@@ -43,11 +43,11 @@ export default function Markets({ coins, loading, onSelectCoin }) {
   }
 
   return (
-    <div>
+    <div style={{ maxWidth: 700, margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Live Markets</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Tap any coin for details · Updates every 30s</p>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Tap any coin for details, charts, buy and swap</p>
         </div>
         <input
           value={q}
@@ -56,7 +56,7 @@ export default function Markets({ coins, loading, onSelectCoin }) {
           style={{
             background: C.card, border: '1px solid ' + C.border,
             borderRadius: 10, padding: '9px 14px', color: '#fff',
-            fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: 200,
+            fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: 180,
           }}
         />
       </div>
@@ -64,67 +64,76 @@ export default function Markets({ coins, loading, onSelectCoin }) {
       {loading ? (
         <div style={{ textAlign: 'center', padding: 60, color: C.muted }}>Loading markets...</div>
       ) : (
-        <div>
-          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
+        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
 
-            <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 90px 70px 70px', gap: 8, padding: '10px 14px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
-              <div>#</div>
-              <div>NAME</div>
-              <button onClick={function() { handleSort('current_price'); }} style={{ background: 'none', border: 'none', color: sort === 'current_price' ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0 }}>
-                PRICE {sort === 'current_price' ? (dir === -1 ? '↓' : '↑') : ''}
-              </button>
-              <button onClick={function() { handleSort('price_change_percentage_24h'); }} style={{ background: 'none', border: 'none', color: sort === 'price_change_percentage_24h' ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0 }}>
-                24H {sort === 'price_change_percentage_24h' ? (dir === -1 ? '↓' : '↑') : ''}
-              </button>
-              <button onClick={function() { handleSort('market_cap'); }} style={{ background: 'none', border: 'none', color: sort === 'market_cap' ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0 }}>
-                CAP {sort === 'market_cap' ? (dir === -1 ? '↓' : '↑') : ''}
-              </button>
-            </div>
+          <div style={{
+            display: 'grid', gridTemplateColumns: '28px 1fr 90px 70px 80px',
+            gap: 8, padding: '10px 14px',
+            borderBottom: '1px solid rgba(0,229,255,.06)',
+            fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8,
+          }}>
+            <div>#</div>
+            <div>NAME</div>
+            <button onClick={function() { handleSort('current_price'); }} style={{ background: 'none', border: 'none', color: sort === 'current_price' ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0, fontFamily: 'Syne, sans-serif' }}>
+              PRICE {sort === 'current_price' ? (dir === -1 ? '↓' : '↑') : ''}
+            </button>
+            <button onClick={function() { handleSort('price_change_percentage_24h'); }} style={{ background: 'none', border: 'none', color: sort === 'price_change_percentage_24h' ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0, fontFamily: 'Syne, sans-serif' }}>
+              24H {sort === 'price_change_percentage_24h' ? (dir === -1 ? '↓' : '↑') : ''}
+            </button>
+            <button onClick={function() { handleSort('market_cap'); }} style={{ background: 'none', border: 'none', color: sort === 'market_cap' ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0, fontFamily: 'Syne, sans-serif' }}>
+              CAP {sort === 'market_cap' ? (dir === -1 ? '↓' : '↑') : ''}
+            </button>
+          </div>
 
-            {sorted.map(function(c, i) {
-              return (
-                <div key={c.id}
-                  onClick={function() { onSelectCoin && onSelectCoin(c); }}
-                  style={{
-                    display: 'grid', gridTemplateColumns: '32px 1fr 90px 70px 70px',
-                    gap: 8, padding: '13px 14px',
-                    borderBottom: '1px solid rgba(255,255,255,.025)',
-                    cursor: 'pointer', alignItems: 'center', transition: 'background .15s',
-                  }}
-                  onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }}
-                  onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
-                >
-                  <div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div>
+          {sorted.map(function(c, i) {
+            return (
+              <div key={c.id}
+                onClick={function() { onSelectCoin && onSelectCoin(c); }}
+                style={{
+                  display: 'grid', gridTemplateColumns: '28px 1fr 90px 70px 80px',
+                  gap: 8, padding: '13px 14px',
+                  borderBottom: '1px solid rgba(255,255,255,.025)',
+                  cursor: 'pointer', alignItems: 'center', transition: 'background .15s',
+                }}
+                onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }}
+                onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
+              >
+                <div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div>
 
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                    {c.image ? (
-                      <img src={c.image} alt={c.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} />
-                    ) : (
-                      <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>
-                        {c.symbol && c.symbol.charAt(0).toUpperCase()}
-                      </div>
-                    )}
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
-                      <div style={{ fontSize: 10, color: C.muted }}>{c.symbol && c.symbol.toUpperCase()}</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                  {c.image ? (
+                    <img src={c.image} alt={c.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} />
+                  ) : (
+                    <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>
+                      {c.symbol && c.symbol.charAt(0).toUpperCase()}
                     </div>
+                  )}
+                  <div style={{ minWidth: 0 }}>
+                    <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
+                    <div style={{ fontSize: 10, color: C.muted }}>{c.symbol && c.symbol.toUpperCase()}</div>
                   </div>
-
-                  <div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>{fmt(c.current_price)}</div>
-
-                  <div style={{ fontSize: 12, color: (c.price_change_percentage_24h || 0) >= 0 ? C.green : C.red, textAlign: 'right', fontWeight: 600 }}>
-                    {pct(c.price_change_percentage_24h)}
-                  </div>
-
-                  <div style={{ fontSize: 11, color: C.muted, textAlign: 'right' }}>{fmt(c.market_cap)}</div>
                 </div>
-              );
-            })}
-          </div>
 
-          <div style={{ textAlign: 'center', marginTop: 12, color: C.muted, fontSize: 11 }}>
-            Tap any coin to view details, chart, buy and swap
-          </div>
+                <div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>
+                  {fmt(c.current_price)}
+                </div>
+
+                <div style={{ fontSize: 12, color: (c.price_change_percentage_24h || 0) >= 0 ? C.green : C.red, textAlign: 'right', fontWeight: 600 }}>
+                  {pct(c.price_change_percentage_24h)}
+                </div>
+
+                <div style={{ fontSize: 11, color: C.muted, textAlign: 'right' }}>
+                  {fmt(c.market_cap)}
+                </div>
+              </div>
+            );
+          })}
+
+          {sorted.length === 0 && (
+            <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>
+              No coins found matching your search.
+            </div>
+          )}
         </div>
       )}
     </div>
