@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useAccount, useConnectModal } from '@rainbow-me/rainbowkit';
+import { useAccount } from 'wagmi';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import SwapWidget from './components/SwapWidget';
 import Markets from './components/Markets';
