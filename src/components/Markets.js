@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
-import { LineChart, Line, ResponsiveContainer } from 'recharts';
- 
+
 const C = {
   card: '#080d1a', card2: '#0c1220',
   border: 'rgba(0,229,255,0.10)',
@@ -24,9 +23,9 @@ function pct(n) {
 }
 
 export default function Markets({ coins, loading, onSelectCoin }) {
+  const [q, setQ] = useState('');
   const [sort, setSort] = useState('market_cap');
   const [dir, setDir] = useState(-1);
-  const [q, setQ] = useState('');
 
   var filtered = coins.filter(function(c) {
     if (!q) return true;
@@ -45,10 +44,10 @@ export default function Markets({ coins, loading, onSelectCoin }) {
 
   return (
     <div>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
         <div>
-          <h1 style={{ fontSize: 26, fontWeight: 800, color: '#fff' }}>Live Markets</h1>
-          <p style={{ color: C.muted, fontSize: 13, marginTop: 4 }}>Real-time data - updates every 30s</p>
+          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Live Markets</h1>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Tap any coin for details · Updates every 30s</p>
         </div>
         <input
           value={q}
@@ -56,105 +55,76 @@ export default function Markets({ coins, loading, onSelectCoin }) {
           placeholder="Search coins..."
           style={{
             background: C.card, border: '1px solid ' + C.border,
-            borderRadius: 10, padding: '10px 16px', color: C.text,
-            fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: 220,
+            borderRadius: 10, padding: '9px 14px', color: '#fff',
+            fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: 200,
           }}
         />
       </div>
 
       {loading ? (
-        <div style={{ textAlign: 'center', padding: 80, color: C.muted }}>Loading markets...</div>
+        <div style={{ textAlign: 'center', padding: 60, color: C.muted }}>Loading markets...</div>
       ) : (
-        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, overflow: 'hidden' }}>
-          <div style={{
-            display: 'grid',
-            gridTemplateColumns: '44px 2fr 1.4fr .9fr .9fr .9fr 1.3fr 1.4fr 110px',
-            gap: 12, padding: '13px 24px',
-            borderBottom: '1px solid rgba(0,229,255,.06)',
-            fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: 1
-          }}>
-            {[
-              ['#', null],
-              ['NAME', null],
-              ['PRICE', 'current_price'],
-              ['1H %', 'price_change_percentage_1h_in_currency'],
-              ['24H %', 'price_change_percentage_24h'],
-              ['7D %', 'price_change_percentage_7d_in_currency'],
-              ['VOLUME', 'total_volume'],
-              ['MKT CAP', 'market_cap'],
-              ['7D CHART', null],
-            ].map(function(item) {
+        <div>
+          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 90px 70px 70px', gap: 8, padding: '10px 14px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
+              <div>#</div>
+              <div>NAME</div>
+              <button onClick={function() { handleSort('current_price'); }} style={{ background: 'none', border: 'none', color: sort === 'current_price' ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0 }}>
+                PRICE {sort === 'current_price' ? (dir === -1 ? '↓' : '↑') : ''}
+              </button>
+              <button onClick={function() { handleSort('price_change_percentage_24h'); }} style={{ background: 'none', border: 'none', color: sort === 'price_change_percentage_24h' ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0 }}>
+                24H {sort === 'price_change_percentage_24h' ? (dir === -1 ? '↓' : '↑') : ''}
+              </button>
+              <button onClick={function() { handleSort('market_cap'); }} style={{ background: 'none', border: 'none', color: sort === 'market_cap' ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0 }}>
+                CAP {sort === 'market_cap' ? (dir === -1 ? '↓' : '↑') : ''}
+              </button>
+            </div>
+
+            {sorted.map(function(c, i) {
               return (
-                <div key={item[0]}
-                  onClick={function() { if (item[1]) handleSort(item[1]); }}
-                  style={{ cursor: item[1] ? 'pointer' : 'default', userSelect: 'none' }}
+                <div key={c.id}
+                  onClick={function() { onSelectCoin && onSelectCoin(c); }}
+                  style={{
+                    display: 'grid', gridTemplateColumns: '32px 1fr 90px 70px 70px',
+                    gap: 8, padding: '13px 14px',
+                    borderBottom: '1px solid rgba(255,255,255,.025)',
+                    cursor: 'pointer', alignItems: 'center', transition: 'background .15s',
+                  }}
+                  onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }}
+                  onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
                 >
-                  {item[0]}{item[1] && sort === item[1] ? (dir === -1 ? ' ↓' : ' ↑') : ''}
+                  <div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                    {c.image ? (
+                      <img src={c.image} alt={c.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} />
+                    ) : (
+                      <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>
+                        {c.symbol && c.symbol.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
+                      <div style={{ fontSize: 10, color: C.muted }}>{c.symbol && c.symbol.toUpperCase()}</div>
+                    </div>
+                  </div>
+
+                  <div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>{fmt(c.current_price)}</div>
+
+                  <div style={{ fontSize: 12, color: (c.price_change_percentage_24h || 0) >= 0 ? C.green : C.red, textAlign: 'right', fontWeight: 600 }}>
+                    {pct(c.price_change_percentage_24h)}
+                  </div>
+
+                  <div style={{ fontSize: 11, color: C.muted, textAlign: 'right' }}>{fmt(c.market_cap)}</div>
                 </div>
               );
             })}
           </div>
 
-          {sorted.map(function(c, i) {
-            var sp = c.sparkline_in_7d ? c.sparkline_in_7d.price : [];
-            var pos = sp.length > 1 && sp[sp.length - 1] > sp[0];
-            var spPts = sp.filter(function(_, j) { return j % 24 === 0; }).map(function(p, j) { return { p: p, j: j }; });
-
-            return (
-              <div key={c.id}
-                onClick={function() { if (onSelectCoin) onSelectCoin(c.id); }}
-                style={{
-                  display: 'grid',
-                  gridTemplateColumns: '44px 2fr 1.4fr .9fr .9fr .9fr 1.3fr 1.4fr 110px',
-                  gap: 12, padding: '15px 24px',
-                  borderBottom: '1px solid rgba(255,255,255,.025)',
-                  cursor: 'pointer', alignItems: 'center', transition: 'background .15s',
-                }}
-                onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }}
-                onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
-              >
-                <div style={{ color: C.muted, fontSize: 12 }}>{i + 1}</div>
-
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{
-                    width: 36, height: 36, borderRadius: '50%', flexShrink: 0,
-                    background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 13, fontWeight: 700, color: C.accent,
-                  }}>{c.symbol && c.symbol.charAt(0).toUpperCase()}</div>
-                  <div>
-                    <div style={{ fontWeight: 700, fontSize: 14, color: '#fff' }}>{c.name}</div>
-                    <div style={{ fontSize: 11, color: C.muted }}>{c.symbol && c.symbol.toUpperCase()}</div>
-                  </div>
-                </div>
-
-                <div style={{ fontWeight: 500, color: '#fff', fontSize: 14 }}>{fmt(c.current_price)}</div>
-
-                {[
-                  c.price_change_percentage_1h_in_currency,
-                  c.price_change_percentage_24h,
-                  c.price_change_percentage_7d_in_currency
-                ].map(function(v, idx) {
-                  return (
-                    <div key={idx} style={{ fontSize: 12, color: (v || 0) >= 0 ? C.green : C.red }}>
-                      {pct(v)}
-                    </div>
-                  );
-                })}
-
-                <div style={{ fontSize: 12, color: C.muted }}>{fmt(c.total_volume)}</div>
-                <div style={{ fontSize: 12, color: C.muted }}>{fmt(c.market_cap)}</div>
-
-                <div style={{ height: 44 }}>
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={spPts}>
-                      <Line type="monotone" dataKey="p" stroke={pos ? C.green : C.red} strokeWidth={1.5} dot={false} />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </div>
-              </div>
-            );
-          })}
+          <div style={{ textAlign: 'center', marginTop: 12, color: C.muted, fontSize: 11 }}>
+            Tap any coin to view details, chart, buy and swap
+          </div>
         </div>
       )}
     </div>
