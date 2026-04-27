@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useAccount, useConnectModal } from '@rainbow-me/rainbowkit';
+import { useAccount } from 'wagmi';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { Connection, PublicKey } from '@solana/web3.js';
 
@@ -37,7 +37,6 @@ function fmt(n, d) {
 
 export default function Portfolio({ coins, onSend }) {
   const { address, isConnected } = useAccount();
-  const { openConnectModal } = useConnectModal();
   const [balances, setBalances] = useState([]);
   const [solBalance, setSolBalance] = useState(0);
   const [loading, setLoading] = useState(false);
