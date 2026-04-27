@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useAccount, useConnectModal } from '@rainbow-me/rainbowkit';
-import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { useAccount } from 'wagmi';
+import { useConnectModal, ConnectButton } from '@rainbow-me/rainbowkit';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 const JUPITER_REFERRAL_KEY = 'E2yVdtMKBX8c7nNwks2mJ8gXpVrEMf2gkrXLz5oaDzQX';
@@ -50,21 +50,18 @@ function TradeDrawer({ open, onClose, mode, coin, solanaToken }) {
   const [quote, setQuote] = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [swapStatus, setSwapStatus] = useState('idle');
-  const [swapTx, setSwapTx] = useState(null);
 
   var fromToken = mode === 'sell'
     ? { mint: solanaToken.mint, symbol: coin.symbol.toUpperCase(), name: coin.name, decimals: solanaToken.decimals }
     : SOL_TOKEN;
 
   var toToken = mode === 'sell' ? USDC_TOKEN
-    : mode === 'buy' ? { mint: solanaToken.mint, symbol: coin.symbol.toUpperCase(), name: coin.name, decimals: solanaToken.decimals }
     : { mint: solanaToken.mint, symbol: coin.symbol.toUpperCase(), name: coin.name, decimals: solanaToken.decimals };
 
   useEffect(function() {
     setFromAmt('');
     setQuote(null);
     setSwapStatus('idle');
-    setSwapTx(null);
   }, [open, mode]);
 
   useEffect(function() {
@@ -115,7 +112,6 @@ function TradeDrawer({ open, onClose, mode, coin, solanaToken }) {
       var swapData = await swapRes.json();
       if (swapData.swapTransaction) {
         setSwapStatus('success');
-        setSwapTx('confirmed');
         setFromAmt('');
         setQuote(null);
         setTimeout(function() { setSwapStatus('idle'); }, 4000);
@@ -128,42 +124,59 @@ function TradeDrawer({ open, onClose, mode, coin, solanaToken }) {
 
   var modeLabel = mode === 'buy' ? 'Buy' : mode === 'sell' ? 'Sell' : 'Swap';
   var modeColor = mode === 'buy' ? C.accent : mode === 'sell' ? C.red : C.green;
+  var modeGradient = mode === 'sell'
+    ? 'linear-gradient(135deg,#ff3b6b,#cc1144)'
+    : mode === 'buy'
+    ? 'linear-gradient(135deg,#00e5ff,#0055ff)'
+    : 'linear-gradient(135deg,#00ffa3,#00b36b)';
 
   if (!open) return null;
 
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,.7)' }} />
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,.75)' }} />
       <div style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 401,
-        background: C.card, borderTop: '1px solid ' + C.borderHi,
+        background: C.card, borderTop: '2px solid ' + C.borderHi,
         borderRadius: '20px 20px 0 0',
         padding: '20px 20px 40px',
-        boxShadow: '0 -20px 60px rgba(0,0,0,.8)',
-        animation: 'slideUp .25s ease',
+        boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
         maxHeight: '85vh', overflowY: 'auto',
+        animation: 'slideUp .25s ease',
       }}>
         <style>{`@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }`}</style>
 
+        <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 20px' }} />
+
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {coin.image && <img src={coin.image} alt={coin.symbol} style={{ width: 32, height: 32, borderRadius: '50%' }} />}
+            {coin.image && (
+              <img src={coin.image} alt={coin.symbol} style={{ width: 36, height: 36, borderRadius: '50%' }} />
+            )}
             <div>
-              <div style={{ color: modeColor, fontWeight: 800, fontSize: 18 }}>{modeLabel} {coin.symbol && coin.symbol.toUpperCase()}</div>
-              <div style={{ color: C.muted, fontSize: 12 }}>{fmt(coin.current_price)} per {coin.symbol && coin.symbol.toUpperCase()}</div>
+              <div style={{ color: modeColor, fontWeight: 800, fontSize: 20 }}>
+                {modeLabel} {coin.symbol && coin.symbol.toUpperCase()}
+              </div>
+              <div style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>
+                {fmt(coin.current_price)} per {coin.symbol && coin.symbol.toUpperCase()}
+              </div>
             </div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 24, cursor: 'pointer', padding: 0 }}>×</button>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer', padding: 0 }}>×</button>
         </div>
 
         {!isConnected && (
-          <div style={{ marginBottom: 16, padding: 14, background: 'rgba(0,229,255,.05)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10 }}>
+          <div style={{
+            marginBottom: 16, padding: 14,
+            background: 'rgba(0,229,255,.05)', border: '1px solid rgba(0,229,255,.15)',
+            borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10,
+          }}>
             <span style={{ color: C.muted, fontSize: 13 }}>Connect wallet to trade</span>
             <ConnectButton showBalance={false} chainStatus="none" accountStatus="avatar" />
           </div>
         )}
 
-        <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border, marginBottom: 8 }}>
+        <div style={{ background: C.card2, borderRadius: 12, padding: 16, border: '1px solid ' + C.border, marginBottom: 8 }}>
           <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 8 }}>
             {mode === 'sell' ? 'YOU SELL' : 'YOU PAY'} ({fromToken.symbol})
           </div>
@@ -173,20 +186,25 @@ function TradeDrawer({ open, onClose, mode, coin, solanaToken }) {
             placeholder="0.00"
             style={{
               width: '100%', background: 'transparent', border: 'none',
-              fontSize: 28, fontWeight: 600, color: '#fff', outline: 'none',
+              fontSize: 30, fontWeight: 600, color: '#fff', outline: 'none',
             }}
           />
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0' }}>
-          <div style={{ width: 30, height: 30, borderRadius: 8, background: C.card3, border: '1px solid ' + C.border, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.accent, fontSize: 14 }}>↓</div>
+          <div style={{
+            width: 30, height: 30, borderRadius: 8,
+            background: C.card3, border: '1px solid ' + C.border,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            color: C.accent, fontSize: 14,
+          }}>↓</div>
         </div>
 
-        <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border, marginBottom: 16 }}>
+        <div style={{ background: C.card2, borderRadius: 12, padding: 16, border: '1px solid ' + C.border, marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 8 }}>
             YOU RECEIVE ({toToken.symbol})
           </div>
-          <div style={{ fontSize: 28, fontWeight: 600, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>
+          <div style={{ fontSize: 30, fontWeight: 600, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>
             {quoteLoading ? '...' : quote ? quote.outAmountDisplay : '0.00'}
           </div>
         </div>
@@ -217,20 +235,19 @@ function TradeDrawer({ open, onClose, mode, coin, solanaToken }) {
               : swapStatus === 'error' ? 'rgba(255,59,107,.2)'
               : !isConnected ? 'linear-gradient(135deg,#00e5ff,#0055ff)'
               : !fromAmt || !quote ? C.card3
-              : mode === 'sell' ? 'linear-gradient(135deg,#ff3b6b,#cc1144)'
-              : mode === 'buy' ? 'linear-gradient(135deg,#00e5ff,#0055ff)'
-              : 'linear-gradient(135deg,#00ffa3,#00b36b)',
-            color: !isConnected ? C.bg : !fromAmt || !quote ? C.muted2 : swapStatus === 'error' ? C.red : C.bg,
+              : modeGradient,
+            color: !fromAmt || !quote && isConnected ? C.muted2 : swapStatus === 'error' ? C.red : C.bg,
             fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16,
-            cursor: 'pointer', transition: 'all .3s',
+            cursor: isConnected && (!fromAmt || !quote) ? 'not-allowed' : 'pointer',
+            transition: 'all .3s',
           }}>
-          {!isConnected ? 'Connect Wallet'
+          {!isConnected ? 'Connect Wallet to Trade'
             : swapStatus === 'loading' ? 'Confirming...'
             : swapStatus === 'success' ? modeLabel + ' Confirmed!'
             : swapStatus === 'error' ? 'Failed - Try Again'
             : !fromAmt ? 'Enter Amount'
             : !quote ? 'Getting Quote...'
-            : modeLabel + ' ' + coin.symbol.toUpperCase()}
+            : modeLabel + ' ' + (coin.symbol && coin.symbol.toUpperCase())}
         </button>
 
         {swapStatus === 'success' && (
@@ -279,7 +296,10 @@ export default function TokenDetail({ coin, coins, onBack, onBuy }) {
   var chartColor = priceChange >= 0 ? C.green : C.red;
 
   var openDrawer = function(mode) {
-    if (mode === 'buy' && !solanaToken) { onBuy && onBuy(coin); return; }
+    if (!solanaToken) {
+      if (onBuy) onBuy(coin);
+      return;
+    }
     setDrawerMode(mode);
     setDrawerOpen(true);
   };
@@ -306,7 +326,9 @@ export default function TokenDetail({ coin, coins, onBack, onBuy }) {
             )}
             <div>
               <div style={{ fontWeight: 800, fontSize: 20, color: '#fff' }}>{coin.name}</div>
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{coin.symbol && coin.symbol.toUpperCase()} · Rank #{coin.market_cap_rank}</div>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
+                {coin.symbol && coin.symbol.toUpperCase()} · Rank #{coin.market_cap_rank}
+              </div>
             </div>
           </div>
           <div style={{ textAlign: 'right' }}>
@@ -332,7 +354,9 @@ export default function TokenDetail({ coin, coins, onBack, onBuy }) {
         </div>
 
         {chartLoading ? (
-          <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted }}>Loading chart...</div>
+          <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted }}>
+            Loading chart...
+          </div>
         ) : (
           <ResponsiveContainer width="100%" height={200}>
             <AreaChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
@@ -344,7 +368,10 @@ export default function TokenDetail({ coin, coins, onBack, onBuy }) {
               </defs>
               <XAxis dataKey="t" hide />
               <YAxis hide domain={['auto', 'auto']} />
-              <Tooltip contentStyle={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 11 }} formatter={function(v) { return [fmt(v), 'Price']; }} />
+              <Tooltip
+                contentStyle={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 11 }}
+                formatter={function(v) { return [fmt(v), 'Price']; }}
+              />
               <Area type="monotone" dataKey="p" stroke={chartColor} strokeWidth={2} fill="url(#tdGrad)" />
             </AreaChart>
           </ResponsiveContainer>
@@ -353,20 +380,20 @@ export default function TokenDetail({ coin, coins, onBack, onBuy }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 14 }}>
         <button onClick={function() { openDrawer('buy'); }} style={{
-          padding: '14px 10px', borderRadius: 14, border: 'none', cursor: 'pointer',
+          padding: '16px 10px', borderRadius: 14, border: 'none', cursor: 'pointer',
           background: 'linear-gradient(135deg,#00e5ff,#0055ff)',
-          color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
+          color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16,
           boxShadow: '0 0 20px rgba(0,229,255,.2)',
         }}>Buy</button>
         <button onClick={function() { openDrawer('swap'); }} style={{
-          padding: '14px 10px', borderRadius: 14, cursor: 'pointer',
+          padding: '16px 10px', borderRadius: 14, cursor: 'pointer',
           background: 'rgba(0,255,163,.08)', border: '1px solid rgba(0,255,163,.3)',
-          color: C.green, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
+          color: C.green, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16,
         }}>Swap</button>
         <button onClick={function() { openDrawer('sell'); }} style={{
-          padding: '14px 10px', borderRadius: 14, cursor: 'pointer',
+          padding: '16px 10px', borderRadius: 14, cursor: 'pointer',
           background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.3)',
-          color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
+          color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16,
         }}>Sell</button>
       </div>
 
