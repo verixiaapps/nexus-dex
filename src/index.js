@@ -18,7 +18,7 @@ import {
 } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
-
+ 
 const config = getDefaultConfig({
   appName: 'Nexus DEX',
   projectId: '1a7c741caab0a2c5ffa2b199a816ea92',
