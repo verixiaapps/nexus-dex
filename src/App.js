@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useWallet } from '@solana/wallet-adapter-react';
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { useAccount, useConnectModal } from '@rainbow-me/rainbowkit';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import SwapWidget from './components/SwapWidget';
 import Markets from './components/Markets';
@@ -27,7 +26,7 @@ export default function App() {
   const [selectedToken, setSelectedToken] = useState(null);
   const [swapFromToken, setSwapFromToken] = useState(null);
   const [swapToToken, setSwapToToken] = useState(null);
-  const { publicKey } = useWallet();
+  const { address, isConnected } = useAccount();
 
   const fetchMarkets = async () => {
     try {
@@ -54,23 +53,17 @@ export default function App() {
     setTab('token');
   };
 
-  const handleQuickSwap = function(fromToken, toToken) {
-    setSwapFromToken(fromToken);
-    setSwapToToken(toToken);
-    setTab('swap');
-  };
-
   const handleQuickBuy = function(coin) {
     setSelectedToken(coin);
     setTab('buy');
   };
 
   const tabs = [
-    { id: 'swap', label: 'Swap' },
-    { id: 'markets', label: 'Markets' },
-    { id: 'buy', label: 'Buy' },
-    { id: 'send', label: 'Send' },
-    { id: 'portfolio', label: 'Portfolio' },
+    { id: 'swap', label: 'Swap', icon: '⇄' },
+    { id: 'markets', label: 'Markets', icon: '📊' },
+    { id: 'buy', label: 'Buy', icon: '💳' },
+    { id: 'send', label: 'Send', icon: '➤' },
+    { id: 'portfolio', label: 'Wallet', icon: '👛' },
   ];
 
   return (
@@ -85,13 +78,16 @@ export default function App() {
       <header style={{
         position: 'sticky', top: 0, zIndex: 100,
         borderBottom: '1px solid rgba(0,229,255,0.10)',
-        background: 'rgba(3,6,15,.96)', backdropFilter: 'blur(24px)'
+        background: 'rgba(3,6,15,.96)', backdropFilter: 'blur(24px)',
       }}>
         <div style={{
           maxWidth: 1400, margin: '0 auto', padding: '0 12px',
           display: 'flex', alignItems: 'center', gap: 8, height: 56,
         }}>
-          <div onClick={() => setTab('swap')} style={{ display: 'flex', alignItems: 'center', gap: 6, cursor: 'pointer', flexShrink: 0 }}>
+          <div onClick={() => setTab('swap')} style={{
+            display: 'flex', alignItems: 'center', gap: 6,
+            cursor: 'pointer', flexShrink: 0,
+          }}>
             <div style={{
               width: 30, height: 30, borderRadius: 8,
               background: 'linear-gradient(135deg,#00e5ff,#0066ff)',
@@ -99,9 +95,17 @@ export default function App() {
               fontWeight: 700, fontSize: 13, color: C.bg,
             }}>N</div>
             <span style={{ fontWeight: 800, fontSize: 14, letterSpacing: 2, color: '#fff' }}>NEXUS</span>
+            <span style={{
+              fontSize: 9, color: C.accent,
+              background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.3)',
+              borderRadius: 4, padding: '1px 5px', fontWeight: 600,
+            }}>DEX</span>
           </div>
 
-          <nav style={{ display: 'flex', gap: 1, flex: 1, overflowX: 'auto', scrollbarWidth: 'none' }}>
+          <nav style={{
+            display: 'flex', gap: 2, flex: 1,
+            overflowX: 'auto', scrollbarWidth: 'none',
+          }}>
             {tabs.map(function(t) {
               return (
                 <button key={t.id} onClick={() => setTab(t.id)} style={{
@@ -116,24 +120,21 @@ export default function App() {
             })}
           </nav>
 
-          <div style={{ display: 'flex', gap: 6, flexShrink: 0, alignItems: 'center' }}>
-            <WalletMultiButton style={{
-              height: 34, fontSize: 11, padding: '0 10px',
-              background: 'linear-gradient(135deg,#9945ff,#7c3aed)',
-              border: 'none', borderRadius: 8,
-              fontFamily: 'Syne, sans-serif', fontWeight: 700,
-            }} />
+          <div style={{ flexShrink: 0 }}>
             <ConnectButton
-              label="EVM"
               showBalance={false}
               chainStatus="none"
-              accountStatus="address"
+              accountStatus="avatar"
             />
           </div>
         </div>
       </header>
 
-      <main style={{ position: 'relative', zIndex: 1, maxWidth: 1400, margin: '0 auto', padding: '20px 12px 100px' }}>
+      <main style={{
+        position: 'relative', zIndex: 1,
+        maxWidth: 1400, margin: '0 auto',
+        padding: '20px 12px 100px',
+      }}>
         {tab === 'swap' && (
           <SwapWidget
             coins={coins}
@@ -141,6 +142,7 @@ export default function App() {
             initialFromToken={swapFromToken}
             initialToToken={swapToToken}
             onTokensUsed={() => { setSwapFromToken(null); setSwapToToken(null); }}
+            onGoToToken={goToToken}
           />
         )}
         {tab === 'markets' && (
@@ -155,57 +157,56 @@ export default function App() {
             coin={selectedToken}
             coins={coins}
             onBack={() => setTab('markets')}
-            onSwap={handleQuickSwap}
             onBuy={handleQuickBuy}
           />
         )}
         {tab === 'buy' && (
           <BuyCrypto
             coins={coins}
-            walletAddress={publicKey ? publicKey.toString() : ''}
+            walletAddress={address || ''}
             selectedCoinSymbol={selectedToken ? selectedToken.symbol : null}
           />
         )}
-        {tab === 'send' && <Send coins={coins} />}
-        {tab === 'portfolio' && <Portfolio coins={coins} onSend={() => setTab('send')} />}
+        {tab === 'send' && (
+          <Send coins={coins} walletAddress={address || ''} />
+        )}
+        {tab === 'portfolio' && (
+          <Portfolio
+            coins={coins}
+            walletAddress={address || ''}
+            onSend={() => setTab('send')}
+          />
+        )}
       </main>
 
       <nav style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100,
         background: 'rgba(3,6,15,.96)', backdropFilter: 'blur(24px)',
         borderTop: '1px solid rgba(0,229,255,.1)',
-        padding: '8px 12px 20px',
+        padding: '8px 8px 24px',
         display: 'flex', justifyContent: 'space-around', alignItems: 'center',
       }}>
-        {[
-          ['swap', '⇄', 'Swap'],
-          ['markets', '📊', 'Markets'],
-          ['buy', '💳', 'Buy'],
-          ['send', '➤', 'Send'],
-          ['portfolio', '👛', 'Wallet'],
-        ].map(function(item) {
+        {tabs.map(function(t) {
           return (
-            <button key={item[0]} onClick={() => setTab(item[0])} style={{
-              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3,
+            <button key={t.id} onClick={() => setTab(t.id)} style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 2,
               background: 'transparent', border: 'none', cursor: 'pointer',
-              color: tab === item[0] ? C.accent : C.muted,
-              fontFamily: 'Syne, sans-serif', fontSize: 10, fontWeight: 600,
-              padding: '4px 8px', borderRadius: 8,
-              transition: 'color .15s',
+              color: tab === t.id ? C.accent : C.muted,
+              fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600,
+              padding: '4px 6px', borderRadius: 8,
+              transition: 'color .15s', flexShrink: 0,
             }}>
-              <span style={{ fontSize: 18 }}>{item[1]}</span>
-              <span>{item[2]}</span>
+              <span style={{ fontSize: 16 }}>{t.icon}</span>
+              <span>{t.label}</span>
             </button>
           );
         })}
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-          <WalletMultiButton style={{
-            height: 28, fontSize: 10, padding: '0 8px',
-            background: 'linear-gradient(135deg,#9945ff,#7c3aed)',
-            border: 'none', borderRadius: 8,
-            fontFamily: 'Syne, sans-serif', fontWeight: 700,
-          }} />
-          <span style={{ fontSize: 10, color: C.muted, fontWeight: 600 }}>Solana</span>
+        <div style={{ flexShrink: 0 }}>
+          <ConnectButton
+            showBalance={false}
+            chainStatus="none"
+            accountStatus="avatar"
+          />
         </div>
       </nav>
     </div>
