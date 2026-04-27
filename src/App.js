@@ -1,12 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
-import { ConnectButton } from '@rainbow-me/rainbowkit';
 import SwapWidget from './components/SwapWidget';
 import Markets from './components/Markets';
 import BuyCrypto from './components/BuyCrypto';
 import Portfolio from './components/Portfolio';
- 
+
 const C = {
   bg: '#03060f',
   card: '#080d1a',
@@ -22,11 +21,11 @@ export default function App() {
   const [tab, setTab] = useState('swap');
   const [coins, setCoins] = useState([]);
   const [loading, setLoading] = useState(true);
-  const { connected, publicKey } = useWallet();
+  const { publicKey } = useWallet();
 
   const fetchMarkets = async () => {
     try {
-      const ids = 'bitcoin,ethereum,solana,binancecoin,ripple,cardano,dogecoin,avalanche-2,chainlink,uniswap,matic-network,toncoin,shiba-inu,litecoin,polkadot,cosmos,near,aptos,sui,arbitrum';
+      const ids = 'bitcoin,ethereum,solana,binancecoin,ripple,cardano,dogecoin,avalanche-2,chainlink,uniswap,matic-network,toncoin,shiba-inu,litecoin,polkadot,cosmos,near,aptos,sui,arbitrum,optimism,injective-protocol,render-token,helium,bonk,jupiter-exchange-solana,raydium,orca,pyth-network,jito-governance-token';
       const res = await fetch(
         'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=' + ids + '&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d'
       );
@@ -66,94 +65,91 @@ export default function App() {
         background: 'rgba(3,6,15,.94)', backdropFilter: 'blur(24px)'
       }}>
         <div style={{
-          maxWidth: 1400, margin: '0 auto', padding: '0 24px',
-          display: 'flex', alignItems: 'center', gap: 16, height: 64
+          maxWidth: 1400, margin: '0 auto', padding: '0 16px',
+          display: 'flex', alignItems: 'center', gap: 12, height: 60,
+          flexWrap: 'nowrap', overflowX: 'auto',
         }}>
-          <div onClick={() => setTab('swap')} style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', flexShrink: 0 }}>
+          <div onClick={() => setTab('swap')} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', flexShrink: 0 }}>
             <div style={{
-              width: 34, height: 34, borderRadius: 9,
+              width: 32, height: 32, borderRadius: 9,
               background: 'linear-gradient(135deg,#00e5ff,#0066ff)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, fontSize: 15,
-              color: C.bg, boxShadow: '0 0 24px rgba(0,229,255,.4)'
+              fontWeight: 700, fontSize: 14, color: C.bg,
             }}>N</div>
-            <span style={{ fontWeight: 800, fontSize: 17, letterSpacing: 3, color: '#fff' }}>NEXUS</span>
+            <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: 2, color: '#fff' }}>NEXUS</span>
             <span style={{
-              fontSize: 10, color: C.accent,
+              fontSize: 9, color: C.accent,
               background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.3)',
-              borderRadius: 4, padding: '2px 6px', letterSpacing: .8, fontWeight: 600
+              borderRadius: 4, padding: '1px 5px', fontWeight: 600
             }}>DEX</span>
           </div>
 
-          <nav style={{ display: 'flex', gap: 4, flex: 1 }}>
+          <nav style={{ display: 'flex', gap: 2, flex: 1, minWidth: 0 }}>
             {tabs.map(function(t) {
               return (
                 <button key={t.id} onClick={() => setTab(t.id)} style={{
                   background: tab === t.id ? 'rgba(0,229,255,.09)' : 'transparent',
                   border: tab === t.id ? '1px solid rgba(0,229,255,.2)' : '1px solid transparent',
-                  borderRadius: 8, padding: '6px 14px',
+                  borderRadius: 8, padding: '5px 10px',
                   color: tab === t.id ? C.accent : C.muted,
-                  fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: 13,
-                  cursor: 'pointer', letterSpacing: .4, transition: 'all .15s'
+                  fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: 12,
+                  cursor: 'pointer', whiteSpace: 'nowrap',
                 }}>{t.label}</button>
               );
             })}
           </nav>
 
-          <div style={{ display: 'flex', gap: 16, flexShrink: 0 }}>
-            {coins.slice(0, 3).map(function(c) {
-              return (
-                <span key={c.id} style={{ display: 'flex', gap: 5, fontSize: 11, fontFamily: 'JetBrains Mono, monospace', whiteSpace: 'nowrap', color: C.muted }}>
-                  <span style={{ color: '#fff', fontWeight: 700 }}>{c.symbol && c.symbol.toUpperCase()}</span>
-                  <span style={{ color: (c.price_change_percentage_24h || 0) >= 0 ? C.green : C.red }}>
-                    {'$' + (c.current_price || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })}
-                  </span>
-                </span>
-              );
-            })}
-          </div>
-
-          <div style={{ display: 'flex', gap: 8, flexShrink: 0, alignItems: 'center' }}>
-            <WalletMultiButton style={{ height: 38, fontSize: 13 }} />
-            <ConnectButton label="EVM Wallet" showBalance={false} />
+          <div style={{ flexShrink: 0 }}>
+            <WalletMultiButton style={{
+              height: 36, fontSize: 12, padding: '0 12px',
+              background: 'linear-gradient(135deg,#00e5ff,#0055ff)',
+              color: '#03060f', border: 'none', borderRadius: 8,
+              fontFamily: 'Syne, sans-serif', fontWeight: 700,
+            }} />
           </div>
         </div>
       </header>
 
-      <main style={{ position: 'relative', zIndex: 1, maxWidth: 1400, margin: '0 auto', padding: '36px 24px 80px' }}>
+      <main style={{ position: 'relative', zIndex: 1, maxWidth: 1400, margin: '0 auto', padding: '24px 16px 80px' }}>
         {tab === 'swap' && <SwapWidget coins={coins} loading={loading} />}
         {tab === 'markets' && <Markets coins={coins} loading={loading} onSelectCoin={() => setTab('swap')} />}
         {tab === 'buy' && <BuyCrypto coins={coins} walletAddress={publicKey ? publicKey.toString() : ''} />}
         {tab === 'portfolio' && <Portfolio coins={coins} />}
       </main>
 
-      <footer style={{ borderTop: '1px solid rgba(0,229,255,0.10)', padding: '20px 24px' }}>
+      <footer style={{ borderTop: '1px solid rgba(0,229,255,0.10)', padding: '16px' }}>
         <div style={{
           maxWidth: 1400, margin: '0 auto',
-          display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12
+          display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 10
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <div style={{
-              width: 26, height: 26, borderRadius: 7,
+              width: 24, height: 24, borderRadius: 6,
               background: 'linear-gradient(135deg,#00e5ff,#0055ff)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, fontSize: 12, color: C.bg
+              fontWeight: 700, fontSize: 11, color: C.bg
             }}>N</div>
-            <span style={{ fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 14, letterSpacing: 2, color: '#fff' }}>NEXUS DEX</span>
+            <span style={{ fontWeight: 800, fontSize: 13, letterSpacing: 2, color: '#fff' }}>NEXUS DEX</span>
           </div>
-          <div style={{ display: 'flex', gap: 8 }}>
-            {['JUPITER ROUTING', 'RAINBOWKIT', 'WALLETCONNECT', '0.3% FEE', 'NON-CUSTODIAL'].map(function(l) {
+          <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+            {[
+              ['SWAP', 'swap'],
+              ['MARKETS', 'markets'],
+              ['BUY CRYPTO', 'buy'],
+              ['PORTFOLIO', 'portfolio'],
+            ].map(function(item) {
               return (
-                <span key={l} style={{
+                <button key={item[0]} onClick={() => setTab(item[1])} style={{
                   fontSize: 10, color: C.accent,
                   background: 'rgba(0,229,255,.07)', border: '1px solid rgba(0,229,255,.2)',
-                  borderRadius: 4, padding: '2px 7px', letterSpacing: .8, fontWeight: 600
-                }}>{l}</span>
+                  borderRadius: 4, padding: '3px 8px', letterSpacing: .8, fontWeight: 600,
+                  cursor: 'pointer', fontFamily: 'Syne, sans-serif',
+                }}>{item[0]}</button>
               );
             })}
           </div>
-          <span style={{ fontSize: 11, color: '#2e3f5e', fontFamily: 'JetBrains Mono, monospace' }}>
-            2025 Nexus DEX - Non-custodial - 0.3% fee paid by user
+          <span style={{ fontSize: 11, color: '#2e3f5e' }}>
+            2025 Nexus DEX · 0.3% fee paid by user
           </span>
         </div>
       </footer>
