@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
-import { PublicKey } from '@solana/web3.js';
+import { useAccount, useConnectModal } from '@rainbow-me/rainbowkit';
+import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { Connection, PublicKey } from '@solana/web3.js';
 
 const C = {
   card: '#080d1a', card2: '#0c1220',
@@ -10,15 +10,7 @@ const C = {
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
 
-function fmt(n, d) {
-  d = d || 2;
-  if (n == null) return '--';
-  if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
-  if (n >= 1) return '$' + n.toFixed(d);
-  return '$' + n.toFixed(6);
-}
+const RPC = process.env.REACT_APP_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
 
 const TOKEN_MAP = {
   'So11111111111111111111111111111111111111112': { symbol: 'SOL', name: 'Solana', decimals: 9, cgId: 'solana' },
@@ -33,9 +25,19 @@ const TOKEN_MAP = {
   'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE': { symbol: 'ORCA', name: 'Orca', decimals: 6, cgId: 'orca' },
 };
 
+function fmt(n, d) {
+  d = d || 2;
+  if (n == null) return '--';
+  if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
+  if (n >= 1) return '$' + n.toFixed(d);
+  return '$' + n.toFixed(6);
+}
+
 export default function Portfolio({ coins, onSend }) {
-  const { publicKey, connected } = useWallet();
-  const { connection } = useConnection();
+  const { address, isConnected } = useAccount();
+  const { openConnectModal } = useConnectModal();
   const [balances, setBalances] = useState([]);
   const [solBalance, setSolBalance] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -48,15 +50,18 @@ export default function Portfolio({ coins, onSend }) {
   };
 
   var fetchBalances = async function() {
-    if (!publicKey || !connection) return;
+    if (!address) return;
     setLoading(true);
     try {
-      var solLamports = await connection.getBalance(publicKey);
+      var connection = new Connection(RPC);
+      var pubkey = new PublicKey(address);
+
+      var solLamports = await connection.getBalance(pubkey);
       var solAmt = solLamports / 1e9;
       setSolBalance(solAmt);
 
       var tokenAccounts = await connection.getParsedTokenAccountsByOwner(
-        publicKey,
+        pubkey,
         { programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') }
       );
 
@@ -100,41 +105,41 @@ export default function Portfolio({ coins, onSend }) {
   };
 
   useEffect(function() {
-    if (connected && publicKey) {
+    if (isConnected && address) {
       fetchBalances();
       var interval = setInterval(fetchBalances, 30000);
       return function() { clearInterval(interval); };
     }
-  }, [connected, publicKey, coins.length]);
+  }, [isConnected, address, coins.length]);
 
   var solPrice = getPrice('solana');
   var solValue = solBalance * solPrice;
 
-  if (!connected) {
+  if (!isConnected) {
     return (
       <div style={{ maxWidth: 520, margin: '0 auto' }}>
         <div style={{ marginBottom: 20 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
-          <p style={{ color: C.muted, fontSize: 13, marginTop: 4 }}>Track your Solana wallet balances</p>
+          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Track your wallet balances in real time</p>
         </div>
         <div style={{ textAlign: 'center', padding: '60px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
           <div style={{ fontSize: 48, marginBottom: 16 }}>👛</div>
           <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Connect Your Wallet</h2>
           <p style={{ color: C.muted, fontSize: 13, maxWidth: 300, margin: '0 auto 24px', lineHeight: 1.6 }}>
-            Connect Phantom or Solflare to view your real-time balances and portfolio value.
+            Connect via WalletConnect to view your real-time portfolio and token balances.
           </p>
-          <WalletMultiButton />
+          <ConnectButton showBalance={false} chainStatus="none" />
         </div>
       </div>
     );
   }
 
   return (
-    <div style={{ maxWidth: 700, margin: '0 auto' }}>
+    <div style={{ maxWidth: 600, margin: '0 auto' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 10 }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Real-time Solana balances · Auto-refreshes</p>
+          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Real-time balances · Auto-refreshes every 30s</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={fetchBalances} style={{
@@ -158,7 +163,7 @@ export default function Portfolio({ coins, onSend }) {
           ['Total Value', fmt(totalValue), C.accent],
           ['SOL Balance', solBalance.toFixed(4) + ' SOL', C.green],
           ['SOL Value', fmt(solValue), C.text],
-          ['Tokens', (balances.length + 1) + ' assets', C.muted],
+          ['Assets', (balances.length + 1) + ' tokens', C.muted],
         ].map(function(item) {
           return (
             <div key={item[0]} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 16 }}>
@@ -170,11 +175,11 @@ export default function Portfolio({ coins, onSend }) {
       </div>
 
       <div style={{ background: C.card, border: '1px solid rgba(0,255,163,.15)', borderRadius: 12, padding: 14, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(0,255,163,.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>👛</div>
+        <div style={{ fontSize: 24, flexShrink: 0 }}>👛</div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>CONNECTED WALLET</div>
+          <div style={{ fontSize: 10, color: C.muted, marginBottom: 2, fontWeight: 700 }}>CONNECTED WALLET</div>
           <div style={{ fontSize: 11, color: C.green, fontFamily: 'JetBrains Mono, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {publicKey ? publicKey.toString() : ''}
+            {address}
           </div>
         </div>
       </div>
@@ -255,11 +260,11 @@ export default function Portfolio({ coins, onSend }) {
         <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 40, textAlign: 'center' }}>
           <div style={{ fontSize: 36, marginBottom: 12 }}>📋</div>
           <div style={{ color: '#fff', fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Transaction History</div>
-          <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 300, margin: '0 auto 20px' }}>
+          <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 280, margin: '0 auto 20px' }}>
             View your full transaction history on Solscan.
           </p>
-          {publicKey && (
-            <a href={'https://solscan.io/account/' + publicKey.toString()} target="_blank" rel="noreferrer"
+          {address && (
+            <a href={'https://solscan.io/account/' + address} target="_blank" rel="noreferrer"
               style={{
                 display: 'inline-block', padding: '10px 24px', borderRadius: 10,
                 background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)',
