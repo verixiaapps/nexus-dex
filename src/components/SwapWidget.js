@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAccount, useConnectModal } from '@rainbow-me/rainbowkit';
-import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { useAccount } from 'wagmi';
+import { useConnectModal, ConnectButton } from '@rainbow-me/rainbowkit';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 const JUPITER_REFERRAL_KEY = 'E2yVdtMKBX8c7nNwks2mJ8gXpVrEMf2gkrXLz5oaDzQX';
@@ -497,7 +497,7 @@ export default function SwapWidget({ coins, initialFromToken, initialToToken, on
       </div>
 
       <div style={{ marginBottom: 12 }}>
-        <div style={{ fontSize: 12, color: C.muted, marginBottom: 8, fontWeight: 600 }}>MARKET CHARTS — tap to view token</div>
+        <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 600 }}>MARKET CHARTS — tap to view token</div>
         <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
           {coins.slice(0, 10).map(function(c) {
             return (
