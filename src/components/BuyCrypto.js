@@ -6,7 +6,7 @@ const C = {
   accent: '#00e5ff',
   muted: '#586994',
 };
-
+ 
 export default function BuyCrypto({ coins, walletAddress, selectedCoinSymbol }) {
   const [selectedCoin, setSelectedCoin] = useState(selectedCoinSymbol || 'SOL');
 
