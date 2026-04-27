@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useAccount } from 'wagmi';
 import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { Connection, PublicKey } from '@solana/web3.js';
-
+ 
 const C = {
   card: '#080d1a', card2: '#0c1220',
   border: 'rgba(0,229,255,0.10)',
