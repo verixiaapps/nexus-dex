@@ -6,7 +6,7 @@ import SwapWidget from './components/SwapWidget';
 import Markets from './components/Markets';
 import BuyCrypto from './components/BuyCrypto';
 import Portfolio from './components/Portfolio';
-
+ 
 const C = {
   bg: '#03060f',
   card: '#080d1a',
