@@ -20,14 +20,6 @@ function fmt(n, d) {
   return '$' + n.toFixed(6);
 }
 
-function fmtAmt(n, decimals) {
-  if (!n) return '0';
-  var val = n / Math.pow(10, decimals || 9);
-  if (val >= 1000) return val.toLocaleString('en-US', { maximumFractionDigits: 2 });
-  if (val >= 1) return val.toFixed(4);
-  return val.toFixed(6);
-}
-
 const TOKEN_MAP = {
   'So11111111111111111111111111111111111111112': { symbol: 'SOL', name: 'Solana', decimals: 9, cgId: 'solana' },
   'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': { symbol: 'USDC', name: 'USD Coin', decimals: 6, cgId: 'usd-coin' },
@@ -38,15 +30,17 @@ const TOKEN_MAP = {
   '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R': { symbol: 'RAY', name: 'Raydium', decimals: 6, cgId: 'raydium' },
   'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3': { symbol: 'PYTH', name: 'Pyth', decimals: 6, cgId: 'pyth-network' },
   '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs': { symbol: 'ETH', name: 'Ethereum', decimals: 8, cgId: 'ethereum' },
+  'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE': { symbol: 'ORCA', name: 'Orca', decimals: 6, cgId: 'orca' },
 };
 
-export default function Portfolio({ coins }) {
+export default function Portfolio({ coins, onSend }) {
   const { publicKey, connected } = useWallet();
   const { connection } = useConnection();
   const [balances, setBalances] = useState([]);
   const [solBalance, setSolBalance] = useState(0);
   const [loading, setLoading] = useState(false);
   const [totalValue, setTotalValue] = useState(0);
+  const [activeTab, setActiveTab] = useState('holdings');
 
   var getPrice = function(cgId) {
     var coin = coins.find(function(c) { return c.id === cgId; });
@@ -70,31 +64,32 @@ export default function Portfolio({ coins }) {
       tokenAccounts.value.forEach(function(account) {
         var info = account.account.data.parsed.info;
         var mint = info.mint;
-        var amount = info.tokenAmount.amount;
-        var decimals = info.tokenAmount.decimals;
         var uiAmount = info.tokenAmount.uiAmount;
-
-        if (uiAmount && uiAmount > 0) {
+        if (uiAmount && uiAmount > 0.000001) {
           var tokenInfo = TOKEN_MAP[mint];
           holdings.push({
             mint: mint,
-            symbol: tokenInfo ? tokenInfo.symbol : mint.slice(0, 6) + '...',
+            symbol: tokenInfo ? tokenInfo.symbol : mint.slice(0, 4) + '...',
             name: tokenInfo ? tokenInfo.name : 'Unknown Token',
-            decimals: decimals,
-            amount: amount,
+            decimals: info.tokenAmount.decimals,
             uiAmount: uiAmount,
             cgId: tokenInfo ? tokenInfo.cgId : null,
           });
         }
       });
 
+      holdings.sort(function(a, b) {
+        var aVal = a.uiAmount * (a.cgId ? getPrice(a.cgId) : 0);
+        var bVal = b.uiAmount * (b.cgId ? getPrice(b.cgId) : 0);
+        return bVal - aVal;
+      });
+
       setBalances(holdings);
 
-      var total = solAmt * getPrice('solana');
+      var solPrice = getPrice('solana');
+      var total = solAmt * solPrice;
       holdings.forEach(function(h) {
-        if (h.cgId) {
-          total += h.uiAmount * getPrice(h.cgId);
-        }
+        if (h.cgId) total += h.uiAmount * getPrice(h.cgId);
       });
       setTotalValue(total);
 
@@ -110,116 +105,168 @@ export default function Portfolio({ coins }) {
       var interval = setInterval(fetchBalances, 30000);
       return function() { clearInterval(interval); };
     }
-  }, [connected, publicKey, coins]);
+  }, [connected, publicKey, coins.length]);
 
   var solPrice = getPrice('solana');
   var solValue = solBalance * solPrice;
 
-  return (
-    <div>
-      <div style={{ marginBottom: 24 }}>
-        <h1 style={{ fontSize: 26, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
-        <p style={{ color: C.muted, fontSize: 13, marginTop: 4 }}>Real-time Solana wallet balances</p>
-      </div>
-
-      {!connected ? (
-        <div style={{ textAlign: 'center', padding: '80px 40px', background: C.card, border: '1px solid ' + C.border, borderRadius: 22 }}>
-          <div style={{ fontSize: 54, marginBottom: 20 }}>🔐</div>
-          <h2 style={{ fontSize: 22, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Connect Your Wallet</h2>
-          <p style={{ color: C.muted, fontSize: 14, maxWidth: 360, margin: '0 auto 28px', lineHeight: 1.6 }}>
-            Link Phantom or Solflare to view your real-time portfolio and token balances.
+  if (!connected) {
+    return (
+      <div style={{ maxWidth: 520, margin: '0 auto' }}>
+        <div style={{ marginBottom: 20 }}>
+          <h1 style={{ fontSize: 24, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
+          <p style={{ color: C.muted, fontSize: 13, marginTop: 4 }}>Track your Solana wallet balances</p>
+        </div>
+        <div style={{ textAlign: 'center', padding: '60px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>👛</div>
+          <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Connect Your Wallet</h2>
+          <p style={{ color: C.muted, fontSize: 13, maxWidth: 300, margin: '0 auto 24px', lineHeight: 1.6 }}>
+            Connect Phantom or Solflare to view your real-time balances and portfolio value.
           </p>
           <WalletMultiButton />
         </div>
-      ) : (
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ maxWidth: 700, margin: '0 auto' }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 10 }}>
         <div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 14, marginBottom: 20 }}>
-            {[
-              ['Total Value', fmt(totalValue), C.accent],
-              ['SOL Balance', solBalance.toFixed(4) + ' SOL', C.green],
-              ['SOL Value', fmt(solValue), C.text],
-              ['Tokens', (balances.length + 1).toString(), C.muted],
-            ].map(function(item) {
-              return (
-                <div key={item[0]} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 14, padding: 18 }}>
-                  <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: .8 }}>{item[0]}</div>
-                  <div style={{ fontSize: 18, color: item[2], fontWeight: 600 }}>{item[1]}</div>
-                </div>
-              );
-            })}
+          <h1 style={{ fontSize: 24, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Real-time Solana balances · Auto-refreshes</p>
+        </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button onClick={fetchBalances} style={{
+            background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)',
+            borderRadius: 8, padding: '7px 14px', color: C.accent,
+            fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600,
+          }}>Refresh</button>
+          {onSend && (
+            <button onClick={onSend} style={{
+              background: 'linear-gradient(135deg,#00e5ff,#0055ff)',
+              border: 'none', borderRadius: 8, padding: '7px 14px',
+              color: '#03060f', fontSize: 12, cursor: 'pointer',
+              fontFamily: 'Syne, sans-serif', fontWeight: 700,
+            }}>Send Tokens</button>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginBottom: 16 }}>
+        {[
+          ['Total Value', fmt(totalValue), C.accent],
+          ['SOL Balance', solBalance.toFixed(4) + ' SOL', C.green],
+          ['SOL Value', fmt(solValue), C.text],
+          ['Tokens', (balances.length + 1) + ' assets', C.muted],
+        ].map(function(item) {
+          return (
+            <div key={item[0]} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 10, color: C.muted, marginBottom: 6, fontWeight: 700, letterSpacing: .8 }}>{item[0]}</div>
+              <div style={{ fontSize: 16, color: item[2], fontWeight: 600 }}>{item[1]}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div style={{ background: C.card, border: '1px solid rgba(0,255,163,.15)', borderRadius: 12, padding: 14, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+        <div style={{ width: 36, height: 36, borderRadius: 10, background: 'rgba(0,255,163,.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, flexShrink: 0 }}>👛</div>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ fontSize: 10, color: C.muted, marginBottom: 2 }}>CONNECTED WALLET</div>
+          <div style={{ fontSize: 11, color: C.green, fontFamily: 'JetBrains Mono, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {publicKey ? publicKey.toString() : ''}
+          </div>
+        </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 4, marginBottom: 14 }}>
+        {[['holdings', 'Holdings'], ['activity', 'Activity']].map(function(item) {
+          return (
+            <button key={item[0]} onClick={function() { setActiveTab(item[0]); }} style={{
+              padding: '7px 16px', borderRadius: 8, fontSize: 12, fontWeight: 600,
+              fontFamily: 'Syne, sans-serif', cursor: 'pointer',
+              background: activeTab === item[0] ? 'rgba(0,229,255,.09)' : 'transparent',
+              border: '1px solid ' + (activeTab === item[0] ? 'rgba(0,229,255,.25)' : C.border),
+              color: activeTab === item[0] ? C.accent : C.muted,
+            }}>{item[1]}</button>
+          );
+        })}
+      </div>
+
+      {activeTab === 'holdings' && (
+        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
+            <div>TOKEN</div>
+            <div style={{ textAlign: 'right' }}>BALANCE</div>
+            <div style={{ textAlign: 'right' }}>PRICE</div>
+            <div style={{ textAlign: 'right' }}>VALUE</div>
           </div>
 
-          <div style={{ background: C.card, border: '1px solid rgba(0,255,163,.15)', borderRadius: 14, padding: 16, marginBottom: 20, display: 'flex', alignItems: 'center', gap: 14 }}>
-            <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(0,255,163,.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}>👛</div>
-            <div style={{ flex: 1 }}>
-              <div style={{ fontSize: 11, color: C.muted, marginBottom: 2 }}>Connected Wallet</div>
-              <div style={{ fontSize: 12, color: C.green, fontFamily: 'JetBrains Mono, monospace', fontWeight: 500 }}>
-                {publicKey ? publicKey.toString() : ''}
+          <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(153,69,255,.2)', border: '1px solid rgba(153,69,255,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#9945ff', flexShrink: 0 }}>S</div>
+              <div>
+                <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>SOL</div>
+                <div style={{ color: C.muted, fontSize: 10 }}>Solana</div>
               </div>
             </div>
-            <button onClick={fetchBalances} style={{
-              background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)',
-              borderRadius: 8, padding: '6px 12px', color: C.accent,
-              fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600,
-            }}>Refresh</button>
+            <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{solBalance.toFixed(4)}</div>
+            <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{fmt(solPrice)}</div>
+            <div style={{ textAlign: 'right', color: C.green, fontSize: 13, fontWeight: 600 }}>{fmt(solValue)}</div>
           </div>
 
           {loading ? (
-            <div style={{ textAlign: 'center', padding: 40, color: C.muted }}>Loading balances...</div>
+            <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>Loading balances...</div>
+          ) : balances.length === 0 ? (
+            <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>No other token balances found</div>
           ) : (
-            <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 18, overflow: 'hidden' }}>
-              <div style={{ padding: '12px 20px', borderBottom: '1px solid rgba(0,229,255,.06)', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10, fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>
-                <div>TOKEN</div>
-                <div style={{ textAlign: 'right' }}>BALANCE</div>
-                <div style={{ textAlign: 'right' }}>PRICE</div>
-                <div style={{ textAlign: 'right' }}>VALUE</div>
-              </div>
-
-              <div style={{ padding: '14px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(153,69,255,.2)', border: '1px solid rgba(153,69,255,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#9945ff' }}>S</div>
-                  <div>
-                    <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>SOL</div>
-                    <div style={{ color: C.muted, fontSize: 10 }}>Solana</div>
-                  </div>
-                </div>
-                <div style={{ textAlign: 'right', color: C.text, fontSize: 13 }}>{solBalance.toFixed(4)}</div>
-                <div style={{ textAlign: 'right', color: C.text, fontSize: 13 }}>{fmt(solPrice)}</div>
-                <div style={{ textAlign: 'right', color: C.green, fontSize: 13, fontWeight: 600 }}>{fmt(solValue)}</div>
-              </div>
-
-              {balances.map(function(token) {
-                var price = token.cgId ? getPrice(token.cgId) : 0;
-                var value = token.uiAmount * price;
-                return (
-                  <div key={token.mint} style={{ padding: '14px 20px', display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 10, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)' }}
-                    onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }}
-                    onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
-                  >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                      <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent }}>
-                        {token.symbol.charAt(0)}
-                      </div>
-                      <div>
-                        <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{token.symbol}</div>
-                        <div style={{ color: C.muted, fontSize: 10 }}>{token.name}</div>
-                      </div>
+            balances.map(function(token) {
+              var price = token.cgId ? getPrice(token.cgId) : 0;
+              var value = token.uiAmount * price;
+              return (
+                <div key={token.mint} style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)', transition: 'background .15s' }}
+                  onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }}
+                  onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                    <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>
+                      {token.symbol.charAt(0)}
                     </div>
-                    <div style={{ textAlign: 'right', color: C.text, fontSize: 13 }}>{token.uiAmount.toFixed(4)}</div>
-                    <div style={{ textAlign: 'right', color: C.text, fontSize: 13 }}>{price > 0 ? fmt(price) : '--'}</div>
-                    <div style={{ textAlign: 'right', color: value > 0 ? C.green : C.muted, fontSize: 13, fontWeight: value > 0 ? 600 : 400 }}>
-                      {value > 0 ? fmt(value) : '--'}
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.symbol}</div>
+                      <div style={{ color: C.muted, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.name}</div>
                     </div>
                   </div>
-                );
-              })}
-
-              {balances.length === 0 && !loading && (
-                <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>
-                  No SPL token balances found in this wallet.
+                  <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>
+                    {token.uiAmount >= 1000 ? token.uiAmount.toLocaleString('en-US', { maximumFractionDigits: 2 }) : token.uiAmount.toFixed(4)}
+                  </div>
+                  <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{price > 0 ? fmt(price) : '--'}</div>
+                  <div style={{ textAlign: 'right', color: value > 0.01 ? C.green : C.muted, fontSize: 12, fontWeight: value > 0.01 ? 600 : 400 }}>
+                    {value > 0.01 ? fmt(value) : '--'}
+                  </div>
                 </div>
-              )}
-            </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {activeTab === 'activity' && (
+        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 40, textAlign: 'center' }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>📋</div>
+          <div style={{ color: '#fff', fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Transaction History</div>
+          <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 300, margin: '0 auto 20px' }}>
+            View your full transaction history on Solscan.
+          </p>
+          {publicKey && (
+            <a href={'https://solscan.io/account/' + publicKey.toString()} target="_blank" rel="noreferrer"
+              style={{
+                display: 'inline-block', padding: '10px 24px', borderRadius: 10,
+                background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)',
+                color: C.accent, fontSize: 13, fontWeight: 600, textDecoration: 'none',
+              }}>
+              View on Solscan ↗
+            </a>
           )}
         </div>
       )}
