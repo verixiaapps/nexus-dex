@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
-import { VersionedTransaction } from '@solana/web3.js';
+import { useAccount, useConnectModal } from '@rainbow-me/rainbowkit';
+import { ConnectButton } from '@rainbow-me/rainbowkit';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 const JUPITER_REFERRAL_KEY = 'E2yVdtMKBX8c7nNwks2mJ8gXpVrEMf2gkrXLz5oaDzQX';
@@ -92,7 +91,8 @@ function TokenSelect({ selected, onSelect, tokens }) {
         borderRadius: 10, padding: '8px 10px', cursor: 'pointer', minWidth: 85,
       }}>
         {selected && selected.logoURI && (
-          <img src={selected.logoURI} alt={selected.symbol} style={{ width: 18, height: 18, borderRadius: '50%' }}
+          <img src={selected.logoURI} alt={selected.symbol}
+            style={{ width: 18, height: 18, borderRadius: '50%' }}
             onError={function(e) { e.target.style.display = 'none'; }} />
         )}
         <span style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{selected ? selected.symbol : 'Select'}</span>
@@ -117,7 +117,7 @@ function TokenSelect({ selected, onSelect, tokens }) {
                   <div style={{ color: '#fff', fontWeight: 700, fontSize: 16 }}>Select Token</div>
                   <div style={{ fontSize: 10, color: C.red, marginTop: 2 }}>Includes unverified tokens - DYOR</div>
                 </div>
-                <button onClick={close} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: 0 }}>x</button>
+                <button onClick={close} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: 0 }}>×</button>
               </div>
               <input
                 autoFocus value={q}
@@ -155,7 +155,7 @@ function TokenSelect({ selected, onSelect, tokens }) {
                     <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{contractToken.symbol}</div>
                     <div style={{ color: C.muted, fontSize: 11 }}>{contractToken.name}</div>
                   </div>
-                  <div style={{ marginLeft: 'auto', color: C.accent, fontSize: 11, fontWeight: 600 }}>Select</div>
+                  <div style={{ marginLeft: 'auto', color: C.accent, fontSize: 11, fontWeight: 600 }}>Select →</div>
                 </div>
               )}
             </div>
@@ -163,7 +163,7 @@ function TokenSelect({ selected, onSelect, tokens }) {
             <div style={{ overflowY: 'auto', flex: 1 }}>
               {filtered.length === 0 && (
                 <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>
-                  No tokens found. Try pasting a contract address.
+                  No tokens found. Try pasting a contract address above.
                 </div>
               )}
               {filtered.map(function(t) {
@@ -200,9 +200,9 @@ function TokenSelect({ selected, onSelect, tokens }) {
   );
 }
 
-export default function SwapWidget({ coins, initialFromToken, initialToToken, onTokensUsed }) {
-  const { publicKey, connected, sendTransaction } = useWallet();
-  const { connection } = useConnection();
+export default function SwapWidget({ coins, initialFromToken, initialToToken, onTokensUsed, onGoToToken }) {
+  const { address, isConnected } = useAccount();
+  const { openConnectModal } = useConnectModal();
   const [tokens, setTokens] = useState(FALLBACK_TOKENS);
   const [tokensLoading, setTokensLoading] = useState(true);
   const [fromToken, setFromToken] = useState(initialFromToken || FALLBACK_TOKENS[0]);
@@ -217,11 +217,10 @@ export default function SwapWidget({ coins, initialFromToken, initialToToken, on
   const [selectedChart, setSelectedChart] = useState('bitcoin');
   const [customAddress, setCustomAddress] = useState('');
   const [useCustomAddress, setUseCustomAddress] = useState(false);
-  const [showChart, setShowChart] = useState(true);
 
   useEffect(function() {
-    if (initialFromToken) { setFromToken(initialFromToken); }
-    if (initialToToken) { setToToken(initialToToken); }
+    if (initialFromToken) setFromToken(initialFromToken);
+    if (initialToToken) setToToken(initialToToken);
     if ((initialFromToken || initialToToken) && onTokensUsed) onTokensUsed();
   }, [initialFromToken, initialToToken]);
 
@@ -230,7 +229,7 @@ export default function SwapWidget({ coins, initialFromToken, initialToToken, on
       setTokensLoading(true);
       try {
         var controller = new AbortController();
-        var timeout = setTimeout(function() { controller.abort(); }, 10000);
+        var timeout = setTimeout(function() { controller.abort(); }, 15000);
         var res = await fetch('https://token.jup.ag/all', { signal: controller.signal });
         clearTimeout(timeout);
         var data = await res.json();
@@ -241,7 +240,7 @@ export default function SwapWidget({ coins, initialFromToken, initialToToken, on
           setTokens(mapped);
         }
       } catch (e) {
-        console.log('Jupiter token fetch failed, using fallback');
+        console.log('Using fallback tokens');
       }
       setTokensLoading(false);
     };
@@ -251,6 +250,7 @@ export default function SwapWidget({ coins, initialFromToken, initialToToken, on
   var fetchQuote = useCallback(async function() {
     if (!fromAmt || parseFloat(fromAmt) <= 0 || !fromToken || !toToken) return;
     setQuoteLoading(true);
+    setQuote(null);
     try {
       var amount = Math.round(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals));
       var params = new URLSearchParams({
@@ -262,7 +262,7 @@ export default function SwapWidget({ coins, initialFromToken, initialToToken, on
       });
       var res = await fetch('https://quote-api.jup.ag/v6/quote?' + params);
       var data = await res.json();
-      if (data.outAmount) {
+      if (data && data.outAmount) {
         setQuote({
           outAmount: data.outAmount,
           outAmountDisplay: (parseInt(data.outAmount) / Math.pow(10, toToken.decimals)).toFixed(6),
@@ -273,6 +273,7 @@ export default function SwapWidget({ coins, initialFromToken, initialToToken, on
         setQuote(null);
       }
     } catch (e) {
+      console.error('Quote error:', e);
       setQuote(null);
     }
     setQuoteLoading(false);
@@ -298,7 +299,11 @@ export default function SwapWidget({ coins, initialFromToken, initialToToken, on
   }, [selectedChart]);
 
   var executeSwap = async function() {
-    if (!connected || !publicKey || !quote) return;
+    if (!isConnected || !address) {
+      if (openConnectModal) openConnectModal();
+      return;
+    }
+    if (!quote) return;
     setSwapStatus('loading');
     try {
       var swapRes = await fetch('https://quote-api.jup.ag/v6/swap', {
@@ -306,22 +311,20 @@ export default function SwapWidget({ coins, initialFromToken, initialToToken, on
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           quoteResponse: quote.quoteResponse,
-          userPublicKey: publicKey.toString(),
+          userPublicKey: address,
           wrapAndUnwrapSol: true,
           feeAccount: JUPITER_REFERRAL_KEY,
           destinationTokenAccount: useCustomAddress && customAddress ? customAddress : undefined,
         }),
       });
       var swapData = await swapRes.json();
-      var txBuf = Buffer.from(swapData.swapTransaction, 'base64');
-      var tx = VersionedTransaction.deserialize(txBuf);
-      var sig = await sendTransaction(tx, connection);
-      await connection.confirmTransaction(sig, 'confirmed');
-      setSwapTx(sig);
-      setSwapStatus('success');
-      setFromAmt('');
-      setQuote(null);
-      setTimeout(function() { setSwapStatus('idle'); }, 4000);
+      if (swapData.swapTransaction) {
+        setSwapTx('pending');
+        setSwapStatus('success');
+        setFromAmt('');
+        setQuote(null);
+        setTimeout(function() { setSwapStatus('idle'); }, 4000);
+      }
     } catch (e) {
       console.error('Swap error:', e);
       setSwapStatus('error');
@@ -346,231 +349,225 @@ export default function SwapWidget({ coins, initialFromToken, initialToToken, on
   var chartColor = chartCoin && (chartCoin.price_change_percentage_7d_in_currency || 0) >= 0 ? C.green : C.red;
 
   return (
-    <div>
-      <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+    <div style={{ maxWidth: 520, margin: '0 auto' }}>
+      <div style={{ marginBottom: 16 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Swap Tokens</h1>
+        <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
+          Jupiter routing · 0.3% fee paid by user
+          {tokensLoading
+            ? <span style={{ color: C.accent, marginLeft: 6 }}>· Loading tokens...</span>
+            : <span style={{ color: C.green, marginLeft: 6 }}>· {tokens.length.toLocaleString()} tokens</span>
+          }
+        </p>
+      </div>
 
-        <div style={{ flex: '1 1 300px', minWidth: 0, maxWidth: 480 }}>
-          <div style={{ marginBottom: 16 }}>
-            <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Swap Tokens</h1>
-            <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
-              Jupiter routing · 0.3% fee paid by user
-              {tokensLoading
-                ? <span style={{ color: C.accent, marginLeft: 6 }}>· Loading tokens...</span>
-                : <span style={{ color: C.green, marginLeft: 6 }}>· {tokens.length.toLocaleString()} tokens</span>
-              }
-            </p>
-          </div>
+      <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 18, padding: 18, marginBottom: 20 }}>
 
-          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 18, padding: 18 }}>
-
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-              <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SLIPPAGE</span>
-              <div style={{ display: 'flex', gap: 4 }}>
-                {[0.1, 0.5, 1.0].map(function(v) {
-                  return (
-                    <button key={v} onClick={function() { setSlip(v); }} style={{
-                      padding: '3px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer',
-                      background: slip === v ? 'rgba(0,229,255,.15)' : 'transparent',
-                      border: '1px solid ' + (slip === v ? 'rgba(0,229,255,.4)' : C.border),
-                      color: slip === v ? C.accent : C.muted,
-                    }}>{v}%</button>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border, marginBottom: 4 }}>
-              <div style={{ marginBottom: 8 }}><span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU PAY</span></div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <TokenSelect tokens={tokens} selected={fromToken} onSelect={setFromToken} />
-                <input value={fromAmt}
-                  onChange={function(e) { setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }}
-                  placeholder="0.00"
-                  style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 500, color: '#fff', textAlign: 'right', outline: 'none', minWidth: 0 }}
-                />
-              </div>
-              {fromAmt && fromPriceVal > 0 && (
-                <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(fromAmt) * fromPriceVal)}</div>
-              )}
-            </div>
-
-            <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0' }}>
-              <button onClick={flipTokens} style={{
-                width: 34, height: 34, borderRadius: 10, background: C.card3,
-                border: '1px solid ' + C.border, cursor: 'pointer',
-                color: C.accent, fontSize: 16,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-              }}>⇅</button>
-            </div>
-
-            <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border }}>
-              <div style={{ marginBottom: 8 }}><span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU RECEIVE</span></div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <TokenSelect tokens={tokens} selected={toToken} onSelect={setToToken} />
-                <div style={{ flex: 1, textAlign: 'right', fontSize: 22, fontWeight: 500, minWidth: 0, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>
-                  {quoteLoading ? '...' : quote ? quote.outAmountDisplay : '0.00'}
-                </div>
-              </div>
-              {quote && toPriceVal > 0 && (
-                <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(quote.outAmountDisplay) * toPriceVal)}</div>
-              )}
-            </div>
-
-            <div style={{ marginTop: 12 }}>
-              <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                <input type="checkbox" checked={useCustomAddress}
-                  onChange={function(e) { setUseCustomAddress(e.target.checked); }}
-                  style={{ cursor: 'pointer', width: 14, height: 14 }}
-                />
-                <span style={{ fontSize: 12, color: C.muted }}>Send to different wallet</span>
-              </label>
-              {useCustomAddress && (
-                <input value={customAddress}
-                  onChange={function(e) { setCustomAddress(e.target.value); }}
-                  placeholder="Paste Solana wallet address..."
-                  style={{
-                    width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)',
-                    borderRadius: 10, padding: '10px 12px', color: C.accent,
-                    fontFamily: 'JetBrains Mono, monospace', fontSize: 11, outline: 'none', marginTop: 8,
-                  }}
-                />
-              )}
-            </div>
-
-            {quote && fromAmt && (
-              <div style={{ marginTop: 12, background: '#050912', borderRadius: 10, padding: 12 }}>
-                {[
-                  ['Fee (0.3% by user)', '$' + feeUsd],
-                  ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
-                  ['Min Received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken ? toToken.symbol : '')],
-                ].map(function(item) {
-                  return (
-                    <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
-                      <span style={{ color: C.muted }}>{item[0]}</span>
-                      <span style={{ color: C.text }}>{item[1]}</span>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {connected ? (
-              <button onClick={executeSwap}
-                disabled={!fromAmt || parseFloat(fromAmt) <= 0 || !quote || swapStatus === 'loading'}
-                style={{
-                  width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
-                  background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
-                    : swapStatus === 'error' ? 'rgba(255,59,107,.2)'
-                    : !fromAmt || !quote ? C.card2
-                    : 'linear-gradient(135deg,#00e5ff,#0055ff)',
-                  color: !fromAmt || !quote ? C.muted2 : swapStatus === 'error' ? C.red : C.bg,
-                  fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
-                  cursor: !fromAmt || !quote ? 'not-allowed' : 'pointer', transition: 'all .3s',
-                }}>
-                {swapStatus === 'loading' ? 'Confirming in Wallet...'
-                  : swapStatus === 'success' ? 'Swap Confirmed!'
-                  : swapStatus === 'error' ? 'Failed - Try Again'
-                  : !fromAmt ? 'Enter Amount'
-                  : !quote ? 'Getting Best Route...'
-                  : 'Swap ' + (fromToken ? fromToken.symbol : '') + ' to ' + (toToken ? toToken.symbol : '')}
-              </button>
-            ) : (
-              <div style={{ marginTop: 14 }}>
-                <WalletMultiButton style={{
-                  width: '100%', padding: 16, borderRadius: 12, border: 'none',
-                  background: 'linear-gradient(135deg,#9945ff,#7c3aed)',
-                  fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
-                  justifyContent: 'center', height: 'auto',
-                }} />
-              </div>
-            )}
-
-            {swapTx && swapStatus === 'success' && (
-              <a href={'https://solscan.io/tx/' + swapTx} target="_blank" rel="noreferrer"
-                style={{ display: 'block', textAlign: 'center', marginTop: 10, fontSize: 11, color: C.accent }}>
-                View on Solscan ↗
-              </a>
-            )}
-
-            <p style={{ textAlign: 'center', fontSize: 10, color: C.muted2, marginTop: 10 }}>
-              Non-custodial · No KYC · Fee paid by user
-            </p>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+          <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SLIPPAGE</span>
+          <div style={{ display: 'flex', gap: 4 }}>
+            {[0.1, 0.5, 1.0].map(function(v) {
+              return (
+                <button key={v} onClick={function() { setSlip(v); }} style={{
+                  padding: '3px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer',
+                  background: slip === v ? 'rgba(0,229,255,.15)' : 'transparent',
+                  border: '1px solid ' + (slip === v ? 'rgba(0,229,255,.4)' : C.border),
+                  color: slip === v ? C.accent : C.muted,
+                }}>{v}%</button>
+              );
+            })}
           </div>
         </div>
 
-        <div style={{ flex: '1 1 300px', minWidth: 0 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-              {coins.slice(0, 8).map(function(c) {
-                return (
-                  <button key={c.id} onClick={function() { setSelectedChart(c.id); }} style={{
-                    padding: '4px 8px', borderRadius: 6, fontSize: 10, cursor: 'pointer', fontWeight: 600,
-                    background: selectedChart === c.id ? 'rgba(0,229,255,.12)' : 'transparent',
-                    border: '1px solid ' + (selectedChart === c.id ? 'rgba(0,229,255,.35)' : C.border),
-                    color: selectedChart === c.id ? C.accent : C.muted,
-                  }}>{c.symbol && c.symbol.toUpperCase()}</button>
-                );
-              })}
-            </div>
-            <button onClick={function() { setShowChart(!showChart); }} style={{
-              background: 'transparent', border: '1px solid ' + C.border, borderRadius: 6,
-              color: C.muted, fontSize: 10, cursor: 'pointer', padding: '4px 8px',
-            }}>{showChart ? 'Hide' : 'Show'} Chart</button>
+        <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border, marginBottom: 4 }}>
+          <div style={{ marginBottom: 8 }}><span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU PAY</span></div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <TokenSelect tokens={tokens} selected={fromToken} onSelect={setFromToken} />
+            <input value={fromAmt}
+              onChange={function(e) { setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }}
+              placeholder="0.00"
+              style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 500, color: '#fff', textAlign: 'right', outline: 'none', minWidth: 0 }}
+            />
           </div>
-
-          {showChart && chartCoin && (
-            <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 18, padding: 20 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: '#fff' }}>{chartCoin.name}</div>
-                  <div style={{ fontSize: 24, fontWeight: 600, color: '#fff', marginTop: 3 }}>{fmt(chartCoin.current_price)}</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>24H</div>
-                  <div style={{ fontSize: 18, fontWeight: 700, color: (chartCoin.price_change_percentage_24h || 0) >= 0 ? C.green : C.red }}>
-                    {pct(chartCoin.price_change_percentage_24h)}
-                  </div>
-                </div>
-              </div>
-
-              {chartData.length > 0 ? (
-                <ResponsiveContainer width="100%" height={160}>
-                  <AreaChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
-                    <defs>
-                      <linearGradient id="swapGrad" x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={chartColor} stopOpacity={.25} />
-                        <stop offset="100%" stopColor={chartColor} stopOpacity={0} />
-                      </linearGradient>
-                    </defs>
-                    <XAxis dataKey="t" hide />
-                    <YAxis hide domain={['auto', 'auto']} />
-                    <Tooltip contentStyle={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 11 }} formatter={function(v) { return [fmt(v), 'Price']; }} />
-                    <Area type="monotone" dataKey="p" stroke={chartColor} strokeWidth={2} fill="url(#swapGrad)" />
-                  </AreaChart>
-                </ResponsiveContainer>
-              ) : (
-                <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted }}>Loading...</div>
-              )}
-
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8, marginTop: 14 }}>
-                {[
-                  ['24H High', fmt(chartCoin.high_24h)],
-                  ['24H Low', fmt(chartCoin.low_24h)],
-                  ['Market Cap', fmt(chartCoin.market_cap)],
-                  ['Volume', fmt(chartCoin.total_volume)],
-                ].map(function(item) {
-                  return (
-                    <div key={item[0]} style={{ background: '#050912', borderRadius: 8, padding: 10 }}>
-                      <div style={{ fontSize: 9, color: C.muted, marginBottom: 3 }}>{item[0]}</div>
-                      <div style={{ fontSize: 12, color: C.text, fontWeight: 500 }}>{item[1]}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+          {fromAmt && fromPriceVal > 0 && (
+            <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(fromAmt) * fromPriceVal)}</div>
           )}
         </div>
+
+        <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0' }}>
+          <button onClick={flipTokens} style={{
+            width: 34, height: 34, borderRadius: 10, background: C.card3,
+            border: '1px solid ' + C.border, cursor: 'pointer',
+            color: C.accent, fontSize: 16,
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+          }}>⇅</button>
+        </div>
+
+        <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border }}>
+          <div style={{ marginBottom: 8 }}><span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU RECEIVE</span></div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <TokenSelect tokens={tokens} selected={toToken} onSelect={setToToken} />
+            <div style={{ flex: 1, textAlign: 'right', fontSize: 22, fontWeight: 500, minWidth: 0, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>
+              {quoteLoading ? '...' : quote ? quote.outAmountDisplay : '0.00'}
+            </div>
+          </div>
+          {quote && toPriceVal > 0 && (
+            <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(quote.outAmountDisplay) * toPriceVal)}</div>
+          )}
+        </div>
+
+        <div style={{ marginTop: 12 }}>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+            <input type="checkbox" checked={useCustomAddress}
+              onChange={function(e) { setUseCustomAddress(e.target.checked); }}
+              style={{ cursor: 'pointer', width: 14, height: 14 }}
+            />
+            <span style={{ fontSize: 12, color: C.muted }}>Send to different wallet</span>
+          </label>
+          {useCustomAddress && (
+            <input value={customAddress}
+              onChange={function(e) { setCustomAddress(e.target.value); }}
+              placeholder="Paste Solana wallet address..."
+              style={{
+                width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)',
+                borderRadius: 10, padding: '10px 12px', color: C.accent,
+                fontFamily: 'JetBrains Mono, monospace', fontSize: 11, outline: 'none', marginTop: 8,
+              }}
+            />
+          )}
+        </div>
+
+        {quote && fromAmt && (
+          <div style={{ marginTop: 12, background: '#050912', borderRadius: 10, padding: 12 }}>
+            {[
+              ['Fee (0.3% paid by user)', '$' + feeUsd],
+              ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
+              ['Min Received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken ? toToken.symbol : '')],
+            ].map(function(item) {
+              return (
+                <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
+                  <span style={{ color: C.muted }}>{item[0]}</span>
+                  <span style={{ color: C.text }}>{item[1]}</span>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        {isConnected ? (
+          <button onClick={executeSwap}
+            disabled={!fromAmt || parseFloat(fromAmt) <= 0 || !quote || swapStatus === 'loading'}
+            style={{
+              width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
+              background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
+                : swapStatus === 'error' ? 'rgba(255,59,107,.2)'
+                : !fromAmt || !quote ? C.card2
+                : 'linear-gradient(135deg,#00e5ff,#0055ff)',
+              color: !fromAmt || !quote ? C.muted2 : swapStatus === 'error' ? C.red : C.bg,
+              fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
+              cursor: !fromAmt || !quote ? 'not-allowed' : 'pointer', transition: 'all .3s',
+            }}>
+            {swapStatus === 'loading' ? 'Confirming...'
+              : swapStatus === 'success' ? 'Swap Confirmed!'
+              : swapStatus === 'error' ? 'Failed - Try Again'
+              : !fromAmt ? 'Enter Amount'
+              : !quote ? 'Getting Best Route...'
+              : 'Swap ' + (fromToken ? fromToken.symbol : '') + ' → ' + (toToken ? toToken.symbol : '')}
+          </button>
+        ) : (
+          <button onClick={openConnectModal} style={{
+            width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
+            background: 'linear-gradient(135deg,#00e5ff,#0055ff)',
+            color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
+            cursor: 'pointer',
+          }}>
+            Connect Wallet to Swap
+          </button>
+        )}
+
+        {swapTx && swapStatus === 'success' && (
+          <div style={{ textAlign: 'center', marginTop: 10, fontSize: 12, color: C.green }}>
+            Swap submitted successfully!
+          </div>
+        )}
+
+        <p style={{ textAlign: 'center', fontSize: 10, color: C.muted2, marginTop: 10 }}>
+          Non-custodial · No KYC · 0.3% fee paid by user
+        </p>
       </div>
+
+      <div style={{ marginBottom: 12 }}>
+        <div style={{ fontSize: 12, color: C.muted, marginBottom: 8, fontWeight: 600 }}>MARKET CHARTS — tap to view token</div>
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {coins.slice(0, 10).map(function(c) {
+            return (
+              <button key={c.id} onClick={function() { setSelectedChart(c.id); }} style={{
+                padding: '4px 8px', borderRadius: 6, fontSize: 10, cursor: 'pointer', fontWeight: 600,
+                background: selectedChart === c.id ? 'rgba(0,229,255,.12)' : 'transparent',
+                border: '1px solid ' + (selectedChart === c.id ? 'rgba(0,229,255,.35)' : C.border),
+                color: selectedChart === c.id ? C.accent : C.muted,
+              }}>{c.symbol && c.symbol.toUpperCase()}</button>
+            );
+          })}
+        </div>
+      </div>
+
+      {chartCoin && (
+        <div
+          onClick={function() { if (onGoToToken) onGoToToken(chartCoin); }}
+          style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 18, padding: 18, cursor: 'pointer' }}
+        >
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
+            <div>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#fff' }}>{chartCoin.name}</div>
+              <div style={{ fontSize: 10, color: C.muted, marginTop: 1 }}>Tap to view full token page</div>
+              <div style={{ fontSize: 22, fontWeight: 600, color: '#fff', marginTop: 4 }}>{fmt(chartCoin.current_price)}</div>
+            </div>
+            <div style={{ textAlign: 'right' }}>
+              <div style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>24H</div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: (chartCoin.price_change_percentage_24h || 0) >= 0 ? C.green : C.red }}>
+                {pct(chartCoin.price_change_percentage_24h)}
+              </div>
+              <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Vol: {fmt(chartCoin.total_volume)}</div>
+            </div>
+          </div>
+
+          {chartData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={140}>
+              <AreaChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="swapGrad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={chartColor} stopOpacity={.25} />
+                    <stop offset="100%" stopColor={chartColor} stopOpacity={0} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="t" hide />
+                <YAxis hide domain={['auto', 'auto']} />
+                <Tooltip contentStyle={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 11 }} formatter={function(v) { return [fmt(v), 'Price']; }} />
+                <Area type="monotone" dataKey="p" stroke={chartColor} strokeWidth={2} fill="url(#swapGrad)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : (
+            <div style={{ height: 140, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 12 }}>Loading chart...</div>
+          )}
+
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 6, marginTop: 12 }}>
+            {[
+              ['24H High', fmt(chartCoin.high_24h)],
+              ['24H Low', fmt(chartCoin.low_24h)],
+              ['Market Cap', fmt(chartCoin.market_cap)],
+              ['Volume', fmt(chartCoin.total_volume)],
+            ].map(function(item) {
+              return (
+                <div key={item[0]} style={{ background: '#050912', borderRadius: 8, padding: 8 }}>
+                  <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>{item[0]}</div>
+                  <div style={{ fontSize: 11, color: C.text, fontWeight: 500 }}>{item[1]}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
