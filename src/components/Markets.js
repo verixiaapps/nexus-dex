@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { LineChart, Line, ResponsiveContainer } from 'recharts';
-
+ 
 const C = {
   card: '#080d1a', card2: '#0c1220',
   border: 'rgba(0,229,255,0.10)',
