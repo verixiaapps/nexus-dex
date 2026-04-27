@@ -9,7 +9,7 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
-
+ 
 const YOUR_FEE_WALLET = 'E2yVdtMKBX8c7nNwks2mJ8gXpVrEMf2gkrXLz5oaDzQX';
 const FEE_PERCENT = 0.001;
 const RPC = process.env.REACT_APP_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
