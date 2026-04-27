@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { VersionedTransaction } from '@solana/web3.js';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
- 
+
 const JUPITER_REFERRAL_KEY = 'E2yVdtMKBX8c7nNwks2mJ8gXpVrEMf2gkrXLz5oaDzQX';
 const JUPITER_FEE_BPS = 30;
 
@@ -13,7 +13,7 @@ const C = {
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
 
-const DEFAULT_TOKENS = [
+const FALLBACK_TOKENS = [
   { mint: 'So11111111111111111111111111111111111111112', symbol: 'SOL', name: 'Solana', decimals: 9 },
   { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC', name: 'USD Coin', decimals: 6 },
   { mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', symbol: 'USDT', name: 'Tether', decimals: 6 },
@@ -23,7 +23,7 @@ const DEFAULT_TOKENS = [
   { mint: 'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So', symbol: 'mSOL', name: 'Marinade SOL', decimals: 9 },
   { mint: '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R', symbol: 'RAY', name: 'Raydium', decimals: 6 },
   { mint: 'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE', symbol: 'ORCA', name: 'Orca', decimals: 6 },
-  { mint: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3', symbol: 'PYTH', name: 'Pyth Network', decimals: 6 },
+  { mint: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3', symbol: 'PYTH', name: 'Pyth', decimals: 6 },
 ];
 
 function fmt(n, d) {
@@ -44,68 +44,153 @@ function pct(n) {
 function TokenSelect({ selected, onSelect, tokens }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
+  const [contractAddr, setContractAddr] = useState('');
+  const [contractToken, setContractToken] = useState(null);
+  const [contractLoading, setContractLoading] = useState(false);
+
+  const isAddress = function(str) {
+    return str && str.length >= 32 && str.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(str);
+  };
+
+  const lookupContract = async function(addr) {
+    if (!isAddress(addr)) return;
+    setContractLoading(true);
+    try {
+      const found = tokens.find(function(t) { return t.mint === addr; });
+      if (found) {
+        setContractToken(found);
+      } else {
+        setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6 });
+      }
+    } catch (e) {
+      setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6 });
+    }
+    setContractLoading(false);
+  };
 
   const filtered = tokens.filter(function(t) {
-    return t.symbol.toLowerCase().includes(q.toLowerCase()) ||
-      t.name.toLowerCase().includes(q.toLowerCase());
-  }).slice(0, 50);
+    if (!q) return true;
+    var ql = q.toLowerCase();
+    return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
+      (t.name && t.name.toLowerCase().includes(ql)) ||
+      (t.mint && t.mint.toLowerCase().includes(ql));
+  }).slice(0, 100);
 
   return (
-    <div style={{ position: 'relative' }}>
+    <div style={{ position: 'relative', flexShrink: 0 }}>
       <button onClick={() => setOpen(!open)} style={{
-        display: 'flex', alignItems: 'center', gap: 8,
+        display: 'flex', alignItems: 'center', gap: 6,
         background: C.card3, border: '1px solid ' + C.border,
-        borderRadius: 10, padding: '8px 12px', cursor: 'pointer', minWidth: 100,
+        borderRadius: 10, padding: '8px 10px', cursor: 'pointer', minWidth: 90,
       }}>
-        <span style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{selected ? selected.symbol : 'Select'}</span>
-        <span style={{ color: C.muted, fontSize: 10 }}>▾</span>
+        <span style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{selected ? selected.symbol : 'Select'}</span>
+        <span style={{ color: C.muted, fontSize: 9 }}>▾</span>
       </button>
+
       {open && (
-        <div style={{
-          position: 'absolute', top: '110%', left: 0, zIndex: 200,
-          background: C.card, border: '1px solid ' + C.borderHi,
-          borderRadius: 14, width: 260, maxHeight: 360,
-          display: 'flex', flexDirection: 'column',
-          boxShadow: '0 20px 60px rgba(0,0,0,.8)'
-        }}>
-          <div style={{ padding: '12px 12px 8px' }}>
-            <input
-              autoFocus value={q}
-              onChange={function(e) { setQ(e.target.value); }}
-              placeholder="Search token..."
-              style={{
-                width: '100%', background: C.card2,
-                border: '1px solid ' + C.border,
-                borderRadius: 8, padding: '8px 12px',
-                color: C.text, fontSize: 13, outline: 'none',
-                fontFamily: 'Syne, sans-serif'
-              }}
-            />
-          </div>
-          <div style={{ overflowY: 'auto', flex: 1 }}>
-            {filtered.map(function(t) {
-              return (
-                <div key={t.mint}
-                  onClick={function() { onSelect(t); setOpen(false); setQ(''); }}
-                  style={{ padding: '10px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}
-                  onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.05)'; }}
-                  onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
-                >
-                  <div style={{
-                    width: 28, height: 28, borderRadius: '50%',
-                    background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    fontSize: 11, fontWeight: 700, color: C.accent, flexShrink: 0
-                  }}>{t.symbol.charAt(0)}</div>
-                  <div>
-                    <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{t.symbol}</div>
-                    <div style={{ color: C.muted, fontSize: 11 }}>{t.name}</div>
-                  </div>
+        <>
+          <div onClick={() => { setOpen(false); setQ(''); setContractAddr(''); setContractToken(null); }}
+            style={{ position: 'fixed', inset: 0, zIndex: 299, background: 'rgba(0,0,0,.7)' }} />
+          <div style={{
+            position: 'fixed', top: '50%', left: '50%',
+            transform: 'translate(-50%, -50%)',
+            zIndex: 300, background: C.card,
+            border: '1px solid ' + C.borderHi,
+            borderRadius: 16, width: '92vw', maxWidth: 400,
+            maxHeight: '85vh', display: 'flex', flexDirection: 'column',
+            boxShadow: '0 20px 60px rgba(0,0,0,.9)',
+          }}>
+            <div style={{ padding: '16px 16px 10px', borderBottom: '1px solid ' + C.border, flexShrink: 0 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <div>
+                  <span style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>Select Token</span>
+                  <div style={{ fontSize: 10, color: C.red, marginTop: 2 }}>Warning: includes unverified tokens - DYOR</div>
                 </div>
-              );
-            })}
+                <button onClick={() => { setOpen(false); setQ(''); setContractAddr(''); setContractToken(null); }}
+                  style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1 }}>x</button>
+              </div>
+              <input
+                autoFocus value={q}
+                onChange={function(e) { setQ(e.target.value); }}
+                placeholder="Search name or symbol..."
+                style={{
+                  width: '100%', background: C.card2,
+                  border: '1px solid ' + C.border,
+                  borderRadius: 8, padding: '10px 12px',
+                  color: C.text, fontSize: 13, outline: 'none',
+                  fontFamily: 'Syne, sans-serif', marginBottom: 8,
+                }}
+              />
+              <input
+                value={contractAddr}
+                onChange={function(e) { setContractAddr(e.target.value); }}
+                onBlur={function() { if (contractAddr) lookupContract(contractAddr); }}
+                placeholder="Paste contract address..."
+                style={{
+                  width: '100%', background: C.card2,
+                  border: '1px solid rgba(0,229,255,.2)',
+                  borderRadius: 8, padding: '10px 12px',
+                  color: C.accent, fontSize: 12, outline: 'none',
+                  fontFamily: 'JetBrains Mono, monospace',
+                }}
+              />
+              {contractLoading && (
+                <div style={{ color: C.muted, fontSize: 12, marginTop: 6 }}>Looking up token...</div>
+              )}
+              {contractToken && !contractLoading && (
+                <div onClick={function() { onSelect(contractToken); setOpen(false); setContractAddr(''); setContractToken(null); setQ(''); }}
+                  style={{
+                    marginTop: 8, padding: '10px 12px', background: 'rgba(0,229,255,.08)',
+                    border: '1px solid rgba(0,229,255,.3)', borderRadius: 8, cursor: 'pointer',
+                    display: 'flex', alignItems: 'center', gap: 10,
+                  }}>
+                  <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>
+                    {contractToken.symbol.charAt(0)}
+                  </div>
+                  <div>
+                    <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{contractToken.symbol}</div>
+                    <div style={{ color: C.muted, fontSize: 11 }}>{contractToken.name}</div>
+                  </div>
+                  <div style={{ marginLeft: 'auto', color: C.accent, fontSize: 11 }}>Select</div>
+                </div>
+              )}
+            </div>
+
+            <div style={{ overflowY: 'auto', flex: 1 }}>
+              {filtered.length === 0 && (
+                <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>
+                  No tokens found. Paste a contract address above.
+                </div>
+              )}
+              {filtered.map(function(t) {
+                return (
+                  <div key={t.mint}
+                    onClick={function() { onSelect(t); setOpen(false); setQ(''); }}
+                    style={{ padding: '11px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid rgba(255,255,255,.03)' }}
+                    onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.05)'; }}
+                    onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    {t.logoURI ? (
+                      <img src={t.logoURI} alt={t.symbol} style={{ width: 30, height: 30, borderRadius: '50%', flexShrink: 0 }}
+                        onError={function(e) { e.target.style.display = 'none'; }} />
+                    ) : (
+                      <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>
+                        {t.symbol && t.symbol.charAt(0)}
+                      </div>
+                    )}
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{t.symbol}</div>
+                      <div style={{ color: C.muted, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</div>
+                    </div>
+                    <div style={{ color: C.muted2, fontSize: 9, fontFamily: 'JetBrains Mono, monospace', flexShrink: 0 }}>
+                      {t.mint && t.mint.slice(0, 4) + '...' + t.mint.slice(-4)}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
           </div>
-        </div>
+        </>
       )}
     </div>
   );
@@ -114,9 +199,10 @@ function TokenSelect({ selected, onSelect, tokens }) {
 export default function SwapWidget({ coins }) {
   const { publicKey, connected, sendTransaction } = useWallet();
   const { connection } = useConnection();
-  const [tokens, setTokens] = useState(DEFAULT_TOKENS);
-  const [fromToken, setFromToken] = useState(DEFAULT_TOKENS[0]);
-  const [toToken, setToToken] = useState(DEFAULT_TOKENS[1]);
+  const [tokens, setTokens] = useState(FALLBACK_TOKENS);
+  const [tokensLoading, setTokensLoading] = useState(true);
+  const [fromToken, setFromToken] = useState(FALLBACK_TOKENS[0]);
+  const [toToken, setToToken] = useState(FALLBACK_TOKENS[1]);
   const [fromAmt, setFromAmt] = useState('');
   const [quote, setQuote] = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
@@ -130,21 +216,32 @@ export default function SwapWidget({ coins }) {
 
   useEffect(function() {
     var fetchTokens = async function() {
+      setTokensLoading(true);
       try {
-        var res = await fetch('https://token.jup.ag/strict');
+        var res = await fetch('https://token.jup.ag/all');
         var data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
-          setTokens(data.slice(0, 500));
+          var mapped = data.map(function(t) {
+            return {
+              mint: t.address,
+              symbol: t.symbol,
+              name: t.name,
+              decimals: t.decimals,
+              logoURI: t.logoURI,
+            };
+          });
+          setTokens(mapped);
         }
       } catch (e) {
-        console.log('Using default tokens');
+        console.log('Using fallback tokens');
       }
+      setTokensLoading(false);
     };
     fetchTokens();
   }, []);
 
   var fetchQuote = useCallback(async function() {
-    if (!fromAmt || parseFloat(fromAmt) <= 0) return;
+    if (!fromAmt || parseFloat(fromAmt) <= 0 || !fromToken || !toToken) return;
     setQuoteLoading(true);
     try {
       var amount = Math.round(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals));
@@ -164,9 +261,11 @@ export default function SwapWidget({ coins }) {
           priceImpactPct: data.priceImpactPct,
           quoteResponse: data,
         });
+      } else {
+        setQuote(null);
       }
     } catch (e) {
-      console.error('Quote error:', e);
+      setQuote(null);
     }
     setQuoteLoading(false);
   }, [fromAmt, fromToken, toToken, slip]);
@@ -194,16 +293,15 @@ export default function SwapWidget({ coins }) {
     if (!connected || !publicKey || !quote) return;
     setSwapStatus('loading');
     try {
-      var recipientAddress = useCustomAddress && customAddress ? customAddress : publicKey.toString();
       var swapRes = await fetch('https://quote-api.jup.ag/v6/swap', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           quoteResponse: quote.quoteResponse,
           userPublicKey: publicKey.toString(),
-          destinationTokenAccount: useCustomAddress && customAddress ? customAddress : undefined,
           wrapAndUnwrapSol: true,
           feeAccount: JUPITER_REFERRAL_KEY,
+          destinationTokenAccount: useCustomAddress && customAddress ? customAddress : undefined,
         }),
       });
       var swapData = await swapRes.json();
@@ -224,8 +322,9 @@ export default function SwapWidget({ coins }) {
   };
 
   var flipTokens = function() {
+    var tmp = fromToken;
     setFromToken(toToken);
-    setToToken(fromToken);
+    setToToken(tmp);
     setFromAmt(quote ? quote.outAmountDisplay : '');
     setQuote(null);
   };
@@ -239,22 +338,27 @@ export default function SwapWidget({ coins }) {
   var chartColor = chartCoin && (chartCoin.price_change_percentage_7d_in_currency || 0) >= 0 ? C.green : C.red;
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: '480px 1fr', gap: 28, alignItems: 'start' }}>
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px,480px) 1fr', gap: 24, alignItems: 'start' }}>
       <div>
-        <div style={{ marginBottom: 22 }}>
-          <h1 style={{ fontSize: 26, fontWeight: 800, letterSpacing: .5, color: '#fff' }}>Swap Tokens</h1>
-          <p style={{ color: C.muted, fontSize: 13, marginTop: 4 }}>Jupiter routing · 0.3% fee paid by user</p>
+        <div style={{ marginBottom: 20 }}>
+          <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: .5, color: '#fff' }}>Swap Tokens</h1>
+          <p style={{ color: C.muted, fontSize: 13, marginTop: 4 }}>
+            Jupiter routing · 0.3% fee paid by user
+            {tokensLoading
+              ? <span style={{ color: C.accent, marginLeft: 8 }}>· Loading tokens...</span>
+              : <span style={{ color: C.green, marginLeft: 8 }}>· {tokens.length.toLocaleString()} tokens available</span>
+            }
+          </p>
         </div>
 
-        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 22, padding: 24 }}>
-
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
+        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
             <span style={{ fontSize: 12, color: C.muted }}>Slippage</span>
             <div style={{ display: 'flex', gap: 4 }}>
               {[0.1, 0.5, 1.0].map(function(v) {
                 return (
                   <button key={v} onClick={function() { setSlip(v); }} style={{
-                    padding: '4px 10px', borderRadius: 6, fontSize: 11, cursor: 'pointer',
+                    padding: '3px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer',
                     background: slip === v ? 'rgba(0,229,255,.15)' : 'transparent',
                     border: '1px solid ' + (slip === v ? 'rgba(0,229,255,.4)' : C.border),
                     color: slip === v ? C.accent : C.muted,
@@ -264,8 +368,8 @@ export default function SwapWidget({ coins }) {
             </div>
           </div>
 
-          <div style={{ background: C.card2, borderRadius: 14, padding: 16, border: '1px solid ' + C.border }}>
-            <div style={{ marginBottom: 10 }}>
+          <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border, marginBottom: 4 }}>
+            <div style={{ marginBottom: 8 }}>
               <span style={{ fontSize: 12, color: C.muted }}>You Pay</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -273,7 +377,7 @@ export default function SwapWidget({ coins }) {
               <input value={fromAmt}
                 onChange={function(e) { setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }}
                 placeholder="0.00"
-                style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 26, fontWeight: 500, color: '#fff', textAlign: 'right', outline: 'none' }}
+                style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 24, fontWeight: 500, color: '#fff', textAlign: 'right', outline: 'none', minWidth: 0 }}
               />
             </div>
             {fromAmt && fromPriceVal > 0 && (
@@ -283,22 +387,22 @@ export default function SwapWidget({ coins }) {
             )}
           </div>
 
-          <div style={{ display: 'flex', justifyContent: 'center', margin: '10px 0' }}>
+          <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0' }}>
             <button onClick={flipTokens} style={{
-              width: 38, height: 38, borderRadius: 11, background: C.card3,
+              width: 36, height: 36, borderRadius: 10, background: C.card3,
               border: '1px solid ' + C.border, cursor: 'pointer',
-              color: C.accent, fontSize: 20,
+              color: C.accent, fontSize: 18,
               display: 'flex', alignItems: 'center', justifyContent: 'center',
             }}>⇅</button>
           </div>
 
-          <div style={{ background: C.card2, borderRadius: 14, padding: 16, border: '1px solid ' + C.border }}>
-            <div style={{ marginBottom: 10 }}>
+          <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border }}>
+            <div style={{ marginBottom: 8 }}>
               <span style={{ fontSize: 12, color: C.muted }}>You Receive</span>
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <TokenSelect tokens={tokens} selected={toToken} onSelect={setToToken} />
-              <div style={{ flex: 1, textAlign: 'right', fontSize: 26, fontWeight: 500, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>
+              <div style={{ flex: 1, textAlign: 'right', fontSize: 24, fontWeight: 500, color: quoteLoading ? C.muted : quote ? C.green : C.muted2, minWidth: 0 }}>
                 {quoteLoading ? '...' : quote ? quote.outAmountDisplay : '0.00'}
               </div>
             </div>
@@ -309,41 +413,41 @@ export default function SwapWidget({ coins }) {
             )}
           </div>
 
-          <div style={{ marginTop: 14 }}>
+          <div style={{ marginTop: 12 }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
               <input type="checkbox" id="customAddr"
                 checked={useCustomAddress}
                 onChange={function(e) { setUseCustomAddress(e.target.checked); }}
-                style={{ cursor: 'pointer' }}
+                style={{ cursor: 'pointer', width: 14, height: 14 }}
               />
               <label htmlFor="customAddr" style={{ fontSize: 12, color: C.muted, cursor: 'pointer' }}>
-                Send to different address
+                Send to different wallet address
               </label>
             </div>
             {useCustomAddress && (
               <input
                 value={customAddress}
                 onChange={function(e) { setCustomAddress(e.target.value); }}
-                placeholder="Enter Solana wallet address..."
+                placeholder="Paste Solana wallet address..."
                 style={{
-                  width: '100%', background: C.card2, border: '1px solid ' + C.border,
-                  borderRadius: 10, padding: '10px 14px', color: C.text,
-                  fontFamily: 'JetBrains Mono, monospace', fontSize: 12, outline: 'none'
+                  width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)',
+                  borderRadius: 10, padding: '10px 14px', color: C.accent,
+                  fontFamily: 'JetBrains Mono, monospace', fontSize: 11, outline: 'none',
                 }}
               />
             )}
           </div>
 
           {quote && fromAmt && (
-            <div style={{ marginTop: 14, background: '#050912', borderRadius: 12, padding: 14 }}>
+            <div style={{ marginTop: 12, background: '#050912', borderRadius: 10, padding: 12 }}>
               {[
                 ['Platform Fee (0.3% paid by user)', '$' + feeUsd],
                 ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
-                ['Min Received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + toToken.symbol],
-                ['Route', fromToken.symbol + ' via Jupiter to ' + toToken.symbol],
+                ['Min Received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken ? toToken.symbol : '')],
+                ['Route', (fromToken ? fromToken.symbol : '') + ' via Jupiter to ' + (toToken ? toToken.symbol : '')],
               ].map(function(item) {
                 return (
-                  <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 12 }}>
+                  <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
                     <span style={{ color: C.muted }}>{item[0]}</span>
                     <span style={{ color: C.text }}>{item[1]}</span>
                   </div>
@@ -356,13 +460,13 @@ export default function SwapWidget({ coins }) {
             <button onClick={executeSwap}
               disabled={!fromAmt || parseFloat(fromAmt) <= 0 || !quote || swapStatus === 'loading'}
               style={{
-                width: '100%', marginTop: 16, padding: 18, borderRadius: 14, border: 'none',
+                width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
                 background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
                   : swapStatus === 'error' ? 'rgba(255,59,107,.2)'
                   : !fromAmt || !quote ? C.card2
                   : 'linear-gradient(135deg,#00e5ff,#0055ff)',
                 color: !fromAmt || !quote ? C.muted2 : swapStatus === 'error' ? C.red : C.bg,
-                fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16,
+                fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
                 cursor: !fromAmt || !quote ? 'not-allowed' : 'pointer', transition: 'all .3s',
               }}>
               {swapStatus === 'loading' ? 'Confirming in Wallet...'
@@ -370,10 +474,10 @@ export default function SwapWidget({ coins }) {
                 : swapStatus === 'error' ? 'Failed - Try Again'
                 : !fromAmt ? 'Enter Amount'
                 : !quote ? 'Getting Best Route...'
-                : 'Swap ' + fromToken.symbol + ' to ' + toToken.symbol}
+                : 'Swap ' + (fromToken ? fromToken.symbol : '') + ' to ' + (toToken ? toToken.symbol : '')}
             </button>
           ) : (
-            <div style={{ width: '100%', marginTop: 16, padding: 18, borderRadius: 14, background: 'rgba(0,229,255,.05)', border: '1px solid ' + C.border, textAlign: 'center', color: C.muted, fontSize: 14 }}>
+            <div style={{ width: '100%', marginTop: 14, padding: 16, borderRadius: 12, background: 'rgba(0,229,255,.05)', border: '1px solid ' + C.border, textAlign: 'center', color: C.muted, fontSize: 14 }}>
               Connect Phantom or Solflare wallet to swap
             </div>
           )}
@@ -385,18 +489,18 @@ export default function SwapWidget({ coins }) {
             </a>
           )}
 
-          <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 12 }}>
+          <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 10 }}>
             Non-custodial · Wallet-to-wallet · No KYC · Fee paid by user
           </p>
         </div>
       </div>
 
       <div>
-        <div style={{ display: 'flex', gap: 6, marginBottom: 18, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 16, flexWrap: 'wrap' }}>
           {coins.slice(0, 10).map(function(c) {
             return (
               <button key={c.id} onClick={function() { setSelectedChart(c.id); }} style={{
-                padding: '6px 12px', borderRadius: 8, fontSize: 12, cursor: 'pointer', fontWeight: 500,
+                padding: '5px 10px', borderRadius: 8, fontSize: 11, cursor: 'pointer', fontWeight: 500,
                 background: selectedChart === c.id ? 'rgba(0,229,255,.12)' : 'transparent',
                 border: '1px solid ' + (selectedChart === c.id ? 'rgba(0,229,255,.35)' : C.border),
                 color: selectedChart === c.id ? C.accent : C.muted,
@@ -406,25 +510,25 @@ export default function SwapWidget({ coins }) {
         </div>
 
         {chartCoin && (
-          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 22, padding: 28 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 24 }}>
+          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 24 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20 }}>
               <div>
-                <div style={{ fontWeight: 700, fontSize: 16, color: '#fff' }}>{chartCoin.name}</div>
-                <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{chartCoin.symbol && chartCoin.symbol.toUpperCase()} · 7-Day</div>
-                <div style={{ fontSize: 30, fontWeight: 500, color: '#fff', marginTop: 6 }}>{fmt(chartCoin.current_price)}</div>
+                <div style={{ fontWeight: 700, fontSize: 15, color: '#fff' }}>{chartCoin.name}</div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{chartCoin.symbol && chartCoin.symbol.toUpperCase()} · 7-Day</div>
+                <div style={{ fontSize: 28, fontWeight: 500, color: '#fff', marginTop: 4 }}>{fmt(chartCoin.current_price)}</div>
               </div>
               <div style={{ textAlign: 'right' }}>
-                <div style={{ fontSize: 11, color: C.muted, marginBottom: 4 }}>24H CHANGE</div>
-                <div style={{ fontSize: 22, fontWeight: 700, color: (chartCoin.price_change_percentage_24h || 0) >= 0 ? C.green : C.red }}>
+                <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>24H CHANGE</div>
+                <div style={{ fontSize: 20, fontWeight: 700, color: (chartCoin.price_change_percentage_24h || 0) >= 0 ? C.green : C.red }}>
                   {pct(chartCoin.price_change_percentage_24h)}
                 </div>
-                <div style={{ fontSize: 11, color: C.muted, marginTop: 8 }}>Vol: {fmt(chartCoin.total_volume)}</div>
+                <div style={{ fontSize: 11, color: C.muted, marginTop: 6 }}>Vol: {fmt(chartCoin.total_volume)}</div>
                 <div style={{ fontSize: 11, color: C.muted }}>Cap: {fmt(chartCoin.market_cap)}</div>
               </div>
             </div>
 
             {chartData.length > 0 ? (
-              <ResponsiveContainer width="100%" height={200}>
+              <ResponsiveContainer width="100%" height={180}>
                 <AreaChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
                   <defs>
                     <linearGradient id="cg" x1="0" y1="0" x2="0" y2="1">
@@ -435,19 +539,19 @@ export default function SwapWidget({ coins }) {
                   <XAxis dataKey="t" hide />
                   <YAxis hide domain={['auto', 'auto']} />
                   <Tooltip
-                    contentStyle={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 12 }}
+                    contentStyle={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 11 }}
                     formatter={function(v) { return [fmt(v), 'Price']; }}
                   />
                   <Area type="monotone" dataKey="p" stroke={chartColor} strokeWidth={2} fill="url(#cg)" />
                 </AreaChart>
               </ResponsiveContainer>
             ) : (
-              <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted }}>
+              <div style={{ height: 180, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted }}>
                 Loading chart...
               </div>
             )}
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 10, marginTop: 20 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 8, marginTop: 16 }}>
               {[
                 ['24H High', fmt(chartCoin.high_24h)],
                 ['24H Low', fmt(chartCoin.low_24h)],
@@ -455,9 +559,9 @@ export default function SwapWidget({ coins }) {
                 ['Rank', '#' + (chartCoin.market_cap_rank || '--')],
               ].map(function(item) {
                 return (
-                  <div key={item[0]} style={{ background: '#050912', borderRadius: 10, padding: 12 }}>
-                    <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>{item[0]}</div>
-                    <div style={{ fontSize: 13, color: C.text, fontWeight: 500 }}>{item[1]}</div>
+                  <div key={item[0]} style={{ background: '#050912', borderRadius: 8, padding: 10 }}>
+                    <div style={{ fontSize: 9, color: C.muted, marginBottom: 3 }}>{item[0]}</div>
+                    <div style={{ fontSize: 12, color: C.text, fontWeight: 500 }}>{item[1]}</div>
                   </div>
                 );
               })}
