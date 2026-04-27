@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useAccount, useConnectModal } from '@rainbow-me/rainbowkit';
-import { ConnectButton } from '@rainbow-me/rainbowkit';
+import { useAccount } from 'wagmi';
+import { useConnectModal, ConnectButton } from '@rainbow-me/rainbowkit';
 import { Connection, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 
 const C = {
@@ -55,7 +55,9 @@ export default function Send({ coins, walletAddress }) {
   }, [address]);
 
   var getPrice = function(symbol) {
-    var coin = coins.find(function(c) { return c.symbol && c.symbol.toLowerCase() === symbol.toLowerCase(); });
+    var coin = coins.find(function(c) {
+      return c.symbol && c.symbol.toLowerCase() === symbol.toLowerCase();
+    });
     return coin ? coin.current_price : 0;
   };
 
@@ -85,9 +87,13 @@ export default function Send({ coins, walletAddress }) {
       if (selectedToken.isNative) {
         var recipientLamports = Math.round(recipientAmount * LAMPORTS_PER_SOL);
         var feeLamports = Math.round(feeAmount * LAMPORTS_PER_SOL);
-        transaction.add(SystemProgram.transfer({ fromPubkey, toPubkey: recipientPubkey, lamports: recipientLamports }));
+        transaction.add(
+          SystemProgram.transfer({ fromPubkey, toPubkey: recipientPubkey, lamports: recipientLamports })
+        );
         if (feeLamports > 0) {
-          transaction.add(SystemProgram.transfer({ fromPubkey, toPubkey: feePubkey, lamports: feeLamports }));
+          transaction.add(
+            SystemProgram.transfer({ fromPubkey, toPubkey: feePubkey, lamports: feeLamports })
+          );
         }
       }
 
@@ -215,7 +221,9 @@ export default function Send({ coins, walletAddress }) {
                 return (
                   <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 12 }}>
                     <span style={{ color: C.muted }}>{item[0]}</span>
-                    <span style={{ color: item[0] === 'Recipient Gets' ? C.green : C.text, fontWeight: item[0] === 'Recipient Gets' ? 600 : 400 }}>{item[1]}</span>
+                    <span style={{ color: item[0] === 'Recipient Gets' ? C.green : C.text, fontWeight: item[0] === 'Recipient Gets' ? 600 : 400 }}>
+                      {item[1]}
+                    </span>
                   </div>
                 );
               })}
