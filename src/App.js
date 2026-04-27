@@ -7,7 +7,7 @@ import BuyCrypto from './components/BuyCrypto';
 import Portfolio from './components/Portfolio';
 import TokenDetail from './components/TokenDetail';
 import Send from './components/Send';
-
+ 
 const C = {
   bg: '#03060f',
   card: '#080d1a',
