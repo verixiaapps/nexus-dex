@@ -1,25 +1,22 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
+import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
+import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
+import '@solana/wallet-adapter-react-ui/styles.css';
 import '@rainbow-me/rainbowkit/styles.css';
-import {
-  getDefaultConfig,
-  RainbowKitProvider,
-  darkTheme,
-} from '@rainbow-me/rainbowkit';
-import { WagmiProvider, useAccount } from 'wagmi';
-import {
-  mainnet,
-  polygon,
-  arbitrum,
-  base,
-  bsc,
-  avalanche,
-  optimism,
-} from 'wagmi/chains';
+import { getDefaultConfig, RainbowKitProvider, darkTheme } from '@rainbow-me/rainbowkit';
+import { WagmiProvider } from 'wagmi';
+import { mainnet, polygon, arbitrum, base, bsc, avalanche, optimism } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
- 
-const config = getDefaultConfig({
+
+const SOLANA_RPC = process.env.REACT_APP_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
+
+const solanaWallets = [
+  new PhantomWalletAdapter(),
+];
+
+const wagmiConfig = getDefaultConfig({
   appName: 'Nexus DEX',
   projectId: '1a7c741caab0a2c5ffa2b199a816ea92',
   chains: [mainnet, polygon, arbitrum, base, bsc, avalanche, optimism],
@@ -30,7 +27,7 @@ const queryClient = new QueryClient();
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
-  <WagmiProvider config={config}>
+  <WagmiProvider config={wagmiConfig}>
     <QueryClientProvider client={queryClient}>
       <RainbowKitProvider
         theme={darkTheme({
@@ -41,9 +38,12 @@ root.render(
           overlayBlur: 'small',
         })}
         modalSize="compact"
-        showRecentTransactions={true}
       >
-        <App />
+        <ConnectionProvider endpoint={SOLANA_RPC}>
+          <WalletProvider wallets={solanaWallets} autoConnect>
+            <App />
+          </WalletProvider>
+        </ConnectionProvider>
       </RainbowKitProvider>
     </QueryClientProvider>
   </WagmiProvider>
