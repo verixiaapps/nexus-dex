@@ -206,8 +206,8 @@ export default function App() {
       setJupiterLoading(true);
       try {
         var controller = new AbortController();
-        var timeout = setTimeout(function() { controller.abort(); }, 20000);
-        var res = await fetch('https://tokens.jup.ag/tokens?tags=verified', { signal: controller.signal });
+        var timeout = setTimeout(function() { controller.abort(); }, 30000);
+        var res = await fetch('https://token.jup.ag/all', { signal: controller.signal });
         clearTimeout(timeout);
         var data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
