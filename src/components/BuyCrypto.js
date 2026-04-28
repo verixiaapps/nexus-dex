@@ -6,7 +6,9 @@ const C = {
   accent: '#00e5ff',
   muted: '#586994',
 };
- 
+
+const COINS = ['SOL', 'BTC', 'ETH', 'USDC', 'USDT', 'BNB', 'XRP', 'ADA', 'DOGE', 'AVAX', 'MATIC', 'LINK'];
+
 export default function BuyCrypto({ coins, walletAddress, selectedCoinSymbol }) {
   const [selectedCoin, setSelectedCoin] = useState(selectedCoinSymbol || 'SOL');
 
@@ -14,14 +16,17 @@ export default function BuyCrypto({ coins, walletAddress, selectedCoinSymbol }) 
     if (selectedCoinSymbol) setSelectedCoin(selectedCoinSymbol.toUpperCase());
   }, [selectedCoinSymbol]);
 
-  var moonpayUrl = 'https://buy.moonpay.com?defaultCurrencyCode=' + selectedCoin.toLowerCase() + '&colorCode=%2300e5ff&theme=dark';
-  if (walletAddress) moonpayUrl += '&walletAddress=' + walletAddress;
-
-  const COINS = ['BTC', 'ETH', 'SOL', 'USDC', 'USDT', 'BNB', 'XRP', 'ADA', 'DOGE', 'AVAX', 'MATIC', 'LINK'];
+  var transakUrl = 'https://global.transak.com' +
+    '?defaultCryptoCurrency=' + selectedCoin +
+    '&themeColor=00e5ff' +
+    '&colorMode=DARK' +
+    '&hideMenu=true' +
+    '&exchangeScreenTitle=Buy%20Crypto';
+  if (walletAddress) transakUrl += '&walletAddress=' + walletAddress;
 
   return (
     <div style={{ maxWidth: 600, margin: '0 auto' }}>
-      <div style={{ marginBottom: 20 }}>
+      <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Buy Crypto</h1>
         <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
           Visa, Mastercard, Apple Pay, Google Pay, Bank Transfer
@@ -33,7 +38,7 @@ export default function BuyCrypto({ coins, walletAddress, selectedCoinSymbol }) 
         )}
       </div>
 
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginBottom: 14 }}>
         {COINS.map(function(sym) {
           return (
             <button key={sym} onClick={function() { setSelectedCoin(sym); }} style={{
@@ -51,12 +56,12 @@ export default function BuyCrypto({ coins, walletAddress, selectedCoinSymbol }) 
       <div style={{
         background: C.card, border: '1px solid ' + C.border,
         borderRadius: 18, overflow: 'hidden',
-        height: 'calc(100vh - 280px)', minHeight: 500,
+        height: 'calc(100vh - 260px)', minHeight: 520,
       }}>
         <iframe
-          key={moonpayUrl}
-          src={moonpayUrl}
-          title="Buy Crypto with MoonPay"
+          key={transakUrl}
+          src={transakUrl}
+          title="Buy Crypto with Transak"
           width="100%"
           height="100%"
           style={{ border: 'none', display: 'block' }}
@@ -66,7 +71,7 @@ export default function BuyCrypto({ coins, walletAddress, selectedCoinSymbol }) 
       </div>
 
       <p style={{ textAlign: 'center', fontSize: 11, color: C.muted, marginTop: 12, lineHeight: 1.6 }}>
-        Powered by MoonPay · Non-custodial · KYC handled by MoonPay
+        Powered by Transak · Non-custodial · KYC handled by Transak
       </p>
     </div>
   );
