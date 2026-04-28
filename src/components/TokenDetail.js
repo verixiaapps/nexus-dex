@@ -7,6 +7,7 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'rec
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
+const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -21,10 +22,17 @@ const USDC_TOKEN = { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbo
 const POPULAR_TOKENS = [
   SOL_TOKEN,
   USDC_TOKEN,
-  { mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', symbol: 'USDT', name: 'Tether', decimals: 6 },
-  { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', symbol: 'JUP', name: 'Jupiter', decimals: 6 },
-  { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', symbol: 'BONK', name: 'Bonk', decimals: 5 },
+  { mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', symbol: 'USDT', name: 'Tether', decimals: 6, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.png' },
+  { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', symbol: 'JUP', name: 'Jupiter', decimals: 6, logoURI: 'https://static.jup.ag/jup/icon.png' },
+  { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', symbol: 'BONK', name: 'Bonk', decimals: 5, logoURI: 'https://arweave.net/hQiPZOsRZXGXBJd_82PhVdlM_hACsT_q6wqwf5cSY7I' },
+  { mint: '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R', symbol: 'RAY', name: 'Raydium', decimals: 6, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R/logo.png' },
 ];
+
+function getDecimals(token) {
+  if (!token) return 6;
+  var d = parseInt(token.decimals);
+  return isNaN(d) ? 6 : d;
+}
 
 function fmt(n, d) {
   d = d || 2;
@@ -63,10 +71,18 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
       if (found) {
         setContractToken(found);
       } else {
-        var res = await fetch('https://lite-api.jup.ag/tokens/v1/token/' + addr);
+        var res = await fetch('https://lite-api.jup.ag/tokens/v1/token/' + addr, {
+          headers: { 'x-api-key': JUP_API_KEY }
+        });
         if (res.ok) {
           var data = await res.json();
-          setContractToken({ mint: data.address, symbol: data.symbol, name: data.name, decimals: data.decimals, logoURI: data.logoURI });
+          setContractToken({
+            mint: data.address,
+            symbol: data.symbol,
+            name: data.name,
+            decimals: parseInt(data.decimals) || 6,
+            logoURI: data.logoURI,
+          });
         } else {
           setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6 });
         }
@@ -88,29 +104,27 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
   }, [q, allTokens]);
 
   var displayTokens = q ? searchResults : POPULAR_TOKENS;
-
-  var close = function() {
-    setOpen(false); setQ(''); setContractAddr(''); setContractToken(null); setSearchResults([]);
-  };
+  var close = function() { setOpen(false); setQ(''); setContractAddr(''); setContractToken(null); setSearchResults([]); };
 
   return (
-    <div style={{ position: 'relative', flexShrink: 0 }}>
-      <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 6 }}>{label}</div>
+    <div>
+      {label && <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 6 }}>{label}</div>}
       <button onClick={() => setOpen(true)} style={{
         display: 'flex', alignItems: 'center', gap: 8,
         background: C.card2, border: '1px solid ' + C.border,
         borderRadius: 10, padding: '10px 14px', cursor: 'pointer', width: '100%',
       }}>
-        {selected && selected.logoURI && (
+        {selected && selected.logoURI ? (
           <img src={selected.logoURI} alt={selected.symbol} style={{ width: 24, height: 24, borderRadius: '50%' }}
             onError={function(e) { e.target.style.display = 'none'; }} />
-        )}
-        {selected && !selected.logoURI && (
+        ) : selected ? (
           <div style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(0,229,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>
             {selected.symbol && selected.symbol.charAt(0)}
           </div>
-        )}
-        <span style={{ color: '#fff', fontWeight: 700, fontSize: 14, flex: 1, textAlign: 'left' }}>{selected ? selected.symbol : 'Select Token'}</span>
+        ) : null}
+        <span style={{ color: '#fff', fontWeight: 700, fontSize: 14, flex: 1, textAlign: 'left' }}>
+          {selected ? selected.symbol : 'Select Token'}
+        </span>
         <span style={{ color: C.muted, fontSize: 11 }}>▾</span>
       </button>
 
@@ -134,12 +148,12 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
               </div>
               <input autoFocus value={q} onChange={function(e) { setQ(e.target.value); }}
                 placeholder="Search by name or symbol..."
-                style={{ width: '100%', background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, padding: '10px 12px', color: C.text, fontSize: 13, outline: 'none', fontFamily: 'Syne, sans-serif', marginBottom: 8 }}
+                style={{ width: '100%', background: C.card3, border: '1px solid ' + C.border, borderRadius: 8, padding: '10px 12px', color: C.text, fontSize: 13, outline: 'none', fontFamily: 'Syne, sans-serif', marginBottom: 8 }}
               />
               <input value={contractAddr} onChange={function(e) { setContractAddr(e.target.value); }}
                 onBlur={function() { if (contractAddr) lookupByAddress(contractAddr); }}
                 placeholder="Or paste any Solana contract address..."
-                style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 8, padding: '10px 12px', color: C.accent, fontSize: 12, outline: 'none', fontFamily: 'JetBrains Mono, monospace' }}
+                style={{ width: '100%', background: C.card3, border: '1px solid rgba(0,229,255,.2)', borderRadius: 8, padding: '10px 12px', color: C.accent, fontSize: 12, outline: 'none', fontFamily: 'JetBrains Mono, monospace' }}
               />
               {contractLoading && <div style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>Looking up token...</div>}
               {contractToken && !contractLoading && (
@@ -155,6 +169,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
                   <div>
                     <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{contractToken.symbol}</div>
                     <div style={{ color: C.muted, fontSize: 11 }}>{contractToken.name}</div>
+                    <div style={{ color: C.muted2, fontSize: 10 }}>Decimals: {getDecimals(contractToken)}</div>
                   </div>
                   <div style={{ marginLeft: 'auto', color: C.accent, fontSize: 11, fontWeight: 600 }}>Select →</div>
                 </div>
@@ -204,7 +219,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
   const { connection } = useConnection();
 
   const [fromToken, setFromToken] = useState(SOL_TOKEN);
-  const [toToken, setToToken] = useState(jupiterToken || SOL_TOKEN);
+  const [toToken, setToToken] = useState(jupiterToken || USDC_TOKEN);
   const [fromAmt, setFromAmt] = useState('');
   const [quote, setQuote] = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
@@ -217,14 +232,12 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
   var totalFee = antiMev ? BASE_FEE + ANTIMEV_FEE : BASE_FEE;
 
   useEffect(function() {
-    if (jupiterToken) {
-      if (mode === 'buy') {
-        setFromToken(SOL_TOKEN);
-        setToToken(jupiterToken);
-      } else {
-        setFromToken(jupiterToken);
-        setToToken(USDC_TOKEN);
-      }
+    if (mode === 'buy') {
+      setFromToken(SOL_TOKEN);
+      setToToken(jupiterToken || USDC_TOKEN);
+    } else {
+      setFromToken(jupiterToken || USDC_TOKEN);
+      setToToken(USDC_TOKEN);
     }
     setFromAmt(''); setQuote(null); setSwapStatus('idle');
     setSwapTx(null); setSwapError(''); setQuoteError('');
@@ -235,14 +248,22 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
     var t = setTimeout(async function() {
       setQuoteLoading(true); setQuoteError('');
       try {
-        var amount = Math.round(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals));
-        var url = 'https://api.jup.ag/swap/v1/quote?inputMint=' + fromToken.mint +
-          '&outputMint=' + toToken.mint + '&amount=' + amount + '&slippageBps=50';
-        var res = await fetch(url);
+        var fromDecimals = getDecimals(fromToken);
+        var toDecimals = getDecimals(toToken);
+        var amount = Math.round(parseFloat(fromAmt) * Math.pow(10, fromDecimals));
+        if (!amount || amount <= 0) { setQuoteLoading(false); return; }
+        var url = 'https://api.jup.ag/swap/v1/quote' +
+          '?inputMint=' + fromToken.mint +
+          '&outputMint=' + toToken.mint +
+          '&amount=' + amount +
+          '&slippageBps=50' +
+          '&restrictIntermediateTokens=true';
+        var res = await fetch(url, { headers: { 'x-api-key': JUP_API_KEY } });
         var data = await res.json();
         if (data && data.outAmount) {
+          var outAmt = parseInt(data.outAmount) / Math.pow(10, toDecimals);
           setQuote({
-            outAmountDisplay: (parseInt(data.outAmount) / Math.pow(10, toToken.decimals)).toFixed(6),
+            outAmountDisplay: outAmt.toFixed(toDecimals > 4 ? 4 : toDecimals),
             priceImpactPct: data.priceImpactPct,
             quoteResponse: data,
           });
@@ -267,7 +288,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
     try {
       var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
         body: JSON.stringify({
           quoteResponse: quote.quoteResponse,
           userPublicKey: publicKey.toString(),
@@ -287,8 +308,9 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
       try {
         var solCoin = coins.find(function(c) { return c.id === 'solana'; });
         var solPrice = solCoin ? solCoin.current_price : 100;
-        var fromCoinPrice = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
-        var amountUsd = parseFloat(fromAmt) * (fromCoinPrice ? fromCoinPrice.current_price : (coin ? coin.current_price : 0));
+        var fromCoinData = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
+        var fromPrice = fromCoinData ? fromCoinData.current_price : (coin ? coin.current_price : 0);
+        var amountUsd = parseFloat(fromAmt) * fromPrice;
         var feeSol = (amountUsd * totalFee) / solPrice;
         if (feeSol > 0.000001) {
           var feeTx = new Transaction().add(SystemProgram.transfer({
@@ -312,7 +334,6 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
 
   var modeLabel = mode === 'buy' ? 'Buy' : 'Sell';
   var modeGradient = mode === 'buy' ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'linear-gradient(135deg,#ff3b6b,#cc1144)';
-
   var fromCoinData = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
   var fromPriceVal = fromCoinData ? fromCoinData.current_price : 0;
   var toCoinData = coins.find(function(c) { return c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
@@ -362,12 +383,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
         )}
 
         <div style={{ marginBottom: 8 }}>
-          <TokenSelect
-            selected={fromToken}
-            onSelect={setFromToken}
-            jupiterTokens={jupiterTokens}
-            label="YOU PAY"
-          />
+          <TokenSelect selected={fromToken} onSelect={setFromToken} jupiterTokens={jupiterTokens} label="YOU PAY" />
           <div style={{ marginTop: 8 }}>
             <input value={fromAmt} onChange={function(e) { setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }}
               placeholder="0.00"
@@ -380,7 +396,10 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'center', margin: '10px 0' }}>
-          <button onClick={function() { var tmp = fromToken; setFromToken(toToken); setToToken(tmp); setFromAmt(''); setQuote(null); }} style={{
+          <button onClick={function() {
+            var tmp = fromToken; setFromToken(toToken); setToToken(tmp);
+            setFromAmt(''); setQuote(null);
+          }} style={{
             width: 36, height: 36, borderRadius: 10, background: C.card3,
             border: '1px solid ' + C.border, cursor: 'pointer', color: C.accent, fontSize: 18,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -388,12 +407,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
         </div>
 
         <div style={{ marginBottom: 14 }}>
-          <TokenSelect
-            selected={toToken}
-            onSelect={setToToken}
-            jupiterTokens={jupiterTokens}
-            label="YOU RECEIVE"
-          />
+          <TokenSelect selected={toToken} onSelect={setToToken} jupiterTokens={jupiterTokens} label="YOU RECEIVE" />
           <div style={{ marginTop: 8, background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '14px 16px' }}>
             <div style={{ fontSize: 26, fontWeight: 600, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>
               {quoteLoading ? '...' : quote ? quote.outAmountDisplay : '0.00'}
@@ -504,7 +518,12 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
     });
   }
   if (!jupiterToken && coin) {
-    jupiterToken = { mint: SOL_TOKEN.mint, symbol: coin.symbol || 'TOKEN', name: coin.name || 'Token', decimals: 6 };
+    jupiterToken = {
+      mint: SOL_TOKEN.mint,
+      symbol: coin.symbol || 'TOKEN',
+      name: coin.name || 'Token',
+      decimals: 6,
+    };
   }
 
   useEffect(function() {
