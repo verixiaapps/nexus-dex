@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { VersionedTransaction } from '@solana/web3.js';
+import { VersionedTransaction, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
-const JUPITER_REFERRAL_KEY = 'E2yVdtMKBX8c7nNwks2mJ8gXpVrEMf2gkrXLz5oaDzQX';
-const BASE_FEE_BPS = 400;
-const ANTIMEV_FEE_BPS = 200;
+const FEE_WALLET = new PublicKey('47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5');
+const BASE_FEE = 0.04;
+const ANTIMEV_FEE = 0.02;
 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -39,7 +40,7 @@ function pct(n) {
   return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 
-function TradeDrawer({ open, onClose, mode, coin, jupiterToken, onConnectWallet }) {
+function TradeDrawer({ open, onClose, mode, coin, jupiterToken, coins, onConnectWallet }) {
   const { publicKey, connected, sendTransaction } = useWallet();
   const { connection } = useConnection();
   const [fromAmt, setFromAmt] = useState('');
@@ -47,11 +48,10 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, onConnectWallet 
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [swapStatus, setSwapStatus] = useState('idle');
   const [swapTx, setSwapTx] = useState(null);
+  const [swapError, setSwapError] = useState('');
   const [antiMev, setAntiMev] = useState(true);
 
-  var feeBps = antiMev ? BASE_FEE_BPS + ANTIMEV_FEE_BPS : BASE_FEE_BPS;
-  var feePercent = feeBps / 100;
-
+  var totalFee = antiMev ? BASE_FEE + ANTIMEV_FEE : BASE_FEE;
   var fromToken = mode === 'sell' ? jupiterToken : SOL_TOKEN;
   var toToken = mode === 'sell' ? USDC_TOKEN : jupiterToken;
 
@@ -60,6 +60,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, onConnectWallet 
     setQuote(null);
     setSwapStatus('idle');
     setSwapTx(null);
+    setSwapError('');
   }, [open, mode]);
 
   useEffect(function() {
@@ -68,14 +69,12 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, onConnectWallet 
       setQuoteLoading(true);
       try {
         var amount = Math.round(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals));
-        var params = new URLSearchParams({
-          inputMint: fromToken.mint,
-          outputMint: toToken.mint,
-          amount: amount.toString(),
-          slippageBps: '50',
-          platformFeeBps: feeBps.toString(),
-        });
-        var res = await fetch('https://quote-api.jup.ag/v6/quote?' + params);
+        var url = 'https://quote-api.jup.ag/v6/quote' +
+          '?inputMint=' + fromToken.mint +
+          '&outputMint=' + toToken.mint +
+          '&amount=' + amount +
+          '&slippageBps=50';
+        var res = await fetch(url);
         var data = await res.json();
         if (data && data.outAmount) {
           setQuote({
@@ -90,7 +89,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, onConnectWallet 
       setQuoteLoading(false);
     }, 600);
     return function() { clearTimeout(t); };
-  }, [fromAmt, mode, feeBps]);
+  }, [fromAmt, mode, fromToken, toToken]);
 
   var executeSwap = async function() {
     if (!connected || !publicKey) {
@@ -99,6 +98,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, onConnectWallet 
     }
     if (!quote) return;
     setSwapStatus('loading');
+    setSwapError('');
     try {
       var swapRes = await fetch('https://quote-api.jup.ag/v6/swap', {
         method: 'POST',
@@ -107,27 +107,53 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, onConnectWallet 
           quoteResponse: quote.quoteResponse,
           userPublicKey: publicKey.toString(),
           wrapAndUnwrapSol: true,
-          feeAccount: JUPITER_REFERRAL_KEY,
           computeUnitPriceMicroLamports: antiMev ? 50000 : 1000,
           prioritizationFeeLamports: antiMev ? 100000 : 5000,
         }),
       });
       var swapData = await swapRes.json();
-      if (swapData.swapTransaction) {
-        var txBuf = Buffer.from(swapData.swapTransaction, 'base64');
-        var tx = VersionedTransaction.deserialize(txBuf);
-        var sig = await sendTransaction(tx, connection);
-        await connection.confirmTransaction(sig, 'confirmed');
-        setSwapTx(sig);
-        setSwapStatus('success');
-        setFromAmt('');
-        setQuote(null);
-        setTimeout(function() { setSwapStatus('idle'); }, 4000);
+      if (!swapData.swapTransaction) throw new Error('No swap transaction returned');
+
+      var txBuf = Buffer.from(swapData.swapTransaction, 'base64');
+      var tx = VersionedTransaction.deserialize(txBuf);
+      var sig = await sendTransaction(tx, connection);
+      await connection.confirmTransaction(sig, 'confirmed');
+
+      var solCoin = coins.find(function(c) { return c.id === 'solana'; });
+      var solPrice = solCoin ? solCoin.current_price : 100;
+      var amountUsd = parseFloat(fromAmt) * (coin ? coin.current_price : 0);
+      var feeUsd = amountUsd * totalFee;
+      var feeSol = feeUsd / solPrice;
+
+      if (feeSol > 0.000001) {
+        try {
+          var feeLamports = Math.round(feeSol * LAMPORTS_PER_SOL);
+          var feeTx = new Transaction().add(
+            SystemProgram.transfer({
+              fromPubkey: publicKey,
+              toPubkey: FEE_WALLET,
+              lamports: feeLamports,
+            })
+          );
+          var { blockhash } = await connection.getLatestBlockhash();
+          feeTx.recentBlockhash = blockhash;
+          feeTx.feePayer = publicKey;
+          await sendTransaction(feeTx, connection);
+        } catch (feeErr) {
+          console.log('Fee tx failed silently:', feeErr);
+        }
       }
+
+      setSwapTx(sig);
+      setSwapStatus('success');
+      setFromAmt('');
+      setQuote(null);
+      setTimeout(function() { setSwapStatus('idle'); setSwapTx(null); }, 5000);
     } catch (e) {
       console.error('Trade error:', e);
+      setSwapError(e.message || 'Trade failed');
       setSwapStatus('error');
-      setTimeout(function() { setSwapStatus('idle'); }, 3000);
+      setTimeout(function() { setSwapStatus('idle'); setSwapError(''); }, 4000);
     }
   };
 
@@ -136,9 +162,6 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, onConnectWallet 
   var modeGradient = mode === 'buy'
     ? 'linear-gradient(135deg,#00e5ff,#0055ff)'
     : 'linear-gradient(135deg,#ff3b6b,#cc1144)';
-
-  var fromPriceVal = mode === 'buy' ? (coin ? coin.current_price : 0) : 0;
-  var feeUsd = fromAmt && fromPriceVal ? (parseFloat(fromAmt) * fromPriceVal * feeBps / 10000).toFixed(2) : '0.00';
 
   if (!open) return null;
 
@@ -168,7 +191,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, onConnectWallet 
                 {modeLabel} {coin && coin.symbol && coin.symbol.toUpperCase()}
               </div>
               <div style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>
-                {coin && fmt(coin.current_price)} · {feePercent}% fee
+                {coin && fmt(coin.current_price)} · {(totalFee * 100).toFixed(0)}% fee
               </div>
             </div>
           </div>
@@ -247,8 +270,8 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, onConnectWallet 
           {quote && fromAmt && (
             <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
               {[
-                ['Platform Fee (4%)', '$' + (parseFloat(fromAmt) * (coin ? coin.current_price : 0) * BASE_FEE_BPS / 10000).toFixed(2)],
-                antiMev ? ['Anti-MEV Fee (2%)', '$' + (parseFloat(fromAmt) * (coin ? coin.current_price : 0) * ANTIMEV_FEE_BPS / 10000).toFixed(2)] : null,
+                ['Platform Fee (3%)', '$' + (parseFloat(fromAmt) * (coin ? coin.current_price : 0) * 0.03).toFixed(2)],
+                antiMev ? ['Anti-MEV Fee (2%)', '$' + (parseFloat(fromAmt) * (coin ? coin.current_price : 0) * 0.02).toFixed(2)] : null,
                 ['Service Fee (1%)', '$' + (parseFloat(fromAmt) * (coin ? coin.current_price : 0) * 0.01).toFixed(2)],
                 ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
               ].filter(Boolean).map(function(item) {
@@ -262,6 +285,12 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, onConnectWallet 
             </div>
           )}
         </div>
+
+        {swapError && (
+          <div style={{ padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 8, fontSize: 12, color: C.red, marginBottom: 14 }}>
+            {swapError}
+          </div>
+        )}
 
         <button
           onClick={executeSwap}
@@ -315,7 +344,6 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
       return t.symbol && t.symbol.toUpperCase() === coin.symbol.toUpperCase();
     });
   }
-
   if (!jupiterToken && coin) {
     jupiterToken = {
       mint: 'So11111111111111111111111111111111111111112',
@@ -354,16 +382,13 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
 
   return (
     <div style={{ maxWidth: 640, margin: '0 auto' }}>
-
       <button onClick={onBack} style={{
         display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20,
         background: 'transparent', border: 'none', color: C.muted,
-        cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600,
-        padding: 0,
+        cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600, padding: 0,
       }}>← Back to Markets</button>
 
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
-
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {coin.image ? (
@@ -403,9 +428,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         </div>
 
         {chartLoading ? (
-          <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted }}>
-            Loading chart...
-          </div>
+          <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted }}>Loading chart...</div>
         ) : (
           <ResponsiveContainer width="100%" height={200}>
             <AreaChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
@@ -496,6 +519,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
           onClose={function() { setDrawerOpen(false); }}
           mode={drawerMode}
           coin={coin}
+          coins={coins}
           jupiterToken={jupiterToken}
           onConnectWallet={onConnectWallet}
         />
