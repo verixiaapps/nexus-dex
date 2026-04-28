@@ -29,7 +29,9 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
   const [activeTab, setActiveTab] = useState('holdings');
 
   var getPrice = function(symbol) {
-    var coin = coins.find(function(c) { return c.symbol && c.symbol.toLowerCase() === (symbol || '').toLowerCase(); });
+    var coin = coins.find(function(c) {
+      return c.symbol && c.symbol.toLowerCase() === (symbol || '').toLowerCase();
+    });
     return coin ? coin.current_price : 0;
   };
 
@@ -114,7 +116,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
           <div style={{ fontSize: 48, marginBottom: 16 }}>👛</div>
           <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Connect Your Wallet</h2>
           <p style={{ color: C.muted, fontSize: 13, maxWidth: 300, margin: '0 auto 24px', lineHeight: 1.6 }}>
-            Connect Phantom to view your real-time portfolio and token balances.
+            Connect Phantom to view your real-time portfolio and all token balances.
           </p>
           <button onClick={onConnectWallet} style={{
             background: 'linear-gradient(135deg,#9945ff,#7c3aed)',
@@ -241,4 +243,38 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
                     </div>
                   </div>
                   <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>
-                    {token.uiAmount >= 1​​​​​​​​​​​​​​​​
+                    {token.uiAmount >= 1000 ? token.uiAmount.toLocaleString('en-US', { maximumFractionDigits: 2 }) : token.uiAmount.toFixed(4)}
+                  </div>
+                  <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{price > 0 ? fmt(price) : '--'}</div>
+                  <div style={{ textAlign: 'right', color: value > 0.01 ? C.green : C.muted, fontSize: 12, fontWeight: value > 0.01 ? 600 : 400 }}>
+                    {value > 0.01 ? fmt(value) : '--'}
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+      )}
+
+      {activeTab === 'activity' && (
+        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 40, textAlign: 'center' }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>📋</div>
+          <div style={{ color: '#fff', fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Transaction History</div>
+          <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 280, margin: '0 auto 20px' }}>
+            View your full transaction history on Solscan.
+          </p>
+          {publicKey && (
+            <a href={'https://solscan.io/account/' + publicKey.toString()} target="_blank" rel="noreferrer"
+              style={{
+                display: 'inline-block', padding: '10px 24px', borderRadius: 10,
+                background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)',
+                color: C.accent, fontSize: 13, fontWeight: 600, textDecoration: 'none',
+              }}>
+              View on Solscan ↗
+            </a>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
