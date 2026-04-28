@@ -1,11 +1,12 @@
 import React, { useState, useEffect } from 'react';
-import { useAccount } from 'wagmi';
-import { useConnectModal, ConnectButton } from '@rainbow-me/rainbowkit';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { VersionedTransaction } from '@solana/web3.js';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 const JUPITER_REFERRAL_KEY = 'E2yVdtMKBX8c7nNwks2mJ8gXpVrEMf2gkrXLz5oaDzQX';
-const JUPITER_FEE_BPS = 30;
- 
+const BASE_FEE_BPS = 400;
+const ANTIMEV_FEE_BPS = 200;
+
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
   border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
@@ -13,20 +14,15 @@ const C = {
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
 
-const SOLANA_TOKENS = {
-  'SOL': { mint: 'So11111111111111111111111111111111111111112', decimals: 9 },
-  'USDC': { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', decimals: 6 },
-  'USDT': { mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', decimals: 6 },
-  'ETH': { mint: '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs', decimals: 8 },
-  'BONK': { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', decimals: 5 },
-  'JUP': { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', decimals: 6 },
-  'RAY': { mint: '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R', decimals: 6 },
-  'ORCA': { mint: 'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE', decimals: 6 },
-  'PYTH': { mint: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3', decimals: 6 },
+const SOL_TOKEN = {
+  mint: 'So11111111111111111111111111111111111111112',
+  symbol: 'SOL', name: 'Solana', decimals: 9, isNative: true,
 };
 
-const SOL_TOKEN = { mint: 'So11111111111111111111111111111111111111112', symbol: 'SOL', name: 'Solana', decimals: 9 };
-const USDC_TOKEN = { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC', name: 'USD Coin', decimals: 6 };
+const USDC_TOKEN = {
+  mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+  symbol: 'USDC', name: 'USD Coin', decimals: 6, isNative: false,
+};
 
 function fmt(n, d) {
   d = d || 2;
@@ -43,25 +39,27 @@ function pct(n) {
   return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 
-function TradeDrawer({ open, onClose, mode, coin, solanaToken }) {
-  const { address, isConnected } = useAccount();
-  const { openConnectModal } = useConnectModal();
+function TradeDrawer({ open, onClose, mode, coin, jupiterToken, onConnectWallet }) {
+  const { publicKey, connected, sendTransaction } = useWallet();
+  const { connection } = useConnection();
   const [fromAmt, setFromAmt] = useState('');
   const [quote, setQuote] = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [swapStatus, setSwapStatus] = useState('idle');
+  const [swapTx, setSwapTx] = useState(null);
+  const [antiMev, setAntiMev] = useState(true);
 
-  var fromToken = mode === 'sell'
-    ? { mint: solanaToken.mint, symbol: coin.symbol.toUpperCase(), name: coin.name, decimals: solanaToken.decimals }
-    : SOL_TOKEN;
+  var feeBps = antiMev ? BASE_FEE_BPS + ANTIMEV_FEE_BPS : BASE_FEE_BPS;
+  var feePercent = feeBps / 100;
 
-  var toToken = mode === 'sell' ? USDC_TOKEN
-    : { mint: solanaToken.mint, symbol: coin.symbol.toUpperCase(), name: coin.name, decimals: solanaToken.decimals };
+  var fromToken = mode === 'sell' ? jupiterToken : SOL_TOKEN;
+  var toToken = mode === 'sell' ? USDC_TOKEN : jupiterToken;
 
   useEffect(function() {
     setFromAmt('');
     setQuote(null);
     setSwapStatus('idle');
+    setSwapTx(null);
   }, [open, mode]);
 
   useEffect(function() {
@@ -75,7 +73,7 @@ function TradeDrawer({ open, onClose, mode, coin, solanaToken }) {
           outputMint: toToken.mint,
           amount: amount.toString(),
           slippageBps: '50',
-          platformFeeBps: JUPITER_FEE_BPS.toString(),
+          platformFeeBps: feeBps.toString(),
         });
         var res = await fetch('https://quote-api.jup.ag/v6/quote?' + params);
         var data = await res.json();
@@ -92,10 +90,13 @@ function TradeDrawer({ open, onClose, mode, coin, solanaToken }) {
       setQuoteLoading(false);
     }, 600);
     return function() { clearTimeout(t); };
-  }, [fromAmt, mode]);
+  }, [fromAmt, mode, feeBps]);
 
   var executeSwap = async function() {
-    if (!isConnected) { if (openConnectModal) openConnectModal(); return; }
+    if (!connected || !publicKey) {
+      if (onConnectWallet) onConnectWallet();
+      return;
+    }
     if (!quote) return;
     setSwapStatus('loading');
     try {
@@ -104,44 +105,53 @@ function TradeDrawer({ open, onClose, mode, coin, solanaToken }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           quoteResponse: quote.quoteResponse,
-          userPublicKey: address,
+          userPublicKey: publicKey.toString(),
           wrapAndUnwrapSol: true,
           feeAccount: JUPITER_REFERRAL_KEY,
+          computeUnitPriceMicroLamports: antiMev ? 50000 : 1000,
+          prioritizationFeeLamports: antiMev ? 100000 : 5000,
         }),
       });
       var swapData = await swapRes.json();
       if (swapData.swapTransaction) {
+        var txBuf = Buffer.from(swapData.swapTransaction, 'base64');
+        var tx = VersionedTransaction.deserialize(txBuf);
+        var sig = await sendTransaction(tx, connection);
+        await connection.confirmTransaction(sig, 'confirmed');
+        setSwapTx(sig);
         setSwapStatus('success');
         setFromAmt('');
         setQuote(null);
         setTimeout(function() { setSwapStatus('idle'); }, 4000);
       }
     } catch (e) {
+      console.error('Trade error:', e);
       setSwapStatus('error');
       setTimeout(function() { setSwapStatus('idle'); }, 3000);
     }
   };
 
-  var modeLabel = mode === 'buy' ? 'Buy' : mode === 'sell' ? 'Sell' : 'Swap';
-  var modeColor = mode === 'buy' ? C.accent : mode === 'sell' ? C.red : C.green;
-  var modeGradient = mode === 'sell'
-    ? 'linear-gradient(135deg,#ff3b6b,#cc1144)'
-    : mode === 'buy'
+  var modeLabel = mode === 'buy' ? 'Buy' : 'Sell';
+  var modeColor = mode === 'buy' ? C.accent : C.red;
+  var modeGradient = mode === 'buy'
     ? 'linear-gradient(135deg,#00e5ff,#0055ff)'
-    : 'linear-gradient(135deg,#00ffa3,#00b36b)';
+    : 'linear-gradient(135deg,#ff3b6b,#cc1144)';
+
+  var fromPriceVal = mode === 'buy' ? (coin ? coin.current_price : 0) : 0;
+  var feeUsd = fromAmt && fromPriceVal ? (parseFloat(fromAmt) * fromPriceVal * feeBps / 10000).toFixed(2) : '0.00';
 
   if (!open) return null;
 
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,.75)' }} />
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,.8)' }} />
       <div style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 401,
         background: C.card, borderTop: '2px solid ' + C.borderHi,
         borderRadius: '20px 20px 0 0',
         padding: '20px 20px 40px',
         boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
-        maxHeight: '85vh', overflowY: 'auto',
+        maxHeight: '90vh', overflowY: 'auto',
         animation: 'slideUp .25s ease',
       }}>
         <style>{`@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }`}</style>
@@ -150,29 +160,34 @@ function TradeDrawer({ open, onClose, mode, coin, solanaToken }) {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {coin.image && (
+            {coin && coin.image && (
               <img src={coin.image} alt={coin.symbol} style={{ width: 36, height: 36, borderRadius: '50%' }} />
             )}
             <div>
               <div style={{ color: modeColor, fontWeight: 800, fontSize: 20 }}>
-                {modeLabel} {coin.symbol && coin.symbol.toUpperCase()}
+                {modeLabel} {coin && coin.symbol && coin.symbol.toUpperCase()}
               </div>
               <div style={{ color: C.muted, fontSize: 12, marginTop: 2 }}>
-                {fmt(coin.current_price)} per {coin.symbol && coin.symbol.toUpperCase()}
+                {coin && fmt(coin.current_price)} · {feePercent}% fee
               </div>
             </div>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer', padding: 0 }}>×</button>
         </div>
 
-        {!isConnected && (
+        {!connected && (
           <div style={{
             marginBottom: 16, padding: 14,
             background: 'rgba(0,229,255,.05)', border: '1px solid rgba(0,229,255,.15)',
             borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 10,
           }}>
             <span style={{ color: C.muted, fontSize: 13 }}>Connect wallet to trade</span>
-            <ConnectButton showBalance={false} chainStatus="none" accountStatus="avatar" />
+            <button onClick={function() { onConnectWallet && onConnectWallet(); }} style={{
+              background: 'linear-gradient(135deg,#9945ff,#7c3aed)',
+              border: 'none', borderRadius: 8, padding: '8px 16px',
+              color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+              fontFamily: 'Syne, sans-serif',
+            }}>Connect Wallet</button>
           </div>
         )}
 
@@ -200,7 +215,7 @@ function TradeDrawer({ open, onClose, mode, coin, solanaToken }) {
           }}>↓</div>
         </div>
 
-        <div style={{ background: C.card2, borderRadius: 12, padding: 16, border: '1px solid ' + C.border, marginBottom: 16 }}>
+        <div style={{ background: C.card2, borderRadius: 12, padding: 16, border: '1px solid ' + C.border, marginBottom: 14 }}>
           <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 8 }}>
             YOU RECEIVE ({toToken.symbol})
           </div>
@@ -209,65 +224,107 @@ function TradeDrawer({ open, onClose, mode, coin, solanaToken }) {
           </div>
         </div>
 
-        {quote && (
-          <div style={{ background: '#050912', borderRadius: 10, padding: 12, marginBottom: 16 }}>
-            {[
-              ['Fee (0.3% paid by user)', '$' + (parseFloat(fromAmt) * (coin.current_price || 0) * 0.003).toFixed(2)],
-              ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
-              ['Min Received', (parseFloat(quote.outAmountDisplay) * 0.995).toFixed(6) + ' ' + toToken.symbol],
-            ].map(function(item) {
-              return (
-                <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
-                  <span style={{ color: C.muted }}>{item[0]}</span>
-                  <span style={{ color: C.text }}>{item[1]}</span>
-                </div>
-              );
-            })}
+        <div style={{ background: '#050912', borderRadius: 10, padding: 12, marginBottom: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+            <div>
+              <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>ANTI-MEV PROTECTION</span>
+              <div style={{ fontSize: 10, color: antiMev ? C.accent : C.muted, marginTop: 2 }}>
+                {antiMev ? 'ON — Priority, bot protected (+2%)' : 'OFF — Standard (saves 2%)'}
+              </div>
+            </div>
+            <button onClick={function() { setAntiMev(!antiMev); }} style={{
+              width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer',
+              background: antiMev ? C.accent : C.muted2, transition: 'background .2s',
+              position: 'relative', flexShrink: 0,
+            }}>
+              <div style={{
+                width: 18, height: 18, borderRadius: '50%', background: '#fff',
+                position: 'absolute', top: 3, left: antiMev ? 23 : 3,
+                transition: 'left .2s',
+              }} />
+            </button>
           </div>
-        )}
+          {quote && fromAmt && (
+            <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
+              {[
+                ['Platform Fee (4%)', '$' + (parseFloat(fromAmt) * (coin ? coin.current_price : 0) * BASE_FEE_BPS / 10000).toFixed(2)],
+                antiMev ? ['Anti-MEV Fee (2%)', '$' + (parseFloat(fromAmt) * (coin ? coin.current_price : 0) * ANTIMEV_FEE_BPS / 10000).toFixed(2)] : null,
+                ['Service Fee (1%)', '$' + (parseFloat(fromAmt) * (coin ? coin.current_price : 0) * 0.01).toFixed(2)],
+                ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
+              ].filter(Boolean).map(function(item) {
+                return (
+                  <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
+                    <span style={{ color: C.muted }}>{item[0]}</span>
+                    <span style={{ color: C.text }}>{item[1]}</span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
 
         <button
-          onClick={isConnected ? executeSwap : openConnectModal}
-          disabled={isConnected && (!fromAmt || !quote || swapStatus === 'loading')}
+          onClick={executeSwap}
+          disabled={connected && (!fromAmt || !quote || swapStatus === 'loading')}
           style={{
             width: '100%', padding: 18, borderRadius: 14, border: 'none',
             background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
               : swapStatus === 'error' ? 'rgba(255,59,107,.2)'
-              : !isConnected ? 'linear-gradient(135deg,#00e5ff,#0055ff)'
+              : !connected ? 'linear-gradient(135deg,#9945ff,#7c3aed)'
               : !fromAmt || !quote ? C.card3
               : modeGradient,
-            color: !fromAmt || !quote && isConnected ? C.muted2 : swapStatus === 'error' ? C.red : C.bg,
+            color: connected && (!fromAmt || !quote) ? C.muted2 : swapStatus === 'error' ? C.red : '#fff',
             fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16,
-            cursor: isConnected && (!fromAmt || !quote) ? 'not-allowed' : 'pointer',
-            transition: 'all .3s',
+            cursor: connected && (!fromAmt || !quote) ? 'not-allowed' : 'pointer',
+            transition: 'all .3s', minHeight: 54,
           }}>
-          {!isConnected ? 'Connect Wallet to Trade'
+          {!connected ? 'Connect Wallet to Trade'
             : swapStatus === 'loading' ? 'Confirming...'
             : swapStatus === 'success' ? modeLabel + ' Confirmed!'
             : swapStatus === 'error' ? 'Failed - Try Again'
             : !fromAmt ? 'Enter Amount'
             : !quote ? 'Getting Quote...'
-            : modeLabel + ' ' + (coin.symbol && coin.symbol.toUpperCase())}
+            : modeLabel + ' ' + (coin && coin.symbol && coin.symbol.toUpperCase())}
         </button>
 
-        {swapStatus === 'success' && (
-          <div style={{ textAlign: 'center', marginTop: 12, color: C.green, fontSize: 13, fontWeight: 600 }}>
-            Transaction submitted successfully!
-          </div>
+        {swapTx && swapStatus === 'success' && (
+          <a href={'https://solscan.io/tx/' + swapTx} target="_blank" rel="noreferrer"
+            style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>
+            View on Solscan ↗
+          </a>
         )}
+
+        <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 12, lineHeight: 1.6 }}>
+          Powered by Jupiter · Non-custodial · Fees paid by user
+        </p>
       </div>
     </>
   );
 }
 
-export default function TokenDetail({ coin, coins, onBack, onBuy }) {
+export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConnectWallet }) {
   const [chartData, setChartData] = useState([]);
   const [chartPeriod, setChartPeriod] = useState('7');
   const [chartLoading, setChartLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState('buy');
 
-  var solanaToken = coin && coin.symbol ? SOLANA_TOKENS[coin.symbol.toUpperCase()] : null;
+  var jupiterToken = null;
+  if (coin && coin.symbol && jupiterTokens && jupiterTokens.length > 0) {
+    jupiterToken = jupiterTokens.find(function(t) {
+      return t.symbol && t.symbol.toUpperCase() === coin.symbol.toUpperCase();
+    });
+  }
+
+  if (!jupiterToken && coin) {
+    jupiterToken = {
+      mint: 'So11111111111111111111111111111111111111112',
+      symbol: coin.symbol || 'TOKEN',
+      name: coin.name || 'Token',
+      decimals: 6,
+      isNative: false,
+    };
+  }
 
   useEffect(function() {
     if (!coin) return;
@@ -295,22 +352,14 @@ export default function TokenDetail({ coin, coins, onBack, onBuy }) {
   var priceChange = coin.price_change_percentage_24h || 0;
   var chartColor = priceChange >= 0 ? C.green : C.red;
 
-  var openDrawer = function(mode) {
-    if (!solanaToken) {
-      if (onBuy) onBuy(coin);
-      return;
-    }
-    setDrawerMode(mode);
-    setDrawerOpen(true);
-  };
-
   return (
-    <div style={{ maxWidth: 600, margin: '0 auto' }}>
+    <div style={{ maxWidth: 640, margin: '0 auto' }}>
 
       <button onClick={onBack} style={{
         display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20,
         background: 'transparent', border: 'none', color: C.muted,
         cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600,
+        padding: 0,
       }}>← Back to Markets</button>
 
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
@@ -327,7 +376,7 @@ export default function TokenDetail({ coin, coins, onBack, onBuy }) {
             <div>
               <div style={{ fontWeight: 800, fontSize: 20, color: '#fff' }}>{coin.name}</div>
               <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
-                {coin.symbol && coin.symbol.toUpperCase()} · Rank #{coin.market_cap_rank}
+                {coin.symbol && coin.symbol.toUpperCase()} · Rank #{coin.market_cap_rank || '--'}
               </div>
             </div>
           </div>
@@ -378,23 +427,19 @@ export default function TokenDetail({ coin, coins, onBack, onBuy }) {
         )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 14 }}>
-        <button onClick={function() { openDrawer('buy'); }} style={{
-          padding: '16px 10px', borderRadius: 14, border: 'none', cursor: 'pointer',
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
+        <button onClick={function() { setDrawerMode('buy'); setDrawerOpen(true); }} style={{
+          padding: '18px 10px', borderRadius: 14, border: 'none', cursor: 'pointer',
           background: 'linear-gradient(135deg,#00e5ff,#0055ff)',
-          color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16,
-          boxShadow: '0 0 20px rgba(0,229,255,.2)',
-        }}>Buy</button>
-        <button onClick={function() { openDrawer('swap'); }} style={{
-          padding: '16px 10px', borderRadius: 14, cursor: 'pointer',
-          background: 'rgba(0,255,163,.08)', border: '1px solid rgba(0,255,163,.3)',
-          color: C.green, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16,
-        }}>Swap</button>
-        <button onClick={function() { openDrawer('sell'); }} style={{
-          padding: '16px 10px', borderRadius: 14, cursor: 'pointer',
+          color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18,
+          boxShadow: '0 0 20px rgba(0,229,255,.2)', minHeight: 56,
+        }}>Buy {coin.symbol && coin.symbol.toUpperCase()}</button>
+        <button onClick={function() { setDrawerMode('sell'); setDrawerOpen(true); }} style={{
+          padding: '18px 10px', borderRadius: 14, cursor: 'pointer',
           background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.3)',
-          color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16,
-        }}>Sell</button>
+          color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18,
+          minHeight: 56,
+        }}>Sell {coin.symbol && coin.symbol.toUpperCase()}</button>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginBottom: 14 }}>
@@ -436,22 +481,23 @@ export default function TokenDetail({ coin, coins, onBack, onBuy }) {
         </div>
       </div>
 
-      {solanaToken && (
+      {jupiterToken && jupiterToken.mint !== SOL_TOKEN.mint && (
         <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>SOLANA CONTRACT</div>
           <div style={{ fontSize: 11, color: C.accent, fontFamily: 'JetBrains Mono, monospace', wordBreak: 'break-all', lineHeight: 1.6 }}>
-            {solanaToken.mint}
+            {jupiterToken.mint}
           </div>
         </div>
       )}
 
-      {drawerOpen && solanaToken && (
+      {drawerOpen && (
         <TradeDrawer
           open={drawerOpen}
           onClose={function() { setDrawerOpen(false); }}
           mode={drawerMode}
           coin={coin}
-          solanaToken={solanaToken}
+          jupiterToken={jupiterToken}
+          onConnectWallet={onConnectWallet}
         />
       )}
     </div>
