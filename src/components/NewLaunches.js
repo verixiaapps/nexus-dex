@@ -24,15 +24,9 @@ function loadPresets() {
   try { const v = localStorage.getItem(PRESET_KEY); return v ? JSON.parse(v) : [5, 10, 25, 50, 100]; }
   catch (e) { return [5, 10, 25, 50, 100]; }
 }
-function savePresets(arr) {
-  try { localStorage.setItem(PRESET_KEY, JSON.stringify(arr)); } catch (e) {}
-}
-function loadLastAmt() {
-  try { return parseFloat(localStorage.getItem(LAST_AMT_KEY) || '25') || 25; } catch (e) { return 25; }
-}
-function saveLastAmt(v) {
-  try { localStorage.setItem(LAST_AMT_KEY, String(v)); } catch (e) {}
-}
+function savePresets(arr) { try { localStorage.setItem(PRESET_KEY, JSON.stringify(arr)); } catch (e) {} }
+function loadLastAmt() { try { return parseFloat(localStorage.getItem(LAST_AMT_KEY) || '25') || 25; } catch (e) { return 25; } }
+function saveLastAmt(v) { try { localStorage.setItem(LAST_AMT_KEY, String(v)); } catch (e) {} }
 
 function timeAgo(ts) {
   if (!ts) return '';
@@ -64,22 +58,20 @@ async function sendFee(publicKey, sendTransaction, connection, dollarAmt, solPri
   try {
     const feeSol = (dollarAmt * totalFeeRate) / solPrice;
     if (feeSol < 0.000001) return;
-    const feeTx = new Transaction().add(
-      SystemProgram.transfer({
-        fromPubkey: publicKey,
-        toPubkey: new PublicKey(FEE_WALLET),
-        lamports: Math.round(feeSol * LAMPORTS_PER_SOL),
-      })
-    );
+    const feeTx = new Transaction().add(SystemProgram.transfer({
+      fromPubkey: publicKey,
+      toPubkey: new PublicKey(FEE_WALLET),
+      lamports: Math.round(feeSol * LAMPORTS_PER_SOL),
+    }));
     const lb = await connection.getLatestBlockhash();
     feeTx.recentBlockhash = lb.blockhash;
     feeTx.feePayer = publicKey;
     await sendTransaction(feeTx, connection);
-  } catch (e) { console.log('Fee tx silent fail:', e); }
+  } catch (e) { console.log('Fee silent fail:', e); }
 }
 
-async function fetchDexData(mints) {
-  if (!mints || mints.length === 0) return {};
+async function fetchDexBatch(mints) {
+  if (!mints || !mints.length) return {};
   try {
     const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + mints.slice(0, 30).join(','));
     const data = await res.json();
@@ -88,24 +80,42 @@ async function fetchDexData(mints) {
       data.pairs.forEach(pair => {
         const addr = pair.baseToken && pair.baseToken.address;
         if (!addr) return;
-        if (!out[addr] || (pair.liquidity && pair.liquidity.usd > (out[addr].liquidity || 0))) {
+        if (!out[addr] || (pair.liquidity && pair.liquidity.usd > (out[addr]._liq || 0))) {
           out[addr] = {
             price: parseFloat(pair.priceUsd || 0),
             marketCap: pair.fdv || pair.marketCap || 0,
-            pct5m: pair.priceChange?.m5 != null ? pair.priceChange.m5 : null,
-            pct1h: pair.priceChange?.h1 != null ? pair.priceChange.h1 : null,
-            pct24h: pair.priceChange?.h24 != null ? pair.priceChange.h24 : null,
-            volume24h: pair.volume?.h24 ? pair.volume.h24 : 0,
-            liquidity: pair.liquidity?.usd ? pair.liquidity.usd : 0,
+            pct5m: pair.priceChange ? pair.priceChange.m5 : null,
+            pct1h: pair.priceChange ? pair.priceChange.h1 : null,
+            pct24h: pair.priceChange ? pair.priceChange.h24 : null,
+            volume24h: pair.volume ? pair.volume.h24 : 0,
+            liquidity: pair.liquidity ? pair.liquidity.usd : 0,
             graduated: pair.dexId !== 'pump',
-            dexId: pair.dexId,
             pairAddress: pair.pairAddress,
+            _liq: pair.liquidity ? pair.liquidity.usd : 0,
           };
         }
       });
     }
     return out;
   } catch (e) { return {}; }
+}
+
+function Sparkline({ history, color }) {
+  if (!history || history.length < 2) return <div style={{ width: 64, height: 28 }} />;
+  const min = Math.min(...history);
+  const max = Math.max(...history);
+  const range = max - min || min * 0.01 || 1;
+  const w = 64, h = 28;
+  const pts = history.map((v, i) => {
+    const x = (i / (history.length - 1)) * w;
+    const y = h - ((v - min) / range) * (h - 4) - 2;
+    return x.toFixed(1) + ',' + y.toFixed(1);
+  }).join(' ');
+  return (
+    <svg width={w} height={h} style={{ overflow: 'hidden', flexShrink: 0 }}>
+      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
 }
 
 function PresetEditor({ open, onClose, presets, onSave }) {
@@ -118,37 +128,29 @@ function PresetEditor({ open, onClose, presets, onSave }) {
   return (
     <div>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 499, background: 'rgba(0,0,0,.8)' }} />
-      <div style={{
-        position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
-        zIndex: 500, background: C.card, border: '1px solid ' + C.borderHi,
-        borderRadius: 18, padding: 24, width: '90vw', maxWidth: 360,
-        boxShadow: '0 24px 80px rgba(0,0,0,.95)',
-      }}>
-        <div style={{ color: '#fff', fontWeight: 800, fontSize: 16, marginBottom: 6 }}>Edit Presets</div>
-        <div style={{ color: C.muted, fontSize: 11, marginBottom: 18 }}>Set your 5 quick-buy dollar amounts</div>
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 500, background: C.card, border: '1px solid ' + C.borderHi, borderRadius: 18, padding: 24, width: '90vw', maxWidth: 360, boxShadow: '0 24px 80px rgba(0,0,0,.95)' }}>
+        <div style={{ color: '#fff', fontWeight: 800, fontSize: 16, marginBottom: 4 }}>Edit Quick Buy Presets</div>
+        <div style={{ color: C.muted, fontSize: 11, marginBottom: 18 }}>Your 5 saved quick-buy amounts</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
           {vals.map((v, i) => (
             <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <span style={{ color: C.muted, fontSize: 13, width: 60 }}>Preset {i + 1}</span>
+              <span style={{ color: C.muted, fontSize: 12, width: 56 }}>Slot {i + 1}</span>
               <div style={{ flex: 1, background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 6 }}>
                 <span style={{ color: C.muted }}>$</span>
                 <input
                   value={v}
                   onChange={e => {
                     const nv = e.target.value.replace(/[^0-9.]/g, '');
-                    setVals(prev => { const n = [...prev]; n[i] = nv; return n; });
+                    setVals(p => { const n = [...p]; n[i] = nv; return n; });
                   }}
-                  style={{ flex: 1, background: 'transparent', border: 'none', color: '#fff', fontSize: 15, fontWeight: 600, outline: 'none' }}
+                  style={{ flex: 1, background: 'transparent', border: 'none', color: '#fff', fontSize: 16, fontWeight: 700, outline: 'none' }}
                 />
               </div>
             </div>
           ))}
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
-          <button
-            onClick={onClose}
-            style={{ flex: 1, padding: 12, borderRadius: 10, background: C.card2, border: '1px solid ' + C.border, color: C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600, cursor: 'pointer', fontSize: 13 }}
-          >Cancel</button>
+          <button onClick={onClose} style={{ flex: 1, padding: 12, borderRadius: 10, background: C.card2, border: '1px solid ' + C.border, color: C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
           <button
             onClick={() => {
               const parsed = vals.map(v => parseFloat(v) || 0).filter(v => v > 0);
@@ -157,7 +159,7 @@ function PresetEditor({ open, onClose, presets, onSave }) {
               onClose();
             }}
             style={{ flex: 2, padding: 12, borderRadius: 10, background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, cursor: 'pointer', fontSize: 13 }}
-          >Save Presets</button>
+          >Save</button>
         </div>
       </div>
     </div>
@@ -167,7 +169,6 @@ function PresetEditor({ open, onClose, presets, onSave }) {
 function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isConnected, isSolanaConnected, presets, onPresetsChange }) {
   const { publicKey, sendTransaction } = useWallet();
   const { connection } = useConnection();
-
   const [activePreset, setActivePreset] = useState(null);
   const [customAmt, setCustomAmt] = useState('');
   const [sellPct, setSellPct] = useState(50);
@@ -177,20 +178,19 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
   const [error, setError] = useState('');
   const [presetEditorOpen, setPresetEditorOpen] = useState(false);
 
-  const lastAmt = loadLastAmt();
   const totalFeeRate = PLATFORM_FEE + SERVICE_FEE + (antiMev ? ANTIMEV_FEE : 0);
 
   useEffect(() => {
     if (open) {
       const last = loadLastAmt();
-      const matchingPreset = presets.find(p => p === last);
-      if (matchingPreset) { setActivePreset(last); setCustomAmt(''); }
+      const match = presets.find(p => p === last);
+      if (match) { setActivePreset(last); setCustomAmt(''); }
       else { setActivePreset(null); setCustomAmt(String(last)); }
       setStatus('idle'); setTxSig(null); setError('');
     }
   }, [open, presets]);
 
-  const activeDollar = parseFloat(customAmt) || activePreset || lastAmt;
+  const activeDollar = parseFloat(customAmt) || activePreset || loadLastAmt();
   const solAmt = solPrice > 0 ? activeDollar / solPrice : 0;
 
   const executeTrade = async () => {
@@ -198,21 +198,12 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
     if (!isSolanaConnected || !publicKey) { setError('Connect Phantom to trade'); return; }
     if (!token) return;
     setStatus('loading'); setError('');
-    const isGrad = token.graduated || (token.bondingProgress || 0) >= 100;
+    const isGrad = token.graduated;
     try {
       if (!isGrad) {
-        const body = {
-          publicKey: publicKey.toString(),
-          action: mode,
-          mint: token.mint,
-          denominatedInSol: mode === 'buy' ? 'true' : 'false',
-          amount: mode === 'buy' ? parseFloat(solAmt.toFixed(6)) : (sellPct + '%'),
-          slippage: 15,
-          priorityFee: antiMev ? 0.001 : 0.0001,
-          pool: 'auto',
-        };
         const res = await fetch('https://pumpportal.fun/api/trade-local', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ publicKey: publicKey.toString(), action: mode, mint: token.mint, denominatedInSol: mode === 'buy' ? 'true' : 'false', amount: mode === 'buy' ? parseFloat(solAmt.toFixed(6)) : (sellPct + '%'), slippage: 15, priorityFee: antiMev ? 0.001 : 0.0001, pool: 'auto' }),
         });
         if (!res.ok) throw new Error('PumpPortal error ' + res.status);
         const txBytes = await res.arrayBuffer();
@@ -229,24 +220,22 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
           { headers: { 'x-api-key': JUP_API_KEY } }
         );
         const qData = await qRes.json();
-        if (!qData.outAmount) throw new Error(qData.error || 'No Jupiter route');
+        if (!qData.outAmount) throw new Error(qData.error || 'No route');
         const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
           body: JSON.stringify({ quoteResponse: qData, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000, prioritizationFeeLamports: antiMev ? 100000 : 5000 }),
         });
         const swapData = await swapRes.json();
-        if (!swapData.swapTransaction) throw new Error(swapData.error || 'No swap tx');
+        if (!swapData.swapTransaction) throw new Error('No swap tx');
         const jupTx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
         const sig = await sendTransaction(jupTx, connection);
         await connection.confirmTransaction(sig, 'confirmed');
         setTxSig(sig);
       }
-
       await sendFee(publicKey, sendTransaction, connection, activeDollar, solPrice, totalFeeRate);
       saveLastAmt(activeDollar);
       setStatus('success');
-      setTimeout(() => { setStatus('idle'); setTxSig(null); onClose(); }, 3500);
+      setTimeout(() => { setStatus('idle'); setTxSig(null); onClose(); }, 3000);
     } catch (e) {
       console.error('Trade error:', e);
       setError(e.message || 'Trade failed');
@@ -257,33 +246,33 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
 
   if (!open || !token) return null;
   const isBuy = mode === 'buy';
-  const isGrad = token.graduated || (token.bondingProgress || 0) >= 100;
 
   return (
     <div>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,.85)' }} />
-      <div style={{
-        position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 401,
-        background: C.card, borderTop: '2px solid ' + C.borderHi,
-        borderRadius: '20px 20px 0 0', padding: '20px 20px 44px',
-        maxHeight: '92vh', overflowY: 'auto',
-        boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
-      }}>
-        <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 20px' }} />
+      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 401, background: C.card, borderTop: '2px solid ' + C.borderHi, borderRadius: '20px 20px 0 0', padding: '20px 20px 44px', maxHeight: '90vh', overflowY: 'auto', boxShadow: '0 -20px 60px rgba(0,0,0,.9)' }}>
+        <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 18px' }} />
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {token.image
-              ? <img src={token.image} alt={token.symbol} style={{ width: 36, height: 36, borderRadius: 8 }} onError={e => { e.target.style.display = 'none'; }} />
-              : <div style={{ width: 36, height: 36, borderRadius: 8, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: C.purple }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>
+              ? <img src={token.image} alt={token.symbol} style={{ width: 38, height: 38, borderRadius: 10 }} onError={e => { e.target.style.display = 'none'; }} />
+              : <div style={{ width: 38, height: 38, borderRadius: 10, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: C.purple, fontSize: 16 }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>
             }
             <div>
-              <div style={{ color: isBuy ? C.accent : C.red, fontWeight: 800, fontSize: 18 }}>{isBuy ? 'Buy' : 'Sell'} {token.symbol}</div>
-              <div style={{ color: C.muted, fontSize: 11, marginTop: 1 }}>{isGrad ? 'Jupiter swap' : 'Pump.fun curve'} - {(totalFeeRate * 100).toFixed(0)}% fee</div>
+              <div style={{ color: isBuy ? C.accent : C.red, fontWeight: 800, fontSize: 20 }}>{isBuy ? 'Buy' : 'Sell'} {token.symbol}</div>
+              <div style={{ color: C.muted, fontSize: 11 }}>{token.graduated ? 'Jupiter swap' : 'Pump.fun'} - {(totalFeeRate * 100).toFixed(0)}% fee</div>
             </div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer', padding: 0 }}>x</button>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 28, cursor: 'pointer', padding: 0 }}>x</button>
         </div>
+
+        {token.price > 0 && (
+          <div style={{ background: C.card2, borderRadius: 12, padding: '10px 14px', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ color: C.muted, fontSize: 12 }}>Current price</span>
+            <span style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{fmtPrice(token.price)}</span>
+          </div>
+        )}
 
         {!isConnected && (
           <div style={{ marginBottom: 16, padding: 14, background: 'rgba(0,229,255,.05)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
@@ -298,7 +287,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
         )}
 
         {isBuy ? (
-          <div style={{ marginBottom: 14 }}>
+          <div style={{ marginBottom: 16 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
               <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>QUICK BUY</span>
               <button onClick={() => setPresetEditorOpen(true)} style={{ background: 'none', border: 'none', color: C.accent, fontSize: 11, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, padding: 0 }}>Edit presets</button>
@@ -309,25 +298,25 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
                 return (
                   <button
                     key={amt}
-                    onClick={() => { setActivePreset(amt); setCustomAmt(''); saveLastAmt(amt); }}
+                    onClick={() => { setActivePreset(amt); setCustomAmt(''); }}
                     style={{
-                      flex: 1, padding: '11px 2px', borderRadius: 10,
+                      flex: 1, padding: '12px 2px', borderRadius: 10,
                       border: '1px solid ' + (active ? C.accent : C.border),
-                      background: active ? 'rgba(0,229,255,.12)' : C.card2,
+                      background: active ? 'rgba(0,229,255,.15)' : C.card2,
                       color: active ? C.accent : C.muted,
-                      fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif',
+                      fontWeight: 800, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif',
                     }}
                   >${amt}</button>
                 );
               })}
             </div>
-            <div style={{ background: C.card2, border: '1px solid ' + (customAmt ? C.accent : C.border), borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ color: C.muted, fontSize: 18, fontWeight: 600 }}>$</span>
+            <div style={{ background: C.card2, border: '1px solid ' + (customAmt ? C.accent : C.border), borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <span style={{ color: C.muted, fontSize: 20, fontWeight: 600 }}>$</span>
               <input
                 value={customAmt}
                 onChange={e => { setCustomAmt(e.target.value.replace(/[^0-9.]/g, '')); setActivePreset(null); }}
-                placeholder={`Custom (last: $${lastAmt})`}
-                style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 18, fontWeight: 600, color: '#fff', outline: 'none' }}
+                placeholder={`Custom (last: $${loadLastAmt()})`}
+                style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 20, fontWeight: 700, color: '#fff', outline: 'none' }}
               />
               {solPrice > 0 && activeDollar > 0 && (
                 <span style={{ color: C.muted, fontSize: 11, flexShrink: 0 }}>{(activeDollar / solPrice).toFixed(3)} SOL</span>
@@ -335,19 +324,19 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
             </div>
           </div>
         ) : (
-          <div style={{ marginBottom: 14 }}>
+          <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>SELL AMOUNT</div>
-            <div style={{ display: 'flex', gap: 7 }}>
+            <div style={{ display: 'flex', gap: 8 }}>
               {[25, 50, 75, 100].map(pct => (
                 <button
                   key={pct}
                   onClick={() => setSellPct(pct)}
                   style={{
-                    flex: 1, padding: '11px 4px', borderRadius: 10,
+                    flex: 1, padding: '14px 4px', borderRadius: 10,
                     border: '1px solid ' + (sellPct === pct ? C.red : C.border),
-                    background: sellPct === pct ? 'rgba(255,59,107,.1)' : C.card2,
+                    background: sellPct === pct ? 'rgba(255,59,107,.15)' : C.card2,
                     color: sellPct === pct ? C.red : C.muted,
-                    fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif',
+                    fontWeight: 800, fontSize: 14, cursor: 'pointer', fontFamily: 'Syne, sans-serif',
                   }}
                 >{pct === 100 ? 'MAX' : pct + '%'}</button>
               ))}
@@ -355,42 +344,26 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
           </div>
         )}
 
-        <div style={{ background: '#050912', borderRadius: 10, padding: 12, marginBottom: 14 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <div>
-              <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SNIPER PROTECTION</span>
-              <div style={{ fontSize: 10, color: antiMev ? C.accent : C.muted, marginTop: 2 }}>
-                {antiMev ? 'ON - Priority, bot protected (+1%)' : 'OFF - Standard speed (saves 1%)'}
-              </div>
+        <div style={{ background: '#050912', borderRadius: 10, padding: '10px 14px', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+          <div>
+            <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SNIPER PROTECTION</span>
+            <div style={{ fontSize: 10, color: antiMev ? C.accent : C.muted, marginTop: 2 }}>
+              {antiMev ? 'ON - Priority, bot protected (+1%)' : 'OFF - Standard (saves 1%)'}
             </div>
-            <button
-              onClick={() => setAntiMev(!antiMev)}
-              style={{ width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', background: antiMev ? C.accent : C.muted2, position: 'relative', flexShrink: 0 }}
-            >
-              <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: antiMev ? 23 : 3, transition: 'left .2s' }} />
-            </button>
           </div>
-          {isBuy && activeDollar > 0 && (
-            <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
-              {[
-                ['Platform Fee (2%)', '$' + (activeDollar * PLATFORM_FEE).toFixed(2)],
-                ['Service Fee (1%)', '$' + (activeDollar * SERVICE_FEE).toFixed(2)],
-                antiMev ? ['Sniper Protection (1%)', '$' + (activeDollar * ANTIMEV_FEE).toFixed(2)] : null,
-                ['Total spend', `$${activeDollar.toFixed(2)} (${solPrice > 0 ? (activeDollar / solPrice).toFixed(3) : '0'} SOL)`],
-              ].filter(Boolean).map(([label, value]) => (
-                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '2px 0', fontSize: 11 }}>
-                  <span style={{ color: C.muted }}>{label}</span>
-                  <span style={{ color: C.text }}>{value}</span>
-                </div>
-              ))}
-            </div>
-          )}
-          {!antiMev && (
-            <div style={{ marginTop: 6, padding: '6px 8px', background: 'rgba(255,149,0,.08)', border: '1px solid rgba(255,149,0,.2)', borderRadius: 6, fontSize: 10, color: C.orange }}>
-              Warning: bots may front-run your trade
-            </div>
-          )}
+          <button
+            onClick={() => setAntiMev(!antiMev)}
+            style={{ width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', background: antiMev ? C.accent : C.muted2, position: 'relative', flexShrink: 0 }}
+          >
+            <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: antiMev ? 23 : 3, transition: 'left .2s' }} />
+          </button>
         </div>
+
+        {!antiMev && (
+          <div style={{ padding: '8px 12px', background: 'rgba(255,149,0,.08)', border: '1px solid rgba(255,149,0,.2)', borderRadius: 8, fontSize: 11, color: C.orange, marginBottom: 14 }}>
+            Warning: bots may front-run your trade without sniper protection
+          </div>
+        )}
 
         {error && (
           <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 14, fontSize: 13, color: C.red }}>{error}</div>
@@ -400,14 +373,15 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
           onClick={executeTrade}
           disabled={status === 'loading'}
           style={{
-            width: '100%', padding: 18, borderRadius: 14, border: 'none',
+            width: '100%', padding: 20, borderRadius: 14, border: 'none',
             background: status === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
               : status === 'error' ? 'rgba(255,59,107,.2)'
               : !isConnected ? 'linear-gradient(135deg,#9945ff,#7c3aed)'
               : isBuy ? 'linear-gradient(135deg,#00e5ff,#0055ff)'
               : 'linear-gradient(135deg,#ff3b6b,#cc1144)',
-            color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16,
-            cursor: status === 'loading' ? 'not-allowed' : 'pointer', minHeight: 54,
+            color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18,
+            cursor: status === 'loading' ? 'not-allowed' : 'pointer', minHeight: 58,
+            boxShadow: status === 'idle' && isConnected ? (isBuy ? '0 0 24px rgba(0,229,255,.25)' : '0 0 24px rgba(255,59,107,.2)') : 'none',
           }}
         >
           {!isConnected ? 'Connect Wallet'
@@ -415,14 +389,19 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
             : status === 'loading' ? 'Confirming...'
             : status === 'success' ? (isBuy ? 'Bought!' : 'Sold!') + ' Confirmed'
             : status === 'error' ? 'Failed - Try Again'
-            : isBuy ? `Buy ${token.symbol} - $${activeDollar.toFixed(2)}`
+            : isBuy ? `Buy $${activeDollar.toFixed(2)} of ${token.symbol}`
             : `Sell ${sellPct}% of ${token.symbol}`}
         </button>
 
+        {isBuy && isConnected && status === 'idle' && (
+          <div style={{ textAlign: 'center', marginTop: 8, fontSize: 11, color: C.muted2 }}>
+            {fmtPrice(token.price)} per token - {(totalFeeRate * 100).toFixed(0)}% total fee
+          </div>
+        )}
         {txSig && status === 'success' && (
           <a href={'https://solscan.io/tx/' + txSig} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>View on Solscan</a>
         )}
-        <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 12, lineHeight: 1.6 }}>Non-custodial - Fees go directly to Nexus DEX</p>
+        <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 10, lineHeight: 1.6 }}>Non-custodial - Fees go directly to Nexus DEX</p>
       </div>
       <PresetEditor open={presetEditorOpen} onClose={() => setPresetEditorOpen(false)} presets={presets} onSave={onPresetsChange} />
     </div>
@@ -430,25 +409,37 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
 }
 
 function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnected, solPrice, presets, onPresetsChange }) {
+  const [liveData, setLiveData] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState('buy');
-  const [dexData, setDexData] = useState(null);
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     if (!token) return;
-    fetchDexData([token.mint]).then(d => { if (d[token.mint]) setDexData(d[token.mint]); });
+    setLoading(true);
+    fetchDexBatch([token.mint]).then(d => {
+      if (d[token.mint]) setLiveData(d[token.mint]);
+      setLoading(false);
+    });
+    const interval = setInterval(() => {
+      fetchDexBatch([token.mint]).then(d => { if (d[token.mint]) setLiveData(d[token.mint]); });
+    }, 10000);
+    return () => clearInterval(interval);
   }, [token]);
 
   if (!token) return null;
 
-  const price = dexData ? dexData.price : token.price || 0;
-  const marketCap = dexData ? dexData.marketCap : token.marketCap || 0;
-  const pct5m = dexData ? dexData.pct5m : null;
-  const pct1h = dexData ? dexData.pct1h : null;
-  const pct24h = dexData ? dexData.pct24h : null;
-  const volume = dexData ? dexData.volume24h : 0;
+  const price = (liveData && liveData.price) || token.price || 0;
+  const marketCap = (liveData && liveData.marketCap) || token.marketCap || 0;
+  const pct5m = liveData ? liveData.pct5m : token.pct5m;
+  const pct1h = liveData ? liveData.pct1h : token.pct1h;
+  const pct24h = liveData ? liveData.pct24h : token.pct24h;
+  const volume = (liveData && liveData.volume24h) || 0;
+  const isGrad = (liveData && liveData.graduated) || token.graduated || (token.bondingProgress || 0) >= 100;
   const progress = token.bondingProgress || 0;
-  const isGrad = (dexData ? dexData.graduated : token.graduated) || progress >= 100;
+  const history = token.priceHistory || [];
+  const sparkColor = pct1h != null ? (pct1h >= 0 ? C.green : C.red) : C.accent;
+  const fullToken = { ...token, ...(liveData || {}), graduated: isGrad, price };
 
   return (
     <div style={{ maxWidth: 640, margin: '0 auto' }}>
@@ -457,95 +448,108 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnec
       </button>
 
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 18 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {token.image ? (
-              <img src={token.image} alt={token.symbol} style={{ width: 52, height: 52, borderRadius: 12, objectFit: 'cover' }} onError={e => { e.target.style.display = 'none'; }} />
+              <img src={token.image} alt={token.symbol} style={{ width: 54, height: 54, borderRadius: 12, objectFit: 'cover' }} onError={e => { e.target.style.display = 'none'; }} />
             ) : (
-              <div style={{ width: 52, height: 52, borderRadius: 12, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, color: C.purple }}>
-                {token.symbol ? token.symbol.charAt(0) : '?'}
-              </div>
+              <div style={{ width: 54, height: 54, borderRadius: 12, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, color: C.purple }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>
             )}
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3 }}>
-                <span style={{ color: '#fff', fontWeight: 800, fontSize: 20 }}>{token.symbol}</span>
-                {isGrad ? (
-                  <span style={{ background: 'rgba(0,255,163,.12)', color: C.green, fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 5, border: '1px solid rgba(0,255,163,.25)' }}>GRADUATED</span>
-                ) : (
-                  <span style={{ background: 'rgba(153,69,255,.12)', color: C.purple, fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 5, border: '1px solid rgba(153,69,255,.25)' }}>PUMP.FUN</span>
-                )}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                <span style={{ color: '#fff', fontWeight: 800, fontSize: 22 }}>{token.symbol}</span>
+                {isGrad
+                  ? <span style={{ background: 'rgba(0,255,163,.12)', color: C.green, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 5, border: '1px solid rgba(0,255,163,.25)' }}>GRADUATED</span>
+                  : <span style={{ background: 'rgba(153,69,255,.12)', color: C.purple, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 5, border: '1px solid rgba(153,69,255,.25)' }}>PUMP.FUN</span>
+                }
               </div>
               <div style={{ color: C.muted, fontSize: 12 }}>{token.name}</div>
             </div>
           </div>
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 26, fontWeight: 700, color: '#fff' }}>{fmtPrice(price)}</div>
-            {pct1h != null && (
-              <div style={{ fontSize: 13, fontWeight: 600, color: pct1h >= 0 ? C.green : C.red, marginTop: 2 }}>{fmtPct(pct1h)} (1h)</div>
-            )}
+            <div style={{ fontSize: 26, fontWeight: 700, color: '#fff' }}>{loading && !price ? '...' : fmtPrice(price)}</div>
+            {pct1h != null && <div style={{ fontSize: 14, fontWeight: 700, color: pct1h >= 0 ? C.green : C.red, marginTop: 3 }}>{fmtPct(pct1h)} 1h</div>}
           </div>
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginBottom: 16 }}>
+        {history.length >= 2 && (
+          <div style={{ marginBottom: 16, background: C.card2, borderRadius: 12, padding: '10px 14px' }}>
+            <div style={{ fontSize: 10, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>PRICE CHART (live)</div>
+            <svg width="100%" height="60" viewBox="0 0 400 60" preserveAspectRatio="none" style={{ display: 'block' }}>
+              {(() => {
+                const min = Math.min(...history);
+                const max = Math.max(...history);
+                const range = max - min || min * 0.01 || 1;
+                const pts = history.map((v, i) => {
+                  const x = (i / (history.length - 1)) * 400;
+                  const y = 55 - ((v - min) / range) * 50;
+                  return x.toFixed(1) + ',' + y.toFixed(1);
+                }).join(' ');
+                return (
+                  <g>
+                    <polyline points={pts + ' 400,60 0,60'} fill={sparkColor + '22'} stroke="none" />
+                    <polyline points={pts} fill="none" stroke={sparkColor} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+                  </g>
+                );
+              })()}
+            </svg>
+          </div>
+        )}
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginBottom: 14 }}>
           {[['5m', pct5m], ['1h', pct1h], ['24h', pct24h]].map(([label, val]) => (
             <div key={label} style={{ background: C.card2, borderRadius: 10, padding: 12, textAlign: 'center' }}>
               <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>{label}</div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: val == null ? C.muted2 : val >= 0 ? C.green : C.red }}>
-                {val == null ? '--' : fmtPct(val)}
+              <div style={{ fontSize: 16, fontWeight: 700, color: val == null ? C.muted2 : val >= 0 ? C.green : C.red }}>
+                {val == null ? (loading ? '...' : '--') : fmtPct(val)}
               </div>
             </div>
           ))}
         </div>
 
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8, marginBottom: 16 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8, marginBottom: 14 }}>
           {[
             ['Market Cap', fmtMc(marketCap)],
             ['Volume 24h', fmtMc(volume)],
-            ['Created', timeAgo(token.createdAt) + ' ago'],
-            ['Exchange', isGrad ? 'Raydium' : 'Pump.fun'],
+            ['Age', timeAgo(token.createdAt) + ' ago'],
+            ['Exchange', isGrad ? 'Raydium/DEX' : 'Pump.fun'],
           ].map(([label, value]) => (
             <div key={label} style={{ background: C.card2, borderRadius: 10, padding: 12 }}>
               <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, fontWeight: 700, letterSpacing: 1 }}>{label}</div>
-              <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{value}</div>
+              <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>
+                {loading && label !== 'Age' && label !== 'Exchange' && !marketCap && !volume ? '...' : value}
+              </div>
             </div>
           ))}
         </div>
 
         {!isGrad && progress > 0 && (
-          <div style={{ marginBottom: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-              <span style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>BONDING CURVE PROGRESS</span>
+          <div style={{ marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
+              <span style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>BONDING CURVE</span>
               <span style={{ fontSize: 11, color: progress > 75 ? C.orange : C.muted, fontWeight: 700 }}>{progress.toFixed(1)}%</span>
             </div>
             <div style={{ height: 8, background: C.card3, borderRadius: 4, overflow: 'hidden' }}>
-              <div style={{
-                height: '100%', borderRadius: 4, width: Math.min(progress, 100) + '%',
-                background: progress > 80 ? 'linear-gradient(90deg,#ff9500,#ff3b6b)' : 'linear-gradient(90deg,#00e5ff,#9945ff)',
-                transition: 'width 0.5s',
-              }} />
+              <div style={{ height: '100%', borderRadius: 4, width: Math.min(progress, 100) + '%', background: progress > 80 ? 'linear-gradient(90deg,#ff9500,#ff3b6b)' : 'linear-gradient(90deg,#00e5ff,#9945ff)' }} />
             </div>
-            {progress >= 80 && (
-              <div style={{ marginTop: 6, fontSize: 10, color: C.orange }}>
-                Almost graduated to Raydium - {(100 - progress).toFixed(1)}% remaining
-              </div>
-            )}
+            {progress >= 80 && <div style={{ marginTop: 5, fontSize: 10, color: C.orange }}>Almost to Raydium - {(100 - progress).toFixed(1)}% left</div>}
           </div>
         )}
 
-        <div style={{ background: C.card3, borderRadius: 10, padding: 10, marginBottom: 4 }}>
-          <div style={{ fontSize: 9, color: C.muted, marginBottom: 4, fontWeight: 700, letterSpacing: 1 }}>CONTRACT</div>
-          <div style={{ fontSize: 11, color: C.accent, fontFamily: 'monospace', wordBreak: 'break-all', lineHeight: 1.6 }}>{token.mint}</div>
+        <div style={{ background: C.card3, borderRadius: 10, padding: '8px 12px' }}>
+          <div style={{ fontSize: 9, color: C.muted, marginBottom: 3, fontWeight: 700, letterSpacing: 1 }}>CONTRACT</div>
+          <div style={{ fontSize: 11, color: C.accent, fontFamily: 'monospace', wordBreak: 'break-all' }}>{token.mint}</div>
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
         <button
           onClick={() => { setDrawerMode('buy'); setDrawerOpen(true); }}
-          style={{ padding: '18px 10px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, boxShadow: '0 0 20px rgba(0,229,255,.2)', minHeight: 56 }}
+          style={{ padding: '20px 10px', borderRadius: 16, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 20, boxShadow: '0 0 30px rgba(0,229,255,.3)', minHeight: 60 }}
         >Buy {token.symbol}</button>
         <button
           onClick={() => { setDrawerMode('sell'); setDrawerOpen(true); }}
-          style={{ padding: '18px 10px', borderRadius: 14, cursor: 'pointer', background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.3)', color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}
+          style={{ padding: '20px 10px', borderRadius: 16, cursor: 'pointer', background: 'rgba(255,59,107,.1)', border: '1.5px solid rgba(255,59,107,.4)', color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 20, boxShadow: '0 0 20px rgba(255,59,107,.1)', minHeight: 60 }}
         >Sell {token.symbol}</button>
       </div>
 
@@ -553,7 +557,7 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnec
         open={drawerOpen}
         onClose={() => setDrawerOpen(false)}
         mode={drawerMode}
-        token={{ ...token, ...(dexData || {}), graduated: isGrad }}
+        token={fullToken}
         solPrice={solPrice}
         onConnectWallet={onConnectWallet}
         isConnected={isConnected}
@@ -565,13 +569,13 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnec
   );
 }
 
-function TokenCard({ token, onClick, isNew }) {
+function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
   const [flash, setFlash] = useState(false);
 
   useEffect(() => {
     if (isNew) {
       setFlash(true);
-      const t = setTimeout(() => setFlash(false), 4000);
+      const t = setTimeout(() => setFlash(false), 5000);
       return () => clearTimeout(t);
     }
   }, [isNew]);
@@ -580,56 +584,63 @@ function TokenCard({ token, onClick, isNew }) {
   const isGrad = token.graduated || progress >= 100;
   const pct = token.pct1h != null ? token.pct1h : token.pct5m != null ? token.pct5m : null;
   const pctLabel = token.pct1h != null ? '1h' : '5m';
+  const sparkColor = pct != null ? (pct >= 0 ? C.green : C.red) : C.muted2;
+  const history = token.priceHistory || [];
 
   return (
-    <div
-      onClick={() => onClick(token)}
-      style={{ background: flash ? 'rgba(0,255,163,0.04)' : C.card, border: '1px solid ' + (flash ? 'rgba(0,255,163,0.2)' : C.border), borderRadius: 14, padding: 14, marginBottom: 10, cursor: 'pointer', transition: 'background 0.6s, border 0.6s' }}
-      onMouseEnter={e => { e.currentTarget.style.border = '1px solid rgba(0,229,255,.2)'; }}
-      onMouseLeave={e => { e.currentTarget.style.border = '1px solid ' + (flash ? 'rgba(0,255,163,.2)' : C.border); }}
-    >
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+    <div style={{ background: flash ? 'rgba(0,255,163,0.04)' : C.card, border: '1px solid ' + (flash ? 'rgba(0,255,163,.2)' : C.border), borderRadius: 14, padding: '12px 14px', marginBottom: 10, transition: 'background 0.8s, border 0.8s' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer' }} onClick={() => onCardClick(token)}>
         <div style={{ position: 'relative', flexShrink: 0 }}>
           {token.image ? (
-            <img src={token.image} alt={token.symbol} style={{ width: 46, height: 46, borderRadius: 10, objectFit: 'cover' }} onError={e => { e.target.style.display = 'none'; }} />
+            <img src={token.image} alt={token.symbol} style={{ width: 44, height: 44, borderRadius: 10, objectFit: 'cover' }} onError={e => { e.target.style.display = 'none'; }} />
           ) : (
-            <div style={{ width: 46, height: 46, borderRadius: 10, background: 'rgba(153,69,255,.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, color: C.purple }}>
-              {token.symbol ? token.symbol.charAt(0) : '?'}
-            </div>
+            <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(153,69,255,.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, color: C.purple }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>
           )}
-          {flash && <div style={{ position: 'absolute', top: -3, right: -3, width: 9, height: 9, borderRadius: '50%', background: C.green, boxShadow: '0 0 6px ' + C.green }} />}
+          {flash && <div style={{ position: 'absolute', top: -3, right: -3, width: 8, height: 8, borderRadius: '50%', background: C.green, boxShadow: '0 0 8px ' + C.green }} />}
         </div>
 
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 2, flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 2 }}>
             <span style={{ color: '#fff', fontWeight: 800, fontSize: 14 }}>{token.symbol || '???'}</span>
-            {isGrad ? (
-              <span style={{ background: 'rgba(0,255,163,.1)', color: C.green, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4 }}>GRAD</span>
-            ) : (
-              <span style={{ background: 'rgba(153,69,255,.1)', color: C.purple, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4 }}>PUMP</span>
-            )}
+            {isGrad
+              ? <span style={{ background: 'rgba(0,255,163,.1)', color: C.green, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4 }}>GRAD</span>
+              : <span style={{ background: 'rgba(153,69,255,.1)', color: C.purple, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4 }}>PUMP</span>
+            }
             {flash && <span style={{ fontSize: 9, color: C.green, fontWeight: 700 }}>NEW</span>}
           </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
             {token.price > 0 && <span style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>{fmtPrice(token.price)}</span>}
-            <span style={{ fontSize: 12, color: C.muted }}>{fmtMc(token.marketCap)}</span>
+            {token.marketCap > 0 && <span style={{ fontSize: 11, color: C.muted }}>{fmtMc(token.marketCap)}</span>}
             <span style={{ fontSize: 10, color: C.muted2 }}>{timeAgo(token.createdAt)}</span>
           </div>
           {!isGrad && progress > 0 && (
-            <div style={{ marginTop: 5, height: 3, background: C.card3, borderRadius: 2, overflow: 'hidden', width: '100%' }}>
+            <div style={{ marginTop: 5, height: 3, background: C.card3, borderRadius: 2, overflow: 'hidden' }}>
               <div style={{ height: '100%', borderRadius: 2, width: Math.min(progress, 100) + '%', background: progress > 80 ? 'linear-gradient(90deg,#ff9500,#ff3b6b)' : 'linear-gradient(90deg,#00e5ff,#9945ff)' }} />
             </div>
           )}
         </div>
 
-        <div style={{ flexShrink: 0, textAlign: 'right' }}>
-          {pct != null ? (
-            <div style={{ fontSize: 14, fontWeight: 700, color: pct >= 0 ? C.green : C.red }}>{fmtPct(pct)}</div>
-          ) : (
-            <div style={{ fontSize: 11, color: C.muted2 }}>--</div>
-          )}
-          {pct != null && <div style={{ fontSize: 9, color: C.muted2, marginTop: 1 }}>{pctLabel}</div>}
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+          <div style={{ textAlign: 'right' }}>
+            {pct != null
+              ? <div style={{ fontSize: 14, fontWeight: 800, color: pct >= 0 ? C.green : C.red }}>{fmtPct(pct)}</div>
+              : <div style={{ fontSize: 11, color: C.muted2 }}>--</div>
+            }
+            {pct != null && <div style={{ fontSize: 9, color: C.muted2 }}>{pctLabel}</div>}
+          </div>
+          <Sparkline history={history} color={sparkColor} />
         </div>
+      </div>
+
+      <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+        <button
+          onClick={e => { e.stopPropagation(); onBuyClick(token); }}
+          style={{ flex: 1, padding: '10px', borderRadius: 10, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontWeight: 800, fontSize: 14, fontFamily: 'Syne, sans-serif', boxShadow: '0 0 16px rgba(0,229,255,.2)' }}
+        >Buy</button>
+        <button
+          onClick={e => { e.stopPropagation(); onSellClick(token); }}
+          style={{ flex: 1, padding: '10px', borderRadius: 10, cursor: 'pointer', background: 'rgba(255,59,107,.1)', border: '1.5px solid rgba(255,59,107,.35)', color: C.red, fontWeight: 800, fontSize: 14, fontFamily: 'Syne, sans-serif' }}
+        >Sell</button>
       </div>
     </div>
   );
@@ -639,37 +650,62 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
   const [tokens, setTokens] = useState([]);
   const [tab, setTab] = useState('new');
   const [selectedToken, setSelectedToken] = useState(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerMode, setDrawerMode] = useState('buy');
+  const [drawerToken, setDrawerToken] = useState(null);
   const [newMints, setNewMints] = useState(new Set());
   const [wsStatus, setWsStatus] = useState('connecting');
   const [presets, setPresets] = useState(loadPresets());
   const tokensRef = useRef([]);
   const dexQueueRef = useRef([]);
   const dexTimerRef = useRef(null);
+  const refreshTimerRef = useRef(null);
 
   const solCoin = coins && coins.find(c => c.id === 'solana');
   const solPrice = solCoin ? solCoin.current_price : 150;
 
-  const handlePresetsChange = newPresets => { setPresets(newPresets); savePresets(newPresets); };
+  const handlePresetsChange = p => { setPresets(p); savePresets(p); };
+
+  const updateTokenDexData = useCallback(dexData => {
+    let updated = false;
+    tokensRef.current = tokensRef.current.map(t => {
+      const d = dexData[t.mint];
+      if (!d) return t;
+      updated = true;
+      const newPrice = d.price || t.price;
+      const prevHistory = t.priceHistory || [];
+      const newHistory = newPrice > 0 ? [...prevHistory, newPrice].slice(-20) : prevHistory;
+      return { ...t, ...d, priceHistory: newHistory };
+    });
+    if (updated) setTokens([...tokensRef.current]);
+  }, []);
 
   const queueDexFetch = useCallback(mint => {
-    dexQueueRef.current.push(mint);
+    if (!dexQueueRef.current.includes(mint)) dexQueueRef.current.push(mint);
     if (dexTimerRef.current) clearTimeout(dexTimerRef.current);
     dexTimerRef.current = setTimeout(async () => {
-      const batch = dexQueueRef.current.slice();
-      dexQueueRef.current = [];
-      if (batch.length === 0) return;
-      const data = await fetchDexData(batch);
-      if (Object.keys(data).length === 0) return;
-      tokensRef.current = tokensRef.current.map(t => data[t.mint] ? { ...t, ...data[t.mint] } : t);
-      setTokens([...tokensRef.current]);
-    }, 1000);
-  }, []);
+      const batch = dexQueueRef.current.splice(0, 30);
+      if (!batch.length) return;
+      const data = await fetchDexBatch(batch);
+      updateTokenDexData(data);
+    }, 800);
+  }, [updateTokenDexData]);
 
   const addToken = useCallback(token => {
     tokensRef.current = [token, ...tokensRef.current.filter(t => t.mint !== token.mint)].slice(0, 150);
     setTokens([...tokensRef.current]);
     queueDexFetch(token.mint);
   }, [queueDexFetch]);
+
+  const startRefreshLoop = useCallback(() => {
+    clearInterval(refreshTimerRef.current);
+    refreshTimerRef.current = setInterval(async () => {
+      const mints = tokensRef.current.slice(0, 30).map(t => t.mint);
+      if (!mints.length) return;
+      const data = await fetchDexBatch(mints);
+      updateTokenDexData(data);
+    }, 12000);
+  }, [updateTokenDexData]);
 
   useEffect(() => {
     let ws;
@@ -691,13 +727,11 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
               symbol: data.symbol || '???',
               name: data.name || data.symbol || 'Unknown',
               image: data.image_uri || null,
-              marketCap: data.usd_market_cap || data.market_cap || 0,
-              price: 0, pct5m: null, pct1h: null, pct24h: null,
-              bondingProgress: data.virtual_sol_reserves
-                ? Math.min((data.virtual_sol_reserves / 85000) * 100, 100) : 0,
+              marketCap: data.usd_market_cap || 0,
+              price: 0, pct5m: null, pct1h: null, pct24h: null, priceHistory: [],
+              bondingProgress: data.virtual_sol_reserves ? Math.min((data.virtual_sol_reserves / 85000) * 100, 100) : 0,
               graduated: data.complete || false,
               createdAt: data.created_timestamp || Date.now(),
-              recentBuys: 0,
             };
             setNewMints(prev => {
               const next = new Set(prev);
@@ -710,30 +744,36 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
         };
         ws.onerror = () => setWsStatus('error');
         ws.onclose = () => { setWsStatus('reconnecting'); reconnectTimer = setTimeout(connect, 3000); };
-      } catch (e) {
-        setWsStatus('error');
-        reconnectTimer = setTimeout(connect, 5000);
-      }
+      } catch (e) { setWsStatus('error'); reconnectTimer = setTimeout(connect, 5000); }
     }
 
     connect();
+    startRefreshLoop();
 
-    fetch('https://api.dexscreener.com/token-profiles/latest/v1')
-      .then(r => r.json())
-      .then(data => {
-        const arr = Array.isArray(data) ? data : (data.tokenProfiles || []);
-        arr.filter(t => t.chainId === 'solana').slice(0, 30).forEach(t => {
-          addToken({
-            mint: t.tokenAddress, symbol: t.header || t.tokenAddress.slice(0, 6),
-            name: t.description || t.header || 'Unknown', image: t.icon || null,
-            marketCap: 0, price: 0, pct5m: null, pct1h: null, pct24h: null,
-            bondingProgress: 0, graduated: false, createdAt: Date.now(), recentBuys: 0,
-          });
-        });
-      }).catch(() => {});
+    Promise.all([
+      fetch('https://api.dexscreener.com/token-profiles/latest/v1').then(r => r.json()).catch(() => []),
+    ]).then(([profiles]) => {
+      const arr = Array.isArray(profiles) ? profiles : (profiles.tokenProfiles || []);
+      const initialTokens = arr
+        .filter(t => t.chainId === 'solana').slice(0, 30)
+        .map(t => ({ mint: t.tokenAddress, symbol: t.header || t.tokenAddress.slice(0, 6), name: t.description || t.header || 'Unknown', image: t.icon || null, marketCap: 0, price: 0, pct5m: null, pct1h: null, pct24h: null, priceHistory: [], bondingProgress: 0, graduated: false, createdAt: Date.now() }));
+      if (initialTokens.length > 0) {
+        tokensRef.current = initialTokens;
+        setTokens([...tokensRef.current]);
+        fetchDexBatch(initialTokens.map(t => t.mint)).then(data => updateTokenDexData(data));
+      }
+    });
 
-    return () => { clearTimeout(reconnectTimer); clearTimeout(dexTimerRef.current); if (ws) ws.close(); };
-  }, [addToken]);
+    return () => {
+      clearTimeout(reconnectTimer);
+      clearTimeout(dexTimerRef.current);
+      clearInterval(refreshTimerRef.current);
+      if (ws) ws.close();
+    };
+  }, [addToken, startRefreshLoop, updateTokenDexData]);
+
+  const openBuyDrawer = token => { setDrawerToken(token); setDrawerMode('buy'); setDrawerOpen(true); };
+  const openSellDrawer = token => { setDrawerToken(token); setDrawerMode('sell'); setDrawerOpen(true); };
 
   if (selectedToken) {
     return (
@@ -753,45 +793,34 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
   const displayTokens = [...tokens].sort((a, b) =>
     tab === 'new'
       ? (b.createdAt || 0) - (a.createdAt || 0)
-      : Math.abs(b.pct1h || 0) - Math.abs(a.pct1h || 0)
+      : Math.abs(b.pct1h || b.pct5m || 0) - Math.abs(a.pct1h || a.pct5m || 0)
   );
 
   return (
     <div style={{ maxWidth: 640, margin: '0 auto' }}>
-      <style>{`@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.3; } }`}</style>
+      <style>{`@keyframes pulse { 0%,100%{opacity:1}50%{opacity:0.3} }`}</style>
 
-      <div style={{ marginBottom: 20 }}>
+      <div style={{ marginBottom: 18 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>New Launches</h1>
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 5,
-            background: wsStatus === 'live' ? 'rgba(0,255,163,.08)' : 'rgba(255,149,0,.08)',
-            border: '1px solid ' + (wsStatus === 'live' ? 'rgba(0,255,163,.2)' : 'rgba(255,149,0,.2)'),
-            borderRadius: 20, padding: '3px 10px',
-          }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, background: wsStatus === 'live' ? 'rgba(0,255,163,.08)' : 'rgba(255,149,0,.08)', border: '1px solid ' + (wsStatus === 'live' ? 'rgba(0,255,163,.2)' : 'rgba(255,149,0,.2)'), borderRadius: 20, padding: '3px 10px' }}>
             <div style={{ width: 6, height: 6, borderRadius: '50%', background: wsStatus === 'live' ? C.green : C.orange, animation: wsStatus === 'live' ? 'pulse 1.5s infinite' : 'none' }} />
             <span style={{ fontSize: 10, color: wsStatus === 'live' ? C.green : C.orange, fontWeight: 600 }}>
               {wsStatus === 'live' ? 'LIVE' : wsStatus === 'reconnecting' ? 'RECONNECTING' : 'CONNECTING'}
             </span>
           </div>
         </div>
-        <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>{tokens.length} tokens tracked - tap any to trade</p>
+        <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>{tokens.length} tokens - tap to trade</p>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
         {[['new', 'New'], ['trending', 'Trending']].map(([val, lbl]) => {
           const active = tab === val;
           return (
             <button
               key={val}
               onClick={() => setTab(val)}
-              style={{
-                flex: 1, padding: '10px', borderRadius: 10, fontWeight: 700, fontSize: 13,
-                cursor: 'pointer', fontFamily: 'Syne, sans-serif',
-                background: active ? 'rgba(0,229,255,.1)' : C.card2,
-                border: '1px solid ' + (active ? 'rgba(0,229,255,.3)' : C.border),
-                color: active ? C.accent : C.muted,
-              }}
+              style={{ flex: 1, padding: '10px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', background: active ? 'rgba(0,229,255,.1)' : C.card2, border: '1px solid ' + (active ? 'rgba(0,229,255,.3)' : C.border), color: active ? C.accent : C.muted }}
             >{lbl}</button>
           );
         })}
@@ -799,16 +828,36 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
 
       {tokens.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '60px 20px', background: C.card, border: '1px solid ' + C.border, borderRadius: 16 }}>
-          <div style={{ color: C.muted, fontSize: 14, marginBottom: 8 }}>
+          <div style={{ color: C.muted, fontSize: 14, marginBottom: 6 }}>
             {wsStatus === 'live' ? 'Waiting for new launches...' : 'Connecting to live feed...'}
           </div>
-          <div style={{ color: C.muted2, fontSize: 12 }}>Tokens will appear here as they launch</div>
+          <div style={{ color: C.muted2, fontSize: 11 }}>Tokens appear here as they launch on Solana</div>
         </div>
       ) : (
         displayTokens.map(token => (
-          <TokenCard key={token.mint} token={token} onClick={setSelectedToken} isNew={newMints.has(token.mint)} />
+          <TokenCard
+            key={token.mint}
+            token={token}
+            onCardClick={setSelectedToken}
+            onBuyClick={openBuyDrawer}
+            onSellClick={openSellDrawer}
+            isNew={newMints.has(token.mint)}
+          />
         ))
       )}
+
+      <TradeDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        mode={drawerMode}
+        token={drawerToken}
+        solPrice={solPrice}
+        onConnectWallet={onConnectWallet}
+        isConnected={isConnected}
+        isSolanaConnected={isSolanaConnected}
+        presets={presets}
+        onPresetsChange={handlePresetsChange}
+      />
     </div>
   );
 }
