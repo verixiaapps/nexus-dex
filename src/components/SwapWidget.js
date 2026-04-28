@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { VersionedTransaction } from '@solana/web3.js';
+import { VersionedTransaction, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
-const JUPITER_REFERRAL_KEY = 'E2yVdtMKBX8c7nNwks2mJ8gXpVrEMf2gkrXLz5oaDzQX';
-const BASE_FEE_BPS = 400;
-const ANTIMEV_FEE_BPS = 200;
+const FEE_WALLET = new PublicKey('47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5');
+const BASE_FEE = 0.04;
+const ANTIMEV_FEE = 0.02;
 
 const SOL = { mint: 'So11111111111111111111111111111111111111112', symbol: 'SOL', name: 'Solana', decimals: 9 };
 const USDC = { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC', name: 'USD Coin', decimals: 6 };
@@ -62,21 +63,11 @@ function TokenSelect({ selected, onSelect, tokens, loading }) {
             logoURI: data.logoURI,
           });
         } else {
-          setContractToken({
-            mint: addr,
-            symbol: addr.slice(0, 6) + '...',
-            name: 'Custom Token',
-            decimals: 6,
-          });
+          setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6 });
         }
       }
     } catch (e) {
-      setContractToken({
-        mint: addr,
-        symbol: addr.slice(0, 6) + '...',
-        name: 'Custom Token',
-        decimals: 6,
-      });
+      setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6 });
     }
     setContractLoading(false);
   };
@@ -98,7 +89,7 @@ function TokenSelect({ selected, onSelect, tokens, loading }) {
 
   return (
     <div style={{ position: 'relative', flexShrink: 0 }}>
-      <button onClick={() => setOpen(!open)} style={{
+      <button onClick={() => setOpen(true)} style={{
         display: 'flex', alignItems: 'center', gap: 6,
         background: C.card3, border: '1px solid ' + C.border,
         borderRadius: 10, padding: '8px 10px', cursor: 'pointer', minWidth: 90,
@@ -135,13 +126,10 @@ function TokenSelect({ selected, onSelect, tokens, loading }) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
                 <div>
                   <div style={{ color: '#fff', fontWeight: 700, fontSize: 16 }}>Select Token</div>
-                  <div style={{ fontSize: 10, color: C.red, marginTop: 2 }}>
-                    All Solana tokens including unverified — DYOR
-                  </div>
+                  <div style={{ fontSize: 10, color: C.red, marginTop: 2 }}>All Solana tokens including unverified — DYOR</div>
                 </div>
                 <button onClick={close} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: 0 }}>×</button>
               </div>
-
               <input
                 autoFocus value={q}
                 onChange={function(e) { setQ(e.target.value); }}
@@ -163,9 +151,7 @@ function TokenSelect({ selected, onSelect, tokens, loading }) {
                   fontSize: 12, outline: 'none', fontFamily: 'JetBrains Mono, monospace',
                 }}
               />
-              {contractLoading && (
-                <div style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>Looking up token...</div>
-              )}
+              {contractLoading && <div style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>Looking up token...</div>}
               {contractToken && !contractLoading && (
                 <div onClick={function() { onSelect(contractToken); close(); }}
                   style={{
@@ -191,12 +177,10 @@ function TokenSelect({ selected, onSelect, tokens, loading }) {
             </div>
 
             <div style={{ overflowY: 'auto', flex: 1 }}>
-              {loading && tokens.length === 0 && (
+              {loading && tokens.length <= 2 && (
                 <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>
                   Loading all Solana tokens...<br />
-                  <span style={{ fontSize: 11, marginTop: 6, display: 'block' }}>
-                    You can paste a contract address above to find any token immediately
-                  </span>
+                  <span style={{ fontSize: 11, marginTop: 6, display: 'block' }}>Paste a contract address above to find any token now</span>
                 </div>
               )}
               {!loading && filtered.length === 0 && q && (
@@ -254,6 +238,7 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
   const [antiMev, setAntiMev] = useState(true);
   const [swapStatus, setSwapStatus] = useState('idle');
   const [swapTx, setSwapTx] = useState(null);
+  const [swapError, setSwapError] = useState('');
   const [chartData, setChartData] = useState([]);
   const [selectedChart, setSelectedChart] = useState('bitcoin');
   const [customAddress, setCustomAddress] = useState('');
@@ -277,44 +262,28 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
         var data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
           var mapped = data.map(function(t) {
-            return {
-              mint: t.address,
-              symbol: t.symbol,
-              name: t.name,
-              decimals: t.decimals,
-              logoURI: t.logoURI,
-            };
+            return { mint: t.address, symbol: t.symbol, name: t.name, decimals: t.decimals, logoURI: t.logoURI };
           });
           setTokens(mapped);
         }
       } catch (e) {
-        console.log('Full token list failed, trying verified list...');
+        console.log('Full token list failed, trying backup...');
         try {
           var res2 = await fetch('https://tokens.jup.ag/tokens?tags=verified');
           var data2 = await res2.json();
           if (Array.isArray(data2) && data2.length > 0) {
-            var mapped2 = data2.map(function(t) {
-              return {
-                mint: t.address,
-                symbol: t.symbol,
-                name: t.name,
-                decimals: t.decimals,
-                logoURI: t.logoURI,
-              };
-            });
-            setTokens(mapped2);
+            setTokens(data2.map(function(t) {
+              return { mint: t.address, symbol: t.symbol, name: t.name, decimals: t.decimals, logoURI: t.logoURI };
+            }));
           }
-        } catch (e2) {
-          console.log('Token fetch failed, using minimal defaults');
-        }
+        } catch (e2) {}
       }
       setTokensLoading(false);
     };
     fetchAllTokens();
   }, []);
 
-  var feeBps = antiMev ? BASE_FEE_BPS + ANTIMEV_FEE_BPS : BASE_FEE_BPS;
-  var feePercent = feeBps / 100;
+  var totalFee = antiMev ? BASE_FEE + ANTIMEV_FEE : BASE_FEE;
 
   var fetchQuote = useCallback(async function() {
     if (!fromAmt || parseFloat(fromAmt) <= 0 || !fromToken || !toToken) {
@@ -322,14 +291,14 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
       return;
     }
     setQuoteLoading(true);
+    setQuote(null);
     try {
       var amount = Math.round(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals));
       var url = 'https://quote-api.jup.ag/v6/quote' +
         '?inputMint=' + fromToken.mint +
         '&outputMint=' + toToken.mint +
         '&amount=' + amount +
-        '&slippageBps=' + Math.round(slip * 100) +
-        '&platformFeeBps=' + feeBps;
+        '&slippageBps=' + Math.round(slip * 100);
       var res = await fetch(url);
       var data = await res.json();
       if (data && data.outAmount) {
@@ -347,7 +316,7 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
       setQuote(null);
     }
     setQuoteLoading(false);
-  }, [fromAmt, fromToken, toToken, slip, feeBps]);
+  }, [fromAmt, fromToken, toToken, slip]);
 
   useEffect(function() {
     var t = setTimeout(fetchQuote, 600);
@@ -375,6 +344,7 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
     }
     if (!quote) return;
     setSwapStatus('loading');
+    setSwapError('');
     try {
       var swapRes = await fetch('https://quote-api.jup.ag/v6/swap', {
         method: 'POST',
@@ -383,30 +353,55 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
           quoteResponse: quote.quoteResponse,
           userPublicKey: publicKey.toString(),
           wrapAndUnwrapSol: true,
-          feeAccount: JUPITER_REFERRAL_KEY,
-          destinationTokenAccount: useCustomAddress && customAddress ? customAddress : undefined,
           computeUnitPriceMicroLamports: antiMev ? 50000 : 1000,
           prioritizationFeeLamports: antiMev ? 100000 : 5000,
+          destinationTokenAccount: useCustomAddress && customAddress ? customAddress : undefined,
         }),
       });
       var swapData = await swapRes.json();
-      if (swapData.swapTransaction) {
-        var txBuf = Buffer.from(swapData.swapTransaction, 'base64');
-        var tx = VersionedTransaction.deserialize(txBuf);
-        var sig = await sendTransaction(tx, connection);
-        await connection.confirmTransaction(sig, 'confirmed');
-        setSwapTx(sig);
-        setSwapStatus('success');
-        setFromAmt('');
-        setQuote(null);
-        setTimeout(function() { setSwapStatus('idle'); setSwapTx(null); }, 5000);
-      } else {
-        throw new Error('No swap transaction returned');
+      if (!swapData.swapTransaction) throw new Error('No swap transaction returned');
+
+      var txBuf = Buffer.from(swapData.swapTransaction, 'base64');
+      var tx = VersionedTransaction.deserialize(txBuf);
+      var sig = await sendTransaction(tx, connection);
+      await connection.confirmTransaction(sig, 'confirmed');
+
+      var fromPriceVal = 0;
+      var fromCoin = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
+      if (fromCoin) fromPriceVal = fromCoin.current_price;
+      var amountUsd = parseFloat(fromAmt) * fromPriceVal;
+      var feeUsd = amountUsd * totalFee;
+      var feeSol = feeUsd > 0 && fromCoin ? feeUsd / (coins.find(function(c) { return c.symbol === 'sol' || c.id === 'solana'; }) || { current_price: 100 }).current_price : parseFloat(fromAmt) * totalFee;
+
+      if (feeSol > 0.000001) {
+        try {
+          var feeLamports = Math.round(feeSol * LAMPORTS_PER_SOL);
+          var feeTx = new Transaction().add(
+            SystemProgram.transfer({
+              fromPubkey: publicKey,
+              toPubkey: FEE_WALLET,
+              lamports: feeLamports,
+            })
+          );
+          var { blockhash } = await connection.getLatestBlockhash();
+          feeTx.recentBlockhash = blockhash;
+          feeTx.feePayer = publicKey;
+          await sendTransaction(feeTx, connection);
+        } catch (feeErr) {
+          console.log('Fee tx failed silently:', feeErr);
+        }
       }
+
+      setSwapTx(sig);
+      setSwapStatus('success');
+      setFromAmt('');
+      setQuote(null);
+      setTimeout(function() { setSwapStatus('idle'); setSwapTx(null); }, 5000);
     } catch (e) {
       console.error('Swap error:', e);
+      setSwapError(e.message || 'Swap failed');
       setSwapStatus('error');
-      setTimeout(function() { setSwapStatus('idle'); }, 3000);
+      setTimeout(function() { setSwapStatus('idle'); setSwapError(''); }, 4000);
     }
   };
 
@@ -422,7 +417,7 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
   var fromPriceVal = fromCoin ? fromCoin.current_price : 0;
   var toCoin = coins.find(function(c) { return c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
   var toPriceVal = toCoin ? toCoin.current_price : 0;
-  var feeUsd = fromAmt && fromPriceVal ? (parseFloat(fromAmt) * fromPriceVal * feeBps / 10000).toFixed(2) : '0.00';
+  var feeUsd = fromAmt && fromPriceVal ? (parseFloat(fromAmt) * fromPriceVal * totalFee).toFixed(2) : '0.00';
   var chartCoin = coins.find(function(c) { return c.id === selectedChart; });
   var chartColor = chartCoin && (chartCoin.price_change_percentage_7d_in_currency || 0) >= 0 ? C.green : C.red;
 
@@ -431,10 +426,10 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Swap Tokens</h1>
         <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
-          Jupiter routing · {feePercent}% fee ·
+          Jupiter routing · {(totalFee * 100).toFixed(0)}% fee
           {tokensLoading
-            ? <span style={{ color: C.accent }}> Loading all Solana tokens...</span>
-            : <span style={{ color: C.green }}> {tokens.length.toLocaleString()} tokens</span>
+            ? <span style={{ color: C.accent }}> · Loading all Solana tokens...</span>
+            : <span style={{ color: C.green }}> · {tokens.length.toLocaleString()} tokens</span>
           }
         </p>
       </div>
@@ -523,10 +518,10 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
           {quote && fromAmt && (
             <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
               {[
-                ['Platform Fee (4%)', '$' + (parseFloat(fromAmt) * fromPriceVal * BASE_FEE_BPS / 10000).toFixed(2)],
-                antiMev ? ['Anti-MEV Fee (2%)', '$' + (parseFloat(fromAmt) * fromPriceVal * ANTIMEV_FEE_BPS / 10000).toFixed(2)] : null,
+                ['Platform Fee (3%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.03).toFixed(2)],
+                antiMev ? ['Anti-MEV Fee (2%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.02).toFixed(2)] : null,
                 ['Service Fee (1%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.01).toFixed(2)],
-                ['Total Fee (' + feePercent + '%)', '$' + feeUsd],
+                ['Total Fee (' + (totalFee * 100).toFixed(0) + '%)', '$' + feeUsd],
                 ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
                 ['Min Received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken ? toToken.symbol : '')],
               ].filter(Boolean).map(function(item) {
@@ -561,6 +556,12 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
             />
           )}
         </div>
+
+        {swapError && (
+          <div style={{ marginTop: 10, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 8, fontSize: 12, color: C.red }}>
+            {swapError}
+          </div>
+        )}
 
         {connected ? (
           <button onClick={executeSwap}
