@@ -1,7 +1,12 @@
 import React, { useState, useEffect } from 'react';
+import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { getAssociatedTokenAddress, createTransferInstruction } from '@solana/spl-token';
+
+const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
+const BASE_FEE = 0.03;
+const ANTIMEV_FEE = 0.02;
 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -9,10 +14,6 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
-
-const YOUR_FEE_WALLET = 'E2yVdtMKBX8c7nNwks2mJ8gXpVrEMf2gkrXLz5oaDzQX';
-const BASE_FEE_PERCENT = 0.03;
-const ANTIMEV_FEE_PERCENT = 0.02;
 
 const SOL_TOKEN = {
   mint: 'So11111111111111111111111111111111111111112',
@@ -44,7 +45,13 @@ function TokenSearchModal({ open, onClose, jupiterTokens }) {
       if (found) {
         setContractToken(found);
       } else {
-        setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6, isNative: false });
+        var res = await fetch('https://tokens.jup.ag/token/' + addr);
+        if (res.ok) {
+          var data = await res.json();
+          setContractToken({ mint: data.address, symbol: data.symbol, name: data.name, decimals: data.decimals, logoURI: data.logoURI });
+        } else {
+          setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6, isNative: false });
+        }
       }
     } catch (e) {
       setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6, isNative: false });
@@ -52,7 +59,7 @@ function TokenSearchModal({ open, onClose, jupiterTokens }) {
     setContractLoading(false);
   };
 
-  var filtered = jupiterTokens.filter(function(t) {
+  var filtered = (jupiterTokens || []).filter(function(t) {
     if (!q) return true;
     var ql = q.toLowerCase();
     return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
@@ -85,7 +92,7 @@ function TokenSearchModal({ open, onClose, jupiterTokens }) {
           <input
             autoFocus value={q}
             onChange={function(e) { setQ(e.target.value); }}
-            placeholder="Search name, symbol or address..."
+            placeholder="Search by name or symbol..."
             style={{
               width: '100%', background: C.card2, border: '1px solid ' + C.border,
               borderRadius: 8, padding: '10px 12px', color: C.text,
@@ -96,7 +103,7 @@ function TokenSearchModal({ open, onClose, jupiterTokens }) {
             value={contractAddr}
             onChange={function(e) { setContractAddr(e.target.value); }}
             onBlur={function() { if (contractAddr) lookupContract(contractAddr); }}
-            placeholder="Or paste any Solana contract address..."
+            placeholder="Paste any Solana contract address..."
             style={{
               width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)',
               borderRadius: 8, padding: '10px 12px', color: C.accent,
@@ -112,7 +119,7 @@ function TokenSearchModal({ open, onClose, jupiterTokens }) {
                 borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
               }}>
               <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>
-                {contractToken.symbol.charAt(0)}
+                {contractToken.symbol && contractToken.symbol.charAt(0)}
               </div>
               <div>
                 <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{contractToken.symbol}</div>
@@ -178,7 +185,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet }) {
   const [solBalance, setSolBalance] = useState(0);
   const [antiMev, setAntiMev] = useState(true);
 
-  var feePercent = antiMev ? BASE_FEE_PERCENT + ANTIMEV_FEE_PERCENT : BASE_FEE_PERCENT;
+  var totalFee = antiMev ? BASE_FEE + ANTIMEV_FEE : BASE_FEE;
 
   useEffect(function() {
     if (!publicKey || !connection) return;
@@ -203,7 +210,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet }) {
   };
 
   var amountNum = parseFloat(amount) || 0;
-  var feeAmount = amountNum * feePercent;
+  var feeAmount = amountNum * totalFee;
   var recipientAmount = amountNum - feeAmount;
   var price = getPrice(selectedToken.symbol);
   var usdValue = amountNum * price;
@@ -219,15 +226,19 @@ export default function Send({ coins, jupiterTokens, onConnectWallet }) {
     setStatus('loading');
     try {
       var recipientPubkey = new PublicKey(recipient);
-      var feePubkey = new PublicKey(YOUR_FEE_WALLET);
+      var feePubkey = new PublicKey(FEE_WALLET);
       var transaction = new Transaction();
 
       if (selectedToken.isNative) {
         var recipientLamports = Math.round(recipientAmount * LAMPORTS_PER_SOL);
         var feeLamports = Math.round(feeAmount * LAMPORTS_PER_SOL);
-        transaction.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: recipientPubkey, lamports: recipientLamports }));
+        transaction.add(SystemProgram.transfer({
+          fromPubkey: publicKey, toPubkey: recipientPubkey, lamports: recipientLamports,
+        }));
         if (feeLamports > 0) {
-          transaction.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: feePubkey, lamports: feeLamports }));
+          transaction.add(SystemProgram.transfer({
+            fromPubkey: publicKey, toPubkey: feePubkey, lamports: feeLamports,
+          }));
         }
       } else {
         var mintPubkey = new PublicKey(selectedToken.mint);
@@ -267,7 +278,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet }) {
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Send Tokens</h1>
         <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
-          Any Solana token · {(feePercent * 100).toFixed(0)}% fee
+          Any Solana token · {(totalFee * 100).toFixed(0)}% fee
         </p>
       </div>
 
@@ -295,11 +306,10 @@ export default function Send({ coins, jupiterTokens, onConnectWallet }) {
               background: C.card2, border: '1px solid ' + C.border,
               borderRadius: 12, padding: '12px 16px', cursor: 'pointer', width: '100%',
             }}>
-              {selectedToken.logoURI && (
+              {selectedToken.logoURI ? (
                 <img src={selectedToken.logoURI} alt={selectedToken.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }}
                   onError={function(e) { e.target.style.display = 'none'; }} />
-              )}
-              {!selectedToken.logoURI && (
+              ) : (
                 <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent }}>
                   {selectedToken.symbol && selectedToken.symbol.charAt(0)}
                 </div>
@@ -393,8 +403,8 @@ export default function Send({ coins, jupiterTokens, onConnectWallet }) {
             {amount && parseFloat(amount) > 0 && (
               <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
                 {[
-                  ['Platform Fee (3%)', (amountNum * BASE_FEE_PERCENT).toFixed(6) + ' ' + selectedToken.symbol],
-                  antiMev ? ['Anti-MEV Fee (2%)', (amountNum * ANTIMEV_FEE_PERCENT).toFixed(6) + ' ' + selectedToken.symbol] : null,
+                  ['Platform Fee (3%)', (amountNum * BASE_FEE).toFixed(6) + ' ' + selectedToken.symbol],
+                  antiMev ? ['Anti-MEV Fee (2%)', (amountNum * ANTIMEV_FEE).toFixed(6) + ' ' + selectedToken.symbol] : null,
                   ['Service Fee (1%)', (amountNum * 0.01).toFixed(6) + ' ' + selectedToken.symbol],
                   ['Recipient Gets', recipientAmount.toFixed(6) + ' ' + selectedToken.symbol],
                   price > 0 ? ['USD Value', fmt(usdValue)] : null,
@@ -447,7 +457,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet }) {
           )}
 
           <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 14, lineHeight: 1.6 }}>
-            Non-custodial · Fees paid by user · Powered by Solana
+            Non-custodial · Fees sent directly to Nexus DEX
           </p>
         </div>
       )}
