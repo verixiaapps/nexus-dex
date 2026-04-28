@@ -27,24 +27,25 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
   const [loading, setLoading] = useState(false);
   const [totalValue, setTotalValue] = useState(0);
   const [activeTab, setActiveTab] = useState('holdings');
+  const [error, setError] = useState('');
 
   var getPrice = function(symbol) {
+    if (!symbol) return 0;
     var coin = coins.find(function(c) {
-      return c.symbol && c.symbol.toLowerCase() === (symbol || '').toLowerCase();
+      return c.symbol && c.symbol.toLowerCase() === symbol.toLowerCase();
     });
     return coin ? coin.current_price : 0;
   };
 
   var getTokenInfo = function(mint) {
-    if (jupiterTokens && jupiterTokens.length > 0) {
-      return jupiterTokens.find(function(t) { return t.mint === mint; });
-    }
-    return null;
+    if (!jupiterTokens || jupiterTokens.length === 0) return null;
+    return jupiterTokens.find(function(t) { return t.mint === mint; });
   };
 
   var fetchBalances = async function() {
     if (!publicKey || !connection) return;
     setLoading(true);
+    setError('');
     try {
       var solLamports = await connection.getBalance(publicKey);
       var solAmt = solLamports / 1e9;
@@ -57,20 +58,22 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
 
       var holdings = [];
       tokenAccounts.value.forEach(function(account) {
-        var info = account.account.data.parsed.info;
-        var mint = info.mint;
-        var uiAmount = info.tokenAmount.uiAmount;
-        if (uiAmount && uiAmount > 0.000001) {
-          var tokenInfo = getTokenInfo(mint);
-          holdings.push({
-            mint: mint,
-            symbol: tokenInfo ? tokenInfo.symbol : mint.slice(0, 4) + '...',
-            name: tokenInfo ? tokenInfo.name : 'Unknown Token',
-            logoURI: tokenInfo ? tokenInfo.logoURI : null,
-            decimals: info.tokenAmount.decimals,
-            uiAmount: uiAmount,
-          });
-        }
+        try {
+          var info = account.account.data.parsed.info;
+          var mint = info.mint;
+          var uiAmount = info.tokenAmount.uiAmount;
+          if (uiAmount && uiAmount > 0.000001) {
+            var tokenInfo = getTokenInfo(mint);
+            holdings.push({
+              mint: mint,
+              symbol: tokenInfo ? tokenInfo.symbol : mint.slice(0, 4) + '...' + mint.slice(-4),
+              name: tokenInfo ? tokenInfo.name : 'Unknown Token',
+              logoURI: tokenInfo ? tokenInfo.logoURI : null,
+              decimals: info.tokenAmount.decimals,
+              uiAmount: uiAmount,
+            });
+          }
+        } catch (e) {}
       });
 
       holdings.sort(function(a, b) {
@@ -90,6 +93,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
 
     } catch (e) {
       console.error('Balance fetch error:', e);
+      setError('Failed to load balances. Check your RPC connection.');
     }
     setLoading(false);
   };
@@ -100,7 +104,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
       var interval = setInterval(fetchBalances, 30000);
       return function() { clearInterval(interval); };
     }
-  }, [connected, publicKey, coins.length]);
+  }, [connected, publicKey]);
 
   var solPrice = getPrice('SOL');
   var solValue = solBalance * solPrice;
@@ -141,7 +145,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
             background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)',
             borderRadius: 8, padding: '7px 14px', color: C.accent,
             fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600,
-          }}>Refresh</button>
+          }}>↻ Refresh</button>
           {onSend && (
             <button onClick={onSend} style={{
               background: 'linear-gradient(135deg,#00e5ff,#0055ff)',
@@ -178,6 +182,12 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
           </div>
         </div>
       </div>
+
+      {error && (
+        <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 13, color: C.red }}>
+          {error}
+        </div>
+      )}
 
       <div style={{ display: 'flex', gap: 4, marginBottom: 14 }}>
         {[['holdings', 'Holdings'], ['activity', 'Activity']].map(function(item) {
@@ -216,9 +226,13 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
           </div>
 
           {loading ? (
-            <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>Loading balances...</div>
+            <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>
+              Loading balances...
+            </div>
           ) : balances.length === 0 ? (
-            <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>No other token balances found</div>
+            <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>
+              No other token balances found
+            </div>
           ) : (
             balances.map(function(token) {
               var price = getPrice(token.symbol);
@@ -234,7 +248,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
                         onError={function(e) { e.target.style.display = 'none'; }} />
                     ) : (
                       <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>
-                        {token.symbol.charAt(0)}
+                        {token.symbol && token.symbol.charAt(0)}
                       </div>
                     )}
                     <div style={{ minWidth: 0 }}>
