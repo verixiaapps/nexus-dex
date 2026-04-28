@@ -3,58 +3,58 @@ import ReactDOM from 'react-dom/client';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
 import '@solana/wallet-adapter-react-ui/styles.css';
-import '@rainbow-me/rainbowkit/styles.css';
-import {
-  RainbowKitProvider,
-  darkTheme,
-  getDefaultConfig,
-} from '@rainbow-me/rainbowkit';
+import { createWeb3Modal } from '@web3modal/wagmi/react';
+import { defaultWagmiConfig } from '@web3modal/wagmi/react/config';
 import { WagmiProvider } from 'wagmi';
-import {
-  mainnet,
-  polygon,
-  arbitrum,
-  base,
-  bsc,
-  avalanche,
-  optimism,
-} from 'wagmi/chains';
+import { mainnet, polygon, arbitrum, base, bsc, avalanche, optimism } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 
 const SOLANA_RPC = process.env.REACT_APP_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
+const PROJECT_ID = '1a7c741caab0a2c5ffa2b199a816ea92';
 
-const solanaWallets = [new PhantomWalletAdapter()];
+const metadata = {
+  name: 'Nexus DEX',
+  description: 'Multi-chain DEX aggregator',
+  url: 'https://swap.verixiaapps.com',
+  icons: ['https://swap.verixiaapps.com/logo.png'],
+};
 
-const wagmiConfig = getDefaultConfig({
-  appName: 'Nexus DEX',
-  projectId: '1a7c741caab0a2c5ffa2b199a816ea92',
-  chains: [mainnet, polygon, arbitrum, base, bsc, avalanche, optimism],
+const chains = [mainnet, polygon, arbitrum, base, bsc, avalanche, optimism];
+
+const wagmiConfig = defaultWagmiConfig({
+  chains,
+  projectId: PROJECT_ID,
+  metadata,
   ssr: false,
 });
 
+createWeb3Modal({
+  wagmiConfig,
+  projectId: PROJECT_ID,
+  chains,
+  defaultChain: mainnet,
+  themeMode: 'dark',
+  themeVariables: {
+    '--w3m-accent': '#00e5ff',
+    '--w3m-border-radius-master': '12px',
+    '--w3m-font-family': 'Syne, sans-serif',
+    '--w3m-background-color': '#080d1a',
+  },
+});
+
+const solanaWallets = [new PhantomWalletAdapter()];
 const queryClient = new QueryClient();
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
   <WagmiProvider config={wagmiConfig}>
     <QueryClientProvider client={queryClient}>
-      <RainbowKitProvider
-        theme={darkTheme({
-          accentColor: '#00e5ff',
-          accentColorForeground: '#03060f',
-          borderRadius: 'large',
-          fontStack: 'system',
-          overlayBlur: 'small',
-        })}
-        modalSize="compact"
-      >
-        <ConnectionProvider endpoint={SOLANA_RPC}>
-          <WalletProvider wallets={solanaWallets} autoConnect>
-            <App />
-          </WalletProvider>
-        </ConnectionProvider>
-      </RainbowKitProvider>
+      <ConnectionProvider endpoint={SOLANA_RPC}>
+        <WalletProvider wallets={solanaWallets} autoConnect>
+          <App />
+        </WalletProvider>
+      </ConnectionProvider>
     </QueryClientProvider>
   </WagmiProvider>
 );
