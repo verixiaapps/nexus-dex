@@ -116,7 +116,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
           <div style={{ fontSize: 48, marginBottom: 16 }}>👛</div>
           <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Connect Your Wallet</h2>
           <p style={{ color: C.muted, fontSize: 13, maxWidth: 300, margin: '0 auto 24px', lineHeight: 1.6 }}>
-            Connect Phantom to view your real-time portfolio and all token balances.
+            Connect your wallet to view real-time balances for all your tokens.
           </p>
           <button onClick={onConnectWallet} style={{
             background: 'linear-gradient(135deg,#9945ff,#7c3aed)',
@@ -224,7 +224,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
               var price = getPrice(token.symbol);
               var value = token.uiAmount * price;
               return (
-                <div key={token.mint} style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)', transition: 'background .15s' }}
+                <div key={token.mint} style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)' }}
                   onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }}
                   onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
                 >
@@ -243,7 +243,9 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
                     </div>
                   </div>
                   <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>
-                    {token.uiAmount >= 1000 ? token.uiAmount.toLocaleString('en-US', { maximumFractionDigits: 2 }) : token.uiAmount.toFixed(4)}
+                    {token.uiAmount >= 1000
+                      ? token.uiAmount.toLocaleString('en-US', { maximumFractionDigits: 2 })
+                      : token.uiAmount.toFixed(4)}
                   </div>
                   <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{price > 0 ? fmt(price) : '--'}</div>
                   <div style={{ textAlign: 'right', color: value > 0.01 ? C.green : C.muted, fontSize: 12, fontWeight: value > 0.01 ? 600 : 400 }}>
