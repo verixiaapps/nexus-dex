@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAccount } from 'wagmi';
-import { useConnectModal } from '@rainbow-me/rainbowkit';
+import { useWeb3Modal } from '@web3modal/wagmi/react';
 import SwapWidget from './components/SwapWidget';
 import Markets from './components/Markets';
 import BuyCrypto from './components/BuyCrypto';
@@ -22,7 +22,7 @@ const C = {
 
 function WalletModal({ open, onClose }) {
   const { select, wallets } = useWallet();
-  const { openConnectModal } = useConnectModal();
+  const { open: openWeb3Modal } = useWeb3Modal();
 
   var phantomWallet = wallets.find(function(w) {
     return w.adapter.name === 'Phantom';
@@ -72,21 +72,18 @@ function WalletModal({ open, onClose }) {
               border: '1px solid rgba(153,69,255,.3)',
               borderRadius: 16, padding: '18px 24px',
               cursor: 'pointer', width: '100%',
-              transition: 'all .15s',
             }}
-            onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(153,69,255,.2)'; }}
-            onMouseLeave={function(e) { e.currentTarget.style.background = 'rgba(153,69,255,.1)'; }}
           >
             <div style={{
               width: 48, height: 48, borderRadius: 12, flexShrink: 0,
               background: 'linear-gradient(135deg,#9945ff,#7c3aed)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 24,
+              fontSize: 26,
             }}>👻</div>
             <div style={{ textAlign: 'left', flex: 1 }}>
               <div style={{ color: '#fff', fontWeight: 700, fontSize: 17 }}>Phantom</div>
               <div style={{ color: '#9945ff', fontSize: 13, marginTop: 2 }}>
-                {phantomWallet ? 'Solana wallet — detected' : 'Solana wallet — click to install'}
+                {phantomWallet ? 'Solana wallet — detected' : 'Solana wallet — tap to install'}
               </div>
             </div>
             <div style={{ color: '#9945ff', fontSize: 20 }}>→</div>
@@ -94,8 +91,8 @@ function WalletModal({ open, onClose }) {
 
           <button
             onClick={function() {
-              openConnectModal();
               onClose();
+              openWeb3Modal();
             }}
             style={{
               display: 'flex', alignItems: 'center', gap: 16,
@@ -103,10 +100,7 @@ function WalletModal({ open, onClose }) {
               border: '1px solid rgba(59,153,252,.3)',
               borderRadius: 16, padding: '18px 24px',
               cursor: 'pointer', width: '100%',
-              transition: 'all .15s',
             }}
-            onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(59,153,252,.2)'; }}
-            onMouseLeave={function(e) { e.currentTarget.style.background = 'rgba(59,153,252,.1)'; }}
           >
             <div style={{
               width: 48, height: 48, borderRadius: 12, flexShrink: 0,
@@ -126,6 +120,7 @@ function WalletModal({ open, onClose }) {
             </div>
             <div style={{ color: '#3b99fc', fontSize: 20 }}>→</div>
           </button>
+
         </div>
       </div>
     </>
@@ -237,20 +232,19 @@ export default function App() {
               width: 32, height: 32, borderRadius: 9,
               background: 'linear-gradient(135deg,#00e5ff,#0066ff)',
               display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontWeight: 700, fontSize: 14, color: C.bg, flexShrink: 0,
+              fontWeight: 700, fontSize: 14, color: C.bg,
             }}>N</div>
             <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: 2, color: '#fff' }}>NEXUS</span>
             <span style={{
               fontSize: 9, color: C.accent,
               background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.3)',
-              borderRadius: 4, padding: '1px 5px', fontWeight: 600, flexShrink: 0,
+              borderRadius: 4, padding: '1px 5px', fontWeight: 600,
             }}>DEX</span>
           </div>
 
           <nav style={{
             display: 'flex', gap: 2, overflowX: 'auto',
-            scrollbarWidth: 'none', msOverflowStyle: 'none',
-            flex: 1, justifyContent: 'center',
+            scrollbarWidth: 'none', flex: 1, justifyContent: 'center', padding: '0 8px',
           }}>
             {tabs.map(function(t) {
               return (
@@ -276,7 +270,7 @@ export default function App() {
           }}>
             {isConnected ? (
               <>
-                <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.green, flexShrink: 0 }} />
+                <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.green }} />
                 {displayAddress}
               </>
             ) : 'Connect Wallet'}
@@ -342,7 +336,7 @@ export default function App() {
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100,
         background: 'rgba(3,6,15,.96)', backdropFilter: 'blur(24px)',
         borderTop: '1px solid rgba(0,229,255,.1)',
-        padding: '8px 16px env(safe-area-inset-bottom)',
+        padding: '8px 8px env(safe-area-inset-bottom)',
         display: 'flex', justifyContent: 'space-around', alignItems: 'center',
       }}>
         {tabs.map(function(t) {
@@ -352,8 +346,7 @@ export default function App() {
               background: 'transparent', border: 'none', cursor: 'pointer',
               color: tab === t.id ? C.accent : C.muted,
               fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600,
-              padding: '4px 8px', borderRadius: 8,
-              minWidth: 44, minHeight: 44, justifyContent: 'center',
+              padding: '4px 8px', minWidth: 44, minHeight: 44, justifyContent: 'center',
             }}>
               <span style={{ fontSize: 18 }}>{t.icon}</span>
               <span>{t.label}</span>
@@ -365,8 +358,7 @@ export default function App() {
           background: 'transparent', border: 'none', cursor: 'pointer',
           color: isConnected ? C.green : C.muted,
           fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600,
-          padding: '4px 8px', borderRadius: 8,
-          minWidth: 44, minHeight: 44, justifyContent: 'center',
+          padding: '4px 8px', minWidth: 44, minHeight: 44, justifyContent: 'center',
         }}>
           <span style={{ fontSize: 18 }}>🔗</span>
           <span>{isConnected ? 'Connected' : 'Connect'}</span>
