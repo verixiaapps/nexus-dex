@@ -12,7 +12,7 @@ import App from './App';
 
 const SOLANA_RPC = process.env.REACT_APP_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
 const PROJECT_ID = '1a7c741caab0a2c5ffa2b199a816ea92';
-
+ 
 const metadata = {
   name: 'Nexus DEX',
   description: 'Multi-chain DEX aggregator',
