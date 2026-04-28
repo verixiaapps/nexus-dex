@@ -861,3 +861,4 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
     </div>
   );
 }
+ 
