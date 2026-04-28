@@ -9,9 +9,8 @@ const C = {
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
 
-function fmt(n, d) {
-  d = d || 2;
-  if (n == null) return '--';
+function fmt(n, d = 2) {
+  if (n == null) return '–';
   if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
   if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
@@ -29,66 +28,56 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
   const [activeTab, setActiveTab] = useState('holdings');
   const [error, setError] = useState('');
 
-  var getPrice = useCallback(function(symbol) {
+  const getPrice = useCallback(symbol => {
     if (!symbol || !coins || !coins.length) return 0;
-    var coin = coins.find(function(c) {
-      return c.symbol && c.symbol.toLowerCase() === symbol.toLowerCase();
-    });
+    const coin = coins.find(c => c.symbol && c.symbol.toLowerCase() === symbol.toLowerCase());
     return coin ? coin.current_price : 0;
   }, [coins]);
 
-  var getTokenInfo = useCallback(function(mint) {
-    if (!jupiterTokens || jupiterTokens.length === 0) return null;
-    return jupiterTokens.find(function(t) { return t.mint === mint; });
+  const getTokenInfo = useCallback(mint => {
+    if (!jupiterTokens || !jupiterTokens.length) return null;
+    return jupiterTokens.find(t => t.mint === mint);
   }, [jupiterTokens]);
 
-  var fetchBalances = useCallback(async function() {
+  const fetchBalances = useCallback(async () => {
     if (!publicKey || !connection) return;
-    setLoading(true);
-    setError('');
+    setLoading(true); setError('');
     try {
-      var solLamports = await connection.getBalance(publicKey);
-      var solAmt = solLamports / 1e9;
+      const solLamports = await connection.getBalance(publicKey);
+      const solAmt = solLamports / 1e9;
       setSolBalance(solAmt);
 
-      var tokenAccounts = await connection.getParsedTokenAccountsByOwner(
-        publicKey,
-        { programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') }
-      );
+      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(publicKey, {
+        programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
+      });
 
-      var holdings = [];
-      tokenAccounts.value.forEach(function(account) {
+      const holdings = [];
+      tokenAccounts.value.forEach(account => {
         try {
-          var info = account.account.data.parsed.info;
-          var mint = info.mint;
-          var uiAmount = info.tokenAmount.uiAmount;
+          const info = account.account.data.parsed.info;
+          const mint = info.mint;
+          const uiAmount = info.tokenAmount.uiAmount;
           if (uiAmount && uiAmount > 0.000001) {
-            var tokenInfo = getTokenInfo(mint);
+            const tokenInfo = getTokenInfo(mint);
             holdings.push({
-              mint: mint,
+              mint,
               symbol: tokenInfo ? tokenInfo.symbol : mint.slice(0, 4) + '...' + mint.slice(-4),
               name: tokenInfo ? tokenInfo.name : 'Unknown Token',
               logoURI: tokenInfo ? tokenInfo.logoURI : null,
               decimals: info.tokenAmount.decimals,
-              uiAmount: uiAmount,
+              uiAmount,
             });
           }
         } catch (e) {}
       });
 
-      holdings.sort(function(a, b) {
-        var aVal = a.uiAmount * getPrice(a.symbol);
-        var bVal = b.uiAmount * getPrice(b.symbol);
-        return bVal - aVal;
-      });
-
+      holdings.sort((a, b) => (b.uiAmount * getPrice(b.symbol)) - (a.uiAmount * getPrice(a.symbol)));
       setBalances(holdings);
 
-      var solPrice = getPrice('SOL');
-      var total = solAmt * solPrice;
-      holdings.forEach(function(h) { total += h.uiAmount * getPrice(h.symbol); });
+      const solPrice = getPrice('SOL');
+      let total = solAmt * solPrice;
+      holdings.forEach(h => { total += h.uiAmount * getPrice(h.symbol); });
       setTotalValue(total);
-
     } catch (e) {
       console.error('Balance fetch error:', e);
       setError('Failed to load balances: ' + (e.message || 'Check your connection'));
@@ -96,40 +85,34 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
     setLoading(false);
   }, [publicKey, connection, getPrice, getTokenInfo]);
 
-  useEffect(function() {
+  useEffect(() => {
     if (isSolanaConnected && publicKey) {
       fetchBalances();
-      var interval = setInterval(fetchBalances, 30000);
-      return function() { clearInterval(interval); };
+      const interval = setInterval(fetchBalances, 30000);
+      return () => clearInterval(interval);
     }
   }, [isSolanaConnected, publicKey, fetchBalances]);
 
-  useEffect(function() {
-    if (isSolanaConnected && publicKey && coins.length > 0) {
-      fetchBalances();
-    }
-  }, [coins.length, jupiterTokens.length]);
+  useEffect(() => {
+    if (isSolanaConnected && publicKey && coins.length > 0) fetchBalances();
+  }, [coins.length]);
 
-  var solPrice = getPrice('SOL');
-  var solValue = solBalance * solPrice;
+  const solPrice = getPrice('SOL');
+  const solValue = solBalance * solPrice;
+  const rootStyle = { width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' };
 
   if (!isConnected) {
     return (
-      <div style={{ maxWidth: 520, margin: '0 auto' }}>
+      <div style={{ maxWidth: 520, margin: '0 auto', ...rootStyle }}>
         <div style={{ marginBottom: 20 }}>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
           <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Track your wallet balances in real time</p>
         </div>
         <div style={{ textAlign: 'center', padding: '60px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
-          <div style={{ fontSize: 48, marginBottom: 16 }}>👛</div>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>W</div>
           <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Connect Your Wallet</h2>
-          <p style={{ color: C.muted, fontSize: 13, maxWidth: 300, margin: '0 auto 24px', lineHeight: 1.6 }}>
-            Connect your wallet to view real-time balances.
-          </p>
-          <button onClick={onConnectWallet} style={{
-            background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10,
-            padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif',
-          }}>Connect Wallet</button>
+          <p style={{ color: C.muted, fontSize: 13, maxWidth: 300, margin: '0 auto 24px', lineHeight: 1.6 }}>Connect your wallet to view real-time balances.</p>
+          <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect Wallet</button>
         </div>
       </div>
     );
@@ -137,44 +120,31 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
 
   if (!isSolanaConnected) {
     return (
-      <div style={{ maxWidth: 520, margin: '0 auto' }}>
+      <div style={{ maxWidth: 520, margin: '0 auto', ...rootStyle }}>
         <div style={{ marginBottom: 20 }}>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
         </div>
         <div style={{ textAlign: 'center', padding: '60px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
-          <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>!</div>
           <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Solana Wallet Required</h2>
-          <p style={{ color: C.muted, fontSize: 13, maxWidth: 300, margin: '0 auto 24px', lineHeight: 1.6 }}>
-            Please connect Phantom to view your Solana token balances.
-          </p>
-          <button onClick={onConnectWallet} style={{
-            background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10,
-            padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif',
-          }}>Connect Phantom</button>
+          <p style={{ color: C.muted, fontSize: 13, maxWidth: 300, margin: '0 auto 24px', lineHeight: 1.6 }}>Please connect Phantom to view your Solana token balances.</p>
+          <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect Phantom</button>
         </div>
       </div>
     );
   }
 
   return (
-    <div style={{ maxWidth: 600, margin: '0 auto' }}>
+    <div style={{ maxWidth: 600, margin: '0 auto', ...rootStyle }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Real-time balances · Auto-refreshes every 30s</p>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Real-time balances - Auto-refreshes every 30s</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={fetchBalances} style={{
-            background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)',
-            borderRadius: 8, padding: '7px 14px', color: C.accent,
-            fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600,
-          }}>↻ Refresh</button>
+          <button onClick={fetchBalances} style={{ background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)', borderRadius: 8, padding: '7px 14px', color: C.accent, fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}>Refresh</button>
           {onSend && (
-            <button onClick={onSend} style={{
-              background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none',
-              borderRadius: 8, padding: '7px 14px', color: '#03060f',
-              fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700,
-            }}>Send Tokens</button>
+            <button onClick={onSend} style={{ background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none', borderRadius: 8, padding: '7px 14px', color: '#03060f', fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700 }}>Send Tokens</button>
           )}
         </div>
       </div>
@@ -185,44 +155,33 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
           ['SOL Balance', solBalance.toFixed(4) + ' SOL', C.green],
           ['SOL Value', fmt(solValue), C.text],
           ['Assets', (balances.length + 1) + ' tokens', C.muted],
-        ].map(function(item) {
-          return (
-            <div key={item[0]} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 16 }}>
-              <div style={{ fontSize: 10, color: C.muted, marginBottom: 6, fontWeight: 700, letterSpacing: .8 }}>{item[0]}</div>
-              <div style={{ fontSize: 16, color: item[2], fontWeight: 600 }}>{item[1]}</div>
-            </div>
-          );
-        })}
+        ].map(([label, value, color]) => (
+          <div key={label} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 16 }}>
+            <div style={{ fontSize: 10, color: C.muted, marginBottom: 6, fontWeight: 700, letterSpacing: .8 }}>{label}</div>
+            <div style={{ fontSize: 16, color, fontWeight: 600 }}>{value}</div>
+          </div>
+        ))}
       </div>
 
       <div style={{ background: C.card, border: '1px solid rgba(0,255,163,.15)', borderRadius: 12, padding: 14, marginBottom: 16, display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-        <div style={{ fontSize: 24, flexShrink: 0 }}>👛</div>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 10, color: C.muted, marginBottom: 2, fontWeight: 700 }}>CONNECTED WALLET</div>
-          <div style={{ fontSize: 11, color: C.green, fontFamily: 'JetBrains Mono, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {walletAddress || ''}
-          </div>
+          <div style={{ fontSize: 11, color: C.green, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{walletAddress || ''}</div>
         </div>
       </div>
 
       {error && (
-        <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 13, color: C.red }}>
-          {error}
-        </div>
+        <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 13, color: C.red }}>{error}</div>
       )}
 
       <div style={{ display: 'flex', gap: 4, marginBottom: 14 }}>
-        {[['holdings', 'Holdings'], ['activity', 'Activity']].map(function(item) {
-          return (
-            <button key={item[0]} onClick={function() { setActiveTab(item[0]); }} style={{
-              padding: '7px 16px', borderRadius: 8, fontSize: 12, fontWeight: 600,
-              fontFamily: 'Syne, sans-serif', cursor: 'pointer',
-              background: activeTab === item[0] ? 'rgba(0,229,255,.09)' : 'transparent',
-              border: '1px solid ' + (activeTab === item[0] ? 'rgba(0,229,255,.25)' : C.border),
-              color: activeTab === item[0] ? C.accent : C.muted,
-            }}>{item[1]}</button>
-          );
-        })}
+        {[['holdings', 'Holdings'], ['activity', 'Activity']].map(([id, label]) => (
+          <button
+            key={id}
+            onClick={() => setActiveTab(id)}
+            style={{ padding: '7px 16px', borderRadius: 8, fontSize: 12, fontWeight: 600, fontFamily: 'Syne, sans-serif', cursor: 'pointer', background: activeTab === id ? 'rgba(0,229,255,.09)' : 'transparent', border: '1px solid ' + (activeTab === id ? 'rgba(0,229,255,.25)' : C.border), color: activeTab === id ? C.accent : C.muted }}
+          >{label}</button>
+        ))}
       </div>
 
       {activeTab === 'holdings' && (
@@ -252,23 +211,21 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
           ) : balances.length === 0 ? (
             <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>No other token balances found</div>
           ) : (
-            balances.map(function(token) {
-              var price = getPrice(token.symbol);
-              var value = token.uiAmount * price;
+            balances.map(token => {
+              const price = getPrice(token.symbol);
+              const value = token.uiAmount * price;
               return (
-                <div key={token.mint} style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)' }}
-                  onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }}
-                  onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
+                <div
+                  key={token.mint}
+                  style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    {token.logoURI ? (
-                      <img src={token.logoURI} alt={token.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }}
-                        onError={function(e) { e.target.style.display = 'none'; }} />
-                    ) : (
-                      <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>
-                        {token.symbol && token.symbol.charAt(0)}
-                      </div>
-                    )}
+                    {token.logoURI
+                      ? <img src={token.logoURI} alt={token.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
+                      : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{token.symbol && token.symbol.charAt(0)}</div>
+                    }
                     <div style={{ minWidth: 0 }}>
                       <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.symbol}</div>
                       <div style={{ color: C.muted, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.name}</div>
@@ -290,16 +247,16 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
 
       {activeTab === 'activity' && (
         <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 40, textAlign: 'center' }}>
-          <div style={{ fontSize: 36, marginBottom: 12 }}>📋</div>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>T</div>
           <div style={{ color: '#fff', fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Transaction History</div>
-          <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 280, margin: '0 auto 20px' }}>
-            View your full transaction history on Solscan.
-          </p>
+          <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 280, margin: '0 auto 20px' }}>View your full transaction history on Solscan.</p>
           {walletAddress && (
-            <a href={'https://solscan.io/account/' + walletAddress} target="_blank" rel="noreferrer"
-              style={{ display: 'inline-block', padding: '10px 24px', borderRadius: 10, background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)', color: C.accent, fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>
-              View on Solscan ↗
-            </a>
+            <a
+              href={'https://solscan.io/account/' + walletAddress}
+              target="_blank"
+              rel="noreferrer"
+              style={{ display: 'inline-block', padding: '10px 24px', borderRadius: 10, background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)', color: C.accent, fontSize: 13, fontWeight: 600, textDecoration: 'none' }}
+            >View on Solscan</a>
           )}
         </div>
       )}
