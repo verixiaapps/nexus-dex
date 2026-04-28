@@ -6,7 +6,7 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994',
 };
- 
+
 function fmt(n, d) {
   d = d || 2;
   if (n == null) return '--';
@@ -47,7 +47,7 @@ export default function Markets({ coins, loading, onSelectCoin }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Live Markets</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Tap any coin for details, charts, buy and swap</p>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Tap any coin for details, chart, buy and sell</p>
         </div>
         <input
           value={q}
@@ -65,7 +65,6 @@ export default function Markets({ coins, loading, onSelectCoin }) {
         <div style={{ textAlign: 'center', padding: 60, color: C.muted }}>Loading markets...</div>
       ) : (
         <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
-
           <div style={{
             display: 'grid', gridTemplateColumns: '28px 1fr 90px 70px 80px',
             gap: 8, padding: '10px 14px',
