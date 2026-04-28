@@ -4,12 +4,22 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { VersionedTransaction, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
-const FEE_WALLET = new PublicKey('47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5');
+const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
 
-const SOL = { mint: 'So11111111111111111111111111111111111111112', symbol: 'SOL', name: 'Solana', decimals: 9 };
-const USDC = { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC', name: 'USD Coin', decimals: 6 };
+const POPULAR_TOKENS = [
+  { mint: 'So11111111111111111111111111111111111111112', symbol: 'SOL', name: 'Solana', decimals: 9, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png' },
+  { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC', name: 'USD Coin', decimals: 6, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png' },
+  { mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', symbol: 'USDT', name: 'Tether', decimals: 6, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.png' },
+  { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', symbol: 'JUP', name: 'Jupiter', decimals: 6, logoURI: 'https://static.jup.ag/jup/icon.png' },
+  { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', symbol: 'BONK', name: 'Bonk', decimals: 5, logoURI: 'https://arweave.net/hQiPZOsRZXGXBJd_82PhVdlM_hACsT_q6wqwf5cSY7I' },
+  { mint: '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R', symbol: 'RAY', name: 'Raydium', decimals: 6, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R/logo.png' },
+  { mint: 'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So', symbol: 'mSOL', name: 'Marinade SOL', decimals: 9, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So/logo.png' },
+  { mint: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3', symbol: 'PYTH', name: 'Pyth', decimals: 6, logoURI: 'https://pyth.network/token.svg' },
+  { mint: 'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE', symbol: 'ORCA', name: 'Orca', decimals: 6, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE/logo.png' },
+  { mint: '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs', symbol: 'WETH', name: 'Wrapped Ether', decimals: 8, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs/logo.png' },
+];
 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -33,26 +43,29 @@ function pct(n) {
   return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 
-function TokenSelect({ selected, onSelect, tokens, loading }) {
+function TokenSelect({ selected, onSelect, jupiterTokens }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [contractAddr, setContractAddr] = useState('');
   const [contractToken, setContractToken] = useState(null);
   const [contractLoading, setContractLoading] = useState(false);
+  const [searchResults, setSearchResults] = useState([]);
+
+  var allTokens = jupiterTokens && jupiterTokens.length > 0 ? jupiterTokens : POPULAR_TOKENS;
 
   var isValidAddress = function(str) {
     return str && str.length >= 32 && str.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(str);
   };
 
-  var lookupContract = async function(addr) {
+  var lookupByAddress = async function(addr) {
     if (!isValidAddress(addr)) return;
     setContractLoading(true);
     try {
-      var found = tokens.find(function(t) { return t.mint === addr; });
+      var found = allTokens.find(function(t) { return t.mint === addr; });
       if (found) {
         setContractToken(found);
       } else {
-        var res = await fetch('https://tokens.jup.ag/token/' + addr);
+        var res = await fetch('https://lite-api.jup.ag/tokens/v1/token/' + addr);
         if (res.ok) {
           var data = await res.json();
           setContractToken({
@@ -72,19 +85,25 @@ function TokenSelect({ selected, onSelect, tokens, loading }) {
     setContractLoading(false);
   };
 
-  var filtered = tokens.filter(function(t) {
-    if (!q) return true;
+  useEffect(function() {
+    if (!q) { setSearchResults([]); return; }
     var ql = q.toLowerCase();
-    return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-      (t.name && t.name.toLowerCase().includes(ql)) ||
-      (t.mint && t.mint.toLowerCase().includes(ql));
-  }).slice(0, 100);
+    var results = allTokens.filter(function(t) {
+      return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
+        (t.name && t.name.toLowerCase().includes(ql)) ||
+        (t.mint && t.mint.toLowerCase().includes(ql));
+    }).slice(0, 100);
+    setSearchResults(results);
+  }, [q, allTokens]);
+
+  var displayTokens = q ? searchResults : POPULAR_TOKENS;
 
   var close = function() {
     setOpen(false);
     setQ('');
     setContractAddr('');
     setContractToken(null);
+    setSearchResults([]);
   };
 
   return (
@@ -104,9 +123,7 @@ function TokenSelect({ selected, onSelect, tokens, loading }) {
             {selected.symbol && selected.symbol.charAt(0)}
           </div>
         )}
-        <span style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>
-          {selected ? selected.symbol : 'Select'}
-        </span>
+        <span style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{selected ? selected.symbol : 'Select'}</span>
         <span style={{ color: C.muted, fontSize: 9 }}>▾</span>
       </button>
 
@@ -115,7 +132,7 @@ function TokenSelect({ selected, onSelect, tokens, loading }) {
           <div onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 299, background: 'rgba(0,0,0,.75)' }} />
           <div style={{
             position: 'fixed', top: '50%', left: '50%',
-            transform: 'translate(-50%, -50%)',
+            transform: 'translate(-50%,-50%)',
             zIndex: 300, background: C.card,
             border: '1px solid ' + C.borderHi,
             borderRadius: 18, width: '94vw', maxWidth: 420,
@@ -123,10 +140,10 @@ function TokenSelect({ selected, onSelect, tokens, loading }) {
             boxShadow: '0 24px 80px rgba(0,0,0,.95)',
           }}>
             <div style={{ padding: '16px 16px 10px', borderBottom: '1px solid ' + C.border, flexShrink: 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
                 <div>
                   <div style={{ color: '#fff', fontWeight: 700, fontSize: 16 }}>Select Token</div>
-                  <div style={{ fontSize: 10, color: C.red, marginTop: 2 }}>All Solana tokens including unverified — DYOR</div>
+                  <div style={{ fontSize: 10, color: C.red, marginTop: 2 }}>Includes unverified tokens — DYOR</div>
                 </div>
                 <button onClick={close} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: 0 }}>×</button>
               </div>
@@ -143,8 +160,8 @@ function TokenSelect({ selected, onSelect, tokens, loading }) {
               <input
                 value={contractAddr}
                 onChange={function(e) { setContractAddr(e.target.value); }}
-                onBlur={function() { if (contractAddr) lookupContract(contractAddr); }}
-                placeholder="Paste any Solana contract address..."
+                onBlur={function() { if (contractAddr) lookupByAddress(contractAddr); }}
+                placeholder="Or paste any Solana contract address..."
                 style={{
                   width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)',
                   borderRadius: 8, padding: '10px 12px', color: C.accent,
@@ -177,19 +194,18 @@ function TokenSelect({ selected, onSelect, tokens, loading }) {
             </div>
 
             <div style={{ overflowY: 'auto', flex: 1 }}>
-              {loading && tokens.length <= 2 && (
-                <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>
-                  Loading all Solana tokens...<br />
-                  <span style={{ fontSize: 11, marginTop: 6, display: 'block' }}>Paste a contract address above to find any token now</span>
+              {!q && (
+                <div style={{ padding: '8px 16px 4px', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
+                  POPULAR TOKENS
                 </div>
               )}
-              {!loading && filtered.length === 0 && q && (
+              {q && searchResults.length === 0 && (
                 <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>
-                  No tokens found for "{q}"<br />
-                  <span style={{ fontSize: 11, marginTop: 4, display: 'block' }}>Try pasting the contract address above</span>
+                  No tokens found.<br />
+                  <span style={{ fontSize: 11, marginTop: 4, display: 'block' }}>Paste the contract address above to find any token.</span>
                 </div>
               )}
-              {filtered.map(function(t) {
+              {displayTokens.map(function(t) {
                 return (
                   <div key={t.mint}
                     onClick={function() { onSelect(t); close(); }}
@@ -223,17 +239,16 @@ function TokenSelect({ selected, onSelect, tokens, loading }) {
   );
 }
 
-export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
+export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoToToken, onConnectWallet }) {
   const { publicKey, connected, sendTransaction } = useWallet();
   const { connection } = useConnection();
 
-  const [tokens, setTokens] = useState([SOL, USDC]);
-  const [tokensLoading, setTokensLoading] = useState(true);
-  const [fromToken, setFromToken] = useState(SOL);
-  const [toToken, setToToken] = useState(USDC);
+  const [fromToken, setFromToken] = useState(POPULAR_TOKENS[0]);
+  const [toToken, setToToken] = useState(POPULAR_TOKENS[1]);
   const [fromAmt, setFromAmt] = useState('');
   const [quote, setQuote] = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState('');
   const [slip, setSlip] = useState(0.5);
   const [antiMev, setAntiMev] = useState(true);
   const [swapStatus, setSwapStatus] = useState('idle');
@@ -251,50 +266,20 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
     return function() { window.removeEventListener('resize', handleResize); };
   }, []);
 
-  useEffect(function() {
-    var fetchAllTokens = async function() {
-      setTokensLoading(true);
-      try {
-        var controller = new AbortController();
-        var timeout = setTimeout(function() { controller.abort(); }, 30000);
-        var res = await fetch('https://token.jup.ag/all', { signal: controller.signal });
-        clearTimeout(timeout);
-        var data = await res.json();
-        if (Array.isArray(data) && data.length > 0) {
-          var mapped = data.map(function(t) {
-            return { mint: t.address, symbol: t.symbol, name: t.name, decimals: t.decimals, logoURI: t.logoURI };
-          });
-          setTokens(mapped);
-        }
-      } catch (e) {
-        console.log('Full token list failed, trying backup...');
-        try {
-          var res2 = await fetch('https://tokens.jup.ag/tokens?tags=verified');
-          var data2 = await res2.json();
-          if (Array.isArray(data2) && data2.length > 0) {
-            setTokens(data2.map(function(t) {
-              return { mint: t.address, symbol: t.symbol, name: t.name, decimals: t.decimals, logoURI: t.logoURI };
-            }));
-          }
-        } catch (e2) {}
-      }
-      setTokensLoading(false);
-    };
-    fetchAllTokens();
-  }, []);
-
   var totalFee = antiMev ? BASE_FEE + ANTIMEV_FEE : BASE_FEE;
 
   var fetchQuote = useCallback(async function() {
     if (!fromAmt || parseFloat(fromAmt) <= 0 || !fromToken || !toToken) {
       setQuote(null);
+      setQuoteError('');
       return;
     }
     setQuoteLoading(true);
     setQuote(null);
+    setQuoteError('');
     try {
       var amount = Math.round(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals));
-      var url = 'https://quote-api.jup.ag/v6/quote' +
+      var url = 'https://api.jup.ag/swap/v1/quote' +
         '?inputMint=' + fromToken.mint +
         '&outputMint=' + toToken.mint +
         '&amount=' + amount +
@@ -308,11 +293,15 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
           priceImpactPct: data.priceImpactPct,
           quoteResponse: data,
         });
+      } else if (data.error) {
+        setQuoteError(data.error);
+        setQuote(null);
       } else {
         setQuote(null);
       }
     } catch (e) {
       console.error('Quote error:', e);
+      setQuoteError('Failed to get quote');
       setQuote(null);
     }
     setQuoteLoading(false);
@@ -346,7 +335,7 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
     setSwapStatus('loading');
     setSwapError('');
     try {
-      var swapRes = await fetch('https://quote-api.jup.ag/v6/swap', {
+      var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -359,27 +348,27 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
         }),
       });
       var swapData = await swapRes.json();
-      if (!swapData.swapTransaction) throw new Error('No swap transaction returned');
+      if (!swapData.swapTransaction) throw new Error(swapData.error || 'No swap transaction returned');
 
       var txBuf = Buffer.from(swapData.swapTransaction, 'base64');
       var tx = VersionedTransaction.deserialize(txBuf);
       var sig = await sendTransaction(tx, connection);
       await connection.confirmTransaction(sig, 'confirmed');
 
-      var fromPriceVal = 0;
-      var fromCoin = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
-      if (fromCoin) fromPriceVal = fromCoin.current_price;
-      var amountUsd = parseFloat(fromAmt) * fromPriceVal;
-      var feeUsd = amountUsd * totalFee;
-      var feeSol = feeUsd > 0 && fromCoin ? feeUsd / (coins.find(function(c) { return c.symbol === 'sol' || c.id === 'solana'; }) || { current_price: 100 }).current_price : parseFloat(fromAmt) * totalFee;
-
-      if (feeSol > 0.000001) {
-        try {
+      // Collect fee in SOL
+      try {
+        var fromCoin = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
+        var solCoin = coins.find(function(c) { return c.id === 'solana'; });
+        var solPrice = solCoin ? solCoin.current_price : 100;
+        var fromPriceVal = fromCoin ? fromCoin.current_price : 0;
+        var amountUsd = parseFloat(fromAmt) * fromPriceVal;
+        var feeSol = amountUsd > 0 ? (amountUsd * totalFee) / solPrice : parseFloat(fromAmt) * totalFee;
+        if (feeSol > 0.000001) {
           var feeLamports = Math.round(feeSol * LAMPORTS_PER_SOL);
           var feeTx = new Transaction().add(
             SystemProgram.transfer({
               fromPubkey: publicKey,
-              toPubkey: FEE_WALLET,
+              toPubkey: new PublicKey(FEE_WALLET),
               lamports: feeLamports,
             })
           );
@@ -387,9 +376,9 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
           feeTx.recentBlockhash = blockhash;
           feeTx.feePayer = publicKey;
           await sendTransaction(feeTx, connection);
-        } catch (feeErr) {
-          console.log('Fee tx failed silently:', feeErr);
         }
+      } catch (feeErr) {
+        console.log('Fee tx failed silently:', feeErr);
       }
 
       setSwapTx(sig);
@@ -426,16 +415,15 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Swap Tokens</h1>
         <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
-          Jupiter routing · {(totalFee * 100).toFixed(0)}% fee
-          {tokensLoading
-            ? <span style={{ color: C.accent }}> · Loading all Solana tokens...</span>
-            : <span style={{ color: C.green }}> · {tokens.length.toLocaleString()} tokens</span>
+          Jupiter routing · {(totalFee * 100).toFixed(0)}% fee ·
+          {jupiterLoading
+            ? <span style={{ color: C.accent }}> Loading tokens...</span>
+            : <span style={{ color: C.green }}> {jupiterTokens.length > 0 ? jupiterTokens.length.toLocaleString() : POPULAR_TOKENS.length} tokens</span>
           }
         </p>
       </div>
 
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 18, padding: 18 }}>
-
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SLIPPAGE</span>
           <div style={{ display: 'flex', gap: 4 }}>
@@ -457,7 +445,7 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU PAY</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <TokenSelect tokens={tokens} loading={tokensLoading} selected={fromToken} onSelect={setFromToken} />
+            <TokenSelect jupiterTokens={jupiterTokens} selected={fromToken} onSelect={setFromToken} />
             <input value={fromAmt}
               onChange={function(e) { setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }}
               placeholder="0.00"
@@ -472,8 +460,7 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
         <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0' }}>
           <button onClick={flipTokens} style={{
             width: 36, height: 36, borderRadius: 10, background: C.card3,
-            border: '1px solid ' + C.border, cursor: 'pointer',
-            color: C.accent, fontSize: 18,
+            border: '1px solid ' + C.border, cursor: 'pointer', color: C.accent, fontSize: 18,
             display: 'flex', alignItems: 'center', justifyContent: 'center',
           }}>⇅</button>
         </div>
@@ -483,7 +470,7 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU RECEIVE</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <TokenSelect tokens={tokens} loading={tokensLoading} selected={toToken} onSelect={setToToken} />
+            <TokenSelect jupiterTokens={jupiterTokens} selected={toToken} onSelect={setToToken} />
             <div style={{ flex: 1, textAlign: 'right', fontSize: 22, fontWeight: 500, minWidth: 0, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>
               {quoteLoading ? '...' : quote ? quote.outAmountDisplay : '0.00'}
             </div>
@@ -492,6 +479,12 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
             <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(quote.outAmountDisplay) * toPriceVal)}</div>
           )}
         </div>
+
+        {quoteError && (
+          <div style={{ marginTop: 8, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.2)', borderRadius: 8, fontSize: 12, color: C.red }}>
+            {quoteError}
+          </div>
+        )}
 
         <div style={{ marginTop: 12, background: '#050912', borderRadius: 10, padding: 12 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
@@ -508,9 +501,7 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
             }}>
               <div style={{
                 width: 18, height: 18, borderRadius: '50%', background: '#fff',
-                position: 'absolute', top: 3,
-                left: antiMev ? 23 : 3,
-                transition: 'left .2s',
+                position: 'absolute', top: 3, left: antiMev ? 23 : 3, transition: 'left .2s',
               }} />
             </button>
           </div>
@@ -518,7 +509,7 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
           {quote && fromAmt && (
             <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
               {[
-                ['Platform Fee (3%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.03).toFixed(2)],
+                ['Platform Fee (4%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.04).toFixed(2)],
                 antiMev ? ['Anti-MEV Fee (2%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.02).toFixed(2)] : null,
                 ['Service Fee (1%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.01).toFixed(2)],
                 ['Total Fee (' + (totalFee * 100).toFixed(0) + '%)', '$' + feeUsd],
@@ -574,8 +565,7 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
                 : 'linear-gradient(135deg,#00e5ff,#0055ff)',
               color: !fromAmt || !quote ? C.muted2 : swapStatus === 'error' ? C.red : C.bg,
               fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
-              cursor: !fromAmt || !quote ? 'not-allowed' : 'pointer', transition: 'all .3s',
-              minHeight: 52,
+              cursor: !fromAmt || !quote ? 'not-allowed' : 'pointer', transition: 'all .3s', minHeight: 52,
             }}>
             {swapStatus === 'loading' ? 'Confirming...'
               : swapStatus === 'success' ? 'Swap Confirmed!'
@@ -590,9 +580,7 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
             background: 'linear-gradient(135deg,#9945ff,#7c3aed)',
             color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
             cursor: 'pointer', minHeight: 52,
-          }}>
-            Connect Wallet to Swap
-          </button>
+          }}>Connect Wallet to Swap</button>
         )}
 
         {swapTx && swapStatus === 'success' && (
@@ -625,16 +613,12 @@ export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
       </div>
 
       {chartCoin && (
-        <div
-          onClick={function() { if (onGoToToken) onGoToToken(chartCoin); }}
-          style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 18, padding: 18, cursor: 'pointer' }}
-        >
+        <div onClick={function() { if (onGoToToken) onGoToToken(chartCoin); }}
+          style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 18, padding: 18, cursor: 'pointer' }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                {chartCoin.image && (
-                  <img src={chartCoin.image} alt={chartCoin.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} />
-                )}
+                {chartCoin.image && <img src={chartCoin.image} alt={chartCoin.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} />}
                 <div>
                   <div style={{ fontWeight: 700, fontSize: 14, color: '#fff' }}>{chartCoin.name}</div>
                   <div style={{ fontSize: 10, color: C.muted }}>Tap to view token page</div>
