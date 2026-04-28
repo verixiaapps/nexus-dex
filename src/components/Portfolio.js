@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
 
@@ -29,20 +29,20 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
   const [activeTab, setActiveTab] = useState('holdings');
   const [error, setError] = useState('');
 
-  var getPrice = function(symbol) {
-    if (!symbol) return 0;
+  var getPrice = useCallback(function(symbol) {
+    if (!symbol || !coins || !coins.length) return 0;
     var coin = coins.find(function(c) {
       return c.symbol && c.symbol.toLowerCase() === symbol.toLowerCase();
     });
     return coin ? coin.current_price : 0;
-  };
+  }, [coins]);
 
-  var getTokenInfo = function(mint) {
+  var getTokenInfo = useCallback(function(mint) {
     if (!jupiterTokens || jupiterTokens.length === 0) return null;
     return jupiterTokens.find(function(t) { return t.mint === mint; });
-  };
+  }, [jupiterTokens]);
 
-  var fetchBalances = async function() {
+  var fetchBalances = useCallback(async function() {
     if (!publicKey || !connection) return;
     setLoading(true);
     setError('');
@@ -91,10 +91,10 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
 
     } catch (e) {
       console.error('Balance fetch error:', e);
-      setError('Failed to load balances. Check your connection.');
+      setError('Failed to load balances: ' + (e.message || 'Check your connection'));
     }
     setLoading(false);
-  };
+  }, [publicKey, connection, getPrice, getTokenInfo]);
 
   useEffect(function() {
     if (isSolanaConnected && publicKey) {
@@ -102,7 +102,13 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
       var interval = setInterval(fetchBalances, 30000);
       return function() { clearInterval(interval); };
     }
-  }, [isSolanaConnected, publicKey]);
+  }, [isSolanaConnected, publicKey, fetchBalances]);
+
+  useEffect(function() {
+    if (isSolanaConnected && publicKey && coins.length > 0) {
+      fetchBalances();
+    }
+  }, [coins.length, jupiterTokens.length]);
 
   var solPrice = getPrice('SOL');
   var solValue = solBalance * solPrice;
