@@ -1,11 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { VersionedTransaction, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
+import { PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { getAssociatedTokenAddress, createTransferInstruction, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
 
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
-const BASE_FEE = 0.04;
+const BASE_FEE = 0.03;
 const ANTIMEV_FEE = 0.02;
 const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
 
@@ -17,7 +16,7 @@ const C = {
 };
 
 const POPULAR_TOKENS = [
-  { mint: 'So11111111111111111111111111111111111111112', symbol: 'SOL', name: 'Solana', decimals: 9, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png' },
+  { mint: 'So11111111111111111111111111111111111111112', symbol: 'SOL', name: 'Solana', decimals: 9, isNative: true, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png' },
   { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC', name: 'USD Coin', decimals: 6, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png' },
   { mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', symbol: 'USDT', name: 'Tether', decimals: 6, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.png' },
   { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', symbol: 'JUP', name: 'Jupiter', decimals: 6, logoURI: 'https://static.jup.ag/jup/icon.png' },
@@ -30,7 +29,6 @@ const POPULAR_TOKENS = [
 ];
 
 const SOL_TOKEN = POPULAR_TOKENS[0];
-const USDC_TOKEN = POPULAR_TOKENS[1];
 
 async function getTokenDecimals(token) {
   if (!token) return 6;
@@ -49,22 +47,14 @@ async function getTokenDecimals(token) {
   return token.decimals || 6;
 }
 
-function fmt(n, d = 2) {
-  if (n == null) return '–';
-  if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
-  if (n >= 1) return '$' + n.toFixed(d);
+function fmt(n) {
+  if (!n) return '$0.00';
+  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (n >= 1) return '$' + n.toFixed(2);
   return '$' + n.toFixed(6);
 }
 
-function pct(n) {
-  if (!n && n !== 0) return '–';
-  return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
-}
-
-function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
-  const [open, setOpen] = useState(false);
+function TokenSearchModal({ open, onClose, jupiterTokens }) {
   const [q, setQ] = useState('');
   const [contractAddr, setContractAddr] = useState('');
   const [contractToken, setContractToken] = useState(null);
@@ -76,7 +66,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
   const isValidAddress = str =>
     str && str.length >= 32 && str.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(str);
 
-  const lookupByAddress = async addr => {
+  const lookupContract = async addr => {
     if (!isValidAddress(addr)) return;
     setContractLoading(true);
     try {
@@ -91,18 +81,16 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
           const data = await res.json();
           const dec = parseInt(data.decimals);
           setContractToken({
-            mint: data.address,
-            symbol: data.symbol,
-            name: data.name,
+            mint: data.address, symbol: data.symbol, name: data.name,
             decimals: (!isNaN(dec) && dec >= 0 && dec <= 18) ? dec : 6,
-            logoURI: data.logoURI,
+            logoURI: data.logoURI, isNative: false,
           });
         } else {
-          setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '…', name: 'Custom Token', decimals: 6 });
+          setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '…', name: 'Custom Token', decimals: 6, isNative: false });
         }
       }
     } catch (e) {
-      setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '…', name: 'Custom Token', decimals: 6 });
+      setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '…', name: 'Custom Token', decimals: 6, isNative: false });
     }
     setContractLoading(false);
   };
@@ -120,293 +108,294 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
   }, [q, allTokens]);
 
   const displayTokens = q ? searchResults : POPULAR_TOKENS;
-  const close = () => { setOpen(false); setQ(''); setContractAddr(''); setContractToken(null); setSearchResults([]); };
-
-  return (
-    <div>
-      {label && <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 6 }}>{label}</div>}
-      <button
-        onClick={() => setOpen(true)}
-        style={{ display: 'flex', alignItems: 'center', gap: 8, background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '10px 14px', cursor: 'pointer', width: '100%' }}
-      >
-        {selected && selected.logoURI ? (
-          <img src={selected.logoURI} alt={selected.symbol} style={{ width: 24, height: 24, borderRadius: '50%' }} onError={e => { e.target.style.display = 'none'; }} />
-        ) : selected ? (
-          <div style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(0,229,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>
-            {selected.symbol && selected.symbol.charAt(0)}
-          </div>
-        ) : null}
-        <span style={{ color: '#fff', fontWeight: 700, fontSize: 14, flex: 1, textAlign: 'left' }}>
-          {selected ? selected.symbol : 'Select Token'}
-        </span>
-        <span style={{ color: C.muted, fontSize: 11 }}>v</span>
-      </button>
-
-      {open && (
-        <div>
-          <div onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 499, background: 'rgba(0,0,0,.75)' }} />
-          <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 500, background: C.card, border: '1px solid ' + C.borderHi, borderRadius: 18, width: '94vw', maxWidth: 420, maxHeight: '80vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 80px rgba(0,0,0,.95)' }}>
-            <div style={{ padding: '16px 16px 10px', borderBottom: '1px solid ' + C.border, flexShrink: 0 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
-                <div>
-                  <div style={{ color: '#fff', fontWeight: 700, fontSize: 16 }}>Select Token</div>
-                  <div style={{ fontSize: 10, color: C.red, marginTop: 2 }}>Includes unverified - DYOR</div>
-                </div>
-                <button onClick={close} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: 0 }}>x</button>
-              </div>
-              <input
-                autoFocus
-                value={q}
-                onChange={e => setQ(e.target.value)}
-                placeholder="Search by name or symbol..."
-                style={{ width: '100%', background: C.card3, border: '1px solid ' + C.border, borderRadius: 8, padding: '10px 12px', color: C.text, fontSize: 13, outline: 'none', fontFamily: 'Syne, sans-serif', marginBottom: 8 }}
-              />
-              <input
-                value={contractAddr}
-                onChange={e => setContractAddr(e.target.value)}
-                onBlur={() => { if (contractAddr) lookupByAddress(contractAddr); }}
-                placeholder="Or paste any Solana contract address..."
-                style={{ width: '100%', background: C.card3, border: '1px solid rgba(0,229,255,.2)', borderRadius: 8, padding: '10px 12px', color: C.accent, fontSize: 12, outline: 'none', fontFamily: 'monospace' }}
-              />
-              {contractLoading && <div style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>Looking up token...</div>}
-              {contractToken && !contractLoading && (
-                <div
-                  onClick={() => { onSelect(contractToken); close(); }}
-                  style={{ marginTop: 8, padding: '10px 12px', background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.3)', borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}
-                >
-                  {contractToken.logoURI
-                    ? <img src={contractToken.logoURI} alt={contractToken.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} onError={e => { e.target.style.display = 'none'; }} />
-                    : <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>{contractToken.symbol && contractToken.symbol.charAt(0)}</div>
-                  }
-                  <div>
-                    <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{contractToken.symbol}</div>
-                    <div style={{ color: C.muted, fontSize: 11 }}>{contractToken.name}</div>
-                  </div>
-                  <div style={{ marginLeft: 'auto', color: C.accent, fontSize: 11, fontWeight: 600 }}>Select</div>
-                </div>
-              )}
-            </div>
-            <div style={{ overflowY: 'auto', flex: 1 }}>
-              {!q && <div style={{ padding: '8px 16px 4px', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>POPULAR TOKENS</div>}
-              {q && searchResults.length === 0 && (
-                <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>No tokens found. Paste contract address above.</div>
-              )}
-              {displayTokens.map(t => (
-                <div
-                  key={t.mint}
-                  onClick={() => { onSelect(t); close(); }}
-                  style={{ padding: '11px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid rgba(255,255,255,.03)' }}
-                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,229,255,.05)'; }}
-                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-                >
-                  {t.logoURI
-                    ? <img src={t.logoURI} alt={t.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
-                    : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{t.symbol && t.symbol.charAt(0)}</div>
-                  }
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{t.symbol}</div>
-                    <div style={{ color: C.muted, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</div>
-                  </div>
-                  <div style={{ color: C.muted2, fontSize: 9, fontFamily: 'monospace', flexShrink: 0 }}>
-                    {t.mint && t.mint.slice(0, 4) + '...' + t.mint.slice(-4)}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, coins, onConnectWallet, isConnected, isSolanaConnected }) {
-  const { publicKey, sendTransaction } = useWallet();
-  const { connection } = useConnection();
-  const [fromToken, setFromToken] = useState(SOL_TOKEN);
-  const [toToken, setToToken] = useState(jupiterToken || USDC_TOKEN);
-  const [fromAmt, setFromAmt] = useState('');
-  const [quote, setQuote] = useState(null);
-  const [quoteLoading, setQuoteLoading] = useState(false);
-  const [quoteError, setQuoteError] = useState('');
-  const [swapStatus, setSwapStatus] = useState('idle');
-  const [swapTx, setSwapTx] = useState(null);
-  const [swapError, setSwapError] = useState('');
-  const [antiMev, setAntiMev] = useState(true);
-
-  const totalFee = antiMev ? BASE_FEE + ANTIMEV_FEE : BASE_FEE;
-
-  useEffect(() => {
-    if (mode === 'buy') { setFromToken(SOL_TOKEN); setToToken(jupiterToken || USDC_TOKEN); }
-    else { setFromToken(jupiterToken || USDC_TOKEN); setToToken(USDC_TOKEN); }
-    setFromAmt(''); setQuote(null); setSwapStatus('idle'); setSwapTx(null); setSwapError(''); setQuoteError('');
-  }, [open, mode, jupiterToken]);
-
-  useEffect(() => {
-    if (!fromAmt || parseFloat(fromAmt) <= 0 || !fromToken || !toToken) { setQuote(null); return; }
-    const t = setTimeout(async () => {
-      setQuoteLoading(true); setQuoteError('');
-      try {
-        const fromDecimals = await getTokenDecimals(fromToken);
-        const toDecimals = await getTokenDecimals(toToken);
-        const amount = Math.round(parseFloat(fromAmt) * Math.pow(10, fromDecimals));
-        if (!amount || amount <= 0) { setQuoteLoading(false); return; }
-        const url = `https://api.jup.ag/swap/v1/quote?inputMint=${fromToken.mint}&outputMint=${toToken.mint}&amount=${amount}&slippageBps=50&restrictIntermediateTokens=true`;
-        const res = await fetch(url, { headers: { 'x-api-key': JUP_API_KEY } });
-        const data = await res.json();
-        if (data && data.outAmount) {
-          setQuote({
-            outAmountDisplay: (parseInt(data.outAmount) / Math.pow(10, toDecimals)).toFixed(6),
-            priceImpactPct: data.priceImpactPct,
-            quoteResponse: data,
-          });
-        } else {
-          setQuoteError(data.error || 'No route found');
-          setQuote(null);
-        }
-      } catch (e) {
-        setQuoteError('Failed to get quote');
-        setQuote(null);
-      }
-      setQuoteLoading(false);
-    }, 600);
-    return () => clearTimeout(t);
-  }, [fromAmt, fromToken, toToken]);
-
-  const executeSwap = async () => {
-    if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
-    if (!isSolanaConnected || !publicKey) { setSwapError('Please connect a Solana wallet to trade'); return; }
-    if (!quote) return;
-    setSwapStatus('loading'); setSwapError('');
-    try {
-      const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
-        body: JSON.stringify({
-          quoteResponse: quote.quoteResponse,
-          userPublicKey: publicKey.toString(),
-          wrapAndUnwrapSol: true,
-          computeUnitPriceMicroLamports: antiMev ? 50000 : 1000,
-          prioritizationFeeLamports: antiMev ? 100000 : 5000,
-        }),
-      });
-      const swapData = await swapRes.json();
-      if (!swapData.swapTransaction) throw new Error(swapData.error || 'No swap transaction');
-      const txBuf = Buffer.from(swapData.swapTransaction, 'base64');
-      const tx = VersionedTransaction.deserialize(txBuf);
-      const sig = await sendTransaction(tx, connection);
-      await connection.confirmTransaction(sig, 'confirmed');
-
-      try {
-        const solCoin = coins.find(c => c.id === 'solana');
-        const solPrice = solCoin ? solCoin.current_price : 100;
-        const fromCoinData = coins.find(c => c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase());
-        const fromPrice = fromCoinData ? fromCoinData.current_price : (coin ? coin.current_price : 0);
-        const feeSol = (parseFloat(fromAmt) * fromPrice * totalFee) / solPrice;
-        if (feeSol > 0.000001) {
-          const feeTx = new Transaction().add(SystemProgram.transfer({
-            fromPubkey: publicKey,
-            toPubkey: new PublicKey(FEE_WALLET),
-            lamports: Math.round(feeSol * LAMPORTS_PER_SOL),
-          }));
-          const lb = await connection.getLatestBlockhash();
-          feeTx.recentBlockhash = lb.blockhash;
-          feeTx.feePayer = publicKey;
-          await sendTransaction(feeTx, connection);
-        }
-      } catch (feeErr) {
-        console.log('Fee failed:', feeErr);
-      }
-
-      setSwapTx(sig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
-      setTimeout(() => { setSwapStatus('idle'); setSwapTx(null); }, 5000);
-    } catch (e) {
-      setSwapError(e.message || 'Trade failed'); setSwapStatus('error');
-      setTimeout(() => { setSwapStatus('idle'); setSwapError(''); }, 4000);
-    }
-  };
-
-  const modeLabel = mode === 'buy' ? 'Buy' : 'Sell';
-  const modeGradient = mode === 'buy' ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'linear-gradient(135deg,#ff3b6b,#cc1144)';
-  const fromCoinData = coins.find(c => c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase());
-  const fromPriceVal = fromCoinData ? fromCoinData.current_price : 0;
-  const toCoinData = coins.find(c => c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase());
-  const toPriceVal = toCoinData ? toCoinData.current_price : 0;
+  const close = () => { setQ(''); setContractAddr(''); setContractToken(null); setSearchResults([]); onClose(null); };
 
   if (!open) return null;
 
   return (
     <div>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,.8)' }} />
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 401, background: C.card, borderTop: '2px solid ' + C.borderHi, borderRadius: '20px 20px 0 0', padding: '20px 20px 40px', boxShadow: '0 -20px 60px rgba(0,0,0,.9)', maxHeight: '92vh', overflowY: 'auto' }}>
-        <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 20px' }} />
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {coin && coin.image && <img src={coin.image} alt={coin.symbol} style={{ width: 32, height: 32, borderRadius: '50%' }} />}
+      <div onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 299, background: 'rgba(0,0,0,.75)' }} />
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 300, background: C.card, border: '1px solid ' + C.borderHi, borderRadius: 18, width: '94vw', maxWidth: 420, maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 80px rgba(0,0,0,.95)' }}>
+        <div style={{ padding: '16px 16px 10px', borderBottom: '1px solid ' + C.border, flexShrink: 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
             <div>
-              <div style={{ color: mode === 'buy' ? C.accent : C.red, fontWeight: 800, fontSize: 18 }}>{modeLabel} {coin && coin.symbol && coin.symbol.toUpperCase()}</div>
-              <div style={{ color: C.muted, fontSize: 11, marginTop: 2 }}>{coin && fmt(coin.current_price)} - {(totalFee * 100).toFixed(0)}% fee</div>
+              <div style={{ color: '#fff', fontWeight: 700, fontSize: 16 }}>Select Token</div>
+              <div style={{ fontSize: 10, color: C.red, marginTop: 2 }}>All Solana tokens including unverified - DYOR</div>
             </div>
+            <button onClick={close} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: 0 }}>x</button>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer', padding: 0 }}>x</button>
+          <input
+            autoFocus
+            value={q}
+            onChange={e => setQ(e.target.value)}
+            placeholder="Search by name or symbol…"
+            style={{ width: '100%', background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, padding: '10px 12px', color: C.text, fontSize: 13, outline: 'none', fontFamily: 'Syne, sans-serif', marginBottom: 8 }}
+          />
+          <input
+            value={contractAddr}
+            onChange={e => setContractAddr(e.target.value)}
+            onBlur={() => { if (contractAddr) lookupContract(contractAddr); }}
+            placeholder="Or paste any Solana contract address…"
+            style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 8, padding: '10px 12px', color: C.accent, fontSize: 12, outline: 'none', fontFamily: 'monospace' }}
+          />
+          {contractLoading && <div style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>Looking up token…</div>}
+          {contractToken && !contractLoading && (
+            <div
+              onClick={() => { onClose(contractToken); setContractAddr(''); setContractToken(null); setQ(''); }}
+              style={{ marginTop: 8, padding: '10px 12px', background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.3)', borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}
+            >
+              {contractToken.logoURI
+                ? <img src={contractToken.logoURI} alt={contractToken.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} onError={e => { e.target.style.display = 'none'; }} />
+                : <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>{contractToken.symbol && contractToken.symbol.charAt(0)}</div>
+              }
+              <div>
+                <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{contractToken.symbol}</div>
+                <div style={{ color: C.muted, fontSize: 11 }}>{contractToken.name}</div>
+              </div>
+              <div style={{ marginLeft: 'auto', color: C.accent, fontSize: 11, fontWeight: 600 }}>Select</div>
+            </div>
+          )}
         </div>
-
-        {!isConnected && (
-          <div style={{ marginBottom: 16, padding: 14, background: 'rgba(0,229,255,.05)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-            <span style={{ color: C.muted, fontSize: 13 }}>Connect wallet to trade</span>
-            <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 8, padding: '8px 16px', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect</button>
-          </div>
-        )}
-        {isConnected && !isSolanaConnected && (
-          <div style={{ marginBottom: 16, padding: 14, background: 'rgba(255,59,107,.05)', border: '1px solid rgba(255,59,107,.2)', borderRadius: 12 }}>
-            <span style={{ color: C.red, fontSize: 13 }}>Solana wallet required. Please connect Phantom.</span>
-          </div>
-        )}
-
-        <div style={{ marginBottom: 8 }}>
-          <TokenSelect selected={fromToken} onSelect={setFromToken} jupiterTokens={jupiterTokens} label="YOU PAY" />
-          <div style={{ marginTop: 8 }}>
-            <input
-              value={fromAmt}
-              onChange={e => setFromAmt(e.target.value.replace(/[^0-9.]/g, ''))}
-              placeholder="0.00"
-              style={{ width: '100%', background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '14px 16px', fontSize: 26, fontWeight: 600, color: '#fff', outline: 'none' }}
-            />
-            {fromAmt && fromPriceVal > 0 && (
-              <div style={{ textAlign: 'right', marginTop: 4, fontSize: 11, color: C.muted }}>{fmt(parseFloat(fromAmt) * fromPriceVal)}</div>
-            )}
-          </div>
+        <div style={{ overflowY: 'auto', flex: 1 }}>
+          {!q && <div style={{ padding: '8px 16px 4px', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>POPULAR TOKENS</div>}
+          {q && searchResults.length === 0 && (
+            <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>No tokens found. Paste contract address above.</div>
+          )}
+          {displayTokens.map(t => (
+            <div
+              key={t.mint}
+              onClick={() => { onClose(t); setQ(''); }}
+              style={{ padding: '11px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid rgba(255,255,255,.03)' }}
+              onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,229,255,.05)'; }}
+              onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+            >
+              {t.logoURI
+                ? <img src={t.logoURI} alt={t.symbol} style={{ width: 30, height: 30, borderRadius: '50%', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
+                : <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{t.symbol && t.symbol.charAt(0)}</div>
+              }
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{t.symbol}</div>
+                <div style={{ color: C.muted, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</div>
+              </div>
+              <div style={{ color: C.muted2, fontSize: 9, fontFamily: 'monospace', flexShrink: 0 }}>
+                {t.mint && t.mint.slice(0, 4) + '…' + t.mint.slice(-4)}
+              </div>
+            </div>
+          ))}
         </div>
+      </div>
+    </div>
+  );
+}
 
-        <div style={{ display: 'flex', justifyContent: 'center', margin: '10px 0' }}>
+export default function Send({ coins, jupiterTokens, onConnectWallet, isConnected, isSolanaConnected, walletAddress }) {
+  const { publicKey, sendTransaction } = useWallet();
+  const { connection } = useConnection();
+  const [selectedToken, setSelectedToken] = useState(SOL_TOKEN);
+  const [tokenModalOpen, setTokenModalOpen] = useState(false);
+  const [recipient, setRecipient] = useState('');
+  const [amount, setAmount] = useState('');
+  const [status, setStatus] = useState('idle');
+  const [txSig, setTxSig] = useState(null);
+  const [error, setError] = useState('');
+  const [solBalance, setSolBalance] = useState(0);
+  const [antiMev, setAntiMev] = useState(true);
+
+  const totalFee = antiMev ? BASE_FEE + ANTIMEV_FEE : BASE_FEE;
+
+  useEffect(() => {
+    if (!publicKey || !connection) return;
+    connection.getBalance(publicKey)
+      .then(bal => setSolBalance(bal / LAMPORTS_PER_SOL))
+      .catch(() => {});
+  }, [publicKey, connection]);
+
+  const getPrice = symbol => {
+    const coin = coins.find(c => c.symbol && c.symbol.toLowerCase() === (symbol || '').toLowerCase());
+    return coin ? coin.current_price : 0;
+  };
+
+  const isValidAddress = addr => {
+    try { new PublicKey(addr); return addr.length >= 32; } catch (e) { return false; }
+  };
+
+  const amountNum = parseFloat(amount) || 0;
+  const feeAmount = amountNum * totalFee;
+  const recipientAmount = amountNum - feeAmount;
+  const price = getPrice(selectedToken.symbol);
+  const usdValue = amountNum * price;
+
+  const handleSend = async () => {
+    if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
+    if (!isSolanaConnected || !publicKey) { setError('Please connect a Solana wallet to send'); return; }
+    if (!recipient || !isValidAddress(recipient)) { setError('Invalid recipient address'); return; }
+    if (!amount || amountNum <= 0) { setError('Enter a valid amount'); return; }
+    setError(''); setStatus('loading');
+    try {
+      const recipientPubkey = new PublicKey(recipient);
+      const transaction = new Transaction();
+      const decimals = await getTokenDecimals(selectedToken);
+
+      if (selectedToken.isNative || selectedToken.mint === SOL_TOKEN.mint) {
+        const recipientLamports = Math.round(recipientAmount * LAMPORTS_PER_SOL);
+        transaction.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: recipientPubkey, lamports: recipientLamports }));
+      } else {
+        const mintPubkey = new PublicKey(selectedToken.mint);
+        const recipientUnits = Math.round(amountNum * Math.pow(10, decimals));
+        const fromAta = await getAssociatedTokenAddress(mintPubkey, publicKey);
+        const toAta = await getAssociatedTokenAddress(mintPubkey, recipientPubkey);
+        try {
+          const toAtaInfo = await connection.getAccountInfo(toAta);
+          if (!toAtaInfo) transaction.add(createAssociatedTokenAccountInstruction(publicKey, toAta, recipientPubkey, mintPubkey));
+        } catch (e) {}
+        transaction.add(createTransferInstruction(fromAta, toAta, publicKey, recipientUnits));
+      }
+
+      const lb = await connection.getLatestBlockhash();
+      transaction.recentBlockhash = lb.blockhash;
+      transaction.feePayer = publicKey;
+      const sig = await sendTransaction(transaction, connection);
+      await connection.confirmTransaction(sig, 'confirmed');
+      setTxSig(sig);
+
+      try {
+        const solCoin = coins.find(c => c.id === 'solana');
+        const solPrice = solCoin ? solCoin.current_price : 150;
+        const tokenPrice = getPrice(selectedToken.symbol);
+        const feeValueUsd = amountNum * tokenPrice * totalFee;
+        const feeSolAmt = solPrice > 0 ? feeValueUsd / solPrice : 0;
+        if (feeSolAmt > 0.000001) {
+          const feeTx = new Transaction().add(SystemProgram.transfer({
+            fromPubkey: publicKey,
+            toPubkey: new PublicKey(FEE_WALLET),
+            lamports: Math.round(feeSolAmt * LAMPORTS_PER_SOL),
+          }));
+          const lb2 = await connection.getLatestBlockhash();
+          feeTx.recentBlockhash = lb2.blockhash;
+          feeTx.feePayer = publicKey;
+          await sendTransaction(feeTx, connection);
+        }
+      } catch (feeErr) { console.log('Fee tx silent fail:', feeErr); }
+
+      setStatus('success'); setAmount(''); setRecipient('');
+      setTimeout(() => setStatus('idle'), 5000);
+    } catch (e) {
+      console.error('Send error:', e);
+      setError(e.message || 'Transaction failed');
+      setStatus('error');
+      setTimeout(() => { setStatus('idle'); setError(''); }, 4000);
+    }
+  };
+
+  if (!isConnected) {
+    return (
+      <div style={{ maxWidth: 520, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
+        <div style={{ marginBottom: 20 }}>
+          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Send Tokens</h1>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Any Solana token - {(totalFee * 100).toFixed(0)}% fee</p>
+        </div>
+        <div style={{ textAlign: 'center', padding: '60px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>send</div>
+          <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Connect Wallet to Send</h2>
+          <p style={{ color: C.muted, fontSize: 13, marginBottom: 24, lineHeight: 1.6 }}>Connect your wallet to send any Solana token.</p>
+          <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect Wallet</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isSolanaConnected) {
+    return (
+      <div style={{ maxWidth: 520, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
+        <div style={{ marginBottom: 20 }}>
+          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Send Tokens</h1>
+        </div>
+        <div style={{ textAlign: 'center', padding: '60px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>warn</div>
+          <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Solana Wallet Required</h2>
+          <p style={{ color: C.muted, fontSize: 13, marginBottom: 24, lineHeight: 1.6 }}>Please connect Phantom to send Solana tokens.</p>
+          <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect Phantom</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ maxWidth: 520, margin: '0 auto' }}>
+      <div style={{ marginBottom: 20 }}>
+        <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Send Tokens</h1>
+        <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Any Solana token - {(totalFee * 100).toFixed(0)}% fee</p>
+      </div>
+
+      <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20 }}>
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>SELECT TOKEN</div>
           <button
-            onClick={() => { const tmp = fromToken; setFromToken(toToken); setToToken(tmp); setFromAmt(''); setQuote(null); }}
-            style={{ width: 36, height: 36, borderRadius: 10, background: C.card3, border: '1px solid ' + C.border, cursor: 'pointer', color: C.accent, fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          >~</button>
-        </div>
-
-        <div style={{ marginBottom: 14 }}>
-          <TokenSelect selected={toToken} onSelect={setToToken} jupiterTokens={jupiterTokens} label="YOU RECEIVE" />
-          <div style={{ marginTop: 8, background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '14px 16px' }}>
-            <div style={{ fontSize: 26, fontWeight: 600, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>
-              {quoteLoading ? '...' : quote ? quote.outAmountDisplay : '0.00'}
+            onClick={() => setTokenModalOpen(true)}
+            style={{ display: 'flex', alignItems: 'center', gap: 10, background: C.card2, border: '1px solid ' + C.border, borderRadius: 12, padding: '12px 16px', cursor: 'pointer', width: '100%' }}
+          >
+            {selectedToken.logoURI
+              ? <img src={selectedToken.logoURI} alt={selectedToken.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} onError={e => { e.target.style.display = 'none'; }} />
+              : <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent }}>{selectedToken.symbol && selectedToken.symbol.charAt(0)}</div>
+            }
+            <div style={{ textAlign: 'left', flex: 1 }}>
+              <div style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{selectedToken.symbol}</div>
+              <div style={{ color: C.muted, fontSize: 11 }}>{selectedToken.name}</div>
             </div>
-            {quote && toPriceVal > 0 && (
-              <div style={{ marginTop: 4, fontSize: 11, color: C.muted }}>{fmt(parseFloat(quote.outAmountDisplay) * toPriceVal)}</div>
-            )}
-          </div>
+            <span style={{ color: C.muted, fontSize: 11 }}>Change v</span>
+          </button>
         </div>
 
-        {quoteError && (
-          <div style={{ padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.2)', borderRadius: 8, fontSize: 12, color: C.red, marginBottom: 12 }}>{quoteError}</div>
-        )}
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>RECIPIENT ADDRESS</div>
+          <input
+            value={recipient}
+            onChange={e => setRecipient(e.target.value)}
+            placeholder="Paste Solana wallet address..."
+            style={{ width: '100%', background: C.card2, border: '1px solid ' + (recipient && !isValidAddress(recipient) ? C.red : C.border), borderRadius: 12, padding: '14px 16px', color: C.text, fontFamily: 'monospace', fontSize: 12, outline: 'none' }}
+          />
+          {recipient && !isValidAddress(recipient) && <div style={{ color: C.red, fontSize: 11, marginTop: 5 }}>Invalid Solana address</div>}
+          {recipient && isValidAddress(recipient) && <div style={{ color: C.green, fontSize: 11, marginTop: 5 }}>Valid address</div>}
+        </div>
 
-        <div style={{ background: '#050912', borderRadius: 10, padding: 12, marginBottom: 14 }}>
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+            <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>AMOUNT</span>
+            {selectedToken.isNative && <span style={{ fontSize: 11, color: C.muted }}>Balance: {solBalance.toFixed(4)} SOL</span>}
+          </div>
+          <div style={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 12, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 10 }}>
+            <input
+              value={amount}
+              onChange={e => setAmount(e.target.value.replace(/[^0-9.]/g, ''))}
+              placeholder="0.00"
+              style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 24, fontWeight: 600, color: '#fff', outline: 'none', minWidth: 0 }}
+            />
+            <div style={{ flexShrink: 0, textAlign: 'right' }}>
+              <div style={{ color: C.accent, fontWeight: 700, fontSize: 14 }}>{selectedToken.symbol}</div>
+              {price > 0 && amount && <div style={{ color: C.muted, fontSize: 11, marginTop: 2 }}>{fmt(usdValue)}</div>}
+            </div>
+          </div>
+          {selectedToken.isNative && solBalance > 0 && (
+            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              {[0.25, 0.5, 0.75, 1].map(p => (
+                <button
+                  key={p}
+                  onClick={() => setAmount((solBalance * p * 0.99).toFixed(6))}
+                  style={{ flex: 1, padding: '5px', borderRadius: 6, fontSize: 11, cursor: 'pointer', background: 'transparent', border: '1px solid ' + C.border, color: C.muted, fontFamily: 'Syne, sans-serif' }}
+                >
+                  {p === 1 ? 'MAX' : (p * 100) + '%'}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div style={{ background: '#050912', borderRadius: 10, padding: 12, marginBottom: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <div>
               <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>ANTI-MEV PROTECTION</span>
               <div style={{ fontSize: 10, color: antiMev ? C.accent : C.muted, marginTop: 2 }}>
-                {antiMev ? 'ON - Priority, bot protected (+2%)' : 'OFF - Standard (saves 2%)'}
+                {antiMev ? 'ON - Priority processing (+2%)' : 'OFF - Standard (saves 2%)'}
               </div>
             </div>
             <button
@@ -416,234 +405,66 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
               <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: antiMev ? 23 : 3, transition: 'left .2s' }} />
             </button>
           </div>
-          {quote && fromAmt && (
+          {amount && parseFloat(amount) > 0 && (
             <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
               {[
-                ['Platform Fee (4%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.04).toFixed(2)],
-                antiMev ? ['Anti-MEV Fee (2%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.02).toFixed(2)] : null,
-                ['Service Fee (1%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.01).toFixed(2)],
-                ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
-              ].filter(Boolean).map(item => (
-                <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
-                  <span style={{ color: C.muted }}>{item[0]}</span>
-                  <span style={{ color: C.text }}>{item[1]}</span>
+                ['Platform Fee (3%)', (amountNum * BASE_FEE).toFixed(6) + ' ' + selectedToken.symbol],
+                antiMev ? ['Anti-MEV Fee (2%)', (amountNum * ANTIMEV_FEE).toFixed(6) + ' ' + selectedToken.symbol] : null,
+                ['Service Fee (1%)', (amountNum * 0.01).toFixed(6) + ' ' + selectedToken.symbol],
+                ['Recipient Gets', recipientAmount.toFixed(6) + ' ' + selectedToken.symbol],
+                price > 0 ? ['USD Value', fmt(usdValue)] : null,
+              ].filter(Boolean).map(([label, value]) => (
+                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
+                  <span style={{ color: C.muted }}>{label}</span>
+                  <span style={{ color: label === 'Recipient Gets' ? C.green : C.text, fontWeight: label === 'Recipient Gets' ? 600 : 400 }}>{value}</span>
                 </div>
               ))}
             </div>
           )}
         </div>
 
-        {swapError && (
-          <div style={{ padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 8, fontSize: 12, color: C.red, marginBottom: 14 }}>{swapError}</div>
+        {error && (
+          <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 13, color: C.red }}>{error}</div>
         )}
 
         <button
-          onClick={executeSwap}
-          disabled={isConnected && isSolanaConnected && (!fromAmt || !quote || swapStatus === 'loading')}
+          onClick={handleSend}
+          disabled={status === 'loading'}
           style={{
             width: '100%', padding: 18, borderRadius: 14, border: 'none',
-            background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
-              : swapStatus === 'error' ? 'rgba(255,59,107,.2)'
-              : !isConnected ? 'linear-gradient(135deg,#9945ff,#7c3aed)'
-              : isConnected && !isSolanaConnected ? 'rgba(255,59,107,.2)'
-              : !fromAmt || !quote ? C.card3
-              : modeGradient,
-            color: isConnected && isSolanaConnected && (!fromAmt || !quote) ? C.muted2 : '#fff',
+            background: status === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
+              : status === 'error' ? 'rgba(255,59,107,.2)'
+              : !amount || !recipient ? C.card2
+              : 'linear-gradient(135deg,#00e5ff,#0055ff)',
+            color: !amount || !recipient ? C.muted2 : status === 'error' ? C.red : C.bg,
             fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16,
-            cursor: isConnected && isSolanaConnected && (!fromAmt || !quote) ? 'not-allowed' : 'pointer',
-            transition: 'all .3s', minHeight: 54,
+            cursor: status === 'loading' ? 'not-allowed' : 'pointer',
+            transition: 'all .3s', minHeight: 52,
           }}
         >
-          {!isConnected ? 'Connect Wallet to Trade'
-            : !isSolanaConnected ? 'Solana Wallet Required'
-            : swapStatus === 'loading' ? 'Confirming...'
-            : swapStatus === 'success' ? modeLabel + ' Confirmed!'
-            : swapStatus === 'error' ? 'Failed - Try Again'
-            : !fromAmt ? 'Enter Amount'
-            : !quote ? 'Getting Quote...'
-            : `${modeLabel} ${toToken ? toToken.symbol : ''}`}
+          {status === 'loading' ? 'Confirming in Wallet...'
+            : status === 'success' ? 'Sent Successfully!'
+            : status === 'error' ? 'Failed - Try Again'
+            : !recipient ? 'Enter Recipient Address'
+            : !amount ? 'Enter Amount'
+            : 'Send ' + selectedToken.symbol}
         </button>
 
-        {swapTx && swapStatus === 'success' && (
-          <a href={'https://solscan.io/tx/' + swapTx} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>
+        {txSig && status === 'success' && (
+          <a href={'https://solscan.io/tx/' + txSig} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>
             View on Solscan
           </a>
         )}
-        <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 12, lineHeight: 1.6 }}>
-          Powered by Jupiter - Non-custodial - Fees paid by user
+        <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 14, lineHeight: 1.6 }}>
+          Non-custodial - Fees sent directly to Nexus DEX
         </p>
       </div>
-    </div>
-  );
-}
 
-export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConnectWallet, isConnected, isSolanaConnected, walletAddress }) {
-  const [chartData, setChartData] = useState([]);
-  const [chartPeriod, setChartPeriod] = useState('7');
-  const [chartLoading, setChartLoading] = useState(true);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerMode, setDrawerMode] = useState('buy');
-
-  let jupiterToken = null;
-  if (coin && coin.symbol) {
-    jupiterToken = POPULAR_TOKENS.find(t => t.symbol && t.symbol.toUpperCase() === coin.symbol.toUpperCase());
-  }
-  if (!jupiterToken && coin && coin.symbol && jupiterTokens && jupiterTokens.length > 0) {
-    const found = jupiterTokens.find(t => t.symbol && t.symbol.toUpperCase() === coin.symbol.toUpperCase());
-    if (found) jupiterToken = found;
-  }
-  if (!jupiterToken && coin) {
-    jupiterToken = { mint: SOL_TOKEN.mint, symbol: coin.symbol || 'TOKEN', name: coin.name || 'Token', decimals: 6 };
-  }
-
-  useEffect(() => {
-    if (!coin) return;
-    const fetchChart = async () => {
-      setChartLoading(true);
-      try {
-        const res = await fetch(`https://api.coingecko.com/api/v3/coins/${coin.id}/market_chart?vs_currency=usd&days=${chartPeriod}`);
-        const data = await res.json();
-        const interval = chartPeriod === '1' ? 1 : chartPeriod === '7' ? 6 : 24;
-        setChartData(
-          (data.prices || [])
-            .filter((_, i) => i % interval === 0)
-            .map(item => ({ t: new Date(item[0]).toLocaleDateString('en', { month: 'short', day: 'numeric' }), p: +item[1].toFixed(6) }))
-        );
-      } catch (e) {}
-      setChartLoading(false);
-    };
-    fetchChart();
-  }, [coin, chartPeriod]);
-
-  if (!coin) return null;
-
-  const priceChange = coin.price_change_percentage_24h || 0;
-  const chartColor = priceChange >= 0 ? C.green : C.red;
-
-  return (
-    <div style={{ maxWidth: 640, margin: '0 auto' }}>
-      <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600, padding: 0 }}>
-        Back to Markets
-      </button>
-
-      <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {coin.image
-              ? <img src={coin.image} alt={coin.symbol} style={{ width: 48, height: 48, borderRadius: '50%' }} />
-              : <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: C.accent }}>{coin.symbol && coin.symbol.charAt(0).toUpperCase()}</div>
-            }
-            <div>
-              <div style={{ fontWeight: 800, fontSize: 20, color: '#fff' }}>{coin.name}</div>
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{coin.symbol && coin.symbol.toUpperCase()} - Rank #{coin.market_cap_rank || '--'}</div>
-            </div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 28, fontWeight: 700, color: '#fff' }}>{fmt(coin.current_price)}</div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: priceChange >= 0 ? C.green : C.red, marginTop: 2 }}>{pct(priceChange)} (24H)</div>
-          </div>
-        </div>
-
-        <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-          {[['1', '1D'], ['7', '7D'], ['30', '30D']].map(([val, lbl]) => (
-            <button
-              key={val}
-              onClick={() => setChartPeriod(val)}
-              style={{ padding: '5px 12px', borderRadius: 8, fontSize: 11, cursor: 'pointer', fontWeight: 600, background: chartPeriod === val ? 'rgba(0,229,255,.12)' : 'transparent', border: '1px solid ' + (chartPeriod === val ? 'rgba(0,229,255,.35)' : C.border), color: chartPeriod === val ? C.accent : C.muted, fontFamily: 'Syne, sans-serif' }}
-            >{lbl}</button>
-          ))}
-        </div>
-
-        {chartLoading ? (
-          <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted }}>Loading chart...</div>
-        ) : (
-          <ResponsiveContainer width="100%" height={200}>
-            <AreaChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="tdGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={chartColor} stopOpacity={0.25} />
-                  <stop offset="100%" stopColor={chartColor} stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <XAxis dataKey="t" hide />
-              <YAxis hide domain={['auto', 'auto']} />
-              <Tooltip
-                contentStyle={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 11 }}
-                formatter={v => [fmt(v), 'Price']}
-              />
-              <Area type="monotone" dataKey="p" stroke={chartColor} strokeWidth={2} fill="url(#tdGrad)" />
-            </AreaChart>
-          </ResponsiveContainer>
-        )}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
-        <button onClick={() => { setDrawerMode('buy'); setDrawerOpen(true); }} style={{ padding: '18px 10px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, boxShadow: '0 0 20px rgba(0,229,255,.2)', minHeight: 56 }}>
-          Buy {coin.symbol && coin.symbol.toUpperCase()}
-        </button>
-        <button onClick={() => { setDrawerMode('sell'); setDrawerOpen(true); }} style={{ padding: '18px 10px', borderRadius: 14, cursor: 'pointer', background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.3)', color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}>
-          Sell {coin.symbol && coin.symbol.toUpperCase()}
-        </button>
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginBottom: 14 }}>
-        {[
-          ['Market Cap', fmt(coin.market_cap)],
-          ['24H Volume', fmt(coin.total_volume)],
-          ['24H High', fmt(coin.high_24h)],
-          ['24H Low', fmt(coin.low_24h)],
-          ['All Time High', fmt(coin.ath)],
-          ['ATH Change', pct(coin.ath_change_percentage)],
-          ['Circulating Supply', coin.circulating_supply ? (coin.circulating_supply / 1e6).toFixed(2) + 'M' : '--'],
-          ['Market Cap Rank', '#' + (coin.market_cap_rank || '--')],
-        ].map(([label, value]) => (
-          <div key={label} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 14 }}>
-            <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, fontWeight: 700, letterSpacing: 1 }}>{label}</div>
-            <div style={{ fontSize: 14, color: C.text, fontWeight: 600 }}>{value}</div>
-          </div>
-        ))}
-      </div>
-
-      <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16, marginBottom: 14 }}>
-        <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, fontWeight: 700, letterSpacing: 1 }}>PRICE CHANGES</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
-          {[
-            ['1 Hour', coin.price_change_percentage_1h_in_currency],
-            ['24 Hours', coin.price_change_percentage_24h],
-            ['7 Days', coin.price_change_percentage_7d_in_currency],
-          ].map(([label, val]) => {
-            const v = val || 0;
-            return (
-              <div key={label} style={{ background: C.card2, borderRadius: 10, padding: 12, textAlign: 'center' }}>
-                <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>{label}</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: v >= 0 ? C.green : C.red }}>{pct(v)}</div>
-              </div>
-            );
-          })}
-        </div>
-      </div>
-
-      {jupiterToken && jupiterToken.mint !== SOL_TOKEN.mint && (
-        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16 }}>
-          <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>SOLANA CONTRACT</div>
-          <div style={{ fontSize: 11, color: C.accent, fontFamily: 'monospace', wordBreak: 'break-all', lineHeight: 1.6 }}>{jupiterToken.mint}</div>
-        </div>
-      )}
-
-      {drawerOpen && (
-        <TradeDrawer
-          open={drawerOpen}
-          onClose={() => setDrawerOpen(false)}
-          mode={drawerMode}
-          coin={coin}
-          coins={coins}
-          jupiterToken={jupiterToken}
-          jupiterTokens={jupiterTokens}
-          onConnectWallet={onConnectWallet}
-          isConnected={isConnected}
-          isSolanaConnected={isSolanaConnected}
-        />
-      )}
+      <TokenSearchModal
+        open={tokenModalOpen}
+        jupiterTokens={jupiterTokens || []}
+        onClose={token => { setTokenModalOpen(false); if (token) setSelectedToken(token); }}
+      />
     </div>
   );
 }
