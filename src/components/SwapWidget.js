@@ -57,11 +57,23 @@ function TokenSelect({ selected, onSelect, tokens }) {
     if (!isValidAddress(addr)) return;
     setContractLoading(true);
     try {
-      var found = tokens.find(function(t) { return t.mint === addr; });
-      if (found) {
-        setContractToken(found);
+      var res = await fetch('https://tokens.jup.ag/token/' + addr);
+      if (res.ok) {
+        var data = await res.json();
+        setContractToken({
+          mint: data.address,
+          symbol: data.symbol,
+          name: data.name,
+          decimals: data.decimals,
+          logoURI: data.logoURI,
+        });
       } else {
-        setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6 });
+        var found = tokens.find(function(t) { return t.mint === addr; });
+        if (found) {
+          setContractToken(found);
+        } else {
+          setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6 });
+        }
       }
     } catch (e) {
       setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6 });
@@ -95,6 +107,11 @@ function TokenSelect({ selected, onSelect, tokens }) {
           <img src={selected.logoURI} alt={selected.symbol}
             style={{ width: 20, height: 20, borderRadius: '50%' }}
             onError={function(e) { e.target.style.display = 'none'; }} />
+        )}
+        {selected && !selected.logoURI && (
+          <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'rgba(0,229,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, color: C.accent, flexShrink: 0 }}>
+            {selected.symbol && selected.symbol.charAt(0)}
+          </div>
         )}
         <span style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>
           {selected ? selected.symbol : 'Select'}
@@ -153,9 +170,14 @@ function TokenSelect({ selected, onSelect, tokens }) {
                     background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.3)',
                     borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
                   }}>
-                  <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>
-                    {contractToken.symbol.charAt(0)}
-                  </div>
+                  {contractToken.logoURI ? (
+                    <img src={contractToken.logoURI} alt={contractToken.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }}
+                      onError={function(e) { e.target.style.display = 'none'; }} />
+                  ) : (
+                    <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>
+                      {contractToken.symbol.charAt(0)}
+                    </div>
+                  )}
                   <div>
                     <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{contractToken.symbol}</div>
                     <div style={{ color: C.muted, fontSize: 11 }}>{contractToken.name}</div>
@@ -166,9 +188,14 @@ function TokenSelect({ selected, onSelect, tokens }) {
             </div>
 
             <div style={{ overflowY: 'auto', flex: 1 }}>
-              {filtered.length === 0 && (
+              {filtered.length === 0 && !q && (
                 <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>
-                  No tokens found. Try pasting a contract address above.
+                  Loading tokens... paste a contract address above to search any token.
+                </div>
+              )}
+              {filtered.length === 0 && q && (
+                <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>
+                  No tokens found. Try pasting the contract address above.
                 </div>
               )}
               {filtered.map(function(t) {
@@ -209,8 +236,8 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   const { publicKey, connected, sendTransaction } = useWallet();
   const { connection } = useConnection();
 
-  const tokens = jupiterTokens && jupiterTokens.length > 0 ? jupiterTokens : FALLBACK_TOKENS;
-
+  const [localTokens, setLocalTokens] = useState(FALLBACK_TOKENS);
+  const [localLoading, setLocalLoading] = useState(true);
   const [fromToken, setFromToken] = useState(FALLBACK_TOKENS[0]);
   const [toToken, setToToken] = useState(FALLBACK_TOKENS[1]);
   const [fromAmt, setFromAmt] = useState('');
@@ -232,6 +259,36 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     return function() { window.removeEventListener('resize', handleResize); };
   }, []);
 
+  useEffect(function() {
+    var fetchAllTokens = async function() {
+      setLocalLoading(true);
+      try {
+        var res = await fetch('https://tokens.jup.ag/tokens?tags=verified');
+        var data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          var mapped = data.map(function(t) {
+            return { mint: t.address, symbol: t.symbol, name: t.name, decimals: t.decimals, logoURI: t.logoURI };
+          });
+          setLocalTokens(mapped);
+        }
+      } catch (e) {
+        console.log('Using fallback tokens');
+        if (jupiterTokens && jupiterTokens.length > 0) {
+          setLocalTokens(jupiterTokens);
+        }
+      }
+      setLocalLoading(false);
+    };
+    fetchAllTokens();
+  }, []);
+
+  useEffect(function() {
+    if (jupiterTokens && jupiterTokens.length > 0 && localLoading) {
+      setLocalTokens(jupiterTokens);
+    }
+  }, [jupiterTokens]);
+
+  var tokens = localTokens.length > 0 ? localTokens : FALLBACK_TOKENS;
   var feeBps = antiMev ? BASE_FEE_BPS + ANTIMEV_FEE_BPS : BASE_FEE_BPS;
   var feePercent = feeBps / 100;
 
@@ -243,14 +300,13 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     setQuoteLoading(true);
     try {
       var amount = Math.round(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals));
-      var params = new URLSearchParams({
-        inputMint: fromToken.mint,
-        outputMint: toToken.mint,
-        amount: amount.toString(),
-        slippageBps: Math.round(slip * 100).toString(),
-        platformFeeBps: feeBps.toString(),
-      });
-      var res = await fetch('https://quote-api.jup.ag/v6/quote?' + params);
+      var url = 'https://quote-api.jup.ag/v6/quote' +
+        '?inputMint=' + fromToken.mint +
+        '&outputMint=' + toToken.mint +
+        '&amount=' + amount +
+        '&slippageBps=' + Math.round(slip * 100) +
+        '&platformFeeBps=' + feeBps;
+      var res = await fetch(url);
       var data = await res.json();
       if (data && data.outAmount) {
         setQuote({
@@ -319,7 +375,9 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         setSwapStatus('success');
         setFromAmt('');
         setQuote(null);
-        setTimeout(function() { setSwapStatus('idle'); }, 4000);
+        setTimeout(function() { setSwapStatus('idle'); setSwapTx(null); }, 5000);
+      } else {
+        throw new Error('No swap transaction returned');
       }
     } catch (e) {
       console.error('Swap error:', e);
@@ -350,9 +408,9 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Swap Tokens</h1>
         <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
           Jupiter routing · {feePercent}% fee
-          {jupiterLoading
+          {localLoading
             ? <span style={{ color: C.accent, marginLeft: 6 }}>· Loading tokens...</span>
-            : <span style={{ color: C.green, marginLeft: 6 }}>· {tokens.length.toLocaleString()} tokens</span>
+            : <span style={{ color: C.green, marginLeft: 6 }}>· {tokens.length.toLocaleString()} tokens available</span>
           }
         </p>
       </div>
@@ -421,7 +479,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             <div>
               <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>ANTI-MEV PROTECTION</span>
               <div style={{ fontSize: 10, color: antiMev ? C.accent : C.muted, marginTop: 2 }}>
-                {antiMev ? 'ON — Priority processing, protected from bots (+2%)' : 'OFF — Standard processing (saves 2%)'}
+                {antiMev ? 'ON — Priority processing, bot protected (+2%)' : 'OFF — Standard processing (saves 2%)'}
               </div>
             </div>
             <button onClick={function() { setAntiMev(!antiMev); }} style={{
