@@ -21,8 +21,7 @@ const C = {
 };
 
 function WalletModal({ open, onClose }) {
-  const { connect, wallets } = useWallet();
-  const phantomWallet = wallets.find(function(w) { return w.adapter.name === 'Phantom'; });
+  const { wallets, connect } = useWallet();
 
   if (!open) return null;
 
@@ -37,110 +36,75 @@ function WalletModal({ open, onClose }) {
         animation: 'slideUp .25s ease',
       }}>
         <style>{`@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }`}</style>
-
         <div style={{ width: 40, height: 4, background: '#2e3f5e', borderRadius: 2, margin: '0 auto 24px' }} />
+        <div style={{ fontSize: 18, fontWeight: 800, color: '#fff', marginBottom: 6, textAlign: 'center' }}>Connect Wallet</div>
+        <div style={{ fontSize: 12, color: '#586994', marginBottom: 24, textAlign: 'center' }}>Choose your wallet to get started</div>
 
-        <div style={{ fontSize: 18, fontWeight: 800, color: '#fff', marginBottom: 6, textAlign: 'center' }}>
-          Connect Wallet
-        </div>
-        <div style={{ fontSize: 12, color: '#586994', marginBottom: 24, textAlign: 'center' }}>
-          Choose your wallet to get started
-        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {wallets.map(function(wallet) {
+            return (
+              <button key={wallet.adapter.name}
+                onClick={function() { connect({ wallet }); onClose(); }}
+                style={{
+                  display: 'flex', alignItems: 'center', gap: 16,
+                  background: 'rgba(153,69,255,.08)', border: '1px solid rgba(153,69,255,.2)',
+                  borderRadius: 14, padding: '14px 20px', cursor: 'pointer', width: '100%',
+                }}>
+                <img src={wallet.adapter.icon} alt={wallet.adapter.name}
+                  style={{ width: 36, height: 36, borderRadius: 8 }}
+                  onError={function(e) { e.target.style.display = 'none'; }}
+                />
+                <div style={{ textAlign: 'left' }}>
+                  <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>{wallet.adapter.name}</div>
+                  <div style={{ color: '#586994', fontSize: 12 }}>Solana wallet</div>
+                </div>
+                <div style={{ marginLeft: 'auto', color: '#9945ff', fontSize: 11, fontWeight: 600 }}>SOLANA</div>
+              </button>
+            );
+          })}
 
-          {phantomWallet && (
-            <button
-              onClick={function() {
-                connect({ wallet: phantomWallet });
-                onClose();
-              }}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 16,
-                background: 'rgba(153,69,255,.08)', border: '1px solid rgba(153,69,255,.3)',
-                borderRadius: 14, padding: '16px 20px', cursor: 'pointer', width: '100%',
-              }}>
-              <img src="https://187760183-files.gitbook.io/~/files/v0/b/gitbook-x-prod.appspot.com/o/spaces%2F-MVOiF6Zqit57q_hxJYp%2Fuploads%2FHEjleywo9QOnfYkqNAMj%2FPhantom_SVG_Icon.svg?alt=media&token=71b80a0a-defb-476d-a5b9-2ebe42288c4c"
-                alt="Phantom" style={{ width: 36, height: 36, borderRadius: 8 }}
-                onError={function(e) { e.target.style.display = 'none'; }}
-              />
-              <div style={{ textAlign: 'left' }}>
-                <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>Phantom</div>
-                <div style={{ color: '#586994', fontSize: 12 }}>Solana wallet</div>
-              </div>
-              <div style={{ marginLeft: 'auto', color: '#9945ff', fontSize: 12, fontWeight: 600 }}>Solana</div>
-            </button>
-          )}
+          <div style={{ fontSize: 11, color: C.muted, textAlign: 'center', padding: '4px 0' }}>— or connect EVM wallet —</div>
 
-          <div style={{
-            display: 'flex', alignItems: 'center', gap: 16,
-            background: 'rgba(0,229,255,.04)', border: '1px solid rgba(0,229,255,.1)',
-            borderRadius: 14, padding: '12px 20px',
-          }}>
-            <div style={{ color: '#586994', fontSize: 12, flex: 1 }}>EVM Wallets — MetaMask, Rainbow, WalletConnect</div>
-          </div>
+          <ConnectButton.Custom>
+            {function({ openConnectModal }) {
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  <button onClick={function() { openConnectModal(); onClose(); }} style={{
+                    display: 'flex', alignItems: 'center', gap: 16,
+                    background: 'rgba(245,130,49,.08)', border: '1px solid rgba(245,130,49,.2)',
+                    borderRadius: 14, padding: '14px 20px', cursor: 'pointer', width: '100%',
+                  }}>
+                    <img src="https://upload.wikimedia.org/wikipedia/commons/3/36/MetaMask_Fox.svg"
+                      alt="MetaMask" style={{ width: 36, height: 36 }}
+                      onError={function(e) { e.target.style.display = 'none'; }}
+                    />
+                    <div style={{ textAlign: 'left' }}>
+                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>MetaMask</div>
+                      <div style={{ color: '#586994', fontSize: 12 }}>EVM wallet</div>
+                    </div>
+                    <div style={{ marginLeft: 'auto', color: '#f58231', fontSize: 11, fontWeight: 600 }}>EVM</div>
+                  </button>
 
-          <div style={{ borderRadius: 14, overflow: 'hidden', border: '1px solid rgba(0,229,255,.1)' }}>
-            <ConnectButton.Custom>
-              {function({ openConnectModal }) {
-                return (
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-
-                    <button onClick={function() { openConnectModal(); onClose(); }} style={{
-                      display: 'flex', alignItems: 'center', gap: 16,
-                      background: 'rgba(245,130,49,.08)', border: 'none',
-                      borderBottom: '1px solid rgba(255,255,255,.05)',
-                      padding: '16px 20px', cursor: 'pointer', width: '100%',
-                    }}>
-                      <img src="https://upload.wikimedia.org/wikipedia/commons/3/36/MetaMask_Fox.svg"
-                        alt="MetaMask" style={{ width: 36, height: 36 }}
-                        onError={function(e) { e.target.style.display = 'none'; }}
-                      />
-                      <div style={{ textAlign: 'left' }}>
-                        <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>MetaMask</div>
-                        <div style={{ color: '#586994', fontSize: 12 }}>EVM wallet</div>
-                      </div>
-                      <div style={{ marginLeft: 'auto', color: '#f58231', fontSize: 12, fontWeight: 600 }}>EVM</div>
-                    </button>
-
-                    <button onClick={function() { openConnectModal(); onClose(); }} style={{
-                      display: 'flex', alignItems: 'center', gap: 16,
-                      background: 'rgba(94,129,244,.08)', border: 'none',
-                      borderBottom: '1px solid rgba(255,255,255,.05)',
-                      padding: '16px 20px', cursor: 'pointer', width: '100%',
-                    }}>
-                      <img src="https://rainbowkit.com/rainbow.svg"
-                        alt="Rainbow" style={{ width: 36, height: 36, borderRadius: 8 }}
-                        onError={function(e) { e.target.style.display = 'none'; }}
-                      />
-                      <div style={{ textAlign: 'left' }}>
-                        <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>Rainbow</div>
-                        <div style={{ color: '#586994', fontSize: 12 }}>EVM wallet</div>
-                      </div>
-                      <div style={{ marginLeft: 'auto', color: '#5e81f4', fontSize: 12, fontWeight: 600 }}>EVM</div>
-                    </button>
-
-                    <button onClick={function() { openConnectModal(); onClose(); }} style={{
-                      display: 'flex', alignItems: 'center', gap: 16,
-                      background: 'rgba(59,153,252,.08)', border: 'none',
-                      padding: '16px 20px', cursor: 'pointer', width: '100%',
-                    }}>
-                      <img src="https://avatars.githubusercontent.com/u/37784886"
-                        alt="WalletConnect" style={{ width: 36, height: 36, borderRadius: 8 }}
-                        onError={function(e) { e.target.style.display = 'none'; }}
-                      />
-                      <div style={{ textAlign: 'left' }}>
-                        <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>WalletConnect</div>
-                        <div style={{ color: '#586994', fontSize: 12 }}>Any wallet via QR</div>
-                      </div>
-                      <div style={{ marginLeft: 'auto', color: '#3b99fc', fontSize: 12, fontWeight: 600 }}>Any</div>
-                    </button>
-
-                  </div>
-                );
-              }}
-            </ConnectButton.Custom>
-          </div>
+                  <button onClick={function() { openConnectModal(); onClose(); }} style={{
+                    display: 'flex', alignItems: 'center', gap: 16,
+                    background: 'rgba(59,153,252,.08)', border: '1px solid rgba(59,153,252,.2)',
+                    borderRadius: 14, padding: '14px 20px', cursor: 'pointer', width: '100%',
+                  }}>
+                    <img src="https://avatars.githubusercontent.com/u/37784886"
+                      alt="WalletConnect" style={{ width: 36, height: 36, borderRadius: 8 }}
+                      onError={function(e) { e.target.style.display = 'none'; }}
+                    />
+                    <div style={{ textAlign: 'left' }}>
+                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>WalletConnect</div>
+                      <div style={{ color: '#586994', fontSize: 12 }}>Any wallet via QR</div>
+                    </div>
+                    <div style={{ marginLeft: 'auto', color: '#3b99fc', fontSize: 11, fontWeight: 600 }}>ANY</div>
+                  </button>
+                </div>
+              );
+            }}
+          </ConnectButton.Custom>
         </div>
       </div>
     </>
@@ -155,6 +119,8 @@ export default function App() {
   const [swapFromToken, setSwapFromToken] = useState(null);
   const [swapToToken, setSwapToToken] = useState(null);
   const [walletModalOpen, setWalletModalOpen] = useState(false);
+  const [jupiterTokens, setJupiterTokens] = useState([]);
+  const [jupiterLoading, setJupiterLoading] = useState(true);
   const { address: evmAddress, isConnected: evmConnected } = useAccount();
   const { publicKey, connected: solConnected } = useWallet();
 
@@ -164,6 +130,35 @@ export default function App() {
     : evmConnected && evmAddress
     ? evmAddress.slice(0, 4) + '...' + evmAddress.slice(-4)
     : null;
+
+  useEffect(function() {
+    var fetchJupiterTokens = async function() {
+      setJupiterLoading(true);
+      try {
+        var controller = new AbortController();
+        var timeout = setTimeout(function() { controller.abort(); }, 20000);
+        var res = await fetch('https://token.jup.ag/all', { signal: controller.signal });
+        clearTimeout(timeout);
+        var data = await res.json();
+        if (Array.isArray(data) && data.length > 0) {
+          var mapped = data.map(function(t) {
+            return {
+              mint: t.address,
+              symbol: t.symbol,
+              name: t.name,
+              decimals: t.decimals,
+              logoURI: t.logoURI,
+            };
+          });
+          setJupiterTokens(mapped);
+        }
+      } catch (e) {
+        console.log('Jupiter token fetch failed');
+      }
+      setJupiterLoading(false);
+    };
+    fetchJupiterTokens();
+  }, []);
 
   const fetchMarkets = async () => {
     try {
@@ -188,11 +183,6 @@ export default function App() {
   const goToToken = function(coin) {
     setSelectedToken(coin);
     setTab('token');
-  };
-
-  const handleQuickBuy = function(coin) {
-    setSelectedToken(coin);
-    setTab('buy');
   };
 
   const tabs = [
@@ -221,7 +211,7 @@ export default function App() {
           maxWidth: 1400, margin: '0 auto', padding: '0 16px',
           display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 56,
         }}>
-          <div onClick={() => setTab('swap')} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+          <div onClick={() => setTab('swap')} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', flexShrink: 0 }}>
             <div style={{
               width: 32, height: 32, borderRadius: 9,
               background: 'linear-gradient(135deg,#00e5ff,#0066ff)',
@@ -236,7 +226,7 @@ export default function App() {
             }}>DEX</span>
           </div>
 
-          <nav style={{ display: 'flex', gap: 2, position: 'absolute', left: '50%', transform: 'translateX(-50%)' }}>
+          <nav style={{ display: 'flex', gap: 2, overflowX: 'auto', scrollbarWidth: 'none', flex: 1, justifyContent: 'center', padding: '0 8px' }}>
             {tabs.map(function(t) {
               return (
                 <button key={t.id} onClick={() => setTab(t.id)} style={{
@@ -245,26 +235,26 @@ export default function App() {
                   borderRadius: 8, padding: '5px 10px',
                   color: tab === t.id ? C.accent : C.muted,
                   fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: 12,
-                  cursor: 'pointer', whiteSpace: 'nowrap',
+                  cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
                 }}>{t.label}</button>
               );
             })}
           </nav>
 
           <button onClick={() => setWalletModalOpen(true)} style={{
-            display: 'flex', alignItems: 'center', gap: 8,
+            display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
             background: isConnected ? 'rgba(0,229,255,.08)' : 'linear-gradient(135deg,#00e5ff,#0055ff)',
             border: isConnected ? '1px solid rgba(0,229,255,.3)' : 'none',
-            borderRadius: 10, padding: '8px 14px', cursor: 'pointer',
+            borderRadius: 10, padding: '7px 12px', cursor: 'pointer',
             fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12,
             color: isConnected ? C.accent : C.bg,
           }}>
             {isConnected ? (
               <>
-                <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.green }} />
+                <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.green }} />
                 {displayAddress}
               </>
-            ) : 'Connect Wallet'}
+            ) : 'Connect'}
           </button>
         </div>
       </header>
@@ -277,7 +267,8 @@ export default function App() {
         {tab === 'swap' && (
           <SwapWidget
             coins={coins}
-            loading={loading}
+            jupiterTokens={jupiterTokens}
+            jupiterLoading={jupiterLoading}
             initialFromToken={swapFromToken}
             initialToToken={swapToToken}
             onTokensUsed={() => { setSwapFromToken(null); setSwapToToken(null); }}
@@ -292,8 +283,8 @@ export default function App() {
           <TokenDetail
             coin={selectedToken}
             coins={coins}
+            jupiterTokens={jupiterTokens}
             onBack={() => setTab('markets')}
-            onBuy={handleQuickBuy}
             onConnectWallet={() => setWalletModalOpen(true)}
           />
         )}
@@ -307,12 +298,14 @@ export default function App() {
         {tab === 'send' && (
           <Send
             coins={coins}
+            jupiterTokens={jupiterTokens}
             onConnectWallet={() => setWalletModalOpen(true)}
           />
         )}
         {tab === 'portfolio' && (
           <Portfolio
             coins={coins}
+            jupiterTokens={jupiterTokens}
             onSend={() => setTab('send')}
             onConnectWallet={() => setWalletModalOpen(true)}
           />
