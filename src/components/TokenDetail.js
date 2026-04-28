@@ -4,7 +4,7 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { VersionedTransaction, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
-const FEE_WALLET = new PublicKey('47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5');
+const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
 
@@ -46,6 +46,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, coins, onConnect
   const [fromAmt, setFromAmt] = useState('');
   const [quote, setQuote] = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState('');
   const [swapStatus, setSwapStatus] = useState('idle');
   const [swapTx, setSwapTx] = useState(null);
   const [swapError, setSwapError] = useState('');
@@ -61,15 +62,17 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, coins, onConnect
     setSwapStatus('idle');
     setSwapTx(null);
     setSwapError('');
+    setQuoteError('');
   }, [open, mode]);
 
   useEffect(function() {
     if (!fromAmt || parseFloat(fromAmt) <= 0) { setQuote(null); return; }
     var t = setTimeout(async function() {
       setQuoteLoading(true);
+      setQuoteError('');
       try {
         var amount = Math.round(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals));
-        var url = 'https://quote-api.jup.ag/v6/quote' +
+        var url = 'https://api.jup.ag/swap/v1/quote' +
           '?inputMint=' + fromToken.mint +
           '&outputMint=' + toToken.mint +
           '&amount=' + amount +
@@ -83,9 +86,13 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, coins, onConnect
             quoteResponse: data,
           });
         } else {
+          setQuoteError(data.error || 'No route found');
           setQuote(null);
         }
-      } catch (e) { setQuote(null); }
+      } catch (e) {
+        setQuoteError('Failed to get quote');
+        setQuote(null);
+      }
       setQuoteLoading(false);
     }, 600);
     return function() { clearTimeout(t); };
@@ -100,7 +107,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, coins, onConnect
     setSwapStatus('loading');
     setSwapError('');
     try {
-      var swapRes = await fetch('https://quote-api.jup.ag/v6/swap', {
+      var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -112,26 +119,24 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, coins, onConnect
         }),
       });
       var swapData = await swapRes.json();
-      if (!swapData.swapTransaction) throw new Error('No swap transaction returned');
+      if (!swapData.swapTransaction) throw new Error(swapData.error || 'No swap transaction');
 
       var txBuf = Buffer.from(swapData.swapTransaction, 'base64');
       var tx = VersionedTransaction.deserialize(txBuf);
       var sig = await sendTransaction(tx, connection);
       await connection.confirmTransaction(sig, 'confirmed');
 
-      var solCoin = coins.find(function(c) { return c.id === 'solana'; });
-      var solPrice = solCoin ? solCoin.current_price : 100;
-      var amountUsd = parseFloat(fromAmt) * (coin ? coin.current_price : 0);
-      var feeUsd = amountUsd * totalFee;
-      var feeSol = feeUsd / solPrice;
-
-      if (feeSol > 0.000001) {
-        try {
+      try {
+        var solCoin = coins.find(function(c) { return c.id === 'solana'; });
+        var solPrice = solCoin ? solCoin.current_price : 100;
+        var amountUsd = parseFloat(fromAmt) * (coin ? coin.current_price : 0);
+        var feeSol = (amountUsd * totalFee) / solPrice;
+        if (feeSol > 0.000001) {
           var feeLamports = Math.round(feeSol * LAMPORTS_PER_SOL);
           var feeTx = new Transaction().add(
             SystemProgram.transfer({
               fromPubkey: publicKey,
-              toPubkey: FEE_WALLET,
+              toPubkey: new PublicKey(FEE_WALLET),
               lamports: feeLamports,
             })
           );
@@ -139,9 +144,9 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, coins, onConnect
           feeTx.recentBlockhash = blockhash;
           feeTx.feePayer = publicKey;
           await sendTransaction(feeTx, connection);
-        } catch (feeErr) {
-          console.log('Fee tx failed silently:', feeErr);
         }
+      } catch (feeErr) {
+        console.log('Fee tx failed silently:', feeErr);
       }
 
       setSwapTx(sig);
@@ -247,6 +252,12 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, coins, onConnect
           </div>
         </div>
 
+        {quoteError && (
+          <div style={{ padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.2)', borderRadius: 8, fontSize: 12, color: C.red, marginBottom: 14 }}>
+            {quoteError}
+          </div>
+        )}
+
         <div style={{ background: '#050912', borderRadius: 10, padding: 12, marginBottom: 14 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <div>
@@ -262,15 +273,14 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, coins, onConnect
             }}>
               <div style={{
                 width: 18, height: 18, borderRadius: '50%', background: '#fff',
-                position: 'absolute', top: 3, left: antiMev ? 23 : 3,
-                transition: 'left .2s',
+                position: 'absolute', top: 3, left: antiMev ? 23 : 3, transition: 'left .2s',
               }} />
             </button>
           </div>
           {quote && fromAmt && (
             <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
               {[
-                ['Platform Fee (3%)', '$' + (parseFloat(fromAmt) * (coin ? coin.current_price : 0) * 0.03).toFixed(2)],
+                ['Platform Fee (4%)', '$' + (parseFloat(fromAmt) * (coin ? coin.current_price : 0) * 0.04).toFixed(2)],
                 antiMev ? ['Anti-MEV Fee (2%)', '$' + (parseFloat(fromAmt) * (coin ? coin.current_price : 0) * 0.02).toFixed(2)] : null,
                 ['Service Fee (1%)', '$' + (parseFloat(fromAmt) * (coin ? coin.current_price : 0) * 0.01).toFixed(2)],
                 ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
@@ -363,10 +373,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         var data = await res.json();
         var interval = chartPeriod === '1' ? 1 : chartPeriod === '7' ? 6 : 24;
         var pts = (data.prices || []).filter(function(_, i) { return i % interval === 0; }).map(function(item) {
-          return {
-            t: new Date(item[0]).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
-            p: +item[1].toFixed(6),
-          };
+          return { t: new Date(item[0]).toLocaleDateString('en', { month: 'short', day: 'numeric' }), p: +item[1].toFixed(6) };
         });
         setChartData(pts);
       } catch (e) {}
@@ -440,10 +447,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
               </defs>
               <XAxis dataKey="t" hide />
               <YAxis hide domain={['auto', 'auto']} />
-              <Tooltip
-                contentStyle={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 11 }}
-                formatter={function(v) { return [fmt(v), 'Price']; }}
-              />
+              <Tooltip contentStyle={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 11 }} formatter={function(v) { return [fmt(v), 'Price']; }} />
               <Area type="monotone" dataKey="p" stroke={chartColor} strokeWidth={2} fill="url(#tdGrad)" />
             </AreaChart>
           </ResponsiveContainer>
@@ -460,8 +464,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         <button onClick={function() { setDrawerMode('sell'); setDrawerOpen(true); }} style={{
           padding: '18px 10px', borderRadius: 14, cursor: 'pointer',
           background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.3)',
-          color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18,
-          minHeight: 56,
+          color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56,
         }}>Sell {coin.symbol && coin.symbol.toUpperCase()}</button>
       </div>
 
