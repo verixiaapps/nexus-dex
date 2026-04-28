@@ -91,9 +91,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
           const data = await res.json();
           const dec = parseInt(data.decimals);
           setContractToken({
-            mint: data.address,
-            symbol: data.symbol,
-            name: data.name,
+            mint: data.address, symbol: data.symbol, name: data.name,
             decimals: (!isNaN(dec) && dec >= 0 && dec <= 18) ? dec : 6,
             logoURI: data.logoURI,
           });
@@ -314,9 +312,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
           feeTx.feePayer = publicKey;
           await sendTransaction(feeTx, connection);
         }
-      } catch (feeErr) {
-        console.log('Fee failed:', feeErr);
-      }
+      } catch (feeErr) { console.log('Fee failed:', feeErr); }
 
       setSwapTx(sig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
       setTimeout(() => { setSwapStatus('idle'); setSwapTx(null); }, 5000);
@@ -340,6 +336,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,.8)' }} />
       <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 401, background: C.card, borderTop: '2px solid ' + C.borderHi, borderRadius: '20px 20px 0 0', padding: '20px 20px 40px', boxShadow: '0 -20px 60px rgba(0,0,0,.9)', maxHeight: '92vh', overflowY: 'auto' }}>
         <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 20px' }} />
+
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {coin && coin.image && <img src={coin.image} alt={coin.symbol} style={{ width: 32, height: 32, borderRadius: '50%' }} />}
@@ -423,10 +420,10 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
                 antiMev ? ['Anti-MEV Fee (2%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.02).toFixed(2)] : null,
                 ['Service Fee (1%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.01).toFixed(2)],
                 ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
-              ].filter(Boolean).map(item => (
-                <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
-                  <span style={{ color: C.muted }}>{item[0]}</span>
-                  <span style={{ color: C.text }}>{item[1]}</span>
+              ].filter(Boolean).map(([label, value]) => (
+                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
+                  <span style={{ color: C.muted }}>{label}</span>
+                  <span style={{ color: C.text }}>{value}</span>
                 </div>
               ))}
             </div>
@@ -521,7 +518,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
   const chartColor = priceChange >= 0 ? C.green : C.red;
 
   return (
-    <div style={{ maxWidth: 640, margin: '0 auto' }}>
+    <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
       <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600, padding: 0 }}>
         Back to Markets
       </button>
