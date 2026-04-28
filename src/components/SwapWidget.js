@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAccount } from 'wagmi';
-import { useConnectModal, ConnectButton } from '@rainbow-me/rainbowkit';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { VersionedTransaction } from '@solana/web3.js';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 const JUPITER_REFERRAL_KEY = 'E2yVdtMKBX8c7nNwks2mJ8gXpVrEMf2gkrXLz5oaDzQX';
@@ -12,7 +12,7 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
- 
+
 const FALLBACK_TOKENS = [
   { mint: 'So11111111111111111111111111111111111111112', symbol: 'SOL', name: 'Solana', decimals: 9 },
   { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC', name: 'USD Coin', decimals: 6 },
@@ -200,9 +200,9 @@ function TokenSelect({ selected, onSelect, tokens }) {
   );
 }
 
-export default function SwapWidget({ coins, initialFromToken, initialToToken, onTokensUsed, onGoToToken }) {
-  const { address, isConnected } = useAccount();
-  const { openConnectModal } = useConnectModal();
+export default function SwapWidget({ coins, initialFromToken, initialToToken, onTokensUsed, onGoToToken, onConnectWallet }) {
+  const { publicKey, connected, sendTransaction } = useWallet();
+  const { connection } = useConnection();
   const [tokens, setTokens] = useState(FALLBACK_TOKENS);
   const [tokensLoading, setTokensLoading] = useState(true);
   const [fromToken, setFromToken] = useState(initialFromToken || FALLBACK_TOKENS[0]);
@@ -299,8 +299,8 @@ export default function SwapWidget({ coins, initialFromToken, initialToToken, on
   }, [selectedChart]);
 
   var executeSwap = async function() {
-    if (!isConnected || !address) {
-      if (openConnectModal) openConnectModal();
+    if (!connected || !publicKey) {
+      if (onConnectWallet) onConnectWallet();
       return;
     }
     if (!quote) return;
@@ -311,7 +311,7 @@ export default function SwapWidget({ coins, initialFromToken, initialToToken, on
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           quoteResponse: quote.quoteResponse,
-          userPublicKey: address,
+          userPublicKey: publicKey.toString(),
           wrapAndUnwrapSol: true,
           feeAccount: JUPITER_REFERRAL_KEY,
           destinationTokenAccount: useCustomAddress && customAddress ? customAddress : undefined,
@@ -319,7 +319,11 @@ export default function SwapWidget({ coins, initialFromToken, initialToToken, on
       });
       var swapData = await swapRes.json();
       if (swapData.swapTransaction) {
-        setSwapTx('pending');
+        var txBuf = Buffer.from(swapData.swapTransaction, 'base64');
+        var tx = VersionedTransaction.deserialize(txBuf);
+        var sig = await sendTransaction(tx, connection);
+        await connection.confirmTransaction(sig, 'confirmed');
+        setSwapTx(sig);
         setSwapStatus('success');
         setFromAmt('');
         setQuote(null);
@@ -454,7 +458,7 @@ export default function SwapWidget({ coins, initialFromToken, initialToToken, on
           </div>
         )}
 
-        {isConnected ? (
+        {connected ? (
           <button onClick={executeSwap}
             disabled={!fromAmt || parseFloat(fromAmt) <= 0 || !quote || swapStatus === 'loading'}
             style={{
@@ -475,20 +479,21 @@ export default function SwapWidget({ coins, initialFromToken, initialToToken, on
               : 'Swap ' + (fromToken ? fromToken.symbol : '') + ' → ' + (toToken ? toToken.symbol : '')}
           </button>
         ) : (
-          <button onClick={openConnectModal} style={{
+          <button onClick={onConnectWallet} style={{
             width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
-            background: 'linear-gradient(135deg,#00e5ff,#0055ff)',
-            color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
+            background: 'linear-gradient(135deg,#9945ff,#7c3aed)',
+            color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
             cursor: 'pointer',
           }}>
-            Connect Wallet to Swap
+            Connect Phantom to Swap
           </button>
         )}
 
         {swapTx && swapStatus === 'success' && (
-          <div style={{ textAlign: 'center', marginTop: 10, fontSize: 12, color: C.green }}>
-            Swap submitted successfully!
-          </div>
+          <a href={'https://solscan.io/tx/' + swapTx} target="_blank" rel="noreferrer"
+            style={{ display: 'block', textAlign: 'center', marginTop: 10, fontSize: 12, color: C.accent }}>
+            View on Solscan ↗
+          </a>
         )}
 
         <p style={{ textAlign: 'center', fontSize: 10, color: C.muted2, marginTop: 10 }}>
