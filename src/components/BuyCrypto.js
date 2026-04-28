@@ -7,8 +7,11 @@ const C = {
 };
 
 export default function BuyCrypto({ walletAddress, selectedCoinSymbol }) {
-  var coin = selectedCoinSymbol ? selectedCoinSymbol.toLowerCase() : 'sol';
-  var url = 'https://buy.moonpay.com?defaultCurrencyCode=' + coin + '&colorCode=%2300e5ff&theme=dark';
+  var coin = selectedCoinSymbol ? selectedCoinSymbol.toUpperCase() : 'SOL';
+  var url = 'https://global.transak.com' +
+    '?defaultCryptoCurrency=' + coin +
+    '&themeColor=00e5ff' +
+    '&colorMode=DARK';
   if (walletAddress) url += '&walletAddress=' + encodeURIComponent(walletAddress);
 
   return (
@@ -19,15 +22,13 @@ export default function BuyCrypto({ walletAddress, selectedCoinSymbol }) {
           Visa, Mastercard, Apple Pay, Google Pay, Bank Transfer
         </p>
       </div>
-
       <div style={{
-        background: C.card,
-        border: '1px solid ' + C.border,
         borderRadius: 18,
         overflow: 'hidden',
+        border: '1px solid ' + C.border,
         height: 'calc(100vh - 200px)',
-        minHeight: 560,
-        position: 'relative',
+        minHeight: 600,
+        background: C.card,
       }}>
         <iframe
           src={url}
@@ -35,8 +36,7 @@ export default function BuyCrypto({ walletAddress, selectedCoinSymbol }) {
           width="100%"
           height="100%"
           style={{ border: 'none', display: 'block' }}
-          allow="accelerometer; autoplay; camera; gyroscope; payment; microphone"
-          sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-top-navigation-by-user-activation"
+          allow="accelerometer; autoplay; camera; gyroscope; payment; microphone; clipboard-read; clipboard-write"
         />
       </div>
     </div>
