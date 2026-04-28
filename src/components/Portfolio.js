@@ -19,8 +19,8 @@ function fmt(n, d) {
   return '$' + n.toFixed(6);
 }
 
-export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWallet }) {
-  const { publicKey, connected } = useWallet();
+export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWallet, isConnected, isSolanaConnected, walletAddress }) {
+  const { publicKey } = useWallet();
   const { connection } = useConnection();
   const [balances, setBalances] = useState([]);
   const [solBalance, setSolBalance] = useState(0);
@@ -86,30 +86,28 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
 
       var solPrice = getPrice('SOL');
       var total = solAmt * solPrice;
-      holdings.forEach(function(h) {
-        total += h.uiAmount * getPrice(h.symbol);
-      });
+      holdings.forEach(function(h) { total += h.uiAmount * getPrice(h.symbol); });
       setTotalValue(total);
 
     } catch (e) {
       console.error('Balance fetch error:', e);
-      setError('Failed to load balances. Check your RPC connection.');
+      setError('Failed to load balances. Check your connection.');
     }
     setLoading(false);
   };
 
   useEffect(function() {
-    if (connected && publicKey) {
+    if (isSolanaConnected && publicKey) {
       fetchBalances();
       var interval = setInterval(fetchBalances, 30000);
       return function() { clearInterval(interval); };
     }
-  }, [connected, publicKey]);
+  }, [isSolanaConnected, publicKey]);
 
   var solPrice = getPrice('SOL');
   var solValue = solBalance * solPrice;
 
-  if (!connected) {
+  if (!isConnected) {
     return (
       <div style={{ maxWidth: 520, margin: '0 auto' }}>
         <div style={{ marginBottom: 20 }}>
@@ -120,14 +118,33 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
           <div style={{ fontSize: 48, marginBottom: 16 }}>👛</div>
           <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Connect Your Wallet</h2>
           <p style={{ color: C.muted, fontSize: 13, maxWidth: 300, margin: '0 auto 24px', lineHeight: 1.6 }}>
-            Connect your wallet to view real-time balances for all your tokens.
+            Connect your wallet to view real-time balances.
           </p>
           <button onClick={onConnectWallet} style={{
-            background: 'linear-gradient(135deg,#9945ff,#7c3aed)',
-            border: 'none', borderRadius: 10, padding: '12px 28px',
-            color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer',
-            fontFamily: 'Syne, sans-serif',
+            background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10,
+            padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif',
           }}>Connect Wallet</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isSolanaConnected) {
+    return (
+      <div style={{ maxWidth: 520, margin: '0 auto' }}>
+        <div style={{ marginBottom: 20 }}>
+          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
+        </div>
+        <div style={{ textAlign: 'center', padding: '60px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>⚠️</div>
+          <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Solana Wallet Required</h2>
+          <p style={{ color: C.muted, fontSize: 13, maxWidth: 300, margin: '0 auto 24px', lineHeight: 1.6 }}>
+            Please connect Phantom to view your Solana token balances.
+          </p>
+          <button onClick={onConnectWallet} style={{
+            background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10,
+            padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif',
+          }}>Connect Phantom</button>
         </div>
       </div>
     );
@@ -148,10 +165,9 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
           }}>↻ Refresh</button>
           {onSend && (
             <button onClick={onSend} style={{
-              background: 'linear-gradient(135deg,#00e5ff,#0055ff)',
-              border: 'none', borderRadius: 8, padding: '7px 14px',
-              color: '#03060f', fontSize: 12, cursor: 'pointer',
-              fontFamily: 'Syne, sans-serif', fontWeight: 700,
+              background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none',
+              borderRadius: 8, padding: '7px 14px', color: '#03060f',
+              fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700,
             }}>Send Tokens</button>
           )}
         </div>
@@ -178,7 +194,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 10, color: C.muted, marginBottom: 2, fontWeight: 700 }}>CONNECTED WALLET</div>
           <div style={{ fontSize: 11, color: C.green, fontFamily: 'JetBrains Mono, monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-            {publicKey ? publicKey.toString() : ''}
+            {walletAddress || ''}
           </div>
         </div>
       </div>
@@ -226,13 +242,9 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
           </div>
 
           {loading ? (
-            <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>
-              Loading balances...
-            </div>
+            <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>Loading balances...</div>
           ) : balances.length === 0 ? (
-            <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>
-              No other token balances found
-            </div>
+            <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>No other token balances found</div>
           ) : (
             balances.map(function(token) {
               var price = getPrice(token.symbol);
@@ -257,9 +269,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
                     </div>
                   </div>
                   <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>
-                    {token.uiAmount >= 1000
-                      ? token.uiAmount.toLocaleString('en-US', { maximumFractionDigits: 2 })
-                      : token.uiAmount.toFixed(4)}
+                    {token.uiAmount >= 1000 ? token.uiAmount.toLocaleString('en-US', { maximumFractionDigits: 2 }) : token.uiAmount.toFixed(4)}
                   </div>
                   <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{price > 0 ? fmt(price) : '--'}</div>
                   <div style={{ textAlign: 'right', color: value > 0.01 ? C.green : C.muted, fontSize: 12, fontWeight: value > 0.01 ? 600 : 400 }}>
@@ -279,13 +289,9 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
           <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 280, margin: '0 auto 20px' }}>
             View your full transaction history on Solscan.
           </p>
-          {publicKey && (
-            <a href={'https://solscan.io/account/' + publicKey.toString()} target="_blank" rel="noreferrer"
-              style={{
-                display: 'inline-block', padding: '10px 24px', borderRadius: 10,
-                background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)',
-                color: C.accent, fontSize: 13, fontWeight: 600, textDecoration: 'none',
-              }}>
+          {walletAddress && (
+            <a href={'https://solscan.io/account/' + walletAddress} target="_blank" rel="noreferrer"
+              style={{ display: 'inline-block', padding: '10px 24px', borderRadius: 10, background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)', color: C.accent, fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>
               View on Solscan ↗
             </a>
           )}
