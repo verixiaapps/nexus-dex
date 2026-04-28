@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { useAccount } from 'wagmi';
+import { useAccount, useDisconnect } from 'wagmi';
 import { useWeb3Modal } from '@web3modal/wagmi/react';
 import SwapWidget from './components/SwapWidget';
 import Markets from './components/Markets';
@@ -8,7 +8,7 @@ import BuyCrypto from './components/BuyCrypto';
 import Portfolio from './components/Portfolio';
 import TokenDetail from './components/TokenDetail';
 import Send from './components/Send';
- 
+
 const C = {
   bg: '#03060f',
   card: '#080d1a',
@@ -21,8 +21,10 @@ const C = {
 };
 
 function WalletModal({ open, onClose }) {
-  const { select, wallets } = useWallet();
+  const { select, wallets, connect, disconnect, connected, publicKey } = useWallet();
   const { open: openWeb3Modal } = useWeb3Modal();
+  const { isConnected: evmConnected } = useAccount();
+  const { disconnect: evmDisconnect } = useDisconnect();
 
   var phantomWallet = wallets.find(function(w) {
     return w.adapter.name === 'Phantom';
@@ -50,78 +52,131 @@ function WalletModal({ open, onClose }) {
         <div style={{ width: 40, height: 4, background: '#2e3f5e', borderRadius: 2, margin: '0 auto 24px' }} />
 
         <div style={{ textAlign: 'center', marginBottom: 28 }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 6 }}>Connect Wallet</div>
-          <div style={{ fontSize: 13, color: '#586994' }}>Choose how to connect</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 6 }}>
+            {connected || evmConnected ? 'Wallet Connected' : 'Connect Wallet'}
+          </div>
+          <div style={{ fontSize: 13, color: '#586994' }}>
+            {connected && publicKey
+              ? 'Phantom: ' + publicKey.toString().slice(0, 8) + '...' + publicKey.toString().slice(-8)
+              : evmConnected ? 'Connected via WalletConnect'
+              : 'Choose how to connect'}
+          </div>
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 400, margin: '0 auto' }}>
-
-          <button
-            onClick={function() {
-              if (phantomWallet) {
-                select(phantomWallet.adapter.name);
-                onClose();
-              } else {
-                window.open('https://phantom.app', '_blank');
-                onClose();
-              }
-            }}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 16,
-              background: 'rgba(153,69,255,.1)',
-              border: '1px solid rgba(153,69,255,.3)',
-              borderRadius: 16, padding: '18px 24px',
-              cursor: 'pointer', width: '100%',
-            }}
-          >
+        {(connected || evmConnected) ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 400, margin: '0 auto' }}>
             <div style={{
-              width: 48, height: 48, borderRadius: 12, flexShrink: 0,
-              background: 'linear-gradient(135deg,#9945ff,#7c3aed)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              fontSize: 26,
-            }}>👻</div>
-            <div style={{ textAlign: 'left', flex: 1 }}>
-              <div style={{ color: '#fff', fontWeight: 700, fontSize: 17 }}>Phantom</div>
-              <div style={{ color: '#9945ff', fontSize: 13, marginTop: 2 }}>
-                {phantomWallet ? 'Solana wallet — detected' : 'Solana wallet — tap to install'}
+              background: 'rgba(0,255,163,.08)', border: '1px solid rgba(0,255,163,.2)',
+              borderRadius: 16, padding: '16px 24px', textAlign: 'center',
+            }}>
+              <div style={{ color: '#00ffa3', fontWeight: 700, fontSize: 15, marginBottom: 4 }}>✓ Wallet Connected</div>
+              <div style={{ color: '#586994', fontSize: 12 }}>
+                {connected && publicKey ? publicKey.toString().slice(0, 16) + '...' : 'EVM wallet connected'}
               </div>
             </div>
-            <div style={{ color: '#9945ff', fontSize: 20 }}>→</div>
-          </button>
 
-          <button
-            onClick={function() {
-              onClose();
-              openWeb3Modal();
-            }}
-            style={{
-              display: 'flex', alignItems: 'center', gap: 16,
-              background: 'rgba(59,153,252,.1)',
-              border: '1px solid rgba(59,153,252,.3)',
-              borderRadius: 16, padding: '18px 24px',
-              cursor: 'pointer', width: '100%',
-            }}
-          >
-            <div style={{
-              width: 48, height: 48, borderRadius: 12, flexShrink: 0,
-              background: 'linear-gradient(135deg,#3b99fc,#0066cc)',
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>
-              <img
-                src="https://avatars.githubusercontent.com/u/37784886"
-                alt="WalletConnect"
-                style={{ width: 32, height: 32, borderRadius: 8 }}
-                onError={function(e) { e.target.style.display = 'none'; }}
-              />
-            </div>
-            <div style={{ textAlign: 'left', flex: 1 }}>
-              <div style={{ color: '#fff', fontWeight: 700, fontSize: 17 }}>WalletConnect</div>
-              <div style={{ color: '#3b99fc', fontSize: 13, marginTop: 2 }}>All wallets — stay on site</div>
-            </div>
-            <div style={{ color: '#3b99fc', fontSize: 20 }}>→</div>
-          </button>
+            <button
+              onClick={async function() {
+                try {
+                  if (connected) await disconnect();
+                  if (evmConnected) evmDisconnect();
+                  onClose();
+                } catch (e) {
+                  console.error('Disconnect error:', e);
+                }
+              }}
+              style={{
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                background: 'rgba(255,59,107,.1)',
+                border: '1px solid rgba(255,59,107,.3)',
+                borderRadius: 16, padding: '16px 24px',
+                cursor: 'pointer', width: '100%',
+                color: '#ff3b6b', fontWeight: 700, fontSize: 15,
+                fontFamily: 'Syne, sans-serif',
+              }}
+            >
+              Disconnect Wallet
+            </button>
 
-        </div>
+            <button onClick={onClose} style={{
+              background: 'transparent', border: '1px solid rgba(255,255,255,.1)',
+              borderRadius: 16, padding: '14px 24px', cursor: 'pointer',
+              color: '#586994', fontSize: 14, fontFamily: 'Syne, sans-serif',
+            }}>Close</button>
+          </div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 400, margin: '0 auto' }}>
+            <button
+              onClick={async function() {
+                try {
+                  if (phantomWallet) {
+                    await select(phantomWallet.adapter.name);
+                    await connect();
+                    onClose();
+                  } else {
+                    window.open('https://phantom.app', '_blank');
+                    onClose();
+                  }
+                } catch (e) {
+                  console.error('Phantom connect error:', e);
+                }
+              }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 16,
+                background: 'rgba(153,69,255,.1)',
+                border: '1px solid rgba(153,69,255,.3)',
+                borderRadius: 16, padding: '18px 24px',
+                cursor: 'pointer', width: '100%',
+              }}
+            >
+              <div style={{
+                width: 48, height: 48, borderRadius: 12, flexShrink: 0,
+                background: 'linear-gradient(135deg,#9945ff,#7c3aed)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontSize: 26,
+              }}>👻</div>
+              <div style={{ textAlign: 'left', flex: 1 }}>
+                <div style={{ color: '#fff', fontWeight: 700, fontSize: 17 }}>Phantom</div>
+                <div style={{ color: '#9945ff', fontSize: 13, marginTop: 2 }}>
+                  {phantomWallet ? 'Solana wallet — detected' : 'Tap to install Phantom'}
+                </div>
+              </div>
+              <div style={{ color: '#9945ff', fontSize: 20 }}>→</div>
+            </button>
+
+            <button
+              onClick={function() {
+                onClose();
+                setTimeout(function() { openWeb3Modal(); }, 100);
+              }}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 16,
+                background: 'rgba(59,153,252,.1)',
+                border: '1px solid rgba(59,153,252,.3)',
+                borderRadius: 16, padding: '18px 24px',
+                cursor: 'pointer', width: '100%',
+              }}
+            >
+              <div style={{
+                width: 48, height: 48, borderRadius: 12, flexShrink: 0,
+                background: 'linear-gradient(135deg,#3b99fc,#0066cc)',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+              }}>
+                <img
+                  src="https://avatars.githubusercontent.com/u/37784886"
+                  alt="WalletConnect"
+                  style={{ width: 32, height: 32, borderRadius: 8 }}
+                  onError={function(e) { e.target.style.display = 'none'; }}
+                />
+              </div>
+              <div style={{ textAlign: 'left', flex: 1 }}>
+                <div style={{ color: '#fff', fontWeight: 700, fontSize: 17 }}>WalletConnect</div>
+                <div style={{ color: '#3b99fc', fontSize: 13, marginTop: 2 }}>All wallets — stay on site</div>
+              </div>
+              <div style={{ color: '#3b99fc', fontSize: 20 }}>→</div>
+            </button>
+          </div>
+        )}
       </div>
     </>
   );
@@ -152,7 +207,7 @@ export default function App() {
       try {
         var controller = new AbortController();
         var timeout = setTimeout(function() { controller.abort(); }, 20000);
-        var res = await fetch('https://token.jup.ag/all', { signal: controller.signal });
+        var res = await fetch('https://tokens.jup.ag/tokens?tags=verified', { signal: controller.signal });
         clearTimeout(timeout);
         var data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
@@ -168,7 +223,7 @@ export default function App() {
           setJupiterTokens(mapped);
         }
       } catch (e) {
-        console.log('Jupiter token fetch failed');
+        console.log('Jupiter token fetch failed:', e);
       }
       setJupiterLoading(false);
     };
