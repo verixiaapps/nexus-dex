@@ -27,8 +27,7 @@ function SparkLine({ data, positive }) {
   var min = Math.min.apply(null, data);
   var max = Math.max.apply(null, data);
   var range = max - min || 1;
-  var w = 80;
-  var h = 32;
+  var w = 80, h = 32;
   var pts = data.map(function(v, i) {
     var x = (i / (data.length - 1)) * w;
     var y = h - ((v - min) / range) * h;
@@ -36,14 +35,9 @@ function SparkLine({ data, positive }) {
   }).join(' ');
   return (
     <svg width={w} height={h} style={{ flexShrink: 0 }}>
-      <polyline
-        points={pts}
-        fill="none"
+      <polyline points={pts} fill="none"
         stroke={positive ? '#00ffa3' : '#ff3b6b'}
-        strokeWidth="1.5"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
+        strokeWidth="1.5" strokeLinejoin="round" strokeLinecap="round" />
     </svg>
   );
 }
@@ -56,8 +50,9 @@ export default function Markets({ coins, loading, onSelectCoin }) {
 
   var filtered = coins.filter(function(c) {
     if (!q) return true;
-    return (c.name && c.name.toLowerCase().includes(q.toLowerCase())) ||
-      (c.symbol && c.symbol.toLowerCase().includes(q.toLowerCase()));
+    var ql = q.toLowerCase();
+    return (c.name && c.name.toLowerCase().includes(ql)) ||
+      (c.symbol && c.symbol.toLowerCase().includes(ql));
   });
 
   var sorted = filtered.slice().sort(function(a, b) {
@@ -71,7 +66,6 @@ export default function Markets({ coins, loading, onSelectCoin }) {
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto' }}>
-
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Live Markets</h1>
@@ -120,15 +114,15 @@ export default function Markets({ coins, loading, onSelectCoin }) {
 
           {sorted.map(function(c, i) {
             var positive = (c.price_change_percentage_24h || 0) >= 0;
-            var sparkData = c.sparkline_in_7d ? c.sparkline_in_7d.price : [];
+            var sparkData = c.sparkline_in_7d ? c.sparkline_in_7d.price.filter(function(_, i) { return i % 8 === 0; }) : [];
 
             if (isMobile) {
               return (
                 <div key={c.id}
                   onClick={function() { onSelectCoin && onSelectCoin(c); }}
                   style={{
-                    display: 'flex', alignItems: 'center', gap: 12,
-                    padding: '14px 16px',
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '13px 16px',
                     borderBottom: '1px solid rgba(255,255,255,.025)',
                     cursor: 'pointer',
                   }}
@@ -153,7 +147,7 @@ export default function Markets({ coins, loading, onSelectCoin }) {
                       {pct(c.price_change_percentage_24h)}
                     </div>
                   </div>
-                  <SparkLine data={sparkData.filter(function(_, i) { return i % 8 === 0; })} positive={positive} />
+                  <SparkLine data={sparkData} positive={positive} />
                 </div>
               );
             }
@@ -200,7 +194,7 @@ export default function Markets({ coins, loading, onSelectCoin }) {
                 </div>
 
                 <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-                  <SparkLine data={sparkData.filter(function(_, i) { return i % 8 === 0; })} positive={positive} />
+                  <SparkLine data={sparkData} positive={positive} />
                 </div>
               </div>
             );
