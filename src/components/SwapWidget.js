@@ -3,7 +3,7 @@ import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { VersionedTransaction, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
- 
+
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
@@ -68,13 +68,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
         var res = await fetch('https://lite-api.jup.ag/tokens/v1/token/' + addr);
         if (res.ok) {
           var data = await res.json();
-          setContractToken({
-            mint: data.address,
-            symbol: data.symbol,
-            name: data.name,
-            decimals: data.decimals,
-            logoURI: data.logoURI,
-          });
+          setContractToken({ mint: data.address, symbol: data.symbol, name: data.name, decimals: data.decimals, logoURI: data.logoURI });
         } else {
           setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6 });
         }
@@ -88,22 +82,17 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
   useEffect(function() {
     if (!q) { setSearchResults([]); return; }
     var ql = q.toLowerCase();
-    var results = allTokens.filter(function(t) {
+    setSearchResults(allTokens.filter(function(t) {
       return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
         (t.name && t.name.toLowerCase().includes(ql)) ||
         (t.mint && t.mint.toLowerCase().includes(ql));
-    }).slice(0, 100);
-    setSearchResults(results);
+    }).slice(0, 100));
   }, [q, allTokens]);
 
   var displayTokens = q ? searchResults : POPULAR_TOKENS;
 
   var close = function() {
-    setOpen(false);
-    setQ('');
-    setContractAddr('');
-    setContractToken(null);
-    setSearchResults([]);
+    setOpen(false); setQ(''); setContractAddr(''); setContractToken(null); setSearchResults([]);
   };
 
   return (
@@ -114,8 +103,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
         borderRadius: 10, padding: '8px 10px', cursor: 'pointer', minWidth: 90,
       }}>
         {selected && selected.logoURI && (
-          <img src={selected.logoURI} alt={selected.symbol}
-            style={{ width: 20, height: 20, borderRadius: '50%' }}
+          <img src={selected.logoURI} alt={selected.symbol} style={{ width: 20, height: 20, borderRadius: '50%' }}
             onError={function(e) { e.target.style.display = 'none'; }} />
         )}
         {selected && !selected.logoURI && (
@@ -131,10 +119,8 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
         <>
           <div onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 299, background: 'rgba(0,0,0,.75)' }} />
           <div style={{
-            position: 'fixed', top: '50%', left: '50%',
-            transform: 'translate(-50%,-50%)',
-            zIndex: 300, background: C.card,
-            border: '1px solid ' + C.borderHi,
+            position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
+            zIndex: 300, background: C.card, border: '1px solid ' + C.borderHi,
             borderRadius: 18, width: '94vw', maxWidth: 420,
             maxHeight: '85vh', display: 'flex', flexDirection: 'column',
             boxShadow: '0 24px 80px rgba(0,0,0,.95)',
@@ -147,38 +133,21 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
                 </div>
                 <button onClick={close} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: 0 }}>×</button>
               </div>
-              <input
-                autoFocus value={q}
-                onChange={function(e) { setQ(e.target.value); }}
+              <input autoFocus value={q} onChange={function(e) { setQ(e.target.value); }}
                 placeholder="Search by name or symbol..."
-                style={{
-                  width: '100%', background: C.card2, border: '1px solid ' + C.border,
-                  borderRadius: 8, padding: '10px 12px', color: C.text,
-                  fontSize: 13, outline: 'none', fontFamily: 'Syne, sans-serif', marginBottom: 8,
-                }}
+                style={{ width: '100%', background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, padding: '10px 12px', color: C.text, fontSize: 13, outline: 'none', fontFamily: 'Syne, sans-serif', marginBottom: 8 }}
               />
-              <input
-                value={contractAddr}
-                onChange={function(e) { setContractAddr(e.target.value); }}
+              <input value={contractAddr} onChange={function(e) { setContractAddr(e.target.value); }}
                 onBlur={function() { if (contractAddr) lookupByAddress(contractAddr); }}
                 placeholder="Or paste any Solana contract address..."
-                style={{
-                  width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)',
-                  borderRadius: 8, padding: '10px 12px', color: C.accent,
-                  fontSize: 12, outline: 'none', fontFamily: 'JetBrains Mono, monospace',
-                }}
+                style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 8, padding: '10px 12px', color: C.accent, fontSize: 12, outline: 'none', fontFamily: 'JetBrains Mono, monospace' }}
               />
               {contractLoading && <div style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>Looking up token...</div>}
               {contractToken && !contractLoading && (
                 <div onClick={function() { onSelect(contractToken); close(); }}
-                  style={{
-                    marginTop: 8, padding: '10px 12px',
-                    background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.3)',
-                    borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
-                  }}>
+                  style={{ marginTop: 8, padding: '10px 12px', background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.3)', borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}>
                   {contractToken.logoURI ? (
-                    <img src={contractToken.logoURI} alt={contractToken.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }}
-                      onError={function(e) { e.target.style.display = 'none'; }} />
+                    <img src={contractToken.logoURI} alt={contractToken.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} onError={function(e) { e.target.style.display = 'none'; }} />
                   ) : (
                     <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>
                       {contractToken.symbol && contractToken.symbol.charAt(0)}
@@ -192,30 +161,22 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
                 </div>
               )}
             </div>
-
             <div style={{ overflowY: 'auto', flex: 1 }}>
-              {!q && (
-                <div style={{ padding: '8px 16px 4px', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
-                  POPULAR TOKENS
-                </div>
-              )}
+              {!q && <div style={{ padding: '8px 16px 4px', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>POPULAR TOKENS</div>}
               {q && searchResults.length === 0 && (
                 <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>
-                  No tokens found.<br />
-                  <span style={{ fontSize: 11, marginTop: 4, display: 'block' }}>Paste the contract address above to find any token.</span>
+                  No tokens found.<br /><span style={{ fontSize: 11, marginTop: 4, display: 'block' }}>Paste the contract address above.</span>
                 </div>
               )}
               {displayTokens.map(function(t) {
                 return (
-                  <div key={t.mint}
-                    onClick={function() { onSelect(t); close(); }}
+                  <div key={t.mint} onClick={function() { onSelect(t); close(); }}
                     style={{ padding: '11px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid rgba(255,255,255,.03)' }}
                     onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.05)'; }}
                     onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
                   >
                     {t.logoURI ? (
-                      <img src={t.logoURI} alt={t.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }}
-                        onError={function(e) { e.target.style.display = 'none'; }} />
+                      <img src={t.logoURI} alt={t.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} />
                     ) : (
                       <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>
                         {t.symbol && t.symbol.charAt(0)}
@@ -239,8 +200,8 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
   );
 }
 
-export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoToToken, onConnectWallet }) {
-  const { publicKey, connected, sendTransaction } = useWallet();
+export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoToToken, onConnectWallet, isConnected, isSolanaConnected, walletAddress }) {
+  const { publicKey, sendTransaction } = useWallet();
   const { connection } = useConnection();
 
   const [fromToken, setFromToken] = useState(POPULAR_TOKENS[0]);
@@ -270,20 +231,13 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
 
   var fetchQuote = useCallback(async function() {
     if (!fromAmt || parseFloat(fromAmt) <= 0 || !fromToken || !toToken) {
-      setQuote(null);
-      setQuoteError('');
-      return;
+      setQuote(null); setQuoteError(''); return;
     }
-    setQuoteLoading(true);
-    setQuote(null);
-    setQuoteError('');
+    setQuoteLoading(true); setQuote(null); setQuoteError('');
     try {
       var amount = Math.round(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals));
-      var url = 'https://api.jup.ag/swap/v1/quote' +
-        '?inputMint=' + fromToken.mint +
-        '&outputMint=' + toToken.mint +
-        '&amount=' + amount +
-        '&slippageBps=' + Math.round(slip * 100);
+      var url = 'https://api.jup.ag/swap/v1/quote?inputMint=' + fromToken.mint +
+        '&outputMint=' + toToken.mint + '&amount=' + amount + '&slippageBps=' + Math.round(slip * 100);
       var res = await fetch(url);
       var data = await res.json();
       if (data && data.outAmount) {
@@ -293,15 +247,12 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           priceImpactPct: data.priceImpactPct,
           quoteResponse: data,
         });
-      } else if (data.error) {
-        setQuoteError(data.error);
-        setQuote(null);
       } else {
+        setQuoteError(data.error || 'No route found for this pair');
         setQuote(null);
       }
     } catch (e) {
-      console.error('Quote error:', e);
-      setQuoteError('Failed to get quote');
+      setQuoteError('Failed to get quote — check connection');
       setQuote(null);
     }
     setQuoteLoading(false);
@@ -317,23 +268,19 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       try {
         var res = await fetch('https://api.coingecko.com/api/v3/coins/' + selectedChart + '/market_chart?vs_currency=usd&days=7');
         var data = await res.json();
-        var pts = (data.prices || []).filter(function(_, i) { return i % 6 === 0; }).map(function(item) {
+        setChartData((data.prices || []).filter(function(_, i) { return i % 6 === 0; }).map(function(item) {
           return { t: new Date(item[0]).toLocaleDateString('en', { month: 'short', day: 'numeric' }), p: +item[1].toFixed(4) };
-        });
-        setChartData(pts);
+        }));
       } catch (e) {}
     };
     fetchChart();
   }, [selectedChart]);
 
   var executeSwap = async function() {
-    if (!connected || !publicKey) {
-      if (onConnectWallet) onConnectWallet();
-      return;
-    }
-    if (!quote) return;
-    setSwapStatus('loading');
-    setSwapError('');
+    if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
+    if (!isSolanaConnected) { setSwapError('Please connect a Solana wallet to swap'); return; }
+    if (!quote || !publicKey) return;
+    setSwapStatus('loading'); setSwapError('');
     try {
       var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
         method: 'POST',
@@ -355,36 +302,24 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       var sig = await sendTransaction(tx, connection);
       await connection.confirmTransaction(sig, 'confirmed');
 
-      // Collect fee in SOL
       try {
         var fromCoin = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
         var solCoin = coins.find(function(c) { return c.id === 'solana'; });
         var solPrice = solCoin ? solCoin.current_price : 100;
         var fromPriceVal = fromCoin ? fromCoin.current_price : 0;
-        var amountUsd = parseFloat(fromAmt) * fromPriceVal;
-        var feeSol = amountUsd > 0 ? (amountUsd * totalFee) / solPrice : parseFloat(fromAmt) * totalFee;
+        var feeSol = fromPriceVal > 0 ? (parseFloat(fromAmt) * fromPriceVal * totalFee) / solPrice : parseFloat(fromAmt) * totalFee;
         if (feeSol > 0.000001) {
-          var feeLamports = Math.round(feeSol * LAMPORTS_PER_SOL);
-          var feeTx = new Transaction().add(
-            SystemProgram.transfer({
-              fromPubkey: publicKey,
-              toPubkey: new PublicKey(FEE_WALLET),
-              lamports: feeLamports,
-            })
-          );
+          var feeTx = new Transaction().add(SystemProgram.transfer({
+            fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: Math.round(feeSol * LAMPORTS_PER_SOL),
+          }));
           var { blockhash } = await connection.getLatestBlockhash();
           feeTx.recentBlockhash = blockhash;
           feeTx.feePayer = publicKey;
           await sendTransaction(feeTx, connection);
         }
-      } catch (feeErr) {
-        console.log('Fee tx failed silently:', feeErr);
-      }
+      } catch (feeErr) { console.log('Fee tx failed silently:', feeErr); }
 
-      setSwapTx(sig);
-      setSwapStatus('success');
-      setFromAmt('');
-      setQuote(null);
+      setSwapTx(sig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
       setTimeout(function() { setSwapStatus('idle'); setSwapTx(null); }, 5000);
     } catch (e) {
       console.error('Swap error:', e);
@@ -395,11 +330,8 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   };
 
   var flipTokens = function() {
-    var tmp = fromToken;
-    setFromToken(toToken);
-    setToToken(tmp);
-    setFromAmt(quote ? quote.outAmountDisplay : '');
-    setQuote(null);
+    var tmp = fromToken; setFromToken(toToken); setToToken(tmp);
+    setFromAmt(quote ? quote.outAmountDisplay : ''); setQuote(null);
   };
 
   var fromCoin = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
@@ -418,7 +350,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           Jupiter routing · {(totalFee * 100).toFixed(0)}% fee ·
           {jupiterLoading
             ? <span style={{ color: C.accent }}> Loading tokens...</span>
-            : <span style={{ color: C.green }}> {jupiterTokens.length > 0 ? jupiterTokens.length.toLocaleString() : POPULAR_TOKENS.length} tokens</span>
+            : <span style={{ color: C.green }}> {jupiterTokens && jupiterTokens.length > 0 ? jupiterTokens.length.toLocaleString() : POPULAR_TOKENS.length} tokens</span>
           }
         </p>
       </div>
@@ -441,13 +373,10 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         </div>
 
         <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border, marginBottom: 4 }}>
-          <div style={{ marginBottom: 8 }}>
-            <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU PAY</span>
-          </div>
+          <div style={{ marginBottom: 8 }}><span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU PAY</span></div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <TokenSelect jupiterTokens={jupiterTokens} selected={fromToken} onSelect={setFromToken} />
-            <input value={fromAmt}
-              onChange={function(e) { setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }}
+            <input value={fromAmt} onChange={function(e) { setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }}
               placeholder="0.00"
               style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 500, color: '#fff', textAlign: 'right', outline: 'none', minWidth: 0 }}
             />
@@ -466,9 +395,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         </div>
 
         <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border }}>
-          <div style={{ marginBottom: 8 }}>
-            <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU RECEIVE</span>
-          </div>
+          <div style={{ marginBottom: 8 }}><span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU RECEIVE</span></div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <TokenSelect jupiterTokens={jupiterTokens} selected={toToken} onSelect={setToToken} />
             <div style={{ flex: 1, textAlign: 'right', fontSize: 22, fontWeight: 500, minWidth: 0, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>
@@ -496,16 +423,11 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             </div>
             <button onClick={function() { setAntiMev(!antiMev); }} style={{
               width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer',
-              background: antiMev ? C.accent : C.muted2, transition: 'background .2s',
-              position: 'relative', flexShrink: 0,
+              background: antiMev ? C.accent : C.muted2, transition: 'background .2s', position: 'relative', flexShrink: 0,
             }}>
-              <div style={{
-                width: 18, height: 18, borderRadius: '50%', background: '#fff',
-                position: 'absolute', top: 3, left: antiMev ? 23 : 3, transition: 'left .2s',
-              }} />
+              <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: antiMev ? 23 : 3, transition: 'left .2s' }} />
             </button>
           </div>
-
           {quote && fromAmt && (
             <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
               {[
@@ -529,21 +451,13 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
 
         <div style={{ marginTop: 10 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-            <input type="checkbox" checked={useCustomAddress}
-              onChange={function(e) { setUseCustomAddress(e.target.checked); }}
-              style={{ cursor: 'pointer', width: 14, height: 14 }}
-            />
+            <input type="checkbox" checked={useCustomAddress} onChange={function(e) { setUseCustomAddress(e.target.checked); }} style={{ cursor: 'pointer', width: 14, height: 14 }} />
             <span style={{ fontSize: 12, color: C.muted }}>Send to different wallet</span>
           </label>
           {useCustomAddress && (
-            <input value={customAddress}
-              onChange={function(e) { setCustomAddress(e.target.value); }}
+            <input value={customAddress} onChange={function(e) { setCustomAddress(e.target.value); }}
               placeholder="Paste Solana wallet address..."
-              style={{
-                width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)',
-                borderRadius: 10, padding: '10px 12px', color: C.accent,
-                fontFamily: 'JetBrains Mono, monospace', fontSize: 11, outline: 'none', marginTop: 8,
-              }}
+              style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 10, padding: '10px 12px', color: C.accent, fontFamily: 'JetBrains Mono, monospace', fontSize: 11, outline: 'none', marginTop: 8 }}
             />
           )}
         </div>
@@ -554,7 +468,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           </div>
         )}
 
-        {connected ? (
+        {isConnected ? (
           <button onClick={executeSwap}
             disabled={!fromAmt || parseFloat(fromAmt) <= 0 || !quote || swapStatus === 'loading'}
             style={{
@@ -570,6 +484,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             {swapStatus === 'loading' ? 'Confirming...'
               : swapStatus === 'success' ? 'Swap Confirmed!'
               : swapStatus === 'error' ? 'Failed - Try Again'
+              : !isSolanaConnected ? 'Connect Solana Wallet to Swap'
               : !fromAmt ? 'Enter Amount'
               : !quote ? 'Getting Best Route...'
               : 'Swap ' + (fromToken ? fromToken.symbol : '') + ' → ' + (toToken ? toToken.symbol : '')}
@@ -611,7 +526,6 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           );
         })}
       </div>
-
       {chartCoin && (
         <div onClick={function() { if (onGoToToken) onGoToToken(chartCoin); }}
           style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 18, padding: 18, cursor: 'pointer' }}>
@@ -634,7 +548,6 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
               <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Vol: {fmt(chartCoin.total_volume)}</div>
             </div>
           </div>
-
           {chartData.length > 0 ? (
             <ResponsiveContainer width="100%" height={160}>
               <AreaChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
@@ -653,14 +566,8 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           ) : (
             <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 12 }}>Loading chart...</div>
           )}
-
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 6, marginTop: 12 }}>
-            {[
-              ['24H High', fmt(chartCoin.high_24h)],
-              ['24H Low', fmt(chartCoin.low_24h)],
-              ['Market Cap', fmt(chartCoin.market_cap)],
-              ['Volume', fmt(chartCoin.total_volume)],
-            ].map(function(item) {
+            {[['24H High', fmt(chartCoin.high_24h)], ['24H Low', fmt(chartCoin.low_24h)], ['Market Cap', fmt(chartCoin.market_cap)], ['Volume', fmt(chartCoin.total_volume)]].map(function(item) {
               return (
                 <div key={item[0]} style={{ background: '#050912', borderRadius: 8, padding: 8 }}>
                   <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>{item[0]}</div>
@@ -677,15 +584,9 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   return (
     <div>
       {isMobile ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          {swapPanel}
-          {chartPanel}
-        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>{swapPanel}{chartPanel}</div>
       ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 480px) 1fr', gap: 24, alignItems: 'start' }}>
-          {swapPanel}
-          {chartPanel}
-        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 480px) 1fr', gap: 24, alignItems: 'start' }}>{swapPanel}{chartPanel}</div>
       )}
     </div>
   );
