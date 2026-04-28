@@ -7,25 +7,15 @@ const JUPITER_REFERRAL_KEY = 'E2yVdtMKBX8c7nNwks2mJ8gXpVrEMf2gkrXLz5oaDzQX';
 const BASE_FEE_BPS = 400;
 const ANTIMEV_FEE_BPS = 200;
 
+const SOL = { mint: 'So11111111111111111111111111111111111111112', symbol: 'SOL', name: 'Solana', decimals: 9 };
+const USDC = { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC', name: 'USD Coin', decimals: 6 };
+
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
   border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
-
-const FALLBACK_TOKENS = [
-  { mint: 'So11111111111111111111111111111111111111112', symbol: 'SOL', name: 'Solana', decimals: 9 },
-  { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC', name: 'USD Coin', decimals: 6 },
-  { mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', symbol: 'USDT', name: 'Tether', decimals: 6 },
-  { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', symbol: 'JUP', name: 'Jupiter', decimals: 6 },
-  { mint: '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs', symbol: 'ETH', name: 'Ethereum', decimals: 8 },
-  { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', symbol: 'BONK', name: 'Bonk', decimals: 5 },
-  { mint: 'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So', symbol: 'mSOL', name: 'Marinade SOL', decimals: 9 },
-  { mint: '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R', symbol: 'RAY', name: 'Raydium', decimals: 6 },
-  { mint: 'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE', symbol: 'ORCA', name: 'Orca', decimals: 6 },
-  { mint: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3', symbol: 'PYTH', name: 'Pyth', decimals: 6 },
-];
 
 function fmt(n, d) {
   d = d || 2;
@@ -42,7 +32,7 @@ function pct(n) {
   return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 
-function TokenSelect({ selected, onSelect, tokens }) {
+function TokenSelect({ selected, onSelect, tokens, loading }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState('');
   const [contractAddr, setContractAddr] = useState('');
@@ -57,26 +47,36 @@ function TokenSelect({ selected, onSelect, tokens }) {
     if (!isValidAddress(addr)) return;
     setContractLoading(true);
     try {
-      var res = await fetch('https://tokens.jup.ag/token/' + addr);
-      if (res.ok) {
-        var data = await res.json();
-        setContractToken({
-          mint: data.address,
-          symbol: data.symbol,
-          name: data.name,
-          decimals: data.decimals,
-          logoURI: data.logoURI,
-        });
+      var found = tokens.find(function(t) { return t.mint === addr; });
+      if (found) {
+        setContractToken(found);
       } else {
-        var found = tokens.find(function(t) { return t.mint === addr; });
-        if (found) {
-          setContractToken(found);
+        var res = await fetch('https://tokens.jup.ag/token/' + addr);
+        if (res.ok) {
+          var data = await res.json();
+          setContractToken({
+            mint: data.address,
+            symbol: data.symbol,
+            name: data.name,
+            decimals: data.decimals,
+            logoURI: data.logoURI,
+          });
         } else {
-          setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6 });
+          setContractToken({
+            mint: addr,
+            symbol: addr.slice(0, 6) + '...',
+            name: 'Custom Token',
+            decimals: 6,
+          });
         }
       }
     } catch (e) {
-      setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6 });
+      setContractToken({
+        mint: addr,
+        symbol: addr.slice(0, 6) + '...',
+        name: 'Custom Token',
+        decimals: 6,
+      });
     }
     setContractLoading(false);
   };
@@ -109,7 +109,7 @@ function TokenSelect({ selected, onSelect, tokens }) {
             onError={function(e) { e.target.style.display = 'none'; }} />
         )}
         {selected && !selected.logoURI && (
-          <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'rgba(0,229,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, color: C.accent, flexShrink: 0 }}>
+          <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'rgba(0,229,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, color: C.accent }}>
             {selected.symbol && selected.symbol.charAt(0)}
           </div>
         )}
@@ -135,14 +135,17 @@ function TokenSelect({ selected, onSelect, tokens }) {
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 10 }}>
                 <div>
                   <div style={{ color: '#fff', fontWeight: 700, fontSize: 16 }}>Select Token</div>
-                  <div style={{ fontSize: 10, color: C.red, marginTop: 2 }}>Includes unverified tokens — DYOR</div>
+                  <div style={{ fontSize: 10, color: C.red, marginTop: 2 }}>
+                    All Solana tokens including unverified — DYOR
+                  </div>
                 </div>
                 <button onClick={close} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: 0 }}>×</button>
               </div>
+
               <input
                 autoFocus value={q}
                 onChange={function(e) { setQ(e.target.value); }}
-                placeholder="Search name, symbol or address..."
+                placeholder="Search by name or symbol..."
                 style={{
                   width: '100%', background: C.card2, border: '1px solid ' + C.border,
                   borderRadius: 8, padding: '10px 12px', color: C.text,
@@ -153,7 +156,7 @@ function TokenSelect({ selected, onSelect, tokens }) {
                 value={contractAddr}
                 onChange={function(e) { setContractAddr(e.target.value); }}
                 onBlur={function() { if (contractAddr) lookupContract(contractAddr); }}
-                placeholder="Or paste any Solana contract address..."
+                placeholder="Paste any Solana contract address..."
                 style={{
                   width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)',
                   borderRadius: 8, padding: '10px 12px', color: C.accent,
@@ -175,7 +178,7 @@ function TokenSelect({ selected, onSelect, tokens }) {
                       onError={function(e) { e.target.style.display = 'none'; }} />
                   ) : (
                     <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>
-                      {contractToken.symbol.charAt(0)}
+                      {contractToken.symbol && contractToken.symbol.charAt(0)}
                     </div>
                   )}
                   <div>
@@ -188,14 +191,18 @@ function TokenSelect({ selected, onSelect, tokens }) {
             </div>
 
             <div style={{ overflowY: 'auto', flex: 1 }}>
-              {filtered.length === 0 && !q && (
-                <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>
-                  Loading tokens... paste a contract address above to search any token.
+              {loading && tokens.length === 0 && (
+                <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>
+                  Loading all Solana tokens...<br />
+                  <span style={{ fontSize: 11, marginTop: 6, display: 'block' }}>
+                    You can paste a contract address above to find any token immediately
+                  </span>
                 </div>
               )}
-              {filtered.length === 0 && q && (
+              {!loading && filtered.length === 0 && q && (
                 <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>
-                  No tokens found. Try pasting the contract address above.
+                  No tokens found for "{q}"<br />
+                  <span style={{ fontSize: 11, marginTop: 4, display: 'block' }}>Try pasting the contract address above</span>
                 </div>
               )}
               {filtered.map(function(t) {
@@ -232,14 +239,14 @@ function TokenSelect({ selected, onSelect, tokens }) {
   );
 }
 
-export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoToToken, onConnectWallet }) {
+export default function SwapWidget({ coins, onGoToToken, onConnectWallet }) {
   const { publicKey, connected, sendTransaction } = useWallet();
   const { connection } = useConnection();
 
-  const [localTokens, setLocalTokens] = useState(FALLBACK_TOKENS);
-  const [localLoading, setLocalLoading] = useState(true);
-  const [fromToken, setFromToken] = useState(FALLBACK_TOKENS[0]);
-  const [toToken, setToToken] = useState(FALLBACK_TOKENS[1]);
+  const [tokens, setTokens] = useState([SOL, USDC]);
+  const [tokensLoading, setTokensLoading] = useState(true);
+  const [fromToken, setFromToken] = useState(SOL);
+  const [toToken, setToToken] = useState(USDC);
   const [fromAmt, setFromAmt] = useState('');
   const [quote, setQuote] = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
@@ -261,34 +268,51 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
 
   useEffect(function() {
     var fetchAllTokens = async function() {
-      setLocalLoading(true);
+      setTokensLoading(true);
       try {
-        var res = await fetch('https://tokens.jup.ag/tokens?tags=verified');
+        var controller = new AbortController();
+        var timeout = setTimeout(function() { controller.abort(); }, 30000);
+        var res = await fetch('https://token.jup.ag/all', { signal: controller.signal });
+        clearTimeout(timeout);
         var data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
           var mapped = data.map(function(t) {
-            return { mint: t.address, symbol: t.symbol, name: t.name, decimals: t.decimals, logoURI: t.logoURI };
+            return {
+              mint: t.address,
+              symbol: t.symbol,
+              name: t.name,
+              decimals: t.decimals,
+              logoURI: t.logoURI,
+            };
           });
-          setLocalTokens(mapped);
+          setTokens(mapped);
         }
       } catch (e) {
-        console.log('Using fallback tokens');
-        if (jupiterTokens && jupiterTokens.length > 0) {
-          setLocalTokens(jupiterTokens);
+        console.log('Full token list failed, trying verified list...');
+        try {
+          var res2 = await fetch('https://tokens.jup.ag/tokens?tags=verified');
+          var data2 = await res2.json();
+          if (Array.isArray(data2) && data2.length > 0) {
+            var mapped2 = data2.map(function(t) {
+              return {
+                mint: t.address,
+                symbol: t.symbol,
+                name: t.name,
+                decimals: t.decimals,
+                logoURI: t.logoURI,
+              };
+            });
+            setTokens(mapped2);
+          }
+        } catch (e2) {
+          console.log('Token fetch failed, using minimal defaults');
         }
       }
-      setLocalLoading(false);
+      setTokensLoading(false);
     };
     fetchAllTokens();
   }, []);
 
-  useEffect(function() {
-    if (jupiterTokens && jupiterTokens.length > 0 && localLoading) {
-      setLocalTokens(jupiterTokens);
-    }
-  }, [jupiterTokens]);
-
-  var tokens = localTokens.length > 0 ? localTokens : FALLBACK_TOKENS;
   var feeBps = antiMev ? BASE_FEE_BPS + ANTIMEV_FEE_BPS : BASE_FEE_BPS;
   var feePercent = feeBps / 100;
 
@@ -407,10 +431,10 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Swap Tokens</h1>
         <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
-          Jupiter routing · {feePercent}% fee
-          {localLoading
-            ? <span style={{ color: C.accent, marginLeft: 6 }}>· Loading tokens...</span>
-            : <span style={{ color: C.green, marginLeft: 6 }}>· {tokens.length.toLocaleString()} tokens available</span>
+          Jupiter routing · {feePercent}% fee ·
+          {tokensLoading
+            ? <span style={{ color: C.accent }}> Loading all Solana tokens...</span>
+            : <span style={{ color: C.green }}> {tokens.length.toLocaleString()} tokens</span>
           }
         </p>
       </div>
@@ -438,7 +462,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU PAY</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <TokenSelect tokens={tokens} selected={fromToken} onSelect={setFromToken} />
+            <TokenSelect tokens={tokens} loading={tokensLoading} selected={fromToken} onSelect={setFromToken} />
             <input value={fromAmt}
               onChange={function(e) { setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }}
               placeholder="0.00"
@@ -464,7 +488,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU RECEIVE</span>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <TokenSelect tokens={tokens} selected={toToken} onSelect={setToToken} />
+            <TokenSelect tokens={tokens} loading={tokensLoading} selected={toToken} onSelect={setToToken} />
             <div style={{ flex: 1, textAlign: 'right', fontSize: 22, fontWeight: 500, minWidth: 0, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>
               {quoteLoading ? '...' : quote ? quote.outAmountDisplay : '0.00'}
             </div>
