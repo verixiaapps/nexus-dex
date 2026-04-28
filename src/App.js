@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useWallet } from '@solana/wallet-adapter-react';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useAccount, useDisconnect } from 'wagmi';
 import { useWeb3Modal } from '@web3modal/wagmi/react';
 import SwapWidget from './components/SwapWidget';
@@ -10,14 +10,8 @@ import TokenDetail from './components/TokenDetail';
 import Send from './components/Send';
 
 const C = {
-  bg: '#03060f',
-  card: '#080d1a',
-  border: 'rgba(0,229,255,0.10)',
-  accent: '#00e5ff',
-  green: '#00ffa3',
-  red: '#ff3b6b',
-  text: '#cdd6f4',
-  muted: '#586994',
+  bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
+  accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b', text: '#cdd6f4', muted: '#586994',
 };
 
 function WalletModal({ open, onClose }) {
@@ -26,26 +20,18 @@ function WalletModal({ open, onClose }) {
   const { isConnected: evmConnected } = useAccount();
   const { disconnect: evmDisconnect } = useDisconnect();
 
-  var phantomWallet = wallets.find(function(w) {
-    return w.adapter.name === 'Phantom';
-  });
+  var phantomWallet = wallets.find(function(w) { return w.adapter.name === 'Phantom'; });
 
   if (!open) return null;
 
   return (
     <>
-      <div onClick={onClose} style={{
-        position: 'fixed', inset: 0, zIndex: 500,
-        background: 'rgba(0,0,0,.85)',
-      }} />
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 500, background: 'rgba(0,0,0,.85)' }} />
       <div style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 501,
-        background: '#080d1a',
-        borderTop: '2px solid rgba(0,229,255,.2)',
-        borderRadius: '20px 20px 0 0',
-        padding: '24px 24px 48px',
-        boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
-        animation: 'slideUp .25s ease',
+        background: '#080d1a', borderTop: '2px solid rgba(0,229,255,.2)',
+        borderRadius: '20px 20px 0 0', padding: '24px 24px 48px',
+        boxShadow: '0 -20px 60px rgba(0,0,0,.9)', animation: 'slideUp .25s ease',
       }}>
         <style>{`@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }`}</style>
         <div style={{ width: 40, height: 4, background: '#2e3f5e', borderRadius: 2, margin: '0 auto 24px' }} />
@@ -69,7 +55,7 @@ function WalletModal({ open, onClose }) {
             }}>
               <div style={{ color: '#00ffa3', fontWeight: 700, fontSize: 15, marginBottom: 4 }}>✓ Wallet Connected</div>
               <div style={{ color: '#586994', fontSize: 12 }}>
-                {connected && publicKey ? publicKey.toString().slice(0, 16) + '...' : 'EVM wallet connected'}
+                {connected && publicKey ? publicKey.toString().slice(0, 20) + '...' : 'EVM wallet connected'}
               </div>
             </div>
             <button onClick={async function() {
@@ -161,34 +147,29 @@ export default function App() {
   const [jupiterTokens, setJupiterTokens] = useState([]);
   const [jupiterLoading, setJupiterLoading] = useState(true);
 
-  const { publicKey, connected: solConnected } = useWallet();
+  const { publicKey, connected: solConnected, sendTransaction } = useWallet();
+  const { connection } = useConnection();
   const { address: evmAddress, isConnected: evmConnected } = useAccount();
 
   const isConnected = solConnected || evmConnected;
-  const displayAddress = solConnected && publicKey
-    ? publicKey.toString().slice(0, 4) + '...' + publicKey.toString().slice(-4)
-    : evmConnected && evmAddress
-    ? evmAddress.slice(0, 4) + '...' + evmAddress.slice(-4)
+  const isSolanaConnected = solConnected && !!publicKey;
+  const walletAddress = solConnected && publicKey
+    ? publicKey.toString()
+    : evmAddress || '';
+  const displayAddress = walletAddress
+    ? walletAddress.slice(0, 4) + '...' + walletAddress.slice(-4)
     : null;
 
   useEffect(function() {
     var fetchJupiterTokens = async function() {
       setJupiterLoading(true);
       try {
-        // Fetch popular/strict verified tokens only — not the 300MB full list
         var res = await fetch('https://lite-api.jup.ag/tokens/v1/tagged/strict');
         var data = await res.json();
         if (Array.isArray(data) && data.length > 0) {
-          var mapped = data.map(function(t) {
-            return {
-              mint: t.address,
-              symbol: t.symbol,
-              name: t.name,
-              decimals: t.decimals,
-              logoURI: t.logoURI,
-            };
-          });
-          setJupiterTokens(mapped);
+          setJupiterTokens(data.map(function(t) {
+            return { mint: t.address, symbol: t.symbol, name: t.name, decimals: t.decimals, logoURI: t.logoURI };
+          }));
         }
       } catch (e) {
         console.log('Jupiter token fetch failed:', e);
@@ -205,9 +186,7 @@ export default function App() {
         var res = await fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=' + ids + '&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d');
         var data = await res.json();
         if (Array.isArray(data)) setCoins(data);
-      } catch (e) {
-        console.error('Market fetch error:', e);
-      }
+      } catch (e) { console.error('Market fetch error:', e); }
       setLoading(false);
     };
     fetchMarkets();
@@ -215,10 +194,7 @@ export default function App() {
     return function() { clearInterval(interval); };
   }, []);
 
-  var goToToken = function(coin) {
-    setSelectedToken(coin);
-    setTab('token');
-  };
+  var goToToken = function(coin) { setSelectedToken(coin); setTab('token'); };
 
   var tabs = [
     { id: 'swap', label: 'Swap', icon: '⇄' },
@@ -243,12 +219,9 @@ export default function App() {
       }}>
         <div style={{
           maxWidth: 1200, margin: '0 auto', padding: '0 16px',
-          display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-          height: 56, gap: 8,
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between', height: 56, gap: 8,
         }}>
-          <div onClick={() => setTab('swap')} style={{
-            display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', flexShrink: 0,
-          }}>
+          <div onClick={() => setTab('swap')} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', flexShrink: 0 }}>
             <div style={{
               width: 32, height: 32, borderRadius: 9,
               background: 'linear-gradient(135deg,#00e5ff,#0066ff)',
@@ -257,16 +230,12 @@ export default function App() {
             }}>N</div>
             <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: 2, color: '#fff' }}>NEXUS</span>
             <span style={{
-              fontSize: 9, color: C.accent,
-              background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.3)',
-              borderRadius: 4, padding: '1px 5px', fontWeight: 600,
+              fontSize: 9, color: C.accent, background: 'rgba(0,229,255,.1)',
+              border: '1px solid rgba(0,229,255,.3)', borderRadius: 4, padding: '1px 5px', fontWeight: 600,
             }}>DEX</span>
           </div>
 
-          <nav style={{
-            display: 'flex', gap: 2, overflowX: 'auto',
-            scrollbarWidth: 'none', flex: 1, justifyContent: 'center', padding: '0 8px',
-          }}>
+          <nav style={{ display: 'flex', gap: 2, overflowX: 'auto', scrollbarWidth: 'none', flex: 1, justifyContent: 'center', padding: '0 8px' }}>
             {tabs.map(function(t) {
               return (
                 <button key={t.id} onClick={() => setTab(t.id)} style={{
@@ -299,11 +268,7 @@ export default function App() {
         </div>
       </header>
 
-      <main style={{
-        position: 'relative', zIndex: 1,
-        maxWidth: 1200, margin: '0 auto',
-        padding: '20px 16px 100px',
-      }}>
+      <main style={{ position: 'relative', zIndex: 1, maxWidth: 1200, margin: '0 auto', padding: '20px 16px 100px' }}>
         {tab === 'swap' && (
           <SwapWidget
             coins={coins}
@@ -311,6 +276,9 @@ export default function App() {
             jupiterLoading={jupiterLoading}
             onGoToToken={goToToken}
             onConnectWallet={() => setWalletModalOpen(true)}
+            isConnected={isConnected}
+            isSolanaConnected={isSolanaConnected}
+            walletAddress={walletAddress}
           />
         )}
         {tab === 'markets' && (
@@ -323,12 +291,15 @@ export default function App() {
             jupiterTokens={jupiterTokens}
             onBack={() => setTab('markets')}
             onConnectWallet={() => setWalletModalOpen(true)}
+            isConnected={isConnected}
+            isSolanaConnected={isSolanaConnected}
+            walletAddress={walletAddress}
           />
         )}
         {tab === 'buy' && (
           <BuyCrypto
             coins={coins}
-            walletAddress={solConnected && publicKey ? publicKey.toString() : evmAddress || ''}
+            walletAddress={walletAddress}
             selectedCoinSymbol={selectedToken ? selectedToken.symbol : null}
           />
         )}
@@ -337,6 +308,9 @@ export default function App() {
             coins={coins}
             jupiterTokens={jupiterTokens}
             onConnectWallet={() => setWalletModalOpen(true)}
+            isConnected={isConnected}
+            isSolanaConnected={isSolanaConnected}
+            walletAddress={walletAddress}
           />
         )}
         {tab === 'portfolio' && (
@@ -345,6 +319,9 @@ export default function App() {
             jupiterTokens={jupiterTokens}
             onSend={() => setTab('send')}
             onConnectWallet={() => setWalletModalOpen(true)}
+            isConnected={isConnected}
+            isSolanaConnected={isSolanaConnected}
+            walletAddress={walletAddress}
           />
         )}
       </main>
