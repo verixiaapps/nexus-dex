@@ -1,7 +1,8 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
-import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
+import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
+import { getWallets } from '@solana/wallet-adapter-wallets';
 import '@solana/wallet-adapter-react-ui/styles.css';
 import '@rainbow-me/rainbowkit/styles.css';
 import { getDefaultConfig, RainbowKitProvider, darkTheme } from '@rainbow-me/rainbowkit';
@@ -12,9 +13,7 @@ import App from './App';
 
 const SOLANA_RPC = process.env.REACT_APP_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
 
-const solanaWallets = [
-  new PhantomWalletAdapter(),
-];
+const solanaWallets = getWallets();
 
 const wagmiConfig = getDefaultConfig({
   appName: 'Nexus DEX',
