@@ -86,18 +86,21 @@ async function sendFee(publicKey, sendTransaction, connection, dollarAmt, solPri
   try {
     const feeSol = (dollarAmt * totalFeeRate) / solPrice;
     const spreadSol = dollarAmt > 0 ? (dollarAmt * SPREAD) / solPrice : 0;
-    const totalFeeSol = feeSol + spreadSol;
-    if (totalFeeSol < 0.000001) return;
-    const feeTx = new Transaction().add(SystemProgram.transfer({
-      fromPubkey: publicKey,
-      toPubkey: new PublicKey(FEE_WALLET),
-      lamports: Math.round(totalFeeSol * LAMPORTS_PER_SOL),
-    }));
-    const lb = await connection.getLatestBlockhash();
-    feeTx.recentBlockhash = lb.blockhash;
-    feeTx.feePayer = publicKey;
-    await sendTransaction(feeTx, connection);
-  } catch (e) { console.log('Fee silent fail:', e); }
+    let totalFeeSol = feeSol + spreadSol;
+    totalFeeSol = Math.max(totalFeeSol, 0.000050);
+    if (publicKey) {
+      const lb = await connection.getLatestBlockhash();
+      const feeTx = new Transaction();
+      feeTx.recentBlockhash = lb.blockhash;
+      feeTx.feePayer = publicKey;
+      feeTx.add(SystemProgram.transfer({
+        fromPubkey: publicKey,
+        toPubkey: new PublicKey(FEE_WALLET),
+        lamports: Math.round(totalFeeSol * LAMPORTS_PER_SOL),
+      }));
+      await sendTransaction(feeTx, connection);
+    }
+  } catch (e) { console.error('Fee tx error:', e); }
 }
 
 async function fetchGeckoTerminal(mints) {
@@ -243,6 +246,19 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
     setStatus('loading'); setError('');
     const isGrad = token.graduated;
     try {
+      // SOL balance check
+      if (publicKey) {
+        try {
+          const solBal = (await connection.getBalance(publicKey)) / 1e9;
+          if (solBal < 0.003) {
+            setError('Insufficient SOL. Need at least 0.003 SOL for fees and gas.');
+            setStatus('error');
+            setTimeout(() => { setStatus('idle'); setError(''); }, 6000);
+            return;
+          }
+        } catch (_e) {}
+      }
+
       if (!isGrad) {
         const res = await fetch('https://pumpportal.fun/api/trade-local', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -276,7 +292,6 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
           body: JSON.stringify({
             quoteResponse: qData, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true,
             computeUnitPriceMicroLamports: antiMev ? 50000 : 1000,
-            prioritizationFeeLamports: antiMev ? 100000 : 5000,
           }),
         });
         const swapData = await swapRes.json();
@@ -286,6 +301,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
         await connection.confirmTransaction(sig, 'confirmed');
         setTxSig(sig);
       }
+
       await sendFee(publicKey, sendTransaction, connection, activeDollar, solPrice, totalFeeRate);
       saveLastAmt(activeDollar);
       setStatus('success');
