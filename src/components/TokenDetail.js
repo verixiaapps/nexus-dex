@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { VersionedTransaction, TransactionMessage, AddressLookupTableAccount, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
@@ -9,6 +9,7 @@ const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
 const SPREAD = 0.005;
 const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -32,7 +33,6 @@ const POPULAR_TOKENS = [
 
 const SOL_TOKEN = POPULAR_TOKENS[0];
 const USDC_TOKEN = POPULAR_TOKENS[1];
-const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
 async function getTokenDecimals(token) {
   if (!token) return 6;
@@ -350,16 +350,19 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
 
         let luts = [];
         if (instrData.addressLookupTableAddresses?.length) {
-          const ltRes = await Promise.all(instrData.addressLookupTableAddresses.map(a => connection.getAddressLookupTable(new PublicKey(a))));
-          luts = ltRes.map(r => r.value).filter(Boolean);
+          const lutKeys = instrData.addressLookupTableAddresses.map(a => new PublicKey(a));
+          const lutInfos = await connection.getMultipleAccountsInfo(lutKeys);
+          luts = lutInfos.reduce((acc, info, i) => {
+            if (info) acc.push(new AddressLookupTableAccount({ key: lutKeys[i], state: AddressLookupTableAccount.deserialize(info.data) }));
+            return acc;
+          }, []);
         }
 
         const bh = await connection.getLatestBlockhash('confirmed');
         const msgV0 = new TransactionMessage({
           payerKey: publicKey, recentBlockhash: bh.blockhash, instructions: allIxs,
         }).compileToV0Message(luts);
-        const vTx = new VersionedTransaction(msgV0);
-        sig = await sendTransaction(vTx, connection);
+        sig = await sendTransaction(new VersionedTransaction(msgV0), connection);
         await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
       } else {
         const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
