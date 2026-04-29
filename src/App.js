@@ -1,3 +1,5 @@
+src/App.js:
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAccount, useDisconnect } from 'wagmi';
@@ -41,8 +43,8 @@ function WalletModal({ open, onClose }) {
 
   const isSol = connected && publicKey;
   const displayAddr = isSol
-    ? publicKey.toString().slice(0, 6) + '…' + publicKey.toString().slice(-6)
-    : evmConnected && evmAddress ? evmAddress.slice(0, 6) + '…' + evmAddress.slice(-6) : null;
+    ? publicKey.toString().slice(0, 6) + '...' + publicKey.toString().slice(-6)
+    : evmConnected && evmAddress ? evmAddress.slice(0, 6) + '...' + evmAddress.slice(-6) : null;
   let connectedWalletName = isSol && wallets.find(w => w.adapter.connected);
   connectedWalletName = connectedWalletName ? connectedWalletName.adapter.name : (isSol ? 'Solana Wallet' : 'EVM Wallet');
 
@@ -282,7 +284,7 @@ export default function App() {
   };
 
   const displayAddress = wallet.walletAddress
-    ? wallet.walletAddress.slice(0, 4) + '…' + wallet.walletAddress.slice(-4)
+    ? wallet.walletAddress.slice(0, 4) + '...' + wallet.walletAddress.slice(-4)
     : null;
 
   const headerTabs = [
@@ -382,4 +384,3 @@ export default function App() {
     </div>
   );
 }
- 
