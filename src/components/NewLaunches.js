@@ -238,7 +238,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
 
   const executeTrade = async () => {
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
-    if (!publicKey) { setError('Please connect a Solana-compatible wallet'); return; }
+    if (!publicKey) { setError('Please connect a wallet'); return; }
     if (!token) return;
     setStatus('loading'); setError('');
     const isGrad = token.graduated;
