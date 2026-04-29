@@ -152,8 +152,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
                 <button onClick={close} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: 0 }}>x</button>
               </div>
               <input
-                autoFocus
-                value={q}
+                autoFocus value={q}
                 onChange={e => setQ(e.target.value)}
                 placeholder="Search by name or symbol..."
                 style={{ width: '100%', background: C.card3, border: '1px solid ' + C.border, borderRadius: 8, padding: '10px 12px', color: C.text, fontSize: 13, outline: 'none', fontFamily: 'Syne, sans-serif', marginBottom: 8 }}
@@ -220,8 +219,13 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
 function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, coins, onConnectWallet, isConnected, isSolanaConnected }) {
   const { publicKey, sendTransaction } = useWallet();
   const { connection } = useConnection();
+
+  const viewedToken = coin
+    ? jupiterToken || { mint: coin.id || coin.mint || '', symbol: coin.symbol || '', name: coin.name || '', decimals: 6, logoURI: coin.image || null }
+    : null;
+
   const [fromToken, setFromToken] = useState(SOL_TOKEN);
-  const [toToken, setToToken] = useState(jupiterToken || USDC_TOKEN);
+  const [toToken, setToToken] = useState(viewedToken || USDC_TOKEN);
   const [fromAmt, setFromAmt] = useState('');
   const [quote, setQuote] = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
@@ -504,28 +508,39 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
     const fetchChart = async () => {
       setChartLoading(true);
       try {
-        let pairAddr = coin.dexPairAddress;
-        if (!pairAddr) {
-          const searchRes = await fetch('https://api.dexscreener.com/latest/dex/search?q=' + (coin.symbol || coin.id));
-          const searchData = await searchRes.json();
-          const found = (searchData.pairs || []).find(p => p.chainId === 'solana');
-          if (found) pairAddr = found.pairAddress;
-        }
-        if (!pairAddr) return;
-        const res = await fetch('https://api.dexscreener.com/latest/dex/pairs/solana/' + pairAddr);
-        const data = await res.json();
-        const pair = data.pair || data.pairs?.[0];
-        if (!pair) return;
-        const currentPrice = parseFloat(pair.priceUsd || 0);
         const days = parseInt(chartPeriod) || 7;
-        const pctChange = pair.priceChange?.h24 || 0;
-        const points = [];
-        for (let i = days; i >= 0; i--) {
-          const d = new Date(Date.now() - i * 86400000);
-          const factor = 1 + (pctChange / 100) * (i / days);
-          points.push({ t: d.toLocaleDateString('en', { month: 'short', day: 'numeric' }), p: +(currentPrice / factor).toFixed(6) });
+        let points = [];
+
+        // CoinGecko IDs are text slugs (bitcoin, ethereum) — not mint addresses
+        const isCgCoin = coin.id && !coin.isSolanaToken && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(coin.id);
+        if (isCgCoin) {
+          const cgRes = await fetch(`https://api.coingecko.com/api/v3/coins/${coin.id}/market_chart?vs_currency=usd&days=${days}`);
+          const cgData = await cgRes.json();
+          const interval = days <= 1 ? 1 : days <= 7 ? 6 : 24;
+          points = (cgData.prices || [])
+            .filter((_, i) => i % interval === 0)
+            .map(item => ({
+              t: new Date(item[0]).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
+              p: +item[1].toFixed(6),
+            }));
+        } else {
+          const tokenAddr = coin.id || coin.mint;
+          const timeframe = days <= 1 ? 'minute' : 'day';
+          const aggregate = days <= 1 ? 30 : 1;
+          const limit = days <= 1 ? 48 : days;
+          const gtRes = await fetch(
+            `https://api.geckoterminal.com/api/v2/networks/solana/tokens/${tokenAddr}/ohlcv/${timeframe}?aggregate=${aggregate}&limit=${limit}`
+          );
+          const gtData = await gtRes.json();
+          const ohlcv = gtData.data?.attributes?.ohlcv_list;
+          if (ohlcv && ohlcv.length) {
+            points = ohlcv.map(item => ({
+              t: new Date(item[0] * 1000).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
+              p: +parseFloat(item[4]).toFixed(6),
+            }));
+          }
         }
-        setChartData(points);
+        if (points.length) setChartData(points);
       } catch (e) {}
       setChartLoading(false);
     };
