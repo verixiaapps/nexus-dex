@@ -1,5 +1,3 @@
-src/App.js:
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAccount, useDisconnect } from 'wagmi';
