@@ -238,7 +238,11 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
 
       if (selectedToken.isNative || selectedToken.mint === SOL_TOKEN.mint) {
         const recipientLamports = Math.round(recipientAmount * LAMPORTS_PER_SOL);
-        transaction.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: recipientPubkey, lamports: recipientLamports }));
+        transaction.add(SystemProgram.transfer({
+          fromPubkey: publicKey,
+          toPubkey: recipientPubkey,
+          lamports: recipientLamports,
+        }));
       } else {
         const mintPubkey = new PublicKey(selectedToken.mint);
         const recipientUnits = Math.round(amountNum * Math.pow(10, decimals));
@@ -382,9 +386,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
                   key={p}
                   onClick={() => setAmount((solBalance * p * 0.99).toFixed(6))}
                   style={{ flex: 1, padding: '5px', borderRadius: 6, fontSize: 11, cursor: 'pointer', background: 'transparent', border: '1px solid ' + C.border, color: C.muted, fontFamily: 'Syne, sans-serif' }}
-                >
-                  {p === 1 ? 'MAX' : (p * 100) + '%'}
-                </button>
+                >{p === 1 ? 'MAX' : (p * 100) + '%'}</button>
               ))}
             </div>
           )}
@@ -451,13 +453,9 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
         </button>
 
         {txSig && status === 'success' && (
-          <a href={'https://solscan.io/tx/' + txSig} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>
-            View on Solscan
-          </a>
+          <a href={'https://solscan.io/tx/' + txSig} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>View on Solscan</a>
         )}
-        <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 14, lineHeight: 1.6 }}>
-          Non-custodial - Fees sent directly to Nexus DEX
-        </p>
+        <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 14, lineHeight: 1.6 }}>Non-custodial - Fees sent directly to Nexus DEX</p>
       </div>
 
       <TokenSearchModal
