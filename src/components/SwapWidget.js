@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { VersionedTransaction, TransactionMessage, AddressLookupTableAccount, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
@@ -234,7 +234,6 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     return () => clearTimeout(t);
   }, [fetchQuote]);
 
-  // Fetch balances for selected tokens
   useEffect(() => {
     if (!publicKey || !connection) { setFromBalance(null); setToBalance(null); return; }
     const fetchBals = async () => {
@@ -268,7 +267,6 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     if (!quote || !publicKey) return;
     setSwapStatus('loading'); setSwapError('');
     try {
-      // SOL balance check
       const solBal = (await connection.getBalance(publicKey)) / 1e9;
       if (solBal < 0.003) {
         setSwapError('Need at least 0.003 SOL to cover fees and gas.');
@@ -277,7 +275,6 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         return;
       }
 
-      // Calculate fee
       const fromCoin = coins.find(c => c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase());
       const solCoin = coins.find(c => c.id === 'solana' || (c.symbol && c.symbol.toLowerCase() === 'sol'));
       const solPrice = solCoin ? solCoin.current_price : 150;
@@ -296,7 +293,6 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         50000
       ));
 
-      // Try swap-instructions: compose fee into same tx
       const instrRes = await fetch('https://api.jup.ag/swap/v1/swap-instructions', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' },
@@ -317,44 +313,35 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         instrData.setupInstructions?.forEach(ix => allIxs.push(deserializeIx(ix)));
         allIxs.push(deserializeIx(instrData.swapInstruction));
         if (instrData.cleanupInstruction) allIxs.push(deserializeIx(instrData.cleanupInstruction));
-        // Fee transfer in SAME tx
         allIxs.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
 
         let lookupTables = [];
         if (instrData.addressLookupTableAddresses?.length) {
-          const ltResults = await Promise.all(
-            instrData.addressLookupTableAddresses.map(addr => connection.getAddressLookupTable(new PublicKey(addr)))
-          );
-          lookupTables = ltResults.map(r => r.value).filter(Boolean);
+          const lutKeys = instrData.addressLookupTableAddresses.map(a => new PublicKey(a));
+          const lutInfos = await connection.getMultipleAccountsInfo(lutKeys);
+          lookupTables = lutInfos.reduce((acc, info, i) => {
+            if (info) acc.push(new AddressLookupTableAccount({ key: lutKeys[i], state: AddressLookupTableAccount.deserialize(info.data) }));
+            return acc;
+          }, []);
         }
 
         const bh = await connection.getLatestBlockhash('confirmed');
         const msgV0 = new TransactionMessage({
-          payerKey: publicKey,
-          recentBlockhash: bh.blockhash,
-          instructions: allIxs,
+          payerKey: publicKey, recentBlockhash: bh.blockhash, instructions: allIxs,
         }).compileToV0Message(lookupTables);
         const vTx = new VersionedTransaction(msgV0);
         sig = await sendTransaction(vTx, connection);
         await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
       } else {
-        // Fallback: regular swap
         const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' },
-          body: JSON.stringify({
-            quoteResponse: quote.quoteResponse,
-            userPublicKey: publicKey.toString(),
-            wrapAndUnwrapSol: true,
-            computeUnitPriceMicroLamports: antiMev ? 50000 : 1000,
-          }),
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' },
+          body: JSON.stringify({ quoteResponse: quote.quoteResponse, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000 }),
         });
         const swapData = await swapRes.json();
         if (!swapData.swapTransaction) throw new Error(swapData.error || 'No swap transaction returned');
         const txFB = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
         sig = await sendTransaction(txFB, connection);
         await connection.confirmTransaction(sig, 'confirmed');
-        // Fee as separate fallback tx
         try {
           const fbh = await connection.getLatestBlockhash('finalized');
           const feeTx = new Transaction();
