@@ -58,6 +58,13 @@ export default function Markets({ coins, loading, onSelectCoin }) {
     else { setSort(key); setDir(-1); }
   };
 
+  const SortBtn = ({ sortKey, label }) => (
+    <button
+      onClick={() => handleSort(sortKey)}
+      style={{ background: 'none', border: 'none', color: sort === sortKey ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0, fontFamily: 'Syne, sans-serif' }}
+    >{label} {sort === sortKey ? (dir === -1 ? 'v' : '^') : ''}</button>
+  );
+
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
@@ -81,15 +88,9 @@ export default function Markets({ coins, loading, onSelectCoin }) {
             <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 110px 80px 110px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
               <div>#</div>
               <div>NAME</div>
-              <button onClick={() => handleSort('current_price')} style={{ background: 'none', border: 'none', color: sort === 'current_price' ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0, fontFamily: 'Syne, sans-serif' }}>
-                PRICE {sort === 'current_price' ? (dir === -1 ? 'v' : '^') : ''}
-              </button>
-              <button onClick={() => handleSort('price_change_percentage_24h')} style={{ background: 'none', border: 'none', color: sort === 'price_change_percentage_24h' ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0, fontFamily: 'Syne, sans-serif' }}>
-                24H {sort === 'price_change_percentage_24h' ? (dir === -1 ? 'v' : '^') : ''}
-              </button>
-              <button onClick={() => handleSort('market_cap')} style={{ background: 'none', border: 'none', color: sort === 'market_cap' ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0, fontFamily: 'Syne, sans-serif' }}>
-                MKT CAP {sort === 'market_cap' ? (dir === -1 ? 'v' : '^') : ''}
-              </button>
+              <SortBtn sortKey="current_price" label="PRICE" />
+              <SortBtn sortKey="price_change_percentage_24h" label="24H" />
+              <SortBtn sortKey="market_cap" label="MKT CAP" />
               <div style={{ textAlign: 'right', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>7D</div>
             </div>
           )}
