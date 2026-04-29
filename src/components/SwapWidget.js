@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { VersionedTransaction, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
@@ -155,8 +155,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
               {!q && <div style={{ padding: '8px 16px 4px', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>POPULAR TOKENS</div>}
               {q && searchResults.length === 0 && (
                 <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>
-                  No tokens found.<br />
-                  <span style={{ fontSize: 11, marginTop: 4, display: 'block' }}>Paste the contract address above.</span>
+                  No tokens found.<br /><span style={{ fontSize: 11, marginTop: 4, display: 'block' }}>Paste the contract address above.</span>
                 </div>
               )}
               {displayTokens.map(t => (
@@ -225,10 +224,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           priceImpactPct: data.priceImpactPct,
           quoteResponse: data,
         });
-      } else {
-        setQuoteError(data.error || 'No route found for this pair');
-        setQuote(null);
-      }
+      } else { setQuoteError(data.error || 'No route found for this pair'); setQuote(null); }
     } catch (e) { setQuoteError('Failed to get quote'); setQuote(null); }
     setQuoteLoading(false);
   }, [fromAmt, fromToken, toToken, slip]);
@@ -260,26 +256,50 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     fetchBals();
   }, [publicKey, connection, fromToken, toToken]);
 
+  const deserializeIx = ix => ({
+    programId: new PublicKey(ix.programId),
+    keys: ix.accounts.map(a => ({ pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable })),
+    data: Buffer.from(ix.data, 'base64'),
+  });
+
   const executeSwap = async () => {
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
     if (!publicKey) { setSwapError('Please connect a wallet to swap'); return; }
     if (!quote || !publicKey) return;
     setSwapStatus('loading'); setSwapError('');
     try {
-      if (publicKey) {
-        try {
-          const solBal = (await connection.getBalance(publicKey)) / 1e9;
-          if (solBal < 0.003) {
-            setSwapError('Insufficient SOL balance. Need at least 0.003 SOL to cover fees and gas.');
-            setSwapStatus('error');
-            setTimeout(() => { setSwapStatus('idle'); setSwapError(''); }, 6000);
-            return;
-          }
-        } catch (_e) {}
+      // SOL balance check
+      const solBal = (await connection.getBalance(publicKey)) / 1e9;
+      if (solBal < 0.003) {
+        setSwapError('Need at least 0.003 SOL to cover fees and gas.');
+        setSwapStatus('error');
+        setTimeout(() => { setSwapStatus('idle'); setSwapError(''); }, 6000);
+        return;
       }
 
-      const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
-        method: 'POST', headers: { 'Content-Type': 'application/json' },
+      // Calculate fee
+      const fromCoin = coins.find(c => c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase());
+      const solCoin = coins.find(c => c.id === 'solana' || (c.symbol && c.symbol.toLowerCase() === 'sol'));
+      const solPrice = solCoin ? solCoin.current_price : 150;
+      let fromPriceUsd = fromCoin ? fromCoin.current_price : (fromToken?.symbol === 'SOL' ? solPrice : 0);
+      if (!fromPriceUsd && quote && fromAmt) {
+        const toCoin = coins.find(c => c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase());
+        const toPriceUsd = toCoin ? toCoin.current_price : (toToken && (toToken.symbol === 'USDC' || toToken.symbol === 'USDT') ? 1 : 0);
+        if (toPriceUsd > 0) fromPriceUsd = (parseFloat(quote.outAmountDisplay) * toPriceUsd) / parseFloat(fromAmt);
+      }
+      const tradeUsd = parseFloat(fromAmt) * fromPriceUsd;
+      const totalFeePct = totalFee + SPREAD;
+      const feeLamports = Math.round(Math.max(
+        tradeUsd > 0
+          ? (tradeUsd * totalFeePct / solPrice) * LAMPORTS_PER_SOL
+          : parseFloat(fromAmt) * totalFeePct * LAMPORTS_PER_SOL,
+        50000
+      ));
+
+      // Try swap-instructions: compose fee into same tx
+      const instrRes = await fetch('https://api.jup.ag/swap/v1/swap-instructions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' },
         body: JSON.stringify({
           quoteResponse: quote.quoteResponse,
           userPublicKey: publicKey.toString(),
@@ -288,39 +308,62 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           destinationTokenAccount: useCustomAddress && customAddress ? customAddress : undefined,
         }),
       });
-      const swapData = await swapRes.json();
-      if (!swapData.swapTransaction) throw new Error(swapData.error || 'No swap transaction returned');
-      const txBuf = Buffer.from(swapData.swapTransaction, 'base64');
-      const tx = VersionedTransaction.deserialize(txBuf);
-      const sig = await sendTransaction(tx, connection);
-      await connection.confirmTransaction(sig, 'confirmed');
+      const instrData = await instrRes.json();
 
-      if (publicKey) {
+      let sig;
+      if (instrData && instrData.swapInstruction && !instrData.error) {
+        const allIxs = [];
+        instrData.computeBudgetInstructions?.forEach(ix => allIxs.push(deserializeIx(ix)));
+        instrData.setupInstructions?.forEach(ix => allIxs.push(deserializeIx(ix)));
+        allIxs.push(deserializeIx(instrData.swapInstruction));
+        if (instrData.cleanupInstruction) allIxs.push(deserializeIx(instrData.cleanupInstruction));
+        // Fee transfer in SAME tx
+        allIxs.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
+
+        let lookupTables = [];
+        if (instrData.addressLookupTableAddresses?.length) {
+          const ltResults = await Promise.all(
+            instrData.addressLookupTableAddresses.map(addr => connection.getAddressLookupTable(new PublicKey(addr)))
+          );
+          lookupTables = ltResults.map(r => r.value).filter(Boolean);
+        }
+
+        const bh = await connection.getLatestBlockhash('confirmed');
+        const msgV0 = new TransactionMessage({
+          payerKey: publicKey,
+          recentBlockhash: bh.blockhash,
+          instructions: allIxs,
+        }).compileToV0Message(lookupTables);
+        const vTx = new VersionedTransaction(msgV0);
+        sig = await sendTransaction(vTx, connection);
+        await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+      } else {
+        // Fallback: regular swap
+        const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' },
+          body: JSON.stringify({
+            quoteResponse: quote.quoteResponse,
+            userPublicKey: publicKey.toString(),
+            wrapAndUnwrapSol: true,
+            computeUnitPriceMicroLamports: antiMev ? 50000 : 1000,
+          }),
+        });
+        const swapData = await swapRes.json();
+        if (!swapData.swapTransaction) throw new Error(swapData.error || 'No swap transaction returned');
+        const txFB = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
+        sig = await sendTransaction(txFB, connection);
+        await connection.confirmTransaction(sig, 'confirmed');
+        // Fee as separate fallback tx
         try {
-          const fromCoin = coins.find(c => c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase());
-          const solCoin = coins.find(c => c.id === 'solana' || (c.symbol && c.symbol.toLowerCase() === 'sol'));
-          const solPrice = solCoin ? solCoin.current_price : 150;
-          let fromPriceUsd = fromCoin ? fromCoin.current_price : (fromToken?.symbol === 'SOL' ? solPrice : 0);
-          if (!fromPriceUsd && quote && fromAmt && parseFloat(fromAmt) > 0) {
-            const toCoin = coins.find(c => c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase());
-            const toPriceUsd = toCoin ? toCoin.current_price : (toToken && (toToken.symbol === 'USDC' || toToken.symbol === 'USDT') ? 1 : 0);
-            if (toPriceUsd > 0) fromPriceUsd = (parseFloat(quote.outAmountDisplay) * toPriceUsd) / parseFloat(fromAmt);
-          }
-          const tradeUsd = parseFloat(fromAmt) * fromPriceUsd;
-          const totalFeePct = totalFee + SPREAD;
-          let totalFeeSol = tradeUsd > 0 ? (tradeUsd * totalFeePct) / solPrice : parseFloat(fromAmt) * totalFeePct;
-          totalFeeSol = Math.max(totalFeeSol, 0.000050);
-          const feeBlockhash = await connection.getLatestBlockhash();
+          const fbh = await connection.getLatestBlockhash('finalized');
           const feeTx = new Transaction();
-          feeTx.recentBlockhash = feeBlockhash.blockhash;
+          feeTx.recentBlockhash = fbh.blockhash;
+          feeTx.lastValidBlockHeight = fbh.lastValidBlockHeight;
           feeTx.feePayer = publicKey;
-          feeTx.add(SystemProgram.transfer({
-            fromPubkey: publicKey,
-            toPubkey: new PublicKey(FEE_WALLET),
-            lamports: Math.round(totalFeeSol * LAMPORTS_PER_SOL),
-          }));
+          feeTx.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
           await sendTransaction(feeTx, connection);
-        } catch (feeErr) { console.error('Fee tx error:', feeErr); }
+        } catch (fe) { console.error('Fee fallback:', fe); }
       }
 
       setSwapTx(sig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
@@ -355,10 +398,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   }
 
   const feeUsd = fromAmt && fromPriceVal ? (parseFloat(fromAmt) * fromPriceVal * totalFee).toFixed(2) : '0.00';
-
-  const fmtBal = bal => bal >= 1000
-    ? bal.toLocaleString('en-US', { maximumFractionDigits: 2 })
-    : bal.toFixed(4);
+  const fmtBal = b => b >= 1000 ? b.toLocaleString('en-US', { maximumFractionDigits: 2 }) : b.toFixed(4);
 
   const swapPanel = (
     <div>
@@ -373,8 +413,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           <div style={{ display: 'flex', gap: 4 }}>
             {[0.1, 0.5, 1.0].map(v => (
               <button
-                key={v}
-                onClick={() => setSlip(v)}
+                key={v} onClick={() => setSlip(v)}
                 style={{ padding: '3px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer', background: slip === v ? 'rgba(0,229,255,.15)' : 'transparent', border: '1px solid ' + (slip === v ? 'rgba(0,229,255,.4)' : C.border), color: slip === v ? C.accent : C.muted }}
               >{v}%</button>
             ))}
@@ -386,9 +425,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU PAY</span>
             {fromBalance != null && (
-              <span style={{ fontSize: 11, color: C.muted }}>
-                Balance: <span style={{ color: C.text }}>{fmtBal(fromBalance)}</span>
-              </span>
+              <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{fmtBal(fromBalance)}</span></span>
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -403,9 +440,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
               <button
                 onClick={() => {
                   const fees = totalFee + SPREAD + 0.002;
-                  const maxAmt = fromToken?.symbol === 'SOL'
-                    ? Math.max(0, fromBalance - fees)
-                    : fromBalance;
+                  const maxAmt = fromToken?.symbol === 'SOL' ? Math.max(0, fromBalance - fees) : fromBalance;
                   setFromAmt(maxAmt > 0 ? maxAmt.toFixed(fromToken?.decimals <= 2 ? 2 : 6) : '0');
                 }}
                 style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '3px 8px', color: C.accent, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}
@@ -429,9 +464,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU RECEIVE</span>
             {toBalance != null && (
-              <span style={{ fontSize: 11, color: C.muted }}>
-                Balance: <span style={{ color: C.text }}>{fmtBal(toBalance)}</span>
-              </span>
+              <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{fmtBal(toBalance)}</span></span>
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -486,8 +519,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         <div style={{ marginTop: 10 }}>
           <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
             <input
-              type="checkbox"
-              checked={useCustomAddress}
+              type="checkbox" checked={useCustomAddress}
               onChange={e => setUseCustomAddress(e.target.checked)}
               style={{ cursor: 'pointer', width: 14, height: 14 }}
             />
