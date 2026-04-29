@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
+import { useAccount, useBalance } from 'wagmi';
 
 const C = {
   card: '#080d1a', card2: '#0c1220',
@@ -27,6 +28,11 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
   const [totalValue, setTotalValue] = useState(0);
   const [activeTab, setActiveTab] = useState('holdings');
   const [error, setError] = useState('');
+  const [manualAddress, setManualAddress] = useState('');
+  const [lookupAddress, setLookupAddress] = useState('');
+
+  const { address: evmAddress, isConnected: evmConnected, chain } = useAccount();
+  const { data: evmNativeBalance } = useBalance({ address: evmAddress, enabled: !!evmAddress });
 
   const getPrice = useCallback(symbol => {
     if (!symbol || !coins || !coins.length) return 0;
@@ -40,14 +46,16 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
   }, [jupiterTokens]);
 
   const fetchBalances = useCallback(async () => {
-    if (!publicKey || !connection) return;
+    const addrToUse = publicKey ? publicKey.toString() : lookupAddress;
+    if (!addrToUse || !connection) return;
     setLoading(true); setError('');
     try {
-      const solLamports = await connection.getBalance(publicKey);
+      const lookupPubkey = new PublicKey(addrToUse);
+      const solLamports = await connection.getBalance(lookupPubkey);
       const solAmt = solLamports / 1e9;
       setSolBalance(solAmt);
 
-      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(publicKey, {
+      const tokenAccounts = await connection.getParsedTokenAccountsByOwner(lookupPubkey, {
         programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
       });
       const holdings = [];
@@ -81,18 +89,20 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
       setError('Failed to load balances: ' + (e.message || 'Check your connection'));
     }
     setLoading(false);
-  }, [publicKey, connection, getPrice, getTokenInfo]);
+  }, [publicKey, connection, lookupAddress, getPrice, getTokenInfo]);
+
+  const effectiveAddress = publicKey ? publicKey.toString() : lookupAddress;
 
   useEffect(() => {
-    if (isSolanaConnected && publicKey) {
+    if (effectiveAddress) {
       fetchBalances();
       const interval = setInterval(fetchBalances, 30000);
       return () => clearInterval(interval);
     }
-  }, [isSolanaConnected, publicKey, fetchBalances]);
+  }, [effectiveAddress, fetchBalances]);
 
   useEffect(() => {
-    if (isSolanaConnected && publicKey && coins.length > 0) fetchBalances();
+    if (effectiveAddress && coins.length > 0) fetchBalances();
   }, [coins.length]);
 
   const solPrice = getPrice('SOL');
@@ -116,21 +126,10 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
     );
   }
 
-  if (!isSolanaConnected) {
-    return (
-      <div style={{ maxWidth: 520, margin: '0 auto', ...rootStyle }}>
-        <div style={{ marginBottom: 20 }}>
-          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
-        </div>
-        <div style={{ textAlign: 'center', padding: '60px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
-          <div style={{ fontSize: 48, marginBottom: 16 }}>!</div>
-          <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Solana Wallet Required</h2>
-          <p style={{ color: C.muted, fontSize: 13, maxWidth: 300, margin: '0 auto 24px', lineHeight: 1.6 }}>Please connect Phantom to view your Solana token balances.</p>
-          <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect Phantom</button>
-        </div>
-      </div>
-    );
-  }
+  const evmSymbol = evmNativeBalance?.symbol;
+  const evmCoin = evmSymbol ? coins.find(c => c.symbol?.toUpperCase() === evmSymbol.toUpperCase()) : null;
+  const evmPrice = evmCoin ? evmCoin.current_price : 0;
+  const evmValue = evmNativeBalance ? parseFloat(evmNativeBalance.formatted) * evmPrice : 0;
 
   return (
     <div style={{ maxWidth: 600, margin: '0 auto', ...rootStyle }}>
@@ -144,6 +143,30 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
           {onSend && <button onClick={onSend} style={{ background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none', borderRadius: 8, padding: '7px 14px', color: '#03060f', fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700 }}>Send Tokens</button>}
         </div>
       </div>
+
+      {/* Manual Solana address input - for MetaMask/WalletConnect users */}
+      {!publicKey && (
+        <div style={{ background: C.card, border: '1px solid rgba(0,229,255,.15)', borderRadius: 12, padding: 16, marginBottom: 16 }}>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 8 }}>SOLANA WALLET ADDRESS</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <input
+              value={manualAddress}
+              onChange={e => setManualAddress(e.target.value)}
+              placeholder="Paste your Solana address to view balances..."
+              style={{ flex: 1, background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, padding: '10px 12px', color: '#fff', fontFamily: 'monospace', fontSize: 12, outline: 'none' }}
+            />
+            <button
+              onClick={() => setLookupAddress(manualAddress.trim())}
+              style={{ background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none', borderRadius: 8, padding: '10px 16px', color: '#03060f', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', flexShrink: 0 }}
+            >Load</button>
+          </div>
+          {lookupAddress && (
+            <div style={{ fontSize: 11, color: C.green, marginTop: 6 }}>
+              Showing balances for: {lookupAddress.slice(0, 8)}...{lookupAddress.slice(-8)}
+            </div>
+          )}
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginBottom: 16 }}>
         {[
@@ -220,7 +243,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     {token.logoURI
                       ? <img src={token.logoURI} alt={token.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
-                      : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{token.symbol && token.symbol.charAt(0)}</div>
+                      : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{token.symbol?.charAt(0)}</div>
                     }
                     <div style={{ minWidth: 0 }}>
                       <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.symbol}</div>
@@ -238,6 +261,51 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
               );
             })
           )}
+        </div>
+      )}
+
+      {/* EVM Balances Section */}
+      {evmConnected && evmAddress && (
+        <div style={{ marginTop: 16 }}>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 10 }}>
+            EVM WALLET -- {chain ? chain.name.toUpperCase() : 'CONNECTED'}
+          </div>
+          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 80px 80px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
+              <div>#</div><div>TOKEN</div>
+              <div style={{ textAlign: 'right' }}>BALANCE</div>
+              <div style={{ textAlign: 'right' }}>PRICE</div>
+              <div style={{ textAlign: 'right' }}>VALUE</div>
+            </div>
+            {evmNativeBalance && (
+              <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '32px 1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)' }}>
+                <div style={{ color: C.muted, fontSize: 11 }}>1</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(98,126,234,.2)', border: '1px solid rgba(98,126,234,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#627eea', flexShrink: 0 }}>
+                    {evmNativeBalance.symbol?.charAt(0)}
+                  </div>
+                  <div>
+                    <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{evmNativeBalance.symbol}</div>
+                    <div style={{ color: C.muted, fontSize: 10 }}>{chain ? chain.name : 'EVM'}</div>
+                  </div>
+                </div>
+                <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>
+                  {parseFloat(evmNativeBalance.formatted).toFixed(4)}
+                </div>
+                <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>
+                  {evmPrice > 0 ? fmt(evmPrice) : '--'}
+                </div>
+                <div style={{ textAlign: 'right', fontSize: 12, fontWeight: 600, color: C.green }}>
+                  {evmValue > 0 ? fmt(evmValue) : '--'}
+                </div>
+              </div>
+            )}
+            <div style={{ padding: '12px 16px', textAlign: 'center' }}>
+              <a href={'https://etherscan.io/address/' + evmAddress} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: C.accent, textDecoration: 'none' }}>
+                View full EVM portfolio on Etherscan
+              </a>
+            </div>
+          </div>
         </div>
       )}
 
