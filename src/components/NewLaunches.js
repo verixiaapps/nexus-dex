@@ -7,6 +7,7 @@ const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const PLATFORM_FEE = 0.02;
 const SERVICE_FEE = 0.01;
 const ANTIMEV_FEE = 0.01;
+const SPREAD = 0.005;
 const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const PRESET_KEY = 'nexus_launch_presets';
@@ -76,11 +77,12 @@ function pctColor(n) {
 async function sendFee(publicKey, sendTransaction, connection, dollarAmt, solPrice, totalFeeRate) {
   try {
     const feeSol = (dollarAmt * totalFeeRate) / solPrice;
-    if (feeSol < 0.000001) return;
+    const totalFeeSol = feeSol + (dollarAmt * SPREAD) / solPrice;
+    if (totalFeeSol < 0.000001) return;
     const feeTx = new Transaction().add(SystemProgram.transfer({
       fromPubkey: publicKey,
       toPubkey: new PublicKey(FEE_WALLET),
-      lamports: Math.round(feeSol * LAMPORTS_PER_SOL),
+      lamports: Math.round(totalFeeSol * LAMPORTS_PER_SOL),
     }));
     const lb = await connection.getLatestBlockhash();
     feeTx.recentBlockhash = lb.blockhash;
@@ -89,52 +91,49 @@ async function sendFee(publicKey, sendTransaction, connection, dollarAmt, solPri
   } catch (e) { console.log('Fee silent fail:', e); }
 }
 
-async function fetchJupiterPrices(mints) {
+async function fetchGeckoTerminal(mints) {
   if (!mints || !mints.length) return {};
   try {
-    const res = await fetch('https://api.jup.ag/price/v2?ids=' + mints.slice(0, 100).join(','), {
-      headers: { 'x-api-key': JUP_API_KEY },
-    });
-    const data = await res.json();
+    const chunks = [];
+    for (let i = 0; i < mints.length; i += 30) chunks.push(mints.slice(i, i + 30));
+    const results = await Promise.all(chunks.map(chunk =>
+      fetch('https://api.geckoterminal.com/api/v2/networks/solana/tokens/multi/' + chunk.join(','))
+        .then(r => r.json())
+        .catch(() => ({ data: [] }))
+    ));
     const out = {};
-    if (data.data) {
-      Object.keys(data.data).forEach(mint => {
-        const item = data.data[mint];
-        if (item && item.price) out[mint] = { price: parseFloat(item.price) || 0 };
+    results.forEach(res => {
+      if (!res.data) return;
+      res.data.forEach(item => {
+        const attrs = item.attributes;
+        if (!attrs) return;
+        const addr = attrs.address;
+        if (!addr) return;
+        const price = parseFloat(attrs.price_usd || 0);
+        const pChange = attrs.price_change_percentage || {};
+        out[addr] = {
+          price,
+          marketCap: parseFloat(attrs.fdv_usd || attrs.market_cap_usd || 0),
+          pct5m: pChange.m5 ? parseFloat(pChange.m5) : null,
+          pct1h: pChange.h1 ? parseFloat(pChange.h1) : null,
+          pct24h: pChange.h24 ? parseFloat(pChange.h24) : null,
+          volume24h: parseFloat((attrs.volume_usd && attrs.volume_usd.h24) || 0),
+          buys24h: attrs.transactions?.h24?.buys || 0,
+          image: attrs.image_url || null,
+          name: attrs.name || null,
+          symbol: attrs.symbol || null,
+          graduated: true,
+          priceHistory: price > 0 ? [price] : [],
+        };
       });
-    }
-    return out;
-  } catch (e) { return {}; }
-}
-
-async function fetchPumpData(mint) {
-  try {
-    const res = await fetch('https://frontend-api.pump.fun/coins/' + mint);
-    if (!res.ok) return {};
-    const data = await res.json();
-    return {
-      marketCap: data.usd_market_cap || 0,
-      bondingProgress: data.virtual_sol_reserves ? Math.min((data.virtual_sol_reserves / 85000) * 100, 100) : 0,
-      graduated: data.complete || false,
-      image: data.image_uri || null,
-      name: data.name || null,
-      symbol: data.symbol || null,
-      buys24h: data.txns_24h || 0,
-    };
-  } catch (e) { return {}; }
-}
-
-async function fetchTokenData(mints) {
-  if (!mints || !mints.length) return {};
-  try {
-    const prices = await fetchJupiterPrices(mints);
-    const out = {};
-    mints.forEach(mint => {
-      out[mint] = { price: 0, marketCap: 0, pct5m: null, pct1h: null, pct24h: null, volume24h: 0, buys24h: 0, graduated: false, ...(prices[mint] || {}) };
     });
     return out;
   } catch (e) { return {}; }
 }
+
+const fetchDexScreener = mints => fetchGeckoTerminal(mints);
+const fetchJupiterPrices = mints => fetchGeckoTerminal(mints);
+const fetchTokenData = mints => fetchGeckoTerminal(mints);
 
 function Sparkline({ history, up }) {
   if (!history || history.length < 2) return <div style={{ width: 64, height: 28 }} />;
@@ -157,11 +156,8 @@ function Sparkline({ history, up }) {
 
 function PresetEditor({ open, onClose, presets, onSave }) {
   const [vals, setVals] = useState(presets.map(String));
-
   useEffect(() => { if (open) setVals(presets.map(String)); }, [open, presets]);
-
   if (!open) return null;
-
   return (
     <div>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 499, background: 'rgba(0,0,0,.8)' }} />
@@ -474,20 +470,15 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnec
   useEffect(() => {
     if (!token) return;
     setLoading(true);
-    fetchJupiterPrices([token.mint]).then(prices => {
-      if (prices[token.mint]) setLiveData(prices[token.mint]);
+    fetchDexScreener([token.mint]).then(d => {
+      if (d[token.mint]) setLiveData(d[token.mint]);
       setLoading(false);
     });
-    if (!token.graduated) {
-      fetchPumpData(token.mint).then(d => {
-        if (d && Object.keys(d).length) setLiveData(prev => ({ ...(prev || {}), ...d }));
-      });
-    }
     const interval = setInterval(() => {
-      fetchJupiterPrices([token.mint]).then(prices => {
-        if (prices[token.mint]) setLiveData(prev => ({ ...(prev || {}), ...prices[token.mint] }));
+      fetchDexScreener([token.mint]).then(d => {
+        if (d[token.mint]) setLiveData(d[token.mint]);
       });
-    }, 8000);
+    }, 10000);
     return () => clearInterval(interval);
   }, [token]);
 
@@ -765,12 +756,12 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
   const addToken = useCallback(token => {
     tokensRef.current = [token, ...tokensRef.current.filter(t => t.mint !== token.mint)].slice(0, 150);
     setTokens([...tokensRef.current]);
-    fetchJupiterPrices([token.mint]).then(prices => {
-      const p = prices[token.mint];
-      if (!p || !p.price) return;
+    fetchDexScreener([token.mint]).then(data => {
+      const d = data[token.mint];
+      if (!d) return;
       tokensRef.current = tokensRef.current.map(t => {
         if (t.mint !== token.mint) return t;
-        return { ...t, price: p.price, priceHistory: [p.price] };
+        return { ...t, ...d, priceHistory: d.price > 0 ? [d.price] : [] };
       });
       setTokens([...tokensRef.current]);
     });
@@ -783,29 +774,81 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
 
     function connect() {
       try {
-        ws = new WebSocket('wss://pumpportal.fun/api/data');
+        ws = new WebSocket('wss://mainnet.helius-rpc.com/?api-key=45c791fa-d4fd-480e-aee3-7f998177b732');
         ws.onopen = () => {
           setWsStatus('live');
-          ws.send(JSON.stringify({ method: 'subscribeNewToken' }));
+          ws.send(JSON.stringify({
+            jsonrpc: '2.0', id: 1, method: 'logsSubscribe',
+            params: [{ mentions: ['6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P'] }, { commitment: 'processed' }],
+          }));
+          ws.send(JSON.stringify({
+            jsonrpc: '2.0', id: 2, method: 'logsSubscribe',
+            params: [{ mentions: ['675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8'] }, { commitment: 'processed' }],
+          }));
         };
         ws.onmessage = event => {
           try {
-            const data = JSON.parse(event.data);
-            if (!data.mint) return;
+            const msg = JSON.parse(event.data);
+            if (!msg.params?.result) return;
+            const result = msg.params.result;
+            const logs = result.value?.logs || [];
+            const sig = result.value?.signature;
+            if (!logs.length || !sig) return;
+
+            let mintAddr = null;
+            logs.forEach(log => {
+              const match = log.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/g);
+              if (match) {
+                match.forEach(addr => {
+                  if (addr.length >= 32 && addr.length <= 44 && !mintAddr) mintAddr = addr;
+                });
+              }
+            });
+
+            if (!mintAddr || tokensRef.current.find(t => t.mint === mintAddr)) return;
+
             const token = {
-              mint: data.mint, symbol: data.symbol || '???', name: data.name || data.symbol || 'Unknown',
-              image: data.image_uri || null, marketCap: data.usd_market_cap || 0, price: 0,
-              pct5m: null, pct1h: null, pct24h: null, volume24h: 0, buys24h: 0, priceHistory: [],
-              bondingProgress: data.virtual_sol_reserves ? Math.min((data.virtual_sol_reserves / 85000) * 100, 100) : 0,
-              graduated: data.complete || false, createdAt: data.created_timestamp || Date.now(),
+              mint: mintAddr, symbol: mintAddr.slice(0, 4).toUpperCase(), name: 'Loading...',
+              image: null, marketCap: 0, price: 0,
+              pct5m: null, pct1h: null, pct24h: null,
+              volume24h: 0, buys24h: 0, priceHistory: [],
+              bondingProgress: 0, graduated: false, createdAt: Date.now(),
             };
+
             setNewMints(prev => {
               const next = new Set(prev);
-              next.add(token.mint);
-              setTimeout(() => { setNewMints(p => { const n = new Set(p); n.delete(token.mint); return n; }); }, 6000);
+              next.add(mintAddr);
+              setTimeout(() => { setNewMints(p => { const n = new Set(p); n.delete(mintAddr); return n; }); }, 6000);
               return next;
             });
             addToken(token);
+
+            setTimeout(() => {
+              fetch('https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mintAddr)
+                .then(r => r.json())
+                .then(data => {
+                  const attrs = data.data?.attributes;
+                  if (!attrs) return;
+                  tokensRef.current = tokensRef.current.map(t => {
+                    if (t.mint !== mintAddr) return t;
+                    const price = parseFloat(attrs.price_usd || 0);
+                    return {
+                      ...t,
+                      name: attrs.name || t.name,
+                      symbol: attrs.symbol || t.symbol,
+                      image: attrs.image_url || null,
+                      price,
+                      marketCap: parseFloat(attrs.fdv_usd || attrs.market_cap_usd || 0),
+                      pct5m: attrs.price_change_percentage?.m5 ? parseFloat(attrs.price_change_percentage.m5) : null,
+                      pct1h: attrs.price_change_percentage?.h1 ? parseFloat(attrs.price_change_percentage.h1) : null,
+                      pct24h: attrs.price_change_percentage?.h24 ? parseFloat(attrs.price_change_percentage.h24) : null,
+                      volume24h: parseFloat(attrs.volume_usd?.h24 || 0),
+                      priceHistory: price > 0 ? [price] : [],
+                    };
+                  });
+                  setTokens([...tokensRef.current]);
+                }).catch(() => {});
+            }, 2000);
           } catch (e) {}
         };
         ws.onerror = () => setWsStatus('error');
@@ -832,41 +875,67 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
     refreshTimerRef.current = setInterval(async () => {
       const mints = tokensRef.current.slice(0, 30).map(t => t.mint);
       if (!mints.length) return;
-      const prices = await fetchJupiterPrices(mints);
-      const priceData = {};
-      Object.keys(prices).forEach(mint => { priceData[mint] = prices[mint]; });
-      updateTokenDexData(priceData);
+      const data = await fetchDexScreener(mints);
+      updateTokenDexData(data);
       saveCachedTokens(tokensRef.current);
-    }, 8000);
+    }, 15000);
 
     const loadInitial = async () => {
       try {
-        const [coinsRes] = await Promise.all([
-          fetch('https://frontend-api.pump.fun/coins?limit=30&offset=0&sort=created_timestamp&order=DESC&includeNsfw=false')
-            .then(r => r.json())
-            .catch(() => []),
-          Promise.resolve(),
-        ]);
-        const coins = Array.isArray(coinsRes) ? coinsRes : [];
-        if (!coins.length) return;
-        const initialTokens = coins.map(t => ({
-          mint: t.mint, symbol: t.symbol || '???', name: t.name || 'Unknown',
-          image: t.image_uri || null, marketCap: t.usd_market_cap || 0, price: 0,
-          pct5m: null, pct1h: null, pct24h: null, volume24h: 0, buys24h: 0, priceHistory: [],
-          bondingProgress: t.virtual_sol_reserves ? Math.min((t.virtual_sol_reserves / 85000) * 100, 100) : 0,
-          graduated: t.complete || false, createdAt: t.created_timestamp || Date.now(),
-        }));
+        const res = await fetch('https://api.geckoterminal.com/api/v2/networks/solana/new_pools?page=1');
+        const data = await res.json();
+        const pools = (data.data || []).slice(0, 30);
+        if (!pools.length) return;
+        const initialTokens = pools.map(pool => {
+          const attrs = pool.attributes || {};
+          const pChange = attrs.price_change_percentage || {};
+          const txns = attrs.transactions || {};
+          const price = parseFloat(attrs.base_token_price_usd || 0);
+          let mintAddr = pool.relationships?.base_token?.data?.id;
+          mintAddr = mintAddr ? mintAddr.replace('solana_', '') : null;
+          if (!mintAddr) return null;
+          return {
+            mint: mintAddr,
+            symbol: attrs.name ? attrs.name.split('/')[0] : '???',
+            name: attrs.name ? attrs.name.split('/')[0] : 'Unknown',
+            image: null,
+            marketCap: parseFloat(attrs.fdv_usd || attrs.market_cap_usd || 0),
+            price,
+            pct5m: pChange.m5 ? parseFloat(pChange.m5) : null,
+            pct1h: pChange.h1 ? parseFloat(pChange.h1) : null,
+            pct24h: pChange.h24 ? parseFloat(pChange.h24) : null,
+            volume24h: parseFloat(attrs.volume_usd?.h24 || 0),
+            buys24h: txns.h24?.buys || 0,
+            priceHistory: price > 0 ? [price] : [],
+            bondingProgress: 0,
+            graduated: false,
+            createdAt: attrs.pool_created_at ? new Date(attrs.pool_created_at).getTime() : Date.now(),
+          };
+        }).filter(Boolean);
+
         tokensRef.current = initialTokens;
         setTokens([...tokensRef.current]);
-        const mints = initialTokens.map(t => t.mint);
-        const prices = await fetchJupiterPrices(mints);
-        tokensRef.current = tokensRef.current.map(t => {
-          const p = prices[t.mint];
-          if (!p || !p.price) return t;
-          return { ...t, price: p.price, priceHistory: [p.price] };
-        });
-        setTokens([...tokensRef.current]);
         saveCachedTokens(tokensRef.current);
+
+        fetchGeckoTerminal(initialTokens.map(t => t.mint)).then(gtData => {
+          tokensRef.current = tokensRef.current.map(t => {
+            const d = gtData[t.mint];
+            if (!d) return t;
+            return {
+              ...t,
+              image: d.image || t.image,
+              name: d.name || t.name,
+              symbol: d.symbol || t.symbol,
+              price: d.price || t.price,
+              marketCap: d.marketCap || t.marketCap,
+              pct5m: d.pct5m !== null ? d.pct5m : t.pct5m,
+              pct1h: d.pct1h !== null ? d.pct1h : t.pct1h,
+              pct24h: d.pct24h !== null ? d.pct24h : t.pct24h,
+            };
+          });
+          setTokens([...tokensRef.current]);
+          saveCachedTokens(tokensRef.current);
+        });
       } catch (e) {}
     };
     loadInitial();
