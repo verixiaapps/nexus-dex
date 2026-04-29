@@ -19,7 +19,7 @@ function fmt(n, d = 2) {
   return '$' + n.toFixed(6);
 }
 
-export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWallet, isConnected, isSolanaConnected, walletAddress }) {
+export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWallet, isConnected, isSolanaConnected, walletAddress, refreshKey, onSelectToken }) {
   const { publicKey } = useWallet();
   const { connection } = useConnection();
   const [balances, setBalances] = useState([]);
@@ -104,6 +104,11 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
   useEffect(() => {
     if (effectiveAddress && coins.length > 0) fetchBalances();
   }, [coins.length]);
+
+  // Refresh every time user visits tab
+  useEffect(() => {
+    if (refreshKey > 0 && (publicKey || lookupAddress)) fetchBalances();
+  }, [refreshKey]);
 
   const solPrice = getPrice('SOL');
   const solValue = solBalance * solPrice;
@@ -212,7 +217,13 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
             <div style={{ textAlign: 'right' }}>VALUE</div>
           </div>
 
-          <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)' }}>
+          {/* SOL row */}
+          <div
+            onClick={() => onSelectToken && onSelectToken({ id: 'solana', symbol: 'SOL', name: 'Solana', current_price: solPrice })}
+            style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: onSelectToken ? 'pointer' : 'default' }}
+            onMouseEnter={e => { if (onSelectToken) e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+          >
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(153,69,255,.2)', border: '1px solid rgba(153,69,255,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#9945ff', flexShrink: 0 }}>S</div>
               <div>
@@ -236,7 +247,12 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
               return (
                 <div
                   key={token.mint}
-                  style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)' }}
+                  onClick={() => onSelectToken && onSelectToken({
+                    id: token.mint, symbol: token.symbol, name: token.name,
+                    image: token.logoURI, current_price: getPrice(token.symbol),
+                    isSolanaToken: true, mint: token.mint,
+                  })}
+                  style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: onSelectToken ? 'pointer' : 'default' }}
                   onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }}
                   onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
                 >
