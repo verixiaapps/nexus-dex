@@ -32,7 +32,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
   const [lookupAddress, setLookupAddress] = useState('');
 
   const { address: evmAddress, isConnected: evmConnected, chain } = useAccount();
-  const { data: evmNativeBalance } = useBalance({ address: evmAddress, enabled: !!evmAddress });
+  const { data: evmNativeBalance } = useBalance({ address: evmAddress, query: { enabled: !!evmAddress } });
 
   const getPrice = useCallback(symbol => {
     if (!symbol || !coins || !coins.length) return 0;
@@ -109,6 +109,11 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
   const solValue = solBalance * solPrice;
   const rootStyle = { width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' };
 
+  const evmSymbol = evmNativeBalance?.symbol;
+  const evmCoin = evmSymbol ? coins.find(c => c.symbol?.toUpperCase() === evmSymbol.toUpperCase()) : null;
+  const evmPrice = evmCoin ? evmCoin.current_price : 0;
+  const evmValue = evmNativeBalance ? parseFloat(evmNativeBalance.formatted) * evmPrice : 0;
+
   if (!isConnected) {
     return (
       <div style={{ maxWidth: 520, margin: '0 auto', ...rootStyle }}>
@@ -125,11 +130,6 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
       </div>
     );
   }
-
-  const evmSymbol = evmNativeBalance?.symbol;
-  const evmCoin = evmSymbol ? coins.find(c => c.symbol?.toUpperCase() === evmSymbol.toUpperCase()) : null;
-  const evmPrice = evmCoin ? evmCoin.current_price : 0;
-  const evmValue = evmNativeBalance ? parseFloat(evmNativeBalance.formatted) * evmPrice : 0;
 
   return (
     <div style={{ maxWidth: 600, margin: '0 auto', ...rootStyle }}>
