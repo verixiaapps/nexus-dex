@@ -7,6 +7,7 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'rec
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
+const SPREAD = 0.005;
 const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
 
 const C = {
@@ -295,12 +296,15 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
         const solPrice = solCoin ? solCoin.current_price : 100;
         const fromCoinData = coins.find(c => c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase());
         const fromPrice = fromCoinData ? fromCoinData.current_price : (coin ? coin.current_price : 0);
-        const feeSol = (parseFloat(fromAmt) * fromPrice * totalFee) / solPrice;
-        if (feeSol > 0.000001) {
+        const tradeUsd = parseFloat(fromAmt) * fromPrice;
+        const feeSol = (tradeUsd * totalFee) / solPrice;
+        const spreadSol = tradeUsd > 0 ? (tradeUsd * SPREAD) / solPrice : 0;
+        const totalFeeSol = feeSol + spreadSol;
+        if (totalFeeSol > 0.000001) {
           const feeTx = new Transaction().add(SystemProgram.transfer({
             fromPubkey: publicKey,
             toPubkey: new PublicKey(FEE_WALLET),
-            lamports: Math.round(feeSol * LAMPORTS_PER_SOL),
+            lamports: Math.round(totalFeeSol * LAMPORTS_PER_SOL),
           }));
           const lb = await connection.getLatestBlockhash();
           feeTx.recentBlockhash = lb.blockhash;
@@ -466,9 +470,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
         </button>
 
         {swapTx && swapStatus === 'success' && (
-          <a href={'https://solscan.io/tx/' + swapTx} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>
-            View on Solscan
-          </a>
+          <a href={'https://solscan.io/tx/' + swapTx} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>View on Solscan</a>
         )}
         <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 12, lineHeight: 1.6 }}>
           Powered by Jupiter - Non-custodial - Fees paid by user
@@ -521,10 +523,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         for (let i = days; i >= 0; i--) {
           const d = new Date(Date.now() - i * 86400000);
           const factor = 1 + (pctChange / 100) * (i / days);
-          points.push({
-            t: d.toLocaleDateString('en', { month: 'short', day: 'numeric' }),
-            p: +(currentPrice / factor).toFixed(6),
-          });
+          points.push({ t: d.toLocaleDateString('en', { month: 'short', day: 'numeric' }), p: +(currentPrice / factor).toFixed(6) });
         }
         setChartData(points);
       } catch (e) {}
