@@ -3,13 +3,20 @@ import ReactDOM from 'react-dom/client';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
 import '@solana/wallet-adapter-react-ui/styles.css';
+import { createSolanaClient } from '@metamask/connect-solana';
 import { createWeb3Modal } from '@web3modal/wagmi/react';
 import { defaultWagmiConfig } from '@web3modal/wagmi/react/config';
 import { WagmiProvider } from 'wagmi';
 import { mainnet, polygon, arbitrum, base, bsc, avalanche, optimism } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
- 
+
+// Only register MetaMask as a Solana wallet if MetaMask is detected
+// This lets MetaMask users get a Solana address automatically
+if (typeof window !== 'undefined' && window.ethereum && window.ethereum.isMetaMask) {
+  try { createSolanaClient({}); } catch (e) {}
+}
+
 const SOLANA_RPC = process.env.REACT_APP_SOLANA_RPC ||
   'https://mainnet.helius-rpc.com/?api-key=45c791fa-d4fd-480e-aee3-7f998177b732';
 const PROJECT_ID = '1a7c741caab0a2c5ffa2b199a816ea92';
