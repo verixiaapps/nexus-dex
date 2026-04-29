@@ -20,6 +20,21 @@ const C = {
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
 
+function loadCachedTokens() {
+  try {
+    const v = localStorage.getItem('nexus_launch_cache');
+    if (!v) return [];
+    const parsed = JSON.parse(v);
+    if (Date.now() - (parsed.ts || 0) > 300000) return [];
+    return parsed.tokens || [];
+  } catch (e) { return []; }
+}
+function saveCachedTokens(tokens) {
+  try {
+    localStorage.setItem('nexus_launch_cache', JSON.stringify({ ts: Date.now(), tokens: tokens.slice(0, 30) }));
+  } catch (e) {}
+}
+
 function loadPresets() {
   try { const v = localStorage.getItem(PRESET_KEY); return v ? JSON.parse(v) : [5, 10, 25, 50, 100]; }
   catch (e) { return [5, 10, 25, 50, 100]; }
@@ -194,6 +209,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
   const [activePreset, setActivePreset] = useState(null);
   const [customAmt, setCustomAmt] = useState('');
   const [sellPct, setSellPct] = useState(50);
+  const [customSellAmt, setCustomSellAmt] = useState('');
   const [antiMev, setAntiMev] = useState(true);
   const [status, setStatus] = useState('idle');
   const [txSig, setTxSig] = useState(null);
@@ -208,7 +224,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
       const match = presets.find(p => p === last);
       if (match) { setActivePreset(last); setCustomAmt(''); }
       else { setActivePreset(null); setCustomAmt(String(last)); }
-      setStatus('idle'); setTxSig(null); setError('');
+      setStatus('idle'); setTxSig(null); setError(''); setCustomSellAmt('');
     }
   }, [open, presets]);
 
@@ -363,17 +379,31 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
         ) : (
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>SELL AMOUNT</div>
-            <div style={{ display: 'flex', gap: 8 }}>
+            <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
               {[25, 50, 75, 100].map(pct => (
                 <button
                   key={pct}
-                  onClick={() => setSellPct(pct)}
-                  style={{ flex: 1, padding: '14px 4px', borderRadius: 10, border: '1px solid ' + (sellPct === pct ? C.red : C.border), background: sellPct === pct ? 'rgba(255,59,107,.15)' : C.card2, color: sellPct === pct ? C.red : C.muted, fontWeight: 800, fontSize: 14, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}
+                  onClick={() => { setSellPct(pct); setCustomSellAmt(''); }}
+                  style={{ flex: 1, padding: '12px 2px', borderRadius: 10, border: '1px solid ' + (sellPct === pct && !customSellAmt ? C.red : C.border), background: sellPct === pct && !customSellAmt ? 'rgba(255,59,107,.15)' : C.card2, color: sellPct === pct && !customSellAmt ? C.red : C.muted, fontWeight: 800, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}
                 >
                   {pct === 100 ? 'MAX' : pct + '%'}
                 </button>
               ))}
             </div>
+            <div style={{ background: C.card2, border: '1px solid ' + (customSellAmt ? C.red : C.border), borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <input
+                value={customSellAmt}
+                onChange={e => { setCustomSellAmt(e.target.value.replace(/[^0-9.]/g, '')); setSellPct(null); }}
+                placeholder="Custom Amount"
+                style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 20, fontWeight: 700, color: '#fff', outline: 'none' }}
+              />
+              <span style={{ color: C.muted, fontSize: 13, flexShrink: 0 }}>{token ? token.symbol : ''}</span>
+            </div>
+            {token && token.price > 0 && customSellAmt && parseFloat(customSellAmt) > 0 && (
+              <div style={{ textAlign: 'right', marginTop: 6, fontSize: 11, color: C.muted }}>
+                approx ${(parseFloat(customSellAmt) * token.price).toFixed(4)} USD
+              </div>
+            )}
           </div>
         )}
 
@@ -735,6 +765,15 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
   const addToken = useCallback(token => {
     tokensRef.current = [token, ...tokensRef.current.filter(t => t.mint !== token.mint)].slice(0, 150);
     setTokens([...tokensRef.current]);
+    fetchJupiterPrices([token.mint]).then(prices => {
+      const p = prices[token.mint];
+      if (!p || !p.price) return;
+      tokensRef.current = tokensRef.current.map(t => {
+        if (t.mint !== token.mint) return t;
+        return { ...t, price: p.price, priceHistory: [p.price] };
+      });
+      setTokens([...tokensRef.current]);
+    });
     queueDexFetch(token.mint);
   }, [queueDexFetch]);
 
@@ -776,38 +815,61 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
 
     connect();
 
+    const cached = loadCachedTokens();
+    if (cached.length > 0) {
+      tokensRef.current = cached;
+      setTokens([...cached]);
+      fetchJupiterPrices(cached.map(t => t.mint)).then(prices => {
+        tokensRef.current = tokensRef.current.map(t => {
+          const p = prices[t.mint];
+          if (!p || !p.price) return t;
+          return { ...t, price: p.price };
+        });
+        setTokens([...tokensRef.current]);
+      });
+    }
+
     refreshTimerRef.current = setInterval(async () => {
       const mints = tokensRef.current.slice(0, 30).map(t => t.mint);
       if (!mints.length) return;
-      const data = await fetchTokenData(mints);
-      updateTokenDexData(data);
+      const prices = await fetchJupiterPrices(mints);
+      const priceData = {};
+      Object.keys(prices).forEach(mint => { priceData[mint] = prices[mint]; });
+      updateTokenDexData(priceData);
+      saveCachedTokens(tokensRef.current);
     }, 8000);
 
-    fetch('https://frontend-api.pump.fun/coins?limit=30&offset=0&sort=created_timestamp&order=DESC&includeNsfw=false')
-      .then(r => r.json())
-      .then(data => {
-        const coins = Array.isArray(data) ? data : [];
+    const loadInitial = async () => {
+      try {
+        const [coinsRes] = await Promise.all([
+          fetch('https://frontend-api.pump.fun/coins?limit=30&offset=0&sort=created_timestamp&order=DESC&includeNsfw=false')
+            .then(r => r.json())
+            .catch(() => []),
+          Promise.resolve(),
+        ]);
+        const coins = Array.isArray(coinsRes) ? coinsRes : [];
         if (!coins.length) return;
         const initialTokens = coins.map(t => ({
           mint: t.mint, symbol: t.symbol || '???', name: t.name || 'Unknown',
-          image: t.image_uri || null, marketCap: t.usd_market_cap || 0,
-          price: t.usd_market_cap && t.total_supply ? t.usd_market_cap / t.total_supply : 0,
+          image: t.image_uri || null, marketCap: t.usd_market_cap || 0, price: 0,
           pct5m: null, pct1h: null, pct24h: null, volume24h: 0, buys24h: 0, priceHistory: [],
           bondingProgress: t.virtual_sol_reserves ? Math.min((t.virtual_sol_reserves / 85000) * 100, 100) : 0,
           graduated: t.complete || false, createdAt: t.created_timestamp || Date.now(),
         }));
         tokensRef.current = initialTokens;
         setTokens([...tokensRef.current]);
-        fetchJupiterPrices(initialTokens.map(t => t.mint)).then(prices => {
-          tokensRef.current = tokensRef.current.map(t => {
-            const p = prices[t.mint];
-            if (!p || !p.price) return t;
-            return { ...t, price: p.price, priceHistory: p.price > 0 ? [p.price] : [] };
-          });
-          setTokens([...tokensRef.current]);
+        const mints = initialTokens.map(t => t.mint);
+        const prices = await fetchJupiterPrices(mints);
+        tokensRef.current = tokensRef.current.map(t => {
+          const p = prices[t.mint];
+          if (!p || !p.price) return t;
+          return { ...t, price: p.price, priceHistory: [p.price] };
         });
-      })
-      .catch(() => {});
+        setTokens([...tokensRef.current]);
+        saveCachedTokens(tokensRef.current);
+      } catch (e) {}
+    };
+    loadInitial();
 
     return () => {
       clearTimeout(reconnectTimer);
