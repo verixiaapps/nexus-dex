@@ -43,7 +43,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
     const EVM_CHAINS = ['0x1', '0x89', '0xa4b1', '0x2105', '0x38', '0xa86a', '0xa'];
     const CHAIN_NAMES = { '0x1': 'Ethereum', '0x89': 'Polygon', '0xa4b1': 'Arbitrum', '0x2105': 'Base', '0x38': 'BSC', '0xa86a': 'Avalanche', '0xa': 'Optimism' };
     Promise.all(EVM_CHAINS.map(chainId =>
-      fetch(`https://deep-index.moralis.io/api/v2.2/wallets/${evmAddress}/tokens?chain=${chainId}&exclude_spam=true&exclude_unverified_contracts=false`, {
+      fetch('https://deep-index.moralis.io/api/v2.2/wallets/' + evmAddress + '/tokens?chain=' + chainId + '&exclude_spam=true&exclude_unverified_contracts=false', {
         headers: { 'X-API-Key': MORALIS_KEY, 'Accept': 'application/json' },
       })
         .then(r => r.ok ? r.json() : { result: [] })
@@ -177,7 +177,6 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
         </div>
       </div>
 
-      {/* Manual Solana address input */}
       {!publicKey && (
         <div style={{ background: C.card, border: '1px solid rgba(0,229,255,.15)', borderRadius: 12, padding: 16, marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 8 }}>SOLANA WALLET ADDRESS</div>
@@ -237,7 +236,6 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
             <div>TOKEN</div><div style={{ textAlign: 'right' }}>BALANCE</div><div style={{ textAlign: 'right' }}>PRICE</div><div style={{ textAlign: 'right' }}>VALUE</div>
           </div>
 
-          {/* SOL row */}
           <div
             onClick={() => onSelectToken && onSelectToken({ id: 'solana', symbol: 'SOL', name: 'Solana', current_price: solPrice })}
             style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: onSelectToken ? 'pointer' : 'default' }}
@@ -296,7 +294,6 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
         </div>
       )}
 
-      {/* EVM Balances - Moralis powered, all chains */}
       {evmConnected && evmAddress && (
         <div style={{ marginTop: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
@@ -318,7 +315,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
               const positive = token.pct24h >= 0;
               return (
                 <div
-                  key={`${token.chain}-${token.address}-${i}`}
+                  key={token.chain + '-' + token.address + '-' + i}
                   style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', alignItems: 'center' }}
                   onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }}
                   onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
