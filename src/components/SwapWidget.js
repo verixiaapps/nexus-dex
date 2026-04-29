@@ -205,6 +205,8 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   const [swapError, setSwapError] = useState('');
   const [customAddress, setCustomAddress] = useState('');
   const [useCustomAddress, setUseCustomAddress] = useState(false);
+  const [fromBalance, setFromBalance] = useState(null);
+  const [toBalance, setToBalance] = useState(null);
 
   const totalFee = antiMev ? BASE_FEE + ANTIMEV_FEE : BASE_FEE;
 
@@ -236,13 +238,34 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     return () => clearTimeout(t);
   }, [fetchQuote]);
 
+  // Fetch balances for selected tokens
+  useEffect(() => {
+    if (!publicKey || !connection) { setFromBalance(null); setToBalance(null); return; }
+    const fetchBals = async () => {
+      try {
+        if (fromToken?.mint === 'So11111111111111111111111111111111111111112') {
+          setFromBalance((await connection.getBalance(publicKey)) / 1e9);
+        } else if (fromToken?.mint) {
+          const accts = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: new PublicKey(fromToken.mint) });
+          setFromBalance(accts.value.length > 0 ? accts.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0);
+        }
+        if (toToken?.mint === 'So11111111111111111111111111111111111111112') {
+          setToBalance((await connection.getBalance(publicKey)) / 1e9);
+        } else if (toToken?.mint) {
+          const accts2 = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: new PublicKey(toToken.mint) });
+          setToBalance(accts2.value.length > 0 ? accts2.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0);
+        }
+      } catch (e) {}
+    };
+    fetchBals();
+  }, [publicKey, connection, fromToken, toToken]);
+
   const executeSwap = async () => {
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
     if (!publicKey) { setSwapError('Please connect a wallet to swap'); return; }
     if (!quote || !publicKey) return;
     setSwapStatus('loading'); setSwapError('');
     try {
-      // SOL balance check - covers fee + network gas
       if (publicKey) {
         try {
           const solBal = (await connection.getBalance(publicKey)) / 1e9;
@@ -333,6 +356,10 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
 
   const feeUsd = fromAmt && fromPriceVal ? (parseFloat(fromAmt) * fromPriceVal * totalFee).toFixed(2) : '0.00';
 
+  const fmtBal = bal => bal >= 1000
+    ? bal.toLocaleString('en-US', { maximumFractionDigits: 2 })
+    : bal.toFixed(4);
+
   const swapPanel = (
     <div>
       <div style={{ marginBottom: 16 }}>
@@ -354,8 +381,16 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           </div>
         </div>
 
+        {/* YOU PAY */}
         <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border, marginBottom: 4 }}>
-          <div style={{ marginBottom: 8 }}><span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU PAY</span></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU PAY</span>
+            {fromBalance != null && (
+              <span style={{ fontSize: 11, color: C.muted }}>
+                Balance: <span style={{ color: C.text }}>{fmtBal(fromBalance)}</span>
+              </span>
+            )}
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <TokenSelect jupiterTokens={jupiterTokens} selected={fromToken} onSelect={setFromToken} />
             <input
@@ -364,6 +399,18 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
               placeholder="0.00"
               style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 500, color: '#fff', textAlign: 'right', outline: 'none', minWidth: 0 }}
             />
+            {fromBalance != null && fromBalance > 0 && (
+              <button
+                onClick={() => {
+                  const fees = totalFee + SPREAD + 0.002;
+                  const maxAmt = fromToken?.symbol === 'SOL'
+                    ? Math.max(0, fromBalance - fees)
+                    : fromBalance;
+                  setFromAmt(maxAmt > 0 ? maxAmt.toFixed(fromToken?.decimals <= 2 ? 2 : 6) : '0');
+                }}
+                style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '3px 8px', color: C.accent, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}
+              >MAX</button>
+            )}
           </div>
           {fromAmt && fromPriceVal > 0 && (
             <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(fromAmt) * fromPriceVal)}</div>
@@ -377,8 +424,16 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           >^v</button>
         </div>
 
+        {/* YOU RECEIVE */}
         <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border }}>
-          <div style={{ marginBottom: 8 }}><span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU RECEIVE</span></div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU RECEIVE</span>
+            {toBalance != null && (
+              <span style={{ fontSize: 11, color: C.muted }}>
+                Balance: <span style={{ color: C.text }}>{fmtBal(toBalance)}</span>
+              </span>
+            )}
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <TokenSelect jupiterTokens={jupiterTokens} selected={toToken} onSelect={setToToken} />
             <div style={{ flex: 1, textAlign: 'right', fontSize: 22, fontWeight: 500, minWidth: 0, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>
