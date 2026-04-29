@@ -7,7 +7,7 @@ const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
 const SPREAD = 0.005;
- 
+
 const POPULAR_TOKENS = [
   { mint: 'So11111111111111111111111111111111111111112', symbol: 'SOL', name: 'Solana', decimals: 9, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png' },
   { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC', name: 'USD Coin', decimals: 6, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png' },
@@ -102,7 +102,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
           <img src={selected.logoURI} alt={selected.symbol} style={{ width: 20, height: 20, borderRadius: '50%' }} onError={e => { e.target.style.display = 'none'; }} />
         )}
         {selected && !selected.logoURI && (
-          <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'rgba(0,229,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, color: C.accent }}>{selected.symbol && selected.symbol.charAt(0)}</div>
+          <div style={{ width: 20, height: 20, borderRadius: '50%', background: 'rgba(0,229,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 10, fontWeight: 700, color: C.accent }}>{selected.symbol?.charAt(0)}</div>
         )}
         <span style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{selected ? selected.symbol : 'Select'}</span>
         <span style={{ color: C.muted, fontSize: 9 }}>v</span>
@@ -121,8 +121,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
                 <button onClick={close} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: 0 }}>x</button>
               </div>
               <input
-                autoFocus
-                value={q}
+                autoFocus value={q}
                 onChange={e => setQ(e.target.value)}
                 placeholder="Search by name or symbol..."
                 style={{ width: '100%', background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, padding: '10px 12px', color: C.text, fontSize: 13, outline: 'none', fontFamily: 'Syne, sans-serif', marginBottom: 8 }}
@@ -142,7 +141,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
                 >
                   {contractToken.logoURI
                     ? <img src={contractToken.logoURI} alt={contractToken.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} onError={e => { e.target.style.display = 'none'; }} />
-                    : <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>{contractToken.symbol && contractToken.symbol.charAt(0)}</div>
+                    : <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>{contractToken.symbol?.charAt(0)}</div>
                   }
                   <div>
                     <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{contractToken.symbol}</div>
@@ -170,7 +169,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
                 >
                   {t.logoURI
                     ? <img src={t.logoURI} alt={t.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
-                    : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{t.symbol && t.symbol.charAt(0)}</div>
+                    : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{t.symbol?.charAt(0)}</div>
                   }
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{t.symbol}</div>
@@ -214,8 +213,8 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     setQuoteLoading(true); setQuote(null); setQuoteError('');
     try {
       const amount = Math.round(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals));
-      const url = `https://api.jup.ag/swap/v1/quote?inputMint=${fromToken.mint}&outputMint=${toToken.mint}&amount=${amount}&slippageBps=${Math.round(slip * 100)}`;
-      const res = await fetch(url);
+      const url = `https://api.jup.ag/swap/v1/quote?inputMint=${fromToken.mint}&outputMint=${toToken.mint}&amount=${amount}&slippageBps=${Math.round(slip * 100)}&restrictIntermediateTokens=true`;
+      const res = await fetch(url, { headers: { 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' } });
       const data = await res.json();
       if (data && data.outAmount) {
         setQuote({
@@ -239,7 +238,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
 
   const executeSwap = async () => {
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
-    if (!isSolanaConnected) { setSwapError('Please connect a Solana wallet to swap'); return; }
+    if (!publicKey) { setSwapError('Please connect a wallet to swap'); return; }
     if (!quote || !publicKey) return;
     setSwapStatus('loading'); setSwapError('');
     try {
@@ -441,7 +440,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         {isConnected ? (
           <button
             onClick={executeSwap}
-            disabled={!fromAmt || parseFloat(fromAmt) <= 0 || !quote || swapStatus === 'loading'}
+            disabled={swapStatus === 'loading'}
             style={{
               width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
               background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
@@ -450,16 +449,16 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
                 : 'linear-gradient(135deg,#00e5ff,#0055ff)',
               color: !fromAmt || !quote ? C.muted2 : swapStatus === 'error' ? C.red : C.bg,
               fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
-              cursor: !fromAmt || !quote ? 'not-allowed' : 'pointer',
+              cursor: swapStatus === 'loading' ? 'not-allowed' : 'pointer',
               transition: 'all .3s', minHeight: 52,
             }}
           >
             {swapStatus === 'loading' ? 'Confirming…'
               : swapStatus === 'success' ? 'Swap Confirmed!'
               : swapStatus === 'error' ? 'Failed - Try Again'
-              : !isSolanaConnected ? 'Connect Solana Wallet to Swap'
               : !fromAmt ? 'Enter Amount'
-              : !quote ? 'Getting Best Route…'
+              : quoteLoading ? 'Getting Best Route…'
+              : !quote ? 'No Route Found'
               : `Swap ${fromToken ? fromToken.symbol : ''} > ${toToken ? toToken.symbol : ''}`}
           </button>
         ) : (
