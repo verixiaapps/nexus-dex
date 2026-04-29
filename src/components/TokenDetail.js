@@ -132,7 +132,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
           <img src={selected.logoURI} alt={selected.symbol} style={{ width: 24, height: 24, borderRadius: '50%' }} onError={e => { e.target.style.display = 'none'; }} />
         ) : selected ? (
           <div style={{ width: 24, height: 24, borderRadius: '50%', background: 'rgba(0,229,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>
-            {selected.symbol && selected.symbol.charAt(0)}
+            {selected.symbol?.charAt(0)}
           </div>
         ) : null}
         <span style={{ color: '#fff', fontWeight: 700, fontSize: 14, flex: 1, textAlign: 'left' }}>{selected ? selected.symbol : 'Select Token'}</span>
@@ -172,7 +172,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
                 >
                   {contractToken.logoURI
                     ? <img src={contractToken.logoURI} alt={contractToken.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} onError={e => { e.target.style.display = 'none'; }} />
-                    : <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>{contractToken.symbol && contractToken.symbol.charAt(0)}</div>
+                    : <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>{contractToken.symbol?.charAt(0)}</div>
                   }
                   <div>
                     <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{contractToken.symbol}</div>
@@ -197,7 +197,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
                 >
                   {t.logoURI
                     ? <img src={t.logoURI} alt={t.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
-                    : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{t.symbol && t.symbol.charAt(0)}</div>
+                    : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{t.symbol?.charAt(0)}</div>
                   }
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{t.symbol}</div>
@@ -261,10 +261,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
             priceImpactPct: data.priceImpactPct,
             quoteResponse: data,
           });
-        } else {
-          setQuoteError(data.error || 'No route found');
-          setQuote(null);
-        }
+        } else { setQuoteError(data.error || 'No route found'); setQuote(null); }
       } catch (e) { setQuoteError('Failed to get quote'); setQuote(null); }
       setQuoteLoading(false);
     }, 600);
@@ -273,7 +270,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
 
   const executeSwap = async () => {
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
-    if (!isSolanaConnected || !publicKey) { setSwapError('Please connect a Solana wallet to trade'); return; }
+    if (!publicKey) { setSwapError('Please connect a Solana-compatible wallet'); return; }
     if (!quote) return;
     setSwapStatus('loading'); setSwapError('');
     try {
@@ -366,11 +363,6 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
             <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 8, padding: '8px 16px', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect</button>
           </div>
         )}
-        {isConnected && !isSolanaConnected && (
-          <div style={{ marginBottom: 16, padding: 14, background: 'rgba(255,59,107,.05)', border: '1px solid rgba(255,59,107,.2)', borderRadius: 12 }}>
-            <span style={{ color: C.red, fontSize: 13 }}>Solana wallet required. Please connect Phantom.</span>
-          </div>
-        )}
 
         <div style={{ marginBottom: 8 }}>
           <TokenSelect selected={fromToken} onSelect={setFromToken} jupiterTokens={jupiterTokens} label="YOU PAY" />
@@ -448,28 +440,27 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
 
         <button
           onClick={executeSwap}
-          disabled={isConnected && isSolanaConnected && (!fromAmt || !quote || swapStatus === 'loading')}
+          disabled={swapStatus === 'loading'}
           style={{
             width: '100%', padding: 18, borderRadius: 14, border: 'none',
             background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
               : swapStatus === 'error' ? 'rgba(255,59,107,.2)'
               : !isConnected ? 'linear-gradient(135deg,#9945ff,#7c3aed)'
-              : isConnected && !isSolanaConnected ? 'rgba(255,59,107,.2)'
               : !fromAmt || !quote ? C.card3
               : modeGradient,
-            color: isConnected && isSolanaConnected && (!fromAmt || !quote) ? C.muted2 : '#fff',
+            color: !isConnected || (!fromAmt && !quote) ? C.muted2 : '#fff',
             fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16,
-            cursor: isConnected && isSolanaConnected && (!fromAmt || !quote) ? 'not-allowed' : 'pointer',
+            cursor: swapStatus === 'loading' ? 'not-allowed' : 'pointer',
             transition: 'all .3s', minHeight: 54,
           }}
         >
           {!isConnected ? 'Connect Wallet to Trade'
-            : !isSolanaConnected ? 'Solana Wallet Required'
             : swapStatus === 'loading' ? 'Confirming...'
             : swapStatus === 'success' ? `${modeLabel} Confirmed!`
             : swapStatus === 'error' ? 'Failed - Try Again'
             : !fromAmt ? 'Enter Amount'
-            : !quote ? 'Getting Quote...'
+            : quoteLoading ? 'Getting Quote...'
+            : !quote ? 'No Route Found'
             : `${modeLabel} ${toToken ? toToken.symbol : ''}`}
         </button>
 
