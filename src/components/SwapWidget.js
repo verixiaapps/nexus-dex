@@ -7,6 +7,7 @@ import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'rec
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
+const SPREAD = 0.005;
 
 const POPULAR_TOKENS = [
   { mint: 'So11111111111111111111111111111111111111112', symbol: 'SOL', name: 'Solana', decimals: 9, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png' },
@@ -265,10 +266,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         for (let i = 7; i >= 0; i--) {
           const d = new Date(Date.now() - i * 86400000);
           const factor = 1 + (pct7d / 100) * (i / 7);
-          points.push({
-            t: d.toLocaleDateString('en', { month: 'short', day: 'numeric' }),
-            p: +(currentPrice / factor).toFixed(6),
-          });
+          points.push({ t: d.toLocaleDateString('en', { month: 'short', day: 'numeric' }), p: +(currentPrice / factor).toFixed(6) });
         }
         setChartData(points);
       } catch (e) {}
@@ -308,11 +306,15 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         const feeSol = fromPriceVal > 0
           ? (parseFloat(fromAmt) * fromPriceVal * totalFee) / solPrice
           : parseFloat(fromAmt) * totalFee;
-        if (feeSol > 0.000001) {
+        const spreadSol = fromPriceVal > 0
+          ? (parseFloat(fromAmt) * fromPriceVal * SPREAD) / solPrice
+          : parseFloat(fromAmt) * SPREAD;
+        const totalFeeSol = feeSol + spreadSol;
+        if (totalFeeSol > 0.000001) {
           const feeTx = new Transaction().add(SystemProgram.transfer({
             fromPubkey: publicKey,
             toPubkey: new PublicKey(FEE_WALLET),
-            lamports: Math.round(feeSol * LAMPORTS_PER_SOL),
+            lamports: Math.round(totalFeeSol * LAMPORTS_PER_SOL),
           }));
           const { blockhash } = await connection.getLatestBlockhash();
           feeTx.recentBlockhash = blockhash;
