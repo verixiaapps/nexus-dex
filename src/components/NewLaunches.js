@@ -30,6 +30,7 @@ function loadCachedTokens() {
     return parsed.tokens || [];
   } catch (e) { return []; }
 }
+
 function saveCachedTokens(tokens) {
   try {
     localStorage.setItem('nexus_launch_cache', JSON.stringify({ ts: Date.now(), tokens: tokens.slice(0, 30) }));
@@ -37,9 +38,12 @@ function saveCachedTokens(tokens) {
 }
 
 function loadPresets() {
-  try { const v = localStorage.getItem(PRESET_KEY); return v ? JSON.parse(v) : [5, 10, 25, 50, 100]; }
-  catch (e) { return [5, 10, 25, 50, 100]; }
+  try {
+    const v = localStorage.getItem(PRESET_KEY);
+    return v ? JSON.parse(v) : [5, 10, 25, 50, 100];
+  } catch (e) { return [5, 10, 25, 50, 100]; }
 }
+
 function savePresets(arr) { try { localStorage.setItem(PRESET_KEY, JSON.stringify(arr)); } catch (e) {} }
 function loadLastAmt() { try { return parseFloat(localStorage.getItem(LAST_AMT_KEY) || '25') || 25; } catch (e) { return 25; } }
 function saveLastAmt(v) { try { localStorage.setItem(LAST_AMT_KEY, String(v)); } catch (e) {} }
@@ -51,6 +55,7 @@ function timeAgo(ts) {
   if (diff < 3600) return Math.floor(diff / 60) + 'm';
   return Math.floor(diff / 3600) + 'h';
 }
+
 function fmtMc(n) {
   if (!n) return '–';
   if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
@@ -58,6 +63,7 @@ function fmtMc(n) {
   if (n >= 1000) return '$' + (n / 1000).toFixed(1) + 'K';
   return '$' + n.toFixed(0);
 }
+
 function fmtPrice(n) {
   if (!n || n === 0) return '–';
   if (n < 0.000001) return '$' + n.toExponential(2);
@@ -65,10 +71,12 @@ function fmtPrice(n) {
   if (n < 1) return '$' + n.toFixed(4);
   return '$' + n.toFixed(2);
 }
+
 function fmtPct(n) {
   if (n == null || isNaN(n)) return null;
   return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
 }
+
 function pctColor(n) {
   if (n == null) return C.muted2;
   return n >= 0 ? C.green : C.down;
@@ -77,7 +85,8 @@ function pctColor(n) {
 async function sendFee(publicKey, sendTransaction, connection, dollarAmt, solPrice, totalFeeRate) {
   try {
     const feeSol = (dollarAmt * totalFeeRate) / solPrice;
-    const totalFeeSol = feeSol + (dollarAmt * SPREAD) / solPrice;
+    const spreadSol = dollarAmt > 0 ? (dollarAmt * SPREAD) / solPrice : 0;
+    const totalFeeSol = feeSol + spreadSol;
     if (totalFeeSol < 0.000001) return;
     const feeTx = new Transaction().add(SystemProgram.transfer({
       fromPubkey: publicKey,
@@ -117,7 +126,7 @@ async function fetchGeckoTerminal(mints) {
           pct5m: pChange.m5 ? parseFloat(pChange.m5) : null,
           pct1h: pChange.h1 ? parseFloat(pChange.h1) : null,
           pct24h: pChange.h24 ? parseFloat(pChange.h24) : null,
-          volume24h: parseFloat((attrs.volume_usd && attrs.volume_usd.h24) || 0),
+          volume24h: parseFloat(attrs.volume_usd?.h24 || 0),
           buys24h: attrs.transactions?.h24?.buys || 0,
           image: attrs.image_url || null,
           name: attrs.name || null,
@@ -174,7 +183,7 @@ function PresetEditor({ open, onClose, presets, onSave }) {
                   value={v}
                   onChange={e => {
                     const nv = e.target.value.replace(/[^0-9.]/g, '');
-                    setVals(p => { const n = [...p]; n[i] = nv; return n; });
+                    setVals(prev => { const n = [...prev]; n[i] = nv; return n; });
                   }}
                   style={{ flex: 1, background: 'transparent', border: 'none', color: '#fff', fontSize: 16, fontWeight: 700, outline: 'none', width: '100%' }}
                 />
@@ -186,7 +195,7 @@ function PresetEditor({ open, onClose, presets, onSave }) {
           <button onClick={onClose} style={{ flex: 1, padding: 12, borderRadius: 10, background: C.card2, border: '1px solid ' + C.border, color: C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
           <button
             onClick={() => {
-              const parsed = vals.map(v => parseFloat(v) || 0).filter(v => v > 0);
+              let parsed = vals.map(v => parseFloat(v) || 0).filter(v => v > 0);
               while (parsed.length < 5) parsed.push(25);
               onSave(parsed.slice(0, 5));
               onClose();
@@ -229,7 +238,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
 
   const executeTrade = async () => {
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
-    if (!isSolanaConnected || !publicKey) { setError('Connect Phantom to trade'); return; }
+    if (!publicKey) { setError('Please connect a Solana-compatible wallet'); return; }
     if (!token) return;
     setStatus('loading'); setError('');
     const isGrad = token.graduated;
@@ -237,7 +246,12 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
       if (!isGrad) {
         const res = await fetch('https://pumpportal.fun/api/trade-local', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ publicKey: publicKey.toString(), action: mode, mint: token.mint, denominatedInSol: mode === 'buy' ? 'true' : 'false', amount: mode === 'buy' ? parseFloat(solAmt.toFixed(6)) : (sellPct + '%'), slippage: 15, priorityFee: antiMev ? 0.001 : 0.0001, pool: 'auto' }),
+          body: JSON.stringify({
+            publicKey: publicKey.toString(), action: mode, mint: token.mint,
+            denominatedInSol: mode === 'buy' ? 'true' : 'false',
+            amount: mode === 'buy' ? parseFloat(solAmt.toFixed(6)) : (sellPct + '%'),
+            slippage: 15, priorityFee: antiMev ? 0.001 : 0.0001, pool: 'auto',
+          }),
         });
         if (!res.ok) throw new Error('PumpPortal error ' + res.status);
         const txBytes = await res.arrayBuffer();
@@ -248,7 +262,9 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
       } else {
         const inputMint = mode === 'buy' ? SOL_MINT : token.mint;
         const outputMint = mode === 'buy' ? token.mint : SOL_MINT;
-        const amount = mode === 'buy' ? Math.round(solAmt * 1e9) : Math.round((sellPct / 100) * (token.userBalance || 1e6));
+        const amount = mode === 'buy'
+          ? Math.round(solAmt * 1e9)
+          : Math.round((sellPct / 100) * (token.userBalance || 1e6));
         const qRes = await fetch(
           `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=150&restrictIntermediateTokens=true`,
           { headers: { 'x-api-key': JUP_API_KEY } }
@@ -257,7 +273,11 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
         if (!qData.outAmount) throw new Error(qData.error || 'No route');
         const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
-          body: JSON.stringify({ quoteResponse: qData, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000, prioritizationFeeLamports: antiMev ? 100000 : 5000 }),
+          body: JSON.stringify({
+            quoteResponse: qData, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true,
+            computeUnitPriceMicroLamports: antiMev ? 50000 : 1000,
+            prioritizationFeeLamports: antiMev ? 100000 : 5000,
+          }),
         });
         const swapData = await swapRes.json();
         if (!swapData.swapTransaction) throw new Error('No swap tx');
@@ -335,11 +355,6 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
             <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 8, padding: '8px 16px', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect</button>
           </div>
         )}
-        {isConnected && !isSolanaConnected && (
-          <div style={{ marginBottom: 14, padding: 14, background: 'rgba(255,59,107,.05)', border: '1px solid rgba(255,59,107,.2)', borderRadius: 12 }}>
-            <span style={{ color: C.red, fontSize: 13 }}>Solana wallet required. Connect Phantom.</span>
-          </div>
-        )}
 
         {isBuy ? (
           <div style={{ marginBottom: 14 }}>
@@ -381,9 +396,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
                   key={pct}
                   onClick={() => { setSellPct(pct); setCustomSellAmt(''); }}
                   style={{ flex: 1, padding: '12px 2px', borderRadius: 10, border: '1px solid ' + (sellPct === pct && !customSellAmt ? C.red : C.border), background: sellPct === pct && !customSellAmt ? 'rgba(255,59,107,.15)' : C.card2, color: sellPct === pct && !customSellAmt ? C.red : C.muted, fontWeight: 800, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}
-                >
-                  {pct === 100 ? 'MAX' : pct + '%'}
-                </button>
+                >{pct === 100 ? 'MAX' : pct + '%'}</button>
               ))}
             </div>
             <div style={{ background: C.card2, border: '1px solid ' + (customSellAmt ? C.red : C.border), borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -439,11 +452,12 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
               : 'linear-gradient(135deg,#ff3b6b,#cc1144)',
             color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18,
             cursor: status === 'loading' ? 'not-allowed' : 'pointer', minHeight: 58,
-            boxShadow: status === 'idle' && isConnected ? (isBuy ? '0 0 24px rgba(0,229,255,.25)' : '0 0 24px rgba(255,59,107,.2)') : 'none',
+            boxShadow: status === 'idle' && isConnected
+              ? (isBuy ? '0 0 24px rgba(0,229,255,.25)' : '0 0 24px rgba(255,59,107,.2)')
+              : 'none',
           }}
         >
           {!isConnected ? 'Connect Wallet'
-            : !isSolanaConnected ? 'Solana Wallet Required'
             : status === 'loading' ? 'Confirming...'
             : status === 'success' ? (isBuy ? 'Bought!' : 'Sold!') + ' Confirmed'
             : status === 'error' ? 'Failed - Try Again'
@@ -475,23 +489,21 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnec
       setLoading(false);
     });
     const interval = setInterval(() => {
-      fetchDexScreener([token.mint]).then(d => {
-        if (d[token.mint]) setLiveData(d[token.mint]);
-      });
+      fetchDexScreener([token.mint]).then(d => { if (d[token.mint]) setLiveData(d[token.mint]); });
     }, 10000);
     return () => clearInterval(interval);
   }, [token]);
 
   if (!token) return null;
 
-  const price = (liveData && liveData.price) || token.price || 0;
-  const marketCap = (liveData && liveData.marketCap) || token.marketCap || 0;
+  const price = liveData?.price || token.price || 0;
+  const marketCap = liveData?.marketCap || token.marketCap || 0;
   const pct5m = liveData ? liveData.pct5m : token.pct5m;
   const pct1h = liveData ? liveData.pct1h : token.pct1h;
   const pct24h = liveData ? liveData.pct24h : token.pct24h;
-  const volume = (liveData && liveData.volume24h) || token.volume24h || 0;
-  const buys = (liveData && liveData.buys24h) || 0;
-  const isGrad = (liveData && liveData.graduated) || token.graduated || (token.bondingProgress || 0) >= 100;
+  const volume = liveData?.volume24h || token.volume24h || 0;
+  const buys = liveData?.buys24h || 0;
+  const isGrad = liveData?.graduated || token.graduated || (token.bondingProgress || 0) >= 100;
   const progress = token.bondingProgress || 0;
   const history = token.priceHistory || [];
   const sparkUp = pct1h != null ? pct1h >= 0 : null;
@@ -606,16 +618,10 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnec
       </div>
 
       <TradeDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        mode={drawerMode}
-        token={fullToken}
-        solPrice={solPrice}
-        onConnectWallet={onConnectWallet}
-        isConnected={isConnected}
-        isSolanaConnected={isSolanaConnected}
-        presets={presets}
-        onPresetsChange={onPresetsChange}
+        open={drawerOpen} onClose={() => setDrawerOpen(false)} mode={drawerMode}
+        token={fullToken} solPrice={solPrice} onConnectWallet={onConnectWallet}
+        isConnected={isConnected} isSolanaConnected={isSolanaConnected}
+        presets={presets} onPresetsChange={onPresetsChange}
       />
     </div>
   );
@@ -623,13 +629,8 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnec
 
 function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
   const [flash, setFlash] = useState(false);
-
   useEffect(() => {
-    if (isNew) {
-      setFlash(true);
-      const t = setTimeout(() => setFlash(false), 5000);
-      return () => clearTimeout(t);
-    }
+    if (isNew) { setFlash(true); const t = setTimeout(() => setFlash(false), 5000); return () => clearTimeout(t); }
   }, [isNew]);
 
   const progress = token.bondingProgress || 0;
@@ -683,14 +684,8 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
       </div>
 
       <div style={{ display: 'flex', gap: 8 }}>
-        <button
-          onClick={e => { e.stopPropagation(); onBuyClick(token); }}
-          style={{ flex: 1, padding: '11px', borderRadius: 10, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontWeight: 800, fontSize: 14, fontFamily: 'Syne, sans-serif', boxShadow: '0 0 14px rgba(0,229,255,.2)' }}
-        >Buy</button>
-        <button
-          onClick={e => { e.stopPropagation(); onSellClick(token); }}
-          style={{ flex: 1, padding: '11px', borderRadius: 10, cursor: 'pointer', background: 'rgba(255,59,107,.1)', border: '1.5px solid rgba(255,59,107,.35)', color: C.red, fontWeight: 800, fontSize: 14, fontFamily: 'Syne, sans-serif' }}
-        >Sell</button>
+        <button onClick={e => { e.stopPropagation(); onBuyClick(token); }} style={{ flex: 1, padding: '11px', borderRadius: 10, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontWeight: 800, fontSize: 14, fontFamily: 'Syne, sans-serif', boxShadow: '0 0 14px rgba(0,229,255,.2)' }}>Buy</button>
+        <button onClick={e => { e.stopPropagation(); onSellClick(token); }} style={{ flex: 1, padding: '11px', borderRadius: 10, cursor: 'pointer', background: 'rgba(255,59,107,.1)', border: '1.5px solid rgba(255,59,107,.35)', color: C.red, fontWeight: 800, fontSize: 14, fontFamily: 'Syne, sans-serif' }}>Sell</button>
       </div>
     </div>
   );
@@ -759,32 +754,24 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
     fetchDexScreener([token.mint]).then(data => {
       const d = data[token.mint];
       if (!d) return;
-      tokensRef.current = tokensRef.current.map(t => {
-        if (t.mint !== token.mint) return t;
-        return { ...t, ...d, priceHistory: d.price > 0 ? [d.price] : [] };
-      });
+      tokensRef.current = tokensRef.current.map(t =>
+        t.mint !== token.mint ? t : { ...t, ...d, priceHistory: d.price > 0 ? [d.price] : [] }
+      );
       setTokens([...tokensRef.current]);
     });
     queueDexFetch(token.mint);
   }, [queueDexFetch]);
 
   useEffect(() => {
-    let ws;
-    let reconnectTimer;
+    let ws, reconnectTimer;
 
-    function connect() {
+    const connect = () => {
       try {
         ws = new WebSocket('wss://mainnet.helius-rpc.com/?api-key=45c791fa-d4fd-480e-aee3-7f998177b732');
         ws.onopen = () => {
           setWsStatus('live');
-          ws.send(JSON.stringify({
-            jsonrpc: '2.0', id: 1, method: 'logsSubscribe',
-            params: [{ mentions: ['6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P'] }, { commitment: 'processed' }],
-          }));
-          ws.send(JSON.stringify({
-            jsonrpc: '2.0', id: 2, method: 'logsSubscribe',
-            params: [{ mentions: ['675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8'] }, { commitment: 'processed' }],
-          }));
+          ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'logsSubscribe', params: [{ mentions: ['6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P'] }, { commitment: 'processed' }] }));
+          ws.send(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'logsSubscribe', params: [{ mentions: ['675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8'] }, { commitment: 'processed' }] }));
         };
         ws.onmessage = event => {
           try {
@@ -794,19 +781,12 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
             const logs = result.value?.logs || [];
             const sig = result.value?.signature;
             if (!logs.length || !sig) return;
-
             let mintAddr = null;
             logs.forEach(log => {
               const match = log.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/g);
-              if (match) {
-                match.forEach(addr => {
-                  if (addr.length >= 32 && addr.length <= 44 && !mintAddr) mintAddr = addr;
-                });
-              }
+              if (match) match.forEach(addr => { if (addr.length >= 32 && addr.length <= 44 && !mintAddr) mintAddr = addr; });
             });
-
             if (!mintAddr || tokensRef.current.find(t => t.mint === mintAddr)) return;
-
             const token = {
               mint: mintAddr, symbol: mintAddr.slice(0, 4).toUpperCase(), name: 'Loading...',
               image: null, marketCap: 0, price: 0,
@@ -814,15 +794,13 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
               volume24h: 0, buys24h: 0, priceHistory: [],
               bondingProgress: 0, graduated: false, createdAt: Date.now(),
             };
-
             setNewMints(prev => {
               const next = new Set(prev);
               next.add(mintAddr);
-              setTimeout(() => { setNewMints(p => { const n = new Set(p); n.delete(mintAddr); return n; }); }, 6000);
+              setTimeout(() => setNewMints(p => { const n = new Set(p); n.delete(mintAddr); return n; }), 6000);
               return next;
             });
             addToken(token);
-
             setTimeout(() => {
               fetch('https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mintAddr)
                 .then(r => r.json())
@@ -832,19 +810,7 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
                   tokensRef.current = tokensRef.current.map(t => {
                     if (t.mint !== mintAddr) return t;
                     const price = parseFloat(attrs.price_usd || 0);
-                    return {
-                      ...t,
-                      name: attrs.name || t.name,
-                      symbol: attrs.symbol || t.symbol,
-                      image: attrs.image_url || null,
-                      price,
-                      marketCap: parseFloat(attrs.fdv_usd || attrs.market_cap_usd || 0),
-                      pct5m: attrs.price_change_percentage?.m5 ? parseFloat(attrs.price_change_percentage.m5) : null,
-                      pct1h: attrs.price_change_percentage?.h1 ? parseFloat(attrs.price_change_percentage.h1) : null,
-                      pct24h: attrs.price_change_percentage?.h24 ? parseFloat(attrs.price_change_percentage.h24) : null,
-                      volume24h: parseFloat(attrs.volume_usd?.h24 || 0),
-                      priceHistory: price > 0 ? [price] : [],
-                    };
+                    return { ...t, name: attrs.name || t.name, symbol: attrs.symbol || t.symbol, image: attrs.image_url || null, price, marketCap: parseFloat(attrs.fdv_usd || attrs.market_cap_usd || 0), pct5m: attrs.price_change_percentage?.m5 ? parseFloat(attrs.price_change_percentage.m5) : null, pct1h: attrs.price_change_percentage?.h1 ? parseFloat(attrs.price_change_percentage.h1) : null, pct24h: attrs.price_change_percentage?.h24 ? parseFloat(attrs.price_change_percentage.h24) : null, volume24h: parseFloat(attrs.volume_usd?.h24 || 0), priceHistory: price > 0 ? [price] : [] };
                   });
                   setTokens([...tokensRef.current]);
                 }).catch(() => {});
@@ -854,7 +820,7 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
         ws.onerror = () => setWsStatus('error');
         ws.onclose = () => { setWsStatus('reconnecting'); reconnectTimer = setTimeout(connect, 3000); };
       } catch (e) { setWsStatus('error'); reconnectTimer = setTimeout(connect, 5000); }
-    }
+    };
 
     connect();
 
@@ -907,31 +873,18 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
             volume24h: parseFloat(attrs.volume_usd?.h24 || 0),
             buys24h: txns.h24?.buys || 0,
             priceHistory: price > 0 ? [price] : [],
-            bondingProgress: 0,
-            graduated: false,
+            bondingProgress: 0, graduated: false,
             createdAt: attrs.pool_created_at ? new Date(attrs.pool_created_at).getTime() : Date.now(),
           };
         }).filter(Boolean);
-
         tokensRef.current = initialTokens;
         setTokens([...tokensRef.current]);
         saveCachedTokens(tokensRef.current);
-
         fetchGeckoTerminal(initialTokens.map(t => t.mint)).then(gtData => {
           tokensRef.current = tokensRef.current.map(t => {
             const d = gtData[t.mint];
             if (!d) return t;
-            return {
-              ...t,
-              image: d.image || t.image,
-              name: d.name || t.name,
-              symbol: d.symbol || t.symbol,
-              price: d.price || t.price,
-              marketCap: d.marketCap || t.marketCap,
-              pct5m: d.pct5m !== null ? d.pct5m : t.pct5m,
-              pct1h: d.pct1h !== null ? d.pct1h : t.pct1h,
-              pct24h: d.pct24h !== null ? d.pct24h : t.pct24h,
-            };
+            return { ...t, image: d.image || t.image, name: d.name || t.name, symbol: d.symbol || t.symbol, price: d.price || t.price, marketCap: d.marketCap || t.marketCap, pct5m: d.pct5m !== null ? d.pct5m : t.pct5m, pct1h: d.pct1h !== null ? d.pct1h : t.pct1h, pct24h: d.pct24h !== null ? d.pct24h : t.pct24h };
           });
           setTokens([...tokensRef.current]);
           saveCachedTokens(tokensRef.current);
@@ -961,14 +914,9 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
   if (selectedToken) {
     return (
       <TokenPage
-        token={selectedToken}
-        onBack={() => setSelectedToken(null)}
-        onConnectWallet={onConnectWallet}
-        isConnected={isConnected}
-        isSolanaConnected={isSolanaConnected}
-        solPrice={solPrice}
-        presets={presets}
-        onPresetsChange={handlePresetsChange}
+        token={selectedToken} onBack={() => setSelectedToken(null)}
+        onConnectWallet={onConnectWallet} isConnected={isConnected} isSolanaConnected={isSolanaConnected}
+        solPrice={solPrice} presets={presets} onPresetsChange={handlePresetsChange}
       />
     );
   }
@@ -1016,8 +964,7 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
       ) : (
         displayTokens.map(token => (
           <TokenCard
-            key={token.mint}
-            token={token}
+            key={token.mint} token={token}
             onCardClick={setSelectedToken}
             onBuyClick={openBuyDrawer}
             onSellClick={openSellDrawer}
@@ -1027,16 +974,10 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
       )}
 
       <TradeDrawer
-        open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
-        mode={drawerMode}
-        token={drawerToken}
-        solPrice={solPrice}
-        onConnectWallet={onConnectWallet}
-        isConnected={isConnected}
-        isSolanaConnected={isSolanaConnected}
-        presets={presets}
-        onPresetsChange={handlePresetsChange}
+        open={drawerOpen} onClose={() => setDrawerOpen(false)} mode={drawerMode}
+        token={drawerToken} solPrice={solPrice} onConnectWallet={onConnectWallet}
+        isConnected={isConnected} isSolanaConnected={isSolanaConnected}
+        presets={presets} onPresetsChange={handlePresetsChange}
       />
     </div>
   );
