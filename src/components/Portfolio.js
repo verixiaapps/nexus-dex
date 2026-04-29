@@ -1,5 +1,3 @@
-Portfolio.js — all requirements met. Here it is with guaranteed clean ASCII:
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
