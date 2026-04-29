@@ -119,6 +119,9 @@ function WalletModal({ open, onClose }) {
   );
 }
 
+const prefetchLaunches = () =>
+  fetch('https://frontend-api.pump.fun/coins?limit=30&offset=0&sort=created_timestamp&order=DESC&includeNsfw=false').catch(() => {});
+
 export default function App() {
   const [tab, setTab] = useState('swap');
   const [prevTab, setPrevTab] = useState('swap');
@@ -238,6 +241,7 @@ export default function App() {
                 <button
                   key={t.id}
                   onClick={() => switchTab(t.id)}
+                  onMouseEnter={t.id === 'launches' ? prefetchLaunches : undefined}
                   style={{ background: active ? 'rgba(0,229,255,.09)' : 'transparent', border: active ? '1px solid rgba(0,229,255,.2)' : '1px solid transparent', borderRadius: 8, padding: '5px 10px', color: active ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}
                 >{t.label}</button>
               );
@@ -292,6 +296,7 @@ export default function App() {
             <button
               key={t.id}
               onClick={() => switchTab(t.id)}
+              onMouseEnter={t.id === 'launches' ? prefetchLaunches : undefined}
               style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: active ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 700, padding: '4px 6px', minWidth: 52, minHeight: 44, justifyContent: 'center' }}
             >
               <div style={{ width: active ? 20 : 6, height: 2, borderRadius: 2, background: active ? C.accent : 'transparent', transition: 'width .2s', marginBottom: 4 }} />
