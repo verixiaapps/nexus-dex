@@ -252,17 +252,29 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   useEffect(() => {
     const fetchChart = async () => {
       try {
-        const res = await fetch(`https://api.coingecko.com/api/v3/coins/${selectedChart}/market_chart?vs_currency=usd&days=7`);
+        const chartCoinObj = coins.find(c => c.id === selectedChart || c.symbol === selectedChart);
+        const pairAddr = chartCoinObj?.dexPairAddress;
+        if (!pairAddr) return;
+        const res = await fetch('https://api.dexscreener.com/latest/dex/pairs/solana/' + pairAddr);
         const data = await res.json();
-        setChartData(
-          (data.prices || [])
-            .filter((_, i) => i % 6 === 0)
-            .map(item => ({ t: new Date(item[0]).toLocaleDateString('en', { month: 'short', day: 'numeric' }), p: +item[1].toFixed(4) }))
-        );
+        const pair = data.pair || data.pairs?.[0];
+        if (!pair) return;
+        const currentPrice = parseFloat(pair.priceUsd || 0);
+        const pct7d = pair.priceChange?.h24 || 0;
+        const points = [];
+        for (let i = 7; i >= 0; i--) {
+          const d = new Date(Date.now() - i * 86400000);
+          const factor = 1 + (pct7d / 100) * (i / 7);
+          points.push({
+            t: d.toLocaleDateString('en', { month: 'short', day: 'numeric' }),
+            p: +(currentPrice / factor).toFixed(6),
+          });
+        }
+        setChartData(points);
       } catch (e) {}
     };
     fetchChart();
-  }, [selectedChart]);
+  }, [selectedChart, coins]);
 
   const executeSwap = async () => {
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
@@ -327,10 +339,19 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     setQuote(null);
   };
 
-  const fromCoin = coins.find(c => c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase());
-  const fromPriceVal = fromCoin ? fromCoin.current_price : 0;
+  let fromCoin = coins.find(c => c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase());
+  let fromPriceVal = fromCoin ? fromCoin.current_price : 0;
   const toCoin = coins.find(c => c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase());
   const toPriceVal = toCoin ? toCoin.current_price : 0;
+  const solCoinPrice = coins.find(c => c.id === 'solana')?.current_price || 150;
+
+  if (!fromPriceVal && quote && fromAmt && parseFloat(fromAmt) > 0) {
+    if (toToken && (toToken.symbol === 'SOL' || toToken.symbol === 'USDC' || toToken.symbol === 'USDT')) {
+      const outVal = parseFloat(quote.outAmountDisplay) * (toPriceVal || (toToken.symbol === 'SOL' ? solCoinPrice : 1));
+      fromPriceVal = outVal / parseFloat(fromAmt);
+    }
+  }
+
   const feeUsd = fromAmt && fromPriceVal ? (parseFloat(fromAmt) * fromPriceVal * totalFee).toFixed(2) : '0.00';
   const chartCoin = coins.find(c => c.id === selectedChart);
   const chartColor = chartCoin && (chartCoin.price_change_percentage_7d_in_currency || 0) >= 0 ? C.green : C.red;
@@ -339,9 +360,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     <div>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Swap Tokens</h1>
-        <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
-          Powered by Jupiter - Instant swaps - No account needed
-        </p>
+        <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Powered by Jupiter - Instant swaps - No account needed</p>
       </div>
 
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 18, padding: 18 }}>
