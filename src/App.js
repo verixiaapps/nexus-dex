@@ -309,7 +309,7 @@ export default function App() {
 
       <main style={{ position: 'relative', zIndex: 1, maxWidth: 1200, margin: '0 auto', padding: '20px 16px 100px', boxSizing: 'border-box', width: '100%', minHeight: 'calc(100vh - 56px)', overflowX: 'hidden' }}>
         {tab === 'swap' && <SwapWidget {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} jupiterLoading={jupiterLoading} onGoToToken={goToToken} />}
-        {tab === 'markets' && <Markets coins={coins} loading={loading} onSelectCoin={goToToken} />}
+        {tab === 'markets' && <Markets coins={coins} loading={loading} onSelectCoin={goToToken} jupiterTokens={jupiterTokens} />}
         {tab === 'token' && selectedToken && (
           <TokenDetail {...sharedProps} coin={selectedToken} coins={coins} jupiterTokens={jupiterTokens} onBack={() => switchTab(prevTab === 'token' ? 'markets' : prevTab)} />
         )}
