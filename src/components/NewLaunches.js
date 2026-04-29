@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { VersionedTransaction, TransactionMessage, AddressLookupTableAccount, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
-const PLATFORM_FEE = 0.02;
-const SERVICE_FEE = 0.01;
-const ANTIMEV_FEE = 0.01;
+const BASE_FEE = 0.04;
+const ANTIMEV_FEE = 0.02;
 const SPREAD = 0.005;
 const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -234,7 +233,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
     }
   }, [publicKey, connection, token, open]);
 
-  const totalFeeRate = PLATFORM_FEE + SERVICE_FEE + (antiMev ? ANTIMEV_FEE : 0);
+  const totalFeeRate = BASE_FEE + (antiMev ? ANTIMEV_FEE : 0);
 
   useEffect(() => {
     if (open) {
@@ -329,8 +328,12 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
 
           let luts = [];
           if (instrData.addressLookupTableAddresses?.length) {
-            const ltRes = await Promise.all(instrData.addressLookupTableAddresses.map(a => connection.getAddressLookupTable(new PublicKey(a))));
-            luts = ltRes.map(r => r.value).filter(Boolean);
+            const lutKeys = instrData.addressLookupTableAddresses.map(a => new PublicKey(a));
+            const lutInfos = await connection.getMultipleAccountsInfo(lutKeys);
+            luts = lutInfos.reduce((acc, info, i) => {
+              if (info) acc.push(new AddressLookupTableAccount({ key: lutKeys[i], state: AddressLookupTableAccount.deserialize(info.data) }));
+              return acc;
+            }, []);
           }
 
           const bh = await connection.getLatestBlockhash('confirmed');
