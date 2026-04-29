@@ -9,6 +9,7 @@ const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
 const SPREAD = 0.005;
 const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -62,6 +63,10 @@ function fmt(n, d = 2) {
 function pct(n) {
   if (!n && n !== 0) return '–';
   return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
+}
+
+function fmtBal(b) {
+  return b >= 1000 ? b.toLocaleString('en-US', { maximumFractionDigits: 2 }) : b.toFixed(4);
 }
 
 function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
@@ -234,6 +239,26 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
   const [swapTx, setSwapTx] = useState(null);
   const [swapError, setSwapError] = useState('');
   const [antiMev, setAntiMev] = useState(true);
+  const [fromBalance, setFromBalance] = useState(null);
+  const [toBalance, setToBalance] = useState(null);
+
+  // Fetch balances when drawer opens or tokens change
+  useEffect(() => {
+    if (!publicKey || !connection || !open) { setFromBalance(null); setToBalance(null); return; }
+    const fetchBal = async (token, setter) => {
+      if (!token?.mint) return;
+      try {
+        if (token.mint === SOL_MINT) {
+          setter((await connection.getBalance(publicKey)) / 1e9);
+        } else {
+          const accts = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: new PublicKey(token.mint) });
+          setter(accts.value.length > 0 ? accts.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0);
+        }
+      } catch (e) { setter(null); }
+    };
+    fetchBal(fromToken, setFromBalance);
+    fetchBal(toToken, setToBalance);
+  }, [publicKey, connection, fromToken, toToken, open]);
 
   const totalFee = antiMev ? BASE_FEE + ANTIMEV_FEE : BASE_FEE;
 
@@ -381,19 +406,38 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
           </div>
         )}
 
+        {/* YOU PAY */}
         <div style={{ marginBottom: 8 }}>
-          <TokenSelect selected={fromToken} onSelect={setFromToken} jupiterTokens={jupiterTokens} label="YOU PAY" />
-          <div style={{ marginTop: 8 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <TokenSelect selected={fromToken} onSelect={setFromToken} jupiterTokens={jupiterTokens} label="YOU PAY" />
+            {fromBalance != null && (
+              <span style={{ fontSize: 11, color: C.muted }}>
+                Bal: <span style={{ color: C.text }}>{fmtBal(fromBalance)}</span>
+              </span>
+            )}
+          </div>
+          <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
             <input
               value={fromAmt}
               onChange={e => setFromAmt(e.target.value.replace(/[^0-9.]/g, ''))}
               placeholder="0.00"
-              style={{ width: '100%', background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '14px 16px', fontSize: 26, fontWeight: 600, color: '#fff', outline: 'none' }}
+              style={{ flex: 1, background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '14px 16px', fontSize: 26, fontWeight: 600, color: '#fff', outline: 'none' }}
             />
-            {fromAmt && fromPriceVal > 0 && (
-              <div style={{ textAlign: 'right', marginTop: 4, fontSize: 11, color: C.muted }}>{fmt(parseFloat(fromAmt) * fromPriceVal)}</div>
+            {fromBalance != null && fromBalance > 0 && (
+              <button
+                onClick={() => {
+                  const max = fromToken?.symbol === 'SOL'
+                    ? Math.max(0, fromBalance - 0.01)
+                    : fromBalance;
+                  setFromAmt(max > 0 ? max.toFixed(6) : '0');
+                }}
+                style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 8, padding: '8px 12px', color: C.accent, fontSize: 12, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}
+              >MAX</button>
             )}
           </div>
+          {fromAmt && fromPriceVal > 0 && (
+            <div style={{ textAlign: 'right', marginTop: 4, fontSize: 11, color: C.muted }}>{fmt(parseFloat(fromAmt) * fromPriceVal)}</div>
+          )}
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'center', margin: '10px 0' }}>
@@ -403,8 +447,16 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
           >~</button>
         </div>
 
+        {/* YOU RECEIVE */}
         <div style={{ marginBottom: 14 }}>
-          <TokenSelect selected={toToken} onSelect={setToToken} jupiterTokens={jupiterTokens} label="YOU RECEIVE" />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+            <TokenSelect selected={toToken} onSelect={setToToken} jupiterTokens={jupiterTokens} label="YOU RECEIVE" />
+            {toBalance != null && (
+              <span style={{ fontSize: 11, color: C.muted }}>
+                Bal: <span style={{ color: C.text }}>{fmtBal(toBalance)}</span>
+              </span>
+            )}
+          </div>
           <div style={{ marginTop: 8, background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '14px 16px' }}>
             <div style={{ fontSize: 26, fontWeight: 600, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>
               {quoteLoading ? '...' : quote ? quote.outAmountDisplay : '0.00'}
@@ -518,7 +570,6 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
       try {
         const days = parseInt(chartPeriod) || 7;
         let points = [];
-
         const isCgCoin = coin.id && !coin.isSolanaToken && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(coin.id);
         if (isCgCoin) {
           const cgRes = await fetch(`https://api.coingecko.com/api/v3/coins/${coin.id}/market_chart?vs_currency=usd&days=${days}`);
