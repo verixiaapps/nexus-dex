@@ -20,8 +20,6 @@ export function useAppWallet() {
   const { address: evmAddress, isConnected: evmConnected } = useAccount();
 
   const isConnected = solConnected || evmConnected;
-  // Treat any connected wallet as Solana-capable
-  // Pages unlock for all wallets, tx fails naturally if wallet can't sign
   const isSolanaConnected = isConnected;
   const walletAddress = solConnected && publicKey
     ? publicKey.toString()
@@ -68,9 +66,7 @@ function WalletModal({ open, onClose }) {
           <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 6 }}>
             {connected || evmConnected ? 'Wallet Connected' : 'Connect Wallet'}
           </div>
-          {displayAddr && (
-            <div style={{ fontSize: 13, color: '#586994' }}>{connectedWalletName}: {displayAddr}</div>
-          )}
+          {displayAddr && <div style={{ fontSize: 13, color: '#586994' }}>{connectedWalletName}: {displayAddr}</div>}
         </div>
 
         {(connected || evmConnected) ? (
@@ -182,6 +178,7 @@ export default function App() {
   const [jupiterTokens, setJupiterTokens] = useState([]);
   const [jupiterLoading, setJupiterLoading] = useState(true);
   const [launchesKey, setLaunchesKey] = useState(0);
+  const [portfolioKey, setPortfolioKey] = useState(0);
 
   const wallet = useAppWallet();
 
@@ -194,6 +191,7 @@ export default function App() {
   const switchTab = useCallback(newTab => {
     if (newTab !== 'token') setSelectedToken(null);
     if (newTab === 'launches') setLaunchesKey(k => k + 1);
+    if (newTab === 'portfolio') setPortfolioKey(k => k + 1);
     setPrevTab(tab);
     setTab(newTab);
   }, [tab]);
@@ -252,10 +250,8 @@ export default function App() {
           const meta = metaMap[mint] || {};
           if (!priceInfo?.price) return null;
           return {
-            id: mint,
-            symbol: meta.symbol || mint.slice(0, 4),
-            name: meta.name || 'Unknown',
-            image: meta.logoURI || null,
+            id: mint, symbol: meta.symbol || mint.slice(0, 4),
+            name: meta.name || 'Unknown', image: meta.logoURI || null,
             current_price: parseFloat(priceInfo.price),
             market_cap: 0, market_cap_rank: 50 + i, total_volume: 0,
             high_24h: null, low_24h: null,
@@ -353,7 +349,9 @@ export default function App() {
         {tab === 'launches' && <NewLaunches {...sharedProps} coins={coins} resetKey={launchesKey} />}
         {tab === 'buy' && <BuyCrypto coins={coins} walletAddress={wallet.walletAddress || ''} selectedCoinSymbol={selectedToken ? selectedToken.symbol : null} />}
         {tab === 'send' && <Send {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} />}
-        {tab === 'portfolio' && <Portfolio {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} onSend={() => switchTab('send')} />}
+        {tab === 'portfolio' && (
+          <Portfolio {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} onSend={() => switchTab('send')} refreshKey={portfolioKey} onSelectToken={goToToken} />
+        )}
       </main>
 
       <nav style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100, background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(0,229,255,.1)', padding: '8px 4px env(safe-area-inset-bottom)', display: 'flex', justifyContent: 'space-around', alignItems: 'center' }}>
@@ -384,4 +382,3 @@ export default function App() {
     </div>
   );
 }
- 
