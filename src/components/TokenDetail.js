@@ -270,7 +270,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
 
   const executeSwap = async () => {
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
-    if (!publicKey) { setSwapError('Please connect a Solana-compatible wallet'); return; }
+    if (!publicKey) { setSwapError('Please connect a wallet'); return; }
     if (!quote) return;
     setSwapStatus('loading'); setSwapError('');
     try {
