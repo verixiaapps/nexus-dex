@@ -119,6 +119,24 @@ function WalletModal({ open, onClose }) {
   );
 }
 
+const MAJOR_MINTS = [
+  'So11111111111111111111111111111111111111112',
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
+  'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
+  'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
+  '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R',
+  'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3',
+  'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE',
+  'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So',
+  '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs',
+  'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm',
+  'WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk',
+  '7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr',
+  'MEFNBXixkEbait3xn9bkm8WsJzXtVsaJEn4c8Sam21p',
+  'nosXBVoaCTtYdLvKY6Csb4AC8JCdQKKAaWYtx2ZMoo7',
+];
+
 const prefetchLaunches = () =>
   fetch('https://frontend-api.pump.fun/coins?limit=30&offset=0&sort=created_timestamp&order=DESC&includeNsfw=false').catch(() => {});
 
@@ -181,10 +199,40 @@ export default function App() {
   useEffect(() => {
     const fetchMarkets = async () => {
       try {
-        const ids = 'bitcoin,ethereum,solana,binancecoin,ripple,cardano,dogecoin,avalanche-2,chainlink,uniswap,matic-network,toncoin,shiba-inu,litecoin,polkadot,cosmos,near,aptos,sui,arbitrum,optimism,injective-protocol,render-token,bonk,jupiter-exchange-solana,raydium,pyth-network,jito-governance-token,helium,the-sandbox';
-        const res = await fetch(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${ids}&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d`);
+        const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + MAJOR_MINTS.join(','));
         const data = await res.json();
-        if (Array.isArray(data)) setCoins(data);
+        if (data.pairs && data.pairs.length) {
+          const seen = {};
+          const mapped = [];
+          data.pairs
+            .sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))
+            .forEach(pair => {
+              const addr = pair.baseToken?.address;
+              if (!addr || seen[addr]) return;
+              seen[addr] = true;
+              mapped.push({
+                id: addr,
+                symbol: pair.baseToken.symbol,
+                name: pair.baseToken.name,
+                image: null,
+                current_price: parseFloat(pair.priceUsd || 0),
+                market_cap: pair.fdv || 0,
+                market_cap_rank: mapped.length + 1,
+                total_volume: pair.volume?.h24 || 0,
+                high_24h: null,
+                low_24h: null,
+                price_change_percentage_1h_in_currency: pair.priceChange?.h1 || null,
+                price_change_percentage_24h: pair.priceChange?.h24 || null,
+                price_change_percentage_7d_in_currency: pair.priceChange?.h7d || null,
+                sparkline_in_7d: null,
+                ath: null,
+                ath_change_percentage: null,
+                circulating_supply: null,
+                dexPairAddress: pair.pairAddress,
+              });
+            });
+          if (mapped.length) setCoins(mapped);
+        }
       } catch (e) { console.error('Market fetch error:', e); }
       setLoading(false);
     };
