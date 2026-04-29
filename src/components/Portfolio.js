@@ -9,7 +9,7 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
- 
+
 function fmt(n, d = 2) {
   if (n == null) return '–';
   if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
