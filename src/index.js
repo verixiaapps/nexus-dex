@@ -1,5 +1,3 @@
-Starting with src/index.js:
-
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
