@@ -39,18 +39,27 @@ function WalletModal({ open, onClose }) {
   const { isConnected: evmConnected, address: evmAddress } = useAccount();
   const { disconnect: evmDisconnect } = useDisconnect();
 
-  const phantomWallet = wallets.find(w => w.adapter.name === 'Phantom');
   const isSol = connected && publicKey;
   const displayAddr = isSol
-    ? publicKey.toString().slice(0, 8) + '…' + publicKey.toString().slice(-8)
-    : evmConnected && evmAddress ? evmAddress.slice(0, 8) + '…' + evmAddress.slice(-8) : null;
+    ? publicKey.toString().slice(0, 6) + '…' + publicKey.toString().slice(-6)
+    : evmConnected && evmAddress ? evmAddress.slice(0, 6) + '…' + evmAddress.slice(-6) : null;
+  let connectedWalletName = isSol && wallets.find(w => w.adapter.connected);
+  connectedWalletName = connectedWalletName ? connectedWalletName.adapter.name : (isSol ? 'Solana Wallet' : 'EVM Wallet');
+
+  const detectedWallets = wallets.filter(w => w.readyState === 'Installed' || w.readyState === 'Loadable');
+  const notDetectedWallets = wallets.filter(w => w.readyState !== 'Installed' && w.readyState !== 'Loadable');
 
   if (!open) return null;
+
+  const handleSolanaConnect = async wallet => {
+    try { await select(wallet.adapter.name); await connect(); onClose(); }
+    catch (e) { console.error(e); }
+  };
 
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 500, background: 'rgba(0,0,0,.85)' }} />
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 501, background: '#080d1a', borderTop: '2px solid rgba(0,229,255,.2)', borderRadius: '20px 20px 0 0', padding: '24px 24px 48px', boxShadow: '0 -20px 60px rgba(0,0,0,.9)', animation: 'slideUp .25s ease' }}>
+      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 501, background: '#080d1a', borderTop: '2px solid rgba(0,229,255,.2)', borderRadius: '20px 20px 0 0', padding: '24px 24px 48px', boxShadow: '0 -20px 60px rgba(0,0,0,.9)', animation: 'slideUp .25s ease', maxHeight: '85vh', overflowY: 'auto' }}>
         <style>{`@keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }`}</style>
         <div style={{ width: 40, height: 4, background: '#2e3f5e', borderRadius: 2, margin: '0 auto 24px' }} />
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
@@ -58,18 +67,16 @@ function WalletModal({ open, onClose }) {
             {connected || evmConnected ? 'Wallet Connected' : 'Connect Wallet'}
           </div>
           {displayAddr && (
-            <div style={{ fontSize: 13, color: '#586994' }}>{isSol ? 'Phantom: ' : 'WalletConnect: '}{displayAddr}</div>
+            <div style={{ fontSize: 13, color: '#586994' }}>{connectedWalletName}: {displayAddr}</div>
           )}
         </div>
 
         {(connected || evmConnected) ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 400, margin: '0 auto' }}>
             <div style={{ background: 'rgba(0,255,163,.08)', border: '1px solid rgba(0,255,163,.2)', borderRadius: 16, padding: '16px 20px' }}>
-              <div style={{ color: '#00ffa3', fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Wallet Connected</div>
-              <div style={{ color: '#586994', fontSize: 12, fontFamily: 'monospace', wordBreak: 'break-all' }}>{displayAddr}</div>
-              <div style={{ color: '#586994', fontSize: 11, marginTop: 6 }}>
-                {isSol ? 'Solana - Phantom' : 'EVM - WalletConnect'} - connected across all pages
-              </div>
+              <div style={{ color: '#00ffa3', fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Connected - active site wide</div>
+              <div style={{ color: '#586994', fontSize: 12, fontFamily: 'monospace', wordBreak: 'break-all', marginBottom: 4 }}>{displayAddr}</div>
+              <div style={{ color: '#586994', fontSize: 11 }}>{connectedWalletName} - all transactions use this wallet</div>
             </div>
             <button
               onClick={async () => {
@@ -77,41 +84,69 @@ function WalletModal({ open, onClose }) {
                 catch (e) { console.error(e); }
               }}
               style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 16, padding: '16px', cursor: 'pointer', width: '100%', color: '#ff3b6b', fontWeight: 700, fontSize: 15, fontFamily: 'Syne, sans-serif' }}
-            >Disconnect Wallet</button>
+            >Disconnect</button>
             <button
               onClick={onClose}
               style={{ background: 'transparent', border: '1px solid rgba(255,255,255,.1)', borderRadius: 16, padding: '14px', cursor: 'pointer', color: '#586994', fontSize: 14, fontFamily: 'Syne, sans-serif' }}
             >Close</button>
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 400, margin: '0 auto' }}>
-            <button
-              onClick={async () => {
-                try {
-                  if (phantomWallet) { await select(phantomWallet.adapter.name); await connect(); onClose(); }
-                  else { window.open('https://phantom.app', '_blank'); onClose(); }
-                } catch (e) { console.error(e); }
-              }}
-              style={{ display: 'flex', alignItems: 'center', gap: 16, background: 'rgba(153,69,255,.1)', border: '1px solid rgba(153,69,255,.3)', borderRadius: 16, padding: '18px 20px', cursor: 'pointer', width: '100%' }}
-            >
-              <div style={{ width: 48, height: 48, borderRadius: 12, flexShrink: 0, background: 'linear-gradient(135deg,#9945ff,#7c3aed)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, color: '#fff' }}>P</div>
-              <div style={{ textAlign: 'left', flex: 1 }}>
-                <div style={{ color: '#fff', fontWeight: 700, fontSize: 17 }}>Phantom</div>
-                <div style={{ color: '#9945ff', fontSize: 13, marginTop: 2 }}>{phantomWallet ? 'Detected - tap to connect' : 'Tap to install'}</div>
-              </div>
-            </button>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 400, margin: '0 auto' }}>
+            {detectedWallets.length > 0 && (
+              <>
+                <div style={{ fontSize: 10, color: '#586994', fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>DETECTED WALLETS</div>
+                {detectedWallets.map(wallet => (
+                  <button
+                    key={wallet.adapter.name}
+                    onClick={() => handleSolanaConnect(wallet)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(0,229,255,.06)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 14, padding: '14px 18px', cursor: 'pointer', width: '100%' }}
+                  >
+                    {wallet.adapter.icon
+                      ? <img src={wallet.adapter.icon} alt={wallet.adapter.name} style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
+                      : <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(0,229,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: '#00e5ff', flexShrink: 0 }}>{wallet.adapter.name.charAt(0)}</div>
+                    }
+                    <div style={{ textAlign: 'left', flex: 1 }}>
+                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>{wallet.adapter.name}</div>
+                      <div style={{ color: '#00e5ff', fontSize: 12, marginTop: 1 }}>Detected - tap to connect</div>
+                    </div>
+                  </button>
+                ))}
+              </>
+            )}
+
             <button
               onClick={() => { onClose(); setTimeout(() => openWeb3Modal(), 100); }}
-              style={{ display: 'flex', alignItems: 'center', gap: 16, background: 'rgba(59,153,252,.1)', border: '1px solid rgba(59,153,252,.3)', borderRadius: 16, padding: '18px 20px', cursor: 'pointer', width: '100%' }}
+              style={{ display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(59,153,252,.08)', border: '1px solid rgba(59,153,252,.2)', borderRadius: 14, padding: '14px 18px', cursor: 'pointer', width: '100%' }}
             >
-              <div style={{ width: 48, height: 48, borderRadius: 12, flexShrink: 0, background: 'linear-gradient(135deg,#3b99fc,#0066cc)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <img src="https://avatars.githubusercontent.com/u/37784886" alt="WC" style={{ width: 32, height: 32, borderRadius: 8 }} onError={e => { e.target.style.display = 'none'; }} />
+              <div style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, background: 'linear-gradient(135deg,#3b99fc,#0066cc)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                <img src="https://avatars.githubusercontent.com/u/37784886" alt="WC" style={{ width: 28, height: 28, borderRadius: 6 }} onError={e => { e.target.style.display = 'none'; }} />
               </div>
               <div style={{ textAlign: 'left', flex: 1 }}>
-                <div style={{ color: '#fff', fontWeight: 700, fontSize: 17 }}>WalletConnect</div>
-                <div style={{ color: '#3b99fc', fontSize: 13, marginTop: 2 }}>All wallets supported</div>
+                <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>WalletConnect</div>
+                <div style={{ color: '#3b99fc', fontSize: 12, marginTop: 1 }}>300+ wallets supported</div>
               </div>
             </button>
+
+            {notDetectedWallets.length > 0 && (
+              <>
+                <div style={{ fontSize: 10, color: '#586994', fontWeight: 700, letterSpacing: 1, margin: '6px 0 2px' }}>MORE WALLETS</div>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
+                  {notDetectedWallets.slice(0, 6).map(wallet => (
+                    <button
+                      key={wallet.adapter.name}
+                      onClick={() => { window.open(wallet.adapter.url, '_blank'); onClose(); }}
+                      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.06)', borderRadius: 12, padding: '12px 8px', cursor: 'pointer' }}
+                    >
+                      {wallet.adapter.icon
+                        ? <img src={wallet.adapter.icon} alt={wallet.adapter.name} style={{ width: 32, height: 32, borderRadius: 8 }} onError={e => { e.target.style.display = 'none'; }} />
+                        : <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 800, color: '#00e5ff' }}>{wallet.adapter.name.charAt(0)}</div>
+                      }
+                      <div style={{ color: '#586994', fontSize: 10, textAlign: 'center', lineHeight: 1.2 }}>{wallet.adapter.name}</div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
