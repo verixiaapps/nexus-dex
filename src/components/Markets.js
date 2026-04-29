@@ -90,26 +90,28 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     setSearchToken(null);
     const ql = trimmed.toLowerCase();
 
-    if (!jupiterTokens || !jupiterTokens.length) {
-      setSearchResults(coins.filter(c =>
-        (c.name && c.name.toLowerCase().includes(ql)) ||
-        (c.symbol && c.symbol.toLowerCase().includes(ql))
-      ));
-      return;
+    const cgMatches = coins.filter(c =>
+      (c.name && c.name.toLowerCase().includes(ql)) ||
+      (c.symbol && c.symbol.toLowerCase().includes(ql))
+    );
+
+    let jupMatches = [];
+    if (jupiterTokens && jupiterTokens.length) {
+      const cgIds = new Set(cgMatches.map(c => (c.symbol || '').toLowerCase()));
+      jupMatches = jupiterTokens.filter(t => {
+        if (cgIds.has((t.symbol || '').toLowerCase())) return false;
+        return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
+               (t.name && t.name.toLowerCase().includes(ql));
+      }).slice(0, 40).map(t => ({
+        id: t.mint, mint: t.mint, symbol: t.symbol, name: t.name,
+        image: t.logoURI || null,
+        current_price: 0, market_cap: 0, total_volume: 0,
+        price_change_percentage_24h: null, sparkline_in_7d: null,
+        isSolanaToken: true,
+      }));
     }
 
-    const jResults = jupiterTokens.filter(t =>
-      (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-      (t.name && t.name.toLowerCase().includes(ql))
-    ).slice(0, 50);
-
-    setSearchResults(jResults.map(t => ({
-      id: t.mint, mint: t.mint, symbol: t.symbol, name: t.name,
-      image: t.logoURI || null,
-      current_price: 0, market_cap: 0, total_volume: 0,
-      price_change_percentage_24h: null, sparkline_in_7d: null,
-      isSolanaToken: true,
-    })));
+    setSearchResults([...cgMatches, ...jupMatches]);
   }, [q, coins, jupiterTokens]);
 
   useEffect(() => {
@@ -221,7 +223,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
             placeholder="Search name, symbol or paste address…"
             style={{ background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border), borderRadius: 10, padding: '9px 36px 9px 14px', color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: '100%' }}
           />
-          {q && !searchLoading && (
+          {q && (
             <button
               onClick={() => { setQ(''); setSearchResults([]); setSearchToken(null); }}
               style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 0 }}
