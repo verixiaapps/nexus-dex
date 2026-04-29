@@ -1,24 +1,7 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
-import {
-  PhantomWalletAdapter,
-  SolflareWalletAdapter,
-  BackpackWalletAdapter,
-  BraveWalletAdapter,
-  CoinbaseWalletAdapter,
-  LedgerWalletAdapter,
-  TrustWalletAdapter, 
-  TorusWalletAdapter,
-  MathWalletAdapter,
-  TokenPocketWalletAdapter,
-  BitKeepWalletAdapter,
-  CloverWalletAdapter,
-  Coin98WalletAdapter,
-  SafePalWalletAdapter,
-  SlopeWalletAdapter,
-  SolongWalletAdapter,
-} from '@solana/wallet-adapter-wallets';
+import { PhantomWalletAdapter, SolflareWalletAdapter } from '@solana/wallet-adapter-wallets';
 import '@solana/wallet-adapter-react-ui/styles.css';
 import { createWeb3Modal } from '@web3modal/wagmi/react';
 import { defaultWagmiConfig } from '@web3modal/wagmi/react/config';
@@ -61,23 +44,11 @@ createWeb3Modal({
   },
 });
 
+// Phantom + Solflare explicitly
+// All other wallets (Backpack, Trust, Brave, Coinbase etc) auto-detected via Wallet Standard
 const solanaWallets = [
   new PhantomWalletAdapter(),
   new SolflareWalletAdapter(),
-  new BackpackWalletAdapter(),
-  new BraveWalletAdapter(),
-  new CoinbaseWalletAdapter(),
-  new LedgerWalletAdapter(),
-  new TrustWalletAdapter(),
-  new TorusWalletAdapter(),
-  new MathWalletAdapter(),
-  new TokenPocketWalletAdapter(),
-  new BitKeepWalletAdapter(),
-  new CloverWalletAdapter(),
-  new Coin98WalletAdapter(),
-  new SafePalWalletAdapter(),
-  new SlopeWalletAdapter(),
-  new SolongWalletAdapter(),
 ];
 
 const queryClient = new QueryClient();
