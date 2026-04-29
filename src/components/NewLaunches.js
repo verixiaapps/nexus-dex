@@ -110,8 +110,7 @@ async function fetchGeckoTerminal(mints) {
     for (let i = 0; i < mints.length; i += 30) chunks.push(mints.slice(i, i + 30));
     const results = await Promise.all(chunks.map(chunk =>
       fetch('https://api.geckoterminal.com/api/v2/networks/solana/tokens/multi/' + chunk.join(','))
-        .then(r => r.json())
-        .catch(() => ({ data: [] }))
+        .then(r => r.json()).catch(() => ({ data: [] }))
     ));
     const out = {};
     results.forEach(res => {
@@ -218,11 +217,24 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
   const [customAmt, setCustomAmt] = useState('');
   const [sellPct, setSellPct] = useState(50);
   const [customSellAmt, setCustomSellAmt] = useState('');
+  const [solBalance, setSolBalance] = useState(null);
+  const [tokenBalance, setTokenBalance] = useState(null);
   const [antiMev, setAntiMev] = useState(true);
   const [status, setStatus] = useState('idle');
   const [txSig, setTxSig] = useState(null);
   const [error, setError] = useState('');
   const [presetEditorOpen, setPresetEditorOpen] = useState(false);
+
+  // Fetch SOL + token balance when drawer opens
+  useEffect(() => {
+    if (!publicKey || !connection || !open) { setSolBalance(null); setTokenBalance(null); return; }
+    connection.getBalance(publicKey).then(lam => setSolBalance(lam / 1e9)).catch(() => {});
+    if (token?.mint) {
+      connection.getParsedTokenAccountsByOwner(publicKey, { mint: new PublicKey(token.mint) })
+        .then(accts => setTokenBalance(accts.value.length > 0 ? accts.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0))
+        .catch(() => {});
+    }
+  }, [publicKey, connection, token, open]);
 
   const totalFeeRate = PLATFORM_FEE + SERVICE_FEE + (antiMev ? ANTIMEV_FEE : 0);
 
@@ -246,7 +258,6 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
     setStatus('loading'); setError('');
     const isGrad = token.graduated;
     try {
-      // SOL balance check
       if (publicKey) {
         try {
           const solBal = (await connection.getBalance(publicKey)) / 1e9;
@@ -290,8 +301,8 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
         const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
           body: JSON.stringify({
-            quoteResponse: qData, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true,
-            computeUnitPriceMicroLamports: antiMev ? 50000 : 1000,
+            quoteResponse: qData, userPublicKey: publicKey.toString(),
+            wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000,
           }),
         });
         const swapData = await swapRes.json();
@@ -375,8 +386,28 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
         {isBuy ? (
           <div style={{ marginBottom: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-              <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>QUICK BUY</span>
-              <button onClick={() => setPresetEditorOpen(true)} style={{ background: 'none', border: 'none', color: C.accent, fontSize: 11, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, padding: 0 }}>Edit presets</button>
+              <div>
+                <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>QUICK BUY</span>
+                {solBalance != null && (
+                  <span style={{ fontSize: 10, color: C.muted, marginLeft: 8 }}>
+                    SOL: <span style={{ color: C.text }}>{solBalance.toFixed(4)}</span>
+                  </span>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                {solBalance != null && solBalance > 0.01 && (
+                  <button
+                    onClick={() => {
+                      const max = Math.max(0, solBalance - 0.005);
+                      const maxUsd = max * solPrice;
+                      setCustomAmt(maxUsd.toFixed(2));
+                      setActivePreset(null);
+                    }}
+                    style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '2px 8px', color: C.accent, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}
+                  >MAX</button>
+                )}
+                <button onClick={() => setPresetEditorOpen(true)} style={{ background: 'none', border: 'none', color: C.accent, fontSize: 11, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, padding: 0 }}>Edit presets</button>
+              </div>
             </div>
             <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
               {presets.map(amt => {
@@ -405,7 +436,14 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
           </div>
         ) : (
           <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1, marginBottom: 10 }}>SELL AMOUNT</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>SELL AMOUNT</span>
+              {tokenBalance != null && (
+                <span style={{ fontSize: 10, color: C.muted }}>
+                  {token?.symbol}: <span style={{ color: C.text }}>{tokenBalance >= 1000 ? tokenBalance.toLocaleString('en-US', { maximumFractionDigits: 2 }) : tokenBalance.toFixed(4)}</span>
+                </span>
+              )}
+            </div>
             <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
               {[25, 50, 75, 100].map(pct => (
                 <button
@@ -423,6 +461,12 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
                 style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 20, fontWeight: 700, color: '#fff', outline: 'none' }}
               />
               <span style={{ color: C.muted, fontSize: 13, flexShrink: 0 }}>{token ? token.symbol : ''}</span>
+              {tokenBalance != null && tokenBalance > 0 && (
+                <button
+                  onClick={() => { setCustomSellAmt(tokenBalance.toFixed(6)); setSellPct(null); }}
+                  style={{ background: 'rgba(255,59,107,.12)', border: '1px solid rgba(255,59,107,.25)', borderRadius: 6, padding: '4px 8px', color: C.red, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}
+                >MAX</button>
+              )}
             </div>
             {token && token.price > 0 && customSellAmt && parseFloat(customSellAmt) > 0 && (
               <div style={{ textAlign: 'right', marginTop: 6, fontSize: 11, color: C.muted }}>
