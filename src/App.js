@@ -20,14 +20,16 @@ export function useAppWallet() {
   const { address: evmAddress, isConnected: evmConnected } = useAccount();
 
   const isConnected = solConnected || evmConnected;
-  const isSolanaConnected = solConnected && !!publicKey;
-  const walletAddress = isSolanaConnected
+  // Treat any connected wallet as Solana-capable
+  // Pages unlock for all wallets, tx fails naturally if wallet can't sign
+  const isSolanaConnected = isConnected;
+  const walletAddress = solConnected && publicKey
     ? publicKey.toString()
     : evmConnected && evmAddress ? evmAddress : null;
 
   return {
     isConnected, isSolanaConnected, walletAddress,
-    publicKey: isSolanaConnected ? publicKey : null,
+    publicKey: (solConnected && publicKey) ? publicKey : null,
     sendTransaction, signTransaction, signAllTransactions,
     solConnected, evmConnected, evmAddress,
   };
