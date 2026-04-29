@@ -4,7 +4,7 @@ const C = {
   card: '#080d1a', border: 'rgba(0,229,255,0.10)',
   accent: '#00e5ff', green: '#00ffa3', muted: '#586994', text: '#cdd6f4',
 };
-
+ 
 export default function BuyCrypto({ walletAddress, selectedCoinSymbol }) {
   const coin = selectedCoinSymbol ? selectedCoinSymbol.toUpperCase() : 'SOL';
   let url = 'https://global.transak.com?defaultCryptoCurrency=' + coin;
