@@ -242,6 +242,19 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     if (!quote || !publicKey) return;
     setSwapStatus('loading'); setSwapError('');
     try {
+      // SOL balance check - covers fee + network gas
+      if (publicKey) {
+        try {
+          const solBal = (await connection.getBalance(publicKey)) / 1e9;
+          if (solBal < 0.003) {
+            setSwapError('Insufficient SOL balance. Need at least 0.003 SOL to cover fees and gas.');
+            setSwapStatus('error');
+            setTimeout(() => { setSwapStatus('idle'); setSwapError(''); }, 6000);
+            return;
+          }
+        } catch (_e) {}
+      }
+
       const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -249,7 +262,6 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           userPublicKey: publicKey.toString(),
           wrapAndUnwrapSol: true,
           computeUnitPriceMicroLamports: antiMev ? 50000 : 1000,
-          prioritizationFeeLamports: antiMev ? 100000 : 5000,
           destinationTokenAccount: useCustomAddress && customAddress ? customAddress : undefined,
         }),
       });
@@ -260,30 +272,33 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       const sig = await sendTransaction(tx, connection);
       await connection.confirmTransaction(sig, 'confirmed');
 
-      try {
-        const fromCoin = coins.find(c => c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase());
-        const solCoin = coins.find(c => c.id === 'solana');
-        const solPrice = solCoin ? solCoin.current_price : 100;
-        const fromPriceVal = fromCoin ? fromCoin.current_price : 0;
-        const feeSol = fromPriceVal > 0
-          ? (parseFloat(fromAmt) * fromPriceVal * totalFee) / solPrice
-          : parseFloat(fromAmt) * totalFee;
-        const spreadSol = fromPriceVal > 0
-          ? (parseFloat(fromAmt) * fromPriceVal * SPREAD) / solPrice
-          : parseFloat(fromAmt) * SPREAD;
-        const totalFeeSol = feeSol + spreadSol;
-        if (totalFeeSol > 0.000001) {
-          const feeTx = new Transaction().add(SystemProgram.transfer({
+      if (publicKey) {
+        try {
+          const fromCoin = coins.find(c => c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase());
+          const solCoin = coins.find(c => c.id === 'solana' || (c.symbol && c.symbol.toLowerCase() === 'sol'));
+          const solPrice = solCoin ? solCoin.current_price : 150;
+          let fromPriceUsd = fromCoin ? fromCoin.current_price : (fromToken?.symbol === 'SOL' ? solPrice : 0);
+          if (!fromPriceUsd && quote && fromAmt && parseFloat(fromAmt) > 0) {
+            const toCoin = coins.find(c => c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase());
+            const toPriceUsd = toCoin ? toCoin.current_price : (toToken && (toToken.symbol === 'USDC' || toToken.symbol === 'USDT') ? 1 : 0);
+            if (toPriceUsd > 0) fromPriceUsd = (parseFloat(quote.outAmountDisplay) * toPriceUsd) / parseFloat(fromAmt);
+          }
+          const tradeUsd = parseFloat(fromAmt) * fromPriceUsd;
+          const totalFeePct = totalFee + SPREAD;
+          let totalFeeSol = tradeUsd > 0 ? (tradeUsd * totalFeePct) / solPrice : parseFloat(fromAmt) * totalFeePct;
+          totalFeeSol = Math.max(totalFeeSol, 0.000050);
+          const feeBlockhash = await connection.getLatestBlockhash();
+          const feeTx = new Transaction();
+          feeTx.recentBlockhash = feeBlockhash.blockhash;
+          feeTx.feePayer = publicKey;
+          feeTx.add(SystemProgram.transfer({
             fromPubkey: publicKey,
             toPubkey: new PublicKey(FEE_WALLET),
             lamports: Math.round(totalFeeSol * LAMPORTS_PER_SOL),
           }));
-          const { blockhash } = await connection.getLatestBlockhash();
-          feeTx.recentBlockhash = blockhash;
-          feeTx.feePayer = publicKey;
           await sendTransaction(feeTx, connection);
-        }
-      } catch (feeErr) { console.log('Fee tx failed silently:', feeErr); }
+        } catch (feeErr) { console.error('Fee tx error:', feeErr); }
+      }
 
       setSwapTx(sig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
       setTimeout(() => { setSwapStatus('idle'); setSwapTx(null); }, 5000);
@@ -482,4 +497,3 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     </div>
   );
 }
- 
