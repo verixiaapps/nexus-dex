@@ -43,6 +43,15 @@ function isValidMint(str) {
   return str && str.length >= 32 && str.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(str);
 }
 
+function SortBtn({ label, sortKey, sort, dir, onSort }) {
+  return (
+    <button
+      onClick={() => onSort(sortKey)}
+      style={{ background: 'none', border: 'none', color: sort === sortKey ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0, fontFamily: 'Syne, sans-serif' }}
+    >{label} {sort === sortKey ? (dir === -1 ? 'v' : '^') : ''}</button>
+  );
+}
+
 export default function Markets({ coins, loading, onSelectCoin, jupiterTokens }) {
   const [q, setQ] = useState('');
   const [sort, setSort] = useState('market_cap');
@@ -64,8 +73,8 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
       Promise.all([
         fetch('https://lite-api.jup.ag/tokens/v1/token/' + trimmed).then(r => r.ok ? r.json() : null).catch(() => null),
         fetch('https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + trimmed).then(r => r.ok ? r.json() : null).catch(() => null),
-      ]).then(([jupMeta, gtRes]) => {
-        const gtData = gtRes?.data?.attributes;
+      ]).then(([jupMeta, gtResult]) => {
+        const gtData = gtResult?.data?.attributes;
         const price = gtData ? parseFloat(gtData.price_usd || 0) : 0;
         const pChange = gtData?.price_change_percentage || {};
         if (jupMeta || gtData) {
@@ -79,8 +88,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
             total_volume: gtData ? parseFloat(gtData.volume_usd?.h24 || 0) : 0,
             price_change_percentage_24h: pChange.h24 ? parseFloat(pChange.h24) : null,
             price_change_percentage_1h_in_currency: pChange.h1 ? parseFloat(pChange.h1) : null,
-            sparkline_in_7d: null,
-            isSolanaToken: true,
+            sparkline_in_7d: null, isSolanaToken: true,
           });
         }
         setSearchLoading(false);
@@ -94,8 +102,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     const ql = trimmed.toLowerCase();
 
     const cgMatches = coins.filter(c =>
-      (c.name && c.name.toLowerCase().includes(ql)) ||
-      (c.symbol && c.symbol.toLowerCase().includes(ql))
+      (c.name && c.name.toLowerCase().includes(ql)) || (c.symbol && c.symbol.toLowerCase().includes(ql))
     );
 
     let localJupMatches = [];
@@ -106,58 +113,73 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
         return (t.symbol && t.symbol.toLowerCase().includes(ql)) || (t.name && t.name.toLowerCase().includes(ql));
       }).slice(0, 40).map(t => ({
         id: t.mint, mint: t.mint, symbol: t.symbol, name: t.name,
-        image: t.logoURI || null, current_price: 0, market_cap: 0,
-        total_volume: 0, price_change_percentage_24h: null, sparkline_in_7d: null, isSolanaToken: true,
+        image: t.logoURI || null, current_price: 0, market_cap: 0, total_volume: 0,
+        price_change_percentage_24h: null, sparkline_in_7d: null, isSolanaToken: true,
       }));
     }
 
     const immediate = [...cgMatches, ...localJupMatches];
     if (immediate.length) setSearchResults(immediate);
 
-    fetch('https://lite-api.jup.ag/tokens/v1/tagged/strict')
-      .then(r => r.ok ? r.json() : [])
-      .then(allTokens => {
-        const tokens = Array.isArray(allTokens) ? allTokens : [];
-        const qlLower = trimmed.toLowerCase();
-        const existingSymbols = new Set(immediate.map(c => (c.symbol || '').toLowerCase()));
-        const newMatches = tokens.filter(t => {
-          if (existingSymbols.has((t.symbol || '').toLowerCase())) return false;
-          return (t.symbol && t.symbol.toLowerCase().includes(qlLower)) ||
-            (t.name && t.name.toLowerCase().includes(qlLower)) ||
-            (t.address && t.address.toLowerCase() === qlLower);
-        }).slice(0, 50).map(t => ({
-          id: t.address, mint: t.address, symbol: t.symbol, name: t.name,
-          image: t.logoURI || null, current_price: 0, market_cap: 0,
-          total_volume: 0, price_change_percentage_24h: null, sparkline_in_7d: null, isSolanaToken: true,
-        }));
-        const combined = [...immediate, ...newMatches];
-        if (combined.length) setSearchResults(combined);
-        setSearchLoading(false);
+    Promise.all([
+      fetch('https://lite-api.jup.ag/tokens/v1/tagged/strict').then(r => r.ok ? r.json() : []).catch(() => []),
+      fetch('https://api.dexscreener.com/latest/dex/search?q=' + encodeURIComponent(trimmed)).then(r => r.ok ? r.json() : { pairs: [] }).catch(() => ({ pairs: [] })),
+    ]).then(([jupTokens, dexResult]) => {
+      const dexPairs = dexResult.pairs || [];
+      const existingSymbols = new Set(immediate.map(c => (c.symbol || '').toLowerCase()));
 
-        const mintsToPrice = combined
-          .filter(c => c.isSolanaToken && !c.current_price && c.mint)
-          .map(c => c.mint).slice(0, 30);
-        if (mintsToPrice.length) {
-          fetch('https://api.jup.ag/price/v2?ids=' + mintsToPrice.join(','))
-            .then(r => r.ok ? r.json() : {})
-            .then(priceData => {
-              if (!priceData.data) return;
-              setSearchResults(prev => prev.map(c => {
-                const p = priceData.data[c.mint];
-                if (!p || !p.price) return c;
-                return { ...c, current_price: parseFloat(p.price) };
-              }));
-            }).catch(() => {});
-        }
-      })
-      .catch(() => setSearchLoading(false));
+      const jupMatches = (Array.isArray(jupTokens) ? jupTokens : []).filter(t => {
+        if (existingSymbols.has((t.symbol || '').toLowerCase())) return false;
+        return (t.symbol && t.symbol.toLowerCase().includes(ql)) || (t.name && t.name.toLowerCase().includes(ql));
+      }).slice(0, 30).map(t => {
+        existingSymbols.add((t.symbol || '').toLowerCase());
+        return { id: t.address, mint: t.address, symbol: t.symbol, name: t.name, image: t.logoURI || null, current_price: 0, market_cap: 0, total_volume: 0, price_change_percentage_24h: null, sparkline_in_7d: null, isSolanaToken: true };
+      });
+
+      const dexSeen = new Set();
+      const dexMatches = dexPairs
+        .filter(p => p.chainId === 'solana' && p.baseToken)
+        .filter(p => {
+          const sym = (p.baseToken.symbol || '').toLowerCase();
+          const addr = p.baseToken.address || '';
+          if (existingSymbols.has(sym) || dexSeen.has(addr)) return false;
+          dexSeen.add(addr);
+          return true;
+        })
+        .slice(0, 20)
+        .map(p => ({
+          id: p.baseToken.address, mint: p.baseToken.address,
+          symbol: p.baseToken.symbol, name: p.baseToken.name, image: null,
+          current_price: parseFloat(p.priceUsd || 0),
+          market_cap: p.fdv || 0,
+          total_volume: p.volume?.h24 || 0,
+          price_change_percentage_24h: p.priceChange?.h24 || null,
+          sparkline_in_7d: null, isSolanaToken: true,
+        }));
+
+      const combined = [...immediate, ...jupMatches, ...dexMatches];
+      if (combined.length) setSearchResults(combined);
+      setSearchLoading(false);
+
+      const mintsToPrice = combined.filter(c => c.isSolanaToken && !c.current_price && c.mint).map(c => c.mint).slice(0, 30);
+      if (mintsToPrice.length) {
+        fetch('https://api.jup.ag/price/v2?ids=' + mintsToPrice.join(','))
+          .then(r => r.ok ? r.json() : {})
+          .then(priceData => {
+            if (!priceData.data) return;
+            setSearchResults(prev => prev.map(c => {
+              const p = priceData.data[c.mint];
+              if (!p || !p.price) return c;
+              return { ...c, current_price: parseFloat(p.price) };
+            }));
+          }).catch(() => {});
+      }
+    }).catch(() => setSearchLoading(false));
   }, [q, coins, jupiterTokens]);
 
   useEffect(() => {
     if (!searchResults.length) return;
-    const mints = searchResults
-      .filter(c => c.isSolanaToken && c.current_price === 0)
-      .map(c => c.id).slice(0, 30);
+    const mints = searchResults.filter(c => c.isSolanaToken && c.current_price === 0).map(c => c.id).slice(0, 30);
     if (!mints.length) return;
     fetch('https://api.jup.ag/price/v2?ids=' + mints.join(','))
       .then(r => r.json())
@@ -181,9 +203,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
 
   const renderRow = (c, i) => {
     const positive = (c.price_change_percentage_24h || 0) >= 0;
-    const sparkData = c.sparkline_in_7d
-      ? c.sparkline_in_7d.price.filter((_, i) => i % 8 === 0)
-      : [];
+    const sparkData = c.sparkline_in_7d ? c.sparkline_in_7d.price.filter((_, i) => i % 8 === 0) : [];
 
     if (isMobile) {
       return (
@@ -239,13 +259,6 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     );
   };
 
-  const SortBtn = ({ label, key: k }) => (
-    <button
-      onClick={() => handleSort(k)}
-      style={{ background: 'none', border: 'none', color: sort === k ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0, fontFamily: 'Syne, sans-serif' }}
-    >{label} {sort === k ? (dir === -1 ? 'v' : '^') : ''}</button>
-  );
-
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
@@ -260,11 +273,8 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
             placeholder="Search name, symbol or paste address…"
             style={{ background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border), borderRadius: 10, padding: '9px 36px 9px 14px', color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: '100%' }}
           />
-          {q && (
-            <button
-              onClick={() => { setQ(''); setSearchResults([]); setSearchToken(null); }}
-              style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 0 }}
-            >x</button>
+          {q && !searchLoading && (
+            <button onClick={() => { setQ(''); setSearchResults([]); setSearchToken(null); }} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 0 }}>x</button>
           )}
           {searchLoading && (
             <div style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: C.accent, fontSize: 11 }}>…</div>
@@ -286,9 +296,9 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
             <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 110px 80px 110px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
               <div>#</div>
               <div>NAME</div>
-              <SortBtn label="PRICE" key="current_price" />
-              <SortBtn label="24H" key="price_change_percentage_24h" />
-              <SortBtn label="MKT CAP" key="market_cap" />
+              <SortBtn label="PRICE" sortKey="current_price" sort={sort} dir={dir} onSort={handleSort} />
+              <SortBtn label="24H" sortKey="price_change_percentage_24h" sort={sort} dir={dir} onSort={handleSort} />
+              <SortBtn label="MKT CAP" sortKey="market_cap" sort={sort} dir={dir} onSort={handleSort} />
               <div style={{ textAlign: 'right', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>7D</div>
             </div>
           )}
