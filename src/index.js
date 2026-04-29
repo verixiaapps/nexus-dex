@@ -74,3 +74,4 @@ root.render(
     </QueryClientProvider>
   </WagmiProvider>
 );
+ 
