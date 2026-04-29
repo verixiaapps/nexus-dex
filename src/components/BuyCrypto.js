@@ -1,5 +1,3 @@
-The file is full of curly smart quotes (' ') throughout — every string. Here it is with all quotes replaced with straight ASCII quotes:
-
 import React from 'react';
 
 const C = {
