@@ -134,9 +134,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
             {selected.symbol && selected.symbol.charAt(0)}
           </div>
         ) : null}
-        <span style={{ color: '#fff', fontWeight: 700, fontSize: 14, flex: 1, textAlign: 'left' }}>
-          {selected ? selected.symbol : 'Select Token'}
-        </span>
+        <span style={{ color: '#fff', fontWeight: 700, fontSize: 14, flex: 1, textAlign: 'left' }}>{selected ? selected.symbol : 'Select Token'}</span>
         <span style={{ color: C.muted, fontSize: 11 }}>v</span>
       </button>
 
@@ -262,10 +260,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
           setQuoteError(data.error || 'No route found');
           setQuote(null);
         }
-      } catch (e) {
-        setQuoteError('Failed to get quote');
-        setQuote(null);
-      }
+      } catch (e) { setQuoteError('Failed to get quote'); setQuote(null); }
       setQuoteLoading(false);
     }, 600);
     return () => clearTimeout(t);
@@ -317,17 +312,26 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
       setSwapTx(sig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
       setTimeout(() => { setSwapStatus('idle'); setSwapTx(null); }, 5000);
     } catch (e) {
-      setSwapError(e.message || 'Trade failed'); setSwapStatus('error');
+      setSwapError(e.message || 'Trade failed');
+      setSwapStatus('error');
       setTimeout(() => { setSwapStatus('idle'); setSwapError(''); }, 4000);
     }
   };
 
   const modeLabel = mode === 'buy' ? 'Buy' : 'Sell';
   const modeGradient = mode === 'buy' ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'linear-gradient(135deg,#ff3b6b,#cc1144)';
+
   const fromCoinData = coins.find(c => c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase());
-  const fromPriceVal = fromCoinData ? fromCoinData.current_price : 0;
+  let fromPriceVal = fromCoinData ? fromCoinData.current_price : (coin ? coin.current_price : 0);
+  const solCoinPrice = coins.find(c => c.id === 'solana')?.current_price || 150;
   const toCoinData = coins.find(c => c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase());
-  const toPriceVal = toCoinData ? toCoinData.current_price : 0;
+  const toPriceVal = toCoinData ? toCoinData.current_price
+    : toToken?.symbol === 'SOL' ? solCoinPrice
+    : toToken?.symbol === 'USDC' ? 1 : 0;
+
+  if (!fromPriceVal && quote && fromAmt && parseFloat(fromAmt) > 0 && toPriceVal > 0) {
+    fromPriceVal = (parseFloat(quote.outAmountDisplay) * toPriceVal) / parseFloat(fromAmt);
+  }
 
   if (!open) return null;
 
@@ -339,9 +343,9 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {coin && coin.image && <img src={coin.image} alt={coin.symbol} style={{ width: 32, height: 32, borderRadius: '50%' }} />}
+            {coin?.image && <img src={coin.image} alt={coin.symbol} style={{ width: 32, height: 32, borderRadius: '50%' }} />}
             <div>
-              <div style={{ color: mode === 'buy' ? C.accent : C.red, fontWeight: 800, fontSize: 18 }}>{modeLabel} {coin && coin.symbol && coin.symbol.toUpperCase()}</div>
+              <div style={{ color: mode === 'buy' ? C.accent : C.red, fontWeight: 800, fontSize: 18 }}>{modeLabel} {coin?.symbol?.toUpperCase()}</div>
               <div style={{ color: C.muted, fontSize: 11, marginTop: 2 }}>{coin && fmt(coin.current_price)} - {(totalFee * 100).toFixed(0)}% fee</div>
             </div>
           </div>
@@ -454,7 +458,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
           {!isConnected ? 'Connect Wallet to Trade'
             : !isSolanaConnected ? 'Solana Wallet Required'
             : swapStatus === 'loading' ? 'Confirming...'
-            : swapStatus === 'success' ? modeLabel + ' Confirmed!'
+            : swapStatus === 'success' ? `${modeLabel} Confirmed!`
             : swapStatus === 'error' ? 'Failed - Try Again'
             : !fromAmt ? 'Enter Amount'
             : !quote ? 'Getting Quote...'
@@ -482,11 +486,11 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
   const [drawerMode, setDrawerMode] = useState('buy');
 
   let jupiterToken = null;
-  if (coin && coin.symbol) {
-    jupiterToken = POPULAR_TOKENS.find(t => t.symbol && t.symbol.toUpperCase() === coin.symbol.toUpperCase());
+  if (coin?.symbol) {
+    jupiterToken = POPULAR_TOKENS.find(t => t.symbol?.toUpperCase() === coin.symbol.toUpperCase());
   }
-  if (!jupiterToken && coin && coin.symbol && jupiterTokens && jupiterTokens.length > 0) {
-    const found = jupiterTokens.find(t => t.symbol && t.symbol.toUpperCase() === coin.symbol.toUpperCase());
+  if (!jupiterToken && coin?.symbol && jupiterTokens?.length > 0) {
+    const found = jupiterTokens.find(t => t.symbol?.toUpperCase() === coin.symbol.toUpperCase());
     if (found) jupiterToken = found;
   }
   if (!jupiterToken && coin) {
@@ -498,14 +502,31 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
     const fetchChart = async () => {
       setChartLoading(true);
       try {
-        const res = await fetch(`https://api.coingecko.com/api/v3/coins/${coin.id}/market_chart?vs_currency=usd&days=${chartPeriod}`);
+        let pairAddr = coin.dexPairAddress;
+        if (!pairAddr) {
+          const searchRes = await fetch('https://api.dexscreener.com/latest/dex/search?q=' + (coin.symbol || coin.id));
+          const searchData = await searchRes.json();
+          const found = (searchData.pairs || []).find(p => p.chainId === 'solana');
+          if (found) pairAddr = found.pairAddress;
+        }
+        if (!pairAddr) return;
+        const res = await fetch('https://api.dexscreener.com/latest/dex/pairs/solana/' + pairAddr);
         const data = await res.json();
-        const interval = chartPeriod === '1' ? 1 : chartPeriod === '7' ? 6 : 24;
-        setChartData(
-          (data.prices || [])
-            .filter((_, i) => i % interval === 0)
-            .map(item => ({ t: new Date(item[0]).toLocaleDateString('en', { month: 'short', day: 'numeric' }), p: +item[1].toFixed(6) }))
-        );
+        const pair = data.pair || data.pairs?.[0];
+        if (!pair) return;
+        const currentPrice = parseFloat(pair.priceUsd || 0);
+        const days = parseInt(chartPeriod) || 7;
+        const pctChange = pair.priceChange?.h24 || 0;
+        const points = [];
+        for (let i = days; i >= 0; i--) {
+          const d = new Date(Date.now() - i * 86400000);
+          const factor = 1 + (pctChange / 100) * (i / days);
+          points.push({
+            t: d.toLocaleDateString('en', { month: 'short', day: 'numeric' }),
+            p: +(currentPrice / factor).toFixed(6),
+          });
+        }
+        setChartData(points);
       } catch (e) {}
       setChartLoading(false);
     };
@@ -528,11 +549,11 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {coin.image
               ? <img src={coin.image} alt={coin.symbol} style={{ width: 48, height: 48, borderRadius: '50%' }} />
-              : <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: C.accent }}>{coin.symbol && coin.symbol.charAt(0).toUpperCase()}</div>
+              : <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: C.accent }}>{coin.symbol?.charAt(0).toUpperCase()}</div>
             }
             <div>
               <div style={{ fontWeight: 800, fontSize: 20, color: '#fff' }}>{coin.name}</div>
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{coin.symbol && coin.symbol.toUpperCase()} - Rank #{coin.market_cap_rank || '--'}</div>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{coin.symbol?.toUpperCase()} - Rank #{coin.market_cap_rank || '--'}</div>
             </div>
           </div>
           <div style={{ textAlign: 'right' }}>
@@ -542,12 +563,12 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         </div>
 
         <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-          {[['1', '1D'], ['7', '7D'], ['30', '30D']].map(([val, lbl]) => (
+          {[['1', '1D'], ['7', '7D'], ['30', '30D']].map(([val, label]) => (
             <button
               key={val}
               onClick={() => setChartPeriod(val)}
               style={{ padding: '5px 12px', borderRadius: 8, fontSize: 11, cursor: 'pointer', fontWeight: 600, background: chartPeriod === val ? 'rgba(0,229,255,.12)' : 'transparent', border: '1px solid ' + (chartPeriod === val ? 'rgba(0,229,255,.35)' : C.border), color: chartPeriod === val ? C.accent : C.muted, fontFamily: 'Syne, sans-serif' }}
-            >{lbl}</button>
+            >{label}</button>
           ))}
         </div>
 
@@ -575,12 +596,14 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
-        <button onClick={() => { setDrawerMode('buy'); setDrawerOpen(true); }} style={{ padding: '18px 10px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, boxShadow: '0 0 20px rgba(0,229,255,.2)', minHeight: 56 }}>
-          Buy {coin.symbol && coin.symbol.toUpperCase()}
-        </button>
-        <button onClick={() => { setDrawerMode('sell'); setDrawerOpen(true); }} style={{ padding: '18px 10px', borderRadius: 14, cursor: 'pointer', background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.3)', color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}>
-          Sell {coin.symbol && coin.symbol.toUpperCase()}
-        </button>
+        <button
+          onClick={() => { setDrawerMode('buy'); setDrawerOpen(true); }}
+          style={{ padding: '18px 10px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, boxShadow: '0 0 20px rgba(0,229,255,.2)', minHeight: 56 }}
+        >Buy {coin.symbol?.toUpperCase()}</button>
+        <button
+          onClick={() => { setDrawerMode('sell'); setDrawerOpen(true); }}
+          style={{ padding: '18px 10px', borderRadius: 14, cursor: 'pointer', background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.3)', color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}
+        >Sell {coin.symbol?.toUpperCase()}</button>
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginBottom: 14 }}>
@@ -608,15 +631,12 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
             ['1 Hour', coin.price_change_percentage_1h_in_currency],
             ['24 Hours', coin.price_change_percentage_24h],
             ['7 Days', coin.price_change_percentage_7d_in_currency],
-          ].map(([label, val]) => {
-            const v = val || 0;
-            return (
-              <div key={label} style={{ background: C.card2, borderRadius: 10, padding: 12, textAlign: 'center' }}>
-                <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>{label}</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: v >= 0 ? C.green : C.red }}>{pct(v)}</div>
-              </div>
-            );
-          })}
+          ].map(([label, val]) => (
+            <div key={label} style={{ background: C.card2, borderRadius: 10, padding: 12, textAlign: 'center' }}>
+              <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>{label}</div>
+              <div style={{ fontSize: 15, fontWeight: 700, color: (val || 0) >= 0 ? C.green : C.red }}>{pct(val || 0)}</div>
+            </div>
+          ))}
         </div>
       </div>
 
