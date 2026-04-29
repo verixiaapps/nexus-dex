@@ -482,3 +482,4 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     </div>
   );
 }
+ 
