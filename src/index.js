@@ -16,7 +16,7 @@ import App from './App';
 if (typeof window !== 'undefined' && window.ethereum && window.ethereum.isMetaMask) {
   try { createSolanaClient({}); } catch (e) {}
 }
-
+ 
 const SOLANA_RPC = process.env.REACT_APP_SOLANA_RPC || 'https://mainnet.helius-rpc.com/?api-key=45c791fa-d4fd-480e-aee3-7f998177b732';
 const PROJECT_ID = '1a7c741caab0a2c5ffa2b199a816ea92';
 
