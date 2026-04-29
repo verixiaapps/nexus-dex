@@ -6,7 +6,7 @@ import { WalletConnectWalletAdapter } from ‘@walletconnect/solana-adapter’;
 import { WalletAdapterNetwork } from ‘@solana/wallet-adapter-base’;
 import ‘@solana/wallet-adapter-react-ui/styles.css’;
 import { createSolanaClient } from ‘@metamask/connect-solana’;
-
+ 
 // MetaMask Solana support
 if (typeof window !== ‘undefined’ && window.ethereum && window.ethereum.isMetaMask) {
 try { createSolanaClient({}); } catch (e) {}
