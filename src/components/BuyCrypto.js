@@ -9,7 +9,7 @@ export default function BuyCrypto({ walletAddress, selectedCoinSymbol }) {
   const coin = selectedCoinSymbol ? selectedCoinSymbol.toUpperCase() : 'SOL';
   let url = 'https://global.transak.com?defaultCryptoCurrency=' + coin;
   if (walletAddress) url += '&walletAddress=' + encodeURIComponent(walletAddress);
-
+ 
   return (
     <div style={{ maxWidth: 480, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
       <div style={{ marginBottom: 20 }}>
