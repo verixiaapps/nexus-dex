@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { VersionedTransaction, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
@@ -9,7 +9,6 @@ const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
 const SPREAD = 0.005;
 const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
-const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -33,15 +32,14 @@ const POPULAR_TOKENS = [
 
 const SOL_TOKEN = POPULAR_TOKENS[0];
 const USDC_TOKEN = POPULAR_TOKENS[1];
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
 async function getTokenDecimals(token) {
   if (!token) return 6;
   const popular = POPULAR_TOKENS.find(t => t.mint === token.mint);
   if (popular) return popular.decimals;
   try {
-    const r = await fetch('https://lite-api.jup.ag/tokens/v1/token/' + token.mint, {
-      headers: { 'x-api-key': JUP_API_KEY },
-    });
+    const r = await fetch('https://lite-api.jup.ag/tokens/v1/token/' + token.mint, { headers: { 'x-api-key': JUP_API_KEY } });
     if (r.ok) {
       const d = await r.json();
       const dec = parseInt(d.decimals);
@@ -90,9 +88,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
       if (found) {
         setContractToken(found);
       } else {
-        const res = await fetch('https://lite-api.jup.ag/tokens/v1/token/' + addr, {
-          headers: { 'x-api-key': JUP_API_KEY },
-        });
+        const res = await fetch('https://lite-api.jup.ag/tokens/v1/token/' + addr, { headers: { 'x-api-key': JUP_API_KEY } });
         if (res.ok) {
           const data = await res.json();
           const dec = parseInt(data.decimals);
@@ -242,7 +238,6 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
   const [fromBalance, setFromBalance] = useState(null);
   const [toBalance, setToBalance] = useState(null);
 
-  // Fetch balances when drawer opens or tokens change
   useEffect(() => {
     if (!publicKey || !connection || !open) { setFromBalance(null); setToBalance(null); return; }
     const fetchBal = async (token, setter) => {
@@ -293,27 +288,48 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
     return () => clearTimeout(t);
   }, [fromAmt, fromToken, toToken]);
 
+  const deserializeIx = ix => ({
+    programId: new PublicKey(ix.programId),
+    keys: ix.accounts.map(a => ({ pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable })),
+    data: Buffer.from(ix.data, 'base64'),
+  });
+
   const executeSwap = async () => {
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
     if (!publicKey) { setSwapError('Please connect a wallet'); return; }
     if (!quote) return;
     setSwapStatus('loading'); setSwapError('');
     try {
-      if (publicKey) {
-        try {
-          const solBal = (await connection.getBalance(publicKey)) / 1e9;
-          if (solBal < 0.003) {
-            setSwapError('Insufficient SOL balance. Need at least 0.003 SOL to cover fees and gas.');
-            setSwapStatus('error');
-            setTimeout(() => { setSwapStatus('idle'); setSwapError(''); }, 6000);
-            return;
-          }
-        } catch (_e) {}
-      }
+      try {
+        const solBal = (await connection.getBalance(publicKey)) / 1e9;
+        if (solBal < 0.003) {
+          setSwapError('Insufficient SOL balance. Need at least 0.003 SOL to cover fees and gas.');
+          setSwapStatus('error');
+          setTimeout(() => { setSwapStatus('idle'); setSwapError(''); }, 6000);
+          return;
+        }
+      } catch (_e) {}
 
-      const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
+      const solCoin = coins.find(c => c.id === 'solana' || (c.symbol && c.symbol.toLowerCase() === 'sol'));
+      const solPrice = solCoin ? solCoin.current_price : 150;
+      const fromCoinData = coins.find(c => c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase());
+      const fromPrice = fromCoinData ? fromCoinData.current_price : (coin ? coin.current_price : (fromToken?.symbol === 'SOL' ? solPrice : 0));
+      let tradeUsd = parseFloat(fromAmt) * (fromPrice || 0);
+      if (!tradeUsd && quote) {
+        const toCoin2 = coins.find(c => c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase());
+        const tp2 = toCoin2 ? toCoin2.current_price : (toToken && (toToken.symbol === 'USDC' || toToken.symbol === 'USDT') ? 1 : 0);
+        if (tp2 > 0) tradeUsd = parseFloat(quote.outAmountDisplay) * tp2;
+      }
+      const totalFeePct = totalFee + SPREAD;
+      const feeLamports = Math.round(Math.max(
+        tradeUsd > 0
+          ? (tradeUsd * totalFeePct / solPrice) * LAMPORTS_PER_SOL
+          : parseFloat(fromAmt) * totalFeePct * LAMPORTS_PER_SOL,
+        50000
+      ));
+
+      const instrRes = await fetch('https://api.jup.ag/swap/v1/swap-instructions', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
         body: JSON.stringify({
           quoteResponse: quote.quoteResponse,
           userPublicKey: publicKey.toString(),
@@ -321,40 +337,50 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
           computeUnitPriceMicroLamports: antiMev ? 50000 : 1000,
         }),
       });
-      const swapData = await swapRes.json();
-      if (!swapData.swapTransaction) throw new Error(swapData.error || 'No swap transaction');
-      const txBuf = Buffer.from(swapData.swapTransaction, 'base64');
-      const tx = VersionedTransaction.deserialize(txBuf);
-      const sig = await sendTransaction(tx, connection);
-      await connection.confirmTransaction(sig, 'confirmed');
+      const instrData = await instrRes.json();
 
-      try {
-        const solCoin = coins.find(c => c.id === 'solana');
-        const solPrice = solCoin ? solCoin.current_price : 100;
-        const fromCoinData = coins.find(c => c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase());
-        const fromPrice = fromCoinData ? fromCoinData.current_price : (coin ? coin.current_price : 0);
-        let tradeUsd = parseFloat(fromAmt) * (fromPrice || 0);
-        if (!tradeUsd && quote) {
-          const toCoin2 = coins.find(c => c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase());
-          const tp2 = toCoin2 ? toCoin2.current_price : (toToken && (toToken.symbol === 'USDC' || toToken.symbol === 'USDT') ? 1 : 0);
-          if (tp2 > 0) tradeUsd = parseFloat(quote.outAmountDisplay) * tp2;
+      let sig;
+      if (instrData && instrData.swapInstruction && !instrData.error) {
+        const allIxs = [];
+        instrData.computeBudgetInstructions?.forEach(ix => allIxs.push(deserializeIx(ix)));
+        instrData.setupInstructions?.forEach(ix => allIxs.push(deserializeIx(ix)));
+        allIxs.push(deserializeIx(instrData.swapInstruction));
+        if (instrData.cleanupInstruction) allIxs.push(deserializeIx(instrData.cleanupInstruction));
+        allIxs.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
+
+        let luts = [];
+        if (instrData.addressLookupTableAddresses?.length) {
+          const ltRes = await Promise.all(instrData.addressLookupTableAddresses.map(a => connection.getAddressLookupTable(new PublicKey(a))));
+          luts = ltRes.map(r => r.value).filter(Boolean);
         }
-        const totalFeePct = totalFee + SPREAD;
-        let totalFeeSol = tradeUsd > 0 ? (tradeUsd * totalFeePct) / solPrice : parseFloat(fromAmt) * totalFeePct;
-        totalFeeSol = Math.max(totalFeeSol, 0.000050);
-        if (publicKey) {
-          const lb = await connection.getLatestBlockhash();
+
+        const bh = await connection.getLatestBlockhash('confirmed');
+        const msgV0 = new TransactionMessage({
+          payerKey: publicKey, recentBlockhash: bh.blockhash, instructions: allIxs,
+        }).compileToV0Message(luts);
+        const vTx = new VersionedTransaction(msgV0);
+        sig = await sendTransaction(vTx, connection);
+        await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+      } else {
+        const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
+          body: JSON.stringify({ quoteResponse: quote.quoteResponse, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000 }),
+        });
+        const swapData = await swapRes.json();
+        if (!swapData.swapTransaction) throw new Error(swapData.error || 'No swap transaction');
+        const txFB = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
+        sig = await sendTransaction(txFB, connection);
+        await connection.confirmTransaction(sig, 'confirmed');
+        try {
+          const fbh = await connection.getLatestBlockhash('finalized');
           const feeTx = new Transaction();
-          feeTx.recentBlockhash = lb.blockhash;
+          feeTx.recentBlockhash = fbh.blockhash;
+          feeTx.lastValidBlockHeight = fbh.lastValidBlockHeight;
           feeTx.feePayer = publicKey;
-          feeTx.add(SystemProgram.transfer({
-            fromPubkey: publicKey,
-            toPubkey: new PublicKey(FEE_WALLET),
-            lamports: Math.round(totalFeeSol * LAMPORTS_PER_SOL),
-          }));
+          feeTx.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
           await sendTransaction(feeTx, connection);
-        }
-      } catch (feeErr) { console.error('Fee tx error:', feeErr); }
+        } catch (fe) { console.error('Fee fallback:', fe); }
+      }
 
       setSwapTx(sig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
       setTimeout(() => { setSwapStatus('idle'); setSwapTx(null); }, 5000);
@@ -411,9 +437,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
             <TokenSelect selected={fromToken} onSelect={setFromToken} jupiterTokens={jupiterTokens} label="YOU PAY" />
             {fromBalance != null && (
-              <span style={{ fontSize: 11, color: C.muted }}>
-                Bal: <span style={{ color: C.text }}>{fmtBal(fromBalance)}</span>
-              </span>
+              <span style={{ fontSize: 11, color: C.muted }}>Bal: <span style={{ color: C.text }}>{fmtBal(fromBalance)}</span></span>
             )}
           </div>
           <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
@@ -426,9 +450,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
             {fromBalance != null && fromBalance > 0 && (
               <button
                 onClick={() => {
-                  const max = fromToken?.symbol === 'SOL'
-                    ? Math.max(0, fromBalance - 0.01)
-                    : fromBalance;
+                  const max = fromToken?.symbol === 'SOL' ? Math.max(0, fromBalance - 0.01) : fromBalance;
                   setFromAmt(max > 0 ? max.toFixed(6) : '0');
                 }}
                 style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 8, padding: '8px 12px', color: C.accent, fontSize: 12, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}
@@ -452,9 +474,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
             <TokenSelect selected={toToken} onSelect={setToToken} jupiterTokens={jupiterTokens} label="YOU RECEIVE" />
             {toBalance != null && (
-              <span style={{ fontSize: 11, color: C.muted }}>
-                Bal: <span style={{ color: C.text }}>{fmtBal(toBalance)}</span>
-              </span>
+              <span style={{ fontSize: 11, color: C.muted }}>Bal: <span style={{ color: C.text }}>{fmtBal(toBalance)}</span></span>
             )}
           </div>
           <div style={{ marginTop: 8, background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '14px 16px' }}>
