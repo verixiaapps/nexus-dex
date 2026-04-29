@@ -2,7 +2,6 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { VersionedTransaction, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
@@ -205,17 +204,8 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   const [swapStatus, setSwapStatus] = useState('idle');
   const [swapTx, setSwapTx] = useState(null);
   const [swapError, setSwapError] = useState('');
-  const [chartData, setChartData] = useState([]);
-  const [selectedChart, setSelectedChart] = useState('bitcoin');
   const [customAddress, setCustomAddress] = useState('');
   const [useCustomAddress, setUseCustomAddress] = useState(false);
-  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
-
-  useEffect(() => {
-    const handleResize = () => setIsMobile(window.innerWidth < 768);
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
 
   const totalFee = antiMev ? BASE_FEE + ANTIMEV_FEE : BASE_FEE;
 
@@ -238,10 +228,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         setQuoteError(data.error || 'No route found for this pair');
         setQuote(null);
       }
-    } catch (e) {
-      setQuoteError('Failed to get quote');
-      setQuote(null);
-    }
+    } catch (e) { setQuoteError('Failed to get quote'); setQuote(null); }
     setQuoteLoading(false);
   }, [fromAmt, fromToken, toToken, slip]);
 
@@ -249,30 +236,6 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     const t = setTimeout(fetchQuote, 600);
     return () => clearTimeout(t);
   }, [fetchQuote]);
-
-  useEffect(() => {
-    const fetchChart = async () => {
-      try {
-        const chartCoinObj = coins.find(c => c.id === selectedChart || c.symbol === selectedChart);
-        const pairAddr = chartCoinObj?.dexPairAddress;
-        if (!pairAddr) return;
-        const res = await fetch('https://api.dexscreener.com/latest/dex/pairs/solana/' + pairAddr);
-        const data = await res.json();
-        const pair = data.pair || data.pairs?.[0];
-        if (!pair) return;
-        const currentPrice = parseFloat(pair.priceUsd || 0);
-        const pct7d = pair.priceChange?.h24 || 0;
-        const points = [];
-        for (let i = 7; i >= 0; i--) {
-          const d = new Date(Date.now() - i * 86400000);
-          const factor = 1 + (pct7d / 100) * (i / 7);
-          points.push({ t: d.toLocaleDateString('en', { month: 'short', day: 'numeric' }), p: +(currentPrice / factor).toFixed(6) });
-        }
-        setChartData(points);
-      } catch (e) {}
-    };
-    fetchChart();
-  }, [selectedChart, coins]);
 
   const executeSwap = async () => {
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
@@ -355,8 +318,6 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   }
 
   const feeUsd = fromAmt && fromPriceVal ? (parseFloat(fromAmt) * fromPriceVal * totalFee).toFixed(2) : '0.00';
-  const chartCoin = coins.find(c => c.id === selectedChart);
-  const chartColor = chartCoin && (chartCoin.price_change_percentage_7d_in_currency || 0) >= 0 ? C.green : C.red;
 
   const swapPanel = (
     <div>
@@ -373,7 +334,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
               <button
                 key={v}
                 onClick={() => setSlip(v)}
-                style={{ padding: '3px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer', fontWeight: 600, background: slip === v ? 'rgba(0,229,255,.15)' : 'transparent', border: '1px solid ' + (slip === v ? 'rgba(0,229,255,.4)' : C.border), color: slip === v ? C.accent : C.muted }}
+                style={{ padding: '3px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer', background: slip === v ? 'rgba(0,229,255,.15)' : 'transparent', border: '1px solid ' + (slip === v ? 'rgba(0,229,255,.4)' : C.border), color: slip === v ? C.accent : C.muted }}
               >{v}%</button>
             ))}
           </div>
@@ -509,98 +470,16 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         )}
 
         {swapTx && swapStatus === 'success' && (
-          <a href={'https://solscan.io/tx/' + swapTx} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 10, fontSize: 12, color: C.accent }}>
-            View on Solscan
-          </a>
+          <a href={'https://solscan.io/tx/' + swapTx} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 10, fontSize: 12, color: C.accent }}>View on Solscan</a>
         )}
         <p style={{ textAlign: 'center', fontSize: 10, color: C.muted2, marginTop: 10 }}>Non-custodial - No KYC - Fees paid by user</p>
       </div>
     </div>
   );
 
-  const chartPanel = (
-    <div style={{ minWidth: 0 }}>
-      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap', marginBottom: 12 }}>
-        {coins.slice(0, 10).map(c => (
-          <button
-            key={c.id}
-            onClick={() => setSelectedChart(c.id)}
-            style={{ padding: '4px 8px', borderRadius: 6, fontSize: 10, cursor: 'pointer', fontWeight: 600, background: selectedChart === c.id ? 'rgba(0,229,255,.12)' : 'transparent', border: '1px solid ' + (selectedChart === c.id ? 'rgba(0,229,255,.35)' : C.border), color: selectedChart === c.id ? C.accent : C.muted }}
-          >{c.symbol && c.symbol.toUpperCase()}</button>
-        ))}
-      </div>
-
-      {chartCoin && (
-        <div
-          onClick={() => { if (onGoToToken) onGoToToken(chartCoin); }}
-          style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 18, padding: 18, cursor: 'pointer' }}
-        >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 14 }}>
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                {chartCoin.image && <img src={chartCoin.image} alt={chartCoin.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} />}
-                <div>
-                  <div style={{ fontWeight: 700, fontSize: 14, color: '#fff' }}>{chartCoin.name}</div>
-                  <div style={{ fontSize: 10, color: C.muted }}>Tap to view token page</div>
-                </div>
-              </div>
-              <div style={{ fontSize: 22, fontWeight: 600, color: '#fff', marginTop: 6 }}>{fmt(chartCoin.current_price)}</div>
-            </div>
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 10, color: C.muted, marginBottom: 3 }}>24H</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: (chartCoin.price_change_percentage_24h || 0) >= 0 ? C.green : C.red }}>{pct(chartCoin.price_change_percentage_24h)}</div>
-              <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Vol: {fmt(chartCoin.total_volume)}</div>
-            </div>
-          </div>
-
-          {chartData.length > 0 ? (
-            <ResponsiveContainer width="100%" height={160}>
-              <AreaChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
-                <defs>
-                  <linearGradient id="swapGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={chartColor} stopOpacity={.25} />
-                    <stop offset="100%" stopColor={chartColor} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <XAxis dataKey="t" hide />
-                <YAxis hide domain={['auto', 'auto']} />
-                <Tooltip
-                  contentStyle={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 11 }}
-                  formatter={v => [fmt(v), 'Price']}
-                />
-                <Area type="monotone" dataKey="p" stroke={chartColor} strokeWidth={2} fill="url(#swapGrad)" />
-              </AreaChart>
-            </ResponsiveContainer>
-          ) : (
-            <div style={{ height: 160, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 12 }}>Loading chart…</div>
-          )}
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 6, marginTop: 12 }}>
-            {[
-              ['24H High', fmt(chartCoin.high_24h)],
-              ['24H Low', fmt(chartCoin.low_24h)],
-              ['Market Cap', fmt(chartCoin.market_cap)],
-              ['Volume', fmt(chartCoin.total_volume)],
-            ].map(([label, value]) => (
-              <div key={label} style={{ background: '#050912', borderRadius: 8, padding: 8 }}>
-                <div style={{ fontSize: 9, color: C.muted, marginBottom: 2 }}>{label}</div>
-                <div style={{ fontSize: 11, color: C.text, fontWeight: 500 }}>{value}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
   return (
-    <div style={{ width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
-      {isMobile ? (
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>{swapPanel}{chartPanel}</div>
-      ) : (
-        <div style={{ display: 'grid', gridTemplateColumns: 'minmax(300px, 480px) 1fr', gap: 24, alignItems: 'start' }}>{swapPanel}{chartPanel}</div>
-      )}
+    <div style={{ width: '100%', maxWidth: 520, margin: '0 auto', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
+      {swapPanel}
     </div>
   );
 }
- 
