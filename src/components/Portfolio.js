@@ -33,6 +33,44 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
 
   const { address: evmAddress, isConnected: evmConnected, chain } = useAccount();
   const { data: evmNativeBalance } = useBalance({ address: evmAddress, query: { enabled: !!evmAddress } });
+  const [evmTokens, setEvmTokens] = useState([]);
+  const [evmLoading, setEvmLoading] = useState(false);
+
+  // Fetch all EVM token balances via Moralis across all chains
+  useEffect(() => {
+    if (!evmAddress) { setEvmTokens([]); return; }
+    const MORALIS_KEY = process.env.REACT_APP_MORALIS_KEY || '';
+    if (!MORALIS_KEY) return;
+    setEvmLoading(true);
+    const EVM_CHAINS = ['0x1', '0x89', '0xa4b1', '0x2105', '0x38', '0xa86a', '0xa'];
+    const CHAIN_NAMES = { '0x1': 'Ethereum', '0x89': 'Polygon', '0xa4b1': 'Arbitrum', '0x2105': 'Base', '0x38': 'BSC', '0xa86a': 'Avalanche', '0xa': 'Optimism' };
+    Promise.all(EVM_CHAINS.map(chainId =>
+      fetch(`https://deep-index.moralis.io/api/v2.2/wallets/${evmAddress}/tokens?chain=${chainId}&exclude_spam=true&exclude_unverified_contracts=false`, {
+        headers: { 'X-API-Key': MORALIS_KEY, 'Accept': 'application/json' },
+      })
+        .then(r => r.ok ? r.json() : { result: [] })
+        .then(data => (data.result || []).map(t => ({
+          chain: chainId,
+          chainName: CHAIN_NAMES[chainId] || chainId,
+          address: t.token_address,
+          symbol: t.symbol || '???',
+          name: t.name || 'Unknown',
+          logo: t.logo || t.thumbnail || null,
+          decimals: parseInt(t.decimals || 18),
+          balance: parseFloat(t.balance_formatted || (t.balance / Math.pow(10, parseInt(t.decimals || 18)))),
+          price: parseFloat(t.usd_price || 0),
+          value: parseFloat(t.usd_value || 0),
+          pct24h: parseFloat(t.usd_price_24hr_percent_change || 0),
+          isNative: t.native_token || false,
+          isSpam: t.possible_spam || false,
+        })).filter(t => !t.isSpam && t.balance > 0))
+        .catch(() => [])
+    )).then(results => {
+      const all = results.flat().sort((a, b) => b.value - a.value);
+      setEvmTokens(all);
+      setEvmLoading(false);
+    });
+  }, [evmAddress, refreshKey]);
 
   const getPrice = useCallback(symbol => {
     if (!symbol || !coins || !coins.length) return 0;
@@ -105,7 +143,6 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
     if (effectiveAddress && coins.length > 0) fetchBalances();
   }, [coins.length]);
 
-  // Refresh every time user visits tab
   useEffect(() => {
     if (refreshKey > 0 && (publicKey || lookupAddress)) fetchBalances();
   }, [refreshKey]);
@@ -113,11 +150,6 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
   const solPrice = getPrice('SOL');
   const solValue = solBalance * solPrice;
   const rootStyle = { width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' };
-
-  const evmSymbol = evmNativeBalance?.symbol;
-  const evmCoin = evmSymbol ? coins.find(c => c.symbol?.toUpperCase() === evmSymbol.toUpperCase()) : null;
-  const evmPrice = evmCoin ? evmCoin.current_price : 0;
-  const evmValue = evmNativeBalance ? parseFloat(evmNativeBalance.formatted) * evmPrice : 0;
 
   if (!isConnected) {
     return (
@@ -149,7 +181,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
         </div>
       </div>
 
-      {/* Manual Solana address input - for MetaMask/WalletConnect users */}
+      {/* Manual Solana address input */}
       {!publicKey && (
         <div style={{ background: C.card, border: '1px solid rgba(0,229,255,.15)', borderRadius: 12, padding: 16, marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 8 }}>SOLANA WALLET ADDRESS</div>
@@ -280,47 +312,68 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
         </div>
       )}
 
-      {/* EVM Balances Section */}
+      {/* EVM Balances - Moralis powered, all chains */}
       {evmConnected && evmAddress && (
         <div style={{ marginTop: 16 }}>
-          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 10 }}>
-            EVM WALLET -- {chain ? chain.name.toUpperCase() : 'CONNECTED'}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>EVM WALLETS -- ALL CHAINS</span>
+            {evmLoading && <span style={{ fontSize: 11, color: C.accent }}>Loading...</span>}
+            {!evmLoading && evmTokens.length > 0 && (
+              <span style={{ fontSize: 11, color: C.muted }}>
+                Total: <span style={{ color: C.green, fontWeight: 700 }}>{fmt(evmTokens.reduce((sum, t) => sum + t.value, 0))}</span>
+              </span>
+            )}
           </div>
           <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
-            <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 80px 80px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
-              <div>#</div><div>TOKEN</div>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
+              <div>TOKEN</div>
               <div style={{ textAlign: 'right' }}>BALANCE</div>
               <div style={{ textAlign: 'right' }}>PRICE</div>
               <div style={{ textAlign: 'right' }}>VALUE</div>
             </div>
-            {evmNativeBalance && (
-              <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '32px 1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)' }}>
-                <div style={{ color: C.muted, fontSize: 11 }}>1</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                  <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(98,126,234,.2)', border: '1px solid rgba(98,126,234,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#627eea', flexShrink: 0 }}>
-                    {evmNativeBalance.symbol?.charAt(0)}
+            {evmLoading && <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>Loading balances across all chains...</div>}
+            {!evmLoading && evmTokens.length === 0 && <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>No EVM token balances found</div>}
+            {evmTokens.map((token, i) => {
+              const positive = token.pct24h >= 0;
+              return (
+                <div
+                  key={`${token.chain}-${token.address}-${i}`}
+                  style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', alignItems: 'center' }}
+                  onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }}
+                  onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                    {token.logo
+                      ? <img src={token.logo} alt={token.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
+                      : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(98,126,234,.15)', border: '1px solid rgba(98,126,234,.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#627eea', flexShrink: 0 }}>{token.symbol.charAt(0)}</div>
+                    }
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{token.symbol}</div>
+                      <div style={{ fontSize: 10, color: C.muted }}>{token.chainName}</div>
+                    </div>
                   </div>
-                  <div>
-                    <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{evmNativeBalance.symbol}</div>
-                    <div style={{ color: C.muted, fontSize: 10 }}>{chain ? chain.name : 'EVM'}</div>
+                  <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>
+                    {token.balance >= 1000 ? token.balance.toLocaleString('en-US', { maximumFractionDigits: 2 }) : token.balance.toFixed(4)}
+                  </div>
+                  <div style={{ textAlign: 'right', fontSize: 12 }}>
+                    <div style={{ color: C.text }}>{token.price > 0 ? fmt(token.price) : '--'}</div>
+                    {token.pct24h !== 0 && (
+                      <div style={{ fontSize: 10, color: positive ? C.green : C.red }}>
+                        {positive ? '+' : ''}{token.pct24h.toFixed(2)}%
+                      </div>
+                    )}
+                  </div>
+                  <div style={{ textAlign: 'right', color: token.value > 0.01 ? C.green : C.muted, fontSize: 12, fontWeight: token.value > 0.01 ? 600 : 400 }}>
+                    {token.value > 0.01 ? fmt(token.value) : '--'}
                   </div>
                 </div>
-                <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>
-                  {parseFloat(evmNativeBalance.formatted).toFixed(4)}
-                </div>
-                <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>
-                  {evmPrice > 0 ? fmt(evmPrice) : '--'}
-                </div>
-                <div style={{ textAlign: 'right', fontSize: 12, fontWeight: 600, color: C.green }}>
-                  {evmValue > 0 ? fmt(evmValue) : '--'}
-                </div>
+              );
+            })}
+            {evmAddress && (
+              <div style={{ padding: '10px 16px', textAlign: 'center', borderTop: '1px solid rgba(255,255,255,.03)' }}>
+                <a href={'https://etherscan.io/address/' + evmAddress} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: C.accent, textDecoration: 'none' }}>View on Etherscan</a>
               </div>
             )}
-            <div style={{ padding: '12px 16px', textAlign: 'center' }}>
-              <a href={'https://etherscan.io/address/' + evmAddress} target="_blank" rel="noreferrer" style={{ fontSize: 12, color: C.accent, textDecoration: 'none' }}>
-                View full EVM portfolio on Etherscan
-              </a>
-            </div>
           </div>
         </div>
       )}
