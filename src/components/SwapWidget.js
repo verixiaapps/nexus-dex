@@ -340,11 +340,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Swap Tokens</h1>
         <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
-          Jupiter routing - {(totalFee * 100).toFixed(0)}% fee -{' '}
-          {jupiterLoading
-            ? <span style={{ color: C.accent }}>Loading tokens…</span>
-            : <span style={{ color: C.green }}>{jupiterTokens && jupiterTokens.length > 0 ? jupiterTokens.length.toLocaleString() : POPULAR_TOKENS.length} tokens</span>
-          }
+          Powered by Jupiter - Instant swaps - No account needed
         </p>
       </div>
 
