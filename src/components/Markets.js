@@ -88,6 +88,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     }
 
     setSearchToken(null);
+    setSearchLoading(true);
     const ql = trimmed.toLowerCase();
 
     const cgMatches = coins.filter(c =>
@@ -95,10 +96,10 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
       (c.symbol && c.symbol.toLowerCase().includes(ql))
     );
 
-    let jupMatches = [];
+    let localJupMatches = [];
     if (jupiterTokens && jupiterTokens.length) {
       const cgIds = new Set(cgMatches.map(c => (c.symbol || '').toLowerCase()));
-      jupMatches = jupiterTokens.filter(t => {
+      localJupMatches = jupiterTokens.filter(t => {
         if (cgIds.has((t.symbol || '').toLowerCase())) return false;
         return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
                (t.name && t.name.toLowerCase().includes(ql));
@@ -111,7 +112,27 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
       }));
     }
 
-    setSearchResults([...cgMatches, ...jupMatches]);
+    const immediate = [...cgMatches, ...localJupMatches];
+    if (immediate.length) setSearchResults(immediate);
+
+    fetch('https://lite-api.jup.ag/tokens/v1/search?query=' + encodeURIComponent(trimmed) + '&limit=30')
+      .then(r => r.ok ? r.json() : [])
+      .then(data => {
+        const apiResults = Array.isArray(data) ? data : (data.tokens || []);
+        const existingSymbols = new Set(immediate.map(c => (c.symbol || '').toLowerCase()));
+        const newMatches = apiResults
+          .filter(t => !existingSymbols.has((t.symbol || '').toLowerCase()))
+          .map(t => ({
+            id: t.address, mint: t.address, symbol: t.symbol, name: t.name,
+            image: t.logoURI || null,
+            current_price: 0, market_cap: 0, total_volume: 0,
+            price_change_percentage_24h: null, sparkline_in_7d: null,
+            isSolanaToken: true,
+          }));
+        if (newMatches.length) setSearchResults([...immediate, ...newMatches]);
+        setSearchLoading(false);
+      })
+      .catch(() => setSearchLoading(false));
   }, [q, coins, jupiterTokens]);
 
   useEffect(() => {
@@ -223,7 +244,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
             placeholder="Search name, symbol or paste address…"
             style={{ background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border), borderRadius: 10, padding: '9px 36px 9px 14px', color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: '100%' }}
           />
-          {q && (
+          {q && !searchLoading && (
             <button
               onClick={() => { setQ(''); setSearchResults([]); setSearchToken(null); }}
               style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 0 }}
