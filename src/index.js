@@ -1,3 +1,5 @@
+Starting with src/index.js:
+
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
@@ -6,6 +8,11 @@ import { WalletConnectWalletAdapter } from '@walletconnect/solana-adapter';
 import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import '@solana/wallet-adapter-react-ui/styles.css';
 import { createSolanaClient } from '@metamask/connect-solana';
+
+if (typeof window !== 'undefined' && window.ethereum && window.ethereum.isMetaMask) {
+  try { createSolanaClient({}); } catch (e) {}
+}
+
 import { createWeb3Modal } from '@web3modal/wagmi/react';
 import { defaultWagmiConfig } from '@web3modal/wagmi/react/config';
 import { WagmiProvider } from 'wagmi';
@@ -13,10 +20,6 @@ import { mainnet, polygon, arbitrum, base, bsc, avalanche, optimism } from 'wagm
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 
-if (typeof window !== 'undefined' && window.ethereum && window.ethereum.isMetaMask) {
-  try { createSolanaClient({}); } catch (e) {}
-}
- 
 const SOLANA_RPC = process.env.REACT_APP_SOLANA_RPC || 'https://mainnet.helius-rpc.com/?api-key=45c791fa-d4fd-480e-aee3-7f998177b732';
 const PROJECT_ID = '1a7c741caab0a2c5ffa2b199a816ea92';
 
@@ -29,7 +32,12 @@ const metadata = {
 
 const chains = [mainnet, polygon, arbitrum, base, bsc, avalanche, optimism];
 
-const wagmiConfig = defaultWagmiConfig({ chains, projectId: PROJECT_ID, metadata, ssr: false });
+const wagmiConfig = defaultWagmiConfig({
+  chains,
+  projectId: PROJECT_ID,
+  metadata,
+  ssr: false,
+});
 
 createWeb3Modal({
   wagmiConfig,
@@ -48,7 +56,10 @@ createWeb3Modal({
     description: 'Multi-chain DEX aggregator',
     url: 'https://swap.verixiaapps.com',
     icons: ['https://swap.verixiaapps.com/logo.png'],
-    redirect: { native: 'nexusdex://', universal: 'https://swap.verixiaapps.com' },
+    redirect: {
+      native: 'nexusdex://',
+      universal: 'https://swap.verixiaapps.com',
+    },
   },
 });
 
@@ -74,4 +85,3 @@ root.render(
     </QueryClientProvider>
   </WagmiProvider>
 );
- 
