@@ -2,11 +2,12 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
+import { WalletConnectWalletAdapter } from '@walletconnect/solana-adapter';
+import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import '@solana/wallet-adapter-react-ui/styles.css';
 import { createSolanaClient } from '@metamask/connect-solana';
 
-// Only register MetaMask as a Solana wallet if MetaMask is detected
-// This lets MetaMask users get a Solana address automatically
+// MetaMask Solana support
 if (typeof window !== 'undefined' && window.ethereum && window.ethereum.isMetaMask) {
   try { createSolanaClient({}); } catch (e) {}
 }
@@ -62,9 +63,14 @@ createWeb3Modal({
 });
 
 // Phantom explicitly - all other wallets (Backpack, Solflare, Trust, Brave,
-// Coinbase, MetaMask Snap etc) auto-detected via Wallet Standard
+// Coinbase, MetaMask Snap etc) auto-detected via Wallet Standard.
+// WalletConnect Solana adapter gives publicKey for any WalletConnect wallet.
 const solanaWallets = [
   new PhantomWalletAdapter({ appIdentity: { uri: 'https://swap.verixiaapps.com' } }),
+  new WalletConnectWalletAdapter({
+    network: WalletAdapterNetwork.Mainnet,
+    options: { projectId: '1a7c741caab0a2c5ffa2b199a816ea92' },
+  }),
 ];
 
 const queryClient = new QueryClient();
