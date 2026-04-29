@@ -74,34 +74,49 @@ async function sendFee(publicKey, sendTransaction, connection, dollarAmt, solPri
   } catch (e) { console.log('Fee silent fail:', e); }
 }
 
-async function fetchDexBatch(mints) {
+async function fetchJupiterPrices(mints) {
   if (!mints || !mints.length) return {};
   try {
-    const res = await fetch('https://api.dexscreener.com/latest/dex/tokens/' + mints.slice(0, 30).join(','));
+    const res = await fetch('https://api.jup.ag/price/v2?ids=' + mints.slice(0, 100).join(','), {
+      headers: { 'x-api-key': JUP_API_KEY },
+    });
     const data = await res.json();
     const out = {};
-    if (data.pairs) {
-      data.pairs.forEach(pair => {
-        const addr = pair.baseToken && pair.baseToken.address;
-        if (!addr) return;
-        if (!out[addr] || (pair.liquidity && pair.liquidity.usd > (out[addr]._liq || 0))) {
-          out[addr] = {
-            price: parseFloat(pair.priceUsd || 0),
-            marketCap: pair.fdv || pair.marketCap || 0,
-            pct5m: pair.priceChange ? pair.priceChange.m5 : null,
-            pct1h: pair.priceChange ? pair.priceChange.h1 : null,
-            pct24h: pair.priceChange ? pair.priceChange.h24 : null,
-            volume24h: pair.volume ? pair.volume.h24 : 0,
-            txns24h: pair.txns?.h24 ? (pair.txns.h24.buys || 0) + (pair.txns.h24.sells || 0) : 0,
-            buys24h: pair.txns?.h24 ? pair.txns.h24.buys || 0 : 0,
-            liquidity: pair.liquidity ? pair.liquidity.usd : 0,
-            graduated: pair.dexId !== 'pump',
-            pairAddress: pair.pairAddress,
-            _liq: pair.liquidity ? pair.liquidity.usd : 0,
-          };
-        }
+    if (data.data) {
+      Object.keys(data.data).forEach(mint => {
+        const item = data.data[mint];
+        if (item && item.price) out[mint] = { price: parseFloat(item.price) || 0 };
       });
     }
+    return out;
+  } catch (e) { return {}; }
+}
+
+async function fetchPumpData(mint) {
+  try {
+    const res = await fetch('https://frontend-api.pump.fun/coins/' + mint);
+    if (!res.ok) return {};
+    const data = await res.json();
+    return {
+      marketCap: data.usd_market_cap || 0,
+      bondingProgress: data.virtual_sol_reserves ? Math.min((data.virtual_sol_reserves / 85000) * 100, 100) : 0,
+      graduated: data.complete || false,
+      image: data.image_uri || null,
+      name: data.name || null,
+      symbol: data.symbol || null,
+      buys24h: data.txns_24h || 0,
+    };
+  } catch (e) { return {}; }
+}
+
+async function fetchTokenData(mints) {
+  if (!mints || !mints.length) return {};
+  try {
+    const prices = await fetchJupiterPrices(mints);
+    const out = {};
+    mints.forEach(mint => {
+      out[mint] = { price: 0, marketCap: 0, pct5m: null, pct1h: null, pct24h: null, volume24h: 0, buys24h: 0, graduated: false, ...(prices[mint] || {}) };
+    });
     return out;
   } catch (e) { return {}; }
 }
@@ -429,13 +444,20 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnec
   useEffect(() => {
     if (!token) return;
     setLoading(true);
-    fetchDexBatch([token.mint]).then(d => {
-      if (d[token.mint]) setLiveData(d[token.mint]);
+    fetchJupiterPrices([token.mint]).then(prices => {
+      if (prices[token.mint]) setLiveData(prices[token.mint]);
       setLoading(false);
     });
+    if (!token.graduated) {
+      fetchPumpData(token.mint).then(d => {
+        if (d && Object.keys(d).length) setLiveData(prev => ({ ...(prev || {}), ...d }));
+      });
+    }
     const interval = setInterval(() => {
-      fetchDexBatch([token.mint]).then(d => { if (d[token.mint]) setLiveData(d[token.mint]); });
-    }, 10000);
+      fetchJupiterPrices([token.mint]).then(prices => {
+        if (prices[token.mint]) setLiveData(prev => ({ ...(prev || {}), ...prices[token.mint] }));
+      });
+    }, 8000);
     return () => clearInterval(interval);
   }, [token]);
 
@@ -513,9 +535,7 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnec
           {[['5m', pct5m], ['1h', pct1h], ['24h', pct24h]].map(([label, val]) => (
             <div key={label} style={{ background: C.card2, borderRadius: 10, padding: 12, textAlign: 'center' }}>
               <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>{label}</div>
-              <div style={{ fontSize: 16, fontWeight: 700, color: pctColor(val) }}>
-                {val == null ? (loading ? '...' : '--') : fmtPct(val)}
-              </div>
+              <div style={{ fontSize: 16, fontWeight: 700, color: pctColor(val) }}>{val == null ? (loading ? '...' : '--') : fmtPct(val)}</div>
             </div>
           ))}
         </div>
@@ -595,8 +615,6 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
   const isGrad = token.graduated || progress >= 100;
   const pct = token.pct1h != null ? token.pct1h : token.pct5m != null ? token.pct5m : null;
   const pctLabel = token.pct1h != null ? '1h' : '5m';
-  const history = token.priceHistory || [];
-  const sparkUp = pct != null ? pct >= 0 : null;
 
   return (
     <div style={{ background: flash ? 'rgba(0,255,163,0.04)' : C.card, border: '1px solid ' + (flash ? 'rgba(0,255,163,.2)' : C.border), borderRadius: 14, padding: '12px 14px', marginBottom: 10, transition: 'background 0.8s, border 0.8s', boxSizing: 'border-box', width: '100%' }}>
@@ -631,16 +649,15 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
           )}
         </div>
 
-        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-end', gap: 4, flexShrink: 0 }}>
+        <div style={{ flexShrink: 0 }}>
           {pct != null ? (
-            <div style={{ background: pct >= 0 ? 'rgba(0,255,163,.12)' : 'rgba(59,158,255,.12)', border: '1px solid ' + (pct >= 0 ? 'rgba(0,255,163,.25)' : 'rgba(59,158,255,.25)'), borderRadius: 6, padding: '3px 8px', textAlign: 'center' }}>
-              <div style={{ fontSize: 14, fontWeight: 800, color: pctColor(pct), lineHeight: 1.2 }}>{fmtPct(pct)}</div>
+            <div style={{ background: pct >= 0 ? 'rgba(0,255,163,.12)' : 'rgba(59,158,255,.12)', border: '1px solid ' + (pct >= 0 ? 'rgba(0,255,163,.25)' : 'rgba(59,158,255,.25)'), borderRadius: 8, padding: '5px 10px', textAlign: 'center' }}>
+              <div style={{ fontSize: 15, fontWeight: 800, color: pctColor(pct) }}>{fmtPct(pct)}</div>
               <div style={{ fontSize: 9, color: C.muted2, marginTop: 1 }}>{pctLabel}</div>
             </div>
           ) : (
-            <div style={{ fontSize: 11, color: C.muted2, padding: '3px 8px' }}>--</div>
+            <div style={{ fontSize: 11, color: C.muted2 }}>--</div>
           )}
-          <Sparkline history={history} up={sparkUp} />
         </div>
       </div>
 
@@ -658,7 +675,7 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
   );
 }
 
-export default function NewLaunches({ coins, onConnectWallet, isConnected, isSolanaConnected, walletAddress }) {
+export default function NewLaunches({ coins, onConnectWallet, isConnected, isSolanaConnected, walletAddress, resetKey }) {
   const [tokens, setTokens] = useState([]);
   const [tab, setTab] = useState('new');
   const [selectedToken, setSelectedToken] = useState(null);
@@ -676,6 +693,8 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
   const solCoin = coins && coins.find(c => c.id === 'solana');
   const solPrice = solCoin ? solCoin.current_price : 150;
 
+  useEffect(() => { setSelectedToken(null); }, [resetKey]);
+
   const handlePresetsChange = p => { setPresets(p); savePresets(p); };
 
   const updateTokenDexData = useCallback(dexData => {
@@ -686,8 +705,18 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
       updated = true;
       const newPrice = d.price || t.price;
       const prevHistory = t.priceHistory || [];
-      const newHistory = newPrice > 0 ? [...prevHistory, newPrice].slice(-20) : prevHistory;
-      return { ...t, ...d, priceHistory: newHistory };
+      const newHistory = newPrice > 0 ? [...prevHistory, newPrice].slice(-30) : prevHistory;
+      let pct1h = null, pct5m = null;
+      if (newHistory.length >= 2) {
+        const first = newHistory[0];
+        const last = newHistory[newHistory.length - 1];
+        if (first > 0) pct1h = ((last - first) / first) * 100;
+        if (newHistory.length >= 4) {
+          const older = newHistory[newHistory.length - 4];
+          if (older > 0) pct5m = ((last - older) / older) * 100;
+        }
+      }
+      return { ...t, ...d, priceHistory: newHistory, pct1h: d.pct1h != null ? d.pct1h : pct1h, pct5m: d.pct5m != null ? d.pct5m : pct5m };
     });
     if (updated) setTokens([...tokensRef.current]);
   }, []);
@@ -698,9 +727,9 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
     dexTimerRef.current = setTimeout(async () => {
       const batch = dexQueueRef.current.splice(0, 30);
       if (!batch.length) return;
-      const data = await fetchDexBatch(batch);
+      const data = await fetchTokenData(batch);
       updateTokenDexData(data);
-    }, 200);
+    }, 100);
   }, [updateTokenDexData]);
 
   const addToken = useCallback(token => {
@@ -750,27 +779,35 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
     refreshTimerRef.current = setInterval(async () => {
       const mints = tokensRef.current.slice(0, 30).map(t => t.mint);
       if (!mints.length) return;
-      const data = await fetchDexBatch(mints);
+      const data = await fetchTokenData(mints);
       updateTokenDexData(data);
-    }, 12000);
+    }, 8000);
 
-    Promise.all([
-      fetch('https://api.dexscreener.com/token-profiles/latest/v1').then(r => r.json()).catch(() => []),
-    ]).then(([profiles]) => {
-      const arr = Array.isArray(profiles) ? profiles : (profiles.tokenProfiles || []);
-      const solTokens = arr.filter(t => t.chainId === 'solana').slice(0, 30);
-      if (!solTokens.length) return;
-      const initialTokens = solTokens.map(t => ({
-        mint: t.tokenAddress, symbol: t.header || t.tokenAddress.slice(0, 6),
-        name: t.description || t.header || 'Unknown', image: t.icon || null,
-        marketCap: 0, price: 0, pct5m: null, pct1h: null, pct24h: null,
-        volume24h: 0, buys24h: 0, priceHistory: [], bondingProgress: 0,
-        graduated: false, createdAt: Date.now(),
-      }));
-      tokensRef.current = initialTokens;
-      setTokens([...tokensRef.current]);
-      fetchDexBatch(initialTokens.map(t => t.mint)).then(data => updateTokenDexData(data));
-    });
+    fetch('https://frontend-api.pump.fun/coins?limit=30&offset=0&sort=created_timestamp&order=DESC&includeNsfw=false')
+      .then(r => r.json())
+      .then(data => {
+        const coins = Array.isArray(data) ? data : [];
+        if (!coins.length) return;
+        const initialTokens = coins.map(t => ({
+          mint: t.mint, symbol: t.symbol || '???', name: t.name || 'Unknown',
+          image: t.image_uri || null, marketCap: t.usd_market_cap || 0,
+          price: t.usd_market_cap && t.total_supply ? t.usd_market_cap / t.total_supply : 0,
+          pct5m: null, pct1h: null, pct24h: null, volume24h: 0, buys24h: 0, priceHistory: [],
+          bondingProgress: t.virtual_sol_reserves ? Math.min((t.virtual_sol_reserves / 85000) * 100, 100) : 0,
+          graduated: t.complete || false, createdAt: t.created_timestamp || Date.now(),
+        }));
+        tokensRef.current = initialTokens;
+        setTokens([...tokensRef.current]);
+        fetchJupiterPrices(initialTokens.map(t => t.mint)).then(prices => {
+          tokensRef.current = tokensRef.current.map(t => {
+            const p = prices[t.mint];
+            if (!p || !p.price) return t;
+            return { ...t, price: p.price, priceHistory: p.price > 0 ? [p.price] : [] };
+          });
+          setTokens([...tokensRef.current]);
+        });
+      })
+      .catch(() => {});
 
     return () => {
       clearTimeout(reconnectTimer);
