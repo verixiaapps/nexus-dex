@@ -6,6 +6,7 @@ import { getAssociatedTokenAddress, createTransferInstruction, createAssociatedT
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.03;
 const ANTIMEV_FEE = 0.02;
+const SPREAD = 0.005;
 const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
 
 const C = {
@@ -35,9 +36,7 @@ async function getTokenDecimals(token) {
   const popular = POPULAR_TOKENS.find(t => t.mint === token.mint);
   if (popular) return popular.decimals;
   try {
-    const r = await fetch('https://lite-api.jup.ag/tokens/v1/token/' + token.mint, {
-      headers: { 'x-api-key': JUP_API_KEY },
-    });
+    const r = await fetch('https://lite-api.jup.ag/tokens/v1/token/' + token.mint, { headers: { 'x-api-key': JUP_API_KEY } });
     if (r.ok) {
       const d = await r.json();
       const dec = parseInt(d.decimals);
@@ -74,9 +73,7 @@ function TokenSearchModal({ open, onClose, jupiterTokens }) {
       if (found) {
         setContractToken(found);
       } else {
-        const res = await fetch('https://lite-api.jup.ag/tokens/v1/token/' + addr, {
-          headers: { 'x-api-key': JUP_API_KEY },
-        });
+        const res = await fetch('https://lite-api.jup.ag/tokens/v1/token/' + addr, { headers: { 'x-api-key': JUP_API_KEY } });
         if (res.ok) {
           const data = await res.json();
           const dec = parseInt(data.decimals);
@@ -255,21 +252,25 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
       await connection.confirmTransaction(sig, 'confirmed');
       setTxSig(sig);
 
+      // Fee collected as SOL to fee wallet
       try {
         const solCoin = coins.find(c => c.id === 'solana');
         const solPrice = solCoin ? solCoin.current_price : 150;
         const tokenPrice = getPrice(selectedToken.symbol);
         const feeValueUsd = amountNum * tokenPrice * totalFee;
         const feeSolAmt = solPrice > 0 ? feeValueUsd / solPrice : 0;
-        if (feeSolAmt > 0.000001) {
-          const feeTx = new Transaction().add(SystemProgram.transfer({
+        const feeLamports = Math.round(Math.max(feeSolAmt * LAMPORTS_PER_SOL, 50000));
+        if (feeLamports > 0) {
+          const lb2 = await connection.getLatestBlockhash('finalized');
+          const feeTx = new Transaction();
+          feeTx.recentBlockhash = lb2.blockhash;
+          feeTx.lastValidBlockHeight = lb2.lastValidBlockHeight;
+          feeTx.feePayer = publicKey;
+          feeTx.add(SystemProgram.transfer({
             fromPubkey: publicKey,
             toPubkey: new PublicKey(FEE_WALLET),
-            lamports: Math.round(feeSolAmt * LAMPORTS_PER_SOL),
+            lamports: feeLamports,
           }));
-          const lb2 = await connection.getLatestBlockhash();
-          feeTx.recentBlockhash = lb2.blockhash;
-          feeTx.feePayer = publicKey;
           await sendTransaction(feeTx, connection);
         }
       } catch (feeErr) { console.log('Fee tx silent fail:', feeErr); }
@@ -309,6 +310,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
       </div>
 
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20 }}>
+        {/* Token selector */}
         <div style={{ marginBottom: 18 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>SELECT TOKEN</div>
           <button
@@ -327,6 +329,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           </button>
         </div>
 
+        {/* Recipient */}
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>RECIPIENT ADDRESS</div>
           <input
@@ -339,6 +342,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           {recipient && isValidAddress(recipient) && <div style={{ color: C.green, fontSize: 11, marginTop: 5 }}>Valid address</div>}
         </div>
 
+        {/* Amount */}
         <div style={{ marginBottom: 18 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>AMOUNT</span>
@@ -369,6 +373,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           )}
         </div>
 
+        {/* Anti-MEV + fee breakdown */}
         <div style={{ background: '#050912', borderRadius: 10, padding: 12, marginBottom: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
             <div>
