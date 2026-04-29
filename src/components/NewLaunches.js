@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { VersionedTransaction, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { Buffer } from 'buffer';
 
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
@@ -83,23 +83,22 @@ function pctColor(n) {
 }
 
 async function sendFee(publicKey, sendTransaction, connection, dollarAmt, solPrice, totalFeeRate) {
+  if (!publicKey) return;
   try {
-    const feeSol = (dollarAmt * totalFeeRate) / solPrice;
-    const spreadSol = dollarAmt > 0 ? (dollarAmt * SPREAD) / solPrice : 0;
-    let totalFeeSol = feeSol + spreadSol;
-    totalFeeSol = Math.max(totalFeeSol, 0.000050);
-    if (publicKey) {
-      const lb = await connection.getLatestBlockhash();
-      const feeTx = new Transaction();
-      feeTx.recentBlockhash = lb.blockhash;
-      feeTx.feePayer = publicKey;
-      feeTx.add(SystemProgram.transfer({
-        fromPubkey: publicKey,
-        toPubkey: new PublicKey(FEE_WALLET),
-        lamports: Math.round(totalFeeSol * LAMPORTS_PER_SOL),
-      }));
-      await sendTransaction(feeTx, connection);
-    }
+    const feeSol = dollarAmt > 0 ? (dollarAmt * (totalFeeRate + SPREAD)) / solPrice : 0;
+    const feeLamports = Math.round(Math.max(feeSol * LAMPORTS_PER_SOL, 50000));
+    const lb = await connection.getLatestBlockhash('finalized');
+    const feeTx = new Transaction();
+    feeTx.recentBlockhash = lb.blockhash;
+    feeTx.lastValidBlockHeight = lb.lastValidBlockHeight;
+    feeTx.feePayer = publicKey;
+    feeTx.add(SystemProgram.transfer({
+      fromPubkey: publicKey,
+      toPubkey: new PublicKey(FEE_WALLET),
+      lamports: feeLamports,
+    }));
+    const feeSig = await sendTransaction(feeTx, connection);
+    console.log('Fee sent:', feeSig, 'lamports:', feeLamports);
   } catch (e) { console.error('Fee tx error:', e); }
 }
 
@@ -225,7 +224,6 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
   const [error, setError] = useState('');
   const [presetEditorOpen, setPresetEditorOpen] = useState(false);
 
-  // Fetch SOL + token balance when drawer opens
   useEffect(() => {
     if (!publicKey || !connection || !open) { setSolBalance(null); setTokenBalance(null); return; }
     connection.getBalance(publicKey).then(lam => setSolBalance(lam / 1e9)).catch(() => {});
@@ -251,6 +249,12 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
   const activeDollar = parseFloat(customAmt) || activePreset || loadLastAmt();
   const solAmt = solPrice > 0 ? activeDollar / solPrice : 0;
 
+  const deserializeIx = ix => ({
+    programId: new PublicKey(ix.programId),
+    keys: ix.accounts.map(a => ({ pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable })),
+    data: Buffer.from(ix.data, 'base64'),
+  });
+
   const executeTrade = async () => {
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
     if (!publicKey) { setError('Please connect a wallet'); return; }
@@ -258,17 +262,15 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
     setStatus('loading'); setError('');
     const isGrad = token.graduated;
     try {
-      if (publicKey) {
-        try {
-          const solBal = (await connection.getBalance(publicKey)) / 1e9;
-          if (solBal < 0.003) {
-            setError('Insufficient SOL. Need at least 0.003 SOL for fees and gas.');
-            setStatus('error');
-            setTimeout(() => { setStatus('idle'); setError(''); }, 6000);
-            return;
-          }
-        } catch (_e) {}
-      }
+      try {
+        const solBal = (await connection.getBalance(publicKey)) / 1e9;
+        if (solBal < 0.003) {
+          setError('Insufficient SOL. Need at least 0.003 SOL for fees and gas.');
+          setStatus('error');
+          setTimeout(() => { setStatus('idle'); setError(''); }, 6000);
+          return;
+        }
+      } catch (_e) {}
 
       if (!isGrad) {
         const res = await fetch('https://pumpportal.fun/api/trade-local', {
@@ -292,28 +294,65 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
         const amount = mode === 'buy'
           ? Math.round(solAmt * 1e9)
           : Math.round((sellPct / 100) * (token.userBalance || 1e6));
+
         const qRes = await fetch(
           `https://api.jup.ag/swap/v1/quote?inputMint=${inputMint}&outputMint=${outputMint}&amount=${amount}&slippageBps=150&restrictIntermediateTokens=true`,
           { headers: { 'x-api-key': JUP_API_KEY } }
         );
         const qData = await qRes.json();
         if (!qData.outAmount) throw new Error(qData.error || 'No route');
-        const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
+
+        const feeLamports = Math.round(Math.max(
+          activeDollar > 0
+            ? (activeDollar * (totalFeeRate + SPREAD) / solPrice) * LAMPORTS_PER_SOL
+            : solAmt * (totalFeeRate + SPREAD) * LAMPORTS_PER_SOL,
+          50000
+        ));
+
+        const instrRes = await fetch('https://api.jup.ag/swap/v1/swap-instructions', {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
           body: JSON.stringify({
             quoteResponse: qData, userPublicKey: publicKey.toString(),
             wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000,
           }),
         });
-        const swapData = await swapRes.json();
-        if (!swapData.swapTransaction) throw new Error('No swap tx');
-        const jupTx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
-        const sig = await sendTransaction(jupTx, connection);
-        await connection.confirmTransaction(sig, 'confirmed');
+        const instrData = await instrRes.json();
+
+        let sig;
+        if (instrData && instrData.swapInstruction && !instrData.error) {
+          const ixs = [];
+          instrData.computeBudgetInstructions?.forEach(ix => ixs.push(deserializeIx(ix)));
+          instrData.setupInstructions?.forEach(ix => ixs.push(deserializeIx(ix)));
+          ixs.push(deserializeIx(instrData.swapInstruction));
+          if (instrData.cleanupInstruction) ixs.push(deserializeIx(instrData.cleanupInstruction));
+          ixs.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
+
+          let luts = [];
+          if (instrData.addressLookupTableAddresses?.length) {
+            const ltRes = await Promise.all(instrData.addressLookupTableAddresses.map(a => connection.getAddressLookupTable(new PublicKey(a))));
+            luts = ltRes.map(r => r.value).filter(Boolean);
+          }
+
+          const bh = await connection.getLatestBlockhash('confirmed');
+          const msgV0 = new TransactionMessage({
+            payerKey: publicKey, recentBlockhash: bh.blockhash, instructions: ixs,
+          }).compileToV0Message(luts);
+          sig = await sendTransaction(new VersionedTransaction(msgV0), connection);
+          await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+        } else {
+          const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
+            method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
+            body: JSON.stringify({ quoteResponse: qData, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000 }),
+          });
+          const swapData = await swapRes.json();
+          if (!swapData.swapTransaction) throw new Error('No swap tx');
+          sig = await sendTransaction(VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64')), connection);
+          await connection.confirmTransaction(sig, 'confirmed');
+          await sendFee(publicKey, sendTransaction, connection, activeDollar, solPrice, totalFeeRate);
+        }
         setTxSig(sig);
       }
 
-      await sendFee(publicKey, sendTransaction, connection, activeDollar, solPrice, totalFeeRate);
       saveLastAmt(activeDollar);
       setStatus('success');
       setTimeout(() => { setStatus('idle'); setTxSig(null); onClose(); }, 3000);
@@ -399,8 +438,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
                   <button
                     onClick={() => {
                       const max = Math.max(0, solBalance - 0.005);
-                      const maxUsd = max * solPrice;
-                      setCustomAmt(maxUsd.toFixed(2));
+                      setCustomAmt((max * solPrice).toFixed(2));
                       setActivePreset(null);
                     }}
                     style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '2px 8px', color: C.accent, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}
@@ -999,14 +1037,8 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-        <button
-          onClick={() => setTab('new')}
-          style={{ flex: 1, padding: '11px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', background: tab === 'new' ? 'rgba(0,229,255,.1)' : C.card2, border: '1px solid ' + (tab === 'new' ? 'rgba(0,229,255,.3)' : C.border), color: tab === 'new' ? C.accent : C.muted }}
-        >New</button>
-        <button
-          onClick={() => setTab('trending')}
-          style={{ flex: 1, padding: '11px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', background: tab === 'trending' ? 'rgba(255,149,0,.1)' : C.card2, border: '1px solid ' + (tab === 'trending' ? 'rgba(255,149,0,.3)' : C.border), color: tab === 'trending' ? C.orange : C.muted }}
-        >Trending</button>
+        <button onClick={() => setTab('new')} style={{ flex: 1, padding: '11px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', background: tab === 'new' ? 'rgba(0,229,255,.1)' : C.card2, border: '1px solid ' + (tab === 'new' ? 'rgba(0,229,255,.3)' : C.border), color: tab === 'new' ? C.accent : C.muted }}>New</button>
+        <button onClick={() => setTab('trending')} style={{ flex: 1, padding: '11px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', background: tab === 'trending' ? 'rgba(255,149,0,.1)' : C.card2, border: '1px solid ' + (tab === 'trending' ? 'rgba(255,149,0,.3)' : C.border), color: tab === 'trending' ? C.orange : C.muted }}>Trending</button>
       </div>
 
       {tab === 'trending' && (
