@@ -50,7 +50,6 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
       const tokenAccounts = await connection.getParsedTokenAccountsByOwner(publicKey, {
         programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA'),
       });
-
       const holdings = [];
       tokenAccounts.value.forEach(account => {
         try {
@@ -70,7 +69,6 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
           }
         } catch (e) {}
       });
-
       holdings.sort((a, b) => (b.uiAmount * getPrice(b.symbol)) - (a.uiAmount * getPrice(a.symbol)));
       setBalances(holdings);
 
@@ -143,9 +141,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
           <button onClick={fetchBalances} style={{ background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)', borderRadius: 8, padding: '7px 14px', color: C.accent, fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}>Refresh</button>
-          {onSend && (
-            <button onClick={onSend} style={{ background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none', borderRadius: 8, padding: '7px 14px', color: '#03060f', fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700 }}>Send Tokens</button>
-          )}
+          {onSend && <button onClick={onSend} style={{ background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none', borderRadius: 8, padding: '7px 14px', color: '#03060f', fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700 }}>Send Tokens</button>}
         </div>
       </div>
 
@@ -251,12 +247,9 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
           <div style={{ color: '#fff', fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Transaction History</div>
           <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 280, margin: '0 auto 20px' }}>View your full transaction history on Solscan.</p>
           {walletAddress && (
-            <a
-              href={'https://solscan.io/account/' + walletAddress}
-              target="_blank"
-              rel="noreferrer"
-              style={{ display: 'inline-block', padding: '10px 24px', borderRadius: 10, background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)', color: C.accent, fontSize: 13, fontWeight: 600, textDecoration: 'none' }}
-            >View on Solscan</a>
+            <a href={'https://solscan.io/account/' + walletAddress} target="_blank" rel="noreferrer" style={{ display: 'inline-block', padding: '10px 24px', borderRadius: 10, background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)', color: C.accent, fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>
+              View on Solscan
+            </a>
           )}
         </div>
       )}
