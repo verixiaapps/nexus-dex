@@ -274,6 +274,18 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
     if (!quote) return;
     setSwapStatus('loading'); setSwapError('');
     try {
+      if (publicKey) {
+        try {
+          const solBal = (await connection.getBalance(publicKey)) / 1e9;
+          if (solBal < 0.003) {
+            setSwapError('Insufficient SOL balance. Need at least 0.003 SOL to cover fees and gas.');
+            setSwapStatus('error');
+            setTimeout(() => { setSwapStatus('idle'); setSwapError(''); }, 6000);
+            return;
+          }
+        } catch (_e) {}
+      }
+
       const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
@@ -282,7 +294,6 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
           userPublicKey: publicKey.toString(),
           wrapAndUnwrapSol: true,
           computeUnitPriceMicroLamports: antiMev ? 50000 : 1000,
-          prioritizationFeeLamports: antiMev ? 100000 : 5000,
         }),
       });
       const swapData = await swapRes.json();
@@ -297,22 +308,28 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
         const solPrice = solCoin ? solCoin.current_price : 100;
         const fromCoinData = coins.find(c => c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase());
         const fromPrice = fromCoinData ? fromCoinData.current_price : (coin ? coin.current_price : 0);
-        const tradeUsd = parseFloat(fromAmt) * fromPrice;
-        const feeSol = (tradeUsd * totalFee) / solPrice;
-        const spreadSol = tradeUsd > 0 ? (tradeUsd * SPREAD) / solPrice : 0;
-        const totalFeeSol = feeSol + spreadSol;
-        if (totalFeeSol > 0.000001) {
-          const feeTx = new Transaction().add(SystemProgram.transfer({
+        let tradeUsd = parseFloat(fromAmt) * (fromPrice || 0);
+        if (!tradeUsd && quote) {
+          const toCoin2 = coins.find(c => c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase());
+          const tp2 = toCoin2 ? toCoin2.current_price : (toToken && (toToken.symbol === 'USDC' || toToken.symbol === 'USDT') ? 1 : 0);
+          if (tp2 > 0) tradeUsd = parseFloat(quote.outAmountDisplay) * tp2;
+        }
+        const totalFeePct = totalFee + SPREAD;
+        let totalFeeSol = tradeUsd > 0 ? (tradeUsd * totalFeePct) / solPrice : parseFloat(fromAmt) * totalFeePct;
+        totalFeeSol = Math.max(totalFeeSol, 0.000050);
+        if (publicKey) {
+          const lb = await connection.getLatestBlockhash();
+          const feeTx = new Transaction();
+          feeTx.recentBlockhash = lb.blockhash;
+          feeTx.feePayer = publicKey;
+          feeTx.add(SystemProgram.transfer({
             fromPubkey: publicKey,
             toPubkey: new PublicKey(FEE_WALLET),
             lamports: Math.round(totalFeeSol * LAMPORTS_PER_SOL),
           }));
-          const lb = await connection.getLatestBlockhash();
-          feeTx.recentBlockhash = lb.blockhash;
-          feeTx.feePayer = publicKey;
           await sendTransaction(feeTx, connection);
         }
-      } catch (feeErr) { console.log('Fee failed:', feeErr); }
+      } catch (feeErr) { console.error('Fee tx error:', feeErr); }
 
       setSwapTx(sig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
       setTimeout(() => { setSwapStatus('idle'); setSwapTx(null); }, 5000);
@@ -502,7 +519,6 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         const days = parseInt(chartPeriod) || 7;
         let points = [];
 
-        // CoinGecko IDs are text slugs (bitcoin, ethereum) — not mint addresses
         const isCgCoin = coin.id && !coin.isSolanaToken && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(coin.id);
         if (isCgCoin) {
           const cgRes = await fetch(`https://api.coingecko.com/api/v3/coins/${coin.id}/market_chart?vs_currency=usd&days=${days}`);
@@ -657,13 +673,10 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
           open={drawerOpen}
           onClose={() => setDrawerOpen(false)}
           mode={drawerMode}
-          coin={coin}
-          coins={coins}
-          jupiterToken={jupiterToken}
-          jupiterTokens={jupiterTokens}
+          coin={coin} coins={coins}
+          jupiterToken={jupiterToken} jupiterTokens={jupiterTokens}
           onConnectWallet={onConnectWallet}
-          isConnected={isConnected}
-          isSolanaConnected={isSolanaConnected}
+          isConnected={isConnected} isSolanaConnected={isSolanaConnected}
         />
       )}
     </div>
