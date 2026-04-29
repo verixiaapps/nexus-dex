@@ -8,7 +8,7 @@ import {
   BraveWalletAdapter,
   CoinbaseWalletAdapter,
   LedgerWalletAdapter,
-  TrustWalletAdapter,
+  TrustWalletAdapter, 
   TorusWalletAdapter,
   MathWalletAdapter,
   TokenPocketWalletAdapter,
