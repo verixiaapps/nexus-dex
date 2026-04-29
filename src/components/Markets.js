@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 
 const C = {
   card: '#080d1a', card2: '#0c1220',
@@ -58,6 +58,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     const trimmed = q.trim();
     if (!trimmed || trimmed.length < 2) { setSearchResults([]); setSearchToken(null); return; }
 
+    // Contract address lookup
     if (isValidMint(trimmed)) {
       setSearchLoading(true);
       Promise.all([
@@ -87,6 +88,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
       return;
     }
 
+    // Name/symbol search
     setSearchToken(null);
     setSearchLoading(true);
     const ql = trimmed.toLowerCase();
@@ -101,36 +103,52 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
       const cgIds = new Set(cgMatches.map(c => (c.symbol || '').toLowerCase()));
       localJupMatches = jupiterTokens.filter(t => {
         if (cgIds.has((t.symbol || '').toLowerCase())) return false;
-        return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-               (t.name && t.name.toLowerCase().includes(ql));
+        return (t.symbol && t.symbol.toLowerCase().includes(ql)) || (t.name && t.name.toLowerCase().includes(ql));
       }).slice(0, 40).map(t => ({
         id: t.mint, mint: t.mint, symbol: t.symbol, name: t.name,
-        image: t.logoURI || null,
-        current_price: 0, market_cap: 0, total_volume: 0,
-        price_change_percentage_24h: null, sparkline_in_7d: null,
-        isSolanaToken: true,
+        image: t.logoURI || null, current_price: 0, market_cap: 0,
+        total_volume: 0, price_change_percentage_24h: null, sparkline_in_7d: null, isSolanaToken: true,
       }));
     }
 
     const immediate = [...cgMatches, ...localJupMatches];
     if (immediate.length) setSearchResults(immediate);
 
-    fetch('https://lite-api.jup.ag/tokens/v1/search?query=' + encodeURIComponent(trimmed) + '&limit=30')
+    fetch('https://lite-api.jup.ag/tokens/v1/tagged/strict')
       .then(r => r.ok ? r.json() : [])
-      .then(data => {
-        const apiResults = Array.isArray(data) ? data : (data.tokens || []);
+      .then(allTokens => {
+        const tokens = Array.isArray(allTokens) ? allTokens : [];
+        const qlLower = trimmed.toLowerCase();
         const existingSymbols = new Set(immediate.map(c => (c.symbol || '').toLowerCase()));
-        const newMatches = apiResults
-          .filter(t => !existingSymbols.has((t.symbol || '').toLowerCase()))
-          .map(t => ({
-            id: t.address, mint: t.address, symbol: t.symbol, name: t.name,
-            image: t.logoURI || null,
-            current_price: 0, market_cap: 0, total_volume: 0,
-            price_change_percentage_24h: null, sparkline_in_7d: null,
-            isSolanaToken: true,
-          }));
-        if (newMatches.length) setSearchResults([...immediate, ...newMatches]);
+        const newMatches = tokens.filter(t => {
+          if (existingSymbols.has((t.symbol || '').toLowerCase())) return false;
+          return (t.symbol && t.symbol.toLowerCase().includes(qlLower)) ||
+            (t.name && t.name.toLowerCase().includes(qlLower)) ||
+            (t.address && t.address.toLowerCase() === qlLower);
+        }).slice(0, 50).map(t => ({
+          id: t.address, mint: t.address, symbol: t.symbol, name: t.name,
+          image: t.logoURI || null, current_price: 0, market_cap: 0,
+          total_volume: 0, price_change_percentage_24h: null, sparkline_in_7d: null, isSolanaToken: true,
+        }));
+        const combined = [...immediate, ...newMatches];
+        if (combined.length) setSearchResults(combined);
         setSearchLoading(false);
+
+        const mintsToPrice = combined
+          .filter(c => c.isSolanaToken && !c.current_price && c.mint)
+          .map(c => c.mint).slice(0, 30);
+        if (mintsToPrice.length) {
+          fetch('https://api.jup.ag/price/v2?ids=' + mintsToPrice.join(','))
+            .then(r => r.ok ? r.json() : {})
+            .then(priceData => {
+              if (!priceData.data) return;
+              setSearchResults(prev => prev.map(c => {
+                const p = priceData.data[c.mint];
+                if (!p || !p.price) return c;
+                return { ...c, current_price: parseFloat(p.price) };
+              }));
+            }).catch(() => {});
+        }
       })
       .catch(() => setSearchLoading(false));
   }, [q, coins, jupiterTokens]);
@@ -139,8 +157,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     if (!searchResults.length) return;
     const mints = searchResults
       .filter(c => c.isSolanaToken && c.current_price === 0)
-      .map(c => c.id)
-      .slice(0, 30);
+      .map(c => c.id).slice(0, 30);
     if (!mints.length) return;
     fetch('https://api.jup.ag/price/v2?ids=' + mints.join(','))
       .then(r => r.json())
@@ -151,8 +168,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
           if (!p || !p.price) return c;
           return { ...c, current_price: parseFloat(p.price) };
         }));
-      })
-      .catch(() => {});
+      }).catch(() => {});
   }, [searchResults.length]);
 
   const handleSort = key => {
@@ -162,13 +178,6 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
 
   const displayCoins = q.trim() ? (searchToken ? [searchToken] : searchResults) : coins;
   const sorted = [...displayCoins].sort((a, b) => dir * ((a[sort] || 0) - (b[sort] || 0)));
-
-  const SortBtn = ({ sortKey, label }) => (
-    <button
-      onClick={() => handleSort(sortKey)}
-      style={{ background: 'none', border: 'none', color: sort === sortKey ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0, fontFamily: 'Syne, sans-serif' }}
-    >{label} {sort === sortKey ? (dir === -1 ? 'v' : '^') : ''}</button>
-  );
 
   const renderRow = (c, i) => {
     const positive = (c.price_change_percentage_24h || 0) >= 0;
@@ -230,6 +239,13 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     );
   };
 
+  const SortBtn = ({ label, key: k }) => (
+    <button
+      onClick={() => handleSort(k)}
+      style={{ background: 'none', border: 'none', color: sort === k ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0, fontFamily: 'Syne, sans-serif' }}
+    >{label} {sort === k ? (dir === -1 ? 'v' : '^') : ''}</button>
+  );
+
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
@@ -244,7 +260,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
             placeholder="Search name, symbol or paste address…"
             style={{ background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border), borderRadius: 10, padding: '9px 36px 9px 14px', color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: '100%' }}
           />
-          {q && !searchLoading && (
+          {q && (
             <button
               onClick={() => { setQ(''); setSearchResults([]); setSearchToken(null); }}
               style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 0 }}
@@ -270,9 +286,9 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
             <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 110px 80px 110px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
               <div>#</div>
               <div>NAME</div>
-              <SortBtn sortKey="current_price" label="PRICE" />
-              <SortBtn sortKey="price_change_percentage_24h" label="24H" />
-              <SortBtn sortKey="market_cap" label="MKT CAP" />
+              <SortBtn label="PRICE" key="current_price" />
+              <SortBtn label="24H" key="price_change_percentage_24h" />
+              <SortBtn label="MKT CAP" key="market_cap" />
               <div style={{ textAlign: 'right', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>7D</div>
             </div>
           )}
