@@ -125,8 +125,7 @@ function TokenSearchModal({ open, onClose, jupiterTokens }) {
             <button onClick={close} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: 0 }}>x</button>
           </div>
           <input
-            autoFocus
-            value={q}
+            autoFocus value={q}
             onChange={e => setQ(e.target.value)}
             placeholder="Search by name or symbol…"
             style={{ width: '100%', background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, padding: '10px 12px', color: C.text, fontSize: 13, outline: 'none', fontFamily: 'Syne, sans-serif', marginBottom: 8 }}
@@ -146,7 +145,7 @@ function TokenSearchModal({ open, onClose, jupiterTokens }) {
             >
               {contractToken.logoURI
                 ? <img src={contractToken.logoURI} alt={contractToken.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} onError={e => { e.target.style.display = 'none'; }} />
-                : <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>{contractToken.symbol && contractToken.symbol.charAt(0)}</div>
+                : <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>{contractToken.symbol?.charAt(0)}</div>
               }
               <div>
                 <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{contractToken.symbol}</div>
@@ -171,7 +170,7 @@ function TokenSearchModal({ open, onClose, jupiterTokens }) {
             >
               {t.logoURI
                 ? <img src={t.logoURI} alt={t.symbol} style={{ width: 30, height: 30, borderRadius: '50%', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
-                : <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{t.symbol && t.symbol.charAt(0)}</div>
+                : <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{t.symbol?.charAt(0)}</div>
               }
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{t.symbol}</div>
@@ -205,9 +204,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
 
   useEffect(() => {
     if (!publicKey || !connection) return;
-    connection.getBalance(publicKey)
-      .then(bal => setSolBalance(bal / LAMPORTS_PER_SOL))
-      .catch(() => {});
+    connection.getBalance(publicKey).then(bal => setSolBalance(bal / LAMPORTS_PER_SOL)).catch(() => {});
   }, [publicKey, connection]);
 
   const getPrice = symbol => {
@@ -227,7 +224,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
 
   const handleSend = async () => {
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
-    if (!isSolanaConnected || !publicKey) { setError('Please connect a Solana wallet to send'); return; }
+    if (!publicKey) { setError('Please connect a wallet to send'); return; }
     if (!recipient || !isValidAddress(recipient)) { setError('Invalid recipient address'); return; }
     if (!amount || amountNum <= 0) { setError('Enter a valid amount'); return; }
     setError(''); setStatus('loading');
@@ -238,11 +235,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
 
       if (selectedToken.isNative || selectedToken.mint === SOL_TOKEN.mint) {
         const recipientLamports = Math.round(recipientAmount * LAMPORTS_PER_SOL);
-        transaction.add(SystemProgram.transfer({
-          fromPubkey: publicKey,
-          toPubkey: recipientPubkey,
-          lamports: recipientLamports,
-        }));
+        transaction.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: recipientPubkey, lamports: recipientLamports }));
       } else {
         const mintPubkey = new PublicKey(selectedToken.mint);
         const recipientUnits = Math.round(amountNum * Math.pow(10, decimals));
@@ -308,22 +301,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
     );
   }
 
-  if (!isSolanaConnected) {
-    return (
-      <div style={{ maxWidth: 520, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
-        <div style={{ marginBottom: 20 }}>
-          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Send Tokens</h1>
-        </div>
-        <div style={{ textAlign: 'center', padding: '60px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
-          <div style={{ fontSize: 48, marginBottom: 16 }}>warn</div>
-          <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Solana Wallet Required</h2>
-          <p style={{ color: C.muted, fontSize: 13, marginBottom: 24, lineHeight: 1.6 }}>Please connect Phantom to send Solana tokens.</p>
-          <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect Phantom</button>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div style={{ maxWidth: 520, margin: '0 auto' }}>
       <div style={{ marginBottom: 20 }}>
@@ -340,7 +317,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           >
             {selectedToken.logoURI
               ? <img src={selectedToken.logoURI} alt={selectedToken.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} onError={e => { e.target.style.display = 'none'; }} />
-              : <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent }}>{selectedToken.symbol && selectedToken.symbol.charAt(0)}</div>
+              : <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent }}>{selectedToken.symbol?.charAt(0)}</div>
             }
             <div style={{ textAlign: 'left', flex: 1 }}>
               <div style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{selectedToken.symbol}</div>
@@ -449,7 +426,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
             : status === 'error' ? 'Failed - Try Again'
             : !recipient ? 'Enter Recipient Address'
             : !amount ? 'Enter Amount'
-            : 'Send ' + selectedToken.symbol}
+            : `Send ${selectedToken.symbol}`}
         </button>
 
         {txSig && status === 'success' && (
