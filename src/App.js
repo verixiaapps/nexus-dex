@@ -193,22 +193,25 @@ export default function App() {
 
   useEffect(() => {
     const fetchMarkets = async () => {
-      try {
-        const cgIds = 'bitcoin,ethereum,binancecoin,ripple,cardano,dogecoin,solana,avalanche-2,chainlink,uniswap,matic-network,toncoin,shiba-inu,litecoin,polkadot,cosmos,near';
-        const cgRes = await fetch(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${cgIds}&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d`);
-        const cgData = await cgRes.json();
+      let combined = [];
+      const cgIds = 'bitcoin,ethereum,binancecoin,ripple,cardano,dogecoin,solana,avalanche-2,chainlink,uniswap,matic-network,toncoin,shiba-inu,litecoin,polkadot,cosmos,near';
 
-        const [jupPriceRes, metaRes] = await Promise.all([
-          fetch('https://api.jup.ag/price/v2?ids=' + SOLANA_MINTS.join(',')),
-          fetch('https://lite-api.jup.ag/tokens/v1/tagged/strict'),
-        ]);
-        const jupPriceData = await jupPriceRes.json();
-        const metaArr = await metaRes.json();
+      const [cgResult, jupPriceResult, metaResult] = await Promise.allSettled([
+        fetch(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${cgIds}&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d`).then(r => r.json()),
+        fetch('https://api.jup.ag/price/v2?ids=' + SOLANA_MINTS.join(',')).then(r => r.json()),
+        fetch('https://lite-api.jup.ag/tokens/v1/tagged/strict').then(r => r.json()),
+      ]);
+
+      if (cgResult.status === 'fulfilled' && Array.isArray(cgResult.value)) {
+        combined = [...combined, ...cgResult.value];
+      }
+
+      if (jupPriceResult.status === 'fulfilled' && metaResult.status === 'fulfilled') {
+        const jupData = jupPriceResult.value;
         const metaMap = {};
-        if (Array.isArray(metaArr)) metaArr.forEach(t => { metaMap[t.address] = t; });
-
+        if (Array.isArray(metaResult.value)) metaResult.value.forEach(t => { metaMap[t.address] = t; });
         const solanaCoins = SOLANA_MINTS.map((mint, i) => {
-          const priceInfo = jupPriceData.data?.[mint];
+          const priceInfo = jupData.data?.[mint];
           const meta = metaMap[mint] || {};
           if (!priceInfo?.price) return null;
           return {
@@ -217,9 +220,7 @@ export default function App() {
             name: meta.name || 'Unknown',
             image: meta.logoURI || null,
             current_price: parseFloat(priceInfo.price),
-            market_cap: 0,
-            market_cap_rank: 50 + i,
-            total_volume: 0,
+            market_cap: 0, market_cap_rank: 50 + i, total_volume: 0,
             high_24h: null, low_24h: null,
             price_change_percentage_1h_in_currency: null,
             price_change_percentage_24h: null,
@@ -229,10 +230,10 @@ export default function App() {
             isSolanaToken: true,
           };
         }).filter(Boolean);
+        combined = [...combined, ...solanaCoins];
+      }
 
-        const combined = Array.isArray(cgData) ? [...cgData, ...solanaCoins] : solanaCoins;
-        if (combined.length) setCoins(combined);
-      } catch (e) { console.error('Market fetch error:', e); }
+      if (combined.length) setCoins(combined);
       setLoading(false);
     };
     fetchMarkets();
@@ -307,33 +308,15 @@ export default function App() {
       </header>
 
       <main style={{ position: 'relative', zIndex: 1, maxWidth: 1200, margin: '0 auto', padding: '20px 16px 100px', boxSizing: 'border-box', width: '100%', minHeight: 'calc(100vh - 56px)', overflowX: 'hidden' }}>
-        {tab === 'swap' && (
-          <SwapWidget {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} jupiterLoading={jupiterLoading} onGoToToken={goToToken} />
-        )}
-        {tab === 'markets' && (
-          <Markets coins={coins} loading={loading} onSelectCoin={goToToken} />
-        )}
+        {tab === 'swap' && <SwapWidget {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} jupiterLoading={jupiterLoading} onGoToToken={goToToken} />}
+        {tab === 'markets' && <Markets coins={coins} loading={loading} onSelectCoin={goToToken} />}
         {tab === 'token' && selectedToken && (
-          <TokenDetail
-            {...sharedProps}
-            coin={selectedToken}
-            coins={coins}
-            jupiterTokens={jupiterTokens}
-            onBack={() => switchTab(prevTab === 'token' ? 'markets' : prevTab)}
-          />
+          <TokenDetail {...sharedProps} coin={selectedToken} coins={coins} jupiterTokens={jupiterTokens} onBack={() => switchTab(prevTab === 'token' ? 'markets' : prevTab)} />
         )}
-        {tab === 'launches' && (
-          <NewLaunches {...sharedProps} coins={coins} resetKey={launchesKey} />
-        )}
-        {tab === 'buy' && (
-          <BuyCrypto coins={coins} walletAddress={wallet.walletAddress || ''} selectedCoinSymbol={selectedToken ? selectedToken.symbol : null} />
-        )}
-        {tab === 'send' && (
-          <Send {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} />
-        )}
-        {tab === 'portfolio' && (
-          <Portfolio {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} onSend={() => switchTab('send')} />
-        )}
+        {tab === 'launches' && <NewLaunches {...sharedProps} coins={coins} resetKey={launchesKey} />}
+        {tab === 'buy' && <BuyCrypto coins={coins} walletAddress={wallet.walletAddress || ''} selectedCoinSymbol={selectedToken ? selectedToken.symbol : null} />}
+        {tab === 'send' && <Send {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} />}
+        {tab === 'portfolio' && <Portfolio {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} onSend={() => switchTab('send')} />}
       </main>
 
       <nav style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100, background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(0,229,255,.1)', padding: '8px 4px env(safe-area-inset-bottom)', display: 'flex', justifyContent: 'space-around', alignItems: 'center' }}>
