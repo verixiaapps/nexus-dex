@@ -128,6 +128,7 @@ export default function App() {
   const [walletModalOpen, setWalletModalOpen] = useState(false);
   const [jupiterTokens, setJupiterTokens] = useState([]);
   const [jupiterLoading, setJupiterLoading] = useState(true);
+  const [launchesKey, setLaunchesKey] = useState(0);
 
   const wallet = useAppWallet();
 
@@ -139,6 +140,7 @@ export default function App() {
 
   const switchTab = useCallback(newTab => {
     if (newTab !== 'token') setSelectedToken(null);
+    if (newTab === 'launches') setLaunchesKey(k => k + 1);
     setPrevTab(tab);
     setTab(newTab);
   }, [tab]);
@@ -269,11 +271,15 @@ export default function App() {
             onBack={() => switchTab(prevTab === 'token' ? 'markets' : prevTab)}
           />
         )}
-        {tab === 'launches' && <NewLaunches {...sharedProps} coins={coins} />}
+        {tab === 'launches' && (
+          <NewLaunches {...sharedProps} coins={coins} resetKey={launchesKey} />
+        )}
         {tab === 'buy' && (
           <BuyCrypto coins={coins} walletAddress={wallet.walletAddress || ''} selectedCoinSymbol={selectedToken ? selectedToken.symbol : null} />
         )}
-        {tab === 'send' && <Send {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} />}
+        {tab === 'send' && (
+          <Send {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} />
+        )}
         {tab === 'portfolio' && (
           <Portfolio {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} onSend={() => switchTab('send')} />
         )}
