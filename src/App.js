@@ -1,9 +1,11 @@
+Only one line needs changing — line 6. Here’s the full corrected App.js with that fix:
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAccount, useDisconnect } from 'wagmi';
 import { useWeb3Modal } from '@web3modal/wagmi/react';
 import { PublicKey } from '@solana/web3.js';
-import { metaMaskSolanaClient } from './index';
+import { metaMaskSolanaClient } from './metamask';
 import SwapWidget from './components/SwapWidget';
 import Markets from './components/Markets';
 import BuyCrypto from './components/BuyCrypto';
