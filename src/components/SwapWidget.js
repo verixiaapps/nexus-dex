@@ -340,5 +340,3 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   );
 }
 
-
-Say next for TokenDetail.js.
