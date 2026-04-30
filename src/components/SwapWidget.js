@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { VersionedTransaction, TransactionMessage, AddressLookupTableAccount, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
- 
+import { VersionedTransaction, TransactionMessage, AddressLookupTableAccount, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
+
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
@@ -29,7 +29,7 @@ const C = {
 };
 
 function fmt(n, d = 2) {
-  if (n == null) return '–';
+  if (n == null) return '-';
   if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
   if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
@@ -38,7 +38,7 @@ function fmt(n, d = 2) {
 }
 
 function pct(n) {
-  if (!n && n !== 0) return '–';
+  if (!n && n !== 0) return '-';
   return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 
@@ -68,11 +68,11 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
           const data = await res.json();
           setContractToken({ mint: data.address, symbol: data.symbol, name: data.name, decimals: data.decimals, logoURI: data.logoURI });
         } else {
-          setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '…', name: 'Custom Token', decimals: 6 });
+          setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6 });
         }
       }
     } catch (e) {
-      setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '…', name: 'Custom Token', decimals: 6 });
+      setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6 });
     }
     setContractLoading(false);
   };
@@ -306,52 +306,34 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       });
       const instrData = await instrRes.json();
 
-      let sig;
-      if (instrData && instrData.swapInstruction && !instrData.error) {
-        const allIxs = [];
-        instrData.computeBudgetInstructions?.forEach(ix => allIxs.push(deserializeIx(ix)));
-        instrData.setupInstructions?.forEach(ix => allIxs.push(deserializeIx(ix)));
-        allIxs.push(deserializeIx(instrData.swapInstruction));
-        if (instrData.cleanupInstruction) allIxs.push(deserializeIx(instrData.cleanupInstruction));
-        allIxs.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
-
-        let lookupTables = [];
-        if (instrData.addressLookupTableAddresses?.length) {
-          const lutKeys = instrData.addressLookupTableAddresses.map(a => new PublicKey(a));
-          const lutInfos = await connection.getMultipleAccountsInfo(lutKeys);
-          lookupTables = lutInfos.reduce((acc, info, i) => {
-            if (info) acc.push(new AddressLookupTableAccount({ key: lutKeys[i], state: AddressLookupTableAccount.deserialize(info.data) }));
-            return acc;
-          }, []);
-        }
-
-        const bh = await connection.getLatestBlockhash('confirmed');
-        const msgV0 = new TransactionMessage({
-          payerKey: publicKey, recentBlockhash: bh.blockhash, instructions: allIxs,
-        }).compileToV0Message(lookupTables);
-        const vTx = new VersionedTransaction(msgV0);
-        sig = await sendTransaction(vTx, connection);
-        await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
-      } else {
-        const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
-          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' },
-          body: JSON.stringify({ quoteResponse: quote.quoteResponse, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000 }),
-        });
-        const swapData = await swapRes.json();
-        if (!swapData.swapTransaction) throw new Error(swapData.error || 'No swap transaction returned');
-        const txFB = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
-        sig = await sendTransaction(txFB, connection);
-        await connection.confirmTransaction(sig, 'confirmed');
-        try {
-          const fbh = await connection.getLatestBlockhash('finalized');
-          const feeTx = new Transaction();
-          feeTx.recentBlockhash = fbh.blockhash;
-          feeTx.lastValidBlockHeight = fbh.lastValidBlockHeight;
-          feeTx.feePayer = publicKey;
-          feeTx.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
-          await sendTransaction(feeTx, connection);
-        } catch (fe) { console.error('Fee fallback:', fe); }
+      if (!instrData || !instrData.swapInstruction || instrData.error) {
+        throw new Error(instrData?.error || 'Failed to get swap instructions');
       }
+
+      const allIxs = [];
+      instrData.computeBudgetInstructions?.forEach(ix => allIxs.push(deserializeIx(ix)));
+      instrData.setupInstructions?.forEach(ix => allIxs.push(deserializeIx(ix)));
+      allIxs.push(deserializeIx(instrData.swapInstruction));
+      if (instrData.cleanupInstruction) allIxs.push(deserializeIx(instrData.cleanupInstruction));
+      allIxs.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
+
+      let lookupTables = [];
+      if (instrData.addressLookupTableAddresses?.length) {
+        const lutKeys = instrData.addressLookupTableAddresses.map(a => new PublicKey(a));
+        const lutInfos = await connection.getMultipleAccountsInfo(lutKeys);
+        lookupTables = lutInfos.reduce((acc, info, i) => {
+          if (info) acc.push(new AddressLookupTableAccount({ key: lutKeys[i], state: AddressLookupTableAccount.deserialize(info.data) }));
+          return acc;
+        }, []);
+      }
+
+      const bh = await connection.getLatestBlockhash('confirmed');
+      const msgV0 = new TransactionMessage({
+        payerKey: publicKey, recentBlockhash: bh.blockhash, instructions: allIxs,
+      }).compileToV0Message(lookupTables);
+      const vTx = new VersionedTransaction(msgV0);
+      const sig = await sendTransaction(vTx, connection);
+      await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
 
       setSwapTx(sig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
       setTimeout(() => { setSwapStatus('idle'); setSwapTx(null); }, 5000);
@@ -387,187 +369,181 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   const feeUsd = fromAmt && fromPriceVal ? (parseFloat(fromAmt) * fromPriceVal * totalFee).toFixed(2) : '0.00';
   const fmtBal = b => b >= 1000 ? b.toLocaleString('en-US', { maximumFractionDigits: 2 }) : b.toFixed(4);
 
-  const swapPanel = (
-    <div>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Swap Tokens</h1>
-        <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Powered by Jupiter - Instant swaps - No account needed</p>
-      </div>
-
-      <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 18, padding: 18 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-          <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SLIPPAGE</span>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {[0.1, 0.5, 1.0].map(v => (
-              <button
-                key={v} onClick={() => setSlip(v)}
-                style={{ padding: '3px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer', background: slip === v ? 'rgba(0,229,255,.15)' : 'transparent', border: '1px solid ' + (slip === v ? 'rgba(0,229,255,.4)' : C.border), color: slip === v ? C.accent : C.muted }}
-              >{v}%</button>
-            ))}
-          </div>
-        </div>
-
-        {/* YOU PAY */}
-        <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border, marginBottom: 4 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU PAY</span>
-            {fromBalance != null && (
-              <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{fmtBal(fromBalance)}</span></span>
-            )}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <TokenSelect jupiterTokens={jupiterTokens} selected={fromToken} onSelect={setFromToken} />
-            <input
-              value={fromAmt}
-              onChange={e => setFromAmt(e.target.value.replace(/[^0-9.]/g, ''))}
-              placeholder="0.00"
-              style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 500, color: '#fff', textAlign: 'right', outline: 'none', minWidth: 0 }}
-            />
-            {fromBalance != null && fromBalance > 0 && (
-              <button
-                onClick={() => {
-                  const fees = totalFee + SPREAD + 0.002;
-                  const maxAmt = fromToken?.symbol === 'SOL' ? Math.max(0, fromBalance - fees) : fromBalance;
-                  setFromAmt(maxAmt > 0 ? maxAmt.toFixed(fromToken?.decimals <= 2 ? 2 : 6) : '0');
-                }}
-                style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '3px 8px', color: C.accent, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}
-              >MAX</button>
-            )}
-          </div>
-          {fromAmt && fromPriceVal > 0 && (
-            <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(fromAmt) * fromPriceVal)}</div>
-          )}
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0' }}>
-          <button
-            onClick={flipTokens}
-            style={{ width: 36, height: 36, borderRadius: 10, background: C.card3, border: '1px solid ' + C.border, cursor: 'pointer', color: C.accent, fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
-          >^v</button>
-        </div>
-
-        {/* YOU RECEIVE */}
-        <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU RECEIVE</span>
-            {toBalance != null && (
-              <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{fmtBal(toBalance)}</span></span>
-            )}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <TokenSelect jupiterTokens={jupiterTokens} selected={toToken} onSelect={setToToken} />
-            <div style={{ flex: 1, textAlign: 'right', fontSize: 22, fontWeight: 500, minWidth: 0, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>
-              {quoteLoading ? '…' : quote ? quote.outAmountDisplay : '0.00'}
-            </div>
-          </div>
-          {quote && toPriceVal > 0 && (
-            <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(quote.outAmountDisplay) * toPriceVal)}</div>
-          )}
-        </div>
-
-        {quoteError && (
-          <div style={{ marginTop: 8, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.2)', borderRadius: 8, fontSize: 12, color: C.red }}>{quoteError}</div>
-        )}
-
-        <div style={{ marginTop: 12, background: '#050912', borderRadius: 10, padding: 12 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <div>
-              <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>ANTI-MEV PROTECTION</span>
-              <div style={{ fontSize: 10, color: antiMev ? C.accent : C.muted, marginTop: 2 }}>
-                {antiMev ? 'ON - Priority, bot protected (+2%)' : 'OFF - Standard processing (saves 2%)'}
-              </div>
-            </div>
-            <button
-              onClick={() => setAntiMev(!antiMev)}
-              style={{ width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', background: antiMev ? C.accent : C.muted2, transition: 'background .2s', position: 'relative', flexShrink: 0 }}
-            >
-              <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: antiMev ? 23 : 3, transition: 'left .2s' }} />
-            </button>
-          </div>
-          {quote && fromAmt && (
-            <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
-              {[
-                ['Platform Fee (4%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.04).toFixed(2)],
-                antiMev ? ['Anti-MEV Fee (2%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.02).toFixed(2)] : null,
-                ['Service Fee (1%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.01).toFixed(2)],
-                ['Total Fee (' + (totalFee * 100).toFixed(0) + '%)', '$' + feeUsd],
-                ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
-                ['Min Received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken ? toToken.symbol : '')],
-              ].filter(Boolean).map(([label, value]) => (
-                <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
-                  <span style={{ color: C.muted }}>{label}</span>
-                  <span style={{ color: label.includes('Total') ? C.accent : C.text }}>{value}</span>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        <div style={{ marginTop: 10 }}>
-          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-            <input
-              type="checkbox" checked={useCustomAddress}
-              onChange={e => setUseCustomAddress(e.target.checked)}
-              style={{ cursor: 'pointer', width: 14, height: 14 }}
-            />
-            <span style={{ fontSize: 12, color: C.muted }}>Send to different wallet</span>
-          </label>
-          {useCustomAddress && (
-            <input
-              value={customAddress}
-              onChange={e => setCustomAddress(e.target.value)}
-              placeholder="Paste Solana wallet address…"
-              style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 10, padding: '10px 12px', color: C.accent, fontFamily: 'monospace', fontSize: 11, outline: 'none', marginTop: 8 }}
-            />
-          )}
-        </div>
-
-        {swapError && (
-          <div style={{ marginTop: 10, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 8, fontSize: 12, color: C.red }}>{swapError}</div>
-        )}
-
-        {isConnected ? (
-          <button
-            onClick={executeSwap}
-            disabled={swapStatus === 'loading'}
-            style={{
-              width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
-              background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
-                : swapStatus === 'error' ? 'rgba(255,59,107,.2)'
-                : !fromAmt || !quote ? C.card2
-                : 'linear-gradient(135deg,#00e5ff,#0055ff)',
-              color: !fromAmt || !quote ? C.muted2 : swapStatus === 'error' ? C.red : C.bg,
-              fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
-              cursor: swapStatus === 'loading' ? 'not-allowed' : 'pointer',
-              transition: 'all .3s', minHeight: 52,
-            }}
-          >
-            {swapStatus === 'loading' ? 'Confirming…'
-              : swapStatus === 'success' ? 'Swap Confirmed!'
-              : swapStatus === 'error' ? 'Failed - Try Again'
-              : !fromAmt ? 'Enter Amount'
-              : quoteLoading ? 'Getting Best Route…'
-              : !quote ? 'No Route Found'
-              : `Swap ${fromToken ? fromToken.symbol : ''} > ${toToken ? toToken.symbol : ''}`}
-          </button>
-        ) : (
-          <button
-            onClick={onConnectWallet}
-            style={{ width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#9945ff,#7c3aed)', color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52 }}
-          >Connect Wallet to Swap</button>
-        )}
-
-        {swapTx && swapStatus === 'success' && (
-          <a href={'https://solscan.io/tx/' + swapTx} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 10, fontSize: 12, color: C.accent }}>View on Solscan</a>
-        )}
-        <p style={{ textAlign: 'center', fontSize: 10, color: C.muted2, marginTop: 10 }}>Non-custodial - No KYC - Fees paid by user</p>
-      </div>
-    </div>
-  );
-
   return (
     <div style={{ width: '100%', maxWidth: 520, margin: '0 auto', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
-      {swapPanel}
+      <div>
+        <div style={{ marginBottom: 16 }}>
+          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Swap Tokens</h1>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Powered by Jupiter - Instant swaps - No account needed</p>
+        </div>
+
+        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 18, padding: 18 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
+            <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SLIPPAGE</span>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[0.1, 0.5, 1.0].map(v => (
+                <button
+                  key={v} onClick={() => setSlip(v)}
+                  style={{ padding: '3px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer', background: slip === v ? 'rgba(0,229,255,.15)' : 'transparent', border: '1px solid ' + (slip === v ? 'rgba(0,229,255,.4)' : C.border), color: slip === v ? C.accent : C.muted }}
+                >{v}%</button>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border, marginBottom: 4 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU PAY</span>
+              {fromBalance != null && (
+                <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{fmtBal(fromBalance)}</span></span>
+              )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <TokenSelect jupiterTokens={jupiterTokens} selected={fromToken} onSelect={setFromToken} />
+              <input
+                value={fromAmt}
+                onChange={e => setFromAmt(e.target.value.replace(/[^0-9.]/g, ''))}
+                placeholder="0.00"
+                style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 500, color: '#fff', textAlign: 'right', outline: 'none', minWidth: 0 }}
+              />
+              {fromBalance != null && fromBalance > 0 && (
+                <button
+                  onClick={() => {
+                    const fees = totalFee + SPREAD + 0.002;
+                    const maxAmt = fromToken?.symbol === 'SOL' ? Math.max(0, fromBalance - fees) : fromBalance;
+                    setFromAmt(maxAmt > 0 ? maxAmt.toFixed(fromToken?.decimals <= 2 ? 2 : 6) : '0');
+                  }}
+                  style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '3px 8px', color: C.accent, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}
+                >MAX</button>
+              )}
+            </div>
+            {fromAmt && fromPriceVal > 0 && (
+              <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(fromAmt) * fromPriceVal)}</div>
+            )}
+          </div>
+
+          <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0' }}>
+            <button
+              onClick={flipTokens}
+              style={{ width: 36, height: 36, borderRadius: 10, background: C.card3, border: '1px solid ' + C.border, cursor: 'pointer', color: C.accent, fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+            >^v</button>
+          </div>
+
+          <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU RECEIVE</span>
+              {toBalance != null && (
+                <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{fmtBal(toBalance)}</span></span>
+              )}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <TokenSelect jupiterTokens={jupiterTokens} selected={toToken} onSelect={setToToken} />
+              <div style={{ flex: 1, textAlign: 'right', fontSize: 22, fontWeight: 500, minWidth: 0, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>
+                {quoteLoading ? '...' : quote ? quote.outAmountDisplay : '0.00'}
+              </div>
+            </div>
+            {quote && toPriceVal > 0 && (
+              <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(quote.outAmountDisplay) * toPriceVal)}</div>
+            )}
+          </div>
+
+          {quoteError && (
+            <div style={{ marginTop: 8, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.2)', borderRadius: 8, fontSize: 12, color: C.red }}>{quoteError}</div>
+          )}
+
+          <div style={{ marginTop: 12, background: '#050912', borderRadius: 10, padding: 12 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <div>
+                <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>ANTI-MEV PROTECTION</span>
+                <div style={{ fontSize: 10, color: antiMev ? C.accent : C.muted, marginTop: 2 }}>
+                  {antiMev ? 'ON - Priority, bot protected (+2%)' : 'OFF - Standard processing (saves 2%)'}
+                </div>
+              </div>
+              <button
+                onClick={() => setAntiMev(!antiMev)}
+                style={{ width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', background: antiMev ? C.accent : C.muted2, transition: 'background .2s', position: 'relative', flexShrink: 0 }}
+              >
+                <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: antiMev ? 23 : 3, transition: 'left .2s' }} />
+              </button>
+            </div>
+            {quote && fromAmt && (
+              <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
+                {[
+                  ['Platform Fee (4%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.04).toFixed(2)],
+                  antiMev ? ['Anti-MEV Fee (2%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.02).toFixed(2)] : null,
+                  ['Service Fee (1%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.01).toFixed(2)],
+                  ['Total Fee (' + (totalFee * 100).toFixed(0) + '%)', '$' + feeUsd],
+                  ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
+                  ['Min Received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken ? toToken.symbol : '')],
+                ].filter(Boolean).map(([label, value]) => (
+                  <div key={label} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
+                    <span style={{ color: C.muted }}>{label}</span>
+                    <span style={{ color: label.includes('Total') ? C.accent : C.text }}>{value}</span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <div style={{ marginTop: 10 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+              <input
+                type="checkbox" checked={useCustomAddress}
+                onChange={e => setUseCustomAddress(e.target.checked)}
+                style={{ cursor: 'pointer', width: 14, height: 14 }}
+              />
+              <span style={{ fontSize: 12, color: C.muted }}>Send to different wallet</span>
+            </label>
+            {useCustomAddress && (
+              <input
+                value={customAddress}
+                onChange={e => setCustomAddress(e.target.value)}
+                placeholder="Paste Solana wallet address..."
+                style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 10, padding: '10px 12px', color: C.accent, fontFamily: 'monospace', fontSize: 11, outline: 'none', marginTop: 8 }}
+              />
+            )}
+          </div>
+
+          {swapError && (
+            <div style={{ marginTop: 10, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 8, fontSize: 12, color: C.red }}>{swapError}</div>
+          )}
+
+          {isConnected ? (
+            <button
+              onClick={executeSwap}
+              disabled={swapStatus === 'loading'}
+              style={{
+                width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
+                background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
+                  : swapStatus === 'error' ? 'rgba(255,59,107,.2)'
+                  : !fromAmt || !quote ? C.card2
+                  : 'linear-gradient(135deg,#00e5ff,#0055ff)',
+                color: !fromAmt || !quote ? C.muted2 : swapStatus === 'error' ? C.red : C.bg,
+                fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
+                cursor: swapStatus === 'loading' ? 'not-allowed' : 'pointer',
+                transition: 'all .3s', minHeight: 52,
+              }}
+            >
+              {swapStatus === 'loading' ? 'Confirming...'
+                : swapStatus === 'success' ? 'Swap Confirmed!'
+                : swapStatus === 'error' ? 'Failed - Try Again'
+                : !fromAmt ? 'Enter Amount'
+                : quoteLoading ? 'Getting Best Route...'
+                : !quote ? 'No Route Found'
+                : `Swap ${fromToken ? fromToken.symbol : ''} > ${toToken ? toToken.symbol : ''}`}
+            </button>
+          ) : (
+            <button
+              onClick={onConnectWallet}
+              style={{ width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#9945ff,#7c3aed)', color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52 }}
+            >Connect Wallet to Swap</button>
+          )}
+
+          {swapTx && swapStatus === 'success' && (
+            <a href={'https://solscan.io/tx/' + swapTx} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 10, fontSize: 12, color: C.accent }}>View on Solscan</a>
+          )}
+          <p style={{ textAlign: 'center', fontSize: 10, color: C.muted2, marginTop: 10 }}>Non-custodial - No KYC - Fees paid by user</p>
+        </div>
+      </div>
     </div>
   );
 }
