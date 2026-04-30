@@ -33,8 +33,14 @@ function WalletModal({ open, onClose }) {
   var displayAddr = isSol ? publicKey.toString().slice(0, 6) + '...' + publicKey.toString().slice(-6) : evmConnected && evmAddress ? evmAddress.slice(0, 6) + '...' + evmAddress.slice(-6) : null;
   var connectedWalletName = isSol && wallets.find(function(w) { return w.adapter.connected; });
   connectedWalletName = connectedWalletName ? connectedWalletName.adapter.name : (isSol ? 'Solana Wallet' : 'EVM Wallet');
-  var detectedWallets = wallets.filter(function(w) { return w.readyState === 'Installed' || w.readyState === 'Loadable'; });
-  var notDetectedWallets = wallets.filter(function(w) { return w.readyState !== 'Installed' && w.readyState !== 'Loadable'; });
+  var _seen = new Set();
+  var detectedWallets = wallets.filter(function(w) {
+    if (w.adapter.name === 'WalletConnect') return false;
+    if (_seen.has(w.adapter.name)) return false;
+    _seen.add(w.adapter.name);
+    return w.readyState === 'Installed' || w.readyState === 'Loadable';
+  });
+  var notDetectedWallets = wallets.filter(function(w) { return w.readyState !== 'Installed' && w.readyState !== 'Loadable' && w.adapter.name !== 'WalletConnect'; });
   if (!open) return null;
   var handleSolanaConnect = async function(wallet) {
     try { await select(wallet.adapter.name); await connect(); onClose(); } catch (e) { console.error(e); }
@@ -187,8 +193,8 @@ export default function App() {
 
   var sharedProps = { isConnected: wallet.isConnected, isSolanaConnected: wallet.isSolanaConnected, walletAddress: wallet.walletAddress, onConnectWallet: openWallet };
   var displayAddress = wallet.walletAddress ? wallet.walletAddress.slice(0, 4) + '...' + wallet.walletAddress.slice(-4) : null;
-  var headerTabs = [{ id: 'swap', label: 'Swap' },{ id: 'markets', label: 'Markets' },{ id: 'launches', label: 'New Launches' },{ id: 'buy', label: 'Buy Crypto' },{ id: 'send', label: 'Send' },{ id: 'portfolio', label: 'Portfolio' }];
-  var navTabs = [{ id: 'swap', label: 'Swap' },{ id: 'markets', label: 'Markets' },{ id: 'launches', label: 'Launches' },{ id: 'send', label: 'Send' },{ id: 'portfolio', label: 'Wallet' }];
+  var headerTabs = [{ id: 'swap', label: 'Swap' }, { id: 'markets', label: 'Markets' }, { id: 'launches', label: 'New Launches' }, { id: 'buy', label: 'Buy Crypto' }, { id: 'send', label: 'Send' }, { id: 'portfolio', label: 'Portfolio' }];
+  var navTabs = [{ id: 'swap', label: 'Swap' }, { id: 'markets', label: 'Markets' }, { id: 'launches', label: 'Launches' }, { id: 'send', label: 'Send' }, { id: 'portfolio', label: 'Wallet' }];
 
   return (
     <div style={{ minHeight: '100vh', height: '100%', background: C.bg, color: C.text, fontFamily: 'Syne, sans-serif', overscrollBehavior: 'none', overflowX: 'hidden', width: '100%', boxSizing: 'border-box' }}>
@@ -235,4 +241,3 @@ export default function App() {
     </div>
   );
 }
-
