@@ -1,5 +1,5 @@
 import React from 'react';
-
+ 
 const C = {
   card: '#080d1a', border: 'rgba(0,229,255,0.10)',
   accent: '#00e5ff', green: '#00ffa3', muted: '#586994', text: '#cdd6f4',
