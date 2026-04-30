@@ -1,7 +1,18 @@
+Several issues found:
+
+	1.	isSolanaConnected = isConnected — wrong. EVM-only users (MetaMask EVM) get marked as Solana-connected, breaking swap/send logic
+	2.	MetaMask Solana not wired — metaMaskSolanaClient from index.js is never imported or used. MetaMask users can’t sign Solana transactions
+	3.	WalletModal missing MetaMask — no dedicated MetaMask button, users have to find it through WalletConnect
+	4.	publicKey null for MetaMask — when MetaMask Solana snap is connected, publicKey should come from the snap client not the wallet adapter
+
+Here’s the fixed App.js:
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAccount, useDisconnect } from 'wagmi';
 import { useWeb3Modal } from '@web3modal/wagmi/react';
+import { PublicKey } from '@solana/web3.js';
+import { metaMaskSolanaClient } from './index';
 import SwapWidget from './components/SwapWidget';
 import Markets from './components/Markets';
 import BuyCrypto from './components/BuyCrypto';
@@ -18,18 +29,57 @@ const C = {
 export function useAppWallet() {
   const { publicKey, connected: solConnected, sendTransaction, signTransaction, signAllTransactions } = useWallet();
   const { address: evmAddress, isConnected: evmConnected } = useAccount();
+  const [mmSolPublicKey, setMmSolPublicKey] = useState(null);
+  const [mmSolConnected, setMmSolConnected] = useState(false);
 
-  const isConnected = solConnected || evmConnected;
-  const isSolanaConnected = isConnected;
-  const walletAddress = solConnected && publicKey
-    ? publicKey.toString()
+  useEffect(() => {
+    if (!metaMaskSolanaClient || !evmConnected) {
+      setMmSolPublicKey(null);
+      setMmSolConnected(false);
+      return;
+    }
+    const tryGetMmSolKey = async () => {
+      try {
+        const accounts = await metaMaskSolanaClient.connect();
+        if (accounts && accounts[0]) {
+          setMmSolPublicKey(new PublicKey(accounts[0]));
+          setMmSolConnected(true);
+        }
+      } catch (e) {
+        setMmSolPublicKey(null);
+        setMmSolConnected(false);
+      }
+    };
+    tryGetMmSolKey();
+  }, [evmConnected]);
+
+  const mmSendTransaction = useCallback(async (tx, connection) => {
+    if (!metaMaskSolanaClient) throw new Error('MetaMask Solana not available');
+    return metaMaskSolanaClient.sendTransaction(tx, connection);
+  }, []);
+
+  const isSolanaConnected = solConnected || mmSolConnected;
+  const isConnected = solConnected || evmConnected || mmSolConnected;
+
+  const effectivePublicKey = solConnected && publicKey ? publicKey : mmSolConnected && mmSolPublicKey ? mmSolPublicKey : null;
+  const effectiveSendTransaction = solConnected ? sendTransaction : mmSolConnected ? mmSendTransaction : null;
+
+  const walletAddress = effectivePublicKey
+    ? effectivePublicKey.toString()
     : evmConnected && evmAddress ? evmAddress : null;
 
   return {
-    isConnected, isSolanaConnected, walletAddress,
-    publicKey: (solConnected && publicKey) ? publicKey : null,
-    sendTransaction, signTransaction, signAllTransactions,
-    solConnected, evmConnected, evmAddress,
+    isConnected,
+    isSolanaConnected,
+    walletAddress,
+    publicKey: effectivePublicKey,
+    sendTransaction: effectiveSendTransaction,
+    signTransaction,
+    signAllTransactions,
+    solConnected,
+    evmConnected,
+    evmAddress,
+    mmSolConnected,
   };
 }
 
@@ -38,22 +88,41 @@ function WalletModal({ open, onClose }) {
   const { open: openWeb3Modal } = useWeb3Modal();
   const { isConnected: evmConnected, address: evmAddress } = useAccount();
   const { disconnect: evmDisconnect } = useDisconnect();
+  const wallet = useAppWallet();
 
   const isSol = connected && publicKey;
-  const displayAddr = isSol
-    ? publicKey.toString().slice(0, 6) + '...' + publicKey.toString().slice(-6)
-    : evmConnected && evmAddress ? evmAddress.slice(0, 6) + '...' + evmAddress.slice(-6) : null;
+  const displayAddr = wallet.walletAddress
+    ? wallet.walletAddress.slice(0, 6) + '...' + wallet.walletAddress.slice(-6)
+    : null;
+
   let connectedWalletName = isSol && wallets.find(w => w.adapter.connected);
-  connectedWalletName = connectedWalletName ? connectedWalletName.adapter.name : (isSol ? 'Solana Wallet' : 'EVM Wallet');
+  connectedWalletName = connectedWalletName
+    ? connectedWalletName.adapter.name
+    : wallet.mmSolConnected ? 'MetaMask (Solana)'
+    : evmConnected ? 'EVM Wallet' : 'Solana Wallet';
 
   const detectedWallets = wallets.filter(w => w.readyState === 'Installed' || w.readyState === 'Loadable');
   const notDetectedWallets = wallets.filter(w => w.readyState !== 'Installed' && w.readyState !== 'Loadable');
+  const hasMetaMask = typeof window !== 'undefined' && window.ethereum?.isMetaMask;
 
   if (!open) return null;
 
-  const handleSolanaConnect = async wallet => {
-    try { await select(wallet.adapter.name); await connect(); onClose(); }
+  const handleSolanaConnect = async w => {
+    try { await select(w.adapter.name); await connect(); onClose(); }
     catch (e) { console.error(e); }
+  };
+
+  const handleMetaMaskConnect = async () => {
+    try {
+      if (metaMaskSolanaClient) {
+        await metaMaskSolanaClient.connect();
+      }
+      openWeb3Modal();
+      onClose();
+    } catch (e) {
+      openWeb3Modal();
+      onClose();
+    }
   };
 
   return (
@@ -64,12 +133,12 @@ function WalletModal({ open, onClose }) {
         <div style={{ width: 40, height: 4, background: '#2e3f5e', borderRadius: 2, margin: '0 auto 24px' }} />
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
           <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 6 }}>
-            {connected || evmConnected ? 'Wallet Connected' : 'Connect Wallet'}
+            {wallet.isConnected ? 'Wallet Connected' : 'Connect Wallet'}
           </div>
           {displayAddr && <div style={{ fontSize: 13, color: '#586994' }}>{connectedWalletName}: {displayAddr}</div>}
         </div>
 
-        {(connected || evmConnected) ? (
+        {wallet.isConnected ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 400, margin: '0 auto' }}>
             <div style={{ background: 'rgba(0,255,163,.08)', border: '1px solid rgba(0,255,163,.2)', borderRadius: 16, padding: '16px 20px' }}>
               <div style={{ color: '#00ffa3', fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Connected - active site wide</div>
@@ -93,23 +162,36 @@ function WalletModal({ open, onClose }) {
             {detectedWallets.length > 0 && (
               <>
                 <div style={{ fontSize: 10, color: '#586994', fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>DETECTED WALLETS</div>
-                {detectedWallets.map(wallet => (
+                {detectedWallets.map(w => (
                   <button
-                    key={wallet.adapter.name}
-                    onClick={() => handleSolanaConnect(wallet)}
+                    key={w.adapter.name}
+                    onClick={() => handleSolanaConnect(w)}
                     style={{ display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(0,229,255,.06)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 14, padding: '14px 18px', cursor: 'pointer', width: '100%' }}
                   >
-                    {wallet.adapter.icon
-                      ? <img src={wallet.adapter.icon} alt={wallet.adapter.name} style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
-                      : <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(0,229,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: '#00e5ff', flexShrink: 0 }}>{wallet.adapter.name.charAt(0)}</div>
+                    {w.adapter.icon
+                      ? <img src={w.adapter.icon} alt={w.adapter.name} style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
+                      : <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(0,229,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: '#00e5ff', flexShrink: 0 }}>{w.adapter.name.charAt(0)}</div>
                     }
                     <div style={{ textAlign: 'left', flex: 1 }}>
-                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>{wallet.adapter.name}</div>
+                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>{w.adapter.name}</div>
                       <div style={{ color: '#00e5ff', fontSize: 12, marginTop: 1 }}>Detected - tap to connect</div>
                     </div>
                   </button>
                 ))}
               </>
+            )}
+
+            {hasMetaMask && (
+              <button
+                onClick={handleMetaMaskConnect}
+                style={{ display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(245,130,32,.08)', border: '1px solid rgba(245,130,32,.2)', borderRadius: 14, padding: '14px 18px', cursor: 'pointer', width: '100%' }}
+              >
+                <div style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, background: 'linear-gradient(135deg,#f58220,#e2761b)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22 }}>M</div>
+                <div style={{ textAlign: 'left', flex: 1 }}>
+                  <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>MetaMask</div>
+                  <div style={{ color: '#f58220', fontSize: 12, marginTop: 1 }}>EVM + Solana Snap</div>
+                </div>
+              </button>
             )}
 
             <button
@@ -129,17 +211,17 @@ function WalletModal({ open, onClose }) {
               <>
                 <div style={{ fontSize: 10, color: '#586994', fontWeight: 700, letterSpacing: 1, margin: '6px 0 2px' }}>MORE WALLETS</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 8 }}>
-                  {notDetectedWallets.slice(0, 6).map(wallet => (
+                  {notDetectedWallets.slice(0, 6).map(w => (
                     <button
-                      key={wallet.adapter.name}
-                      onClick={() => { window.open(wallet.adapter.url, '_blank'); onClose(); }}
+                      key={w.adapter.name}
+                      onClick={() => { window.open(w.adapter.url, '_blank'); onClose(); }}
                       style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.06)', borderRadius: 12, padding: '12px 8px', cursor: 'pointer' }}
                     >
-                      {wallet.adapter.icon
-                        ? <img src={wallet.adapter.icon} alt={wallet.adapter.name} style={{ width: 32, height: 32, borderRadius: 8 }} onError={e => { e.target.style.display = 'none'; }} />
-                        : <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 800, color: '#00e5ff' }}>{wallet.adapter.name.charAt(0)}</div>
+                      {w.adapter.icon
+                        ? <img src={w.adapter.icon} alt={w.adapter.name} style={{ width: 32, height: 32, borderRadius: 8 }} onError={e => { e.target.style.display = 'none'; }} />
+                        : <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 800, color: '#00e5ff' }}>{w.adapter.name.charAt(0)}</div>
                       }
-                      <div style={{ color: '#586994', fontSize: 10, textAlign: 'center', lineHeight: 1.2 }}>{wallet.adapter.name}</div>
+                      <div style={{ color: '#586994', fontSize: 10, textAlign: 'center', lineHeight: 1.2 }}>{w.adapter.name}</div>
                     </button>
                   ))}
                 </div>
