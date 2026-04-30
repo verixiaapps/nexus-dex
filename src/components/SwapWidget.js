@@ -147,7 +147,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
 }
 
 export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoToToken, onConnectWallet, isConnected, isSolanaConnected, walletAddress }) {
-  const { publicKey, sendTransaction } = useWallet();
+  const { publicKey, sendTransaction, signAllTransactions } = useWallet();
   const { connection } = useConnection();
 
   const [fromToken, setFromToken] = useState(POPULAR_TOKENS[0]);
@@ -220,6 +220,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       var _solBal = (await connection.getBalance(publicKey)) / 1e9;
       if (_solBal < 0.005) { setSwapError('Need at least 0.005 SOL for fees and gas.'); setSwapStatus('error'); setTimeout(function() { setSwapStatus('idle'); setSwapError(''); }, 6000); return; }
 
+      // Fee calculation
       var fromCoin = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
       var solCoin = coins.find(function(c) { return c.id === 'solana' || (c.symbol && c.symbol.toLowerCase() === 'sol'); });
       var solPrice = solCoin ? solCoin.current_price : 150;
@@ -236,35 +237,43 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         50000
       ));
 
-      var instrRes = await fetch('https://api.jup.ag/swap/v1/swap-instructions', {
+      // Transaction 1: Jupiter swap - get serialized tx from /swap endpoint
+      var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' },
-        body: JSON.stringify({ quoteResponse: quote.quoteResponse, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000, destinationTokenAccount: useCustomAddress && customAddress ? customAddress : undefined }),
+        body: JSON.stringify({ quoteResponse: quote.quoteResponse, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, dynamicComputeUnitLimit: true, prioritizationFeeLamports: antiMev ? { priorityLevelWithMaxLamports: { maxLamports: 1000000, priorityLevel: 'high' } } : 1000, destinationTokenAccount: useCustomAddress && customAddress ? customAddress : undefined }),
       });
-      var instrData = await instrRes.json();
-      if (!instrData || instrData.error || !instrData.swapInstruction) throw new Error(instrData.error || 'swap-instructions failed');
+      var swapData = await swapRes.json();
+      if (!swapData || !swapData.swapTransaction) throw new Error(swapData.error || 'Failed to get swap transaction');
+      var swapTxBytes = Buffer.from(swapData.swapTransaction, 'base64');
+      var swapVersionedTx = VersionedTransaction.deserialize(swapTxBytes);
 
-      var dIx = function(ix) { return { programId: new PublicKey(ix.programId), keys: ix.accounts.map(function(a) { return { pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable }; }), data: Buffer.from(ix.data, 'base64') }; };
-      var allIxs = [];
-      if (instrData.computeBudgetInstructions) instrData.computeBudgetInstructions.forEach(function(ix) { allIxs.push(dIx(ix)); });
-      if (instrData.setupInstructions) instrData.setupInstructions.forEach(function(ix) { allIxs.push(dIx(ix)); });
-      allIxs.push(dIx(instrData.swapInstruction));
-      if (instrData.cleanupInstruction) allIxs.push(dIx(instrData.cleanupInstruction));
-      allIxs.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
+      // Transaction 2: Fee transfer - completely separate
+      var bh = await connection.getLatestBlockhash('confirmed');
+      var feeTx = new Transaction();
+      feeTx.recentBlockhash = bh.blockhash;
+      feeTx.feePayer = publicKey;
+      feeTx.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
 
-      var luts = [];
-      if (instrData.addressLookupTableAddresses && instrData.addressLookupTableAddresses.length) {
-        var lutResults = await Promise.all(instrData.addressLookupTableAddresses.map(function(addr) { return connection.getAddressLookupTable(new PublicKey(addr)); }));
-        luts = lutResults.map(function(r) { return r.value; }).filter(Boolean);
+      // Sign both in one wallet prompt
+      if (signAllTransactions) {
+        var signed = await signAllTransactions([swapVersionedTx, feeTx]);
+        var swapSig = await connection.sendRawTransaction(signed[0].serialize(), { skipPreflight: false, maxRetries: 3 });
+        await connection.confirmTransaction({ signature: swapSig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+        console.log('Swap tx:', swapSig);
+        try {
+          var feeSig = await connection.sendRawTransaction(signed[1].serialize(), { skipPreflight: false });
+          console.log('Fee tx:', feeSig);
+        } catch (feeErr) { console.log('Fee send error:', feeErr); }
+      } else {
+        // Fallback: send swap only if signAllTransactions not available
+        var sig = await sendTransaction(swapVersionedTx, connection);
+        await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+        console.log('Swap tx:', sig);
+        swapSig = sig;
       }
 
-      var bh = await connection.getLatestBlockhash('confirmed');
-      var msgV0 = new TransactionMessage({ payerKey: publicKey, recentBlockhash: bh.blockhash, instructions: allIxs }).compileToV0Message(luts);
-      var vTx = new VersionedTransaction(msgV0);
-      var sig = await sendTransaction(vTx, connection);
-      await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
-      console.log('Swap+fee tx:', sig);
-      setSwapTx(sig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
+      setSwapTx(swapSig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
       setTimeout(function() { setSwapStatus('idle'); setSwapTx(null); }, 5000);
     } catch (e) {
       console.error('Swap error:', e); setSwapError(e.message || 'Swap failed'); setSwapStatus('error');
