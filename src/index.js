@@ -9,7 +9,7 @@ import { WagmiProvider } from 'wagmi';
 import { mainnet, polygon, arbitrum, base, bsc, avalanche, optimism } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
-
+ 
 const SOLANA_RPC =
   process.env.REACT_APP_SOLANA_RPC ||
   'https://mainnet.helius-rpc.com/?api-key=45c791fa-d4fd-480e-aee3-7f998177b732';
