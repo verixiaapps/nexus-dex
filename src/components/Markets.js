@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useCallback } from 'react';
- 
+import React, { useState, useEffect } from 'react';
+
 const C = {
   card: '#080d1a', card2: '#0c1220',
   border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
@@ -8,7 +8,7 @@ const C = {
 };
 
 function fmt(n, d = 2) {
-  if (n == null || n === 0) return '–';
+  if (n == null || n === 0) return '-';
   if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
   if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
@@ -17,7 +17,7 @@ function fmt(n, d = 2) {
 }
 
 function pct(n) {
-  if (!n && n !== 0) return '–';
+  if (!n && n !== 0) return '-';
   return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 
@@ -67,7 +67,6 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     const trimmed = q.trim();
     if (!trimmed || trimmed.length < 2) { setSearchResults([]); setSearchToken(null); return; }
 
-    // Contract address lookup
     if (isValidMint(trimmed)) {
       setSearchLoading(true);
       Promise.all([
@@ -96,7 +95,6 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
       return;
     }
 
-    // Name/symbol search
     setSearchToken(null);
     setSearchLoading(true);
     const ql = trimmed.toLowerCase();
@@ -203,31 +201,41 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
 
   const renderRow = (c, i) => {
     const positive = (c.price_change_percentage_24h || 0) >= 0;
-    const sparkData = c.sparkline_in_7d ? c.sparkline_in_7d.price.filter((_, i) => i % 8 === 0) : [];
+    const sparkData = c.sparkline_in_7d ? c.sparkline_in_7d.price.filter((_, idx) => idx % 8 === 0) : [];
 
     if (isMobile) {
       return (
-        <div
-          key={c.id}
-          onClick={() => onSelectCoin && onSelectCoin(c)}
-          style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer' }}
-          onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }}
-          onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
-        >
-          <div style={{ color: C.muted, fontSize: 11, width: 20, flexShrink: 0, textAlign: 'center' }}>{i + 1}</div>
-          {c.image
-            ? <img src={c.image} alt={c.symbol} style={{ width: 36, height: 36, borderRadius: '50%', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
-            : <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{c.symbol?.charAt(0).toUpperCase()}</div>
-          }
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 14, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{c.symbol?.toUpperCase()}</div>
+        <div key={c.id} style={{ borderBottom: '1px solid rgba(255,255,255,.025)' }}>
+          <div
+            onClick={() => onSelectCoin && onSelectCoin(c)}
+            style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px 8px', cursor: 'pointer' }}
+            onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }}
+            onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
+          >
+            <div style={{ color: C.muted, fontSize: 11, width: 20, flexShrink: 0, textAlign: 'center' }}>{i + 1}</div>
+            {c.image
+              ? <img src={c.image} alt={c.symbol} style={{ width: 36, height: 36, borderRadius: '50%', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
+              : <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{c.symbol?.charAt(0).toUpperCase()}</div>
+            }
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontWeight: 700, fontSize: 14, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{c.symbol?.toUpperCase()}</div>
+            </div>
+            <div style={{ textAlign: 'right', flexShrink: 0 }}>
+              <div style={{ fontWeight: 600, color: '#fff', fontSize: 13 }}>{fmt(c.current_price)}</div>
+              <div style={{ fontSize: 12, color: positive ? C.green : C.red, marginTop: 2, fontWeight: 600 }}>{pct(c.price_change_percentage_24h)}</div>
+            </div>
           </div>
-          <div style={{ textAlign: 'right', flexShrink: 0 }}>
-            <div style={{ fontWeight: 600, color: '#fff', fontSize: 13 }}>{fmt(c.current_price)}</div>
-            <div style={{ fontSize: 12, color: positive ? C.green : C.red, marginTop: 2, fontWeight: 600 }}>{pct(c.price_change_percentage_24h)}</div>
+          <div style={{ display: 'flex', gap: 8, padding: '0 16px 12px 66px' }}>
+            <button
+              onClick={e => { e.stopPropagation(); onSelectCoin && onSelectCoin(c); }}
+              style={{ flex: 1, padding: '8px', borderRadius: 8, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: '#03060f', fontWeight: 800, fontSize: 12, fontFamily: 'Syne, sans-serif' }}
+            >Buy</button>
+            <button
+              onClick={e => { e.stopPropagation(); onSelectCoin && onSelectCoin(c); }}
+              style={{ flex: 1, padding: '8px', borderRadius: 8, cursor: 'pointer', background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', color: C.red, fontWeight: 800, fontSize: 12, fontFamily: 'Syne, sans-serif' }}
+            >Sell</button>
           </div>
-          <SparkLine data={sparkData} positive={positive} />
         </div>
       );
     }
@@ -235,13 +243,15 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     return (
       <div
         key={c.id}
-        onClick={() => onSelectCoin && onSelectCoin(c)}
-        style={{ display: 'grid', gridTemplateColumns: '32px 1fr 110px 80px 110px 90px', gap: 8, padding: '13px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer', alignItems: 'center' }}
+        style={{ display: 'grid', gridTemplateColumns: '32px 1fr 110px 80px 110px 90px 140px', gap: 8, padding: '13px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', alignItems: 'center' }}
         onMouseEnter={e => { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }}
         onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
       >
         <div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        <div
+          onClick={() => onSelectCoin && onSelectCoin(c)}
+          style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, cursor: 'pointer' }}
+        >
           {c.image
             ? <img src={c.image} alt={c.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
             : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{c.symbol?.charAt(0).toUpperCase()}</div>
@@ -255,6 +265,16 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
         <div style={{ fontSize: 12, color: positive ? C.green : C.red, textAlign: 'right', fontWeight: 600 }}>{pct(c.price_change_percentage_24h)}</div>
         <div style={{ fontSize: 11, color: C.muted, textAlign: 'right' }}>{fmt(c.market_cap)}</div>
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}><SparkLine data={sparkData} positive={positive} /></div>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            onClick={() => onSelectCoin && onSelectCoin(c)}
+            style={{ flex: 1, padding: '6px 4px', borderRadius: 7, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: '#03060f', fontWeight: 800, fontSize: 11, fontFamily: 'Syne, sans-serif' }}
+          >Buy</button>
+          <button
+            onClick={() => onSelectCoin && onSelectCoin(c)}
+            style={{ flex: 1, padding: '6px 4px', borderRadius: 7, cursor: 'pointer', background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', color: C.red, fontWeight: 800, fontSize: 11, fontFamily: 'Syne, sans-serif' }}
+          >Sell</button>
+        </div>
       </div>
     );
   };
@@ -270,14 +290,14 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
           <input
             value={q}
             onChange={e => setQ(e.target.value)}
-            placeholder="Search name, symbol or paste address…"
+            placeholder="Search name, symbol or paste address..."
             style={{ background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border), borderRadius: 10, padding: '9px 36px 9px 14px', color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: '100%' }}
           />
           {q && !searchLoading && (
             <button onClick={() => { setQ(''); setSearchResults([]); setSearchToken(null); }} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 0 }}>x</button>
           )}
           {searchLoading && (
-            <div style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: C.accent, fontSize: 11 }}>…</div>
+            <div style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: C.accent, fontSize: 11 }}>...</div>
           )}
         </div>
       </div>
@@ -293,13 +313,14 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
       ) : (
         <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
           {!isMobile && (
-            <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 110px 80px 110px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 110px 80px 110px 90px 140px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
               <div>#</div>
               <div>NAME</div>
               <SortBtn label="PRICE" sortKey="current_price" sort={sort} dir={dir} onSort={handleSort} />
               <SortBtn label="24H" sortKey="price_change_percentage_24h" sort={sort} dir={dir} onSort={handleSort} />
               <SortBtn label="MKT CAP" sortKey="market_cap" sort={sort} dir={dir} onSort={handleSort} />
               <div style={{ textAlign: 'right', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>7D</div>
+              <div style={{ textAlign: 'center', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>TRADE</div>
             </div>
           )}
 
