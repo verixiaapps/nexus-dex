@@ -105,9 +105,7 @@ function WalletModal({ open, onClose }) {
 
   const handleMetaMaskConnect = async () => {
     try {
-      if (metaMaskSolanaClient) {
-        await metaMaskSolanaClient.connect();
-      }
+      if (metaMaskSolanaClient) await metaMaskSolanaClient.connect();
       openWeb3Modal();
       onClose();
     } catch (e) {
@@ -247,6 +245,7 @@ export default function App() {
   const [coins, setCoins] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedToken, setSelectedToken] = useState(null);
+  const [selectedMode, setSelectedMode] = useState('buy');
   const [walletModalOpen, setWalletModalOpen] = useState(false);
   const [jupiterTokens, setJupiterTokens] = useState([]);
   const [jupiterLoading, setJupiterLoading] = useState(true);
@@ -271,8 +270,9 @@ export default function App() {
 
   const openWallet = useCallback(() => setWalletModalOpen(true), []);
 
-  const goToToken = useCallback(coin => {
+  const goToToken = useCallback((coin, mode = 'buy') => {
     setSelectedToken(coin);
+    setSelectedMode(mode);
     setTab('token');
   }, []);
 
@@ -417,7 +417,7 @@ export default function App() {
         {tab === 'swap' && <SwapWidget {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} jupiterLoading={jupiterLoading} onGoToToken={goToToken} />}
         {tab === 'markets' && <Markets coins={coins} loading={loading} onSelectCoin={goToToken} jupiterTokens={jupiterTokens} />}
         {tab === 'token' && selectedToken && (
-          <TokenDetail {...sharedProps} coin={selectedToken} coins={coins} jupiterTokens={jupiterTokens} onBack={() => switchTab(prevTab === 'token' ? 'markets' : prevTab)} />
+          <TokenDetail {...sharedProps} coin={selectedToken} coins={coins} jupiterTokens={jupiterTokens} defaultDrawerMode={selectedMode} onBack={() => switchTab(prevTab === 'token' ? 'markets' : prevTab)} />
         )}
         {tab === 'launches' && <NewLaunches {...sharedProps} coins={coins} resetKey={launchesKey} />}
         {tab === 'buy' && <BuyCrypto coins={coins} walletAddress={wallet.walletAddress || ''} selectedCoinSymbol={selectedToken ? selectedToken.symbol : null} />}
