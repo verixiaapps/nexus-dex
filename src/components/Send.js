@@ -8,7 +8,7 @@ const BASE_FEE = 0.03;
 const ANTIMEV_FEE = 0.02;
 const SPREAD = 0.005;
 const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
-
+ 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
   border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
