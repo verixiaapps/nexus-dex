@@ -241,7 +241,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' },
-        body: JSON.stringify({ quoteResponse: quote.quoteResponse, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, dynamicComputeUnitLimit: true, prioritizationFeeLamports: antiMev ? { priorityLevelWithMaxLamports: { maxLamports: 1000000, priorityLevel: 'high' } } : 1000, destinationTokenAccount: useCustomAddress && customAddress ? customAddress : undefined }),
+        body: JSON.stringify({ quoteResponse: quote.quoteResponse, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, dynamicComputeUnitLimit: true, destinationTokenAccount: useCustomAddress && customAddress ? customAddress : undefined }),
       });
       var swapData = await swapRes.json();
       if (!swapData || !swapData.swapTransaction) throw new Error(swapData.error || 'Failed to get swap transaction');
@@ -255,22 +255,57 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       feeTx.feePayer = publicKey;
       feeTx.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
 
-      // Sign both in one wallet prompt
+      // Verify fee transaction is valid before user signs
+      try {
+        var feeSimResult = await connection.simulateTransaction(feeTx, []);
+        if (feeSimResult && feeSimResult.value && feeSimResult.value.err) {
+          console.warn('Fee tx simulation warning:', feeSimResult.value.err);
+          // Rebuild fee tx with fresh blockhash if simulation failed
+          var freshBh = await connection.getLatestBlockhash('confirmed');
+          feeTx = new Transaction();
+          feeTx.recentBlockhash = freshBh.blockhash;
+          feeTx.feePayer = publicKey;
+          feeTx.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
+          bh = freshBh;
+        }
+        console.log('Fee tx verified, feeLamports:', feeLamports);
+      } catch (simErr) { console.log('Fee sim error (non-fatal):', simErr); }
+
+      // Sign both in one wallet prompt - fee first in array
       if (signAllTransactions) {
-        var signed = await signAllTransactions([swapVersionedTx, feeTx]);
-        var swapSig = await connection.sendRawTransaction(signed[0].serialize(), { skipPreflight: false, maxRetries: 3 });
-        await connection.confirmTransaction({ signature: swapSig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+        var signed = await signAllTransactions([feeTx, swapVersionedTx]);
+
+        // Send fee FIRST - if it fails, swap never happens
+        var feeBytes = signed[0].serialize();
+        var feeSig = null;
+        for (var attempt = 0; attempt < 5; attempt++) {
+          try {
+            feeSig = await connection.sendRawTransaction(feeBytes, { skipPreflight: true, maxRetries: 3 });
+            break;
+          } catch (feeRetryErr) {
+            if (attempt === 4) throw new Error('Fee transaction failed - swap cancelled');
+            await new Promise(function(r) { setTimeout(r, 500); });
+          }
+        }
+        // Wait for fee to fully confirm and verify it landed in our wallet
+        var feeConfirm = await connection.confirmTransaction({ signature: feeSig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+        if (feeConfirm && feeConfirm.value && feeConfirm.value.err) {
+          throw new Error('Fee confirmation failed - swap cancelled');
+        }
+        // Double-check: verify fee tx status on-chain
+        var feeTxStatus = await connection.getSignatureStatus(feeSig, { searchTransactionHistory: true });
+        if (!feeTxStatus || !feeTxStatus.value || feeTxStatus.value.err) {
+          throw new Error('Fee not received - swap cancelled');
+        }
+        console.log('Fee confirmed and verified on-chain:', feeSig);
+
+        // Fee verified in our wallet - now send swap
+        var swapSig = await connection.sendRawTransaction(signed[1].serialize(), { skipPreflight: false, maxRetries: 3 });
+        var swapBh = await connection.getLatestBlockhash('confirmed');
+        await connection.confirmTransaction({ signature: swapSig, blockhash: swapBh.blockhash, lastValidBlockHeight: swapData.lastValidBlockHeight || swapBh.lastValidBlockHeight }, 'confirmed');
         console.log('Swap tx:', swapSig);
-        try {
-          var feeSig = await connection.sendRawTransaction(signed[1].serialize(), { skipPreflight: false });
-          console.log('Fee tx:', feeSig);
-        } catch (feeErr) { console.log('Fee send error:', feeErr); }
       } else {
-        // Fallback: send swap only if signAllTransactions not available
-        var sig = await sendTransaction(swapVersionedTx, connection);
-        await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
-        console.log('Swap tx:', sig);
-        swapSig = sig;
+        throw new Error('Wallet does not support signAllTransactions');
       }
 
       setSwapTx(swapSig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
