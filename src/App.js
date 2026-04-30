@@ -1,12 +1,3 @@
-Several issues found:
-
-	1.	isSolanaConnected = isConnected — wrong. EVM-only users (MetaMask EVM) get marked as Solana-connected, breaking swap/send logic
-	2.	MetaMask Solana not wired — metaMaskSolanaClient from index.js is never imported or used. MetaMask users can’t sign Solana transactions
-	3.	WalletModal missing MetaMask — no dedicated MetaMask button, users have to find it through WalletConnect
-	4.	publicKey null for MetaMask — when MetaMask Solana snap is connected, publicKey should come from the snap client not the wallet adapter
-
-Here’s the fixed App.js:
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAccount, useDisconnect } from 'wagmi';
