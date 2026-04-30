@@ -36,7 +36,6 @@ export default function BuyCrypto({ coins, walletAddress, selectedCoinSymbol }) 
         <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Buy Crypto</h1>
         <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Buy crypto with a card or bank transfer</p>
       </div>
-
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20 }}>
         <div style={{ display: 'flex', gap: 8, marginBottom: 20 }}>
           {[['transak', 'Transak'], ['moonpay', 'MoonPay']].map(function(item) {
@@ -47,7 +46,6 @@ export default function BuyCrypto({ coins, walletAddress, selectedCoinSymbol }) 
             );
           })}
         </div>
-
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>AMOUNT</div>
           <div style={{ display: 'flex', gap: 8 }}>
@@ -64,13 +62,19 @@ export default function BuyCrypto({ coins, walletAddress, selectedCoinSymbol }) 
             })}
           </div>
         </div>
-
         <div style={{ background: C.card2, border: '1px solid rgba(0,255,163,.1)', borderRadius: 12, padding: 14, marginBottom: 16 }}>
           <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, fontWeight: 700 }}>RECEIVING WALLET</div>
           <div style={{ fontSize: 11, color: C.green, fontFamily: 'monospace', wordBreak: 'break-all', lineHeight: 1.5 }}>
             {addr || 'Connect wallet to auto-fill'}
           </div>
         </div>
-
         <a href={provider === 'transak' ? transakUrl : moonpayUrl} target="_blank" rel="noreferrer" style={{ display: 'block', width: '100%', padding: 18, borderRadius: 14, border: 'none', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: '#03060f', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16, cursor: 'pointer', textAlign: 'center', textDecoration: 'none' }}>
-          Buy with {provider === 'transak' ? 'Transak'
+          Buy with {provider === 'transak' ? 'Transak' : 'MoonPay'}
+        </a>
+        <p style={{ textAlign: 'center', fontSize: 11, color: C.muted, marginTop: 14, lineHeight: 1.6 }}>
+          Powered by {provider === 'transak' ? 'Transak' : 'MoonPay'} - KYC may be required - Rates vary
+        </p>
+      </div>
+    </div>
+  );
+}
