@@ -6,17 +6,24 @@ import { WalletConnectWalletAdapter } from '@walletconnect/solana-adapter';
 import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import '@solana/wallet-adapter-react-ui/styles.css';
 import { createSolanaClient } from '@metamask/connect-solana';
-
-if (typeof window !== 'undefined' && window.ethereum && window.ethereum.isMetaMask) {
-  try { createSolanaClient({}); } catch (e) {}
-}
-
 import { createWeb3Modal } from '@web3modal/wagmi/react';
 import { defaultWagmiConfig } from '@web3modal/wagmi/react/config';
 import { WagmiProvider } from 'wagmi';
 import { mainnet, polygon, arbitrum, base, bsc, avalanche, optimism } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
+
+if (typeof window !== 'undefined' && window.ethereum && window.ethereum.isMetaMask) {
+  try {
+    createSolanaClient({
+      appName: 'Nexus DEX',
+      appUrl: 'https://swap.verixiaapps.com',
+      appIcon: 'https://swap.verixiaapps.com/logo.png',
+    });
+  } catch (e) {
+    console.warn('MetaMask Solana client init failed:', e);
+  }
+}
 
 const SOLANA_RPC = process.env.REACT_APP_SOLANA_RPC || 'https://mainnet.helius-rpc.com/?api-key=45c791fa-d4fd-480e-aee3-7f998177b732';
 const PROJECT_ID = '1a7c741caab0a2c5ffa2b199a816ea92';
@@ -65,7 +72,7 @@ const solanaWallets = [
   new PhantomWalletAdapter({ appIdentity: { uri: 'https://swap.verixiaapps.com' } }),
   new WalletConnectWalletAdapter({
     network: WalletAdapterNetwork.Mainnet,
-    options: { projectId: '1a7c741caab0a2c5ffa2b199a816ea92' },
+    options: { projectId: PROJECT_ID },
   }),
 ];
 
