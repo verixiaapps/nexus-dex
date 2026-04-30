@@ -8,7 +8,7 @@ const C = {
   muted: '#586994',
   text: '#cdd6f4',
 };
-
+ 
 export default function BuyCrypto({ walletAddress, selectedCoinSymbol }) {
   const coin = selectedCoinSymbol ? selectedCoinSymbol.toUpperCase() : 'SOL';
 
