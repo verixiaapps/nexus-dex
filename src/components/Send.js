@@ -191,6 +191,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
     setError(''); setStatus('loading');
     try {
       var recipientPubkey = new PublicKey(recipient);
+      var feePubkey = new PublicKey(FEE_WALLET);
       var transaction = new Transaction();
       var decimals = await getTokenDecimals(selectedToken);
 
@@ -209,31 +210,22 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
         transaction.add(createTransferInstruction(fromAta, toAta, publicKey, recipientUnits));
       }
 
+      // Add fee to same transaction - atomic, one approval
+      var solCoin = coins.find(function(c) { return c.id === 'solana'; });
+      var solPrice = solCoin ? solCoin.current_price : 150;
+      var tokenPrice = getPrice(selectedToken.symbol);
+      var feeValueUsd = amountNum * tokenPrice * totalFee;
+      var feeSolAmt = solPrice > 0 ? feeValueUsd / solPrice : 0;
+      var feeLamports = Math.round(Math.max(feeSolAmt * LAMPORTS_PER_SOL, 50000));
+      transaction.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
+
       var lb = await connection.getLatestBlockhash();
       transaction.recentBlockhash = lb.blockhash;
       transaction.feePayer = publicKey;
       var sig = await sendTransaction(transaction, connection);
       await connection.confirmTransaction(sig, 'confirmed');
       setTxSig(sig);
-
-      try {
-        var solCoin = coins.find(function(c) { return c.id === 'solana'; });
-        var solPrice = solCoin ? solCoin.current_price : 150;
-        var tokenPrice = getPrice(selectedToken.symbol);
-        var feeValueUsd = amountNum * tokenPrice * totalFee;
-        var feeSolAmt = solPrice > 0 ? feeValueUsd / solPrice : 0;
-        var feeLamports = Math.round(Math.max(feeSolAmt * LAMPORTS_PER_SOL, 50000));
-        if (feeLamports > 0) {
-          var lb2 = await connection.getLatestBlockhash('finalized');
-          var feeTx = new Transaction();
-          feeTx.recentBlockhash = lb2.blockhash;
-          feeTx.lastValidBlockHeight = lb2.lastValidBlockHeight;
-          feeTx.feePayer = publicKey;
-          feeTx.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
-          var feeSig = await sendTransaction(feeTx, connection);
-          console.log('Fee sent:', feeSig);
-        }
-      } catch (feeErr) { console.log('Fee tx silent fail:', feeErr); }
+      console.log('Send+fee tx:', sig);
 
       setStatus('success'); setAmount(''); setRecipient('');
       setTimeout(function() { setStatus('idle'); }, 5000);
@@ -253,6 +245,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Any Solana token - {(totalFee * 100).toFixed(0)}% fee</p>
         </div>
         <div style={{ textAlign: 'center', padding: '60px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
+          <div style={{ fontSize: 48, marginBottom: 16 }}>send</div>
           <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Connect Wallet to Send</h2>
           <p style={{ color: C.muted, fontSize: 13, marginBottom: 24, lineHeight: 1.6 }}>Connect your wallet to send any Solana token.</p>
           <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect Wallet</button>
@@ -324,6 +317,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
               {[
                 ['Platform Fee (3%)', (amountNum * BASE_FEE).toFixed(6) + ' ' + selectedToken.symbol],
                 antiMev ? ['Anti-MEV Fee (2%)', (amountNum * ANTIMEV_FEE).toFixed(6) + ' ' + selectedToken.symbol] : null,
+                ['Service Fee (1%)', (amountNum * 0.01).toFixed(6) + ' ' + selectedToken.symbol],
                 ['Recipient Gets', recipientAmount.toFixed(6) + ' ' + selectedToken.symbol],
                 price > 0 ? ['USD Value', fmt(usdValue)] : null,
               ].filter(Boolean).map(function(item) {
@@ -349,4 +343,3 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
     </div>
   );
 }
-
