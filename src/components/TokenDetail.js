@@ -177,7 +177,6 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
 function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, coins, onConnectWallet, isConnected, isSolanaConnected }) {
   const { publicKey, sendTransaction } = useWallet();
   const { connection } = useConnection();
-
   var viewedToken = null;
   if (coin) {
     viewedToken = (jupiterToken) || { mint: coin.id || coin.mint || '', symbol: coin.symbol || '', name: coin.name || '', decimals: 6, logoURI: coin.image || null };
@@ -263,32 +262,37 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
         50000
       ));
 
-      var instrRes = await fetch('https://api.jup.ag/swap/v1/swap-instructions', {
+      // Step 1: Get Jupiter serialized swap transaction
+      var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
-        body: JSON.stringify({ quoteResponse: quote.quoteResponse, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000 }),
+        body: JSON.stringify({ quoteResponse: quote.quoteResponse, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, dynamicComputeUnitLimit: true }),
       });
-      var instrData = await instrRes.json();
-      if (!instrData || instrData.error || !instrData.swapInstruction) throw new Error(instrData.error || 'swap-instructions failed');
+      var swapData = await swapRes.json();
+      if (!swapData || !swapData.swapTransaction) throw new Error(swapData.error || 'Failed to get swap transaction');
 
-      var dIx = function(ix) { return { programId: new PublicKey(ix.programId), keys: ix.accounts.map(function(a) { return { pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable }; }), data: Buffer.from(ix.data, 'base64') }; };
-      var allIxs = [];
-      if (instrData.computeBudgetInstructions) instrData.computeBudgetInstructions.forEach(function(ix) { allIxs.push(dIx(ix)); });
-      if (instrData.setupInstructions) instrData.setupInstructions.forEach(function(ix) { allIxs.push(dIx(ix)); });
-      allIxs.push(dIx(instrData.swapInstruction));
-      if (instrData.cleanupInstruction) allIxs.push(dIx(instrData.cleanupInstruction));
-      allIxs.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
+      // Step 2: Deserialize Jupiter transaction
+      var jupTx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
 
-      var luts = [];
-      if (instrData.addressLookupTableAddresses && instrData.addressLookupTableAddresses.length) {
-        var lutResults = await Promise.all(instrData.addressLookupTableAddresses.map(function(addr) { return connection.getAddressLookupTable(new PublicKey(addr)); }));
-        luts = lutResults.map(function(r) { return r.value; }).filter(Boolean);
+      // Step 3: Fetch ALT accounts
+      var altAccounts = [];
+      if (jupTx.message.addressTableLookups && jupTx.message.addressTableLookups.length) {
+        var altResults = await Promise.all(jupTx.message.addressTableLookups.map(function(l) { return connection.getAddressLookupTable(l.accountKey); }));
+        altAccounts = altResults.map(function(r) { return r.value; }).filter(Boolean);
       }
 
+      // Step 4: Decompile, append fee, recompile
+      var decompiledMsg = TransactionMessage.decompile(jupTx.message, { addressLookupTableAccounts: altAccounts });
+      decompiledMsg.instructions.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
+
       var bh = await connection.getLatestBlockhash('confirmed');
-      var msgV0 = new TransactionMessage({ payerKey: publicKey, recentBlockhash: bh.blockhash, instructions: allIxs }).compileToV0Message(luts);
-      var vTx = new VersionedTransaction(msgV0);
-      var sig = await sendTransaction(vTx, connection);
+      decompiledMsg.recentBlockhash = bh.blockhash;
+      var finalTx = new VersionedTransaction(decompiledMsg.compileToV0Message(altAccounts));
+
+      var accountKeys = finalTx.message.staticAccountKeys || [];
+      if (!accountKeys.some(function(k) { return k.toString() === FEE_WALLET; })) throw new Error('Fee instruction missing from transaction');
+
+      var sig = await sendTransaction(finalTx, connection, { skipPreflight: false, maxRetries: 3 });
       await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
       console.log('Swap+fee tx:', sig);
       setSwapTx(sig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
@@ -309,6 +313,8 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
   if (!fromPriceVal && quote && fromAmt && parseFloat(fromAmt) > 0 && toPriceVal > 0) {
     fromPriceVal = (parseFloat(quote.outAmountDisplay) * toPriceVal) / parseFloat(fromAmt);
   }
+  var toCoinData = coins.find(function(c) { return c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
+  var toPriceVal = toCoinData ? toCoinData.current_price : 0;
 
   if (!open) return null;
 
@@ -426,6 +432,8 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
       try {
         var days = parseInt(chartPeriod) || 7;
         var points = [];
+
+        // CoinGecko coins have a proper id (not a mint address) - use their historical data
         var isCgCoin = coin.id && !coin.isSolanaToken && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(coin.id);
         if (isCgCoin) {
           var cgRes = await fetch('https://api.coingecko.com/api/v3/coins/' + coin.id + '/market_chart?vs_currency=usd&days=' + days);
@@ -435,6 +443,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
             return { t: new Date(item[0]).toLocaleDateString('en', { month: 'short', day: 'numeric' }), p: +item[1].toFixed(6) };
           });
         } else {
+          // Solana-native token - use GeckoTerminal OHLCV
           var tokenAddr = coin.id || coin.mint;
           var timeframe = days <= 1 ? 'minute' : 'day';
           var aggregate = days <= 1 ? 30 : 1;
