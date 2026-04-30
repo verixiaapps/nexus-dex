@@ -1,3 +1,5 @@
+Violations: 2 — '–' in fmtMc and fmtPrice. Formatted:
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
@@ -20,13 +22,11 @@ const C = {
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
 
-// Token cache - show instantly on load
 function loadCachedTokens() {
   try {
     var v = localStorage.getItem('nexus_launch_cache');
     if (!v) return [];
     var parsed = JSON.parse(v);
-    // Only use cache if less than 5 minutes old
     if (Date.now() - (parsed.ts || 0) > 300000) return [];
     return parsed.tokens || [];
   } catch (e) { return []; }
@@ -95,11 +95,9 @@ async function sendFee(publicKey, sendTransaction, connection, dollarAmt, solPri
   } catch (e) { console.error('Fee tx error:', e); }
 }
 
-// GeckoTerminal batch - free, no key, covers all Solana tokens including new pump launches
 async function fetchGeckoTerminal(mints) {
   if (!mints || !mints.length) return {};
   try {
-    // GeckoTerminal supports up to 30 addresses in multi endpoint
     var chunks = [];
     for (var i = 0; i < mints.length; i += 30) {
       chunks.push(mints.slice(i, i + 30));
@@ -139,7 +137,6 @@ async function fetchGeckoTerminal(mints) {
   } catch (e) { return {}; }
 }
 
-// Aliases so all existing calls work
 async function fetchDexScreener(mints) { return fetchGeckoTerminal(mints); }
 async function fetchJupiterPrices(mints) { return fetchGeckoTerminal(mints); }
 async function fetchTokenData(mints) { return fetchGeckoTerminal(mints); }
@@ -210,7 +207,6 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
   const [solBalance, setSolBalance] = useState(null);
   const [tokenBalance, setTokenBalance] = useState(null);
 
-  // Fetch SOL + token balance
   useEffect(function() {
     if (!publicKey || !connection || !open) { setSolBalance(null); setTokenBalance(null); return; }
     connection.getBalance(publicKey).then(function(lam) { setSolBalance(lam / 1e9); }).catch(function() {});
@@ -249,7 +245,6 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
     setStatus('loading'); setError('');
     var isGrad = token.graduated;
     try {
-      // SOL balance check
       if (publicKey) {
         try {
           var _solBal = (await connection.getBalance(publicKey)) / 1e9;
@@ -279,34 +274,31 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
         var qRes = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + inputMint + '&outputMint=' + outputMint + '&amount=' + amount + '&slippageBps=150&restrictIntermediateTokens=true', { headers: { 'x-api-key': JUP_API_KEY } });
         var qData = await qRes.json();
         if (!qData.outAmount) throw new Error(qData.error || 'No route');
-        // Get swap instructions to include fee in same tx
         var feeLamports = Math.round(Math.max(activeDollar > 0 ? (activeDollar * (totalFeeRate + SPREAD) / solPrice) * LAMPORTS_PER_SOL : solAmt * (totalFeeRate + SPREAD) * LAMPORTS_PER_SOL, 50000));
 
-        var instrRes = await fetch('https://api.jup.ag/swap/v1/swap-instructions', {
+        // Step 1: Get Jupiter serialized swap transaction
+        var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
-          body: JSON.stringify({ quoteResponse: qData, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000 }),
+          body: JSON.stringify({ quoteResponse: qData, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, dynamicComputeUnitLimit: true }),
         });
-        var instrData = await instrRes.json();
-        if (!instrData || instrData.error || !instrData.swapInstruction) throw new Error(instrData.error || 'swap-instructions failed');
+        var swapData = await swapRes.json();
+        if (!swapData || !swapData.swapTransaction) throw new Error(swapData.error || 'Failed to get swap transaction');
 
-        var dIx = function(ix) { return { programId: new PublicKey(ix.programId), keys: ix.accounts.map(function(a) { return { pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable }; }), data: Buffer.from(ix.data, 'base64') }; };
-        var allIxs = [];
-        if (instrData.computeBudgetInstructions) instrData.computeBudgetInstructions.forEach(function(ix) { allIxs.push(dIx(ix)); });
-        if (instrData.setupInstructions) instrData.setupInstructions.forEach(function(ix) { allIxs.push(dIx(ix)); });
-        allIxs.push(dIx(instrData.swapInstruction));
-        if (instrData.cleanupInstruction) allIxs.push(dIx(instrData.cleanupInstruction));
-        allIxs.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
-
-        var luts = [];
-        if (instrData.addressLookupTableAddresses && instrData.addressLookupTableAddresses.length) {
-          var lutResults = await Promise.all(instrData.addressLookupTableAddresses.map(function(addr) { return connection.getAddressLookupTable(new PublicKey(addr)); }));
-          luts = lutResults.map(function(r) { return r.value; }).filter(Boolean);
+        // Step 2: Deserialize, fetch ALTs, decompile, append fee, recompile
+        var jupTx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
+        var altAccounts = [];
+        if (jupTx.message.addressTableLookups && jupTx.message.addressTableLookups.length) {
+          var altResults = await Promise.all(jupTx.message.addressTableLookups.map(function(l) { return connection.getAddressLookupTable(l.accountKey); }));
+          altAccounts = altResults.map(function(r) { return r.value; }).filter(Boolean);
         }
-
+        var decompiledMsg = TransactionMessage.decompile(jupTx.message, { addressLookupTableAccounts: altAccounts });
+        decompiledMsg.instructions.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
         var bh = await connection.getLatestBlockhash('confirmed');
-        var msgV0 = new TransactionMessage({ payerKey: publicKey, recentBlockhash: bh.blockhash, instructions: allIxs }).compileToV0Message(luts);
-        var vTx = new VersionedTransaction(msgV0);
-        var sig = await sendTransaction(vTx, connection);
+        decompiledMsg.recentBlockhash = bh.blockhash;
+        var finalTx = new VersionedTransaction(decompiledMsg.compileToV0Message(altAccounts));
+        var accountKeys = finalTx.message.staticAccountKeys || [];
+        if (!accountKeys.some(function(k) { return k.toString() === FEE_WALLET; })) throw new Error('Fee instruction missing from transaction');
+        var sig = await sendTransaction(finalTx, connection);
         await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
         console.log('Swap+fee tx:', sig);
         setTxSig(sig);
@@ -673,7 +665,6 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
   var solCoin = coins && coins.find(function(c) { return c.id === 'solana'; });
   var solPrice = solCoin ? solCoin.current_price : 150;
 
-  // Reset to list when tab is clicked again
   useEffect(function() {
     setSelectedToken(null);
   }, [resetKey]);
@@ -689,14 +680,12 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
       var newPrice = d.price || t.price;
       var prevHistory = t.priceHistory || [];
       var newHistory = newPrice > 0 ? prevHistory.concat([newPrice]).slice(-30) : prevHistory;
-      // Compute % change from price history ourselves (no DexScreener needed)
       var pct1h = null;
       var pct5m = null;
       if (newHistory.length >= 2) {
         var first = newHistory[0];
         var last = newHistory[newHistory.length - 1];
         if (first > 0) pct1h = ((last - first) / first) * 100;
-        // 5m: compare last 3 points vs current (at 8s intervals ~= 24s, rough approximation)
         if (newHistory.length >= 4) {
           var older = newHistory[newHistory.length - 4];
           if (older > 0) pct5m = ((last - older) / older) * 100;
@@ -725,7 +714,6 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
   var addToken = useCallback(function(token) {
     tokensRef.current = [token].concat(tokensRef.current.filter(function(t) { return t.mint !== token.mint; })).slice(0, 150);
     setTokens([].concat(tokensRef.current));
-    // Fetch DexScreener data for new token immediately
     fetchDexScreener([token.mint]).then(function(data) {
       var d = data[token.mint];
       if (!d) return;
@@ -744,12 +732,10 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
 
     function connect() {
       try {
-        // Helius WebSocket - direct chain, faster than PumpPortal
         ws = new WebSocket('wss://mainnet.helius-rpc.com/?api-key=45c791fa-d4fd-480e-aee3-7f998177b732');
         var subId = null;
         ws.onopen = function() {
           setWsStatus('live');
-          // Watch pump.fun, Raydium, Meteora all at once
           ws.send(JSON.stringify({
             jsonrpc: '2.0', id: 1, method: 'logsSubscribe',
             params: [
@@ -768,17 +754,14 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
         ws.onmessage = function(event) {
           try {
             var msg = JSON.parse(event.data);
-            // Extract mint from logs
             if (!msg.params || !msg.params.result) return;
             var result = msg.params.result;
             var logs = result.value && result.value.logs ? result.value.logs : [];
             var sig = result.value && result.value.signature;
             if (!logs.length || !sig) return;
 
-            // Look for token mint in logs
             var mintAddr = null;
             logs.forEach(function(log) {
-              // pump.fun logs contain 'initialize' and token mint
               var match = log.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/g);
               if (match) {
                 match.forEach(function(addr) {
@@ -791,7 +774,6 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
 
             if (!mintAddr || tokensRef.current.find(function(t) { return t.mint === mintAddr; })) return;
 
-            // Create card immediately with what we know
             var token = {
               mint: mintAddr, symbol: mintAddr.slice(0, 4).toUpperCase(), name: 'Loading...',
               image: null, marketCap: 0, price: 0,
@@ -808,7 +790,6 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
             });
             addToken(token);
 
-            // Fetch full data from GeckoTerminal immediately
             setTimeout(function() {
               fetch('https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mintAddr)
                 .then(function(r) { return r.json(); })
@@ -843,12 +824,10 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
 
     connect();
 
-    // Show cached tokens INSTANTLY while fresh data loads
     var cached = loadCachedTokens();
     if (cached.length > 0) {
       tokensRef.current = cached;
       setTokens([].concat(cached));
-      // Fire Jupiter prices for cached tokens immediately
       fetchJupiterPrices(cached.map(function(t) { return t.mint; })).then(function(prices) {
         tokensRef.current = tokensRef.current.map(function(t) {
           var p = prices[t.mint];
@@ -859,7 +838,6 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
       });
     }
 
-    // Refresh all visible tokens every 8s for live prices + trending data
     refreshTimerRef.current = setInterval(async function() {
       var mints = tokensRef.current.slice(0, 30).map(function(t) { return t.mint; });
       if (!mints.length) return;
@@ -868,7 +846,6 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
       saveCachedTokens(tokensRef.current);
     }, 15000);
 
-    // Load initial tokens from GeckoTerminal - free, no key, fast
     var loadInitial = async function() {
       try {
         var res = await fetch('https://api.geckoterminal.com/api/v2/networks/solana/new_pools?page=1');
@@ -880,7 +857,6 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
           var pChange = attrs.price_change_percentage || {};
           var txns = attrs.transactions || {};
           var price = parseFloat(attrs.base_token_price_usd || 0);
-          // base token address is in relationships
           var mintAddr = pool.relationships && pool.relationships.base_token && pool.relationships.base_token.data && pool.relationships.base_token.data.id;
           mintAddr = mintAddr ? mintAddr.replace('solana_', '') : null;
           if (!mintAddr) return null;
@@ -905,7 +881,6 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
         tokensRef.current = initialTokens;
         setTokens([].concat(tokensRef.current));
         saveCachedTokens(tokensRef.current);
-        // Fetch token metadata/images for each in parallel
         var mints = initialTokens.map(function(t) { return t.mint; });
         fetchGeckoTerminal(mints).then(function(gtData) {
           tokensRef.current = tokensRef.current.map(function(t) {
@@ -937,13 +912,10 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
     };
   }, [addToken, updateTokenDexData]);
 
-  // New tab: newest first
-  // Trending tab: highest volume + most buys + biggest % move
   var displayTokens = tokens.slice().sort(function(a, b) {
     if (tab === 'new') {
       return (b.createdAt || 0) - (a.createdAt || 0);
     }
-    // Trending: score by volume, buys, and % change combined
     var scoreA = (a.volume24h || 0) + (a.buys24h || 0) * 10 + Math.abs(a.pct1h || a.pct5m || 0) * 100;
     var scoreB = (b.volume24h || 0) + (b.buys24h || 0) * 10 + Math.abs(b.pct1h || b.pct5m || 0) * 100;
     return scoreB - scoreA;
