@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { VersionedTransaction, TransactionMessage, AddressLookupTableAccount, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
-
+ 
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
