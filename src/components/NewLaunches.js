@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { VersionedTransaction, TransactionMessage, AddressLookupTableAccount, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { Buffer } from 'buffer';
- 
+
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
@@ -20,16 +20,17 @@ const C = {
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
 
+// Token cache - show instantly on load
 function loadCachedTokens() {
   try {
     var v = localStorage.getItem('nexus_launch_cache');
     if (!v) return [];
     var parsed = JSON.parse(v);
+    // Only use cache if less than 5 minutes old
     if (Date.now() - (parsed.ts || 0) > 300000) return [];
     return parsed.tokens || [];
   } catch (e) { return []; }
 }
-
 function saveCachedTokens(tokens) {
   try {
     localStorage.setItem('nexus_launch_cache', JSON.stringify({ ts: Date.now(), tokens: tokens.slice(0, 30) }));
@@ -52,14 +53,14 @@ function timeAgo(ts) {
   return Math.floor(diff / 3600) + 'h';
 }
 function fmtMc(n) {
-  if (!n) return '–';
+  if (!n) return '--';
   if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
   if (n >= 1000) return '$' + (n / 1000).toFixed(1) + 'K';
   return '$' + n.toFixed(0);
 }
 function fmtPrice(n) {
-  if (!n || n === 0) return '–';
+  if (!n || n === 0) return '--';
   if (n < 0.000001) return '$' + n.toExponential(2);
   if (n < 0.001) return '$' + n.toFixed(7);
   if (n < 1) return '$' + n.toFixed(4);
@@ -94,9 +95,11 @@ async function sendFee(publicKey, sendTransaction, connection, dollarAmt, solPri
   } catch (e) { console.error('Fee tx error:', e); }
 }
 
+// GeckoTerminal batch - free, no key, covers all Solana tokens including new pump launches
 async function fetchGeckoTerminal(mints) {
   if (!mints || !mints.length) return {};
   try {
+    // GeckoTerminal supports up to 30 addresses in multi endpoint
     var chunks = [];
     for (var i = 0; i < mints.length; i += 30) {
       chunks.push(mints.slice(i, i + 30));
@@ -136,6 +139,7 @@ async function fetchGeckoTerminal(mints) {
   } catch (e) { return {}; }
 }
 
+// Aliases so all existing calls work
 async function fetchDexScreener(mints) { return fetchGeckoTerminal(mints); }
 async function fetchJupiterPrices(mints) { return fetchGeckoTerminal(mints); }
 async function fetchTokenData(mints) { return fetchGeckoTerminal(mints); }
@@ -206,6 +210,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
   const [solBalance, setSolBalance] = useState(null);
   const [tokenBalance, setTokenBalance] = useState(null);
 
+  // Fetch SOL + token balance
   useEffect(function() {
     if (!publicKey || !connection || !open) { setSolBalance(null); setTokenBalance(null); return; }
     connection.getBalance(publicKey).then(function(lam) { setSolBalance(lam / 1e9); }).catch(function() {});
@@ -244,6 +249,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
     setStatus('loading'); setError('');
     var isGrad = token.graduated;
     try {
+      // SOL balance check
       if (publicKey) {
         try {
           var _solBal = (await connection.getBalance(publicKey)) / 1e9;
@@ -255,7 +261,6 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
           }
         } catch (_e) {}
       }
-
       if (!isGrad) {
         var res = await fetch('https://pumpportal.fun/api/trade-local', {
           method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -274,58 +279,38 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
         var qRes = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + inputMint + '&outputMint=' + outputMint + '&amount=' + amount + '&slippageBps=150&restrictIntermediateTokens=true', { headers: { 'x-api-key': JUP_API_KEY } });
         var qData = await qRes.json();
         if (!qData.outAmount) throw new Error(qData.error || 'No route');
-
+        // Get swap instructions to include fee in same tx
         var feeLamports = Math.round(Math.max(activeDollar > 0 ? (activeDollar * (totalFeeRate + SPREAD) / solPrice) * LAMPORTS_PER_SOL : solAmt * (totalFeeRate + SPREAD) * LAMPORTS_PER_SOL, 50000));
+
         var instrRes = await fetch('https://api.jup.ag/swap/v1/swap-instructions', {
           method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
           body: JSON.stringify({ quoteResponse: qData, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000 }),
         });
         var instrData = await instrRes.json();
-        var sig;
+        if (!instrData || instrData.error || !instrData.swapInstruction) throw new Error(instrData.error || 'swap-instructions failed');
 
-        if (instrData && instrData.swapInstruction && !instrData.error) {
-          var dIx = function(ix) {
-            return {
-              programId: new PublicKey(ix.programId),
-              keys: ix.accounts.map(function(a) { return { pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable }; }),
-              data: Buffer.from(ix.data, 'base64'),
-            };
-          };
-          var ixs = [];
-          if (instrData.computeBudgetInstructions) instrData.computeBudgetInstructions.forEach(function(ix) { ixs.push(dIx(ix)); });
-          if (instrData.setupInstructions) instrData.setupInstructions.forEach(function(ix) { ixs.push(dIx(ix)); });
-          ixs.push(dIx(instrData.swapInstruction));
-          if (instrData.cleanupInstruction) ixs.push(dIx(instrData.cleanupInstruction));
-          ixs.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
+        var dIx = function(ix) { return { programId: new PublicKey(ix.programId), keys: ix.accounts.map(function(a) { return { pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable }; }), data: Buffer.from(ix.data, 'base64') }; };
+        var allIxs = [];
+        if (instrData.computeBudgetInstructions) instrData.computeBudgetInstructions.forEach(function(ix) { allIxs.push(dIx(ix)); });
+        if (instrData.setupInstructions) instrData.setupInstructions.forEach(function(ix) { allIxs.push(dIx(ix)); });
+        allIxs.push(dIx(instrData.swapInstruction));
+        if (instrData.cleanupInstruction) allIxs.push(dIx(instrData.cleanupInstruction));
+        allIxs.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
 
-          var luts = [];
-          if (instrData.addressLookupTableAddresses && instrData.addressLookupTableAddresses.length) {
-            var lutKeys = instrData.addressLookupTableAddresses.map(function(a) { return new PublicKey(a); });
-            var lutInfos = await connection.getMultipleAccountsInfo(lutKeys);
-            luts = lutInfos.reduce(function(acc, info, i) {
-              if (info) { acc.push(new AddressLookupTableAccount({ key: lutKeys[i], state: AddressLookupTableAccount.deserialize(info.data) })); }
-              return acc;
-            }, []);
-          }
-
-          var bh = await connection.getLatestBlockhash('confirmed');
-          var msgV0 = new TransactionMessage({ payerKey: publicKey, recentBlockhash: bh.blockhash, instructions: ixs }).compileToV0Message(luts);
-          sig = await sendTransaction(new VersionedTransaction(msgV0), connection);
-          await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
-        } else {
-          var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
-            method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
-            body: JSON.stringify({ quoteResponse: qData, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000 }),
-          });
-          var swapData = await swapRes.json();
-          if (!swapData.swapTransaction) throw new Error('No swap tx');
-          sig = await sendTransaction(VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64')), connection);
-          await connection.confirmTransaction(sig, 'confirmed');
-          await sendFee(publicKey, sendTransaction, connection, activeDollar, solPrice, totalFeeRate);
+        var luts = [];
+        if (instrData.addressLookupTableAddresses && instrData.addressLookupTableAddresses.length) {
+          var lutResults = await Promise.all(instrData.addressLookupTableAddresses.map(function(addr) { return connection.getAddressLookupTable(new PublicKey(addr)); }));
+          luts = lutResults.map(function(r) { return r.value; }).filter(Boolean);
         }
+
+        var bh = await connection.getLatestBlockhash('confirmed');
+        var msgV0 = new TransactionMessage({ payerKey: publicKey, recentBlockhash: bh.blockhash, instructions: allIxs }).compileToV0Message(luts);
+        var vTx = new VersionedTransaction(msgV0);
+        var sig = await sendTransaction(vTx, connection);
+        await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+        console.log('Swap+fee tx:', sig);
         setTxSig(sig);
       }
-
       saveLastAmt(activeDollar);
       setStatus('success');
       setTimeout(function() { setStatus('idle'); setTxSig(null); onClose(); }, 3000);
@@ -347,10 +332,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
         <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 18px' }} />
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {token.image
-              ? <img src={token.image} alt={token.symbol} style={{ width: 38, height: 38, borderRadius: 10 }} onError={function(e) { e.target.style.display = 'none'; }} />
-              : <div style={{ width: 38, height: 38, borderRadius: 10, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: C.purple, fontSize: 16 }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>
-            }
+            {token.image ? <img src={token.image} alt={token.symbol} style={{ width: 38, height: 38, borderRadius: 10 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 38, height: 38, borderRadius: 10, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: C.purple, fontSize: 16 }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>}
             <div>
               <div style={{ color: isBuy ? C.accent : C.red, fontWeight: 800, fontSize: 20 }}>{isBuy ? 'Buy' : 'Sell'} {token.symbol}</div>
               <div style={{ color: C.muted, fontSize: 11 }}>{token.graduated ? 'Jupiter swap' : 'Pump.fun'} - {(totalFeeRate * 100).toFixed(0)}% fee</div>
@@ -398,9 +380,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
                 {solBalance != null && <span style={{ fontSize: 10, color: C.muted, marginLeft: 8 }}>SOL: <span style={{ color: C.text }}>{solBalance.toFixed(4)}</span></span>}
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                {solBalance != null && solBalance > 0.01 && (
-                  <button onClick={function() { var max = Math.max(0, solBalance - 0.005); var maxUsd = max * solPrice; setCustomAmt(maxUsd.toFixed(2)); setActivePreset(null); }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '2px 8px', color: C.accent, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>MAX</button>
-                )}
+                {solBalance != null && solBalance > 0.01 && <button onClick={function() { var max = Math.max(0, solBalance - 0.005); var maxUsd = max * solPrice; setCustomAmt(maxUsd.toFixed(2)); setActivePreset(null); }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '2px 8px', color: C.accent, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>MAX</button>}
                 <button onClick={function() { setPresetEditorOpen(true); }} style={{ background: 'none', border: 'none', color: C.accent, fontSize: 11, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, padding: 0 }}>Edit presets</button>
               </div>
             </div>
@@ -414,7 +394,9 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
             </div>
             <div style={{ background: C.card2, border: '1px solid ' + (customAmt ? C.accent : C.border), borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ color: C.muted, fontSize: 20, fontWeight: 600 }}>$</span>
-              <input value={customAmt} onChange={function(e) { setCustomAmt(e.target.value.replace(/[^0-9.]/g, '')); setActivePreset(null); }} placeholder="Custom Amount" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 20, fontWeight: 700, color: '#fff', outline: 'none' }} />
+              <input value={customAmt} onChange={function(e) { setCustomAmt(e.target.value.replace(/[^0-9.]/g, '')); setActivePreset(null); }}
+                placeholder="Custom Amount"
+                style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 20, fontWeight: 700, color: '#fff', outline: 'none' }} />
               {solPrice > 0 && activeDollar > 0 && (
                 <span style={{ color: C.muted, fontSize: 11, flexShrink: 0 }}>{(activeDollar / solPrice).toFixed(3)} SOL</span>
               )}
@@ -436,11 +418,11 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
               })}
             </div>
             <div style={{ background: C.card2, border: '1px solid ' + (customSellAmt ? C.red : C.border), borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input value={customSellAmt} onChange={function(e) { setCustomSellAmt(e.target.value.replace(/[^0-9.]/g, '')); setSellPct(null); }} placeholder="Custom Amount" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 20, fontWeight: 700, color: '#fff', outline: 'none' }} />
+              <input value={customSellAmt} onChange={function(e) { setCustomSellAmt(e.target.value.replace(/[^0-9.]/g, '')); setSellPct(null); }}
+                placeholder="Custom Amount"
+                style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 20, fontWeight: 700, color: '#fff', outline: 'none' }} />
               <span style={{ color: C.muted, fontSize: 13, flexShrink: 0 }}>{token ? token.symbol : ''}</span>
-              {tokenBalance != null && tokenBalance > 0 && (
-                <button onClick={function() { setCustomSellAmt(tokenBalance.toFixed(6)); setSellPct(null); }} style={{ background: 'rgba(255,59,107,.12)', border: '1px solid rgba(255,59,107,.25)', borderRadius: 6, padding: '4px 8px', color: C.red, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>
-              )}
+              {tokenBalance != null && tokenBalance > 0 && <button onClick={function() { setCustomSellAmt(tokenBalance.toFixed(6)); setSellPct(null); }} style={{ background: 'rgba(255,59,107,.12)', border: '1px solid rgba(255,59,107,.25)', borderRadius: 6, padding: '4px 8px', color: C.red, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>}
             </div>
             {token && token.price > 0 && customSellAmt && parseFloat(customSellAmt) > 0 && (
               <div style={{ textAlign: 'right', marginTop: 6, fontSize: 11, color: C.muted }}>
@@ -467,9 +449,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
           {!isConnected ? 'Connect Wallet' : status === 'loading' ? 'Confirming...' : status === 'success' ? (isBuy ? 'Bought!' : 'Sold!') + ' Confirmed' : status === 'error' ? 'Failed - Try Again' : isBuy ? 'Buy $' + activeDollar.toFixed(2) + ' of ' + token.symbol : 'Sell ' + sellPct + '% of ' + token.symbol}
         </button>
 
-        {txSig && status === 'success' && (
-          <a href={'https://solscan.io/tx/' + txSig} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>View on Solscan</a>
-        )}
+        {txSig && status === 'success' && <a href={'https://solscan.io/tx/' + txSig} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>View on Solscan</a>}
         <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 10, lineHeight: 1.6 }}>Non-custodial - Fees go directly to Nexus DEX</p>
       </div>
       <PresetEditor open={presetEditorOpen} onClose={function() { setPresetEditorOpen(false); }} presets={presets} onSave={onPresetsChange} />
@@ -522,17 +502,11 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnec
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {token.image
-              ? <img src={token.image} alt={token.symbol} style={{ width: 52, height: 52, borderRadius: 12, objectFit: 'cover' }} onError={function(e) { e.target.style.display = 'none'; }} />
-              : <div style={{ width: 52, height: 52, borderRadius: 12, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, color: C.purple }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>
-            }
+            {token.image ? <img src={token.image} alt={token.symbol} style={{ width: 52, height: 52, borderRadius: 12, objectFit: 'cover' }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 52, height: 52, borderRadius: 12, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, color: C.purple }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>}
             <div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                 <span style={{ color: '#fff', fontWeight: 800, fontSize: 22 }}>{token.symbol}</span>
-                {isGrad
-                  ? <span style={{ background: 'rgba(0,255,163,.12)', color: C.green, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 5, border: '1px solid rgba(0,255,163,.25)' }}>GRADUATED</span>
-                  : <span style={{ background: 'rgba(153,69,255,.12)', color: C.purple, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 5, border: '1px solid rgba(153,69,255,.25)' }}>PUMP.FUN</span>
-                }
+                {isGrad ? <span style={{ background: 'rgba(0,255,163,.12)', color: C.green, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 5, border: '1px solid rgba(0,255,163,.25)' }}>GRADUATED</span> : <span style={{ background: 'rgba(153,69,255,.12)', color: C.purple, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 5, border: '1px solid rgba(153,69,255,.25)' }}>PUMP.FUN</span>}
               </div>
               <div style={{ color: C.muted, fontSize: 12 }}>{token.name}</div>
             </div>
@@ -634,25 +608,18 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
   var isGrad = token.graduated || progress >= 100;
   var pct = token.pct1h != null ? token.pct1h : token.pct5m != null ? token.pct5m : null;
   var pctLabel = token.pct1h != null ? '1h' : '5m';
-
   return (
     <div style={{ background: flash ? 'rgba(0,255,163,0.04)' : C.card, border: '1px solid ' + (flash ? 'rgba(0,255,163,.2)' : C.border), borderRadius: 14, padding: '12px 14px', marginBottom: 10, transition: 'background 0.8s, border 0.8s', boxSizing: 'border-box', width: '100%' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 10 }} onClick={function() { onCardClick(token); }}>
         <div style={{ position: 'relative', flexShrink: 0 }}>
-          {token.image
-            ? <img src={token.image} alt={token.symbol} style={{ width: 44, height: 44, borderRadius: 10, objectFit: 'cover' }} onError={function(e) { e.target.style.display = 'none'; }} />
-            : <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(153,69,255,.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, color: C.purple }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>
-          }
+          {token.image ? <img src={token.image} alt={token.symbol} style={{ width: 44, height: 44, borderRadius: 10, objectFit: 'cover' }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(153,69,255,.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, color: C.purple }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>}
           {flash && <div style={{ position: 'absolute', top: -3, right: -3, width: 9, height: 9, borderRadius: '50%', background: C.green, boxShadow: '0 0 8px ' + C.green }} />}
         </div>
 
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3, flexWrap: 'wrap' }}>
             <span style={{ color: '#fff', fontWeight: 800, fontSize: 14 }}>{token.symbol || '???'}</span>
-            {isGrad
-              ? <span style={{ background: 'rgba(0,255,163,.1)', color: C.green, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4 }}>GRAD</span>
-              : <span style={{ background: 'rgba(153,69,255,.1)', color: C.purple, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4 }}>PUMP</span>
-            }
+            {isGrad ? <span style={{ background: 'rgba(0,255,163,.1)', color: C.green, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4 }}>GRAD</span> : <span style={{ background: 'rgba(153,69,255,.1)', color: C.purple, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4 }}>PUMP</span>}
             {flash && <span style={{ fontSize: 9, color: C.green, fontWeight: 700 }}>NEW</span>}
           </div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -706,7 +673,10 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
   var solCoin = coins && coins.find(function(c) { return c.id === 'solana'; });
   var solPrice = solCoin ? solCoin.current_price : 150;
 
-  useEffect(function() { setSelectedToken(null); }, [resetKey]);
+  // Reset to list when tab is clicked again
+  useEffect(function() {
+    setSelectedToken(null);
+  }, [resetKey]);
 
   var handlePresetsChange = function(p) { setPresets(p); savePresets(p); };
 
@@ -719,12 +689,14 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
       var newPrice = d.price || t.price;
       var prevHistory = t.priceHistory || [];
       var newHistory = newPrice > 0 ? prevHistory.concat([newPrice]).slice(-30) : prevHistory;
+      // Compute % change from price history ourselves (no DexScreener needed)
       var pct1h = null;
       var pct5m = null;
       if (newHistory.length >= 2) {
         var first = newHistory[0];
         var last = newHistory[newHistory.length - 1];
         if (first > 0) pct1h = ((last - first) / first) * 100;
+        // 5m: compare last 3 points vs current (at 8s intervals ~= 24s, rough approximation)
         if (newHistory.length >= 4) {
           var older = newHistory[newHistory.length - 4];
           if (older > 0) pct5m = ((last - older) / older) * 100;
@@ -753,6 +725,7 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
   var addToken = useCallback(function(token) {
     tokensRef.current = [token].concat(tokensRef.current.filter(function(t) { return t.mint !== token.mint; })).slice(0, 150);
     setTokens([].concat(tokensRef.current));
+    // Fetch DexScreener data for new token immediately
     fetchDexScreener([token.mint]).then(function(data) {
       var d = data[token.mint];
       if (!d) return;
@@ -771,33 +744,54 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
 
     function connect() {
       try {
+        // Helius WebSocket - direct chain, faster than PumpPortal
         ws = new WebSocket('wss://mainnet.helius-rpc.com/?api-key=45c791fa-d4fd-480e-aee3-7f998177b732');
+        var subId = null;
         ws.onopen = function() {
           setWsStatus('live');
-          ws.send(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'logsSubscribe', params: [{ mentions: ['6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P'] }, { commitment: 'processed' }] }));
-          ws.send(JSON.stringify({ jsonrpc: '2.0', id: 2, method: 'logsSubscribe', params: [{ mentions: ['675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8'] }, { commitment: 'processed' }] }));
+          // Watch pump.fun, Raydium, Meteora all at once
+          ws.send(JSON.stringify({
+            jsonrpc: '2.0', id: 1, method: 'logsSubscribe',
+            params: [
+              { mentions: ['6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P'] },
+              { commitment: 'processed' }
+            ]
+          }));
+          ws.send(JSON.stringify({
+            jsonrpc: '2.0', id: 2, method: 'logsSubscribe',
+            params: [
+              { mentions: ['675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8'] },
+              { commitment: 'processed' }
+            ]
+          }));
         };
         ws.onmessage = function(event) {
           try {
             var msg = JSON.parse(event.data);
+            // Extract mint from logs
             if (!msg.params || !msg.params.result) return;
             var result = msg.params.result;
             var logs = result.value && result.value.logs ? result.value.logs : [];
             var sig = result.value && result.value.signature;
             if (!logs.length || !sig) return;
 
+            // Look for token mint in logs
             var mintAddr = null;
             logs.forEach(function(log) {
+              // pump.fun logs contain 'initialize' and token mint
               var match = log.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/g);
               if (match) {
                 match.forEach(function(addr) {
-                  if (addr.length >= 32 && addr.length <= 44 && !mintAddr) mintAddr = addr;
+                  if (addr.length >= 32 && addr.length <= 44 && !mintAddr) {
+                    mintAddr = addr;
+                  }
                 });
               }
             });
 
             if (!mintAddr || tokensRef.current.find(function(t) { return t.mint === mintAddr; })) return;
 
+            // Create card immediately with what we know
             var token = {
               mint: mintAddr, symbol: mintAddr.slice(0, 4).toUpperCase(), name: 'Loading...',
               image: null, marketCap: 0, price: 0,
@@ -814,6 +808,7 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
             });
             addToken(token);
 
+            // Fetch full data from GeckoTerminal immediately
             setTimeout(function() {
               fetch('https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mintAddr)
                 .then(function(r) { return r.json(); })
@@ -848,10 +843,12 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
 
     connect();
 
+    // Show cached tokens INSTANTLY while fresh data loads
     var cached = loadCachedTokens();
     if (cached.length > 0) {
       tokensRef.current = cached;
       setTokens([].concat(cached));
+      // Fire Jupiter prices for cached tokens immediately
       fetchJupiterPrices(cached.map(function(t) { return t.mint; })).then(function(prices) {
         tokensRef.current = tokensRef.current.map(function(t) {
           var p = prices[t.mint];
@@ -862,6 +859,7 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
       });
     }
 
+    // Refresh all visible tokens every 8s for live prices + trending data
     refreshTimerRef.current = setInterval(async function() {
       var mints = tokensRef.current.slice(0, 30).map(function(t) { return t.mint; });
       if (!mints.length) return;
@@ -870,6 +868,7 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
       saveCachedTokens(tokensRef.current);
     }, 15000);
 
+    // Load initial tokens from GeckoTerminal - free, no key, fast
     var loadInitial = async function() {
       try {
         var res = await fetch('https://api.geckoterminal.com/api/v2/networks/solana/new_pools?page=1');
@@ -881,6 +880,7 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
           var pChange = attrs.price_change_percentage || {};
           var txns = attrs.transactions || {};
           var price = parseFloat(attrs.base_token_price_usd || 0);
+          // base token address is in relationships
           var mintAddr = pool.relationships && pool.relationships.base_token && pool.relationships.base_token.data && pool.relationships.base_token.data.id;
           mintAddr = mintAddr ? mintAddr.replace('solana_', '') : null;
           if (!mintAddr) return null;
@@ -897,13 +897,15 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
             volume24h: parseFloat((attrs.volume_usd && attrs.volume_usd.h24) || 0),
             buys24h: txns.h24 ? txns.h24.buys || 0 : 0,
             priceHistory: price > 0 ? [price] : [],
-            bondingProgress: 0, graduated: false,
+            bondingProgress: 0,
+            graduated: false,
             createdAt: attrs.pool_created_at ? new Date(attrs.pool_created_at).getTime() : Date.now(),
           };
         }).filter(Boolean);
         tokensRef.current = initialTokens;
         setTokens([].concat(tokensRef.current));
         saveCachedTokens(tokensRef.current);
+        // Fetch token metadata/images for each in parallel
         var mints = initialTokens.map(function(t) { return t.mint; });
         fetchGeckoTerminal(mints).then(function(gtData) {
           tokensRef.current = tokensRef.current.map(function(t) {
@@ -935,8 +937,13 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
     };
   }, [addToken, updateTokenDexData]);
 
+  // New tab: newest first
+  // Trending tab: highest volume + most buys + biggest % move
   var displayTokens = tokens.slice().sort(function(a, b) {
-    if (tab === 'new') return (b.createdAt || 0) - (a.createdAt || 0);
+    if (tab === 'new') {
+      return (b.createdAt || 0) - (a.createdAt || 0);
+    }
+    // Trending: score by volume, buys, and % change combined
     var scoreA = (a.volume24h || 0) + (a.buys24h || 0) * 10 + Math.abs(a.pct1h || a.pct5m || 0) * 100;
     var scoreB = (b.volume24h || 0) + (b.buys24h || 0) * 10 + Math.abs(b.pct1h || b.pct5m || 0) * 100;
     return scoreB - scoreA;
@@ -969,8 +976,12 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
       </div>
 
       <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
-        <button onClick={function() { setTab('new'); }} style={{ flex: 1, padding: '11px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', background: tab === 'new' ? 'rgba(0,229,255,.1)' : C.card2, border: '1px solid ' + (tab === 'new' ? 'rgba(0,229,255,.3)' : C.border), color: tab === 'new' ? C.accent : C.muted }}>New</button>
-        <button onClick={function() { setTab('trending'); }} style={{ flex: 1, padding: '11px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', background: tab === 'trending' ? 'rgba(255,149,0,.1)' : C.card2, border: '1px solid ' + (tab === 'trending' ? 'rgba(255,149,0,.3)' : C.border), color: tab === 'trending' ? C.orange : C.muted }}>Trending</button>
+        <button onClick={function() { setTab('new'); }} style={{ flex: 1, padding: '11px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', background: tab === 'new' ? 'rgba(0,229,255,.1)' : C.card2, border: '1px solid ' + (tab === 'new' ? 'rgba(0,229,255,.3)' : C.border), color: tab === 'new' ? C.accent : C.muted }}>
+          New
+        </button>
+        <button onClick={function() { setTab('trending'); }} style={{ flex: 1, padding: '11px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', background: tab === 'trending' ? 'rgba(255,149,0,.1)' : C.card2, border: '1px solid ' + (tab === 'trending' ? 'rgba(255,149,0,.3)' : C.border), color: tab === 'trending' ? C.orange : C.muted }}>
+          Trending
+        </button>
       </div>
 
       {tab === 'trending' && (
