@@ -9,7 +9,7 @@ import Portfolio from './components/Portfolio';
 import TokenDetail from './components/TokenDetail';
 import Send from './components/Send';
 import NewLaunches from './components/NewLaunches';
-
+ 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b', text: '#cdd6f4', muted: '#586994',
