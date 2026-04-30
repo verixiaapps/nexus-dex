@@ -12,7 +12,7 @@ import { WagmiProvider } from 'wagmi';
 import { mainnet, polygon, arbitrum, base, bsc, avalanche, optimism } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
-
+ 
 if (typeof window !== 'undefined' && window.ethereum && window.ethereum.isMetaMask) {
   try {
     createSolanaClient({
