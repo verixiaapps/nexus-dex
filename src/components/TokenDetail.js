@@ -1,9 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { VersionedTransaction, TransactionMessage, AddressLookupTableAccount, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-  
+
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
@@ -50,7 +50,7 @@ async function getTokenDecimals(token) {
 
 function fmt(n, d) {
   d = d || 2;
-  if (n == null) return '–';
+  if (n == null) return '--';
   if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
   if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
@@ -59,7 +59,7 @@ function fmt(n, d) {
 }
 
 function pct(n) {
-  if (!n && n !== 0) return '–';
+  if (!n && n !== 0) return '--';
   return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 
@@ -91,11 +91,11 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
           var dec = parseInt(data.decimals);
           setContractToken({ mint: data.address, symbol: data.symbol, name: data.name, decimals: (!isNaN(dec) && dec >= 0 && dec <= 18) ? dec : 6, logoURI: data.logoURI });
         } else {
-          setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '…', name: 'Custom Token', decimals: 6 });
+          setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6 });
         }
       }
     } catch (e) {
-      setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '…', name: 'Custom Token', decimals: 6 });
+      setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6 });
     }
     setContractLoading(false);
   };
@@ -145,14 +145,8 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
               {contractLoading && <div style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>Looking up token...</div>}
               {contractToken && !contractLoading && (
                 <div onClick={function() { onSelect(contractToken); close(); }} style={{ marginTop: 8, padding: '10px 12px', background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.3)', borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}>
-                  {contractToken.logoURI
-                    ? <img src={contractToken.logoURI} alt={contractToken.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} onError={function(e) { e.target.style.display = 'none'; }} />
-                    : <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>{contractToken.symbol && contractToken.symbol.charAt(0)}</div>
-                  }
-                  <div>
-                    <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{contractToken.symbol}</div>
-                    <div style={{ color: C.muted, fontSize: 11 }}>{contractToken.name}</div>
-                  </div>
+                  {contractToken.logoURI ? <img src={contractToken.logoURI} alt={contractToken.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, color: C.accent }}>{contractToken.symbol && contractToken.symbol.charAt(0)}</div>}
+                  <div><div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{contractToken.symbol}</div><div style={{ color: C.muted, fontSize: 11 }}>{contractToken.name}</div></div>
                   <div style={{ marginLeft: 'auto', color: C.accent, fontSize: 11, fontWeight: 600 }}>Select</div>
                 </div>
               )}
@@ -163,10 +157,7 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
               {displayTokens.map(function(t) {
                 return (
                   <div key={t.mint} onClick={function() { onSelect(t); close(); }} style={{ padding: '11px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid rgba(255,255,255,.03)' }} onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.05)'; }} onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
-                    {t.logoURI
-                      ? <img src={t.logoURI} alt={t.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} />
-                      : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{t.symbol && t.symbol.charAt(0)}</div>
-                    }
+                    {t.logoURI ? <img src={t.logoURI} alt={t.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{t.symbol && t.symbol.charAt(0)}</div>}
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{t.symbol}</div>
                       <div style={{ color: C.muted, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</div>
@@ -189,9 +180,8 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
 
   var viewedToken = null;
   if (coin) {
-    viewedToken = jupiterToken || { mint: coin.id || coin.mint || '', symbol: coin.symbol || '', name: coin.name || '', decimals: 6, logoURI: coin.image || null };
+    viewedToken = (jupiterToken) || { mint: coin.id || coin.mint || '', symbol: coin.symbol || '', name: coin.name || '', decimals: 6, logoURI: coin.image || null };
   }
-
   const [fromToken, setFromToken] = useState(SOL_TOKEN);
   const [toToken, setToToken] = useState(viewedToken || USDC_TOKEN);
   const [fromAmt, setFromAmt] = useState('');
@@ -211,13 +201,8 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
     var fetchBal = async function(token, setter) {
       if (!token || !token.mint) return;
       try {
-        if (token.mint === SOL_MINT) {
-          var lam = await connection.getBalance(publicKey);
-          setter(lam / 1e9);
-        } else {
-          var accts = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: new PublicKey(token.mint) });
-          setter(accts.value.length > 0 ? accts.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0);
-        }
+        if (token.mint === SOL_MINT) { var lam = await connection.getBalance(publicKey); setter(lam / 1e9); }
+        else { var accts = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: new PublicKey(token.mint) }); setter(accts.value.length > 0 ? accts.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0); }
       } catch (e) { setter(null); }
     };
     fetchBal(fromToken, setFromBalance);
@@ -228,7 +213,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
 
   useEffect(function() {
     if (mode === 'buy') { setFromToken(SOL_TOKEN); setToToken(jupiterToken || USDC_TOKEN); }
-    else { setFromToken(jupiterToken || USDC_TOKEN); setToToken(USDC_TOKEN); }
+    else { setFromToken(jupiterToken || USDC_TOKEN); setToToken(SOL_TOKEN); }
     setFromAmt(''); setQuote(null); setSwapStatus('idle'); setSwapTx(null); setSwapError(''); setQuoteError('');
   }, [open, mode, jupiterToken]);
 
@@ -256,18 +241,11 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
   var executeSwap = async function() {
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
     if (!publicKey) { setSwapError('Please connect a wallet'); return; }
-    if (!quote) return;
+    if (!quote || !publicKey) return;
     setSwapStatus('loading'); setSwapError('');
     try {
-      try {
-        var _solBal = (await connection.getBalance(publicKey)) / 1e9;
-        if (_solBal < 0.003) {
-          setSwapError('Insufficient SOL balance. Need at least 0.003 SOL to cover fees and gas.');
-          setSwapStatus('error');
-          setTimeout(function() { setSwapStatus('idle'); setSwapError(''); }, 6000);
-          return;
-        }
-      } catch (_e) {}
+      var _solBal = (await connection.getBalance(publicKey)) / 1e9;
+      if (_solBal < 0.005) { setSwapError('Need at least 0.005 SOL for fees and gas.'); setSwapStatus('error'); setTimeout(function() { setSwapStatus('idle'); setSwapError(''); }, 6000); return; }
 
       var solCoin = coins.find(function(c) { return c.id === 'solana' || (c.symbol && c.symbol.toLowerCase() === 'sol'); });
       var solPrice = solCoin ? solCoin.current_price : 150;
@@ -275,8 +253,8 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
       var fromPrice = fromCoinData ? fromCoinData.current_price : (coin ? coin.current_price : (fromToken && fromToken.symbol === 'SOL' ? solPrice : 0));
       var tradeUsd = parseFloat(fromAmt) * (fromPrice || 0);
       if (!tradeUsd && quote) {
-        var toCoinData = coins.find(function(c) { return c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
-        var tp2 = toCoinData ? toCoinData.current_price : (toToken && (toToken.symbol === 'USDC' || toToken.symbol === 'USDT') ? 1 : 0);
+        var toCoin2 = coins.find(function(c) { return c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
+        var tp2 = toCoin2 ? toCoin2.current_price : (toToken && (toToken.symbol === 'USDC' || toToken.symbol === 'USDT') ? 1 : 0);
         if (tp2 > 0) tradeUsd = parseFloat(quote.outAmountDisplay) * tp2;
       }
       var totalFeePct = totalFee + SPREAD;
@@ -286,66 +264,37 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
       ));
 
       var instrRes = await fetch('https://api.jup.ag/swap/v1/swap-instructions', {
-        method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
         body: JSON.stringify({ quoteResponse: quote.quoteResponse, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000 }),
       });
       var instrData = await instrRes.json();
-      var sig;
+      if (!instrData || instrData.error || !instrData.swapInstruction) throw new Error(instrData.error || 'swap-instructions failed');
 
-      if (instrData && instrData.swapInstruction && !instrData.error) {
-        var deserializeIx = function(ix) {
-          return {
-            programId: new PublicKey(ix.programId),
-            keys: ix.accounts.map(function(a) { return { pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable }; }),
-            data: Buffer.from(ix.data, 'base64'),
-          };
-        };
-        var allIxs = [];
-        if (instrData.computeBudgetInstructions) instrData.computeBudgetInstructions.forEach(function(ix) { allIxs.push(deserializeIx(ix)); });
-        if (instrData.setupInstructions) instrData.setupInstructions.forEach(function(ix) { allIxs.push(deserializeIx(ix)); });
-        allIxs.push(deserializeIx(instrData.swapInstruction));
-        if (instrData.cleanupInstruction) allIxs.push(deserializeIx(instrData.cleanupInstruction));
-        allIxs.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
+      var dIx = function(ix) { return { programId: new PublicKey(ix.programId), keys: ix.accounts.map(function(a) { return { pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable }; }), data: Buffer.from(ix.data, 'base64') }; };
+      var allIxs = [];
+      if (instrData.computeBudgetInstructions) instrData.computeBudgetInstructions.forEach(function(ix) { allIxs.push(dIx(ix)); });
+      if (instrData.setupInstructions) instrData.setupInstructions.forEach(function(ix) { allIxs.push(dIx(ix)); });
+      allIxs.push(dIx(instrData.swapInstruction));
+      if (instrData.cleanupInstruction) allIxs.push(dIx(instrData.cleanupInstruction));
+      allIxs.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
 
-        var luts = [];
-        if (instrData.addressLookupTableAddresses && instrData.addressLookupTableAddresses.length) {
-          var lutKeys = instrData.addressLookupTableAddresses.map(function(a) { return new PublicKey(a); });
-          var lutInfos = await connection.getMultipleAccountsInfo(lutKeys);
-          luts = lutInfos.reduce(function(acc, info, i) {
-            if (info) { acc.push(new AddressLookupTableAccount({ key: lutKeys[i], state: AddressLookupTableAccount.deserialize(info.data) })); }
-            return acc;
-          }, []);
-        }
-
-        var bh = await connection.getLatestBlockhash('confirmed');
-        var msgV0 = new TransactionMessage({ payerKey: publicKey, recentBlockhash: bh.blockhash, instructions: allIxs }).compileToV0Message(luts);
-        sig = await sendTransaction(new VersionedTransaction(msgV0), connection);
-        await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
-      } else {
-        var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
-          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
-          body: JSON.stringify({ quoteResponse: quote.quoteResponse, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000 }),
-        });
-        var swapData = await swapRes.json();
-        if (!swapData.swapTransaction) throw new Error(swapData.error || 'No swap transaction');
-        var txFB = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
-        sig = await sendTransaction(txFB, connection);
-        await connection.confirmTransaction(sig, 'confirmed');
-        try {
-          var fbh = await connection.getLatestBlockhash('finalized');
-          var feeTx = new Transaction();
-          feeTx.recentBlockhash = fbh.blockhash;
-          feeTx.lastValidBlockHeight = fbh.lastValidBlockHeight;
-          feeTx.feePayer = publicKey;
-          feeTx.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
-          await sendTransaction(feeTx, connection);
-        } catch (fe) { console.error('Fee fallback:', fe); }
+      var luts = [];
+      if (instrData.addressLookupTableAddresses && instrData.addressLookupTableAddresses.length) {
+        var lutResults = await Promise.all(instrData.addressLookupTableAddresses.map(function(addr) { return connection.getAddressLookupTable(new PublicKey(addr)); }));
+        luts = lutResults.map(function(r) { return r.value; }).filter(Boolean);
       }
 
+      var bh = await connection.getLatestBlockhash('confirmed');
+      var msgV0 = new TransactionMessage({ payerKey: publicKey, recentBlockhash: bh.blockhash, instructions: allIxs }).compileToV0Message(luts);
+      var vTx = new VersionedTransaction(msgV0);
+      var sig = await sendTransaction(vTx, connection);
+      await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+      console.log('Swap+fee tx:', sig);
       setSwapTx(sig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
       setTimeout(function() { setSwapStatus('idle'); setSwapTx(null); }, 5000);
     } catch (e) {
-      setSwapError(e.message || 'Trade failed'); setSwapStatus('error');
+      console.error('Swap error:', e); setSwapError(e.message || 'Swap failed'); setSwapStatus('error');
       setTimeout(function() { setSwapStatus('idle'); setSwapError(''); }, 4000);
     }
   };
@@ -393,9 +342,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
           </div>
           <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
             <input value={fromAmt} onChange={function(e) { setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }} placeholder="0.00" style={{ flex: 1, background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '14px 16px', fontSize: 26, fontWeight: 600, color: '#fff', outline: 'none' }} />
-            {fromBalance != null && fromBalance > 0 && (
-              <button onClick={function() { var max = fromToken && fromToken.symbol === 'SOL' ? Math.max(0, fromBalance - 0.01) : fromBalance; setFromAmt(max > 0 ? max.toFixed(6) : '0'); }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 8, padding: '8px 12px', color: C.accent, fontSize: 12, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>
-            )}
+            {fromBalance != null && fromBalance > 0 && <button onClick={function() { var max = fromToken && fromToken.symbol === 'SOL' ? Math.max(0, fromBalance - 0.01) : fromBalance; setFromAmt(max > 0 ? max.toFixed(6) : '0'); }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 8, padding: '8px 12px', color: C.accent, fontSize: 12, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>}
             {fromAmt && fromPriceVal > 0 && <div style={{ textAlign: 'right', marginTop: 4, fontSize: 11, color: C.muted }}>{fmt(parseFloat(fromAmt) * fromPriceVal)}</div>}
           </div>
         </div>
@@ -432,12 +379,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
                 ['Service Fee (1%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.01).toFixed(2)],
                 ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
               ].filter(Boolean).map(function(item) {
-                return (
-                  <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
-                    <span style={{ color: C.muted }}>{item[0]}</span>
-                    <span style={{ color: C.text }}>{item[1]}</span>
-                  </div>
-                );
+                return <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}><span style={{ color: C.muted }}>{item[0]}</span><span style={{ color: C.text }}>{item[1]}</span></div>;
               })}
             </div>
           )}
@@ -446,7 +388,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
         {swapError && <div style={{ padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 8, fontSize: 12, color: C.red, marginBottom: 14 }}>{swapError}</div>}
 
         <button onClick={executeSwap} disabled={swapStatus === 'loading'} style={{ width: '100%', padding: 18, borderRadius: 14, border: 'none', background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : swapStatus === 'error' ? 'rgba(255,59,107,.2)' : !isConnected ? 'linear-gradient(135deg,#9945ff,#7c3aed)' : !fromAmt || !quote ? C.card3 : modeGradient, color: !isConnected || (!fromAmt && !quote) ? C.muted2 : '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16, cursor: swapStatus === 'loading' ? 'not-allowed' : 'pointer', transition: 'all .3s', minHeight: 54 }}>
-          {!isConnected ? 'Connect Wallet to Trade' : swapStatus === 'loading' ? 'Confirming...' : swapStatus === 'success' ? modeLabel + ' Confirmed!' : swapStatus === 'error' ? 'Failed - Try Again' : !fromAmt ? 'Enter Amount' : quoteLoading ? 'Getting Quote...' : !quote ? 'No Route Found' : modeLabel + ' ' + (toToken ? toToken.symbol : '')}
+          {!isConnected ? 'Connect Wallet to Trade' : swapStatus === 'loading' ? 'Confirming...' : swapStatus === 'success' ? modeLabel + ' Confirmed!' : swapStatus === 'error' ? 'Failed - Try Again' : !fromAmt ? 'Enter Amount' : quoteLoading ? 'Getting Quote...' : !quote ? 'No Route Found' : modeLabel + ' ' + (mode === 'buy' ? (toToken ? toToken.symbol : '') : (fromToken ? fromToken.symbol : ''))}
         </button>
 
         {swapTx && swapStatus === 'success' && (
@@ -525,10 +467,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {coin.image
-              ? <img src={coin.image} alt={coin.symbol} style={{ width: 48, height: 48, borderRadius: '50%' }} />
-              : <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: C.accent }}>{coin.symbol && coin.symbol.charAt(0).toUpperCase()}</div>
-            }
+            {coin.image ? <img src={coin.image} alt={coin.symbol} style={{ width: 48, height: 48, borderRadius: '50%' }} /> : <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: C.accent }}>{coin.symbol && coin.symbol.charAt(0).toUpperCase()}</div>}
             <div>
               <div style={{ fontWeight: 800, fontSize: 20, color: '#fff' }}>{coin.name}</div>
               <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{coin.symbol && coin.symbol.toUpperCase()} - Rank #{coin.market_cap_rank || '--'}</div>
@@ -543,9 +482,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
           {[['1', '1D'], ['7', '7D'], ['30', '30D']].map(function(item) {
             return (
-              <button key={item[0]} onClick={function() { setChartPeriod(item[0]); }} style={{ padding: '5px 12px', borderRadius: 8, fontSize: 11, cursor: 'pointer', fontWeight: 600, background: chartPeriod === item[0] ? 'rgba(0,229,255,.12)' : 'transparent', border: '1px solid ' + (chartPeriod === item[0] ? 'rgba(0,229,255,.35)' : C.border), color: chartPeriod === item[0] ? C.accent : C.muted, fontFamily: 'Syne, sans-serif' }}>
-                {item[1]}
-              </button>
+              <button key={item[0]} onClick={function() { setChartPeriod(item[0]); }} style={{ padding: '5px 12px', borderRadius: 8, fontSize: 11, cursor: 'pointer', fontWeight: 600, background: chartPeriod === item[0] ? 'rgba(0,229,255,.12)' : 'transparent', border: '1px solid ' + (chartPeriod === item[0] ? 'rgba(0,229,255,.35)' : C.border), color: chartPeriod === item[0] ? C.accent : C.muted, fontFamily: 'Syne, sans-serif' }}>{item[1]}</button>
             );
           })}
         </div>
