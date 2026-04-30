@@ -299,5 +299,3 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
   );
 }
 
-
-This is Portfolio.js based on the default export.
