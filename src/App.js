@@ -1,5 +1,3 @@
-Only one line needs changing — line 6. Here’s the full corrected App.js with that fix:
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAccount, useDisconnect } from 'wagmi';
