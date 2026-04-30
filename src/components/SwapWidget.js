@@ -227,8 +227,8 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         '&fromAmount=' + (parseFloat(fromAmt)) +
         '&slippage=' + slip +
         '&payer=' + publicKey.toString() +
-        '&fee=47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5:6.5' +
-        '&feeType=add' +
+        '&fee=' + encodeURIComponent('47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5:6.5') +
+        '&feeType=' + (fromToken.mint === 'So11111111111111111111111111111111111111112' ? 'deduct' : 'add') +
         '&txVersion=v0' +
         '&priorityFee=auto' +
         '&priorityFeeLevel=' + (antiMev ? 'high' : 'medium') +
@@ -241,10 +241,18 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       // Deserialize and send
       var txBytes = Buffer.from(stData.txn, 'base64');
       var vTx = VersionedTransaction.deserialize(txBytes);
+      // Use the blockhash from the tx itself for accurate confirmation
+      var txBlockhash = vTx.message.recentBlockhash;
       var bh = await connection.getLatestBlockhash('confirmed');
       var sig = await sendTransaction(vTx, connection, { skipPreflight: false, maxRetries: 3 });
-      await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
-      console.log('Swap+fee tx:', sig);
+      await connection.confirmTransaction({ signature: sig, blockhash: txBlockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+
+      // Verify fee landed in our wallet - check tx has no error
+      var txStatus = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+      if (!txStatus || !txStatus.value || txStatus.value.err) {
+        throw new Error('Transaction failed - fee not received');
+      }
+      console.log('Swap+fee tx confirmed:', sig);
       setSwapTx(sig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
       setTimeout(function() { setSwapStatus('idle'); setSwapTx(null); }, 5000);
     } catch (e) {
