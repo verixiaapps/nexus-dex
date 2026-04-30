@@ -6,10 +6,10 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
- 
+
 function fmt(n, d) {
   d = d || 2;
-  if (n == null || n === 0) return '–';
+  if (n == null || n === 0) return '--';
   if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
   if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
@@ -18,7 +18,7 @@ function fmt(n, d) {
 }
 
 function pct(n) {
-  if (!n && n !== 0) return '–';
+  if (!n && n !== 0) return '--';
   return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 
@@ -59,7 +59,6 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     var trimmed = q.trim();
     if (!trimmed || trimmed.length < 2) { setSearchResults([]); setSearchToken(null); return; }
 
-    // Contract address lookup
     if (isValidMint(trimmed)) {
       setSearchLoading(true);
       Promise.all([
@@ -72,8 +71,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
         var pChange = gtData && gtData.price_change_percentage ? gtData.price_change_percentage : {};
         if (jupMeta || gtData) {
           setSearchToken({
-            id: trimmed,
-            mint: trimmed,
+            id: trimmed, mint: trimmed,
             symbol: (jupMeta && jupMeta.symbol) || (gtData && gtData.symbol) || trimmed.slice(0, 6) + '...',
             name: (jupMeta && jupMeta.name) || (gtData && gtData.name) || 'Unknown Token',
             image: (jupMeta && jupMeta.logoURI) || (gtData && gtData.image_url) || null,
@@ -82,8 +80,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
             total_volume: gtData ? parseFloat((gtData.volume_usd && gtData.volume_usd.h24) || 0) : 0,
             price_change_percentage_24h: pChange.h24 ? parseFloat(pChange.h24) : null,
             price_change_percentage_1h_in_currency: pChange.h1 ? parseFloat(pChange.h1) : null,
-            sparkline_in_7d: null,
-            isSolanaToken: true,
+            sparkline_in_7d: null, isSolanaToken: true,
           });
         }
         setSearchLoading(false);
@@ -91,7 +88,6 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
       return;
     }
 
-    // Name/symbol search
     setSearchToken(null);
     setSearchLoading(true);
     var ql = trimmed.toLowerCase();
@@ -117,16 +113,11 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     var qlLower = trimmed.toLowerCase();
 
     Promise.all([
-      fetch('https://lite-api.jup.ag/tokens/v1/tagged/strict')
-        .then(function(r) { return r.ok ? r.json() : []; })
-        .catch(function() { return []; }),
-      fetch('https://api.dexscreener.com/latest/dex/search?q=' + encodeURIComponent(trimmed))
-        .then(function(r) { return r.ok ? r.json() : { pairs: [] }; })
-        .catch(function() { return { pairs: [] }; }),
+      fetch('https://lite-api.jup.ag/tokens/v1/tagged/strict').then(function(r) { return r.ok ? r.json() : []; }).catch(function() { return []; }),
+      fetch('https://api.dexscreener.com/latest/dex/search?q=' + encodeURIComponent(trimmed)).then(function(r) { return r.ok ? r.json() : { pairs: [] }; }).catch(function() { return { pairs: [] }; }),
     ]).then(function(results) {
       var jupTokens = Array.isArray(results[0]) ? results[0] : [];
       var dexPairs = results[1].pairs || [];
-
       var existingSymbols = new Set(immediate.map(function(c) { return (c.symbol || '').toLowerCase(); }));
 
       var jupMatches = jupTokens.filter(function(t) {
@@ -146,19 +137,8 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
           if (existingSymbols.has(sym) || dexSeen.has(addr)) return false;
           dexSeen.add(addr);
           return true;
-        })
-        .slice(0, 20)
-        .map(function(p) {
-          return {
-            id: p.baseToken.address, mint: p.baseToken.address,
-            symbol: p.baseToken.symbol, name: p.baseToken.name,
-            image: null,
-            current_price: parseFloat(p.priceUsd || 0),
-            market_cap: p.fdv || 0,
-            total_volume: p.volume ? p.volume.h24 : 0,
-            price_change_percentage_24h: p.priceChange ? p.priceChange.h24 : null,
-            sparkline_in_7d: null, isSolanaToken: true,
-          };
+        }).slice(0, 20).map(function(p) {
+          return { id: p.baseToken.address, mint: p.baseToken.address, symbol: p.baseToken.symbol, name: p.baseToken.name, image: null, current_price: parseFloat(p.priceUsd || 0), market_cap: p.fdv || 0, total_volume: p.volume ? p.volume.h24 : 0, price_change_percentage_24h: p.priceChange ? p.priceChange.h24 : null, sparkline_in_7d: null, isSolanaToken: true };
         });
 
       var combined = immediate.concat(jupMatches).concat(dexMatches);
@@ -215,10 +195,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
       return (
         <div key={c.id} onClick={function() { onSelectCoin && onSelectCoin(c); }} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer' }} onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }} onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
           <div style={{ color: C.muted, fontSize: 11, width: 20, flexShrink: 0, textAlign: 'center' }}>{i + 1}</div>
-          {c.image
-            ? <img src={c.image} alt={c.symbol} style={{ width: 36, height: 36, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} />
-            : <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{c.symbol && c.symbol.charAt(0).toUpperCase()}</div>
-          }
+          {c.image ? <img src={c.image} alt={c.symbol} style={{ width: 36, height: 36, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{c.symbol && c.symbol.charAt(0).toUpperCase()}</div>}
           <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontWeight: 700, fontSize: 14, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
             <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{c.symbol && c.symbol.toUpperCase()}</div>
@@ -236,10 +213,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
       <div key={c.id} onClick={function() { onSelectCoin && onSelectCoin(c); }} style={{ display: 'grid', gridTemplateColumns: '32px 1fr 110px 80px 110px 90px', gap: 8, padding: '13px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer', alignItems: 'center' }} onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }} onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
         <div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-          {c.image
-            ? <img src={c.image} alt={c.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} />
-            : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{c.symbol && c.symbol.charAt(0).toUpperCase()}</div>
-          }
+          {c.image ? <img src={c.image} alt={c.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{c.symbol && c.symbol.charAt(0).toUpperCase()}</div>}
           <div style={{ minWidth: 0 }}>
             <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
             <div style={{ fontSize: 10, color: C.muted }}>{c.symbol && c.symbol.toUpperCase()}</div>
@@ -261,9 +235,9 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
           <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Search any token or paste a contract address</p>
         </div>
         <div style={{ position: 'relative', width: '100%', maxWidth: 280 }}>
-          <input value={q} onChange={function(e) { setQ(e.target.value); }} placeholder="Search name, symbol or paste address…" style={{ background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border), borderRadius: 10, padding: '9px 36px 9px 14px', color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: '100%' }} />
+          <input value={q} onChange={function(e) { setQ(e.target.value); }} placeholder="Search name, symbol or paste address..." style={{ background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border), borderRadius: 10, padding: '9px 36px 9px 14px', color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: '100%' }} />
           {q && <button onClick={function() { setQ(''); setSearchResults([]); setSearchToken(null); }} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 0 }}>x</button>}
-          {searchLoading && <div style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: C.accent, fontSize: 11 }}>…</div>}
+          {searchLoading && <div style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: C.accent, fontSize: 11 }}>...</div>}
         </div>
       </div>
 
@@ -287,16 +261,13 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
               <div style={{ textAlign: 'right', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>7D</div>
             </div>
           )}
-
           {sorted.length === 0 && q && !searchLoading && (
             <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>
               No tokens found for "{q}"
               {isContract && <div style={{ marginTop: 8, fontSize: 12 }}>Token may be too new or not indexed yet</div>}
             </div>
           )}
-
           {sorted.map(function(c, i) { return renderRow(c, i); })}
-
           {sorted.length === 0 && !q && !loading && (
             <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>No market data available</div>
           )}
