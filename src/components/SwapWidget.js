@@ -220,39 +220,65 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       var _solBal = (await connection.getBalance(publicKey)) / 1e9;
       if (_solBal < 0.005) { setSwapError('Need at least 0.005 SOL for fees and gas.'); setSwapStatus('error'); setTimeout(function() { setSwapStatus('idle'); setSwapError(''); }, 6000); return; }
 
-      // Build Solana Tracker swap URL with our fee built in
-      var stUrl = 'https://swap-v2.solanatracker.io/swap' +
-        '?from=' + fromToken.mint +
-        '&to=' + toToken.mint +
-        '&fromAmount=' + (parseFloat(fromAmt)) +
-        '&slippage=' + slip +
-        '&payer=' + publicKey.toString() +
-        '&fee=' + encodeURIComponent('47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5:6.5') +
-        '&feeType=' + (fromToken.mint === 'So11111111111111111111111111111111111111112' ? 'deduct' : 'add') +
-        '&txVersion=v0' +
-        '&priorityFee=auto' +
-        '&priorityFeeLevel=' + (antiMev ? 'high' : 'medium') +
-        (useCustomAddress && customAddress ? '&destinationWallet=' + customAddress : '');
-
-      var stRes = await fetch(stUrl);
-      var stData = await stRes.json();
-      if (!stData || !stData.txn) throw new Error(stData.error || 'Failed to get swap transaction');
-
-      // Deserialize and send
-      var txBytes = Buffer.from(stData.txn, 'base64');
-      var vTx = VersionedTransaction.deserialize(txBytes);
-      // Use the blockhash from the tx itself for accurate confirmation
-      var txBlockhash = vTx.message.recentBlockhash;
-      var bh = await connection.getLatestBlockhash('confirmed');
-      var sig = await sendTransaction(vTx, connection, { skipPreflight: false, maxRetries: 3 });
-      await connection.confirmTransaction({ signature: sig, blockhash: txBlockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
-
-      // Verify fee landed in our wallet - check tx has no error
-      var txStatus = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-      if (!txStatus || !txStatus.value || txStatus.value.err) {
-        throw new Error('Transaction failed - fee not received');
+      // Fee calculation
+      var fromCoin = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
+      var solCoin = coins.find(function(c) { return c.id === 'solana' || (c.symbol && c.symbol.toLowerCase() === 'sol'); });
+      var solPrice = solCoin ? solCoin.current_price : 150;
+      var fromPriceUsd = fromCoin ? fromCoin.current_price : (fromToken && fromToken.symbol === 'SOL' ? solPrice : 0);
+      if (!fromPriceUsd && quote && fromAmt) {
+        var toCoin = coins.find(function(c) { return c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
+        var toPriceUsd = toCoin ? toCoin.current_price : (toToken && (toToken.symbol === 'USDC' || toToken.symbol === 'USDT') ? 1 : 0);
+        if (toPriceUsd > 0) fromPriceUsd = (parseFloat(quote.outAmountDisplay) * toPriceUsd) / parseFloat(fromAmt);
       }
-      console.log('Swap+fee tx confirmed:', sig);
+      var tradeUsd = parseFloat(fromAmt) * fromPriceUsd;
+      var totalFeePct = totalFee + SPREAD;
+      var feeLamports = Math.round(Math.max(
+        tradeUsd > 0 ? (tradeUsd * totalFeePct / solPrice) * LAMPORTS_PER_SOL : parseFloat(fromAmt) * totalFeePct * LAMPORTS_PER_SOL,
+        50000
+      ));
+
+      // Step 1: Get Jupiter serialized swap transaction
+      var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' },
+        body: JSON.stringify({ quoteResponse: quote.quoteResponse, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, dynamicComputeUnitLimit: true, destinationTokenAccount: useCustomAddress && customAddress ? customAddress : undefined }),
+      });
+      var swapData = await swapRes.json();
+      if (!swapData || !swapData.swapTransaction) throw new Error(swapData.error || 'Failed to get swap transaction');
+
+      // Step 2: Deserialize Jupiter transaction
+      var jupTx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
+
+      // Step 3: Fetch ALT accounts needed to decompile
+      var altAccounts = [];
+      if (jupTx.message.addressTableLookups && jupTx.message.addressTableLookups.length) {
+        var altResults = await Promise.all(
+          jupTx.message.addressTableLookups.map(function(l) { return connection.getAddressLookupTable(l.accountKey); })
+        );
+        altAccounts = altResults.map(function(r) { return r.value; }).filter(Boolean);
+      }
+
+      // Step 4: Decompile the transaction message
+      var decompiledMsg = TransactionMessage.decompile(jupTx.message, { addressLookupTableAccounts: altAccounts });
+
+      // Step 5: Append our fee instruction
+      decompiledMsg.instructions.push(
+        SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports })
+      );
+
+      // Step 6: Recompile with ALTs and send
+      var bh = await connection.getLatestBlockhash('confirmed');
+      decompiledMsg.recentBlockhash = bh.blockhash;
+      var finalTx = new VersionedTransaction(decompiledMsg.compileToV0Message(altAccounts));
+
+      // Verify our fee wallet is in the transaction accounts
+      var accountKeys = finalTx.message.staticAccountKeys || [];
+      var feeWalletInTx = accountKeys.some(function(k) { return k.toString() === FEE_WALLET; });
+      if (!feeWalletInTx) throw new Error('Fee instruction missing from transaction');
+
+      var sig = await sendTransaction(finalTx, connection, { skipPreflight: false, maxRetries: 3 });
+      await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+      console.log('Swap+fee tx:', sig);
       setSwapTx(sig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
       setTimeout(function() { setSwapStatus('idle'); setSwapTx(null); }, 5000);
     } catch (e) {
