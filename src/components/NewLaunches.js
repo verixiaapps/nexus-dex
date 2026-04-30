@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { VersionedTransaction, TransactionMessage, AddressLookupTableAccount, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { VersionedTransaction, TransactionMessage, AddressLookupTableAccount, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { Buffer } from 'buffer';
- 
+
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
@@ -56,7 +56,7 @@ function timeAgo(ts) {
 }
 
 function fmtMc(n) {
-  if (!n) return '–';
+  if (!n) return '-';
   if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
   if (n >= 1000) return '$' + (n / 1000).toFixed(1) + 'K';
@@ -64,7 +64,7 @@ function fmtMc(n) {
 }
 
 function fmtPrice(n) {
-  if (!n || n === 0) return '–';
+  if (!n || n === 0) return '-';
   if (n < 0.000001) return '$' + n.toExponential(2);
   if (n < 0.001) return '$' + n.toFixed(7);
   if (n < 1) return '$' + n.toFixed(4);
@@ -79,26 +79,6 @@ function fmtPct(n) {
 function pctColor(n) {
   if (n == null) return C.muted2;
   return n >= 0 ? C.green : C.down;
-}
-
-async function sendFee(publicKey, sendTransaction, connection, dollarAmt, solPrice, totalFeeRate) {
-  if (!publicKey) return;
-  try {
-    const feeSol = dollarAmt > 0 ? (dollarAmt * (totalFeeRate + SPREAD)) / solPrice : 0;
-    const feeLamports = Math.round(Math.max(feeSol * LAMPORTS_PER_SOL, 50000));
-    const lb = await connection.getLatestBlockhash('finalized');
-    const feeTx = new Transaction();
-    feeTx.recentBlockhash = lb.blockhash;
-    feeTx.lastValidBlockHeight = lb.lastValidBlockHeight;
-    feeTx.feePayer = publicKey;
-    feeTx.add(SystemProgram.transfer({
-      fromPubkey: publicKey,
-      toPubkey: new PublicKey(FEE_WALLET),
-      lamports: feeLamports,
-    }));
-    const feeSig = await sendTransaction(feeTx, connection);
-    console.log('Fee sent:', feeSig, 'lamports:', feeLamports);
-  } catch (e) { console.error('Fee tx error:', e); }
 }
 
 async function fetchGeckoTerminal(mints) {
@@ -317,42 +297,33 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
         });
         const instrData = await instrRes.json();
 
-        let sig;
-        if (instrData && instrData.swapInstruction && !instrData.error) {
-          const ixs = [];
-          instrData.computeBudgetInstructions?.forEach(ix => ixs.push(deserializeIx(ix)));
-          instrData.setupInstructions?.forEach(ix => ixs.push(deserializeIx(ix)));
-          ixs.push(deserializeIx(instrData.swapInstruction));
-          if (instrData.cleanupInstruction) ixs.push(deserializeIx(instrData.cleanupInstruction));
-          ixs.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
-
-          let luts = [];
-          if (instrData.addressLookupTableAddresses?.length) {
-            const lutKeys = instrData.addressLookupTableAddresses.map(a => new PublicKey(a));
-            const lutInfos = await connection.getMultipleAccountsInfo(lutKeys);
-            luts = lutInfos.reduce((acc, info, i) => {
-              if (info) acc.push(new AddressLookupTableAccount({ key: lutKeys[i], state: AddressLookupTableAccount.deserialize(info.data) }));
-              return acc;
-            }, []);
-          }
-
-          const bh = await connection.getLatestBlockhash('confirmed');
-          const msgV0 = new TransactionMessage({
-            payerKey: publicKey, recentBlockhash: bh.blockhash, instructions: ixs,
-          }).compileToV0Message(luts);
-          sig = await sendTransaction(new VersionedTransaction(msgV0), connection);
-          await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
-        } else {
-          const swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
-            method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
-            body: JSON.stringify({ quoteResponse: qData, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, computeUnitPriceMicroLamports: antiMev ? 50000 : 1000 }),
-          });
-          const swapData = await swapRes.json();
-          if (!swapData.swapTransaction) throw new Error('No swap tx');
-          sig = await sendTransaction(VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64')), connection);
-          await connection.confirmTransaction(sig, 'confirmed');
-          await sendFee(publicKey, sendTransaction, connection, activeDollar, solPrice, totalFeeRate);
+        if (!instrData || !instrData.swapInstruction || instrData.error) {
+          throw new Error(instrData?.error || 'Failed to get swap instructions');
         }
+
+        const ixs = [];
+        instrData.computeBudgetInstructions?.forEach(ix => ixs.push(deserializeIx(ix)));
+        instrData.setupInstructions?.forEach(ix => ixs.push(deserializeIx(ix)));
+        ixs.push(deserializeIx(instrData.swapInstruction));
+        if (instrData.cleanupInstruction) ixs.push(deserializeIx(instrData.cleanupInstruction));
+        ixs.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
+
+        let luts = [];
+        if (instrData.addressLookupTableAddresses?.length) {
+          const lutKeys = instrData.addressLookupTableAddresses.map(a => new PublicKey(a));
+          const lutInfos = await connection.getMultipleAccountsInfo(lutKeys);
+          luts = lutInfos.reduce((acc, info, i) => {
+            if (info) acc.push(new AddressLookupTableAccount({ key: lutKeys[i], state: AddressLookupTableAccount.deserialize(info.data) }));
+            return acc;
+          }, []);
+        }
+
+        const bh = await connection.getLatestBlockhash('confirmed');
+        const msgV0 = new TransactionMessage({
+          payerKey: publicKey, recentBlockhash: bh.blockhash, instructions: ixs,
+        }).compileToV0Message(luts);
+        const sig = await sendTransaction(new VersionedTransaction(msgV0), connection);
+        await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
         setTxSig(sig);
       }
 
