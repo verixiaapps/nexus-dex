@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAccount, useDisconnect } from 'wagmi';
 import { useWeb3Modal } from '@web3modal/wagmi/react';
+import { createConfig } from '@lifi/sdk';
 import SwapWidget from './components/SwapWidget';
 import Markets from './components/Markets';
 import BuyCrypto from './components/BuyCrypto';
@@ -9,6 +10,12 @@ import Portfolio from './components/Portfolio';
 import TokenDetail from './components/TokenDetail';
 import Send from './components/Send';
 import NewLaunches from './components/NewLaunches';
+
+// Initialize LI.FI SDK once
+createConfig({
+  integrator: 'nexus-dex',
+  apiKey: process.env.REACT_APP_LIFI_API_KEY || '',
+});
 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
