@@ -1,8 +1,11 @@
+Fixes (9): same as previous versions — '–' → '--' in fmt and pct, '…' → '...' in lookupByAddress ×2, quoteLoading ? '...', 'Confirming...', 'Getting Best Route...', and both destination wallet placeholders.
+
+Note: this version uses the LI.FI REST API directly (https://li.quest/v1/quote) rather than the @lifi/sdk — no getQuote/executeRoute imports needed.
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useAccount, useWalletClient } from 'wagmi';
-import { getQuote, executeRoute } from '@lifi/sdk';
 import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
 
 const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
@@ -238,32 +241,34 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       } else if (route === '0x') {
         var sellAmt = (parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toFixed(0);
         var taker = evmAddress || '0x0000000000000000000000000000000000000000';
-        var params = new URLSearchParams({ chainId: fromToken.chainId.toString(), sellToken: fromToken.address, buyToken: toToken.address, sellAmount: sellAmt, taker: taker, swapFeeBps: '550', swapFeeRecipient: EVM_FEE_WALLET, swapFeeToken: toToken.address === NATIVE ? fromToken.address : toToken.address, slippageBps: Math.round(slip * 100).toString() });
+        var params = new URLSearchParams({ chainId: fromToken.chainId.toString(), sellToken: fromToken.address, buyToken: toToken.address, sellAmount: sellAmt, taker: taker, slippageBps: Math.round(slip * 100).toString() });
         var oxRes = await fetch('https://api.0x.org/swap/allowance-holder/price?' + params.toString(), { headers: { '0x-api-key': process.env.REACT_APP_0X_API_KEY || '', '0x-version': 'v2' } });
         var oxData = await oxRes.json();
         if (oxData && oxData.buyAmount) {
           setQuote({ outAmountDisplay: (parseInt(oxData.buyAmount) / Math.pow(10, toToken.decimals)).toFixed(6), priceImpactPct: 0, engine: '0x' });
-        } else { setQuoteError((oxData && oxData.message) || 'No 0x route found'); }
+        } else { setQuoteError((oxData && (oxData.message || oxData.reason || JSON.stringify(oxData))) || 'No 0x route found'); }
 
       } else {
         var fromAddr = isSol(fromToken) ? (publicKey ? publicKey.toString() : '') : (evmAddress || '');
-        var fromChainId = isSol(fromToken) ? 'SOL' : fromToken.chainId;
-        var toChainId = isSol(toToken) ? 'SOL' : toToken.chainId;
+        var fromChainId = isSol(fromToken) ? 'SOL' : fromToken.chainId.toString();
+        var toChainId = isSol(toToken) ? 'SOL' : toToken.chainId.toString();
         var fromTokenAddr = isSol(fromToken) ? fromToken.mint : fromToken.address;
         var toTokenAddr = isSol(toToken) ? toToken.mint : toToken.address;
         var fromAmtRaw = (parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toFixed(0);
         var toAddr = isSol(toToken)
           ? (publicKey ? publicKey.toString() : customAddress)
           : (evmAddress || customAddress);
-        var lifiParams = {
+        var lifiQParams = new URLSearchParams({
           fromChain: fromChainId, toChain: toChainId,
           fromToken: fromTokenAddr, toToken: toTokenAddr,
           fromAmount: fromAmtRaw,
-          slippage: slip / 100,
-        };
-        if (fromAddr) lifiParams.fromAddress = fromAddr;
-        if (toAddr) lifiParams.toAddress = toAddr;
-        var lifiQuote = await getQuote(lifiParams);
+          slippage: (slip / 100).toString(),
+        });
+        lifiQParams.set('fromAddress', (fromAddr && fromAddr.length > 10) ? fromAddr : (isSol(fromToken) ? '11111111111111111111111111111111' : '0x0000000000000000000000000000000000000001'));
+        lifiQParams.set('toAddress', (toAddr && toAddr.length > 10) ? toAddr : (isSol(toToken) ? '11111111111111111111111111111111' : '0x0000000000000000000000000000000000000001'));
+        var lifiRes = await fetch('https://li.quest/v1/quote?' + lifiQParams.toString());
+        var lifiQuote = await lifiRes.json();
+        if (!lifiRes.ok) throw new Error(lifiQuote.message || 'No cross-chain route found');
         var toAmt = lifiQuote && lifiQuote.estimate && lifiQuote.estimate.toAmount;
         if (toAmt) {
           var outDisp = (parseInt(toAmt) / Math.pow(10, toToken.decimals)).toFixed(6);
@@ -363,11 +368,24 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
 
       } else {
         if (!lifiRoute) throw new Error('No cross-chain route available');
-        var result = await executeRoute(lifiRoute, {
-          updateRouteHook: function(updatedRoute) { setLifiRoute(updatedRoute); },
-        });
-        if (result && result.transactionHash) setSwapTx(result.transactionHash);
-        else if (result && result.signature) setSwapTx(result.signature);
+        var lifiStep = lifiRoute.transactionRequest;
+        if (!lifiStep) throw new Error('No transaction data in route');
+        if (isSol(fromToken)) {
+          if (!publicKey) throw new Error('Connect Solana wallet');
+          var lifiTxData = lifiStep.data;
+          var lifiTx = VersionedTransaction.deserialize(Buffer.from(lifiTxData.replace('0x', ''), 'hex'));
+          var lifiSig = await sendTransaction(lifiTx, connection, { skipPreflight: false, maxRetries: 3 });
+          setSwapTx(lifiSig);
+        } else {
+          if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
+          var lifiTxHash = await walletClient.sendTransaction({
+            to: lifiStep.to,
+            data: lifiStep.data,
+            value: lifiStep.value ? BigInt(lifiStep.value) : BigInt(0),
+            gasLimit: lifiStep.gasLimit ? BigInt(lifiStep.gasLimit) : undefined,
+          });
+          setSwapTx(lifiTxHash);
+        }
       }
 
       setSwapStatus('success'); setFromAmt(''); setQuote(null); setLifiRoute(null);
