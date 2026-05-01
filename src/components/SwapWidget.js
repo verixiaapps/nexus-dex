@@ -8,10 +8,7 @@ import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, Tra
 const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const EVM_FEE_WALLET = '0xC41c1de4250104dC1EE2854ffD5b40a04B9AC9fF';
 const BASE_FEE = 0.04;
-const ANTIMEV_FEE = 0.02;
 const SPREAD = 0.005;
-const LIFI_FEE = 0.085;
-
 var NATIVE = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
 var CHAIN_NAMES = { 1: 'Ethereum', 137: 'Polygon', 42161: 'Arbitrum', 8453: 'Base', 56: 'BNB Chain', 43114: 'Avalanche', 10: 'Optimism' };
 
@@ -212,7 +209,6 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState('');
   const [slip, setSlip] = useState(0.5);
-  const [antiMev, setAntiMev] = useState(true);
   const [swapStatus, setSwapStatus] = useState('idle');
   const [swapTx, setSwapTx] = useState(null);
   const [swapError, setSwapError] = useState('');
@@ -223,7 +219,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   const [lifiRoute, setLifiRoute] = useState(null);
 
   var route = getRoute(fromToken, toToken);
-  var totalFee = antiMev ? BASE_FEE + ANTIMEV_FEE : BASE_FEE;
+  var totalFee = BASE_FEE + 0.02;
 
   var fetchQuote = useCallback(async function() {
     setQuote(null); setQuoteError(''); setLifiRoute(null);
@@ -232,7 +228,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     try {
       if (route === 'jupiter') {
         var amount = Math.round(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals));
-        var url = 'https://api.jup.ag/swap/v1/quote?inputMint=' + fromToken.mint + '&outputMint=' + toToken.mint + '&amount=' + amount + '&slippageBps=' + Math.round(slip * 100) + '&restrictIntermediateTokens=true';
+        var url = 'https://api.jup.ag/swap/v1/quote?inputMint=' + fromToken.mint + '&outputMint=' + toToken.mint + '&amount=' + amount + '&slippageBps=' + Math.round(slip * 100) + '';
         var res = await fetch(url, { headers: { 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' } });
         var data = await res.json();
         if (data && data.outAmount) {
@@ -242,7 +238,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       } else if (route === '0x') {
         var sellAmt = (parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toFixed(0);
         var taker = evmAddress || '0x0000000000000000000000000000000000000000';
-        var params = new URLSearchParams({ chainId: fromToken.chainId.toString(), sellToken: fromToken.address, buyToken: toToken.address, sellAmount: sellAmt, taker: taker, swapFeeBps: '550', swapFeeRecipient: EVM_FEE_WALLET, swapFeeToken: toToken.address, slippageBps: Math.round(slip * 100).toString() });
+        var params = new URLSearchParams({ chainId: fromToken.chainId.toString(), sellToken: fromToken.address, buyToken: toToken.address, sellAmount: sellAmt, taker: taker, swapFeeBps: '550', swapFeeRecipient: EVM_FEE_WALLET, swapFeeToken: toToken.address === NATIVE ? fromToken.address : toToken.address, slippageBps: Math.round(slip * 100).toString() });
         var oxRes = await fetch('https://api.0x.org/swap/allowance-holder/price?' + params.toString(), { headers: { '0x-api-key': process.env.REACT_APP_0X_API_KEY || '', '0x-version': 'v2' } });
         var oxData = await oxRes.json();
         if (oxData && oxData.buyAmount) {
@@ -256,15 +252,21 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         var fromTokenAddr = isSol(fromToken) ? fromToken.mint : fromToken.address;
         var toTokenAddr = isSol(toToken) ? toToken.mint : toToken.address;
         var fromAmtRaw = (parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toFixed(0);
-        var lifiQuote = await getQuote({
+        var toAddr = isSol(toToken)
+          ? (publicKey ? publicKey.toString() : customAddress)
+          : (evmAddress || customAddress);
+        var lifiParams = {
           fromChain: fromChainId, toChain: toChainId,
           fromToken: fromTokenAddr, toToken: toTokenAddr,
           fromAmount: fromAmtRaw,
-          fromAddress: fromAddr || '0x0000000000000000000000000000000000000000',
-          fee: LIFI_FEE, integrator: 'nexus-dex', slippage: slip / 100,
-        });
-        if (lifiQuote && lifiQuote.estimate) {
-          var outDisp = (parseInt(lifiQuote.estimate.toAmount) / Math.pow(10, toToken.decimals)).toFixed(6);
+          slippage: slip / 100,
+        };
+        if (fromAddr) lifiParams.fromAddress = fromAddr;
+        if (toAddr) lifiParams.toAddress = toAddr;
+        var lifiQuote = await getQuote(lifiParams);
+        var toAmt = lifiQuote && lifiQuote.estimate && lifiQuote.estimate.toAmount;
+        if (toAmt) {
+          var outDisp = (parseInt(toAmt) / Math.pow(10, toToken.decimals)).toFixed(6);
           setQuote({ outAmountDisplay: outDisp, priceImpactPct: 0, engine: 'lifi' });
           setLifiRoute(lifiQuote);
         } else { setQuoteError('No cross-chain route found'); }
@@ -351,7 +353,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       } else if (route === '0x') {
         if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
         var sellAmt2 = (parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toFixed(0);
-        var params2 = new URLSearchParams({ chainId: fromToken.chainId.toString(), sellToken: fromToken.address, buyToken: toToken.address, sellAmount: sellAmt2, taker: evmAddress, swapFeeBps: '550', swapFeeRecipient: EVM_FEE_WALLET, swapFeeToken: toToken.address, slippageBps: Math.round(slip * 100).toString() });
+        var params2 = new URLSearchParams({ chainId: fromToken.chainId.toString(), sellToken: fromToken.address, buyToken: toToken.address, sellAmount: sellAmt2, taker: evmAddress, swapFeeBps: '550', swapFeeRecipient: EVM_FEE_WALLET, swapFeeToken: toToken.address === NATIVE ? fromToken.address : toToken.address, slippageBps: Math.round(slip * 100).toString() });
         var oxQuoteRes = await fetch('https://api.0x.org/swap/allowance-holder/quote?' + params2.toString(), { headers: { '0x-api-key': process.env.REACT_APP_0X_API_KEY || '', '0x-version': 'v2' } });
         var oxQuote = await oxQuoteRes.json();
         if (!oxQuote || !oxQuote.transaction) throw new Error((oxQuote && oxQuote.message) || 'Failed to get 0x quote');
@@ -443,40 +445,35 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           {quote && toPriceVal > 0 && <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(quote.outAmountDisplay) * toPriceVal)}</div>}
         </div>
         {quoteError && <div style={{ marginTop: 8, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.2)', borderRadius: 8, fontSize: 12, color: C.red }}>{quoteError}</div>}
-        {route === 'jupiter' && (
+        {route === 'jupiter' && quote && fromAmt && (
           <div style={{ marginTop: 12, background: '#050912', borderRadius: 10, padding: 12 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <div>
-                <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>ANTI-MEV PROTECTION</span>
-                <div style={{ fontSize: 10, color: antiMev ? C.accent : C.muted, marginTop: 2 }}>{antiMev ? 'ON - Priority, bot protected (+2%)' : 'OFF - Standard processing (saves 2%)'}</div>
-              </div>
-              <button onClick={function() { setAntiMev(!antiMev); }} style={{ width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', background: antiMev ? C.accent : C.muted2, transition: 'background .2s', position: 'relative', flexShrink: 0 }}>
-                <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: antiMev ? 23 : 3, transition: 'left .2s' }} />
-              </button>
+            <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
+              {[
+                ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
+                ['Min Received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken ? toToken.symbol : '')],
+              ].map(function(item) {
+                return <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}><span style={{ color: C.muted }}>{item[0]}</span><span style={{ color: C.text }}>{item[1]}</span></div>;
+              })}
             </div>
-            {quote && fromAmt && (
-              <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
-                {[
-                  ['Platform Fee (4%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.04).toFixed(2)],
-                  antiMev ? ['Anti-MEV Fee (2%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.02).toFixed(2)] : null,
-                  ['Service Fee (1%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.01).toFixed(2)],
-                  ['Total Fee (' + (totalFee * 100).toFixed(0) + '%)', '$' + feeUsd],
-                  ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
-                  ['Min Received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken ? toToken.symbol : '')],
-                ].filter(Boolean).map(function(item) {
-                  return <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}><span style={{ color: C.muted }}>{item[0]}</span><span style={{ color: item[0].includes('Total') ? C.accent : C.text }}>{item[1]}</span></div>;
-                })}
-              </div>
-            )}
           </div>
         )}
-        {isSol(toToken) && (
+        {(isSol(toToken) || route === 'lifi') && (
           <div style={{ marginTop: 10 }}>
-            <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-              <input type="checkbox" checked={useCustomAddress} onChange={function(e) { setUseCustomAddress(e.target.checked); }} style={{ cursor: 'pointer', width: 14, height: 14 }} />
-              <span style={{ fontSize: 12, color: C.muted }}>Send to different wallet</span>
-            </label>
-            {useCustomAddress && <input value={customAddress} onChange={function(e) { setCustomAddress(e.target.value); }} placeholder="Paste Solana wallet address..." style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 10, padding: '10px 12px', color: C.accent, fontFamily: 'monospace', fontSize: 11, outline: 'none', marginTop: 8 }} />}
+            {route === 'lifi' ? (
+              <div>
+                <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 6 }}>DESTINATION WALLET</div>
+                <input value={customAddress} onChange={function(e) { setCustomAddress(e.target.value); }} placeholder={isSol(toToken) ? 'Your Solana wallet address...' : 'Your EVM wallet address (0x...)...'} style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 10, padding: '10px 12px', color: C.accent, fontFamily: 'monospace', fontSize: 11, outline: 'none' }} />
+                <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Enter the wallet where you want to receive your tokens</div>
+              </div>
+            ) : (
+              <>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
+                  <input type="checkbox" checked={useCustomAddress} onChange={function(e) { setUseCustomAddress(e.target.checked); }} style={{ cursor: 'pointer', width: 14, height: 14 }} />
+                  <span style={{ fontSize: 12, color: C.muted }}>Send to different wallet</span>
+                </label>
+                {useCustomAddress && <input value={customAddress} onChange={function(e) { setCustomAddress(e.target.value); }} placeholder="Paste Solana wallet address..." style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 10, padding: '10px 12px', color: C.accent, fontFamily: 'monospace', fontSize: 11, outline: 'none', marginTop: 8 }} />}
+              </>
+            )}
           </div>
         )}
         {swapError && <div style={{ marginTop: 10, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 8, fontSize: 12, color: C.red }}>{swapError}</div>}
