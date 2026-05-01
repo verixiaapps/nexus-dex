@@ -459,22 +459,22 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           {quote && toPriceVal > 0 && <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(quote.outAmountDisplay) * toPriceVal)}</div>}
         </div>
         {quoteError && <div style={{ marginTop: 8, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.2)', borderRadius: 8, fontSize: 12, color: C.red }}>{quoteError}</div>}
-        {route === 'jupiter' && quote && fromAmt && (
+        {quote && fromAmt && (
           <div style={{ marginTop: 12, background: '#050912', borderRadius: 10, padding: 12 }}>
             <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
               {[
                 ['Platform Fee (4%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.04).toFixed(2)],
                 ['Service Fee (2%)', '$' + (parseFloat(fromAmt) * fromPriceVal * 0.02).toFixed(2)],
                 ['Total Fee (6%)', '$' + feeUsd],
-                ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'],
-                ['Min Received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken ? toToken.symbol : '')],
-              ].map(function(item) {
+                route === 'jupiter' ? ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'] : null,
+                route === 'jupiter' ? ['Min Received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken ? toToken.symbol : '')] : null,
+              ].filter(Boolean).map(function(item) {
                 return <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}><span style={{ color: C.muted }}>{item[0]}</span><span style={{ color: item[0].includes('Total') ? C.accent : C.text }}>{item[1]}</span></div>;
               })}
             </div>
           </div>
         )}
-        {(isSol(toToken) || route === 'lifi') && (
+        {route === 'lifi' && (
           <div style={{ marginTop: 10 }}>
             {route === 'lifi' ? (
               <div>
