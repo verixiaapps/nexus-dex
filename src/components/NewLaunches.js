@@ -73,26 +73,6 @@ function pctColor(n) {
   return n >= 0 ? C.green : C.down;
 }
 
-async function sendFee(publicKey, sendTransaction, connection, dollarAmt, solPrice, totalFeeRate) {
-  if (!publicKey) return;
-  try {
-    var feeSol = dollarAmt > 0 ? (dollarAmt * (totalFeeRate + SPREAD)) / solPrice : 0;
-    var feeLamports = Math.round(Math.max(feeSol * LAMPORTS_PER_SOL, 50000));
-    var lb = await connection.getLatestBlockhash('finalized');
-    var feeTx = new Transaction();
-    feeTx.recentBlockhash = lb.blockhash;
-    feeTx.lastValidBlockHeight = lb.lastValidBlockHeight;
-    feeTx.feePayer = publicKey;
-    feeTx.add(SystemProgram.transfer({
-      fromPubkey: publicKey,
-      toPubkey: new PublicKey(FEE_WALLET),
-      lamports: feeLamports,
-    }));
-    var feeSig = await sendTransaction(feeTx, connection);
-    console.log('Fee sent:', feeSig, 'lamports:', feeLamports);
-  } catch (e) { console.error('Fee tx error:', e); }
-}
-
 async function fetchGeckoTerminal(mints) {
   if (!mints || !mints.length) return {};
   try {
