@@ -1,7 +1,3 @@
-Fixes (9): same as previous versions — '–' → '--' in fmt and pct, '…' → '...' in lookupByAddress ×2, quoteLoading ? '...', 'Confirming...', 'Getting Best Route...', and both destination wallet placeholders.
-
-Note: this version uses the LI.FI REST API directly (https://li.quest/v1/quote) rather than the @lifi/sdk — no getQuote/executeRoute imports needed.
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
