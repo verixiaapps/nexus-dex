@@ -97,22 +97,36 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
           var uiAmount = info.tokenAmount.uiAmount;
           if (uiAmount && uiAmount > 0.000001) {
             var tokenInfo = getTokenInfo(mint);
-            holdings.push({
-              mint: mint,
-              symbol: tokenInfo ? tokenInfo.symbol : mint.slice(0, 4) + '...' + mint.slice(-4),
-              name: tokenInfo ? tokenInfo.name : 'Unknown Token',
-              logoURI: tokenInfo ? tokenInfo.logoURI : null,
-              decimals: info.tokenAmount.decimals,
-              uiAmount: uiAmount,
-            });
+            holdings.push({ mint: mint, symbol: tokenInfo ? tokenInfo.symbol : mint.slice(0, 4) + '...' + mint.slice(-4), name: tokenInfo ? tokenInfo.name : 'Unknown Token', logoURI: tokenInfo ? tokenInfo.logoURI : null, decimals: info.tokenAmount.decimals, uiAmount: uiAmount });
           }
         } catch (e) {}
       });
-      holdings.sort(function(a, b) { return (b.uiAmount * getPrice(b.symbol)) - (a.uiAmount * getPrice(a.symbol)); });
+      var missingMints = holdings.filter(function(h) { return getPrice(h.symbol) === 0 && h.mint; }).map(function(h) { return h.mint; });
+      var jupPrices = {};
+      if (missingMints.length > 0) {
+        try {
+          var jupRes = await fetch('https://api.jup.ag/price/v2?ids=' + missingMints.slice(0, 100).join(','));
+          var jupData = await jupRes.json();
+          if (jupData.data) jupPrices = jupData.data;
+        } catch (e) {}
+      }
+
+      var getTokenPrice = function(h) {
+        var cgPrice = getPrice(h.symbol);
+        if (cgPrice > 0) return cgPrice;
+        var jupPrice = jupPrices[h.mint];
+        return jupPrice && jupPrice.price ? parseFloat(jupPrice.price) : 0;
+      };
+
+      holdings = holdings.map(function(h) {
+        return Object.assign({}, h, { jupPrice: jupPrices[h.mint] ? parseFloat(jupPrices[h.mint].price) : 0 });
+      });
+
+      holdings.sort(function(a, b) { return (b.uiAmount * getTokenPrice(b)) - (a.uiAmount * getTokenPrice(a)); });
       setBalances(holdings);
       var solPrice = getPrice('SOL');
       var total = solAmt * solPrice;
-      holdings.forEach(function(h) { total += h.uiAmount * getPrice(h.symbol); });
+      holdings.forEach(function(h) { total += h.uiAmount * getTokenPrice(h); });
       setTotalValue(total);
     } catch (e) {
       console.error('Balance fetch error:', e);
@@ -185,12 +199,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginBottom: 16 }}>
         {[['Total Value', fmt(totalValue), C.accent], ['SOL Balance', solBalance.toFixed(4) + ' SOL', C.green], ['SOL Value', fmt(solValue), C.text], ['Assets', (balances.length + 1) + ' tokens', C.muted]].map(function(item) {
-          return (
-            <div key={item[0]} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 16 }}>
-              <div style={{ fontSize: 10, color: C.muted, marginBottom: 6, fontWeight: 700, letterSpacing: .8 }}>{item[0]}</div>
-              <div style={{ fontSize: 16, color: item[2], fontWeight: 600 }}>{item[1]}</div>
-            </div>
-          );
+          return <div key={item[0]} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 16 }}><div style={{ fontSize: 10, color: C.muted, marginBottom: 6, fontWeight: 700, letterSpacing: .8 }}>{item[0]}</div><div style={{ fontSize: 16, color: item[2], fontWeight: 600 }}>{item[1]}</div></div>;
         })}
       </div>
 
@@ -203,9 +212,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
 
       <div style={{ display: 'flex', gap: 4, marginBottom: 14 }}>
         {[['holdings', 'Holdings'], ['activity', 'Activity']].map(function(item) {
-          return (
-            <button key={item[0]} onClick={function() { setActiveTab(item[0]); }} style={{ padding: '7px 16px', borderRadius: 8, fontSize: 12, fontWeight: 600, fontFamily: 'Syne, sans-serif', cursor: 'pointer', background: activeTab === item[0] ? 'rgba(0,229,255,.09)' : 'transparent', border: '1px solid ' + (activeTab === item[0] ? 'rgba(0,229,255,.25)' : C.border), color: activeTab === item[0] ? C.accent : C.muted }}>{item[1]}</button>
-          );
+          return <button key={item[0]} onClick={function() { setActiveTab(item[0]); }} style={{ padding: '7px 16px', borderRadius: 8, fontSize: 12, fontWeight: 600, fontFamily: 'Syne, sans-serif', cursor: 'pointer', background: activeTab === item[0] ? 'rgba(0,229,255,.09)' : 'transparent', border: '1px solid ' + (activeTab === item[0] ? 'rgba(0,229,255,.25)' : C.border), color: activeTab === item[0] ? C.accent : C.muted }}>{item[1]}</button>;
         })}
       </div>
 
@@ -229,16 +236,13 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
             <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>No other token balances found</div>
           ) : (
             balances.map(function(token) {
-              var price = getPrice(token.symbol);
+              var price = getPrice(token.symbol) || token.jupPrice || 0;
               var value = token.uiAmount * price;
               return (
                 <div key={token.mint} onClick={function() { onSelectToken && onSelectToken({ id: token.mint, symbol: token.symbol, name: token.name, image: token.logoURI, current_price: price, isSolanaToken: true, mint: token.mint }); }} style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: onSelectToken ? 'pointer' : 'default' }} onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }} onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     {token.logoURI ? <img src={token.logoURI} alt={token.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{token.symbol && token.symbol.charAt(0)}</div>}
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.symbol}</div>
-                      <div style={{ color: C.muted, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.name}</div>
-                    </div>
+                    <div style={{ minWidth: 0 }}><div style={{ color: '#fff', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.symbol}</div><div style={{ color: C.muted, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.name}</div></div>
                   </div>
                   <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{token.uiAmount >= 1000 ? token.uiAmount.toLocaleString('en-US', { maximumFractionDigits: 2 }) : token.uiAmount.toFixed(4)}</div>
                   <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{price > 0 ? fmt(price) : '--'}</div>
@@ -269,10 +273,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
                 <div key={token.chain + '-' + token.address + '-' + i} style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', alignItems: 'center' }} onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }} onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
                     {token.logo ? <img src={token.logo} alt={token.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(98,126,234,.15)', border: '1px solid rgba(98,126,234,.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#627eea', flexShrink: 0 }}>{token.symbol.charAt(0)}</div>}
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{token.symbol}</div>
-                      <div style={{ fontSize: 10, color: C.muted }}>{token.chainName}</div>
-                    </div>
+                    <div style={{ minWidth: 0 }}><div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{token.symbol}</div><div style={{ fontSize: 10, color: C.muted }}>{token.chainName}</div></div>
                   </div>
                   <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{token.balance >= 1000 ? token.balance.toLocaleString('en-US', { maximumFractionDigits: 2 }) : token.balance.toFixed(4)}</div>
                   <div style={{ textAlign: 'right', fontSize: 12 }}>
@@ -290,6 +291,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
 
       {activeTab === 'activity' && (
         <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 40, textAlign: 'center' }}>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>T</div>
           <div style={{ color: '#fff', fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Transaction History</div>
           <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 280, margin: '0 auto 20px' }}>View your full transaction history on Solscan.</p>
           {walletAddress && <a href={'https://solscan.io/account/' + walletAddress} target="_blank" rel="noreferrer" style={{ display: 'inline-block', padding: '10px 24px', borderRadius: 10, background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)', color: C.accent, fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>View on Solscan</a>}
@@ -298,4 +300,3 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
     </div>
   );
 }
-
