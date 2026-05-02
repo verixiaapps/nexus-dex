@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { useAccount, useWalletClient } from 'wagmi';
+import { useAccount, useWalletClient, useBalance } from 'wagmi';
 import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
 
 const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
@@ -254,6 +254,16 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   const [toBalance, setToBalance] = useState(null);
   const [lifiRoute, setLifiRoute] = useState(null);
   const [customAddress, setCustomAddress] = useState('');
+
+  // EVM balance for MAX button on sells -- native token uses undefined tokenAddress
+  var isEvmFrom = isEvm(fromToken);
+  var isNativeEvmFrom = isEvmFrom && fromToken.address === NATIVE;
+  const { data: evmFromBalanceData } = useBalance({
+    address: evmAddress,
+    token: isEvmFrom && !isNativeEvmFrom ? fromToken.address : undefined,
+    chainId: isEvmFrom ? fromToken.chainId : undefined,
+    query: { enabled: !!evmAddress && isEvmFrom },
+  });
 
   var route = getRoute(fromToken, toToken);
   // FIX 2: totalFee correctly includes lifi cross-chain fee
@@ -515,6 +525,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU PAY</span>
             {fromBalance != null && isSol(fromToken) && <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{fromBalance >= 1000 ? fromBalance.toLocaleString('en-US', { maximumFractionDigits: 2 }) : fromBalance.toFixed(4)}</span></span>}
+            {evmFromBalanceData && isEvm(fromToken) && <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{parseFloat(evmFromBalanceData.formatted).toFixed(4)}</span></span>}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <TokenSelect jupiterTokens={jupiterTokens} selected={fromToken} onSelect={function(t) { setFromToken(t); setQuote(null); setQuoteError(''); setLifiRoute(null); }} />
@@ -522,6 +533,13 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             {fromBalance != null && fromBalance > 0 && isSol(fromToken) && (
               <button onClick={function() {
                 var maxAmt = fromToken.symbol === 'SOL' ? Math.max(0, fromBalance - TOTAL_FEE - 0.002) : fromBalance;
+                setFromAmt(maxAmt > 0 ? maxAmt.toFixed(fromToken.decimals <= 2 ? 2 : 6) : '0');
+              }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '3px 8px', color: C.accent, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>
+            )}
+            {evmFromBalanceData && isEvm(fromToken) && parseFloat(evmFromBalanceData.formatted) > 0 && (
+              <button onClick={function() {
+                var bal = parseFloat(evmFromBalanceData.formatted);
+                var maxAmt = isNativeEvmFrom ? Math.max(0, bal - 0.002) : bal;
                 setFromAmt(maxAmt > 0 ? maxAmt.toFixed(fromToken.decimals <= 2 ? 2 : 6) : '0');
               }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '3px 8px', color: C.accent, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>
             )}
