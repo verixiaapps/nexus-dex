@@ -1,3 +1,17 @@
 [phases.setup]
 nixPkgs = ["nodejs_20", "python3"]
- 
+
+[phases.install]
+cmds = ["npm ci"]
+
+[phases.build]
+cmds = ["npm run build"]
+
+[variables]
+NODE_OPTIONS = "--max-old-space-size=4096"
+GENERATE_SOURCEMAP = "false"
+CI = "false"
+NODE_ENV = "production"
+
+[start]
+cmd = "node server.js"
