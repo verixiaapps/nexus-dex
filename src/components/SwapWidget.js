@@ -1,3 +1,7 @@
+Fixes (5): same as doc 10 — '--' in fmt/pct, '...' in lookupByAddress ×3.
+
+Differences from doc 10: adds same-token guard in fetchQuote, uses Math.floor instead of .toFixed(0) for 0x sellAmt, adds console.log('0x params:', ...), and slightly different lifi error message strings.
+
 import React, { useState, useEffect, useCallback } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
@@ -270,6 +274,13 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     setQuote(null); setQuoteError('');
     if (!fromAmt || parseFloat(fromAmt) <= 0 || !fromToken || !toToken) return;
     if (!route) { setQuoteError('Cross-chain swaps not supported. Use same-chain tokens.'); return; }
+    var fromId = fromToken.mint || fromToken.address;
+    var toId = toToken.mint || toToken.address;
+    if (fromId && toId && fromId.toLowerCase() === toId.toLowerCase() && (fromToken.chainId === toToken.chainId || (isSol(fromToken) && isSol(toToken)))) {
+      setQuoteError('Cannot swap a token for itself.');
+      setQuoteLoading(false);
+      return;
+    }
     setQuoteLoading(true);
     try {
       if (route === 'jupiter') {
@@ -282,13 +293,14 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         } else { setQuoteError(data.error || 'No route found for this pair'); }
 
       } else if (route === '0x') {
-        var sellAmt = (parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toFixed(0);
+        var sellAmt = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
         var oxParams = new URLSearchParams({ chainId: fromToken.chainId.toString(), sellToken: fromToken.address, buyToken: toToken.address, sellAmount: sellAmt, slippageBps: Math.round(slip * 100).toString(), tradeSurplusRecipient: EVM_FEE_WALLET });
+        console.log('0x params:', oxParams.toString());
         var oxRes = await fetch('/api/0x/swap/allowance-holder/price?' + oxParams.toString());
         var oxData = await oxRes.json();
         if (oxData && oxData.buyAmount) {
           setQuote({ outAmountDisplay: (parseInt(oxData.buyAmount) / Math.pow(10, toToken.decimals)).toFixed(6), priceImpactPct: 0, engine: '0x' });
-        } else { setQuoteError('0x: ' + JSON.stringify(oxData)); }
+        } else { setQuoteError('0x price error: ' + JSON.stringify(oxData)); }
 
       } else if (route === 'lifi') {
         var fromAddr = isSol(fromToken) ? (publicKey ? publicKey.toString() : '') : (evmAddress || '');
@@ -308,12 +320,12 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         lifiQParams.set('toAddress', (toAddr && toAddr.length > 10) ? toAddr : (isSol(toToken) ? '11111111111111111111111111111111' : '0x0000000000000000000000000000000000000001'));
         var lifiRes = await fetch('https://li.quest/v1/quote?' + lifiQParams.toString());
         var lifiQuote = await lifiRes.json();
-        if (!lifiRes.ok) throw new Error(lifiQuote.message || 'No cross-chain route found');
+        if (!lifiRes.ok) throw new Error('LI.FI error: ' + JSON.stringify(lifiQuote));
         var toAmt = lifiQuote && lifiQuote.estimate && lifiQuote.estimate.toAmount;
         if (toAmt) {
           setQuote({ outAmountDisplay: (parseInt(toAmt) / Math.pow(10, toToken.decimals)).toFixed(6), priceImpactPct: 0, engine: 'lifi' });
           setLifiRoute(lifiQuote);
-        } else { setQuoteError('No cross-chain route found'); }
+        } else { setQuoteError('LI.FI: no toAmount in response - ' + JSON.stringify(lifiQuote)); }
       }
     } catch (e) { setQuoteError('Failed to get quote: ' + (e.message || '')); }
     setQuoteLoading(false);
@@ -416,7 +428,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
 
       } else if (route === '0x') {
         if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
-        var sellAmt2 = (parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toFixed(0);
+        var sellAmt2 = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
         var oxExecParams = new URLSearchParams({ chainId: fromToken.chainId.toString(), sellToken: fromToken.address, buyToken: toToken.address, sellAmount: sellAmt2, taker: evmAddress, swapFeeBps: '500', swapFeeRecipient: EVM_FEE_WALLET, swapFeeToken: toToken.address === NATIVE ? fromToken.address : toToken.address, slippageBps: Math.round(slip * 100).toString(), tradeSurplusRecipient: EVM_FEE_WALLET });
         var oxQuoteRes = await fetch('/api/0x/swap/allowance-holder/quote?' + oxExecParams.toString());
         var oxQuote = await oxQuoteRes.json();
