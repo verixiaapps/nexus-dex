@@ -10,6 +10,21 @@ const C = {
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
 
+// Ankr chain IDs for the multichain balance API (free, no key required)
+var ANKR_CHAINS = [
+  'eth', 'polygon', 'arbitrum', 'base', 'bsc', 'avalanche', 'optimism',
+  'gnosis', 'linea', 'scroll', 'mantle', 'blast', 'zksync_era', 'fantom',
+  'celo', 'moonbeam', 'aurora', 'metis',
+];
+
+var ANKR_CHAIN_NAMES = {
+  eth: 'Ethereum', polygon: 'Polygon', arbitrum: 'Arbitrum', base: 'Base',
+  bsc: 'BNB Chain', avalanche: 'Avalanche', optimism: 'Optimism',
+  gnosis: 'Gnosis', linea: 'Linea', scroll: 'Scroll', mantle: 'Mantle',
+  blast: 'Blast', zksync_era: 'zkSync Era', fantom: 'Fantom',
+  celo: 'Celo', moonbeam: 'Moonbeam', aurora: 'Aurora', metis: 'Metis',
+};
+
 function fmt(n, d) {
   if (d === undefined) d = 2;
   if (n == null) return '--';
@@ -20,53 +35,154 @@ function fmt(n, d) {
   return '$' + n.toFixed(6);
 }
 
+// Ankr blockchain name -> EVM chain ID
+var ANKR_TO_CHAIN_ID = {
+  eth: 1, polygon: 137, arbitrum: 42161, base: 8453,
+  bsc: 56, avalanche: 43114, optimism: 10, gnosis: 100,
+  linea: 59144, scroll: 534352, mantle: 5000, blast: 81457,
+  zksync_era: 324, fantom: 250, celo: 42220,
+};
+
+// Chains supported by 0x v2
+var OX_CHAIN_IDS = new Set([1, 137, 42161, 8453, 56, 43114, 10, 324, 59144]);
+
+// USDC address per 0x-supported chain (used as buyToken for price quotes)
+var USDC_BY_CHAIN = {
+  1:     '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+  137:   '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
+  42161: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+  8453:  '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+  56:    '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
+  43114: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E',
+  10:    '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
+  324:   '0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4',
+  59144: '0x176211869cA2b568f2A7D4EE941E073a821EE1ff',
+};
+
+// Get price via 0x (EVM chains 0x supports)
+async function getOxPrice(chainId, tokenAddress, decimals) {
+  var usdcAddr = USDC_BY_CHAIN[chainId];
+  if (!usdcAddr) return 0;
+  var sellAmount = BigInt(Math.pow(10, Math.min(decimals || 18, 18))).toString();
+  var params = new URLSearchParams({
+    chainId: chainId.toString(),
+    sellToken: tokenAddress.toLowerCase(),
+    buyToken: usdcAddr.toLowerCase(),
+    sellAmount: sellAmount,
+  });
+  try {
+    var res = await fetch('/api/0x/swap/allowance-holder/price?' + params.toString());
+    if (!res.ok) return 0;
+    var data = await res.json();
+    return data.buyAmount ? parseInt(data.buyAmount) / 1e6 : 0;
+  } catch (e) { return 0; }
+}
+
+// Get price via LI.FI (fallback for non-0x EVM chains)
+async function getLifiPrice(chainId, tokenAddress) {
+  try {
+    var res = await fetch('https://li.quest/v1/token?chain=' + chainId + '&token=' + tokenAddress);
+    if (!res.ok) return 0;
+    var data = await res.json();
+    return data.priceUSD ? parseFloat(data.priceUSD) : 0;
+  } catch (e) { return 0; }
+}
+
+// Fetch EVM balances via Ankr (free, no key required), then enrich prices via
+// 0x for supported chains and LI.FI for everything else
+async function fetchEvmBalances(address) {
+  var tokens = [];
+  try {
+    var res = await fetch('https://rpc.ankr.com/multichain', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1,
+        method: 'ankr_getAccountBalance',
+        params: {
+          blockchain: ANKR_CHAINS,
+          walletAddress: address,
+          onlyWhitelisted: false,
+          pageSize: 200,
+        },
+      }),
+    });
+    var data = await res.json();
+    var assets = data.result && data.result.assets ? data.result.assets : [];
+    tokens = assets
+      .filter(function(t) { return parseFloat(t.balance || 0) > 0; })
+      .map(function(t) {
+        return {
+          blockchain: ANKR_CHAIN_NAMES[t.blockchain] || t.blockchain,
+          ankrChain: t.blockchain,
+          chainId: ANKR_TO_CHAIN_ID[t.blockchain] || 0,
+          contractAddress: t.contractAddress || '',
+          tokenSymbol: t.tokenSymbol || '???',
+          tokenName: t.tokenName || 'Unknown',
+          thumbnail: t.thumbnail || null,
+          balance: parseFloat(t.balance || 0),
+          balanceUsd: parseFloat(t.balanceUsd || 0),
+          tokenPrice: parseFloat(t.tokenPrice || 0),
+          decimals: parseInt(t.tokenDecimals || 18),
+          pct24h: 0,
+          tokenType: t.tokenType || 'ERC20',
+        };
+      });
+  } catch (e) {
+    console.error('Ankr balance fetch failed:', e);
+    return [];
+  }
+
+  var missingPrice = tokens.filter(function(t) {
+    return (!t.tokenPrice || t.tokenPrice === 0) && t.contractAddress && t.balance > 0.001;
+  }).slice(0, 30);
+
+  if (missingPrice.length > 0) {
+    var enriched = await Promise.all(missingPrice.map(async function(t) {
+      var price = 0;
+      if (t.chainId && OX_CHAIN_IDS.has(t.chainId) && t.contractAddress) {
+        price = await getOxPrice(t.chainId, t.contractAddress, t.decimals);
+      }
+      if (!price && t.chainId && t.contractAddress) {
+        price = await getLifiPrice(t.chainId, t.contractAddress);
+      }
+      return { contractAddress: t.contractAddress, chainId: t.chainId, price: price };
+    }));
+
+    var priceMap = {};
+    enriched.forEach(function(e) {
+      priceMap[e.chainId + '-' + e.contractAddress] = e.price;
+    });
+    tokens = tokens.map(function(t) {
+      if (t.tokenPrice > 0) return t;
+      var key = t.chainId + '-' + t.contractAddress;
+      var enrichedPrice = priceMap[key] || 0;
+      return Object.assign({}, t, {
+        tokenPrice: enrichedPrice,
+        balanceUsd: enrichedPrice > 0 ? t.balance * enrichedPrice : t.balanceUsd,
+      });
+    });
+  }
+
+  return tokens;
+}
+
 export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWallet, isConnected, isSolanaConnected, walletAddress, refreshKey, onSelectToken }) {
   const { publicKey } = useWallet();
   const { connection } = useConnection();
-  const [balances, setBalances] = useState([]);
-  const [solBalance, setSolBalance] = useState(0);
-  const [loading, setLoading] = useState(false);
-  const [totalValue, setTotalValue] = useState(0);
-  const [activeTab, setActiveTab] = useState('holdings');
-  const [error, setError] = useState('');
-  const [manualAddress, setManualAddress] = useState('');
-  const [lookupAddress, setLookupAddress] = useState('');
-
   const { address: evmAddress, isConnected: evmConnected } = useAccount();
+
+  const [solBalances, setSolBalances] = useState([]);
+  const [solBalance, setSolBalance] = useState(0);
+  const [solLoading, setSolLoading] = useState(false);
+  const [solError, setSolError] = useState('');
+
   const [evmTokens, setEvmTokens] = useState([]);
   const [evmLoading, setEvmLoading] = useState(false);
 
-  useEffect(function() {
-    if (!evmAddress) { setEvmTokens([]); return; }
-    var MORALIS_KEY = process.env.REACT_APP_MORALIS_KEY || '';
-    if (!MORALIS_KEY) return;
-    setEvmLoading(true);
-    var EVM_CHAINS = ['0x1', '0x89', '0xa4b1', '0x2105', '0x38', '0xa86a', '0xa'];
-    var CHAIN_NAMES = { '0x1': 'Ethereum', '0x89': 'Polygon', '0xa4b1': 'Arbitrum', '0x2105': 'Base', '0x38': 'BSC', '0xa86a': 'Avalanche', '0xa': 'Optimism' };
-    Promise.all(EVM_CHAINS.map(function(chainId) {
-      return fetch('https://deep-index.moralis.io/api/v2.2/wallets/' + evmAddress + '/tokens?chain=' + chainId + '&exclude_spam=true', {
-        headers: { 'X-API-Key': MORALIS_KEY, 'Accept': 'application/json' },
-      }).then(function(r) { return r.ok ? r.json() : { result: [] }; })
-        .then(function(data) {
-          return (data.result || []).map(function(t) {
-            return {
-              chain: chainId, chainName: CHAIN_NAMES[chainId] || chainId,
-              address: t.token_address, symbol: t.symbol || '???', name: t.name || 'Unknown',
-              logo: t.logo || t.thumbnail || null, decimals: parseInt(t.decimals || 18),
-              balance: parseFloat(t.balance_formatted || (t.balance / Math.pow(10, parseInt(t.decimals || 18)))),
-              price: parseFloat(t.usd_price || 0), value: parseFloat(t.usd_value || 0),
-              pct24h: parseFloat(t.usd_price_24hr_percent_change || 0),
-              isNative: t.native_token || false, isSpam: t.possible_spam || false,
-            };
-          }).filter(function(t) { return !t.isSpam && t.balance > 0; });
-        }).catch(function() { return []; });
-    })).then(function(results) {
-      var all = [].concat.apply([], results);
-      all.sort(function(a, b) { return b.value - a.value; });
-      setEvmTokens(all);
-      setEvmLoading(false);
-    });
-  }, [evmAddress, refreshKey]);
+  const [activeTab, setActiveTab] = useState('holdings');
+  const [manualAddress, setManualAddress] = useState('');
+  const [lookupAddress, setLookupAddress] = useState('');
 
   var getPrice = useCallback(function(symbol) {
     if (!symbol || !coins || !coins.length) return 0;
@@ -79,82 +195,124 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
     return jupiterTokens.find(function(t) { return t.mint === mint; });
   }, [jupiterTokens]);
 
-  var fetchBalances = useCallback(async function() {
+  var fetchSolBalances = useCallback(async function() {
     var addrToUse = publicKey ? publicKey.toString() : lookupAddress;
     if (!addrToUse || !connection) return;
-    setLoading(true); setError('');
+    setSolLoading(true); setSolError('');
     try {
       var lookupPubkey = new PublicKey(addrToUse);
-      var solLamports = await connection.getBalance(lookupPubkey);
-      var solAmt = solLamports / 1e9;
+      var lamports = await connection.getBalance(lookupPubkey);
+      var solAmt = lamports / 1e9;
       setSolBalance(solAmt);
-      var tokenAccounts = await connection.getParsedTokenAccountsByOwner(lookupPubkey, { programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') });
+
+      var tokenAccounts = await connection.getParsedTokenAccountsByOwner(
+        lookupPubkey,
+        { programId: new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA') }
+      );
+
       var holdings = [];
       tokenAccounts.value.forEach(function(account) {
         try {
           var info = account.account.data.parsed.info;
-          var mint = info.mint;
           var uiAmount = info.tokenAmount.uiAmount;
           if (uiAmount && uiAmount > 0.000001) {
-            var tokenInfo = getTokenInfo(mint);
-            holdings.push({ mint: mint, symbol: tokenInfo ? tokenInfo.symbol : mint.slice(0, 4) + '...' + mint.slice(-4), name: tokenInfo ? tokenInfo.name : 'Unknown Token', logoURI: tokenInfo ? tokenInfo.logoURI : null, decimals: info.tokenAmount.decimals, uiAmount: uiAmount });
+            var tokenInfo = getTokenInfo(info.mint);
+            holdings.push({
+              mint: info.mint,
+              symbol: tokenInfo ? tokenInfo.symbol : info.mint.slice(0, 4) + '...' + info.mint.slice(-4),
+              name: tokenInfo ? tokenInfo.name : 'Unknown Token',
+              logoURI: tokenInfo ? tokenInfo.logoURI : null,
+              decimals: info.tokenAmount.decimals,
+              uiAmount: uiAmount,
+              jupPrice: 0,
+            });
           }
         } catch (e) {}
       });
-      var missingMints = holdings.filter(function(h) { return getPrice(h.symbol) === 0 && h.mint; }).map(function(h) { return h.mint; });
-      var jupPrices = {};
+
+      var missingMints = holdings
+        .filter(function(h) { return getPrice(h.symbol) === 0; })
+        .map(function(h) { return h.mint; });
+
       if (missingMints.length > 0) {
         try {
-          var jupRes = await fetch('https://api.jup.ag/price/v2?ids=' + missingMints.slice(0, 100).join(','));
-          var jupData = await jupRes.json();
-          if (jupData.data) jupPrices = jupData.data;
+          var chunks = [];
+          for (var i = 0; i < missingMints.length; i += 100) {
+            chunks.push(missingMints.slice(i, i + 100));
+          }
+          var priceResults = await Promise.all(chunks.map(function(chunk) {
+            return fetch('https://api.jup.ag/price/v2?ids=' + chunk.join(','))
+              .then(function(r) { return r.ok ? r.json() : {}; })
+              .catch(function() { return {}; });
+          }));
+          var jupPrices = {};
+          priceResults.forEach(function(r) {
+            if (r.data) Object.assign(jupPrices, r.data);
+          });
+          holdings = holdings.map(function(h) {
+            var p = jupPrices[h.mint];
+            return Object.assign({}, h, { jupPrice: p && p.price ? parseFloat(p.price) : 0 });
+          });
         } catch (e) {}
       }
 
-      var getTokenPrice = function(h) {
-        var cgPrice = getPrice(h.symbol);
-        if (cgPrice > 0) return cgPrice;
-        var jupPrice = jupPrices[h.mint];
-        return jupPrice && jupPrice.price ? parseFloat(jupPrice.price) : 0;
-      };
-
-      holdings = holdings.map(function(h) {
-        return Object.assign({}, h, { jupPrice: jupPrices[h.mint] ? parseFloat(jupPrices[h.mint].price) : 0 });
+      holdings.sort(function(a, b) {
+        var priceA = getPrice(a.symbol) || a.jupPrice;
+        var priceB = getPrice(b.symbol) || b.jupPrice;
+        return (b.uiAmount * priceB) - (a.uiAmount * priceA);
       });
 
-      holdings.sort(function(a, b) { return (b.uiAmount * getTokenPrice(b)) - (a.uiAmount * getTokenPrice(a)); });
-      setBalances(holdings);
-      var solPrice = getPrice('SOL');
-      var total = solAmt * solPrice;
-      holdings.forEach(function(h) { total += h.uiAmount * getTokenPrice(h); });
-      setTotalValue(total);
+      setSolBalances(holdings);
     } catch (e) {
-      console.error('Balance fetch error:', e);
-      setError('Failed to load balances: ' + (e.message || 'Check your connection'));
+      console.error('Solana balance error:', e);
+      setSolError('Failed to load Solana balances: ' + (e.message || ''));
     }
-    setLoading(false);
+    setSolLoading(false);
   }, [publicKey, connection, lookupAddress, getPrice, getTokenInfo]);
+
+  var fetchEvmBalancesData = useCallback(async function() {
+    if (!evmAddress) { setEvmTokens([]); return; }
+    setEvmLoading(true);
+    var tokens = await fetchEvmBalances(evmAddress);
+    tokens.sort(function(a, b) { return b.balanceUsd - a.balanceUsd; });
+    setEvmTokens(tokens);
+    setEvmLoading(false);
+  }, [evmAddress]);
 
   var effectiveAddress = publicKey ? publicKey.toString() : lookupAddress;
 
   useEffect(function() {
     if (effectiveAddress) {
-      fetchBalances();
-      var interval = setInterval(fetchBalances, 30000);
+      fetchSolBalances();
+      var interval = setInterval(fetchSolBalances, 30000);
       return function() { clearInterval(interval); };
     }
-  }, [effectiveAddress, fetchBalances]);
+  }, [effectiveAddress, fetchSolBalances]);
 
   useEffect(function() {
-    if (effectiveAddress && coins.length > 0) fetchBalances();
-  }, [coins.length]);
+    fetchEvmBalancesData();
+  }, [fetchEvmBalancesData]);
 
   useEffect(function() {
-    if (refreshKey > 0 && (publicKey || lookupAddress)) fetchBalances();
+    if (refreshKey > 0) {
+      if (publicKey || lookupAddress) fetchSolBalances();
+      if (evmAddress) fetchEvmBalancesData();
+    }
   }, [refreshKey]);
+
+  useEffect(function() {
+    if (effectiveAddress && coins.length > 0) fetchSolBalances();
+  }, [coins]);
 
   var solPrice = getPrice('SOL');
   var solValue = solBalance * solPrice;
+  var solTokensTotal = solBalances.reduce(function(sum, h) {
+    var p = getPrice(h.symbol) || h.jupPrice;
+    return sum + (h.uiAmount * p);
+  }, 0);
+  var evmTotal = evmTokens.reduce(function(sum, t) { return sum + t.balanceUsd; }, 0);
+  var totalValue = solValue + solTokensTotal + evmTotal;
+
   var rootStyle = { width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' };
 
   if (!isConnected) {
@@ -162,11 +320,11 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
       <div style={Object.assign({ maxWidth: 520, margin: '0 auto' }, rootStyle)}>
         <div style={{ marginBottom: 20 }}>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Track your wallet balances in real time</p>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>All tokens across Solana and all EVM chains</p>
         </div>
         <div style={{ textAlign: 'center', padding: '60px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
           <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Connect Your Wallet</h2>
-          <p style={{ color: C.muted, fontSize: 13, maxWidth: 300, margin: '0 auto 24px', lineHeight: 1.6 }}>Connect your wallet to view real-time balances.</p>
+          <p style={{ color: C.muted, fontSize: 13, maxWidth: 300, margin: '0 auto 24px', lineHeight: 1.6 }}>Connect to view real-time balances across all chains.</p>
           <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect Wallet</button>
         </div>
       </div>
@@ -178,19 +336,19 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20, flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Real-time balances - Auto-refreshes every 30s</p>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>All tokens · Solana + {ANKR_CHAINS.length} EVM chains · Auto-refreshes every 30s</p>
         </div>
         <div style={{ display: 'flex', gap: 8 }}>
-          <button onClick={fetchBalances} style={{ background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)', borderRadius: 8, padding: '7px 14px', color: C.accent, fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}>Refresh</button>
-          {onSend && <button onClick={onSend} style={{ background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none', borderRadius: 8, padding: '7px 14px', color: '#03060f', fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700 }}>Send Tokens</button>}
+          <button onClick={function() { fetchSolBalances(); fetchEvmBalancesData(); }} style={{ background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)', borderRadius: 8, padding: '7px 14px', color: C.accent, fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600 }}>Refresh</button>
+          {onSend && <button onClick={onSend} style={{ background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none', borderRadius: 8, padding: '7px 14px', color: '#03060f', fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700 }}>Send</button>}
         </div>
       </div>
 
       {!publicKey && (
         <div style={{ background: C.card, border: '1px solid rgba(0,229,255,.15)', borderRadius: 12, padding: 16, marginBottom: 16 }}>
-          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 8 }}>SOLANA WALLET ADDRESS</div>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 8 }}>LOOK UP SOLANA ADDRESS</div>
           <div style={{ display: 'flex', gap: 8 }}>
-            <input value={manualAddress} onChange={function(e) { setManualAddress(e.target.value); }} placeholder="Paste your Solana address to view balances..." style={{ flex: 1, background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, padding: '10px 12px', color: '#fff', fontFamily: 'monospace', fontSize: 12, outline: 'none' }} />
+            <input value={manualAddress} onChange={function(e) { setManualAddress(e.target.value); }} placeholder="Paste Solana address..." style={{ flex: 1, background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, padding: '10px 12px', color: '#fff', fontFamily: 'monospace', fontSize: 12, outline: 'none' }} />
             <button onClick={function() { setLookupAddress(manualAddress.trim()); }} style={{ background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none', borderRadius: 8, padding: '10px 16px', color: '#03060f', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', flexShrink: 0 }}>Load</button>
           </div>
           {lookupAddress && <div style={{ fontSize: 11, color: C.green, marginTop: 6 }}>Showing: {lookupAddress.slice(0, 8)}...{lookupAddress.slice(-8)}</div>}
@@ -198,8 +356,18 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
       )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginBottom: 16 }}>
-        {[['Total Value', fmt(totalValue), C.accent], ['SOL Balance', solBalance.toFixed(4) + ' SOL', C.green], ['SOL Value', fmt(solValue), C.text], ['Assets', (balances.length + 1) + ' tokens', C.muted]].map(function(item) {
-          return <div key={item[0]} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 16 }}><div style={{ fontSize: 10, color: C.muted, marginBottom: 6, fontWeight: 700, letterSpacing: .8 }}>{item[0]}</div><div style={{ fontSize: 16, color: item[2], fontWeight: 600 }}>{item[1]}</div></div>;
+        {[
+          ['Total Portfolio', fmt(totalValue), C.accent],
+          ['SOL Balance', solBalance.toFixed(4) + ' SOL', C.green],
+          ['Solana Value', fmt(solValue + solTokensTotal), C.text],
+          ['EVM Value', fmt(evmTotal), evmTotal > 0 ? C.green : C.muted],
+        ].map(function(item) {
+          return (
+            <div key={item[0]} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 16 }}>
+              <div style={{ fontSize: 10, color: C.muted, marginBottom: 6, fontWeight: 700, letterSpacing: .8 }}>{item[0]}</div>
+              <div style={{ fontSize: 16, color: item[2], fontWeight: 600 }}>{item[1]}</div>
+            </div>
+          );
         })}
       </div>
 
@@ -208,7 +376,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
         <div style={{ fontSize: 11, color: C.green, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{walletAddress || ''}</div>
       </div>
 
-      {error && <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 13, color: C.red }}>{error}</div>}
+      {solError && <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 13, color: C.red }}>{solError}</div>}
 
       <div style={{ display: 'flex', gap: 4, marginBottom: 14 }}>
         {[['holdings', 'Holdings'], ['activity', 'Activity']].map(function(item) {
@@ -217,84 +385,107 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
       </div>
 
       {activeTab === 'holdings' && (
-        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
-          <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
-            <div>TOKEN</div><div style={{ textAlign: 'right' }}>BALANCE</div><div style={{ textAlign: 'right' }}>PRICE</div><div style={{ textAlign: 'right' }}>VALUE</div>
+        <>
+          <div style={{ marginBottom: 4 }}>
+            <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 8 }}>SOLANA TOKENS</div>
           </div>
-          <div onClick={function() { onSelectToken && onSelectToken({ id: 'solana', symbol: 'SOL', name: 'Solana', current_price: solPrice }); }} style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: onSelectToken ? 'pointer' : 'default' }} onMouseEnter={function(e) { if (onSelectToken) e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }} onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(153,69,255,.2)', border: '1px solid rgba(153,69,255,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#9945ff', flexShrink: 0 }}>S</div>
-              <div><div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>SOL</div><div style={{ color: C.muted, fontSize: 10 }}>Solana</div></div>
-            </div>
-            <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{solBalance.toFixed(4)}</div>
-            <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{fmt(solPrice)}</div>
-            <div style={{ textAlign: 'right', color: C.green, fontSize: 13, fontWeight: 600 }}>{fmt(solValue)}</div>
-          </div>
-          {loading ? (
-            <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>Loading balances...</div>
-          ) : balances.length === 0 ? (
-            <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>No other token balances found</div>
-          ) : (
-            balances.map(function(token) {
-              var price = getPrice(token.symbol) || token.jupPrice || 0;
-              var value = token.uiAmount * price;
-              return (
-                <div key={token.mint} onClick={function() { onSelectToken && onSelectToken({ id: token.mint, symbol: token.symbol, name: token.name, image: token.logoURI, current_price: price, isSolanaToken: true, mint: token.mint }); }} style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: onSelectToken ? 'pointer' : 'default' }} onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }} onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-                    {token.logoURI ? <img src={token.logoURI} alt={token.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{token.symbol && token.symbol.charAt(0)}</div>}
-                    <div style={{ minWidth: 0 }}><div style={{ color: '#fff', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.symbol}</div><div style={{ color: C.muted, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.name}</div></div>
-                  </div>
-                  <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{token.uiAmount >= 1000 ? token.uiAmount.toLocaleString('en-US', { maximumFractionDigits: 2 }) : token.uiAmount.toFixed(4)}</div>
-                  <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{price > 0 ? fmt(price) : '--'}</div>
-                  <div style={{ textAlign: 'right', color: value > 0.01 ? C.green : C.muted, fontSize: 12, fontWeight: value > 0.01 ? 600 : 400 }}>{value > 0.01 ? fmt(value) : '--'}</div>
-                </div>
-              );
-            })
-          )}
-        </div>
-      )}
-
-      {evmConnected && evmAddress && (
-        <div style={{ marginTop: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-            <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>EVM WALLETS -- ALL CHAINS</span>
-            {evmLoading && <span style={{ fontSize: 11, color: C.accent }}>Loading...</span>}
-            {!evmLoading && evmTokens.length > 0 && <span style={{ fontSize: 11, color: C.muted }}>Total: <span style={{ color: C.green, fontWeight: 700 }}>{fmt(evmTokens.reduce(function(s, t) { return s + t.value; }, 0))}</span></span>}
-          </div>
-          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
+          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden', marginBottom: 16 }}>
             <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
               <div>TOKEN</div><div style={{ textAlign: 'right' }}>BALANCE</div><div style={{ textAlign: 'right' }}>PRICE</div><div style={{ textAlign: 'right' }}>VALUE</div>
             </div>
-            {evmLoading && <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>Loading balances across all chains...</div>}
-            {!evmLoading && evmTokens.length === 0 && <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>No EVM token balances found</div>}
-            {evmTokens.map(function(token, i) {
-              var positive = token.pct24h >= 0;
-              return (
-                <div key={token.chain + '-' + token.address + '-' + i} style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', alignItems: 'center' }} onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }} onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                    {token.logo ? <img src={token.logo} alt={token.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(98,126,234,.15)', border: '1px solid rgba(98,126,234,.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#627eea', flexShrink: 0 }}>{token.symbol.charAt(0)}</div>}
-                    <div style={{ minWidth: 0 }}><div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{token.symbol}</div><div style={{ fontSize: 10, color: C.muted }}>{token.chainName}</div></div>
+
+            <div onClick={function() { onSelectToken && onSelectToken({ id: 'solana', symbol: 'SOL', name: 'Solana', current_price: solPrice }); }} style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: onSelectToken ? 'pointer' : 'default' }} onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }} onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(153,69,255,.2)', border: '1px solid rgba(153,69,255,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#9945ff', flexShrink: 0 }}>S</div>
+                <div><div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>SOL</div><div style={{ color: C.muted, fontSize: 10 }}>Solana</div></div>
+              </div>
+              <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{solBalance.toFixed(4)}</div>
+              <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{fmt(solPrice)}</div>
+              <div style={{ textAlign: 'right', color: C.green, fontSize: 13, fontWeight: 600 }}>{fmt(solValue)}</div>
+            </div>
+
+            {solLoading && solBalances.length === 0 ? (
+              <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>Loading Solana tokens...</div>
+            ) : solBalances.length === 0 ? (
+              <div style={{ padding: 20, textAlign: 'center', color: C.muted, fontSize: 12 }}>No other SPL tokens found</div>
+            ) : (
+              solBalances.map(function(token) {
+                var price = getPrice(token.symbol) || token.jupPrice || 0;
+                var value = token.uiAmount * price;
+                return (
+                  <div key={token.mint} onClick={function() { onSelectToken && onSelectToken({ id: token.mint, symbol: token.symbol, name: token.name, image: token.logoURI, current_price: price, isSolanaToken: true, mint: token.mint }); }} style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: onSelectToken ? 'pointer' : 'default' }} onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }} onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      {token.logoURI ? <img src={token.logoURI} alt={token.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{token.symbol && token.symbol.charAt(0)}</div>}
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.symbol}</div>
+                        <div style={{ color: C.muted, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.name}</div>
+                      </div>
+                    </div>
+                    <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{token.uiAmount >= 1000 ? token.uiAmount.toLocaleString('en-US', { maximumFractionDigits: 2 }) : token.uiAmount.toFixed(4)}</div>
+                    <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{price > 0 ? fmt(price) : '--'}</div>
+                    <div style={{ textAlign: 'right', color: value > 0.01 ? C.green : C.muted, fontSize: 12, fontWeight: value > 0.01 ? 600 : 400 }}>{value > 0.01 ? fmt(value) : '--'}</div>
                   </div>
-                  <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{token.balance >= 1000 ? token.balance.toLocaleString('en-US', { maximumFractionDigits: 2 }) : token.balance.toFixed(4)}</div>
-                  <div style={{ textAlign: 'right', fontSize: 12 }}>
-                    <div style={{ color: C.text }}>{token.price > 0 ? fmt(token.price) : '--'}</div>
-                    {token.pct24h !== 0 && <div style={{ fontSize: 10, color: positive ? C.green : C.red }}>{positive ? '+' : ''}{token.pct24h.toFixed(2)}%</div>}
-                  </div>
-                  <div style={{ textAlign: 'right', color: token.value > 0.01 ? C.green : C.muted, fontSize: 12, fontWeight: token.value > 0.01 ? 600 : 400 }}>{token.value > 0.01 ? fmt(token.value) : '--'}</div>
-                </div>
-              );
-            })}
-            {evmAddress && <div style={{ padding: '10px 16px', textAlign: 'center', borderTop: '1px solid rgba(255,255,255,.03)' }}><a href={'https://etherscan.io/address/' + evmAddress} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: C.accent, textDecoration: 'none' }}>View on Etherscan</a></div>}
+                );
+              })
+            )}
           </div>
-        </div>
+
+          {evmConnected && evmAddress && (
+            <div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>EVM TOKENS -- {ANKR_CHAINS.length} CHAINS</div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  {evmLoading && <span style={{ fontSize: 11, color: C.accent }}>Loading...</span>}
+                  {!evmLoading && evmTokens.length > 0 && <span style={{ fontSize: 11, color: C.muted }}>Total: <span style={{ color: C.green, fontWeight: 700 }}>{fmt(evmTotal)}</span></span>}
+                </div>
+              </div>
+              <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
+                  <div>TOKEN</div><div style={{ textAlign: 'right' }}>BALANCE</div><div style={{ textAlign: 'right' }}>PRICE</div><div style={{ textAlign: 'right' }}>VALUE</div>
+                </div>
+                {evmLoading && evmTokens.length === 0 && <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>Loading EVM balances across all chains...</div>}
+                {!evmLoading && evmTokens.length === 0 && <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>No EVM token balances found</div>}
+                {evmTokens.map(function(token, i) {
+                  var positive = token.pct24h >= 0;
+                  return (
+                    <div key={token.blockchain + '-' + (token.contractAddress || token.tokenSymbol) + '-' + i} style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', alignItems: 'center' }} onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }} onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                        {token.thumbnail ? <img src={token.thumbnail} alt={token.tokenSymbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(98,126,234,.15)', border: '1px solid rgba(98,126,234,.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#627eea', flexShrink: 0 }}>{token.tokenSymbol.charAt(0)}</div>}
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.tokenSymbol}</div>
+                          <div style={{ fontSize: 10, color: C.muted }}>{token.blockchain}</div>
+                        </div>
+                      </div>
+                      <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{token.balance >= 1000 ? token.balance.toLocaleString('en-US', { maximumFractionDigits: 2 }) : token.balance.toFixed(4)}</div>
+                      <div style={{ textAlign: 'right', fontSize: 12 }}>
+                        <div style={{ color: C.text }}>{token.tokenPrice > 0 ? fmt(token.tokenPrice) : '--'}</div>
+                        {token.pct24h !== 0 && <div style={{ fontSize: 10, color: positive ? C.green : C.red }}>{positive ? '+' : ''}{token.pct24h.toFixed(2)}%</div>}
+                      </div>
+                      <div style={{ textAlign: 'right', color: token.balanceUsd > 0.01 ? C.green : C.muted, fontSize: 12, fontWeight: token.balanceUsd > 0.01 ? 600 : 400 }}>{token.balanceUsd > 0.01 ? fmt(token.balanceUsd) : '--'}</div>
+                    </div>
+                  );
+                })}
+                {evmAddress && (
+                  <div style={{ padding: '10px 16px', textAlign: 'center', borderTop: '1px solid rgba(255,255,255,.03)' }}>
+                    <a href={'https://etherscan.io/address/' + evmAddress} target="_blank" rel="noreferrer" style={{ fontSize: 11, color: C.accent, textDecoration: 'none' }}>View on Etherscan</a>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+        </>
       )}
 
       {activeTab === 'activity' && (
         <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 40, textAlign: 'center' }}>
-          <div style={{ fontSize: 36, marginBottom: 12 }}>T</div>
+          <div style={{ fontSize: 36, marginBottom: 12 }}>↗</div>
           <div style={{ color: '#fff', fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Transaction History</div>
-          <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 280, margin: '0 auto 20px' }}>View your full transaction history on Solscan.</p>
-          {walletAddress && <a href={'https://solscan.io/account/' + walletAddress} target="_blank" rel="noreferrer" style={{ display: 'inline-block', padding: '10px 24px', borderRadius: 10, background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)', color: C.accent, fontSize: 13, fontWeight: 600, textDecoration: 'none' }}>View on Solscan</a>}
+          <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 280, margin: '0 auto 20px' }}>View your full transaction history on Solscan or Etherscan.</p>
+          <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
+            {walletAddress && <a href={'https://solscan.io/account/' + walletAddress} target="_blank" rel="noreferrer" style={{ display: 'inline-block', padding: '10px 20px', borderRadius: 10, background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)', color: C.accent, fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>Solscan</a>}
+            {evmAddress && <a href={'https://etherscan.io/address/' + evmAddress} target="_blank" rel="noreferrer" style={{ display: 'inline-block', padding: '10px 20px', borderRadius: 10, background: 'rgba(98,126,234,.08)', border: '1px solid rgba(98,126,234,.25)', color: '#627eea', fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>Etherscan</a>}
+            {evmAddress && <a href={'https://debank.com/profile/' + evmAddress} target="_blank" rel="noreferrer" style={{ display: 'inline-block', padding: '10px 20px', borderRadius: 10, background: 'rgba(0,255,163,.06)', border: '1px solid rgba(0,255,163,.15)', color: C.green, fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>DeBank</a>}
+          </div>
         </div>
       )}
     </div>
