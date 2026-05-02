@@ -7,11 +7,12 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",
-    "react-app-rewired": "^2.2.1", 
+    "react-app-rewired": "^2.2.1",
     "ajv": "^8.12.0",
     "dotenv": "^16.4.5",
-    "express": "^4.18.2", 
+    "express": "^4.18.2",
     "cors": "^2.8.5",
+    "bs58": "^5.0.0",
     "bn.js": "^5.2.1",
     "buffer": "^6.0.3",
     "process": "^0.11.10",
@@ -35,12 +36,11 @@
     "viem": "^2.21.0",
     "@tanstack/react-query": "^5.56.0",
     "recharts": "^2.10.0",
-    "@raydium-io/raydium-sdk-v2": "^0.1.95",
-    "@metaplex-foundation/mpl-token-metadata": "^3.2.1"
+    "@raydium-io/raydium-sdk-v2": "latest",
+    "@metaplex-foundation/mpl-token-metadata": "latest"
   },
   "devDependencies": {
-    "concurrently": "^8.2.0",
-    "bs58": "^5.0.0"
+    "concurrently": "^8.2.0"
   },
   "scripts": {
     "start": "node server.js",
