@@ -228,7 +228,7 @@ setTimeout(function() { setStatus(‘idle’); setError(’’); }, 6000);
 return;
 }
 
-```
+
   if (!isGrad) {
     // Pump.fun — no spread capture (PumpPortal handles routing)
     var res = await fetch('https://pumpportal.fun/api/trade-local', {
@@ -314,7 +314,7 @@ return;
   setStatus('error');
   setTimeout(function() { setStatus('idle'); setError(''); }, 4000);
 }
-```
+
 
 };
 
@@ -337,7 +337,7 @@ return (
 <button onClick={onClose} style={{ background: ‘none’, border: ‘none’, color: C.muted, fontSize: 28, cursor: ‘pointer’, padding: 0 }}>x</button>
 </div>
 
-```
+
     <div style={{ background: C.card2, borderRadius: 10, padding: '12px 14px', marginBottom: 14 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: token.price > 0 ? 10 : 0 }}>
         <span style={{ color: C.muted, fontSize: 12 }}>Current price</span>
@@ -437,7 +437,7 @@ return (
   </div>
   <PresetEditor open={presetEditorOpen} onClose={function() { setPresetEditorOpen(false); }} presets={presets} onSave={onPresetsChange} />
 </div>
-```
+
 
 );
 }
@@ -480,7 +480,7 @@ return (
 <div style={{ maxWidth: 640, margin: ‘0 auto’, overscrollBehavior: ‘none’ }}>
 <button onClick={onBack} style={{ display: ‘flex’, alignItems: ‘center’, gap: 6, marginBottom: 20, background: ‘transparent’, border: ‘none’, color: C.muted, cursor: ‘pointer’, fontFamily: ‘Syne, sans-serif’, fontSize: 13, fontWeight: 600, padding: 0 }}>Back to Launches</button>
 
-```
+
   <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -573,7 +573,7 @@ return (
 
   <TradeDrawer open={drawerOpen} onClose={function() { setDrawerOpen(false); }} mode={drawerMode} token={fullToken} solPrice={solPrice} onConnectWallet={onConnectWallet} isConnected={isConnected} isSolanaConnected={isSolanaConnected} presets={presets} onPresetsChange={onPresetsChange} />
 </div>
-```
+
 
 );
 }
@@ -704,7 +704,7 @@ useEffect(function() {
 var ws;
 var reconnectTimer;
 
-```
+
 function connect() {
   try {
     // FIX: Use env-var-derived WebSocket URL, not hardcoded Helius key
@@ -818,7 +818,7 @@ return function() {
   clearInterval(refreshTimerRef.current);
   if (ws) ws.close();
 };
-```
+
 
 }, [addToken, updateTokenDexData]);
 
@@ -850,7 +850,7 @@ return (
 <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>{tokens.length} tokens tracked — tap any to trade</p>
 </div>
 
-```
+
   <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
     <button onClick={function() { setTab('new'); }} style={{ flex: 1, padding: '11px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', background: tab === 'new' ? 'rgba(0,229,255,.1)' : C.card2, border: '1px solid ' + (tab === 'new' ? 'rgba(0,229,255,.3)' : C.border), color: tab === 'new' ? C.accent : C.muted }}>New</button>
     <button onClick={function() { setTab('trending'); }} style={{ flex: 1, padding: '11px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', background: tab === 'trending' ? 'rgba(255,149,0,.1)' : C.card2, border: '1px solid ' + (tab === 'trending' ? 'rgba(255,149,0,.3)' : C.border), color: tab === 'trending' ? C.orange : C.muted }}>Trending</button>
@@ -876,7 +876,7 @@ return (
 
   <TradeDrawer open={drawerOpen} onClose={function() { setDrawerOpen(false); }} mode={drawerMode} token={drawerToken} solPrice={solPrice} onConnectWallet={onConnectWallet} isConnected={isConnected} isSolanaConnected={isSolanaConnected} presets={presets} onPresetsChange={handlePresetsChange} />
 </div>
-```
+
 
 );
 }
