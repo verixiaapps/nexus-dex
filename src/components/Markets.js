@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
- 
+
 const C = {
   card: '#080d1a', card2: '#0c1220',
   border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
@@ -9,7 +9,7 @@ const C = {
 
 function fmt(n, d) {
   d = d || 2;
-  if (n == null || n === 0) return '--';
+  if (n == null || n === 0) return '-';
   if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
   if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
@@ -18,7 +18,7 @@ function fmt(n, d) {
 }
 
 function pct(n) {
-  if (!n && n !== 0) return '--';
+  if (!n && n !== 0) return '-';
   return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 
@@ -27,7 +27,7 @@ function SparkLine({ data, positive }) {
   var min = Math.min.apply(null, data);
   var max = Math.max.apply(null, data);
   var range = max - min || 1;
-  var w = 80, h = 32;
+  var w = 64, h = 28;
   var pts = data.map(function(v, i) {
     var x = (i / (data.length - 1)) * w;
     var y = h - ((v - min) / range) * h;
@@ -48,10 +48,13 @@ function isValidEvmAddress(str) {
   return str && /^0x[0-9a-fA-F]{40}$/.test(str);
 }
 
-// -------------------------
-// Module-level EVM token cache (LI.FI covers all 0x-supported chains too)
-// Fetched once per page load -- never re-fetched on search keystrokes
-// -------------------------
+// Strip DexScreener's "pump" suffix that gets appended to some Solana addresses
+function cleanMint(addr) {
+  if (!addr) return addr;
+  return addr.replace(/pump$/, '');
+}
+
+// Module-level EVM token cache
 var _evmCache = null;
 var _evmLoading = false;
 var _evmCallbacks = [];
@@ -71,15 +74,7 @@ function getEvmTokenCache() {
           Object.values(data.tokens).forEach(function(chainTokens) {
             chainTokens.forEach(function(t) {
               if (t.symbol && t.address && t.chainId) {
-                tokens.push({
-                  id: t.address + '-' + t.chainId,
-                  address: t.address, chainId: t.chainId,
-                  symbol: t.symbol, name: t.name || t.symbol,
-                  decimals: t.decimals || 18, chain: 'evm',
-                  logoURI: t.logoURI || null,
-                  current_price: 0, market_cap: 0, total_volume: 0,
-                  price_change_percentage_24h: null, sparkline_in_7d: null,
-                });
+                tokens.push({ id: t.address + '-' + t.chainId, address: t.address, chainId: t.chainId, symbol: t.symbol, name: t.name || t.symbol, decimals: t.decimals || 18, chain: 'evm', logoURI: t.logoURI || null, current_price: 0, market_cap: 0, total_volume: 0, price_change_percentage_24h: null, sparkline_in_7d: null });
               }
             });
           });
@@ -90,14 +85,9 @@ function getEvmTokenCache() {
       });
   });
 }
-
-// Kick off EVM cache load immediately when module is imported
 getEvmTokenCache();
 
-// -------------------------
 // Module-level Jupiter full token cache
-// Uses the full unverified list for maximum Solana token coverage
-// -------------------------
 var _jupCache = null;
 var _jupLoading = false;
 var _jupCallbacks = [];
@@ -108,45 +98,38 @@ function getJupTokenCache() {
     _jupCallbacks.push(resolve);
     if (_jupLoading) return;
     _jupLoading = true;
-    // tagged/all gives full coverage including unverified tokens
     fetch('https://lite-api.jup.ag/tokens/v1/tagged/all')
       .then(function(r) { return r.ok ? r.json() : []; })
       .catch(function() { return []; })
       .then(function(data) {
         var tokens = Array.isArray(data) ? data : [];
         _jupCache = tokens.map(function(t) {
-          return {
-            id: t.address, mint: t.address,
-            symbol: t.symbol, name: t.name || t.symbol,
-            decimals: t.decimals || 6, chain: 'solana',
-            logoURI: t.logoURI || null,
-            current_price: 0, market_cap: 0, total_volume: 0,
-            price_change_percentage_24h: null, sparkline_in_7d: null,
-            isSolanaToken: true,
-          };
+          return { id: t.address, mint: t.address, symbol: t.symbol, name: t.name || t.symbol, decimals: t.decimals || 6, chain: 'solana', logoURI: t.logoURI || null, current_price: 0, market_cap: 0, total_volume: 0, price_change_percentage_24h: null, sparkline_in_7d: null, isSolanaToken: true };
         });
         _jupCallbacks.forEach(function(cb) { cb(_jupCache); });
         _jupCallbacks = [];
       });
-  });
+  }); // <-- was missing
 }
-
-// Kick off Jupiter cache load immediately
 getJupTokenCache();
-
-// -------------------------
 
 export default function Markets({ coins, loading, onSelectCoin, jupiterTokens }) {
   const [q, setQ] = useState('');
   const [sort, setSort] = useState('market_cap');
   const [dir, setDir] = useState(-1);
-  const [isMobile] = useState(window.innerWidth < 768);
+  // FIX: Listen to resize so mobile/desktop layout updates correctly
+  const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchToken, setSearchToken] = useState(null);
 
-  // Keep coins in a ref -- search effect only re-runs when q changes,
-  // not on every 30s market data refresh
+  useEffect(function() {
+    var handler = function() { setIsMobile(window.innerWidth < 768); };
+    window.addEventListener('resize', handler);
+    return function() { window.removeEventListener('resize', handler); };
+  }, []);
+
+  // Keep coins in ref so search doesn't re-run on 30s market refresh
   var coinsRef = useRef(coins);
   useEffect(function() { coinsRef.current = coins; }, [coins]);
 
@@ -154,43 +137,26 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
 
   useEffect(function() {
     var trimmed = q.trim();
-    if (!trimmed || trimmed.length < 2) {
-      setSearchResults([]); setSearchToken(null); return;
-    }
+    if (!trimmed || trimmed.length < 2) { setSearchResults([]); setSearchToken(null); return; }
 
     var aborted = false;
 
-    // --- EVM contract address lookup ---
     if (isValidEvmAddress(trimmed)) {
       setSearchLoading(true);
       getEvmTokenCache().then(function(evmTokens) {
         if (aborted) return;
-        var found = evmTokens.filter(function(t) {
-          return t.address && t.address.toLowerCase() === trimmed.toLowerCase();
-        });
-        if (found.length) {
-          setSearchResults(found);
-        } else {
-          setSearchResults([{
-            id: trimmed, address: trimmed, chainId: 1,
-            symbol: trimmed.slice(0, 6) + '...', name: 'Unknown EVM Token',
-            chain: 'evm', decimals: 18, current_price: 0,
-            market_cap: 0, total_volume: 0,
-          }]);
-        }
+        var found = evmTokens.filter(function(t) { return t.address && t.address.toLowerCase() === trimmed.toLowerCase(); });
+        setSearchResults(found.length ? found : [{ id: trimmed, address: trimmed, chainId: 1, symbol: trimmed.slice(0, 6) + '...', name: 'Unknown EVM Token', chain: 'evm', decimals: 18, current_price: 0, market_cap: 0, total_volume: 0 }]);
         setSearchLoading(false);
       });
       return function() { aborted = true; };
     }
 
-    // --- Solana contract address lookup ---
     if (isValidMint(trimmed)) {
       setSearchLoading(true);
       Promise.all([
-        fetch('https://lite-api.jup.ag/tokens/v1/token/' + trimmed)
-          .then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
-        fetch('https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + trimmed)
-          .then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+        fetch('https://lite-api.jup.ag/tokens/v1/token/' + trimmed).then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
+        fetch('https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + trimmed).then(function(r) { return r.ok ? r.json() : null; }).catch(function() { return null; }),
       ]).then(function(results) {
         if (aborted) return;
         var jupMeta = results[0];
@@ -198,47 +164,28 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
         var price = gtData ? parseFloat(gtData.price_usd || 0) : 0;
         var pChange = gtData && gtData.price_change_percentage ? gtData.price_change_percentage : {};
         if (jupMeta || gtData) {
-          setSearchToken({
-            id: trimmed, mint: trimmed,
-            symbol: (jupMeta && jupMeta.symbol) || (gtData && gtData.symbol) || trimmed.slice(0, 6) + '...',
-            name: (jupMeta && jupMeta.name) || (gtData && gtData.name) || 'Unknown Token',
-            image: (jupMeta && jupMeta.logoURI) || (gtData && gtData.image_url) || null,
-            current_price: price,
-            market_cap: gtData ? parseFloat(gtData.fdv_usd || gtData.market_cap_usd || 0) : 0,
-            total_volume: gtData ? parseFloat((gtData.volume_usd && gtData.volume_usd.h24) || 0) : 0,
-            price_change_percentage_24h: pChange.h24 ? parseFloat(pChange.h24) : null,
-            price_change_percentage_1h_in_currency: pChange.h1 ? parseFloat(pChange.h1) : null,
-            sparkline_in_7d: null, isSolanaToken: true,
-          });
+          setSearchToken({ id: trimmed, mint: trimmed, symbol: (jupMeta && jupMeta.symbol) || (gtData && gtData.symbol) || trimmed.slice(0, 6) + '...', name: (jupMeta && jupMeta.name) || (gtData && gtData.name) || 'Unknown Token', image: (jupMeta && jupMeta.logoURI) || (gtData && gtData.image_url) || null, current_price: price, market_cap: gtData ? parseFloat(gtData.fdv_usd || gtData.market_cap_usd || 0) : 0, total_volume: gtData ? parseFloat((gtData.volume_usd && gtData.volume_usd.h24) || 0) : 0, price_change_percentage_24h: pChange.h24 ? parseFloat(pChange.h24) : null, sparkline_in_7d: null, isSolanaToken: true });
         }
         setSearchLoading(false);
       });
       return function() { aborted = true; };
     }
 
-    // --- Symbol/name search ---
     setSearchToken(null);
     setSearchLoading(true);
     var ql = trimmed.toLowerCase();
     var currentCoins = coinsRef.current || [];
 
     var cgMatches = currentCoins.filter(function(c) {
-      return (c.name && c.name.toLowerCase().includes(ql)) ||
-             (c.symbol && c.symbol.toLowerCase().includes(ql));
+      return (c.name && c.name.toLowerCase().includes(ql)) || (c.symbol && c.symbol.toLowerCase().includes(ql));
     });
 
     var strictJupIds = new Set(cgMatches.map(function(c) { return (c.symbol || '').toLowerCase(); }));
     var strictMatches = (jupiterTokens || []).filter(function(t) {
       if (strictJupIds.has((t.symbol || '').toLowerCase())) return false;
-      return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-             (t.name && t.name.toLowerCase().includes(ql));
+      return (t.symbol && t.symbol.toLowerCase().includes(ql)) || (t.name && t.name.toLowerCase().includes(ql));
     }).slice(0, 30).map(function(t) {
-      return {
-        id: t.mint, mint: t.mint, symbol: t.symbol, name: t.name,
-        image: t.logoURI || null, current_price: 0, market_cap: 0,
-        total_volume: 0, price_change_percentage_24h: null,
-        sparkline_in_7d: null, isSolanaToken: true,
-      };
+      return { id: t.mint, mint: t.mint, symbol: t.symbol, name: t.name, image: t.logoURI || null, current_price: 0, market_cap: 0, total_volume: 0, price_change_percentage_24h: null, sparkline_in_7d: null, isSolanaToken: true };
     });
 
     var immediate = cgMatches.concat(strictMatches);
@@ -247,59 +194,47 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     Promise.all([
       getJupTokenCache(),
       getEvmTokenCache(),
-      fetch('https://api.dexscreener.com/latest/dex/search?q=' + encodeURIComponent(trimmed))
-        .then(function(r) { return r.ok ? r.json() : { pairs: [] }; })
-        .catch(function() { return { pairs: [] }; }),
+      fetch('https://api.dexscreener.com/latest/dex/search?q=' + encodeURIComponent(trimmed)).then(function(r) { return r.ok ? r.json() : { pairs: [] }; }).catch(function() { return { pairs: [] }; }),
     ]).then(function(results) {
       if (aborted) return;
-
       var allJupTokens = results[0];
       var allEvmTokens = results[1];
       var dexPairs = results[2].pairs || [];
-
       var seen = new Set(immediate.map(function(c) { return (c.symbol || '').toLowerCase() + '-' + (c.mint || c.id || ''); }));
 
       var jupMatches = allJupTokens.filter(function(t) {
         var key = (t.symbol || '').toLowerCase() + '-' + (t.mint || '');
         if (seen.has(key)) return false;
-        return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-               (t.name && t.name.toLowerCase().includes(ql));
+        return (t.symbol && t.symbol.toLowerCase().includes(ql)) || (t.name && t.name.toLowerCase().includes(ql));
       }).slice(0, 40);
       jupMatches.forEach(function(t) { seen.add((t.symbol || '').toLowerCase() + '-' + (t.mint || '')); });
 
       var evmMatches = allEvmTokens.filter(function(t) {
         var key = (t.symbol || '').toLowerCase() + '-' + (t.address || '') + '-' + (t.chainId || '');
         if (seen.has(key)) return false;
-        return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-               (t.name && t.name.toLowerCase().includes(ql));
+        return (t.symbol && t.symbol.toLowerCase().includes(ql)) || (t.name && t.name.toLowerCase().includes(ql));
       }).slice(0, 40);
       evmMatches.forEach(function(t) { seen.add((t.symbol || '').toLowerCase() + '-' + (t.address || '') + '-' + (t.chainId || '')); });
 
       var dexMatches = dexPairs
         .filter(function(p) { return p.chainId === 'solana' && p.baseToken; })
         .filter(function(p) {
-          var key = (p.baseToken.symbol || '').toLowerCase() + '-' + (p.baseToken.address || '');
+          // FIX: Strip "pump" suffix from DexScreener addresses
+          var cleanAddr = cleanMint(p.baseToken.address || '');
+          var key = (p.baseToken.symbol || '').toLowerCase() + '-' + cleanAddr;
           if (seen.has(key)) return false;
           seen.add(key);
           return true;
         }).slice(0, 20).map(function(p) {
-          return {
-            id: p.baseToken.address, mint: p.baseToken.address,
-            symbol: p.baseToken.symbol, name: p.baseToken.name,
-            image: null, current_price: parseFloat(p.priceUsd || 0),
-            market_cap: p.fdv || 0, total_volume: p.volume ? p.volume.h24 : 0,
-            price_change_percentage_24h: p.priceChange ? p.priceChange.h24 : null,
-            sparkline_in_7d: null, isSolanaToken: true,
-          };
+          var cleanAddr = cleanMint(p.baseToken.address || '');
+          return { id: cleanAddr, mint: cleanAddr, symbol: p.baseToken.symbol, name: p.baseToken.name, image: null, current_price: parseFloat(p.priceUsd || 0), market_cap: p.fdv || 0, total_volume: p.volume ? p.volume.h24 : 0, price_change_percentage_24h: p.priceChange ? p.priceChange.h24 : null, sparkline_in_7d: null, isSolanaToken: true };
         });
 
       var combined = immediate.concat(jupMatches).concat(evmMatches).concat(dexMatches);
       if (combined.length) setSearchResults(combined);
       setSearchLoading(false);
 
-      var mintsToPrice = combined
-        .filter(function(c) { return c.isSolanaToken && !c.current_price && c.mint; })
-        .map(function(c) { return c.mint; }).slice(0, 30);
+      var mintsToPrice = combined.filter(function(c) { return c.isSolanaToken && !c.current_price && c.mint; }).map(function(c) { return c.mint; }).slice(0, 30);
       if (mintsToPrice.length) {
         fetch('https://api.jup.ag/price/v2?ids=' + mintsToPrice.join(','))
           .then(function(r) { return r.ok ? r.json() : {}; })
@@ -331,26 +266,28 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     var positive = (c.price_change_percentage_24h || 0) >= 0;
     var sparkData = c.sparkline_in_7d ? c.sparkline_in_7d.price.filter(function(_, idx) { return idx % 8 === 0; }) : [];
 
+    // Mobile row — compact single line
     if (isMobile) {
       return (
-        <div key={c.id} onClick={function() { onSelectCoin && onSelectCoin(c); }} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '13px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer' }} onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }} onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
-          <div style={{ color: C.muted, fontSize: 11, width: 20, flexShrink: 0, textAlign: 'center' }}>{i + 1}</div>
-          {c.image ? <img src={c.image} alt={c.symbol} style={{ width: 36, height: 36, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{c.symbol && c.symbol.charAt(0).toUpperCase()}</div>}
+        <div key={c.id} onClick={function() { onSelectCoin && onSelectCoin(c); }} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer' }} onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }} onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
+          <div style={{ color: C.muted, fontSize: 10, width: 18, flexShrink: 0, textAlign: 'center' }}>{i + 1}</div>
+          {c.image ? <img src={c.image} alt={c.symbol} style={{ width: 34, height: 34, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{c.symbol && c.symbol.charAt(0).toUpperCase()}</div>}
           <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontWeight: 700, fontSize: 14, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{c.symbol && c.symbol.toUpperCase()}</div>
+            <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{c.symbol && c.symbol.toUpperCase()}</div>
           </div>
           <div style={{ textAlign: 'right', flexShrink: 0 }}>
             <div style={{ fontWeight: 600, color: '#fff', fontSize: 13 }}>{fmt(c.current_price)}</div>
-            <div style={{ fontSize: 12, color: positive ? C.green : C.red, marginTop: 2, fontWeight: 600 }}>{pct(c.price_change_percentage_24h)}</div>
+            <div style={{ fontSize: 11, color: positive ? C.green : C.red, marginTop: 1, fontWeight: 600 }}>{pct(c.price_change_percentage_24h)}</div>
           </div>
           <SparkLine data={sparkData} positive={positive} />
         </div>
       );
     }
 
+    // Desktop row
     return (
-      <div key={c.id} onClick={function() { onSelectCoin && onSelectCoin(c); }} style={{ display: 'grid', gridTemplateColumns: '32px 1fr 110px 80px 110px 90px', gap: 8, padding: '13px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer', alignItems: 'center' }} onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }} onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
+      <div key={c.id} onClick={function() { onSelectCoin && onSelectCoin(c); }} style={{ display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 100px 72px 100px 72px', gap: 8, padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer', alignItems: 'center' }} onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }} onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}>
         <div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
           {c.image ? <img src={c.image} alt={c.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{c.symbol && c.symbol.charAt(0).toUpperCase()}</div>}
@@ -359,7 +296,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
             <div style={{ fontSize: 10, color: C.muted }}>{c.symbol && c.symbol.toUpperCase()}</div>
           </div>
         </div>
-        <div style={{ fontWeight: 600, color: '#fff', fontSize: 13, textAlign: 'right' }}>{fmt(c.current_price)}</div>
+        <div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>{fmt(c.current_price)}</div>
         <div style={{ fontSize: 12, color: positive ? C.green : C.red, textAlign: 'right', fontWeight: 600 }}>{pct(c.price_change_percentage_24h)}</div>
         <div style={{ fontSize: 11, color: C.muted, textAlign: 'right' }}>{fmt(c.market_cap)}</div>
         <div style={{ display: 'flex', justifyContent: 'flex-end' }}><SparkLine data={sparkData} positive={positive} /></div>
@@ -369,16 +306,16 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Live Markets</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Search any token -- Solana, EVM, or paste a contract address</p>
+          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Live Markets</h1>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Solana, EVM, or paste a contract address</p>
         </div>
-        <div style={{ position: 'relative', width: '100%', maxWidth: 300 }}>
-          <input value={q} onChange={function(e) { setQ(e.target.value); }} placeholder="Name, symbol, or contract address..." style={{ background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border), borderRadius: 10, padding: '9px 36px 9px 14px', color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: '100%' }} />
-          {q && <button onClick={function() { setQ(''); setSearchResults([]); setSearchToken(null); }} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 16, lineHeight: 1, padding: 0 }}>x</button>}
-          {searchLoading && !q.length && <div style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: C.accent, fontSize: 11 }}>...</div>}
-          {searchLoading && q.length > 0 && <div style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', color: C.accent, fontSize: 11 }}>...</div>}
+        {/* Search — full width on mobile, fixed on desktop */}
+        <div style={{ position: 'relative', width: '100%', maxWidth: isMobile ? '100%' : 300 }}>
+          <input value={q} onChange={function(e) { setQ(e.target.value); }} placeholder="Name, symbol, or contract..." style={{ background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border), borderRadius: 10, padding: '10px 36px 10px 14px', color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: '100%' }} />
+          {q && <button onClick={function() { setQ(''); setSearchResults([]); setSearchToken(null); }} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: 0 }}>x</button>}
+          {searchLoading && <div style={{ position: 'absolute', right: q ? 32 : 10, top: '50%', transform: 'translateY(-50%)', color: C.accent, fontSize: 11 }}>...</div>}
         </div>
       </div>
 
@@ -393,7 +330,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
       ) : (
         <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
           {!isMobile && (
-            <div style={{ display: 'grid', gridTemplateColumns: '32px 1fr 110px 80px 110px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 100px 72px 100px 72px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
               <div>#</div>
               <div>NAME</div>
               <button onClick={function() { handleSort('current_price'); }} style={{ background: 'none', border: 'none', color: sort === 'current_price' ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, letterSpacing: .8, textAlign: 'right', padding: 0, fontFamily: 'Syne, sans-serif' }}>PRICE {sort === 'current_price' ? (dir === -1 ? 'v' : '^') : ''}</button>
