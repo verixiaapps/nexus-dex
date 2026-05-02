@@ -15,7 +15,7 @@ var ANKR_CHAINS = [
   'eth', 'polygon', 'arbitrum', 'base', 'bsc', 'avalanche', 'optimism',
   'gnosis', 'linea', 'scroll', 'mantle', 'blast', 'zksync_era', 'fantom',
   'celo', 'moonbeam', 'aurora', 'metis',
-];
+]; 
 
 var ANKR_CHAIN_NAMES = {
   eth: 'Ethereum', polygon: 'Polygon', arbitrum: 'Arbitrum', base: 'Base',
