@@ -290,7 +290,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
 
       } else if (route === '0x') {
         var sellAmt = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
-        var oxParams = new URLSearchParams({ chainId: fromToken.chainId.toString(), sellToken: fromToken.address, buyToken: toToken.address, sellAmount: sellAmt, slippageBps: Math.round(slip * 100).toString(), tradeSurplusRecipient: EVM_FEE_WALLET });
+        var oxParams = new URLSearchParams({ chainId: fromToken.chainId.toString(), sellToken: fromToken.address, buyToken: toToken.address, sellAmount: sellAmt, slippageBps: Math.round(slip * 100).toString() });
         console.log('0x params:', oxParams.toString());
         var oxRes = await fetch('/api/0x/swap/allowance-holder/price?' + oxParams.toString());
         var oxData = await oxRes.json();
