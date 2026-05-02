@@ -1,7 +1,3 @@
-Fixes (5): same as doc 10 — '--' in fmt/pct, '...' in lookupByAddress ×3.
-
-Differences from doc 10: adds same-token guard in fetchQuote, uses Math.floor instead of .toFixed(0) for 0x sellAmt, adds console.log('0x params:', ...), and slightly different lifi error message strings.
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
