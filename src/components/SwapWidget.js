@@ -267,7 +267,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         var oxData = await oxRes.json();
         if (oxData && oxData.buyAmount) {
           setQuote({ outAmountDisplay: (parseInt(oxData.buyAmount) / Math.pow(10, toToken.decimals)).toFixed(6), priceImpactPct: 0, engine: '0x' });
-        } else { setQuoteError((oxData && (oxData.message || oxData.reason || JSON.stringify(oxData))) || 'No 0x route found'); }
+        } else { setQuoteError('0x error: ' + JSON.stringify(oxData)); }
 
       } else {
         var fromAddr = isSol(fromToken) ? (publicKey ? publicKey.toString() : '') : (evmAddress || '');
@@ -398,7 +398,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         var params2 = new URLSearchParams({ chainId: fromToken.chainId.toString(), sellToken: fromToken.address, buyToken: toToken.address, sellAmount: sellAmt2, taker: evmAddress, swapFeeBps: '550', swapFeeRecipient: EVM_FEE_WALLET, swapFeeToken: toToken.address === NATIVE ? fromToken.address : toToken.address, slippageBps: Math.round(slip * 100).toString(), tradeSurplusRecipient: EVM_FEE_WALLET });
         var oxQuoteRes = await fetch('https://api.0x.org/swap/allowance-holder/quote?' + params2.toString(), { headers: { '0x-api-key': process.env.REACT_APP_0X_API_KEY || '', '0x-version': 'v2' } });
         var oxQuote = await oxQuoteRes.json();
-        if (!oxQuote || !oxQuote.transaction) throw new Error((oxQuote && (oxQuote.message || oxQuote.reason || JSON.stringify(oxQuote))) || 'Failed to get 0x quote');
+        if (!oxQuote || !oxQuote.transaction) throw new Error('0x error: ' + JSON.stringify(oxQuote));
         if (oxQuote.issues && oxQuote.issues.allowance && oxQuote.issues.allowance.spender) {
           var spender = oxQuote.issues.allowance.spender;
           var approvalData = '0x095ea7b3' + spender.slice(2).padStart(64, '0') + 'f'.repeat(64);
