@@ -6,7 +6,7 @@ cmds = ["npm install --legacy-peer-deps"]
 
 [phases.build]
 cmds = ["npm run build"]
-
+ 
 [variables]
 NODE_OPTIONS = "--max-old-space-size=4096"
 GENERATE_SOURCEMAP = "false"
