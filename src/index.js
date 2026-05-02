@@ -7,7 +7,7 @@ import '@solana/wallet-adapter-react-ui/styles.css';
 import { createWeb3Modal } from '@web3modal/wagmi/react';
 import { defaultWagmiConfig } from '@web3modal/wagmi/react/config';
 import { WagmiProvider } from 'wagmi';
-import {
+import { 
   mainnet, polygon, polygonZkEvm, arbitrum, base, bsc, avalanche, optimism,
   gnosis, linea, scroll, mantle, blast, mode, fantom, moonbeam,
   celo, aurora, metis, zora, fraxtal, kroma, taiko, cronos, klaytn, sei, ronin,
