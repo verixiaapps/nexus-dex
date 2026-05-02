@@ -1,6 +1,6 @@
 // Load .env for local development (no-op in production where
 // env vars are set through the hosting platform directly)
-require(‘dotenv’).config();
+require('dotenv').config();
 
 const express = require(‘express’);
 const cors = require(‘cors’);
