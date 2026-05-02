@@ -2,17 +2,15 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { Buffer } from 'buffer';
- 
+
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
-// No fixed SPREAD -- graduated token buys use dynamic spread via Jupiter price API
 const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const PRESET_KEY = 'nexus_launch_presets';
 const LAST_AMT_KEY = 'nexus_launch_last_amt';
 
-// FIX: Derive WebSocket URL from env var instead of hardcoding the Helius API key
 var _rpc = process.env.REACT_APP_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
 var HELIUS_WS = _rpc.replace('https://', 'wss://').replace('http://', 'ws://');
 
@@ -25,20 +23,10 @@ const C = {
 };
 
 function loadCachedTokens() {
-  try {
-    var v = localStorage.getItem('nexus_launch_cache');
-    if (!v) return [];
-    var parsed = JSON.parse(v);
-    if (Date.now() - (parsed.ts || 0) > 300000) return [];
-    return parsed.tokens || [];
-  } catch (e) { return []; }
+  try { var v = localStorage.getItem('nexus_launch_cache'); if (!v) return []; var p = JSON.parse(v); if (Date.now() - (p.ts || 0) > 300000) return []; return p.tokens || []; } catch (e) { return []; }
 }
-function saveCachedTokens(tokens) {
-  try { localStorage.setItem('nexus_launch_cache', JSON.stringify({ ts: Date.now(), tokens: tokens.slice(0, 30) })); } catch (e) {}
-}
-function loadPresets() {
-  try { var v = localStorage.getItem(PRESET_KEY); return v ? JSON.parse(v) : [5, 10, 25, 50, 100]; } catch (e) { return [5, 10, 25, 50, 100]; }
-}
+function saveCachedTokens(t) { try { localStorage.setItem('nexus_launch_cache', JSON.stringify({ ts: Date.now(), tokens: t.slice(0, 30) })); } catch (e) {} }
+function loadPresets() { try { var v = localStorage.getItem(PRESET_KEY); return v ? JSON.parse(v) : [5, 10, 25, 50, 100]; } catch (e) { return [5, 10, 25, 50, 100]; } }
 function savePresets(arr) { try { localStorage.setItem(PRESET_KEY, JSON.stringify(arr)); } catch (e) {} }
 function loadLastAmt() { try { return parseFloat(localStorage.getItem(LAST_AMT_KEY) || '25') || 25; } catch (e) { return 25; } }
 function saveLastAmt(v) { try { localStorage.setItem(LAST_AMT_KEY, String(v)); } catch (e) {} }
@@ -51,27 +39,21 @@ function timeAgo(ts) {
   return Math.floor(diff / 3600) + 'h';
 }
 function fmtMc(n) {
-  if (!n) return '--';
+  if (!n) return '-';
   if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
   if (n >= 1000) return '$' + (n / 1000).toFixed(1) + 'K';
   return '$' + n.toFixed(0);
 }
 function fmtPrice(n) {
-  if (!n || n === 0) return '--';
+  if (!n || n === 0) return '-';
   if (n < 0.000001) return '$' + n.toExponential(2);
   if (n < 0.001) return '$' + n.toFixed(7);
   if (n < 1) return '$' + n.toFixed(4);
   return '$' + n.toFixed(2);
 }
-function fmtPct(n) {
-  if (n == null || isNaN(n)) return null;
-  return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
-}
-function pctColor(n) {
-  if (n == null) return C.muted2;
-  return n >= 0 ? C.green : C.down;
-}
+function fmtPct(n) { if (n == null || isNaN(n)) return null; return (n >= 0 ? '+' : '') + n.toFixed(1) + '%'; }
+function pctColor(n) { if (n == null) return C.muted2; return n >= 0 ? C.green : C.down; }
 
 async function fetchGeckoTerminal(mints) {
   if (!mints || !mints.length) return {};
@@ -87,24 +69,18 @@ async function fetchGeckoTerminal(mints) {
       if (!res.data) return;
       res.data.forEach(function(item) {
         var attrs = item.attributes;
-        if (!attrs) return;
-        var addr = attrs.address;
-        if (!addr) return;
+        if (!attrs || !attrs.address) return;
         var price = parseFloat(attrs.price_usd || 0);
         var pChange = attrs.price_change_percentage || {};
-        out[addr] = {
-          price: price,
-          marketCap: parseFloat(attrs.fdv_usd || attrs.market_cap_usd || 0),
+        out[attrs.address] = {
+          price: price, marketCap: parseFloat(attrs.fdv_usd || attrs.market_cap_usd || 0),
           pct5m: pChange.m5 ? parseFloat(pChange.m5) : null,
           pct1h: pChange.h1 ? parseFloat(pChange.h1) : null,
           pct24h: pChange.h24 ? parseFloat(pChange.h24) : null,
           volume24h: parseFloat((attrs.volume_usd && attrs.volume_usd.h24) || 0),
           buys24h: attrs.transactions && attrs.transactions.h24 ? attrs.transactions.h24.buys || 0 : 0,
-          image: attrs.image_url || null,
-          name: attrs.name || null,
-          symbol: attrs.symbol || null,
-          graduated: true,
-          priceHistory: price > 0 ? [price] : [],
+          image: attrs.image_url || null, name: attrs.name || null, symbol: attrs.symbol || null,
+          graduated: true, priceHistory: price > 0 ? [price] : [],
         };
       });
     });
@@ -112,28 +88,19 @@ async function fetchGeckoTerminal(mints) {
   } catch (e) { return {}; }
 }
 
-// All use GeckoTerminal as the price/data source
 async function fetchDexScreener(mints) { return fetchGeckoTerminal(mints); }
-async function fetchJupiterPrices(mints) { return fetchGeckoTerminal(mints); }
 async function fetchTokenData(mints) { return fetchGeckoTerminal(mints); }
 
 function Sparkline({ history, up }) {
   if (!history || history.length < 2) return <div style={{ width: 64, height: 28 }} />;
-  var min = Math.min.apply(null, history);
-  var max = Math.max.apply(null, history);
+  var min = Math.min.apply(null, history), max = Math.max.apply(null, history);
   var range = max - min || min * 0.01 || 1;
   var w = 64, h = 28;
   var pts = history.map(function(v, i) {
-    var x = (i / (history.length - 1)) * w;
-    var y = h - ((v - min) / range) * (h - 4) - 2;
-    return x.toFixed(1) + ',' + y.toFixed(1);
+    return ((i / (history.length - 1)) * w).toFixed(1) + ',' + (h - ((v - min) / range) * (h - 4) - 2).toFixed(1);
   }).join(' ');
   var color = up == null ? C.muted2 : up ? C.green : C.down;
-  return (
-    <svg width={w} height={h} style={{ overflow: 'hidden', flexShrink: 0 }}>
-      <polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
+  return <svg width={w} height={h} style={{ overflow: 'hidden', flexShrink: 0 }}><polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>;
 }
 
 function PresetEditor({ open, onClose, presets, onSave }) {
@@ -141,11 +108,13 @@ function PresetEditor({ open, onClose, presets, onSave }) {
   useEffect(function() { if (open) setVals(presets.map(String)); }, [open, presets]);
   if (!open) return null;
   return (
-    <div>
+    <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 499, background: 'rgba(0,0,0,.8)' }} />
       <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 500, background: C.card, border: '1px solid ' + C.borderHi, borderRadius: 18, padding: 24, width: '90vw', maxWidth: 360, boxShadow: '0 24px 80px rgba(0,0,0,.95)' }}>
-        <div style={{ color: '#fff', fontWeight: 800, fontSize: 16, marginBottom: 4 }}>Edit Quick Buy Presets</div>
-        <div style={{ color: C.muted, fontSize: 11, marginBottom: 18 }}>Set your 5 saved quick-buy amounts</div>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ color: '#fff', fontWeight: 800, fontSize: 16 }}>Edit Quick Buy Presets</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 24, padding: 0, lineHeight: 1 }}>x</button>
+        </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
           {vals.map(function(v, i) {
             return (
@@ -161,19 +130,14 @@ function PresetEditor({ open, onClose, presets, onSave }) {
         </div>
         <div style={{ display: 'flex', gap: 10 }}>
           <button onClick={onClose} style={{ flex: 1, padding: 12, borderRadius: 10, background: C.card2, border: '1px solid ' + C.border, color: C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
-          <button onClick={function() {
-            var parsed = vals.map(function(v) { return parseFloat(v) || 0; }).filter(function(v) { return v > 0; });
-            while (parsed.length < 5) parsed.push(25);
-            onSave(parsed.slice(0, 5));
-            onClose();
-          }} style={{ flex: 2, padding: 12, borderRadius: 10, background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, cursor: 'pointer', fontSize: 13 }}>Save Presets</button>
+          <button onClick={function() { var parsed = vals.map(function(v) { return parseFloat(v) || 0; }).filter(function(v) { return v > 0; }); while (parsed.length < 5) parsed.push(25); onSave(parsed.slice(0, 5)); onClose(); }} style={{ flex: 2, padding: 12, borderRadius: 10, background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, cursor: 'pointer', fontSize: 13 }}>Save Presets</button>
         </div>
       </div>
-    </div>
+    </>
   );
 }
 
-function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isConnected, isSolanaConnected, presets, onPresetsChange }) {
+function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isConnected, presets, onPresetsChange }) {
   const { publicKey, sendTransaction } = useWallet();
   const { connection } = useConnection();
   const [activePreset, setActivePreset] = useState(null);
@@ -204,8 +168,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
     if (open) {
       var last = loadLastAmt();
       var match = presets.find(function(p) { return p === last; });
-      if (match) { setActivePreset(last); setCustomAmt(''); }
-      else { setActivePreset(null); setCustomAmt(String(last)); }
+      if (match) { setActivePreset(last); setCustomAmt(''); } else { setActivePreset(null); setCustomAmt(String(last)); }
       setStatus('idle'); setTxSig(null); setError(''); setCustomSellAmt('');
     }
   }, [open, presets]);
@@ -215,77 +178,49 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
 
   var executeTrade = async function() {
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
-    if (!publicKey) { setError('Please connect a wallet'); return; }
-    if (!token) return;
+    if (!publicKey || !token) return;
     setStatus('loading'); setError('');
     var isGrad = token.graduated;
     try {
       var _solBal = (await connection.getBalance(publicKey)) / 1e9;
-      if (_solBal < 0.003) {
-        setError('Insufficient SOL. Need at least 0.003 SOL for fees and gas.');
-        setStatus('error');
-        setTimeout(function() { setStatus('idle'); setError(''); }, 6000);
-        return;
-      }
+      if (_solBal < 0.003) { setError('Need at least 0.003 SOL.'); setStatus('error'); setTimeout(function() { setStatus('idle'); setError(''); }, 5000); return; }
 
       if (!isGrad) {
-        // Pump.fun -- no spread capture (PumpPortal handles routing)
-        var res = await fetch('https://pumpportal.fun/api/trade-local', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ publicKey: publicKey.toString(), action: mode, mint: token.mint, denominatedInSol: mode === 'buy' ? 'true' : 'false', amount: mode === 'buy' ? parseFloat(solAmt.toFixed(6)) : (sellPct + '%'), slippage: 15, priorityFee: antiMev ? 0.001 : 0.0001, pool: 'auto' }),
-        });
+        var res = await fetch('https://pumpportal.fun/api/trade-local', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ publicKey: publicKey.toString(), action: mode, mint: token.mint, denominatedInSol: mode === 'buy' ? 'true' : 'false', amount: mode === 'buy' ? parseFloat(solAmt.toFixed(6)) : (sellPct + '%'), slippage: 15, priorityFee: antiMev ? 0.001 : 0.0001, pool: 'auto' }) });
         if (!res.ok) throw new Error('PumpPortal error ' + res.status);
         var txBytes = await res.arrayBuffer();
         var tx = VersionedTransaction.deserialize(new Uint8Array(txBytes));
         var sig = await sendTransaction(tx, connection);
         await connection.confirmTransaction(sig, 'confirmed');
         setTxSig(sig);
-
       } else {
-        // Graduated token -- Jupiter swap with dynamic spread capture
         var inputMint = mode === 'buy' ? SOL_MINT : token.mint;
         var outputMint = mode === 'buy' ? token.mint : SOL_MINT;
-        var amount = mode === 'buy'
-          ? Math.round(solAmt * 1e9)
-          : Math.round((sellPct / 100) * (token.userBalance || 1e6));
-
+        var amount = mode === 'buy' ? Math.round(solAmt * 1e9) : Math.round((sellPct / 100) * (token.userBalance || 1e6));
         var qRes = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + inputMint + '&outputMint=' + outputMint + '&amount=' + amount + '&slippageBps=150&restrictIntermediateTokens=true', { headers: { 'x-api-key': JUP_API_KEY } });
         var qData = await qRes.json();
         if (!qData.outAmount) throw new Error(qData.error || 'No route found');
-
-        // FIX: Dynamic spread -- fetch Jupiter price API to capture full market spread
         var dynamicSpread = 0;
         try {
           var mktRes = await fetch('https://api.jup.ag/price/v2?ids=' + inputMint + ',' + outputMint);
           var mktData = await mktRes.json();
-          var fromMktPrice = mktData.data && mktData.data[inputMint] && parseFloat(mktData.data[inputMint].price);
-          var toMktPrice = mktData.data && mktData.data[outputMint] && parseFloat(mktData.data[outputMint].price);
-          var tokenDecimals = token.decimals || 6;
-          var inDecimals = mode === 'buy' ? 9 : tokenDecimals;
-          var outDecimals = mode === 'buy' ? tokenDecimals : 9;
-          if (fromMktPrice && toMktPrice) {
-            var inputAmt = amount / Math.pow(10, inDecimals);
-            var expectedOut = (inputAmt * fromMktPrice) / toMktPrice;
-            var actualOut = parseInt(qData.outAmount) / Math.pow(10, outDecimals);
-            if (expectedOut > actualOut && expectedOut > 0) {
-              dynamicSpread = (expectedOut - actualOut) / expectedOut;
-            }
+          var fromP = mktData.data && mktData.data[inputMint] && parseFloat(mktData.data[inputMint].price);
+          var toP = mktData.data && mktData.data[outputMint] && parseFloat(mktData.data[outputMint].price);
+          var tDec = token.decimals || 6;
+          var inDec = mode === 'buy' ? 9 : tDec;
+          var outDec = mode === 'buy' ? tDec : 9;
+          if (fromP && toP) {
+            var inAmt = amount / Math.pow(10, inDec);
+            var expOut = (inAmt * fromP) / toP;
+            var actOut = parseInt(qData.outAmount) / Math.pow(10, outDec);
+            if (expOut > actOut && expOut > 0) dynamicSpread = (expOut - actOut) / expOut;
           }
         } catch (e) {}
-
         var totalFeePct = totalFeeRate + dynamicSpread;
-        var feeLamports = Math.round(Math.max(
-          activeDollar > 0 ? (activeDollar * totalFeePct / solPrice) * LAMPORTS_PER_SOL : solAmt * totalFeePct * LAMPORTS_PER_SOL,
-          50000
-        ));
-
-        var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
-          method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
-          body: JSON.stringify({ quoteResponse: qData, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, dynamicComputeUnitLimit: true }),
-        });
+        var feeLamports = Math.round(Math.max(activeDollar > 0 ? (activeDollar * totalFeePct / solPrice) * LAMPORTS_PER_SOL : solAmt * totalFeePct * LAMPORTS_PER_SOL, 50000));
+        var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY }, body: JSON.stringify({ quoteResponse: qData, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, dynamicComputeUnitLimit: true }) });
         var swapData = await swapRes.json();
         if (!swapData || !swapData.swapTransaction) throw new Error(swapData.error || 'Failed to get swap transaction');
-
         var jupTx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
         var altAccounts = [];
         if (jupTx.message.addressTableLookups && jupTx.message.addressTableLookups.length) {
@@ -297,20 +232,16 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
         var bh = await connection.getLatestBlockhash('confirmed');
         decompiledMsg.recentBlockhash = bh.blockhash;
         var finalTx = new VersionedTransaction(decompiledMsg.compileToV0Message(altAccounts));
-        var accountKeys = finalTx.message.staticAccountKeys || [];
-        if (!accountKeys.some(function(k) { return k.toString() === FEE_WALLET; })) throw new Error('Fee instruction missing from transaction');
+        if (!finalTx.message.staticAccountKeys.some(function(k) { return k.toString() === FEE_WALLET; })) throw new Error('Fee instruction missing');
         var sig = await sendTransaction(finalTx, connection);
         await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
         setTxSig(sig);
       }
-
       saveLastAmt(activeDollar);
       setStatus('success');
       setTimeout(function() { setStatus('idle'); setTxSig(null); onClose(); }, 3000);
     } catch (e) {
-      console.error('Trade error:', e);
-      setError(e.message || 'Trade failed');
-      setStatus('error');
+      console.error('Trade error:', e); setError(e.message || 'Trade failed'); setStatus('error');
       setTimeout(function() { setStatus('idle'); setError(''); }, 4000);
     }
   };
@@ -319,7 +250,7 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
   var isBuy = mode === 'buy';
 
   return (
-    <div>
+    <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,.85)' }} />
       <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 401, background: C.card, borderTop: '2px solid ' + C.borderHi, borderRadius: '20px 20px 0 0', padding: '20px 20px 44px', maxHeight: '92vh', overflowY: 'auto', boxShadow: '0 -20px 60px rgba(0,0,0,.9)' }}>
         <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 18px' }} />
@@ -327,33 +258,25 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             {token.image ? <img src={token.image} alt={token.symbol} style={{ width: 38, height: 38, borderRadius: 10 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 38, height: 38, borderRadius: 10, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: C.purple, fontSize: 16 }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>}
             <div>
-              <div style={{ color: isBuy ? C.accent : C.red, fontWeight: 800, fontSize: 20 }}>{isBuy ? 'Buy' : 'Sell'} {token.symbol}</div>
+              <div style={{ color: isBuy ? C.accent : C.red, fontWeight: 800, fontSize: 18 }}>{isBuy ? 'Buy' : 'Sell'} {token.symbol}</div>
               <div style={{ color: C.muted, fontSize: 11 }}>{token.graduated ? 'Jupiter swap' : 'Pump.fun'} -- {(totalFeeRate * 100).toFixed(0)}% fee + spread</div>
             </div>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 28, cursor: 'pointer', padding: 0 }}>x</button>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer', padding: '0 4px', lineHeight: 1 }}>x</button>
         </div>
 
         <div style={{ background: C.card2, borderRadius: 10, padding: '12px 14px', marginBottom: 14 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: token.price > 0 ? 10 : 0 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ color: C.muted, fontSize: 12 }}>Current price</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{token.price > 0 ? fmtPrice(token.price) : 'Loading...'}</span>
-              {token.pct1h != null && <span style={{ fontSize: 13, fontWeight: 800, color: pctColor(token.pct1h), background: token.pct1h >= 0 ? 'rgba(0,255,163,.1)' : 'rgba(59,158,255,.1)', padding: '2px 8px', borderRadius: 6 }}>{fmtPct(token.pct1h)} 1h</span>}
+              {token.pct1h != null && <span style={{ fontSize: 11, fontWeight: 700, color: pctColor(token.pct1h), background: token.pct1h >= 0 ? 'rgba(0,255,163,.1)' : 'rgba(59,158,255,.1)', padding: '2px 7px', borderRadius: 6 }}>{fmtPct(token.pct1h)} 1h</span>}
             </div>
           </div>
           {isBuy && token.price > 0 && activeDollar > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, borderTop: '1px solid rgba(255,255,255,.05)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, marginTop: 8, borderTop: '1px solid rgba(255,255,255,.05)' }}>
               <span style={{ color: C.muted, fontSize: 12 }}>You receive approx</span>
-              <span style={{ color: C.green, fontWeight: 800, fontSize: 15 }}>
-                {((activeDollar * (1 - totalFeeRate)) / token.price).toLocaleString('en-US', { maximumFractionDigits: 0 })} {token.symbol}
-              </span>
-            </div>
-          )}
-          {!isBuy && token.price > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, borderTop: '1px solid rgba(255,255,255,.05)' }}>
-              <span style={{ color: C.muted, fontSize: 12 }}>Selling {sellPct}% -- fee {(totalFeeRate * 100).toFixed(0)}%</span>
-              <span style={{ color: C.down, fontWeight: 700, fontSize: 13 }}>SOL credited to wallet</span>
+              <span style={{ color: C.green, fontWeight: 800, fontSize: 14 }}>{((activeDollar * (1 - totalFeeRate)) / token.price).toLocaleString('en-US', { maximumFractionDigits: 0 })} {token.symbol}</span>
             </div>
           )}
         </div>
@@ -373,18 +296,18 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
                 {solBalance != null && <span style={{ fontSize: 10, color: C.muted, marginLeft: 8 }}>SOL: <span style={{ color: C.text }}>{solBalance.toFixed(4)}</span></span>}
               </div>
               <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                {solBalance != null && solBalance > 0.01 && <button onClick={function() { var max = Math.max(0, solBalance - 0.005); var maxUsd = max * solPrice; setCustomAmt(maxUsd.toFixed(2)); setActivePreset(null); }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '2px 8px', color: C.accent, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>MAX</button>}
+                {solBalance != null && solBalance > 0.01 && <button onClick={function() { setCustomAmt((Math.max(0, solBalance - 0.005) * solPrice).toFixed(2)); setActivePreset(null); }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '2px 8px', color: C.accent, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>MAX</button>}
                 <button onClick={function() { setPresetEditorOpen(true); }} style={{ background: 'none', border: 'none', color: C.accent, fontSize: 11, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, padding: 0 }}>Edit presets</button>
               </div>
             </div>
             <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
               {presets.map(function(amt) {
                 var active = activePreset === amt && !customAmt;
-                return <button key={amt} onClick={function() { setActivePreset(amt); setCustomAmt(''); }} style={{ flex: 1, padding: '12px 2px', borderRadius: 10, border: '1px solid ' + (active ? C.accent : C.border), background: active ? 'rgba(0,229,255,.15)' : C.card2, color: active ? C.accent : C.muted, fontWeight: 800, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>${amt}</button>;
+                return <button key={amt} onClick={function() { setActivePreset(amt); setCustomAmt(''); }} style={{ flex: 1, padding: '11px 2px', borderRadius: 10, border: '1px solid ' + (active ? C.accent : C.border), background: active ? 'rgba(0,229,255,.15)' : C.card2, color: active ? C.accent : C.muted, fontWeight: 800, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>${amt}</button>;
               })}
             </div>
             <div style={{ background: C.card2, border: '1px solid ' + (customAmt ? C.accent : C.border), borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ color: C.muted, fontSize: 20, fontWeight: 600 }}>$</span>
+              <span style={{ color: C.muted, fontSize: 20 }}>$</span>
               <input value={customAmt} onChange={function(e) { setCustomAmt(e.target.value.replace(/[^0-9.]/g, '')); setActivePreset(null); }} placeholder="Custom Amount" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 20, fontWeight: 700, color: '#fff', outline: 'none' }} />
               {solPrice > 0 && activeDollar > 0 && <span style={{ color: C.muted, fontSize: 11, flexShrink: 0 }}>{(activeDollar / solPrice).toFixed(3)} SOL</span>}
             </div>
@@ -393,20 +316,20 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
           <div style={{ marginBottom: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
               <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>SELL AMOUNT</span>
-              {tokenBalance != null && <span style={{ fontSize: 10, color: C.muted }}>{token && token.symbol}: <span style={{ color: C.text }}>{tokenBalance >= 1000 ? tokenBalance.toLocaleString('en-US', { maximumFractionDigits: 2 }) : tokenBalance.toFixed(4)}</span></span>}
+              {tokenBalance != null && <span style={{ fontSize: 10, color: C.muted }}>{token.symbol}: <span style={{ color: C.text }}>{tokenBalance >= 1000 ? tokenBalance.toLocaleString('en-US', { maximumFractionDigits: 2 }) : tokenBalance.toFixed(4)}</span></span>}
             </div>
             <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-              {[25, 50, 75, 100].map(function(pct) {
-                return <button key={pct} onClick={function() { setSellPct(pct); setCustomSellAmt(''); }} style={{ flex: 1, padding: '12px 2px', borderRadius: 10, border: '1px solid ' + (sellPct === pct && !customSellAmt ? C.red : C.border), background: sellPct === pct && !customSellAmt ? 'rgba(255,59,107,.15)' : C.card2, color: sellPct === pct && !customSellAmt ? C.red : C.muted, fontWeight: 800, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>{pct === 100 ? 'MAX' : pct + '%'}</button>;
+              {[25, 50, 75, 100].map(function(p) {
+                return <button key={p} onClick={function() { setSellPct(p); setCustomSellAmt(''); }} style={{ flex: 1, padding: '11px 2px', borderRadius: 10, border: '1px solid ' + (sellPct === p && !customSellAmt ? C.red : C.border), background: sellPct === p && !customSellAmt ? 'rgba(255,59,107,.15)' : C.card2, color: sellPct === p && !customSellAmt ? C.red : C.muted, fontWeight: 800, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>{p === 100 ? 'MAX' : p + '%'}</button>;
               })}
             </div>
             <div style={{ background: C.card2, border: '1px solid ' + (customSellAmt ? C.red : C.border), borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
               <input value={customSellAmt} onChange={function(e) { setCustomSellAmt(e.target.value.replace(/[^0-9.]/g, '')); setSellPct(null); }} placeholder="Custom Amount" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 20, fontWeight: 700, color: '#fff', outline: 'none' }} />
-              <span style={{ color: C.muted, fontSize: 13, flexShrink: 0 }}>{token ? token.symbol : ''}</span>
+              <span style={{ color: C.muted, fontSize: 13, flexShrink: 0 }}>{token.symbol}</span>
               {tokenBalance != null && tokenBalance > 0 && <button onClick={function() { setCustomSellAmt(tokenBalance.toFixed(6)); setSellPct(null); }} style={{ background: 'rgba(255,59,107,.12)', border: '1px solid rgba(255,59,107,.25)', borderRadius: 6, padding: '4px 8px', color: C.red, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>}
             </div>
-            {token && token.price > 0 && customSellAmt && parseFloat(customSellAmt) > 0 && (
-              <div style={{ textAlign: 'right', marginTop: 6, fontSize: 11, color: C.muted }}>approx ${(parseFloat(customSellAmt) * token.price).toFixed(4)} USD</div>
+            {token.price > 0 && customSellAmt && parseFloat(customSellAmt) > 0 && (
+              <div style={{ textAlign: 'right', marginTop: 6, fontSize: 11, color: C.muted }}>&asymp; ${(parseFloat(customSellAmt) * token.price).toFixed(4)}</div>
             )}
           </div>
         )}
@@ -414,29 +337,28 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
         <div style={{ background: '#050912', borderRadius: 10, padding: '10px 14px', marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <div>
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SNIPER PROTECTION</span>
-            <div style={{ fontSize: 10, color: antiMev ? C.accent : C.muted, marginTop: 2 }}>{antiMev ? 'ON - Priority, bot protected (+2%)' : 'OFF - Standard speed (saves 2%)'}</div>
+            <div style={{ fontSize: 10, color: antiMev ? C.accent : C.muted, marginTop: 2 }}>{antiMev ? 'ON - bot protected (+2%)' : 'OFF - saves 2%'}</div>
           </div>
           <button onClick={function() { setAntiMev(!antiMev); }} style={{ width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', background: antiMev ? C.accent : C.muted2, position: 'relative', flexShrink: 0 }}>
             <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: antiMev ? 23 : 3, transition: 'left .2s' }} />
           </button>
         </div>
 
-        {!antiMev && <div style={{ padding: '8px 12px', background: 'rgba(255,149,0,.08)', border: '1px solid rgba(255,149,0,.2)', borderRadius: 8, fontSize: 11, color: C.orange, marginBottom: 14 }}>Warning: bots may front-run your trade</div>}
         {error && <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 14, fontSize: 13, color: C.red }}>{error}</div>}
 
-        <button onClick={executeTrade} disabled={status === 'loading'} style={{ width: '100%', padding: 20, borderRadius: 14, border: 'none', background: status === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : status === 'error' ? 'rgba(255,59,107,.2)' : !isConnected ? 'linear-gradient(135deg,#9945ff,#7c3aed)' : isBuy ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'linear-gradient(135deg,#ff3b6b,#cc1144)', color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, cursor: status === 'loading' ? 'not-allowed' : 'pointer', minHeight: 58, boxShadow: status === 'idle' && isConnected ? (isBuy ? '0 0 24px rgba(0,229,255,.25)' : '0 0 24px rgba(255,59,107,.2)') : 'none' }}>
-          {!isConnected ? 'Connect Wallet' : status === 'loading' ? 'Confirming...' : status === 'success' ? (isBuy ? 'Bought!' : 'Sold!') + ' Confirmed' : status === 'error' ? 'Failed - Try Again' : isBuy ? 'Buy $' + activeDollar.toFixed(2) + ' of ' + token.symbol : 'Sell ' + sellPct + '% of ' + token.symbol}
+        <button onClick={executeTrade} disabled={status === 'loading'} style={{ width: '100%', padding: 18, borderRadius: 14, border: 'none', background: status === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : status === 'error' ? 'rgba(255,59,107,.2)' : !isConnected ? 'linear-gradient(135deg,#9945ff,#7c3aed)' : isBuy ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'linear-gradient(135deg,#ff3b6b,#cc1144)', color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 17, cursor: status === 'loading' ? 'not-allowed' : 'pointer', minHeight: 54 }}>
+          {!isConnected ? 'Connect Wallet' : status === 'loading' ? 'Confirming...' : status === 'success' ? (isBuy ? 'Bought!' : 'Sold!') : status === 'error' ? 'Failed - Try Again' : isBuy ? 'Buy $' + activeDollar.toFixed(2) + ' of ' + token.symbol : 'Sell ' + sellPct + '% of ' + token.symbol}
         </button>
 
         {txSig && status === 'success' && <a href={'https://solscan.io/tx/' + txSig} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>View on Solscan</a>}
-        <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 10, lineHeight: 1.6 }}>Non-custodial - Fees go directly to Nexus DEX</p>
+        <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 10, lineHeight: 1.6 }}>Non-custodial &mdash; Fees go directly to Nexus DEX</p>
       </div>
       <PresetEditor open={presetEditorOpen} onClose={function() { setPresetEditorOpen(false); }} presets={presets} onSave={onPresetsChange} />
-    </div>
+    </>
   );
 }
 
-function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnected, solPrice, presets, onPresetsChange }) {
+function TokenPage({ token, onBack, onConnectWallet, isConnected, solPrice, presets, onPresetsChange }) {
   const [liveData, setLiveData] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState('buy');
@@ -445,18 +367,12 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnec
   useEffect(function() {
     if (!token) return;
     setLoading(true);
-    fetchDexScreener([token.mint]).then(function(d) {
-      if (d[token.mint]) setLiveData(d[token.mint]);
-      setLoading(false);
-    });
-    var interval = setInterval(function() {
-      fetchDexScreener([token.mint]).then(function(d) { if (d[token.mint]) setLiveData(d[token.mint]); });
-    }, 10000);
+    fetchGeckoTerminal([token.mint]).then(function(d) { if (d[token.mint]) setLiveData(d[token.mint]); setLoading(false); });
+    var interval = setInterval(function() { fetchGeckoTerminal([token.mint]).then(function(d) { if (d[token.mint]) setLiveData(d[token.mint]); }); }, 10000);
     return function() { clearInterval(interval); };
   }, [token]);
 
   if (!token) return null;
-
   var price = (liveData && liveData.price) || token.price || 0;
   var marketCap = (liveData && liveData.marketCap) || token.marketCap || 0;
   var pct5m = liveData ? liveData.pct5m : token.pct5m;
@@ -471,47 +387,39 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnec
   var fullToken = Object.assign({}, token, liveData || {}, { graduated: isGrad, price: price });
 
   return (
-    <div style={{ maxWidth: 640, margin: '0 auto', overscrollBehavior: 'none' }}>
-      <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600, padding: 0 }}>Back to Launches</button>
+    <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
+      <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600, padding: 0 }}>
+        &larr; Back to Launches
+      </button>
 
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {token.image ? <img src={token.image} alt={token.symbol} style={{ width: 52, height: 52, borderRadius: 12, objectFit: 'cover' }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 52, height: 52, borderRadius: 12, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, color: C.purple }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>}
             <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-                <span style={{ color: '#fff', fontWeight: 800, fontSize: 22 }}>{token.symbol}</span>
-                {isGrad ? <span style={{ background: 'rgba(0,255,163,.12)', color: C.green, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 5, border: '1px solid rgba(0,255,163,.25)' }}>GRADUATED</span> : <span style={{ background: 'rgba(153,69,255,.12)', color: C.purple, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 5, border: '1px solid rgba(153,69,255,.25)' }}>PUMP.FUN</span>}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
+                <span style={{ color: '#fff', fontWeight: 800, fontSize: 20 }}>{token.symbol}</span>
+                {isGrad ? <span style={{ background: 'rgba(0,255,163,.12)', color: C.green, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 5 }}>GRADUATED</span> : <span style={{ background: 'rgba(153,69,255,.12)', color: C.purple, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 5 }}>PUMP.FUN</span>}
               </div>
               <div style={{ color: C.muted, fontSize: 12 }}>{token.name}</div>
             </div>
           </div>
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 26, fontWeight: 700, color: '#fff' }}>{loading && !price ? '...' : fmtPrice(price)}</div>
-            {pct1h != null && <div style={{ fontSize: 14, fontWeight: 700, color: pctColor(pct1h), marginTop: 3 }}>{fmtPct(pct1h)} 1h</div>}
+            <div style={{ fontSize: 24, fontWeight: 700, color: '#fff' }}>{loading && !price ? '...' : fmtPrice(price)}</div>
+            {pct1h != null && <div style={{ fontSize: 13, fontWeight: 700, color: pctColor(pct1h), marginTop: 3 }}>{fmtPct(pct1h)} 1h</div>}
           </div>
         </div>
 
         {history.length >= 2 && (
-          <div style={{ marginBottom: 16, background: C.card2, borderRadius: 12, padding: '10px 14px' }}>
-            <div style={{ fontSize: 10, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>PRICE CHART (live)</div>
-            <svg width="100%" height="60" viewBox="0 0 400 60" preserveAspectRatio="none" style={{ display: 'block' }}>
+          <div style={{ marginBottom: 14, background: C.card2, borderRadius: 12, padding: '10px 14px' }}>
+            <div style={{ fontSize: 10, color: C.muted, marginBottom: 6, fontWeight: 700, letterSpacing: 1 }}>PRICE CHART (live)</div>
+            <svg width="100%" height="56" viewBox="0 0 400 56" preserveAspectRatio="none" style={{ display: 'block' }}>
               {(function() {
-                var min = Math.min.apply(null, history);
-                var max = Math.max.apply(null, history);
+                var min = Math.min.apply(null, history), max = Math.max.apply(null, history);
                 var range = max - min || min * 0.01 || 1;
-                var pts = history.map(function(v, i) {
-                  var x = (i / (history.length - 1)) * 400;
-                  var y = 55 - ((v - min) / range) * 50;
-                  return x.toFixed(1) + ',' + y.toFixed(1);
-                }).join(' ');
+                var pts = history.map(function(v, i) { var x = (i / (history.length - 1)) * 400; var y = 52 - ((v - min) / range) * 46; return x.toFixed(1) + ',' + y.toFixed(1); }).join(' ');
                 var col = sparkUp == null ? C.accent : sparkUp ? C.green : C.down;
-                return (
-                  <g>
-                    <polyline points={pts + ' 400,60 0,60'} fill={col + '22'} stroke="none" />
-                    <polyline points={pts} fill="none" stroke={col} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-                  </g>
-                );
+                return <g><polyline points={pts + ' 400,56 0,56'} fill={col + '22'} stroke="none" /><polyline points={pts} fill="none" stroke={col} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></g>;
               })()}
             </svg>
           </div>
@@ -523,7 +431,7 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnec
             return (
               <div key={item[0]} style={{ background: C.card2, borderRadius: 10, padding: 12, textAlign: 'center' }}>
                 <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>{item[0]}</div>
-                <div style={{ fontSize: 16, fontWeight: 700, color: pctColor(val) }}>{val == null ? (loading ? '...' : '--') : fmtPct(val)}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: pctColor(val) }}>{val == null ? (loading ? '...' : '--') : fmtPct(val)}</div>
               </div>
             );
           })}
@@ -549,7 +457,7 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnec
             <div style={{ height: 8, background: C.card3, borderRadius: 4, overflow: 'hidden' }}>
               <div style={{ height: '100%', borderRadius: 4, width: Math.min(progress, 100) + '%', background: progress > 80 ? 'linear-gradient(90deg,#ff9500,#ff3b6b)' : 'linear-gradient(90deg,#00e5ff,#9945ff)' }} />
             </div>
-            {progress >= 80 && <div style={{ marginTop: 5, fontSize: 10, color: C.orange }}>Almost to Raydium -- {(100 - progress).toFixed(1)}% left</div>}
+            {progress >= 80 && <div style={{ marginTop: 5, fontSize: 10, color: C.orange }}>Almost to Raydium &mdash; {(100 - progress).toFixed(1)}% left</div>}
           </div>
         )}
 
@@ -560,11 +468,11 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, isSolanaConnec
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
-        <button onClick={function() { setDrawerMode('buy'); setDrawerOpen(true); }} style={{ padding: '20px 10px', borderRadius: 16, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 20, boxShadow: '0 0 28px rgba(0,229,255,.3)', minHeight: 60 }}>Buy {token.symbol}</button>
-        <button onClick={function() { setDrawerMode('sell'); setDrawerOpen(true); }} style={{ padding: '20px 10px', borderRadius: 16, cursor: 'pointer', background: 'rgba(255,59,107,.1)', border: '1.5px solid rgba(255,59,107,.4)', color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 20, boxShadow: '0 0 20px rgba(255,59,107,.1)', minHeight: 60 }}>Sell {token.symbol}</button>
+        <button onClick={function() { setDrawerMode('buy'); setDrawerOpen(true); }} style={{ padding: '18px 10px', borderRadius: 16, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}>Buy {token.symbol}</button>
+        <button onClick={function() { setDrawerMode('sell'); setDrawerOpen(true); }} style={{ padding: '18px 10px', borderRadius: 16, cursor: 'pointer', background: 'rgba(255,59,107,.1)', border: '1.5px solid rgba(255,59,107,.4)', color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}>Sell {token.symbol}</button>
       </div>
 
-      <TradeDrawer open={drawerOpen} onClose={function() { setDrawerOpen(false); }} mode={drawerMode} token={fullToken} solPrice={solPrice} onConnectWallet={onConnectWallet} isConnected={isConnected} isSolanaConnected={isSolanaConnected} presets={presets} onPresetsChange={onPresetsChange} />
+      <TradeDrawer open={drawerOpen} onClose={function() { setDrawerOpen(false); }} mode={drawerMode} token={fullToken} solPrice={solPrice} onConnectWallet={onConnectWallet} isConnected={isConnected} presets={presets} onPresetsChange={onPresetsChange} />
     </div>
   );
 }
@@ -579,8 +487,9 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
   var isGrad = token.graduated || progress >= 100;
   var pct = token.pct1h != null ? token.pct1h : token.pct5m != null ? token.pct5m : null;
   var pctLabel = token.pct1h != null ? '1h' : '5m';
+
   return (
-    <div style={{ background: flash ? 'rgba(0,255,163,0.04)' : C.card, border: '1px solid ' + (flash ? 'rgba(0,255,163,.2)' : C.border), borderRadius: 14, padding: '12px 14px', marginBottom: 10, transition: 'background 0.8s, border 0.8s', boxSizing: 'border-box', width: '100%' }}>
+    <div style={{ background: flash ? 'rgba(0,255,163,0.04)' : C.card, border: '1px solid ' + (flash ? 'rgba(0,255,163,.2)' : C.border), borderRadius: 14, padding: '12px 14px', marginBottom: 10, transition: 'background 0.8s, border 0.8s', width: '100%', boxSizing: 'border-box' }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 10 }} onClick={function() { onCardClick(token); }}>
         <div style={{ position: 'relative', flexShrink: 0 }}>
           {token.image ? <img src={token.image} alt={token.symbol} style={{ width: 44, height: 44, borderRadius: 10, objectFit: 'cover' }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(153,69,255,.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, color: C.purple }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>}
@@ -607,16 +516,16 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
         <div style={{ flexShrink: 0 }}>
           {pct != null ? (
             <div style={{ background: pct >= 0 ? 'rgba(0,255,163,.12)' : 'rgba(59,158,255,.12)', border: '1px solid ' + (pct >= 0 ? 'rgba(0,255,163,.25)' : 'rgba(59,158,255,.25)'), borderRadius: 8, padding: '5px 10px', textAlign: 'center' }}>
-              <div style={{ fontSize: 15, fontWeight: 800, color: pctColor(pct) }}>{fmtPct(pct)}</div>
+              <div style={{ fontSize: 14, fontWeight: 800, color: pctColor(pct) }}>{fmtPct(pct)}</div>
               <div style={{ fontSize: 9, color: C.muted2, marginTop: 1 }}>{pctLabel}</div>
             </div>
           ) : (
-            <div style={{ fontSize: 11, color: C.muted2 }}>--</div>
+            <div style={{ fontSize: 11, color: C.muted2 }}>-</div>
           )}
         </div>
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={function(e) { e.stopPropagation(); onBuyClick(token); }} style={{ flex: 1, padding: '11px', borderRadius: 10, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontWeight: 800, fontSize: 14, fontFamily: 'Syne, sans-serif', boxShadow: '0 0 14px rgba(0,229,255,.2)' }}>Buy</button>
+        <button onClick={function(e) { e.stopPropagation(); onBuyClick(token); }} style={{ flex: 1, padding: '11px', borderRadius: 10, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontWeight: 800, fontSize: 14, fontFamily: 'Syne, sans-serif' }}>Buy</button>
         <button onClick={function(e) { e.stopPropagation(); onSellClick(token); }} style={{ flex: 1, padding: '11px', borderRadius: 10, cursor: 'pointer', background: 'rgba(255,59,107,.1)', border: '1.5px solid rgba(255,59,107,.35)', color: C.red, fontWeight: 800, fontSize: 14, fontFamily: 'Syne, sans-serif' }}>Sell</button>
       </div>
     </div>
@@ -679,7 +588,8 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
   var addToken = useCallback(function(token) {
     tokensRef.current = [token].concat(tokensRef.current.filter(function(t) { return t.mint !== token.mint; })).slice(0, 150);
     setTokens([].concat(tokensRef.current));
-    fetchDexScreener([token.mint]).then(function(data) {
+    // FIX: fetch immediately, no 2s delay
+    fetchGeckoTerminal([token.mint]).then(function(data) {
       var d = data[token.mint];
       if (!d) return;
       tokensRef.current = tokensRef.current.map(function(t) {
@@ -709,8 +619,7 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
             if (!msg.params || !msg.params.result) return;
             var result = msg.params.result;
             var logs = result.value && result.value.logs ? result.value.logs : [];
-            var sig = result.value && result.value.signature;
-            if (!logs.length || !sig) return;
+            if (!logs.length) return;
             var mintAddr = null;
             logs.forEach(function(log) {
               var match = log.match(/[1-9A-HJ-NP-Za-km-z]{32,44}/g);
@@ -724,20 +633,6 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
               return next;
             });
             addToken(token);
-            setTimeout(function() {
-              fetch('https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + mintAddr)
-                .then(function(r) { return r.json(); })
-                .then(function(data) {
-                  var attrs = data.data && data.data.attributes;
-                  if (!attrs) return;
-                  tokensRef.current = tokensRef.current.map(function(t) {
-                    if (t.mint !== mintAddr) return t;
-                    var price = parseFloat(attrs.price_usd || 0);
-                    return Object.assign({}, t, { name: attrs.name || t.name, symbol: attrs.symbol || t.symbol, image: attrs.image_url || null, price: price, marketCap: parseFloat(attrs.fdv_usd || attrs.market_cap_usd || 0), pct5m: attrs.price_change_percentage && attrs.price_change_percentage.m5 ? parseFloat(attrs.price_change_percentage.m5) : null, pct1h: attrs.price_change_percentage && attrs.price_change_percentage.h1 ? parseFloat(attrs.price_change_percentage.h1) : null, pct24h: attrs.price_change_percentage && attrs.price_change_percentage.h24 ? parseFloat(attrs.price_change_percentage.h24) : null, volume24h: parseFloat((attrs.volume_usd && attrs.volume_usd.h24) || 0), priceHistory: price > 0 ? [price] : [] });
-                  });
-                  setTokens([].concat(tokensRef.current));
-                }).catch(function() {});
-            }, 2000);
           } catch (e) {}
         };
         ws.onerror = function() { setWsStatus('error'); };
@@ -751,14 +646,6 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
     if (cached.length > 0) {
       tokensRef.current = cached;
       setTokens([].concat(cached));
-      fetchJupiterPrices(cached.map(function(t) { return t.mint; })).then(function(prices) {
-        tokensRef.current = tokensRef.current.map(function(t) {
-          var p = prices[t.mint];
-          if (!p || !p.price) return t;
-          return Object.assign({}, t, { price: p.price });
-        });
-        setTokens([].concat(tokensRef.current));
-      });
     }
 
     refreshTimerRef.current = setInterval(async function() {
@@ -841,13 +728,6 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
         <button onClick={function() { setTab('new'); }} style={{ flex: 1, padding: '11px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', background: tab === 'new' ? 'rgba(0,229,255,.1)' : C.card2, border: '1px solid ' + (tab === 'new' ? 'rgba(0,229,255,.3)' : C.border), color: tab === 'new' ? C.accent : C.muted }}>New</button>
         <button onClick={function() { setTab('trending'); }} style={{ flex: 1, padding: '11px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', background: tab === 'trending' ? 'rgba(255,149,0,.1)' : C.card2, border: '1px solid ' + (tab === 'trending' ? 'rgba(255,149,0,.3)' : C.border), color: tab === 'trending' ? C.orange : C.muted }}>Trending</button>
       </div>
-
-      {tab === 'trending' && (
-        <div style={{ fontSize: 11, color: C.orange, marginBottom: 12, padding: '8px 12px', background: 'rgba(255,149,0,.08)', border: '1px solid rgba(255,149,0,.2)', borderRadius: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <span>Ranked by volume, buys and price movement</span>
-          <span style={{ color: C.muted2, fontSize: 10 }}>live</span>
-        </div>
-      )}
 
       {tokens.length === 0 ? (
         <div style={{ textAlign: 'center', padding: '60px 20px', background: C.card, border: '1px solid ' + C.border, borderRadius: 16 }}>
