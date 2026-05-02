@@ -276,7 +276,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     setQuoteLoading(false);
   }, [fromAmt, fromToken, toToken, slip, route, evmAddress, publicKey]);
 
-  useEffect(function() { var t = setTimeout(fetchQuote, 600); return function() { clearTimeout(t); }; }, [fetchQuote]);
+  useEffect(function() { var t = setTimeout(fetchQuote, 300); return function() { clearTimeout(t); }; }, [fetchQuote]);
 
   useEffect(function() {
     if (!publicKey || !connection || !isSol(fromToken)) { setFromBalance(null); setToBalance(null); return; }
@@ -432,7 +432,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             {fromBalance != null && isSol(fromToken) && <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{fromBalance >= 1000 ? fromBalance.toLocaleString('en-US', { maximumFractionDigits: 2 }) : fromBalance.toFixed(4)}</span></span>}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <TokenSelect jupiterTokens={jupiterTokens} selected={fromToken} onSelect={function(t) { setFromToken(t); setQuote(null); setLifiRoute(null); }} />
+            <TokenSelect jupiterTokens={jupiterTokens} selected={fromToken} onSelect={function(t) { setFromToken(t); setQuote(null); setQuoteError(''); setLifiRoute(null); }} />
             <input value={fromAmt} onChange={function(e) { setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }} placeholder="0.00" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 500, color: '#fff', textAlign: 'right', outline: 'none', minWidth: 0 }} />
             {fromBalance != null && fromBalance > 0 && isSol(fromToken) && (
               <button onClick={function() {
@@ -453,7 +453,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             {toBalance != null && isSol(toToken) && <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{toBalance >= 1000 ? toBalance.toLocaleString('en-US', { maximumFractionDigits: 2 }) : toBalance.toFixed(4)}</span></span>}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <TokenSelect jupiterTokens={jupiterTokens} selected={toToken} onSelect={function(t) { setToToken(t); setQuote(null); setLifiRoute(null); }} />
+            <TokenSelect jupiterTokens={jupiterTokens} selected={toToken} onSelect={function(t) { setToToken(t); setQuote(null); setQuoteError(''); setLifiRoute(null); }} />
             <div style={{ flex: 1, textAlign: 'right', fontSize: 22, fontWeight: 500, minWidth: 0, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>{quoteLoading ? '...' : quote ? quote.outAmountDisplay : '0.00'}</div>
           </div>
           {quote && toPriceVal > 0 && <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(quote.outAmountDisplay) * toPriceVal)}</div>}
@@ -476,21 +476,9 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         )}
         {route === 'lifi' && (
           <div style={{ marginTop: 10 }}>
-            {route === 'lifi' ? (
-              <div>
-                <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 6 }}>DESTINATION WALLET</div>
-                <input value={customAddress} onChange={function(e) { setCustomAddress(e.target.value); }} placeholder={isSol(toToken) ? 'Your Solana wallet address...' : 'Your EVM wallet address (0x...)...'} style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 10, padding: '10px 12px', color: C.accent, fontFamily: 'monospace', fontSize: 11, outline: 'none' }} />
-                <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Enter the wallet where you want to receive your tokens</div>
-              </div>
-            ) : (
-              <>
-                <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer' }}>
-                  <input type="checkbox" checked={useCustomAddress} onChange={function(e) { setUseCustomAddress(e.target.checked); }} style={{ cursor: 'pointer', width: 14, height: 14 }} />
-                  <span style={{ fontSize: 12, color: C.muted }}>Send to different wallet</span>
-                </label>
-                {useCustomAddress && <input value={customAddress} onChange={function(e) { setCustomAddress(e.target.value); }} placeholder="Paste Solana wallet address..." style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 10, padding: '10px 12px', color: C.accent, fontFamily: 'monospace', fontSize: 11, outline: 'none', marginTop: 8 }} />}
-              </>
-            )}
+            <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 6 }}>DESTINATION WALLET</div>
+            <input value={customAddress} onChange={function(e) { setCustomAddress(e.target.value); }} placeholder={isSol(toToken) ? 'Your Solana wallet address...' : 'Your EVM wallet address (0x...)...'} style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 10, padding: '10px 12px', color: C.accent, fontFamily: 'monospace', fontSize: 11, outline: 'none' }} />
+            <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Enter the wallet where you want to receive your tokens</div>
           </div>
         )}
         {swapError && <div style={{ marginTop: 10, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 8, fontSize: 12, color: C.red }}>{swapError}</div>}
