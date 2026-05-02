@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAccount, useDisconnect } from 'wagmi';
 import { useWeb3Modal } from '@web3modal/wagmi/react';
@@ -9,7 +9,8 @@ import Portfolio from './components/Portfolio';
 import TokenDetail from './components/TokenDetail';
 import Send from './components/Send';
 import NewLaunches from './components/NewLaunches';
- 
+import TokenLaunch from './components/TokenLaunch';
+
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b', text: '#cdd6f4', muted: '#586994',
@@ -19,7 +20,9 @@ export function useAppWallet() {
   const { publicKey, connected: solConnected, sendTransaction, signTransaction } = useWallet();
   const { address: evmAddress, isConnected: evmConnected } = useAccount();
   var isConnected = solConnected || evmConnected;
-  var isSolanaConnected = isConnected;
+  // FIX 1: isSolanaConnected should only be true when Solana wallet is connected,
+  // not whenever any wallet (including EVM) is connected.
+  var isSolanaConnected = solConnected;
   var walletAddress = solConnected && publicKey ? publicKey.toString() : evmConnected && evmAddress ? evmAddress : null;
   return { isConnected, isSolanaConnected, walletAddress, publicKey: (solConnected && publicKey) ? publicKey : null, sendTransaction, signTransaction, solConnected, evmConnected, evmAddress };
 }
@@ -29,10 +32,44 @@ function WalletModal({ open, onClose }) {
   const { open: openWeb3Modal } = useWeb3Modal();
   const { isConnected: evmConnected, address: evmAddress } = useAccount();
   const { disconnect: evmDisconnect } = useDisconnect();
+  // FIX 2: Track which wallet was selected so the useEffect can trigger connect
+  // after the adapter has had a render cycle to register the selection.
+  const [pendingWallet, setPendingWallet] = useState(null);
+
+  useEffect(function() {
+    if (!pendingWallet) return;
+    var doConnect = async function() {
+      try {
+        await connect();
+        onClose();
+      } catch (e) {
+        console.error('Wallet connect error:', e);
+      } finally {
+        setPendingWallet(null);
+      }
+    };
+    doConnect();
+  }, [pendingWallet, connect, onClose]);
+
+  var handleSolanaConnect = async function(wallet) {
+    try {
+      select(wallet.adapter.name);
+      // Signal the effect to connect on the next render cycle
+      setPendingWallet(wallet.adapter.name);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   var isSol = connected && publicKey;
-  var displayAddr = isSol ? publicKey.toString().slice(0, 6) + '...' + publicKey.toString().slice(-6) : evmConnected && evmAddress ? evmAddress.slice(0, 6) + '...' + evmAddress.slice(-6) : null;
+  var displayAddr = isSol
+    ? publicKey.toString().slice(0, 6) + '...' + publicKey.toString().slice(-6)
+    : evmConnected && evmAddress
+    ? evmAddress.slice(0, 6) + '...' + evmAddress.slice(-6)
+    : null;
   var connectedWalletName = isSol && wallets.find(function(w) { return w.adapter.connected; });
   connectedWalletName = connectedWalletName ? connectedWalletName.adapter.name : (isSol ? 'Solana Wallet' : 'EVM Wallet');
+
   var _seen = new Set();
   var detectedWallets = wallets.filter(function(w) {
     if (w.adapter.name === 'WalletConnect') return false;
@@ -40,11 +77,16 @@ function WalletModal({ open, onClose }) {
     _seen.add(w.adapter.name);
     return w.readyState === 'Installed' || w.readyState === 'Loadable';
   });
-  var notDetectedWallets = wallets.filter(function(w) { return w.readyState !== 'Installed' && w.readyState !== 'Loadable' && w.adapter.name !== 'WalletConnect'; });
+  // FIX 5: Exclude WalletConnect from notDetectedWallets so it doesn't
+  // appear in the "MORE WALLETS" grid (it has its own dedicated button).
+  var notDetectedWallets = wallets.filter(function(w) {
+    return w.adapter.name !== 'WalletConnect' &&
+      w.readyState !== 'Installed' &&
+      w.readyState !== 'Loadable';
+  });
+
   if (!open) return null;
-  var handleSolanaConnect = async function(wallet) {
-    try { await select(wallet.adapter.name); await connect(); onClose(); } catch (e) { console.error(e); }
-  };
+
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 500, background: 'rgba(0,0,0,.85)' }} />
@@ -116,13 +158,17 @@ function WalletModal({ open, onClose }) {
 
 export default function App() {
   const [tab, setTab] = useState('swap');
-  const [prevTab, setPrevTab] = useState('swap');
+  // FIX 3: Use a history stack instead of a single prevTab so nested
+  // navigation (token -> token) always resolves to the correct back destination.
+  const [tabHistory, setTabHistory] = useState(['swap']);
   const [coins, setCoins] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedToken, setSelectedToken] = useState(null);
   const [walletModalOpen, setWalletModalOpen] = useState(false);
   const [jupiterTokens, setJupiterTokens] = useState([]);
   const [jupiterLoading, setJupiterLoading] = useState(true);
+  // FIX 4: Only increment keys when the tab is already active (acts as a refresh),
+  // not on every navigation, so data isn't thrown away on normal tab switches.
   const [launchesKey, setLaunchesKey] = useState(0);
   const [portfolioKey, setPortfolioKey] = useState(0);
   const wallet = useAppWallet();
@@ -135,11 +181,21 @@ export default function App() {
 
   var switchTab = useCallback(function(newTab) {
     if (newTab !== 'token') setSelectedToken(null);
-    if (newTab === 'launches') setLaunchesKey(function(k) { return k + 1; });
-    if (newTab === 'portfolio') setPortfolioKey(function(k) { return k + 1; });
-    setPrevTab(tab);
+    // Only remount launches/portfolio if the user taps the already-active tab
+    if (newTab === 'launches' && tab === 'launches') setLaunchesKey(function(k) { return k + 1; });
+    if (newTab === 'portfolio' && tab === 'portfolio') setPortfolioKey(function(k) { return k + 1; });
+    setTabHistory(function(prev) {
+      // Avoid duplicate consecutive entries
+      if (prev[prev.length - 1] === newTab) return prev;
+      return prev.concat(newTab);
+    });
     setTab(newTab);
   }, [tab]);
+
+  // Derive prevTab from history stack: last entry that isn't the current tab
+  var prevTab = tabHistory.length >= 2
+    ? tabHistory[tabHistory.length - 2]
+    : 'markets';
 
   var openWallet = useCallback(function() { setWalletModalOpen(true); }, []);
   var goToToken = useCallback(function(coin) { setSelectedToken(coin); setTab('token'); }, []);
@@ -153,7 +209,9 @@ export default function App() {
         var res = await fetch('https://lite-api.jup.ag/tokens/v1/tagged/strict', { signal: controller.signal, headers: { 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' } });
         clearTimeout(timeout);
         var data = await res.json();
-        if (Array.isArray(data) && data.length > 0) setJupiterTokens(data.map(function(t) { return { mint: t.address, symbol: t.symbol, name: t.name, decimals: t.decimals, logoURI: t.logoURI }; }));
+        if (Array.isArray(data) && data.length > 0) {
+          setJupiterTokens(data.map(function(t) { return { mint: t.address, symbol: t.symbol, name: t.name, decimals: t.decimals, logoURI: t.logoURI }; }));
+        }
       } catch (e) { console.log('Jupiter token fetch failed:', e); }
       setJupiterLoading(false);
     };
@@ -161,40 +219,66 @@ export default function App() {
   }, []);
 
   useEffect(function() {
+    // FIX 6: Guard against setting state on unmounted component by tracking
+    // mount state and using an AbortController for the fetch.
+    var isMounted = true;
+    var controller = new AbortController();
+
     var fetchMarkets = async function() {
-      var combined = [];
-      var cgIds = 'bitcoin,ethereum,binancecoin,ripple,cardano,dogecoin,solana,avalanche-2,chainlink,uniswap,matic-network,toncoin,shiba-inu,litecoin,polkadot,cosmos,near';
-      var SOLANA_MINTS = ['JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN','DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263','4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R','HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3','mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So','orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE','Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB','EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm','jtojtomepa8tDDcS9EeQJwAkNnhvbTVS6ZoXgbCXyzz','WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk'];
-      var [cgResult, jupPriceResult, metaResult] = await Promise.allSettled([
-        fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=' + cgIds + '&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d').then(function(r) { return r.json(); }),
-        fetch('https://api.jup.ag/price/v2?ids=' + SOLANA_MINTS.join(',')).then(function(r) { return r.json(); }),
-        fetch('https://lite-api.jup.ag/tokens/v1/tagged/strict').then(function(r) { return r.json(); }),
-      ]);
-      if (cgResult.status === 'fulfilled' && Array.isArray(cgResult.value)) combined = combined.concat(cgResult.value);
-      if (jupPriceResult.status === 'fulfilled' && metaResult.status === 'fulfilled') {
-        var jupData = jupPriceResult.value;
-        var metaMap = {};
-        if (Array.isArray(metaResult.value)) metaResult.value.forEach(function(t) { metaMap[t.address] = t; });
-        var solanaCoins = SOLANA_MINTS.map(function(mint, i) {
-          var priceInfo = jupData.data && jupData.data[mint];
-          var meta = metaMap[mint] || {};
-          if (!priceInfo || !priceInfo.price) return null;
-          return { id: mint, symbol: meta.symbol || mint.slice(0, 4), name: meta.name || 'Unknown', image: meta.logoURI || null, current_price: parseFloat(priceInfo.price), market_cap: 0, market_cap_rank: 50 + i, total_volume: 0, high_24h: null, low_24h: null, price_change_percentage_1h_in_currency: null, price_change_percentage_24h: null, price_change_percentage_7d_in_currency: null, sparkline_in_7d: null, ath: null, ath_change_percentage: null, circulating_supply: null, isSolanaToken: true };
-        }).filter(Boolean);
-        combined = combined.concat(solanaCoins);
+      try {
+        var combined = [];
+        var cgIds = 'bitcoin,ethereum,binancecoin,ripple,cardano,dogecoin,solana,avalanche-2,chainlink,uniswap,matic-network,toncoin,shiba-inu,litecoin,polkadot,cosmos,near';
+        var SOLANA_MINTS = [
+          'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
+          'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
+          '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R',
+          'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3',
+          'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So',
+          'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE',
+          'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
+          'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm',
+          'jtojtomepa8tDDcS9EeQJwAkNnhvbTVS6ZoXgbCXyzz',
+          'WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk',
+        ];
+        var [cgResult, jupPriceResult, metaResult] = await Promise.allSettled([
+          fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=' + cgIds + '&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d', { signal: controller.signal }).then(function(r) { return r.json(); }),
+          fetch('https://api.jup.ag/price/v2?ids=' + SOLANA_MINTS.join(','), { signal: controller.signal }).then(function(r) { return r.json(); }),
+          fetch('https://lite-api.jup.ag/tokens/v1/tagged/strict', { signal: controller.signal }).then(function(r) { return r.json(); }),
+        ]);
+        if (!isMounted) return;
+        if (cgResult.status === 'fulfilled' && Array.isArray(cgResult.value)) combined = combined.concat(cgResult.value);
+        if (jupPriceResult.status === 'fulfilled' && metaResult.status === 'fulfilled') {
+          var jupData = jupPriceResult.value;
+          var metaMap = {};
+          if (Array.isArray(metaResult.value)) metaResult.value.forEach(function(t) { metaMap[t.address] = t; });
+          var solanaCoins = SOLANA_MINTS.map(function(mint, i) {
+            var priceInfo = jupData.data && jupData.data[mint];
+            var meta = metaMap[mint] || {};
+            if (!priceInfo || !priceInfo.price) return null;
+            return { id: mint, symbol: meta.symbol || mint.slice(0, 4), name: meta.name || 'Unknown', image: meta.logoURI || null, current_price: parseFloat(priceInfo.price), market_cap: 0, market_cap_rank: 50 + i, total_volume: 0, high_24h: null, low_24h: null, price_change_percentage_1h_in_currency: null, price_change_percentage_24h: null, price_change_percentage_7d_in_currency: null, sparkline_in_7d: null, ath: null, ath_change_percentage: null, circulating_supply: null, isSolanaToken: true };
+          }).filter(Boolean);
+          combined = combined.concat(solanaCoins);
+        }
+        if (combined.length && isMounted) setCoins(combined);
+        if (isMounted) setLoading(false);
+      } catch (e) {
+        if (e.name !== 'AbortError') console.error('Market fetch error:', e);
       }
-      if (combined.length) setCoins(combined);
-      setLoading(false);
     };
+
     fetchMarkets();
     var interval = setInterval(fetchMarkets, 30000);
-    return function() { clearInterval(interval); };
+    return function() {
+      isMounted = false;
+      controller.abort();
+      clearInterval(interval);
+    };
   }, []);
 
   var sharedProps = { isConnected: wallet.isConnected, isSolanaConnected: wallet.isSolanaConnected, walletAddress: wallet.walletAddress, onConnectWallet: openWallet };
   var displayAddress = wallet.walletAddress ? wallet.walletAddress.slice(0, 4) + '...' + wallet.walletAddress.slice(-4) : null;
-  var headerTabs = [{ id: 'swap', label: 'Swap' }, { id: 'markets', label: 'Markets' }, { id: 'launches', label: 'New Launches' }, { id: 'buy', label: 'Buy Crypto' }, { id: 'send', label: 'Send' }, { id: 'portfolio', label: 'Portfolio' }];
-  var navTabs = [{ id: 'swap', label: 'Swap' }, { id: 'markets', label: 'Markets' }, { id: 'launches', label: 'Launches' }, { id: 'send', label: 'Send' }, { id: 'portfolio', label: 'Wallet' }];
+  var headerTabs = [{ id: 'swap', label: 'Swap' }, { id: 'markets', label: 'Markets' }, { id: 'launches', label: 'New Launches' }, { id: 'launch', label: 'Launch' }, { id: 'buy', label: 'Buy Crypto' }, { id: 'send', label: 'Send' }, { id: 'portfolio', label: 'Portfolio' }];
+  var navTabs = [{ id: 'swap', label: 'Swap' }, { id: 'markets', label: 'Markets' }, { id: 'launches', label: 'Launches' }, { id: 'launch', label: 'Launch' }, { id: 'send', label: 'Send' }, { id: 'portfolio', label: 'Wallet' }];
 
   return (
     <div style={{ minHeight: '100vh', height: '100%', background: C.bg, color: C.text, fontFamily: 'Syne, sans-serif', overscrollBehavior: 'none', overflowX: 'hidden', width: '100%', boxSizing: 'border-box' }}>
@@ -223,6 +307,7 @@ export default function App() {
         {tab === 'markets' && <Markets coins={coins} loading={loading} onSelectCoin={goToToken} jupiterTokens={jupiterTokens} />}
         {tab === 'token' && selectedToken && <TokenDetail {...sharedProps} coin={selectedToken} coins={coins} jupiterTokens={jupiterTokens} onBack={function() { switchTab(prevTab === 'token' ? 'markets' : prevTab); }} />}
         {tab === 'launches' && <NewLaunches {...sharedProps} coins={coins} resetKey={launchesKey} />}
+        {tab === 'launch' && <TokenLaunch {...sharedProps} />}
         {tab === 'buy' && <BuyCrypto coins={coins} walletAddress={wallet.walletAddress || ''} selectedCoinSymbol={selectedToken ? selectedToken.symbol : null} />}
         {tab === 'send' && <Send {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} />}
         {tab === 'portfolio' && <Portfolio {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} onSend={function() { switchTab('send'); }} refreshKey={portfolioKey} onSelectToken={goToToken} />}
