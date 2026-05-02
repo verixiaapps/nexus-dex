@@ -7,20 +7,15 @@ import '@solana/wallet-adapter-react-ui/styles.css';
 import { createWeb3Modal } from '@web3modal/wagmi/react';
 import { defaultWagmiConfig } from '@web3modal/wagmi/react/config';
 import { WagmiProvider } from 'wagmi';
-import { 
+import {
   mainnet, polygon, polygonZkEvm, arbitrum, base, bsc, avalanche, optimism,
   gnosis, linea, scroll, mantle, blast, mode, fantom, moonbeam,
   celo, aurora, metis, zora, fraxtal, kroma, taiko, cronos, klaytn, sei, ronin,
+  zkSync,
 } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 
-// zkSync imported separately with correct casing -- wagmi exports it as
-// zkSync (capital S). Importing it alone avoids a silent undefined if the
-// casing mismatches in the installed wagmi version.
-import { zkSync } from 'wagmi/chains';
-
-// Custom chain definitions for chains not guaranteed in all wagmi 2.x versions
 const unichain      = { id: 130,    name: 'Unichain',     nativeCurrency: { name: 'Ether',        symbol: 'ETH',  decimals: 18 }, rpcUrls: { default: { http: ['https://mainnet.unichain.org'] } } };
 const sonic         = { id: 146,    name: 'Sonic',        nativeCurrency: { name: 'Sonic',        symbol: 'S',    decimals: 18 }, rpcUrls: { default: { http: ['https://rpc.soniclabs.com'] } } };
 const berachain     = { id: 80094,  name: 'Berachain',    nativeCurrency: { name: 'BERA',         symbol: 'BERA', decimals: 18 }, rpcUrls: { default: { http: ['https://rpc.berachain.com'] } } };
@@ -43,31 +38,47 @@ const megaEth       = { id: 6342,   name: 'MegaETH',      nativeCurrency: { name
 const kcc           = { id: 321,    name: 'KCC',          nativeCurrency: { name: 'KuCoin Token', symbol: 'KCS',  decimals: 18 }, rpcUrls: { default: { http: ['https://rpc-mainnet.kcc.network'] } } };
 const shape         = { id: 360,    name: 'Shape',        nativeCurrency: { name: 'Ether',        symbol: 'ETH',  decimals: 18 }, rpcUrls: { default: { http: ['https://mainnet.shape.network'] } } };
 
-// FIX: Use public RPC as fallback -- never hardcode API keys in source code
-// as they end up visible in the production JS bundle
 const SOLANA_RPC = process.env.REACT_APP_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
 const PROJECT_ID = process.env.REACT_APP_WC_PROJECT_ID || '';
+
+const SITE_URL = 'https://swap.verixiaapps.com';
 
 const metadata = {
   name: 'Nexus DEX',
   description: 'Multi-chain DEX aggregator',
-  url: 'https://swap.verixiaapps.com',
-  icons: ['https://swap.verixiaapps.com/logo.png'],
+  url: SITE_URL,
+  icons: [SITE_URL + '/logo.png'],
 };
 
 const chains = [
-  // Core EVM (wagmi/chains)
   mainnet, polygon, polygonZkEvm, arbitrum, base, bsc, avalanche, optimism,
   gnosis, zkSync, linea, scroll, mantle, blast, mode,
   fantom, moonbeam, celo, aurora, metis, zora, fraxtal, kroma, taiko,
   cronos, klaytn, sei, ronin,
-  // Custom definitions
   unichain, sonic, berachain, ink, monad, worldchain, abstractChain, apeChain,
   bob, zircuit, flowEvm, hemi, kava, boba, lisk, fuse, coreDao,
   bitlayer, megaEth, kcc, shape,
 ];
 
-const wagmiConfig = defaultWagmiConfig({ chains, projectId: PROJECT_ID, metadata, ssr: false });
+const wagmiConfig = defaultWagmiConfig({
+  chains,
+  projectId: PROJECT_ID,
+  metadata,
+  ssr: false,
+  // Deep link redirect — after wallet approval, user returns to our site
+  walletConnectParameters: {
+    metadata: {
+      name: metadata.name,
+      description: metadata.description,
+      url: SITE_URL,
+      icons: metadata.icons,
+      redirect: {
+        native: 'nexusdex://',
+        universal: SITE_URL,
+      },
+    },
+  },
+});
 
 createWeb3Modal({
   wagmiConfig,
@@ -81,17 +92,11 @@ createWeb3Modal({
     '--w3m-font-family': 'Syne, sans-serif',
     '--w3m-background-color': '#080d1a',
   },
-  metadata: {
-    name: 'Nexus DEX',
-    description: 'Multi-chain DEX aggregator',
-    url: 'https://swap.verixiaapps.com',
-    icons: ['https://swap.verixiaapps.com/logo.png'],
-    redirect: { native: 'nexusdex://', universal: 'https://swap.verixiaapps.com' },
-  },
+  metadata,
 });
 
 const solanaWallets = [
-  new PhantomWalletAdapter({ appIdentity: { uri: 'https://swap.verixiaapps.com' } }),
+  new PhantomWalletAdapter({ appIdentity: { uri: SITE_URL } }),
   new SolflareWalletAdapter(),
 ];
 
