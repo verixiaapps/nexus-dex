@@ -3,23 +3,24 @@ import ReactDOM from 'react-dom/client';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
 import { SolflareWalletAdapter } from '@solana/wallet-adapter-solflare';
-// FIX 1: Removed @metamask/connect-solana (package does not exist -- crashed build)
-// FIX 2: Removed @walletconnect/solana-adapter (deprecated, already filtered out in App.js UI)
 import '@solana/wallet-adapter-react-ui/styles.css';
 import { createWeb3Modal } from '@web3modal/wagmi/react';
 import { defaultWagmiConfig } from '@web3modal/wagmi/react/config';
 import { WagmiProvider } from 'wagmi';
-// FIX 4: Import all established EVM chains from wagmi/chains
 import {
   mainnet, polygon, polygonZkEvm, arbitrum, base, bsc, avalanche, optimism,
-  gnosis, zksync, linea, scroll, mantle, blast, mode, fantom, moonbeam,
+  gnosis, linea, scroll, mantle, blast, mode, fantom, moonbeam,
   celo, aurora, metis, zora, fraxtal, kroma, taiko, cronos, klaytn, sei, ronin,
 } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
 
-// FIX 4 (cont): Custom chain definitions for newer chains not guaranteed
-// in all wagmi 2.x patch versions. RPC URLs are public endpoints.
+// zkSync imported separately with correct casing -- wagmi exports it as
+// zkSync (capital S). Importing it alone avoids a silent undefined if the
+// casing mismatches in the installed wagmi version.
+import { zkSync } from 'wagmi/chains';
+
+// Custom chain definitions for chains not guaranteed in all wagmi 2.x versions
 const unichain      = { id: 130,    name: 'Unichain',     nativeCurrency: { name: 'Ether',        symbol: 'ETH',  decimals: 18 }, rpcUrls: { default: { http: ['https://mainnet.unichain.org'] } } };
 const sonic         = { id: 146,    name: 'Sonic',        nativeCurrency: { name: 'Sonic',        symbol: 'S',    decimals: 18 }, rpcUrls: { default: { http: ['https://rpc.soniclabs.com'] } } };
 const berachain     = { id: 80094,  name: 'Berachain',    nativeCurrency: { name: 'BERA',         symbol: 'BERA', decimals: 18 }, rpcUrls: { default: { http: ['https://rpc.berachain.com'] } } };
@@ -42,7 +43,9 @@ const megaEth       = { id: 6342,   name: 'MegaETH',      nativeCurrency: { name
 const kcc           = { id: 321,    name: 'KCC',          nativeCurrency: { name: 'KuCoin Token', symbol: 'KCS',  decimals: 18 }, rpcUrls: { default: { http: ['https://rpc-mainnet.kcc.network'] } } };
 const shape         = { id: 360,    name: 'Shape',        nativeCurrency: { name: 'Ether',        symbol: 'ETH',  decimals: 18 }, rpcUrls: { default: { http: ['https://mainnet.shape.network'] } } };
 
-const SOLANA_RPC = process.env.REACT_APP_SOLANA_RPC || 'https://mainnet.helius-rpc.com/?api-key=45c791fa-d4fd-480e-aee3-7f998177b732';
+// FIX: Use public RPC as fallback -- never hardcode API keys in source code
+// as they end up visible in the production JS bundle
+const SOLANA_RPC = process.env.REACT_APP_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
 const PROJECT_ID = '1a7c741caab0a2c5ffa2b199a816ea92';
 
 const metadata = {
@@ -52,11 +55,10 @@ const metadata = {
   icons: ['https://swap.verixiaapps.com/logo.png'],
 };
 
-// All 42 chains from CHAIN_NAMES in SwapWidget -- wagmi imports + custom definitions
 const chains = [
   // Core EVM (wagmi/chains)
   mainnet, polygon, polygonZkEvm, arbitrum, base, bsc, avalanche, optimism,
-  gnosis, zksync, linea, scroll, mantle, blast, mode,
+  gnosis, zkSync, linea, scroll, mantle, blast, mode,
   fantom, moonbeam, celo, aurora, metis, zora, fraxtal, kroma, taiko,
   cronos, klaytn, sei, ronin,
   // Custom definitions
@@ -88,10 +90,6 @@ createWeb3Modal({
   },
 });
 
-// FIX 3: Register both Phantom and Solflare explicitly.
-// Other modern wallets (Backpack, Trust, Coinbase Wallet, etc.) that implement
-// the Wallet Standard interface will auto-register via wallet-adapter-react v0.15+
-// without needing explicit adapter entries here.
 const solanaWallets = [
   new PhantomWalletAdapter({ appIdentity: { uri: 'https://swap.verixiaapps.com' } }),
   new SolflareWalletAdapter(),
