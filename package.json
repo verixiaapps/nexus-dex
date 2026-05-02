@@ -29,7 +29,8 @@
     "@metaplex-foundation/mpl-token-metadata": "^3.2.1"
   },
   "devDependencies": {
-    "concurrently": "^8.2.0"
+    "concurrently": "^8.2.0",
+    "bs58": "^5.0.0"
   },
   "scripts": {
     "start": "node server.js",
