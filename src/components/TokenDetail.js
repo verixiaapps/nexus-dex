@@ -1,13 +1,13 @@
 import React, { useState, useEffect } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 
 const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const BASE_FEE = 0.04;
 const ANTIMEV_FEE = 0.02;
-const SPREAD = 0.005;
+// SPREAD is captured dynamically -- see executeSwap
 const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
 
 const C = {
@@ -105,8 +105,8 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
     var ql = q.toLowerCase();
     setSearchResults(allTokens.filter(function(t) {
       return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-        (t.name && t.name.toLowerCase().includes(ql)) ||
-        (t.mint && t.mint.toLowerCase().includes(ql));
+             (t.name && t.name.toLowerCase().includes(ql)) ||
+             (t.mint && t.mint.toLowerCase().includes(ql));
     }).slice(0, 100));
   }, [q, allTokens]);
 
@@ -174,15 +174,14 @@ function TokenSelect({ selected, onSelect, jupiterTokens, label }) {
   );
 }
 
-function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, coins, onConnectWallet, isConnected, isSolanaConnected }) {
+function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, coins, onConnectWallet, isConnected }) {
   const { publicKey, sendTransaction } = useWallet();
   const { connection } = useConnection();
-  var viewedToken = null;
-  if (coin) {
-    viewedToken = (jupiterToken) || { mint: coin.id || coin.mint || '', symbol: coin.symbol || '', name: coin.name || '', decimals: 6, logoURI: coin.image || null };
-  }
+
+  var viewedToken = jupiterToken || (coin ? { mint: coin.mint || coin.id || '', symbol: coin.symbol || '', name: coin.name || '', decimals: coin.decimals || 6, logoURI: coin.image || null } : USDC_TOKEN);
+
   const [fromToken, setFromToken] = useState(SOL_TOKEN);
-  const [toToken, setToToken] = useState(viewedToken || USDC_TOKEN);
+  const [toToken, setToToken] = useState(viewedToken);
   const [fromAmt, setFromAmt] = useState('');
   const [quote, setQuote] = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
@@ -251,18 +250,37 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
       var fromCoinData = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
       var fromPrice = fromCoinData ? fromCoinData.current_price : (coin ? coin.current_price : (fromToken && fromToken.symbol === 'SOL' ? solPrice : 0));
       var tradeUsd = parseFloat(fromAmt) * (fromPrice || 0);
-      if (!tradeUsd && quote) {
-        var toCoin2 = coins.find(function(c) { return c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
-        var tp2 = toCoin2 ? toCoin2.current_price : (toToken && (toToken.symbol === 'USDC' || toToken.symbol === 'USDT') ? 1 : 0);
-        if (tp2 > 0) tradeUsd = parseFloat(quote.outAmountDisplay) * tp2;
+
+      var toCoinData = coins.find(function(c) { return c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
+      var toPriceVal = toCoinData ? toCoinData.current_price : (toToken && toToken.symbol === 'SOL' ? solPrice : toToken && (toToken.symbol === 'USDC' || toToken.symbol === 'USDT') ? 1 : 0);
+
+      if (!tradeUsd && quote && toPriceVal > 0) {
+        tradeUsd = parseFloat(quote.outAmountDisplay) * toPriceVal;
       }
-      var totalFeePct = totalFee + SPREAD;
+
+      // Dynamic spread capture -- take the full difference between the Jupiter
+      // price API expected output and the actual quote (same as SwapWidget)
+      var dynamicSpread = 0;
+      try {
+        var mktRes = await fetch('https://api.jup.ag/price/v2?ids=' + fromToken.mint + ',' + toToken.mint);
+        var mktData = await mktRes.json();
+        var fromMktPrice = mktData.data && mktData.data[fromToken.mint] && parseFloat(mktData.data[fromToken.mint].price);
+        var toMktPrice = mktData.data && mktData.data[toToken.mint] && parseFloat(mktData.data[toToken.mint].price);
+        if (fromMktPrice && toMktPrice && parseFloat(fromAmt) > 0) {
+          var expectedOut = (parseFloat(fromAmt) * fromMktPrice) / toMktPrice;
+          var actualOut = parseFloat(quote.outAmountDisplay);
+          if (expectedOut > actualOut && expectedOut > 0) {
+            dynamicSpread = (expectedOut - actualOut) / expectedOut;
+          }
+        }
+      } catch (e) {}
+
+      var totalFeePct = totalFee + dynamicSpread;
       var feeLamports = Math.round(Math.max(
         tradeUsd > 0 ? (tradeUsd * totalFeePct / solPrice) * LAMPORTS_PER_SOL : parseFloat(fromAmt) * totalFeePct * LAMPORTS_PER_SOL,
         50000
       ));
 
-      // Step 1: Get Jupiter serialized swap transaction
       var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY },
@@ -271,30 +289,23 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
       var swapData = await swapRes.json();
       if (!swapData || !swapData.swapTransaction) throw new Error(swapData.error || 'Failed to get swap transaction');
 
-      // Step 2: Deserialize Jupiter transaction
       var jupTx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
-
-      // Step 3: Fetch ALT accounts
       var altAccounts = [];
       if (jupTx.message.addressTableLookups && jupTx.message.addressTableLookups.length) {
         var altResults = await Promise.all(jupTx.message.addressTableLookups.map(function(l) { return connection.getAddressLookupTable(l.accountKey); }));
         altAccounts = altResults.map(function(r) { return r.value; }).filter(Boolean);
       }
 
-      // Step 4: Decompile, append fee, recompile
       var decompiledMsg = TransactionMessage.decompile(jupTx.message, { addressLookupTableAccounts: altAccounts });
       decompiledMsg.instructions.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
-
       var bh = await connection.getLatestBlockhash('confirmed');
       decompiledMsg.recentBlockhash = bh.blockhash;
       var finalTx = new VersionedTransaction(decompiledMsg.compileToV0Message(altAccounts));
-
       var accountKeys = finalTx.message.staticAccountKeys || [];
       if (!accountKeys.some(function(k) { return k.toString() === FEE_WALLET; })) throw new Error('Fee instruction missing from transaction');
 
       var sig = await sendTransaction(finalTx, connection, { skipPreflight: false, maxRetries: 3 });
       await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
-      console.log('Swap+fee tx:', sig);
       setSwapTx(sig); setSwapStatus('success'); setFromAmt(''); setQuote(null);
       setTimeout(function() { setSwapStatus('idle'); setSwapTx(null); }, 5000);
     } catch (e) {
@@ -305,16 +316,14 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
 
   var modeLabel = mode === 'buy' ? 'Buy' : 'Sell';
   var modeGradient = mode === 'buy' ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'linear-gradient(135deg,#ff3b6b,#cc1144)';
-  var fromCoinData = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
-  var fromPriceVal = fromCoinData ? fromCoinData.current_price : (coin ? coin.current_price : 0);
-  var solCoinPrice = (coins.find(function(c) { return c.id === 'solana'; }) || {}).current_price || 150;
-  var toCoinData = coins.find(function(c) { return c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
-  var toPriceVal = toCoinData ? toCoinData.current_price : (toToken && toToken.symbol === 'SOL' ? solCoinPrice : toToken && toToken.symbol === 'USDC' ? 1 : 0);
-  if (!fromPriceVal && quote && fromAmt && parseFloat(fromAmt) > 0 && toPriceVal > 0) {
-    fromPriceVal = (parseFloat(quote.outAmountDisplay) * toPriceVal) / parseFloat(fromAmt);
+  var fromCoinData2 = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
+  var fromPriceVal = fromCoinData2 ? fromCoinData2.current_price : (coin ? coin.current_price : 0);
+  var solCoinPrice2 = (coins.find(function(c) { return c.id === 'solana'; }) || {}).current_price || 150;
+  var toCoinData2 = coins.find(function(c) { return c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
+  var toPriceValDisplay = toCoinData2 ? toCoinData2.current_price : (toToken && toToken.symbol === 'SOL' ? solCoinPrice2 : toToken && (toToken.symbol === 'USDC' || toToken.symbol === 'USDT') ? 1 : 0);
+  if (!fromPriceVal && quote && fromAmt && parseFloat(fromAmt) > 0 && toPriceValDisplay > 0) {
+    fromPriceVal = (parseFloat(quote.outAmountDisplay) * toPriceValDisplay) / parseFloat(fromAmt);
   }
-  var toCoinData = coins.find(function(c) { return c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
-  var toPriceVal = toCoinData ? toCoinData.current_price : 0;
 
   if (!open) return null;
 
@@ -349,8 +358,8 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
           <div style={{ marginTop: 8, display: 'flex', gap: 8, alignItems: 'center' }}>
             <input value={fromAmt} onChange={function(e) { setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }} placeholder="0.00" style={{ flex: 1, background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '14px 16px', fontSize: 26, fontWeight: 600, color: '#fff', outline: 'none' }} />
             {fromBalance != null && fromBalance > 0 && <button onClick={function() { var max = fromToken && fromToken.symbol === 'SOL' ? Math.max(0, fromBalance - 0.01) : fromBalance; setFromAmt(max > 0 ? max.toFixed(6) : '0'); }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 8, padding: '8px 12px', color: C.accent, fontSize: 12, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>}
-            {fromAmt && fromPriceVal > 0 && <div style={{ textAlign: 'right', marginTop: 4, fontSize: 11, color: C.muted }}>{fmt(parseFloat(fromAmt) * fromPriceVal)}</div>}
           </div>
+          {fromAmt && fromPriceVal > 0 && <div style={{ textAlign: 'right', marginTop: 4, fontSize: 11, color: C.muted }}>{fmt(parseFloat(fromAmt) * fromPriceVal)}</div>}
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'center', margin: '10px 0' }}>
@@ -361,7 +370,7 @@ function TradeDrawer({ open, onClose, mode, coin, jupiterToken, jupiterTokens, c
           <TokenSelect selected={toToken} onSelect={setToToken} jupiterTokens={jupiterTokens} label="YOU RECEIVE" />
           <div style={{ marginTop: 8, background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '14px 16px' }}>
             <div style={{ fontSize: 26, fontWeight: 600, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>{quoteLoading ? '...' : quote ? quote.outAmountDisplay : '0.00'}</div>
-            {quote && toPriceVal > 0 && <div style={{ marginTop: 4, fontSize: 11, color: C.muted }}>{fmt(parseFloat(quote.outAmountDisplay) * toPriceVal)}</div>}
+            {quote && toPriceValDisplay > 0 && <div style={{ marginTop: 4, fontSize: 11, color: C.muted }}>{fmt(parseFloat(quote.outAmountDisplay) * toPriceValDisplay)}</div>}
           </div>
         </div>
 
@@ -412,17 +421,22 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
   const [chartLoading, setChartLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState('buy');
+  const [pools, setPools] = useState([]);
+  const [poolsLoading, setPoolsLoading] = useState(false);
+  const [totalLiquidity, setTotalLiquidity] = useState(0);
+
+  var isEvmToken = coin && (coin.chain === 'evm' || (coin.address && !coin.mint));
 
   var jupiterToken = null;
-  if (coin && coin.symbol) {
+  if (!isEvmToken && coin && coin.symbol) {
     jupiterToken = POPULAR_TOKENS.find(function(t) { return t.symbol && t.symbol.toUpperCase() === coin.symbol.toUpperCase(); });
   }
-  if (!jupiterToken && coin && coin.symbol && jupiterTokens && jupiterTokens.length > 0) {
+  if (!jupiterToken && !isEvmToken && coin && coin.symbol && jupiterTokens && jupiterTokens.length > 0) {
     var found = jupiterTokens.find(function(t) { return t.symbol && t.symbol.toUpperCase() === coin.symbol.toUpperCase(); });
     if (found) jupiterToken = found;
   }
-  if (!jupiterToken && coin) {
-    jupiterToken = { mint: SOL_TOKEN.mint, symbol: coin.symbol || 'TOKEN', name: coin.name || 'Token', decimals: 6 };
+  if (!jupiterToken && !isEvmToken && coin) {
+    jupiterToken = { mint: coin.mint || coin.id || '', symbol: coin.symbol || 'TOKEN', name: coin.name || 'Token', decimals: coin.decimals || 6, logoURI: coin.image || null };
   }
 
   useEffect(function() {
@@ -432,8 +446,6 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
       try {
         var days = parseInt(chartPeriod) || 7;
         var points = [];
-
-        // CoinGecko coins have a proper id (not a mint address) - use their historical data
         var isCgCoin = coin.id && !coin.isSolanaToken && !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(coin.id);
         if (isCgCoin) {
           var cgRes = await fetch('https://api.coingecko.com/api/v3/coins/' + coin.id + '/market_chart?vs_currency=usd&days=' + days);
@@ -443,12 +455,12 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
             return { t: new Date(item[0]).toLocaleDateString('en', { month: 'short', day: 'numeric' }), p: +item[1].toFixed(6) };
           });
         } else {
-          // Solana-native token - use GeckoTerminal OHLCV
-          var tokenAddr = coin.id || coin.mint;
+          var tokenAddr = coin.id || coin.mint || coin.address;
+          var network = isEvmToken ? ('ethereum') : 'solana';
           var timeframe = days <= 1 ? 'minute' : 'day';
           var aggregate = days <= 1 ? 30 : 1;
           var limit = days <= 1 ? 48 : days;
-          var gtRes = await fetch('https://api.geckoterminal.com/api/v2/networks/solana/tokens/' + tokenAddr + '/ohlcv/' + timeframe + '?aggregate=' + aggregate + '&limit=' + limit);
+          var gtRes = await fetch('https://api.geckoterminal.com/api/v2/networks/' + network + '/tokens/' + tokenAddr + '/ohlcv/' + timeframe + '?aggregate=' + aggregate + '&limit=' + limit);
           var gtData = await gtRes.json();
           var ohlcv = gtData.data && gtData.data.attributes && gtData.data.attributes.ohlcv_list;
           if (ohlcv && ohlcv.length) {
@@ -462,7 +474,40 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
       setChartLoading(false);
     };
     fetchChart();
-  }, [coin, chartPeriod]);
+  }, [coin, chartPeriod, isEvmToken]);
+
+  useEffect(function() {
+    if (!coin) return;
+    var tokenAddr = coin.mint || coin.id || coin.address;
+    if (!tokenAddr) return;
+
+    var isMounted = true;
+    setPoolsLoading(true);
+    setPools([]);
+    setTotalLiquidity(0);
+
+    fetch('https://api.dexscreener.com/latest/dex/tokens/' + tokenAddr)
+      .then(function(r) { return r.ok ? r.json() : { pairs: [] }; })
+      .catch(function() { return { pairs: [] }; })
+      .then(function(data) {
+        if (!isMounted) return;
+        var pairs = (data.pairs || [])
+          .sort(function(a, b) {
+            var la = a.liquidity ? a.liquidity.usd || 0 : 0;
+            var lb = b.liquidity ? b.liquidity.usd || 0 : 0;
+            return lb - la;
+          })
+          .slice(0, 5);
+        var total = pairs.reduce(function(sum, p) {
+          return sum + (p.liquidity ? p.liquidity.usd || 0 : 0);
+        }, 0);
+        setPools(pairs);
+        setTotalLiquidity(total);
+        setPoolsLoading(false);
+      });
+
+    return function() { isMounted = false; };
+  }, [coin]);
 
   if (!coin) return null;
 
@@ -479,7 +524,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
             {coin.image ? <img src={coin.image} alt={coin.symbol} style={{ width: 48, height: 48, borderRadius: '50%' }} /> : <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: C.accent }}>{coin.symbol && coin.symbol.charAt(0).toUpperCase()}</div>}
             <div>
               <div style={{ fontWeight: 800, fontSize: 20, color: '#fff' }}>{coin.name}</div>
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{coin.symbol && coin.symbol.toUpperCase()} - Rank #{coin.market_cap_rank || '--'}</div>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{coin.symbol && coin.symbol.toUpperCase()} {coin.market_cap_rank ? '- Rank #' + coin.market_cap_rank : ''} {isEvmToken ? <span style={{ fontSize: 9, color: '#627eea', background: 'rgba(98,126,234,.15)', borderRadius: 4, padding: '1px 5px', marginLeft: 4 }}>EVM</span> : null}</div>
             </div>
           </div>
           <div style={{ textAlign: 'right' }}>
@@ -498,6 +543,8 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
 
         {chartLoading ? (
           <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted }}>Loading chart...</div>
+        ) : chartData.length === 0 ? (
+          <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 12 }}>No chart data available</div>
         ) : (
           <ResponsiveContainer width="100%" height={200}>
             <AreaChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
@@ -516,10 +563,17 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         )}
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
-        <button onClick={function() { setDrawerMode('buy'); setDrawerOpen(true); }} style={{ padding: '18px 10px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, boxShadow: '0 0 20px rgba(0,229,255,.2)', minHeight: 56 }}>Buy {coin.symbol && coin.symbol.toUpperCase()}</button>
-        <button onClick={function() { setDrawerMode('sell'); setDrawerOpen(true); }} style={{ padding: '18px 10px', borderRadius: 14, cursor: 'pointer', background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.3)', color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}>Sell {coin.symbol && coin.symbol.toUpperCase()}</button>
-      </div>
+      {!isEvmToken ? (
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
+          <button onClick={function() { setDrawerMode('buy'); setDrawerOpen(true); }} style={{ padding: '18px 10px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}>Buy {coin.symbol && coin.symbol.toUpperCase()}</button>
+          <button onClick={function() { setDrawerMode('sell'); setDrawerOpen(true); }} style={{ padding: '18px 10px', borderRadius: 14, cursor: 'pointer', background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.3)', color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}>Sell {coin.symbol && coin.symbol.toUpperCase()}</button>
+        </div>
+      ) : (
+        <div style={{ marginBottom: 14, padding: 14, background: 'rgba(0,229,255,.05)', border: '1px solid rgba(0,229,255,.12)', borderRadius: 14, textAlign: 'center' }}>
+          <div style={{ color: C.muted, fontSize: 13, marginBottom: 4 }}>EVM token -- trade via the Swap tab</div>
+          <div style={{ fontSize: 11, color: C.muted2 }}>Supported on {coin.chainId ? 'Chain ID ' + coin.chainId : 'EVM'} via 0x / LI.FI</div>
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginBottom: 14 }}>
         {[
@@ -527,7 +581,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
           ['24H High', fmt(coin.high_24h)], ['24H Low', fmt(coin.low_24h)],
           ['All Time High', fmt(coin.ath)], ['ATH Change', pct(coin.ath_change_percentage)],
           ['Circulating Supply', coin.circulating_supply ? (coin.circulating_supply / 1e6).toFixed(2) + 'M' : '--'],
-          ['Market Cap Rank', '#' + (coin.market_cap_rank || '--')],
+          ['Market Cap Rank', coin.market_cap_rank ? '#' + coin.market_cap_rank : '--'],
         ].map(function(item) {
           return (
             <div key={item[0]} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 14 }}>
@@ -553,14 +607,51 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         </div>
       </div>
 
-      {jupiterToken && jupiterToken.mint !== SOL_TOKEN.mint && (
+      <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16, marginBottom: 14 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>LIQUIDITY</div>
+          {totalLiquidity > 0 && <div style={{ fontSize: 15, fontWeight: 700, color: C.accent }}>{fmt(totalLiquidity)} total</div>}
+        </div>
+        {poolsLoading ? (
+          <div style={{ color: C.muted, fontSize: 12, padding: '8px 0' }}>Loading pools...</div>
+        ) : pools.length === 0 ? (
+          <div style={{ color: C.muted, fontSize: 12, padding: '8px 0' }}>No liquidity data found</div>
+        ) : (
+          pools.map(function(pool, i) {
+            var liq = pool.liquidity ? pool.liquidity.usd || 0 : 0;
+            var vol = pool.volume ? pool.volume.h24 || 0 : 0;
+            var pairLabel = pool.baseToken && pool.quoteToken ? pool.baseToken.symbol + '/' + pool.quoteToken.symbol : '--';
+            var dexName = pool.dexId ? pool.dexId.charAt(0).toUpperCase() + pool.dexId.slice(1) : '--';
+            return (
+              <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: i < pools.length - 1 ? '1px solid rgba(255,255,255,.04)' : 'none' }}>
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>{dexName}</div>
+                  <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{pairLabel} · Vol 24h: {fmt(vol)}</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 14, fontWeight: 700, color: C.green }}>{fmt(liq)}</div>
+                  <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>Liquidity</div>
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+
+      {!isEvmToken && jupiterToken && jupiterToken.mint && (
         <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>SOLANA CONTRACT</div>
           <div style={{ fontSize: 11, color: C.accent, fontFamily: 'monospace', wordBreak: 'break-all', lineHeight: 1.6 }}>{jupiterToken.mint}</div>
         </div>
       )}
+      {isEvmToken && (coin.address || coin.id) && (
+        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16 }}>
+          <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>CONTRACT ADDRESS</div>
+          <div style={{ fontSize: 11, color: C.accent, fontFamily: 'monospace', wordBreak: 'break-all', lineHeight: 1.6 }}>{coin.address || coin.id}</div>
+        </div>
+      )}
 
-      {drawerOpen && (
+      {drawerOpen && !isEvmToken && (
         <TradeDrawer open={drawerOpen} onClose={function() { setDrawerOpen(false); }} mode={drawerMode} coin={coin} coins={coins} jupiterToken={jupiterToken} jupiterTokens={jupiterTokens} onConnectWallet={onConnectWallet} isConnected={isConnected} isSolanaConnected={isSolanaConnected} />
       )}
     </div>
