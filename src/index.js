@@ -46,7 +46,7 @@ const shape         = { id: 360,    name: 'Shape',        nativeCurrency: { name
 // FIX: Use public RPC as fallback -- never hardcode API keys in source code
 // as they end up visible in the production JS bundle
 const SOLANA_RPC = process.env.REACT_APP_SOLANA_RPC || 'https://api.mainnet-beta.solana.com';
-const PROJECT_ID = '1a7c741caab0a2c5ffa2b199a816ea92';
+const PROJECT_ID = process.env.REACT_APP_WC_PROJECT_ID || '';
 
 const metadata = {
   name: 'Nexus DEX',
