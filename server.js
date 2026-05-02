@@ -46,7 +46,7 @@ var oxPath = req.path.replace(’/api/0x’, ‘’);
 var queryString = req.url.includes(’?’) ? req.url.slice(req.url.indexOf(’?’)) : ‘’;
 var url = ‘https://api.0x.org’ + oxPath + queryString;
 
-```
+
 var response = await fetchWithTimeout(url, {
   headers: {
     '0x-api-key': OX_API_KEY,
@@ -60,7 +60,7 @@ if (result.parsed !== null) {
   return res.status(response.status).json(result.parsed);
 }
 return res.status(response.status).json({ error: 'Upstream returned non-JSON', body: result.raw });
-```
+
 
 } catch (e) {
 if (e.name === ‘AbortError’) {
@@ -77,7 +77,7 @@ var raydiumPath = req.path.replace(’/api/raydium’, ‘’);
 var queryString = req.url.includes(’?’) ? req.url.slice(req.url.indexOf(’?’)) : ‘’;
 var url = ‘https://api-v3.raydium.io’ + raydiumPath + queryString;
 
-```
+
 var response = await fetchWithTimeout(url, {
   headers: { 'Content-Type': 'application/json' },
 });
