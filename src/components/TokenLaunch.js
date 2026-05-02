@@ -5,7 +5,7 @@ import { PublicKey, SystemProgram, Transaction, Keypair, LAMPORTS_PER_SOL } from
 import { Raydium, LAUNCHPAD_PROGRAM, getPdaLaunchpadConfigId, TxVersion } from ‘@raydium-io/raydium-sdk-v2’;
 import { NATIVE_MINT } from ‘@solana/spl-token’;
 import BN from ‘bn.js’;
-
+ 
 // FIX 2: Removed unused LAUNCHPAD_PROGRAM_ID string constant — the SDK exports
 // LAUNCHPAD_PROGRAM (a PublicKey) which is what all SDK calls actually use.
 const SOL_FEE_WALLET = ‘47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5’;
