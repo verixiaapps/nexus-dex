@@ -7,12 +7,22 @@
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",
+    "react-app-rewired": "^2.2.1",
     "ajv": "^8.12.0",
-    "buffer": "^6.0.3",
     "dotenv": "^16.4.5",
     "express": "^4.18.2",
     "cors": "^2.8.5",
     "bn.js": "^5.2.1",
+    "buffer": "^6.0.3",
+    "process": "^0.11.10",
+    "crypto-browserify": "^3.12.0",
+    "stream-browserify": "^3.0.0",
+    "stream-http": "^3.2.0",
+    "https-browserify": "^1.0.0",
+    "os-browserify": "^0.3.0",
+    "path-browserify": "^1.0.1",
+    "assert": "^2.1.0",
+    "url": "^0.11.3",
     "@solana/web3.js": "^1.87.6",
     "@solana/spl-token": "^0.3.11",
     "@solana/wallet-adapter-base": "^0.9.23",
@@ -34,8 +44,8 @@
   },
   "scripts": {
     "start": "node server.js",
-    "build": "react-scripts build",
-    "dev": "concurrently \"react-scripts start\" \"node server.js\""
+    "build": "react-app-rewired build",
+    "dev": "concurrently \"react-app-rewired start\" \"node server.js\""
   },
   "browserslist": {
     "production": [
