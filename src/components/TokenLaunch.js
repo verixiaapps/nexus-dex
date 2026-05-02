@@ -116,7 +116,7 @@ if (!publicKey || !signTransaction || !signAllTransactions) {
 setError(‘Connect Solana wallet first’); return;
 }
 
-```
+
 // FIX 1: Validate supply string before BN conversion
 var supplyStr = form.supply.trim();
 if (!supplyStr || isNaN(Number(supplyStr)) || Number(supplyStr) < 10000000) {
@@ -217,7 +217,7 @@ try {
   setError(e.message || 'Launch failed');
 }
 setLaunching(false);
-```
+
 
 }, [publicKey, signTransaction, signAllTransactions, connection, form, imageFile, imagePreview]);
 
@@ -234,7 +234,7 @@ return (
 <p style={{ color: C.muted, fontSize: 13, margin: ‘6px 0 0’ }}>Create your Solana token with a bonding curve. Powered by Raydium LaunchLab.</p>
 </div>
 
-```
+
   {step < 4 && (
     <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 24 }}>
       {[1, 2, 3].map(function(s) {
