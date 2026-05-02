@@ -9,7 +9,8 @@ const EVM_FEE_WALLET = '0xC41c1de4250104dC1EE2854ffD5b40a04B9AC9fF';
 const PLATFORM_FEE = 0.03;
 const SAFETY_FEE = 0.02;
 const TOTAL_FEE = PLATFORM_FEE + SAFETY_FEE;
-var NATIVE = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
+// FIX 1: lowercase -- 0x API v2 rejects mixed-case checksummed addresses
+var NATIVE = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 
 var CHAIN_NAMES = {
   1: 'Ethereum', 137: 'Polygon', 42161: 'Arbitrum', 8453: 'Base', 56: 'BNB Chain',
@@ -76,11 +77,6 @@ function fmt(n, d) {
   return '$' + n.toFixed(6);
 }
 
-function pct(n) {
-  if (!n && n !== 0) return '--';
-  return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
-}
-
 function ChainBadge({ token }) {
   if (!token) return null;
   var label = isSol(token) ? 'SOL' : (CHAIN_NAMES[token.chainId] || 'EVM');
@@ -136,10 +132,6 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
   useEffect(function() {
     if (!q || q.length < 1) { setSearchResults([]); return; }
     var ql = q.toLowerCase();
-
-    var chainMatch = Object.entries(CHAIN_NAMES).find(function(entry) {
-      return entry[1].toLowerCase().includes(ql);
-    });
 
     var sm = solTokens.filter(function(t) {
       return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
@@ -264,6 +256,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   const [customAddress, setCustomAddress] = useState('');
 
   var route = getRoute(fromToken, toToken);
+  // FIX 2: totalFee correctly includes lifi cross-chain fee
   var totalFee = route === 'lifi' ? PLATFORM_FEE + SAFETY_FEE + 0.04 : TOTAL_FEE;
 
   var fetchQuote = useCallback(async function() {
@@ -290,8 +283,14 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
 
       } else if (route === '0x') {
         var sellAmt = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
-        var oxParams = new URLSearchParams({ chainId: fromToken.chainId.toString(), sellToken: fromToken.address, buyToken: toToken.address, sellAmount: sellAmt, slippageBps: Math.round(slip * 100).toString() });
-        console.log('0x params:', oxParams.toString());
+        // FIX 3: lowercase addresses -- 0x API v2 rejects mixed-case; tradeSurplusRecipient omitted (price call only)
+        var oxParams = new URLSearchParams({
+          chainId: fromToken.chainId.toString(),
+          sellToken: fromToken.address.toLowerCase(),
+          buyToken: toToken.address.toLowerCase(),
+          sellAmount: sellAmt,
+          slippageBps: Math.round(slip * 100).toString(),
+        });
         var oxRes = await fetch('/api/0x/swap/allowance-holder/price?' + oxParams.toString());
         var oxData = await oxRes.json();
         if (oxData && oxData.buyAmount) {
@@ -425,7 +424,20 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       } else if (route === '0x') {
         if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
         var sellAmt2 = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
-        var oxExecParams = new URLSearchParams({ chainId: fromToken.chainId.toString(), sellToken: fromToken.address, buyToken: toToken.address, sellAmount: sellAmt2, taker: evmAddress, swapFeeBps: '500', swapFeeRecipient: EVM_FEE_WALLET, swapFeeToken: toToken.address === NATIVE ? fromToken.address : toToken.address, slippageBps: Math.round(slip * 100).toString(), tradeSurplusRecipient: EVM_FEE_WALLET });
+        // FIX 4: lowercase all addresses; case-insensitive NATIVE check for swapFeeToken
+        var feeToken = toToken.address.toLowerCase() === NATIVE ? fromToken.address : toToken.address;
+        var oxExecParams = new URLSearchParams({
+          chainId: fromToken.chainId.toString(),
+          sellToken: fromToken.address.toLowerCase(),
+          buyToken: toToken.address.toLowerCase(),
+          sellAmount: sellAmt2,
+          taker: evmAddress,
+          swapFeeBps: '500',
+          swapFeeRecipient: EVM_FEE_WALLET,
+          swapFeeToken: feeToken.toLowerCase(),
+          slippageBps: Math.round(slip * 100).toString(),
+          tradeSurplusRecipient: EVM_FEE_WALLET,
+        });
         var oxQuoteRes = await fetch('/api/0x/swap/allowance-holder/quote?' + oxExecParams.toString());
         var oxQuote = await oxQuoteRes.json();
         if (!oxQuote || !oxQuote.transaction) throw new Error('0x: ' + JSON.stringify(oxQuote));
@@ -478,7 +490,8 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       fromPriceVal = outVal / parseFloat(fromAmt);
     }
   }
-  var feeUsd = fromAmt && fromPriceVal ? (parseFloat(fromAmt) * fromPriceVal * TOTAL_FEE).toFixed(2) : '0.00';
+  // FIX 5: use totalFee (not hardcoded TOTAL_FEE) so lifi routes show correct 9% total
+  var feeUsd = fromAmt && fromPriceVal ? (parseFloat(fromAmt) * fromPriceVal * totalFee).toFixed(2) : '0.00';
   var engineLabel = route === 'jupiter' ? 'Jupiter' : route === '0x' ? '0x' : route === 'lifi' ? 'LI.FI' : 'Nexus';
   var txLink = swapTx ? (route === 'jupiter' ? 'https://solscan.io/tx/' + swapTx : route === 'lifi' ? 'https://scan.li.fi/tx/' + swapTx : 'https://etherscan.io/tx/' + swapTx) : null;
 
@@ -558,6 +571,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Enter the wallet where you want to receive your tokens</div>
           </div>
         )}
+
         {swapError && <div style={{ marginTop: 10, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 8, fontSize: 12, color: C.red }}>{swapError}</div>}
 
         {isConnected ? (
