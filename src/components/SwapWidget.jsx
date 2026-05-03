@@ -24,7 +24,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from ‘react’;
 import { Buffer } from ‘buffer’;
 import { useWallet, useConnection } from ‘@solana/wallet-adapter-react’;
-import { useAccount, useWalletClient, useBalance, useSwitchChain } from ‘wagmi’;
+import { useAccount, useWalletClient, useBalance, useSwitchChain, usePublicClient } from ‘wagmi’;
 import {
 VersionedTransaction,
 TransactionMessage,
@@ -88,30 +88,28 @@ const CHAIN_NAMES = {
 9745: ‘PlasmaChain’, 999: ‘HyperEVM’, 4217: ‘Yala’,
 };
 
-// Native token symbol per chain (for default-token resolution)
-const NATIVE_SYMBOL = {
-1: ‘ETH’, 10: ‘ETH’, 8453: ‘ETH’, 42161: ‘ETH’, 59144: ‘ETH’, 534352: ‘ETH’,
-324: ‘ETH’, 5000: ‘MNT’, 81457: ‘ETH’, 34443: ‘ETH’, 130: ‘ETH’, 57073: ‘ETH’,
-60808: ‘ETH’, 2741: ‘ETH’, 480: ‘ETH’, 360: ‘ETH’, 6342: ‘ETH’, 1135: ‘ETH’,
-43111: ‘ETH’, 167000: ‘ETH’, 7777777: ‘ETH’, 252: ‘ETH’, 255: ‘ETH’, 48900: ‘ETH’,
-56: ‘BNB’, 137: ‘POL’, 43114: ‘AVAX’, 250: ‘FTM’, 100: ‘xDAI’, 25: ‘CRO’,
-1284: ‘GLMR’, 42220: ‘CELO’, 1329: ‘SEI’, 2020: ‘RON’, 1116: ‘CORE’,
-146: ‘S’, 80094: ‘BERA’, 33139: ‘APE’, 747: ‘FLOW’, 2222: ‘KAVA’,
-288: ‘ETH’, 122: ‘FUSE’, 321: ‘KCS’, 200901: ‘BTC’, 143: ‘MON’,
-1313161554: ‘ETH’, 1088: ‘METIS’, 14: ‘FLR’, 9745: ‘XPL’, 999: ‘HYPE’, 4217: ‘YALA’,
-};
-
 // Stablecoin USDC addresses per chain (for default to-token in swap mode)
 const USDC_BY_CHAIN = {
 1:     ‘0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48’,
 10:    ‘0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85’,
 56:    ‘0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d’,
+100:   ‘0xDDAfbb505ad214D7b80b1f830fcCc89B60fb7A83’,
+130:   ‘0x078D782b760474a361dDA0AF3839290b0EF57AD6’,
 137:   ‘0x3c499c542cef5e3811e1192ce70d8cc03d5c3359’,
+146:   ‘0x29219dd400f2Bf60E5a23d13Be72B486D4038894’,
+250:   ‘0x2F733095B80A04b38b0D10cC884524a3d09b836a’,
 324:   ‘0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4’,
+480:   ‘0x79A02482A880bCE3F13e09Da970dC34db4CD24d1’,
+1135:  ‘0xF242275d3a6527d877f2c927a82D9b057609cc71’,
+5000:  ‘0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9’,
 8453:  ‘0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913’,
+34443: ‘0xd988097fb8612cc24eeC14542bC03424c656005f’,
 42161: ‘0xaf88d065e77c8cC2239327C5EDb3A432268e5831’,
 43114: ‘0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E’,
 59144: ‘0x176211869cA2b568f2A7D4EE941E073a821EE1ff’,
+81457: ‘0x4300000000000000000000000000000000000003’,
+534352: ‘0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4’,
+80094: ‘0x549943e04f40284185054145c6E4e9568C1D3241’,
 };
 const USDC_SOLANA = ‘EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v’;
 
@@ -231,6 +229,22 @@ if (!addr || addr.length < head + tail) return addr || ‘’;
 return addr.slice(0, head) + ‘…’ + addr.slice(-tail);
 }
 
+/* Convert a decimal token amount string (e.g., “1.5”) to raw smallest-units
+
+- using BigInt so precision is preserved at any size — Math.pow(10,18) loses
+- precision for large 18-decimal amounts. */
+  function toRawAmount(amountStr, decimals) {
+  if (!amountStr) return ‘0’;
+  const s = String(amountStr).trim();
+  if (!s || isNaN(Number(s))) return ‘0’;
+  const [whole, frac = ‘’] = s.split(’.’);
+  const fracPadded = (frac + ‘0’.repeat(decimals)).slice(0, decimals);
+  const wholeBig = BigInt(whole || ‘0’);
+  const fracBig  = fracPadded ? BigInt(fracPadded) : BigInt(0);
+  const scale    = BigInt(10) ** BigInt(decimals);
+  return (wholeBig * scale + fracBig).toString();
+  }
+
 /* ============================================================================
 
 - TOKEN NORMALIZATION — convert any “coin” shape to a strict Token object
@@ -313,17 +327,98 @@ return null;
 - Mode ‘swap’ → free-form
 - ========================================================================= */
 
+// Native symbol lookup per chain — used when synthesizing native tokens
+// for chains not in POPULAR_TOKENS.
+const _NATIVE_BY_CHAIN = {
+1: { symbol: ‘ETH’, name: ‘Ethereum’ },
+10: { symbol: ‘ETH’, name: ‘ETH (Optimism)’ },
+25: { symbol: ‘CRO’, name: ‘Cronos’ },
+56: { symbol: ‘BNB’, name: ‘BNB’ },
+100: { symbol: ‘xDAI’, name: ‘xDAI’ },
+122: { symbol: ‘FUSE’, name: ‘Fuse’ },
+130: { symbol: ‘ETH’, name: ‘ETH (Unichain)’ },
+137: { symbol: ‘POL’, name: ‘Polygon’ },
+146: { symbol: ‘S’, name: ‘Sonic’ },
+250: { symbol: ‘FTM’, name: ‘Fantom’ },
+252: { symbol: ‘ETH’, name: ‘ETH (Fraxtal)’ },
+255: { symbol: ‘ETH’, name: ‘ETH (Kroma)’ },
+288: { symbol: ‘ETH’, name: ‘ETH (Boba)’ },
+321: { symbol: ‘KCS’, name: ‘KuCoin’ },
+324: { symbol: ‘ETH’, name: ‘ETH (zkSync)’ },
+360: { symbol: ‘ETH’, name: ‘ETH (Shape)’ },
+480: { symbol: ‘ETH’, name: ‘ETH (World Chain)’ },
+747: { symbol: ‘FLOW’, name: ‘Flow’ },
+1088: { symbol: ‘METIS’, name: ‘Metis’ },
+1116: { symbol: ‘CORE’, name: ‘Core’ },
+1135: { symbol: ‘ETH’, name: ‘ETH (Lisk)’ },
+1284: { symbol: ‘GLMR’, name: ‘Moonbeam’ },
+1313161554: { symbol: ‘ETH’, name: ‘ETH (Aurora)’ },
+1329: { symbol: ‘SEI’, name: ‘SEI’ },
+2020: { symbol: ‘RON’, name: ‘Ronin’ },
+2222: { symbol: ‘KAVA’, name: ‘Kava’ },
+2741: { symbol: ‘ETH’, name: ‘ETH (Abstract)’ },
+5000: { symbol: ‘MNT’, name: ‘Mantle’ },
+8453: { symbol: ‘ETH’, name: ‘ETH (Base)’ },
+33139: { symbol: ‘APE’, name: ‘ApeCoin’ },
+34443: { symbol: ‘ETH’, name: ‘ETH (Mode)’ },
+42161: { symbol: ‘ETH’, name: ‘ETH (Arbitrum)’ },
+42220: { symbol: ‘CELO’, name: ‘Celo’ },
+43111: { symbol: ‘ETH’, name: ‘ETH (Hemi)’ },
+43114: { symbol: ‘AVAX’, name: ‘Avalanche’ },
+48900: { symbol: ‘ETH’, name: ‘ETH (Zircuit)’ },
+57073: { symbol: ‘ETH’, name: ‘ETH (Ink)’ },
+59144: { symbol: ‘ETH’, name: ‘ETH (Linea)’ },
+60808: { symbol: ‘ETH’, name: ‘ETH (BOB)’ },
+80094: { symbol: ‘BERA’, name: ‘Berachain’ },
+81457: { symbol: ‘ETH’, name: ‘ETH (Blast)’ },
+167000: { symbol: ‘ETH’, name: ‘ETH (Taiko)’ },
+200901: { symbol: ‘BTC’, name: ‘Bitlayer BTC’ },
+534352: { symbol: ‘ETH’, name: ‘ETH (Scroll)’ },
+7777777: { symbol: ‘ETH’, name: ‘ETH (Zora)’ },
+};
+
 function nativeOfChain(chainId) {
-if (chainId === ‘solana’) return POPULAR_TOKENS.find((t) => t.mint === WSOL_MINT);
-return POPULAR_TOKENS.find((t) => isEvm(t) && t.chainId === chainId && t.address === NATIVE_EVM)
-|| POPULAR_TOKENS.find((t) => isEvm(t) && t.chainId === 1 && t.address === NATIVE_EVM);
+if (chainId === ‘solana’) {
+return POPULAR_TOKENS.find((t) => t.mint === WSOL_MINT) || null;
+}
+// First try POPULAR_TOKENS for the icon
+const popular = POPULAR_TOKENS.find((t) => isEvm(t) && t.chainId === chainId && t.address === NATIVE_EVM);
+if (popular) return popular;
+// Synthesize from chain meta
+const meta = _NATIVE_BY_CHAIN[chainId];
+if (!meta) return null;
+return {
+chain: ‘evm’,
+address: NATIVE_EVM,
+chainId,
+symbol: meta.symbol,
+name: meta.name,
+decimals: 18,
+logoURI: null,
+};
 }
 
 function usdcOfChain(chainId) {
-if (chainId === ‘solana’) return POPULAR_TOKENS.find((t) => t.mint === USDC_SOLANA);
+if (chainId === ‘solana’) {
+return POPULAR_TOKENS.find((t) => t.mint === USDC_SOLANA) || null;
+}
 const addr = USDC_BY_CHAIN[chainId];
 if (!addr) return null;
-return POPULAR_TOKENS.find((t) => isEvm(t) && t.chainId === chainId && (t.address || ‘’).toLowerCase() === addr.toLowerCase());
+// First try POPULAR_TOKENS for the icon
+const popular = POPULAR_TOKENS.find((t) =>
+isEvm(t) && t.chainId === chainId && (t.address || ‘’).toLowerCase() === addr.toLowerCase()
+);
+if (popular) return popular;
+// Synthesize from address
+return {
+chain: ‘evm’,
+address: addr,
+chainId,
+symbol: ‘USDC’,
+name: ‘USDC (’ + (CHAIN_NAMES[chainId] || ‘EVM’) + ‘)’,
+decimals: 6,
+logoURI: ‘https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png’,
+};
 }
 
 function chainOfToken(t) {
@@ -385,12 +480,16 @@ async function fetchLifiTokens() {
 if (_lifiTokensCache) return _lifiTokensCache;
 if (_lifiTokensInflight) return _lifiTokensInflight;
 _lifiTokensInflight = fetch(‘https://li.quest/v1/tokens?chainTypes=EVM,SVM’)
-.then((r) => (r.ok ? r.json() : { tokens: {} }))
-.catch(() => ({ tokens: {} }))
+.then((r) => (r.ok ? r.json() : null))
+.catch(() => null)
 .then((data) => {
-_lifiTokensCache = data;
 _lifiTokensInflight = null;
+// Only cache successful, non-empty results — otherwise let next call retry
+if (data && data.tokens && Object.keys(data.tokens).length > 0) {
+_lifiTokensCache = data;
 return data;
+}
+return { tokens: {} };
 });
 return _lifiTokensInflight;
 }
@@ -432,7 +531,8 @@ buyToken:              (buyToken  || ‘’).toLowerCase(),
 sellAmount:            String(sellAmount),
 taker:                 taker || ‘’,
 slippageBps:           String(slipBps),
-swapFeeBps:            String(Math.round(LIFI_FEE * 10000)), // 0x expects bps; using same fee bps as LiFi
+// 0x is for same-chain swaps only — use TOTAL_FEE (5%), not the cross-chain rate.
+swapFeeBps:            String(Math.round(TOTAL_FEE * 10000)),
 swapFeeRecipient:      feeRecipient,
 swapFeeToken:          (feeToken || ‘’).toLowerCase(),
 tradeSurplusRecipient: feeRecipient,
@@ -1038,8 +1138,13 @@ const { publicKey, sendTransaction, connected: solConnected } = useWallet();
 const { connection } = useConnection();
 const { address: evmAddress, isConnected: evmConnected, chainId: evmChainId } = useAccount();
 const { data: walletClient } = useWalletClient();
-const { switchChain } = useSwitchChain();
+const { switchChain, switchChainAsync } = useSwitchChain();
 const walletConnected = solConnected || evmConnected;
+
+// Ref to walletClient so async code paths (after chain switch) can read
+// the freshest client instead of the closure-captured stale one.
+const walletClientRef = useRef(walletClient);
+useEffect(() => { walletClientRef.current = walletClient; }, [walletClient]);
 
 /* — Header chain (controlled from parent or fallback to localStorage) — */
 const [headerChainLocal, setHeaderChainLocal] = useState(() =>
@@ -1107,6 +1212,12 @@ const isCrossChain = route === ‘lifi’;
 
 const isEvmFrom = isEvm(fromToken);
 const isNativeEvmFrom = isEvmFrom && (fromToken.address || ‘’).toLowerCase() === NATIVE_EVM;
+
+/* — Public client for the from-token’s chain (read-only EVM RPC).
+Used for allowance checks and tx receipt waits. — */
+const publicClient = usePublicClient({ chainId: isEvmFrom ? fromToken.chainId : undefined });
+const publicClientRef = useRef(publicClient);
+useEffect(() => { publicClientRef.current = publicClient; }, [publicClient]);
 
 /* — EVM balance (wagmi) — */
 const { data: evmFromBal } = useBalance({
@@ -1179,7 +1290,7 @@ quoteAbortRef.current = controller;
 setQuoteLoading(true);
 const timer = setTimeout(() => controller.abort(), QUOTE_TIMEOUT_MS);
 try {
-  const fromAmtRaw = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
+  const fromAmtRaw = toRawAmount(fromAmt, fromToken.decimals);
   const slipBps = Math.round(slip * 100);
 
   if (route === 'jupiter') {
@@ -1199,9 +1310,7 @@ try {
   } else if (route === '0x') {
     // For Permit2 we need the taker address. If wallet not connected, use a sentinel.
     const taker = evmAddress || '0x0000000000000000000000000000000000000001';
-    // Fee token: charge fee in the buy token if it's a stablecoin/native, else from token
-    const isNatTo = (toToken.address || '').toLowerCase() === NATIVE_EVM;
-    const feeToken = isNatTo ? fromToken.address : toToken.address;
+    // 0x v2 requires swapFeeToken to be the buyToken (toToken).
     const data = await fetchOxQuote({
       chainId:    fromToken.chainId,
       sellToken:  fromToken.address,
@@ -1210,7 +1319,7 @@ try {
       taker,
       slipBps,
       feeRecipient: EVM_FEE_WALLET,
-      feeToken,
+      feeToken:     toToken.address,
       signal: controller.signal,
     });
     setQuote({
@@ -1404,7 +1513,7 @@ if (!quote) return;
 setSwapStatus('loading'); setSwapError(''); setSwapTx(null);
 
 try {
-  const fromAmtRaw = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
+  const fromAmtRaw = toRawAmount(fromAmt, fromToken.decimals);
   const slipBps = Math.round(slip * 100);
 
   /* ============================================================
@@ -1476,22 +1585,26 @@ try {
    * 0X (EVM same-chain) — Permit2 single-sig
    * ============================================================ */
   else if (route === '0x') {
-    if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
+    if (!evmAddress || !walletClientRef.current) throw new Error('Connect EVM wallet');
 
-    // Auto-switch chain if needed
+    // Auto-switch chain if needed (switchChainAsync awaits the wallet's ack)
     if (evmChainId && evmChainId !== fromToken.chainId) {
       try {
-        await switchChain({ chainId: fromToken.chainId });
-        // Wait briefly for wallet to update
-        const start = Date.now();
-        while (Date.now() - start < 5000) {
-          if (walletClient.chain && walletClient.chain.id === fromToken.chainId) break;
-          await new Promise((r) => setTimeout(r, 250));
+        if (switchChainAsync) {
+          await switchChainAsync({ chainId: fromToken.chainId });
+        } else if (switchChain) {
+          switchChain({ chainId: fromToken.chainId });
         }
+        // Brief settle window so wagmi's hooks publish the new walletClient
+        await new Promise((r) => setTimeout(r, 400));
       } catch (e) {
         throw new Error('Please switch your wallet to ' + (CHAIN_NAMES[fromToken.chainId] || 'the correct chain'));
       }
     }
+
+    // Read the freshest walletClient (post chain-switch)
+    const wc = walletClientRef.current;
+    if (!wc) throw new Error('Wallet not ready — try again');
 
     const oxData = quote.oxResponse;
 
@@ -1504,23 +1617,22 @@ try {
 
     if (permit2 && permit2.eip712) {
       // Sign the EIP-712 permit (off-chain, no gas, no chain interaction)
-      const signature = await walletClient.signTypedData({
+      const signature = await wc.signTypedData({
         domain:      permit2.eip712.domain,
         types:       permit2.eip712.types,
         primaryType: permit2.eip712.primaryType,
         message:     permit2.eip712.message,
       });
 
-      // 0x expects the signature appended with a 32-byte length prefix
-      // per their permit2 docs. Format:
-      //   data = quote.transaction.data + uint256(sig.length) + sig
+      // 0x expects the signature appended with a 32-byte length prefix.
+      // Format: data = quote.transaction.data + uint256(sig.length) + sig
       const sigHex = signature.startsWith('0x') ? signature.slice(2) : signature;
       const sigLen = (sigHex.length / 2).toString(16).padStart(64, '0');
       finalTxData = tx.data + sigLen + sigHex;
     }
 
     // ONE signature: the swap tx itself (which includes Permit2-authorized transfer)
-    const hash = await walletClient.sendTransaction({
+    const hash = await wc.sendTransaction({
       to:    tx.to,
       data:  finalTxData,
       value: tx.value ? BigInt(tx.value) : BigInt(0),
@@ -1571,17 +1683,25 @@ try {
         )
         .catch(() => {});
     } else {
-      if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
+      if (!evmAddress || !walletClientRef.current) throw new Error('Connect EVM wallet');
 
-      // Auto-switch chain if needed
+      // Auto-switch chain if needed (switchChainAsync awaits the wallet's ack)
       if (evmChainId && evmChainId !== fromToken.chainId) {
-        try { await switchChain({ chainId: fromToken.chainId }); } catch {}
-        const start = Date.now();
-        while (Date.now() - start < 5000) {
-          if (walletClient.chain && walletClient.chain.id === fromToken.chainId) break;
-          await new Promise((r) => setTimeout(r, 250));
+        try {
+          if (switchChainAsync) {
+            await switchChainAsync({ chainId: fromToken.chainId });
+          } else if (switchChain) {
+            switchChain({ chainId: fromToken.chainId });
+          }
+          await new Promise((r) => setTimeout(r, 400));
+        } catch {
+          throw new Error('Please switch your wallet to ' + (CHAIN_NAMES[fromToken.chainId] || 'the correct chain'));
         }
       }
+
+      const wc = walletClientRef.current;
+      const pc = publicClientRef.current;
+      if (!wc) throw new Error('Wallet not ready — try again');
 
       const isNativeFrom = (fromToken.address || '').toLowerCase() === NATIVE_EVM;
 
@@ -1589,43 +1709,47 @@ try {
       if (!isNativeFrom) {
         const spender = txReq.to;
         const sellBig = BigInt(fromAmtRaw);
-        // Check current allowance
-        const allowCalldata = '0xdd62ed3e' +
-          evmAddress.slice(2).padStart(64, '0') +
-          spender.slice(2).padStart(64, '0');
+        // Check current allowance via the public client
         let needsApprove = true;
-        try {
-          const allowHex = await walletClient.request({
-            method: 'eth_call',
-            params: [{ to: fromToken.address, data: allowCalldata }, 'latest'],
-          });
-          needsApprove = BigInt(allowHex || '0x0') < sellBig;
-        } catch { /* default to needing approve */ }
+        if (pc) {
+          try {
+            const allowance = await pc.readContract({
+              address: fromToken.address,
+              abi: [{
+                name: 'allowance', type: 'function', stateMutability: 'view',
+                inputs: [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }],
+                outputs: [{ name: '', type: 'uint256' }],
+              }],
+              functionName: 'allowance',
+              args: [evmAddress, spender],
+            });
+            needsApprove = BigInt(allowance) < sellBig;
+          } catch { /* default to needing approve */ }
+        }
 
         if (needsApprove) {
-          // Use exact-amount approval (safer than infinite) but use max uint to save future approvals
+          // Use max-uint approval so subsequent swaps don't need re-approval
           const approveData = '0x095ea7b3' +
             spender.slice(2).padStart(64, '0') +
             'f'.repeat(64);
-          const approveHash = await walletClient.sendTransaction({
+          const approveHash = await wc.sendTransaction({
             to: fromToken.address,
             data: approveData,
             value: BigInt(0),
           });
           // Wait for confirmation before bridge tx (must be on-chain)
-          const startedAt = Date.now();
-          while (Date.now() - startedAt < 30_000) {
+          if (pc) {
             try {
-              const r = await walletClient.waitForTransactionReceipt({ hash: approveHash, timeout: 5_000 });
-              if (r) break;
-            } catch {}
-            await new Promise((r) => setTimeout(r, 2_000));
+              await pc.waitForTransactionReceipt({ hash: approveHash, timeout: 60_000 });
+            } catch {
+              // If wait fails, proceed anyway — bridge will revert if approval not landed
+            }
           }
         }
       }
 
       // Final bridge tx — ONE signature (or two total if approval was needed)
-      const hash = await walletClient.sendTransaction({
+      const hash = await wc.sendTransaction({
         to:    txReq.to,
         data:  txReq.data,
         value: txReq.value ? BigInt(txReq.value) : BigInt(0),
@@ -1650,8 +1774,8 @@ try {
 
 }, [
 walletConnected, onConnectWallet, quote, route, fromAmt, fromToken, toToken,
-slip, publicKey, connection, sendTransaction, evmAddress, walletClient,
-evmChainId, switchChain, customDestAddr, fromPriceUsd, solPriceUsd,
+slip, publicKey, connection, sendTransaction, evmAddress,
+evmChainId, switchChain, switchChainAsync, customDestAddr, fromPriceUsd, solPriceUsd,
 ]);
 
 /* — Tx explorer link — */
@@ -1967,47 +2091,74 @@ Best price across every chain. Single signature. No KYC.
     )}
 
     {/* ACTION BUTTON */}
-    {walletConnected ? (
-      <button
-        onClick={executeSwap}
-        disabled={swapStatus === 'loading' || !fromAmt || !quote || quoteLoading}
-        style={{
-          width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
-          background: swapStatus === 'success'
-            ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
-            : swapStatus === 'error'
-            ? 'rgba(255,59,107,.2)'
-            : !fromAmt || !quote
-            ? C.card2
-            : modeProp === 'sell' ? C.sellGrad : C.buyGrad,
-          color: !fromAmt || !quote
-            ? C.muted2
-            : swapStatus === 'error' ? C.red : '#fff',
-          fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
-          cursor: swapStatus === 'loading' ? 'not-allowed' : 'pointer',
-          minHeight: 52, transition: 'all .2s',
-        }}
-      >
-        {swapStatus === 'loading' ? 'Confirming…'
-          : swapStatus === 'success' ? 'Confirmed!'
-          : swapStatus === 'error' ? 'Failed — try again'
-          : !fromAmt ? 'Enter amount'
-          : quoteLoading ? 'Getting best route…'
-          : !quote ? 'No route'
-          : (modeProp === 'sell' ? 'Sell ' : modeProp === 'buy' ? 'Buy ' : 'Swap ')
-            + (fromToken ? fromToken.symbol : '') + ' → ' + (toToken ? toToken.symbol : '')}
-      </button>
-    ) : (
-      <button
-        onClick={onConnectWallet}
-        style={{
-          width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
-          background: 'linear-gradient(135deg,#9945ff,#7c3aed)',
-          color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
-          cursor: 'pointer', minHeight: 52,
-        }}
-      >Connect Wallet</button>
-    )}
+    {(() => {
+      // Determine if user has the right wallet type for this route
+      const needsSol = (route === 'jupiter')
+                   || (route === 'lifi' && isSol(fromToken));
+      const needsEvm = (route === '0x')
+                   || (route === 'lifi' && isEvm(fromToken));
+      const hasNeededWallet = (needsSol && solConnected) || (needsEvm && evmConnected);
+
+      if (!walletConnected) {
+        return (
+          <button
+            onClick={onConnectWallet}
+            style={{
+              width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
+              background: 'linear-gradient(135deg,#9945ff,#7c3aed)',
+              color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
+              cursor: 'pointer', minHeight: 52,
+            }}
+          >Connect Wallet</button>
+        );
+      }
+
+      if (!hasNeededWallet) {
+        return (
+          <button
+            onClick={onConnectWallet}
+            style={{
+              width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
+              background: 'linear-gradient(135deg,#9945ff,#7c3aed)',
+              color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
+              cursor: 'pointer', minHeight: 52,
+            }}
+          >Connect {needsSol ? 'Solana' : 'EVM'} wallet</button>
+        );
+      }
+
+      return (
+        <button
+          onClick={executeSwap}
+          disabled={swapStatus === 'loading' || !fromAmt || !quote || quoteLoading}
+          style={{
+            width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
+            background: swapStatus === 'success'
+              ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
+              : swapStatus === 'error'
+              ? 'rgba(255,59,107,.2)'
+              : !fromAmt || !quote
+              ? C.card2
+              : modeProp === 'sell' ? C.sellGrad : C.buyGrad,
+            color: !fromAmt || !quote
+              ? C.muted2
+              : swapStatus === 'error' ? C.red : '#fff',
+            fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
+            cursor: swapStatus === 'loading' ? 'not-allowed' : 'pointer',
+            minHeight: 52, transition: 'all .2s',
+          }}
+        >
+          {swapStatus === 'loading' ? 'Confirming…'
+            : swapStatus === 'success' ? 'Confirmed!'
+            : swapStatus === 'error' ? 'Failed — try again'
+            : !fromAmt ? 'Enter amount'
+            : quoteLoading ? 'Getting best route…'
+            : !quote ? 'No route'
+            : (modeProp === 'sell' ? 'Sell ' : modeProp === 'buy' ? 'Buy ' : 'Swap ')
+              + (fromToken ? fromToken.symbol : '') + ' → ' + (toToken ? toToken.symbol : '')}
+        </button>
+      );
+    })()}
 
     {swapTx && swapStatus === 'success' && txLink && (
       <a
