@@ -137,6 +137,7 @@ function normalizeToToken(coin) {
     coin.mint ||
     (coin.isSolanaToken ? coin.id : null) ||
     (coin.chain === 'solana' ? coin.id : null) ||
+    (isValidSolMint(coin.id) ? coin.id : null) ||
     '';
 
   if (isValidSolMint(mintCandidate)) {
@@ -148,6 +149,13 @@ function normalizeToToken(coin) {
       chain: 'solana',
       logoURI: logoURI,
     };
+  }
+
+  if (coin.symbol) {
+    var bySymbol = POPULAR_TOKENS.find(function(t) {
+      return t.symbol && t.symbol.toLowerCase() === coin.symbol.toLowerCase();
+    });
+    if (bySymbol) return bySymbol;
   }
 
   return POPULAR_TOKENS[0];
@@ -367,10 +375,12 @@ export function TradeDrawer({ open, onClose, mode, coin, jupiterTokens, coins, o
 }
 
 export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoToToken, onConnectWallet, isConnected, isSolanaConnected, walletAddress, defaultFromToken, defaultToToken, compact }) {
-  const { publicKey, sendTransaction } = useWallet();
+  const { publicKey, sendTransaction, connected: solConnected } = useWallet();
   const { connection } = useConnection();
-  const { address: evmAddress } = useAccount();
+  const { address: evmAddress, isConnected: evmConnected } = useAccount();
   const { data: walletClient } = useWalletClient();
+
+  const walletConnected = solConnected || evmConnected;
 
   const [fromToken, setFromToken] = useState(defaultFromToken || POPULAR_TOKENS[0]);
   const [toToken,   setToToken]   = useState(defaultToToken   || POPULAR_TOKENS[1]);
@@ -465,7 +475,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   }, [publicKey, connection, fromToken, toToken]);
 
   var executeSwap = async function() {
-    if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
+    if (!walletConnected) { if (onConnectWallet) onConnectWallet(); return; }
     if (!quote) return;
     setSwapStatus('loading'); setSwapError('');
     try {
@@ -540,7 +550,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             try {
               var receipt = await walletClient.waitForTransactionReceipt({ hash: approveTxHash, timeout: 5000 }).catch(function() { return null; });
               if (receipt) break;
-            } catch(_) {}  // FIX: was catch(*) — invalid syntax
+            } catch(_) {}  // FIX: was catch(*) -- invalid syntax
             await new Promise(function(r) { setTimeout(r, 2000); });
           }
         }
@@ -573,7 +583,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             try {
               var allowHex = await walletClient.request({ method: 'eth_call', params: [{ to: fromToken.address, data: allowData }, 'latest'] });
               needsApprove = BigInt(allowHex || '0x0') < sellBig;
-            } catch(_) {}
+            } catch(_) {}  // FIX: was catch(*) -- invalid syntax
             if (needsApprove) {
               var lifiApproveTxHash = await walletClient.sendTransaction({ to: fromToken.address, data: '0x095ea7b3' + spender.slice(2).padStart(64, '0') + 'f'.repeat(64), value: BigInt(0) });
               var lifiApproveStart = Date.now();
@@ -581,7 +591,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
                 try {
                   var lifiApproveReceipt = await walletClient.waitForTransactionReceipt({ hash: lifiApproveTxHash, timeout: 5000 }).catch(function() { return null; });
                   if (lifiApproveReceipt) break;
-                } catch(_) {}  // FIX: was catch(*) — invalid syntax
+                } catch(_) {}
                 await new Promise(function(r) { setTimeout(r, 2000); });
               }
             }
@@ -686,7 +696,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           </div>
         )}
         {swapError && <div style={{ marginTop: 10, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 8, fontSize: 12, color: C.red }}>{swapError}</div>}
-        {isConnected ? (
+        {walletConnected ? (
           <button onClick={executeSwap} disabled={swapStatus === 'loading'} style={{ width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none', background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : swapStatus === 'error' ? 'rgba(255,59,107,.2)' : !fromAmt || !quote ? C.card2 : 'linear-gradient(135deg,#00e5ff,#0055ff)', color: !fromAmt || !quote ? C.muted2 : swapStatus === 'error' ? C.red : C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, cursor: swapStatus === 'loading' ? 'not-allowed' : 'pointer', transition: 'all .3s', minHeight: 52 }}>
             {swapStatus === 'loading' ? 'Confirming...' : swapStatus === 'success' ? 'Swap Confirmed!' : swapStatus === 'error' ? 'Failed -- Try Again' : !fromAmt ? 'Enter Amount' : quoteLoading ? 'Getting Best Route...' : !quote ? 'No Route Found' : 'Swap ' + (fromToken ? fromToken.symbol : '') + ' > ' + (toToken ? toToken.symbol : '')}
           </button>
