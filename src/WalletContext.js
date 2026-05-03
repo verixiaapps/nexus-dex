@@ -52,7 +52,7 @@ solConnected,
 evmConnected,
 isSolanaConnected: solConnected,
 
-```
+
   // Addresses
   walletAddress,
   publicKey:  solConnected && publicKey ? publicKey : null,
@@ -72,7 +72,7 @@ isSolanaConnected: solConnected,
 }}>
   {children}
 </WalletContext.Provider>
-```
+
 
 );
 }
