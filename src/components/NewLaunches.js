@@ -1,13 +1,9 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
-import { Buffer } from 'buffer';
+import { VersionedTransaction, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { TradeDrawer } from './SwapWidget';
 
-const FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
-const BASE_FEE = 0.04;
-const ANTIMEV_FEE = 0.02;
 const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
-const SOL_MINT = 'So11111111111111111111111111111111111111112';
 const PRESET_KEY = 'nexus_launch_presets';
 const LAST_AMT_KEY = 'nexus_launch_last_amt';
 
@@ -137,9 +133,52 @@ function PresetEditor({ open, onClose, presets, onSave }) {
   );
 }
 
-function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isConnected, presets, onPresetsChange }) {
+function LaunchTradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isConnected, coins, jupiterTokens, presets, onPresetsChange }) {
+  var isGrad = token && token.graduated;
+
+  if (isGrad) {
+    var coin = token ? {
+      mint: token.mint,
+      symbol: token.symbol,
+      name: token.name,
+      image: token.image,
+      decimals: token.decimals || 6,
+      chain: 'solana',
+      isSolanaToken: true,
+    } : null;
+    return (
+      <TradeDrawer
+        open={open}
+        onClose={onClose}
+        mode={mode}
+        coin={coin}
+        jupiterTokens={jupiterTokens}
+        coins={coins}
+        onConnectWallet={onConnectWallet}
+        isConnected={isConnected}
+      />
+    );
+  }
+
+  return (
+    <PumpDrawer
+      open={open}
+      onClose={onClose}
+      mode={mode}
+      token={token}
+      solPrice={solPrice}
+      onConnectWallet={onConnectWallet}
+      isConnected={isConnected}
+      presets={presets}
+      onPresetsChange={onPresetsChange}
+    />
+  );
+}
+
+function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isConnected, presets, onPresetsChange }) {
   const { publicKey, sendTransaction } = useWallet();
   const { connection } = useConnection();
+
   const [activePreset, setActivePreset] = useState(null);
   const [customAmt, setCustomAmt] = useState('');
   const [sellPct, setSellPct] = useState(50);
@@ -152,6 +191,10 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
   const [error, setError] = useState('');
   const [presetEditorOpen, setPresetEditorOpen] = useState(false);
 
+  const BASE_FEE = 0.04;
+  const ANTIMEV_FEE = 0.02;
+  var totalFeeRate = BASE_FEE + (antiMev ? ANTIMEV_FEE : 0);
+
   useEffect(function() {
     if (!publicKey || !connection || !open) { setSolBalance(null); setTokenBalance(null); return; }
     connection.getBalance(publicKey).then(function(lam) { setSolBalance(lam / 1e9); }).catch(function() {});
@@ -161,8 +204,6 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
         .catch(function() {});
     }
   }, [publicKey, connection, token, open]);
-
-  var totalFeeRate = BASE_FEE + (antiMev ? ANTIMEV_FEE : 0);
 
   useEffect(function() {
     if (open) {
@@ -180,63 +221,34 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
     if (!publicKey || !token) return;
     setStatus('loading'); setError('');
-    var isGrad = token.graduated;
     try {
       var _solBal = (await connection.getBalance(publicKey)) / 1e9;
       if (_solBal < 0.003) { setError('Need at least 0.003 SOL.'); setStatus('error'); setTimeout(function() { setStatus('idle'); setError(''); }, 5000); return; }
 
-      if (!isGrad) {
-        var res = await fetch('https://pumpportal.fun/api/trade-local', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ publicKey: publicKey.toString(), action: mode, mint: token.mint, denominatedInSol: mode === 'buy' ? 'true' : 'false', amount: mode === 'buy' ? parseFloat(solAmt.toFixed(6)) : (sellPct + '%'), slippage: 15, priorityFee: antiMev ? 0.001 : 0.0001, pool: 'auto' }) });
-        if (!res.ok) throw new Error('PumpPortal error ' + res.status);
-        var txBytes = await res.arrayBuffer();
-        var tx = VersionedTransaction.deserialize(new Uint8Array(txBytes));
-        var sig = await sendTransaction(tx, connection);
-        await connection.confirmTransaction(sig, 'confirmed');
-        setTxSig(sig);
-      } else {
-        var inputMint = mode === 'buy' ? SOL_MINT : token.mint;
-        var outputMint = mode === 'buy' ? token.mint : SOL_MINT;
-        var amount = mode === 'buy' ? Math.round(solAmt * 1e9) : Math.round((sellPct / 100) * (token.userBalance || 1e6));
-        var qRes = await fetch('https://api.jup.ag/swap/v1/quote?inputMint=' + inputMint + '&outputMint=' + outputMint + '&amount=' + amount + '&slippageBps=150&restrictIntermediateTokens=true', { headers: { 'x-api-key': JUP_API_KEY } });
-        var qData = await qRes.json();
-        if (!qData.outAmount) throw new Error(qData.error || 'No route found');
-        var dynamicSpread = 0;
-        try {
-          var mktRes = await fetch('https://api.jup.ag/price/v2?ids=' + inputMint + ',' + outputMint);
-          var mktData = await mktRes.json();
-          var fromP = mktData.data && mktData.data[inputMint] && parseFloat(mktData.data[inputMint].price);
-          var toP = mktData.data && mktData.data[outputMint] && parseFloat(mktData.data[outputMint].price);
-          var tDec = token.decimals || 6;
-          var inDec = mode === 'buy' ? 9 : tDec;
-          var outDec = mode === 'buy' ? tDec : 9;
-          if (fromP && toP) {
-            var inAmt = amount / Math.pow(10, inDec);
-            var expOut = (inAmt * fromP) / toP;
-            var actOut = parseInt(qData.outAmount) / Math.pow(10, outDec);
-            if (expOut > actOut && expOut > 0) dynamicSpread = (expOut - actOut) / expOut;
-          }
-        } catch (e) {}
-        var totalFeePct = totalFeeRate + dynamicSpread;
-        var feeLamports = Math.round(Math.max(activeDollar > 0 ? (activeDollar * totalFeePct / solPrice) * LAMPORTS_PER_SOL : solAmt * totalFeePct * LAMPORTS_PER_SOL, 50000));
-        var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-api-key': JUP_API_KEY }, body: JSON.stringify({ quoteResponse: qData, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, dynamicComputeUnitLimit: true }) });
-        var swapData = await swapRes.json();
-        if (!swapData || !swapData.swapTransaction) throw new Error(swapData.error || 'Failed to get swap transaction');
-        var jupTx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
-        var altAccounts = [];
-        if (jupTx.message.addressTableLookups && jupTx.message.addressTableLookups.length) {
-          var altResults = await Promise.all(jupTx.message.addressTableLookups.map(function(l) { return connection.getAddressLookupTable(l.accountKey); }));
-          altAccounts = altResults.map(function(r) { return r.value; }).filter(Boolean);
-        }
-        var decompiledMsg = TransactionMessage.decompile(jupTx.message, { addressLookupTableAccounts: altAccounts });
-        decompiledMsg.instructions.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET), lamports: feeLamports }));
-        var bh = await connection.getLatestBlockhash('confirmed');
-        decompiledMsg.recentBlockhash = bh.blockhash;
-        var finalTx = new VersionedTransaction(decompiledMsg.compileToV0Message(altAccounts));
-        if (!finalTx.message.staticAccountKeys.some(function(k) { return k.toString() === FEE_WALLET; })) throw new Error('Fee instruction missing');
-        var sig = await sendTransaction(finalTx, connection);
-        await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
-        setTxSig(sig);
-      }
+      var sellAmount = customSellAmt
+        ? parseFloat(customSellAmt)
+        : (sellPct / 100 * (tokenBalance || 0));
+
+      var res = await fetch('https://pumpportal.fun/api/trade-local', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          publicKey: publicKey.toString(),
+          action: mode,
+          mint: token.mint,
+          denominatedInSol: mode === 'buy' ? 'true' : 'false',
+          amount: mode === 'buy' ? parseFloat(solAmt.toFixed(6)) : sellAmount,
+          slippage: 15,
+          priorityFee: antiMev ? 0.001 : 0.0001,
+          pool: 'auto',
+        }),
+      });
+      if (!res.ok) throw new Error('PumpPortal error ' + res.status);
+      var txBytes = await res.arrayBuffer();
+      var tx = VersionedTransaction.deserialize(new Uint8Array(txBytes));
+      var sig = await sendTransaction(tx, connection);
+      await connection.confirmTransaction(sig, 'confirmed');
+      setTxSig(sig);
       saveLastAmt(activeDollar);
       setStatus('success');
       setTimeout(function() { setStatus('idle'); setTxSig(null); onClose(); }, 3000);
@@ -252,113 +264,125 @@ function TradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, is
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,.85)' }} />
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 401, background: C.card, borderTop: '2px solid ' + C.borderHi, borderRadius: '20px 20px 0 0', padding: '20px 20px 44px', maxHeight: '92vh', overflowY: 'auto', boxShadow: '0 -20px 60px rgba(0,0,0,.9)' }}>
-        <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 18px' }} />
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {token.image ? <img src={token.image} alt={token.symbol} style={{ width: 38, height: 38, borderRadius: 10 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 38, height: 38, borderRadius: 10, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: C.purple, fontSize: 16 }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>}
-            <div>
-              <div style={{ color: isBuy ? C.accent : C.red, fontWeight: 800, fontSize: 18 }}>{isBuy ? 'Buy' : 'Sell'} {token.symbol}</div>
-              <div style={{ color: C.muted, fontSize: 11 }}>{token.graduated ? 'Jupiter swap' : 'Pump.fun'} -- {(totalFeeRate * 100).toFixed(0)}% fee + spread</div>
-            </div>
-          </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer', padding: '0 4px', lineHeight: 1 }}>x</button>
-        </div>
-
-        <div style={{ background: C.card2, borderRadius: 10, padding: '12px 14px', marginBottom: 14 }}>
+      <div style={{
+        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
+        width: '100%', maxWidth: 560, zIndex: 401,
+        background: C.card, borderTop: '2px solid ' + C.borderHi,
+        borderRadius: '20px 20px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
+        maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      }}>
+        {/* Fixed header */}
+        <div style={{ flexShrink: 0, padding: '16px 20px 14px' }}>
+          <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 16px' }} />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <span style={{ color: C.muted, fontSize: 12 }}>Current price</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{token.price > 0 ? fmtPrice(token.price) : 'Loading...'}</span>
-              {token.pct1h != null && <span style={{ fontSize: 11, fontWeight: 700, color: pctColor(token.pct1h), background: token.pct1h >= 0 ? 'rgba(0,255,163,.1)' : 'rgba(59,158,255,.1)', padding: '2px 7px', borderRadius: 6 }}>{fmtPct(token.pct1h)} 1h</span>}
-            </div>
-          </div>
-          {isBuy && token.price > 0 && activeDollar > 0 && (
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, marginTop: 8, borderTop: '1px solid rgba(255,255,255,.05)' }}>
-              <span style={{ color: C.muted, fontSize: 12 }}>You receive approx</span>
-              <span style={{ color: C.green, fontWeight: 800, fontSize: 14 }}>{((activeDollar * (1 - totalFeeRate)) / token.price).toLocaleString('en-US', { maximumFractionDigits: 0 })} {token.symbol}</span>
-            </div>
-          )}
-        </div>
-
-        {!isConnected && (
-          <div style={{ marginBottom: 14, padding: 14, background: 'rgba(0,229,255,.05)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
-            <span style={{ color: C.muted, fontSize: 13 }}>Connect wallet to trade</span>
-            <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 8, padding: '8px 16px', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect</button>
-          </div>
-        )}
-
-        {isBuy ? (
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {token.image ? <img src={token.image} alt={token.symbol} style={{ width: 38, height: 38, borderRadius: 10 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 38, height: 38, borderRadius: 10, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, color: C.purple, fontSize: 16 }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>}
               <div>
-                <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>QUICK BUY</span>
-                {solBalance != null && <span style={{ fontSize: 10, color: C.muted, marginLeft: 8 }}>SOL: <span style={{ color: C.text }}>{solBalance.toFixed(4)}</span></span>}
-              </div>
-              <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                {solBalance != null && solBalance > 0.01 && <button onClick={function() { setCustomAmt((Math.max(0, solBalance - 0.005) * solPrice).toFixed(2)); setActivePreset(null); }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '2px 8px', color: C.accent, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>MAX</button>}
-                <button onClick={function() { setPresetEditorOpen(true); }} style={{ background: 'none', border: 'none', color: C.accent, fontSize: 11, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, padding: 0 }}>Edit presets</button>
+                <div style={{ color: isBuy ? C.accent : C.red, fontWeight: 800, fontSize: 18 }}>{isBuy ? 'Buy' : 'Sell'} {token.symbol}</div>
+                <div style={{ color: C.muted, fontSize: 11 }}>Pump.fun -- {(totalFeeRate * 100).toFixed(0)}% fee</div>
               </div>
             </div>
-            <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-              {presets.map(function(amt) {
-                var active = activePreset === amt && !customAmt;
-                return <button key={amt} onClick={function() { setActivePreset(amt); setCustomAmt(''); }} style={{ flex: 1, padding: '11px 2px', borderRadius: 10, border: '1px solid ' + (active ? C.accent : C.border), background: active ? 'rgba(0,229,255,.15)' : C.card2, color: active ? C.accent : C.muted, fontWeight: 800, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>${amt}</button>;
-              })}
-            </div>
-            <div style={{ background: C.card2, border: '1px solid ' + (customAmt ? C.accent : C.border), borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <span style={{ color: C.muted, fontSize: 20 }}>$</span>
-              <input value={customAmt} onChange={function(e) { setCustomAmt(e.target.value.replace(/[^0-9.]/g, '')); setActivePreset(null); }} placeholder="Custom Amount" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 20, fontWeight: 700, color: '#fff', outline: 'none' }} />
-              {solPrice > 0 && activeDollar > 0 && <span style={{ color: C.muted, fontSize: 11, flexShrink: 0 }}>{(activeDollar / solPrice).toFixed(3)} SOL</span>}
-            </div>
+            <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer', padding: '0 4px', lineHeight: 1 }}>x</button>
           </div>
-        ) : (
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-              <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>SELL AMOUNT</span>
-              {tokenBalance != null && <span style={{ fontSize: 10, color: C.muted }}>{token.symbol}: <span style={{ color: C.text }}>{tokenBalance >= 1000 ? tokenBalance.toLocaleString('en-US', { maximumFractionDigits: 2 }) : tokenBalance.toFixed(4)}</span></span>}
+        </div>
+        {/* Scrollable content */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px', paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)' }}>
+
+          <div style={{ background: C.card2, borderRadius: 10, padding: '12px 14px', marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ color: C.muted, fontSize: 12 }}>Current price</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{token.price > 0 ? fmtPrice(token.price) : 'Loading...'}</span>
+                {token.pct1h != null && <span style={{ fontSize: 11, fontWeight: 700, color: pctColor(token.pct1h), background: token.pct1h >= 0 ? 'rgba(0,255,163,.1)' : 'rgba(59,158,255,.1)', padding: '2px 7px', borderRadius: 6 }}>{fmtPct(token.pct1h)} 1h</span>}
+              </div>
             </div>
-            <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-              {[25, 50, 75, 100].map(function(p) {
-                return <button key={p} onClick={function() { setSellPct(p); setCustomSellAmt(''); }} style={{ flex: 1, padding: '11px 2px', borderRadius: 10, border: '1px solid ' + (sellPct === p && !customSellAmt ? C.red : C.border), background: sellPct === p && !customSellAmt ? 'rgba(255,59,107,.15)' : C.card2, color: sellPct === p && !customSellAmt ? C.red : C.muted, fontWeight: 800, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>{p === 100 ? 'MAX' : p + '%'}</button>;
-              })}
-            </div>
-            <div style={{ background: C.card2, border: '1px solid ' + (customSellAmt ? C.red : C.border), borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
-              <input value={customSellAmt} onChange={function(e) { setCustomSellAmt(e.target.value.replace(/[^0-9.]/g, '')); setSellPct(null); }} placeholder="Custom Amount" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 20, fontWeight: 700, color: '#fff', outline: 'none' }} />
-              <span style={{ color: C.muted, fontSize: 13, flexShrink: 0 }}>{token.symbol}</span>
-              {tokenBalance != null && tokenBalance > 0 && <button onClick={function() { setCustomSellAmt(tokenBalance.toFixed(6)); setSellPct(null); }} style={{ background: 'rgba(255,59,107,.12)', border: '1px solid rgba(255,59,107,.25)', borderRadius: 6, padding: '4px 8px', color: C.red, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>}
-            </div>
-            {token.price > 0 && customSellAmt && parseFloat(customSellAmt) > 0 && (
-              <div style={{ textAlign: 'right', marginTop: 6, fontSize: 11, color: C.muted }}>&asymp; ${(parseFloat(customSellAmt) * token.price).toFixed(4)}</div>
+            {isBuy && token.price > 0 && activeDollar > 0 && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 8, marginTop: 8, borderTop: '1px solid rgba(255,255,255,.05)' }}>
+                <span style={{ color: C.muted, fontSize: 12 }}>You receive approx</span>
+                <span style={{ color: C.green, fontWeight: 800, fontSize: 14 }}>{((activeDollar * (1 - totalFeeRate)) / token.price).toLocaleString('en-US', { maximumFractionDigits: 0 })} {token.symbol}</span>
+              </div>
             )}
           </div>
-        )}
 
-        <div style={{ background: '#050912', borderRadius: 10, padding: '10px 14px', marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-          <div>
-            <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SNIPER PROTECTION</span>
-            <div style={{ fontSize: 10, color: antiMev ? C.accent : C.muted, marginTop: 2 }}>{antiMev ? 'ON - bot protected (+2%)' : 'OFF - saves 2%'}</div>
+          {!isConnected && (
+            <div style={{ marginBottom: 14, padding: 14, background: 'rgba(0,229,255,.05)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+              <span style={{ color: C.muted, fontSize: 13 }}>Connect wallet to trade</span>
+              <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 8, padding: '8px 16px', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect</button>
+            </div>
+          )}
+
+          {isBuy ? (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <div>
+                  <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>QUICK BUY</span>
+                  {solBalance != null && <span style={{ fontSize: 10, color: C.muted, marginLeft: 8 }}>SOL: <span style={{ color: C.text }}>{solBalance.toFixed(4)}</span></span>}
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  {solBalance != null && solBalance > 0.01 && <button onClick={function() { setCustomAmt((Math.max(0, solBalance - 0.005) * solPrice).toFixed(2)); setActivePreset(null); }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '2px 8px', color: C.accent, fontSize: 10, fontWeight: 700, cursor: 'pointer' }}>MAX</button>}
+                  <button onClick={function() { setPresetEditorOpen(true); }} style={{ background: 'none', border: 'none', color: C.accent, fontSize: 11, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 600, padding: 0 }}>Edit presets</button>
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                {presets.map(function(amt) {
+                  var active = activePreset === amt && !customAmt;
+                  return <button key={amt} onClick={function() { setActivePreset(amt); setCustomAmt(''); }} style={{ flex: 1, padding: '11px 2px', borderRadius: 10, border: '1px solid ' + (active ? C.accent : C.border), background: active ? 'rgba(0,229,255,.15)' : C.card2, color: active ? C.accent : C.muted, fontWeight: 800, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>${amt}</button>;
+                })}
+              </div>
+              <div style={{ background: C.card2, border: '1px solid ' + (customAmt ? C.accent : C.border), borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ color: C.muted, fontSize: 20 }}>$</span>
+                <input value={customAmt} onChange={function(e) { setCustomAmt(e.target.value.replace(/[^0-9.]/g, '')); setActivePreset(null); }} placeholder="Custom Amount" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 20, fontWeight: 700, color: '#fff', outline: 'none' }} />
+                {solPrice > 0 && activeDollar > 0 && <span style={{ color: C.muted, fontSize: 11, flexShrink: 0 }}>{(activeDollar / solPrice).toFixed(3)} SOL</span>}
+              </div>
+            </div>
+          ) : (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>SELL AMOUNT</span>
+                {tokenBalance != null && <span style={{ fontSize: 10, color: C.muted }}>{token.symbol}: <span style={{ color: C.text }}>{tokenBalance >= 1000 ? tokenBalance.toLocaleString('en-US', { maximumFractionDigits: 2 }) : tokenBalance.toFixed(4)}</span></span>}
+              </div>
+              <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+                {[25, 50, 75, 100].map(function(p) {
+                  return <button key={p} onClick={function() { setSellPct(p); setCustomSellAmt(''); }} style={{ flex: 1, padding: '11px 2px', borderRadius: 10, border: '1px solid ' + (sellPct === p && !customSellAmt ? C.red : C.border), background: sellPct === p && !customSellAmt ? 'rgba(255,59,107,.15)' : C.card2, color: sellPct === p && !customSellAmt ? C.red : C.muted, fontWeight: 800, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>{p === 100 ? 'MAX' : p + '%'}</button>;
+                })}
+              </div>
+              <div style={{ background: C.card2, border: '1px solid ' + (customSellAmt ? C.red : C.border), borderRadius: 12, padding: '12px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input value={customSellAmt} onChange={function(e) { setCustomSellAmt(e.target.value.replace(/[^0-9.]/g, '')); setSellPct(null); }} placeholder="Custom Amount" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 20, fontWeight: 700, color: '#fff', outline: 'none' }} />
+                <span style={{ color: C.muted, fontSize: 13, flexShrink: 0 }}>{token.symbol}</span>
+                {tokenBalance != null && tokenBalance > 0 && <button onClick={function() { setCustomSellAmt(tokenBalance.toFixed(6)); setSellPct(null); }} style={{ background: 'rgba(255,59,107,.12)', border: '1px solid rgba(255,59,107,.25)', borderRadius: 6, padding: '4px 8px', color: C.red, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>}
+              </div>
+              {token.price > 0 && customSellAmt && parseFloat(customSellAmt) > 0 && (
+                <div style={{ textAlign: 'right', marginTop: 6, fontSize: 11, color: C.muted }}>&asymp; ${(parseFloat(customSellAmt) * token.price).toFixed(4)}</div>
+              )}
+            </div>
+          )}
+
+          <div style={{ background: '#050912', borderRadius: 10, padding: '10px 14px', marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SNIPER PROTECTION</span>
+              <div style={{ fontSize: 10, color: antiMev ? C.accent : C.muted, marginTop: 2 }}>{antiMev ? 'ON - bot protected (+2%)' : 'OFF - saves 2%'}</div>
+            </div>
+            <button onClick={function() { setAntiMev(!antiMev); }} style={{ width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', background: antiMev ? C.accent : C.muted2, position: 'relative', flexShrink: 0 }}>
+              <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: antiMev ? 23 : 3, transition: 'left .2s' }} />
+            </button>
           </div>
-          <button onClick={function() { setAntiMev(!antiMev); }} style={{ width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', background: antiMev ? C.accent : C.muted2, position: 'relative', flexShrink: 0 }}>
-            <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: antiMev ? 23 : 3, transition: 'left .2s' }} />
+
+          {error && <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 14, fontSize: 13, color: C.red }}>{error}</div>}
+
+          <button onClick={executeTrade} disabled={status === 'loading'} style={{ width: '100%', padding: 18, borderRadius: 14, border: 'none', background: status === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : status === 'error' ? 'rgba(255,59,107,.2)' : !isConnected ? 'linear-gradient(135deg,#9945ff,#7c3aed)' : isBuy ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'linear-gradient(135deg,#ff3b6b,#cc1144)', color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 17, cursor: status === 'loading' ? 'not-allowed' : 'pointer', minHeight: 54 }}>
+            {!isConnected ? 'Connect Wallet' : status === 'loading' ? 'Confirming...' : status === 'success' ? (isBuy ? 'Bought!' : 'Sold!') : status === 'error' ? 'Failed - Try Again' : isBuy ? 'Buy $' + activeDollar.toFixed(2) + ' of ' + token.symbol : 'Sell ' + (customSellAmt || sellPct + '%') + ' ' + token.symbol}
           </button>
+
+          {txSig && status === 'success' && <a href={'https://solscan.io/tx/' + txSig} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>View on Solscan</a>}
+          <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 10, lineHeight: 1.6 }}>Non-custodial &mdash; Fees go directly to Nexus DEX</p>
         </div>
-
-        {error && <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 14, fontSize: 13, color: C.red }}>{error}</div>}
-
-        <button onClick={executeTrade} disabled={status === 'loading'} style={{ width: '100%', padding: 18, borderRadius: 14, border: 'none', background: status === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : status === 'error' ? 'rgba(255,59,107,.2)' : !isConnected ? 'linear-gradient(135deg,#9945ff,#7c3aed)' : isBuy ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'linear-gradient(135deg,#ff3b6b,#cc1144)', color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 17, cursor: status === 'loading' ? 'not-allowed' : 'pointer', minHeight: 54 }}>
-          {!isConnected ? 'Connect Wallet' : status === 'loading' ? 'Confirming...' : status === 'success' ? (isBuy ? 'Bought!' : 'Sold!') : status === 'error' ? 'Failed - Try Again' : isBuy ? 'Buy $' + activeDollar.toFixed(2) + ' of ' + token.symbol : 'Sell ' + sellPct + '% of ' + token.symbol}
-        </button>
-
-        {txSig && status === 'success' && <a href={'https://solscan.io/tx/' + txSig} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>View on Solscan</a>}
-        <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 10, lineHeight: 1.6 }}>Non-custodial &mdash; Fees go directly to Nexus DEX</p>
       </div>
       <PresetEditor open={presetEditorOpen} onClose={function() { setPresetEditorOpen(false); }} presets={presets} onSave={onPresetsChange} />
     </>
   );
 }
 
-function TokenPage({ token, onBack, onConnectWallet, isConnected, solPrice, presets, onPresetsChange }) {
+function TokenPage({ token, onBack, onConnectWallet, isConnected, solPrice, coins, jupiterTokens, presets, onPresetsChange }) {
   const [liveData, setLiveData] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState('buy');
@@ -472,7 +496,19 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, solPrice, pres
         <button onClick={function() { setDrawerMode('sell'); setDrawerOpen(true); }} style={{ padding: '18px 10px', borderRadius: 16, cursor: 'pointer', background: 'rgba(255,59,107,.1)', border: '1.5px solid rgba(255,59,107,.4)', color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}>Sell {token.symbol}</button>
       </div>
 
-      <TradeDrawer open={drawerOpen} onClose={function() { setDrawerOpen(false); }} mode={drawerMode} token={fullToken} solPrice={solPrice} onConnectWallet={onConnectWallet} isConnected={isConnected} presets={presets} onPresetsChange={onPresetsChange} />
+      <LaunchTradeDrawer
+        open={drawerOpen}
+        onClose={function() { setDrawerOpen(false); }}
+        mode={drawerMode}
+        token={fullToken}
+        solPrice={solPrice}
+        onConnectWallet={onConnectWallet}
+        isConnected={isConnected}
+        coins={coins}
+        jupiterTokens={jupiterTokens}
+        presets={presets}
+        onPresetsChange={onPresetsChange}
+      />
     </div>
   );
 }
@@ -532,7 +568,7 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
   );
 }
 
-export default function NewLaunches({ coins, onConnectWallet, isConnected, isSolanaConnected, walletAddress, resetKey }) {
+export default function NewLaunches({ coins, jupiterTokens, onConnectWallet, isConnected, isSolanaConnected, walletAddress, resetKey }) {
   const [tokens, setTokens] = useState([]);
   const [tab, setTab] = useState('new');
   const [selectedToken, setSelectedToken] = useState(null);
@@ -588,7 +624,6 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
   var addToken = useCallback(function(token) {
     tokensRef.current = [token].concat(tokensRef.current.filter(function(t) { return t.mint !== token.mint; })).slice(0, 150);
     setTokens([].concat(tokensRef.current));
-    // FIX: fetch immediately, no 2s delay
     fetchGeckoTerminal([token.mint]).then(function(data) {
       var d = data[token.mint];
       if (!d) return;
@@ -643,10 +678,7 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
     connect();
 
     var cached = loadCachedTokens();
-    if (cached.length > 0) {
-      tokensRef.current = cached;
-      setTokens([].concat(cached));
-    }
+    if (cached.length > 0) { tokensRef.current = cached; setTokens([].concat(cached)); }
 
     refreshTimerRef.current = setInterval(async function() {
       var mints = tokensRef.current.slice(0, 30).map(function(t) { return t.mint; });
@@ -707,7 +739,7 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
   var openSellDrawer = function(token) { setDrawerToken(token); setDrawerMode('sell'); setDrawerOpen(true); };
 
   if (selectedToken) {
-    return <TokenPage token={selectedToken} onBack={function() { setSelectedToken(null); }} onConnectWallet={onConnectWallet} isConnected={isConnected} isSolanaConnected={isSolanaConnected} solPrice={solPrice} presets={presets} onPresetsChange={handlePresetsChange} />;
+    return <TokenPage token={selectedToken} onBack={function() { setSelectedToken(null); }} onConnectWallet={onConnectWallet} isConnected={isConnected} solPrice={solPrice} coins={coins} jupiterTokens={jupiterTokens} presets={presets} onPresetsChange={handlePresetsChange} />;
   }
 
   return (
@@ -740,7 +772,19 @@ export default function NewLaunches({ coins, onConnectWallet, isConnected, isSol
         })
       )}
 
-      <TradeDrawer open={drawerOpen} onClose={function() { setDrawerOpen(false); }} mode={drawerMode} token={drawerToken} solPrice={solPrice} onConnectWallet={onConnectWallet} isConnected={isConnected} isSolanaConnected={isSolanaConnected} presets={presets} onPresetsChange={handlePresetsChange} />
+      <LaunchTradeDrawer
+        open={drawerOpen}
+        onClose={function() { setDrawerOpen(false); }}
+        mode={drawerMode}
+        token={drawerToken}
+        solPrice={solPrice}
+        onConnectWallet={onConnectWallet}
+        isConnected={isConnected}
+        coins={coins}
+        jupiterTokens={jupiterTokens}
+        presets={presets}
+        onPresetsChange={handlePresetsChange}
+      />
     </div>
   );
 }
