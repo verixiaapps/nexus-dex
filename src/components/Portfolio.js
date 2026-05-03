@@ -160,9 +160,11 @@ async function fetchEvmBalances(address) {
 }
 
 export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWallet, isConnected, isSolanaConnected, walletAddress, refreshKey, onSelectToken }) {
-  const { publicKey } = useWallet();
+  const { publicKey, connected: solConnected } = useWallet();
   const { connection } = useConnection();
-  const { address: evmAddress } = useAccount();
+  const { address: evmAddress, isConnected: evmConnected } = useAccount();
+
+  var walletConnected = isConnected || solConnected || evmConnected;
 
   const [solBalances, setSolBalances] = useState([]);
   const [solBalance, setSolBalance] = useState(0);
@@ -212,7 +214,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
               name: tokenInfo ? tokenInfo.name : 'Unknown Token',
               logoURI: tokenInfo ? tokenInfo.logoURI : null,
               decimals: info.tokenAmount.decimals,
-              uiAmount: uiAmount,
+              uiAmount,
               jupPrice: 0,
             });
           }
@@ -294,7 +296,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
 
   var rootStyle = { width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' };
 
-  if (!isConnected) {
+  if (!walletConnected) {
     return (
       <div style={Object.assign({ maxWidth: 520, margin: '0 auto' }, rootStyle)}>
         <div style={{ marginBottom: 20 }}>
@@ -323,9 +325,9 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
         </div>
       </div>
 
-      {!publicKey && (
+      {!solConnected && !publicKey && (
         <div style={{ background: C.card, border: '1px solid rgba(0,229,255,.15)', borderRadius: 12, padding: 16, marginBottom: 16 }}>
-          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 8 }}>LOOK UP SOLANA ADDRESS</div>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 8 }}>LOOK UP SOLANA ADDRESS (OPTIONAL)</div>
           <div style={{ display: 'flex', gap: 8 }}>
             <input value={manualAddress} onChange={function(e) { setManualAddress(e.target.value); }} placeholder="Paste Solana address..." style={{ flex: 1, background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, padding: '10px 12px', color: '#fff', fontFamily: 'monospace', fontSize: 12, outline: 'none' }} />
             <button onClick={function() { setLookupAddress(manualAddress.trim()); }} style={{ background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none', borderRadius: 8, padding: '10px 16px', color: '#03060f', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', flexShrink: 0 }}>Load</button>
@@ -352,7 +354,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
 
       <div style={{ background: C.card, border: '1px solid rgba(0,255,163,.15)', borderRadius: 12, padding: 14, marginBottom: 16 }}>
         <div style={{ fontSize: 10, color: C.muted, marginBottom: 2, fontWeight: 700 }}>CONNECTED WALLET</div>
-        <div style={{ fontSize: 11, color: C.green, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{walletAddress || ''}</div>
+        <div style={{ fontSize: 11, color: C.green, fontFamily: 'monospace', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{walletAddress || evmAddress || ''}</div>
       </div>
 
       {solError && <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 13, color: C.red }}>{solError}</div>}
@@ -365,16 +367,13 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
 
       {activeTab === 'holdings' && (
         <>
-          {/* Solana tokens */}
-          {(publicKey || lookupAddress) && (
+          {(solConnected || publicKey || lookupAddress) && (
             <>
               <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 8 }}>SOLANA TOKENS</div>
               <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden', marginBottom: 16 }}>
                 <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
                   <div>TOKEN</div><div style={{ textAlign: 'right' }}>BALANCE</div><div style={{ textAlign: 'right' }}>PRICE</div><div style={{ textAlign: 'right' }}>VALUE</div>
                 </div>
-
-                {/* SOL native */}
                 <div
                   onClick={function() { onSelectToken && onSelectToken({ id: 'solana', symbol: 'SOL', name: 'Solana', current_price: solPrice, image: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png', mint: 'So11111111111111111111111111111111111111112', isSolanaToken: true }); }}
                   style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer' }}
@@ -383,16 +382,12 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
                 >
                   <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                     <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(153,69,255,.2)', border: '1px solid rgba(153,69,255,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#9945ff', flexShrink: 0 }}>S</div>
-                    <div>
-                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>SOL</div>
-                      <div style={{ color: C.muted, fontSize: 10 }}>Solana</div>
-                    </div>
+                    <div><div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>SOL</div><div style={{ color: C.muted, fontSize: 10 }}>Solana</div></div>
                   </div>
                   <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{solBalance.toFixed(4)}</div>
                   <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{fmt(solPrice)}</div>
                   <div style={{ textAlign: 'right', color: C.green, fontSize: 13, fontWeight: 600 }}>{fmt(solValue)}</div>
                 </div>
-
                 {solLoading && solBalances.length === 0 ? (
                   <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>Loading Solana tokens...</div>
                 ) : solBalances.length === 0 ? (
@@ -430,8 +425,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
             </>
           )}
 
-          {/* EVM tokens */}
-          {evmAddress ? (
+          {evmConnected || evmAddress ? (
             <div>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>EVM TOKENS -- {ANKR_CHAINS.length} CHAINS</div>
@@ -453,13 +447,9 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
                       onClick={function() {
                         onSelectToken && onSelectToken({
                           id: token.contractAddress || token.tokenSymbol,
-                          symbol: token.tokenSymbol,
-                          name: token.tokenName,
-                          image: token.thumbnail || null,
-                          current_price: token.tokenPrice,
-                          address: token.contractAddress,
-                          chainId: token.chainId,
-                          chain: 'evm',
+                          symbol: token.tokenSymbol, name: token.tokenName,
+                          image: token.thumbnail || null, current_price: token.tokenPrice,
+                          address: token.contractAddress, chainId: token.chainId, chain: 'evm',
                         });
                       }}
                       style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', alignItems: 'center', cursor: 'pointer' }}
@@ -505,7 +495,7 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
           <div style={{ color: '#fff', fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Transaction History</div>
           <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 280, margin: '0 auto 20px' }}>View your full transaction history on Solscan or Etherscan.</p>
           <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
-            {walletAddress && <a href={'https://solscan.io/account/' + walletAddress} target="_blank" rel="noreferrer" style={{ display: 'inline-block', padding: '10px 20px', borderRadius: 10, background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)', color: C.accent, fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>Solscan</a>}
+            {(walletAddress || publicKey) && <a href={'https://solscan.io/account/' + (walletAddress || publicKey.toString())} target="_blank" rel="noreferrer" style={{ display: 'inline-block', padding: '10px 20px', borderRadius: 10, background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)', color: C.accent, fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>Solscan</a>}
             {evmAddress && <a href={'https://etherscan.io/address/' + evmAddress} target="_blank" rel="noreferrer" style={{ display: 'inline-block', padding: '10px 20px', borderRadius: 10, background: 'rgba(98,126,234,.08)', border: '1px solid rgba(98,126,234,.25)', color: '#627eea', fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>Etherscan</a>}
             {evmAddress && <a href={'https://debank.com/profile/' + evmAddress} target="_blank" rel="noreferrer" style={{ display: 'inline-block', padding: '10px 20px', borderRadius: 10, background: 'rgba(0,255,163,.06)', border: '1px solid rgba(0,255,163,.15)', color: C.green, fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>DeBank</a>}
           </div>
