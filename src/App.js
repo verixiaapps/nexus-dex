@@ -11,6 +11,7 @@ import TokenDetail from './components/TokenDetail';
 import Send from './components/Send';
 import NewLaunches from './components/NewLaunches';
 import TokenLaunch from './components/TokenLaunch';
+import { useNexusWallet } from './WalletContext';
 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
@@ -52,20 +53,7 @@ function getActiveTab(tab) {
 }
 
 export function useAppWallet() {
-  const { publicKey, connected: solConnected, sendTransaction, signTransaction } = useWallet();
-  const { address: evmAddress, isConnected: evmConnected } = useAccount();
-  const isConnected = solConnected || evmConnected;
-  const isSolanaConnected = solConnected;
-  const walletAddress = solConnected && publicKey
-    ? publicKey.toString()
-    : evmConnected && evmAddress
-    ? evmAddress
-    : null;
-  return {
-    isConnected, isSolanaConnected, walletAddress,
-    publicKey: (solConnected && publicKey) ? publicKey : null,
-    sendTransaction, signTransaction, solConnected, evmConnected, evmAddress,
-  };
+  return useNexusWallet();
 }
 
 function WalletModal({ open, onClose }) {
@@ -82,13 +70,17 @@ function WalletModal({ open, onClose }) {
   useEffect(function() { onCloseRef.current = onClose; }, [onClose]);
 
   useEffect(function() {
+    if (!open) { setConnecting(false); setPendingWallet(null); }
+  }, [open]);
+
+  useEffect(function() {
     if (!open) return;
-    if (connected || evmConnected) {
+    if ((connected || evmConnected) && connecting) {
       setPendingWallet(null);
       setConnecting(false);
       onCloseRef.current();
     }
-  }, [connected, evmConnected, open]);
+  }, [connected, evmConnected, open, connecting]);
 
   useEffect(function() {
     if (!pendingWallet) return;
@@ -117,6 +109,7 @@ function WalletModal({ open, onClose }) {
   };
 
   const handleWalletConnect = function() {
+    setConnecting(true);
     onClose();
     openWeb3Modal({ view: 'Connect' });
   };
@@ -179,16 +172,10 @@ function WalletModal({ open, onClose }) {
                 <div style={{ color: '#00ffa3', fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Connected</div>
                 <div style={{ color: '#586994', fontSize: 12, fontFamily: 'monospace', wordBreak: 'break-all' }}>{displayAddr}</div>
               </div>
-              <button
-                onClick={handleDisconnect}
-                style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 16, padding: 16, cursor: 'pointer', width: '100%', color: '#ff3b6b', fontWeight: 700, fontSize: 15, fontFamily: 'Syne, sans-serif' }}
-              >
+              <button onClick={handleDisconnect} style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 16, padding: 16, cursor: 'pointer', width: '100%', color: '#ff3b6b', fontWeight: 700, fontSize: 15, fontFamily: 'Syne, sans-serif' }}>
                 Disconnect
               </button>
-              <button
-                onClick={onClose}
-                style={{ background: 'transparent', border: '1px solid rgba(255,255,255,.1)', borderRadius: 16, padding: 14, cursor: 'pointer', color: '#586994', fontSize: 14, fontFamily: 'Syne, sans-serif' }}
-              >
+              <button onClick={onClose} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,.1)', borderRadius: 16, padding: 14, cursor: 'pointer', color: '#586994', fontSize: 14, fontFamily: 'Syne, sans-serif' }}>
                 Close
               </button>
             </div>
@@ -225,10 +212,7 @@ function WalletModal({ open, onClose }) {
                 </>
               )}
 
-              <button
-                onClick={handleWalletConnect}
-                style={{ display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(59,153,252,.08)', border: '1px solid rgba(59,153,252,.2)', borderRadius: 14, padding: '14px 18px', cursor: 'pointer', width: '100%' }}
-              >
+              <button onClick={handleWalletConnect} style={{ display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(59,153,252,.08)', border: '1px solid rgba(59,153,252,.2)', borderRadius: 14, padding: '14px 18px', cursor: 'pointer', width: '100%' }}>
                 <div style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, background: 'linear-gradient(135deg,#3b99fc,#0066cc)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <img src="https://avatars.githubusercontent.com/u/37784886" alt="WC" style={{ width: 28, height: 28, borderRadius: 6 }} onError={function(e) { e.target.style.display = 'none'; }} />
                 </div>
@@ -278,21 +262,21 @@ function IconWallet() { return <svg width="18" height="18" viewBox="0 0 24 24" f
 const NAV_ICONS = { swap: IconSwap, markets: IconMarkets, launches: IconLaunches, launch: IconLaunch, send: IconSend, portfolio: IconWallet };
 
 const NAV_TABS = [
-  { id: 'swap', label: 'Swap' },
-  { id: 'markets', label: 'Markets' },
-  { id: 'launches', label: 'Launches' },
-  { id: 'launch', label: 'Launch' },
-  { id: 'send', label: 'Send' },
+  { id: 'swap',      label: 'Swap' },
+  { id: 'markets',   label: 'Markets' },
+  { id: 'launches',  label: 'Launches' },
+  { id: 'launch',    label: 'Launch' },
+  { id: 'send',      label: 'Send' },
   { id: 'portfolio', label: 'Wallet' },
 ];
 
 const HEADER_TABS = [
-  { id: 'swap', label: 'Swap' },
-  { id: 'markets', label: 'Markets' },
-  { id: 'launches', label: 'Launches' },
-  { id: 'launch', label: 'Launch' },
-  { id: 'buy', label: 'Buy' },
-  { id: 'send', label: 'Send' },
+  { id: 'swap',      label: 'Swap' },
+  { id: 'markets',   label: 'Markets' },
+  { id: 'launches',  label: 'Launches' },
+  { id: 'launch',    label: 'Launch' },
+  { id: 'buy',       label: 'Buy' },
+  { id: 'send',      label: 'Send' },
   { id: 'portfolio', label: 'Wallet' },
 ];
 
@@ -432,6 +416,10 @@ function AppInner() {
     isConnected: wallet.isConnected,
     isSolanaConnected: wallet.isSolanaConnected,
     walletAddress: wallet.walletAddress,
+    solConnected: wallet.solConnected,
+    evmConnected: wallet.evmConnected,
+    evmAddress: wallet.evmAddress,
+    publicKey: wallet.publicKey,
     onConnectWallet: openWallet,
   };
   var displayAddress = wallet.walletAddress
