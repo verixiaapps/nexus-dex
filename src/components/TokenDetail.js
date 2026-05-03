@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { useAccount } from 'wagmi';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { TradeDrawer } from './SwapWidget';
- 
+import { TradeDrawer } from './SwapWidget.jsx';
+
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
   border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
@@ -17,7 +19,6 @@ const CHAIN_NAMES = {
   250: 'Fantom', 25: 'Cronos', 1284: 'Moonbeam', 42220: 'Celo', 1329: 'SEI',
 };
 
-// Fix 1: Full chainId -> GeckoTerminal network slug map.
 const GT_NETWORKS = {
   1: 'eth', 137: 'polygon_pos', 42161: 'arbitrum', 8453: 'base',
   56: 'bsc', 43114: 'avax', 10: 'optimism', 100: 'xdai',
@@ -27,8 +28,8 @@ const GT_NETWORKS = {
   250: 'fantom', 25: 'cronos', 1284: 'moonbeam', 42220: 'celo', 1329: 'sei',
 };
 
-// Fix 6: Default parameter instead of d = d || 2 (d||2 breaks when d=0)
-function fmt(n, d = 2) {
+function fmt(n, d) {
+  if (d === undefined) d = 2;
   if (n == null) return '-';
   if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
@@ -37,7 +38,6 @@ function fmt(n, d = 2) {
   return '$' + n.toFixed(6);
 }
 
-// Fix 7: n == null is explicit and idiomatic
 function pct(n) {
   if (n == null) return '-';
   return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
@@ -51,6 +51,11 @@ function isOnChainAddress(str) {
 }
 
 export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConnectWallet, isConnected, isSolanaConnected, walletAddress }) {
+  const { connected: solConnected } = useWallet();
+  const { isConnected: evmConnected } = useAccount();
+
+  var walletConnected = isConnected || solConnected || evmConnected;
+
   const [chartData, setChartData] = useState([]);
   const [chartPeriod, setChartPeriod] = useState('7');
   const [chartLoading, setChartLoading] = useState(true);
@@ -60,10 +65,8 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
   const [poolsLoading, setPoolsLoading] = useState(false);
   const [totalLiquidity, setTotalLiquidity] = useState(0);
 
-  // Fix 5 + 8: const/let throughout; isEvmToken as const (not var)
   const isEvmToken = coin && (coin.chain === 'evm' || (coin.address && !coin.mint));
 
-  // Fix 10: Build contractLabel uppercase once here, not via .toUpperCase() in JSX every render
   const contractAddress = isEvmToken
     ? (coin?.address || coin?.id)
     : (coin?.mint || (isOnChainAddress(coin?.id) ? coin?.id : null));
@@ -71,97 +74,94 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
     ? ((CHAIN_NAMES[coin?.chainId] || 'EVM') + ' CONTRACT').toUpperCase()
     : 'SOLANA CONTRACT';
 
-  useEffect(() => {
+  useEffect(function() {
     if (!coin) return;
+    var controller = new AbortController();
+    var signal = controller.signal;
 
-    // Fix 2: AbortController so in-flight chart requests are cancelled if
-    // the user changes period or navigates away before the fetch completes.
-    const controller = new AbortController();
-    const { signal } = controller;
-
-    const fetchChart = async () => {
+    var fetchChart = async function() {
       setChartLoading(true);
       try {
-        const days = parseInt(chartPeriod) || 7;
-        let points = [];
-        const isCgCoin = coin.id && !coin.isSolanaToken && !isOnChainAddress(coin.id);
+        var days = parseInt(chartPeriod) || 7;
+        var points = [];
+        var isCgCoin = coin.id && !coin.isSolanaToken && !isOnChainAddress(coin.id);
 
         if (isCgCoin) {
-          const cgRes = await fetch(
-            `https://api.coingecko.com/api/v3/coins/${coin.id}/market_chart?vs_currency=usd&days=${days}`,
+          var cgRes = await fetch(
+            'https://api.coingecko.com/api/v3/coins/' + coin.id + '/market_chart?vs_currency=usd&days=' + days,
             { signal }
           );
-          const cgData = await cgRes.json();
-          const interval = days <= 1 ? 1 : days <= 7 ? 6 : 24;
+          var cgData = await cgRes.json();
+          var interval = days <= 1 ? 1 : days <= 7 ? 6 : 24;
           points = (cgData.prices || [])
-            .filter((_, i) => i % interval === 0)
-            .map(item => ({
-              t: new Date(item[0]).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
-              p: +item[1].toFixed(6),
-            }));
+            .filter(function(_, i) { return i % interval === 0; })
+            .map(function(item) {
+              return {
+                t: new Date(item[0]).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
+                p: parseFloat(item[1].toFixed(6)),
+              };
+            });
         } else {
-          const tokenAddr = isEvmToken ? (coin.address || coin.id) : (coin.mint || coin.id);
-          // Fix 1: Use the chainId->slug map instead of hardcoding 'ethereum'
-          const network = isEvmToken ? (GT_NETWORKS[coin.chainId] || 'eth') : 'solana';
-          const timeframe = days <= 1 ? 'minute' : 'day';
-          const aggregate = days <= 1 ? 30 : 1;
-          const limit = days <= 1 ? 48 : days;
-          const gtRes = await fetch(
-            `https://api.geckoterminal.com/api/v2/networks/${network}/tokens/${tokenAddr}/ohlcv/${timeframe}?aggregate=${aggregate}&limit=${limit}`,
+          var tokenAddr = isEvmToken ? (coin.address || coin.id) : (coin.mint || coin.id);
+          var network = isEvmToken ? (GT_NETWORKS[coin.chainId] || 'eth') : 'solana';
+          var timeframe = days <= 1 ? 'minute' : 'day';
+          var aggregate = days <= 1 ? 30 : 1;
+          var limit = days <= 1 ? 48 : days;
+          var gtRes = await fetch(
+            'https://api.geckoterminal.com/api/v2/networks/' + network + '/tokens/' + tokenAddr + '/ohlcv/' + timeframe + '?aggregate=' + aggregate + '&limit=' + limit,
             { signal }
           );
-          const gtData = await gtRes.json();
-          const ohlcv = gtData.data?.attributes?.ohlcv_list;
-          if (ohlcv?.length) {
-            points = ohlcv.map(item => ({
-              t: new Date(item[0] * 1000).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
-              p: +parseFloat(item[4]).toFixed(6),
-            }));
+          var gtData = await gtRes.json();
+          var ohlcv = gtData.data && gtData.data.attributes && gtData.data.attributes.ohlcv_list;
+          if (ohlcv && ohlcv.length) {
+            points = ohlcv.map(function(item) {
+              return {
+                t: new Date(item[0] * 1000).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
+                p: parseFloat(parseFloat(item[4]).toFixed(6)),
+              };
+            });
           }
         }
 
         if (points.length) setChartData(points);
       } catch (e) {
-        // Fix 3: Log chart fetch failures instead of silently swallowing them
         if (e.name !== 'AbortError') console.warn('Chart fetch failed:', e);
       }
       setChartLoading(false);
     };
 
     fetchChart();
-    return () => controller.abort();
+    return function() { controller.abort(); };
   }, [coin, chartPeriod, isEvmToken]);
 
-  useEffect(() => {
+  useEffect(function() {
     if (!coin) return;
-    let isMounted = true;
-
-    // Fix 2: AbortController for pool fetches too
-    const controller = new AbortController();
-    const { signal } = controller;
+    var isMounted = true;
+    var controller = new AbortController();
+    var signal = controller.signal;
 
     setPoolsLoading(true);
     setPools([]);
     setTotalLiquidity(0);
 
-    const fetchPools = async () => {
+    var fetchPools = async function() {
       try {
-        let tokenAddr = isEvmToken ? coin.address : coin.mint;
+        var tokenAddr = isEvmToken ? coin.address : coin.mint;
 
         if (!tokenAddr || !isOnChainAddress(tokenAddr)) {
           if (coin.id && isOnChainAddress(coin.id)) {
             tokenAddr = coin.id;
           } else if (coin.id && !coin.isSolanaToken) {
-            const cgRes = await fetch(
-              `https://api.coingecko.com/api/v3/coins/${coin.id}?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false`,
+            var cgRes = await fetch(
+              'https://api.coingecko.com/api/v3/coins/' + coin.id + '?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false',
               { signal }
             );
             if (cgRes.ok) {
-              const cgData = await cgRes.json();
-              const platforms = cgData.platforms || {};
+              var cgData = await cgRes.json();
+              var platforms = cgData.platforms || {};
               tokenAddr = platforms['ethereum']
                 || platforms['solana']
-                || Object.values(platforms).find(v => v && isOnChainAddress(v))
+                || Object.values(platforms).find(function(v) { return v && isOnChainAddress(v); })
                 || null;
             }
           }
@@ -172,19 +172,19 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
           return;
         }
 
-        const data = await fetch(
-          `https://api.dexscreener.com/latest/dex/tokens/${tokenAddr}`,
+        var data = await fetch(
+          'https://api.dexscreener.com/latest/dex/tokens/' + tokenAddr,
           { signal }
         )
-          .then(r => r.ok ? r.json() : { pairs: [] })
-          .catch(() => ({ pairs: [] }));
+          .then(function(r) { return r.ok ? r.json() : { pairs: [] }; })
+          .catch(function() { return { pairs: [] }; });
 
         if (!isMounted) return;
 
-        const pairs = (data.pairs || [])
-          .sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))
+        var pairs = (data.pairs || [])
+          .sort(function(a, b) { return (b.liquidity && b.liquidity.usd || 0) - (a.liquidity && a.liquidity.usd || 0); })
           .slice(0, 5);
-        const total = pairs.reduce((sum, p) => sum + (p.liquidity?.usd || 0), 0);
+        var total = pairs.reduce(function(sum, p) { return sum + (p.liquidity && p.liquidity.usd || 0); }, 0);
         setPools(pairs);
         setTotalLiquidity(total);
         setPoolsLoading(false);
@@ -195,13 +195,13 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
     };
 
     fetchPools();
-    return () => { isMounted = false; controller.abort(); };
+    return function() { isMounted = false; controller.abort(); };
   }, [coin, isEvmToken]);
 
   if (!coin) return null;
 
-  const priceChange = coin.price_change_percentage_24h || 0;
-  const chartColor  = priceChange >= 0 ? C.green : C.red;
+  var priceChange = coin.price_change_percentage_24h || 0;
+  var chartColor  = priceChange >= 0 ? C.green : C.red;
 
   return (
     <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
@@ -212,12 +212,12 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {coin.image
               ? <img src={coin.image} alt={coin.symbol} style={{ width: 48, height: 48, borderRadius: '50%' }} />
-              : <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: C.accent }}>{coin.symbol?.charAt(0).toUpperCase()}</div>
+              : <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: C.accent }}>{coin.symbol && coin.symbol.charAt(0).toUpperCase()}</div>
             }
             <div>
               <div style={{ fontWeight: 800, fontSize: 20, color: '#fff' }}>{coin.name}</div>
               <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
-                {coin.symbol?.toUpperCase()} {coin.market_cap_rank ? '- Rank #' + coin.market_cap_rank : ''}
+                {coin.symbol && coin.symbol.toUpperCase()} {coin.market_cap_rank ? '- Rank #' + coin.market_cap_rank : ''}
                 {isEvmToken && (
                   <span style={{ fontSize: 9, color: '#627eea', background: 'rgba(98,126,234,.15)', borderRadius: 4, padding: '1px 5px', marginLeft: 4 }}>
                     {CHAIN_NAMES[coin.chainId] || 'EVM'}
@@ -233,15 +233,18 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         </div>
 
         <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-          {[['1', '1D'], ['7', '7D'], ['30', '30D']].map(([val, label]) => (
-            <button
-              key={val}
-              onClick={() => setChartPeriod(val)}
-              style={{ padding: '5px 12px', borderRadius: 8, fontSize: 11, cursor: 'pointer', fontWeight: 600, background: chartPeriod === val ? 'rgba(0,229,255,.12)' : 'transparent', border: '1px solid ' + (chartPeriod === val ? 'rgba(0,229,255,.35)' : C.border), color: chartPeriod === val ? C.accent : C.muted, fontFamily: 'Syne, sans-serif' }}
-            >
-              {label}
-            </button>
-          ))}
+          {[['1', '1D'], ['7', '7D'], ['30', '30D']].map(function(item) {
+            var val = item[0], label = item[1];
+            return (
+              <button
+                key={val}
+                onClick={function() { setChartPeriod(val); }}
+                style={{ padding: '5px 12px', borderRadius: 8, fontSize: 11, cursor: 'pointer', fontWeight: 600, background: chartPeriod === val ? 'rgba(0,229,255,.12)' : 'transparent', border: '1px solid ' + (chartPeriod === val ? 'rgba(0,229,255,.35)' : C.border), color: chartPeriod === val ? C.accent : C.muted, fontFamily: 'Syne, sans-serif' }}
+              >
+                {label}
+              </button>
+            );
+          })}
         </div>
 
         {chartLoading ? (
@@ -261,7 +264,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
               <YAxis hide domain={['auto', 'auto']} />
               <Tooltip
                 contentStyle={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 11 }}
-                formatter={v => [fmt(v), 'Price']}
+                formatter={function(v) { return [fmt(v), 'Price']; }}
               />
               <Area type="monotone" dataKey="p" stroke={chartColor} strokeWidth={2} fill="url(#tdGrad)" />
             </AreaChart>
@@ -269,19 +272,18 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         )}
       </div>
 
-      {/* Buy / Sell */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
         <button
-          onClick={() => { setDrawerMode('buy'); setDrawerOpen(true); }}
+          onClick={function() { setDrawerMode('buy'); setDrawerOpen(true); }}
           style={{ padding: '18px 10px', borderRadius: 14, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}
         >
-          Buy {coin.symbol?.toUpperCase()}
+          Buy {coin.symbol && coin.symbol.toUpperCase()}
         </button>
         <button
-          onClick={() => { setDrawerMode('sell'); setDrawerOpen(true); }}
+          onClick={function() { setDrawerMode('sell'); setDrawerOpen(true); }}
           style={{ padding: '18px 10px', borderRadius: 14, cursor: 'pointer', background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.3)', color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}
         >
-          Sell {coin.symbol?.toUpperCase()}
+          Sell {coin.symbol && coin.symbol.toUpperCase()}
         </button>
       </div>
 
@@ -295,12 +297,14 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
           ['ATH CHANGE',         pct(coin.ath_change_percentage)],
           ['CIRCULATING SUPPLY', coin.circulating_supply ? (coin.circulating_supply / 1e6).toFixed(2) + 'M' : '--'],
           ['MARKET CAP RANK',    coin.market_cap_rank ? '#' + coin.market_cap_rank : '--'],
-        ].map(([label, value]) => (
-          <div key={label} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 14 }}>
-            <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, fontWeight: 700, letterSpacing: 1 }}>{label}</div>
-            <div style={{ fontSize: 14, color: C.text, fontWeight: 600 }}>{value}</div>
-          </div>
-        ))}
+        ].map(function(item) {
+          return (
+            <div key={item[0]} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 14 }}>
+              <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, fontWeight: 700, letterSpacing: 1 }}>{item[0]}</div>
+              <div style={{ fontSize: 14, color: C.text, fontWeight: 600 }}>{item[1]}</div>
+            </div>
+          );
+        })}
       </div>
 
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16, marginBottom: 14 }}>
@@ -310,11 +314,11 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
             ['1 Hour',   coin.price_change_percentage_1h_in_currency],
             ['24 Hours', coin.price_change_percentage_24h],
             ['7 Days',   coin.price_change_percentage_7d_in_currency],
-          ].map(([label, val]) => {
-            const v = val || 0;
+          ].map(function(item) {
+            var v = item[1] || 0;
             return (
-              <div key={label} style={{ background: C.card2, borderRadius: 10, padding: 12, textAlign: 'center' }}>
-                <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>{label}</div>
+              <div key={item[0]} style={{ background: C.card2, borderRadius: 10, padding: 12, textAlign: 'center' }}>
+                <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>{item[0]}</div>
                 <div style={{ fontSize: 15, fontWeight: 700, color: v >= 0 ? C.green : C.red }}>{pct(v)}</div>
               </div>
             );
@@ -332,13 +336,12 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         ) : pools.length === 0 ? (
           <div style={{ color: C.muted, fontSize: 12, padding: '8px 0' }}>No liquidity data found</div>
         ) : (
-          pools.map((pool, i) => {
-            const liq       = pool.liquidity?.usd || 0;
-            const vol       = pool.volume?.h24 || 0;
-            const pairLabel = pool.baseToken && pool.quoteToken ? `${pool.baseToken.symbol}/${pool.quoteToken.symbol}` : '--';
-            const dexName   = pool.dexId ? pool.dexId.charAt(0).toUpperCase() + pool.dexId.slice(1) : '--';
+          pools.map(function(pool, i) {
+            var liq       = pool.liquidity && pool.liquidity.usd || 0;
+            var vol       = pool.volume && pool.volume.h24 || 0;
+            var pairLabel = pool.baseToken && pool.quoteToken ? pool.baseToken.symbol + '/' + pool.quoteToken.symbol : '--';
+            var dexName   = pool.dexId ? pool.dexId.charAt(0).toUpperCase() + pool.dexId.slice(1) : '--';
             return (
-              // Fix 9: key on pairAddress (unique per pool) instead of array index
               <div key={pool.pairAddress || i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: i < pools.length - 1 ? '1px solid rgba(255,255,255,.04)' : 'none' }}>
                 <div>
                   <div style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>{dexName}</div>
@@ -354,24 +357,22 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         )}
       </div>
 
-      {/* Fix 10: contractLabel already uppercase — no .toUpperCase() in render */}
       {contractAddress && isOnChainAddress(contractAddress) && (
-        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16 }}>
+        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16, marginBottom: 14 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>{contractLabel}</div>
           <div style={{ fontSize: 11, color: C.accent, fontFamily: 'monospace', wordBreak: 'break-all', lineHeight: 1.6 }}>{contractAddress}</div>
         </div>
       )}
 
-      {/* Fix 4: TradeDrawer owns its open state via the prop */}
       <TradeDrawer
         open={drawerOpen}
-        onClose={() => setDrawerOpen(false)}
+        onClose={function() { setDrawerOpen(false); }}
         mode={drawerMode}
         coin={coin}
         jupiterTokens={jupiterTokens}
         coins={coins}
         onConnectWallet={onConnectWallet}
-        isConnected={isConnected}
+        isConnected={walletConnected}
       />
     </div>
   );
