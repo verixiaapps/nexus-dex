@@ -1,115 +1,492 @@
-// Load .env for local development (no-op in production where
-// env vars are set through the hosting platform directly)
-require('dotenv').config();
+/**
 
-const express = require('express');
-const cors = require('cors');
-const path = require('path');
+- NEXUS DEX — Backend Proxy Server
+- 
+- Responsibilities:
+- 1. Proxy all third-party API calls so secrets never reach the browser.
+- 1. Rate-limit per IP to protect API quotas.
+- 1. CORS locked to our own domain in production.
+- 1. Serve the built React app.
+- 1. Healthcheck for Railway.
+- 
+- Required env vars (server-side, NOT REACT_APP_ prefixed):
+- OX_API_KEY            — 0x.org API key
+- PINATA_JWT            — Pinata JWT for IPFS uploads
+- HELIUS_API_KEY        — Helius Solana RPC key (optional, falls back to public)
+- ALLOWED_ORIGINS       — comma-separated list of allowed origins
+- ```
+                        (e.g. "https://swap.verixiaapps.com,http://localhost:3000")
+  ```
+- PORT                  — provided by Railway
+- 
+- Deprecated (kept temporarily for migration):
+- REACT_APP_0X_API_KEY     — falls back to this if OX_API_KEY missing
+- REACT_APP_PINATA_JWT     — falls back to this if PINATA_JWT missing
+  */
+
+require(‘dotenv’).config();
+
+const express = require(‘express’);
+const cors = require(‘cors’);
+const path = require(‘path’);
+const rateLimit = require(‘express-rate-limit’);
+const multer = require(‘multer’);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
-// Check both naming conventions — REACT_APP_ prefix is React convention
-// but server env vars on hosting platforms are often set without it
-const OX_API_KEY = process.env.REACT_APP_0X_API_KEY || process.env.OX_API_KEY || '';
+const NODE_ENV = process.env.NODE_ENV || ‘development’;
 
-// Fetch with a 10s timeout — prevents hanging requests if upstream API stalls
+/* ============================================================================
+
+- SECRETS — server-side only, never leaked to browser
+- ========================================================================= */
+
+const OX_API_KEY     = process.env.OX_API_KEY     || process.env.REACT_APP_0X_API_KEY  || ‘’;
+const PINATA_JWT     = process.env.PINATA_JWT     || process.env.REACT_APP_PINATA_JWT  || ‘’;
+const HELIUS_API_KEY = process.env.HELIUS_API_KEY || process.env.REACT_APP_HELIUS_API_KEY || ‘’;
+
+/* ============================================================================
+
+- CORS — locked to allowed origins in production
+- ========================================================================= */
+
+const allowedOrigins = (process.env.ALLOWED_ORIGINS || ‘https://swap.verixiaapps.com,http://localhost:3000’)
+.split(’,’)
+.map((s) => s.trim())
+.filter(Boolean);
+
+const corsOptions = {
+origin: (origin, callback) => {
+// Allow same-origin requests (no Origin header) and explicitly listed domains
+if (!origin) return callback(null, true);
+if (NODE_ENV !== ‘production’) return callback(null, true);
+if (allowedOrigins.includes(origin)) return callback(null, true);
+return callback(new Error(’Not allowed by CORS: ’ + origin));
+},
+credentials: false,
+methods: [‘GET’, ‘POST’, ‘OPTIONS’],
+allowedHeaders: [‘Content-Type’, ‘Accept’],
+};
+
+app.use(cors(corsOptions));
+app.use(express.json({ limit: ‘256kb’ })); // Cap JSON body size
+app.set(‘trust proxy’, 1);                  // Required for Railway IP detection
+
+/* ============================================================================
+
+- RATE LIMITING — per IP, prevents quota burn from one abusive client
+- ========================================================================= */
+
+const apiLimiter = rateLimit({
+windowMs: 60_000,        // 1 minute
+max: 120,                // 120 requests per minute per IP (2/sec sustained)
+standardHeaders: true,
+legacyHeaders: false,
+message: { error: ‘Too many requests, slow down.’ },
+});
+
+const uploadLimiter = rateLimit({
+windowMs: 60_000,
+max: 10,                 // 10 file uploads per minute per IP
+standardHeaders: true,
+legacyHeaders: false,
+message: { error: ‘Too many uploads, slow down.’ },
+});
+
+app.use(’/api/’, apiLimiter);
+
+/* ============================================================================
+
+- SHARED HELPERS
+- ========================================================================= */
+
 async function fetchWithTimeout(url, options, timeoutMs) {
-  timeoutMs = timeoutMs || 10000;
-  var controller = new AbortController();
-  var timer = setTimeout(function() { controller.abort(); }, timeoutMs);
-  try {
-    var res = await fetch(url, Object.assign({}, options, { signal: controller.signal }));
-    return res;
-  } finally {
-    clearTimeout(timer);
-  }
+timeoutMs = timeoutMs || 12_000;
+const controller = new AbortController();
+const timer = setTimeout(() => controller.abort(), timeoutMs);
+try {
+return await fetch(url, Object.assign({}, options, { signal: controller.signal }));
+} finally {
+clearTimeout(timer);
+}
 }
 
-// Parse upstream response safely — if upstream returns HTML (e.g. Cloudflare
-// error page), response.json() would throw and lose the real error body.
 async function safeJson(response) {
-  var text = await response.text();
-  try {
-    return { parsed: JSON.parse(text), raw: null };
-  } catch (e) {
-    return { parsed: null, raw: text };
-  }
+const text = await response.text();
+try {
+return { parsed: JSON.parse(text), raw: null };
+} catch (e) {
+return { parsed: null, raw: text };
+}
 }
 
-app.use(cors());
-app.use(express.json());
+function logError(tag, err) {
+// Don’t log full stack in production — just message + status code
+if (NODE_ENV === ‘production’) {
+console.warn(’[’ + tag + ‘]’, err.message || err);
+} else {
+console.error(’[’ + tag + ‘]’, err);
+}
+}
 
-// Proxy all 0x API requests
-app.get('/api/0x/*', async function(req, res) {
-  try {
-    var oxPath = req.path.replace('/api/0x', '');
-    var queryString = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-    var url = 'https://api.0x.org' + oxPath + queryString;
+/* ============================================================================
 
-    var response = await fetchWithTimeout(url, {
-      headers: {
-        '0x-api-key': OX_API_KEY,
-        '0x-version': 'v2',
-        'Content-Type': 'application/json',
-      },
-    });
+- HEALTHCHECK — Railway pings this to verify server is up
+- ========================================================================= */
 
-    var result = await safeJson(response);
-    if (result.parsed !== null) {
-      return res.status(response.status).json(result.parsed);
-    }
-    return res.status(response.status).json({ error: 'Upstream returned non-JSON', body: result.raw });
-
-  } catch (e) {
-    if (e.name === 'AbortError') {
-      return res.status(504).json({ error: '0x API request timed out' });
-    }
-    res.status(500).json({ error: e.message });
-  }
+app.get(’/api/health’, (req, res) => {
+res.json({
+ok: true,
+env: NODE_ENV,
+has: {
+ox:     Boolean(OX_API_KEY),
+pinata: Boolean(PINATA_JWT),
+helius: Boolean(HELIUS_API_KEY),
+},
+time: new Date().toISOString(),
+});
 });
 
-// Proxy Raydium API requests
-app.get('/api/raydium/*', async function(req, res) {
-  try {
-    var raydiumPath = req.path.replace('/api/raydium', '');
-    var queryString = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
-    var url = 'https://api-v3.raydium.io' + raydiumPath + queryString;
+/* ============================================================================
 
-    var response = await fetchWithTimeout(url, {
-      headers: { 'Content-Type': 'application/json' },
-    });
+- 0X API PROXY — supports GET (price/quote) and POST (permit2 submission)
+- 
+- /api/0x/*   →   https://api.0x.org/*
+- 
+- Permit2 quote: GET /api/0x/swap/permit2/quote?…
+- Standard quote: GET /api/0x/swap/permit2/price?…
+- ========================================================================= */
 
-    var result = await safeJson(response);
-    if (result.parsed !== null) {
-      return res.status(response.status).json(result.parsed);
-    }
-    return res.status(response.status).json({ error: 'Upstream returned non-JSON', body: result.raw });
+async function proxy0x(req, res) {
+try {
+const subPath = req.path.replace(’/api/0x’, ‘’);
+const queryString = req.url.includes(’?’) ? req.url.slice(req.url.indexOf(’?’)) : ‘’;
+const url = ‘https://api.0x.org’ + subPath + queryString;
 
-  } catch (e) {
-    if (e.name === 'AbortError') {
-      return res.status(504).json({ error: 'Raydium API request timed out' });
-    }
-    res.status(500).json({ error: e.message });
-  }
+```
+const headers = {
+  '0x-api-key': OX_API_KEY,
+  '0x-version': 'v2',
+  'Content-Type': 'application/json',
+  Accept: 'application/json',
+};
+
+const fetchOpts = { method: req.method, headers };
+if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
+  fetchOpts.body = JSON.stringify(req.body);
+}
+
+const response = await fetchWithTimeout(url, fetchOpts);
+const result = await safeJson(response);
+
+if (result.parsed !== null) {
+  return res.status(response.status).json(result.parsed);
+}
+return res.status(response.status).json({
+  error: 'Upstream returned non-JSON',
+  body: result.raw && result.raw.slice(0, 500),
+});
+```
+
+} catch (e) {
+if (e.name === ‘AbortError’) {
+return res.status(504).json({ error: ‘0x API request timed out’ });
+}
+logError(‘0x’, e);
+return res.status(500).json({ error: e.message || ‘Unknown error’ });
+}
+}
+
+app.get(’/api/0x/*’, proxy0x);
+app.post(’/api/0x/*’, proxy0x);
+
+/* ============================================================================
+
+- RAYDIUM API PROXY — read-only public API, GET only
+- 
+- /api/raydium/*   →   https://api-v3.raydium.io/*
+- ========================================================================= */
+
+app.get(’/api/raydium/*’, async (req, res) => {
+try {
+const subPath = req.path.replace(’/api/raydium’, ‘’);
+const queryString = req.url.includes(’?’) ? req.url.slice(req.url.indexOf(’?’)) : ‘’;
+const url = ‘https://api-v3.raydium.io’ + subPath + queryString;
+
+```
+const response = await fetchWithTimeout(url, {
+  method: 'GET',
+  headers: { 'Content-Type': 'application/json' },
+});
+const result = await safeJson(response);
+
+if (result.parsed !== null) {
+  return res.status(response.status).json(result.parsed);
+}
+return res.status(response.status).json({
+  error: 'Upstream returned non-JSON',
+  body: result.raw && result.raw.slice(0, 500),
+});
+```
+
+} catch (e) {
+if (e.name === ‘AbortError’) {
+return res.status(504).json({ error: ‘Raydium API request timed out’ });
+}
+logError(‘raydium’, e);
+return res.status(500).json({ error: e.message || ‘Unknown error’ });
+}
 });
 
-// Catch unmatched /api/* routes — use app.all (not app.use) so it explicitly
-// handles every HTTP method and avoids Express 4 prefix-matching edge cases.
-// Must come before the static file handler so invalid API paths don't fall
-// through and receive index.html with a 200 status.
-app.all('/api/*', function(req, res) {
-  res.status(404).json({ error: 'API route not found: ' + req.path });
+/* ============================================================================
+
+- LIFI API PROXY — public but rate-limited heavily by them. Proxy lets us
+- cache and back off on our side.
+- 
+- /api/lifi/*   →   https://li.quest/v1/*
+- ========================================================================= */
+
+app.get(’/api/lifi/*’, async (req, res) => {
+try {
+const subPath = req.path.replace(’/api/lifi’, ‘’);
+const queryString = req.url.includes(’?’) ? req.url.slice(req.url.indexOf(’?’)) : ‘’;
+const url = ‘https://li.quest/v1’ + subPath + queryString;
+
+```
+const response = await fetchWithTimeout(url, {
+  method: 'GET',
+  headers: { 'Content-Type': 'application/json' },
+});
+const result = await safeJson(response);
+
+if (result.parsed !== null) {
+  return res.status(response.status).json(result.parsed);
+}
+return res.status(response.status).json({
+  error: 'Upstream returned non-JSON',
+  body: result.raw && result.raw.slice(0, 500),
+});
+```
+
+} catch (e) {
+if (e.name === ‘AbortError’) {
+return res.status(504).json({ error: ‘LiFi API request timed out’ });
+}
+logError(‘lifi’, e);
+return res.status(500).json({ error: e.message || ‘Unknown error’ });
+}
 });
 
-// Serve React build in production
-app.use(express.static(path.join(__dirname, 'build')));
-app.get('*', function(req, res) {
-  res.sendFile(path.join(__dirname, 'build', 'index.html'));
+/* ============================================================================
+
+- HELIUS RPC PROXY — Solana RPC requests proxied so the API key stays server-side
+- 
+- POST /api/solana-rpc   →   https://mainnet.helius-rpc.com/?api-key=…
+- 
+- Falls back to public mainnet-beta RPC if no Helius key configured.
+- ========================================================================= */
+
+app.post(’/api/solana-rpc’, async (req, res) => {
+try {
+const url = HELIUS_API_KEY
+? ‘https://mainnet.helius-rpc.com/?api-key=’ + HELIUS_API_KEY
+: ‘https://api.mainnet-beta.solana.com’;
+
+```
+const response = await fetchWithTimeout(url, {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify(req.body || {}),
+}, 15_000);
+const result = await safeJson(response);
+
+if (result.parsed !== null) {
+  return res.status(response.status).json(result.parsed);
+}
+return res.status(response.status).json({
+  error: 'Upstream returned non-JSON',
+  body: result.raw && result.raw.slice(0, 500),
+});
+```
+
+} catch (e) {
+if (e.name === ‘AbortError’) {
+return res.status(504).json({ error: ‘Solana RPC request timed out’ });
+}
+logError(‘solana-rpc’, e);
+return res.status(500).json({ error: e.message || ‘Unknown error’ });
+}
 });
 
-app.listen(PORT, function() {
-  console.log('Nexus DEX server running on port ' + PORT);
-  if (!OX_API_KEY) {
-    console.warn('WARNING: No 0x API key found. Set REACT_APP_0X_API_KEY or OX_API_KEY in your environment.');
-  }
+/* ============================================================================
+
+- PINATA UPLOADS — moved server-side so the JWT never reaches the browser
+- 
+- POST /api/pinata/json   — body: { name, content }
+- Used by TokenLaunch to upload metadata JSON
+- 
+- POST /api/pinata/file   — multipart form, field “file”
+- Used by TokenLaunch to upload token image
+- 
+- Response: { ipfsHash, url }
+- ========================================================================= */
+
+const upload = multer({
+storage: multer.memoryStorage(),
+limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
+fileFilter: (req, file, cb) => {
+// Only allow images
+if (!/^image/(png|jpeg|jpg|gif|webp|svg+xml)$/i.test(file.mimetype || ‘’)) {
+return cb(new Error(‘Only image files are allowed’));
+}
+cb(null, true);
+},
+});
+
+app.post(’/api/pinata/json’, uploadLimiter, async (req, res) => {
+try {
+if (!PINATA_JWT) return res.status(503).json({ error: ‘Pinata not configured’ });
+const { name, content } = req.body || {};
+if (!content || typeof content !== ‘object’) {
+return res.status(400).json({ error: ‘Missing content’ });
+}
+
+```
+const response = await fetchWithTimeout('https://api.pinata.cloud/pinning/pinJSONToIPFS', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    Authorization: 'Bearer ' + PINATA_JWT,
+  },
+  body: JSON.stringify({
+    pinataContent: content,
+    pinataMetadata: { name: (name || 'metadata').slice(0, 64) },
+  }),
+}, 20_000);
+
+const result = await safeJson(response);
+if (result.parsed && result.parsed.IpfsHash) {
+  return res.json({
+    ipfsHash: result.parsed.IpfsHash,
+    url: 'https://ipfs.io/ipfs/' + result.parsed.IpfsHash,
+  });
+}
+return res.status(response.status).json({
+  error: 'Pinata upload failed',
+  detail: result.parsed || (result.raw && result.raw.slice(0, 300)),
+});
+```
+
+} catch (e) {
+logError(‘pinata-json’, e);
+return res.status(500).json({ error: e.message || ‘Unknown error’ });
+}
+});
+
+app.post(’/api/pinata/file’, uploadLimiter, upload.single(‘file’), async (req, res) => {
+try {
+if (!PINATA_JWT) return res.status(503).json({ error: ‘Pinata not configured’ });
+if (!req.file) return res.status(400).json({ error: ‘No file uploaded’ });
+
+```
+// Build form data manually since Pinata wants multipart
+const FormData = require('form-data');
+const fd = new FormData();
+fd.append('file', req.file.buffer, {
+  filename: req.file.originalname || 'upload',
+  contentType: req.file.mimetype,
+});
+if (req.body && req.body.name) {
+  fd.append('pinataMetadata', JSON.stringify({ name: String(req.body.name).slice(0, 64) }));
+}
+
+const response = await fetchWithTimeout('https://api.pinata.cloud/pinning/pinFileToIPFS', {
+  method: 'POST',
+  headers: Object.assign(
+    { Authorization: 'Bearer ' + PINATA_JWT },
+    fd.getHeaders()
+  ),
+  body: fd,
+}, 30_000);
+
+const result = await safeJson(response);
+if (result.parsed && result.parsed.IpfsHash) {
+  return res.json({
+    ipfsHash: result.parsed.IpfsHash,
+    url: 'https://ipfs.io/ipfs/' + result.parsed.IpfsHash,
+  });
+}
+return res.status(response.status).json({
+  error: 'Pinata upload failed',
+  detail: result.parsed || (result.raw && result.raw.slice(0, 300)),
+});
+```
+
+} catch (e) {
+if (e.message && e.message.includes(‘Only image files’)) {
+return res.status(400).json({ error: e.message });
+}
+if (e.code === ‘LIMIT_FILE_SIZE’) {
+return res.status(413).json({ error: ‘File too large (max 5MB)’ });
+}
+logError(‘pinata-file’, e);
+return res.status(500).json({ error: e.message || ‘Unknown error’ });
+}
+});
+
+/* ============================================================================
+
+- 404 FOR UNMATCHED API ROUTES — must come before SPA catch-all so typos
+- don’t fall through to index.html with a 200.
+- ========================================================================= */
+
+app.all(’/api/*’, (req, res) => {
+res.status(404).json({ error: ’API route not found: ’ + req.path });
+});
+
+/* ============================================================================
+
+- SPA STATIC + CATCH-ALL
+- ========================================================================= */
+
+app.use(express.static(path.join(__dirname, ‘build’), {
+maxAge: ‘7d’,
+setHeaders: (res, filePath) => {
+// Don’t cache index.html — we want fresh JS bundle on each visit
+if (filePath.endsWith(’.html’)) {
+res.setHeader(‘Cache-Control’, ‘no-cache, no-store, must-revalidate’);
+}
+},
+}));
+
+app.get(’*’, (req, res) => {
+res.sendFile(path.join(__dirname, ‘build’, ‘index.html’));
+});
+
+/* ============================================================================
+
+- ERROR HANDLER — last middleware, catches anything thrown
+- ========================================================================= */
+
+app.use((err, req, res, next) => {
+if (err && err.message && err.message.startsWith(‘Not allowed by CORS’)) {
+return res.status(403).json({ error: ‘CORS: origin not allowed’ });
+}
+logError(‘unhandled’, err);
+if (res.headersSent) return next(err);
+res.status(500).json({ error: ‘Internal server error’ });
+});
+
+/* ============================================================================
+
+- BOOT
+- ========================================================================= */
+
+app.listen(PORT, () => {
+console.log(‘Nexus DEX server running on port ’ + PORT);
+console.log(’  env:           ’ + NODE_ENV);
+console.log(’  allowed origins: ’ + allowedOrigins.join(’, ‘));
+if (!OX_API_KEY)     console.warn(’  WARNING: OX_API_KEY not set — EVM swaps will fail’);
+if (!PINATA_JWT)     console.warn(’  WARNING: PINATA_JWT not set — token launch metadata will fail’);
+if (!HELIUS_API_KEY) console.warn(’  WARNING: HELIUS_API_KEY not set — falling back to public Solana RPC’);
 });
