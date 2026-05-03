@@ -14,8 +14,8 @@ import {
   zkSync,
 } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
-import App from './App';
-import { WalletContextProvider } from './WalletContext';
+import App from './App.js';
+import { WalletContextProvider } from './WalletContext.js';
 
 const unichain      = { id: 130,    name: 'Unichain',    nativeCurrency: { name: 'Ether',        symbol: 'ETH',  decimals: 18 }, rpcUrls: { default: { http: ['https://mainnet.unichain.org'] } } };
 const sonic         = { id: 146,    name: 'Sonic',       nativeCurrency: { name: 'Sonic',        symbol: 'S',    decimals: 18 }, rpcUrls: { default: { http: ['https://rpc.soniclabs.com'] } } };
@@ -78,10 +78,10 @@ createWeb3Modal({
   defaultChain: mainnet,
   themeMode: 'dark',
   themeVariables: {
-    '--w3m-accent':               '#00e5ff',   // FIX: was '–w3m-accent' (en dash)
-    '--w3m-border-radius-master': '12px',      // FIX: was '–w3m-border-radius-master'
-    '--w3m-font-family':          'Syne, sans-serif', // FIX: was '–w3m-font-family'
-    '--w3m-background-color':     '#080d1a',   // FIX: was '–w3m-background-color'
+    '--w3m-accent':               '#00e5ff',
+    '--w3m-border-radius-master': '12px',
+    '--w3m-font-family':          'Syne, sans-serif',
+    '--w3m-background-color':     '#080d1a',
   },
   metadata,
 });
