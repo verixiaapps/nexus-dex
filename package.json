@@ -12,7 +12,10 @@
     "ajv": "^8.12.0",
     "dotenv": "^16.4.5",
     "express": "^4.18.2",
+    "express-rate-limit": "^7.4.0",
     "cors": "^2.8.5",
+    "multer": "^1.4.5-lts.1",
+    "form-data": "^4.0.0",
     "bs58": "^5.0.0",
     "bn.js": "^5.2.1",
     "buffer": "^6.0.3",
@@ -25,8 +28,8 @@
     "path-browserify": "^1.0.1",
     "assert": "^2.1.0",
     "url": "^0.11.3",
-    "@solana/web3.js": "^1.87.6",
-    "@solana/spl-token": "^0.3.11",
+    "@solana/web3.js": "^1.95.0",
+    "@solana/spl-token": "^0.4.6",
     "@solana/wallet-adapter-base": "^0.9.23",
     "@solana/wallet-adapter-react": "^0.15.35",
     "@solana/wallet-adapter-react-ui": "^0.9.35",
@@ -37,8 +40,8 @@
     "viem": "^2.21.0",
     "@tanstack/react-query": "^5.56.0",
     "recharts": "^2.10.0",
-    "@raydium-io/raydium-sdk-v2": "latest",
-    "@metaplex-foundation/mpl-token-metadata": "latest"
+    "@raydium-io/raydium-sdk-v2": "0.1.131-alpha",
+    "@metaplex-foundation/mpl-token-metadata": "3.4.0"
   },
   "devDependencies": {
     "concurrently": "^8.2.0"
