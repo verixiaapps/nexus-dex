@@ -17,67 +17,123 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b', text: '#cdd6f4', muted: '#586994',
 };
 
-var PATH_TO_TAB = {
+// Fix 10: Module-level constants — never change, no reason to recreate per render
+const SOLANA_MINTS = [
+  'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
+  'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
+  '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R',
+  'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3',
+  'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So',
+  'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE',
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
+  'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm',
+  'jtojtomepa8tDDcS9EeQJwAkNnhvbTVS6ZoXgbCXyzz',
+  'WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk',
+];
+
+const CG_IDS = 'bitcoin,ethereum,binancecoin,ripple,cardano,dogecoin,solana,avalanche-2,chainlink,uniswap,matic-network,toncoin,shiba-inu,litecoin,polkadot,cosmos,near';
+
+// Fix 9: Global styles as a module-level constant, injected once via useEffect
+const GLOBAL_STYLES = `html,body{margin:0;padding:0;width:100%;min-height:100vh;overflow-x:hidden;overscroll-behavior:none;} *,*::before,*::after{box-sizing:border-box;} input,button,select,textarea{font-family:'Syne',sans-serif;} ::-webkit-scrollbar{width:3px;height:3px;} ::-webkit-scrollbar-track{background:#03060f;} ::-webkit-scrollbar-thumb{background:#1e2d4a;border-radius:2px;} .hide-scrollbar{scrollbar-width:none;} .hide-scrollbar::-webkit-scrollbar{display:none;} @media(max-width:768px){.desktop-nav{display:none!important;}} @media(min-width:769px){.mobile-nav{display:none!important;}}`;
+
+const PATH_TO_TAB = {
   '/': 'swap', '/swap': 'swap', '/markets': 'markets',
   '/launches': 'launches', '/launch': 'launch',
   '/buy': 'buy', '/send': 'send', '/portfolio': 'portfolio',
 };
-var TAB_TO_PATH = {
+const TAB_TO_PATH = {
   swap: '/swap', markets: '/markets', launches: '/launches',
   launch: '/launch', buy: '/buy', send: '/send', portfolio: '/portfolio',
 };
 
+// Fix 8: Shared helpers to avoid duplicating activeTab derivation logic
+function tabFromPathname(pathname) {
+  return PATH_TO_TAB[pathname] || (pathname.startsWith('/markets/token') ? 'token' : 'swap');
+}
+function getActiveTab(tab) {
+  return tab === 'token' ? 'markets' : tab;
+}
+
 export function useAppWallet() {
   const { publicKey, connected: solConnected, sendTransaction, signTransaction } = useWallet();
   const { address: evmAddress, isConnected: evmConnected } = useAccount();
-  var isConnected = solConnected || evmConnected;
-  var isSolanaConnected = solConnected;
-  var walletAddress = solConnected && publicKey ? publicKey.toString() : evmConnected && evmAddress ? evmAddress : null;
-  return { isConnected, isSolanaConnected, walletAddress, publicKey: (solConnected && publicKey) ? publicKey : null, sendTransaction, signTransaction, solConnected, evmConnected, evmAddress };
+  const isConnected = solConnected || evmConnected;
+  const isSolanaConnected = solConnected;
+  const walletAddress = solConnected && publicKey
+    ? publicKey.toString()
+    : evmConnected && evmAddress
+    ? evmAddress
+    : null;
+  return {
+    isConnected, isSolanaConnected, walletAddress,
+    publicKey: (solConnected && publicKey) ? publicKey : null,
+    sendTransaction, signTransaction, solConnected, evmConnected, evmAddress,
+  };
 }
 
 function WalletModal({ open, onClose }) {
-  const { select, wallets, connect, disconnect, connected, publicKey } = useWallet();
+  const { wallet: selectedWallet, select, wallets, connect, disconnect, connected, publicKey } = useWallet();
   const { open: openWeb3Modal } = useWeb3Modal();
   const { isConnected: evmConnected, address: evmAddress } = useAccount();
   const { disconnect: evmDisconnect } = useDisconnect();
   const [pendingWallet, setPendingWallet] = useState(null);
 
-  useEffect(function() {
+  // Fix 3: Wait for selectedWallet to actually match before calling connect(),
+  // avoiding the race where connect() fires before the adapter is ready.
+  useEffect(() => {
     if (!pendingWallet) return;
-    var doConnect = async function() {
-      try { await connect(); onClose(); } catch (e) { console.error('Wallet connect error:', e); } finally { setPendingWallet(null); }
+    if (selectedWallet?.adapter.name !== pendingWallet) return;
+    let cancelled = false;
+    const doConnect = async () => {
+      try {
+        await connect();
+        if (!cancelled) onClose();
+      } catch (e) {
+        console.error('Wallet connect error:', e);
+      } finally {
+        if (!cancelled) setPendingWallet(null);
+      }
     };
     doConnect();
-  }, [pendingWallet, connect, onClose]);
+    return () => { cancelled = true; };
+  }, [pendingWallet, selectedWallet, connect, onClose]);
 
-  var handleSolanaConnect = function(wallet) {
-    try { select(wallet.adapter.name); setPendingWallet(wallet.adapter.name); } catch (e) { console.error(e); }
+  const handleSolanaConnect = (wallet) => {
+    try {
+      select(wallet.adapter.name);
+      setPendingWallet(wallet.adapter.name);
+    } catch (e) {
+      console.error('Wallet select error:', e);
+    }
   };
 
-  var handleWalletConnect = function() {
+  const handleWalletConnect = () => {
     onClose();
-    setTimeout(function() { openWeb3Modal({ view: 'Connect' }); }, 100);
+    setTimeout(() => openWeb3Modal({ view: 'Connect' }), 100);
   };
 
-  var isSol = connected && publicKey;
-  var displayAddr = isSol
+  const isSol = connected && publicKey;
+  const displayAddr = isSol
     ? publicKey.toString().slice(0, 6) + '...' + publicKey.toString().slice(-4)
     : evmConnected && evmAddress
     ? evmAddress.slice(0, 6) + '...' + evmAddress.slice(-4)
     : null;
-  var connectedWalletName = isSol && wallets.find(function(w) { return w.adapter.connected; });
-  connectedWalletName = connectedWalletName ? connectedWalletName.adapter.name : (isSol ? 'Solana' : 'EVM Wallet');
+  const connectedWalletName = isSol
+    ? (wallets.find(w => w.adapter.connected)?.adapter.name ?? 'Solana')
+    : 'EVM Wallet';
 
-  var _seen = new Set();
-  var detectedWallets = wallets.filter(function(w) {
+  // Fix 2: Single shared _seen Set so notDetectedWallets can't contain
+  // anything already present in detectedWallets.
+  const _seen = new Set();
+  const detectedWallets = wallets.filter(w => {
     if (w.adapter.name === 'WalletConnect') return false;
     if (_seen.has(w.adapter.name)) return false;
     _seen.add(w.adapter.name);
     return w.readyState === 'Installed' || w.readyState === 'Loadable';
   });
-  var notDetectedWallets = wallets.filter(function(w) {
-    return w.adapter.name !== 'WalletConnect' && w.readyState !== 'Installed' && w.readyState !== 'Loadable';
+  const notDetectedWallets = wallets.filter(w => {
+    if (w.adapter.name === 'WalletConnect') return false;
+    return !_seen.has(w.adapter.name);
   });
 
   if (!open) return null;
@@ -87,39 +143,68 @@ function WalletModal({ open, onClose }) {
       <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 501, background: '#080d1a', borderTop: '2px solid rgba(0,229,255,.2)', borderRadius: '20px 20px 0 0', padding: '24px 24px 48px', maxHeight: '85vh', overflowY: 'auto', boxShadow: '0 -20px 60px rgba(0,0,0,.9)' }}>
         <div style={{ width: 40, height: 4, background: '#2e3f5e', borderRadius: 2, margin: '0 auto 24px' }} />
         <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 6 }}>{connected || evmConnected ? 'Wallet Connected' : 'Connect Wallet'}</div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 6 }}>
+            {connected || evmConnected ? 'Wallet Connected' : 'Connect Wallet'}
+          </div>
           {displayAddr && <div style={{ fontSize: 13, color: '#586994' }}>{connectedWalletName}: {displayAddr}</div>}
         </div>
+
         {(connected || evmConnected) ? (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 400, margin: '0 auto' }}>
             <div style={{ background: 'rgba(0,255,163,.08)', border: '1px solid rgba(0,255,163,.2)', borderRadius: 16, padding: '16px 20px' }}>
               <div style={{ color: '#00ffa3', fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Connected</div>
               <div style={{ color: '#586994', fontSize: 12, fontFamily: 'monospace', wordBreak: 'break-all' }}>{displayAddr}</div>
             </div>
-            <button onClick={async function() { try { if (connected) await disconnect(); if (evmConnected) evmDisconnect(); onClose(); } catch (e) { console.error(e); } }} style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 16, padding: 16, cursor: 'pointer', width: '100%', color: '#ff3b6b', fontWeight: 700, fontSize: 15, fontFamily: 'Syne, sans-serif' }}>Disconnect</button>
-            <button onClick={onClose} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,.1)', borderRadius: 16, padding: 14, cursor: 'pointer', color: '#586994', fontSize: 14, fontFamily: 'Syne, sans-serif' }}>Close</button>
+            <button
+              onClick={async () => {
+                try {
+                  if (connected) await disconnect();
+                  if (evmConnected) evmDisconnect();
+                  onClose();
+                } catch (e) {
+                  console.error('Disconnect error:', e);
+                }
+              }}
+              style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 16, padding: 16, cursor: 'pointer', width: '100%', color: '#ff3b6b', fontWeight: 700, fontSize: 15, fontFamily: 'Syne, sans-serif' }}
+            >
+              Disconnect
+            </button>
+            <button
+              onClick={onClose}
+              style={{ background: 'transparent', border: '1px solid rgba(255,255,255,.1)', borderRadius: 16, padding: 14, cursor: 'pointer', color: '#586994', fontSize: 14, fontFamily: 'Syne, sans-serif' }}
+            >
+              Close
+            </button>
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 400, margin: '0 auto' }}>
             {detectedWallets.length > 0 && (
               <>
                 <div style={{ fontSize: 10, color: '#586994', fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>DETECTED WALLETS</div>
-                {detectedWallets.map(function(wallet) {
-                  return (
-                    <button key={wallet.adapter.name} onClick={function() { handleSolanaConnect(wallet); }} style={{ display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(0,229,255,.06)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 14, padding: '14px 18px', cursor: 'pointer', width: '100%' }}>
-                      {wallet.adapter.icon ? <img src={wallet.adapter.icon} alt={wallet.adapter.name} style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(0,229,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: '#00e5ff', flexShrink: 0 }}>{wallet.adapter.name.charAt(0)}</div>}
-                      <div style={{ textAlign: 'left', flex: 1 }}>
-                        <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>{wallet.adapter.name}</div>
-                        <div style={{ color: '#00e5ff', fontSize: 12, marginTop: 1 }}>Detected - tap to connect</div>
-                      </div>
-                    </button>
-                  );
-                })}
+                {detectedWallets.map(wallet => (
+                  <button
+                    key={wallet.adapter.name}
+                    onClick={() => handleSolanaConnect(wallet)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(0,229,255,.06)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 14, padding: '14px 18px', cursor: 'pointer', width: '100%' }}
+                  >
+                    {wallet.adapter.icon
+                      ? <img src={wallet.adapter.icon} alt={wallet.adapter.name} style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
+                      : <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(0,229,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: '#00e5ff', flexShrink: 0 }}>{wallet.adapter.name.charAt(0)}</div>
+                    }
+                    <div style={{ textAlign: 'left', flex: 1 }}>
+                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>{wallet.adapter.name}</div>
+                      <div style={{ color: '#00e5ff', fontSize: 12, marginTop: 1 }}>Detected - tap to connect</div>
+                    </div>
+                  </button>
+                ))}
               </>
             )}
-            <button onClick={handleWalletConnect} style={{ display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(59,153,252,.08)', border: '1px solid rgba(59,153,252,.2)', borderRadius: 14, padding: '14px 18px', cursor: 'pointer', width: '100%' }}>
+            <button
+              onClick={handleWalletConnect}
+              style={{ display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(59,153,252,.08)', border: '1px solid rgba(59,153,252,.2)', borderRadius: 14, padding: '14px 18px', cursor: 'pointer', width: '100%' }}
+            >
               <div style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, background: 'linear-gradient(135deg,#3b99fc,#0066cc)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                <img src="https://avatars.githubusercontent.com/u/37784886" alt="WC" style={{ width: 28, height: 28, borderRadius: 6 }} onError={function(e) { e.target.style.display = 'none'; }} />
+                <img src="https://avatars.githubusercontent.com/u/37784886" alt="WC" style={{ width: 28, height: 28, borderRadius: 6 }} onError={e => { e.target.style.display = 'none'; }} />
               </div>
               <div style={{ textAlign: 'left', flex: 1 }}>
                 <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>WalletConnect</div>
@@ -130,14 +215,19 @@ function WalletModal({ open, onClose }) {
               <>
                 <div style={{ fontSize: 10, color: '#586994', fontWeight: 700, letterSpacing: 1, margin: '6px 0 2px' }}>MORE WALLETS</div>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
-                  {notDetectedWallets.slice(0, 6).map(function(wallet) {
-                    return (
-                      <button key={wallet.adapter.name} onClick={function() { window.open(wallet.adapter.url, '_blank'); onClose(); }} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.06)', borderRadius: 12, padding: '12px 8px', cursor: 'pointer' }}>
-                        {wallet.adapter.icon ? <img src={wallet.adapter.icon} alt={wallet.adapter.name} style={{ width: 32, height: 32, borderRadius: 8 }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 800, color: '#00e5ff' }}>{wallet.adapter.name.charAt(0)}</div>}
-                        <div style={{ color: '#586994', fontSize: 10, textAlign: 'center', lineHeight: 1.2 }}>{wallet.adapter.name}</div>
-                      </button>
-                    );
-                  })}
+                  {notDetectedWallets.slice(0, 6).map(wallet => (
+                    <button
+                      key={wallet.adapter.name}
+                      onClick={() => { window.open(wallet.adapter.url, '_blank'); onClose(); }}
+                      style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.06)', borderRadius: 12, padding: '12px 8px', cursor: 'pointer' }}
+                    >
+                      {wallet.adapter.icon
+                        ? <img src={wallet.adapter.icon} alt={wallet.adapter.name} style={{ width: 32, height: 32, borderRadius: 8 }} onError={e => { e.target.style.display = 'none'; }} />
+                        : <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 800, color: '#00e5ff' }}>{wallet.adapter.name.charAt(0)}</div>
+                      }
+                      <div style={{ color: '#586994', fontSize: 10, textAlign: 'center', lineHeight: 1.2 }}>{wallet.adapter.name}</div>
+                    </button>
+                  ))}
                 </div>
               </>
             )}
@@ -155,9 +245,9 @@ function IconLaunches() { return <svg width="18" height="18" viewBox="0 0 24 24"
 function IconLaunch() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>; }
 function IconSend() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>; }
 function IconWallet() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
-var NAV_ICONS = { swap: IconSwap, markets: IconMarkets, launches: IconLaunches, launch: IconLaunch, send: IconSend, portfolio: IconWallet };
+const NAV_ICONS = { swap: IconSwap, markets: IconMarkets, launches: IconLaunches, launch: IconLaunch, send: IconSend, portfolio: IconWallet };
 
-var NAV_TABS = [
+const NAV_TABS = [
   { id: 'swap', label: 'Swap' },
   { id: 'markets', label: 'Markets' },
   { id: 'launches', label: 'Launches' },
@@ -166,7 +256,7 @@ var NAV_TABS = [
   { id: 'portfolio', label: 'Wallet' },
 ];
 
-var HEADER_TABS = [
+const HEADER_TABS = [
   { id: 'swap', label: 'Swap' },
   { id: 'markets', label: 'Markets' },
   { id: 'launches', label: 'Launches' },
@@ -181,8 +271,8 @@ function AppInner() {
   const location = useLocation();
   const wallet = useAppWallet();
 
-  var tabFromPath = PATH_TO_TAB[location.pathname] || (location.pathname.startsWith('/markets/token') ? 'token' : 'swap');
-  const [tab, setTab] = useState(tabFromPath);
+  // Fix 5: const/let throughout (no var)
+  const [tab, setTab] = useState(() => tabFromPathname(location.pathname));
   const [selectedToken, setSelectedToken] = useState(null);
   const [walletModalOpen, setWalletModalOpen] = useState(false);
   const [coins, setCoins] = useState([]);
@@ -192,100 +282,153 @@ function AppInner() {
   const [launchesKey, setLaunchesKey] = useState(0);
   const [portfolioKey, setPortfolioKey] = useState(0);
 
-  // Sync tab from URL when browser back/forward used
-  useEffect(function() {
-    var newTab = PATH_TO_TAB[location.pathname] || (location.pathname.startsWith('/markets/token') ? 'token' : 'swap');
+  // Fix 9: Inject global styles once on mount, clean up on unmount
+  useEffect(() => {
+    const el = document.createElement('style');
+    el.textContent = GLOBAL_STYLES;
+    document.head.appendChild(el);
+    return () => document.head.removeChild(el);
+  }, []);
+
+  // Fix 1: tab included in deps so the closure is never stale
+  useEffect(() => {
+    const newTab = tabFromPathname(location.pathname);
     if (newTab !== tab) {
       setTab(newTab);
       if (newTab !== 'token') setSelectedToken(null);
     }
-  }, [location.pathname]);
+  }, [location.pathname, tab]);
 
-  var switchTab = useCallback(function(newTab) {
+  const switchTab = useCallback((newTab) => {
     if (newTab === tab && newTab !== 'token') {
-      if (newTab === 'launches') setLaunchesKey(function(k) { return k + 1; });
-      if (newTab === 'portfolio') setPortfolioKey(function(k) { return k + 1; });
+      if (newTab === 'launches') setLaunchesKey(k => k + 1);
+      if (newTab === 'portfolio') setPortfolioKey(k => k + 1);
       return;
     }
     if (newTab !== 'token') setSelectedToken(null);
-    var path = TAB_TO_PATH[newTab] || '/swap';
-    navigate(path);
+    navigate(TAB_TO_PATH[newTab] || '/swap');
     setTab(newTab);
     window.scrollTo(0, 0);
   }, [tab, navigate]);
 
-  var goToToken = useCallback(function(coin) {
+  const goToToken = useCallback((coin) => {
     setSelectedToken(coin);
     setTab('token');
     navigate('/markets/token');
     window.scrollTo(0, 0);
   }, [navigate]);
 
-  var goBack = useCallback(function() {
-    navigate(-1);
-  }, [navigate]);
+  // Fix 7: goBack is a trivial one-liner — no useCallback needed
+  const goBack = () => navigate(-1);
 
-  var openWallet = useCallback(function() { setWalletModalOpen(true); }, []);
+  const openWallet = useCallback(() => setWalletModalOpen(true), []);
 
-  // Jupiter tokens
-  useEffect(function() {
-    var fetch2 = async function() {
-      setJupiterLoading(true);
+  // Fix 4: Single fetch pipeline — jupiterTokens are set from the same
+  // metaResult used by the market poll. Eliminates the duplicate fetch.
+  useEffect(() => {
+    let isMounted = true;
+    const controller = new AbortController();
+
+    const fetchMarkets = async () => {
       try {
-        var res = await fetch('https://lite-api.jup.ag/tokens/v1/tagged/strict', { headers: { 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' } });
-        var data = await res.json();
-        if (Array.isArray(data) && data.length > 0) setJupiterTokens(data.map(function(t) { return { mint: t.address, symbol: t.symbol, name: t.name, decimals: t.decimals, logoURI: t.logoURI }; }));
-      } catch (e) {}
-      setJupiterLoading(false);
-    };
-    fetch2();
-  }, []);
-
-  // Market data — refreshes every 30s
-  useEffect(function() {
-    var isMounted = true;
-    var controller = new AbortController();
-    var fetchMarkets = async function() {
-      try {
-        var cgIds = 'bitcoin,ethereum,binancecoin,ripple,cardano,dogecoin,solana,avalanche-2,chainlink,uniswap,matic-network,toncoin,shiba-inu,litecoin,polkadot,cosmos,near';
-        var SOLANA_MINTS = ['JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN','DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263','4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R','HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3','mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So','orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE','Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB','EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm','jtojtomepa8tDDcS9EeQJwAkNnhvbTVS6ZoXgbCXyzz','WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk'];
-        var [cgResult, jupPriceResult, metaResult] = await Promise.allSettled([
-          fetch('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=' + cgIds + '&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d', { signal: controller.signal }).then(function(r) { return r.json(); }),
-          fetch('https://api.jup.ag/price/v2?ids=' + SOLANA_MINTS.join(','), { signal: controller.signal }).then(function(r) { return r.json(); }),
-          fetch('https://lite-api.jup.ag/tokens/v1/tagged/strict', { signal: controller.signal }).then(function(r) { return r.json(); }),
+        const [cgResult, jupPriceResult, metaResult] = await Promise.allSettled([
+          fetch(
+            `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${CG_IDS}&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d`,
+            { signal: controller.signal }
+          ).then(r => r.json()),
+          fetch(
+            `https://api.jup.ag/price/v2?ids=${SOLANA_MINTS.join(',')}`,
+            { signal: controller.signal }
+          ).then(r => r.json()),
+          fetch(
+            'https://lite-api.jup.ag/tokens/v1/tagged/strict',
+            { signal: controller.signal }
+          ).then(r => r.json()),
         ]);
+
         if (!isMounted) return;
-        var combined = [];
-        if (cgResult.status === 'fulfilled' && Array.isArray(cgResult.value)) combined = combined.concat(cgResult.value);
+
+        // Fix 6: Log failures so they're visible in production
+        if (cgResult.status === 'rejected')       console.warn('CoinGecko fetch failed:', cgResult.reason);
+        if (jupPriceResult.status === 'rejected') console.warn('Jupiter price fetch failed:', jupPriceResult.reason);
+        if (metaResult.status === 'rejected')     console.warn('Jupiter meta fetch failed:', metaResult.reason);
+
+        let combined = [];
+
+        if (cgResult.status === 'fulfilled' && Array.isArray(cgResult.value)) {
+          combined = combined.concat(cgResult.value);
+        }
+
         if (jupPriceResult.status === 'fulfilled' && metaResult.status === 'fulfilled') {
-          var jupData = jupPriceResult.value;
-          var metaMap = {};
-          if (Array.isArray(metaResult.value)) metaResult.value.forEach(function(t) { metaMap[t.address] = t; });
-          var solanaCoins = SOLANA_MINTS.map(function(mint, i) {
-            var priceInfo = jupData.data && jupData.data[mint];
-            var meta = metaMap[mint] || {};
-            if (!priceInfo || !priceInfo.price) return null;
-            return { id: mint, symbol: meta.symbol || mint.slice(0,4), name: meta.name || 'Unknown', image: meta.logoURI || null, current_price: parseFloat(priceInfo.price), market_cap: 0, market_cap_rank: 50 + i, total_volume: 0, high_24h: null, low_24h: null, price_change_percentage_1h_in_currency: null, price_change_percentage_24h: null, price_change_percentage_7d_in_currency: null, sparkline_in_7d: null, ath: null, ath_change_percentage: null, circulating_supply: null, isSolanaToken: true };
+          const jupData = jupPriceResult.value;
+          const metaMap = {};
+
+          if (Array.isArray(metaResult.value)) {
+            metaResult.value.forEach(t => { metaMap[t.address] = t; });
+
+            // Fix 4: Reuse the already-fetched meta to populate jupiterTokens
+            setJupiterTokens(
+              metaResult.value.map(t => ({
+                mint: t.address, symbol: t.symbol, name: t.name,
+                decimals: t.decimals, logoURI: t.logoURI,
+              }))
+            );
+            setJupiterLoading(false);
+          }
+
+          const solanaCoins = SOLANA_MINTS.map((mint, i) => {
+            const priceInfo = jupData.data?.[mint];
+            const meta = metaMap[mint] || {};
+            if (!priceInfo?.price) return null;
+            return {
+              id: mint,
+              symbol: meta.symbol || mint.slice(0, 4),
+              name: meta.name || 'Unknown',
+              image: meta.logoURI || null,
+              current_price: parseFloat(priceInfo.price),
+              market_cap: 0,
+              market_cap_rank: 50 + i,
+              total_volume: 0,
+              high_24h: null, low_24h: null,
+              price_change_percentage_1h_in_currency: null,
+              price_change_percentage_24h: null,
+              price_change_percentage_7d_in_currency: null,
+              sparkline_in_7d: null,
+              ath: null, ath_change_percentage: null,
+              circulating_supply: null,
+              isSolanaToken: true,
+            };
           }).filter(Boolean);
+
           combined = combined.concat(solanaCoins);
         }
+
         if (combined.length && isMounted) setCoins(combined);
         if (isMounted) setLoading(false);
-      } catch (e) { if (e.name !== 'AbortError') console.error('Market fetch error:', e); }
+      } catch (e) {
+        if (e.name !== 'AbortError') console.error('Market fetch error:', e);
+      }
     };
+
     fetchMarkets();
-    var interval = setInterval(fetchMarkets, 30000);
-    return function() { isMounted = false; controller.abort(); clearInterval(interval); };
+    const interval = setInterval(fetchMarkets, 30000);
+    return () => { isMounted = false; controller.abort(); clearInterval(interval); };
   }, []);
 
-  var sharedProps = { isConnected: wallet.isConnected, isSolanaConnected: wallet.isSolanaConnected, walletAddress: wallet.walletAddress, onConnectWallet: openWallet };
-  var displayAddress = wallet.walletAddress ? wallet.walletAddress.slice(0, 4) + '..' + wallet.walletAddress.slice(-4) : null;
-  var activeTab = tab === 'token' ? 'markets' : tab;
+  const sharedProps = {
+    isConnected: wallet.isConnected,
+    isSolanaConnected: wallet.isSolanaConnected,
+    walletAddress: wallet.walletAddress,
+    onConnectWallet: openWallet,
+  };
+  const displayAddress = wallet.walletAddress
+    ? wallet.walletAddress.slice(0, 4) + '..' + wallet.walletAddress.slice(-4)
+    : null;
+  // Fix 8: Derived via shared helper — no inline duplication
+  const activeTab = getActiveTab(tab);
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg, color: C.text, fontFamily: 'Syne, sans-serif', overscrollBehavior: 'none', overflowX: 'hidden', width: '100%' }}>
-      <style>{`html,body{margin:0;padding:0;width:100%;min-height:100vh;overflow-x:hidden;overscroll-behavior:none;} *,*::before,*::after{box-sizing:border-box;} input,button,select,textarea{font-family:'Syne',sans-serif;} ::-webkit-scrollbar{width:3px;height:3px;} ::-webkit-scrollbar-track{background:#03060f;} ::-webkit-scrollbar-thumb{background:#1e2d4a;border-radius:2px;} .hide-scrollbar{scrollbar-width:none;} .hide-scrollbar::-webkit-scrollbar{display:none;} @media(max-width:768px){.desktop-nav{display:none!important;}} @media(min-width:769px){.mobile-nav{display:none!important;}}`}</style>
-
       {/* Background grid */}
       <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 0, backgroundImage: 'linear-gradient(rgba(0,229,255,.02) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,.02) 1px,transparent 1px)', backgroundSize: '48px 48px' }} />
 
@@ -293,7 +436,7 @@ function AppInner() {
       <header style={{ position: 'sticky', top: 0, zIndex: 100, borderBottom: '1px solid rgba(0,229,255,0.08)', background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)' }}>
         <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 16px', display: 'flex', alignItems: 'center', height: 56, gap: 12 }}>
           {/* Logo */}
-          <div onClick={function() { switchTab('swap'); }} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', flexShrink: 0 }}>
+          <div onClick={() => switchTab('swap')} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', flexShrink: 0 }}>
             <div style={{ width: 32, height: 32, borderRadius: 9, background: 'linear-gradient(135deg,#00e5ff,#0066ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 14, color: C.bg }}>N</div>
             <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: 2, color: '#fff' }}>NEXUS</span>
             <span style={{ fontSize: 9, color: C.accent, background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.3)', borderRadius: 4, padding: '1px 5px', fontWeight: 600 }}>DEX</span>
@@ -301,49 +444,70 @@ function AppInner() {
 
           {/* Desktop nav */}
           <nav className="desktop-nav hide-scrollbar" style={{ display: 'flex', gap: 2, flex: 1, justifyContent: 'center', overflowX: 'auto' }}>
-            {HEADER_TABS.map(function(t) {
-              var active = activeTab === t.id;
-              return <button key={t.id} onClick={function() { switchTab(t.id); }} style={{ background: active ? 'rgba(0,229,255,.09)' : 'transparent', border: active ? '1px solid rgba(0,229,255,.2)' : '1px solid transparent', borderRadius: 8, padding: '5px 12px', color: active ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>{t.label}</button>;
+            {HEADER_TABS.map(t => {
+              const active = activeTab === t.id;
+              return (
+                <button
+                  key={t.id}
+                  onClick={() => switchTab(t.id)}
+                  style={{ background: active ? 'rgba(0,229,255,.09)' : 'transparent', border: active ? '1px solid rgba(0,229,255,.2)' : '1px solid transparent', borderRadius: 8, padding: '5px 12px', color: active ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}
+                >
+                  {t.label}
+                </button>
+              );
             })}
           </nav>
 
           {/* Mobile spacer */}
           <div className="mobile-nav" style={{ flex: 1 }} />
 
-          {/* Wallet */}
-          <button onClick={openWallet} style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, background: wallet.isConnected ? 'rgba(0,229,255,.08)' : 'linear-gradient(135deg,#00e5ff,#0055ff)', border: wallet.isConnected ? '1px solid rgba(0,229,255,.3)' : 'none', borderRadius: 10, padding: '7px 14px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12, color: wallet.isConnected ? C.accent : C.bg, whiteSpace: 'nowrap' }}>
-            {wallet.isConnected ? (<><div style={{ width: 7, height: 7, borderRadius: '50%', background: C.green, flexShrink: 0 }} />{displayAddress}</>) : 'Connect Wallet'}
+          {/* Wallet button */}
+          <button
+            onClick={openWallet}
+            style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, background: wallet.isConnected ? 'rgba(0,229,255,.08)' : 'linear-gradient(135deg,#00e5ff,#0055ff)', border: wallet.isConnected ? '1px solid rgba(0,229,255,.3)' : 'none', borderRadius: 10, padding: '7px 14px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12, color: wallet.isConnected ? C.accent : C.bg, whiteSpace: 'nowrap' }}
+          >
+            {wallet.isConnected
+              ? (<><div style={{ width: 7, height: 7, borderRadius: '50%', background: C.green, flexShrink: 0 }} />{displayAddress}</>)
+              : 'Connect Wallet'
+            }
           </button>
         </div>
       </header>
 
       {/* Content */}
       <main style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '24px 16px 100px', width: '100%' }}>
-        {tab === 'swap' && <SwapWidget {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} jupiterLoading={jupiterLoading} onGoToToken={goToToken} />}
-        {tab === 'markets' && <Markets coins={coins} loading={loading} onSelectCoin={goToToken} jupiterTokens={jupiterTokens} />}
+        {tab === 'swap'      && <SwapWidget   {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} jupiterLoading={jupiterLoading} onGoToToken={goToToken} />}
+        {tab === 'markets'   && <Markets      coins={coins} loading={loading} onSelectCoin={goToToken} jupiterTokens={jupiterTokens} />}
         {tab === 'token' && selectedToken && <TokenDetail {...sharedProps} coin={selectedToken} coins={coins} jupiterTokens={jupiterTokens} onBack={goBack} />}
-        {tab === 'launches' && <NewLaunches {...sharedProps} coins={coins} resetKey={launchesKey} />}
-        {tab === 'launch' && <TokenLaunch {...sharedProps} />}
-        {tab === 'buy' && <BuyCrypto coins={coins} walletAddress={wallet.walletAddress || ''} selectedCoinSymbol={selectedToken ? selectedToken.symbol : null} />}
-        {tab === 'send' && <Send {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} />}
-        {tab === 'portfolio' && <Portfolio {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} onSend={function() { switchTab('send'); }} refreshKey={portfolioKey} onSelectToken={goToToken} />}
+        {tab === 'launches'  && <NewLaunches  {...sharedProps} coins={coins} resetKey={launchesKey} />}
+        {tab === 'launch'    && <TokenLaunch  {...sharedProps} />}
+        {tab === 'buy'       && <BuyCrypto    coins={coins} walletAddress={wallet.walletAddress || ''} selectedCoinSymbol={selectedToken?.symbol ?? null} />}
+        {tab === 'send'      && <Send         {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} />}
+        {tab === 'portfolio' && <Portfolio    {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} onSend={() => switchTab('send')} refreshKey={portfolioKey} onSelectToken={goToToken} />}
       </main>
 
       {/* Mobile bottom nav */}
       <nav className="mobile-nav" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100, background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(0,229,255,.1)', display: 'flex', alignItems: 'stretch', paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        {NAV_TABS.map(function(t) {
-          var active = activeTab === t.id;
-          var Icon = NAV_ICONS[t.id];
+        {NAV_TABS.map(t => {
+          const active = activeTab === t.id;
+          const Icon = NAV_ICONS[t.id];
           return (
-            <button key={t.id} onClick={function() { switchTab(t.id); }} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: active ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '8px 2px', minHeight: 54, position: 'relative' }}>
+            <button
+              key={t.id}
+              onClick={() => switchTab(t.id)}
+              style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: active ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '8px 2px', minHeight: 54, position: 'relative' }}
+            >
               {active && <div style={{ position: 'absolute', top: 0, left: '25%', right: '25%', height: 2, borderRadius: '0 0 2px 2px', background: C.accent }} />}
               {Icon && <Icon />}
               <span>{t.label}</span>
             </button>
           );
         })}
-        {/* Wallet / Connect */}
-        <button onClick={openWallet} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: wallet.isConnected ? C.green : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '8px 2px', minHeight: 54 }}>
+        {/* Wallet connect button */}
+        <button
+          onClick={openWallet}
+          style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: wallet.isConnected ? C.green : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '8px 2px', minHeight: 54 }}
+        >
           <div style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid ' + (wallet.isConnected ? C.green : C.muted), display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             {wallet.isConnected && <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.green }} />}
           </div>
@@ -351,7 +515,7 @@ function AppInner() {
         </button>
       </nav>
 
-      <WalletModal open={walletModalOpen} onClose={function() { setWalletModalOpen(false); }} />
+      <WalletModal open={walletModalOpen} onClose={() => setWalletModalOpen(false)} />
     </div>
   );
 }
@@ -363,3 +527,4 @@ export default function App() {
     </BrowserRouter>
   );
 }
+
