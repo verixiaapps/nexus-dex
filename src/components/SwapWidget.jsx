@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { useAccount, useWalletClient, useBalance } from 'wagmi';
+import { useAccount, useWalletClient, useBalance, useSwitchChain } from 'wagmi';
 import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
 
 const SOL_FEE_WALLET  = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
@@ -377,8 +377,9 @@ export function TradeDrawer({ open, onClose, mode, coin, jupiterTokens, coins, o
 export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoToToken, onConnectWallet, isConnected, isSolanaConnected, walletAddress, defaultFromToken, defaultToToken, compact }) {
   const { publicKey, sendTransaction, connected: solConnected } = useWallet();
   const { connection } = useConnection();
-  const { address: evmAddress, isConnected: evmConnected } = useAccount();
+  const { address: evmAddress, isConnected: evmConnected, chainId: evmChainId } = useAccount();
   const { data: walletClient } = useWalletClient();
+  const { switchChain } = useSwitchChain();
 
   const walletConnected = solConnected || evmConnected;
 
@@ -395,6 +396,21 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   const [fromBalance, setFromBalance] = useState(null);
   const [toBalance,   setToBalance]   = useState(null);
   const [customAddress, setCustomAddress] = useState('');
+
+  useEffect(function() {
+    if (!evmChainId || !evmConnected) return;
+    var nativeForChain = POPULAR_TOKENS.find(function(t) {
+      return t.chain === 'evm' && t.chainId === evmChainId && t.address === NATIVE_EVM;
+    });
+    if (!nativeForChain) return;
+    if (isEvm(fromToken) && fromToken.chainId !== evmChainId) {
+      setFromToken(nativeForChain); setQuote(null); setFromAmt('');
+      return;
+    }
+    if (!solConnected && isSol(fromToken)) {
+      setFromToken(nativeForChain); setQuote(null); setFromAmt('');
+    }
+  }, [evmChainId, evmConnected, solConnected]);
 
   var isEvmFrom       = isEvm(fromToken);
   var isNativeEvmFrom = isEvmFrom && fromToken.address === NATIVE_EVM;
@@ -452,7 +468,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     setQuoteLoading(false);
   }, [fromAmt, fromToken, toToken, slip, route, evmAddress, publicKey]);
 
-  useEffect(function() { var t = setTimeout(fetchQuote, 400); return function() { clearTimeout(t); }; }, [fetchQuote]);
+  useEffect(function() { var t = setTimeout(fetchQuote, 150); return function() { clearTimeout(t); }; }, [fetchQuote]);
 
   useEffect(function() {
     if (!publicKey || !connection || !isSol(fromToken)) { setFromBalance(null); setToBalance(null); return; }
@@ -533,6 +549,15 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           .catch(function(e) { console.warn('Confirm warning (tx may still be processing):', e); });
       } else if (route === '0x') {
         if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
+        if (evmChainId && evmChainId !== fromToken.chainId) {
+          await switchChain({ chainId: fromToken.chainId });
+          var switchStart = Date.now();
+          while (Date.now() - switchStart < 5000) {
+            var currentChain = walletClient.chain && walletClient.chain.id;
+            if (currentChain === fromToken.chainId) break;
+            await new Promise(function(r) { setTimeout(r, 300); });
+          }
+        }
         var sell0x   = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
         var isNatTo  = isEvm(toToken) && toToken.address && toToken.address.toLowerCase() === NATIVE_EVM;
         var feeTok0x = isNatTo ? fromToken.address : toToken.address;
@@ -574,6 +599,15 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             .catch(function(e) { console.warn('LiFi confirm warning:', e); });
         } else {
           if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
+          if (evmChainId && evmChainId !== fromToken.chainId) {
+            await switchChain({ chainId: fromToken.chainId });
+            var lifiSwitchStart = Date.now();
+            while (Date.now() - lifiSwitchStart < 5000) {
+              var lifiCurrentChain = walletClient.chain && walletClient.chain.id;
+              if (lifiCurrentChain === fromToken.chainId) break;
+              await new Promise(function(r) { setTimeout(r, 300); });
+            }
+          }
           var isNatSell = fromToken.address.toLowerCase() === NATIVE_EVM;
           if (!isNatSell) {
             var spender      = txReq.to;
