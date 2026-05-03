@@ -5,7 +5,7 @@ import { useAccount, useWalletClient, useSwitchChain } from 'wagmi';
 // Single wallet context for the entire Nexus DEX site.
 // Wrap the app once in index.js and every component gets live wallet state
 // without needing props passed down manually.
-//
+// 
 // Usage in any component:
 //   import { useNexusWallet } from './WalletContext';
 //   const { isConnected, publicKey, evmAddress } = useNexusWallet();
