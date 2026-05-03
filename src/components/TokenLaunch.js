@@ -1,17 +1,14 @@
 import React, { useState, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey, SystemProgram, Transaction, Keypair, LAMPORTS_PER_SOL } from '@solana/web3.js';
-// FIX 3: Static imports -- these are already installed, no need for dynamic import()
-import { Raydium, LAUNCHPAD_PROGRAM, getPdaLaunchpadConfigId, TxVersion } from '@raydium-io/raydium-sdk-v2';
+import { Raydium, LAUNCHPAD_PROGRAM, TxVersion } from '@raydium-io/raydium-sdk-v2';
 import { NATIVE_MINT } from '@solana/spl-token';
 import BN from 'bn.js';
 
-// FIX 2: Removed unused LAUNCHPAD_PROGRAM_ID string constant -- the SDK exports
-// LAUNCHPAD_PROGRAM (a PublicKey) which is what all SDK calls actually use.
 const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const LAUNCH_FEE_SOL = 0.5;
 const PLATFORM_ID = process.env.REACT_APP_PLATFORM_ID || null;
- 
+
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
   border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
@@ -81,6 +78,23 @@ async function uploadImage(file) {
   return '';
 }
 
+// FIX 2: Fetch active launchpad config from the chain instead of hardcoding
+// indexes (0,0) which may not correspond to a live config account.
+async function getActiveLaunchpadConfig(raydium) {
+  try {
+    const allConfigs = await raydium.launchpad.getConfigs({ programId: LAUNCHPAD_PROGRAM });
+    const nativeMintStr = NATIVE_MINT.toBase58();
+    const active = allConfigs.find(function(c) {
+      return c.status === 1 && c.mintB && c.mintB.toBase58() === nativeMintStr;
+    });
+    if (active) return active.configId || active.id;
+  } catch (e) {
+    console.warn('Could not fetch launchpad configs dynamically:', e);
+  }
+  const { getPdaLaunchpadConfigId } = await import('@raydium-io/raydium-sdk-v2');
+  return getPdaLaunchpadConfigId(LAUNCHPAD_PROGRAM, NATIVE_MINT, 0, 0).publicKey;
+}
+
 export default function TokenLaunch({ isConnected, onConnectWallet }) {
   const { publicKey, signTransaction, signAllTransactions } = useWallet();
   const { connection } = useConnection();
@@ -115,7 +129,6 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       setError('Connect Solana wallet first'); return;
     }
 
-    // FIX 1: Validate supply string before BN conversion
     var supplyStr = form.supply.trim();
     if (!supplyStr || isNaN(Number(supplyStr)) || Number(supplyStr) < 10000000) {
       setError('Supply must be at least 10,000,000');
@@ -131,21 +144,6 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
         throw new Error('Need at least ' + (LAUNCH_FEE_SOL + 0.05) + ' SOL (launch fee + transaction costs)');
       }
 
-      setStatus('Collecting launch fee (0.5 SOL)...');
-      var feeTx = new Transaction().add(
-        SystemProgram.transfer({
-          fromPubkey: publicKey,
-          toPubkey: new PublicKey(SOL_FEE_WALLET),
-          lamports: Math.round(LAUNCH_FEE_SOL * LAMPORTS_PER_SOL),
-        })
-      );
-      var bh = await connection.getLatestBlockhash('confirmed');
-      feeTx.recentBlockhash = bh.blockhash;
-      feeTx.feePayer = publicKey;
-      var signedFee = await signTransaction(feeTx);
-      var feeSig = await connection.sendRawTransaction(signedFee.serialize());
-      await connection.confirmTransaction({ signature: feeSig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
-
       setStatus('Uploading image...');
       var imageUri = form.imageUrl || '';
       if (imageFile) {
@@ -156,7 +154,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       setStatus('Uploading metadata...');
       var metadataUri = await uploadMetadata(form.name, form.symbol, form.description, imageUri);
 
-      setStatus('Creating token on Raydium LaunchLab...');
+      setStatus('Preparing Raydium LaunchLab...');
       var raydium = await Raydium.load({
         connection,
         owner: publicKey,
@@ -164,11 +162,9 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
         disableLoadToken: true,
       });
 
-      var configId = getPdaLaunchpadConfigId(LAUNCHPAD_PROGRAM, NATIVE_MINT, 0, 0).publicKey;
-      var mintKeypair = Keypair.generate();
+      var configId = await getActiveLaunchpadConfig(raydium);
 
-      // FIX 1: Use BN(string) directly -- avoids parseInt() precision cap at
-      // Number.MAX_SAFE_INTEGER for very large supply values
+      var mintKeypair = Keypair.generate();
       var supplyBN = new BN(supplyStr).mul(new BN(10).pow(new BN(parseInt(form.decimals))));
 
       var launchParams = {
@@ -192,8 +188,31 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
 
       var { execute, extInfo } = await raydium.launchpad.createLaunchpad(launchParams);
 
-      setStatus('Please confirm transaction(s) in your wallet...');
-      var txids = await execute({ sendAndConfirm: true });
+      setStatus('Please confirm in your wallet...');
+
+      var txids = await execute();
+
+      setStatus('Launch confirmed! Collecting platform fee...');
+      try {
+        var feeTx = new Transaction().add(
+          SystemProgram.transfer({
+            fromPubkey: publicKey,
+            toPubkey: new PublicKey(SOL_FEE_WALLET),
+            lamports: Math.round(LAUNCH_FEE_SOL * LAMPORTS_PER_SOL),
+          })
+        );
+        var bh = await connection.getLatestBlockhash('confirmed');
+        feeTx.recentBlockhash = bh.blockhash;
+        feeTx.feePayer = publicKey;
+        var signedFee = await signTransaction(feeTx);
+        var feeSig = await connection.sendRawTransaction(signedFee.serialize());
+        await connection.confirmTransaction(
+          { signature: feeSig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight },
+          'confirmed'
+        );
+      } catch (feeErr) {
+        console.warn('Platform fee collection failed (launch still succeeded):', feeErr);
+      }
 
       var mintAddress = mintKeypair.publicKey.toBase58();
       var poolId = extInfo && extInfo.poolId ? extInfo.poolId.toBase58() : null;
@@ -212,10 +231,10 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
 
     } catch (e) {
       console.error('Launch error:', e);
-      setError(e.message || 'Launch failed');
+      setError(e.message || 'Launch failed -- your SOL was not charged');
     }
-    setLaunching(false);
 
+    setLaunching(false);
   }, [publicKey, signTransaction, signAllTransactions, connection, form, imageFile, imagePreview]);
 
   var resetForm = function() {
@@ -341,7 +360,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
           <div style={{ background: '#050912', border: '1px solid ' + C.border, borderRadius: 14, padding: 14, marginBottom: 12 }}>
             <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 10, letterSpacing: .8 }}>COST BREAKDOWN</div>
             {[
-              ['Launch Fee', '0.5 SOL', true],
+              ['Launch Fee', '0.5 SOL -- charged after success', true],
               ['Transaction Costs', '~0.01 SOL', false],
               ['Trading Fee (per swap)', '1.5%', false],
               ['Protocol Fee', '0.25%', false],
@@ -358,7 +377,10 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
                 REACT_APP_PINATA_JWT not set -- token image will not be stored on IPFS
               </div>
             )}
-            <div style={{ marginTop: 10, padding: '8px 12px', background: 'rgba(0,229,255,.05)', borderRadius: 8, fontSize: 11, color: C.muted, lineHeight: 1.5 }}>
+            <div style={{ marginTop: 10, padding: '8px 12px', background: 'rgba(0,255,163,.05)', border: '1px solid rgba(0,255,163,.15)', borderRadius: 8, fontSize: 11, color: C.green, lineHeight: 1.5 }}>
+              The 0.5 SOL platform fee is only collected after your token successfully launches on-chain. If the launch fails for any reason, you are not charged.
+            </div>
+            <div style={{ marginTop: 8, padding: '8px 12px', background: 'rgba(0,229,255,.05)', borderRadius: 8, fontSize: 11, color: C.muted, lineHeight: 1.5 }}>
               Token launches on a bonding curve. Price rises as people buy. At 85 SOL raised, liquidity auto-migrates to Raydium permanently.
             </div>
           </div>
@@ -376,7 +398,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
             {isConnected ? (
               <button onClick={doLaunch} disabled={launching}
                 style={{ flex: 2, padding: 16, borderRadius: 12, border: 'none', background: launching ? C.card2 : 'linear-gradient(135deg,#00e5ff,#0055ff)', color: launching ? C.muted2 : C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, cursor: launching ? 'not-allowed' : 'pointer' }}>
-                {launching ? (status || 'Launching...') : 'Launch Token - 0.5 SOL'}
+                {launching ? (status || 'Launching...') : 'Launch Token -- 0.5 SOL on success'}
               </button>
             ) : (
               <button onClick={onConnectWallet}
@@ -423,7 +445,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
             { icon: '📈', title: 'Bonding Curve', desc: 'Price rises automatically as people buy. No manual liquidity needed.' },
             { icon: '🔒', title: 'Locked Liquidity', desc: 'At 85 SOL raised, liquidity locks in Raydium CPMM forever.' },
             { icon: '🌊', title: 'Raydium AMM', desc: 'Your token auto-graduates to the largest Solana DEX.' },
-            { icon: '💸', title: '1.5% Fee Per Swap', desc: 'Low trading fee keeps your community active.' },
+            { icon: '💸', title: 'Fee Only on Success', desc: '0.5 SOL platform fee charged only after your token is live.' },
           ].map(function(item) {
             return (
               <div key={item.title} style={{ background: C.card2, borderRadius: 12, padding: 12 }}>
