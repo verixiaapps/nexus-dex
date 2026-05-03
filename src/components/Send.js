@@ -1,22 +1,24 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useAccount, useWalletClient } from 'wagmi';
-import { PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL } from '@solana/web3.js';
+import { PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL, VersionedTransaction } from '@solana/web3.js';
 import { getAssociatedTokenAddress, createTransferInstruction, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
- 
+import { Buffer } from 'buffer';
+
 const FEE_WALLET_SOL = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const FEE_WALLET_EVM = '0xC41c1de4250104dC1EE2854ffD5b40a04B9AC9fF';
 const NATIVE_EVM = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
-const BASE_FEE = 0.03;
-const ANTIMEV_FEE = 0.02;
-// No fixed SPREAD constant -- Solana uses dynamic spread from Jupiter price API;
-// LI.FI cross-chain routes capture spread via integrator fee param (fee: '0.09')
-const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
+const PLATFORM_FEE = 0.03;
+const SAFETY_FEE   = 0.02;
+const TOTAL_FEE    = PLATFORM_FEE + SAFETY_FEE;
+const LIFI_FEE     = 0.08;
+const LIFI_INTEGRATOR = 'nexus-dex';
+const JUP_API_KEY  = process.env.REACT_APP_JUPITER_API_KEY1 || '';
 
 const CHAIN_NAMES = {
   1: 'Ethereum', 137: 'Polygon', 42161: 'Arbitrum', 8453: 'Base', 56: 'BNB Chain',
   43114: 'Avalanche', 10: 'Optimism', 100: 'Gnosis', 324: 'zkSync Era', 59144: 'Linea',
-  534352: 'Scroll', 5000: 'Mantle', 81457: 'Blast', 10: 'Optimism',
+  534352: 'Scroll', 5000: 'Mantle', 81457: 'Blast',
 };
 
 const C = {
@@ -32,14 +34,14 @@ const POPULAR_TOKENS = [
   { mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', symbol: 'USDT', name: 'Tether (SOL)', decimals: 6, chain: 'solana', logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.png' },
   { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', symbol: 'JUP', name: 'Jupiter', decimals: 6, chain: 'solana', logoURI: 'https://static.jup.ag/jup/icon.png' },
   { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', symbol: 'BONK', name: 'Bonk', decimals: 5, chain: 'solana', logoURI: 'https://arweave.net/hQiPZOsRZXGXBJd_82PhVdlM_hACsT_q6wqwf5cSY7I' },
-  { address: NATIVE_EVM, chainId: 1, symbol: 'ETH', name: 'Ethereum', decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
-  { address: NATIVE_EVM, chainId: 8453, symbol: 'ETH', name: 'ETH (Base)', decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
-  { address: NATIVE_EVM, chainId: 42161, symbol: 'ETH', name: 'ETH (Arbitrum)', decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
-  { address: NATIVE_EVM, chainId: 56, symbol: 'BNB', name: 'BNB Chain', decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/binance/info/logo.png' },
-  { address: NATIVE_EVM, chainId: 137, symbol: 'POL', name: 'Polygon', decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/polygon/info/logo.png' },
-  { address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', chainId: 1, symbol: 'USDC', name: 'USD Coin (ETH)', decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { address: NATIVE_EVM, chainId: 1,     symbol: 'ETH',  name: 'Ethereum',        decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
+  { address: NATIVE_EVM, chainId: 8453,  symbol: 'ETH',  name: 'ETH (Base)',      decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
+  { address: NATIVE_EVM, chainId: 42161, symbol: 'ETH',  name: 'ETH (Arbitrum)', decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
+  { address: NATIVE_EVM, chainId: 56,    symbol: 'BNB',  name: 'BNB Chain',      decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/binance/info/logo.png' },
+  { address: NATIVE_EVM, chainId: 137,   symbol: 'POL',  name: 'Polygon',        decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/polygon/info/logo.png' },
+  { address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', chainId: 1,    symbol: 'USDC', name: 'USD Coin (ETH)',  decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
   { address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', chainId: 8453, symbol: 'USDC', name: 'USD Coin (Base)', decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
-  { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', chainId: 1, symbol: 'USDT', name: 'Tether (ETH)', decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
+  { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', chainId: 1,    symbol: 'USDT', name: 'Tether (ETH)',     decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
 ];
 
 function isSol(t) { return t && t.chain === 'solana'; }
@@ -76,7 +78,7 @@ function ChainBadge({ token }) {
   if (!token) return null;
   var label = isSol(token) ? 'SOL' : (CHAIN_NAMES[token.chainId] || 'EVM');
   var color = isSol(token) ? '#9945ff' : '#627eea';
-  return <span style={{ fontSize: 9, color: color, background: color + '22', border: '1px solid ' + color + '44', borderRadius: 4, padding: '1px 5px', marginLeft: 4, fontWeight: 700 }}>{label}</span>;
+  return <span style={{ fontSize: 9, color, background: color + '22', border: '1px solid ' + color + '44', borderRadius: 4, padding: '1px 5px', marginLeft: 4, fontWeight: 700 }}>{label}</span>;
 }
 
 function TokenModal({ open, onClose, jupiterTokens }) {
@@ -187,16 +189,15 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
   const [tokenModalOpen, setTokenModalOpen] = useState(false);
   const [recipient, setRecipient] = useState('');
   const [amount, setAmount] = useState('');
+  const [slip, setSlip] = useState(0.5);
   const [destChain, setDestChain] = useState('solana');
   const [sendStatus, setSendStatus] = useState('idle');
   const [txSig, setTxSig] = useState(null);
   const [error, setError] = useState('');
   const [solBalance, setSolBalance] = useState(null);
-  const [antiMev, setAntiMev] = useState(true);
   const [lifiRoute, setLifiRoute] = useState(null);
   const [lifiLoading, setLifiLoading] = useState(false);
 
-  var totalFee = antiMev ? BASE_FEE + ANTIMEV_FEE : BASE_FEE;
   var route = getRoute(selectedToken, destChain);
 
   useEffect(function() {
@@ -214,28 +215,30 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
     if (route !== 'lifi' || !amount || parseFloat(amount) <= 0 || !selectedToken) return;
     var aborted = false;
     setLifiLoading(true);
-    var fromAddr = isSol(selectedToken) ? (publicKey ? publicKey.toString() : '11111111111111111111111111111111') : (evmAddress || '0x0000000000000000000000000000000000000001');
+    var fromAddr = isSol(selectedToken)
+      ? (publicKey ? publicKey.toString() : '11111111111111111111111111111111')
+      : (evmAddress || '0x0000000000000000000000000000000000000001');
     var fromChainId = isSol(selectedToken) ? 'SOL' : selectedToken.chainId.toString();
-    var toChainId = destChain === 'solana' ? 'SOL' : destChain.toString();
+    var toChainId   = destChain === 'solana' ? 'SOL' : destChain.toString();
     var fromTokenAddr = isSol(selectedToken) ? selectedToken.mint : selectedToken.address;
-    var fromAmtRaw = (parseFloat(amount) * Math.pow(10, selectedToken.decimals || 6)).toFixed(0);
+    var fromAmtRaw = Math.floor(parseFloat(amount) * Math.pow(10, selectedToken.decimals || 6)).toString();
     var toAddr = recipient && recipient.length > 10 ? recipient : (destChain === 'solana' ? '11111111111111111111111111111111' : '0x0000000000000000000000000000000000000001');
-    var toTokenAddr = fromTokenAddr;
     var params = new URLSearchParams({
       fromChain: fromChainId, toChain: toChainId,
-      fromToken: fromTokenAddr, toToken: toTokenAddr,
+      fromToken: fromTokenAddr, toToken: fromTokenAddr,
       fromAmount: fromAmtRaw, fromAddress: fromAddr, toAddress: toAddr,
-      fee: '0.09', integrator: 'nexus-dex',
+      slippage: String(slip / 100),
+      fee: String(LIFI_FEE), integrator: LIFI_INTEGRATOR,
     });
     fetch('https://li.quest/v1/quote?' + params.toString())
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(data) {
         if (!aborted && data && data.estimate) setLifiRoute(data);
-        setLifiLoading(false);
+        if (!aborted) setLifiLoading(false);
       })
       .catch(function() { if (!aborted) setLifiLoading(false); });
     return function() { aborted = true; };
-  }, [route, amount, selectedToken, destChain, recipient, publicKey, evmAddress]);
+  }, [route, amount, selectedToken, destChain, recipient, publicKey, evmAddress, slip]);
 
   var getPrice = function(symbol) {
     var coin = coins.find(function(c) { return c.symbol && c.symbol.toLowerCase() === (symbol || '').toLowerCase(); });
@@ -253,7 +256,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
   var amountNum = parseFloat(amount) || 0;
   var price = getPrice(selectedToken.symbol);
   var usdValue = amountNum * price;
-  var feeAmount = amountNum * totalFee;
+  var feeAmount = amountNum * TOTAL_FEE;
   var recipientAmount = amountNum - feeAmount;
 
   var handleSend = async function() {
@@ -263,13 +266,14 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
     setError(''); setSendStatus('loading');
 
     try {
+      // -- Solana direct send -----------------------------------------------
       if (route === 'solana') {
         if (!publicKey) throw new Error('Connect Solana wallet');
         var recipientPubkey = new PublicKey(recipient);
         var transaction = new Transaction();
         var decimals = await getSolDecimals(selectedToken);
 
-        if (isSol(selectedToken) && selectedToken.mint === 'So11111111111111111111111111111111111111112') {
+        if (selectedToken.mint === 'So11111111111111111111111111111111111111112') {
           var recipientLamports = Math.round(recipientAmount * LAMPORTS_PER_SOL);
           transaction.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: recipientPubkey, lamports: recipientLamports }));
         } else {
@@ -287,10 +291,9 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
         var tokenPrice = getPrice(selectedToken.symbol);
 
         var dynamicSpread = 0;
-        if (isSol(selectedToken) && selectedToken.mint !== 'So11111111111111111111111111111111111111112') {
+        if (selectedToken.mint !== 'So11111111111111111111111111111111111111112') {
           try {
-            var usdcMint = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-            var mktRes = await fetch('https://api.jup.ag/price/v2?ids=' + selectedToken.mint + ',' + usdcMint);
+            var mktRes = await fetch('https://api.jup.ag/price/v2?ids=' + selectedToken.mint);
             var mktData = await mktRes.json();
             var tokenMktPrice = mktData.data && mktData.data[selectedToken.mint] && parseFloat(mktData.data[selectedToken.mint].price);
             if (tokenMktPrice && tokenPrice > 0 && tokenMktPrice > tokenPrice) {
@@ -299,9 +302,12 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           } catch (e) {}
         }
 
-        var totalFeePct = totalFee + dynamicSpread;
-        var feeValueUsdFull = amountNum * (tokenPrice || solPrice) * totalFeePct;
-        var feeLamports = Math.round(Math.max(solPrice > 0 ? (feeValueUsdFull / solPrice) * LAMPORTS_PER_SOL : amountNum * totalFeePct * LAMPORTS_PER_SOL, 50000));
+        var totalFeePct = TOTAL_FEE + dynamicSpread;
+        var feeValueUsd = amountNum * (tokenPrice || solPrice) * totalFeePct;
+        var feeLamports = Math.round(Math.max(
+          solPrice > 0 ? (feeValueUsd / solPrice) * LAMPORTS_PER_SOL : amountNum * totalFeePct * LAMPORTS_PER_SOL,
+          50000
+        ));
         transaction.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET_SOL), lamports: feeLamports }));
 
         var lb = await connection.getLatestBlockhash();
@@ -311,18 +317,17 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
         await connection.confirmTransaction(sig, 'confirmed');
         setTxSig(sig);
 
+      // -- EVM direct send --------------------------------------------------
       } else if (route === 'evm') {
         if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
 
         var isNative = selectedToken.address.toLowerCase() === NATIVE_EVM;
         var sendAmt = BigInt(Math.floor(recipientAmount * Math.pow(10, selectedToken.decimals)));
-        var feeAmt = BigInt(Math.floor(feeAmount * Math.pow(10, selectedToken.decimals)));
+        var feeAmt  = BigInt(Math.floor(feeAmount * Math.pow(10, selectedToken.decimals)));
 
         if (isNative) {
           var hash1 = await walletClient.sendTransaction({ to: recipient, value: sendAmt });
-          if (feeAmt > BigInt(0)) {
-            await walletClient.sendTransaction({ to: FEE_WALLET_EVM, value: feeAmt });
-          }
+          if (feeAmt > BigInt(0)) await walletClient.sendTransaction({ to: FEE_WALLET_EVM, value: feeAmt });
           setTxSig(hash1);
         } else {
           var transferData = '0xa9059cbb' + recipient.slice(2).padStart(64, '0') + sendAmt.toString(16).padStart(64, '0');
@@ -334,20 +339,60 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           setTxSig(hash2);
         }
 
+      // -- LiFi cross-chain -------------------------------------------------
       } else if (route === 'lifi') {
-        if (!lifiRoute) throw new Error('Cross-chain route not ready -- wait a moment');
-        var txReq = lifiRoute.transactionRequest;
-        if (!txReq) throw new Error('No transaction data in route');
+        var srcAddr = isSol(selectedToken) ? (publicKey ? publicKey.toString() : null) : (evmAddress || null);
+        if (!srcAddr) throw new Error('Connect your ' + (isSol(selectedToken) ? 'Solana' : 'EVM') + ' wallet');
+        if (!recipient || recipient.length < 10) throw new Error('Enter recipient address');
+
+        var execFromChain = isSol(selectedToken) ? 'SOL' : selectedToken.chainId.toString();
+        var execToChain   = destChain === 'solana' ? 'SOL' : destChain.toString();
+        var execFromToken = isSol(selectedToken) ? selectedToken.mint : selectedToken.address;
+        var execFromAmt   = Math.floor(parseFloat(amount) * Math.pow(10, selectedToken.decimals || 6)).toString();
+
+        var freshParams = new URLSearchParams({
+          fromChain: execFromChain, toChain: execToChain,
+          fromToken: execFromToken, toToken: execFromToken,
+          fromAmount: execFromAmt, fromAddress: srcAddr, toAddress: recipient,
+          slippage: String(slip / 100),
+          fee: String(LIFI_FEE), integrator: LIFI_INTEGRATOR,
+        });
+        var freshRes = await fetch('https://li.quest/v1/quote?' + freshParams.toString());
+        var freshRoute = await freshRes.json();
+        if (!freshRes.ok || !freshRoute.transactionRequest) {
+          throw new Error(freshRoute.message || 'LiFi could not find a route -- try adjusting amount');
+        }
+        var txReq = freshRoute.transactionRequest;
 
         if (isSol(selectedToken)) {
           if (!publicKey) throw new Error('Connect Solana wallet');
-          var { VersionedTransaction } = await import('@solana/web3.js');
-          var lifiTx = VersionedTransaction.deserialize(Buffer.from(txReq.data.replace('0x', ''), 'hex'));
-          var lifiSig = await sendTransaction(lifiTx, connection, { skipPreflight: false });
+          var lifiSolTx = VersionedTransaction.deserialize(Buffer.from(txReq.data, 'base64'));
+          var lifiBh = await connection.getLatestBlockhash('confirmed');
+          var lifiSig = await sendTransaction(lifiSolTx, connection, { skipPreflight: false, maxRetries: 3 });
+          await connection.confirmTransaction({ signature: lifiSig, blockhash: lifiBh.blockhash, lastValidBlockHeight: lifiBh.lastValidBlockHeight }, 'confirmed');
           setTxSig(lifiSig);
         } else {
           if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
-          var lifiHash = await walletClient.sendTransaction({ to: txReq.to, data: txReq.data, value: txReq.value ? BigInt(txReq.value) : BigInt(0), gasLimit: txReq.gasLimit ? BigInt(txReq.gasLimit) : undefined });
+          var isNativeSell = selectedToken.address.toLowerCase() === NATIVE_EVM;
+          if (!isNativeSell) {
+            var spender = txReq.to;
+            var sellBig = BigInt(execFromAmt);
+            var allowCalldata = '0xdd62ed3e' + evmAddress.slice(2).padStart(64, '0') + spender.slice(2).padStart(64, '0');
+            var needsApprove = true;
+            try {
+              var allowHex = await walletClient.request({ method: 'eth_call', params: [{ to: selectedToken.address, data: allowCalldata }, 'latest'] });
+              needsApprove = BigInt(allowHex || '0x0') < sellBig;
+            } catch (_) {}
+            if (needsApprove) {
+              await walletClient.sendTransaction({ to: selectedToken.address, data: '0x095ea7b3' + spender.slice(2).padStart(64, '0') + 'f'.repeat(64), value: BigInt(0) });
+              await new Promise(function(r) { setTimeout(r, 4000); });
+            }
+          }
+          var lifiHash = await walletClient.sendTransaction({
+            to: txReq.to, data: txReq.data,
+            value: txReq.value ? BigInt(txReq.value) : BigInt(0),
+            gas: txReq.gasLimit ? BigInt(txReq.gasLimit) : undefined,
+          });
           setTxSig(lifiHash);
         }
       }
@@ -360,7 +405,11 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
     }
   };
 
-  var txLink = txSig ? (route === 'solana' ? 'https://solscan.io/tx/' + txSig : route === 'lifi' ? 'https://scan.li.fi/tx/' + txSig : 'https://etherscan.io/tx/' + txSig) : null;
+  var txLink = txSig
+    ? (route === 'solana' ? 'https://solscan.io/tx/' + txSig
+    : route === 'lifi' ? (isSol(selectedToken) ? 'https://solscan.io/tx/' + txSig : 'https://scan.li.fi/tx/' + txSig)
+    : 'https://etherscan.io/tx/' + txSig)
+    : null;
 
   var destChainOptions = [
     { id: 'solana', label: 'Solana' },
@@ -375,10 +424,10 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
       <div style={{ maxWidth: 520, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
         <div style={{ marginBottom: 20 }}>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Send Tokens</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Solana, EVM, and cross-chain -- {(totalFee * 100).toFixed(0)}% fee</p>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Solana, EVM, and cross-chain -- {(TOTAL_FEE * 100).toFixed(0)}% fee</p>
         </div>
         <div style={{ textAlign: 'center', padding: '60px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
-          <div style={{ fontSize: 40, marginBottom: 16 }}>-&gt;</div>
+          <div style={{ fontSize: 40, marginBottom: 16 }}>&#8594;</div>
           <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Connect Wallet to Send</h2>
           <p style={{ color: C.muted, fontSize: 13, marginBottom: 24, lineHeight: 1.6 }}>Send any token on Solana, EVM, or cross-chain via LI.FI.</p>
           <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect Wallet</button>
@@ -392,12 +441,13 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Send Tokens</h1>
         <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
-          {route === 'solana' ? 'Solana direct send via Jupiter' : route === 'evm' ? 'EVM direct send' : 'Cross-chain bridge via LI.FI'} -- {(totalFee * 100).toFixed(0)}% fee
+          {route === 'solana' ? 'Solana direct send' : route === 'evm' ? 'EVM direct send' : 'Cross-chain via LI.FI'} -- {(TOTAL_FEE * 100).toFixed(0)}% fee
         </p>
       </div>
 
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20 }}>
 
+        {/* Token select */}
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>SELECT TOKEN</div>
           <button onClick={function() { setTokenModalOpen(true); }} style={{ display: 'flex', alignItems: 'center', gap: 10, background: C.card2, border: '1px solid ' + C.border, borderRadius: 12, padding: '12px 16px', cursor: 'pointer', width: '100%' }}>
@@ -413,6 +463,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           </button>
         </div>
 
+        {/* Destination chain */}
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>DESTINATION CHAIN</div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -426,13 +477,27 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           {route === 'lifi' && <div style={{ fontSize: 10, color: C.accent, marginTop: 6 }}>Cross-chain bridge via LI.FI</div>}
         </div>
 
+        {/* Slippage */}
+        {route === 'lifi' && (
+          <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SLIPPAGE</span>
+            <div style={{ display: 'flex', gap: 4 }}>
+              {[0.1, 0.5, 1.0].map(function(v) {
+                return <button key={v} onClick={function() { setSlip(v); }} style={{ padding: '3px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer', background: slip === v ? 'rgba(0,229,255,.15)' : 'transparent', border: '1px solid ' + (slip === v ? 'rgba(0,229,255,.4)' : C.border), color: slip === v ? C.accent : C.muted }}>{v}%</button>;
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* Recipient */}
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>RECIPIENT ADDRESS</div>
           <input value={recipient} onChange={function(e) { setRecipient(e.target.value); }} placeholder={destChain === 'solana' ? 'Solana wallet address...' : '0x EVM address...'} style={{ width: '100%', background: C.card2, border: '1px solid ' + (recipient && !isValidRecipient(recipient) ? C.red : C.border), borderRadius: 12, padding: '14px 16px', color: C.text, fontFamily: 'monospace', fontSize: 12, outline: 'none' }} />
           {recipient && !isValidRecipient(recipient) && <div style={{ color: C.red, fontSize: 11, marginTop: 4 }}>Invalid address for {destChain === 'solana' ? 'Solana' : 'EVM'}</div>}
-          {recipient && isValidRecipient(recipient) && <div style={{ color: C.green, fontSize: 11, marginTop: 4 }}>Valid address ✓</div>}
+          {recipient && isValidRecipient(recipient) && <div style={{ color: C.green, fontSize: 11, marginTop: 4 }}>Valid address</div>}
         </div>
 
+        {/* Amount */}
         <div style={{ marginBottom: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>AMOUNT</span>
@@ -454,6 +519,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           )}
         </div>
 
+        {/* LiFi route preview */}
         {route === 'lifi' && (
           <div style={{ marginBottom: 14, padding: 12, background: 'rgba(0,229,255,.04)', border: '1px solid rgba(0,229,255,.12)', borderRadius: 10 }}>
             <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 4 }}>CROSS-CHAIN ROUTE</div>
@@ -461,30 +527,22 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
             {!lifiLoading && lifiRoute && lifiRoute.estimate && (
               <div style={{ fontSize: 12, color: C.text }}>
                 Recipient gets: <span style={{ color: C.green, fontWeight: 700 }}>{(parseInt(lifiRoute.estimate.toAmount) / Math.pow(10, selectedToken.decimals || 6)).toFixed(6)} {selectedToken.symbol}</span>
-                <div style={{ color: C.muted, fontSize: 10, marginTop: 2 }}>via {lifiRoute.tool || 'LI.FI'} · includes 9% integrator fee</div>
+                <div style={{ color: C.muted, fontSize: 10, marginTop: 2 }}>via {lifiRoute.tool || 'LI.FI'}</div>
               </div>
             )}
             {!lifiLoading && !lifiRoute && amount && parseFloat(amount) > 0 && <div style={{ color: C.red, fontSize: 12 }}>No cross-chain route found for this pair</div>}
           </div>
         )}
 
+        {/* Fee breakdown */}
         <div style={{ background: '#050912', borderRadius: 10, padding: 12, marginBottom: 16 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-            <div>
-              <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>ANTI-MEV PROTECTION</span>
-              <div style={{ fontSize: 10, color: antiMev ? C.accent : C.muted, marginTop: 2 }}>{antiMev ? 'ON - Priority processing (+2%)' : 'OFF - Standard (saves 2%)'}</div>
-            </div>
-            <button onClick={function() { setAntiMev(!antiMev); }} style={{ width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', background: antiMev ? C.accent : C.muted2, transition: 'background .2s', position: 'relative', flexShrink: 0 }}>
-              <div style={{ width: 18, height: 18, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: antiMev ? 23 : 3, transition: 'left .2s' }} />
-            </button>
-          </div>
           {amount && amountNum > 0 && (
             <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
               {[
-                ['Platform Fee (3%)', (amountNum * BASE_FEE).toFixed(6) + ' ' + selectedToken.symbol],
-                antiMev ? ['Anti-MEV Fee (2%)', (amountNum * ANTIMEV_FEE).toFixed(6) + ' ' + selectedToken.symbol] : null,
+                ['Fee', (amountNum * PLATFORM_FEE).toFixed(6) + ' ' + selectedToken.symbol],
+                ['Safety and Anti-MEV', (amountNum * SAFETY_FEE).toFixed(6) + ' ' + selectedToken.symbol],
                 route !== 'lifi' ? ['Recipient Gets', recipientAmount.toFixed(6) + ' ' + selectedToken.symbol] : null,
-                route === 'lifi' ? ['Bridge Fee', '9% (included in LI.FI route)'] : null,
+                route === 'lifi' ? ['Cross-chain fee', '3% (via LI.FI)'] : null,
                 price > 0 ? ['USD Value', fmt(usdValue)] : null,
               ].filter(Boolean).map(function(item) {
                 return <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}><span style={{ color: C.muted }}>{item[0]}</span><span style={{ color: item[0] === 'Recipient Gets' ? C.green : C.text, fontWeight: item[0] === 'Recipient Gets' ? 600 : 400 }}>{item[1]}</span></div>;
@@ -496,13 +554,13 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
         {error && <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 13, color: C.red }}>{error}</div>}
 
         <button onClick={handleSend} disabled={sendStatus === 'loading'} style={{ width: '100%', padding: 18, borderRadius: 14, border: 'none', background: sendStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : sendStatus === 'error' ? 'rgba(255,59,107,.2)' : !amount || !recipient ? C.card2 : 'linear-gradient(135deg,#00e5ff,#0055ff)', color: !amount || !recipient ? C.muted2 : sendStatus === 'error' ? C.red : C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16, cursor: sendStatus === 'loading' ? 'not-allowed' : 'pointer', transition: 'all .3s', minHeight: 52 }}>
-          {sendStatus === 'loading' ? 'Confirming in Wallet...' : sendStatus === 'success' ? 'Sent!' : sendStatus === 'error' ? 'Failed - Try Again' : !recipient ? 'Enter Recipient Address' : !amount ? 'Enter Amount' : route === 'lifi' && lifiLoading ? 'Finding Route...' : route === 'lifi' && !lifiRoute ? 'No Route Found' : 'Send ' + selectedToken.symbol + (route === 'lifi' ? ' Cross-Chain' : '')}
+          {sendStatus === 'loading' ? 'Confirming in Wallet...' : sendStatus === 'success' ? 'Sent!' : sendStatus === 'error' ? 'Failed -- Try Again' : !recipient ? 'Enter Recipient Address' : !amount ? 'Enter Amount' : route === 'lifi' && lifiLoading ? 'Finding Route...' : route === 'lifi' && !lifiRoute ? 'No Route Found' : 'Send ' + selectedToken.symbol + (route === 'lifi' ? ' Cross-Chain' : '')}
         </button>
 
         {txSig && sendStatus === 'success' && txLink && (
           <a href={txLink} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>View Transaction</a>
         )}
-        <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 14, lineHeight: 1.6 }}>Non-custodial · Fees paid to Nexus DEX</p>
+        <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 14, lineHeight: 1.6 }}>Non-custodial - Fees paid to Nexus DEX</p>
       </div>
 
       <TokenModal open={tokenModalOpen} jupiterTokens={jupiterTokens || []} onClose={function(token) { setTokenModalOpen(false); if (token) setSelectedToken(token); }} />
