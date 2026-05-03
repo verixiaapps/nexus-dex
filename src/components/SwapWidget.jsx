@@ -318,24 +318,40 @@ export function TradeDrawer({ open, onClose, mode, coin, jupiterTokens, coins, o
   const defaultFromToken = mode === 'buy' ? nativeToken : coinToken;
   const defaultToToken   = mode === 'buy' ? coinToken   : nativeToken;
 
+  const swapKey = useMemo(function() {
+    var id = coin ? (coin.mint || coin.address || coin.id || 'token') : 'default';
+    return id + '-' + mode;
+  }, [coin, mode]);
+
   if (!open) return null;
 
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,.8)' }} />
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 401, background: C.card, borderTop: '2px solid ' + C.borderHi, borderRadius: '20px 20px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,.9)', maxHeight: '92vh', overflowY: 'auto' }}>
-        <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '16px auto 0' }} />
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 20px 0' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {coin && coin.image && <img src={coin.image} alt={coin.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} />}
-            <div style={{ color: mode === 'buy' ? C.accent : C.red, fontWeight: 800, fontSize: 17 }}>
-              {mode === 'buy' ? 'Buy' : 'Sell'} {coin && coin.symbol && coin.symbol.toUpperCase()}
+      <div style={{
+        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
+        width: '100%', maxWidth: 560, zIndex: 401,
+        background: C.card, borderTop: '2px solid ' + C.borderHi,
+        borderRadius: '20px 20px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
+        maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      }}>
+        {/* Fixed header */}
+        <div style={{ flexShrink: 0, padding: '16px 20px 12px' }}>
+          <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 14px' }} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              {coin && coin.image && <img src={coin.image} alt={coin.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} />}
+              <div style={{ color: mode === 'buy' ? C.accent : C.red, fontWeight: 800, fontSize: 17 }}>
+                {mode === 'buy' ? 'Buy' : 'Sell'} {coin && coin.symbol && coin.symbol.toUpperCase()}
+              </div>
             </div>
+            <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer', padding: 0 }}>x</button>
           </div>
-          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer', padding: 0 }}>x</button>
         </div>
-        <div style={{ padding: '8px 20px 40px' }}>
+        {/* Scrollable content */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '4px 20px', paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)' }}>
           <SwapWidget
+            key={swapKey}
             coins={coins}
             jupiterTokens={jupiterTokens}
             onConnectWallet={onConnectWallet}
@@ -369,14 +385,6 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   const [fromBalance, setFromBalance] = useState(null);
   const [toBalance,   setToBalance]   = useState(null);
   const [customAddress, setCustomAddress] = useState('');
-
-  useEffect(function() {
-    if (defaultFromToken) setFromToken(defaultFromToken);
-    if (defaultToToken)   setToToken(defaultToToken);
-    setFromAmt(''); setQuote(null); setQuoteError('');
-    setSwapStatus('idle'); setSwapTx(null); setSwapError('');
-    setCustomAddress('');
-  }, [defaultFromToken, defaultToToken]);
 
   var isEvmFrom       = isEvm(fromToken);
   var isNativeEvmFrom = isEvmFrom && fromToken.address === NATIVE_EVM;
@@ -509,9 +517,10 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         var bh    = await connection.getLatestBlockhash('confirmed');
         msg.recentBlockhash = bh.blockhash;
         var final = new VersionedTransaction(msg.compileToV0Message(altAccts));
-        var sig   = await sendTransaction(final, connection, { skipPreflight: false, maxRetries: 3 });
-        await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
+        var sig = await sendTransaction(final, connection, { skipPreflight: true, maxRetries: 3 });
         setSwapTx(sig);
+        connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed')
+          .catch(function(e) { console.warn('Confirm warning (tx may still be processing):', e); });
       } else if (route === '0x') {
         if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
         var sell0x   = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
@@ -525,8 +534,15 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         }).toString())).json();
         if (!oxQ || !oxQ.transaction) throw new Error('0x: ' + JSON.stringify(oxQ));
         if (oxQ.issues && oxQ.issues.allowance && oxQ.issues.allowance.spender) {
-          await walletClient.sendTransaction({ to: fromToken.address, data: '0x095ea7b3' + oxQ.issues.allowance.spender.slice(2).padStart(64, '0') + 'f'.repeat(64), value: BigInt(0) });
-          await new Promise(function(r) { setTimeout(r, 3000); });
+          var approveTxHash = await walletClient.sendTransaction({ to: fromToken.address, data: '0x095ea7b3' + oxQ.issues.allowance.spender.slice(2).padStart(64, '0') + 'f'.repeat(64), value: BigInt(0) });
+          var approveStart = Date.now();
+          while (Date.now() - approveStart < 30000) {
+            try {
+              var receipt = await walletClient.waitForTransactionReceipt({ hash: approveTxHash, timeout: 5000 }).catch(function() { return null; });
+              if (receipt) break;
+            } catch(_) {}  // FIX: was catch(*) — invalid syntax
+            await new Promise(function(r) { setTimeout(r, 2000); });
+          }
         }
         setSwapTx(await walletClient.sendTransaction({ to: oxQ.transaction.to, data: oxQ.transaction.data, value: oxQ.transaction.value ? BigInt(oxQ.transaction.value) : BigInt(0), gas: oxQ.transaction.gas ? BigInt(oxQ.transaction.gas) : undefined }));
       } else if (route === 'lifi') {
@@ -542,9 +558,10 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           if (!publicKey) throw new Error('Connect Solana wallet');
           var lifiSolTx = VersionedTransaction.deserialize(Buffer.from(txReq.data, 'base64'));
           var lifiBh    = await connection.getLatestBlockhash('confirmed');
-          var lifiSig   = await sendTransaction(lifiSolTx, connection, { skipPreflight: false, maxRetries: 3 });
-          await connection.confirmTransaction({ signature: lifiSig, blockhash: lifiBh.blockhash, lastValidBlockHeight: lifiBh.lastValidBlockHeight }, 'confirmed');
+          var lifiSig = await sendTransaction(lifiSolTx, connection, { skipPreflight: true, maxRetries: 3 });
           setSwapTx(lifiSig);
+          connection.confirmTransaction({ signature: lifiSig, blockhash: lifiBh.blockhash, lastValidBlockHeight: lifiBh.lastValidBlockHeight }, 'confirmed')
+            .catch(function(e) { console.warn('LiFi confirm warning:', e); });
         } else {
           if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
           var isNatSell = fromToken.address.toLowerCase() === NATIVE_EVM;
@@ -558,8 +575,15 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
               needsApprove = BigInt(allowHex || '0x0') < sellBig;
             } catch(_) {}
             if (needsApprove) {
-              await walletClient.sendTransaction({ to: fromToken.address, data: '0x095ea7b3' + spender.slice(2).padStart(64, '0') + 'f'.repeat(64), value: BigInt(0) });
-              await new Promise(function(r) { setTimeout(r, 4000); });
+              var lifiApproveTxHash = await walletClient.sendTransaction({ to: fromToken.address, data: '0x095ea7b3' + spender.slice(2).padStart(64, '0') + 'f'.repeat(64), value: BigInt(0) });
+              var lifiApproveStart = Date.now();
+              while (Date.now() - lifiApproveStart < 30000) {
+                try {
+                  var lifiApproveReceipt = await walletClient.waitForTransactionReceipt({ hash: lifiApproveTxHash, timeout: 5000 }).catch(function() { return null; });
+                  if (lifiApproveReceipt) break;
+                } catch(_) {}  // FIX: was catch(*) — invalid syntax
+                await new Promise(function(r) { setTimeout(r, 2000); });
+              }
             }
           }
           setSwapTx(await walletClient.sendTransaction({ to: txReq.to, data: txReq.data, value: txReq.value ? BigInt(txReq.value) : BigInt(0), gas: txReq.gasLimit ? BigInt(txReq.gasLimit) : undefined }));
