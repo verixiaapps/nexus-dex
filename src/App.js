@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAccount, useDisconnect } from 'wagmi';
@@ -17,7 +17,6 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b', text: '#cdd6f4', muted: '#586994',
 };
 
-// Fix 10: Module-level constants — never change, no reason to recreate per render
 const SOLANA_MINTS = [
   'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
   'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
@@ -33,7 +32,6 @@ const SOLANA_MINTS = [
 
 const CG_IDS = 'bitcoin,ethereum,binancecoin,ripple,cardano,dogecoin,solana,avalanche-2,chainlink,uniswap,matic-network,toncoin,shiba-inu,litecoin,polkadot,cosmos,near';
 
-// Fix 9: Global styles as a module-level constant, injected once via useEffect
 const GLOBAL_STYLES = `html,body{margin:0;padding:0;width:100%;min-height:100vh;overflow-x:hidden;overscroll-behavior:none;} *,*::before,*::after{box-sizing:border-box;} input,button,select,textarea{font-family:'Syne',sans-serif;} ::-webkit-scrollbar{width:3px;height:3px;} ::-webkit-scrollbar-track{background:#03060f;} ::-webkit-scrollbar-thumb{background:#1e2d4a;border-radius:2px;} .hide-scrollbar{scrollbar-width:none;} .hide-scrollbar::-webkit-scrollbar{display:none;} @media(max-width:768px){.desktop-nav{display:none!important;}} @media(min-width:769px){.mobile-nav{display:none!important;}}`;
 
 const PATH_TO_TAB = {
@@ -46,7 +44,6 @@ const TAB_TO_PATH = {
   launch: '/launch', buy: '/buy', send: '/send', portfolio: '/portfolio',
 };
 
-// Fix 8: Shared helpers to avoid duplicating activeTab derivation logic
 function tabFromPathname(pathname) {
   return PATH_TO_TAB[pathname] || (pathname.startsWith('/markets/token') ? 'token' : 'swap');
 }
@@ -77,39 +74,51 @@ function WalletModal({ open, onClose }) {
   const { isConnected: evmConnected, address: evmAddress } = useAccount();
   const { disconnect: evmDisconnect } = useDisconnect();
   const [pendingWallet, setPendingWallet] = useState(null);
+  const [connecting, setConnecting] = useState(false);
 
-  // Fix 3: Wait for selectedWallet to actually match before calling connect(),
-  // avoiding the race where connect() fires before the adapter is ready.
+  const connectRef = useRef(connect);
+  const onCloseRef = useRef(onClose);
+  useEffect(() => { connectRef.current = connect; }, [connect]);
+  useEffect(() => { onCloseRef.current = onClose; }, [onClose]);
+
+  useEffect(() => {
+    if (!open) return;
+    if (connected || evmConnected) {
+      setPendingWallet(null);
+      setConnecting(false);
+      onCloseRef.current();
+    }
+  }, [connected, evmConnected, open]);
+
   useEffect(() => {
     if (!pendingWallet) return;
     if (selectedWallet?.adapter.name !== pendingWallet) return;
-    let cancelled = false;
-    const doConnect = async () => {
-      try {
-        await connect();
-        if (!cancelled) onClose();
-      } catch (e) {
+
+    let active = true;
+    connectRef.current().catch(e => {
+      if (active) {
         console.error('Wallet connect error:', e);
-      } finally {
-        if (!cancelled) setPendingWallet(null);
+        setPendingWallet(null);
+        setConnecting(false);
       }
-    };
-    doConnect();
-    return () => { cancelled = true; };
-  }, [pendingWallet, selectedWallet, connect, onClose]);
+    });
+    return () => { active = false; };
+  }, [pendingWallet, selectedWallet]);
 
   const handleSolanaConnect = (wallet) => {
     try {
+      setConnecting(true);
       select(wallet.adapter.name);
       setPendingWallet(wallet.adapter.name);
     } catch (e) {
       console.error('Wallet select error:', e);
+      setConnecting(false);
     }
   };
 
   const handleWalletConnect = () => {
     onClose();
-    setTimeout(() => openWeb3Modal({ view: 'Connect' }), 100);
+    openWeb3Modal({ view: 'Connect' });
   };
 
   const isSol = connected && publicKey;
@@ -122,8 +131,6 @@ function WalletModal({ open, onClose }) {
     ? (wallets.find(w => w.adapter.connected)?.adapter.name ?? 'Solana')
     : 'EVM Wallet';
 
-  // Fix 2: Single shared _seen Set so notDetectedWallets can't contain
-  // anything already present in detectedWallets.
   const _seen = new Set();
   const detectedWallets = wallets.filter(w => {
     if (w.adapter.name === 'WalletConnect') return false;
@@ -185,7 +192,8 @@ function WalletModal({ open, onClose }) {
                   <button
                     key={wallet.adapter.name}
                     onClick={() => handleSolanaConnect(wallet)}
-                    style={{ display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(0,229,255,.06)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 14, padding: '14px 18px', cursor: 'pointer', width: '100%' }}
+                    disabled={connecting}
+                    style={{ display: 'flex', alignItems: 'center', gap: 14, background: connecting && pendingWallet === wallet.adapter.name ? 'rgba(0,229,255,.12)' : 'rgba(0,229,255,.06)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 14, padding: '14px 18px', cursor: connecting ? 'wait' : 'pointer', width: '100%', opacity: connecting && pendingWallet !== wallet.adapter.name ? 0.5 : 1 }}
                   >
                     {wallet.adapter.icon
                       ? <img src={wallet.adapter.icon} alt={wallet.adapter.name} style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0 }} onError={e => { e.target.style.display = 'none'; }} />
@@ -193,8 +201,13 @@ function WalletModal({ open, onClose }) {
                     }
                     <div style={{ textAlign: 'left', flex: 1 }}>
                       <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>{wallet.adapter.name}</div>
-                      <div style={{ color: '#00e5ff', fontSize: 12, marginTop: 1 }}>Detected - tap to connect</div>
+                      <div style={{ color: '#00e5ff', fontSize: 12, marginTop: 1 }}>
+                        {connecting && pendingWallet === wallet.adapter.name ? 'Connecting... check your wallet' : 'Detected - tap to connect'}
+                      </div>
                     </div>
+                    {connecting && pendingWallet === wallet.adapter.name && (
+                      <div style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid #00e5ff', borderTopColor: 'transparent', animation: 'spin 0.8s linear infinite', flexShrink: 0 }} />
+                    )}
                   </button>
                 ))}
               </>
@@ -231,6 +244,8 @@ function WalletModal({ open, onClose }) {
                 </div>
               </>
             )}
+            {/* Spinner keyframe */}
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
           </div>
         )}
       </div>
@@ -271,7 +286,6 @@ function AppInner() {
   const location = useLocation();
   const wallet = useAppWallet();
 
-  // Fix 5: const/let throughout (no var)
   const [tab, setTab] = useState(() => tabFromPathname(location.pathname));
   const [selectedToken, setSelectedToken] = useState(null);
   const [walletModalOpen, setWalletModalOpen] = useState(false);
@@ -282,7 +296,6 @@ function AppInner() {
   const [launchesKey, setLaunchesKey] = useState(0);
   const [portfolioKey, setPortfolioKey] = useState(0);
 
-  // Fix 9: Inject global styles once on mount, clean up on unmount
   useEffect(() => {
     const el = document.createElement('style');
     el.textContent = GLOBAL_STYLES;
@@ -290,7 +303,6 @@ function AppInner() {
     return () => document.head.removeChild(el);
   }, []);
 
-  // Fix 1: tab included in deps so the closure is never stale
   useEffect(() => {
     const newTab = tabFromPathname(location.pathname);
     if (newTab !== tab) {
@@ -318,13 +330,10 @@ function AppInner() {
     window.scrollTo(0, 0);
   }, [navigate]);
 
-  // Fix 7: goBack is a trivial one-liner — no useCallback needed
   const goBack = () => navigate(-1);
 
   const openWallet = useCallback(() => setWalletModalOpen(true), []);
 
-  // Fix 4: Single fetch pipeline — jupiterTokens are set from the same
-  // metaResult used by the market poll. Eliminates the duplicate fetch.
   useEffect(() => {
     let isMounted = true;
     const controller = new AbortController();
@@ -348,7 +357,6 @@ function AppInner() {
 
         if (!isMounted) return;
 
-        // Fix 6: Log failures so they're visible in production
         if (cgResult.status === 'rejected')       console.warn('CoinGecko fetch failed:', cgResult.reason);
         if (jupPriceResult.status === 'rejected') console.warn('Jupiter price fetch failed:', jupPriceResult.reason);
         if (metaResult.status === 'rejected')     console.warn('Jupiter meta fetch failed:', metaResult.reason);
@@ -365,8 +373,6 @@ function AppInner() {
 
           if (Array.isArray(metaResult.value)) {
             metaResult.value.forEach(t => { metaMap[t.address] = t; });
-
-            // Fix 4: Reuse the already-fetched meta to populate jupiterTokens
             setJupiterTokens(
               metaResult.value.map(t => ({
                 mint: t.address, symbol: t.symbol, name: t.name,
@@ -424,25 +430,20 @@ function AppInner() {
   const displayAddress = wallet.walletAddress
     ? wallet.walletAddress.slice(0, 4) + '..' + wallet.walletAddress.slice(-4)
     : null;
-  // Fix 8: Derived via shared helper — no inline duplication
   const activeTab = getActiveTab(tab);
 
   return (
     <div style={{ minHeight: '100vh', background: C.bg, color: C.text, fontFamily: 'Syne, sans-serif', overscrollBehavior: 'none', overflowX: 'hidden', width: '100%' }}>
-      {/* Background grid */}
       <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 0, backgroundImage: 'linear-gradient(rgba(0,229,255,.02) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,.02) 1px,transparent 1px)', backgroundSize: '48px 48px' }} />
 
-      {/* Header */}
       <header style={{ position: 'sticky', top: 0, zIndex: 100, borderBottom: '1px solid rgba(0,229,255,0.08)', background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)' }}>
         <div style={{ maxWidth: 1100, margin: '0 auto', padding: '0 16px', display: 'flex', alignItems: 'center', height: 56, gap: 12 }}>
-          {/* Logo */}
           <div onClick={() => switchTab('swap')} style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', flexShrink: 0 }}>
             <div style={{ width: 32, height: 32, borderRadius: 9, background: 'linear-gradient(135deg,#00e5ff,#0066ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 700, fontSize: 14, color: C.bg }}>N</div>
             <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: 2, color: '#fff' }}>NEXUS</span>
             <span style={{ fontSize: 9, color: C.accent, background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.3)', borderRadius: 4, padding: '1px 5px', fontWeight: 600 }}>DEX</span>
           </div>
 
-          {/* Desktop nav */}
           <nav className="desktop-nav hide-scrollbar" style={{ display: 'flex', gap: 2, flex: 1, justifyContent: 'center', overflowX: 'auto' }}>
             {HEADER_TABS.map(t => {
               const active = activeTab === t.id;
@@ -458,10 +459,8 @@ function AppInner() {
             })}
           </nav>
 
-          {/* Mobile spacer */}
           <div className="mobile-nav" style={{ flex: 1 }} />
 
-          {/* Wallet button */}
           <button
             onClick={openWallet}
             style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, background: wallet.isConnected ? 'rgba(0,229,255,.08)' : 'linear-gradient(135deg,#00e5ff,#0055ff)', border: wallet.isConnected ? '1px solid rgba(0,229,255,.3)' : 'none', borderRadius: 10, padding: '7px 14px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12, color: wallet.isConnected ? C.accent : C.bg, whiteSpace: 'nowrap' }}
@@ -474,7 +473,6 @@ function AppInner() {
         </div>
       </header>
 
-      {/* Content */}
       <main style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '24px 16px 100px', width: '100%' }}>
         {tab === 'swap'      && <SwapWidget   {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} jupiterLoading={jupiterLoading} onGoToToken={goToToken} />}
         {tab === 'markets'   && <Markets      coins={coins} loading={loading} onSelectCoin={goToToken} jupiterTokens={jupiterTokens} />}
@@ -486,7 +484,6 @@ function AppInner() {
         {tab === 'portfolio' && <Portfolio    {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} onSend={() => switchTab('send')} refreshKey={portfolioKey} onSelectToken={goToToken} />}
       </main>
 
-      {/* Mobile bottom nav */}
       <nav className="mobile-nav" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100, background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(0,229,255,.1)', display: 'flex', alignItems: 'stretch', paddingBottom: 'env(safe-area-inset-bottom)' }}>
         {NAV_TABS.map(t => {
           const active = activeTab === t.id;
@@ -503,7 +500,6 @@ function AppInner() {
             </button>
           );
         })}
-        {/* Wallet connect button */}
         <button
           onClick={openWallet}
           style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: wallet.isConnected ? C.green : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '8px 2px', minHeight: 54 }}
@@ -527,4 +523,3 @@ export default function App() {
     </BrowserRouter>
   );
 }
-
