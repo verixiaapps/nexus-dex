@@ -3,16 +3,16 @@ import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAccount, useDisconnect } from 'wagmi';
 import { useWeb3Modal } from '@web3modal/wagmi/react';
-import SwapWidget from './components/SwapWidget';
-import Markets from './components/Markets';
-import BuyCrypto from './components/BuyCrypto';
-import Portfolio from './components/Portfolio';
-import TokenDetail from './components/TokenDetail';
-import Send from './components/Send';
-import NewLaunches from './components/NewLaunches';
-import TokenLaunch from './components/TokenLaunch';
-import { useNexusWallet } from './WalletContext';
- 
+import { useNexusWallet } from './WalletContext.js';
+import SwapWidget from './components/SwapWidget.jsx';
+import Markets from './components/Markets.js';
+import BuyCrypto from './components/BuyCrypto.js';
+import Portfolio from './components/Portfolio.js';
+import TokenDetail from './components/TokenDetail.js';
+import Send from './components/Send.js';
+import NewLaunches from './components/NewLaunches.js';
+import TokenLaunch from './components/TokenLaunch.js';
+
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b', text: '#cdd6f4', muted: '#586994',
@@ -53,6 +53,7 @@ function getActiveTab(tab) {
 }
 
 export function useAppWallet() {
+  // Keep for backwards compatibility -- just delegates to useNexusWallet
   return useNexusWallet();
 }
 
@@ -85,33 +86,20 @@ function WalletModal({ open, onClose }) {
   useEffect(function() {
     if (!pendingWallet) return;
     if (selectedWallet?.adapter.name !== pendingWallet) return;
-
     var active = true;
     connectRef.current().catch(function(e) {
-      if (active) {
-        console.error('Wallet connect error:', e);
-        setPendingWallet(null);
-        setConnecting(false);
-      }
+      if (active) { console.error('Wallet connect error:', e); setPendingWallet(null); setConnecting(false); }
     });
     return function() { active = false; };
   }, [pendingWallet, selectedWallet]);
 
   const handleSolanaConnect = function(wallet) {
-    try {
-      setConnecting(true);
-      select(wallet.adapter.name);
-      setPendingWallet(wallet.adapter.name);
-    } catch (e) {
-      console.error('Wallet select error:', e);
-      setConnecting(false);
-    }
+    try { setConnecting(true); select(wallet.adapter.name); setPendingWallet(wallet.adapter.name); }
+    catch (e) { console.error('Wallet select error:', e); setConnecting(false); }
   };
 
   const handleWalletConnect = function() {
-    setConnecting(true);
-    onClose();
-    openWeb3Modal({ view: 'Connect' });
+    setConnecting(true); onClose(); openWeb3Modal({ view: 'Connect' });
   };
 
   const handleDisconnect = async function() {
@@ -153,7 +141,6 @@ function WalletModal({ open, onClose }) {
         borderRadius: '20px 20px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
         maxHeight: '85vh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>
-        {/* Fixed header */}
         <div style={{ flexShrink: 0, padding: '20px 24px 16px' }}>
           <div style={{ width: 40, height: 4, background: '#2e3f5e', borderRadius: 2, margin: '0 auto 20px' }} />
           <div style={{ textAlign: 'center' }}>
@@ -163,21 +150,15 @@ function WalletModal({ open, onClose }) {
             {displayAddr && <div style={{ fontSize: 13, color: '#586994' }}>{connectedWalletName}: {displayAddr}</div>}
           </div>
         </div>
-        {/* Scrollable content */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 24px', paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)' }}>
-
           {(connected || evmConnected) ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 400, margin: '0 auto', paddingTop: 8 }}>
               <div style={{ background: 'rgba(0,255,163,.08)', border: '1px solid rgba(0,255,163,.2)', borderRadius: 16, padding: '16px 20px' }}>
                 <div style={{ color: '#00ffa3', fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Connected</div>
                 <div style={{ color: '#586994', fontSize: 12, fontFamily: 'monospace', wordBreak: 'break-all' }}>{displayAddr}</div>
               </div>
-              <button onClick={handleDisconnect} style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 16, padding: 16, cursor: 'pointer', width: '100%', color: '#ff3b6b', fontWeight: 700, fontSize: 15, fontFamily: 'Syne, sans-serif' }}>
-                Disconnect
-              </button>
-              <button onClick={onClose} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,.1)', borderRadius: 16, padding: 14, cursor: 'pointer', color: '#586994', fontSize: 14, fontFamily: 'Syne, sans-serif' }}>
-                Close
-              </button>
+              <button onClick={handleDisconnect} style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 16, padding: 16, cursor: 'pointer', width: '100%', color: '#ff3b6b', fontWeight: 700, fontSize: 15, fontFamily: 'Syne, sans-serif' }}>Disconnect</button>
+              <button onClick={onClose} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,.1)', borderRadius: 16, padding: 14, cursor: 'pointer', color: '#586994', fontSize: 14, fontFamily: 'Syne, sans-serif' }}>Close</button>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 400, margin: '0 auto', paddingTop: 8 }}>
@@ -187,31 +168,21 @@ function WalletModal({ open, onClose }) {
                   {detectedWallets.map(function(wallet) {
                     var isPending = connecting && pendingWallet === wallet.adapter.name;
                     return (
-                      <button
-                        key={wallet.adapter.name}
-                        onClick={function() { handleSolanaConnect(wallet); }}
-                        disabled={connecting}
-                        style={{ display: 'flex', alignItems: 'center', gap: 14, background: isPending ? 'rgba(0,229,255,.12)' : 'rgba(0,229,255,.06)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 14, padding: '14px 18px', cursor: connecting ? 'wait' : 'pointer', width: '100%', opacity: connecting && !isPending ? 0.5 : 1 }}
-                      >
+                      <button key={wallet.adapter.name} onClick={function() { handleSolanaConnect(wallet); }} disabled={connecting} style={{ display: 'flex', alignItems: 'center', gap: 14, background: isPending ? 'rgba(0,229,255,.12)' : 'rgba(0,229,255,.06)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 14, padding: '14px 18px', cursor: connecting ? 'wait' : 'pointer', width: '100%', opacity: connecting && !isPending ? 0.5 : 1 }}>
                         {wallet.adapter.icon
                           ? <img src={wallet.adapter.icon} alt={wallet.adapter.name} style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} />
                           : <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(0,229,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: '#00e5ff', flexShrink: 0 }}>{wallet.adapter.name.charAt(0)}</div>
                         }
                         <div style={{ textAlign: 'left', flex: 1 }}>
                           <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>{wallet.adapter.name}</div>
-                          <div style={{ color: '#00e5ff', fontSize: 12, marginTop: 1 }}>
-                            {isPending ? 'Check your wallet app...' : 'Detected - tap to connect'}
-                          </div>
+                          <div style={{ color: '#00e5ff', fontSize: 12, marginTop: 1 }}>{isPending ? 'Check your wallet app...' : 'Detected - tap to connect'}</div>
                         </div>
-                        {isPending && (
-                          <div style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid #00e5ff', borderTopColor: 'transparent', animation: 'wc-spin 0.8s linear infinite', flexShrink: 0 }} />
-                        )}
+                        {isPending && <div style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid #00e5ff', borderTopColor: 'transparent', animation: 'wc-spin 0.8s linear infinite', flexShrink: 0 }} />}
                       </button>
                     );
                   })}
                 </>
               )}
-
               <button onClick={handleWalletConnect} style={{ display: 'flex', alignItems: 'center', gap: 14, background: 'rgba(59,153,252,.08)', border: '1px solid rgba(59,153,252,.2)', borderRadius: 14, padding: '14px 18px', cursor: 'pointer', width: '100%' }}>
                 <div style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, background: 'linear-gradient(135deg,#3b99fc,#0066cc)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                   <img src="https://avatars.githubusercontent.com/u/37784886" alt="WC" style={{ width: 28, height: 28, borderRadius: 6 }} onError={function(e) { e.target.style.display = 'none'; }} />
@@ -221,18 +192,13 @@ function WalletModal({ open, onClose }) {
                   <div style={{ color: '#3b99fc', fontSize: 12, marginTop: 1 }}>300+ wallets supported</div>
                 </div>
               </button>
-
               {notDetectedWallets.length > 0 && (
                 <>
                   <div style={{ fontSize: 10, color: '#586994', fontWeight: 700, letterSpacing: 1, margin: '6px 0 2px' }}>MORE WALLETS</div>
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
                     {notDetectedWallets.slice(0, 6).map(function(wallet) {
                       return (
-                        <button
-                          key={wallet.adapter.name}
-                          onClick={function() { window.open(wallet.adapter.url, '_blank'); onClose(); }}
-                          style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.06)', borderRadius: 12, padding: '12px 8px', cursor: 'pointer' }}
-                        >
+                        <button key={wallet.adapter.name} onClick={function() { window.open(wallet.adapter.url, '_blank'); onClose(); }} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.06)', borderRadius: 12, padding: '12px 8px', cursor: 'pointer' }}>
                           {wallet.adapter.icon
                             ? <img src={wallet.adapter.icon} alt={wallet.adapter.name} style={{ width: 32, height: 32, borderRadius: 8 }} onError={function(e) { e.target.style.display = 'none'; }} />
                             : <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 800, color: '#00e5ff' }}>{wallet.adapter.name.charAt(0)}</div>
@@ -257,27 +223,20 @@ function IconSwap() { return <svg width="18" height="18" viewBox="0 0 24 24" fil
 function IconMarkets() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>; }
 function IconLaunches() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>; }
 function IconLaunch() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>; }
+function IconBuy() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>; }
 function IconSend() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>; }
 function IconWallet() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
-const NAV_ICONS = { swap: IconSwap, markets: IconMarkets, launches: IconLaunches, launch: IconLaunch, send: IconSend, portfolio: IconWallet };
+const NAV_ICONS = { swap: IconSwap, markets: IconMarkets, launches: IconLaunches, launch: IconLaunch, buy: IconBuy, send: IconSend, portfolio: IconWallet };
 
 const NAV_TABS = [
-  { id: 'swap',      label: 'Swap' },
-  { id: 'markets',   label: 'Markets' },
-  { id: 'launches',  label: 'Launches' },
-  { id: 'launch',    label: 'Launch' },
-  { id: 'send',      label: 'Send' },
-  { id: 'portfolio', label: 'Wallet' },
+  { id: 'swap', label: 'Swap' }, { id: 'markets', label: 'Markets' },
+  { id: 'launches', label: 'Launches' }, { id: 'launch', label: 'Launch' },
+  { id: 'buy', label: 'Buy' }, { id: 'send', label: 'Send' }, { id: 'portfolio', label: 'Wallet' },
 ];
-
 const HEADER_TABS = [
-  { id: 'swap',      label: 'Swap' },
-  { id: 'markets',   label: 'Markets' },
-  { id: 'launches',  label: 'Launches' },
-  { id: 'launch',    label: 'Launch' },
-  { id: 'buy',       label: 'Buy' },
-  { id: 'send',      label: 'Send' },
-  { id: 'portfolio', label: 'Wallet' },
+  { id: 'swap', label: 'Swap' }, { id: 'markets', label: 'Markets' },
+  { id: 'launches', label: 'Launches' }, { id: 'launch', label: 'Launch' },
+  { id: 'buy', label: 'Buy' }, { id: 'send', label: 'Send' }, { id: 'portfolio', label: 'Wallet' },
 ];
 
 function AppInner() {
@@ -304,10 +263,7 @@ function AppInner() {
 
   useEffect(function() {
     var newTab = tabFromPathname(location.pathname);
-    if (newTab !== tab) {
-      setTab(newTab);
-      if (newTab !== 'token') setSelectedToken(null);
-    }
+    if (newTab !== tab) { setTab(newTab); if (newTab !== 'token') setSelectedToken(null); }
   }, [location.pathname, tab]);
 
   const switchTab = useCallback(function(newTab) {
@@ -323,10 +279,7 @@ function AppInner() {
   }, [tab, navigate]);
 
   const goToToken = useCallback(function(coin) {
-    setSelectedToken(coin);
-    setTab('token');
-    navigate('/markets/token');
-    window.scrollTo(0, 0);
+    setSelectedToken(coin); setTab('token'); navigate('/markets/token'); window.scrollTo(0, 0);
   }, [navigate]);
 
   const goBack = function() { navigate(-1); };
@@ -352,18 +305,14 @@ function AppInner() {
         .then(function(r) { return r.json(); })
         .then(function(data) {
           if (!isMounted || !Array.isArray(data)) return;
-          setCoins(function(prev) {
-            return data.concat(prev.filter(function(c) { return c.isSolanaToken; }));
-          });
+          setCoins(function(prev) { return data.concat(prev.filter(function(c) { return c.isSolanaToken; })); });
           setLoading(false);
           try {
             var c = JSON.parse(localStorage.getItem('nexus_market_cache') || '{}');
             localStorage.setItem('nexus_market_cache', JSON.stringify(Object.assign({}, c, { coins: data, ts: Date.now() })));
           } catch(e) {}
         })
-        .catch(function(e) {
-          if (isMounted && e.name !== 'AbortError') setLoading(false);
-        });
+        .catch(function(e) { if (isMounted && e.name !== 'AbortError') setLoading(false); });
 
       fetch('https://lite-api.jup.ag/tokens/v1/tagged/strict', { signal: controller.signal })
         .then(function(r) { return r.json(); })
@@ -378,7 +327,6 @@ function AppInner() {
             var c = JSON.parse(localStorage.getItem('nexus_market_cache') || '{}');
             localStorage.setItem('nexus_market_cache', JSON.stringify(Object.assign({}, c, { jupTokens: jupTokens, ts: Date.now() })));
           } catch(e) {}
-
           return fetch('https://api.jup.ag/price/v2?ids=' + SOLANA_MINTS.join(','), { signal: controller.signal })
             .then(function(r) { return r.json(); })
             .then(function(jupData) {
@@ -399,9 +347,7 @@ function AppInner() {
                   circulating_supply: null, isSolanaToken: true,
                 };
               }).filter(Boolean);
-              setCoins(function(prev) {
-                return prev.filter(function(c) { return !c.isSolanaToken; }).concat(solanaCoins);
-              });
+              setCoins(function(prev) { return prev.filter(function(c) { return !c.isSolanaToken; }).concat(solanaCoins); });
             });
         })
         .catch(function() {});
@@ -413,14 +359,11 @@ function AppInner() {
   }, []);
 
   var sharedProps = {
-    isConnected: wallet.isConnected,
-    isSolanaConnected: wallet.isSolanaConnected,
-    walletAddress: wallet.walletAddress,
-    solConnected: wallet.solConnected,
-    evmConnected: wallet.evmConnected,
-    evmAddress: wallet.evmAddress,
-    publicKey: wallet.publicKey,
-    onConnectWallet: openWallet,
+    isConnected: wallet.isConnected, isSolanaConnected: wallet.isSolanaConnected,
+    walletAddress: wallet.walletAddress, solConnected: wallet.solConnected,
+    evmConnected: wallet.evmConnected, evmAddress: wallet.evmAddress,
+    publicKey: wallet.publicKey, onConnectWallet: openWallet,
+    onBuyCrypto: function() { switchTab('buy'); },
   };
   var displayAddress = wallet.walletAddress
     ? wallet.walletAddress.slice(0, 4) + '..' + wallet.walletAddress.slice(-4)
@@ -438,7 +381,6 @@ function AppInner() {
             <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: 2, color: '#fff' }}>NEXUS</span>
             <span style={{ fontSize: 9, color: C.accent, background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.3)', borderRadius: 4, padding: '1px 5px', fontWeight: 600 }}>DEX</span>
           </div>
-
           <nav className="desktop-nav hide-scrollbar" style={{ display: 'flex', gap: 2, flex: 1, justifyContent: 'center', overflowX: 'auto' }}>
             {HEADER_TABS.map(function(t) {
               var active = activeTab === t.id;
@@ -449,17 +391,9 @@ function AppInner() {
               );
             })}
           </nav>
-
           <div className="mobile-nav" style={{ flex: 1 }} />
-
-          <button
-            onClick={openWallet}
-            style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, background: wallet.isConnected ? 'rgba(0,229,255,.08)' : 'linear-gradient(135deg,#00e5ff,#0055ff)', border: wallet.isConnected ? '1px solid rgba(0,229,255,.3)' : 'none', borderRadius: 10, padding: '7px 14px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12, color: wallet.isConnected ? C.accent : C.bg, whiteSpace: 'nowrap' }}
-          >
-            {wallet.isConnected
-              ? (<><div style={{ width: 7, height: 7, borderRadius: '50%', background: C.green, flexShrink: 0 }} />{displayAddress}</>)
-              : 'Connect Wallet'
-            }
+          <button onClick={openWallet} style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, background: wallet.isConnected ? 'rgba(0,229,255,.08)' : 'linear-gradient(135deg,#00e5ff,#0055ff)', border: wallet.isConnected ? '1px solid rgba(0,229,255,.3)' : 'none', borderRadius: 10, padding: '7px 14px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12, color: wallet.isConnected ? C.accent : C.bg, whiteSpace: 'nowrap' }}>
+            {wallet.isConnected ? (<><div style={{ width: 7, height: 7, borderRadius: '50%', background: C.green, flexShrink: 0 }} />{displayAddress}</>) : 'Connect Wallet'}
           </button>
         </div>
       </header>
@@ -496,6 +430,13 @@ function AppInner() {
       </nav>
 
       <WalletModal open={walletModalOpen} onClose={function() { setWalletModalOpen(false); }} />
+
+      {tab !== 'buy' && (
+        <button onClick={function() { switchTab('buy'); }} style={{ position: 'fixed', bottom: 80, right: 16, zIndex: 200, background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none', borderRadius: 20, padding: '10px 16px', color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12, cursor: 'pointer', boxShadow: '0 4px 20px rgba(0,229,255,.35)', display: 'flex', alignItems: 'center', gap: 6, whiteSpace: 'nowrap' }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="2" y="5" width="20" height="14" rx="2"/><line x1="2" y1="10" x2="22" y2="10"/></svg>
+          Buy Crypto
+        </button>
+      )}
     </div>
   );
 }
