@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { VersionedTransaction, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
-import { TradeDrawer } from './SwapWidget';
+import { TradeDrawer } from './SwapWidget.jsx';
 
 const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
 const PRESET_KEY = 'nexus_launch_presets';
@@ -18,9 +18,7 @@ const C = {
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
 
-function loadCachedTokens() {
-  try { var v = localStorage.getItem('nexus_launch_cache'); if (!v) return []; var p = JSON.parse(v); if (Date.now() - (p.ts || 0) > 300000) return []; return p.tokens || []; } catch (e) { return []; }
-}
+function loadCachedTokens() { try { var v = localStorage.getItem('nexus_launch_cache'); if (!v) return []; var p = JSON.parse(v); if (Date.now() - (p.ts || 0) > 300000) return []; return p.tokens || []; } catch (e) { return []; } }
 function saveCachedTokens(t) { try { localStorage.setItem('nexus_launch_cache', JSON.stringify({ ts: Date.now(), tokens: t.slice(0, 30) })); } catch (e) {} }
 function loadPresets() { try { var v = localStorage.getItem(PRESET_KEY); return v ? JSON.parse(v) : [5, 10, 25, 50, 100]; } catch (e) { return [5, 10, 25, 50, 100]; } }
 function savePresets(arr) { try { localStorage.setItem(PRESET_KEY, JSON.stringify(arr)); } catch (e) {} }
@@ -69,7 +67,7 @@ async function fetchGeckoTerminal(mints) {
         var price = parseFloat(attrs.price_usd || 0);
         var pChange = attrs.price_change_percentage || {};
         out[attrs.address] = {
-          price: price, marketCap: parseFloat(attrs.fdv_usd || attrs.market_cap_usd || 0),
+          price, marketCap: parseFloat(attrs.fdv_usd || attrs.market_cap_usd || 0),
           pct5m: pChange.m5 ? parseFloat(pChange.m5) : null,
           pct1h: pChange.h1 ? parseFloat(pChange.h1) : null,
           pct24h: pChange.h24 ? parseFloat(pChange.h24) : null,
@@ -138,39 +136,24 @@ function LaunchTradeDrawer({ open, onClose, mode, token, solPrice, onConnectWall
 
   if (isGrad) {
     var coin = token ? {
-      mint: token.mint,
-      symbol: token.symbol,
-      name: token.name,
-      image: token.image,
-      decimals: token.decimals || 6,
-      chain: 'solana',
-      isSolanaToken: true,
+      mint: token.mint, symbol: token.symbol, name: token.name,
+      image: token.image, decimals: token.decimals || 6,
+      chain: 'solana', isSolanaToken: true,
     } : null;
     return (
       <TradeDrawer
-        open={open}
-        onClose={onClose}
-        mode={mode}
-        coin={coin}
-        jupiterTokens={jupiterTokens}
-        coins={coins}
-        onConnectWallet={onConnectWallet}
-        isConnected={isConnected}
+        open={open} onClose={onClose} mode={mode} coin={coin}
+        jupiterTokens={jupiterTokens} coins={coins}
+        onConnectWallet={onConnectWallet} isConnected={isConnected}
       />
     );
   }
 
   return (
     <PumpDrawer
-      open={open}
-      onClose={onClose}
-      mode={mode}
-      token={token}
-      solPrice={solPrice}
-      onConnectWallet={onConnectWallet}
-      isConnected={isConnected}
-      presets={presets}
-      onPresetsChange={onPresetsChange}
+      open={open} onClose={onClose} mode={mode} token={token}
+      solPrice={solPrice} onConnectWallet={onConnectWallet} isConnected={isConnected}
+      presets={presets} onPresetsChange={onPresetsChange}
     />
   );
 }
@@ -178,7 +161,7 @@ function LaunchTradeDrawer({ open, onClose, mode, token, solPrice, onConnectWall
 function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isConnected, presets, onPresetsChange }) {
   const { publicKey, sendTransaction, connected: solConnected } = useWallet();
   const { connection } = useConnection();
-  var walletConnected = solConnected;
+  const walletConnected = solConnected;
 
   const [activePreset, setActivePreset] = useState(null);
   const [customAmt, setCustomAmt] = useState('');
@@ -272,7 +255,6 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isC
         borderRadius: '20px 20px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
         maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>
-        {/* Fixed header */}
         <div style={{ flexShrink: 0, padding: '16px 20px 14px' }}>
           <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 16px' }} />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -286,7 +268,6 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isC
             <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer', padding: '0 4px', lineHeight: 1 }}>x</button>
           </div>
         </div>
-        {/* Scrollable content */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px', paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)' }}>
 
           <div style={{ background: C.card2, borderRadius: 10, padding: '12px 14px', marginBottom: 14 }}>
@@ -377,8 +358,8 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isC
           {txSig && status === 'success' && <a href={'https://solscan.io/tx/' + txSig} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>View on Solscan</a>}
           <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 10, lineHeight: 1.6 }}>Non-custodial &mdash; Fees go directly to Nexus DEX</p>
         </div>
+        <PresetEditor open={presetEditorOpen} onClose={function() { setPresetEditorOpen(false); }} presets={presets} onSave={onPresetsChange} />
       </div>
-      <PresetEditor open={presetEditorOpen} onClose={function() { setPresetEditorOpen(false); }} presets={presets} onSave={onPresetsChange} />
     </>
   );
 }
@@ -409,7 +390,7 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, solPrice, coin
   var progress = token.bondingProgress || 0;
   var history = token.priceHistory || [];
   var sparkUp = pct1h != null ? pct1h >= 0 : null;
-  var fullToken = Object.assign({}, token, liveData || {}, { graduated: isGrad, price: price });
+  var fullToken = Object.assign({}, token, liveData || {}, { graduated: isGrad, price });
 
   return (
     <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
@@ -498,17 +479,11 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, solPrice, coin
       </div>
 
       <LaunchTradeDrawer
-        open={drawerOpen}
-        onClose={function() { setDrawerOpen(false); }}
-        mode={drawerMode}
-        token={fullToken}
-        solPrice={solPrice}
-        onConnectWallet={onConnectWallet}
-        isConnected={isConnected}
-        coins={coins}
-        jupiterTokens={jupiterTokens}
-        presets={presets}
-        onPresetsChange={onPresetsChange}
+        open={drawerOpen} onClose={function() { setDrawerOpen(false); }}
+        mode={drawerMode} token={fullToken} solPrice={solPrice}
+        onConnectWallet={onConnectWallet} isConnected={isConnected}
+        coins={coins} jupiterTokens={jupiterTokens}
+        presets={presets} onPresetsChange={onPresetsChange}
       />
     </div>
   );
@@ -703,7 +678,7 @@ export default function NewLaunches({ coins, jupiterTokens, onConnectWallet, isC
           var mintAddr = pool.relationships && pool.relationships.base_token && pool.relationships.base_token.data && pool.relationships.base_token.data.id;
           mintAddr = mintAddr ? mintAddr.replace('solana_', '') : null;
           if (!mintAddr) return null;
-          return { mint: mintAddr, symbol: attrs.name ? attrs.name.split('/')[0] : '???', name: attrs.name ? attrs.name.split('/')[0] : 'Unknown', image: null, marketCap: parseFloat(attrs.fdv_usd || attrs.market_cap_usd || 0), price: price, pct5m: pChange.m5 ? parseFloat(pChange.m5) : null, pct1h: pChange.h1 ? parseFloat(pChange.h1) : null, pct24h: pChange.h24 ? parseFloat(pChange.h24) : null, volume24h: parseFloat((attrs.volume_usd && attrs.volume_usd.h24) || 0), buys24h: txns.h24 ? txns.h24.buys || 0 : 0, priceHistory: price > 0 ? [price] : [], bondingProgress: 0, graduated: false, createdAt: attrs.pool_created_at ? new Date(attrs.pool_created_at).getTime() : Date.now() };
+          return { mint: mintAddr, symbol: attrs.name ? attrs.name.split('/')[0] : '???', name: attrs.name ? attrs.name.split('/')[0] : 'Unknown', image: null, marketCap: parseFloat(attrs.fdv_usd || attrs.market_cap_usd || 0), price, pct5m: pChange.m5 ? parseFloat(pChange.m5) : null, pct1h: pChange.h1 ? parseFloat(pChange.h1) : null, pct24h: pChange.h24 ? parseFloat(pChange.h24) : null, volume24h: parseFloat((attrs.volume_usd && attrs.volume_usd.h24) || 0), buys24h: txns.h24 ? txns.h24.buys || 0 : 0, priceHistory: price > 0 ? [price] : [], bondingProgress: 0, graduated: false, createdAt: attrs.pool_created_at ? new Date(attrs.pool_created_at).getTime() : Date.now() };
         }).filter(Boolean);
         tokensRef.current = initialTokens;
         setTokens([].concat(tokensRef.current));
@@ -774,17 +749,11 @@ export default function NewLaunches({ coins, jupiterTokens, onConnectWallet, isC
       )}
 
       <LaunchTradeDrawer
-        open={drawerOpen}
-        onClose={function() { setDrawerOpen(false); }}
-        mode={drawerMode}
-        token={drawerToken}
-        solPrice={solPrice}
-        onConnectWallet={onConnectWallet}
-        isConnected={isConnected}
-        coins={coins}
-        jupiterTokens={jupiterTokens}
-        presets={presets}
-        onPresetsChange={handlePresetsChange}
+        open={drawerOpen} onClose={function() { setDrawerOpen(false); }}
+        mode={drawerMode} token={drawerToken} solPrice={solPrice}
+        onConnectWallet={onConnectWallet} isConnected={isConnected}
+        coins={coins} jupiterTokens={jupiterTokens}
+        presets={presets} onPresetsChange={handlePresetsChange}
       />
     </div>
   );
