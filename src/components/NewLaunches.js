@@ -176,8 +176,9 @@ function LaunchTradeDrawer({ open, onClose, mode, token, solPrice, onConnectWall
 }
 
 function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isConnected, presets, onPresetsChange }) {
-  const { publicKey, sendTransaction } = useWallet();
+  const { publicKey, sendTransaction, connected: solConnected } = useWallet();
   const { connection } = useConnection();
+  var walletConnected = solConnected;
 
   const [activePreset, setActivePreset] = useState(null);
   const [customAmt, setCustomAmt] = useState('');
@@ -218,7 +219,7 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isC
   var solAmt = solPrice > 0 ? activeDollar / solPrice : 0;
 
   var executeTrade = async function() {
-    if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
+    if (!walletConnected) { if (onConnectWallet) onConnectWallet(); return; }
     if (!publicKey || !token) return;
     setStatus('loading'); setError('');
     try {
@@ -304,7 +305,7 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isC
             )}
           </div>
 
-          {!isConnected && (
+          {!walletConnected && (
             <div style={{ marginBottom: 14, padding: 14, background: 'rgba(0,229,255,.05)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 12, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
               <span style={{ color: C.muted, fontSize: 13 }}>Connect wallet to trade</span>
               <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 8, padding: '8px 16px', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect</button>
@@ -369,8 +370,8 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isC
 
           {error && <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 14, fontSize: 13, color: C.red }}>{error}</div>}
 
-          <button onClick={executeTrade} disabled={status === 'loading'} style={{ width: '100%', padding: 18, borderRadius: 14, border: 'none', background: status === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : status === 'error' ? 'rgba(255,59,107,.2)' : !isConnected ? 'linear-gradient(135deg,#9945ff,#7c3aed)' : isBuy ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'linear-gradient(135deg,#ff3b6b,#cc1144)', color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 17, cursor: status === 'loading' ? 'not-allowed' : 'pointer', minHeight: 54 }}>
-            {!isConnected ? 'Connect Wallet' : status === 'loading' ? 'Confirming...' : status === 'success' ? (isBuy ? 'Bought!' : 'Sold!') : status === 'error' ? 'Failed - Try Again' : isBuy ? 'Buy $' + activeDollar.toFixed(2) + ' of ' + token.symbol : 'Sell ' + (customSellAmt || sellPct + '%') + ' ' + token.symbol}
+          <button onClick={executeTrade} disabled={status === 'loading'} style={{ width: '100%', padding: 18, borderRadius: 14, border: 'none', background: status === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : status === 'error' ? 'rgba(255,59,107,.2)' : !walletConnected ? 'linear-gradient(135deg,#9945ff,#7c3aed)' : isBuy ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'linear-gradient(135deg,#ff3b6b,#cc1144)', color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 17, cursor: status === 'loading' ? 'not-allowed' : 'pointer', minHeight: 54 }}>
+            {!walletConnected ? 'Connect Wallet' : status === 'loading' ? 'Confirming...' : status === 'success' ? (isBuy ? 'Bought!' : 'Sold!') : status === 'error' ? 'Failed - Try Again' : isBuy ? 'Buy $' + activeDollar.toFixed(2) + ' of ' + token.symbol : 'Sell ' + (customSellAmt || sellPct + '%') + ' ' + token.symbol}
           </button>
 
           {txSig && status === 'success' && <a href={'https://solscan.io/tx/' + txSig} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>View on Solscan</a>}
