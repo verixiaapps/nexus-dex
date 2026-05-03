@@ -16,7 +16,7 @@ import {
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App.js';
 import { WalletContextProvider } from './WalletContext.js';
-
+ 
 const unichain      = { id: 130,    name: 'Unichain',    nativeCurrency: { name: 'Ether',        symbol: 'ETH',  decimals: 18 }, rpcUrls: { default: { http: ['https://mainnet.unichain.org'] } } };
 const sonic         = { id: 146,    name: 'Sonic',       nativeCurrency: { name: 'Sonic',        symbol: 'S',    decimals: 18 }, rpcUrls: { default: { http: ['https://rpc.soniclabs.com'] } } };
 const berachain     = { id: 80094,  name: 'Berachain',   nativeCurrency: { name: 'BERA',         symbol: 'BERA', decimals: 18 }, rpcUrls: { default: { http: ['https://rpc.berachain.com'] } } };
