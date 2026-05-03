@@ -4,7 +4,7 @@ import { PublicKey, SystemProgram, Transaction, Keypair, LAMPORTS_PER_SOL } from
 import { Raydium, LAUNCHPAD_PROGRAM, TxVersion } from '@raydium-io/raydium-sdk-v2';
 import { NATIVE_MINT } from '@solana/spl-token';
 import BN from 'bn.js';
-
+ 
 const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const LAUNCH_FEE_SOL = 0.5;
 const PLATFORM_ID = process.env.REACT_APP_PLATFORM_ID || null;
