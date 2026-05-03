@@ -123,13 +123,9 @@ function normalizeToToken(coin) {
 
   if (coin.chain === 'evm' || isValidEvmAddr(coin.address)) {
     return {
-      address: coin.address,
-      chainId: coin.chainId || 1,
-      symbol: coin.symbol || 'TOKEN',
-      name: coin.name || 'Token',
-      decimals: coin.decimals || 18,
-      chain: 'evm',
-      logoURI: logoURI,
+      address: coin.address, chainId: coin.chainId || 1,
+      symbol: coin.symbol || 'TOKEN', name: coin.name || 'Token',
+      decimals: coin.decimals || 18, chain: 'evm', logoURI,
     };
   }
 
@@ -142,12 +138,9 @@ function normalizeToToken(coin) {
 
   if (isValidSolMint(mintCandidate)) {
     return {
-      mint: mintCandidate,
-      symbol: coin.symbol || 'TOKEN',
-      name: coin.name || 'Token',
-      decimals: coin.decimals || 6,
-      chain: 'solana',
-      logoURI: logoURI,
+      mint: mintCandidate, symbol: coin.symbol || 'TOKEN',
+      name: coin.name || 'Token', decimals: coin.decimals || 6,
+      chain: 'solana', logoURI,
     };
   }
 
@@ -343,7 +336,6 @@ export function TradeDrawer({ open, onClose, mode, coin, jupiterTokens, coins, o
         borderRadius: '20px 20px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
         maxHeight: '90vh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>
-        {/* Fixed header */}
         <div style={{ flexShrink: 0, padding: '16px 20px 12px' }}>
           <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 14px' }} />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -356,7 +348,6 @@ export function TradeDrawer({ open, onClose, mode, coin, jupiterTokens, coins, o
             <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer', padding: 0 }}>x</button>
           </div>
         </div>
-        {/* Scrollable content */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '4px 20px', paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)' }}>
           <SwapWidget
             key={swapKey}
@@ -397,20 +388,57 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   const [toBalance,   setToBalance]   = useState(null);
   const [customAddress, setCustomAddress] = useState('');
 
+  // Multi-chain balance detection.
+  // When EVM wallet connects, query native balance on all supported chains in parallel.
+  // Auto-select the chain with the highest balance as fromToken so user never has
+  // to manually switch chains.
   useEffect(function() {
-    if (!evmChainId || !evmConnected) return;
-    var nativeForChain = POPULAR_TOKENS.find(function(t) {
-      return t.chain === 'evm' && t.chainId === evmChainId && t.address === NATIVE_EVM;
+    if (!evmAddress || !evmConnected) return;
+    var aborted = false;
+
+    var CHAIN_RPCS = [
+      { id: 1,      rpc: 'https://eth.llamarpc.com' },
+      { id: 8453,   rpc: 'https://mainnet.base.org' },
+      { id: 42161,  rpc: 'https://arb1.arbitrum.io/rpc' },
+      { id: 137,    rpc: 'https://polygon-rpc.com' },
+      { id: 56,     rpc: 'https://bsc-dataseed.binance.org' },
+      { id: 43114,  rpc: 'https://api.avax.network/ext/bc/C/rpc' },
+      { id: 10,     rpc: 'https://mainnet.optimism.io' },
+      { id: 59144,  rpc: 'https://rpc.linea.build' },
+      { id: 534352, rpc: 'https://rpc.scroll.io' },
+      { id: 5000,   rpc: 'https://rpc.mantle.xyz' },
+      { id: 81457,  rpc: 'https://rpc.blast.io' },
+      { id: 146,    rpc: 'https://rpc.soniclabs.com' },
+      { id: 130,    rpc: 'https://mainnet.unichain.org' },
+      { id: 480,    rpc: 'https://worldchain-mainnet.g.alchemy.com/public' },
+    ];
+
+    Promise.all(CHAIN_RPCS.map(function(chain) {
+      return fetch(chain.rpc, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', method: 'eth_getBalance', params: [evmAddress, 'latest'], id: 1 }),
+      })
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+          var raw = data.result ? parseInt(data.result, 16) : 0;
+          return { chainId: chain.id, balance: raw / 1e18 };
+        })
+        .catch(function() { return { chainId: chain.id, balance: 0 }; });
+    })).then(function(results) {
+      if (aborted) return;
+      var best = results.reduce(function(a, b) { return b.balance > a.balance ? b : a; }, results[0]);
+      if (!best || best.balance <= 0) return;
+      if (!isEvm(fromToken)) {
+        var nativeToken = POPULAR_TOKENS.find(function(t) {
+          return t.chain === 'evm' && t.chainId === best.chainId && t.address === NATIVE_EVM;
+        });
+        if (nativeToken) { setFromToken(nativeToken); setQuote(null); setFromAmt(''); }
+      }
     });
-    if (!nativeForChain) return;
-    if (isEvm(fromToken) && fromToken.chainId !== evmChainId) {
-      setFromToken(nativeForChain); setQuote(null); setFromAmt('');
-      return;
-    }
-    if (!solConnected && isSol(fromToken)) {
-      setFromToken(nativeForChain); setQuote(null); setFromAmt('');
-    }
-  }, [evmChainId, evmConnected, solConnected]);
+
+    return function() { aborted = true; };
+  }, [evmAddress, evmConnected]);
 
   var isEvmFrom       = isEvm(fromToken);
   var isNativeEvmFrom = isEvmFrom && fromToken.address === NATIVE_EVM;
@@ -575,7 +603,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             try {
               var receipt = await walletClient.waitForTransactionReceipt({ hash: approveTxHash, timeout: 5000 }).catch(function() { return null; });
               if (receipt) break;
-            } catch(_) {}  // FIX: was catch(*) -- invalid syntax
+            } catch(_) {}
             await new Promise(function(r) { setTimeout(r, 2000); });
           }
         }
@@ -617,7 +645,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             try {
               var allowHex = await walletClient.request({ method: 'eth_call', params: [{ to: fromToken.address, data: allowData }, 'latest'] });
               needsApprove = BigInt(allowHex || '0x0') < sellBig;
-            } catch(_) {}  // FIX: was catch(*) -- invalid syntax
+            } catch(_) {}
             if (needsApprove) {
               var lifiApproveTxHash = await walletClient.sendTransaction({ to: fromToken.address, data: '0x095ea7b3' + spender.slice(2).padStart(64, '0') + 'f'.repeat(64), value: BigInt(0) });
               var lifiApproveStart = Date.now();
