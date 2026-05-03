@@ -34,6 +34,13 @@ var CHAIN_NAMES = {
 function isSol(t) { return t && t.chain === 'solana'; }
 function isEvm(t) { return t && t.chain === 'evm'; }
 
+function isValidSolMint(str) {
+  return str && str.length >= 32 && str.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(str);
+}
+function isValidEvmAddr(str) {
+  return str && /^0x[0-9a-fA-F]{40}$/.test(str);
+}
+
 function getRoute(from, to) {
   if (!from || !to) return 'jupiter';
   if (isSol(from) && isSol(to)) return 'jupiter';
@@ -108,6 +115,42 @@ function getNativeToken(token) {
     return t.chain === 'evm' && t.chainId === token.chainId && t.address === NATIVE_EVM;
   });
   return native || POPULAR_TOKENS.find(function(t) { return t.address === NATIVE_EVM && t.chainId === 1; });
+}
+
+function normalizeToToken(coin) {
+  if (!coin) return POPULAR_TOKENS[0];
+  var logoURI = coin.logoURI || coin.image || null;
+
+  if (coin.chain === 'evm' || isValidEvmAddr(coin.address)) {
+    return {
+      address: coin.address,
+      chainId: coin.chainId || 1,
+      symbol: coin.symbol || 'TOKEN',
+      name: coin.name || 'Token',
+      decimals: coin.decimals || 18,
+      chain: 'evm',
+      logoURI: logoURI,
+    };
+  }
+
+  var mintCandidate =
+    coin.mint ||
+    (coin.isSolanaToken ? coin.id : null) ||
+    (coin.chain === 'solana' ? coin.id : null) ||
+    '';
+
+  if (isValidSolMint(mintCandidate)) {
+    return {
+      mint: mintCandidate,
+      symbol: coin.symbol || 'TOKEN',
+      name: coin.name || 'Token',
+      decimals: coin.decimals || 6,
+      chain: 'solana',
+      logoURI: logoURI,
+    };
+  }
+
+  return POPULAR_TOKENS[0];
 }
 
 const C = {
@@ -269,391 +312,52 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
 }
 
 export function TradeDrawer({ open, onClose, mode, coin, jupiterTokens, coins, onConnectWallet, isConnected }) {
-  const { publicKey, sendTransaction } = useWallet();
-  const { connection } = useConnection();
-  const { address: evmAddress } = useAccount();
-  const { data: walletClient } = useWalletClient();
+  const coinToken   = useMemo(function() { return normalizeToToken(coin); }, [coin]);
+  const nativeToken = useMemo(function() { return getNativeToken(coinToken); }, [coinToken]);
 
-  var coinToken = useMemo(function() {
-    if (!coin) return POPULAR_TOKENS[0];
-    if (coin.chain === 'evm' || (coin.address && !coin.mint)) {
-      return {
-        address: coin.address || coin.id,
-        chainId: coin.chainId || 1,
-        symbol: coin.symbol || 'TOKEN',
-        name: coin.name || 'Token',
-        decimals: coin.decimals || 18,
-        chain: 'evm',
-        logoURI: coin.image || null,
-      };
-    }
-    var mint = coin.mint || coin.id || '';
-    return {
-      mint: mint,
-      symbol: coin.symbol || 'TOKEN',
-      name: coin.name || 'Token',
-      decimals: coin.decimals || 6,
-      chain: 'solana',
-      logoURI: coin.image || null,
-    };
-  }, [coin]);
-
-  var nativeToken = useMemo(function() { return getNativeToken(coinToken); }, [coinToken]);
-
-  var initFrom = mode === 'buy' ? nativeToken : coinToken;
-  var initTo   = mode === 'buy' ? coinToken   : nativeToken;
-
-  const [fromToken, setFromToken] = useState(initFrom);
-  const [toToken,   setToToken]   = useState(initTo);
-  const [fromAmt,   setFromAmt]   = useState('');
-  const [quote,     setQuote]     = useState(null);
-  const [quoteLoading, setQuoteLoading] = useState(false);
-  const [quoteError,   setQuoteError]   = useState('');
-  const [slip,      setSlip]      = useState(0.5);
-  const [swapStatus, setSwapStatus] = useState('idle');
-  const [swapTx,    setSwapTx]    = useState(null);
-  const [swapError, setSwapError] = useState('');
-  const [fromBalance, setFromBalance] = useState(null);
-  const [toBalance,   setToBalance]   = useState(null);
-  const [customAddress, setCustomAddress] = useState('');
-
-  useEffect(function() {
-    if (!open) return;
-    var from = mode === 'buy' ? nativeToken : coinToken;
-    var to   = mode === 'buy' ? coinToken   : nativeToken;
-    setFromToken(from);
-    setToToken(to);
-    setFromAmt(''); setQuote(null); setQuoteError('');
-    setSwapStatus('idle'); setSwapTx(null); setSwapError('');
-    setCustomAddress('');
-  }, [open, mode, coin]);
-
-  var isEvmFrom       = isEvm(fromToken);
-  var isNativeEvmFrom = isEvmFrom && fromToken.address === NATIVE_EVM;
-  const { data: evmFromBalanceData } = useBalance({
-    address: evmAddress,
-    token:   isEvmFrom && !isNativeEvmFrom ? fromToken.address : undefined,
-    chainId: isEvmFrom ? fromToken.chainId : undefined,
-    query:   { enabled: !!evmAddress && isEvmFrom && open },
-  });
-
-  var route        = getRoute(fromToken, toToken);
-  var isCrossChain = route === 'lifi';
-
-  useEffect(function() {
-    if (!publicKey || !connection || !isSol(fromToken) || !open) { setFromBalance(null); setToBalance(null); return; }
-    (async function() {
-      try {
-        if (fromToken.mint === WSOL_MINT) { setFromBalance((await connection.getBalance(publicKey)) / 1e9); }
-        else if (fromToken.mint) {
-          var a = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: new PublicKey(fromToken.mint) });
-          setFromBalance(a.value.length > 0 ? a.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0);
-        }
-        if (isSol(toToken) && toToken.mint) {
-          if (toToken.mint === WSOL_MINT) { setToBalance((await connection.getBalance(publicKey)) / 1e9); }
-          else {
-            var b = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: new PublicKey(toToken.mint) });
-            setToBalance(b.value.length > 0 ? b.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0);
-          }
-        }
-      } catch(e) {}
-    })();
-  }, [publicKey, connection, fromToken, toToken, open]);
-
-  var fetchQuote = useCallback(async function() {
-    setQuote(null); setQuoteError('');
-    if (!fromAmt || parseFloat(fromAmt) <= 0 || !fromToken || !toToken) return;
-    var fId = (fromToken.mint || fromToken.address || '').toLowerCase();
-    var tId = (toToken.mint   || toToken.address   || '').toLowerCase();
-    if (fId === tId && (isSol(fromToken) === isSol(toToken)) && fromToken.chainId === toToken.chainId) {
-      setQuoteError('Cannot swap a token for itself.'); return;
-    }
-    setQuoteLoading(true);
-    try {
-      if (route === 'jupiter') {
-        var amount = Math.round(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals));
-        var res = await fetch(
-          'https://api.jup.ag/swap/v1/quote?inputMint=' + fromToken.mint +
-          '&outputMint=' + toToken.mint + '&amount=' + amount +
-          '&slippageBps=' + Math.round(slip * 100),
-          { headers: { 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' } }
-        );
-        var data = await res.json();
-        if (data && data.outAmount) {
-          setQuote({ outAmountDisplay: (parseInt(data.outAmount) / Math.pow(10, toToken.decimals)).toFixed(6), priceImpactPct: data.priceImpactPct, quoteResponse: data, engine: 'jupiter' });
-        } else { setQuoteError(data.error || 'No route found'); }
-      } else if (route === '0x') {
-        var sellAmt = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
-        var oxRes = await fetch('/api/0x/swap/allowance-holder/price?' + new URLSearchParams({
-          chainId: fromToken.chainId.toString(), sellToken: fromToken.address.toLowerCase(),
-          buyToken: toToken.address.toLowerCase(), sellAmount: sellAmt,
-          slippageBps: Math.round(slip * 100).toString(),
-        }).toString());
-        var oxData = await oxRes.json();
-        if (oxData && oxData.buyAmount) {
-          setQuote({ outAmountDisplay: (parseInt(oxData.buyAmount) / Math.pow(10, toToken.decimals)).toFixed(6), priceImpactPct: 0, engine: '0x' });
-        } else { setQuoteError('0x: ' + JSON.stringify(oxData)); }
-      } else if (route === 'lifi') {
-        var fromAmtRaw = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
-        var previewFrom = isSol(fromToken) ? (publicKey ? publicKey.toString() : '11111111111111111111111111111111') : (evmAddress || '0x0000000000000000000000000000000000000001');
-        var previewTo   = isSol(toToken)   ? '11111111111111111111111111111111' : '0x0000000000000000000000000000000000000001';
-        var lifiQ = await fetchLifiQuote({ fromToken, toToken, fromAmtRaw, fromAddress: previewFrom, toAddress: previewTo, slip });
-        setQuote({ outAmountDisplay: (parseInt(lifiQ.estimate.toAmount) / Math.pow(10, toToken.decimals)).toFixed(6), priceImpactPct: 0, engine: 'lifi' });
-      }
-    } catch(e) { setQuoteError('Failed to get quote: ' + (e.message || '')); }
-    setQuoteLoading(false);
-  }, [fromAmt, fromToken, toToken, slip, route, evmAddress, publicKey]);
-
-  useEffect(function() { if (!open) return; var t = setTimeout(fetchQuote, 400); return function() { clearTimeout(t); }; }, [fetchQuote, open]);
-
-  var executeSwap = async function() {
-    if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
-    if (!quote) return;
-    setSwapStatus('loading'); setSwapError('');
-    try {
-      if (route === 'jupiter') {
-        if (!publicKey) throw new Error('Connect Solana wallet');
-        var solBal = (await connection.getBalance(publicKey)) / 1e9;
-        if (solBal < 0.005) throw new Error('Need at least 0.005 SOL for fees.');
-        var solCoin   = coins.find(function(c) { return c.id === 'solana'; });
-        var solPrice  = solCoin ? solCoin.current_price : 150;
-        var fromCoinJ = coins.find(function(c) { return c.symbol && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
-        var fromPriceJ = fromCoinJ ? fromCoinJ.current_price : (fromToken.symbol === 'SOL' ? solPrice : 0);
-        if (!fromPriceJ && quote) {
-          var toCoinJ = coins.find(function(c) { return c.symbol && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
-          var toPriceJ = toCoinJ ? toCoinJ.current_price : (['USDC','USDT'].includes(toToken.symbol) ? 1 : 0);
-          if (toPriceJ > 0) fromPriceJ = (parseFloat(quote.outAmountDisplay) * toPriceJ) / parseFloat(fromAmt);
-        }
-        var tradeUsd = parseFloat(fromAmt) * fromPriceJ;
-        var spread = 0;
-        try {
-          var mkt = await (await fetch('https://api.jup.ag/price/v2?ids=' + fromToken.mint + ',' + toToken.mint)).json();
-          var fMkt = mkt.data && mkt.data[fromToken.mint] && parseFloat(mkt.data[fromToken.mint].price);
-          var tMkt = mkt.data && mkt.data[toToken.mint]  && parseFloat(mkt.data[toToken.mint].price);
-          if (fMkt && tMkt) {
-            var expected = (parseFloat(fromAmt) * fMkt) / tMkt;
-            var actual   = parseFloat(quote.outAmountDisplay);
-            if (expected > actual && expected > 0) spread = (expected - actual) / expected;
-          }
-        } catch(e) {}
-        var totalPct    = TOTAL_FEE + spread;
-        var feeLamports = Math.round(Math.max(
-          tradeUsd > 0 ? (tradeUsd * totalPct / solPrice) * LAMPORTS_PER_SOL : parseFloat(fromAmt) * totalPct * LAMPORTS_PER_SOL,
-          50000
-        ));
-        var swapRes  = await fetch('https://api.jup.ag/swap/v1/swap', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' },
-          body: JSON.stringify({ quoteResponse: quote.quoteResponse, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, dynamicComputeUnitLimit: true }),
-        });
-        var swapData = await swapRes.json();
-        if (!swapData || !swapData.swapTransaction) throw new Error(swapData.error || 'Failed to get swap transaction');
-        var jupTx    = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
-        var altAccts = [];
-        if (jupTx.message.addressTableLookups && jupTx.message.addressTableLookups.length) {
-          var altRes = await Promise.all(jupTx.message.addressTableLookups.map(function(l) { return connection.getAddressLookupTable(l.accountKey); }));
-          altAccts = altRes.map(function(r) { return r.value; }).filter(Boolean);
-        }
-        var msg = TransactionMessage.decompile(jupTx.message, { addressLookupTableAccounts: altAccts });
-        msg.instructions.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(SOL_FEE_WALLET), lamports: feeLamports }));
-        var bh    = await connection.getLatestBlockhash('confirmed');
-        msg.recentBlockhash = bh.blockhash;
-        var final = new VersionedTransaction(msg.compileToV0Message(altAccts));
-        var sig   = await sendTransaction(final, connection, { skipPreflight: false, maxRetries: 3 });
-        await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
-        setSwapTx(sig);
-      } else if (route === '0x') {
-        if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
-        var sell0x   = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
-        var isNatTo  = isEvm(toToken) && toToken.address && toToken.address.toLowerCase() === NATIVE_EVM;
-        var feeTok0x = isNatTo ? fromToken.address : toToken.address;
-        var oxQ      = await (await fetch('/api/0x/swap/allowance-holder/quote?' + new URLSearchParams({
-          chainId: fromToken.chainId.toString(), sellToken: fromToken.address.toLowerCase(),
-          buyToken: toToken.address.toLowerCase(), sellAmount: sell0x, taker: evmAddress,
-          swapFeeBps: '500', swapFeeRecipient: EVM_FEE_WALLET, swapFeeToken: feeTok0x.toLowerCase(),
-          slippageBps: Math.round(slip * 100).toString(), tradeSurplusRecipient: EVM_FEE_WALLET,
-        }).toString())).json();
-        if (!oxQ || !oxQ.transaction) throw new Error('0x: ' + JSON.stringify(oxQ));
-        if (oxQ.issues && oxQ.issues.allowance && oxQ.issues.allowance.spender) {
-          await walletClient.sendTransaction({ to: fromToken.address, data: '0x095ea7b3' + oxQ.issues.allowance.spender.slice(2).padStart(64, '0') + 'f'.repeat(64), value: BigInt(0) });
-          await new Promise(function(r) { setTimeout(r, 3000); });
-        }
-        setSwapTx(await walletClient.sendTransaction({ to: oxQ.transaction.to, data: oxQ.transaction.data, value: oxQ.transaction.value ? BigInt(oxQ.transaction.value) : BigInt(0), gas: oxQ.transaction.gas ? BigInt(oxQ.transaction.gas) : undefined }));
-      } else if (route === 'lifi') {
-        var srcAddr = isSol(fromToken) ? (publicKey ? publicKey.toString() : null) : (evmAddress || null);
-        var dstAddr = isSol(toToken) ? (publicKey ? publicKey.toString() : customAddress.trim()) : (evmAddress || customAddress.trim());
-        if (!srcAddr) throw new Error('Connect your ' + (isSol(fromToken) ? 'Solana' : 'EVM') + ' wallet');
-        if (!dstAddr || dstAddr.length < 10) throw new Error('Enter destination wallet address');
-        var lfAmtRaw = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
-        var lifiQ = await fetchLifiQuote({ fromToken, toToken, fromAmtRaw: lfAmtRaw, fromAddress: srcAddr, toAddress: dstAddr, slip });
-        if (!lifiQ.transactionRequest) throw new Error('LiFi: no transaction returned -- try again');
-        var txReq = lifiQ.transactionRequest;
-        if (isSol(fromToken)) {
-          if (!publicKey) throw new Error('Connect Solana wallet');
-          var lifiSolTx = VersionedTransaction.deserialize(Buffer.from(txReq.data, 'base64'));
-          var lifiBh    = await connection.getLatestBlockhash('confirmed');
-          var lifiSig   = await sendTransaction(lifiSolTx, connection, { skipPreflight: false, maxRetries: 3 });
-          await connection.confirmTransaction({ signature: lifiSig, blockhash: lifiBh.blockhash, lastValidBlockHeight: lifiBh.lastValidBlockHeight }, 'confirmed');
-          setSwapTx(lifiSig);
-        } else {
-          if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
-          var isNatSell = fromToken.address.toLowerCase() === NATIVE_EVM;
-          if (!isNatSell) {
-            var spender      = txReq.to;
-            var sellBig      = BigInt(lfAmtRaw);
-            var allowData    = '0xdd62ed3e' + evmAddress.slice(2).padStart(64, '0') + spender.slice(2).padStart(64, '0');
-            var needsApprove = true;
-            try {
-              var allowHex = await walletClient.request({ method: 'eth_call', params: [{ to: fromToken.address, data: allowData }, 'latest'] });
-              needsApprove = BigInt(allowHex || '0x0') < sellBig;
-            } catch(_) {}
-            if (needsApprove) {
-              await walletClient.sendTransaction({ to: fromToken.address, data: '0x095ea7b3' + spender.slice(2).padStart(64, '0') + 'f'.repeat(64), value: BigInt(0) });
-              await new Promise(function(r) { setTimeout(r, 4000); });
-            }
-          }
-          setSwapTx(await walletClient.sendTransaction({ to: txReq.to, data: txReq.data, value: txReq.value ? BigInt(txReq.value) : BigInt(0), gas: txReq.gasLimit ? BigInt(txReq.gasLimit) : undefined }));
-        }
-      }
-      setSwapStatus('success'); setFromAmt(''); setQuote(null);
-      setTimeout(function() { setSwapStatus('idle'); setSwapTx(null); }, 6000);
-    } catch(e) {
-      console.error('Swap error:', e); setSwapError(e.message || 'Swap failed'); setSwapStatus('error');
-      setTimeout(function() { setSwapStatus('idle'); setSwapError(''); }, 4000);
-    }
-  };
-
-  var flipTokens = function() {
-    var tmp = fromToken; setFromToken(toToken); setToToken(tmp);
-    setFromAmt(''); setQuote(null); setFromBalance(null); setToBalance(null); setCustomAddress('');
-  };
-
-  var fromCoin     = coins.find(function(c) { return c.symbol && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
-  var fromPriceVal = fromCoin ? fromCoin.current_price : 0;
-  var toCoin       = coins.find(function(c) { return c.symbol && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
-  var toPriceVal   = toCoin ? toCoin.current_price : 0;
-  if (!fromPriceVal && quote && fromAmt && parseFloat(fromAmt) > 0 && toPriceVal > 0)
-    fromPriceVal = (parseFloat(quote.outAmountDisplay) * toPriceVal) / parseFloat(fromAmt);
-
-  var engineLabel  = route === 'jupiter' ? 'Jupiter' : route === '0x' ? '0x' : 'LiFi';
-  var txLink       = swapTx ? (isSol(fromToken) ? 'https://solscan.io/tx/' + swapTx : (isCrossChain ? 'https://scan.li.fi/tx/' + swapTx : 'https://etherscan.io/tx/' + swapTx)) : null;
-  var needsDstAddr = isCrossChain && ((isSol(toToken) && !publicKey) || (isEvm(toToken) && !evmAddress));
-  var modeLabel    = mode === 'buy' ? 'Buy' : 'Sell';
-  var modeGrad     = mode === 'buy' ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'linear-gradient(135deg,#ff3b6b,#cc1144)';
+  const defaultFromToken = mode === 'buy' ? nativeToken : coinToken;
+  const defaultToToken   = mode === 'buy' ? coinToken   : nativeToken;
 
   if (!open) return null;
 
   return (
-    <div>
+    <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,.8)' }} />
-      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 401, background: C.card, borderTop: '2px solid ' + C.borderHi, borderRadius: '20px 20px 0 0', padding: '20px 20px 40px', boxShadow: '0 -20px 60px rgba(0,0,0,.9)', maxHeight: '92vh', overflowY: 'auto' }}>
-        <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 16px' }} />
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+      <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 401, background: C.card, borderTop: '2px solid ' + C.borderHi, borderRadius: '20px 20px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,.9)', maxHeight: '92vh', overflowY: 'auto' }}>
+        <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '16px auto 0' }} />
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '12px 20px 0' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            {coin && coin.image && <img src={coin.image} alt={coin.symbol} style={{ width: 30, height: 30, borderRadius: '50%' }} />}
-            <div>
-              <div style={{ color: mode === 'buy' ? C.accent : C.red, fontWeight: 800, fontSize: 17 }}>{modeLabel} {coin && coin.symbol && coin.symbol.toUpperCase()}</div>
-              <div style={{ color: C.muted, fontSize: 11, marginTop: 1 }}>via {engineLabel}</div>
+            {coin && coin.image && <img src={coin.image} alt={coin.symbol} style={{ width: 28, height: 28, borderRadius: '50%' }} />}
+            <div style={{ color: mode === 'buy' ? C.accent : C.red, fontWeight: 800, fontSize: 17 }}>
+              {mode === 'buy' ? 'Buy' : 'Sell'} {coin && coin.symbol && coin.symbol.toUpperCase()}
             </div>
           </div>
           <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer', padding: 0 }}>x</button>
         </div>
-
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SLIPPAGE</span>
-          <div style={{ display: 'flex', gap: 4 }}>
-            {[0.1, 0.5, 1.0].map(function(v) {
-              return <button key={v} onClick={function() { setSlip(v); }} style={{ padding: '3px 8px', borderRadius: 6, fontSize: 11, cursor: 'pointer', background: slip === v ? 'rgba(0,229,255,.15)' : 'transparent', border: '1px solid ' + (slip === v ? 'rgba(0,229,255,.4)' : C.border), color: slip === v ? C.accent : C.muted }}>{v}%</button>;
-            })}
-          </div>
+        <div style={{ padding: '8px 20px 40px' }}>
+          <SwapWidget
+            coins={coins}
+            jupiterTokens={jupiterTokens}
+            onConnectWallet={onConnectWallet}
+            isConnected={isConnected}
+            defaultFromToken={defaultFromToken}
+            defaultToToken={defaultToToken}
+            compact={true}
+          />
         </div>
-
-        <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border, marginBottom: 4 }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU PAY</span>
-            {fromBalance != null && isSol(fromToken) && <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{fromBalance >= 1000 ? fromBalance.toLocaleString('en-US', { maximumFractionDigits: 2 }) : fromBalance.toFixed(4)}</span></span>}
-            {evmFromBalanceData && isEvm(fromToken) && <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{parseFloat(evmFromBalanceData.formatted).toFixed(4)}</span></span>}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <TokenSelect jupiterTokens={jupiterTokens} selected={fromToken} onSelect={function(t) { setFromToken(t); setQuote(null); setQuoteError(''); setCustomAddress(''); }} />
-            <input value={fromAmt} onChange={function(e) { setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }} placeholder="0.00" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 500, color: '#fff', textAlign: 'right', outline: 'none', minWidth: 0 }} />
-            {fromBalance != null && fromBalance > 0 && isSol(fromToken) && (
-              <button onClick={function() { var m = fromToken.symbol === 'SOL' ? Math.max(0, fromBalance - TOTAL_FEE - 0.002) : fromBalance; setFromAmt(m > 0 ? m.toFixed(fromToken.decimals <= 2 ? 2 : 6) : '0'); }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '3px 8px', color: C.accent, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>
-            )}
-            {evmFromBalanceData && isEvm(fromToken) && parseFloat(evmFromBalanceData.formatted) > 0 && (
-              <button onClick={function() { var b = parseFloat(evmFromBalanceData.formatted); var m = isNativeEvmFrom ? Math.max(0, b - 0.002) : b; setFromAmt(m > 0 ? m.toFixed(fromToken.decimals <= 2 ? 2 : 6) : '0'); }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '3px 8px', color: C.accent, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>
-            )}
-          </div>
-          {fromAmt && fromPriceVal > 0 && <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(fromAmt) * fromPriceVal)}</div>}
-        </div>
-
-        <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0' }}>
-          <button onClick={flipTokens} style={{ width: 36, height: 36, borderRadius: 10, background: C.card3, border: '1px solid ' + C.border, cursor: 'pointer', color: C.accent, fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>^v</button>
-        </div>
-
-        <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU RECEIVE</span>
-            {toBalance != null && isSol(toToken) && <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{toBalance >= 1000 ? toBalance.toLocaleString('en-US', { maximumFractionDigits: 2 }) : toBalance.toFixed(4)}</span></span>}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <TokenSelect jupiterTokens={jupiterTokens} selected={toToken} onSelect={function(t) { setToToken(t); setQuote(null); setQuoteError(''); setCustomAddress(''); }} />
-            <div style={{ flex: 1, textAlign: 'right', fontSize: 22, fontWeight: 500, minWidth: 0, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>{quoteLoading ? '...' : quote ? quote.outAmountDisplay : '0.00'}</div>
-          </div>
-          {quote && toPriceVal > 0 && <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(quote.outAmountDisplay) * toPriceVal)}</div>}
-        </div>
-
-        {quoteError && <div style={{ marginTop: 8, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.2)', borderRadius: 8, fontSize: 12, color: C.red }}>{quoteError}</div>}
-
-        {quote && fromAmt && (
-          <div style={{ marginTop: 12, background: '#050912', borderRadius: 10, padding: 12 }}>
-            <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
-              {[
-                ['Fee',                 fromPriceVal > 0 ? '$' + (parseFloat(fromAmt) * fromPriceVal * PLATFORM_FEE).toFixed(2) : '3%'],
-                ['Safety and Anti-MEV', fromPriceVal > 0 ? '$' + (parseFloat(fromAmt) * fromPriceVal * SAFETY_FEE).toFixed(2) : '2%'],
-                isCrossChain ? ['Cross-chain fee', fromPriceVal > 0 ? '$' + (parseFloat(fromAmt) * fromPriceVal * CROSS_FEE).toFixed(2) : '3%'] : null,
-                route === 'jupiter' ? ['Price impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'] : null,
-                route === 'jupiter' ? ['Min received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken ? toToken.symbol : '')] : null,
-              ].filter(Boolean).map(function(item) {
-                return <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}><span style={{ color: C.muted }}>{item[0]}</span><span style={{ color: C.text }}>{item[1]}</span></div>;
-              })}
-            </div>
-          </div>
-        )}
-
-        {needsDstAddr && (
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 6 }}>DESTINATION WALLET</div>
-            <input value={customAddress} onChange={function(e) { setCustomAddress(e.target.value); }} placeholder={isSol(toToken) ? 'Your Solana wallet address...' : 'Your ' + (CHAIN_NAMES[toToken && toToken.chainId] || 'EVM') + ' address (0x...)...'} style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 10, padding: '10px 12px', color: C.accent, fontFamily: 'monospace', fontSize: 11, outline: 'none', boxSizing: 'border-box' }} />
-            <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Where you want to receive your tokens</div>
-          </div>
-        )}
-
-        {swapError && <div style={{ marginTop: 10, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 8, fontSize: 12, color: C.red }}>{swapError}</div>}
-
-        {isConnected ? (
-          <button onClick={executeSwap} disabled={swapStatus === 'loading'} style={{ width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none', background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : swapStatus === 'error' ? 'rgba(255,59,107,.2)' : !fromAmt || !quote ? C.card2 : modeGrad, color: !fromAmt || !quote ? C.muted2 : swapStatus === 'error' ? C.red : '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, cursor: swapStatus === 'loading' ? 'not-allowed' : 'pointer', transition: 'all .3s', minHeight: 52 }}>
-            {swapStatus === 'loading' ? 'Confirming...' : swapStatus === 'success' ? modeLabel + ' Confirmed!' : swapStatus === 'error' ? 'Failed -- Try Again' : !fromAmt ? 'Enter Amount' : quoteLoading ? 'Getting Best Route...' : !quote ? 'No Route Found' : modeLabel + ' ' + (toToken ? toToken.symbol : '')}
-          </button>
-        ) : (
-          <button onClick={onConnectWallet} style={{ width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#9945ff,#7c3aed)', color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52 }}>Connect Wallet to Trade</button>
-        )}
-
-        {swapTx && swapStatus === 'success' && txLink && <a href={txLink} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 10, fontSize: 12, color: C.accent }}>View Transaction</a>}
-        <p style={{ textAlign: 'center', fontSize: 10, color: C.muted2, marginTop: 10 }}>Non-custodial - No KYC - Fees paid by user</p>
       </div>
-    </div>
+    </>
   );
 }
 
-export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoToToken, onConnectWallet, isConnected, isSolanaConnected, walletAddress }) {
+export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoToToken, onConnectWallet, isConnected, isSolanaConnected, walletAddress, defaultFromToken, defaultToToken, compact }) {
   const { publicKey, sendTransaction } = useWallet();
   const { connection } = useConnection();
   const { address: evmAddress } = useAccount();
   const { data: walletClient } = useWalletClient();
 
-  const [fromToken, setFromToken] = useState(POPULAR_TOKENS[0]);
-  const [toToken,   setToToken]   = useState(POPULAR_TOKENS[1]);
+  const [fromToken, setFromToken] = useState(defaultFromToken || POPULAR_TOKENS[0]);
+  const [toToken,   setToToken]   = useState(defaultToToken   || POPULAR_TOKENS[1]);
   const [fromAmt,   setFromAmt]   = useState('');
   const [quote,     setQuote]     = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
@@ -665,6 +369,14 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   const [fromBalance, setFromBalance] = useState(null);
   const [toBalance,   setToBalance]   = useState(null);
   const [customAddress, setCustomAddress] = useState('');
+
+  useEffect(function() {
+    if (defaultFromToken) setFromToken(defaultFromToken);
+    if (defaultToToken)   setToToken(defaultToToken);
+    setFromAmt(''); setQuote(null); setQuoteError('');
+    setSwapStatus('idle'); setSwapTx(null); setSwapError('');
+    setCustomAddress('');
+  }, [defaultFromToken, defaultToToken]);
 
   var isEvmFrom       = isEvm(fromToken);
   var isNativeEvmFrom = isEvmFrom && fromToken.address === NATIVE_EVM;
@@ -878,12 +590,14 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   var needsDstAddr = isCrossChain && ((isSol(toToken) && !publicKey) || (isEvm(toToken) && !evmAddress));
 
   return (
-    <div style={{ width: '100%', maxWidth: 520, margin: '0 auto', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
-      <div style={{ marginBottom: 16 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Swap Tokens</h1>
-        <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Powered by {engineLabel}{isCrossChain ? ' - Cross-chain' : ''} - Instant swaps - No account needed</p>
-      </div>
-      <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 18, padding: 18 }}>
+    <div style={{ width: '100%', maxWidth: compact ? '100%' : 520, margin: '0 auto', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
+      {!compact && (
+        <div style={{ marginBottom: 16 }}>
+          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Swap Tokens</h1>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Powered by {engineLabel}{isCrossChain ? ' - Cross-chain' : ''} - Instant swaps - No account needed</p>
+        </div>
+      )}
+      <div style={{ background: compact ? 'transparent' : C.card, border: compact ? 'none' : '1px solid ' + C.border, borderRadius: compact ? 0 : 18, padding: compact ? 0 : 18 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SLIPPAGE</span>
           <div style={{ display: 'flex', gap: 4 }}>
