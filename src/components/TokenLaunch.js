@@ -78,20 +78,18 @@ async function uploadImage(file) {
   return '';
 }
 
-// FIX 2: Fetch active launchpad config from the chain instead of hardcoding
-// indexes (0,0) which may not correspond to a live config account.
 async function getActiveLaunchpadConfig(raydium) {
   try {
-    const allConfigs = await raydium.launchpad.getConfigs({ programId: LAUNCHPAD_PROGRAM });
-    const nativeMintStr = NATIVE_MINT.toBase58();
-    const active = allConfigs.find(function(c) {
+    var allConfigs = await raydium.launchpad.getConfigs({ programId: LAUNCHPAD_PROGRAM });
+    var nativeMintStr = NATIVE_MINT.toBase58();
+    var active = allConfigs.find(function(c) {
       return c.status === 1 && c.mintB && c.mintB.toBase58() === nativeMintStr;
     });
     if (active) return active.configId || active.id;
   } catch (e) {
     console.warn('Could not fetch launchpad configs dynamically:', e);
   }
-  const { getPdaLaunchpadConfigId } = await import('@raydium-io/raydium-sdk-v2');
+  var getPdaLaunchpadConfigId = (await import('@raydium-io/raydium-sdk-v2')).getPdaLaunchpadConfigId;
   return getPdaLaunchpadConfigId(LAUNCHPAD_PROGRAM, NATIVE_MINT, 0, 0).publicKey;
 }
 
@@ -186,7 +184,9 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
         launchParams.platformId = new PublicKey(PLATFORM_ID);
       }
 
-      var { execute, extInfo } = await raydium.launchpad.createLaunchpad(launchParams);
+      var result = await raydium.launchpad.createLaunchpad(launchParams);
+      var execute = result.execute;
+      var extInfo = result.extInfo;
 
       setStatus('Please confirm in your wallet...');
 
