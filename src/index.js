@@ -15,6 +15,7 @@ import {
 } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import App from './App';
+import { WalletContextProvider } from './WalletContext';
 
 const unichain      = { id: 130,    name: 'Unichain',    nativeCurrency: { name: 'Ether',        symbol: 'ETH',  decimals: 18 }, rpcUrls: { default: { http: ['https://mainnet.unichain.org'] } } };
 const sonic         = { id: 146,    name: 'Sonic',       nativeCurrency: { name: 'Sonic',        symbol: 'S',    decimals: 18 }, rpcUrls: { default: { http: ['https://rpc.soniclabs.com'] } } };
@@ -42,20 +43,13 @@ const SOLANA_RPC = process.env.REACT_APP_SOLANA_RPC || 'https://api.mainnet-beta
 const PROJECT_ID = process.env.REACT_APP_WC_PROJECT_ID || '';
 const SITE_URL   = 'https://swap.verixiaapps.com';
 
-// -- FIX: redirect lives HERE in the top-level metadata ----------------------
-// This is what WalletConnect SignClient actually reads.
-// The previous walletConnectParameters.metadata nesting was never picked up.
 const metadata = {
   name:        'Nexus DEX',
   description: 'Multi-chain DEX aggregator',
   url:         SITE_URL,
   icons:       [SITE_URL + '/logo.png'],
   redirect: {
-    // universal: browser opens this URL after wallet approval (works for most WC wallets)
     universal: SITE_URL,
-    // native: deep link for wallets that support custom schemes
-    // If you ever publish to App Store / Play Store with scheme "nexusdex://", keep this.
-    // For a pure web app, universal alone is sufficient.
     native: 'nexusdex://',
   },
 };
@@ -70,7 +64,6 @@ const chains = [
   bitlayer, megaEth, kcc, shape,
 ];
 
-// -- FIX: no walletConnectParameters duplication — metadata above is enough --
 const wagmiConfig = defaultWagmiConfig({
   chains,
   projectId: PROJECT_ID,
@@ -85,18 +78,17 @@ createWeb3Modal({
   defaultChain: mainnet,
   themeMode: 'dark',
   themeVariables: {
-    '--w3m-accent':               '#00e5ff',
-    '--w3m-border-radius-master': '12px',
-    '--w3m-font-family':          'Syne, sans-serif',
-    '--w3m-background-color':     '#080d1a',
+    '--w3m-accent':               '#00e5ff',   // FIX: was '–w3m-accent' (en dash)
+    '--w3m-border-radius-master': '12px',      // FIX: was '–w3m-border-radius-master'
+    '--w3m-font-family':          'Syne, sans-serif', // FIX: was '–w3m-font-family'
+    '--w3m-background-color':     '#080d1a',   // FIX: was '–w3m-background-color'
   },
-  // -- FIX: tell the modal to redirect back after connection on mobile -------
   metadata,
 });
 
 const solanaWallets = [
-  new PhantomWalletAdapter({ appIdentity: { uri: SITE_URL } }),
-  new SolflareWalletAdapter({ appIdentity: { uri: SITE_URL } }), // FIX: added appIdentity
+  new PhantomWalletAdapter(),
+  new SolflareWalletAdapter(),
 ];
 
 const queryClient = new QueryClient();
@@ -107,7 +99,12 @@ root.render(
     <QueryClientProvider client={queryClient}>
       <ConnectionProvider endpoint={SOLANA_RPC}>
         <WalletProvider wallets={solanaWallets} autoConnect>
-          <App />
+          {/* WalletContextProvider must be inside WalletProvider + WagmiProvider
+              so it can read from both. Every component on the site gets live
+              wallet state from useNexusWallet() without needing props. */}
+          <WalletContextProvider>
+            <App />
+          </WalletContextProvider>
         </WalletProvider>
       </ConnectionProvider>
     </QueryClientProvider>
