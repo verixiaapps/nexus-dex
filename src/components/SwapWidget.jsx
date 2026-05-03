@@ -1,28 +1,36 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useAccount, useWalletClient, useBalance } from 'wagmi';
 import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
- 
+
 const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const EVM_FEE_WALLET = '0xC41c1de4250104dC1EE2854ffD5b40a04B9AC9fF';
 const PLATFORM_FEE = 0.03;
 const SAFETY_FEE = 0.02;
 const TOTAL_FEE = PLATFORM_FEE + SAFETY_FEE;
-// FIX 1: lowercase -- 0x API v2 rejects mixed-case checksummed addresses
 var NATIVE = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+
+// Chains 0x Swap API actually supports — same-chain swaps only
+// FIX: Monad mainnet is 143, not 10143 (testnet). Added HyperEVM/Plasma/Tempo.
+var OX_CHAIN_IDS = new Set([
+  1, 2741, 42161, 43114, 8453, 80094, 81457, 56,
+  999, 57073, 59144, 5000, 34443, 143, 10, 9745,
+  137, 534352, 146, 4217, 130, 480,
+]);
 
 var CHAIN_NAMES = {
   1: 'Ethereum', 137: 'Polygon', 42161: 'Arbitrum', 8453: 'Base', 56: 'BNB Chain',
   43114: 'Avalanche', 10: 'Optimism', 100: 'Gnosis', 324: 'zkSync Era', 59144: 'Linea',
   534352: 'Scroll', 5000: 'Mantle', 81457: 'Blast', 34443: 'Mode', 130: 'Unichain',
-  146: 'Sonic', 80094: 'Berachain', 57073: 'Ink', 10143: 'Monad', 480: 'World Chain',
+  146: 'Sonic', 80094: 'Berachain', 57073: 'Ink', 143: 'Monad', 480: 'World Chain',
   1101: 'Polygon zkEVM', 250: 'Fantom', 25: 'Cronos', 1284: 'Moonbeam', 42220: 'Celo',
   1313161554: 'Aurora', 2222: 'Kava', 1088: 'Metis', 288: 'Boba', 167000: 'Taiko',
   1329: 'SEI', 2741: 'Abstract', 33139: 'ApeChain', 60808: 'BOB', 7777777: 'Zora',
   2020: 'Ronin', 122: 'Fuse', 1135: 'Lisk', 48900: 'Zircuit', 747: 'Flow',
   43111: 'Hemi', 1116: 'Core', 8217: 'Klaytn', 252: 'Fraxtal', 255: 'Kroma',
   200901: 'Bitlayer', 6342: 'MegaETH', 321: 'KCC', 360: 'Shape',
+  999: 'HyperEVM', 9745: 'Plasma', 4217: 'Tempo',
 };
 
 const POPULAR_TOKENS = [
@@ -36,7 +44,6 @@ const POPULAR_TOKENS = [
   { mint: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3', symbol: 'PYTH', name: 'Pyth', decimals: 6, chain: 'solana', logoURI: 'https://pyth.network/token.svg' },
   { mint: 'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE', symbol: 'ORCA', name: 'Orca', decimals: 6, chain: 'solana', logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE/logo.png' },
   { mint: '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs', symbol: 'WETH', name: 'Wrapped Ether', decimals: 8, chain: 'solana', logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs/logo.png' },
-  // Popular EVM tokens
   { address: NATIVE, chainId: 1, symbol: 'ETH', name: 'Ethereum', decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
   { address: NATIVE, chainId: 8453, symbol: 'ETH', name: 'ETH (Base)', decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
   { address: NATIVE, chainId: 42161, symbol: 'ETH', name: 'ETH (Arbitrum)', decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
@@ -53,11 +60,26 @@ const POPULAR_TOKENS = [
 
 function isSol(t) { return t && t.chain === 'solana'; }
 function isEvm(t) { return t && t.chain === 'evm'; }
+
 function getRoute(from, to) {
   if (!from || !to) return 'jupiter';
   if (isSol(from) && isSol(to)) return 'jupiter';
-  if (isEvm(from) && isEvm(to) && from.chainId === to.chainId) return '0x';
+  // FIX: only use 0x for same-chain EVM on chains 0x actually supports — all else goes to LiFi
+  if (isEvm(from) && isEvm(to) && from.chainId === to.chainId && OX_CHAIN_IDS.has(from.chainId)) return '0x';
   return 'lifi';
+}
+
+// Module-level LiFi token cache — fetched once, reused across all keystrokes
+var _lifiTokenCache = null;
+var _lifiTokenFetch = null;
+function getLifiTokens() {
+  if (_lifiTokenCache) return Promise.resolve(_lifiTokenCache);
+  if (_lifiTokenFetch) return _lifiTokenFetch;
+  _lifiTokenFetch = fetch('https://li.quest/v1/tokens?chainTypes=EVM')
+    .then(function(r) { return r.json(); })
+    .then(function(data) { _lifiTokenCache = data; return data; })
+    .catch(function() { return null; });
+  return _lifiTokenFetch;
 }
 
 const C = {
@@ -69,7 +91,7 @@ const C = {
 
 function fmt(n, d) {
   d = d || 2;
-  if (n == null) return '--';
+  if (n == null) return '-';
   if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
   if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
@@ -92,14 +114,17 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
   const [contractLoading, setContractLoading] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
 
-  var solTokens = jupiterTokens && jupiterTokens.length > 0
-    ? jupiterTokens.map(function(t) { return Object.assign({}, t, { chain: 'solana' }); })
-    : POPULAR_TOKENS.filter(function(t) { return t.chain === 'solana'; });
+  // FIX: memoize solTokens — was computed inline every render, producing a new array reference
+  // each time, which caused the useEffect below to fire endlessly (infinite re-render loop)
+  var solTokens = useMemo(function() {
+    return jupiterTokens && jupiterTokens.length > 0
+      ? jupiterTokens.map(function(t) { return Object.assign({}, t, { chain: 'solana' }); })
+      : POPULAR_TOKENS.filter(function(t) { return t.chain === 'solana'; });
+  }, [jupiterTokens]);
 
   var isValidSolAddress = function(str) {
     return str && str.length >= 32 && str.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(str);
   };
-
   var isValidEvmAddress = function(str) {
     return str && /^0x[0-9a-fA-F]{40}$/.test(str);
   };
@@ -132,13 +157,11 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
   useEffect(function() {
     if (!q || q.length < 1) { setSearchResults([]); return; }
     var ql = q.toLowerCase();
-
     var sm = solTokens.filter(function(t) {
       return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
              (t.name && t.name.toLowerCase().includes(ql)) ||
              (t.mint && t.mint.toLowerCase().includes(ql));
     }).slice(0, 50);
-
     var em = POPULAR_TOKENS.filter(function(t) {
       if (t.chain !== 'evm') return false;
       var chainName = CHAIN_NAMES[t.chainId] || '';
@@ -146,16 +169,13 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
              (t.name && t.name.toLowerCase().includes(ql)) ||
              chainName.toLowerCase().includes(ql);
     }).slice(0, 20);
-
     setSearchResults(sm.concat(em));
-
-    var searchEvm = async function() {
-      try {
-        var lifiRes = await fetch('https://li.quest/v1/tokens?chainTypes=EVM');
-        var lifiData = await lifiRes.json();
-        if (!lifiData.tokens) return;
+    // FIX: use module-level cache — was fetching ALL LiFi tokens on every keystroke (2+ chars)
+    if (q.length >= 2) {
+      getLifiTokens().then(function(lifiData) {
+        if (!lifiData || !lifiData.tokens) return;
         var evmResults = [];
-        var seen = new Set(em.map(function(t) { return t.address + '-' + t.chainId; }));
+        var seen = new Set(em.map(function(t) { return t.address.toLowerCase() + '-' + t.chainId; }));
         Object.values(lifiData.tokens).forEach(function(chainTokens) {
           chainTokens.forEach(function(t) {
             if (!t.symbol || !t.address || !t.chainId) return;
@@ -168,9 +188,8 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
           });
         });
         setSearchResults(sm.concat(em).concat(evmResults.slice(0, 100)));
-      } catch (e) {}
-    };
-    if (q.length >= 2) searchEvm();
+      });
+    }
   }, [q, solTokens]);
 
   var displayTokens = q ? searchResults : POPULAR_TOKENS;
@@ -184,7 +203,6 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
         <span style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{selected ? selected.symbol : 'Select'}</span>
         <span style={{ color: C.muted, fontSize: 9 }}>v</span>
       </button>
-
       {open && (
         <>
           <div onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 299, background: 'rgba(0,0,0,.75)' }} />
@@ -255,7 +273,6 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   const [lifiRoute, setLifiRoute] = useState(null);
   const [customAddress, setCustomAddress] = useState('');
 
-  // EVM balance for MAX button on sells -- native token uses undefined tokenAddress
   var isEvmFrom = isEvm(fromToken);
   var isNativeEvmFrom = isEvmFrom && fromToken.address === NATIVE;
   const { data: evmFromBalanceData } = useBalance({
@@ -266,13 +283,13 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   });
 
   var route = getRoute(fromToken, toToken);
-  // FIX 2: totalFee correctly includes lifi cross-chain fee
   var totalFee = route === 'lifi' ? PLATFORM_FEE + SAFETY_FEE + 0.04 : TOTAL_FEE;
 
+  // FIX: removed customAddress from deps — it only matters at execution time, not quote time.
+  // Having it here triggered a fresh quote API call on every character typed in the destination field.
   var fetchQuote = useCallback(async function() {
     setQuote(null); setQuoteError('');
     if (!fromAmt || parseFloat(fromAmt) <= 0 || !fromToken || !toToken) return;
-    if (!route) { setQuoteError('Cross-chain swaps not supported. Use same-chain tokens.'); return; }
     var fromId = fromToken.mint || fromToken.address;
     var toId = toToken.mint || toToken.address;
     if (fromId && toId && fromId.toLowerCase() === toId.toLowerCase() && (fromToken.chainId === toToken.chainId || (isSol(fromToken) && isSol(toToken)))) {
@@ -293,7 +310,6 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
 
       } else if (route === '0x') {
         var sellAmt = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
-        // FIX 3: lowercase addresses -- 0x API v2 rejects mixed-case; tradeSurplusRecipient omitted (price call only)
         var oxParams = new URLSearchParams({
           chainId: fromToken.chainId.toString(),
           sellToken: fromToken.address.toLowerCase(),
@@ -308,21 +324,25 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         } else { setQuoteError('0x price error: ' + JSON.stringify(oxData)); }
 
       } else if (route === 'lifi') {
-        var fromAddr = isSol(fromToken) ? (publicKey ? publicKey.toString() : '') : (evmAddress || '');
         var fromChainId = isSol(fromToken) ? 'SOL' : fromToken.chainId.toString();
         var toChainId = isSol(toToken) ? 'SOL' : toToken.chainId.toString();
         var fromTokenAddr = isSol(fromToken) ? fromToken.mint : fromToken.address;
         var toTokenAddr = isSol(toToken) ? toToken.mint : toToken.address;
         var fromAmtRaw = (parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toFixed(0);
-        var toAddr = isSol(toToken) ? (publicKey ? publicKey.toString() : customAddress) : (evmAddress || customAddress);
+        // Use placeholder addresses for preview quote — real wallet addresses used at execution time
+        var previewFrom = isSol(fromToken)
+          ? (publicKey ? publicKey.toString() : '11111111111111111111111111111111')
+          : (evmAddress || '0x0000000000000000000000000000000000000001');
+        var previewTo = isSol(toToken)
+          ? '11111111111111111111111111111111'
+          : '0x0000000000000000000000000000000000000001';
         var lifiQParams = new URLSearchParams({
           fromChain: fromChainId, toChain: toChainId,
           fromToken: fromTokenAddr, toToken: toTokenAddr,
           fromAmount: fromAmtRaw, slippage: (slip / 100).toString(),
           fee: '0.09', integrator: 'nexus-dex',
+          fromAddress: previewFrom, toAddress: previewTo,
         });
-        lifiQParams.set('fromAddress', (fromAddr && fromAddr.length > 10) ? fromAddr : (isSol(fromToken) ? '11111111111111111111111111111111' : '0x0000000000000000000000000000000000000001'));
-        lifiQParams.set('toAddress', (toAddr && toAddr.length > 10) ? toAddr : (isSol(toToken) ? '11111111111111111111111111111111' : '0x0000000000000000000000000000000000000001'));
         var lifiRes = await fetch('https://li.quest/v1/quote?' + lifiQParams.toString());
         var lifiQuote = await lifiRes.json();
         if (!lifiRes.ok) throw new Error('LI.FI error: ' + JSON.stringify(lifiQuote));
@@ -334,7 +354,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       }
     } catch (e) { setQuoteError('Failed to get quote: ' + (e.message || '')); }
     setQuoteLoading(false);
-  }, [fromAmt, fromToken, toToken, slip, route, evmAddress, publicKey, customAddress]);
+  }, [fromAmt, fromToken, toToken, slip, route, evmAddress, publicKey]);
 
   useEffect(function() { var t = setTimeout(fetchQuote, 300); return function() { clearTimeout(t); }; }, [fetchQuote]);
 
@@ -366,7 +386,6 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   var executeSwap = async function() {
     if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
     if (!quote) return;
-    if (!route) { setSwapError('Cross-chain swaps not supported.'); return; }
     setSwapStatus('loading'); setSwapError('');
     try {
       if (route === 'jupiter') {
@@ -374,13 +393,13 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         var _solBal = (await connection.getBalance(publicKey)) / 1e9;
         if (_solBal < 0.005) throw new Error('Need at least 0.005 SOL for fees and gas.');
 
-        var fromCoin = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
+        var fromCoinExec = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
         var solCoin = coins.find(function(c) { return c.id === 'solana' || (c.symbol && c.symbol.toLowerCase() === 'sol'); });
         var solPrice = solCoin ? solCoin.current_price : 150;
-        var fromPriceUsd = fromCoin ? fromCoin.current_price : (fromToken.symbol === 'SOL' ? solPrice : 0);
+        var fromPriceUsd = fromCoinExec ? fromCoinExec.current_price : (fromToken.symbol === 'SOL' ? solPrice : 0);
         if (!fromPriceUsd && quote) {
-          var toCoin = coins.find(function(c) { return c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
-          var toPriceUsd = toCoin ? toCoin.current_price : ((toToken.symbol === 'USDC' || toToken.symbol === 'USDT') ? 1 : 0);
+          var toCoinExec = coins.find(function(c) { return c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
+          var toPriceUsd = toCoinExec ? toCoinExec.current_price : ((toToken.symbol === 'USDC' || toToken.symbol === 'USDT') ? 1 : 0);
           if (toPriceUsd > 0) fromPriceUsd = (parseFloat(quote.outAmountDisplay) * toPriceUsd) / parseFloat(fromAmt);
         }
         var tradeUsd = parseFloat(fromAmt) * fromPriceUsd;
@@ -394,9 +413,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           if (fromMktPrice && toMktPrice && parseFloat(fromAmt) > 0) {
             var expectedOut = (parseFloat(fromAmt) * fromMktPrice) / toMktPrice;
             var actualOut = parseFloat(quote.outAmountDisplay);
-            if (expectedOut > actualOut && expectedOut > 0) {
-              dynamicSpread = (expectedOut - actualOut) / expectedOut;
-            }
+            if (expectedOut > actualOut && expectedOut > 0) dynamicSpread = (expectedOut - actualOut) / expectedOut;
           }
         } catch (e) {}
 
@@ -425,8 +442,9 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         var bh = await connection.getLatestBlockhash('confirmed');
         decompiledMsg.recentBlockhash = bh.blockhash;
         var finalTx = new VersionedTransaction(decompiledMsg.compileToV0Message(altAccounts));
-        var accountKeys = finalTx.message.staticAccountKeys || [];
-        if (!accountKeys.some(function(k) { return k.toString() === SOL_FEE_WALLET; })) throw new Error('Fee instruction missing from transaction');
+        // FIX: removed strict staticAccountKeys fee wallet check — on complex Jupiter routes
+        // the fee wallet can end up in an Address Lookup Table, not staticAccountKeys, causing
+        // valid txs to be falsely rejected. We added the instruction ourselves so it's always there.
         var sig = await sendTransaction(finalTx, connection, { skipPreflight: false, maxRetries: 3 });
         await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
         setSwapTx(sig);
@@ -434,8 +452,9 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       } else if (route === '0x') {
         if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
         var sellAmt2 = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
-        // FIX 4: lowercase all addresses; case-insensitive NATIVE check for swapFeeToken
-        var feeToken = toToken.address.toLowerCase() === NATIVE ? fromToken.address : toToken.address;
+        // FIX: guard .address access — toToken could theoretically be Solana token (no .address)
+        var isNativeToToken = isEvm(toToken) && toToken.address && toToken.address.toLowerCase() === NATIVE;
+        var feeToken = isNativeToToken ? fromToken.address : (isEvm(toToken) ? toToken.address : fromToken.address);
         var oxExecParams = new URLSearchParams({
           chainId: fromToken.chainId.toString(),
           sellToken: fromToken.address.toLowerCase(),
@@ -452,29 +471,101 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         var oxQuote = await oxQuoteRes.json();
         if (!oxQuote || !oxQuote.transaction) throw new Error('0x: ' + JSON.stringify(oxQuote));
         if (oxQuote.issues && oxQuote.issues.allowance && oxQuote.issues.allowance.spender) {
-          var spender = oxQuote.issues.allowance.spender;
-          var approvalData = '0x095ea7b3' + spender.slice(2).padStart(64, '0') + 'f'.repeat(64);
-          await walletClient.sendTransaction({ to: fromToken.address, data: approvalData, value: BigInt(0) });
+          var spender0x = oxQuote.issues.allowance.spender;
+          var approvalData0x = '0x095ea7b3' + spender0x.slice(2).padStart(64, '0') + 'f'.repeat(64);
+          await walletClient.sendTransaction({ to: fromToken.address, data: approvalData0x, value: BigInt(0) });
           await new Promise(function(r) { setTimeout(r, 3000); });
         }
-        var tx = oxQuote.transaction;
-        var txHash = await walletClient.sendTransaction({ to: tx.to, data: tx.data, value: tx.value ? BigInt(tx.value) : BigInt(0), gas: tx.gas ? BigInt(tx.gas) : undefined });
-        setSwapTx(txHash);
+        var tx0x = oxQuote.transaction;
+        // FIX: wagmi sendTransaction uses `gas` not `gasLimit`
+        var txHash0x = await walletClient.sendTransaction({
+          to: tx0x.to, data: tx0x.data,
+          value: tx0x.value ? BigInt(tx0x.value) : BigInt(0),
+          gas: tx0x.gas ? BigInt(tx0x.gas) : undefined,
+        });
+        setSwapTx(txHash0x);
 
       } else if (route === 'lifi') {
-        if (!lifiRoute) throw new Error('No cross-chain route available');
-        var destAddr = isSol(toToken) ? (publicKey ? publicKey.toString() : customAddress) : (evmAddress || customAddress);
-        if (!destAddr || destAddr.length < 10) throw new Error('Please enter your ' + (isSol(toToken) ? 'Solana' : CHAIN_NAMES[toToken && toToken.chainId] || 'EVM') + ' destination wallet address');
-        var lifiStep = lifiRoute.transactionRequest;
-        if (!lifiStep) throw new Error('No transaction data in route');
+        var srcAddr = isSol(fromToken)
+          ? (publicKey ? publicKey.toString() : null)
+          : (evmAddress || null);
+        var dstAddr = isSol(toToken)
+          ? (publicKey ? publicKey.toString() : customAddress.trim())
+          : (evmAddress || customAddress.trim());
+
+        if (!srcAddr) throw new Error('Connect your ' + (isSol(fromToken) ? 'Solana' : 'EVM') + ' wallet');
+        if (!dstAddr || dstAddr.length < 10) throw new Error('Enter your ' + (isSol(toToken) ? 'Solana' : (CHAIN_NAMES[toToken && toToken.chainId] || 'EVM')) + ' destination wallet address');
+
+        // FIX: always re-fetch a fresh quote at execution time — the stored quote from state
+        // expires in ~30s and using it causes LiFi to reject the transaction
+        var execFromChain = isSol(fromToken) ? 'SOL' : fromToken.chainId.toString();
+        var execToChain = isSol(toToken) ? 'SOL' : toToken.chainId.toString();
+        var execFromToken = isSol(fromToken) ? fromToken.mint : fromToken.address;
+        var execToToken = isSol(toToken) ? toToken.mint : toToken.address;
+        var execFromAmt = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
+        var freshParams = new URLSearchParams({
+          fromChain: execFromChain, toChain: execToChain,
+          fromToken: execFromToken, toToken: execToToken,
+          fromAmount: execFromAmt,
+          fromAddress: srcAddr, toAddress: dstAddr,
+          slippage: (slip / 100).toString(),
+          fee: '0.09', integrator: 'nexus-dex',
+        });
+        var freshRes = await fetch('https://li.quest/v1/quote?' + freshParams.toString());
+        var freshRoute = await freshRes.json();
+        if (!freshRes.ok || !freshRoute.transactionRequest) {
+          throw new Error(freshRoute.message || 'LI.FI could not find a route -- try adjusting amount or slippage');
+        }
+        var txReq = freshRoute.transactionRequest;
+
         if (isSol(fromToken)) {
           if (!publicKey) throw new Error('Connect Solana wallet');
-          var lifiTx = VersionedTransaction.deserialize(Buffer.from(lifiStep.data.replace('0x', ''), 'hex'));
+          // FIX: LiFi Solana transactions are base64-encoded — original code used hex decoding
+          // which produced garbage bytes and broke every single SOL cross-chain swap silently
+          var lifiTxBytes = Buffer.from(txReq.data, 'base64');
+          var lifiTx = VersionedTransaction.deserialize(lifiTxBytes);
+          var lifiBh = await connection.getLatestBlockhash('confirmed');
           var lifiSig = await sendTransaction(lifiTx, connection, { skipPreflight: false, maxRetries: 3 });
+          await connection.confirmTransaction({ signature: lifiSig, blockhash: lifiBh.blockhash, lastValidBlockHeight: lifiBh.lastValidBlockHeight }, 'confirmed');
           setSwapTx(lifiSig);
+
         } else {
           if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
-          var lifiTxHash = await walletClient.sendTransaction({ to: lifiStep.to, data: lifiStep.data, value: lifiStep.value ? BigInt(lifiStep.value) : BigInt(0), gasLimit: lifiStep.gasLimit ? BigInt(lifiStep.gasLimit) : undefined });
+          var isNativeSell = fromToken.address.toLowerCase() === NATIVE;
+
+          // FIX: check allowance before approving — skip if already sufficient.
+          // Original code blindly sent approval every time, wasting a tx and gas for the user.
+          if (!isNativeSell) {
+            var lifiSpender = txReq.to;
+            var sellAmtBig = BigInt(execFromAmt);
+            // allowance(address owner, address spender) selector = 0xdd62ed3e
+            var allowanceCalldata = '0xdd62ed3e'
+              + evmAddress.slice(2).padStart(64, '0')
+              + lifiSpender.slice(2).padStart(64, '0');
+            var needsApproval = true;
+            try {
+              var allowanceHex = await walletClient.request({
+                method: 'eth_call',
+                params: [{ to: fromToken.address, data: allowanceCalldata }, 'latest'],
+              });
+              needsApproval = BigInt(allowanceHex || '0x0') < sellAmtBig;
+            } catch (_) {}
+            if (needsApproval) {
+              // approve(address spender, uint256 amount) selector = 0x095ea7b3, max uint256
+              var approveCalldata = '0x095ea7b3'
+                + lifiSpender.slice(2).padStart(64, '0')
+                + 'f'.repeat(64);
+              await walletClient.sendTransaction({ to: fromToken.address, data: approveCalldata, value: BigInt(0) });
+              await new Promise(function(r) { setTimeout(r, 4000); });
+            }
+          }
+
+          // FIX: wagmi sendTransaction uses `gas` not `gasLimit`
+          var lifiTxHash = await walletClient.sendTransaction({
+            to: txReq.to, data: txReq.data,
+            value: txReq.value ? BigInt(txReq.value) : BigInt(0),
+            gas: txReq.gasLimit ? BigInt(txReq.gasLimit) : undefined,
+          });
           setSwapTx(lifiTxHash);
         }
       }
@@ -487,7 +578,13 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     }
   };
 
-  var flipTokens = function() { var tmp = fromToken; setFromToken(toToken); setToToken(tmp); setFromAmt(''); setQuote(null); setLifiRoute(null); };
+  // FIX: reset balances on flip — stale values were shown until the balance useEffect re-ran
+  var flipTokens = function() {
+    var tmp = fromToken;
+    setFromToken(toToken); setToToken(tmp);
+    setFromAmt(''); setQuote(null); setLifiRoute(null);
+    setFromBalance(null); setToBalance(null);
+  };
 
   var fromCoin = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
   var fromPriceVal = fromCoin ? fromCoin.current_price : 0;
@@ -500,10 +597,17 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
       fromPriceVal = outVal / parseFloat(fromAmt);
     }
   }
-  // FIX 5: use totalFee (not hardcoded TOTAL_FEE) so lifi routes show correct 9% total
   var feeUsd = fromAmt && fromPriceVal ? (parseFloat(fromAmt) * fromPriceVal * totalFee).toFixed(2) : '0.00';
-  var engineLabel = route === 'jupiter' ? 'Jupiter' : route === '0x' ? '0x' : route === 'lifi' ? 'LI.FI' : 'Nexus';
-  var txLink = swapTx ? (route === 'jupiter' ? 'https://solscan.io/tx/' + swapTx : route === 'lifi' ? 'https://scan.li.fi/tx/' + swapTx : 'https://etherscan.io/tx/' + swapTx) : null;
+  var engineLabel = route === 'jupiter' ? 'Jupiter' : route === '0x' ? '0x' : 'LI.FI';
+
+  // FIX: LiFi Solana-source txs belong on solscan, EVM-source go to scan.li.fi (which tracks cross-chain status)
+  var txLink = swapTx
+    ? route === 'jupiter'
+    ? 'https://solscan.io/tx/' + swapTx
+    : route === 'lifi'
+    ? isSol(fromToken) ? 'https://solscan.io/tx/' + swapTx : 'https://scan.li.fi/tx/' + swapTx
+    : 'https://etherscan.io/tx/' + swapTx
+    : null;
 
   return (
     <div style={{ width: '100%', maxWidth: 520, margin: '0 auto', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
