@@ -4,15 +4,18 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useAccount, useWalletClient, useBalance } from 'wagmi';
 import { VersionedTransaction, TransactionMessage, PublicKey, SystemProgram, LAMPORTS_PER_SOL } from '@solana/web3.js';
 
-const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
-const EVM_FEE_WALLET = '0xC41c1de4250104dC1EE2854ffD5b40a04B9AC9fF';
-const PLATFORM_FEE = 0.03;
-const SAFETY_FEE = 0.02;
-const TOTAL_FEE = PLATFORM_FEE + SAFETY_FEE;
-var NATIVE = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+const SOL_FEE_WALLET  = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
+const EVM_FEE_WALLET  = '0xC41c1de4250104dC1EE2854ffD5b40a04B9AC9fF';
+const PLATFORM_FEE    = 0.03;
+const SAFETY_FEE      = 0.02;
+const CROSS_FEE       = 0.03;
+const TOTAL_FEE       = PLATFORM_FEE + SAFETY_FEE;
+const TOTAL_FEE_CC    = PLATFORM_FEE + SAFETY_FEE + CROSS_FEE;
+const LIFI_FEE        = TOTAL_FEE_CC;
+const LIFI_INTEGRATOR = 'nexus-dex';
+var NATIVE_EVM = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+var WSOL_MINT  = 'So11111111111111111111111111111111111111112';
 
-// Chains 0x Swap API actually supports — same-chain swaps only
-// FIX: Monad mainnet is 143, not 10143 (testnet). Added HyperEVM/Plasma/Tempo.
 var OX_CHAIN_IDS = new Set([
   1, 2741, 42161, 43114, 8453, 80094, 81457, 56,
   999, 57073, 59144, 5000, 34443, 143, 10, 9745,
@@ -24,17 +27,60 @@ var CHAIN_NAMES = {
   43114: 'Avalanche', 10: 'Optimism', 100: 'Gnosis', 324: 'zkSync Era', 59144: 'Linea',
   534352: 'Scroll', 5000: 'Mantle', 81457: 'Blast', 34443: 'Mode', 130: 'Unichain',
   146: 'Sonic', 80094: 'Berachain', 57073: 'Ink', 143: 'Monad', 480: 'World Chain',
-  1101: 'Polygon zkEVM', 250: 'Fantom', 25: 'Cronos', 1284: 'Moonbeam', 42220: 'Celo',
-  1313161554: 'Aurora', 2222: 'Kava', 1088: 'Metis', 288: 'Boba', 167000: 'Taiko',
-  1329: 'SEI', 2741: 'Abstract', 33139: 'ApeChain', 60808: 'BOB', 7777777: 'Zora',
-  2020: 'Ronin', 122: 'Fuse', 1135: 'Lisk', 48900: 'Zircuit', 747: 'Flow',
-  43111: 'Hemi', 1116: 'Core', 8217: 'Klaytn', 252: 'Fraxtal', 255: 'Kroma',
-  200901: 'Bitlayer', 6342: 'MegaETH', 321: 'KCC', 360: 'Shape',
-  999: 'HyperEVM', 9745: 'Plasma', 4217: 'Tempo',
+  250: 'Fantom', 25: 'Cronos', 1284: 'Moonbeam', 42220: 'Celo', 1329: 'SEI',
+  7777777: 'Zora', 2020: 'Ronin', 1135: 'Lisk', 252: 'Fraxtal', 255: 'Kroma',
 };
 
+function isSol(t) { return t && t.chain === 'solana'; }
+function isEvm(t) { return t && t.chain === 'evm'; }
+
+function getRoute(from, to) {
+  if (!from || !to) return 'jupiter';
+  if (isSol(from) && isSol(to)) return 'jupiter';
+  if (isEvm(from) && isEvm(to) && from.chainId === to.chainId && OX_CHAIN_IDS.has(from.chainId)) return '0x';
+  return 'lifi';
+}
+
+function lifiChain(t) { return isSol(t) ? 'SOL' : String(t.chainId); }
+function lifiToken(t) { return isSol(t) ? t.mint : t.address; }
+
+// LiFi handles all multi-hop routing internally (swap+bridge+swap) in one tx.
+// Quotes expire ~30s — always re-fetch at execution time.
+// Fees (8%) accumulate in LiFi fee contract — withdraw at portal.li.fi with EVM_FEE_WALLET.
+async function fetchLifiQuote({ fromToken, toToken, fromAmtRaw, fromAddress, toAddress }) {
+  var params = new URLSearchParams({
+    fromChain:   lifiChain(fromToken),
+    toChain:     lifiChain(toToken),
+    fromToken:   lifiToken(fromToken),
+    toToken:     lifiToken(toToken),
+    fromAmount:  fromAmtRaw,
+    fromAddress: fromAddress,
+    toAddress:   toAddress || fromAddress,
+    slippage:    '0.005',
+    fee:         String(LIFI_FEE),
+    integrator:  LIFI_INTEGRATOR,
+  });
+  var res = await fetch('https://li.quest/v1/quote?' + params.toString());
+  var data = await res.json();
+  if (!res.ok) throw new Error(data.message || JSON.stringify(data));
+  if (!data.estimate || !data.estimate.toAmount) throw new Error('LiFi: no route found for this pair');
+  return data;
+}
+
+var _lifiTokenCache = null;
+var _lifiTokenFetch = null;
+function getLifiTokens() {
+  if (_lifiTokenCache) return Promise.resolve(_lifiTokenCache);
+  if (_lifiTokenFetch) return _lifiTokenFetch;
+  _lifiTokenFetch = fetch('https://li.quest/v1/tokens?chainTypes=EVM')
+    .then(function(r) { return r.json(); })
+    .then(function(d) { _lifiTokenCache = d; return d; })
+    .catch(function() { return null; });
+  return _lifiTokenFetch;
+}
+
 const POPULAR_TOKENS = [
-  { mint: 'So11111111111111111111111111111111111111112', symbol: 'SOL', name: 'Solana', decimals: 9, chain: 'solana', logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png' },
+  { mint: WSOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, chain: 'solana', logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png' },
   { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC', name: 'USD Coin', decimals: 6, chain: 'solana', logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png' },
   { mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', symbol: 'USDT', name: 'Tether', decimals: 6, chain: 'solana', logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.png' },
   { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', symbol: 'JUP', name: 'Jupiter', decimals: 6, chain: 'solana', logoURI: 'https://static.jup.ag/jup/icon.png' },
@@ -44,43 +90,19 @@ const POPULAR_TOKENS = [
   { mint: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3', symbol: 'PYTH', name: 'Pyth', decimals: 6, chain: 'solana', logoURI: 'https://pyth.network/token.svg' },
   { mint: 'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE', symbol: 'ORCA', name: 'Orca', decimals: 6, chain: 'solana', logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE/logo.png' },
   { mint: '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs', symbol: 'WETH', name: 'Wrapped Ether', decimals: 8, chain: 'solana', logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs/logo.png' },
-  { address: NATIVE, chainId: 1, symbol: 'ETH', name: 'Ethereum', decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
-  { address: NATIVE, chainId: 8453, symbol: 'ETH', name: 'ETH (Base)', decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
-  { address: NATIVE, chainId: 42161, symbol: 'ETH', name: 'ETH (Arbitrum)', decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
-  { address: NATIVE, chainId: 10, symbol: 'ETH', name: 'ETH (Optimism)', decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
-  { address: NATIVE, chainId: 56, symbol: 'BNB', name: 'BNB Chain', decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/binance/info/logo.png' },
-  { address: NATIVE, chainId: 137, symbol: 'POL', name: 'Polygon', decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/polygon/info/logo.png' },
-  { address: NATIVE, chainId: 43114, symbol: 'AVAX', name: 'Avalanche', decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/avalanchec/info/logo.png' },
-  { address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', chainId: 1, symbol: 'USDC', name: 'USD Coin (ETH)', decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
-  { address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', chainId: 8453, symbol: 'USDC', name: 'USD Coin (Base)', decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
-  { address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', chainId: 42161, symbol: 'USDC', name: 'USD Coin (Arbitrum)', decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
-  { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', chainId: 1, symbol: 'USDT', name: 'Tether (ETH)', decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
-  { address: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', chainId: 1, symbol: 'WBTC', name: 'Wrapped Bitcoin', decimals: 8, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599/logo.png' },
+  { address: NATIVE_EVM, chainId: 1,     symbol: 'ETH',  name: 'Ethereum',        decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
+  { address: NATIVE_EVM, chainId: 8453,  symbol: 'ETH',  name: 'ETH (Base)',      decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
+  { address: NATIVE_EVM, chainId: 42161, symbol: 'ETH',  name: 'ETH (Arbitrum)', decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
+  { address: NATIVE_EVM, chainId: 10,    symbol: 'ETH',  name: 'ETH (Optimism)', decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
+  { address: NATIVE_EVM, chainId: 56,    symbol: 'BNB',  name: 'BNB Chain',      decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/binance/info/logo.png' },
+  { address: NATIVE_EVM, chainId: 137,   symbol: 'POL',  name: 'Polygon',        decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/polygon/info/logo.png' },
+  { address: NATIVE_EVM, chainId: 43114, symbol: 'AVAX', name: 'Avalanche',      decimals: 18, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/avalanchec/info/logo.png' },
+  { address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', chainId: 1,     symbol: 'USDC', name: 'USDC (ETH)',      decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', chainId: 8453,  symbol: 'USDC', name: 'USDC (Base)',     decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { address: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831', chainId: 42161, symbol: 'USDC', name: 'USDC (Arbitrum)', decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', chainId: 1,     symbol: 'USDT', name: 'Tether (ETH)',    decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
+  { address: '0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599', chainId: 1,     symbol: 'WBTC', name: 'Wrapped Bitcoin', decimals: 8, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0x2260FAC5E5542a773Aa44fBCfeDf7C193bc2C599/logo.png' },
 ];
-
-function isSol(t) { return t && t.chain === 'solana'; }
-function isEvm(t) { return t && t.chain === 'evm'; }
-
-function getRoute(from, to) {
-  if (!from || !to) return 'jupiter';
-  if (isSol(from) && isSol(to)) return 'jupiter';
-  // FIX: only use 0x for same-chain EVM on chains 0x actually supports — all else goes to LiFi
-  if (isEvm(from) && isEvm(to) && from.chainId === to.chainId && OX_CHAIN_IDS.has(from.chainId)) return '0x';
-  return 'lifi';
-}
-
-// Module-level LiFi token cache — fetched once, reused across all keystrokes
-var _lifiTokenCache = null;
-var _lifiTokenFetch = null;
-function getLifiTokens() {
-  if (_lifiTokenCache) return Promise.resolve(_lifiTokenCache);
-  if (_lifiTokenFetch) return _lifiTokenFetch;
-  _lifiTokenFetch = fetch('https://li.quest/v1/tokens?chainTypes=EVM')
-    .then(function(r) { return r.json(); })
-    .then(function(data) { _lifiTokenCache = data; return data; })
-    .catch(function() { return null; });
-  return _lifiTokenFetch;
-}
 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -103,7 +125,7 @@ function ChainBadge({ token }) {
   if (!token) return null;
   var label = isSol(token) ? 'SOL' : (CHAIN_NAMES[token.chainId] || 'EVM');
   var color = isSol(token) ? '#9945ff' : '#627eea';
-  return <span style={{ fontSize: 9, color: color, background: color + '22', border: '1px solid ' + color + '44', borderRadius: 4, padding: '1px 5px', marginLeft: 4, fontWeight: 700 }}>{label}</span>;
+  return <span style={{ fontSize: 9, color, background: color + '22', border: '1px solid ' + color + '44', borderRadius: 4, padding: '1px 5px', marginLeft: 4, fontWeight: 700 }}>{label}</span>;
 }
 
 function TokenSelect({ selected, onSelect, jupiterTokens }) {
@@ -114,41 +136,35 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
   const [contractLoading, setContractLoading] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
 
-  // FIX: memoize solTokens — was computed inline every render, producing a new array reference
-  // each time, which caused the useEffect below to fire endlessly (infinite re-render loop)
   var solTokens = useMemo(function() {
     return jupiterTokens && jupiterTokens.length > 0
       ? jupiterTokens.map(function(t) { return Object.assign({}, t, { chain: 'solana' }); })
       : POPULAR_TOKENS.filter(function(t) { return t.chain === 'solana'; });
   }, [jupiterTokens]);
 
-  var isValidSolAddress = function(str) {
-    return str && str.length >= 32 && str.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(str);
-  };
-  var isValidEvmAddress = function(str) {
-    return str && /^0x[0-9a-fA-F]{40}$/.test(str);
-  };
+  var isValidSol = function(s) { return s && s.length >= 32 && s.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s); };
+  var isValidEvm = function(s) { return s && /^0x[0-9a-fA-F]{40}$/.test(s); };
 
   var lookupByAddress = async function(addr) {
-    if (!isValidSolAddress(addr) && !isValidEvmAddress(addr)) return;
+    if (!isValidSol(addr) && !isValidEvm(addr)) return;
     setContractLoading(true);
     try {
-      if (isValidSolAddress(addr)) {
+      if (isValidSol(addr)) {
         var found = solTokens.find(function(t) { return t.mint === addr; });
         if (found) { setContractToken(found); }
         else {
           var res = await fetch('https://lite-api.jup.ag/tokens/v1/token/' + addr);
           if (res.ok) {
-            var data = await res.json();
-            setContractToken({ mint: data.address, symbol: data.symbol, name: data.name, decimals: data.decimals, logoURI: data.logoURI, chain: 'solana' });
+            var d = await res.json();
+            setContractToken({ mint: d.address, symbol: d.symbol, name: d.name, decimals: d.decimals, logoURI: d.logoURI, chain: 'solana' });
           } else {
             setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6, chain: 'solana' });
           }
         }
-      } else if (isValidEvmAddress(addr)) {
+      } else {
         setContractToken({ address: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom EVM Token', decimals: 18, chain: 'evm', chainId: 1 });
       }
-    } catch (e) {
+    } catch(e) {
       setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6, chain: 'solana' });
     }
     setContractLoading(false);
@@ -158,24 +174,18 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
     if (!q || q.length < 1) { setSearchResults([]); return; }
     var ql = q.toLowerCase();
     var sm = solTokens.filter(function(t) {
-      return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-             (t.name && t.name.toLowerCase().includes(ql)) ||
-             (t.mint && t.mint.toLowerCase().includes(ql));
+      return (t.symbol && t.symbol.toLowerCase().includes(ql)) || (t.name && t.name.toLowerCase().includes(ql)) || (t.mint && t.mint.toLowerCase().includes(ql));
     }).slice(0, 50);
     var em = POPULAR_TOKENS.filter(function(t) {
       if (t.chain !== 'evm') return false;
-      var chainName = CHAIN_NAMES[t.chainId] || '';
-      return (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-             (t.name && t.name.toLowerCase().includes(ql)) ||
-             chainName.toLowerCase().includes(ql);
+      return (t.symbol && t.symbol.toLowerCase().includes(ql)) || (t.name && t.name.toLowerCase().includes(ql)) || ((CHAIN_NAMES[t.chainId] || '').toLowerCase().includes(ql));
     }).slice(0, 20);
     setSearchResults(sm.concat(em));
-    // FIX: use module-level cache — was fetching ALL LiFi tokens on every keystroke (2+ chars)
     if (q.length >= 2) {
       getLifiTokens().then(function(lifiData) {
         if (!lifiData || !lifiData.tokens) return;
-        var evmResults = [];
-        var seen = new Set(em.map(function(t) { return t.address.toLowerCase() + '-' + t.chainId; }));
+        var extra = [];
+        var seen = new Set(em.map(function(t) { return (t.address || '').toLowerCase() + '-' + t.chainId; }));
         Object.values(lifiData.tokens).forEach(function(chainTokens) {
           chainTokens.forEach(function(t) {
             if (!t.symbol || !t.address || !t.chainId) return;
@@ -183,11 +193,11 @@ function TokenSelect({ selected, onSelect, jupiterTokens }) {
             if (seen.has(key)) return;
             if ((t.symbol.toLowerCase().includes(ql)) || (t.name && t.name.toLowerCase().includes(ql))) {
               seen.add(key);
-              evmResults.push({ address: t.address, chainId: t.chainId, symbol: t.symbol, name: t.name, decimals: t.decimals || 18, chain: 'evm', logoURI: t.logoURI });
+              extra.push({ address: t.address, chainId: t.chainId, symbol: t.symbol, name: t.name, decimals: t.decimals || 18, chain: 'evm', logoURI: t.logoURI });
             }
           });
         });
-        setSearchResults(sm.concat(em).concat(evmResults.slice(0, 100)));
+        setSearchResults(sm.concat(em).concat(extra.slice(0, 80)));
       });
     }
   }, [q, solTokens]);
@@ -259,128 +269,103 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
   const { data: walletClient } = useWalletClient();
 
   const [fromToken, setFromToken] = useState(POPULAR_TOKENS[0]);
-  const [toToken, setToToken] = useState(POPULAR_TOKENS[1]);
-  const [fromAmt, setFromAmt] = useState('');
-  const [quote, setQuote] = useState(null);
+  const [toToken,   setToToken]   = useState(POPULAR_TOKENS[1]);
+  const [fromAmt,   setFromAmt]   = useState('');
+  const [quote,     setQuote]     = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
-  const [quoteError, setQuoteError] = useState('');
-  const [slip, setSlip] = useState(0.5);
+  const [quoteError,   setQuoteError]   = useState('');
+  const [slip,      setSlip]      = useState(0.5);
   const [swapStatus, setSwapStatus] = useState('idle');
-  const [swapTx, setSwapTx] = useState(null);
+  const [swapTx,    setSwapTx]    = useState(null);
   const [swapError, setSwapError] = useState('');
   const [fromBalance, setFromBalance] = useState(null);
-  const [toBalance, setToBalance] = useState(null);
-  const [lifiRoute, setLifiRoute] = useState(null);
+  const [toBalance,   setToBalance]   = useState(null);
   const [customAddress, setCustomAddress] = useState('');
 
-  var isEvmFrom = isEvm(fromToken);
-  var isNativeEvmFrom = isEvmFrom && fromToken.address === NATIVE;
+  var isEvmFrom       = isEvm(fromToken);
+  var isNativeEvmFrom = isEvmFrom && fromToken.address === NATIVE_EVM;
   const { data: evmFromBalanceData } = useBalance({
     address: evmAddress,
-    token: isEvmFrom && !isNativeEvmFrom ? fromToken.address : undefined,
+    token:   isEvmFrom && !isNativeEvmFrom ? fromToken.address : undefined,
     chainId: isEvmFrom ? fromToken.chainId : undefined,
-    query: { enabled: !!evmAddress && isEvmFrom },
+    query:   { enabled: !!evmAddress && isEvmFrom },
   });
 
-  var route = getRoute(fromToken, toToken);
-  var totalFee = route === 'lifi' ? PLATFORM_FEE + SAFETY_FEE + 0.04 : TOTAL_FEE;
+  var route        = getRoute(fromToken, toToken);
+  var isCrossChain = route === 'lifi';
 
-  // FIX: removed customAddress from deps — it only matters at execution time, not quote time.
-  // Having it here triggered a fresh quote API call on every character typed in the destination field.
   var fetchQuote = useCallback(async function() {
     setQuote(null); setQuoteError('');
     if (!fromAmt || parseFloat(fromAmt) <= 0 || !fromToken || !toToken) return;
-    var fromId = fromToken.mint || fromToken.address;
-    var toId = toToken.mint || toToken.address;
-    if (fromId && toId && fromId.toLowerCase() === toId.toLowerCase() && (fromToken.chainId === toToken.chainId || (isSol(fromToken) && isSol(toToken)))) {
-      setQuoteError('Cannot swap a token for itself.');
-      setQuoteLoading(false);
-      return;
+    var fId = (fromToken.mint || fromToken.address || '').toLowerCase();
+    var tId = (toToken.mint   || toToken.address   || '').toLowerCase();
+    if (fId === tId && (isSol(fromToken) === isSol(toToken)) && fromToken.chainId === toToken.chainId) {
+      setQuoteError('Cannot swap a token for itself.'); return;
     }
     setQuoteLoading(true);
     try {
       if (route === 'jupiter') {
         var amount = Math.round(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals));
-        var url = 'https://api.jup.ag/swap/v1/quote?inputMint=' + fromToken.mint + '&outputMint=' + toToken.mint + '&amount=' + amount + '&slippageBps=' + Math.round(slip * 100);
-        var res = await fetch(url, { headers: { 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' } });
+        var res = await fetch(
+          'https://api.jup.ag/swap/v1/quote?inputMint=' + fromToken.mint +
+          '&outputMint=' + toToken.mint + '&amount=' + amount +
+          '&slippageBps=' + Math.round(slip * 100),
+          { headers: { 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' } }
+        );
         var data = await res.json();
         if (data && data.outAmount) {
-          setQuote({ outAmount: data.outAmount, outAmountDisplay: (parseInt(data.outAmount) / Math.pow(10, toToken.decimals)).toFixed(6), priceImpactPct: data.priceImpactPct, quoteResponse: data, engine: 'jupiter' });
-        } else { setQuoteError(data.error || 'No route found for this pair'); }
+          setQuote({ outAmountDisplay: (parseInt(data.outAmount) / Math.pow(10, toToken.decimals)).toFixed(6), priceImpactPct: data.priceImpactPct, quoteResponse: data, engine: 'jupiter' });
+        } else { setQuoteError(data.error || 'No route found'); }
 
       } else if (route === '0x') {
         var sellAmt = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
-        var oxParams = new URLSearchParams({
-          chainId: fromToken.chainId.toString(),
-          sellToken: fromToken.address.toLowerCase(),
-          buyToken: toToken.address.toLowerCase(),
-          sellAmount: sellAmt,
+        var oxRes = await fetch('/api/0x/swap/allowance-holder/price?' + new URLSearchParams({
+          chainId: fromToken.chainId.toString(), sellToken: fromToken.address.toLowerCase(),
+          buyToken: toToken.address.toLowerCase(), sellAmount: sellAmt,
           slippageBps: Math.round(slip * 100).toString(),
-        });
-        var oxRes = await fetch('/api/0x/swap/allowance-holder/price?' + oxParams.toString());
+        }).toString());
         var oxData = await oxRes.json();
         if (oxData && oxData.buyAmount) {
           setQuote({ outAmountDisplay: (parseInt(oxData.buyAmount) / Math.pow(10, toToken.decimals)).toFixed(6), priceImpactPct: 0, engine: '0x' });
-        } else { setQuoteError('0x price error: ' + JSON.stringify(oxData)); }
+        } else { setQuoteError('0x: ' + JSON.stringify(oxData)); }
 
       } else if (route === 'lifi') {
-        var fromChainId = isSol(fromToken) ? 'SOL' : fromToken.chainId.toString();
-        var toChainId = isSol(toToken) ? 'SOL' : toToken.chainId.toString();
-        var fromTokenAddr = isSol(fromToken) ? fromToken.mint : fromToken.address;
-        var toTokenAddr = isSol(toToken) ? toToken.mint : toToken.address;
-        var fromAmtRaw = (parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toFixed(0);
-        // Use placeholder addresses for preview quote — real wallet addresses used at execution time
+        var fromAmtRaw = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
         var previewFrom = isSol(fromToken)
           ? (publicKey ? publicKey.toString() : '11111111111111111111111111111111')
           : (evmAddress || '0x0000000000000000000000000000000000000001');
         var previewTo = isSol(toToken)
           ? '11111111111111111111111111111111'
           : '0x0000000000000000000000000000000000000001';
-        var lifiQParams = new URLSearchParams({
-          fromChain: fromChainId, toChain: toChainId,
-          fromToken: fromTokenAddr, toToken: toTokenAddr,
-          fromAmount: fromAmtRaw, slippage: (slip / 100).toString(),
-          fee: '0.09', integrator: 'nexus-dex',
-          fromAddress: previewFrom, toAddress: previewTo,
-        });
-        var lifiRes = await fetch('https://li.quest/v1/quote?' + lifiQParams.toString());
-        var lifiQuote = await lifiRes.json();
-        if (!lifiRes.ok) throw new Error('LI.FI error: ' + JSON.stringify(lifiQuote));
-        var toAmt = lifiQuote && lifiQuote.estimate && lifiQuote.estimate.toAmount;
-        if (toAmt) {
-          setQuote({ outAmountDisplay: (parseInt(toAmt) / Math.pow(10, toToken.decimals)).toFixed(6), priceImpactPct: 0, engine: 'lifi' });
-          setLifiRoute(lifiQuote);
-        } else { setQuoteError('LI.FI: no toAmount in response - ' + JSON.stringify(lifiQuote)); }
+        var lifiQ = await fetchLifiQuote({ fromToken, toToken, fromAmtRaw, fromAddress: previewFrom, toAddress: previewTo });
+        setQuote({ outAmountDisplay: (parseInt(lifiQ.estimate.toAmount) / Math.pow(10, toToken.decimals)).toFixed(6), priceImpactPct: 0, engine: 'lifi' });
       }
-    } catch (e) { setQuoteError('Failed to get quote: ' + (e.message || '')); }
+    } catch(e) { setQuoteError('Failed to get quote: ' + (e.message || '')); }
     setQuoteLoading(false);
   }, [fromAmt, fromToken, toToken, slip, route, evmAddress, publicKey]);
 
-  useEffect(function() { var t = setTimeout(fetchQuote, 300); return function() { clearTimeout(t); }; }, [fetchQuote]);
+  useEffect(function() { var t = setTimeout(fetchQuote, 400); return function() { clearTimeout(t); }; }, [fetchQuote]);
 
   useEffect(function() {
     if (!publicKey || !connection || !isSol(fromToken)) { setFromBalance(null); setToBalance(null); return; }
-    var fetchBals = async function() {
+    (async function() {
       try {
-        if (fromToken.mint === 'So11111111111111111111111111111111111111112') {
-          var solLam = await connection.getBalance(publicKey);
-          setFromBalance(solLam / 1e9);
+        if (fromToken.mint === WSOL_MINT) {
+          setFromBalance((await connection.getBalance(publicKey)) / 1e9);
         } else if (fromToken.mint) {
-          var accts = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: new PublicKey(fromToken.mint) });
-          setFromBalance(accts.value.length > 0 ? accts.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0);
+          var a = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: new PublicKey(fromToken.mint) });
+          setFromBalance(a.value.length > 0 ? a.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0);
         }
         if (isSol(toToken)) {
-          if (toToken.mint === 'So11111111111111111111111111111111111111112') {
-            var solLam2 = await connection.getBalance(publicKey);
-            setToBalance(solLam2 / 1e9);
+          if (toToken.mint === WSOL_MINT) {
+            setToBalance((await connection.getBalance(publicKey)) / 1e9);
           } else if (toToken.mint) {
-            var accts2 = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: new PublicKey(toToken.mint) });
-            setToBalance(accts2.value.length > 0 ? accts2.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0);
+            var b = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: new PublicKey(toToken.mint) });
+            setToBalance(b.value.length > 0 ? b.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0);
           }
         }
-      } catch (e) {}
-    };
-    fetchBals();
+      } catch(e) {}
+    })();
   }, [publicKey, connection, fromToken, toToken]);
 
   var executeSwap = async function() {
@@ -388,42 +373,45 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     if (!quote) return;
     setSwapStatus('loading'); setSwapError('');
     try {
+
+      // -- JUPITER (SOL -> SOL) ---------------------------------------------
       if (route === 'jupiter') {
         if (!publicKey) throw new Error('Connect Solana wallet');
-        var _solBal = (await connection.getBalance(publicKey)) / 1e9;
-        if (_solBal < 0.005) throw new Error('Need at least 0.005 SOL for fees and gas.');
+        var solBal = (await connection.getBalance(publicKey)) / 1e9;
+        if (solBal < 0.005) throw new Error('Need at least 0.005 SOL for fees.');
 
-        var fromCoinExec = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
-        var solCoin = coins.find(function(c) { return c.id === 'solana' || (c.symbol && c.symbol.toLowerCase() === 'sol'); });
-        var solPrice = solCoin ? solCoin.current_price : 150;
-        var fromPriceUsd = fromCoinExec ? fromCoinExec.current_price : (fromToken.symbol === 'SOL' ? solPrice : 0);
-        if (!fromPriceUsd && quote) {
-          var toCoinExec = coins.find(function(c) { return c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
-          var toPriceUsd = toCoinExec ? toCoinExec.current_price : ((toToken.symbol === 'USDC' || toToken.symbol === 'USDT') ? 1 : 0);
-          if (toPriceUsd > 0) fromPriceUsd = (parseFloat(quote.outAmountDisplay) * toPriceUsd) / parseFloat(fromAmt);
+        var solCoin    = coins.find(function(c) { return c.id === 'solana'; });
+        var solPrice   = solCoin ? solCoin.current_price : 150;
+        var fromCoinJ  = coins.find(function(c) { return c.symbol && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
+        var fromPriceJ = fromCoinJ ? fromCoinJ.current_price : (fromToken.symbol === 'SOL' ? solPrice : 0);
+        if (!fromPriceJ && quote) {
+          var toCoinJ  = coins.find(function(c) { return c.symbol && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
+          var toPriceJ = toCoinJ ? toCoinJ.current_price : (['USDC','USDT'].includes(toToken.symbol) ? 1 : 0);
+          if (toPriceJ > 0) fromPriceJ = (parseFloat(quote.outAmountDisplay) * toPriceJ) / parseFloat(fromAmt);
         }
-        var tradeUsd = parseFloat(fromAmt) * fromPriceUsd;
+        var tradeUsd = parseFloat(fromAmt) * fromPriceJ;
 
-        var dynamicSpread = 0;
+        var spread = 0;
         try {
-          var mktRes = await fetch('https://api.jup.ag/price/v2?ids=' + fromToken.mint + ',' + toToken.mint);
-          var mktData = await mktRes.json();
-          var fromMktPrice = mktData.data && mktData.data[fromToken.mint] && parseFloat(mktData.data[fromToken.mint].price);
-          var toMktPrice = mktData.data && mktData.data[toToken.mint] && parseFloat(mktData.data[toToken.mint].price);
-          if (fromMktPrice && toMktPrice && parseFloat(fromAmt) > 0) {
-            var expectedOut = (parseFloat(fromAmt) * fromMktPrice) / toMktPrice;
-            var actualOut = parseFloat(quote.outAmountDisplay);
-            if (expectedOut > actualOut && expectedOut > 0) dynamicSpread = (expectedOut - actualOut) / expectedOut;
+          var mkt = await (await fetch('https://api.jup.ag/price/v2?ids=' + fromToken.mint + ',' + toToken.mint)).json();
+          var fMkt = mkt.data && mkt.data[fromToken.mint] && parseFloat(mkt.data[fromToken.mint].price);
+          var tMkt = mkt.data && mkt.data[toToken.mint]  && parseFloat(mkt.data[toToken.mint].price);
+          if (fMkt && tMkt) {
+            var expected = (parseFloat(fromAmt) * fMkt) / tMkt;
+            var actual   = parseFloat(quote.outAmountDisplay);
+            if (expected > actual && expected > 0) spread = (expected - actual) / expected;
           }
-        } catch (e) {}
+        } catch(e) {}
 
-        var totalFeePct = TOTAL_FEE + dynamicSpread;
+        var totalPct    = TOTAL_FEE + spread;
         var feeLamports = Math.round(Math.max(
-          tradeUsd > 0 ? (tradeUsd * totalFeePct / solPrice) * LAMPORTS_PER_SOL : parseFloat(fromAmt) * totalFeePct * LAMPORTS_PER_SOL,
+          tradeUsd > 0
+            ? (tradeUsd * totalPct / solPrice) * LAMPORTS_PER_SOL
+            : parseFloat(fromAmt) * totalPct * LAMPORTS_PER_SOL,
           50000
         ));
 
-        var swapRes = await fetch('https://api.jup.ag/swap/v1/swap', {
+        var swapRes  = await fetch('https://api.jup.ag/swap/v1/swap', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'x-api-key': process.env.REACT_APP_JUPITER_API_KEY1 || '' },
           body: JSON.stringify({ quoteResponse: quote.quoteResponse, userPublicKey: publicKey.toString(), wrapAndUnwrapSol: true, dynamicComputeUnitLimit: true }),
@@ -431,191 +419,122 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
         var swapData = await swapRes.json();
         if (!swapData || !swapData.swapTransaction) throw new Error(swapData.error || 'Failed to get swap transaction');
 
-        var jupTx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
-        var altAccounts = [];
+        var jupTx    = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
+        var altAccts = [];
         if (jupTx.message.addressTableLookups && jupTx.message.addressTableLookups.length) {
-          var altResults = await Promise.all(jupTx.message.addressTableLookups.map(function(l) { return connection.getAddressLookupTable(l.accountKey); }));
-          altAccounts = altResults.map(function(r) { return r.value; }).filter(Boolean);
+          var altRes = await Promise.all(jupTx.message.addressTableLookups.map(function(l) { return connection.getAddressLookupTable(l.accountKey); }));
+          altAccts = altRes.map(function(r) { return r.value; }).filter(Boolean);
         }
-        var decompiledMsg = TransactionMessage.decompile(jupTx.message, { addressLookupTableAccounts: altAccounts });
-        decompiledMsg.instructions.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(SOL_FEE_WALLET), lamports: feeLamports }));
-        var bh = await connection.getLatestBlockhash('confirmed');
-        decompiledMsg.recentBlockhash = bh.blockhash;
-        var finalTx = new VersionedTransaction(decompiledMsg.compileToV0Message(altAccounts));
-        // FIX: removed strict staticAccountKeys fee wallet check — on complex Jupiter routes
-        // the fee wallet can end up in an Address Lookup Table, not staticAccountKeys, causing
-        // valid txs to be falsely rejected. We added the instruction ourselves so it's always there.
-        var sig = await sendTransaction(finalTx, connection, { skipPreflight: false, maxRetries: 3 });
+        var msg = TransactionMessage.decompile(jupTx.message, { addressLookupTableAccounts: altAccts });
+        msg.instructions.push(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(SOL_FEE_WALLET), lamports: feeLamports }));
+        var bh    = await connection.getLatestBlockhash('confirmed');
+        msg.recentBlockhash = bh.blockhash;
+        var final = new VersionedTransaction(msg.compileToV0Message(altAccts));
+        var sig   = await sendTransaction(final, connection, { skipPreflight: false, maxRetries: 3 });
         await connection.confirmTransaction({ signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight }, 'confirmed');
         setSwapTx(sig);
 
+      // -- 0x (EVM same-chain) ----------------------------------------------
       } else if (route === '0x') {
         if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
-        var sellAmt2 = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
-        // FIX: guard .address access — toToken could theoretically be Solana token (no .address)
-        var isNativeToToken = isEvm(toToken) && toToken.address && toToken.address.toLowerCase() === NATIVE;
-        var feeToken = isNativeToToken ? fromToken.address : (isEvm(toToken) ? toToken.address : fromToken.address);
-        var oxExecParams = new URLSearchParams({
-          chainId: fromToken.chainId.toString(),
-          sellToken: fromToken.address.toLowerCase(),
-          buyToken: toToken.address.toLowerCase(),
-          sellAmount: sellAmt2,
-          taker: evmAddress,
-          swapFeeBps: '500',
-          swapFeeRecipient: EVM_FEE_WALLET,
-          swapFeeToken: feeToken.toLowerCase(),
-          slippageBps: Math.round(slip * 100).toString(),
-          tradeSurplusRecipient: EVM_FEE_WALLET,
-        });
-        var oxQuoteRes = await fetch('/api/0x/swap/allowance-holder/quote?' + oxExecParams.toString());
-        var oxQuote = await oxQuoteRes.json();
-        if (!oxQuote || !oxQuote.transaction) throw new Error('0x: ' + JSON.stringify(oxQuote));
-        if (oxQuote.issues && oxQuote.issues.allowance && oxQuote.issues.allowance.spender) {
-          var spender0x = oxQuote.issues.allowance.spender;
-          var approvalData0x = '0x095ea7b3' + spender0x.slice(2).padStart(64, '0') + 'f'.repeat(64);
-          await walletClient.sendTransaction({ to: fromToken.address, data: approvalData0x, value: BigInt(0) });
+        var sell0x   = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
+        var isNatTo  = isEvm(toToken) && toToken.address && toToken.address.toLowerCase() === NATIVE_EVM;
+        var feeTok0x = isNatTo ? fromToken.address : toToken.address;
+        var oxQ      = await (await fetch('/api/0x/swap/allowance-holder/quote?' + new URLSearchParams({
+          chainId: fromToken.chainId.toString(), sellToken: fromToken.address.toLowerCase(),
+          buyToken: toToken.address.toLowerCase(), sellAmount: sell0x, taker: evmAddress,
+          swapFeeBps: '500', swapFeeRecipient: EVM_FEE_WALLET, swapFeeToken: feeTok0x.toLowerCase(),
+          slippageBps: Math.round(slip * 100).toString(), tradeSurplusRecipient: EVM_FEE_WALLET,
+        }).toString())).json();
+        if (!oxQ || !oxQ.transaction) throw new Error('0x: ' + JSON.stringify(oxQ));
+        if (oxQ.issues && oxQ.issues.allowance && oxQ.issues.allowance.spender) {
+          await walletClient.sendTransaction({ to: fromToken.address, data: '0x095ea7b3' + oxQ.issues.allowance.spender.slice(2).padStart(64, '0') + 'f'.repeat(64), value: BigInt(0) });
           await new Promise(function(r) { setTimeout(r, 3000); });
         }
-        var tx0x = oxQuote.transaction;
-        // FIX: wagmi sendTransaction uses `gas` not `gasLimit`
-        var txHash0x = await walletClient.sendTransaction({
-          to: tx0x.to, data: tx0x.data,
-          value: tx0x.value ? BigInt(tx0x.value) : BigInt(0),
-          gas: tx0x.gas ? BigInt(tx0x.gas) : undefined,
-        });
-        setSwapTx(txHash0x);
+        setSwapTx(await walletClient.sendTransaction({ to: oxQ.transaction.to, data: oxQ.transaction.data, value: oxQ.transaction.value ? BigInt(oxQ.transaction.value) : BigInt(0), gas: oxQ.transaction.gas ? BigInt(oxQ.transaction.gas) : undefined }));
 
+      // -- LiFi (all cross-chain) -------------------------------------------
       } else if (route === 'lifi') {
-        var srcAddr = isSol(fromToken)
-          ? (publicKey ? publicKey.toString() : null)
-          : (evmAddress || null);
+        var srcAddr = isSol(fromToken) ? (publicKey ? publicKey.toString() : null) : (evmAddress || null);
         var dstAddr = isSol(toToken)
           ? (publicKey ? publicKey.toString() : customAddress.trim())
           : (evmAddress || customAddress.trim());
-
         if (!srcAddr) throw new Error('Connect your ' + (isSol(fromToken) ? 'Solana' : 'EVM') + ' wallet');
-        if (!dstAddr || dstAddr.length < 10) throw new Error('Enter your ' + (isSol(toToken) ? 'Solana' : (CHAIN_NAMES[toToken && toToken.chainId] || 'EVM')) + ' destination wallet address');
+        if (!dstAddr || dstAddr.length < 10) throw new Error('Enter destination wallet address');
 
-        // FIX: always re-fetch a fresh quote at execution time — the stored quote from state
-        // expires in ~30s and using it causes LiFi to reject the transaction
-        var execFromChain = isSol(fromToken) ? 'SOL' : fromToken.chainId.toString();
-        var execToChain = isSol(toToken) ? 'SOL' : toToken.chainId.toString();
-        var execFromToken = isSol(fromToken) ? fromToken.mint : fromToken.address;
-        var execToToken = isSol(toToken) ? toToken.mint : toToken.address;
-        var execFromAmt = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
-        var freshParams = new URLSearchParams({
-          fromChain: execFromChain, toChain: execToChain,
-          fromToken: execFromToken, toToken: execToToken,
-          fromAmount: execFromAmt,
-          fromAddress: srcAddr, toAddress: dstAddr,
-          slippage: (slip / 100).toString(),
-          fee: '0.09', integrator: 'nexus-dex',
-        });
-        var freshRes = await fetch('https://li.quest/v1/quote?' + freshParams.toString());
-        var freshRoute = await freshRes.json();
-        if (!freshRes.ok || !freshRoute.transactionRequest) {
-          throw new Error(freshRoute.message || 'LI.FI could not find a route -- try adjusting amount or slippage');
-        }
-        var txReq = freshRoute.transactionRequest;
+        var lfAmtRaw = Math.floor(parseFloat(fromAmt) * Math.pow(10, fromToken.decimals)).toString();
+        var lifiQ = await fetchLifiQuote({ fromToken, toToken, fromAmtRaw: lfAmtRaw, fromAddress: srcAddr, toAddress: dstAddr });
+        if (!lifiQ.transactionRequest) throw new Error('LiFi: no transaction returned -- try again');
+        var txReq = lifiQ.transactionRequest;
 
         if (isSol(fromToken)) {
           if (!publicKey) throw new Error('Connect Solana wallet');
-          // FIX: LiFi Solana transactions are base64-encoded — original code used hex decoding
-          // which produced garbage bytes and broke every single SOL cross-chain swap silently
-          var lifiTxBytes = Buffer.from(txReq.data, 'base64');
-          var lifiTx = VersionedTransaction.deserialize(lifiTxBytes);
-          var lifiBh = await connection.getLatestBlockhash('confirmed');
-          var lifiSig = await sendTransaction(lifiTx, connection, { skipPreflight: false, maxRetries: 3 });
+          var lifiSolTx = VersionedTransaction.deserialize(Buffer.from(txReq.data, 'base64'));
+          var lifiBh    = await connection.getLatestBlockhash('confirmed');
+          var lifiSig   = await sendTransaction(lifiSolTx, connection, { skipPreflight: false, maxRetries: 3 });
           await connection.confirmTransaction({ signature: lifiSig, blockhash: lifiBh.blockhash, lastValidBlockHeight: lifiBh.lastValidBlockHeight }, 'confirmed');
           setSwapTx(lifiSig);
 
         } else {
           if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
-          var isNativeSell = fromToken.address.toLowerCase() === NATIVE;
-
-          // FIX: check allowance before approving — skip if already sufficient.
-          // Original code blindly sent approval every time, wasting a tx and gas for the user.
-          if (!isNativeSell) {
-            var lifiSpender = txReq.to;
-            var sellAmtBig = BigInt(execFromAmt);
-            // allowance(address owner, address spender) selector = 0xdd62ed3e
-            var allowanceCalldata = '0xdd62ed3e'
-              + evmAddress.slice(2).padStart(64, '0')
-              + lifiSpender.slice(2).padStart(64, '0');
-            var needsApproval = true;
+          var isNatSell = fromToken.address.toLowerCase() === NATIVE_EVM;
+          if (!isNatSell) {
+            var spender       = txReq.to;
+            var sellBig       = BigInt(lfAmtRaw);
+            var allowData     = '0xdd62ed3e' + evmAddress.slice(2).padStart(64, '0') + spender.slice(2).padStart(64, '0');
+            var needsApprove  = true;
             try {
-              var allowanceHex = await walletClient.request({
-                method: 'eth_call',
-                params: [{ to: fromToken.address, data: allowanceCalldata }, 'latest'],
-              });
-              needsApproval = BigInt(allowanceHex || '0x0') < sellAmtBig;
-            } catch (_) {}
-            if (needsApproval) {
-              // approve(address spender, uint256 amount) selector = 0x095ea7b3, max uint256
-              var approveCalldata = '0x095ea7b3'
-                + lifiSpender.slice(2).padStart(64, '0')
-                + 'f'.repeat(64);
-              await walletClient.sendTransaction({ to: fromToken.address, data: approveCalldata, value: BigInt(0) });
+              var allowHex = await walletClient.request({ method: 'eth_call', params: [{ to: fromToken.address, data: allowData }, 'latest'] });
+              needsApprove = BigInt(allowHex || '0x0') < sellBig;
+            } catch(_) {}
+            if (needsApprove) {
+              await walletClient.sendTransaction({ to: fromToken.address, data: '0x095ea7b3' + spender.slice(2).padStart(64, '0') + 'f'.repeat(64), value: BigInt(0) });
               await new Promise(function(r) { setTimeout(r, 4000); });
             }
           }
-
-          // FIX: wagmi sendTransaction uses `gas` not `gasLimit`
-          var lifiTxHash = await walletClient.sendTransaction({
-            to: txReq.to, data: txReq.data,
+          setSwapTx(await walletClient.sendTransaction({
+            to:    txReq.to,
+            data:  txReq.data,
             value: txReq.value ? BigInt(txReq.value) : BigInt(0),
-            gas: txReq.gasLimit ? BigInt(txReq.gasLimit) : undefined,
-          });
-          setSwapTx(lifiTxHash);
+            gas:   txReq.gasLimit ? BigInt(txReq.gasLimit) : undefined,
+          }));
         }
       }
 
-      setSwapStatus('success'); setFromAmt(''); setQuote(null); setLifiRoute(null);
-      setTimeout(function() { setSwapStatus('idle'); setSwapTx(null); }, 5000);
-    } catch (e) {
-      console.error('Swap error:', e); setSwapError(e.message || 'Swap failed'); setSwapStatus('error');
+      setSwapStatus('success'); setFromAmt(''); setQuote(null);
+      setTimeout(function() { setSwapStatus('idle'); setSwapTx(null); }, 6000);
+    } catch(e) {
+      console.error('Swap error:', e);
+      setSwapError(e.message || 'Swap failed');
+      setSwapStatus('error');
       setTimeout(function() { setSwapStatus('idle'); setSwapError(''); }, 4000);
     }
   };
 
-  // FIX: reset balances on flip — stale values were shown until the balance useEffect re-ran
   var flipTokens = function() {
-    var tmp = fromToken;
-    setFromToken(toToken); setToToken(tmp);
-    setFromAmt(''); setQuote(null); setLifiRoute(null);
-    setFromBalance(null); setToBalance(null);
+    var tmp = fromToken; setFromToken(toToken); setToToken(tmp);
+    setFromAmt(''); setQuote(null); setFromBalance(null); setToBalance(null);
   };
 
-  var fromCoin = coins.find(function(c) { return c.symbol && fromToken && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
+  var fromCoin     = coins.find(function(c) { return c.symbol && c.symbol.toLowerCase() === fromToken.symbol.toLowerCase(); });
   var fromPriceVal = fromCoin ? fromCoin.current_price : 0;
-  var toCoin = coins.find(function(c) { return c.symbol && toToken && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
-  var toPriceVal = toCoin ? toCoin.current_price : 0;
-  var solCoinPrice = (coins.find(function(c) { return c.id === 'solana'; }) || {}).current_price || 150;
-  if (!fromPriceVal && quote && fromAmt && parseFloat(fromAmt) > 0) {
-    if (toToken && (toToken.symbol === 'SOL' || toToken.symbol === 'USDC' || toToken.symbol === 'USDT')) {
-      var outVal = parseFloat(quote.outAmountDisplay) * (toPriceVal || (toToken.symbol === 'SOL' ? solCoinPrice : 1));
-      fromPriceVal = outVal / parseFloat(fromAmt);
-    }
-  }
-  var feeUsd = fromAmt && fromPriceVal ? (parseFloat(fromAmt) * fromPriceVal * totalFee).toFixed(2) : '0.00';
-  var engineLabel = route === 'jupiter' ? 'Jupiter' : route === '0x' ? '0x' : 'LI.FI';
+  var toCoin       = coins.find(function(c) { return c.symbol && c.symbol.toLowerCase() === toToken.symbol.toLowerCase(); });
+  var toPriceVal   = toCoin ? toCoin.current_price : 0;
+  if (!fromPriceVal && quote && fromAmt && parseFloat(fromAmt) > 0 && toPriceVal > 0)
+    fromPriceVal = (parseFloat(quote.outAmountDisplay) * toPriceVal) / parseFloat(fromAmt);
 
-  // FIX: LiFi Solana-source txs belong on solscan, EVM-source go to scan.li.fi (which tracks cross-chain status)
-  var txLink = swapTx
-    ? route === 'jupiter'
-    ? 'https://solscan.io/tx/' + swapTx
-    : route === 'lifi'
-    ? isSol(fromToken) ? 'https://solscan.io/tx/' + swapTx : 'https://scan.li.fi/tx/' + swapTx
-    : 'https://etherscan.io/tx/' + swapTx
-    : null;
+  var engineLabel  = route === 'jupiter' ? 'Jupiter' : route === '0x' ? '0x' : 'LiFi';
+  var txLink       = swapTx ? (isSol(fromToken) ? 'https://solscan.io/tx/' + swapTx : (isCrossChain ? 'https://scan.li.fi/tx/' + swapTx : 'https://etherscan.io/tx/' + swapTx)) : null;
+  var needsDstAddr = isCrossChain && ((isSol(toToken) && !publicKey) || (isEvm(toToken) && !evmAddress));
 
   return (
     <div style={{ width: '100%', maxWidth: 520, margin: '0 auto', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
       <div style={{ marginBottom: 16 }}>
         <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Swap Tokens</h1>
-        <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Powered by {engineLabel} - Instant swaps - No account needed</p>
+        <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Powered by {engineLabel}{isCrossChain ? ' - Cross-chain' : ''} - Instant swaps - No account needed</p>
       </div>
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 18, padding: 18 }}>
+
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SLIPPAGE</span>
           <div style={{ display: 'flex', gap: 4 }}>
@@ -632,27 +551,20 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             {evmFromBalanceData && isEvm(fromToken) && <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{parseFloat(evmFromBalanceData.formatted).toFixed(4)}</span></span>}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <TokenSelect jupiterTokens={jupiterTokens} selected={fromToken} onSelect={function(t) { setFromToken(t); setQuote(null); setQuoteError(''); setLifiRoute(null); }} />
+            <TokenSelect jupiterTokens={jupiterTokens} selected={fromToken} onSelect={function(t) { setFromToken(t); setQuote(null); setQuoteError(''); }} />
             <input value={fromAmt} onChange={function(e) { setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }} placeholder="0.00" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 500, color: '#fff', textAlign: 'right', outline: 'none', minWidth: 0 }} />
             {fromBalance != null && fromBalance > 0 && isSol(fromToken) && (
-              <button onClick={function() {
-                var maxAmt = fromToken.symbol === 'SOL' ? Math.max(0, fromBalance - TOTAL_FEE - 0.002) : fromBalance;
-                setFromAmt(maxAmt > 0 ? maxAmt.toFixed(fromToken.decimals <= 2 ? 2 : 6) : '0');
-              }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '3px 8px', color: C.accent, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>
+              <button onClick={function() { var m = fromToken.symbol === 'SOL' ? Math.max(0, fromBalance - TOTAL_FEE - 0.002) : fromBalance; setFromAmt(m > 0 ? m.toFixed(fromToken.decimals <= 2 ? 2 : 6) : '0'); }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '3px 8px', color: C.accent, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>
             )}
             {evmFromBalanceData && isEvm(fromToken) && parseFloat(evmFromBalanceData.formatted) > 0 && (
-              <button onClick={function() {
-                var bal = parseFloat(evmFromBalanceData.formatted);
-                var maxAmt = isNativeEvmFrom ? Math.max(0, bal - 0.002) : bal;
-                setFromAmt(maxAmt > 0 ? maxAmt.toFixed(fromToken.decimals <= 2 ? 2 : 6) : '0');
-              }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '3px 8px', color: C.accent, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>
+              <button onClick={function() { var b = parseFloat(evmFromBalanceData.formatted); var m = isNativeEvmFrom ? Math.max(0, b - 0.002) : b; setFromAmt(m > 0 ? m.toFixed(fromToken.decimals <= 2 ? 2 : 6) : '0'); }} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '3px 8px', color: C.accent, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0 }}>MAX</button>
             )}
           </div>
           {fromAmt && fromPriceVal > 0 && <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(fromAmt) * fromPriceVal)}</div>}
         </div>
 
         <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0' }}>
-          <button onClick={flipTokens} style={{ width: 36, height: 36, borderRadius: 10, background: C.card3, border: '1px solid ' + C.border, cursor: 'pointer', color: C.accent, fontSize: 18, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>^v</button>
+          <button onClick={flipTokens} style={{ width: 36, height: 36, borderRadius: 10, background: C.card3, border: '1px solid ' + C.border, cursor: 'pointer', color: C.accent, fontSize: 16, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>^v</button>
         </div>
 
         <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border }}>
@@ -661,7 +573,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
             {toBalance != null && isSol(toToken) && <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{toBalance >= 1000 ? toBalance.toLocaleString('en-US', { maximumFractionDigits: 2 }) : toBalance.toFixed(4)}</span></span>}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <TokenSelect jupiterTokens={jupiterTokens} selected={toToken} onSelect={function(t) { setToToken(t); setQuote(null); setQuoteError(''); setLifiRoute(null); }} />
+            <TokenSelect jupiterTokens={jupiterTokens} selected={toToken} onSelect={function(t) { setToToken(t); setQuote(null); setQuoteError(''); }} />
             <div style={{ flex: 1, textAlign: 'right', fontSize: 22, fontWeight: 500, minWidth: 0, color: quoteLoading ? C.muted : quote ? C.green : C.muted2 }}>{quoteLoading ? '...' : quote ? quote.outAmountDisplay : '0.00'}</div>
           </div>
           {quote && toPriceVal > 0 && <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmt(parseFloat(quote.outAmountDisplay) * toPriceVal)}</div>}
@@ -673,24 +585,23 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
           <div style={{ marginTop: 12, background: '#050912', borderRadius: 10, padding: 12 }}>
             <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
               {[
-                ['Platform Fee (3%)', fromPriceVal > 0 ? '$' + (parseFloat(fromAmt) * fromPriceVal * PLATFORM_FEE).toFixed(2) : '3% of swap'],
-                ['Safety & Anti-MEV (2%)', fromPriceVal > 0 ? '$' + (parseFloat(fromAmt) * fromPriceVal * SAFETY_FEE).toFixed(2) : '2% of swap'],
-                route === 'lifi' ? ['Cross-Chain Fee (4%)', fromPriceVal > 0 ? '$' + (parseFloat(fromAmt) * fromPriceVal * 0.04).toFixed(2) : '4% of swap'] : null,
-                ['Total Fee (' + (route === 'lifi' ? '9%' : '5%') + ')', fromPriceVal > 0 ? '$' + feeUsd : (route === 'lifi' ? '9%' : '5%') + ' of swap'],
-                route === 'jupiter' ? ['Price Impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'] : null,
-                route === 'jupiter' ? ['Min Received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken ? toToken.symbol : '')] : null,
+                ['Fee',                 fromPriceVal > 0 ? '$' + (parseFloat(fromAmt) * fromPriceVal * PLATFORM_FEE).toFixed(2) : '3%'],
+                ['Safety and Anti-MEV', fromPriceVal > 0 ? '$' + (parseFloat(fromAmt) * fromPriceVal * SAFETY_FEE).toFixed(2) : '2%'],
+                isCrossChain ? ['Cross-chain fee', fromPriceVal > 0 ? '$' + (parseFloat(fromAmt) * fromPriceVal * CROSS_FEE).toFixed(2) : '3%'] : null,
+                route === 'jupiter' ? ['Price impact', '~' + parseFloat(quote.priceImpactPct || 0).toFixed(3) + '%'] : null,
+                route === 'jupiter' ? ['Min received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken ? toToken.symbol : '')] : null,
               ].filter(Boolean).map(function(item) {
-                return <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}><span style={{ color: C.muted }}>{item[0]}</span><span style={{ color: item[0].includes('Total') ? C.accent : C.text }}>{item[1]}</span></div>;
+                return <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}><span style={{ color: C.muted }}>{item[0]}</span><span style={{ color: C.text }}>{item[1]}</span></div>;
               })}
             </div>
           </div>
         )}
 
-        {route === 'lifi' && (
+        {needsDstAddr && (
           <div style={{ marginTop: 10 }}>
             <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 6 }}>DESTINATION WALLET</div>
-            <input value={customAddress} onChange={function(e) { setCustomAddress(e.target.value); }} placeholder={isSol(toToken) ? 'Your Solana wallet address...' : 'Your ' + (CHAIN_NAMES[toToken && toToken.chainId] || 'EVM') + ' wallet address (0x...)...'} style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 10, padding: '10px 12px', color: C.accent, fontFamily: 'monospace', fontSize: 11, outline: 'none' }} />
-            <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Enter the wallet where you want to receive your tokens</div>
+            <input value={customAddress} onChange={function(e) { setCustomAddress(e.target.value); }} placeholder={isSol(toToken) ? 'Your Solana wallet address...' : 'Your ' + (CHAIN_NAMES[toToken && toToken.chainId] || 'EVM') + ' address (0x...)...'} style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 10, padding: '10px 12px', color: C.accent, fontFamily: 'monospace', fontSize: 11, outline: 'none', boxSizing: 'border-box' }} />
+            <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Where you want to receive your tokens</div>
           </div>
         )}
 
@@ -698,7 +609,7 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
 
         {isConnected ? (
           <button onClick={executeSwap} disabled={swapStatus === 'loading'} style={{ width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none', background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : swapStatus === 'error' ? 'rgba(255,59,107,.2)' : !fromAmt || !quote ? C.card2 : 'linear-gradient(135deg,#00e5ff,#0055ff)', color: !fromAmt || !quote ? C.muted2 : swapStatus === 'error' ? C.red : C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, cursor: swapStatus === 'loading' ? 'not-allowed' : 'pointer', transition: 'all .3s', minHeight: 52 }}>
-            {swapStatus === 'loading' ? 'Confirming...' : swapStatus === 'success' ? 'Swap Confirmed!' : swapStatus === 'error' ? 'Failed - Try Again' : !fromAmt ? 'Enter Amount' : quoteLoading ? 'Getting Best Route...' : !quote ? 'No Route Found' : 'Swap ' + (fromToken ? fromToken.symbol : '') + ' > ' + (toToken ? toToken.symbol : '')}
+            {swapStatus === 'loading' ? 'Confirming...' : swapStatus === 'success' ? 'Swap Confirmed!' : swapStatus === 'error' ? 'Failed -- Try Again' : !fromAmt ? 'Enter Amount' : quoteLoading ? 'Getting Best Route...' : !quote ? 'No Route Found' : 'Swap ' + (fromToken ? fromToken.symbol : '') + ' > ' + (toToken ? toToken.symbol : '')}
           </button>
         ) : (
           <button onClick={onConnectWallet} style={{ width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#9945ff,#7c3aed)', color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52 }}>Connect Wallet to Swap</button>
@@ -710,3 +621,4 @@ export default function SwapWidget({ coins, jupiterTokens, jupiterLoading, onGoT
     </div>
   );
 }
+
