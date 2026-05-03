@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { VersionedTransaction, PublicKey, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { TradeDrawer } from './SwapWidget.jsx';
-
+ 
 const JUP_API_KEY = process.env.REACT_APP_JUPITER_API_KEY1 || '';
 const PRESET_KEY = 'nexus_launch_presets';
 const LAST_AMT_KEY = 'nexus_launch_last_amt';
