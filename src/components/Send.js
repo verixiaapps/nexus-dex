@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { useAccount, useWalletClient } from 'wagmi';
+import { useAccount, useWalletClient, useSwitchChain } from 'wagmi';
 import { PublicKey, SystemProgram, Transaction, LAMPORTS_PER_SOL, VersionedTransaction } from '@solana/web3.js';
 import { getAssociatedTokenAddress, createTransferInstruction, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
 import { Buffer } from 'buffer';
@@ -182,10 +182,11 @@ function TokenModal({ open, onClose, jupiterTokens }) {
 export default function Send({ coins, jupiterTokens, onConnectWallet, isConnected, isSolanaConnected, walletAddress }) {
   const { publicKey, sendTransaction, connected: solConnected } = useWallet();
   const { connection } = useConnection();
-  const { address: evmAddress, isConnected: evmConnected } = useAccount();
+  const { address: evmAddress, isConnected: evmConnected, chainId: evmChainId } = useAccount();
   const { data: walletClient } = useWalletClient();
+  const { switchChain } = useSwitchChain();
 
-  const walletConnected = solConnected || evmConnected;
+  const walletConnected = isConnected || solConnected || evmConnected;
 
   const [selectedToken, setSelectedToken] = useState(POPULAR_TOKENS[0]);
   const [tokenModalOpen, setTokenModalOpen] = useState(false);
@@ -220,8 +221,8 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
     var fromAddr = isSol(selectedToken)
       ? (publicKey ? publicKey.toString() : '11111111111111111111111111111111')
       : (evmAddress || '0x0000000000000000000000000000000000000001');
-    var fromChainId = isSol(selectedToken) ? 'SOL' : selectedToken.chainId.toString();
-    var toChainId   = destChain === 'solana' ? 'SOL' : destChain.toString();
+    var fromChainId  = isSol(selectedToken) ? 'SOL' : selectedToken.chainId.toString();
+    var toChainId    = destChain === 'solana' ? 'SOL' : destChain.toString();
     var fromTokenAddr = isSol(selectedToken) ? selectedToken.mint : selectedToken.address;
     var fromAmtRaw = Math.floor(parseFloat(amount) * Math.pow(10, selectedToken.decimals || 6)).toString();
     var toAddr = recipient && recipient.length > 10 ? recipient : (destChain === 'solana' ? '11111111111111111111111111111111' : '0x0000000000000000000000000000000000000001');
@@ -317,6 +318,10 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
 
       } else if (route === 'evm') {
         if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
+        if (evmChainId && evmChainId !== selectedToken.chainId) {
+          await switchChain({ chainId: selectedToken.chainId });
+          await new Promise(function(r) { setTimeout(r, 800); });
+        }
         var isNative = selectedToken.address.toLowerCase() === NATIVE_EVM;
         var sendAmt = BigInt(Math.floor(recipientAmount * Math.pow(10, selectedToken.decimals)));
         var feeAmt  = BigInt(Math.floor(feeAmount * Math.pow(10, selectedToken.decimals)));
@@ -364,6 +369,10 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           setTxSig(lifiSig);
         } else {
           if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
+          if (evmChainId && evmChainId !== selectedToken.chainId) {
+            await switchChain({ chainId: selectedToken.chainId });
+            await new Promise(function(r) { setTimeout(r, 800); });
+          }
           var isNativeSell = selectedToken.address.toLowerCase() === NATIVE_EVM;
           if (!isNativeSell) {
             var spender = txReq.to;
