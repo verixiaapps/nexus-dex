@@ -180,10 +180,12 @@ function TokenModal({ open, onClose, jupiterTokens }) {
 }
 
 export default function Send({ coins, jupiterTokens, onConnectWallet, isConnected, isSolanaConnected, walletAddress }) {
-  const { publicKey, sendTransaction } = useWallet();
+  const { publicKey, sendTransaction, connected: solConnected } = useWallet();
   const { connection } = useConnection();
-  const { address: evmAddress } = useAccount();
+  const { address: evmAddress, isConnected: evmConnected } = useAccount();
   const { data: walletClient } = useWalletClient();
+
+  const walletConnected = solConnected || evmConnected;
 
   const [selectedToken, setSelectedToken] = useState(POPULAR_TOKENS[0]);
   const [tokenModalOpen, setTokenModalOpen] = useState(false);
@@ -260,13 +262,12 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
   var recipientAmount = amountNum - feeAmount;
 
   var handleSend = async function() {
-    if (!isConnected) { if (onConnectWallet) onConnectWallet(); return; }
+    if (!walletConnected) { if (onConnectWallet) onConnectWallet(); return; }
     if (!isValidRecipient(recipient)) { setError('Invalid recipient address'); return; }
     if (!amountNum || amountNum <= 0) { setError('Enter a valid amount'); return; }
     setError(''); setSendStatus('loading');
 
     try {
-      // -- Solana direct send -----------------------------------------------
       if (route === 'solana') {
         if (!publicKey) throw new Error('Connect Solana wallet');
         var recipientPubkey = new PublicKey(recipient);
@@ -289,7 +290,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
         var solCoin = coins.find(function(c) { return c.id === 'solana'; });
         var solPrice = solCoin ? solCoin.current_price : 150;
         var tokenPrice = getPrice(selectedToken.symbol);
-
         var dynamicSpread = 0;
         if (selectedToken.mint !== 'So11111111111111111111111111111111111111112') {
           try {
@@ -301,7 +301,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
             }
           } catch (e) {}
         }
-
         var totalFeePct = TOTAL_FEE + dynamicSpread;
         var feeValueUsd = amountNum * (tokenPrice || solPrice) * totalFeePct;
         var feeLamports = Math.round(Math.max(
@@ -309,7 +308,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           50000
         ));
         transaction.add(SystemProgram.transfer({ fromPubkey: publicKey, toPubkey: new PublicKey(FEE_WALLET_SOL), lamports: feeLamports }));
-
         var lb = await connection.getLatestBlockhash();
         transaction.recentBlockhash = lb.blockhash;
         transaction.feePayer = publicKey;
@@ -317,14 +315,11 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
         await connection.confirmTransaction(sig, 'confirmed');
         setTxSig(sig);
 
-      // -- EVM direct send --------------------------------------------------
       } else if (route === 'evm') {
         if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
-
         var isNative = selectedToken.address.toLowerCase() === NATIVE_EVM;
         var sendAmt = BigInt(Math.floor(recipientAmount * Math.pow(10, selectedToken.decimals)));
         var feeAmt  = BigInt(Math.floor(feeAmount * Math.pow(10, selectedToken.decimals)));
-
         if (isNative) {
           var hash1 = await walletClient.sendTransaction({ to: recipient, value: sendAmt });
           if (feeAmt > BigInt(0)) await walletClient.sendTransaction({ to: FEE_WALLET_EVM, value: feeAmt });
@@ -339,17 +334,14 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           setTxSig(hash2);
         }
 
-      // -- LiFi cross-chain -------------------------------------------------
       } else if (route === 'lifi') {
         var srcAddr = isSol(selectedToken) ? (publicKey ? publicKey.toString() : null) : (evmAddress || null);
         if (!srcAddr) throw new Error('Connect your ' + (isSol(selectedToken) ? 'Solana' : 'EVM') + ' wallet');
         if (!recipient || recipient.length < 10) throw new Error('Enter recipient address');
-
         var execFromChain = isSol(selectedToken) ? 'SOL' : selectedToken.chainId.toString();
         var execToChain   = destChain === 'solana' ? 'SOL' : destChain.toString();
         var execFromToken = isSol(selectedToken) ? selectedToken.mint : selectedToken.address;
         var execFromAmt   = Math.floor(parseFloat(amount) * Math.pow(10, selectedToken.decimals || 6)).toString();
-
         var freshParams = new URLSearchParams({
           fromChain: execFromChain, toChain: execToChain,
           fromToken: execFromToken, toToken: execFromToken,
@@ -363,7 +355,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           throw new Error(freshRoute.message || 'LiFi could not find a route -- try adjusting amount');
         }
         var txReq = freshRoute.transactionRequest;
-
         if (isSol(selectedToken)) {
           if (!publicKey) throw new Error('Connect Solana wallet');
           var lifiSolTx = VersionedTransaction.deserialize(Buffer.from(txReq.data, 'base64'));
@@ -419,7 +410,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
     { id: 10, label: 'Optimism' },
   ];
 
-  if (!isConnected) {
+  if (!walletConnected) {
     return (
       <div style={{ maxWidth: 520, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
         <div style={{ marginBottom: 20 }}>
@@ -446,8 +437,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
       </div>
 
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20 }}>
-
-        {/* Token select */}
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>SELECT TOKEN</div>
           <button onClick={function() { setTokenModalOpen(true); }} style={{ display: 'flex', alignItems: 'center', gap: 10, background: C.card2, border: '1px solid ' + C.border, borderRadius: 12, padding: '12px 16px', cursor: 'pointer', width: '100%' }}>
@@ -463,7 +452,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           </button>
         </div>
 
-        {/* Destination chain */}
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>DESTINATION CHAIN</div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -477,7 +465,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           {route === 'lifi' && <div style={{ fontSize: 10, color: C.accent, marginTop: 6 }}>Cross-chain bridge via LI.FI</div>}
         </div>
 
-        {/* Slippage */}
         {route === 'lifi' && (
           <div style={{ marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SLIPPAGE</span>
@@ -489,7 +476,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           </div>
         )}
 
-        {/* Recipient */}
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>RECIPIENT ADDRESS</div>
           <input value={recipient} onChange={function(e) { setRecipient(e.target.value); }} placeholder={destChain === 'solana' ? 'Solana wallet address...' : '0x EVM address...'} style={{ width: '100%', background: C.card2, border: '1px solid ' + (recipient && !isValidRecipient(recipient) ? C.red : C.border), borderRadius: 12, padding: '14px 16px', color: C.text, fontFamily: 'monospace', fontSize: 12, outline: 'none' }} />
@@ -497,7 +483,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           {recipient && isValidRecipient(recipient) && <div style={{ color: C.green, fontSize: 11, marginTop: 4 }}>Valid address</div>}
         </div>
 
-        {/* Amount */}
         <div style={{ marginBottom: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>AMOUNT</span>
@@ -519,7 +504,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           )}
         </div>
 
-        {/* LiFi route preview */}
         {route === 'lifi' && (
           <div style={{ marginBottom: 14, padding: 12, background: 'rgba(0,229,255,.04)', border: '1px solid rgba(0,229,255,.12)', borderRadius: 10 }}>
             <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 4 }}>CROSS-CHAIN ROUTE</div>
@@ -534,7 +518,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           </div>
         )}
 
-        {/* Fee breakdown */}
         <div style={{ background: '#050912', borderRadius: 10, padding: 12, marginBottom: 16 }}>
           {amount && amountNum > 0 && (
             <div style={{ borderTop: '1px solid rgba(255,255,255,.05)', paddingTop: 8 }}>
