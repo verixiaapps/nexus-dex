@@ -13,6 +13,7 @@
 - OX_API_KEY            — 0x.org API key
 - PINATA_JWT            — Pinata JWT for IPFS uploads
 - HELIUS_API_KEY        — Helius Solana RPC key (optional, falls back to public)
+- MORALIS_API_KEY       — Moralis API key for Portfolio EVM balances
 - ALLOWED_ORIGINS       — comma-separated list of allowed origins
 - ```
                         (e.g. "https://swap.verixiaapps.com,http://localhost:3000")
@@ -22,6 +23,7 @@
 - Deprecated (kept temporarily for migration):
 - REACT_APP_0X_API_KEY     — falls back to this if OX_API_KEY missing
 - REACT_APP_PINATA_JWT     — falls back to this if PINATA_JWT missing
+- REACT_APP_MORALIS_API_KEY — falls back to this if MORALIS_API_KEY missing
   */
 
 require(‘dotenv’).config();
@@ -45,9 +47,10 @@ app.set(‘trust proxy’, 1);
 - SECRETS — server-side only, never leaked to browser
 - ========================================================================= */
 
-const OX_API_KEY     = process.env.OX_API_KEY     || process.env.REACT_APP_0X_API_KEY  || ‘’;
-const PINATA_JWT     = process.env.PINATA_JWT     || process.env.REACT_APP_PINATA_JWT  || ‘’;
-const HELIUS_API_KEY = process.env.HELIUS_API_KEY || process.env.REACT_APP_HELIUS_API_KEY || ‘’;
+const OX_API_KEY      = process.env.OX_API_KEY      || process.env.REACT_APP_0X_API_KEY      || ‘’;
+const PINATA_JWT      = process.env.PINATA_JWT      || process.env.REACT_APP_PINATA_JWT      || ‘’;
+const HELIUS_API_KEY  = process.env.HELIUS_API_KEY  || process.env.REACT_APP_HELIUS_API_KEY  || ‘’;
+const MORALIS_API_KEY = process.env.MORALIS_API_KEY || process.env.REACT_APP_MORALIS_API_KEY || ‘’;
 
 /* ============================================================================
 
@@ -151,9 +154,10 @@ res.json({
 ok: true,
 env: NODE_ENV,
 has: {
-ox:     Boolean(OX_API_KEY),
-pinata: Boolean(PINATA_JWT),
-helius: Boolean(HELIUS_API_KEY),
+ox:      Boolean(OX_API_KEY),
+pinata:  Boolean(PINATA_JWT),
+helius:  Boolean(HELIUS_API_KEY),
+moralis: Boolean(MORALIS_API_KEY),
 },
 time: new Date().toISOString(),
 });
@@ -440,6 +444,136 @@ return res.status(500).json({ error: e.message || ‘Unknown error’ });
 
 /* ============================================================================
 
+- MORALIS — wallet token balances across multiple EVM chains
+- 
+- GET /api/moralis/wallet-tokens?address=0x…&chains=eth,polygon,base,…
+- 
+- Iterates through requested chains and aggregates results from
+- GET /api/v2.2/wallets/:address/tokens?chain=<chain>
+- which returns native + ERC20 holdings with USD prices already attached.
+- 
+- Response shape (matches what Portfolio.js expects):
+- { tokens: [{ chainId, contractAddress, symbol, name, logo,
+- ```
+             balance, balanceFormatted, decimals,
+  ```
+- ```
+             usdPrice, usdValue, pct24h }] }
+  ```
+- ========================================================================= */
+
+// Chain string -> EVM chainId. Restricted to chains explicitly listed in
+// the Moralis “Get Native & ERC20 Token Balances by Wallet” docs as of
+// Q1 2026. If you add a chain here, verify it appears in
+// https://docs.moralis.com/web3-data-api/evm/reference/wallet-api/get-wallet-token-balances-price
+// Adding a string Moralis doesn’t accept causes that chain to 400 silently
+// (but other chains in the same request still succeed).
+const MORALIS_CHAIN_TO_ID = {
+eth: 1,
+polygon: 137,
+bsc: 56,
+avalanche: 43114,
+fantom: 250,
+cronos: 25,
+arbitrum: 42161,
+gnosis: 100,
+base: 8453,
+optimism: 10,
+linea: 59144,
+moonbeam: 1284,
+ronin: 2020,
+lisk: 1135,
+pulse: 369,
+};
+
+app.get(’/api/moralis/wallet-tokens’, async (req, res) => {
+try {
+if (!MORALIS_API_KEY) {
+return res.status(503).json({ error: ‘Moralis not configured’, tokens: [] });
+}
+
+```
+const address = (req.query.address || '').toString().trim();
+if (!/^0x[0-9a-fA-F]{40}$/.test(address)) {
+  return res.status(400).json({ error: 'Invalid EVM address', tokens: [] });
+}
+
+const chainsParam = (req.query.chains || 'eth,polygon,arbitrum,base,bsc,avalanche,optimism').toString();
+const chains = chainsParam
+  .split(',')
+  .map((s) => s.trim().toLowerCase())
+  .filter((c) => MORALIS_CHAIN_TO_ID[c]);
+
+if (!chains.length) {
+  return res.status(400).json({ error: 'No valid chains', tokens: [] });
+}
+
+const headers = {
+  Accept: 'application/json',
+  'X-API-Key': MORALIS_API_KEY,
+};
+
+// Run requests in parallel; failures on one chain don't kill the whole call.
+const results = await Promise.allSettled(chains.map(async (chain) => {
+  const url = 'https://deep-index.moralis.io/api/v2.2/wallets/' +
+    encodeURIComponent(address) + '/tokens?chain=' + encodeURIComponent(chain) +
+    '&exclude_spam=true&exclude_unverified_contracts=false';
+  const r = await fetchWithTimeout(url, { method: 'GET', headers }, 15_000);
+  const parsed = await safeJson(r);
+  if (!r.ok || !parsed.parsed) {
+    return { chain, items: [] };
+  }
+  return { chain, items: parsed.parsed.result || [] };
+}));
+
+const tokens = [];
+results.forEach((settled) => {
+  if (settled.status !== 'fulfilled') return;
+  const { chain, items } = settled.value;
+  const chainId = MORALIS_CHAIN_TO_ID[chain];
+  if (!chainId) return;
+
+  items.forEach((t) => {
+    // Moralis returns native and ERC20 in the same shape; native has
+    // native_token=true. balance_formatted is human-readable string.
+    const balanceFmt = parseFloat(t.balance_formatted || '0');
+    if (!balanceFmt || balanceFmt <= 0) return;
+
+    const usdPrice = parseFloat(t.usd_price || '0');
+    const usdValue = parseFloat(t.usd_value || '0');
+    const pct24h   = parseFloat(t.usd_price_24hr_percent_change || '0');
+
+    tokens.push({
+      chainId,
+      contractAddress: t.native_token ? '' : (t.token_address || ''),
+      symbol: t.symbol || '',
+      name:   t.name   || t.symbol || '',
+      logo:   t.logo   || t.thumbnail || null,
+      balance: t.balance || '0',
+      balanceFormatted: balanceFmt,
+      decimals: parseInt(t.decimals || '18'),
+      usdPrice,
+      usdValue,
+      pct24h,
+      isNative: Boolean(t.native_token),
+    });
+  });
+});
+
+return res.json({ tokens });
+```
+
+} catch (e) {
+if (e.name === ‘AbortError’) {
+return res.status(504).json({ error: ‘Moralis request timed out’, tokens: [] });
+}
+logError(‘moralis’, e);
+return res.status(500).json({ error: e.message || ‘Unknown error’, tokens: [] });
+}
+});
+
+/* ============================================================================
+
 - 404 FOR UNMATCHED API ROUTES — must come before SPA catch-all so typos
 - don’t fall through to index.html with a 200.
 - ========================================================================= */
@@ -500,9 +634,10 @@ app.listen(PORT, () => {
 console.log(‘Nexus DEX server running on port ’ + PORT);
 console.log(’  env:           ’ + NODE_ENV);
 console.log(’  allowed origins: ’ + allowedOrigins.join(’, ‘));
-if (!OX_API_KEY)     console.warn(’  WARNING: OX_API_KEY not set — EVM swaps will fail’);
-if (!PINATA_JWT)     console.warn(’  WARNING: PINATA_JWT not set — token launch metadata will fail’);
-if (!HELIUS_API_KEY) console.warn(’  WARNING: HELIUS_API_KEY not set — falling back to public Solana RPC’);
+if (!OX_API_KEY)      console.warn(’  WARNING: OX_API_KEY not set — EVM swaps will fail’);
+if (!PINATA_JWT)      console.warn(’  WARNING: PINATA_JWT not set — token launch metadata will fail’);
+if (!HELIUS_API_KEY)  console.warn(’  WARNING: HELIUS_API_KEY not set — falling back to public Solana RPC’);
+if (!MORALIS_API_KEY) console.warn(’  WARNING: MORALIS_API_KEY not set — Portfolio EVM balances will be empty’);
 });
 
 // Last-resort handlers for async errors that escape every other catch.
