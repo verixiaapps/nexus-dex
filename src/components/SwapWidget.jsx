@@ -303,13 +303,103 @@ function toRawAmount(amountStr, decimals) {
 *   EVM:    { chain:'evm', address, chainId, symbol, name, decimals, logoURI }
 * ========================================================================= */
 
+/* ============================================================================
+* NATIVE COIN RESOLUTION
+*
+* When users click a coin from any markets/portfolio/list view, we resolve
+* the canonical "real" form of that coin BEFORE handing it to the trade
+* drawer. Without this, a CoinGecko coin like BNB whose platforms map
+* contains both `binance-smart-chain` (native) and `ethereum` (a bridged
+* ERC20 wrapper) could get auto-resolved to the Ethereum-chain wrapper if
+* the user happened to have ETH selected as their header chain. That
+* wrapper has no aggregator route, so the swap fails with the unhelpful
+* "Failed to get quote -- input is invalid".
+*
+* Keys are CoinGecko coin IDs (slugs). Each entry says how to resolve:
+*   - 'evm-native':  use NATIVE_EVM (0xeeee...) on the given chainId
+*   - 'solana':      use the wrapped SOL mint (Jupiter convention for native)
+*   - 'btc':         use the BTC token shape from POPULAR_TOKENS
+*
+* Native L2 governance tokens (OP, ARB, BLAST, etc.) are NOT in this map --
+* they're ERC20s, not gas tokens, so the platforms-map fallback handles
+* them correctly (picks the right ERC20 contract on the right chain).
+* ========================================================================= */
+const NATIVE_COIN_RESOLVE = {
+ // EVM L1 gas tokens -- coin IS the chain's native asset
+ 'ethereum':                   { kind: 'evm-native', chainId: 1 },
+ 'binancecoin':                { kind: 'evm-native', chainId: 56 },
+ 'matic-network':              { kind: 'evm-native', chainId: 137 },     // legacy MATIC id
+ 'polygon-ecosystem-token':    { kind: 'evm-native', chainId: 137 },     // POL rename
+ 'avalanche-2':                { kind: 'evm-native', chainId: 43114 },
+ 'fantom':                     { kind: 'evm-native', chainId: 250 },
+ 'sonic-3':                    { kind: 'evm-native', chainId: 146 },
+ 's':                          { kind: 'evm-native', chainId: 146 },     // SonicLabs S
+ 'celo':                       { kind: 'evm-native', chainId: 42220 },
+ 'xdai':                       { kind: 'evm-native', chainId: 100 },
+ 'cronos':                     { kind: 'evm-native', chainId: 25 },
+ 'moonbeam':                   { kind: 'evm-native', chainId: 1284 },
+ 'kava':                       { kind: 'evm-native', chainId: 2222 },
+ 'mantle':                     { kind: 'evm-native', chainId: 5000 },
+ 'core':                       { kind: 'evm-native', chainId: 1116 },
+ 'flare-networks':             { kind: 'evm-native', chainId: 14 },
+ 'metis-token':                { kind: 'evm-native', chainId: 1088 },
+ 'sei-network':                { kind: 'evm-native', chainId: 1329 },
+ 'berachain-bera':             { kind: 'evm-native', chainId: 80094 },
+ 'monad':                      { kind: 'evm-native', chainId: 143 },
+ 'ronin':                      { kind: 'evm-native', chainId: 2020 },
+ 'kucoin-shares':              { kind: 'evm-native', chainId: 321 },
+ 'flow':                       { kind: 'evm-native', chainId: 747 },
+ 'lisk':                       { kind: 'evm-native', chainId: 1135 },
+ 'apecoin':                    { kind: 'evm-native', chainId: 33139 },
+ 'fuse-network-token':         { kind: 'evm-native', chainId: 122 },
+ 'hyperliquid':                { kind: 'evm-native', chainId: 999 },
+ 'plasma':                     { kind: 'evm-native', chainId: 9745 },
+ 'aurora-near':                { kind: 'evm-native', chainId: 1313161554 },
+
+ // Non-EVM
+ 'solana':                     { kind: 'solana' },
+ 'bitcoin':                    { kind: 'btc' },
+};
+
+// BTC shape used in resolution -- matches POPULAR_TOKENS BTC entry
+const BTC_RESOLVE_SHAPE = { chain: 'bitcoin', address: 'bitcoin', chainId: 20000000000001, symbol: 'BTC', name: 'Bitcoin', decimals: 8 };
+
 function normalizeToken(input, opts = {}) {
  if (!input) return null;
  const { defaultChainId = 1 } = opts;
 
+ // -- Native L1 override --------------------------------------------
+ // Runs BEFORE the strict-shape early returns. Even if the caller already
+ // populated a (wrong-chain) ERC20 address from the CoinGecko platforms
+ // map, if the coin's id matches a known L1 native we override to the
+ // canonical native form. This is what fixes the BNB-on-Ethereum-ERC20
+ // bug for every entry path (TokenDetail, NewLaunches, direct callers).
+ const nativeRule = input.id ? NATIVE_COIN_RESOLVE[input.id] : null;
+ if (nativeRule) {
+   const baseLogo = input.logoURI || input.image || input.thumbnail || null;
+   const baseSym  = input.symbol || (nativeRule.kind === 'btc' ? 'BTC' : nativeRule.kind === 'solana' ? 'SOL' : 'TOKEN');
+   const baseName = input.name || baseSym;
+   if (nativeRule.kind === 'evm-native') {
+     return {
+       chain: 'evm', address: NATIVE_EVM, chainId: nativeRule.chainId,
+       symbol: baseSym, name: baseName, decimals: 18, logoURI: baseLogo,
+     };
+   }
+   if (nativeRule.kind === 'solana') {
+     return {
+       chain: 'solana', mint: WSOL_MINT,
+       symbol: baseSym, name: baseName, decimals: 9, logoURI: baseLogo,
+     };
+   }
+   if (nativeRule.kind === 'btc') {
+     return Object.assign({}, BTC_RESOLVE_SHAPE, { logoURI: baseLogo });
+   }
+ }
+
  // Already a strict token
  if (isSol(input) && input.mint) return input;
  if (isEvm(input) && input.address && input.chainId) return input;
+ if (isBtc(input)) return input;
 
  const logoURI = input.logoURI || input.image || input.thumbnail || null;
  const symbol  = input.symbol || input.tokenSymbol || 'TOKEN';
@@ -344,508 +434,14 @@ function normalizeToken(input, opts = {}) {
    };
  }
 
- // CoinGecko-style coin where id is a string slug ("solana", "ethereum") -- try by symbol
- if (input.symbol) {
-   const lc = input.symbol.toLowerCase();
-   const found = POPULAR_TOKENS.find((t) => t.symbol.toLowerCase() === lc);
-   if (found) return found;
- }
-
+ // STRICT -- no symbol-based fallback. Tokens with no chain context, no
+ // contract address, no mint, AND no canonical CG-id native rule cannot
+ // be resolved without guessing. Returning null here forces callers to
+ // fall through to chain-anchored defaults (e.g., native of headerChain)
+ // rather than picking a random POPULAR_TOKENS entry that happens to
+ // share a symbol -- which is exactly how clicking "USDC" on a markets
+ // row used to land you on USDC-on-Ethereum no matter your header chain.
  return null;
-}
-
-/* ============================================================================
-* DEFAULT TOKEN RESOLVERS
-*
-* For a given "destination chain" (header selector) + "viewed token" (if any) + "mode",
-* decide what from-token and to-token should be.
-*
-* Mode 'buy'  -> user wants to acquire viewedToken
-* Mode 'sell' -> user wants to dispose of viewedToken
-* Mode 'swap' -> free-form
-* ========================================================================= */
-
-// Native symbol lookup per chain -- used when synthesizing native tokens
-// for chains not in POPULAR_TOKENS.
-const _NATIVE_BY_CHAIN = {
- 1: { symbol: 'ETH', name: 'Ethereum' },
- 10: { symbol: 'ETH', name: 'ETH (Optimism)' },
- 25: { symbol: 'CRO', name: 'Cronos' },
- 56: { symbol: 'BNB', name: 'BNB' },
- 100: { symbol: 'xDAI', name: 'xDAI' },
- 122: { symbol: 'FUSE', name: 'Fuse' },
- 130: { symbol: 'ETH', name: 'ETH (Unichain)' },
- 137: { symbol: 'POL', name: 'Polygon' },
- 146: { symbol: 'S', name: 'Sonic' },
- 250: { symbol: 'FTM', name: 'Fantom' },
- 252: { symbol: 'ETH', name: 'ETH (Fraxtal)' },
- 255: { symbol: 'ETH', name: 'ETH (Kroma)' },
- 288: { symbol: 'ETH', name: 'ETH (Boba)' },
- 321: { symbol: 'KCS', name: 'KuCoin' },
- 324: { symbol: 'ETH', name: 'ETH (zkSync)' },
- 360: { symbol: 'ETH', name: 'ETH (Shape)' },
- 480: { symbol: 'ETH', name: 'ETH (World Chain)' },
- 747: { symbol: 'FLOW', name: 'Flow' },
- 1088: { symbol: 'METIS', name: 'Metis' },
- 1116: { symbol: 'CORE', name: 'Core' },
- 1135: { symbol: 'ETH', name: 'ETH (Lisk)' },
- 1284: { symbol: 'GLMR', name: 'Moonbeam' },
- 1313161554: { symbol: 'ETH', name: 'ETH (Aurora)' },
- 1329: { symbol: 'SEI', name: 'SEI' },
- 2020: { symbol: 'RON', name: 'Ronin' },
- 2222: { symbol: 'KAVA', name: 'Kava' },
- 2741: { symbol: 'ETH', name: 'ETH (Abstract)' },
- 5000: { symbol: 'MNT', name: 'Mantle' },
- 8453: { symbol: 'ETH', name: 'ETH (Base)' },
- 33139: { symbol: 'APE', name: 'ApeCoin' },
- 34443: { symbol: 'ETH', name: 'ETH (Mode)' },
- 42161: { symbol: 'ETH', name: 'ETH (Arbitrum)' },
- 42220: { symbol: 'CELO', name: 'Celo' },
- 43111: { symbol: 'ETH', name: 'ETH (Hemi)' },
- 43114: { symbol: 'AVAX', name: 'Avalanche' },
- 48900: { symbol: 'ETH', name: 'ETH (Zircuit)' },
- 57073: { symbol: 'ETH', name: 'ETH (Ink)' },
- 59144: { symbol: 'ETH', name: 'ETH (Linea)' },
- 60808: { symbol: 'ETH', name: 'ETH (BOB)' },
- 80094: { symbol: 'BERA', name: 'Berachain' },
- 81457: { symbol: 'ETH', name: 'ETH (Blast)' },
- 167000: { symbol: 'ETH', name: 'ETH (Taiko)' },
- 200901: { symbol: 'BTC', name: 'Bitlayer BTC' },
- 534352: { symbol: 'ETH', name: 'ETH (Scroll)' },
- 7777777: { symbol: 'ETH', name: 'ETH (Zora)' },
-};
-
-function nativeOfChain(chainId) {
- if (chainId === 'solana') {
-   return POPULAR_TOKENS.find((t) => t.mint === WSOL_MINT) || null;
- }
- // First try POPULAR_TOKENS for the icon
- const popular = POPULAR_TOKENS.find((t) => isEvm(t) && t.chainId === chainId && t.address === NATIVE_EVM);
- if (popular) return popular;
- // Synthesize from chain meta
- const meta = _NATIVE_BY_CHAIN[chainId];
- if (!meta) return null;
- return {
-   chain: 'evm',
-   address: NATIVE_EVM,
-   chainId,
-   symbol: meta.symbol,
-   name: meta.name,
-   decimals: 18,
-   logoURI: null,
- };
-}
-
-function usdcOfChain(chainId) {
- if (chainId === 'solana') {
-   return POPULAR_TOKENS.find((t) => t.mint === USDC_SOLANA) || null;
- }
- const addr = USDC_BY_CHAIN[chainId];
- if (!addr) return null;
- // First try POPULAR_TOKENS for the icon
- const popular = POPULAR_TOKENS.find((t) =>
-   isEvm(t) && t.chainId === chainId && (t.address || '').toLowerCase() === addr.toLowerCase()
- );
- if (popular) return popular;
- // Synthesize from address
- return {
-   chain: 'evm',
-   address: addr,
-   chainId,
-   symbol: 'USDC',
-   name: 'USDC (' + (CHAIN_NAMES[chainId] || 'EVM') + ')',
-   decimals: 6,
-   logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png',
- };
-}
-
-function chainOfToken(t) {
- if (isSol(t)) return 'solana';
- if (isBtc(t)) return 'bitcoin';
- if (isEvm(t)) return t.chainId;
- return null;
-}
-
-function defaultTokenPair({ mode, viewedToken, headerChain, lastFromToken }) {
- const viewed = viewedToken ? normalizeToken(viewedToken, { defaultChainId: headerChain === 'solana' ? 1 : headerChain }) : null;
-
- if (mode === 'buy' && viewed) {
-   const tokenChain = chainOfToken(viewed);
-   const fromToken = lastFromToken || nativeOfChain(tokenChain) || nativeOfChain(headerChain) || POPULAR_TOKENS[0];
-   return { fromToken, toToken: viewed };
- }
- if (mode === 'sell' && viewed) {
-   const tokenChain = chainOfToken(viewed);
-   const toToken = usdcOfChain(headerChain) || usdcOfChain(tokenChain) || nativeOfChain(headerChain) || POPULAR_TOKENS[1];
-   return { fromToken: viewed, toToken };
- }
- // mode === 'swap' or no viewed token
- const fromToken = lastFromToken || nativeOfChain(headerChain) || POPULAR_TOKENS[0];
- const toToken   = usdcOfChain(headerChain) || POPULAR_TOKENS[1];
- return { fromToken, toToken };
-}
-
-/* ============================================================================
-* ROUTE PICKER -- decides Jupiter / 0x / LiFi / multi-hop, silently.
-* Never shown to user.
-* ========================================================================= */
-
-function pickRoute(from, to) {
- if (!from || !to) return 'lifi';
- // Same-chain Solana -> Jupiter
- if (isSol(from) && isSol(to)) return 'jupiter';
- // Same-chain EVM with 0x support -> 0x Permit2
- if (isEvm(from) && isEvm(to) && from.chainId === to.chainId && OX_CHAIN_IDS.has(from.chainId)) return '0x';
- // Anything else -> LiFi (cross-chain or unsupported same-chain EVM)
- return 'lifi';
-}
-
-/* ============================================================================
-* LIFI HELPERS
-* ========================================================================= */
-
-function lifiChainParam(t) {
- if (isSol(t)) return 'SOL';
- if (isBtc(t)) return 'BTC';
- return String(t.chainId);
-}
-function lifiTokenParam(t) {
- if (isSol(t)) return t.mint;
- if (isBtc(t)) return 'bitcoin';   // LiFi's special address for BTC native
- return t.address;
-}
-
-async function fetchLifiTokens() {
- if (_lifiTokensCache) return _lifiTokensCache;
- if (_lifiTokensInflight) return _lifiTokensInflight;
- // chainTypes includes UTXO so BTC tokens come back too.
- _lifiTokensInflight = fetch('https://li.quest/v1/tokens?chainTypes=EVM,SVM,UTXO')
-   .then((r) => (r.ok ? r.json() : null))
-   .catch(() => null)
-   .then((data) => {
-     _lifiTokensInflight = null;
-     // Only cache successful, non-empty results -- otherwise let next call retry
-     if (data && data.tokens && Object.keys(data.tokens).length > 0) {
-       _lifiTokensCache = data;
-       return data;
-     }
-     return { tokens: {} };
-   });
- return _lifiTokensInflight;
-}
-
-async function fetchLifiQuote({ fromToken, toToken, fromAmtRaw, fromAddress, toAddress, slip, signal }) {
- const params = new URLSearchParams({
-   fromChain:   lifiChainParam(fromToken),
-   toChain:     lifiChainParam(toToken),
-   fromToken:   lifiTokenParam(fromToken),
-   toToken:     lifiTokenParam(toToken),
-   fromAmount:  String(fromAmtRaw),
-   fromAddress,
-   toAddress:   toAddress || fromAddress,
-   slippage:    String(slip / 100),
-   fee:         String(LIFI_FEE),
-   integrator:  LIFI_INTEGRATOR,
- });
- const res = await fetch('https://li.quest/v1/quote?' + params.toString(), { signal });
- const data = await res.json();
- if (!res.ok) throw new Error(data.message || 'LiFi quote failed');
- if (!data.estimate || !data.estimate.toAmount) throw new Error('No cross-chain route');
- return data;
-}
-
-/* ============================================================================
-* 0X HELPERS (Permit2 -- single-signature swap+approval)
-*
-* Calls go through our /api/0x proxy so the API key never touches the browser.
-* ========================================================================= */
-
-async function fetchOxQuote({ chainId, sellToken, buyToken, sellAmount, taker, slipBps, feeRecipient, feeToken, signal }) {
- // Use Permit2 endpoint -- user signs an EIP-712 permit (off-chain, no gas, no popup-2)
- // and the resulting signed quote can be executed in a single on-chain tx that includes the swap.
- const qs = new URLSearchParams({
-   chainId:               String(chainId),
-   sellToken:             (sellToken || '').toLowerCase(),
-   buyToken:              (buyToken  || '').toLowerCase(),
-   sellAmount:            String(sellAmount),
-   taker:                 taker || '',
-   slippageBps:           String(slipBps),
-   // 0x is for same-chain swaps only -- use TOTAL_FEE (5%), not the cross-chain rate.
-   swapFeeBps:            String(Math.round(TOTAL_FEE * 10000)),
-   swapFeeRecipient:      feeRecipient,
-   swapFeeToken:          (feeToken || '').toLowerCase(),
-   tradeSurplusRecipient: feeRecipient,
- });
- const res = await fetch('/api/0x/swap/permit2/quote?' + qs.toString(), { signal });
- const data = await res.json();
- if (!res.ok) throw new Error(data.error || data.message || '0x quote failed');
- if (!data.buyAmount) throw new Error('0x: no buyAmount in response');
- return data;
-}
-
-/* ============================================================================
-* JUPITER HELPERS
-*
-* These hit api.jup.ag directly (read-only price/quote endpoints, no key needed
-* for v1 quote, key for higher rate limits goes via x-api-key header).
-* ========================================================================= */
-
-async function fetchJupiterQuote({ inputMint, outputMint, amountRaw, slipBps, signal }) {
- const qs = new URLSearchParams({
-   inputMint,
-   outputMint,
-   amount:        String(amountRaw),
-   slippageBps:   String(slipBps),
-   onlyDirectRoutes: 'false',
- });
- const headers = { 'Content-Type': 'application/json' };
- if (process.env.REACT_APP_JUPITER_API_KEY1) headers['x-api-key'] = process.env.REACT_APP_JUPITER_API_KEY1;
- const res = await fetch('https://api.jup.ag/swap/v1/quote?' + qs.toString(), { headers, signal });
- const data = await res.json();
- if (!res.ok) throw new Error(data.error || 'Jupiter quote failed');
- if (!data.outAmount) throw new Error('Jupiter: no route');
- return data;
-}
-
-async function fetchJupiterSwapTx({ quoteResponse, userPublicKey, signal }) {
- const headers = { 'Content-Type': 'application/json' };
- if (process.env.REACT_APP_JUPITER_API_KEY1) headers['x-api-key'] = process.env.REACT_APP_JUPITER_API_KEY1;
- const res = await fetch('https://api.jup.ag/swap/v1/swap', {
-   method: 'POST',
-   headers,
-   body: JSON.stringify({
-     quoteResponse,
-     userPublicKey,
-     wrapAndUnwrapSol:        true,
-     dynamicComputeUnitLimit: true,
-     prioritizationFeeLamports: 'auto',
-   }),
-   signal,
- });
- const data = await res.json();
- if (!res.ok || !data.swapTransaction) throw new Error(data.error || 'Jupiter swap tx build failed');
- return data;
-}
-
-/* ============================================================================
-* FEE CALCULATION
-*
-* For Solana same-chain swaps we deduct the platform fee in SOL
-* (converted from USD via current SOL price) and append a SystemProgram.transfer
-* to the swap's instruction list -- bundled in the same single signature.
-*
-* For EVM 0x swaps the fee is part of the 0x quote (swapFeeBps + swapFeeRecipient),
-* so 0x already takes care of routing the fee to our wallet.
-*
-* For LiFi swaps the fee is part of the LiFi quote (fee param + integrator),
-* also bundled.
-* ========================================================================= */
-
-function calcSolFeeLamports({ fromAmtTokens, fromTokenSymbol, fromTokenPriceUsd, solPriceUsd, isCrossChain }) {
- const feeRate = isCrossChain ? TOTAL_FEE_CC : TOTAL_FEE;
- const tradeUsd = fromAmtTokens * (fromTokenPriceUsd || 0);
-
- let lamports;
- if (tradeUsd > 0 && solPriceUsd > 0) {
-   lamports = Math.round((tradeUsd * feeRate / solPriceUsd) * LAMPORTS_PER_SOL);
- } else if (fromTokenSymbol === 'SOL') {
-   // direct: take % of SOL amount itself
-   lamports = Math.round(fromAmtTokens * feeRate * LAMPORTS_PER_SOL);
- } else {
-   // can't price the trade -- fall back to a small fixed minimum
-   lamports = 50_000;
- }
- return Math.max(lamports, 50_000); // never less than 0.00005 SOL
-}
-
-/* ============================================================================
-* PRESET HELPERS (localStorage)
-* ========================================================================= */
-
-function loadPresets() {
- try {
-   const raw = localStorage.getItem(PRESETS_LS_KEY);
-   if (!raw) return { buy: DEFAULT_BUY_PRESETS, sell: DEFAULT_SELL_PRESETS };
-   const p = JSON.parse(raw);
-   return {
-     buy:  Array.isArray(p.buy)  && p.buy.length  >= 3 ? p.buy  : DEFAULT_BUY_PRESETS,
-     sell: Array.isArray(p.sell) && p.sell.length >= 3 ? p.sell : DEFAULT_SELL_PRESETS,
-   };
- } catch { return { buy: DEFAULT_BUY_PRESETS, sell: DEFAULT_SELL_PRESETS }; }
-}
-function savePresets(p) {
- try { localStorage.setItem(PRESETS_LS_KEY, JSON.stringify(p)); } catch {}
-}
-
-function loadHeaderChain() {
- try {
-   const raw = localStorage.getItem(HEADER_CHAIN_LS_KEY);
-   if (!raw) return 1; // Default to Ethereum
-   const v = JSON.parse(raw);
-   if (v === 'solana') return 'solana';
-   if (typeof v === 'number') return v;
-   return 1;
- } catch { return 1; }
-}
-function saveHeaderChain(c) {
- try { localStorage.setItem(HEADER_CHAIN_LS_KEY, JSON.stringify(c)); } catch {}
-}
-
-/* ============================================================================
-* MAX-SAFE AMOUNT CALCULATION
-*
-* The old bug: TOTAL_FEE (0.05) was subtracted as if it were a SOL amount.
-* Correct: subtract a proportional fee % AND a tx-cost reserve.
-* ========================================================================= */
-
-function maxSafeAmount({ balance, isNative, isCrossChain }) {
- if (!balance || balance <= 0) return 0;
- const feeRate = isCrossChain ? TOTAL_FEE_CC : TOTAL_FEE;
-
- if (isNative) {
-   // For native tokens (SOL, ETH, BNB...) we have to leave gas/fee headroom.
-   // 1) Keep 0.5% of balance for gas
-   // 2) Subtract our platform fee % (will be deducted in the same tx)
-   const afterGas = balance * (1 - EVM_NATIVE_RESERVE_PCT);
-   const afterFee = afterGas * (1 - feeRate);
-   return Math.max(0, afterFee);
- }
- // Non-native: full balance is swap-eligible. Fee is deducted from output side.
- return balance;
-}
-
-function maxSafeSolBalance(lamports) {
- if (!lamports) return 0;
- const usable = Math.max(0, lamports - SOL_RESERVE_LAMPORTS);
- return usable / LAMPORTS_PER_SOL;
-}
-
-/* ============================================================================
-* TOKEN SELECT MODAL
-*
-* Searches across:
-*   - jupiterTokens prop (Solana, big list)
-*   - LiFi tokens (EVM, lazy fetched on first search)
-*   - POPULAR_TOKENS (built-in fallback)
-*   - Direct contract paste (Solana mint or EVM address)
-*
-* For pasted EVM addresses we default chainId to the headerChain rather than 1.
-* ========================================================================= */
-
-// Short labels for chain badges (8 chars max -- keeps from/to buttons compact)
-const CHAIN_SHORT = {
- 1: 'ETH', 10: 'OP', 25: 'CRO', 56: 'BNB', 100: 'GNO',
- 130: 'UNI', 137: 'POL', 143: 'MON', 146: 'SONIC', 250: 'FTM',
- 252: 'FRAX', 255: 'KROMA', 288: 'BOBA', 324: 'zkSync', 480: 'WORLD',
- 747: 'FLOW', 1116: 'CORE', 1135: 'LISK', 1284: 'GLMR', 1329: 'SEI',
- 2020: 'RON', 2222: 'KAVA', 2741: 'ABS', 5000: 'MNT', 8453: 'BASE',
- 34443: 'MODE', 42161: 'ARB', 42220: 'CELO', 43111: 'HEMI', 43114: 'AVAX',
- 48900: 'ZIRC', 57073: 'INK', 59144: 'LINEA', 60808: 'BOB', 80094: 'BERA',
- 81457: 'BLAST', 200901: 'BTRL', 534352: 'SCROLL', 6342: 'MEGA',
- 321: 'KCC', 360: 'SHAPE', 33139: 'APE', 167000: 'TAIKO', 7777777: 'ZORA',
- 122: 'FUSE', 1313161554: 'AURORA', 1088: 'METIS', 14: 'FLR',
- 9745: 'XPL', 999: 'HYPE', 4217: 'YALA',
- 20000000000001: 'BTC',
-};
-
-function ChainBadge({ token }) {
- if (!token) return null;
- const label = isSol(token) ? 'SOL'
-             : isBtc(token) ? 'BTC'
-             : (CHAIN_SHORT[token.chainId] || 'EVM');
- const color = isSol(token) ? '#9945ff'
-             : isBtc(token) ? '#f7931a'   // Bitcoin orange
-             : '#627eea';
- return (
-   <span style={{
-     fontSize: 9, color, background: color + '22', border: '1px solid ' + color + '44',
-     borderRadius: 4, padding: '1px 5px', marginLeft: 4, fontWeight: 700,
-   }}>{label}</span>
- );
-}
-
-function TokenIcon({ token, size = 32 }) {
- const [errored, setErrored] = useState(false);
- if (token && token.logoURI && !errored) {
-   return (
-     <img
-       src={token.logoURI}
-       alt={token.symbol || ''}
-       style={{ width: size, height: size, borderRadius: '50%', flexShrink: 0 }}
-       onError={() => setErrored(true)}
-     />
-   );
- }
- const ch = (token && token.symbol) ? token.symbol.charAt(0).toUpperCase() : '?';
- return (
-   <div style={{
-     width: size, height: size, borderRadius: '50%', flexShrink: 0,
-     background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)',
-     display: 'flex', alignItems: 'center', justifyContent: 'center',
-     fontSize: Math.round(size * 0.4), fontWeight: 700, color: C.accent,
-   }}>{ch}</div>
- );
-}
-
-/* ============================================================================
-* DRAWER / MODAL SHARED HOOKS
-*
-* useBodyScrollLock(open):
-*   When `open` is true, locks document.body scroll so the underlying page
-*   doesn't scroll when the drawer's backdrop or its inner overflow is
-*   touch-dragged on mobile. Saves and restores prior overflow / position
-*   so it composes when multiple drawers stack (Token select on top of
-*   Trade drawer).
-*
-* useEscapeKey(open, handler):
-*   When `open` is true, attaches a keydown listener and calls `handler`
-*   on Escape. Removes itself on close / unmount.
-*
-* These are required for drawer correctness -- without them, the backdrop
-* is decorative (page still scrolls under it) and Escape does nothing.
-* ========================================================================= */
-
-// Counter so stacked drawers don't fight over body.style. Only the first
-// open drawer locks; the last one to close restores.
-let _bodyLockCount = 0;
-let _bodyLockSaved = null;
-
-function useBodyScrollLock(open) {
- useEffect(() => {
-   if (!open) return undefined;
-   if (typeof document === 'undefined') return undefined;
-   if (_bodyLockCount === 0) {
-     _bodyLockSaved = {
-       overflow: document.body.style.overflow,
-       touchAction: document.body.style.touchAction,
-     };
-     document.body.style.overflow = 'hidden';
-     document.body.style.touchAction = 'none';
-   }
-   _bodyLockCount += 1;
-   return () => {
-     _bodyLockCount = Math.max(0, _bodyLockCount - 1);
-     if (_bodyLockCount === 0 && _bodyLockSaved) {
-       document.body.style.overflow = _bodyLockSaved.overflow || '';
-       document.body.style.touchAction = _bodyLockSaved.touchAction || '';
-       _bodyLockSaved = null;
-     }
-   };
- }, [open]);
-}
-
-function useEscapeKey(open, handler) {
- useEffect(() => {
-   if (!open) return undefined;
-   const onKey = (e) => {
-     if (e.key === 'Escape' || e.keyCode === 27) {
-       e.stopPropagation();
-       if (typeof handler === 'function') handler();
-     }
-   };
-   window.addEventListener('keydown', onKey);
-   return () => window.removeEventListener('keydown', onKey);
- }, [open, handler]);
 }
 
 function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, headerChain, excludeBtc }) {
@@ -1621,6 +1217,38 @@ export default function SwapWidget({
    setQuote(null); setQuoteError(''); setFromAmt('');
    // eslint-disable-next-line react-hooks/exhaustive-deps
  }, [modeProp, headerChain]);
+
+ /* --- Sync to parent-supplied defaultFromToken / defaultToToken when they
+  *     change AFTER mount. This matters because TokenDetail's `enrichedCoin`
+  *     only gets full chain context once cgMeta finishes loading. If the user
+  *     is fast on the Buy/Sell tap, the drawer can mount with a half-resolved
+  *     coin, then the parent updates with the resolved version a moment later
+  *     -- without this effect, SwapWidget would keep showing the stale defaults
+  *     because its `initialPair` useMemo runs only on mount.
+  *     Each token is compared by canonical identity (mint / address+chainId)
+  *     via tokensEqual to avoid spurious re-renders when the same token
+  *     re-references with a fresh logoURI etc. ---------------------------- */
+ useEffect(() => {
+   if (defaultFromToken) {
+     const next = normalizeToken(defaultFromToken);
+     if (next && !tokensEqual(next, fromToken)) {
+       setFromToken(next);
+       setQuote(null); setQuoteError('');
+     }
+   }
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [defaultFromToken]);
+
+ useEffect(() => {
+   if (defaultToToken) {
+     const next = normalizeToken(defaultToToken);
+     if (next && !tokensEqual(next, toToken)) {
+       setToToken(next);
+       setQuote(null); setQuoteError('');
+     }
+   }
+   // eslint-disable-next-line react-hooks/exhaustive-deps
+ }, [defaultToToken]);
 
  /* --- Quote engine (debounced + abortable) --- */
  const fetchQuote = useCallback(async () => {
@@ -2685,69 +2313,5 @@ export function TradeDrawer({
        width: '100%', maxWidth: 560, zIndex: 401,
        background: C.card, borderTop: '2px solid ' + C.borderHi,
        borderRadius: '20px 20px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
-       maxHeight: 'min(90vh, 100dvh)', display: 'flex', flexDirection: 'column', overflow: 'hidden',
-     }}>
-       <div style={{ flexShrink: 0, padding: '16px 20px 12px' }}>
-         <div
-           onClick={() => { if (swapStatus !== 'loading') onClose(); }}
-           role="button"
-           aria-label="Close"
-           style={{
-             width: 40, height: 4, background: C.muted2, borderRadius: 2,
-             margin: '0 auto 14px',
-             cursor: swapStatus === 'loading' ? 'default' : 'pointer',
-             opacity: swapStatus === 'loading' ? 0.4 : 1,
-             // Larger invisible tap target around the visual bar
-             padding: '8px 0', boxSizing: 'content-box',
-           }}
-         />
-         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-             {coin && coin.image && (
-               <img src={coin.image} alt={symbol} style={{ width: 28, height: 28, borderRadius: '50%' }}
-                 onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-             )}
-             <div style={{ color: mode === 'buy' ? C.accent : C.red, fontWeight: 800, fontSize: 17 }}>
-               {mode === 'buy' ? 'Buy' : 'Sell'} {symbol}
-             </div>
-           </div>
-           <button
-             onClick={safeClose}
-             disabled={isBusy}
-             aria-label="Close"
-             style={{
-               background: 'none', border: 'none',
-               color: isBusy ? C.muted2 : C.muted,
-               fontSize: 26, cursor: isBusy ? 'not-allowed' : 'pointer',
-               padding: 0, lineHeight: 1,
-               opacity: isBusy ? 0.4 : 1,
-             }}
-           >x</button>
-         </div>
-       </div>
-       <div style={{
-         flex: 1, overflowY: 'auto', padding: '4px 20px',
-         paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)',
-       }}>
-         <SwapWidget
-           key={widgetKey}
-           coins={coins}
-           jupiterTokens={jupiterTokens}
-           onConnectWallet={onConnectWallet}
-           isConnected={isConnected}
-           defaultFromToken={pair.fromToken}
-           defaultToToken={pair.toToken}
-           compact={true}
-           mode={mode}
-           headerChain={headerChain}
-           onHeaderChainChange={onHeaderChainChange}
-           presets={presets}
-           onPresetsChange={onPresetsChange}
-           onStatusChange={setSwapStatus}
-         />
-       </div>
-     </div>
-   </>
- );
-}
+       maxHeight: 'min(
 
