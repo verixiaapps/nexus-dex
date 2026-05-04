@@ -3,466 +3,487 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { useAccount } from 'wagmi';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { TradeDrawer } from './SwapWidget.jsx';
-import { useNexusWallet } from '../WalletContext.js'; 
+import { useNexusWallet } from '../WalletContext.js';
 
 /* ============================================================================
- * Changes vs the previous TokenDetail.js (preserves layout & styling; only
- * the listed fixes applied):
- *
- * - H7 (liquidity coverage): DexScreener was the only pools source. Now
- *   falls back to GeckoTerminal when DexScreener returns 0 pairs (better
- *   coverage on Solana memecoins). For native CG coins (BTC, ETH, SOL,
- *   etc. -- coins with no `platforms` map), the liquidity section shows
- *   "Native asset -- no on-chain DEX liquidity" instead of the same
- *   "No liquidity data found" used for failed lookups.
- *
- * - H8 (parallel loads): Chart fetch and pools fetch are kept in separate
- *   effects so they fire in parallel (this was already the case). The
- *   CG metadata fetch -- previously only triggered inside the pools
- *   fetcher when an address lookup was needed -- is now a third parallel
- *   effect that fires as soon as the page mounts, so we don't wait on
- *   pools to know whether the coin is native. Static stats (price,
- *   market cap, volume) keep rendering immediately from the coin prop.
- *
- * - H9 (drawer normalization): isEvmToken was a fragile heuristic
- *   (`coin.chain === 'evm' || (coin.address && !coin.mint)`). For a CG
- *   coin like "uniswap" or "chainlink", coin.address is undefined -- the
- *   contract lives in coin.platforms (fetched from CG /coins/{id}). The
- *   coin handed to TradeDrawer therefore had no usable address+chainId,
- *   so the drawer fell back to widget defaults instead of buying the
- *   viewed token. Now we build an `enrichedCoin` that, for CG coins,
- *   reads `cgMeta.platforms` and picks the platform matching the user's
- *   headerChain (or the first valid EVM platform / Solana mint as a
- *   fallback). The drawer receives the enriched coin.
- *
- * - L4 (chart x-axis): XAxis was `hide`. Now shows date tick labels
- *   using muted color so they don't overpower the chart.
- *
- * - M15 (live price): Page no longer freezes at the price snapshot from
- *   `selectedToken`. A `liveCoin` memo looks up the coin by id in the
- *   `coins` prop on every refresh tick from App.js (every 30s) and
- *   renders the live price/change.
- *
- * Things intentionally NOT changed:
- * - Visual layout, colors, button style, stat grid, period buttons.
- * - Direct browser calls to coingecko/dexscreener/geckoterminal (H14
- *   deferred to Round 4).
- * - Solana-token detection logic for `coin.mint` and `isSolanaToken`.
- * ========================================================================= */
+* Changes vs the previous TokenDetail.js (preserves layout & styling; only
+* the listed fixes applied):
+*
+*   - H7 (liquidity coverage): DexScreener was the only pools source. Now
+*                              falls back to GeckoTerminal when DexScreener returns 0 pairs (better
+*                              coverage on Solana memecoins). For native CG coins (BTC, ETH, SOL,
+*                              etc. -- coins with no `platforms` map), the liquidity section shows
+*                              "Native asset -- no on-chain DEX liquidity" instead of the same
+*                              "No liquidity data found" used for failed lookups.
+*
+*   - H8 (parallel loads): Chart fetch and pools fetch are kept in separate
+*                              effects so they fire in parallel (this was already the case). The
+*                              CG metadata fetch -- previously only triggered inside the pools
+*                              fetcher when an address lookup was needed -- is now a third parallel
+*                              effect that fires as soon as the page mounts, so we don't wait on
+*                              pools to know whether the coin is native. Static stats (price,
+*                              market cap, volume) keep rendering immediately from the coin prop.
+*
+*   - H9 (drawer normalization): isEvmToken was a fragile heuristic
+*                              (`coin.chain === 'evm' || (coin.address && !coin.mint)`). For a CG
+*                              coin like "uniswap" or "chainlink", coin.address is undefined -- the
+*                              contract lives in coin.platforms (fetched from CG /coins/{id}). The
+*                              coin handed to TradeDrawer therefore had no usable address+chainId,
+*                              so the drawer fell back to widget defaults instead of buying the
+*                              viewed token. Now we build an `enrichedCoin` that, for CG coins,
+*                              reads `cgMeta.platforms` and picks the platform matching the user's
+*                              headerChain (or the first valid EVM platform / Solana mint as a
+*                              fallback). The drawer receives the enriched coin.
+*
+*   - L4 (chart x-axis): XAxis was `hide`. Now shows date tick labels
+*                              using muted color so they don't overpower the chart.
+*
+*   - M15 (live price): Page no longer freezes at the price snapshot from
+*                              `selectedToken`. A `liveCoin` memo looks up the coin by id in the
+*                              `coins` prop on every refresh tick from App.js (every 30s) and
+*                              renders the live price/change.
+*
+* Things intentionally NOT changed:
+*   - Visual layout, colors, button style, stat grid, period buttons.
+*   - Direct browser calls to coingecko/dexscreener/geckoterminal (H14
+*                              deferred to Round 4).
+*   - Solana-token detection logic for `coin.mint` and `isSolanaToken`.
+* ========================================================================= */
 
 const C = {
-  bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
-  border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
-  accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
-  text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
+ bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
+ border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
+ accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
+ text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
 
 const CHAIN_NAMES = {
-  1: 'Ethereum', 137: 'Polygon', 42161: 'Arbitrum', 8453: 'Base', 56: 'BNB Chain',
-  43114: 'Avalanche', 10: 'Optimism', 100: 'Gnosis', 324: 'zkSync Era', 59144: 'Linea',
-  534352: 'Scroll', 5000: 'Mantle', 81457: 'Blast', 34443: 'Mode', 130: 'Unichain',
-  146: 'Sonic', 80094: 'Berachain', 57073: 'Ink', 143: 'Monad', 480: 'World Chain',
-  250: 'Fantom', 25: 'Cronos', 1284: 'Moonbeam', 42220: 'Celo', 1329: 'SEI',
+ 1: 'Ethereum', 137: 'Polygon', 42161: 'Arbitrum', 8453: 'Base', 56: 'BNB Chain',
+ 43114: 'Avalanche', 10: 'Optimism', 100: 'Gnosis', 324: 'zkSync Era', 59144: 'Linea',
+ 534352: 'Scroll', 5000: 'Mantle', 81457: 'Blast', 34443: 'Mode', 130: 'Unichain',
+ 146: 'Sonic', 80094: 'Berachain', 57073: 'Ink', 143: 'Monad', 480: 'World Chain',
+ 250: 'Fantom', 25: 'Cronos', 1284: 'Moonbeam', 42220: 'Celo', 1329: 'SEI',
 };
 
 const GT_NETWORKS = {
-  1: 'eth', 137: 'polygon_pos', 42161: 'arbitrum', 8453: 'base',
-  56: 'bsc', 43114: 'avax', 10: 'optimism', 100: 'xdai',
-  324: 'zksync', 59144: 'linea', 534352: 'scroll', 5000: 'mantle',
-  81457: 'blast', 34443: 'mode', 130: 'unichain', 146: 'sonic',
-  80094: 'berachain', 57073: 'ink', 480: 'worldchain',
-  250: 'fantom', 25: 'cronos', 1284: 'moonbeam', 42220: 'celo', 1329: 'sei',
+ 1: 'eth', 137: 'polygon_pos', 42161: 'arbitrum', 8453: 'base',
+ 56: 'bsc', 43114: 'avax', 10: 'optimism', 100: 'xdai',
+ 324: 'zksync', 59144: 'linea', 534352: 'scroll', 5000: 'mantle',
+ 81457: 'blast', 34443: 'mode', 130: 'unichain', 146: 'sonic',
+ 80094: 'berachain', 57073: 'ink', 480: 'worldchain',
+ 250: 'fantom', 25: 'cronos', 1284: 'moonbeam', 42220: 'celo', 1329: 'sei',
 };
 
 // CoinGecko platform key -> wagmi chainId. Used by H9 normalization to map
 // `cgMeta.platforms[<platform>]` into a chainId the drawer understands.
 const CG_PLATFORM_TO_CHAIN = {
-  'ethereum':            1,
-  'binance-smart-chain': 56,
-  'polygon-pos':         137,
-  'arbitrum-one':        42161,
-  'optimistic-ethereum': 10,
-  'base':                8453,
-  'avalanche':           43114,
-  'fantom':              250,
-  'cronos':              25,
-  'moonbeam':            1284,
-  'celo':                42220,
-  'gnosis':              100,
-  'sonic':               146,
-  'mantle':              5000,
-  'blast':               81457,
-  'mode':                34443,
-  'linea':               59144,
-  'scroll':              534352,
-  'zksync':              324,
-  'metis-andromeda':     1088,
-  'aurora':              1313161554,
-  'kava':                2222,
-  'sei-evm':             1329,
-  'unichain':            130,
-  'berachain':           80094,
+ 'ethereum':            1,
+ 'binance-smart-chain': 56,
+ 'polygon-pos':         137,
+ 'arbitrum-one':        42161,
+ 'optimistic-ethereum': 10,
+ 'base':                8453,
+ 'avalanche':           43114,
+ 'fantom':              250,
+ 'cronos':              25,
+ 'moonbeam':            1284,
+ 'celo':                42220,
+ 'gnosis':              100,
+ 'sonic':               146,
+ 'mantle':              5000,
+ 'blast':               81457,
+ 'mode':                34443,
+ 'linea':               59144,
+ 'scroll':              534352,
+ 'zksync':              324,
+ 'metis-andromeda':     1088,
+ 'aurora':              1313161554,
+ 'kava':                2222,
+ 'sei-evm':             1329,
+ 'unichain':            130,
+ 'berachain':           80094,
 };
 
 function fmt(n, d) {
-  if (d === undefined) d = 2;
-  if (n == null) return '-';
-  if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
-  if (n >= 1) return '$' + n.toFixed(d);
-  return '$' + n.toFixed(6);
+ if (d === undefined) d = 2;
+ if (n == null) return '-';
+ if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+ if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+ if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
+ if (n >= 1) return '$' + n.toFixed(d);
+ return '$' + n.toFixed(6);
 }
 
 function pct(n) {
-  if (n == null) return '-';
-  return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
+ if (n == null) return '-';
+ return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 
 function isOnChainAddress(str) {
-  if (!str) return false;
-  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(str)) return true;
-  if (/^0x[0-9a-fA-F]{40}$/.test(str)) return true;
-  return false;
+ if (!str) return false;
+ if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(str)) return true;
+ if (/^0x[0-9a-fA-F]{40}$/.test(str)) return true;
+ return false;
 }
 
 export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConnectWallet, isConnected, isSolanaConnected, walletAddress }) {
-  const { connected: solConnected } = useWallet();
-  const { isConnected: evmConnected } = useAccount();
-  const { headerChain } = useNexusWallet();
+ const { connected: solConnected } = useWallet();
+ const { isConnected: evmConnected } = useAccount();
+ const { headerChain } = useNexusWallet();
 
-  var walletConnected = isConnected || solConnected || evmConnected;
+ var walletConnected = isConnected || solConnected || evmConnected;
 
-  const [chartData, setChartData] = useState([]);
-  const [chartPeriod, setChartPeriod] = useState('7');
-  const [chartLoading, setChartLoading] = useState(true);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerMode, setDrawerMode] = useState('buy');
-  const [pools, setPools] = useState([]);
-  const [poolsLoading, setPoolsLoading] = useState(false);
-  const [totalLiquidity, setTotalLiquidity] = useState(0);
-  // H7/H9 -- CG metadata for native-asset detection and drawer normalization.
-  // `cgMeta` shape: { platforms, asset_platform_id }. `cgMetaFailed` is set
-  // when the fetch errors so we don't falsely declare "native asset" for
-  // coins whose platforms we just couldn't load.
-  const [cgMeta, setCgMeta] = useState(null);
-  const [cgMetaLoading, setCgMetaLoading] = useState(false);
-  const [cgMetaFailed, setCgMetaFailed] = useState(false);
+ const [chartData, setChartData] = useState([]);
+ const [chartPeriod, setChartPeriod] = useState('7');
+ const [chartLoading, setChartLoading] = useState(true);
+ const [drawerOpen, setDrawerOpen] = useState(false);
+ const [drawerMode, setDrawerMode] = useState('buy');
+ const [pools, setPools] = useState([]);
+ const [poolsLoading, setPoolsLoading] = useState(false);
+ const [totalLiquidity, setTotalLiquidity] = useState(0);
+ // H7/H9 -- CG metadata for native-asset detection and drawer normalization.
+ // `cgMeta` shape: { platforms, asset_platform_id }. `cgMetaFailed` is set
+ // when the fetch errors so we don't falsely declare "native asset" for
+ // coins whose platforms we just couldn't load.
+ const [cgMeta, setCgMeta] = useState(null);
+ const [cgMetaLoading, setCgMetaLoading] = useState(false);
+ const [cgMetaFailed, setCgMetaFailed] = useState(false);
 
-  const isEvmToken = coin && (coin.chain === 'evm' || (coin.address && !coin.mint));
+ const isEvmToken = coin && (coin.chain === 'evm' || (coin.address && !coin.mint));
 
-  // M15 -- re-look up the coin in the live `coins` array on every refresh tick
-  // from App.js. Keeps current_price / market_cap / volume fresh while the
-  // user lingers on the detail page. Falls back to the original prop if not
-  // found (e.g., user navigated directly via URL before markets loaded).
-  const liveCoin = useMemo(function() {
-    if (!coin) return null;
-    if (!Array.isArray(coins) || !coins.length) return coin;
-    var match = coins.find(function(c) {
-      if (!c) return false;
-      if (coin.id && c.id === coin.id) return true;
-      if (coin.mint && c.id === coin.mint) return true;
-      if (coin.mint && c.mint === coin.mint) return true;
-      return false;
-    });
-    return match || coin;
-  }, [coin, coins]);
+ // M15 -- re-look up the coin in the live `coins` array on every refresh tick
+ // from App.js. Keeps current_price / market_cap / volume fresh while the
+ // user lingers on the detail page. Falls back to the original prop if not
+ // found (e.g., user navigated directly via URL before markets loaded).
+ const liveCoin = useMemo(function() {
+   if (!coin) return null;
+   if (!Array.isArray(coins) || !coins.length) return coin;
+   var match = coins.find(function(c) {
+     if (!c) return false;
+     if (coin.id && c.id === coin.id) return true;
+     if (coin.mint && c.id === coin.mint) return true;
+     if (coin.mint && c.mint === coin.mint) return true;
+     return false;
+   });
+   return match || coin;
+ }, [coin, coins]);
 
-  // H9 -- normalize the coin into a shape TradeDrawer can use directly.
-  // Solana coins keep their mint. EVM coins keep address+chainId. CG coins
-  // get enriched from cgMeta.platforms -- preferring the user's headerChain,
-  // then any EVM platform, then Solana. Native CG coins (no platforms) fall
-  // through unmodified -- drawer will use its own defaults.
-  const enrichedCoin = useMemo(function() {
-    if (!coin) return null;
+ // H9 -- normalize the coin into a shape TradeDrawer can use directly.
+ // Solana coins keep their mint. EVM coins keep address+chainId. CG coins
+ // get enriched from cgMeta.platforms -- preferring the user's headerChain,
+ // then any EVM platform, then Solana. Native CG coins (no platforms) fall
+ // through unmodified -- drawer will use its own defaults.
+ const enrichedCoin = useMemo(function() {
+   if (!coin) return null;
 
-    // Solana token already (Markets-synthesized or Jupiter)
-    if (coin.mint || coin.isSolanaToken || coin.chain === 'solana') {
-      return Object.assign({}, coin, {
-        mint:  coin.mint || coin.id,
-        chain: 'solana',
-      });
-    }
+   // Solana token already (Markets-synthesized or Jupiter)
+   if (coin.mint || coin.isSolanaToken || coin.chain === 'solana') {
+     return Object.assign({}, coin, {
+       mint:  coin.mint || coin.id,
+       chain: 'solana',
+     });
+   }
 
-    // EVM contract already passed through
-    if (coin.chain === 'evm' && coin.address && coin.chainId) {
-      return coin;
-    }
+   // EVM contract already passed through
+   if (coin.chain === 'evm' && coin.address && coin.chainId) {
+     return coin;
+   }
 
-    // CG coin -- enrich from platforms map
-    if (cgMeta && cgMeta.platforms && Object.keys(cgMeta.platforms).length > 0) {
-      var platforms = cgMeta.platforms;
+   // CG coin -- enrich from platforms map
+   if (cgMeta && cgMeta.platforms && Object.keys(cgMeta.platforms).length > 0) {
+     var platforms = cgMeta.platforms;
 
-      // 1) headerChain === 'solana' and the coin has a Solana mint -> use it
-      if (headerChain === 'solana' && platforms.solana && isOnChainAddress(platforms.solana)) {
-        return Object.assign({}, coin, {
-          mint:  platforms.solana,
-          chain: 'solana',
-        });
-      }
+     // 1) headerChain === 'solana' and the coin has a Solana mint -> use it
+     if (headerChain === 'solana' && platforms.solana && isOnChainAddress(platforms.solana)) {
+       return Object.assign({}, coin, {
+         mint:  platforms.solana,
+         chain: 'solana',
+       });
+     }
 
-      // 2) headerChain is an EVM chainId -- find the matching CG platform
-      if (typeof headerChain === 'number') {
-        var matchedKey = Object.keys(CG_PLATFORM_TO_CHAIN).find(function(p) {
-          return CG_PLATFORM_TO_CHAIN[p] === headerChain && platforms[p] && isOnChainAddress(platforms[p]);
-        });
-        if (matchedKey) {
-          return Object.assign({}, coin, {
-            chain:   'evm',
-            address: platforms[matchedKey],
-            chainId: headerChain,
-          });
-        }
-      }
+     // 2) headerChain is an EVM chainId -- find the matching CG platform
+     if (typeof headerChain === 'number') {
+       var matchedKey = Object.keys(CG_PLATFORM_TO_CHAIN).find(function(p) {
+         return CG_PLATFORM_TO_CHAIN[p] === headerChain && platforms[p] && isOnChainAddress(platforms[p]);
+       });
+       if (matchedKey) {
+         return Object.assign({}, coin, {
+           chain:   'evm',
+           address: platforms[matchedKey],
+           chainId: headerChain,
+         });
+       }
+     }
 
-      // 3) Fallback -- first valid EVM platform
-      var fallbackKey = Object.keys(platforms).find(function(p) {
-        return CG_PLATFORM_TO_CHAIN[p] && platforms[p] && /^0x[0-9a-fA-F]{40}$/.test(platforms[p]);
-      });
-      if (fallbackKey) {
-        return Object.assign({}, coin, {
-          chain:   'evm',
-          address: platforms[fallbackKey],
-          chainId: CG_PLATFORM_TO_CHAIN[fallbackKey],
-        });
-      }
+     // 3) Fallback -- first valid EVM platform
+     var fallbackKey = Object.keys(platforms).find(function(p) {
+       return CG_PLATFORM_TO_CHAIN[p] && platforms[p] && /^0x[0-9a-fA-F]{40}$/.test(platforms[p]);
+     });
+     if (fallbackKey) {
+       return Object.assign({}, coin, {
+         chain:   'evm',
+         address: platforms[fallbackKey],
+         chainId: CG_PLATFORM_TO_CHAIN[fallbackKey],
+       });
+     }
 
-      // 4) Solana fallback if any
-      if (platforms.solana && isOnChainAddress(platforms.solana)) {
-        return Object.assign({}, coin, {
-          mint:  platforms.solana,
-          chain: 'solana',
-        });
-      }
-    }
+     // 4) Solana fallback if any
+     if (platforms.solana && isOnChainAddress(platforms.solana)) {
+       return Object.assign({}, coin, {
+         mint:  platforms.solana,
+         chain: 'solana',
+       });
+     }
+   }
 
-    // Native asset or unenriched -- drawer handles defaults
-    return coin;
-  }, [coin, cgMeta, headerChain]);
+   // Native asset or unenriched -- drawer handles defaults
+   return coin;
+ }, [coin, cgMeta, headerChain]);
 
-  // Native asset detection for the H7 liquidity message -- only definitive
-  // once cgMeta has actually loaded successfully (otherwise we'd flash
-  // "native asset" briefly before platforms arrive, or claim native after
-  // a failed fetch).
-  var isNativeCgCoin = !!(cgMeta && !cgMetaFailed && cgMeta.platforms && Object.keys(cgMeta.platforms).length === 0);
+ // Native asset detection for the H7 liquidity message -- only definitive
+ // once cgMeta has actually loaded successfully (otherwise we'd flash
+ // "native asset" briefly before platforms arrive, or claim native after
+ // a failed fetch).
+ var isNativeCgCoin = !!(cgMeta && !cgMetaFailed && cgMeta.platforms && Object.keys(cgMeta.platforms).length === 0);
 
-  const contractAddress = isEvmToken
-    ? (coin?.address || coin?.id)
-    : (coin?.mint || (isOnChainAddress(coin?.id) ? coin?.id : null));
-  const contractLabel = isEvmToken
-    ? ((CHAIN_NAMES[coin?.chainId] || 'EVM') + ' CONTRACT').toUpperCase()
-    : 'SOLANA CONTRACT';
+ const contractAddress = isEvmToken
+   ? (coin?.address || coin?.id)
+   : (coin?.mint || (isOnChainAddress(coin?.id) ? coin?.id : null));
+ const contractLabel = isEvmToken
+   ? ((CHAIN_NAMES[coin?.chainId] || 'EVM') + ' CONTRACT').toUpperCase()
+   : 'SOLANA CONTRACT';
 
-  // H8/H9 -- fire CG metadata fetch on mount in parallel with chart and pools.
-  // Skips Solana tokens (no useful CG metadata) and tokens that already have
-  // an on-chain address attached.
-  useEffect(function() {
-    if (!coin) return undefined;
-    if (coin.isSolanaToken || coin.mint || (coin.chain === 'evm' && coin.address)) return undefined;
-    if (!coin.id || isOnChainAddress(coin.id)) return undefined;
+ // H8/H9 -- fire CG metadata fetch on mount in parallel with chart and pools.
+ // Skips Solana tokens (no useful CG metadata) and tokens that already have
+ // an on-chain address attached.
+ useEffect(function() {
+   if (!coin) return undefined;
+   if (coin.isSolanaToken || coin.mint || (coin.chain === 'evm' && coin.address)) return undefined;
+   if (!coin.id || isOnChainAddress(coin.id)) return undefined;
 
-    var controller = new AbortController();
-    setCgMetaLoading(true);
-    setCgMeta(null);
-    setCgMetaFailed(false);
+   var isMounted = true;
+   var controller = new AbortController();
+   setCgMetaLoading(true);
+   setCgMeta(null);
+   setCgMetaFailed(false);
 
-    fetch(
-      'https://api.coingecko.com/api/v3/coins/' + coin.id + '?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false',
-      { signal: controller.signal }
-    )
-      .then(function(r) { return r.ok ? r.json() : null; })
-      .then(function(data) {
-        if (!data) {
-          // Empty-platforms marker so the pools effect can proceed (it waits
-          // on cgMeta != null). cgMetaFailed flag prevents the UI from
-          // misreading this as "native asset".
-          setCgMeta({ platforms: {}, asset_platform_id: null });
-          setCgMetaFailed(true);
-          setCgMetaLoading(false);
-          return;
-        }
-        setCgMeta({ platforms: data.platforms || {}, asset_platform_id: data.asset_platform_id || null });
-        setCgMetaLoading(false);
-      })
-      .catch(function(e) {
-        if (e.name !== 'AbortError') {
-          console.warn('CG meta fetch failed:', e);
-          setCgMeta({ platforms: {}, asset_platform_id: null });
-          setCgMetaFailed(true);
-        }
-        setCgMetaLoading(false);
-      });
+   fetch(
+     'https://api.coingecko.com/api/v3/coins/' + coin.id + '?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false',
+     { signal: controller.signal }
+   )
+     .then(function(r) { return r.ok ? r.json() : null; })
+     .then(function(data) {
+       if (!isMounted || controller.signal.aborted) return;
+       if (!data) {
+         // Empty-platforms marker so the pools effect can proceed (it waits
+         // on cgMeta != null). cgMetaFailed flag prevents the UI from
+         // misreading this as "native asset".
+         setCgMeta({ platforms: {}, asset_platform_id: null });
+         setCgMetaFailed(true);
+         setCgMetaLoading(false);
+         return;
+       }
+       setCgMeta({ platforms: data.platforms || {}, asset_platform_id: data.asset_platform_id || null });
+       setCgMetaLoading(false);
+     })
+     .catch(function(e) {
+       if (!isMounted || controller.signal.aborted) return;
+       if (e.name !== 'AbortError') {
+         console.warn('CG meta fetch failed:', e);
+         setCgMeta({ platforms: {}, asset_platform_id: null });
+         setCgMetaFailed(true);
+         setCgMetaLoading(false);
+       }
+     });
 
-    return function() { controller.abort(); };
-  }, [coin]);
+   return function() { isMounted = false; controller.abort(); };
+ }, [coin]);
 
-  useEffect(function() {
-    if (!coin) return undefined;
-    var controller = new AbortController();
-    var signal = controller.signal;
+ useEffect(function() {
+   if (!coin) return undefined;
+   var isMounted = true;
+   var controller = new AbortController();
+   var signal = controller.signal;
 
-    var fetchChart = async function() {
-      setChartLoading(true);
-      try {
-        var days = parseInt(chartPeriod) || 7;
-        var points = [];
-        var isCgCoin = coin.id && !coin.isSolanaToken && !isOnChainAddress(coin.id);
+   var fetchChart = async function() {
+     setChartLoading(true);
+     try {
+       var days = parseInt(chartPeriod) || 7;
+       var points = [];
+       var isCgCoin = coin.id && !coin.isSolanaToken && !isOnChainAddress(coin.id);
 
-        if (isCgCoin) {
-          var cgRes = await fetch(
-            'https://api.coingecko.com/api/v3/coins/' + coin.id + '/market_chart?vs_currency=usd&days=' + days,
-            { signal }
-          );
-          var cgData = await cgRes.json();
-          var interval = days <= 1 ? 1 : days <= 7 ? 6 : 24;
-          points = (cgData.prices || [])
-            .filter(function(_, i) { return i % interval === 0; })
-            .map(function(item) {
-              return {
-                t: new Date(item[0]).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
-                p: parseFloat(item[1].toFixed(6)),
-              };
-            });
-        } else {
-          var tokenAddr = isEvmToken ? (coin.address || coin.id) : (coin.mint || coin.id);
-          var network = isEvmToken ? (GT_NETWORKS[coin.chainId] || 'eth') : 'solana';
-          var timeframe = days <= 1 ? 'minute' : 'day';
-          var aggregate = days <= 1 ? 30 : 1;
-          var limit = days <= 1 ? 48 : days;
-          var gtRes = await fetch(
-            'https://api.geckoterminal.com/api/v2/networks/' + network + '/tokens/' + tokenAddr + '/ohlcv/' + timeframe + '?aggregate=' + aggregate + '&limit=' + limit,
-            { signal }
-          );
-          var gtData = await gtRes.json();
-          var ohlcv = gtData.data && gtData.data.attributes && gtData.data.attributes.ohlcv_list;
-          if (ohlcv && ohlcv.length) {
-            points = ohlcv.map(function(item) {
-              return {
-                t: new Date(item[0] * 1000).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
-                p: parseFloat(parseFloat(item[4]).toFixed(6)),
-              };
-            });
-          }
-        }
+       if (isCgCoin) {
+         var cgRes = await fetch(
+           'https://api.coingecko.com/api/v3/coins/' + coin.id + '/market_chart?vs_currency=usd&days=' + days,
+           { signal }
+         );
+         var cgData = await cgRes.json();
+         var interval = days <= 1 ? 1 : days <= 7 ? 6 : 24;
+         points = (cgData.prices || [])
+           .filter(function(item, i) {
+             // Null-guard: CG occasionally returns [ts, null] entries.
+             return i % interval === 0 && item && Array.isArray(item) &&
+                    typeof item[0] === 'number' &&
+                    typeof item[1] === 'number' && Number.isFinite(item[1]);
+           })
+           .map(function(item) {
+             return {
+               t: new Date(item[0]).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
+               p: parseFloat(item[1].toFixed(6)),
+             };
+           });
+       } else {
+         var tokenAddr = isEvmToken ? (coin.address || coin.id) : (coin.mint || coin.id);
+         var network = isEvmToken ? (GT_NETWORKS[coin.chainId] || 'eth') : 'solana';
+         var timeframe = days <= 1 ? 'minute' : 'day';
+         var aggregate = days <= 1 ? 30 : 1;
+         var limit = days <= 1 ? 48 : days;
+         var gtRes = await fetch(
+           'https://api.geckoterminal.com/api/v2/networks/' + network + '/tokens/' + tokenAddr + '/ohlcv/' + timeframe + '?aggregate=' + aggregate + '&limit=' + limit,
+           { signal }
+         );
+         var gtData = await gtRes.json();
+         var ohlcv = gtData.data && gtData.data.attributes && gtData.data.attributes.ohlcv_list;
+         if (ohlcv && ohlcv.length) {
+           points = ohlcv
+             .map(function(item) {
+               if (!item || !Array.isArray(item)) return null;
+               var ts = item[0];
+               var close = parseFloat(item[4]);
+               if (typeof ts !== 'number' || !Number.isFinite(close)) return null;
+               return {
+                 t: new Date(ts * 1000).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
+                 p: parseFloat(close.toFixed(6)),
+               };
+             })
+             .filter(Boolean);
+         }
+       }
 
-        if (points.length) setChartData(points);
-        else setChartData([]);
-      } catch (e) {
-        if (e.name !== 'AbortError') console.warn('Chart fetch failed:', e);
-      }
-      setChartLoading(false);
-    };
+       // Only commit state if this effect is still the active one. AbortError
+       // throws above will skip this branch entirely; this guards against
+       // any successful response that arrives after the user changed period.
+       if (!isMounted || signal.aborted) return;
+       setChartData(points.length ? points : []);
+     } catch (e) {
+       if (e.name !== 'AbortError') console.warn('Chart fetch failed:', e);
+       // Do NOT setChartData on error -- keep whatever was previously rendered.
+     }
+     // Only flip loading off if we're still the active effect -- otherwise
+     // we'd briefly flash "loaded" while the new effect's request is in-flight.
+     if (isMounted && !signal.aborted) setChartLoading(false);
+   };
 
-    fetchChart();
-    return function() { controller.abort(); };
-  }, [coin, chartPeriod, isEvmToken]);
+   fetchChart();
+   return function() { isMounted = false; controller.abort(); };
+ }, [coin, chartPeriod, isEvmToken]);
 
-  useEffect(function() {
-    if (!coin) return undefined;
-    var isMounted = true;
-    var controller = new AbortController();
-    var signal = controller.signal;
+ useEffect(function() {
+   if (!coin) return undefined;
+   var isMounted = true;
+   var controller = new AbortController();
+   var signal = controller.signal;
 
-    setPoolsLoading(true);
-    setPools([]);
-    setTotalLiquidity(0);
+   setPoolsLoading(true);
+   setPools([]);
+   setTotalLiquidity(0);
 
-    var fetchPools = async function() {
-      try {
-        var tokenAddr = isEvmToken ? coin.address : coin.mint;
+   var fetchPools = async function() {
+     try {
+       var tokenAddr = isEvmToken ? coin.address : coin.mint;
 
-        if (!tokenAddr || !isOnChainAddress(tokenAddr)) {
-          if (coin.id && isOnChainAddress(coin.id)) {
-            tokenAddr = coin.id;
-          } else if (coin.id && !coin.isSolanaToken) {
-            // We need platforms from cgMeta. The dedicated cgMeta effect
-            // populates it in parallel. If not loaded yet, bail -- this
-            // effect re-runs once cgMeta arrives (it's in the dep array).
-            if (!cgMeta) {
-              return;
-            }
-            var platforms = cgMeta.platforms || {};
-            tokenAddr = platforms['ethereum']
-              || platforms['solana']
-              || Object.values(platforms).find(function(v) { return v && isOnChainAddress(v); })
-              || null;
-          }
-        }
+       if (!tokenAddr || !isOnChainAddress(tokenAddr)) {
+         if (coin.id && isOnChainAddress(coin.id)) {
+           tokenAddr = coin.id;
+         } else if (coin.id && !coin.isSolanaToken) {
+           // We need platforms from cgMeta. The dedicated cgMeta effect
+           // populates it in parallel. If not loaded yet, bail -- this
+           // effect re-runs once cgMeta arrives (it's in the dep array).
+           if (!cgMeta) {
+             return;
+           }
+           var platforms = cgMeta.platforms || {};
+           tokenAddr = platforms['ethereum']
+             || platforms['solana']
+             || Object.values(platforms).find(function(v) { return v && isOnChainAddress(v); })
+             || null;
+         }
+       }
 
-        if (!tokenAddr || !isOnChainAddress(tokenAddr)) {
-          if (isMounted) { setPools([]); setTotalLiquidity(0); setPoolsLoading(false); }
-          return;
-        }
+       if (!tokenAddr || !isOnChainAddress(tokenAddr)) {
+         if (isMounted) { setPools([]); setTotalLiquidity(0); setPoolsLoading(false); }
+         return;
+       }
 
-        // Try DexScreener first.
-        var dsData = await fetch(
-          'https://api.dexscreener.com/latest/dex/tokens/' + tokenAddr,
-          { signal }
-        )
-          .then(function(r) { return r.ok ? r.json() : { pairs: [] }; })
-          .catch(function() { return { pairs: [] }; });
+       // Try DexScreener first.
+       var dsData = await fetch(
+         'https://api.dexscreener.com/latest/dex/tokens/' + tokenAddr,
+         { signal }
+       )
+         .then(function(r) { return r.ok ? r.json() : { pairs: [] }; })
+         .catch(function() { return { pairs: [] }; });
 
-        if (!isMounted) return;
+       if (!isMounted) return;
 
-        var pairs = (dsData.pairs || [])
-          .sort(function(a, b) { return (b.liquidity && b.liquidity.usd || 0) - (a.liquidity && a.liquidity.usd || 0); })
-          .slice(0, 5);
+       var pairs = (dsData.pairs || [])
+         .sort(function(a, b) { return (b.liquidity && b.liquidity.usd || 0) - (a.liquidity && a.liquidity.usd || 0); })
+         .slice(0, 5);
 
-        // H7 -- GeckoTerminal fallback. DexScreener has gaps especially on
-        // Solana memecoins; GT fills those in. Only used when DS returned 0.
-        if (pairs.length === 0) {
-          var network = isEvmToken
-            ? (GT_NETWORKS[coin.chainId] || 'eth')
-            : 'solana';
-          var gtData = await fetch(
-            'https://api.geckoterminal.com/api/v2/networks/' + network + '/tokens/' + tokenAddr + '/pools?page=1',
-            { signal }
-          )
-            .then(function(r) { return r.ok ? r.json() : { data: [] }; })
-            .catch(function() { return { data: [] }; });
+       // H7 -- GeckoTerminal fallback. DexScreener has gaps especially on
+       // Solana memecoins; GT fills those in. Only used when DS returned 0.
+       if (pairs.length === 0) {
+         var network = isEvmToken
+           ? (GT_NETWORKS[coin.chainId] || 'eth')
+           : 'solana';
+         var gtData = await fetch(
+           'https://api.geckoterminal.com/api/v2/networks/' + network + '/tokens/' + tokenAddr + '/pools?page=1',
+           { signal }
+         )
+           .then(function(r) { return r.ok ? r.json() : { data: [] }; })
+           .catch(function() { return { data: [] }; });
 
-          if (!isMounted) return;
+         if (!isMounted) return;
 
-          // Map GT pool shape into the same shape the renderer expects from
-          // DexScreener -- that way the JSX below doesn't need to branch.
-          pairs = (gtData.data || []).slice(0, 5).map(function(p) {
-            var a = p.attributes || {};
-            var rels = p.relationships || {};
-            var dexId = (rels.dex && rels.dex.data && rels.dex.data.id) || 'geckoterminal';
-            var name = a.name || '';
-            var pairParts = name.split(' / ');
-            return {
-              pairAddress: p.id,
-              dexId: dexId,
-              baseToken: { symbol: pairParts[0] || '?' },
-              quoteToken: { symbol: pairParts[1] || '?' },
-              liquidity: { usd: parseFloat(a.reserve_in_usd) || 0 },
-              volume: { h24: parseFloat(a.volume_usd && a.volume_usd.h24) || 0 },
-            };
-          });
-        }
+         // Map GT pool shape into the same shape the renderer expects from
+         // DexScreener -- that way the JSX below doesn't need to branch.
+         pairs = (gtData.data || []).slice(0, 5).map(function(p) {
+           var a = p.attributes || {};
+           var rels = p.relationships || {};
+           var dexId = (rels.dex && rels.dex.data && rels.dex.data.id) || 'geckoterminal';
+           var name = a.name || '';
+           var pairParts = name.split(' / ');
+           return {
+             pairAddress: p.id,
+             dexId: dexId,
+             baseToken: { symbol: pairParts[0] || '?' },
+             quoteToken: { symbol: pairParts[1] || '?' },
+             liquidity: { usd: parseFloat(a.reserve_in_usd) || 0 },
+             volume: { h24: parseFloat(a.volume_usd && a.volume_usd.h24) || 0 },
+           };
+         });
+       }
 
-        if (!isMounted) return;
-        var total = pairs.reduce(function(sum, p) { return sum + (p.liquidity && p.liquidity.usd || 0); }, 0);
-        setPools(pairs);
-        setTotalLiquidity(total);
-        setPoolsLoading(false);
-      } catch (e) {
-        if (e.name !== 'AbortError') console.warn('Pool fetch failed:', e);
-        if (isMounted) { setPools([]); setTotalLiquidity(0); setPoolsLoading(false); }
-      }
-    };
+       if (!isMounted) return;
+       var total = pairs.reduce(function(sum, p) { return sum + (p.liquidity && p.liquidity.usd || 0); }, 0);
+       setPools(pairs);
+       setTotalLiquidity(total);
+       setPoolsLoading(false);
+     } catch (e) {
+       if (e.name !== 'AbortError') console.warn('Pool fetch failed:', e);
+       if (isMounted) { setPools([]); setTotalLiquidity(0); setPoolsLoading(false); }
+     }
+   };
 
-    fetchPools();
-    return function() { isMounted = false; controller.abort(); };
-  }, [coin, isEvmToken, cgMeta]);
+   fetchPools();
+   return function() { isMounted = false; controller.abort(); };
+ }, [coin, isEvmToken, cgMeta]);
 
-  if (!coin) return null;
+ if (!coin) return null;
 
-  // Use the live coin data for price/change when available, fall back to prop.
-  var displayPrice  = liveCoin.current_price;
-  var priceChange   = liveCoin.price_change_percentage_24h || 0;
-  var chartColor    = priceChange >= 0 ? C.green : C.red;
+ // Use the live coin data for price/change when available, fall back to prop.
+ var displayPrice  = liveCoin.current_price;
+ var priceChange   = liveCoin.price_change_percentage_24h || 0;
+ var chartColor    = priceChange >= 0 ? C.green : C.red;
 
  return (
    <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
@@ -655,4 +676,3 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
    </div>
  );
 }
-
