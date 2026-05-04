@@ -40,7 +40,7 @@ import {
 mainnet, polygon, polygonZkEvm, arbitrum, base, bsc, avalanche, optimism,
 gnosis, linea, scroll, mantle, blast, mode, fantom, moonbeam,
 celo, aurora, metis, zora, fraxtal, kroma, taiko, cronos, klaytn, sei, ronin,
-zkSync,
+zksync,
 } from ‘wagmi/chains’;
 import { QueryClient, QueryClientProvider } from ‘@tanstack/react-query’;
 
@@ -126,7 +126,7 @@ bsc,               // 56
 avalanche,         // 43114
 
 // Tier 2 — established L2s and alt-L1s
-zkSync,            // 324
+zksync,            // 324
 linea,             // 59144
 scroll,            // 534352
 mantle,            // 5000
@@ -152,7 +152,7 @@ taiko,             // 167000
 unichain, sonic, berachain, ink, worldchain, abstractChain, apeChain,
 bob, zircuit, flowEvm, hemi, kava, boba, lisk, fuse, coreDao,
 bitlayer, kcc, shape,
-];
+].filter(Boolean);  // Drop any undefined entries (e.g., if viem renames a chain)
 
 /* ============================================================================
 
@@ -241,7 +241,7 @@ refetchOnWindowFocus: false,
 
 /* ============================================================================
 
-- MOUNT 
+- MOUNT
 - ========================================================================= */
 
 const rootEl = document.getElementById(‘root’);
