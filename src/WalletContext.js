@@ -8,7 +8,7 @@
 *   4. Quick Buy / Quick Sell presets (global, persisted)
 *   5. Mobile in-app wallet detection
 *   6. Disconnect flow that handles both wallet types
-* 
+*
 * Usage in any component:
 *   const wallet = useNexusWallet();
 *   wallet.isConnected            -- true if either wallet connected
@@ -71,22 +71,37 @@ function detectMobileInAppWallet() {
  const isMobile = /iphone|ipad|ipod|android/i.test(uaRaw);
  if (!isMobile) return null;
 
- // Phantom in-app browser
+ const eth = window.ethereum || null;
+
+ // Phantom in-app browser -- Phantom mobile sets window.phantom on iOS/Android.
  if (window.phantom && (window.phantom.solana || window.phantom.ethereum)) {
    return 'phantom';
  }
- // MetaMask Mobile in-app browser
- if (ua.includes('metamaskmobile') || (window.ethereum && window.ethereum.isMetaMask)) {
-   return 'metamask';
- }
- // Trust Wallet in-app browser
- if (ua.includes('trust') && window.ethereum) return 'trust';
- // Coinbase Wallet in-app browser
- if (ua.includes('coinbasewallet') || (window.ethereum && window.ethereum.isCoinbaseWallet)) {
-   return 'coinbase';
- }
  // Solflare in-app browser
  if (window.solflare && window.solflare.isSolflare) return 'solflare';
+
+ // EVM wallets -- order matters here. Many wallets set isMetaMask=true for
+ // dApp compatibility, so the MetaMask check MUST come last among EVM
+ // wallets, and we additionally require the UA string for MetaMask. Each
+ // wallet below is checked via its own specific flag and/or UA token before
+ // we fall through to the MetaMask catch-all.
+ if (eth) {
+   // Coinbase Wallet (mobile in-app)
+   if (ua.includes('coinbasewallet') || eth.isCoinbaseWallet) return 'coinbase';
+   // Trust Wallet (mobile in-app) -- sets isTrust on injected provider
+   if (ua.includes('trust') || eth.isTrust || eth.isTrustWallet) return 'trust';
+   // Rabby -- sets isRabby
+   if (eth.isRabby) return 'rabby';
+   // OKX wallet
+   if (ua.includes('okapp') || eth.isOkxWallet || eth.isOKExWallet) return 'okx';
+   // Brave wallet -- sets isBraveWallet
+   if (eth.isBraveWallet) return 'brave';
+   // Bitget wallet
+   if (eth.isBitKeep || eth.isBitKeepChrome) return 'bitget';
+   // MetaMask Mobile -- must require the UA, NOT just the isMetaMask flag,
+   // because Trust/Rabby/Brave/etc. set isMetaMask=true for compat.
+   if (ua.includes('metamaskmobile') || ua.includes('metamask')) return 'metamask';
+ }
 
  return null;
 }
@@ -191,7 +206,7 @@ export function WalletContextProvider({ children }) {
  } = useAccount();
  const { data: walletClient } = useWalletClient();
  const { switchChain, switchChainAsync } = useSwitchChain();
- const { disconnect: evmDisconnect } = useDisconnect();
+ const { disconnect: evmDisconnect, disconnectAsync: evmDisconnectAsync } = useDisconnect();
 
  /* Refs that always hold the latest wagmi values. Async functions like
   * switchToChain() poll these instead of useCallback-captured snapshots --
@@ -251,14 +266,15 @@ export function WalletContextProvider({ children }) {
 
  /* -- Disconnect both wallets cleanly.
   *
-  * WC-3: wagmi's `disconnect()` is a synchronous mutation but the connection
-  * state flip (evmConnected -> false, evmAddress -> undefined) propagates
-  * through wagmi's reactive store on the next tick. If we resolve immediately,
-  * components reading evmConnected on the next render still see `true`,
-  * which causes a flash of "still connected" UI right before disconnect.
+  *  WC-3: wagmi v2 exposes `disconnectAsync` -- a Promise-returning variant
+  *  of disconnect that resolves only after the connection state has
+  *  actually flipped (evmConnected -> false). We use it instead of the
+  *  sync `disconnect()` + manual polling -- it removes the timing guess
+  *  and eliminates the race where components read stale `connected: true`
+  *  for one render cycle.
   *
-  * We poll briefly (max 1.5s) for the state to actually flip before resolving.
-  * Native wallet disconnect is awaitable so it doesn't need this.
+  *  Fallback to sync evmDisconnect if disconnectAsync isn't available
+  *  (older wagmi or unusual connector).
   */
  const disconnectAll = useCallback(async () => {
    let ok = true;
@@ -271,18 +287,10 @@ export function WalletContextProvider({ children }) {
    }
    if (evmConnected) {
      try {
-       evmDisconnect();
-       // Wait briefly for wagmi to flip evmConnected to false. Without this
-       // wait, components reading the post-disconnect state see stale
-       // `connected: true` for one render cycle.
-       const start = Date.now();
-       while (Date.now() - start < 1_500) {
-         // wagmi exposes the live connected flag through the same hook we
-         // already destructured, but our `evmConnected` is the closure
-         // snapshot. We can't re-read it here. The cleanest signal is
-         // `walletClientRef.current` -- wagmi clears it on disconnect.
-         if (!walletClientRef.current) break;
-         await new Promise((r) => setTimeout(r, 100));
+       if (typeof evmDisconnectAsync === 'function') {
+         await evmDisconnectAsync();
+       } else {
+         evmDisconnect();
        }
      } catch (e) {
        // eslint-disable-next-line no-console
@@ -292,17 +300,17 @@ export function WalletContextProvider({ children }) {
    }
    setActiveContext(null);
    return ok;
- }, [solConnected, evmConnected, solDisconnect, evmDisconnect, setActiveContext]);
+ }, [solConnected, evmConnected, solDisconnect, evmDisconnect, evmDisconnectAsync, setActiveContext]);
 
  /* -- Switch EVM chain with a promise we can await safely.
   *    Wraps wagmi's switchChainAsync with our own polling.
   *
-  * WC-5: Some mobile wallets are slow:
-  *   - Coinbase Wallet iOS: 7-10s after user approves the prompt
-  *   - Trust Wallet mobile: 5-7s
-  *   - Phantom EVM: 2-4s
-  * Old 5s window returned false even when the switch eventually succeeded.
-  * 10s covers the slow path. Polling stays cheap (150ms ticks).
+  *  WC-5: Some mobile wallets are slow:
+  *    - Coinbase Wallet iOS: 7-10s after user approves the prompt
+  *    - Trust Wallet mobile: 5-7s
+  *    - Phantom EVM: 2-4s
+  *  Old 5s window returned false even when the switch eventually succeeded.
+  *  10s covers the slow path. Polling stays cheap (150ms ticks).
   */
  const switchToChain = useCallback(async (targetChainId) => {
    if (!targetChainId || typeof targetChainId !== 'number') return false;
