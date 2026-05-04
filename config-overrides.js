@@ -1,4 +1,4 @@
-/** 
+/**
 * config-overrides.js -- react-app-rewired build config
 *
 * One job: make the build pass after we ripped out `@web3modal/wagmi` so the
@@ -84,6 +84,15 @@ try {
 
 module.exports = function override(config) {
  config.resolve = config.resolve || {};
+
+ // CRA installs ModuleScopePlugin which blocks any import resolving outside
+ // src/. Our @web3modal stub lives in node_modules/.cache, so we have to
+ // strip that plugin or the alias gets rejected with
+ // "Relative imports outside of src/ are not supported."
+ config.resolve.plugins = (config.resolve.plugins || []).filter(function (p) {
+   return !p || !p.constructor || p.constructor.name !== 'ModuleScopePlugin';
+ });
+
  config.resolve.alias = Object.assign({}, config.resolve.alias || {}, {
    // Every documented import path of @web3modal/wagmi -> stub
    '@web3modal/wagmi/react/config': STUB_PATH,
