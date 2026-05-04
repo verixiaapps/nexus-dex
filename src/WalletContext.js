@@ -8,7 +8,7 @@
 *   4. Quick Buy / Quick Sell presets (global, persisted)
 *   5. Mobile in-app wallet detection
 *   6. Disconnect flow that handles both wallet types
-*
+* 
 * Usage in any component:
 *   const wallet = useNexusWallet();
 *   wallet.isConnected            -- true if either wallet connected
