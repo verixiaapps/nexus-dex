@@ -66,11 +66,38 @@ const EVM_NATIVE_RESERVE_PCT = 0.005;     // 0.5% of native balance reserved for
 const QUOTE_DEBOUNCE_MS = 200;
 const QUOTE_TIMEOUT_MS  = 12_000;
 
-// Chain IDs that 0x supports (for same-chain EVM swaps with Permit2)
+// Chain IDs that 0x v2 supports for same-chain Permit2 swaps.
+//
+// Authoritative list: GET https://api.0x.org/swap/permit2/getChains
+// (call from server.js with the API key — chains evolve over time)
+//
+// Verified via 0x docs and changelog as of Q1 2026:
+//   1     Ethereum
+//   10    Optimism
+//   56    BNB Chain
+//   130   Unichain        (added 2025)
+//   137   Polygon
+//   324   zkSync Era
+//   1101  Polygon zkEVM
+//   2741  Abstract        (added 2025)
+//   5000  Mantle
+//   8453  Base
+//   34443 Mode
+//   42161 Arbitrum
+//   43114 Avalanche
+//   59144 Linea
+//   80094 Berachain       (added 2025)
+//   81457 Blast
+//   146   Sonic           (added 2025)
+//   57073 Ink             (added 2025)
+//   534352 Scroll
+//
+// Removed since previous version (0x returns “chain not supported” for these,
+// so route picker now correctly falls through to LiFi):
+//   100, 250, 252, 255, 480, 1135, 9745, 42220, 4217, 999, 143
 const OX_CHAIN_IDS = new Set([
-1, 10, 56, 100, 137, 146, 250, 252, 255, 480, 1135, 5000, 8453, 9745,
-34443, 42161, 42220, 43114, 57073, 59144, 80094, 81457, 130, 143, 534352,
-2741, 999, 4217,
+1, 10, 56, 130, 137, 146, 324, 1101, 2741, 5000, 8453,
+34443, 42161, 43114, 57073, 59144, 80094, 81457, 534352,
 ]);
 
 // Display names for chain badges and labels
@@ -1182,6 +1209,42 @@ const walletConnected = solConnected || evmConnected;
 const walletClientRef = useRef(walletClient);
 useEffect(() => { walletClientRef.current = walletClient; }, [walletClient]);
 
+// SW-5: track chainId via ref so the poll-after-switch loop reads the
+// fresh value instead of a captured closure snapshot.
+const evmChainIdRef = useRef(evmChainId);
+useEffect(() => { evmChainIdRef.current = evmChainId; }, [evmChainId]);
+
+// Poll-and-wait helper that resolves only after the wallet has actually
+// switched chains. Replaces the previous fixed 400ms sleep, which raced
+// against wagmi’s reactive state propagation on slow mobile wallets.
+const ensureChain = useCallback(async (targetChainId) => {
+if (!targetChainId) return true;
+if (evmChainIdRef.current === targetChainId) return true;
+try {
+if (switchChainAsync) {
+await switchChainAsync({ chainId: targetChainId });
+} else if (switchChain) {
+switchChain({ chainId: targetChainId });
+}
+} catch (e) {
+throw new Error(’Please switch your wallet to ’ + (CHAIN_NAMES[targetChainId] || ‘the correct chain’));
+}
+// Poll up to 8s for wagmi state to publish the post-switch walletClient.
+// Mobile Safari + Coinbase Wallet sometimes takes 5-7s.
+const start = Date.now();
+while (Date.now() - start < 8_000) {
+const wc = walletClientRef.current;
+if (evmChainIdRef.current === targetChainId) return true;
+if (wc && wc.chain && wc.chain.id === targetChainId) return true;
+await new Promise((r) => setTimeout(r, 100));
+}
+// Last check — if still mismatched, throw with a clear message
+if (evmChainIdRef.current !== targetChainId) {
+throw new Error(‘Chain switch did not take effect. Try again.’);
+}
+return true;
+}, [switchChain, switchChainAsync]);
+
 /* — Header chain (controlled from parent or fallback to localStorage) — */
 const [headerChainLocal, setHeaderChainLocal] = useState(() =>
 headerChainProp != null ? headerChainProp : loadHeaderChain()
@@ -1249,6 +1312,17 @@ const isCrossChain = route === ‘lifi’;
 
 const isEvmFrom = isEvm(fromToken);
 const isNativeEvmFrom = isEvmFrom && (fromToken.address || ‘’).toLowerCase() === NATIVE_EVM;
+
+// True only for the path that genuinely requires two wallet popups:
+// ERC20 (non-native) cross-chain via LiFi. Every other path is single-sig:
+//   - Jupiter (Solana same-chain): 1 sig (fee bundled)
+//   - 0x (EVM same-chain): 1 sig (Permit2 typed-data sig is off-chain, only the swap tx is signed)
+//   - LiFi Solana source: 1 sig (LiFi builds the bundled tx)
+//   - LiFi native EVM source: 1 sig (no approval needed for native)
+// The flag stays false on first render until the user picks tokens.
+// We display a clear UI banner on this exact path so the user knows
+// upfront they’ll see two prompts (approval + bridge) instead of one.
+const requiresApproval = isCrossChain && isEvmFrom && !isNativeEvmFrom;
 
 /* — Public client for the from-token’s chain (read-only EVM RPC).
 Used for allowance checks and tx receipt waits. — */
@@ -1630,19 +1704,11 @@ try {
   else if (route === '0x') {
     if (!evmAddress || !walletClientRef.current) throw new Error('Connect EVM wallet');
 
-    // Auto-switch chain if needed (switchChainAsync awaits the wallet's ack)
+    // Auto-switch chain if needed. ensureChain() polls walletClient
+    // until wagmi has actually published the post-switch state, then
+    // returns. Replaces a 400ms fixed sleep that raced on slow mobile.
     if (evmChainId && evmChainId !== fromToken.chainId) {
-      try {
-        if (switchChainAsync) {
-          await switchChainAsync({ chainId: fromToken.chainId });
-        } else if (switchChain) {
-          switchChain({ chainId: fromToken.chainId });
-        }
-        // Brief settle window so wagmi's hooks publish the new walletClient
-        await new Promise((r) => setTimeout(r, 400));
-      } catch (e) {
-        throw new Error('Please switch your wallet to ' + (CHAIN_NAMES[fromToken.chainId] || 'the correct chain'));
-      }
+      await ensureChain(fromToken.chainId);
     }
 
     // Read the freshest walletClient (post chain-switch)
@@ -1720,33 +1786,32 @@ try {
 
     if (isSol(fromToken)) {
       if (!publicKey) throw new Error('Connect Solana wallet');
-      // LiFi returns a base64 v0 transaction; fee already included via integrator param
+      // LiFi returns a base64 v0 transaction; fee already included via integrator param.
+      // SW-4 fix: confirm against the blockhash the tx was signed with
+      // (extracted from the deserialized message), NOT a freshly-fetched
+      // one — those can mismatch and cause "tx confirmed too early"
+      // false positives on the UI.
       const lifiSolTx = VersionedTransaction.deserialize(Buffer.from(txReq.data, 'base64'));
-      const bh = await connection.getLatestBlockhash('confirmed');
+      const lifiBh = lifiSolTx.message.recentBlockhash;
+      // We still need lastValidBlockHeight for the deadline; query the
+      // current one — it's a forward-looking cap, doesn't have to match
+      // the tx's blockhash.
+      const lvbh = (await connection.getLatestBlockhash('confirmed')).lastValidBlockHeight;
       // ONE signature
       const sig = await sendTransaction(lifiSolTx, connection, { skipPreflight: true, maxRetries: 3 });
       setSwapTx(sig);
       connection
         .confirmTransaction(
-          { signature: sig, blockhash: bh.blockhash, lastValidBlockHeight: bh.lastValidBlockHeight },
+          { signature: sig, blockhash: lifiBh, lastValidBlockHeight: lvbh },
           'confirmed'
         )
         .catch(() => {});
     } else {
       if (!evmAddress || !walletClientRef.current) throw new Error('Connect EVM wallet');
 
-      // Auto-switch chain if needed (switchChainAsync awaits the wallet's ack)
+      // SW-5 fix: ensureChain polls until wagmi publishes the new walletClient
       if (evmChainId && evmChainId !== fromToken.chainId) {
-        try {
-          if (switchChainAsync) {
-            await switchChainAsync({ chainId: fromToken.chainId });
-          } else if (switchChain) {
-            switchChain({ chainId: fromToken.chainId });
-          }
-          await new Promise((r) => setTimeout(r, 400));
-        } catch {
-          throw new Error('Please switch your wallet to ' + (CHAIN_NAMES[fromToken.chainId] || 'the correct chain'));
-        }
+        await ensureChain(fromToken.chainId);
       }
 
       const wc = walletClientRef.current;
@@ -1831,7 +1896,7 @@ try {
 }, [
 walletConnected, onConnectWallet, quote, route, fromAmt, fromToken, toToken,
 slip, publicKey, connection, sendTransaction, evmAddress,
-evmChainId, switchChain, switchChainAsync, customDestAddr, fromPriceUsd, solPriceUsd,
+evmChainId, switchChain, switchChainAsync, ensureChain, customDestAddr, fromPriceUsd, solPriceUsd,
 ]);
 
 /* — Tx explorer link — */
@@ -1841,18 +1906,20 @@ if (route === ‘jupiter’) return ‘https://solscan.io/tx/’ + swapTx;
 if (route === ‘lifi’)    return isSol(fromToken)
 ? ‘https://solscan.io/tx/’ + swapTx
 : ‘https://scan.li.fi/tx/’ + swapTx;
-// 0x — explorer based on chain
+// 0x — explorer based on chain. SW-7 fix: every chain in OX_CHAIN_IDS
+// also has an entry here so successful 0x swaps always show a tx link.
 const exp = {
 1: ‘etherscan.io’, 10: ‘optimistic.etherscan.io’, 25: ‘cronoscan.com’,
 56: ‘bscscan.com’, 100: ‘gnosisscan.io’, 130: ‘uniscan.xyz’,
 137: ‘polygonscan.com’, 146: ‘sonicscan.org’, 250: ‘ftmscan.com’,
-324: ‘explorer.zksync.io’, 480: ‘worldscan.org’, 1135: ‘blockscout.lisk.com’,
-1284: ‘moonscan.io’, 1329: ‘seitrace.com’, 2741: ‘abscan.org’,
-5000: ‘mantlescan.xyz’, 8453: ‘basescan.org’, 34443: ‘modescan.io’,
-42161: ‘arbiscan.io’, 42220: ‘celoscan.io’, 43114: ‘snowtrace.io’,
-48900: ‘explorer.zircuit.com’, 57073: ‘explorer.inkonchain.com’,
-59144: ‘lineascan.build’, 60808: ‘explorer.gobob.xyz’, 80094: ‘beratrail.io’,
-81457: ‘blastscan.io’, 167000: ‘taikoscan.io’, 534352: ‘scrollscan.com’,
+324: ‘explorer.zksync.io’, 480: ‘worldscan.org’, 1101: ‘zkevm.polygonscan.com’,
+1135: ‘blockscout.lisk.com’, 1284: ‘moonscan.io’, 1329: ‘seitrace.com’,
+2741: ‘abscan.org’, 5000: ‘mantlescan.xyz’, 8453: ‘basescan.org’,
+34443: ‘modescan.io’, 42161: ‘arbiscan.io’, 42220: ‘celoscan.io’,
+43111: ‘explorer.hemi.xyz’, 43114: ‘snowtrace.io’, 48900: ‘explorer.zircuit.com’,
+57073: ‘explorer.inkonchain.com’, 59144: ‘lineascan.build’,
+60808: ‘explorer.gobob.xyz’, 80094: ‘beratrail.io’, 81457: ‘blastscan.io’,
+167000: ‘taikoscan.io’, 200901: ‘btrscan.com’, 534352: ‘scrollscan.com’,
 1116: ‘scan.coredao.org’, 122: ‘explorer.fuse.io’, 288: ‘bobascan.com’,
 747: ‘flowdiver.io’, 2222: ‘kavascan.com’, 33139: ‘apescan.io’,
 }[fromToken.chainId];
@@ -2201,6 +2268,19 @@ Best price across every chain. Single signature. No KYC.
       }
 
       return (
+        <>
+        {requiresApproval && (
+          <div style={{
+            marginTop: 10, padding: '10px 12px',
+            background: 'rgba(255,149,0,.08)',
+            border: '1px solid rgba(255,149,0,.25)',
+            borderRadius: 10, fontSize: 11, color: '#ff9500',
+            display: 'flex', alignItems: 'center', gap: 8,
+          }}>
+            <span style={{ fontWeight: 700 }}>2 signatures may be needed:</span>
+            <span style={{ color: '#cdd6f4' }}>first to approve {fromToken && fromToken.symbol} for the bridge, then to swap. Future swaps of {fromToken && fromToken.symbol} are 1 signature.</span>
+          </div>
+        )}
         <button
           onClick={executeSwap}
           disabled={swapStatus === 'loading' || !fromAmt || !quote || quoteLoading}
@@ -2230,6 +2310,7 @@ Best price across every chain. Single signature. No KYC.
             : (modeProp === 'sell' ? 'Sell ' : modeProp === 'buy' ? 'Buy ' : 'Swap ')
               + (fromToken ? fromToken.symbol : '') + ' → ' + (toToken ? toToken.symbol : '')}
         </button>
+        </>
       );
     })()}
 
