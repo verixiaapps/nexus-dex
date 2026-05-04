@@ -12,6 +12,6 @@ NODE_OPTIONS = "--max-old-space-size=4096"
 GENERATE_SOURCEMAP = "false"
 CI = "false"
 NODE_ENV = "production"
-
+ 
 [start]
 cmd = "node server.js"
