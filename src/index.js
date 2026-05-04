@@ -2,42 +2,31 @@
 * NEXUS DEX -- App entry
 *
 * Sets up:
-*   - Wagmi (EVM wallets) -- INJECTED ONLY. No WalletConnect, no QR codes.
-*   - Solana wallet adapter (Phantom, Solflare) -- also injected only
+*   - Wagmi (EVM wallets) via WalletConnect connector
+*   - Solana wallet adapter (Phantom, Solflare)
 *   - WalletContext (unified wallet state across the app)
 *   - React Query
 *   - BrowserRouter (in App.js)
 *
-* Connection model -- strict no-QR:
-*   Desktop: user must have a browser extension wallet (MetaMask, Phantom,
-*            Rabby, Coinbase Wallet extension, etc.) -- detected via EIP-6963.
-*   Mobile:  user must open the site in their wallet app's in-app browser
-*            (Phantom, MetaMask, Trust, Coinbase, etc.) -- also injection-based.
-*            If they're in regular Safari/Chrome, App.js shows deep-link buttons
-*            that bounce them into the wallet's in-app browser pointed at us.
-*   No WalletConnect QR pairing exists in this build.
+* Three-button connection model (locked spec):
+*   1. Phantom        -- Solana, via @solana/wallet-adapter-phantom.
+*                        Adapter handles desktop extension AND mobile
+*                        universal-link automatically.
+*   2. Solflare       -- Solana, via @solana/wallet-adapter-solflare.
+*                        Same dual handling.
+*   3. WalletConnect  -- everything else (MetaMask, Trust, Rainbow,
+*                        Coinbase, OKX, Rabby, Bitget, 600+ wallets) via
+*                        wagmi's `walletConnect` connector. Desktop -> QR
+*                        modal in-page (user stays on our site). Mobile ->
+*                        deep-links into the chosen wallet, returns to us
+*                        automatically after approval.
 *
-* Why no Web3Modal / WalletConnect / Coinbase SDK:
-*   Web3Modal, WalletConnect, and the Coinbase Wallet SDK can each render
-*   a QR for desktop->mobile pairing. Removing the connectors entirely is
-*   the only way to make sure no QR can ever appear, even if a future call
-*   to `useWeb3Modal().open()` slips into the codebase. Wagmi's
-*   `createConfig` with just the `injected` connector covers every wallet
-*   that exposes `window.ethereum`-style injection, including Phantom EVM,
-*   MetaMask, Rabby, Trust (in its browser), Coinbase Wallet extension,
-*   OKX, Bitget, Brave, etc.
-*
-* Fixes vs old version:
-*   - PROJECT_ID and Web3Modal removed entirely
-*   - WalletConnect connector removed (no QR risk)
-*   - Coinbase Wallet SDK connector NOT added (it can show QR too)
-*   - Plain wagmi createConfig with injected() -- EIP-6963 multi-wallet discovery
-*   - Monad removed (RPC was testnet, not mainnet)
-*   - autoConnect on Solana wallet provider disabled to eliminate
-*     race with manual connect (was a major source of "connects inconsistently")
-*   - Wallet adapter onError prop added so failures surface to console
-*   - Single ConnectionProvider for Solana that can be redirected to a
-*     proxy endpoint (future) instead of public RPC
+* autoConnect for Solana is ENABLED. Combined with the resilience layer
+* in WalletContext (visibility / online listeners + heartbeat +
+* userExplicitlyDisconnected guard), this is what keeps users connected
+* across reloads, tab backgrounding, and network blips. The previous
+* "race with manual connect" complaint is fixed by the WalletContext
+* state machine, not by disabling autoConnect.
 */
 
 import React from 'react';
@@ -48,7 +37,7 @@ import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
 import { SolflareWalletAdapter } from '@solana/wallet-adapter-solflare';
 import '@solana/wallet-adapter-react-ui/styles.css';
 import { WagmiProvider, createConfig, http } from 'wagmi';
-import { injected } from 'wagmi/connectors';
+import { walletConnect } from 'wagmi/connectors';
 import {
  mainnet, polygon, polygonZkEvm, arbitrum, base, bsc, avalanche, optimism,
  gnosis, linea, scroll, mantle, blast, mode, fantom, moonbeam,
@@ -68,12 +57,38 @@ if (typeof window !== 'undefined' && !window.Buffer) {
 }
 
 /* ============================================================================
+* REOWN / WALLETCONNECT PROJECT ID
+*
+* Required for the WalletConnect button in the modal. Get one (free) at
+* https://cloud.reown.com -- takes 30 seconds. Paste into Railway env as
+* REACT_APP_REOWN_PROJECT_ID and redeploy.
+*
+* If unset, wagmi still loads but the WalletConnect connector self-reports
+* as unavailable; the modal then displays a clear "WalletConnect not
+* configured" message instead of failing silently when tapped.
+* ========================================================================= */
+
+const REOWN_PROJECT_ID =
+ process.env.REACT_APP_REOWN_PROJECT_ID ||
+ process.env.REACT_APP_WALLETCONNECT_PROJECT_ID || // legacy alias
+ '';
+
+if (!REOWN_PROJECT_ID) {
+ // eslint-disable-next-line no-console
+ console.warn(
+   '[Nexus DEX] REACT_APP_REOWN_PROJECT_ID not set. WalletConnect button ' +
+   'will be disabled until a project ID is configured. Get one (free) at ' +
+   'https://cloud.reown.com and add it on Railway.'
+ );
+}
+
+/* ============================================================================
 * SOLANA RPC -- config + warning when falling back to public endpoint
 * ========================================================================= */
 
 const SOLANA_RPC = process.env.REACT_APP_SOLANA_RPC
  || (process.env.REACT_APP_HELIUS_API_KEY
-   ? 'https://mainnet.helius-rpc.com/?api-key=' + process.env.REACT_APP_HELIUS_API_KEY
+   ? 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(process.env.REACT_APP_HELIUS_API_KEY)
    : 'https://api.mainnet-beta.solana.com');
 
 if (!process.env.REACT_APP_SOLANA_RPC && !process.env.REACT_APP_HELIUS_API_KEY) {
@@ -87,12 +102,6 @@ if (!process.env.REACT_APP_SOLANA_RPC && !process.env.REACT_APP_HELIUS_API_KEY) 
 
 /* ============================================================================
 * CUSTOM CHAINS -- chains not yet in viem/wagmi presets
-*
-* Removed since last review:
-*   - monad: RPC was testnet, presented as mainnet (misleading)
-*
-* Each chain object follows wagmi's Chain shape:
-*   { id, name, nativeCurrency, rpcUrls: { default: { http: [...] } } }
 * ========================================================================= */
 
 const unichain      = { id: 130,    name: 'Unichain',    nativeCurrency: { name: 'Ether',         symbol: 'ETH',  decimals: 18 }, rpcUrls: { default: { http: ['https://mainnet.unichain.org'] } } };
@@ -116,10 +125,7 @@ const kcc           = { id: 321,    name: 'KCC',         nativeCurrency: { name:
 const shape         = { id: 360,    name: 'Shape',       nativeCurrency: { name: 'Ether',         symbol: 'ETH',  decimals: 18 }, rpcUrls: { default: { http: ['https://mainnet.shape.network'] } } };
 
 /* ============================================================================
-* CHAIN LIST -- all chains the app supports for EVM wallet connections
-*
-* Order matters because the FIRST chain in this array is wagmi's "default"
-* chain when the wallet has no preference. Mainnet first.
+* CHAIN LIST -- mainnet first; FIRST chain is wagmi's default.
 * ========================================================================= */
 
 const chains = [
@@ -159,39 +165,53 @@ const chains = [
  unichain, sonic, berachain, ink, worldchain, abstractChain, apeChain,
  bob, zircuit, flowEvm, hemi, kava, boba, lisk, fuse, coreDao,
  bitlayer, kcc, shape,
-].filter(Boolean);  // Drop any undefined entries (e.g., if viem renames a chain)
+].filter(Boolean);
 
 /* ============================================================================
-* WAGMI CONFIG -- INJECTED ONLY
+* WAGMI CONFIG -- WalletConnect only on the EVM side.
 *
-* `injected({ shimDisconnect: true })` enables EIP-6963 multi-wallet
-* discovery: every browser wallet that announces itself via the
-* eip6963:announceProvider event becomes a separate connector entry that
-* App.js can render as its own button (Phantom, MetaMask, Rabby, Coinbase
-* Wallet ext, OKX, Bitget, Brave, Trust ext, etc.). If only one wallet is
-* installed and EIP-6963 isn't available, the legacy `window.ethereum`
-* fallback still works.
+* The wagmi `walletConnect` connector handles every supported wallet:
+*   - Desktop: opens an in-page QR modal. User scans with their mobile
+*     wallet. Desktop site stays put -- transactions on our site, only
+*     the signing prompt is in their wallet.
+*   - Mobile: deep-links into the chosen wallet via universal link, then
+*     returns to us automatically once they approve. Metadata below
+*     ensures the return URL is correctly set.
 *
-* `shimDisconnect: true` makes wagmi remember a manual disconnect across
-* page reloads. Without it, refreshing while connected re-connects
-* automatically, which is the WC4 pattern we want to avoid (silent
-* reconnect -> user thinks they've disconnected but signs the next tx).
-*
-* No WalletConnect connector. No Coinbase SDK connector. No QR codes
-* possible from this config.
+* showQrModal=true is the default; we set it explicitly so future wagmi
+* upgrades don't silently change behavior.
 * ========================================================================= */
 
-const transports = chains.reduce((acc, c) => {
- // Use viem's default `http()` transport; viem will use chain.rpcUrls.default.http[0]
- acc[c.id] = http();
+const SITE_NAME = 'Nexus DEX';
+const SITE_URL  = 'https://swap.verixiaapps.com';
+const SITE_ICON = SITE_URL + '/icon-512.png';
+
+const transports = chains.reduce(function (acc, c) {
+ acc[c.id] = http(); // viem uses chain.rpcUrls.default.http[0] by default
  return acc;
 }, {});
 
+const wagmiConnectors = REOWN_PROJECT_ID
+ ? [
+     walletConnect({
+       projectId: REOWN_PROJECT_ID,
+       showQrModal: true,
+       metadata: {
+         name: SITE_NAME,
+         description: 'Best price across every chain. Single signature. No KYC.',
+         url: SITE_URL,
+         icons: [SITE_ICON],
+       },
+     }),
+   ]
+ : [];
+// If projectId is missing, the connectors array stays empty -- wagmi still
+// initializes, the WalletConnect button in the modal detects the missing
+// connector and shows "Unavailable -- check setup" instead of crashing.
+
 const wagmiConfig = createConfig({
  chains,
- connectors: [
-   injected({ shimDisconnect: true }),
- ],
+ connectors: wagmiConnectors,
  transports,
  ssr: false,
 });
@@ -199,9 +219,11 @@ const wagmiConfig = createConfig({
 /* ============================================================================
 * SOLANA WALLET ADAPTERS
 *
-* autoConnect is INTENTIONALLY off. The old auto-connect raced with manual
-* connect attempts when users reloaded mid-session, leaving stale state that
-* looked like "connects inconsistently." Manual connect only.
+* autoConnect is ON. The previous "race with manual connect" complaint is
+* solved by the WalletContext state machine + targetWalletRef pattern, not
+* by disabling auto-reconnect. Without autoConnect users would have to
+* reconnect on every page reload, which violates the "keep them connected
+* at all times" rule.
 * ========================================================================= */
 
 const solanaWallets = [
@@ -223,8 +245,8 @@ function onWalletError(err, adapter) {
 const queryClient = new QueryClient({
  defaultOptions: {
    queries: {
-     staleTime: 30_000,        // 30s -- most data refreshes via interval anyway
-     retry: 1,                 // one retry, then surface the error
+     staleTime: 30_000,
+     retry: 1,
      refetchOnWindowFocus: false,
    },
  },
@@ -244,7 +266,7 @@ if (!rootEl) {
    <WagmiProvider config={wagmiConfig}>
      <QueryClientProvider client={queryClient}>
        <ConnectionProvider endpoint={SOLANA_RPC} config={{ commitment: 'confirmed' }}>
-         <WalletProvider wallets={solanaWallets} autoConnect={false} onError={onWalletError}>
+         <WalletProvider wallets={solanaWallets} autoConnect={true} onError={onWalletError}>
            <WalletContextProvider>
              <App />
            </WalletContextProvider>
