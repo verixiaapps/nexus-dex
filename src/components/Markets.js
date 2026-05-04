@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
- 
+
 const C = {
   card: '#080d1a', card2: '#0c1220',
   border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
- 
+
 // FIX: Use default parameter so fmt(n, 0) works correctly (d || 2 would coerce 0 -> 2)
 function fmt(n, d = 2) {
   if (n == null || n === 0) return '-';
@@ -22,7 +22,7 @@ function pct(n) {
   return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 
-// FIX: Moved outside component — stable reference, no recreation on every render
+// FIX: Moved outside component -- stable reference, no recreation on every render
 function SparkLine({ data, positive }) {
   if (!data || data.length < 2) return null;
   var min = Math.min.apply(null, data);
@@ -55,7 +55,7 @@ function cleanMint(addr) {
   return addr.replace(/pump$/, '');
 }
 
-// FIX: Debounce hook — prevents search firing on every keystroke
+// FIX: Debounce hook -- prevents search firing on every keystroke
 function useDebounce(value, delay) {
   const [debounced, setDebounced] = useState(value);
   useEffect(function() {
@@ -66,7 +66,7 @@ function useDebounce(value, delay) {
 }
 
 // Module-level EVM token cache
-// FIX: No longer eagerly fetched at module load — lazy, only when EVM address is searched
+// FIX: No longer eagerly fetched at module load -- lazy, only when EVM address is searched
 var _evmCache = null;
 var _evmLoading = false;
 var _evmCallbacks = [];
@@ -113,7 +113,7 @@ function getEvmTokenCache() {
 }
 
 // Module-level Jupiter full token cache
-// FIX: No longer eagerly fetched — lazy, only triggered when search starts
+// FIX: No longer eagerly fetched -- lazy, only triggered when search starts
 var _jupCache = null;
 var _jupLoading = false;
 var _jupCallbacks = [];
@@ -213,9 +213,8 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
   const [isMobile, setIsMobile] = useState(window.innerWidth < 768);
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
-  const [searchToken, setSearchToken] = useState(null);
 
-  // FIX: Debounce query — search only fires 350ms after user stops typing
+  // FIX: Debounce query -- search only fires 350ms after user stops typing
   const debouncedQ = useDebounce(q, 350);
 
   useEffect(function() {
@@ -228,17 +227,24 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
   var coinsRef = useRef(coins);
   useEffect(function() { coinsRef.current = coins; }, [coins]);
 
-  // FIX: useMemo so regex doesn't re-run on every render
-  const isContract = useMemo(function() {
+  // FIX: Single isContractQuery memo (was previously duplicated as `isContract`
+  // and `isContractQuery` -- the first was dead code).
+  const isContractQuery = useMemo(function() {
     return isValidMint(debouncedQ.trim()) || isValidEvmAddress(debouncedQ.trim());
   }, [debouncedQ]);
 
-  // FIX: debouncedQ used instead of q; jupiterTokens added to deps array
+  // FIX: debouncedQ used instead of q; jupiterTokens added to deps array.
+  // FIX: All three branches (EVM contract / Solana mint / text) now reset
+  // searchResults to [] at the start so a previous query's results never
+  // leak through if the new query yields nothing or has a different shape.
+  // Previously, EVM and Solana-mint branches left stale text-search results
+  // behind on failure, and there was a separate `searchToken` state that
+  // doubled the bookkeeping for no benefit -- collapsed into searchResults.
   useEffect(function() {
     var trimmed = debouncedQ.trim();
     if (!trimmed || trimmed.length < 2) {
       setSearchResults([]);
-      setSearchToken(null);
+      setSearchLoading(false);
       return;
     }
 
@@ -246,8 +252,9 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
 
     // --- EVM contract address lookup ---
     if (isValidEvmAddress(trimmed)) {
+      setSearchResults([]);
       setSearchLoading(true);
-      // EVM cache is now lazy — only fetched when an EVM address is actually searched
+      // EVM cache is now lazy -- only fetched when an EVM address is actually searched
       getEvmTokenCache().then(function(evmTokens) {
         if (aborted) return;
         var found = evmTokens.filter(function(t) {
@@ -265,6 +272,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
 
     // --- Solana mint address lookup ---
     if (isValidMint(trimmed)) {
+      setSearchResults([]);
       setSearchLoading(true);
       Promise.all([
         fetch('https://lite-api.jup.ag/tokens/v1/token/' + trimmed)
@@ -280,7 +288,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
         var price = gtData ? parseFloat(gtData.price_usd || 0) : 0;
         var pChange = (gtData && gtData.price_change_percentage) ? gtData.price_change_percentage : {};
         if (jupMeta || gtData) {
-          setSearchToken({
+          setSearchResults([{
             id: trimmed, mint: trimmed,
             symbol: (jupMeta && jupMeta.symbol) || (gtData && gtData.symbol) || trimmed.slice(0, 6) + '...',
             name: (jupMeta && jupMeta.name) || (gtData && gtData.name) || 'Unknown Token',
@@ -291,7 +299,10 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
             price_change_percentage_24h: pChange.h24 ? parseFloat(pChange.h24) : null,
             sparkline_in_7d: null,
             isSolanaToken: true,
-          });
+          }]);
+        } else {
+          // Lookup failed for both providers -- show empty rather than stale.
+          setSearchResults([]);
         }
         setSearchLoading(false);
       });
@@ -299,7 +310,6 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     }
 
     // --- Text search ---
-    setSearchToken(null);
     setSearchLoading(true);
     var ql = trimmed.toLowerCase();
     var currentCoins = coinsRef.current || [];
@@ -324,6 +334,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
 
     var immediate = cgMatches.concat(strictMatches);
     if (immediate.length) setSearchResults(immediate);
+    else setSearchResults([]);
 
     Promise.all([
       getJupTokenCache(),
@@ -436,19 +447,15 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     else { setSort(key); setDir(-1); }
   }, [sort]);
 
-  // FIX: useMemo — sorted list only recalculated when data, sort key, or direction changes
-  // FIX: Initial market view capped at 20 tokens — data for more tokens only loads on search or click
+  // FIX: useMemo -- sorted list only recalculated when data, sort key, or direction changes
+  // FIX: Initial market view capped at 20 tokens -- data for more tokens only loads on search or click
+  // FIX: searchToken state removed; sorted reads searchResults uniformly
   const sorted = useMemo(function() {
     var base = debouncedQ.trim()
-      ? (searchToken ? [searchToken] : searchResults)
+      ? searchResults
       : (coins || []).slice(0, 20);
     return base.slice().sort(function(a, b) { return dir * ((a[sort] || 0) - (b[sort] || 0)); });
-  }, [debouncedQ, searchToken, searchResults, coins, sort, dir]);
-
-  // FIX: isContract uses debouncedQ now (consistent with search effect)
-  const isContractQuery = useMemo(function() {
-    return isValidMint(debouncedQ.trim()) || isValidEvmAddress(debouncedQ.trim());
-  }, [debouncedQ]);
+  }, [debouncedQ, searchResults, coins, sort, dir]);
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
@@ -466,7 +473,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
           />
           {q && (
             <button
-              onClick={function() { setQ(''); setSearchResults([]); setSearchToken(null); }}
+              onClick={function() { setQ(''); setSearchResults([]); }}
               style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: 0 }}
             >x</button>
           )}
@@ -476,7 +483,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
         </div>
       </div>
 
-      {isContractQuery && !searchToken && !searchLoading && debouncedQ.trim() && (
+      {isContractQuery && searchResults.length === 0 && !searchLoading && debouncedQ.trim() && (
         <div style={{ background: 'rgba(0,229,255,.04)', border: '1px solid rgba(0,229,255,.12)', borderRadius: 10, padding: '10px 16px', marginBottom: 12, fontSize: 12, color: C.muted }}>
           Looking up contract address...
         </div>
