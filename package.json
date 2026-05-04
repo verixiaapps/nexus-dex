@@ -15,7 +15,6 @@
     "express-rate-limit": "^7.4.0",
     "cors": "^2.8.5",
     "multer": "^1.4.5-lts.1",
-    "form-data": "^4.0.0",
     "bs58": "^5.0.0",
     "bn.js": "^5.2.1",
     "buffer": "^6.0.3",
