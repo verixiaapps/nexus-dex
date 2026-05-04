@@ -9,7 +9,7 @@ const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const LAUNCH_FEE_SOL = 0.5;
 const PLATFORM_ID = process.env.REACT_APP_PLATFORM_ID || null;
 
-const C = {
+const C = { 
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
   border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
