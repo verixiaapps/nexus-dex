@@ -698,9 +698,26 @@ return usable / LAMPORTS_PER_SOL;
 - For pasted EVM addresses we default chainId to the headerChain rather than 1.
 - ========================================================================= */
 
+// Short labels for chain badges (8 chars max — keeps from/to buttons compact)
+const CHAIN_SHORT = {
+1: ‘ETH’, 10: ‘OP’, 25: ‘CRO’, 56: ‘BNB’, 100: ‘GNO’,
+130: ‘UNI’, 137: ‘POL’, 143: ‘MON’, 146: ‘SONIC’, 250: ‘FTM’,
+252: ‘FRAX’, 255: ‘KROMA’, 288: ‘BOBA’, 324: ‘zkSync’, 480: ‘WORLD’,
+747: ‘FLOW’, 1116: ‘CORE’, 1135: ‘LISK’, 1284: ‘GLMR’, 1329: ‘SEI’,
+2020: ‘RON’, 2222: ‘KAVA’, 2741: ‘ABS’, 5000: ‘MNT’, 8453: ‘BASE’,
+34443: ‘MODE’, 42161: ‘ARB’, 42220: ‘CELO’, 43111: ‘HEMI’, 43114: ‘AVAX’,
+48900: ‘ZIRC’, 57073: ‘INK’, 59144: ‘LINEA’, 60808: ‘BOB’, 80094: ‘BERA’,
+81457: ‘BLAST’, 200901: ‘BTRL’, 534352: ‘SCROLL’, 6342: ‘MEGA’,
+321: ‘KCC’, 360: ‘SHAPE’, 33139: ‘APE’, 167000: ‘TAIKO’, 7777777: ‘ZORA’,
+122: ‘FUSE’, 1313161554: ‘AURORA’, 1088: ‘METIS’, 14: ‘FLR’,
+9745: ‘XPL’, 999: ‘HYPE’, 4217: ‘YALA’,
+};
+
 function ChainBadge({ token }) {
 if (!token) return null;
-const label = isSol(token) ? ‘SOL’ : (CHAIN_NAMES[token.chainId] || ‘EVM’);
+const label = isSol(token)
+? ‘SOL’
+: (CHAIN_SHORT[token.chainId] || ‘EVM’);
 const color = isSol(token) ? ‘#9945ff’ : ‘#627eea’;
 return (
 <span style={{
@@ -792,7 +809,7 @@ const ql = trimmed.toLowerCase();
 const sol = solTokens.filter((t) =>
   (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
   (t.name && t.name.toLowerCase().includes(ql)) ||
-  (t.mint && t.mint.toLowerCase() === ql)
+  (t.mint && t.mint === trimmed)
 ).slice(0, 50);
 
 const evmFromIndex = evmIndex.filter((t) =>
@@ -833,39 +850,54 @@ if (isValidSolMint(trimmed)) {
 const cached = solTokens.find((t) => t.mint === trimmed);
 if (cached) { setContractToken(cached); }
 else {
+let resolved = null;
+try {
 const r = await fetch(‘https://lite-api.jup.ag/tokens/v1/token/’ + trimmed);
 if (r.ok) {
 const d = await r.json();
-setContractToken({
-chain: ‘solana’, mint: d.address, symbol: d.symbol, name: d.name,
-decimals: d.decimals || 6, logoURI: d.logoURI,
-});
-} else {
-setContractToken({
-chain: ‘solana’, mint: trimmed, symbol: shortAddr(trimmed, 4, 4),
-name: ‘Custom Token’, decimals: 6, logoURI: null,
-});
+if (d && d.address) {
+resolved = {
+chain: ‘solana’, mint: d.address, symbol: d.symbol || shortAddr(d.address, 4, 4),
+name: d.name || ‘Unknown’, decimals: typeof d.decimals === ‘number’ ? d.decimals : 6,
+logoURI: d.logoURI || null,
+};
 }
 }
-} else {
-// EVM address — default chainId from header (correct fix for the old chainId:1 bug)
-const chainId = headerChain === ‘solana’ ? 1 : headerChain;
-// Try LiFi index for symbol/decimals
-const found = evmIndex.find((t) => (t.address || ‘’).toLowerCase() === trimmed.toLowerCase() && t.chainId === chainId);
-if (found) { setContractToken(found); }
-else {
-setContractToken({
-chain: ‘evm’, address: trimmed, chainId,
-symbol: shortAddr(trimmed, 4, 4),
-name: ‘Custom EVM Token (’ + (CHAIN_NAMES[chainId] || ‘EVM’) + ‘)’,
-decimals: 18, logoURI: null,
-});
-}
-}
+} catch { /* fall through to placeholder */ }
+
+```
+      setContractToken(resolved || {
+        chain: 'solana', mint: trimmed, symbol: shortAddr(trimmed, 4, 4),
+        name: 'Custom Token', decimals: 6, logoURI: null,
+      });
+    }
+  } else {
+    // EVM address — search LiFi index across ALL chains, prefer headerChain match
+    const targetAddr = trimmed.toLowerCase();
+    const allMatches = evmIndex.filter((t) => (t.address || '').toLowerCase() === targetAddr);
+    const headerChainNum = headerChain === 'solana' ? 1 : headerChain;
+    const preferred = allMatches.find((t) => t.chainId === headerChainNum);
+    const found = preferred || allMatches[0];
+
+    if (found) {
+      setContractToken(found);
+    } else {
+      // Not in LiFi index — synthesize on the user's currently-viewed chain
+      const chainId = headerChainNum || 1;
+      setContractToken({
+        chain: 'evm', address: trimmed, chainId,
+        symbol: shortAddr(trimmed, 4, 4),
+        name: 'Custom EVM Token (' + (CHAIN_NAMES[chainId] || 'EVM') + ')',
+        decimals: 18, logoURI: null,
+      });
+    }
+  }
 } catch {
-setContractToken(null);
+  setContractToken(null);
 }
 setContractLoading(false);
+```
+
 }, [solTokens, evmIndex, headerChain]);
 
 const close = () => {
@@ -1033,7 +1065,9 @@ fontSize: 24, padding: 0, lineHeight: 1,
             <input
               value={v}
               onChange={(e) => {
-                const nv = e.target.value.replace(/[^0-9.]/g, '');
+                let nv = e.target.value.replace(/[^0-9.]/g, '');
+                const dotIdx = nv.indexOf('.');
+                if (dotIdx >= 0) nv = nv.slice(0, dotIdx + 1) + nv.slice(dotIdx + 1).replace(/\./g, '');
                 setBuyVals((p) => { const n = p.slice(); n[i] = nv; return n; });
               }}
               style={{ flex: 1, background: 'transparent', border: 'none', color: '#fff', fontSize: 15, fontWeight: 700, outline: 'none', width: '100%' }}
@@ -1054,7 +1088,9 @@ fontSize: 24, padding: 0, lineHeight: 1,
             <input
               value={v}
               onChange={(e) => {
-                const nv = e.target.value.replace(/[^0-9.]/g, '');
+                let nv = e.target.value.replace(/[^0-9.]/g, '');
+                const dotIdx = nv.indexOf('.');
+                if (dotIdx >= 0) nv = nv.slice(0, dotIdx + 1) + nv.slice(dotIdx + 1).replace(/\./g, '');
                 setSellVals((p) => { const n = p.slice(); n[i] = nv; return n; });
               }}
               style={{ flex: 1, background: 'transparent', border: 'none', color: '#fff', fontSize: 15, fontWeight: 700, outline: 'none', width: '100%' }}
@@ -1184,6 +1220,7 @@ const quoteAbortRef = useRef(null);
 const [swapStatus, setSwapStatus] = useState(‘idle’);
 const [swapTx, setSwapTx] = useState(null);
 const [swapError, setSwapError] = useState(’’);
+const swapStatusTimerRef = useRef(null);
 
 /* — Balance state — */
 const [solBalanceLamports, setSolBalanceLamports] = useState(null);
@@ -1510,6 +1547,12 @@ if (!walletConnected) { if (onConnectWallet) onConnectWallet(); return; }
 if (!quote) return;
 
 ```
+// Clear any pending status reset from a previous attempt
+if (swapStatusTimerRef.current) {
+  clearTimeout(swapStatusTimerRef.current);
+  swapStatusTimerRef.current = null;
+}
+
 setSwapStatus('loading'); setSwapError(''); setSwapTx(null);
 
 try {
@@ -1654,7 +1697,14 @@ try {
       : (evmAddress || customDestAddr.trim());
 
     if (!srcAddr) throw new Error('Connect your ' + (isSol(fromToken) ? 'Solana' : 'EVM') + ' wallet');
-    if (!dstAddr || dstAddr.length < 10) throw new Error('Enter destination wallet address');
+    if (!dstAddr) throw new Error('Enter destination wallet address');
+    // Validate destination address format matches the destination chain
+    if (isSol(toToken) && !isValidSolMint(dstAddr)) {
+      throw new Error('Invalid Solana destination address');
+    }
+    if (isEvm(toToken) && !isValidEvmAddr(dstAddr)) {
+      throw new Error('Invalid EVM destination address');
+    }
 
     // Fresh quote with real addresses
     const lifiQ = await fetchLifiQuote({
@@ -1763,12 +1813,18 @@ try {
   setSwapStatus('success');
   setFromAmt('');
   setQuote(null);
-  setTimeout(() => { setSwapStatus('idle'); setSwapTx(null); }, 6000);
+  swapStatusTimerRef.current = setTimeout(() => {
+    setSwapStatus('idle'); setSwapTx(null);
+    swapStatusTimerRef.current = null;
+  }, 6000);
 } catch (e) {
   console.error('[SwapWidget] swap error:', e);
   setSwapError(e.message || 'Swap failed');
   setSwapStatus('error');
-  setTimeout(() => { setSwapStatus('idle'); setSwapError(''); }, 5000);
+  swapStatusTimerRef.current = setTimeout(() => {
+    setSwapStatus('idle'); setSwapError('');
+    swapStatusTimerRef.current = null;
+  }, 5000);
 }
 ```
 
@@ -1787,10 +1843,20 @@ if (route === ‘lifi’)    return isSol(fromToken)
 : ‘https://scan.li.fi/tx/’ + swapTx;
 // 0x — explorer based on chain
 const exp = {
-1:‘etherscan.io’, 10:‘optimistic.etherscan.io’, 56:‘bscscan.com’,
-137:‘polygonscan.com’, 8453:‘basescan.org’, 42161:‘arbiscan.io’,
-43114:‘snowtrace.io’, 59144:‘lineascan.build’, 534352:‘scrollscan.com’,
-}[fromToken.chainId] || ‘etherscan.io’;
+1: ‘etherscan.io’, 10: ‘optimistic.etherscan.io’, 25: ‘cronoscan.com’,
+56: ‘bscscan.com’, 100: ‘gnosisscan.io’, 130: ‘uniscan.xyz’,
+137: ‘polygonscan.com’, 146: ‘sonicscan.org’, 250: ‘ftmscan.com’,
+324: ‘explorer.zksync.io’, 480: ‘worldscan.org’, 1135: ‘blockscout.lisk.com’,
+1284: ‘moonscan.io’, 1329: ‘seitrace.com’, 2741: ‘abscan.org’,
+5000: ‘mantlescan.xyz’, 8453: ‘basescan.org’, 34443: ‘modescan.io’,
+42161: ‘arbiscan.io’, 42220: ‘celoscan.io’, 43114: ‘snowtrace.io’,
+48900: ‘explorer.zircuit.com’, 57073: ‘explorer.inkonchain.com’,
+59144: ‘lineascan.build’, 60808: ‘explorer.gobob.xyz’, 80094: ‘beratrail.io’,
+81457: ‘blastscan.io’, 167000: ‘taikoscan.io’, 534352: ‘scrollscan.com’,
+1116: ‘scan.coredao.org’, 122: ‘explorer.fuse.io’, 288: ‘bobascan.com’,
+747: ‘flowdiver.io’, 2222: ‘kavascan.com’, 33139: ‘apescan.io’,
+}[fromToken.chainId];
+if (!exp) return null;
 return ‘https://’ + exp + ‘/tx/’ + swapTx;
 }, [swapTx, route, fromToken]);
 
@@ -1862,9 +1928,9 @@ Best price across every chain. Single signature. No KYC.
           QUICK BUY
         </div>
         <div style={{ display: 'flex', gap: 5 }}>
-          {presets.buy.map((amt) => (
+          {presets.buy.map((amt, i) => (
             <button
-              key={amt}
+              key={'b-' + i}
               onClick={() => applyBuyPreset(amt)}
               style={{
                 flex: 1, padding: '9px 2px', borderRadius: 8,
@@ -1886,9 +1952,9 @@ Best price across every chain. Single signature. No KYC.
           QUICK SELL
         </div>
         <div style={{ display: 'flex', gap: 5 }}>
-          {presets.sell.map((pct) => (
+          {presets.sell.map((pct, i) => (
             <button
-              key={pct}
+              key={'s-' + i}
               onClick={() => applySellPreset(pct)}
               style={{
                 flex: 1, padding: '9px 2px', borderRadius: 8,
@@ -1933,7 +1999,14 @@ Best price across every chain. Single signature. No KYC.
         </button>
         <input
           value={fromAmt}
-          onChange={(e) => setFromAmt(e.target.value.replace(/[^0-9.]/g, ''))}
+          onChange={(e) => {
+            let v = e.target.value.replace(/[^0-9.]/g, '');
+            const dotIdx = v.indexOf('.');
+            if (dotIdx >= 0) {
+              v = v.slice(0, dotIdx + 1) + v.slice(dotIdx + 1).replace(/\./g, '');
+            }
+            setFromAmt(v);
+          }}
           placeholder="0.00"
           inputMode="decimal"
           style={{
