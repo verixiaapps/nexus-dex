@@ -36,6 +36,10 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const NODE_ENV = process.env.NODE_ENV || ‘development’;
 
+// Required for Railway (and any reverse-proxy setup) so req.ip resolves to
+// the real client IP, not the proxy’s. Must be set BEFORE rate-limit middleware.
+app.set(‘trust proxy’, 1);
+
 /* ============================================================================
 
 - SECRETS — server-side only, never leaked to browser
@@ -70,7 +74,6 @@ allowedHeaders: [‘Content-Type’, ‘Accept’],
 
 app.use(cors(corsOptions));
 app.use(express.json({ limit: ‘256kb’ })); // Cap JSON body size
-app.set(‘trust proxy’, 1);                  // Required for Railway IP detection
 
 /* ============================================================================
 
@@ -120,12 +123,21 @@ return { parsed: null, raw: text };
 }
 }
 
+function scrubSecrets(s) {
+if (s == null) return ‘’;
+return String(s)
+.replace(/api-key=[^&\s”’]+/gi, ‘api-key=***’)
+.replace(/Bearer\s+[A-Za-z0-9._-]+/gi, ‘Bearer ***’)
+.replace(/0x-api-key[”’:\s]+[^&\s”’,}]+/gi, ’0x-api-key=***’);
+}
+
 function logError(tag, err) {
-// Don’t log full stack in production — just message + status code
+const msg = scrubSecrets(err && err.message ? err.message : err);
 if (NODE_ENV === ‘production’) {
-console.warn(’[’ + tag + ‘]’, err.message || err);
+console.warn(’[’ + tag + ‘]’, msg);
 } else {
-console.error(’[’ + tag + ‘]’, err);
+const stack = err && err.stack ? scrubSecrets(err.stack) : ‘’;
+console.error(’[’ + tag + ‘]’, msg, stack ? ‘\n’ + stack : ‘’);
 }
 }
 
@@ -335,8 +347,9 @@ const upload = multer({
 storage: multer.memoryStorage(),
 limits: { fileSize: 5 * 1024 * 1024 }, // 5MB max
 fileFilter: (req, file, cb) => {
-// Only allow images
-if (!/^image/(png|jpeg|jpg|gif|webp|svg+xml)$/i.test(file.mimetype || ‘’)) {
+// Only allow raster images. SVG intentionally excluded — it can carry
+// embedded JavaScript and creates stored-XSS risk if served back later.
+if (!/^image/(png|jpeg|jpg|gif|webp)$/i.test(file.mimetype || ‘’)) {
 return cb(new Error(‘Only image files are allowed’));
 }
 cb(null, true);
@@ -389,23 +402,20 @@ if (!PINATA_JWT) return res.status(503).json({ error: ‘Pinata not configured�
 if (!req.file) return res.status(400).json({ error: ‘No file uploaded’ });
 
 ```
-// Build form data manually since Pinata wants multipart
-const FormData = require('form-data');
+// Use web-standard FormData/Blob (built into Node 18+).
+// Don't use the legacy `form-data` npm package — Node's built-in fetch
+// (undici) doesn't handle it reliably.
 const fd = new FormData();
-fd.append('file', req.file.buffer, {
-  filename: req.file.originalname || 'upload',
-  contentType: req.file.mimetype,
-});
+const blob = new Blob([req.file.buffer], { type: req.file.mimetype });
+fd.append('file', blob, req.file.originalname || 'upload');
 if (req.body && req.body.name) {
   fd.append('pinataMetadata', JSON.stringify({ name: String(req.body.name).slice(0, 64) }));
 }
 
 const response = await fetchWithTimeout('https://api.pinata.cloud/pinning/pinFileToIPFS', {
   method: 'POST',
-  headers: Object.assign(
-    { Authorization: 'Bearer ' + PINATA_JWT },
-    fd.getHeaders()
-  ),
+  // Don't set Content-Type — fetch sets it with the multipart boundary
+  headers: { Authorization: 'Bearer ' + PINATA_JWT },
   body: fd,
 }, 30_000);
 
@@ -423,12 +433,6 @@ return res.status(response.status).json({
 ```
 
 } catch (e) {
-if (e.message && e.message.includes(‘Only image files’)) {
-return res.status(400).json({ error: e.message });
-}
-if (e.code === ‘LIMIT_FILE_SIZE’) {
-return res.status(413).json({ error: ‘File too large (max 5MB)’ });
-}
 logError(‘pinata-file’, e);
 return res.status(500).json({ error: e.message || ‘Unknown error’ });
 }
@@ -472,6 +476,16 @@ app.use((err, req, res, next) => {
 if (err && err.message && err.message.startsWith(‘Not allowed by CORS’)) {
 return res.status(403).json({ error: ‘CORS: origin not allowed’ });
 }
+// Multer errors fire here, not in the route handler’s try/catch
+if (err && err.message === ‘Only image files are allowed’) {
+return res.status(400).json({ error: err.message });
+}
+if (err && err.code === ‘LIMIT_FILE_SIZE’) {
+return res.status(413).json({ error: ‘File too large (max 5MB)’ });
+}
+if (err && err.code === ‘LIMIT_UNEXPECTED_FILE’) {
+return res.status(400).json({ error: ‘Unexpected file field — use field name “file”’ });
+}
 logError(‘unhandled’, err);
 if (res.headersSent) return next(err);
 res.status(500).json({ error: ‘Internal server error’ });
@@ -490,3 +504,8 @@ if (!OX_API_KEY)     console.warn(’  WARNING: OX_API_KEY not set — EVM swaps
 if (!PINATA_JWT)     console.warn(’  WARNING: PINATA_JWT not set — token launch metadata will fail’);
 if (!HELIUS_API_KEY) console.warn(’  WARNING: HELIUS_API_KEY not set — falling back to public Solana RPC’);
 });
+
+// Last-resort handlers for async errors that escape every other catch.
+// Don’t process.exit() — let Node decide; Railway will restart if needed.
+process.on(‘uncaughtException’,  (err) => logError(‘uncaughtException’, err));
+process.on(‘unhandledRejection’, (err) => logError(‘unhandledRejection’, err));
