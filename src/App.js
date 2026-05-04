@@ -404,12 +404,33 @@ function WalletModal({ open, onClose }) {
  })();
 
  // Mobile detection -- used to decide whether to show in-app-browser
- // deep-link buttons. We show those whenever we're on a mobile browser
- // AND there's no injected EVM connector available (i.e., user is in
- // regular Safari/Chrome on iOS/Android, not in a wallet's in-app browser).
+ // deep-link buttons. Two states matter on mobile:
+ //   (a) User is in regular mobile Safari/Chrome -> no window.ethereum, no
+ //       EIP-6963 announcements; the generic 'injected' connector wagmi
+ //       always creates will fail with "Provider not found" if tapped.
+ //       Hide it. Show deep-links prominently as the only EVM path.
+ //   (b) User is already in a wallet's in-app browser (Phantom mobile,
+ //       MetaMask mobile, etc.) -> window.ethereum is populated, possibly
+ //       EIP-6963 too. Treat like desktop: show the connectors, hide
+ //       deep-links (they'd just send the user back through the maze).
  const isMobileBrowser = typeof navigator !== 'undefined'
    && /iphone|ipad|ipod|android/i.test(navigator.userAgent || '');
- const showMobileDeepLinks = isMobileBrowser && evmConnectors.length === 0;
+ const hasInjectedProvider = typeof window !== 'undefined' && !!window.ethereum;
+ const hasNamedConnector = evmConnectors.some(function(c) { return c.id && c.id !== 'injected'; });
+ // True iff we're on plain mobile Safari/Chrome with no wallet at all.
+ const isStrandedMobile = isMobileBrowser && !hasInjectedProvider && !hasNamedConnector;
+
+ // Filter the connectors list shown to the user. On stranded mobile, drop
+ // the generic 'injected' entry -- tapping it produces the "Provider not
+ // found" error users are seeing in the screenshots.
+ const evmConnectorsToShow = isStrandedMobile
+   ? evmConnectors.filter(function(c) { return c.id && c.id !== 'injected'; })
+   : evmConnectors;
+
+ // Show deep-links whenever we're on a mobile browser without a real
+ // injected provider -- covers both stranded Safari and the case where a
+ // user has only Solana wallets visible.
+ const showMobileDeepLinks = isMobileBrowser && !hasInjectedProvider && !hasNamedConnector;
 
  // Mobile deep-links -- bounce the user from regular Safari/Chrome into the
  // wallet app's IN-APP BROWSER, pointed at our site. Once they're in that
@@ -511,10 +532,10 @@ function WalletModal({ open, onClose }) {
 
              {/* EVM WALLETS -- every EIP-6963 injected wallet (MetaMask, Phantom EVM,
                  Rabby, Coinbase Wallet ext, OKX, Bitget, Brave, Trust ext, etc.) */}
-             {evmConnectors.length > 0 && (
+             {evmConnectorsToShow.length > 0 && (
                <>
                  <div style={{ fontSize: 10, color: '#586994', fontWeight: 700, letterSpacing: 1, margin: '6px 0 2px' }}>EVM WALLETS</div>
-                 {evmConnectors.map(function(connector) {
+                 {evmConnectorsToShow.map(function(connector) {
                    const isPending = isConnecting && pendingWallet === (connector.name || 'EVM Wallet');
                    return (
                      <button key={connector.uid || connector.id} onClick={function() { handleEvmConnect(connector); }} disabled={isConnecting} style={{ display: 'flex', alignItems: 'center', gap: 14, background: isPending ? 'rgba(98,126,234,.18)' : 'rgba(98,126,234,.06)', border: '1px solid rgba(98,126,234,.25)', borderRadius: 14, padding: '14px 18px', cursor: isConnecting ? 'wait' : 'pointer', width: '100%', opacity: isConnecting && !isPending ? 0.5 : 1 }}>
@@ -588,7 +609,7 @@ function WalletModal({ open, onClose }) {
              )}
 
              {/* NO WALLETS DETECTED -- desktop with no extension installed AND not mobile */}
-             {evmConnectors.length === 0 && detectedSolWallets.length === 0 && !showMobileDeepLinks && (
+             {evmConnectorsToShow.length === 0 && detectedSolWallets.length === 0 && !showMobileDeepLinks && (
                <div style={{
                  background: 'rgba(255,59,107,.06)', border: '1px solid rgba(255,59,107,.2)',
                  borderRadius: 12, padding: 14, textAlign: 'center',
