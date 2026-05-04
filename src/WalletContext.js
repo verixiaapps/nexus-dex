@@ -452,4 +452,4 @@ export function useNexusWallet() {
 const ctx = useContext(WalletContext);
 if (!ctx) throw new Error(‘useNexusWallet must be used inside WalletContextProvider’);
 return ctx;
-}
+} 
