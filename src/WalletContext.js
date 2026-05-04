@@ -34,7 +34,7 @@
 - walletAddress, isSolanaConnected, connectedWalletName
   */
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from ‘react’;
+import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from ‘react’;
 import { useWallet } from ‘@solana/wallet-adapter-react’;
 import { useAccount, useWalletClient, useSwitchChain, useDisconnect } from ‘wagmi’;
 
@@ -66,14 +66,20 @@ const DEFAULT_SELL_PRESETS = [25, 50, 75, 100];
 
 function detectMobileInAppWallet() {
 if (typeof window === ‘undefined’) return null;
-const ua = (navigator.userAgent || ‘’).toLowerCase();
+const uaRaw = navigator.userAgent || ‘’;
+const ua = uaRaw.toLowerCase();
+// Only flag mobile in-app browsers — desktop extensions inject the same
+// globals (window.phantom, window.ethereum.isCoinbaseWallet) and shouldn’t
+// be treated as “in-app”.
+const isMobile = /iphone|ipad|ipod|android/i.test(uaRaw);
+if (!isMobile) return null;
 
 // Phantom in-app browser
 if (window.phantom && (window.phantom.solana || window.phantom.ethereum)) {
 return ‘phantom’;
 }
 // MetaMask Mobile in-app browser
-if (ua.includes(‘metamaskmobile’) || (window.ethereum && window.ethereum.isMetaMask && /iPhone|iPad|Android/i.test(ua))) {
+if (ua.includes(‘metamaskmobile’) || (window.ethereum && window.ethereum.isMetaMask)) {
 return ‘metamask’;
 }
 // Trust Wallet in-app browser
@@ -98,10 +104,21 @@ try {
 const raw = localStorage.getItem(PRESETS_LS_KEY);
 if (!raw) return { buy: DEFAULT_BUY_PRESETS, sell: DEFAULT_SELL_PRESETS };
 const p = JSON.parse(raw);
+
+```
+const validBuys = Array.isArray(p.buy)
+  ? p.buy.map(Number).filter((v) => Number.isFinite(v) && v > 0).slice(0, 5)
+  : [];
+const validSells = Array.isArray(p.sell)
+  ? p.sell.map(Number).filter((v) => Number.isFinite(v) && v > 0 && v <= 100).slice(0, 4)
+  : [];
+
 return {
-buy:  Array.isArray(p.buy)  && p.buy.length  >= 3 ? p.buy  : DEFAULT_BUY_PRESETS,
-sell: Array.isArray(p.sell) && p.sell.length >= 3 ? p.sell : DEFAULT_SELL_PRESETS,
+  buy:  validBuys.length  >= 3 ? validBuys  : DEFAULT_BUY_PRESETS,
+  sell: validSells.length >= 3 ? validSells : DEFAULT_SELL_PRESETS,
 };
+```
+
 } catch {
 return { buy: DEFAULT_BUY_PRESETS, sell: DEFAULT_SELL_PRESETS };
 }
@@ -186,6 +203,16 @@ const { data: walletClient } = useWalletClient();
 const { switchChain, switchChainAsync } = useSwitchChain();
 const { disconnect: evmDisconnect } = useDisconnect();
 
+/* Refs that always hold the latest wagmi values. Async functions like
+
+- switchToChain() poll these instead of useCallback-captured snapshots —
+- otherwise the captured walletClient is stale by the time the chain
+- actually switches and the polling loop never sees the new chain id. */
+  const walletClientRef = useRef(walletClient);
+  const evmChainIdRef   = useRef(evmChainId);
+  useEffect(() => { walletClientRef.current = walletClient; }, [walletClient]);
+  useEffect(() => { evmChainIdRef.current   = evmChainId;   }, [evmChainId]);
+
 /* — Header chain (destination network selector) — */
 const [headerChain, setHeaderChainState] = useState(() => loadHeaderChain());
 const setHeaderChain = useCallback((c) => {
@@ -258,26 +285,32 @@ return ok;
 Wraps wagmi’s switchChainAsync with our own timeout/retry. — */
 const switchToChain = useCallback(async (targetChainId) => {
 if (!targetChainId || typeof targetChainId !== ‘number’) return false;
-if (evmChainId === targetChainId) return true;
+if (evmChainIdRef.current === targetChainId) return true;
 try {
 if (switchChainAsync) {
 await switchChainAsync({ chainId: targetChainId });
 } else if (switchChain) {
 switchChain({ chainId: targetChainId });
 }
-// Short verification window
+// Verification window — read fresh values via refs so we see the
+// post-switch state instead of the closure’s stale snapshot.
 const start = Date.now();
 while (Date.now() - start < 5_000) {
-if (walletClient && walletClient.chain && walletClient.chain.id === targetChainId) return true;
+const wc = walletClientRef.current;
+const cid = evmChainIdRef.current;
+if (cid === targetChainId) return true;
+if (wc && wc.chain && wc.chain.id === targetChainId) return true;
 await new Promise((r) => setTimeout(r, 200));
 }
-return walletClient && walletClient.chain && walletClient.chain.id === targetChainId;
+const wc = walletClientRef.current;
+const cid = evmChainIdRef.current;
+return cid === targetChainId || (wc && wc.chain && wc.chain.id === targetChainId);
 } catch (e) {
 // eslint-disable-next-line no-console
 console.warn(’[WalletContext] switchChain failed:’, e && e.message);
 return false;
 }
-}, [evmChainId, switchChain, switchChainAsync, walletClient]);
+}, [switchChain, switchChainAsync]);
 
 /* — Derived state — */
 const isConnected = solConnected || evmConnected;
