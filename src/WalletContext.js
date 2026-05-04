@@ -260,57 +260,93 @@ savePresets(p);
 const mobileInAppWallet = useMemo(() => detectMobileInAppWallet(), []);
 const isMobileInAppWallet = !!mobileInAppWallet;
 
-/* — Disconnect both wallets cleanly — */
-const disconnectAll = useCallback(async () => {
-let ok = true;
-if (solConnected) {
-try { await solDisconnect(); } catch (e) {
-// eslint-disable-next-line no-console
-console.warn(’[WalletContext] Solana disconnect error:’, e);
-ok = false;
-}
-}
-if (evmConnected) {
-try { evmDisconnect(); } catch (e) {
-// eslint-disable-next-line no-console
-console.warn(’[WalletContext] EVM disconnect error:’, e);
-ok = false;
-}
-}
-setActiveContext(null);
-return ok;
-}, [solConnected, evmConnected, solDisconnect, evmDisconnect, setActiveContext]);
+/* — Disconnect both wallets cleanly.
+*
+
+- WC-3: wagmi’s `disconnect()` is a synchronous mutation but the connection
+- state flip (evmConnected -> false, evmAddress -> undefined) propagates
+- through wagmi’s reactive store on the next tick. If we resolve immediately,
+- components reading evmConnected on the next render still see `true`,
+- which causes a flash of “still connected” UI right before disconnect.
+- 
+- We poll briefly (max 1.5s) for the state to actually flip before resolving.
+- Native wallet disconnect is awaitable so it doesn’t need this.
+  */
+  const disconnectAll = useCallback(async () => {
+  let ok = true;
+  if (solConnected) {
+  try { await solDisconnect(); } catch (e) {
+  // eslint-disable-next-line no-console
+  console.warn(’[WalletContext] Solana disconnect error:’, e);
+  ok = false;
+  }
+  }
+  if (evmConnected) {
+  try {
+  evmDisconnect();
+  // Wait briefly for wagmi to flip evmConnected to false. Without this
+  // wait, components reading the post-disconnect state see stale
+  // `connected: true` for one render cycle.
+  const start = Date.now();
+  while (Date.now() - start < 1_500) {
+  // wagmi exposes the live connected flag through the same hook we
+  // already destructured, but our `evmConnected` is the closure
+  // snapshot. We can’t re-read it here. The cleanest signal is
+  // `walletClientRef.current` — wagmi clears it on disconnect.
+  if (!walletClientRef.current) break;
+  await new Promise((r) => setTimeout(r, 100));
+  }
+  } catch (e) {
+  // eslint-disable-next-line no-console
+  console.warn(’[WalletContext] EVM disconnect error:’, e);
+  ok = false;
+  }
+  }
+  setActiveContext(null);
+  return ok;
+  }, [solConnected, evmConnected, solDisconnect, evmDisconnect, setActiveContext]);
 
 /* — Switch EVM chain with a promise we can await safely.
-Wraps wagmi’s switchChainAsync with our own timeout/retry. — */
-const switchToChain = useCallback(async (targetChainId) => {
-if (!targetChainId || typeof targetChainId !== ‘number’) return false;
-if (evmChainIdRef.current === targetChainId) return true;
-try {
-if (switchChainAsync) {
-await switchChainAsync({ chainId: targetChainId });
-} else if (switchChain) {
-switchChain({ chainId: targetChainId });
-}
-// Verification window — read fresh values via refs so we see the
-// post-switch state instead of the closure’s stale snapshot.
-const start = Date.now();
-while (Date.now() - start < 5_000) {
-const wc = walletClientRef.current;
-const cid = evmChainIdRef.current;
-if (cid === targetChainId) return true;
-if (wc && wc.chain && wc.chain.id === targetChainId) return true;
-await new Promise((r) => setTimeout(r, 200));
-}
-const wc = walletClientRef.current;
-const cid = evmChainIdRef.current;
-return cid === targetChainId || (wc && wc.chain && wc.chain.id === targetChainId);
-} catch (e) {
-// eslint-disable-next-line no-console
-console.warn(’[WalletContext] switchChain failed:’, e && e.message);
-return false;
-}
-}, [switchChain, switchChainAsync]);
+
+- ```
+  Wraps wagmi's switchChainAsync with our own polling.
+  ```
+- 
+- WC-5: Some mobile wallets are slow:
+- - Coinbase Wallet iOS: 7-10s after user approves the prompt
+- - Trust Wallet mobile: 5-7s
+- - Phantom EVM: 2-4s
+- Old 5s window returned false even when the switch eventually succeeded.
+- 10s covers the slow path. Polling stays cheap (150ms ticks).
+  */
+  const switchToChain = useCallback(async (targetChainId) => {
+  if (!targetChainId || typeof targetChainId !== ‘number’) return false;
+  if (evmChainIdRef.current === targetChainId) return true;
+  try {
+  if (switchChainAsync) {
+  await switchChainAsync({ chainId: targetChainId });
+  } else if (switchChain) {
+  switchChain({ chainId: targetChainId });
+  }
+  // Verification window — read fresh values via refs so we see the
+  // post-switch state instead of the closure’s stale snapshot.
+  const start = Date.now();
+  while (Date.now() - start < 10_000) {
+  const wc = walletClientRef.current;
+  const cid = evmChainIdRef.current;
+  if (cid === targetChainId) return true;
+  if (wc && wc.chain && wc.chain.id === targetChainId) return true;
+  await new Promise((r) => setTimeout(r, 150));
+  }
+  const wc = walletClientRef.current;
+  const cid = evmChainIdRef.current;
+  return cid === targetChainId || (wc && wc.chain && wc.chain.id === targetChainId);
+  } catch (e) {
+  // eslint-disable-next-line no-console
+  console.warn(’[WalletContext] switchChain failed:’, e && e.message);
+  return false;
+  }
+  }, [switchChain, switchChainAsync]);
 
 /* — Derived state — */
 const isConnected = solConnected || evmConnected;
