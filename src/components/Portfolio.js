@@ -3,7 +3,7 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
 import { useAccount } from 'wagmi';
 
-const C = {
+const C = { 
   card: '#080d1a', card2: '#0c1220',
   border: 'rgba(0,229,255,0.10)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
