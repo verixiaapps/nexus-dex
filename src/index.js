@@ -77,6 +77,19 @@ console.error(
 );
 }
 
+// IDX-5: Warn loud when Solana RPC has fallen through to the public endpoint.
+// Public mainnet-beta rate-limits at ~10 req/min, which means most Jupiter
+// quotes, balance checks, and confirmations will fail under any real load.
+// The warning fires once at boot so the dev sees it in their browser console.
+if (!process.env.REACT_APP_SOLANA_RPC && !process.env.REACT_APP_HELIUS_API_KEY) {
+// eslint-disable-next-line no-console
+console.warn(
+’[Nexus DEX] No Solana RPC configured. Falling back to public mainnet-beta, ’ +
+’which is heavily rate-limited and will fail under normal use. ’ +
+‘Set REACT_APP_HELIUS_API_KEY (recommended) or REACT_APP_SOLANA_RPC on Railway.’
+);
+}
+
 /* ============================================================================
 
 - CUSTOM CHAINS — chains not yet in viem/wagmi presets
@@ -263,4 +276,4 @@ root.render(
 </QueryClientProvider>
 </WagmiProvider>
 );
-} 
+}
