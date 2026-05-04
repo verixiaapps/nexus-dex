@@ -1,5 +1,3 @@
-Part 1 of 2:
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAccount } from 'wagmi';
