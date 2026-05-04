@@ -5,7 +5,7 @@
 * site can't show QR codes. Some leftover file in src/ still imports from
 * `@web3modal/wagmi/react` (or its sub-paths). Webpack fails with
 * "Module not found".
-* 
+*
 * Fix without hunting that file down right now:
 *   1. At build time, write a tiny stub module to node_modules/.cache.
 *   2. Alias every `@web3modal/wagmi*` import path to that stub.
