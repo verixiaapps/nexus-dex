@@ -6,7 +6,7 @@
  * Usage:  node setupLaunchpad.mjs
  * Requires: ADMIN_WALLET_PRIVATE_KEY env var (base58 encoded private key of your SOL fee wallet)
  * Cost: ~0.01 SOL (one-time)
- */
+ */ 
 
 // FIX 4: Load .env for local use (ADMIN_WALLET_PRIVATE_KEY lives here)
 import 'dotenv/config';
