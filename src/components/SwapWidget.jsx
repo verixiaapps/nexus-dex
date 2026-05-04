@@ -107,6 +107,8 @@ const CHAIN_NAMES = {
  321: 'KCC', 360: 'Shape', 33139: 'ApeChain', 167000: 'Taiko', 7777777: 'Zora',
  122: 'Fuse', 1313161554: 'Aurora', 1088: 'Metis', 14: 'Flare',
  9745: 'PlasmaChain', 999: 'HyperEVM', 4217: 'Yala',
+ // Bitcoin -- LiFi uses chainId 20000000000001 with chain key 'BTC'
+ 20000000000001: 'Bitcoin',
 };
 
 // Stablecoin USDC addresses per chain (for default to-token in swap mode)
@@ -192,6 +194,13 @@ const POPULAR_TOKENS = [
    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
  { address: USDC_BY_CHAIN[42161], chainId: 42161, symbol: 'USDC', name: 'USDC (Arbitrum)', decimals: 6, chain: 'evm',
    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+
+ // Bitcoin -- destination only (source-BTC requires BTC wallet integration which
+ // isn't yet built). LiFi tokens API returns BTC with these fields when
+ // chainTypes=UTXO is included; we mirror that exact shape here.
+ { address: 'bitcoin', chainId: 20000000000001, symbol: 'BTC', name: 'Bitcoin',
+   decimals: 8, chain: 'bitcoin',
+   logoURI: 'https://assets.coingecko.com/coins/images/1/large/bitcoin.png' },
 ];
 
 /* ============================================================================
@@ -200,6 +209,7 @@ const POPULAR_TOKENS = [
 
 const isSol = (t) => !!(t && t.chain === 'solana');
 const isEvm = (t) => !!(t && t.chain === 'evm');
+const isBtc = (t) => !!(t && t.chain === 'bitcoin');
 
 function isValidSolMint(s) {
  return !!s && s.length >= 32 && s.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
@@ -207,10 +217,25 @@ function isValidSolMint(s) {
 function isValidEvmAddr(s) {
  return !!s && /^0x[0-9a-fA-F]{40}$/.test(s);
 }
+// Bitcoin address validators -- covers all three formats users actually paste:
+//   - bech32 (native segwit):      bc1q...  / bc1p... (taproot)
+//   - P2SH (script):                3...
+//   - legacy P2PKH:                 1...
+// We do format-only validation; LiFi will reject malformed checksums on quote.
+function isValidBtcAddr(s) {
+ if (!s || typeof s !== 'string') return false;
+ const v = s.trim();
+ // bech32 / bech32m: bc1 + alphanumeric, 14-74 chars total
+ if (/^bc1[ac-hj-np-z02-9]{6,87}$/i.test(v)) return true;
+ // legacy P2PKH (1...) or P2SH (3...)
+ if (/^[13]{25,34}$/.test(v)) return true;
+ return false;
+}
 
 function tokensEqual(a, b) {
  if (!a || !b) return false;
  if (isSol(a) && isSol(b)) return a.mint === b.mint;
+ if (isBtc(a) && isBtc(b)) return true;        // only one BTC token exists
  if (isEvm(a) && isEvm(b)) return (
    a.chainId === b.chainId &&
    (a.address || '').toLowerCase() === (b.address || '').toLowerCase()
@@ -436,6 +461,7 @@ function usdcOfChain(chainId) {
 
 function chainOfToken(t) {
  if (isSol(t)) return 'solana';
+ if (isBtc(t)) return 'bitcoin';
  if (isEvm(t)) return t.chainId;
  return null;
 }
@@ -480,17 +506,20 @@ function pickRoute(from, to) {
 
 function lifiChainParam(t) {
  if (isSol(t)) return 'SOL';
+ if (isBtc(t)) return 'BTC';
  return String(t.chainId);
 }
 function lifiTokenParam(t) {
  if (isSol(t)) return t.mint;
+ if (isBtc(t)) return 'bitcoin';   // LiFi's special address for BTC native
  return t.address;
 }
 
 async function fetchLifiTokens() {
  if (_lifiTokensCache) return _lifiTokensCache;
  if (_lifiTokensInflight) return _lifiTokensInflight;
- _lifiTokensInflight = fetch('https://li.quest/v1/tokens?chainTypes=EVM,SVM')
+ // chainTypes includes UTXO so BTC tokens come back too.
+ _lifiTokensInflight = fetch('https://li.quest/v1/tokens?chainTypes=EVM,SVM,UTXO')
    .then((r) => (r.ok ? r.json() : null))
    .catch(() => null)
    .then((data) => {
@@ -716,14 +745,17 @@ const CHAIN_SHORT = {
  321: 'KCC', 360: 'SHAPE', 33139: 'APE', 167000: 'TAIKO', 7777777: 'ZORA',
  122: 'FUSE', 1313161554: 'AURORA', 1088: 'METIS', 14: 'FLR',
  9745: 'XPL', 999: 'HYPE', 4217: 'YALA',
+ 20000000000001: 'BTC',
 };
 
 function ChainBadge({ token }) {
  if (!token) return null;
- const label = isSol(token)
-   ? 'SOL'
-   : (CHAIN_SHORT[token.chainId] || 'EVM');
- const color = isSol(token) ? '#9945ff' : '#627eea';
+ const label = isSol(token) ? 'SOL'
+             : isBtc(token) ? 'BTC'
+             : (CHAIN_SHORT[token.chainId] || 'EVM');
+ const color = isSol(token) ? '#9945ff'
+             : isBtc(token) ? '#f7931a'   // Bitcoin orange
+             : '#627eea';
  return (
    <span style={{
      fontSize: 9, color, background: color + '22', border: '1px solid ' + color + '44',
@@ -816,7 +848,7 @@ function useEscapeKey(open, handler) {
  }, [open, handler]);
 }
 
-function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, headerChain }) {
+function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, headerChain, excludeBtc }) {
  const [q, setQ] = useState('');
  const [contractInput, setContractInput] = useState('');
  const [contractToken, setContractToken] = useState(null);
@@ -842,10 +874,17 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, headerChain 
      Object.values(data.tokens).forEach((chainTokens) => {
        chainTokens.forEach((t) => {
          if (!t.symbol || !t.address || !t.chainId) return;
+         // LiFi response now includes SVM (Solana, chainId ~1.15e15) and
+         // UTXO (Bitcoin, chainId 2e13) tokens because we asked for
+         // chainTypes=EVM,SVM,UTXO. Solana tokens come from jupiterTokens
+         // separately; Bitcoin is in POPULAR_TOKENS. Skip them here so
+         // they don't get mistakenly tagged as 'evm'.
+         const cid = Number(t.chainId);
+         if (!Number.isFinite(cid) || cid > 1_000_000_000) return;
          arr.push({
            chain: 'evm',
            address: t.address,
-           chainId: Number(t.chainId),
+           chainId: cid,
            symbol: t.symbol,
            name: t.name || t.symbol,
            decimals: t.decimals || 18,
@@ -908,7 +947,15 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, headerChain 
        if (!seen.has(key)) { seen.add(key); evmCombined.push(t); }
      });
 
-     setSearchResults([...sol, ...evmCombined]);
+     // Bitcoin: only one entry, surface it whenever the query mentions it.
+     const btcMatches = POPULAR_TOKENS.filter((t) =>
+       isBtc(t) && (
+         (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
+         (t.name && t.name.toLowerCase().includes(ql))
+       )
+     );
+
+     setSearchResults([...sol, ...evmCombined, ...btcMatches]);
    }, 250);
    return () => { clearTimeout(handle); };
  }, [q, solTokens, evmIndex]);
@@ -1037,7 +1084,10 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, headerChain 
    if (!contractInput) setContractToken(null);
  }, [contractInput]);
 
- const display = q.trim() ? searchResults : POPULAR_TOKENS;
+ const display = (function() {
+   const base = q.trim() ? searchResults : POPULAR_TOKENS;
+   return excludeBtc ? base.filter((t) => !isBtc(t)) : base;
+ })();
 
  if (!open) return null;
  return (
@@ -1754,6 +1804,8 @@ export default function SwapWidget({
  /* --- Determine if cross-chain destination needs a manual address --- */
  const needsDestAddr = useMemo(() => {
    if (!isCrossChain) return false;
+   // BTC destination always needs a custom address -- we don't connect BTC wallets
+   if (isBtc(toToken)) return true;
    if (isSol(toToken) && !publicKey) return true;
    if (isEvm(toToken) && !evmAddress) return true;
    return false;
@@ -1924,13 +1976,25 @@ export default function SwapWidget({
       * LIFI (cross-chain or unsupported same-chain EVM)
       * ============================================================ */
      else if (route === 'lifi') {
+       // BTC SOURCE not yet supported (no BTC wallet integration yet -- would
+       // need sats-connect / Xverse / Phantom-BTC / Unisat / Leather adapters
+       // and PSBT signing). Surface this clearly instead of failing later.
+       if (isBtc(fromToken)) {
+         throw new Error('Sending FROM Bitcoin is not yet supported. Pick another source token.');
+       }
+
        // Resolve real addresses
        const srcAddr = isSol(fromToken)
          ? (publicKey ? publicKey.toString() : null)
          : (evmAddress || null);
-       const dstAddr = isSol(toToken)
-         ? (publicKey ? publicKey.toString() : customDestAddr.trim())
-         : (evmAddress || customDestAddr.trim());
+       // BTC destination always uses the customDestAddr field (we don't have
+       // a BTC wallet to read from). Solana / EVM destinations prefer the
+       // connected wallet's address but fall back to the custom field.
+       const dstAddr = isBtc(toToken)
+         ? customDestAddr.trim()
+         : isSol(toToken)
+           ? (publicKey ? publicKey.toString() : customDestAddr.trim())
+           : (evmAddress || customDestAddr.trim());
 
        if (!srcAddr) throw new Error('Connect your ' + (isSol(fromToken) ? 'Solana' : 'EVM') + ' wallet');
        if (!dstAddr) throw new Error('Enter destination wallet address');
@@ -1940,6 +2004,9 @@ export default function SwapWidget({
        }
        if (isEvm(toToken) && !isValidEvmAddr(dstAddr)) {
          throw new Error('Invalid EVM destination address');
+       }
+       if (isBtc(toToken) && !isValidBtcAddr(dstAddr)) {
+         throw new Error('Invalid Bitcoin destination address (use bc1..., 3..., or 1...)');
        }
 
        // Fresh quote with real addresses
@@ -2369,9 +2436,11 @@ export default function SwapWidget({
            <input
              value={customDestAddr}
              onChange={(e) => setCustomDestAddr(e.target.value)}
-             placeholder={isSol(toToken)
-               ? 'Your Solana wallet address...'
-               : 'Your ' + (CHAIN_NAMES[toToken && toToken.chainId] || 'EVM') + ' address (0x...)'}
+             placeholder={isBtc(toToken)
+               ? 'Your Bitcoin address (bc1..., 3..., or 1...)'
+               : isSol(toToken)
+                 ? 'Your Solana wallet address...'
+                 : 'Your ' + (CHAIN_NAMES[toToken && toToken.chainId] || 'EVM') + ' address (0x...)'}
              style={{
                width: '100%', background: C.card2,
                border: '1px solid rgba(0,229,255,.2)', borderRadius: 10,
@@ -2527,6 +2596,7 @@ export default function SwapWidget({
        }}
        jupiterTokens={jupiterTokens}
        headerChain={headerChain}
+       excludeBtc={true}
      />
      <TokenSelectModal
        open={toSelectOpen}
@@ -2536,8 +2606,8 @@ export default function SwapWidget({
        }}
        jupiterTokens={jupiterTokens}
        headerChain={headerChain}
+       excludeBtc={false}
      />
-
      {/* PRESET EDITOR */}
      <PresetEditor
        open={presetEditorOpen}
@@ -2680,3 +2750,4 @@ export function TradeDrawer({
    </>
  );
 }
+
