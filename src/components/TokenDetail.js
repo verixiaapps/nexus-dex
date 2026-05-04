@@ -3,7 +3,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { useAccount } from 'wagmi';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { TradeDrawer } from './SwapWidget.jsx';
-import { useNexusWallet } from '../WalletContext.js';
+import { useNexusWallet } from '../WalletContext.js'; 
 
 /* ============================================================================
  * Changes vs the previous TokenDetail.js (preserves layout & styling; only
