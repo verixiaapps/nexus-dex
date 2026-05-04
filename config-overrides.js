@@ -93,6 +93,18 @@ module.exports = function override(config) {
    return !p || !p.constructor || p.constructor.name !== 'ModuleScopePlugin';
  });
 
+ // Disable ESLintWebpackPlugin during build. CRA 5 wires it up to use
+ // @babel/eslint-parser so JSX in .js files is recognized, but in this
+ // project that wiring is broken -- ESLint defaults to espree, which throws
+ // "Syntax error: Missing semicolon" on every JSX node. The actual JS is
+ // parsed independently by babel-loader (which works fine), so removing
+ // the eslint plugin from the build pipeline only removes an in-build
+ // linter, not any real validation. Lint locally / in CI separately if
+ // you want lint output.
+ config.plugins = (config.plugins || []).filter(function (p) {
+   return !p || !p.constructor || p.constructor.name !== 'ESLintWebpackPlugin';
+ });
+
  config.resolve.alias = Object.assign({}, config.resolve.alias || {}, {
    // Every documented import path of @web3modal/wagmi -> stub
    '@web3modal/wagmi/react/config': STUB_PATH,
