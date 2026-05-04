@@ -13,55 +13,40 @@ import NewLaunches from './components/NewLaunches.js';
 import TokenLaunch from './components/TokenLaunch.js';
 
 /* ============================================================================
-* Changes vs the previous App.js (preserves original structure and visuals;
-* only the listed fixes applied):
+* App.js -- locked plan applied:
 *
-*   - M12 (DRY):       HEADER_TABS removed. NAV_TABS is the single source
-*                      used by both the desktop header and the mobile bottom nav.
+*   Wallet modal = THREE buttons, period:
+*     1. Phantom        -- Solana, via @solana/wallet-adapter-phantom
+*                          (handles desktop extension AND mobile universal
+*                          link automatically inside the adapter)
+*     2. Solflare       -- Solana, via @solana/wallet-adapter-solflare
+*                          (same: extension + mobile universal link)
+*     3. WalletConnect  -- everything else, via wagmi's `walletConnect`
+*                          connector. Desktop -> QR modal in-page (user
+*                          stays on our site). Mobile -> wallet picker
+*                          deep-links into the chosen wallet, returns
+*                          here automatically after approval.
 *
-*   - M13 (props):     BuyCrypto now receives the same sharedProps every
-*                      other route gets (isConnected, walletAddress, etc.). Was missing
-*                      before, so isConnected was unavailable inside BuyCrypto.
+*   No EIP-6963 enumeration. No "open in wallet app" deep-link grid. No
+*   install grid. The three adapters/connector each handle their own
+*   install / mobile / fallback paths internally -- we don't re-implement
+*   any of that here.
 *
-*   - H15 (cache):     localStorage market cache key bumped to
-*                      `nexus_market_cache_v2` with an explicit `v: 2` field. Old cache
-*                      entries under the unversioned key are simply ignored on upgrade --
-*                      next cache-shape change just bumps the suffix.
+*   All transactions stay on-site. The only off-site step is the wallet's
+*   own approval prompt, which is unavoidable and handled by the wallet
+*   itself (it returns the user to our origin via universal link).
 *
-*   - A6 (locked rule): NetworkSelector dropdown placed in the header to
-*                      the LEFT of the Connect Wallet button. Reads `headerChain` from
-*                      WalletContext (persisted across sessions). SwapWidget reads the same
-*                      value for its default token pair.
-*
-*   - WC1, WC3, WC5 (race conditions): WalletModal connect flow rewritten
-*                      as a single useReducer state machine instead of three useEffects
-*                      fighting over `connecting` / `pendingWallet` flags. States are
-*                      idle -> connecting{wallet, target} -> idle | error{message}.
-*
-*   - NO-QR REBUILD: Web3Modal and WalletConnect removed entirely. EVM
-*                      connections now go through wagmi's `useConnect` with the `injected`
-*                      (EIP-6963) connector -- every browser-extension wallet shows up as
-*                      its own button. For mobile users in regular Safari/Chrome, a "Open
-*                      in wallet app" section deep-links them into the wallet's own
-*                      in-app browser pointed at this site. No QR pairing exists in the
-*                      UI or in the underlying connector set.
-*
-*   - WC6 (silent failures): Connect errors now display in the modal UI
-*                      with a Retry button instead of just console.error.
-*
-*   - Minor: `@keyframes wc-spin` moved from an inline <style> tag inside
-*                      WalletModal into GLOBAL_STYLES so it injects once at app startup
-*                      rather than each time the modal mounts.
-*
-* Things intentionally NOT changed:
-*
-*   - Direct browser calls to api.coingecko.com and lite-api.jup.ag (H14 in
-*                      the review). Server-side proxying is a Round 4 task.
-*   - useAppWallet shim -- kept as a backwards-compat wrapper, AppInner
-*                      still uses it (it's not dead code; just a 1-line passthrough).
-*   - autoConnect on Solana provider (handled in index.js, already off).
-*   - Visual styling, icons, layout, SOLANA_MINTS list, CG_IDS list -- all
-*                      preserved as-is.
+* Other things preserved exactly from the previous version:
+*   - M12: single NAV_TABS source for desktop + mobile nav
+*   - M13: BuyCrypto receives sharedProps
+*   - H15: versioned market cache key (`nexus_market_cache_v2`)
+*   - A6:  NetworkSelector left of Connect Wallet button, persisted
+*   - WC1/WC3/WC5 fix: useReducer state machine for connect flow
+*   - WC6: connect errors render in-modal with Retry, not console-only
+*   - APP-2/APP-3: cache buffer + id-based dedupe in market fetch
+*   - C8:  active-context pill in header when both wallets connected
+*   - useAppWallet shim kept as backwards-compat passthrough
+*   - All visuals, NAV_ICONS, SOLANA_MINTS, CG_IDS, GLOBAL_STYLES intact
 * ========================================================================= */
 
 const C = {
@@ -84,7 +69,7 @@ const SOLANA_MINTS = [
 
 const CG_IDS = 'bitcoin,ethereum,binancecoin,ripple,cardano,dogecoin,solana,avalanche-2,chainlink,uniswap,matic-network,toncoin,shiba-inu,litecoin,polkadot,cosmos,near';
 
-// H15 fix -- versioned cache key. Old `nexus_market_cache` entries are simply
+// H15 -- versioned cache key. Old `nexus_market_cache` entries are simply
 // ignored on upgrade. Bump suffix any time the cache shape changes.
 const MARKET_CACHE_KEY = 'nexus_market_cache_v2';
 
@@ -109,8 +94,6 @@ function getActiveTab(tab) {
 
 /* ============================================================================
 * useAppWallet -- backwards-compat shim, just delegates to useNexusWallet.
-* Kept as an export so external components can keep importing it; AppInner
-* also uses it directly.
 * ========================================================================= */
 export function useAppWallet() {
  return useNexusWallet();
@@ -118,8 +101,6 @@ export function useAppWallet() {
 
 /* ============================================================================
 * NETWORK SELECTOR -- header dropdown to the LEFT of the Connect Wallet button.
-* Selecting a chain updates `headerChain` in WalletContext (persisted to
-* localStorage). SwapWidget reads this for default token pairs.
 * ========================================================================= */
 
 const HEADER_CHAINS = [
@@ -211,14 +192,12 @@ function NetworkSelector({ headerChain, onSelect, compact }) {
 }
 
 /* ============================================================================
-* WALLET MODAL -- single state machine
-*
-* Replaces the previous (pendingWallet, connecting, connectRef) tangle that
-* caused WC1, WC3, WC5. Three states:
-*   { kind: 'idle' }
-*   { kind: 'connecting', wallet }
-*   { kind: 'error', message, wallet }
+* WALLET MODAL -- three buttons. Phantom, Solflare, WalletConnect.
 * ========================================================================= */
+
+const WC_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent(
+ '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="#3b99fc"/><path d="M11 16.5c5-4.7 13-4.7 18 0l.6.6c.3.2.3.7 0 1l-2 2c-.2.2-.4.2-.5 0l-.9-.8c-3.5-3.3-9-3.3-12.4 0l-1 .9c-.1.1-.3.1-.5 0l-2-2c-.2-.3-.2-.7 0-1l.7-.7zm22.3 4.1l1.8 1.8c.3.2.3.7 0 1l-8 8c-.3.2-.7.2-1 0l-5.7-5.7c0-.1-.2-.1-.3 0l-5.7 5.7c-.2.2-.7.2-1 0l-8-8c-.3-.3-.3-.7 0-1l1.7-1.8c.3-.2.7-.2 1 0l5.7 5.7c.1.1.3.1.4 0l5.7-5.7c.2-.2.7-.2 1 0l5.6 5.7c.1.1.3.1.4 0l5.7-5.7c.2-.2.7-.2 1 0z" fill="#fff"/></svg>'
+);
 
 const WM_INITIAL = { kind: 'idle', message: '', wallet: '', target: '' };
 
@@ -235,12 +214,16 @@ function walletModalReducer(state, action) {
 function WalletModal({ open, onClose }) {
  const [mState, dispatch] = useReducer(walletModalReducer, WM_INITIAL);
 
- const { wallet: selectedWallet, select, wallets, connect: solConnect, disconnect, connected, publicKey } = useWallet();
+ const { wallet: selectedWallet, select, wallets, connect: solConnect, disconnect: solDisconnect, connected, publicKey } = useWallet();
  const { isConnected: evmConnected, address: evmAddress } = useAccount();
  const { disconnect: evmDisconnect, disconnectAsync: evmDisconnectAsync } = useDisconnect();
- // wagmi useConnect -- we use injected (EIP-6963) connectors only. No QR.
- // Each EIP-6963-announced wallet shows up as its own connector entry.
  const { connectAsync: evmConnectAsync, connectors: evmConnectorsRaw } = useConnect();
+
+ // Resolve the three concrete connectors we offer. Anything not in this
+ // list is intentionally not surfaced -- 3 buttons, that's the spec.
+ const phantomWallet  = wallets.find(function(w) { return w.adapter.name === 'Phantom';  });
+ const solflareWallet = wallets.find(function(w) { return w.adapter.name === 'Solflare'; });
+ const walletConnectConnector = (evmConnectorsRaw || []).find(function(c) { return c.id === 'walletConnect'; });
 
  // Reset state machine when the modal closes externally -- otherwise next
  // open shows leftover error or stuck "connecting" state (WC3).
@@ -248,8 +231,7 @@ function WalletModal({ open, onClose }) {
    if (!open) dispatch({ type: 'RESET' });
  }, [open]);
 
- // Body scroll lock -- prevents page scroll under the modal on mobile.
- // Escape key closes -- desktop accessibility.
+ // Body scroll lock + Escape closes.
  useEffect(function() {
    if (!open) return undefined;
    if (typeof document === 'undefined') return undefined;
@@ -288,10 +270,10 @@ function WalletModal({ open, onClose }) {
    }
  }, [connected, evmConnected, selectedWallet, mState.kind, mState.wallet, mState.target, onClose]);
 
- // Solana connect -- ref-based wait for select() propagation.
- // The WC1 race was: click -> select() -> connect() in the same tick, but
- // selectedWallet hadn't actually updated yet. Using a ref + an effect that
- // watches selectedWallet means we only call connect() once we can see the
+ // WC1 fix -- ref-based wait for select() propagation. The race was:
+ // click -> select() -> connect() in the same tick, but selectedWallet
+ // hadn't actually updated yet. Using a ref + an effect that watches
+ // selectedWallet means we only call connect() once we can see the
  // adapter we picked.
  const targetWalletRef = useRef(null);
 
@@ -315,6 +297,10 @@ function WalletModal({ open, onClose }) {
  }, [selectedWallet, solConnect, mState.kind, mState.wallet]);
 
  const handleSolanaConnect = useCallback(function(wallet) {
+   if (!wallet || !wallet.adapter) {
+     dispatch({ type: 'ERROR', message: 'Wallet adapter unavailable. Refresh and try again.' });
+     return;
+   }
    dispatch({ type: 'START', wallet: wallet.adapter.name, target: 'solana' });
    targetWalletRef.current = wallet.adapter.name;
    try {
@@ -326,22 +312,27 @@ function WalletModal({ open, onClose }) {
    }
  }, [select]);
 
- // EVM connect via wagmi injected (EIP-6963). One button per detected
- // wallet provider. No QR -- pure injected-only flow.
- const handleEvmConnect = useCallback(async function(connector) {
-   dispatch({ type: 'START', wallet: connector.name || 'EVM Wallet', target: 'evm' });
+ const handleWalletConnect = useCallback(async function() {
+   if (!walletConnectConnector) {
+     dispatch({
+       type: 'ERROR',
+       message: 'WalletConnect not configured. Set REACT_APP_REOWN_PROJECT_ID and rebuild.',
+     });
+     return;
+   }
+   dispatch({ type: 'START', wallet: 'WalletConnect', target: 'evm' });
    try {
-     await evmConnectAsync({ connector });
+     await evmConnectAsync({ connector: walletConnectConnector });
      // Success branch handled by the auto-close effect (watches evmConnected).
    } catch (e) {
      const raw = (e && e.message) ? e.message : 'Failed to connect wallet';
      const msg = /reject|cancel|denied|user/i.test(raw) ? 'Connection cancelled' : raw;
      dispatch({ type: 'ERROR', message: msg });
    }
- }, [evmConnectAsync]);
+ }, [evmConnectAsync, walletConnectConnector]);
 
  const handleDisconnect = useCallback(async function() {
-   try { if (connected) await disconnect(); } catch (e) { console.error('Sol disconnect error:', e); }
+   try { if (connected) await solDisconnect(); } catch (e) { console.error('Sol disconnect error:', e); }
    try {
      if (evmConnected) {
        if (typeof evmDisconnectAsync === 'function') await evmDisconnectAsync();
@@ -350,7 +341,7 @@ function WalletModal({ open, onClose }) {
    } catch (e) { console.error('EVM disconnect error:', e); }
    dispatch({ type: 'RESET' });
    onClose();
- }, [connected, disconnect, evmConnected, evmDisconnect, evmDisconnectAsync, onClose]);
+ }, [connected, solDisconnect, evmConnected, evmDisconnect, evmDisconnectAsync, onClose]);
 
  const isSol = connected && publicKey;
  const displayAddr = isSol
@@ -362,94 +353,40 @@ function WalletModal({ open, onClose }) {
    ? (wallets.find(function(w) { return w.adapter.connected; })?.adapter.name ?? 'Solana')
    : 'EVM Wallet';
 
- // Solana wallet detection -- names already ordered by adapter library
- const _seen = new Set();
- const detectedSolWallets = wallets.filter(function(w) {
-   if (w.adapter.name === 'WalletConnect') return false;
-   if (_seen.has(w.adapter.name)) return false;
-   _seen.add(w.adapter.name);
-   return w.readyState === 'Installed' || w.readyState === 'Loadable';
- });
- const notDetectedSolWallets = wallets.filter(function(w) {
-   if (w.adapter.name === 'WalletConnect') return false;
-   return !_seen.has(w.adapter.name);
- });
-
- // EVM injected connectors via EIP-6963. wagmi v2 adds one connector per
- // announcement (id like 'io.metamask', 'app.phantom', etc.) AND keeps a
- // generic 'injected' fallback that targets window.ethereum. When at least
- // one EIP-6963 wallet has announced itself, the generic 'injected' is
- // redundant -- it would appear as a second button targeting the same
- // wallet. Hide it in that case. If nothing has announced (rare, very old
- // wallet), the generic falls through and still works.
- const evmConnectors = (function() {
-   const raw = (evmConnectorsRaw || []).filter(function(c) {
-     // Defense if config changes -- only injected-type entries here.
-     return !c.type || c.type === 'injected';
-   });
-   const hasNamed = raw.some(function(c) {
-     return c.id && c.id !== 'injected';
-   });
-   const seen = new Set();
-   const out = [];
-   raw.forEach(function(c) {
-     // Drop the generic fallback when a specific EIP-6963 entry exists.
-     if (hasNamed && c.id === 'injected') return;
-     const key = ((c.id || '') + ':' + (c.name || '')).toLowerCase();
-     if (!key || seen.has(key)) return;
-     seen.add(key);
-     out.push(c);
-   });
-   return out;
- })();
-
- // Mobile detection -- used to decide whether to show in-app-browser
- // deep-link buttons. Two states matter on mobile:
- //   (a) User is in regular mobile Safari/Chrome -> no window.ethereum, no
- //       EIP-6963 announcements; the generic 'injected' connector wagmi
- //       always creates will fail with "Provider not found" if tapped.
- //       Hide it. Show deep-links prominently as the only EVM path.
- //   (b) User is already in a wallet's in-app browser (Phantom mobile,
- //       MetaMask mobile, etc.) -> window.ethereum is populated, possibly
- //       EIP-6963 too. Treat like desktop: show the connectors, hide
- //       deep-links (they'd just send the user back through the maze).
- const isMobileBrowser = typeof navigator !== 'undefined'
-   && /iphone|ipad|ipod|android/i.test(navigator.userAgent || '');
- const hasInjectedProvider = typeof window !== 'undefined' && !!window.ethereum;
- const hasNamedConnector = evmConnectors.some(function(c) { return c.id && c.id !== 'injected'; });
- // True iff we're on plain mobile Safari/Chrome with no wallet at all.
- const isStrandedMobile = isMobileBrowser && !hasInjectedProvider && !hasNamedConnector;
-
- // Filter the connectors list shown to the user. On stranded mobile, drop
- // the generic 'injected' entry -- tapping it produces the "Provider not
- // found" error users are seeing in the screenshots.
- const evmConnectorsToShow = isStrandedMobile
-   ? evmConnectors.filter(function(c) { return c.id && c.id !== 'injected'; })
-   : evmConnectors;
-
- // Show deep-links whenever we're on a mobile browser without a real
- // injected provider -- covers both stranded Safari and the case where a
- // user has only Solana wallets visible.
- const showMobileDeepLinks = isMobileBrowser && !hasInjectedProvider && !hasNamedConnector;
-
- // Mobile deep-links -- bounce the user from regular Safari/Chrome into the
- // wallet app's IN-APP BROWSER, pointed at our site. Once they're in that
- // in-app browser, the wallet's injection works normally and they connect
- // via the EVM/Solana connectors above. No QR codes anywhere in this flow.
- // Each URL is the wallet's documented universal-link format.
- const SITE_HOST = 'swap.verixiaapps.com';
- const SITE_URL  = 'https://' + SITE_HOST;
- const MOBILE_WALLETS = [
-   { name: 'MetaMask',        url: 'https://metamask.app.link/dapp/' + SITE_HOST,                          color: '#f6851b' },
-   { name: 'Phantom',         url: 'https://phantom.app/ul/browse/' + encodeURIComponent(SITE_URL) + '?ref=' + encodeURIComponent(SITE_URL), color: '#ab9ff2' },
-   { name: 'Trust Wallet',    url: 'https://link.trustwallet.com/open_url?coin_id=60&url=' + encodeURIComponent(SITE_URL), color: '#3375bb' },
-   { name: 'Coinbase Wallet', url: 'https://go.cb-w.com/dapp?cb_url=' + encodeURIComponent(SITE_URL),       color: '#0052ff' },
-   { name: 'Rainbow',         url: 'https://rnbwapp.com/dapp/' + SITE_HOST,                                 color: '#001e59' },
-   { name: 'OKX Wallet',      url: 'okx://wallet/dapp/url?dappUrl=' + encodeURIComponent(SITE_URL),         color: '#000000' },
- ];
-
  const isConnecting = mState.kind === 'connecting';
  const pendingWallet = isConnecting ? mState.wallet : null;
+
+ // Build the three options uniformly so the JSX below stays simple.
+ // Each option owns its own click handler + ready-state tag.
+ const options = [
+   {
+     key: 'phantom',
+     name: 'Phantom',
+     subtitle: 'Solana wallet',
+     color: '#ab9ff2',
+     icon: phantomWallet && phantomWallet.adapter.icon,
+     ready: !!phantomWallet,
+     onClick: function() { handleSolanaConnect(phantomWallet); },
+   },
+   {
+     key: 'solflare',
+     name: 'Solflare',
+     subtitle: 'Solana wallet',
+     color: '#fc9533',
+     icon: solflareWallet && solflareWallet.adapter.icon,
+     ready: !!solflareWallet,
+     onClick: function() { handleSolanaConnect(solflareWallet); },
+   },
+   {
+     key: 'walletconnect',
+     name: 'WalletConnect',
+     subtitle: 'MetaMask, Trust, Rainbow & 600+ wallets',
+     color: '#3b99fc',
+     icon: WC_LOGO,
+     ready: !!walletConnectConnector,
+     onClick: handleWalletConnect,
+   },
+ ];
 
  if (!open) return null;
  return (
@@ -474,6 +411,11 @@ function WalletModal({ open, onClose }) {
              {connected || evmConnected ? 'Wallet Connected' : 'Connect Wallet'}
            </div>
            {displayAddr && <div style={{ fontSize: 13, color: '#586994' }}>{connectedWalletName}: {displayAddr}</div>}
+           {!(connected || evmConnected) && (
+             <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
+               Pick one. We never see your keys.
+             </div>
+           )}
          </div>
        </div>
        <div style={{ flex: 1, overflowY: 'auto', padding: '0 24px', paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)' }}>
@@ -507,117 +449,63 @@ function WalletModal({ open, onClose }) {
                </div>
              )}
 
-             {/* SOLANA WALLETS -- phantom, solflare, etc. via wallet-adapter */}
-             {detectedSolWallets.length > 0 && (
-               <>
-                 <div style={{ fontSize: 10, color: '#586994', fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>SOLANA WALLETS</div>
-                 {detectedSolWallets.map(function(wallet) {
-                   const isPending = isConnecting && pendingWallet === wallet.adapter.name;
-                   return (
-                     <button key={wallet.adapter.name} onClick={function() { handleSolanaConnect(wallet); }} disabled={isConnecting} style={{ display: 'flex', alignItems: 'center', gap: 14, background: isPending ? 'rgba(0,229,255,.12)' : 'rgba(0,229,255,.06)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 14, padding: '14px 18px', cursor: isConnecting ? 'wait' : 'pointer', width: '100%', opacity: isConnecting && !isPending ? 0.5 : 1 }}>
-                       {wallet.adapter.icon
-                         ? <img src={wallet.adapter.icon} alt={wallet.adapter.name} style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} />
-                         : <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(0,229,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: '#00e5ff', flexShrink: 0 }}>{wallet.adapter.name.charAt(0)}</div>
-                       }
-                       <div style={{ textAlign: 'left', flex: 1 }}>
-                         <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>{wallet.adapter.name}</div>
-                         <div style={{ color: '#00e5ff', fontSize: 12, marginTop: 1 }}>{isPending ? 'Check your wallet...' : 'Detected -- tap to connect'}</div>
-                       </div>
-                       {isPending && <div style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid #00e5ff', borderTopColor: 'transparent', animation: 'wc-spin 0.8s linear infinite', flexShrink: 0 }} />}
-                     </button>
-                   );
-                 })}
-               </>
-             )}
+             {options.map(function(opt) {
+               const isPending = isConnecting && pendingWallet === opt.name;
+               const disabled = isConnecting || !opt.ready;
+               return (
+                 <button
+                   key={opt.key}
+                   onClick={opt.onClick}
+                   disabled={disabled}
+                   style={{
+                     display: 'flex', alignItems: 'center', gap: 14,
+                     background: isPending ? 'rgba(0,229,255,.12)' : 'rgba(255,255,255,.03)',
+                     border: '1px solid ' + (isPending ? 'rgba(0,229,255,.35)' : 'rgba(255,255,255,.08)'),
+                     borderRadius: 14, padding: '14px 18px',
+                     cursor: disabled ? (isConnecting ? 'wait' : 'not-allowed') : 'pointer',
+                     width: '100%',
+                     opacity: (isConnecting && !isPending) || !opt.ready ? 0.55 : 1,
+                     transition: 'background .15s, border-color .15s',
+                   }}
+                 >
+                   {opt.icon
+                     ? <img
+                         src={opt.icon}
+                         alt={opt.name}
+                         style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, background: '#fff' }}
+                         onError={function(e) { e.target.style.display = 'none'; }}
+                       />
+                     : <div style={{
+                         width: 40, height: 40, borderRadius: 10,
+                         background: opt.color + '22',
+                         display: 'flex', alignItems: 'center', justifyContent: 'center',
+                         fontSize: 16, fontWeight: 800, color: opt.color, flexShrink: 0,
+                       }}>{opt.name.charAt(0)}</div>
+                   }
+                   <div style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
+                     <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>{opt.name}</div>
+                     <div style={{ color: opt.color, fontSize: 12, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                       {isPending
+                         ? 'Check your wallet...'
+                         : (opt.ready ? opt.subtitle : 'Unavailable -- check setup')}
+                     </div>
+                   </div>
+                   {isPending && (
+                     <div style={{
+                       width: 18, height: 18, borderRadius: '50%',
+                       border: '2px solid #00e5ff', borderTopColor: 'transparent',
+                       animation: 'wc-spin 0.8s linear infinite', flexShrink: 0,
+                     }} />
+                   )}
+                 </button>
+               );
+             })}
 
-             {/* EVM WALLETS -- every EIP-6963 injected wallet (MetaMask, Phantom EVM,
-                 Rabby, Coinbase Wallet ext, OKX, Bitget, Brave, Trust ext, etc.) */}
-             {evmConnectorsToShow.length > 0 && (
-               <>
-                 <div style={{ fontSize: 10, color: '#586994', fontWeight: 700, letterSpacing: 1, margin: '6px 0 2px' }}>EVM WALLETS</div>
-                 {evmConnectorsToShow.map(function(connector) {
-                   const isPending = isConnecting && pendingWallet === (connector.name || 'EVM Wallet');
-                   return (
-                     <button key={connector.uid || connector.id} onClick={function() { handleEvmConnect(connector); }} disabled={isConnecting} style={{ display: 'flex', alignItems: 'center', gap: 14, background: isPending ? 'rgba(98,126,234,.18)' : 'rgba(98,126,234,.06)', border: '1px solid rgba(98,126,234,.25)', borderRadius: 14, padding: '14px 18px', cursor: isConnecting ? 'wait' : 'pointer', width: '100%', opacity: isConnecting && !isPending ? 0.5 : 1 }}>
-                       {connector.icon
-                         ? <img src={connector.icon} alt={connector.name} style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} />
-                         : <div style={{ width: 40, height: 40, borderRadius: 10, background: 'rgba(98,126,234,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16, fontWeight: 800, color: '#627eea', flexShrink: 0 }}>{(connector.name || 'E').charAt(0)}</div>
-                       }
-                       <div style={{ textAlign: 'left', flex: 1 }}>
-                         <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>{connector.name || 'EVM Wallet'}</div>
-                         <div style={{ color: '#627eea', fontSize: 12, marginTop: 1 }}>{isPending ? 'Check your wallet...' : 'Detected -- tap to connect'}</div>
-                       </div>
-                       {isPending && <div style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid #627eea', borderTopColor: 'transparent', animation: 'wc-spin 0.8s linear infinite', flexShrink: 0 }} />}
-                     </button>
-                   );
-                 })}
-               </>
-             )}
-
-             {/* MOBILE DEEP-LINKS -- only shown when on mobile Safari/Chrome with
-                 no EVM connectors present. Each link bounces the user into the
-                 wallet app's in-app browser pointed at this site. From there,
-                 the wallet's injection works normally. No QR codes. */}
-             {showMobileDeepLinks && (
-               <>
-                 <div style={{ fontSize: 10, color: '#586994', fontWeight: 700, letterSpacing: 1, margin: '6px 0 2px' }}>OPEN IN WALLET APP</div>
-                 <div style={{ fontSize: 11, color: C.muted, marginBottom: 6 }}>
-                   Tap your wallet to continue inside its in-app browser. No scanning needed.
-                 </div>
-                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8 }}>
-                   {MOBILE_WALLETS.map(function(w) {
-                     return (
-                       <a key={w.name} href={w.url} target="_blank" rel="noreferrer" style={{
-                         display: 'flex', alignItems: 'center', gap: 10,
-                         background: 'rgba(255,255,255,.04)',
-                         border: '1px solid ' + w.color + '55',
-                         borderRadius: 12, padding: '12px 14px',
-                         textDecoration: 'none', cursor: 'pointer',
-                       }}>
-                         <div style={{ width: 32, height: 32, borderRadius: 8, background: w.color, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 14, fontWeight: 800, color: '#fff', flexShrink: 0 }}>
-                           {w.name.charAt(0)}
-                         </div>
-                         <div style={{ color: '#fff', fontSize: 12, fontWeight: 700 }}>{w.name}</div>
-                       </a>
-                     );
-                   })}
-                 </div>
-               </>
-             )}
-
-             {/* INSTALL -- Solana wallets the user can install (desktop only really matters here) */}
-             {notDetectedSolWallets.length > 0 && !showMobileDeepLinks && (
-               <>
-                 <div style={{ fontSize: 10, color: '#586994', fontWeight: 700, letterSpacing: 1, margin: '6px 0 2px' }}>INSTALL A WALLET</div>
-                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
-                   {notDetectedSolWallets.slice(0, 6).map(function(wallet) {
-                     return (
-                       <button key={wallet.adapter.name} onClick={function() { window.open(wallet.adapter.url, '_blank', 'noopener,noreferrer'); }} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6, background: 'rgba(255,255,255,.03)', border: '1px solid rgba(255,255,255,.06)', borderRadius: 12, padding: '12px 8px', cursor: 'pointer' }}>
-                         {wallet.adapter.icon
-                           ? <img src={wallet.adapter.icon} alt={wallet.adapter.name} style={{ width: 32, height: 32, borderRadius: 8 }} onError={function(e) { e.target.style.display = 'none'; }} />
-                           : <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 800, color: '#00e5ff' }}>{wallet.adapter.name.charAt(0)}</div>
-                         }
-                         <div style={{ color: '#586994', fontSize: 10, textAlign: 'center', lineHeight: 1.2 }}>{wallet.adapter.name}</div>
-                       </button>
-                     );
-                   })}
-                 </div>
-                 <div style={{ fontSize: 10, color: C.muted, textAlign: 'center', marginTop: 4 }}>
-                   Returning here is on you -- install, then come back.
-                 </div>
-               </>
-             )}
-
-             {/* NO WALLETS DETECTED -- desktop with no extension installed AND not mobile */}
-             {evmConnectorsToShow.length === 0 && detectedSolWallets.length === 0 && !showMobileDeepLinks && (
-               <div style={{
-                 background: 'rgba(255,59,107,.06)', border: '1px solid rgba(255,59,107,.2)',
-                 borderRadius: 12, padding: 14, textAlign: 'center',
-                 color: C.muted, fontSize: 12, lineHeight: 1.5,
-               }}>
-                 No wallet detected. Install MetaMask, Phantom, Rabby, or another browser-extension wallet, then refresh this page.
-               </div>
-             )}
+             <div style={{ fontSize: 10, color: C.muted, textAlign: 'center', marginTop: 6, lineHeight: 1.5 }}>
+               Non-custodial. We never see or store your keys. You stay on
+               {' '}<span style={{ color: C.text }}>swap.verixiaapps.com</span>
+               {' '}the entire time.
+             </div>
            </div>
          )}
        </div>
@@ -662,7 +550,6 @@ function AppInner() {
  const [launchesKey, setLaunchesKey] = useState(0);
  const [portfolioKey, setPortfolioKey] = useState(0);
 
- // Mobile detection (debounced) -- drives the network selector compact mode.
  const [isMobile, setIsMobile] = useState(function() {
    if (typeof window === 'undefined') return false;
    return window.innerWidth < 769;
@@ -712,7 +599,6 @@ function AppInner() {
    var isMounted = true;
    var controller = new AbortController();
 
-   // H15 -- versioned cache. Old `nexus_market_cache` entries are ignored.
    try {
      var cached = JSON.parse(localStorage.getItem(MARKET_CACHE_KEY) || 'null');
      if (cached && cached.v === 2 && Date.now() - cached.ts < 300000) {
@@ -721,10 +607,6 @@ function AppInner() {
      }
    } catch(e) {}
 
-   // APP-2 fix: keep the cache as a single mutable object instead of
-   // read-modify-write through localStorage. Both fetches mutate the same
-   // ref then flush to disk. Without this, concurrent finishes lose one
-   // side's update because the read-then-write is non-atomic.
    var cacheBuf = { v: 2, coins: [], jupTokens: [], ts: 0 };
    try {
      var existing = JSON.parse(localStorage.getItem(MARKET_CACHE_KEY) || '{}');
@@ -740,10 +622,6 @@ function AppInner() {
      } catch(e) {}
    };
 
-   // APP-3 fix: dedupe by id when merging CG + Solana coins. CG entries
-   // never have isSolanaToken=true, so under normal conditions there's no
-   // overlap -- but during refresh, a stale Solana mint that has since
-   // been added to CG_IDS could appear in both lists. Last-write-wins by id.
    var mergeCoins = function(cgList, prevList) {
      var seen = new Set();
      var merged = [];
@@ -806,10 +684,6 @@ function AppInner() {
                  circulating_supply: null, isSolanaToken: true,
                };
              }).filter(Boolean);
-             // APP-3 fix: replace solana entries by id, not by isSolanaToken flag.
-             // Two solana coins with the same mint can't coexist; CG and
-             // solana lists never share ids (CG ids are slugs like "bitcoin",
-             // not mints), so this is safe.
              setCoins(function(prev) {
                var solIds = new Set(solanaCoins.map(function(c) { return c.id; }));
                var keepers = prev.filter(function(c) {
@@ -828,10 +702,6 @@ function AppInner() {
    return function() { isMounted = false; controller.abort(); clearInterval(interval); };
  }, []);
 
- // M13 -- sharedProps used by every route (BuyCrypto previously didn't get it,
- // so isConnected etc weren't available inside it).
- // C8 -- activeContext + setActiveContext exposed so children can show which
- // wallet is "primary" and let user switch when both are connected.
  var sharedProps = {
    isConnected: wallet.isConnected,
    isSolanaConnected: wallet.isSolanaConnected,
@@ -873,7 +743,6 @@ function AppInner() {
          </nav>
          <div className="mobile-nav" style={{ flex: 1 }} />
 
-         {/* A6 (locked rule) -- Network selector LEFT of the Connect button */}
          <NetworkSelector
            headerChain={headerChain}
            onSelect={setHeaderChain}
@@ -884,12 +753,6 @@ function AppInner() {
            {wallet.isConnected ? (<><div style={{ width: 7, height: 7, borderRadius: '50%', background: C.green, flexShrink: 0 }} />{displayAddress}</>) : 'Connect Wallet'}
          </button>
 
-         {/* C8 -- active context indicator. When both wallets are connected,
-             shows a small tappable pill labelled SOL or EVM. Tapping flips
-             the active context so the user knows (and controls) which
-             wallet `walletAddress` and signing operations resolve to. When
-             only one wallet is connected the pill is read-only (no tap).
-             When neither is connected, the pill is hidden. */}
          {wallet.isConnected && (
            (function() {
              var both = wallet.solConnected && wallet.evmConnected;
@@ -930,7 +793,6 @@ function AppInner() {
        {tab === 'token' && selectedToken && <TokenDetail {...sharedProps} coin={selectedToken} coins={coins} jupiterTokens={jupiterTokens} onBack={goBack} />}
        {tab === 'launches'  && <NewLaunches  {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} resetKey={launchesKey} />}
        {tab === 'launch'    && <TokenLaunch  {...sharedProps} />}
-       {/* M13 -- BuyCrypto now receives sharedProps too */}
        {tab === 'buy'       && <BuyCrypto    {...sharedProps} coins={coins} selectedCoinSymbol={selectedToken ? selectedToken.symbol : null} />}
        {tab === 'send'      && <Send         {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} />}
        {tab === 'portfolio' && <Portfolio    {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} onSend={function() { switchTab('send'); }} refreshKey={portfolioKey} onSelectToken={goToToken} />}
