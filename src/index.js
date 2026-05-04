@@ -1,6 +1,6 @@
 /**
  * NEXUS DEX -- App entry
- *
+ * 
  * Sets up:
  *   - Wagmi (EVM wallets)
  *   - Web3Modal (WalletConnect QR + injected EVM wallets)
