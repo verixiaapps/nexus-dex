@@ -17,12 +17,12 @@
 - - autoConnect on Solana wallet provider disabled to eliminate
 - ```
   race with manual connect (was a major source of "connects inconsistently")
-  ```
+  
 - - Wallet adapter onError prop added so failures surface to console
 - - Single ConnectionProvider for Solana that can be redirected to a
-- ```
+- 
   proxy endpoint (future) instead of public RPC
-  ```
+  
 
 */
 
