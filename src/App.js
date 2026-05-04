@@ -12,7 +12,7 @@ import TokenDetail from './components/TokenDetail.js';
 import Send from './components/Send.js';
 import NewLaunches from './components/NewLaunches.js';
 import TokenLaunch from './components/TokenLaunch.js';
-
+ 
 /* ============================================================================
  * Changes vs the previous App.js (preserves original structure and visuals;
  * only the listed fixes applied):
