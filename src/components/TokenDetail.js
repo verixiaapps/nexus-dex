@@ -767,3 +767,4 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
     </div>
   );
 }
+
