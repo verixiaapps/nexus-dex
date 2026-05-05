@@ -1,7 +1,7 @@
 /**
  * NEXUS DEX -- Backend Proxy Server
  *
- * Responsibilities:
+ * Responsibilities: 
  *   1. Proxy all third-party API calls so secrets never reach the browser.
  *   2. Rate-limit per IP to protect API quotas.
  *   3. CORS locked to our own domain in production.
