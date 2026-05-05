@@ -1,8 +1,11 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { TradeDrawer } from './SwapWidget.jsx';
+import InstantTrade from './InstantTrade.jsx';
 import { useNexusWallet } from '../WalletContext.js';
- 
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { PublicKey } from '@solana/web3.js';
+
 /* ============================================================================
  * TokenDetail
  *
@@ -105,6 +108,15 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
   // the app. setHeaderChain is forwarded to the drawer so when the user
   // picks a token on a different chain, the global header updates too.
   const { headerChain, setHeaderChain, presets, setPresets } = useNexusWallet();
+  const { publicKey, connected: solConnected } = useWallet();
+  const { connection } = useConnection();
+
+  // -- Instant trade extras: SOL price (for $ -> SOL conversion in presets)
+  //    and the user's balance of the current token (for the SELL %s).
+  const [solPriceUsd, setSolPriceUsd] = useState(0);
+  const [userTokenBalance, setUserTokenBalance] = useState(0);
+  const [userTokenDecimals, setUserTokenDecimals] = useState(null);
+  const [tradeRefreshTick, setTradeRefreshTick] = useState(0);
 
   const [chartData, setChartData] = useState([]);
   const [chartPeriod, setChartPeriod] = useState('7');
@@ -122,6 +134,67 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
   const [cgMeta, setCgMeta] = useState(null);
   const [cgMetaLoading, setCgMetaLoading] = useState(false);
   const [cgMetaFailed, setCgMetaFailed] = useState(false);
+
+  // -- SOL/USD price for $-preset conversion. Jupiter price API, cached upstream.
+  useEffect(function () {
+    var cancelled = false;
+    var SOL_MINT = 'So11111111111111111111111111111111111111112';
+    fetch('https://api.jup.ag/price/v2?ids=' + SOL_MINT)
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        if (cancelled) return;
+        var p = d && d.data && d.data[SOL_MINT] && parseFloat(d.data[SOL_MINT].price);
+        if (Number.isFinite(p) && p > 0) setSolPriceUsd(p);
+      })
+      .catch(function () {});
+    var poll = setInterval(function () {
+      if (cancelled) return;
+      fetch('https://api.jup.ag/price/v2?ids=' + SOL_MINT)
+        .then(function (r) { return r.json(); })
+        .then(function (d) {
+          if (cancelled) return;
+          var p = d && d.data && d.data[SOL_MINT] && parseFloat(d.data[SOL_MINT].price);
+          if (Number.isFinite(p) && p > 0) setSolPriceUsd(p);
+        })
+        .catch(function () {});
+    }, 60_000);
+    return function () { cancelled = true; clearInterval(poll); };
+  }, []);
+
+  // -- User's SPL token balance for SELL presets. Only fires for Solana tokens
+  //    when the user has a Solana wallet connected (external OR Privy embedded).
+  useEffect(function () {
+    if (!coin || !coin.mint) { setUserTokenBalance(0); setUserTokenDecimals(null); return undefined; }
+    if (!solConnected || !publicKey || !connection) { setUserTokenBalance(0); return undefined; }
+    var cancelled = false;
+    (async function () {
+      try {
+        var mintPk = new PublicKey(coin.mint);
+        var resp = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: mintPk });
+        if (cancelled) return;
+        var total = 0;
+        var dec = null;
+        if (resp && resp.value) {
+          resp.value.forEach(function (acc) {
+            try {
+              var info = acc.account.data.parsed.info;
+              var ta = info && info.tokenAmount;
+              if (ta) {
+                if (dec == null && Number.isFinite(ta.decimals)) dec = ta.decimals;
+                var ui = parseFloat(ta.uiAmountString || ta.uiAmount || 0);
+                if (Number.isFinite(ui)) total += ui;
+              }
+            } catch (e) {}
+          });
+        }
+        setUserTokenBalance(total);
+        if (dec != null) setUserTokenDecimals(dec);
+      } catch (e) {
+        if (!cancelled) setUserTokenBalance(0);
+      }
+    })();
+    return function () { cancelled = true; };
+  }, [coin, solConnected, publicKey, connection, tradeRefreshTick]);
 
   const isEvmToken = coin && (coin.chain === 'evm' || (coin.address && !coin.mint));
 
@@ -372,10 +445,17 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
           } else if (coin.id && !coin.isSolanaToken) {
             // We need platforms from cgMeta. Bail if not loaded yet --
             // this effect re-runs once cgMeta arrives (in dep array).
+            // Don't flip loading off here; the re-run will.
             if (!cgMeta) return;
             var platforms = cgMeta.platforms || {};
             tokenAddr = platforms['ethereum']
               || platforms['solana']
+              || platforms['binance-smart-chain']
+              || platforms['polygon-pos']
+              || platforms['arbitrum-one']
+              || platforms['optimistic-ethereum']
+              || platforms['base']
+              || platforms['avalanche']
               || Object.values(platforms).find(function(v) { return v && isOnChainAddress(v); })
               || null;
           }
@@ -525,6 +605,26 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
             </AreaChart>
           </ResponsiveContainer>
         )}
+      </div>
+
+      {/* Instant Trade -- GMGN-style preset bar. One-click for Privy
+          embedded wallets (no popup). For external wallets, taps open
+          the drawer pre-filled (1 popup as usual). */}
+      <div style={{ marginBottom: 12 }}>
+        <InstantTrade
+          token={enrichedCoin}
+          solPrice={solPriceUsd}
+          tokenBalance={userTokenBalance}
+          tokenDecimals={userTokenDecimals}
+          onConnectWallet={onConnectWallet}
+          onOpenDrawer={function (mode, opts) {
+            setDrawerMode(mode);
+            setDrawerOpen(true);
+          }}
+          onTradeComplete={function () {
+            setTradeRefreshTick(function (t) { return t + 1; });
+          }}
+        />
       </div>
 
       {/* Buy/Sell buttons -- disabled while CG metadata is loading so the
