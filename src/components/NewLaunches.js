@@ -8,7 +8,7 @@ import {
 import bs58 from 'bs58';
 import { TradeDrawer } from './SwapWidget.jsx';
 import { quickBuyPump, quickSellPump } from '../pumpTrade.js';
-
+ 
 const PRESET_KEY = 'nexus_launch_presets';
 const LAST_AMT_KEY = 'nexus_launch_last_amt';
 
