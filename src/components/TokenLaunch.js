@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
 import {
@@ -119,7 +119,7 @@ async function bundleFeeIntoLaunchTx(connection, rawTx, payerPubkey, feeLamports
 export default function TokenLaunch({ isConnected, onConnectWallet }) {
   const { publicKey: extPublicKey, signTransaction: extSignTx, signAllTransactions: extSignAllTxs } = useWallet();
   const { connection } = useConnection();
-  const { activeWalletKind, privyEmbeddedSol } = useNexusWallet();
+  const { activeWalletKind, privyEmbeddedSol, loginPrivy } = useNexusWallet();
 
   // Unified Solana publicKey + signers across external + Privy.
   const publicKey = useMemo(function () {
@@ -171,6 +171,10 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
   const [error, setError] = useState('');
   const [launching, setLaunching] = useState(false);
   const [launched, setLaunched] = useState(null);
+  // Pending launch: when disconnected user taps "Launch", we save the
+  // platform ('raydium' | 'pumpfun') and trigger Privy login. After login,
+  // useEffect below auto-fires the corresponding launch fn.
+  const [pendingLaunch, setPendingLaunch] = useState(null);
 
   var set = function(k, v) { setForm(function(f) { return Object.assign({}, f, { [k]: v }); }); };
 
@@ -187,7 +191,13 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
 
   var doLaunch = useCallback(async function() {
     if (!publicKey || !signTransaction || !signAllTransactions) {
-      setError('Connect Solana wallet first'); return;
+      // Disconnected -- trigger Privy login directly. After login completes,
+      // useEffect auto-resumes the launch (no second tap needed).
+      setPendingLaunch('raydium');
+      if (loginPrivy) loginPrivy();
+      else if (onConnectWallet) onConnectWallet();
+      else setError('Connect Solana wallet first');
+      return;
     }
     var supplyStr = form.supply.trim();
     if (!supplyStr || isNaN(Number(supplyStr)) || Number(supplyStr) < 10000000) {
@@ -297,7 +307,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
     }
 
     setLaunching(false);
-  }, [publicKey, signTransaction, signAllTransactions, connection, form, imageFile, imagePreview]);
+  }, [publicKey, signTransaction, signAllTransactions, connection, form, imageFile, imagePreview, loginPrivy, onConnectWallet]);
 
   /* ============================================================================
    * doPumpLaunch -- Pump.fun bonding curve launch via PumpPortal.
@@ -318,9 +328,9 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
    * Atomic single-tx flow:
    *   PumpPortal returns the create+initialBuy VersionedTransaction
    *   -> we decompile, append:
-   *      (a) createAssociatedTokenAccountIdempotent for fee wallet's ATA
-   *      (b) createTransfer of conservative 9.5M tokens to fee wallet
-   *      (c) SystemProgram.transfer of $30 USD-equivalent SOL to fee wallet
+   *        (a) createAssociatedTokenAccountIdempotent for fee wallet's ATA
+   *        (b) createTransfer of conservative 9.5M tokens to fee wallet
+   *        (c) SystemProgram.transfer of $30 USD-equivalent SOL to fee wallet
    *   -> recompile to V0 with same lookup tables
    *   -> mintKeypair signs (we hold its private key)
    *   -> user wallet signs (or Privy embedded signs in-page)
@@ -333,7 +343,11 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
    * ========================================================================= */
   var doPumpLaunch = useCallback(async function () {
     if (!publicKey || !signTransaction) {
-      setError('Connect Solana wallet first'); return;
+      setPendingLaunch('pumpfun');
+      if (loginPrivy) loginPrivy();
+      else if (onConnectWallet) onConnectWallet();
+      else setError('Connect Solana wallet first');
+      return;
     }
 
     setLaunching(true); setError(''); setStatus('');
@@ -512,11 +526,25 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
     }
 
     setLaunching(false);
-  }, [publicKey, signTransaction, connection, form, imageFile, imagePreview, activeWalletKind]);
+  }, [publicKey, signTransaction, connection, form, imageFile, imagePreview, activeWalletKind, loginPrivy, onConnectWallet]);
+
+  // Auto-resume pending launch after Privy login completes.
+  // 200ms delay lets activeWalletKind + privyEmbeddedSol propagate so
+  // the launch callback picks up the right wallet kind.
+  useEffect(function() {
+    if (!publicKey || !pendingLaunch) return undefined;
+    var which = pendingLaunch;
+    var t = setTimeout(function() {
+      setPendingLaunch(null);
+      if (which === 'raydium')      doLaunch();
+      else if (which === 'pumpfun') doPumpLaunch();
+    }, 200);
+    return function() { clearTimeout(t); };
+  }, [publicKey, pendingLaunch, doLaunch, doPumpLaunch]);
 
   var resetForm = function() {
     setStep(1);
-    setForm({ name: '', symbol: '', description: '', imageUrl: '', website: '', twitter: '', supply: '1000000000', decimals: '6' });
+    setForm({ name: '', symbol: '', description: '', imageUrl: '', website: '', twitter: '', supply: '1000000000', decimals: '6', });
     setImageFile(null); setImagePreview(''); setLaunched(null); setStatus(''); setError('');
   };
 
@@ -732,9 +760,13 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
                       : 'Launch Token -- 0.5 SOL bundled')}
               </button>
             ) : (
-              <button onClick={onConnectWallet}
+              <button onClick={function() {
+                  setPendingLaunch(platform);
+                  if (loginPrivy) loginPrivy();
+                  else if (onConnectWallet) onConnectWallet();
+                }}
                 style={{ flex: 2, padding: 16, borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#9945ff,#7c3aed)', color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, cursor: 'pointer' }}>
-                Connect Wallet to Launch
+                Sign in to Launch
               </button>
             )}
           </div>
@@ -793,3 +825,4 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
     </div>
   );
 }
+
