@@ -1,6 +1,6 @@
 /**
  * NEXUS DEX -- App entry
- *
+ * 
  * Provider order (locked, top to bottom):
  *   PrivyProvider                 -- embedded wallet + email/social/passkey login
  *     WagmiProvider               -- EVM external wallets (WalletConnect)
