@@ -1132,7 +1132,7 @@ function PresetEditor({ open, onClose, presets, onSave }) {
   );
 }
 
-Sending Block 2 of 3.
+
 
 /* ============================================================================
  * MAIN SWAP WIDGET
