@@ -6,7 +6,7 @@ import {
 } from '@solana/web3.js';
 import bs58 from 'bs58';
 import { TradeDrawer } from './SwapWidget.jsx';
-
+ 
 const PRESET_KEY = 'nexus_launch_presets';
 const LAST_AMT_KEY = 'nexus_launch_last_amt';
 
