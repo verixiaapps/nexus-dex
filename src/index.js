@@ -1,7 +1,7 @@
 /**
 * NEXUS DEX -- App entry
 *
-* Sets up:
+* Sets up: 
 *   - Wagmi (EVM wallets) via WalletConnect connector
 *   - Solana wallet adapter (Phantom, Solflare)
 *   - WalletContext (unified wallet state across the app)
