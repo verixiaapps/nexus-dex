@@ -6,7 +6,7 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
- 
+
 // FIX: Use default parameter so fmt(n, 0) works correctly (d || 2 would coerce 0 -> 2)
 function fmt(n, d = 2) {
   if (n == null || n === 0) return '-';
@@ -439,7 +439,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     });
 
     return function() { aborted = true; };
-  // FIX: jupiterTokens added to deps; debouncedQ used instead of q
+    // FIX: jupiterTokens added to deps; debouncedQ used instead of q
   }, [debouncedQ, jupiterTokens]);
 
   const handleSort = useCallback(function(key) {
@@ -527,3 +527,4 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     </div>
   );
 }
+
