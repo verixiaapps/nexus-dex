@@ -1,6 +1,6 @@
 /**
  * config-overrides.js -- react-app-rewired build config
- *
+ * 
  * One job: make the build pass after we ripped out `@web3modal/wagmi` so the
  * site can't show QR codes. Some leftover file in src/ still imports from
  * `@web3modal/wagmi` (or its sub-paths). Webpack fails with
