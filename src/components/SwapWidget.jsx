@@ -1,6 +1,6 @@
 /**
  * NEXUS DEX -- Unified Swap Widget
- *
+ * 
  * Behavior contract (locked):
  *   1. ONE wallet popup per swap action (chain minimum: ERC20 first-send
  *      requires +1 approval/permit popup; every send after that is 1).
