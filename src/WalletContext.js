@@ -1,6 +1,6 @@
 /**
  * NEXUS DEX -- Wallet Context
- *
+ * 
  * Single source of truth for:
  *   1. Wallet connection state across FOUR options:
  *        a) Phantom         (Solana external)
