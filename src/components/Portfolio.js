@@ -9,7 +9,7 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
- 
+
 var EVM_CHAINS = [
   { id: 1,     name: 'Ethereum',  moralis: 'eth' },
   { id: 137,   name: 'Polygon',   moralis: 'polygon' },
@@ -163,7 +163,6 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
   const [evmTokens, setEvmTokens] = useState([]);
   const [evmLoading, setEvmLoading] = useState(false);
   const [solFallbackPrice, setSolFallbackPrice] = useState(0);
-  const [activeTab, setActiveTab] = useState('holdings');
   const [manualAddress, setManualAddress] = useState('');
   const [lookupAddress, setLookupAddress] = useState('');
 
@@ -442,164 +441,142 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
 
       {solError && <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 13, color: C.red }}>{solError}</div>}
 
-      <div style={{ display: 'flex', gap: 4, marginBottom: 14 }}>
-        {[['holdings', 'Holdings'], ['activity', 'Activity']].map(function(item) {
-          return <button key={item[0]} onClick={function() { setActiveTab(item[0]); }} style={{ padding: '7px 16px', borderRadius: 8, fontSize: 12, fontWeight: 600, fontFamily: 'Syne, sans-serif', cursor: 'pointer', background: activeTab === item[0] ? 'rgba(0,229,255,.09)' : 'transparent', border: '1px solid ' + (activeTab === item[0] ? 'rgba(0,229,255,.25)' : C.border), color: activeTab === item[0] ? C.accent : C.muted }}>{item[1]}</button>;
-        })}
-      </div>
-
-      {activeTab === 'holdings' && (
+      {(solConnected || publicKey || lookupAddress) && (
         <>
-          {(solConnected || publicKey || lookupAddress) && (
-            <>
-              <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 8 }}>SOLANA TOKENS</div>
-              <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden', marginBottom: 16 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
-                  <div>TOKEN</div><div style={{ textAlign: 'right' }}>BALANCE</div><div style={{ textAlign: 'right' }}>PRICE</div><div style={{ textAlign: 'right' }}>VALUE</div>
+          <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 8 }}>SOLANA TOKENS</div>
+          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden', marginBottom: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
+              <div>TOKEN</div><div style={{ textAlign: 'right' }}>BALANCE</div><div style={{ textAlign: 'right' }}>PRICE</div><div style={{ textAlign: 'right' }}>VALUE</div>
+            </div>
+            <div
+              onClick={function() { onSelectToken && onSelectToken({ id: 'solana', symbol: 'SOL', name: 'Solana', current_price: solPrice, image: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png', mint: SOL_MINT, address: SOL_MINT, isSolanaToken: true, chain: 'solana' }); }}
+              style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer' }}
+              onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }}
+              onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(153,69,255,.2)', border: '1px solid rgba(153,69,255,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#9945ff', flexShrink: 0 }}>S</div>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>SOL</div>
+                  <div style={{ color: C.muted, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Solana</div>
                 </div>
-                <div
-                  onClick={function() { onSelectToken && onSelectToken({ id: 'solana', symbol: 'SOL', name: 'Solana', current_price: solPrice, image: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png', mint: SOL_MINT, address: SOL_MINT, isSolanaToken: true, chain: 'solana' }); }}
-                  style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer' }}
-                  onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }}
-                  onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
-                >
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                    <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(153,69,255,.2)', border: '1px solid rgba(153,69,255,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#9945ff', flexShrink: 0 }}>S</div>
-                    <div style={{ minWidth: 0 }}>
-                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>SOL</div>
-                      <div style={{ color: C.muted, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>Solana</div>
+              </div>
+              <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{solBalance.toFixed(4)}</div>
+              <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{fmt(solPrice)}</div>
+              <div style={{ textAlign: 'right', color: solValue > 0 ? C.green : C.muted, fontSize: 13, fontWeight: 600 }}>{fmt(solValue)}</div>
+            </div>
+            {solLoading && solBalances.length === 0 ? (
+              <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>Loading Solana tokens...</div>
+            ) : solBalances.length === 0 ? (
+              <div style={{ padding: 20, textAlign: 'center', color: C.muted, fontSize: 12 }}>No other SPL tokens found</div>
+            ) : (
+              solBalances.map(function(token) {
+                var price = priceForSolHolding(token);
+                var value = token.uiAmount * price;
+                return (
+                  <div
+                    key={token.mint}
+                    onClick={function() {
+                      onSelectToken && onSelectToken({
+                        id: token.mint, mint: token.mint, address: token.mint,
+                        symbol: token.symbol, name: token.name,
+                        image: token.logoURI, current_price: price,
+                        isSolanaToken: true, chain: 'solana',
+                        decimals: token.decimals,
+                      });
+                    }}
+                    style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer' }}
+                    onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }}
+                    onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
+                  >
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                      {token.logoURI
+                        ? <img src={token.logoURI} alt={token.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} />
+                        : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{token.symbol && token.symbol.charAt(0)}</div>
+                      }
+                      <div style={{ minWidth: 0 }}>
+                        <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.symbol}</div>
+                        <div style={{ color: C.muted, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.name}</div>
+                      </div>
                     </div>
+                    <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{fmtTokenAmt(token.uiAmount)}</div>
+                    <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{price > 0 ? fmt(price) : '-'}</div>
+                    <div style={{ textAlign: 'right', color: value > 0 ? C.green : C.muted, fontSize: 12, fontWeight: 600 }}>{value > 0 ? fmt(value) : '-'}</div>
                   </div>
-                  <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{solBalance.toFixed(4)}</div>
-                  <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{fmt(solPrice)}</div>
-                  <div style={{ textAlign: 'right', color: solValue > 0 ? C.green : C.muted, fontSize: 13, fontWeight: 600 }}>{fmt(solValue)}</div>
-                </div>
-                {solLoading && solBalances.length === 0 ? (
-                  <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>Loading Solana tokens...</div>
-                ) : solBalances.length === 0 ? (
-                  <div style={{ padding: 20, textAlign: 'center', color: C.muted, fontSize: 12 }}>No other SPL tokens found</div>
-                ) : (
-                  solBalances.map(function(token) {
-                    var price = priceForSolHolding(token);
-                    var value = token.uiAmount * price;
-                    return (
-                      <div
-                        key={token.mint}
-                        onClick={function() {
-                          onSelectToken && onSelectToken({
-                            id: token.mint, mint: token.mint, address: token.mint,
-                            symbol: token.symbol, name: token.name,
-                            image: token.logoURI, current_price: price,
-                            isSolanaToken: true, chain: 'solana',
-                            decimals: token.decimals,
-                          });
-                        }}
-                        style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer' }}
-                        onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }}
-                        onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                          {token.logoURI
-                            ? <img src={token.logoURI} alt={token.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} />
-                            : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{token.symbol && token.symbol.charAt(0)}</div>
-                          }
-                          <div style={{ minWidth: 0 }}>
-                            <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.symbol}</div>
-                            <div style={{ color: C.muted, fontSize: 10, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.name}</div>
-                          </div>
-                        </div>
-                        <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{fmtTokenAmt(token.uiAmount)}</div>
-                        <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{price > 0 ? fmt(price) : '-'}</div>
-                        <div style={{ textAlign: 'right', color: value > 0 ? C.green : C.muted, fontSize: 12, fontWeight: 600 }}>{value > 0 ? fmt(value) : '-'}</div>
-                      </div>
-                    );
-                  })
-                )}
-              </div>
-            </>
-          )}
-
-          {evmConnected || evmAddress ? (
-            <div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>EVM TOKENS &middot; {EVM_CHAINS.length} CHAINS</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                  {evmLoading && <span style={{ fontSize: 11, color: C.accent }}>Loading...</span>}
-                  {!evmLoading && evmTokens.length > 0 && <span style={{ fontSize: 11, color: C.muted }}>Total: <span style={{ color: C.green, fontWeight: 700 }}>{fmt(evmTotal)}</span></span>}
-                </div>
-              </div>
-              <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
-                <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
-                  <div>TOKEN</div><div style={{ textAlign: 'right' }}>BALANCE</div><div style={{ textAlign: 'right' }}>PRICE</div><div style={{ textAlign: 'right' }}>VALUE</div>
-                </div>
-                {evmLoading && evmTokens.length === 0 && <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>Loading EVM balances across all chains...</div>}
-                {!evmLoading && evmTokens.length === 0 && <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>No EVM token balances found</div>}
-                {evmTokens.map(function(token, i) {
-                  // PORT-8: stable, unique ID for EVM token rows. Was
-                  // `contractAddress || tokenSymbol` -- the symbol fallback
-                  // collided across chains (a USDC on Polygon and a USDC on
-                  // Arbitrum got the same id). Now: chainId-address, with a
-                  // 'native-{chainId}' form for native coins (no contract).
-                  var addrLc = (token.contractAddress || '').toLowerCase();
-                  var stableId = addrLc
-                    ? token.chainId + '-' + addrLc
-                    : 'native-' + token.chainId;
-                  return (
-                    <div
-                      key={stableId + '-' + i}
-                      onClick={function() {
-                        onSelectToken && onSelectToken({
-                          id: stableId,
-                          symbol: token.tokenSymbol, name: token.tokenName,
-                          image: token.thumbnail || null, current_price: token.tokenPrice,
-                          address: token.contractAddress, chainId: token.chainId, chain: 'evm',
-                          decimals: token.decimals,
-                        });
-                      }}
-                      style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', alignItems: 'center', cursor: 'pointer' }}
-                      onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }}
-                      onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
-                    >
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                        {token.thumbnail
-                          ? <img src={token.thumbnail} alt={token.tokenSymbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} />
-                          : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(98,126,234,.15)', border: '1px solid rgba(98,126,234,.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#627eea', flexShrink: 0 }}>{token.tokenSymbol.charAt(0)}</div>
-                        }
-                        <div style={{ minWidth: 0 }}>
-                          <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.tokenSymbol}</div>
-                          <div style={{ fontSize: 10, color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.tokenName} &middot; {token.blockchain}</div>
-                        </div>
-                      </div>
-                      <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{fmtTokenAmt(token.balance)}</div>
-                      <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{token.tokenPrice > 0 ? fmt(token.tokenPrice) : '-'}</div>
-                      <div style={{ textAlign: 'right', color: token.balanceUsd > 0 ? C.green : C.muted, fontSize: 12, fontWeight: 600 }}>{token.balanceUsd > 0 ? fmt(token.balanceUsd) : '-'}</div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          ) : (
-            <div style={{ background: C.card, border: '1px solid rgba(98,126,234,.2)', borderRadius: 14, padding: 20, textAlign: 'center' }}>
-              <div style={{ color: '#627eea', fontWeight: 700, fontSize: 14, marginBottom: 6 }}>Connect EVM Wallet</div>
-              <p style={{ color: C.muted, fontSize: 12, marginBottom: 14 }}>See balances across {EVM_CHAINS.length} EVM chains</p>
-              <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#627eea,#4a5fcc)', border: 'none', borderRadius: 8, padding: '10px 22px', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect</button>
-            </div>
-          )}
+                );
+              })
+            )}
+          </div>
         </>
       )}
 
-      {activeTab === 'activity' && (
-        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 40, textAlign: 'center' }}>
-          <div style={{ fontSize: 36, marginBottom: 12 }}>&#8599;</div>
-          <div style={{ color: '#fff', fontWeight: 700, fontSize: 16, marginBottom: 8 }}>Transaction History</div>
-          <p style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, maxWidth: 280, margin: '0 auto 20px' }}>View your full transaction history on Solscan or Etherscan.</p>
-          <div style={{ display: 'flex', gap: 10, justifyContent: 'center', flexWrap: 'wrap' }}>
-            {(walletAddress || publicKey) && <a href={'https://solscan.io/account/' + (walletAddress || publicKey.toString())} target="_blank" rel="noreferrer" style={{ display: 'inline-block', padding: '10px 20px', borderRadius: 10, background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.2)', color: C.accent, fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>Solscan</a>}
-            {evmAddress && <a href={'https://etherscan.io/address/' + evmAddress} target="_blank" rel="noreferrer" style={{ display: 'inline-block', padding: '10px 20px', borderRadius: 10, background: 'rgba(98,126,234,.08)', border: '1px solid rgba(98,126,234,.25)', color: '#627eea', fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>Etherscan</a>}
-            {evmAddress && <a href={'https://debank.com/profile/' + evmAddress} target="_blank" rel="noreferrer" style={{ display: 'inline-block', padding: '10px 20px', borderRadius: 10, background: 'rgba(0,255,163,.06)', border: '1px solid rgba(0,255,163,.15)', color: C.green, fontSize: 12, fontWeight: 600, textDecoration: 'none' }}>DeBank</a>}
+      {evmConnected || evmAddress ? (
+        <div>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>EVM TOKENS &middot; {EVM_CHAINS.length} CHAINS</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {evmLoading && <span style={{ fontSize: 11, color: C.accent }}>Loading...</span>}
+              {!evmLoading && evmTokens.length > 0 && <span style={{ fontSize: 11, color: C.muted }}>Total: <span style={{ color: C.green, fontWeight: 700 }}>{fmt(evmTotal)}</span></span>}
+            </div>
           </div>
+          <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
+              <div>TOKEN</div><div style={{ textAlign: 'right' }}>BALANCE</div><div style={{ textAlign: 'right' }}>PRICE</div><div style={{ textAlign: 'right' }}>VALUE</div>
+            </div>
+            {evmLoading && evmTokens.length === 0 && <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>Loading EVM balances across all chains...</div>}
+            {!evmLoading && evmTokens.length === 0 && <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>No EVM token balances found</div>}
+            {evmTokens.map(function(token, i) {
+              // PORT-8: stable, unique ID for EVM token rows. Was
+              // `contractAddress || tokenSymbol` -- the symbol fallback
+              // collided across chains (a USDC on Polygon and a USDC on
+              // Arbitrum got the same id). Now: chainId-address, with a
+              // 'native-{chainId}' form for native coins (no contract).
+              var addrLc = (token.contractAddress || '').toLowerCase();
+              var stableId = addrLc
+                ? token.chainId + '-' + addrLc
+                : 'native-' + token.chainId;
+              return (
+                <div
+                  key={stableId + '-' + i}
+                  onClick={function() {
+                    onSelectToken && onSelectToken({
+                      id: stableId,
+                      symbol: token.tokenSymbol, name: token.tokenName,
+                      image: token.thumbnail || null, current_price: token.tokenPrice,
+                      address: token.contractAddress, chainId: token.chainId, chain: 'evm',
+                      decimals: token.decimals,
+                    });
+                  }}
+                  style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', alignItems: 'center', cursor: 'pointer' }}
+                  onMouseEnter={function(e) { e.currentTarget.style.background = 'rgba(0,229,255,.02)'; }}
+                  onMouseLeave={function(e) { e.currentTarget.style.background = 'transparent'; }}
+                >
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+                    {token.thumbnail
+                      ? <img src={token.thumbnail} alt={token.tokenSymbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0 }} onError={function(e) { e.target.style.display = 'none'; }} />
+                      : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(98,126,234,.15)', border: '1px solid rgba(98,126,234,.3)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: '#627eea', flexShrink: 0 }}>{token.tokenSymbol.charAt(0)}</div>
+                    }
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.tokenSymbol}</div>
+                      <div style={{ fontSize: 10, color: C.muted, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{token.tokenName} &middot; {token.blockchain}</div>
+                    </div>
+                  </div>
+                  <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{fmtTokenAmt(token.balance)}</div>
+                  <div style={{ textAlign: 'right', color: C.text, fontSize: 12 }}>{token.tokenPrice > 0 ? fmt(token.tokenPrice) : '-'}</div>
+                  <div style={{ textAlign: 'right', color: token.balanceUsd > 0 ? C.green : C.muted, fontSize: 12, fontWeight: 600 }}>{token.balanceUsd > 0 ? fmt(token.balanceUsd) : '-'}</div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      ) : (
+        <div style={{ background: C.card, border: '1px solid rgba(98,126,234,.2)', borderRadius: 14, padding: 20, textAlign: 'center' }}>
+          <div style={{ color: '#627eea', fontWeight: 700, fontSize: 14, marginBottom: 6 }}>Connect EVM Wallet</div>
+          <p style={{ color: C.muted, fontSize: 12, marginBottom: 14 }}>See balances across {EVM_CHAINS.length} EVM chains</p>
+          <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#627eea,#4a5fcc)', border: 'none', borderRadius: 8, padding: '10px 22px', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect</button>
         </div>
       )}
     </div>
   );
 }
+
