@@ -1,124 +1,149 @@
 /**
  * NEXUS DEX -- Wallet Context
- * 
+ *
  * Single source of truth for:
- *   1. Wallet connection state (Solana + EVM, simultaneously possible)
- *   2. Active chain context (which wallet is "primary" for the current task)
- *   3. Header network selector (the user's chosen destination chain)
- *   4. Quick Buy / Quick Sell presets (global, persisted)
+ *   1. Wallet connection state across FOUR options:
+ *      a) Phantom         (Solana external)
+ *      b) Solflare        (Solana external)
+ *      c) WalletConnect   (any EVM wallet)
+ *      d) Privy embedded  (email/social/passkey -> auto-created Sol+EVM wallets)
+ *   2. Active context (which wallet is "primary" for the current task)
+ *   3. Header network selector
+ *   4. Quick Buy / Quick Sell presets
  *   5. Mobile in-app wallet detection
- *   6. Disconnect flow that handles both wallet types
- *   7. Resilience layer -- auto-reconnect after backgrounding, network loss,
- *      or silent WalletConnect session expiry. User stays connected without
- *      having to reconnect manually.
+ *   6. Disconnect flow that handles all wallet types
+ *   7. Auto-reconnect resilience layer
  *
- * Usage in any component:
+ * Multiple wallets can be connected simultaneously. activeContext picks
+ * which one is "primary" for routing decisions and address display.
+ *
+ * Privy notes:
+ *   - Privy embedded wallets are NON-CUSTODIAL. Keys live in the user's
+ *     device + Privy's TEE infra. Neither Privy nor we can access them.
+ *   - Privy can create BOTH a Solana and an EVM wallet for the same user.
+ *     We surface both via privyEmbeddedSol / privyEmbeddedEvm.
+ *   - Privy is OPTIONAL. If REACT_APP_PRIVY_APP_ID isn't set, the
+ *     PrivyProvider isn't mounted and our hooks return null safely.
+ *
+ * Usage:
  *   const wallet = useNexusWallet();
- *   wallet.isConnected            -- true if either wallet connected
- *   wallet.solConnected           -- Solana wallet connected
- *   wallet.evmConnected           -- EVM wallet connected
- *   wallet.publicKey              -- Solana PublicKey (or null)
- *   wallet.evmAddress             -- EVM address (or null)
- *   wallet.evmChainId             -- Currently connected EVM chain
- *   wallet.headerChain            -- User's selected destination chain
- *   wallet.setHeaderChain(chainId)-- Change header chain (persists)
- *   wallet.activeContext          -- 'solana' | 'evm' | null (last-used)
- *   wallet.presets                -- { buy:[], sell:[] }
- *   wallet.setPresets(p)          -- Update presets (persists)
- *   wallet.disconnectAll()        -- Disconnect both wallets
- *   wallet.reconnectIfStale()     -- Force a stale-session recheck (manual)
- *   wallet.isMobileInAppWallet    -- User is in Phantom/MetaMask in-app browser
- *   wallet.walletClient           -- viem WalletClient for EVM
- *   wallet.sendTransaction        -- Solana send fn
- *   wallet.signTransaction        -- Solana sign fn
- *   wallet.switchChain            -- wagmi switchChain fn
- *
- * Backwards compat (old field names kept so existing components don't break):
- *   walletAddress, isSolanaConnected, connectedWalletName
+ *   wallet.isConnected            -- ANY wallet connected (sol, evm, or privy)
+ *   wallet.solConnected           -- Phantom/Solflare or Privy Solana embedded
+ *   wallet.evmConnected           -- WalletConnect or Privy EVM embedded
+ *   wallet.privyAuthenticated     -- user is logged in via Privy
+ *   wallet.privyEmbeddedSol       -- Privy's Solana wallet { address, signTransaction, ... }
+ *   wallet.privyEmbeddedEvm       -- Privy's EVM wallet    { address, sendTransaction, ... }
+ *   wallet.publicKey              -- ALWAYS the active Solana PublicKey (external OR Privy)
+ *   wallet.evmAddress             -- ALWAYS the active EVM address (external OR Privy)
+ *   wallet.activeWalletKind       -- 'phantom' | 'solflare' | 'walletconnect' | 'privy' | null
+ *   wallet.loginPrivy()           -- open Privy modal
+ *   wallet.logoutPrivy()          -- log out of Privy
+ *   wallet.disconnectAll()        -- disconnect every wallet (Sol, EVM, Privy)
  */
 
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useAccount, useWalletClient, useSwitchChain, useDisconnect, useReconnect } from 'wagmi';
+import { PublicKey } from '@solana/web3.js';
+
+/* Privy hooks. We import lazily-tolerant -- if @privy-io/react-auth isn't
+ * installed, the bundler will fail at build time (which is what we want
+ * once you add Privy). At runtime, if PrivyProvider isn't wrapping us,
+ * the hooks return safe defaults via the try/catch wrappers below. */
+import { usePrivy as _usePrivy } from '@privy-io/react-auth';
+import { useSolanaWallets as _useSolanaWalletsPrivy } from '@privy-io/react-auth/solana';
+import { useWallets as _useWalletsPrivy } from '@privy-io/react-auth';
 
 const WalletContext = createContext(null);
 
 /* ============================================================================
- * LOCALSTORAGE KEYS -- must match the keys used in SwapWidget.jsx so a
- * change made there is read by us, and vice versa.
+ * SAFE PRIVY HOOK WRAPPERS
+ *
+ * If PrivyProvider isn't mounted (PRIVY_APP_ID missing), Privy's hooks
+ * throw. We wrap them so the rest of the app keeps working.
+ * ========================================================================= */
+
+function useSafePrivy() {
+  try {
+    return _usePrivy();
+  } catch (e) {
+    return {
+      ready: false,
+      authenticated: false,
+      user: null,
+      login: () => { /* no-op when Privy not configured */ },
+      logout: async () => {},
+      connectWallet: () => {},
+      exportWallet: async () => {},
+    };
+  }
+}
+function useSafePrivySolWallets() {
+  try {
+    const r = _useSolanaWalletsPrivy();
+    return (r && r.wallets) || [];
+  } catch (e) {
+    return [];
+  }
+}
+function useSafePrivyEvmWallets() {
+  try {
+    const r = _useWalletsPrivy();
+    return (r && r.wallets) || [];
+  } catch (e) {
+    return [];
+  }
+}
+
+/* ============================================================================
+ * STORAGE KEYS + DEFAULTS
  * ========================================================================= */
 
 const PRESETS_LS_KEY      = 'nexus_presets_v1';
 const HEADER_CHAIN_LS_KEY = 'nexus_header_chain_v1';
 const ACTIVE_CTX_LS_KEY   = 'nexus_active_ctx_v1';
+const ACTIVE_KIND_LS_KEY  = 'nexus_active_kind_v1';
 
-const DEFAULT_BUY_PRESETS  = [10, 25, 50, 100, 250];
+/* GMGN-style preset defaults. Buy presets are USD amounts (we convert to
+ * native via Jupiter / LiFi at trade time). Sell presets are % of balance.
+ * Tuned for memecoin trading: 25/50/100/250/500 USD for buys (covers
+ * casual to whale positions), 25/50/75/100% for sells. */
+const DEFAULT_BUY_PRESETS  = [25, 50, 100, 250, 500];
 const DEFAULT_SELL_PRESETS = [25, 50, 75, 100];
 
-/* ============================================================================
- * RECONNECT TUNING
- * ========================================================================= */
-
-const RECONNECT_COOLDOWN_MS = 5_000;     // min gap between reconnect attempts
-const HEARTBEAT_INTERVAL_MS = 30_000;    // periodic stale-state check
+const RECONNECT_COOLDOWN_MS = 5_000;
+const HEARTBEAT_INTERVAL_MS = 30_000;
 
 /* ============================================================================
  * MOBILE IN-APP WALLET DETECTION
- *
- * When users open swap.verixiaapps.com inside Phantom's or MetaMask's in-app
- * browser, the wallet is injected directly. Signing happens in-context, no
- * app switching. This is the gold-standard mobile flow.
- *
- * We detect by checking the user agent and injected globals.
  * ========================================================================= */
 
 function detectMobileInAppWallet() {
   if (typeof window === 'undefined') return null;
   const uaRaw = navigator.userAgent || '';
   const ua = uaRaw.toLowerCase();
-  // Only flag mobile in-app browsers -- desktop extensions inject the same
-  // globals (window.phantom, window.ethereum.isCoinbaseWallet) and shouldn't
-  // be treated as "in-app".
   const isMobile = /iphone|ipad|ipod|android/i.test(uaRaw);
   if (!isMobile) return null;
 
   const eth = window.ethereum || null;
 
-  // Phantom in-app browser -- Phantom mobile sets window.phantom on iOS/Android.
-  if (window.phantom && (window.phantom.solana || window.phantom.ethereum)) {
-    return 'phantom';
-  }
-  // Solflare in-app browser
+  if (window.phantom && (window.phantom.solana || window.phantom.ethereum)) return 'phantom';
   if (window.solflare && window.solflare.isSolflare) return 'solflare';
 
-  // EVM wallets -- order matters here. Many wallets set isMetaMask=true for
-  // dApp compatibility, so the MetaMask check MUST come last among EVM
-  // wallets, and we additionally require the UA string for MetaMask. Each
-  // wallet below is checked via its own specific flag and/or UA token before
-  // we fall through to the MetaMask catch-all.
   if (eth) {
-    // Coinbase Wallet (mobile in-app)
     if (ua.includes('coinbasewallet') || eth.isCoinbaseWallet) return 'coinbase';
-    // Trust Wallet (mobile in-app) -- sets isTrust on injected provider
     if (ua.includes('trust') || eth.isTrust || eth.isTrustWallet) return 'trust';
-    // Rabby -- sets isRabby
     if (eth.isRabby) return 'rabby';
-    // OKX wallet
     if (ua.includes('okapp') || eth.isOkxWallet || eth.isOKExWallet) return 'okx';
-    // Brave wallet -- sets isBraveWallet
     if (eth.isBraveWallet) return 'brave';
-    // Bitget wallet
     if (eth.isBitKeep || eth.isBitKeepChrome) return 'bitget';
-    // MetaMask Mobile -- must require the UA, NOT just the isMetaMask flag,
-    // because Trust/Rabby/Brave/etc. set isMetaMask=true for compat.
     if (ua.includes('metamaskmobile') || ua.includes('metamask')) return 'metamask';
   }
-
   return null;
 }
 
 /* ============================================================================
- * PRESETS LOAD/SAVE
+ * STORAGE HELPERS
  * ========================================================================= */
 
 function loadPresets() {
@@ -126,14 +151,12 @@ function loadPresets() {
     const raw = localStorage.getItem(PRESETS_LS_KEY);
     if (!raw) return { buy: DEFAULT_BUY_PRESETS, sell: DEFAULT_SELL_PRESETS };
     const p = JSON.parse(raw);
-
     const validBuys = Array.isArray(p.buy)
       ? p.buy.map(Number).filter((v) => Number.isFinite(v) && v > 0).slice(0, 5)
       : [];
     const validSells = Array.isArray(p.sell)
       ? p.sell.map(Number).filter((v) => Number.isFinite(v) && v > 0 && v <= 100).slice(0, 4)
       : [];
-
     return {
       buy:  validBuys.length  >= 3 ? validBuys  : DEFAULT_BUY_PRESETS,
       sell: validSells.length >= 3 ? validSells : DEFAULT_SELL_PRESETS,
@@ -142,51 +165,44 @@ function loadPresets() {
     return { buy: DEFAULT_BUY_PRESETS, sell: DEFAULT_SELL_PRESETS };
   }
 }
-
 function savePresets(p) {
   try { localStorage.setItem(PRESETS_LS_KEY, JSON.stringify(p)); } catch {}
 }
-
-/* ============================================================================
- * HEADER CHAIN LOAD/SAVE
- * ========================================================================= */
-
 function loadHeaderChain() {
   try {
     const raw = localStorage.getItem(HEADER_CHAIN_LS_KEY);
-    if (!raw) return 1; // Default Ethereum
+    if (!raw) return 1;
     const v = JSON.parse(raw);
     if (v === 'solana') return 'solana';
     if (typeof v === 'number' && v > 0) return v;
     return 1;
   } catch { return 1; }
 }
-
 function saveHeaderChain(c) {
   try { localStorage.setItem(HEADER_CHAIN_LS_KEY, JSON.stringify(c)); } catch {}
 }
-
-/* ============================================================================
- * ACTIVE CONTEXT (last-used wallet type)
- *
- * When both wallets are connected, we need to know which one the user is
- * "actively using" -- typically the last one they signed a tx with. This
- * decides things like: does `walletAddress` return Solana or EVM address?
- *
- * Persists across sessions.
- * ========================================================================= */
-
 function loadActiveContext() {
   try {
     const v = localStorage.getItem(ACTIVE_CTX_LS_KEY);
     return v === 'solana' || v === 'evm' ? v : null;
   } catch { return null; }
 }
-
 function saveActiveContext(ctx) {
   try {
     if (ctx) localStorage.setItem(ACTIVE_CTX_LS_KEY, ctx);
     else localStorage.removeItem(ACTIVE_CTX_LS_KEY);
+  } catch {}
+}
+function loadActiveKind() {
+  try {
+    const v = localStorage.getItem(ACTIVE_KIND_LS_KEY);
+    return ['phantom', 'solflare', 'walletconnect', 'privy'].includes(v) ? v : null;
+  } catch { return null; }
+}
+function saveActiveKind(k) {
+  try {
+    if (k) localStorage.setItem(ACTIVE_KIND_LS_KEY, k);
+    else localStorage.removeItem(ACTIVE_KIND_LS_KEY);
   } catch {}
 }
 
@@ -195,24 +211,24 @@ function saveActiveContext(ctx) {
  * ========================================================================= */
 
 export function WalletContextProvider({ children }) {
-  /* -- Solana wallet hooks -- */
+  /* --- Solana external (Phantom / Solflare via wallet-adapter) --- */
   const {
-    publicKey,
-    connected: solConnected,
+    publicKey: extSolPublicKey,
+    connected: extSolConnected,
     connecting: solConnecting,
-    sendTransaction,
-    signTransaction,
-    signAllTransactions,
+    sendTransaction: extSolSendTx,
+    signTransaction: extSolSignTx,
+    signAllTransactions: extSolSignAll,
     disconnect: solDisconnect,
     connect: solConnect,
     select: solSelect,
     wallet: solWallet,
   } = useWallet();
 
-  /* -- EVM wallet hooks -- */
+  /* --- EVM external (WalletConnect via wagmi) --- */
   const {
-    address: evmAddress,
-    isConnected: evmConnected,
+    address: extEvmAddress,
+    isConnected: extEvmConnected,
     isConnecting: evmConnecting,
     chainId: evmChainId,
     connector: evmConnector,
@@ -222,61 +238,80 @@ export function WalletContextProvider({ children }) {
   const { disconnect: evmDisconnect, disconnectAsync: evmDisconnectAsync } = useDisconnect();
   const { reconnectAsync: evmReconnectAsync } = useReconnect();
 
-  /* Refs that always hold the latest wagmi values. Async functions like
-   * switchToChain() poll these instead of useCallback-captured snapshots --
-   * otherwise the captured walletClient is stale by the time the chain
-   * actually switches and the polling loop never sees the new chain id. */
+  /* --- Privy embedded --- */
+  const privy = useSafePrivy();
+  const privySolWallets = useSafePrivySolWallets();
+  const privyAllWallets = useSafePrivyEvmWallets();
+
+  // Privy's embedded wallets are tagged walletClientType === 'privy'.
+  // External wallets connected through Privy's modal show up too -- we
+  // ignore those here (we route external wallets through wagmi/adapter).
+  const privyEmbeddedSol = useMemo(() => {
+    if (!privy.authenticated) return null;
+    return privySolWallets.find(function (w) {
+      return w && w.walletClientType === 'privy';
+    }) || null;
+  }, [privy.authenticated, privySolWallets]);
+
+  const privyEmbeddedEvm = useMemo(() => {
+    if (!privy.authenticated) return null;
+    return privyAllWallets.find(function (w) {
+      return w && w.walletClientType === 'privy' && w.chainType === 'ethereum';
+    }) || null;
+  }, [privy.authenticated, privyAllWallets]);
+
+  /* Refs that always hold the latest wagmi values for async paths */
   const walletClientRef = useRef(walletClient);
   const evmChainIdRef   = useRef(evmChainId);
   useEffect(() => { walletClientRef.current = walletClient; }, [walletClient]);
   useEffect(() => { evmChainIdRef.current   = evmChainId;   }, [evmChainId]);
 
-  /* -- Reconnect-resilience refs.
-   *
-   *  WC-6: We need to distinguish "user explicitly tapped Disconnect" from
-   *  "wallet got dropped silently (mobile backgrounded too long, network
-   *  blip, idle WC session)". Without that distinction the heartbeat
-   *  loop would re-establish a connection the user just walked away from.
-   *
-   *  - reconnectingRef:                in-flight guard for reconnectIfStale
-   *  - lastReconnectAttemptRef:        cooldown guard (prevents thrash)
-   *  - userExplicitlyDisconnectedRef:  set by disconnectAll(), cleared
-   *                                    automatically on next successful
-   *                                    connect (see effect below)
-   *  - wasConnectedRef:                "did we ever have a connection in
-   *                                    this session?" -- gates the silent-
-   *                                    failure heartbeat so we don't try
-   *                                    to reconnect on first page load.
-   */
+  /* --- Connection booleans (any source) --- */
+  const solConnected = extSolConnected || !!privyEmbeddedSol;
+  const evmConnected = extEvmConnected || !!privyEmbeddedEvm;
+  const isConnected  = solConnected || evmConnected;
+  const isConnecting = solConnecting || evmConnecting;
+
+  /* --- Active addresses (prefer external when both present, since users
+   *     who connected an external wallet AND signed into Privy probably
+   *     intended the external wallet to be primary). Privy is fallback. --- */
+  const publicKey = useMemo(() => {
+    if (extSolPublicKey) return extSolPublicKey;
+    if (privyEmbeddedSol && privyEmbeddedSol.address) {
+      try { return new PublicKey(privyEmbeddedSol.address); } catch { return null; }
+    }
+    return null;
+  }, [extSolPublicKey, privyEmbeddedSol]);
+
+  const evmAddress = extEvmAddress || (privyEmbeddedEvm && privyEmbeddedEvm.address) || null;
+
+  /* --- Reconnect resilience refs --- */
   const reconnectingRef               = useRef(false);
   const lastReconnectAttemptRef       = useRef(0);
   const userExplicitlyDisconnectedRef = useRef(false);
   const wasConnectedRef               = useRef(false);
 
-  // Track session connection history. Once connected, we know the user
-  // intends to be connected; clear the explicit-disconnect flag.
   useEffect(() => {
-    if (solConnected || evmConnected) {
+    if (isConnected) {
       wasConnectedRef.current = true;
       userExplicitlyDisconnectedRef.current = false;
     }
-  }, [solConnected, evmConnected]);
+  }, [isConnected]);
 
-  /* -- Header chain (destination network selector) -- */
+  /* --- Header chain --- */
   const [headerChain, setHeaderChainState] = useState(() => loadHeaderChain());
   const setHeaderChain = useCallback((c) => {
     setHeaderChainState(c);
     saveHeaderChain(c);
   }, []);
 
-  /* -- Active context (which wallet type is "primary" right now) -- */
+  /* --- Active context --- */
   const [activeContext, setActiveContextState] = useState(() => loadActiveContext());
   const setActiveContext = useCallback((ctx) => {
     setActiveContextState(ctx);
     saveActiveContext(ctx);
   }, []);
 
-  // Auto-update active context when one wallet connects without the other
   useEffect(() => {
     if (solConnected && !evmConnected && activeContext !== 'solana') {
       setActiveContext('solana');
@@ -285,11 +320,8 @@ export function WalletContextProvider({ children }) {
     } else if (!solConnected && !evmConnected && activeContext != null) {
       setActiveContext(null);
     }
-    // When BOTH are connected, keep whatever was last set (don't auto-switch)
   }, [solConnected, evmConnected, activeContext, setActiveContext]);
 
-  // When user changes header chain to Solana, mark Solana as active context
-  // (if connected). Vice versa for EVM.
   useEffect(() => {
     if (headerChain === 'solana' && solConnected && activeContext !== 'solana') {
       setActiveContext('solana');
@@ -298,36 +330,46 @@ export function WalletContextProvider({ children }) {
     }
   }, [headerChain, solConnected, evmConnected, activeContext, setActiveContext]);
 
-  /* -- Presets -- */
+  /* --- Active wallet kind (which of the 4 options is "primary") --- */
+  const [activeWalletKind, setActiveWalletKindState] = useState(() => loadActiveKind());
+  const setActiveWalletKind = useCallback((k) => {
+    setActiveWalletKindState(k);
+    saveActiveKind(k);
+  }, []);
+
+  // Auto-detect kind on connection events
+  useEffect(() => {
+    if (extSolConnected && solWallet && solWallet.adapter) {
+      const name = (solWallet.adapter.name || '').toLowerCase();
+      if (name.includes('phantom'))  setActiveWalletKind('phantom');
+      else if (name.includes('solflare')) setActiveWalletKind('solflare');
+    } else if (extEvmConnected) {
+      setActiveWalletKind('walletconnect');
+    } else if (privy.authenticated && (privyEmbeddedSol || privyEmbeddedEvm)) {
+      setActiveWalletKind('privy');
+    } else {
+      setActiveWalletKind(null);
+    }
+  }, [extSolConnected, extEvmConnected, solWallet, privy.authenticated, privyEmbeddedSol, privyEmbeddedEvm, setActiveWalletKind]);
+
+  /* --- Presets --- */
   const [presets, setPresetsState] = useState(() => loadPresets());
   const setPresets = useCallback((p) => {
     setPresetsState(p);
     savePresets(p);
   }, []);
 
-  /* -- Mobile in-app wallet detection (computed once on mount) -- */
+  /* --- Mobile in-app wallet --- */
   const mobileInAppWallet = useMemo(() => detectMobileInAppWallet(), []);
   const isMobileInAppWallet = !!mobileInAppWallet;
 
-  /* -- WC-6: reconnectIfStale --
-   *
-   *  Tries to restore wallet connections that dropped silently. Common
-   *  causes: mobile browser backgrounded too long (WalletConnect relay
-   *  drops idle sessions), network blip, OS swapping the tab, laptop lid
-   *  closed for a while.
-   *
-   *  Safe to call freely -- it dedupes via reconnectingRef and rate-limits
-   *  via lastReconnectAttemptRef. No-op if the user explicitly disconnected
-   *  (until they manually reconnect, which clears the flag).
-   *
-   *  Returns true if a reconnect attempt was made, false if skipped.
-   */
+  /* --- Reconnect-if-stale --- */
   const reconnectIfStale = useCallback(async () => {
     if (userExplicitlyDisconnectedRef.current) return false;
     if (reconnectingRef.current) return false;
 
-    const needsEvm = !evmConnected;
-    const needsSol = !!(solWallet && !solConnected);
+    const needsEvm = !extEvmConnected;
+    const needsSol = !!(solWallet && !extSolConnected);
     if (!needsEvm && !needsSol) return false;
 
     if (Date.now() - lastReconnectAttemptRef.current < RECONNECT_COOLDOWN_MS) return false;
@@ -335,19 +377,12 @@ export function WalletContextProvider({ children }) {
     reconnectingRef.current = true;
     lastReconnectAttemptRef.current = Date.now();
     try {
-      // EVM: ask wagmi to restore the last-known connector. If there's
-      // nothing stored (fresh visit, or user previously hit disconnect),
-      // wagmi resolves with no-op -- we don't propagate the error.
       if (needsEvm && typeof evmReconnectAsync === 'function') {
         try { await evmReconnectAsync(); }
         catch (e) {
-          // eslint-disable-next-line no-console
           if (e && e.message) console.debug('[WalletContext] EVM reconnect:', e.message);
         }
       }
-      // Solana: only attempt if the adapter reports the wallet is detectable
-      // (extension installed / in-app wallet present). Otherwise connect()
-      // will throw with a misleading "wallet not ready" error.
       if (
         needsSol &&
         typeof solConnect === 'function' &&
@@ -357,8 +392,6 @@ export function WalletContextProvider({ children }) {
       ) {
         try { await solConnect(); }
         catch (e) {
-          // User may need to approve in their wallet UI -- not a hard error.
-          // eslint-disable-next-line no-console
           if (e && e.message) console.debug('[WalletContext] Solana reconnect:', e.message);
         }
       }
@@ -366,23 +399,14 @@ export function WalletContextProvider({ children }) {
       reconnectingRef.current = false;
     }
     return true;
-  }, [evmConnected, evmReconnectAsync, solWallet, solConnected, solConnect]);
+  }, [extEvmConnected, evmReconnectAsync, solWallet, extSolConnected, solConnect]);
 
-  /* -- WC-7: visibility + network listeners --
-   *
-   *  When the user returns to the tab or the network comes back, attempt
-   *  to silently restore any dropped connections. This is the single
-   *  biggest UX win for mobile, where backgrounding for 30+ seconds will
-   *  often kill the WalletConnect session.
-   */
   useEffect(() => {
     if (typeof window === 'undefined' || typeof document === 'undefined') return undefined;
-
     const onVisibility = () => {
       if (document.visibilityState === 'visible') reconnectIfStale();
     };
     const onOnline = () => { reconnectIfStale(); };
-
     document.addEventListener('visibilitychange', onVisibility);
     window.addEventListener('online', onOnline);
     return () => {
@@ -391,101 +415,81 @@ export function WalletContextProvider({ children }) {
     };
   }, [reconnectIfStale]);
 
-  /* -- WC-7: silent-failure heartbeat --
-   *
-   *  Catches sessions that died while the tab was always visible (long-idle
-   *  WalletConnect sessions, server-side relay restart, mobile carrier
-   *  network swap with no online/offline event). Cheap: we don't ping the
-   *  wallet, we only look at our reactive state for "was connected, isn't
-   *  anymore" and ask the adapters to restore. Only runs while the tab is
-   *  visible to avoid waking laptops just to attempt reconnects.
-   */
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const intervalId = setInterval(() => {
       if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
       if (userExplicitlyDisconnectedRef.current) return;
-      const isCurrentlyConnected = solConnected || evmConnected;
+      const isCurrentlyConnected = extSolConnected || extEvmConnected;
       if (wasConnectedRef.current && !isCurrentlyConnected) {
         reconnectIfStale();
       }
     }, HEARTBEAT_INTERVAL_MS);
     return () => clearInterval(intervalId);
-  }, [solConnected, evmConnected, reconnectIfStale]);
+  }, [extSolConnected, extEvmConnected, reconnectIfStale]);
 
-  /* -- Disconnect both wallets cleanly.
+  /* --- Privy login / logout passthrough --
    *
-   *  WC-3: wagmi v2 exposes `disconnectAsync` -- a Promise-returning variant
-   *  of disconnect that resolves only after the connection state has
-   *  actually flipped (evmConnected -> false). We use it instead of the
-   *  sync `disconnect()` + manual polling -- it removes the timing guess
-   *  and eliminates the race where components read stale `connected: true`
-   *  for one render cycle.
+   * loginPrivy() opens Privy's modal -- email, social, passkey, or
+   * external wallet. After login, Privy auto-creates embedded Sol+EVM
+   * wallets for users without external wallets connected.
    *
-   *  Fallback to sync evmDisconnect if disconnectAsync isn't available
-   *  (older wagmi or unusual connector).
-   *
-   *  WC-7: we also clear the Solana wallet selection (`solSelect(null)`)
-   *  so the adapter's autoConnect doesn't reconnect to the just-disconnected
-   *  wallet on the next page load. And we set the explicit-disconnect ref
-   *  so the heartbeat / visibility listeners don't immediately re-engage.
+   * logoutPrivy() ends the Privy session. Embedded wallet keys remain
+   * intact (recoverable via login). External wallets connected through
+   * Privy stay connected via their respective adapters.
    */
+  const loginPrivy = useCallback(() => {
+    try {
+      if (typeof privy.login === 'function') privy.login();
+    } catch (e) {
+      console.warn('[WalletContext] Privy login failed:', e && e.message);
+    }
+  }, [privy]);
+
+  const logoutPrivy = useCallback(async () => {
+    try {
+      if (typeof privy.logout === 'function') await privy.logout();
+    } catch (e) {
+      console.warn('[WalletContext] Privy logout failed:', e && e.message);
+    }
+  }, [privy]);
+
+  /* --- Disconnect everything --- */
   const disconnectAll = useCallback(async () => {
     userExplicitlyDisconnectedRef.current = true;
     wasConnectedRef.current = false;
 
     let ok = true;
-    if (solConnected) {
-      try { await solDisconnect(); } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('[WalletContext] Solana disconnect error:', e);
-        ok = false;
-      }
+    if (extSolConnected) {
+      try { await solDisconnect(); }
+      catch (e) { console.warn('[WalletContext] Solana disconnect error:', e); ok = false; }
     }
-    if (evmConnected) {
+    if (extEvmConnected) {
       try {
-        if (typeof evmDisconnectAsync === 'function') {
-          await evmDisconnectAsync();
-        } else {
-          evmDisconnect();
-        }
-      } catch (e) {
-        // eslint-disable-next-line no-console
-        console.warn('[WalletContext] EVM disconnect error:', e);
-        ok = false;
-      }
+        if (typeof evmDisconnectAsync === 'function') await evmDisconnectAsync();
+        else evmDisconnect();
+      } catch (e) { console.warn('[WalletContext] EVM disconnect error:', e); ok = false; }
     }
-    // Clear the persisted Solana wallet selection so autoConnect doesn't
-    // re-engage on next page load. wagmi's disconnect() already clears its
-    // own stored connector, so no equivalent step is needed for EVM.
+    if (privy.authenticated) {
+      try { await logoutPrivy(); }
+      catch (e) { console.warn('[WalletContext] Privy disconnect error:', e); ok = false; }
+    }
     if (solWallet && typeof solSelect === 'function') {
       try { solSelect(null); } catch { /* no-op */ }
     }
     setActiveContext(null);
+    setActiveWalletKind(null);
     return ok;
-  }, [solConnected, evmConnected, solDisconnect, evmDisconnect, evmDisconnectAsync, solWallet, solSelect, setActiveContext]);
+  }, [extSolConnected, extEvmConnected, solDisconnect, evmDisconnect, evmDisconnectAsync, solWallet, solSelect, setActiveContext, setActiveWalletKind, privy.authenticated, logoutPrivy]);
 
-  /* -- Switch EVM chain with a promise we can await safely.
-   *    Wraps wagmi's switchChainAsync with our own polling.
-   *
-   *  WC-5: Some mobile wallets are slow:
-   *    - Coinbase Wallet iOS: 7-10s after user approves the prompt
-   *    - Trust Wallet mobile: 5-7s
-   *    - Phantom EVM: 2-4s
-   *  Old 5s window returned false even when the switch eventually succeeded.
-   *  10s covers the slow path. Polling stays cheap (150ms ticks).
-   */
+  /* --- Switch EVM chain (external wallets only -- Privy handles its own
+   *     chain switching via the embedded wallet UI / programmatic API) --- */
   const switchToChain = useCallback(async (targetChainId) => {
     if (!targetChainId || typeof targetChainId !== 'number') return false;
     if (evmChainIdRef.current === targetChainId) return true;
     try {
-      if (switchChainAsync) {
-        await switchChainAsync({ chainId: targetChainId });
-      } else if (switchChain) {
-        switchChain({ chainId: targetChainId });
-      }
-      // Verification window -- read fresh values via refs so we see the
-      // post-switch state instead of the closure's stale snapshot.
+      if (switchChainAsync) await switchChainAsync({ chainId: targetChainId });
+      else if (switchChain) switchChain({ chainId: targetChainId });
       const start = Date.now();
       while (Date.now() - start < 10_000) {
         const wc = walletClientRef.current;
@@ -498,20 +502,14 @@ export function WalletContextProvider({ children }) {
       const cid = evmChainIdRef.current;
       return cid === targetChainId || (wc && wc.chain && wc.chain.id === targetChainId);
     } catch (e) {
-      // eslint-disable-next-line no-console
       console.warn('[WalletContext] switchChain failed:', e && e.message);
       return false;
     }
   }, [switchChain, switchChainAsync]);
 
-  /* -- Derived state -- */
-  const isConnected = solConnected || evmConnected;
-  const isConnecting = solConnecting || evmConnecting;
-
-  // walletAddress respects activeContext when both are connected
+  /* --- Display address (respects activeContext when both wallets connected) --- */
   const walletAddress = useMemo(() => {
     if (solConnected && evmConnected) {
-      // Both connected -- return based on activeContext
       if (activeContext === 'evm' && evmAddress) return evmAddress;
       if (publicKey) return publicKey.toString();
       return evmAddress || null;
@@ -522,31 +520,68 @@ export function WalletContextProvider({ children }) {
   }, [solConnected, evmConnected, activeContext, publicKey, evmAddress]);
 
   const connectedWalletName = useMemo(() => {
-    if (solConnected && evmConnected) {
-      return activeContext === 'evm'
-        ? (evmConnector && evmConnector.name) || 'EVM Wallet'
-        : (solWallet && solWallet.adapter && solWallet.adapter.name) || 'Solana';
-    }
+    if (activeWalletKind === 'privy') return 'Email / Social';
+    if (activeWalletKind === 'phantom') return 'Phantom';
+    if (activeWalletKind === 'solflare') return 'Solflare';
+    if (activeWalletKind === 'walletconnect') return (evmConnector && evmConnector.name) || 'WalletConnect';
     if (solConnected) return (solWallet && solWallet.adapter && solWallet.adapter.name) || 'Solana';
     if (evmConnected) return (evmConnector && evmConnector.name) || 'EVM Wallet';
     return null;
-  }, [solConnected, evmConnected, activeContext, solWallet, evmConnector]);
+  }, [activeWalletKind, solConnected, evmConnected, solWallet, evmConnector]);
 
-  /* -- Context value -- */
+  /* --- Unified Solana sign/send.
+   *
+   * Returns the appropriate signer based on which Solana wallet is
+   * active. Privy embedded path uses provider.request({method:'signAndSendTransaction'})
+   * -- we expose Privy's wallet object directly and let consumers call
+   * the right method. External wallet path keeps wallet-adapter's signer.
+   *
+   * For the executeSwap / executeTrade / handleSend code paths,
+   * consumers should branch on `activeWalletKind === 'privy'` and use
+   * the Privy wallet's getProvider() flow (per Privy docs).
+   */
+  const sendTransaction = extSolSendTx; // wallet-adapter's send (external Solana)
+  const signTransaction = extSolSignTx;
+  const signAllTransactions = extSolSignAll;
+
+  /* ============================================================================
+   * CONTEXT VALUE
+   * ========================================================================= */
   const value = useMemo(() => ({
     // Connection state
     isConnected,
     isConnecting,
     solConnected,
     evmConnected,
-    isSolanaConnected: solConnected,    // backwards-compat alias
+    isSolanaConnected: solConnected,
 
-    // Addresses
+    // Active wallet kind (which of the 4 options is primary)
+    activeWalletKind,
+    setActiveWalletKind,
+
+    // Privy specific
+    privyReady:           privy.ready,
+    privyAuthenticated:   privy.authenticated,
+    privyUser:            privy.user || null,
+    privyEmbeddedSol,         // { address, signMessage, getProvider, ... } | null
+    privyEmbeddedEvm,         // { address, getEthereumProvider, ... } | null
+    loginPrivy,
+    logoutPrivy,
+    privyExportWallet:    typeof privy.exportWallet === 'function' ? privy.exportWallet : null,
+
+    // External Solana state (for code that needs to know specifically)
+    extSolConnected,
+    extSolPublicKey,
+    // External EVM state
+    extEvmConnected,
+    extEvmAddress,
+
+    // Unified addresses (external > Privy precedence)
     walletAddress,
     publicKey:  solConnected && publicKey ? publicKey : null,
-    evmAddress: evmConnected ? evmAddress  : null,
+    evmAddress: evmConnected ? evmAddress : null,
 
-    // Active context (which wallet is "primary" right now)
+    // Active context (sol vs evm)
     activeContext,
     setActiveContext,
 
@@ -555,7 +590,8 @@ export function WalletContextProvider({ children }) {
     headerChain,
     setHeaderChain,
 
-    // Transaction signers
+    // Transaction signers (external Solana). For Privy, branch on
+    // activeWalletKind and use privyEmbeddedSol.getProvider().
     walletClient,
     sendTransaction,
     signTransaction,
@@ -566,22 +602,25 @@ export function WalletContextProvider({ children }) {
     // Display
     connectedWalletName,
 
-    // Presets (global)
+    // Presets
     presets,
     setPresets,
 
-    // Mobile in-app wallet detection
+    // Mobile in-app
     isMobileInAppWallet,
     mobileInAppWalletName: mobileInAppWallet,
 
-    // Disconnect both wallets
+    // Disconnect
     disconnectAll,
 
-    // Manual stale-session recheck (auto-fired on visibility / online /
-    // heartbeat -- exposed for connect modals and error handlers).
+    // Manual reconnect
     reconnectIfStale,
   }), [
     isConnected, isConnecting, solConnected, evmConnected,
+    activeWalletKind, setActiveWalletKind,
+    privy.ready, privy.authenticated, privy.user, privy.exportWallet,
+    privyEmbeddedSol, privyEmbeddedEvm, loginPrivy, logoutPrivy,
+    extSolConnected, extSolPublicKey, extEvmConnected, extEvmAddress,
     walletAddress, publicKey, evmAddress,
     activeContext, setActiveContext,
     evmChainId, headerChain, setHeaderChain,
@@ -599,10 +638,6 @@ export function WalletContextProvider({ children }) {
     </WalletContext.Provider>
   );
 }
-
-/* ============================================================================
- * HOOK
- * ========================================================================= */
 
 export function useNexusWallet() {
   const ctx = useContext(WalletContext);
