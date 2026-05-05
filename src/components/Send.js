@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useAccount, useWalletClient } from 'wagmi';
 import { encodeFunctionData } from 'viem';
@@ -11,7 +11,7 @@ import {
   createAssociatedTokenAccountInstruction,
 } from '@solana/spl-token';
 import { Buffer } from 'buffer';
- 
+
 // LOCKED FEE RULES -- DO NOT MODIFY.
 // Same-chain: 3% platform + 2% safety = 5%. Cross-chain: + 3% bridge = 8%.
 // All sends are ONE TX, ONE SIGNATURE:
@@ -213,7 +213,7 @@ function TokenModal({ open, onClose, jupiterTokens, currentEvmChainId }) {
   const [contractToken, setContractToken] = useState(null);
   const [contractLoading, setContractLoading] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
-  const lookupReqRef = React.useRef(0);
+  const lookupReqRef = useRef(0);
 
   var solTokens = jupiterTokens && jupiterTokens.length > 0
     ? jupiterTokens.map(function(t) { return Object.assign({}, t, { chain: 'solana' }); })
@@ -292,7 +292,7 @@ function TokenModal({ open, onClose, jupiterTokens, currentEvmChainId }) {
   return (
     <>
       <div onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 299, background: 'rgba(0,0,0,.75)' }} />
-      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 300, background: C.card, border: '1px solid ' + C.borderHi, borderRadius: 18, width: '94vw', maxWidth: 420, maxHeight: '85vh', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 80px rgba(0,0,0,.95)' }}>
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 300, background: C.card, border: '1px solid ' + C.borderHi, borderRadius: 18, width: '94vw', maxWidth: 420, maxHeight: 'min(85vh, 100dvh)', display: 'flex', flexDirection: 'column', boxShadow: '0 24px 80px rgba(0,0,0,.95)' }}>
         <div style={{ padding: '16px 16px 10px', borderBottom: '1px solid ' + C.border, flexShrink: 0 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
             <div>
@@ -337,11 +337,37 @@ function TokenModal({ open, onClose, jupiterTokens, currentEvmChainId }) {
 }
 
 export default function Send({ coins, jupiterTokens, onConnectWallet, isConnected, isSolanaConnected, walletAddress }) {
-  const { publicKey, sendTransaction, connected: solConnected } = useWallet();
+  const { publicKey: extPublicKey, sendTransaction: extSolSendTx, connected: solConnected } = useWallet();
   const { connection } = useConnection();
   const { address: evmAddress, isConnected: evmConnected, chainId: evmChainId } = useAccount();
   const { data: walletClient } = useWalletClient();
-  const { switchToChain } = useNexusWallet();
+  const { switchToChain, activeWalletKind, privyEmbeddedSol, loginPrivy } = useNexusWallet();
+
+  // Unified Solana publicKey: external wallet OR Privy embedded.
+  // Same shape as wallet-adapter's PublicKey so existing tx code works.
+  const publicKey = useMemo(function () {
+    if (extPublicKey) return extPublicKey;
+    if (privyEmbeddedSol && privyEmbeddedSol.address) {
+      try { return new PublicKey(privyEmbeddedSol.address); } catch (e) { return null; }
+    }
+    return null;
+  }, [extPublicKey, privyEmbeddedSol]);
+
+  // Unified Solana sender: branches on Privy vs external wallet.
+  // Both have the same shape (tx, connection[, opts]) -> Promise<signature>.
+  const sendSolanaTx = useCallback(async function (tx, conn, opts) {
+    if (activeWalletKind === 'privy' && privyEmbeddedSol) {
+      if (typeof privyEmbeddedSol.sendTransaction === 'function') {
+        return privyEmbeddedSol.sendTransaction(tx, conn, opts);
+      }
+      if (typeof privyEmbeddedSol.signTransaction === 'function') {
+        var signed = await privyEmbeddedSol.signTransaction(tx);
+        return conn.sendRawTransaction(signed.serialize(), opts || { skipPreflight: false, maxRetries: 3 });
+      }
+      throw new Error('Privy wallet has no sign method');
+    }
+    return extSolSendTx(tx, conn, opts);
+  }, [activeWalletKind, privyEmbeddedSol, extSolSendTx]);
 
   const walletConnected = isConnected || solConnected || evmConnected;
 
@@ -358,6 +384,9 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
   const [lifiRoute, setLifiRoute] = useState(null);
   const [lifiLoading, setLifiLoading] = useState(false);
   const [needsApproval, setNeedsApproval] = useState(false);
+  // Pending send: when disconnected user taps "Send", we save flag + trigger
+  // Privy login. After login, useEffect auto-fires handleSend.
+  const [pendingSend, setPendingSend] = useState(false);
 
   var route = getRoute(selectedToken, destChain);
   var isCrossChain = route === 'lifi';
@@ -367,6 +396,18 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
     if (isSol(selectedToken)) setDestChain('solana');
     else if (isEvm(selectedToken)) setDestChain(selectedToken.chainId);
   }, [selectedToken]);
+
+  // Auto-resume pending send after Privy login completes.
+  // 200ms delay lets activeWalletKind + privyEmbeddedSol propagate.
+  useEffect(function() {
+    if (!walletConnected || !pendingSend) return undefined;
+    var t = setTimeout(function() {
+      setPendingSend(false);
+      handleSend();
+    }, 200);
+    return function() { clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletConnected, pendingSend]);
 
   useEffect(function() {
     if (!publicKey || !connection) return;
@@ -462,7 +503,12 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
   var recipientAmountDisp = amountNum - feeAmountDisp;
 
   var handleSend = async function() {
-    if (!walletConnected) { if (onConnectWallet) onConnectWallet(); return; }
+    if (!walletConnected) {
+      setPendingSend(true);
+      if (loginPrivy) loginPrivy();
+      else if (onConnectWallet) onConnectWallet();
+      return;
+    }
     if (!isValidRecipient(recipient)) { setError('Invalid recipient address'); return; }
     if (!amountNum || amountNum <= 0) { setError('Enter a valid amount'); return; }
     setError(''); setSendStatus('loading');
@@ -498,11 +544,14 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           transaction.add(createTransferInstruction(fromAta, feeAta, publicKey, split2.feeRaw));
         }
 
-        var lb = await connection.getLatestBlockhash();
+        var lb = await connection.getLatestBlockhash('confirmed');
         transaction.recentBlockhash = lb.blockhash;
         transaction.feePayer = publicKey;
-        var sig = await sendTransaction(transaction, connection);
-        await connection.confirmTransaction(sig, 'confirmed');
+        var sig = await sendSolanaTx(transaction, connection);
+        await connection.confirmTransaction(
+          { signature: sig, blockhash: lb.blockhash, lastValidBlockHeight: lb.lastValidBlockHeight },
+          'confirmed'
+        );
         setTxSig(sig);
 
       } else if (route === 'evm') {
@@ -618,7 +667,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           if (!publicKey) throw new Error('Connect Solana wallet');
           var lifiSolTx = VersionedTransaction.deserialize(Buffer.from(txReq.data, 'base64'));
           var lifiBh = await connection.getLatestBlockhash('confirmed');
-          var lifiSig = await sendTransaction(lifiSolTx, connection, { skipPreflight: false, maxRetries: 3 });
+          var lifiSig = await sendSolanaTx(lifiSolTx, connection, { skipPreflight: false, maxRetries: 3 });
           await connection.confirmTransaction({ signature: lifiSig, blockhash: lifiBh.blockhash, lastValidBlockHeight: lifiBh.lastValidBlockHeight }, 'confirmed');
           setTxSig(lifiSig);
         } else {
@@ -689,9 +738,9 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
         </div>
         <div style={{ textAlign: 'center', padding: '60px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
           <div style={{ fontSize: 40, marginBottom: 16 }}>-&gt;</div>
-          <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Connect Wallet to Send</h2>
+          <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Sign in to Send</h2>
           <p style={{ color: C.muted, fontSize: 13, marginBottom: 24, lineHeight: 1.6 }}>Send any token on Solana, EVM, or cross-chain via LI.FI.</p>
-          <button onClick={onConnectWallet} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect Wallet</button>
+          <button onClick={function() { if (loginPrivy) loginPrivy(); else if (onConnectWallet) onConnectWallet(); }} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Sign in</button>
         </div>
       </div>
     );
@@ -815,7 +864,15 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
         {error && <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 13, color: C.red }}>{error}</div>}
 
         <button onClick={handleSend} disabled={sendStatus === 'loading'} style={{ width: '100%', padding: 18, borderRadius: 14, border: 'none', background: sendStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : sendStatus === 'error' ? 'rgba(255,59,107,.2)' : !amount || !recipient ? C.card2 : 'linear-gradient(135deg,#00e5ff,#0055ff)', color: !amount || !recipient ? C.muted2 : sendStatus === 'error' ? C.red : C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16, cursor: sendStatus === 'loading' ? 'not-allowed' : 'pointer', transition: 'all .3s', minHeight: 52 }}>
-          {sendStatus === 'loading' ? 'Confirming in Wallet...' : sendStatus === 'success' ? 'Sent!' : sendStatus === 'error' ? 'Failed -- Try Again' : !recipient ? 'Enter Recipient Address' : !amount ? 'Enter Amount' : route === 'lifi' && lifiLoading ? 'Finding Route...' : route === 'lifi' && !lifiRoute ? 'No Route Found' : 'Send ' + selectedToken.symbol + (route === 'lifi' ? ' Cross-Chain' : '')}
+          {sendStatus === 'loading'
+            ? (activeWalletKind === 'privy' ? 'Signing...' : 'Confirming in Wallet...')
+            : sendStatus === 'success' ? 'Sent!'
+            : sendStatus === 'error' ? 'Failed -- Try Again'
+            : !recipient ? 'Enter Recipient Address'
+            : !amount ? 'Enter Amount'
+            : route === 'lifi' && lifiLoading ? 'Finding Route...'
+            : route === 'lifi' && !lifiRoute ? 'No Route Found'
+            : 'Send ' + selectedToken.symbol + (route === 'lifi' ? ' Cross-Chain' : '')}
         </button>
 
         {txSig && sendStatus === 'success' && txLink && (
@@ -828,3 +885,4 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
     </div>
   );
 }
+
