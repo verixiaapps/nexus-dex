@@ -6,7 +6,7 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3',
   text: '#cdd6f4', muted: '#586994',
 };
-
+ 
 const PROVIDERS = [
   {
     id: 'transak',
