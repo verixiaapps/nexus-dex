@@ -1,12 +1,12 @@
 /**
  * NEXUS DEX -- Wallet Context
- * 
+ *
  * Single source of truth for:
  *   1. Wallet connection state across FOUR options:
- *      a) Phantom         (Solana external)
- *      b) Solflare        (Solana external)
- *      c) WalletConnect   (any EVM wallet)
- *      d) Privy embedded  (email/social/passkey -> auto-created Sol+EVM wallets)
+ *        a) Phantom         (Solana external)
+ *        b) Solflare        (Solana external)
+ *        c) WalletConnect   (any EVM wallet)
+ *        d) Privy embedded  (email/social/passkey -> auto-created Sol+EVM wallets)
  *   2. Active context (which wallet is "primary" for the current task)
  *   3. Header network selector
  *   4. Quick Buy / Quick Sell presets
@@ -211,7 +211,7 @@ function saveActiveKind(k) {
  * ========================================================================= */
 
 export function WalletContextProvider({ children }) {
-  /* --- Solana external (Phantom / Solflare via wallet-adapter) --- */
+  /* -- Solana external (Phantom / Solflare via wallet-adapter) -- */
   const {
     publicKey: extSolPublicKey,
     connected: extSolConnected,
@@ -225,7 +225,7 @@ export function WalletContextProvider({ children }) {
     wallet: solWallet,
   } = useWallet();
 
-  /* --- EVM external (WalletConnect via wagmi) --- */
+  /* -- EVM external (WalletConnect via wagmi) -- */
   const {
     address: extEvmAddress,
     isConnected: extEvmConnected,
@@ -238,7 +238,7 @@ export function WalletContextProvider({ children }) {
   const { disconnect: evmDisconnect, disconnectAsync: evmDisconnectAsync } = useDisconnect();
   const { reconnectAsync: evmReconnectAsync } = useReconnect();
 
-  /* --- Privy embedded --- */
+  /* -- Privy embedded -- */
   const privy = useSafePrivy();
   const privySolWallets = useSafePrivySolWallets();
   const privyAllWallets = useSafePrivyEvmWallets();
@@ -266,15 +266,15 @@ export function WalletContextProvider({ children }) {
   useEffect(() => { walletClientRef.current = walletClient; }, [walletClient]);
   useEffect(() => { evmChainIdRef.current   = evmChainId;   }, [evmChainId]);
 
-  /* --- Connection booleans (any source) --- */
+  /* -- Connection booleans (any source) -- */
   const solConnected = extSolConnected || !!privyEmbeddedSol;
   const evmConnected = extEvmConnected || !!privyEmbeddedEvm;
   const isConnected  = solConnected || evmConnected;
   const isConnecting = solConnecting || evmConnecting;
 
-  /* --- Active addresses (prefer external when both present, since users
-   *     who connected an external wallet AND signed into Privy probably
-   *     intended the external wallet to be primary). Privy is fallback. --- */
+  /* -- Active addresses (prefer external when both present, since users
+   *    who connected an external wallet AND signed into Privy probably
+   *    intended the external wallet to be primary). Privy is fallback. -- */
   const publicKey = useMemo(() => {
     if (extSolPublicKey) return extSolPublicKey;
     if (privyEmbeddedSol && privyEmbeddedSol.address) {
@@ -285,7 +285,7 @@ export function WalletContextProvider({ children }) {
 
   const evmAddress = extEvmAddress || (privyEmbeddedEvm && privyEmbeddedEvm.address) || null;
 
-  /* --- Reconnect resilience refs --- */
+  /* -- Reconnect resilience refs -- */
   const reconnectingRef               = useRef(false);
   const lastReconnectAttemptRef       = useRef(0);
   const userExplicitlyDisconnectedRef = useRef(false);
@@ -298,14 +298,14 @@ export function WalletContextProvider({ children }) {
     }
   }, [isConnected]);
 
-  /* --- Header chain --- */
+  /* -- Header chain -- */
   const [headerChain, setHeaderChainState] = useState(() => loadHeaderChain());
   const setHeaderChain = useCallback((c) => {
     setHeaderChainState(c);
     saveHeaderChain(c);
   }, []);
 
-  /* --- Active context --- */
+  /* -- Active context -- */
   const [activeContext, setActiveContextState] = useState(() => loadActiveContext());
   const setActiveContext = useCallback((ctx) => {
     setActiveContextState(ctx);
@@ -330,7 +330,7 @@ export function WalletContextProvider({ children }) {
     }
   }, [headerChain, solConnected, evmConnected, activeContext, setActiveContext]);
 
-  /* --- Active wallet kind (which of the 4 options is "primary") --- */
+  /* -- Active wallet kind (which of the 4 options is "primary") -- */
   const [activeWalletKind, setActiveWalletKindState] = useState(() => loadActiveKind());
   const setActiveWalletKind = useCallback((k) => {
     setActiveWalletKindState(k);
@@ -352,18 +352,18 @@ export function WalletContextProvider({ children }) {
     }
   }, [extSolConnected, extEvmConnected, solWallet, privy.authenticated, privyEmbeddedSol, privyEmbeddedEvm, setActiveWalletKind]);
 
-  /* --- Presets --- */
+  /* -- Presets -- */
   const [presets, setPresetsState] = useState(() => loadPresets());
   const setPresets = useCallback((p) => {
     setPresetsState(p);
     savePresets(p);
   }, []);
 
-  /* --- Mobile in-app wallet --- */
+  /* -- Mobile in-app wallet -- */
   const mobileInAppWallet = useMemo(() => detectMobileInAppWallet(), []);
   const isMobileInAppWallet = !!mobileInAppWallet;
 
-  /* --- Reconnect-if-stale --- */
+  /* -- Reconnect-if-stale -- */
   const reconnectIfStale = useCallback(async () => {
     if (userExplicitlyDisconnectedRef.current) return false;
     if (reconnectingRef.current) return false;
@@ -428,7 +428,7 @@ export function WalletContextProvider({ children }) {
     return () => clearInterval(intervalId);
   }, [extSolConnected, extEvmConnected, reconnectIfStale]);
 
-  /* --- Privy login / logout passthrough --
+  /* -- Privy login / logout passthrough --
    *
    * loginPrivy() opens Privy's modal -- email, social, passkey, or
    * external wallet. After login, Privy auto-creates embedded Sol+EVM
@@ -454,7 +454,7 @@ export function WalletContextProvider({ children }) {
     }
   }, [privy]);
 
-  /* --- Disconnect everything --- */
+  /* -- Disconnect everything -- */
   const disconnectAll = useCallback(async () => {
     userExplicitlyDisconnectedRef.current = true;
     wasConnectedRef.current = false;
@@ -482,8 +482,8 @@ export function WalletContextProvider({ children }) {
     return ok;
   }, [extSolConnected, extEvmConnected, solDisconnect, evmDisconnect, evmDisconnectAsync, solWallet, solSelect, setActiveContext, setActiveWalletKind, privy.authenticated, logoutPrivy]);
 
-  /* --- Switch EVM chain (external wallets only -- Privy handles its own
-   *     chain switching via the embedded wallet UI / programmatic API) --- */
+  /* -- Switch EVM chain (external wallets only -- Privy handles its own
+   *    chain switching via the embedded wallet UI / programmatic API) -- */
   const switchToChain = useCallback(async (targetChainId) => {
     if (!targetChainId || typeof targetChainId !== 'number') return false;
     if (evmChainIdRef.current === targetChainId) return true;
@@ -507,7 +507,7 @@ export function WalletContextProvider({ children }) {
     }
   }, [switchChain, switchChainAsync]);
 
-  /* --- Display address (respects activeContext when both wallets connected) --- */
+  /* -- Display address (respects activeContext when both wallets connected) -- */
   const walletAddress = useMemo(() => {
     if (solConnected && evmConnected) {
       if (activeContext === 'evm' && evmAddress) return evmAddress;
@@ -529,7 +529,7 @@ export function WalletContextProvider({ children }) {
     return null;
   }, [activeWalletKind, solConnected, evmConnected, solWallet, evmConnector]);
 
-  /* --- Unified Solana sign/send.
+  /* -- Unified Solana sign/send.
    *
    * Returns the appropriate signer based on which Solana wallet is
    * active. Privy embedded path uses provider.request({method:'signAndSendTransaction'})
@@ -644,3 +644,4 @@ export function useNexusWallet() {
   if (!ctx) throw new Error('useNexusWallet must be used inside WalletContextProvider');
   return ctx;
 }
+
