@@ -1,6 +1,6 @@
 /**
  * NEXUS DEX -- Unified Swap Widget
- * 
+ *
  * Behavior contract (locked):
  *   1. ONE wallet popup per swap action (chain minimum: ERC20 first-send
  *      requires +1 approval/permit popup; every send after that is 1).
@@ -20,6 +20,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { useNexusWallet } from '../WalletContext.js';
 import { useAccount, useWalletClient, useBalance, useSwitchChain, usePublicClient } from 'wagmi';
 import {
   VersionedTransaction,
@@ -48,7 +49,6 @@ const NATIVE_EVM = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 const WSOL_MINT  = 'So11111111111111111111111111111111111111112';
 
 const SOL_RESERVE_LAMPORTS = 5_000_000;
-const SOL_MIN_FOR_SWAP     = 3_000_000;
 const EVM_NATIVE_RESERVE_PCT = 0.005;
 
 const QUOTE_DEBOUNCE_MS  = 200;
@@ -173,7 +173,7 @@ function isValidBtcAddr(s) {
   if (!s || typeof s !== 'string') return false;
   const v = s.trim();
   if (/^bc1[ac-hj-np-z02-9]{6,87}$/i.test(v)) return true;
-  if (/^[13]{25,34}$/.test(v)) return true;
+  if (/^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(v)) return true;
   return false;
 }
 
@@ -227,37 +227,37 @@ function toRawAmount(amountStr, decimals) {
  * ========================================================================= */
 
 const NATIVE_COIN_RESOLVE = {
-  'ethereum': { kind: 'evm-native', chainId: 1 },
-  'binancecoin': { kind: 'evm-native', chainId: 56 },
-  'matic-network': { kind: 'evm-native', chainId: 137 },
+  'ethereum':                { kind: 'evm-native', chainId: 1 },
+  'binancecoin':             { kind: 'evm-native', chainId: 56 },
+  'matic-network':           { kind: 'evm-native', chainId: 137 },
   'polygon-ecosystem-token': { kind: 'evm-native', chainId: 137 },
-  'avalanche-2': { kind: 'evm-native', chainId: 43114 },
-  'fantom': { kind: 'evm-native', chainId: 250 },
-  'sonic-3': { kind: 'evm-native', chainId: 146 },
-  's': { kind: 'evm-native', chainId: 146 },
-  'celo': { kind: 'evm-native', chainId: 42220 },
-  'xdai': { kind: 'evm-native', chainId: 100 },
-  'cronos': { kind: 'evm-native', chainId: 25 },
-  'moonbeam': { kind: 'evm-native', chainId: 1284 },
-  'kava': { kind: 'evm-native', chainId: 2222 },
-  'mantle': { kind: 'evm-native', chainId: 5000 },
-  'core': { kind: 'evm-native', chainId: 1116 },
-  'flare-networks': { kind: 'evm-native', chainId: 14 },
-  'metis-token': { kind: 'evm-native', chainId: 1088 },
-  'sei-network': { kind: 'evm-native', chainId: 1329 },
-  'berachain-bera': { kind: 'evm-native', chainId: 80094 },
-  'monad': { kind: 'evm-native', chainId: 143 },
-  'ronin': { kind: 'evm-native', chainId: 2020 },
-  'kucoin-shares': { kind: 'evm-native', chainId: 321 },
-  'flow': { kind: 'evm-native', chainId: 747 },
-  'lisk': { kind: 'evm-native', chainId: 1135 },
-  'apecoin': { kind: 'evm-native', chainId: 33139 },
-  'fuse-network-token': { kind: 'evm-native', chainId: 122 },
-  'hyperliquid': { kind: 'evm-native', chainId: 999 },
-  'plasma': { kind: 'evm-native', chainId: 9745 },
-  'aurora-near': { kind: 'evm-native', chainId: 1313161554 },
-  'solana': { kind: 'solana' },
-  'bitcoin': { kind: 'btc' },
+  'avalanche-2':             { kind: 'evm-native', chainId: 43114 },
+  'fantom':                  { kind: 'evm-native', chainId: 250 },
+  'sonic-3':                 { kind: 'evm-native', chainId: 146 },
+  's':                       { kind: 'evm-native', chainId: 146 },
+  'celo':                    { kind: 'evm-native', chainId: 42220 },
+  'xdai':                    { kind: 'evm-native', chainId: 100 },
+  'cronos':                  { kind: 'evm-native', chainId: 25 },
+  'moonbeam':                { kind: 'evm-native', chainId: 1284 },
+  'kava':                    { kind: 'evm-native', chainId: 2222 },
+  'mantle':                  { kind: 'evm-native', chainId: 5000 },
+  'core':                    { kind: 'evm-native', chainId: 1116 },
+  'flare-networks':          { kind: 'evm-native', chainId: 14 },
+  'metis-token':             { kind: 'evm-native', chainId: 1088 },
+  'sei-network':             { kind: 'evm-native', chainId: 1329 },
+  'berachain-bera':          { kind: 'evm-native', chainId: 80094 },
+  'monad':                   { kind: 'evm-native', chainId: 143 },
+  'ronin':                   { kind: 'evm-native', chainId: 2020 },
+  'kucoin-shares':           { kind: 'evm-native', chainId: 321 },
+  'flow':                    { kind: 'evm-native', chainId: 747 },
+  'lisk':                    { kind: 'evm-native', chainId: 1135 },
+  'apecoin':                 { kind: 'evm-native', chainId: 33139 },
+  'fuse-network-token':      { kind: 'evm-native', chainId: 122 },
+  'hyperliquid':             { kind: 'evm-native', chainId: 999 },
+  'plasma':                  { kind: 'evm-native', chainId: 9745 },
+  'aurora-near':             { kind: 'evm-native', chainId: 1313161554 },
+  'solana':                  { kind: 'solana' },
+  'bitcoin':                 { kind: 'btc' },
 };
 
 const BTC_RESOLVE_SHAPE = { chain: 'bitcoin', address: 'bitcoin', chainId: 20000000000001, symbol: 'BTC', name: 'Bitcoin', decimals: 8 };
@@ -290,7 +290,7 @@ function normalizeToken(input, opts = {}) {
       chain: 'evm', address: evmAddr, chainId: input.chainId || defaultChainId,
       symbol, name,
       decimals: typeof input.decimals === 'number' ? input.decimals
-              : typeof input.tokenDecimals === 'number' ? input.tokenDecimals : 18,
+                : typeof input.tokenDecimals === 'number' ? input.tokenDecimals : 18,
       logoURI,
     };
   }
@@ -511,7 +511,12 @@ async function fetchJupiterSwapTx({ quoteResponse, userPublicKey, feeAccount, si
     userPublicKey,
     wrapAndUnwrapSol: true,
     dynamicComputeUnitLimit: true,
-    prioritizationFeeLamports: 'auto',
+    prioritizationFeeLamports: {
+      priorityLevelWithMaxLamports: {
+        maxLamports: 5_000_000,
+        priorityLevel: 'high',
+      },
+    },
   };
   if (feeAccount) body.feeAccount = feeAccount;
   const res = await fetch('/api/jupiter/swap/v1/swap', {
@@ -1132,8 +1137,6 @@ function PresetEditor({ open, onClose, presets, onSave }) {
   );
 }
 
-
-
 /* ============================================================================
  * MAIN SWAP WIDGET
  *
@@ -1150,9 +1153,9 @@ function PresetEditor({ open, onClose, presets, onSave }) {
  *   onPresetsChange   -- bubble preset changes for global sync
  *   onStatusChange    -- TradeDrawer hooks this to lock dismissal during tx
  *
- * NOTE: `coins` prop intentionally REMOVED. Pricing comes from aggregators
- * only (Jupiter price API for SOL, LiFi tokens index priceUSD for EVM/BTC).
- * No CoinGecko anywhere in this file.
+ *   NOTE: `coins` prop intentionally REMOVED. Pricing comes from aggregators
+ *   only (Jupiter price API for SOL, LiFi tokens index priceUSD for EVM/BTC).
+ *   No CoinGecko anywhere in this file.
  * ========================================================================= */
 
 export default function SwapWidget({
@@ -1169,12 +1172,40 @@ export default function SwapWidget({
   onStatusChange,
 }) {
   /* --- Wallet hooks --- */
-  const { publicKey, sendTransaction, connected: solConnected } = useWallet();
+  const { publicKey: extPublicKey, sendTransaction: extSolSendTx, connected: solConnected } = useWallet();
   const { connection } = useConnection();
   const { address: evmAddress, isConnected: evmConnected, chainId: evmChainId } = useAccount();
   const { data: walletClient } = useWalletClient();
   const { switchChain, switchChainAsync } = useSwitchChain();
-  const walletConnected = solConnected || evmConnected;
+  const nexus = useNexusWallet();
+  const { activeWalletKind, privyEmbeddedSol } = nexus;
+
+  // Unified Solana publicKey across external + Privy embedded.
+  const publicKey = useMemo(() => {
+    if (extPublicKey) return extPublicKey;
+    if (privyEmbeddedSol && privyEmbeddedSol.address) {
+      try { return new PublicKey(privyEmbeddedSol.address); } catch (e) { return null; }
+    }
+    return null;
+  }, [extPublicKey, privyEmbeddedSol]);
+
+  // Unified Solana sender. Privy: in-page sign (no popup). External: wallet-adapter.
+  const sendTransaction = useCallback(async (tx, conn, opts) => {
+    if (activeWalletKind === 'privy' && privyEmbeddedSol) {
+      if (typeof privyEmbeddedSol.sendTransaction === 'function') {
+        return privyEmbeddedSol.sendTransaction(tx, conn, opts);
+      }
+      if (typeof privyEmbeddedSol.signTransaction === 'function') {
+        const signed = await privyEmbeddedSol.signTransaction(tx);
+        return conn.sendRawTransaction(signed.serialize(), opts || { skipPreflight: false, maxRetries: 3 });
+      }
+      throw new Error('Privy wallet has no sign method');
+    }
+    return extSolSendTx(tx, conn, opts);
+  }, [activeWalletKind, privyEmbeddedSol, extSolSendTx]);
+
+  // For Privy users, also expose connected = true so guards pass.
+  const walletConnected = solConnected || evmConnected || (activeWalletKind === 'privy' && (!!privyEmbeddedSol || !!nexus.privyEmbeddedEvm));
 
   // Refs to wagmi state so async paths after chain-switch read fresh values.
   const walletClientRef = useRef(walletClient);
@@ -1225,7 +1256,7 @@ export default function SwapWidget({
       };
     }
     return defaultTokenPair({ mode: modeProp, viewedToken: null, headerChain, lastFromToken: null });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const [fromToken, setFromToken] = useState(initialPair.fromToken || POPULAR_TOKENS[0]);
   const [toToken,   setToToken]   = useState(initialPair.toToken   || POPULAR_TOKENS[1]);
@@ -1599,9 +1630,6 @@ export default function SwapWidget({
       /* === JUPITER === */
       if (route === 'jupiter') {
         if (!publicKey) throw new Error('Connect Solana wallet');
-        const solBal = await connection.getBalance(publicKey);
-        if (solBal < SOL_MIN_FOR_SWAP) throw new Error('Need at least 0.003 SOL for fees.');
-
         // Derive our fee ATA on the OUTPUT mint. Jupiter sends platformFee here.
         // If it doesn't exist, Jupiter's swap tx creates it (user pays rent).
         const outputMintPk = new PublicKey(toToken.mint);
@@ -2243,3 +2271,4 @@ export function TradeDrawer({
     </>
   );
 }
+
