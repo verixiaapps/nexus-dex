@@ -857,7 +857,15 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, is
       else (onQuickBuy || onBuyClick)(token, usd);
       return;
     }
-    if (!isPrivy) { (onQuickBuy || onBuyClick)(token, usd); return; }
+    // Need Solana capability: either Privy embedded Sol OR external Solana wallet.
+    var canTradeSol = isPrivy || solConnected;
+    if (!canTradeSol) {
+      // Only EVM connected on a Solana token -- trigger Privy login.
+      setPendingIntent({ kind: 'buy', usd: usd });
+      if (loginPrivy) loginPrivy();
+      else (onQuickBuy || onBuyClick)(token, usd);
+      return;
+    }
     if (!solPrice || solPrice <= 0) {
       setCardStatus('error'); setCardStatusMsg('No SOL price');
       setTimeout(function () { setCardStatus('idle'); setCardStatusMsg(''); }, 2500);
@@ -866,15 +874,21 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, is
     if (!unifiedPublicKey) { (onQuickBuy || onBuyClick)(token, usd); return; }
 
     setPendingPreset('buy:' + usd);
-    setCardStatus('loading'); setCardStatusMsg('Signing...');
+    setCardStatus('loading');
+    setCardStatusMsg(isPrivy ? 'Signing...' : 'Confirm in wallet...');
     try {
+      // Privy: zero-popup with instant flag. External (Phantom/Solflare):
+      // wallet-adapter sendTransaction shows ONE popup, then signs + sends.
+      var walletDescriptor = isPrivy
+        ? { kind: 'privy', privyWallet: privyEmbeddedSol, instant: true }
+        : { kind: 'external', sendTransaction: extSolSendTx };
       var result = await quickBuyPump({
         mint: token.mint,
         usdAmount: usd,
         solPriceUsd: solPrice,
         publicKey: unifiedPublicKey,
         connection,
-        wallet: { kind: 'privy', privyWallet: privyEmbeddedSol, instant: true },
+        wallet: walletDescriptor,
         onStatus: function (s) { setCardStatusMsg(s); },
       });
       setCardStatus('success'); setCardStatusMsg('Bought! ' + result.signature.slice(0, 8) + '...');
@@ -890,7 +904,7 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, is
     }
   }
 
-  // Direct one-click SELL for Privy. External users fall through to drawer.
+  // Direct one-click SELL for Privy AND external Solana wallets (no drawer).
   async function handleQuickSell(e, pctVal) {
     e.stopPropagation();
     if (!isValidMint(token.mint)) return;
@@ -900,7 +914,13 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, is
       else onSellClick(token);
       return;
     }
-    if (!isPrivy) { onSellClick(token); return; }
+    var canTradeSol = isPrivy || solConnected;
+    if (!canTradeSol) {
+      setPendingIntent({ kind: 'sell', pct: pctVal });
+      if (loginPrivy) loginPrivy();
+      else onSellClick(token);
+      return;
+    }
     if (!userTokenBalance || userTokenBalance <= 0) {
       setCardStatus('error'); setCardStatusMsg('No balance');
       setTimeout(function () { setCardStatus('idle'); setCardStatusMsg(''); }, 2500);
@@ -909,8 +929,12 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, is
     if (!unifiedPublicKey) { onSellClick(token); return; }
 
     setPendingPreset('sell:' + pctVal);
-    setCardStatus('loading'); setCardStatusMsg('Signing...');
+    setCardStatus('loading');
+    setCardStatusMsg(isPrivy ? 'Signing...' : 'Confirm in wallet...');
     try {
+      var walletDescriptor = isPrivy
+        ? { kind: 'privy', privyWallet: privyEmbeddedSol, instant: true }
+        : { kind: 'external', sendTransaction: extSolSendTx };
       var result = await quickSellPump({
         mint: token.mint,
         tokenBalance: userTokenBalance,
@@ -919,7 +943,7 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, is
         solPriceUsd: solPrice,
         publicKey: unifiedPublicKey,
         connection,
-        wallet: { kind: 'privy', privyWallet: privyEmbeddedSol, instant: true },
+        wallet: walletDescriptor,
         onStatus: function (s) { setCardStatusMsg(s); },
       });
       setCardStatus('success'); setCardStatusMsg('Sold! ' + result.signature.slice(0, 8) + '...');
@@ -998,7 +1022,7 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, is
           var disabled = cardStatus === 'loading' && !isPending;
           // For Privy users with balance, sell defaults to 100%. For external/no-balance, opens drawer.
           var sellHandler = function (e) {
-            if (isPrivy && userTokenBalance > 0) {
+            if ((isPrivy || solConnected) && userTokenBalance > 0) {
               handleQuickSell(e, 100);
             } else {
               safeSell(e);
@@ -1019,7 +1043,7 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, is
                 touchAction: 'manipulation',
               }}
             >
-              {isPending ? '...' : (isPrivy && userTokenBalance > 0 ? 'Sell MAX' : 'Sell')}
+              {isPending ? '...' : ((isPrivy || solConnected) && userTokenBalance > 0 ? 'Sell MAX' : 'Sell')}
             </button>
           );
         })()}
