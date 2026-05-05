@@ -7,10 +7,10 @@ import { useNexusWallet } from '../WalletContext.js';
  * TokenDetail
  *
  * Three parallel data fetches on mount:
- *   1. Chart (CG for non-on-chain coins, GeckoTerminal for on-chain).
- *   2. Pools  (DexScreener primary, GeckoTerminal fallback).
+ *   1. Chart       (CG for non-on-chain coins, GeckoTerminal for on-chain).
+ *   2. Pools       (DexScreener primary, GeckoTerminal fallback).
  *   3. CG metadata (platforms map for drawer normalization + native-asset
- *      detection in the liquidity section).
+ *                   detection in the liquidity section).
  *
  * Live price ticker: liveCoin memo re-reads the coin from `coins` on every
  * App.js refresh tick so price/volume/change update without leaving the page.
@@ -19,7 +19,8 @@ import { useNexusWallet } from '../WalletContext.js';
  * (mint+chain for Solana, address+chainId for EVM) preferring the user's
  * headerChain when multiple platforms exist. Buy/Sell buttons are disabled
  * while CG metadata is loading so the drawer never opens on a half-resolved
- * coin.
+ * coin. headerChain, setHeaderChain, presets, setPresets are all sourced
+ * from WalletContext so the drawer stays in sync with global state.
  * ========================================================================= */
 
 const C = {
@@ -99,10 +100,11 @@ function isOnChainAddress(str) {
 }
 
 export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConnectWallet }) {
-  // headerChain + setHeaderChain come from WalletContext. setHeaderChain is
-  // forwarded to the drawer so when the user picks a token on a different
-  // chain inside the drawer, the global header state updates too.
-  const { headerChain, setHeaderChain } = useNexusWallet();
+  // headerChain + setHeaderChain + presets + setPresets from WalletContext
+  // -- single source of truth so the drawer stays in sync with the rest of
+  // the app. setHeaderChain is forwarded to the drawer so when the user
+  // picks a token on a different chain, the global header updates too.
+  const { headerChain, setHeaderChain, presets, setPresets } = useNexusWallet();
 
   const [chartData, setChartData] = useState([]);
   const [chartPeriod, setChartPeriod] = useState('7');
@@ -643,10 +645,13 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
       )}
 
       {/* Drawer hand-off:
-            coin              = enrichedCoin (mint+chain or address+chainId)
-            headerChain       = global from WalletContext
+            coin                = enrichedCoin (mint+chain or address+chainId)
+            headerChain         = global from WalletContext
             onHeaderChainChange = setHeaderChain so cross-chain selections
-                                  inside the drawer update the global header */}
+                                  inside the drawer update the global header
+            presets             = global from WalletContext
+            onPresetsChange     = setPresets so preset edits inside the
+                                  drawer update the global state */}
       <TradeDrawer
         open={drawerOpen}
         onClose={function() { setDrawerOpen(false); }}
@@ -656,6 +661,8 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         onConnectWallet={onConnectWallet}
         headerChain={headerChain}
         onHeaderChainChange={setHeaderChain}
+        presets={presets}
+        onPresetsChange={setPresets}
       />
     </div>
   );
