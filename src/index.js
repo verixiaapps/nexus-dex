@@ -1,33 +1,33 @@
 /**
-* NEXUS DEX -- App entry
-*
-* Sets up: 
-*   - Wagmi (EVM wallets) via WalletConnect connector
-*   - Solana wallet adapter (Phantom, Solflare)
-*   - WalletContext (unified wallet state across the app)
-*   - React Query
-*   - BrowserRouter (in App.js)
-*
-* Three-button connection model (locked spec):
-*   1. Phantom        -- Solana, via @solana/wallet-adapter-phantom.
-*                        Adapter handles desktop extension AND mobile
-*                        universal-link automatically.
-*   2. Solflare       -- Solana, via @solana/wallet-adapter-solflare.
-*                        Same dual handling.
-*   3. WalletConnect  -- everything else (MetaMask, Trust, Rainbow,
-*                        Coinbase, OKX, Rabby, Bitget, 600+ wallets) via
-*                        wagmi's `walletConnect` connector. Desktop -> QR
-*                        modal in-page (user stays on our site). Mobile ->
-*                        deep-links into the chosen wallet, returns to us
-*                        automatically after approval.
-*
-* autoConnect for Solana is ENABLED. Combined with the resilience layer
-* in WalletContext (visibility / online listeners + heartbeat +
-* userExplicitlyDisconnected guard), this is what keeps users connected
-* across reloads, tab backgrounding, and network blips. The previous
-* "race with manual connect" complaint is fixed by the WalletContext
-* state machine, not by disabling autoConnect.
-*/
+ * NEXUS DEX -- App entry
+ *
+ * Provider order (locked, top to bottom):
+ *   PrivyProvider                 -- embedded wallet + email/social/passkey login
+ *     WagmiProvider               -- EVM external wallets (WalletConnect)
+ *       QueryClientProvider       -- TanStack Query
+ *         ConnectionProvider      -- Solana RPC
+ *           WalletProvider        -- Solana external wallet adapters (Phantom, Solflare)
+ *             WalletContextProvider -- our unified state across all of the above
+ *               <App />
+ *
+ * Why Privy outermost: Privy's hooks (usePrivy, useSolanaWallets, etc.) must
+ * be available everywhere, including inside WalletContextProvider where we
+ * combine Privy's embedded wallet state with the external-adapter state.
+ *
+ * Wallet options surfaced in the connect modal (locked spec):
+ *   1. Phantom        -- Solana, via @solana/wallet-adapter-phantom
+ *   2. Solflare       -- Solana, via @solana/wallet-adapter-solflare
+ *   3. WalletConnect  -- everything EVM (MetaMask, Trust, Rainbow, Coinbase,
+ *                        OKX, Rabby, Bitget, 600+ wallets) via wagmi
+ *   4. Email / Social -- Privy embedded wallet (Solana + EVM auto-created
+ *                        for users without external wallets). Login with
+ *                        email, Google, Apple, Twitter/X, Discord, or
+ *                        passkey. No seed phrase to manage. One-tap signing.
+ *
+ * Privy embedded wallets are non-custodial. Keys are sharded across the
+ * user's device (in a TEE / secure enclave) and Privy's infra. Neither
+ * Privy nor we can access the user's keys.
+ */
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
@@ -39,70 +39,70 @@ import '@solana/wallet-adapter-react-ui/styles.css';
 import { WagmiProvider, createConfig, http } from 'wagmi';
 import { walletConnect } from 'wagmi/connectors';
 import {
- mainnet, polygon, polygonZkEvm, arbitrum, base, bsc, avalanche, optimism,
- gnosis, linea, scroll, mantle, blast, mode, fantom, moonbeam,
- celo, aurora, metis, zora, fraxtal, kroma, taiko, cronos, klaytn, sei, ronin,
- zksync,
+  mainnet, polygon, polygonZkEvm, arbitrum, base, bsc, avalanche, optimism,
+  gnosis, linea, scroll, mantle, blast, mode, fantom, moonbeam,
+  celo, aurora, metis, zora, fraxtal, kroma, taiko, cronos, klaytn, sei, ronin,
+  zksync,
 } from 'wagmi/chains';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+
+import { PrivyProvider } from '@privy-io/react-auth';
+import { toSolanaWalletConnectors } from '@privy-io/react-auth/solana';
 
 import App from './App.js';
 import { WalletContextProvider } from './WalletContext.js';
 
 /* ============================================================================
-* Buffer polyfill for browser (some web3 libs expect it on `window`)
-* ========================================================================= */
+ * Buffer polyfill for browser
+ * ========================================================================= */
 if (typeof window !== 'undefined' && !window.Buffer) {
- window.Buffer = Buffer;
+  window.Buffer = Buffer;
 }
 
 /* ============================================================================
-* REOWN / WALLETCONNECT PROJECT ID
-*
-* Required for the WalletConnect button in the modal. Get one (free) at
-* https://cloud.reown.com -- takes 30 seconds. Paste into Railway env as
-* REACT_APP_REOWN_PROJECT_ID and redeploy.
-*
-* If unset, wagmi still loads but the WalletConnect connector self-reports
-* as unavailable; the modal then displays a clear "WalletConnect not
-* configured" message instead of failing silently when tapped.
-* ========================================================================= */
+ * ENV: REOWN / WALLETCONNECT, SOLANA RPC, PRIVY APP ID
+ * ========================================================================= */
 
 const REOWN_PROJECT_ID =
- process.env.REACT_APP_REOWN_PROJECT_ID ||
- process.env.REACT_APP_WALLETCONNECT_PROJECT_ID || // legacy alias
- '';
+  process.env.REACT_APP_REOWN_PROJECT_ID ||
+  process.env.REACT_APP_WALLETCONNECT_PROJECT_ID ||
+  '';
 
 if (!REOWN_PROJECT_ID) {
- // eslint-disable-next-line no-console
- console.warn(
-   '[Nexus DEX] REACT_APP_REOWN_PROJECT_ID not set. WalletConnect button ' +
-   'will be disabled until a project ID is configured. Get one (free) at ' +
-   'https://cloud.reown.com and add it on Railway.'
- );
+  // eslint-disable-next-line no-console
+  console.warn(
+    '[Nexus DEX] REACT_APP_REOWN_PROJECT_ID not set. WalletConnect button ' +
+    'will be disabled. Get a free project ID at https://cloud.reown.com.'
+  );
 }
-
-/* ============================================================================
-* SOLANA RPC -- config + warning when falling back to public endpoint
-* ========================================================================= */
 
 const SOLANA_RPC = process.env.REACT_APP_SOLANA_RPC
- || (process.env.REACT_APP_HELIUS_API_KEY
-   ? 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(process.env.REACT_APP_HELIUS_API_KEY)
-   : 'https://api.mainnet-beta.solana.com');
+  || (process.env.REACT_APP_HELIUS_API_KEY
+    ? 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(process.env.REACT_APP_HELIUS_API_KEY)
+    : 'https://api.mainnet-beta.solana.com');
 
 if (!process.env.REACT_APP_SOLANA_RPC && !process.env.REACT_APP_HELIUS_API_KEY) {
- // eslint-disable-next-line no-console
- console.warn(
-   '[Nexus DEX] No Solana RPC configured. Falling back to public mainnet-beta, ' +
-   'which is heavily rate-limited and will fail under normal use. ' +
-   'Set REACT_APP_HELIUS_API_KEY (recommended) or REACT_APP_SOLANA_RPC on Railway.'
- );
+  // eslint-disable-next-line no-console
+  console.warn(
+    '[Nexus DEX] No Solana RPC configured. Falling back to public mainnet-beta, ' +
+    'which is heavily rate-limited. Set REACT_APP_HELIUS_API_KEY on Railway.'
+  );
+}
+
+const PRIVY_APP_ID = process.env.REACT_APP_PRIVY_APP_ID || '';
+
+if (!PRIVY_APP_ID) {
+  // eslint-disable-next-line no-console
+  console.warn(
+    '[Nexus DEX] REACT_APP_PRIVY_APP_ID not set. The "Continue with email" ' +
+    'button will be disabled until you create an app at https://dashboard.privy.io ' +
+    'and add the App ID to Railway env.'
+  );
 }
 
 /* ============================================================================
-* CUSTOM CHAINS -- chains not yet in viem/wagmi presets
-* ========================================================================= */
+ * CUSTOM CHAINS
+ * ========================================================================= */
 
 const unichain      = { id: 130,    name: 'Unichain',    nativeCurrency: { name: 'Ether',         symbol: 'ETH',  decimals: 18 }, rpcUrls: { default: { http: ['https://mainnet.unichain.org'] } } };
 const sonic         = { id: 146,    name: 'Sonic',       nativeCurrency: { name: 'Sonic',         symbol: 'S',    decimals: 18 }, rpcUrls: { default: { http: ['https://rpc.soniclabs.com'] } } };
@@ -125,154 +125,214 @@ const kcc           = { id: 321,    name: 'KCC',         nativeCurrency: { name:
 const shape         = { id: 360,    name: 'Shape',       nativeCurrency: { name: 'Ether',         symbol: 'ETH',  decimals: 18 }, rpcUrls: { default: { http: ['https://mainnet.shape.network'] } } };
 
 /* ============================================================================
-* CHAIN LIST -- mainnet first; FIRST chain is wagmi's default.
-* ========================================================================= */
+ * CHAIN LIST
+ * ========================================================================= */
 
 const chains = [
- // Tier 1 -- major chains by TVL
- mainnet,           // 1
- base,              // 8453
- arbitrum,          // 42161
- optimism,          // 10
- polygon,           // 137
- bsc,               // 56
- avalanche,         // 43114
-
- // Tier 2 -- established L2s and alt-L1s
- zksync,            // 324
- linea,             // 59144
- scroll,            // 534352
- mantle,            // 5000
- blast,             // 81457
- mode,              // 34443
- polygonZkEvm,      // 1101
- gnosis,            // 100
- fantom,            // 250
- cronos,            // 25
- moonbeam,          // 1284
- celo,              // 42220
- aurora,            // 1313161554
- metis,             // 1088
- klaytn,            // 8217
- sei,               // 1329
- ronin,             // 2020
- zora,              // 7777777
- fraxtal,           // 252
- kroma,             // 255
- taiko,             // 167000
-
- // Tier 3 -- emerging chains
- unichain, sonic, berachain, ink, worldchain, abstractChain, apeChain,
- bob, zircuit, flowEvm, hemi, kava, boba, lisk, fuse, coreDao,
- bitlayer, kcc, shape,
+  mainnet, base, arbitrum, optimism, polygon, bsc, avalanche,
+  zksync, linea, scroll, mantle, blast, mode, polygonZkEvm, gnosis,
+  fantom, cronos, moonbeam, celo, aurora, metis, klaytn, sei, ronin,
+  zora, fraxtal, kroma, taiko,
+  unichain, sonic, berachain, ink, worldchain, abstractChain, apeChain,
+  bob, zircuit, flowEvm, hemi, kava, boba, lisk, fuse, coreDao,
+  bitlayer, kcc, shape,
 ].filter(Boolean);
 
 /* ============================================================================
-* WAGMI CONFIG -- WalletConnect only on the EVM side.
-*
-* The wagmi `walletConnect` connector handles every supported wallet:
-*   - Desktop: opens an in-page QR modal. User scans with their mobile
-*     wallet. Desktop site stays put -- transactions on our site, only
-*     the signing prompt is in their wallet.
-*   - Mobile: deep-links into the chosen wallet via universal link, then
-*     returns to us automatically once they approve. Metadata below
-*     ensures the return URL is correctly set.
-*
-* showQrModal=true is the default; we set it explicitly so future wagmi
-* upgrades don't silently change behavior.
-* ========================================================================= */
+ * WAGMI CONFIG -- WalletConnect for external EVM wallets
+ * ========================================================================= */
 
 const SITE_NAME = 'Nexus DEX';
 const SITE_URL  = 'https://swap.verixiaapps.com';
 const SITE_ICON = SITE_URL + '/icon-512.png';
 
 const transports = chains.reduce(function (acc, c) {
- acc[c.id] = http(); // viem uses chain.rpcUrls.default.http[0] by default
- return acc;
+  acc[c.id] = http();
+  return acc;
 }, {});
 
 const wagmiConnectors = REOWN_PROJECT_ID
- ? [
-     walletConnect({
-       projectId: REOWN_PROJECT_ID,
-       showQrModal: true,
-       metadata: {
-         name: SITE_NAME,
-         description: 'Best price across every chain. Single signature. No KYC.',
-         url: SITE_URL,
-         icons: [SITE_ICON],
-       },
-     }),
-   ]
- : [];
-// If projectId is missing, the connectors array stays empty -- wagmi still
-// initializes, the WalletConnect button in the modal detects the missing
-// connector and shows "Unavailable -- check setup" instead of crashing.
+  ? [
+      walletConnect({
+        projectId: REOWN_PROJECT_ID,
+        showQrModal: true,
+        // Explicit relay URL -- prevents Safari from receiving malformed
+        // wc:// deeplinks when our origin is hit before the relay handshake
+        // completes. Default works in Chrome but iOS Safari sometimes
+        // intercepts the universal link before the QR/redirect modal
+        // finishes (the "address invalid" error from pic 2).
+        relayUrl: 'wss://relay.walletconnect.com',
+        metadata: {
+          name: SITE_NAME,
+          description: 'Best price across every chain. Single signature. No KYC.',
+          url: SITE_URL,
+          icons: [SITE_ICON],
+          // verifyUrl explicitly set so WalletConnect's verify API uses our
+          // origin for the "Verified" badge and Safari's universal-link
+          // resolver gets a stable target.
+          verifyUrl: SITE_URL,
+        },
+        qrModalOptions: {
+          themeMode: 'dark',
+          themeVariables: {
+            '--wcm-z-index': '999',
+            '--wcm-accent-color': '#00e5ff',
+          },
+          // Disable WalletConnect's "Open in Wallet" deep-link button on
+          // Safari -- it's the source of the "address invalid" error
+          // when the wallet's universal link isn't installed. Users can
+          // still scan the QR or paste the URI manually.
+          enableExplorer: true,
+          explorerRecommendedWalletIds: 'NONE',
+        },
+      }),
+    ]
+  : [];
 
 const wagmiConfig = createConfig({
- chains,
- connectors: wagmiConnectors,
- transports,
- ssr: false,
+  chains,
+  connectors: wagmiConnectors,
+  transports,
+  ssr: false,
 });
 
 /* ============================================================================
-* SOLANA WALLET ADAPTERS
-*
-* autoConnect is ON. The previous "race with manual connect" complaint is
-* solved by the WalletContext state machine + targetWalletRef pattern, not
-* by disabling auto-reconnect. Without autoConnect users would have to
-* reconnect on every page reload, which violates the "keep them connected
-* at all times" rule.
-* ========================================================================= */
+ * SOLANA WALLET ADAPTERS -- external wallets only (Phantom + Solflare).
+ * Privy's embedded Solana wallet is handled separately via Privy's hooks.
+ * ========================================================================= */
 
 const solanaWallets = [
- new PhantomWalletAdapter(),
- new SolflareWalletAdapter(),
+  new PhantomWalletAdapter(),
+  new SolflareWalletAdapter(),
 ];
 
 function onWalletError(err, adapter) {
- // Surface adapter errors to the console so we can debug "silent" connection
- // failures. The modal already shows error state via WalletContext.
- // eslint-disable-next-line no-console
- console.warn('[Nexus DEX] Solana wallet error:', adapter && adapter.name, err && err.message);
+  // eslint-disable-next-line no-console
+  console.warn('[Nexus DEX] Solana wallet error:', adapter && adapter.name, err && err.message);
 }
 
 /* ============================================================================
-* REACT QUERY
-* ========================================================================= */
+ * REACT QUERY
+ * ========================================================================= */
 
 const queryClient = new QueryClient({
- defaultOptions: {
-   queries: {
-     staleTime: 30_000,
-     retry: 1,
-     refetchOnWindowFocus: false,
-   },
- },
+  defaultOptions: {
+    queries: {
+      staleTime: 30_000,
+      retry: 1,
+      refetchOnWindowFocus: false,
+    },
+  },
 });
 
 /* ============================================================================
-* MOUNT
-* ========================================================================= */
+ * PRIVY CONFIG
+ *
+ * Login methods enabled (chosen for max conversion across DeFi user types):
+ *   - email      -- universal, works for everyone
+ *   - google     -- 1-tap on Android / Chrome
+ *   - apple      -- 1-tap on iOS / Safari, required for App Store apps
+ *   - twitter    -- crypto-native social login
+ *   - discord    -- crypto-native social login
+ *   - passkey    -- modern biometric, no password to remember
+ *   - wallet     -- power users connect their existing wallet to Privy too
+ *
+ * Embedded wallets:
+ *   - Auto-create for users without an external wallet on login (zero-friction)
+ *   - Cross-chain: BOTH Solana AND EVM created in the same flow
+ *   - No password required at create time (passkey / device key handles it)
+ *
+ * walletChainType: 'ethereum-and-solana' -- shows both chain types in
+ * Privy's connect modal when users choose to link an external wallet.
+ *
+ * Solana cluster routed through our Helius RPC (or fallback) so embedded
+ * wallet RPC calls share the same endpoint as the rest of the app.
+ *
+ * Theme matches Nexus DEX dark UI; accent color matches our cyan brand.
+ * ========================================================================= */
+
+const solanaConnectors = toSolanaWalletConnectors({
+  shouldAutoConnect: false, // we manage Solana autoConnect via the wallet-adapter
+});
+
+const privyConfig = {
+  appearance: {
+    theme: 'dark',
+    accentColor: '#00e5ff',
+    logo: SITE_URL + '/icon-512.png',
+    showWalletLoginFirst: false,
+    walletChainType: 'ethereum-and-solana',
+    landingHeader: 'Sign in to Nexus DEX',
+    loginMessage: 'Trade across every chain. No seed phrase needed.',
+  },
+  loginMethods: ['email', 'google', 'apple', 'twitter', 'discord', 'passkey', 'wallet'],
+  embeddedWallets: {
+    ethereum: {
+      createOnLogin: 'users-without-wallets',
+    },
+    solana: {
+      createOnLogin: 'users-without-wallets',
+    },
+    requireUserPasswordOnCreate: false,
+    showWalletUIs: true, // show Privy's tx confirmation UI; we'll bypass for instant trades later
+    priceDisplay: {
+      primary: 'fiat-currency',
+      secondary: 'native-token',
+    },
+  },
+  externalWallets: {
+    solana: { connectors: solanaConnectors },
+  },
+  solana: {
+    rpcs: {
+      'mainnet-beta': SOLANA_RPC,
+    },
+  },
+  defaultChain: mainnet,
+  supportedChains: chains,
+  legal: {
+    termsAndConditionsUrl: SITE_URL + '/terms',
+    privacyPolicyUrl: SITE_URL + '/privacy',
+  },
+};
+
+/* ============================================================================
+ * MOUNT
+ *
+ * If PRIVY_APP_ID is missing we still render the app so existing
+ * Phantom/Solflare/WalletConnect flows keep working. Privy's "Continue
+ * with email" button in WalletModal handles the missing-config case
+ * gracefully (button shows "Unavailable -- check setup").
+ * ========================================================================= */
 
 const rootEl = document.getElementById('root');
 if (!rootEl) {
- // eslint-disable-next-line no-console
- console.error('[Nexus DEX] #root element not found in HTML');
+  // eslint-disable-next-line no-console
+  console.error('[Nexus DEX] #root element not found in HTML');
 } else {
- const root = ReactDOM.createRoot(rootEl);
- root.render(
-   <WagmiProvider config={wagmiConfig}>
-     <QueryClientProvider client={queryClient}>
-       <ConnectionProvider endpoint={SOLANA_RPC} config={{ commitment: 'confirmed' }}>
-         <WalletProvider wallets={solanaWallets} autoConnect={true} onError={onWalletError}>
-           <WalletContextProvider>
-             <App />
-           </WalletContextProvider>
-         </WalletProvider>
-       </ConnectionProvider>
-     </QueryClientProvider>
-   </WagmiProvider>
- );
+  const root = ReactDOM.createRoot(rootEl);
+
+  const tree = (
+    <WagmiProvider config={wagmiConfig}>
+      <QueryClientProvider client={queryClient}>
+        <ConnectionProvider endpoint={SOLANA_RPC} config={{ commitment: 'confirmed' }}>
+          <WalletProvider wallets={solanaWallets} autoConnect={true} onError={onWalletError}>
+            <WalletContextProvider>
+              <App />
+            </WalletContextProvider>
+          </WalletProvider>
+        </ConnectionProvider>
+      </QueryClientProvider>
+    </WagmiProvider>
+  );
+
+  root.render(
+    PRIVY_APP_ID ? (
+      <PrivyProvider appId={PRIVY_APP_ID} config={privyConfig}>
+        {tree}
+      </PrivyProvider>
+    ) : (
+      tree
+    )
+  );
 }
