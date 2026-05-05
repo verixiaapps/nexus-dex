@@ -11,7 +11,7 @@ import {
   createAssociatedTokenAccountInstruction,
 } from '@solana/spl-token';
 import { Buffer } from 'buffer';
-
+ 
 // LOCKED FEE RULES -- DO NOT MODIFY.
 // Same-chain: 3% platform + 2% safety = 5%. Cross-chain: + 3% bridge = 8%.
 // All sends are ONE TX, ONE SIGNATURE:
