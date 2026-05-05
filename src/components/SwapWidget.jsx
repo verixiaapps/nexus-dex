@@ -7,12 +7,12 @@
  *   2. Fees: 5% same-chain, 8% cross-chain. ALWAYS taken from output via
  *      the aggregator's own fee mechanism. Never bundled separately.
  *   3. Pricing: aggregator only, NEVER CoinGecko.
- *      - Solana -> Jupiter price API
- *      - EVM/BTC -> LiFi tokens API priceUSD
+ *        - Solana -> Jupiter price API
+ *        - EVM/BTC -> LiFi tokens API priceUSD
  *   4. Route picker:
- *      - Solana <-> Solana                       -> Jupiter
- *      - EVM <-> EVM, same chain, 0x supported   -> 0x (Permit2)
- *      - Anything else                           -> LiFi
+ *        - Solana <-> Solana                       -> Jupiter
+ *        - EVM <-> EVM, same chain, 0x supported   -> 0x (Permit2)
+ *        - Anything else                           -> LiFi
  *   5. Buy mode: from = native of source chain, to = the token.
  *      Sell mode: from = the token, to = native of header chain.
  */
@@ -173,7 +173,7 @@ function isValidBtcAddr(s) {
   if (!s || typeof s !== 'string') return false;
   const v = s.trim();
   if (/^bc1[ac-hj-np-z02-9]{6,87}$/i.test(v)) return true;
-  if (/^[13][a-km-zA-HJ-NP-Z1-9]{25,34}$/.test(v)) return true;
+  if (/^[13]{25,34}$/.test(v)) return true;
   return false;
 }
 
@@ -290,7 +290,7 @@ function normalizeToken(input, opts = {}) {
       chain: 'evm', address: evmAddr, chainId: input.chainId || defaultChainId,
       symbol, name,
       decimals: typeof input.decimals === 'number' ? input.decimals
-                : typeof input.tokenDecimals === 'number' ? input.tokenDecimals : 18,
+              : typeof input.tokenDecimals === 'number' ? input.tokenDecimals : 18,
       logoURI,
     };
   }
@@ -1153,9 +1153,9 @@ function PresetEditor({ open, onClose, presets, onSave }) {
  *   onPresetsChange   -- bubble preset changes for global sync
  *   onStatusChange    -- TradeDrawer hooks this to lock dismissal during tx
  *
- *   NOTE: `coins` prop intentionally REMOVED. Pricing comes from aggregators
- *   only (Jupiter price API for SOL, LiFi tokens index priceUSD for EVM/BTC).
- *   No CoinGecko anywhere in this file.
+ * NOTE: `coins` prop intentionally REMOVED. Pricing comes from aggregators
+ * only (Jupiter price API for SOL, LiFi tokens index priceUSD for EVM/BTC).
+ * No CoinGecko anywhere in this file.
  * ========================================================================= */
 
 export default function SwapWidget({
@@ -1171,14 +1171,14 @@ export default function SwapWidget({
   onPresetsChange,
   onStatusChange,
 }) {
-  /* --- Wallet hooks --- */
+  /* -- Wallet hooks -- */
   const { publicKey: extPublicKey, sendTransaction: extSolSendTx, connected: solConnected } = useWallet();
   const { connection } = useConnection();
   const { address: evmAddress, isConnected: evmConnected, chainId: evmChainId } = useAccount();
   const { data: walletClient } = useWalletClient();
   const { switchChain, switchChainAsync } = useSwitchChain();
   const nexus = useNexusWallet();
-  const { activeWalletKind, privyEmbeddedSol } = nexus;
+  const { activeWalletKind, privyEmbeddedSol, loginPrivy } = nexus;
 
   // Unified Solana publicKey across external + Privy embedded.
   const publicKey = useMemo(() => {
@@ -1237,7 +1237,7 @@ export default function SwapWidget({
     return true;
   }, [switchChain, switchChainAsync]);
 
-  /* --- Header chain (parent-controlled w/ localStorage fallback) --- */
+  /* -- Header chain (parent-controlled w/ localStorage fallback) -- */
   const [headerChainLocal, setHeaderChainLocal] = useState(() =>
     headerChainProp != null ? headerChainProp : loadHeaderChain()
   );
@@ -1247,7 +1247,7 @@ export default function SwapWidget({
     else { setHeaderChainLocal(c); saveHeaderChain(c); }
   }, [onHeaderChainChange]);
 
-  /* --- Token state (initialPair only on mount; effects handle updates) --- */
+  /* -- Token state (initialPair only on mount; effects handle updates) -- */
   const initialPair = useMemo(() => {
     if (defaultFromToken || defaultToToken) {
       return {
@@ -1261,21 +1261,24 @@ export default function SwapWidget({
   const [fromToken, setFromToken] = useState(initialPair.fromToken || POPULAR_TOKENS[0]);
   const [toToken,   setToToken]   = useState(initialPair.toToken   || POPULAR_TOKENS[1]);
 
-  /* --- Amount + slippage --- */
+  /* -- Amount + slippage -- */
   const [fromAmt, setFromAmt] = useState('');
   const [slip, setSlip] = useState(0.5);
 
-  /* --- Quote state --- */
+  /* -- Quote state -- */
   const [quote, setQuote] = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState('');
   const quoteAbortRef = useRef(null);
 
-  /* --- Swap execution state --- */
+  /* -- Swap execution state -- */
   const [swapStatus, setSwapStatus] = useState('idle');
   const [swapTx, setSwapTx] = useState(null);
   const [swapError, setSwapError] = useState('');
   const swapStatusTimerRef = useRef(null);
+  // Pending swap: when disconnected user taps "Swap", we save a flag and
+  // trigger Privy login. After login, useEffect below auto-fires executeSwap.
+  const [pendingSwap, setPendingSwap] = useState(false);
 
   // Stuck-swap escape hatch -- shows a Reset button after 30s of 'loading'.
   const [stuckSwap, setStuckSwap] = useState(false);
@@ -1302,14 +1305,14 @@ export default function SwapWidget({
     if (typeof onStatusChange === 'function') onStatusChange(swapStatus);
   }, [swapStatus, onStatusChange]);
 
-  /* --- Solana balance state --- */
+  /* -- Solana balance state -- */
   const [solBalanceLamports, setSolBalanceLamports] = useState(null);
   const [solSplBalance, setSolSplBalance] = useState(null);
 
-  /* --- Cross-chain destination address --- */
+  /* -- Cross-chain destination address -- */
   const [customDestAddr, setCustomDestAddr] = useState('');
 
-  /* --- Preset state --- */
+  /* -- Preset state -- */
   const [presetsLocal, setPresetsLocal] = useState(() => presetsProp || loadPresets());
   const presets = presetsProp || presetsLocal;
   const setPresets = useCallback((p) => {
@@ -1318,11 +1321,11 @@ export default function SwapWidget({
   }, [onPresetsChange]);
   const [presetEditorOpen, setPresetEditorOpen] = useState(false);
 
-  /* --- Token select modals --- */
+  /* -- Token select modals -- */
   const [fromSelectOpen, setFromSelectOpen] = useState(false);
   const [toSelectOpen,   setToSelectOpen]   = useState(false);
 
-  /* --- Derived --- */
+  /* -- Derived -- */
   const route = useMemo(() => pickRoute(fromToken, toToken), [fromToken, toToken]);
   const isCrossChain = route === 'lifi' && !isLifiSameChain(fromToken, toToken);
   const isEvmFrom = isEvm(fromToken);
@@ -1335,12 +1338,12 @@ export default function SwapWidget({
   //   - Solana: never (Jupiter handles fee + sig in one tx)
   const requiresApproval = isEvmFrom && !isNativeEvmFrom && (route === '0x' || route === 'lifi');
 
-  /* --- Public client for from-token's chain (allowance reads, receipt waits) --- */
+  /* -- Public client for from-token's chain (allowance reads, receipt waits) -- */
   const publicClient = usePublicClient({ chainId: isEvmFrom ? fromToken.chainId : undefined });
   const publicClientRef = useRef(publicClient);
   useEffect(() => { publicClientRef.current = publicClient; }, [publicClient]);
 
-  /* --- EVM balance (wagmi, refetchable on swap success) --- */
+  /* -- EVM balance (wagmi, refetchable on swap success) -- */
   const { data: evmFromBal, refetch: refetchEvmBal } = useBalance({
     address: evmAddress,
     token:   isEvmFrom && !isNativeEvmFrom ? fromToken.address : undefined,
@@ -1348,7 +1351,7 @@ export default function SwapWidget({
     query:   { enabled: !!evmAddress && isEvmFrom },
   });
 
-  /* --- Solana balance fetch (narrowed dep: only re-runs on mint change) --- */
+  /* -- Solana balance fetch (narrowed dep: only re-runs on mint change) -- */
   const fromMint = isSol(fromToken) ? fromToken.mint : null;
   useEffect(() => {
     if (!publicKey || !connection) { setSolBalanceLamports(null); setSolSplBalance(null); return; }
@@ -1385,7 +1388,7 @@ export default function SwapWidget({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapStatus]);
 
-  /* --- Sync header chain when user picks a different-chain to-token --- */
+  /* -- Sync header chain when user picks a different-chain to-token -- */
   useEffect(() => {
     if (!toToken) return;
     const tokenChain = chainOfToken(toToken);
@@ -1393,7 +1396,7 @@ export default function SwapWidget({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [toToken]);
 
-  /* --- Sync default tokens on mode/header change (only when no override) --- */
+  /* -- Sync default tokens on mode/header change (only when no override) -- */
   useEffect(() => {
     if (defaultFromToken || defaultToToken) return;
     const pair = defaultTokenPair({ mode: modeProp, viewedToken: null, headerChain, lastFromToken: fromToken });
@@ -1403,7 +1406,7 @@ export default function SwapWidget({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [modeProp, headerChain]);
 
-  /* --- Sync to parent-supplied defaults when they change AFTER mount --- */
+  /* -- Sync to parent-supplied defaults when they change AFTER mount -- */
   useEffect(() => {
     if (defaultFromToken) {
       const next = normalizeToken(defaultFromToken);
@@ -1423,7 +1426,7 @@ export default function SwapWidget({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultToToken]);
 
-  /* --- USD prices via aggregators (no CG). Updated on token change. --- */
+  /* -- USD prices via aggregators (no CG). Updated on token change. -- */
   const [fromPriceUsd, setFromPriceUsd] = useState(null);
   const [toPriceUsd, setToPriceUsd] = useState(null);
   useEffect(() => {
@@ -1443,7 +1446,7 @@ export default function SwapWidget({
     return () => { cancelled = true; };
   }, [toToken]);
 
-  /* --- Quote engine (debounced + abortable) --- */
+  /* -- Quote engine (debounced + abortable) -- */
   const fetchQuote = useCallback(async () => {
     setQuote(null); setQuoteError('');
     if (!fromAmt || parseFloat(fromAmt) <= 0 || !fromToken || !toToken) return;
@@ -1528,7 +1531,7 @@ export default function SwapWidget({
     return () => clearTimeout(t);
   }, [fetchQuote]);
 
-  /* --- Display balance --- */
+  /* -- Display balance -- */
   const fromBalanceDisplay = useMemo(() => {
     if (isSol(fromToken)) {
       if (fromToken.mint === WSOL_MINT) {
@@ -1540,7 +1543,7 @@ export default function SwapWidget({
     return null;
   }, [fromToken, solBalanceLamports, solSplBalance, evmFromBal]);
 
-  /* --- MAX (no fee subtraction -- aggregators take fee from output side) --- */
+  /* -- MAX (no fee subtraction -- aggregators take fee from output side) -- */
   const onMax = useCallback(() => {
     if (fromBalanceDisplay == null || fromBalanceDisplay <= 0) return;
     if (isSol(fromToken) && fromToken.mint === WSOL_MINT) {
@@ -1556,7 +1559,7 @@ export default function SwapWidget({
     setFromAmt(max > 0 ? max.toFixed(fromToken.decimals <= 2 ? 2 : 6) : '0');
   }, [fromBalanceDisplay, fromToken, solBalanceLamports, isNativeEvmFrom]);
 
-  /* --- Quick-buy preset: "spend $X of native" -- aggregator price only --- */
+  /* -- Quick-buy preset: "spend $X of native" -- aggregator price only -- */
   const applyBuyPreset = useCallback((dollars) => {
     if (!fromToken) return;
     if (fromPriceUsd && fromPriceUsd > 0) {
@@ -1571,7 +1574,7 @@ export default function SwapWidget({
     // Otherwise: silently no-op until price loads. Quote will refresh.
   }, [fromToken, fromPriceUsd]);
 
-  /* --- Quick-sell preset: "Sell X% of balance" --- */
+  /* -- Quick-sell preset: "Sell X% of balance" -- */
   const applySellPreset = useCallback((pct) => {
     if (fromBalanceDisplay == null || fromBalanceDisplay <= 0) return;
     const isNative = isSol(fromToken) ? fromToken.mint === WSOL_MINT : isNativeEvmFrom;
@@ -1615,7 +1618,12 @@ export default function SwapWidget({
    *   cross-chain via integrator config.
    * ========================================================================= */
   const executeSwap = useCallback(async () => {
-    if (!walletConnected) { if (onConnectWallet) onConnectWallet(); return; }
+    if (!walletConnected) {
+      setPendingSwap(true);
+      if (loginPrivy) loginPrivy();
+      else if (onConnectWallet) onConnectWallet();
+      return;
+    }
     if (!quote) return;
 
     if (swapStatusTimerRef.current) {
@@ -1802,10 +1810,22 @@ export default function SwapWidget({
   }, [
     walletConnected, onConnectWallet, quote, route, fromAmt, fromToken, toToken,
     slip, publicKey, connection, sendTransaction, evmAddress, evmChainId,
-    ensureChain, customDestAddr,
+    ensureChain, customDestAddr, loginPrivy,
   ]);
 
-  /* --- Tx explorer link --- */
+  // Auto-resume pending swap after Privy login completes.
+  // 200ms delay lets activeWalletKind + privyEmbeddedSol propagate.
+  useEffect(() => {
+    if (!walletConnected || !pendingSwap) return undefined;
+    const t = setTimeout(() => {
+      setPendingSwap(false);
+      executeSwap();
+    }, 200);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [walletConnected, pendingSwap]);
+
+  /* -- Tx explorer link -- */
   const txLink = useMemo(() => {
     if (!swapTx) return null;
     if (route === 'jupiter') return 'https://solscan.io/tx/' + swapTx;
@@ -2061,11 +2081,15 @@ export default function SwapWidget({
 
           if (!walletConnected) {
             return (
-              <button onClick={onConnectWallet} style={{
+              <button onClick={() => {
+                setPendingSwap(true);
+                if (loginPrivy) loginPrivy();
+                else if (onConnectWallet) onConnectWallet();
+              }} style={{
                 width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
                 background: 'linear-gradient(135deg,#9945ff,#7c3aed)', color: '#fff',
                 fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52,
-              }}>Connect Wallet</button>
+              }}>Sign in to Swap</button>
             );
           }
           if (!hasNeededWallet) {
@@ -2271,4 +2295,3 @@ export function TradeDrawer({
     </>
   );
 }
-
