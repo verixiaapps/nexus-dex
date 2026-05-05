@@ -14,16 +14,16 @@ import TokenLaunch from './components/TokenLaunch.js';
 /* ============================================================================
  * App.js -- locked plan applied:
  *
- *   Wallet modal = FOUR options:
- *     1. Phantom        -- Solana, wallet-adapter
- *     2. Solflare       -- Solana, wallet-adapter
- *     3. WalletConnect  -- everything EVM (600+ wallets)
- *     4. Email / Social -- Privy embedded wallet (auto-creates Solana + EVM
- *                          wallets for email/Google/Apple/Twitter/Discord/
- *                          passkey users). Non-custodial. No seed phrase.
+ * Wallet modal = FOUR options:
+ *    1. Phantom        -- Solana, wallet-adapter
+ *    2. Solflare       -- Solana, wallet-adapter
+ *    3. WalletConnect  -- everything EVM (600+ wallets)
+ *    4. Email / Social -- Privy embedded wallet (auto-creates Solana + EVM
+ *                         wallets for email/Google/Apple/Twitter/Discord/
+ *                         passkey users). Non-custodial. No seed phrase.
  *
- *   All transactions stay on-site. The only off-site step is the wallet's
- *   own approval prompt (or for Privy embedded, an in-page prompt).
+ * All transactions stay on-site. The only off-site step is the wallet's
+ * own approval prompt (or for Privy embedded, an in-page prompt).
  * ========================================================================= */
 
 const C = {
@@ -435,7 +435,40 @@ function WalletModal({ open, onClose }) {
     null
   );
 
-  const options = [
+  // Mobile detection -- WalletConnect is hidden on mobile (its redirect-back
+  // behavior is unreliable on iOS Safari + Android Chrome). Phantom and
+  // Solflare use their own native deep links and stay available on mobile.
+  const [isMobile, setIsMobile] = useState(function () {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
+    return window.matchMedia('(max-width: 767px)').matches;
+  });
+  useEffect(function () {
+    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
+    var mq = window.matchMedia('(max-width: 767px)');
+    var listener = function (e) { setIsMobile(e.matches); };
+    if (mq.addEventListener) mq.addEventListener('change', listener);
+    else if (mq.addListener) mq.addListener(listener);
+    return function () {
+      if (mq.removeEventListener) mq.removeEventListener('change', listener);
+      else if (mq.removeListener) mq.removeListener(listener);
+    };
+  }, []);
+
+  // Privy is the primary path -- big CTA at top.
+  const primaryOption = {
+    key: 'privy',
+    name: 'Continue with email',
+    subtitle: 'Email, Google, Apple, passkey -- no seed phrase',
+    color: C.privy,
+    icon: PRIVY_LOGO,
+    ready: privyReady,
+    onClick: handlePrivyLogin,
+  };
+
+  // Secondary options -- "Already have a wallet?" group.
+  // Phantom + Solflare always shown (native deep links work on mobile).
+  // WalletConnect shown on desktop only.
+  const secondaryOptions = [
     {
       key: 'phantom',
       name: 'Phantom',
@@ -454,7 +487,9 @@ function WalletModal({ open, onClose }) {
       ready: !!solflareWallet,
       onClick: function() { handleSolanaConnect(solflareWallet); },
     },
-    {
+  ];
+  if (!isMobile) {
+    secondaryOptions.push({
       key: 'walletconnect',
       name: 'WalletConnect',
       subtitle: 'MetaMask, Trust, Rainbow & 600+ wallets',
@@ -462,17 +497,8 @@ function WalletModal({ open, onClose }) {
       icon: WC_LOGO,
       ready: !!walletConnectConnector,
       onClick: handleWalletConnect,
-    },
-    {
-      key: 'privy',
-      name: 'Continue with email',
-      subtitle: 'Email, Google, Apple, passkey -- no seed phrase',
-      color: C.privy,
-      icon: PRIVY_LOGO,
-      ready: privyReady,
-      onClick: handlePrivyLogin,
-    },
-  ];
+    });
+  }
 
   if (!open) return null;
   return (
@@ -547,7 +573,72 @@ function WalletModal({ open, onClose }) {
                 </div>
               )}
 
-              {options.map(function(opt) {
+              {/* PRIMARY: Privy embedded wallet -- the default path. */}
+              {(function () {
+                var opt = primaryOption;
+                var isPending = isConnecting && pendingWallet === opt.name;
+                var disabled = isConnecting || !opt.ready;
+                return (
+                  <button
+                    key={opt.key}
+                    onClick={opt.onClick}
+                    disabled={disabled}
+                    style={{
+                      display: 'flex', alignItems: 'center', gap: 14,
+                      background: isPending
+                        ? 'linear-gradient(135deg, rgba(150,93,232,.35), rgba(0,229,255,.25))'
+                        : 'linear-gradient(135deg, rgba(150,93,232,.20), rgba(0,229,255,.12))',
+                      border: '1.5px solid ' + (isPending ? C.privy : 'rgba(150,93,232,.5)'),
+                      borderRadius: 16, padding: '18px 20px',
+                      cursor: disabled ? (isConnecting ? 'wait' : 'not-allowed') : 'pointer',
+                      width: '100%',
+                      opacity: (isConnecting && !isPending) || !opt.ready ? 0.55 : 1,
+                      transition: 'background .15s, border-color .15s',
+                      boxShadow: '0 4px 24px rgba(150,93,232,.15)',
+                    }}
+                  >
+                    {opt.icon
+                      ? <img
+                          src={opt.icon}
+                          alt={opt.name}
+                          style={{ width: 44, height: 44, borderRadius: 12, flexShrink: 0, background: '#fff' }}
+                          onError={function(e) { e.target.style.display = 'none'; }}
+                        />
+                      : <div style={{
+                          width: 44, height: 44, borderRadius: 12,
+                          background: opt.color + '33',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontSize: 18, fontWeight: 800, color: opt.color, flexShrink: 0,
+                        }}>{opt.name.charAt(0)}</div>
+                    }
+                    <div style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
+                      <div style={{ color: '#fff', fontWeight: 800, fontSize: 16 }}>{opt.name}</div>
+                      <div style={{ color: opt.color, fontSize: 12, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {isPending ? 'Check your wallet...' : (opt.ready ? opt.subtitle : 'Loading...')}
+                      </div>
+                    </div>
+                    {isPending && (
+                      <div style={{
+                        width: 18, height: 18, borderRadius: '50%',
+                        border: '2px solid ' + C.privy, borderTopColor: 'transparent',
+                        animation: 'wc-spin 0.8s linear infinite', flexShrink: 0,
+                      }} />
+                    )}
+                  </button>
+                );
+              })()}
+
+              {/* DIVIDER: "Already have a wallet?" */}
+              <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '14px 0 4px' }}>
+                <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,.08)' }} />
+                <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase' }}>
+                  Already have a wallet?
+                </div>
+                <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,.08)' }} />
+              </div>
+
+              {/* SECONDARY: external wallets (Phantom + Solflare always; WalletConnect desktop-only). */}
+              {secondaryOptions.map(function(opt) {
                 const isPending = isConnecting && pendingWallet === opt.name;
                 const disabled = isConnecting || !opt.ready;
                 return (
@@ -556,10 +647,10 @@ function WalletModal({ open, onClose }) {
                     onClick={opt.onClick}
                     disabled={disabled}
                     style={{
-                      display: 'flex', alignItems: 'center', gap: 14,
-                      background: isPending ? 'rgba(0,229,255,.12)' : 'rgba(255,255,255,.03)',
-                      border: '1px solid ' + (isPending ? 'rgba(0,229,255,.35)' : 'rgba(255,255,255,.08)'),
-                      borderRadius: 14, padding: '14px 18px',
+                      display: 'flex', alignItems: 'center', gap: 12,
+                      background: isPending ? 'rgba(0,229,255,.12)' : 'rgba(255,255,255,.025)',
+                      border: '1px solid ' + (isPending ? 'rgba(0,229,255,.35)' : 'rgba(255,255,255,.06)'),
+                      borderRadius: 12, padding: '11px 14px',
                       cursor: disabled ? (isConnecting ? 'wait' : 'not-allowed') : 'pointer',
                       width: '100%',
                       opacity: (isConnecting && !isPending) || !opt.ready ? 0.55 : 1,
@@ -570,27 +661,27 @@ function WalletModal({ open, onClose }) {
                       ? <img
                           src={opt.icon}
                           alt={opt.name}
-                          style={{ width: 40, height: 40, borderRadius: 10, flexShrink: 0, background: '#fff' }}
+                          style={{ width: 32, height: 32, borderRadius: 8, flexShrink: 0, background: '#fff' }}
                           onError={function(e) { e.target.style.display = 'none'; }}
                         />
                       : <div style={{
-                          width: 40, height: 40, borderRadius: 10,
+                          width: 32, height: 32, borderRadius: 8,
                           background: opt.color + '22',
                           display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          fontSize: 16, fontWeight: 800, color: opt.color, flexShrink: 0,
+                          fontSize: 14, fontWeight: 800, color: opt.color, flexShrink: 0,
                         }}>{opt.name.charAt(0)}</div>
                     }
                     <div style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
-                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 15 }}>{opt.name}</div>
-                      <div style={{ color: opt.color, fontSize: 12, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{opt.name}</div>
+                      <div style={{ color: C.muted, fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                         {isPending
                           ? 'Check your wallet...'
-                          : (opt.ready ? opt.subtitle : 'Unavailable -- check setup')}
+                          : (opt.ready ? opt.subtitle : 'Unavailable')}
                       </div>
                     </div>
                     {isPending && (
                       <div style={{
-                        width: 18, height: 18, borderRadius: '50%',
+                        width: 16, height: 16, borderRadius: '50%',
                         border: '2px solid #00e5ff', borderTopColor: 'transparent',
                         animation: 'wc-spin 0.8s linear infinite', flexShrink: 0,
                       }} />
@@ -927,3 +1018,4 @@ export default function App() {
     </BrowserRouter>
   );
 }
+
