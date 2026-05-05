@@ -6,7 +6,7 @@ import { useNexusWallet } from '../WalletContext.js';
 import {
   PublicKey, SystemProgram, Transaction, VersionedTransaction,
 } from '@solana/web3.js';
-import {
+import { 
   getAssociatedTokenAddress, createTransferInstruction,
   createAssociatedTokenAccountInstruction,
 } from '@solana/spl-token';
