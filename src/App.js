@@ -10,7 +10,7 @@ import TokenDetail from './components/TokenDetail.js';
 import Send from './components/Send.js';
 import NewLaunches from './components/NewLaunches.js';
 import TokenLaunch from './components/TokenLaunch.js';
-
+ 
 /* ============================================================================
  * App.js -- locked plan applied:
  *
