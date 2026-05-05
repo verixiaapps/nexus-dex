@@ -1,388 +1,339 @@
-function TokenPage({ token, onBack, onConnectWallet, isConnected, solPrice, coins, jupiterTokens, presets, onPresetsChange }) {
-  const [liveData, setLiveData] = useState(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
-  const [drawerMode, setDrawerMode] = useState('buy');
-  const [loading, setLoading] = useState(true);
+import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { useNexusWallet } from '../WalletContext.js';
+import {
+  VersionedTransaction, TransactionMessage, SystemProgram,
+  PublicKey, LAMPORTS_PER_SOL,
+} from '@solana/web3.js';
+import bs58 from 'bs58';
+import { TradeDrawer } from './SwapWidget.jsx';
+import { quickBuyPump, quickSellPump } from '../pumpTrade.js';
+
+const PRESET_KEY = 'nexus_launch_presets';
+const LAST_AMT_KEY = 'nexus_launch_last_amt';
+
+var _rpc = process.env.REACT_APP_SOLANA_RPC || '';
+var _heliusKey = process.env.REACT_APP_HELIUS_API_KEY || '';
+var WS_URL = (function() {
+  if (_rpc && /^https?:\/\//.test(_rpc) && !/api\.mainnet-beta\.solana\.com/.test(_rpc)) {
+    return _rpc.replace(/^https?:\/\//, function(m) { return m === 'https://' ? 'wss://' : 'ws://'; });
+  }
+  if (_heliusKey) return 'wss://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(_heliusKey);
+  return null;
+})();
+
+// LOCKED -- DO NOT MODIFY.
+// Same-chain trades take 5% total platform fee. The full spread is
+// transferred to SOL_FEE_WALLET inside the SAME versioned transaction
+// as the PumpPortal trade (one signature, one tx). The Sniper
+// Protection toggle is a network priority fee only -- it does NOT
+// reduce or split the platform fee.
+var PLATFORM_FEE_RATE = 0.05;
+var SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
+var SOL_FEE_WALLET_PK = new PublicKey(SOL_FEE_WALLET);
+
+var PUMPFUN_PROGRAM = '6EF8rrecthR5Dkzon8Nwu78hRvfCKubJ14M5uBEwF6P';
+var RAYDIUM_AMM_PROGRAM = '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8';
+var TOKEN_PROGRAM = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+var TOKEN_2022 = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+
+const C = {
+  bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
+  border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
+  accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
+  down: '#3b9eff', orange: '#ff9500', purple: '#9945ff',
+  text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
+};
+
+function loadCachedTokens() { try { var v = localStorage.getItem('nexus_launch_cache'); if (!v) return []; var p = JSON.parse(v); if (Date.now() - (p.ts || 0) > 300000) return []; return p.tokens || []; } catch (e) { return []; } }
+function saveCachedTokens(t) { try { localStorage.setItem('nexus_launch_cache', JSON.stringify({ ts: Date.now(), tokens: t.slice(0, 30) })); } catch (e) {} }
+function loadPresets() { try { var v = localStorage.getItem(PRESET_KEY); return v ? JSON.parse(v) : [5, 10, 25, 50, 100]; } catch (e) { return [5, 10, 25, 50, 100]; } }
+function savePresets(arr) { try { localStorage.setItem(PRESET_KEY, JSON.stringify(arr)); } catch (e) {} }
+function loadLastAmt() { try { return parseFloat(localStorage.getItem(LAST_AMT_KEY) || '25') || 25; } catch (e) { return 25; } }
+function saveLastAmt(v) { try { localStorage.setItem(LAST_AMT_KEY, String(v)); } catch (e) {} }
+
+function isValidMint(s) {
+  if (!s || typeof s !== 'string') return false;
+  s = s.trim();
+  if (s.length < 32 || s.length > 44) return false;
+  return /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
+}
+
+function timeAgo(ts) {
+  if (!ts) return '';
+  var diff = Math.floor((Date.now() - ts) / 1000);
+  if (diff < 60) return diff + 's';
+  if (diff < 3600) return Math.floor(diff / 60) + 'm';
+  return Math.floor(diff / 3600) + 'h';
+}
+function fmtMc(n) {
+  if (!n) return '-';
+  if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1000) return '$' + (n / 1000).toFixed(1) + 'K';
+  return '$' + n.toFixed(0);
+}
+function fmtPrice(n) {
+  if (!n || n === 0) return '-';
+  if (n < 0.000001) return '$' + n.toExponential(2);
+  if (n < 0.001) return '$' + n.toFixed(7);
+  if (n < 1) return '$' + n.toFixed(4);
+  return '$' + n.toFixed(2);
+}
+function fmtPct(n) { if (n == null || isNaN(n)) return null; return (n >= 0 ? '+' : '') + n.toFixed(1) + '%'; }
+function pctColor(n) { if (n == null) return C.muted2; return n >= 0 ? C.green : C.down; }
+
+async function fetchGeckoTerminal(mints) {
+  if (!mints || !mints.length) return {};
+  try {
+    var chunks = [];
+    for (var i = 0; i < mints.length; i += 30) chunks.push(mints.slice(i, i + 30));
+    var results = await Promise.all(chunks.map(function(chunk) {
+      return fetch('https://api.geckoterminal.com/api/v2/networks/solana/tokens/multi/' + chunk.join(','))
+        .then(function(r) { return r.ok ? r.json() : { data: [] }; })
+        .catch(function() { return { data: [] }; });
+    }));
+    var out = {};
+    results.forEach(function(res) {
+      if (!res.data) return;
+      res.data.forEach(function(item) {
+        var attrs = item.attributes;
+        if (!attrs || !attrs.address) return;
+        var price = parseFloat(attrs.price_usd || 0);
+        var pChange = attrs.price_change_percentage || {};
+        out[attrs.address] = {
+          price: price, marketCap: parseFloat(attrs.fdv_usd || attrs.market_cap_usd || 0),
+          pct5m: pChange.m5 ? parseFloat(pChange.m5) : null,
+          pct1h: pChange.h1 ? parseFloat(pChange.h1) : null,
+          pct24h: pChange.h24 ? parseFloat(pChange.h24) : null,
+          volume24h: parseFloat((attrs.volume_usd && attrs.volume_usd.h24) || 0),
+          buys24h: attrs.transactions && attrs.transactions.h24 ? attrs.transactions.h24.buys || 0 : 0,
+          image: attrs.image_url || null, name: attrs.name || null, symbol: attrs.symbol || null,
+          graduated: true, priceHistory: price > 0 ? [price] : [],
+        };
+      });
+    });
+    return out;
+  } catch (e) { return {}; }
+}
+
+async function extractMintFromTx(connection, signature) {
+  try {
+    var tx = await connection.getTransaction(signature, {
+      maxSupportedTransactionVersion: 0,
+      commitment: 'confirmed',
+    });
+    if (!tx || !tx.transaction || !tx.transaction.message) return null;
+
+    var msg = tx.transaction.message;
+    var keys = msg.staticAccountKeys
+      ? msg.staticAccountKeys.map(function(k) { return k.toBase58 ? k.toBase58() : String(k); })
+      : (msg.accountKeys || []).map(function(k) { return k.toBase58 ? k.toBase58() : String(k); });
+
+    if (tx.meta && tx.meta.loadedAddresses) {
+      var w = tx.meta.loadedAddresses.writable || [];
+      var r = tx.meta.loadedAddresses.readonly || [];
+      keys = keys.concat(w.map(function(k) { return k.toBase58 ? k.toBase58() : String(k); }))
+                 .concat(r.map(function(k) { return k.toBase58 ? k.toBase58() : String(k); }));
+    }
+
+    var instructions = msg.compiledInstructions || msg.instructions || [];
+
+    function checkInstruction(ix) {
+      var pid = keys[ix.programIdIndex];
+      if (pid !== TOKEN_PROGRAM && pid !== TOKEN_2022) return null;
+      var data = ix.data;
+      var firstByte = null;
+      if (typeof data === 'string') {
+        try { firstByte = bs58.decode(data)[0]; }
+        catch (e) {
+          try { firstByte = Uint8Array.from(atob(data), function(c) { return c.charCodeAt(0); })[0]; } catch (e2) {}
+        }
+      } else if (data && data.length) {
+        firstByte = data[0];
+      }
+      if (firstByte === 0 || firstByte === 20) {
+        var accountIndices = ix.accountKeyIndexes || ix.accounts || [];
+        if (accountIndices.length > 0) {
+          var mintKey = keys[accountIndices[0]];
+          return isValidMint(mintKey) ? mintKey : null;
+        }
+      }
+      return null;
+    }
+
+    for (var i = 0; i < instructions.length; i++) {
+      var found = checkInstruction(instructions[i]);
+      if (found) return found;
+    }
+
+    if (tx.meta && tx.meta.innerInstructions) {
+      for (var j = 0; j < tx.meta.innerInstructions.length; j++) {
+        var inner = tx.meta.innerInstructions[j];
+        var innerIxs = inner.instructions || [];
+        for (var k = 0; k < innerIxs.length; k++) {
+          var f = checkInstruction(innerIxs[k]);
+          if (f) return f;
+        }
+      }
+    }
+
+    return null;
+  } catch (e) {
+    if (process.env.NODE_ENV !== 'production') console.warn('extractMintFromTx failed:', e && e.message);
+    return null;
+  }
+}
+
+// FEE COLLECTION (locked rule #2: ONE tx, ONE signature).
+// Take the unsigned VersionedTransaction returned by PumpPortal,
+// decompile it, append a SystemProgram.transfer that pays the platform
+// fee from the user's wallet to SOL_FEE_WALLET, recompile to a V0
+// message, and return a fresh VersionedTransaction. The user signs
+// once; the trade and the fee settle atomically. For BUY the fee
+// transfer follows the trade instructions but is sourced from the user
+// directly. For SELL the fee transfer also follows the trade, so the
+// SOL the user just received from PumpPortal can cover it.
+async function injectPlatformFee(connection, tx, fromPubkey, feeLamports) {
+  if (!feeLamports || feeLamports <= 0) return tx;
+
+  var lookupTableAccounts = [];
+  var lookups = (tx.message && tx.message.addressTableLookups) || [];
+  if (lookups.length > 0) {
+    var resolved = await Promise.all(lookups.map(function(lt) {
+      return connection.getAddressLookupTable(lt.accountKey)
+        .then(function(r) { return r && r.value ? r.value : null; })
+        .catch(function() { return null; });
+    }));
+    lookupTableAccounts = resolved.filter(Boolean);
+  }
+
+  var decompiled = TransactionMessage.decompile(tx.message, {
+    addressLookupTableAccounts: lookupTableAccounts,
+  });
+
+  decompiled.instructions.push(SystemProgram.transfer({
+    fromPubkey: fromPubkey,
+    toPubkey: SOL_FEE_WALLET_PK,
+    lamports: feeLamports,
+  }));
+
+  var newMsg = decompiled.compileToV0Message(lookupTableAccounts);
+  return new VersionedTransaction(newMsg);
+}
+
+function Sparkline({ history, up }) {
+  if (!history || history.length < 2) return <div style={{ width: 64, height: 28 }} />;
+  var min = Math.min.apply(null, history), max = Math.max.apply(null, history);
+  var range = max - min || min * 0.01 || 1;
+  var w = 64, h = 28;
+  var pts = history.map(function(v, i) {
+    return ((i / (history.length - 1)) * w).toFixed(1) + ',' + (h - ((v - min) / range) * (h - 4) - 2).toFixed(1);
+  }).join(' ');
+  var color = up == null ? C.muted2 : up ? C.green : C.down;
+  return <svg width={w} height={h} style={{ overflow: 'hidden', flexShrink: 0 }}><polyline points={pts} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" /></svg>;
+}
+
+function PresetEditor({ open, onClose, presets, onSave }) {
+  const [vals, setVals] = useState(presets.map(String));
+  useEffect(function() { if (open) setVals(presets.map(String)); }, [open, presets]);
 
   useEffect(function() {
-    if (!token || !isValidMint(token.mint)) return;
-    setLoading(true);
-    fetchGeckoTerminal([token.mint]).then(function(d) { if (d[token.mint]) setLiveData(d[token.mint]); setLoading(false); });
-    var interval = setInterval(function() { fetchGeckoTerminal([token.mint]).then(function(d) { if (d[token.mint]) setLiveData(d[token.mint]); }); }, 10000);
-    return function() { clearInterval(interval); };
-  }, [token]);
+    if (!open) return undefined;
+    if (typeof document === 'undefined') return undefined;
+    var prevOverflow = document.body.style.overflow;
+    var prevTouch = document.body.style.touchAction;
+    document.body.style.overflow = 'hidden';
+    document.body.style.touchAction = 'none';
+    function onKey(e) { if (e.key === 'Escape' || e.keyCode === 27) onClose(); }
+    window.addEventListener('keydown', onKey);
+    return function() {
+      document.body.style.overflow = prevOverflow || '';
+      document.body.style.touchAction = prevTouch || '';
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open, onClose]);
 
-  if (!token) return null;
-  var price = (liveData && liveData.price) || token.price || 0;
-  var marketCap = (liveData && liveData.marketCap) || token.marketCap || 0;
-  var pct5m = liveData ? liveData.pct5m : token.pct5m;
-  var pct1h = liveData ? liveData.pct1h : token.pct1h;
-  var pct24h = liveData ? liveData.pct24h : token.pct24h;
-  var volume = (liveData && liveData.volume24h) || token.volume24h || 0;
-  var buys = (liveData && liveData.buys24h) || 0;
-  var isGrad = (liveData && liveData.graduated) || token.graduated || (token.bondingProgress || 0) >= 100;
-  var progress = token.bondingProgress || 0;
-  var history = token.priceHistory || [];
-  var sparkUp = pct1h != null ? pct1h >= 0 : null;
-
-  var fullToken = Object.assign(
-    {},
-    token,
-    liveData || {},
-    { graduated: isGrad, price: price, mint: token.mint, decimals: token.decimals || 6 }
-  );
-
+  if (!open) return null;
   return (
-    <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
-      <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600, padding: 0 }}>
-        &lt;- Back to Launches
-      </button>
-
-      <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {token.image ? <img src={token.image} alt={token.symbol} style={{ width: 52, height: 52, borderRadius: 12, objectFit: 'cover' }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 52, height: 52, borderRadius: 12, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, color: C.purple }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>}
-            <div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4, flexWrap: 'wrap' }}>
-                <span style={{ color: '#fff', fontWeight: 800, fontSize: 20 }}>{token.symbol}</span>
-                {isGrad ? <span style={{ background: 'rgba(0,255,163,.12)', color: C.green, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 5 }}>GRADUATED</span> : <span style={{ background: 'rgba(153,69,255,.12)', color: C.purple, fontSize: 10, fontWeight: 700, padding: '2px 8px', borderRadius: 5 }}>PUMP.FUN</span>}
-              </div>
-              <div style={{ color: C.muted, fontSize: 12 }}>{token.name}</div>
-            </div>
-          </div>
-          <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 24, fontWeight: 700, color: '#fff' }}>{loading && !price ? '...' : fmtPrice(price)}</div>
-            {pct1h != null && <div style={{ fontSize: 13, fontWeight: 700, color: pctColor(pct1h), marginTop: 3 }}>{fmtPct(pct1h)} 1h</div>}
-          </div>
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 499, background: 'rgba(0,0,0,.8)' }} />
+      <div style={{ position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)', zIndex: 500, background: C.card, border: '1px solid ' + C.borderHi, borderRadius: 18, padding: 24, width: '90vw', maxWidth: 360, boxShadow: '0 24px 80px rgba(0,0,0,.95)' }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <div style={{ color: '#fff', fontWeight: 800, fontSize: 16 }}>Edit Quick Buy Presets</div>
+          <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 24, padding: 0, lineHeight: 1 }}>x</button>
         </div>
-
-        {history.length >= 2 && (
-          <div style={{ marginBottom: 14, background: C.card2, borderRadius: 12, padding: '10px 14px' }}>
-            <div style={{ fontSize: 10, color: C.muted, marginBottom: 6, fontWeight: 700, letterSpacing: 1 }}>PRICE CHART (live)</div>
-            <svg width="100%" height="56" viewBox="0 0 400 56" preserveAspectRatio="none" style={{ display: 'block' }}>
-              {(function() {
-                var min = Math.min.apply(null, history), max = Math.max.apply(null, history);
-                var range = max - min || min * 0.01 || 1;
-                var pts = history.map(function(v, i) { var x = (i / (history.length - 1)) * 400; var y = 52 - ((v - min) / range) * 46; return x.toFixed(1) + ',' + y.toFixed(1); }).join(' ');
-                var col = sparkUp == null ? C.accent : sparkUp ? C.green : C.down;
-                return <g><polyline points={pts + ' 400,56 0,56'} fill={col + '22'} stroke="none" /><polyline points={pts} fill="none" stroke={col} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></g>;
-              })()}
-            </svg>
-          </div>
-        )}
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginBottom: 14 }}>
-          {[['5m', pct5m], ['1h', pct1h], ['24h', pct24h]].map(function(item) {
-            var val = item[1];
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 20 }}>
+          {vals.map(function(v, i) {
             return (
-              <div key={item[0]} style={{ background: C.card2, borderRadius: 10, padding: 12, textAlign: 'center' }}>
-                <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>{item[0]}</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: pctColor(val) }}>{val == null ? (loading ? '...' : '--') : fmtPct(val)}</div>
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ color: C.muted, fontSize: 12, width: 56, flexShrink: 0 }}>Slot {i + 1}</span>
+                <div style={{ flex: 1, background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  <span style={{ color: C.muted }}>$</span>
+                  <input value={v} onChange={function(e) { var nv = e.target.value.replace(/[^0-9.]/g, ''); setVals(function(p) { var n = p.slice(); n[i] = nv; return n; }); }} style={{ flex: 1, background: 'transparent', border: 'none', color: '#fff', fontSize: 16, fontWeight: 700, outline: 'none', width: '100%' }} />
+                </div>
               </div>
             );
           })}
         </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8, marginBottom: 14 }}>
-          {[['Market Cap', fmtMc(marketCap)], ['Volume 24h', fmtMc(volume)], ['Buys 24h', buys > 0 ? buys.toLocaleString() : '--'], ['Age', timeAgo(token.createdAt) + ' ago']].map(function(item) {
-            return (
-              <div key={item[0]} style={{ background: C.card2, borderRadius: 10, padding: 12 }}>
-                <div style={{ fontSize: 10, color: C.muted, marginBottom: 3, fontWeight: 700, letterSpacing: 1 }}>{item[0]}</div>
-                <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{item[1]}</div>
-              </div>
-            );
-          })}
-        </div>
-
-        {!isGrad && progress > 0 && (
-          <div style={{ marginBottom: 14 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5 }}>
-              <span style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>BONDING CURVE</span>
-              <span style={{ fontSize: 11, color: progress > 75 ? C.orange : C.muted, fontWeight: 700 }}>{progress.toFixed(1)}%</span>
-            </div>
-            <div style={{ height: 8, background: C.card3, borderRadius: 4, overflow: 'hidden' }}>
-              <div style={{ height: '100%', borderRadius: 4, width: Math.min(progress, 100) + '%', background: progress > 80 ? 'linear-gradient(90deg,#ff9500,#ff3b6b)' : 'linear-gradient(90deg,#00e5ff,#9945ff)' }} />
-            </div>
-            {progress >= 80 && <div style={{ marginTop: 5, fontSize: 10, color: C.orange }}>Almost to Raydium &mdash; {(100 - progress).toFixed(1)}% left</div>}
-          </div>
-        )}
-
-        <div style={{ background: C.card3, borderRadius: 10, padding: '8px 12px' }}>
-          <div style={{ fontSize: 9, color: C.muted, marginBottom: 3, fontWeight: 700, letterSpacing: 1 }}>CONTRACT</div>
-          <div style={{ fontSize: 11, color: C.accent, fontFamily: 'monospace', wordBreak: 'break-all' }}>{token.mint}</div>
+        <div style={{ display: 'flex', gap: 10 }}>
+          <button onClick={onClose} style={{ flex: 1, padding: 12, borderRadius: 10, background: C.card2, border: '1px solid ' + C.border, color: C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600, cursor: 'pointer', fontSize: 13 }}>Cancel</button>
+          <button onClick={function() { var parsed = vals.map(function(v) { return parseFloat(v) || 0; }).filter(function(v) { return v > 0; }); while (parsed.length < 5) parsed.push(25); onSave(parsed.slice(0, 5)); onClose(); }} style={{ flex: 2, padding: 12, borderRadius: 10, background: 'linear-gradient(135deg,#00e5ff,#0055ff)', border: 'none', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, cursor: 'pointer', fontSize: 13 }}>Save Presets</button>
         </div>
       </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 14 }}>
-        <button onClick={function() { setDrawerMode('buy'); setDrawerOpen(true); }} style={{ padding: '18px 10px', borderRadius: 16, border: 'none', cursor: 'pointer', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}>Buy {token.symbol}</button>
-        <button onClick={function() { setDrawerMode('sell'); setDrawerOpen(true); }} style={{ padding: '18px 10px', borderRadius: 16, cursor: 'pointer', background: 'rgba(255,59,107,.1)', border: '1.5px solid rgba(255,59,107,.4)', color: C.red, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}>Sell {token.symbol}</button>
-      </div>
-
-      <LaunchTradeDrawer
-        open={drawerOpen} onClose={function() { setDrawerOpen(false); }}
-        mode={drawerMode} token={fullToken} solPrice={solPrice}
-        onConnectWallet={onConnectWallet} isConnected={isConnected}
-        coins={coins} jupiterTokens={jupiterTokens}
-        presets={presets} onPresetsChange={onPresetsChange}
-      />
-    </div>
+    </>
   );
 }
 
-function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, isNew, solPrice }) {
-  const { publicKey: extPublicKey, sendTransaction: extSolSendTx, connected: solConnected } = useWallet();
-  const { connection } = useConnection();
-  const { activeWalletKind, privyEmbeddedSol, isConnected: nexusConnected } = useNexusWallet();
+function buildSolanaCoin(token) {
+  if (!token || !isValidMint(token.mint)) return null;
+  var mint = String(token.mint).trim();
+  return {
+    id: mint, mint: mint, address: mint,
+    symbol: token.symbol || mint.slice(0, 4).toUpperCase(),
+    name: token.name || 'Unknown Token',
+    image: token.image || null,
+    decimals: typeof token.decimals === 'number' ? token.decimals : 6,
+    chain: 'solana', isSolanaToken: true,
+    current_price: token.price || 0,
+  };
+}
 
-  const [flash, setFlash] = useState(false);
-  const [cardStatus, setCardStatus] = useState('idle');  // idle | loading | success | error
-  const [cardStatusMsg, setCardStatusMsg] = useState('');
-  const [pendingPreset, setPendingPreset] = useState(null);
-  const [userTokenBalance, setUserTokenBalance] = useState(0);
-  const [userTokenDecimals, setUserTokenDecimals] = useState(null);
-  const [refreshTick, setRefreshTick] = useState(0);
-
-  useEffect(function() {
-    if (isNew) { setFlash(true); var t = setTimeout(function() { setFlash(false); }, 5000); return function() { clearTimeout(t); }; }
-  }, [isNew]);
-
-  // Fetch user's balance of THIS token (for sell %s).
-  // Only fires when solana wallet (external or Privy) is connected.
-  useEffect(function () {
-    var unifiedPk = extPublicKey
-      || (privyEmbeddedSol && privyEmbeddedSol.address ? (function () { try { return new PublicKey(privyEmbeddedSol.address); } catch (e) { return null; } })() : null);
-    if (!unifiedPk || !connection || !token || !token.mint || !isValidMint(token.mint)) {
-      setUserTokenBalance(0); setUserTokenDecimals(null); return undefined;
+function LaunchTradeDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isConnected, coins, jupiterTokens, presets, onPresetsChange, presetUsd }) {
+  if (open && (!token || !isValidMint(token.mint))) {
+    if (process.env.NODE_ENV !== 'production') {
+      console.warn('[NewLaunches] drawer suppressed -- invalid mint on token:', token);
     }
-    var cancelled = false;
-    (async function () {
-      try {
-        var mintPk = new PublicKey(token.mint);
-        var resp = await connection.getParsedTokenAccountsByOwner(unifiedPk, { mint: mintPk });
-        if (cancelled) return;
-        var total = 0; var dec = null;
-        if (resp && resp.value) {
-          resp.value.forEach(function (acc) {
-            try {
-              var info = acc.account.data.parsed.info;
-              var ta = info && info.tokenAmount;
-              if (ta) {
-                if (dec == null && Number.isFinite(ta.decimals)) dec = ta.decimals;
-                var ui = parseFloat(ta.uiAmountString || ta.uiAmount || 0);
-                if (Number.isFinite(ui)) total += ui;
-              }
-            } catch (e) {}
-          });
-        }
-        setUserTokenBalance(total);
-        if (dec != null) setUserTokenDecimals(dec);
-      } catch (e) {
-        if (!cancelled) setUserTokenBalance(0);
-      }
-    })();
-    return function () { cancelled = true; };
-  }, [token, extPublicKey, privyEmbeddedSol, connection, refreshTick]);
-
-  var progress = token.bondingProgress || 0;
-  var isGrad = token.graduated || progress >= 100;
-  var pct = token.pct1h != null ? token.pct1h : token.pct5m != null ? token.pct5m : null;
-  var pctLabel = token.pct1h != null ? '1h' : '5m';
-
-  var isPrivy = activeWalletKind === 'privy' && !!privyEmbeddedSol;
-  var anyConnected = nexusConnected || solConnected;
-
-  // Build the unified Solana publicKey for the helper.
-  var unifiedPublicKey = extPublicKey
-    || (privyEmbeddedSol && privyEmbeddedSol.address
-        ? (function () { try { return new PublicKey(privyEmbeddedSol.address); } catch (e) { return null; } })()
-        : null);
-
-  function safeBuy(e) { e.stopPropagation(); if (!isValidMint(token.mint)) return; onBuyClick(token); }
-  function safeSell(e) { e.stopPropagation(); if (!isValidMint(token.mint)) return; onSellClick(token); }
-  function safeCardClick() { if (!isValidMint(token.mint)) return; onCardClick(token); }
-
-  // Direct one-click BUY for Privy users. External users fall through to drawer.
-  async function handleQuickBuy(e, usd) {
-    e.stopPropagation();
-    if (!isValidMint(token.mint)) return;
-    if (!anyConnected) { (onQuickBuy || onBuyClick)(token, usd); return; }
-    if (!isPrivy) { (onQuickBuy || onBuyClick)(token, usd); return; }
-    if (!solPrice || solPrice <= 0) {
-      setCardStatus('error'); setCardStatusMsg('No SOL price');
-      setTimeout(function () { setCardStatus('idle'); setCardStatusMsg(''); }, 2500);
-      return;
-    }
-    if (!unifiedPublicKey) { (onQuickBuy || onBuyClick)(token, usd); return; }
-
-    setPendingPreset('buy:' + usd);
-    setCardStatus('loading'); setCardStatusMsg('Signing...');
-    try {
-      var result = await quickBuyPump({
-        mint: token.mint,
-        usdAmount: usd,
-        solPriceUsd: solPrice,
-        publicKey: unifiedPublicKey,
-        connection,
-        wallet: { kind: 'privy', privyWallet: privyEmbeddedSol, instant: true },
-        onStatus: function (s) { setCardStatusMsg(s); },
-      });
-      setCardStatus('success'); setCardStatusMsg('Bought! ' + result.signature.slice(0, 8) + '...');
-      setRefreshTick(function (t) { return t + 1; });
-      setTimeout(function () { setCardStatus('idle'); setCardStatusMsg(''); setPendingPreset(null); }, 4000);
-    } catch (err) {
-      var raw = (err && err.message) || 'Trade failed';
-      var friendly = /reject|cancel|denied|user/i.test(raw)
-        ? 'Cancelled'
-        : (raw.length > 50 ? raw.slice(0, 50) + '...' : raw);
-      setCardStatus('error'); setCardStatusMsg(friendly);
-      setTimeout(function () { setCardStatus('idle'); setCardStatusMsg(''); setPendingPreset(null); }, 4000);
-    }
+    return null;
   }
 
-  // Direct one-click SELL for Privy. External users fall through to drawer.
-  async function handleQuickSell(e, pctVal) {
-    e.stopPropagation();
-    if (!isValidMint(token.mint)) return;
-    if (!anyConnected) { onSellClick(token); return; }
-    if (!isPrivy) { onSellClick(token); return; }
-    if (!userTokenBalance || userTokenBalance <= 0) {
-      setCardStatus('error'); setCardStatusMsg('No balance');
-      setTimeout(function () { setCardStatus('idle'); setCardStatusMsg(''); }, 2500);
-      return;
-    }
-    if (!unifiedPublicKey) { onSellClick(token); return; }
+  var isGrad = token && token.graduated;
 
-    setPendingPreset('sell:' + pctVal);
-    setCardStatus('loading'); setCardStatusMsg('Signing...');
-    try {
-      var result = await quickSellPump({
-        mint: token.mint,
-        tokenBalance: userTokenBalance,
-        pct: pctVal,
-        tokenPriceUsd: token.price || 0,
-        solPriceUsd: solPrice,
-        publicKey: unifiedPublicKey,
-        connection,
-        wallet: { kind: 'privy', privyWallet: privyEmbeddedSol, instant: true },
-        onStatus: function (s) { setCardStatusMsg(s); },
-      });
-      setCardStatus('success'); setCardStatusMsg('Sold! ' + result.signature.slice(0, 8) + '...');
-      setRefreshTick(function (t) { return t + 1; });
-      setTimeout(function () { setCardStatus('idle'); setCardStatusMsg(''); setPendingPreset(null); }, 4000);
-    } catch (err) {
-      var raw = (err && err.message) || 'Trade failed';
-      var friendly = /reject|cancel|denied|user/i.test(raw)
-        ? 'Cancelled'
-        : (raw.length > 50 ? raw.slice(0, 50) + '...' : raw);
-      setCardStatus('error'); setCardStatusMsg(friendly);
-      setTimeout(function () { setCardStatus('idle'); setCardStatusMsg(''); setPendingPreset(null); }, 4000);
-    }
+  if (isGrad) {
+    var coin = buildSolanaCoin(token);
+    if (!coin) return null;
+    return (
+      <TradeDrawer
+        open={open} onClose={onClose} mode={mode} coin={coin}
+        jupiterTokens={jupiterTokens} coins={coins}
+        onConnectWallet={onConnectWallet} isConnected={isConnected}
+      />
+    );
   }
 
   return (
-    <div style={{ background: flash ? 'rgba(0,255,163,0.04)' : C.card, border: '1px solid ' + (flash ? 'rgba(0,255,163,.2)' : C.border), borderRadius: 14, padding: '12px 14px', marginBottom: 10, transition: 'background 0.8s, border 0.8s', width: '100%', boxSizing: 'border-box' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, cursor: 'pointer', marginBottom: 10 }} onClick={safeCardClick}>
-        <div style={{ position: 'relative', flexShrink: 0 }}>
-          {token.image ? <img src={token.image} alt={token.symbol} style={{ width: 44, height: 44, borderRadius: 10, objectFit: 'cover' }} onError={function(e) { e.target.style.display = 'none'; }} /> : <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(153,69,255,.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, color: C.purple }}>{token.symbol ? token.symbol.charAt(0) : '?'}</div>}
-          {flash && <div style={{ position: 'absolute', top: -3, right: -3, width: 9, height: 9, borderRadius: '50%', background: C.green, boxShadow: '0 0 8px ' + C.green }} />}
-        </div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 3, flexWrap: 'wrap' }}>
-            <span style={{ color: '#fff', fontWeight: 800, fontSize: 14 }}>{token.symbol || '???'}</span>
-            {isGrad ? <span style={{ background: 'rgba(0,255,163,.1)', color: C.green, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4 }}>GRAD</span> : <span style={{ background: 'rgba(153,69,255,.1)', color: C.purple, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4 }}>PUMP</span>}
-            {flash && <span style={{ fontSize: 9, color: C.green, fontWeight: 700 }}>NEW</span>}
-          </div>
-          <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
-            {token.price > 0 && <span style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>{fmtPrice(token.price)}</span>}
-            {token.marketCap > 0 && <span style={{ fontSize: 11, color: C.muted }}>{fmtMc(token.marketCap)}</span>}
-            <span style={{ fontSize: 10, color: C.muted2 }}>{timeAgo(token.createdAt)}</span>
-            {token.buys24h > 0 && <span style={{ fontSize: 10, color: C.orange }}>{token.buys24h} buys</span>}
-          </div>
-          {!isGrad && progress > 0 && (
-            <div style={{ marginTop: 5, height: 3, background: C.card3, borderRadius: 2, overflow: 'hidden' }}>
-              <div style={{ height: '100%', borderRadius: 2, width: Math.min(progress, 100) + '%', background: progress > 80 ? 'linear-gradient(90deg,#ff9500,#ff3b6b)' : 'linear-gradient(90deg,#00e5ff,#9945ff)' }} />
-            </div>
-          )}
-        </div>
-        <div style={{ flexShrink: 0 }}>
-          {pct != null ? (
-            <div style={{ background: pct >= 0 ? 'rgba(0,255,163,.12)' : 'rgba(59,158,255,.12)', border: '1px solid ' + (pct >= 0 ? 'rgba(0,255,163,.25)' : 'rgba(59,158,255,.25)'), borderRadius: 8, padding: '5px 10px', textAlign: 'center' }}>
-              <div style={{ fontSize: 14, fontWeight: 800, color: pctColor(pct) }}>{fmtPct(pct)}</div>
-              <div style={{ fontSize: 9, color: C.muted2, marginTop: 1 }}>{pctLabel}</div>
-            </div>
-          ) : (
-            <div style={{ fontSize: 11, color: C.muted2 }}>-</div>
-          )}
-        </div>
-      </div>
-      <div style={{ display: 'flex', gap: 6 }}>
-        {[25, 50, 100].map(function (usd) {
-          var isPending = pendingPreset === 'buy:' + usd;
-          var disabled = cardStatus === 'loading' && !isPending;
-          return (
-            <button
-              key={'b-' + usd}
-              onClick={function (e) { handleQuickBuy(e, usd); }}
-              disabled={disabled}
-              style={{
-                flex: 1, padding: '10px 4px', borderRadius: 10, border: 'none',
-                cursor: disabled ? 'not-allowed' : 'pointer',
-                background: 'linear-gradient(135deg,#00e5ff,#0055ff)',
-                color: C.bg, fontWeight: 800, fontSize: 13, fontFamily: 'Syne, sans-serif',
-                opacity: disabled ? 0.4 : 1,
-                touchAction: 'manipulation',
-              }}
-            >
-              {isPending ? '...' : '$' + usd}
-            </button>
-          );
-        })}
-        {(function () {
-          var isPending = pendingPreset && pendingPreset.indexOf('sell:') === 0;
-          var disabled = cardStatus === 'loading' && !isPending;
-          // For Privy users with balance, sell defaults to 100%. For external/no-balance, opens drawer.
-          var sellHandler = function (e) {
-            if (isPrivy && userTokenBalance > 0) {
-              handleQuickSell(e, 100);
-            } else {
-              safeSell(e);
-            }
-          };
-          return (
-            <button
-              onClick={sellHandler}
-              disabled={disabled}
-              style={{
-                flex: 1, padding: '10px 4px', borderRadius: 10,
-                cursor: disabled ? 'not-allowed' : 'pointer',
-                background: isPending ? 'linear-gradient(135deg,#ff3b6b,#cc1144)' : 'rgba(255,59,107,.1)',
-                border: '1.5px solid rgba(255,59,107,.35)',
-                color: isPending ? '#fff' : C.red,
-                fontWeight: 800, fontSize: 13, fontFamily: 'Syne, sans-serif',
-                opacity: disabled ? 0.4 : 1,
-                touchAction: 'manipulation',
-              }}
-            >
-              {isPending ? '...' : (isPrivy && userTokenBalance > 0 ? 'Sell MAX' : 'Sell')}
-            </button>
-          );
-        })()}
-      </div>
-      {cardStatus !== 'idle' && cardStatusMsg && (
-        <div style={{
-          marginTop: 6, fontSize: 10, fontWeight: 700, textAlign: 'center',
-          color: cardStatus === 'error' ? C.red : cardStatus === 'success' ? C.green : C.muted,
-        }}>
-          {cardStatusMsg}
-        </div>
-      )}
-    </div>
+    <PumpDrawer
+      open={open} onClose={onClose} mode={mode} token={token}
+      solPrice={solPrice} onConnectWallet={onConnectWallet} isConnected={isConnected}
+      presets={presets} onPresetsChange={onPresetsChange}
+      presetUsd={presetUsd}
+    />
   );
 }
 
 function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isConnected, presets, onPresetsChange, presetUsd }) {
   const { publicKey: extPublicKey, sendTransaction: extSolSendTx, connected: solConnected } = useWallet();
-  const { activeWalletKind, privyEmbeddedSol } = useNexusWallet();
+  const { activeWalletKind, privyEmbeddedSol, loginPrivy } = useNexusWallet();
 
   // Unified Solana publicKey across external + Privy embedded.
   const publicKey = useMemo(function () {
@@ -485,7 +436,11 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, isC
   var buyTradeSolAmount = buyTradeLamports / LAMPORTS_PER_SOL;
 
   var executeTrade = async function() {
-    if (!walletConnected) { if (onConnectWallet) onConnectWallet(); return; }
+    if (!walletConnected) {
+      if (loginPrivy) loginPrivy();
+      else if (onConnectWallet) onConnectWallet();
+      return;
+    }
     if (!publicKey || !token || !isValidMint(token.mint)) {
       setError('Invalid token address'); setStatus('error');
       setTimeout(function() { setStatus('idle'); setError(''); }, 4000);
@@ -804,7 +759,7 @@ function TokenPage({ token, onBack, onConnectWallet, isConnected, solPrice, coin
 function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, isNew, solPrice }) {
   const { publicKey: extPublicKey, sendTransaction: extSolSendTx, connected: solConnected } = useWallet();
   const { connection } = useConnection();
-  const { activeWalletKind, privyEmbeddedSol, isConnected: nexusConnected } = useNexusWallet();
+  const { activeWalletKind, privyEmbeddedSol, isConnected: nexusConnected, loginPrivy } = useNexusWallet();
 
   const [flash, setFlash] = useState(false);
   const [cardStatus, setCardStatus] = useState('idle');  // idle | loading | success | error
@@ -813,6 +768,10 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, is
   const [userTokenBalance, setUserTokenBalance] = useState(0);
   const [userTokenDecimals, setUserTokenDecimals] = useState(null);
   const [refreshTick, setRefreshTick] = useState(0);
+  // Pending action queue: when disconnected user taps Buy/Sell, save intent
+  // and trigger Privy login. After login completes, useEffect auto-resumes
+  // the action -- no need to tap again.
+  const [pendingIntent, setPendingIntent] = useState(null);
 
   useEffect(function() {
     if (isNew) { setFlash(true); var t = setTimeout(function() { setFlash(false); }, 5000); return function() { clearTimeout(t); }; }
@@ -855,6 +814,20 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, is
     return function () { cancelled = true; };
   }, [token, extPublicKey, privyEmbeddedSol, connection, refreshTick]);
 
+  // Auto-resume pending intent after Privy login completes.
+  // 200ms delay lets activeWalletKind + privyEmbeddedSol propagate.
+  useEffect(function () {
+    if (!nexusConnected || !pendingIntent) return undefined;
+    var intent = pendingIntent;
+    var t = setTimeout(function () {
+      setPendingIntent(null);
+      if (intent.kind === 'buy')  handleQuickBuy({ stopPropagation: function(){} }, intent.usd);
+      else if (intent.kind === 'sell') handleQuickSell({ stopPropagation: function(){} }, intent.pct);
+    }, 200);
+    return function () { clearTimeout(t); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [nexusConnected, pendingIntent]);
+
   var progress = token.bondingProgress || 0;
   var isGrad = token.graduated || progress >= 100;
   var pct = token.pct1h != null ? token.pct1h : token.pct5m != null ? token.pct5m : null;
@@ -877,7 +850,13 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, is
   async function handleQuickBuy(e, usd) {
     e.stopPropagation();
     if (!isValidMint(token.mint)) return;
-    if (!anyConnected) { (onQuickBuy || onBuyClick)(token, usd); return; }
+    // Connect-first: trigger Privy directly (skip full wallet modal).
+    if (!anyConnected) {
+      setPendingIntent({ kind: 'buy', usd: usd });
+      if (loginPrivy) loginPrivy();
+      else (onQuickBuy || onBuyClick)(token, usd);
+      return;
+    }
     if (!isPrivy) { (onQuickBuy || onBuyClick)(token, usd); return; }
     if (!solPrice || solPrice <= 0) {
       setCardStatus('error'); setCardStatusMsg('No SOL price');
@@ -915,7 +894,12 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, is
   async function handleQuickSell(e, pctVal) {
     e.stopPropagation();
     if (!isValidMint(token.mint)) return;
-    if (!anyConnected) { onSellClick(token); return; }
+    if (!anyConnected) {
+      setPendingIntent({ kind: 'sell', pct: pctVal });
+      if (loginPrivy) loginPrivy();
+      else onSellClick(token);
+      return;
+    }
     if (!isPrivy) { onSellClick(token); return; }
     if (!userTokenBalance || userTokenBalance <= 0) {
       setCardStatus('error'); setCardStatusMsg('No balance');
@@ -1351,3 +1335,4 @@ export default function NewLaunches({ coins, jupiterTokens, onConnectWallet, isC
     </div>
   );
 }
+
