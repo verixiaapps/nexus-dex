@@ -1,6 +1,6 @@
 /**
  * NEXUS DEX -- Wallet Context
- *
+ * 
  * Single source of truth for:
  *   1. Wallet connection state (Solana + EVM, simultaneously possible)
  *   2. Active chain context (which wallet is "primary" for the current task)
