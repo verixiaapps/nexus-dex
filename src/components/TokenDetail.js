@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { TradeDrawer } from './SwapWidget.jsx';
 import { useNexusWallet } from '../WalletContext.js';
-
+ 
 /* ============================================================================
  * TokenDetail
  *
