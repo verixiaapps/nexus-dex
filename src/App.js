@@ -10,17 +10,21 @@ import TokenDetail from './components/TokenDetail.js';
 import Send from './components/Send.js';
 import NewLaunches from './components/NewLaunches.js';
 import TokenLaunch from './components/TokenLaunch.js';
- 
+
 /* ============================================================================
- * App.js -- locked plan applied:
+ * App.js - locked plan applied:
  *
- * Wallet modal = FOUR options:
- *    1. Phantom        -- Solana, wallet-adapter
- *    2. Solflare       -- Solana, wallet-adapter
- *    3. WalletConnect  -- everything EVM (600+ wallets)
- *    4. Email / Social -- Privy embedded wallet (auto-creates Solana + EVM
- *                         wallets for email/Google/Apple/Twitter/Discord/
- *                         passkey users). Non-custodial. No seed phrase.
+ * Wallet modal is policy-driven. WalletContext.walletPolicy.allowed is the
+ * single source of truth for which options render.
+ *
+ *   Desktop:                  Privy + Phantom + Solflare + WalletConnect
+ *   Mobile in Phantom app:    Phantom only
+ *   Mobile in Solflare app:   Solflare only
+ *   Mobile in any EVM app:    Injected (browser wallet) only
+ *   Mobile plain Safari/etc.: Privy ONLY
+ *
+ * The mobile-browser-only-Privy choice is what stops the redirect-back-to-
+ * Phantom loop that was eating user sessions on iOS Safari.
  *
  * All transactions stay on-site. The only off-site step is the wallet's
  * own approval prompt (or for Privy embedded, an in-page prompt).
@@ -48,76 +52,16 @@ const SOLANA_MINTS = [
 const CG_IDS = 'bitcoin,ethereum,binancecoin,ripple,cardano,dogecoin,solana,avalanche-2,chainlink,uniswap,matic-network,toncoin,shiba-inu,litecoin,polkadot,cosmos,near';
 
 const MARKET_CACHE_KEY = 'nexus_market_cache_v2';
+const MARKET_POLL_MS   = 30_000;
 
-/* GLOBAL_STYLES -- mobile-stable sizing baseline.
- *
- * Fixes the "page resizes weirdly" symptoms:
- *   1. iOS Safari URL bar showing/hiding -> use 100dvh (dynamic viewport
- *      height) instead of 100vh. dvh re-measures as the bar moves so the
- *      app doesn't visually jump.
- *   2. iPhone notch / home indicator -> safe-area-inset padding on root +
- *      mobile nav so content doesn't get covered.
- *   3. iOS pull-to-refresh and rubber-band scrolling -> overscroll-behavior:
- *      none on the body, contain on internal scroll containers.
- *   4. iOS input auto-zoom (any input < 16px font-size triggers a 1.05x
- *      zoom on focus that doesn't reset cleanly) -> 16px floor on inputs.
- *   5. iOS double-tap zoom -> touch-action:manipulation on buttons/links.
- *   6. Tap highlight flash on iOS -> -webkit-tap-highlight-color transparent.
- *   7. 100% width inputs that overflow because of default user-agent
- *      padding -> explicit box-sizing already set; reinforce here.
- *   8. Sub-pixel scrollbar jitter on Windows -> stable scrollbar gutter.
- *
- * Internal component scroll (token lists, modals, drawers) is REQUIRED --
- * we just contain it so it never propagates to the body.
- */
-const GLOBAL_STYLES = `
-  html,body{
-    margin:0;padding:0;width:100%;
-    min-height:100vh;
-    min-height:100dvh;
-    overflow-x:hidden;
-    overscroll-behavior:none;
-    -webkit-text-size-adjust:100%;
-    text-size-adjust:100%;
-  }
-  body{
-    -webkit-font-smoothing:antialiased;
-    -moz-osx-font-smoothing:grayscale;
-  }
-  #root{
-    min-height:100vh;
-    min-height:100dvh;
-    display:flex;
-    flex-direction:column;
-  }
-  *,*::before,*::after{box-sizing:border-box;}
-  *{
-    -webkit-tap-highlight-color:transparent;
-  }
-  button,a,[role="button"]{
-    touch-action:manipulation;
-  }
-  input,button,select,textarea{
-    font-family:'Syne',sans-serif;
-    font-size:16px;  /* iOS no-zoom baseline */
-  }
-  input[type="text"],input[type="number"],input[type="email"],input[type="password"],input[type="search"],input:not([type]),textarea{
-    font-size:16px !important;  /* iOS no-zoom enforced */
-  }
-  ::-webkit-scrollbar{width:3px;height:3px;}
-  ::-webkit-scrollbar-track{background:#03060f;}
-  ::-webkit-scrollbar-thumb{background:#1e2d4a;border-radius:2px;}
-  .hide-scrollbar{scrollbar-width:none;}
-  .hide-scrollbar::-webkit-scrollbar{display:none;}
-  .scroll-contain{
-    overflow-y:auto;
-    -webkit-overflow-scrolling:touch;
-    overscroll-behavior:contain;
-  }
-  @media(max-width:768px){.desktop-nav{display:none!important;}}
-  @media(min-width:769px){.mobile-nav{display:none!important;}}
-  @keyframes wc-spin { to { transform: rotate(360deg); } }
-`;
+// All third-party APIs go through our backend proxy. Rate limits hit our
+// server's single IP rather than the user's (which on mobile often shares
+// CGNAT and gets throttled aggressively by free-tier APIs).
+const COINGECKO_MARKETS_URL = '/api/coingecko/coins/markets';
+const JUPITER_TOKENS_URL    = '/api/jupiter/tokens/v1/tagged/strict';
+const JUPITER_PRICE_URL     = '/api/jupiter/price/v2';
+
+const GLOBAL_STYLES = `html,body{ margin:0;padding:0;width:100%; min-height:100vh; min-height:100dvh; overflow-x:hidden; overscroll-behavior:none; -webkit-text-size-adjust:100%; text-size-adjust:100%; } body{ -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; } body.nexus-scroll-locked{ overflow:hidden !important; } #root{ min-height:100vh; min-height:100dvh; display:flex; flex-direction:column; } *,*::before,*::after{box-sizing:border-box;} *{ -webkit-tap-highlight-color:transparent; } button,a,[role="button"]{ touch-action:manipulation; } input,button,select,textarea{ font-family:'Syne',sans-serif; font-size:16px; } input[type="text"],input[type="number"],input[type="email"],input[type="password"],input[type="search"],input:not([type]),textarea{ font-size:16px !important; } ::-webkit-scrollbar{width:3px;height:3px;} ::-webkit-scrollbar-track{background:#03060f;} ::-webkit-scrollbar-thumb{background:#1e2d4a;border-radius:2px;} .hide-scrollbar{scrollbar-width:none;} .hide-scrollbar::-webkit-scrollbar{display:none;} .scroll-contain{ overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; } @media(max-width:768px){.desktop-nav{display:none!important;}} @media(min-width:769px){.mobile-nav{display:none!important;}} @keyframes wc-spin { to { transform: rotate(360deg); } }`;
 
 const PATH_TO_TAB = {
   '/': 'swap', '/swap': 'swap', '/markets': 'markets',
@@ -139,10 +83,6 @@ function getActiveTab(tab) {
 export function useAppWallet() {
   return useNexusWallet();
 }
-
-/* ============================================================================
- * NETWORK SELECTOR
- * ========================================================================= */
 
 const HEADER_CHAINS = [
   { id: 'solana', label: 'Solana',    symbol: 'SOL',  color: '#9945ff' },
@@ -175,7 +115,11 @@ function NetworkSelector({ headerChain, onSelect, compact }) {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
     }
     document.addEventListener('mousedown', onDocClick);
-    return function() { document.removeEventListener('mousedown', onDocClick); };
+    document.addEventListener('touchstart', onDocClick, { passive: true });
+    return function() {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('touchstart', onDocClick);
+    };
   }, [open]);
 
   const current = HEADER_CHAINS.find(function(c) { return c.id === headerChain; }) || HEADER_CHAINS[0];
@@ -232,18 +176,62 @@ function NetworkSelector({ headerChain, onSelect, compact }) {
   );
 }
 
-/* ============================================================================
- * WALLET MODAL -- FOUR options
- * ========================================================================= */
+function WalletIcon({ src, fallbackLetter, color, size }) {
+  const [errored, setErrored] = useState(false);
+  if (!src || errored) {
+    return (
+      <div style={{
+        width: size, height: size,
+        borderRadius: Math.round(size / 4),
+        background: (color || '#586994') + '33',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        fontSize: Math.round(size * 0.42), fontWeight: 800,
+        color: color || '#fff', flexShrink: 0,
+      }}>
+        {(fallbackLetter || '?').toString().charAt(0).toUpperCase()}
+      </div>
+    );
+  }
+  return (
+    <img
+      src={src}
+      alt={fallbackLetter || ''}
+      style={{
+        width: size, height: size,
+        borderRadius: Math.round(size / 4),
+        flexShrink: 0, background: '#fff',
+      }}
+      onError={function() { setErrored(true); }}
+    />
+  );
+}
 
 const WC_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="#3b99fc"/><path d="M11 16.5c5-4.7 13-4.7 18 0l.6.6c.3.2.3.7 0 1l-2 2c-.2.2-.4.2-.5 0l-.9-.8c-3.5-3.3-9-3.3-12.4 0l-1 .9c-.1.1-.3.1-.5 0l-2-2c-.2-.3-.2-.7 0-1l.7-.7zm22.3 4.1l1.8 1.8c.3.2.3.7 0 1l-8 8c-.3.2-.7.2-1 0l-5.7-5.7c0-.1-.2-.1-.3 0l-5.7 5.7c-.2.2-.7.2-1 0l-8-8c-.3-.3-.3-.7 0-1l1.7-1.8c.3-.2.7-.2 1 0l5.7 5.7c.1.1.3.1.4 0l5.7-5.7c.2-.2.7-.2 1 0l5.6 5.7c.1.1.3.1.4 0l5.7-5.7c.2-.2.7-.2 1 0z" fill="#fff"/></svg>'
 );
 
-// Email/social icon for the Privy button (envelope + sparkle)
 const PRIVY_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="#a855f7"/><path d="M8 14l12 8 12-8v14H8V14z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/><path d="M8 14h24v0L20 22 8 14z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>'
 );
+
+/**
+ * Wagmi v2 + EIP-6963: connectors include both the explicit `injected()`
+ * connector (id 'injected') and any wallets the browser announced via
+ * EIP-6963 (id like 'io.metamask', 'app.phantom', 'com.coinbase.wallet').
+ * Prefer the EIP-6963 connector - its name and icon come from the wallet
+ * itself rather than being generic "Injected".
+ */
+function pickInjectedConnector(connectors) {
+  const list = (connectors || []).filter(function(c) {
+    return c && c.id !== 'walletConnect' && c.id !== 'walletConnectSDK';
+  });
+  if (!list.length) return null;
+  const eip6963 = list.find(function(c) {
+    return c.id !== 'injected' && (c.icon || (c.name && c.name !== 'Injected'));
+  });
+  if (eip6963) return eip6963;
+  return list.find(function(c) { return c.id === 'injected'; }) || list[0];
+}
 
 const WM_INITIAL = { kind: 'idle', message: '', wallet: '', target: '' };
 
@@ -260,25 +248,29 @@ function walletModalReducer(state, action) {
 function WalletModal({ open, onClose }) {
   const [mState, dispatch] = useReducer(walletModalReducer, WM_INITIAL);
 
-  const { wallet: selectedWallet, select, wallets, connect: solConnect, connected, publicKey } = useWallet();
-  const { isConnected: evmConnected, address: evmAddress } = useAccount();
-  const { connectAsync: evmConnectAsync, connectors: evmConnectorsRaw } = useConnect();
-
-  // Privy + unified wallet state from our context
   const nexus = useNexusWallet();
   const {
-    privyReady,
-    privyAuthenticated,
-    privyUser,
-    privyEmbeddedSol,
-    privyEmbeddedEvm,
-    loginPrivy,
-    disconnectAll,
+    walletPolicy,
+    privyReady, privyAuthenticated, privyUser,
+    privyEmbeddedSol, privyEmbeddedEvm,
+    loginPrivy, disconnectAll,
+    isConnected: nexusConnected,
+    extSolConnected, extSolPublicKey,
+    extEvmConnected, extEvmAddress,
+    walletAddress, connectedWalletName,
   } = nexus;
+
+  const { wallet: selectedWallet, select, wallets, connect: solConnect } = useWallet();
+  const { connectAsync: evmConnectAsync, connectors: evmConnectorsRaw } = useConnect();
+  const { isConnected: evmConnectedFromAccount } = useAccount();
 
   const phantomWallet  = wallets.find(function(w) { return w.adapter.name === 'Phantom';  });
   const solflareWallet = wallets.find(function(w) { return w.adapter.name === 'Solflare'; });
-  const walletConnectConnector = (evmConnectorsRaw || []).find(function(c) { return c.id === 'walletConnect'; });
+
+  const walletConnectConnector = (evmConnectorsRaw || []).find(function(c) {
+    return c && (c.id === 'walletConnect' || c.id === 'walletConnectSDK');
+  });
+  const injectedConnector = pickInjectedConnector(evmConnectorsRaw);
 
   useEffect(function() {
     if (!open) dispatch({ type: 'RESET' });
@@ -287,31 +279,26 @@ function WalletModal({ open, onClose }) {
   useEffect(function() {
     if (!open) return undefined;
     if (typeof document === 'undefined') return undefined;
-    var prevOverflow = document.body.style.overflow;
-    var prevTouch = document.body.style.touchAction;
-    document.body.style.overflow = 'hidden';
-    document.body.style.touchAction = 'none';
+    document.body.classList.add('nexus-scroll-locked');
     function onKey(e) {
       if (e.key === 'Escape' || e.keyCode === 27) onClose();
     }
     window.addEventListener('keydown', onKey);
     return function() {
-      document.body.style.overflow = prevOverflow || '';
-      document.body.style.touchAction = prevTouch || '';
+      document.body.classList.remove('nexus-scroll-locked');
       window.removeEventListener('keydown', onKey);
     };
   }, [open, onClose]);
 
-  // Auto-close when target connection succeeds
   useEffect(function() {
     if (mState.kind !== 'connecting') return;
     let matched = false;
     if (mState.target === 'evm') {
-      matched = evmConnected;
+      matched = evmConnectedFromAccount;
     } else if (mState.target === 'privy') {
       matched = privyAuthenticated;
-    } else {
-      matched = connected
+    } else if (mState.target === 'solana') {
+      matched = extSolConnected
         && selectedWallet
         && selectedWallet.adapter
         && selectedWallet.adapter.name === mState.wallet;
@@ -320,7 +307,10 @@ function WalletModal({ open, onClose }) {
       dispatch({ type: 'SUCCESS' });
       onClose();
     }
-  }, [connected, evmConnected, privyAuthenticated, selectedWallet, mState.kind, mState.wallet, mState.target, onClose]);
+  }, [
+    extSolConnected, evmConnectedFromAccount, privyAuthenticated,
+    selectedWallet, mState.kind, mState.wallet, mState.target, onClose,
+  ]);
 
   const targetWalletRef = useRef(null);
 
@@ -350,9 +340,8 @@ function WalletModal({ open, onClose }) {
     }
     dispatch({ type: 'START', wallet: wallet.adapter.name, target: 'solana' });
     targetWalletRef.current = wallet.adapter.name;
-    try {
-      select(wallet.adapter.name);
-    } catch (e) {
+    try { select(wallet.adapter.name); }
+    catch (e) {
       const msg = (e && e.message) || 'Failed to select wallet';
       dispatch({ type: 'ERROR', message: msg });
       targetWalletRef.current = null;
@@ -361,35 +350,42 @@ function WalletModal({ open, onClose }) {
 
   const handleWalletConnect = useCallback(async function() {
     if (!walletConnectConnector) {
-      dispatch({
-        type: 'ERROR',
-        message: 'WalletConnect not configured. Set REACT_APP_REOWN_PROJECT_ID and rebuild.',
-      });
+      dispatch({ type: 'ERROR', message: 'WalletConnect not configured. Set REACT_APP_REOWN_PROJECT_ID and rebuild.' });
       return;
     }
     dispatch({ type: 'START', wallet: 'WalletConnect', target: 'evm' });
-    try {
-      await evmConnectAsync({ connector: walletConnectConnector });
-    } catch (e) {
+    try { await evmConnectAsync({ connector: walletConnectConnector }); }
+    catch (e) {
       const raw = (e && e.message) ? e.message : 'Failed to connect wallet';
       const msg = /reject|cancel|denied|user/i.test(raw) ? 'Connection cancelled' : raw;
       dispatch({ type: 'ERROR', message: msg });
     }
   }, [evmConnectAsync, walletConnectConnector]);
 
+  const handleInjectedConnect = useCallback(async function() {
+    if (!injectedConnector) {
+      dispatch({ type: 'ERROR', message: 'No injected wallet detected in this browser.' });
+      return;
+    }
+    const name = injectedConnector.name || 'Wallet';
+    dispatch({ type: 'START', wallet: name, target: 'evm' });
+    try { await evmConnectAsync({ connector: injectedConnector }); }
+    catch (e) {
+      const raw = (e && e.message) ? e.message : 'Failed to connect wallet';
+      const msg = /reject|cancel|denied|user/i.test(raw) ? 'Connection cancelled' : raw;
+      dispatch({ type: 'ERROR', message: msg });
+    }
+  }, [evmConnectAsync, injectedConnector]);
+
   const handlePrivyLogin = useCallback(function() {
     if (!privyReady) {
-      dispatch({
-        type: 'ERROR',
-        message: 'Privy not configured. Set REACT_APP_PRIVY_APP_ID and rebuild.',
-      });
+      dispatch({ type: 'ERROR', message: 'Email login is not configured. Set REACT_APP_PRIVY_APP_ID and rebuild.' });
       return;
     }
     dispatch({ type: 'START', wallet: 'Email / Social', target: 'privy' });
-    try {
-      loginPrivy();
-    } catch (e) {
-      const msg = (e && e.message) || 'Failed to open Privy login';
+    try { loginPrivy(); }
+    catch (e) {
+      const msg = (e && e.message) || 'Failed to open login';
       dispatch({ type: 'ERROR', message: msg });
     }
   }, [privyReady, loginPrivy]);
@@ -400,32 +396,55 @@ function WalletModal({ open, onClose }) {
     onClose();
   }, [disconnectAll, onClose]);
 
-  const isSol = connected && publicKey;
-  const privyOnly = !isSol && !evmConnected && privyAuthenticated;
+  const optionDefs = {
+    privy: {
+      key: 'privy', name: 'Continue with email',
+      subtitle: 'Email, Google, Apple, passkey - no seed phrase',
+      color: C.privy, icon: PRIVY_LOGO, ready: privyReady,
+      pendingMatch: 'Email / Social', onClick: handlePrivyLogin,
+    },
+    phantom: {
+      key: 'phantom', name: 'Phantom', subtitle: 'Solana wallet',
+      color: '#ab9ff2', icon: phantomWallet && phantomWallet.adapter.icon,
+      ready: !!phantomWallet, pendingMatch: 'Phantom',
+      onClick: function() { handleSolanaConnect(phantomWallet); },
+    },
+    solflare: {
+      key: 'solflare', name: 'Solflare', subtitle: 'Solana wallet',
+      color: '#fc9533', icon: solflareWallet && solflareWallet.adapter.icon,
+      ready: !!solflareWallet, pendingMatch: 'Solflare',
+      onClick: function() { handleSolanaConnect(solflareWallet); },
+    },
+    walletconnect: {
+      key: 'walletconnect', name: 'WalletConnect',
+      subtitle: 'MetaMask, Trust, Rainbow & 600+ wallets',
+      color: '#3b99fc', icon: WC_LOGO, ready: !!walletConnectConnector,
+      pendingMatch: 'WalletConnect', onClick: handleWalletConnect,
+    },
+    injected: {
+      key: 'injected',
+      name: (injectedConnector && injectedConnector.name) || 'Browser Wallet',
+      subtitle: 'Use the wallet you opened this site with',
+      color: '#00e5ff', icon: injectedConnector && injectedConnector.icon,
+      ready: !!injectedConnector,
+      pendingMatch: (injectedConnector && injectedConnector.name) || 'Wallet',
+      onClick: handleInjectedConnect,
+    },
+  };
 
-  const displayAddr = isSol
-    ? publicKey.toString().slice(0, 6) + '...' + publicKey.toString().slice(-4)
-    : evmConnected && evmAddress
-      ? evmAddress.slice(0, 6) + '...' + evmAddress.slice(-4)
-      : privyEmbeddedSol && privyEmbeddedSol.address
-        ? privyEmbeddedSol.address.slice(0, 6) + '...' + privyEmbeddedSol.address.slice(-4)
-        : privyEmbeddedEvm && privyEmbeddedEvm.address
-          ? privyEmbeddedEvm.address.slice(0, 6) + '...' + privyEmbeddedEvm.address.slice(-4)
-          : null;
-
-  const connectedWalletName = isSol
-    ? (wallets.find(function(w) { return w.adapter.connected; })?.adapter.name ?? 'Solana')
-    : evmConnected
-      ? 'EVM Wallet'
-      : privyOnly
-        ? 'Email / Social'
-        : null;
+  const allowedKinds = (walletPolicy && walletPolicy.allowed) || [];
+  const allowedOpts = allowedKinds.map(function(k) { return optionDefs[k]; }).filter(Boolean);
+  const primaryOption = allowedOpts.find(function(o) { return o.key === 'privy'; });
+  const secondaryOptions = allowedOpts.filter(function(o) { return o.key !== 'privy'; });
 
   const isConnecting = mState.kind === 'connecting';
   const pendingWallet = isConnecting ? mState.wallet : null;
-  const anyConnected = connected || evmConnected || privyAuthenticated;
+  const anyConnected = nexusConnected || privyAuthenticated;
 
-  // Privy user email/handle for display
+  const displayAddr = walletAddress
+    ? walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4)
+    : null;
+
   const privyHandle = privyUser && (
     (privyUser.email && privyUser.email.address) ||
     (privyUser.google && privyUser.google.email) ||
@@ -435,70 +454,13 @@ function WalletModal({ open, onClose }) {
     null
   );
 
-  // Mobile detection -- WalletConnect is hidden on mobile (its redirect-back
-  // behavior is unreliable on iOS Safari + Android Chrome). Phantom and
-  // Solflare use their own native deep links and stay available on mobile.
-  const [isMobile, setIsMobile] = useState(function () {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return false;
-    return window.matchMedia('(max-width: 767px)').matches;
-  });
-  useEffect(function () {
-    if (typeof window === 'undefined' || typeof window.matchMedia !== 'function') return undefined;
-    var mq = window.matchMedia('(max-width: 767px)');
-    var listener = function (e) { setIsMobile(e.matches); };
-    if (mq.addEventListener) mq.addEventListener('change', listener);
-    else if (mq.addListener) mq.addListener(listener);
-    return function () {
-      if (mq.removeEventListener) mq.removeEventListener('change', listener);
-      else if (mq.removeListener) mq.removeListener(listener);
-    };
-  }, []);
-
-  // Privy is the primary path -- big CTA at top.
-  const primaryOption = {
-    key: 'privy',
-    name: 'Continue with email',
-    subtitle: 'Email, Google, Apple, passkey -- no seed phrase',
-    color: C.privy,
-    icon: PRIVY_LOGO,
-    ready: privyReady,
-    onClick: handlePrivyLogin,
-  };
-
-  // Secondary options -- "Already have a wallet?" group.
-  // Phantom + Solflare always shown (native deep links work on mobile).
-  // WalletConnect shown on desktop only.
-  const secondaryOptions = [
-    {
-      key: 'phantom',
-      name: 'Phantom',
-      subtitle: 'Solana wallet',
-      color: '#ab9ff2',
-      icon: phantomWallet && phantomWallet.adapter.icon,
-      ready: !!phantomWallet,
-      onClick: function() { handleSolanaConnect(phantomWallet); },
-    },
-    {
-      key: 'solflare',
-      name: 'Solflare',
-      subtitle: 'Solana wallet',
-      color: '#fc9533',
-      icon: solflareWallet && solflareWallet.adapter.icon,
-      ready: !!solflareWallet,
-      onClick: function() { handleSolanaConnect(solflareWallet); },
-    },
-  ];
-  if (!isMobile) {
-    secondaryOptions.push({
-      key: 'walletconnect',
-      name: 'WalletConnect',
-      subtitle: 'MetaMask, Trust, Rainbow & 600+ wallets',
-      color: '#3b99fc',
-      icon: WC_LOGO,
-      ready: !!walletConnectConnector,
-      onClick: handleWalletConnect,
-    });
-  }
+  const showPrivyHandle = privyAuthenticated && !extSolConnected && !extEvmConnected;
+  const showWalletAppHint =
+    !anyConnected && walletPolicy &&
+    walletPolicy.environment === 'mobile-browser' && privyReady;
+  const privyMissingOnMobile =
+    !anyConnected && walletPolicy &&
+    walletPolicy.environment === 'mobile-browser' && !privyReady;
 
   if (!open) return null;
   return (
@@ -512,41 +474,44 @@ function WalletModal({ open, onClose }) {
         maxHeight: 'min(85vh, 100dvh)', display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>
         <div style={{ flexShrink: 0, padding: '20px 24px 16px' }}>
-          <div
-            onClick={onClose}
-            role="button"
-            aria-label="Close"
-            style={{ width: 40, height: 4, background: '#2e3f5e', borderRadius: 2, margin: '0 auto 20px', cursor: 'pointer', padding: '8px 0', boxSizing: 'content-box' }}
-          />
+          <div onClick={onClose} role="button" aria-label="Close"
+            style={{ width: 40, height: 4, background: '#2e3f5e', borderRadius: 2, margin: '0 auto 20px', cursor: 'pointer', padding: '8px 0', boxSizing: 'content-box' }} />
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 6 }}>
               {anyConnected ? 'Wallet Connected' : 'Connect Wallet'}
             </div>
-            {displayAddr && <div style={{ fontSize: 13, color: '#586994' }}>{connectedWalletName}: {displayAddr}</div>}
-            {privyHandle && privyOnly && (
+            {displayAddr && (
+              <div style={{ fontSize: 13, color: '#586994' }}>
+                {(connectedWalletName || 'Wallet')}: {displayAddr}
+              </div>
+            )}
+            {privyHandle && showPrivyHandle && (
               <div style={{ fontSize: 12, color: C.privy, marginTop: 2 }}>{privyHandle}</div>
             )}
-            {!anyConnected && (
+            {!anyConnected && !privyMissingOnMobile && (
               <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>
                 Pick one. We never see your keys.
               </div>
             )}
           </div>
         </div>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 24px', paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)' }}>
+
+        <div className="scroll-contain" style={{ flex: 1, padding: '0 24px', paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)' }}>
           {anyConnected ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 400, margin: '0 auto', paddingTop: 8 }}>
               <div style={{ background: 'rgba(0,255,163,.08)', border: '1px solid rgba(0,255,163,.2)', borderRadius: 16, padding: '16px 20px' }}>
                 <div style={{ color: '#00ffa3', fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Connected</div>
-                <div style={{ color: '#586994', fontSize: 12, fontFamily: 'monospace', wordBreak: 'break-all' }}>{displayAddr}</div>
-                {privyEmbeddedSol && privyEmbeddedSol.address && (privyEmbeddedSol.address !== (publicKey && publicKey.toString())) && (
+                <div style={{ color: '#586994', fontSize: 12, fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                  {displayAddr || '(provisioning wallet...)'}
+                </div>
+                {privyEmbeddedSol && privyEmbeddedSol.address && extSolPublicKey && (privyEmbeddedSol.address !== extSolPublicKey.toString()) && (
                   <div style={{ color: C.privy, fontSize: 11, marginTop: 6, fontFamily: 'monospace' }}>
-                    + Privy SOL: {privyEmbeddedSol.address.slice(0,6)}...{privyEmbeddedSol.address.slice(-4)}
+                    + Privy SOL: {privyEmbeddedSol.address.slice(0, 6)}...{privyEmbeddedSol.address.slice(-4)}
                   </div>
                 )}
-                {privyEmbeddedEvm && privyEmbeddedEvm.address && (privyEmbeddedEvm.address.toLowerCase() !== (evmAddress || '').toLowerCase()) && (
+                {privyEmbeddedEvm && privyEmbeddedEvm.address && extEvmAddress && (privyEmbeddedEvm.address.toLowerCase() !== extEvmAddress.toLowerCase()) && (
                   <div style={{ color: C.privy, fontSize: 11, marginTop: 4, fontFamily: 'monospace' }}>
-                    + Privy EVM: {privyEmbeddedEvm.address.slice(0,6)}...{privyEmbeddedEvm.address.slice(-4)}
+                    + Privy EVM: {privyEmbeddedEvm.address.slice(0, 6)}...{privyEmbeddedEvm.address.slice(-4)}
                   </div>
                 )}
               </div>
@@ -562,27 +527,28 @@ function WalletModal({ open, onClose }) {
                   borderRadius: 12, padding: '10px 14px',
                 }}>
                   <span style={{ color: C.red, fontSize: 12, fontWeight: 600 }}>{mState.message}</span>
-                  <button
-                    onClick={function() { dispatch({ type: 'RESET' }); }}
-                    style={{
-                      background: 'transparent', border: '1px solid ' + C.red,
-                      color: C.red, padding: '4px 10px', borderRadius: 6,
-                      fontSize: 11, fontFamily: 'Syne, sans-serif', fontWeight: 700, cursor: 'pointer',
-                    }}
-                  >Retry</button>
+                  <button onClick={function() { dispatch({ type: 'RESET' }); }}
+                    style={{ background: 'transparent', border: '1px solid ' + C.red, color: C.red, padding: '4px 10px', borderRadius: 6, fontSize: 11, fontFamily: 'Syne, sans-serif', fontWeight: 700, cursor: 'pointer' }}>Retry</button>
                 </div>
               )}
 
-              {/* PRIMARY: Privy embedded wallet -- the default path. */}
-              {(function () {
+              {privyMissingOnMobile && (
+                <div style={{
+                  background: 'rgba(255,59,107,.10)', border: '1px solid rgba(255,59,107,.3)',
+                  borderRadius: 12, padding: '14px 16px', color: C.red, fontSize: 13, lineHeight: 1.5,
+                }}>
+                  Email login isn't configured. To use this site on mobile, open
+                  it from inside your wallet app's browser (Phantom, Solflare,
+                  MetaMask, Coinbase, Trust, etc.).
+                </div>
+              )}
+
+              {primaryOption && (function() {
                 var opt = primaryOption;
-                var isPending = isConnecting && pendingWallet === opt.name;
+                var isPending = isConnecting && pendingWallet === opt.pendingMatch;
                 var disabled = isConnecting || !opt.ready;
                 return (
-                  <button
-                    key={opt.key}
-                    onClick={opt.onClick}
-                    disabled={disabled}
+                  <button key={opt.key} onClick={opt.onClick} disabled={disabled}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 14,
                       background: isPending
@@ -595,22 +561,8 @@ function WalletModal({ open, onClose }) {
                       opacity: (isConnecting && !isPending) || !opt.ready ? 0.55 : 1,
                       transition: 'background .15s, border-color .15s',
                       boxShadow: '0 4px 24px rgba(150,93,232,.15)',
-                    }}
-                  >
-                    {opt.icon
-                      ? <img
-                          src={opt.icon}
-                          alt={opt.name}
-                          style={{ width: 44, height: 44, borderRadius: 12, flexShrink: 0, background: '#fff' }}
-                          onError={function(e) { e.target.style.display = 'none'; }}
-                        />
-                      : <div style={{
-                          width: 44, height: 44, borderRadius: 12,
-                          background: opt.color + '33',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          fontSize: 18, fontWeight: 800, color: opt.color, flexShrink: 0,
-                        }}>{opt.name.charAt(0)}</div>
-                    }
+                    }}>
+                    <WalletIcon src={opt.icon} fallbackLetter={opt.name} color={opt.color} size={44} />
                     <div style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
                       <div style={{ color: '#fff', fontWeight: 800, fontSize: 16 }}>{opt.name}</div>
                       <div style={{ color: opt.color, fontSize: 12, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
@@ -628,24 +580,21 @@ function WalletModal({ open, onClose }) {
                 );
               })()}
 
-              {/* DIVIDER: "Already have a wallet?" */}
-              <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '14px 0 4px' }}>
-                <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,.08)' }} />
-                <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase' }}>
-                  Already have a wallet?
+              {primaryOption && secondaryOptions.length > 0 && (
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '14px 0 4px' }}>
+                  <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,.08)' }} />
+                  <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase' }}>
+                    Already have a wallet?
+                  </div>
+                  <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,.08)' }} />
                 </div>
-                <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,.08)' }} />
-              </div>
+              )}
 
-              {/* SECONDARY: external wallets (Phantom + Solflare always; WalletConnect desktop-only). */}
               {secondaryOptions.map(function(opt) {
-                const isPending = isConnecting && pendingWallet === opt.name;
+                const isPending = isConnecting && pendingWallet === opt.pendingMatch;
                 const disabled = isConnecting || !opt.ready;
                 return (
-                  <button
-                    key={opt.key}
-                    onClick={opt.onClick}
-                    disabled={disabled}
+                  <button key={opt.key} onClick={opt.onClick} disabled={disabled}
                     style={{
                       display: 'flex', alignItems: 'center', gap: 12,
                       background: isPending ? 'rgba(0,229,255,.12)' : 'rgba(255,255,255,.025)',
@@ -655,28 +604,12 @@ function WalletModal({ open, onClose }) {
                       width: '100%',
                       opacity: (isConnecting && !isPending) || !opt.ready ? 0.55 : 1,
                       transition: 'background .15s, border-color .15s',
-                    }}
-                  >
-                    {opt.icon
-                      ? <img
-                          src={opt.icon}
-                          alt={opt.name}
-                          style={{ width: 32, height: 32, borderRadius: 8, flexShrink: 0, background: '#fff' }}
-                          onError={function(e) { e.target.style.display = 'none'; }}
-                        />
-                      : <div style={{
-                          width: 32, height: 32, borderRadius: 8,
-                          background: opt.color + '22',
-                          display: 'flex', alignItems: 'center', justifyContent: 'center',
-                          fontSize: 14, fontWeight: 800, color: opt.color, flexShrink: 0,
-                        }}>{opt.name.charAt(0)}</div>
-                    }
+                    }}>
+                    <WalletIcon src={opt.icon} fallbackLetter={opt.name} color={opt.color} size={32} />
                     <div style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
                       <div style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{opt.name}</div>
                       <div style={{ color: C.muted, fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {isPending
-                          ? 'Check your wallet...'
-                          : (opt.ready ? opt.subtitle : 'Unavailable')}
+                        {isPending ? 'Check your wallet...' : (opt.ready ? opt.subtitle : 'Unavailable')}
                       </div>
                     </div>
                     {isPending && (
@@ -689,6 +622,13 @@ function WalletModal({ open, onClose }) {
                   </button>
                 );
               })}
+
+              {showWalletAppHint && (
+                <div style={{ fontSize: 11, color: C.muted, textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>
+                  Have Phantom or Solflare? Open this page from inside your
+                  wallet's in-app browser to use it.
+                </div>
+              )}
 
               <div style={{ fontSize: 10, color: C.muted, textAlign: 'center', marginTop: 6, lineHeight: 1.5 }}>
                 Non-custodial. We never see or store your keys. You stay on
@@ -778,8 +718,10 @@ function AppInner() {
     setSelectedToken(coin); setTab('token'); navigate('/markets/token'); window.scrollTo(0, 0);
   }, [navigate]);
 
-  const goBack = function() { navigate(-1); };
+  const goBack = useCallback(function() { navigate(-1); }, [navigate]);
   const openWallet = useCallback(function() { setWalletModalOpen(true); }, []);
+
+  /* -- markets fetch (all via backend proxy) -- */
 
   useEffect(function() {
     var isMounted = true;
@@ -824,12 +766,12 @@ function AppInner() {
       return merged;
     };
 
-    var fetchMarkets = function() {
-      fetch(
-        'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=' + CG_IDS + '&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d',
+    var fetchCoinGecko = function() {
+      return fetch(
+        COINGECKO_MARKETS_URL + '?vs_currency=usd&ids=' + encodeURIComponent(CG_IDS) + '&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d',
         { signal: controller.signal }
       )
-        .then(function(r) { return r.json(); })
+        .then(function(r) { return r.ok ? r.json() : null; })
         .then(function(data) {
           if (!isMounted || !Array.isArray(data)) return;
           setCoins(function(prev) { return mergeCoins(data, prev); });
@@ -837,12 +779,20 @@ function AppInner() {
           cacheBuf.coins = data;
           flushCache();
         })
-        .catch(function(e) { if (isMounted && e.name !== 'AbortError') setLoading(false); });
+        .catch(function(e) {
+          if (isMounted && (!e || e.name !== 'AbortError')) setLoading(false);
+        });
+    };
 
-      fetch('https://lite-api.jup.ag/tokens/v1/tagged/strict', { signal: controller.signal })
-        .then(function(r) { return r.json(); })
+    var fetchJupiter = function() {
+      return fetch(JUPITER_TOKENS_URL, { signal: controller.signal })
+        .then(function(r) { return r.ok ? r.json() : null; })
         .then(function(meta) {
-          if (!isMounted || !Array.isArray(meta)) return;
+          if (!isMounted) return null;
+          if (!Array.isArray(meta)) {
+            setJupiterLoading(false);
+            return null;
+          }
           var jupTokens = meta.map(function(t) {
             return { mint: t.address, symbol: t.symbol, name: t.name, decimals: t.decimals, logoURI: t.logoURI };
           });
@@ -850,14 +800,22 @@ function AppInner() {
           setJupiterLoading(false);
           cacheBuf.jupTokens = jupTokens;
           flushCache();
-          return fetch('https://api.jup.ag/price/v2?ids=' + SOLANA_MINTS.join(','), { signal: controller.signal })
-            .then(function(r) { return r.json(); })
+          return meta;
+        })
+        .catch(function() {
+          if (isMounted) setJupiterLoading(false);
+          return null;
+        })
+        .then(function(meta) {
+          if (!meta || !isMounted) return;
+          return fetch(JUPITER_PRICE_URL + '?ids=' + SOLANA_MINTS.join(','), { signal: controller.signal })
+            .then(function(r) { return r.ok ? r.json() : null; })
             .then(function(jupData) {
-              if (!isMounted) return;
+              if (!isMounted || !jupData || !jupData.data) return;
               var metaMap = {};
               meta.forEach(function(t) { metaMap[t.address] = t; });
               var solanaCoins = SOLANA_MINTS.map(function(mint, i) {
-                var priceInfo = jupData.data && jupData.data[mint];
+                var priceInfo = jupData.data[mint];
                 var m = metaMap[mint] || {};
                 if (!priceInfo || !priceInfo.price) return null;
                 return {
@@ -878,14 +836,45 @@ function AppInner() {
                 });
                 return keepers.concat(solanaCoins);
               });
-            });
-        })
-        .catch(function() {});
+            })
+            .catch(function() { /* non-fatal */ });
+        });
     };
 
-    fetchMarkets();
-    var interval = setInterval(fetchMarkets, 30000);
-    return function() { isMounted = false; controller.abort(); clearInterval(interval); };
+    var fetchAll = function() {
+      fetchCoinGecko();
+      fetchJupiter();
+    };
+
+    fetchAll();
+
+    var interval = null;
+    var startPolling = function() {
+      if (interval) return;
+      interval = setInterval(fetchAll, MARKET_POLL_MS);
+    };
+    var stopPolling = function() {
+      if (interval) { clearInterval(interval); interval = null; }
+    };
+    startPolling();
+
+    var onVis = function() {
+      if (typeof document === 'undefined') return;
+      if (document.visibilityState === 'visible') {
+        fetchAll();
+        startPolling();
+      } else {
+        stopPolling();
+      }
+    };
+    document.addEventListener('visibilitychange', onVis);
+
+    return function() {
+      isMounted = false;
+      controller.abort();
+      stopPolling();
+      document.removeEventListener('visibilitychange', onVis);
+    };
   }, []);
 
   var sharedProps = {
@@ -904,10 +893,39 @@ function AppInner() {
     privyEmbeddedEvm: wallet.privyEmbeddedEvm,
     onConnectWallet: openWallet,
   };
+
   var displayAddress = wallet.walletAddress
-    ? wallet.walletAddress.slice(0, 4) + '..' + wallet.walletAddress.slice(-4)
+    ? wallet.walletAddress.slice(0, 4) + '...' + wallet.walletAddress.slice(-4)
     : null;
+
   var activeTab = getActiveTab(tab);
+
+  var renderContextToggle = function() {
+    if (!wallet.isConnected) return null;
+    var both = wallet.solConnected && wallet.evmConnected;
+    var ctx = wallet.activeContext || (wallet.solConnected ? 'solana' : 'evm');
+    var label = ctx === 'solana' ? 'SOL' : 'EVM';
+    var color = ctx === 'solana' ? '#9945ff' : '#627eea';
+    return (
+      <button
+        onClick={function() {
+          if (!both) return;
+          wallet.setActiveContext(ctx === 'solana' ? 'evm' : 'solana');
+        }}
+        title={both ? 'Tap to switch active wallet' : ('Active: ' + label)}
+        disabled={!both}
+        style={{
+          flexShrink: 0,
+          background: 'rgba(255,255,255,.04)',
+          border: '1px solid ' + color, color: color,
+          borderRadius: 8, padding: '5px 8px',
+          fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 10,
+          letterSpacing: 1, cursor: both ? 'pointer' : 'default',
+        }}>
+        {label}{both ? ' <->' : ''}
+      </button>
+    );
+  };
 
   return (
     <div style={{ minHeight: '100dvh', background: C.bg, color: C.text, fontFamily: 'Syne, sans-serif', overscrollBehavior: 'none', overflowX: 'hidden', width: '100%' }}>
@@ -932,47 +950,13 @@ function AppInner() {
           </nav>
           <div className="mobile-nav" style={{ flex: 1 }} />
 
-          <NetworkSelector
-            headerChain={headerChain}
-            onSelect={setHeaderChain}
-            compact={isMobile}
-          />
+          <NetworkSelector headerChain={headerChain} onSelect={setHeaderChain} compact={isMobile} />
 
           <button onClick={openWallet} style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, background: wallet.isConnected ? 'rgba(0,229,255,.08)' : 'linear-gradient(135deg,#00e5ff,#0055ff)', border: wallet.isConnected ? '1px solid rgba(0,229,255,.3)' : 'none', borderRadius: 10, padding: '7px 14px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12, color: wallet.isConnected ? C.accent : C.bg, whiteSpace: 'nowrap' }}>
             {wallet.isConnected ? (<><div style={{ width: 7, height: 7, borderRadius: '50%', background: C.green, flexShrink: 0 }} />{displayAddress}</>) : 'Connect Wallet'}
           </button>
 
-          {wallet.isConnected && (
-            (function() {
-              var both = wallet.solConnected && wallet.evmConnected;
-              var ctx = wallet.activeContext
-                || (wallet.solConnected ? 'solana' : 'evm');
-              var label = ctx === 'solana' ? 'SOL' : 'EVM';
-              var color = ctx === 'solana' ? '#9945ff' : '#627eea';
-              return (
-                <button
-                  onClick={function() {
-                    if (!both) return;
-                    wallet.setActiveContext(ctx === 'solana' ? 'evm' : 'solana');
-                  }}
-                  title={both ? 'Tap to switch active wallet' : ('Active: ' + label)}
-                  disabled={!both}
-                  style={{
-                    flexShrink: 0,
-                    background: 'rgba(255,255,255,.04)',
-                    border: '1px solid ' + color,
-                    color: color,
-                    borderRadius: 8, padding: '5px 8px',
-                    fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 10,
-                    letterSpacing: 1,
-                    cursor: both ? 'pointer' : 'default',
-                  }}
-                >
-                  {label}{both ? ' <->' : ''}
-                </button>
-              );
-            })()
-          )}
+          {renderContextToggle()}
         </div>
       </header>
 
@@ -1018,4 +1002,3 @@ export default function App() {
     </BrowserRouter>
   );
 }
-
