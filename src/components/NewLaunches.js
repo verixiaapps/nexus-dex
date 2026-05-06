@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
-import { 
+import {  
   VersionedTransaction, TransactionMessage, SystemProgram,
   PublicKey, LAMPORTS_PER_SOL,
 } from '@solana/web3.js';
