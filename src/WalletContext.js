@@ -3,18 +3,18 @@
  *
  * Single source of truth for:
  *   1. Wallet connection state across FIVE wallet kinds:
- *      a) phantom        (Solana external -- adapter or in-app browser)
- *      b) solflare       (Solana external -- adapter or in-app browser)
- *      c) walletconnect  (EVM via WalletConnect protocol -- desktop QR)
- *      d) injected       (EVM via window.ethereum -- mobile in-app browser)
- *      e) privy          (email/social/passkey -> embedded Sol+EVM wallets)
+ *        a) phantom        (Solana external -- adapter or in-app browser)
+ *        b) solflare       (Solana external -- adapter or in-app browser)
+ *        c) walletconnect  (EVM via WalletConnect protocol -- desktop QR)
+ *        d) injected       (EVM via window.ethereum -- mobile in-app browser)
+ *        e) privy          (email/social/passkey -> embedded Sol+EVM wallets)
  *
  *   2. The wallet policy for the current device (which kinds are allowed):
- *      - Desktop:                 all four external + privy
- *      - Mobile in Phantom app:   phantom only
- *      - Mobile in Solflare app:  solflare only
- *      - Mobile in any EVM app:   injected only
- *      - Mobile in plain Safari:  privy only
+ *        - Desktop:                 all four external + privy
+ *        - Mobile in Phantom app:   phantom only
+ *        - Mobile in Solflare app:  solflare only
+ *        - Mobile in any EVM app:   injected only
+ *        - Mobile in plain Safari:  privy only
  *
  *      The modal in App.js MUST read `walletPolicy.allowed` and only
  *      render those options. This is what stops mobile-Safari redirect
@@ -27,24 +27,24 @@
  *
  * KEY DESIGN NOTES:
  *
- *   - We DO NOT auto-reconnect Solana on visibility change. On mobile Safari,
- *     calling solConnect() triggers a redirect-back-to-Phantom loop. Wallet-
- *     adapter's own autoConnect (configured in index.js) handles the one-shot
- *     reconnect on mount, which is enough.
+ *  - We DO NOT auto-reconnect Solana on visibility change. On mobile Safari,
+ *    calling solConnect() triggers a redirect-back-to-Phantom loop. Wallet-
+ *    adapter's own autoConnect (configured in index.js) handles the one-shot
+ *    reconnect on mount, which is enough.
  *
- *   - Wagmi's reconnectAsync() is session-based - it rehydrates from storage
- *     without prompting -- so it IS safe to call on visibility. Throttled.
+ *  - Wagmi's reconnectAsync() is session-based - it rehydrates from storage
+ *    without prompting -- so it IS safe to call on visibility. Throttled.
  *
- *   - activeContext is the user's explicit preference. We auto-set it once
- *     when only one wallet is connected, and clear it when both disconnect.
- *     We never override an existing value just because headerChain changed.
+ *  - activeContext is the user's explicit preference. We auto-set it once
+ *    when only one wallet is connected, and clear it when both disconnect.
+ *    We never override an existing value just because headerChain changed.
  *
  * Privy notes:
- *   - Privy embedded wallets are NON-CUSTODIAL. Keys live in user device +
- *     Privy's TEE infra. Neither Privy nor we can access them.
- *   - Privy is REQUIRED for mobile Safari. If REACT_APP_PRIVY_APP_ID isn't
- *     set, mobile-Safari users will see no wallet options. This is intentional
- *     and the modal should surface that error to the user.
+ *  - Privy embedded wallets are NON-CUSTODIAL. Keys live in user device +
+ *    Privy's TEE infra. Neither Privy nor we can access them.
+ *  - Privy is REQUIRED for mobile Safari. If REACT_APP_PRIVY_APP_ID isn't
+ *    set, mobile-Safari users will see no wallet options. This is intentional
+ *    and the modal should surface that error to the user.
  */
 
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
@@ -90,15 +90,21 @@ function useSafePrivyEvmWallets() {
 
 /* ============================================================================
  * STORAGE KEYS + DEFAULTS
+ *
+ * PRESETS_LS_KEY is bumped to v2 to invalidate stale v1 entries from the
+ * previous default scheme (sell defaults were [25,50,75,100]; new is [50,100]).
+ * Without the bump, returning users would still see the old persisted presets
+ * even if they never customized. v2 forces a one-time reset to the new
+ * defaults; user customizations made after this release persist normally.
  * ========================================================================= */
 
-const PRESETS_LS_KEY      = 'nexus_presets_v1';
+const PRESETS_LS_KEY      = 'nexus_presets_v2';
 const HEADER_CHAIN_LS_KEY = 'nexus_header_chain_v1';
 const ACTIVE_CTX_LS_KEY   = 'nexus_active_ctx_v1';
 const ACTIVE_KIND_LS_KEY  = 'nexus_active_kind_v1';
 
 const DEFAULT_BUY_PRESETS  = [25, 50, 100, 250, 500];
-const DEFAULT_SELL_PRESETS = [25, 50, 75, 100];
+const DEFAULT_SELL_PRESETS = [50, 100];
 
 const EVM_RECONNECT_THROTTLE_MS = 10_000;
 
@@ -136,6 +142,11 @@ function detectMobileWalletApp() {
 
 /* ============================================================================
  * STORAGE HELPERS
+ *
+ * Preset validation accepts ANY non-empty list. Earlier we required >=3
+ * entries before trusting the user's saved presets - that punished anyone
+ * who customized to fewer slots (the new default sell list itself is just
+ * 2 entries). Now any non-empty validated list is preserved.
  * ========================================================================= */
 
 function loadPresets() {
@@ -150,8 +161,8 @@ function loadPresets() {
       ? p.sell.map(Number).filter((v) => Number.isFinite(v) && v > 0 && v <= 100).slice(0, 4)
       : [];
     return {
-      buy:  validBuys.length  >= 3 ? validBuys  : DEFAULT_BUY_PRESETS,
-      sell: validSells.length >= 3 ? validSells : DEFAULT_SELL_PRESETS,
+      buy:  validBuys.length  >= 1 ? validBuys  : DEFAULT_BUY_PRESETS,
+      sell: validSells.length >= 1 ? validSells : DEFAULT_SELL_PRESETS,
     };
   } catch {
     return { buy: DEFAULT_BUY_PRESETS, sell: DEFAULT_SELL_PRESETS };
