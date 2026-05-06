@@ -1,5 +1,5 @@
 /**
- * NEXUS DEX -- Backend Proxy Server
+ * NEXUS DEX - Backend Proxy Server
  *
  * Responsibilities:
  *   1. Proxy all third-party API calls so secrets never reach the browser.
@@ -7,21 +7,22 @@
  *   3. CORS locked to our own domain in production.
  *   4. Serve the built React app.
  *   5. Healthcheck for Railway.
- * 
+ *
  * Required env vars (server-side, NOT REACT_APP_ prefixed):
- *   OX_API_KEY            -- 0x.org API key
- *   PINATA_JWT            -- Pinata JWT for IPFS uploads
- *   HELIUS_API_KEY        -- Helius Solana RPC key (optional, falls back to public)
- *   MORALIS_API_KEY       -- Moralis API key for Portfolio EVM balances
- *   JUPITER_API_KEY       -- Jupiter aggregator key (optional, falls back to lite-api free tier)
- *   ALLOWED_ORIGINS       -- comma-separated list of allowed origins
- *                            (e.g. "https://swap.verixiaapps.com,http://localhost:3000")
- *   PORT                  -- provided by Railway
+ *   OX_API_KEY            - 0x.org API key
+ *   PINATA_JWT            - Pinata JWT for IPFS uploads
+ *   HELIUS_API_KEY        - Helius Solana RPC key (optional, falls back to public)
+ *   MORALIS_API_KEY       - Moralis API key for Portfolio EVM balances
+ *   JUPITER_API_KEY       - Jupiter aggregator key (optional, free tier OK)
+ *   COINGECKO_API_KEY     - CoinGecko Pro/Demo API key (optional)
+ *   ALLOWED_ORIGINS       - comma-separated list of allowed origins
+ *                           (e.g. "https://swap.verixiaapps.com,http://localhost:3000")
+ *   PORT                  - provided by Railway
  *
  * Deprecated (kept temporarily for migration):
- *   REACT_APP_0X_API_KEY      -- falls back to this if OX_API_KEY missing
- *   REACT_APP_PINATA_JWT      -- falls back to this if PINATA_JWT missing
- *   REACT_APP_MORALIS_API_KEY -- falls back to this if MORALIS_API_KEY missing
+ *   REACT_APP_0X_API_KEY      - falls back to this if OX_API_KEY missing
+ *   REACT_APP_PINATA_JWT      - falls back to this if PINATA_JWT missing
+ *   REACT_APP_MORALIS_API_KEY - falls back to this if MORALIS_API_KEY missing
  */
 
 require('dotenv').config();
@@ -36,7 +37,7 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
-// Hide Express fingerprint -- defense in depth.
+// Hide Express fingerprint - defense in depth.
 app.disable('x-powered-by');
 
 // Required for Railway (and any reverse-proxy setup) so req.ip resolves to
@@ -44,17 +45,22 @@ app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
 /* ============================================================================
- * SECRETS -- server-side only, never leaked to browser
+ * SECRETS - server-side only, never leaked to browser
  * ========================================================================= */
 
-const OX_API_KEY      = process.env.OX_API_KEY      || process.env.REACT_APP_0X_API_KEY      || '';
-const PINATA_JWT      = process.env.PINATA_JWT      || process.env.REACT_APP_PINATA_JWT      || '';
-const HELIUS_API_KEY  = process.env.HELIUS_API_KEY  || process.env.REACT_APP_HELIUS_API_KEY  || '';
-const MORALIS_API_KEY = process.env.MORALIS_API_KEY || process.env.REACT_APP_MORALIS_API_KEY || '';
-const JUPITER_API_KEY = process.env.JUPITER_API_KEY || '';
+const OX_API_KEY        = process.env.OX_API_KEY        || process.env.REACT_APP_0X_API_KEY      || '';
+const PINATA_JWT        = process.env.PINATA_JWT        || process.env.REACT_APP_PINATA_JWT      || '';
+const HELIUS_API_KEY    = process.env.HELIUS_API_KEY    || process.env.REACT_APP_HELIUS_API_KEY  || '';
+const MORALIS_API_KEY   = process.env.MORALIS_API_KEY   || process.env.REACT_APP_MORALIS_API_KEY || '';
+const JUPITER_API_KEY   = process.env.JUPITER_API_KEY   || '';
+const COINGECKO_API_KEY = process.env.COINGECKO_API_KEY || '';
+
+// CoinGecko key auth varies by plan: demo uses x-cg-demo-api-key, pro uses
+// x-cg-pro-api-key. COINGECKO_API_KEY_TYPE='pro' opts into pro headers.
+const COINGECKO_API_KEY_TYPE = (process.env.COINGECKO_API_KEY_TYPE || 'demo').toLowerCase();
 
 /* ============================================================================
- * CORS -- locked to allowed origins in production
+ * CORS - locked to allowed origins in production
  * ========================================================================= */
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'https://swap.verixiaapps.com,http://localhost:3000')
@@ -130,7 +136,8 @@ function scrubSecrets(s) {
     .replace(/api-key=[^&\s"']+/gi, 'api-key=***')
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer ***')
     .replace(/0x-api-key["':\s]+[^&\s"',}]+/gi, '0x-api-key=***')
-    .replace(/x-api-key["':\s]+[^&\s"',}]+/gi, 'x-api-key=***');
+    .replace(/x-api-key["':\s]+[^&\s"',}]+/gi, 'x-api-key=***')
+    .replace(/x-cg-(?:pro|demo)-api-key["':\s]+[^&\s"',}]+/gi, 'x-cg-key=***');
 }
 
 function logError(tag, err) {
@@ -158,11 +165,12 @@ app.get('/api/health', (req, res) => {
     ok: true,
     env: NODE_ENV,
     has: {
-      ox:      Boolean(OX_API_KEY),
-      pinata:  Boolean(PINATA_JWT),
-      helius:  Boolean(HELIUS_API_KEY),
-      moralis: Boolean(MORALIS_API_KEY),
-      jupiter: Boolean(JUPITER_API_KEY),
+      ox:        Boolean(OX_API_KEY),
+      pinata:    Boolean(PINATA_JWT),
+      helius:    Boolean(HELIUS_API_KEY),
+      moralis:   Boolean(MORALIS_API_KEY),
+      jupiter:   Boolean(JUPITER_API_KEY),
+      coingecko: Boolean(COINGECKO_API_KEY),
     },
     time: new Date().toISOString(),
   });
@@ -264,7 +272,7 @@ app.get('/api/lifi/*', proxyLifi);
 app.post('/api/lifi/*', proxyLifi);
 
 /* ============================================================================
- * JUPITER API PROXY -- Solana aggregator
+ * JUPITER API PROXY - Solana aggregator
  *
  *   /api/jupiter/swap/v1/quote          ->   api.jup.ag (or lite-api fallback)
  *   /api/jupiter/swap/v1/swap           ->   api.jup.ag (or lite-api fallback)
@@ -274,12 +282,8 @@ app.post('/api/lifi/*', proxyLifi);
  * Routing rules:
  *   - /price/* and /tokens/* always go to lite-api.jup.ag (these endpoints
  *     don't exist on api.jup.ag).
- *   - /swap/* goes to api.jup.ag when JUPITER_API_KEY is set (paid tier --
- *     higher rate limits + lower latency), otherwise lite-api.jup.ag
- *     (free tier, fine for low traffic).
- *
- * The API key NEVER reaches the browser -- this proxy is the only place
- * it lives. SwapWidget.js calls /api/jupiter/* directly.
+ *   - /swap/* goes to api.jup.ag when JUPITER_API_KEY is set, otherwise
+ *     lite-api.jup.ag (free tier).
  * ========================================================================= */
 
 async function proxyJupiter(req, res) {
@@ -320,6 +324,41 @@ async function proxyJupiter(req, res) {
 
 app.get('/api/jupiter/*', proxyJupiter);
 app.post('/api/jupiter/*', proxyJupiter);
+
+/* ============================================================================
+ * COINGECKO API PROXY
+ *   /api/coingecko/*   ->   https://api.coingecko.com/api/v3/*
+ *
+ * Putting CoinGecko behind our proxy means rate limits hit our server's
+ * single IP rather than the user's (which on mobile often shares CGNAT).
+ * If COINGECKO_API_KEY is set, we attach the appropriate header.
+ * ========================================================================= */
+
+app.get('/api/coingecko/*', async (req, res) => {
+  try {
+    const subPath = req.path.replace('/api/coingecko', '');
+    const url = 'https://api.coingecko.com/api/v3' + subPath + queryStringOf(req);
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+    };
+    if (COINGECKO_API_KEY) {
+      if (COINGECKO_API_KEY_TYPE === 'pro') headers['x-cg-pro-api-key']  = COINGECKO_API_KEY;
+      else                                  headers['x-cg-demo-api-key'] = COINGECKO_API_KEY;
+    }
+    const response = await fetchWithTimeout(url, { method: 'GET', headers }, 12_000);
+    const result = await safeJson(response);
+    if (result.parsed !== null) return res.status(response.status).json(result.parsed);
+    return res.status(response.status).json({
+      error: 'Upstream returned non-JSON',
+      body: result.raw && result.raw.slice(0, 500),
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'CoinGecko API request timed out' });
+    logError('coingecko', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
 
 /* ============================================================================
  * HELIUS RPC PROXY
@@ -430,7 +469,7 @@ app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, r
 });
 
 /* ============================================================================
- * MORALIS -- wallet token balances across multiple EVM chains
+ * MORALIS - wallet token balances across multiple EVM chains
  * ========================================================================= */
 
 const MORALIS_CHAIN_TO_ID = {
@@ -493,7 +532,8 @@ app.get('/api/moralis/wallet-tokens', async (req, res) => {
 
         const usdPrice = parseFloat(t.usd_price || '0');
         const usdValue = parseFloat(t.usd_value || '0');
-        const pct24h   = parseFloat(t.usd_price_24hr_percent_change || '0');
+        const pct24hRaw = t.usd_price_24hr_percent_change;
+        const pct24h = pct24hRaw == null || pct24hRaw === '' ? null : parseFloat(pct24hRaw);
 
         const rawDec = t.decimals;
         const decimals = rawDec != null && Number.isFinite(Number(rawDec)) ? Number(rawDec) : 18;
@@ -570,7 +610,7 @@ app.use((err, req, res, next) => {
     return res.status(413).json({ error: 'File too large (max 5MB)' });
   }
   if (err && err.code === 'LIMIT_UNEXPECTED_FILE') {
-    return res.status(400).json({ error: 'Unexpected file field -- use field name "file"' });
+    return res.status(400).json({ error: 'Unexpected file field - use field name "file"' });
   }
   logError('unhandled', err);
   if (res.headersSent) return next(err);
@@ -585,13 +625,13 @@ app.listen(PORT, () => {
   console.log('Nexus DEX server running on port ' + PORT);
   console.log('  env:             ' + NODE_ENV);
   console.log('  allowed origins: ' + allowedOrigins.join(', '));
-  if (!OX_API_KEY)      console.warn('  WARNING: OX_API_KEY not set -- EVM swaps will fail');
-  if (!PINATA_JWT)      console.warn('  WARNING: PINATA_JWT not set -- token launch metadata will fail');
-  if (!HELIUS_API_KEY)  console.warn('  WARNING: HELIUS_API_KEY not set -- falling back to public Solana RPC');
-  if (!MORALIS_API_KEY) console.warn('  WARNING: MORALIS_API_KEY not set -- Portfolio EVM balances will be empty');
-  if (!JUPITER_API_KEY) console.log('  INFO: JUPITER_API_KEY not set -- using free tier (lower rate limits, fine for low traffic)');
+  if (!OX_API_KEY)        console.warn('  WARNING: OX_API_KEY not set - EVM swaps will fail');
+  if (!PINATA_JWT)        console.warn('  WARNING: PINATA_JWT not set - token launch metadata will fail');
+  if (!HELIUS_API_KEY)    console.warn('  WARNING: HELIUS_API_KEY not set - falling back to public Solana RPC');
+  if (!MORALIS_API_KEY)   console.warn('  WARNING: MORALIS_API_KEY not set - Portfolio EVM balances will be empty');
+  if (!JUPITER_API_KEY)   console.log('  INFO: JUPITER_API_KEY not set - using free tier (lower rate limits)');
+  if (!COINGECKO_API_KEY) console.log('  INFO: COINGECKO_API_KEY not set - using free tier (10-30 req/min)');
 });
 
 process.on('uncaughtException',  (err) => logError('uncaughtException', err));
 process.on('unhandledRejection', (err) => logError('unhandledRejection', err));
-
