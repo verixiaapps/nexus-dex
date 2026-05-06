@@ -62,7 +62,11 @@ const OX_API_KEY        = process.env.OX_API_KEY        || process.env.REACT_APP
 const JUPITER_API_KEY   = process.env.JUPITER_API_KEY   || process.env.REACT_APP_JUPITER_API_KEY   || '';
 const LIFI_API_KEY      = process.env.LIFI_API_KEY      || process.env.REACT_APP_LIFI_API_KEY      || '';
 const HELIUS_API_KEY    = process.env.HELIUS_API_KEY    || process.env.REACT_APP_HELIUS_API_KEY    || '';
-const MORALIS_API_KEY   = process.env.MORALIS_API_KEY   || process.env.REACT_APP_MORALIS_API_KEY   || '';
+/* REACT_APP_SOLANA_RPC is a FULL URL with the Helius key embedded
+ * (e.g. https://mainnet.helius-rpc.com/?api-key=xxx). If set we use
+ * it directly instead of constructing the URL from HELIUS_API_KEY. */
+const HELIUS_RPC_URL    = process.env.HELIUS_RPC_URL    || process.env.REACT_APP_SOLANA_RPC        || '';
+const MORALIS_API_KEY   = process.env.MORALIS_API_KEY   || process.env.REACT_APP_MORALIS_API_KEY   || process.env.REACT_APP_MORALIS_KEY || '';
 const PINATA_JWT        = process.env.PINATA_JWT        || process.env.REACT_APP_PINATA_JWT        || '';
 const COINGECKO_API_KEY = process.env.COINGECKO_API_KEY || process.env.REACT_APP_COINGECKO_API_KEY || '';
 const COINGECKO_API_KEY_TYPE = (process.env.COINGECKO_API_KEY_TYPE || 'demo').toLowerCase();
@@ -130,7 +134,7 @@ function respondJsonOrError(res, response, result) {
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true, env: NODE_ENV,
-    has: { ox: Boolean(OX_API_KEY), jupiter: Boolean(JUPITER_API_KEY), lifi: Boolean(LIFI_API_KEY), helius: Boolean(HELIUS_API_KEY), moralis: Boolean(MORALIS_API_KEY), pinata: Boolean(PINATA_JWT), coingecko: Boolean(COINGECKO_API_KEY) },
+    has: { ox: Boolean(OX_API_KEY), jupiter: Boolean(JUPITER_API_KEY), lifi: Boolean(LIFI_API_KEY), helius: Boolean(HELIUS_API_KEY || HELIUS_RPC_URL), moralis: Boolean(MORALIS_API_KEY), pinata: Boolean(PINATA_JWT), coingecko: Boolean(COINGECKO_API_KEY) },
     time: new Date().toISOString(),
   });
 });
@@ -249,7 +253,11 @@ app.get('/api/geckoterminal/*', async (req, res) => {
 /* HELIUS DAS (REQUIRED - Solana metadata + price fallback) */
 app.post('/api/helius/das', async (req, res) => {
   try {
-    const url = HELIUS_API_KEY ? 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(HELIUS_API_KEY) : 'https://api.mainnet-beta.solana.com';
+    const url = HELIUS_RPC_URL
+      ? HELIUS_RPC_URL
+      : (HELIUS_API_KEY
+        ? 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(HELIUS_API_KEY)
+        : 'https://api.mainnet-beta.solana.com');
     const response = await fetchWithTimeout(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req.body || {}) }, 15_000);
     return respondJsonOrError(res, response, await safeJson(response));
   } catch (e) {
@@ -262,7 +270,11 @@ app.post('/api/helius/das', async (req, res) => {
 /* SOLANA RPC (existing) */
 app.post('/api/solana-rpc', async (req, res) => {
   try {
-    const url = HELIUS_API_KEY ? 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(HELIUS_API_KEY) : 'https://api.mainnet-beta.solana.com';
+    const url = HELIUS_RPC_URL
+      ? HELIUS_RPC_URL
+      : (HELIUS_API_KEY
+        ? 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(HELIUS_API_KEY)
+        : 'https://api.mainnet-beta.solana.com');
     const response = await fetchWithTimeout(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req.body || {}) }, 15_000);
     return respondJsonOrError(res, response, await safeJson(response));
   } catch (e) {
@@ -408,7 +420,7 @@ app.listen(PORT, () => {
   if (!OX_API_KEY)        console.warn('  WARNING: OX_API_KEY not set - EVM swaps will fail');
   if (!JUPITER_API_KEY)   console.warn('  WARNING: JUPITER_API_KEY not set - Solana swaps will rate-limit on free tier');
   if (!LIFI_API_KEY)      console.warn('  WARNING: LIFI_API_KEY not set - cross-chain bridges will rate-limit on free tier');
-  if (!HELIUS_API_KEY)    console.warn('  WARNING: HELIUS_API_KEY not set - falling back to public Solana RPC');
+  if (!HELIUS_API_KEY && !HELIUS_RPC_URL) console.warn('  WARNING: HELIUS_API_KEY / REACT_APP_SOLANA_RPC not set - falling back to public Solana RPC');
   if (!MORALIS_API_KEY)   console.warn('  WARNING: MORALIS_API_KEY not set - Portfolio + EVM price fallback will fail');
   if (!PINATA_JWT)        console.warn('  WARNING: PINATA_JWT not set - token launch metadata uploads will fail');
   if (!COINGECKO_API_KEY) console.log('  INFO: COINGECKO_API_KEY not set - using free tier');
@@ -416,5 +428,3 @@ app.listen(PORT, () => {
 
 process.on('uncaughtException', err => logError('uncaughtException', err));
 process.on('unhandledRejection', err => logError('unhandledRejection', err));
-
-
