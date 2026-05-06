@@ -8,7 +8,7 @@
  *        c) walletconnect  (EVM via WalletConnect protocol -- desktop QR)
  *        d) injected       (EVM via window.ethereum -- mobile in-app browser)
  *        e) privy          (email/social/passkey -> embedded Sol+EVM wallets)
- *
+ * 
  *   2. The wallet policy for the current device (which kinds are allowed):
  *        - Desktop:                 all four external + privy
  *        - Mobile in Phantom app:   phantom only
