@@ -8,7 +8,8 @@ import {
 import bs58 from 'bs58';
 import { TradeDrawer } from './SwapWidget.jsx';
 import { quickBuyPump, quickSellPump } from '../pumpTrade.js';
- 
+import { useInstantPresets, PresetsEditButton } from '../instantPresets.jsx';
+
 const PRESET_KEY = 'nexus_launch_presets';
 const LAST_AMT_KEY = 'nexus_launch_last_amt';
 
@@ -761,6 +762,12 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, is
   const { connection } = useConnection();
   const { activeWalletKind, privyEmbeddedSol, isConnected: nexusConnected, loginPrivy } = useNexusWallet();
 
+  // User-customized presets (synced via localStorage across the whole app).
+  // Cards display the first 3 buy presets. Sell button defaults to MAX (100%)
+  // for one-tap full-balance sell. Per-percent sells live on TokenDetail.
+  const { buyPresets, sellPresets } = useInstantPresets();
+  const cardBuyPresets = (buyPresets || []).slice(0, 3);
+
   const [flash, setFlash] = useState(false);
   const [cardStatus, setCardStatus] = useState('idle');  // idle | loading | success | error
   const [cardStatusMsg, setCardStatusMsg] = useState('');
@@ -996,7 +1003,7 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, onQuickBuy, is
         </div>
       </div>
       <div style={{ display: 'flex', gap: 6 }}>
-        {[25, 50, 100].map(function (usd) {
+        {cardBuyPresets.map(function (usd) {
           var isPending = pendingPreset === 'buy:' + usd;
           var disabled = cardStatus === 'loading' && !isPending;
           return (
@@ -1332,9 +1339,10 @@ export default function NewLaunches({ coins, jupiterTokens, onConnectWallet, isC
         <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>{tokens.length} tokens tracked - tap any to trade</p>
       </div>
 
-      <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 14, alignItems: 'center' }}>
         <button onClick={function() { setTab('new'); }} style={{ flex: 1, padding: '11px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', background: tab === 'new' ? 'rgba(0,229,255,.1)' : C.card2, border: '1px solid ' + (tab === 'new' ? 'rgba(0,229,255,.3)' : C.border), color: tab === 'new' ? C.accent : C.muted }}>New</button>
         <button onClick={function() { setTab('trending'); }} style={{ flex: 1, padding: '11px', borderRadius: 10, fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif', background: tab === 'trending' ? 'rgba(255,149,0,.1)' : C.card2, border: '1px solid ' + (tab === 'trending' ? 'rgba(255,149,0,.3)' : C.border), color: tab === 'trending' ? C.orange : C.muted }}>Trending</button>
+        <PresetsEditButton size={42} label="Customize instant buy amounts" />
       </div>
 
       {tokens.length === 0 ? (
