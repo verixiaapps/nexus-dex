@@ -2,7 +2,7 @@
  * NEXUS DEX -- InstantTrade
  *
  * GMGN / Photon / BullX -style one-tap preset bar for token pages.
- *
+ * 
  * Behavior: 
  *   - Privy embedded wallet (activeWalletKind === 'privy'):
  *       Tap a preset -> trade fires DIRECT via solanaSwap.js. NO popup.
