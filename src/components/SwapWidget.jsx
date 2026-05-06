@@ -3,27 +3,40 @@
  *
  * Behavior contract (locked):
  *   1. NO header chain selector. Routing is driven entirely by the from/to
- *      tokens. Defaults come from the connected wallet's actual state, and
+ *      tokens. Defaults come from the connected wallet's actual state and
  *      from the user's last-used pair via localStorage.
+ *
  *   2. ONE wallet popup per swap action for external wallets. Privy embedded
- *      wallets sign silently (configured in WalletContext via Privy's
+ *      wallets sign silently (configured in PrivyProvider via
  *      noPromptOnSignature). ERC20 first-send still adds 1 approval popup
- *      because that's the underlying chain's requirement, not ours.
+ *      because that's the underlying chain's requirement.
+ *
  *   3. Fees: 5% same-chain, 8% cross-chain. ALWAYS taken from output via
  *      the aggregator's own fee mechanism. Never bundled separately.
- *   4. Pricing: aggregator only, NEVER CoinGecko.
- *        Solana  -> Jupiter price API
- *        EVM/BTC -> LiFi tokens API priceUSD
- *   5. Route picker:
+ *
+ *   4. Pre-click data sources (NEVER aggregator endpoints):
+ *        Prices    -> CoinGecko -> GeckoTerminal -> Moralis (EVM) ->
+ *                     Helius DAS (Solana). First positive hit wins.
+ *        Metadata  -> Helius DAS for Solana mint paste, on-chain RPC for
+ *                     EVM contract paste, CG /coins/{id} for resolving
+ *                     CG-shaped Markets entries to a contract address.
+ *        Directory -> POPULAR_TOKENS hardcoded + jupiterTokens prop from
+ *                     parent for the search modal.
+ *
+ *   5. Click routing (aggregator endpoints fire here and ONLY here):
  *        Solana <-> Solana                       -> Jupiter
  *        EVM <-> EVM, same chain, 0x supported   -> 0x (Permit2)
  *        Anything else                           -> LiFi
- *      0x failures fall back to LiFi automatically.
- *   6. Quotes work without a connected wallet:
- *        - Jupiter: doesn't need any address (already address-free)
- *        - 0x: omit taker entirely (v2 returns price-only when taker absent)
- *        - LiFi: pass a known-rich placeholder address so simulation passes
- *      User connects only when they actually press the swap button.
+ *
+ *   6. Quote engine:
+ *        Pre-click: price-derived estimate
+ *           out = in * fromPriceUsd / toPriceUsd * (1 - feeRate)
+ *           Displayed with `~` prefix and "Estimated - live route on
+ *           confirm" hint. NEVER hits Jupiter/0x/LiFi.
+ *        On click: executeSwap fetches a fresh aggregator /quote (or
+ *           /swap-build for Jupiter) using the user's real wallet
+ *           address and submits the signed tx.
+ *
  *   7. Buy mode: from = native of the viewed token's chain, to = the token.
  *      Sell mode: from = the token, to = USDC of the token's chain.
  *      Swap mode: from = wallet's native (or last-used), to = USDC.
@@ -67,15 +80,6 @@ const QUOTE_DEBOUNCE_MS  = 250;
 const QUOTE_TIMEOUT_MS   = 12_000;
 const PRICE_CACHE_TTL_MS = 60_000;
 
-/* Preview addresses for un-connected quotes. Vitalik's wallet holds basically
- * every common ERC20 across every major EVM chain, so any LiFi/0x simulation
- * against it passes regardless of the source token. The Solana address below
- * is the System Program ("11111...") - it always exists, and Jupiter quotes
- * don't actually need a user address anyway, but LiFi expects something. */
-const PREVIEW_EVM_ADDR = '0xd8dA6BF26964aF9D7eED9e03E53415D37aA96045';
-const PREVIEW_SOL_ADDR = '11111111111111111111111111111111';
-const PREVIEW_BTC_ADDR = 'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq';
-
 /* 0x v2 supported chains (Settler/Permit2 deployed). Anything outside this
  * set falls through to LiFi automatically. */
 const OX_CHAIN_IDS = new Set([
@@ -90,6 +94,7 @@ const CHAIN_NAMES = {
   747: 'Flow', 1116: 'Core', 1135: 'Lisk', 1284: 'Moonbeam', 1329: 'SEI',
   2020: 'Ronin', 2222: 'Kava', 2741: 'Abstract', 5000: 'Mantle', 8453: 'Base',
   34443: 'Mode', 42161: 'Arbitrum', 42220: 'Celo', 43111: 'Hemi', 43114: 'Avalanche',
+  48900: 'Zircuit', 57073: 'Ink', 59144: 'Linea', 60808​​​​​​​​​​​​​​​​
   48900: 'Zircuit', 57073: 'Ink', 59144: 'Linea', 60808: 'BOB', 80094: 'Berachain',
   81457: 'Blast', 200901: 'Bitlayer', 534352: 'Scroll', 6342: 'MegaETH',
   321: 'KCC', 360: 'Shape', 33139: 'ApeChain', 167000: 'Taiko', 7777777: 'Zora',
@@ -142,8 +147,8 @@ const DEFAULT_SELL_PRESETS = [50, 100];
 const PRESETS_LS_KEY      = 'nexus_presets_v2';
 const LAST_PAIR_LS_KEY    = 'nexus_last_pair_v1';
 
-let _lifiTokensCache  = null;
-let _lifiTokensInflight = null;
+/* (LiFi tokens index removed - aggregator endpoints are reserved for
+ * executeSwap only. Pre-click data comes from CG/GT/Moralis/Helius.) */
 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -322,7 +327,7 @@ function normalizeToken(input, opts = {}) {
       chain: 'evm', address: evmAddr, chainId: input.chainId || defaultChainId,
       symbol, name,
       decimals: typeof input.decimals === 'number' ? input.decimals
-        : typeof input.tokenDecimals === 'number' ? input.tokenDecimals : 18,
+                : typeof input.tokenDecimals === 'number' ? input.tokenDecimals : 18,
       logoURI,
     };
   }
@@ -392,15 +397,7 @@ function chainOfToken(t) {
 
 /* ============================================================================
  * DEFAULT TOKEN PAIR - driven by wallet state and last-used pair, NEVER by
- * a header chain selector. The viewedToken arg comes from TradeDrawer when a
- * specific token is being bought or sold; otherwise the function picks
- * sensible defaults from what the user is connected to.
- *
- * Priority order for fresh visits:
- *   1. lastFromToken from localStorage           (returning user)
- *   2. Solana wallet connected -> SOL/USDC      (most common user)
- *   3. EVM wallet connected -> native/USDC      (EVM-only user)
- *   4. Hardcoded SOL -> USDC                    (cold visit)
+ * a header chain selector.
  * ========================================================================= */
 
 function pickDistinct(target, candidates) {
@@ -415,7 +412,6 @@ function defaultTokenPair({ mode, viewedToken, lastFromToken, walletState }) {
   const ws = walletState || {};
   const viewed = viewedToken ? normalizeToken(viewedToken) : null;
 
-  /* Buy mode with a specific token -> from = native of token's chain */
   if (mode === 'buy' && viewed) {
     const tokenChain = chainOfToken(viewed);
     const fromCandidates = [
@@ -429,7 +425,6 @@ function defaultTokenPair({ mode, viewedToken, lastFromToken, walletState }) {
     return { fromToken: pickDistinct(viewed, fromCandidates) || POPULAR_TOKENS[0], toToken: viewed };
   }
 
-  /* Sell mode with a specific token -> to = USDC of token's chain */
   if (mode === 'sell' && viewed) {
     const tokenChain = chainOfToken(viewed);
     const toCandidates = [
@@ -440,7 +435,6 @@ function defaultTokenPair({ mode, viewedToken, lastFromToken, walletState }) {
     return { fromToken: viewed, toToken: pickDistinct(viewed, toCandidates) || POPULAR_TOKENS[1] };
   }
 
-  /* Generic swap mode with no specific token */
   if (lastFromToken) {
     const fromChain = chainOfToken(lastFromToken);
     const usdc = usdcOfChain(fromChain);
@@ -475,16 +469,12 @@ function pickRoute(from, to) {
   if (isEvm(from) && isEvm(to) && from.chainId === to.chainId && OX_CHAIN_IDS.has(from.chainId)) return '0x';
   return 'lifi';
 }
-/* LiFi handles same-chain EVM fallback (chains 0x doesn't support) AND
- * cross-chain. Fee rate must match the locked rule:
- *   same-chain  -> 5%   (TOTAL_FEE)
- *   cross-chain -> 8%   (TOTAL_FEE_CC) */
 function isLifiSameChain(from, to) {
   return isEvm(from) && isEvm(to) && from.chainId === to.chainId;
 }
 
 /* ============================================================================
- * AGGREGATOR HELPERS (all proxied through server.js - no API keys in browser)
+ * AGGREGATOR HELPERS
  * ========================================================================= */
 
 function lifiChainParam(t) {
@@ -498,26 +488,9 @@ function lifiTokenParam(t) {
   return t.address;
 }
 
-async function fetchLifiTokens() {
-  if (_lifiTokensCache) return _lifiTokensCache;
-  if (_lifiTokensInflight) return _lifiTokensInflight;
-  _lifiTokensInflight = fetch('/api/lifi/tokens?chainTypes=EVM,SVM,UTXO')
-    .then((r) => (r.ok ? r.json() : null))
-    .catch(() => null)
-    .then((data) => {
-      _lifiTokensInflight = null;
-      if (data && data.tokens && Object.keys(data.tokens).length > 0) {
-        _lifiTokensCache = data;
-        return data;
-      }
-      return { tokens: {} };
-    });
-  return _lifiTokensInflight;
-}
-
-/* LiFi quote. fromAddress / toAddress are required by the API but only
- * used for simulation. For preview-only quotes, we substitute placeholder
- * addresses in the caller (see fetchQuote in SwapWidget). */
+/* LiFi quote. fromAddress + toAddress are required and validated by their
+ * API against the source/destination chain. ONLY called from executeSwap
+ * after the user clicks - never pre-click. */
 async function fetchLifiQuote({ fromToken, toToken, fromAmtRaw, fromAddress, toAddress, slip, signal }) {
   const feeRate = isLifiSameChain(fromToken, toToken) ? TOTAL_FEE : TOTAL_FEE_CC;
   const params = new URLSearchParams({
@@ -539,27 +512,20 @@ async function fetchLifiQuote({ fromToken, toToken, fromAmtRaw, fromAddress, toA
   return data;
 }
 
-/* 0x v2 quote.
- *   - When `taker` is undefined/empty, we OMIT the parameter entirely so 0x
- *     returns a price-only quote without simulating against an address that
- *     may not have balance. This lets us show prices before wallet connect.
- *   - When the user actually executes, the caller passes their real address,
- *     which produces a quote with calldata + permit2 typed-data. */
+/* 0x v2 QUOTE endpoint - taker required. ONLY called from executeSwap. */
 async function fetchOxQuote({ chainId, sellToken, buyToken, sellAmount, taker, slipBps, feeRecipient, feeToken, signal }) {
   const qs = new URLSearchParams({
     chainId: String(chainId),
     sellToken: (sellToken || '').toLowerCase(),
     buyToken:  (buyToken  || '').toLowerCase(),
     sellAmount: String(sellAmount),
+    taker,
     slippageBps: String(slipBps),
     swapFeeBps: String(OX_SWAP_FEE_BPS),
     swapFeeRecipient: feeRecipient,
     swapFeeToken: (feeToken || '').toLowerCase(),
     tradeSurplusRecipient: feeRecipient,
   });
-  if (taker && isValidEvmAddr(taker)) {
-    qs.set('taker', taker);
-  }
   const res = await fetch('/api/0x/swap/permit2/quote?' + qs.toString(), { signal });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || data.message || '0x quote failed');
@@ -567,7 +533,7 @@ async function fetchOxQuote({ chainId, sellToken, buyToken, sellAmount, taker, s
   return data;
 }
 
-/* Jupiter quote. Doesn't need a user address at all. */
+/* Jupiter quote. Doesn't need a user address. */
 async function fetchJupiterQuote({ inputMint, outputMint, amountRaw, slipBps, signal }) {
   const qs = new URLSearchParams({
     inputMint, outputMint,
@@ -609,7 +575,7 @@ async function fetchJupiterSwapTx({ quoteResponse, userPublicKey, feeAccount, si
 }
 
 /* ============================================================================
- * USD PRICING (aggregator-derived, NEVER CoinGecko). Cached 60s.
+ * USD PRICING - data sources only, NO aggregator calls. Cached 60s.
  * ========================================================================= */
 
 const _priceCache = new Map();
@@ -634,36 +600,202 @@ function setCachedPrice(token, price) {
   _priceCache.set(key, { price: Number(price), ts: Date.now() });
 }
 
-async function fetchJupiterPrice(mints) {
-  const ids = (Array.isArray(mints) ? mints : [mints]).filter(Boolean).join(',');
-  if (!ids) return {};
+/* ============================================================================
+ * PRE-CLICK PRICE HELPERS - CoinGecko + Moralis ONLY
+ *
+ * No aggregator (Jupiter, 0x, LiFi) calls happen pre-click. Aggregators are
+ * reserved for the actual swap execution after the user clicks. Pre-click
+ * numbers come from these two proxies wired up in server.js:
+ *
+ *   /api/coingecko/* -> CoinGecko free + paid (handles native coins, EVM
+ *                       contracts via /simple/token_price/{platform}, and
+ *                       Solana SPL contracts via /simple/token_price/solana)
+ *   /api/moralis/*   -> Moralis EVM token price API (used as fallback when
+ *                       CoinGecko doesn't index a contract)
+ *
+ * Cached 60s. If neither source has the token, getTokenPriceUsd returns null
+ * and the YOU RECEIVE box stays at 0.00. Click still works because
+ * executeSwap fetches the real aggregator quote at click time.
+ * ========================================================================= */
+
+/* CoinGecko asset platform slugs by chain ID. Used for the
+ * /simple/token_price/{platform} endpoint. Covers every chain CG indexes;
+ * chains not in this map fall through to GeckoTerminal/Moralis/Helius. */
+const CG_PLATFORM = {
+  1: 'ethereum', 10: 'optimistic-ethereum', 14: 'flare-network', 25: 'cronos',
+  56: 'binance-smart-chain', 100: 'xdai', 122: 'fuse', 130: 'unichain',
+  137: 'polygon-pos', 146: 'sonic', 250: 'fantom', 252: 'fraxtal',
+  255: 'kroma', 288: 'boba', 321: 'kucoin-community-chain', 324: 'zksync',
+  360: 'shape', 480: 'world-chain', 747: 'flow-evm', 999: 'hyperliquid',
+  1088: 'metis-andromeda', 1101: 'polygon-zkevm', 1116: 'core',
+  1135: 'lisk', 1284: 'moonbeam', 1313161554: 'aurora', 1329: 'sei-evm',
+  2020: 'ronin', 2222: 'kava', 2741: 'abstract', 5000: 'mantle',
+  8453: 'base', 9745: 'plasma', 33139: 'apechain', 34443: 'mode',
+  42161: 'arbitrum-one', 42220: 'celo', 43111: 'hemi', 43114: 'avalanche',
+  48900: 'zircuit', 57073: 'ink', 59144: 'linea', 60808: 'bob-network',
+  80094: 'berachain', 81457: 'blast', 167000: 'taiko', 200901: 'bitlayer',
+  534352: 'scroll', 7777777: 'zora',
+};
+
+/* CoinGecko coin IDs for native chain coins. Used for the /simple/price
+ * endpoint (the contract endpoint doesn't return a price for the native
+ * coin since it has no contract). Every chain in CHAIN_NAMES with a known
+ * native coin price source is mapped. */
+const CG_NATIVE_ID = {
+  1: 'ethereum', 10: 'ethereum', 14: 'flare-networks',
+  25: 'crypto-com-chain', 56: 'binancecoin', 100: 'xdai',
+  122: 'fuse-network-token', 130: 'ethereum', 137: 'matic-network',
+  146: 'sonic-3', 250: 'fantom', 252: 'ethereum', 255: 'ethereum',
+  288: 'ethereum', 321: 'kucoin-shares', 324: 'ethereum',
+  360: 'ethereum', 480: 'ethereum', 747: 'flow', 999: 'hyperliquid',
+  1088: 'metis-token', 1101: 'ethereum', 1116: 'core',
+  1135: 'ethereum', 1284: 'moonbeam', 1313161554: 'ethereum',
+  1329: 'sei-network', 2020: 'ronin', 2222: 'kava', 2741: 'ethereum',
+  5000: 'mantle', 8453: 'ethereum', 9745: 'plasma', 33139: 'apecoin',
+  34443: 'ethereum', 42161: 'ethereum', 42220: 'celo', 43111: 'ethereum',
+  43114: 'avalanche-2', 48900: 'ethereum', 57073: 'ethereum',
+  59144: 'ethereum', 60808: 'ethereum', 80094: 'berachain-bera',
+  81457: 'ethereum', 167000: 'ethereum', 200901: 'bitcoin',
+  534352: 'ethereum', 7777777: 'ethereum',
+};
+
+/* Moralis chain keys for the EVM token price endpoint. Used as fallback
+ * when CG and GeckoTerminal don't have a contract. */
+const MORALIS_CHAIN = {
+  1: 'eth', 10: 'optimism', 25: 'cronos', 56: 'bsc', 100: 'gnosis',
+  137: 'polygon', 250: 'fantom', 324: 'zksync', 1101: 'polygon-zkevm',
+  5000: 'mantle', 8453: 'base', 42161: 'arbitrum', 43114: 'avalanche',
+  59144: 'linea', 81457: 'blast', 167000: 'taiko', 534352: 'scroll',
+};
+
+async function fetchCgPrice(token) {
   try {
-    const res = await fetch('/api/jupiter/price/v2?ids=' + encodeURIComponent(ids));
-    if (!res.ok) return {};
-    const data = await res.json();
-    const out = {};
-    if (data && data.data) {
-      Object.keys(data.data).forEach((mint) => {
-        const p = data.data[mint];
-        if (p && p.price != null) out[mint] = Number(p.price);
-      });
+    if (isBtc(token)) {
+      const r = await fetch('/api/coingecko/api/v3/simple/price?ids=bitcoin&vs_currencies=usd');
+      if (!r.ok) return null;
+      const d = await r.json();
+      const v = d && d.bitcoin && d.bitcoin.usd;
+      return Number.isFinite(v) && v > 0 ? Number(v) : null;
     }
-    return out;
-  } catch { return {}; }
+    if (isSol(token)) {
+      if (token.mint === WSOL_MINT) {
+        const r = await fetch('/api/coingecko/api/v3/simple/price?ids=solana&vs_currencies=usd');
+        if (!r.ok) return null;
+        const d = await r.json();
+        const v = d && d.solana && d.solana.usd;
+        return Number.isFinite(v) && v > 0 ? Number(v) : null;
+      }
+      const r = await fetch('/api/coingecko/api/v3/simple/token_price/solana?contract_addresses=' + encodeURIComponent(token.mint) + '&vs_currencies=usd');
+      if (!r.ok) return null;
+      const d = await r.json();
+      const k = d && Object.keys(d)[0];
+      const v = k && d[k] && d[k].usd;
+      return Number.isFinite(v) && v > 0 ? Number(v) : null;
+    }
+    if (isEvm(token)) {
+      if ((token.address || '').toLowerCase() === NATIVE_EVM) {
+        const id = CG_NATIVE_ID[token.chainId];
+        if (!id) return null;
+        const r = await fetch('/api/coingecko/api/v3/simple/price?ids=' + id + '&vs_currencies=usd');
+        if (!r.ok) return null;
+        const d = await r.json();
+        const v = d && d[id] && d[id].usd;
+        return Number.isFinite(v) && v > 0 ? Number(v) : null;
+      }
+      const platform = CG_PLATFORM[token.chainId];
+      if (!platform) return null;
+      const r = await fetch('/api/coingecko/api/v3/simple/token_price/' + platform + '?contract_addresses=' + encodeURIComponent(token.address) + '&vs_currencies=usd');
+      if (!r.ok) return null;
+      const d = await r.json();
+      const k = d && Object.keys(d)[0];
+      const v = k && d[k] && d[k].usd;
+      return Number.isFinite(v) && v > 0 ? Number(v) : null;
+    }
+    return null;
+  } catch { return null; }
 }
 
-async function fetchLifiPriceFromIndex(token) {
+async function fetchMoralisPrice(token) {
   try {
-    const data = await fetchLifiTokens();
-    if (!data || !data.tokens) return null;
-    const chainId = isBtc(token) ? 20000000000001 : token.chainId;
-    const list = data.tokens[String(chainId)];
-    if (!list) return null;
-    const target = isBtc(token) ? 'bitcoin' : (token.address || '').toLowerCase();
-    const match = list.find((t) => (t.address || '').toLowerCase() === target);
-    if (!match) return null;
-    const p = parseFloat(match.priceUSD);
-    return Number.isFinite(p) && p > 0 ? p : null;
+    if (!isEvm(token)) return null;
+    const chain = MORALIS_CHAIN[token.chainId];
+    if (!chain) return null;
+    if ((token.address || '').toLowerCase() === NATIVE_EVM) {
+      /* Moralis price needs an ERC20 contract; it can't price native coins
+       * by this endpoint. Fall through. */
+      return null;
+    }
+    const r = await fetch('/api/moralis/api/v2.2/erc20/' + token.address + '/price?chain=' + chain);
+    if (!r.ok) return null;
+    const d = await r.json();
+    const v = d && d.usdPrice;
+    return Number.isFinite(v) && v > 0 ? Number(v) : null;
+  } catch { return null; }
+}
+
+/* GeckoTerminal network slugs (different from CG asset platform slugs).
+ * Used for /api/v2/networks/{network}/tokens/{address} which covers
+ * on-chain DEX prices for memecoins and fresh launches not yet indexed in
+ * the main CoinGecko coins list. Falls back to Moralis (EVM) / Helius
+ * (Solana) for chains GT doesn't index. */
+const GT_NETWORK = {
+  1: 'eth', 10: 'optimism', 14: 'flare', 25: 'cro', 56: 'bsc',
+  100: 'xdai', 122: 'fuse', 130: 'unichain', 137: 'polygon_pos',
+  146: 'sonic', 250: 'ftm', 252: 'fraxtal', 255: 'kroma', 288: 'boba',
+  321: 'kcc', 324: 'zksync', 480: 'wc', 1088: 'metis', 1101: 'polygon-zkevm',
+  1116: 'core', 1135: 'lisk', 1284: 'moonbeam', 1313161554: 'aurora',
+  1329: 'sei-evm-1329', 2020: 'ronin', 2222: 'kava', 2741: 'abstract',
+  5000: 'mantle', 8453: 'base', 33139: 'apechain', 34443: 'mode',
+  42161: 'arbitrum', 42220: 'celo', 43111: 'hemi', 43114: 'avax',
+  48900: 'zircuit', 57073: 'ink', 59144: 'linea', 60808: 'bob-network',
+  80094: 'berachain', 81457: 'blast', 167000: 'taiko', 200901: 'bitlayer',
+  534352: 'scroll', 7777777: 'zora',
+};
+
+async function fetchGeckoTerminalPrice(token) {
+  try {
+    let network = null;
+    let addr = null;
+    if (isSol(token)) {
+      network = 'solana';
+      addr = token.mint;
+    } else if (isEvm(token)) {
+      network = GT_NETWORK[token.chainId];
+      if (!network) return null;
+      addr = (token.address || '').toLowerCase() === NATIVE_EVM
+        ? null  /* GT prices contracts only - native handled by CG primary */
+        : token.address;
+    } else {
+      return null;
+    }
+    if (!network || !addr) return null;
+    const r = await fetch('/api/geckoterminal/api/v2/networks/' + network + '/tokens/' + encodeURIComponent(addr));
+    if (!r.ok) return null;
+    const d = await r.json();
+    const raw = d && d.data && d.data.attributes && d.data.attributes.price_usd;
+    const v = raw == null ? null : Number(raw);
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch { return null; }
+}
+
+/* Helius: last-resort fallback for Solana tokens not in CG or GT. The DAS
+ * getAsset call returns token_info.price_info.price_per_token for many
+ * SPL tokens. */
+async function fetchHeliusPrice(token) {
+  try {
+    if (!isSol(token) || !token.mint) return null;
+    const r = await fetch('/api/helius/das', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 'p', method: 'getAsset', params: { id: token.mint },
+      }),
+    });
+    if (!r.ok) return null;
+    const d = await r.json();
+    const v = d && d.result && d.result.token_info && d.result.token_info.price_info
+      ? d.result.token_info.price_info.price_per_token : null;
+    return Number.isFinite(v) && v > 0 ? Number(v) : null;
   } catch { return null; }
 }
 
@@ -671,14 +803,21 @@ async function getTokenPriceUsd(token) {
   if (!token) return null;
   const cached = getCachedPrice(token);
   if (cached != null) return cached;
-  if (isSol(token)) {
-    const map = await fetchJupiterPrice([token.mint]);
-    const p = map[token.mint];
-    if (p != null) { setCachedPrice(token, p); return p; }
-    return null;
-  }
-  const p = await fetchLifiPriceFromIndex(token);
+  /* Order: CG (curated, most accurate for top tokens) -> GT (memecoins,
+   * pump.fun, anything with a DEX pool) -> Moralis (EVM long-tail) ->
+   * Helius (Solana long-tail). First positive hit wins and is cached. */
+  let p = await fetchCgPrice(token);
   if (p != null) { setCachedPrice(token, p); return p; }
+  p = await fetchGeckoTerminalPrice(token);
+  if (p != null) { setCachedPrice(token, p); return p; }
+  if (isEvm(token)) {
+    p = await fetchMoralisPrice(token);
+    if (p != null) { setCachedPrice(token, p); return p; }
+  }
+  if (isSol(token)) {
+    p = await fetchHeliusPrice(token);
+    if (p != null) { setCachedPrice(token, p); return p; }
+  }
   return null;
 }
 
@@ -715,8 +854,6 @@ function saveLastPair(fromToken, toToken) {
   } catch {}
 }
 
-/* Aggregators take fees from OUTPUT, so user input is the FULL amount.
- * We only reserve gas headroom on native tokens. */
 function maxSafeAmount({ balance, isNative }) {
   if (!balance || balance <= 0) return 0;
   if (!isNative) return balance;
@@ -759,8 +896,6 @@ function TokenIcon({ token, size = 32 }) {
   }}>{ch}</div>;
 }
 
-/* Body scroll lock uses a CSS class from App.js's GLOBAL_STYLES instead of
- * setting touch-action: none, which broke modal scrolling on iOS. */
 let _bodyLockCount = 0;
 function useBodyScrollLock(open) {
   useEffect(() => {
@@ -790,15 +925,6 @@ function useEscapeKey(open, handler) {
 
 /* ============================================================================
  * TOKEN SELECT MODAL
- *
- *   - Searches across Jupiter (Solana), LiFi tokens index (every EVM chain),
- *     and POPULAR_TOKENS (curated).
- *   - Contract paste lookup runs on input (debounced 350ms), not on blur.
- *   - For pasted EVM addresses, decimals are read on-chain via the connected
- *     wallet's current chain. If no EVM wallet is connected, we read from
- *     Ethereum mainnet by default and surface a hint to the user that they
- *     may need to switch chains. With the header selector gone, this is the
- *     cleanest fallback - the user can correct chain at the select moment.
  * ========================================================================= */
 
 function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }) {
@@ -807,37 +933,21 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
   const [contractToken, setContractToken] = useState(null);
   const [contractLoading, setContractLoading] = useState(false);
   const [searchResults, setSearchResults] = useState([]);
-  const [evmIndex, setEvmIndex] = useState([]);
+  /* `cgDiscovered` holds CoinGecko /search hits (id-only stubs). They're
+   * appended to the visible list immediately so symbol search like "pepe"
+   * always returns hits, but each item has `chain: 'deferred'` until the
+   * user clicks; on click we resolve via /coins/{id} to a real chain +
+   * contract before forwarding to the parent's onSelect. */
+  const [cgDiscovered, setCgDiscovered] = useState([]);
+  const [resolvingId, setResolvingId] = useState(null);
 
-  /* Connected EVM wallet's current chain becomes the default for pasted EVM
-   * contract lookups. If no wallet, fall back to Ethereum mainnet. */
   const { chainId: evmWalletChainId } = useAccount();
   const evmChainForLookup = evmWalletChainId || 1;
   const publicClient = usePublicClient({ chainId: evmChainForLookup });
 
-  useEffect(() => {
-    if (!open) return undefined;
-    let aborted = false;
-    fetchLifiTokens().then((data) => {
-      if (aborted || !data || !data.tokens) return;
-      const arr = [];
-      Object.values(data.tokens).forEach((chainTokens) => {
-        chainTokens.forEach((t) => {
-          if (!t.symbol || !t.address || !t.chainId) return;
-          const cid = Number(t.chainId);
-          if (!Number.isFinite(cid) || cid > 1_000_000_000) return;
-          arr.push({
-            chain: 'evm', address: t.address, chainId: cid,
-            symbol: t.symbol, name: t.name || t.symbol,
-            decimals: t.decimals || 18, logoURI: t.logoURI || null,
-          });
-        });
-      });
-      setEvmIndex(arr);
-    });
-    return () => { aborted = true; };
-  }, [open]);
-
+  /* Solana token list comes in via the `jupiterTokens` prop, populated by
+   * the parent page (App.js or whoever owns the directory). Treat that as
+   * cached metadata, not a live aggregator call from this component. */
   const solTokens = useMemo(() => {
     if (jupiterTokens && jupiterTokens.length > 0) {
       return jupiterTokens.map((t) => ({
@@ -848,6 +958,9 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
     return POPULAR_TOKENS.filter((t) => isSol(t));
   }, [jupiterTokens]);
 
+  /* Local fast-path search: hardcoded popular tokens + jupiterTokens prop.
+   * Fires synchronously on every keystroke so the user sees popular hits
+   * immediately, then CG discovery (below) appends long-tail matches. */
   useEffect(() => {
     const trimmed = q.trim();
     if (!trimmed) { setSearchResults([]); return undefined; }
@@ -858,33 +971,102 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
         (t.name && t.name.toLowerCase().includes(ql)) ||
         (t.mint && t.mint === trimmed)
       ).slice(0, 50);
-      const evmFromIndex = evmIndex.filter((t) =>
-        (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-        (t.name && t.name.toLowerCase().includes(ql)) ||
-        ((CHAIN_NAMES[t.chainId] || '').toLowerCase().includes(ql))
-      ).slice(0, 80);
       const evmFromPopular = POPULAR_TOKENS.filter((t) =>
         isEvm(t) && (
           (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-          (t.name && t.name.toLowerCase().includes(ql))
+          (t.name && t.name.toLowerCase().includes(ql)) ||
+          ((CHAIN_NAMES[t.chainId] || '').toLowerCase().includes(ql))
         )
       );
-      const evmCombined = [];
-      const seen = new Set();
-      [...evmFromPopular, ...evmFromIndex].forEach((t) => {
-        const key = (t.address || '').toLowerCase() + '-' + t.chainId;
-        if (!seen.has(key)) { seen.add(key); evmCombined.push(t); }
-      });
       const btcMatches = POPULAR_TOKENS.filter((t) =>
         isBtc(t) && (
           (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
           (t.name && t.name.toLowerCase().includes(ql))
         )
       );
-      setSearchResults([...sol, ...evmCombined, ...btcMatches]);
+      setSearchResults([...sol, ...evmFromPopular, ...btcMatches]);
     }, 250);
     return () => clearTimeout(handle);
-  }, [q, solTokens, evmIndex]);
+  }, [q, solTokens]);
+
+  /* CG symbol discovery. Hits CG /search (cheap, returns id+symbol+name+
+   * logo, no contracts) and appends results as deferred-chain stubs. Skip
+   * for short queries, contract-shaped queries (the paste field handles
+   * those), and tokens already in NATIVE_COIN_RESOLVE / popular lists. */
+  const cgSearchReqRef = useRef(0);
+  useEffect(() => {
+    const trimmed = q.trim();
+    if (!trimmed || trimmed.length < 2) { setCgDiscovered([]); return undefined; }
+    if (isValidSolMint(trimmed) || isValidEvmAddr(trimmed)) { setCgDiscovered([]); return undefined; }
+    const reqId = ++cgSearchReqRef.current;
+    const handle = setTimeout(async () => {
+      try {
+        const r = await fetch('/api/coingecko/api/v3/search?query=' + encodeURIComponent(trimmed));
+        if (cgSearchReqRef.current !== reqId || !r.ok) return;
+        const d = await r.json();
+        if (cgSearchReqRef.current !== reqId) return;
+        const coins = (d && Array.isArray(d.coins)) ? d.coins : [];
+        const popularSymbols = new Set(POPULAR_TOKENS.map((t) => (t.symbol || '').toUpperCase()));
+        const solSymbols = new Set(solTokens.map((t) => (t.symbol || '').toUpperCase()));
+        const stubs = coins
+          /* Skip native coins already covered by NATIVE_COIN_RESOLVE -
+           * those resolve through the popular tokens list with proper
+           * chain assignments. */
+          .filter((c) => !NATIVE_COIN_RESOLVE[c.id])
+          /* Skip symbols already in the local popular results to avoid
+           * duplicates. */
+          .filter((c) => {
+            const sym = (c.symbol || '').toUpperCase();
+            return !popularSymbols.has(sym) && !solSymbols.has(sym);
+          })
+          .slice(0, 25)
+          .map((c) => ({
+            chain: 'deferred', id: c.id,
+            symbol: (c.symbol || '').toUpperCase(),
+            name: c.name || c.id,
+            logoURI: c.large || c.thumb || null,
+            marketCapRank: c.market_cap_rank == null ? 9999 : c.market_cap_rank,
+          }))
+          .sort((a, b) => a.marketCapRank - b.marketCapRank);
+        setCgDiscovered(stubs);
+      } catch {
+        if (cgSearchReqRef.current === reqId) setCgDiscovered([]);
+      }
+    }, 350);
+    return () => clearTimeout(handle);
+  }, [q, solTokens]);
+
+  /* Click handler. For real tokens, forwards to onSelect immediately. For
+   * deferred CG stubs, fetches /coins/{id} -> resolveFromCgCoin -> forwards
+   * the resolved token. Shows a brief in-row spinner during resolution. */
+  const handleSelect = useCallback(async (token) => {
+    if (token.chain !== 'deferred') {
+      onSelect(token);
+      setQ(''); setContractInput(''); setContractToken(null);
+      setSearchResults([]); setCgDiscovered([]); setResolvingId(null);
+      onClose();
+      return;
+    }
+    setResolvingId(token.id);
+    try {
+      const r = await fetch('/api/coingecko/api/v3/coins/' + encodeURIComponent(token.id) +
+        '?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false');
+      if (!r.ok) { setResolvingId(null); return; }
+      const d = await r.json();
+      const resolved = resolveFromCgCoin({ symbol: token.symbol, name: token.name, image: token.logoURI }, d, evmWalletChainId);
+      if (resolved) {
+        setResolvingId(null);
+        onSelect(resolved);
+        setQ(''); setContractInput(''); setContractToken(null);
+        setSearchResults([]); setCgDiscovered([]);
+        onClose();
+      } else {
+        setResolvingId(null);
+      }
+    } catch {
+      setResolvingId(null);
+    }
+  }, [onSelect, onClose, evmWalletChainId]);
 
   const lookupReqRef = useRef(0);
   const lookupContract = useCallback(async (addr) => {
@@ -900,20 +1082,38 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
         if (cached) {
           if (lookupReqRef.current === reqId) setContractToken(cached);
         } else {
+          /* Helius DAS - data source, NOT an aggregator. Returns metadata
+           * (symbol, name, decimals, image) for any SPL mint. Replaces the
+           * old Jupiter tokens API call which violated the no-aggregator
+           * pre-click rule. */
           let resolved = null;
           try {
-            const r = await fetch('/api/jupiter/tokens/v1/token/' + trimmed);
+            const r = await fetch('/api/helius/das', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                jsonrpc: '2.0', id: 'tk', method: 'getAsset', params: { id: trimmed },
+              }),
+            });
             if (lookupReqRef.current !== reqId) return;
             if (r.ok) {
               const d = await r.json();
               if (lookupReqRef.current !== reqId) return;
-              if (d && d.address) {
+              const result = d && d.result;
+              if (result) {
+                const ti = result.token_info || {};
+                const meta = (result.content && result.content.metadata) || {};
+                const links = (result.content && result.content.links) || {};
+                const files = (result.content && result.content.files) || [];
+                const sym = (ti.symbol || meta.symbol || '').trim();
+                const nm  = (meta.name || ti.symbol || '').trim();
+                const img = links.image || (files[0] && files[0].uri) || null;
                 resolved = {
-                  chain: 'solana', mint: d.address,
-                  symbol: d.symbol || shortAddr(d.address, 4, 4),
-                  name: d.name || 'Unknown',
-                  decimals: typeof d.decimals === 'number' ? d.decimals : 6,
-                  logoURI: d.logoURI || null,
+                  chain: 'solana', mint: trimmed,
+                  symbol: sym || shortAddr(trimmed, 4, 4),
+                  name:   nm  || 'Custom Token',
+                  decimals: typeof ti.decimals === 'number' ? ti.decimals : 6,
+                  logoURI: img,
                 };
               }
             }
@@ -926,62 +1126,47 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
           }
         }
       } else {
-        /* EVM address. Resolve from LiFi index across every chain it appears
-         * on; if multi-chain, prefer the user's currently-connected chain. */
-        const targetAddr = trimmed.toLowerCase();
-        const allMatches = evmIndex.filter((t) => (t.address || '').toLowerCase() === targetAddr);
-        const preferred = evmWalletChainId ? allMatches.find((t) => t.chainId === evmWalletChainId) : null;
-        const found = preferred || allMatches[0];
-
-        if (found) {
-          if (lookupReqRef.current === reqId) setContractToken(found);
-        } else {
-          /* Not in any index. Read on-chain decimals + symbol from the
-           * wallet's current EVM chain. If no wallet, default to Ethereum
-           * mainnet -- the user can change chains by selecting the right
-           * version from search results, or by using a wallet on the
-           * correct chain. */
-          let decimals = 18;
-          let onChainSymbol = null;
-          try {
-            if (publicClient) {
-              const [decRes, symRes] = await Promise.allSettled([
-                publicClient.readContract({
-                  address: trimmed,
-                  abi: [{ name: 'decimals', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ name: '', type: 'uint8' }] }],
-                  functionName: 'decimals',
-                }),
-                publicClient.readContract({
-                  address: trimmed,
-                  abi: [{ name: 'symbol', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ name: '', type: 'string' }] }],
-                  functionName: 'symbol',
-                }),
-              ]);
-              if (decRes.status === 'fulfilled' && (typeof decRes.value === 'number' || typeof decRes.value === 'bigint')) {
-                decimals = Number(decRes.value);
-              }
-              if (symRes.status === 'fulfilled' && typeof symRes.value === 'string' && symRes.value) {
-                onChainSymbol = symRes.value;
-              }
+        /* EVM contract paste -> resolve via on-chain RPC (decimals + symbol).
+         * No aggregator hit; pure chain read via the wallet's public client. */
+        let decimals = 18;
+        let onChainSymbol = null;
+        try {
+          if (publicClient) {
+            const [decRes, symRes] = await Promise.allSettled([
+              publicClient.readContract({
+                address: trimmed,
+                abi: [{ name: 'decimals', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ name: '', type: 'uint8' }] }],
+                functionName: 'decimals',
+              }),
+              publicClient.readContract({
+                address: trimmed,
+                abi: [{ name: 'symbol', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ name: '', type: 'string' }] }],
+                functionName: 'symbol',
+              }),
+            ]);
+            if (decRes.status === 'fulfilled' && (typeof decRes.value === 'number' || typeof decRes.value === 'bigint')) {
+              decimals = Number(decRes.value);
             }
-          } catch {}
-          if (lookupReqRef.current === reqId) {
-            setContractToken({
-              chain: 'evm', address: trimmed, chainId: evmChainForLookup,
-              symbol: onChainSymbol || shortAddr(trimmed, 4, 4),
-              name: 'Custom Token (' + (CHAIN_NAMES[evmChainForLookup] || 'EVM') + ')',
-              decimals, logoURI: null,
-            });
+            if (symRes.status === 'fulfilled' && typeof symRes.value === 'string' && symRes.value) {
+              onChainSymbol = symRes.value;
+            }
           }
+        } catch {}
+        if (lookupReqRef.current === reqId) {
+          setContractToken({
+            chain: 'evm', address: trimmed, chainId: evmChainForLookup,
+            symbol: onChainSymbol || shortAddr(trimmed, 4, 4),
+            name: 'Custom Token (' + (CHAIN_NAMES[evmChainForLookup] || 'EVM') + ')',
+            decimals, logoURI: null,
+          });
         }
       }
     } catch {
       if (lookupReqRef.current === reqId) setContractToken(null);
     }
     if (lookupReqRef.current === reqId) setContractLoading(false);
-  }, [solTokens, evmIndex, evmWalletChainId, evmChainForLookup, publicClient]);
+  }, [solTokens, evmWalletChainId, evmChainForLookup, publicClient]);
 
-  /* Debounce lookup on input change. */
   useEffect(() => {
     const v = contractInput.trim();
     if (!v) { setContractToken(null); return undefined; }
@@ -990,14 +1175,25 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
   }, [contractInput, lookupContract]);
 
   const close = () => {
-    setQ(''); setContractInput(''); setContractToken(null); setSearchResults([]);
+    setQ(''); setContractInput(''); setContractToken(null);
+    setSearchResults([]); setCgDiscovered([]); setResolvingId(null);
     onClose();
   };
 
   useBodyScrollLock(open);
   useEscapeKey(open, close);
 
-  const display = q.trim() ? searchResults : (excludeBtc ? POPULAR_TOKENS.filter((t) => !isBtc(t)) : POPULAR_TOKENS);
+  /* Merge local fast-path results with CG-discovered stubs. ChainBadge
+   * handles deferred entries gracefully (returns null since chain
+   * isn't 'solana'/'evm'/'bitcoin'). */
+  const merged = useMemo(() => {
+    if (!q.trim()) return [];
+    const seenSym = new Set(searchResults.map((t) => (t.symbol || '').toUpperCase()));
+    const filteredCg = cgDiscovered.filter((t) => !seenSym.has((t.symbol || '').toUpperCase()));
+    return [...searchResults, ...filteredCg];
+  }, [q, searchResults, cgDiscovered]);
+
+  const display = q.trim() ? merged : (excludeBtc ? POPULAR_TOKENS.filter((t) => !isBtc(t)) : POPULAR_TOKENS);
 
   if (!open) return null;
   return (
@@ -1036,7 +1232,7 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
             }} />
           {contractLoading && <div style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>Looking up token...</div>}
           {contractToken && !contractLoading && (
-            <div onClick={() => { onSelect(contractToken); close(); }} style={{
+            <div onClick={() => handleSelect(contractToken)} style={{
               marginTop: 8, padding: '10px 12px',
               background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.3)',
               borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
@@ -1057,30 +1253,44 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
         </div>
         <div style={{ overflowY: 'auto', flex: 1, WebkitOverflowScrolling: 'touch' }}>
           {!q.trim() && <div style={{ padding: '8px 16px 4px', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>POPULAR TOKENS</div>}
-          {q.trim() && searchResults.length === 0 && (
+          {q.trim() && merged.length === 0 && (
             <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>
-              No tokens found.
-              <div style={{ fontSize: 11, marginTop: 4 }}>Paste the contract address above.</div>
+              Searching...
+              <div style={{ fontSize: 11, marginTop: 4 }}>Or paste the contract address above.</div>
             </div>
           )}
           {display.map((t, i) => {
-            const key = (t.mint || t.address || '') + '-' + (t.chainId || 'sol') + '-' + i;
+            const isDeferred = t.chain === 'deferred';
+            const isResolving = isDeferred && resolvingId === t.id;
+            const key = isDeferred ? ('cg-' + t.id) : ((t.mint || t.address || '') + '-' + (t.chainId || 'sol') + '-' + i);
             return (
-              <div key={key} onClick={() => { onSelect(t); close(); }}
+              <div key={key} onClick={() => { if (!isResolving) handleSelect(t); }}
                 style={{
-                  padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
+                  padding: '12px 16px', cursor: isResolving ? 'wait' : 'pointer',
+                  display: 'flex', alignItems: 'center', gap: 10,
                   borderBottom: '1px solid rgba(255,255,255,.03)', minHeight: 48,
+                  opacity: isResolving ? 0.6 : 1,
                 }}
-                onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(0,229,255,.05)'; }}
+                onMouseEnter={(e) => { if (!isResolving) e.currentTarget.style.background = 'rgba(0,229,255,.05)'; }}
                 onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
                 <TokenIcon token={t} size={32} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center' }}>
                     <span style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{t.symbol}</span>
-                    <ChainBadge token={t} />
+                    {!isDeferred && <ChainBadge token={t} />}
+                    {isDeferred && (
+                      <span style={{
+                        fontSize: 9, color: '#a855f7',
+                        background: 'rgba(168,85,247,.15)', border: '1px solid rgba(168,85,247,.3)',
+                        borderRadius: 4, padding: '1px 5px', marginLeft: 4, fontWeight: 700,
+                      }}>CG</span>
+                    )}
                   </div>
                   <div style={{ color: C.muted, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</div>
                 </div>
+                {isResolving && (
+                  <div style={{ color: C.accent, fontSize: 10, fontStyle: 'italic' }}>Resolving...</div>
+                )}
               </div>
             );
           })}
@@ -1092,10 +1302,6 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
 
 /* ============================================================================
  * PRESET EDITOR - bottom sheet, sticky save, big tap targets.
- *
- * Two sections: BUY (USD amounts, up to 5) and SELL (% of holdings, up to 4).
- * Removed the centered-modal/cramped-spacing problems from the previous
- * version that made it feel "jenky" on mobile.
  * ========================================================================= */
 
 function PresetEditor({ open, onClose, presets, onSave }) {
@@ -1133,7 +1339,6 @@ function PresetEditor({ open, onClose, presets, onSave }) {
         maxHeight: 'min(88vh, 100dvh)',
         display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>
-        {/* Drag handle (visual only) + title */}
         <div style={{ flexShrink: 0, padding: '14px 20px 8px' }}>
           <div onClick={onClose} role="button" aria-label="Close" style={{
             width: 40, height: 4, background: C.muted2, borderRadius: 2,
@@ -1154,7 +1359,6 @@ function PresetEditor({ open, onClose, presets, onSave }) {
           </div>
         </div>
 
-        {/* Scrollable body */}
         <div style={{
           flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch',
           padding: '8px 20px 16px',
@@ -1250,7 +1454,6 @@ function PresetEditor({ open, onClose, presets, onSave }) {
           )}
         </div>
 
-        {/* Sticky save bar */}
         <div style={{
           flexShrink: 0, padding: '12px 20px',
           paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)',
@@ -1275,24 +1478,6 @@ function PresetEditor({ open, onClose, presets, onSave }) {
 
 /* ============================================================================
  * MAIN SWAP WIDGET
- *
- * Props:
- *   jupiterTokens     - Solana token list (from parent)
- *   onConnectWallet   - opens app's wallet modal
- *   defaultFromToken  - optional, used by TradeDrawer to seed buy/sell mode
- *   defaultToToken    - optional, used by TradeDrawer
- *   compact           - boolean, hides title block when true
- *   mode              - 'swap' | 'buy' | 'sell' (default 'swap')
- *   presets           - { buy:[], sell:[] } from parent (or loaded internally)
- *   onPresetsChange   - bubble preset changes for global sync
- *   onStatusChange    - TradeDrawer hooks this to lock dismissal during tx
- *
- * Removed props: headerChain, onHeaderChainChange. Routing is now driven
- * entirely by the from/to tokens. The props are still accepted (silently
- * ignored) so existing callers don't break.
- *
- * NOTE: Pricing comes from aggregators only (Jupiter price API for SOL,
- * LiFi tokens index priceUSD for EVM/BTC). No CoinGecko anywhere.
  * ========================================================================= */
 
 export default function SwapWidget({
@@ -1311,7 +1496,7 @@ export default function SwapWidget({
   // eslint-disable-next-line no-unused-vars
   onHeaderChainChange: _hcChangeIgnored,
 }) {
-  /* ---- Wallet hooks ---- */
+  /* -- Wallet hooks -- */
   const { publicKey: extPublicKey, sendTransaction: extSolSendTx, connected: solConnected } = useWallet();
   const { connection } = useConnection();
   const { address: evmAddress, isConnected: evmConnected, chainId: evmChainId } = useAccount();
@@ -1320,7 +1505,6 @@ export default function SwapWidget({
   const nexus = useNexusWallet();
   const { activeWalletKind, privyEmbeddedSol, privyEmbeddedEvm, loginPrivy } = nexus;
 
-  /* Unified Solana publicKey (external wallet OR Privy embedded). */
   const publicKey = useMemo(() => {
     if (extPublicKey) return extPublicKey;
     if (privyEmbeddedSol && privyEmbeddedSol.address) {
@@ -1329,19 +1513,15 @@ export default function SwapWidget({
     return null;
   }, [extPublicKey, privyEmbeddedSol]);
 
-  /* True iff the user has a usable Solana signer (external or Privy). */
   const hasSolSigner = solConnected || (!!privyEmbeddedSol && !!publicKey);
-  /* True iff the user has a usable EVM signer (external or Privy). */
   const hasEvmSigner = evmConnected || (!!privyEmbeddedEvm && !!privyEmbeddedEvm.address);
 
-  /* The unified EVM address: external takes priority, Privy embedded fallback. */
   const effectiveEvmAddress = useMemo(() => {
     if (evmAddress) return evmAddress;
     if (privyEmbeddedEvm && privyEmbeddedEvm.address) return privyEmbeddedEvm.address;
     return null;
   }, [evmAddress, privyEmbeddedEvm]);
 
-  /* Unified Solana sender. Privy uses noPromptOnSignature -> silent sign. */
   const sendTransaction = useCallback(async (tx, conn, opts) => {
     if (activeWalletKind === 'privy' && privyEmbeddedSol) {
       if (typeof privyEmbeddedSol.sendTransaction === 'function') {
@@ -1356,16 +1536,13 @@ export default function SwapWidget({
     return extSolSendTx(tx, conn, opts);
   }, [activeWalletKind, privyEmbeddedSol, extSolSendTx]);
 
-  /* Aggregate "any wallet at all" - includes Privy. */
   const walletConnected = solConnected || evmConnected || hasSolSigner || hasEvmSigner;
 
-  /* Refs to wagmi state so async paths after chain-switch read fresh values. */
   const walletClientRef = useRef(walletClient);
   useEffect(() => { walletClientRef.current = walletClient; }, [walletClient]);
   const evmChainIdRef = useRef(evmChainId);
   useEffect(() => { evmChainIdRef.current = evmChainId; }, [evmChainId]);
 
-  /* Poll-and-wait helper for chain switches. */
   const ensureChain = useCallback(async (targetChainId) => {
     if (!targetChainId) return true;
     if (evmChainIdRef.current === targetChainId) return true;
@@ -1388,8 +1565,7 @@ export default function SwapWidget({
     return true;
   }, [switchChain, switchChainAsync]);
 
-  /* ---- Initial token pair (mount-only). After mount, effects react
-   *      to wallet connect / token override changes. ---- */
+  /* -- Initial token pair -- */
   const initialPair = useMemo(() => {
     if (defaultFromToken || defaultToToken) {
       const ws = { solConnected, evmConnected, evmChainId };
@@ -1416,27 +1592,35 @@ export default function SwapWidget({
   const [fromToken, setFromToken] = useState(initialPair.fromToken || POPULAR_TOKENS[0]);
   const [toToken,   setToToken]   = useState(initialPair.toToken   || POPULAR_TOKENS[1]);
 
-  /* ---- Amount + slippage ---- */
+  /* -- Amount + slippage -- */
   const [fromAmt, setFromAmt] = useState('');
   const [slip, setSlip] = useState(0.5);
   const userTouchedAmtRef = useRef(false);
 
-  /* ---- Quote state ---- */
+  /* -- Quote state -- */
   const [quote, setQuote] = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
   const [quoteError, setQuoteError] = useState('');
   const [quoteIsStale, setQuoteIsStale] = useState(false);
+  /* needsWalletForQuote removed - pre-click numbers come from price sources */
   const quoteAbortRef = useRef(null);
   const quoteReqIdRef = useRef(0);
+  /* quoteRef lets fetchQuote read the latest quote WITHOUT taking quote as
+   * a useCallback dep. If we put quote in the deps, every successful fetch
+   * recreates fetchQuote, which retriggers the debounced effect, which
+   * fires another fetch -- an infinite refetch loop that hammers the
+   * aggregator and surfaces rate-limit errors over a perfectly good
+   * displayed quote. */
+  const quoteRef = useRef(null);
+  useEffect(() => { quoteRef.current = quote; }, [quote]);
 
-  /* ---- Swap execution state ---- */
+  /* -- Swap execution state -- */
   const [swapStatus, setSwapStatus] = useState('idle');
   const [swapTx, setSwapTx] = useState(null);
   const [swapError, setSwapError] = useState('');
   const swapStatusTimerRef = useRef(null);
   const [pendingSwap, setPendingSwap] = useState(false);
 
-  /* Stuck-swap escape hatch - shows a Reset button after 30s of 'loading'. */
   const [stuckSwap, setStuckSwap] = useState(false);
   const stuckTimerRef = useRef(null);
   useEffect(() => {
@@ -1460,14 +1644,14 @@ export default function SwapWidget({
     if (typeof onStatusChange === 'function') onStatusChange(swapStatus);
   }, [swapStatus, onStatusChange]);
 
-  /* ---- Solana balance ---- */
+  /* -- Solana balance -- */
   const [solBalanceLamports, setSolBalanceLamports] = useState(null);
   const [solSplBalance, setSolSplBalance] = useState(null);
 
-  /* ---- Cross-chain destination address ---- */
+  /* -- Cross-chain destination address -- */
   const [customDestAddr, setCustomDestAddr] = useState('');
 
-  /* ---- Preset state ---- */
+  /* -- Preset state -- */
   const [presetsLocal, setPresetsLocal] = useState(() => presetsProp || loadPresets());
   const presets = presetsProp || presetsLocal;
   const setPresets = useCallback((p) => {
@@ -1476,28 +1660,25 @@ export default function SwapWidget({
   }, [onPresetsChange]);
   const [presetEditorOpen, setPresetEditorOpen] = useState(false);
 
-  /* ---- Token select modals ---- */
+  /* -- Token select modals -- */
   const [fromSelectOpen, setFromSelectOpen] = useState(false);
   const [toSelectOpen,   setToSelectOpen]   = useState(false);
 
-  /* ---- Derived ---- */
+  /* -- Derived -- */
   const route = useMemo(() => pickRoute(fromToken, toToken), [fromToken, toToken]);
   const isCrossChain = route === 'lifi' && !isLifiSameChain(fromToken, toToken);
   const isEvmFrom = isEvm(fromToken);
   const isNativeEvmFrom = isEvmFrom && (fromToken.address || '').toLowerCase() === NATIVE_EVM;
 
-  /* For Privy users on Solana (with noPromptOnSignature) the "popup" framing
-   * is misleading - they don't see popups. Hide the approval banner for
-   * Privy-only flows and keep it for external EVM ERC20 flows. */
   const isPrivyOnly = activeWalletKind === 'privy' && !solConnected && !evmConnected;
   const requiresApproval = isEvmFrom && !isNativeEvmFrom && (route === '0x' || route === 'lifi') && !isPrivyOnly;
 
-  /* ---- Public client for from-token's chain ---- */
+  /* -- Public client for from-token's chain -- */
   const publicClient = usePublicClient({ chainId: isEvmFrom ? fromToken.chainId : undefined });
   const publicClientRef = useRef(publicClient);
   useEffect(() => { publicClientRef.current = publicClient; }, [publicClient]);
 
-  /* ---- EVM balance ---- */
+  /* -- EVM balance -- */
   const balanceAddress = effectiveEvmAddress;
   const { data: evmFromBal, refetch: refetchEvmBal } = useBalance({
     address: balanceAddress,
@@ -1506,7 +1687,7 @@ export default function SwapWidget({
     query:   { enabled: !!balanceAddress && isEvmFrom },
   });
 
-  /* ---- Solana balance fetch ---- */
+  /* -- Solana balance fetch -- */
   const fromMint = isSol(fromToken) ? fromToken.mint : null;
   useEffect(() => {
     if (!publicKey || !connection) { setSolBalanceLamports(null); setSolSplBalance(null); return; }
@@ -1528,7 +1709,6 @@ export default function SwapWidget({
     return () => { cancelled = true; };
   }, [publicKey, connection, fromMint]);
 
-  /* Refetch balances after a successful swap. */
   useEffect(() => {
     if (swapStatus !== 'success') return;
     if (typeof refetchEvmBal === 'function') refetchEvmBal();
@@ -1543,9 +1723,6 @@ export default function SwapWidget({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapStatus]);
 
-  /* On wallet connect, if user hasn't typed an amount, auto-replace the
-   * from/to to match what they can actually trade. Skipped when TradeDrawer
-   * has supplied explicit defaults. */
   const lastSeenWalletState = useRef({ sol: solConnected, evm: evmConnected, chain: evmChainId });
   useEffect(() => {
     if (defaultFromToken || defaultToToken) return;
@@ -1572,7 +1749,6 @@ export default function SwapWidget({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [solConnected, evmConnected, evmChainId]);
 
-  /* Sync to parent-supplied defaults when they change AFTER mount. */
   useEffect(() => {
     if (defaultFromToken) {
       const next = normalizeToken(defaultFromToken);
@@ -1592,7 +1768,11 @@ export default function SwapWidget({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultToToken]);
 
-  /* ---- USD prices via aggregators ---- */
+  /* -- USD prices (price-source derived, NOT aggregator) --
+   * Each effect fires exactly once per token reference change. There is
+   * no polling, no focus refetch, no interval. Once a price is set it
+   * stays until the user picks a different token. Server-side CG/GT/
+   * Moralis/Helius proxies provide their own caching. */
   const [fromPriceUsd, setFromPriceUsd] = useState(null);
   const [toPriceUsd, setToPriceUsd] = useState(null);
   useEffect(() => {
@@ -1613,28 +1793,31 @@ export default function SwapWidget({
   }, [toToken]);
 
   /* ============================================================================
-   * QUOTE ENGINE
+   * QUOTE ENGINE - price-derived estimate, NEVER aggregator pre-click.
    *
-   * Works without a wallet by substituting placeholder addresses for the
-   * preview-only call. Uses Vitalik's wallet for EVM (he holds every common
-   * ERC20, so simulations pass) and the System Program for Solana (Jupiter
-   * doesn't actually need an address; LiFi only reads the address shape).
+   *   out = in * fromPriceUsd / toPriceUsd * (1 - feeRate)
    *
-   * Per-aggregator behavior:
-   *   Jupiter - no address needed, just tokens + amount
-   *   0x      - omit `taker` for preview, include real address for execution
-   *   LiFi    - pass the placeholder address; LiFi simulates, but Vitalik's
-   *             address has every token so it passes
+   * fromPriceUsd / toPriceUsd are populated by getTokenPriceUsd which
+   * walks CG -> GeckoTerminal -> Moralis (EVM) -> Helius (Solana).
+   * Returns null if no source has the token, in which case the YOU
+   * RECEIVE box stays at 0.00 until prices arrive.
    *
-   * Fallback: if 0x returns "no route" or any error other than rate-limit /
-   * abort, automatically retry with LiFi. 0x has narrower DEX coverage on
-   * less popular pairs and LiFi often fills the gap.
+   * feeRate: 5% (TOTAL_FEE) for same-chain or Solana<->Solana, 8%
+   * (TOTAL_FEE_CC) for any LiFi cross-chain route.
+   *
+   * Cross-chain coverage is identical to same-chain coverage - both
+   * source and destination tokens are priced independently against USD,
+   * so any combination that resolves both prices produces an estimate
+   * (e.g. ETH -> SOL, ETH -> BTC, USDC.Base -> USDC.Polygon, ETH ->
+   * pump.fun memecoin).
+   *
+   * On click, executeSwap fetches a real aggregator quote with the
+   * user's actual wallet address and submits the tx.
    * ========================================================================= */
 
   const fetchQuote = useCallback(async () => {
-    /* Reset error-only state. Keep `quote` visible (greyed via quoteIsStale
-     * below) so the user doesn't see numbers blank out on every keystroke. */
     setQuoteError('');
+
     if (!fromAmt || parseFloat(fromAmt) <= 0 || !fromToken || !toToken) {
       setQuote(null); setQuoteIsStale(false); return;
     }
@@ -1647,123 +1830,50 @@ export default function SwapWidget({
       return;
     }
 
-    if (quoteAbortRef.current) quoteAbortRef.current.abort();
-    const controller = new AbortController();
-    quoteAbortRef.current = controller;
-    const reqId = ++quoteReqIdRef.current;
-
-    setQuoteLoading(true);
-    setQuoteIsStale(!!quote); /* show grey if we're refreshing on top of a quote */
-    const timer = setTimeout(() => controller.abort(), QUOTE_TIMEOUT_MS);
-
-    try {
-      const fromAmtRaw = toRawAmount(fromAmt, fromToken.decimals);
-      if (fromAmtRaw === '0') return;
-      const slipBps = Math.round(slip * 100);
-
-      /* Preview addresses for un-connected quotes. Real wallet addresses
-       * take priority when available. */
-      const previewSrcEvm = effectiveEvmAddress || PREVIEW_EVM_ADDR;
-      const previewSrcSol = publicKey ? publicKey.toString() : PREVIEW_SOL_ADDR;
-      const previewDstEvm = effectiveEvmAddress || (customDestAddr.trim() && isValidEvmAddr(customDestAddr.trim()) ? customDestAddr.trim() : PREVIEW_EVM_ADDR);
-      const previewDstSol = publicKey ? publicKey.toString() : (customDestAddr.trim() && isValidSolMint(customDestAddr.trim()) ? customDestAddr.trim() : PREVIEW_SOL_ADDR);
-      const previewDstBtc = customDestAddr.trim() && isValidBtcAddr(customDestAddr.trim()) ? customDestAddr.trim() : PREVIEW_BTC_ADDR;
-
-      let result = null;
-
-      if (route === 'jupiter') {
-        const data = await fetchJupiterQuote({
-          inputMint:  fromToken.mint,
-          outputMint: toToken.mint,
-          amountRaw:  fromAmtRaw,
-          slipBps,
-          signal: controller.signal,
-        });
-        result = {
-          engine: 'jupiter',
-          outAmountDisplay: (Number(data.outAmount) / Math.pow(10, toToken.decimals)).toFixed(6),
-          priceImpactPct: data.priceImpactPct,
-          quoteResponse: data,
-        };
-      } else if (route === '0x') {
-        try {
-          const data = await fetchOxQuote({
-            chainId:    fromToken.chainId,
-            sellToken:  fromToken.address,
-            buyToken:   toToken.address,
-            sellAmount: fromAmtRaw,
-            taker:      effectiveEvmAddress || undefined, /* omit when un-connected */
-            slipBps,
-            feeRecipient: EVM_FEE_WALLET,
-            feeToken:     toToken.address,
-            signal: controller.signal,
-          });
-          result = {
-            engine: '0x',
-            outAmountDisplay: (Number(data.buyAmount) / Math.pow(10, toToken.decimals)).toFixed(6),
-            priceImpactPct: 0,
-            oxResponse: data,
-          };
-        } catch (oxErr) {
-          /* Don't fall back on aborts. */
-          if (oxErr.name === 'AbortError') throw oxErr;
-          /* On any 0x failure, try LiFi (same chain). LiFi may have a route
-           * that 0x missed -- broader DEX coverage. */
-          const data = await fetchLifiQuote({
-            fromToken, toToken, fromAmtRaw,
-            fromAddress: previewSrcEvm,
-            toAddress:   previewDstEvm,
-            slip, signal: controller.signal,
-          });
-          result = {
-            engine: 'lifi',
-            outAmountDisplay: (Number(data.estimate.toAmount) / Math.pow(10, toToken.decimals)).toFixed(6),
-            priceImpactPct: 0,
-            lifiResponse: data,
-            fallback: true,
-          };
-        }
-      } else {
-        /* LiFi for everything else (cross-chain or unsupported same-chain). */
-        const previewFrom = isSol(fromToken) ? previewSrcSol : previewSrcEvm;
-        const previewTo = isBtc(toToken) ? previewDstBtc
-          : isSol(toToken) ? previewDstSol
-          : previewDstEvm;
-        const data = await fetchLifiQuote({
-          fromToken, toToken, fromAmtRaw,
-          fromAddress: previewFrom,
-          toAddress:   previewTo,
-          slip, signal: controller.signal,
-        });
-        result = {
-          engine: 'lifi',
-          outAmountDisplay: (Number(data.estimate.toAmount) / Math.pow(10, toToken.decimals)).toFixed(6),
-          priceImpactPct: 0,
-          lifiResponse: data,
-        };
-      }
-
-      /* Discard if a newer request is in flight. */
-      if (quoteReqIdRef.current !== reqId) return;
-      setQuote(result);
-      setQuoteIsStale(false);
-    } catch (e) {
-      if (e.name === 'AbortError') return;
-      if (quoteReqIdRef.current !== reqId) return;
-      setQuoteError('Failed to get quote: ' + (e.message || ''));
-      setQuoteIsStale(false);
-    } finally {
-      clearTimeout(timer);
-      if (quoteReqIdRef.current === reqId) setQuoteLoading(false);
+    /* Pre-click pricing is ALWAYS price-source-derived. No aggregator
+     * /quote or /price calls are made until the user actually clicks
+     * Buy / Sell / Swap. Prices come from getTokenPriceUsd which walks
+     * CoinGecko -> GeckoTerminal -> Moralis (EVM) -> Helius DAS (Solana).
+     * Those upstream calls fire ONCE per token change in the price
+     * effects above. fetchQuote itself never hits the network - it just
+     * does local math: out = in * fromPriceUsd / toPriceUsd * (1 - fee).
+     * So this body re-runs on amount typing (recomputes the local math)
+     * or on price arrival (one-shot per token change), never on a poll. */
+    const fromNum = parseFloat(fromAmt);
+    if (!Number.isFinite(fromNum) || fromNum <= 0) {
+      setQuote(null); setQuoteIsStale(false); return;
     }
-  }, [fromAmt, fromToken, toToken, slip, route, effectiveEvmAddress, publicKey, customDestAddr, quote]);
+    if (!(fromPriceUsd > 0) || !(toPriceUsd > 0)) {
+      /* Prices not loaded yet - the price effects will refire and re-call
+       * fetchQuote once they resolve. Don't set an error; just stay quiet. */
+      setQuote(null); setQuoteIsStale(false);
+      return;
+    }
+
+    const isCC = route === 'lifi' && !isLifiSameChain(fromToken, toToken);
+    const feeRate = isCC ? TOTAL_FEE_CC : TOTAL_FEE;
+    const grossOut = fromNum * fromPriceUsd / toPriceUsd;
+    const netOut = grossOut * (1 - feeRate);
+
+    /* Eight decimal places for sub-dollar tokens, six otherwise. */
+    const dp = (netOut > 0 && netOut < 0.01) ? 8 : 6;
+
+    setQuote({
+      engine: 'estimate',
+      outAmountDisplay: netOut.toFixed(dp),
+      priceImpactPct: 0,
+      preview: true,
+    });
+    setQuoteIsStale(false);
+    return;
+  }, [fromAmt, fromToken, toToken, route, fromPriceUsd, toPriceUsd]);
 
   useEffect(() => {
     const t = setTimeout(fetchQuote, QUOTE_DEBOUNCE_MS);
     return () => clearTimeout(t);
   }, [fetchQuote]);
 
-  /* ---- Display balance ---- */
+  /* -- Display balance -- */
   const fromBalanceDisplay = useMemo(() => {
     if (isSol(fromToken)) {
       if (fromToken.mint === WSOL_MINT) {
@@ -1775,7 +1885,7 @@ export default function SwapWidget({
     return null;
   }, [fromToken, solBalanceLamports, solSplBalance, evmFromBal]);
 
-  /* ---- MAX ---- */
+  /* -- MAX -- */
   const onMax = useCallback(() => {
     if (fromBalanceDisplay == null || fromBalanceDisplay <= 0) return;
     userTouchedAmtRef.current = true;
@@ -1792,7 +1902,7 @@ export default function SwapWidget({
     setFromAmt(max > 0 ? max.toFixed(fromToken.decimals <= 2 ? 2 : 6) : '0');
   }, [fromBalanceDisplay, fromToken, solBalanceLamports, isNativeEvmFrom]);
 
-  /* ---- Quick-buy preset: "spend $X of from-token" ---- */
+  /* -- Quick-buy preset: "spend $X of from-token" -- */
   const applyBuyPreset = useCallback((dollars) => {
     if (!fromToken) return;
     userTouchedAmtRef.current = true;
@@ -1801,14 +1911,12 @@ export default function SwapWidget({
       setFromAmt(tokens > 0 ? tokens.toFixed(6) : '0');
       return;
     }
-    /* No price yet - if from-token is a stablecoin, $X is just X tokens. */
     if (/^(USDC|USDT|DAI|USDE|TUSD|FRAX|USDP|GUSD)$/i.test(fromToken.symbol || '')) {
       setFromAmt(String(dollars));
     }
-    /* Otherwise wait for price; quote will refresh when it loads. */
   }, [fromToken, fromPriceUsd]);
 
-  /* ---- Quick-sell preset: "Sell X% of balance" ---- */
+  /* -- Quick-sell preset: "Sell X% of balance" -- */
   const applySellPreset = useCallback((pct) => {
     if (fromBalanceDisplay == null || fromBalanceDisplay <= 0) return;
     userTouchedAmtRef.current = true;
@@ -1827,7 +1935,8 @@ export default function SwapWidget({
   const flipTokens = useCallback(() => {
     setFromToken(toToken);
     setToToken(fromToken);
-    setFromAmt(''); setQuote(null); setQuoteError(''); setQuoteIsStale(false); setCustomDestAddr('');
+    setFromAmt(''); setQuote(null); setQuoteError(''); setQuoteIsStale(false);
+    setCustomDestAddr('');
     userTouchedAmtRef.current = false;
   }, [fromToken, toToken]);
 
@@ -1841,26 +1950,20 @@ export default function SwapWidget({
 
   /* ============================================================================
    * EXECUTE SWAP
-   *
-   * Jupiter: ONE silent sign for Privy (noPromptOnSignature) or ONE popup for
-   * external wallets. Fee bundled via platformFeeBps + feeAccount.
-   *
-   * 0x Permit2: Native source = 1 sig. ERC20 = 2 sigs (typed-data + tx).
-   * Fee taken via swapFeeBps. Privy embedded EVM signs silently.
-   *
-   * LiFi: Solana source = 1 sig. EVM native source = 1 sig. EVM ERC20 source
-   * = 2 sigs (approve + bridge). Fee = 5% same-chain or 8% cross-chain.
    * ========================================================================= */
   const executeSwap = useCallback(async () => {
     if (!walletConnected) {
-      /* No wallet at all - queue the swap, open Privy login (or fall back
-       * to the wallet modal). useEffect below auto-fires after connect. */
       setPendingSwap(true);
       if (loginPrivy) loginPrivy();
       else if (onConnectWallet) onConnectWallet();
       return;
     }
-    if (!quote) return;
+    /* No `!quote` gate here. The pre-click `quote` is only a price-derived
+     * estimate for display; the real route is fetched fresh at execution
+     * time below. Letting the user click without an estimate covers the
+     * brief window before prices arrive AND tokens whose USD price isn't
+     * indexed by any of CG/GT/Moralis/Helius (the swap still routes via
+     * Jupiter/0x/LiFi at click time). */
 
     if (swapStatusTimerRef.current) {
       clearTimeout(swapStatusTimerRef.current);
@@ -1868,96 +1971,16 @@ export default function SwapWidget({
     }
     setSwapStatus('loading'); setSwapError(''); setSwapTx(null);
 
-    /* Determine actual engine to use. The quote may have come back via
-     * fallback (0x -> LiFi), in which case we need to honor that. */
-    const engineUsed = quote.engine || route;
+    const engineUsed = route;
 
     try {
       const fromAmtRaw = toRawAmount(fromAmt, fromToken.decimals);
 
-      /* ============ JUPITER ============ */
-      if (engineUsed === 'jupiter') {
-        if (!publicKey) throw new Error('Connect a Solana wallet');
-        const outputMintPk = new PublicKey(toToken.mint);
-        const feeWalletPk  = new PublicKey(SOL_FEE_WALLET);
-        const feeAta = await getAssociatedTokenAddress(outputMintPk, feeWalletPk);
-
-        /* Always re-quote at execution time -- the cached preview quote is
-         * fine for display but the swap-build endpoint wants a fresh one. */
-        const freshQuote = await fetchJupiterQuote({
-          inputMint:  fromToken.mint,
-          outputMint: toToken.mint,
-          amountRaw:  fromAmtRaw,
-          slipBps:    Math.round(slip * 100),
-        });
-
-        const swapData = await fetchJupiterSwapTx({
-          quoteResponse: freshQuote,
-          userPublicKey: publicKey.toString(),
-          feeAccount:    feeAta.toBase58(),
-        });
-
-        const jupTx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
-        const sig = await sendTransaction(jupTx, connection, { skipPreflight: true, maxRetries: 3 });
-        setSwapTx(sig);
-
-        /* Confirm against the blockhash that's already in the tx. */
-        const bh   = jupTx.message.recentBlockhash;
-        const lvbh = (await connection.getLatestBlockhash('confirmed')).lastValidBlockHeight;
-        connection.confirmTransaction(
-          { signature: sig, blockhash: bh, lastValidBlockHeight: lvbh },
-          'confirmed'
-        ).catch(() => {});
-      }
-
-      /* ============ 0X (EVM same-chain Permit2) ============ */
-      else if (engineUsed === '0x') {
-        if (!effectiveEvmAddress || !walletClientRef.current) throw new Error('Connect an EVM wallet');
-        if (evmChainId && evmChainId !== fromToken.chainId) {
-          await ensureChain(fromToken.chainId);
-        }
-        const wc = walletClientRef.current;
-        if (!wc) throw new Error('Wallet not ready -- try again');
-
-        /* Re-quote with the real taker so we get calldata + permit2. */
-        const freshOx = await fetchOxQuote({
-          chainId:     fromToken.chainId,
-          sellToken:   fromToken.address,
-          buyToken:    toToken.address,
-          sellAmount:  fromAmtRaw,
-          taker:       effectiveEvmAddress,
-          slipBps:     Math.round(slip * 100),
-          feeRecipient: EVM_FEE_WALLET,
-          feeToken:     toToken.address,
-        });
-        const permit2 = freshOx.permit2;
-        const tx = freshOx.transaction;
-        if (!tx || !tx.to || !tx.data) throw new Error('0x: incomplete transaction');
-
-        let finalTxData = tx.data;
-        if (permit2 && permit2.eip712) {
-          const signature = await wc.signTypedData({
-            domain:      permit2.eip712.domain,
-            types:       permit2.eip712.types,
-            primaryType: permit2.eip712.primaryType,
-            message:     permit2.eip712.message,
-          });
-          const sigHex = signature.startsWith('0x') ? signature.slice(2) : signature;
-          const sigLen = (sigHex.length / 2).toString(16).padStart(64, '0');
-          finalTxData = tx.data + sigLen + sigHex;
-        }
-
-        const hash = await wc.sendTransaction({
-          to:    tx.to,
-          data:  finalTxData,
-          value: tx.value ? BigInt(tx.value) : BigInt(0),
-          gas:   tx.gas ? BigInt(tx.gas) : undefined,
-        });
-        setSwapTx(hash);
-      }
-
-      /* ============ LIFI (cross-chain or unsupported same-chain EVM) ============ */
-      else {
+      /* Reusable LiFi swap runner. Called directly for cross-chain or
+       * 0x-unsupported same-chain routes, AND as a fallback when 0x has
+       * no route on a supported same-chain pair (LiFi has broader DEX
+       * coverage on long-tail pairs). */
+      const runLifiSwap = async () => {
         if (isBtc(fromToken)) {
           throw new Error('Sending FROM Bitcoin is not yet supported. Pick another source token.');
         }
@@ -1976,7 +1999,6 @@ export default function SwapWidget({
         if (isEvm(toToken) && !isValidEvmAddr(dstAddr)) throw new Error('Invalid EVM destination address');
         if (isBtc(toToken) && !isValidBtcAddr(dstAddr)) throw new Error('Invalid Bitcoin destination address');
 
-        /* Re-quote with the user's real address. */
         const freshLifi = await fetchLifiQuote({
           fromToken, toToken, fromAmtRaw,
           fromAddress: srcAddr, toAddress: dstAddr, slip,
@@ -2002,7 +2024,7 @@ export default function SwapWidget({
           }
           const wc = walletClientRef.current;
           const pc = publicClientRef.current;
-          if (!wc) throw new Error('Wallet not ready -- try again');
+          if (!wc) throw new Error('Wallet not ready - try again');
 
           const isNativeFrom = (fromToken.address || '').toLowerCase() === NATIVE_EVM;
           if (!isNativeFrom) {
@@ -2025,7 +2047,6 @@ export default function SwapWidget({
               } catch {}
             }
             if (needsApprove) {
-              /* Max-uint approval -- subsequent swaps of this token are 1 sig. */
               const approveData = '0x095ea7b3' +
                 spender.slice(2).padStart(64, '0') +
                 'f'.repeat(64);
@@ -2046,9 +2067,99 @@ export default function SwapWidget({
           });
           setSwapTx(hash);
         }
+      };
+
+      /* ============ JUPITER ============ */
+      if (engineUsed === 'jupiter') {
+        if (!publicKey) throw new Error('Connect a Solana wallet');
+        const outputMintPk = new PublicKey(toToken.mint);
+        const feeWalletPk  = new PublicKey(SOL_FEE_WALLET);
+        const feeAta = await getAssociatedTokenAddress(outputMintPk, feeWalletPk);
+
+        const freshQuote = await fetchJupiterQuote({
+          inputMint:  fromToken.mint,
+          outputMint: toToken.mint,
+          amountRaw:  fromAmtRaw,
+          slipBps:    Math.round(slip * 100),
+        });
+
+        const swapData = await fetchJupiterSwapTx({
+          quoteResponse: freshQuote,
+          userPublicKey: publicKey.toString(),
+          feeAccount:    feeAta.toBase58(),
+        });
+
+        const jupTx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
+        const sig = await sendTransaction(jupTx, connection, { skipPreflight: true, maxRetries: 3 });
+        setSwapTx(sig);
+
+        const bh   = jupTx.message.recentBlockhash;
+        const lvbh = (await connection.getLatestBlockhash('confirmed')).lastValidBlockHeight;
+        connection.confirmTransaction(
+          { signature: sig, blockhash: bh, lastValidBlockHeight: lvbh },
+          'confirmed'
+        ).catch(() => {});
       }
 
-      /* Persist the pair the user just swapped so we restore it next visit. */
+      /* ============ 0X (EVM same-chain Permit2) with LiFi fallback ============ */
+      else if (engineUsed === '0x') {
+        if (!effectiveEvmAddress || !walletClientRef.current) throw new Error('Connect an EVM wallet');
+        if (evmChainId && evmChainId !== fromToken.chainId) {
+          await ensureChain(fromToken.chainId);
+        }
+        const wc = walletClientRef.current;
+        if (!wc) throw new Error('Wallet not ready - try again');
+
+        try {
+          const freshOx = await fetchOxQuote({
+            chainId:     fromToken.chainId,
+            sellToken:   fromToken.address,
+            buyToken:    toToken.address,
+            sellAmount:  fromAmtRaw,
+            taker:       effectiveEvmAddress,
+            slipBps:     Math.round(slip * 100),
+            feeRecipient: EVM_FEE_WALLET,
+            feeToken:     toToken.address,
+          });
+          const permit2 = freshOx.permit2;
+          const tx = freshOx.transaction;
+          if (!tx || !tx.to || !tx.data) throw new Error('0x: incomplete transaction');
+
+          let finalTxData = tx.data;
+          if (permit2 && permit2.eip712) {
+            const signature = await wc.signTypedData({
+              domain:      permit2.eip712.domain,
+              types:       permit2.eip712.types,
+              primaryType: permit2.eip712.primaryType,
+              message:     permit2.eip712.message,
+            });
+            const sigHex = signature.startsWith('0x') ? signature.slice(2) : signature;
+            const sigLen = (sigHex.length / 2).toString(16).padStart(64, '0');
+            finalTxData = tx.data + sigLen + sigHex;
+          }
+
+          const hash = await wc.sendTransaction({
+            to:    tx.to,
+            data:  finalTxData,
+            value: tx.value ? BigInt(tx.value) : BigInt(0),
+            gas:   tx.gas ? BigInt(tx.gas) : undefined,
+          });
+          setSwapTx(hash);
+        } catch (oxErr) {
+          if (oxErr && oxErr.name === 'AbortError') throw oxErr;
+          /* 0x failed (typically "no route" on long-tail same-chain pairs)
+           * - LiFi has broader DEX coverage so retry there. We only fall
+           * back if 0x didn't actually submit a tx (no setSwapTx hit). */
+          console.warn('[SwapWidget] 0x failed (' + (oxErr.message || 'unknown') + '), retrying via LiFi');
+          await runLifiSwap();
+        }
+      }
+
+      /* ============ LIFI (cross-chain or 0x-unsupported same-chain) ============ */
+      else {
+        await runLifiSwap();
+      }
+
       saveLastPair(fromToken, toToken);
 
       setSwapStatus('success');
@@ -2084,10 +2195,10 @@ export default function SwapWidget({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletConnected, pendingSwap]);
 
-  /* ---- Tx explorer link ---- */
+  /* -- Tx explorer link -- */
   const txLink = useMemo(() => {
     if (!swapTx) return null;
-    const engineUsed = (quote && quote.engine) || route;
+    const engineUsed = route;
     if (engineUsed === 'jupiter') return 'https://solscan.io/tx/' + swapTx;
     if (engineUsed === 'lifi')    return isSol(fromToken)
       ? 'https://solscan.io/tx/' + swapTx
@@ -2115,9 +2226,6 @@ export default function SwapWidget({
    * RENDER
    * ========================================================================= */
 
-  /* In 'buy' mode, always show buy presets. In 'swap' mode, show them only
-   * when the from-token is something users typically pay with - i.e. a gas
-   * token or a stable. Avoids cluttering the UI with "spend $25 of WIF". */
   const showBuyPresets  = modeProp === 'buy' || (
     modeProp === 'swap' && fromToken &&
     /^(SOL|ETH|BNB|POL|AVAX|MNT|FTM|CRO|GLMR|CELO|SEI|RON|FUSE|KCS|HYPE|YALA|BERA|APE|FLOW|KAVA|S|CORE|MON|BTC|XPL|FLR|METIS|USDC|USDT|DAI|USDE|TUSD|FRAX|USDP|GUSD)$/i.test(fromToken.symbol)
@@ -2127,18 +2235,17 @@ export default function SwapWidget({
   const fromUsdValue = fromAmt && fromPriceUsd > 0 ? parseFloat(fromAmt) * fromPriceUsd : 0;
   const toUsdValue   = quote && toPriceUsd > 0 ? parseFloat(quote.outAmountDisplay) * toPriceUsd : 0;
 
-  /* Wallet check used by the action button. Includes Privy. */
   const needsSol = (route === 'jupiter') || (route === 'lifi' && isSol(fromToken));
   const needsEvm = (route === '0x') || (route === 'lifi' && isEvm(fromToken));
   const hasNeededWallet = (needsSol && hasSolSigner) || (needsEvm && hasEvmSigner);
 
-  /* TO box display: when a quote is loading on top of an existing quote we
-   * keep showing the old number greyed out so the UI doesn't blink to "0.00"
-   * on every keystroke. */
-  const toDisplay = quote ? quote.outAmountDisplay : (quoteLoading ? '...' : '0.00');
+  const isPreview = !!(quote && quote.preview);
+  const toDisplay = quote ? (isPreview ? '~' + quote.outAmountDisplay : quote.outAmountDisplay)
+                          : (quoteLoading ? '...' : '0.00');
   const toColor = quoteIsStale ? C.muted
-    : quoteLoading && !quote ? C.muted
-    : quote ? C.green : C.muted2;
+                : quoteLoading && !quote ? C.muted
+                : quote ? C.green
+                : C.muted2;
 
   return (
     <div style={{ width: '100%', maxWidth: compact ? '100%' : 520, margin: '0 auto', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
@@ -2302,8 +2409,23 @@ export default function SwapWidget({
           )}
         </div>
 
-        {/* QUOTE ERROR */}
-        {quoteError && !quoteLoading && (
+        {/* PREVIEW HINT - shown when the quote is a price-derived estimate
+         * (i.e. user hasn't clicked yet). On click, executeSwap fetches a
+         * real aggregator quote using their actual wallet. */}
+        {isPreview && (
+          <div style={{
+            marginTop: 6, fontSize: 11, color: C.muted,
+            textAlign: 'right', fontStyle: 'italic',
+          }}>
+            Estimated &middot; live route on confirm
+          </div>
+        )}
+
+        {/* QUOTE ERROR - only shown when we have NO valid quote to display.
+         * If a refresh attempt fails but we already have a working quote on
+         * screen, we keep showing the numbers and stay silent. The user
+         * came here to see the price, not to read about API hiccups. */}
+        {quoteError && !quoteLoading && !quote && (
           <div style={{
             marginTop: 8, padding: 10,
             background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.2)',
@@ -2324,7 +2446,6 @@ export default function SwapWidget({
               quote.outAmountDisplay
                 ? ['Min received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken && toToken.symbol)]
                 : null,
-              quote.fallback ? ['Route', 'LiFi (0x had no route)'] : null,
             ].filter(Boolean).map((item) => (
               <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
                 <span style={{ color: C.muted }}>{item[0]}</span>
@@ -2334,7 +2455,7 @@ export default function SwapWidget({
           </div>
         )}
 
-        {/* DESTINATION ADDRESS (cross-chain to a wallet user doesn't have connected) */}
+        {/* DESTINATION ADDRESS */}
         {needsDestAddr && (
           <div style={{ marginTop: 10 }}>
             <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 6 }}>DESTINATION WALLET</div>
@@ -2392,9 +2513,6 @@ export default function SwapWidget({
           }
           return (
             <>
-              {/* "First send" approval banner -- shown only for external EVM
-               * ERC20 sources. Privy users sign silently and don't see popups,
-               * so the messaging is hidden for them. */}
               {requiresApproval && (
                 <div style={{
                   marginTop: 10, padding: '10px 12px',
@@ -2410,29 +2528,26 @@ export default function SwapWidget({
                 </div>
               )}
               <button onClick={executeSwap}
-                disabled={swapStatus === 'loading' || !fromAmt || !quote || quoteLoading}
+                disabled={swapStatus === 'loading' || !fromAmt}
                 style={{
                   width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
                   background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
                     : swapStatus === 'error' ? 'rgba(255,59,107,.2)'
-                    : !fromAmt || !quote ? C.card2
+                    : !fromAmt ? C.card2
                     : modeProp === 'sell' ? C.sellGrad : C.buyGrad,
-                  color: !fromAmt || !quote ? C.muted2 : swapStatus === 'error' ? C.red : '#fff',
+                  color: !fromAmt ? C.muted2 : swapStatus === 'error' ? C.red : '#fff',
                   fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
                   cursor: swapStatus === 'loading' ? 'not-allowed' : 'pointer',
                   minHeight: 52, transition: 'all .2s',
                 }}>
                 {swapStatus === 'loading' ? 'Confirming...'
                   : swapStatus === 'success' ? 'Confirmed!'
-                  : swapStatus === 'error' ? 'Failed -- try again'
+                  : swapStatus === 'error' ? 'Failed - try again'
                   : !fromAmt ? 'Enter amount'
-                  : quoteLoading && !quote ? 'Getting best route...'
-                  : !quote ? 'No route'
                   : (modeProp === 'sell' ? 'Sell ' : modeProp === 'buy' ? 'Buy ' : 'Swap ') +
                     (fromToken ? fromToken.symbol : '') + ' \u2192 ' + (toToken ? toToken.symbol : '')}
               </button>
 
-              {/* Stuck-swap reset (>30s loading) */}
               {swapStatus === 'loading' && stuckSwap && (
                 <div style={{
                   marginTop: 10, padding: '10px 12px',
@@ -2440,7 +2555,7 @@ export default function SwapWidget({
                   borderRadius: 10, fontSize: 11, color: C.muted, lineHeight: 1.4,
                 }}>
                   <div style={{ color: '#fff', fontWeight: 600, marginBottom: 4 }}>Still waiting on your wallet...</div>
-                  <div>If you've already signed, the transaction may still complete -- check your wallet for status.</div>
+                  <div>If you've already signed, the transaction may still complete - check your wallet for status.</div>
                   <button onClick={cancelStuckSwap} style={{
                     marginTop: 8, background: 'transparent', border: '1px solid ' + C.red, color: C.red,
                     padding: '6px 12px', borderRadius: 6, fontSize: 11,
@@ -2495,14 +2610,77 @@ export default function SwapWidget({
   );
 }
 
+/* CoinGecko platform slug -> our chain ID. Used to translate CG /coins/{id}
+ * platforms map into a token shape SwapWidget understands. */
+const CG_SLUG_TO_CHAIN = {
+  ethereum: 1, 'optimistic-ethereum': 10, cronos: 25, 'binance-smart-chain': 56,
+  xdai: 100, unichain: 130, 'polygon-pos': 137, sonic: 146,
+  fantom: 250, fraxtal: 252, zksync: 324, 'world-chain': 480,
+  core: 1116, lisk: 1135, moonbeam: 1284, 'sei-evm': 1329, ronin: 2020,
+  kava: 2222, abstract: 2741, mantle: 5000, base: 8453,
+  apechain: 33139, mode: 34443, 'arbitrum-one': 42161, celo: 42220,
+  avalanche: 43114, zircuit: 48900, ink: 57073, linea: 59144,
+  'bob-network': 60808, berachain: 80094, blast: 81457,
+  taiko: 167000, bitlayer: 200901, scroll: 534352, zora: 7777777,
+};
+
+/* Resolve a CG /coins/{id} response into a normalized token. Picks chain in
+ * order: preferred (user's connected EVM chain) -> Ethereum -> Solana ->
+ * any other EVM. Returns null if no usable platform is found. */
+function resolveFromCgCoin(originalCoin, cgData, preferredChainId) {
+  if (!cgData) return null;
+  const platforms = cgData.platforms || {};
+  const detail = cgData.detail_platforms || {};
+  const baseLogo = (cgData.image && (cgData.image.large || cgData.image.small || cgData.image.thumb))
+    || originalCoin.image || originalCoin.logoURI || null;
+  const baseSym  = (cgData.symbol || originalCoin.symbol || 'TOKEN').toUpperCase();
+  const baseName = cgData.name || originalCoin.name || baseSym;
+
+  const tryEvm = (slug, chainId) => {
+    const addr = platforms[slug];
+    if (!addr) return null;
+    return {
+      chain: 'evm', address: addr, chainId,
+      symbol: baseSym, name: baseName,
+      decimals: (detail[slug] && typeof detail[slug].decimal_place === 'number') ? detail[slug].decimal_place : 18,
+      logoURI: baseLogo,
+    };
+  };
+
+  /* 1. Preferred chain (user's connected EVM chain) */
+  if (preferredChainId) {
+    const slug = Object.keys(CG_SLUG_TO_CHAIN).find((s) => CG_SLUG_TO_CHAIN[s] === preferredChainId);
+    if (slug) {
+      const e = tryEvm(slug, preferredChainId);
+      if (e) return e;
+    }
+  }
+  /* 2. Ethereum mainnet */
+  const eth = tryEvm('ethereum', 1);
+  if (eth) return eth;
+  /* 3. Solana */
+  if (platforms.solana) {
+    return {
+      chain: 'solana', mint: platforms.solana,
+      symbol: baseSym, name: baseName,
+      decimals: (detail.solana && typeof detail.solana.decimal_place === 'number') ? detail.solana.decimal_place : 6,
+      logoURI: baseLogo,
+    };
+  }
+  /* 4. Any other EVM, in popularity order */
+  const fallback = [56, 8453, 42161, 137, 10, 43114, 59144, 81457, 5000, 534352, 324];
+  for (let i = 0; i < fallback.length; i++) {
+    const cid = fallback[i];
+    const slug = Object.keys(CG_SLUG_TO_CHAIN).find((s) => CG_SLUG_TO_CHAIN[s] === cid);
+    if (!slug) continue;
+    const e = tryEvm(slug, cid);
+    if (e) return e;
+  }
+  return null;
+}
+
 /* ============================================================================
  * TRADE DRAWER
- * Bottom-sheet wrapper used by TokenDetail / NewLaunches / Markets / Portfolio.
- * Opens SwapWidget in compact mode with mode + token defaults pre-applied.
- *
- * The headerChain / onHeaderChainChange props are accepted (for backward
- * compatibility with older callers) but no longer used internally - routing
- * is driven entirely by the from/to tokens.
  * ========================================================================= */
 
 export function TradeDrawer({
@@ -2519,18 +2697,67 @@ export function TradeDrawer({
   const { isConnected: evmConnected, chainId: evmChainId } = useAccount();
   const ws = { solConnected, evmConnected, evmChainId };
 
-  const pair = useMemo(() => {
-    if (!coin) return defaultTokenPair({ mode, viewedToken: null, lastFromToken: null, walletState: ws });
-    return defaultTokenPair({ mode, viewedToken: coin, lastFromToken: null, walletState: ws });
+  /* Coin enrichment. The drawer is the integration boundary between
+   * Markets/TokenDetail/NewLaunches and SwapWidget. Markets passes
+   * CoinGecko-shaped objects (id, symbol, name, image - NO contract).
+   * NewLaunches passes pump.fun shapes ({ mint, ... }). TokenDetail can pass
+   * either. We probe normalizeToken first; if it fails (typically a CG
+   * ERC20 with only `id`), we fetch /coins/{id} from the CG proxy to pull
+   * the contract address from `platforms`, then build a real token shape
+   * for SwapWidget to consume.
+   *
+   * If enrichment fails (CG doesn't have the coin, or it has no usable
+   * platform), the drawer still opens with a sensible default pair
+   * (SOL/USDC) and a small inline note so the user isn't stuck. */
+  const [enrichedCoin, setEnrichedCoin] = useState(null);
+  const [enrichFailed, setEnrichFailed] = useState(false);
+
+  const directNormalized = coin ? normalizeToken(coin) : null;
+  const needsEnrichment = !!(coin && !directNormalized && coin.id);
+  const enriching = !!(open && needsEnrichment && !enrichedCoin && !enrichFailed);
+
+  useEffect(() => {
+    if (!open) {
+      setEnrichedCoin(null);
+      setEnrichFailed(false);
+      return undefined;
+    }
+    if (!coin || directNormalized || !coin.id) {
+      setEnrichedCoin(null);
+      setEnrichFailed(false);
+      return undefined;
+    }
+    let cancelled = false;
+    setEnrichedCoin(null);
+    setEnrichFailed(false);
+    fetch('/api/coingecko/api/v3/coins/' + encodeURIComponent(coin.id) +
+      '?localization=false&tickers=false&community_data=false&developer_data=false&sparkline=false')
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => {
+        if (cancelled) return;
+        const resolved = resolveFromCgCoin(coin, d, evmChainId);
+        if (resolved) setEnrichedCoin(resolved);
+        else setEnrichFailed(true);
+      })
+      .catch(() => { if (!cancelled) setEnrichFailed(true); });
+    return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [coin, mode, solConnected, evmConnected, evmChainId]);
+  }, [open, coin && coin.id, evmChainId]);
+
+  const effectiveCoin = enrichedCoin || coin;
+
+  const pair = useMemo(() => {
+    if (!effectiveCoin) return defaultTokenPair({ mode, viewedToken: null, lastFromToken: null, walletState: ws });
+    return defaultTokenPair({ mode, viewedToken: effectiveCoin, lastFromToken: null, walletState: ws });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [effectiveCoin, mode, solConnected, evmConnected, evmChainId]);
 
   const widgetKey = useMemo(() => {
-    const id = coin ? (coin.mint || coin.address || coin.id || 'tok') : 'none';
+    const c = effectiveCoin || coin;
+    const id = c ? (c.mint || c.address || c.id || 'tok') : 'none';
     return id + '-' + mode;
-  }, [coin, mode]);
+  }, [effectiveCoin, coin, mode]);
 
-  /* Lock dismissal during in-flight swap (loading state). */
   const [swapStatus, setSwapStatus] = useState('idle');
   const isBusy = swapStatus === 'loading';
 
@@ -2545,7 +2772,10 @@ export function TradeDrawer({
   useEscapeKey(open, safeClose);
 
   if (!open) return null;
-  const symbol = coin && coin.symbol ? coin.symbol.toUpperCase() : '';
+  const symbol = (effectiveCoin && effectiveCoin.symbol) || (coin && coin.symbol) || '';
+  const symbolUpper = symbol ? symbol.toUpperCase() : '';
+  const headerImg = (effectiveCoin && (effectiveCoin.image || effectiveCoin.logoURI))
+    || (coin && (coin.image || coin.logoURI));
 
   return (
     <>
@@ -2565,13 +2795,13 @@ export function TradeDrawer({
           }} />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              {coin && (coin.image || coin.logoURI) && (
-                <img src={coin.image || coin.logoURI} alt={symbol}
+              {headerImg && (
+                <img src={headerImg} alt={symbolUpper}
                   style={{ width: 28, height: 28, borderRadius: '50%' }}
                   onError={(e) => { e.currentTarget.style.display = 'none'; }} />
               )}
               <div style={{ color: mode === 'buy' ? C.accent : C.red, fontWeight: 800, fontSize: 17 }}>
-                {mode === 'buy' ? 'Buy' : 'Sell'} {symbol}
+                {mode === 'buy' ? 'Buy' : 'Sell'} {symbolUpper}
               </div>
             </div>
             <button onClick={safeClose} disabled={isBusy} aria-label="Close" style={{
