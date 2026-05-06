@@ -3,7 +3,7 @@
  *
  * GMGN / Photon / BullX -style one-tap preset bar for token pages.
  * 
- * Behavior: 
+ * Behavior:  
  *   - Privy embedded wallet (activeWalletKind === 'privy'):
  *       Tap a preset -> trade fires DIRECT via solanaSwap.js. NO popup.
  *       Pure one-click. This is the feature the user asked for.
