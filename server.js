@@ -1,28 +1,5 @@
 /**
  * NEXUS DEX - Backend Proxy Server
- *
- * Responsibilities:
- *   1. Proxy all third-party API calls so secrets never reach the browser.
- *   2. Rate-limit per IP to protect API quotas.
- *   3. CORS locked to our own domain in production.
- *   4. Serve the built React app.
- *   5. Healthcheck for Railway.
- *
- * Required env vars (server-side, NOT REACT_APP_ prefixed):
- *   OX_API_KEY            - 0x.org API key
- *   PINATA_JWT            - Pinata JWT for IPFS uploads
- *   HELIUS_API_KEY        - Helius Solana RPC key (optional, falls back to public)
- *   MORALIS_API_KEY       - Moralis API key for Portfolio EVM balances
- *   JUPITER_API_KEY       - Jupiter aggregator key (optional, free tier OK)
- *   COINGECKO_API_KEY     - CoinGecko Pro/Demo API key (optional)
- *   ALLOWED_ORIGINS       - comma-separated list of allowed origins
- *                           (e.g. "https://swap.verixiaapps.com,http://localhost:3000")
- *   PORT                  - provided by Railway
- *
- * Deprecated (kept temporarily for migration):
- *   REACT_APP_0X_API_KEY      - falls back to this if OX_API_KEY missing
- *   REACT_APP_PINATA_JWT      - falls back to this if PINATA_JWT missing
- *   REACT_APP_MORALIS_API_KEY - falls back to this if MORALIS_API_KEY missing
  */
 
 require('dotenv').config();
@@ -37,45 +14,11 @@ const app = express();
 const PORT = process.env.PORT || 3001;
 const NODE_ENV = process.env.NODE_ENV || 'development';
 
-// Hide Express fingerprint - defense in depth.
 app.disable('x-powered-by');
-
-// Required for Railway (and any reverse-proxy setup) so req.ip resolves to
-// the real client IP, not the proxy's. Must be set BEFORE rate-limit middleware.
 app.set('trust proxy', 1);
 
 /* ============================================================================
  * SECURITY HEADERS
- *
- * CSP (Content-Security-Policy) is the main defense against XSS and
- * clickjacking. Privy requires specific domains for the embedded wallet
- * iframe (auth.privy.io, *.rpc.privy.systems, WalletConnect relays,
- * Cloudflare Turnstile for CAPTCHA). The list below is built from Privy's
- * official guidance plus what this app actually uses.
- *
- * Rollout strategy:
- *   1. Default mode is 'report-only'. CSP violations are logged to the
- *      browser console (and to CSP_REPORT_URI if set) but nothing is
- *      blocked. Run for 24-48h in production while real users exercise
- *      the app, watch the console / report endpoint for violations.
- *   2. Once clean, set CSP_MODE=enforce in Railway env vars. The header
- *      flips from Content-Security-Policy-Report-Only to the enforcing
- *      Content-Security-Policy. Browsers now block disallowed loads.
- *   3. If a legitimate domain is missing, add it via the EXTRA_CSP_*
- *      env vars (comma-separated) and redeploy. No code change needed.
- *
- * X-Frame-Options: DENY blocks the app from being embedded in any iframe
- * (clickjacking defense). frame-ancestors 'none' in CSP does the same for
- * modern browsers; both are sent for belt-and-suspenders coverage.
- *
- * Env vars:
- *   CSP_MODE                - 'report-only' (default) or 'enforce'
- *   CSP_REPORT_URI          - optional URL to receive violation reports
- *   EXTRA_CSP_CONNECT_SRC   - extra domains for connect-src (CSV)
- *   EXTRA_CSP_FRAME_SRC     - extra domains for frame-src   (CSV)
- *   EXTRA_CSP_SCRIPT_SRC    - extra domains for script-src  (CSV)
- *   HSTS_DISABLE            - set to '1' to skip HSTS (e.g. for staging
- *                             on a non-HTTPS preview URL)
  * ========================================================================= */
 
 const CSP_MODE       = (process.env.CSP_MODE || 'report-only').toLowerCase();
@@ -88,45 +31,25 @@ const EXTRA_CONNECT_SRC = _splitCsv(process.env.EXTRA_CSP_CONNECT_SRC);
 const EXTRA_FRAME_SRC   = _splitCsv(process.env.EXTRA_CSP_FRAME_SRC);
 const EXTRA_SCRIPT_SRC  = _splitCsv(process.env.EXTRA_CSP_SCRIPT_SRC);
 
-/* Each entry is [directive_name, [sources]]. */
 const CSP_DIRECTIVES = [
-  /* Default deny - everything below is an explicit allowlist. */
   ['default-src', ["'self'"]],
-
-  /* CRA's index.html injects inline env config; without 'unsafe-inline'
-   * the SPA won't boot. Tightening further requires nonce-based serving
-   * (per-request CSP header with a nonce attribute on each <script>). */
   ['script-src', [
     "'self'",
     "'unsafe-inline'",
     'https://challenges.cloudflare.com',
     ...EXTRA_SCRIPT_SRC,
   ]],
-
-  /* React's inline `style={{...}}` (used everywhere in this app) requires
-   * 'unsafe-inline'. Google Fonts CSS for Syne / JetBrains Mono. */
   ['style-src', [
     "'self'",
     "'unsafe-inline'",
     'https://fonts.googleapis.com',
   ]],
-
-  /* Token logos can come from anywhere - GitHub raw, CoinGecko CDN,
-   * IPFS gateways, project websites. Restricting img-src would break
-   * 90%+ of token icons; the risk is minimal because images can't
-   * execute code. */
   ['img-src', ["'self'", 'data:', 'blob:', 'https:']],
-
   ['font-src',     ["'self'", 'data:', 'https://fonts.gstatic.com']],
   ['object-src',   ["'none'"]],
   ['base-uri',     ["'self'"]],
   ['form-action',  ["'self'"]],
-
-  /* Modern equivalent of X-Frame-Options: DENY. */
   ['frame-ancestors', ["'none'"]],
-
-  /* Iframes the app is allowed to embed: Privy auth iframe, WalletConnect
-   * verify iframes, Cloudflare Turnstile CAPTCHA. */
   ['frame-src', [
     "'self'",
     'https://auth.privy.io',
@@ -141,23 +64,12 @@ const CSP_DIRECTIVES = [
     'https://verify.walletconnect.com',
     'https://verify.walletconnect.org',
   ]],
-
-  /* Network connections. 'self' covers all /api/* proxy routes (Jupiter,
-   * 0x, LiFi, Helius, Moralis, CoinGecko, Pinata are all proxied through
-   * this server). The remaining entries are for direct browser->third-party
-   * connections that can't be proxied (Privy auth flow, WalletConnect
-   * relay WebSockets, Solana cluster RPC).
-   *
-   * Privy's docs explicitly require Solana cluster URLs even when an RPC
-   * override is provided - the SDK falls back to them in some flows. */
   ['connect-src', [
     "'self'",
-    /* Privy */
     'https://auth.privy.io',
     'https://*.privy.io',
     'https://*.privy.systems',
     'https://*.rpc.privy.systems',
-    /* WalletConnect (HTTPS + WSS) */
     'https://explorer-api.walletconnect.com',
     'https://*.walletconnect.com',
     'https://*.walletconnect.org',
@@ -165,18 +77,14 @@ const CSP_DIRECTIVES = [
     'wss://relay.walletconnect.org',
     'wss://*.walletconnect.com',
     'wss://*.walletconnect.org',
-    /* Coinbase Wallet */
     'wss://www.walletlink.org',
-    /* Solana clusters (Privy requires these even with RPC override) */
     'https://api.mainnet-beta.solana.com',
     'https://api.devnet.solana.com',
     'https://api.testnet.solana.com',
-    /* Public EVM RPC fallbacks wagmi may reach without an Alchemy/Infura key */
     'https://*.publicnode.com',
     'https://*.drpc.org',
     ...EXTRA_CONNECT_SRC,
   ]],
-
   ['worker-src',   ["'self'", 'blob:']],
   ['manifest-src', ["'self'"]],
 ];
@@ -197,32 +105,25 @@ if (EXTRA_SCRIPT_SRC.length)  console.log('[security] extra script-src:',  EXTRA
 const HSTS_ENABLED = NODE_ENV === 'production' && process.env.HSTS_DISABLE !== '1';
 
 app.use((req, res, next) => {
-  /* Skip on the healthcheck - some load balancers parse the body and
-   * the headers add noise to monitoring logs. */
   if (req.path === '/health' || req.path === '/api/health') {
     return next();
   }
-
   res.setHeader(CSP_HEADER_NAME, CSP_VALUE);
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-Content-Type-Options', 'nosniff');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
-  /* Disable browser features the app doesn't need. */
   res.setHeader(
     'Permissions-Policy',
     'camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=()'
   );
-
   if (HSTS_ENABLED) {
-    /* 1 year, include subdomains. */
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
-
   next();
 });
 
 /* ============================================================================
- * SECRETS - server-side only, never leaked to browser
+ * SECRETS
  * ========================================================================= */
 
 const OX_API_KEY        = process.env.OX_API_KEY        || process.env.REACT_APP_0X_API_KEY      || '';
@@ -231,13 +132,10 @@ const HELIUS_API_KEY    = process.env.HELIUS_API_KEY    || process.env.REACT_APP
 const MORALIS_API_KEY   = process.env.MORALIS_API_KEY   || process.env.REACT_APP_MORALIS_API_KEY || '';
 const JUPITER_API_KEY   = process.env.JUPITER_API_KEY   || '';
 const COINGECKO_API_KEY = process.env.COINGECKO_API_KEY || '';
-
-// CoinGecko key auth varies by plan: demo uses x-cg-demo-api-key, pro uses
-// x-cg-pro-api-key. COINGECKO_API_KEY_TYPE='pro' opts into pro headers.
 const COINGECKO_API_KEY_TYPE = (process.env.COINGECKO_API_KEY_TYPE || 'demo').toLowerCase();
 
 /* ============================================================================
- * CORS - locked to allowed origins in production
+ * CORS
  * ========================================================================= */
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'https://swap.verixiaapps.com,http://localhost:3000')
@@ -355,7 +253,6 @@ app.get('/api/health', (req, res) => {
 
 /* ============================================================================
  * 0X API PROXY
- *   /api/0x/*   ->   https://api.0x.org/*
  * ========================================================================= */
 
 async function proxy0x(req, res) {
@@ -388,10 +285,8 @@ async function proxy0x(req, res) {
 
 app.get('/api/0x/*', proxy0x);
 app.post('/api/0x/*', proxy0x);
-
 /* ============================================================================
  * RAYDIUM API PROXY
- *   /api/raydium/*   ->   https://api-v3.raydium.io/*
  * ========================================================================= */
 
 app.get('/api/raydium/*', async (req, res) => {
@@ -417,7 +312,6 @@ app.get('/api/raydium/*', async (req, res) => {
 
 /* ============================================================================
  * LIFI API PROXY
- *   /api/lifi/*   ->   https://li.quest/v1/*
  * ========================================================================= */
 
 async function proxyLifi(req, res) {
@@ -449,18 +343,7 @@ app.get('/api/lifi/*', proxyLifi);
 app.post('/api/lifi/*', proxyLifi);
 
 /* ============================================================================
- * JUPITER API PROXY - Solana aggregator
- *
- *   /api/jupiter/swap/v1/quote          ->   api.jup.ag (or lite-api fallback)
- *   /api/jupiter/swap/v1/swap           ->   api.jup.ag (or lite-api fallback)
- *   /api/jupiter/price/v2               ->   lite-api.jup.ag
- *   /api/jupiter/tokens/v1/token/:mint  ->   lite-api.jup.ag
- *
- * Routing rules:
- *   - /price/* and /tokens/* always go to lite-api.jup.ag (these endpoints
- *     don't exist on api.jup.ag).
- *   - /swap/* goes to api.jup.ag when JUPITER_API_KEY is set, otherwise
- *     lite-api.jup.ag (free tier).
+ * JUPITER API PROXY
  * ========================================================================= */
 
 async function proxyJupiter(req, res) {
@@ -505,15 +388,12 @@ app.post('/api/jupiter/*', proxyJupiter);
 /* ============================================================================
  * COINGECKO API PROXY
  *   /api/coingecko/*   ->   https://api.coingecko.com/api/v3/*
- *
- * Putting CoinGecko behind our proxy means rate limits hit our server's
- * single IP rather than the user's (which on mobile often shares CGNAT).
- * If COINGECKO_API_KEY is set, we attach the appropriate header.
+ *   /api/cg/*          ->   same  (legacy alias for Markets.js, etc.)
  * ========================================================================= */
 
-app.get('/api/coingecko/*', async (req, res) => {
+async function proxyCoinGecko(prefix, req, res) {
   try {
-    const subPath = req.path.replace('/api/coingecko', '');
+    const subPath = req.path.replace(prefix, '');
     const url = 'https://api.coingecko.com/api/v3' + subPath + queryStringOf(req);
     const headers = {
       'Content-Type': 'application/json',
@@ -535,11 +415,13 @@ app.get('/api/coingecko/*', async (req, res) => {
     logError('coingecko', e);
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
-});
+}
+
+app.get('/api/coingecko/*', (req, res) => proxyCoinGecko('/api/coingecko', req, res));
+app.get('/api/cg/*',        (req, res) => proxyCoinGecko('/api/cg',        req, res));
 
 /* ============================================================================
  * HELIUS RPC PROXY
- *   POST /api/solana-rpc   ->   helius (or public mainnet-beta fallback)
  * ========================================================================= */
 
 app.post('/api/solana-rpc', async (req, res) => {
