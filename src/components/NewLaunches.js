@@ -1,6 +1,6 @@
 /**
  * NEXUS DEX -- NewLaunches
- *
+ * 
  * Live feed of newly-launched Solana tokens with one-tap buy/sell on each
  * card and a full pump.fun trading drawer on detail pages.
  *
