@@ -1,6 +1,6 @@
 /**
  * NEXUS DEX -- Unified Swap Widget
- *
+ * 
  * Behavior contract (locked):
  *   1. NO header chain selector. Routing is driven entirely by from/to
  *      tokens. Defaults come from the connected wallet's actual state and
