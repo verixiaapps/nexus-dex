@@ -10,7 +10,7 @@ import TokenDetail from './components/TokenDetail.js';
 import Send from './components/Send.js';
 import NewLaunches from './components/NewLaunches.js';
 import TokenLaunch from './components/TokenLaunch.js';
- 
+
 /* ============================================================================
  * App.js - locked plan applied:
  *
@@ -23,11 +23,12 @@ import TokenLaunch from './components/TokenLaunch.js';
  *   Mobile in any EVM app:    Injected (browser wallet) only
  *   Mobile plain Safari/etc.: Privy ONLY
  *
- * The mobile-browser-only-Privy choice is what stops the redirect-back-to-
- * Phantom loop that was eating user sessions on iOS Safari.
+ * Data sources (only these three):
+ *   - Jupiter   - Solana market data, token registry, prices, swaps
+ *   - 0x        - EVM swaps (used inside SwapWidget)
+ *   - LiFi      - Cross-chain quotes + multi-chain token registry/balances
  *
- * All transactions stay on-site. The only off-site step is the wallet's
- * own approval prompt (or for Privy embedded, an in-page prompt).
+ * No CoinGecko, no GeckoTerminal, no Moralis, no other data sources.
  * ========================================================================= */
 
 const C = {
@@ -36,30 +37,19 @@ const C = {
   privy: '#a855f7',
 };
 
-const SOLANA_MINTS = [
-  'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
-  'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263',
-  '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R',
-  'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3',
-  'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So',
-  'orcaEKTdK7LKz57vaAYr9QeNsVEPfiu6QeMU1kektZE',
-  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
-  'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm',
-  'jtojtomepa8tDDcS9EeQJwAkNnhvbTVS6ZoXgbCXyzz',
-  'WENWENvqqNya429ubCdR81ZmD69brwQaaBYY6p3LCpk',
-];
-
-const CG_IDS = 'bitcoin,ethereum,binancecoin,ripple,cardano,dogecoin,solana,avalanche-2,chainlink,uniswap,matic-network,toncoin,shiba-inu,litecoin,polkadot,cosmos,near';
-
-const MARKET_CACHE_KEY = 'nexus_market_cache_v2';
+const MARKET_CACHE_KEY = 'nexus_market_cache_v3';
 const MARKET_POLL_MS   = 30_000;
 
 // All third-party APIs go through our backend proxy. Rate limits hit our
 // server's single IP rather than the user's (which on mobile often shares
 // CGNAT and gets throttled aggressively by free-tier APIs).
-const COINGECKO_MARKETS_URL = '/api/coingecko/coins/markets';
-const JUPITER_TOKENS_URL    = '/api/jupiter/tokens/v1/tagged/strict';
-const JUPITER_PRICE_URL     = '/api/jupiter/price/v2';
+//
+// Jupiter Developer Platform endpoints (post 6 April 2026 migration):
+//   - tokens/v2/toporganicscore/{interval}  -> top Solana tokens with full stats
+//   - tokens/v2/tag?query=verified          -> verified Solana token registry
+//   - price/v3?ids=...                      -> ad-hoc price lookup (used by children)
+const JUPITER_MARKETS_URL  = '/api/jupiter/tokens/v2/toporganicscore/24h?limit=100';
+const JUPITER_REGISTRY_URL = '/api/jupiter/tokens/v2/tag?query=verified';
 
 const GLOBAL_STYLES = `html,body{ margin:0;padding:0;width:100%; min-height:100vh; min-height:100dvh; overflow-x:hidden; overscroll-behavior:none; -webkit-text-size-adjust:100%; text-size-adjust:100%; } body{ -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; } body.nexus-scroll-locked{ overflow:hidden !important; } #root{ min-height:100vh; min-height:100dvh; display:flex; flex-direction:column; } *,*::before,*::after{box-sizing:border-box;} *{ -webkit-tap-highlight-color:transparent; } button,a,[role="button"]{ touch-action:manipulation; } input,button,select,textarea{ font-family:'Syne',sans-serif; font-size:16px; } input[type="text"],input[type="number"],input[type="email"],input[type="password"],input[type="search"],input:not([type]),textarea{ font-size:16px !important; } ::-webkit-scrollbar{width:3px;height:3px;} ::-webkit-scrollbar-track{background:#03060f;} ::-webkit-scrollbar-thumb{background:#1e2d4a;border-radius:2px;} .hide-scrollbar{scrollbar-width:none;} .hide-scrollbar::-webkit-scrollbar{display:none;} .scroll-contain{ overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; } @media(max-width:768px){.desktop-nav{display:none!important;}} @media(min-width:769px){.mobile-nav{display:none!important;}} @keyframes wc-spin { to { transform: rotate(360deg); } }`;
 
@@ -496,6 +486,8 @@ function WalletModal({ open, onClose }) {
           </div>
         </div>
 
+Chunk 3 of 4 (lines 491–730):
+
         <div className="scroll-contain" style={{ flex: 1, padding: '0 24px', paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)' }}>
           {anyConnected ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 400, margin: '0 auto', paddingTop: 8 }}>
@@ -660,6 +652,46 @@ const NAV_TABS = [
   { id: 'portfolio', label: 'Wallet' },
 ];
 
+/* Map a Jupiter Tokens V2 entry onto the legacy `coins` shape used by all
+ * downstream components. Keeping the shape stable means Markets, TokenDetail,
+ * Portfolio etc. don't need to change. */
+function mapJupiterTokenToCoin(t, idx) {
+  if (!t || !t.id) return null;
+  const stats24h = t.stats24h || {};
+  const stats1h  = t.stats1h  || {};
+  const stats6h  = t.stats6h  || {};
+  const buyVol   = Number(stats24h.buyVolume)  || 0;
+  const sellVol  = Number(stats24h.sellVolume) || 0;
+  return {
+    id: t.id,
+    symbol: t.symbol || (t.id.slice(0, 4)),
+    name: t.name || 'Unknown',
+    image: t.icon || null,
+    current_price: typeof t.usdPrice === 'number' ? t.usdPrice : (parseFloat(t.usdPrice) || 0),
+    market_cap: typeof t.mcap === 'number' ? t.mcap : (parseFloat(t.mcap) || 0),
+    market_cap_rank: idx + 1,
+    total_volume: buyVol + sellVol,
+    high_24h: null,
+    low_24h: null,
+    price_change_percentage_1h_in_currency:
+      typeof stats1h.priceChange === 'number' ? stats1h.priceChange : null,
+    price_change_percentage_24h:
+      typeof stats24h.priceChange === 'number' ? stats24h.priceChange : null,
+    price_change_percentage_7d_in_currency:
+      typeof stats6h.priceChange === 'number' ? stats6h.priceChange : null,
+    sparkline_in_7d: null,
+    ath: null,
+    ath_change_percentage: null,
+    circulating_supply:
+      typeof t.circSupply === 'number' ? t.circSupply : (parseFloat(t.circSupply) || null),
+    isSolanaToken: true,
+    organicScore: t.organicScore,
+    organicScoreLabel: t.organicScoreLabel,
+    isVerified: !!t.isVerified,
+    liquidity: typeof t.liquidity === 'number' ? t.liquidity : (parseFloat(t.liquidity) || 0),
+  };
+}
+
 function AppInner() {
   const navigate = useNavigate();
   const location = useLocation();
@@ -721,62 +753,49 @@ function AppInner() {
   const goBack = useCallback(function() { navigate(-1); }, [navigate]);
   const openWallet = useCallback(function() { setWalletModalOpen(true); }, []);
 
-  /* -- markets fetch (all via backend proxy) -- */
+Chunk 4 of 4 (lines 731–end):
 
+  /* -- markets fetch (Jupiter only - all via backend proxy) --
+   * Two parallel calls:
+   *   1. Top organic-scored Solana tokens (24h) -> drives the Markets tab
+   *   2. Verified Solana token registry        -> token picker / lookups
+   */
   useEffect(function() {
     var isMounted = true;
     var controller = new AbortController();
 
     try {
       var cached = JSON.parse(localStorage.getItem(MARKET_CACHE_KEY) || 'null');
-      if (cached && cached.v === 2 && Date.now() - cached.ts < 300000) {
+      if (cached && cached.v === 3 && Date.now() - cached.ts < 300000) {
         if (cached.coins && cached.coins.length)         { setCoins(cached.coins); setLoading(false); }
         if (cached.jupTokens && cached.jupTokens.length) { setJupiterTokens(cached.jupTokens); setJupiterLoading(false); }
       }
-    } catch(e) {}
+    } catch (e) {}
 
-    var cacheBuf = { v: 2, coins: [], jupTokens: [], ts: 0 };
+    var cacheBuf = { v: 3, coins: [], jupTokens: [], ts: 0 };
     try {
       var existing = JSON.parse(localStorage.getItem(MARKET_CACHE_KEY) || '{}');
-      if (existing && existing.v === 2) {
+      if (existing && existing.v === 3) {
         cacheBuf.coins     = existing.coins     || [];
         cacheBuf.jupTokens = existing.jupTokens || [];
       }
-    } catch(e) {}
+    } catch (e) {}
     var flushCache = function() {
       try {
         cacheBuf.ts = Date.now();
         localStorage.setItem(MARKET_CACHE_KEY, JSON.stringify(cacheBuf));
-      } catch(e) {}
+      } catch (e) {}
     };
 
-    var mergeCoins = function(cgList, prevList) {
-      var seen = new Set();
-      var merged = [];
-      cgList.forEach(function(c) {
-        if (!c || !c.id || seen.has(c.id)) return;
-        seen.add(c.id); merged.push(c);
-      });
-      prevList.forEach(function(c) {
-        if (!c || !c.isSolanaToken) return;
-        if (c.id && seen.has(c.id)) return;
-        if (c.id) seen.add(c.id);
-        merged.push(c);
-      });
-      return merged;
-    };
-
-    var fetchCoinGecko = function() {
-      return fetch(
-        COINGECKO_MARKETS_URL + '?vs_currency=usd&ids=' + encodeURIComponent(CG_IDS) + '&order=market_cap_desc&sparkline=true&price_change_percentage=1h,24h,7d',
-        { signal: controller.signal }
-      )
+    var fetchMarkets = function() {
+      return fetch(JUPITER_MARKETS_URL, { signal: controller.signal })
         .then(function(r) { return r.ok ? r.json() : null; })
         .then(function(data) {
           if (!isMounted || !Array.isArray(data)) return;
-          setCoins(function(prev) { return mergeCoins(data, prev); });
+          var mapped = data.map(mapJupiterTokenToCoin).filter(Boolean);
+          setCoins(mapped);
           setLoading(false);
-          cacheBuf.coins = data;
+          cacheBuf.coins = mapped;
           flushCache();
         })
         .catch(function(e) {
@@ -784,66 +803,37 @@ function AppInner() {
         });
     };
 
-    var fetchJupiter = function() {
-      return fetch(JUPITER_TOKENS_URL, { signal: controller.signal })
+    var fetchRegistry = function() {
+      return fetch(JUPITER_REGISTRY_URL, { signal: controller.signal })
         .then(function(r) { return r.ok ? r.json() : null; })
-        .then(function(meta) {
-          if (!isMounted) return null;
-          if (!Array.isArray(meta)) {
+        .then(function(data) {
+          if (!isMounted) return;
+          if (!Array.isArray(data)) {
             setJupiterLoading(false);
-            return null;
+            return;
           }
-          var jupTokens = meta.map(function(t) {
-            return { mint: t.address, symbol: t.symbol, name: t.name, decimals: t.decimals, logoURI: t.logoURI };
+          var jupTokens = data.map(function(t) {
+            return {
+              mint: t.id,
+              symbol: t.symbol,
+              name: t.name,
+              decimals: t.decimals,
+              logoURI: t.icon,
+            };
           });
           setJupiterTokens(jupTokens);
           setJupiterLoading(false);
           cacheBuf.jupTokens = jupTokens;
           flushCache();
-          return meta;
         })
         .catch(function() {
           if (isMounted) setJupiterLoading(false);
-          return null;
-        })
-        .then(function(meta) {
-          if (!meta || !isMounted) return;
-          return fetch(JUPITER_PRICE_URL + '?ids=' + SOLANA_MINTS.join(','), { signal: controller.signal })
-            .then(function(r) { return r.ok ? r.json() : null; })
-            .then(function(jupData) {
-              if (!isMounted || !jupData || !jupData.data) return;
-              var metaMap = {};
-              meta.forEach(function(t) { metaMap[t.address] = t; });
-              var solanaCoins = SOLANA_MINTS.map(function(mint, i) {
-                var priceInfo = jupData.data[mint];
-                var m = metaMap[mint] || {};
-                if (!priceInfo || !priceInfo.price) return null;
-                return {
-                  id: mint, symbol: m.symbol || mint.slice(0, 4), name: m.name || 'Unknown',
-                  image: m.logoURI || null, current_price: parseFloat(priceInfo.price),
-                  market_cap: 0, market_cap_rank: 50 + i, total_volume: 0,
-                  high_24h: null, low_24h: null, price_change_percentage_1h_in_currency: null,
-                  price_change_percentage_24h: null, price_change_percentage_7d_in_currency: null,
-                  sparkline_in_7d: null, ath: null, ath_change_percentage: null,
-                  circulating_supply: null, isSolanaToken: true,
-                };
-              }).filter(Boolean);
-              setCoins(function(prev) {
-                var solIds = new Set(solanaCoins.map(function(c) { return c.id; }));
-                var keepers = prev.filter(function(c) {
-                  if (!c.isSolanaToken) return true;
-                  return !solIds.has(c.id);
-                });
-                return keepers.concat(solanaCoins);
-              });
-            })
-            .catch(function() { /* non-fatal */ });
         });
     };
 
     var fetchAll = function() {
-      fetchCoinGecko();
-      fetchJupiter();
+      fetchMarkets();
+      fetchRegistry();
     };
 
     fetchAll();
@@ -1002,3 +992,5 @@ export default function App() {
     </BrowserRouter>
   );
 }
+
+
