@@ -1,30 +1,32 @@
+Cleaned. ~270 lines — 2 chunks.
+Chunk 1 of 2 (lines 1–140):
+
 import React, { useState, useEffect, useMemo } from 'react';
-import { AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { TradeDrawer } from './SwapWidget.jsx';
 import InstantTrade from './InstantTrade.jsx';
 import { useNexusWallet } from '../WalletContext.js';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
- 
-/* ============================================================================
- * TokenDetail
+
+/**
+ * NEXUS DEX -- TokenDetail
  *
- * Three parallel data fetches on mount:
- *   1. Chart       (CG for non-on-chain coins, GeckoTerminal for on-chain).
- *   2. Pools       (DexScreener primary, GeckoTerminal fallback).
- *   3. CG metadata (platforms map for drawer normalization + native-asset
- *                   detection in the liquidity section).
+ * Data sources (locked: Jupiter Solana, 0x EVM, LiFi cross-chain):
+ *   - Coin info:     `coin` prop, refreshed via `coins` array (App.js
+ *                    maps Jupiter v2 search response to CG-shaped output)
+ *   - SOL price:     /api/jupiter/price/v3 proxy
+ *   - SPL balance:   Solana RPC via /api/solana-rpc proxy
  *
- * Live price ticker: liveCoin memo re-reads the coin from `coins` on every
- * App.js refresh tick so price/volume/change update without leaving the page.
+ * Removed (banned data sources):
+ *   - CoinGecko enrichment (platforms map + chart + metadata)
+ *   - GeckoTerminal (OHLCV + pools)
+ *   - DexScreener (pools)
+ *   - Jupiter price v2 (deprecated -> v3)
  *
- * Drawer hand-off: enrichedCoin maps CG coins -> drawer-usable token shape
- * (mint+chain for Solana, address+chainId for EVM) preferring the user's
- * headerChain when multiple platforms exist. Buy/Sell buttons are disabled
- * while CG metadata is loading so the drawer never opens on a half-resolved
- * coin. headerChain, setHeaderChain, presets, setPresets are all sourced
- * from WalletContext so the drawer stays in sync with global state.
- * ========================================================================= */
+ * Note: historical chart + pools sections removed -- none of Jupiter / 0x
+ * / LiFi provide OHLCV history or pool listings. Everything else (stats,
+ * 24h changes, contract, instant trade, drawer) preserved.
+ */
 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -37,47 +39,8 @@ const CHAIN_NAMES = {
   1: 'Ethereum', 137: 'Polygon', 42161: 'Arbitrum', 8453: 'Base', 56: 'BNB Chain',
   43114: 'Avalanche', 10: 'Optimism', 100: 'Gnosis', 324: 'zkSync Era', 59144: 'Linea',
   534352: 'Scroll', 5000: 'Mantle', 81457: 'Blast', 34443: 'Mode', 130: 'Unichain',
-  146: 'Sonic', 80094: 'Berachain', 57073: 'Ink', 143: 'Monad', 480: 'World Chain',
-  250: 'Fantom', 25: 'Cronos', 1284: 'Moonbeam', 42220: 'Celo', 1329: 'SEI',
-};
-
-const GT_NETWORKS = {
-  1: 'eth', 137: 'polygon_pos', 42161: 'arbitrum', 8453: 'base',
-  56: 'bsc', 43114: 'avax', 10: 'optimism', 100: 'xdai',
-  324: 'zksync', 59144: 'linea', 534352: 'scroll', 5000: 'mantle',
-  81457: 'blast', 34443: 'mode', 130: 'unichain', 146: 'sonic',
-  80094: 'berachain', 57073: 'ink', 480: 'worldchain',
-  250: 'fantom', 25: 'cronos', 1284: 'moonbeam', 42220: 'celo', 1329: 'sei',
-};
-
-// CoinGecko platform key -> wagmi chainId. Used by enrichedCoin to translate
-// `cgMeta.platforms[<platform>]` into a chainId the drawer understands.
-const CG_PLATFORM_TO_CHAIN = {
-  'ethereum':            1,
-  'binance-smart-chain': 56,
-  'polygon-pos':         137,
-  'arbitrum-one':        42161,
-  'optimistic-ethereum': 10,
-  'base':                8453,
-  'avalanche':           43114,
-  'fantom':              250,
-  'cronos':              25,
-  'moonbeam':            1284,
-  'celo':                42220,
-  'gnosis':              100,
-  'sonic':               146,
-  'mantle':              5000,
-  'blast':               81457,
-  'mode':                34443,
-  'linea':               59144,
-  'scroll':              534352,
-  'zksync':              324,
-  'metis-andromeda':     1088,
-  'aurora':              1313161554,
-  'kava':                2222,
-  'sei-evm':             1329,
-  'unichain':            130,
-  'berachain':           80094,
+  146: 'Sonic', 80094: 'Berachain', 57073: 'Ink', 480: 'World Chain',
+  250: 'Fantom', 25: 'Cronos', 1284: 'Moonbeam', 42220: 'Celo', 1329: 'SEI', 8217: 'Kaia',
 };
 
 function fmt(n, d) {
@@ -89,12 +52,10 @@ function fmt(n, d) {
   if (n >= 1) return '$' + n.toFixed(d);
   return '$' + n.toFixed(6);
 }
-
 function pct(n) {
   if (n == null) return '-';
   return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
 }
-
 function isOnChainAddress(str) {
   if (!str) return false;
   if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(str)) return true;
@@ -103,66 +64,38 @@ function isOnChainAddress(str) {
 }
 
 export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConnectWallet }) {
-  // headerChain + setHeaderChain + presets + setPresets from WalletContext
-  // -- single source of truth so the drawer stays in sync with the rest of
-  // the app. setHeaderChain is forwarded to the drawer so when the user
-  // picks a token on a different chain, the global header updates too.
   const { headerChain, setHeaderChain, presets, setPresets } = useNexusWallet();
   const { publicKey, connected: solConnected } = useWallet();
   const { connection } = useConnection();
 
-  // -- Instant trade extras: SOL price (for $ -> SOL conversion in presets)
-  //    and the user's balance of the current token (for the SELL %s).
   const [solPriceUsd, setSolPriceUsd] = useState(0);
   const [userTokenBalance, setUserTokenBalance] = useState(0);
   const [userTokenDecimals, setUserTokenDecimals] = useState(null);
   const [tradeRefreshTick, setTradeRefreshTick] = useState(0);
 
-  const [chartData, setChartData] = useState([]);
-  const [chartPeriod, setChartPeriod] = useState('7');
-  const [chartLoading, setChartLoading] = useState(true);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState('buy');
-  const [pools, setPools] = useState([]);
-  const [poolsLoading, setPoolsLoading] = useState(false);
-  const [totalLiquidity, setTotalLiquidity] = useState(0);
 
-  // CG metadata (platforms map + asset_platform_id) for drawer normalization
-  // and the native-asset liquidity-section message. cgMetaFailed is set when
-  // the fetch errors so we don't falsely declare "native asset" for coins
-  // whose platforms we just couldn't load.
-  const [cgMeta, setCgMeta] = useState(null);
-  const [cgMetaLoading, setCgMetaLoading] = useState(false);
-  const [cgMetaFailed, setCgMetaFailed] = useState(false);
-
-  // -- SOL/USD price for $-preset conversion. Jupiter price API, cached upstream.
+  /* SOL/USD via Jupiter v3 proxy. v3 response: { "<mint>": { "usdPrice": ... } } */
   useEffect(function () {
     var cancelled = false;
     var SOL_MINT = 'So11111111111111111111111111111111111111112';
-    fetch('https://api.jup.ag/price/v2?ids=' + SOL_MINT)
-      .then(function (r) { return r.json(); })
-      .then(function (d) {
-        if (cancelled) return;
-        var p = d && d.data && d.data[SOL_MINT] && parseFloat(d.data[SOL_MINT].price);
-        if (Number.isFinite(p) && p > 0) setSolPriceUsd(p);
-      })
-      .catch(function () {});
-    var poll = setInterval(function () {
-      if (cancelled) return;
-      fetch('https://api.jup.ag/price/v2?ids=' + SOL_MINT)
-        .then(function (r) { return r.json(); })
+    var fetchPrice = function () {
+      fetch('/api/jupiter/price/v3?ids=' + SOL_MINT)
+        .then(function (r) { return r.ok ? r.json() : null; })
         .then(function (d) {
-          if (cancelled) return;
-          var p = d && d.data && d.data[SOL_MINT] && parseFloat(d.data[SOL_MINT].price);
+          if (cancelled || !d) return;
+          var p = d[SOL_MINT] && parseFloat(d[SOL_MINT].usdPrice);
           if (Number.isFinite(p) && p > 0) setSolPriceUsd(p);
         })
         .catch(function () {});
-    }, 60_000);
+    };
+    fetchPrice();
+    var poll = setInterval(fetchPrice, 60000);
     return function () { cancelled = true; clearInterval(poll); };
   }, []);
 
-  // -- User's SPL token balance for SELL presets. Only fires for Solana tokens
-  //    when the user has a Solana wallet connected (external OR Privy embedded).
+  /* User's SPL balance for SELL presets. Solana-only, requires connected wallet. */
   useEffect(function () {
     if (!coin || !coin.mint) { setUserTokenBalance(0); setUserTokenDecimals(null); return undefined; }
     if (!solConnected || !publicKey || !connection) { setUserTokenBalance(0); return undefined; }
@@ -198,9 +131,8 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
 
   const isEvmToken = coin && (coin.chain === 'evm' || (coin.address && !coin.mint));
 
-  // Live coin lookup -- re-reads from `coins` on every refresh tick from
-  // App.js so price/market_cap/volume stay fresh while the user lingers
-  // on the detail page. Falls back to the original prop if not found.
+  /* Live coin lookup -- re-reads from coins array on every refresh tick
+   * from App.js so price/mc/volume stay fresh while user lingers here. */
   const liveCoin = useMemo(function() {
     if (!coin) return null;
     if (!Array.isArray(coins) || !coins.length) return coin;
@@ -214,329 +146,53 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
     return match || coin;
   }, [coin, coins]);
 
-  // Normalize coin into a shape TradeDrawer can use directly.
-  // Solana coins keep their mint. EVM coins keep address+chainId. CG coins
-  // get enriched from cgMeta.platforms -- preferring the user's headerChain,
-  // then any EVM platform, then Solana. Native CG coins (no platforms) fall
-  // through unmodified -- drawer falls back to its own defaults.
+  /* Simplified normalization. No CG platforms map -- coins from App.js
+   * (Jupiter v2) already arrive as Solana, and EVM tokens always have
+   * address+chainId attached upstream. */
   const enrichedCoin = useMemo(function() {
     if (!coin) return null;
-
-    // Already-normalized Solana token
     if (coin.mint || coin.isSolanaToken || coin.chain === 'solana') {
-      return Object.assign({}, coin, {
-        mint:  coin.mint || coin.id,
-        chain: 'solana',
-      });
+      return Object.assign({}, coin, { mint: coin.mint || coin.id, chain: 'solana' });
     }
-
-    // Already-normalized EVM token
-    if (coin.chain === 'evm' && coin.address && coin.chainId) {
-      return coin;
-    }
-
-    // CG coin -- enrich from platforms map
-    if (cgMeta && cgMeta.platforms && Object.keys(cgMeta.platforms).length > 0) {
-      var platforms = cgMeta.platforms;
-
-      // 1) headerChain === 'solana' and coin has a Solana mint -> use it
-      if (headerChain === 'solana' && platforms.solana && isOnChainAddress(platforms.solana)) {
-        return Object.assign({}, coin, {
-          mint:  platforms.solana,
-          chain: 'solana',
-        });
-      }
-
-      // 2) headerChain is an EVM chainId -- find the matching CG platform
-      if (typeof headerChain === 'number') {
-        var matchedKey = Object.keys(CG_PLATFORM_TO_CHAIN).find(function(p) {
-          return CG_PLATFORM_TO_CHAIN[p] === headerChain && platforms[p] && isOnChainAddress(platforms[p]);
-        });
-        if (matchedKey) {
-          return Object.assign({}, coin, {
-            chain:   'evm',
-            address: platforms[matchedKey],
-            chainId: headerChain,
-          });
-        }
-      }
-
-      // 3) Fallback -- first valid EVM platform
-      var fallbackKey = Object.keys(platforms).find(function(p) {
-        return CG_PLATFORM_TO_CHAIN[p] && platforms[p] && /^0x[0-9a-fA-F]{40}$/.test(platforms[p]);
-      });
-      if (fallbackKey) {
-        return Object.assign({}, coin, {
-          chain:   'evm',
-          address: platforms[fallbackKey],
-          chainId: CG_PLATFORM_TO_CHAIN[fallbackKey],
-        });
-      }
-
-      // 4) Solana fallback if nothing else matches
-      if (platforms.solana && isOnChainAddress(platforms.solana)) {
-        return Object.assign({}, coin, {
-          mint:  platforms.solana,
-          chain: 'solana',
-        });
-      }
-    }
-
-    // Native asset or unenriched -- drawer handles defaults
+    if (coin.chain === 'evm' && coin.address && coin.chainId) return coin;
     return coin;
-  }, [coin, cgMeta, headerChain]);
-
-  // True only for CG coins whose platforms haven't loaded yet. For
-  // already-resolved Solana/EVM tokens cgMetaLoading stays false (the
-  // metadata effect short-circuits). Used to disable Buy/Sell buttons so
-  // the drawer never opens on a half-resolved coin.
-  const drawerNotReady = !!cgMetaLoading;
-
-  // Native-asset detection for the liquidity message -- only definitive
-  // once cgMeta has actually loaded successfully. Without this guard the
-  // UI would briefly flash "native asset" before platforms arrive, or
-  // claim native after a failed fetch.
-  var isNativeCgCoin = !!(cgMeta && !cgMetaFailed && cgMeta.platforms && Object.keys(cgMeta.platforms).length === 0);
-
-  const contractAddress = isEvmToken
-    ? (coin?.address || coin?.id)
-    : (coin?.mint || (isOnChainAddress(coin?.id) ? coin?.id : null));
-  const contractLabel = isEvmToken
-    ? ((CHAIN_NAMES[coin?.chainId] || 'EVM') + ' CONTRACT').toUpperCase()
-    : 'SOLANA CONTRACT';
-
-  // CG metadata fetch -- fires on mount in parallel with chart and pools.
-  // Skips Solana tokens (no useful CG metadata) and tokens that already
-  // have an on-chain address attached.
-  useEffect(function() {
-    if (!coin) return undefined;
-    if (coin.isSolanaToken || coin.mint || (coin.chain === 'evm' && coin.address)) return undefined;
-    if (!coin.id || isOnChainAddress(coin.id)) return undefined;
-
-    var isMounted = true;
-    var controller = new AbortController();
-    setCgMetaLoading(true);
-    setCgMeta(null);
-    setCgMetaFailed(false);
-
-    fetch(
-      'https://api.coingecko.com/api/v3/coins/' + coin.id + '?localization=false&tickers=false&market_data=false&community_data=false&developer_data=false&sparkline=false',
-      { signal: controller.signal }
-    )
-      .then(function(r) { return r.ok ? r.json() : null; })
-      .then(function(data) {
-        if (!isMounted || controller.signal.aborted) return;
-        if (!data) {
-          // Empty-platforms marker so the pools effect can proceed (it
-          // waits on cgMeta != null). cgMetaFailed prevents the UI from
-          // misreading this as "native asset".
-          setCgMeta({ platforms: {}, asset_platform_id: null });
-          setCgMetaFailed(true);
-          setCgMetaLoading(false);
-          return;
-        }
-        setCgMeta({ platforms: data.platforms || {}, asset_platform_id: data.asset_platform_id || null });
-        setCgMetaLoading(false);
-      })
-      .catch(function(e) {
-        if (!isMounted || controller.signal.aborted) return;
-        if (e.name !== 'AbortError') {
-          console.warn('CG meta fetch failed:', e);
-          setCgMeta({ platforms: {}, asset_platform_id: null });
-          setCgMetaFailed(true);
-          setCgMetaLoading(false);
-        }
-      });
-
-    return function() { isMounted = false; controller.abort(); };
   }, [coin]);
 
-  // Chart fetch
-  useEffect(function() {
-    if (!coin) return undefined;
-    var isMounted = true;
-    var controller = new AbortController();
-    var signal = controller.signal;
-
-    var fetchChart = async function() {
-      setChartLoading(true);
-      try {
-        var days = parseInt(chartPeriod) || 7;
-        var points = [];
-        var isCgCoin = coin.id && !coin.isSolanaToken && !isOnChainAddress(coin.id);
-
-        if (isCgCoin) {
-          var cgRes = await fetch(
-            'https://api.coingecko.com/api/v3/coins/' + coin.id + '/market_chart?vs_currency=usd&days=' + days,
-            { signal }
-          );
-          var cgData = await cgRes.json();
-          var interval = days <= 1 ? 1 : days <= 7 ? 6 : 24;
-          points = (cgData.prices || [])
-            .filter(function(item, i) {
-              return i % interval === 0 && item && Array.isArray(item) &&
-                     typeof item[0] === 'number' &&
-                     typeof item[1] === 'number' && Number.isFinite(item[1]);
-            })
-            .map(function(item) {
-              return {
-                t: new Date(item[0]).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
-                p: parseFloat(item[1].toFixed(6)),
-              };
-            });
-        } else {
-          var tokenAddr = isEvmToken ? (coin.address || coin.id) : (coin.mint || coin.id);
-          var network = isEvmToken ? (GT_NETWORKS[coin.chainId] || 'eth') : 'solana';
-          var timeframe = days <= 1 ? 'minute' : 'day';
-          var aggregate = days <= 1 ? 30 : 1;
-          var limit = days <= 1 ? 48 : days;
-          var gtRes = await fetch(
-            'https://api.geckoterminal.com/api/v2/networks/' + network + '/tokens/' + tokenAddr + '/ohlcv/' + timeframe + '?aggregate=' + aggregate + '&limit=' + limit,
-            { signal }
-          );
-          var gtData = await gtRes.json();
-          var ohlcv = gtData.data && gtData.data.attributes && gtData.data.attributes.ohlcv_list;
-          if (ohlcv && ohlcv.length) {
-            points = ohlcv
-              .map(function(item) {
-                if (!item || !Array.isArray(item)) return null;
-                var ts = item[0];
-                var close = parseFloat(item[4]);
-                if (typeof ts !== 'number' || !Number.isFinite(close)) return null;
-                return {
-                  t: new Date(ts * 1000).toLocaleDateString('en', { month: 'short', day: 'numeric' }),
-                  p: parseFloat(close.toFixed(6)),
-                };
-              })
-              .filter(Boolean);
-          }
-        }
-
-        if (!isMounted || signal.aborted) return;
-        setChartData(points.length ? points : []);
-      } catch (e) {
-        if (e.name !== 'AbortError') console.warn('Chart fetch failed:', e);
-      }
-      if (isMounted && !signal.aborted) setChartLoading(false);
-    };
-
-    fetchChart();
-    return function() { isMounted = false; controller.abort(); };
-  }, [coin, chartPeriod, isEvmToken]);
-
-  // Pools fetch (DexScreener primary, GeckoTerminal fallback)
-  useEffect(function() {
-    if (!coin) return undefined;
-    var isMounted = true;
-    var controller = new AbortController();
-    var signal = controller.signal;
-
-    setPoolsLoading(true);
-    setPools([]);
-    setTotalLiquidity(0);
-
-    var fetchPools = async function() {
-      try {
-        var tokenAddr = isEvmToken ? coin.address : coin.mint;
-
-        if (!tokenAddr || !isOnChainAddress(tokenAddr)) {
-          if (coin.id && isOnChainAddress(coin.id)) {
-            tokenAddr = coin.id;
-          } else if (coin.id && !coin.isSolanaToken) {
-            // We need platforms from cgMeta. Bail if not loaded yet --
-            // this effect re-runs once cgMeta arrives (in dep array).
-            // Don't flip loading off here; the re-run will.
-            if (!cgMeta) return;
-            var platforms = cgMeta.platforms || {};
-            tokenAddr = platforms['ethereum']
-              || platforms['solana']
-              || platforms['binance-smart-chain']
-              || platforms['polygon-pos']
-              || platforms['arbitrum-one']
-              || platforms['optimistic-ethereum']
-              || platforms['base']
-              || platforms['avalanche']
-              || Object.values(platforms).find(function(v) { return v && isOnChainAddress(v); })
-              || null;
-          }
-        }
-
-        if (!tokenAddr || !isOnChainAddress(tokenAddr)) {
-          if (isMounted) { setPools([]); setTotalLiquidity(0); setPoolsLoading(false); }
-          return;
-        }
-
-        var dsData = await fetch(
-          'https://api.dexscreener.com/latest/dex/tokens/' + tokenAddr,
-          { signal }
-        )
-          .then(function(r) { return r.ok ? r.json() : { pairs: [] }; })
-          .catch(function() { return { pairs: [] }; });
-
-        if (!isMounted) return;
-
-        var pairs = (dsData.pairs || [])
-          .sort(function(a, b) { return (b.liquidity && b.liquidity.usd || 0) - (a.liquidity && a.liquidity.usd || 0); })
-          .slice(0, 5);
-
-        if (pairs.length === 0) {
-          var network = isEvmToken
-            ? (GT_NETWORKS[coin.chainId] || 'eth')
-            : 'solana';
-          var gtData = await fetch(
-            'https://api.geckoterminal.com/api/v2/networks/' + network + '/tokens/' + tokenAddr + '/pools?page=1',
-            { signal }
-          )
-            .then(function(r) { return r.ok ? r.json() : { data: [] }; })
-            .catch(function() { return { data: [] }; });
-
-          if (!isMounted) return;
-
-          pairs = (gtData.data || []).slice(0, 5).map(function(p) {
-            var a = p.attributes || {};
-            var rels = p.relationships || {};
-            var dexId = (rels.dex && rels.dex.data && rels.dex.data.id) || 'geckoterminal';
-            var name = a.name || '';
-            var pairParts = name.split(' / ');
-            return {
-              pairAddress: p.id,
-              dexId: dexId,
-              baseToken: { symbol: pairParts[0] || '?' },
-              quoteToken: { symbol: pairParts[1] || '?' },
-              liquidity: { usd: parseFloat(a.reserve_in_usd) || 0 },
-              volume: { h24: parseFloat(a.volume_usd && a.volume_usd.h24) || 0 },
-            };
-          });
-        }
-
-        if (!isMounted) return;
-        var total = pairs.reduce(function(sum, p) { return sum + (p.liquidity && p.liquidity.usd || 0); }, 0);
-        setPools(pairs);
-        setTotalLiquidity(total);
-        setPoolsLoading(false);
-      } catch (e) {
-        if (e.name !== 'AbortError') console.warn('Pool fetch failed:', e);
-        if (isMounted) { setPools([]); setTotalLiquidity(0); setPoolsLoading(false); }
-      }
-    };
-
-    fetchPools();
-    return function() { isMounted = false; controller.abort(); };
-  }, [coin, isEvmToken, cgMeta]);
+  const contractAddress = isEvmToken
+    ? (coin && (coin.address || coin.id))
+    : (coin && (coin.mint || (isOnChainAddress(coin.id) ? coin.id : null)));
+  const contractLabel = isEvmToken
+    ? ((CHAIN_NAMES[coin && coin.chainId] || 'EVM') + ' CONTRACT').toUpperCase()
+    : 'SOLANA CONTRACT';
 
   if (!coin) return null;
 
   var displayPrice = liveCoin.current_price;
   var priceChange  = liveCoin.price_change_percentage_24h || 0;
-  var chartColor   = priceChange >= 0 ? C.green : C.red;
   var symbolUp     = coin.symbol ? coin.symbol.toUpperCase() : '';
+
+  /* Stats grid -- show whatever is available from the upstream coin
+   * mapping. Anything missing renders as '-' via fmt(). Jupiter v2
+   * provides current_price, market_cap, total_volume, 24h change at
+   * minimum; CG-derived fields (ATH, supply, rank) may be absent. */
+  var statsItems = [
+    ['MARKET CAP',         fmt(liveCoin.market_cap)],
+    ['24H VOLUME',         fmt(liveCoin.total_volume)],
+    ['24H HIGH',           fmt(liveCoin.high_24h)],
+    ['24H LOW',            fmt(liveCoin.low_24h)],
+    ['ALL TIME HIGH',      fmt(liveCoin.ath)],
+    ['ATH CHANGE',         pct(liveCoin.ath_change_percentage)],
+    ['CIRCULATING SUPPLY', liveCoin.circulating_supply ? (liveCoin.circulating_supply / 1e6).toFixed(2) + 'M' : '-'],
+    ['MARKET CAP RANK',    liveCoin.market_cap_rank ? '#' + liveCoin.market_cap_rank : '-'],
+  ];
 
   return (
     <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
       <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600, padding: 0 }}>Back to Markets</button>
 
+      {/* Header card -- name, symbol, current price, 24h change */}
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 20, flexWrap: 'wrap', gap: 10 }}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             {coin.image
               ? <img src={coin.image} alt={coin.symbol} style={{ width: 48, height: 48, borderRadius: '50%' }} />
@@ -559,57 +215,10 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
             <div style={{ fontSize: 14, fontWeight: 600, color: priceChange >= 0 ? C.green : C.red, marginTop: 2 }}>{pct(priceChange)} (24H)</div>
           </div>
         </div>
-
-        <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-          {[['1', '1D'], ['7', '7D'], ['30', '30D']].map(function(item) {
-            var val = item[0], label = item[1];
-            return (
-              <button
-                key={val}
-                onClick={function() { setChartPeriod(val); }}
-                style={{ padding: '5px 12px', borderRadius: 8, fontSize: 11, cursor: 'pointer', fontWeight: 600, background: chartPeriod === val ? 'rgba(0,229,255,.12)' : 'transparent', border: '1px solid ' + (chartPeriod === val ? 'rgba(0,229,255,.35)' : C.border), color: chartPeriod === val ? C.accent : C.muted, fontFamily: 'Syne, sans-serif' }}
-              >
-                {label}
-              </button>
-            );
-          })}
-        </div>
-
-        {chartLoading ? (
-          <div style={{ height: 200, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted }}>Loading chart...</div>
-        ) : chartData.length === 0 ? (
-          <div style={{ height: 120, display: 'flex', alignItems: 'center', justifyContent: 'center', color: C.muted, fontSize: 12 }}>No chart data available</div>
-        ) : (
-          <ResponsiveContainer width="100%" height={220}>
-            <AreaChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 0 }}>
-              <defs>
-                <linearGradient id="tdGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor={chartColor} stopOpacity={0.25} />
-                  <stop offset="100%" stopColor={chartColor} stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <XAxis
-                dataKey="t"
-                tick={{ fill: C.muted, fontSize: 10 }}
-                axisLine={false}
-                tickLine={false}
-                interval="preserveStartEnd"
-                minTickGap={40}
-              />
-              <YAxis hide domain={['auto', 'auto']} />
-              <Tooltip
-                contentStyle={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, fontSize: 11 }}
-                formatter={function(v) { return [fmt(v), 'Price']; }}
-              />
-              <Area type="monotone" dataKey="p" stroke={chartColor} strokeWidth={2} fill="url(#tdGrad)" />
-            </AreaChart>
-          </ResponsiveContainer>
-        )}
       </div>
 
       {/* Instant Trade -- GMGN-style preset bar. One-click for Privy
-          embedded wallets (no popup). For external wallets, taps open
-          the drawer pre-filled (1 popup as usual). */}
+          embedded wallets (no popup); external wallets open the drawer. */}
       <div style={{ marginBottom: 12 }}>
         <InstantTrade
           token={enrichedCoin}
@@ -627,53 +236,34 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         />
       </div>
 
-      {/* Buy/Sell buttons -- disabled while CG metadata is loading so the
-          drawer never opens on a coin we couldn't resolve to a real
-          mint+chain pair yet. For Solana/EVM tokens drawerNotReady is
-          always false (the metadata effect short-circuits). */}
+      {/* Buy / Sell -- always enabled (no CG metadata gating since coin
+          is already resolved upstream by App.js / Markets / Portfolio). */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
         <button
           onClick={function() { setDrawerMode('buy'); setDrawerOpen(true); }}
-          disabled={drawerNotReady}
           style={{
-            padding: '18px 10px', borderRadius: 14, border: 'none',
-            cursor: drawerNotReady ? 'wait' : 'pointer',
-            background: drawerNotReady ? C.card2 : 'linear-gradient(135deg,#00e5ff,#0055ff)',
-            color: drawerNotReady ? C.muted : C.bg,
+            padding: '18px 10px', borderRadius: 14, border: 'none', cursor: 'pointer',
+            background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg,
             fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56,
-            opacity: drawerNotReady ? 0.7 : 1,
           }}
         >
-          {drawerNotReady ? 'Loading...' : 'Buy ' + symbolUp}
+          Buy {symbolUp}
         </button>
         <button
           onClick={function() { setDrawerMode('sell'); setDrawerOpen(true); }}
-          disabled={drawerNotReady}
           style={{
-            padding: '18px 10px', borderRadius: 14,
-            cursor: drawerNotReady ? 'wait' : 'pointer',
-            background: drawerNotReady ? C.card2 : 'rgba(255,59,107,.08)',
-            border: '1px solid ' + (drawerNotReady ? C.border : 'rgba(255,59,107,.3)'),
-            color: drawerNotReady ? C.muted : C.red,
+            padding: '18px 10px', borderRadius: 14, cursor: 'pointer',
+            background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.3)', color: C.red,
             fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56,
-            opacity: drawerNotReady ? 0.7 : 1,
           }}
         >
-          {drawerNotReady ? 'Loading...' : 'Sell ' + symbolUp}
+          Sell {symbolUp}
         </button>
       </div>
 
+      {/* Stats grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginBottom: 14 }}>
-        {[
-          ['MARKET CAP',         fmt(liveCoin.market_cap)],
-          ['24H VOLUME',         fmt(liveCoin.total_volume)],
-          ['24H HIGH',           fmt(liveCoin.high_24h)],
-          ['24H LOW',            fmt(liveCoin.low_24h)],
-          ['ALL TIME HIGH',      fmt(liveCoin.ath)],
-          ['ATH CHANGE',         pct(liveCoin.ath_change_percentage)],
-          ['CIRCULATING SUPPLY', liveCoin.circulating_supply ? (liveCoin.circulating_supply / 1e6).toFixed(2) + 'M' : '--'],
-          ['MARKET CAP RANK',    liveCoin.market_cap_rank ? '#' + liveCoin.market_cap_rank : '--'],
-        ].map(function(item) {
+        {statsItems.map(function(item) {
           return (
             <div key={item[0]} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 14 }}>
               <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, fontWeight: 700, letterSpacing: 1 }}>{item[0]}</div>
@@ -683,6 +273,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         })}
       </div>
 
+      {/* Price changes */}
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16, marginBottom: 14 }}>
         <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, fontWeight: 700, letterSpacing: 1 }}>PRICE CHANGES</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
@@ -691,52 +282,19 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
             ['24 Hours', liveCoin.price_change_percentage_24h],
             ['7 Days',   liveCoin.price_change_percentage_7d_in_currency],
           ].map(function(item) {
-            var v = item[1] || 0;
+            var v = item[1];
+            var hasVal = Number.isFinite(v);
             return (
               <div key={item[0]} style={{ background: C.card2, borderRadius: 10, padding: 12, textAlign: 'center' }}>
                 <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>{item[0]}</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: v >= 0 ? C.green : C.red }}>{pct(v)}</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: !hasVal ? C.muted : v >= 0 ? C.green : C.red }}>{hasVal ? pct(v) : '-'}</div>
               </div>
             );
           })}
         </div>
       </div>
 
-      <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16, marginBottom: 14 }}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: 1 }}>LIQUIDITY</div>
-          {totalLiquidity > 0 && <div style={{ fontSize: 15, fontWeight: 700, color: C.accent }}>{fmt(totalLiquidity)} total</div>}
-        </div>
-        {poolsLoading || cgMetaLoading ? (
-          <div style={{ color: C.muted, fontSize: 12, padding: '8px 0' }}>Loading pools...</div>
-        ) : pools.length === 0 ? (
-          <div style={{ color: C.muted, fontSize: 12, padding: '8px 0' }}>
-            {isNativeCgCoin
-              ? 'Native asset -- no on-chain DEX liquidity at this address.'
-              : 'No liquidity data found.'}
-          </div>
-        ) : (
-          pools.map(function(pool, i) {
-            var liq       = pool.liquidity && pool.liquidity.usd || 0;
-            var vol       = pool.volume && pool.volume.h24 || 0;
-            var pairLabel = pool.baseToken && pool.quoteToken ? pool.baseToken.symbol + '/' + pool.quoteToken.symbol : '--';
-            var dexName   = pool.dexId ? pool.dexId.charAt(0).toUpperCase() + pool.dexId.slice(1) : '--';
-            return (
-              <div key={pool.pairAddress || i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px 0', borderBottom: i < pools.length - 1 ? '1px solid rgba(255,255,255,.04)' : 'none' }}>
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: '#fff' }}>{dexName}</div>
-                  <div style={{ fontSize: 11, color: C.muted, marginTop: 2 }}>{pairLabel} - Vol 24h: {fmt(vol)}</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 14, fontWeight: 700, color: C.green }}>{fmt(liq)}</div>
-                  <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>Liquidity</div>
-                </div>
-              </div>
-            );
-          })
-        )}
-      </div>
-
+      {/* Contract address */}
       {contractAddress && isOnChainAddress(contractAddress) && (
         <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16, marginBottom: 14 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>{contractLabel}</div>
@@ -744,14 +302,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         </div>
       )}
 
-      {/* Drawer hand-off:
-            coin                = enrichedCoin (mint+chain or address+chainId)
-            headerChain         = global from WalletContext
-            onHeaderChainChange = setHeaderChain so cross-chain selections
-                                  inside the drawer update the global header
-            presets             = global from WalletContext
-            onPresetsChange     = setPresets so preset edits inside the
-                                  drawer update the global state */}
+      {/* Trade drawer */}
       <TradeDrawer
         open={drawerOpen}
         onClose={function() { setDrawerOpen(false); }}
@@ -767,4 +318,3 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
     </div>
   );
 }
-
