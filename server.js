@@ -1,6 +1,3 @@
-Cleaned. ~275 lines — 2 chunks. JSDoc header reconstructed from markdown-bullet damage to proper /** ... */ block; CSP nested-quote source values like "'self'" restored; regex /^image\/(png|jpeg...)/i escape restored.
-Chunk 1 of 2 (lines 1–140):
-
 /**
  * NEXUS DEX -- Backend Proxy Server
  *
