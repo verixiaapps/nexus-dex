@@ -1,6 +1,3 @@
-Massive file (~1700 lines after cleanup). Cleaning: smart quotes → straight, em/en dashes → --/-, JSDoc header reconstructed from markdown-list damage, spread operators (...searchResults) restored, regex escapes preserved. 6 chunks.
-Chunk 1 of 6 (lines 1–300):
-
 /**
  * NEXUS DEX -- Unified Swap Widget
  *
