@@ -3,19 +3,31 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 /**
  * NEXUS DEX -- Markets
  *
- * Data source rule (locked):
- *   - Jupiter v2  -> Solana tokens (verified + unverified, includes memecoins)
- *   - LiFi v1     -> EVM tokens across every chain LiFi supports
- *   - 0x          -> swap quotes on EVM (not used here -- this is browse/search)
+ * Data sources (locked):
+ *   Jupiter v2  -> Solana tokens (verified + unverified)
+ *   LiFi v1     -> EVM tokens across every chain LiFi indexes
+ *   0x          -> swap quotes only, NOT used in this file (browse/search)
  *
- * No synthetic rows. If a contract address isn't in our aggregator
- * coverage, the user sees "not found" -- never a fake placeholder.
+ * Hard rules enforced in this file:
  *
- * Endpoints (all routed through /api proxy so keys stay server-side):
- *   /api/jupiter/tokens/v2/toporganicscore/24h     (parent supplies via `coins`)
- *   /api/jupiter/tokens/v2/tag?query=verified      (parent supplies via `jupiterTokens`)
- *   /api/jupiter/tokens/v2/search?query=<text|mint>
- *   /api/lifi/v1/tokens                            (loaded once, cached at module scope)
+ *   1. Every displayed row must have a *real, parseable* address:
+ *        - Solana: base58 mint, length 32-44, passes isValidMint
+ *        - EVM:    0x-prefixed 40-hex, passes isValidEvmAddress
+ *      AND a non-empty symbol. Anything else is dropped, never displayed.
+ *
+ *   2. Search results must actually match the query. The Jupiter symbol
+ *      search returns loosely-related tokens; we filter to symbol/name/
+ *      address matches client-side, the same way the EVM branch already
+ *      does. Verified Jupiter tokens are boosted above unverified scams.
+ *
+ *   3. Click handling never hands a raw row to the parent. Every row is
+ *      run through `toCanonicalToken` first, which produces the exact
+ *      shape SwapWidget's `normalizeToken` accepts. This guarantees the
+ *      Buy/Sell drawer opens with the *clicked* token's address as the
+ *      default, not a fallback.
+ *
+ *   4. No synthetic rows. If a contract is not in our aggregator coverage,
+ *      the user sees "not found" -- never a fake placeholder.
  */
 
 const C = {
@@ -25,10 +37,6 @@ const C = {
   text: '#cdd6f4', muted: '#586994',
 };
 
-/* ============================================================================
- * Chain labels for the small badge next to the symbol in search results.
- * Short codes so they fit on mobile rows.
- * ========================================================================= */
 const CHAIN_LABEL = {
   1: 'ETH', 10: 'OP', 56: 'BNB', 100: 'GNO', 130: 'UNI', 137: 'POL',
   146: 'SONIC', 250: 'FTM', 288: 'BOBA', 324: 'ZKS', 480: 'WORLD',
@@ -46,6 +54,18 @@ function chainLabelFor(c) {
 }
 
 /* ============================================================================
+ * Validators -- single source of truth for what counts as a real address.
+ * ========================================================================= */
+function isValidMint(s) {
+  return !!s && typeof s === 'string' &&
+    s.length >= 32 && s.length <= 44 &&
+    /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
+}
+function isValidEvmAddress(s) {
+  return !!s && typeof s === 'string' && /^0x[0-9a-fA-F]{40}$/.test(s);
+}
+
+/* ============================================================================
  * Formatters
  * ========================================================================= */
 function fmt(n, d = 2) {
@@ -60,15 +80,9 @@ function pctFmt(n) {
   if (n == null || isNaN(n)) return '-';
   return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
 }
-
-/* ============================================================================
- * Validators
- * ========================================================================= */
-function isValidMint(s) {
-  return s && s.length >= 32 && s.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
-}
-function isValidEvmAddress(s) {
-  return s && /^0x[0-9a-fA-F]{40}$/.test(s);
+function shortAddr(a) {
+  if (!a || a.length < 10) return a || '';
+  return a.slice(0, 4) + '...' + a.slice(-4);
 }
 
 /* ============================================================================
@@ -105,20 +119,29 @@ function useDebounce(value, delay) {
 }
 
 /* ============================================================================
- * Map a Jupiter v2 token to row shape.
+ * Mappers -- now strictly validate. Anything without a parseable address
+ * or a non-empty symbol is rejected at the source so it never reaches the
+ * UI or the click handler.
  * ========================================================================= */
 function mapJupiter(t) {
   if (!t || !t.id) return null;
+  if (!isValidMint(t.id)) return null;
+  const symbol = (t.symbol || '').trim();
+  if (!symbol) return null;
+
   const stats = t.stats24h || {};
-  const buyVol = Number(stats.buyVolume) || 0;
+  const buyVol  = Number(stats.buyVolume) || 0;
   const sellVol = Number(stats.sellVolume) || 0;
+  const tags = Array.isArray(t.tags) ? t.tags : [];
+  const verified = tags.indexOf('verified') !== -1 || tags.indexOf('strict') !== -1 || !!t.verified;
+
   return {
     id: t.id,
     mint: t.id,
-    symbol: t.symbol || '',
-    name: t.name || t.symbol || '',
+    symbol,
+    name: (t.name || symbol).trim(),
     image: t.icon || t.logoURI || null,
-    decimals: t.decimals != null ? t.decimals : 6,
+    decimals: typeof t.decimals === 'number' ? t.decimals : 6,
     current_price: t.usdPrice != null ? Number(t.usdPrice) : 0,
     market_cap: t.mcap != null ? Number(t.mcap) : (t.fdv != null ? Number(t.fdv) : 0),
     total_volume: buyVol + sellVol,
@@ -126,24 +149,30 @@ function mapJupiter(t) {
     sparkline_in_7d: null,
     isSolanaToken: true,
     chain: 'solana',
+    verified,
   };
 }
 
-/* ============================================================================
- * Map a LiFi token to row shape.
- * ========================================================================= */
 function mapLifi(t) {
   if (!t || !t.address) return null;
   const isSolana = !t.address.startsWith('0x');
+  if (isSolana) {
+    if (!isValidMint(t.address)) return null;
+  } else {
+    if (!isValidEvmAddress(t.address)) return null;
+  }
+  const symbol = (t.symbol || '').trim();
+  if (!symbol) return null;
+
   return {
-    id: t.address + '-' + t.chainId,
+    id: t.address + '-' + (t.chainId || 'sol'),
     address: t.address,
     mint: isSolana ? t.address : undefined,
     chainId: t.chainId,
-    symbol: t.symbol || '',
-    name: t.name || t.symbol || '',
+    symbol,
+    name: (t.name || symbol).trim(),
     image: t.logoURI || null,
-    decimals: t.decimals != null ? t.decimals : 18,
+    decimals: typeof t.decimals === 'number' ? t.decimals : 18,
     current_price: t.priceUSD ? parseFloat(t.priceUSD) : 0,
     market_cap: 0,
     total_volume: 0,
@@ -151,11 +180,82 @@ function mapLifi(t) {
     sparkline_in_7d: null,
     isSolanaToken: isSolana,
     chain: isSolana ? 'solana' : 'evm',
+    verified: false,
   };
 }
 
 /* ============================================================================
- * Lazy LiFi token cache. Fetched once for the session.
+ * isUsableRow -- gate for both display and click. A row is usable iff it
+ * carries a real address and a real symbol. This protects against badly-
+ * mapped entries in the parent's `coins` prop just as much as it protects
+ * against bad search results.
+ * ========================================================================= */
+function isUsableRow(c) {
+  if (!c) return false;
+  if (!c.symbol || typeof c.symbol !== 'string' || !c.symbol.trim()) return false;
+  if (c.chain === 'solana' || c.isSolanaToken) {
+    return isValidMint(c.mint || c.id);
+  }
+  if (c.chain === 'evm' || c.chainId) {
+    return isValidEvmAddress(c.address);
+  }
+  // No chain info at all -- try to infer from what's there.
+  if (c.address && isValidEvmAddress(c.address)) return true;
+  if ((c.mint || c.id) && isValidMint(c.mint || c.id)) return true;
+  return false;
+}
+
+/* ============================================================================
+ * toCanonicalToken -- the exact shape SwapWidget's normalizeToken accepts.
+ * Every onSelectCoin call goes through this. If we can't produce a canonical
+ * token, we don't fire the click at all (better than opening the swap with
+ * the wrong default).
+ * ========================================================================= */
+function toCanonicalToken(c) {
+  if (!c) return null;
+  const symbol = (c.symbol || '').trim();
+  const name   = (c.name || symbol).trim();
+  const image  = c.image || c.logoURI || null;
+
+  // Solana detection: explicit chain flag, or valid mint, or isSolanaToken.
+  const possibleMint = c.mint || (!c.address ? c.id : null);
+  const looksSolana =
+    c.chain === 'solana' || c.isSolanaToken === true ||
+    (possibleMint && isValidMint(possibleMint) && !c.chainId);
+
+  if (looksSolana) {
+    if (!isValidMint(possibleMint)) return null;
+    if (!symbol) return null;
+    return {
+      chain: 'solana',
+      mint: possibleMint,
+      symbol,
+      name,
+      decimals: typeof c.decimals === 'number' ? c.decimals : 6,
+      logoURI: image,
+    };
+  }
+
+  // EVM detection: explicit chain flag plus chainId, or 0x address present.
+  if (c.address && isValidEvmAddress(c.address) && c.chainId) {
+    if (!symbol) return null;
+    return {
+      chain: 'evm',
+      address: c.address,
+      chainId: c.chainId,
+      symbol,
+      name,
+      decimals: typeof c.decimals === 'number' ? c.decimals : 18,
+      logoURI: image,
+    };
+  }
+
+  return null;
+}
+
+/* ============================================================================
+ * Lazy LiFi token cache. Fetched once per session. Mappers reject malformed
+ * entries so the cache only ever holds valid, tradeable tokens.
  * ========================================================================= */
 let _evmCache = null;
 let _evmLoading = false;
@@ -177,7 +277,7 @@ function getEvmTokenCache() {
             if (Array.isArray(chainTokens)) {
               chainTokens.forEach(function (t) {
                 const m = mapLifi(t);
-                if (m && m.symbol) all.push(m);
+                if (m) all.push(m);
               });
             }
           });
@@ -191,40 +291,48 @@ function getEvmTokenCache() {
 }
 
 /* ============================================================================
- * Rank search results: exact symbol > starts-with > market cap.
- * Mint/address exact match also wins.
+ * Search ranking. Score by relevance, then by verified, then by market cap.
+ * Zero-score (irrelevant) rows are filtered out -- they never appear.
  * ========================================================================= */
 function rankSearchResults(results, query) {
   const ql = query.toLowerCase();
   function score(c) {
-    const sym = (c.symbol || '').toLowerCase();
+    const sym  = (c.symbol || '').toLowerCase();
+    const nm   = (c.name   || '').toLowerCase();
     const addr = ((c.mint || c.address) || '').toLowerCase();
-    if (addr === ql) return 4;
-    if (sym === ql) return 3;
-    if (sym.startsWith(ql)) return 2;
-    if (sym.includes(ql)) return 1;
+    if (addr === ql)         return 1000;
+    if (sym  === ql)         return 800;
+    if (sym.startsWith(ql))  return 500;
+    if (sym.includes(ql))    return 300;
+    if (nm.includes(ql))     return 100;
     return 0;
   }
-  return results.slice().sort(function (a, b) {
-    const sa = score(a);
-    const sb = score(b);
-    if (sa !== sb) return sb - sa;
-    return (b.market_cap || 0) - (a.market_cap || 0);
-  });
+  return results
+    .map(function (c) { return { c, s: score(c) }; })
+    .filter(function (x) { return x.s > 0; })
+    .sort(function (a, b) {
+      if (a.s !== b.s) return b.s - a.s;
+      const va = a.c.verified ? 1 : 0;
+      const vb = b.c.verified ? 1 : 0;
+      if (va !== vb) return vb - va;
+      return (b.c.market_cap || 0) - (a.c.market_cap || 0);
+    })
+    .map(function (x) { return x.c; });
 }
 
 /* ============================================================================
  * Row renderer
  * ========================================================================= */
-function renderRow(c, i, isMobile, onSelectCoin) {
+function renderRow(c, i, isMobile, onRowClick) {
   const change = c.price_change_percentage_24h;
   const positive = (change || 0) >= 0;
   const sparkData = c.sparkline_in_7d
     ? c.sparkline_in_7d.price.filter(function (_, idx) { return idx % 8 === 0; })
     : [];
   const chain = chainLabelFor(c);
+  const displaySymbol = (c.symbol || '').toUpperCase() || shortAddr(c.mint || c.address);
 
-  function handleClick() { onSelectCoin && onSelectCoin(c); }
+  function handleClick() { onRowClick(c); }
   function handleEnter(e) { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }
   function handleLeave(e) { e.currentTarget.style.background = 'transparent'; }
 
@@ -232,18 +340,18 @@ function renderRow(c, i, isMobile, onSelectCoin) {
 
   const ChainBadge = chain ? (
     <span style={{
-      display: 'inline-block',
-      marginLeft: 6,
-      padding: '1px 5px',
-      borderRadius: 4,
-      background: 'rgba(0,229,255,.07)',
-      border: '1px solid rgba(0,229,255,.18)',
-      color: C.muted,
-      fontSize: 9,
-      fontWeight: 700,
-      letterSpacing: 0.4,
-      verticalAlign: 'middle',
+      display: 'inline-block', marginLeft: 6, padding: '1px 5px', borderRadius: 4,
+      background: 'rgba(0,229,255,.07)', border: '1px solid rgba(0,229,255,.18)',
+      color: C.muted, fontSize: 9, fontWeight: 700, letterSpacing: 0.4, verticalAlign: 'middle',
     }}>{chain}</span>
+  ) : null;
+
+  const VerifiedBadge = c.verified ? (
+    <span title="Verified" style={{
+      display: 'inline-block', marginLeft: 4, padding: '1px 4px', borderRadius: 4,
+      background: 'rgba(0,255,163,.08)', border: '1px solid rgba(0,255,163,.25)',
+      color: C.green, fontSize: 9, fontWeight: 700, letterSpacing: 0.4, verticalAlign: 'middle',
+    }}>{'\u2713'}</span>
   ) : null;
 
   if (isMobile) {
@@ -251,14 +359,15 @@ function renderRow(c, i, isMobile, onSelectCoin) {
       <div key={c.id} onClick={handleClick} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer' }} onMouseEnter={handleEnter} onMouseLeave={handleLeave}>
         <div style={{ color: C.muted, fontSize: 10, width: 18, flexShrink: 0, textAlign: 'center' }}>{i + 1}</div>
         {c.image
-          ? <img src={c.image} alt={c.symbol} style={{ width: 34, height: 34, borderRadius: '50%', flexShrink: 0, background: 'rgba(0,229,255,.08)' }} onError={function (e) { e.target.style.display = 'none'; }} />
+          ? <img src={c.image} alt={displaySymbol} style={{ width: 34, height: 34, borderRadius: '50%', flexShrink: 0, background: 'rgba(0,229,255,.08)' }} onError={function (e) { e.target.style.display = 'none'; }} />
           : <div style={{ width: 34, height: 34, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{fallbackLetter}</div>
         }
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>
-            {(c.symbol || '').toUpperCase()}
+            {displaySymbol}
             {ChainBadge}
+            {VerifiedBadge}
           </div>
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
@@ -275,14 +384,15 @@ function renderRow(c, i, isMobile, onSelectCoin) {
       <div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
         {c.image
-          ? <img src={c.image} alt={c.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, background: 'rgba(0,229,255,.08)' }} onError={function (e) { e.target.style.display = 'none'; }} />
+          ? <img src={c.image} alt={displaySymbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, background: 'rgba(0,229,255,.08)' }} onError={function (e) { e.target.style.display = 'none'; }} />
           : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{fallbackLetter}</div>
         }
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
           <div style={{ fontSize: 10, color: C.muted }}>
-            {(c.symbol || '').toUpperCase()}
+            {displaySymbol}
             {ChainBadge}
+            {VerifiedBadge}
           </div>
         </div>
       </div>
@@ -293,7 +403,6 @@ function renderRow(c, i, isMobile, onSelectCoin) {
     </div>
   );
 }
-
 
 /* ============================================================================
  * Main component
@@ -320,15 +429,6 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
 
   /* ---------------------------------------------------------------------
    * SEARCH EFFECT
-   *
-   * Branches:
-   *   1. EVM contract address  -> LiFi cache, filter by address.
-   *                               If not found, return [] (no synthetic row).
-   *   2. Solana mint           -> Jupiter /tokens/v2/search?query=<mint>
-   *   3. Free text             -> Jupiter v2 search (Solana) AND LiFi cache
-   *                               filtered to EVM-only (Jupiter is the
-   *                               source of truth for Solana, so skipping
-   *                               LiFi's Solana entries prevents dupes).
    * --------------------------------------------------------------------- */
   useEffect(function () {
     const trimmed = debouncedQ.trim();
@@ -340,7 +440,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
 
     let aborted = false;
 
-    /* --- EVM contract address --- */
+    /* --- EVM contract address paste --- */
     if (isValidEvmAddress(trimmed)) {
       setSearchResults([]);
       setSearchLoading(true);
@@ -355,7 +455,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
       return function () { aborted = true; };
     }
 
-    /* --- Solana mint OR free text --- */
+    /* --- Solana mint paste OR free text --- */
     setSearchLoading(true);
     const url = '/api/jupiter/tokens/v2/search?query=' + encodeURIComponent(trimmed);
 
@@ -370,28 +470,41 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
       const ql = trimmed.toLowerCase();
       const seen = new Set();
       const out = [];
+      const isMintQuery = isValidMint(trimmed);
 
+      // Jupiter: validate via mapJupiter, then filter by relevance.
       jupArr.forEach(function (t) {
         const m = mapJupiter(t);
         if (!m) return;
+        const sym  = (m.symbol || '').toLowerCase();
+        const nm   = (m.name   || '').toLowerCase();
+        const addr = (m.mint   || '').toLowerCase();
+        // Mint query: only keep exact-mint matches.
+        // Text query: keep if symbol or name contains the query.
+        const matches = isMintQuery
+          ? addr === ql
+          : (sym.includes(ql) || nm.includes(ql) || addr === ql);
+        if (!matches) return;
         const key = 'sol-' + m.mint;
         if (seen.has(key)) return;
         seen.add(key);
         out.push(m);
       });
 
-      evmArr.forEach(function (t) {
-        if (!t || !t.symbol) return;
-        // Skip Solana entries from LiFi -- Jupiter is the source for Solana.
-        if (t.chain === 'solana') return;
-        const sym = t.symbol.toLowerCase();
-        const nm = (t.name || '').toLowerCase();
-        if (!sym.includes(ql) && !nm.includes(ql)) return;
-        const key = 'evm-' + t.address + '-' + t.chainId;
-        if (seen.has(key)) return;
-        seen.add(key);
-        out.push(t);
-      });
+      // LiFi: skip Solana entries (Jupiter is canonical for Solana). Filter
+      // by relevance. Mappers already enforced address+symbol validity.
+      if (!isMintQuery) {
+        evmArr.forEach(function (t) {
+          if (!t || t.chain === 'solana') return;
+          const sym = (t.symbol || '').toLowerCase();
+          const nm  = (t.name   || '').toLowerCase();
+          if (!sym.includes(ql) && !nm.includes(ql)) return;
+          const key = 'evm-' + t.address + '-' + t.chainId;
+          if (seen.has(key)) return;
+          seen.add(key);
+          out.push(t);
+        });
+      }
 
       setSearchResults(out);
       setSearchLoading(false);
@@ -409,18 +522,40 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     else { setSort(key); setDir(-1); }
   }, [sort]);
 
-  /* For search results, rank by relevance (exact match wins). For the
-   * default browse view, use the column-header sort. */
+  /* Default browse list:
+   *   - Drop unusable rows (no address / no symbol). Better to show fewer
+   *     rows than to show clickable rows that won't open a swap correctly.
+   *   - Sort by user-selected column.
+   * Search list:
+   *   - Already validated and relevance-filtered upstream.
+   *   - Apply rankSearchResults for verified-first ordering. */
   const sorted = useMemo(function () {
     const trimmed = debouncedQ.trim();
     if (trimmed) {
       return rankSearchResults(searchResults, trimmed);
     }
-    const base = (coins || []).slice(0, 20);
+    const base = (coins || []).filter(isUsableRow).slice(0, 20);
     return base.slice().sort(function (a, b) {
       return dir * ((a[sort] || 0) - (b[sort] || 0));
     });
   }, [debouncedQ, searchResults, coins, sort, dir]);
+
+  /* Click pipeline:
+   *   1. Canonicalize the row.
+   *   2. If it can't be canonicalized, swallow the click. (Should never
+   *      happen because isUsableRow gates display, but defensive.)
+   *   3. Hand the canonical token to the parent. SwapWidget's normalizeToken
+   *      is now guaranteed to return non-null for this input, which means
+   *      defaultTokenPair will populate the Buy/Sell defaults with this
+   *      token's exact address. */
+  const handleRowClick = useCallback(function (row) {
+    const canonical = toCanonicalToken(row);
+    if (!canonical) {
+      console.warn('[Markets] dropped click on un-canonicalizable row:', row);
+      return;
+    }
+    if (typeof onSelectCoin === 'function') onSelectCoin(canonical);
+  }, [onSelectCoin]);
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
@@ -477,7 +612,7 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
             </div>
           )}
 
-          {sorted.map(function (c, i) { return renderRow(c, i, isMobile, onSelectCoin); })}
+          {sorted.map(function (c, i) { return renderRow(c, i, isMobile, handleRowClick); })}
 
           {sorted.length === 0 && !q && !loading && (
             <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>No market data available</div>
