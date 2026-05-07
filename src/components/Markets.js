@@ -242,7 +242,7 @@ function renderRow(c, i, isMobile, onSelectCoin) {
     <div key={c.id} onClick={handleClick} style={{ display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 100px 72px 100px 72px', gap: 8, padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer', alignItems: 'center' }} onMouseEnter={handleEnter} onMouseLeave={handleLeave}>
       <div style={{ color: C.muted, fontSize: 11
 
-Chunk 2 of 2 (lines 231–end):
+
 
 /* ============================================================================
  * Main component
