@@ -54,8 +54,12 @@ import { useNexusWallet } from '../WalletContext.js';
 import { useAccount, useWalletClient, useBalance, useSwitchChain, usePublicClient } from 'wagmi';
 import {
   VersionedTransaction, PublicKey, LAMPORTS_PER_SOL,
+  TransactionInstruction, TransactionMessage, AddressLookupTableAccount,
 } from '@solana/web3.js';
-import { getAssociatedTokenAddress } from '@solana/spl-token';
+import {
+  getAssociatedTokenAddress,
+  createAssociatedTokenAccountIdempotentInstruction,
+} from '@solana/spl-token';
 
 /* ============================================================================
  * CONSTANTS
@@ -537,7 +541,10 @@ async function fetchOxQuote({ chainId, sellToken, buyToken, sellAmount, taker, s
 }
 
 /* Jupiter quote. restrictIntermediateTokens=true keeps the route to
- * battle-tested intermediates -- avoids high-slippage long-tail hops. */
+ * battle-tested intermediates -- avoids high-slippage long-tail hops.
+ * platformFeeBps is ALWAYS included; the matching feeAccount is paired in
+ * the swap-instructions call below. Jupiter rejects the build if one is
+ * present without the other. */
 async function fetchJupiterQuote({ inputMint, outputMint, amountRaw, slipBps, signal }) {
   const qs = new URLSearchParams({
     inputMint, outputMint,
@@ -554,16 +561,14 @@ async function fetchJupiterQuote({ inputMint, outputMint, amountRaw, slipBps, si
   return data;
 }
 
-/* Jupiter swap-build. instructionVersion=V2 selects the Token-2022-aware
- * fee-collection path. Required when the output mint is Token-2022 with a
- * transfer-fee extension; harmless on classic SPL.
- *
- * positiveSlippageFeeBps + positiveSlippageFeeAccount route 100% of any
- * surplus over the quoted amount to our fee account. Per Jupiter swap-api
- * release notes: positive_slippage_fee_account meta is appended after the
- * platform_fee_account meta in the built instruction. We pass the same
- * fee ATA for both -- safe because we already verified its existence. */
-async function fetchJupiterSwapTx({ quoteResponse, userPublicKey, feeAccount, signal }) {
+/* Jupiter swap-INSTRUCTIONS endpoint. Returns individual ixs instead of a
+ * sealed transaction so we can prepend our own createAssociatedTokenAccount
+ * instruction for the fee ATA. That way the fee ATA gets created on the fly
+ * inside the same atomic transaction as the swap -- no separate setup tx,
+ * no "feeAccount missing" failures, no operational ATA pre-creation. User
+ * pays ~0.002 SOL rent on the first trade to a brand-new output mint, then
+ * nothing forever. */
+async function fetchJupiterSwapInstructions({ quoteResponse, userPublicKey, feeAccount, signal }) {
   const body = {
     quoteResponse,
     userPublicKey,
@@ -575,49 +580,100 @@ async function fetchJupiterSwapTx({ quoteResponse, userPublicKey, feeAccount, si
         priorityLevel: 'high',
       },
     },
+    feeAccount,
+    positiveSlippageFeeBps: JUPITER_POSITIVE_SLIPPAGE_BPS,
+    positiveSlippageFeeAccount: feeAccount,
   };
-  if (feeAccount) {
-    body.feeAccount = feeAccount;
-    body.positiveSlippageFeeBps = JUPITER_POSITIVE_SLIPPAGE_BPS;
-    body.positiveSlippageFeeAccount = feeAccount;
-  }
-  const res = await fetch('/api/jupiter/swap/v1/swap?instructionVersion=V2', {
+  const res = await fetch('/api/jupiter/swap/v1/swap-instructions?instructionVersion=V2', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
     signal,
   });
   const data = await res.json();
-  if (!res.ok || !data.swapTransaction) throw new Error(data.error || 'Jupiter swap build failed');
+  if (!res.ok) throw new Error(data.error || 'Jupiter swap-instructions failed');
+  if (!data.swapInstruction) throw new Error('Jupiter returned no swap instruction');
   return data;
 }
 
-/* Retry the swap-build without positive-slippage params if the API rejects
- * them (e.g., slightly different param naming on a server-side update).
- * Fee collection still works on output via platformFeeBps. */
-async function fetchJupiterSwapTxNoPositiveSlippage({ quoteResponse, userPublicKey, feeAccount, signal }) {
-  const body = {
-    quoteResponse,
-    userPublicKey,
-    wrapAndUnwrapSol: true,
-    dynamicComputeUnitLimit: true,
-    prioritizationFeeLamports: {
-      priorityLevelWithMaxLamports: {
-        maxLamports: 5_000_000,
-        priorityLevel: 'high',
-      },
-    },
-  };
-  if (feeAccount) body.feeAccount = feeAccount;
-  const res = await fetch('/api/jupiter/swap/v1/swap?instructionVersion=V2', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal,
+/* Convert Jupiter's API-shaped instruction (programId/accounts/data as
+ * base64) into a TransactionInstruction the web3.js builder accepts. */
+function deserializeJupiterIx(rawIx) {
+  return new TransactionInstruction({
+    programId: new PublicKey(rawIx.programId),
+    keys: (rawIx.accounts || []).map((acc) => ({
+      pubkey: new PublicKey(acc.pubkey),
+      isSigner: !!acc.isSigner,
+      isWritable: !!acc.isWritable,
+    })),
+    data: Buffer.from(rawIx.data || '', 'base64'),
   });
-  const data = await res.json();
-  if (!res.ok || !data.swapTransaction) throw new Error(data.error || 'Jupiter swap build failed');
-  return data;
+}
+
+/* Build the final VersionedTransaction. Order of instructions:
+ *   1. Jupiter's compute budget (priority fee + CU limit)
+ *   2. Our createAssociatedTokenAccountIdempotent for the fee ATA
+ *      -- idempotent: no-op if exists, creates if missing
+ *   3. Jupiter's setup ixs (e.g., wSOL wrap)
+ *   4. Jupiter's swap ix
+ *   5. Jupiter's cleanup ix (e.g., wSOL unwrap)
+ * Address lookup tables come from Jupiter's response so the route can fit
+ * within Solana's 64-account limit. */
+async function buildJupiterSwapTransaction({
+  connection, userPubkey, outputMint, feeWallet, feeAta, ixData,
+}) {
+  const instructions = [];
+
+  if (Array.isArray(ixData.computeBudgetInstructions)) {
+    ixData.computeBudgetInstructions.forEach((ix) => instructions.push(deserializeJupiterIx(ix)));
+  }
+
+  instructions.push(
+    createAssociatedTokenAccountIdempotentInstruction(
+      userPubkey,   // payer = the user (they pay ~0.002 SOL rent on first creation)
+      feeAta,       // ata to ensure exists
+      feeWallet,    // owner of the new ata
+      outputMint,   // mint of the new ata
+    )
+  );
+
+  if (Array.isArray(ixData.setupInstructions)) {
+    ixData.setupInstructions.forEach((ix) => instructions.push(deserializeJupiterIx(ix)));
+  }
+
+  if (ixData.swapInstruction) {
+    instructions.push(deserializeJupiterIx(ixData.swapInstruction));
+  }
+
+  if (ixData.cleanupInstruction) {
+    instructions.push(deserializeJupiterIx(ixData.cleanupInstruction));
+  }
+
+  const ltAddrs = Array.isArray(ixData.addressLookupTableAddresses)
+    ? ixData.addressLookupTableAddresses
+    : [];
+  const lookupTablesRaw = await Promise.all(
+    ltAddrs.map(async (addr) => {
+      try {
+        const acct = await connection.getAccountInfo(new PublicKey(addr));
+        if (!acct) return null;
+        return new AddressLookupTableAccount({
+          key: new PublicKey(addr),
+          state: AddressLookupTableAccount.deserialize(acct.data),
+        });
+      } catch { return null; }
+    })
+  );
+  const lookupTables = lookupTablesRaw.filter(Boolean);
+
+  const { blockhash } = await connection.getLatestBlockhash('finalized');
+  const message = new TransactionMessage({
+    payerKey: userPubkey,
+    recentBlockhash: blockhash,
+    instructions,
+  }).compileToV0Message(lookupTables);
+
+  return new VersionedTransaction(message);
 }
 
 /* ============================================================================
@@ -1838,19 +1894,13 @@ export default function SwapWidget({
       if (route === 'jupiter') {
         if (!publicKey) throw new Error('Connect a Solana wallet');
 
-        /* Check our fee ATA exists on-chain. If missing (fresh output mint
-         * we've never received fees in), skip the feeAccount param. The
-         * swap still succeeds; we just forfeit fees on this one trade.
-         * Better than blocking the user. Pre-create ATAs for SOL/USDC/USDT
-         * to cover the common cases. */
-        let feeAtaParam = null;
-        try {
-          const outputMintPk = new PublicKey(toToken.mint);
-          const feeWalletPk  = new PublicKey(SOL_FEE_WALLET);
-          const candidate = await getAssociatedTokenAddress(outputMintPk, feeWalletPk);
-          const info = await connection.getAccountInfo(candidate);
-          if (info) feeAtaParam = candidate.toBase58();
-        } catch {}
+        /* Always derive the fee ATA. We will create it atomically inside
+         * the swap transaction below, so it does not matter whether it
+         * already exists on-chain. */
+        const outputMintPk = new PublicKey(toToken.mint);
+        const feeWalletPk  = new PublicKey(SOL_FEE_WALLET);
+        const feeAta       = await getAssociatedTokenAddress(outputMintPk, feeWalletPk);
+        const feeAtaParam  = feeAta.toBase58();
 
         const freshQuote = await fetchJupiterQuote({
           inputMint:  fromToken.mint,
@@ -1859,30 +1909,21 @@ export default function SwapWidget({
           slipBps:    Math.round(slip * 100),
         });
 
-        /* Try with positive-slippage capture first; fall back without if
-         * the API rejects the params (server-side naming variations). */
-        let swapData;
-        try {
-          swapData = await fetchJupiterSwapTx({
-            quoteResponse: freshQuote,
-            userPublicKey: publicKey.toString(),
-            feeAccount:    feeAtaParam,
-          });
-        } catch (e) {
-          const msg = (e && e.message) || '';
-          if (/positiveSlippage|unknown field|invalid/i.test(msg)) {
-            console.warn('[SwapWidget] Jupiter rejected positive-slippage params, retrying without');
-            swapData = await fetchJupiterSwapTxNoPositiveSlippage({
-              quoteResponse: freshQuote,
-              userPublicKey: publicKey.toString(),
-              feeAccount:    feeAtaParam,
-            });
-          } else {
-            throw e;
-          }
-        }
+        const ixData = await fetchJupiterSwapInstructions({
+          quoteResponse: freshQuote,
+          userPublicKey: publicKey.toString(),
+          feeAccount:    feeAtaParam,
+        });
 
-        const jupTx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
+        const jupTx = await buildJupiterSwapTransaction({
+          connection,
+          userPubkey: publicKey,
+          outputMint: outputMintPk,
+          feeWallet:  feeWalletPk,
+          feeAta,
+          ixData,
+        });
+
         const sig = await sendTransaction(jupTx, connection, { skipPreflight: true, maxRetries: 3 });
         setSwapTx(sig);
 
@@ -2497,3 +2538,4 @@ export function TradeDrawer({
     </>
   );
 }
+
