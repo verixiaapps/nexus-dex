@@ -1,6 +1,6 @@
 /**
  * NEXUS DEX -- Shared Solana Swap Helper
- *
+ * 
  * Single execution path used by:
  *   - InstantTrade.jsx (one-click Privy buy/sell on token pages)
  *   - (Tomorrow) SwapWidget.jsx executeSwap (refactor)
