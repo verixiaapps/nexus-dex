@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
- 
-/** 
+
+/**
  * NEXUS DEX -- Markets
  *
  * Data source rule (locked):
@@ -8,32 +8,14 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
  *   - LiFi v1     -> EVM tokens across every chain LiFi supports
  *   - 0x          -> swap quotes on EVM (not used here -- this is browse/search)
  *
- * Coverage: every token and every chain that Jupiter, 0x, or LiFi supports.
+ * No synthetic rows. If a contract address isn't in our aggregator
+ * coverage, the user sees "not found" -- never a fake placeholder.
  *
- * Endpoints (all routed through the server proxy so API keys stay server-side):
- *
- *   Solana browse (parent passes via `coins`):
- *     /api/jupiter/tokens/v2/toporganicscore/24h
- *     /api/jupiter/tokens/v2/tag?query=verified  (parent passes via `jupiterTokens`)
- *
- *   Solana search:
- *     /api/jupiter/tokens/v2/search?query=<text|mint>
- *       returns BOTH verified AND unverified, with full price/mcap data
- *
- *   EVM browse + search:
- *     /api/lifi/v1/tokens
- *       returns tokens across every chain LiFi indexes (EVM, Solana, and
- *       loaded once and cached at module scope
- *
- * No DexScreener. No GeckoTerminal. No CoinGecko. No Moralis.
- *
- * Props from App.js:
- *   coins         pre-fetched Jupiter top-organic-score Solana tokens
- *                 (already mapped to coin shape by App.js)
- *   loading       coins still loading
- *   onSelectCoin  (coin) => navigate to TokenDetail
- *   jupiterTokens optional verified-tag list, used as cheap client-side
- *                 prefilter while server search runs
+ * Endpoints (all routed through /api proxy so keys stay server-side):
+ *   /api/jupiter/tokens/v2/toporganicscore/24h     (parent supplies via `coins`)
+ *   /api/jupiter/tokens/v2/tag?query=verified      (parent supplies via `jupiterTokens`)
+ *   /api/jupiter/tokens/v2/search?query=<text|mint>
+ *   /api/lifi/v1/tokens                            (loaded once, cached at module scope)
  */
 
 const C = {
@@ -42,6 +24,26 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994',
 };
+
+/* ============================================================================
+ * Chain labels for the small badge next to the symbol in search results.
+ * Short codes so they fit on mobile rows.
+ * ========================================================================= */
+const CHAIN_LABEL = {
+  1: 'ETH', 10: 'OP', 56: 'BNB', 100: 'GNO', 130: 'UNI', 137: 'POL',
+  146: 'SONIC', 250: 'FTM', 288: 'BOBA', 324: 'ZKS', 480: 'WORLD',
+  747: 'FLOW', 1116: 'CORE', 1135: 'LISK', 2222: 'KAVA', 2741: 'ABS',
+  5000: 'MNT', 8453: 'BASE', 33139: 'APE', 42161: 'ARB', 43111: 'HEMI',
+  43114: 'AVAX', 48900: 'ZRC', 57073: 'INK', 59144: 'LINEA', 60808: 'BOB',
+  80094: 'BERA', 81457: 'BLAST', 200901: 'BTL', 534352: 'SCROLL',
+};
+
+function chainLabelFor(c) {
+  if (!c) return null;
+  if (c.chain === 'solana' || c.isSolanaToken) return 'SOL';
+  if (c.chainId) return CHAIN_LABEL[c.chainId] || ('CHAIN ' + c.chainId);
+  return null;
+}
 
 /* ============================================================================
  * Formatters
@@ -70,7 +72,7 @@ function isValidEvmAddress(s) {
 }
 
 /* ============================================================================
- * Sparkline (only used if a token's stats include 7d data)
+ * Sparkline
  * ========================================================================= */
 function SparkLine({ data, positive }) {
   if (!data || data.length < 2) return null;
@@ -104,14 +106,6 @@ function useDebounce(value, delay) {
 
 /* ============================================================================
  * Map a Jupiter v2 token to row shape.
- *
- * Jupiter v2 fields used:
- *   id           mint address
- *   name, symbol, decimals
- *   icon         logo URL
- *   usdPrice     current USD price
- *   mcap, fdv    market cap
- *   stats24h     { priceChange, buyVolume, sellVolume, ... }
  * ========================================================================= */
 function mapJupiter(t) {
   if (!t || !t.id) return null;
@@ -137,10 +131,6 @@ function mapJupiter(t) {
 
 /* ============================================================================
  * Map a LiFi token to row shape.
- *
- * LiFi /v1/tokens returns:
- *   { tokens: { '<chainId>': [ { address, chainId, symbol, name, decimals,
- *                                logoURI, priceUSD } ] } }
  * ========================================================================= */
 function mapLifi(t) {
   if (!t || !t.address) return null;
@@ -165,8 +155,7 @@ function mapLifi(t) {
 }
 
 /* ============================================================================
- * Lazy LiFi token cache. Fetched once for the session. Covers every
- * chain LiFi indexes (EVM, Solana, and others).
+ * Lazy LiFi token cache. Fetched once for the session.
  * ========================================================================= */
 let _evmCache = null;
 let _evmLoading = false;
@@ -202,7 +191,30 @@ function getEvmTokenCache() {
 }
 
 /* ============================================================================
- * Row renderer (outside component for stable identity across renders)
+ * Rank search results: exact symbol > starts-with > market cap.
+ * Mint/address exact match also wins.
+ * ========================================================================= */
+function rankSearchResults(results, query) {
+  const ql = query.toLowerCase();
+  function score(c) {
+    const sym = (c.symbol || '').toLowerCase();
+    const addr = ((c.mint || c.address) || '').toLowerCase();
+    if (addr === ql) return 4;
+    if (sym === ql) return 3;
+    if (sym.startsWith(ql)) return 2;
+    if (sym.includes(ql)) return 1;
+    return 0;
+  }
+  return results.slice().sort(function (a, b) {
+    const sa = score(a);
+    const sb = score(b);
+    if (sa !== sb) return sb - sa;
+    return (b.market_cap || 0) - (a.market_cap || 0);
+  });
+}
+
+/* ============================================================================
+ * Row renderer
  * ========================================================================= */
 function renderRow(c, i, isMobile, onSelectCoin) {
   const change = c.price_change_percentage_24h;
@@ -210,12 +222,29 @@ function renderRow(c, i, isMobile, onSelectCoin) {
   const sparkData = c.sparkline_in_7d
     ? c.sparkline_in_7d.price.filter(function (_, idx) { return idx % 8 === 0; })
     : [];
+  const chain = chainLabelFor(c);
 
   function handleClick() { onSelectCoin && onSelectCoin(c); }
   function handleEnter(e) { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; }
   function handleLeave(e) { e.currentTarget.style.background = 'transparent'; }
 
   const fallbackLetter = (c.symbol || '?').charAt(0).toUpperCase();
+
+  const ChainBadge = chain ? (
+    <span style={{
+      display: 'inline-block',
+      marginLeft: 6,
+      padding: '1px 5px',
+      borderRadius: 4,
+      background: 'rgba(0,229,255,.07)',
+      border: '1px solid rgba(0,229,255,.18)',
+      color: C.muted,
+      fontSize: 9,
+      fontWeight: 700,
+      letterSpacing: 0.4,
+      verticalAlign: 'middle',
+    }}>{chain}</span>
+  ) : null;
 
   if (isMobile) {
     return (
@@ -227,7 +256,10 @@ function renderRow(c, i, isMobile, onSelectCoin) {
         }
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{(c.symbol || '').toUpperCase()}</div>
+          <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>
+            {(c.symbol || '').toUpperCase()}
+            {ChainBadge}
+          </div>
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
           <div style={{ fontWeight: 600, color: '#fff', fontSize: 13 }}>{fmt(c.current_price)}</div>
@@ -248,7 +280,10 @@ function renderRow(c, i, isMobile, onSelectCoin) {
         }
         <div style={{ minWidth: 0 }}>
           <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
-          <div style={{ fontSize: 10, color: C.muted }}>{(c.symbol || '').toUpperCase()}</div>
+          <div style={{ fontSize: 10, color: C.muted }}>
+            {(c.symbol || '').toUpperCase()}
+            {ChainBadge}
+          </div>
         </div>
       </div>
       <div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>{fmt(c.current_price)}</div>
@@ -287,11 +322,13 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
    * SEARCH EFFECT
    *
    * Branches:
-   *   1. EVM contract address  -> LiFi cache, filter by address
+   *   1. EVM contract address  -> LiFi cache, filter by address.
+   *                               If not found, return [] (no synthetic row).
    *   2. Solana mint           -> Jupiter /tokens/v2/search?query=<mint>
-   *   3. Free text             -> Jupiter v2 search (Solana, includes
-   *                              unverified) AND LiFi cache match (EVM
-   *                              across every chain)
+   *   3. Free text             -> Jupiter v2 search (Solana) AND LiFi cache
+   *                               filtered to EVM-only (Jupiter is the
+   *                               source of truth for Solana, so skipping
+   *                               LiFi's Solana entries prevents dupes).
    * --------------------------------------------------------------------- */
   useEffect(function () {
     const trimmed = debouncedQ.trim();
@@ -312,28 +349,13 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
         const found = evmTokens.filter(function (t) {
           return t.address && t.address.toLowerCase() === trimmed.toLowerCase();
         });
-        setSearchResults(found.length ? found : [{
-          id: trimmed + '-evm',
-          address: trimmed,
-          chainId: 1,
-          symbol: trimmed.slice(0, 6) + '...',
-          name: 'Unknown EVM Token',
-          image: null,
-          chain: 'evm',
-          decimals: 18,
-          current_price: 0,
-          market_cap: 0,
-          total_volume: 0,
-          price_change_percentage_24h: null,
-        }]);
+        setSearchResults(found);
         setSearchLoading(false);
       });
       return function () { aborted = true; };
     }
 
-    /* --- Solana mint OR free text -> hit Jupiter v2 search.
-     * Returns verified + unverified tokens with full price/mcap data.
-     * In parallel, match against LiFi cache (if loaded) for EVM tokens. */
+    /* --- Solana mint OR free text --- */
     setSearchLoading(true);
     const url = '/api/jupiter/tokens/v2/search?query=' + encodeURIComponent(trimmed);
 
@@ -360,6 +382,8 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
 
       evmArr.forEach(function (t) {
         if (!t || !t.symbol) return;
+        // Skip Solana entries from LiFi -- Jupiter is the source for Solana.
+        if (t.chain === 'solana') return;
         const sym = t.symbol.toLowerCase();
         const nm = (t.name || '').toLowerCase();
         if (!sym.includes(ql) && !nm.includes(ql)) return;
@@ -385,12 +409,14 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     else { setSort(key); setDir(-1); }
   }, [sort]);
 
-  /* Sorted list. For initial view (no query), show top 20 popular tokens
-   * passed in via `coins` prop (Jupiter top organic score from App.js). */
+  /* For search results, rank by relevance (exact match wins). For the
+   * default browse view, use the column-header sort. */
   const sorted = useMemo(function () {
-    const base = debouncedQ.trim()
-      ? searchResults
-      : (coins || []).slice(0, 20);
+    const trimmed = debouncedQ.trim();
+    if (trimmed) {
+      return rankSearchResults(searchResults, trimmed);
+    }
+    const base = (coins || []).slice(0, 20);
     return base.slice().sort(function (a, b) {
       return dir * ((a[sort] || 0) - (b[sort] || 0));
     });
@@ -422,12 +448,6 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
         </div>
       </div>
 
-      {isContractQuery && searchResults.length === 0 && !searchLoading && debouncedQ.trim() && (
-        <div style={{ background: 'rgba(0,229,255,.04)', border: '1px solid rgba(0,229,255,.12)', borderRadius: 10, padding: '10px 16px', marginBottom: 12, fontSize: 12, color: C.muted }}>
-          Looking up contract address...
-        </div>
-      )}
-
       {loading && !q ? (
         <div style={{ textAlign: 'center', padding: 60, color: C.muted, fontSize: 14 }}>Loading markets...</div>
       ) : (
@@ -451,8 +471,9 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
 
           {sorted.length === 0 && debouncedQ && !searchLoading && (
             <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>
-              No tokens found for "{debouncedQ}"
-              {isContractQuery && <div style={{ marginTop: 8, fontSize: 12 }}>Token may be too new or not indexed yet</div>}
+              {isContractQuery
+                ? 'This contract is not in our aggregator coverage (Jupiter / LiFi).'
+                : 'No tokens found for "' + debouncedQ + '"'}
             </div>
           )}
 
