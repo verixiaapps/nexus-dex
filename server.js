@@ -1,9 +1,31 @@
+Cleaned. ~275 lines — 2 chunks. JSDoc header reconstructed from markdown-bullet damage to proper /** ... */ block; CSP nested-quote source values like "'self'" restored; regex /^image\/(png|jpeg...)/i escape restored.
+Chunk 1 of 2 (lines 1–140):
+
 /**
- * NEXUS DEX - Backend Proxy Server
- * Required: OX_API_KEY, JUPITER_API_KEY, LIFI_API_KEY, HELIUS_API_KEY,
- *           MORALIS_API_KEY, PINATA_JWT (each accepts REACT_APP_* fallback)
- * Optional: COINGECKO_API_KEY, COINGECKO_API_KEY_TYPE, ALLOWED_ORIGINS,
- *           PORT, NODE_ENV, CSP_MODE, EXTRA_CSP_*, HSTS_DISABLE
+ * NEXUS DEX -- Backend Proxy Server
+ *
+ * Active routes:
+ *   /api/0x/*         -- 0x v2 swap aggregator (EVM)
+ *   /api/jupiter/*    -- Jupiter swap + price + token search (Solana)
+ *   /api/lifi/*       -- LiFi cross-chain + token price + catalog
+ *   /api/helius/das   -- Helius DAS getAsset (Solana metadata + price fallback)
+ *   /api/solana-rpc   -- Solana RPC proxy (Helius preferred)
+ *   /api/pinata/json  -- Pinata pinJSONToIPFS (token-launch metadata)
+ *   /api/pinata/file  -- Pinata pinFileToIPFS (token-launch images)
+ *   /api/health       -- healthcheck
+ *
+ * Removed (banned data sources):
+ *   /api/coingecko/*       -- replaced by Jupiter /price/v3 + LiFi /v1/token
+ *   /api/cg/* (alias)      -- ditto
+ *   /api/geckoterminal/*   -- replaced by Jupiter + LiFi
+ *   /api/moralis/*         -- replaced by Jupiter + LiFi + on-chain RPC
+ *   /api/raydium/*         -- TokenLaunch uses @raydium-io/raydium-sdk-v2
+ *                            directly, which routes through /api/solana-rpc
+ *
+ * Required env: OX_API_KEY, JUPITER_API_KEY, LIFI_API_KEY, HELIUS_API_KEY,
+ *               PINATA_JWT (each accepts REACT_APP_* fallback)
+ * Optional env: ALLOWED_ORIGINS, PORT, NODE_ENV, CSP_MODE, EXTRA_CSP_*,
+ *               HSTS_DISABLE, REACT_APP_SOLANA_RPC (full Helius URL)
  */
 require('dotenv').config();
 const express = require('express');
@@ -35,7 +57,7 @@ const CSP_DIRECTIVES = [
   ['frame-ancestors', ["'none'"]],
   ['frame-src', ["'self'",'https://auth.privy.io','https://verify.walletconnect.com','https://verify.walletconnect.org','https://challenges.cloudflare.com',...EXTRA_FRAME_SRC]],
   ['child-src', ["'self'",'https://auth.privy.io','https://verify.walletconnect.com','https://verify.walletconnect.org']],
-  ['connect-src', ["'self'",'https://auth.privy.io','https://*.privy.io','https://*.privy.systems','https://*.rpc.privy.systems','https://explorer-api.walletconnect.com','https://*.walletconnect.com','https://*.walletconnect.org','wss://relay.walletconnect.com','wss://relay.walletconnect.org','wss://*.walletconnect.com','wss://*.walletconnect.org','wss://www.walletlink.org','https://api.mainnet-beta.solana.com','https://api.devnet.solana.com','https://api.testnet.solana.com','https://*.publicnode.com','https://*.drpc.org',...EXTRA_CONNECT_SRC]],
+  ['connect-src', ["'self'",'https://auth.privy.io','https://*.privy.io','https://*.privy.systems','https://*.rpc.privy.systems','https://explorer-api.walletconnect.com','https://*.walletconnect.com','https://*.walletconnect.org','wss://relay.walletconnect.com','wss://relay.walletconnect.org','wss://*.walletconnect.com','wss://*.walletconnect.org','wss://www.walletlink.org','https://api.mainnet-beta.solana.com','https://api.devnet.solana.com','https://api.testnet.solana.com','https://*.publicnode.com','https://*.drpc.org','https://pumpportal.fun','wss://pumpportal.fun',...EXTRA_CONNECT_SRC]],
   ['worker-src', ["'self'",'blob:']],
   ['manifest-src', ["'self'"]],
 ];
@@ -58,18 +80,15 @@ app.use((req, res, next) => {
 });
 
 /* SECRETS - all support REACT_APP_* fallbacks */
-const OX_API_KEY        = process.env.OX_API_KEY        || process.env.REACT_APP_0X_API_KEY        || '';
-const JUPITER_API_KEY   = process.env.JUPITER_API_KEY   || process.env.REACT_APP_JUPITER_API_KEY   || '';
-const LIFI_API_KEY      = process.env.LIFI_API_KEY      || process.env.REACT_APP_LIFI_API_KEY      || '';
-const HELIUS_API_KEY    = process.env.HELIUS_API_KEY    || process.env.REACT_APP_HELIUS_API_KEY    || '';
+const OX_API_KEY      = process.env.OX_API_KEY      || process.env.REACT_APP_0X_API_KEY      || '';
+const JUPITER_API_KEY = process.env.JUPITER_API_KEY || process.env.REACT_APP_JUPITER_API_KEY || '';
+const LIFI_API_KEY    = process.env.LIFI_API_KEY    || process.env.REACT_APP_LIFI_API_KEY    || '';
+const HELIUS_API_KEY  = process.env.HELIUS_API_KEY  || process.env.REACT_APP_HELIUS_API_KEY  || '';
 /* REACT_APP_SOLANA_RPC is a FULL URL with the Helius key embedded
  * (e.g. https://mainnet.helius-rpc.com/?api-key=xxx). If set we use
  * it directly instead of constructing the URL from HELIUS_API_KEY. */
-const HELIUS_RPC_URL    = process.env.HELIUS_RPC_URL    || process.env.REACT_APP_SOLANA_RPC        || '';
-const MORALIS_API_KEY   = process.env.MORALIS_API_KEY   || process.env.REACT_APP_MORALIS_API_KEY   || process.env.REACT_APP_MORALIS_KEY || '';
-const PINATA_JWT        = process.env.PINATA_JWT        || process.env.REACT_APP_PINATA_JWT        || '';
-const COINGECKO_API_KEY = process.env.COINGECKO_API_KEY || process.env.REACT_APP_COINGECKO_API_KEY || '';
-const COINGECKO_API_KEY_TYPE = (process.env.COINGECKO_API_KEY_TYPE || 'demo').toLowerCase();
+const HELIUS_RPC_URL  = process.env.HELIUS_RPC_URL  || process.env.REACT_APP_SOLANA_RPC      || '';
+const PINATA_JWT      = process.env.PINATA_JWT      || process.env.REACT_APP_PINATA_JWT      || '';
 
 /* CORS + JSON */
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'https://swap.verixiaapps.com,http://localhost:3000')
@@ -87,8 +106,10 @@ app.use(cors({
 }));
 app.use(express.json({ limit: '256kb' }));
 
-/* RATE LIMITING */
-const apiLimiter = rateLimit({ windowMs: 60_000, max: 240, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests, slow down.' }, skip: r => r.path === '/health' });
+/* RATE LIMITING -- bumped from 240 to 600/min. Quote engine fires more
+ * proxy calls per session now (Jupiter/LiFi for both from+to tokens, plus
+ * lazy LiFi catalog load); 240 was too tight for active swappers. */
+const apiLimiter = rateLimit({ windowMs: 60_000, max: 600, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many requests, slow down.' }, skip: r => r.path === '/health' });
 const uploadLimiter = rateLimit({ windowMs: 60_000, max: 10, standardHeaders: true, legacyHeaders: false, message: { error: 'Too many uploads, slow down.' } });
 app.use('/api/', apiLimiter);
 
@@ -112,8 +133,7 @@ function scrubSecrets(s) {
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer ***')
     .replace(/0x-api-key["':\s]+[^&\s"',}]+/gi, '0x-api-key=***')
     .replace(/x-api-key["':\s]+[^&\s"',}]+/gi, 'x-api-key=***')
-    .replace(/x-lifi-api-key["':\s]+[^&\s"',}]+/gi, 'x-lifi-api-key=***')
-    .replace(/x-cg-(?:pro|demo)-api-key["':\s]+[^&\s"',}]+/gi, 'x-cg-key=***');
+    .replace(/x-lifi-api-key["':\s]+[^&\s"',}]+/gi, 'x-lifi-api-key=***');
 }
 function logError(tag, err) {
   const msg = scrubSecrets(err && err.message ? err.message : err);
@@ -134,12 +154,18 @@ function respondJsonOrError(res, response, result) {
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true, env: NODE_ENV,
-    has: { ox: Boolean(OX_API_KEY), jupiter: Boolean(JUPITER_API_KEY), lifi: Boolean(LIFI_API_KEY), helius: Boolean(HELIUS_API_KEY || HELIUS_RPC_URL), moralis: Boolean(MORALIS_API_KEY), pinata: Boolean(PINATA_JWT), coingecko: Boolean(COINGECKO_API_KEY) },
+    has: {
+      ox:      Boolean(OX_API_KEY),
+      jupiter: Boolean(JUPITER_API_KEY),
+      lifi:    Boolean(LIFI_API_KEY),
+      helius:  Boolean(HELIUS_API_KEY || HELIUS_RPC_URL),
+      pinata:  Boolean(PINATA_JWT),
+    },
     time: new Date().toISOString(),
   });
 });
 
-/* 0X PROXY (REQUIRED - EVM swap aggregator) */
+/* 0X PROXY -- EVM swap aggregator */
 async function proxy0x(req, res) {
   try {
     const subPath = req.path.replace('/api/0x', '');
@@ -158,7 +184,9 @@ async function proxy0x(req, res) {
 app.get('/api/0x/*', proxy0x);
 app.post('/api/0x/*', proxy0x);
 
-/* JUPITER PROXY (REQUIRED - Solana swap aggregator) */
+/* JUPITER PROXY -- Solana swap + price + token search.
+ * lite-api.jup.ag for /price/* and /tokens/* (the public lite host);
+ * api.jup.ag with x-api-key for /swap/* (paid swap host). */
 async function proxyJupiter(req, res) {
   try {
     const subPath = req.path.replace('/api/jupiter', '');
@@ -180,11 +208,11 @@ async function proxyJupiter(req, res) {
 app.get('/api/jupiter/*', proxyJupiter);
 app.post('/api/jupiter/*', proxyJupiter);
 
-/* LIFI PROXY (REQUIRED - cross-chain bridge aggregator) */
+/* LIFI PROXY -- cross-chain bridge aggregator + token price + catalog */
 async function proxyLifi(req, res) {
   try {
     const subPath = req.path.replace('/api/lifi', '');
-    const url = 'https://li.quest/v1' + subPath + queryStringOf(req);
+    const url = 'https://li.quest' + subPath + queryStringOf(req);
     const headers = { 'Content-Type': 'application/json' };
     if (LIFI_API_KEY) headers['x-lifi-api-key'] = LIFI_API_KEY;
     const fetchOpts = { method: req.method, headers };
@@ -200,64 +228,14 @@ async function proxyLifi(req, res) {
 app.get('/api/lifi/*', proxyLifi);
 app.post('/api/lifi/*', proxyLifi);
 
-/* RAYDIUM PROXY (no key) */
-app.get('/api/raydium/*', async (req, res) => {
-  try {
-    const subPath = req.path.replace('/api/raydium', '');
-    const url = 'https://api-v3.raydium.io' + subPath + queryStringOf(req);
-    const response = await fetchWithTimeout(url, { method: 'GET', headers: { 'Content-Type': 'application/json' } });
-    return respondJsonOrError(res, response, await safeJson(response));
-  } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ error: 'Raydium request timed out' });
-    logError('raydium', e);
-    return res.status(500).json({ error: e.message || 'Unknown error' });
-  }
-});
-
-/* COINGECKO PROXY - smart routing accepts both /api/coingecko/coins/markets and /api/coingecko/api/v3/simple/price */
-async function proxyCoinGecko(prefix, req, res) {
-  try {
-    const subPath = req.path.replace(prefix, '');
-    const upstream = subPath.startsWith('/api/v3') ? 'https://api.coingecko.com' + subPath : 'https://api.coingecko.com/api/v3' + subPath;
-    const url = upstream + queryStringOf(req);
-    const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
-    if (COINGECKO_API_KEY) {
-      if (COINGECKO_API_KEY_TYPE === 'pro') headers['x-cg-pro-api-key'] = COINGECKO_API_KEY;
-      else headers['x-cg-demo-api-key'] = COINGECKO_API_KEY;
-    }
-    const response = await fetchWithTimeout(url, { method: 'GET', headers }, 12_000);
-    return respondJsonOrError(res, response, await safeJson(response));
-  } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ error: 'CoinGecko request timed out' });
-    logError('coingecko', e);
-    return res.status(500).json({ error: e.message || 'Unknown error' });
-  }
-}
-app.get('/api/coingecko/*', (req, res) => proxyCoinGecko('/api/coingecko', req, res));
-app.get('/api/cg/*', (req, res) => proxyCoinGecko('/api/cg', req, res));
-
-/* GECKOTERMINAL PROXY (no key, used for memecoin pricing) */
-app.get('/api/geckoterminal/*', async (req, res) => {
-  try {
-    const subPath = req.path.replace('/api/geckoterminal', '');
-    const url = 'https://api.geckoterminal.com' + subPath + queryStringOf(req);
-    const response = await fetchWithTimeout(url, { method: 'GET', headers: { 'Content-Type': 'application/json', Accept: 'application/json' } }, 12_000);
-    return respondJsonOrError(res, response, await safeJson(response));
-  } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ error: 'GeckoTerminal request timed out' });
-    logError('geckoterminal', e);
-    return res.status(500).json({ error: e.message || 'Unknown error' });
-  }
-});
-
-/* HELIUS DAS (REQUIRED - Solana metadata + price fallback) */
+/* HELIUS DAS -- Solana metadata + price fallback */
 app.post('/api/helius/das', async (req, res) => {
   try {
     const url = HELIUS_RPC_URL
       ? HELIUS_RPC_URL
       : (HELIUS_API_KEY
-        ? 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(HELIUS_API_KEY)
-        : 'https://api.mainnet-beta.solana.com');
+          ? 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(HELIUS_API_KEY)
+          : 'https://api.mainnet-beta.solana.com');
     const response = await fetchWithTimeout(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req.body || {}) }, 15_000);
     return respondJsonOrError(res, response, await safeJson(response));
   } catch (e) {
@@ -267,14 +245,15 @@ app.post('/api/helius/das', async (req, res) => {
   }
 });
 
-/* SOLANA RPC (existing) */
+/* SOLANA RPC -- Helius preferred, falls back to public mainnet.
+ * The Raydium SDK's RPC calls flow through this endpoint. */
 app.post('/api/solana-rpc', async (req, res) => {
   try {
     const url = HELIUS_RPC_URL
       ? HELIUS_RPC_URL
       : (HELIUS_API_KEY
-        ? 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(HELIUS_API_KEY)
-        : 'https://api.mainnet-beta.solana.com');
+          ? 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(HELIUS_API_KEY)
+          : 'https://api.mainnet-beta.solana.com');
     const response = await fetchWithTimeout(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req.body || {}) }, 15_000);
     return respondJsonOrError(res, response, await safeJson(response));
   } catch (e) {
@@ -284,7 +263,7 @@ app.post('/api/solana-rpc', async (req, res) => {
   }
 });
 
-/* PINATA (REQUIRED - IPFS uploads) */
+/* PINATA -- IPFS uploads for token-launch metadata + images */
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -325,65 +304,6 @@ app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, r
   } catch (e) { logError('pinata-file', e); return res.status(500).json({ error: e.message || 'Unknown error' }); }
 });
 
-/* MORALIS - specific wallet-tokens MUST come BEFORE general /* proxy */
-const MORALIS_CHAIN_TO_ID = { eth: 1, polygon: 137, bsc: 56, avalanche: 43114, fantom: 250, cronos: 25, arbitrum: 42161, gnosis: 100, base: 8453, optimism: 10, linea: 59144, moonbeam: 1284, ronin: 2020, lisk: 1135, pulse: 369 };
-app.get('/api/moralis/wallet-tokens', async (req, res) => {
-  try {
-    if (!MORALIS_API_KEY) return res.status(503).json({ error: 'Moralis not configured', tokens: [] });
-    const address = (req.query.address || '').toString().trim();
-    if (!/^0x[0-9a-fA-F]{40}$/.test(address)) return res.status(400).json({ error: 'Invalid EVM address', tokens: [] });
-    const chainsParam = (req.query.chains || 'eth,polygon,arbitrum,base,bsc,avalanche,optimism,linea').toString();
-    const chains = chainsParam.split(',').map(s => s.trim().toLowerCase()).filter(c => MORALIS_CHAIN_TO_ID[c]);
-    if (!chains.length) return res.status(400).json({ error: 'No valid chains', tokens: [] });
-    const headers = { Accept: 'application/json', 'X-API-Key': MORALIS_API_KEY };
-    const results = await Promise.allSettled(chains.map(async chain => {
-      const url = 'https://deep-index.moralis.io/api/v2.2/wallets/' + encodeURIComponent(address) + '/tokens?chain=' + encodeURIComponent(chain) + '&exclude_spam=true&exclude_unverified_contracts=false';
-      const r = await fetchWithTimeout(url, { method: 'GET', headers }, 15_000);
-      const parsed = await safeJson(r);
-      if (!r.ok || !parsed.parsed) return { chain, items: [] };
-      return { chain, items: parsed.parsed.result || [] };
-    }));
-    const tokens = [];
-    results.forEach(settled => {
-      if (settled.status !== 'fulfilled') return;
-      const { chain, items } = settled.value;
-      const chainId = MORALIS_CHAIN_TO_ID[chain];
-      if (!chainId) return;
-      items.forEach(t => {
-        const balanceFmt = parseFloat(t.balance_formatted || '0');
-        if (!balanceFmt || balanceFmt <= 0) return;
-        const usdPrice = parseFloat(t.usd_price || '0');
-        const usdValue = parseFloat(t.usd_value || '0');
-        const pct24hRaw = t.usd_price_24hr_percent_change;
-        const pct24h = pct24hRaw == null || pct24hRaw === '' ? null : parseFloat(pct24hRaw);
-        const rawDec = t.decimals;
-        const decimals = rawDec != null && Number.isFinite(Number(rawDec)) ? Number(rawDec) : 18;
-        tokens.push({ chainId, contractAddress: t.native_token ? '' : (t.token_address || ''), symbol: t.symbol || '', name: t.name || t.symbol || '', logo: t.logo || t.thumbnail || null, balance: t.balance || '0', balanceFormatted: balanceFmt, decimals, usdPrice, usdValue, pct24h, isNative: Boolean(t.native_token) });
-      });
-    });
-    return res.json({ tokens });
-  } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ error: 'Moralis request timed out', tokens: [] });
-    logError('moralis-wallet', e);
-    return res.status(500).json({ error: e.message || 'Unknown error', tokens: [] });
-  }
-});
-
-/* MORALIS GENERAL PROXY - for EVM token price lookups in SwapWidget */
-app.get('/api/moralis/*', async (req, res) => {
-  try {
-    if (!MORALIS_API_KEY) return res.status(503).json({ error: 'Moralis not configured' });
-    const subPath = req.path.replace('/api/moralis', '');
-    const url = 'https://deep-index.moralis.io' + subPath + queryStringOf(req);
-    const response = await fetchWithTimeout(url, { method: 'GET', headers: { Accept: 'application/json', 'X-API-Key': MORALIS_API_KEY } }, 15_000);
-    return respondJsonOrError(res, response, await safeJson(response));
-  } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ error: 'Moralis request timed out' });
-    logError('moralis', e);
-    return res.status(500).json({ error: e.message || 'Unknown error' });
-  }
-});
-
 /* 404 FOR UNMATCHED API ROUTES */
 app.all('/api/*', (req, res) => {
   res.status(404).json({ error: 'API route not found: ' + req.path });
@@ -417,13 +337,11 @@ app.listen(PORT, () => {
   console.log('Nexus DEX server running on port ' + PORT);
   console.log('  env:             ' + NODE_ENV);
   console.log('  allowed origins: ' + allowedOrigins.join(', '));
-  if (!OX_API_KEY)        console.warn('  WARNING: OX_API_KEY not set - EVM swaps will fail');
-  if (!JUPITER_API_KEY)   console.warn('  WARNING: JUPITER_API_KEY not set - Solana swaps will rate-limit on free tier');
-  if (!LIFI_API_KEY)      console.warn('  WARNING: LIFI_API_KEY not set - cross-chain bridges will rate-limit on free tier');
+  if (!OX_API_KEY)      console.warn('  WARNING: OX_API_KEY not set - EVM swaps will fail');
+  if (!JUPITER_API_KEY) console.warn('  WARNING: JUPITER_API_KEY not set - Solana swaps will rate-limit on free tier');
+  if (!LIFI_API_KEY)    console.warn('  WARNING: LIFI_API_KEY not set - cross-chain bridges will rate-limit on free tier');
   if (!HELIUS_API_KEY && !HELIUS_RPC_URL) console.warn('  WARNING: HELIUS_API_KEY / REACT_APP_SOLANA_RPC not set - falling back to public Solana RPC');
-  if (!MORALIS_API_KEY)   console.warn('  WARNING: MORALIS_API_KEY not set - Portfolio + EVM price fallback will fail');
-  if (!PINATA_JWT)        console.warn('  WARNING: PINATA_JWT not set - token launch metadata uploads will fail');
-  if (!COINGECKO_API_KEY) console.log('  INFO: COINGECKO_API_KEY not set - using free tier');
+  if (!PINATA_JWT)      console.warn('  WARNING: PINATA_JWT not set - token launch metadata uploads will fail');
 });
 
 process.on('uncaughtException', err => logError('uncaughtException', err));
