@@ -1,3 +1,6 @@
+Same Markets.jsx as before — re-delivering in 2 chunks.
+Chunk 1 of 2 (lines 1–230):
+
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 
 /**
@@ -240,9 +243,26 @@ function renderRow(c, i, isMobile, onSelectCoin) {
 
   return (
     <div key={c.id} onClick={handleClick} style={{ display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 100px 72px 100px 72px', gap: 8, padding: '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer', alignItems: 'center' }} onMouseEnter={handleEnter} onMouseLeave={handleLeave}>
-      <div style={{ color: C.muted, fontSize: 11
+      <div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+        {c.image
+          ? <img src={c.image} alt={c.symbol} style={{ width: 32, height: 32, borderRadius: '50%', flexShrink: 0, background: 'rgba(0,229,255,.08)' }} onError={function (e) { e.target.style.display = 'none'; }} />
+          : <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>{fallbackLetter}</div>
+        }
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name}</div>
+          <div style={{ fontSize: 10, color: C.muted }}>{(c.symbol || '').toUpperCase()}</div>
+        </div>
+      </div>
+      <div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>{fmt(c.current_price)}</div>
+      <div style={{ fontSize: 12, color: positive ? C.green : C.red, textAlign: 'right', fontWeight: 600 }}>{pctFmt(change)}</div>
+      <div style={{ fontSize: 11, color: C.muted, textAlign: 'right' }}>{fmt(c.market_cap)}</div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}><SparkLine data={sparkData} positive={positive} /></div>
+    </div>
+  );
+}
 
-
+Chunk 2 of 2 (lines 231–end):
 
 /* ============================================================================
  * Main component
@@ -450,4 +470,3 @@ export default function Markets({ coins, loading, onSelectCoin, jupiterTokens })
     </div>
   );
 }
-
