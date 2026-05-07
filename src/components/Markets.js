@@ -259,7 +259,6 @@ function renderRow(c, i, isMobile, onSelectCoin) {
   );
 }
 
-Chunk 2 of 2 (lines 231–end):
 
 /* ============================================================================
  * Main component
