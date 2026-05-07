@@ -671,3 +671,4 @@ export default function Portfolio({ coins, jupiterTokens, onSend, onConnectWalle
     </div>
   );
 }
+ 
