@@ -15,7 +15,11 @@ import {
   createTransferInstruction,
 } from '@solana/spl-token';
 import BN from 'bn.js';
- 
+
+// PATCHED: Jupiter price v2 (deprecated) -> /api/jupiter/price/v3 proxy.
+// Direct PumpPortal call stays (approved on-ramp, CSP allows pumpportal.fun).
+// Pinata remains via /api/pinata/* proxies.
+
 const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const LAUNCH_FEE_SOL = 0.5;
 const PLATFORM_ID = process.env.REACT_APP_PLATFORM_ID || null;
@@ -86,13 +90,11 @@ async function getActiveLaunchpadConfig(raydium) {
   return getPdaLaunchpadConfigId(LAUNCHPAD_PROGRAM, NATIVE_MINT, 0, 0).publicKey;
 }
 
-// FEE COLLECTION (locked rule #2: ONE tx, ONE signature).
+// FEE COLLECTION (locked rule: ONE tx, ONE signature).
 // Take Raydium's launch VersionedTransaction, decompile its message,
 // append a SystemProgram.transfer for the 0.5 SOL platform fee,
 // recompile to V0. Caller must re-sign with mintKeypair (extra signer)
-// and the user wallet. Atomic: failed launch -> no fee charged;
-// successful launch -> fee guaranteed. No more separate fee tx that the
-// user could reject after the launch already succeeded.
+// and the user wallet. Atomic: failed launch -> no fee charged.
 async function bundleFeeIntoLaunchTx(connection, rawTx, payerPubkey, feeLamports) {
   var lookupTableAccounts = [];
   var lookups = (rawTx.message && rawTx.message.addressTableLookups) || [];
@@ -121,7 +123,6 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
   const { connection } = useConnection();
   const { activeWalletKind, privyEmbeddedSol, loginPrivy } = useNexusWallet();
 
-  // Unified Solana publicKey + signers across external + Privy.
   const publicKey = useMemo(function () {
     if (extPublicKey) return extPublicKey;
     if (privyEmbeddedSol && privyEmbeddedSol.address) {
@@ -138,8 +139,6 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
     throw new Error('No wallet available to sign');
   }, [activeWalletKind, privyEmbeddedSol, extSignTx]);
 
-  // Raydium SDK requires signAllTransactions. Privy v2 doesn't expose it
-  // natively, so we synthesize it by signing each tx sequentially.
   const signAllTransactions = useCallback(async function (txs) {
     if (activeWalletKind === 'privy' && privyEmbeddedSol) {
       if (typeof privyEmbeddedSol.signAllTransactions === 'function') {
@@ -160,7 +159,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
   }, [activeWalletKind, privyEmbeddedSol, extSignAllTxs]);
 
   const [step, setStep] = useState(1);
-  const [platform, setPlatform] = useState('raydium'); // 'raydium' | 'pumpfun'
+  const [platform, setPlatform] = useState('raydium');
   const [form, setForm] = useState({
     name: '', symbol: '', description: '', imageUrl: '', website: '', twitter: '',
     supply: '1000000000', decimals: '6',
@@ -171,9 +170,6 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
   const [error, setError] = useState('');
   const [launching, setLaunching] = useState(false);
   const [launched, setLaunched] = useState(null);
-  // Pending launch: when disconnected user taps "Launch", we save the
-  // platform ('raydium' | 'pumpfun') and trigger Privy login. After login,
-  // useEffect below auto-fires the corresponding launch fn.
   const [pendingLaunch, setPendingLaunch] = useState(null);
 
   var set = function(k, v) { setForm(function(f) { return Object.assign({}, f, { [k]: v }); }); };
@@ -191,8 +187,6 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
 
   var doLaunch = useCallback(async function() {
     if (!publicKey || !signTransaction || !signAllTransactions) {
-      // Disconnected -- trigger Privy login directly. After login completes,
-      // useEffect auto-resumes the launch (no second tap needed).
       setPendingLaunch('raydium');
       if (loginPrivy) loginPrivy();
       else if (onConnectWallet) onConnectWallet();
@@ -250,28 +244,18 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       var result = await raydium.launchpad.createLaunchpad(launchParams);
       var extInfo = result.extInfo;
 
-      // Pull the raw VersionedTransaction(s) out of the SDK result.
-      // SDK v2 typically returns a single tx for LaunchLab create; handle
-      // both shapes defensively.
       var rawTxs = result.transactions || (result.transaction ? [result.transaction] : null);
       if (!rawTxs || !rawTxs.length) {
         throw new Error('Raydium SDK did not return a transaction to sign');
       }
       if (rawTxs.length > 1) {
-        // Multi-tx launches would need a different bundling strategy
-        // (signAllTransactions across the batch, fee attached to the
-        // last tx). Fail loudly so we don't silently lose the fee.
         throw new Error('Unexpected multi-transaction launch -- aborting to protect fee collection');
       }
 
-      // FEE BUNDLING: inject 0.5 SOL fee into the SAME tx as the launch.
       setStatus('Bundling platform fee into launch tx...');
       var feeLamports = Math.round(LAUNCH_FEE_SOL * LAMPORTS_PER_SOL);
       var bundledTx = await bundleFeeIntoLaunchTx(connection, rawTxs[0], publicKey, feeLamports);
 
-      // The recompile produced a fresh message; every required signer
-      // must re-sign. mintKeypair signs first (we hold its private key),
-      // then the user wallet signs.
       bundledTx.sign([mintKeypair]);
 
       setStatus('Please confirm in your wallet...');
@@ -302,45 +286,16 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
 
     } catch (e) {
       console.error('Launch error:', e);
-      // Atomic bundling means a failed launch never charges the fee.
       setError(e.message || 'Launch failed -- no SOL was charged');
     }
 
     setLaunching(false);
   }, [publicKey, signTransaction, signAllTransactions, connection, form, imageFile, imagePreview, loginPrivy, onConnectWallet]);
 
-  /* ============================================================================
-   * doPumpLaunch -- Pump.fun bonding curve launch via PumpPortal.
-   *
-   * Fee structure (NEW, additive -- does not affect Raydium fees):
-   *   - $30 USD per launch (paid in SOL via SystemProgram.transfer to
-   *     SOL_FEE_WALLET, USD->SOL converted via Jupiter price API at launch time)
-   *   - 1% of supply skim: bonding-curve approximation -- initial creator buy
-   *     of 0.30 SOL purchases ~1% of supply at curve start (virtual reserves
-   *     are 30 SOL / 1.073B tokens, so 0.30 SOL ~ 10M tokens ~ 1%). We then
-   *     transfer a CONSERVATIVE 9.5M tokens (the safe minimum given 10%
-   *     slippage tolerance) to SOL_FEE_WALLET's ATA on the new mint.
-   *     User keeps any dust above 9.5M (~0-1M tokens, worth pennies at
-   *     launch). If slippage exceeds 10% and they get less than 9.5M
-   *     tokens, the transfer fails -> entire tx fails -> atomic rollback,
-   *     NO SOL CHARGED. So it's safe to retry.
-   *
-   * Atomic single-tx flow:
-   *   PumpPortal returns the create+initialBuy VersionedTransaction
-   *   -> we decompile, append:
-   *        (a) createAssociatedTokenAccountIdempotent for fee wallet's ATA
-   *        (b) createTransfer of conservative 9.5M tokens to fee wallet
-   *        (c) SystemProgram.transfer of $30 USD-equivalent SOL to fee wallet
-   *   -> recompile to V0 with same lookup tables
-   *   -> mintKeypair signs (we hold its private key)
-   *   -> user wallet signs (or Privy embedded signs in-page)
-   *   -> sendRawTransaction
-   *
-   * Failure modes:
-   *   - PumpPortal API error -> nothing broadcast, no SOL charged
-   *   - User rejects -> nothing broadcast, no SOL charged
-   *   - Tx fails on-chain -> Solana atomicity, no SOL charged, no tokens moved
-   * ========================================================================= */
+  // doPumpLaunch -- Pump.fun bonding curve launch via PumpPortal.
+  // Fee: $30 USD-equivalent SOL + 1% supply skim (9.5M conservative floor),
+  // both bundled atomically into the create+initialBuy tx. Failed tx ->
+  // Solana atomicity guarantees nothing charged, no tokens moved.
   var doPumpLaunch = useCallback(async function () {
     if (!publicKey || !signTransaction) {
       setPendingLaunch('pumpfun');
@@ -353,7 +308,6 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
     setLaunching(true); setError(''); setStatus('');
 
     try {
-      // 1. Upload image + metadata to Pinata (same helpers as Raydium path).
       setStatus('Uploading image...');
       var imageUri = form.imageUrl || '';
       if (imageFile) {
@@ -364,15 +318,17 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       setStatus('Uploading metadata...');
       var metadataUri = await uploadMetadata(form.name, form.symbol, form.description, imageUri);
 
-      // 2. Fetch SOL/USD price via Jupiter for $30 USD fee conversion.
+      // PATCHED: Jupiter price v2 (deprecated) -> v3 via /api/jupiter proxy.
+      // v3 response shape: { "<mint>": { "usdPrice": number, ... } }
+      // (no .data wrapper, field renamed from price to usdPrice).
       setStatus('Fetching SOL price...');
       var SOL_MINT = 'So11111111111111111111111111111111111111112';
       var solPriceUsd = 0;
       try {
-        var priceRes = await fetch('https://api.jup.ag/price/v2?ids=' + SOL_MINT);
+        var priceRes = await fetch('/api/jupiter/price/v3?ids=' + SOL_MINT);
         var priceData = await priceRes.json();
-        if (priceData && priceData.data && priceData.data[SOL_MINT]) {
-          solPriceUsd = parseFloat(priceData.data[SOL_MINT].price) || 0;
+        if (priceData && priceData[SOL_MINT]) {
+          solPriceUsd = parseFloat(priceData[SOL_MINT].usdPrice) || 0;
         }
       } catch (e) {}
       if (!solPriceUsd || solPriceUsd <= 0) {
@@ -382,22 +338,15 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       var feeLamports = Math.floor((FEE_USD / solPriceUsd) * LAMPORTS_PER_SOL);
       if (feeLamports <= 0) throw new Error('Fee calculation failed');
 
-      // 3. Bonding-curve constants for pump.fun.
-      //    Virtual reserves at creation: ~30 SOL, ~1,073,000,000 tokens.
-      //    Initial buy of 0.30 SOL -> approximately 10M tokens (~1% of 1B supply).
-      //    We use 10% slippage and conservatively skim 9.5M (the floor).
-      //    Pump.fun tokens always have 6 decimals.
       var INITIAL_BUY_SOL    = 0.30;
-      var SKIM_TOKENS_HUMAN  = 9_500_000;        // conservative 1% minimum
+      var SKIM_TOKENS_HUMAN  = 9_500_000;
       var PUMP_DECIMALS      = 6;
       var SLIPPAGE_PCT       = 10;
       var skimAmountBaseUnits = BigInt(SKIM_TOKENS_HUMAN) * BigInt(10) ** BigInt(PUMP_DECIMALS);
 
-      // 4. Generate mint Keypair (creator must sign with this).
       var mintKeypair = Keypair.generate();
       var mintPk      = mintKeypair.publicKey;
 
-      // 5. PumpPortal create with initial buy.
       setStatus('Creating token on Pump.fun...');
       var createBody = {
         publicKey: publicKey.toString(),
@@ -432,17 +381,10 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       }
       var createTx = VersionedTransaction.deserialize(new Uint8Array(txBytes));
 
-      // 6. Derive ATAs deterministically (no RPC calls; pure key derivation).
-      //    User's ATA is created by PumpPortal's create instruction internally.
-      //    Fee wallet's ATA we create idempotently (no-op if it exists).
       var feeWalletPk = new PublicKey(SOL_FEE_WALLET);
       var userAta     = await getAssociatedTokenAddress(mintPk, publicKey);
       var feeAta      = await getAssociatedTokenAddress(mintPk, feeWalletPk);
 
-      // 7. Bundle three additional instructions into the create tx:
-      //    (a) Idempotent ATA creation for fee wallet on the new mint
-      //    (b) Transfer 9.5M tokens (conservative skim) to fee wallet
-      //    (c) Transfer $30 USD-equivalent SOL to fee wallet
       setStatus('Bundling fee + 1% supply skim...');
       var lookupTableAccounts = [];
       var lookups = (createTx.message && createTx.message.addressTableLookups) || [];
@@ -459,18 +401,12 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       });
       decompiled.instructions.push(
         createAssociatedTokenAccountIdempotentInstruction(
-          publicKey,    // payer (user pays rent for fee wallet's ATA)
-          feeAta,
-          feeWalletPk,
-          mintPk,
+          publicKey, feeAta, feeWalletPk, mintPk,
         ),
       );
       decompiled.instructions.push(
         createTransferInstruction(
-          userAta,      // source: user's ATA on new mint (created by PumpPortal)
-          feeAta,       // dest: fee wallet's ATA
-          publicKey,    // owner authority
-          skimAmountBaseUnits,
+          userAta, feeAta, publicKey, skimAmountBaseUnits,
         ),
       );
       decompiled.instructions.push(
@@ -483,13 +419,11 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       var newMsg = decompiled.compileToV0Message(lookupTableAccounts);
       var bundledTx = new VersionedTransaction(newMsg);
 
-      // 8. Sign with mintKeypair first, then user wallet (or Privy embedded).
       bundledTx.sign([mintKeypair]);
 
       setStatus(activeWalletKind === 'privy' ? 'Signing...' : 'Please confirm in your wallet...');
       var fullySigned = await signTransaction(bundledTx);
 
-      // 9. Send + confirm.
       setStatus('Sending launch transaction...');
       var bh = await connection.getLatestBlockhash('confirmed');
       var sig = await connection.sendRawTransaction(fullySigned.serialize(), {
@@ -516,9 +450,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
 
     } catch (e) {
       console.error('Pump.fun launch error:', e);
-      // Atomic bundling means a failed launch never charges fees or moves tokens.
       var msg = (e && e.message) || 'Pump.fun launch failed -- no SOL was charged';
-      // Friendly hint when the supply-skim transfer underflows (rare):
       if (/insufficient.*funds|0x1$/i.test(msg)) {
         msg = 'Initial buy slippage too high -- got fewer than 9.5M tokens. Retry. No SOL was charged.';
       }
@@ -528,9 +460,6 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
     setLaunching(false);
   }, [publicKey, signTransaction, connection, form, imageFile, imagePreview, activeWalletKind, loginPrivy, onConnectWallet]);
 
-  // Auto-resume pending launch after Privy login completes.
-  // 200ms delay lets activeWalletKind + privyEmbeddedSol propagate so
-  // the launch callback picks up the right wallet kind.
   useEffect(function() {
     if (!publicKey || !pendingLaunch) return undefined;
     var which = pendingLaunch;
@@ -563,13 +492,11 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
           <button
             onClick={function () { setPlatform('raydium'); }}
             style={{
-              padding: '12px 14px',
-              borderRadius: 12,
+              padding: '12px 14px', borderRadius: 12,
               border: '1px solid ' + (platform === 'raydium' ? 'rgba(0,229,255,.45)' : C.border),
               background: platform === 'raydium' ? 'rgba(0,229,255,.08)' : C.card2,
               color: platform === 'raydium' ? C.accent : C.muted,
-              fontFamily: 'Syne, sans-serif',
-              fontWeight: 800, fontSize: 13, cursor: 'pointer',
+              fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 13, cursor: 'pointer',
               textAlign: 'left', lineHeight: 1.3,
             }}
           >
@@ -581,13 +508,11 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
           <button
             onClick={function () { setPlatform('pumpfun'); }}
             style={{
-              padding: '12px 14px',
-              borderRadius: 12,
+              padding: '12px 14px', borderRadius: 12,
               border: '1px solid ' + (platform === 'pumpfun' ? 'rgba(168,85,247,.45)' : C.border),
               background: platform === 'pumpfun' ? 'rgba(168,85,247,.08)' : C.card2,
               color: platform === 'pumpfun' ? '#a855f7' : C.muted,
-              fontFamily: 'Syne, sans-serif',
-              fontWeight: 800, fontSize: 13, cursor: 'pointer',
+              fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 13, cursor: 'pointer',
               textAlign: 'left', lineHeight: 1.3,
             }}
           >
@@ -775,7 +700,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
 
       {step === 4 && launched && (
         <div style={{ background: C.card, border: '1px solid rgba(0,255,163,.25)', borderRadius: 18, padding: 24, textAlign: 'center' }}>
-          <div style={{ fontSize: 52, marginBottom: 10 }}>🚀</div>
+          <div style={{ fontSize: 52, marginBottom: 10 }}>{'\uD83D\uDE80'}</div>
           <div style={{ fontSize: 22, fontWeight: 800, color: C.green, marginBottom: 6 }}>Token Launched!</div>
           <div style={{ fontSize: 13, color: C.muted, marginBottom: 20 }}>
             {launched.name} (${launched.symbol}) is live on {launched.platform === 'pumpfun' ? 'Pump.fun' : 'Raydium LaunchLab'}
@@ -807,10 +732,10 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       {step < 4 && (
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 20 }}>
           {[
-            { icon: '📈', title: 'Bonding Curve', desc: 'Price rises automatically as people buy. No manual liquidity needed.' },
-            { icon: '🔒', title: 'Locked Liquidity', desc: 'At 85 SOL raised, liquidity locks in Raydium CPMM forever.' },
-            { icon: '🌊', title: 'Raydium AMM', desc: 'Your token auto-graduates to the largest Solana DEX.' },
-            { icon: '💸', title: 'Atomic Fee', desc: '0.5 SOL fee bundled in the same tx. No fee on a failed launch.' },
+            { icon: '\uD83D\uDCC8', title: 'Bonding Curve', desc: 'Price rises automatically as people buy. No manual liquidity needed.' },
+            { icon: '\uD83D\uDD12', title: 'Locked Liquidity', desc: 'At 85 SOL raised, liquidity locks in Raydium CPMM forever.' },
+            { icon: '\uD83C\uDF0A', title: 'Raydium AMM', desc: 'Your token auto-graduates to the largest Solana DEX.' },
+            { icon: '\uD83D\uDCB8', title: 'Atomic Fee', desc: '0.5 SOL fee bundled in the same tx. No fee on a failed launch.' },
           ].map(function(item) {
             return (
               <div key={item.title} style={{ background: C.card2, borderRadius: 12, padding: 12 }}>
@@ -825,4 +750,3 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
     </div>
   );
 }
-
