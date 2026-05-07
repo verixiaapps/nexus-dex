@@ -3,124 +3,33 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useAccount, useWalletClient } from 'wagmi';
 import { encodeFunctionData } from 'viem';
 import { useNexusWallet } from '../WalletContext.js';
-import {
-  PublicKey, SystemProgram, Transaction, VersionedTransaction,
-} from '@solana/web3.js';
-import { 
-  getAssociatedTokenAddress, createTransferInstruction,
-  createAssociatedTokenAccountInstruction,
-} from '@solana/spl-token';
+import { PublicKey, SystemProgram, Transaction, VersionedTransaction } from '@solana/web3.js';
+import { getAssociatedTokenAddress, createTransferInstruction, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
 import { Buffer } from 'buffer';
 
-// LOCKED FEE RULES -- DO NOT MODIFY.
-// Same-chain: 3% platform + 2% safety = 5%. Cross-chain: + 3% bridge = 8%.
-// All sends are ONE TX, ONE SIGNATURE:
-//   - Solana: multi-instruction transaction
-//   - EVM native: Multicall3.aggregate3Value (splits ETH/BNB/etc atomically)
-//   - EVM ERC20: Multicall3.aggregate3 with two transferFrom calls
-//                (requires one-time MAX approval to Multicall3 per token)
-//   - Cross-chain: LiFi (fee charged + routed via integrator config)
+// LOCKED: One sig, one tx, fees baked in. Same-chain 5%, cross-chain 8%.
+// Endpoints: /api/jupiter/tokens/v2/search (replaces deprecated lite-api),
+//            /api/lifi/v1/quote (proxied -- LiFi key server-side).
 const FEE_WALLET_SOL = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const FEE_WALLET_EVM = '0xC41c1de4250104dC1EE2854ffD5b40a04B9AC9fF';
-const PLATFORM_FEE   = 0.03;
-const SAFETY_FEE     = 0.02;
-const BRIDGE_FEE     = 0.03;
-const TOTAL_FEE      = PLATFORM_FEE + SAFETY_FEE;
-const TOTAL_FEE_CC   = PLATFORM_FEE + SAFETY_FEE + BRIDGE_FEE;
+const PLATFORM_FEE = 0.03, SAFETY_FEE = 0.02, BRIDGE_FEE = 0.03;
+const TOTAL_FEE = PLATFORM_FEE + SAFETY_FEE;
+const TOTAL_FEE_CC = PLATFORM_FEE + SAFETY_FEE + BRIDGE_FEE;
 const LIFI_INTEGRATOR = 'nexus-dex';
-
-// Multicall3 -- deterministic address on every major EVM chain.
-// https://www.multicall3.com -- audited, used by everyone (1inch, Uni, etc.)
 const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11';
 const MAX_UINT256 = (BigInt(2) ** BigInt(256)) - BigInt(1);
-
 const NATIVE_EVM = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
-const SOL_MINT   = 'So11111111111111111111111111111111111111112';
-
-const CHAIN_NAMES = {
-  1: 'Ethereum', 137: 'Polygon', 42161: 'Arbitrum', 8453: 'Base', 56: 'BNB Chain',
-  43114: 'Avalanche', 10: 'Optimism', 100: 'Gnosis', 324: 'zkSync Era', 59144: 'Linea',
-  534352: 'Scroll', 5000: 'Mantle', 81457: 'Blast',
-};
-
-const EVM_EXPLORERS = {
-  1: 'etherscan.io', 10: 'optimistic.etherscan.io', 25: 'cronoscan.com',
-  56: 'bscscan.com', 100: 'gnosisscan.io', 137: 'polygonscan.com',
-  250: 'ftmscan.com', 324: 'explorer.zksync.io', 1284: 'moonscan.io',
-  5000: 'mantlescan.xyz', 8453: 'basescan.org', 42161: 'arbiscan.io',
-  43114: 'snowtrace.io', 59144: 'lineascan.build', 81457: 'blastscan.io',
-  534352: 'scrollscan.com',
-};
-
-const USDC_BY_CHAIN = {
-  1:     '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-  10:    '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
-  56:    '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
-  137:   '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
-  324:   '0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4',
-  8453:  '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-  42161: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
-  43114: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E',
-  59144: '0x176211869cA2b568f2A7D4EE941E073a821EE1ff',
-};
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
+const CHAIN_NAMES = {1:'Ethereum',137:'Polygon',42161:'Arbitrum',8453:'Base',56:'BNB Chain',43114:'Avalanche',10:'Optimism',100:'Gnosis',324:'zkSync Era',59144:'Linea',534352:'Scroll',5000:'Mantle',81457:'Blast'};
+const EVM_EXPLORERS = {1:'etherscan.io',10:'optimistic.etherscan.io',25:'cronoscan.com',56:'bscscan.com',100:'gnosisscan.io',137:'polygonscan.com',250:'ftmscan.com',324:'explorer.zksync.io',1284:'moonscan.io',5000:'mantlescan.xyz',8453:'basescan.org',42161:'arbiscan.io',43114:'snowtrace.io',59144:'lineascan.build',81457:'blastscan.io',534352:'scrollscan.com'};
+const USDC_BY_CHAIN = {1:'0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',10:'0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',56:'0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',137:'0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',324:'0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4',8453:'0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',42161:'0xaf88d065e77c8cC2239327C5EDb3A432268e5831',43114:'0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E',59144:'0x176211869cA2b568f2A7D4EE941E073a821EE1ff'};
 const USDC_SOLANA = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-
-const C = {
-  bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
-  border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
-  accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
-  text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
-};
-
-// ============ ABI fragments for Multicall3 + ERC20 ============
-const aggregate3ValueAbi = [{
-  name: 'aggregate3Value', type: 'function', stateMutability: 'payable',
-  inputs: [{ name: 'calls', type: 'tuple[]', components: [
-    { name: 'target', type: 'address' },
-    { name: 'allowFailure', type: 'bool' },
-    { name: 'value', type: 'uint256' },
-    { name: 'callData', type: 'bytes' },
-  ]}],
-  outputs: [],
-}];
-
-const aggregate3Abi = [{
-  name: 'aggregate3', type: 'function', stateMutability: 'payable',
-  inputs: [{ name: 'calls', type: 'tuple[]', components: [
-    { name: 'target', type: 'address' },
-    { name: 'allowFailure', type: 'bool' },
-    { name: 'callData', type: 'bytes' },
-  ]}],
-  outputs: [],
-}];
-
-const erc20TransferFromAbi = [{
-  name: 'transferFrom', type: 'function', stateMutability: 'nonpayable',
-  inputs: [
-    { name: 'from', type: 'address' },
-    { name: 'to', type: 'address' },
-    { name: 'amount', type: 'uint256' },
-  ],
-  outputs: [{ name: '', type: 'bool' }],
-}];
-
-const erc20AllowanceAbi = [{
-  name: 'allowance', type: 'function', stateMutability: 'view',
-  inputs: [
-    { name: 'owner', type: 'address' },
-    { name: 'spender', type: 'address' },
-  ],
-  outputs: [{ name: '', type: 'uint256' }],
-}];
-
-const erc20ApproveAbi = [{
-  name: 'approve', type: 'function', stateMutability: 'nonpayable',
-  inputs: [
-    { name: 'spender', type: 'address' },
-    { name: 'amount', type: 'uint256' },
-  ],
-  outputs: [{ name: '', type: 'bool' }],
-}];
+const C = {bg:'#03060f',card:'#080d1a',card2:'#0c1220',card3:'#111d30',border:'rgba(0,229,255,0.10)',borderHi:'rgba(0,229,255,0.25)',accent:'#00e5ff',green:'#00ffa3',red:'#ff3b6b',text:'#cdd6f4',muted:'#586994',muted2:'#2e3f5e'};
+const aggregate3ValueAbi = [{name:'aggregate3Value',type:'function',stateMutability:'payable',inputs:[{name:'calls',type:'tuple[]',components:[{name:'target',type:'address'},{name:'allowFailure',type:'bool'},{name:'value',type:'uint256'},{name:'callData',type:'bytes'}]}],outputs:[]}];
+const aggregate3Abi = [{name:'aggregate3',type:'function',stateMutability:'payable',inputs:[{name:'calls',type:'tuple[]',components:[{name:'target',type:'address'},{name:'allowFailure',type:'bool'},{name:'callData',type:'bytes'}]}],outputs:[]}];
+const erc20TransferFromAbi = [{name:'transferFrom',type:'function',stateMutability:'nonpayable',inputs:[{name:'from',type:'address'},{name:'to',type:'address'},{name:'amount',type:'uint256'}],outputs:[{name:'',type:'bool'}]}];
+const erc20AllowanceAbi = [{name:'allowance',type:'function',stateMutability:'view',inputs:[{name:'owner',type:'address'},{name:'spender',type:'address'}],outputs:[{name:'',type:'uint256'}]}];
+const erc20ApproveAbi = [{name:'approve',type:'function',stateMutability:'nonpayable',inputs:[{name:'spender',type:'address'},{name:'amount',type:'uint256'}],outputs:[{name:'',type:'bool'}]}];
 
 const POPULAR_TOKENS = [
   { mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, chain: 'solana', isNative: true, logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png' },
@@ -128,84 +37,40 @@ const POPULAR_TOKENS = [
   { mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', symbol: 'USDT', name: 'Tether (SOL)', decimals: 6, chain: 'solana', logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.png' },
   { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', symbol: 'JUP', name: 'Jupiter', decimals: 6, chain: 'solana', logoURI: 'https://static.jup.ag/jup/icon.png' },
   { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', symbol: 'BONK', name: 'Bonk', decimals: 5, chain: 'solana', logoURI: 'https://arweave.net/hQiPZOsRZXGXBJd_82PhVdlM_hACsT_q6wqwf5cSY7I' },
-  { address: NATIVE_EVM, chainId: 1,     symbol: 'ETH',  name: 'Ethereum',       decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
-  { address: NATIVE_EVM, chainId: 8453,  symbol: 'ETH',  name: 'ETH (Base)',     decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
-  { address: NATIVE_EVM, chainId: 42161, symbol: 'ETH',  name: 'ETH (Arbitrum)', decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
-  { address: NATIVE_EVM, chainId: 56,    symbol: 'BNB',  name: 'BNB Chain',      decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/binance/info/logo.png' },
-  { address: NATIVE_EVM, chainId: 137,   symbol: 'POL',  name: 'Polygon',        decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/polygon/info/logo.png' },
-  { address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', chainId: 1,    symbol: 'USDC', name: 'USD Coin (ETH)',  decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  { address: NATIVE_EVM, chainId: 1, symbol: 'ETH', name: 'Ethereum', decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
+  { address: NATIVE_EVM, chainId: 8453, symbol: 'ETH', name: 'ETH (Base)', decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
+  { address: NATIVE_EVM, chainId: 42161, symbol: 'ETH', name: 'ETH (Arbitrum)', decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
+  { address: NATIVE_EVM, chainId: 56, symbol: 'BNB', name: 'BNB Chain', decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/binance/info/logo.png' },
+  { address: NATIVE_EVM, chainId: 137, symbol: 'POL', name: 'Polygon', decimals: 18, chain: 'evm', isNative: true, logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/polygon/info/logo.png' },
+  { address: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', chainId: 1, symbol: 'USDC', name: 'USD Coin (ETH)', decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
   { address: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', chainId: 8453, symbol: 'USDC', name: 'USD Coin (Base)', decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
-  { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', chainId: 1,    symbol: 'USDT', name: 'Tether (ETH)',     decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
+  { address: '0xdAC17F958D2ee523a2206206994597C13D831ec7', chainId: 1, symbol: 'USDT', name: 'Tether (ETH)', decimals: 6, chain: 'evm', logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xdAC17F958D2ee523a2206206994597C13D831ec7/logo.png' },
 ];
 
-function isSol(t) { return t && t.chain === 'solana'; }
-function isEvm(t) { return t && t.chain === 'evm'; }
-
-function getRoute(fromToken, destChain) {
-  if (!fromToken || !destChain) return null;
-  if (isSol(fromToken) && destChain === 'solana') return 'solana';
-  if (isEvm(fromToken) && destChain === fromToken.chainId) return 'evm';
-  return 'lifi';
-}
-
-function pickDestToken(fromToken, destChain) {
-  const fromSym = (fromToken.symbol || '').toUpperCase();
-  if (destChain === 'solana') {
-    if (fromSym === 'USDT') return { mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', decimals: 6, symbol: 'USDT' };
-    if (fromSym === 'SOL')  return { mint: SOL_MINT, decimals: 9, symbol: 'SOL' };
-    return { mint: USDC_SOLANA, decimals: 6, symbol: 'USDC' };
-  }
-  const usdc = USDC_BY_CHAIN[destChain];
-  if (usdc) return { address: usdc, decimals: 6, symbol: 'USDC' };
-  return { address: NATIVE_EVM, decimals: 18, symbol: CHAIN_NAMES[destChain] || 'NATIVE' };
-}
+function isSol(t){return t&&t.chain==='solana';}
+function isEvm(t){return t&&t.chain==='evm';}
+function getRoute(f,d){if(!f||!d)return null;if(isSol(f)&&d==='solana')return 'solana';if(isEvm(f)&&d===f.chainId)return 'evm';return 'lifi';}
+function pickDestToken(f,d){const s=(f.symbol||'').toUpperCase();if(d==='solana'){if(s==='USDT')return{mint:'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',decimals:6,symbol:'USDT'};if(s==='SOL')return{mint:SOL_MINT,decimals:9,symbol:'SOL'};return{mint:USDC_SOLANA,decimals:6,symbol:'USDC'};}const u=USDC_BY_CHAIN[d];if(u)return{address:u,decimals:6,symbol:'USDC'};return{address:NATIVE_EVM,decimals:18,symbol:CHAIN_NAMES[d]||'NATIVE'};}
 
 async function getSolDecimals(token) {
   if (!token || !token.mint) return 6;
   var popular = POPULAR_TOKENS.find(function(t) { return t.mint === token.mint; });
   if (popular) return popular.decimals;
   try {
-    var r = await fetch('https://lite-api.jup.ag/tokens/v1/token/' + token.mint);
+    var r = await fetch('/api/jupiter/tokens/v2/search?query=' + encodeURIComponent(token.mint));
     if (r.ok) {
-      var d = await r.json();
-      var dec = parseInt(d.decimals);
-      return (!isNaN(dec) && dec >= 0 && dec <= 18) ? dec : (token.decimals || 6);
+      var arr = await r.json();
+      var m = Array.isArray(arr) ? (arr.find(function(x){return x.id===token.mint;}) || arr[0]) : null;
+      if (m && Number.isFinite(m.decimals)) return m.decimals;
     }
   } catch (e) {}
   return token.decimals || 6;
 }
 
-function fmt(n) {
-  if (!n) return '$0.00';
-  if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
-  if (n >= 1) return '$' + n.toFixed(2);
-  return '$' + n.toFixed(6);
-}
-
-function toRawAmount(amountStr, decimals) {
-  if (amountStr == null) return BigInt(0);
-  var s = String(amountStr).trim();
-  if (!s || isNaN(Number(s))) return BigInt(0);
-  var parts = s.split('.');
-  var whole = parts[0] || '0';
-  var frac  = parts[1] || '';
-  var fracPadded = (frac + '0'.repeat(decimals)).slice(0, decimals);
-  return BigInt(whole) * (BigInt(10) ** BigInt(decimals)) + (fracPadded ? BigInt(fracPadded) : BigInt(0));
-}
-
-function splitFeeRaw(totalRaw) {
-  var feeRaw = (totalRaw * BigInt(5)) / BigInt(100);
-  return { feeRaw: feeRaw, recipientRaw: totalRaw - feeRaw };
-}
-
-function ChainBadge({ token }) {
-  if (!token) return null;
-  var label = isSol(token) ? 'SOL' : (CHAIN_NAMES[token.chainId] || 'EVM');
-  var color = isSol(token) ? '#9945ff' : '#627eea';
-  return <span style={{ fontSize: 9, color, background: color + '22', border: '1px solid ' + color + '44', borderRadius: 4, padding: '1px 5px', marginLeft: 4, fontWeight: 700 }}>{label}</span>;
-}
+function fmt(n){if(!n)return '$0.00';if(n>=1e9)return '$'+(n/1e9).toFixed(2)+'B';if(n>=1e6)return '$'+(n/1e6).toFixed(2)+'M';if(n>=1000)return '$'+n.toLocaleString('en-US',{maximumFractionDigits:2});if(n>=1)return '$'+n.toFixed(2);return '$'+n.toFixed(6);}
+function toRawAmount(s,d){if(s==null)return BigInt(0);var x=String(s).trim();if(!x||isNaN(Number(x)))return BigInt(0);var p=x.split('.');var w=p[0]||'0';var f=p[1]||'';var fp=(f+'0'.repeat(d)).slice(0,d);return BigInt(w)*(BigInt(10)**BigInt(d))+(fp?BigInt(fp):BigInt(0));}
+function splitFeeRaw(t){var f=(t*BigInt(5))/BigInt(100);return{feeRaw:f,recipientRaw:t-f};}
+function ChainBadge({token}){if(!token)return null;var l=isSol(token)?'SOL':(CHAIN_NAMES[token.chainId]||'EVM');var c=isSol(token)?'#9945ff':'#627eea';return <span style={{fontSize:9,color:c,background:c+'22',border:'1px solid '+c+'44',borderRadius:4,padding:'1px 5px',marginLeft:4,fontWeight:700}}>{l}</span>;}
 
 function TokenModal({ open, onClose, jupiterTokens, currentEvmChainId }) {
   const [q, setQ] = useState('');
@@ -231,11 +96,16 @@ function TokenModal({ open, onClose, jupiterTokens, currentEvmChainId }) {
         var found = solTokens.find(function(t) { return t.mint === addr; });
         if (found) { if (lookupReqRef.current === reqId) setContractToken(found); }
         else {
-          var res = await fetch('https://lite-api.jup.ag/tokens/v1/token/' + addr);
+          var res = await fetch('/api/jupiter/tokens/v2/search?query=' + encodeURIComponent(addr));
           if (lookupReqRef.current !== reqId) return;
           if (res.ok) {
-            var data = await res.json();
-            setContractToken({ mint: data.address, symbol: data.symbol, name: data.name, decimals: data.decimals || 6, chain: 'solana', logoURI: data.logoURI });
+            var arr = await res.json();
+            var m = Array.isArray(arr) ? (arr.find(function(x){return x.id===addr;}) || arr[0]) : null;
+            if (m) {
+              setContractToken({ mint: m.id, symbol: m.symbol, name: m.name || m.symbol, decimals: m.decimals != null ? m.decimals : 6, chain: 'solana', logoURI: m.icon || m.logoURI || null });
+            } else {
+              setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6, chain: 'solana' });
+            }
           } else {
             setContractToken({ mint: addr, symbol: addr.slice(0, 6) + '...', name: 'Custom Token', decimals: 6, chain: 'solana' });
           }
@@ -343,8 +213,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
   const { data: walletClient } = useWalletClient();
   const { switchToChain, activeWalletKind, privyEmbeddedSol, loginPrivy } = useNexusWallet();
 
-  // Unified Solana publicKey: external wallet OR Privy embedded.
-  // Same shape as wallet-adapter's PublicKey so existing tx code works.
   const publicKey = useMemo(function () {
     if (extPublicKey) return extPublicKey;
     if (privyEmbeddedSol && privyEmbeddedSol.address) {
@@ -353,8 +221,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
     return null;
   }, [extPublicKey, privyEmbeddedSol]);
 
-  // Unified Solana sender: branches on Privy vs external wallet.
-  // Both have the same shape (tx, connection[, opts]) -> Promise<signature>.
   const sendSolanaTx = useCallback(async function (tx, conn, opts) {
     if (activeWalletKind === 'privy' && privyEmbeddedSol) {
       if (typeof privyEmbeddedSol.sendTransaction === 'function') {
@@ -384,8 +250,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
   const [lifiRoute, setLifiRoute] = useState(null);
   const [lifiLoading, setLifiLoading] = useState(false);
   const [needsApproval, setNeedsApproval] = useState(false);
-  // Pending send: when disconnected user taps "Send", we save flag + trigger
-  // Privy login. After login, useEffect auto-fires handleSend.
   const [pendingSend, setPendingSend] = useState(false);
 
   var route = getRoute(selectedToken, destChain);
@@ -397,8 +261,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
     else if (isEvm(selectedToken)) setDestChain(selectedToken.chainId);
   }, [selectedToken]);
 
-  // Auto-resume pending send after Privy login completes.
-  // 200ms delay lets activeWalletKind + privyEmbeddedSol propagate.
   useEffect(function() {
     if (!walletConnected || !pendingSend) return undefined;
     var t = setTimeout(function() {
@@ -414,10 +276,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
     connection.getBalance(publicKey).then(function(b) { setSolBalance(b / 1e9); }).catch(function() {});
   }, [publicKey, connection]);
 
-  // Pre-flight allowance check for EVM ERC20 same-chain so we can show a
-  // truthful "first send needs one-time approval" hint in the UI before
-  // the user clicks Send. After the MAX approval is set, every future
-  // send of this token is one signature.
   useEffect(function() {
     setNeedsApproval(false);
     if (route !== 'evm') return;
@@ -428,14 +286,8 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
     var aborted = false;
     (async function() {
       try {
-        var allowanceData = encodeFunctionData({
-          abi: erc20AllowanceAbi, functionName: 'allowance',
-          args: [evmAddress, MULTICALL3],
-        });
-        var hex = await walletClient.request({
-          method: 'eth_call',
-          params: [{ to: selectedToken.address, data: allowanceData }, 'latest'],
-        });
+        var allowanceData = encodeFunctionData({ abi: erc20AllowanceAbi, functionName: 'allowance', args: [evmAddress, MULTICALL3] });
+        var hex = await walletClient.request({ method: 'eth_call', params: [{ to: selectedToken.address, data: allowanceData }, 'latest'] });
         if (aborted) return;
         var current = BigInt(hex || '0x0');
         var totalRaw = toRawAmount(amount, selectedToken.decimals);
@@ -469,7 +321,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
       slippage: String(slip / 100),
       fee: String(TOTAL_FEE_CC), integrator: LIFI_INTEGRATOR,
     });
-    fetch('https://li.quest/v1/quote?' + params.toString())
+    fetch('/api/lifi/v1/quote?' + params.toString())
       .then(function(r) { return r.ok ? r.json() : null; })
       .then(function(data) {
         if (!aborted && data && data.estimate) {
@@ -487,7 +339,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
     var coin = (coins || []).find(function(c) { return c.symbol && c.symbol.toLowerCase() === (symbol || '').toLowerCase(); });
     return coin ? coin.current_price : 0;
   };
-
   var isValidSolAddr = function(a) { try { new PublicKey(a); return a.length >= 32; } catch (e) { return false; } };
   var isValidEvmAddr = function(a) { return a && /^0x[0-9a-fA-F]{40}$/.test(a); };
   var isValidRecipient = function(a) {
@@ -515,7 +366,6 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
 
     try {
       if (route === 'solana') {
-        // SOLANA SAME-CHAIN -- one tx, multiple instructions, one signature.
         if (!publicKey) throw new Error('Connect Solana wallet');
         var recipientPubkey = new PublicKey(recipient);
         var feeWalletPk = new PublicKey(FEE_WALLET_SOL);
@@ -548,22 +398,10 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
         transaction.recentBlockhash = lb.blockhash;
         transaction.feePayer = publicKey;
         var sig = await sendSolanaTx(transaction, connection);
-        await connection.confirmTransaction(
-          { signature: sig, blockhash: lb.blockhash, lastValidBlockHeight: lb.lastValidBlockHeight },
-          'confirmed'
-        );
+        await connection.confirmTransaction({ signature: sig, blockhash: lb.blockhash, lastValidBlockHeight: lb.lastValidBlockHeight }, 'confirmed');
         setTxSig(sig);
 
       } else if (route === 'evm') {
-        // EVM SAME-CHAIN via Multicall3 -- ONE tx, ONE signature.
-        // Native: aggregate3Value forwards lamports to recipient + fee
-        // wallet from the call's own value. ERC20: aggregate3 calls
-        // token.transferFrom twice, pulling allowance from Multicall3
-        // (which the user has approved MAX once per token, lifetime).
-        // First-send-per-token requires that one-time MAX approval; this
-        // is the chain-level minimum (every EVM DEX works this way). The
-        // approval popup is unavoidable and is shown explicitly so the
-        // user knows what they're signing.
         if (!evmAddress || !walletClient) throw new Error('Connect EVM wallet');
         if (evmChainId && evmChainId !== selectedToken.chainId) {
           var ok = await switchToChain(selectedToken.chainId);
@@ -574,73 +412,36 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
         var isNative = selectedToken.address.toLowerCase() === NATIVE_EVM;
 
         if (isNative) {
-          // Multicall3.aggregate3Value: ETH/native goes to caller,
-          // forwarded to each target with the per-call value.
           var nativeCalls = [
             { target: recipient,      allowFailure: false, value: splitE.recipientRaw, callData: '0x' },
             { target: FEE_WALLET_EVM, allowFailure: false, value: splitE.feeRaw,       callData: '0x' },
           ];
-          var nativeData = encodeFunctionData({
-            abi: aggregate3ValueAbi, functionName: 'aggregate3Value',
-            args: [nativeCalls],
-          });
-          var nativeHash = await walletClient.sendTransaction({
-            to: MULTICALL3, value: totalRawE, data: nativeData,
-          });
+          var nativeData = encodeFunctionData({ abi: aggregate3ValueAbi, functionName: 'aggregate3Value', args: [nativeCalls] });
+          var nativeHash = await walletClient.sendTransaction({ to: MULTICALL3, value: totalRawE, data: nativeData });
           setTxSig(nativeHash);
         } else {
-          // ERC20: ensure MAX approval to Multicall3 first (one-time per
-          // token). Then aggregate3 with two transferFrom calls.
-          var allowanceData = encodeFunctionData({
-            abi: erc20AllowanceAbi, functionName: 'allowance',
-            args: [evmAddress, MULTICALL3],
-          });
-          var allowanceHex = await walletClient.request({
-            method: 'eth_call',
-            params: [{ to: selectedToken.address, data: allowanceData }, 'latest'],
-          });
+          var allowanceData = encodeFunctionData({ abi: erc20AllowanceAbi, functionName: 'allowance', args: [evmAddress, MULTICALL3] });
+          var allowanceHex = await walletClient.request({ method: 'eth_call', params: [{ to: selectedToken.address, data: allowanceData }, 'latest'] });
           var currentAllowance = BigInt(allowanceHex || '0x0');
 
           if (currentAllowance < totalRawE) {
-            var approveData = encodeFunctionData({
-              abi: erc20ApproveAbi, functionName: 'approve',
-              args: [MULTICALL3, MAX_UINT256],
-            });
-            var approveHash = await walletClient.sendTransaction({
-              to: selectedToken.address, data: approveData, value: BigInt(0),
-            });
-            // Wait long enough for the allowance to be visible to the
-            // next eth_call. Most chains finalize in 2-5s.
+            var approveData = encodeFunctionData({ abi: erc20ApproveAbi, functionName: 'approve', args: [MULTICALL3, MAX_UINT256] });
+            await walletClient.sendTransaction({ to: selectedToken.address, data: approveData, value: BigInt(0) });
             await new Promise(function(r) { setTimeout(r, 5000); });
           }
 
-          var transferFromRecipient = encodeFunctionData({
-            abi: erc20TransferFromAbi, functionName: 'transferFrom',
-            args: [evmAddress, recipient, splitE.recipientRaw],
-          });
-          var transferFromFee = encodeFunctionData({
-            abi: erc20TransferFromAbi, functionName: 'transferFrom',
-            args: [evmAddress, FEE_WALLET_EVM, splitE.feeRaw],
-          });
-
+          var transferFromRecipient = encodeFunctionData({ abi: erc20TransferFromAbi, functionName: 'transferFrom', args: [evmAddress, recipient, splitE.recipientRaw] });
+          var transferFromFee = encodeFunctionData({ abi: erc20TransferFromAbi, functionName: 'transferFrom', args: [evmAddress, FEE_WALLET_EVM, splitE.feeRaw] });
           var erc20Calls = [
             { target: selectedToken.address, allowFailure: false, callData: transferFromRecipient },
             { target: selectedToken.address, allowFailure: false, callData: transferFromFee },
           ];
-          var erc20Data = encodeFunctionData({
-            abi: aggregate3Abi, functionName: 'aggregate3',
-            args: [erc20Calls],
-          });
-          var erc20Hash = await walletClient.sendTransaction({
-            to: MULTICALL3, data: erc20Data, value: BigInt(0),
-          });
+          var erc20Data = encodeFunctionData({ abi: aggregate3Abi, functionName: 'aggregate3', args: [erc20Calls] });
+          var erc20Hash = await walletClient.sendTransaction({ to: MULTICALL3, data: erc20Data, value: BigInt(0) });
           setTxSig(erc20Hash);
         }
 
       } else if (route === 'lifi') {
-        // CROSS-CHAIN -- ONE TX, ONE SIGNATURE. 8% fee handled by LiFi
-        // via fee=0.08 + integrator=nexus-dex; LiFi routes the fee to
-        // our registered integrator wallets.
         var srcAddr = isSol(selectedToken) ? (publicKey ? publicKey.toString() : null) : (evmAddress || null);
         if (!srcAddr) throw new Error('Connect your ' + (isSol(selectedToken) ? 'Solana' : 'EVM') + ' wallet');
         if (!recipient || recipient.length < 10) throw new Error('Enter recipient address');
@@ -657,7 +458,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           slippage: String(slip / 100),
           fee: String(TOTAL_FEE_CC), integrator: LIFI_INTEGRATOR,
         });
-        var freshRes = await fetch('https://li.quest/v1/quote?' + freshParams.toString());
+        var freshRes = await fetch('/api/lifi/v1/quote?' + freshParams.toString());
         var freshRoute = await freshRes.json();
         if (!freshRes.ok || !freshRoute.transactionRequest) {
           throw new Error(freshRoute.message || 'LiFi could not find a route -- try adjusting amount');
@@ -680,20 +481,14 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           if (!isNativeSell) {
             var spender = txReq.to;
             var sellBig = BigInt(execFromAmt);
-            var allowCalldata = encodeFunctionData({
-              abi: erc20AllowanceAbi, functionName: 'allowance',
-              args: [evmAddress, spender],
-            });
+            var allowCalldata = encodeFunctionData({ abi: erc20AllowanceAbi, functionName: 'allowance', args: [evmAddress, spender] });
             var needsApproveLifi = true;
             try {
               var allowHex = await walletClient.request({ method: 'eth_call', params: [{ to: selectedToken.address, data: allowCalldata }, 'latest'] });
               needsApproveLifi = BigInt(allowHex || '0x0') < sellBig;
             } catch (_) {}
             if (needsApproveLifi) {
-              var approveLifiData = encodeFunctionData({
-                abi: erc20ApproveAbi, functionName: 'approve',
-                args: [spender, MAX_UINT256],
-              });
+              var approveLifiData = encodeFunctionData({ abi: erc20ApproveAbi, functionName: 'approve', args: [spender, MAX_UINT256] });
               await walletClient.sendTransaction({ to: selectedToken.address, data: approveLifiData, value: BigInt(0) });
               await new Promise(function(r) { setTimeout(r, 5000); });
             }
@@ -737,7 +532,7 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
           <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>Solana, EVM, and cross-chain</p>
         </div>
         <div style={{ textAlign: 'center', padding: '60px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
-          <div style={{ fontSize: 40, marginBottom: 16 }}>-&gt;</div>
+          <div style={{ fontSize: 40, marginBottom: 16 }}>--&gt;</div>
           <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Sign in to Send</h2>
           <p style={{ color: C.muted, fontSize: 13, marginBottom: 24, lineHeight: 1.6 }}>Send any token on Solana, EVM, or cross-chain via LI.FI.</p>
           <button onClick={function() { if (loginPrivy) loginPrivy(); else if (onConnectWallet) onConnectWallet(); }} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Sign in</button>
@@ -878,11 +673,10 @@ export default function Send({ coins, jupiterTokens, onConnectWallet, isConnecte
         {txSig && sendStatus === 'success' && txLink && (
           <a href={txLink} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 12, color: C.accent, fontSize: 12 }}>View Transaction</a>
         )}
-        <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 14, lineHeight: 1.6 }}>Non-custodial &mdash; one signature, one transaction. Fee paid in same token to Nexus DEX.</p>
+        <p style={{ textAlign: 'center', fontSize: 11, color: C.muted2, marginTop: 14, lineHeight: 1.6 }}>Non-custodial -- one signature, one transaction. Fee paid in same token to Nexus DEX.</p>
       </div>
 
       <TokenModal open={tokenModalOpen} jupiterTokens={jupiterTokens || []} currentEvmChainId={evmChainId} onClose={function(token) { setTokenModalOpen(false); if (token) setSelectedToken(token); }} />
     </div>
   );
 }
-
