@@ -10,7 +10,7 @@
  * Required env:
  *   ADMIN_WALLET_PRIVATE_KEY  base58 secret key of the SOL fee wallet
  *   PLATFORM_IMG              public https URL for the platform logo
- *
+ * 
  * Optional env:
  *   HELIUS_RPC                full RPC URL (preferred)
  *   HELIUS_API_KEY            api key, used to build a Helius URL
