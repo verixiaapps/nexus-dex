@@ -1,6 +1,6 @@
 /**
  * NEXUS DEX -- Shared Instant Buy/Sell Presets
- * 
+ *  
  * Persists per-user customized preset amounts via localStorage.
  * Both NewLaunches TokenCards and InstantTrade (on TokenDetail) import
  * the `useInstantPresets` hook from here, so a change in either place
