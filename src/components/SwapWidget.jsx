@@ -1,30 +1,34 @@
 /**
- * NEXUS DEX -- Unified Swap Widget
- * 
+ * NEXUS DEX -- Unified Swap Widget (Jupiter + 0x edition)
+ *
  * Behavior contract (locked):
  *   1. NO header chain selector. Routing is driven entirely by from/to
  *      tokens. Defaults come from the connected wallet's actual state and
  *      from the user's last-used pair via localStorage.
  *
- *   2. ONE wallet popup per swap action for external wallets. Privy
- *      embedded wallets sign silently (PrivyProvider with
- *      noPromptOnSignature). ERC20 first-send still adds 1 approval popup.
+ *   2. ONE wallet popup per swap action after the first ERC20 approval.
+ *      0x uses AllowanceHolder (single-sig path) instead of Permit2 so
+ *      subsequent swaps of an already-approved token are exactly one
+ *      popup. Privy embedded wallets sign silently.
  *
- *   3. Fees: 5% same-chain, 8% cross-chain. ALWAYS taken from output via
- *      the aggregator's own fee mechanism.
+ *   3. Fees: 5% same-chain. ALWAYS taken from output via the aggregator's
+ *      own fee mechanism. Plus positive-slippage / trade-surplus capture
+ *      directed to our fee wallet on both routes.
  *
  *   4. Pre-click data sources (NEVER aggregator quote endpoints):
  *        Solana prices  -> Jupiter /price/v3 -> Helius DAS fallback
- *        EVM/BTC prices -> LiFi /v1/token (priceUSD field)
+ *        EVM prices     -> LiFi /v1/token (priceUSD) -- DATA ONLY
  *        Solana paste   -> Helius DAS getAsset
  *        EVM paste      -> on-chain RPC via wagmi public client
  *        Symbol search  -> Jupiter /tokens/v2/search (Solana) +
  *                          LiFi /v1/tokens catalog (EVM, lazy-loaded once)
  *
- *   5. Click routing (aggregator endpoints fire here AND ONLY here):
+ *   5. Click routing (only two engines now):
  *        Solana <-> Solana                       -> Jupiter
- *        EVM <-> EVM, same chain, 0x supported   -> 0x (Permit2)
- *        Anything else                           -> LiFi
+ *        EVM <-> EVM, same chain, 0x supported   -> 0x AllowanceHolder
+ *        Anything else                           -> blocked at UI level
+ *      Cross-chain and BTC swaps are temporarily disabled until a
+ *      replacement bridge integration ships.
  *
  *   6. Quote engine: pre-click is a price-derived estimate
  *        out = in * fromPriceUsd / toPriceUsd * (1 - feeRate)
@@ -34,14 +38,13 @@
  *      Sell mode: from = the token, to = USDC of the token's chain.
  *      Swap mode: from = wallet's native (or last-used), to = USDC.
  *
- * Removed (banned data sources):
- *   - CoinGecko everywhere (/simple/price, /token_price, /search,
- *     /coins/{id}, platforms map enrichment)
- *   - GeckoTerminal /api/v2/networks/* (price + pools)
- *   - Moralis /erc20/{addr}/price
- *   - Jupiter price v2 (deprecated -> v3)
- *   - resolveFromCgCoin + TradeDrawer CG enrichment (dead code now that
- *     Markets/TokenDetail/Portfolio feed normalized coins)
+ * Removed in this revision:
+ *   - LiFi swap execution (fetchLifiQuote + LiFi tx path entirely)
+ *   - Bitcoin tokens from popular list (no path without LiFi)
+ *   - Permit2 path on 0x (replaced with AllowanceHolder for 1-popup UX)
+ *
+ * Kept (data sources, not transactions):
+ *   - LiFi /v1/token + /v1/tokens (price + symbol search only)
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -63,18 +66,17 @@ const EVM_FEE_WALLET = '0xC41c1de4250104dC1EE2854ffD5b40a04B9AC9fF';
 
 const PLATFORM_FEE = 0.03;
 const SAFETY_FEE   = 0.02;
-const CROSS_FEE    = 0.03;
-const TOTAL_FEE    = PLATFORM_FEE + SAFETY_FEE;          // 0.05
-const TOTAL_FEE_CC = TOTAL_FEE + CROSS_FEE;              // 0.08
-const LIFI_INTEGRATOR = 'nexus-dex';
+const TOTAL_FEE    = PLATFORM_FEE + SAFETY_FEE;             // 0.05 (same-chain)
 const JUPITER_PLATFORM_FEE_BPS = Math.round(TOTAL_FEE * 10000);
 const OX_SWAP_FEE_BPS          = Math.round(TOTAL_FEE * 10000);
 
-/* NATIVE_EVM (0xeeee...) is wagmi/Uniswap convention used internally to
- * tag native EVM coins. LIFI_NATIVE (0x0000...) is what LiFi accepts on
- * the wire -- we map between them in lifiTokenParam and fetchLifiTokenPrice. */
+/* Positive-slippage capture: 100% of any surplus over the quoted amount
+ * is routed to the fee wallet on both routes. On 0x this is the
+ * `tradeSurplusRecipient` mechanism. On Jupiter it's the
+ * `positiveSlippageFeeBps` + `positiveSlippageFeeAccount` pair. */
+const JUPITER_POSITIVE_SLIPPAGE_BPS = 10000; // 100% of surplus
+
 const NATIVE_EVM  = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
-const LIFI_NATIVE = '0x0000000000000000000000000000000000000000';
 const WSOL_MINT   = 'So11111111111111111111111111111111111111112';
 
 const SOL_RESERVE_LAMPORTS   = 5_000_000;
@@ -83,8 +85,8 @@ const EVM_NATIVE_RESERVE_PCT = 0.005;
 const QUOTE_DEBOUNCE_MS  = 250;
 const PRICE_CACHE_TTL_MS = 60_000;
 
-/* 0x v2 supported chains (Settler/Permit2 deployed). Anything outside this
- * set falls through to LiFi automatically. */
+/* 0x v2 supported chains (Settler + AllowanceHolder deployed). Anything
+ * outside this set is treated as unsupported in this build. */
 const OX_CHAIN_IDS = new Set([
   1, 10, 56, 130, 137, 146, 324, 1101, 2741, 5000, 8453,
   34443, 42161, 43114, 57073, 59144, 80094, 81457, 534352,
@@ -102,7 +104,6 @@ const CHAIN_NAMES = {
   321: 'KCC', 360: 'Shape', 33139: 'ApeChain', 167000: 'Taiko', 7777777: 'Zora',
   122: 'Fuse', 1313161554: 'Aurora', 1088: 'Metis', 14: 'Flare',
   9745: 'PlasmaChain', 999: 'HyperEVM', 4217: 'Yala', 8217: 'Kaia',
-  20000000000001: 'Bitcoin',
 };
 const CHAIN_SHORT = {
   1:'ETH',10:'OP',25:'CRO',56:'BNB',100:'GNO',130:'UNI',137:'POL',143:'MON',146:'SONIC',
@@ -112,7 +113,7 @@ const CHAIN_SHORT = {
   48900:'ZIRC',57073:'INK',59144:'LINEA',60808:'BOB',80094:'BERA',81457:'BLAST',
   200901:'BTRL',534352:'SCROLL',6342:'MEGA',321:'KCC',360:'SHAPE',33139:'APE',
   167000:'TAIKO',7777777:'ZORA',122:'FUSE',1313161554:'AURORA',1088:'METIS',14:'FLR',
-  9745:'XPL',999:'HYPE',4217:'YALA',8217:'KAIA',20000000000001:'BTC',
+  9745:'XPL',999:'HYPE',4217:'YALA',8217:'KAIA',
 };
 
 const USDC_BY_CHAIN = {
@@ -138,6 +139,9 @@ const USDC_BY_CHAIN = {
   80094: '0x549943e04f40284185054145c6E4e9568C1D3241',
 };
 const USDC_SOLANA = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+
+/* For LiFi catalog price lookup (data source only -- not used for swaps). */
+const LIFI_NATIVE = '0x0000000000000000000000000000000000000000';
 
 const DEFAULT_BUY_PRESETS  = [25, 50, 100, 250, 500];
 const DEFAULT_SELL_PRESETS = [50, 100];
@@ -181,8 +185,6 @@ const POPULAR_TOKENS = [
     logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
   { address: USDC_BY_CHAIN[42161], chainId: 42161, symbol: 'USDC', name: 'USDC (Arbitrum)', decimals: 6, chain: 'evm',
     logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
-  { address: 'bitcoin', chainId: 20000000000001, symbol: 'BTC', name: 'Bitcoin', decimals: 8, chain: 'bitcoin',
-    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/bitcoin/info/logo.png' },
 ];
 
 const NATIVE_COIN_RESOLVE = {
@@ -211,12 +213,6 @@ const NATIVE_COIN_RESOLVE = {
   'hyperliquid':             { kind: 'evm-native', chainId: 999 },
   'aurora-near':             { kind: 'evm-native', chainId: 1313161554 },
   'solana':                  { kind: 'solana' },
-  'bitcoin':                 { kind: 'btc' },
-};
-
-const BTC_RESOLVE_SHAPE = {
-  chain: 'bitcoin', address: 'bitcoin', chainId: 20000000000001,
-  symbol: 'BTC', name: 'Bitcoin', decimals: 8,
 };
 
 const _NATIVE_BY_CHAIN = {
@@ -246,29 +242,50 @@ const _NATIVE_BY_CHAIN = {
 };
 
 /* ============================================================================
+ * NUMERIC SAFETY HELPERS
+ *
+ * safeBigInt: accept anything (string, number, bigint, hex, decimal,
+ * scientific) and produce a BigInt without throwing the iOS JSC error
+ * "out of range integral type conversion attempted" on float input. All
+ * BigInt() boundaries on the EVM tx path go through this.
+ * ========================================================================= */
+
+function safeBigInt(v) {
+  if (v == null) return BigInt(0);
+  if (typeof v === 'bigint') return v;
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v)) return BigInt(0);
+    return BigInt(Math.trunc(v));
+  }
+  let s = String(v).trim();
+  if (!s) return BigInt(0);
+  if (/^-?0x[0-9a-f]+$/i.test(s)) return BigInt(s);
+  if (/^-?\d+$/.test(s)) return BigInt(s);
+  if (/^-?\d+\.\d+$/.test(s)) return BigInt(s.split('.')[0] || '0');
+  if (/^-?\d+(\.\d+)?e[+-]?\d+$/i.test(s)) {
+    const n = Number(s);
+    if (!Number.isFinite(n)) return BigInt(0);
+    return BigInt(n.toFixed(0));
+  }
+  const n = Number(s);
+  return Number.isFinite(n) ? BigInt(Math.trunc(n)) : BigInt(0);
+}
+
+/* ============================================================================
  * TYPE GUARDS / VALIDATORS / FORMATTERS
  * ========================================================================= */
 
 const isSol = (t) => !!(t && t.chain === 'solana');
 const isEvm = (t) => !!(t && t.chain === 'evm');
-const isBtc = (t) => !!(t && t.chain === 'bitcoin');
 
 function isValidSolMint(s) {
   return !!s && s.length >= 32 && s.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
 }
 function isValidEvmAddr(s) { return !!s && /^0x[0-9a-fA-F]{40}$/.test(s); }
-function isValidBtcAddr(s) {
-  if (!s || typeof s !== 'string') return false;
-  const v = s.trim();
-  if (/^bc1[ac-hj-np-z02-9]{6,87}$/i.test(v)) return true;
-  if (/^[13]{25,34}$/.test(v)) return true;
-  return false;
-}
 
 function tokensEqual(a, b) {
   if (!a || !b) return false;
   if (isSol(a) && isSol(b)) return a.mint === b.mint;
-  if (isBtc(a) && isBtc(b)) return true;
   if (isEvm(a) && isEvm(b)) return a.chainId === b.chainId &&
     (a.address || '').toLowerCase() === (b.address || '').toLowerCase();
   return false;
@@ -297,17 +314,34 @@ function shortAddr(addr, head = 4, tail = 4) {
   return addr.slice(0, head) + '...' + addr.slice(-tail);
 }
 
-/* BigInt-safe decimal-string -> raw smallest-units. */
+/* Hardened decimal-string -> raw smallest-units. Handles commas, scientific
+ * notation, leading +, multiple/trailing dots. Always truncates fractional
+ * digits beyond `decimals` (never rounds up). Always returns a clean
+ * integer string suitable for BigInt() consumers. */
 function toRawAmount(amountStr, decimals) {
-  if (!amountStr) return '0';
-  const s = String(amountStr).trim();
-  if (!s || isNaN(Number(s))) return '0';
+  if (!amountStr || decimals == null) return '0';
+  let s = String(amountStr).trim().replace(/,/g, '.').replace(/^\+/, '');
+  if (!s || s.startsWith('-')) return '0';
+  if (!/^(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(s)) return '0';
+  if (/e/i.test(s)) {
+    const n = Number(s);
+    if (!Number.isFinite(n) || n < 0) return '0';
+    s = n.toFixed(Math.max(Number(decimals) || 0, 20));
+  }
+  const dec = Math.max(0, Math.floor(Number(decimals) || 0));
   const [whole, frac = ''] = s.split('.');
-  const fracPadded = (frac + '0'.repeat(decimals)).slice(0, decimals);
-  const wholeBig = BigInt(whole || '0');
-  const fracBig  = fracPadded ? BigInt(fracPadded) : BigInt(0);
-  const scale    = BigInt(10) ** BigInt(decimals);
-  return (wholeBig * scale + fracBig).toString();
+  const fracTrunc  = frac.slice(0, dec);
+  const fracPadded = (fracTrunc + '0'.repeat(dec)).slice(0, dec);
+  try {
+    const wholeBig = BigInt((whole || '0').replace(/^0+(?=\d)/, '') || '0');
+    const fracBig  = dec > 0
+      ? BigInt((fracPadded || '0').replace(/^0+(?=\d)/, '') || '0')
+      : BigInt(0);
+    const scale = BigInt(10) ** BigInt(dec);
+    return (wholeBig * scale + fracBig).toString();
+  } catch {
+    return '0';
+  }
 }
 
 /* ============================================================================
@@ -320,18 +354,15 @@ function normalizeToken(input, opts = {}) {
   const nativeRule = input.id ? NATIVE_COIN_RESOLVE[input.id] : null;
   if (nativeRule) {
     const baseLogo = input.logoURI || input.image || input.thumbnail || null;
-    const baseSym  = input.symbol || (nativeRule.kind === 'btc' ? 'BTC' : nativeRule.kind === 'solana' ? 'SOL' : 'TOKEN');
+    const baseSym  = input.symbol || (nativeRule.kind === 'solana' ? 'SOL' : 'TOKEN');
     const baseName = input.name || baseSym;
     if (nativeRule.kind === 'evm-native')
       return { chain: 'evm', address: NATIVE_EVM, chainId: nativeRule.chainId, symbol: baseSym, name: baseName, decimals: 18, logoURI: baseLogo };
     if (nativeRule.kind === 'solana')
       return { chain: 'solana', mint: WSOL_MINT, symbol: baseSym, name: baseName, decimals: 9, logoURI: baseLogo };
-    if (nativeRule.kind === 'btc')
-      return Object.assign({}, BTC_RESOLVE_SHAPE, { logoURI: baseLogo });
   }
   if (isSol(input) && input.mint) return input;
   if (isEvm(input) && input.address && input.chainId) return input;
-  if (isBtc(input)) return input;
 
   const logoURI = input.logoURI || input.image || input.thumbnail || null;
   const symbol  = input.symbol || input.tokenSymbol || 'TOKEN';
@@ -342,7 +373,7 @@ function normalizeToken(input, opts = {}) {
       chain: 'evm', address: evmAddr, chainId: input.chainId || defaultChainId,
       symbol, name,
       decimals: typeof input.decimals === 'number' ? input.decimals
-              : typeof input.tokenDecimals === 'number' ? input.tokenDecimals : 18,
+        : typeof input.tokenDecimals === 'number' ? input.tokenDecimals : 18,
       logoURI,
     };
   }
@@ -379,14 +410,12 @@ function usdcOfChain(chainId) {
 }
 function chainOfToken(t) {
   if (isSol(t)) return 'solana';
-  if (isBtc(t)) return 'bitcoin';
   if (isEvm(t)) return t.chainId;
   return null;
 }
 
 /* ============================================================================
- * DEFAULT TOKEN PAIR -- driven by wallet state and last-used pair, NEVER by
- * a header chain selector.
+ * DEFAULT TOKEN PAIR
  * ========================================================================= */
 
 function pickDistinct(target, candidates) {
@@ -449,64 +478,43 @@ function defaultTokenPair({ mode, viewedToken, lastFromToken, walletState }) {
 }
 
 /* ============================================================================
- * ROUTE PICKER + LIFI SAME-CHAIN DETECTOR
+ * ROUTE PICKER
+ *
+ *   jupiter      -- Solana <-> Solana
+ *   0x           -- EVM <-> EVM, same chain, 0x-supported
+ *   unsupported  -- everything else (cross-chain, non-0x EVM, mixed)
  * ========================================================================= */
 
 function pickRoute(from, to) {
-  if (!from || !to) return 'lifi';
+  if (!from || !to) return 'unsupported';
   if (isSol(from) && isSol(to)) return 'jupiter';
   if (isEvm(from) && isEvm(to) && from.chainId === to.chainId && OX_CHAIN_IDS.has(from.chainId)) return '0x';
-  return 'lifi';
+  return 'unsupported';
 }
-function isLifiSameChain(from, to) {
-  return isEvm(from) && isEvm(to) && from.chainId === to.chainId;
+
+function unsupportedReason(from, to) {
+  if (!from || !to) return 'Select tokens to swap.';
+  if (isSol(from) && isEvm(to)) return 'Cross-chain swaps temporarily unavailable.';
+  if (isEvm(from) && isSol(to)) return 'Cross-chain swaps temporarily unavailable.';
+  if (isEvm(from) && isEvm(to) && from.chainId !== to.chainId) {
+    return 'Cross-chain swaps temporarily unavailable.';
+  }
+  if (isEvm(from) && isEvm(to) && !OX_CHAIN_IDS.has(from.chainId)) {
+    return (CHAIN_NAMES[from.chainId] || 'This chain') + ' swaps temporarily unavailable.';
+  }
+  return 'This pair is not currently supported.';
 }
 
 /* ============================================================================
- * AGGREGATOR HELPERS
+ * AGGREGATOR HELPERS -- Jupiter + 0x AllowanceHolder only
  * ========================================================================= */
 
-function lifiChainParam(t) {
-  if (isSol(t)) return 'SOL';
-  if (isBtc(t)) return 'BTC';
-  return String(t.chainId);
-}
-
-/* lifiTokenParam: LiFi accepts 0x0000... for native EVM tokens, NOT the
- * 0xeeee... wagmi/Uniswap convention we use internally. Map NATIVE_EVM ->
- * LIFI_NATIVE here so on-the-wire calls work. */
-function lifiTokenParam(t) {
-  if (isSol(t)) return t.mint;
-  if (isBtc(t)) return 'bitcoin';
-  if ((t.address || '').toLowerCase() === NATIVE_EVM) return LIFI_NATIVE;
-  return t.address;
-}
-
-/* LiFi quote. fromAddress + toAddress are required and validated by the
- * API against the source/destination chain. ONLY called from executeSwap
- * after the user clicks -- never pre-click. */
-async function fetchLifiQuote({ fromToken, toToken, fromAmtRaw, fromAddress, toAddress, slip, signal }) {
-  const feeRate = isLifiSameChain(fromToken, toToken) ? TOTAL_FEE : TOTAL_FEE_CC;
-  const params = new URLSearchParams({
-    fromChain: lifiChainParam(fromToken),
-    toChain:   lifiChainParam(toToken),
-    fromToken: lifiTokenParam(fromToken),
-    toToken:   lifiTokenParam(toToken),
-    fromAmount: String(fromAmtRaw),
-    fromAddress,
-    toAddress: toAddress || fromAddress,
-    slippage: String(slip / 100),
-    fee: String(feeRate),
-    integrator: LIFI_INTEGRATOR,
-  });
-  const res = await fetch('/api/lifi/v1/quote?' + params.toString(), { signal });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.message || 'LiFi quote failed');
-  if (!data.estimate || !data.estimate.toAmount) throw new Error('No route');
-  return data;
-}
-
-/* 0x v2 QUOTE endpoint -- taker required. ONLY called from executeSwap. */
+/* 0x v2 AllowanceHolder QUOTE. Single-signature flow: user does an ERC20
+ * approve(allowanceHolderSpender, MAX) once per token, then every swap is
+ * a single sendTransaction. No EIP-712 typed-data signing needed.
+ *
+ * tradeSurplusRecipient    captures positive slippage in the buy token
+ * swapFeeBps / Recipient   takes our 5% platform fee from the buy token */
 async function fetchOxQuote({ chainId, sellToken, buyToken, sellAmount, taker, slipBps, feeRecipient, feeToken, signal }) {
   const qs = new URLSearchParams({
     chainId: String(chainId),
@@ -520,17 +528,16 @@ async function fetchOxQuote({ chainId, sellToken, buyToken, sellAmount, taker, s
     swapFeeToken: (feeToken || '').toLowerCase(),
     tradeSurplusRecipient: feeRecipient,
   });
-  const res = await fetch('/api/0x/swap/permit2/quote?' + qs.toString(), { signal });
+  const res = await fetch('/api/0x/swap/allowance-holder/quote?' + qs.toString(), { signal });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || data.message || '0x quote failed');
-  if (!data.buyAmount) throw new Error('No route');
+  if (!data.liquidityAvailable) throw new Error('No liquidity for this pair on 0x');
+  if (!data.transaction || !data.transaction.to) throw new Error('No route');
   return data;
 }
 
 /* Jupiter quote. restrictIntermediateTokens=true keeps the route to
- * battle-tested intermediates (per Jupiter best-practice -- avoids
- * routing through illiquid hops which is the #1 cause of high-slippage
- * fills on long-tail mints). */
+ * battle-tested intermediates -- avoids high-slippage long-tail hops. */
 async function fetchJupiterQuote({ inputMint, outputMint, amountRaw, slipBps, signal }) {
   const qs = new URLSearchParams({
     inputMint, outputMint,
@@ -547,11 +554,48 @@ async function fetchJupiterQuote({ inputMint, outputMint, amountRaw, slipBps, si
   return data;
 }
 
-/* Jupiter swap-build. instructionVersion=V2 selects the new Token-2022-aware
- * fee collection path (Jupiter Developer Platform release Apr 6 2026).
- * Required when the output mint is Token-2022 with a transfer-fee extension;
- * harmless on classic SPL mints. */
+/* Jupiter swap-build. instructionVersion=V2 selects the Token-2022-aware
+ * fee-collection path. Required when the output mint is Token-2022 with a
+ * transfer-fee extension; harmless on classic SPL.
+ *
+ * positiveSlippageFeeBps + positiveSlippageFeeAccount route 100% of any
+ * surplus over the quoted amount to our fee account. Per Jupiter swap-api
+ * release notes: positive_slippage_fee_account meta is appended after the
+ * platform_fee_account meta in the built instruction. We pass the same
+ * fee ATA for both -- safe because we already verified its existence. */
 async function fetchJupiterSwapTx({ quoteResponse, userPublicKey, feeAccount, signal }) {
+  const body = {
+    quoteResponse,
+    userPublicKey,
+    wrapAndUnwrapSol: true,
+    dynamicComputeUnitLimit: true,
+    prioritizationFeeLamports: {
+      priorityLevelWithMaxLamports: {
+        maxLamports: 5_000_000,
+        priorityLevel: 'high',
+      },
+    },
+  };
+  if (feeAccount) {
+    body.feeAccount = feeAccount;
+    body.positiveSlippageFeeBps = JUPITER_POSITIVE_SLIPPAGE_BPS;
+    body.positiveSlippageFeeAccount = feeAccount;
+  }
+  const res = await fetch('/api/jupiter/swap/v1/swap?instructionVersion=V2', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+    signal,
+  });
+  const data = await res.json();
+  if (!res.ok || !data.swapTransaction) throw new Error(data.error || 'Jupiter swap build failed');
+  return data;
+}
+
+/* Retry the swap-build without positive-slippage params if the API rejects
+ * them (e.g., slightly different param naming on a server-side update).
+ * Fee collection still works on output via platformFeeBps. */
+async function fetchJupiterSwapTxNoPositiveSlippage({ quoteResponse, userPublicKey, feeAccount, signal }) {
   const body = {
     quoteResponse,
     userPublicKey,
@@ -578,25 +622,12 @@ async function fetchJupiterSwapTx({ quoteResponse, userPublicKey, feeAccount, si
 
 /* ============================================================================
  * USD PRICING -- data sources only, NEVER aggregator quote endpoints.
- *
- * Solana       -> Jupiter /price/v3 (curated, covers most SPL incl.
- *                 verified memecoins) -> Helius DAS getAsset fallback
- *                 for long-tail mints with on-chain price metadata.
- * EVM / BTC    -> LiFi /v1/token (priceUSD field). LiFi maintains its
- *                 own price index spanning 60+ chains; one endpoint
- *                 covers ETH, Base, Arb, OP, BNB, Polygon, Avax, Sonic,
- *                 Berachain, etc. Native EVM uses LIFI_NATIVE address.
- *
- * Cached 60s. If neither source has the token, getTokenPriceUsd returns
- * null and the YOU RECEIVE box stays at 0.00. The click still works
- * because executeSwap fetches the real aggregator quote at click time.
  * ========================================================================= */
 
 const _priceCache = new Map();
 function _priceCacheKey(token) {
   if (!token) return null;
   if (isSol(token)) return 'sol:' + token.mint;
-  if (isBtc(token)) return 'btc';
   if (isEvm(token)) return 'evm:' + token.chainId + ':' + (token.address || '').toLowerCase();
   return null;
 }
@@ -614,9 +645,6 @@ function setCachedPrice(token, price) {
   _priceCache.set(key, { price: Number(price), ts: Date.now() });
 }
 
-/* Jupiter /price/v3 -- response shape: { "<mint>": { "usdPrice": number,
- * "blockId": ..., "decimals": ..., "priceChange24h": ... } }. No .data
- * wrapper (v2 had one and was renamed `price` -> `usdPrice` in v3). */
 async function fetchJupiterPrice(token) {
   try {
     if (!isSol(token) || !token.mint) return null;
@@ -628,10 +656,6 @@ async function fetchJupiterPrice(token) {
   } catch { return null; }
 }
 
-/* Jupiter /tokens/v2/search -- accepts a mint as the query and returns
- * the matching token with `usdPrice` populated. Slightly broader coverage
- * than /price/v3 for long-tail SPL (especially fresh launches that have
- * a Jupiter route but aren't in the curated price set). */
 async function fetchJupiterTokenSearchPrice(token) {
   try {
     if (!isSol(token) || !token.mint) return null;
@@ -645,21 +669,12 @@ async function fetchJupiterTokenSearchPrice(token) {
   } catch { return null; }
 }
 
-/* LiFi /v1/token -- per-token lookup. For native EVM coins, pass the LiFi
- * native address (0x0000...) instead of our internal NATIVE_EVM marker
- * (0xeeee...). For BTC, pass the LiFi 'bitcoin' alias. */
+/* LiFi /v1/token (price data only -- not used for swap routing). */
 async function fetchLifiTokenPrice(token) {
   try {
-    let chain, addr;
-    if (isBtc(token)) {
-      chain = 'BTC';
-      addr  = 'bitcoin';
-    } else if (isEvm(token)) {
-      chain = String(token.chainId);
-      addr  = (token.address || '').toLowerCase() === NATIVE_EVM ? LIFI_NATIVE : token.address;
-    } else {
-      return null;
-    }
+    if (!isEvm(token)) return null;
+    const chain = String(token.chainId);
+    const addr  = (token.address || '').toLowerCase() === NATIVE_EVM ? LIFI_NATIVE : token.address;
     const params = new URLSearchParams({ chain, token: addr });
     const r = await fetch('/api/lifi/v1/token?' + params.toString());
     if (!r.ok) return null;
@@ -669,9 +684,6 @@ async function fetchLifiTokenPrice(token) {
   } catch { return null; }
 }
 
-/* LiFi catalog fallback -- the lazy-loaded /v1/tokens response includes
- * priceUSD per entry. Used when /v1/token misses (occasionally happens
- * for tokens in the catalog but not the per-token endpoint cache). */
 async function fetchLifiCatalogPrice(token) {
   try {
     if (!isEvm(token)) return null;
@@ -687,9 +699,6 @@ async function fetchLifiCatalogPrice(token) {
   } catch { return null; }
 }
 
-/* Helius DAS getAsset -- returns token_info.price_info.price_per_token for
- * many SPL tokens that aren't in Jupiter's curated price set. Last-resort
- * fallback for Solana long-tail. */
 async function fetchHeliusPrice(token) {
   try {
     if (!isSol(token) || !token.mint) return null;
@@ -717,24 +726,16 @@ async function getTokenPriceUsd(token) {
     p = await fetchJupiterPrice(token);
     if (p == null) p = await fetchJupiterTokenSearchPrice(token);
     if (p == null) p = await fetchHeliusPrice(token);
-  } else if (isEvm(token) || isBtc(token)) {
+  } else if (isEvm(token)) {
     p = await fetchLifiTokenPrice(token);
-    if (p == null && isEvm(token)) p = await fetchLifiCatalogPrice(token);
+    if (p == null) p = await fetchLifiCatalogPrice(token);
   }
   if (p != null && p > 0) { setCachedPrice(token, p); return p; }
   return null;
 }
 
 /* ============================================================================
- * SYMBOL SEARCH -- modal autocomplete sources
- *
- * Solana long-tail -> Jupiter /tokens/v2/search?query=<text>
- * EVM long-tail    -> LiFi /v1/tokens (full catalog, lazy-loaded once
- *                     per session, then filtered client-side)
- *
- * Both endpoints return real contract addresses, so there's no deferred-
- * resolution two-step needed. POPULAR_TOKENS + jupiterTokens prop still
- * provide instant fast-path matches synchronously.
+ * SYMBOL SEARCH -- catalog data only, not transactional
  * ========================================================================= */
 
 async function searchJupiterBySymbol(query, signal) {
@@ -772,9 +773,6 @@ function loadLifiTokens() {
         if (!Number.isFinite(chainIdNum)) return;
         arr.forEach((t) => {
           if (!t || !t.address || !t.symbol) return;
-          /* Keep native (LIFI_NATIVE) entries in the catalog -- they're
-           * filtered out at symbol-search time but used as a price-lookup
-           * fallback by fetchLifiCatalogPrice. */
           const lower = (t.address || '').toLowerCase();
           if (lower !== LIFI_NATIVE && !isValidEvmAddr(t.address)) return;
           flat.push({
@@ -845,8 +843,8 @@ function maxSafeSolBalance(lamports) {
 
 function ChainBadge({ token }) {
   if (!token) return null;
-  const label = isSol(token) ? 'SOL' : isBtc(token) ? 'BTC' : (CHAIN_SHORT[token.chainId] || 'EVM');
-  const color = isSol(token) ? '#9945ff' : isBtc(token) ? '#f7931a' : '#627eea';
+  const label = isSol(token) ? 'SOL' : (CHAIN_SHORT[token.chainId] || 'EVM');
+  const color = isSol(token) ? '#9945ff' : '#627eea';
   return (
     <span style={{
       fontSize: 9, color, background: color + '22', border: '1px solid ' + color + '44',
@@ -900,19 +898,9 @@ function useEscapeKey(open, handler) {
 
 /* ============================================================================
  * TOKEN SELECT MODAL
- *
- * Search sources:
- *   - POPULAR_TOKENS                 -- hardcoded, always first results
- *   - jupiterTokens prop             -- pre-loaded by parent (App.js)
- *   - Jupiter /tokens/v2/search      -- Solana long-tail, dynamic per query
- *   - LiFi /v1/tokens catalog        -- EVM long-tail, lazy-loaded once
- *
- * Contract paste:
- *   - Solana mint -> Helius DAS getAsset
- *   - EVM addr    -> on-chain RPC via wagmi public client
  * ========================================================================= */
 
-function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }) {
+function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
   const [q, setQ] = useState('');
   const [contractInput, setContractInput] = useState('');
   const [contractToken, setContractToken] = useState(null);
@@ -926,9 +914,6 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
   const evmChainForLookup = evmWalletChainId || 1;
   const publicClient = usePublicClient({ chainId: evmChainForLookup });
 
-  /* Solana token list comes in via the `jupiterTokens` prop, populated by
-   * the parent page (App.js). Treat that as cached metadata, not a live
-   * aggregator call from this component. */
   const solTokens = useMemo(() => {
     if (jupiterTokens && jupiterTokens.length > 0) {
       return jupiterTokens.map((t) => ({
@@ -939,9 +924,6 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
     return POPULAR_TOKENS.filter((t) => isSol(t));
   }, [jupiterTokens]);
 
-  /* Local fast-path search: hardcoded popular tokens + jupiterTokens prop.
-   * Fires synchronously on every keystroke so the user sees popular hits
-   * immediately. Long-tail discovery (below) appends after a debounce. */
   useEffect(() => {
     const trimmed = q.trim();
     if (!trimmed) { setSearchResults([]); return undefined; }
@@ -959,21 +941,11 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
           ((CHAIN_NAMES[t.chainId] || '').toLowerCase().includes(ql))
         )
       );
-      const btcMatches = excludeBtc ? [] : POPULAR_TOKENS.filter((t) =>
-        isBtc(t) && (
-          (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-          (t.name && t.name.toLowerCase().includes(ql))
-        )
-      );
-      setSearchResults([...sol, ...evmFromPopular, ...btcMatches]);
+      setSearchResults([...sol, ...evmFromPopular]);
     }, 250);
     return () => clearTimeout(handle);
-  }, [q, solTokens, excludeBtc]);
+  }, [q, solTokens]);
 
-  /* Long-tail discovery: Jupiter v2 search for Solana mints + LiFi catalog
-   * filter for EVM tokens. Both endpoints return real contract addresses,
-   * no deferred-resolution two-step. Skips short queries and queries that
-   * look like contracts (the paste field handles those). */
   const discoverReqRef = useRef(0);
   useEffect(() => {
     const trimmed = q.trim();
@@ -1010,7 +982,6 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
     return () => { clearTimeout(handle); controller.abort(); };
   }, [q]);
 
-  /* Click handler. Every result has a real contract -- no deferred branch. */
   const handleSelect = useCallback((token) => {
     onSelect(token);
     setQ(''); setContractInput(''); setContractToken(null);
@@ -1032,8 +1003,6 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
         if (cached) {
           if (lookupReqRef.current === reqId) setContractToken(cached);
         } else {
-          /* Helius DAS -- data source, not an aggregator. Returns metadata
-           * for any SPL mint. */
           let resolved = null;
           try {
             const r = await fetch('/api/helius/das', {
@@ -1074,7 +1043,6 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
           }
         }
       } else {
-        /* EVM contract paste -> on-chain RPC for decimals + symbol. */
         let decimals = 18;
         let onChainSymbol = null;
         try {
@@ -1130,16 +1098,12 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
   useBodyScrollLock(open);
   useEscapeKey(open, close);
 
-  /* Merge: fast-path results first, then long-tail discovery. Dedupe by
-   * (chain + mint/address+chainId) so jupiterTokens prop overlap with
-   * Jupiter v2 search results doesn't double up. */
   const merged = useMemo(() => {
     if (!q.trim()) return [];
     const seen = new Set();
     const out = [];
     const keyOf = (t) => isSol(t) ? 'sol:' + t.mint
       : isEvm(t) ? 'evm:' + t.chainId + ':' + (t.address || '').toLowerCase()
-      : isBtc(t) ? 'btc'
       : ('?:' + (t.symbol || '') + ':' + (t.name || ''));
     [...searchResults, ...discoveredSol, ...discoveredEvm].forEach((t) => {
       const k = keyOf(t);
@@ -1150,7 +1114,7 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
     return out;
   }, [q, searchResults, discoveredSol, discoveredEvm]);
 
-  const display = q.trim() ? merged : (excludeBtc ? POPULAR_TOKENS.filter((t) => !isBtc(t)) : POPULAR_TOKENS);
+  const display = q.trim() ? merged : POPULAR_TOKENS;
 
   if (!open) return null;
   return (
@@ -1250,7 +1214,7 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens, excludeBtc }
 }
 
 /* ============================================================================
- * PRESET EDITOR -- bottom sheet, sticky save, big tap targets.
+ * PRESET EDITOR
  * ========================================================================= */
 
 function PresetEditor({ open, onClose, presets, onSave }) {
@@ -1439,7 +1403,6 @@ export default function SwapWidget({
   presets: presetsProp,
   onPresetsChange,
   onStatusChange,
-  /* legacy / silently ignored: */
   // eslint-disable-next-line no-unused-vars
   headerChain: _hcIgnored,
   // eslint-disable-next-line no-unused-vars
@@ -1586,9 +1549,6 @@ export default function SwapWidget({
   const [solBalanceLamports, setSolBalanceLamports] = useState(null);
   const [solSplBalance, setSolSplBalance] = useState(null);
 
-  /* -- Cross-chain destination address -- */
-  const [customDestAddr, setCustomDestAddr] = useState('');
-
   /* -- Preset state -- */
   const [presetsLocal, setPresetsLocal] = useState(() => presetsProp || loadPresets());
   const presets = presetsProp || presetsLocal;
@@ -1604,12 +1564,16 @@ export default function SwapWidget({
 
   /* -- Derived -- */
   const route = useMemo(() => pickRoute(fromToken, toToken), [fromToken, toToken]);
-  const isCrossChain = route === 'lifi' && !isLifiSameChain(fromToken, toToken);
+  const isSupported = route !== 'unsupported';
+  const unsupportedMsg = useMemo(() =>
+    isSupported ? '' : unsupportedReason(fromToken, toToken),
+    [isSupported, fromToken, toToken]
+  );
   const isEvmFrom = isEvm(fromToken);
   const isNativeEvmFrom = isEvmFrom && (fromToken.address || '').toLowerCase() === NATIVE_EVM;
 
   const isPrivyOnly = activeWalletKind === 'privy' && !solConnected && !evmConnected;
-  const requiresApproval = isEvmFrom && !isNativeEvmFrom && (route === '0x' || route === 'lifi') && !isPrivyOnly;
+  const requiresApproval = isEvmFrom && !isNativeEvmFrom && route === '0x' && !isPrivyOnly;
 
   /* -- Public client for from-token's chain -- */
   const publicClient = usePublicClient({ chainId: isEvmFrom ? fromToken.chainId : undefined });
@@ -1706,9 +1670,7 @@ export default function SwapWidget({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultToToken]);
 
-  /* -- USD prices (data-source derived, NOT aggregator) --
-   * Each effect fires once per token reference change. No polling. Server
-   * proxies (Jupiter, LiFi, Helius) provide their own caching. */
+  /* -- USD prices -- */
   const [fromPriceUsd, setFromPriceUsd] = useState(null);
   const [toPriceUsd, setToPriceUsd] = useState(null);
   useEffect(() => {
@@ -1730,10 +1692,7 @@ export default function SwapWidget({
 
   /* ============================================================================
    * QUOTE ENGINE -- price-derived estimate, NEVER aggregator pre-click.
-   *
-   *   out = in * fromPriceUsd / toPriceUsd * (1 - feeRate)
    * ========================================================================= */
-
   const fetchQuote = useCallback(async () => {
     setQuoteError('');
 
@@ -1758,10 +1717,8 @@ export default function SwapWidget({
       return;
     }
 
-    const isCC = route === 'lifi' && !isLifiSameChain(fromToken, toToken);
-    const feeRate = isCC ? TOTAL_FEE_CC : TOTAL_FEE;
     const grossOut = fromNum * fromPriceUsd / toPriceUsd;
-    const netOut = grossOut * (1 - feeRate);
+    const netOut = grossOut * (1 - TOTAL_FEE);
     const dp = (netOut > 0 && netOut < 0.01) ? 8 : 6;
 
     setQuote({
@@ -1772,7 +1729,7 @@ export default function SwapWidget({
     });
     setQuoteIsStale(false);
     return;
-  }, [fromAmt, fromToken, toToken, route, fromPriceUsd, toPriceUsd]);
+  }, [fromAmt, fromToken, toToken, fromPriceUsd, toPriceUsd]);
 
   useEffect(() => {
     const t = setTimeout(fetchQuote, QUOTE_DEBOUNCE_MS);
@@ -1791,30 +1748,34 @@ export default function SwapWidget({
     return null;
   }, [fromToken, solBalanceLamports, solSplBalance, evmFromBal]);
 
-  /* -- MAX -- */
+  /* -- MAX -- always clamp to token's actual decimals (and <=9 for JS Number
+   * precision safety). Ensures the resulting input string is integer-clean
+   * when passed to BigInt boundaries downstream. */
   const onMax = useCallback(() => {
     if (fromBalanceDisplay == null || fromBalanceDisplay <= 0) return;
     userTouchedAmtRef.current = true;
+    const dec = Math.min(typeof fromToken.decimals === 'number' ? fromToken.decimals : 6, 9);
+
     if (isSol(fromToken) && fromToken.mint === WSOL_MINT) {
       const usable = maxSafeSolBalance(solBalanceLamports);
-      setFromAmt(usable > 0 ? usable.toFixed(6) : '0');
+      setFromAmt(usable > 0 ? usable.toFixed(dec) : '0');
       return;
     }
     if (isSol(fromToken)) {
-      setFromAmt(fromBalanceDisplay.toFixed(6));
+      setFromAmt(fromBalanceDisplay.toFixed(dec));
       return;
     }
     const max = maxSafeAmount({ balance: fromBalanceDisplay, isNative: isNativeEvmFrom });
-    setFromAmt(max > 0 ? max.toFixed(fromToken.decimals <= 2 ? 2 : 6) : '0');
+    setFromAmt(max > 0 ? max.toFixed(dec) : '0');
   }, [fromBalanceDisplay, fromToken, solBalanceLamports, isNativeEvmFrom]);
 
-  /* -- Quick-buy preset: "spend $X of from-token" -- */
   const applyBuyPreset = useCallback((dollars) => {
     if (!fromToken) return;
     userTouchedAmtRef.current = true;
     if (fromPriceUsd && fromPriceUsd > 0) {
       const tokens = dollars / fromPriceUsd;
-      setFromAmt(tokens > 0 ? tokens.toFixed(6) : '0');
+      const dec = Math.min(typeof fromToken.decimals === 'number' ? fromToken.decimals : 6, 9);
+      setFromAmt(tokens > 0 ? tokens.toFixed(dec) : '0');
       return;
     }
     if (/^(USDC|USDT|DAI|USDE|TUSD|FRAX|USDP|GUSD)$/i.test(fromToken.symbol || '')) {
@@ -1822,11 +1783,11 @@ export default function SwapWidget({
     }
   }, [fromToken, fromPriceUsd]);
 
-  /* -- Quick-sell preset: "Sell X% of balance" -- */
   const applySellPreset = useCallback((pct) => {
     if (fromBalanceDisplay == null || fromBalanceDisplay <= 0) return;
     userTouchedAmtRef.current = true;
     const isNative = isSol(fromToken) ? fromToken.mint === WSOL_MINT : isNativeEvmFrom;
+    const dec = Math.min(typeof fromToken.decimals === 'number' ? fromToken.decimals : 6, 9);
     let amount = fromBalanceDisplay * (pct / 100);
     if (pct === 100) {
       if (isSol(fromToken) && fromToken.mint === WSOL_MINT) {
@@ -1835,27 +1796,18 @@ export default function SwapWidget({
         amount = maxSafeAmount({ balance: fromBalanceDisplay, isNative: true });
       }
     }
-    setFromAmt(amount > 0 ? amount.toFixed(6) : '0');
+    setFromAmt(amount > 0 ? amount.toFixed(dec) : '0');
   }, [fromBalanceDisplay, fromToken, isNativeEvmFrom, solBalanceLamports]);
 
   const flipTokens = useCallback(() => {
     setFromToken(toToken);
     setToToken(fromToken);
     setFromAmt(''); setQuote(null); setQuoteError(''); setQuoteIsStale(false);
-    setCustomDestAddr('');
     userTouchedAmtRef.current = false;
   }, [fromToken, toToken]);
 
-  const needsDestAddr = useMemo(() => {
-    if (route !== 'lifi' || isLifiSameChain(fromToken, toToken)) return false;
-    if (isBtc(toToken)) return true;
-    if (isSol(toToken) && !publicKey) return true;
-    if (isEvm(toToken) && !effectiveEvmAddress) return true;
-    return false;
-  }, [route, fromToken, toToken, publicKey, effectiveEvmAddress]);
-
   /* ============================================================================
-   * EXECUTE SWAP
+   * EXECUTE SWAP -- Jupiter or 0x AllowanceHolder only
    * ========================================================================= */
   const executeSwap = useCallback(async () => {
     if (!walletConnected) {
@@ -1865,111 +1817,40 @@ export default function SwapWidget({
       return;
     }
 
+    if (!isSupported) {
+      setSwapError(unsupportedMsg || 'This pair is not supported.');
+      setSwapStatus('error');
+      return;
+    }
+
     if (swapStatusTimerRef.current) {
       clearTimeout(swapStatusTimerRef.current);
       swapStatusTimerRef.current = null;
     }
     setSwapStatus('loading'); setSwapError(''); setSwapTx(null);
 
-    const engineUsed = route;
-
     try {
       const fromAmtRaw = toRawAmount(fromAmt, fromToken.decimals);
+      if (!fromAmtRaw || fromAmtRaw === '0') {
+        throw new Error('Invalid amount');
+      }
 
-      const runLifiSwap = async () => {
-        if (isBtc(fromToken)) {
-          throw new Error('Sending FROM Bitcoin is not yet supported. Pick another source token.');
-        }
-        const srcAddr = isSol(fromToken)
-          ? (publicKey ? publicKey.toString() : null)
-          : (effectiveEvmAddress || null);
-        const dstAddr = isBtc(toToken)
-          ? customDestAddr.trim()
-          : isSol(toToken)
-            ? (publicKey ? publicKey.toString() : customDestAddr.trim())
-            : (effectiveEvmAddress || customDestAddr.trim());
-
-        if (!srcAddr) throw new Error('Connect your ' + (isSol(fromToken) ? 'Solana' : 'EVM') + ' wallet');
-        if (!dstAddr) throw new Error('Enter destination wallet address');
-        if (isSol(toToken) && !isValidSolMint(dstAddr)) throw new Error('Invalid Solana destination address');
-        if (isEvm(toToken) && !isValidEvmAddr(dstAddr)) throw new Error('Invalid EVM destination address');
-        if (isBtc(toToken) && !isValidBtcAddr(dstAddr)) throw new Error('Invalid Bitcoin destination address');
-
-        const freshLifi = await fetchLifiQuote({
-          fromToken, toToken, fromAmtRaw,
-          fromAddress: srcAddr, toAddress: dstAddr, slip,
-        });
-        if (!freshLifi.transactionRequest) throw new Error('LiFi: no transaction returned');
-        const txReq = freshLifi.transactionRequest;
-
-        if (isSol(fromToken)) {
-          if (!publicKey) throw new Error('Connect Solana wallet');
-          const lifiSolTx = VersionedTransaction.deserialize(Buffer.from(txReq.data, 'base64'));
-          const lifiBh = lifiSolTx.message.recentBlockhash;
-          const lvbh = (await connection.getLatestBlockhash('confirmed')).lastValidBlockHeight;
-          const sig = await sendTransaction(lifiSolTx, connection, { skipPreflight: true, maxRetries: 3 });
-          setSwapTx(sig);
-          connection.confirmTransaction(
-            { signature: sig, blockhash: lifiBh, lastValidBlockHeight: lvbh },
-            'confirmed'
-          ).catch(() => {});
-        } else {
-          if (!effectiveEvmAddress || !walletClientRef.current) throw new Error('Connect EVM wallet');
-          if (evmChainId && evmChainId !== fromToken.chainId) {
-            await ensureChain(fromToken.chainId);
-          }
-          const wc = walletClientRef.current;
-          const pc = publicClientRef.current;
-          if (!wc) throw new Error('Wallet not ready - try again');
-
-          const isNativeFrom = (fromToken.address || '').toLowerCase() === NATIVE_EVM;
-          if (!isNativeFrom) {
-            const spender = txReq.to;
-            const sellBig = BigInt(fromAmtRaw);
-            let needsApprove = true;
-            if (pc) {
-              try {
-                const allowance = await pc.readContract({
-                  address: fromToken.address,
-                  abi: [{
-                    name: 'allowance', type: 'function', stateMutability: 'view',
-                    inputs: [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }],
-                    outputs: [{ name: '', type: 'uint256' }],
-                  }],
-                  functionName: 'allowance',
-                  args: [effectiveEvmAddress, spender],
-                });
-                needsApprove = BigInt(allowance) < sellBig;
-              } catch {}
-            }
-            if (needsApprove) {
-              const approveData = '0x095ea7b3' +
-                spender.slice(2).padStart(64, '0') +
-                'f'.repeat(64);
-              const approveHash = await wc.sendTransaction({
-                to: fromToken.address, data: approveData, value: BigInt(0),
-              });
-              if (pc) {
-                try { await pc.waitForTransactionReceipt({ hash: approveHash, timeout: 60_000 }); } catch {}
-              }
-            }
-          }
-
-          const hash = await wc.sendTransaction({
-            to:    txReq.to,
-            data:  txReq.data,
-            value: txReq.value ? BigInt(txReq.value) : BigInt(0),
-            gas:   txReq.gasLimit ? BigInt(txReq.gasLimit) : undefined,
-          });
-          setSwapTx(hash);
-        }
-      };
-
-      if (engineUsed === 'jupiter') {
+      if (route === 'jupiter') {
         if (!publicKey) throw new Error('Connect a Solana wallet');
-        const outputMintPk = new PublicKey(toToken.mint);
-        const feeWalletPk  = new PublicKey(SOL_FEE_WALLET);
-        const feeAta = await getAssociatedTokenAddress(outputMintPk, feeWalletPk);
+
+        /* Check our fee ATA exists on-chain. If missing (fresh output mint
+         * we've never received fees in), skip the feeAccount param. The
+         * swap still succeeds; we just forfeit fees on this one trade.
+         * Better than blocking the user. Pre-create ATAs for SOL/USDC/USDT
+         * to cover the common cases. */
+        let feeAtaParam = null;
+        try {
+          const outputMintPk = new PublicKey(toToken.mint);
+          const feeWalletPk  = new PublicKey(SOL_FEE_WALLET);
+          const candidate = await getAssociatedTokenAddress(outputMintPk, feeWalletPk);
+          const info = await connection.getAccountInfo(candidate);
+          if (info) feeAtaParam = candidate.toBase58();
+        } catch {}
 
         const freshQuote = await fetchJupiterQuote({
           inputMint:  fromToken.mint,
@@ -1978,11 +1859,28 @@ export default function SwapWidget({
           slipBps:    Math.round(slip * 100),
         });
 
-        const swapData = await fetchJupiterSwapTx({
-          quoteResponse: freshQuote,
-          userPublicKey: publicKey.toString(),
-          feeAccount:    feeAta.toBase58(),
-        });
+        /* Try with positive-slippage capture first; fall back without if
+         * the API rejects the params (server-side naming variations). */
+        let swapData;
+        try {
+          swapData = await fetchJupiterSwapTx({
+            quoteResponse: freshQuote,
+            userPublicKey: publicKey.toString(),
+            feeAccount:    feeAtaParam,
+          });
+        } catch (e) {
+          const msg = (e && e.message) || '';
+          if (/positiveSlippage|unknown field|invalid/i.test(msg)) {
+            console.warn('[SwapWidget] Jupiter rejected positive-slippage params, retrying without');
+            swapData = await fetchJupiterSwapTxNoPositiveSlippage({
+              quoteResponse: freshQuote,
+              userPublicKey: publicKey.toString(),
+              feeAccount:    feeAtaParam,
+            });
+          } else {
+            throw e;
+          }
+        }
 
         const jupTx = VersionedTransaction.deserialize(Buffer.from(swapData.swapTransaction, 'base64'));
         const sig = await sendTransaction(jupTx, connection, { skipPreflight: true, maxRetries: 3 });
@@ -1996,60 +1894,76 @@ export default function SwapWidget({
         ).catch(() => {});
       }
 
-      else if (engineUsed === '0x') {
+      else if (route === '0x') {
         if (!effectiveEvmAddress || !walletClientRef.current) throw new Error('Connect an EVM wallet');
         if (evmChainId && evmChainId !== fromToken.chainId) {
           await ensureChain(fromToken.chainId);
         }
         const wc = walletClientRef.current;
+        const pc = publicClientRef.current;
         if (!wc) throw new Error('Wallet not ready - try again');
 
-        try {
-          const freshOx = await fetchOxQuote({
-            chainId:     fromToken.chainId,
-            sellToken:   fromToken.address,
-            buyToken:    toToken.address,
-            sellAmount:  fromAmtRaw,
-            taker:       effectiveEvmAddress,
-            slipBps:     Math.round(slip * 100),
-            feeRecipient: EVM_FEE_WALLET,
-            feeToken:     toToken.address,
-          });
-          const permit2 = freshOx.permit2;
-          const tx = freshOx.transaction;
-          if (!tx || !tx.to || !tx.data) throw new Error('0x: incomplete transaction');
+        const freshOx = await fetchOxQuote({
+          chainId:     fromToken.chainId,
+          sellToken:   fromToken.address,
+          buyToken:    toToken.address,
+          sellAmount:  fromAmtRaw,
+          taker:       effectiveEvmAddress,
+          slipBps:     Math.round(slip * 100),
+          feeRecipient: EVM_FEE_WALLET,
+          feeToken:     toToken.address,
+        });
 
-          let finalTxData = tx.data;
-          if (permit2 && permit2.eip712) {
-            const signature = await wc.signTypedData({
-              domain:      permit2.eip712.domain,
-              types:       permit2.eip712.types,
-              primaryType: permit2.eip712.primaryType,
-              message:     permit2.eip712.message,
-            });
-            const sigHex = signature.startsWith('0x') ? signature.slice(2) : signature;
-            const sigLen = (sigHex.length / 2).toString(16).padStart(64, '0');
-            finalTxData = tx.data + sigLen + sigHex;
+        const tx = freshOx.transaction;
+        if (!tx || !tx.to || !tx.data) throw new Error('0x: incomplete transaction');
+
+        /* AllowanceHolder approval check. issues.allowance.spender is the
+         * AllowanceHolder contract address; only required for non-native
+         * sell tokens (native ETH/POL/etc. doesn't need approval). */
+        if (!isNativeEvmFrom) {
+          const allowanceInfo = freshOx.issues && freshOx.issues.allowance;
+          const spender = allowanceInfo && allowanceInfo.spender;
+          const need = safeBigInt(fromAmtRaw);
+          let have = safeBigInt(0);
+          if (spender && pc) {
+            try {
+              const onchain = await pc.readContract({
+                address: fromToken.address,
+                abi: [{
+                  name: 'allowance', type: 'function', stateMutability: 'view',
+                  inputs: [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }],
+                  outputs: [{ name: '', type: 'uint256' }],
+                }],
+                functionName: 'allowance',
+                args: [effectiveEvmAddress, spender],
+              });
+              have = safeBigInt(onchain);
+            } catch {}
           }
-
-          const hash = await wc.sendTransaction({
-            to:    tx.to,
-            data:  finalTxData,
-            value: tx.value ? BigInt(tx.value) : BigInt(0),
-            gas:   tx.gas ? BigInt(tx.gas) : undefined,
-          });
-          setSwapTx(hash);
-        } catch (oxErr) {
-          if (oxErr && oxErr.name === 'AbortError') throw oxErr;
-          /* 0x failed (typically "no route" on long-tail same-chain pairs).
-           * LiFi has broader DEX coverage so retry there. */
-          console.warn('[SwapWidget] 0x failed (' + (oxErr.message || 'unknown') + '), retrying via LiFi');
-          await runLifiSwap();
+          if (spender && have < need) {
+            const approveData = '0x095ea7b3' +
+              spender.slice(2).toLowerCase().padStart(64, '0') +
+              'f'.repeat(64);
+            const approveHash = await wc.sendTransaction({
+              to: fromToken.address, data: approveData, value: safeBigInt(0),
+            });
+            if (pc) {
+              try { await pc.waitForTransactionReceipt({ hash: approveHash, timeout: 60_000 }); } catch {}
+            }
+          }
         }
+
+        const hash = await wc.sendTransaction({
+          to:    tx.to,
+          data:  tx.data,
+          value: safeBigInt(tx.value),
+          gas:   tx.gas ? safeBigInt(tx.gas) : undefined,
+        });
+        setSwapTx(hash);
       }
 
       else {
-        await runLifiSwap();
+        throw new Error(unsupportedMsg || 'This pair is not supported.');
       }
 
       saveLastPair(fromToken, toToken);
@@ -2071,12 +1985,11 @@ export default function SwapWidget({
       }, 5000);
     }
   }, [
-    walletConnected, onConnectWallet, route, fromAmt, fromToken, toToken,
-    slip, publicKey, connection, sendTransaction, effectiveEvmAddress, evmChainId,
-    ensureChain, customDestAddr, loginPrivy,
+    walletConnected, onConnectWallet, route, isSupported, unsupportedMsg,
+    fromAmt, fromToken, toToken, slip, publicKey, connection, sendTransaction,
+    effectiveEvmAddress, evmChainId, ensureChain, isNativeEvmFrom, loginPrivy,
   ]);
 
-  /* Auto-resume pending swap after Privy login completes. */
   useEffect(() => {
     if (!walletConnected || !pendingSwap) return undefined;
     const t = setTimeout(() => {
@@ -2087,28 +2000,17 @@ export default function SwapWidget({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletConnected, pendingSwap]);
 
-  /* -- Tx explorer link -- */
   const txLink = useMemo(() => {
     if (!swapTx) return null;
-    const engineUsed = route;
-    if (engineUsed === 'jupiter') return 'https://solscan.io/tx/' + swapTx;
-    if (engineUsed === 'lifi')    return isSol(fromToken)
-      ? 'https://solscan.io/tx/' + swapTx
-      : 'https://scan.li.fi/tx/' + swapTx;
+    if (route === 'jupiter') return 'https://solscan.io/tx/' + swapTx;
     const exp = {
-      1: 'etherscan.io', 10: 'optimistic.etherscan.io', 25: 'cronoscan.com',
-      56: 'bscscan.com', 100: 'gnosisscan.io', 130: 'uniscan.xyz',
-      137: 'polygonscan.com', 146: 'sonicscan.org', 250: 'ftmscan.com',
-      324: 'explorer.zksync.io', 480: 'worldscan.org', 1101: 'zkevm.polygonscan.com',
-      1135: 'blockscout.lisk.com', 1284: 'moonscan.io', 1329: 'seitrace.com',
-      2741: 'abscan.org', 5000: 'mantlescan.xyz', 8453: 'basescan.org',
-      34443: 'modescan.io', 42161: 'arbiscan.io', 42220: 'celoscan.io',
-      43111: 'explorer.hemi.xyz', 43114: 'snowtrace.io', 48900: 'explorer.zircuit.com',
-      57073: 'explorer.inkonchain.com', 59144: 'lineascan.build',
-      60808: 'explorer.gobob.xyz', 80094: 'beratrail.io', 81457: 'blastscan.io',
-      167000: 'taikoscan.io', 200901: 'btrscan.com', 534352: 'scrollscan.com',
-      1116: 'scan.coredao.org', 122: 'explorer.fuse.io', 288: 'bobascan.com',
-      747: 'flowdiver.io', 2222: 'kavascan.com', 33139: 'apescan.io', 8217: 'kaiascan.io',
+      1: 'etherscan.io', 10: 'optimistic.etherscan.io', 56: 'bscscan.com',
+      130: 'uniscan.xyz', 137: 'polygonscan.com', 146: 'sonicscan.org',
+      324: 'explorer.zksync.io', 2741: 'abscan.org', 5000: 'mantlescan.xyz',
+      8453: 'basescan.org', 34443: 'modescan.io', 42161: 'arbiscan.io',
+      43114: 'snowtrace.io', 57073: 'explorer.inkonchain.com',
+      59144: 'lineascan.build', 80094: 'beratrail.io', 81457: 'blastscan.io',
+      534352: 'scrollscan.com', 1101: 'zkevm.polygonscan.com',
     }[fromToken.chainId];
     if (!exp) return null;
     return 'https://' + exp + '/tx/' + swapTx;
@@ -2120,15 +2022,15 @@ export default function SwapWidget({
 
   const showBuyPresets  = modeProp === 'buy' || (
     modeProp === 'swap' && fromToken &&
-    /^(SOL|ETH|BNB|POL|AVAX|MNT|FTM|CRO|GLMR|CELO|SEI|RON|FUSE|KCS|HYPE|YALA|BERA|APE|FLOW|KAVA|S|CORE|MON|BTC|XPL|FLR|METIS|KAIA|USDC|USDT|DAI|USDE|TUSD|FRAX|USDP|GUSD)$/i.test(fromToken.symbol)
+    /^(SOL|ETH|BNB|POL|AVAX|MNT|FTM|CRO|GLMR|CELO|SEI|RON|FUSE|KCS|HYPE|YALA|BERA|APE|FLOW|KAVA|S|CORE|MON|XPL|FLR|METIS|KAIA|USDC|USDT|DAI|USDE|TUSD|FRAX|USDP|GUSD)$/i.test(fromToken.symbol)
   );
   const showSellPresets = modeProp === 'sell';
 
   const fromUsdValue = fromAmt && fromPriceUsd > 0 ? parseFloat(fromAmt) * fromPriceUsd : 0;
   const toUsdValue   = quote && toPriceUsd > 0 ? parseFloat(quote.outAmountDisplay) * toPriceUsd : 0;
 
-  const needsSol = (route === 'jupiter') || (route === 'lifi' && isSol(fromToken));
-  const needsEvm = (route === '0x') || (route === 'lifi' && isEvm(fromToken));
+  const needsSol = route === 'jupiter';
+  const needsEvm = route === '0x';
   const hasNeededWallet = (needsSol && hasSolSigner) || (needsEvm && hasEvmSigner);
 
   const isPreview = !!(quote && quote.preview);
@@ -2144,7 +2046,7 @@ export default function SwapWidget({
       {!compact && (
         <div style={{ marginBottom: 16 }}>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Swap</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Best price across every chain. No KYC.</p>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Solana & major EVM chains. No KYC.</p>
         </div>
       )}
 
@@ -2304,10 +2206,6 @@ export default function SwapWidget({
           </div>
         )}
 
-        {/* Fallback hint when we have an amount but couldn't compute a
-         * preview (one of the prices didn't resolve). The click still
-         * works because executeSwap fetches a fresh aggregator quote --
-         * tell the user that explicitly so 0.00 doesn't look broken. */}
         {!quote && !quoteError && fromAmt && parseFloat(fromAmt) > 0 &&
          (!(fromPriceUsd > 0) || !(toPriceUsd > 0)) && (
           <div style={{
@@ -2316,6 +2214,14 @@ export default function SwapWidget({
           }}>
             Live route on confirm
           </div>
+        )}
+
+        {!isSupported && (
+          <div style={{
+            marginTop: 10, padding: 10,
+            background: 'rgba(255,149,0,.08)', border: '1px solid rgba(255,149,0,.25)',
+            borderRadius: 8, fontSize: 12, color: '#ff9500',
+          }}>{unsupportedMsg}</div>
         )}
 
         {quoteError && !quoteLoading && !quote && (
@@ -2331,7 +2237,6 @@ export default function SwapWidget({
             {[
               ['Platform fee', fromUsdValue > 0 ? fmtUsd(fromUsdValue * PLATFORM_FEE) : (PLATFORM_FEE * 100).toFixed(0) + '%'],
               ['Anti-MEV / safety', fromUsdValue > 0 ? fmtUsd(fromUsdValue * SAFETY_FEE) : (SAFETY_FEE * 100).toFixed(0) + '%'],
-              isCrossChain ? ['Cross-chain fee', fromUsdValue > 0 ? fmtUsd(fromUsdValue * CROSS_FEE) : (CROSS_FEE * 100).toFixed(0) + '%'] : null,
               quote.outAmountDisplay
                 ? ['Min received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken && toToken.symbol)]
                 : null,
@@ -2341,23 +2246,6 @@ export default function SwapWidget({
                 <span style={{ color: C.text }}>{item[1]}</span>
               </div>
             ))}
-          </div>
-        )}
-
-        {needsDestAddr && (
-          <div style={{ marginTop: 10 }}>
-            <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 6 }}>DESTINATION WALLET</div>
-            <input value={customDestAddr} onChange={(e) => setCustomDestAddr(e.target.value)}
-              placeholder={isBtc(toToken) ? 'Your Bitcoin address (bc1..., 3..., or 1...)'
-                : isSol(toToken) ? 'Your Solana wallet address...'
-                : 'Your ' + (CHAIN_NAMES[toToken && toToken.chainId] || 'EVM') + ' address (0x...)'}
-              style={{
-                width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)',
-                borderRadius: 10, padding: '12px 14px', color: C.accent,
-                fontFamily: 'monospace', fontSize: 11, outline: 'none',
-                boxSizing: 'border-box', minHeight: 44,
-              }} />
-            <div style={{ fontSize: 10, color: C.muted, marginTop: 4 }}>Where you want to receive your tokens</div>
           </div>
         )}
 
@@ -2384,6 +2272,16 @@ export default function SwapWidget({
               }}>Sign in to Swap</button>
             );
           }
+          if (!isSupported) {
+            return (
+              <button disabled style={{
+                width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
+                background: C.card2, color: C.muted2,
+                fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
+                cursor: 'not-allowed', minHeight: 52,
+              }}>Pair not supported</button>
+            );
+          }
           if (!hasNeededWallet) {
             return (
               <button onClick={() => {
@@ -2407,9 +2305,7 @@ export default function SwapWidget({
                 }}>
                   <span style={{ fontWeight: 700 }}>First send of {fromToken && fromToken.symbol}: 2 wallet popups.</span>{' '}
                   <span style={{ color: '#cdd6f4' }}>
-                    {route === '0x'
-                      ? 'A Permit2 signature (off-chain, no gas) plus the swap. Future swaps of ' + (fromToken && fromToken.symbol) + ' = 1 popup.'
-                      : 'A token approval plus the bridge tx. Future swaps of ' + (fromToken && fromToken.symbol) + ' = 1 popup.'}
+                    A one-time token approval plus the swap. Future swaps of {fromToken && fromToken.symbol} = 1 popup.
                   </span>
                 </div>
               )}
@@ -2470,10 +2366,8 @@ export default function SwapWidget({
         onSelect={(t) => {
           setFromToken(t);
           setQuote(null); setQuoteError(''); setQuoteIsStale(false);
-          setCustomDestAddr('');
         }}
         jupiterTokens={jupiterTokens}
-        excludeBtc={true}
       />
       <TokenSelectModal
         open={toSelectOpen}
@@ -2481,10 +2375,8 @@ export default function SwapWidget({
         onSelect={(t) => {
           setToToken(t);
           setQuote(null); setQuoteError(''); setQuoteIsStale(false);
-          setCustomDestAddr('');
         }}
         jupiterTokens={jupiterTokens}
-        excludeBtc={false}
       />
       <PresetEditor
         open={presetEditorOpen}
@@ -2498,20 +2390,12 @@ export default function SwapWidget({
 
 /* ============================================================================
  * TRADE DRAWER
- *
- * Integration boundary between Markets/TokenDetail/NewLaunches/Portfolio
- * and SwapWidget. Upstream callers now feed normalized tokens directly
- * (Markets uses Jupiter+LiFi, TokenDetail+Portfolio map at the source,
- * NewLaunches passes pump.fun mints), so the drawer only needs to run
- * normalizeToken on the incoming coin -- no CG /coins/{id} enrichment,
- * no platforms-map walking, no deferred resolution.
  * ========================================================================= */
 
 export function TradeDrawer({
   open, onClose, mode = 'buy', coin,
   jupiterTokens, onConnectWallet,
   presets, onPresetsChange,
-  /* legacy / silently ignored: */
   // eslint-disable-next-line no-unused-vars
   headerChain: _hcIgnored,
   // eslint-disable-next-line no-unused-vars
@@ -2613,4 +2497,3 @@ export function TradeDrawer({
     </>
   );
 }
-
