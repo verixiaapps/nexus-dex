@@ -1,6 +1,6 @@
 /**
  * NEXUS DEX -- Shared Solana Swap Helper
- * 
+ *
  * Single execution path used by:
  *   - InstantTrade.jsx (one-click Privy buy/sell on token pages)
  *   - (Tomorrow) SwapWidget.jsx executeSwap (refactor)
@@ -52,6 +52,10 @@ export const JUPITER_PLATFORM_FEE_BPS = 500;       // 5% (locked)
 export const SOL_MINT                 = 'So11111111111111111111111111111111111111112';
 export const DEFAULT_SLIPPAGE_BPS     = 1500;      // 15% (memecoin default)
 export const BLUE_CHIP_SLIPPAGE_BPS   = 100;       // 1% (USDC, ETH, BTC, SOL)
+
+// u64::MAX -- Jupiter / Solana programs reject amounts larger than this
+// with "out of range integral type conversion attempted".
+const U64_MAX = 18446744073709551615n;
 
 const BLUE_CHIPS = new Set([
   SOL_MINT,
@@ -178,6 +182,20 @@ export async function executeSolanaSwap({
   if (!publicKey) throw new Error('Wallet not connected');
   if (!connection) throw new Error('No Solana connection');
   if (!wallet || !wallet.kind) throw new Error('Wallet info missing');
+
+  // Defensive: catch a u64-overflowing amountRaw before it hits Jupiter,
+  // so the user sees a clear "wrong decimals" error instead of the
+  // cryptic "out of range integral type conversion attempted" from WASM.
+  try {
+    const big = BigInt(String(amountRaw));
+    if (big <= 0n) throw new Error('Amount must be positive');
+    if (big > U64_MAX) {
+      throw new Error('Amount exceeds u64 (' + big.toString() + '). Check token decimals on the input mint.');
+    }
+  } catch (e) {
+    if (e && e.message) throw e;
+    throw new Error('Invalid amountRaw');
+  }
 
   const slip = Number.isFinite(slippageBps) ? slippageBps : pickSlippageBps(toMint);
 
@@ -308,24 +326,35 @@ export async function quickBuySol({
  * Convert a human token amount to raw base-unit string, WITHOUT going
  * through float precision (which silently corrupts at >2^53 base units,
  * e.g., billion-supply memecoin at 9 decimals = 10^18 base units).
+ *
+ * Throws on u64 overflow rather than silently sending a doomed tx --
+ * Jupiter / on-chain programs would reject it with "out of range integral
+ * type conversion attempted", which is opaque to the user. This guard
+ * usually surfaces a wrong-decimals bug upstream (e.g., 18 leaked through
+ * from EVM-side metadata for a 5/6/9-decimal Solana token).
  */
 function humanToRawAmount(humanAmount, decimals) {
   if (!Number.isFinite(humanAmount) || humanAmount <= 0) return '0';
   const dec = Number.isFinite(decimals) && decimals >= 0 ? Math.floor(decimals) : 9;
-  // Use a high-precision string representation. toFixed handles the
-  // common case; for very small numbers we expand exponent notation.
   let s = humanAmount.toFixed(dec);
-  // Strip trailing zeros only if no fractional part remains
   if (s.indexOf('.') >= 0) s = s.replace(/0+$/, '').replace(/\.$/, '');
   const [intPart, fracPart = ''] = s.split('.');
   const fracPadded = fracPart.padEnd(dec, '0').slice(0, dec);
   const combined = (intPart + fracPadded).replace(/^0+(?=\d)/, '');
   if (!combined || combined === '') return '0';
+  let big;
   try {
-    return BigInt(combined).toString();
+    big = BigInt(combined);
   } catch (e) {
     return '0';
   }
+  if (big > U64_MAX) {
+    throw new Error(
+      'Amount exceeds u64 (' + big.toString() + '). ' +
+      'Decimals=' + dec + ' is likely wrong for this mint.'
+    );
+  }
+  return big.toString();
 }
 
 /**
