@@ -4,7 +4,7 @@ import InstantTrade from './InstantTrade.jsx';
 import { useNexusWallet } from '../WalletContext.js';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
- 
+
 /**
  * NEXUS DEX -- TokenDetail
  *
@@ -20,9 +20,17 @@ import { PublicKey } from '@solana/web3.js';
  *   - DexScreener (pools)
  *   - Jupiter price v2 (deprecated -> v3)
  *
- * Note: historical chart + pools sections removed -- none of Jupiter / 0x
- * / LiFi provide OHLCV history or pool listings. Everything else (stats,
- * 24h changes, contract, instant trade, drawer) preserved.
+ * Drawer prefill contract (locked):
+ *   - InstantTrade calls onOpenDrawer(mode, opts) where opts is one of
+ *       { presetUsd: <usd> }   from a buy preset tap
+ *       { presetPct: <pct> }   from a sell preset tap
+ *   - We keep that opts in state and forward it to <TradeDrawer> as
+ *     `presetUsd` / `presetPct` props. SwapWidget consumes those to
+ *     pre-fill the input amount.
+ *   - The big Buy/Sell buttons below pass NO preset -- drawer opens
+ *     with this token already on the correct side but a blank amount.
+ *   - Closing the drawer clears the preset so a stale value doesn't
+ *     leak into the next open.
  */
 
 const C = {
@@ -72,6 +80,11 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState('buy');
+  // Drawer prefill -- threaded from InstantTrade preset taps. One of:
+  //   null                        no prefill (opened from big Buy/Sell)
+  //   { presetUsd: <number> }     buy preset tap
+  //   { presetPct: <number> }     sell preset tap
+  const [drawerPrefill, setDrawerPrefill] = useState(null);
 
   /* SOL/USD via Jupiter v3 proxy. v3 response: { "<mint>": { "usdPrice": ... } } */
   useEffect(function () {
@@ -183,6 +196,19 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
     ['MARKET CAP RANK',    liveCoin.market_cap_rank ? '#' + liveCoin.market_cap_rank : '-'],
   ];
 
+  function openDrawerWithPrefill(mode, opts) {
+    setDrawerMode(mode);
+    setDrawerPrefill(opts || null);
+    setDrawerOpen(true);
+  }
+
+  function closeDrawer() {
+    setDrawerOpen(false);
+    // Clear prefill so the next open (e.g., from the big Buy button)
+    // doesn't carry a stale preset amount.
+    setDrawerPrefill(null);
+  }
+
   return (
     <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
       <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600, padding: 0 }}>Back to Markets</button>
@@ -215,7 +241,8 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
       </div>
 
       {/* Instant Trade -- GMGN-style preset bar. One-click for Privy
-          embedded wallets (no popup); external wallets open the drawer. */}
+          embedded wallets (no popup); external wallets open the drawer
+          via openDrawerWithPrefill so the tapped amount carries over. */}
       <div style={{ marginBottom: 12 }}>
         <InstantTrade
           token={enrichedCoin}
@@ -223,21 +250,20 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
           tokenBalance={userTokenBalance}
           tokenDecimals={userTokenDecimals}
           onConnectWallet={onConnectWallet}
-          onOpenDrawer={function (mode, opts) {
-            setDrawerMode(mode);
-            setDrawerOpen(true);
-          }}
+          onOpenDrawer={openDrawerWithPrefill}
           onTradeComplete={function () {
             setTradeRefreshTick(function (t) { return t + 1; });
           }}
         />
       </div>
 
-      {/* Buy / Sell -- always enabled (no CG metadata gating since coin
-          is already resolved upstream by App.js / Markets / Portfolio). */}
+      {/* Buy / Sell -- always enabled. No prefill amount; the drawer
+          should open with THIS token already on the correct side
+          (consumed inside SwapWidget via the `coin` prop) and the
+          amount field blank. */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
         <button
-          onClick={function() { setDrawerMode('buy'); setDrawerOpen(true); }}
+          onClick={function() { openDrawerWithPrefill('buy', null); }}
           style={{
             padding: '18px 10px', borderRadius: 14, border: 'none', cursor: 'pointer',
             background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg,
@@ -247,7 +273,7 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
           Buy {symbolUp}
         </button>
         <button
-          onClick={function() { setDrawerMode('sell'); setDrawerOpen(true); }}
+          onClick={function() { openDrawerWithPrefill('sell', null); }}
           style={{
             padding: '18px 10px', borderRadius: 14, cursor: 'pointer',
             background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.3)', color: C.red,
@@ -299,10 +325,12 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         </div>
       )}
 
-      {/* Trade drawer */}
+      {/* Trade drawer -- receives `coin` so the input/output is locked
+          to this exact token, plus optional `presetUsd` / `presetPct`
+          for amount prefill from InstantTrade preset taps. */}
       <TradeDrawer
         open={drawerOpen}
-        onClose={function() { setDrawerOpen(false); }}
+        onClose={closeDrawer}
         mode={drawerMode}
         coin={enrichedCoin}
         jupiterTokens={jupiterTokens}
@@ -311,6 +339,8 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         onHeaderChainChange={setHeaderChain}
         presets={presets}
         onPresetsChange={setPresets}
+        presetUsd={drawerPrefill && drawerPrefill.presetUsd != null ? drawerPrefill.presetUsd : null}
+        presetPct={drawerPrefill && drawerPrefill.presetPct != null ? drawerPrefill.presetPct : null}
       />
     </div>
   );
