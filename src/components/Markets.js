@@ -1,6 +1,3 @@
-Same Markets.jsx as before — re-delivering in 2 chunks.
-Chunk 1 of 2 (lines 1–230):
-
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 
 /**
