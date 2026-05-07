@@ -1,4 +1,4 @@
-/** 
+/**
  * NEXUS DEX -- Shared Solana Swap Helper
  *
  * Single execution path used by:
@@ -7,9 +7,16 @@
  *   - (Tomorrow) NewLaunches.js InstantTrade-on-card variant
  *
  * Behavior:
- *   - Solana <-> Solana via Jupiter v6 (via our /api/jupiter/swap proxy)
+ *   - Solana <-> Solana via Jupiter v1 swap API (via our /api/jupiter proxy)
  *   - Platform fee 5% (locked) via Jupiter's platformFeeBps mechanism
  *   - Fee account = our SOL_FEE_WALLET's ATA on the OUTPUT mint
+ *     -> derived against the OUTPUT mint's actual token program (legacy
+ *        SPL Token OR Token-2022). Fixes fee collection on Token-2022
+ *        memecoins (some pump.fun graduates and newer launches).
+ *   - instructionVersion=V2 (required by Jupiter for Token-2022 fee
+ *     collection per the docs)
+ *   - restrictIntermediateTokens=true (Jupiter best practice; routes
+ *     through illiquid intermediates fail much more often)
  *   - prioritizationFeeLamports structured (fixes the "out of range
  *     integral type conversion" error pic 1)
  *   - dynamicComputeUnitLimit = true (Jupiter computes optimal CU for us)
@@ -29,18 +36,22 @@
  */
 
 import { VersionedTransaction, PublicKey } from '@solana/web3.js';
-import { getAssociatedTokenAddress } from '@solana/spl-token';
+import {
+  getAssociatedTokenAddress,
+  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
 import { Buffer } from 'buffer';
 
 /* ============================================================================
  * LOCKED CONSTANTS -- match SwapWidget.jsx exactly.
  * ========================================================================= */
 
-export const SOL_FEE_WALLET        = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
+export const SOL_FEE_WALLET           = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 export const JUPITER_PLATFORM_FEE_BPS = 500;       // 5% (locked)
-export const SOL_MINT              = 'So11111111111111111111111111111111111111112';
-export const DEFAULT_SLIPPAGE_BPS  = 1500;         // 15% (memecoin default)
-export const BLUE_CHIP_SLIPPAGE_BPS = 100;         // 1% (USDC, ETH, BTC, SOL)
+export const SOL_MINT                 = 'So11111111111111111111111111111111111111112';
+export const DEFAULT_SLIPPAGE_BPS     = 1500;      // 15% (memecoin default)
+export const BLUE_CHIP_SLIPPAGE_BPS   = 100;       // 1% (USDC, ETH, BTC, SOL)
 
 const BLUE_CHIPS = new Set([
   SOL_MINT,
@@ -56,6 +67,30 @@ export function pickSlippageBps(toMint) {
 }
 
 /* ============================================================================
+ * Resolve the token program (legacy SPL vs Token-2022) for a mint.
+ *
+ * The ATA derivation differs between programs, so getting this wrong
+ * means the fee account address Jupiter sends fees to does not exist
+ * on-chain. For Token-2022 mints, we MUST pass TOKEN_2022_PROGRAM_ID
+ * to getAssociatedTokenAddress.
+ *
+ * Falls back to legacy SPL Token if the mint can't be fetched (most
+ * common case anyway), which preserves the previous behavior for
+ * regular tokens if RPC is briefly unavailable.
+ * ========================================================================= */
+async function resolveTokenProgram(connection, mintPk) {
+  try {
+    const info = await connection.getAccountInfo(mintPk, 'confirmed');
+    if (info && info.owner && info.owner.equals(TOKEN_2022_PROGRAM_ID)) {
+      return TOKEN_2022_PROGRAM_ID;
+    }
+  } catch (_) {
+    /* fall through to legacy default */
+  }
+  return TOKEN_PROGRAM_ID;
+}
+
+/* ============================================================================
  * JUPITER QUOTE + SWAP -- same proxy URLs as SwapWidget.
  * ========================================================================= */
 
@@ -66,7 +101,9 @@ async function fetchQuote({ inputMint, outputMint, amountRaw, slippageBps, signa
     amount: String(amountRaw),
     slippageBps: String(slippageBps),
     onlyDirectRoutes: 'false',
+    restrictIntermediateTokens: 'true',
     platformFeeBps: String(JUPITER_PLATFORM_FEE_BPS),
+    instructionVersion: 'V2',
   });
   const res = await fetch('/api/jupiter/swap/v1/quote?' + qs.toString(), { signal });
   const data = await res.json();
@@ -121,7 +158,7 @@ async function fetchSwapTx({ quoteResponse, userPublicKey, feeAccount, signal })
  *   signal          : AbortSignal (optional)
  *
  * Returns:
- *   { signature, quote, route }
+ *   { signature, quote }
  * ========================================================================= */
 
 export async function executeSolanaSwap({
@@ -146,11 +183,19 @@ export async function executeSolanaSwap({
 
   // 1. Derive fee account ATA on output mint for SOL_FEE_WALLET.
   //    Jupiter sends platformFeeBps in OUTPUT units to this address.
+  //    Detect Token-2022 vs legacy SPL Token to pass the correct program
+  //    -- Token-2022 mints have a different ATA derivation.
   //    If the ATA doesn't exist, Jupiter's swap tx creates it (user
   //    pays rent ~0.00203 SOL one-time per output mint).
   const outputMintPk = new PublicKey(toMint);
   const feeWalletPk  = new PublicKey(SOL_FEE_WALLET);
-  const feeAccount   = await getAssociatedTokenAddress(outputMintPk, feeWalletPk);
+  const tokenProgram = await resolveTokenProgram(connection, outputMintPk);
+  const feeAccount   = await getAssociatedTokenAddress(
+    outputMintPk,
+    feeWalletPk,
+    false,           // allowOwnerOffCurve
+    tokenProgram,    // <-- correct program for Token-2022 support
+  );
 
   // 2. Quote.
   status('Getting best price...');
