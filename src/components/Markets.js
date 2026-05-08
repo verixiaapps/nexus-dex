@@ -1,3 +1,4 @@
+```js
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 
 const C = {
@@ -75,7 +76,6 @@ function mapDexPair(p) {
   if (!p || !p.chainId || !p.pairAddress) return null;
 
   const bt = p.baseToken || {};
-  const qt = p.quoteToken || {};
   const isSol = p.chainId === 'solana';
   const addr = bt.address || '';
   const symbol = bt.symbol || '???';
@@ -87,15 +87,13 @@ function mapDexPair(p) {
   const change = p.priceChange?.h24 != null ? Number(p.priceChange.h24) : (p.priceChange24h != null ? Number(p.priceChange24h) : null);
   const volume = Number(p.volume?.h24 || p.volume || 0) || 0;
   const mcap = Number(p.marketCap || p.fdv || 0) || 0;
-  const liquidity = Number(p.liquidity?.usd || 0) || 0;
 
   const chainId = isSol ? undefined : (CHAIN_MAP[p.chainId] || undefined);
-  const evmChainId = chainId || (p.chainId === 'solana' ? undefined : p.chainId);
 
   return {
     id: p.chainId + '-' + addr,
     chain: isSol ? 'solana' : 'evm',
-    chainId: evmChainId,
+    chainId: chainId || (p.chainId === 'solana' ? undefined : p.chainId),
     mint: isSol ? addr : undefined,
     address: isSol ? undefined : addr,
     symbol,
@@ -106,11 +104,11 @@ function mapDexPair(p) {
     market_cap: mcap,
     total_volume: volume,
     price_change_percentage_24h: Number.isFinite(change) ? change : null,
-    liquidity,
+    liquidity: Number(p.liquidity?.usd || 0) || 0,
     isSolanaToken: isSol,
     source: 'dexscreener',
     decimals: bt.decimals || (isSol ? 6 : 18),
-    quoteSymbol: qt.symbol || '',
+    quoteSymbol: (p.quoteToken || {}).symbol || '',
   };
 }
 
@@ -129,7 +127,7 @@ function toCanonical(c) {
 function TokenImage({ token, size }) {
   const [broke, setBroke] = useState(false);
   const letter = String(token.symbol || '?').charAt(0).toUpperCase();
-  if (!token.image && !token.logoURI || broke) return <div style={{ width: size, height: size, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: Math.round(size * 0.4), fontWeight: 800, color: C.accent, flexShrink: 0 }}>{letter}</div>;
+  if ((!token.image && !token.logoURI) || broke) return <div style={{ width: size, height: size, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: Math.round(size * 0.4), fontWeight: 800, color: C.accent, flexShrink: 0 }}>{letter}</div>;
   return <img src={token.image || token.logoURI} alt="" onError={() => setBroke(true)} style={{ width: size, height: size, borderRadius: '50%', flexShrink: 0, background: 'rgba(0,229,255,.08)' }} />;
 }
 
@@ -150,8 +148,8 @@ function Row({ c, i, isMobile, onClick }) {
     transition: 'background .15s',
   };
 
-  const onEnter = e => e.currentTarget.style.background = 'rgba(0,229,255,.03)';
-  const onLeave = e => e.currentTarget.style.background = 'transparent';
+  const onEnter = e => { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; };
+  const onLeave = e => { e.currentTarget.style.background = 'transparent'; };
 
   if (isMobile) {
     return (
@@ -221,7 +219,6 @@ export default function Markets({ onSelectCoin }) {
   const [searchLoading, setSearchLoading] = useState(false);
   const debouncedQ = useDebounce(q, 350);
 
-  // Browse: top tokens from search
   useEffect(() => {
     let c = false;
     setBrowseLoading(true);
@@ -234,7 +231,6 @@ export default function Markets({ onSelectCoin }) {
     return () => { c = true; };
   }, []);
 
-  // Search
   useEffect(() => {
     const t = debouncedQ.trim();
     if (!t || t.length < 2) { setSearchResults([]); setSearchLoading(false); return; }
@@ -311,7 +307,7 @@ export default function Markets({ onSelectCoin }) {
             <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>No results for "{debouncedQ}"</div>
           )}
           {sorted.map((c, i) => <Row key={c.id} c={c} i={i} isMobile={isMobile} onClick={onRowClick} />)}
-        </>
+        </div>
       )}
     </div>
   );
