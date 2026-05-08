@@ -1,6 +1,3 @@
-Here's TokenDetail. Fetches its own data. Passes exact contract address. Fast. Clean.
-
-```js
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { TradeDrawer } from './SwapWidget.jsx';
 import InstantTrade from './InstantTrade.jsx';
