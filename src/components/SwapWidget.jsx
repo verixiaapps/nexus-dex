@@ -337,20 +337,30 @@ function toRawAmount(amountStr, decimals) {
     if (!Number.isFinite(n) || n < 0) return '0';
     s = n.toFixed(Math.max(Number(decimals) || 0, 20));
   }
-  const dec = Math.max(0, Math.floor(Number(decimals) || 0));
-  const [whole, frac = ''] = s.split('.');
-  const fracTrunc  = frac.slice(0, dec);
-  const fracPadded = (fracTrunc + '0'.repeat(dec)).slice(0, dec);
-  try {
-    const wholeBig = BigInt((whole || '0').replace(/^0+(?=\d)/, '') || '0');
-    const fracBig  = dec > 0
-      ? BigInt((fracPadded || '0').replace(/^0+(?=\d)/, '') || '0')
-      : BigInt(0);
-    const scale = BigInt(10) ** BigInt(dec);
-    return (wholeBig * scale + fracBig).toString();
-  } catch {
-    return '0';
-  }
+  const parsedDecimals = Number(decimals);
+
+if (!Number.isFinite(parsedDecimals) || parsedDecimals < 0 || parsedDecimals > 18) {
+  return '0';
+}
+
+const dec = Math.floor(parsedDecimals);
+const [whole, frac = ''] = s.split('.');
+
+const safeWhole = (whole || '0').replace(/[^\d]/g, '').replace(/^0+(?=\d)/, '') || '0';
+const safeFracRaw = (frac || '').replace(/[^\d]/g, '');
+
+const fracTrunc = safeFracRaw.slice(0, dec);
+const fracPadded = (fracTrunc + '0'.repeat(dec)).slice(0, dec) || '0';
+
+try {
+  const wholeBig = BigInt(safeWhole);
+  const fracBig = dec > 0 ? BigInt(fracPadded) : BigInt(0);
+  const scale = 10n ** BigInt(dec);
+
+  return (wholeBig * scale + fracBig).toString();
+} catch {
+  return '0';
+}
 }
 
 /* ============================================================================
