@@ -1,5 +1,3 @@
-Use this as the revised server.js.
-
 /**
  * NEXUS DEX - Backend Proxy Server
  *
