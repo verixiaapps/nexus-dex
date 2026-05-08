@@ -4,7 +4,7 @@ import InstantTrade from './InstantTrade.jsx';
 import { useNexusWallet } from '../WalletContext.js';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
-
+ 
 /**
  * NEXUS DEX -- TokenDetail
  *
