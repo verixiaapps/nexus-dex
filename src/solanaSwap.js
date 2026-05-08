@@ -5,14 +5,12 @@
  *   - InstantTrade.jsx
  *   - SwapWidget.jsx executeSwap
  *   - NewLaunches.js instant trade variants
- * 
+ *
  * Behavior:
  *   - Solana <-> Solana through OKX DEX aggregator via backend proxy.
  *   - Uses /api/okx/dex/aggregator/swap-instruction.
  *   - Backend injects feePercent + fee wallet server-side.
  *   - Frontend never handles OKX API keys or fee wallet injection.
- *   - External wallets use signTransaction -> sendRawTransaction for better
- *     Phantom/Solflare compatibility.
  */
 
 import {
@@ -50,9 +48,7 @@ function assertAmountRaw(amountRaw) {
   try {
     const big = BigInt(String(amountRaw));
     if (big <= 0n) throw new Error('Amount must be positive');
-    if (big > U64_MAX) {
-      throw new Error('Amount exceeds u64 (' + big.toString() + '). Check token decimals on the input mint.');
-    }
+    if (big > U64_MAX) throw new Error('Amount exceeds u64');
   } catch (e) {
     if (e && e.message) throw e;
     throw new Error('Invalid amountRaw');
@@ -60,55 +56,38 @@ function assertAmountRaw(amountRaw) {
 }
 
 function asPublicKey(value, label) {
-  try {
-    return value instanceof PublicKey ? value : new PublicKey(String(value));
-  } catch {
-    throw new Error(label || 'Invalid public key');
-  }
+  try { return value instanceof PublicKey ? value : new PublicKey(String(value)); }
+  catch { throw new Error(label || 'Invalid public key'); }
 }
 
 function normalizeOkxTokenAddress(mint) {
-  if (mint === SOL_MINT) return SOL_MINT;
-  return mint;
+  return mint === SOL_MINT ? '11111111111111111111111111111111' : mint;
 }
 
-function okxAmount(amountRaw) {
-  return String(amountRaw);
-}
+function okxAmount(amountRaw) { return String(amountRaw); }
 
 function slippageBpsToPercent(slippageBps) {
   const bps = Number.isFinite(slippageBps) ? slippageBps : DEFAULT_SLIPPAGE_BPS;
-  return String(Math.max(0.01, bps / 100));
+  return String((bps / 100).toFixed(4));
 }
 
 function readOkxData(data) {
   if (!data) throw new Error('Empty OKX response');
-
-  if (data.code && data.code !== '0') {
-    throw new Error(data.msg || data.message || 'OKX request failed');
-  }
-
+  if (data.code && data.code !== '0') throw new Error(data.msg || data.message || 'OKX request failed');
   if (Array.isArray(data.data) && data.data.length > 0) return data.data[0];
   if (data.data && typeof data.data === 'object') return data.data;
-
   throw new Error(data.msg || data.message || 'OKX returned no route');
 }
 
-async function fetchOkxSwapInstruction({
-  fromMint,
-  toMint,
-  amountRaw,
-  slippageBps,
-  publicKey,
-  signal,
-}) {
+async function fetchOkxSwapInstruction({ fromMint, toMint, amountRaw, slippageBps, publicKey, signal }) {
   const qs = new URLSearchParams({
     chainIndex: OKX_SOLANA_CHAIN_ID,
     fromTokenAddress: normalizeOkxTokenAddress(fromMint),
     toTokenAddress: normalizeOkxTokenAddress(toMint),
     amount: okxAmount(amountRaw),
-    slippage: slippageBpsToPercent(slippageBps),
+    slippagePercent: slippageBpsToPercent(slippageBps),
     userWalletAddress: publicKey.toString(),
+    referrer: 'nexus-dex',
   });
 
   const res = await fetch('/api/okx/dex/aggregator/swap-instruction?' + qs.toString(), {
@@ -117,75 +96,33 @@ async function fetchOkxSwapInstruction({
     signal,
   });
 
-  const data = await res.json().catch(function () {
-    return null;
-  });
-
-  if (!res.ok) {
-    throw new Error((data && (data.msg || data.message || data.error)) || 'OKX swap-instruction failed');
-  }
-
+  const data = await res.json().catch(() => null);
+  if (!res.ok) throw new Error((data && (data.msg || data.message || data.error)) || 'OKX swap-instruction failed');
   return readOkxData(data);
 }
 
 function decodeBase64Instruction(ix) {
   if (!ix || !ix.programId || !Array.isArray(ix.accounts) || !ix.data) return null;
-
   return new TransactionInstruction({
     programId: new PublicKey(ix.programId),
-    keys: ix.accounts.map(function (a) {
-      return {
-        pubkey: new PublicKey(a.pubkey || a.publicKey || a.address),
-        isSigner: !!a.isSigner,
-        isWritable: !!a.isWritable,
-      };
-    }),
+    keys: ix.accounts.map(a => ({ pubkey: new PublicKey(a.pubkey || a.publicKey || a.address), isSigner: !!a.isSigner, isWritable: !!a.isWritable })),
     data: Buffer.from(ix.data, 'base64'),
   });
 }
 
-function decodeInstructionList(list) {
-  if (!Array.isArray(list)) return [];
-  return list.map(decodeBase64Instruction).filter(Boolean);
-}
+function decodeInstructionList(list) { return Array.isArray(list) ? list.map(decodeBase64Instruction).filter(Boolean) : []; }
 
 async function fetchLookupTable(connection, address) {
-  try {
-    const res = await connection.getAddressLookupTable(new PublicKey(address));
-    return res && res.value ? res.value : null;
-  } catch {
-    return null;
-  }
+  try { const res = await connection.getAddressLookupTable(new PublicKey(address)); return res && res.value ? res.value : null; }
+  catch { return null; }
 }
 
 async function buildTxFromOkxInstructionData({ connection, owner, swapData }) {
-  if (swapData.tx && swapData.tx.data) {
-    return VersionedTransaction.deserialize(Buffer.from(swapData.tx.data, 'base64'));
-  }
+  if (swapData.tx && swapData.tx.data) return VersionedTransaction.deserialize(Buffer.from(swapData.tx.data, 'base64'));
+  if (swapData.data) { try { return VersionedTransaction.deserialize(Buffer.from(swapData.data, 'base64')); } catch {} }
 
-  if (swapData.data) {
-    try {
-      return VersionedTransaction.deserialize(Buffer.from(swapData.data, 'base64'));
-    } catch {
-      /* continue to instruction build */
-    }
-  }
-
-  const addressLookupTableAddresses =
-    swapData.addressLookupTableAddresses ||
-    swapData.addressLookupTableAccountAddresses ||
-    swapData.lookupTableAddresses ||
-    [];
-
-  const lookupTableAccountsRaw = await Promise.all(
-    addressLookupTableAddresses.map(function (addr) {
-      return fetchLookupTable(connection, addr);
-    })
-  );
-
-  const lookupTableAccounts = lookupTableAccountsRaw.filter(function (x) {
-    return x instanceof AddressLookupTableAccount;
-  });
+  const ltAddrs = swapData.addressLookupTableAddresses || swapData.addressLookupTableAccountAddresses || swapData.lookupTableAddresses || [];
+  const lookupTables = (await Promise.all(ltAddrs.map(addr => fetchLookupTable(connection, addr)))).filter(x => x instanceof AddressLookupTableAccount);
 
   const instructions = []
     .concat(decodeInstructionList(swapData.computeBudgetInstructions))
@@ -194,50 +131,30 @@ async function buildTxFromOkxInstructionData({ connection, owner, swapData }) {
     .concat(decodeInstructionList(swapData.swapInstruction ? [swapData.swapInstruction] : []))
     .concat(decodeInstructionList(swapData.cleanupInstruction ? [swapData.cleanupInstruction] : []));
 
-  if (!instructions.length) {
-    throw new Error('OKX returned no usable transaction instructions');
-  }
+  if (!instructions.length) throw new Error('OKX returned no usable transaction instructions');
 
-  const latest = await connection.getLatestBlockhash('confirmed');
-
-  const message = new TransactionMessage({
-    payerKey: owner,
-    recentBlockhash: latest.blockhash,
-    instructions,
-  }).compileToV0Message(lookupTableAccounts);
-
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  const message = new TransactionMessage({ payerKey: owner, recentBlockhash: blockhash, instructions }).compileToV0Message(lookupTables);
   return new VersionedTransaction(message);
 }
 
 async function sendSignedTransaction(connection, signedTx) {
-  const signature = await connection.sendRawTransaction(signedTx.serialize(), {
-    skipPreflight: false,
-    maxRetries: 3,
-  });
-
-  await connection.confirmTransaction(signature, 'confirmed');
-  return signature;
+  const sig = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: false, maxRetries: 3 });
+  await connection.confirmTransaction(sig, 'confirmed');
+  return sig;
 }
 
 async function sendWithPrivy({ tx, connection, wallet, status }) {
   if (!wallet.privyWallet) throw new Error('Privy wallet unavailable');
-
   status('Signing...');
-
   if (typeof wallet.privyWallet.sendTransaction === 'function') {
-    const sendOpts = wallet.instant
-      ? { uiOptions: { showWalletUIs: false } }
-      : undefined;
-
-    return await wallet.privyWallet.sendTransaction(tx, connection, sendOpts);
+    return await wallet.privyWallet.sendTransaction(tx, connection, wallet.instant ? { uiOptions: { showWalletUIs: false } } : undefined);
   }
-
   if (typeof wallet.privyWallet.signTransaction === 'function') {
     const signed = await wallet.privyWallet.signTransaction(tx);
     status('Sending...');
     return await sendSignedTransaction(connection, signed);
   }
-
   throw new Error('Privy wallet missing signing methods');
 }
 
@@ -248,185 +165,76 @@ async function sendWithExternalWallet({ tx, connection, wallet, status }) {
     status('Sending...');
     return await sendSignedTransaction(connection, signed);
   }
-
   if (typeof wallet.sendTransaction === 'function') {
     status('Confirm in wallet...');
-    return await wallet.sendTransaction(tx, connection, {
-      skipPreflight: false,
-      maxRetries: 3,
-    });
+    return await wallet.sendTransaction(tx, connection, { skipPreflight: false, maxRetries: 3 });
   }
-
   throw new Error('External wallet missing signing methods');
 }
 
-export async function executeSolanaSwap({
-  fromMint,
-  toMint,
-  amountRaw,
-  slippageBps,
-  publicKey,
-  connection,
-  wallet,
-  onStatus,
-  signal,
-}) {
-  const status = typeof onStatus === 'function' ? onStatus : function () {};
-
+export async function executeSolanaSwap({ fromMint, toMint, amountRaw, slippageBps, publicKey, connection, wallet, onStatus, signal }) {
+  const status = typeof onStatus === 'function' ? onStatus : () => {};
   if (!fromMint || !toMint) throw new Error('Missing input/output mint');
   if (!publicKey) throw new Error('Wallet not connected');
   if (!connection) throw new Error('No Solana connection');
   if (!wallet || !wallet.kind) throw new Error('Wallet info missing');
 
   assertAmountRaw(amountRaw);
-
   const owner = asPublicKey(publicKey, 'Invalid wallet public key');
   const slip = Number.isFinite(slippageBps) ? slippageBps : pickSlippageBps(toMint);
 
   status('Getting best route...');
-
-  const swapData = await fetchOkxSwapInstruction({
-    fromMint,
-    toMint,
-    amountRaw,
-    slippageBps: slip,
-    publicKey: owner,
-    signal,
-  });
+  const swapData = await fetchOkxSwapInstruction({ fromMint, toMint, amountRaw, slippageBps: slip, publicKey: owner, signal });
 
   status('Building transaction...');
-
-  const tx = await buildTxFromOkxInstructionData({
-    connection,
-    owner,
-    swapData,
-  });
+  const tx = await buildTxFromOkxInstructionData({ connection, owner, swapData });
 
   let signature;
-
   if (wallet.kind === 'privy') {
-    signature = await sendWithPrivy({
-      tx,
-      connection,
-      wallet,
-      status,
-    });
+    signature = await sendWithPrivy({ tx, connection, wallet, status });
   } else {
-    signature = await sendWithExternalWallet({
-      tx,
-      connection,
-      wallet,
-      status,
-    });
+    signature = await sendWithExternalWallet({ tx, connection, wallet, status });
   }
 
   if (!signature) throw new Error('Transaction was not sent');
 
   status('Confirming...');
   await connection.confirmTransaction(signature, 'confirmed');
-
   status('Done!');
 
-  return {
-    signature,
-    quote: swapData,
-  };
+  return { signature, quote: swapData };
 }
 
-export async function quickBuySol({
-  toMint,
-  usdAmount,
-  solPriceUsd,
-  publicKey,
-  connection,
-  wallet,
-  onStatus,
-  signal,
-}) {
+export async function quickBuySol({ toMint, usdAmount, solPriceUsd, publicKey, connection, wallet, onStatus, signal }) {
   if (!solPriceUsd || solPriceUsd <= 0) throw new Error('SOL price unavailable');
-
-  const solAmount = Number(usdAmount) / Number(solPriceUsd);
-  const lamports = Math.floor(solAmount * 1_000_000_000);
-
-  if (!Number.isFinite(lamports) || lamports <= 0) {
-    throw new Error('Amount too small');
-  }
-
-  return executeSolanaSwap({
-    fromMint: SOL_MINT,
-    toMint,
-    amountRaw: lamports,
-    publicKey,
-    connection,
-    wallet,
-    onStatus,
-    signal,
-  });
+  const lamports = Math.floor((Number(usdAmount) / Number(solPriceUsd)) * 1_000_000_000);
+  if (!Number.isFinite(lamports) || lamports <= 0) throw new Error('Amount too small');
+  return executeSolanaSwap({ fromMint: SOL_MINT, toMint, amountRaw: lamports, publicKey, connection, wallet, onStatus, signal });
 }
 
 function humanToRawAmount(humanAmount, decimals) {
   if (!Number.isFinite(humanAmount) || humanAmount <= 0) return '0';
-
   const dec = Number.isFinite(decimals) && decimals >= 0 ? Math.floor(decimals) : 9;
-
   let s = humanAmount.toFixed(dec);
   if (s.indexOf('.') >= 0) s = s.replace(/0+$/, '').replace(/\.$/, '');
-
   const parts = s.split('.');
   const intPart = parts[0] || '0';
   const fracPart = parts[1] || '';
   const fracPadded = fracPart.padEnd(dec, '0').slice(0, dec);
   const combined = (intPart + fracPadded).replace(/^0+(?=\d)/, '');
-
   if (!combined) return '0';
-
   let big;
-  try {
-    big = BigInt(combined);
-  } catch {
-    throw new Error('Invalid amount: decimals=' + dec + ' might be wrong for this mint.');
-  }
-
-  if (big > U64_MAX) {
-    throw new Error(
-      'Amount exceeds u64 (' + big.toString() + '). Decimals=' + dec + ' is likely wrong for this mint.'
-    );
-  }
-
+  try { big = BigInt(combined); }
+  catch { throw new Error('Invalid amount: decimals=' + dec + ' might be wrong for this mint.'); }
+  if (big > U64_MAX) throw new Error('Amount exceeds u64');
   return big.toString();
 }
 
-export async function quickSellSol({
-  fromMint,
-  fromBalance,
-  fromDecimals,
-  pct,
-  publicKey,
-  connection,
-  wallet,
-  onStatus,
-  signal,
-}) {
+export async function quickSellSol({ fromMint, fromBalance, fromDecimals, pct, publicKey, connection, wallet, onStatus, signal }) {
   if (!fromBalance || fromBalance <= 0) throw new Error('No balance to sell');
   if (!Number.isFinite(pct) || pct <= 0 || pct > 100) throw new Error('Invalid percentage');
-
-  const sellHuman = pct === 100
-    ? Number(fromBalance)
-    : Number(fromBalance) * (Number(pct) / 100);
-
-  const dec = Number.isFinite(fromDecimals) ? fromDecimals : 9;
-  const amountRaw = humanToRawAmount(sellHuman, dec);
-
+  const sellHuman = pct === 100 ? Number(fromBalance) : Number(fromBalance) * (Number(pct) / 100);
+  const amountRaw = humanToRawAmount(sellHuman, Number.isFinite(fromDecimals) ? fromDecimals : 9);
   if (amountRaw === '0') throw new Error('Amount too small');
-
-  return executeSolanaSwap({
-    fromMint,
-    toMint: SOL_MINT,
-    amountRaw,
-    publicKey,
-    connection,
-    wallet,
-    onStatus,
-    signal,
-  });
+  return executeSolanaSwap({ fromMint, toMint: SOL_MINT, amountRaw, publicKey, connection, wallet, onStatus, signal });
 }
