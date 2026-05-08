@@ -1279,7 +1279,7 @@ function AppInner() {
         )}
         
         {/* New Perps Tab */}
-        {tab === 'perps' && <PerpsLanding />}
+        {tab === 'perps' && <PerpsLanding onConnectWallet={openWallet} />}
       </main>
 
       <nav className="mobile-nav" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100, background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(0,229,255,.1)', display: 'flex', alignItems: 'stretch', paddingBottom: 'env(safe-area-inset-bottom)' }}>
