@@ -74,11 +74,15 @@ const TOTAL_FEE    = PLATFORM_FEE + SAFETY_FEE;             // 0.05 (same-chain)
 const JUPITER_PLATFORM_FEE_BPS = Math.round(TOTAL_FEE * 10000);
 const OX_SWAP_FEE_BPS          = Math.round(TOTAL_FEE * 10000);
 
-/* Positive-slippage capture: 100% of any surplus over the quoted amount
- * is routed to the fee wallet on both routes. On 0x this is the
- * `tradeSurplusRecipient` mechanism. On Jupiter it's the
- * `positiveSlippageFeeBps` + `positiveSlippageFeeAccount` pair. */
-const JUPITER_POSITIVE_SLIPPAGE_BPS = 10000; // 100% of surplus
+/* Spread / positive-slippage capture: on 0x this is the
+ * `tradeSurplusRecipient` mechanism (only active for whitelisted
+ * integrators on a custom plan; silently ignored otherwise). On
+ * Jupiter we don't capture spread -- the public swap-instructions
+ * API does not expose positive-slippage parameters; passing them
+ * leaks to the on-chain program and causes integer overflow on
+ * tiny outputs. Fee revenue on Jupiter comes entirely from the
+ * platformFeeBps + feeAccount pair (in quote + swap-instructions
+ * respectively). */
 
 const NATIVE_EVM  = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 const WSOL_MINT   = 'So11111111111111111111111111111111111111112';
@@ -509,286 +513,281 @@ function unsupportedReason(from, to) {
   return 'This pair is not currently supported.';
 }
 
+  if (!open) return null;
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 599, background: 'rgba(0,0,0,.85)' }} />
+      <div style={{
+        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
+        width: '100%', maxWidth: 480, zIndex: 600,
+        background: C.card, borderTop: '2px solid ' + C.borderHi,
+        borderRadius: '20px 20px 0 0',
+        boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
+        maxHeight: 'min(88vh, 100dvh)',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      }}>
+        <div style={{ flexShrink: 0, padding: '14px 20px 8px' }}>
+          <div onClick={onClose} role="button" aria-label="Close" style={{
+            width: 40, height: 4, background: C.muted2, borderRadius: 2,
+            margin: '0 auto 14px', cursor: 'pointer',
+            padding: '8px 0', boxSizing: 'content-box',
+          }} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div>
+              <div style={{ color: '#fff', fontWeight: 800, fontSize: 17 }}>Edit Presets</div>
+              <div style={{ color: C.muted, fontSize: 11, marginTop: 2 }}>
+                Used for the Quick Buy and Quick Sell rows.
+              </div>
+            </div>
+            <button onClick={onClose} aria-label="Close" style={{
+              background: 'none', border: 'none', color: C.muted, cursor: 'pointer',
+              fontSize: 24, padding: 8, minWidth: 44, minHeight: 44, lineHeight: 1,
+            }}>x</button>
+          </div>
+        </div>
+
+        <div style={{
+          flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch',
+          padding: '8px 20px 16px',
+        }}>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 10, marginTop: 6 }}>
+            QUICK BUY ($)
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 10 }}>
+            {buyVals.map((v, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ color: C.muted, fontSize: 12, width: 50, flexShrink: 0 }}>Slot {i + 1}</span>
+                <div style={{
+                  flex: 1, background: C.card2, border: '1px solid ' + C.border,
+                  borderRadius: 10, padding: '10px 14px',
+                  display: 'flex', alignItems: 'center', gap: 6, minHeight: 44,
+                }}>
+                  <span style={{ color: C.muted }}>$</span>
+                  <input value={v}
+                    inputMode="decimal"
+                    onChange={(e) => {
+                      let nv = e.target.value.replace(/[^0-9.]/g, '');
+                      const dotIdx = nv.indexOf('.');
+                      if (dotIdx >= 0) nv = nv.slice(0, dotIdx + 1) + nv.slice(dotIdx + 1).replace(/\./g, '');
+                      setBuyVals((p) => { const n = p.slice(); n[i] = nv; return n; });
+                    }}
+                    style={{
+                      flex: 1, background: 'transparent', border: 'none',
+                      color: '#fff', fontSize: 16, fontWeight: 700,
+                      outline: 'none', width: '100%',
+                    }} />
+                </div>
+                {buyVals.length > 2 && (
+                  <button onClick={() => setBuyVals((p) => p.filter((_, j) => j !== i))} aria-label="Remove slot" style={{
+                    flexShrink: 0, width: 36, height: 36, borderRadius: 8,
+                    background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.25)',
+                    color: C.red, cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: 0,
+                  }}>-</button>
+                )}
+              </div>
+            ))}
+          </div>
+          {buyVals.length < 5 && (
+            <button onClick={() => setBuyVals((p) => p.concat(['25']))} style={{
+              width: '100%', padding: '12px', marginBottom: 18, borderRadius: 10,
+              background: 'transparent', border: '1px dashed ' + C.border, color: C.muted,
+              fontFamily: 'Syne, sans-serif', fontSize: 13, cursor: 'pointer', minHeight: 44,
+            }}>+ Add buy slot</button>
+          )}
+
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 10 }}>
+            QUICK SELL (%)
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 10 }}>
+            {sellVals.map((v, i) => (
+              <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ color: C.muted, fontSize: 12, width: 50, flexShrink: 0 }}>Slot {i + 1}</span>
+                <div style={{
+                  flex: 1, background: C.card2, border: '1px solid ' + C.border,
+                  borderRadius: 10, padding: '10px 14px',
+                  display: 'flex', alignItems: 'center', gap: 6, minHeight: 44,
+                }}>
+                  <input value={v}
+                    inputMode="decimal"
+                    onChange={(e) => {
+                      let nv = e.target.value.replace(/[^0-9.]/g, '');
+                      const dotIdx = nv.indexOf('.');
+                      if (dotIdx >= 0) nv = nv.slice(0, dotIdx + 1) + nv.slice(dotIdx + 1).replace(/\./g, '');
+                      setSellVals((p) => { const n = p.slice(); n[i] = nv; return n; });
+                    }}
+                    style={{
+                      flex: 1, background: 'transparent', border: 'none',
+                      color: '#fff', fontSize: 16, fontWeight: 700,
+                      outline: 'none', width: '100%',
+                    }} />
+                  <span style={{ color: C.muted }}>%</span>
+                </div>
+                {sellVals.length > 1 && (
+                  <button onClick={() => setSellVals((p) => p.filter((_, j) => j !== i))} aria-label="Remove slot" style={{
+                    flexShrink: 0, width: 36, height: 36, borderRadius: 8,
+                    background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.25)',
+                    color: C.red, cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: 0,
+                  }}>-</button>
+                )}
+              </div>
+            ))}
+          </div>
+          {sellVals.length < 4 && (
+            <button onClick={() => setSellVals((p) => p.concat(['50']))} style={{
+              width: '100%', padding: '12px', marginBottom: 12, borderRadius: 10,
+              background: 'transparent', border: '1px dashed ' + C.border, color: C.muted,
+              fontFamily: 'Syne, sans-serif', fontSize: 13, cursor: 'pointer', minHeight: 44,
+            }}>+ Add sell slot</button>
+          )}
+        </div>
+
+        <div style={{
+          flexShrink: 0, padding: '12px 20px',
+          paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)',
+          borderTop: '1px solid ' + C.border, background: C.card,
+          display: 'flex', gap: 10,
+        }}>
+          <button onClick={onClose} style={{
+            flex: 1, padding: 14, borderRadius: 12, background: C.card2, border: '1px solid ' + C.border,
+            color: C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600,
+            cursor: 'pointer', fontSize: 14, minHeight: 48,
+          }}>Cancel</button>
+          <button onClick={handleSave} style={{
+            flex: 2, padding: 14, borderRadius: 12, background: C.buyGrad, border: 'none',
+            color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800,
+            cursor: 'pointer', fontSize: 14, minHeight: 48,
+          }}>Save</button>
+        </div>
+      </div>
+    </>
+  );
+}
+
 /* ============================================================================
- * AGGREGATOR HELPERS -- Jupiter + 0x AllowanceHolder only
+ * MAIN SWAP WIDGET
  * ========================================================================= */
 
-/* 0x v2 AllowanceHolder QUOTE. Single-signature flow: user does an ERC20
- * approve(allowanceHolderSpender, MAX) once per token, then every swap is
- * a single sendTransaction. No EIP-712 typed-data signing needed.
- *
- * tradeSurplusRecipient    captures positive slippage in the buy token
- * swapFeeBps / Recipient   takes our 5% platform fee from the buy token */
-async function fetchOxQuote({ chainId, sellToken, buyToken, sellAmount, taker, slipBps, feeRecipient, feeToken, signal }) {
-  const qs = new URLSearchParams({
-    chainId: String(chainId),
-    sellToken: (sellToken || '').toLowerCase(),
-    buyToken:  (buyToken  || '').toLowerCase(),
-    sellAmount: String(sellAmount),
-    taker,
-    slippageBps: String(slipBps),
-    swapFeeBps: String(OX_SWAP_FEE_BPS),
-    swapFeeRecipient: feeRecipient,
-    swapFeeToken: (feeToken || '').toLowerCase(),
-    tradeSurplusRecipient: feeRecipient,
-  });
-  const res = await fetch('/api/0x/swap/allowance-holder/quote?' + qs.toString(), { signal });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || data.message || '0x quote failed');
-  if (!data.liquidityAvailable) throw new Error('No liquidity for this pair on 0x');
-  if (!data.transaction || !data.transaction.to) throw new Error('No route');
-  return data;
-}
-
-/* Jupiter quote. restrictIntermediateTokens=true keeps the route to
- * battle-tested intermediates -- avoids high-slippage long-tail hops.
- * platformFeeBps is ALWAYS included; the matching feeAccount is paired in
- * the swap-instructions call below. Jupiter rejects the build if one is
- * present without the other. */
-async function fetchJupiterQuote({ inputMint, outputMint, amountRaw, slipBps, signal }) {
-  const qs = new URLSearchParams({
-    inputMint, outputMint,
-    amount: String(amountRaw),
-    slippageBps: String(slipBps),
-    onlyDirectRoutes: 'false',
-    restrictIntermediateTokens: 'true',
-    platformFeeBps: String(JUPITER_PLATFORM_FEE_BPS),
-  });
-  const res = await fetch('/api/jupiter/swap/v1/quote?' + qs.toString(), { signal });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Jupiter quote failed');
-  if (!data.outAmount) throw new Error('No route');
-  return data;
-}
-
-/* Jupiter swap-INSTRUCTIONS endpoint. Returns individual ixs instead of a
- * sealed transaction so we can prepend our own createAssociatedTokenAccount
- * instruction for the fee ATA. That way the fee ATA gets created on the fly
- * inside the same atomic transaction as the swap -- no separate setup tx,
- * no "feeAccount missing" failures, no operational ATA pre-creation. User
- * pays ~0.002 SOL rent on the first trade to a brand-new output mint, then
- * nothing forever. */
-async function fetchJupiterSwapInstructions({ quoteResponse, userPublicKey, feeAccount, signal }) {
-  const body = {
-    quoteResponse,
-    userPublicKey,
-    wrapAndUnwrapSol: true,
-    dynamicComputeUnitLimit: true,
-    prioritizationFeeLamports: {
-      priorityLevelWithMaxLamports: {
-        maxLamports: 5_000_000,
-        priorityLevel: 'high',
-      },
-    },
-    feeAccount,
-    positiveSlippageFeeBps: JUPITER_POSITIVE_SLIPPAGE_BPS,
-    positiveSlippageFeeAccount: feeAccount,
-  };
-  const res = await fetch('/api/jupiter/swap/v1/swap-instructions?instructionVersion=V2', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal,
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Jupiter swap-instructions failed');
-  if (!data.swapInstruction) throw new Error('Jupiter returned no swap instruction');
-  return data;
-}
-
-/* Convert Jupiter's API-shaped instruction (programId/accounts/data as
- * base64) into a TransactionInstruction the web3.js builder accepts. */
-function deserializeJupiterIx(rawIx) {
-  return new TransactionInstruction({
-    programId: new PublicKey(rawIx.programId),
-    keys: (rawIx.accounts || []).map((acc) => ({
-      pubkey: new PublicKey(acc.pubkey),
-      isSigner: !!acc.isSigner,
-      isWritable: !!acc.isWritable,
-    })),
-    data: Buffer.from(rawIx.data || '', 'base64'),
-  });
-}
-
-/* Build the final VersionedTransaction. Order of instructions:
- *   1. Jupiter's compute budget (priority fee + CU limit)
- *   2. Our createAssociatedTokenAccountIdempotent for the fee ATA
- *      -- idempotent: no-op if exists, creates if missing
- *   3. Jupiter's setup ixs (e.g., wSOL wrap)
- *   4. Jupiter's swap ix
- *   5. Jupiter's cleanup ix (e.g., wSOL unwrap)
- * Address lookup tables come from Jupiter's response so the route can fit
- * within Solana's 64-account limit. */
-async function buildJupiterSwapTransaction({
-  connection, userPubkey, outputMint, feeWallet, feeAta, ixData,
+export default function SwapWidget({
+  jupiterTokens = [],
+  onConnectWallet,
+  defaultFromToken,
+  defaultToToken,
+  compact = false,
+  mode: modeProp = 'swap',
+  presets: presetsProp,
+  onPresetsChange,
+  onStatusChange,
+  // eslint-disable-next-line no-unused-vars
+  headerChain: _hcIgnored,
+  // eslint-disable-next-line no-unused-vars
+  onHeaderChainChange: _hcChangeIgnored,
 }) {
-  const instructions = [];
+  /* -- Wallet hooks -- */
+  const { publicKey: extPublicKey, sendTransaction: extSolSendTx, connected: solConnected } = useWallet();
+  const { connection } = useConnection();
+  const { address: evmAddress, isConnected: evmConnected, chainId: evmChainId } = useAccount();
+  const { data: walletClient } = useWalletClient();
+  const { switchChain, switchChainAsync } = useSwitchChain();
+  const nexus = useNexusWallet();
+  const { activeWalletKind, privyEmbeddedSol, privyEmbeddedEvm, loginPrivy } = nexus;
 
-  if (Array.isArray(ixData.computeBudgetInstructions)) {
-    ixData.computeBudgetInstructions.forEach((ix) => instructions.push(deserializeJupiterIx(ix)));
-  }
+  const publicKey = useMemo(() => {
+    if (extPublicKey) return extPublicKey;
+    if (privyEmbeddedSol && privyEmbeddedSol.address) {
+      try { return new PublicKey(privyEmbeddedSol.address); } catch (e) { return null; }
+    }
+    return null;
+  }, [extPublicKey, privyEmbeddedSol]);
 
-  instructions.push(
-    createAssociatedTokenAccountIdempotentInstruction(
-      userPubkey,   // payer = the user (they pay ~0.002 SOL rent on first creation)
-      feeAta,       // ata to ensure exists
-      feeWallet,    // owner of the new ata
-      outputMint,   // mint of the new ata
-    )
-  );
+  const hasSolSigner = solConnected || (!!privyEmbeddedSol && !!publicKey);
+  const hasEvmSigner = evmConnected || (!!privyEmbeddedEvm && !!privyEmbeddedEvm.address);
 
-  if (Array.isArray(ixData.setupInstructions)) {
-    ixData.setupInstructions.forEach((ix) => instructions.push(deserializeJupiterIx(ix)));
-  }
+  const effectiveEvmAddress = useMemo(() => {
+    if (evmAddress) return evmAddress;
+    if (privyEmbeddedEvm && privyEmbeddedEvm.address) return privyEmbeddedEvm.address;
+    return null;
+  }, [evmAddress, privyEmbeddedEvm]);
 
-  if (ixData.swapInstruction) {
-    instructions.push(deserializeJupiterIx(ixData.swapInstruction));
-  }
+  const sendTransaction = useCallback(async (tx, conn, opts) => {
+    if (activeWalletKind === 'privy' && privyEmbeddedSol) {
+      if (typeof privyEmbeddedSol.sendTransaction === 'function') {
+        return privyEmbeddedSol.sendTransaction(tx, conn, opts);
+      }
+      if (typeof privyEmbeddedSol.signTransaction === 'function') {
+        const signed = await privyEmbeddedSol.signTransaction(tx);
+        return conn.sendRawTransaction(signed.serialize(), opts || { skipPreflight: false, maxRetries: 3 });
+      }
+      throw new Error('Privy wallet has no sign method');
+    }
+    return extSolSendTx(tx, conn, opts);
+  }, [activeWalletKind, privyEmbeddedSol, extSolSendTx]);
 
-  if (ixData.cleanupInstruction) {
-    instructions.push(deserializeJupiterIx(ixData.cleanupInstruction));
-  }
+  const walletConnected = solConnected || evmConnected || hasSolSigner || hasEvmSigner;
 
-  const ltAddrs = Array.isArray(ixData.addressLookupTableAddresses)
-    ? ixData.addressLookupTableAddresses
-    : [];
-  const lookupTablesRaw = await Promise.all(
-    ltAddrs.map(async (addr) => {
-      try {
-        const acct = await connection.getAccountInfo(new PublicKey(addr));
-        if (!acct) return null;
-        return new AddressLookupTableAccount({
-          key: new PublicKey(addr),
-          state: AddressLookupTableAccount.deserialize(acct.data),
-        });
-      } catch { return null; }
-    })
-  );
-  const lookupTables = lookupTablesRaw.filter(Boolean);
+  const walletClientRef = useRef(walletClient);
+  useEffect(() => { walletClientRef.current = walletClient; }, [walletClient]);
+  const evmChainIdRef = useRef(evmChainId);
+  useEffect(() => { evmChainIdRef.current = evmChainId; }, [evmChainId]);
 
-  const { blockhash } = await connection.getLatestBlockhash('finalized');
-  const message = new TransactionMessage({
-    payerKey: userPubkey,
-    recentBlockhash: blockhash,
-    instructions,
-  }).compileToV0Message(lookupTables);
+  const ensureChain = useCallback(async (targetChainId) => {
+    if (!targetChainId) return true;
+    if (evmChainIdRef.current === targetChainId) return true;
+    try {
+      if (switchChainAsync) await switchChainAsync({ chainId: targetChainId });
+      else if (switchChain)  switchChain({ chainId: targetChainId });
+    } catch {
+      throw new Error('Please switch your wallet to ' + (CHAIN_NAMES[targetChainId] || 'the correct chain'));
+    }
+    const start = Date.now();
+    while (Date.now() - start < 8_000) {
+      const wc = walletClientRef.current;
+      if (evmChainIdRef.current === targetChainId) return true;
+      if (wc && wc.chain && wc.chain.id === targetChainId) return true;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    if (evmChainIdRef.current !== targetChainId) {
+      throw new Error('Chain switch did not take effect. Try again.');
+    }
+    return true;
+  }, [switchChain, switchChainAsync]);
 
-  return new VersionedTransaction(message);
-}
+  /* -- Initial token pair -- */
+  const initialPair = useMemo(() => {
+    if (defaultFromToken || defaultToToken) {
+      const ws = { solConnected, evmConnected, evmChainId };
+      const pair = defaultTokenPair({
+        mode: modeProp,
+        viewedToken: defaultFromToken || defaultToToken
+          ? (modeProp === 'sell' ? defaultFromToken : defaultToToken) || defaultFromToken
+          : null,
+        lastFromToken: null,
+        walletState: ws,
+      });
+      return {
+        fromToken: defaultFromToken ? normalizeToken(defaultFromToken) : pair.fromToken,
+        toToken:   defaultToToken   ? normalizeToken(defaultToToken)   : pair.toToken,
+      };
+    }
+    const last = loadLastPair();
+    const lastFromToken = last && last.from ? normalizeToken(last.from) : null;
+    const ws = { solConnected, evmConnected, evmChainId };
+    return defaultTokenPair({ mode: modeProp, viewedToken: null, lastFromToken, walletState: ws });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-/* ============================================================================
- * USD PRICING -- data sources only, NEVER aggregator quote endpoints.
- * ========================================================================= */
+  const [fromToken, setFromToken] = useState(initialPair.fromToken || POPULAR_TOKENS[0]);
+  const [toToken,   setToToken]   = useState(initialPair.toToken   || POPULAR_TOKENS[1]);
 
-const _priceCache = new Map();
-function _priceCacheKey(token) {
-  if (!token) return null;
-  if (isSol(token)) return 'sol:' + token.mint;
-  if (isEvm(token)) return 'evm:' + token.chainId + ':' + (token.address || '').toLowerCase();
-  return null;
-}
-function getCachedPrice(token) {
-  const key = _priceCacheKey(token);
-  if (!key) return null;
-  const e = _priceCache.get(key);
-  if (!e) return null;
-  if (Date.now() - e.ts > PRICE_CACHE_TTL_MS) { _priceCache.delete(key); return null; }
-  return e.price;
-}
-function setCachedPrice(token, price) {
-  const key = _priceCacheKey(token);
-  if (!key || !(price > 0)) return;
-  _priceCache.set(key, { price: Number(price), ts: Date.now() });
-}
+  /* -- Amount + slippage -- */
+  const [fromAmt, setFromAmt] = useState('');
+  const [slip, setSlip] = useState(0.5);
+  const userTouchedAmtRef = useRef(false);
 
-async function fetchJupiterPrice(token) {
-  try {
-    if (!isSol(token) || !token.mint) return null;
-    const r = await fetch('/api/jupiter/price/v3?ids=' + encodeURIComponent(token.mint));
-    if (!r.ok) return null;
-    const d = await r.json();
-    const v = d && d[token.mint] && d[token.mint].usdPrice;
-    return Number.isFinite(v) && v > 0 ? Number(v) : null;
-  } catch { return null; }
-}
-
-async function fetchJupiterTokenSearchPrice(token) {
-  try {
-    if (!isSol(token) || !token.mint) return null;
-    const r = await fetch('/api/jupiter/tokens/v2/search?query=' + encodeURIComponent(token.mint));
-    if (!r.ok) return null;
-    const arr = await r.json();
-    if (!Array.isArray(arr) || arr.length === 0) return null;
-    const hit = arr.find((t) => t && t.id === token.mint) || arr[0];
-    const v = hit && hit.usdPrice;
-    return Number.isFinite(v) && v > 0 ? Number(v) : null;
-  } catch { return null; }
-}
-
-/* LiFi /v1/token (price data only -- not used for swap routing). */
-async function fetchLifiTokenPrice(token) {
-  try {
-    if (!isEvm(token)) return null;
-    const chain = String(token.chainId);
-    const addr  = (token.address || '').toLowerCase() === NATIVE_EVM ? LIFI_NATIVE : token.address;
-    const params = new URLSearchParams({ chain, token: addr });
-    const r = await fetch('/api/lifi/v1/token?' + params.toString());
-    if (!r.ok) return null;
-    const d = await r.json();
-    const v = d && d.priceUSD ? parseFloat(d.priceUSD) : null;
-    return Number.isFinite(v) && v > 0 ? v : null;
-  } catch { return null; }
-}
-
-async function fetchLifiCatalogPrice(token) {
-  try {
-    if (!isEvm(token)) return null;
-    const catalog = await loadLifiTokens();
-    if (!catalog || !catalog.length) return null;
-    const targetAddr = (token.address || '').toLowerCase() === NATIVE_EVM
-      ? LIFI_NATIVE
-      : (token.address || '').toLowerCase();
-    const hit = catalog.find((t) => t.chainId === token.chainId &&
-      (t.address || '').toLowerCase() === targetAddr);
-    const v = hit && hit.priceUSD;
-    return Number.isFinite(v) && v > 0 ? Number(v) : null;
-  } catch { return null; }
-}
-
-async function fetchHeliusPrice(token) {
-  try {
-    if (!isSol(token) || !token.mint) return null;
-    const r = await fetch('/api/helius/das', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0', id: 'p', method: 'getAsset', params: { id: token.mint },
-      }),
-    });
-    if (!r.ok) return null;
-    const d = await r.json();
-    const v = d && d.result && d.result.token_info && d.result.token_info.price_info
-      ? d.result.token_info.price_info.price_per_token : null;
-    return Number.isFinite(v) && v > 0 ? Number(v) : null;
-  } catch { return null; }
-}
-
-async function getTokenPriceUsd(token) {
-  if (!token) return null;
-  const cached = getCachedPrice(token);
-  if (cached != null) return cached;
-  let p = null;
-  if (isSol(token)) {
-    p = await fetchJupiterPrice(token);
-    if (p == null) p = await fetchJupiterTokenSearchPrice(token);
-    if (p == null) p = await fetchHeliusPrice(token);
-  } else if (isEvm(token)) {
-    p = await fetchLifiTokenPrice(token);
-    if (p == null) p = await fetchLifiCatalogPrice(token);
-  }
-  if (p != null && p > 0) { setCachedPrice(token, p); return p; }
-  return null;
-}
+  /* -- Quote state -- */
+  const [quote, setQuote] = useState(null);
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteError, setQuoteError] = useState('');
+  const [quoteIsStale, setQuoteIsStale] = useState(false);
 
 /* ============================================================================
  * SYMBOL SEARCH -- catalog data only, not transactional
@@ -2538,4 +2537,3 @@ export function TradeDrawer({
     </>
   );
 }
-
