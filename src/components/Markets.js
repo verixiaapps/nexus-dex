@@ -1,8 +1,3 @@
-Alright, then we work with what's enabled. Let me rewrite Markets to use all-tokens for browsing. One call, no dashboard changes needed.
-
-Here's the whole file — replace yours:
-
-```js
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 
 /**
