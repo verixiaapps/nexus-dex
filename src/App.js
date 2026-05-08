@@ -1,3 +1,5 @@
+Part 1 of 2:
+
 import React, { useState, useEffect, useCallback, useRef, useReducer } from 'react';
 import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
@@ -10,7 +12,7 @@ import TokenDetail from './components/TokenDetail.js';
 import Send from './components/Send.js';
 import NewLaunches from './components/NewLaunches.js';
 import TokenLaunch from './components/TokenLaunch.js';
- 
+
 /* ============================================================================
  * App.js - locked plan applied:
  *
@@ -23,12 +25,12 @@ import TokenLaunch from './components/TokenLaunch.js';
  *   Mobile in any EVM app:    Injected (browser wallet) only
  *   Mobile plain Safari/etc.: Privy ONLY
  *
- * Data sources (only these three):
- *   - Jupiter   - Solana market data, token registry, prices, swaps
- *   - 0x        - EVM swaps (used inside SwapWidget)
- *   - LiFi      - Cross-chain quotes + multi-chain token registry/balances
+ * Data sources:
+ *   - OKX      - Swap execution / aggregator routing through backend
+ *   - Jupiter  - Solana market data, token registry, prices through backend
+ *   - LiFi     - Cross-chain token catalog / balances / data through backend
  *
- * No CoinGecko, no GeckoTerminal, no Moralis, no other data sources.
+ * No CoinGecko, no GeckoTerminal, no Moralis.
  * ========================================================================= */
 
 const C = {
@@ -37,17 +39,9 @@ const C = {
   privy: '#a855f7',
 };
 
-const MARKET_CACHE_KEY = 'nexus_market_cache_v3';
+const MARKET_CACHE_KEY = 'nexus_market_cache_v4';
 const MARKET_POLL_MS   = 30_000;
 
-// All third-party APIs go through our backend proxy. Rate limits hit our
-// server's single IP rather than the user's (which on mobile often shares
-// CGNAT and gets throttled aggressively by free-tier APIs).
-//
-// Jupiter Developer Platform endpoints (post 6 April 2026 migration):
-//   - tokens/v2/toporganicscore/{interval}  -> top Solana tokens with full stats
-//   - tokens/v2/tag?query=verified          -> verified Solana token registry
-//   - price/v3?ids=...                      -> ad-hoc price lookup (used by children)
 const JUPITER_MARKETS_URL  = '/api/jupiter/tokens/v2/toporganicscore/24h?limit=100';
 const JUPITER_REGISTRY_URL = '/api/jupiter/tokens/v2/tag?query=verified';
 
@@ -58,6 +52,7 @@ const PATH_TO_TAB = {
   '/launches': 'launches', '/launch': 'launch',
   '/send': 'send', '/portfolio': 'portfolio',
 };
+
 const TAB_TO_PATH = {
   swap: '/swap', markets: '/markets', launches: '/launches',
   launch: '/launch', send: '/send', portfolio: '/portfolio',
@@ -66,6 +61,7 @@ const TAB_TO_PATH = {
 function tabFromPathname(pathname) {
   return PATH_TO_TAB[pathname] || (pathname.startsWith('/markets/token') ? 'token' : 'swap');
 }
+
 function getActiveTab(tab) {
   return tab === 'token' ? 'markets' : tab;
 }
@@ -101,11 +97,14 @@ function NetworkSelector({ headerChain, onSelect, compact }) {
 
   useEffect(function() {
     if (!open) return undefined;
+
     function onDocClick(e) {
       if (ref.current && !ref.current.contains(e.target)) setOpen(false);
     }
+
     document.addEventListener('mousedown', onDocClick);
     document.addEventListener('touchstart', onDocClick, { passive: true });
+
     return function() {
       document.removeEventListener('mousedown', onDocClick);
       document.removeEventListener('touchstart', onDocClick);
@@ -132,6 +131,7 @@ function NetworkSelector({ headerChain, onSelect, compact }) {
         <span style={{ color: '#fff' }}>{compact ? current.symbol : current.label}</span>
         <span style={{ color: C.muted, fontSize: 9 }}>v</span>
       </button>
+
       {open && (
         <div style={{
           position: 'absolute', top: 'calc(100% + 6px)', right: 0,
@@ -168,6 +168,7 @@ function NetworkSelector({ headerChain, onSelect, compact }) {
 
 function WalletIcon({ src, fallbackLetter, color, size }) {
   const [errored, setErrored] = useState(false);
+
   if (!src || errored) {
     return (
       <div style={{
@@ -182,6 +183,7 @@ function WalletIcon({ src, fallbackLetter, color, size }) {
       </div>
     );
   }
+
   return (
     <img
       src={src}
@@ -204,22 +206,19 @@ const PRIVY_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent(
   '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="#a855f7"/><path d="M8 14l12 8 12-8v14H8V14z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/><path d="M8 14h24v0L20 22 8 14z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>'
 );
 
-/**
- * Wagmi v2 + EIP-6963: connectors include both the explicit `injected()`
- * connector (id 'injected') and any wallets the browser announced via
- * EIP-6963 (id like 'io.metamask', 'app.phantom', 'com.coinbase.wallet').
- * Prefer the EIP-6963 connector - its name and icon come from the wallet
- * itself rather than being generic "Injected".
- */
 function pickInjectedConnector(connectors) {
   const list = (connectors || []).filter(function(c) {
     return c && c.id !== 'walletConnect' && c.id !== 'walletConnectSDK';
   });
+
   if (!list.length) return null;
+
   const eip6963 = list.find(function(c) {
     return c.id !== 'injected' && (c.icon || (c.name && c.name !== 'Injected'));
   });
+
   if (eip6963) return eip6963;
+
   return list.find(function(c) { return c.id === 'injected'; }) || list[0];
 }
 
@@ -260,6 +259,7 @@ function WalletModal({ open, onClose }) {
   const walletConnectConnector = (evmConnectorsRaw || []).find(function(c) {
     return c && (c.id === 'walletConnect' || c.id === 'walletConnectSDK');
   });
+
   const injectedConnector = pickInjectedConnector(evmConnectorsRaw);
 
   useEffect(function() {
@@ -269,11 +269,15 @@ function WalletModal({ open, onClose }) {
   useEffect(function() {
     if (!open) return undefined;
     if (typeof document === 'undefined') return undefined;
+
     document.body.classList.add('nexus-scroll-locked');
+
     function onKey(e) {
       if (e.key === 'Escape' || e.keyCode === 27) onClose();
     }
+
     window.addEventListener('keydown', onKey);
+
     return function() {
       document.body.classList.remove('nexus-scroll-locked');
       window.removeEventListener('keydown', onKey);
@@ -282,7 +286,9 @@ function WalletModal({ open, onClose }) {
 
   useEffect(function() {
     if (mState.kind !== 'connecting') return;
+
     let matched = false;
+
     if (mState.target === 'evm') {
       matched = evmConnectedFromAccount;
     } else if (mState.target === 'privy') {
@@ -293,6 +299,7 @@ function WalletModal({ open, onClose }) {
         && selectedWallet.adapter
         && selectedWallet.adapter.name === mState.wallet;
     }
+
     if (matched) {
       dispatch({ type: 'SUCCESS' });
       onClose();
@@ -306,6 +313,7 @@ function WalletModal({ open, onClose }) {
 
   useEffect(function() {
     const target = targetWalletRef.current;
+
     if (!target) return undefined;
     if (!selectedWallet || selectedWallet.adapter.name !== target) return undefined;
     if (mState.kind !== 'connecting' || mState.wallet !== target) return undefined;
@@ -315,12 +323,16 @@ function WalletModal({ open, onClose }) {
 
     solConnect().catch(function(e) {
       if (cancelled) return;
+
       const raw = (e && e.message) ? e.message : 'Failed to connect wallet';
       const msg = /reject|cancel|denied|user/i.test(raw) ? 'Connection cancelled' : raw;
+
       dispatch({ type: 'ERROR', message: msg });
     });
 
-    return function() { cancelled = true; };
+    return function() {
+      cancelled = true;
+    };
   }, [selectedWallet, solConnect, mState.kind, mState.wallet]);
 
   const handleSolanaConnect = useCallback(function(wallet) {
@@ -328,10 +340,13 @@ function WalletModal({ open, onClose }) {
       dispatch({ type: 'ERROR', message: 'Wallet adapter unavailable. Refresh and try again.' });
       return;
     }
+
     dispatch({ type: 'START', wallet: wallet.adapter.name, target: 'solana' });
     targetWalletRef.current = wallet.adapter.name;
-    try { select(wallet.adapter.name); }
-    catch (e) {
+
+    try {
+      select(wallet.adapter.name);
+    } catch (e) {
       const msg = (e && e.message) || 'Failed to select wallet';
       dispatch({ type: 'ERROR', message: msg });
       targetWalletRef.current = null;
@@ -343,14 +358,19 @@ function WalletModal({ open, onClose }) {
       dispatch({ type: 'ERROR', message: 'WalletConnect not configured. Set REACT_APP_REOWN_PROJECT_ID and rebuild.' });
       return;
     }
+
     dispatch({ type: 'START', wallet: 'WalletConnect', target: 'evm' });
-    try { await evmConnectAsync({ connector: walletConnectConnector }); }
-    catch (e) {
+
+    try {
+      await evmConnectAsync({ connector: walletConnectConnector });
+    } catch (e) {
       const raw = (e && e.message) ? e.message : 'Failed to connect wallet';
       const msg = /reject|cancel|denied|user/i.test(raw) ? 'Connection cancelled' : raw;
+
       dispatch({ type: 'ERROR', message: msg });
     }
   }, [evmConnectAsync, walletConnectConnector]);
+
 
   const handleInjectedConnect = useCallback(async function() {
     if (!injectedConnector) {
@@ -359,8 +379,9 @@ function WalletModal({ open, onClose }) {
     }
     const name = injectedConnector.name || 'Wallet';
     dispatch({ type: 'START', wallet: name, target: 'evm' });
-    try { await evmConnectAsync({ connector: injectedConnector }); }
-    catch (e) {
+    try {
+      await evmConnectAsync({ connector: injectedConnector });
+    } catch (e) {
       const raw = (e && e.message) ? e.message : 'Failed to connect wallet';
       const msg = /reject|cancel|denied|user/i.test(raw) ? 'Connection cancelled' : raw;
       dispatch({ type: 'ERROR', message: msg });
@@ -373,15 +394,20 @@ function WalletModal({ open, onClose }) {
       return;
     }
     dispatch({ type: 'START', wallet: 'Email / Social', target: 'privy' });
-    try { loginPrivy(); }
-    catch (e) {
+    try {
+      loginPrivy();
+    } catch (e) {
       const msg = (e && e.message) || 'Failed to open login';
       dispatch({ type: 'ERROR', message: msg });
     }
   }, [privyReady, loginPrivy]);
 
   const handleDisconnect = useCallback(async function() {
-    try { await disconnectAll(); } catch (e) { console.error('Disconnect error:', e); }
+    try {
+      await disconnectAll();
+    } catch (e) {
+      console.error('Disconnect error:', e);
+    }
     dispatch({ type: 'RESET' });
     onClose();
   }, [disconnectAll, onClose]);
@@ -453,6 +479,7 @@ function WalletModal({ open, onClose }) {
     walletPolicy.environment === 'mobile-browser' && !privyReady;
 
   if (!open) return null;
+
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 500, background: 'rgba(0,0,0,.85)' }} />
@@ -527,9 +554,8 @@ function WalletModal({ open, onClose }) {
                   background: 'rgba(255,59,107,.10)', border: '1px solid rgba(255,59,107,.3)',
                   borderRadius: 12, padding: '14px 16px', color: C.red, fontSize: 13, lineHeight: 1.5,
                 }}>
-                  Email login isn't configured. To use this site on mobile, open
-                  it from inside your wallet app's browser (Phantom, Solflare,
-                  MetaMask, Coinbase, Trust, etc.).
+                  Email login is not configured. To use this site on mobile, open
+                  it from inside your wallet app browser.
                 </div>
               )}
 
@@ -616,7 +642,7 @@ function WalletModal({ open, onClose }) {
               {showWalletAppHint && (
                 <div style={{ fontSize: 11, color: C.muted, textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>
                   Have Phantom or Solflare? Open this page from inside your
-                  wallet's in-app browser to use it.
+                  wallet app browser to use it.
                 </div>
               )}
 
@@ -636,178 +662,344 @@ function WalletModal({ open, onClose }) {
 function IconSwap()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M7 16V4m0 0L3 8m4-4l4 4"/><path d="M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>; }
 function IconMarkets()  { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>; }
 function IconLaunches() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>; }
-function IconLaunch()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>; }
-function IconSend()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>; }
-function IconWallet()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
-const NAV_ICONS = { swap: IconSwap, markets: IconMarkets, launches: IconLaunches, launch: IconLaunch, send: IconSend, portfolio: IconWallet };
+
+
+function IconLaunch() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="10"/>
+      <line x1="12" y1="8" x2="12" y2="16"/>
+      <line x1="8" y1="12" x2="16" y2="12"/>
+    </svg>
+  );
+}
+
+function IconSend() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <line x1="22" y1="2" x2="11" y2="13"/>
+      <polygon points="22 2 15 22 11 13 2 9 22 2"/>
+    </svg>
+  );
+}
+
+function IconWallet() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <rect x="1" y="4" width="22" height="16" rx="2"/>
+      <path d="M1 10h22"/>
+    </svg>
+  );
+}
+
+const NAV_ICONS = {
+  swap: IconSwap,
+  markets: IconMarkets,
+  launches: IconLaunches,
+  launch: IconLaunch,
+  send: IconSend,
+  portfolio: IconWallet,
+};
 
 const NAV_TABS = [
-  { id: 'swap',      label: 'Swap' },
-  { id: 'markets',   label: 'Markets' },
-  { id: 'launches',  label: 'Launches' },
-  { id: 'launch',    label: 'Launch' },
-  { id: 'send',      label: 'Send' },
+  { id: 'swap', label: 'Swap' },
+  { id: 'markets', label: 'Markets' },
+  { id: 'launches', label: 'Launches' },
+  { id: 'launch', label: 'Launch' },
+  { id: 'send', label: 'Send' },
   { id: 'portfolio', label: 'Wallet' },
 ];
 
-/* Map a Jupiter Tokens V2 entry onto the legacy `coins` shape used by all
- * downstream components. Keeping the shape stable means Markets, TokenDetail,
- * Portfolio etc. don't need to change. */
 function mapJupiterTokenToCoin(t, idx) {
   if (!t || !t.id) return null;
+
   const stats24h = t.stats24h || {};
-  const stats1h  = t.stats1h  || {};
-  const stats6h  = t.stats6h  || {};
-  const buyVol   = Number(stats24h.buyVolume)  || 0;
-  const sellVol  = Number(stats24h.sellVolume) || 0;
+  const stats1h  = t.stats1h || {};
+  const stats6h  = t.stats6h || {};
+
+  const buyVol  = Number(stats24h.buyVolume) || 0;
+  const sellVol = Number(stats24h.sellVolume) || 0;
+
   return {
     id: t.id,
-    symbol: t.symbol || (t.id.slice(0, 4)),
+    symbol: t.symbol || t.id.slice(0, 4),
     name: t.name || 'Unknown',
     image: t.icon || null,
-    current_price: typeof t.usdPrice === 'number' ? t.usdPrice : (parseFloat(t.usdPrice) || 0),
-    market_cap: typeof t.mcap === 'number' ? t.mcap : (parseFloat(t.mcap) || 0),
+
+    current_price:
+      typeof t.usdPrice === 'number'
+        ? t.usdPrice
+        : (parseFloat(t.usdPrice) || 0),
+
+    market_cap:
+      typeof t.mcap === 'number'
+        ? t.mcap
+        : (parseFloat(t.mcap) || 0),
+
     market_cap_rank: idx + 1,
+
     total_volume: buyVol + sellVol,
+
     high_24h: null,
     low_24h: null,
+
     price_change_percentage_1h_in_currency:
-      typeof stats1h.priceChange === 'number' ? stats1h.priceChange : null,
+      typeof stats1h.priceChange === 'number'
+        ? stats1h.priceChange
+        : null,
+
     price_change_percentage_24h:
-      typeof stats24h.priceChange === 'number' ? stats24h.priceChange : null,
+      typeof stats24h.priceChange === 'number'
+        ? stats24h.priceChange
+        : null,
+
     price_change_percentage_7d_in_currency:
-      typeof stats6h.priceChange === 'number' ? stats6h.priceChange : null,
+      typeof stats6h.priceChange === 'number'
+        ? stats6h.priceChange
+        : null,
+
     sparkline_in_7d: null,
     ath: null,
     ath_change_percentage: null,
+
     circulating_supply:
-      typeof t.circSupply === 'number' ? t.circSupply : (parseFloat(t.circSupply) || null),
+      typeof t.circSupply === 'number'
+        ? t.circSupply
+        : (parseFloat(t.circSupply) || null),
+
     isSolanaToken: true,
     organicScore: t.organicScore,
     organicScoreLabel: t.organicScoreLabel,
     isVerified: !!t.isVerified,
-    liquidity: typeof t.liquidity === 'number' ? t.liquidity : (parseFloat(t.liquidity) || 0),
+
+    liquidity:
+      typeof t.liquidity === 'number'
+        ? t.liquidity
+        : (parseFloat(t.liquidity) || 0),
   };
 }
 
 function AppInner() {
   const navigate = useNavigate();
   const location = useLocation();
-  const wallet = useAppWallet();
-  const { headerChain, setHeaderChain } = wallet;
 
-  const [tab, setTab] = useState(function() { return tabFromPathname(location.pathname); });
+  const wallet = useAppWallet();
+
+  const {
+    headerChain,
+    setHeaderChain,
+  } = wallet;
+
+  const [tab, setTab] = useState(function() {
+    return tabFromPathname(location.pathname);
+  });
+
   const [selectedToken, setSelectedToken] = useState(null);
+
   const [walletModalOpen, setWalletModalOpen] = useState(false);
+
   const [coins, setCoins] = useState([]);
+
   const [loading, setLoading] = useState(true);
+
   const [jupiterTokens, setJupiterTokens] = useState([]);
+
   const [jupiterLoading, setJupiterLoading] = useState(true);
+
   const [launchesKey, setLaunchesKey] = useState(0);
+
   const [portfolioKey, setPortfolioKey] = useState(0);
 
   const [isMobile, setIsMobile] = useState(function() {
     if (typeof window === 'undefined') return false;
     return window.innerWidth < 769;
   });
+
   useEffect(function() {
     let to = null;
+
     function onResize() {
       if (to) clearTimeout(to);
-      to = setTimeout(function() { setIsMobile(window.innerWidth < 769); }, 150);
+
+      to = setTimeout(function() {
+        setIsMobile(window.innerWidth < 769);
+      }, 150);
     }
+
     window.addEventListener('resize', onResize);
-    return function() { window.removeEventListener('resize', onResize); if (to) clearTimeout(to); };
+
+    return function() {
+      window.removeEventListener('resize', onResize);
+
+      if (to) clearTimeout(to);
+    };
   }, []);
 
   useEffect(function() {
     var el = document.createElement('style');
+
     el.textContent = GLOBAL_STYLES;
+
     document.head.appendChild(el);
-    return function() { document.head.removeChild(el); };
+
+    return function() {
+      document.head.removeChild(el);
+    };
   }, []);
 
   useEffect(function() {
     var newTab = tabFromPathname(location.pathname);
-    if (newTab !== tab) { setTab(newTab); if (newTab !== 'token') setSelectedToken(null); }
+
+    if (newTab !== tab) {
+      setTab(newTab);
+
+      if (newTab !== 'token') {
+        setSelectedToken(null);
+      }
+    }
   }, [location.pathname, tab]);
 
   const switchTab = useCallback(function(newTab) {
     if (newTab === tab && newTab !== 'token') {
-      if (newTab === 'launches') setLaunchesKey(function(k) { return k + 1; });
-      if (newTab === 'portfolio') setPortfolioKey(function(k) { return k + 1; });
+      if (newTab === 'launches') {
+        setLaunchesKey(function(k) {
+          return k + 1;
+        });
+      }
+
+      if (newTab === 'portfolio') {
+        setPortfolioKey(function(k) {
+          return k + 1;
+        });
+      }
+
       return;
     }
-    if (newTab !== 'token') setSelectedToken(null);
+
+    if (newTab !== 'token') {
+      setSelectedToken(null);
+    }
+
     navigate(TAB_TO_PATH[newTab] || '/swap');
+
     setTab(newTab);
+
     window.scrollTo(0, 0);
   }, [tab, navigate]);
 
   const goToToken = useCallback(function(coin) {
-    setSelectedToken(coin); setTab('token'); navigate('/markets/token'); window.scrollTo(0, 0);
+    setSelectedToken(coin);
+
+    setTab('token');
+
+    navigate('/markets/token');
+
+    window.scrollTo(0, 0);
   }, [navigate]);
 
-  const goBack = useCallback(function() { navigate(-1); }, [navigate]);
-  const openWallet = useCallback(function() { setWalletModalOpen(true); }, []);
+  const goBack = useCallback(function() {
+    navigate(-1);
+  }, [navigate]);
 
-  /* -- markets fetch (Jupiter only - all via backend proxy) --
-   * Two parallel calls:
-   *   1. Top organic-scored Solana tokens (24h) -> drives the Markets tab
-   *   2. Verified Solana token registry        -> token picker / lookups
-   */
+  const openWallet = useCallback(function() {
+    setWalletModalOpen(true);
+  }, []);
+
   useEffect(function() {
     var isMounted = true;
+
     var controller = new AbortController();
 
     try {
-      var cached = JSON.parse(localStorage.getItem(MARKET_CACHE_KEY) || 'null');
-      if (cached && cached.v === 3 && Date.now() - cached.ts < 300000) {
-        if (cached.coins && cached.coins.length)         { setCoins(cached.coins); setLoading(false); }
-        if (cached.jupTokens && cached.jupTokens.length) { setJupiterTokens(cached.jupTokens); setJupiterLoading(false); }
+      var cached = JSON.parse(
+        localStorage.getItem(MARKET_CACHE_KEY) || 'null'
+      );
+
+      if (
+        cached &&
+        cached.v === 4 &&
+        Date.now() - cached.ts < 300000
+      ) {
+        if (cached.coins && cached.coins.length) {
+          setCoins(cached.coins);
+          setLoading(false);
+        }
+
+        if (cached.jupTokens && cached.jupTokens.length) {
+          setJupiterTokens(cached.jupTokens);
+          setJupiterLoading(false);
+        }
       }
     } catch (e) {}
 
-    var cacheBuf = { v: 3, coins: [], jupTokens: [], ts: 0 };
+    var cacheBuf = {
+      v: 4,
+      coins: [],
+      jupTokens: [],
+      ts: 0,
+    };
+
     try {
-      var existing = JSON.parse(localStorage.getItem(MARKET_CACHE_KEY) || '{}');
-      if (existing && existing.v === 3) {
-        cacheBuf.coins     = existing.coins     || [];
+      var existing = JSON.parse(
+        localStorage.getItem(MARKET_CACHE_KEY) || '{}'
+      );
+
+      if (existing && existing.v === 4) {
+        cacheBuf.coins = existing.coins || [];
         cacheBuf.jupTokens = existing.jupTokens || [];
       }
     } catch (e) {}
+
     var flushCache = function() {
       try {
         cacheBuf.ts = Date.now();
-        localStorage.setItem(MARKET_CACHE_KEY, JSON.stringify(cacheBuf));
+
+        localStorage.setItem(
+          MARKET_CACHE_KEY,
+          JSON.stringify(cacheBuf)
+        );
       } catch (e) {}
     };
 
     var fetchMarkets = function() {
-      return fetch(JUPITER_MARKETS_URL, { signal: controller.signal })
-        .then(function(r) { return r.ok ? r.json() : null; })
+      return fetch(JUPITER_MARKETS_URL, {
+        signal: controller.signal,
+      })
+        .then(function(r) {
+          return r.ok ? r.json() : null;
+        })
         .then(function(data) {
           if (!isMounted || !Array.isArray(data)) return;
-          var mapped = data.map(mapJupiterTokenToCoin).filter(Boolean);
+
+          var mapped = data
+            .map(mapJupiterTokenToCoin)
+            .filter(Boolean);
+
           setCoins(mapped);
+
           setLoading(false);
+
           cacheBuf.coins = mapped;
+
           flushCache();
         })
         .catch(function(e) {
-          if (isMounted && (!e || e.name !== 'AbortError')) setLoading(false);
+          if (isMounted && (!e || e.name !== 'AbortError')) {
+            setLoading(false);
+          }
         });
     };
 
     var fetchRegistry = function() {
-      return fetch(JUPITER_REGISTRY_URL, { signal: controller.signal })
-        .then(function(r) { return r.ok ? r.json() : null; })
+      return fetch(JUPITER_REGISTRY_URL, {
+        signal: controller.signal,
+      })
+        .then(function(r) {
+          return r.ok ? r.json() : null;
+        })
         .then(function(data) {
-          if (!isMounted) return;
-          if (!Array.isArray(data)) {
-            setJupiterLoading(false);
-            return;
-          }
+          if (!isMounted || !Array.isArray(data)) return;
+
           var jupTokens = data.map(function(t) {
             return {
               mint: t.id,
@@ -817,13 +1009,19 @@ function AppInner() {
               logoURI: t.icon,
             };
           });
+
           setJupiterTokens(jupTokens);
+
           setJupiterLoading(false);
+
           cacheBuf.jupTokens = jupTokens;
+
           flushCache();
         })
         .catch(function() {
-          if (isMounted) setJupiterLoading(false);
+          if (isMounted) {
+            setJupiterLoading(false);
+          }
         });
     };
 
@@ -835,17 +1033,24 @@ function AppInner() {
     fetchAll();
 
     var interval = null;
+
     var startPolling = function() {
       if (interval) return;
       interval = setInterval(fetchAll, MARKET_POLL_MS);
     };
+
     var stopPolling = function() {
-      if (interval) { clearInterval(interval); interval = null; }
+      if (interval) {
+        clearInterval(interval);
+        interval = null;
+      }
     };
+
     startPolling();
 
     var onVis = function() {
       if (typeof document === 'undefined') return;
+
       if (document.visibilityState === 'visible') {
         fetchAll();
         startPolling();
@@ -853,6 +1058,7 @@ function AppInner() {
         stopPolling();
       }
     };
+
     document.addEventListener('visibilitychange', onVis);
 
     return function() {
@@ -888,10 +1094,12 @@ function AppInner() {
 
   var renderContextToggle = function() {
     if (!wallet.isConnected) return null;
+
     var both = wallet.solConnected && wallet.evmConnected;
     var ctx = wallet.activeContext || (wallet.solConnected ? 'solana' : 'evm');
     var label = ctx === 'solana' ? 'SOL' : 'EVM';
     var color = ctx === 'solana' ? '#9945ff' : '#627eea';
+
     return (
       <button
         onClick={function() {
@@ -903,11 +1111,17 @@ function AppInner() {
         style={{
           flexShrink: 0,
           background: 'rgba(255,255,255,.04)',
-          border: '1px solid ' + color, color: color,
-          borderRadius: 8, padding: '5px 8px',
-          fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 10,
-          letterSpacing: 1, cursor: both ? 'pointer' : 'default',
-        }}>
+          border: '1px solid ' + color,
+          color: color,
+          borderRadius: 8,
+          padding: '5px 8px',
+          fontFamily: 'Syne, sans-serif',
+          fontWeight: 800,
+          fontSize: 10,
+          letterSpacing: 1,
+          cursor: both ? 'pointer' : 'default',
+        }}
+      >
         {label}{both ? ' <->' : ''}
       </button>
     );
@@ -924,22 +1138,64 @@ function AppInner() {
             <span style={{ fontWeight: 800, fontSize: 15, letterSpacing: 2, color: '#fff' }}>NEXUS</span>
             <span style={{ fontSize: 9, color: C.accent, background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.3)', borderRadius: 4, padding: '1px 5px', fontWeight: 600 }}>DEX</span>
           </div>
+
           <nav className="desktop-nav hide-scrollbar" style={{ display: 'flex', gap: 2, flex: 1, justifyContent: 'center', overflowX: 'auto' }}>
             {NAV_TABS.map(function(t) {
               var active = activeTab === t.id;
+
               return (
-                <button key={t.id} onClick={function() { switchTab(t.id); }} style={{ background: active ? 'rgba(0,229,255,.09)' : 'transparent', border: active ? '1px solid rgba(0,229,255,.2)' : '1px solid transparent', borderRadius: 8, padding: '5px 12px', color: active ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>
+                <button
+                  key={t.id}
+                  onClick={function() { switchTab(t.id); }}
+                  style={{
+                    background: active ? 'rgba(0,229,255,.09)' : 'transparent',
+                    border: active ? '1px solid rgba(0,229,255,.2)' : '1px solid transparent',
+                    borderRadius: 8,
+                    padding: '5px 12px',
+                    color: active ? C.accent : C.muted,
+                    fontFamily: 'Syne, sans-serif',
+                    fontWeight: 600,
+                    fontSize: 12,
+                    cursor: 'pointer',
+                    whiteSpace: 'nowrap',
+                    flexShrink: 0,
+                  }}
+                >
                   {t.label}
                 </button>
               );
             })}
           </nav>
+
           <div className="mobile-nav" style={{ flex: 1 }} />
 
           <NetworkSelector headerChain={headerChain} onSelect={setHeaderChain} compact={isMobile} />
 
-          <button onClick={openWallet} style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, background: wallet.isConnected ? 'rgba(0,229,255,.08)' : 'linear-gradient(135deg,#00e5ff,#0055ff)', border: wallet.isConnected ? '1px solid rgba(0,229,255,.3)' : 'none', borderRadius: 10, padding: '7px 14px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12, color: wallet.isConnected ? C.accent : C.bg, whiteSpace: 'nowrap' }}>
-            {wallet.isConnected ? (<><div style={{ width: 7, height: 7, borderRadius: '50%', background: C.green, flexShrink: 0 }} />{displayAddress}</>) : 'Connect Wallet'}
+          <button
+            onClick={openWallet}
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              flexShrink: 0,
+              background: wallet.isConnected ? 'rgba(0,229,255,.08)' : 'linear-gradient(135deg,#00e5ff,#0055ff)',
+              border: wallet.isConnected ? '1px solid rgba(0,229,255,.3)' : 'none',
+              borderRadius: 10,
+              padding: '7px 14px',
+              cursor: 'pointer',
+              fontFamily: 'Syne, sans-serif',
+              fontWeight: 700,
+              fontSize: 12,
+              color: wallet.isConnected ? C.accent : C.bg,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            {wallet.isConnected ? (
+              <>
+                <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.green, flexShrink: 0 }} />
+                {displayAddress}
+              </>
+            ) : 'Connect Wallet'}
           </button>
 
           {renderContextToggle()}
@@ -947,28 +1203,125 @@ function AppInner() {
       </header>
 
       <main style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '24px 16px 100px', width: '100%' }}>
-        {tab === 'swap'      && <SwapWidget   {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} jupiterLoading={jupiterLoading} onGoToToken={goToToken} />}
-        {tab === 'markets'   && <Markets      coins={coins} loading={loading} onSelectCoin={goToToken} jupiterTokens={jupiterTokens} />}
-        {tab === 'token' && selectedToken && <TokenDetail {...sharedProps} coin={selectedToken} coins={coins} jupiterTokens={jupiterTokens} onBack={goBack} />}
-        {tab === 'launches'  && <NewLaunches  {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} resetKey={launchesKey} />}
-        {tab === 'launch'    && <TokenLaunch  {...sharedProps} />}
-        {tab === 'send'      && <Send         {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} />}
-        {tab === 'portfolio' && <Portfolio    {...sharedProps} coins={coins} jupiterTokens={jupiterTokens} onSend={function() { switchTab('send'); }} refreshKey={portfolioKey} onSelectToken={goToToken} />}
+        {tab === 'swap' && (
+          <SwapWidget
+            {...sharedProps}
+            coins={coins}
+            jupiterTokens={jupiterTokens}
+            jupiterLoading={jupiterLoading}
+            onGoToToken={goToToken}
+          />
+        )}
+
+        {tab === 'markets' && (
+          <Markets
+            coins={coins}
+            loading={loading}
+            onSelectCoin={goToToken}
+            jupiterTokens={jupiterTokens}
+          />
+        )}
+
+        {tab === 'token' && selectedToken && (
+          <TokenDetail
+            {...sharedProps}
+            coin={selectedToken}
+            coins={coins}
+            jupiterTokens={jupiterTokens}
+            onBack={goBack}
+          />
+        )}
+
+        {tab === 'launches' && (
+          <NewLaunches
+            {...sharedProps}
+            coins={coins}
+            jupiterTokens={jupiterTokens}
+            resetKey={launchesKey}
+          />
+        )}
+
+        {tab === 'launch' && (
+          <TokenLaunch
+            {...sharedProps}
+          />
+        )}
+
+        {tab === 'send' && (
+          <Send
+            {...sharedProps}
+            coins={coins}
+            jupiterTokens={jupiterTokens}
+          />
+        )}
+
+        {tab === 'portfolio' && (
+          <Portfolio
+            {...sharedProps}
+            coins={coins}
+            jupiterTokens={jupiterTokens}
+            onSend={function() { switchTab('send'); }}
+            refreshKey={portfolioKey}
+            onSelectToken={goToToken}
+          />
+        )}
       </main>
 
       <nav className="mobile-nav" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100, background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(0,229,255,.1)', display: 'flex', alignItems: 'stretch', paddingBottom: 'env(safe-area-inset-bottom)' }}>
         {NAV_TABS.map(function(t) {
           var active = activeTab === t.id;
           var Icon = NAV_ICONS[t.id];
+
           return (
-            <button key={t.id} onClick={function() { switchTab(t.id); }} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: active ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '8px 2px', minHeight: 54, position: 'relative' }}>
+            <button
+              key={t.id}
+              onClick={function() { switchTab(t.id); }}
+              style={{
+                flex: 1,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 3,
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                color: active ? C.accent : C.muted,
+                fontFamily: 'Syne, sans-serif',
+                fontSize: 9,
+                fontWeight: 600,
+                padding: '8px 2px',
+                minHeight: 54,
+                position: 'relative',
+              }}
+            >
               {active && <div style={{ position: 'absolute', top: 0, left: '25%', right: '25%', height: 2, borderRadius: '0 0 2px 2px', background: C.accent }} />}
               {Icon && <Icon />}
               <span>{t.label}</span>
             </button>
           );
         })}
-        <button onClick={openWallet} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: wallet.isConnected ? C.green : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '8px 2px', minHeight: 54 }}>
+
+        <button
+          onClick={openWallet}
+          style={{
+            flex: 1,
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: 3,
+            background: 'transparent',
+            border: 'none',
+            cursor: 'pointer',
+            color: wallet.isConnected ? C.green : C.muted,
+            fontFamily: 'Syne, sans-serif',
+            fontSize: 9,
+            fontWeight: 600,
+            padding: '8px 2px',
+            minHeight: 54,
+          }}
+        >
           <div style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid ' + (wallet.isConnected ? C.green : C.muted), display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             {wallet.isConnected && <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.green }} />}
           </div>
@@ -988,3 +1341,5 @@ export default function App() {
     </BrowserRouter>
   );
 }
+
+
