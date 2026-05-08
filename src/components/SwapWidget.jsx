@@ -6,7 +6,7 @@
  * 1. NO header chain selector. Routing is driven entirely by from/to
  *    tokens. Defaults come from the connected wallet's actual state and
  *    from the user's last-used pair via localStorage.
- *
+ * 
  * 2. ONE wallet popup per swap action after the first ERC20 approval.
  *    0x uses AllowanceHolder (single-sig path) instead of Permit2 so
  *    subsequent swaps of an already-approved token are exactly one
