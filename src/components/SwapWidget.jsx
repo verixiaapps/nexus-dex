@@ -96,11 +96,40 @@ async function fetchDsSearch(q){try{const r=await fetch(DEXSCREENER_BASE+'/lates
 let _okxCache=null;let _okxLoading=null;
 function loadOkxSolTokens(){if(_okxCache)return Promise.resolve(_okxCache);if(_okxLoading)return _okxLoading;_okxLoading=fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501').then(r=>r.ok?r.json():{data:[]}).catch(()=>({data:[]})).then(j=>{const t=(j.data||[]).map(t=>({chain:'solana',mint:t.tokenContractAddress,symbol:t.tokenSymbol||'',name:t.tokenName||t.tokenSymbol||'',decimals:parseInt(t.decimals)||6,logoURI:t.tokenLogoUrl||null})).filter(t=>isValidSolMint(t.mint)&&t.symbol);_okxCache=t;_okxLoading=null;return t;});return _okxLoading;}
 
-async function fetchOkxSolSwap({fromMint,toMint,amount,slippage,userWallet,signal}){const p=new URLSearchParams({chainIndex:'501',fromTokenAddress:toOkxSolAddress(fromMint),toTokenAddress:toOkxSolAddress(toMint),amount:String(amount),slippagePercent:(slippage/100).toFixed(4),userWalletAddress:userWallet,referrer:OKX_REFERRER});const r=await fetch('/api/okx/dex/aggregator/swap-instruction?'+p.toString(),{signal});const j=await r.json();if(j.code!=='0'||!j.data||!j.data[0])throw new Error(j.msg||'OKX swap-instruction failed');return j.data[0];}
-async function fetchOkxEvmSwap({chainId,fromAddress,toAddress,amount,slippage,userWallet,signal}){const p=new URLSearchParams({chainIndex:String(chainId),fromTokenAddress:toOkxEvmAddress(fromAddress),toTokenAddress:toOkxEvmAddress(toAddress),amount:String(amount),slippagePercent:(slippage/100).toFixed(4),userWalletAddress:userWallet,referrer:OKX_REFERRER});const r=await fetch('/api/okx/dex/aggregator/swap?'+p.toString(),{signal});const j=await r.json();if(j.code!=='0'||!j.data||!j.data[0])throw new Error(j.msg||'OKX EVM swap failed');return j.data[0];}
-async function fetchOkxEvmApproval({chainId,tokenAddress,amount}){try{const p=new URLSearchParams({chainIndex:String(chainId),tokenContractAddress:tokenAddress,approveAmount:String(amount),referrer:OKX_REFERRER});const r=await fetch('/api/okx/dex/aggregator/approve-transaction?'+p.toString());const j=await r.json();if(j.code!=='0'||!j.data||!j.data[0])return null;return j.data[0];}catch{return null;}}
+// FIXED: Handle both array and object OKX response formats
+async function fetchOkxSolSwap({fromMint,toMint,amount,slippage,userWallet,signal}){
+  const p=new URLSearchParams({chainIndex:'501',fromTokenAddress:toOkxSolAddress(fromMint),toTokenAddress:toOkxSolAddress(toMint),amount:String(amount),slippagePercent:(slippage/100).toFixed(4),userWalletAddress:userWallet,referrer:OKX_REFERRER});
+  const r=await fetch('/api/okx/dex/aggregator/swap-instruction?'+p.toString(),{signal});
+  const j=await r.json();
+  if(j.code!=='0'||!j.data)throw new Error(j.msg||'OKX swap-instruction failed');
+  return Array.isArray(j.data)?j.data[0]:j.data;
+}
+async function fetchOkxEvmSwap({chainId,fromAddress,toAddress,amount,slippage,userWallet,signal}){
+  const p=new URLSearchParams({chainIndex:String(chainId),fromTokenAddress:toOkxEvmAddress(fromAddress),toTokenAddress:toOkxEvmAddress(toAddress),amount:String(amount),slippagePercent:(slippage/100).toFixed(4),userWalletAddress:userWallet,referrer:OKX_REFERRER});
+  const r=await fetch('/api/okx/dex/aggregator/swap?'+p.toString(),{signal});
+  const j=await r.json();
+  if(j.code!=='0'||!j.data)throw new Error(j.msg||'OKX EVM swap failed');
+  return Array.isArray(j.data)?j.data[0]:j.data;
+}
+async function fetchOkxEvmApproval({chainId,tokenAddress,amount}){
+  try{
+    const p=new URLSearchParams({chainIndex:String(chainId),tokenContractAddress:tokenAddress,approveAmount:String(amount),referrer:OKX_REFERRER});
+    const r=await fetch('/api/okx/dex/aggregator/approve-transaction?'+p.toString());
+    const j=await r.json();
+    if(j.code!=='0'||!j.data)return null;
+    return Array.isArray(j.data)?j.data[0]:j.data;
+  }catch{return null;}
+}
 function deserializeOkxIx(ix){return new TransactionInstruction({programId:new PublicKey(ix.programId),keys:(ix.accounts||[]).map(a=>({pubkey:new PublicKey(a.pubkey),isSigner:!!a.isSigner,isWritable:!!a.isWritable})),data:Buffer.from(ix.data||'','base64')});}
-async function buildOkxSolTx({connection,userPubkey,swapData}){const ixs=(swapData.instructionLists||[]).map(deserializeOkxIx);const lta=Array.isArray(swapData.addressLookupTableAccount)?swapData.addressLookupTableAccount:[];const lts=(await Promise.all(lta.map(async a=>{try{const acct=await connection.getAccountInfo(new PublicKey(a));if(!acct)return null;return new AddressLookupTableAccount({key:new PublicKey(a),state:AddressLookupTableAccount.deserialize(acct.data)});}catch{return null}}))).filter(Boolean);const{bh}=await connection.getLatestBlockhash('finalized');return new VersionedTransaction(new TransactionMessage({payerKey:userPubkey,recentBlockhash:bh,instructions:ixs}).compileToV0Message(lts));}
+async function buildOkxSolTx({connection,userPubkey,swapData}){
+  const ixs=(swapData.instructionLists||[]).map(deserializeOkxIx);
+  const lta=Array.isArray(swapData.addressLookupTableAccount)?swapData.addressLookupTableAccount:[];
+  const lts=(await Promise.all(lta.map(async a=>{
+    try{const acct=await connection.getAccountInfo(new PublicKey(a));if(!acct)return null;return new AddressLookupTableAccount({key:new PublicKey(a),state:AddressLookupTableAccount.deserialize(acct.data)});}catch{return null;}
+  }))).filter(Boolean);
+  const{bh}=await connection.getLatestBlockhash('finalized');
+  return new VersionedTransaction(new TransactionMessage({payerKey:userPubkey,recentBlockhash:bh,instructions:ixs}).compileToV0Message(lts));
+}
 
 function loadPresets(){try{const r=localStorage.getItem(PRESETS_LS_KEY);if(!r)return{buy:DEFAULT_BUY_PRESETS.slice(),sell:DEFAULT_SELL_PRESETS.slice()};const p=JSON.parse(r);return{buy:Array.isArray(p.buy)&&p.buy.length>=2?p.buy:DEFAULT_BUY_PRESETS.slice(),sell:Array.isArray(p.sell)&&p.sell.length>=1?p.sell:DEFAULT_SELL_PRESETS.slice()};}catch{return{buy:DEFAULT_BUY_PRESETS.slice(),sell:DEFAULT_SELL_PRESETS.slice()};}}
 function savePresets(p){try{localStorage.setItem(PRESETS_LS_KEY,JSON.stringify(p));}catch{}}
