@@ -384,7 +384,7 @@ function humanToRawAmount(humanAmount, decimals) {
   try {
     big = BigInt(combined);
   } catch {
-    return '0';
+    throw new Error('Invalid amount: decimals=' + dec + ' might be wrong for this mint.');
   }
 
   if (big > U64_MAX) {
