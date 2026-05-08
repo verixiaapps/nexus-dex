@@ -1,17 +1,15 @@
+Alright, then we work with what's enabled. Let me rewrite Markets to use all-tokens for browsing. One call, no dashboard changes needed.
+
+Here's the whole file — replace yours:
+
+```js
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 
 /**
  * NEXUS DEX -- Markets
  * 
- * Data source:
- *   OKX DEX Aggregator only for normal market/search coverage.
- *
- * Fallback:
- *   If user pastes a Solana mint and OKX does not return it, we use
- *   /api/helius/das to resolve real Solana metadata so pump.fun / PumpSwap
- *   tokens can still open the token drawer.
- *
- * No Jupiter, no LiFi, no CoinGecko, no fake placeholder rows.
+ * Data source: OKX DEX Aggregator all-tokens (multi-chain).
+ * Fallback: Helius DAS for Solana pump.fun tokens not in OKX.
  */
 
 const C = {
@@ -48,6 +46,8 @@ const OKX_CHAINS = [
   { chainIndex: '80094', label: 'BERA', chain: 'evm' },
   { chainIndex: '130', label: 'UNI', chain: 'evm' },
 ];
+
+const BROWSE_KEYWORDS = ['a', 'e', 'i', 'o', 't', 'n', 's'];
 
 const CHAIN_LABEL = OKX_CHAINS.reduce(function(acc, c) {
   acc[String(c.chainIndex)] = c.label;
@@ -296,26 +296,6 @@ function unwrapOkxTokenList(data) {
     return data.data[0].tokens;
   }
   return [];
-}
-
-async function fetchOkxTokensForChain(chainInfo) {
-  const qs = new URLSearchParams({
-    chainIndex: String(chainInfo.chainIndex),
-  });
-
-  const res = await fetch('/api/okx/dex/aggregator/tokens?' + qs.toString());
-
-  const data = await res.json().catch(function() {
-    return null;
-  });
-
-  if (!res.ok) return [];
-
-  return unwrapOkxTokenList(data)
-    .map(function(t) {
-      return normalizeOkxToken(t, chainInfo);
-    })
-    .filter(isUsableRow);
 }
 
 async function fetchOkxAllTokens(query) {
@@ -687,14 +667,15 @@ export default function Markets({ onSelectCoin }) {
     };
   }, []);
 
+  // Browse: fire all-tokens with single-letter keywords, merge, dedupe
   useEffect(function() {
     let cancelled = false;
 
     setBrowseLoading(true);
 
     Promise.all(
-      OKX_CHAINS.slice(0, 8).map(function(chainInfo) {
-        return fetchOkxTokensForChain(chainInfo);
+      BROWSE_KEYWORDS.map(function(kw) {
+        return fetchOkxAllTokens(kw);
       })
     )
       .then(function(results) {
@@ -704,13 +685,19 @@ export default function Markets({ onSelectCoin }) {
         const merged = [];
 
         results.flat().forEach(function(t) {
+          if (!isUsableRow(t)) return;
           const key = t.chain + '-' + (t.mint || t.address || '').toLowerCase() + '-' + (t.chainId || '');
           if (seen.has(key)) return;
           seen.add(key);
           merged.push(t);
         });
 
-        setBrowseTokens(merged);
+        // Sort by market cap desc for default view
+        merged.sort(function(a, b) {
+          return (Number(b.market_cap) || 0) - (Number(a.market_cap) || 0);
+        });
+
+        setBrowseTokens(merged.slice(0, 100));
         setBrowseLoading(false);
       })
       .catch(function() {
@@ -724,6 +711,7 @@ export default function Markets({ onSelectCoin }) {
     };
   }, []);
 
+  // Search
   useEffect(function() {
     const trimmed = debouncedQ.trim();
 
@@ -797,7 +785,6 @@ export default function Markets({ onSelectCoin }) {
     }
 
     return browseTokens
-      .filter(isUsableRow)
       .slice()
       .sort(function(a, b) {
         const av = Number(a[sort] || 0);
@@ -848,7 +835,7 @@ export default function Markets({ onSelectCoin }) {
             Live Markets
           </h1>
           <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>
-            OKX DEX coverage. Paste a Solana mint for pump.fun fallback.
+            Multi-chain OKX coverage. Paste a Solana mint for pump.fun fallback.
           </p>
         </div>
 
@@ -914,7 +901,7 @@ export default function Markets({ onSelectCoin }) {
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: 60, color: C.muted, fontSize: 14 }}>
-          Loading OKX markets...
+          Loading multi-chain markets...
         </div>
       ) : (
         <div style={{
@@ -1014,7 +1001,7 @@ export default function Markets({ onSelectCoin }) {
 
           {sorted.length === 0 && !q && !browseLoading && (
             <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>
-              No OKX market data available
+              No market data available
             </div>
           )}
         </div>
