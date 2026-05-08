@@ -1,6 +1,3 @@
-Here's the rewritten NewLaunches.js with live trade tracking, percent changes, and sorted New/Trending tabs:
-
-```js
 /**
  * NEXUS DEX -- NewLaunches
  *
