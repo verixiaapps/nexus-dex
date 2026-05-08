@@ -19,29 +19,16 @@ import {
  *   - Solana -> Solana
  *   - EVM -> same EVM chain
  *
- * Removed:
- *   - LI.FI
- *   - bridges
- *   - cross-chain routing
- *   - VersionedTransaction bridge deserialization
- *   - Buffer usage
- *   - ERC20 approval spender flow
- *
- * Fee:
- *   - 5% total fee
- *   - SOL/SPL: recipient + fee transfer bundled into same Solana tx
- *   - EVM native: recipient + fee transfer bundled into one Multicall3 tx
- *   - EVM ERC20: two direct ERC20 transfer txs, no approval spender
+ * Non-custodial:
+ *   - No platform fee
+ *   - No fee wallet
+ *   - No Multicall3
+ *   - No bridges
+ *   - No swaps
+ *   - No routing
+ *   - User signs direct wallet-to-wallet transfers
  */
 
-const FEE_WALLET_SOL = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
-const FEE_WALLET_EVM = '0xC41c1de4250104dC1EE2854ffD5b40a04B9AC9fF';
-
-const PLATFORM_FEE = 0.03;
-const SAFETY_FEE = 0.02;
-const TOTAL_FEE = PLATFORM_FEE + SAFETY_FEE;
-
-const MULTICALL3 = '0xcA11bde05977b3631167028862bE2a173976CA11';
 const NATIVE_EVM = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
@@ -97,27 +84,6 @@ const C = {
   muted: '#586994',
   muted2: '#2e3f5e',
 };
-
-const aggregate3ValueAbi = [
-  {
-    name: 'aggregate3Value',
-    type: 'function',
-    stateMutability: 'payable',
-    inputs: [
-      {
-        name: 'calls',
-        type: 'tuple[]',
-        components: [
-          { name: 'target', type: 'address' },
-          { name: 'allowFailure', type: 'bool' },
-          { name: 'value', type: 'uint256' },
-          { name: 'callData', type: 'bytes' },
-        ],
-      },
-    ],
-    outputs: [],
-  },
-];
 
 const erc20TransferAbi = [
   {
@@ -283,10 +249,6 @@ function isNativeEvmToken(token) {
   return isEvm(token) && token.address && token.address.toLowerCase() === NATIVE_EVM;
 }
 
-function normalizeEvmAddress(address) {
-  return String(address || '').toLowerCase();
-}
-
 function fmt(n) {
   n = Number(n || 0);
   if (!Number.isFinite(n) || n <= 0) return '$0.00';
@@ -324,28 +286,6 @@ function toRawAmount(value, decimals) {
   const paddedFraction = (fraction + '0'.repeat(safeDecimals)).slice(0, safeDecimals);
 
   return BigInt(whole) * (BigInt(10) ** BigInt(safeDecimals)) + BigInt(paddedFraction || '0');
-}
-
-function splitFeeRaw(totalRaw) {
-  const feeRaw = (totalRaw * BigInt(5)) / BigInt(100);
-  return {
-    feeRaw,
-    recipientRaw: totalRaw - feeRaw,
-  };
-}
-
-function splitFeeNumber(total) {
-  const feeAmount = total * TOTAL_FEE;
-  return {
-    feeAmount,
-    recipientAmount: total - feeAmount,
-  };
-}
-
-function shortAddress(address) {
-  if (!address || typeof address !== 'string') return '';
-  if (address.length <= 14) return address;
-  return address.slice(0, 6) + '...' + address.slice(-4);
 }
 
 function getPrice(coins, symbol) {
@@ -943,21 +883,16 @@ export default function Send({
   const [amount, setAmount] = useState('');
   const [sendStatus, setSendStatus] = useState('idle');
   const [txSig, setTxSig] = useState(null);
-  const [txSig2, setTxSig2] = useState(null);
   const [error, setError] = useState('');
   const [solBalance, setSolBalance] = useState(null);
   const [pendingSend, setPendingSend] = useState(false);
 
   const amountNum = parseFloat(amount) || 0;
-  const splitDisplay = splitFeeNumber(amountNum);
   const price = getPrice(coins, selectedToken.symbol);
   const usdValue = amountNum * price;
   const tokenChainName = isSol(selectedToken)
     ? 'Solana'
     : CHAIN_NAMES[selectedToken.chainId] || 'EVM';
-
-  const feeAmountDisplay = splitDisplay.feeAmount;
-  const recipientAmountDisplay = splitDisplay.recipientAmount;
 
   const recipientIsValid = useMemo(function () {
     if (!recipient) return false;
@@ -971,7 +906,6 @@ export default function Send({
     setAmount('');
     setError('');
     setTxSig(null);
-    setTxSig2(null);
     setSendStatus('idle');
   }, [selectedToken]);
 
@@ -1015,28 +949,17 @@ export default function Send({
     if (!connection) throw new Error('Solana connection unavailable');
 
     const recipientPubkey = new PublicKey(recipient.trim());
-    const feeWalletPubkey = new PublicKey(FEE_WALLET_SOL);
     const transaction = new Transaction();
 
     if (selectedToken.mint === SOL_MINT) {
       const totalLamports = toRawAmount(amount, 9);
       if (totalLamports <= BigInt(0)) throw new Error('Amount too small');
 
-      const split = splitFeeRaw(totalLamports);
-
       transaction.add(
         SystemProgram.transfer({
           fromPubkey: publicKey,
           toPubkey: recipientPubkey,
-          lamports: split.recipientRaw,
-        }),
-      );
-
-      transaction.add(
-        SystemProgram.transfer({
-          fromPubkey: publicKey,
-          toPubkey: feeWalletPubkey,
-          lamports: split.feeRaw,
+          lamports: totalLamports,
         }),
       );
     } else {
@@ -1044,20 +967,17 @@ export default function Send({
       const totalRaw = toRawAmount(amount, decimals);
       if (totalRaw <= BigInt(0)) throw new Error('Amount too small');
 
-      const split = splitFeeRaw(totalRaw);
       const mintPk = new PublicKey(selectedToken.mint);
       const programId = await getSolTokenProgramId(connection, mintPk);
 
       const fromAta = await getAssociatedTokenAddress(mintPk, publicKey, false, programId);
       const recipientAta = await getAssociatedTokenAddress(mintPk, recipientPubkey, false, programId);
-      const feeAta = await getAssociatedTokenAddress(mintPk, feeWalletPubkey, false, programId);
 
-      const ataInfos = await Promise.all([
-        connection.getAccountInfo(recipientAta).catch(function () { return null; }),
-        connection.getAccountInfo(feeAta).catch(function () { return null; }),
-      ]);
+      const recipientAtaInfo = await connection.getAccountInfo(recipientAta).catch(function () {
+        return null;
+      });
 
-      if (!ataInfos[0]) {
+      if (!recipientAtaInfo) {
         transaction.add(
           createAssociatedTokenAccountInstruction(
             publicKey,
@@ -1069,35 +989,12 @@ export default function Send({
         );
       }
 
-      if (!ataInfos[1]) {
-        transaction.add(
-          createAssociatedTokenAccountInstruction(
-            publicKey,
-            feeAta,
-            feeWalletPubkey,
-            mintPk,
-            programId,
-          ),
-        );
-      }
-
       transaction.add(
         createTransferInstruction(
           fromAta,
           recipientAta,
           publicKey,
-          split.recipientRaw,
-          [],
-          programId,
-        ),
-      );
-
-      transaction.add(
-        createTransferInstruction(
-          fromAta,
-          feeAta,
-          publicKey,
-          split.feeRaw,
+          totalRaw,
           [],
           programId,
         ),
@@ -1149,34 +1046,10 @@ export default function Send({
     const totalRaw = toRawAmount(amount, selectedToken.decimals || 18);
     if (totalRaw <= BigInt(0)) throw new Error('Amount too small');
 
-    const split = splitFeeRaw(totalRaw);
-
     if (isNativeEvmToken(selectedToken)) {
-      const calls = [
-        {
-          target: recipient.trim(),
-          allowFailure: false,
-          value: split.recipientRaw,
-          callData: '0x',
-        },
-        {
-          target: FEE_WALLET_EVM,
-          allowFailure: false,
-          value: split.feeRaw,
-          callData: '0x',
-        },
-      ];
-
-      const data = encodeFunctionData({
-        abi: aggregate3ValueAbi,
-        functionName: 'aggregate3Value',
-        args: [calls],
-      });
-
       const hash = await walletClient.sendTransaction({
-        to: MULTICALL3,
+        to: recipient.trim(),
         value: totalRaw,
-        data,
         chain: walletClient.chain,
         account: evmAddress,
       });
@@ -1190,16 +1063,10 @@ export default function Send({
     const recipientData = encodeFunctionData({
       abi: erc20TransferAbi,
       functionName: 'transfer',
-      args: [recipient.trim(), split.recipientRaw],
+      args: [recipient.trim(), totalRaw],
     });
 
-    const feeData = encodeFunctionData({
-      abi: erc20TransferAbi,
-      functionName: 'transfer',
-      args: [FEE_WALLET_EVM, split.feeRaw],
-    });
-
-    const firstHash = await walletClient.sendTransaction({
+    const hash = await walletClient.sendTransaction({
       to: tokenAddress,
       data: recipientData,
       value: BigInt(0),
@@ -1207,18 +1074,7 @@ export default function Send({
       account: evmAddress,
     });
 
-    const secondHash = await walletClient.sendTransaction({
-      to: tokenAddress,
-      data: feeData,
-      value: BigInt(0),
-      chain: walletClient.chain,
-      account: evmAddress,
-    });
-
-    return {
-      sig: firstHash,
-      sig2: secondHash,
-    };
+    return { sig: hash };
   }
 
   async function handleSend() {
@@ -1243,7 +1099,6 @@ export default function Send({
 
     setError('');
     setTxSig(null);
-    setTxSig2(null);
     setSendStatus('loading');
 
     try {
@@ -1252,7 +1107,6 @@ export default function Send({
         : await handleEvmSend();
 
       setTxSig(result.sig || null);
-      setTxSig2(result.sig2 || null);
       setSendStatus('success');
       setAmount('');
       setRecipient('');
@@ -1260,7 +1114,6 @@ export default function Send({
       setTimeout(function () {
         setSendStatus('idle');
         setTxSig(null);
-        setTxSig2(null);
       }, 7000);
     } catch (e) {
       console.error('Send error:', e);
@@ -1274,7 +1127,6 @@ export default function Send({
   }
 
   const txLink = getExplorerTxUrl(selectedToken, txSig);
-  const txLink2 = getExplorerTxUrl(selectedToken, txSig2);
 
   if (!walletConnected) {
     return (
@@ -1329,8 +1181,8 @@ export default function Send({
         <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Send Tokens</h1>
         <p style={{ color: C.muted, fontSize: 12, marginTop: 3 }}>
           {isSol(selectedToken)
-            ? 'Solana to Solana only - 5% fee'
-            : (CHAIN_NAMES[selectedToken.chainId] || 'EVM') + ' same-chain only - 5% fee'}
+            ? 'Solana to Solana only'
+            : (CHAIN_NAMES[selectedToken.chainId] || 'EVM') + ' same-chain only'}
         </p>
       </div>
 
@@ -1492,7 +1344,7 @@ export default function Send({
               {[0.25, 0.5, 0.75, 1].map(function (pct) {
                 return (
                   <button
-                    key={                    key={pct}
+                    key={pct}
                     onClick={function () {
                       setAmount((solBalance * pct * 0.99).toFixed(6));
                     }}
@@ -1520,11 +1372,10 @@ export default function Send({
           {amount && amountNum > 0 ? (
             <div>
               {[
-                ['Platform fee (3%)', (amountNum * PLATFORM_FEE).toFixed(6) + ' ' + selectedToken.symbol],
-                ['Safety fee (2%)', (amountNum * SAFETY_FEE).toFixed(6) + ' ' + selectedToken.symbol],
-                ['Total fee (5%)', feeAmountDisplay.toFixed(6) + ' ' + selectedToken.symbol],
-                ['Recipient gets', recipientAmountDisplay.toFixed(6) + ' ' + selectedToken.symbol],
+                ['You send', amountNum.toFixed(6) + ' ' + selectedToken.symbol],
+                ['Recipient gets', amountNum.toFixed(6) + ' ' + selectedToken.symbol],
                 price > 0 ? ['USD Value', fmt(usdValue)] : null,
+                ['Network fee', 'Paid to the blockchain by your wallet'],
               ].filter(Boolean).map(function (item) {
                 const isHighlight = item[0] === 'Recipient gets';
 
@@ -1534,6 +1385,7 @@ export default function Send({
                     style={{
                       display: 'flex',
                       justifyContent: 'space-between',
+                      gap: 12,
                       padding: '3px 0',
                       fontSize: 11,
                     }}
@@ -1543,6 +1395,7 @@ export default function Send({
                       style={{
                         color: isHighlight ? C.green : C.text,
                         fontWeight: isHighlight ? 700 : 400,
+                        textAlign: 'right',
                       }}
                     >
                       {item[1]}
@@ -1553,7 +1406,7 @@ export default function Send({
             </div>
           ) : (
             <div style={{ color: C.muted2, fontSize: 11, lineHeight: 1.5 }}>
-              Same-chain only. No bridges. No routing. Your wallet signs the transfer.
+              Same-chain only. No bridges. No routing. No Nexus fee. Your wallet signs the transfer.
             </div>
           )}
         </div>
@@ -1571,7 +1424,7 @@ export default function Send({
               lineHeight: 1.5,
             }}
           >
-            ERC20 sends use two direct token transfers: one to the recipient and one to the fee wallet. No approval spender is used.
+            ERC20 sends use one direct token transfer to the recipient. No approval spender is used.
           </div>
         )}
 
@@ -1653,23 +1506,6 @@ export default function Send({
           </a>
         )}
 
-        {txSig2 && sendStatus === 'success' && txLink2 && (
-          <a
-            href={txLink2}
-            target="_blank"
-            rel="noreferrer"
-            style={{
-              display: 'block',
-              textAlign: 'center',
-              marginTop: 8,
-              color: C.accent,
-              fontSize: 12,
-            }}
-          >
-            View Fee Transaction
-          </a>
-        )}
-
         <p
           style={{
             textAlign: 'center',
@@ -1679,7 +1515,7 @@ export default function Send({
             lineHeight: 1.6,
           }}
         >
-          Non-custodial -- same-chain send only. Fee is paid in the same token.
+          Non-custodial -- same-chain send only. No Nexus fee. Transactions are irreversible.
         </p>
       </div>
 
