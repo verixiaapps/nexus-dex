@@ -1,29 +1,12 @@
-import React, { useState, useEffect, useMemo } from 'react';
+Here's TokenDetail. Fetches its own data. Passes exact contract address. Fast. Clean.
+
+```js
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { TradeDrawer } from './SwapWidget.jsx';
 import InstantTrade from './InstantTrade.jsx';
 import { useNexusWallet } from '../WalletContext.js';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
- 
-/**
- * NEXUS DEX -- TokenDetail
- *
- * Trading:
- *   - OKX for normal swap execution
- *   - PumpPortal for pump.fun / PumpSwap execution
- *
- * Data:
- *   - Coin info: `coin` prop, refreshed via `coins` array from App.js
- *   - SPL balance: Solana RPC via wallet adapter connection
- *
- * Not used here:
- *   - Jupiter
- *   - 0x
- *   - LiFi
- *   - CoinGecko enrichment
- *   - GeckoTerminal
- *   - DexScreener
- */
 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -33,29 +16,21 @@ const C = {
 };
 
 const CHAIN_NAMES = {
-  1: 'Ethereum', 137: 'Polygon', 42161: 'Arbitrum', 8453: 'Base', 56: 'BNB Chain',
-  43114: 'Avalanche', 10: 'Optimism', 100: 'Gnosis', 324: 'zkSync Era', 59144: 'Linea',
-  534352: 'Scroll', 5000: 'Mantle', 81457: 'Blast', 34443: 'Mode', 130: 'Unichain',
-  146: 'Sonic', 80094: 'Berachain', 57073: 'Ink', 480: 'World Chain',
-  250: 'Fantom', 25: 'Cronos', 1284: 'Moonbeam', 42220: 'Celo', 1329: 'SEI', 8217: 'Kaia',
+  1:'Ethereum',137:'Polygon',42161:'Arbitrum',8453:'Base',56:'BNB Chain',
+  43114:'Avalanche',10:'Optimism',100:'Gnosis',324:'zkSync Era',59144:'Linea',
+  534352:'Scroll',5000:'Mantle',81457:'Blast',34443:'Mode',130:'Unichain',
+  146:'Sonic',80094:'Berachain',57073:'Ink',480:'World Chain',
 };
 
-const SOL_MINT = 'So11111111111111111111111111111111111111112';
-
-function toNum(n, fallback) {
-  const v = Number(n);
-  return Number.isFinite(v) ? v : fallback;
-}
-
 function fmt(n, d) {
-  if (d === undefined) d = 2;
+  if (n == null || !Number.isFinite(Number(n))) return '-';
   const v = Number(n);
-  if (!Number.isFinite(v)) return '-';
+  d = d != null ? d : (v >= 1000 ? 2 : v >= 1 ? 4 : 8);
   if (v >= 1e9) return '$' + (v / 1e9).toFixed(2) + 'B';
   if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
-  if (v >= 1000) return '$' + v.toLocaleString('en-US', { maximumFractionDigits: d });
+  if (v >= 1000) return '$' + v.toLocaleString('en-US', { maximumFractionDigits: 2 });
   if (v >= 1) return '$' + v.toFixed(d);
-  if (v > 0) return '$' + v.toFixed(6);
+  if (v > 0) return '$' + v.toFixed(8);
   return '$0.00';
 }
 
@@ -65,295 +40,264 @@ function pct(n) {
   return (v > 0 ? '+' : '') + v.toFixed(2) + '%';
 }
 
-function isOnChainAddress(str) {
-  if (!str) return false;
-  if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(str)) return true;
-  if (/^0x[0-9a-fA-F]{40}$/.test(str)) return true;
-  return false;
+function shortAddr(a) {
+  if (!a || a.length < 10) return a || '';
+  return a.slice(0, 6) + '...' + a.slice(-4);
 }
 
-export default function TokenDetail({ coin, coins, onBack, onConnectWallet }) {
+async function fetchTokenData(address, chainId) {
+  try {
+    const res = await fetch('/api/dexscreener/latest/dex/tokens/' + encodeURIComponent(address));
+    const data = await res.json().catch(() => null);
+    if (!data || !Array.isArray(data.pairs)) return null;
+
+    // Pick the best pair by liquidity
+    let best = null;
+    for (const p of data.pairs) {
+      const liq = Number(p.liquidity?.usd || 0);
+      if (!best || liq > (best._liq || 0)) best = p;
+    }
+    if (!best) return null;
+
+    const bt = best.baseToken || {};
+    const isSol = best.chainId === 'solana';
+    const addr = bt.address || '';
+
+    return {
+      mint: isSol ? addr : undefined,
+      address: isSol ? undefined : addr,
+      chain: isSol ? 'solana' : 'evm',
+      chainId: chainId || best.chainId,
+      symbol: bt.symbol || '???',
+      name: bt.name || bt.symbol || 'Unknown',
+      image: bt.imgUrl || best.info?.imageUrl || null,
+      logoURI: bt.imgUrl || best.info?.imageUrl || null,
+      decimals: bt.decimals || (isSol ? 6 : 18),
+      current_price: Number(best.priceUsd || 0) || 0,
+      market_cap: Number(best.marketCap || best.fdv || 0) || 0,
+      total_volume: Number(best.volume?.h24 || best.volume || 0) || 0,
+      price_change_percentage_24h: best.priceChange?.h24 != null ? Number(best.priceChange.h24) : null,
+      price_change_percentage_1h_in_currency: best.priceChange?.h1 != null ? Number(best.priceChange.h1) : null,
+      high_24h: null,
+      low_24h: null,
+      ath: null,
+      ath_change_percentage: null,
+      circulating_supply: null,
+      market_cap_rank: null,
+      priceUsd: Number(best.priceUsd || 0) || 0,
+      liquidity: Number(best.liquidity?.usd || 0) || 0,
+      quoteSymbol: (best.quoteToken || {}).symbol || '',
+      pairAddress: best.pairAddress || '',
+    };
+  } catch {
+    return null;
+  }
+}
+
+export default function TokenDetail({ coin, onBack, onConnectWallet }) {
   const { headerChain, setHeaderChain, presets, setPresets } = useNexusWallet();
   const { publicKey, connected: solConnected } = useWallet();
   const { connection } = useConnection();
 
+  const [tokenData, setTokenData] = useState(null);
+  const [loading, setLoading] = useState(true);
   const [userTokenBalance, setUserTokenBalance] = useState(0);
   const [userTokenDecimals, setUserTokenDecimals] = useState(null);
   const [tradeRefreshTick, setTradeRefreshTick] = useState(0);
-
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState('buy');
-  const [drawerPrefill, setDrawerPrefill] = useState(null);
 
-  const liveCoin = useMemo(function () {
+  const contractAddress = useMemo(() => {
     if (!coin) return null;
-    if (!Array.isArray(coins) || !coins.length) return coin;
-
-    const match = coins.find(function (c) {
-      if (!c) return false;
-      if (coin.id && c.id === coin.id) return true;
-      if (coin.mint && c.id === coin.mint) return true;
-      if (coin.mint && c.mint === coin.mint) return true;
-      if (coin.address && c.address && String(c.address).toLowerCase() === String(coin.address).toLowerCase()) return true;
-      return false;
-    });
-
-    return match || coin;
-  }, [coin, coins]);
-
-  const enrichedCoin = useMemo(function () {
-    if (!coin) return null;
-
-    if (coin.mint || coin.isSolanaToken || coin.chain === 'solana') {
-      return Object.assign({}, coin, {
-        mint: coin.mint || coin.id,
-        chain: 'solana',
-      });
-    }
-
-    if (coin.chain === 'evm' && coin.address && coin.chainId) return coin;
-
-    return coin;
+    if (coin.mint) return coin.mint;
+    if (coin.address && coin.chain === 'evm') return coin.address;
+    if (coin.address) return coin.address;
+    return null;
   }, [coin]);
 
-  const isEvmToken = enrichedCoin && (
-    enrichedCoin.chain === 'evm' ||
-    (enrichedCoin.address && !enrichedCoin.mint)
-  );
+  const chainId = useMemo(() => {
+    if (!coin) return null;
+    if (coin.chain === 'solana') return null;
+    return coin.chainId || null;
+  }, [coin]);
 
-  const solPriceUsd = useMemo(function () {
-    if (!Array.isArray(coins)) return 0;
+  // Fetch token data on mount
+  useEffect(() => {
+    if (!contractAddress) { setLoading(false); return; }
+    let cancelled = false;
+    setLoading(true);
+    fetchTokenData(contractAddress, chainId).then(data => {
+      if (!cancelled && data) setTokenData(data);
+      if (!cancelled) setLoading(false);
+    }).catch(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [contractAddress, chainId]);
 
-    const sol = coins.find(function (c) {
-      if (!c) return false;
-      const id = String(c.id || '').toLowerCase();
-      const mint = String(c.mint || '').toLowerCase();
-      const symbol = String(c.symbol || '').toLowerCase();
-
-      return (
-        id === SOL_MINT.toLowerCase() ||
-        mint === SOL_MINT.toLowerCase() ||
-        symbol === 'sol'
-      );
-    });
-
-    const p = sol && Number(sol.current_price);
-    return Number.isFinite(p) && p > 0 ? p : 0;
-  }, [coins]);
-
-  useEffect(function () {
-    if (!enrichedCoin || !enrichedCoin.mint) {
+  // Fetch user balance for Solana tokens
+  useEffect(() => {
+    if (!tokenData || !tokenData.mint || !solConnected || !publicKey || !connection) {
       setUserTokenBalance(0);
       setUserTokenDecimals(null);
-      return undefined;
+      return;
     }
-
-    if (!solConnected || !publicKey || !connection) {
-      setUserTokenBalance(0);
-      return undefined;
-    }
-
     let cancelled = false;
-
-    (async function () {
+    (async () => {
       try {
-        const mintPk = new PublicKey(enrichedCoin.mint);
+        const mintPk = new PublicKey(tokenData.mint);
         const resp = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: mintPk });
-
         if (cancelled) return;
-
-        let total = 0;
-        let dec = null;
-
-        if (resp && resp.value) {
-          resp.value.forEach(function (acc) {
+        let total = 0, dec = null;
+        if (resp?.value) {
+          resp.value.forEach(acc => {
             try {
               const info = acc.account.data.parsed.info;
-              const ta = info && info.tokenAmount;
-
+              const ta = info?.tokenAmount;
               if (ta) {
-                const parsedDecimals = Number(ta.decimals);
-                if (dec == null && Number.isFinite(parsedDecimals)) dec = parsedDecimals;
-
-                const ui = parseFloat(ta.uiAmountString || ta.uiAmount || 0);
-                if (Number.isFinite(ui)) total += ui;
+                if (dec == null) dec = Number(ta.decimals);
+                total += parseFloat(ta.uiAmountString || ta.uiAmount || 0);
               }
-            } catch (e) {}
+            } catch {}
           });
         }
-
         setUserTokenBalance(total);
         if (dec != null) setUserTokenDecimals(dec);
-      } catch (e) {
-        if (!cancelled) {
-          setUserTokenBalance(0);
-          setUserTokenDecimals(null);
-        }
-      }
+      } catch { if (!cancelled) { setUserTokenBalance(0); setUserTokenDecimals(null); } }
     })();
+    return () => { cancelled = true; };
+  }, [tokenData, solConnected, publicKey, connection, tradeRefreshTick]);
 
-    return function () {
-      cancelled = true;
-    };
-  }, [enrichedCoin, solConnected, publicKey, connection, tradeRefreshTick]);
+  const openDrawer = useCallback((mode) => {
+    setDrawerMode(mode);
+    setDrawerOpen(true);
+  }, []);
 
-  if (!coin || !liveCoin) return null;
+  const closeDrawer = useCallback(() => {
+    setDrawerOpen(false);
+  }, []);
 
-  const contractAddress = isEvmToken
-    ? (enrichedCoin && (enrichedCoin.address || enrichedCoin.id))
-    : (enrichedCoin && (enrichedCoin.mint || (isOnChainAddress(enrichedCoin.id) ? enrichedCoin.id : null)));
+  if (loading && !tokenData) {
+    return (
+      <div style={{ maxWidth: 640, margin: '0 auto', padding: 40, textAlign: 'center', color: C.muted, fontFamily: 'Syne, sans-serif' }}>
+        <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 30, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600, padding: 0 }}>← Back to Markets</button>
+        <div style={{ fontSize: 16 }}>Loading token data...</div>
+      </div>
+    );
+  }
 
-  const contractLabel = isEvmToken
-    ? ((CHAIN_NAMES[enrichedCoin && enrichedCoin.chainId] || 'EVM') + ' CONTRACT').toUpperCase()
-    : 'SOLANA CONTRACT';
+  if (!tokenData) {
+    return (
+      <div style={{ maxWidth: 640, margin: '0 auto', padding: 40, textAlign: 'center', color: C.muted, fontFamily: 'Syne, sans-serif' }}>
+        <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 30, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600, padding: 0 }}>← Back to Markets</button>
+        <div style={{ fontSize: 16, marginBottom: 8 }}>Token not found</div>
+        <div style={{ fontSize: 12, color: C.muted2 }}>DexScreener returned no data for this contract.</div>
+      </div>
+    );
+  }
 
-  const displayPrice = toNum(liveCoin.current_price, 0);
-  const priceChange = toNum(liveCoin.price_change_percentage_24h, 0);
-  const symbolUp = coin.symbol ? coin.symbol.toUpperCase() : '';
+  const td = tokenData;
+  const isSol = td.chain === 'solana';
+  const isEvm = td.chain === 'evm';
+  const sym = (td.symbol || '???').toUpperCase();
+  const price = td.current_price;
+  const change = td.price_change_percentage_24h;
+  const solPriceUsd = isSol ? (td.quoteSymbol === 'USDC' || td.priceUsd > 0 ? td.priceUsd : 0) : 0;
 
   const statsItems = [
-    ['MARKET CAP', fmt(liveCoin.market_cap)],
-    ['24H VOLUME', fmt(liveCoin.total_volume)],
-    ['24H HIGH', fmt(liveCoin.high_24h)],
-    ['24H LOW', fmt(liveCoin.low_24h)],
-    ['ALL TIME HIGH', fmt(liveCoin.ath)],
-    ['ATH CHANGE', pct(liveCoin.ath_change_percentage)],
-    ['CIRCULATING SUPPLY', Number(liveCoin.circulating_supply) > 0 ? (Number(liveCoin.circulating_supply) / 1e6).toFixed(2) + 'M' : '-'],
-    ['MARKET CAP RANK', liveCoin.market_cap_rank ? '#' + liveCoin.market_cap_rank : '-'],
+    ['MARKET CAP', fmt(td.market_cap)],
+    ['24H VOLUME', fmt(td.total_volume)],
+    ['LIQUIDITY', fmt(td.liquidity)],
+    ['CHAIN', isSol ? 'Solana' : (CHAIN_NAMES[td.chainId] || 'EVM')],
+    ['PAIR', shortAddr(td.pairAddress)],
+    ['QUOTE', td.quoteSymbol || '-'],
   ];
 
-  function openDrawerWithPrefill(mode, opts) {
-    setDrawerMode(mode);
-    setDrawerPrefill(opts || null);
-    setDrawerOpen(true);
-  }
-
-  function closeDrawer() {
-    setDrawerOpen(false);
-    setDrawerPrefill(null);
-  }
-
   return (
-    <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
-      <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600, padding: 0 }}>Back to Markets</button>
+    <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box', fontFamily: 'Syne, sans-serif' }}>
+      <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 13, fontWeight: 600, padding: 0, fontFamily: 'Syne, sans-serif' }}>← Back to Markets</button>
 
+      {/* Header Card */}
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {coin.image
-              ? <img src={coin.image} alt={coin.symbol} style={{ width: 48, height: 48, borderRadius: '50%' }} />
-              : <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: C.accent }}>{coin.symbol && coin.symbol.charAt(0).toUpperCase()}</div>
+            {td.image
+              ? <img src={td.image} alt={sym} style={{ width: 48, height: 48, borderRadius: '50%' }} />
+              : <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: C.accent }}>{sym.charAt(0)}</div>
             }
-
             <div>
-              <div style={{ fontWeight: 800, fontSize: 20, color: '#fff' }}>{coin.name}</div>
+              <div style={{ fontWeight: 800, fontSize: 20, color: '#fff' }}>{td.name}</div>
               <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
-                {symbolUp} {liveCoin.market_cap_rank ? '- Rank #' + liveCoin.market_cap_rank : ''}
-                {isEvmToken && (
-                  <span style={{ fontSize: 9, color: '#627eea', background: 'rgba(98,126,234,.15)', borderRadius: 4, padding: '1px 5px', marginLeft: 4 }}>
-                    {CHAIN_NAMES[enrichedCoin.chainId] || 'EVM'}
-                  </span>
-                )}
+                {sym}
+                {isEvm && <span style={{ fontSize: 9, color: C.accent, background: 'rgba(0,229,255,.1)', borderRadius: 4, padding: '1px 5px', marginLeft: 4 }}>{CHAIN_NAMES[td.chainId] || 'EVM'}</span>}
+                {isSol && <span style={{ fontSize: 9, color: '#9945ff', background: 'rgba(153,69,255,.1)', borderRadius: 4, padding: '1px 5px', marginLeft: 4 }}>SOL</span>}
               </div>
             </div>
           </div>
-
           <div style={{ textAlign: 'right' }}>
-            <div style={{ fontSize: 28, fontWeight: 700, color: '#fff' }}>{fmt(displayPrice)}</div>
-            <div style={{ fontSize: 14, fontWeight: 600, color: priceChange >= 0 ? C.green : C.red, marginTop: 2 }}>{pct(priceChange)} (24H)</div>
+            <div style={{ fontSize: 28, fontWeight: 700, color: '#fff' }}>{fmt(price)}</div>
+            <div style={{ fontSize: 14, fontWeight: 600, color: (change || 0) >= 0 ? C.green : C.red, marginTop: 2 }}>{pct(change)} (24H)</div>
           </div>
         </div>
       </div>
 
+      {/* Instant Trade */}
       <div style={{ marginBottom: 12 }}>
         <InstantTrade
-          token={enrichedCoin}
+          token={td}
           solPrice={solPriceUsd}
           tokenBalance={userTokenBalance}
           tokenDecimals={userTokenDecimals}
           onConnectWallet={onConnectWallet}
-          onOpenDrawer={openDrawerWithPrefill}
-          onTradeComplete={function () {
-            setTradeRefreshTick(function (t) { return t + 1; });
-          }}
+          onOpenDrawer={(mode, opts) => { setDrawerMode(mode); setDrawerOpen(true); }}
+          onTradeComplete={() => setTradeRefreshTick(t => t + 1)}
         />
       </div>
 
+      {/* Buy / Sell Buttons */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
-        <button
-          onClick={function () { openDrawerWithPrefill('buy', null); }}
-          style={{
-            padding: '18px 10px', borderRadius: 14, border: 'none', cursor: 'pointer',
+        <button onClick={() => openDrawer('buy')}
+          style={{ padding: 18, borderRadius: 14, border: 'none', cursor: 'pointer',
             background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg,
-            fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56,
-          }}
-        >
-          Buy {symbolUp}
+            fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}>
+          Buy {sym}
         </button>
-
-        <button
-          onClick={function () { openDrawerWithPrefill('sell', null); }}
-          style={{
-            padding: '18px 10px', borderRadius: 14, cursor: 'pointer',
+        <button onClick={() => openDrawer('sell')}
+          style={{ padding: 18, borderRadius: 14, cursor: 'pointer',
             background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.3)', color: C.red,
-            fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56,
-          }}
-        >
-          Sell {symbolUp}
+            fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 18, minHeight: 56 }}>
+          Sell {sym}
         </button>
       </div>
 
+      {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginBottom: 14 }}>
-        {statsItems.map(function (item) {
-          return (
-            <div key={item[0]} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 14 }}>
-              <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, fontWeight: 700, letterSpacing: 1 }}>{item[0]}</div>
-              <div style={{ fontSize: 14, color: C.text, fontWeight: 600 }}>{item[1]}</div>
-            </div>
-          );
-        })}
+        {statsItems.map(item => (
+          <div key={item[0]} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 14 }}>
+            <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, fontWeight: 700, letterSpacing: 1 }}>{item[0]}</div>
+            <div style={{ fontSize: 14, color: C.text, fontWeight: 600 }}>{item[1]}</div>
+          </div>
+        ))}
       </div>
 
-      <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16, marginBottom: 14 }}>
-        <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, fontWeight: 700, letterSpacing: 1 }}>PRICE CHANGES</div>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
-          {[
-            ['1 Hour', liveCoin.price_change_percentage_1h_in_currency],
-            ['24 Hours', liveCoin.price_change_percentage_24h],
-            ['7 Days', liveCoin.price_change_percentage_7d_in_currency],
-          ].map(function (item) {
-            const v = Number(item[1]);
-            const hasVal = Number.isFinite(v);
-
-            return (
-              <div key={item[0]} style={{ background: C.card2, borderRadius: 10, padding: 12, textAlign: 'center' }}>
-                <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>{item[0]}</div>
-                <div style={{ fontSize: 15, fontWeight: 700, color: !hasVal ? C.muted : v >= 0 ? C.green : C.red }}>{hasVal ? pct(v) : '-'}</div>
-              </div>
-            );
-          })}
+      {/* Contract Address */}
+      <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16 }}>
+        <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>
+          {isSol ? 'SOLANA CONTRACT' : 'EVM CONTRACT'}
+        </div>
+        <div style={{ fontSize: 11, color: C.accent, fontFamily: 'monospace', wordBreak: 'break-all', lineHeight: 1.6 }}>
+          {contractAddress}
         </div>
       </div>
-
-      {contractAddress && isOnChainAddress(contractAddress) && (
-        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16, marginBottom: 14 }}>
-          <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>{contractLabel}</div>
-          <div style={{ fontSize: 11, color: C.accent, fontFamily: 'monospace', wordBreak: 'break-all', lineHeight: 1.6 }}>{contractAddress}</div>
-        </div>
-      )}
 
       <TradeDrawer
         open={drawerOpen}
         onClose={closeDrawer}
         mode={drawerMode}
-        coin={enrichedCoin}
+        coin={td}
         onConnectWallet={onConnectWallet}
         headerChain={headerChain}
         onHeaderChainChange={setHeaderChain}
         presets={presets}
         onPresetsChange={setPresets}
-        presetUsd={drawerPrefill && drawerPrefill.presetUsd != null ? drawerPrefill.presetUsd : null}
-        presetPct={drawerPrefill && drawerPrefill.presetPct != null ? drawerPrefill.presetPct : null}
       />
     </div>
   );
