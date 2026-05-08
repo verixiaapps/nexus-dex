@@ -1,6 +1,3 @@
-Here's the rewritten Portfolio with OKX-based pricing, no LiFi, no Helius DAS for prices:
-
-```js
 /**
  * NEXUS DEX -- Portfolio
  * 
