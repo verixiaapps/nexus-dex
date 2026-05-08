@@ -1,6 +1,6 @@
 /**
  * NEXUS DEX -- NewLaunches
- *
+ * 
  * Live feed of newly-launched Solana pump.fun tokens via PumpPortal WebSocket.
  * Instant display with bonding curve price. No polling.
  * Trades: pumpTrade.js -> /api/pumpportal/trade-local
