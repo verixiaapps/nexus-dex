@@ -12,7 +12,7 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { useNexusWallet } from '../WalletContext.js';
+import { useNexusWallet } from './WalletContext.js';
 
 export const DEFAULT_BUY_PRESETS  = [25, 50, 100, 250, 500];
 export const DEFAULT_SELL_PRESETS = [50, 100];
