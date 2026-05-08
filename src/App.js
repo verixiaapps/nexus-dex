@@ -1,5 +1,3 @@
-Part 1 of 2:
-
 import React, { useState, useEffect, useCallback, useRef, useReducer } from 'react';
 import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
