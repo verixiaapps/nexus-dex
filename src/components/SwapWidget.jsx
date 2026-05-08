@@ -1,6 +1,3 @@
-Alright. Instead of one massive text, here is the full file, save as SwapWidget.jsx. It has the fix.
-
-```jsx
 /**
  * NEXUS DEX - Unified Swap Widget (OKX DEX edition)
  *
