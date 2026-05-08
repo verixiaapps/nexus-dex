@@ -1,5 +1,3 @@
-Use this full revised Markets.js:
-
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 /**
  * NEXUS DEX -- Markets
