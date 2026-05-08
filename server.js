@@ -3,7 +3,7 @@
  *
  * Active routes:
  * /api/0x/*         - 0x v2 swap aggregator (EVM)
- * /api/jupiter/*    - Jupiter v6 swap + price + token search (Solana)
+ * /api/jupiter/*    - Jupiter swap + price + token search (Solana)
  * /api/lifi/*       - LiFi cross-chain + token price + catalog
  * /api/helius/das   - Helius DAS getAsset (Solana metadata + price fallback)
  * /api/solana-rpc   - Solana RPC proxy (Helius preferred)
@@ -19,10 +19,11 @@
  * /api/raydium/*         - TokenLaunch uses @raydium-io/raydium-sdk-v2
  *                          directly, which routes through /api/solana-rpc
  *
- * Jupiter routing:
- * /quote  GET  -> https://quote-api.jup.ag/v6/quote
- * /swap   POST -> https://quote-api.jup.ag/v6/swap
- * /price/* /tokens/* -> https://lite-api.jup.ag (public, no key)
+ * Jupiter routing (free tier, all paths -> lite-api.jup.ag):
+ * GET  /swap/v1/quote             - swap quote
+ * POST /swap/v1/swap-instructions - swap instruction builder
+ * GET  /price/v3                  - token price lookup
+ * GET  /tokens/v2/search          - token search
  *
  * Required env: OX_API_KEY, JUPITER_API_KEY, LIFI_API_KEY, HELIUS_API_KEY,
  *               PINATA_JWT (each accepts REACT_APP_* fallback)
@@ -149,12 +150,7 @@ app.use(cors({
 
 app.use(express.json({ limit: '256kb' }));
 
-/* -- RATE LIMITING ---------------------------------------------------------- */
-/*
- * Bumped from 240 to 600/min. Quote engine fires more proxy calls per
- * session now (Jupiter/LiFi for both from+to tokens, plus lazy LiFi
- * catalog load); 240 was too tight for active swappers.
- */
+/* -- RATE LIMITING (600/min for active swap sessions) ----------------------- */
 
 const apiLimiter = rateLimit({
   windowMs: 60_000,
@@ -276,18 +272,17 @@ async function proxy0x(req, res) {
 app.get('/api/0x/*', proxy0x);
 app.post('/api/0x/*', proxy0x);
 
-/* -- JUPITER PROXY (Solana swap + price + token search) -------------------- */
+/* -- JUPITER PROXY (all routes -> lite-api.jup.ag free tier) --------------- */
 /*
- * All paths route through quote-api.jup.ag/v6:
- * /quote  GET  -> https://quote-api.jup.ag/v6/quote
- * /swap   POST -> https://quote-api.jup.ag/v6/swap
- * /*           -> https://quote-api.jup.ag/v6/*
+ * Serves: /swap/v1/quote, /swap/v1/swap-instructions,
+ *         /price/v3, /tokens/v2/search
+ * x-api-key forwarded when JUPITER_API_KEY is set (future paid upgrade).
  */
 
 async function proxyJupiter(req, res) {
   try {
     const subPath = req.path.replace('/api/jupiter', '');
-    const url = 'https://quote-api.jup.ag/v6' + subPath + queryStringOf(req);
+    const url = 'https://lite-api.jup.ag' + subPath + queryStringOf(req);
     const headers = { 'Content-Type': 'application/json', Accept: 'application/json' };
     if (JUPITER_API_KEY) headers['x-api-key'] = JUPITER_API_KEY;
     const fetchOpts = { method: req.method, headers };
@@ -353,9 +348,7 @@ app.post('/api/helius/das', async (req, res) => {
 });
 
 /* -- SOLANA RPC (Helius preferred, falls back to public mainnet) ------------ */
-/*
- * The Raydium SDK's RPC calls flow through this endpoint.
- */
+/* Raydium SDK RPC calls flow through this endpoint. */
 
 app.post('/api/solana-rpc', async (req, res) => {
   try {
@@ -399,7 +392,7 @@ app.post('/api/pinata/json', uploadLimiter, async (req, res) => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + PINATA_JWT },
       body: JSON.stringify({
-        pinataContent: content,
+        pinataContent:  content,
         pinataMetadata: { name: (name || 'metadata').slice(0, 64) },
       }),
     }, 20_000);
@@ -408,7 +401,7 @@ app.post('/api/pinata/json', uploadLimiter, async (req, res) => {
       return res.json({ ipfsHash: result.parsed.IpfsHash, url: 'https://ipfs.io/ipfs/' + result.parsed.IpfsHash });
     }
     return res.status(response.status).json({
-      error: 'Pinata upload failed',
+      error:  'Pinata upload failed',
       detail: result.parsed || (result.raw && result.raw.slice(0, 300)),
     });
   } catch (e) {
@@ -420,8 +413,8 @@ app.post('/api/pinata/json', uploadLimiter, async (req, res) => {
 app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, res) => {
   try {
     if (!PINATA_JWT) return res.status(503).json({ error: 'Pinata not configured' });
-    if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-    const fd = new FormData();
+    if (!req.file)   return res.status(400).json({ error: 'No file uploaded' });
+    const fd   = new FormData();
     const blob = new Blob([req.file.buffer], { type: req.file.mimetype });
     fd.append('file', blob, req.file.originalname || 'upload');
     if (req.body && req.body.name) {
@@ -437,7 +430,7 @@ app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, r
       return res.json({ ipfsHash: result.parsed.IpfsHash, url: 'https://ipfs.io/ipfs/' + result.parsed.IpfsHash });
     }
     return res.status(response.status).json({
-      error: 'Pinata upload failed',
+      error:  'Pinata upload failed',
       detail: result.parsed || (result.raw && result.raw.slice(0, 300)),
     });
   } catch (e) {
@@ -498,11 +491,11 @@ app.listen(PORT, () => {
   console.log('Nexus DEX server running on port ' + PORT);
   console.log('  env:             ' + NODE_ENV);
   console.log('  allowed origins: ' + allowedOrigins.join(', '));
-  if (!OX_API_KEY)                          console.warn('  WARNING: OX_API_KEY not set - EVM swaps will fail');
-  if (!JUPITER_API_KEY)                     console.warn('  WARNING: JUPITER_API_KEY not set - Solana swaps will rate-limit on free tier');
-  if (!LIFI_API_KEY)                        console.warn('  WARNING: LIFI_API_KEY not set - cross-chain bridges will rate-limit on free tier');
-  if (!HELIUS_API_KEY && !HELIUS_RPC_URL)   console.warn('  WARNING: HELIUS_API_KEY / REACT_APP_SOLANA_RPC not set - falling back to public Solana RPC');
-  if (!PINATA_JWT)                          console.warn('  WARNING: PINATA_JWT not set - token launch metadata uploads will fail');
+  if (!OX_API_KEY)                        console.warn('  WARNING: OX_API_KEY not set - EVM swaps will fail');
+  if (!JUPITER_API_KEY)                   console.warn('  WARNING: JUPITER_API_KEY not set - using lite-api.jup.ag free tier (rate limited)');
+  if (!LIFI_API_KEY)                      console.warn('  WARNING: LIFI_API_KEY not set - cross-chain bridges will rate-limit on free tier');
+  if (!HELIUS_API_KEY && !HELIUS_RPC_URL) console.warn('  WARNING: HELIUS_API_KEY / REACT_APP_SOLANA_RPC not set - falling back to public Solana RPC');
+  if (!PINATA_JWT)                        console.warn('  WARNING: PINATA_JWT not set - token launch metadata uploads will fail');
 });
 
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
