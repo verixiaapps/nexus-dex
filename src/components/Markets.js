@@ -1,19 +1,33 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+
 /**
  * NEXUS DEX -- Markets
  *
- * OKX-only markets/search file.
+ * Data source:
+ *   OKX DEX Aggregator only for normal market/search coverage.
+ *
+ * Fallback:
+ *   If user pastes a Solana mint and OKX does not return it, we use
+ *   /api/helius/das to resolve real Solana metadata so pump.fun / PumpSwap
+ *   tokens can still open the token drawer.
+ *
+ * No Jupiter, no LiFi, no CoinGecko, no fake placeholder rows.
  */
+
 const C = {
   card: '#080d1a',
+  card2: '#0c1220',
   border: 'rgba(0,229,255,0.10)',
   borderHi: 'rgba(0,229,255,0.25)',
   accent: '#00e5ff',
   green: '#00ffa3',
   red: '#ff3b6b',
+  text: '#cdd6f4',
   muted: '#586994',
 };
+
 const OKX_SOLANA_CHAIN = '501';
+
 const OKX_CHAINS = [
   { chainIndex: '501', label: 'SOL', chain: 'solana' },
   { chainIndex: '1', label: 'ETH', chain: 'evm' },
@@ -34,10 +48,12 @@ const OKX_CHAINS = [
   { chainIndex: '80094', label: 'BERA', chain: 'evm' },
   { chainIndex: '130', label: 'UNI', chain: 'evm' },
 ];
+
 const CHAIN_LABEL = OKX_CHAINS.reduce(function(acc, c) {
   acc[String(c.chainIndex)] = c.label;
   return acc;
 }, {});
+
 function isValidMint(s) {
   return !!s &&
     typeof s === 'string' &&
@@ -45,11 +61,13 @@ function isValidMint(s) {
     s.length <= 44 &&
     /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
 }
+
 function isValidEvmAddress(s) {
   return !!s &&
     typeof s === 'string' &&
     /^0x[0-9a-fA-F]{40}$/.test(s);
 }
+
 function fmt(n, d = 2) {
   const x = Number(n);
   if (!Number.isFinite(x) || x === 0) return '-';
@@ -59,63 +77,78 @@ function fmt(n, d = 2) {
   if (x >= 1) return '$' + x.toFixed(d);
   return '$' + x.toFixed(6);
 }
+
 function pctFmt(n) {
   const x = Number(n);
   if (!Number.isFinite(x)) return '-';
   return (x > 0 ? '+' : '') + x.toFixed(2) + '%';
 }
+
 function shortAddr(a) {
   if (!a || a.length < 10) return a || '';
   return a.slice(0, 4) + '...' + a.slice(-4);
 }
+
 function useDebounce(value, delay) {
   const [debounced, setDebounced] = useState(value);
+
   useEffect(function() {
     const t = setTimeout(function() {
       setDebounced(value);
     }, delay);
+
     return function() {
       clearTimeout(t);
     };
   }, [value, delay]);
+
   return debounced;
 }
-function extractOkxTokenList(data) {
-  if (Array.isArray(data)) return data;
-  if (Array.isArray(data && data.data)) {
-    if (data.data.length === 1 && Array.isArray(data.data[0].tokenList)) return data.data[0].tokenList;
-    return data.data;
-  }
-  if (Array.isArray(data && data.tokenList)) return data.tokenList;
-  if (Array.isArray(data && data.tokens)) return data.tokens;
-  return [];
-}
+
 function normalizeOkxToken(t, chainInfo) {
   if (!t || !chainInfo) return null;
-  const chainIndex = String(t.chainIndex || chainInfo.chainIndex || '');
-  const tokenContractAddress = String(
+
+  const chainIndex = String(t.chainIndex || chainInfo.chainIndex);
+
+  const tokenContractAddress =
     t.tokenContractAddress ||
     t.contractAddress ||
     t.address ||
     t.tokenAddress ||
-    t.tokenContract ||
-    ''
-  ).trim();
+    '';
+
   const symbol = String(t.tokenSymbol || t.symbol || '').trim();
   const name = String(t.tokenName || t.name || symbol || '').trim();
+
   const decimalsRaw = t.decimals != null ? t.decimals : t.tokenDecimal;
   const decimals = Number.isFinite(Number(decimalsRaw))
     ? Number(decimalsRaw)
     : (chainIndex === OKX_SOLANA_CHAIN ? 9 : 18);
+
   if (!symbol) return null;
-  const logo = t.tokenLogoUrl || t.logoURI || t.logoUrl || t.logo || null;
-  const price = Number(t.tokenUnitPrice || t.price || t.priceUsd || t.priceUSD || 0) || 0;
-  const marketCap = Number(t.marketCap || t.mcap || 0) || 0;
-  const volume = Number(t.volume24h || t.totalVolume || t.volume || 0) || 0;
-  const change = t.priceChange24h != null ? Number(t.priceChange24h) : null;
-  const verified = !!(t.isVerified || t.verified);
-  if (chainIndex === OKX_SOLANA_CHAIN) {
+
+  const logo = t.tokenLogoUrl || t.logoURI || t.logoUrl || null;
+
+  const price =
+    Number(t.tokenUnitPrice || t.price || t.priceUsd || t.priceUSD || 0) || 0;
+
+  const marketCap =
+    Number(t.marketCap || t.mcap || 0) || 0;
+
+  const volume =
+    Number(t.volume24h || t.totalVolume || 0) || 0;
+
+  const change =
+    t.priceChange24h != null ? Number(t.priceChange24h) : null;
+
+  const verified =
+    !!t.isVerified || !!t.verified || !!t.isWhitelist || !!t.whiteListed;
+
+  const isSolana = chainIndex === OKX_SOLANA_CHAIN;
+
+  if (isSolana) {
     if (!isValidMint(tokenContractAddress)) return null;
+
     return {
       id: 'okx-sol-' + tokenContractAddress,
       chain: 'solana',
@@ -131,12 +164,15 @@ function normalizeOkxToken(t, chainInfo) {
       current_price: price,
       market_cap: marketCap,
       total_volume: volume,
-      price_change_percentage_24h: change,
+      price_change_percentage_24h: Number.isFinite(change) ? change : null,
       verified,
       isSolanaToken: true,
+      source: 'okx',
     };
   }
+
   if (!isValidEvmAddress(tokenContractAddress)) return null;
+
   return {
     id: 'okx-' + chainIndex + '-' + tokenContractAddress.toLowerCase(),
     chain: 'evm',
@@ -152,19 +188,23 @@ function normalizeOkxToken(t, chainInfo) {
     current_price: price,
     market_cap: marketCap,
     total_volume: volume,
-    price_change_percentage_24h: change,
+    price_change_percentage_24h: Number.isFinite(change) ? change : null,
     verified,
     isSolanaToken: false,
+    source: 'okx',
   };
 }
+
 function isUsableRow(c) {
   if (!c || !c.symbol || !String(c.symbol).trim()) return false;
   if (c.chain === 'solana') return isValidMint(c.mint);
   if (c.chain === 'evm') return isValidEvmAddress(c.address) && !!c.chainId;
   return false;
 }
+
 function toCanonicalToken(c) {
   if (!isUsableRow(c)) return null;
+
   if (c.chain === 'solana') {
     return {
       chain: 'solana',
@@ -173,8 +213,10 @@ function toCanonicalToken(c) {
       name: c.name || c.symbol,
       decimals: typeof c.decimals === 'number' ? c.decimals : 9,
       logoURI: c.logoURI || c.image || null,
+      source: c.source || 'okx',
     };
   }
+
   return {
     chain: 'evm',
     address: c.address,
@@ -183,25 +225,31 @@ function toCanonicalToken(c) {
     name: c.name || c.symbol,
     decimals: typeof c.decimals === 'number' ? c.decimals : 18,
     logoURI: c.logoURI || c.image || null,
+    source: c.source || 'okx',
   };
 }
+
 function matchesQuery(c, query) {
   const q = query.toLowerCase();
   const sym = String(c.symbol || '').toLowerCase();
   const name = String(c.name || '').toLowerCase();
   const addr = String(c.mint || c.address || '').toLowerCase();
+
   return addr === q ||
     sym === q ||
     sym.startsWith(q) ||
     sym.includes(q) ||
     name.includes(q);
 }
+
 function rankResults(results, query) {
   const q = query.toLowerCase();
+
   function score(c) {
     const sym = String(c.symbol || '').toLowerCase();
     const name = String(c.name || '').toLowerCase();
     const addr = String(c.mint || c.address || '').toLowerCase();
+
     if (addr === q) return 1000;
     if (sym === q) return 800;
     if (sym.startsWith(q)) return 600;
@@ -209,6 +257,7 @@ function rankResults(results, query) {
     if (name.includes(q)) return 150;
     return 0;
   }
+
   return results
     .map(function(c) {
       return { c, s: score(c) };
@@ -218,52 +267,79 @@ function rankResults(results, query) {
     })
     .sort(function(a, b) {
       if (a.s !== b.s) return b.s - a.s;
+
       const av = a.c.verified ? 1 : 0;
       const bv = b.c.verified ? 1 : 0;
       if (av !== bv) return bv - av;
-      return Number(b.c.market_cap || 0) - Number(a.c.market_cap || 0);
+
+      const ap = a.c.current_price ? 1 : 0;
+      const bp = b.c.current_price ? 1 : 0;
+      if (ap !== bp) return bp - ap;
+
+      const am = Number(a.c.market_cap || 0);
+      const bm = Number(b.c.market_cap || 0);
+      return bm - am;
     })
     .map(function(x) {
       return x.c;
     });
 }
-function dedupeTokens(tokens) {
-  const seen = new Set();
-  const out = [];
-  tokens.forEach(function(t) {
-    if (!isUsableRow(t)) return;
-    const key = t.chain + '-' + String(t.mint || t.address || '').toLowerCase() + '-' + String(t.chainId || '');
-    if (seen.has(key)) return;
-    seen.add(key);
-    out.push(t);
-  });
-  return out;
+
+function unwrapOkxTokenList(data) {
+  if (Array.isArray(data)) return data;
+  if (Array.isArray(data && data.data)) return data.data;
+  if (Array.isArray(data && data.tokenList)) return data.tokenList;
+  if (Array.isArray(data && data.data && data.data[0] && data.data[0].tokenList)) {
+    return data.data[0].tokenList;
+  }
+  if (Array.isArray(data && data.data && data.data[0] && data.data[0].tokens)) {
+    return data.data[0].tokens;
+  }
+  return [];
 }
+
 async function fetchOkxTokensForChain(chainInfo) {
-  const qs = new URLSearchParams({ chainIndex: String(chainInfo.chainIndex) });
+  const qs = new URLSearchParams({
+    chainIndex: String(chainInfo.chainIndex),
+  });
+
   const res = await fetch('/api/okx/dex/aggregator/tokens?' + qs.toString());
+
   const data = await res.json().catch(function() {
     return null;
   });
+
   if (!res.ok) return [];
-  return extractOkxTokenList(data)
+
+  return unwrapOkxTokenList(data)
     .map(function(t) {
       return normalizeOkxToken(t, chainInfo);
     })
     .filter(isUsableRow);
 }
+
 async function fetchOkxAllTokens(query) {
-  const qs = new URLSearchParams({ keyword: query });
+  const qs = new URLSearchParams({
+    keyword: query,
+  });
+
   const res = await fetch('/api/okx/dex/aggregator/all-tokens?' + qs.toString());
+
   const data = await res.json().catch(function() {
     return null;
   });
+
   if (!res.ok) return [];
+
   const out = [];
-  extractOkxTokenList(data).forEach(function(t) {
+
+  unwrapOkxTokenList(data).forEach(function(t) {
     const chainIndex = String(t.chainIndex || '');
+
     const chainInfo =
-      OKX_CHAINS.find(function(c) { return c.chainIndex === chainIndex; }) ||
+      OKX_CHAINS.find(function(c) {
+        return c.chainIndex === chainIndex;
+      }) ||
       (chainIndex
         ? {
             chainIndex,
@@ -271,34 +347,92 @@ async function fetchOkxAllTokens(query) {
             chain: chainIndex === OKX_SOLANA_CHAIN ? 'solana' : 'evm',
           }
         : null);
+
     const m = normalizeOkxToken(t, chainInfo);
     if (m) out.push(m);
   });
+
   return out;
 }
-async function fetchContractFallback(query) {
-  const trimmed = String(query || '').trim();
-  const isSol = isValidMint(trimmed);
-  const isEvm = isValidEvmAddress(trimmed);
-  if (!isSol && !isEvm) return [];
-  const chains = isSol
-    ? OKX_CHAINS.filter(function(c) { return c.chainIndex === OKX_SOLANA_CHAIN; })
-    : OKX_CHAINS.filter(function(c) { return c.chainIndex !== OKX_SOLANA_CHAIN; });
-  const results = await Promise.all(
-    chains.map(function(chainInfo) {
-      return fetchOkxTokensForChain(chainInfo).catch(function() {
-        return [];
-      });
-    })
-  );
-  const q = trimmed.toLowerCase();
-  return results.flat().filter(function(t) {
-    return String(t.mint || t.address || '').toLowerCase() === q;
+
+async function fetchPumpFallbackToken(mint) {
+  if (!isValidMint(mint)) return null;
+
+  const payload = {
+    jsonrpc: '2.0',
+    id: 'nexus-das-' + Date.now(),
+    method: 'getAsset',
+    params: {
+      id: mint,
+      displayOptions: {
+        showFungible: true,
+      },
+    },
+  };
+
+  const res = await fetch('/api/helius/das', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
   });
+
+  const data = await res.json().catch(function() {
+    return null;
+  });
+
+  if (!res.ok || !data || !data.result) return null;
+
+  const asset = data.result;
+  const content = asset.content || {};
+  const metadata = content.metadata || {};
+  const tokenInfo = asset.token_info || {};
+
+  const symbol = String(
+    tokenInfo.symbol ||
+    metadata.symbol ||
+    ''
+  ).trim();
+
+  const name = String(
+    tokenInfo.name ||
+    metadata.name ||
+    symbol ||
+    'Pump Token'
+  ).trim();
+
+  const image =
+    (content.links && content.links.image) ||
+    content.files && content.files[0] && content.files[0].uri ||
+    null;
+
+  if (!symbol && !name) return null;
+
+  return {
+    id: 'pump-' + mint,
+    chain: 'solana',
+    chainIndex: OKX_SOLANA_CHAIN,
+    chainId: null,
+    mint,
+    address: undefined,
+    symbol: symbol || shortAddr(mint),
+    name: name || symbol || shortAddr(mint),
+    decimals: Number.isFinite(Number(tokenInfo.decimals)) ? Number(tokenInfo.decimals) : 6,
+    logoURI: image,
+    image,
+    current_price: Number(tokenInfo.price_info && tokenInfo.price_info.price_per_token) || 0,
+    market_cap: 0,
+    total_volume: 0,
+    price_change_percentage_24h: null,
+    verified: false,
+    isSolanaToken: true,
+    source: 'pump-fallback',
+  };
 }
+
 function RowImage({ token, size }) {
   const [broken, setBroken] = useState(false);
   const letter = String(token.symbol || '?').charAt(0).toUpperCase();
+
   if (!token.image || broken) {
     return (
       <div style={{
@@ -319,11 +453,14 @@ function RowImage({ token, size }) {
       </div>
     );
   }
+
   return (
     <img
       src={token.image}
       alt={token.symbol}
-      onError={function() { setBroken(true); }}
+      onError={function() {
+        setBroken(true);
+      }}
       style={{
         width: size,
         height: size,
@@ -334,19 +471,21 @@ function RowImage({ token, size }) {
     />
   );
 }
+
 function ChainBadge({ token }) {
   const label = token.chain === 'solana'
-    ? 'SOL'
+    ? (token.source === 'pump-fallback' ? 'PUMP' : 'SOL')
     : (CHAIN_LABEL[String(token.chainIndex)] || ('CHAIN ' + token.chainId));
+
   return (
     <span style={{
       display: 'inline-block',
       marginLeft: 6,
       padding: '1px 5px',
       borderRadius: 4,
-      background: 'rgba(0,229,255,.07)',
-      border: '1px solid rgba(0,229,255,.18)',
-      color: C.muted,
+      background: token.source === 'pump-fallback' ? 'rgba(168,85,247,.08)' : 'rgba(0,229,255,.07)',
+      border: token.source === 'pump-fallback' ? '1px solid rgba(168,85,247,.25)' : '1px solid rgba(0,229,255,.18)',
+      color: token.source === 'pump-fallback' ? '#a855f7' : C.muted,
       fontSize: 9,
       fontWeight: 700,
       letterSpacing: 0.4,
@@ -356,8 +495,10 @@ function ChainBadge({ token }) {
     </span>
   );
 }
+
 function VerifiedBadge({ token }) {
   if (!token.verified) return null;
+
   return (
     <span style={{
       display: 'inline-block',
@@ -376,19 +517,24 @@ function VerifiedBadge({ token }) {
     </span>
   );
 }
+
 function renderRow(c, i, isMobile, onRowClick) {
   const change = c.price_change_percentage_24h;
   const positive = (Number(change) || 0) >= 0;
   const displaySymbol = String(c.symbol || '').toUpperCase() || shortAddr(c.mint || c.address);
+
   function handleClick() {
     onRowClick(c);
   }
+
   function handleEnter(e) {
     e.currentTarget.style.background = 'rgba(0,229,255,.03)';
   }
+
   function handleLeave(e) {
     e.currentTarget.style.background = 'transparent';
   }
+
   if (isMobile) {
     return (
       <div
@@ -408,7 +554,9 @@ function renderRow(c, i, isMobile, onRowClick) {
         <div style={{ color: C.muted, fontSize: 10, width: 18, flexShrink: 0, textAlign: 'center' }}>
           {i + 1}
         </div>
+
         <RowImage token={c} size={34} />
+
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
             fontWeight: 700,
@@ -420,15 +568,18 @@ function renderRow(c, i, isMobile, onRowClick) {
           }}>
             {c.name || displaySymbol}
           </div>
+
           <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>
             {displaySymbol}
             <ChainBadge token={c} />
             <VerifiedBadge token={c} />
           </div>
+
           <div style={{ fontSize: 10, color: C.muted, marginTop: 1 }}>
             {shortAddr(c.mint || c.address)}
           </div>
         </div>
+
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
           <div style={{ fontWeight: 600, color: '#fff', fontSize: 13 }}>
             {fmt(c.current_price)}
@@ -445,6 +596,7 @@ function renderRow(c, i, isMobile, onRowClick) {
       </div>
     );
   }
+
   return (
     <div
       key={c.id}
@@ -461,9 +613,13 @@ function renderRow(c, i, isMobile, onRowClick) {
         alignItems: 'center',
       }}
     >
-      <div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div>
+      <div style={{ color: C.muted, fontSize: 11 }}>
+        {i + 1}
+      </div>
+
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
         <RowImage token={c} size={32} />
+
         <div style={{ minWidth: 0 }}>
           <div style={{
             fontWeight: 700,
@@ -475,6 +631,7 @@ function renderRow(c, i, isMobile, onRowClick) {
           }}>
             {c.name || displaySymbol}
           </div>
+
           <div style={{ fontSize: 10, color: C.muted }}>
             {displaySymbol}
             <ChainBadge token={c} />
@@ -485,9 +642,11 @@ function renderRow(c, i, isMobile, onRowClick) {
           </div>
         </div>
       </div>
+
       <div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>
         {fmt(c.current_price)}
       </div>
+
       <div style={{
         fontSize: 12,
         color: positive ? C.green : C.red,
@@ -496,12 +655,14 @@ function renderRow(c, i, isMobile, onRowClick) {
       }}>
         {pctFmt(change)}
       </div>
+
       <div style={{ fontSize: 11, color: C.muted, textAlign: 'right' }}>
         {fmt(c.market_cap)}
       </div>
     </div>
   );
 }
+
 export default function Markets({ onSelectCoin }) {
   const [q, setQ] = useState('');
   const [sort, setSort] = useState('market_cap');
@@ -511,66 +672,112 @@ export default function Markets({ onSelectCoin }) {
   const [browseLoading, setBrowseLoading] = useState(true);
   const [searchResults, setSearchResults] = useState([]);
   const [searchLoading, setSearchLoading] = useState(false);
+
   const debouncedQ = useDebounce(q, 350);
+
   useEffect(function() {
     function handler() {
       setIsMobile(window.innerWidth < 768);
     }
+
     window.addEventListener('resize', handler);
+
     return function() {
       window.removeEventListener('resize', handler);
     };
   }, []);
+
   useEffect(function() {
     let cancelled = false;
+
     setBrowseLoading(true);
+
     Promise.all(
       OKX_CHAINS.slice(0, 8).map(function(chainInfo) {
-        return fetchOkxTokensForChain(chainInfo).catch(function() {
-          return [];
-        });
+        return fetchOkxTokensForChain(chainInfo);
       })
-    ).then(function(results) {
-      if (cancelled) return;
-      setBrowseTokens(dedupeTokens(results.flat()));
-      setBrowseLoading(false);
-    }).catch(function() {
-      if (cancelled) return;
-      setBrowseTokens([]);
-      setBrowseLoading(false);
-    });
+    )
+      .then(function(results) {
+        if (cancelled) return;
+
+        const seen = new Set();
+        const merged = [];
+
+        results.flat().forEach(function(t) {
+          const key = t.chain + '-' + (t.mint || t.address || '').toLowerCase() + '-' + (t.chainId || '');
+          if (seen.has(key)) return;
+          seen.add(key);
+          merged.push(t);
+        });
+
+        setBrowseTokens(merged);
+        setBrowseLoading(false);
+      })
+      .catch(function() {
+        if (cancelled) return;
+        setBrowseTokens([]);
+        setBrowseLoading(false);
+      });
+
     return function() {
       cancelled = true;
     };
   }, []);
+
   useEffect(function() {
     const trimmed = debouncedQ.trim();
+
     if (!trimmed || trimmed.length < 2) {
       setSearchResults([]);
       setSearchLoading(false);
       return;
     }
+
     let cancelled = false;
+
     setSearchLoading(true);
-    Promise.all([
-      fetchOkxAllTokens(trimmed).catch(function() { return []; }),
-      fetchContractFallback(trimmed).catch(function() { return []; }),
-    ]).then(function(results) {
-      if (cancelled) return;
-      const merged = dedupeTokens(results.flat()).filter(function(t) {
-        return matchesQuery(t, trimmed);
+
+    fetchOkxAllTokens(trimmed)
+      .then(async function(tokens) {
+        if (cancelled) return;
+
+        const seen = new Set();
+        const filtered = [];
+
+        tokens.forEach(function(t) {
+          if (!isUsableRow(t)) return;
+          if (!matchesQuery(t, trimmed)) return;
+
+          const key = t.chain + '-' + (t.mint || t.address || '').toLowerCase() + '-' + (t.chainId || '');
+          if (seen.has(key)) return;
+
+          seen.add(key);
+          filtered.push(t);
+        });
+
+        if (filtered.length === 0 && isValidMint(trimmed)) {
+          const pumpToken = await fetchPumpFallbackToken(trimmed);
+          if (!cancelled && pumpToken && isUsableRow(pumpToken)) {
+            filtered.push(pumpToken);
+          }
+        }
+
+        if (cancelled) return;
+
+        setSearchResults(rankResults(filtered, trimmed));
+        setSearchLoading(false);
+      })
+      .catch(function() {
+        if (cancelled) return;
+        setSearchResults([]);
+        setSearchLoading(false);
       });
-      setSearchResults(rankResults(merged, trimmed));
-      setSearchLoading(false);
-    }).catch(function() {
-      if (cancelled) return;
-      setSearchResults([]);
-      setSearchLoading(false);
-    });
+
     return function() {
       cancelled = true;
     };
   }, [debouncedQ]);
+
   const handleSort = useCallback(function(key) {
     if (sort === key) {
       setDir(function(d) {
@@ -581,9 +788,14 @@ export default function Markets({ onSelectCoin }) {
       setDir(-1);
     }
   }, [sort]);
+
   const sorted = useMemo(function() {
     const trimmed = debouncedQ.trim();
-    if (trimmed) return searchResults;
+
+    if (trimmed) {
+      return searchResults;
+    }
+
     return browseTokens
       .filter(isUsableRow)
       .slice()
@@ -594,21 +806,27 @@ export default function Markets({ onSelectCoin }) {
       })
       .slice(0, 50);
   }, [debouncedQ, searchResults, browseTokens, sort, dir]);
+
   const handleRowClick = useCallback(function(row) {
     const canonical = toCanonicalToken(row);
+
     if (!canonical) {
-      console.warn('[Markets] dropped un-canonicalizable OKX row:', row);
+      console.warn('[Markets] dropped un-canonicalizable row:', row);
       return;
     }
+
     if (typeof onSelectCoin === 'function') {
       onSelectCoin(canonical);
     }
   }, [onSelectCoin]);
+
   const isContractQuery = useMemo(function() {
     const trimmed = debouncedQ.trim();
     return isValidMint(trimmed) || isValidEvmAddress(trimmed);
   }, [debouncedQ]);
+
   const loading = browseLoading && !q;
+
   return (
     <div style={{
       maxWidth: 900,
@@ -630,9 +848,10 @@ export default function Markets({ onSelectCoin }) {
             Live Markets
           </h1>
           <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>
-            OKX DEX coverage only. Search name, symbol, or contract.
+            OKX DEX coverage. Paste a Solana mint for pump.fun fallback.
           </p>
         </div>
+
         <div style={{ position: 'relative', width: '100%', maxWidth: isMobile ? '100%' : 320 }}>
           <input
             value={q}
@@ -653,6 +872,7 @@ export default function Markets({ onSelectCoin }) {
               boxSizing: 'border-box',
             }}
           />
+
           {q && (
             <button
               onClick={function() {
@@ -676,6 +896,7 @@ export default function Markets({ onSelectCoin }) {
               x
             </button>
           )}
+
           {searchLoading && (
             <div style={{
               position: 'absolute',
@@ -690,6 +911,7 @@ export default function Markets({ onSelectCoin }) {
           )}
         </div>
       </div>
+
       {loading ? (
         <div style={{ textAlign: 'center', padding: 60, color: C.muted, fontSize: 14 }}>
           Loading OKX markets...
@@ -715,8 +937,11 @@ export default function Markets({ onSelectCoin }) {
             }}>
               <div>#</div>
               <div>NAME</div>
+
               <button
-                onClick={function() { handleSort('current_price'); }}
+                onClick={function() {
+                  handleSort('current_price');
+                }}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -732,8 +957,11 @@ export default function Markets({ onSelectCoin }) {
               >
                 PRICE {sort === 'current_price' ? (dir === -1 ? 'v' : '^') : ''}
               </button>
+
               <button
-                onClick={function() { handleSort('price_change_percentage_24h'); }}
+                onClick={function() {
+                  handleSort('price_change_percentage_24h');
+                }}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -749,8 +977,11 @@ export default function Markets({ onSelectCoin }) {
               >
                 24H {sort === 'price_change_percentage_24h' ? (dir === -1 ? 'v' : '^') : ''}
               </button>
+
               <button
-                onClick={function() { handleSort('market_cap'); }}
+                onClick={function() {
+                  handleSort('market_cap');
+                }}
                 style={{
                   background: 'none',
                   border: 'none',
@@ -768,16 +999,19 @@ export default function Markets({ onSelectCoin }) {
               </button>
             </div>
           )}
+
           {sorted.length === 0 && debouncedQ && !searchLoading && (
             <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>
               {isContractQuery
-                ? 'This contract was not found in OKX DEX coverage.'
+                ? 'This contract was not found in OKX or Solana metadata fallback.'
                 : 'No OKX tokens found for "' + debouncedQ + '"'}
             </div>
           )}
+
           {sorted.map(function(c, i) {
             return renderRow(c, i, isMobile, handleRowClick);
           })}
+
           {sorted.length === 0 && !q && !browseLoading && (
             <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>
               No OKX market data available
