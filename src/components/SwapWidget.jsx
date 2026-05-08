@@ -1,60 +1,22 @@
 /**
- * NEXUS DEX - Unified Swap Widget (Jupiter + 0x edition)
+ * NEXUS DEX - Unified Swap Widget (OKX DEX edition)
  *
- * Behavior contract (locked):
+ * Swap engine: OKX DEX API (replaces Jupiter + 0x entirely)
+ *   Solana swaps  -> GET /api/okx/dex/aggregator/swap-instruction
+ *   EVM swaps     -> GET /api/okx/dex/aggregator/swap
  *
- * 1. NO header chain selector. Routing is driven entirely by from/to
- *    tokens. Defaults come from the connected wallet's actual state and
- *    from the user's last-used pair via localStorage.
+ * OKX just gives you a transaction. For Solana it returns instructionLists
+ * which we deserialize into a VersionedTransaction. For EVM it returns tx.to
+ * + tx.data + tx.value ready to send. No manual fee transfers, no input-side
+ * deduction, no platformFeeBps. Fee wallet is injected server-side in server.js.
  *
- * 2. ONE wallet popup per swap action after the first ERC20 approval.
- *    0x uses AllowanceHolder (single-sig path) instead of Permit2 so
- *    subsequent swaps of an already-approved token are exactly one
- *    popup. Privy embedded wallets sign silently.
+ * Price data (display only, never aggregator):
+ *   Solana  -> Helius DAS fallback
+ *   EVM     -> LiFi /v1/token
  *
- * 3. Fees: 5% same-chain.
- *    Jupiter (Solana): taken from INPUT before the swap via an in-
- *    transaction transfer instruction. Jupiter caps platformFeeBps at
- *    255 (u8 on-chain), which would overflow at our 5% rate; input-
- *    side deduction bypasses that limit entirely and hits exactly 5%.
- *      SOL input -> SystemProgram.transfer(feeRaw lamports) to fee wallet.
- *      SPL input -> createTransfer(feeRaw tokens) to fee wallet ATA,
- *                   created idempotently in the same transaction.
- *    0x (EVM): taken from OUTPUT via swapFeeBps + swapFeeRecipient.
- *      tradeSurplusRecipient also directed to fee wallet for positive-
- *      slippage capture (active only on whitelisted integrator plans).
- *
- * 4. Pre-click data sources (NEVER aggregator quote endpoints):
- *      Solana prices  -> Jupiter /price/v3 -> Helius DAS fallback
- *      EVM prices     -> LiFi /v1/token (priceUSD) -- DATA ONLY
- *      Solana paste   -> Helius DAS getAsset
- *      EVM paste      -> on-chain RPC via wagmi public client
- *      Symbol search  -> Jupiter /tokens/v2/search (Solana) +
- *                        LiFi /v1/tokens catalog (EVM, lazy-loaded once)
- *
- * 5. Click routing (only two engines now):
- *      Solana <-> Solana                       -> Jupiter
- *      EVM <-> EVM, same chain, 0x supported   -> 0x AllowanceHolder
- *      Anything else                           -> blocked at UI level
- *    Cross-chain and BTC swaps are temporarily disabled until a
- *    replacement bridge integration ships.
- *
- * 6. Quote engine: pre-click is a price-derived estimate
- *      out = in * fromPriceUsd / toPriceUsd * (1 - feeRate)
- *    Displayed with `~` prefix. Click triggers a real aggregator quote.
- *
- * 7. Buy mode:  from = native of viewed token's chain, to = the token.
- *    Sell mode: from = the token, to = USDC of the token's chain.
- *    Swap mode: from = wallet's native (or last-used), to = USDC.
- *
- * Removed in this revision:
- * - LiFi swap execution (fetchLifiQuote + LiFi tx path entirely)
- * - Bitcoin tokens from popular list (no path without LiFi)
- * - Permit2 path on 0x (replaced with AllowanceHolder for 1-popup UX)
- * - platformFeeBps on Jupiter (replaced with input-side fee transfer)
- *
- * Kept (data sources, not transactions):
- * - LiFi /v1/token + /v1/tokens (price + symbol search only)
+ * Token search:
+ *   Solana  -> OKX /dex/aggregator/all-tokens?chainIndex=501 (cached)
+ *   EVM     -> LiFi /v1/tokens catalog (cached)
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -65,53 +27,51 @@ import { useAccount, useWalletClient, useBalance, useSwitchChain, usePublicClien
 import {
   VersionedTransaction, PublicKey, LAMPORTS_PER_SOL,
   TransactionInstruction, TransactionMessage, AddressLookupTableAccount,
-  SystemProgram,
 } from '@solana/web3.js';
-import {
-  getAssociatedTokenAddress,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createTransferInstruction,
-} from '@solana/spl-token';
 
-/* -- CONSTANTS -------------------------------------------------------------- */
+/* ===== CONSTANTS ========================================================== */
 
-const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
-const EVM_FEE_WALLET = '0xC41c1de4250104dC1EE2854ffD5b40a04B9AC9fF';
-
+/* Fees shown in UI only -- actual fee is injected server-side by OKX proxy */
 const PLATFORM_FEE = 0.03;
 const SAFETY_FEE   = 0.02;
-const TOTAL_FEE    = PLATFORM_FEE + SAFETY_FEE; // 0.05 (same-chain)
+const TOTAL_FEE    = PLATFORM_FEE + SAFETY_FEE; // 0.05
 
-/*
- * Jupiter: fee is taken from the INPUT side via an in-transaction transfer,
- * so platformFeeBps sent to the quote API is 0. Jupiter's on-chain program
- * stores feeBps as a u8 (max 255 = 2.55%), so passing 500 overflows it and
- * produces "out of range integral type conversion attempted". Input-side
- * deduction avoids the u8 constraint entirely and captures the full 5%.
- *
- * 0x: fee is taken from the OUTPUT side via swapFeeBps. 0x has no u8 cap so
- * 500 bps (5%) is valid.
- */
-const JUPITER_INPUT_FEE_BPS = Math.round(TOTAL_FEE * 10000); // 500 - used for BigInt math only
-const OX_SWAP_FEE_BPS       = Math.round(TOTAL_FEE * 10000); // 500 - sent to 0x API
+/* OKX native token addresses */
+const OKX_SOL_NATIVE = '11111111111111111111111111111111'; // System Program = native SOL on OKX
+const OKX_EVM_NATIVE = '0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE';
 
-const NATIVE_EVM  = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
-const WSOL_MINT   = 'So11111111111111111111111111111111111111112';
+/* Our token representations */
+const NATIVE_EVM = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
+const WSOL_MINT  = 'So11111111111111111111111111111111111111112';
+
+/* OKX supported EVM chains (chainIndex = standard EVM chainId) */
+const OKX_EVM_CHAINS = new Set([
+  1,      // Ethereum
+  10,     // Optimism
+  56,     // BNB Chain
+  130,    // Unichain
+  137,    // Polygon
+  146,    // Sonic
+  324,    // zkSync Era
+  1101,   // Polygon zkEVM
+  5000,   // Mantle
+  8453,   // Base
+  34443,  // Mode
+  42161,  // Arbitrum
+  43114,  // Avalanche
+  57073,  // Ink
+  59144,  // Linea
+  80094,  // Berachain
+  81457,  // Blast
+  534352, // Scroll
+  1329,   // Sei
+  2741,   // Abstract
+]);
 
 const SOL_RESERVE_LAMPORTS   = 5_000_000;
 const EVM_NATIVE_RESERVE_PCT = 0.005;
-
-const QUOTE_DEBOUNCE_MS  = 250;
-const PRICE_CACHE_TTL_MS = 60_000;
-
-/*
- * 0x v2 supported chains (Settler + AllowanceHolder deployed). Anything
- * outside this set is treated as unsupported in this build.
- */
-const OX_CHAIN_IDS = new Set([
-  1, 10, 56, 130, 137, 146, 324, 1101, 2741, 5000, 8453,
-  34443, 42161, 43114, 57073, 59144, 80094, 81457, 534352,
-]);
+const QUOTE_DEBOUNCE_MS      = 250;
+const PRICE_CACHE_TTL_MS     = 60_000;
 
 const CHAIN_NAMES = {
   1: 'Ethereum', 10: 'Optimism', 25: 'Cronos', 56: 'BNB Chain', 100: 'Gnosis',
@@ -163,8 +123,6 @@ const USDC_BY_CHAIN = {
   80094:  '0x549943e04f40284185054145c6E4e9568C1D3241',
 };
 const USDC_SOLANA = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-
-/* For LiFi catalog price lookup (data source only - not used for swaps). */
 const LIFI_NATIVE = '0x0000000000000000000000000000000000000000';
 
 const DEFAULT_BUY_PRESETS  = [25, 50, 100, 250, 500];
@@ -254,73 +212,26 @@ const NATIVE_COIN_RESOLVE = {
   'core':                    { kind: 'evm-native', chainId: 1116 },
   'sei-network':             { kind: 'evm-native', chainId: 1329 },
   'berachain-bera':          { kind: 'evm-native', chainId: 80094 },
-  'monad':                   { kind: 'evm-native', chainId: 143 },
   'ronin':                   { kind: 'evm-native', chainId: 2020 },
-  'flow':                    { kind: 'evm-native', chainId: 747 },
-  'lisk':                    { kind: 'evm-native', chainId: 1135 },
-  'apecoin':                 { kind: 'evm-native', chainId: 33139 },
-  'fuse-network-token':      { kind: 'evm-native', chainId: 122 },
-  'hyperliquid':             { kind: 'evm-native', chainId: 999 },
-  'aurora-near':             { kind: 'evm-native', chainId: 1313161554 },
   'solana':                  { kind: 'solana' },
 };
 
 const _NATIVE_BY_CHAIN = {
-  1:          { symbol: 'ETH',   name: 'Ethereum' },
-  10:         { symbol: 'ETH',   name: 'ETH (Optimism)' },
-  25:         { symbol: 'CRO',   name: 'Cronos' },
-  56:         { symbol: 'BNB',   name: 'BNB' },
-  100:        { symbol: 'xDAI',  name: 'xDAI' },
-  122:        { symbol: 'FUSE',  name: 'Fuse' },
-  130:        { symbol: 'ETH',   name: 'ETH (Unichain)' },
-  137:        { symbol: 'POL',   name: 'Polygon' },
-  146:        { symbol: 'S',     name: 'Sonic' },
-  250:        { symbol: 'FTM',   name: 'Fantom' },
-  252:        { symbol: 'ETH',   name: 'ETH (Fraxtal)' },
-  255:        { symbol: 'ETH',   name: 'ETH (Kroma)' },
-  288:        { symbol: 'ETH',   name: 'ETH (Boba)' },
-  321:        { symbol: 'KCS',   name: 'KuCoin' },
-  324:        { symbol: 'ETH',   name: 'ETH (zkSync)' },
-  360:        { symbol: 'ETH',   name: 'ETH (Shape)' },
-  480:        { symbol: 'ETH',   name: 'ETH (World Chain)' },
-  747:        { symbol: 'FLOW',  name: 'Flow' },
-  1088:       { symbol: 'METIS', name: 'Metis' },
-  1116:       { symbol: 'CORE',  name: 'Core' },
-  1135:       { symbol: 'ETH',   name: 'ETH (Lisk)' },
-  1284:       { symbol: 'GLMR',  name: 'Moonbeam' },
-  1313161554: { symbol: 'ETH',   name: 'ETH (Aurora)' },
-  1329:       { symbol: 'SEI',   name: 'SEI' },
-  2020:       { symbol: 'RON',   name: 'Ronin' },
-  2222:       { symbol: 'KAVA',  name: 'Kava' },
-  2741:       { symbol: 'ETH',   name: 'ETH (Abstract)' },
-  5000:       { symbol: 'MNT',   name: 'Mantle' },
-  8217:       { symbol: 'KAIA',  name: 'Kaia' },
-  8453:       { symbol: 'ETH',   name: 'ETH (Base)' },
-  33139:      { symbol: 'APE',   name: 'ApeCoin' },
-  34443:      { symbol: 'ETH',   name: 'ETH (Mode)' },
-  42161:      { symbol: 'ETH',   name: 'ETH (Arbitrum)' },
-  42220:      { symbol: 'CELO',  name: 'Celo' },
-  43111:      { symbol: 'ETH',   name: 'ETH (Hemi)' },
-  43114:      { symbol: 'AVAX',  name: 'Avalanche' },
-  48900:      { symbol: 'ETH',   name: 'ETH (Zircuit)' },
-  57073:      { symbol: 'ETH',   name: 'ETH (Ink)' },
-  59144:      { symbol: 'ETH',   name: 'ETH (Linea)' },
-  60808:      { symbol: 'ETH',   name: 'ETH (BOB)' },
-  80094:      { symbol: 'BERA',  name: 'Berachain' },
-  81457:      { symbol: 'ETH',   name: 'ETH (Blast)' },
-  167000:     { symbol: 'ETH',   name: 'ETH (Taiko)' },
-  200901:     { symbol: 'BTC',   name: 'Bitlayer BTC' },
-  534352:     { symbol: 'ETH',   name: 'ETH (Scroll)' },
-  7777777:    { symbol: 'ETH',   name: 'ETH (Zora)' },
+  1: { symbol: 'ETH', name: 'Ethereum' }, 10: { symbol: 'ETH', name: 'ETH (Optimism)' },
+  25: { symbol: 'CRO', name: 'Cronos' }, 56: { symbol: 'BNB', name: 'BNB' },
+  100: { symbol: 'xDAI', name: 'xDAI' }, 130: { symbol: 'ETH', name: 'ETH (Unichain)' },
+  137: { symbol: 'POL', name: 'Polygon' }, 146: { symbol: 'S', name: 'Sonic' },
+  250: { symbol: 'FTM', name: 'Fantom' }, 324: { symbol: 'ETH', name: 'ETH (zkSync)' },
+  2741: { symbol: 'ETH', name: 'ETH (Abstract)' }, 5000: { symbol: 'MNT', name: 'Mantle' },
+  8453: { symbol: 'ETH', name: 'ETH (Base)' }, 34443: { symbol: 'ETH', name: 'ETH (Mode)' },
+  42161: { symbol: 'ETH', name: 'ETH (Arbitrum)' }, 42220: { symbol: 'CELO', name: 'Celo' },
+  43114: { symbol: 'AVAX', name: 'Avalanche' }, 57073: { symbol: 'ETH', name: 'ETH (Ink)' },
+  59144: { symbol: 'ETH', name: 'ETH (Linea)' }, 80094: { symbol: 'BERA', name: 'Berachain' },
+  81457: { symbol: 'ETH', name: 'ETH (Blast)' }, 534352: { symbol: 'ETH', name: 'ETH (Scroll)' },
+  1329: { symbol: 'SEI', name: 'SEI' }, 1101: { symbol: 'ETH', name: 'ETH (Polygon zkEVM)' },
 };
 
-/* -- NUMERIC SAFETY HELPERS ------------------------------------------------- */
-/*
- * safeBigInt: accept anything (string, number, bigint, hex, decimal,
- * scientific) and produce a BigInt without throwing the iOS JSC error
- * "out of range integral type conversion attempted" on float input. All
- * BigInt() boundaries on the EVM tx path go through this.
- */
+/* ===== NUMERIC HELPERS ==================================================== */
 
 function safeBigInt(v) {
   if (v == null) return BigInt(0);
@@ -343,7 +254,7 @@ function safeBigInt(v) {
   return Number.isFinite(n) ? BigInt(Math.trunc(n)) : BigInt(0);
 }
 
-/* -- TYPE GUARDS / VALIDATORS / FORMATTERS ---------------------------------- */
+/* ===== TYPE GUARDS / VALIDATORS / FORMATTERS ============================== */
 
 const isSol = (t) => !!(t && t.chain === 'solana');
 const isEvm = (t) => !!(t && t.chain === 'evm');
@@ -388,12 +299,6 @@ function shortAddr(addr, head = 4, tail = 4) {
   return addr.slice(0, head) + '\u2026' + addr.slice(-tail);
 }
 
-/*
- * Hardened decimal-string -> raw smallest-units. Handles commas, scientific
- * notation, leading +, multiple/trailing dots. Always truncates fractional
- * digits beyond `decimals` (never rounds up). Always returns a clean
- * integer string suitable for BigInt() consumers.
- */
 function toRawAmount(amountStr, decimals) {
   if (!amountStr || decimals == null) return '0';
   let s = String(amountStr).trim().replace(/,/g, '.').replace(/^\+/, '');
@@ -408,21 +313,18 @@ function toRawAmount(amountStr, decimals) {
   if (!Number.isFinite(parsedDecimals) || parsedDecimals < 0 || parsedDecimals > 18) return '0';
   const dec = Math.floor(parsedDecimals);
   const [whole, frac = ''] = s.split('.');
-  const safeWhole    = (whole || '0').replace(/[^\d]/g, '').replace(/^0+(?=\d)/, '') || '0';
-  const safeFracRaw  = (frac || '').replace(/[^\d]/g, '');
-  const fracTrunc    = safeFracRaw.slice(0, dec);
-  const fracPadded   = (fracTrunc + '0'.repeat(dec)).slice(0, dec) || '0';
+  const safeWhole  = (whole || '0').replace(/[^\d]/g, '').replace(/^0+(?=\d)/, '') || '0';
+  const fracTrunc  = (frac || '').replace(/[^\d]/g, '').slice(0, dec);
+  const fracPadded = (fracTrunc + '0'.repeat(dec)).slice(0, dec) || '0';
   try {
     const wholeBig = BigInt(safeWhole);
     const fracBig  = dec > 0 ? BigInt(fracPadded) : BigInt(0);
     const scale    = 10n ** BigInt(dec);
     return (wholeBig * scale + fracBig).toString();
-  } catch {
-    return '0';
-  }
+  } catch { return '0'; }
 }
 
-/* -- TOKEN NORMALIZATION ---------------------------------------------------- */
+/* ===== TOKEN NORMALIZATION ================================================ */
 
 function normalizeToken(input, opts = {}) {
   if (!input) return null;
@@ -432,39 +334,29 @@ function normalizeToken(input, opts = {}) {
     const baseLogo = input.logoURI || input.image || input.thumbnail || null;
     const baseSym  = input.symbol || (nativeRule.kind === 'solana' ? 'SOL' : 'TOKEN');
     const baseName = input.name || baseSym;
-    if (nativeRule.kind === 'evm-native') {
+    if (nativeRule.kind === 'evm-native')
       return { chain: 'evm', address: NATIVE_EVM, chainId: nativeRule.chainId, symbol: baseSym, name: baseName, decimals: 18, logoURI: baseLogo };
-    }
-    if (nativeRule.kind === 'solana') {
+    if (nativeRule.kind === 'solana')
       return { chain: 'solana', mint: WSOL_MINT, symbol: baseSym, name: baseName, decimals: 9, logoURI: baseLogo };
-    }
   }
   if (isSol(input) && input.mint) return input;
   if (isEvm(input) && input.address && input.chainId) return input;
-
   const logoURI = input.logoURI || input.image || input.thumbnail || null;
   const symbol  = input.symbol || input.tokenSymbol || 'TOKEN';
   const name    = input.name || input.tokenName || symbol;
   const evmAddr = input.address || input.contractAddress || null;
-
   if (evmAddr && isValidEvmAddr(evmAddr)) {
     return {
       chain: 'evm', address: evmAddr, chainId: input.chainId || defaultChainId,
       symbol, name,
-      decimals: typeof input.decimals === 'number'      ? input.decimals
-              : typeof input.tokenDecimals === 'number' ? input.tokenDecimals
-              : 18,
+      decimals: typeof input.decimals === 'number' ? input.decimals
+              : typeof input.tokenDecimals === 'number' ? input.tokenDecimals : 18,
       logoURI,
     };
   }
   const solMint = input.mint || (input.isSolanaToken ? input.id : null);
-  if (solMint && isValidSolMint(solMint)) {
-    return {
-      chain: 'solana', mint: solMint, symbol, name,
-      decimals: typeof input.decimals === 'number' ? input.decimals : 6,
-      logoURI,
-    };
-  }
+  if (solMint && isValidSolMint(solMint))
+    return { chain: 'solana', mint: solMint, symbol, name, decimals: typeof input.decimals === 'number' ? input.decimals : 6, logoURI };
   return null;
 }
 
@@ -498,8 +390,6 @@ function chainOfToken(t) {
   return null;
 }
 
-/* -- DEFAULT TOKEN PAIR ----------------------------------------------------- */
-
 function pickDistinct(target, candidates) {
   for (let i = 0; i < candidates.length; i++) {
     const c = candidates[i];
@@ -511,31 +401,21 @@ function pickDistinct(target, candidates) {
 function defaultTokenPair({ mode, viewedToken, lastFromToken, walletState }) {
   const ws     = walletState || {};
   const viewed = viewedToken ? normalizeToken(viewedToken) : null;
-
   if (mode === 'buy' && viewed) {
     const tokenChain = chainOfToken(viewed);
     const fromCandidates = [
-      lastFromToken,
-      nativeOfChain(tokenChain),
-      usdcOfChain(tokenChain),
+      lastFromToken, nativeOfChain(tokenChain), usdcOfChain(tokenChain),
       ws.solConnected ? nativeOfChain('solana') : null,
       ws.evmConnected && ws.evmChainId ? nativeOfChain(ws.evmChainId) : null,
       POPULAR_TOKENS[0],
     ];
     return { fromToken: pickDistinct(viewed, fromCandidates) || POPULAR_TOKENS[0], toToken: viewed };
   }
-
   if (mode === 'sell' && viewed) {
     const tokenChain = chainOfToken(viewed);
-    const toCandidates = [
-      usdcOfChain(tokenChain),
-      nativeOfChain(tokenChain),
-      POPULAR_TOKENS[1],
-      POPULAR_TOKENS[0],
-    ];
+    const toCandidates = [usdcOfChain(tokenChain), nativeOfChain(tokenChain), POPULAR_TOKENS[1], POPULAR_TOKENS[0]];
     return { fromToken: viewed, toToken: pickDistinct(viewed, toCandidates) || POPULAR_TOKENS[1] };
   }
-
   if (lastFromToken) {
     const fromChain = chainOfToken(lastFromToken);
     const usdc = usdcOfChain(fromChain);
@@ -543,9 +423,7 @@ function defaultTokenPair({ mode, viewedToken, lastFromToken, walletState }) {
     const native = nativeOfChain(fromChain);
     if (native && !tokensEqual(native, lastFromToken)) return { fromToken: lastFromToken, toToken: native };
   }
-  if (ws.solConnected) {
-    return { fromToken: nativeOfChain('solana'), toToken: usdcOfChain('solana') };
-  }
+  if (ws.solConnected) return { fromToken: nativeOfChain('solana'), toToken: usdcOfChain('solana') };
   if (ws.evmConnected && ws.evmChainId) {
     const native = nativeOfChain(ws.evmChainId);
     const usdc   = usdcOfChain(ws.evmChainId) || usdcOfChain('solana');
@@ -554,12 +432,12 @@ function defaultTokenPair({ mode, viewedToken, lastFromToken, walletState }) {
   return { fromToken: nativeOfChain('solana'), toToken: usdcOfChain('solana') };
 }
 
-/* -- ROUTE PICKER ----------------------------------------------------------- */
+/* ===== ROUTE PICKER ======================================================= */
 
 function pickRoute(from, to) {
   if (!from || !to) return 'unsupported';
-  if (isSol(from) && isSol(to)) return 'jupiter';
-  if (isEvm(from) && isEvm(to) && from.chainId === to.chainId && OX_CHAIN_IDS.has(from.chainId)) return '0x';
+  if (isSol(from) && isSol(to)) return 'okx-sol';
+  if (isEvm(from) && isEvm(to) && from.chainId === to.chainId && OKX_EVM_CHAINS.has(from.chainId)) return 'okx-evm';
   return 'unsupported';
 }
 
@@ -568,188 +446,115 @@ function unsupportedReason(from, to) {
   if (isSol(from) && isEvm(to)) return 'Cross-chain swaps temporarily unavailable.';
   if (isEvm(from) && isSol(to)) return 'Cross-chain swaps temporarily unavailable.';
   if (isEvm(from) && isEvm(to) && from.chainId !== to.chainId) return 'Cross-chain swaps temporarily unavailable.';
-  if (isEvm(from) && isEvm(to) && !OX_CHAIN_IDS.has(from.chainId)) {
+  if (isEvm(from) && isEvm(to) && !OKX_EVM_CHAINS.has(from.chainId))
     return (CHAIN_NAMES[from.chainId] || 'This chain') + ' swaps temporarily unavailable.';
-  }
   return 'This pair is not currently supported.';
 }
 
-/* -- AGGREGATOR HELPERS (Jupiter + 0x AllowanceHolder only) ----------------- */
+/* ===== OKX ADDRESS HELPERS ================================================ */
+
+/* OKX uses the System Program address for native SOL, not the WSOL mint */
+function toOkxSolAddress(mint) {
+  return mint === WSOL_MINT ? OKX_SOL_NATIVE : mint;
+}
+
+/* OKX uses mixed-case EVM native address */
+function toOkxEvmAddress(address) {
+  return address && address.toLowerCase() === NATIVE_EVM ? OKX_EVM_NATIVE : address;
+}
+
+/* ===== OKX SWAP HELPERS =================================================== */
+/*
+ * OKX just gives you a transaction. Solana: instructionLists array ready to
+ * deserialize. EVM: tx.to + tx.data + tx.value ready to send. No manual fee
+ * math, no ATA creation, no input-side deduction. Fee is injected server-side.
+ */
 
 /*
- * 0x v2 AllowanceHolder QUOTE. Single-signature flow: user does an ERC20
- * approve(allowanceHolderSpender, MAX) once per token, then every swap is
- * a single sendTransaction. No EIP-712 typed-data signing needed.
- *
- * tradeSurplusRecipient  captures positive slippage in the buy token.
- * swapFeeBps/Recipient   takes our 5% platform fee from the buy token.
+ * Solana swap instructions from OKX.
+ * slippagePercent: decimal fraction, e.g. 0.005 = 0.5%
  */
-async function fetchOxQuote({ chainId, sellToken, buyToken, sellAmount, taker, slipBps, feeRecipient, feeToken, signal }) {
-  const qs = new URLSearchParams({
-    chainId:              String(chainId),
-    sellToken:            (sellToken || '').toLowerCase(),
-    buyToken:             (buyToken  || '').toLowerCase(),
-    sellAmount:           String(sellAmount),
-    taker,
-    slippageBps:          String(slipBps),
-    swapFeeBps:           String(OX_SWAP_FEE_BPS),
-    swapFeeRecipient:     feeRecipient,
-    swapFeeToken:         (feeToken || '').toLowerCase(),
-    tradeSurplusRecipient: feeRecipient,
+async function fetchOkxSolanaSwap({ fromMint, toMint, amount, slippage, userWallet, signal }) {
+  const params = new URLSearchParams({
+    chainIndex:        '501',
+    fromTokenAddress:  toOkxSolAddress(fromMint),
+    toTokenAddress:    toOkxSolAddress(toMint),
+    amount:            String(amount),
+    slippagePercent:   (slippage / 100).toFixed(4), // 0.5% -> "0.0050"
+    userWalletAddress: userWallet,
   });
-  const res = await fetch('/api/0x/swap/allowance-holder/quote?' + qs.toString(), { signal });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || data.message || '0x quote failed');
-  if (!data.liquidityAvailable) throw new Error('No liquidity for this pair on 0x');
-  if (!data.transaction || !data.transaction.to) throw new Error('No route');
-  return data;
+  const res  = await fetch('/api/okx/dex/aggregator/swap-instruction?' + params.toString(), { signal });
+  const json = await res.json();
+  if (json.code !== '0' || !json.data || !json.data[0])
+    throw new Error(json.msg || 'OKX swap-instruction failed');
+  return json.data[0];
 }
 
 /*
- * Jupiter quote. No platformFeeBps - we take the full 5% from the input
- * side via a transfer instruction in the same transaction, which bypasses
- * Jupiter's u8 on-chain cap (max 255 bps). The amountRaw passed here is
- * already reduced by the fee (95% of what the user typed).
+ * EVM swap calldata from OKX.
+ * Returns { tx: { to, data, value, gas } }
  */
-async function fetchJupiterQuote({ inputMint, outputMint, amountRaw, slipBps, signal }) {
-  const qs = new URLSearchParams({
-    inputMint, outputMint,
-    amount:                   String(amountRaw),
-    slippageBps:              String(slipBps),
-    onlyDirectRoutes:         'false',
-    restrictIntermediateTokens: 'true',
+async function fetchOkxEvmSwap({ chainId, fromAddress, toAddress, amount, slippage, userWallet, signal }) {
+  const params = new URLSearchParams({
+    chainIndex:        String(chainId),
+    fromTokenAddress:  toOkxEvmAddress(fromAddress),
+    toTokenAddress:    toOkxEvmAddress(toAddress),
+    amount:            String(amount),
+    slippagePercent:   (slippage / 100).toFixed(4),
+    userWalletAddress: userWallet,
   });
-  const res = await fetch('/api/jupiter/swap/v1/quote?' + qs.toString(), { signal });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Jupiter quote failed');
-  if (!data.outAmount) throw new Error('No route');
-  return data;
+  const res  = await fetch('/api/okx/dex/aggregator/swap?' + params.toString(), { signal });
+  const json = await res.json();
+  if (json.code !== '0' || !json.data || !json.data[0])
+    throw new Error(json.msg || 'OKX EVM swap failed');
+  return json.data[0];
 }
 
 /*
- * Jupiter swap-instructions endpoint. No feeAccount is passed because
- * platformFeeBps is 0 in the quote - Jupiter rejects the build if one
- * is present without the other. Fee collection happens via the transfer
- * instruction prepended in buildJupiterSwapTransaction instead.
+ * EVM approval calldata from OKX.
+ * Returns { dexContractAddress, callData } or null.
  */
-async function fetchJupiterSwapInstructions({ quoteResponse, userPublicKey, signal }) {
-  const body = {
-    quoteResponse,
-    userPublicKey,
-    wrapAndUnwrapSol:       true,
-    dynamicComputeUnitLimit: true,
-    prioritizationFeeLamports: {
-      priorityLevelWithMaxLamports: {
-        maxLamports:   5_000_000,
-        priorityLevel: 'high',
-      },
-    },
-  };
-  const res = await fetch('/api/jupiter/swap/v1/swap-instructions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-    signal,
-  });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Jupiter swap-instructions failed');
-  if (!data.swapInstruction) throw new Error('Jupiter returned no swap instruction');
-  return data;
+async function fetchOkxEvmApproval({ chainId, tokenAddress, amount }) {
+  try {
+    const params = new URLSearchParams({
+      chainIndex:           String(chainId),
+      tokenContractAddress: tokenAddress,
+      approveAmount:        String(amount),
+    });
+    const res  = await fetch('/api/okx/dex/aggregator/approve-transaction?' + params.toString());
+    const json = await res.json();
+    if (json.code !== '0' || !json.data || !json.data[0]) return null;
+    return json.data[0]; // { dexContractAddress, callData, gasPrice, gasLimit }
+  } catch { return null; }
 }
 
-/* Convert Jupiter's API-shaped instruction into a TransactionInstruction. */
-function deserializeJupiterIx(rawIx) {
+/*
+ * Deserialize an OKX instruction object into a TransactionInstruction.
+ * OKX format: { programId, accounts: [{ pubkey, isSigner, isWritable }], data (base64) }
+ */
+function deserializeOkxIx(ix) {
   return new TransactionInstruction({
-    programId: new PublicKey(rawIx.programId),
-    keys: (rawIx.accounts || []).map((acc) => ({
-      pubkey:     new PublicKey(acc.pubkey),
-      isSigner:   !!acc.isSigner,
-      isWritable: !!acc.isWritable,
+    programId: new PublicKey(ix.programId),
+    keys: (ix.accounts || []).map((a) => ({
+      pubkey:     new PublicKey(a.pubkey),
+      isSigner:   !!a.isSigner,
+      isWritable: !!a.isWritable,
     })),
-    data: Buffer.from(rawIx.data || '', 'base64'),
+    data: Buffer.from(ix.data || '', 'base64'),
   });
 }
 
 /*
- * Build the final VersionedTransaction. Instruction order:
- *
- * 1. Jupiter's otherInstructions (jito tips etc - normally empty)
- * 2. Jupiter's computeBudgetInstructions (priority fee + CU limit)
- * 3. INPUT-SIDE FEE TRANSFER (our 5%):
- *      SOL input -> SystemProgram.transfer(feeRaw lamports) to fee wallet
- *      SPL input -> create fee wallet's input-token ATA (idempotent)
- *                   + SPL transfer(feeRaw tokens) to that ATA
- * 4. Jupiter's setupInstructions (wSOL wrap, user dest ATA creation)
- * 5. Jupiter's swapInstruction
- * 6. Jupiter's cleanupInstruction (wSOL unwrap)
- *
- * Fee is taken BEFORE Jupiter's setup so lamports/tokens are available
- * at the correct balances when Jupiter's program executes.
+ * Build VersionedTransaction from OKX swap-instruction response.
+ * Much simpler than Jupiter path: just deserialize instructionLists,
+ * resolve lookup tables, compile, done.
  */
-async function buildJupiterSwapTransaction({
-  connection, userPubkey, inputMint, isNativeInput, feeWalletPk, feeRaw, ixData,
-}) {
-  const instructions = [];
+async function buildOkxSolanaTransaction({ connection, userPubkey, swapData }) {
+  const instructions = (swapData.instructionLists || []).map(deserializeOkxIx);
 
-  if (Array.isArray(ixData.otherInstructions)) {
-    ixData.otherInstructions.forEach((ix) => instructions.push(deserializeJupiterIx(ix)));
-  }
-  if (Array.isArray(ixData.computeBudgetInstructions)) {
-    ixData.computeBudgetInstructions.forEach((ix) => instructions.push(deserializeJupiterIx(ix)));
-  }
-
-  /* -- Input-side fee transfer (5%) -- */
-  if (isNativeInput) {
-    /*
-     * SOL: direct lamport transfer. SystemProgram.transfer takes a number;
-     * feeRaw is always small enough (5% of any realistic SOL amount) to
-     * be represented exactly as a JS number.
-     */
-    instructions.push(
-      SystemProgram.transfer({
-        fromPubkey: userPubkey,
-        toPubkey:   feeWalletPk,
-        lamports:   Number(feeRaw),
-      })
-    );
-  } else {
-    /*
-     * SPL token: ensure fee wallet has an ATA for the input mint, then
-     * transfer feeRaw tokens into it. Both instructions are idempotent /
-     * atomic - the ATA create is a no-op if it already exists.
-     */
-    const userInputAta = await getAssociatedTokenAddress(inputMint, userPubkey);
-    const feeInputAta  = await getAssociatedTokenAddress(inputMint, feeWalletPk);
-    instructions.push(
-      createAssociatedTokenAccountIdempotentInstruction(
-        userPubkey,  // payer
-        feeInputAta, // ATA to create/verify
-        feeWalletPk, // owner
-        inputMint,   // mint
-      ),
-      createTransferInstruction(
-        userInputAta, // source
-        feeInputAta,  // destination
-        userPubkey,   // authority
-        feeRaw,       // amount (bigint accepted by spl-token)
-      ),
-    );
-  }
-
-  if (Array.isArray(ixData.setupInstructions)) {
-    ixData.setupInstructions.forEach((ix) => instructions.push(deserializeJupiterIx(ix)));
-  }
-  if (ixData.swapInstruction) {
-    instructions.push(deserializeJupiterIx(ixData.swapInstruction));
-  }
-  if (ixData.cleanupInstruction) {
-    instructions.push(deserializeJupiterIx(ixData.cleanupInstruction));
-  }
-
-  const ltAddrs = Array.isArray(ixData.addressLookupTableAddresses)
-    ? ixData.addressLookupTableAddresses
-    : [];
-  const lookupTablesRaw = await Promise.all(
+  const ltAddrs = Array.isArray(swapData.addressLookupTableAccount)
+    ? swapData.addressLookupTableAccount : [];
+  const lookupTables = (await Promise.all(
     ltAddrs.map(async (addr) => {
       try {
         const acct = await connection.getAccountInfo(new PublicKey(addr));
@@ -760,8 +565,7 @@ async function buildJupiterSwapTransaction({
         });
       } catch { return null; }
     })
-  );
-  const lookupTables = lookupTablesRaw.filter(Boolean);
+  )).filter(Boolean);
 
   const { blockhash } = await connection.getLatestBlockhash('finalized');
   const message = new TransactionMessage({
@@ -773,7 +577,7 @@ async function buildJupiterSwapTransaction({
   return new VersionedTransaction(message);
 }
 
-/* -- USD PRICING (data sources only, NEVER aggregator quote endpoints) ------ */
+/* ===== PRICE FETCHING (display only) ====================================== */
 
 const _priceCache = new Map();
 
@@ -799,26 +603,18 @@ function setCachedPrice(token, price) {
   _priceCache.set(key, { price: Number(price), ts: Date.now() });
 }
 
-async function fetchJupiterPrice(token) {
+async function fetchHeliusPrice(token) {
   try {
     if (!isSol(token) || !token.mint) return null;
-    const r = await fetch('/api/jupiter/price/v3?ids=' + encodeURIComponent(token.mint));
+    const r = await fetch('/api/helius/das', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 'p', method: 'getAsset', params: { id: token.mint } }),
+    });
     if (!r.ok) return null;
     const d = await r.json();
-    const v = d && d[token.mint] && d[token.mint].usdPrice;
-    return Number.isFinite(v) && v > 0 ? Number(v) : null;
-  } catch { return null; }
-}
-
-async function fetchJupiterTokenSearchPrice(token) {
-  try {
-    if (!isSol(token) || !token.mint) return null;
-    const r = await fetch('/api/jupiter/tokens/v2/search?query=' + encodeURIComponent(token.mint));
-    if (!r.ok) return null;
-    const arr = await r.json();
-    if (!Array.isArray(arr) || arr.length === 0) return null;
-    const hit = arr.find((t) => t && t.id === token.mint) || arr[0];
-    const v = hit && hit.usdPrice;
+    const v = d && d.result && d.result.token_info && d.result.token_info.price_info
+      ? d.result.token_info.price_info.price_per_token : null;
     return Number.isFinite(v) && v > 0 ? Number(v) : null;
   } catch { return null; }
 }
@@ -828,11 +624,28 @@ async function fetchLifiTokenPrice(token) {
     if (!isEvm(token)) return null;
     const chain = String(token.chainId);
     const addr  = (token.address || '').toLowerCase() === NATIVE_EVM ? LIFI_NATIVE : token.address;
-    const params = new URLSearchParams({ chain, token: addr });
-    const r = await fetch('/api/lifi/v1/token?' + params.toString());
+    const r = await fetch('/api/lifi/v1/token?' + new URLSearchParams({ chain, token: addr }).toString());
     if (!r.ok) return null;
     const d = await r.json();
     const v = d && d.priceUSD ? parseFloat(d.priceUSD) : null;
+    return Number.isFinite(v) && v > 0 ? v : null;
+  } catch { return null; }
+}
+
+/* OKX quote can double as price source for Solana tokens */
+async function fetchOkxPrice(token) {
+  try {
+    if (!isSol(token) || !token.mint) return null;
+    const params = new URLSearchParams({
+      chainIndex:       '501',
+      fromTokenAddress: toOkxSolAddress(token.mint),
+      toTokenAddress:   USDC_SOLANA,
+      amount:           '1000000000', // 1 SOL equivalent in lamports (rough)
+    });
+    const r    = await fetch('/api/okx/dex/aggregator/quote?' + params.toString());
+    const json = await r.json();
+    if (json.code !== '0' || !json.data || !json.data[0]) return null;
+    const v = parseFloat(json.data[0].fromToken && json.data[0].fromToken.tokenUnitPrice);
     return Number.isFinite(v) && v > 0 ? v : null;
   } catch { return null; }
 }
@@ -843,31 +656,11 @@ async function fetchLifiCatalogPrice(token) {
     const catalog = await loadLifiTokens();
     if (!catalog || !catalog.length) return null;
     const targetAddr = (token.address || '').toLowerCase() === NATIVE_EVM
-      ? LIFI_NATIVE
-      : (token.address || '').toLowerCase();
+      ? LIFI_NATIVE : (token.address || '').toLowerCase();
     const hit = catalog.find(
       (t) => t.chainId === token.chainId && (t.address || '').toLowerCase() === targetAddr
     );
     const v = hit && hit.priceUSD;
-    return Number.isFinite(v) && v > 0 ? Number(v) : null;
-  } catch { return null; }
-}
-
-async function fetchHeliusPrice(token) {
-  try {
-    if (!isSol(token) || !token.mint) return null;
-    const r = await fetch('/api/helius/das', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0', id: 'p', method: 'getAsset', params: { id: token.mint },
-      }),
-    });
-    if (!r.ok) return null;
-    const d = await r.json();
-    const v = d && d.result && d.result.token_info && d.result.token_info.price_info
-      ? d.result.token_info.price_info.price_per_token
-      : null;
     return Number.isFinite(v) && v > 0 ? Number(v) : null;
   } catch { return null; }
 }
@@ -878,9 +671,8 @@ async function getTokenPriceUsd(token) {
   if (cached != null) return cached;
   let p = null;
   if (isSol(token)) {
-    p = await fetchJupiterPrice(token);
-    if (p == null) p = await fetchJupiterTokenSearchPrice(token);
-    if (p == null) p = await fetchHeliusPrice(token);
+    p = await fetchHeliusPrice(token);
+    if (p == null) p = await fetchOkxPrice(token);
   } else if (isEvm(token)) {
     p = await fetchLifiTokenPrice(token);
     if (p == null) p = await fetchLifiCatalogPrice(token);
@@ -889,25 +681,48 @@ async function getTokenPriceUsd(token) {
   return null;
 }
 
-/* -- SYMBOL SEARCH (catalog data only, not transactional) ------------------- */
+/* ===== TOKEN SEARCH ======================================================= */
 
-async function searchJupiterBySymbol(query, signal) {
+/* OKX Solana token catalog (replaces Jupiter /tokens/v2/search) */
+let _okxSolTokensCache   = null;
+let _okxSolTokensLoading = null;
+
+function loadOkxSolTokens() {
+  if (_okxSolTokensCache)   return Promise.resolve(_okxSolTokensCache);
+  if (_okxSolTokensLoading) return _okxSolTokensLoading;
+  _okxSolTokensLoading = fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501')
+    .then((r) => (r.ok ? r.json() : { data: [] }))
+    .catch(() => ({ data: [] }))
+    .then((json) => {
+      const tokens = (json.data || []).map((t) => ({
+        chain:    'solana',
+        mint:     t.tokenContractAddress,
+        symbol:   t.tokenSymbol || '',
+        name:     t.tokenName   || t.tokenSymbol || '',
+        decimals: parseInt(t.decimals) || 6,
+        logoURI:  t.tokenLogoUrl || null,
+      })).filter((t) => isValidSolMint(t.mint) && t.symbol);
+      _okxSolTokensCache   = tokens;
+      _okxSolTokensLoading = null;
+      return tokens;
+    });
+  return _okxSolTokensLoading;
+}
+
+async function searchOkxSolTokens(query, signal) {
   try {
-    const r = await fetch('/api/jupiter/tokens/v2/search?query=' + encodeURIComponent(query), { signal });
-    if (!r.ok) return [];
-    const arr = await r.json();
-    if (!Array.isArray(arr)) return [];
-    return arr.map((t) => ({
-      chain:    'solana',
-      mint:     t.id,
-      symbol:   t.symbol || '',
-      name:     t.name || t.symbol || '',
-      decimals: typeof t.decimals === 'number' ? t.decimals : 6,
-      logoURI:  t.icon || t.logoURI || null,
-    })).filter((t) => isValidSolMint(t.mint) && t.symbol);
+    const tokens = await loadOkxSolTokens();
+    if (signal && signal.aborted) return [];
+    const ql = query.toLowerCase();
+    return tokens.filter((t) =>
+      (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
+      (t.name   && t.name.toLowerCase().includes(ql)) ||
+      t.mint === query
+    ).slice(0, 50);
   } catch { return []; }
 }
 
+/* LiFi EVM catalog (unchanged) */
 let _lifiTokensCache   = null;
 let _lifiTokensLoading = null;
 
@@ -930,13 +745,10 @@ function loadLifiTokens() {
           const lower = (t.address || '').toLowerCase();
           if (lower !== LIFI_NATIVE && !isValidEvmAddr(t.address)) return;
           flat.push({
-            chain:    'evm',
-            address:  t.address,
-            chainId:  chainIdNum,
-            symbol:   t.symbol,
-            name:     t.name || t.symbol,
+            chain: 'evm', address: t.address, chainId: chainIdNum,
+            symbol: t.symbol, name: t.name || t.symbol,
             decimals: typeof t.decimals === 'number' ? t.decimals : 18,
-            logoURI:  t.logoURI || null,
+            logoURI: t.logoURI || null,
             priceUSD: t.priceUSD ? parseFloat(t.priceUSD) : null,
           });
         });
@@ -948,7 +760,7 @@ function loadLifiTokens() {
   return _lifiTokensLoading;
 }
 
-/* -- PRESET + LAST-PAIR HELPERS + MAX-SAFE ---------------------------------- */
+/* ===== PRESET + LAST-PAIR HELPERS ========================================= */
 
 function loadPresets() {
   try {
@@ -971,8 +783,7 @@ function loadLastPair() {
     const raw = localStorage.getItem(LAST_PAIR_LS_KEY);
     if (!raw) return null;
     const v = JSON.parse(raw);
-    if (!v || !v.from) return null;
-    return v;
+    return (!v || !v.from) ? null : v;
   } catch { return null; }
 }
 
@@ -994,7 +805,7 @@ function maxSafeSolBalance(lamports) {
   return Math.max(0, lamports - SOL_RESERVE_LAMPORTS) / LAMPORTS_PER_SOL;
 }
 
-/* -- ICONS, BADGES, SCROLL-LOCK HOOKS --------------------------------------- */
+/* ===== ICONS / BADGES / SCROLL LOCK ======================================= */
 
 function ChainBadge({ token }) {
   if (!token) return null;
@@ -1013,8 +824,7 @@ function TokenIcon({ token, size = 32 }) {
   if (token && token.logoURI && !errored) {
     return (
       <img
-        src={token.logoURI}
-        alt={token.symbol || ''}
+        src={token.logoURI} alt={token.symbol || ''}
         style={{ width: size, height: size, borderRadius: '50%', flexShrink: 0 }}
         onError={() => setErrored(true)}
       />
@@ -1032,7 +842,6 @@ function TokenIcon({ token, size = 32 }) {
 }
 
 let _bodyLockCount = 0;
-
 function useBodyScrollLock(open) {
   useEffect(() => {
     if (!open) return undefined;
@@ -1049,20 +858,15 @@ function useBodyScrollLock(open) {
 function useEscapeKey(open, handler) {
   useEffect(() => {
     if (!open) return undefined;
-    const onKey = (e) => {
-      if (e.key === 'Escape' || e.keyCode === 27) {
-        e.stopPropagation();
-        if (typeof handler === 'function') handler();
-      }
-    };
+    const onKey = (e) => { if (e.key === 'Escape' || e.keyCode === 27) { e.stopPropagation(); if (typeof handler === 'function') handler(); } };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [open, handler]);
 }
 
-/* -- TOKEN SELECT MODAL ----------------------------------------------------- */
+/* ===== TOKEN SELECT MODAL ================================================= */
 
-function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
+function TokenSelectModal({ open, onClose, onSelect }) {
   const [q,               setQ]               = useState('');
   const [contractInput,   setContractInput]   = useState('');
   const [contractToken,   setContractToken]   = useState(null);
@@ -1076,26 +880,13 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
   const evmChainForLookup = evmWalletChainId || 1;
   const publicClient      = usePublicClient({ chainId: evmChainForLookup });
 
-  const solTokens = useMemo(() => {
-    if (jupiterTokens && jupiterTokens.length > 0) {
-      return jupiterTokens.map((t) => ({
-        chain:    'solana',
-        mint:     t.mint,
-        symbol:   t.symbol,
-        name:     t.name || t.symbol,
-        decimals: t.decimals || 6,
-        logoURI:  t.logoURI || null,
-      }));
-    }
-    return POPULAR_TOKENS.filter((t) => isSol(t));
-  }, [jupiterTokens]);
-
   useEffect(() => {
     const trimmed = q.trim();
     if (!trimmed) { setSearchResults([]); return undefined; }
-    const handle = setTimeout(() => {
-      const ql = trimmed.toLowerCase();
-      const sol = solTokens.filter((t) =>
+    const handle = setTimeout(async () => {
+      const ql      = trimmed.toLowerCase();
+      const solList = _okxSolTokensCache || [];
+      const sol = solList.filter((t) =>
         (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
         (t.name   && t.name.toLowerCase().includes(ql)) ||
         (t.mint   && t.mint === trimmed)
@@ -1110,37 +901,29 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
       setSearchResults([...sol, ...evmFromPopular]);
     }, 250);
     return () => clearTimeout(handle);
-  }, [q, solTokens]);
+  }, [q]);
 
   const discoverReqRef = useRef(0);
   useEffect(() => {
     const trimmed = q.trim();
-    if (!trimmed || trimmed.length < 2) {
-      setDiscoveredSol([]); setDiscoveredEvm([]); setDiscovering(false);
-      return undefined;
-    }
-    if (isValidSolMint(trimmed) || isValidEvmAddr(trimmed)) {
-      setDiscoveredSol([]); setDiscoveredEvm([]); setDiscovering(false);
-      return undefined;
-    }
-    const reqId     = ++discoverReqRef.current;
+    if (!trimmed || trimmed.length < 2) { setDiscoveredSol([]); setDiscoveredEvm([]); setDiscovering(false); return undefined; }
+    if (isValidSolMint(trimmed) || isValidEvmAddr(trimmed)) { setDiscoveredSol([]); setDiscoveredEvm([]); setDiscovering(false); return undefined; }
+    const reqId      = ++discoverReqRef.current;
     const controller = new AbortController();
     setDiscovering(true);
     const handle = setTimeout(async () => {
       const ql = trimmed.toLowerCase();
       const [solHits, lifiCatalog] = await Promise.all([
-        searchJupiterBySymbol(trimmed, controller.signal),
+        searchOkxSolTokens(trimmed, controller.signal),
         loadLifiTokens(),
       ]);
       if (discoverReqRef.current !== reqId) return;
-      const evmHits = (lifiCatalog || [])
-        .filter((t) =>
-          (t.address || '').toLowerCase() !== LIFI_NATIVE && (
-            (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-            (t.name   && t.name.toLowerCase().includes(ql))
-          )
+      const evmHits = (lifiCatalog || []).filter((t) =>
+        (t.address || '').toLowerCase() !== LIFI_NATIVE && (
+          (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
+          (t.name   && t.name.toLowerCase().includes(ql))
         )
-        .slice(0, 80);
+      ).slice(0, 80);
       setDiscoveredSol(solHits);
       setDiscoveredEvm(evmHits);
       setDiscovering(false);
@@ -1163,39 +946,31 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
     setContractLoading(true);
     try {
       if (isValidSolMint(trimmed)) {
-        const cached = solTokens.find((t) => t.mint === trimmed);
+        const cached = (_okxSolTokensCache || []).find((t) => t.mint === trimmed);
         if (cached) {
           if (lookupReqRef.current === reqId) setContractToken(cached);
         } else {
           let resolved = null;
           try {
             const r = await fetch('/api/helius/das', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                jsonrpc: '2.0', id: 'tk', method: 'getAsset', params: { id: trimmed },
-              }),
+              method: 'POST', headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ jsonrpc: '2.0', id: 'tk', method: 'getAsset', params: { id: trimmed } }),
             });
             if (lookupReqRef.current !== reqId) return;
             if (r.ok) {
-              const d = await r.json();
-              if (lookupReqRef.current !== reqId) return;
+              const d      = await r.json();
               const result = d && d.result;
               if (result) {
                 const ti    = result.token_info || {};
                 const meta  = (result.content && result.content.metadata) || {};
                 const links = (result.content && result.content.links) || {};
                 const files = (result.content && result.content.files) || [];
-                const sym   = (ti.symbol || meta.symbol || '').trim();
-                const nm    = (meta.name || ti.symbol || '').trim();
-                const img   = links.image || (files[0] && files[0].uri) || null;
                 resolved = {
-                  chain:    'solana',
-                  mint:     trimmed,
-                  symbol:   sym || shortAddr(trimmed, 4, 4),
-                  name:     nm  || 'Custom Token',
+                  chain: 'solana', mint: trimmed,
+                  symbol:   (ti.symbol || meta.symbol || '').trim() || shortAddr(trimmed, 4, 4),
+                  name:     (meta.name || ti.symbol || '').trim() || 'Custom Token',
                   decimals: typeof ti.decimals === 'number' ? ti.decimals : 6,
-                  logoURI:  img,
+                  logoURI:  links.image || (files[0] && files[0].uri) || null,
                 };
               }
             }
@@ -1208,47 +983,29 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
           }
         }
       } else {
-        let decimals      = 18;
-        let onChainSymbol = null;
+        let decimals = 18, onChainSymbol = null;
         try {
           if (publicClient) {
             const [decRes, symRes] = await Promise.allSettled([
-              publicClient.readContract({
-                address: trimmed,
-                abi: [{ name: 'decimals', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ name: '', type: 'uint8' }] }],
-                functionName: 'decimals',
-              }),
-              publicClient.readContract({
-                address: trimmed,
-                abi: [{ name: 'symbol', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ name: '', type: 'string' }] }],
-                functionName: 'symbol',
-              }),
+              publicClient.readContract({ address: trimmed, abi: [{ name: 'decimals', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ name: '', type: 'uint8' }] }], functionName: 'decimals' }),
+              publicClient.readContract({ address: trimmed, abi: [{ name: 'symbol',   type: 'function', stateMutability: 'view', inputs: [], outputs: [{ name: '', type: 'string' }] }], functionName: 'symbol' }),
             ]);
-            if (decRes.status === 'fulfilled' && (typeof decRes.value === 'number' || typeof decRes.value === 'bigint')) {
-              decimals = Number(decRes.value);
-            }
-            if (symRes.status === 'fulfilled' && typeof symRes.value === 'string' && symRes.value) {
-              onChainSymbol = symRes.value;
-            }
+            if (decRes.status === 'fulfilled' && (typeof decRes.value === 'number' || typeof decRes.value === 'bigint')) decimals = Number(decRes.value);
+            if (symRes.status === 'fulfilled' && typeof symRes.value === 'string' && symRes.value) onChainSymbol = symRes.value;
           }
         } catch {}
         if (lookupReqRef.current === reqId) {
           setContractToken({
-            chain:    'evm',
-            address:  trimmed,
-            chainId:  evmChainForLookup,
-            symbol:   onChainSymbol || shortAddr(trimmed, 4, 4),
-            name:     'Custom Token (' + (CHAIN_NAMES[evmChainForLookup] || 'EVM') + ')',
-            decimals,
-            logoURI:  null,
+            chain: 'evm', address: trimmed, chainId: evmChainForLookup,
+            symbol: onChainSymbol || shortAddr(trimmed, 4, 4),
+            name: 'Custom Token (' + (CHAIN_NAMES[evmChainForLookup] || 'EVM') + ')',
+            decimals, logoURI: null,
           });
         }
       }
-    } catch {
-      if (lookupReqRef.current === reqId) setContractToken(null);
-    }
+    } catch { if (lookupReqRef.current === reqId) setContractToken(null); }
     if (lookupReqRef.current === reqId) setContractLoading(false);
-  }, [solTokens, evmChainForLookup, publicClient]);
+  }, [evmChainForLookup, publicClient]);
 
   useEffect(() => {
     const v = contractInput.trim();
@@ -1268,8 +1025,8 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
 
   const merged = useMemo(() => {
     if (!q.trim()) return [];
-    const seen  = new Set();
-    const out   = [];
+    const seen = new Set();
+    const out  = [];
     const keyOf = (t) =>
       isSol(t) ? 'sol:' + t.mint
       : isEvm(t) ? 'evm:' + t.chainId + ':' + (t.address || '').toLowerCase()
@@ -1299,64 +1056,31 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
             <div>
               <div style={{ color: '#fff', fontWeight: 700, fontSize: 16 }}>Select Token</div>
-              <div style={{ fontSize: 10, color: C.red, marginTop: 2 }}>Includes unverified tokens - DYOR</div>
+              <div style={{ fontSize: 10, color: C.red, marginTop: 2 }}>Includes unverified tokens -- DYOR</div>
             </div>
-            <button onClick={close} aria-label="Close" style={{
-              background: 'none', border: 'none', color: C.muted, cursor: 'pointer',
-              fontSize: 22, lineHeight: 1, padding: 4, minWidth: 36, minHeight: 36,
-            }}>x</button>
+            <button onClick={close} aria-label="Close" style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 22, lineHeight: 1, padding: 4, minWidth: 36, minHeight: 36 }}>x</button>
           </div>
-          <input
-            autoFocus
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search name, symbol, chain..."
-            style={{
-              width: '100%', background: C.card2, border: '1px solid ' + C.border,
-              borderRadius: 8, padding: '10px 12px', color: C.text, fontSize: 13,
-              outline: 'none', fontFamily: 'Syne, sans-serif', marginBottom: 8,
-            }}
-          />
-          <input
-            value={contractInput}
-            onChange={(e) => setContractInput(e.target.value)}
-            placeholder="Or paste any Solana or EVM contract address..."
-            style={{
-              width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)',
-              borderRadius: 8, padding: '10px 12px', color: C.accent, fontSize: 12,
-              outline: 'none', fontFamily: 'monospace',
-            }}
-          />
-          {contractLoading && (
-            <div style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>Looking up token...</div>
-          )}
+          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search name, symbol, chain..."
+            style={{ width: '100%', background: C.card2, border: '1px solid ' + C.border, borderRadius: 8, padding: '10px 12px', color: C.text, fontSize: 13, outline: 'none', fontFamily: 'Syne, sans-serif', marginBottom: 8 }} />
+          <input value={contractInput} onChange={(e) => setContractInput(e.target.value)} placeholder="Or paste any Solana or EVM contract address..."
+            style={{ width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)', borderRadius: 8, padding: '10px 12px', color: C.accent, fontSize: 12, outline: 'none', fontFamily: 'monospace' }} />
+          {contractLoading && <div style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>Looking up token...</div>}
           {contractToken && !contractLoading && (
-            <div onClick={() => handleSelect(contractToken)} style={{
-              marginTop: 8, padding: '10px 12px',
-              background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.3)',
-              borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10,
-            }}>
+            <div onClick={() => handleSelect(contractToken)} style={{ marginTop: 8, padding: '10px 12px', background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.3)', borderRadius: 8, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10 }}>
               <TokenIcon token={contractToken} size={28} />
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ display: 'flex', alignItems: 'center' }}>
                   <span style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{contractToken.symbol}</span>
                   <ChainBadge token={contractToken} />
                 </div>
-                <div style={{ color: C.muted, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                  {contractToken.name}
-                </div>
+                <div style={{ color: C.muted, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{contractToken.name}</div>
               </div>
               <div style={{ color: C.accent, fontSize: 11, fontWeight: 600 }}>Select</div>
             </div>
           )}
         </div>
-
         <div style={{ overflowY: 'auto', flex: 1, WebkitOverflowScrolling: 'touch' }}>
-          {!q.trim() && (
-            <div style={{ padding: '8px 16px 4px', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
-              POPULAR TOKENS
-            </div>
-          )}
+          {!q.trim() && <div style={{ padding: '8px 16px 4px', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>POPULAR TOKENS</div>}
           {q.trim() && merged.length === 0 && (
             <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>
               {discovering ? 'Searching...' : 'No matches.'}
@@ -1366,34 +1090,22 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
           {display.map((t, i) => {
             const key = (t.mint || t.address || '') + '-' + (t.chainId || 'sol') + '-' + i;
             return (
-              <div
-                key={key}
-                onClick={() => handleSelect(t)}
-                style={{
-                  padding: '12px 16px', cursor: 'pointer',
-                  display: 'flex', alignItems: 'center', gap: 10,
-                  borderBottom: '1px solid rgba(255,255,255,.03)', minHeight: 48,
-                }}
+              <div key={key} onClick={() => handleSelect(t)} style={{ padding: '12px 16px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 10, borderBottom: '1px solid rgba(255,255,255,.03)', minHeight: 48 }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(0,229,255,.05)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
-              >
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
                 <TokenIcon token={t} size={32} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center' }}>
                     <span style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{t.symbol}</span>
                     <ChainBadge token={t} />
                   </div>
-                  <div style={{ color: C.muted, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {t.name}
-                  </div>
+                  <div style={{ color: C.muted, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</div>
                 </div>
               </div>
             );
           })}
           {q.trim() && discovering && merged.length > 0 && (
-            <div style={{ padding: '10px 16px', fontSize: 11, color: C.muted, fontStyle: 'italic', textAlign: 'center' }}>
-              Loading more matches...
-            </div>
+            <div style={{ padding: '10px 16px', fontSize: 11, color: C.muted, fontStyle: 'italic', textAlign: 'center' }}>Loading more matches...</div>
           )}
         </div>
       </div>
@@ -1401,7 +1113,7 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
   );
 }
 
-/* -- PRESET EDITOR ---------------------------------------------------------- */
+/* ===== PRESET EDITOR ====================================================== */
 
 function PresetEditor({ open, onClose, presets, onSave }) {
   const [buyVals,  setBuyVals]  = useState(presets.buy.map(String));
@@ -1429,155 +1141,69 @@ function PresetEditor({ open, onClose, presets, onSave }) {
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 599, background: 'rgba(0,0,0,.85)' }} />
-      <div style={{
-        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
-        width: '100%', maxWidth: 480, zIndex: 600,
-        background: C.card, borderTop: '2px solid ' + C.borderHi,
-        borderRadius: '20px 20px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
-        maxHeight: 'min(88vh, 100dvh)', display: 'flex', flexDirection: 'column', overflow: 'hidden',
-      }}>
+      <div style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: 480, zIndex: 600, background: C.card, borderTop: '2px solid ' + C.borderHi, borderRadius: '20px 20px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,.9)', maxHeight: 'min(88vh, 100dvh)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ flexShrink: 0, padding: '14px 20px 8px' }}>
-          <div onClick={onClose} role="button" aria-label="Close" style={{
-            width: 40, height: 4, background: C.muted2, borderRadius: 2,
-            margin: '0 auto 14px', cursor: 'pointer',
-            padding: '8px 0', boxSizing: 'content-box',
-          }} />
+          <div onClick={onClose} role="button" aria-label="Close" style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 14px', cursor: 'pointer', padding: '8px 0', boxSizing: 'content-box' }} />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <div style={{ color: '#fff', fontWeight: 800, fontSize: 17 }}>Edit Presets</div>
-              <div style={{ color: C.muted, fontSize: 11, marginTop: 2 }}>
-                Used for the Quick Buy and Quick Sell rows.
-              </div>
+              <div style={{ color: C.muted, fontSize: 11, marginTop: 2 }}>Used for the Quick Buy and Quick Sell rows.</div>
             </div>
-            <button onClick={onClose} aria-label="Close" style={{
-              background: 'none', border: 'none', color: C.muted, cursor: 'pointer',
-              fontSize: 24, padding: 8, minWidth: 44, minHeight: 44, lineHeight: 1,
-            }}>x</button>
+            <button onClick={onClose} aria-label="Close" style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 24, padding: 8, minWidth: 44, minHeight: 44, lineHeight: 1 }}>x</button>
           </div>
         </div>
-
         <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '8px 20px 16px' }}>
-          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 10, marginTop: 6 }}>
-            QUICK BUY ($)
-          </div>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 10, marginTop: 6 }}>QUICK BUY ($)</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 10 }}>
             {buyVals.map((v, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span style={{ color: C.muted, fontSize: 12, width: 50, flexShrink: 0 }}>Slot {i + 1}</span>
-                <div style={{
-                  flex: 1, background: C.card2, border: '1px solid ' + C.border,
-                  borderRadius: 10, padding: '10px 14px',
-                  display: 'flex', alignItems: 'center', gap: 6, minHeight: 44,
-                }}>
+                <div style={{ flex: 1, background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 6, minHeight: 44 }}>
                   <span style={{ color: C.muted }}>$</span>
-                  <input
-                    value={v}
-                    inputMode="decimal"
-                    onChange={(e) => {
-                      let nv = e.target.value.replace(/[^0-9.]/g, '');
-                      const dotIdx = nv.indexOf('.');
-                      if (dotIdx >= 0) nv = nv.slice(0, dotIdx + 1) + nv.slice(dotIdx + 1).replace(/\./g, '');
-                      setBuyVals((p) => { const n = p.slice(); n[i] = nv; return n; });
-                    }}
-                    style={{
-                      flex: 1, background: 'transparent', border: 'none',
-                      color: '#fff', fontSize: 16, fontWeight: 700,
-                      outline: 'none', width: '100%',
-                    }}
-                  />
+                  <input value={v} inputMode="decimal" onChange={(e) => { let nv = e.target.value.replace(/[^0-9.]/g, ''); const d = nv.indexOf('.'); if (d >= 0) nv = nv.slice(0, d + 1) + nv.slice(d + 1).replace(/\./g, ''); setBuyVals((p) => { const n = p.slice(); n[i] = nv; return n; }); }}
+                    style={{ flex: 1, background: 'transparent', border: 'none', color: '#fff', fontSize: 16, fontWeight: 700, outline: 'none', width: '100%' }} />
                 </div>
                 {buyVals.length > 2 && (
-                  <button onClick={() => setBuyVals((p) => p.filter((_, j) => j !== i))} aria-label="Remove slot" style={{
-                    flexShrink: 0, width: 36, height: 36, borderRadius: 8,
-                    background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.25)',
-                    color: C.red, cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: 0,
-                  }}>-</button>
+                  <button onClick={() => setBuyVals((p) => p.filter((_, j) => j !== i))} aria-label="Remove slot" style={{ flexShrink: 0, width: 36, height: 36, borderRadius: 8, background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.25)', color: C.red, cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: 0 }}>-</button>
                 )}
               </div>
             ))}
           </div>
           {buyVals.length < 5 && (
-            <button onClick={() => setBuyVals((p) => p.concat(['25']))} style={{
-              width: '100%', padding: '12px', marginBottom: 18, borderRadius: 10,
-              background: 'transparent', border: '1px dashed ' + C.border, color: C.muted,
-              fontFamily: 'Syne, sans-serif', fontSize: 13, cursor: 'pointer', minHeight: 44,
-            }}>+ Add buy slot</button>
+            <button onClick={() => setBuyVals((p) => p.concat(['25']))} style={{ width: '100%', padding: '12px', marginBottom: 18, borderRadius: 10, background: 'transparent', border: '1px dashed ' + C.border, color: C.muted, fontFamily: 'Syne, sans-serif', fontSize: 13, cursor: 'pointer', minHeight: 44 }}>+ Add buy slot</button>
           )}
-
-          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 10 }}>
-            QUICK SELL (%)
-          </div>
+          <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 10 }}>QUICK SELL (%)</div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 10 }}>
             {sellVals.map((v, i) => (
               <div key={i} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                 <span style={{ color: C.muted, fontSize: 12, width: 50, flexShrink: 0 }}>Slot {i + 1}</span>
-                <div style={{
-                  flex: 1, background: C.card2, border: '1px solid ' + C.border,
-                  borderRadius: 10, padding: '10px 14px',
-                  display: 'flex', alignItems: 'center', gap: 6, minHeight: 44,
-                }}>
-                  <input
-                    value={v}
-                    inputMode="decimal"
-                    onChange={(e) => {
-                      let nv = e.target.value.replace(/[^0-9.]/g, '');
-                      const dotIdx = nv.indexOf('.');
-                      if (dotIdx >= 0) nv = nv.slice(0, dotIdx + 1) + nv.slice(dotIdx + 1).replace(/\./g, '');
-                      setSellVals((p) => { const n = p.slice(); n[i] = nv; return n; });
-                    }}
-                    style={{
-                      flex: 1, background: 'transparent', border: 'none',
-                      color: '#fff', fontSize: 16, fontWeight: 700,
-                      outline: 'none', width: '100%',
-                    }}
-                  />
+                <div style={{ flex: 1, background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '10px 14px', display: 'flex', alignItems: 'center', gap: 6, minHeight: 44 }}>
+                  <input value={v} inputMode="decimal" onChange={(e) => { let nv = e.target.value.replace(/[^0-9.]/g, ''); const d = nv.indexOf('.'); if (d >= 0) nv = nv.slice(0, d + 1) + nv.slice(d + 1).replace(/\./g, ''); setSellVals((p) => { const n = p.slice(); n[i] = nv; return n; }); }}
+                    style={{ flex: 1, background: 'transparent', border: 'none', color: '#fff', fontSize: 16, fontWeight: 700, outline: 'none', width: '100%' }} />
                   <span style={{ color: C.muted }}>%</span>
                 </div>
                 {sellVals.length > 1 && (
-                  <button onClick={() => setSellVals((p) => p.filter((_, j) => j !== i))} aria-label="Remove slot" style={{
-                    flexShrink: 0, width: 36, height: 36, borderRadius: 8,
-                    background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.25)',
-                    color: C.red, cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: 0,
-                  }}>-</button>
+                  <button onClick={() => setSellVals((p) => p.filter((_, j) => j !== i))} aria-label="Remove slot" style={{ flexShrink: 0, width: 36, height: 36, borderRadius: 8, background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.25)', color: C.red, cursor: 'pointer', fontSize: 18, lineHeight: 1, padding: 0 }}>-</button>
                 )}
               </div>
             ))}
           </div>
           {sellVals.length < 4 && (
-            <button onClick={() => setSellVals((p) => p.concat(['50']))} style={{
-              width: '100%', padding: '12px', marginBottom: 12, borderRadius: 10,
-              background: 'transparent', border: '1px dashed ' + C.border, color: C.muted,
-              fontFamily: 'Syne, sans-serif', fontSize: 13, cursor: 'pointer', minHeight: 44,
-            }}>+ Add sell slot</button>
+            <button onClick={() => setSellVals((p) => p.concat(['50']))} style={{ width: '100%', padding: '12px', marginBottom: 12, borderRadius: 10, background: 'transparent', border: '1px dashed ' + C.border, color: C.muted, fontFamily: 'Syne, sans-serif', fontSize: 13, cursor: 'pointer', minHeight: 44 }}>+ Add sell slot</button>
           )}
         </div>
-
-        <div style={{
-          flexShrink: 0, padding: '12px 20px',
-          paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)',
-          borderTop: '1px solid ' + C.border, background: C.card,
-          display: 'flex', gap: 10,
-        }}>
-          <button onClick={onClose} style={{
-            flex: 1, padding: 14, borderRadius: 12, background: C.card2, border: '1px solid ' + C.border,
-            color: C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600,
-            cursor: 'pointer', fontSize: 14, minHeight: 48,
-          }}>Cancel</button>
-          <button onClick={handleSave} style={{
-            flex: 2, padding: 14, borderRadius: 12, background: C.buyGrad, border: 'none',
-            color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800,
-            cursor: 'pointer', fontSize: 14, minHeight: 48,
-          }}>Save</button>
+        <div style={{ flexShrink: 0, padding: '12px 20px', paddingBottom: 'calc(env(safe-area-inset-bottom) + 12px)', borderTop: '1px solid ' + C.border, background: C.card, display: 'flex', gap: 10 }}>
+          <button onClick={onClose} style={{ flex: 1, padding: 14, borderRadius: 12, background: C.card2, border: '1px solid ' + C.border, color: C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600, cursor: 'pointer', fontSize: 14, minHeight: 48 }}>Cancel</button>
+          <button onClick={handleSave} style={{ flex: 2, padding: 14, borderRadius: 12, background: C.buyGrad, border: 'none', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 800, cursor: 'pointer', fontSize: 14, minHeight: 48 }}>Save</button>
         </div>
       </div>
     </>
   );
 }
 
-/* -- MAIN SWAP WIDGET ------------------------------------------------------- */
+/* ===== MAIN SWAP WIDGET =================================================== */
 
 export default function SwapWidget({
-  jupiterTokens = [],
   onConnectWallet,
   defaultFromToken,
   defaultToToken,
@@ -1591,7 +1217,7 @@ export default function SwapWidget({
   // eslint-disable-next-line no-unused-vars
   onHeaderChainChange: _hcChangeIgnored,
 }) {
-  /* -- Wallet hooks -- */
+  /* Wallet hooks */
   const { publicKey: extPublicKey, sendTransaction: extSolSendTx, connected: solConnected } = useWallet();
   const { connection } = useConnection();
   const { address: evmAddress, isConnected: evmConnected, chainId: evmChainId } = useAccount();
@@ -1619,9 +1245,8 @@ export default function SwapWidget({
 
   const sendTransaction = useCallback(async (tx, conn, opts) => {
     if (activeWalletKind === 'privy' && privyEmbeddedSol) {
-      if (typeof privyEmbeddedSol.sendTransaction === 'function') {
+      if (typeof privyEmbeddedSol.sendTransaction === 'function')
         return privyEmbeddedSol.sendTransaction(tx, conn, opts);
-      }
       if (typeof privyEmbeddedSol.signTransaction === 'function') {
         const signed = await privyEmbeddedSol.signTransaction(tx);
         return conn.sendRawTransaction(signed.serialize(), opts || { skipPreflight: false, maxRetries: 3 });
@@ -1637,6 +1262,7 @@ export default function SwapWidget({
   useEffect(() => { walletClientRef.current = walletClient; }, [walletClient]);
   const evmChainIdRef = useRef(evmChainId);
   useEffect(() => { evmChainIdRef.current = evmChainId; }, [evmChainId]);
+  const publicClientRef = useRef(null);
 
   const ensureChain = useCallback(async (targetChainId) => {
     if (!targetChainId) return true;
@@ -1644,34 +1270,23 @@ export default function SwapWidget({
     try {
       if (switchChainAsync) await switchChainAsync({ chainId: targetChainId });
       else if (switchChain) switchChain({ chainId: targetChainId });
-    } catch {
-      throw new Error('Please switch your wallet to ' + (CHAIN_NAMES[targetChainId] || 'the correct chain'));
-    }
+    } catch { throw new Error('Please switch your wallet to ' + (CHAIN_NAMES[targetChainId] || 'the correct chain')); }
     const start = Date.now();
     while (Date.now() - start < 8_000) {
-      const wc = walletClientRef.current;
       if (evmChainIdRef.current === targetChainId) return true;
+      const wc = walletClientRef.current;
       if (wc && wc.chain && wc.chain.id === targetChainId) return true;
       await new Promise((r) => setTimeout(r, 100));
     }
-    if (evmChainIdRef.current !== targetChainId) {
-      throw new Error('Chain switch did not take effect. Try again.');
-    }
+    if (evmChainIdRef.current !== targetChainId) throw new Error('Chain switch did not take effect. Try again.');
     return true;
   }, [switchChain, switchChainAsync]);
 
-  /* -- Initial token pair -- */
+  /* Initial token pair */
   const initialPair = useMemo(() => {
     if (defaultFromToken || defaultToToken) {
       const ws   = { solConnected, evmConnected, evmChainId };
-      const pair = defaultTokenPair({
-        mode: modeProp,
-        viewedToken: defaultFromToken || defaultToToken
-          ? (modeProp === 'sell' ? defaultFromToken : defaultToToken) || defaultFromToken
-          : null,
-        lastFromToken: null,
-        walletState: ws,
-      });
+      const pair = defaultTokenPair({ mode: modeProp, viewedToken: (modeProp === 'sell' ? defaultFromToken : defaultToToken) || defaultFromToken, lastFromToken: null, walletState: ws });
       return {
         fromToken: defaultFromToken ? normalizeToken(defaultFromToken) : pair.fromToken,
         toToken:   defaultToToken   ? normalizeToken(defaultToToken)   : pair.toToken,
@@ -1686,54 +1301,42 @@ export default function SwapWidget({
 
   const [fromToken, setFromToken] = useState(initialPair.fromToken || POPULAR_TOKENS[0]);
   const [toToken,   setToToken]   = useState(initialPair.toToken   || POPULAR_TOKENS[1]);
-
-  /* -- Amount + slippage -- */
-  const [fromAmt, setFromAmt] = useState('');
-  const [slip,    setSlip]    = useState(0.5);
+  const [fromAmt,   setFromAmt]   = useState('');
+  const [slip,      setSlip]      = useState(0.5);
   const userTouchedAmtRef = useRef(false);
 
-  /* -- Quote state -- */
   const [quote,        setQuote]        = useState(null);
-  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteLoading, setQuoteLoading] = useState(false); // eslint-disable-line no-unused-vars
   const [quoteError,   setQuoteError]   = useState('');
   const [quoteIsStale, setQuoteIsStale] = useState(false);
 
-  /* -- Swap execution state -- */
   const [swapStatus,  setSwapStatus]  = useState('idle');
   const [swapTx,      setSwapTx]      = useState(null);
   const [swapError,   setSwapError]   = useState('');
   const swapStatusTimerRef = useRef(null);
   const [pendingSwap, setPendingSwap] = useState(false);
 
-  const [stuckSwap,   setStuckSwap]   = useState(false);
+  const [stuckSwap,  setStuckSwap]  = useState(false);
   const stuckTimerRef = useRef(null);
   useEffect(() => {
     if (swapStatus === 'loading') {
       if (stuckTimerRef.current) clearTimeout(stuckTimerRef.current);
       setStuckSwap(false);
-      stuckTimerRef.current = setTimeout(() => { setStuckSwap(true); }, 30_000);
+      stuckTimerRef.current = setTimeout(() => setStuckSwap(true), 30_000);
     } else {
       if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
       setStuckSwap(false);
     }
-    return () => {
-      if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
-    };
+    return () => { if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; } };
   }, [swapStatus]);
 
-  const cancelStuckSwap = useCallback(() => {
-    setSwapStatus('idle'); setSwapError(''); setSwapTx(null); setStuckSwap(false);
-  }, []);
+  const cancelStuckSwap = useCallback(() => { setSwapStatus('idle'); setSwapError(''); setSwapTx(null); setStuckSwap(false); }, []);
 
-  useEffect(() => {
-    if (typeof onStatusChange === 'function') onStatusChange(swapStatus);
-  }, [swapStatus, onStatusChange]);
+  useEffect(() => { if (typeof onStatusChange === 'function') onStatusChange(swapStatus); }, [swapStatus, onStatusChange]);
 
-  /* -- Solana balance -- */
   const [solBalanceLamports, setSolBalanceLamports] = useState(null);
   const [solSplBalance,      setSolSplBalance]      = useState(null);
 
-  /* -- Preset state -- */
   const [presetsLocal, setPresetsLocal] = useState(() => presetsProp || loadPresets());
   const presets    = presetsProp || presetsLocal;
   const setPresets = useCallback((p) => {
@@ -1742,38 +1345,30 @@ export default function SwapWidget({
   }, [onPresetsChange]);
   const [presetEditorOpen, setPresetEditorOpen] = useState(false);
 
-  /* -- Token select modals -- */
   const [fromSelectOpen, setFromSelectOpen] = useState(false);
   const [toSelectOpen,   setToSelectOpen]   = useState(false);
 
-  /* -- Derived -- */
-  const route       = useMemo(() => pickRoute(fromToken, toToken), [fromToken, toToken]);
-  const isSupported = route !== 'unsupported';
-  const unsupportedMsg = useMemo(
-    () => isSupported ? '' : unsupportedReason(fromToken, toToken),
-    [isSupported, fromToken, toToken]
-  );
+  /* Derived */
+  const route           = useMemo(() => pickRoute(fromToken, toToken), [fromToken, toToken]);
+  const isSupported     = route !== 'unsupported';
+  const unsupportedMsg  = useMemo(() => isSupported ? '' : unsupportedReason(fromToken, toToken), [isSupported, fromToken, toToken]);
   const isEvmFrom       = isEvm(fromToken);
   const isNativeEvmFrom = isEvmFrom && (fromToken.address || '').toLowerCase() === NATIVE_EVM;
+  const requiresApproval = isEvmFrom && !isNativeEvmFrom && route === 'okx-evm';
 
-  const isPrivyOnly      = activeWalletKind === 'privy' && !solConnected && !evmConnected;
-  const requiresApproval = isEvmFrom && !isNativeEvmFrom && route === '0x' && !isPrivyOnly;
-
-  /* -- Public client for from-token's chain -- */
-  const publicClient    = usePublicClient({ chainId: isEvmFrom ? fromToken.chainId : undefined });
-  const publicClientRef = useRef(publicClient);
+  /* Public client for EVM */
+  const publicClient = usePublicClient({ chainId: isEvmFrom ? fromToken.chainId : undefined });
   useEffect(() => { publicClientRef.current = publicClient; }, [publicClient]);
 
-  /* -- EVM balance -- */
-  const balanceAddress = effectiveEvmAddress;
+  /* EVM balance */
   const { data: evmFromBal, refetch: refetchEvmBal } = useBalance({
-    address: balanceAddress,
+    address: effectiveEvmAddress,
     token:   isEvmFrom && !isNativeEvmFrom ? fromToken.address : undefined,
     chainId: isEvmFrom ? fromToken.chainId : undefined,
-    query:   { enabled: !!balanceAddress && isEvmFrom },
+    query:   { enabled: !!effectiveEvmAddress && isEvmFrom },
   });
 
-  /* -- Solana balance fetch -- */
+  /* Solana balance */
   const fromMint = isSol(fromToken) ? fromToken.mint : null;
   useEffect(() => {
     if (!publicKey || !connection) { setSolBalanceLamports(null); setSolSplBalance(null); return; }
@@ -1784,15 +1379,11 @@ export default function SwapWidget({
         if (!cancelled) setSolBalanceLamports(bal);
         if (fromMint && fromMint !== WSOL_MINT) {
           const a = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: new PublicKey(fromMint) });
-          if (!cancelled) setSolSplBalance(
-            a.value.length ? a.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0
-          );
+          if (!cancelled) setSolSplBalance(a.value.length ? a.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0);
         } else {
           if (!cancelled) setSolSplBalance(null);
         }
-      } catch {
-        if (!cancelled) { setSolBalanceLamports(null); setSolSplBalance(null); }
-      }
+      } catch { if (!cancelled) { setSolBalanceLamports(null); setSolSplBalance(null); } }
     })();
     return () => { cancelled = true; };
   }, [publicKey, connection, fromMint]);
@@ -1811,116 +1402,71 @@ export default function SwapWidget({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [swapStatus]);
 
+  /* Auto-update pair on wallet connect */
   const lastSeenWalletState = useRef({ sol: solConnected, evm: evmConnected, chain: evmChainId });
   useEffect(() => {
     if (defaultFromToken || defaultToToken) return;
     if (userTouchedAmtRef.current) return;
-    const prev               = lastSeenWalletState.current;
-    const justConnectedSol   = !prev.sol && solConnected;
-    const justConnectedEvm   = !prev.evm && evmConnected;
-    const justSwitchedChain  = evmConnected && prev.chain !== evmChainId;
+    const prev              = lastSeenWalletState.current;
+    const justConnectedSol  = !prev.sol && solConnected;
+    const justConnectedEvm  = !prev.evm && evmConnected;
+    const justSwitchedChain = evmConnected && prev.chain !== evmChainId;
     lastSeenWalletState.current = { sol: solConnected, evm: evmConnected, chain: evmChainId };
     if (!(justConnectedSol || justConnectedEvm || justSwitchedChain)) return;
-
     const ws            = { solConnected, evmConnected, evmChainId };
     const last          = loadLastPair();
     const lastFromToken = last && last.from ? normalizeToken(last.from) : null;
     const pair          = defaultTokenPair({ mode: modeProp, viewedToken: null, lastFromToken, walletState: ws });
-    if (pair.fromToken && !tokensEqual(pair.fromToken, fromToken)) {
-      setFromToken(pair.fromToken);
-      setQuote(null); setQuoteError(''); setQuoteIsStale(false);
-    }
-    if (pair.toToken && !tokensEqual(pair.toToken, toToken)) {
-      setToToken(pair.toToken);
-      setQuote(null); setQuoteError(''); setQuoteIsStale(false);
-    }
+    if (pair.fromToken && !tokensEqual(pair.fromToken, fromToken)) { setFromToken(pair.fromToken); setQuote(null); setQuoteError(''); setQuoteIsStale(false); }
+    if (pair.toToken   && !tokensEqual(pair.toToken,   toToken))  { setToToken(pair.toToken);     setQuote(null); setQuoteError(''); setQuoteIsStale(false); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [solConnected, evmConnected, evmChainId]);
 
   useEffect(() => {
-    if (defaultFromToken) {
-      const next = normalizeToken(defaultFromToken);
-      if (next && !tokensEqual(next, fromToken)) {
-        setFromToken(next); setQuote(null); setQuoteError(''); setQuoteIsStale(false);
-      }
-    }
+    if (!defaultFromToken) return;
+    const next = normalizeToken(defaultFromToken);
+    if (next && !tokensEqual(next, fromToken)) { setFromToken(next); setQuote(null); setQuoteError(''); setQuoteIsStale(false); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultFromToken]);
 
   useEffect(() => {
-    if (defaultToToken) {
-      const next = normalizeToken(defaultToToken);
-      if (next && !tokensEqual(next, toToken)) {
-        setToToken(next); setQuote(null); setQuoteError(''); setQuoteIsStale(false);
-      }
-    }
+    if (!defaultToToken) return;
+    const next = normalizeToken(defaultToToken);
+    if (next && !tokensEqual(next, toToken)) { setToToken(next); setQuote(null); setQuoteError(''); setQuoteIsStale(false); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultToToken]);
 
-  /* -- USD prices -- */
+  /* USD prices */
   const [fromPriceUsd, setFromPriceUsd] = useState(null);
   const [toPriceUsd,   setToPriceUsd]   = useState(null);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const p = await getTokenPriceUsd(fromToken);
-      if (!cancelled) setFromPriceUsd(p);
-    })();
-    return () => { cancelled = true; };
-  }, [fromToken]);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      const p = await getTokenPriceUsd(toToken);
-      if (!cancelled) setToPriceUsd(p);
-    })();
-    return () => { cancelled = true; };
-  }, [toToken]);
+  useEffect(() => { let c = false; getTokenPriceUsd(fromToken).then((p) => { if (!c) setFromPriceUsd(p); }); return () => { c = true; }; }, [fromToken]);
+  useEffect(() => { let c = false; getTokenPriceUsd(toToken).then((p) => { if (!c) setToPriceUsd(p); }); return () => { c = true; }; }, [toToken]);
 
-  /* -- QUOTE ENGINE (price-derived estimate, NEVER aggregator pre-click) -- */
+  /* Preload OKX token catalog on mount */
+  useEffect(() => { loadOkxSolTokens().catch(() => {}); }, []);
+
+  /* Quote engine: price-derived estimate, no aggregator call pre-click */
   const fetchQuote = useCallback(async () => {
     setQuoteError('');
-
-    if (!fromAmt || parseFloat(fromAmt) <= 0 || !fromToken || !toToken) {
-      setQuote(null); setQuoteIsStale(false); return;
-    }
-    if (typeof fromToken.decimals !== 'number' || typeof toToken.decimals !== 'number') {
-      setQuote(null); setQuoteIsStale(false); return;
-    }
-    if (tokensEqual(fromToken, toToken)) {
-      setQuote(null); setQuoteIsStale(false);
-      setQuoteError('Cannot swap a token for itself.');
-      return;
-    }
-
+    if (!fromAmt || parseFloat(fromAmt) <= 0 || !fromToken || !toToken) { setQuote(null); setQuoteIsStale(false); return; }
+    if (typeof fromToken.decimals !== 'number' || typeof toToken.decimals !== 'number') { setQuote(null); setQuoteIsStale(false); return; }
+    if (tokensEqual(fromToken, toToken)) { setQuote(null); setQuoteIsStale(false); setQuoteError('Cannot swap a token for itself.'); return; }
     const fromNum = parseFloat(fromAmt);
     if (!Number.isFinite(fromNum) || fromNum <= 0) { setQuote(null); setQuoteIsStale(false); return; }
     if (!(fromPriceUsd > 0) || !(toPriceUsd > 0)) { setQuote(null); setQuoteIsStale(false); return; }
-
     const grossOut = fromNum * fromPriceUsd / toPriceUsd;
     const netOut   = grossOut * (1 - TOTAL_FEE);
     const dp       = (netOut > 0 && netOut < 0.01) ? 8 : 6;
-
-    setQuote({
-      engine:           'estimate',
-      outAmountDisplay: netOut.toFixed(dp),
-      priceImpactPct:   0,
-      preview:          true,
-    });
+    setQuote({ engine: 'estimate', outAmountDisplay: netOut.toFixed(dp), priceImpactPct: 0, preview: true });
     setQuoteIsStale(false);
   }, [fromAmt, fromToken, toToken, fromPriceUsd, toPriceUsd]);
 
-  useEffect(() => {
-    const t = setTimeout(fetchQuote, QUOTE_DEBOUNCE_MS);
-    return () => clearTimeout(t);
-  }, [fetchQuote]);
+  useEffect(() => { const t = setTimeout(fetchQuote, QUOTE_DEBOUNCE_MS); return () => clearTimeout(t); }, [fetchQuote]);
 
-  /* -- Display balance -- */
+  /* Display balance */
   const fromBalanceDisplay = useMemo(() => {
     if (isSol(fromToken)) {
-      if (fromToken.mint === WSOL_MINT) {
-        return solBalanceLamports != null ? solBalanceLamports / LAMPORTS_PER_SOL : null;
-      }
+      if (fromToken.mint === WSOL_MINT) return solBalanceLamports != null ? solBalanceLamports / LAMPORTS_PER_SOL : null;
       return solSplBalance;
     }
     if (isEvm(fromToken) && evmFromBal) return parseFloat(evmFromBal.formatted);
@@ -1962,36 +1508,31 @@ export default function SwapWidget({
     const dec      = Math.min(typeof fromToken.decimals === 'number' ? fromToken.decimals : 6, 9);
     let amount     = fromBalanceDisplay * (pct / 100);
     if (pct === 100) {
-      if (isSol(fromToken) && fromToken.mint === WSOL_MINT) {
-        amount = maxSafeSolBalance(solBalanceLamports);
-      } else if (isNative) {
-        amount = maxSafeAmount({ balance: fromBalanceDisplay, isNative: true });
-      }
+      if (isSol(fromToken) && fromToken.mint === WSOL_MINT) amount = maxSafeSolBalance(solBalanceLamports);
+      else if (isNative) amount = maxSafeAmount({ balance: fromBalanceDisplay, isNative: true });
     }
     setFromAmt(amount > 0 ? amount.toFixed(dec) : '0');
   }, [fromBalanceDisplay, fromToken, isNativeEvmFrom, solBalanceLamports]);
 
   const flipTokens = useCallback(() => {
-    setFromToken(toToken);
-    setToToken(fromToken);
+    setFromToken(toToken); setToToken(fromToken);
     setFromAmt(''); setQuote(null); setQuoteError(''); setQuoteIsStale(false);
     userTouchedAmtRef.current = false;
   }, [fromToken, toToken]);
 
-  /* -- EXECUTE SWAP (Jupiter input-side fee / 0x AllowanceHolder output fee) -- */
+  /* ===== EXECUTE SWAP =====================================================
+   * OKX just gives you a transaction:
+   *   Solana: instructionLists -> build VersionedTransaction -> sign -> send
+   *   EVM:    tx.to + tx.data + tx.value -> approve if needed -> send
+   * Fee is injected server-side. No manual fee math here.
+   * ====================================================================== */
   const executeSwap = useCallback(async () => {
     if (!walletConnected) {
       setPendingSwap(true);
-      if (loginPrivy) loginPrivy();
-      else if (onConnectWallet) onConnectWallet();
+      if (loginPrivy) loginPrivy(); else if (onConnectWallet) onConnectWallet();
       return;
     }
-
-    if (!isSupported) {
-      setSwapError(unsupportedMsg || 'This pair is not supported.');
-      setSwapStatus('error');
-      return;
-    }
+    if (!isSupported) { setSwapError(unsupportedMsg || 'This pair is not supported.'); setSwapStatus('error'); return; }
 
     if (swapStatusTimerRef.current) { clearTimeout(swapStatusTimerRef.current); swapStatusTimerRef.current = null; }
     setSwapStatus('loading'); setSwapError(''); setSwapTx(null);
@@ -2000,114 +1541,88 @@ export default function SwapWidget({
       const fromAmtRaw = toRawAmount(fromAmt, fromToken.decimals);
       if (!fromAmtRaw || fromAmtRaw === '0') throw new Error('Invalid amount');
 
-      if (route === 'jupiter') {
+      /* ----- SOLANA via OKX swap-instruction ----- */
+      if (route === 'okx-sol') {
         if (!publicKey) throw new Error('Connect a Solana wallet');
 
-        const inputMintPk   = new PublicKey(fromToken.mint);
-        const feeWalletPk   = new PublicKey(SOL_FEE_WALLET);
-        const isNativeInput = fromToken.mint === WSOL_MINT;
-
-        /*
-         * Fee math in BigInt to avoid float precision loss on large amounts.
-         * feeRaw  = floor(fromAmtRaw * 5%)
-         * swapRaw = fromAmtRaw - feeRaw  (exactly 95% of input)
-         */
-        const feeRaw  = BigInt(fromAmtRaw) * BigInt(JUPITER_INPUT_FEE_BPS) / 10000n;
-        const swapRaw = BigInt(fromAmtRaw) - feeRaw;
-        if (swapRaw <= 0n) throw new Error('Amount too small after fee');
-
-        const freshQuote = await fetchJupiterQuote({
-          inputMint:  fromToken.mint,
-          outputMint: toToken.mint,
-          amountRaw:  swapRaw.toString(), // 95% of input; no platformFeeBps
-          slipBps:    Math.round(slip * 100),
+        const swapData = await fetchOkxSolanaSwap({
+          fromMint:   fromToken.mint,
+          toMint:     toToken.mint,
+          amount:     fromAmtRaw,
+          slippage:   slip,
+          userWallet: publicKey.toString(),
         });
 
-        const ixData = await fetchJupiterSwapInstructions({
-          quoteResponse: freshQuote,
-          userPublicKey: publicKey.toString(),
-          // no feeAccount -- platformFeeBps is 0 in the quote
-        });
-
-        const jupTx = await buildJupiterSwapTransaction({
-          connection,
-          userPubkey:     publicKey,
-          inputMint:      inputMintPk,
-          isNativeInput,
-          feeWalletPk,
-          feeRaw,         // 5% of input, transferred to fee wallet inside the tx
-          ixData,
-        });
-
-        const sig = await sendTransaction(jupTx, connection, { skipPreflight: true, maxRetries: 3 });
+        const tx  = await buildOkxSolanaTransaction({ connection, userPubkey: publicKey, swapData });
+        const sig = await sendTransaction(tx, connection, { skipPreflight: false, maxRetries: 3 });
         setSwapTx(sig);
 
-        const bh   = jupTx.message.recentBlockhash;
+        const bh   = tx.message.recentBlockhash;
         const lvbh = (await connection.getLatestBlockhash('confirmed')).lastValidBlockHeight;
         connection.confirmTransaction(
-          { signature: sig, blockhash: bh, lastValidBlockHeight: lvbh },
-          'confirmed'
+          { signature: sig, blockhash: bh, lastValidBlockHeight: lvbh }, 'confirmed'
         ).catch(() => {});
 
-      } else if (route === '0x') {
+      /* ----- EVM via OKX swap ----- */
+      } else if (route === 'okx-evm') {
         if (!effectiveEvmAddress || !walletClientRef.current) throw new Error('Connect an EVM wallet');
         if (evmChainId && evmChainId !== fromToken.chainId) await ensureChain(fromToken.chainId);
 
         const wc = walletClientRef.current;
         const pc = publicClientRef.current;
-        if (!wc) throw new Error('Wallet not ready - try again');
+        if (!wc) throw new Error('Wallet not ready -- try again');
 
-        const freshOx = await fetchOxQuote({
-          chainId:      fromToken.chainId,
-          sellToken:    fromToken.address,
-          buyToken:     toToken.address,
-          sellAmount:   fromAmtRaw,
-          taker:        effectiveEvmAddress,
-          slipBps:      Math.round(slip * 100),
-          feeRecipient: EVM_FEE_WALLET,
-          feeToken:     toToken.address,
+        /* Get OKX swap calldata */
+        const swapData = await fetchOkxEvmSwap({
+          chainId:     fromToken.chainId,
+          fromAddress: fromToken.address,
+          toAddress:   toToken.address,
+          amount:      fromAmtRaw,
+          slippage:    slip,
+          userWallet:  effectiveEvmAddress,
         });
 
-        const tx = freshOx.transaction;
-        if (!tx || !tx.to || !tx.data) throw new Error('0x: incomplete transaction');
+        const tx = swapData.tx;
+        if (!tx || !tx.to || !tx.data) throw new Error('OKX returned no transaction data');
 
-        /*
-         * AllowanceHolder approval check. issues.allowance.spender is the
-         * AllowanceHolder contract; only required for non-native sell tokens.
-         */
+        /* ERC20 approval check for non-native tokens */
         if (!isNativeEvmFrom) {
-          const allowanceInfo = freshOx.issues && freshOx.issues.allowance;
-          const spender       = allowanceInfo && allowanceInfo.spender;
-          const need          = safeBigInt(fromAmtRaw);
-          let have            = safeBigInt(0);
-          if (spender && pc) {
-            try {
-              const onchain = await pc.readContract({
-                address: fromToken.address,
-                abi: [{
-                  name: 'allowance', type: 'function', stateMutability: 'view',
-                  inputs:  [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }],
-                  outputs: [{ name: '', type: 'uint256' }],
-                }],
-                functionName: 'allowance',
-                args: [effectiveEvmAddress, spender],
-              });
-              have = safeBigInt(onchain);
-            } catch {}
-          }
-          if (spender && have < need) {
-            const approveData = '0x095ea7b3' +
-              spender.slice(2).toLowerCase().padStart(64, '0') +
-              'f'.repeat(64);
-            const approveHash = await wc.sendTransaction({
-              to: fromToken.address, data: approveData, value: safeBigInt(0),
-            });
+          const approvalData = await fetchOkxEvmApproval({
+            chainId:      fromToken.chainId,
+            tokenAddress: fromToken.address,
+            amount:       fromAmtRaw,
+          });
+
+          if (approvalData && approvalData.dexContractAddress) {
+            const spender = approvalData.dexContractAddress;
+            let have = safeBigInt(0);
             if (pc) {
-              try { await pc.waitForTransactionReceipt({ hash: approveHash, timeout: 60_000 }); } catch {}
+              try {
+                const onchain = await pc.readContract({
+                  address: fromToken.address,
+                  abi: [{ name: 'allowance', type: 'function', stateMutability: 'view', inputs: [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }], outputs: [{ name: '', type: 'uint256' }] }],
+                  functionName: 'allowance',
+                  args: [effectiveEvmAddress, spender],
+                });
+                have = safeBigInt(onchain);
+              } catch {}
+            }
+            const need = safeBigInt(fromAmtRaw);
+            if (have < need) {
+              /* Use OKX approval calldata if available, otherwise build manually */
+              const approveData = approvalData.callData ||
+                ('0x095ea7b3' + spender.slice(2).toLowerCase().padStart(64, '0') + 'f'.repeat(64));
+              const approveHash = await wc.sendTransaction({
+                to: fromToken.address, data: approveData, value: safeBigInt(0),
+              });
+              if (pc) {
+                try { await pc.waitForTransactionReceipt({ hash: approveHash, timeout: 60_000 }); } catch {}
+              }
             }
           }
         }
 
+        /* Send swap transaction */
         const hash = await wc.sendTransaction({
           to:    tx.to,
           data:  tx.data,
@@ -2153,256 +1668,143 @@ export default function SwapWidget({
 
   const txLink = useMemo(() => {
     if (!swapTx) return null;
-    if (route === 'jupiter') return 'https://solscan.io/tx/' + swapTx;
+    if (route === 'okx-sol') return 'https://solscan.io/tx/' + swapTx;
     const exp = {
-      1:      'etherscan.io',
-      10:     'optimistic.etherscan.io',
-      56:     'bscscan.com',
-      130:    'uniscan.xyz',
-      137:    'polygonscan.com',
-      146:    'sonicscan.org',
-      324:    'explorer.zksync.io',
-      2741:   'abscan.org',
-      5000:   'mantlescan.xyz',
-      8453:   'basescan.org',
-      34443:  'modescan.io',
-      42161:  'arbiscan.io',
-      43114:  'snowtrace.io',
-      57073:  'explorer.inkonchain.com',
-      59144:  'lineascan.build',
-      80094:  'beratrail.io',
-      81457:  'blastscan.io',
-      534352: 'scrollscan.com',
-      1101:   'zkevm.polygonscan.com',
-    }[fromToken.chainId];
-    if (!exp) return null;
-    return 'https://' + exp + '/tx/' + swapTx;
+      1: 'etherscan.io', 10: 'optimistic.etherscan.io', 56: 'bscscan.com',
+      130: 'uniscan.xyz', 137: 'polygonscan.com', 146: 'sonicscan.org',
+      324: 'explorer.zksync.io', 2741: 'abscan.org', 5000: 'mantlescan.xyz',
+      8453: 'basescan.org', 34443: 'modescan.io', 42161: 'arbiscan.io',
+      43114: 'snowtrace.io', 57073: 'explorer.inkonchain.com',
+      59144: 'lineascan.build', 80094: 'beratrail.io', 81457: 'blastscan.io',
+      534352: 'scrollscan.com', 1101: 'zkevm.polygonscan.com',
+    }[fromToken && fromToken.chainId];
+    return exp ? 'https://' + exp + '/tx/' + swapTx : null;
   }, [swapTx, route, fromToken]);
 
-  /* -- RENDER -- */
+  /* ===== RENDER =========================================================== */
 
-  const showBuyPresets = modeProp === 'buy' || (
-    modeProp === 'swap' && fromToken &&
-    /^(SOL|ETH|BNB|POL|AVAX|MNT|FTM|CRO|GLMR|CELO|SEI|RON|FUSE|KCS|HYPE|YALA|BERA|APE|FLOW|KAVA|S|CORE|MON|XPL|FLR|METIS|KAIA|USDC|USDT|DAI|USDE|TUSD|FRAX|USDP|GUSD)$/i
-      .test(fromToken.symbol)
-  );
+  const showBuyPresets  = modeProp === 'buy' || (modeProp === 'swap' && fromToken && /^(SOL|ETH|BNB|POL|AVAX|MNT|FTM|CRO|GLMR|CELO|SEI|RON|FUSE|KCS|HYPE|YALA|BERA|APE|FLOW|KAVA|S|CORE|MON|XPL|FLR|METIS|KAIA|USDC|USDT|DAI|USDE|TUSD|FRAX|USDP|GUSD)$/i.test(fromToken.symbol));
   const showSellPresets = modeProp === 'sell';
-
-  const fromUsdValue = fromAmt && fromPriceUsd > 0 ? parseFloat(fromAmt) * fromPriceUsd : 0;
-  const toUsdValue   = quote && toPriceUsd > 0 ? parseFloat(quote.outAmountDisplay) * toPriceUsd : 0;
-
-  const needsSol       = route === 'jupiter';
-  const needsEvm       = route === '0x';
+  const fromUsdValue    = fromAmt && fromPriceUsd > 0 ? parseFloat(fromAmt) * fromPriceUsd : 0;
+  const toUsdValue      = quote && toPriceUsd > 0 ? parseFloat(quote.outAmountDisplay) * toPriceUsd : 0;
+  const needsSol        = route === 'okx-sol';
+  const needsEvm        = route === 'okx-evm';
   const hasNeededWallet = (needsSol && hasSolSigner) || (needsEvm && hasEvmSigner);
-
-  const isPreview  = !!(quote && quote.preview);
-  const toDisplay  = quote
-    ? (isPreview ? '~' + quote.outAmountDisplay : quote.outAmountDisplay)
-    : (quoteLoading ? '...' : '0.00');
-  const toColor    = quoteIsStale                ? C.muted
-    : quoteLoading && !quote                     ? C.muted
-    : quote                                      ? C.green
-    : C.muted2;
+  const isPreview       = !!(quote && quote.preview);
+  const toDisplay       = quote ? (isPreview ? '~' + quote.outAmountDisplay : quote.outAmountDisplay) : (quoteLoading ? '...' : '0.00');
+  const toColor         = quoteIsStale ? C.muted : quote ? C.green : C.muted2;
 
   return (
     <div style={{ width: '100%', maxWidth: compact ? '100%' : 520, margin: '0 auto', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
       {!compact && (
         <div style={{ marginBottom: 16 }}>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Swap</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Solana & major EVM chains. No KYC.</p>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Solana & 20+ EVM chains. No KYC.</p>
         </div>
       )}
 
-      <div style={{
-        background: compact ? 'transparent' : C.card,
-        border:     compact ? 'none' : '1px solid ' + C.border,
-        borderRadius: compact ? 0 : 18,
-        padding:    compact ? 0 : 18,
-      }}>
+      <div style={{ background: compact ? 'transparent' : C.card, border: compact ? 'none' : '1px solid ' + C.border, borderRadius: compact ? 0 : 18, padding: compact ? 0 : 18 }}>
 
+        {/* Slippage */}
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
           <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>SLIPPAGE</span>
           <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
             {[0.1, 0.5, 1.0].map((v) => (
-              <button key={v} onClick={() => setSlip(v)} style={{
-                padding: '6px 10px', borderRadius: 6, fontSize: 11, cursor: 'pointer',
-                background: slip === v ? 'rgba(0,229,255,.15)' : 'transparent',
-                border: '1px solid ' + (slip === v ? 'rgba(0,229,255,.4)' : C.border),
-                color: slip === v ? C.accent : C.muted, fontFamily: 'Syne, sans-serif',
-                minHeight: 32,
-              }}>{v}%</button>
+              <button key={v} onClick={() => setSlip(v)} style={{ padding: '6px 10px', borderRadius: 6, fontSize: 11, cursor: 'pointer', background: slip === v ? 'rgba(0,229,255,.15)' : 'transparent', border: '1px solid ' + (slip === v ? 'rgba(0,229,255,.4)' : C.border), color: slip === v ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', minHeight: 32 }}>{v}%</button>
             ))}
-            <button onClick={() => setPresetEditorOpen(true)} title="Edit presets" aria-label="Edit presets" style={{
-              background: 'none', border: 'none', color: C.muted, cursor: 'pointer',
-              fontSize: 16, marginLeft: 6, padding: '6px 8px', minWidth: 32, minHeight: 32,
-              display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
-            }}>{'\u270E'}</button>
+            <button onClick={() => setPresetEditorOpen(true)} title="Edit presets" aria-label="Edit presets" style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 16, marginLeft: 6, padding: '6px 8px', minWidth: 32, minHeight: 32, display: 'inline-flex', alignItems: 'center', justifyContent: 'center' }}>{'\u270E'}</button>
           </div>
         </div>
 
+        {/* Quick buy presets */}
         {showBuyPresets && (
           <div style={{ marginBottom: 8 }}>
             <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 6 }}>QUICK BUY</div>
             <div style={{ display: 'flex', gap: 5, flexWrap: 'wrap' }}>
               {presets.buy.map((amt, i) => (
-                <button key={'b-' + i} onClick={() => applyBuyPreset(amt)} style={{
-                  flex: '1 1 0', minWidth: 56, padding: '10px 4px', borderRadius: 8,
-                  border: '1px solid ' + C.border,
-                  background: C.card2, color: C.muted, fontWeight: 700, fontSize: 12,
-                  cursor: 'pointer', fontFamily: 'Syne, sans-serif', minHeight: 40,
-                }}>${amt}</button>
+                <button key={'b-' + i} onClick={() => applyBuyPreset(amt)} style={{ flex: '1 1 0', minWidth: 56, padding: '10px 4px', borderRadius: 8, border: '1px solid ' + C.border, background: C.card2, color: C.muted, fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', minHeight: 40 }}>${amt}</button>
               ))}
             </div>
           </div>
         )}
 
+        {/* Quick sell presets */}
         {showSellPresets && fromBalanceDisplay != null && fromBalanceDisplay > 0 && (
           <div style={{ marginBottom: 8 }}>
             <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 6 }}>QUICK SELL</div>
             <div style={{ display: 'flex', gap: 5 }}>
               {presets.sell.map((pct, i) => (
-                <button key={'s-' + i} onClick={() => applySellPreset(pct)} style={{
-                  flex: 1, padding: '10px 4px', borderRadius: 8, border: '1px solid ' + C.border,
-                  background: C.card2, color: C.muted, fontWeight: 700, fontSize: 12,
-                  cursor: 'pointer', fontFamily: 'Syne, sans-serif', minHeight: 40,
-                }}>{pct === 100 ? 'MAX' : pct + '%'}</button>
+                <button key={'s-' + i} onClick={() => applySellPreset(pct)} style={{ flex: 1, padding: '10px 4px', borderRadius: 8, border: '1px solid ' + C.border, background: C.card2, color: C.muted, fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif', minHeight: 40 }}>{pct === 100 ? 'MAX' : pct + '%'}</button>
               ))}
             </div>
           </div>
         )}
 
+        {/* From token */}
         <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border, marginBottom: 4 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU PAY</span>
             {fromBalanceDisplay != null && (
-              <span style={{ fontSize: 11, color: C.muted }}>
-                Balance: <span style={{ color: C.text }}>{fmtTokenAmount(fromBalanceDisplay)}</span>
-              </span>
+              <span style={{ fontSize: 11, color: C.muted }}>Balance: <span style={{ color: C.text }}>{fmtTokenAmount(fromBalanceDisplay)}</span></span>
             )}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button onClick={() => setFromSelectOpen(true)} style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              background: C.card3, border: '1px solid ' + C.border,
-              borderRadius: 10, padding: '8px 10px', cursor: 'pointer', minWidth: 90, flexShrink: 0,
-            }}>
+            <button onClick={() => setFromSelectOpen(true)} style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.card3, border: '1px solid ' + C.border, borderRadius: 10, padding: '8px 10px', cursor: 'pointer', minWidth: 90, flexShrink: 0 }}>
               <TokenIcon token={fromToken} size={20} />
               <span style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{fromToken && fromToken.symbol}</span>
               <ChainBadge token={fromToken} />
               <span style={{ color: C.muted, fontSize: 9 }}>v</span>
             </button>
-            <input
-              value={fromAmt}
-              onChange={(e) => {
-                userTouchedAmtRef.current = true;
-                let v = e.target.value.replace(/[^0-9.]/g, '');
-                const dotIdx = v.indexOf('.');
-                if (dotIdx >= 0) v = v.slice(0, dotIdx + 1) + v.slice(dotIdx + 1).replace(/\./g, '');
-                setFromAmt(v);
-              }}
-              placeholder="0.00"
-              inputMode="decimal"
-              style={{
-                flex: 1, background: 'transparent', border: 'none',
-                fontSize: 22, fontWeight: 500, color: '#fff', textAlign: 'right',
-                outline: 'none', minWidth: 0, fontFamily: 'JetBrains Mono, monospace',
-              }}
-            />
+            <input value={fromAmt} onChange={(e) => { userTouchedAmtRef.current = true; let v = e.target.value.replace(/[^0-9.]/g, ''); const d = v.indexOf('.'); if (d >= 0) v = v.slice(0, d + 1) + v.slice(d + 1).replace(/\./g, ''); setFromAmt(v); }}
+              placeholder="0.00" inputMode="decimal"
+              style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 500, color: '#fff', textAlign: 'right', outline: 'none', minWidth: 0, fontFamily: 'JetBrains Mono, monospace' }} />
             {fromBalanceDisplay != null && fromBalanceDisplay > 0 && (
-              <button onClick={onMax} style={{
-                background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)',
-                borderRadius: 6, padding: '6px 10px', color: C.accent,
-                fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0,
-                fontFamily: 'Syne, sans-serif', minHeight: 32,
-              }}>MAX</button>
+              <button onClick={onMax} style={{ background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)', borderRadius: 6, padding: '6px 10px', color: C.accent, fontSize: 11, fontWeight: 700, cursor: 'pointer', flexShrink: 0, fontFamily: 'Syne, sans-serif', minHeight: 32 }}>MAX</button>
             )}
           </div>
-          {fromAmt && fromUsdValue > 0 && (
-            <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>
-              {fmtUsd(fromUsdValue)}
-            </div>
-          )}
+          {fromAmt && fromUsdValue > 0 && <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted }}>{fmtUsd(fromUsdValue)}</div>}
         </div>
 
+        {/* Flip */}
         <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0' }}>
-          <button onClick={flipTokens} aria-label="Flip tokens" style={{
-            width: 40, height: 40, borderRadius: 10, background: C.card3,
-            border: '1px solid ' + C.border, cursor: 'pointer', color: C.accent,
-            fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>{'\u21F5'}</button>
+          <button onClick={flipTokens} aria-label="Flip tokens" style={{ width: 40, height: 40, borderRadius: 10, background: C.card3, border: '1px solid ' + C.border, cursor: 'pointer', color: C.accent, fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{'\u21F5'}</button>
         </div>
 
+        {/* To token */}
         <div style={{ background: C.card2, borderRadius: 12, padding: 14, border: '1px solid ' + C.border }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>YOU RECEIVE</span>
-            {quoteIsStale && quoteLoading && (
-              <span style={{ fontSize: 10, color: C.muted2, fontStyle: 'italic' }}>Refreshing...</span>
-            )}
+            {quoteIsStale && <span style={{ fontSize: 10, color: C.muted2, fontStyle: 'italic' }}>Refreshing...</span>}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <button onClick={() => setToSelectOpen(true)} style={{
-              display: 'flex', alignItems: 'center', gap: 6,
-              background: C.card3, border: '1px solid ' + C.border,
-              borderRadius: 10, padding: '8px 10px', cursor: 'pointer', minWidth: 90, flexShrink: 0,
-            }}>
+            <button onClick={() => setToSelectOpen(true)} style={{ display: 'flex', alignItems: 'center', gap: 6, background: C.card3, border: '1px solid ' + C.border, borderRadius: 10, padding: '8px 10px', cursor: 'pointer', minWidth: 90, flexShrink: 0 }}>
               <TokenIcon token={toToken} size={20} />
               <span style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{toToken && toToken.symbol}</span>
               <ChainBadge token={toToken} />
               <span style={{ color: C.muted, fontSize: 9 }}>v</span>
             </button>
-            <div style={{
-              flex: 1, textAlign: 'right', fontSize: 22, fontWeight: 500, minWidth: 0,
-              color: toColor, fontFamily: 'JetBrains Mono, monospace',
-              opacity: quoteIsStale ? 0.5 : 1,
-              transition: 'opacity .15s, color .15s',
-            }}>
+            <div style={{ flex: 1, textAlign: 'right', fontSize: 22, fontWeight: 500, minWidth: 0, color: toColor, fontFamily: 'JetBrains Mono, monospace', opacity: quoteIsStale ? 0.5 : 1, transition: 'opacity .15s, color .15s' }}>
               {toDisplay}
             </div>
           </div>
-          {quote && toUsdValue > 0 && (
-            <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted, opacity: quoteIsStale ? 0.5 : 1 }}>
-              {fmtUsd(toUsdValue)}
-            </div>
-          )}
+          {quote && toUsdValue > 0 && <div style={{ textAlign: 'right', marginTop: 5, fontSize: 11, color: C.muted, opacity: quoteIsStale ? 0.5 : 1 }}>{fmtUsd(toUsdValue)}</div>}
         </div>
 
-        {isPreview && (
-          <div style={{ marginTop: 6, fontSize: 11, color: C.muted, textAlign: 'right', fontStyle: 'italic' }}>
-            Estimated &middot; live route on confirm
-          </div>
+        {isPreview && <div style={{ marginTop: 6, fontSize: 11, color: C.muted, textAlign: 'right', fontStyle: 'italic' }}>Estimated &middot; live route on confirm</div>}
+        {!quote && !quoteError && fromAmt && parseFloat(fromAmt) > 0 && (!(fromPriceUsd > 0) || !(toPriceUsd > 0)) && (
+          <div style={{ marginTop: 6, fontSize: 11, color: C.muted, textAlign: 'right', fontStyle: 'italic' }}>Live route on confirm</div>
         )}
 
-        {!quote && !quoteError && fromAmt && parseFloat(fromAmt) > 0 &&
-         (!(fromPriceUsd > 0) || !(toPriceUsd > 0)) && (
-          <div style={{ marginTop: 6, fontSize: 11, color: C.muted, textAlign: 'right', fontStyle: 'italic' }}>
-            Live route on confirm
-          </div>
-        )}
+        {!isSupported && <div style={{ marginTop: 10, padding: 10, background: 'rgba(255,149,0,.08)', border: '1px solid rgba(255,149,0,.25)', borderRadius: 8, fontSize: 12, color: '#ff9500' }}>{unsupportedMsg}</div>}
+        {quoteError && !quote && <div style={{ marginTop: 8, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.2)', borderRadius: 8, fontSize: 12, color: C.red }}>{quoteError}</div>}
 
-        {!isSupported && (
-          <div style={{
-            marginTop: 10, padding: 10,
-            background: 'rgba(255,149,0,.08)', border: '1px solid rgba(255,149,0,.25)',
-            borderRadius: 8, fontSize: 12, color: '#ff9500',
-          }}>{unsupportedMsg}</div>
-        )}
-
-        {quoteError && !quoteLoading && !quote && (
-          <div style={{
-            marginTop: 8, padding: 10,
-            background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.2)',
-            borderRadius: 8, fontSize: 12, color: C.red,
-          }}>{quoteError}</div>
-        )}
-
+        {/* Fee breakdown */}
         {quote && fromAmt && (
           <div style={{ marginTop: 12, background: '#050912', borderRadius: 10, padding: 12 }}>
             {[
-              ['Platform fee',        fromUsdValue > 0 ? fmtUsd(fromUsdValue * PLATFORM_FEE) : (PLATFORM_FEE * 100).toFixed(0) + '%'],
-              ['Anti-MEV / safety',   fromUsdValue > 0 ? fmtUsd(fromUsdValue * SAFETY_FEE)   : (SAFETY_FEE   * 100).toFixed(0) + '%'],
-              quote.outAmountDisplay
-                ? ['Min received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken && toToken.symbol)]
-                : null,
+              ['Platform fee',      fromUsdValue > 0 ? fmtUsd(fromUsdValue * PLATFORM_FEE) : (PLATFORM_FEE * 100).toFixed(0) + '%'],
+              ['Anti-MEV / safety', fromUsdValue > 0 ? fmtUsd(fromUsdValue * SAFETY_FEE)   : (SAFETY_FEE   * 100).toFixed(0) + '%'],
+              quote.outAmountDisplay ? ['Min received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken && toToken.symbol)] : null,
             ].filter(Boolean).map((item) => (
               <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '3px 0', fontSize: 11 }}>
                 <span style={{ color: C.muted }}>{item[0]}</span>
@@ -2412,102 +1814,59 @@ export default function SwapWidget({
           </div>
         )}
 
-        {swapError && (
-          <div style={{
-            marginTop: 10, padding: 10,
-            background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)',
-            borderRadius: 8, fontSize: 12, color: C.red,
-          }}>{swapError}</div>
-        )}
+        {swapError && <div style={{ marginTop: 10, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 8, fontSize: 12, color: C.red }}>{swapError}</div>}
 
+        {/* Action button */}
         {(() => {
           if (!walletConnected) {
             return (
-              <button onClick={() => {
-                setPendingSwap(true);
-                if (loginPrivy) loginPrivy();
-                else if (onConnectWallet) onConnectWallet();
-              }} style={{
-                width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
-                background: 'linear-gradient(135deg,#9945ff,#7c3aed)', color: '#fff',
-                fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
-                cursor: 'pointer', minHeight: 52,
-              }}>Sign in to Swap</button>
+              <button onClick={() => { setPendingSwap(true); if (loginPrivy) loginPrivy(); else if (onConnectWallet) onConnectWallet(); }}
+                style={{ width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#9945ff,#7c3aed)', color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52 }}>
+                Sign in to Swap
+              </button>
             );
           }
           if (!isSupported) {
             return (
-              <button disabled style={{
-                width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
-                background: C.card2, color: C.muted2,
-                fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
-                cursor: 'not-allowed', minHeight: 52,
-              }}>Pair not supported</button>
+              <button disabled style={{ width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none', background: C.card2, color: C.muted2, fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, cursor: 'not-allowed', minHeight: 52 }}>
+                Pair not supported
+              </button>
             );
           }
           if (!hasNeededWallet) {
             return (
-              <button onClick={() => {
-                if (onConnectWallet) onConnectWallet();
-                else if (loginPrivy) loginPrivy();
-              }} style={{
-                width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
-                background: 'linear-gradient(135deg,#9945ff,#7c3aed)', color: '#fff',
-                fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
-                cursor: 'pointer', minHeight: 52,
-              }}>Connect {needsSol ? 'Solana' : 'EVM'} wallet</button>
+              <button onClick={() => { if (onConnectWallet) onConnectWallet(); else if (loginPrivy) loginPrivy(); }}
+                style={{ width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#9945ff,#7c3aed)', color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52 }}>
+                Connect {needsSol ? 'Solana' : 'EVM'} wallet
+              </button>
             );
           }
           return (
             <>
               {requiresApproval && (
-                <div style={{
-                  marginTop: 10, padding: '10px 12px',
-                  background: 'rgba(255,149,0,.08)', border: '1px solid rgba(255,149,0,.25)',
-                  borderRadius: 10, fontSize: 11, color: '#ff9500', lineHeight: 1.5,
-                }}>
+                <div style={{ marginTop: 10, padding: '10px 12px', background: 'rgba(255,149,0,.08)', border: '1px solid rgba(255,149,0,.25)', borderRadius: 10, fontSize: 11, color: '#ff9500', lineHeight: 1.5 }}>
                   <span style={{ fontWeight: 700 }}>First send of {fromToken && fromToken.symbol}: 2 wallet popups.</span>{' '}
-                  <span style={{ color: '#cdd6f4' }}>
-                    A one-time token approval plus the swap. Future swaps of {fromToken && fromToken.symbol} = 1 popup.
-                  </span>
+                  <span style={{ color: '#cdd6f4' }}>A one-time token approval plus the swap. Future swaps of {fromToken && fromToken.symbol} = 1 popup.</span>
                 </div>
               )}
-              <button
-                onClick={executeSwap}
-                disabled={swapStatus === 'loading' || !fromAmt}
-                style={{
-                  width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
-                  background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
-                    : swapStatus === 'error' ? 'rgba(255,59,107,.2)'
-                    : !fromAmt ? C.card2
-                    : modeProp === 'sell' ? C.sellGrad : C.buyGrad,
-                  color:  !fromAmt ? C.muted2 : swapStatus === 'error' ? C.red : '#fff',
+              <button onClick={executeSwap} disabled={swapStatus === 'loading' || !fromAmt}
+                style={{ width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
+                  background: swapStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : swapStatus === 'error' ? 'rgba(255,59,107,.2)' : !fromAmt ? C.card2 : modeProp === 'sell' ? C.sellGrad : C.buyGrad,
+                  color: !fromAmt ? C.muted2 : swapStatus === 'error' ? C.red : '#fff',
                   fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
-                  cursor: swapStatus === 'loading' ? 'not-allowed' : 'pointer',
-                  minHeight: 52, transition: 'all .2s',
-                }}
-              >
+                  cursor: swapStatus === 'loading' ? 'not-allowed' : 'pointer', minHeight: 52, transition: 'all .2s' }}>
                 {swapStatus === 'loading' ? 'Confirming...'
                   : swapStatus === 'success' ? 'Confirmed!'
-                  : swapStatus === 'error' ? 'Failed - try again'
+                  : swapStatus === 'error'   ? 'Failed -- try again'
                   : !fromAmt ? 'Enter amount'
-                  : (modeProp === 'sell' ? 'Sell ' : modeProp === 'buy' ? 'Buy ' : 'Swap ') +
-                    (fromToken ? fromToken.symbol : '') + ' \u2192 ' + (toToken ? toToken.symbol : '')}
+                  : (modeProp === 'sell' ? 'Sell ' : modeProp === 'buy' ? 'Buy ' : 'Swap ') + (fromToken ? fromToken.symbol : '') + ' \u2192 ' + (toToken ? toToken.symbol : '')}
               </button>
 
               {swapStatus === 'loading' && stuckSwap && (
-                <div style={{
-                  marginTop: 10, padding: '10px 12px',
-                  background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.25)',
-                  borderRadius: 10, fontSize: 11, color: C.muted, lineHeight: 1.4,
-                }}>
+                <div style={{ marginTop: 10, padding: '10px 12px', background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.25)', borderRadius: 10, fontSize: 11, color: C.muted, lineHeight: 1.4 }}>
                   <div style={{ color: '#fff', fontWeight: 600, marginBottom: 4 }}>Still waiting on your wallet...</div>
-                  <div>If you've already signed, the transaction may still complete - check your wallet for status.</div>
-                  <button onClick={cancelStuckSwap} style={{
-                    marginTop: 8, background: 'transparent', border: '1px solid ' + C.red, color: C.red,
-                    padding: '6px 12px', borderRadius: 6, fontSize: 11,
-                    fontFamily: 'Syne, sans-serif', fontWeight: 700, cursor: 'pointer',
-                  }}>Reset</button>
+                  <div>If you've already signed, the transaction may still complete -- check your wallet for status.</div>
+                  <button onClick={cancelStuckSwap} style={{ marginTop: 8, background: 'transparent', border: '1px solid ' + C.red, color: C.red, padding: '6px 12px', borderRadius: 6, fontSize: 11, fontFamily: 'Syne, sans-serif', fontWeight: 700, cursor: 'pointer' }}>Reset</button>
                 </div>
               )}
             </>
@@ -2515,44 +1874,26 @@ export default function SwapWidget({
         })()}
 
         {swapTx && swapStatus === 'success' && txLink && (
-          <a href={txLink} target="_blank" rel="noreferrer" style={{
-            display: 'block', textAlign: 'center', marginTop: 10, fontSize: 12, color: C.accent,
-          }}>View transaction</a>
+          <a href={txLink} target="_blank" rel="noreferrer" style={{ display: 'block', textAlign: 'center', marginTop: 10, fontSize: 12, color: C.accent }}>View transaction</a>
         )}
 
         <p style={{ textAlign: 'center', fontSize: 10, color: C.muted2, marginTop: 10 }}>
-          Non-custodial - No KYC
+          Non-custodial -- No KYC -- Powered by OKX DEX
         </p>
       </div>
 
-      <TokenSelectModal
-        open={fromSelectOpen}
-        onClose={() => setFromSelectOpen(false)}
-        onSelect={(t) => { setFromToken(t); setQuote(null); setQuoteError(''); setQuoteIsStale(false); }}
-        jupiterTokens={jupiterTokens}
-      />
-      <TokenSelectModal
-        open={toSelectOpen}
-        onClose={() => setToSelectOpen(false)}
-        onSelect={(t) => { setToToken(t); setQuote(null); setQuoteError(''); setQuoteIsStale(false); }}
-        jupiterTokens={jupiterTokens}
-      />
-      <PresetEditor
-        open={presetEditorOpen}
-        onClose={() => setPresetEditorOpen(false)}
-        presets={presets}
-        onSave={setPresets}
-      />
+      <TokenSelectModal open={fromSelectOpen} onClose={() => setFromSelectOpen(false)} onSelect={(t) => { setFromToken(t); setQuote(null); setQuoteError(''); setQuoteIsStale(false); }} />
+      <TokenSelectModal open={toSelectOpen}   onClose={() => setToSelectOpen(false)}   onSelect={(t) => { setToToken(t);   setQuote(null); setQuoteError(''); setQuoteIsStale(false); }} />
+      <PresetEditor open={presetEditorOpen} onClose={() => setPresetEditorOpen(false)} presets={presets} onSave={setPresets} />
     </div>
   );
 }
 
-/* -- TRADE DRAWER ----------------------------------------------------------- */
+/* ===== TRADE DRAWER ======================================================= */
 
 export function TradeDrawer({
   open, onClose, mode = 'buy', coin,
-  jupiterTokens, onConnectWallet,
-  presets, onPresetsChange,
+  onConnectWallet, presets, onPresetsChange,
   // eslint-disable-next-line no-unused-vars
   headerChain: _hcIgnored,
   // eslint-disable-next-line no-unused-vars
@@ -2565,9 +1906,7 @@ export function TradeDrawer({
   const normalizedCoin = useMemo(() => (coin ? normalizeToken(coin) : null), [coin]);
 
   const pair = useMemo(() => {
-    if (!normalizedCoin) {
-      return defaultTokenPair({ mode, viewedToken: null, lastFromToken: null, walletState: ws });
-    }
+    if (!normalizedCoin) return defaultTokenPair({ mode, viewedToken: null, lastFromToken: null, walletState: ws });
     return defaultTokenPair({ mode, viewedToken: normalizedCoin, lastFromToken: null, walletState: ws });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [normalizedCoin, mode, solConnected, evmConnected, evmChainId]);
@@ -2583,67 +1922,33 @@ export function TradeDrawer({
 
   useEffect(() => { if (open) setSwapStatus('idle'); }, [open]);
 
-  const safeClose = useCallback(() => {
-    if (isBusy) return;
-    onClose();
-  }, [isBusy, onClose]);
+  const safeClose = useCallback(() => { if (isBusy) return; onClose(); }, [isBusy, onClose]);
 
   useBodyScrollLock(open);
   useEscapeKey(open, safeClose);
 
   if (!open) return null;
 
-  const symbol      = (normalizedCoin && normalizedCoin.symbol) || (coin && coin.symbol) || '';
-  const symbolUpper = symbol ? symbol.toUpperCase() : '';
-  const headerImg   = (normalizedCoin && (normalizedCoin.logoURI || normalizedCoin.image))
-    || (coin && (coin.image || coin.logoURI));
+  const symbol    = (normalizedCoin && normalizedCoin.symbol) || (coin && coin.symbol) || '';
+  const headerImg = (normalizedCoin && (normalizedCoin.logoURI || normalizedCoin.image)) || (coin && (coin.image || coin.logoURI));
 
   return (
     <>
       <div onClick={safeClose} style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,.85)' }} />
-      <div style={{
-        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
-        width: '100%', maxWidth: 560, zIndex: 401,
-        background: C.card, borderTop: '2px solid ' + C.borderHi,
-        borderRadius: '20px 20px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
-        maxHeight: 'min(90vh, 100dvh)', display: 'flex', flexDirection: 'column', overflow: 'hidden',
-      }}>
+      <div style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: 560, zIndex: 401, background: C.card, borderTop: '2px solid ' + C.borderHi, borderRadius: '20px 20px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,.9)', maxHeight: 'min(90vh, 100dvh)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
         <div style={{ flexShrink: 0, padding: '16px 20px 12px' }}>
-          <div onClick={safeClose} role="button" aria-label="Close" style={{
-            width: 40, height: 4, background: C.muted2, borderRadius: 2,
-            margin: '0 auto 14px', cursor: isBusy ? 'default' : 'pointer',
-            opacity: isBusy ? 0.4 : 1, padding: '8px 0', boxSizing: 'content-box',
-          }} />
+          <div onClick={safeClose} role="button" aria-label="Close" style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 14px', cursor: isBusy ? 'default' : 'pointer', opacity: isBusy ? 0.4 : 1, padding: '8px 0', boxSizing: 'content-box' }} />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-              {headerImg && (
-                <img
-                  src={headerImg}
-                  alt={symbolUpper}
-                  style={{ width: 28, height: 28, borderRadius: '50%' }}
-                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
-                />
-              )}
-              <div style={{ color: mode === 'buy' ? C.accent : C.red, fontWeight: 800, fontSize: 17 }}>
-                {mode === 'buy' ? 'Buy' : 'Sell'} {symbolUpper}
-              </div>
+              {headerImg && <img src={headerImg} alt={symbol.toUpperCase()} style={{ width: 28, height: 28, borderRadius: '50%' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />}
+              <div style={{ color: mode === 'buy' ? C.accent : C.red, fontWeight: 800, fontSize: 17 }}>{mode === 'buy' ? 'Buy' : 'Sell'} {symbol.toUpperCase()}</div>
             </div>
-            <button onClick={safeClose} disabled={isBusy} aria-label="Close" style={{
-              background: 'none', border: 'none',
-              color: isBusy ? C.muted2 : C.muted,
-              fontSize: 26, cursor: isBusy ? 'not-allowed' : 'pointer',
-              padding: 4, minWidth: 36, minHeight: 36, lineHeight: 1, opacity: isBusy ? 0.4 : 1,
-            }}>x</button>
+            <button onClick={safeClose} disabled={isBusy} aria-label="Close" style={{ background: 'none', border: 'none', color: isBusy ? C.muted2 : C.muted, fontSize: 26, cursor: isBusy ? 'not-allowed' : 'pointer', padding: 4, minWidth: 36, minHeight: 36, lineHeight: 1, opacity: isBusy ? 0.4 : 1 }}>x</button>
           </div>
         </div>
-        <div style={{
-          flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch',
-          padding: '4px 20px',
-          paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)',
-        }}>
+        <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '4px 20px', paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)' }}>
           <SwapWidget
             key={widgetKey}
-            jupiterTokens={jupiterTokens}
             onConnectWallet={onConnectWallet}
             defaultFromToken={pair.fromToken}
             defaultToToken={pair.toToken}
