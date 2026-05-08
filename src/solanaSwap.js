@@ -2,168 +2,263 @@
  * NEXUS DEX -- Shared Solana Swap Helper
  *
  * Single execution path used by:
- *   - InstantTrade.jsx (one-click Privy buy/sell on token pages)
- *   - (Tomorrow) SwapWidget.jsx executeSwap (refactor)
- *   - (Tomorrow) NewLaunches.js InstantTrade-on-card variant
+ *   - InstantTrade.jsx
+ *   - SwapWidget.jsx executeSwap
+ *   - NewLaunches.js instant trade variants
  *
  * Behavior:
- *   - Solana <-> Solana via Jupiter v1 swap API (via our /api/jupiter proxy)
- *   - Platform fee 5% (locked) via Jupiter's platformFeeBps mechanism
- *   - Fee account = our SOL_FEE_WALLET's ATA on the OUTPUT mint
- *     -> derived against the OUTPUT mint's actual token program (legacy
- *        SPL Token OR Token-2022). Fixes fee collection on Token-2022
- *        memecoins (some pump.fun graduates and newer launches).
- *   - instructionVersion=V2 (required by Jupiter for Token-2022 fee
- *     collection per the docs)
- *   - restrictIntermediateTokens=true (Jupiter best practice; routes
- *     through illiquid intermediates fail much more often)
- *   - prioritizationFeeLamports structured (fixes the "out of range
- *     integral type conversion" error pic 1)
- *   - dynamicComputeUnitLimit = true (Jupiter computes optimal CU for us)
- *
- * Wallet branch:
- *   - kind === 'privy'  -> privyWallet.sendTransaction(tx, connection).
- *     Privy signs in-page, no popup. This is the killer one-click UX.
- *   - kind === external -> standard wallet-adapter pattern:
- *       const signed = await signTransaction(tx);
- *       const sig    = await connection.sendRawTransaction(signed.serialize(), ...);
- *
- * Locked rules:
- *   1. ONE wallet popup max (Privy: zero popups; external: one).
- *   2. Fee from output via aggregator (Jupiter platformFeeBps).
- *   3. Pricing via aggregator only.
- *   4. Routing: Jupiter for Solana <-> Solana (this helper's only domain).
+ *   - Solana <-> Solana through OKX DEX aggregator via backend proxy.
+ *   - Uses /api/okx/dex/aggregator/swap-instruction.
+ *   - Backend injects feePercent + fee wallet server-side.
+ *   - Frontend never handles OKX API keys or fee wallet injection.
+ *   - External wallets use signTransaction -> sendRawTransaction for better
+ *     Phantom/Solflare compatibility.
  */
 
-import { VersionedTransaction, PublicKey } from '@solana/web3.js';
 import {
-  getAssociatedTokenAddress,
-  TOKEN_PROGRAM_ID,
-  TOKEN_2022_PROGRAM_ID,
-} from '@solana/spl-token';
+  VersionedTransaction,
+  TransactionMessage,
+  TransactionInstruction,
+  PublicKey,
+  AddressLookupTableAccount,
+} from '@solana/web3.js';
 import { Buffer } from 'buffer';
 
-/* ============================================================================
- * LOCKED CONSTANTS -- match SwapWidget.jsx exactly.
- * ========================================================================= */
+export const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
+export const SOL_MINT = 'So11111111111111111111111111111111111111112';
+export const OKX_SOLANA_CHAIN_ID = '501';
 
-export const SOL_FEE_WALLET           = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
-export const JUPITER_PLATFORM_FEE_BPS = 500;       // 5% (locked)
-export const SOL_MINT                 = 'So11111111111111111111111111111111111111112';
-export const DEFAULT_SLIPPAGE_BPS     = 1500;      // 15% (memecoin default)
-export const BLUE_CHIP_SLIPPAGE_BPS   = 100;       // 1% (USDC, ETH, BTC, SOL)
+export const DEFAULT_SLIPPAGE_BPS = 1500;
+export const BLUE_CHIP_SLIPPAGE_BPS = 100;
 
-// u64::MAX -- Jupiter / Solana programs reject amounts larger than this
-// with "out of range integral type conversion attempted".
 const U64_MAX = 18446744073709551615n;
 
 const BLUE_CHIPS = new Set([
   SOL_MINT,
-  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',  // USDC
-  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',  // USDT
-  'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So',   // mSOL
-  '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs',  // wETH
-  '3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh',  // wBTC
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
+  'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So',
+  '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs',
+  '3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh',
 ]);
 
 export function pickSlippageBps(toMint) {
   return BLUE_CHIPS.has(toMint) ? BLUE_CHIP_SLIPPAGE_BPS : DEFAULT_SLIPPAGE_BPS;
 }
 
-/* ============================================================================
- * Resolve the token program (legacy SPL vs Token-2022) for a mint.
- *
- * The ATA derivation differs between programs, so getting this wrong
- * means the fee account address Jupiter sends fees to does not exist
- * on-chain. For Token-2022 mints, we MUST pass TOKEN_2022_PROGRAM_ID
- * to getAssociatedTokenAddress.
- *
- * Falls back to legacy SPL Token if the mint can't be fetched (most
- * common case anyway), which preserves the previous behavior for
- * regular tokens if RPC is briefly unavailable.
- * ========================================================================= */
-async function resolveTokenProgram(connection, mintPk) {
+function assertAmountRaw(amountRaw) {
   try {
-    const info = await connection.getAccountInfo(mintPk, 'confirmed');
-    if (info && info.owner && info.owner.equals(TOKEN_2022_PROGRAM_ID)) {
-      return TOKEN_2022_PROGRAM_ID;
+    const big = BigInt(String(amountRaw));
+    if (big <= 0n) throw new Error('Amount must be positive');
+    if (big > U64_MAX) {
+      throw new Error('Amount exceeds u64 (' + big.toString() + '). Check token decimals on the input mint.');
     }
-  } catch (_) {
-    /* fall through to legacy default */
+  } catch (e) {
+    if (e && e.message) throw e;
+    throw new Error('Invalid amountRaw');
   }
-  return TOKEN_PROGRAM_ID;
 }
 
-/* ============================================================================
- * JUPITER QUOTE + SWAP -- same proxy URLs as SwapWidget.
- * ========================================================================= */
+function asPublicKey(value, label) {
+  try {
+    return value instanceof PublicKey ? value : new PublicKey(String(value));
+  } catch {
+    throw new Error(label || 'Invalid public key');
+  }
+}
 
-async function fetchQuote({ inputMint, outputMint, amountRaw, slippageBps, signal }) {
+function normalizeOkxTokenAddress(mint) {
+  if (mint === SOL_MINT) return SOL_MINT;
+  return mint;
+}
+
+function okxAmount(amountRaw) {
+  return String(amountRaw);
+}
+
+function slippageBpsToPercent(slippageBps) {
+  const bps = Number.isFinite(slippageBps) ? slippageBps : DEFAULT_SLIPPAGE_BPS;
+  return String(Math.max(0.01, bps / 100));
+}
+
+function readOkxData(data) {
+  if (!data) throw new Error('Empty OKX response');
+
+  if (data.code && data.code !== '0') {
+    throw new Error(data.msg || data.message || 'OKX request failed');
+  }
+
+  if (Array.isArray(data.data) && data.data.length > 0) return data.data[0];
+  if (data.data && typeof data.data === 'object') return data.data;
+
+  throw new Error(data.msg || data.message || 'OKX returned no route');
+}
+
+async function fetchOkxSwapInstruction({
+  fromMint,
+  toMint,
+  amountRaw,
+  slippageBps,
+  publicKey,
+  signal,
+}) {
   const qs = new URLSearchParams({
-    inputMint,
-    outputMint,
-    amount: String(amountRaw),
-    slippageBps: String(slippageBps),
-    onlyDirectRoutes: 'false',
-    restrictIntermediateTokens: 'true',
-    platformFeeBps: String(JUPITER_PLATFORM_FEE_BPS),
-    instructionVersion: 'V2',
+    chainIndex: OKX_SOLANA_CHAIN_ID,
+    fromTokenAddress: normalizeOkxTokenAddress(fromMint),
+    toTokenAddress: normalizeOkxTokenAddress(toMint),
+    amount: okxAmount(amountRaw),
+    slippage: slippageBpsToPercent(slippageBps),
+    userWalletAddress: publicKey.toString(),
   });
-  const res = await fetch('/api/jupiter/swap/v1/quote?' + qs.toString(), { signal });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Quote failed');
-  if (!data.outAmount) throw new Error('No route');
-  return data;
-}
 
-async function fetchSwapTx({ quoteResponse, userPublicKey, feeAccount, signal }) {
-  const body = {
-    quoteResponse,
-    userPublicKey,
-    wrapAndUnwrapSol: true,
-    dynamicComputeUnitLimit: true,
-    prioritizationFeeLamports: {
-      priorityLevelWithMaxLamports: {
-        maxLamports: 5_000_000,
-        priorityLevel: 'high',
-      },
-    },
-  };
-  if (feeAccount) body.feeAccount = feeAccount;
-  const res = await fetch('/api/jupiter/swap/v1/swap', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+  const res = await fetch('/api/okx/dex/aggregator/swap-instruction?' + qs.toString(), {
+    method: 'GET',
+    headers: { Accept: 'application/json' },
     signal,
   });
-  const data = await res.json();
-  if (!res.ok || !data.swapTransaction) {
-    throw new Error(data.error || 'Swap build failed');
+
+  const data = await res.json().catch(function () {
+    return null;
+  });
+
+  if (!res.ok) {
+    throw new Error((data && (data.msg || data.message || data.error)) || 'OKX swap-instruction failed');
   }
-  return data;
+
+  return readOkxData(data);
 }
 
-/* ============================================================================
- * MAIN ENTRY -- executeSolanaSwap
- *
- * Args:
- *   fromMint        : string  (e.g., 'So111...112' for SOL)
- *   toMint          : string  (output mint)
- *   amountRaw       : string|number  (smallest unit; for SOL: lamports)
- *   slippageBps     : number  (optional, defaults via pickSlippageBps)
- *   publicKey       : PublicKey  (user's Solana pubkey)
- *   connection      : Connection (Solana web3 connection)
- *   wallet          : {
- *      kind          : 'phantom'|'solflare'|'walletconnect'|'privy'
- *      privyWallet   : Privy embedded wallet object  (when kind === 'privy')
- *      signTransaction : function (when external)
- *   }
- *   onStatus        : function (optional)
- *   signal          : AbortSignal (optional)
- *
- * Returns:
- *   { signature, quote }
- * ========================================================================= */
+function decodeBase64Instruction(ix) {
+  if (!ix || !ix.programId || !Array.isArray(ix.accounts) || !ix.data) return null;
+
+  return new TransactionInstruction({
+    programId: new PublicKey(ix.programId),
+    keys: ix.accounts.map(function (a) {
+      return {
+        pubkey: new PublicKey(a.pubkey || a.publicKey || a.address),
+        isSigner: !!a.isSigner,
+        isWritable: !!a.isWritable,
+      };
+    }),
+    data: Buffer.from(ix.data, 'base64'),
+  });
+}
+
+function decodeInstructionList(list) {
+  if (!Array.isArray(list)) return [];
+  return list.map(decodeBase64Instruction).filter(Boolean);
+}
+
+async function fetchLookupTable(connection, address) {
+  try {
+    const res = await connection.getAddressLookupTable(new PublicKey(address));
+    return res && res.value ? res.value : null;
+  } catch {
+    return null;
+  }
+}
+
+async function buildTxFromOkxInstructionData({ connection, owner, swapData }) {
+  if (swapData.tx && swapData.tx.data) {
+    return VersionedTransaction.deserialize(Buffer.from(swapData.tx.data, 'base64'));
+  }
+
+  if (swapData.data) {
+    try {
+      return VersionedTransaction.deserialize(Buffer.from(swapData.data, 'base64'));
+    } catch {
+      /* continue to instruction build */
+    }
+  }
+
+  const addressLookupTableAddresses =
+    swapData.addressLookupTableAddresses ||
+    swapData.addressLookupTableAccountAddresses ||
+    swapData.lookupTableAddresses ||
+    [];
+
+  const lookupTableAccountsRaw = await Promise.all(
+    addressLookupTableAddresses.map(function (addr) {
+      return fetchLookupTable(connection, addr);
+    })
+  );
+
+  const lookupTableAccounts = lookupTableAccountsRaw.filter(function (x) {
+    return x instanceof AddressLookupTableAccount;
+  });
+
+  const instructions = []
+    .concat(decodeInstructionList(swapData.computeBudgetInstructions))
+    .concat(decodeInstructionList(swapData.setupInstructions))
+    .concat(decodeInstructionList(swapData.instructions))
+    .concat(decodeInstructionList(swapData.swapInstruction ? [swapData.swapInstruction] : []))
+    .concat(decodeInstructionList(swapData.cleanupInstruction ? [swapData.cleanupInstruction] : []));
+
+  if (!instructions.length) {
+    throw new Error('OKX returned no usable transaction instructions');
+  }
+
+  const latest = await connection.getLatestBlockhash('confirmed');
+
+  const message = new TransactionMessage({
+    payerKey: owner,
+    recentBlockhash: latest.blockhash,
+    instructions,
+  }).compileToV0Message(lookupTableAccounts);
+
+  return new VersionedTransaction(message);
+}
+
+async function sendSignedTransaction(connection, signedTx) {
+  const signature = await connection.sendRawTransaction(signedTx.serialize(), {
+    skipPreflight: false,
+    maxRetries: 3,
+  });
+
+  await connection.confirmTransaction(signature, 'confirmed');
+  return signature;
+}
+
+async function sendWithPrivy({ tx, connection, wallet, status }) {
+  if (!wallet.privyWallet) throw new Error('Privy wallet unavailable');
+
+  status('Signing...');
+
+  if (typeof wallet.privyWallet.sendTransaction === 'function') {
+    const sendOpts = wallet.instant
+      ? { uiOptions: { showWalletUIs: false } }
+      : undefined;
+
+    return await wallet.privyWallet.sendTransaction(tx, connection, sendOpts);
+  }
+
+  if (typeof wallet.privyWallet.signTransaction === 'function') {
+    const signed = await wallet.privyWallet.signTransaction(tx);
+    status('Sending...');
+    return await sendSignedTransaction(connection, signed);
+  }
+
+  throw new Error('Privy wallet missing signing methods');
+}
+
+async function sendWithExternalWallet({ tx, connection, wallet, status }) {
+  if (typeof wallet.signTransaction === 'function') {
+    status('Confirm in wallet...');
+    const signed = await wallet.signTransaction(tx);
+    status('Sending...');
+    return await sendSignedTransaction(connection, signed);
+  }
+
+  if (typeof wallet.sendTransaction === 'function') {
+    status('Confirm in wallet...');
+    return await wallet.sendTransaction(tx, connection, {
+      skipPreflight: false,
+      maxRetries: 3,
+    });
+  }
+
+  throw new Error('External wallet missing signing methods');
+}
 
 export async function executeSolanaSwap({
   fromMint,
@@ -183,119 +278,61 @@ export async function executeSolanaSwap({
   if (!connection) throw new Error('No Solana connection');
   if (!wallet || !wallet.kind) throw new Error('Wallet info missing');
 
-  // Defensive: catch a u64-overflowing amountRaw before it hits Jupiter,
-  // so the user sees a clear "wrong decimals" error instead of the
-  // cryptic "out of range integral type conversion attempted" from WASM.
-  try {
-    const big = BigInt(String(amountRaw));
-    if (big <= 0n) throw new Error('Amount must be positive');
-    if (big > U64_MAX) {
-      throw new Error('Amount exceeds u64 (' + big.toString() + '). Check token decimals on the input mint.');
-    }
-  } catch (e) {
-    if (e && e.message) throw e;
-    throw new Error('Invalid amountRaw');
-  }
+  assertAmountRaw(amountRaw);
 
+  const owner = asPublicKey(publicKey, 'Invalid wallet public key');
   const slip = Number.isFinite(slippageBps) ? slippageBps : pickSlippageBps(toMint);
 
-  // 1. Derive fee account ATA on output mint for SOL_FEE_WALLET.
-  //    Jupiter sends platformFeeBps in OUTPUT units to this address.
-  //    Detect Token-2022 vs legacy SPL Token to pass the correct program
-  //    -- Token-2022 mints have a different ATA derivation.
-  //    If the ATA doesn't exist, Jupiter's swap tx creates it (user
-  //    pays rent ~0.00203 SOL one-time per output mint).
-  const outputMintPk = new PublicKey(toMint);
-  const feeWalletPk  = new PublicKey(SOL_FEE_WALLET);
-  const tokenProgram = await resolveTokenProgram(connection, outputMintPk);
-  const feeAccount   = await getAssociatedTokenAddress(
-    outputMintPk,
-    feeWalletPk,
-    false,           // allowOwnerOffCurve
-    tokenProgram,    // <-- correct program for Token-2022 support
-  );
+  status('Getting best route...');
 
-  // 2. Quote.
-  status('Getting best price...');
-  const quote = await fetchQuote({
-    inputMint: fromMint,
-    outputMint: toMint,
+  const swapData = await fetchOkxSwapInstruction({
+    fromMint,
+    toMint,
     amountRaw,
     slippageBps: slip,
+    publicKey: owner,
     signal,
   });
 
-  // 3. Swap tx.
   status('Building transaction...');
-  const swapData = await fetchSwapTx({
-    quoteResponse: quote,
-    userPublicKey: publicKey.toString(),
-    feeAccount: feeAccount.toString(),
-    signal,
+
+  const tx = await buildTxFromOkxInstructionData({
+    connection,
+    owner,
+    swapData,
   });
 
-  // 4. Deserialize.
-  const txBuf = Buffer.from(swapData.swapTransaction, 'base64');
-  const tx    = VersionedTransaction.deserialize(txBuf);
-
-  // 5. Sign + send. Branch on wallet kind.
   let signature;
+
   if (wallet.kind === 'privy') {
-    if (!wallet.privyWallet) throw new Error('Privy wallet unavailable');
-    status('Signing...');
-    // Privy embedded path -- in-page signing.
-    // Per Privy v2 Solana SDK: wallet.sendTransaction(tx, connection, opts).
-    // For TRUE one-click (no Privy confirmation UI), pass uiOptions
-    // showWalletUIs:false. The user's tap on the preset IS the consent;
-    // showing a second confirmation defeats the GMGN-style instant UX.
-    const sendOpts = wallet.instant
-      ? { uiOptions: { showWalletUIs: false } }
-      : undefined;
-    if (typeof wallet.privyWallet.sendTransaction === 'function') {
-      signature = await wallet.privyWallet.sendTransaction(tx, connection, sendOpts);
-    } else if (typeof wallet.privyWallet.signTransaction === 'function') {
-      // Fallback: sign with Privy, send via connection
-      const signed = await wallet.privyWallet.signTransaction(tx);
-      signature = await connection.sendRawTransaction(signed.serialize(), {
-        skipPreflight: false,
-        maxRetries: 3,
-      });
-    } else {
-      throw new Error('Privy wallet missing signing methods');
-    }
+    signature = await sendWithPrivy({
+      tx,
+      connection,
+      wallet,
+      status,
+    });
   } else {
-    if (typeof wallet.signTransaction !== 'function') {
-      throw new Error('External wallet missing signTransaction');
-    }
-    status('Confirm in wallet...');
-    const signed = await wallet.signTransaction(tx);
-    status('Sending...');
-    signature = await connection.sendRawTransaction(signed.serialize(), {
-      skipPreflight: false,
-      maxRetries: 3,
+    signature = await sendWithExternalWallet({
+      tx,
+      connection,
+      wallet,
+      status,
     });
   }
 
-  // 6. Confirm.
+  if (!signature) throw new Error('Transaction was not sent');
+
   status('Confirming...');
-  const latest = await connection.getLatestBlockhash('confirmed');
-  await connection.confirmTransaction(
-    { signature, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight },
-    'confirmed'
-  );
+  await connection.confirmTransaction(signature, 'confirmed');
 
   status('Done!');
-  return { signature, quote };
+
+  return {
+    signature,
+    quote: swapData,
+  };
 }
 
-/* ============================================================================
- * QUICK HELPERS for InstantTrade -- buy / sell with USD presets.
- * ========================================================================= */
-
-/**
- * Quick BUY: spend $usdAmount of SOL on `toMint`.
- * Caller provides solPriceUsd (from Jupiter price API, cached upstream).
- */
 export async function quickBuySol({
   toMint,
   usdAmount,
@@ -307,9 +344,14 @@ export async function quickBuySol({
   signal,
 }) {
   if (!solPriceUsd || solPriceUsd <= 0) throw new Error('SOL price unavailable');
-  const solAmount = usdAmount / solPriceUsd;
-  const lamports  = Math.floor(solAmount * 1_000_000_000);
-  if (lamports <= 0) throw new Error('Amount too small');
+
+  const solAmount = Number(usdAmount) / Number(solPriceUsd);
+  const lamports = Math.floor(solAmount * 1_000_000_000);
+
+  if (!Number.isFinite(lamports) || lamports <= 0) {
+    throw new Error('Amount too small');
+  }
+
   return executeSolanaSwap({
     fromMint: SOL_MINT,
     toMint,
@@ -322,45 +364,38 @@ export async function quickBuySol({
   });
 }
 
-/**
- * Convert a human token amount to raw base-unit string, WITHOUT going
- * through float precision (which silently corrupts at >2^53 base units,
- * e.g., billion-supply memecoin at 9 decimals = 10^18 base units).
- *
- * Throws on u64 overflow rather than silently sending a doomed tx --
- * Jupiter / on-chain programs would reject it with "out of range integral
- * type conversion attempted", which is opaque to the user. This guard
- * usually surfaces a wrong-decimals bug upstream (e.g., 18 leaked through
- * from EVM-side metadata for a 5/6/9-decimal Solana token).
- */
 function humanToRawAmount(humanAmount, decimals) {
   if (!Number.isFinite(humanAmount) || humanAmount <= 0) return '0';
+
   const dec = Number.isFinite(decimals) && decimals >= 0 ? Math.floor(decimals) : 9;
+
   let s = humanAmount.toFixed(dec);
   if (s.indexOf('.') >= 0) s = s.replace(/0+$/, '').replace(/\.$/, '');
-  const [intPart, fracPart = ''] = s.split('.');
+
+  const parts = s.split('.');
+  const intPart = parts[0] || '0';
+  const fracPart = parts[1] || '';
   const fracPadded = fracPart.padEnd(dec, '0').slice(0, dec);
   const combined = (intPart + fracPadded).replace(/^0+(?=\d)/, '');
-  if (!combined || combined === '') return '0';
+
+  if (!combined) return '0';
+
   let big;
   try {
     big = BigInt(combined);
-  } catch (e) {
+  } catch {
     return '0';
   }
+
   if (big > U64_MAX) {
     throw new Error(
-      'Amount exceeds u64 (' + big.toString() + '). ' +
-      'Decimals=' + dec + ' is likely wrong for this mint.'
+      'Amount exceeds u64 (' + big.toString() + '). Decimals=' + dec + ' is likely wrong for this mint.'
     );
   }
+
   return big.toString();
 }
 
-/**
- * Quick SELL: sell `pct` (1-100) of user's balance of `fromMint` to SOL.
- * Caller provides current balance (in human units) and decimals.
- */
 export async function quickSellSol({
   fromMint,
   fromBalance,
@@ -374,12 +409,16 @@ export async function quickSellSol({
 }) {
   if (!fromBalance || fromBalance <= 0) throw new Error('No balance to sell');
   if (!Number.isFinite(pct) || pct <= 0 || pct > 100) throw new Error('Invalid percentage');
-  // For 100% sells, use the entire balance; otherwise scale by pct.
-  // Multiply BEFORE the human->raw conversion so we don't lose precision.
-  const sellHuman = pct === 100 ? fromBalance : (fromBalance * (pct / 100));
+
+  const sellHuman = pct === 100
+    ? Number(fromBalance)
+    : Number(fromBalance) * (Number(pct) / 100);
+
   const dec = Number.isFinite(fromDecimals) ? fromDecimals : 9;
   const amountRaw = humanToRawAmount(sellHuman, dec);
+
   if (amountRaw === '0') throw new Error('Amount too small');
+
   return executeSolanaSwap({
     fromMint,
     toMint: SOL_MINT,
