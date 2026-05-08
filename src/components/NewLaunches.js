@@ -4,7 +4,7 @@
  * Live feed of newly-launched Solana pump.fun tokens with one-tap buy/sell on
  * each card and a full pump.fun trading drawer on detail pages.
  *
- * Data sources:
+ * Data sources: 
  *   - Real-time new launches: PumpPortal WS (wss://pumpportal.fun/api/data)
  *                             method: subscribeNewToken
  *
