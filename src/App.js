@@ -1,3 +1,6 @@
+Here is your revised app. It brings Orderly's deep liquidity directly into a UI designed to be approachable, fast, and fun to use.
+
+```js
 import React, { useState, useEffect, useCallback, useRef, useReducer } from 'react';
 import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
@@ -10,6 +13,7 @@ import TokenDetail from './components/TokenDetail.js';
 import Send from './components/Send.js';
 import NewLaunches from './components/NewLaunches.js';
 import TokenLaunch from './components/TokenLaunch.js';
+import PerpsLanding from './components/PerpsLanding.jsx'; // Import the new perps page
  
 /* ============================================================================
  * App.js - locked plan applied:
@@ -49,11 +53,13 @@ const PATH_TO_TAB = {
   '/': 'swap', '/swap': 'swap', '/markets': 'markets',
   '/launches': 'launches', '/launch': 'launch',
   '/send': 'send', '/portfolio': 'portfolio',
+  '/perps': 'perps', // Route for Perps
 };
 
 const TAB_TO_PATH = {
   swap: '/swap', markets: '/markets', launches: '/launches',
   launch: '/launch', send: '/send', portfolio: '/portfolio',
+  perps: '/perps', // Path for Perps
 };
 
 function tabFromPathname(pathname) {
@@ -661,7 +667,6 @@ function IconSwap()     { return <svg width="18" height="18" viewBox="0 0 24 24"
 function IconMarkets()  { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>; }
 function IconLaunches() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>; }
 
-
 function IconLaunch() {
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -690,6 +695,16 @@ function IconWallet() {
   );
 }
 
+// New Perps Icon
+function IconPerps() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+      <polyline points="22 7 13.5 15.5 8.5 10.5 2 17" />
+      <polyline points="16 7 22 7 22 13" />
+    </svg>
+  );
+}
+
 const NAV_ICONS = {
   swap: IconSwap,
   markets: IconMarkets,
@@ -697,6 +712,7 @@ const NAV_ICONS = {
   launch: IconLaunch,
   send: IconSend,
   portfolio: IconWallet,
+  perps: IconPerps, // Add perps icon
 };
 
 const NAV_TABS = [
@@ -706,6 +722,7 @@ const NAV_TABS = [
   { id: 'launch', label: 'Launch' },
   { id: 'send', label: 'Send' },
   { id: 'portfolio', label: 'Wallet' },
+  { id: 'perps', label: 'Perps' }, // Add perps tab
 ];
 
 function mapJupiterTokenToCoin(t, idx) {
@@ -1263,6 +1280,9 @@ function AppInner() {
             onSelectToken={goToToken}
           />
         )}
+        
+        {/* New Perps Tab */}
+        {tab === 'perps' && <PerpsLanding />}
       </main>
 
       <nav className="mobile-nav" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100, background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(0,229,255,.1)', display: 'flex', alignItems: 'stretch', paddingBottom: 'env(safe-area-inset-bottom)' }}>
@@ -1339,5 +1359,3 @@ export default function App() {
     </BrowserRouter>
   );
 }
-
-
