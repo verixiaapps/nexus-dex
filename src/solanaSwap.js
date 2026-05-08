@@ -1,6 +1,6 @@
 /**
  * NEXUS DEX -- Shared Solana Swap Helper
- *
+ * 
  * Single execution path used by:
  *   - InstantTrade.jsx
  *   - SwapWidget.jsx executeSwap
