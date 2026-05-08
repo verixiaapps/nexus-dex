@@ -1,4 +1,3 @@
-```js
 /**
  * NEXUS DEX -- NewLaunches
  *
