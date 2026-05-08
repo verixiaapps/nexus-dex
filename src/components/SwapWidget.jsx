@@ -1,3 +1,6 @@
+Alright. Instead of one massive text, here is the full file, save as SwapWidget.jsx. It has the fix.
+
+```jsx
 /**
  * NEXUS DEX - Unified Swap Widget (OKX DEX edition)
  *
@@ -120,15 +123,35 @@ async function fetchOkxEvmApproval({chainId,tokenAddress,amount}){
     return Array.isArray(j.data)?j.data[0]:j.data;
   }catch{return null;}
 }
-function deserializeOkxIx(ix){return new TransactionInstruction({programId:new PublicKey(ix.programId),keys:(ix.accounts||[]).map(a=>({pubkey:new PublicKey(a.pubkey),isSigner:!!a.isSigner,isWritable:!!a.isWritable})),data:Buffer.from(ix.data||'','base64')});}
+
+// ===== FIXED: Robust instruction deserialization with try-catch =====
+function deserializeOkxIx(ix){
+  try{
+    if(!ix||!ix.programId||!Array.isArray(ix.accounts)||!ix.data)return null;
+    return new TransactionInstruction({
+      programId:new PublicKey(ix.programId),
+      keys:ix.accounts.map(a=>({pubkey:new PublicKey(a.pubkey||a.publicKey||a.address),isSigner:!!a.isSigner,isWritable:!!a.isWritable})),
+      data:Buffer.from(ix.data,'base64'),
+    });
+  }catch{return null;}
+}
+
+// ===== FIXED: Try direct base64 tx first, then instruction lists =====
 async function buildOkxSolTx({connection,userPubkey,swapData}){
-  const ixs=(swapData.instructionLists||[]).map(deserializeOkxIx);
+  if(swapData.tx&&swapData.tx.data){
+    try{return VersionedTransaction.deserialize(Buffer.from(swapData.tx.data,'base64'));}catch{}
+  }
+  if(swapData.data&&typeof swapData.data==='string'){
+    try{return VersionedTransaction.deserialize(Buffer.from(swapData.data,'base64'));}catch{}
+  }
+  const ixs=(swapData.instructionLists||[]).map(deserializeOkxIx).filter(Boolean);
+  if(!ixs.length)throw new Error('No usable instructions in OKX response');
   const lta=Array.isArray(swapData.addressLookupTableAccount)?swapData.addressLookupTableAccount:[];
   const lts=(await Promise.all(lta.map(async a=>{
     try{const acct=await connection.getAccountInfo(new PublicKey(a));if(!acct)return null;return new AddressLookupTableAccount({key:new PublicKey(a),state:AddressLookupTableAccount.deserialize(acct.data)});}catch{return null;}
   }))).filter(Boolean);
-  const{bh}=await connection.getLatestBlockhash('finalized');
-  return new VersionedTransaction(new TransactionMessage({payerKey:userPubkey,recentBlockhash:bh,instructions:ixs}).compileToV0Message(lts));
+  const{blockhash}=await connection.getLatestBlockhash('finalized');
+  return new VersionedTransaction(new TransactionMessage({payerKey:userPubkey,recentBlockhash:blockhash,instructions:ixs}).compileToV0Message(lts));
 }
 
 function loadPresets(){try{const r=localStorage.getItem(PRESETS_LS_KEY);if(!r)return{buy:DEFAULT_BUY_PRESETS.slice(),sell:DEFAULT_SELL_PRESETS.slice()};const p=JSON.parse(r);return{buy:Array.isArray(p.buy)&&p.buy.length>=2?p.buy:DEFAULT_BUY_PRESETS.slice(),sell:Array.isArray(p.sell)&&p.sell.length>=1?p.sell:DEFAULT_SELL_PRESETS.slice()};}catch{return{buy:DEFAULT_BUY_PRESETS.slice(),sell:DEFAULT_SELL_PRESETS.slice()};}}
