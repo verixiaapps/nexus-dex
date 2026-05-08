@@ -11,7 +11,7 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994',
 };
-
+ 
 const CHAIN_NAMES = {
   1: 'Ethereum', 10: 'Optimism', 56: 'BNB Chain', 100: 'Gnosis',
   137: 'Polygon', 250: 'Fantom', 324: 'zkSync', 8453: 'Base',
