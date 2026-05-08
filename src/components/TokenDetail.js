@@ -8,29 +8,21 @@ import { PublicKey } from '@solana/web3.js';
 /**
  * NEXUS DEX -- TokenDetail
  *
- * Data sources (locked: Jupiter Solana, 0x EVM, LiFi cross-chain):
- *   - Coin info:     `coin` prop, refreshed via `coins` array (App.js
- *                    maps Jupiter v2 search response to CG-shaped output)
- *   - SOL price:     /api/jupiter/price/v3 proxy
- *   - SPL balance:   Solana RPC via /api/solana-rpc proxy
+ * Trading:
+ *   - OKX for normal swap execution
+ *   - PumpPortal for pump.fun / PumpSwap execution
  *
- * Removed (banned data sources):
- *   - CoinGecko enrichment (platforms map + chart + metadata)
- *   - GeckoTerminal (OHLCV + pools)
- *   - DexScreener (pools)
- *   - Jupiter price v2 (deprecated -> v3)
+ * Data:
+ *   - Coin info: `coin` prop, refreshed via `coins` array from App.js
+ *   - SPL balance: Solana RPC via wallet adapter connection
  *
- * Drawer prefill contract (locked):
- *   - InstantTrade calls onOpenDrawer(mode, opts) where opts is one of
- *       { presetUsd: <usd> }   from a buy preset tap
- *       { presetPct: <pct> }   from a sell preset tap
- *   - We keep that opts in state and forward it to <TradeDrawer> as
- *     `presetUsd` / `presetPct` props. SwapWidget consumes those to
- *     pre-fill the input amount.
- *   - The big Buy/Sell buttons below pass NO preset -- drawer opens
- *     with this token already on the correct side but a blank amount.
- *   - Closing the drawer clears the preset so a stale value doesn't
- *     leak into the next open.
+ * Not used here:
+ *   - Jupiter
+ *   - 0x
+ *   - LiFi
+ *   - CoinGecko enrichment
+ *   - GeckoTerminal
+ *   - DexScreener
  */
 
 const C = {
@@ -48,19 +40,31 @@ const CHAIN_NAMES = {
   250: 'Fantom', 25: 'Cronos', 1284: 'Moonbeam', 42220: 'Celo', 1329: 'SEI', 8217: 'Kaia',
 };
 
+const SOL_MINT = 'So11111111111111111111111111111111111111112';
+
+function toNum(n, fallback) {
+  const v = Number(n);
+  return Number.isFinite(v) ? v : fallback;
+}
+
 function fmt(n, d) {
   if (d === undefined) d = 2;
-  if (n == null) return '-';
-  if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
-  if (n >= 1) return '$' + n.toFixed(d);
-  return '$' + n.toFixed(6);
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '-';
+  if (v >= 1e9) return '$' + (v / 1e9).toFixed(2) + 'B';
+  if (v >= 1e6) return '$' + (v / 1e6).toFixed(2) + 'M';
+  if (v >= 1000) return '$' + v.toLocaleString('en-US', { maximumFractionDigits: d });
+  if (v >= 1) return '$' + v.toFixed(d);
+  if (v > 0) return '$' + v.toFixed(6);
+  return '$0.00';
 }
+
 function pct(n) {
-  if (n == null) return '-';
-  return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
+  const v = Number(n);
+  if (!Number.isFinite(v)) return '-';
+  return (v > 0 ? '+' : '') + v.toFixed(2) + '%';
 }
+
 function isOnChainAddress(str) {
   if (!str) return false;
   if (/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(str)) return true;
@@ -68,132 +72,154 @@ function isOnChainAddress(str) {
   return false;
 }
 
-export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConnectWallet }) {
+export default function TokenDetail({ coin, coins, onBack, onConnectWallet }) {
   const { headerChain, setHeaderChain, presets, setPresets } = useNexusWallet();
   const { publicKey, connected: solConnected } = useWallet();
   const { connection } = useConnection();
 
-  const [solPriceUsd, setSolPriceUsd] = useState(0);
   const [userTokenBalance, setUserTokenBalance] = useState(0);
   const [userTokenDecimals, setUserTokenDecimals] = useState(null);
   const [tradeRefreshTick, setTradeRefreshTick] = useState(0);
 
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState('buy');
-  // Drawer prefill -- threaded from InstantTrade preset taps. One of:
-  //   null                        no prefill (opened from big Buy/Sell)
-  //   { presetUsd: <number> }     buy preset tap
-  //   { presetPct: <number> }     sell preset tap
   const [drawerPrefill, setDrawerPrefill] = useState(null);
 
-  /* SOL/USD via Jupiter v3 proxy. v3 response: { "<mint>": { "usdPrice": ... } } */
-  useEffect(function () {
-    var cancelled = false;
-    var SOL_MINT = 'So11111111111111111111111111111111111111112';
-    var fetchPrice = function () {
-      fetch('/api/jupiter/price/v3?ids=' + SOL_MINT)
-        .then(function (r) { return r.ok ? r.json() : null; })
-        .then(function (d) {
-          if (cancelled || !d) return;
-          var p = d[SOL_MINT] && parseFloat(d[SOL_MINT].usdPrice);
-          if (Number.isFinite(p) && p > 0) setSolPriceUsd(p);
-        })
-        .catch(function () {});
-    };
-    fetchPrice();
-    var poll = setInterval(fetchPrice, 60000);
-    return function () { cancelled = true; clearInterval(poll); };
-  }, []);
+  const liveCoin = useMemo(function () {
+    if (!coin) return null;
+    if (!Array.isArray(coins) || !coins.length) return coin;
 
-  /* User's SPL balance for SELL presets. Solana-only, requires connected wallet. */
+    const match = coins.find(function (c) {
+      if (!c) return false;
+      if (coin.id && c.id === coin.id) return true;
+      if (coin.mint && c.id === coin.mint) return true;
+      if (coin.mint && c.mint === coin.mint) return true;
+      if (coin.address && c.address && String(c.address).toLowerCase() === String(coin.address).toLowerCase()) return true;
+      return false;
+    });
+
+    return match || coin;
+  }, [coin, coins]);
+
+  const enrichedCoin = useMemo(function () {
+    if (!coin) return null;
+
+    if (coin.mint || coin.isSolanaToken || coin.chain === 'solana') {
+      return Object.assign({}, coin, {
+        mint: coin.mint || coin.id,
+        chain: 'solana',
+      });
+    }
+
+    if (coin.chain === 'evm' && coin.address && coin.chainId) return coin;
+
+    return coin;
+  }, [coin]);
+
+  const isEvmToken = enrichedCoin && (
+    enrichedCoin.chain === 'evm' ||
+    (enrichedCoin.address && !enrichedCoin.mint)
+  );
+
+  const solPriceUsd = useMemo(function () {
+    if (!Array.isArray(coins)) return 0;
+
+    const sol = coins.find(function (c) {
+      if (!c) return false;
+      const id = String(c.id || '').toLowerCase();
+      const mint = String(c.mint || '').toLowerCase();
+      const symbol = String(c.symbol || '').toLowerCase();
+
+      return (
+        id === SOL_MINT.toLowerCase() ||
+        mint === SOL_MINT.toLowerCase() ||
+        symbol === 'sol'
+      );
+    });
+
+    const p = sol && Number(sol.current_price);
+    return Number.isFinite(p) && p > 0 ? p : 0;
+  }, [coins]);
+
   useEffect(function () {
-    if (!coin || !coin.mint) { setUserTokenBalance(0); setUserTokenDecimals(null); return undefined; }
-    if (!solConnected || !publicKey || !connection) { setUserTokenBalance(0); return undefined; }
-    var cancelled = false;
+    if (!enrichedCoin || !enrichedCoin.mint) {
+      setUserTokenBalance(0);
+      setUserTokenDecimals(null);
+      return undefined;
+    }
+
+    if (!solConnected || !publicKey || !connection) {
+      setUserTokenBalance(0);
+      return undefined;
+    }
+
+    let cancelled = false;
+
     (async function () {
       try {
-        var mintPk = new PublicKey(coin.mint);
-        var resp = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: mintPk });
+        const mintPk = new PublicKey(enrichedCoin.mint);
+        const resp = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: mintPk });
+
         if (cancelled) return;
-        var total = 0;
-        var dec = null;
+
+        let total = 0;
+        let dec = null;
+
         if (resp && resp.value) {
           resp.value.forEach(function (acc) {
             try {
-              var info = acc.account.data.parsed.info;
-              var ta = info && info.tokenAmount;
+              const info = acc.account.data.parsed.info;
+              const ta = info && info.tokenAmount;
+
               if (ta) {
-                if (dec == null && Number.isFinite(ta.decimals)) dec = ta.decimals;
-                var ui = parseFloat(ta.uiAmountString || ta.uiAmount || 0);
+                const parsedDecimals = Number(ta.decimals);
+                if (dec == null && Number.isFinite(parsedDecimals)) dec = parsedDecimals;
+
+                const ui = parseFloat(ta.uiAmountString || ta.uiAmount || 0);
                 if (Number.isFinite(ui)) total += ui;
               }
             } catch (e) {}
           });
         }
+
         setUserTokenBalance(total);
         if (dec != null) setUserTokenDecimals(dec);
       } catch (e) {
-        if (!cancelled) setUserTokenBalance(0);
+        if (!cancelled) {
+          setUserTokenBalance(0);
+          setUserTokenDecimals(null);
+        }
       }
     })();
-    return function () { cancelled = true; };
-  }, [coin, solConnected, publicKey, connection, tradeRefreshTick]);
 
-  const isEvmToken = coin && (coin.chain === 'evm' || (coin.address && !coin.mint));
+    return function () {
+      cancelled = true;
+    };
+  }, [enrichedCoin, solConnected, publicKey, connection, tradeRefreshTick]);
 
-  /* Live coin lookup -- re-reads from coins array on every refresh tick
-   * from App.js so price/mc/volume stay fresh while user lingers here. */
-  const liveCoin = useMemo(function() {
-    if (!coin) return null;
-    if (!Array.isArray(coins) || !coins.length) return coin;
-    var match = coins.find(function(c) {
-      if (!c) return false;
-      if (coin.id && c.id === coin.id) return true;
-      if (coin.mint && c.id === coin.mint) return true;
-      if (coin.mint && c.mint === coin.mint) return true;
-      return false;
-    });
-    return match || coin;
-  }, [coin, coins]);
-
-  /* Simplified normalization. No CG platforms map -- coins from App.js
-   * (Jupiter v2) already arrive as Solana, and EVM tokens always have
-   * address+chainId attached upstream. */
-  const enrichedCoin = useMemo(function() {
-    if (!coin) return null;
-    if (coin.mint || coin.isSolanaToken || coin.chain === 'solana') {
-      return Object.assign({}, coin, { mint: coin.mint || coin.id, chain: 'solana' });
-    }
-    if (coin.chain === 'evm' && coin.address && coin.chainId) return coin;
-    return coin;
-  }, [coin]);
+  if (!coin || !liveCoin) return null;
 
   const contractAddress = isEvmToken
-    ? (coin && (coin.address || coin.id))
-    : (coin && (coin.mint || (isOnChainAddress(coin.id) ? coin.id : null)));
+    ? (enrichedCoin && (enrichedCoin.address || enrichedCoin.id))
+    : (enrichedCoin && (enrichedCoin.mint || (isOnChainAddress(enrichedCoin.id) ? enrichedCoin.id : null)));
+
   const contractLabel = isEvmToken
-    ? ((CHAIN_NAMES[coin && coin.chainId] || 'EVM') + ' CONTRACT').toUpperCase()
+    ? ((CHAIN_NAMES[enrichedCoin && enrichedCoin.chainId] || 'EVM') + ' CONTRACT').toUpperCase()
     : 'SOLANA CONTRACT';
 
-  if (!coin) return null;
+  const displayPrice = toNum(liveCoin.current_price, 0);
+  const priceChange = toNum(liveCoin.price_change_percentage_24h, 0);
+  const symbolUp = coin.symbol ? coin.symbol.toUpperCase() : '';
 
-  var displayPrice = liveCoin.current_price;
-  var priceChange  = liveCoin.price_change_percentage_24h || 0;
-  var symbolUp     = coin.symbol ? coin.symbol.toUpperCase() : '';
-
-  /* Stats grid -- show whatever is available from the upstream coin
-   * mapping. Anything missing renders as '-' via fmt(). Jupiter v2
-   * provides current_price, market_cap, total_volume, 24h change at
-   * minimum; CG-derived fields (ATH, supply, rank) may be absent. */
-  var statsItems = [
-    ['MARKET CAP',         fmt(liveCoin.market_cap)],
-    ['24H VOLUME',         fmt(liveCoin.total_volume)],
-    ['24H HIGH',           fmt(liveCoin.high_24h)],
-    ['24H LOW',            fmt(liveCoin.low_24h)],
-    ['ALL TIME HIGH',      fmt(liveCoin.ath)],
-    ['ATH CHANGE',         pct(liveCoin.ath_change_percentage)],
-    ['CIRCULATING SUPPLY', liveCoin.circulating_supply ? (liveCoin.circulating_supply / 1e6).toFixed(2) + 'M' : '-'],
-    ['MARKET CAP RANK',    liveCoin.market_cap_rank ? '#' + liveCoin.market_cap_rank : '-'],
+  const statsItems = [
+    ['MARKET CAP', fmt(liveCoin.market_cap)],
+    ['24H VOLUME', fmt(liveCoin.total_volume)],
+    ['24H HIGH', fmt(liveCoin.high_24h)],
+    ['24H LOW', fmt(liveCoin.low_24h)],
+    ['ALL TIME HIGH', fmt(liveCoin.ath)],
+    ['ATH CHANGE', pct(liveCoin.ath_change_percentage)],
+    ['CIRCULATING SUPPLY', Number(liveCoin.circulating_supply) > 0 ? (Number(liveCoin.circulating_supply) / 1e6).toFixed(2) + 'M' : '-'],
+    ['MARKET CAP RANK', liveCoin.market_cap_rank ? '#' + liveCoin.market_cap_rank : '-'],
   ];
 
   function openDrawerWithPrefill(mode, opts) {
@@ -204,8 +230,6 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
 
   function closeDrawer() {
     setDrawerOpen(false);
-    // Clear prefill so the next open (e.g., from the big Buy button)
-    // doesn't carry a stale preset amount.
     setDrawerPrefill(null);
   }
 
@@ -213,7 +237,6 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
     <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box', overscrollBehavior: 'none' }}>
       <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600, padding: 0 }}>Back to Markets</button>
 
-      {/* Header card -- name, symbol, current price, 24h change */}
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -221,18 +244,20 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
               ? <img src={coin.image} alt={coin.symbol} style={{ width: 48, height: 48, borderRadius: '50%' }} />
               : <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: C.accent }}>{coin.symbol && coin.symbol.charAt(0).toUpperCase()}</div>
             }
+
             <div>
               <div style={{ fontWeight: 800, fontSize: 20, color: '#fff' }}>{coin.name}</div>
               <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
                 {symbolUp} {liveCoin.market_cap_rank ? '- Rank #' + liveCoin.market_cap_rank : ''}
                 {isEvmToken && (
                   <span style={{ fontSize: 9, color: '#627eea', background: 'rgba(98,126,234,.15)', borderRadius: 4, padding: '1px 5px', marginLeft: 4 }}>
-                    {CHAIN_NAMES[coin.chainId] || 'EVM'}
+                    {CHAIN_NAMES[enrichedCoin.chainId] || 'EVM'}
                   </span>
                 )}
               </div>
             </div>
           </div>
+
           <div style={{ textAlign: 'right' }}>
             <div style={{ fontSize: 28, fontWeight: 700, color: '#fff' }}>{fmt(displayPrice)}</div>
             <div style={{ fontSize: 14, fontWeight: 600, color: priceChange >= 0 ? C.green : C.red, marginTop: 2 }}>{pct(priceChange)} (24H)</div>
@@ -240,9 +265,6 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         </div>
       </div>
 
-      {/* Instant Trade -- GMGN-style preset bar. One-click for Privy
-          embedded wallets (no popup); external wallets open the drawer
-          via openDrawerWithPrefill so the tapped amount carries over. */}
       <div style={{ marginBottom: 12 }}>
         <InstantTrade
           token={enrichedCoin}
@@ -257,13 +279,9 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         />
       </div>
 
-      {/* Buy / Sell -- always enabled. No prefill amount; the drawer
-          should open with THIS token already on the correct side
-          (consumed inside SwapWidget via the `coin` prop) and the
-          amount field blank. */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
         <button
-          onClick={function() { openDrawerWithPrefill('buy', null); }}
+          onClick={function () { openDrawerWithPrefill('buy', null); }}
           style={{
             padding: '18px 10px', borderRadius: 14, border: 'none', cursor: 'pointer',
             background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg,
@@ -272,8 +290,9 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         >
           Buy {symbolUp}
         </button>
+
         <button
-          onClick={function() { openDrawerWithPrefill('sell', null); }}
+          onClick={function () { openDrawerWithPrefill('sell', null); }}
           style={{
             padding: '18px 10px', borderRadius: 14, cursor: 'pointer',
             background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.3)', color: C.red,
@@ -284,9 +303,8 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         </button>
       </div>
 
-      {/* Stats grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginBottom: 14 }}>
-        {statsItems.map(function(item) {
+        {statsItems.map(function (item) {
           return (
             <div key={item[0]} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 14 }}>
               <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, fontWeight: 700, letterSpacing: 1 }}>{item[0]}</div>
@@ -296,17 +314,17 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         })}
       </div>
 
-      {/* Price changes */}
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16, marginBottom: 14 }}>
         <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, fontWeight: 700, letterSpacing: 1 }}>PRICE CHANGES</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8 }}>
           {[
-            ['1 Hour',   liveCoin.price_change_percentage_1h_in_currency],
+            ['1 Hour', liveCoin.price_change_percentage_1h_in_currency],
             ['24 Hours', liveCoin.price_change_percentage_24h],
-            ['7 Days',   liveCoin.price_change_percentage_7d_in_currency],
-          ].map(function(item) {
-            var v = item[1];
-            var hasVal = Number.isFinite(v);
+            ['7 Days', liveCoin.price_change_percentage_7d_in_currency],
+          ].map(function (item) {
+            const v = Number(item[1]);
+            const hasVal = Number.isFinite(v);
+
             return (
               <div key={item[0]} style={{ background: C.card2, borderRadius: 10, padding: 12, textAlign: 'center' }}>
                 <div style={{ fontSize: 10, color: C.muted, marginBottom: 4 }}>{item[0]}</div>
@@ -317,7 +335,6 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         </div>
       </div>
 
-      {/* Contract address */}
       {contractAddress && isOnChainAddress(contractAddress) && (
         <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16, marginBottom: 14 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>{contractLabel}</div>
@@ -325,15 +342,11 @@ export default function TokenDetail({ coin, coins, jupiterTokens, onBack, onConn
         </div>
       )}
 
-      {/* Trade drawer -- receives `coin` so the input/output is locked
-          to this exact token, plus optional `presetUsd` / `presetPct`
-          for amount prefill from InstantTrade preset taps. */}
       <TradeDrawer
         open={drawerOpen}
         onClose={closeDrawer}
         mode={drawerMode}
         coin={enrichedCoin}
-        jupiterTokens={jupiterTokens}
         onConnectWallet={onConnectWallet}
         headerChain={headerChain}
         onHeaderChainChange={setHeaderChain}
