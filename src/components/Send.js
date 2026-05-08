@@ -4,7 +4,7 @@ import { useAccount, useWalletClient } from 'wagmi';
 import { encodeFunctionData } from 'viem';
 import { useNexusWallet } from '../WalletContext.js';
 import { PublicKey, SystemProgram, Transaction } from '@solana/web3.js';
-import {
+import { 
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
   getAssociatedTokenAddress,
