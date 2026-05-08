@@ -1,20 +1,28 @@
 /**
- * NEXUS DEX -- Unified Swap Widget (Jupiter + 0x edition)
+ * NEXUS DEX - Unified Swap Widget (Jupiter + 0x edition)
  *
  * Behavior contract (locked):
- * 
+ *
  * 1. NO header chain selector. Routing is driven entirely by from/to
  *    tokens. Defaults come from the connected wallet's actual state and
  *    from the user's last-used pair via localStorage.
- * 
+ *
  * 2. ONE wallet popup per swap action after the first ERC20 approval.
  *    0x uses AllowanceHolder (single-sig path) instead of Permit2 so
  *    subsequent swaps of an already-approved token are exactly one
  *    popup. Privy embedded wallets sign silently.
  *
- * 3. Fees: 5% same-chain. ALWAYS taken from output via the aggregator's
- *    own fee mechanism. Plus positive-slippage / trade-surplus capture
- *    directed to our fee wallet on both routes.
+ * 3. Fees: 5% same-chain.
+ *    Jupiter (Solana): taken from INPUT before the swap via an in-
+ *    transaction transfer instruction. Jupiter caps platformFeeBps at
+ *    255 (u8 on-chain), which would overflow at our 5% rate; input-
+ *    side deduction bypasses that limit entirely and hits exactly 5%.
+ *      SOL input -> SystemProgram.transfer(feeRaw lamports) to fee wallet.
+ *      SPL input -> createTransfer(feeRaw tokens) to fee wallet ATA,
+ *                   created idempotently in the same transaction.
+ *    0x (EVM): taken from OUTPUT via swapFeeBps + swapFeeRecipient.
+ *      tradeSurplusRecipient also directed to fee wallet for positive-
+ *      slippage capture (active only on whitelisted integrator plans).
  *
  * 4. Pre-click data sources (NEVER aggregator quote endpoints):
  *      Solana prices  -> Jupiter /price/v3 -> Helius DAS fallback
@@ -35,17 +43,18 @@
  *      out = in * fromPriceUsd / toPriceUsd * (1 - feeRate)
  *    Displayed with `~` prefix. Click triggers a real aggregator quote.
  *
- * 7. Buy mode: from = native of viewed token's chain, to = the token.
+ * 7. Buy mode:  from = native of viewed token's chain, to = the token.
  *    Sell mode: from = the token, to = USDC of the token's chain.
  *    Swap mode: from = wallet's native (or last-used), to = USDC.
  *
  * Removed in this revision:
- *   - LiFi swap execution (fetchLifiQuote + LiFi tx path entirely)
- *   - Bitcoin tokens from popular list (no path without LiFi)
- *   - Permit2 path on 0x (replaced with AllowanceHolder for 1-popup UX)
+ * - LiFi swap execution (fetchLifiQuote + LiFi tx path entirely)
+ * - Bitcoin tokens from popular list (no path without LiFi)
+ * - Permit2 path on 0x (replaced with AllowanceHolder for 1-popup UX)
+ * - platformFeeBps on Jupiter (replaced with input-side fee transfer)
  *
  * Kept (data sources, not transactions):
- *   - LiFi /v1/token + /v1/tokens (price + symbol search only)
+ * - LiFi /v1/token + /v1/tokens (price + symbol search only)
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -56,34 +65,35 @@ import { useAccount, useWalletClient, useBalance, useSwitchChain, usePublicClien
 import {
   VersionedTransaction, PublicKey, LAMPORTS_PER_SOL,
   TransactionInstruction, TransactionMessage, AddressLookupTableAccount,
+  SystemProgram,
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountIdempotentInstruction,
+  createTransferInstruction,
 } from '@solana/spl-token';
 
-/* ============================================================================
- * CONSTANTS
- * ========================================================================= */
+/* -- CONSTANTS -------------------------------------------------------------- */
 
 const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const EVM_FEE_WALLET = '0xC41c1de4250104dC1EE2854ffD5b40a04B9AC9fF';
 
 const PLATFORM_FEE = 0.03;
 const SAFETY_FEE   = 0.02;
-const TOTAL_FEE    = PLATFORM_FEE + SAFETY_FEE;             // 0.05 (same-chain)
-const JUPITER_PLATFORM_FEE_BPS = Math.round(TOTAL_FEE * 10000);
-const OX_SWAP_FEE_BPS          = Math.round(TOTAL_FEE * 10000);
+const TOTAL_FEE    = PLATFORM_FEE + SAFETY_FEE; // 0.05 (same-chain)
 
-/* Spread / positive-slippage capture: on 0x this is the
- * `tradeSurplusRecipient` mechanism (only active for whitelisted
- * integrators on a custom plan; silently ignored otherwise). On
- * Jupiter we don't capture spread -- the public swap-instructions
- * API does not expose positive-slippage parameters; passing them
- * leaks to the on-chain program and causes integer overflow on
- * tiny outputs. Fee revenue on Jupiter comes entirely from the
- * platformFeeBps + feeAccount pair (in quote + swap-instructions
- * respectively). */
+/*
+ * Jupiter: fee is taken from the INPUT side via an in-transaction transfer,
+ * so platformFeeBps sent to the quote API is 0. Jupiter's on-chain program
+ * stores feeBps as a u8 (max 255 = 2.55%), so passing 500 overflows it and
+ * produces "out of range integral type conversion attempted". Input-side
+ * deduction avoids the u8 constraint entirely and captures the full 5%.
+ *
+ * 0x: fee is taken from the OUTPUT side via swapFeeBps. 0x has no u8 cap so
+ * 500 bps (5%) is valid.
+ */
+const JUPITER_INPUT_FEE_BPS = Math.round(TOTAL_FEE * 10000); // 500 - used for BigInt math only
+const OX_SWAP_FEE_BPS       = Math.round(TOTAL_FEE * 10000); // 500 - sent to 0x API
 
 const NATIVE_EVM  = '0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee';
 const WSOL_MINT   = 'So11111111111111111111111111111111111111112';
@@ -94,8 +104,10 @@ const EVM_NATIVE_RESERVE_PCT = 0.005;
 const QUOTE_DEBOUNCE_MS  = 250;
 const PRICE_CACHE_TTL_MS = 60_000;
 
-/* 0x v2 supported chains (Settler + AllowanceHolder deployed). Anything
- * outside this set is treated as unsupported in this build. */
+/*
+ * 0x v2 supported chains (Settler + AllowanceHolder deployed). Anything
+ * outside this set is treated as unsupported in this build.
+ */
 const OX_CHAIN_IDS = new Set([
   1, 10, 56, 130, 137, 146, 324, 1101, 2741, 5000, 8453,
   34443, 42161, 43114, 57073, 59144, 80094, 81457, 534352,
@@ -114,48 +126,51 @@ const CHAIN_NAMES = {
   122: 'Fuse', 1313161554: 'Aurora', 1088: 'Metis', 14: 'Flare',
   9745: 'PlasmaChain', 999: 'HyperEVM', 4217: 'Yala', 8217: 'Kaia',
 };
+
 const CHAIN_SHORT = {
-  1:'ETH',10:'OP',25:'CRO',56:'BNB',100:'GNO',130:'UNI',137:'POL',143:'MON',146:'SONIC',
-  250:'FTM',252:'FRAX',255:'KROMA',288:'BOBA',324:'zkSync',480:'WORLD',747:'FLOW',
-  1116:'CORE',1135:'LISK',1284:'GLMR',1329:'SEI',2020:'RON',2222:'KAVA',2741:'ABS',
-  5000:'MNT',8453:'BASE',34443:'MODE',42161:'ARB',42220:'CELO',43111:'HEMI',43114:'AVAX',
-  48900:'ZIRC',57073:'INK',59144:'LINEA',60808:'BOB',80094:'BERA',81457:'BLAST',
-  200901:'BTRL',534352:'SCROLL',6342:'MEGA',321:'KCC',360:'SHAPE',33139:'APE',
-  167000:'TAIKO',7777777:'ZORA',122:'FUSE',1313161554:'AURORA',1088:'METIS',14:'FLR',
-  9745:'XPL',999:'HYPE',4217:'YALA',8217:'KAIA',
+  1: 'ETH', 10: 'OP', 25: 'CRO', 56: 'BNB', 100: 'GNO', 130: 'UNI', 137: 'POL',
+  143: 'MON', 146: 'SONIC', 250: 'FTM', 252: 'FRAX', 255: 'KROMA', 288: 'BOBA',
+  324: 'zkSync', 480: 'WORLD', 747: 'FLOW', 1116: 'CORE', 1135: 'LISK', 1284: 'GLMR',
+  1329: 'SEI', 2020: 'RON', 2222: 'KAVA', 2741: 'ABS', 5000: 'MNT', 8453: 'BASE',
+  34443: 'MODE', 42161: 'ARB', 42220: 'CELO', 43111: 'HEMI', 43114: 'AVAX',
+  48900: 'ZIRC', 57073: 'INK', 59144: 'LINEA', 60808: 'BOB', 80094: 'BERA',
+  81457: 'BLAST', 200901: 'BTRL', 534352: 'SCROLL', 6342: 'MEGA', 321: 'KCC',
+  360: 'SHAPE', 33139: 'APE', 167000: 'TAIKO', 7777777: 'ZORA', 122: 'FUSE',
+  1313161554: 'AURORA', 1088: 'METIS', 14: 'FLR', 9745: 'XPL', 999: 'HYPE',
+  4217: 'YALA', 8217: 'KAIA',
 };
 
 const USDC_BY_CHAIN = {
-  1: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-  10: '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
-  56: '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
-  100: '0xDDAfbb505ad214D7b80b1f830fcCc89B60fb7A83',
-  130: '0x078D782b760474a361dDA0AF3839290b0EF57AD6',
-  137: '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
-  146: '0x29219dd400f2Bf60E5a23d13Be72B486D4038894',
-  250: '0x2F733095B80A04b38b0D10cC884524a3d09b836a',
-  324: '0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4',
-  480: '0x79A02482A880bCE3F13e09Da970dC34db4CD24d1',
-  1135: '0xF242275d3a6527d877f2c927a82D9b057609cc71',
-  5000: '0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9',
-  8453: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-  34443: '0xd988097fb8612cc24eeC14542bC03424c656005f',
-  42161: '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
-  43114: '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E',
-  59144: '0x176211869cA2b568f2A7D4EE941E073a821EE1ff',
-  81457: '0x4300000000000000000000000000000000000003',
+  1:      '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
+  10:     '0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85',
+  56:     '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
+  100:    '0xDDAfbb505ad214D7b80b1f830fcCc89B60fb7A83',
+  130:    '0x078D782b760474a361dDA0AF3839290b0EF57AD6',
+  137:    '0x3c499c542cef5e3811e1192ce70d8cc03d5c3359',
+  146:    '0x29219dd400f2Bf60E5a23d13Be72B486D4038894',
+  250:    '0x2F733095B80A04b38b0D10cC884524a3d09b836a',
+  324:    '0x3355df6D4c9C3035724Fd0e3914dE96A5a83aaf4',
+  480:    '0x79A02482A880bCE3F13e09Da970dC34db4CD24d1',
+  1135:   '0xF242275d3a6527d877f2c927a82D9b057609cc71',
+  5000:   '0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9',
+  8453:   '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+  34443:  '0xd988097fb8612cc24eeC14542bC03424c656005f',
+  42161:  '0xaf88d065e77c8cC2239327C5EDb3A432268e5831',
+  43114:  '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E',
+  59144:  '0x176211869cA2b568f2A7D4EE941E073a821EE1ff',
+  81457:  '0x4300000000000000000000000000000000000003',
   534352: '0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4',
-  80094: '0x549943e04f40284185054145c6E4e9568C1D3241',
+  80094:  '0x549943e04f40284185054145c6E4e9568C1D3241',
 };
 const USDC_SOLANA = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
-/* For LiFi catalog price lookup (data source only -- not used for swaps). */
+/* For LiFi catalog price lookup (data source only - not used for swaps). */
 const LIFI_NATIVE = '0x0000000000000000000000000000000000000000';
 
 const DEFAULT_BUY_PRESETS  = [25, 50, 100, 250, 500];
 const DEFAULT_SELL_PRESETS = [50, 100];
-const PRESETS_LS_KEY      = 'nexus_presets_v2';
-const LAST_PAIR_LS_KEY    = 'nexus_last_pair_v1';
+const PRESETS_LS_KEY       = 'nexus_presets_v2';
+const LAST_PAIR_LS_KEY     = 'nexus_last_pair_v1';
 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -168,32 +183,58 @@ const C = {
 };
 
 const POPULAR_TOKENS = [
-  { mint: WSOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, chain: 'solana',
-    logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png' },
-  { mint: USDC_SOLANA, symbol: 'USDC', name: 'USD Coin', decimals: 6, chain: 'solana',
-    logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png' },
-  { mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', symbol: 'USDT', name: 'Tether', decimals: 6, chain: 'solana',
-    logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.png' },
-  { address: NATIVE_EVM, chainId: 1,     symbol: 'ETH',  name: 'Ethereum', decimals: 18, chain: 'evm',
-    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
-  { address: NATIVE_EVM, chainId: 8453,  symbol: 'ETH',  name: 'ETH (Base)', decimals: 18, chain: 'evm',
-    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
-  { address: NATIVE_EVM, chainId: 42161, symbol: 'ETH',  name: 'ETH (Arbitrum)', decimals: 18, chain: 'evm',
-    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
-  { address: NATIVE_EVM, chainId: 10,    symbol: 'ETH',  name: 'ETH (Optimism)', decimals: 18, chain: 'evm',
-    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png' },
-  { address: NATIVE_EVM, chainId: 56,    symbol: 'BNB',  name: 'BNB', decimals: 18, chain: 'evm',
-    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/binance/info/logo.png' },
-  { address: NATIVE_EVM, chainId: 137,   symbol: 'POL',  name: 'Polygon', decimals: 18, chain: 'evm',
-    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/polygon/info/logo.png' },
-  { address: NATIVE_EVM, chainId: 43114, symbol: 'AVAX', name: 'Avalanche', decimals: 18, chain: 'evm',
-    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/avalanchec/info/logo.png' },
-  { address: USDC_BY_CHAIN[1],     chainId: 1,     symbol: 'USDC', name: 'USDC (ETH)', decimals: 6, chain: 'evm',
-    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
-  { address: USDC_BY_CHAIN[8453],  chainId: 8453,  symbol: 'USDC', name: 'USDC (Base)', decimals: 6, chain: 'evm',
-    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
-  { address: USDC_BY_CHAIN[42161], chainId: 42161, symbol: 'USDC', name: 'USDC (Arbitrum)', decimals: 6, chain: 'evm',
-    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png' },
+  {
+    mint: WSOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, chain: 'solana',
+    logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
+  },
+  {
+    mint: USDC_SOLANA, symbol: 'USDC', name: 'USD Coin', decimals: 6, chain: 'solana',
+    logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png',
+  },
+  {
+    mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', symbol: 'USDT', name: 'Tether', decimals: 6, chain: 'solana',
+    logoURI: 'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.png',
+  },
+  {
+    address: NATIVE_EVM, chainId: 1, symbol: 'ETH', name: 'Ethereum', decimals: 18, chain: 'evm',
+    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png',
+  },
+  {
+    address: NATIVE_EVM, chainId: 8453, symbol: 'ETH', name: 'ETH (Base)', decimals: 18, chain: 'evm',
+    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png',
+  },
+  {
+    address: NATIVE_EVM, chainId: 42161, symbol: 'ETH', name: 'ETH (Arbitrum)', decimals: 18, chain: 'evm',
+    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png',
+  },
+  {
+    address: NATIVE_EVM, chainId: 10, symbol: 'ETH', name: 'ETH (Optimism)', decimals: 18, chain: 'evm',
+    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/info/logo.png',
+  },
+  {
+    address: NATIVE_EVM, chainId: 56, symbol: 'BNB', name: 'BNB', decimals: 18, chain: 'evm',
+    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/binance/info/logo.png',
+  },
+  {
+    address: NATIVE_EVM, chainId: 137, symbol: 'POL', name: 'Polygon', decimals: 18, chain: 'evm',
+    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/polygon/info/logo.png',
+  },
+  {
+    address: NATIVE_EVM, chainId: 43114, symbol: 'AVAX', name: 'Avalanche', decimals: 18, chain: 'evm',
+    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/avalanchec/info/logo.png',
+  },
+  {
+    address: USDC_BY_CHAIN[1], chainId: 1, symbol: 'USDC', name: 'USDC (ETH)', decimals: 6, chain: 'evm',
+    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png',
+  },
+  {
+    address: USDC_BY_CHAIN[8453], chainId: 8453, symbol: 'USDC', name: 'USDC (Base)', decimals: 6, chain: 'evm',
+    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png',
+  },
+  {
+    address: USDC_BY_CHAIN[42161], chainId: 42161, symbol: 'USDC', name: 'USDC (Arbitrum)', decimals: 6, chain: 'evm',
+    logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png',
+  },
 ];
 
 const NATIVE_COIN_RESOLVE = {
@@ -225,39 +266,61 @@ const NATIVE_COIN_RESOLVE = {
 };
 
 const _NATIVE_BY_CHAIN = {
-  1:{symbol:'ETH',name:'Ethereum'},10:{symbol:'ETH',name:'ETH (Optimism)'},
-  25:{symbol:'CRO',name:'Cronos'},56:{symbol:'BNB',name:'BNB'},
-  100:{symbol:'xDAI',name:'xDAI'},122:{symbol:'FUSE',name:'Fuse'},
-  130:{symbol:'ETH',name:'ETH (Unichain)'},137:{symbol:'POL',name:'Polygon'},
-  146:{symbol:'S',name:'Sonic'},250:{symbol:'FTM',name:'Fantom'},
-  252:{symbol:'ETH',name:'ETH (Fraxtal)'},255:{symbol:'ETH',name:'ETH (Kroma)'},
-  288:{symbol:'ETH',name:'ETH (Boba)'},321:{symbol:'KCS',name:'KuCoin'},
-  324:{symbol:'ETH',name:'ETH (zkSync)'},360:{symbol:'ETH',name:'ETH (Shape)'},
-  480:{symbol:'ETH',name:'ETH (World Chain)'},747:{symbol:'FLOW',name:'Flow'},
-  1088:{symbol:'METIS',name:'Metis'},1116:{symbol:'CORE',name:'Core'},
-  1135:{symbol:'ETH',name:'ETH (Lisk)'},1284:{symbol:'GLMR',name:'Moonbeam'},
-  1313161554:{symbol:'ETH',name:'ETH (Aurora)'},1329:{symbol:'SEI',name:'SEI'},
-  2020:{symbol:'RON',name:'Ronin'},2222:{symbol:'KAVA',name:'Kava'},
-  2741:{symbol:'ETH',name:'ETH (Abstract)'},5000:{symbol:'MNT',name:'Mantle'},
-  8217:{symbol:'KAIA',name:'Kaia'},8453:{symbol:'ETH',name:'ETH (Base)'},
-  33139:{symbol:'APE',name:'ApeCoin'},34443:{symbol:'ETH',name:'ETH (Mode)'},
-  42161:{symbol:'ETH',name:'ETH (Arbitrum)'},42220:{symbol:'CELO',name:'Celo'},
-  43111:{symbol:'ETH',name:'ETH (Hemi)'},43114:{symbol:'AVAX',name:'Avalanche'},
-  48900:{symbol:'ETH',name:'ETH (Zircuit)'},57073:{symbol:'ETH',name:'ETH (Ink)'},
-  59144:{symbol:'ETH',name:'ETH (Linea)'},60808:{symbol:'ETH',name:'ETH (BOB)'},
-  80094:{symbol:'BERA',name:'Berachain'},81457:{symbol:'ETH',name:'ETH (Blast)'},
-  167000:{symbol:'ETH',name:'ETH (Taiko)'},200901:{symbol:'BTC',name:'Bitlayer BTC'},
-  534352:{symbol:'ETH',name:'ETH (Scroll)'},7777777:{symbol:'ETH',name:'ETH (Zora)'},
+  1:          { symbol: 'ETH',   name: 'Ethereum' },
+  10:         { symbol: 'ETH',   name: 'ETH (Optimism)' },
+  25:         { symbol: 'CRO',   name: 'Cronos' },
+  56:         { symbol: 'BNB',   name: 'BNB' },
+  100:        { symbol: 'xDAI',  name: 'xDAI' },
+  122:        { symbol: 'FUSE',  name: 'Fuse' },
+  130:        { symbol: 'ETH',   name: 'ETH (Unichain)' },
+  137:        { symbol: 'POL',   name: 'Polygon' },
+  146:        { symbol: 'S',     name: 'Sonic' },
+  250:        { symbol: 'FTM',   name: 'Fantom' },
+  252:        { symbol: 'ETH',   name: 'ETH (Fraxtal)' },
+  255:        { symbol: 'ETH',   name: 'ETH (Kroma)' },
+  288:        { symbol: 'ETH',   name: 'ETH (Boba)' },
+  321:        { symbol: 'KCS',   name: 'KuCoin' },
+  324:        { symbol: 'ETH',   name: 'ETH (zkSync)' },
+  360:        { symbol: 'ETH',   name: 'ETH (Shape)' },
+  480:        { symbol: 'ETH',   name: 'ETH (World Chain)' },
+  747:        { symbol: 'FLOW',  name: 'Flow' },
+  1088:       { symbol: 'METIS', name: 'Metis' },
+  1116:       { symbol: 'CORE',  name: 'Core' },
+  1135:       { symbol: 'ETH',   name: 'ETH (Lisk)' },
+  1284:       { symbol: 'GLMR',  name: 'Moonbeam' },
+  1313161554: { symbol: 'ETH',   name: 'ETH (Aurora)' },
+  1329:       { symbol: 'SEI',   name: 'SEI' },
+  2020:       { symbol: 'RON',   name: 'Ronin' },
+  2222:       { symbol: 'KAVA',  name: 'Kava' },
+  2741:       { symbol: 'ETH',   name: 'ETH (Abstract)' },
+  5000:       { symbol: 'MNT',   name: 'Mantle' },
+  8217:       { symbol: 'KAIA',  name: 'Kaia' },
+  8453:       { symbol: 'ETH',   name: 'ETH (Base)' },
+  33139:      { symbol: 'APE',   name: 'ApeCoin' },
+  34443:      { symbol: 'ETH',   name: 'ETH (Mode)' },
+  42161:      { symbol: 'ETH',   name: 'ETH (Arbitrum)' },
+  42220:      { symbol: 'CELO',  name: 'Celo' },
+  43111:      { symbol: 'ETH',   name: 'ETH (Hemi)' },
+  43114:      { symbol: 'AVAX',  name: 'Avalanche' },
+  48900:      { symbol: 'ETH',   name: 'ETH (Zircuit)' },
+  57073:      { symbol: 'ETH',   name: 'ETH (Ink)' },
+  59144:      { symbol: 'ETH',   name: 'ETH (Linea)' },
+  60808:      { symbol: 'ETH',   name: 'ETH (BOB)' },
+  80094:      { symbol: 'BERA',  name: 'Berachain' },
+  81457:      { symbol: 'ETH',   name: 'ETH (Blast)' },
+  167000:     { symbol: 'ETH',   name: 'ETH (Taiko)' },
+  200901:     { symbol: 'BTC',   name: 'Bitlayer BTC' },
+  534352:     { symbol: 'ETH',   name: 'ETH (Scroll)' },
+  7777777:    { symbol: 'ETH',   name: 'ETH (Zora)' },
 };
 
-/* ============================================================================
- * NUMERIC SAFETY HELPERS
- *
+/* -- NUMERIC SAFETY HELPERS ------------------------------------------------- */
+/*
  * safeBigInt: accept anything (string, number, bigint, hex, decimal,
  * scientific) and produce a BigInt without throwing the iOS JSC error
  * "out of range integral type conversion attempted" on float input. All
  * BigInt() boundaries on the EVM tx path go through this.
- * ========================================================================= */
+ */
 
 function safeBigInt(v) {
   if (v == null) return BigInt(0);
@@ -280,9 +343,7 @@ function safeBigInt(v) {
   return Number.isFinite(n) ? BigInt(Math.trunc(n)) : BigInt(0);
 }
 
-/* ============================================================================
- * TYPE GUARDS / VALIDATORS / FORMATTERS
- * ========================================================================= */
+/* -- TYPE GUARDS / VALIDATORS / FORMATTERS ---------------------------------- */
 
 const isSol = (t) => !!(t && t.chain === 'solana');
 const isEvm = (t) => !!(t && t.chain === 'evm');
@@ -295,8 +356,10 @@ function isValidEvmAddr(s) { return !!s && /^0x[0-9a-fA-F]{40}$/.test(s); }
 function tokensEqual(a, b) {
   if (!a || !b) return false;
   if (isSol(a) && isSol(b)) return a.mint === b.mint;
-  if (isEvm(a) && isEvm(b)) return a.chainId === b.chainId &&
-    (a.address || '').toLowerCase() === (b.address || '').toLowerCase();
+  if (isEvm(a) && isEvm(b)) {
+    return a.chainId === b.chainId &&
+      (a.address || '').toLowerCase() === (b.address || '').toLowerCase();
+  }
   return false;
 }
 
@@ -310,6 +373,7 @@ function fmtUsd(n, decimals = 2) {
   if (v > 0)     return '$' + v.toFixed(6);
   return '$0.00';
 }
+
 function fmtTokenAmount(n, decimals = 4) {
   if (n == null || isNaN(n)) return '0';
   const v = Number(n);
@@ -318,15 +382,18 @@ function fmtTokenAmount(n, decimals = 4) {
   if (v >= 1000) return v.toLocaleString('en-US', { maximumFractionDigits: 2 });
   return v.toFixed(decimals);
 }
+
 function shortAddr(addr, head = 4, tail = 4) {
   if (!addr || addr.length < head + tail) return addr || '';
-  return addr.slice(0, head) + '...' + addr.slice(-tail);
+  return addr.slice(0, head) + '\u2026' + addr.slice(-tail);
 }
 
-/* Hardened decimal-string -> raw smallest-units. Handles commas, scientific
+/*
+ * Hardened decimal-string -> raw smallest-units. Handles commas, scientific
  * notation, leading +, multiple/trailing dots. Always truncates fractional
  * digits beyond `decimals` (never rounds up). Always returns a clean
- * integer string suitable for BigInt() consumers. */
+ * integer string suitable for BigInt() consumers.
+ */
 function toRawAmount(amountStr, decimals) {
   if (!amountStr || decimals == null) return '0';
   let s = String(amountStr).trim().replace(/,/g, '.').replace(/^\+/, '');
@@ -338,34 +405,24 @@ function toRawAmount(amountStr, decimals) {
     s = n.toFixed(Math.max(Number(decimals) || 0, 20));
   }
   const parsedDecimals = Number(decimals);
-
-if (!Number.isFinite(parsedDecimals) || parsedDecimals < 0 || parsedDecimals > 18) {
-  return '0';
+  if (!Number.isFinite(parsedDecimals) || parsedDecimals < 0 || parsedDecimals > 18) return '0';
+  const dec = Math.floor(parsedDecimals);
+  const [whole, frac = ''] = s.split('.');
+  const safeWhole    = (whole || '0').replace(/[^\d]/g, '').replace(/^0+(?=\d)/, '') || '0';
+  const safeFracRaw  = (frac || '').replace(/[^\d]/g, '');
+  const fracTrunc    = safeFracRaw.slice(0, dec);
+  const fracPadded   = (fracTrunc + '0'.repeat(dec)).slice(0, dec) || '0';
+  try {
+    const wholeBig = BigInt(safeWhole);
+    const fracBig  = dec > 0 ? BigInt(fracPadded) : BigInt(0);
+    const scale    = 10n ** BigInt(dec);
+    return (wholeBig * scale + fracBig).toString();
+  } catch {
+    return '0';
+  }
 }
 
-const dec = Math.floor(parsedDecimals);
-const [whole, frac = ''] = s.split('.');
-
-const safeWhole = (whole || '0').replace(/[^\d]/g, '').replace(/^0+(?=\d)/, '') || '0';
-const safeFracRaw = (frac || '').replace(/[^\d]/g, '');
-
-const fracTrunc = safeFracRaw.slice(0, dec);
-const fracPadded = (fracTrunc + '0'.repeat(dec)).slice(0, dec) || '0';
-
-try {
-  const wholeBig = BigInt(safeWhole);
-  const fracBig = dec > 0 ? BigInt(fracPadded) : BigInt(0);
-  const scale = 10n ** BigInt(dec);
-
-  return (wholeBig * scale + fracBig).toString();
-} catch {
-  return '0';
-}
-}
-
-/* ============================================================================
- * TOKEN NORMALIZATION
- * ========================================================================= */
+/* -- TOKEN NORMALIZATION ---------------------------------------------------- */
 
 function normalizeToken(input, opts = {}) {
   if (!input) return null;
@@ -375,10 +432,12 @@ function normalizeToken(input, opts = {}) {
     const baseLogo = input.logoURI || input.image || input.thumbnail || null;
     const baseSym  = input.symbol || (nativeRule.kind === 'solana' ? 'SOL' : 'TOKEN');
     const baseName = input.name || baseSym;
-    if (nativeRule.kind === 'evm-native')
+    if (nativeRule.kind === 'evm-native') {
       return { chain: 'evm', address: NATIVE_EVM, chainId: nativeRule.chainId, symbol: baseSym, name: baseName, decimals: 18, logoURI: baseLogo };
-    if (nativeRule.kind === 'solana')
+    }
+    if (nativeRule.kind === 'solana') {
       return { chain: 'solana', mint: WSOL_MINT, symbol: baseSym, name: baseName, decimals: 9, logoURI: baseLogo };
+    }
   }
   if (isSol(input) && input.mint) return input;
   if (isEvm(input) && input.address && input.chainId) return input;
@@ -387,12 +446,14 @@ function normalizeToken(input, opts = {}) {
   const symbol  = input.symbol || input.tokenSymbol || 'TOKEN';
   const name    = input.name || input.tokenName || symbol;
   const evmAddr = input.address || input.contractAddress || null;
+
   if (evmAddr && isValidEvmAddr(evmAddr)) {
     return {
       chain: 'evm', address: evmAddr, chainId: input.chainId || defaultChainId,
       symbol, name,
-      decimals: typeof input.decimals === 'number' ? input.decimals
-        : typeof input.tokenDecimals === 'number' ? input.tokenDecimals : 18,
+      decimals: typeof input.decimals === 'number'      ? input.decimals
+              : typeof input.tokenDecimals === 'number' ? input.tokenDecimals
+              : 18,
       logoURI,
     };
   }
@@ -415,11 +476,14 @@ function nativeOfChain(chainId) {
   if (!meta) return null;
   return { chain: 'evm', address: NATIVE_EVM, chainId, symbol: meta.symbol, name: meta.name, decimals: 18, logoURI: null };
 }
+
 function usdcOfChain(chainId) {
   if (chainId === 'solana') return POPULAR_TOKENS.find((t) => t.mint === USDC_SOLANA) || null;
   const addr = USDC_BY_CHAIN[chainId];
   if (!addr) return null;
-  const popular = POPULAR_TOKENS.find((t) => isEvm(t) && t.chainId === chainId && (t.address || '').toLowerCase() === addr.toLowerCase());
+  const popular = POPULAR_TOKENS.find(
+    (t) => isEvm(t) && t.chainId === chainId && (t.address || '').toLowerCase() === addr.toLowerCase()
+  );
   if (popular) return popular;
   return {
     chain: 'evm', address: addr, chainId, symbol: 'USDC',
@@ -427,15 +491,14 @@ function usdcOfChain(chainId) {
     logoURI: 'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png',
   };
 }
+
 function chainOfToken(t) {
   if (isSol(t)) return 'solana';
   if (isEvm(t)) return t.chainId;
   return null;
 }
 
-/* ============================================================================
- * DEFAULT TOKEN PAIR
- * ========================================================================= */
+/* -- DEFAULT TOKEN PAIR ----------------------------------------------------- */
 
 function pickDistinct(target, candidates) {
   for (let i = 0; i < candidates.length; i++) {
@@ -446,7 +509,7 @@ function pickDistinct(target, candidates) {
 }
 
 function defaultTokenPair({ mode, viewedToken, lastFromToken, walletState }) {
-  const ws = walletState || {};
+  const ws     = walletState || {};
   const viewed = viewedToken ? normalizeToken(viewedToken) : null;
 
   if (mode === 'buy' && viewed) {
@@ -467,7 +530,8 @@ function defaultTokenPair({ mode, viewedToken, lastFromToken, walletState }) {
     const toCandidates = [
       usdcOfChain(tokenChain),
       nativeOfChain(tokenChain),
-      POPULAR_TOKENS[1], POPULAR_TOKENS[0],
+      POPULAR_TOKENS[1],
+      POPULAR_TOKENS[0],
     ];
     return { fromToken: viewed, toToken: pickDistinct(viewed, toCandidates) || POPULAR_TOKENS[1] };
   }
@@ -475,13 +539,9 @@ function defaultTokenPair({ mode, viewedToken, lastFromToken, walletState }) {
   if (lastFromToken) {
     const fromChain = chainOfToken(lastFromToken);
     const usdc = usdcOfChain(fromChain);
-    if (usdc && !tokensEqual(usdc, lastFromToken)) {
-      return { fromToken: lastFromToken, toToken: usdc };
-    }
+    if (usdc && !tokensEqual(usdc, lastFromToken)) return { fromToken: lastFromToken, toToken: usdc };
     const native = nativeOfChain(fromChain);
-    if (native && !tokensEqual(native, lastFromToken)) {
-      return { fromToken: lastFromToken, toToken: native };
-    }
+    if (native && !tokensEqual(native, lastFromToken)) return { fromToken: lastFromToken, toToken: native };
   }
   if (ws.solConnected) {
     return { fromToken: nativeOfChain('solana'), toToken: usdcOfChain('solana') };
@@ -489,20 +549,12 @@ function defaultTokenPair({ mode, viewedToken, lastFromToken, walletState }) {
   if (ws.evmConnected && ws.evmChainId) {
     const native = nativeOfChain(ws.evmChainId);
     const usdc   = usdcOfChain(ws.evmChainId) || usdcOfChain('solana');
-    if (native && usdc && !tokensEqual(native, usdc)) {
-      return { fromToken: native, toToken: usdc };
-    }
+    if (native && usdc && !tokensEqual(native, usdc)) return { fromToken: native, toToken: usdc };
   }
   return { fromToken: nativeOfChain('solana'), toToken: usdcOfChain('solana') };
 }
 
-/* ============================================================================
- * ROUTE PICKER
- *
- * jupiter      -- Solana <-> Solana
- * 0x           -- EVM <-> EVM, same chain, 0x-supported
- * unsupported  -- everything else (cross-chain, non-0x EVM, mixed)
- * ========================================================================= */
+/* -- ROUTE PICKER ----------------------------------------------------------- */
 
 function pickRoute(from, to) {
   if (!from || !to) return 'unsupported';
@@ -515,36 +567,34 @@ function unsupportedReason(from, to) {
   if (!from || !to) return 'Select tokens to swap.';
   if (isSol(from) && isEvm(to)) return 'Cross-chain swaps temporarily unavailable.';
   if (isEvm(from) && isSol(to)) return 'Cross-chain swaps temporarily unavailable.';
-  if (isEvm(from) && isEvm(to) && from.chainId !== to.chainId) {
-    return 'Cross-chain swaps temporarily unavailable.';
-  }
+  if (isEvm(from) && isEvm(to) && from.chainId !== to.chainId) return 'Cross-chain swaps temporarily unavailable.';
   if (isEvm(from) && isEvm(to) && !OX_CHAIN_IDS.has(from.chainId)) {
     return (CHAIN_NAMES[from.chainId] || 'This chain') + ' swaps temporarily unavailable.';
   }
   return 'This pair is not currently supported.';
 }
 
-/* ============================================================================
- * AGGREGATOR HELPERS -- Jupiter + 0x AllowanceHolder only
- * ========================================================================= */
+/* -- AGGREGATOR HELPERS (Jupiter + 0x AllowanceHolder only) ----------------- */
 
-/* 0x v2 AllowanceHolder QUOTE. Single-signature flow: user does an ERC20
+/*
+ * 0x v2 AllowanceHolder QUOTE. Single-signature flow: user does an ERC20
  * approve(allowanceHolderSpender, MAX) once per token, then every swap is
  * a single sendTransaction. No EIP-712 typed-data signing needed.
  *
- * tradeSurplusRecipient    captures positive slippage in the buy token
- * swapFeeBps / Recipient   takes our 5% platform fee from the buy token */
+ * tradeSurplusRecipient  captures positive slippage in the buy token.
+ * swapFeeBps/Recipient   takes our 5% platform fee from the buy token.
+ */
 async function fetchOxQuote({ chainId, sellToken, buyToken, sellAmount, taker, slipBps, feeRecipient, feeToken, signal }) {
   const qs = new URLSearchParams({
-    chainId: String(chainId),
-    sellToken: (sellToken || '').toLowerCase(),
-    buyToken:  (buyToken  || '').toLowerCase(),
-    sellAmount: String(sellAmount),
+    chainId:              String(chainId),
+    sellToken:            (sellToken || '').toLowerCase(),
+    buyToken:             (buyToken  || '').toLowerCase(),
+    sellAmount:           String(sellAmount),
     taker,
-    slippageBps: String(slipBps),
-    swapFeeBps: String(OX_SWAP_FEE_BPS),
-    swapFeeRecipient: feeRecipient,
-    swapFeeToken: (feeToken || '').toLowerCase(),
+    slippageBps:          String(slipBps),
+    swapFeeBps:           String(OX_SWAP_FEE_BPS),
+    swapFeeRecipient:     feeRecipient,
+    swapFeeToken:         (feeToken || '').toLowerCase(),
     tradeSurplusRecipient: feeRecipient,
   });
   const res = await fetch('/api/0x/swap/allowance-holder/quote?' + qs.toString(), { signal });
@@ -555,19 +605,19 @@ async function fetchOxQuote({ chainId, sellToken, buyToken, sellAmount, taker, s
   return data;
 }
 
-/* Jupiter quote. restrictIntermediateTokens=true keeps the route to
- * battle-tested intermediates -- avoids high-slippage long-tail hops.
- * platformFeeBps is ALWAYS included; the matching feeAccount is paired in
- * the swap-instructions call below. Jupiter rejects the build if one is
- * present without the other. */
+/*
+ * Jupiter quote. No platformFeeBps - we take the full 5% from the input
+ * side via a transfer instruction in the same transaction, which bypasses
+ * Jupiter's u8 on-chain cap (max 255 bps). The amountRaw passed here is
+ * already reduced by the fee (95% of what the user typed).
+ */
 async function fetchJupiterQuote({ inputMint, outputMint, amountRaw, slipBps, signal }) {
   const qs = new URLSearchParams({
     inputMint, outputMint,
-    amount: String(amountRaw),
-    slippageBps: String(slipBps),
-    onlyDirectRoutes: 'false',
+    amount:                   String(amountRaw),
+    slippageBps:              String(slipBps),
+    onlyDirectRoutes:         'false',
     restrictIntermediateTokens: 'true',
-    platformFeeBps: String(JUPITER_PLATFORM_FEE_BPS),
   });
   const res = await fetch('/api/jupiter/swap/v1/quote?' + qs.toString(), { signal });
   const data = await res.json();
@@ -576,26 +626,24 @@ async function fetchJupiterQuote({ inputMint, outputMint, amountRaw, slipBps, si
   return data;
 }
 
-/* Jupiter swap-INSTRUCTIONS endpoint. Returns individual ixs instead of a
- * sealed transaction so we can prepend our own createAssociatedTokenAccount
- * instruction for the fee ATA. That way the fee ATA gets created on the fly
- * inside the same atomic transaction as the swap -- no separate setup tx,
- * no "feeAccount missing" failures, no operational ATA pre-creation. User
- * pays ~0.002 SOL rent on the first trade to a brand-new output mint, then
- * nothing forever. */
-async function fetchJupiterSwapInstructions({ quoteResponse, userPublicKey, feeAccount, signal }) {
+/*
+ * Jupiter swap-instructions endpoint. No feeAccount is passed because
+ * platformFeeBps is 0 in the quote - Jupiter rejects the build if one
+ * is present without the other. Fee collection happens via the transfer
+ * instruction prepended in buildJupiterSwapTransaction instead.
+ */
+async function fetchJupiterSwapInstructions({ quoteResponse, userPublicKey, signal }) {
   const body = {
     quoteResponse,
     userPublicKey,
-    wrapAndUnwrapSol: true,
+    wrapAndUnwrapSol:       true,
     dynamicComputeUnitLimit: true,
     prioritizationFeeLamports: {
       priorityLevelWithMaxLamports: {
-        maxLamports: 5_000_000,
+        maxLamports:   5_000_000,
         priorityLevel: 'high',
       },
     },
-    feeAccount,
   };
   const res = await fetch('/api/jupiter/swap/v1/swap-instructions', {
     method: 'POST',
@@ -609,64 +657,91 @@ async function fetchJupiterSwapInstructions({ quoteResponse, userPublicKey, feeA
   return data;
 }
 
-/* Convert Jupiter's API-shaped instruction (programId/accounts/data as
- * base64) into a TransactionInstruction the web3.js builder accepts. */
+/* Convert Jupiter's API-shaped instruction into a TransactionInstruction. */
 function deserializeJupiterIx(rawIx) {
   return new TransactionInstruction({
     programId: new PublicKey(rawIx.programId),
     keys: (rawIx.accounts || []).map((acc) => ({
-      pubkey: new PublicKey(acc.pubkey),
-      isSigner: !!acc.isSigner,
+      pubkey:     new PublicKey(acc.pubkey),
+      isSigner:   !!acc.isSigner,
       isWritable: !!acc.isWritable,
     })),
     data: Buffer.from(rawIx.data || '', 'base64'),
   });
 }
 
-/* Build the final VersionedTransaction. Order of instructions matches
- * Jupiter's documented response shape, with our fee-ATA-create slotted
- * in BEFORE the swap so the fee account exists when Jupiter's program
- * writes to it:
- *   1. Jupiter's otherInstructions (jito tips, etc -- normally empty
- *      since we use priorityLevelWithMaxLamports, not jitoTipLamports)
- *   2. Jupiter's compute budget (priority fee + CU limit)
- *   3. Jupiter's setup ixs (e.g., wSOL wrap, user dest ATA)
- *   4. Our createAssociatedTokenAccountIdempotent for the fee ATA
- *      -- idempotent: no-op if exists, creates if missing
- *   5. Jupiter's swap ix
- *   6. Jupiter's cleanup ix (e.g., wSOL unwrap)
- * Address lookup tables come from Jupiter's response so the route can
- * fit within Solana's 64-account limit. */
+/*
+ * Build the final VersionedTransaction. Instruction order:
+ *
+ * 1. Jupiter's otherInstructions (jito tips etc - normally empty)
+ * 2. Jupiter's computeBudgetInstructions (priority fee + CU limit)
+ * 3. INPUT-SIDE FEE TRANSFER (our 5%):
+ *      SOL input -> SystemProgram.transfer(feeRaw lamports) to fee wallet
+ *      SPL input -> create fee wallet's input-token ATA (idempotent)
+ *                   + SPL transfer(feeRaw tokens) to that ATA
+ * 4. Jupiter's setupInstructions (wSOL wrap, user dest ATA creation)
+ * 5. Jupiter's swapInstruction
+ * 6. Jupiter's cleanupInstruction (wSOL unwrap)
+ *
+ * Fee is taken BEFORE Jupiter's setup so lamports/tokens are available
+ * at the correct balances when Jupiter's program executes.
+ */
 async function buildJupiterSwapTransaction({
-  connection, userPubkey, outputMint, feeWallet, feeAta, ixData,
+  connection, userPubkey, inputMint, isNativeInput, feeWalletPk, feeRaw, ixData,
 }) {
   const instructions = [];
 
   if (Array.isArray(ixData.otherInstructions)) {
     ixData.otherInstructions.forEach((ix) => instructions.push(deserializeJupiterIx(ix)));
   }
-
   if (Array.isArray(ixData.computeBudgetInstructions)) {
     ixData.computeBudgetInstructions.forEach((ix) => instructions.push(deserializeJupiterIx(ix)));
+  }
+
+  /* -- Input-side fee transfer (5%) -- */
+  if (isNativeInput) {
+    /*
+     * SOL: direct lamport transfer. SystemProgram.transfer takes a number;
+     * feeRaw is always small enough (5% of any realistic SOL amount) to
+     * be represented exactly as a JS number.
+     */
+    instructions.push(
+      SystemProgram.transfer({
+        fromPubkey: userPubkey,
+        toPubkey:   feeWalletPk,
+        lamports:   Number(feeRaw),
+      })
+    );
+  } else {
+    /*
+     * SPL token: ensure fee wallet has an ATA for the input mint, then
+     * transfer feeRaw tokens into it. Both instructions are idempotent /
+     * atomic - the ATA create is a no-op if it already exists.
+     */
+    const userInputAta = await getAssociatedTokenAddress(inputMint, userPubkey);
+    const feeInputAta  = await getAssociatedTokenAddress(inputMint, feeWalletPk);
+    instructions.push(
+      createAssociatedTokenAccountIdempotentInstruction(
+        userPubkey,  // payer
+        feeInputAta, // ATA to create/verify
+        feeWalletPk, // owner
+        inputMint,   // mint
+      ),
+      createTransferInstruction(
+        userInputAta, // source
+        feeInputAta,  // destination
+        userPubkey,   // authority
+        feeRaw,       // amount (bigint accepted by spl-token)
+      ),
+    );
   }
 
   if (Array.isArray(ixData.setupInstructions)) {
     ixData.setupInstructions.forEach((ix) => instructions.push(deserializeJupiterIx(ix)));
   }
-
-  instructions.push(
-    createAssociatedTokenAccountIdempotentInstruction(
-      userPubkey,   // payer = the user (they pay ~0.002 SOL rent on first creation)
-      feeAta,       // ata to ensure exists
-      feeWallet,    // owner of the new ata
-      outputMint,   // mint of the new ata
-    )
-  );
-
   if (ixData.swapInstruction) {
     instructions.push(deserializeJupiterIx(ixData.swapInstruction));
   }
-
   if (ixData.cleanupInstruction) {
     instructions.push(deserializeJupiterIx(ixData.cleanupInstruction));
   }
@@ -680,7 +755,7 @@ async function buildJupiterSwapTransaction({
         const acct = await connection.getAccountInfo(new PublicKey(addr));
         if (!acct) return null;
         return new AddressLookupTableAccount({
-          key: new PublicKey(addr),
+          key:   new PublicKey(addr),
           state: AddressLookupTableAccount.deserialize(acct.data),
         });
       } catch { return null; }
@@ -690,7 +765,7 @@ async function buildJupiterSwapTransaction({
 
   const { blockhash } = await connection.getLatestBlockhash('finalized');
   const message = new TransactionMessage({
-    payerKey: userPubkey,
+    payerKey:        userPubkey,
     recentBlockhash: blockhash,
     instructions,
   }).compileToV0Message(lookupTables);
@@ -698,17 +773,17 @@ async function buildJupiterSwapTransaction({
   return new VersionedTransaction(message);
 }
 
-/* ============================================================================
- * USD PRICING -- data sources only, NEVER aggregator quote endpoints.
- * ========================================================================= */
+/* -- USD PRICING (data sources only, NEVER aggregator quote endpoints) ------ */
 
 const _priceCache = new Map();
+
 function _priceCacheKey(token) {
   if (!token) return null;
   if (isSol(token)) return 'sol:' + token.mint;
   if (isEvm(token)) return 'evm:' + token.chainId + ':' + (token.address || '').toLowerCase();
   return null;
 }
+
 function getCachedPrice(token) {
   const key = _priceCacheKey(token);
   if (!key) return null;
@@ -717,6 +792,7 @@ function getCachedPrice(token) {
   if (Date.now() - e.ts > PRICE_CACHE_TTL_MS) { _priceCache.delete(key); return null; }
   return e.price;
 }
+
 function setCachedPrice(token, price) {
   const key = _priceCacheKey(token);
   if (!key || !(price > 0)) return;
@@ -747,7 +823,6 @@ async function fetchJupiterTokenSearchPrice(token) {
   } catch { return null; }
 }
 
-/* LiFi /v1/token (price data only -- not used for swap routing). */
 async function fetchLifiTokenPrice(token) {
   try {
     if (!isEvm(token)) return null;
@@ -770,8 +845,9 @@ async function fetchLifiCatalogPrice(token) {
     const targetAddr = (token.address || '').toLowerCase() === NATIVE_EVM
       ? LIFI_NATIVE
       : (token.address || '').toLowerCase();
-    const hit = catalog.find((t) => t.chainId === token.chainId &&
-      (t.address || '').toLowerCase() === targetAddr);
+    const hit = catalog.find(
+      (t) => t.chainId === token.chainId && (t.address || '').toLowerCase() === targetAddr
+    );
     const v = hit && hit.priceUSD;
     return Number.isFinite(v) && v > 0 ? Number(v) : null;
   } catch { return null; }
@@ -790,7 +866,8 @@ async function fetchHeliusPrice(token) {
     if (!r.ok) return null;
     const d = await r.json();
     const v = d && d.result && d.result.token_info && d.result.token_info.price_info
-      ? d.result.token_info.price_info.price_per_token : null;
+      ? d.result.token_info.price_info.price_per_token
+      : null;
     return Number.isFinite(v) && v > 0 ? Number(v) : null;
   } catch { return null; }
 }
@@ -812,9 +889,7 @@ async function getTokenPriceUsd(token) {
   return null;
 }
 
-/* ============================================================================
- * SYMBOL SEARCH -- catalog data only, not transactional
- * ========================================================================= */
+/* -- SYMBOL SEARCH (catalog data only, not transactional) ------------------- */
 
 async function searchJupiterBySymbol(query, signal) {
   try {
@@ -823,29 +898,30 @@ async function searchJupiterBySymbol(query, signal) {
     const arr = await r.json();
     if (!Array.isArray(arr)) return [];
     return arr.map((t) => ({
-      chain: 'solana',
-      mint: t.id,
-      symbol: t.symbol || '',
-      name: t.name || t.symbol || '',
+      chain:    'solana',
+      mint:     t.id,
+      symbol:   t.symbol || '',
+      name:     t.name || t.symbol || '',
       decimals: typeof t.decimals === 'number' ? t.decimals : 6,
-      logoURI: t.icon || t.logoURI || null,
+      logoURI:  t.icon || t.logoURI || null,
     })).filter((t) => isValidSolMint(t.mint) && t.symbol);
   } catch { return []; }
 }
 
-let _lifiTokensCache = null;
+let _lifiTokensCache   = null;
 let _lifiTokensLoading = null;
+
 function loadLifiTokens() {
-  if (_lifiTokensCache) return Promise.resolve(_lifiTokensCache);
+  if (_lifiTokensCache)   return Promise.resolve(_lifiTokensCache);
   if (_lifiTokensLoading) return _lifiTokensLoading;
   _lifiTokensLoading = fetch('/api/lifi/v1/tokens')
     .then((r) => (r.ok ? r.json() : { tokens: {} }))
     .catch(() => ({ tokens: {} }))
     .then((data) => {
-      const flat = [];
+      const flat   = [];
       const tokens = (data && data.tokens) || {};
       Object.keys(tokens).forEach((cid) => {
-        const arr = tokens[cid];
+        const arr        = tokens[cid];
         if (!Array.isArray(arr)) return;
         const chainIdNum = Number(cid);
         if (!Number.isFinite(chainIdNum)) return;
@@ -854,27 +930,25 @@ function loadLifiTokens() {
           const lower = (t.address || '').toLowerCase();
           if (lower !== LIFI_NATIVE && !isValidEvmAddr(t.address)) return;
           flat.push({
-            chain: 'evm',
-            address: t.address,
-            chainId: chainIdNum,
-            symbol: t.symbol,
-            name: t.name || t.symbol,
+            chain:    'evm',
+            address:  t.address,
+            chainId:  chainIdNum,
+            symbol:   t.symbol,
+            name:     t.name || t.symbol,
             decimals: typeof t.decimals === 'number' ? t.decimals : 18,
-            logoURI: t.logoURI || null,
+            logoURI:  t.logoURI || null,
             priceUSD: t.priceUSD ? parseFloat(t.priceUSD) : null,
           });
         });
       });
-      _lifiTokensCache = flat;
+      _lifiTokensCache   = flat;
       _lifiTokensLoading = null;
       return flat;
     });
   return _lifiTokensLoading;
 }
 
-/* ============================================================================
- * PRESET + LAST-PAIR HELPERS + MAX-SAFE
- * ========================================================================= */
+/* -- PRESET + LAST-PAIR HELPERS + MAX-SAFE ---------------------------------- */
 
 function loadPresets() {
   try {
@@ -887,7 +961,10 @@ function loadPresets() {
     };
   } catch { return { buy: DEFAULT_BUY_PRESETS.slice(), sell: DEFAULT_SELL_PRESETS.slice() }; }
 }
-function savePresets(p) { try { localStorage.setItem(PRESETS_LS_KEY, JSON.stringify(p)); } catch {} }
+
+function savePresets(p) {
+  try { localStorage.setItem(PRESETS_LS_KEY, JSON.stringify(p)); } catch {}
+}
 
 function loadLastPair() {
   try {
@@ -898,6 +975,7 @@ function loadLastPair() {
     return v;
   } catch { return null; }
 }
+
 function saveLastPair(fromToken, toToken) {
   if (!fromToken || !toToken) return;
   try {
@@ -910,14 +988,13 @@ function maxSafeAmount({ balance, isNative }) {
   if (!isNative) return balance;
   return balance * (1 - EVM_NATIVE_RESERVE_PCT);
 }
+
 function maxSafeSolBalance(lamports) {
   if (!lamports) return 0;
   return Math.max(0, lamports - SOL_RESERVE_LAMPORTS) / LAMPORTS_PER_SOL;
 }
 
-/* ============================================================================
- * ICONS, BADGES, SCROLL-LOCK HOOKS
- * ========================================================================= */
+/* -- ICONS, BADGES, SCROLL-LOCK HOOKS --------------------------------------- */
 
 function ChainBadge({ token }) {
   if (!token) return null;
@@ -934,20 +1011,28 @@ function ChainBadge({ token }) {
 function TokenIcon({ token, size = 32 }) {
   const [errored, setErrored] = useState(false);
   if (token && token.logoURI && !errored) {
-    return <img src={token.logoURI} alt={token.symbol || ''}
-      style={{ width: size, height: size, borderRadius: '50%', flexShrink: 0 }}
-      onError={() => setErrored(true)} />;
+    return (
+      <img
+        src={token.logoURI}
+        alt={token.symbol || ''}
+        style={{ width: size, height: size, borderRadius: '50%', flexShrink: 0 }}
+        onError={() => setErrored(true)}
+      />
+    );
   }
   const ch = (token && token.symbol) ? token.symbol.charAt(0).toUpperCase() : '?';
-  return <div style={{
-    width: size, height: size, borderRadius: '50%', flexShrink: 0,
-    background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)',
-    display: 'flex', alignItems: 'center', justifyContent: 'center',
-    fontSize: Math.round(size * 0.4), fontWeight: 700, color: C.accent,
-  }}>{ch}</div>;
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: '50%', flexShrink: 0,
+      background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: Math.round(size * 0.4), fontWeight: 700, color: C.accent,
+    }}>{ch}</div>
+  );
 }
 
 let _bodyLockCount = 0;
+
 function useBodyScrollLock(open) {
   useEffect(() => {
     if (!open) return undefined;
@@ -960,6 +1045,7 @@ function useBodyScrollLock(open) {
     };
   }, [open]);
 }
+
 function useEscapeKey(open, handler) {
   useEffect(() => {
     if (!open) return undefined;
@@ -974,29 +1060,31 @@ function useEscapeKey(open, handler) {
   }, [open, handler]);
 }
 
-/* ============================================================================
- * TOKEN SELECT MODAL
- * ========================================================================= */
+/* -- TOKEN SELECT MODAL ----------------------------------------------------- */
 
 function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
-  const [q, setQ] = useState('');
-  const [contractInput, setContractInput] = useState('');
-  const [contractToken, setContractToken] = useState(null);
+  const [q,               setQ]               = useState('');
+  const [contractInput,   setContractInput]   = useState('');
+  const [contractToken,   setContractToken]   = useState(null);
   const [contractLoading, setContractLoading] = useState(false);
-  const [searchResults, setSearchResults] = useState([]);
-  const [discoveredSol, setDiscoveredSol] = useState([]);
-  const [discoveredEvm, setDiscoveredEvm] = useState([]);
-  const [discovering, setDiscovering] = useState(false);
+  const [searchResults,   setSearchResults]   = useState([]);
+  const [discoveredSol,   setDiscoveredSol]   = useState([]);
+  const [discoveredEvm,   setDiscoveredEvm]   = useState([]);
+  const [discovering,     setDiscovering]     = useState(false);
 
   const { chainId: evmWalletChainId } = useAccount();
   const evmChainForLookup = evmWalletChainId || 1;
-  const publicClient = usePublicClient({ chainId: evmChainForLookup });
+  const publicClient      = usePublicClient({ chainId: evmChainForLookup });
 
   const solTokens = useMemo(() => {
     if (jupiterTokens && jupiterTokens.length > 0) {
       return jupiterTokens.map((t) => ({
-        chain: 'solana', mint: t.mint, symbol: t.symbol,
-        name: t.name || t.symbol, decimals: t.decimals || 6, logoURI: t.logoURI || null,
+        chain:    'solana',
+        mint:     t.mint,
+        symbol:   t.symbol,
+        name:     t.name || t.symbol,
+        decimals: t.decimals || 6,
+        logoURI:  t.logoURI || null,
       }));
     }
     return POPULAR_TOKENS.filter((t) => isSol(t));
@@ -1009,13 +1097,13 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
       const ql = trimmed.toLowerCase();
       const sol = solTokens.filter((t) =>
         (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-        (t.name && t.name.toLowerCase().includes(ql)) ||
-        (t.mint && t.mint === trimmed)
+        (t.name   && t.name.toLowerCase().includes(ql)) ||
+        (t.mint   && t.mint === trimmed)
       ).slice(0, 50);
       const evmFromPopular = POPULAR_TOKENS.filter((t) =>
         isEvm(t) && (
           (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-          (t.name && t.name.toLowerCase().includes(ql)) ||
+          (t.name   && t.name.toLowerCase().includes(ql)) ||
           ((CHAIN_NAMES[t.chainId] || '').toLowerCase().includes(ql))
         )
       );
@@ -1035,7 +1123,7 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
       setDiscoveredSol([]); setDiscoveredEvm([]); setDiscovering(false);
       return undefined;
     }
-    const reqId = ++discoverReqRef.current;
+    const reqId     = ++discoverReqRef.current;
     const controller = new AbortController();
     setDiscovering(true);
     const handle = setTimeout(async () => {
@@ -1049,7 +1137,7 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
         .filter((t) =>
           (t.address || '').toLowerCase() !== LIFI_NATIVE && (
             (t.symbol && t.symbol.toLowerCase().includes(ql)) ||
-            (t.name && t.name.toLowerCase().includes(ql))
+            (t.name   && t.name.toLowerCase().includes(ql))
           )
         )
         .slice(0, 80);
@@ -1070,9 +1158,7 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
   const lookupReqRef = useRef(0);
   const lookupContract = useCallback(async (addr) => {
     const trimmed = (addr || '').trim();
-    if (!isValidSolMint(trimmed) && !isValidEvmAddr(trimmed)) {
-      setContractToken(null); return;
-    }
+    if (!isValidSolMint(trimmed) && !isValidEvmAddr(trimmed)) { setContractToken(null); return; }
     const reqId = ++lookupReqRef.current;
     setContractLoading(true);
     try {
@@ -1096,19 +1182,20 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
               if (lookupReqRef.current !== reqId) return;
               const result = d && d.result;
               if (result) {
-                const ti = result.token_info || {};
-                const meta = (result.content && result.content.metadata) || {};
+                const ti    = result.token_info || {};
+                const meta  = (result.content && result.content.metadata) || {};
                 const links = (result.content && result.content.links) || {};
                 const files = (result.content && result.content.files) || [];
-                const sym = (ti.symbol || meta.symbol || '').trim();
-                const nm  = (meta.name || ti.symbol || '').trim();
-                const img = links.image || (files[0] && files[0].uri) || null;
+                const sym   = (ti.symbol || meta.symbol || '').trim();
+                const nm    = (meta.name || ti.symbol || '').trim();
+                const img   = links.image || (files[0] && files[0].uri) || null;
                 resolved = {
-                  chain: 'solana', mint: trimmed,
-                  symbol: sym || shortAddr(trimmed, 4, 4),
-                  name:   nm  || 'Custom Token',
+                  chain:    'solana',
+                  mint:     trimmed,
+                  symbol:   sym || shortAddr(trimmed, 4, 4),
+                  name:     nm  || 'Custom Token',
                   decimals: typeof ti.decimals === 'number' ? ti.decimals : 6,
-                  logoURI: img,
+                  logoURI:  img,
                 };
               }
             }
@@ -1121,7 +1208,7 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
           }
         }
       } else {
-        let decimals = 18;
+        let decimals      = 18;
         let onChainSymbol = null;
         try {
           if (publicClient) {
@@ -1147,10 +1234,13 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
         } catch {}
         if (lookupReqRef.current === reqId) {
           setContractToken({
-            chain: 'evm', address: trimmed, chainId: evmChainForLookup,
-            symbol: onChainSymbol || shortAddr(trimmed, 4, 4),
-            name: 'Custom Token (' + (CHAIN_NAMES[evmChainForLookup] || 'EVM') + ')',
-            decimals, logoURI: null,
+            chain:    'evm',
+            address:  trimmed,
+            chainId:  evmChainForLookup,
+            symbol:   onChainSymbol || shortAddr(trimmed, 4, 4),
+            name:     'Custom Token (' + (CHAIN_NAMES[evmChainForLookup] || 'EVM') + ')',
+            decimals,
+            logoURI:  null,
           });
         }
       }
@@ -1178,9 +1268,10 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
 
   const merged = useMemo(() => {
     if (!q.trim()) return [];
-    const seen = new Set();
-    const out = [];
-    const keyOf = (t) => isSol(t) ? 'sol:' + t.mint
+    const seen  = new Set();
+    const out   = [];
+    const keyOf = (t) =>
+      isSol(t) ? 'sol:' + t.mint
       : isEvm(t) ? 'evm:' + t.chainId + ':' + (t.address || '').toLowerCase()
       : ('?:' + (t.symbol || '') + ':' + (t.name || ''));
     [...searchResults, ...discoveredSol, ...discoveredEvm].forEach((t) => {
@@ -1215,21 +1306,30 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
               fontSize: 22, lineHeight: 1, padding: 4, minWidth: 36, minHeight: 36,
             }}>x</button>
           </div>
-          <input autoFocus value={q} onChange={(e) => setQ(e.target.value)}
+          <input
+            autoFocus
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
             placeholder="Search name, symbol, chain..."
             style={{
               width: '100%', background: C.card2, border: '1px solid ' + C.border,
               borderRadius: 8, padding: '10px 12px', color: C.text, fontSize: 13,
               outline: 'none', fontFamily: 'Syne, sans-serif', marginBottom: 8,
-            }} />
-          <input value={contractInput} onChange={(e) => setContractInput(e.target.value)}
+            }}
+          />
+          <input
+            value={contractInput}
+            onChange={(e) => setContractInput(e.target.value)}
             placeholder="Or paste any Solana or EVM contract address..."
             style={{
               width: '100%', background: C.card2, border: '1px solid rgba(0,229,255,.2)',
               borderRadius: 8, padding: '10px 12px', color: C.accent, fontSize: 12,
               outline: 'none', fontFamily: 'monospace',
-            }} />
-          {contractLoading && <div style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>Looking up token...</div>}
+            }}
+          />
+          {contractLoading && (
+            <div style={{ color: C.muted, fontSize: 11, marginTop: 6 }}>Looking up token...</div>
+          )}
           {contractToken && !contractLoading && (
             <div onClick={() => handleSelect(contractToken)} style={{
               marginTop: 8, padding: '10px 12px',
@@ -1250,8 +1350,13 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
             </div>
           )}
         </div>
+
         <div style={{ overflowY: 'auto', flex: 1, WebkitOverflowScrolling: 'touch' }}>
-          {!q.trim() && <div style={{ padding: '8px 16px 4px', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>POPULAR TOKENS</div>}
+          {!q.trim() && (
+            <div style={{ padding: '8px 16px 4px', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
+              POPULAR TOKENS
+            </div>
+          )}
           {q.trim() && merged.length === 0 && (
             <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 13 }}>
               {discovering ? 'Searching...' : 'No matches.'}
@@ -1261,21 +1366,26 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
           {display.map((t, i) => {
             const key = (t.mint || t.address || '') + '-' + (t.chainId || 'sol') + '-' + i;
             return (
-              <div key={key} onClick={() => handleSelect(t)}
+              <div
+                key={key}
+                onClick={() => handleSelect(t)}
                 style={{
                   padding: '12px 16px', cursor: 'pointer',
                   display: 'flex', alignItems: 'center', gap: 10,
                   borderBottom: '1px solid rgba(255,255,255,.03)', minHeight: 48,
                 }}
                 onMouseEnter={(e) => { e.currentTarget.style.background = 'rgba(0,229,255,.05)'; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}>
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              >
                 <TokenIcon token={t} size={32} />
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ display: 'flex', alignItems: 'center' }}>
                     <span style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{t.symbol}</span>
                     <ChainBadge token={t} />
                   </div>
-                  <div style={{ color: C.muted, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{t.name}</div>
+                  <div style={{ color: C.muted, fontSize: 11, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {t.name}
+                  </div>
                 </div>
               </div>
             );
@@ -1291,9 +1401,7 @@ function TokenSelectModal({ open, onClose, onSelect, jupiterTokens }) {
   );
 }
 
-/* ============================================================================
- * PRESET EDITOR
- * ========================================================================= */
+/* -- PRESET EDITOR ---------------------------------------------------------- */
 
 function PresetEditor({ open, onClose, presets, onSave }) {
   const [buyVals,  setBuyVals]  = useState(presets.buy.map(String));
@@ -1309,7 +1417,7 @@ function PresetEditor({ open, onClose, presets, onSave }) {
   useEscapeKey(open, onClose);
 
   const handleSave = useCallback(() => {
-    const buy = buyVals.map((v) => parseFloat(v) || 0).filter((v) => v > 0);
+    const buy  = buyVals.map((v) => parseFloat(v) || 0).filter((v) => v > 0);
     const sell = sellVals.map((v) => parseFloat(v) || 0).filter((v) => v > 0 && v <= 100);
     while (buy.length  < 2) buy.push(25);
     while (sell.length < 1) sell.push(50);
@@ -1325,10 +1433,8 @@ function PresetEditor({ open, onClose, presets, onSave }) {
         position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
         width: '100%', maxWidth: 480, zIndex: 600,
         background: C.card, borderTop: '2px solid ' + C.borderHi,
-        borderRadius: '20px 20px 0 0',
-        boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
-        maxHeight: 'min(88vh, 100dvh)',
-        display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        borderRadius: '20px 20px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
+        maxHeight: 'min(88vh, 100dvh)', display: 'flex', flexDirection: 'column', overflow: 'hidden',
       }}>
         <div style={{ flexShrink: 0, padding: '14px 20px 8px' }}>
           <div onClick={onClose} role="button" aria-label="Close" style={{
@@ -1350,10 +1456,7 @@ function PresetEditor({ open, onClose, presets, onSave }) {
           </div>
         </div>
 
-        <div style={{
-          flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch',
-          padding: '8px 20px 16px',
-        }}>
+        <div style={{ flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch', padding: '8px 20px 16px' }}>
           <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 10, marginTop: 6 }}>
             QUICK BUY ($)
           </div>
@@ -1367,7 +1470,8 @@ function PresetEditor({ open, onClose, presets, onSave }) {
                   display: 'flex', alignItems: 'center', gap: 6, minHeight: 44,
                 }}>
                   <span style={{ color: C.muted }}>$</span>
-                  <input value={v}
+                  <input
+                    value={v}
                     inputMode="decimal"
                     onChange={(e) => {
                       let nv = e.target.value.replace(/[^0-9.]/g, '');
@@ -1379,7 +1483,8 @@ function PresetEditor({ open, onClose, presets, onSave }) {
                       flex: 1, background: 'transparent', border: 'none',
                       color: '#fff', fontSize: 16, fontWeight: 700,
                       outline: 'none', width: '100%',
-                    }} />
+                    }}
+                  />
                 </div>
                 {buyVals.length > 2 && (
                   <button onClick={() => setBuyVals((p) => p.filter((_, j) => j !== i))} aria-label="Remove slot" style={{
@@ -1411,7 +1516,8 @@ function PresetEditor({ open, onClose, presets, onSave }) {
                   borderRadius: 10, padding: '10px 14px',
                   display: 'flex', alignItems: 'center', gap: 6, minHeight: 44,
                 }}>
-                  <input value={v}
+                  <input
+                    value={v}
                     inputMode="decimal"
                     onChange={(e) => {
                       let nv = e.target.value.replace(/[^0-9.]/g, '');
@@ -1423,7 +1529,8 @@ function PresetEditor({ open, onClose, presets, onSave }) {
                       flex: 1, background: 'transparent', border: 'none',
                       color: '#fff', fontSize: 16, fontWeight: 700,
                       outline: 'none', width: '100%',
-                    }} />
+                    }}
+                  />
                   <span style={{ color: C.muted }}>%</span>
                 </div>
                 {sellVals.length > 1 && (
@@ -1467,9 +1574,7 @@ function PresetEditor({ open, onClose, presets, onSave }) {
   );
 }
 
-/* ============================================================================
- * MAIN SWAP WIDGET
- * ========================================================================= */
+/* -- MAIN SWAP WIDGET ------------------------------------------------------- */
 
 export default function SwapWidget({
   jupiterTokens = [],
@@ -1498,7 +1603,7 @@ export default function SwapWidget({
   const publicKey = useMemo(() => {
     if (extPublicKey) return extPublicKey;
     if (privyEmbeddedSol && privyEmbeddedSol.address) {
-      try { return new PublicKey(privyEmbeddedSol.address); } catch (e) { return null; }
+      try { return new PublicKey(privyEmbeddedSol.address); } catch { return null; }
     }
     return null;
   }, [extPublicKey, privyEmbeddedSol]);
@@ -1538,7 +1643,7 @@ export default function SwapWidget({
     if (evmChainIdRef.current === targetChainId) return true;
     try {
       if (switchChainAsync) await switchChainAsync({ chainId: targetChainId });
-      else if (switchChain)  switchChain({ chainId: targetChainId });
+      else if (switchChain) switchChain({ chainId: targetChainId });
     } catch {
       throw new Error('Please switch your wallet to ' + (CHAIN_NAMES[targetChainId] || 'the correct chain'));
     }
@@ -1558,7 +1663,7 @@ export default function SwapWidget({
   /* -- Initial token pair -- */
   const initialPair = useMemo(() => {
     if (defaultFromToken || defaultToToken) {
-      const ws = { solConnected, evmConnected, evmChainId };
+      const ws   = { solConnected, evmConnected, evmChainId };
       const pair = defaultTokenPair({
         mode: modeProp,
         viewedToken: defaultFromToken || defaultToToken
@@ -1572,9 +1677,9 @@ export default function SwapWidget({
         toToken:   defaultToToken   ? normalizeToken(defaultToToken)   : pair.toToken,
       };
     }
-    const last = loadLastPair();
+    const last          = loadLastPair();
     const lastFromToken = last && last.from ? normalizeToken(last.from) : null;
-    const ws = { solConnected, evmConnected, evmChainId };
+    const ws            = { solConnected, evmConnected, evmChainId };
     return defaultTokenPair({ mode: modeProp, viewedToken: null, lastFromToken, walletState: ws });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -1584,23 +1689,23 @@ export default function SwapWidget({
 
   /* -- Amount + slippage -- */
   const [fromAmt, setFromAmt] = useState('');
-  const [slip, setSlip] = useState(0.5);
+  const [slip,    setSlip]    = useState(0.5);
   const userTouchedAmtRef = useRef(false);
 
   /* -- Quote state -- */
-  const [quote, setQuote] = useState(null);
+  const [quote,        setQuote]        = useState(null);
   const [quoteLoading, setQuoteLoading] = useState(false);
-  const [quoteError, setQuoteError] = useState('');
+  const [quoteError,   setQuoteError]   = useState('');
   const [quoteIsStale, setQuoteIsStale] = useState(false);
 
   /* -- Swap execution state -- */
-  const [swapStatus, setSwapStatus] = useState('idle');
-  const [swapTx, setSwapTx] = useState(null);
-  const [swapError, setSwapError] = useState('');
+  const [swapStatus,  setSwapStatus]  = useState('idle');
+  const [swapTx,      setSwapTx]      = useState(null);
+  const [swapError,   setSwapError]   = useState('');
   const swapStatusTimerRef = useRef(null);
   const [pendingSwap, setPendingSwap] = useState(false);
 
-  const [stuckSwap, setStuckSwap] = useState(false);
+  const [stuckSwap,   setStuckSwap]   = useState(false);
   const stuckTimerRef = useRef(null);
   useEffect(() => {
     if (swapStatus === 'loading') {
@@ -1615,6 +1720,7 @@ export default function SwapWidget({
       if (stuckTimerRef.current) { clearTimeout(stuckTimerRef.current); stuckTimerRef.current = null; }
     };
   }, [swapStatus]);
+
   const cancelStuckSwap = useCallback(() => {
     setSwapStatus('idle'); setSwapError(''); setSwapTx(null); setStuckSwap(false);
   }, []);
@@ -1625,11 +1731,11 @@ export default function SwapWidget({
 
   /* -- Solana balance -- */
   const [solBalanceLamports, setSolBalanceLamports] = useState(null);
-  const [solSplBalance, setSolSplBalance] = useState(null);
+  const [solSplBalance,      setSolSplBalance]      = useState(null);
 
   /* -- Preset state -- */
   const [presetsLocal, setPresetsLocal] = useState(() => presetsProp || loadPresets());
-  const presets = presetsProp || presetsLocal;
+  const presets    = presetsProp || presetsLocal;
   const setPresets = useCallback((p) => {
     if (onPresetsChange) onPresetsChange(p);
     else { setPresetsLocal(p); savePresets(p); }
@@ -1641,20 +1747,20 @@ export default function SwapWidget({
   const [toSelectOpen,   setToSelectOpen]   = useState(false);
 
   /* -- Derived -- */
-  const route = useMemo(() => pickRoute(fromToken, toToken), [fromToken, toToken]);
+  const route       = useMemo(() => pickRoute(fromToken, toToken), [fromToken, toToken]);
   const isSupported = route !== 'unsupported';
-  const unsupportedMsg = useMemo(() =>
-    isSupported ? '' : unsupportedReason(fromToken, toToken),
+  const unsupportedMsg = useMemo(
+    () => isSupported ? '' : unsupportedReason(fromToken, toToken),
     [isSupported, fromToken, toToken]
   );
-  const isEvmFrom = isEvm(fromToken);
+  const isEvmFrom       = isEvm(fromToken);
   const isNativeEvmFrom = isEvmFrom && (fromToken.address || '').toLowerCase() === NATIVE_EVM;
 
-  const isPrivyOnly = activeWalletKind === 'privy' && !solConnected && !evmConnected;
+  const isPrivyOnly      = activeWalletKind === 'privy' && !solConnected && !evmConnected;
   const requiresApproval = isEvmFrom && !isNativeEvmFrom && route === '0x' && !isPrivyOnly;
 
   /* -- Public client for from-token's chain -- */
-  const publicClient = usePublicClient({ chainId: isEvmFrom ? fromToken.chainId : undefined });
+  const publicClient    = usePublicClient({ chainId: isEvmFrom ? fromToken.chainId : undefined });
   const publicClientRef = useRef(publicClient);
   useEffect(() => { publicClientRef.current = publicClient; }, [publicClient]);
 
@@ -1678,7 +1784,9 @@ export default function SwapWidget({
         if (!cancelled) setSolBalanceLamports(bal);
         if (fromMint && fromMint !== WSOL_MINT) {
           const a = await connection.getParsedTokenAccountsByOwner(publicKey, { mint: new PublicKey(fromMint) });
-          if (!cancelled) setSolSplBalance(a.value.length ? a.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0);
+          if (!cancelled) setSolSplBalance(
+            a.value.length ? a.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0
+          );
         } else {
           if (!cancelled) setSolSplBalance(null);
         }
@@ -1707,17 +1815,17 @@ export default function SwapWidget({
   useEffect(() => {
     if (defaultFromToken || defaultToToken) return;
     if (userTouchedAmtRef.current) return;
-    const prev = lastSeenWalletState.current;
-    const justConnectedSol = !prev.sol && solConnected;
-    const justConnectedEvm = !prev.evm && evmConnected;
-    const justSwitchedChain = evmConnected && prev.chain !== evmChainId;
+    const prev               = lastSeenWalletState.current;
+    const justConnectedSol   = !prev.sol && solConnected;
+    const justConnectedEvm   = !prev.evm && evmConnected;
+    const justSwitchedChain  = evmConnected && prev.chain !== evmChainId;
     lastSeenWalletState.current = { sol: solConnected, evm: evmConnected, chain: evmChainId };
     if (!(justConnectedSol || justConnectedEvm || justSwitchedChain)) return;
 
-    const ws = { solConnected, evmConnected, evmChainId };
-    const last = loadLastPair();
+    const ws            = { solConnected, evmConnected, evmChainId };
+    const last          = loadLastPair();
     const lastFromToken = last && last.from ? normalizeToken(last.from) : null;
-    const pair = defaultTokenPair({ mode: modeProp, viewedToken: null, lastFromToken, walletState: ws });
+    const pair          = defaultTokenPair({ mode: modeProp, viewedToken: null, lastFromToken, walletState: ws });
     if (pair.fromToken && !tokensEqual(pair.fromToken, fromToken)) {
       setFromToken(pair.fromToken);
       setQuote(null); setQuoteError(''); setQuoteIsStale(false);
@@ -1738,6 +1846,7 @@ export default function SwapWidget({
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [defaultFromToken]);
+
   useEffect(() => {
     if (defaultToToken) {
       const next = normalizeToken(defaultToToken);
@@ -1750,7 +1859,7 @@ export default function SwapWidget({
 
   /* -- USD prices -- */
   const [fromPriceUsd, setFromPriceUsd] = useState(null);
-  const [toPriceUsd, setToPriceUsd] = useState(null);
+  const [toPriceUsd,   setToPriceUsd]   = useState(null);
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -1768,9 +1877,7 @@ export default function SwapWidget({
     return () => { cancelled = true; };
   }, [toToken]);
 
-  /* ============================================================================
-   * QUOTE ENGINE -- price-derived estimate, NEVER aggregator pre-click.
-   * ========================================================================= */
+  /* -- QUOTE ENGINE (price-derived estimate, NEVER aggregator pre-click) -- */
   const fetchQuote = useCallback(async () => {
     setQuoteError('');
 
@@ -1787,26 +1894,20 @@ export default function SwapWidget({
     }
 
     const fromNum = parseFloat(fromAmt);
-    if (!Number.isFinite(fromNum) || fromNum <= 0) {
-      setQuote(null); setQuoteIsStale(false); return;
-    }
-    if (!(fromPriceUsd > 0) || !(toPriceUsd > 0)) {
-      setQuote(null); setQuoteIsStale(false);
-      return;
-    }
+    if (!Number.isFinite(fromNum) || fromNum <= 0) { setQuote(null); setQuoteIsStale(false); return; }
+    if (!(fromPriceUsd > 0) || !(toPriceUsd > 0)) { setQuote(null); setQuoteIsStale(false); return; }
 
     const grossOut = fromNum * fromPriceUsd / toPriceUsd;
-    const netOut = grossOut * (1 - TOTAL_FEE);
-    const dp = (netOut > 0 && netOut < 0.01) ? 8 : 6;
+    const netOut   = grossOut * (1 - TOTAL_FEE);
+    const dp       = (netOut > 0 && netOut < 0.01) ? 8 : 6;
 
     setQuote({
-      engine: 'estimate',
+      engine:           'estimate',
       outAmountDisplay: netOut.toFixed(dp),
-      priceImpactPct: 0,
-      preview: true,
+      priceImpactPct:   0,
+      preview:          true,
     });
     setQuoteIsStale(false);
-    return;
   }, [fromAmt, fromToken, toToken, fromPriceUsd, toPriceUsd]);
 
   useEffect(() => {
@@ -1826,23 +1927,16 @@ export default function SwapWidget({
     return null;
   }, [fromToken, solBalanceLamports, solSplBalance, evmFromBal]);
 
-  /* -- MAX -- always clamp to token's actual decimals (and <=9 for JS Number
-   * precision safety). Ensures the resulting input string is integer-clean
-   * when passed to BigInt boundaries downstream. */
   const onMax = useCallback(() => {
     if (fromBalanceDisplay == null || fromBalanceDisplay <= 0) return;
     userTouchedAmtRef.current = true;
     const dec = Math.min(typeof fromToken.decimals === 'number' ? fromToken.decimals : 6, 9);
-
     if (isSol(fromToken) && fromToken.mint === WSOL_MINT) {
       const usable = maxSafeSolBalance(solBalanceLamports);
       setFromAmt(usable > 0 ? usable.toFixed(dec) : '0');
       return;
     }
-    if (isSol(fromToken)) {
-      setFromAmt(fromBalanceDisplay.toFixed(dec));
-      return;
-    }
+    if (isSol(fromToken)) { setFromAmt(fromBalanceDisplay.toFixed(dec)); return; }
     const max = maxSafeAmount({ balance: fromBalanceDisplay, isNative: isNativeEvmFrom });
     setFromAmt(max > 0 ? max.toFixed(dec) : '0');
   }, [fromBalanceDisplay, fromToken, solBalanceLamports, isNativeEvmFrom]);
@@ -1852,7 +1946,7 @@ export default function SwapWidget({
     userTouchedAmtRef.current = true;
     if (fromPriceUsd && fromPriceUsd > 0) {
       const tokens = dollars / fromPriceUsd;
-      const dec = Math.min(typeof fromToken.decimals === 'number' ? fromToken.decimals : 6, 9);
+      const dec    = Math.min(typeof fromToken.decimals === 'number' ? fromToken.decimals : 6, 9);
       setFromAmt(tokens > 0 ? tokens.toFixed(dec) : '0');
       return;
     }
@@ -1865,8 +1959,8 @@ export default function SwapWidget({
     if (fromBalanceDisplay == null || fromBalanceDisplay <= 0) return;
     userTouchedAmtRef.current = true;
     const isNative = isSol(fromToken) ? fromToken.mint === WSOL_MINT : isNativeEvmFrom;
-    const dec = Math.min(typeof fromToken.decimals === 'number' ? fromToken.decimals : 6, 9);
-    let amount = fromBalanceDisplay * (pct / 100);
+    const dec      = Math.min(typeof fromToken.decimals === 'number' ? fromToken.decimals : 6, 9);
+    let amount     = fromBalanceDisplay * (pct / 100);
     if (pct === 100) {
       if (isSol(fromToken) && fromToken.mint === WSOL_MINT) {
         amount = maxSafeSolBalance(solBalanceLamports);
@@ -1884,9 +1978,7 @@ export default function SwapWidget({
     userTouchedAmtRef.current = false;
   }, [fromToken, toToken]);
 
-  /* ============================================================================
-   * EXECUTE SWAP -- Jupiter or 0x AllowanceHolder only
-   * ========================================================================= */
+  /* -- EXECUTE SWAP (Jupiter input-side fee / 0x AllowanceHolder output fee) -- */
   const executeSwap = useCallback(async () => {
     if (!walletConnected) {
       setPendingSwap(true);
@@ -1901,48 +1993,49 @@ export default function SwapWidget({
       return;
     }
 
-    if (swapStatusTimerRef.current) {
-      clearTimeout(swapStatusTimerRef.current);
-      swapStatusTimerRef.current = null;
-    }
+    if (swapStatusTimerRef.current) { clearTimeout(swapStatusTimerRef.current); swapStatusTimerRef.current = null; }
     setSwapStatus('loading'); setSwapError(''); setSwapTx(null);
 
     try {
       const fromAmtRaw = toRawAmount(fromAmt, fromToken.decimals);
-      if (!fromAmtRaw || fromAmtRaw === '0') {
-        throw new Error('Invalid amount');
-      }
+      if (!fromAmtRaw || fromAmtRaw === '0') throw new Error('Invalid amount');
 
       if (route === 'jupiter') {
         if (!publicKey) throw new Error('Connect a Solana wallet');
 
-        /* Always derive the fee ATA. We will create it atomically inside
-         * the swap transaction below, so it does not matter whether it
-         * already exists on-chain. */
-        const outputMintPk = new PublicKey(toToken.mint);
-        const feeWalletPk  = new PublicKey(SOL_FEE_WALLET);
-        const feeAta       = await getAssociatedTokenAddress(outputMintPk, feeWalletPk);
-        const feeAtaParam  = feeAta.toBase58();
+        const inputMintPk   = new PublicKey(fromToken.mint);
+        const feeWalletPk   = new PublicKey(SOL_FEE_WALLET);
+        const isNativeInput = fromToken.mint === WSOL_MINT;
+
+        /*
+         * Fee math in BigInt to avoid float precision loss on large amounts.
+         * feeRaw  = floor(fromAmtRaw * 5%)
+         * swapRaw = fromAmtRaw - feeRaw  (exactly 95% of input)
+         */
+        const feeRaw  = BigInt(fromAmtRaw) * BigInt(JUPITER_INPUT_FEE_BPS) / 10000n;
+        const swapRaw = BigInt(fromAmtRaw) - feeRaw;
+        if (swapRaw <= 0n) throw new Error('Amount too small after fee');
 
         const freshQuote = await fetchJupiterQuote({
           inputMint:  fromToken.mint,
           outputMint: toToken.mint,
-          amountRaw:  fromAmtRaw,
+          amountRaw:  swapRaw.toString(), // 95% of input; no platformFeeBps
           slipBps:    Math.round(slip * 100),
         });
 
         const ixData = await fetchJupiterSwapInstructions({
           quoteResponse: freshQuote,
           userPublicKey: publicKey.toString(),
-          feeAccount:    feeAtaParam,
+          // no feeAccount -- platformFeeBps is 0 in the quote
         });
 
         const jupTx = await buildJupiterSwapTransaction({
           connection,
-          userPubkey: publicKey,
-          outputMint: outputMintPk,
-          feeWallet:  feeWalletPk,
-          feeAta,
+          userPubkey:     publicKey,
+          inputMint:      inputMintPk,
+          isNativeInput,
+          feeWalletPk,
+          feeRaw,         // 5% of input, transferred to fee wallet inside the tx
           ixData,
         });
 
@@ -1955,24 +2048,22 @@ export default function SwapWidget({
           { signature: sig, blockhash: bh, lastValidBlockHeight: lvbh },
           'confirmed'
         ).catch(() => {});
-      }
 
-      else if (route === '0x') {
+      } else if (route === '0x') {
         if (!effectiveEvmAddress || !walletClientRef.current) throw new Error('Connect an EVM wallet');
-        if (evmChainId && evmChainId !== fromToken.chainId) {
-          await ensureChain(fromToken.chainId);
-        }
+        if (evmChainId && evmChainId !== fromToken.chainId) await ensureChain(fromToken.chainId);
+
         const wc = walletClientRef.current;
         const pc = publicClientRef.current;
         if (!wc) throw new Error('Wallet not ready - try again');
 
         const freshOx = await fetchOxQuote({
-          chainId:     fromToken.chainId,
-          sellToken:   fromToken.address,
-          buyToken:    toToken.address,
-          sellAmount:  fromAmtRaw,
-          taker:       effectiveEvmAddress,
-          slipBps:     Math.round(slip * 100),
+          chainId:      fromToken.chainId,
+          sellToken:    fromToken.address,
+          buyToken:     toToken.address,
+          sellAmount:   fromAmtRaw,
+          taker:        effectiveEvmAddress,
+          slipBps:      Math.round(slip * 100),
           feeRecipient: EVM_FEE_WALLET,
           feeToken:     toToken.address,
         });
@@ -1980,21 +2071,22 @@ export default function SwapWidget({
         const tx = freshOx.transaction;
         if (!tx || !tx.to || !tx.data) throw new Error('0x: incomplete transaction');
 
-        /* AllowanceHolder approval check. issues.allowance.spender is the
-         * AllowanceHolder contract address; only required for non-native
-         * sell tokens (native ETH/POL/etc. doesn't need approval). */
+        /*
+         * AllowanceHolder approval check. issues.allowance.spender is the
+         * AllowanceHolder contract; only required for non-native sell tokens.
+         */
         if (!isNativeEvmFrom) {
           const allowanceInfo = freshOx.issues && freshOx.issues.allowance;
-          const spender = allowanceInfo && allowanceInfo.spender;
-          const need = safeBigInt(fromAmtRaw);
-          let have = safeBigInt(0);
+          const spender       = allowanceInfo && allowanceInfo.spender;
+          const need          = safeBigInt(fromAmtRaw);
+          let have            = safeBigInt(0);
           if (spender && pc) {
             try {
               const onchain = await pc.readContract({
                 address: fromToken.address,
                 abi: [{
                   name: 'allowance', type: 'function', stateMutability: 'view',
-                  inputs: [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }],
+                  inputs:  [{ name: 'owner', type: 'address' }, { name: 'spender', type: 'address' }],
                   outputs: [{ name: '', type: 'uint256' }],
                 }],
                 functionName: 'allowance',
@@ -2023,14 +2115,12 @@ export default function SwapWidget({
           gas:   tx.gas ? safeBigInt(tx.gas) : undefined,
         });
         setSwapTx(hash);
-      }
 
-      else {
+      } else {
         throw new Error(unsupportedMsg || 'This pair is not supported.');
       }
 
       saveLastPair(fromToken, toToken);
-
       setSwapStatus('success');
       setFromAmt(''); setQuote(null); setQuoteIsStale(false);
       userTouchedAmtRef.current = false;
@@ -2038,6 +2128,7 @@ export default function SwapWidget({
         setSwapStatus('idle'); setSwapTx(null);
         swapStatusTimerRef.current = null;
       }, 6000);
+
     } catch (e) {
       console.error('[SwapWidget] swap error:', e);
       setSwapError(e.message || 'Swap failed');
@@ -2055,10 +2146,7 @@ export default function SwapWidget({
 
   useEffect(() => {
     if (!walletConnected || !pendingSwap) return undefined;
-    const t = setTimeout(() => {
-      setPendingSwap(false);
-      executeSwap();
-    }, 250);
+    const t = setTimeout(() => { setPendingSwap(false); executeSwap(); }, 250);
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletConnected, pendingSwap]);
@@ -2067,41 +2155,53 @@ export default function SwapWidget({
     if (!swapTx) return null;
     if (route === 'jupiter') return 'https://solscan.io/tx/' + swapTx;
     const exp = {
-      1: 'etherscan.io', 10: 'optimistic.etherscan.io', 56: 'bscscan.com',
-      130: 'uniscan.xyz', 137: 'polygonscan.com', 146: 'sonicscan.org',
-      324: 'explorer.zksync.io', 2741: 'abscan.org', 5000: 'mantlescan.xyz',
-      8453: 'basescan.org', 34443: 'modescan.io', 42161: 'arbiscan.io',
-      43114: 'snowtrace.io', 57073: 'explorer.inkonchain.com',
-      59144: 'lineascan.build', 80094: 'beratrail.io', 81457: 'blastscan.io',
-      534352: 'scrollscan.com', 1101: 'zkevm.polygonscan.com',
+      1:      'etherscan.io',
+      10:     'optimistic.etherscan.io',
+      56:     'bscscan.com',
+      130:    'uniscan.xyz',
+      137:    'polygonscan.com',
+      146:    'sonicscan.org',
+      324:    'explorer.zksync.io',
+      2741:   'abscan.org',
+      5000:   'mantlescan.xyz',
+      8453:   'basescan.org',
+      34443:  'modescan.io',
+      42161:  'arbiscan.io',
+      43114:  'snowtrace.io',
+      57073:  'explorer.inkonchain.com',
+      59144:  'lineascan.build',
+      80094:  'beratrail.io',
+      81457:  'blastscan.io',
+      534352: 'scrollscan.com',
+      1101:   'zkevm.polygonscan.com',
     }[fromToken.chainId];
     if (!exp) return null;
     return 'https://' + exp + '/tx/' + swapTx;
   }, [swapTx, route, fromToken]);
 
-  /* ============================================================================
-   * RENDER
-   * ========================================================================= */
+  /* -- RENDER -- */
 
-  const showBuyPresets  = modeProp === 'buy' || (
+  const showBuyPresets = modeProp === 'buy' || (
     modeProp === 'swap' && fromToken &&
-    /^(SOL|ETH|BNB|POL|AVAX|MNT|FTM|CRO|GLMR|CELO|SEI|RON|FUSE|KCS|HYPE|YALA|BERA|APE|FLOW|KAVA|S|CORE|MON|XPL|FLR|METIS|KAIA|USDC|USDT|DAI|USDE|TUSD|FRAX|USDP|GUSD)$/i.test(fromToken.symbol)
+    /^(SOL|ETH|BNB|POL|AVAX|MNT|FTM|CRO|GLMR|CELO|SEI|RON|FUSE|KCS|HYPE|YALA|BERA|APE|FLOW|KAVA|S|CORE|MON|XPL|FLR|METIS|KAIA|USDC|USDT|DAI|USDE|TUSD|FRAX|USDP|GUSD)$/i
+      .test(fromToken.symbol)
   );
   const showSellPresets = modeProp === 'sell';
 
   const fromUsdValue = fromAmt && fromPriceUsd > 0 ? parseFloat(fromAmt) * fromPriceUsd : 0;
   const toUsdValue   = quote && toPriceUsd > 0 ? parseFloat(quote.outAmountDisplay) * toPriceUsd : 0;
 
-  const needsSol = route === 'jupiter';
-  const needsEvm = route === '0x';
+  const needsSol       = route === 'jupiter';
+  const needsEvm       = route === '0x';
   const hasNeededWallet = (needsSol && hasSolSigner) || (needsEvm && hasEvmSigner);
 
-  const isPreview = !!(quote && quote.preview);
-  const toDisplay = quote ? (isPreview ? '~' + quote.outAmountDisplay : quote.outAmountDisplay)
+  const isPreview  = !!(quote && quote.preview);
+  const toDisplay  = quote
+    ? (isPreview ? '~' + quote.outAmountDisplay : quote.outAmountDisplay)
     : (quoteLoading ? '...' : '0.00');
-  const toColor = quoteIsStale ? C.muted
-    : quoteLoading && !quote ? C.muted
-    : quote ? C.green
+  const toColor    = quoteIsStale                ? C.muted
+    : quoteLoading && !quote                     ? C.muted
+    : quote                                      ? C.green
     : C.muted2;
 
   return (
@@ -2109,14 +2209,15 @@ export default function SwapWidget({
       {!compact && (
         <div style={{ marginBottom: 16 }}>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Swap</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Solana &amp; major EVM chains. No KYC.</p>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Solana & major EVM chains. No KYC.</p>
         </div>
       )}
 
       <div style={{
         background: compact ? 'transparent' : C.card,
-        border: compact ? 'none' : '1px solid ' + C.border,
-        borderRadius: compact ? 0 : 18, padding: compact ? 0 : 18,
+        border:     compact ? 'none' : '1px solid ' + C.border,
+        borderRadius: compact ? 0 : 18,
+        padding:    compact ? 0 : 18,
       }}>
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
@@ -2190,17 +2291,23 @@ export default function SwapWidget({
               <ChainBadge token={fromToken} />
               <span style={{ color: C.muted, fontSize: 9 }}>v</span>
             </button>
-            <input value={fromAmt} onChange={(e) => {
-              userTouchedAmtRef.current = true;
-              let v = e.target.value.replace(/[^0-9.]/g, '');
-              const dotIdx = v.indexOf('.');
-              if (dotIdx >= 0) v = v.slice(0, dotIdx + 1) + v.slice(dotIdx + 1).replace(/\./g, '');
-              setFromAmt(v);
-            }} placeholder="0.00" inputMode="decimal" style={{
-              flex: 1, background: 'transparent', border: 'none',
-              fontSize: 22, fontWeight: 500, color: '#fff', textAlign: 'right',
-              outline: 'none', minWidth: 0, fontFamily: 'JetBrains Mono, monospace',
-            }} />
+            <input
+              value={fromAmt}
+              onChange={(e) => {
+                userTouchedAmtRef.current = true;
+                let v = e.target.value.replace(/[^0-9.]/g, '');
+                const dotIdx = v.indexOf('.');
+                if (dotIdx >= 0) v = v.slice(0, dotIdx + 1) + v.slice(dotIdx + 1).replace(/\./g, '');
+                setFromAmt(v);
+              }}
+              placeholder="0.00"
+              inputMode="decimal"
+              style={{
+                flex: 1, background: 'transparent', border: 'none',
+                fontSize: 22, fontWeight: 500, color: '#fff', textAlign: 'right',
+                outline: 'none', minWidth: 0, fontFamily: 'JetBrains Mono, monospace',
+              }}
+            />
             {fromBalanceDisplay != null && fromBalanceDisplay > 0 && (
               <button onClick={onMax} style={{
                 background: 'rgba(0,229,255,.12)', border: '1px solid rgba(0,229,255,.25)',
@@ -2245,8 +2352,7 @@ export default function SwapWidget({
             </button>
             <div style={{
               flex: 1, textAlign: 'right', fontSize: 22, fontWeight: 500, minWidth: 0,
-              color: toColor,
-              fontFamily: 'JetBrains Mono, monospace',
+              color: toColor, fontFamily: 'JetBrains Mono, monospace',
               opacity: quoteIsStale ? 0.5 : 1,
               transition: 'opacity .15s, color .15s',
             }}>
@@ -2261,20 +2367,14 @@ export default function SwapWidget({
         </div>
 
         {isPreview && (
-          <div style={{
-            marginTop: 6, fontSize: 11, color: C.muted,
-            textAlign: 'right', fontStyle: 'italic',
-          }}>
+          <div style={{ marginTop: 6, fontSize: 11, color: C.muted, textAlign: 'right', fontStyle: 'italic' }}>
             Estimated &middot; live route on confirm
           </div>
         )}
 
         {!quote && !quoteError && fromAmt && parseFloat(fromAmt) > 0 &&
          (!(fromPriceUsd > 0) || !(toPriceUsd > 0)) && (
-          <div style={{
-            marginTop: 6, fontSize: 11, color: C.muted,
-            textAlign: 'right', fontStyle: 'italic',
-          }}>
+          <div style={{ marginTop: 6, fontSize: 11, color: C.muted, textAlign: 'right', fontStyle: 'italic' }}>
             Live route on confirm
           </div>
         )}
@@ -2298,8 +2398,8 @@ export default function SwapWidget({
         {quote && fromAmt && (
           <div style={{ marginTop: 12, background: '#050912', borderRadius: 10, padding: 12 }}>
             {[
-              ['Platform fee', fromUsdValue > 0 ? fmtUsd(fromUsdValue * PLATFORM_FEE) : (PLATFORM_FEE * 100).toFixed(0) + '%'],
-              ['Anti-MEV / safety', fromUsdValue > 0 ? fmtUsd(fromUsdValue * SAFETY_FEE) : (SAFETY_FEE * 100).toFixed(0) + '%'],
+              ['Platform fee',        fromUsdValue > 0 ? fmtUsd(fromUsdValue * PLATFORM_FEE) : (PLATFORM_FEE * 100).toFixed(0) + '%'],
+              ['Anti-MEV / safety',   fromUsdValue > 0 ? fmtUsd(fromUsdValue * SAFETY_FEE)   : (SAFETY_FEE   * 100).toFixed(0) + '%'],
               quote.outAmountDisplay
                 ? ['Min received', (parseFloat(quote.outAmountDisplay) * (1 - slip / 100)).toFixed(6) + ' ' + (toToken && toToken.symbol)]
                 : null,
@@ -2372,7 +2472,8 @@ export default function SwapWidget({
                   </span>
                 </div>
               )}
-              <button onClick={executeSwap}
+              <button
+                onClick={executeSwap}
                 disabled={swapStatus === 'loading' || !fromAmt}
                 style={{
                   width: '100%', marginTop: 14, padding: 16, borderRadius: 12, border: 'none',
@@ -2380,11 +2481,12 @@ export default function SwapWidget({
                     : swapStatus === 'error' ? 'rgba(255,59,107,.2)'
                     : !fromAmt ? C.card2
                     : modeProp === 'sell' ? C.sellGrad : C.buyGrad,
-                  color: !fromAmt ? C.muted2 : swapStatus === 'error' ? C.red : '#fff',
+                  color:  !fromAmt ? C.muted2 : swapStatus === 'error' ? C.red : '#fff',
                   fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
                   cursor: swapStatus === 'loading' ? 'not-allowed' : 'pointer',
                   minHeight: 52, transition: 'all .2s',
-                }}>
+                }}
+              >
                 {swapStatus === 'loading' ? 'Confirming...'
                   : swapStatus === 'success' ? 'Confirmed!'
                   : swapStatus === 'error' ? 'Failed - try again'
@@ -2426,19 +2528,13 @@ export default function SwapWidget({
       <TokenSelectModal
         open={fromSelectOpen}
         onClose={() => setFromSelectOpen(false)}
-        onSelect={(t) => {
-          setFromToken(t);
-          setQuote(null); setQuoteError(''); setQuoteIsStale(false);
-        }}
+        onSelect={(t) => { setFromToken(t); setQuote(null); setQuoteError(''); setQuoteIsStale(false); }}
         jupiterTokens={jupiterTokens}
       />
       <TokenSelectModal
         open={toSelectOpen}
         onClose={() => setToSelectOpen(false)}
-        onSelect={(t) => {
-          setToToken(t);
-          setQuote(null); setQuoteError(''); setQuoteIsStale(false);
-        }}
+        onSelect={(t) => { setToToken(t); setQuote(null); setQuoteError(''); setQuoteIsStale(false); }}
         jupiterTokens={jupiterTokens}
       />
       <PresetEditor
@@ -2451,9 +2547,7 @@ export default function SwapWidget({
   );
 }
 
-/* ============================================================================
- * TRADE DRAWER
- * ========================================================================= */
+/* -- TRADE DRAWER ----------------------------------------------------------- */
 
 export function TradeDrawer({
   open, onClose, mode = 'buy', coin,
@@ -2479,7 +2573,7 @@ export function TradeDrawer({
   }, [normalizedCoin, mode, solConnected, evmConnected, evmChainId]);
 
   const widgetKey = useMemo(() => {
-    const c = normalizedCoin || coin;
+    const c  = normalizedCoin || coin;
     const id = c ? (c.mint || c.address || c.id || 'tok') : 'none';
     return id + '-' + mode;
   }, [normalizedCoin, coin, mode]);
@@ -2498,9 +2592,10 @@ export function TradeDrawer({
   useEscapeKey(open, safeClose);
 
   if (!open) return null;
-  const symbol = (normalizedCoin && normalizedCoin.symbol) || (coin && coin.symbol) || '';
+
+  const symbol      = (normalizedCoin && normalizedCoin.symbol) || (coin && coin.symbol) || '';
   const symbolUpper = symbol ? symbol.toUpperCase() : '';
-  const headerImg = (normalizedCoin && (normalizedCoin.logoURI || normalizedCoin.image))
+  const headerImg   = (normalizedCoin && (normalizedCoin.logoURI || normalizedCoin.image))
     || (coin && (coin.image || coin.logoURI));
 
   return (
@@ -2522,9 +2617,12 @@ export function TradeDrawer({
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
               {headerImg && (
-                <img src={headerImg} alt={symbolUpper}
+                <img
+                  src={headerImg}
+                  alt={symbolUpper}
                   style={{ width: 28, height: 28, borderRadius: '50%' }}
-                  onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+                  onError={(e) => { e.currentTarget.style.display = 'none'; }}
+                />
               )}
               <div style={{ color: mode === 'buy' ? C.accent : C.red, fontWeight: 800, fontSize: 17 }}>
                 {mode === 'buy' ? 'Buy' : 'Sell'} {symbolUpper}
