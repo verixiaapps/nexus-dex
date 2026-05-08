@@ -1,6 +1,3 @@
-Here's Markets. Clean, fast, DexScreener search. Replace your file:
-
-```js
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 
 const C = {
