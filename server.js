@@ -2,15 +2,17 @@
  * NEXUS DEX - Backend Proxy Server
  *
  * Active routes:
- * /api/okx/*             - OKX DEX aggregator + quote/token data
- * /api/jupiter/quote     - Jupiter Solana quote fallback
- * /api/jupiter/swap      - Jupiter Solana swap fallback
- * /api/pumpportal/*      - PumpPortal trade-local
- * /api/helius/das        - Helius DAS getAsset / Solana metadata fallback
- * /api/solana-rpc        - Solana RPC proxy
- * /api/pinata/json       - Pinata pinJSONToIPFS
- * /api/pinata/file       - Pinata pinFileToIPFS
- * /api/health            - healthcheck
+ * /api/okx/*                        - OKX DEX aggregator + quote/token data
+ * /api/jupiter/quote                - Jupiter Solana quote fallback
+ * /api/jupiter/swap                 - Jupiter Solana swap fallback
+ * /api/jupiter/tokens/v2/toporganicscore/:timeframe - Jupiter top tokens
+ * /api/jupiter/tokens/v2/tag        - Jupiter token registry
+ * /api/pumpportal/*                 - PumpPortal trade-local
+ * /api/helius/das                   - Helius DAS getAsset / Solana metadata fallback
+ * /api/solana-rpc                   - Solana RPC proxy
+ * /api/pinata/json                  - Pinata pinJSONToIPFS
+ * /api/pinata/file                  - Pinata pinFileToIPFS
+ * /api/health                       - healthcheck
  *
  * Removed:
  * /api/0x/*
@@ -68,6 +70,7 @@ const CSP_DIRECTIVES = [
     'https://quote-api.jup.ag',
     'https://lite-api.jup.ag',
     'https://api.jup.ag',
+    'https://token.jup.ag',
     'https://pumpportal.fun',
     'wss://pumpportal.fun',
     'https://api.dexscreener.com',
@@ -85,8 +88,6 @@ const CSP_DIRECTIVES = [
     'wss://*.walletconnect.org',
     'wss://www.walletlink.org',
     'https://api.mainnet-beta.solana.com',
-    'https://api.devnet.solana.com',
-    'https://api.testnet.solana.com',
     'https://mainnet.helius-rpc.com',
     'https://*.helius-rpc.com',
     'https://api.pinata.cloud',
@@ -423,6 +424,37 @@ app.post('/api/jupiter/swap', async (req, res) => {
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
+/* -- JUPITER TOKEN PROXY (markets + registry) ------------------------------ */
+app.get('/api/jupiter/tokens/v2/toporganicscore/:timeframe', async (req, res) => {
+  try {
+    const url = `https://lite-api.jup.ag/tokens/v2/toporganicscore/${req.params.timeframe || '24h'}${buildForwardedQuery(req)}`;
+    const cached = getCachedJson(url);
+    if (cached) return res.status(cached.status).json(cached.payload);
+    const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 12_000);
+    const result = await safeJson(response);
+    if (response.ok && result.parsed) setCachedJson(url, response.status, result.parsed, 30_000);
+    return respondJsonOrError(res, response, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Jupiter tokens request timed out' });
+    logError('jupiter-tokens', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+app.get('/api/jupiter/tokens/v2/tag', async (req, res) => {
+  try {
+    const url = `https://token.jup.ag/tokens/v2/tag${buildForwardedQuery(req)}`;
+    const cached = getCachedJson(url);
+    if (cached) return res.status(cached.status).json(cached.payload);
+    const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 12_000);
+    const result = await safeJson(response);
+    if (response.ok && result.parsed) setCachedJson(url, response.status, result.parsed, 300_000);
+    return respondJsonOrError(res, response, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Jupiter registry request timed out' });
+    logError('jupiter-registry', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
 /* -- PUMPPORTAL PROXY ------------------------------------------------------- */
 app.post('/api/pumpportal/trade-local', async (req, res) => {
   try {
@@ -597,6 +629,8 @@ app.get('/api/health', (req, res) => {
       okx: true,
       jupiterQuote: JUPITER_ENABLED,
       jupiterSwap: JUPITER_ENABLED,
+      jupiterTokens: true,
+      jupiterRegistry: true,
       pumpportal: true,
       helius: true,
       solanaRpc: true,
