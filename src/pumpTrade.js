@@ -4,7 +4,7 @@
  * Used by:
  *   - NewLaunches.js TokenCard one-click preset buttons
  *
- * Behavior:
+ * Behavior: 
  *   - Calls our backend proxy: /api/pumpportal/trade-local
  *   - Backend forwards to PumpPortal trade-local
  *   - Receives serialized VersionedTransaction
