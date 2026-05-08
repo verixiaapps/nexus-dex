@@ -5,7 +5,7 @@ import {
   PublicKey, SystemProgram, LAMPORTS_PER_SOL,
   TransactionMessage, VersionedTransaction, Keypair,
 } from '@solana/web3.js';
-import { 
+import {
   Raydium, LAUNCHPAD_PROGRAM, TxVersion, getPdaLaunchpadConfigId,
 } from '@raydium-io/raydium-sdk-v2';
 import {
@@ -16,13 +16,17 @@ import {
 } from '@solana/spl-token';
 import BN from 'bn.js';
 
-// PATCHED: Jupiter price v2 (deprecated) -> /api/jupiter/price/v3 proxy.
-// Direct PumpPortal call stays (approved on-ramp, CSP allows pumpportal.fun).
-// Pinata remains via /api/pinata/* proxies.
+// NEXUS DEX launch stack:
+// - Raydium LaunchLab for Raydium launches
+// - PumpPortal through /api/pumpportal/trade-local for Pump.fun launches
+// - OKX quote proxy for SOL/USD pricing
+// - Pinata proxies for metadata/images
+// Removed: Jupiter, 0x, LiFi, CoinGecko, GeckoTerminal, DexScreener.
 
 const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const LAUNCH_FEE_SOL = 0.5;
 const PLATFORM_ID = process.env.REACT_APP_PLATFORM_ID || null;
+const USDC_SOLANA = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -44,6 +48,37 @@ function Input({ value, onChange, placeholder, mono }) {
   return <input value={value} onChange={onChange} placeholder={placeholder} style={{ width: '100%', background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '12px 14px', color: '#fff', fontSize: 13, outline: 'none', fontFamily: mono ? 'monospace' : 'Syne, sans-serif' }} />;
 }
 
+async function getSolPriceUsdFromOkx() {
+  var params = new URLSearchParams({
+    chainIndex: '501',
+    fromTokenAddress: NATIVE_MINT.toBase58(),
+    toTokenAddress: USDC_SOLANA,
+    amount: String(LAMPORTS_PER_SOL),
+    slippage: '0.005',
+  });
+
+  var res = await fetch('/api/okx/dex/aggregator/quote?' + params.toString());
+  if (!res.ok) throw new Error('Could not fetch SOL price from OKX');
+
+  var data = await res.json();
+  var quote = data && Array.isArray(data.data) ? data.data[0] : null;
+  if (!quote) throw new Error('Invalid OKX quote response');
+
+  var toAmount = Number(quote.toTokenAmount || quote.toTokenAmountMin || 0);
+  var toDecimals = 6;
+
+  if (quote.toToken && quote.toToken.decimal != null) {
+    toDecimals = Number(quote.toToken.decimal);
+  } else if (quote.toToken && quote.toToken.decimals != null) {
+    toDecimals = Number(quote.toToken.decimals);
+  }
+
+  var price = toAmount / Math.pow(10, Number.isFinite(toDecimals) ? toDecimals : 6);
+  if (!Number.isFinite(price) || price <= 0) throw new Error('Invalid SOL price from OKX');
+
+  return price;
+}
+
 async function uploadMetadata(name, symbol, description, imageUri) {
   var metadata = { name: name, symbol: symbol, description: description || '', image: imageUri || '', showName: true };
   try {
@@ -53,7 +88,7 @@ async function uploadMetadata(name, symbol, description, imageUri) {
     });
     if (res.ok) {
       var data = await res.json();
-      if (data && data.url)      return data.url;
+      if (data && data.url) return data.url;
       if (data && data.ipfsHash) return 'https://ipfs.io/ipfs/' + data.ipfsHash;
     }
   } catch (e) {}
@@ -69,7 +104,7 @@ async function uploadImage(file) {
     var res = await fetch('/api/pinata/file', { method: 'POST', body: fd });
     if (res.ok) {
       var data = await res.json();
-      if (data && data.url)      return data.url;
+      if (data && data.url) return data.url;
       if (data && data.ipfsHash) return 'https://ipfs.io/ipfs/' + data.ipfsHash;
     }
   } catch (e) {}
@@ -90,11 +125,6 @@ async function getActiveLaunchpadConfig(raydium) {
   return getPdaLaunchpadConfigId(LAUNCHPAD_PROGRAM, NATIVE_MINT, 0, 0).publicKey;
 }
 
-// FEE COLLECTION (locked rule: ONE tx, ONE signature).
-// Take Raydium's launch VersionedTransaction, decompile its message,
-// append a SystemProgram.transfer for the 0.5 SOL platform fee,
-// recompile to V0. Caller must re-sign with mintKeypair (extra signer)
-// and the user wallet. Atomic: failed launch -> no fee charged.
 async function bundleFeeIntoLaunchTx(connection, rawTx, payerPubkey, feeLamports) {
   var lookupTableAccounts = [];
   var lookups = (rawTx.message && rawTx.message.addressTableLookups) || [];
@@ -141,9 +171,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
 
   const signAllTransactions = useCallback(async function (txs) {
     if (activeWalletKind === 'privy' && privyEmbeddedSol) {
-      if (typeof privyEmbeddedSol.signAllTransactions === 'function') {
-        return privyEmbeddedSol.signAllTransactions(txs);
-      }
+      if (typeof privyEmbeddedSol.signAllTransactions === 'function') return privyEmbeddedSol.signAllTransactions(txs);
       if (typeof privyEmbeddedSol.signTransaction === 'function') {
         const out = [];
         for (let i = 0; i < txs.length; i++) {
@@ -193,12 +221,16 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       else setError('Connect Solana wallet first');
       return;
     }
+
     var supplyStr = form.supply.trim();
     if (!supplyStr || isNaN(Number(supplyStr)) || Number(supplyStr) < 10000000) {
-      setError('Supply must be at least 10,000,000'); return;
+      setError('Supply must be at least 10,000,000');
+      return;
     }
 
-    setLaunching(true); setError(''); setStatus('');
+    setLaunching(true);
+    setError('');
+    setStatus('');
 
     try {
       setStatus('Uploading image...');
@@ -245,12 +277,8 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       var extInfo = result.extInfo;
 
       var rawTxs = result.transactions || (result.transaction ? [result.transaction] : null);
-      if (!rawTxs || !rawTxs.length) {
-        throw new Error('Raydium SDK did not return a transaction to sign');
-      }
-      if (rawTxs.length > 1) {
-        throw new Error('Unexpected multi-transaction launch -- aborting to protect fee collection');
-      }
+      if (!rawTxs || !rawTxs.length) throw new Error('Raydium SDK did not return a transaction to sign');
+      if (rawTxs.length > 1) throw new Error('Unexpected multi-transaction launch -- aborting to protect fee collection');
 
       setStatus('Bundling platform fee into launch tx...');
       var feeLamports = Math.round(LAUNCH_FEE_SOL * LAMPORTS_PER_SOL);
@@ -277,13 +305,13 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
 
       setLaunched({
         mint: mintAddress, poolId: poolId,
+        platform: 'raydium',
         name: form.name, symbol: form.symbol,
         image: imagePreview || imageUri,
         txid: sig,
       });
       setStep(4);
       setStatus('success');
-
     } catch (e) {
       console.error('Launch error:', e);
       setError(e.message || 'Launch failed -- no SOL was charged');
@@ -292,10 +320,6 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
     setLaunching(false);
   }, [publicKey, signTransaction, signAllTransactions, connection, form, imageFile, imagePreview, loginPrivy, onConnectWallet]);
 
-  // doPumpLaunch -- Pump.fun bonding curve launch via PumpPortal.
-  // Fee: $30 USD-equivalent SOL + 1% supply skim (9.5M conservative floor),
-  // both bundled atomically into the create+initialBuy tx. Failed tx ->
-  // Solana atomicity guarantees nothing charged, no tokens moved.
   var doPumpLaunch = useCallback(async function () {
     if (!publicKey || !signTransaction) {
       setPendingLaunch('pumpfun');
@@ -305,7 +329,9 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       return;
     }
 
-    setLaunching(true); setError(''); setStatus('');
+    setLaunching(true);
+    setError('');
+    setStatus('');
 
     try {
       setStatus('Uploading image...');
@@ -318,34 +344,21 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       setStatus('Uploading metadata...');
       var metadataUri = await uploadMetadata(form.name, form.symbol, form.description, imageUri);
 
-      // PATCHED: Jupiter price v2 (deprecated) -> v3 via /api/jupiter proxy.
-      // v3 response shape: { "<mint>": { "usdPrice": number, ... } }
-      // (no .data wrapper, field renamed from price to usdPrice).
       setStatus('Fetching SOL price...');
-      var SOL_MINT = 'So11111111111111111111111111111111111111112';
-      var solPriceUsd = 0;
-      try {
-        var priceRes = await fetch('/api/jupiter/price/v3?ids=' + SOL_MINT);
-        var priceData = await priceRes.json();
-        if (priceData && priceData[SOL_MINT]) {
-          solPriceUsd = parseFloat(priceData[SOL_MINT].usdPrice) || 0;
-        }
-      } catch (e) {}
-      if (!solPriceUsd || solPriceUsd <= 0) {
-        throw new Error('Could not fetch SOL price for fee calculation');
-      }
+      var solPriceUsd = await getSolPriceUsdFromOkx();
+
       var FEE_USD = 30;
       var feeLamports = Math.floor((FEE_USD / solPriceUsd) * LAMPORTS_PER_SOL);
       if (feeLamports <= 0) throw new Error('Fee calculation failed');
 
-      var INITIAL_BUY_SOL    = 0.30;
-      var SKIM_TOKENS_HUMAN  = 9_500_000;
-      var PUMP_DECIMALS      = 6;
-      var SLIPPAGE_PCT       = 10;
+      var INITIAL_BUY_SOL = 0.30;
+      var SKIM_TOKENS_HUMAN = 9_500_000;
+      var PUMP_DECIMALS = 6;
+      var SLIPPAGE_PCT = 10;
       var skimAmountBaseUnits = BigInt(SKIM_TOKENS_HUMAN) * BigInt(10) ** BigInt(PUMP_DECIMALS);
 
       var mintKeypair = Keypair.generate();
-      var mintPk      = mintKeypair.publicKey;
+      var mintPk = mintKeypair.publicKey;
 
       setStatus('Creating token on Pump.fun...');
       var createBody = {
@@ -366,24 +379,25 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       if (form.twitter) createBody.tokenMetadata.twitter = form.twitter;
       if (form.website) createBody.tokenMetadata.website = form.website;
 
-      var createRes = await fetch('https://pumpportal.fun/api/trade-local', {
+      var createRes = await fetch('/api/pumpportal/trade-local', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(createBody),
       });
+
       if (!createRes.ok) {
         var txt = await createRes.text();
         throw new Error('PumpPortal error ' + createRes.status + ': ' + (txt || '').slice(0, 200));
       }
+
       var txBytes = await createRes.arrayBuffer();
-      if (!txBytes || txBytes.byteLength === 0) {
-        throw new Error('PumpPortal returned empty transaction');
-      }
+      if (!txBytes || txBytes.byteLength === 0) throw new Error('PumpPortal returned empty transaction');
+
       var createTx = VersionedTransaction.deserialize(new Uint8Array(txBytes));
 
       var feeWalletPk = new PublicKey(SOL_FEE_WALLET);
-      var userAta     = await getAssociatedTokenAddress(mintPk, publicKey);
-      var feeAta      = await getAssociatedTokenAddress(mintPk, feeWalletPk);
+      var userAta = await getAssociatedTokenAddress(mintPk, publicKey);
+      var feeAta = await getAssociatedTokenAddress(mintPk, feeWalletPk);
 
       setStatus('Bundling fee + 1% supply skim...');
       var lookupTableAccounts = [];
@@ -396,19 +410,23 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
         }));
         lookupTableAccounts = resolved.filter(Boolean);
       }
+
       var decompiled = TransactionMessage.decompile(createTx.message, {
         addressLookupTableAccounts: lookupTableAccounts,
       });
+
       decompiled.instructions.push(
         createAssociatedTokenAccountIdempotentInstruction(
           publicKey, feeAta, feeWalletPk, mintPk,
         ),
       );
+
       decompiled.instructions.push(
         createTransferInstruction(
           userAta, feeAta, publicKey, skimAmountBaseUnits,
         ),
       );
+
       decompiled.instructions.push(
         SystemProgram.transfer({
           fromPubkey: publicKey,
@@ -416,6 +434,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
           lamports: feeLamports,
         }),
       );
+
       var newMsg = decompiled.compileToV0Message(lookupTableAccounts);
       var bundledTx = new VersionedTransaction(newMsg);
 
@@ -447,7 +466,6 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       });
       setStep(4);
       setStatus('success');
-
     } catch (e) {
       console.error('Pump.fun launch error:', e);
       var msg = (e && e.message) || 'Pump.fun launch failed -- no SOL was charged';
@@ -465,7 +483,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
     var which = pendingLaunch;
     var t = setTimeout(function() {
       setPendingLaunch(null);
-      if (which === 'raydium')      doLaunch();
+      if (which === 'raydium') doLaunch();
       else if (which === 'pumpfun') doPumpLaunch();
     }, 200);
     return function() { clearTimeout(t); };
@@ -473,8 +491,12 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
 
   var resetForm = function() {
     setStep(1);
-    setForm({ name: '', symbol: '', description: '', imageUrl: '', website: '', twitter: '', supply: '1000000000', decimals: '6', });
-    setImageFile(null); setImagePreview(''); setLaunched(null); setStatus(''); setError('');
+    setForm({ name: '', symbol: '', description: '', imageUrl: '', website: '', twitter: '', supply: '1000000000', decimals: '6' });
+    setImageFile(null);
+    setImagePreview('');
+    setLaunched(null);
+    setStatus('');
+    setError('');
   };
 
   return (
@@ -617,9 +639,9 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
               ['Total Supply', parseInt(form.supply).toLocaleString() + ' ' + form.symbol],
               ['Decimals', form.decimals],
               ['Blockchain', 'Solana'],
-              ['Bonding Curve', 'Constant Product (LaunchLab)'],
-              ['Graduation Target', '85 SOL'],
-              ['After Graduation', 'Raydium CPMM Pool'],
+              ['Bonding Curve', platform === 'pumpfun' ? 'Pump.fun bonding curve' : 'Constant Product (LaunchLab)'],
+              ['Graduation Target', platform === 'pumpfun' ? 'Pump.fun graduation rules' : '85 SOL'],
+              ['After Graduation', platform === 'pumpfun' ? 'PumpSwap / Pump.fun ecosystem' : 'Raydium CPMM Pool'],
               form.description ? ['Description', form.description.slice(0, 80) + (form.description.length > 80 ? '...' : '')] : null,
             ].filter(Boolean).map(function(item) {
               return (
@@ -633,24 +655,34 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
 
           <div style={{ background: '#050912', border: '1px solid ' + C.border, borderRadius: 14, padding: 14, marginBottom: 12 }}>
             <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 10, letterSpacing: .8 }}>COST BREAKDOWN</div>
-            {[
-              ['Launch Fee', '0.5 SOL -- bundled in launch tx', true],
-              ['Raydium rent + tx fees', '~0.1 SOL', false],
-              ['Trading Fee (per swap)', '1.5%', false],
-              ['Protocol Fee', '0.25%', false],
-            ].map(function(item) {
+            {(platform === 'pumpfun'
+              ? [
+                  ['Platform Fee', '$30 USD-equivalent SOL -- bundled in launch tx', true],
+                  ['Initial Buy', '0.30 SOL', false],
+                  ['Supply Skim', '1% supply', false],
+                  ['PumpPortal / Pump.fun', 'Protocol fees may apply', false],
+                ]
+              : [
+                  ['Launch Fee', '0.5 SOL -- bundled in launch tx', true],
+                  ['Raydium rent + tx fees', '~0.1 SOL', false],
+                  ['Trading Fee (per swap)', '1.5%', false],
+                  ['Protocol Fee', '0.25%', false],
+                ]
+            ).map(function(item) {
               return (
                 <div key={item[0]} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 12 }}>
                   <span style={{ color: C.muted }}>{item[0]}</span>
-                  <span style={{ color: item[2] ? C.accent : C.text }}>{item[1]}</span>
+                  <span style={{ color: item[2] ? C.accent : C.text, textAlign: 'right' }}>{item[1]}</span>
                 </div>
               );
             })}
             <div style={{ marginTop: 10, padding: '8px 12px', background: 'rgba(0,255,163,.05)', border: '1px solid rgba(0,255,163,.15)', borderRadius: 8, fontSize: 11, color: C.green, lineHeight: 1.5 }}>
-              The 0.5 SOL fee is bundled into the same transaction as the launch -- one signature, atomic. If the launch fails for any reason, no fee is charged.
+              Fees are bundled into the same transaction as the launch -- one signature, atomic. If the launch fails for any reason, no platform fee is charged.
             </div>
             <div style={{ marginTop: 8, padding: '8px 12px', background: 'rgba(0,229,255,.05)', borderRadius: 8, fontSize: 11, color: C.muted, lineHeight: 1.5 }}>
-              Token launches on a bonding curve. Price rises as people buy. At 85 SOL raised, liquidity auto-migrates to Raydium permanently.
+              {platform === 'pumpfun'
+                ? 'Token launches through PumpPortal using Pump.fun trade-local. Your wallet signs the final transaction.'
+                : 'Token launches on a bonding curve. Price rises as people buy. At 85 SOL raised, liquidity auto-migrates to Raydium permanently.'}
             </div>
           </div>
 
@@ -716,13 +748,13 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
             </div>
           )}
           <div style={{ padding: '10px 14px', background: 'rgba(0,255,163,.06)', border: '1px solid rgba(0,255,163,.15)', borderRadius: 10, fontSize: 12, color: C.green, marginBottom: 16 }}>
-            Bonding curve is now active. Liquidity auto-migrates to Raydium at 85 SOL raised.
+            Bonding curve is now active. Your mint address is ready to share.
           </div>
           <div style={{ display: 'flex', gap: 10 }}>
             <a href={'https://solscan.io/token/' + launched.mint} target="_blank" rel="noreferrer"
               style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid rgba(0,229,255,.3)', background: 'transparent', color: C.accent, fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12, textAlign: 'center', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Solscan</a>
-            <a href={'https://raydium.io/launchpad/token/?mint=' + launched.mint} target="_blank" rel="noreferrer"
-              style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid rgba(0,229,255,.3)', background: 'transparent', color: C.accent, fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12, textAlign: 'center', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>Raydium</a>
+            <a href={launched.platform === 'pumpfun' ? ('https://pump.fun/' + launched.mint) : ('https://raydium.io/launchpad/token/?mint=' + launched.mint)} target="_blank" rel="noreferrer"
+              style={{ flex: 1, padding: 12, borderRadius: 10, border: '1px solid rgba(0,229,255,.3)', background: 'transparent', color: C.accent, fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12, textAlign: 'center', textDecoration: 'none', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{launched.platform === 'pumpfun' ? 'Pump.fun' : 'Raydium'}</a>
             <button onClick={resetForm}
               style={{ flex: 1, padding: 12, borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg, fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>New Token</button>
           </div>
@@ -733,9 +765,9 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 20 }}>
           {[
             { icon: '\uD83D\uDCC8', title: 'Bonding Curve', desc: 'Price rises automatically as people buy. No manual liquidity needed.' },
-            { icon: '\uD83D\uDD12', title: 'Locked Liquidity', desc: 'At 85 SOL raised, liquidity locks in Raydium CPMM forever.' },
-            { icon: '\uD83C\uDF0A', title: 'Raydium AMM', desc: 'Your token auto-graduates to the largest Solana DEX.' },
-            { icon: '\uD83D\uDCB8', title: 'Atomic Fee', desc: '0.5 SOL fee bundled in the same tx. No fee on a failed launch.' },
+            { icon: '\uD83D\uDD12', title: 'Atomic Launch', desc: 'Launch and platform fee are bundled into one wallet-signed transaction.' },
+            { icon: '\uD83C\uDF0A', title: 'Launch Options', desc: 'Use Raydium LaunchLab or Pump.fun depending on the token path.' },
+            { icon: '\uD83D\uDCB8', title: 'No Failed Fee', desc: 'If the launch transaction fails, the bundled platform fee does not move.' },
           ].map(function(item) {
             return (
               <div key={item.title} style={{ background: C.card2, borderRadius: 12, padding: 12 }}>
