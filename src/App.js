@@ -1,6 +1,3 @@
-Here is your revised app. It brings Orderly's deep liquidity directly into a UI designed to be approachable, fast, and fun to use.
-
-```js
 import React, { useState, useEffect, useCallback, useRef, useReducer } from 'react';
 import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
