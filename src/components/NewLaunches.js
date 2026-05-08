@@ -1,6 +1,3 @@
-Here's the stripped version. No DexScreener polling. WS-only. Fast.
-
-```js
 /**
  * NEXUS DEX -- NewLaunches
  *
