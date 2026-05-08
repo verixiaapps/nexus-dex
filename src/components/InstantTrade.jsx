@@ -13,7 +13,7 @@
 
 import React, { useState, useCallback, useMemo } from 'react';
 import { useConnection } from '@solana/wallet-adapter-react';
-import { useNexusWallet } from '../WalletContext.js';
+import { useNexusWallet } from './WalletContext.js';
 import { quickBuySol, quickSellSol } from '../solanaSwap.js';
 import { quickBuyPump, quickSellPump } from '../pumpTrade.js';
 import { useInstantPresets, PresetsEditButton } from '../instantPresets.jsx';
