@@ -1,42 +1,43 @@
 /**
- * NEXUS DEX - Unified Swap Widget (Jupiter + 0x edition)
+ * NEXUS DEX -- Unified Swap Widget (Jupiter + 0x edition)
  *
  * Behavior contract (locked):
- *  1. NO header chain selector. Routing is driven entirely by from/to
- *     tokens. Defaults come from the connected wallet's actual state and
- *     from the user's last-used pair via localStorage.
  *
- *  2. ONE wallet popup per swap action after the first ERC20 approval.
- *     0x uses AllowanceHolder (single-sig path) instead of Permit2 so
- *     subsequent swaps of an already-approved token are exactly one
- *     popup. Privy embedded wallets sign silently.
+ * 1. NO header chain selector. Routing is driven entirely by from/to
+ *    tokens. Defaults come from the connected wallet's actual state and
+ *    from the user's last-used pair via localStorage.
  *
- *  3. Fees: 5% same-chain. ALWAYS taken from output via the aggregator's
- *     own fee mechanism. Plus positive-slippage / trade-surplus capture
- *     directed to our fee wallet on both routes.
+ * 2. ONE wallet popup per swap action after the first ERC20 approval.
+ *    0x uses AllowanceHolder (single-sig path) instead of Permit2 so
+ *    subsequent swaps of an already-approved token are exactly one
+ *    popup. Privy embedded wallets sign silently.
  *
- *  4. Pre-click data sources (NEVER aggregator quote endpoints):
- *       Solana prices  -> Jupiter /price/v3 -> Helius DAS fallback
- *       EVM prices     -> LiFi /v1/token (priceUSD) -- DATA ONLY
- *       Solana paste   -> Helius DAS getAsset
- *       EVM paste      -> on-chain RPC via wagmi public client
- *       Symbol search  -> Jupiter /tokens/v2/search (Solana) +
- *                         LiFi /v1/tokens catalog (EVM, lazy-loaded once)
+ * 3. Fees: 5% same-chain. ALWAYS taken from output via the aggregator's
+ *    own fee mechanism. Plus positive-slippage / trade-surplus capture
+ *    directed to our fee wallet on both routes.
  *
- *  5. Click routing (only two engines now):
- *       Solana <-> Solana                       -> Jupiter
- *       EVM <-> EVM, same chain, 0x supported   -> 0x AllowanceHolder
- *       Anything else                           -> blocked at UI level
- *     Cross-chain and BTC swaps are temporarily disabled until a
- *     replacement bridge integration ships.
+ * 4. Pre-click data sources (NEVER aggregator quote endpoints):
+ *      Solana prices  -> Jupiter /price/v3 -> Helius DAS fallback
+ *      EVM prices     -> LiFi /v1/token (priceUSD) -- DATA ONLY
+ *      Solana paste   -> Helius DAS getAsset
+ *      EVM paste      -> on-chain RPC via wagmi public client
+ *      Symbol search  -> Jupiter /tokens/v2/search (Solana) +
+ *                        LiFi /v1/tokens catalog (EVM, lazy-loaded once)
  *
- *  6. Quote engine: pre-click is a price-derived estimate
- *       out = in * fromPriceUsd / toPriceUsd * (1 - feeRate)
- *     Displayed with `~` prefix. Click triggers a real aggregator quote.
+ * 5. Click routing (only two engines now):
+ *      Solana <-> Solana                       -> Jupiter
+ *      EVM <-> EVM, same chain, 0x supported   -> 0x AllowanceHolder
+ *      Anything else                           -> blocked at UI level
+ *    Cross-chain and BTC swaps are temporarily disabled until a
+ *    replacement bridge integration ships.
  *
- *  7. Buy mode: from = native of viewed token's chain, to = the token.
- *     Sell mode: from = the token, to = USDC of the token's chain.
- *     Swap mode: from = wallet's native (or last-used), to = USDC.
+ * 6. Quote engine: pre-click is a price-derived estimate
+ *      out = in * fromPriceUsd / toPriceUsd * (1 - feeRate)
+ *    Displayed with `~` prefix. Click triggers a real aggregator quote.
+ *
+ * 7. Buy mode: from = native of viewed token's chain, to = the token.
+ *    Sell mode: from = the token, to = USDC of the token's chain.
+ *    Swap mode: from = wallet's native (or last-used), to = USDC.
  *
  * Removed in this revision:
  *   - LiFi swap execution (fetchLifiQuote + LiFi tx path entirely)
@@ -77,7 +78,7 @@ const OX_SWAP_FEE_BPS          = Math.round(TOTAL_FEE * 10000);
 /* Spread / positive-slippage capture: on 0x this is the
  * `tradeSurplusRecipient` mechanism (only active for whitelisted
  * integrators on a custom plan; silently ignored otherwise). On
- * Jupiter we don't capture spread - the public swap-instructions
+ * Jupiter we don't capture spread -- the public swap-instructions
  * API does not expose positive-slippage parameters; passing them
  * leaks to the on-chain program and causes integer overflow on
  * tiny outputs. Fee revenue on Jupiter comes entirely from the
@@ -148,7 +149,7 @@ const USDC_BY_CHAIN = {
 };
 const USDC_SOLANA = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
-/* For LiFi catalog price lookup (data source only - not used for swaps). */
+/* For LiFi catalog price lookup (data source only -- not used for swaps). */
 const LIFI_NATIVE = '0x0000000000000000000000000000000000000000';
 
 const DEFAULT_BUY_PRESETS  = [25, 50, 100, 250, 500];
@@ -381,7 +382,7 @@ function normalizeToken(input, opts = {}) {
       chain: 'evm', address: evmAddr, chainId: input.chainId || defaultChainId,
       symbol, name,
       decimals: typeof input.decimals === 'number' ? input.decimals
-              : typeof input.tokenDecimals === 'number' ? input.tokenDecimals : 18,
+        : typeof input.tokenDecimals === 'number' ? input.tokenDecimals : 18,
       logoURI,
     };
   }
@@ -488,9 +489,9 @@ function defaultTokenPair({ mode, viewedToken, lastFromToken, walletState }) {
 /* ============================================================================
  * ROUTE PICKER
  *
- *   jupiter      - Solana <-> Solana
- *   0x           - EVM <-> EVM, same chain, 0x-supported
- *   unsupported  - everything else (cross-chain, non-0x EVM, mixed)
+ * jupiter      -- Solana <-> Solana
+ * 0x           -- EVM <-> EVM, same chain, 0x-supported
+ * unsupported  -- everything else (cross-chain, non-0x EVM, mixed)
  * ========================================================================= */
 
 function pickRoute(from, to) {
@@ -514,15 +515,15 @@ function unsupportedReason(from, to) {
 }
 
 /* ============================================================================
- * AGGREGATOR HELPERS - Jupiter + 0x AllowanceHolder only
+ * AGGREGATOR HELPERS -- Jupiter + 0x AllowanceHolder only
  * ========================================================================= */
 
 /* 0x v2 AllowanceHolder QUOTE. Single-signature flow: user does an ERC20
  * approve(allowanceHolderSpender, MAX) once per token, then every swap is
  * a single sendTransaction. No EIP-712 typed-data signing needed.
  *
- *   tradeSurplusRecipient    captures positive slippage in the buy token
- *   swapFeeBps / Recipient   takes our 5% platform fee from the buy token */
+ * tradeSurplusRecipient    captures positive slippage in the buy token
+ * swapFeeBps / Recipient   takes our 5% platform fee from the buy token */
 async function fetchOxQuote({ chainId, sellToken, buyToken, sellAmount, taker, slipBps, feeRecipient, feeToken, signal }) {
   const qs = new URLSearchParams({
     chainId: String(chainId),
@@ -545,7 +546,7 @@ async function fetchOxQuote({ chainId, sellToken, buyToken, sellAmount, taker, s
 }
 
 /* Jupiter quote. restrictIntermediateTokens=true keeps the route to
- * battle-tested intermediates - avoids high-slippage long-tail hops.
+ * battle-tested intermediates -- avoids high-slippage long-tail hops.
  * platformFeeBps is ALWAYS included; the matching feeAccount is paired in
  * the swap-instructions call below. Jupiter rejects the build if one is
  * present without the other. */
@@ -568,7 +569,7 @@ async function fetchJupiterQuote({ inputMint, outputMint, amountRaw, slipBps, si
 /* Jupiter swap-INSTRUCTIONS endpoint. Returns individual ixs instead of a
  * sealed transaction so we can prepend our own createAssociatedTokenAccount
  * instruction for the fee ATA. That way the fee ATA gets created on the fly
- * inside the same atomic transaction as the swap - no separate setup tx,
+ * inside the same atomic transaction as the swap -- no separate setup tx,
  * no "feeAccount missing" failures, no operational ATA pre-creation. User
  * pays ~0.002 SOL rent on the first trade to a brand-new output mint, then
  * nothing forever. */
@@ -616,8 +617,7 @@ function deserializeJupiterIx(rawIx) {
  * Jupiter's documented response shape, with our fee-ATA-create slotted
  * in BEFORE the swap so the fee account exists when Jupiter's program
  * writes to it:
- *
- *   1. Jupiter's otherInstructions (jito tips, etc - normally empty
+ *   1. Jupiter's otherInstructions (jito tips, etc -- normally empty
  *      since we use priorityLevelWithMaxLamports, not jitoTipLamports)
  *   2. Jupiter's compute budget (priority fee + CU limit)
  *   3. Jupiter's setup ixs (e.g., wSOL wrap, user dest ATA)
@@ -625,7 +625,6 @@ function deserializeJupiterIx(rawIx) {
  *      -- idempotent: no-op if exists, creates if missing
  *   5. Jupiter's swap ix
  *   6. Jupiter's cleanup ix (e.g., wSOL unwrap)
- *
  * Address lookup tables come from Jupiter's response so the route can
  * fit within Solana's 64-account limit. */
 async function buildJupiterSwapTransaction({
@@ -690,7 +689,7 @@ async function buildJupiterSwapTransaction({
 }
 
 /* ============================================================================
- * USD PRICING - data sources only, NEVER aggregator quote endpoints.
+ * USD PRICING -- data sources only, NEVER aggregator quote endpoints.
  * ========================================================================= */
 
 const _priceCache = new Map();
@@ -738,7 +737,7 @@ async function fetchJupiterTokenSearchPrice(token) {
   } catch { return null; }
 }
 
-/* LiFi /v1/token (price data only - not used for swap routing). */
+/* LiFi /v1/token (price data only -- not used for swap routing). */
 async function fetchLifiTokenPrice(token) {
   try {
     if (!isEvm(token)) return null;
@@ -804,7 +803,7 @@ async function getTokenPriceUsd(token) {
 }
 
 /* ============================================================================
- * SYMBOL SEARCH - catalog data only, not transactional
+ * SYMBOL SEARCH -- catalog data only, not transactional
  * ========================================================================= */
 
 async function searchJupiterBySymbol(query, signal) {
@@ -1760,7 +1759,7 @@ export default function SwapWidget({
   }, [toToken]);
 
   /* ============================================================================
-   * QUOTE ENGINE - price-derived estimate, NEVER aggregator pre-click.
+   * QUOTE ENGINE -- price-derived estimate, NEVER aggregator pre-click.
    * ========================================================================= */
   const fetchQuote = useCallback(async () => {
     setQuoteError('');
@@ -1817,7 +1816,7 @@ export default function SwapWidget({
     return null;
   }, [fromToken, solBalanceLamports, solSplBalance, evmFromBal]);
 
-  /* -- MAX - always clamp to token's actual decimals (and <=9 for JS Number
+  /* -- MAX -- always clamp to token's actual decimals (and <=9 for JS Number
    * precision safety). Ensures the resulting input string is integer-clean
    * when passed to BigInt boundaries downstream. */
   const onMax = useCallback(() => {
@@ -1876,7 +1875,7 @@ export default function SwapWidget({
   }, [fromToken, toToken]);
 
   /* ============================================================================
-   * EXECUTE SWAP - Jupiter or 0x AllowanceHolder only
+   * EXECUTE SWAP -- Jupiter or 0x AllowanceHolder only
    * ========================================================================= */
   const executeSwap = useCallback(async () => {
     if (!walletConnected) {
@@ -2100,7 +2099,7 @@ export default function SwapWidget({
       {!compact && (
         <div style={{ marginBottom: 16 }}>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Swap</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Solana & major EVM chains. No KYC.</p>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Solana &amp; major EVM chains. No KYC.</p>
         </div>
       )}
 
