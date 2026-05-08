@@ -1,4 +1,3 @@
-```js
 /**
  * NEXUS DEX - Unified Swap Widget (OKX DEX edition)
  *
