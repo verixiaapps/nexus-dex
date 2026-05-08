@@ -7,6 +7,7 @@
  * /api/jupiter/swap                 - Jupiter Solana swap fallback
  * /api/jupiter/tokens/v2/toporganicscore/:timeframe - Jupiter top tokens
  * /api/jupiter/tokens/v2/tag        - Jupiter token registry
+ * /api/dexscreener/*                - DexScreener proxy (markets, portfolio prices)
  * /api/pumpportal/*                 - PumpPortal trade-local
  * /api/helius/das                   - Helius DAS getAsset / Solana metadata fallback
  * /api/solana-rpc                   - Solana RPC proxy
@@ -455,6 +456,23 @@ app.get('/api/jupiter/tokens/v2/tag', async (req, res) => {
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
+/* -- DEXSCREENER PROXY (markets + portfolio prices) ----------------------- */
+app.get('/api/dexscreener/*', async (req, res) => {
+  try {
+    const path = req.path.replace('/api/dexscreener', '');
+    const url = 'https://api.dexscreener.com' + path + buildForwardedQuery(req);
+    const cached = getCachedJson(url);
+    if (cached) return res.status(cached.status).json(cached.payload);
+    const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 10_000);
+    const result = await safeJson(response);
+    if (response.ok && result.parsed) setCachedJson(url, response.status, result.parsed, 15_000);
+    return respondJsonOrError(res, response, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'DexScreener request timed out' });
+    logError('dexscreener', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
 /* -- PUMPPORTAL PROXY ------------------------------------------------------- */
 app.post('/api/pumpportal/trade-local', async (req, res) => {
   try {
@@ -631,6 +649,7 @@ app.get('/api/health', (req, res) => {
       jupiterSwap: JUPITER_ENABLED,
       jupiterTokens: true,
       jupiterRegistry: true,
+      dexscreener: true,
       pumpportal: true,
       helius: true,
       solanaRpc: true,
