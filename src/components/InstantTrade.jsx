@@ -3,7 +3,7 @@
  *
  * GMGN / Photon / BullX-style preset bar for token cards and detail pages.
  *
- * Behavior:
+ * Behavior: 
  *   - Pump.fun / PumpSwap / bonding-curve tokens route through pumpTrade.js.
  *   - Normal Solana tokens route through solanaSwap.js using OKX.
  *   - EVM tokens always open the regular trade drawer.
