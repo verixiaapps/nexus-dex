@@ -5,7 +5,7 @@
  *   WalletContext.js owns preset state through:
  *     presets = { buy: [...], sell: [...] }
  *     setPresets(nextPresets)
- * 
+ *  
  * Defaults match WalletContext.js:
  *   buy  = [25, 50, 100, 250, 500]
  *   sell = [50, 100]
