@@ -15,7 +15,7 @@ export default function PerpsLanding({ onConnectWallet }) {
 
   if (mode === 'trade') {
     return (
-      <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px', fontFamily: 'Syne, sans-serif' }}>
+      <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px', fontFamily: 'Syne, sans-serif', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
         <button onClick={() => setMode('landing')}
           style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 20, padding: 0, fontFamily: 'Syne, sans-serif' }}>
           ← Back to Perps
@@ -26,7 +26,7 @@ export default function PerpsLanding({ onConnectWallet }) {
   }
 
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto', padding: '40px 16px', fontFamily: 'Syne, sans-serif', color: C.text, background: C.bg, minHeight: '100vh' }}>
+    <div style={{ maxWidth: 900, margin: '0 auto', padding: '40px 16px', fontFamily: 'Syne, sans-serif', color: C.text, background: C.bg, minHeight: '100vh', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
       
       {/* Hero */}
       <div style={{ textAlign: 'center', marginBottom: 40 }}>
@@ -50,7 +50,7 @@ export default function PerpsLanding({ onConnectWallet }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 48 }}>
         {[
           { label: 'Max Leverage', value: '50x' },
-          { label: 'Fee', value: '0.13%' },
+          { label: 'Fee', value: '0.05%' },
           { label: 'Settlement', value: 'USDC' },
         ].map(stat => (
           <div key={stat.label} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 20, textAlign: 'center' }}>
