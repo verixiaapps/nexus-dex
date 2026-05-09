@@ -48,7 +48,6 @@ async function fetchTokenData(address, chainId) {
     const data = await res.json().catch(() => null);
     if (!data || !Array.isArray(data.pairs)) return null;
 
-    // Pick the best pair by liquidity
     let best = null;
     for (const p of data.pairs) {
       const liq = Number(p.liquidity?.usd || 0);
@@ -118,7 +117,6 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
     return coin.chainId || null;
   }, [coin]);
 
-  // Fetch token data on mount
   useEffect(() => {
     if (!contractAddress) { setLoading(false); return; }
     let cancelled = false;
@@ -130,7 +128,6 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
     return () => { cancelled = true; };
   }, [contractAddress, chainId]);
 
-  // Fetch user balance for Solana tokens
   useEffect(() => {
     if (!tokenData || !tokenData.mint || !solConnected || !publicKey || !connection) {
       setUserTokenBalance(0);
@@ -174,7 +171,7 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
 
   if (loading && !tokenData) {
     return (
-      <div style={{ maxWidth: 640, margin: '0 auto', padding: 40, textAlign: 'center', color: C.muted, fontFamily: 'Syne, sans-serif' }}>
+      <div style={{ maxWidth: 640, margin: '0 auto', padding: 40, textAlign: 'center', color: C.muted, fontFamily: 'Syne, sans-serif', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
         <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 30, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600, padding: 0 }}>← Back to Markets</button>
         <div style={{ fontSize: 16 }}>Loading token data...</div>
       </div>
@@ -183,7 +180,7 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
 
   if (!tokenData) {
     return (
-      <div style={{ maxWidth: 640, margin: '0 auto', padding: 40, textAlign: 'center', color: C.muted, fontFamily: 'Syne, sans-serif' }}>
+      <div style={{ maxWidth: 640, margin: '0 auto', padding: 40, textAlign: 'center', color: C.muted, fontFamily: 'Syne, sans-serif', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
         <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 30, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600, padding: 0 }}>← Back to Markets</button>
         <div style={{ fontSize: 16, marginBottom: 8 }}>Token not found</div>
         <div style={{ fontSize: 12, color: C.muted2 }}>DexScreener returned no data for this contract.</div>
@@ -209,10 +206,9 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
   ];
 
   return (
-    <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box', fontFamily: 'Syne, sans-serif' }}>
+    <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box', fontFamily: 'Syne, sans-serif', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
       <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 13, fontWeight: 600, padding: 0, fontFamily: 'Syne, sans-serif' }}>← Back to Markets</button>
 
-      {/* Header Card */}
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 10 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -236,7 +232,6 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
         </div>
       </div>
 
-      {/* Instant Trade */}
       <div style={{ marginBottom: 12 }}>
         <InstantTrade
           token={td}
@@ -249,7 +244,6 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
         />
       </div>
 
-      {/* Buy / Sell Buttons */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
         <button onClick={() => openDrawer('buy')}
           style={{ padding: 18, borderRadius: 14, border: 'none', cursor: 'pointer',
@@ -265,7 +259,6 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
         </button>
       </div>
 
-      {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 10, marginBottom: 14 }}>
         {statsItems.map(item => (
           <div key={item[0]} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 14 }}>
@@ -275,7 +268,6 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
         ))}
       </div>
 
-      {/* Contract Address */}
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 16 }}>
         <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700, letterSpacing: 1 }}>
           {isSol ? 'SOLANA CONTRACT' : 'EVM CONTRACT'}
