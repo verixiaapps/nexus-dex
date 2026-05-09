@@ -143,68 +143,64 @@ export default function Markets({ onSelectCoin }) {
   const [q, setQ] = useState('');
   const [tokens, setTokens] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [initialLoaded, setInitialLoaded] = useState(false);
   const isMobile = useIsMobile();
   const debouncedQ = useDebounce(q, 300);
 
-  // Initial load: top tokens
+  const TOP_MINTS = [
+    'So11111111111111111111111111111111111111112',
+    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+    'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
+    'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
+    'DezXAZ8z7PnrnRJjz3wXBoRgixCa6BFrR4Jfrj6z7m9',
+    'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm',
+    '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R',
+    'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3',
+    'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL',
+    'hntyVP6YFm1Hg25TN9WGLqM12b8TQmcknKrdu1oxWux',
+  ];
+
+  // Fetch tokens
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
 
-    fetch('https://api.dexscreener.com/latest/dex/search?q=SOL')
-      .then((res) => res.json())
-      .then((data) => {
+    const url = debouncedQ.trim()
+      ? `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(debouncedQ)}`
+      : `https://api.dexscreener.com/latest/dex/tokens/${TOP_MINTS.join(',')}`;
+
+    fetch(url)
+      .then(res => res.json())
+      .then(data => {
         if (cancelled) return;
-        const list = parsePairs(data.pairs);
-        list.sort((a, b) => b.total_volume - a.total_volume);
-        setTokens(list.slice(0, 100));
-        setInitialLoaded(true);
+        let list = parsePairs(data.pairs);
+
+        if (!debouncedQ.trim()) {
+          const seenSym = {};
+          const deduped = [];
+          list.forEach((t) => {
+            const sym = t.symbol.toUpperCase();
+            if (!seenSym[sym] || t.total_volume > seenSym[sym].total_volume) {
+              seenSym[sym] = t;
+            }
+          });
+          list = Object.values(seenSym);
+          list.sort((a, b) => b.market_cap - a.market_cap);
+        } else {
+          list.sort((a, b) => b.total_volume - a.total_volume);
+        }
+
+        setTokens(list);
         setLoading(false);
       })
       .catch(() => {
         if (!cancelled) {
           setTokens([]);
-          setInitialLoaded(true);
           setLoading(false);
         }
       });
 
     return () => { cancelled = true; };
-  }, []);
-
-  // Search: fetch when user types
-  useEffect(() => {
-    if (!initialLoaded) return;
-    if (!debouncedQ.trim()) return;
-
-    let cancelled = false;
-    setLoading(true);
-
-    fetch(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(debouncedQ)}`)
-      .then((res) => res.json())
-      .then((data) => {
-        if (cancelled) return;
-        const list = parsePairs(data.pairs);
-        list.sort((a, b) => b.total_volume - a.total_volume);
-        setTokens(list.slice(0, 100));
-        setLoading(false);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setTokens([]);
-          setLoading(false);
-        }
-      });
-
-    return () => { cancelled = true; };
-  }, [debouncedQ, initialLoaded]);
-
-  // When search is cleared, go back to initial top tokens
-  const displayTokens = useMemo(() => {
-    if (q.trim()) return tokens;
-    return tokens;
-  }, [tokens, q]);
+  }, [debouncedQ]);
 
   const handleClick = useCallback(
     (row) => {
@@ -262,10 +258,10 @@ export default function Markets({ onSelectCoin }) {
               <div style={{ textAlign: 'right' }}>MKT CAP</div>
             </div>
           )}
-          {displayTokens.length === 0 && (
+          {tokens.length === 0 && (
             <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>No tokens found</div>
           )}
-          {displayTokens.map((c, i) => (
+          {tokens.map((c, i) => (
             <Row key={c.id} c={c} i={i} isMobile={isMobile} onClick={handleClick} />
           ))}
         </div>
