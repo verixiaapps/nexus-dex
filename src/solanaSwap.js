@@ -11,7 +11,7 @@
  *   - Uses /api/okx/dex/aggregator/swap-instruction.
  *   - Backend injects feePercent + fee wallet server-side.
  *   - Frontend never handles OKX API keys or fee wallet injection.
- *   - skipPreflight: true to avoid wallet simulation failures.
+ *   - signTransaction → sendRawTransaction to avoid wallet simulation.
  */
 
 import {
@@ -139,7 +139,6 @@ async function buildTxFromOkxInstructionData({ connection, owner, swapData }) {
   return new VersionedTransaction(message);
 }
 
-// ---- CHANGED: skipPreflight: true to avoid wallet simulation failures ----
 async function sendSignedTransaction(connection, signedTx) {
   const sig = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: true, maxRetries: 3 });
   await connection.confirmTransaction(sig, 'confirmed');
@@ -150,7 +149,12 @@ async function sendWithPrivy({ tx, connection, wallet, status }) {
   if (!wallet.privyWallet) throw new Error('Privy wallet unavailable');
   status('Signing...');
   if (typeof wallet.privyWallet.sendTransaction === 'function') {
-    return await wallet.privyWallet.sendTransaction(tx, connection, wallet.instant ? { uiOptions: { showWalletUIs: false } } : undefined);
+    const sendOpts = {
+      ...(wallet.instant ? { uiOptions: { showWalletUIs: false } } : {}),
+      skipPreflight: true,
+      maxRetries: 3,
+    };
+    return await wallet.privyWallet.sendTransaction(tx, connection, sendOpts);
   }
   if (typeof wallet.privyWallet.signTransaction === 'function') {
     const signed = await wallet.privyWallet.signTransaction(tx);
@@ -161,18 +165,18 @@ async function sendWithPrivy({ tx, connection, wallet, status }) {
 }
 
 async function sendWithExternalWallet({ tx, connection, wallet, status }) {
-  if (typeof wallet.signTransaction === 'function') {
-    status('Confirm in wallet...');
-    const signed = await wallet.signTransaction(tx);
-    status('Sending...');
-    return await sendSignedTransaction(connection, signed);
+  if (typeof wallet.signTransaction !== 'function') {
+    throw new Error('External wallet missing signTransaction');
   }
-  if (typeof wallet.sendTransaction === 'function') {
-    status('Confirm in wallet...');
-    // ---- CHANGED: skipPreflight: true ----
-    return await wallet.sendTransaction(tx, connection, { skipPreflight: true, maxRetries: 3 });
-  }
-  throw new Error('External wallet missing signing methods');
+  status('Confirm in wallet...');
+  const signed = await wallet.signTransaction(tx);
+  status('Sending...');
+  const signature = await connection.sendRawTransaction(signed.serialize(), {
+    skipPreflight: true,
+    maxRetries: 3,
+  });
+  await connection.confirmTransaction(signature, 'confirmed');
+  return signature;
 }
 
 export async function executeSolanaSwap({ fromMint, toMint, amountRaw, slippageBps, publicKey, connection, wallet, onStatus, signal }) {
