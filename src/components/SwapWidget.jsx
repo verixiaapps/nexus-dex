@@ -9,7 +9,7 @@
  * Token search: OKX (Solana) + DexScreener (all chains)
  * OKX referrer tag added to all OKX requests.
  * Fees injected server-side in server.js.
- * No slippage parameter — OKX handles routing without price cap.
+ * Max slippage: 15% Solana, 15% EVM (OKX routes at best price).
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -97,16 +97,16 @@ async function fetchDsSearch(q){try{const r=await fetch(DEXSCREENER_BASE+'/lates
 let _okxCache=null;let _okxLoading=null;
 function loadOkxSolTokens(){if(_okxCache)return Promise.resolve(_okxCache);if(_okxLoading)return _okxLoading;_okxLoading=fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501').then(r=>r.ok?r.json():{data:[]}).catch(()=>({data:[]})).then(j=>{const t=(j.data||[]).map(t=>({chain:'solana',mint:t.tokenContractAddress,symbol:t.tokenSymbol||'',name:t.tokenName||t.tokenSymbol||'',decimals:parseInt(t.decimals)||6,logoURI:t.tokenLogoUrl||null})).filter(t=>isValidSolMint(t.mint)&&t.symbol);_okxCache=t;_okxLoading=null;return t;});return _okxLoading;}
 
-// NO SLIPPAGE - OKX handles routing without a price cap
+// 15% max slippage for OKX Solana + EVM
 async function fetchOkxSolSwap({fromMint,toMint,amount,userWallet,signal}){
-  const p=new URLSearchParams({chainIndex:'501',fromTokenAddress:toOkxSolAddress(fromMint),toTokenAddress:toOkxSolAddress(toMint),amount:String(amount),userWalletAddress:userWallet,referrer:OKX_REFERRER});
+  const p=new URLSearchParams({chainIndex:'501',fromTokenAddress:toOkxSolAddress(fromMint),toTokenAddress:toOkxSolAddress(toMint),amount:String(amount),slippagePercent:'0.15',userWalletAddress:userWallet,referrer:OKX_REFERRER});
   const r=await fetch('/api/okx/dex/aggregator/swap-instruction?'+p.toString(),{signal});
   const j=await r.json();
   if(j.code!=='0'||!j.data)throw new Error(j.msg||'OKX swap-instruction failed');
   return Array.isArray(j.data)?j.data[0]:j.data;
 }
 async function fetchOkxEvmSwap({chainId,fromAddress,toAddress,amount,userWallet,signal}){
-  const p=new URLSearchParams({chainIndex:String(chainId),fromTokenAddress:toOkxEvmAddress(fromAddress),toTokenAddress:toOkxEvmAddress(toAddress),amount:String(amount),userWalletAddress:userWallet,referrer:OKX_REFERRER});
+  const p=new URLSearchParams({chainIndex:String(chainId),fromTokenAddress:toOkxEvmAddress(fromAddress),toTokenAddress:toOkxEvmAddress(toAddress),amount:String(amount),slippagePercent:'0.15',userWalletAddress:userWallet,referrer:OKX_REFERRER});
   const r=await fetch('/api/okx/dex/aggregator/swap?'+p.toString(),{signal});
   const j=await r.json();
   if(j.code!=='0'||!j.data)throw new Error(j.msg||'OKX EVM swap failed');
@@ -125,27 +125,17 @@ async function fetchOkxEvmApproval({chainId,tokenAddress,amount}){
 function deserializeOkxIx(ix){
   try{
     if(!ix||!ix.programId||!Array.isArray(ix.accounts)||!ix.data)return null;
-    return new TransactionInstruction({
-      programId:new PublicKey(ix.programId),
-      keys:ix.accounts.map(a=>({pubkey:new PublicKey(a.pubkey||a.publicKey||a.address),isSigner:!!a.isSigner,isWritable:!!a.isWritable})),
-      data:Buffer.from(ix.data,'base64'),
-    });
+    return new TransactionInstruction({programId:new PublicKey(ix.programId),keys:ix.accounts.map(a=>({pubkey:new PublicKey(a.pubkey||a.publicKey||a.address),isSigner:!!a.isSigner,isWritable:!!a.isWritable})),data:Buffer.from(ix.data,'base64')});
   }catch{return null;}
 }
 
 async function buildOkxSolTx({connection,userPubkey,swapData}){
-  if(swapData.tx&&swapData.tx.data){
-    try{return VersionedTransaction.deserialize(Buffer.from(swapData.tx.data,'base64'));}catch{}
-  }
-  if(swapData.data&&typeof swapData.data==='string'){
-    try{return VersionedTransaction.deserialize(Buffer.from(swapData.data,'base64'));}catch{}
-  }
+  if(swapData.tx&&swapData.tx.data){try{return VersionedTransaction.deserialize(Buffer.from(swapData.tx.data,'base64'));}catch{}}
+  if(swapData.data&&typeof swapData.data==='string'){try{return VersionedTransaction.deserialize(Buffer.from(swapData.data,'base64'));}catch{}}
   const ixs=(swapData.instructionLists||[]).map(deserializeOkxIx).filter(Boolean);
   if(!ixs.length)throw new Error('No usable instructions in OKX response');
   const lta=Array.isArray(swapData.addressLookupTableAccount)?swapData.addressLookupTableAccount:[];
-  const lts=(await Promise.all(lta.map(async a=>{
-    try{const acct=await connection.getAccountInfo(new PublicKey(a));if(!acct)return null;return new AddressLookupTableAccount({key:new PublicKey(a),state:AddressLookupTableAccount.deserialize(acct.data)});}catch{return null;}
-  }))).filter(Boolean);
+  const lts=(await Promise.all(lta.map(async a=>{try{const acct=await connection.getAccountInfo(new PublicKey(a));if(!acct)return null;return new AddressLookupTableAccount({key:new PublicKey(a),state:AddressLookupTableAccount.deserialize(acct.data)});}catch{return null;}}))).filter(Boolean);
   const{blockhash}=await connection.getLatestBlockhash('finalized');
   return new VersionedTransaction(new TransactionMessage({payerKey:userPubkey,recentBlockhash:blockhash,instructions:ixs}).compileToV0Message(lts));
 }
@@ -197,17 +187,9 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
   const hasSol=!!(solCon||(privyEmbeddedSol&&pubkey));const hasEvm=!!(evmCon||(privyEmbeddedEvm&&privyEmbeddedEvm.address));const effEvm=evmAddr||(privyEmbeddedEvm?.address)||null;const wcon=!!(solCon||evmCon||hasSol||hasEvm);
   const wcRef=useRef(wc);useEffect(()=>{wcRef.current=wc;},[wc]);const cidRef=useRef(evmCid);useEffect(()=>{cidRef.current=evmCid;},[evmCid]);const pcRef=useRef(null);
 
-  // Simulation-first send: RPC simulate, then wallet sendTransaction
   const sendTx=useCallback(async(tx,conn,opts)=>{
-    try{
-      const sim=await conn.simulateTransaction(tx,{sigVerify:false});
-      if(sim&&sim.value&&sim.value.err)throw new Error('Transaction would fail');
-    }catch(e){}
-    if(activeWalletKind==='privy'&&privyEmbeddedSol){
-      if(typeof privyEmbeddedSol.sendTransaction==='function')return privyEmbeddedSol.sendTransaction(tx,conn,{skipPreflight:false,maxRetries:3});
-      if(typeof privyEmbeddedSol.signTransaction==='function'){const s=await privyEmbeddedSol.signTransaction(tx);return conn.sendRawTransaction(s.serialize(),{skipPreflight:true,maxRetries:3});}
-      throw new Error('No sign method');
-    }
+    try{const sim=await conn.simulateTransaction(tx,{sigVerify:false});if(sim&&sim.value&&sim.value.err)throw new Error('Transaction would fail');}catch(e){}
+    if(activeWalletKind==='privy'&&privyEmbeddedSol){if(typeof privyEmbeddedSol.sendTransaction==='function')return privyEmbeddedSol.sendTransaction(tx,conn,{skipPreflight:false,maxRetries:3});if(typeof privyEmbeddedSol.signTransaction==='function'){const s=await privyEmbeddedSol.signTransaction(tx);return conn.sendRawTransaction(s.serialize(),{skipPreflight:true,maxRetries:3});}throw new Error('No sign method');}
     return extSendTx(tx,conn,{skipPreflight:false,maxRetries:3});
   },[activeWalletKind,privyEmbeddedSol,extSendTx]);
 
