@@ -44,6 +44,7 @@ function mapDexSearchPair(p) {
   const change = p.priceChange?.h24 != null ? Number(p.priceChange.h24) : null;
   const volume = Number(p.volume?.h24 || 0) || 0;
   const mcap = Number(p.marketCap || p.fdv || 0) || 0;
+  const liquidity = Number(p.liquidity?.usd || 0) || 0;
   return {
     id: p.chainId + '-' + addr,
     chain: isSol ? 'solana' : 'evm',
@@ -56,6 +57,7 @@ function mapDexSearchPair(p) {
     market_cap: mcap,
     total_volume: volume,
     price_change_percentage_24h: Number.isFinite(change) ? change : null,
+    liquidity,
     isSolanaToken: isSol,
     source: 'dexscreener',
     decimals: bt.decimals || (isSol ? 6 : 18),
@@ -86,14 +88,17 @@ export default function Markets({ onSelectCoin }) {
     Promise.all(SEED_QUERIES.map(kw => searchDexScreener(kw)))
       .then(results => {
         if(c) return;
-        const seen = new Set(); const merged = [];
+        const bestBySymbol = {};
         results.flat().forEach(t => {
           if(t.chain !== 'solana') return;
-          const key = (t.mint||t.address||'').toLowerCase();
-          if(!seen.has(key)) { seen.add(key); merged.push(t); }
+          const sym = (t.symbol || '').toUpperCase();
+          if(!bestBySymbol[sym] || (t.liquidity || 0) > (bestBySymbol[sym].liquidity || 0)) {
+            bestBySymbol[sym] = t;
+          }
         });
+        const merged = Object.values(bestBySymbol);
         merged.sort((a,b)=>(b.market_cap||0)-(a.market_cap||0));
-        setBrowse(merged.slice(0,50));
+        setBrowse(merged.slice(0, 50));
         setBrowseLoading(false);
       }).catch(()=>{ if(!c){ setBrowse([]); setBrowseLoading(false); } });
     return () => { c = true; };
