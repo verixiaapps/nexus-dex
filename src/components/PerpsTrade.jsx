@@ -1,17 +1,21 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
 
 /* ============================================================================
  * NEXUS DEX -- Hyperliquid Perps Trading Interface
- * Non-custodial. User signs locally. Hyperliquid executes.
- * 
+ * Non-custodial. User keys stay in browser. Hyperliquid executes.
+ *
  * Builder Code (Nexus DEX): 0x4e65787573444558000000000000000000000000000000000000000000000000
  * Max Fee Rate: 0.05% (0.0005)
- * 
- * Data: Hyperliquid Info API via backend proxy /api/hyperliquid
- * Trading: Hyperliquid Exchange API via backend proxy /api/hyperliquid/exchange
+ *
+ * Data:   Hyperliquid Info API  via /api/hyperliquid
+ * Orders: Hyperliquid Exchange API via /api/hyperliquid/exchange
+ *
+ * FEATURE FLAG — set ENABLE_TRADING = true to go live
  * ========================================================================= */
+
+const ENABLE_TRADING = false; // <-- flip to true when ready
 
 const BUILDER_CODE = '0x4e65787573444558000000000000000000000000000000000000000000000000';
 const MAX_FEE_RATE = '0.0005';
@@ -37,6 +41,9 @@ const PERPS_PAIRS = [
   { id: 'AVAX', base: 'AVAX', icon: '🔺', leverage: 15 },
 ];
 
+/* ------------------------------------------------------------------ */
+/* helpers                                                            */
+/* ------------------------------------------------------------------ */
 let _bodyLockCount = 0;
 function useBodyLock(open) {
   useEffect(() => {
@@ -63,101 +70,89 @@ function pct(n) {
   return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 
-/* ============================================================================
- * Hyperliquid Wallet (client-side only — non-custodial)
- * ========================================================================= */
+/* ------------------------------------------------------------------ */
+/*  Hyperliquid wallet (all client-side — non-custodial)               */
+/* ------------------------------------------------------------------ */
+let _ethersModule = null;
+async function getEthers() {
+  if (_ethersModule) return _ethersModule;
+  _ethersModule = await import('ethers');
+  return _ethersModule;
+}
+
 function generateHlWallet() {
-  try {
-    const { ethers } = require('ethers');
-    const wallet = ethers.Wallet.createRandom();
-    return {
-      address: wallet.address,
-      privateKey: wallet.privateKey,
-      mnemonic: wallet.mnemonic?.phrase || null,
-    };
-  } catch {
-    return null;
-  }
+  const { ethers } = _ethersModule;
+  if (!ethers) return null;
+  const wallet = ethers.Wallet.createRandom();
+  return { address: wallet.address, privateKey: wallet.privateKey };
 }
 
-function encryptHlWallet(privateKey, signature) {
-  try {
-    const key = signature.slice(0, 32);
-    let encrypted = '';
-    for (let i = 0; i < privateKey.length; i++) {
-      encrypted += String.fromCharCode(privateKey.charCodeAt(i) ^ key.charCodeAt(i % key.length));
-    }
-    return btoa(encrypted);
-  } catch {
-    return null;
-  }
+function xorEncrypt(text, key) {
+  let out = '';
+  for (let i = 0; i < text.length; i++)
+    out += String.fromCharCode(text.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+  return btoa(out);
 }
 
-function decryptHlWallet(encrypted, signature) {
-  try {
-    const key = signature.slice(0, 32);
-    const decoded = atob(encrypted);
-    let decrypted = '';
-    for (let i = 0; i < decoded.length; i++) {
-      decrypted += String.fromCharCode(decoded.charCodeAt(i) ^ key.charCodeAt(i % key.length));
-    }
-    return decrypted;
-  } catch {
-    return null;
-  }
+function xorDecrypt(b64, key) {
+  const decoded = atob(b64);
+  let out = '';
+  for (let i = 0; i < decoded.length; i++)
+    out += String.fromCharCode(decoded.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+  return out;
 }
 
-function getStoredHlWallet(signature) {
+function getStorageKey(walletPubkey) {
+  return 'nexus_hl_wallet_' + (walletPubkey || 'anon');
+}
+
+function getStoredHlWallet(walletPubkey) {
   try {
-    const stored = localStorage.getItem('nexus_hl_wallet');
-    if (!stored) return null;
-    const data = JSON.parse(stored);
-    const pk = decryptHlWallet(data.encrypted, signature);
+    const raw = localStorage.getItem(getStorageKey(walletPubkey));
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    const pk = xorDecrypt(data.encrypted, data.address + 'nexus');
     return pk ? { address: data.address, privateKey: pk } : null;
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-function storeHlWallet(address, privateKey, signature) {
+function storeHlWallet(walletPubkey, address, privateKey) {
   try {
-    const encrypted = encryptHlWallet(privateKey, signature);
-    if (!encrypted) return false;
-    localStorage.setItem('nexus_hl_wallet', JSON.stringify({ address, encrypted }));
+    const encrypted = xorEncrypt(privateKey, address + 'nexus');
+    localStorage.setItem(
+      getStorageKey(walletPubkey),
+      JSON.stringify({ address, encrypted, ts: Date.now() }),
+    );
     return true;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
-/* ============================================================================
- * Hyperliquid API helpers
- * ========================================================================= */
-async function hyperliquidRequest(body, isExchange = false) {
-  const endpoint = isExchange ? '/api/hyperliquid/exchange' : '/api/hyperliquid';
-  const res = await fetch(endpoint, {
+/* ------------------------------------------------------------------ */
+/*  Hyperliquid API                                                    */
+/* ------------------------------------------------------------------ */
+async function hlRequest(body, isExchange = false) {
+  const path = isExchange ? '/api/hyperliquid/exchange' : '/api/hyperliquid';
+  const res = await fetch(path, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
   const data = await res.json();
-  if (!res.ok) throw new Error(data.error || 'Hyperliquid request failed');
+  if (!res.ok) throw new Error(data.error || data.detail || 'Hyperliquid request failed');
   return data;
 }
 
 async function fetchMarketData() {
   try {
     const [meta, prices] = await Promise.all([
-      hyperliquidRequest({ type: 'meta' }),
-      hyperliquidRequest({ type: 'allMids' }),
+      hlRequest({ type: 'meta' }),
+      hlRequest({ type: 'allMids' }),
     ]);
-
     const universe = (meta.universe || []).map((u, i) => ({
       name: u.name || 'Unknown',
       index: i,
       maxLeverage: u.maxLeverage || 50,
     }));
-
     return PERPS_PAIRS.map(p => {
       const info = universe.find(u => u.name === p.id);
       const price = prices && prices[p.id] ? parseFloat(prices[p.id]) : 0;
@@ -173,67 +168,65 @@ async function fetchMarketData() {
   }
 }
 
-async function placeOrder({ privateKey, pairIndex, isLong, amount, leverage }) {
-  try {
-    const { ethers } = require('ethers');
-    const wallet = new ethers.Wallet(privateKey);
-    const timestamp = Date.now();
+async function placeOrder({ privateKey, pairIndex, isLong, sz, leverage }) {
+  const { ethers } = await getEthers();
+  if (!ethers) throw new Error('ethers not loaded');
 
-    const orderRequest = {
-      type: 'order',
-      orders: [{
-        asset: pairIndex,
-        isBuy: isLong,
-        limitPx: 0,
-        sz: Number(amount),
-        leverage: Number(leverage),
-        orderType: { market: {} },
-        reduceOnly: false,
-        cloid: null,
-      }],
-      grouping: 'na',
-      builder: BUILDER_CODE,
-    };
+  const wallet = new ethers.Wallet(privateKey);
+  const timestamp = Date.now();
 
-    const signedOrder = await wallet.signTypedData(
-      {
-        name: 'Exchange',
-        version: '1',
-        chainId: 1337,
-        verifyingContract: '0x0000000000000000000000000000000000000000',
-      },
-      {
-        Agent: [
-          { name: 'source', type: 'string' },
-          { name: 'connectionId', type: 'bytes32' },
-        ],
-      },
-      {
-        source: 'a',
-        connectionId: ethers.constants.HashZero,
-      }
-    );
+  const orderAction = {
+    type: 'order',
+    orders: [{
+      asset: pairIndex,
+      isBuy: isLong,
+      limitPx: 0,
+      sz: Number(sz),
+      leverage: Number(leverage),
+      orderType: { market: {} },
+      reduceOnly: false,
+      cloid: null,
+    }],
+    grouping: 'na',
+    builder: BUILDER_CODE,
+  };
 
-    const payload = {
-      action: orderRequest,
-      signature: {
-        r: signedOrder.slice(0, 66),
-        s: '0x' + signedOrder.slice(66, 130),
-        v: parseInt(signedOrder.slice(130, 132), 16),
-      },
-      nonce: timestamp,
-    };
+  // EIP-712 typed data for Hyperliquid Exchange
+  const domain = {
+    name: 'Exchange',
+    version: '1',
+    chainId: 1337,
+    verifyingContract: '0x0000000000000000000000000000000000000000',
+  };
 
-    const result = await hyperliquidRequest(payload, true);
-    return result;
-  } catch (e) {
-    throw new Error(e.message || 'Order failed');
-  }
+  const types = {
+    HyperliquidTransaction: [
+      { name: 'txType', type: 'string' },
+    ],
+  };
+
+  const value = {
+    txType: 'order',
+  };
+
+  const signature = await wallet.signTypedData(domain, types, value);
+
+  const payload = {
+    action: orderAction,
+    signature: {
+      r: signature.slice(0, 66),
+      s: '0x' + signature.slice(66, 130),
+      v: parseInt(signature.slice(130, 132), 16),
+    },
+    nonce: timestamp,
+  };
+
+  return hlRequest(payload, true);
 }
 
-/* ============================================================================
- * UI Components
- * ========================================================================= */
+/* ================================================================== */
+/*  UI — PairCard                                                     */
+/* ================================================================== */
 function PairCard({ pair, active, onClick }) {
   return (
     <div onClick={onClick} style={{
@@ -253,7 +246,10 @@ function PairCard({ pair, active, onClick }) {
   );
 }
 
-function TradeDrawer({ open, onClose, pair, onConnectWallet }) {
+/* ================================================================== */
+/*  TradeDrawer                                                       */
+/* ================================================================== */
+function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey }) {
   const { connected } = useWallet();
   const { activeWalletKind, privyEmbeddedSol, loginPrivy } = useNexusWallet();
   const wcon = connected || activeWalletKind === 'privy';
@@ -264,6 +260,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet }) {
   const [status, setStatus] = useState('idle');
   const [hlWallet, setHlWallet] = useState(null);
   const [creatingWallet, setCreatingWallet] = useState(false);
+  const [depositing, setDepositing] = useState(false);
 
   useBodyLock(open);
 
@@ -271,17 +268,10 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet }) {
     if (open) {
       setAmount('');
       setStatus('idle');
-      const stored = localStorage.getItem('nexus_hl_wallet');
-      if (stored) {
-        try {
-          const data = JSON.parse(stored);
-          setHlWallet({ address: data.address });
-        } catch {
-          setHlWallet(null);
-        }
-      }
+      const stored = getStoredHlWallet(walletPubkey);
+      setHlWallet(stored ? { address: stored.address } : null);
     }
-  }, [open]);
+  }, [open, walletPubkey]);
 
   const isLong = side === 'long';
   const entryPrice = pair?.price || 0;
@@ -293,10 +283,10 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet }) {
   const createWallet = async () => {
     setCreatingWallet(true);
     try {
+      await getEthers();
       const newWallet = generateHlWallet();
-      if (!newWallet) throw new Error('Failed to generate wallet');
-      const sig = 'nexus-sig-' + Date.now();
-      storeHlWallet(newWallet.address, newWallet.privateKey, sig);
+      if (!newWallet) throw new Error('Wallet generation failed');
+      storeHlWallet(walletPubkey, newWallet.address, newWallet.privateKey);
       setHlWallet({ address: newWallet.address });
     } catch (e) {
       console.error('Wallet creation failed:', e);
@@ -304,39 +294,43 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet }) {
     setCreatingWallet(false);
   };
 
+  const handleDeposit = async () => {
+    if (!hlWallet) return;
+    setDepositing(true);
+    // Placeholder — will integrate OKX swap + bridge to Hyperliquid L1
+    // User deposits USDC from Solana → OKX bridges to HL → credits their HL address
+    setTimeout(() => {
+      setDepositing(false);
+    }, 1000);
+  };
+
   const execute = async () => {
-    if (!wcon) {
-      loginPrivy?.() || onConnectWallet?.();
-      return;
-    }
-    if (!hlWallet) {
-      await createWallet();
+    if (!wcon) { loginPrivy?.() || onConnectWallet?.(); return; }
+    if (!hlWallet) { await createWallet(); return; }
+
+    if (!ENABLE_TRADING) {
+      setStatus('error');
+      setTimeout(() => setStatus('idle'), 3000);
       return;
     }
 
     setStatus('loading');
     try {
-      const stored = localStorage.getItem('nexus_hl_wallet');
-      const data = JSON.parse(stored);
-      const sig = 'nexus-sig-' + Date.now();
-      const pk = decryptHlWallet(data.encrypted, sig);
-      if (!pk) throw new Error('Could not decrypt wallet');
+      const stored = getStoredHlWallet(walletPubkey);
+      if (!stored) throw new Error('Wallet not found');
 
       const pairIndex = PERPS_PAIRS.findIndex(p => p.id === pair.id);
 
       await placeOrder({
-        privateKey: pk,
+        privateKey: stored.privateKey,
         pairIndex: pairIndex >= 0 ? pairIndex : 0,
         isLong,
-        amount: parseFloat(amount) || 0,
+        sz: parseFloat(amount) || 0,
         leverage,
       });
 
       setStatus('success');
-      setTimeout(() => {
-        setStatus('idle');
-        onClose();
-      }, 2000);
+      setTimeout(() => { setStatus('idle'); onClose(); }, 2000);
     } catch (e) {
       console.error('Trade failed:', e);
       setStatus('error');
@@ -349,7 +343,14 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet }) {
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,.85)' }} />
-      <div style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: 520, zIndex: 401, background: C.card, borderTop: '2px solid ' + C.borderHi, borderRadius: '20px 20px 0 0', maxHeight: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{
+        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
+        width: '100%', maxWidth: 520, zIndex: 401,
+        background: C.card, borderTop: '2px solid ' + C.borderHi,
+        borderRadius: '20px 20px 0 0', maxHeight: '92vh',
+        display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      }}>
+        {/* Header */}
         <div style={{ flexShrink: 0, padding: '16px 20px' }}>
           <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 16px' }} />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -363,41 +364,83 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet }) {
             <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer' }}>x</button>
           </div>
         </div>
+
+        {/* Body */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px calc(env(safe-area-inset-bottom) + 24px)' }}>
+          {/* Wallet creation */}
           {!hlWallet && wcon && (
             <div style={{ marginBottom: 16, padding: 14, background: 'rgba(168,85,247,.08)', border: '1px solid rgba(168,85,247,.25)', borderRadius: 12, textAlign: 'center' }}>
-              <div style={{ color: C.privy || C.purple, fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Create your Hyperliquid Wallet</div>
-              <button onClick={createWallet} disabled={creatingWallet} style={{ padding: '10px 20px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,#a855f7,#7c3aed)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>
+              <div style={{ color: C.purple, fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Create your Hyperliquid Wallet</div>
+              <button onClick={createWallet} disabled={creatingWallet} style={{
+                padding: '10px 20px', borderRadius: 10, border: 'none',
+                background: 'linear-gradient(135deg,#a855f7,#7c3aed)',
+                color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif',
+              }}>
                 {creatingWallet ? 'Creating...' : 'Create Wallet'}
               </button>
             </div>
           )}
+
+          {/* Wallet info + deposit */}
           {hlWallet && (
-            <div style={{ marginBottom: 16, padding: 10, background: 'rgba(0,255,163,.06)', border: '1px solid rgba(0,255,163,.15)', borderRadius: 10 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ marginBottom: 16, padding: 12, background: 'rgba(0,255,163,.06)', border: '1px solid rgba(0,255,163,.15)', borderRadius: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
                 <div>
                   <div style={{ fontSize: 10, color: C.muted, fontWeight: 700 }}>HYPERLIQUID WALLET</div>
-                  <div style={{ fontSize: 11, color: C.text, fontFamily: 'monospace' }}>{hlWallet.address.slice(0, 6)}...{hlWallet.address.slice(-4)}</div>
+                  <div style={{ fontSize: 11, color: C.text, fontFamily: 'monospace' }}>
+                    {hlWallet.address.slice(0, 6)}...{hlWallet.address.slice(-4)}
+                  </div>
                 </div>
                 <div style={{ fontSize: 10, color: C.green, fontWeight: 600 }}>Connected</div>
               </div>
+              <button onClick={handleDeposit} disabled={depositing} style={{
+                width: '100%', padding: '8px', borderRadius: 8,
+                border: '1px solid rgba(0,229,255,.25)',
+                background: 'rgba(0,229,255,.08)', color: C.accent,
+                fontWeight: 600, fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif',
+              }}>
+                {depositing ? 'Depositing...' : 'Deposit USDC'}
+              </button>
             </div>
           )}
+
+          {/* Long / Short */}
           <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-            <button onClick={() => setSide('long')} style={{ flex: 1, padding: 12, borderRadius: 12, border: '1px solid ' + (isLong ? C.green : C.border), background: isLong ? 'rgba(0,255,163,.10)' : C.card2, color: isLong ? C.green : C.muted, fontWeight: 800, fontSize: 15, cursor: 'pointer' }}>↑ Long</button>
-            <button onClick={() => setSide('short')} style={{ flex: 1, padding: 12, borderRadius: 12, border: '1px solid ' + (!isLong ? C.red : C.border), background: !isLong ? 'rgba(255,59,107,.10)' : C.card2, color: !isLong ? C.red : C.muted, fontWeight: 800, fontSize: 15, cursor: 'pointer' }}>↓ Short</button>
+            <button onClick={() => setSide('long')} style={{
+              flex: 1, padding: 12, borderRadius: 12,
+              border: '1px solid ' + (isLong ? C.green : C.border),
+              background: isLong ? 'rgba(0,255,163,.10)' : C.card2,
+              color: isLong ? C.green : C.muted, fontWeight: 800, fontSize: 15, cursor: 'pointer',
+            }}>↑ Long</button>
+            <button onClick={() => setSide('short')} style={{
+              flex: 1, padding: 12, borderRadius: 12,
+              border: '1px solid ' + (!isLong ? C.red : C.border),
+              background: !isLong ? 'rgba(255,59,107,.10)' : C.card2,
+              color: !isLong ? C.red : C.muted, fontWeight: 800, fontSize: 15, cursor: 'pointer',
+            }}>↓ Short</button>
           </div>
+
+          {/* Leverage slider */}
           <div style={{ marginBottom: 16 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}><span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>LEVERAGE</span><span style={{ fontSize: 12, color: C.accent, fontWeight: 800 }}>{leverage}x</span></div>
-            <input type="range" min="1" max={pair.leverage} value={leverage} onChange={e => setLeverage(Number(e.target.value))} style={{ width: '100%', accentColor: C.accent, height: 6 }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>LEVERAGE</span>
+              <span style={{ fontSize: 12, color: C.accent, fontWeight: 800 }}>{leverage}x</span>
+            </div>
+            <input type="range" min="1" max={pair.leverage} value={leverage} onChange={e => setLeverage(Number(e.target.value))}
+              style={{ width: '100%', accentColor: C.accent, height: 6 }} />
           </div>
+
+          {/* Order size */}
           <div style={{ marginBottom: 16 }}>
             <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 6 }}>ORDER SIZE (USD)</div>
             <div style={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 12, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ color: C.muted, fontSize: 18 }}>$</span>
-              <input value={amount} onChange={e => setAmount(e.target.value.replace(/[^0-9.]/g, ''))} placeholder="0.00" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 700, color: '#fff', outline: 'none' }} />
+              <input value={amount} onChange={e => setAmount(e.target.value.replace(/[^0-9.]/g, ''))}
+                placeholder="0.00" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 700, color: '#fff', outline: 'none' }} />
             </div>
           </div>
+
+          {/* Position summary */}
           {amount && parseFloat(amount) > 0 && (
             <div style={{ background: C.card2, borderRadius: 12, padding: 14, marginBottom: 16 }}>
               {[
@@ -413,11 +456,37 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet }) {
               ))}
             </div>
           )}
+
+          {/* Action button */}
+          {!ENABLE_TRADING && wcon && (
+            <div style={{ marginBottom: 12, padding: 10, background: 'rgba(255,149,0,.08)', border: '1px solid rgba(255,149,0,.2)', borderRadius: 10, fontSize: 12, color: '#ff9500', textAlign: 'center', fontWeight: 600 }}>
+              Trading is in beta — coming soon
+            </div>
+          )}
+
           {!wcon ? (
-            <button onClick={() => { loginPrivy?.() || onConnectWallet?.(); }} style={{ width: '100%', padding: 16, borderRadius: 14, border: 'none', background: 'linear-gradient(135deg,#9945ff,#7c3aed)', color: '#fff', fontWeight: 800, fontSize: 16, cursor: 'pointer', minHeight: 54 }}>Connect Wallet</button>
+            <button onClick={() => { loginPrivy?.() || onConnectWallet?.(); }} style={{
+              width: '100%', padding: 16, borderRadius: 14, border: 'none',
+              background: 'linear-gradient(135deg,#9945ff,#7c3aed)', color: '#fff',
+              fontWeight: 800, fontSize: 16, cursor: 'pointer', minHeight: 54, fontFamily: 'Syne, sans-serif',
+            }}>Connect Wallet</button>
           ) : (
-            <button onClick={execute} disabled={!amount || status === 'loading'} style={{ width: '100%', padding: 16, borderRadius: 14, border: 'none', background: status === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : status === 'error' ? C.sellGrad : isLong ? C.buyGrad : C.sellGrad, color: '#fff', fontWeight: 800, fontSize: 16, cursor: status === 'loading' ? 'not-allowed' : 'pointer', minHeight: 54 }}>
-              {status === 'loading' ? 'Confirming...' : status === 'success' ? 'Order Placed!' : status === 'error' ? 'Order Failed — Retry' : isLong ? 'Go Long ↑' : 'Go Short ↓'}
+            <button onClick={execute} disabled={!amount || status === 'loading' || !ENABLE_TRADING} style={{
+              width: '100%', padding: 16, borderRadius: 14, border: 'none',
+              background: status === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
+                : status === 'error' ? C.sellGrad
+                : !ENABLE_TRADING ? C.card3
+                : isLong ? C.buyGrad : C.sellGrad,
+              color: !ENABLE_TRADING ? C.muted2 : '#fff',
+              fontWeight: 800, fontSize: 16,
+              cursor: status === 'loading' || !ENABLE_TRADING ? 'not-allowed' : 'pointer',
+              minHeight: 54, fontFamily: 'Syne, sans-serif',
+            }}>
+              {status === 'loading' ? 'Confirming...'
+                : status === 'success' ? 'Order Placed!'
+                : status === 'error' ? 'Order Failed — Retry'
+                : !ENABLE_TRADING ? 'Coming Soon'
+                : isLong ? 'Go Long ↑' : 'Go Short ↓'}
             </button>
           )}
           <div style={{ fontSize: 10, color: C.muted2, textAlign: 'center', marginTop: 10 }}>Powered by Hyperliquid</div>
@@ -427,10 +496,24 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet }) {
   );
 }
 
+/* ================================================================== */
+/*  PerpsTrade (main page)                                            */
+/* ================================================================== */
 export default function PerpsTrade({ onConnectWallet }) {
   const [marketData, setMarketData] = useState(PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0 })));
   const [activePair, setActivePair] = useState(marketData[0]);
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  const { publicKey: solPk } = useWallet();
+  const { privyEmbeddedSol } = useNexusWallet();
+  const walletPubkey = useMemo(() => {
+    if (solPk) return solPk.toString();
+    if (privyEmbeddedSol?.address) return privyEmbeddedSol.address;
+    return null;
+  }, [solPk, privyEmbeddedSol]);
+
+  // Preload ethers on mount
+  useEffect(() => { getEthers().catch(() => {}); }, []);
 
   useEffect(() => {
     let alive = true;
@@ -454,14 +537,22 @@ export default function PerpsTrade({ onConnectWallet }) {
         <h1 style={{ fontSize: 24, fontWeight: 800, color: '#fff', margin: 0 }}>Perps</h1>
         <p style={{ color: C.muted, fontSize: 13, marginTop: 4 }}>Trade with up to 50x leverage · 0.05% fee · Powered by Hyperliquid</p>
       </div>
+
+      {/* Horizontal pair strip */}
       <div style={{ display: 'flex', gap: 10, marginBottom: 20, overflowX: 'auto', paddingBottom: 4 }}>
         {marketData.map(p => (
           <PairCard key={p.id} pair={p} active={activePair?.id === p.id} onClick={() => setActivePair(p)} />
         ))}
       </div>
+
+      {/* Grid of trade buttons */}
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 20 }}>
         {marketData.map(p => (
-          <button key={p.id} onClick={() => openTrade(p)} style={{ padding: 16, borderRadius: 14, background: C.card, border: '1px solid ' + C.border, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left' }}>
+          <button key={p.id} onClick={() => openTrade(p)} style={{
+            padding: 16, borderRadius: 14, background: C.card,
+            border: '1px solid ' + C.border, cursor: 'pointer',
+            display: 'flex', alignItems: 'center', gap: 12, textAlign: 'left',
+          }}>
             <span style={{ fontSize: 28 }}>{p.icon}</span>
             <div style={{ flex: 1 }}>
               <div style={{ fontWeight: 800, color: '#fff', fontSize: 14 }}>{p.base}-PERP</div>
@@ -474,6 +565,8 @@ export default function PerpsTrade({ onConnectWallet }) {
           </button>
         ))}
       </div>
+
+      {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 20 }}>
         {[
           { label: 'Max Leverage', value: '50x' },
@@ -486,7 +579,14 @@ export default function PerpsTrade({ onConnectWallet }) {
           </div>
         ))}
       </div>
-      <TradeDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} pair={activePair} onConnectWallet={onConnectWallet} />
+
+      <TradeDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        pair={activePair}
+        onConnectWallet={onConnectWallet}
+        walletPubkey={walletPubkey}
+      />
     </div>
   );
 }
