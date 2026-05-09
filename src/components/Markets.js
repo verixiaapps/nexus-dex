@@ -31,8 +31,6 @@ const CHAIN_LABELS = {
   berachain: 'BERA', ink: 'INK', worldchain: 'WORLD',
 };
 
-const BROWSE_QUERY = 'usdc,eth,sol,btc,bnb,matic,avax,link,uni,arb';
-
 function fmt(n, d) {
   const x = Number(n);
   if (!Number.isFinite(x) || x === 0) return '-';
@@ -71,28 +69,57 @@ function useIsMobile() {
   return m;
 }
 
-function mapDexPair(p) {
-  if (!p || !p.chainId || !p.pairAddress) return null;
+function mapDexBoostToken(b) {
+  // DexScreener token-boosts endpoint returns flat token objects
+  if (!b || !b.tokenAddress || !b.chainId) return null;
+  const addr = b.tokenAddress;
+  const symbol = b.symbol || '???';
+  const name = b.name || symbol;
+  const price = Number(b.price || 0) || 0;
+  const change = b.priceChange24h != null ? Number(b.priceChange24h) : null;
+  const volume = Number(b.volume || 0) || 0;
+  const mcap = Number(b.marketCap || 0) || 0;
+  const isSol = b.chainId === 'solana';
+  const chainId = isSol ? undefined : (CHAIN_MAP[b.chainId] || undefined);
+  return {
+    id: b.chainId + '-' + addr,
+    chain: isSol ? 'solana' : 'evm',
+    chainId: chainId || (isSol ? undefined : b.chainId),
+    mint: isSol ? addr : undefined,
+    address: isSol ? undefined : addr,
+    symbol,
+    name,
+    logoURI: b.imgUrl || null,
+    image: b.imgUrl || null,
+    current_price: price,
+    market_cap: mcap,
+    total_volume: volume,
+    price_change_percentage_24h: Number.isFinite(change) ? change : null,
+    liquidity: 0,
+    isSolanaToken: isSol,
+    source: 'dexscreener',
+    decimals: isSol ? 6 : 18,
+    quoteSymbol: '',
+  };
+}
 
+function mapDexSearchPair(p) {
+  if (!p || !p.chainId || !p.pairAddress) return null;
   const bt = p.baseToken || {};
   const isSol = p.chainId === 'solana';
   const addr = bt.address || '';
   const symbol = bt.symbol || '???';
   const name = bt.name || symbol;
-
   if (!addr || !symbol) return null;
-
   const price = Number(p.priceUsd || 0) || 0;
   const change = p.priceChange?.h24 != null ? Number(p.priceChange.h24) : (p.priceChange24h != null ? Number(p.priceChange24h) : null);
   const volume = Number(p.volume?.h24 || p.volume || 0) || 0;
   const mcap = Number(p.marketCap || p.fdv || 0) || 0;
-
   const chainId = isSol ? undefined : (CHAIN_MAP[p.chainId] || undefined);
-
   return {
     id: p.chainId + '-' + addr,
     chain: isSol ? 'solana' : 'evm',
-    chainId: chainId || (p.chainId === 'solana' ? undefined : p.chainId),
+    chainId: chainId || (isSol ? undefined : p.chainId),
     mint: isSol ? addr : undefined,
     address: isSol ? undefined : addr,
     symbol,
@@ -147,8 +174,8 @@ function Row({ c, i, isMobile, onClick }) {
     transition: 'background .15s',
   };
 
-  const onEnter = e => { e.currentTarget.style.background = 'rgba(0,229,255,.03)'; };
-  const onLeave = e => { e.currentTarget.style.background = 'transparent'; };
+  const onEnter = e => e.currentTarget.style.background = 'rgba(0,229,255,.03)';
+  const onLeave = e => e.currentTarget.style.background = 'transparent';
 
   if (isMobile) {
     return (
@@ -188,6 +215,17 @@ function Row({ c, i, isMobile, onClick }) {
   );
 }
 
+async function fetchBoostTokens() {
+  try {
+    const res = await fetch('/api/dexscreener/token-boosts/latest/v1');
+    const data = await res.json().catch(() => []);
+    const tokens = (Array.isArray(data) ? data : [])
+      .map(mapDexBoostToken)
+      .filter(isUsable);
+    return tokens;
+  } catch { return []; }
+}
+
 async function searchDexScreener(query) {
   try {
     const res = await fetch('/api/dexscreener/latest/dex/search?q=' + encodeURIComponent(query));
@@ -196,7 +234,7 @@ async function searchDexScreener(query) {
     const seen = new Set();
     const tokens = [];
     for (const p of data.pairs) {
-      const t = mapDexPair(p);
+      const t = mapDexSearchPair(p);
       if (!t || !isUsable(t)) continue;
       const key = (t.mint || t.address || '').toLowerCase();
       if (seen.has(key)) continue;
@@ -218,18 +256,22 @@ export default function Markets({ onSelectCoin }) {
   const [searchLoading, setSearchLoading] = useState(false);
   const debouncedQ = useDebounce(q, 350);
 
+  // Default view: fetch trending tokens from DexScreener token boosts
   useEffect(() => {
     let c = false;
     setBrowseLoading(true);
-    searchDexScreener(BROWSE_QUERY).then(tokens => {
+    fetchBoostTokens().then(tokens => {
       if (c) return;
       tokens.sort((a, b) => (b.market_cap || 0) - (a.market_cap || 0));
       setBrowse(tokens.slice(0, 50));
       setBrowseLoading(false);
-    }).catch(() => { if (!c) { setBrowse([]); setBrowseLoading(false); } });
+    }).catch(() => {
+      if (!c) { setBrowse([]); setBrowseLoading(false); }
+    });
     return () => { c = true; };
   }, []);
 
+  // Search
   useEffect(() => {
     const t = debouncedQ.trim();
     if (!t || t.length < 2) { setSearchResults([]); setSearchLoading(false); return; }
@@ -271,13 +313,14 @@ export default function Markets({ onSelectCoin }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Live Markets</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Multi-chain · Search any token by name, symbol, or address</p>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>DexScreener trending — multi-chain. Search any token.</p>
         </div>
+
         <div style={{ position: 'relative', width: '100%', maxWidth: isMobile ? '100%' : 320 }}>
           <input
             value={q}
             onChange={e => setQ(e.target.value)}
-            placeholder="Name, symbol, or 0x..."
+            placeholder="Name, symbol, or contract..."
             style={{
               background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border),
               borderRadius: 10, padding: '10px 36px 10px 14px', color: '#fff',
@@ -291,7 +334,7 @@ export default function Markets({ onSelectCoin }) {
       </div>
 
       {loading ? (
-        <div style={{ textAlign: 'center', padding: 60, color: C.muted, fontSize: 14 }}>Loading top tokens...</div>
+        <div style={{ textAlign: 'center', padding: 60, color: C.muted, fontSize: 14 }}>Loading trending tokens...</div>
       ) : (
         <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
           {!isMobile && (
@@ -302,10 +345,14 @@ export default function Markets({ onSelectCoin }) {
               <button onClick={() => handleSort('market_cap')} style={{ background: 'none', border: 'none', color: sort === 'market_cap' ? C.accent : C.muted, cursor: 'pointer', fontSize: 10, fontWeight: 700, textAlign: 'right', padding: 0, fontFamily: 'Syne, sans-serif' }}>MKT CAP</button>
             </div>
           )}
+
           {sorted.length === 0 && debouncedQ && !searchLoading && (
             <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>No results for "{debouncedQ}"</div>
           )}
           {sorted.map((c, i) => <Row key={c.id} c={c} i={i} isMobile={isMobile} onClick={onRowClick} />)}
+          {sorted.length === 0 && !q && !browseLoading && (
+            <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>No trending tokens at the moment</div>
+          )}
         </div>
       )}
     </div>
