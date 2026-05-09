@@ -78,17 +78,18 @@ async function sendWithPrivy({ tx, connection, wallet, status }) {
   throw new Error('Privy wallet missing signing methods');
 }
 async function sendWithExternalWallet({ tx, connection, wallet, status }) {
-  if (typeof wallet.signTransaction === 'function') {
-    status('Confirm in wallet...');
-    const signed = await wallet.signTransaction(tx);
-    status('Sending...');
-    return await sendSignedTransaction(connection, signed);
+  if (typeof wallet.signTransaction !== 'function') {
+    throw new Error('External wallet missing signTransaction');
   }
-  if (typeof wallet.sendTransaction === 'function') {
-    status('Confirm in wallet...');
-    return await wallet.sendTransaction(tx, connection, { skipPreflight: true, maxRetries: 3 });
-  }
-  throw new Error('External wallet missing signing methods');
+  status('Confirm in wallet...');
+  const signed = await wallet.signTransaction(tx);
+  status('Sending...');
+  const signature = await connection.sendRawTransaction(signed.serialize(), {
+    skipPreflight: true,
+    maxRetries: 3,
+  });
+  await connection.confirmTransaction(signature, 'confirmed');
+  return signature;
 }
 export async function executePumpTrade({ action, mint, solAmount, tokenAmount, tokenPriceUsd, solPriceUsd, slippagePct, antiMev, publicKey, connection, wallet, onStatus }) {
   const status = typeof onStatus === 'function' ? onStatus : () => {};
