@@ -11,6 +11,7 @@
  *   - Uses /api/okx/dex/aggregator/swap-instruction.
  *   - Backend injects feePercent + fee wallet server-side.
  *   - Frontend never handles OKX API keys or fee wallet injection.
+ *   - Max slippage 15% to ensure trade completion.
  */
 
 import {
@@ -26,23 +27,7 @@ export const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 export const SOL_MINT = 'So11111111111111111111111111111111111111112';
 export const OKX_SOLANA_CHAIN_ID = '501';
 
-export const DEFAULT_SLIPPAGE_BPS = 1500;
-export const BLUE_CHIP_SLIPPAGE_BPS = 100;
-
 const U64_MAX = 18446744073709551615n;
-
-const BLUE_CHIPS = new Set([
-  SOL_MINT,
-  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
-  'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So',
-  '7vfCXTUXx5WJV5JADk17DUJ4ksgau7utNKj4b963voxs',
-  '3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh',
-]);
-
-export function pickSlippageBps(toMint) {
-  return BLUE_CHIPS.has(toMint) ? BLUE_CHIP_SLIPPAGE_BPS : DEFAULT_SLIPPAGE_BPS;
-}
 
 function assertAmountRaw(amountRaw) {
   try {
@@ -80,6 +65,7 @@ async function fetchOkxSwapInstruction({ fromMint, toMint, amountRaw, publicKey,
     fromTokenAddress: normalizeOkxTokenAddress(fromMint),
     toTokenAddress: normalizeOkxTokenAddress(toMint),
     amount: okxAmount(amountRaw),
+    slippagePercent: '0.15', // 15% max slippage
     userWalletAddress: publicKey.toString(),
     referrer: 'nexus-dex',
   });
@@ -154,7 +140,6 @@ async function sendWithPrivy({ tx, connection, wallet, status }) {
 }
 
 async function sendWithExternalWallet({ tx, connection, wallet, status }) {
-  // Simulate first via RPC so Phantom sees a successful simulation
   try {
     const sim = await connection.simulateTransaction(tx, { sigVerify: false });
     if (sim && sim.value && sim.value.err) {
@@ -164,7 +149,6 @@ async function sendWithExternalWallet({ tx, connection, wallet, status }) {
     console.warn('Simulation warning:', e.message);
   }
 
-  // Use wallet's sendTransaction with skipPreflight: false as Phantom requires
   if (typeof wallet.sendTransaction === 'function') {
     status('Confirm in wallet...');
     const signature = await wallet.sendTransaction(tx, connection, {
@@ -175,7 +159,6 @@ async function sendWithExternalWallet({ tx, connection, wallet, status }) {
     return signature;
   }
 
-  // Fallback for sign-only wallets
   if (typeof wallet.signTransaction !== 'function') {
     throw new Error('External wallet missing signing methods');
   }
