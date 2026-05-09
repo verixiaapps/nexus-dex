@@ -4,16 +4,17 @@ import { useNexusWallet } from '../WalletContext.js';
 
 /* ============================================================================
  * NEXUS DEX -- Hyperliquid Perps Trading Interface
- * Fast, fun, PancakeSwap-style UI for Hyperliquid perpetuals.
+ * Non-custodial. User signs locally. Hyperliquid executes.
  * 
  * Builder Code (Nexus DEX): 0x4e65787573444558000000000000000000000000000000000000000000000000
- * Max Fee Rate for Perps: 0.1% (0.001)
+ * Max Fee Rate: 0.05% (0.0005)
  * 
  * Data: Hyperliquid Info API via backend proxy /api/hyperliquid
+ * Trading: Hyperliquid Exchange API via backend proxy /api/hyperliquid/exchange
  * ========================================================================= */
 
 const BUILDER_CODE = '0x4e65787573444558000000000000000000000000000000000000000000000000';
-const MAX_FEE_RATE = '0.001';
+const MAX_FEE_RATE = '0.0005';
 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -63,10 +64,78 @@ function pct(n) {
 }
 
 /* ============================================================================
- * Hyperliquid API helper
+ * Hyperliquid Wallet (client-side only — non-custodial)
  * ========================================================================= */
-async function hyperliquidRequest(body) {
-  const res = await fetch('/api/hyperliquid', {
+function generateHlWallet() {
+  try {
+    const { ethers } = require('ethers');
+    const wallet = ethers.Wallet.createRandom();
+    return {
+      address: wallet.address,
+      privateKey: wallet.privateKey,
+      mnemonic: wallet.mnemonic?.phrase || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function encryptHlWallet(privateKey, signature) {
+  try {
+    const key = signature.slice(0, 32);
+    let encrypted = '';
+    for (let i = 0; i < privateKey.length; i++) {
+      encrypted += String.fromCharCode(privateKey.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+    }
+    return btoa(encrypted);
+  } catch {
+    return null;
+  }
+}
+
+function decryptHlWallet(encrypted, signature) {
+  try {
+    const key = signature.slice(0, 32);
+    const decoded = atob(encrypted);
+    let decrypted = '';
+    for (let i = 0; i < decoded.length; i++) {
+      decrypted += String.fromCharCode(decoded.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+    }
+    return decrypted;
+  } catch {
+    return null;
+  }
+}
+
+function getStoredHlWallet(signature) {
+  try {
+    const stored = localStorage.getItem('nexus_hl_wallet');
+    if (!stored) return null;
+    const data = JSON.parse(stored);
+    const pk = decryptHlWallet(data.encrypted, signature);
+    return pk ? { address: data.address, privateKey: pk } : null;
+  } catch {
+    return null;
+  }
+}
+
+function storeHlWallet(address, privateKey, signature) {
+  try {
+    const encrypted = encryptHlWallet(privateKey, signature);
+    if (!encrypted) return false;
+    localStorage.setItem('nexus_hl_wallet', JSON.stringify({ address, encrypted }));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/* ============================================================================
+ * Hyperliquid API helpers
+ * ========================================================================= */
+async function hyperliquidRequest(body, isExchange = false) {
+  const endpoint = isExchange ? '/api/hyperliquid/exchange' : '/api/hyperliquid';
+  const res = await fetch(endpoint, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -82,13 +151,13 @@ async function fetchMarketData() {
       hyperliquidRequest({ type: 'meta' }),
       hyperliquidRequest({ type: 'allMids' }),
     ]);
-    
+
     const universe = (meta.universe || []).map((u, i) => ({
       name: u.name || 'Unknown',
       index: i,
       maxLeverage: u.maxLeverage || 50,
     }));
-    
+
     return PERPS_PAIRS.map(p => {
       const info = universe.find(u => u.name === p.id);
       const price = prices && prices[p.id] ? parseFloat(prices[p.id]) : 0;
@@ -101,6 +170,64 @@ async function fetchMarketData() {
     });
   } catch {
     return PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0 }));
+  }
+}
+
+async function placeOrder({ privateKey, pairIndex, isLong, amount, leverage }) {
+  try {
+    const { ethers } = require('ethers');
+    const wallet = new ethers.Wallet(privateKey);
+    const timestamp = Date.now();
+
+    const orderRequest = {
+      type: 'order',
+      orders: [{
+        asset: pairIndex,
+        isBuy: isLong,
+        limitPx: 0,
+        sz: Number(amount),
+        leverage: Number(leverage),
+        orderType: { market: {} },
+        reduceOnly: false,
+        cloid: null,
+      }],
+      grouping: 'na',
+      builder: BUILDER_CODE,
+    };
+
+    const signedOrder = await wallet.signTypedData(
+      {
+        name: 'Exchange',
+        version: '1',
+        chainId: 1337,
+        verifyingContract: '0x0000000000000000000000000000000000000000',
+      },
+      {
+        Agent: [
+          { name: 'source', type: 'string' },
+          { name: 'connectionId', type: 'bytes32' },
+        ],
+      },
+      {
+        source: 'a',
+        connectionId: ethers.constants.HashZero,
+      }
+    );
+
+    const payload = {
+      action: orderRequest,
+      signature: {
+        r: signedOrder.slice(0, 66),
+        s: '0x' + signedOrder.slice(66, 130),
+        v: parseInt(signedOrder.slice(130, 132), 16),
+      },
+      nonce: timestamp,
+    };
+
+    const result = await hyperliquidRequest(payload, true);
+    return result;
+  } catch (e) {
+    throw new Error(e.message || 'Order failed');
   }
 }
 
@@ -134,13 +261,26 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet }) {
   const [side, setSide] = useState('long');
   const [amount, setAmount] = useState('');
   const [leverage, setLeverage] = useState(5);
-  const [sliderPct, setSliderPct] = useState(0);
   const [status, setStatus] = useState('idle');
+  const [hlWallet, setHlWallet] = useState(null);
+  const [creatingWallet, setCreatingWallet] = useState(false);
 
   useBodyLock(open);
 
   useEffect(() => {
-    if (open) { setAmount(''); setSliderPct(0); setStatus('idle'); }
+    if (open) {
+      setAmount('');
+      setStatus('idle');
+      const stored = localStorage.getItem('nexus_hl_wallet');
+      if (stored) {
+        try {
+          const data = JSON.parse(stored);
+          setHlWallet({ address: data.address });
+        } catch {
+          setHlWallet(null);
+        }
+      }
+    }
   }, [open]);
 
   const isLong = side === 'long';
@@ -150,15 +290,58 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet }) {
     ? entryPrice * (1 - 0.9 / leverage)
     : entryPrice * (1 + 0.9 / leverage);
 
-  const handleSlider = pct => { setSliderPct(pct); setAmount(''); };
+  const createWallet = async () => {
+    setCreatingWallet(true);
+    try {
+      const newWallet = generateHlWallet();
+      if (!newWallet) throw new Error('Failed to generate wallet');
+      const sig = 'nexus-sig-' + Date.now();
+      storeHlWallet(newWallet.address, newWallet.privateKey, sig);
+      setHlWallet({ address: newWallet.address });
+    } catch (e) {
+      console.error('Wallet creation failed:', e);
+    }
+    setCreatingWallet(false);
+  };
 
   const execute = async () => {
-    if (!wcon) { loginPrivy?.() || onConnectWallet?.(); return; }
+    if (!wcon) {
+      loginPrivy?.() || onConnectWallet?.();
+      return;
+    }
+    if (!hlWallet) {
+      await createWallet();
+      return;
+    }
+
     setStatus('loading');
-    setTimeout(() => {
+    try {
+      const stored = localStorage.getItem('nexus_hl_wallet');
+      const data = JSON.parse(stored);
+      const sig = 'nexus-sig-' + Date.now();
+      const pk = decryptHlWallet(data.encrypted, sig);
+      if (!pk) throw new Error('Could not decrypt wallet');
+
+      const pairIndex = PERPS_PAIRS.findIndex(p => p.id === pair.id);
+
+      await placeOrder({
+        privateKey: pk,
+        pairIndex: pairIndex >= 0 ? pairIndex : 0,
+        isLong,
+        amount: parseFloat(amount) || 0,
+        leverage,
+      });
+
       setStatus('success');
-      setTimeout(() => { setStatus('idle'); onClose(); }, 2000);
-    }, 1200);
+      setTimeout(() => {
+        setStatus('idle');
+        onClose();
+      }, 2000);
+    } catch (e) {
+      console.error('Trade failed:', e);
+      setStatus('error');
+      setTimeout(() => setStatus('idle'), 3000);
+    }
   };
 
   if (!open || !pair) return null;
@@ -174,13 +357,32 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet }) {
               <span style={{ fontSize: 26 }}>{pair.icon}</span>
               <div>
                 <div style={{ color: '#fff', fontWeight: 800, fontSize: 18 }}>{pair.base}-PERP</div>
-                <div style={{ color: C.muted, fontSize: 11 }}>Up to {pair.leverage}x · 0.10% fee · Powered by Hyperliquid</div>
+                <div style={{ color: C.muted, fontSize: 11 }}>Up to {pair.leverage}x · 0.05% fee · Powered by Hyperliquid</div>
               </div>
             </div>
             <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer' }}>x</button>
           </div>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px calc(env(safe-area-inset-bottom) + 24px)' }}>
+          {!hlWallet && wcon && (
+            <div style={{ marginBottom: 16, padding: 14, background: 'rgba(168,85,247,.08)', border: '1px solid rgba(168,85,247,.25)', borderRadius: 12, textAlign: 'center' }}>
+              <div style={{ color: C.privy || C.purple, fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Create your Hyperliquid Wallet</div>
+              <button onClick={createWallet} disabled={creatingWallet} style={{ padding: '10px 20px', borderRadius: 10, border: 'none', background: 'linear-gradient(135deg,#a855f7,#7c3aed)', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>
+                {creatingWallet ? 'Creating...' : 'Create Wallet'}
+              </button>
+            </div>
+          )}
+          {hlWallet && (
+            <div style={{ marginBottom: 16, padding: 10, background: 'rgba(0,255,163,.06)', border: '1px solid rgba(0,255,163,.15)', borderRadius: 10 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <div style={{ fontSize: 10, color: C.muted, fontWeight: 700 }}>HYPERLIQUID WALLET</div>
+                  <div style={{ fontSize: 11, color: C.text, fontFamily: 'monospace' }}>{hlWallet.address.slice(0, 6)}...{hlWallet.address.slice(-4)}</div>
+                </div>
+                <div style={{ fontSize: 10, color: C.green, fontWeight: 600 }}>Connected</div>
+              </div>
+            </div>
+          )}
           <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
             <button onClick={() => setSide('long')} style={{ flex: 1, padding: 12, borderRadius: 12, border: '1px solid ' + (isLong ? C.green : C.border), background: isLong ? 'rgba(0,255,163,.10)' : C.card2, color: isLong ? C.green : C.muted, fontWeight: 800, fontSize: 15, cursor: 'pointer' }}>↑ Long</button>
             <button onClick={() => setSide('short')} style={{ flex: 1, padding: 12, borderRadius: 12, border: '1px solid ' + (!isLong ? C.red : C.border), background: !isLong ? 'rgba(255,59,107,.10)' : C.card2, color: !isLong ? C.red : C.muted, fontWeight: 800, fontSize: 15, cursor: 'pointer' }}>↓ Short</button>
@@ -198,16 +400,24 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet }) {
           </div>
           {amount && parseFloat(amount) > 0 && (
             <div style={{ background: C.card2, borderRadius: 12, padding: 14, marginBottom: 16 }}>
-              {[['Position Size', fmt(positionSize)], ['Entry Price', fmt(entryPrice, 2)], ['Est. Liquidation', fmt(liqPrice, 4)], ['Fee (0.10%)', fmt(parseFloat(amount) * 0.001)]].map(([l, v]) => (
-                <div key={l} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 11 }}><span style={{ color: C.muted }}>{l}</span><span style={{ color: C.text, fontWeight: 600 }}>{v}</span></div>
+              {[
+                ['Position Size', fmt(positionSize)],
+                ['Entry Price', fmt(entryPrice, 2)],
+                ['Est. Liquidation', fmt(liqPrice, 4)],
+                ['Fee (0.05%)', fmt(parseFloat(amount) * 0.0005)],
+              ].map(([l, v]) => (
+                <div key={l} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 11 }}>
+                  <span style={{ color: C.muted }}>{l}</span>
+                  <span style={{ color: C.text, fontWeight: 600 }}>{v}</span>
+                </div>
               ))}
             </div>
           )}
           {!wcon ? (
             <button onClick={() => { loginPrivy?.() || onConnectWallet?.(); }} style={{ width: '100%', padding: 16, borderRadius: 14, border: 'none', background: 'linear-gradient(135deg,#9945ff,#7c3aed)', color: '#fff', fontWeight: 800, fontSize: 16, cursor: 'pointer', minHeight: 54 }}>Connect Wallet</button>
           ) : (
-            <button onClick={execute} disabled={!amount || status !== 'idle'} style={{ width: '100%', padding: 16, borderRadius: 14, border: 'none', background: status === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : isLong ? C.buyGrad : C.sellGrad, color: '#fff', fontWeight: 800, fontSize: 16, cursor: status === 'loading' ? 'not-allowed' : 'pointer', minHeight: 54 }}>
-              {status === 'loading' ? 'Confirming...' : status === 'success' ? 'Position Opened!' : isLong ? 'Go Long ↑' : 'Go Short ↓'}
+            <button onClick={execute} disabled={!amount || status === 'loading'} style={{ width: '100%', padding: 16, borderRadius: 14, border: 'none', background: status === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : status === 'error' ? C.sellGrad : isLong ? C.buyGrad : C.sellGrad, color: '#fff', fontWeight: 800, fontSize: 16, cursor: status === 'loading' ? 'not-allowed' : 'pointer', minHeight: 54 }}>
+              {status === 'loading' ? 'Confirming...' : status === 'success' ? 'Order Placed!' : status === 'error' ? 'Order Failed — Retry' : isLong ? 'Go Long ↑' : 'Go Short ↓'}
             </button>
           )}
           <div style={{ fontSize: 10, color: C.muted2, textAlign: 'center', marginTop: 10 }}>Powered by Hyperliquid</div>
@@ -239,10 +449,10 @@ export default function PerpsTrade({ onConnectWallet }) {
   };
 
   return (
-    <div style={{ maxWidth: 640, margin: '0 auto', width: '100%' }}>
+    <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 24, fontWeight: 800, color: '#fff', margin: 0 }}>Perps</h1>
-        <p style={{ color: C.muted, fontSize: 13, marginTop: 4 }}>Trade with up to 50x leverage · 0.10% fee · Powered by Hyperliquid</p>
+        <p style={{ color: C.muted, fontSize: 13, marginTop: 4 }}>Trade with up to 50x leverage · 0.05% fee · Powered by Hyperliquid</p>
       </div>
       <div style={{ display: 'flex', gap: 10, marginBottom: 20, overflowX: 'auto', paddingBottom: 4 }}>
         {marketData.map(p => (
@@ -265,7 +475,11 @@ export default function PerpsTrade({ onConnectWallet }) {
         ))}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 20 }}>
-        {[ { label: 'Max Leverage', value: '50x' }, { label: 'Your Fee', value: '0.10%' }, { label: 'Powered by', value: 'Hyperliquid' } ].map(s => (
+        {[
+          { label: 'Max Leverage', value: '50x' },
+          { label: 'Fee', value: '0.05%' },
+          { label: 'Powered by', value: 'Hyperliquid' },
+        ].map(s => (
           <div key={s.label} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 14, padding: 14, textAlign: 'center' }}>
             <div style={{ fontSize: 18, fontWeight: 800, color: '#fff' }}>{s.value}</div>
             <div style={{ fontSize: 10, color: C.muted, marginTop: 2 }}>{s.label}</div>
