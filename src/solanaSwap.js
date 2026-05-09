@@ -6,12 +6,11 @@
  *   - SwapWidget.jsx executeSwap
  *   - NewLaunches.js instant trade variants
  *
- * Behavior: 
+ * Behavior:
  *   - Solana <-> Solana through OKX DEX aggregator via backend proxy.
  *   - Uses /api/okx/dex/aggregator/swap-instruction.
  *   - Backend injects feePercent + fee wallet server-side.
- *   - Frontend never handles OKX API keys or fee wallet injection.
- *   - signTransaction → sendRawTransaction to avoid wallet simulation.
+ *   - Simulates before wallet popup for Phantom compatibility.
  */
 
 import {
@@ -149,11 +148,7 @@ async function sendWithPrivy({ tx, connection, wallet, status }) {
   if (!wallet.privyWallet) throw new Error('Privy wallet unavailable');
   status('Signing...');
   if (typeof wallet.privyWallet.sendTransaction === 'function') {
-    const sendOpts = {
-      ...(wallet.instant ? { uiOptions: { showWalletUIs: false } } : {}),
-      skipPreflight: true,
-      maxRetries: 3,
-    };
+    const sendOpts = wallet.instant ? { uiOptions: { showWalletUIs: false } } : undefined;
     return await wallet.privyWallet.sendTransaction(tx, connection, sendOpts);
   }
   if (typeof wallet.privyWallet.signTransaction === 'function') {
@@ -165,8 +160,30 @@ async function sendWithPrivy({ tx, connection, wallet, status }) {
 }
 
 async function sendWithExternalWallet({ tx, connection, wallet, status }) {
+  // Simulate first so Phantom can validate the transaction
+  try {
+    const sim = await connection.simulateTransaction(tx, { sigVerify: false });
+    if (sim && sim.value && sim.value.err) {
+      throw new Error('Transaction would fail');
+    }
+  } catch (e) {
+    // If simulation fails, still try the wallet's native send
+  }
+
+  // Use wallet's sendTransaction — full simulation in wallet
+  if (typeof wallet.sendTransaction === 'function') {
+    status('Confirm in wallet...');
+    const signature = await wallet.sendTransaction(tx, connection, {
+      skipPreflight: false,
+      maxRetries: 3,
+    });
+    await connection.confirmTransaction(signature, 'confirmed');
+    return signature;
+  }
+
+  // Fallback
   if (typeof wallet.signTransaction !== 'function') {
-    throw new Error('External wallet missing signTransaction');
+    throw new Error('External wallet missing signing methods');
   }
   status('Confirm in wallet...');
   const signed = await wallet.signTransaction(tx);
