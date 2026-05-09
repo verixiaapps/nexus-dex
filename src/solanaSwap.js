@@ -6,7 +6,7 @@
  *   - SwapWidget.jsx executeSwap
  *   - NewLaunches.js instant trade variants
  *
- * Behavior:
+ * Behavior: 
  *   - Solana <-> Solana through OKX DEX aggregator via backend proxy.
  *   - Uses /api/okx/dex/aggregator/swap-instruction.
  *   - Backend injects feePercent + fee wallet server-side.
