@@ -20,16 +20,6 @@ const DEFAULT_TOKENS = [
   { mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', symbol: 'USDT', name: 'Tether', decimals: 6 },
   { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', symbol: 'JUP', name: 'Jupiter', decimals: 6 },
   { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6BFrR4Jfrj6z7m9', symbol: 'BONK', name: 'Bonk', decimals: 5 },
-  { mint: 'EKpQGSJtjMFqKZ9QanSqYXRcF6hQyFQ6Q1M5Z2dKp4a', symbol: 'WIF', name: 'dogwifhat', decimals: 6 },
-  { mint: 'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL', symbol: 'JTO', name: 'Jito', decimals: 9 },
-  { mint: '4k3Dyjzvzp8eMZWUXbM6gQ6G5d5q8D4ew3Efr2mH5JxE', symbol: 'RAY', name: 'Raydium', decimals: 6 },
-  { mint: '7GCihgDB8fe6KN8nG7V5s6anVtYwGzYxw5f5P9rPpump', symbol: 'POPCAT', name: 'Popcat', decimals: 9 },
-  { mint: 'ukHH6c7mMyiWCf1b9pnWe25TSpkDDt3H5pQZgZ74J82', symbol: 'BOME', name: 'BOOK OF MEME', decimals: 6 },
-  { mint: 'HZ1JovNiVvGrGNiiYvJ9H7jHjRjtpdD3xVtDUM5yKrt', symbol: 'PYTH', name: 'Pyth Network', decimals: 6 },
-  { mint: '2zMMhcVQEXDtdE6vsuK4tfjCFPfev3x8WJq8q6z6pump', symbol: 'PENGU', name: 'Pudgy Penguins', decimals: 6 },
-  { mint: '9BB6NFEcjBCtnNLFko2FqVQBq8HHM13kCyYcdQbgpump', symbol: 'FARTCOIN', name: 'Fartcoin', decimals: 6 },
-  { mint: 'MEW1gQWm4P5T7mZ4w7c4Xg6t3dYV6M4YhYgJ8Zpump', symbol: 'MEW', name: 'Cat in a Dogs World', decimals: 6 },
-  { mint: 'KMNoY8h5xN2g6z7dL9X4mP6rV7sT3qB4wE5f8u9pump', symbol: 'KMNO', name: 'Kamino', decimals: 6 },
 ];
 
 function fmt(n, d) {
@@ -71,72 +61,6 @@ function useIsMobile() {
     return () => window.removeEventListener('resize', h);
   }, []);
   return m;
-}
-
-function mapDexSearchPair(p) {
-  if (!p || !p.chainId || !p.pairAddress) return null;
-  const bt = p.baseToken || {};
-  const isSol = p.chainId === 'solana';
-  const addr = bt.address || '';
-  const symbol = bt.symbol || '';
-  const name = bt.name || symbol;
-  if (!addr || !symbol) return null;
-  const price = Number(p.priceUsd || 0) || 0;
-  const change = p.priceChange?.h24 != null ? Number(p.priceChange.h24) : null;
-  const volume = Number(p.volume?.h24 || 0) || 0;
-  const mcap = Number(p.marketCap || p.fdv || 0) || 0;
-  return {
-    id: p.chainId + '-' + addr,
-    chain: isSol ? 'solana' : 'evm',
-    mint: isSol ? addr : undefined,
-    address: isSol ? undefined : addr,
-    symbol,
-    name,
-    logoURI: bt.imgUrl || p.info?.imageUrl || null,
-    image: bt.imgUrl || p.info?.imageUrl || null,
-    current_price: price,
-    market_cap: mcap,
-    total_volume: volume,
-    price_change_percentage_24h: Number.isFinite(change) ? change : null,
-    isSolanaToken: isSol,
-    source: 'dexscreener',
-    decimals: bt.decimals || (isSol ? 6 : 18),
-  };
-}
-
-function isUsable(c) {
-  if (!c || !c.symbol) return false;
-  if (c.chain === 'solana') return !!(c.mint && c.mint.length >= 32);
-  return !!(c.address && c.address.startsWith('0x'));
-}
-
-function toCanonical(c) {
-  if (!isUsable(c)) return null;
-  if (c.chain === 'solana') {
-    return {
-      chain: 'solana',
-      mint: c.mint,
-      symbol: c.symbol,
-      name: c.name || c.symbol,
-      decimals: c.decimals || 6,
-      logoURI: c.logoURI || c.image || null,
-      current_price: c.current_price,
-      price_change_percentage_24h: c.price_change_percentage_24h,
-      source: 'dexscreener',
-    };
-  }
-  return {
-    chain: 'evm',
-    address: c.address,
-    chainId: c.chainId,
-    symbol: c.symbol,
-    name: c.name || c.symbol,
-    decimals: c.decimals || 18,
-    logoURI: c.logoURI || c.image || null,
-    current_price: c.current_price,
-    price_change_percentage_24h: c.price_change_percentage_24h,
-    source: 'dexscreener',
-  };
 }
 
 function TokenImage({ token, size }) {
@@ -248,9 +172,6 @@ function Row({ c, i, isMobile, onClick }) {
             {sym}
             <ChainBadge token={c} />
           </div>
-          <div style={{ fontSize: 10, color: C.muted, marginTop: 1 }}>
-            {shortAddr(c.mint || c.address)}
-          </div>
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
           <div style={{ fontWeight: 600, color: '#fff', fontSize: 13 }}>
@@ -304,7 +225,6 @@ function Row({ c, i, isMobile, onClick }) {
           <div style={{ fontSize: 10, color: C.muted }}>
             {sym}
             <ChainBadge token={c} />
-            <span style={{ marginLeft: 6 }}>{shortAddr(c.mint || c.address)}</span>
           </div>
         </div>
       </div>
@@ -328,71 +248,53 @@ function Row({ c, i, isMobile, onClick }) {
   );
 }
 
-async function fetchTokenPrices(mints) {
-  try {
-    const res = await fetch('/api/dexscreener/latest/dex/tokens/' + mints.join(','));
-    const data = await res.json().catch(() => null);
-    if (!data || !Array.isArray(data.pairs)) return {};
-    const prices = {};
-    data.pairs.forEach((p) => {
-      if (p.baseToken && p.baseToken.address) {
-        prices[p.baseToken.address] = {
-          price: Number(p.priceUsd || 0) || 0,
-          change: p.priceChange?.h24 != null ? Number(p.priceChange.h24) : null,
-          volume: Number(p.volume?.h24 || 0) || 0,
-          mcap: Number(p.marketCap || p.fdv || 0) || 0,
-          logoURI: p.info?.imageUrl || p.baseToken.imgUrl || null,
-        };
-      }
-    });
-    return prices;
-  } catch {
-    return {};
-  }
-}
-
-async function searchDexScreener(query) {
-  try {
-    const res = await fetch('/api/dexscreener/latest/dex/search?q=' + encodeURIComponent(query));
-    const data = await res.json().catch(() => null);
-    if (!data || !Array.isArray(data.pairs)) return [];
-    const seen = new Set();
-    const tokens = [];
-    for (const p of data.pairs) {
-      const t = mapDexSearchPair(p);
-      if (!t || !isUsable(t)) continue;
-      const key = (t.mint || t.address || '').toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      tokens.push(t);
-    }
-    return tokens;
-  } catch {
-    return [];
-  }
+function toCanonical(c) {
+  if (!c) return null;
+  return {
+    chain: 'solana',
+    mint: c.mint,
+    symbol: c.symbol,
+    name: c.name || c.symbol,
+    decimals: c.decimals || 6,
+    logoURI: c.logoURI || c.image || null,
+    current_price: c.current_price,
+    price_change_percentage_24h: c.price_change_percentage_24h,
+  };
 }
 
 export default function Markets({ onSelectCoin }) {
   const [q, setQ] = useState('');
-  const [sort, setSort] = useState('market_cap');
-  const [dir, setDir] = useState(-1);
+  const [tokens, setTokens] = useState([]);
+  const [loading, setLoading] = useState(true);
   const isMobile = useIsMobile();
-  const [browse, setBrowse] = useState([]);
-  const [browseLoading, setBrowseLoading] = useState(true);
-  const [searchResults, setSearchResults] = useState([]);
-  const [searchLoading, setSearchLoading] = useState(false);
-  const debouncedQ = useDebounce(q, 350);
 
   useEffect(() => {
     let cancelled = false;
-    setBrowseLoading(true);
-    const mints = DEFAULT_TOKENS.map((t) => t.mint);
+    setLoading(true);
 
-    fetchTokenPrices(mints)
-      .then((prices) => {
+    const mints = DEFAULT_TOKENS.map((t) => t.mint);
+    const url = `https://api.dexscreener.com/latest/dex/tokens/${mints.join(',')}`;
+
+    fetch(url)
+      .then((res) => res.json())
+      .then((data) => {
         if (cancelled) return;
-        const tokens = DEFAULT_TOKENS.map((dt) => {
-          const p = prices[dt.mint] || {};
+        const pairs = data.pairs || [];
+        const priceMap = {};
+        pairs.forEach((p) => {
+          if (p.baseToken?.address) {
+            priceMap[p.baseToken.address] = {
+              price: Number(p.priceUsd || 0) || 0,
+              change: p.priceChange?.h24 != null ? Number(p.priceChange.h24) : null,
+              volume: Number(p.volume?.h24 || 0) || 0,
+              mcap: Number(p.marketCap || p.fdv || 0) || 0,
+              logoURI: p.info?.imageUrl || null,
+            };
+          }
+        });
+
+        const enriched = DEFAULT_TOKENS.map((dt) => {
+          const p = priceMap[dt.mint] || {};
           return {
             id: 'solana-' + dt.mint,
             chain: 'solana',
@@ -406,80 +308,40 @@ export default function Markets({ onSelectCoin }) {
             market_cap: p.mcap || 0,
             total_volume: p.volume || 0,
             price_change_percentage_24h: Number.isFinite(p.change) ? p.change : null,
-            isSolanaToken: true,
-            source: 'dexscreener',
           };
         });
-        tokens.sort((a, b) => (b.market_cap || 0) - (a.market_cap || 0));
-        setBrowse(tokens);
-        setBrowseLoading(false);
+
+        setTokens(enriched);
+        setLoading(false);
       })
       .catch(() => {
         if (!cancelled) {
-          setBrowse([]);
-          setBrowseLoading(false);
+          setTokens([]);
+          setLoading(false);
         }
       });
 
-    return () => {
-      cancelled = true;
-    };
+    return () => { cancelled = true; };
   }, []);
 
-  useEffect(() => {
-    const t = debouncedQ.trim();
-    if (!t || t.length < 2) {
-      setSearchResults([]);
-      setSearchLoading(false);
-      return;
-    }
-    let cancelled = false;
-    setSearchLoading(true);
-    searchDexScreener(t)
-      .then((tokens) => {
-        if (cancelled) return;
-        setSearchResults(tokens);
-        setSearchLoading(false);
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setSearchResults([]);
-          setSearchLoading(false);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [debouncedQ]);
+  const filtered = useMemo(() => {
+    if (!q.trim()) return tokens;
+    const lower = q.toLowerCase();
+    return tokens.filter(
+      (t) =>
+        t.symbol.toLowerCase().includes(lower) ||
+        t.name.toLowerCase().includes(lower) ||
+        t.mint.toLowerCase().includes(lower)
+    );
+  }, [tokens, q]);
 
-  const sorted = useMemo(() => {
-    const list = debouncedQ.trim() ? searchResults : browse;
-    return list
-      .slice()
-      .sort((a, b) => dir * ((Number(a[sort] || 0)) - (Number(b[sort] || 0))))
-      .slice(0, 50);
-  }, [debouncedQ, searchResults, browse, sort, dir]);
-
-  const handleSort = useCallback(
-    (k) => {
-      if (sort === k) setDir((d) => -d);
-      else {
-        setSort(k);
-        setDir(-1);
-      }
-    },
-    [sort]
-  );
-
-  const onRowClick = useCallback(
+  const handleClick = useCallback(
     (row) => {
       const c = toCanonical(row);
       if (c) onSelectCoin?.(c);
     },
     [onSelectCoin]
   );
-
-  const loading = browseLoading && !q;
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
@@ -498,14 +360,14 @@ export default function Markets({ onSelectCoin }) {
             Live Markets
           </h1>
           <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>
-            Top Solana tokens — search any token
+            Top Solana tokens with live prices
           </p>
         </div>
         <div style={{ position: 'relative', width: '100%', maxWidth: isMobile ? '100%' : 320 }}>
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Name, symbol, or contract..."
+            placeholder="Search tokens..."
             style={{
               background: C.card,
               border: '1px solid ' + (q ? C.borderHi : C.border),
@@ -521,10 +383,7 @@ export default function Markets({ onSelectCoin }) {
           />
           {q && (
             <button
-              onClick={() => {
-                setQ('');
-                setSearchResults([]);
-              }}
+              onClick={() => setQ('')}
               style={{
                 position: 'absolute',
                 right: 10,
@@ -541,26 +400,12 @@ export default function Markets({ onSelectCoin }) {
               x
             </button>
           )}
-          {searchLoading && (
-            <div
-              style={{
-                position: 'absolute',
-                right: q ? 32 : 10,
-                top: '50%',
-                transform: 'translateY(-50%)',
-                color: C.accent,
-                fontSize: 11,
-              }}
-            >
-              ...
-            </div>
-          )}
         </div>
       </div>
 
       {loading ? (
         <div style={{ textAlign: 'center', padding: 60, color: C.muted, fontSize: 14 }}>
-          Loading top tokens...
+          Loading tokens...
         </div>
       ) : (
         <div
@@ -587,65 +432,20 @@ export default function Markets({ onSelectCoin }) {
             >
               <div>#</div>
               <div>NAME</div>
-              <button
-                onClick={() => handleSort('current_price')}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: sort === 'current_price' ? C.accent : C.muted,
-                  cursor: 'pointer',
-                  fontSize: 10,
-                  fontWeight: 700,
-                  textAlign: 'right',
-                  padding: 0,
-                  fontFamily: 'Syne, sans-serif',
-                }}
-              >
-                PRICE
-              </button>
-              <button
-                onClick={() => handleSort('price_change_percentage_24h')}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: sort === 'price_change_percentage_24h' ? C.accent : C.muted,
-                  cursor: 'pointer',
-                  fontSize: 10,
-                  fontWeight: 700,
-                  textAlign: 'right',
-                  padding: 0,
-                  fontFamily: 'Syne, sans-serif',
-                }}
-              >
-                24H
-              </button>
-              <button
-                onClick={() => handleSort('market_cap')}
-                style={{
-                  background: 'none',
-                  border: 'none',
-                  color: sort === 'market_cap' ? C.accent : C.muted,
-                  cursor: 'pointer',
-                  fontSize: 10,
-                  fontWeight: 700,
-                  textAlign: 'right',
-                  padding: 0,
-                  fontFamily: 'Syne, sans-serif',
-                }}
-              >
-                MKT CAP
-              </button>
+              <div style={{ textAlign: 'right' }}>PRICE</div>
+              <div style={{ textAlign: 'right' }}>24H</div>
+              <div style={{ textAlign: 'right' }}>MKT CAP</div>
             </div>
           )}
 
-          {sorted.length === 0 && debouncedQ && !searchLoading && (
+          {filtered.length === 0 && (
             <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>
-              No results for "{debouncedQ}"
+              No tokens found
             </div>
           )}
 
-          {sorted.map((c, i) => (
-            <Row key={c.id} c={c} i={i} isMobile={isMobile} onClick={onRowClick} />
+          {filtered.map((c, i) => (
+            <Row key={c.id} c={c} i={i} isMobile={isMobile} onClick={handleClick} />
           ))}
         </div>
       )}
