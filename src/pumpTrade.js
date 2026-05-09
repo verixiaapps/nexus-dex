@@ -4,18 +4,9 @@
  * Used by:
  *   - NewLaunches.js TokenCard one-click preset buttons
  *
- * Behavior:  
- *   - Calls our backend proxy: /api/pumpportal/trade-local
- *   - Backend forwards to PumpPortal trade-local
- *   - Receives serialized VersionedTransaction
- *   - Decompiles, appends platform fee transfer, recompiles to V0
- *   - Signs + sends with Privy or external Solana wallet
- *
  * Fee behavior:
  *   - Buy: exact 5% platform fee is taken inside the user's total SOL spend.
- *          Example: user spends 1 SOL total -> 0.95 SOL trade + 0.05 SOL fee.
- *   - Sell: estimated SOL platform fee is appended because PumpPortal sell output
- *           is not known before execution.
+ *   - Sell: estimated SOL platform fee is appended before execution.
  */
 import {
   VersionedTransaction,
@@ -78,8 +69,30 @@ async function sendWithPrivy({ tx, connection, wallet, status }) {
   throw new Error('Privy wallet missing signing methods');
 }
 async function sendWithExternalWallet({ tx, connection, wallet, status }) {
+  // Simulate first so Phantom can validate the transaction
+  try {
+    const sim = await connection.simulateTransaction(tx, { sigVerify: false });
+    if (sim && sim.value && sim.value.err) {
+      throw new Error('Transaction would fail');
+    }
+  } catch (e) {
+    // If simulation fails, still try the wallet's native send
+  }
+
+  // Use wallet's sendTransaction — full simulation in wallet
+  if (typeof wallet.sendTransaction === 'function') {
+    status('Confirm in wallet...');
+    const signature = await wallet.sendTransaction(tx, connection, {
+      skipPreflight: false,
+      maxRetries: 3,
+    });
+    await connection.confirmTransaction(signature, 'confirmed');
+    return signature;
+  }
+
+  // Fallback
   if (typeof wallet.signTransaction !== 'function') {
-    throw new Error('External wallet missing signTransaction');
+    throw new Error('External wallet missing signing methods');
   }
   status('Confirm in wallet...');
   const signed = await wallet.signTransaction(tx);
