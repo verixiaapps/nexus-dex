@@ -11,6 +11,7 @@
  *   - Uses /api/okx/dex/aggregator/swap-instruction.
  *   - Backend injects feePercent + fee wallet server-side.
  *   - Frontend never handles OKX API keys or fee wallet injection.
+ *   - skipPreflight: true to avoid wallet simulation failures.
  */
 
 import {
@@ -138,8 +139,9 @@ async function buildTxFromOkxInstructionData({ connection, owner, swapData }) {
   return new VersionedTransaction(message);
 }
 
+// ---- CHANGED: skipPreflight: true to avoid wallet simulation failures ----
 async function sendSignedTransaction(connection, signedTx) {
-  const sig = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: false, maxRetries: 3 });
+  const sig = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: true, maxRetries: 3 });
   await connection.confirmTransaction(sig, 'confirmed');
   return sig;
 }
@@ -167,7 +169,8 @@ async function sendWithExternalWallet({ tx, connection, wallet, status }) {
   }
   if (typeof wallet.sendTransaction === 'function') {
     status('Confirm in wallet...');
-    return await wallet.sendTransaction(tx, connection, { skipPreflight: false, maxRetries: 3 });
+    // ---- CHANGED: skipPreflight: true ----
+    return await wallet.sendTransaction(tx, connection, { skipPreflight: true, maxRetries: 3 });
   }
   throw new Error('External wallet missing signing methods');
 }
