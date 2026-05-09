@@ -8,6 +8,7 @@
  * /api/jupiter/tokens/v2/toporganicscore/:timeframe - Jupiter top tokens
  * /api/jupiter/tokens/v2/tag        - Jupiter token registry
  * /api/dexscreener/*                - DexScreener proxy (markets, portfolio prices)
+ * /api/hyperliquid                  - Hyperliquid proxy (perps data + trading)
  * /api/pumpportal/*                 - PumpPortal trade-local
  * /api/helius/das                   - Helius DAS getAsset / Solana metadata fallback
  * /api/solana-rpc                   - Solana RPC proxy
@@ -72,6 +73,7 @@ const CSP_DIRECTIVES = [
     'https://lite-api.jup.ag',
     'https://api.jup.ag',
     'https://token.jup.ag',
+    'https://api.hyperliquid.xyz',
     'https://pumpportal.fun',
     'wss://pumpportal.fun',
     'https://api.dexscreener.com',
@@ -466,6 +468,23 @@ app.get('/api/dexscreener/*', async (req, res) => {
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
+/* -- HYPERLIQUID PROXY (perps data + trading) ----------------------------- */
+app.post('/api/hyperliquid', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const response = await fetchWithTimeout('https://api.hyperliquid.xyz/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }, 10_000);
+    const result = await safeJson(response);
+    return respondJsonOrError(res, response, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Hyperliquid request timed out' });
+    logError('hyperliquid', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
 /* -- PUMPPORTAL PROXY ------------------------------------------------------- */
 app.post('/api/pumpportal/trade-local', async (req, res) => {
   try {
@@ -643,6 +662,7 @@ app.get('/api/health', (req, res) => {
       jupiterTokens: true,
       jupiterRegistry: true,
       dexscreener: true,
+      hyperliquid: true,
       pumpportal: true,
       helius: true,
       solanaRpc: true,
