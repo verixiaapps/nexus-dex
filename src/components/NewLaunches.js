@@ -298,7 +298,7 @@ export default function NewLaunches({ coins, onConnectWallet, resetKey }) {
   const openSellDrawer = token => { if (!isValidMint(token?.mint)) return; setDrawerToken(token); setDrawerMode('sell'); setDrawerPresetUsd(null); setDrawerOpen(true); };
 
   if (selectedToken) return (
-    <div style={{ maxWidth: 640, margin: '0 auto' }}>
+    <div style={{ maxWidth: 640, margin: '0 auto', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
       <button onClick={() => setSelectedToken(null)} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 20, padding: 0, fontFamily: 'Syne, sans-serif' }}>&larr; Back</button>
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
@@ -322,7 +322,7 @@ export default function NewLaunches({ coins, onConnectWallet, resetKey }) {
   );
 
   return (
-    <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
+    <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
       <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}`}</style>
       <div style={{ marginBottom: 18 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
