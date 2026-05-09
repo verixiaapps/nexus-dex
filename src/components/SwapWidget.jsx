@@ -96,7 +96,6 @@ async function fetchDsSearch(q){try{const r=await fetch(DEXSCREENER_BASE+'/lates
 let _okxCache=null;let _okxLoading=null;
 function loadOkxSolTokens(){if(_okxCache)return Promise.resolve(_okxCache);if(_okxLoading)return _okxLoading;_okxLoading=fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501').then(r=>r.ok?r.json():{data:[]}).catch(()=>({data:[]})).then(j=>{const t=(j.data||[]).map(t=>({chain:'solana',mint:t.tokenContractAddress,symbol:t.tokenSymbol||'',name:t.tokenName||t.tokenSymbol||'',decimals:parseInt(t.decimals)||6,logoURI:t.tokenLogoUrl||null})).filter(t=>isValidSolMint(t.mint)&&t.symbol);_okxCache=t;_okxLoading=null;return t;});return _okxLoading;}
 
-// FIXED: Handle both array and object OKX response formats
 async function fetchOkxSolSwap({fromMint,toMint,amount,slippage,userWallet,signal}){
   const p=new URLSearchParams({chainIndex:'501',fromTokenAddress:toOkxSolAddress(fromMint),toTokenAddress:toOkxSolAddress(toMint),amount:String(amount),slippagePercent:(slippage/100).toFixed(4),userWalletAddress:userWallet,referrer:OKX_REFERRER});
   const r=await fetch('/api/okx/dex/aggregator/swap-instruction?'+p.toString(),{signal});
@@ -121,7 +120,6 @@ async function fetchOkxEvmApproval({chainId,tokenAddress,amount}){
   }catch{return null;}
 }
 
-// ===== FIXED: Robust instruction deserialization with try-catch =====
 function deserializeOkxIx(ix){
   try{
     if(!ix||!ix.programId||!Array.isArray(ix.accounts)||!ix.data)return null;
@@ -133,7 +131,6 @@ function deserializeOkxIx(ix){
   }catch{return null;}
 }
 
-// ===== FIXED: Try direct base64 tx first, then instruction lists =====
 async function buildOkxSolTx({connection,userPubkey,swapData}){
   if(swapData.tx&&swapData.tx.data){
     try{return VersionedTransaction.deserialize(Buffer.from(swapData.tx.data,'base64'));}catch{}
@@ -197,7 +194,18 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
   const pubkey=useMemo(()=>{if(extPk)return extPk;if(privyEmbeddedSol?.address){try{return new PublicKey(privyEmbeddedSol.address);}catch{return null;}}return null;},[extPk,privyEmbeddedSol]);
   const hasSol=!!(solCon||(privyEmbeddedSol&&pubkey));const hasEvm=!!(evmCon||(privyEmbeddedEvm&&privyEmbeddedEvm.address));const effEvm=evmAddr||(privyEmbeddedEvm?.address)||null;const wcon=!!(solCon||evmCon||hasSol||hasEvm);
   const wcRef=useRef(wc);useEffect(()=>{wcRef.current=wc;},[wc]);const cidRef=useRef(evmCid);useEffect(()=>{cidRef.current=evmCid;},[evmCid]);const pcRef=useRef(null);
-  const sendTx=useCallback(async(tx,conn,opts)=>{if(activeWalletKind==='privy'&&privyEmbeddedSol){if(typeof privyEmbeddedSol.sendTransaction==='function')return privyEmbeddedSol.sendTransaction(tx,conn,opts);if(typeof privyEmbeddedSol.signTransaction==='function'){const s=await privyEmbeddedSol.signTransaction(tx);return conn.sendRawTransaction(s.serialize(),opts||{});}throw new Error('No sign method');}return extSendTx(tx,conn,opts);},[activeWalletKind,privyEmbeddedSol,extSendTx]);
+  
+  // FIXED: Simulate first, then use wallet's sendTransaction
+  const sendTx=useCallback(async(tx,conn,opts)=>{
+    try{await conn.simulateTransaction(tx,{sigVerify:false});}catch(e){}
+    if(activeWalletKind==='privy'&&privyEmbeddedSol){
+      if(typeof privyEmbeddedSol.sendTransaction==='function')return privyEmbeddedSol.sendTransaction(tx,conn,{skipPreflight:false,maxRetries:3});
+      if(typeof privyEmbeddedSol.signTransaction==='function'){const s=await privyEmbeddedSol.signTransaction(tx);return conn.sendRawTransaction(s.serialize(),{skipPreflight:true,maxRetries:3});}
+      throw new Error('No sign method');
+    }
+    return extSendTx(tx,conn,{skipPreflight:false,maxRetries:3});
+  },[activeWalletKind,privyEmbeddedSol,extSendTx]);
+  
   const ensureChain=useCallback(async(tid)=>{if(cidRef.current===tid)return true;try{if(switchChainAsync)await switchChainAsync({chainId:tid});else if(switchChain)switchChain({chainId:tid});}catch{throw new Error('Switch to '+(CHAIN_NAMES[tid]||'correct chain'));}for(let i=0;i<80;i++){if(cidRef.current===tid)return true;await new Promise(r=>setTimeout(r,100));}throw new Error('Chain switch failed');},[switchChain,switchChainAsync]);
   const ip=useMemo(()=>{if(defaultFromToken||defaultToToken){const ws={solConnected:solCon,evmConnected:evmCon,evmChainId:evmCid};const p=defaultTokenPair({mode:modeProp,viewedToken:defaultToToken||defaultFromToken,lastFromToken:null,walletState:ws});return{fromToken:defaultFromToken?normalizeToken(defaultFromToken):p.fromToken,toToken:defaultToToken?normalizeToken(defaultToToken):p.toToken};}const last=loadLastPair();const ws={solConnected:solCon,evmConnected:evmCon,evmChainId:evmCid};return defaultTokenPair({mode:modeProp,viewedToken:null,lastFromToken:last?.from?normalizeToken(last.from):null,walletState:ws});},[]);
   const[ft,setFt]=useState(ip.fromToken||POPULAR_TOKENS[0]);const[tt,setTt]=useState(ip.toToken||POPULAR_TOKENS[1]);const[fa,setFa]=useState('');const[sl,setSl]=useState(.5);const utRef=useRef(false);
@@ -224,7 +232,7 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
   const applyS=useCallback(pct=>{if(fbd==null||fbd<=0)return;utRef.current=true;const d=Math.min(ft.decimals||6,9);let a=fbd*(pct/100);if(pct===100&&ft?.chain==='solana'&&ft.mint===WSOL_MINT)a=maxSafeSolBalance(sbl);else if(pct===100&&isNativeEvm)a=maxSafeAmount({balance:fbd,isNative:true});setFa(a.toFixed(d));},[fbd,ft,isNativeEvm,sbl]);
   const flip=useCallback(()=>{setFt(tt);setTt(ft);setFa('');setQ(null);setQe('');utRef.current=false;},[ft,tt]);
   const exec=useCallback(async()=>{if(!wcon){setPs(true);loginPrivy?.()||onConnectWallet?.();return;}if(!isSup){setSe('Pair not supported');setSs('error');return;}setSs('loading');setSe('');setStx(null);try{const raw=toRawAmount(fa,ft.decimals);if(!raw||raw==='0')throw new Error('Invalid amount');
-    if(route==='okx-sol'){if(!pubkey)throw new Error('Connect Solana wallet');const sd=await fetchOkxSolSwap({fromMint:ft.mint,toMint:tt.mint,amount:raw,slippage:sl,userWallet:pubkey.toString()});const tx=await buildOkxSolTx({connection,userPubkey:pubkey,swapData:sd});const sig=await sendTx(tx,connection,{skipPreflight:false,maxRetries:3});setStx(sig);connection.confirmTransaction({signature:sig,blockhash:tx.message.recentBlockhash,lastValidBlockHeight:(await connection.getLatestBlockhash('confirmed')).lastValidBlockHeight},'confirmed').catch(()=>{});}
+    if(route==='okx-sol'){if(!pubkey)throw new Error('Connect Solana wallet');const sd=await fetchOkxSolSwap({fromMint:ft.mint,toMint:tt.mint,amount:raw,slippage:sl,userWallet:pubkey.toString()});const tx=await buildOkxSolTx({connection,userPubkey:pubkey,swapData:sd});const sig=await sendTx(tx,connection,{});setStx(sig);connection.confirmTransaction({signature:sig,blockhash:tx.message.recentBlockhash,lastValidBlockHeight:(await connection.getLatestBlockhash('confirmed')).lastValidBlockHeight},'confirmed').catch(()=>{});}
     else if(route==='okx-evm'){if(!effEvm||!wcRef.current)throw new Error('Connect EVM wallet');if(evmCid!==ft.chainId)await ensureChain(ft.chainId);const w=wcRef.current;const pc=pcRef.current;if(!w)throw new Error('Wallet not ready');const sd=await fetchOkxEvmSwap({chainId:ft.chainId,fromAddress:ft.address,toAddress:tt.address,amount:raw,slippage:sl,userWallet:effEvm});const tx=sd.tx;if(!tx?.to||!tx?.data)throw new Error('No tx data');
       if(!isNativeEvm){try{const ad=await fetchOkxEvmApproval({chainId:ft.chainId,tokenAddress:ft.address,amount:raw});if(ad?.dexContractAddress){let need=true;if(pc){try{const allowance=await pc.readContract({address:ft.address,abi:[{name:'allowance',type:'function',stateMutability:'view',inputs:[{name:'owner',type:'address'},{name:'spender',type:'address'}],outputs:[{type:'uint256'}]}],functionName:'allowance',args:[effEvm,ad.dexContractAddress]});need=safeBigInt(allowance)<safeBigInt(raw);}catch{need=false;}}if(need){const appr=ad.callData||('0x095ea7b3'+ad.dexContractAddress.slice(2).toLowerCase().padStart(64,'0')+'f'.repeat(64));const ah=await w.sendTransaction({to:ft.address,data:appr,value:BigInt(0)});if(pc){try{await pc.waitForTransactionReceipt({hash:ah,timeout:90000});}catch{}}}}}catch(e){throw new Error('Approval failed: '+(e.message||'unknown'));}}const hash=await w.sendTransaction({to:tx.to,data:tx.data,value:safeBigInt(tx.value),gas:tx.gas?safeBigInt(tx.gas):undefined});setStx(hash);}
     saveLastPair(ft,tt);setSs('success');setFa('');setQ(null);utRef.current=false;setTimeout(()=>{setSs('idle');setStx(null);},6000);}catch(e){setSe(e.message||'Swap failed');setSs('error');setTimeout(()=>{setSs('idle');setSe('');},5000);}},[wcon,isSup,fa,ft,tt,sl,route,pubkey,sendTx,connection,effEvm,evmCid,ensureChain,isNativeEvm,loginPrivy,onConnectWallet]);
