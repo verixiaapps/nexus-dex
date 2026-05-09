@@ -17,6 +17,9 @@ const CHAIN_LABELS = {
   berachain: 'BERA', ink: 'INK', worldchain: 'WORLD',
 };
 
+// Boring tokens we don't want to show as the main token
+const BORING_SYMBOLS = new Set(['SOL', 'USDC', 'USDT', 'ETH', 'BTC', 'BNB', 'POL', 'AVAX', 'DAI', 'USDe', 'FRAX', 'TUSD', 'USDP', 'GUSD']);
+
 function fmt(n, d) {
   const x = Number(n);
   if (!Number.isFinite(x) || x === 0) return '-';
@@ -57,16 +60,67 @@ function useIsMobile() {
 
 function mapDexSearchPair(p) {
   if (!p || !p.chainId || !p.pairAddress) return null;
+
   const bt = p.baseToken || {};
+  const qt = p.quoteToken || {};
   const isSol = p.chainId === 'solana';
-  const addr = bt.address || '';
-  const symbol = bt.symbol || '';
-  const name = bt.name || symbol;
+  const baseAddr = bt.address || '';
+  const baseSymbol = bt.symbol || '';
+  const baseName = bt.name || baseSymbol;
+  const quoteAddr = qt.address || '';
+  const quoteSymbol = qt.symbol || '';
+  const quoteName = qt.name || quoteSymbol;
+  
+  if (!baseAddr || !baseSymbol) return null;
+
+  // Determine which token to show
+  let addr, symbol, name, decimals, logoURI, imageURI;
+  let price, volume, mcap, change;
+  
+  const priceUsd = Number(p.priceUsd || 0) || 0;
+  const priceNative = Number(p.priceNative || 0) || 0;
+  const vol24h = Number(p.volume?.h24 || p.volume || 0) || 0;
+  const mcapBase = Number(p.marketCap || p.fdv || 0) || 0;
+  const change24h = p.priceChange?.h24 != null ? Number(p.priceChange.h24) : null;
+
+  // If base is boring and quote exists and is not boring, flip the pair
+  if (BORING_SYMBOLS.has(baseSymbol) && quoteSymbol && !BORING_SYMBOLS.has(quoteSymbol)) {
+    // Show quote token as the main token
+    addr = quoteAddr;
+    symbol = quoteSymbol;
+    name = quoteName;
+    decimals = qt.decimals || (isSol ? 6 : 18);
+    logoURI = qt.imgUrl || p.info?.imageUrl || null;
+    imageURI = qt.imgUrl || p.info?.imageUrl || null;
+    
+    // Calculate quote token's USD price: priceUsd / priceNative (if priceNative > 0)
+    // priceNative is how many quote tokens per one base token
+    if (priceNative > 0 && priceUsd > 0) {
+      price = priceUsd / priceNative;
+    } else {
+      price = 0;
+    }
+    // Volume and market cap are for the base token; not directly translatable to quote token.
+    // We can set them to 0 or use the pair's volume/mcap as is (which is for the pair, not token-specific).
+    volume = vol24h; // This is pair volume, not perfect but okay for display
+    mcap = mcapBase; // Similarly, pair-based market cap
+    change = change24h; // Price change for the base token, not accurate for quote token, but okay for now
+  } else {
+    // Show base token as-is
+    addr = baseAddr;
+    symbol = baseSymbol;
+    name = baseName;
+    decimals = bt.decimals || (isSol ? 6 : 18);
+    logoURI = bt.imgUrl || p.info?.imageUrl || null;
+    imageURI = bt.imgUrl || p.info?.imageUrl || null;
+    price = priceUsd;
+    volume = vol24h;
+    mcap = mcapBase;
+    change = change24h;
+  }
+
   if (!addr || !symbol) return null;
-  const price = Number(p.priceUsd || 0) || 0;
-  const change = p.priceChange?.h24 != null ? Number(p.priceChange.h24) : null;
-  const volume = Number(p.volume?.h24 || 0) || 0;
-  const mcap = Number(p.marketCap || p.fdv || 0) || 0;
+
   return {
     id: p.chainId + '-' + addr,
     chain: isSol ? 'solana' : 'evm',
@@ -74,15 +128,15 @@ function mapDexSearchPair(p) {
     address: isSol ? undefined : addr,
     symbol,
     name,
-    logoURI: bt.imgUrl || p.info?.imageUrl || null,
-    image: bt.imgUrl || p.info?.imageUrl || null,
+    logoURI,
+    image: imageURI,
     current_price: price,
     market_cap: mcap,
     total_volume: volume,
     price_change_percentage_24h: Number.isFinite(change) ? change : null,
     isSolanaToken: isSol,
     source: 'dexscreener',
-    decimals: bt.decimals || (isSol ? 6 : 18),
+    decimals,
   };
 }
 
@@ -183,8 +237,7 @@ export default function Markets({ onSelectCoin }) {
   const [searchLoading, setSearchLoading] = useState(false);
   const debouncedQ = useDebounce(q, 350);
 
-  // Default view: Search for "SOL" to get a broad base of Solana tokens.
-  // We filter to only show Solana chain results for the initial view.
+  // Default view: search "SOL" but show the other token in the pair
   useEffect(() => {
     let c = false;
     setBrowseLoading(true);
