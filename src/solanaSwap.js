@@ -10,7 +10,7 @@
  *   - Solana <-> Solana through OKX DEX aggregator via backend proxy.
  *   - Uses /api/okx/dex/aggregator/swap-instruction.
  *   - Backend injects feePercent + fee wallet server-side.
- *   - Simulates before wallet popup for Phantom compatibility.
+ *   - Frontend never handles OKX API keys or fee wallet injection.
  */
 
 import {
@@ -66,11 +66,6 @@ function normalizeOkxTokenAddress(mint) {
 
 function okxAmount(amountRaw) { return String(amountRaw); }
 
-function slippageBpsToPercent(slippageBps) {
-  const bps = Number.isFinite(slippageBps) ? slippageBps : DEFAULT_SLIPPAGE_BPS;
-  return String((bps / 100).toFixed(4));
-}
-
 function readOkxData(data) {
   if (!data) throw new Error('Empty OKX response');
   if (data.code && data.code !== '0') throw new Error(data.msg || data.message || 'OKX request failed');
@@ -79,13 +74,12 @@ function readOkxData(data) {
   throw new Error(data.msg || data.message || 'OKX returned no route');
 }
 
-async function fetchOkxSwapInstruction({ fromMint, toMint, amountRaw, slippageBps, publicKey, signal }) {
+async function fetchOkxSwapInstruction({ fromMint, toMint, amountRaw, publicKey, signal }) {
   const qs = new URLSearchParams({
     chainIndex: OKX_SOLANA_CHAIN_ID,
     fromTokenAddress: normalizeOkxTokenAddress(fromMint),
     toTokenAddress: normalizeOkxTokenAddress(toMint),
     amount: okxAmount(amountRaw),
-    slippagePercent: slippageBpsToPercent(slippageBps),
     userWalletAddress: publicKey.toString(),
     referrer: 'nexus-dex',
   });
@@ -160,17 +154,17 @@ async function sendWithPrivy({ tx, connection, wallet, status }) {
 }
 
 async function sendWithExternalWallet({ tx, connection, wallet, status }) {
-  // Simulate first so Phantom can validate the transaction
+  // Simulate first via RPC so Phantom sees a successful simulation
   try {
     const sim = await connection.simulateTransaction(tx, { sigVerify: false });
     if (sim && sim.value && sim.value.err) {
       throw new Error('Transaction would fail');
     }
   } catch (e) {
-    // If simulation fails, still try the wallet's native send
+    console.warn('Simulation warning:', e.message);
   }
 
-  // Use wallet's sendTransaction — full simulation in wallet
+  // Use wallet's sendTransaction with skipPreflight: false as Phantom requires
   if (typeof wallet.sendTransaction === 'function') {
     status('Confirm in wallet...');
     const signature = await wallet.sendTransaction(tx, connection, {
@@ -181,7 +175,7 @@ async function sendWithExternalWallet({ tx, connection, wallet, status }) {
     return signature;
   }
 
-  // Fallback
+  // Fallback for sign-only wallets
   if (typeof wallet.signTransaction !== 'function') {
     throw new Error('External wallet missing signing methods');
   }
@@ -196,7 +190,7 @@ async function sendWithExternalWallet({ tx, connection, wallet, status }) {
   return signature;
 }
 
-export async function executeSolanaSwap({ fromMint, toMint, amountRaw, slippageBps, publicKey, connection, wallet, onStatus, signal }) {
+export async function executeSolanaSwap({ fromMint, toMint, amountRaw, publicKey, connection, wallet, onStatus, signal }) {
   const status = typeof onStatus === 'function' ? onStatus : () => {};
   if (!fromMint || !toMint) throw new Error('Missing input/output mint');
   if (!publicKey) throw new Error('Wallet not connected');
@@ -205,10 +199,9 @@ export async function executeSolanaSwap({ fromMint, toMint, amountRaw, slippageB
 
   assertAmountRaw(amountRaw);
   const owner = asPublicKey(publicKey, 'Invalid wallet public key');
-  const slip = Number.isFinite(slippageBps) ? slippageBps : pickSlippageBps(toMint);
 
   status('Getting best route...');
-  const swapData = await fetchOkxSwapInstruction({ fromMint, toMint, amountRaw, slippageBps: slip, publicKey: owner, signal });
+  const swapData = await fetchOkxSwapInstruction({ fromMint, toMint, amountRaw, publicKey: owner, signal });
 
   status('Building transaction...');
   const tx = await buildTxFromOkxInstructionData({ connection, owner, swapData });
