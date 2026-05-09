@@ -75,7 +75,6 @@ function getSolPriceFromCoins(coins) {
   return sol && Number(sol.current_price) > 0 ? Number(sol.current_price) : 0;
 }
 
-// Fetch prices from DexScreener for a list of token addresses
 const priceCache = new Map();
 
 async function fetchDexScreenerPrices(addresses) {
@@ -88,7 +87,6 @@ async function fetchDexScreenerPrices(addresses) {
     return out;
   }
 
-  // DexScreener tokens endpoint: up to 30 addresses comma-separated
   const chunks = [];
   for (let i = 0; i < uncached.length; i += 30) chunks.push(uncached.slice(i, i + 30));
 
@@ -216,13 +214,15 @@ export default function Portfolio({ coins, onSend, onConnectWallet, isConnected,
           return { ...h, symbol: p.symbol || h.mint.slice(0,4)+'...', name: p.name || 'Unknown', logoURI: p.logoURI || null, decimals: p.decimals != null ? p.decimals : h.decimals, price: p.price || 0 };
         });
         const solP = prices[SOL_MINT.toLowerCase()];
-        if (solP && solP.price > 0 && solPriceUsd === 0) setSolPriceUsd(solP.price);
+        if (solP && solP.price > 0) {
+          setSolPriceUsd(prev => prev > 0 ? prev : solP.price);
+        }
       }
       holdings.sort((a, b) => (b.uiAmount * b.price) - (a.uiAmount * a.price));
       setSolBalances(holdings);
     } catch (e) { setSolError('Failed to load Solana balances'); }
     setSolLoading(false);
-  }, [publicKey, connection, lookupAddress, solPriceUsd]);
+  }, [publicKey, connection, lookupAddress]);
 
   const fetchEvmData = useCallback(async () => {
     if (!evmAddress || !wagmiConfig) { setEvmTokens([]); return; }
