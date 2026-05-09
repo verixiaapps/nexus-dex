@@ -161,7 +161,7 @@ export default function Markets({ onSelectCoin }) {
           isSolanaToken: true,
           source: 'dexscreener',
         };
-      }).filter(t => t.current_price > 0);
+      });
       tokens.sort((a, b) => (b.market_cap || 0) - (a.market_cap || 0));
       setBrowse(tokens);
       setBrowseLoading(false);
