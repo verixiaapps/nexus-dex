@@ -5,8 +5,8 @@
  *   - NewLaunches.js TokenCard one-click preset buttons
  *
  * Fee behavior:
- *   - Buy: exact 5% platform fee is taken inside the user's total SOL spend.
- *   - Sell: estimated SOL platform fee is appended before execution.
+ *   - Buy: exact 5% platform fee taken inside the user's total SOL spend.
+ *   - Sell: estimated SOL platform fee appended before execution.
  */
 import {
   VersionedTransaction,
@@ -69,17 +69,17 @@ async function sendWithPrivy({ tx, connection, wallet, status }) {
   throw new Error('Privy wallet missing signing methods');
 }
 async function sendWithExternalWallet({ tx, connection, wallet, status }) {
-  // Simulate first so Phantom can validate the transaction
+  // Simulate first via RPC so Phantom sees a successful simulation
   try {
     const sim = await connection.simulateTransaction(tx, { sigVerify: false });
     if (sim && sim.value && sim.value.err) {
       throw new Error('Transaction would fail');
     }
   } catch (e) {
-    // If simulation fails, still try the wallet's native send
+    console.warn('Simulation warning:', e.message);
   }
 
-  // Use wallet's sendTransaction — full simulation in wallet
+  // Use wallet's sendTransaction with skipPreflight: false as Phantom requires
   if (typeof wallet.sendTransaction === 'function') {
     status('Confirm in wallet...');
     const signature = await wallet.sendTransaction(tx, connection, {
@@ -90,7 +90,7 @@ async function sendWithExternalWallet({ tx, connection, wallet, status }) {
     return signature;
   }
 
-  // Fallback
+  // Fallback for sign-only wallets
   if (typeof wallet.signTransaction !== 'function') {
     throw new Error('External wallet missing signing methods');
   }
@@ -141,7 +141,7 @@ export async function executePumpTrade({ action, mint, solAmount, tokenAmount, t
   const res = await fetch(PUMP_PORTAL_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ publicKey: owner.toString(), action, mint, denominatedInSol: action === 'buy' ? 'true' : 'false', amount: pumpAmount, slippage: slip, priorityFee, pool: 'auto' }),
+    body: JSON.stringify({ publicKey: owner.toString(), action, mint, denominatedInSol: action === 'buy' ? 'true' : 'false', amount: pumpAmount, priorityFee, pool: 'auto' }),
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
