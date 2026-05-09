@@ -8,7 +8,8 @@
  * /api/jupiter/tokens/v2/toporganicscore/:timeframe - Jupiter top tokens
  * /api/jupiter/tokens/v2/tag        - Jupiter token registry
  * /api/dexscreener/*                - DexScreener proxy (markets, portfolio prices)
- * /api/hyperliquid                  - Hyperliquid proxy (perps data + trading)
+ * /api/hyperliquid                  - Hyperliquid proxy (perps info)
+ * /api/hyperliquid/exchange         - Hyperliquid exchange proxy (signed orders)
  * /api/pumpportal/*                 - PumpPortal trade-local
  * /api/helius/das                   - Helius DAS getAsset / Solana metadata fallback
  * /api/solana-rpc                   - Solana RPC proxy
@@ -468,7 +469,7 @@ app.get('/api/dexscreener/*', async (req, res) => {
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
-/* -- HYPERLIQUID PROXY (perps data + trading) ----------------------------- */
+/* -- HYPERLIQUID PROXY (perps info) -------------------------------------- */
 app.post('/api/hyperliquid', async (req, res) => {
   try {
     const body = req.body || {};
@@ -482,6 +483,30 @@ app.post('/api/hyperliquid', async (req, res) => {
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'Hyperliquid request timed out' });
     logError('hyperliquid', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+/* -- HYPERLIQUID EXCHANGE PROXY (signed orders) -------------------------- */
+app.post('/api/hyperliquid/exchange', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const response = await fetchWithTimeout('https://api.hyperliquid.xyz/exchange', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }, 15_000);
+    if (!response.ok) {
+      const text = await response.text();
+      return res.status(response.status).json({
+        error: 'Hyperliquid exchange request failed',
+        detail: text.slice(0, 500),
+      });
+    }
+    const result = await safeJson(response);
+    return respondJsonOrError(res, response, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Hyperliquid exchange request timed out' });
+    logError('hyperliquid-exchange', e);
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
@@ -663,6 +688,7 @@ app.get('/api/health', (req, res) => {
       jupiterRegistry: true,
       dexscreener: true,
       hyperliquid: true,
+      hyperliquidExchange: true,
       pumpportal: true,
       helius: true,
       solanaRpc: true,
