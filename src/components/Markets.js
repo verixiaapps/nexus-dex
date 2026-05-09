@@ -55,49 +55,17 @@ function useIsMobile() {
   return m;
 }
 
-function mapDexBoostToken(b) {
-  if (!b || !b.tokenAddress || !b.chainId) return null;
-  const addr = b.tokenAddress;
-  // DexScreener uses 'name' and 'symbol' directly on the boost object
-  const symbol = (b.symbol || b.baseToken?.symbol || '').trim() || shortAddr(addr);
-  const name = (b.name || b.baseToken?.name || symbol).trim();
-  const price = Number(b.price || b.priceUsd || 0) || 0;
-  const change = b.priceChange24h != null ? Number(b.priceChange24h) : (b.priceChange?.h24 != null ? Number(b.priceChange.h24) : null);
-  const volume = Number(b.volume || b.totalVolume || 0) || 0;
-  const mcap = Number(b.marketCap || b.fdv || 0) || 0;
-  const isSol = b.chainId === 'solana';
-  const img = b.imgUrl || b.imageUrl || b.baseToken?.imgUrl || null;
-  return {
-    id: b.chainId + '-' + addr,
-    chain: isSol ? 'solana' : 'evm',
-    mint: isSol ? addr : undefined,
-    address: isSol ? undefined : addr,
-    symbol: symbol || '???',
-    name: name || symbol || '???',
-    logoURI: img,
-    image: img,
-    current_price: price,
-    market_cap: mcap,
-    total_volume: volume,
-    price_change_percentage_24h: Number.isFinite(change) ? change : null,
-    liquidity: 0,
-    isSolanaToken: isSol,
-    source: 'dexscreener',
-    decimals: isSol ? 6 : 18,
-  };
-}
-
 function mapDexSearchPair(p) {
   if (!p || !p.chainId || !p.pairAddress) return null;
   const bt = p.baseToken || {};
   const isSol = p.chainId === 'solana';
   const addr = bt.address || '';
-  const symbol = bt.symbol || '???';
+  const symbol = bt.symbol || '';
   const name = bt.name || symbol;
   if (!addr || !symbol) return null;
   const price = Number(p.priceUsd || 0) || 0;
-  const change = p.priceChange?.h24 != null ? Number(p.priceChange.h24) : (p.priceChange24h != null ? Number(p.priceChange24h) : null);
-  const volume = Number(p.volume?.h24 || p.volume || 0) || 0;
+  const change = p.priceChange?.h24 != null ? Number(p.priceChange.h24) : null;
+  const volume = Number(p.volume?.h24 || 0) || 0;
   const mcap = Number(p.marketCap || p.fdv || 0) || 0;
   return {
     id: p.chainId + '-' + addr,
@@ -112,11 +80,9 @@ function mapDexSearchPair(p) {
     market_cap: mcap,
     total_volume: volume,
     price_change_percentage_24h: Number.isFinite(change) ? change : null,
-    liquidity: Number(p.liquidity?.usd || 0) || 0,
     isSolanaToken: isSol,
     source: 'dexscreener',
     decimals: bt.decimals || (isSol ? 6 : 18),
-    quoteSymbol: (p.quoteToken || {}).symbol || '',
   };
 }
 
@@ -187,20 +153,22 @@ function Row({ c, i, isMobile, onClick }) {
   );
 }
 
-async function fetchBoostTokens() {
-  try {
-    const res = await fetch('/api/dexscreener/token-boosts/latest/v1');
-    const data = await res.json().catch(() => []);
-    return (Array.isArray(data) ? data : []).map(mapDexBoostToken).filter(isUsable);
-  } catch { return []; }
-}
-
 async function searchDexScreener(query) {
   try {
     const res = await fetch('/api/dexscreener/latest/dex/search?q=' + encodeURIComponent(query));
     const data = await res.json().catch(() => null);
     if (!data || !Array.isArray(data.pairs)) return [];
-    return data.pairs.map(mapDexSearchPair).filter(isUsable);
+    const seen = new Set();
+    const tokens = [];
+    for (const p of data.pairs) {
+      const t = mapDexSearchPair(p);
+      if (!t || !isUsable(t)) continue;
+      const key = (t.mint || t.address || '').toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      tokens.push(t);
+    }
+    return tokens;
   } catch { return []; }
 }
 
@@ -215,18 +183,23 @@ export default function Markets({ onSelectCoin }) {
   const [searchLoading, setSearchLoading] = useState(false);
   const debouncedQ = useDebounce(q, 350);
 
+  // Default view: Search for "SOL" to get a broad base of Solana tokens.
+  // We filter to only show Solana chain results for the initial view.
   useEffect(() => {
     let c = false;
     setBrowseLoading(true);
-    fetchBoostTokens().then(tokens => {
+    searchDexScreener('SOL').then(tokens => {
       if (c) return;
-      tokens.sort((a, b) => (b.market_cap || 0) - (a.market_cap || 0));
-      setBrowse(tokens.slice(0, 50));
+      // Only keep Solana tokens for the default view
+      const solTokens = tokens.filter(t => t.chain === 'solana');
+      solTokens.sort((a, b) => (b.market_cap || 0) - (a.market_cap || 0));
+      setBrowse(solTokens.slice(0, 50));
       setBrowseLoading(false);
     }).catch(() => { if (!c) { setBrowse([]); setBrowseLoading(false); } });
     return () => { c = true; };
   }, []);
 
+  // Search
   useEffect(() => {
     const t = debouncedQ.trim();
     if (!t || t.length < 2) { setSearchResults([]); setSearchLoading(false); return; }
@@ -252,7 +225,7 @@ export default function Markets({ onSelectCoin }) {
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-        <div><h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Live Markets</h1><p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>DexScreener trending — multi-chain. Search any token.</p></div>
+        <div><h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Live Markets</h1><p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Solana trending — search any token across all chains</p></div>
         <div style={{ position: 'relative', width: '100%', maxWidth: isMobile ? '100%' : 320 }}>
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="Name, symbol, or contract..." style={{ background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border), borderRadius: 10, padding: '10px 36px 10px 14px', color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: '100%', boxSizing: 'border-box' }} />
           {q && <button onClick={() => { setQ(''); setSearchResults([]); }} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 18, padding: 0 }}>x</button>}
@@ -260,7 +233,7 @@ export default function Markets({ onSelectCoin }) {
         </div>
       </div>
       {loading ? (
-        <div style={{ textAlign: 'center', padding: 60, color: C.muted, fontSize: 14 }}>Loading trending tokens...</div>
+        <div style={{ textAlign: 'center', padding: 60, color: C.muted, fontSize: 14 }}>Loading Solana markets...</div>
       ) : (
         <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
           {!isMobile && (
@@ -273,7 +246,7 @@ export default function Markets({ onSelectCoin }) {
           )}
           {sorted.length === 0 && debouncedQ && !searchLoading && <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>No results for "{debouncedQ}"</div>}
           {sorted.map((c, i) => <Row key={c.id} c={c} i={i} isMobile={isMobile} onClick={onRowClick} />)}
-          {sorted.length === 0 && !q && !browseLoading && <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>No trending tokens at the moment</div>}
+          {sorted.length === 0 && !q && !browseLoading && <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>No Solana market data available</div>}
         </div>
       )}
     </div>
