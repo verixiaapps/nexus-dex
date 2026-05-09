@@ -7,6 +7,7 @@
  * Fee behavior:
  *   - Buy: exact 5% platform fee taken inside the user's total SOL spend.
  *   - Sell: estimated SOL platform fee appended before execution.
+ *   - Max slippage 30% to ensure trade completion on volatile pump tokens.
  */
 import {
   VersionedTransaction,
@@ -69,7 +70,6 @@ async function sendWithPrivy({ tx, connection, wallet, status }) {
   throw new Error('Privy wallet missing signing methods');
 }
 async function sendWithExternalWallet({ tx, connection, wallet, status }) {
-  // Simulate first via RPC so Phantom sees a successful simulation
   try {
     const sim = await connection.simulateTransaction(tx, { sigVerify: false });
     if (sim && sim.value && sim.value.err) {
@@ -79,7 +79,6 @@ async function sendWithExternalWallet({ tx, connection, wallet, status }) {
     console.warn('Simulation warning:', e.message);
   }
 
-  // Use wallet's sendTransaction with skipPreflight: false as Phantom requires
   if (typeof wallet.sendTransaction === 'function') {
     status('Confirm in wallet...');
     const signature = await wallet.sendTransaction(tx, connection, {
@@ -90,7 +89,6 @@ async function sendWithExternalWallet({ tx, connection, wallet, status }) {
     return signature;
   }
 
-  // Fallback for sign-only wallets
   if (typeof wallet.signTransaction !== 'function') {
     throw new Error('External wallet missing signing methods');
   }
@@ -104,7 +102,7 @@ async function sendWithExternalWallet({ tx, connection, wallet, status }) {
   await connection.confirmTransaction(signature, 'confirmed');
   return signature;
 }
-export async function executePumpTrade({ action, mint, solAmount, tokenAmount, tokenPriceUsd, solPriceUsd, slippagePct, antiMev, publicKey, connection, wallet, onStatus }) {
+export async function executePumpTrade({ action, mint, solAmount, tokenAmount, tokenPriceUsd, solPriceUsd, antiMev, publicKey, connection, wallet, onStatus }) {
   const status = typeof onStatus === 'function' ? onStatus : () => {};
   if (action !== 'buy' && action !== 'sell') throw new Error('Invalid action');
   if (!mint) throw new Error('Missing mint');
@@ -113,7 +111,6 @@ export async function executePumpTrade({ action, mint, solAmount, tokenAmount, t
   if (!wallet || !wallet.kind) throw new Error('Wallet info missing');
   const owner = asPublicKey(publicKey);
   if (!owner) throw new Error('Invalid wallet public key');
-  const slip = Number.isFinite(slippagePct) ? slippagePct : 15;
   const priorityFee = antiMev ? 0.001 : 0.0001;
   let pumpAmount;
   let feeLamports = 0;
@@ -141,7 +138,7 @@ export async function executePumpTrade({ action, mint, solAmount, tokenAmount, t
   const res = await fetch(PUMP_PORTAL_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ publicKey: owner.toString(), action, mint, denominatedInSol: action === 'buy' ? 'true' : 'false', amount: pumpAmount, priorityFee, pool: 'auto' }),
+    body: JSON.stringify({ publicKey: owner.toString(), action, mint, denominatedInSol: action === 'buy' ? 'true' : 'false', amount: pumpAmount, slippage: 30, priorityFee, pool: 'auto' }),
   });
   if (!res.ok) {
     const txt = await res.text().catch(() => '');
