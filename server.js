@@ -1,3 +1,4 @@
+```js
 /**
  * NEXUS DEX - Backend Proxy Server
  *
@@ -269,15 +270,9 @@ function buildOkxHeaders(method, okxPath, body) {
 }
 /* -- OKX FEE INJECTION ------------------------------------------------------ */
 /*
- * Fees are injected only into executable swap routes.
- * /quote is intentionally fee-free because the app also uses quote for pricing.
- *
+ * Fees are injected into ALL Solana swap routes.
  * DO NOT CHANGE FEE VALUES HERE UNLESS INTENTIONALLY CHANGING MONETIZATION.
  */
-const OKX_FEE_ENDPOINTS = new Set([
-  '/dex/aggregator/swap',
-  '/dex/aggregator/swap-instruction',
-]);
 const OKX_ALLOWED_ENDPOINTS = new Set([
   '/dex/aggregator/quote',
   '/dex/aggregator/swap',
@@ -291,12 +286,10 @@ const OKX_ALLOWED_ENDPOINTS = new Set([
   '/dex/aggregator/transaction',
   '/dex/aggregator/history',
 ]);
-function injectOkxFee(params, isSolana) {
-  const wallet = isSolana ? OKX_FEE_WALLET_SOL : OKX_FEE_WALLET_EVM;
-  const pct = isSolana ? OKX_SOL_FEE_PCT : OKX_EVM_FEE_PCT;
-  if (wallet && pct) {
-    params.set('toTokenReferrerWalletAddress', wallet);
-    params.set('feePercent', pct);
+function injectOkxFee(params) {
+  if (OKX_FEE_WALLET_SOL && OKX_SOL_FEE_PCT) {
+    params.set('toTokenReferrerWalletAddress', OKX_FEE_WALLET_SOL);
+    params.set('feePercent', OKX_SOL_FEE_PCT);
   }
   return params;
 }
@@ -311,15 +304,16 @@ async function proxyOkx(req, res) {
     if (!OKX_ALLOWED_ENDPOINTS.has(subPath)) {
       return res.status(404).json({ error: 'OKX endpoint not allowed: ' + subPath });
     }
-    let finalQs = rawQs;
-    if (OKX_FEE_ENDPOINTS.has(subPath)) {
-      const params = new URLSearchParams(rawQs.slice(1));
-      const isSolana = params.get('chainIndex') === OKX_SOLANA_CHAIN;
-      injectOkxFee(params, isSolana);
-      finalQs = '?' + params.toString();
+    const params = new URLSearchParams(rawQs.slice(1));
+    const isSolana = params.get('chainIndex') === OKX_SOLANA_CHAIN;
+    const isSwapEndpoint = subPath === '/dex/aggregator/swap' || subPath === '/dex/aggregator/swap-instruction';
+    if (isSolana && isSwapEndpoint) {
+      injectOkxFee(params);
     }
+    const finalQs = '?' + params.toString();
     const okxPath = '/api/v6' + subPath + finalQs;
     const okxUrl = 'https://web3.okx.com' + okxPath;
+    console.log('[okx-debug] final URL:', okxUrl);
     const bodyStr = (req.method !== 'GET' && req.method !== 'HEAD' && req.body)
       ? JSON.stringify(req.body)
       : '';
