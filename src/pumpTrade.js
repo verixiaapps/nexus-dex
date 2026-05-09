@@ -11,16 +11,11 @@
  *   - Decompiles, appends platform fee transfer, recompiles to V0
  *   - Signs + sends with Privy or external Solana wallet
  *
- * Important:
- *   - Uses backend proxy instead of direct PumpPortal URL.
- *   - External wallets prefer signTransaction + sendRawTransaction.
- *     This is more compatible with Solflare than wallet.sendTransaction().
- *
  * Fee behavior:
  *   - Buy: exact 5% platform fee is taken inside the user's total SOL spend.
  *          Example: user spends 1 SOL total -> 0.95 SOL trade + 0.05 SOL fee.
  *   - Sell: estimated SOL platform fee is appended because PumpPortal sell output
- *           is not known before execution. This is best-effort for PumpPortal sells.
+ *           is not known before execution.
  */
 import {
   VersionedTransaction,
@@ -35,32 +30,20 @@ const PUMP_PORTAL_URL = '/api/pumpportal/trade-local';
 function asPublicKey(value) {
   if (!value) return null;
   if (value instanceof PublicKey) return value;
-  try {
-    return new PublicKey(value.toString());
-  } catch {
-    return null;
-  }
+  try { return new PublicKey(value.toString()); } catch { return null; }
 }
 async function getSolBalance(connection, owner) {
-  try {
-    return await connection.getBalance(owner, 'confirmed');
-  } catch {
-    return 0;
-  }
+  try { return await connection.getBalance(owner, 'confirmed'); } catch { return 0; }
 }
 async function resolveLookupTables(connection, tx) {
   const lookups = (tx.message && tx.message.addressTableLookups) || [];
   if (!lookups.length) return [];
   const resolved = await Promise.all(
-    lookups.map(function (lt) {
-      return connection.getAddressLookupTable(lt.accountKey)
-        .then(function (r) {
-          return r && r.value ? r.value : null;
-        })
-        .catch(function () {
-          return null;
-        });
-    })
+    lookups.map(lt =>
+      connection.getAddressLookupTable(lt.accountKey)
+        .then(r => r && r.value ? r.value : null)
+        .catch(() => null)
+    )
   );
   return resolved.filter(Boolean);
 }
@@ -71,25 +54,12 @@ async function injectPlatformFee(connection, tx, fromPubkey, feeLamports) {
   const feeWallet = asPublicKey(SOL_FEE_WALLET);
   if (!feeWallet) throw new Error('Invalid fee wallet');
   const lookupTableAccounts = await resolveLookupTables(connection, tx);
-  const decompiled = TransactionMessage.decompile(tx.message, {
-    addressLookupTableAccounts: lookupTableAccounts,
-  });
-  decompiled.instructions.push(
-    SystemProgram.transfer({
-      fromPubkey: owner,
-      toPubkey: feeWallet,
-      lamports: feeLamports,
-    })
-  );
-  return new VersionedTransaction(
-    decompiled.compileToV0Message(lookupTableAccounts)
-  );
+  const decompiled = TransactionMessage.decompile(tx.message, { addressLookupTableAccounts: lookupTableAccounts });
+  decompiled.instructions.push(SystemProgram.transfer({ fromPubkey: owner, toPubkey: feeWallet, lamports: feeLamports }));
+  return new VersionedTransaction(decompiled.compileToV0Message(lookupTableAccounts));
 }
 async function sendSignedTransaction(connection, signedTx) {
-  const signature = await connection.sendRawTransaction(signedTx.serialize(), {
-    skipPreflight: false,
-    maxRetries: 3,
-  });
+  const signature = await connection.sendRawTransaction(signedTx.serialize(), { skipPreflight: true, maxRetries: 3 });
   await connection.confirmTransaction(signature, 'confirmed');
   return signature;
 }
@@ -97,9 +67,7 @@ async function sendWithPrivy({ tx, connection, wallet, status }) {
   if (!wallet.privyWallet) throw new Error('Privy wallet unavailable');
   status('Signing...');
   if (typeof wallet.privyWallet.sendTransaction === 'function') {
-    const sendOpts = wallet.instant
-      ? { uiOptions: { showWalletUIs: false } }
-      : undefined;
+    const sendOpts = wallet.instant ? { uiOptions: { showWalletUIs: false } } : undefined;
     return await wallet.privyWallet.sendTransaction(tx, connection, sendOpts);
   }
   if (typeof wallet.privyWallet.signTransaction === 'function') {
@@ -118,28 +86,12 @@ async function sendWithExternalWallet({ tx, connection, wallet, status }) {
   }
   if (typeof wallet.sendTransaction === 'function') {
     status('Confirm in wallet...');
-    return await wallet.sendTransaction(tx, connection, {
-      skipPreflight: false,
-      maxRetries: 3,
-    });
+    return await wallet.sendTransaction(tx, connection, { skipPreflight: true, maxRetries: 3 });
   }
   throw new Error('External wallet missing signing methods');
 }
-export async function executePumpTrade({
-  action,
-  mint,
-  solAmount,
-  tokenAmount,
-  tokenPriceUsd,
-  solPriceUsd,
-  slippagePct,
-  antiMev,
-  publicKey,
-  connection,
-  wallet,
-  onStatus,
-}) {
-  const status = typeof onStatus === 'function' ? onStatus : function () {};
+export async function executePumpTrade({ action, mint, solAmount, tokenAmount, tokenPriceUsd, solPriceUsd, slippagePct, antiMev, publicKey, connection, wallet, onStatus }) {
+  const status = typeof onStatus === 'function' ? onStatus : () => {};
   if (action !== 'buy' && action !== 'sell') throw new Error('Invalid action');
   if (!mint) throw new Error('Missing mint');
   if (!publicKey) throw new Error('Wallet not connected');
@@ -152,154 +104,63 @@ export async function executePumpTrade({
   let pumpAmount;
   let feeLamports = 0;
   if (action === 'buy') {
-    if (!Number.isFinite(solAmount) || solAmount <= 0) {
-      throw new Error('Amount too small');
-    }
+    if (!Number.isFinite(solAmount) || solAmount <= 0) throw new Error('Amount too small');
     const totalLamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
     feeLamports = Math.floor(totalLamports * PLATFORM_FEE_RATE);
     const tradeLamports = totalLamports - feeLamports;
-    if (tradeLamports <= 0) {
-      throw new Error('Amount too small after fee');
-    }
+    if (tradeLamports <= 0) throw new Error('Amount too small after fee');
     pumpAmount = parseFloat((tradeLamports / LAMPORTS_PER_SOL).toFixed(6));
     const balance = await getSolBalance(connection, owner);
-    const roughNeeded =
-      totalLamports +
-      Math.ceil(priorityFee * LAMPORTS_PER_SOL) +
-      10000;
-    if (balance < roughNeeded) {
-      throw new Error('Not enough SOL for trade, platform fee, and network fees');
-    }
+    const roughNeeded = totalLamports + Math.ceil(priorityFee * LAMPORTS_PER_SOL) + 10000;
+    if (balance < roughNeeded) throw new Error('Not enough SOL for trade, platform fee, and network fees');
   }
   if (action === 'sell') {
-    if (!Number.isFinite(tokenAmount) || tokenAmount <= 0) {
-      throw new Error('Amount too small');
-    }
+    if (!Number.isFinite(tokenAmount) || tokenAmount <= 0) throw new Error('Amount too small');
     pumpAmount = tokenAmount;
-    const estSolOut =
-      ((Number(tokenPriceUsd) || 0) * tokenAmount) / (Number(solPriceUsd) || 1);
-    feeLamports = Math.max(
-      0,
-      Math.floor(estSolOut * PLATFORM_FEE_RATE * 0.85 * LAMPORTS_PER_SOL)
-    );
+    const estSolOut = ((Number(tokenPriceUsd) || 0) * tokenAmount) / (Number(solPriceUsd) || 1);
+    feeLamports = Math.max(0, Math.floor(estSolOut * PLATFORM_FEE_RATE * 0.85 * LAMPORTS_PER_SOL));
     const balance = await getSolBalance(connection, owner);
-    const roughNeeded =
-      feeLamports +
-      Math.ceil(priorityFee * LAMPORTS_PER_SOL) +
-      10000;
-    if (feeLamports > 0 && balance < roughNeeded) {
-      throw new Error('Not enough SOL for platform fee and network fees');
-    }
+    const roughNeeded = feeLamports + Math.ceil(priorityFee * LAMPORTS_PER_SOL) + 10000;
+    if (feeLamports > 0 && balance < roughNeeded) throw new Error('Not enough SOL for platform fee and network fees');
   }
   status('Building trade...');
   const res = await fetch(PUMP_PORTAL_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      publicKey: owner.toString(),
-      action: action,
-      mint: mint,
-      denominatedInSol: action === 'buy' ? 'true' : 'false',
-      amount: pumpAmount,
-      slippage: slip,
-      priorityFee: priorityFee,
-      pool: 'auto',
-    }),
+    body: JSON.stringify({ publicKey: owner.toString(), action, mint, denominatedInSol: action === 'buy' ? 'true' : 'false', amount: pumpAmount, slippage: slip, priorityFee, pool: 'auto' }),
   });
   if (!res.ok) {
-    const txt = await res.text().catch(function () { return ''; });
+    const txt = await res.text().catch(() => '');
     throw new Error('PumpPortal ' + res.status + ': ' + (txt || '').slice(0, 200));
   }
   const txBytes = await res.arrayBuffer();
-  if (!txBytes || txBytes.byteLength === 0) {
-    throw new Error('PumpPortal returned empty transaction');
-  }
+  if (!txBytes || txBytes.byteLength === 0) throw new Error('PumpPortal returned empty transaction');
   let tx;
-  try {
-    tx = VersionedTransaction.deserialize(new Uint8Array(txBytes));
-  } catch {
-    throw new Error('Could not decode PumpPortal transaction');
-  }
+  try { tx = VersionedTransaction.deserialize(new Uint8Array(txBytes)); } catch { throw new Error('Could not decode PumpPortal transaction'); }
   status('Adding platform fee...');
   tx = await injectPlatformFee(connection, tx, owner, feeLamports);
   let signature;
   if (wallet.kind === 'privy') {
-    signature = await sendWithPrivy({
-      tx: tx,
-      connection: connection,
-      wallet: wallet,
-      status: status,
-    });
+    signature = await sendWithPrivy({ tx, connection, wallet, status });
   } else {
-    signature = await sendWithExternalWallet({
-      tx: tx,
-      connection: connection,
-      wallet: wallet,
-      status: status,
-    });
+    signature = await sendWithExternalWallet({ tx, connection, wallet, status });
   }
   if (!signature) throw new Error('Transaction was not sent');
   status('Confirming...');
   await connection.confirmTransaction(signature, 'confirmed');
   status('Done!');
-  return { signature: signature };
+  return { signature };
 }
-export async function quickBuyPump({
-  mint,
-  usdAmount,
-  solPriceUsd,
-  publicKey,
-  connection,
-  wallet,
-  antiMev,
-  onStatus,
-}) {
+export async function quickBuyPump({ mint, usdAmount, solPriceUsd, publicKey, connection, wallet, antiMev, onStatus }) {
   if (!solPriceUsd || solPriceUsd <= 0) throw new Error('SOL price unavailable');
   const solAmount = Number(usdAmount) / Number(solPriceUsd);
-  if (!Number.isFinite(solAmount) || solAmount <= 0) {
-    throw new Error('Amount too small');
-  }
-  return executePumpTrade({
-    action: 'buy',
-    mint: mint,
-    solAmount: solAmount,
-    publicKey: publicKey,
-    connection: connection,
-    wallet: wallet,
-    antiMev: antiMev,
-    onStatus: onStatus,
-  });
+  if (!Number.isFinite(solAmount) || solAmount <= 0) throw new Error('Amount too small');
+  return executePumpTrade({ action: 'buy', mint, solAmount, publicKey, connection, wallet, antiMev, onStatus });
 }
-export async function quickSellPump({
-  mint,
-  tokenBalance,
-  pct,
-  tokenPriceUsd,
-  solPriceUsd,
-  publicKey,
-  connection,
-  wallet,
-  antiMev,
-  onStatus,
-}) {
+export async function quickSellPump({ mint, tokenBalance, pct, tokenPriceUsd, solPriceUsd, publicKey, connection, wallet, antiMev, onStatus }) {
   if (!tokenBalance || tokenBalance <= 0) throw new Error('No balance to sell');
   if (!Number.isFinite(pct) || pct <= 0 || pct > 100) throw new Error('Invalid percentage');
-  const tokenAmount = pct === 100
-    ? Number(tokenBalance)
-    : Number(tokenBalance) * (Number(pct) / 100);
-  if (!Number.isFinite(tokenAmount) || tokenAmount <= 0) {
-    throw new Error('Amount too small');
-  }
-  return executePumpTrade({
-    action: 'sell',
-    mint: mint,
-    tokenAmount: tokenAmount,
-    tokenPriceUsd: tokenPriceUsd,
-    solPriceUsd: solPriceUsd,
-    publicKey: publicKey,
-    connection: connection,
-    wallet: wallet,
-    antiMev: antiMev,
-    onStatus: onStatus,
-  });
+  const tokenAmount = pct === 100 ? Number(tokenBalance) : Number(tokenBalance) * (Number(pct) / 100);
+  if (!Number.isFinite(tokenAmount) || tokenAmount <= 0) throw new Error('Amount too small');
+  return executePumpTrade({ action: 'sell', mint, tokenAmount, tokenPriceUsd, solPriceUsd, publicKey, connection, wallet, antiMev, onStatus });
 }
