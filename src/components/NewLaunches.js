@@ -5,7 +5,7 @@
  * Instant display with bonding curve price. No polling.
  * Trades: pumpTrade.js -> /api/pumpportal/trade-local
  */
-
+ 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
