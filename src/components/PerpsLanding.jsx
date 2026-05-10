@@ -50,8 +50,8 @@ export default function PerpsLanding({ onConnectWallet }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 48 }}>
         {[
           { label: 'Max Leverage', value: '50x' },
+          { label: 'Powered by', value: 'Hyperliquid' },
           { label: 'Fee', value: '0.10%' },
-          { label: 'Settlement', value: 'USDC' },
         ].map(stat => (
           <div key={stat.label} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 20, textAlign: 'center' }}>
             <div style={{ fontSize: 28, fontWeight: 800, color: '#fff' }}>{stat.value}</div>
