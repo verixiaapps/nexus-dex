@@ -26,20 +26,13 @@ function pctFmt(n) {
 
 function useDebounce(value, delay) {
   const [d, setD] = useState(value);
-  useEffect(() => {
-    const t = setTimeout(() => setD(value), delay);
-    return () => clearTimeout(t);
-  }, [value, delay]);
+  useEffect(() => { const t = setTimeout(() => setD(value), delay); return () => clearTimeout(t); }, [value, delay]);
   return d;
 }
 
 function useIsMobile() {
   const [m, setM] = useState(typeof window !== 'undefined' ? window.innerWidth < 768 : false);
-  useEffect(() => {
-    const h = () => setM(window.innerWidth < 768);
-    window.addEventListener('resize', h);
-    return () => window.removeEventListener('resize', h);
-  }, []);
+  useEffect(() => { const h = () => setM(window.innerWidth < 768); window.addEventListener('resize', h); return () => window.removeEventListener('resize', h); }, []);
   return m;
 }
 
@@ -47,25 +40,9 @@ function TokenImage({ token, size }) {
   const [broke, setBroke] = useState(false);
   const letter = String(token.symbol || '?').charAt(0).toUpperCase();
   if ((!token.image && !token.logoURI) || broke) {
-    return (
-      <div style={{
-        width: size, height: size, borderRadius: '50%',
-        background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)',
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: Math.round(size * 0.4), fontWeight: 800, color: C.accent, flexShrink: 0,
-      }}>
-        {letter}
-      </div>
-    );
+    return (<div style={{ width: size, height: size, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: Math.round(size * 0.4), fontWeight: 800, color: C.accent, flexShrink: 0 }}>{letter}</div>);
   }
-  return (
-    <img
-      src={token.image || token.logoURI}
-      alt=""
-      onError={() => setBroke(true)}
-      style={{ width: size, height: size, borderRadius: '50%', flexShrink: 0, background: 'rgba(0,229,255,.08)' }}
-    />
-  );
+  return (<img src={token.image || token.logoURI} alt="" onError={() => setBroke(true)} style={{ width: size, height: size, borderRadius: '50%', flexShrink: 0, background: 'rgba(0,229,255,.08)' }} />);
 }
 
 function Row({ c, i, isMobile, onClick }) {
@@ -74,71 +51,55 @@ function Row({ c, i, isMobile, onClick }) {
   const sym = String(c.symbol || '').toUpperCase();
   const name = String(c.name || sym);
   const displayName = name.length > 18 ? name.slice(0, 17) + '\u2026' : name;
-  const baseStyle = {
-    padding: isMobile ? '12px 14px' : '12px 16px',
-    borderBottom: '1px solid rgba(255,255,255,.025)',
-    cursor: 'pointer', transition: 'background .15s',
-  };
+  const baseStyle = { padding: isMobile ? '12px 14px' : '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer', transition: 'background .15s' };
 
   if (isMobile) {
-    return (
-      <div onClick={() => onClick(c)} style={{ ...baseStyle, display: 'flex', alignItems: 'center', gap: 10 }}>
-        <div style={{ color: C.muted, fontSize: 10, width: 18, flexShrink: 0, textAlign: 'center' }}>{i + 1}</div>
-        <TokenImage token={c} size={34} />
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</div>
-          <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{sym}</div>
-        </div>
-        <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div style={{ fontWeight: 600, color: '#fff', fontSize: 13 }}>{fmt(c.current_price)}</div>
-          <div style={{ fontSize: 11, color: pos ? C.green : C.red, marginTop: 1, fontWeight: 600 }}>{pctFmt(change)}</div>
-        </div>
+    return (<div onClick={() => onClick(c)} style={{ ...baseStyle, display: 'flex', alignItems: 'center', gap: 10 }}>
+      <div style={{ color: C.muted, fontSize: 10, width: 18, flexShrink: 0, textAlign: 'center' }}>{i + 1}</div>
+      <TokenImage token={c} size={34} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</div>
+        <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{sym}</div>
       </div>
-    );
+      <div style={{ textAlign: 'right', flexShrink: 0 }}>
+        <div style={{ fontWeight: 600, color: '#fff', fontSize: 13 }}>{fmt(c.current_price)}</div>
+        <div style={{ fontSize: 11, color: pos ? C.green : C.red, marginTop: 1, fontWeight: 600 }}>{pctFmt(change)}</div>
+      </div>
+    </div>);
   }
 
-  return (
-    <div onClick={() => onClick(c)} style={{ ...baseStyle, display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 110px 80px 120px', gap: 8, alignItems: 'center' }}>
-      <div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-        <TokenImage token={c} size={32} />
-        <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</div>
-          <div style={{ fontSize: 10, color: C.muted }}>{sym}</div>
-        </div>
+  return (<div onClick={() => onClick(c)} style={{ ...baseStyle, display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 110px 80px 120px', gap: 8, alignItems: 'center' }}>
+    <div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div>
+    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+      <TokenImage token={c} size={32} />
+      <div style={{ minWidth: 0 }}>
+        <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</div>
+        <div style={{ fontSize: 10, color: C.muted }}>{sym}</div>
       </div>
-      <div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>{fmt(c.current_price)}</div>
-      <div style={{ fontSize: 12, color: pos ? C.green : C.red, textAlign: 'right', fontWeight: 600 }}>{pctFmt(change)}</div>
-      <div style={{ fontSize: 11, color: C.muted, textAlign: 'right' }}>{fmt(c.market_cap)}</div>
     </div>
-  );
+    <div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>{fmt(c.current_price)}</div>
+    <div style={{ fontSize: 12, color: pos ? C.green : C.red, textAlign: 'right', fontWeight: 600 }}>{pctFmt(change)}</div>
+    <div style={{ fontSize: 11, color: C.muted, textAlign: 'right' }}>{fmt(c.market_cap)}</div>
+  </div>);
 }
 
-function parsePairs(pairs) {
-  const seen = {};
-  const list = [];
-  (pairs || []).forEach((p) => {
-    if (p.chainId !== 'solana') return;
-    const addr = p.baseToken?.address;
-    if (addr && !seen[addr]) {
-      seen[addr] = true;
-      list.push({
-        id: addr,
-        chain: 'solana',
-        mint: addr,
-        symbol: p.baseToken.symbol,
-        name: p.baseToken.name || p.baseToken.symbol,
-        decimals: p.baseToken.decimals || 6,
-        logoURI: p.info?.imageUrl || null,
-        image: p.info?.imageUrl || null,
-        current_price: Number(p.priceUsd || 0) || 0,
-        market_cap: Number(p.marketCap || p.fdv || 0) || 0,
-        total_volume: Number(p.volume?.h24 || 0) || 0,
-        price_change_percentage_24h: p.priceChange?.h24 != null ? Number(p.priceChange.h24) : null,
-      });
+// Price cache
+const _priceCache = {};
+async function fetchOkxPrice(mint) {
+  if (!mint) return 0;
+  if (_priceCache[mint] && Date.now() - _priceCache[mint].ts < 60000) return _priceCache[mint].price;
+  const knownStable = { 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': 1, 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB': 1 };
+  if (knownStable[mint]) { _priceCache[mint] = { price: 1, ts: Date.now() }; return 1; }
+  try {
+    const r = await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=${mint === 'So11111111111111111111111111111111111111112' ? '1000000000' : '1000000'}`);
+    const j = await r.json();
+    if (j.code === '0' && j.data) {
+      const d = Array.isArray(j.data) ? j.data[0] : j.data;
+      const price = Number(d.toTokenAmount) / (mint === 'So11111111111111111111111111111111111111112' ? 1e9 : 1e6);
+      if (price > 0) { _priceCache[mint] = { price, ts: Date.now() }; return price; }
     }
-  });
-  return list;
+  } catch {}
+  return 0;
 }
 
 export default function Markets({ onSelectCoin, coins }) {
@@ -148,132 +109,109 @@ export default function Markets({ onSelectCoin, coins }) {
   const isMobile = useIsMobile();
   const debouncedQ = useDebounce(q, 300);
 
-  const TOP_MINTS = [
-    'So11111111111111111111111111111111111111112',
-    'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
-    'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',
-    'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',
-    'DezXAZ8z7PnrnRJjz3wXBoRgixCa6BFrR4Jfrj6z7m9',
-    'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm',
-    '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R',
-    'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3',
-    'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL',
-    'hntyVP6YFm1Hg25TN9WGLqM12b8TQmcknKrdu1oxWux',
-  ];
-
-  // Get SOL price for passing to token detail
   const solPriceUsd = useMemo(() => {
     if (!coins || !Array.isArray(coins)) return 0;
     const sol = coins.find(c => c && (c.id === 'solana' || c.symbol === 'SOL'));
     return sol && Number(sol.current_price) > 0 ? Number(sol.current_price) : 0;
   }, [coins]);
 
-  // Fetch tokens
+  // Default: load OKX token list + prices
   useEffect(() => {
+    if (debouncedQ.trim()) return; // let the search effect handle it
     let cancelled = false;
     setLoading(true);
+    (async () => {
+      try {
+        const r = await fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501');
+        const j = await r.json();
+        if (cancelled) return;
+        const raw = (j.data || []).slice(0, 50);
+        const list = [];
+        for (const t of raw) {
+          const mint = t.tokenContractAddress;
+          if (!mint) continue;
+          const price = await fetchOkxPrice(mint);
+          list.push({
+            id: mint,
+            chain: 'solana',
+            mint,
+            symbol: t.tokenSymbol || '?',
+            name: t.tokenName || t.tokenSymbol || 'Unknown',
+            decimals: parseInt(t.decimals) || 6,
+            logoURI: t.tokenLogoUrl || null,
+            image: t.tokenLogoUrl || null,
+            current_price: price,
+            market_cap: 0,
+            total_volume: 0,
+            price_change_percentage_24h: null,
+          });
+        }
+        list.sort((a, b) => b.current_price - a.current_price);
+        if (!cancelled) { setTokens(list); setLoading(false); }
+      } catch { if (!cancelled) { setTokens([]); setLoading(false); } }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
-    const url = debouncedQ.trim()
-      ? `https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(debouncedQ)}`
-      : `https://api.dexscreener.com/latest/dex/tokens/${TOP_MINTS.join(',')}`;
-
-    fetch(url)
+  // Search: use DexScreener
+  useEffect(() => {
+    if (!debouncedQ.trim()) return;
+    let cancelled = false;
+    setLoading(true);
+    fetch(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(debouncedQ)}`)
       .then(res => res.json())
       .then(data => {
         if (cancelled) return;
-        let list = parsePairs(data.pairs);
-
-        if (!debouncedQ.trim()) {
-          const seenSym = {};
-          const deduped = [];
-          list.forEach((t) => {
-            const sym = t.symbol.toUpperCase();
-            if (!seenSym[sym] || t.total_volume > seenSym[sym].total_volume) {
-              seenSym[sym] = t;
-            }
-          });
-          list = Object.values(seenSym);
-          list.sort((a, b) => b.market_cap - a.market_cap);
-        } else {
-          list.sort((a, b) => b.total_volume - a.total_volume);
-        }
-
-        setTokens(list);
-        setLoading(false);
+        const pairs = data.pairs || [];
+        const seen = {};
+        const list = [];
+        pairs.forEach(p => {
+          if (p.chainId !== 'solana') return;
+          const addr = p.baseToken?.address;
+          if (addr && !seen[addr]) {
+            seen[addr] = true;
+            list.push({
+              id: addr, chain: 'solana', mint: addr,
+              symbol: p.baseToken.symbol, name: p.baseToken.name || p.baseToken.symbol,
+              decimals: p.baseToken.decimals || 6,
+              logoURI: p.info?.imageUrl || null, image: p.info?.imageUrl || null,
+              current_price: Number(p.priceUsd || 0) || 0,
+              market_cap: Number(p.marketCap || p.fdv || 0) || 0,
+              total_volume: Number(p.volume?.h24 || 0) || 0,
+              price_change_percentage_24h: p.priceChange?.h24 != null ? Number(p.priceChange.h24) : null,
+            });
+          }
+        });
+        list.sort((a, b) => b.total_volume - a.total_volume);
+        if (!cancelled) { setTokens(list); setLoading(false); }
       })
-      .catch(() => {
-        if (!cancelled) {
-          setTokens([]);
-          setLoading(false);
-        }
-      });
-
+      .catch(() => { if (!cancelled) { setTokens([]); setLoading(false); } });
     return () => { cancelled = true; };
   }, [debouncedQ]);
 
-  const handleClick = useCallback(
-    (row) => {
-      onSelectCoin?.({
-        chain: 'solana',
-        mint: row.mint,
-        symbol: row.symbol,
-        name: row.name || row.symbol,
-        decimals: row.decimals || 6,
-        logoURI: row.logoURI || row.image || null,
-        current_price: row.current_price,
-        price_change_percentage_24h: row.price_change_percentage_24h,
-        solPriceUsd: row.symbol === 'SOL' ? row.current_price : solPriceUsd,
-      });
-    },
-    [onSelectCoin, solPriceUsd]
-  );
+  const handleClick = useCallback((row) => {
+    onSelectCoin?.({
+      chain: 'solana', mint: row.mint, symbol: row.symbol, name: row.name || row.symbol,
+      decimals: row.decimals || 6, logoURI: row.logoURI || row.image || null,
+      current_price: row.current_price, price_change_percentage_24h: row.price_change_percentage_24h,
+      solPriceUsd: row.symbol === 'SOL' ? row.current_price : solPriceUsd,
+    });
+  }, [onSelectCoin, solPriceUsd]);
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', width: '100%', boxSizing: 'border-box', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-        <div>
-          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Live Markets</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Top Solana tokens with live prices</p>
-        </div>
+        <div><h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Live Markets</h1><p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Top Solana tokens with live prices</p></div>
         <div style={{ position: 'relative', width: '100%', maxWidth: isMobile ? '100%' : 320 }}>
-          <input
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-            placeholder="Search tokens..."
-            style={{
-              background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border),
-              borderRadius: 10, padding: '10px 36px 10px 14px',
-              color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13,
-              outline: 'none', width: '100%', boxSizing: 'border-box',
-            }}
-          />
-          {q && (
-            <button onClick={() => setQ('')} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 18, padding: 0 }}>
-              ×
-            </button>
-          )}
+          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tokens..." style={{ background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border), borderRadius: 10, padding: '10px 36px 10px 14px', color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: '100%', boxSizing: 'border-box' }} />
+          {q && <button onClick={() => setQ('')} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 18, padding: 0 }}>×</button>}
         </div>
       </div>
-
-      {loading ? (
-        <div style={{ textAlign: 'center', padding: 60, color: C.muted, fontSize: 14 }}>Loading tokens...</div>
-      ) : (
+      {loading ? (<div style={{ textAlign: 'center', padding: 60, color: C.muted, fontSize: 14 }}>Loading tokens...</div>) : (
         <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
-          {!isMobile && (
-            <div style={{ display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 110px 80px 120px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: 0.8 }}>
-              <div>#</div>
-              <div>NAME</div>
-              <div style={{ textAlign: 'right' }}>PRICE</div>
-              <div style={{ textAlign: 'right' }}>24H</div>
-              <div style={{ textAlign: 'right' }}>MKT CAP</div>
-            </div>
-          )}
-          {tokens.length === 0 && (
-            <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>No tokens found</div>
-          )}
-          {tokens.map((c, i) => (
-            <Row key={c.id} c={c} i={i} isMobile={isMobile} onClick={handleClick} />
-          ))}
+          {!isMobile && (<div style={{ display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 110px 80px 120px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: 0.8 }}><div>#</div><div>NAME</div><div style={{ textAlign: 'right' }}>PRICE</div><div style={{ textAlign: 'right' }}>24H</div><div style={{ textAlign: 'right' }}>MKT CAP</div></div>)}
+          {tokens.length === 0 && <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>No tokens found</div>}
+          {tokens.map((c, i) => (<Row key={c.id} c={c} i={i} isMobile={isMobile} onClick={handleClick} />))}
         </div>
       )}
     </div>
