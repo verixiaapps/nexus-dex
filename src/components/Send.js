@@ -12,7 +12,7 @@ const C = {
   border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
-};
+}; 
 
 const QUICK_TOKENS = [
   { mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, isNative: true },
