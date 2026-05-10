@@ -44,32 +44,10 @@ function Row({ c, i, isMobile, onClick }) {
   const name = String(c.name || sym);
   const displayName = name.length > 22 ? name.slice(0, 21) + '\u2026' : name;
   const baseStyle = { padding: isMobile ? '12px 14px' : '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer', transition: 'background .15s' };
-
   if (isMobile) {
-    return (<div onClick={() => onClick(c)} style={{ ...baseStyle, display: 'flex', alignItems: 'center', gap: 10 }}>
-      <div style={{ color: C.muted, fontSize: 10, width: 18, flexShrink: 0, textAlign: 'center' }}>{i + 1}</div>
-      <TokenImage token={c} size={34} />
-      <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</div>
-        <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{sym}</div>
-      </div>
-      <div style={{ textAlign: 'right', flexShrink: 0 }}>
-        <div style={{ fontWeight: 600, color: '#fff', fontSize: 13 }}>{fmt(c.current_price)}</div>
-      </div>
-    </div>);
+    return (<div onClick={() => onClick(c)} style={{ ...baseStyle, display: 'flex', alignItems: 'center', gap: 10 }}><div style={{ color: C.muted, fontSize: 10, width: 18, flexShrink: 0, textAlign: 'center' }}>{i + 1}</div><TokenImage token={c} size={34} /><div style={{ flex: 1, minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</div><div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{sym}</div></div><div style={{ textAlign: 'right', flexShrink: 0 }}><div style={{ fontWeight: 600, color: '#fff', fontSize: 13 }}>{fmt(c.current_price)}</div></div></div>);
   }
-
-  return (<div onClick={() => onClick(c)} style={{ ...baseStyle, display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 120px', gap: 8, alignItems: 'center' }}>
-    <div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div>
-    <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-      <TokenImage token={c} size={32} />
-      <div style={{ minWidth: 0 }}>
-        <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</div>
-        <div style={{ fontSize: 10, color: C.muted }}>{sym}</div>
-      </div>
-    </div>
-    <div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>{fmt(c.current_price)}</div>
-  </div>);
+  return (<div onClick={() => onClick(c)} style={{ ...baseStyle, display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 120px', gap: 8, alignItems: 'center' }}><div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div><div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}><TokenImage token={c} size={32} /><div style={{ minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</div><div style={{ fontSize: 10, color: C.muted }}>{sym}</div></div></div><div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>{fmt(c.current_price)}</div></div>);
 }
 
 const _priceCache = {};
@@ -80,19 +58,16 @@ async function fetchOkxPrice(mint) {
   try {
     const r = await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=1000000`);
     const j = await r.json();
-    if (j.code === '0' && j.data) {
-      const d = Array.isArray(j.data) ? j.data[0] : j.data;
-      const price = Number(d.toTokenAmount) / 1e6;
-      if (price > 0) { _priceCache[key] = { price, ts: Date.now() }; return price; }
-    }
+    if (j.code === '0' && j.data) { const d = Array.isArray(j.data) ? j.data[0] : j.data; const price = Number(d.toTokenAmount) / 1e6; if (price > 0) { _priceCache[key] = { price, ts: Date.now() }; return price; } }
   } catch {}
   return 0;
 }
 
 export default function Markets({ onSelectCoin, coins }) {
   const [q, setQ] = useState('');
-  const [tokens, setTokens] = useState([]);
+  const [allTokens, setAllTokens] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [pricesLoading, setPricesLoading] = useState(false);
   const isMobile = useIsMobile();
   const debouncedQ = useDebounce(q, 300);
 
@@ -102,9 +77,8 @@ export default function Markets({ onSelectCoin, coins }) {
     return sol && Number(sol.current_price) > 0 ? Number(sol.current_price) : 0;
   }, [coins]);
 
-  // Load OKX all-tokens + prices
+  // Initial load: 20 tokens with names/logos, then prices in parallel
   useEffect(() => {
-    if (debouncedQ.trim()) return;
     let cancelled = false;
     setLoading(true);
     (async () => {
@@ -112,50 +86,42 @@ export default function Markets({ onSelectCoin, coins }) {
         const r = await fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501');
         const j = await r.json();
         if (cancelled) return;
-        const raw = (j.data || []).slice(0, 100);
-        const list = [];
-        for (const t of raw) {
-          if (cancelled) return;
-          const mint = t.tokenContractAddress;
-          if (!mint) continue;
-          const price = await fetchOkxPrice(mint);
-          list.push({
-            id: mint, chain: 'solana', mint,
-            symbol: t.tokenSymbol || '?',
-            name: t.tokenName || t.tokenSymbol || 'Unknown',
-            decimals: parseInt(t.decimals) || 6,
-            logoURI: t.tokenLogoUrl || null,
-            image: t.tokenLogoUrl || null,
-            current_price: price,
-          });
-        }
-        list.sort((a, b) => {
-          if (a.symbol === 'SOL') return -1;
-          if (b.symbol === 'SOL') return 1;
-          if (a.symbol === 'USDC') return -1;
-          if (b.symbol === 'USDC') return 1;
-          if (a.symbol === 'USDT') return -1;
-          if (b.symbol === 'USDT') return 1;
-          return 0;
+        const raw = (j.data || []).slice(0, 20).map(t => ({
+          id: t.tokenContractAddress, chain: 'solana', mint: t.tokenContractAddress,
+          symbol: t.tokenSymbol || '?', name: t.tokenName || t.tokenSymbol || 'Unknown',
+          decimals: parseInt(t.decimals) || 6, logoURI: t.tokenLogoUrl || null, image: t.tokenLogoUrl || null,
+          current_price: 0,
+        }));
+        raw.sort((a, b) => { if (a.symbol === 'SOL') return -1; if (b.symbol === 'SOL') return 1; if (a.symbol === 'USDC') return -1; if (b.symbol === 'USDC') return 1; if (a.symbol === 'USDT') return -1; if (b.symbol === 'USDT') return 1; return 0; });
+        if (!cancelled) { setAllTokens(raw); setLoading(false); }
+        // Fetch prices in parallel
+        setPricesLoading(true);
+        const promises = raw.map(async (t, idx) => {
+          const p = await fetchOkxPrice(t.mint);
+          if (!cancelled) setAllTokens(prev => { const next = [...prev]; if (next[idx]) next[idx] = { ...next[idx], current_price: p }; return next; });
         });
-        if (!cancelled) { setTokens(list); setLoading(false); }
-      } catch { if (!cancelled) { setTokens([]); setLoading(false); } }
+        await Promise.all(promises);
+        if (!cancelled) setPricesLoading(false);
+      } catch { if (!cancelled) { setAllTokens([]); setLoading(false); } }
     })();
     return () => { cancelled = true; };
   }, []);
 
+  // Search: filter from cached OKX list
+  const tokens = useMemo(() => {
+    if (!q.trim()) return allTokens;
+    const lower = q.toLowerCase();
+    return allTokens.filter(t => t.symbol.toLowerCase().includes(lower) || t.name.toLowerCase().includes(lower) || t.mint.toLowerCase().includes(lower)).slice(0, 30);
+  }, [allTokens, q]);
+
   const handleClick = useCallback((row) => {
-    onSelectCoin?.({
-      chain: 'solana', mint: row.mint, symbol: row.symbol, name: row.name || row.symbol,
-      decimals: row.decimals || 6, logoURI: row.logoURI || row.image || null,
-      current_price: row.current_price, solPriceUsd: row.symbol === 'SOL' ? row.current_price : solPriceUsd,
-    });
+    onSelectCoin?.({ chain: 'solana', mint: row.mint, symbol: row.symbol, name: row.name || row.symbol, decimals: row.decimals || 6, logoURI: row.logoURI || row.image || null, current_price: row.current_price, solPriceUsd: row.symbol === 'SOL' ? row.current_price : solPriceUsd });
   }, [onSelectCoin, solPriceUsd]);
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', width: '100%', boxSizing: 'border-box', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-        <div><h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Live Markets</h1><p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Solana tokens with live prices via OKX</p></div>
+        <div><h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Live Markets</h1><p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Solana tokens via OKX{pricesLoading ? ' · loading prices...' : ''}</p></div>
         <div style={{ position: 'relative', width: '100%', maxWidth: isMobile ? '100%' : 320 }}>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tokens..." style={{ background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border), borderRadius: 10, padding: '10px 36px 10px 14px', color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: '100%', boxSizing: 'border-box' }} />
           {q && <button onClick={() => setQ('')} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 18, padding: 0 }}>×</button>}
