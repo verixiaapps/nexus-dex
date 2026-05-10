@@ -18,12 +18,6 @@ function fmt(n, d) {
   return '$' + x.toFixed(d);
 }
 
-function pctFmt(n) {
-  const x = Number(n);
-  if (!Number.isFinite(x)) return '-';
-  return (x > 0 ? '+' : '') + x.toFixed(2) + '%';
-}
-
 function useDebounce(value, delay) {
   const [d, setD] = useState(value);
   useEffect(() => { const t = setTimeout(() => setD(value), delay); return () => clearTimeout(t); }, [value, delay]);
@@ -39,18 +33,16 @@ function useIsMobile() {
 function TokenImage({ token, size }) {
   const [broke, setBroke] = useState(false);
   const letter = String(token.symbol || '?').charAt(0).toUpperCase();
-  if ((!token.image && !token.logoURI) || broke) {
+  if ((!token.logoURI && !token.image) || broke) {
     return (<div style={{ width: size, height: size, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: Math.round(size * 0.4), fontWeight: 800, color: C.accent, flexShrink: 0 }}>{letter}</div>);
   }
-  return (<img src={token.image || token.logoURI} alt="" onError={() => setBroke(true)} style={{ width: size, height: size, borderRadius: '50%', flexShrink: 0, background: 'rgba(0,229,255,.08)' }} />);
+  return (<img src={token.logoURI || token.image} alt="" onError={() => setBroke(true)} style={{ width: size, height: size, borderRadius: '50%', flexShrink: 0, background: 'rgba(0,229,255,.08)' }} />);
 }
 
 function Row({ c, i, isMobile, onClick }) {
-  const change = c.price_change_percentage_24h;
-  const pos = (Number(change) || 0) >= 0;
   const sym = String(c.symbol || '').toUpperCase();
   const name = String(c.name || sym);
-  const displayName = name.length > 20 ? name.slice(0, 19) + '\u2026' : name;
+  const displayName = name.length > 22 ? name.slice(0, 21) + '\u2026' : name;
   const baseStyle = { padding: isMobile ? '12px 14px' : '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer', transition: 'background .15s' };
 
   if (isMobile) {
@@ -63,12 +55,11 @@ function Row({ c, i, isMobile, onClick }) {
       </div>
       <div style={{ textAlign: 'right', flexShrink: 0 }}>
         <div style={{ fontWeight: 600, color: '#fff', fontSize: 13 }}>{fmt(c.current_price)}</div>
-        <div style={{ fontSize: 11, color: pos ? C.green : C.red, marginTop: 1, fontWeight: 600 }}>{pctFmt(change)}</div>
       </div>
     </div>);
   }
 
-  return (<div onClick={() => onClick(c)} style={{ ...baseStyle, display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 110px 80px 120px', gap: 8, alignItems: 'center' }}>
+  return (<div onClick={() => onClick(c)} style={{ ...baseStyle, display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 120px', gap: 8, alignItems: 'center' }}>
     <div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div>
     <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
       <TokenImage token={c} size={32} />
@@ -78,44 +69,14 @@ function Row({ c, i, isMobile, onClick }) {
       </div>
     </div>
     <div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>{fmt(c.current_price)}</div>
-    <div style={{ fontSize: 12, color: pos ? C.green : C.red, textAlign: 'right', fontWeight: 600 }}>{pctFmt(change)}</div>
-    <div style={{ fontSize: 11, color: C.muted, textAlign: 'right' }}>{fmt(c.market_cap)}</div>
   </div>);
 }
-
-// Hardcoded top tokens with accurate names/symbols
-const TOP_TOKENS = [
-  { mint: 'So11111111111111111111111111111111111111112', symbol: 'SOL', name: 'Solana' },
-  { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC', name: 'USD Coin' },
-  { mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', symbol: 'USDT', name: 'Tether USD' },
-  { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', symbol: 'JUP', name: 'Jupiter' },
-  { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6BFrR4Jfrj6z7m9', symbol: 'BONK', name: 'Bonk' },
-  { mint: 'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm', symbol: 'WIF', name: 'dogwifhat' },
-  { mint: '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R', symbol: 'RAY', name: 'Raydium' },
-  { mint: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3', symbol: 'PYTH', name: 'Pyth Network' },
-  { mint: 'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL', symbol: 'JTO', name: 'Jito' },
-  { mint: 'hntyVP6YFm1Hg25TN9WGLqM12b8TQmcknKrdu1oxWux', symbol: 'HNT', name: 'Helium' },
-];
 
 const _priceCache = {};
 async function fetchOkxPrice(mint) {
   if (!mint) return 0;
   const key = mint.toLowerCase();
   if (_priceCache[key] && Date.now() - _priceCache[key].ts < 60000) return _priceCache[key].price;
-  const knownStable = { 'epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v': 1, 'es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb': 1 };
-  if (knownStable[key]) { _priceCache[key] = { price: 1, ts: Date.now() }; return 1; }
-  if (mint === 'So11111111111111111111111111111111111111112') {
-    try {
-      const r = await fetch('/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=So11111111111111111111111111111111111111112&toTokenAddress=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=1000000000');
-      const j = await r.json();
-      if (j.code === '0' && j.data) {
-        const d = Array.isArray(j.data) ? j.data[0] : j.data;
-        const price = Number(d.toTokenAmount) / 1e9;
-        if (price > 0) { _priceCache[key] = { price, ts: Date.now() }; return price; }
-      }
-    } catch {}
-    return 0;
-  }
   try {
     const r = await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=1000000`);
     const j = await r.json();
@@ -141,25 +102,31 @@ export default function Markets({ onSelectCoin, coins }) {
     return sol && Number(sol.current_price) > 0 ? Number(sol.current_price) : 0;
   }, [coins]);
 
-  // Default: TOP_TOKENS with OKX prices
+  // Load OKX all-tokens + prices
   useEffect(() => {
     if (debouncedQ.trim()) return;
     let cancelled = false;
     setLoading(true);
     (async () => {
       try {
+        const r = await fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501');
+        const j = await r.json();
+        if (cancelled) return;
+        const raw = (j.data || []).slice(0, 100);
         const list = [];
-        for (const t of TOP_TOKENS) {
+        for (const t of raw) {
           if (cancelled) return;
-          const price = await fetchOkxPrice(t.mint);
+          const mint = t.tokenContractAddress;
+          if (!mint) continue;
+          const price = await fetchOkxPrice(mint);
           list.push({
-            id: t.mint, chain: 'solana', mint: t.mint,
-            symbol: t.symbol, name: t.name,
-            decimals: t.mint === 'So11111111111111111111111111111111111111112' ? 9 : 6,
-            logoURI: null, image: null,
+            id: mint, chain: 'solana', mint,
+            symbol: t.tokenSymbol || '?',
+            name: t.tokenName || t.tokenSymbol || 'Unknown',
+            decimals: parseInt(t.decimals) || 6,
+            logoURI: t.tokenLogoUrl || null,
+            image: t.tokenLogoUrl || null,
             current_price: price,
-            market_cap: 0, total_volume: 0,
-            price_change_percentage_24h: null,
           });
         }
         list.sort((a, b) => {
@@ -167,7 +134,9 @@ export default function Markets({ onSelectCoin, coins }) {
           if (b.symbol === 'SOL') return 1;
           if (a.symbol === 'USDC') return -1;
           if (b.symbol === 'USDC') return 1;
-          return b.current_price - a.current_price;
+          if (a.symbol === 'USDT') return -1;
+          if (b.symbol === 'USDT') return 1;
+          return 0;
         });
         if (!cancelled) { setTokens(list); setLoading(false); }
       } catch { if (!cancelled) { setTokens([]); setLoading(false); } }
@@ -175,55 +144,18 @@ export default function Markets({ onSelectCoin, coins }) {
     return () => { cancelled = true; };
   }, []);
 
-  // Search: DexScreener
-  useEffect(() => {
-    if (!debouncedQ.trim()) return;
-    let cancelled = false;
-    setLoading(true);
-    fetch(`https://api.dexscreener.com/latest/dex/search?q=${encodeURIComponent(debouncedQ)}`)
-      .then(res => res.json())
-      .then(data => {
-        if (cancelled) return;
-        const pairs = data.pairs || [];
-        const seen = {};
-        const list = [];
-        pairs.forEach(p => {
-          if (p.chainId !== 'solana') return;
-          const addr = p.baseToken?.address;
-          if (addr && !seen[addr]) {
-            seen[addr] = true;
-            list.push({
-              id: addr, chain: 'solana', mint: addr,
-              symbol: p.baseToken.symbol, name: p.baseToken.name || p.baseToken.symbol,
-              decimals: p.baseToken.decimals || 6,
-              logoURI: p.info?.imageUrl || null, image: p.info?.imageUrl || null,
-              current_price: Number(p.priceUsd || 0) || 0,
-              market_cap: Number(p.marketCap || p.fdv || 0) || 0,
-              total_volume: Number(p.volume?.h24 || 0) || 0,
-              price_change_percentage_24h: p.priceChange?.h24 != null ? Number(p.priceChange.h24) : null,
-            });
-          }
-        });
-        list.sort((a, b) => b.total_volume - a.total_volume);
-        if (!cancelled) { setTokens(list); setLoading(false); }
-      })
-      .catch(() => { if (!cancelled) { setTokens([]); setLoading(false); } });
-    return () => { cancelled = true; };
-  }, [debouncedQ]);
-
   const handleClick = useCallback((row) => {
     onSelectCoin?.({
       chain: 'solana', mint: row.mint, symbol: row.symbol, name: row.name || row.symbol,
       decimals: row.decimals || 6, logoURI: row.logoURI || row.image || null,
-      current_price: row.current_price, price_change_percentage_24h: row.price_change_percentage_24h,
-      solPriceUsd: row.symbol === 'SOL' ? row.current_price : solPriceUsd,
+      current_price: row.current_price, solPriceUsd: row.symbol === 'SOL' ? row.current_price : solPriceUsd,
     });
   }, [onSelectCoin, solPriceUsd]);
 
   return (
     <div style={{ maxWidth: 900, margin: '0 auto', width: '100%', boxSizing: 'border-box', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
-        <div><h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Live Markets</h1><p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Top Solana tokens with live prices</p></div>
+        <div><h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Live Markets</h1><p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Solana tokens with live prices via OKX</p></div>
         <div style={{ position: 'relative', width: '100%', maxWidth: isMobile ? '100%' : 320 }}>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tokens..." style={{ background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border), borderRadius: 10, padding: '10px 36px 10px 14px', color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: '100%', boxSizing: 'border-box' }} />
           {q && <button onClick={() => setQ('')} style={{ position: 'absolute', right: 10, top: '50%', transform: 'translateY(-50%)', background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 18, padding: 0 }}>×</button>}
@@ -231,7 +163,7 @@ export default function Markets({ onSelectCoin, coins }) {
       </div>
       {loading ? (<div style={{ textAlign: 'center', padding: 60, color: C.muted, fontSize: 14 }}>Loading tokens...</div>) : (
         <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
-          {!isMobile && (<div style={{ display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 110px 80px 120px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: 0.8 }}><div>#</div><div>NAME</div><div style={{ textAlign: 'right' }}>PRICE</div><div style={{ textAlign: 'right' }}>24H</div><div style={{ textAlign: 'right' }}>MKT CAP</div></div>)}
+          {!isMobile && (<div style={{ display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 120px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: 0.8 }}><div>#</div><div>NAME</div><div style={{ textAlign: 'right' }}>PRICE</div></div>)}
           {tokens.length === 0 && <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13 }}>No tokens found</div>}
           {tokens.map((c, i) => (<Row key={c.id} c={c} i={i} isMobile={isMobile} onClick={handleClick} />))}
         </div>
