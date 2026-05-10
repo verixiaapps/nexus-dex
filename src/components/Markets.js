@@ -50,7 +50,7 @@ function Row({ c, i, isMobile, onClick }) {
   const pos = (Number(change) || 0) >= 0;
   const sym = String(c.symbol || '').toUpperCase();
   const name = String(c.name || sym);
-  const displayName = name.length > 18 ? name.slice(0, 17) + '\u2026' : name;
+  const displayName = name.length > 20 ? name.slice(0, 19) + '\u2026' : name;
   const baseStyle = { padding: isMobile ? '12px 14px' : '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer', transition: 'background .15s' };
 
   if (isMobile) {
@@ -83,20 +83,46 @@ function Row({ c, i, isMobile, onClick }) {
   </div>);
 }
 
-// Price cache
+// Hardcoded top tokens with accurate names/symbols
+const TOP_TOKENS = [
+  { mint: 'So11111111111111111111111111111111111111112', symbol: 'SOL', name: 'Solana' },
+  { mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', symbol: 'USDC', name: 'USD Coin' },
+  { mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', symbol: 'USDT', name: 'Tether USD' },
+  { mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN', symbol: 'JUP', name: 'Jupiter' },
+  { mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6BFrR4Jfrj6z7m9', symbol: 'BONK', name: 'Bonk' },
+  { mint: 'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm', symbol: 'WIF', name: 'dogwifhat' },
+  { mint: '4k3Dyjzvzp8eMZWUXbBCjEvwSkkk59S5iCNLY3QrkX6R', symbol: 'RAY', name: 'Raydium' },
+  { mint: 'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3', symbol: 'PYTH', name: 'Pyth Network' },
+  { mint: 'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL', symbol: 'JTO', name: 'Jito' },
+  { mint: 'hntyVP6YFm1Hg25TN9WGLqM12b8TQmcknKrdu1oxWux', symbol: 'HNT', name: 'Helium' },
+];
+
 const _priceCache = {};
 async function fetchOkxPrice(mint) {
   if (!mint) return 0;
-  if (_priceCache[mint] && Date.now() - _priceCache[mint].ts < 60000) return _priceCache[mint].price;
-  const knownStable = { 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v': 1, 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB': 1 };
-  if (knownStable[mint]) { _priceCache[mint] = { price: 1, ts: Date.now() }; return 1; }
+  const key = mint.toLowerCase();
+  if (_priceCache[key] && Date.now() - _priceCache[key].ts < 60000) return _priceCache[key].price;
+  const knownStable = { 'epjfwdd5aufqssqem2qn1xzybapc8g4weggkzwytdt1v': 1, 'es9vmfrzacermjfrf4h2fyd4kconky11mcce8benwnyb': 1 };
+  if (knownStable[key]) { _priceCache[key] = { price: 1, ts: Date.now() }; return 1; }
+  if (mint === 'So11111111111111111111111111111111111111112') {
+    try {
+      const r = await fetch('/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=So11111111111111111111111111111111111111112&toTokenAddress=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=1000000000');
+      const j = await r.json();
+      if (j.code === '0' && j.data) {
+        const d = Array.isArray(j.data) ? j.data[0] : j.data;
+        const price = Number(d.toTokenAmount) / 1e9;
+        if (price > 0) { _priceCache[key] = { price, ts: Date.now() }; return price; }
+      }
+    } catch {}
+    return 0;
+  }
   try {
-    const r = await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=${mint === 'So11111111111111111111111111111111111111112' ? '1000000000' : '1000000'}`);
+    const r = await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=1000000`);
     const j = await r.json();
     if (j.code === '0' && j.data) {
       const d = Array.isArray(j.data) ? j.data[0] : j.data;
-      const price = Number(d.toTokenAmount) / (mint === 'So11111111111111111111111111111111111111112' ? 1e9 : 1e6);
-      if (price > 0) { _priceCache[mint] = { price, ts: Date.now() }; return price; }
+      const price = Number(d.toTokenAmount) / 1e6;
+      if (price > 0) { _priceCache[key] = { price, ts: Date.now() }; return price; }
     }
   } catch {}
   return 0;
@@ -115,45 +141,41 @@ export default function Markets({ onSelectCoin, coins }) {
     return sol && Number(sol.current_price) > 0 ? Number(sol.current_price) : 0;
   }, [coins]);
 
-  // Default: load OKX token list + prices
+  // Default: TOP_TOKENS with OKX prices
   useEffect(() => {
-    if (debouncedQ.trim()) return; // let the search effect handle it
+    if (debouncedQ.trim()) return;
     let cancelled = false;
     setLoading(true);
     (async () => {
       try {
-        const r = await fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501');
-        const j = await r.json();
-        if (cancelled) return;
-        const raw = (j.data || []).slice(0, 50);
         const list = [];
-        for (const t of raw) {
-          const mint = t.tokenContractAddress;
-          if (!mint) continue;
-          const price = await fetchOkxPrice(mint);
+        for (const t of TOP_TOKENS) {
+          if (cancelled) return;
+          const price = await fetchOkxPrice(t.mint);
           list.push({
-            id: mint,
-            chain: 'solana',
-            mint,
-            symbol: t.tokenSymbol || '?',
-            name: t.tokenName || t.tokenSymbol || 'Unknown',
-            decimals: parseInt(t.decimals) || 6,
-            logoURI: t.tokenLogoUrl || null,
-            image: t.tokenLogoUrl || null,
+            id: t.mint, chain: 'solana', mint: t.mint,
+            symbol: t.symbol, name: t.name,
+            decimals: t.mint === 'So11111111111111111111111111111111111111112' ? 9 : 6,
+            logoURI: null, image: null,
             current_price: price,
-            market_cap: 0,
-            total_volume: 0,
+            market_cap: 0, total_volume: 0,
             price_change_percentage_24h: null,
           });
         }
-        list.sort((a, b) => b.current_price - a.current_price);
+        list.sort((a, b) => {
+          if (a.symbol === 'SOL') return -1;
+          if (b.symbol === 'SOL') return 1;
+          if (a.symbol === 'USDC') return -1;
+          if (b.symbol === 'USDC') return 1;
+          return b.current_price - a.current_price;
+        });
         if (!cancelled) { setTokens(list); setLoading(false); }
       } catch { if (!cancelled) { setTokens([]); setLoading(false); } }
     })();
     return () => { cancelled = true; };
   }, []);
 
-  // Search: use DexScreener
+  // Search: DexScreener
   useEffect(() => {
     if (!debouncedQ.trim()) return;
     let cancelled = false;
