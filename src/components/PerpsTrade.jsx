@@ -377,7 +377,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
   const wcon = connected || activeWalletKind === 'privy';
 
   const [side, setSide] = useState('long');
-  const [orderType, setOrderType] = useState('market');
   const [amount, setAmount] = useState('');
   const [leverage, setLeverage] = useState(5);
   const [takeProfit, setTakeProfit] = useState('');
@@ -540,21 +539,11 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
             }}>Short</button>
           </div>
 
-          <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-            {['market', 'limit'].map(t => (
-              <button key={t} onClick={() => setOrderType(t)} style={{
-                flex: 1, padding: '10px', borderRadius: 10,
-                border: '1px solid ' + (orderType === t ? C.accent : C.border),
-                background: orderType === t ? 'rgba(0,229,255,.10)' : C.card2,
-                color: orderType === t ? C.accent : C.muted,
-                fontWeight: 700, fontSize: 13, cursor: 'pointer',
-                fontFamily: 'Syne, sans-serif', textTransform: 'capitalize',
-              }}>{t}</button>
-            ))}
-          </div>
-
           <div style={{ marginBottom: 14 }}>
-            <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 6 }}>AMOUNT</div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>AMOUNT</span>
+              <span style={{ fontSize: 10, color: C.accent, fontWeight: 700, background: 'rgba(0,229,255,.08)', padding: '2px 8px', borderRadius: 4 }}>Market</span>
+            </div>
             <div style={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 12, padding: '14px 16px', marginBottom: 8 }}>
               <input value={amount} onChange={e => { setAmount(e.target.value.replace(/[^0-9.]/g, '')); setSizePct(null); }}
                 placeholder="$0.00" style={{ width: '100%', background: 'transparent', border: 'none', fontSize: 24, fontWeight: 700, color: '#fff', outline: 'none', fontFamily: 'Syne, sans-serif' }} />
