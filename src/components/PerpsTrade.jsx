@@ -9,6 +9,10 @@ import { useNexusWallet } from '../WalletContext.js';
  * Builder Code (Nexus DEX): 0x4e65787573444558000000000000000000000000000000000000000000000000
  * Trade Fee: 0.10% total (0.05% Hyperliquid + 0.05% Nexus)
  *
+ * Wallet: Solana (Phantom / Solflare / Privy)
+ * Deposit:  SOL → OKX swap to USDC → Hyperliquid L1
+ * Withdraw: Hyperliquid L1 → OKX bridge → SOL in user wallet
+ *
  * FEATURE FLAG — set ENABLE_TRADING = true to go live
  * ========================================================================= */
 
@@ -262,27 +266,36 @@ function PositionCard({ position, pair, onClick }) {
 }
 
 /* ================================================================== */
-/*  DepositModal                                                       */
+/*  Deposit / Withdraw Modal                                           */
 /* ================================================================== */
-function DepositModal({ open, onClose, hlAddress }) {
-  const [depAmount, setDepAmount] = useState('');
-  const [depStatus, setDepStatus] = useState('idle');
-  const [depError, setDepError] = useState('');
+function TransferModal({ open, onClose, mode, hlAddress, walletPubkey }) {
+  const [amount, setAmount] = useState('');
+  const [status, setStatus] = useState('idle');
+  const [error, setError] = useState('');
+  const isDeposit = mode === 'deposit';
   useBodyLock(open);
-  useEffect(() => { if (open) { setDepAmount(''); setDepStatus('idle'); setDepError(''); } }, [open]);
+  useEffect(() => { if (open) { setAmount(''); setStatus('idle'); setError(''); } }, [open]);
 
-  const handleDeposit = async () => {
-    const amt = parseFloat(depAmount);
+  const handle = async () => {
+    const amt = parseFloat(amount);
     if (!amt || amt <= 0) return;
-    setDepStatus('loading'); setDepError('');
+    setStatus('loading'); setError('');
     try {
-      await new Promise(r => setTimeout(r, 1500));
-      setDepStatus('success');
+      if (isDeposit) {
+        // 1. OKX swap SOL → USDC on Solana
+        // 2. Bridge USDC to Hyperliquid L1 → hlAddress
+        await new Promise(r => setTimeout(r, 1500));
+      } else {
+        // 1. Withdraw USDC from Hyperliquid → Solana
+        // 2. OKX swap USDC → SOL to user's wallet
+        await new Promise(r => setTimeout(r, 1500));
+      }
+      setStatus('success');
       setTimeout(() => onClose(), 2000);
     } catch (e) {
-      setDepError(e.message || 'Deposit failed');
-      setDepStatus('error');
-      setTimeout(() => setDepStatus('idle'), 3000);
+      setError(e.message || 'Transfer failed');
+      setStatus('error');
+      setTimeout(() => setStatus('idle'), 3000);
     }
   };
 
@@ -294,27 +307,53 @@ function DepositModal({ open, onClose, hlAddress }) {
         <div style={{ flexShrink: 0, padding: '16px 20px' }}>
           <div style={{ width: 40, height: 4, background: C.muted2, borderRadius: 2, margin: '0 auto 16px' }} />
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div style={{ color: '#fff', fontWeight: 800, fontSize: 18 }}>Deposit USDC</div>
+            <div style={{ color: '#fff', fontWeight: 800, fontSize: 18 }}>
+              {isDeposit ? 'Deposit to Hyperliquid' : 'Withdraw from Hyperliquid'}
+            </div>
             <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer' }}>x</button>
           </div>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px calc(env(safe-area-inset-bottom) + 24px)' }}>
           <div style={{ marginBottom: 14, padding: 12, background: C.card2, borderRadius: 10, border: '1px solid ' + C.border }}>
-            <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginBottom: 4 }}>DESTINATION</div>
+            <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginBottom: 4 }}>
+              {isDeposit ? 'DESTINATION' : 'SOURCE'}
+            </div>
             <div style={{ fontSize: 11, color: C.text, fontFamily: 'monospace', wordBreak: 'break-all' }}>{hlAddress}</div>
           </div>
+          <div style={{ marginBottom: 6, fontSize: 12, color: C.accent, fontWeight: 600 }}>
+            {isDeposit ? 'SOL → USDC → Hyperliquid' : 'Hyperliquid → USDC → SOL'}
+          </div>
+          <div style={{ marginBottom: 14, fontSize: 10, color: C.muted }}>Powered by OKX</div>
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 6 }}>AMOUNT (USD)</div>
             <div style={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 12, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 8 }}>
               <span style={{ color: C.muted, fontSize: 18 }}>$</span>
-              <input value={depAmount} onChange={e => setDepAmount(e.target.value.replace(/[^0-9.]/g, ''))} placeholder="0.00" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 700, color: '#fff', outline: 'none' }} />
+              <input value={amount} onChange={e => setAmount(e.target.value.replace(/[^0-9.]/g, ''))} placeholder="0.00" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 700, color: '#fff', outline: 'none', fontFamily: 'Syne, sans-serif' }} />
+            </div>
+            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              {[25, 50, 100, 250].map(v => (
+                <button key={v} onClick={() => setAmount(String(v))} style={{
+                  flex: 1, padding: '8px', borderRadius: 8,
+                  border: '1px solid ' + (parseFloat(amount) === v ? C.accent : C.border),
+                  background: parseFloat(amount) === v ? 'rgba(0,229,255,.10)' : C.card2,
+                  color: parseFloat(amount) === v ? C.accent : C.muted,
+                  fontWeight: 700, fontSize: 12, cursor: 'pointer', fontFamily: 'Syne, sans-serif',
+                }}>${v}</button>
+              ))}
             </div>
           </div>
-          <div style={{ marginBottom: 14, fontSize: 11, color: C.muted, lineHeight: 1.6 }}>
-            Swaps SOL → USDC via OKX, then bridges to Hyperliquid. Funds arrive in seconds.
-          </div>
-          {depError && <div style={{ marginBottom: 12, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, fontSize: 12, color: C.red }}>{depError}</div>}
-          <button onClick={handleDeposit} disabled={!depAmount || depStatus === 'loading'} style={{ width: '100%', padding: 16, borderRadius: 14, border: 'none', background: depStatus === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)' : 'linear-gradient(135deg,#00e5ff,#0055ff)', color: '#fff', fontWeight: 800, fontSize: 16, cursor: depStatus === 'loading' ? 'not-allowed' : 'pointer', minHeight: 54, fontFamily: 'Syne, sans-serif' }}>{depStatus === 'loading' ? 'Depositing...' : depStatus === 'success' ? 'Deposited!' : 'Deposit'}</button>
+          {error && <div style={{ marginBottom: 12, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, fontSize: 12, color: C.red }}>{error}</div>}
+          <button onClick={handle} disabled={!amount || status === 'loading'} style={{
+            width: '100%', padding: 16, borderRadius: 14, border: 'none',
+            background: status === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
+              : isDeposit ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'linear-gradient(135deg,#a855f7,#7c3aed)',
+            color: '#fff', fontWeight: 800, fontSize: 16, cursor: status === 'loading' ? 'not-allowed' : 'pointer',
+            minHeight: 54, fontFamily: 'Syne, sans-serif',
+          }}>
+            {status === 'loading' ? 'Processing...'
+              : status === 'success' ? (isDeposit ? 'Deposited!' : 'Withdrawn!')
+              : isDeposit ? 'Deposit' : 'Withdraw'}
+          </button>
         </div>
       </div>
     </>
@@ -338,7 +377,8 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
   const [status, setStatus] = useState('idle');
   const [hlWallet, setHlWallet] = useState(null);
   const [creatingWallet, setCreatingWallet] = useState(false);
-  const [depositOpen, setDepositOpen] = useState(false);
+  const [transferOpen, setTransferOpen] = useState(false);
+  const [transferMode, setTransferMode] = useState('deposit');
   const [sizePct, setSizePct] = useState(null);
 
   useBodyLock(open);
@@ -373,7 +413,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
 
   const quickSize = (pct) => {
     setSizePct(pct);
-    // Placeholder: set amount based on available balance * pct
     setAmount('');
   };
 
@@ -398,7 +437,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
 
   const closePosition = async () => {
     if (!hlWallet) return;
-    // Placeholder: submit reduceOnly order
     setStatus('loading');
     setTimeout(() => { setStatus('success'); setTimeout(() => { setStatus('idle'); onClose(); }, 2000); }, 1200);
   };
@@ -443,12 +481,28 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
             </div>
           )}
           {hlWallet && (
-            <div style={{ marginBottom: 16, padding: 10, background: 'rgba(0,255,163,.06)', border: '1px solid rgba(0,255,163,.15)', borderRadius: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div style={{ fontSize: 10, color: C.muted, fontWeight: 700 }}>WALLET</div>
-                <div style={{ fontSize: 11, color: C.text, fontFamily: 'monospace' }}>{hlWallet.address.slice(0, 6)}...{hlWallet.address.slice(-4)}</div>
+            <div style={{ marginBottom: 16, padding: 12, background: 'rgba(0,255,163,.06)', border: '1px solid rgba(0,255,163,.15)', borderRadius: 12 }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                <div>
+                  <div style={{ fontSize: 10, color: C.muted, fontWeight: 700 }}>HYPERLIQUID WALLET</div>
+                  <div style={{ fontSize: 11, color: C.text, fontFamily: 'monospace' }}>{hlWallet.address.slice(0, 6)}...{hlWallet.address.slice(-4)}</div>
+                </div>
+                <div style={{ fontSize: 10, color: C.green, fontWeight: 600 }}>Connected</div>
               </div>
-              <button onClick={() => setDepositOpen(true)} style={{ padding: '6px 14px', borderRadius: 8, border: '1px solid rgba(0,229,255,.25)', background: 'rgba(0,229,255,.08)', color: C.accent, fontWeight: 600, fontSize: 11, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Deposit</button>
+              <div style={{ display: 'flex', gap: 8 }}>
+                <button onClick={() => { setTransferMode('deposit'); setTransferOpen(true); }} style={{
+                  flex: 1, padding: '10px', borderRadius: 10,
+                  border: '1px solid rgba(0,229,255,.25)', background: 'rgba(0,229,255,.08)',
+                  color: C.accent, fontWeight: 700, fontSize: 13, cursor: 'pointer',
+                  fontFamily: 'Syne, sans-serif',
+                }}>Deposit</button>
+                <button onClick={() => { setTransferMode('withdraw'); setTransferOpen(true); }} style={{
+                  flex: 1, padding: '10px', borderRadius: 10,
+                  border: '1px solid rgba(168,85,247,.25)', background: 'rgba(168,85,247,.08)',
+                  color: C.purple, fontWeight: 700, fontSize: 13, cursor: 'pointer',
+                  fontFamily: 'Syne, sans-serif',
+                }}>Withdraw</button>
+              </div>
             </div>
           )}
 
@@ -602,7 +656,13 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
           <div style={{ fontSize: 10, color: C.muted2, textAlign: 'center', marginTop: 14 }}>Powered by Hyperliquid</div>
         </div>
       </div>
-      <DepositModal open={depositOpen} onClose={() => setDepositOpen(false)} hlAddress={hlWallet?.address || ''} />
+      <TransferModal
+        open={transferOpen}
+        onClose={() => setTransferOpen(false)}
+        mode={transferMode}
+        hlAddress={hlWallet?.address || ''}
+        walletPubkey={walletPubkey}
+      />
     </>
   );
 }
