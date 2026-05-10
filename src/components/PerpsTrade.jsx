@@ -8,7 +8,7 @@ import { useNexusWallet } from '../WalletContext.js';
  *
  * Builder Code (Nexus DEX): 0x4e65787573444558000000000000000000000000000000000000000000000000
  * Trade Fee: 0.10% total (0.05% Hyperliquid + 0.05% Nexus)
- *
+ * 
  * Wallet: Solana (Phantom / Solflare / Privy)
  * Deposit:  SOL → OKX swap to USDC → Hyperliquid L1
  * Withdraw: Hyperliquid L1 → OKX bridge → SOL in user wallet
