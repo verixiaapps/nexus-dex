@@ -3,7 +3,7 @@
  * 
  * Used by:
  *   - NewLaunches.js TokenCard one-click preset buttons
- *
+ * 
  * Fee behavior:
  *   - Buy: exact 5% platform fee taken inside the user's total SOL spend.
  *   - Sell: estimated SOL platform fee appended before execution.
