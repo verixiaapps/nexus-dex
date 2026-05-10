@@ -49,7 +49,6 @@ function detectMobileWalletApp() {
   if (typeof window === 'undefined') return null;
   if (!isMobileUA()) return null;
   if (window.phantom && window.phantom.solana) return 'phantom';
-  if (window.solflare && window.solflare.isSolflare) return 'solflare';
   return null;
 }
 
@@ -72,7 +71,7 @@ function savePresets(p) { try { localStorage.setItem(PRESETS_LS_KEY, JSON.string
 function loadHeaderChain() { try { const raw = localStorage.getItem(HEADER_CHAIN_LS_KEY); if (!raw) return 'solana'; return JSON.parse(raw) || 'solana'; } catch { return 'solana'; } }
 function saveHeaderChain(c) { try { localStorage.setItem(HEADER_CHAIN_LS_KEY, JSON.stringify(c)); } catch {} }
 
-const VALID_KINDS = ['phantom', 'solflare', 'privy'];
+const VALID_KINDS = ['phantom', 'privy', 'walletconnect'];
 function loadActiveKind() { try { const v = localStorage.getItem(ACTIVE_KIND_LS_KEY); return VALID_KINDS.includes(v) ? v : null; } catch { return null; } }
 function saveActiveKind(k) { try { if (k) localStorage.setItem(ACTIVE_KIND_LS_KEY, k); else localStorage.removeItem(ACTIVE_KIND_LS_KEY); } catch {} }
 
@@ -99,7 +98,7 @@ export function WalletContextProvider({ children }) {
   const [activeWalletKind, setActiveWalletKindState] = useState(() => loadActiveKind());
   const setActiveWalletKind = useCallback(k => { setActiveWalletKindState(k); saveActiveKind(k); }, []);
 
-  useEffect(() => { if (extSolConnected && solWallet?.adapter) { const name = (solWallet.adapter.name || '').toLowerCase(); if (name.includes('phantom')) { setActiveWalletKind('phantom'); return; } if (name.includes('solflare')) { setActiveWalletKind('solflare'); return; } } if (privy.authenticated && privyEmbeddedSol) { setActiveWalletKind('privy'); return; } setActiveWalletKind(null); }, [extSolConnected, solWallet, privy.authenticated, privyEmbeddedSol, setActiveWalletKind]);
+  useEffect(() => { if (extSolConnected && solWallet?.adapter) { const name = (solWallet.adapter.name || '').toLowerCase(); if (name.includes('phantom')) { setActiveWalletKind('phantom'); return; } if (name.includes('walletconnect')) { setActiveWalletKind('walletconnect'); return; } } if (privy.authenticated && privyEmbeddedSol) { setActiveWalletKind('privy'); return; } setActiveWalletKind(null); }, [extSolConnected, solWallet, privy.authenticated, privyEmbeddedSol, setActiveWalletKind]);
 
   const [presets, setPresetsState] = useState(() => loadPresets());
   const setPresets = useCallback(p => { setPresetsState(p); savePresets(p); }, []);
@@ -108,10 +107,9 @@ export function WalletContextProvider({ children }) {
   const mobileWalletApp = useMemo(() => detectMobileWalletApp(), []);
 
   const walletPolicy = useMemo(() => {
-    if (!isMobile) return { environment: 'desktop', allowed: ['privy', 'phantom', 'solflare'], recommended: 'privy' };
+    if (!isMobile) return { environment: 'desktop', allowed: ['privy', 'phantom', 'walletconnect'], recommended: 'privy' };
     if (mobileWalletApp === 'phantom') return { environment: 'mobile-phantom-app', allowed: ['phantom'], recommended: 'phantom' };
-    if (mobileWalletApp === 'solflare') return { environment: 'mobile-solflare-app', allowed: ['solflare'], recommended: 'solflare' };
-    return { environment: 'mobile-browser', allowed: ['privy', 'phantom', 'solflare'], recommended: 'privy' };
+    return { environment: 'mobile-browser', allowed: ['privy', 'phantom', 'walletconnect'], recommended: 'privy' };
   }, [isMobile, mobileWalletApp]);
 
   const loginPrivy = useCallback(() => { try { if (typeof privy.login === 'function') privy.login(); } catch (e) { console.warn('[WalletContext] Privy login failed:', e?.message); } }, [privy]);
@@ -125,7 +123,7 @@ export function WalletContextProvider({ children }) {
   }, [extSolConnected, solDisconnect, solWallet, solSelect, setActiveWalletKind, privy.authenticated, logoutPrivy]);
 
   const walletAddress = useMemo(() => { if (solConnected && publicKey) return publicKey.toString(); return null; }, [solConnected, publicKey]);
-  const connectedWalletName = useMemo(() => { if (activeWalletKind === 'privy') return 'Email / Social'; if (activeWalletKind === 'phantom') return 'Phantom'; if (activeWalletKind === 'solflare') return 'Solflare'; if (solConnected) return (solWallet?.adapter?.name) || 'Solana'; return null; }, [activeWalletKind, solConnected, solWallet]);
+  const connectedWalletName = useMemo(() => { if (activeWalletKind === 'privy') return 'Email / Social'; if (activeWalletKind === 'phantom') return 'Phantom'; if (activeWalletKind === 'walletconnect') return 'WalletConnect'; if (solConnected) return (solWallet?.adapter?.name) || 'Solana'; return null; }, [activeWalletKind, solConnected, solWallet]);
 
   const value = useMemo(() => ({
     isConnected, isConnecting, solConnected, isSolanaConnected: solConnected,
