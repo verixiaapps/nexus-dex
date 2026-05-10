@@ -71,16 +71,8 @@ async function fetchTokenData(address, chainId) {
       decimals: bt.decimals || (isSol ? 6 : 18),
       current_price: Number(best.priceUsd || 0) || 0,
       market_cap: Number(best.marketCap || best.fdv || 0) || 0,
-      total_volume: Number(best.volume?.h24 || best.volume || 0) || 0,
+      total_volume: Number(best.volume?.h24 || 0) || 0,
       price_change_percentage_24h: best.priceChange?.h24 != null ? Number(best.priceChange.h24) : null,
-      price_change_percentage_1h_in_currency: best.priceChange?.h1 != null ? Number(best.priceChange.h1) : null,
-      high_24h: null,
-      low_24h: null,
-      ath: null,
-      ath_change_percentage: null,
-      circulating_supply: null,
-      market_cap_rank: null,
-      priceUsd: Number(best.priceUsd || 0) || 0,
       liquidity: Number(best.liquidity?.usd || 0) || 0,
       quoteSymbol: (best.quoteToken || {}).symbol || '',
       pairAddress: best.pairAddress || '',
@@ -115,6 +107,13 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
     if (!coin) return null;
     if (coin.chain === 'solana') return null;
     return coin.chainId || null;
+  }, [coin]);
+
+  // SOL price for Quick Buy — use coin's SOL price if provided, or fallback
+  const solPriceUsd = useMemo(() => {
+    if (coin?.solPriceUsd && coin.solPriceUsd > 0) return coin.solPriceUsd;
+    if (coin?.current_price && coin?.symbol === 'SOL') return coin.current_price;
+    return 0;
   }, [coin]);
 
   useEffect(() => {
@@ -194,7 +193,6 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
   const sym = (td.symbol || '???').toUpperCase();
   const price = td.current_price;
   const change = td.price_change_percentage_24h;
-  const solPriceUsd = isSol ? (td.quoteSymbol === 'USDC' || td.priceUsd > 0 ? td.priceUsd : 0) : 0;
 
   const statsItems = [
     ['MARKET CAP', fmt(td.market_cap)],
@@ -217,12 +215,8 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
               : <div style={{ width: 48, height: 48, borderRadius: '50%', background: 'rgba(0,229,255,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 700, color: C.accent }}>{sym.charAt(0)}</div>
             }
             <div>
-              <div style={{ fontWeight: 800, fontSize: 20, color: '#fff' }}>{td.name}</div>
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>
-                {sym}
-                {isEvm && <span style={{ fontSize: 9, color: C.accent, background: 'rgba(0,229,255,.1)', borderRadius: 4, padding: '1px 5px', marginLeft: 4 }}>{CHAIN_NAMES[td.chainId] || 'EVM'}</span>}
-                {isSol && <span style={{ fontSize: 9, color: '#9945ff', background: 'rgba(153,69,255,.1)', borderRadius: 4, padding: '1px 5px', marginLeft: 4 }}>SOL</span>}
-              </div>
+              <div style={{ fontWeight: 800, fontSize: 20, color: '#fff' }}>{td.name || sym}</div>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 2 }}>{sym}</div>
             </div>
           </div>
           <div style={{ textAlign: 'right' }}>
