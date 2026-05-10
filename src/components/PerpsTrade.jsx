@@ -170,13 +170,44 @@ async function fetchMarketData() {
       }
     }
 
+    // Fetch 24h candles for each pair to calculate percent change
+    const now = Math.floor(Date.now() / 1000);
+    const dayAgo = now - 86400;
+    const changeMap = {};
+
+    const candleResults = await Promise.allSettled(
+      PERPS_PAIRS.map(p =>
+        hlRequest({
+          type: 'candleSnapshot',
+          req: {
+            coin: p.id,
+            interval: '1h',
+            startTime: dayAgo,
+            endTime: now,
+          },
+        })
+      )
+    );
+
+    PERPS_PAIRS.forEach((p, i) => {
+      const result = candleResults[i];
+      if (result.status === 'fulfilled' && Array.isArray(result.value) && result.value.length > 0) {
+        const candles = result.value;
+        const openPrice = parseFloat(candles[0].open || 0);
+        const closePrice = parseFloat(candles[candles.length - 1].close || 0);
+        if (openPrice > 0) {
+          changeMap[p.id] = ((closePrice - openPrice) / openPrice) * 100;
+        }
+      }
+    });
+
     return PERPS_PAIRS.map(p => {
       const info = universe.find(u => u.name === p.id);
       const price = priceMap[p.id] || 0;
       return {
         ...p,
         price,
-        change: 0,
+        change: changeMap[p.id] != null ? changeMap[p.id] : 0,
         leverage: info ? Math.min(info.maxLeverage, p.leverage) : p.leverage,
       };
     });
