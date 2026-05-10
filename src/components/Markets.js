@@ -6,7 +6,7 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994',
 };
-
+ 
 function fmt(n, d) {
   const x = Number(n);
   if (!Number.isFinite(x) || x === 0) return '-';
