@@ -50,7 +50,7 @@ export default function PerpsLanding({ onConnectWallet }) {
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 48 }}>
         {[
           { label: 'Max Leverage', value: '50x' },
-          { label: 'Fee', value: '0.05%' },
+          { label: 'Fee', value: '0.10%' },
           { label: 'Settlement', value: 'USDC' },
         ].map(stat => (
           <div key={stat.label} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 20, textAlign: 'center' }}>
@@ -67,8 +67,8 @@ export default function PerpsLanding({ onConnectWallet }) {
         </h2>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
           {[
-            { step: '1', title: 'Connect Wallet', desc: 'Link your Solana or EVM wallet in one click.' },
-            { step: '2', title: 'Deposit USDC', desc: 'Fund your account with USDC on any supported chain.' },
+            { step: '1', title: 'Connect Wallet', desc: 'Link your Solana wallet in one click.' },
+            { step: '2', title: 'Deposit USDC', desc: 'Fund your Hyperliquid account with USDC.' },
             { step: '3', title: 'Pick a Pair', desc: 'Choose from top perps pairs like ETH, BTC, SOL.' },
             { step: '4', title: 'Go Long or Short', desc: 'Set your leverage, confirm, and you\'re trading.' },
           ].map(item => (
@@ -106,7 +106,7 @@ export default function PerpsLanding({ onConnectWallet }) {
       }}>
         <h2 style={{ fontSize: 28, fontWeight: 800, color: '#fff', marginBottom: 8 }}>Ready to trade?</h2>
         <p style={{ fontSize: 16, color: C.muted, marginBottom: 24 }}>
-          No KYC. No gas wars. Just perps.
+          No KYC. Just perps.
         </p>
         <button onClick={() => setMode('trade')}
           style={{
