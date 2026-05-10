@@ -25,12 +25,14 @@ function fmt(n, d) {
 }
 
 const _priceCache = {};
-async function fetchOkxPrice(mint) {
+async function fetchOkxPrice(mint, decimals) {
   if (!mint) return 0;
   const key = mint.toLowerCase();
   if (_priceCache[key] && Date.now() - _priceCache[key].ts < 60000) return _priceCache[key].price;
+  const dec = decimals || 6;
+  const amount = Math.pow(10, dec).toString();
   try {
-    const r = await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=1000000`);
+    const r = await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=${amount}`);
     const j = await r.json();
     if (j.code === '0' && j.data) {
       const d = Array.isArray(j.data) ? j.data[0] : j.data;
@@ -77,17 +79,17 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
     return 0;
   }, [coin]);
 
-  // Fetch live price
+  // Fetch live price with correct decimals
   useEffect(() => {
     if (!td?.mint) { setLoading(false); return; }
     let cancelled = false;
     setLoading(true);
-    fetchOkxPrice(td.mint).then(p => {
+    fetchOkxPrice(td.mint, td.decimals).then(p => {
       if (!cancelled && p > 0) setCurrentPrice(p);
       if (!cancelled) setLoading(false);
     }).catch(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [td?.mint]);
+  }, [td?.mint, td?.decimals]);
 
   // Fetch user balance
   useEffect(() => {
