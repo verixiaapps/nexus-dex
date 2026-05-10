@@ -67,6 +67,37 @@ function defaultTokenPair({mode,viewedToken,lastFromToken,walletState}){
 function pickRoute(){return'okx-sol';}
 function toOkxSolAddress(m){return m===WSOL_MINT?OKX_SOL_NATIVE:m;}
 
+// ---------- OKX token list (with decimals) ----------
+let _okxCache=null;let _okxLoading=null;
+function loadOkxSolTokens(){
+  if(_okxCache)return Promise.resolve(_okxCache);
+  if(_okxLoading)return _okxLoading;
+  _okxLoading=fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501')
+    .then(r=>r.ok?r.json():{data:[]})
+    .catch(()=>({data:[]}))
+    .then(j=>{
+      const t=(j.data||[]).map(t=>({
+        chain:'solana',mint:t.tokenContractAddress,
+        symbol:t.tokenSymbol||'',name:t.tokenName||t.tokenSymbol||'',
+        decimals:parseInt(t.decimals)||6,logoURI:t.tokenLogoUrl||null,
+      })).filter(t=>isValidSolMint(t.mint)&&t.symbol);
+      _okxCache=t;_okxLoading=null;return t;
+    });
+  return _okxLoading;
+}
+
+function getTokenDecimals(mint){
+  if(!mint)return 6;
+  if(mint===WSOL_MINT||mint===OKX_SOL_NATIVE)return 9;
+  const found=POPULAR_TOKENS.find(t=>t.mint===mint);
+  if(found)return found.decimals;
+  if(_okxCache){
+    const okx=_okxCache.find(t=>t.mint===mint);
+    if(okx)return okx.decimals;
+  }
+  return 6;
+}
+
 // ---------- OKX price cache ----------
 const _okxPriceCache=new Map();
 function getCachedOkxPrice(mint){
@@ -84,55 +115,21 @@ async function fetchOkxPrice(mint){
   if(!mint)return null;
   const cached=getCachedOkxPrice(mint);
   if(cached!=null)return cached;
-  // stablecoins
-  if(mint===USDC_SOLANA||mint==='Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'){setCachedOkxPrice(mint,1);return 1;}
-  // SOL itself
-  if(mint===WSOL_MINT||mint===OKX_SOL_NATIVE){
-    try{
-      const r=await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${OKX_SOL_NATIVE}&toTokenAddress=${USDC_SOLANA}&amount=1000000000`);
-      const j=await r.json();
-      if(j.code==='0'&&j.data&&j.data.length>0){
-        const d=Array.isArray(j.data)?j.data[0]:j.data;
-        const amt=Number(d.toTokenAmount)/1e6;
-        const sol=1;
-        const price=amt/sol;
-        if(price>0){setCachedOkxPrice(mint,price);return price;}
-      }
-    }catch{}
-    return null;
-  }
-  // other SPL — quote against USDC
+  
+  const decimals=getTokenDecimals(mint);
+  const amount=Math.pow(10,decimals).toString();
+  
   try{
-    const r=await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=${USDC_SOLANA}&amount=${10**6}`);
+    const r=await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=${USDC_SOLANA}&amount=${amount}`);
     const j=await r.json();
     if(j.code==='0'&&j.data){
       const d=Array.isArray(j.data)?j.data[0]:j.data;
-      const toAmt=Number(d.toTokenAmount)/1e6;
-      const fromAmt=1;
-      const price=toAmt/fromAmt;
+      // USDC has 6 decimals, so divide toTokenAmount by 1e6
+      const price=Number(d.toTokenAmount)/1e6;
       if(price>0){setCachedOkxPrice(mint,price);return price;}
     }
   }catch{}
   return null;
-}
-
-// ---------- OKX token list ----------
-let _okxCache=null;let _okxLoading=null;
-function loadOkxSolTokens(){
-  if(_okxCache)return Promise.resolve(_okxCache);
-  if(_okxLoading)return _okxLoading;
-  _okxLoading=fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501')
-    .then(r=>r.ok?r.json():{data:[]})
-    .catch(()=>({data:[]}))
-    .then(j=>{
-      const t=(j.data||[]).map(t=>({
-        chain:'solana',mint:t.tokenContractAddress,
-        symbol:t.tokenSymbol||'',name:t.tokenName||t.tokenSymbol||'',
-        decimals:parseInt(t.decimals)||6,logoURI:t.tokenLogoUrl||null,
-      })).filter(t=>isValidSolMint(t.mint)&&t.symbol);
-      _okxCache=t;_okxLoading=null;return t;
-    });
-  return _okxLoading;
 }
 
 // ---------- OKX swap ----------
@@ -226,10 +223,8 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
 
   const fetchQ=useCallback(async()=>{
     setQe('');if(!fa||parseFloat(fa)<=0||tokensEqual(ft,tt)){setQ(null);if(tokensEqual(ft,tt))setQe('Cannot swap a token for itself.');return;}
-    const fpEff=ft?.symbol==='USDC'||ft?.symbol==='USDT'?1:fp;
-    const tpEff=tt?.symbol==='USDC'||tt?.symbol==='USDT'?1:tp;
-    if(!(fpEff>0)||!(tpEff>0)){setQ(null);return;}
-    const g=parseFloat(fa)*fpEff/tpEff;const n=g*(1-TOTAL_FEE);
+    if(!(fp>0)||!(tp>0)){setQ(null);return;}
+    const g=parseFloat(fa)*fp/tp;const n=g*(1-TOTAL_FEE);
     setQ({engine:'okx',outAmountDisplay:n.toFixed(n<.01?6:4),preview:true});
   },[fa,ft,tt,fp,tp]);
 
