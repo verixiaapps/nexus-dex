@@ -10,7 +10,7 @@ import Send from './components/Send.js';
 import NewLaunches from './components/NewLaunches.js';
 import TokenLaunch from './components/TokenLaunch.js';
 import PerpsLanding from './components/PerpsLanding.jsx';
-
+ 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b', text: '#cdd6f4', muted: '#586994',
