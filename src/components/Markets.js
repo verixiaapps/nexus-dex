@@ -72,6 +72,8 @@ function Row({ c, i, isMobile, onClick }) {
   const change = c.price_change_percentage_24h;
   const pos = (Number(change) || 0) >= 0;
   const sym = String(c.symbol || '').toUpperCase();
+  const name = String(c.name || sym);
+  const displayName = name.length > 18 ? name.slice(0, 17) + '\u2026' : name;
   const baseStyle = {
     padding: isMobile ? '12px 14px' : '12px 16px',
     borderBottom: '1px solid rgba(255,255,255,.025)',
@@ -84,7 +86,7 @@ function Row({ c, i, isMobile, onClick }) {
         <div style={{ color: C.muted, fontSize: 10, width: 18, flexShrink: 0, textAlign: 'center' }}>{i + 1}</div>
         <TokenImage token={c} size={34} />
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name || sym}</div>
+          <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 1 }}>{sym}</div>
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0 }}>
@@ -101,7 +103,7 @@ function Row({ c, i, isMobile, onClick }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
         <TokenImage token={c} size={32} />
         <div style={{ minWidth: 0 }}>
-          <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.name || sym}</div>
+          <div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</div>
           <div style={{ fontSize: 10, color: C.muted }}>{sym}</div>
         </div>
       </div>
@@ -139,7 +141,7 @@ function parsePairs(pairs) {
   return list;
 }
 
-export default function Markets({ onSelectCoin }) {
+export default function Markets({ onSelectCoin, coins }) {
   const [q, setQ] = useState('');
   const [tokens, setTokens] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -158,6 +160,13 @@ export default function Markets({ onSelectCoin }) {
     'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL',
     'hntyVP6YFm1Hg25TN9WGLqM12b8TQmcknKrdu1oxWux',
   ];
+
+  // Get SOL price for passing to token detail
+  const solPriceUsd = useMemo(() => {
+    if (!coins || !Array.isArray(coins)) return 0;
+    const sol = coins.find(c => c && (c.id === 'solana' || c.symbol === 'SOL'));
+    return sol && Number(sol.current_price) > 0 ? Number(sol.current_price) : 0;
+  }, [coins]);
 
   // Fetch tokens
   useEffect(() => {
@@ -213,13 +222,14 @@ export default function Markets({ onSelectCoin }) {
         logoURI: row.logoURI || row.image || null,
         current_price: row.current_price,
         price_change_percentage_24h: row.price_change_percentage_24h,
+        solPriceUsd: row.symbol === 'SOL' ? row.current_price : solPriceUsd,
       });
     },
-    [onSelectCoin]
+    [onSelectCoin, solPriceUsd]
   );
 
   return (
-    <div style={{ maxWidth: 900, margin: '0 auto', width: '100%', boxSizing: 'border-box' }}>
+    <div style={{ maxWidth: 900, margin: '0 auto', width: '100%', boxSizing: 'border-box', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Live Markets</h1>
