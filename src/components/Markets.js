@@ -50,19 +50,25 @@ function Row({ c, i, isMobile, onClick }) {
   return (<div onClick={() => onClick(c)} style={{ ...baseStyle, display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 120px', gap: 8, alignItems: 'center' }}><div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div><div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}><TokenImage token={c} size={32} /><div style={{ minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</div><div style={{ fontSize: 10, color: C.muted }}>{sym}</div></div></div><div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>{fmt(c.current_price)}</div></div>);
 }
 
-const _priceCache = {};
-async function fetchOkxPrice(mint, decimals) {
-  if (!mint) return 0;
-  const key = mint.toLowerCase();
-  if (_priceCache[key] && Date.now() - _priceCache[key].ts < 60000) return _priceCache[key].price;
-  const dec = decimals || 6;
-  const amount = Math.pow(10, dec).toString();
+// Batch fetch all prices in ONE call via OKX market price endpoint
+async function fetchBatchPrices(mints) {
+  if (!mints || mints.length === 0) return {};
   try {
-    const r = await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=${amount}`);
+    const url = `/api/okx/dex/market/price?chainIndex=501&tokenAddresses=${mints.join(',')}`;
+    const r = await fetch(url);
     const j = await r.json();
-    if (j.code === '0' && j.data) { const d = Array.isArray(j.data) ? j.data[0] : j.data; const price = Number(d.toTokenAmount) / 1e6; if (price > 0) { _priceCache[key] = { price, ts: Date.now() }; return price; } }
+    if (j.code === '0' && j.data) {
+      const priceMap = {};
+      const data = Array.isArray(j.data) ? j.data : [j.data];
+      data.forEach(d => {
+        const addr = (d.tokenAddress || d.instId || '').toLowerCase();
+        const price = Number(d.price || d.last || 0);
+        if (addr && price > 0) priceMap[addr] = price;
+      });
+      return priceMap;
+    }
   } catch {}
-  return 0;
+  return {};
 }
 
 export default function Markets({ onSelectCoin, coins }) {
@@ -84,6 +90,7 @@ export default function Markets({ onSelectCoin, coins }) {
     setLoading(true);
     (async () => {
       try {
+        // 1. Get token list
         const r = await fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501');
         const j = await r.json();
         if (cancelled) return;
@@ -95,13 +102,18 @@ export default function Markets({ onSelectCoin, coins }) {
         }));
         raw.sort((a, b) => { if (a.symbol === 'SOL') return -1; if (b.symbol === 'SOL') return 1; if (a.symbol === 'USDC') return -1; if (b.symbol === 'USDC') return 1; if (a.symbol === 'USDT') return -1; if (b.symbol === 'USDT') return 1; return 0; });
         if (!cancelled) { setAllTokens(raw); setLoading(false); }
+
+        // 2. Batch fetch all prices at once
         setPricesLoading(true);
-        const promises = raw.map(async (t, idx) => {
-          const p = await fetchOkxPrice(t.mint, t.decimals);
-          if (!cancelled) setAllTokens(prev => { const next = [...prev]; if (next[idx]) next[idx] = { ...next[idx], current_price: p }; return next; });
-        });
-        await Promise.all(promises);
-        if (!cancelled) setPricesLoading(false);
+        const mints = raw.map(t => t.mint);
+        const priceMap = await fetchBatchPrices(mints);
+        if (!cancelled) {
+          setAllTokens(prev => prev.map(t => ({
+            ...t,
+            current_price: priceMap[t.mint.toLowerCase()] || t.current_price,
+          })));
+          setPricesLoading(false);
+        }
       } catch { if (!cancelled) { setAllTokens([]); setLoading(false); } }
     })();
     return () => { cancelled = true; };
