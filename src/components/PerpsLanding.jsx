@@ -7,7 +7,7 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994',
 };
- 
+
 const topPairs = ['ETH-PERP', 'BTC-PERP', 'SOL-PERP', 'ARB-PERP', 'OP-PERP'];
 
 export default function PerpsLanding({ onConnectWallet }) {
@@ -34,7 +34,7 @@ export default function PerpsLanding({ onConnectWallet }) {
           Nexus Perps <span style={{ color: C.accent }}>Beta</span>
         </h1>
         <p style={{ fontSize: 18, color: C.muted, marginTop: 8 }}>
-          Trade crypto with up to 50x leverage. Deep liquidity. Cute interface.
+          Trade crypto with up to 50x leverage. Powered by Hyperliquid.
         </p>
         <button onClick={() => setMode('trade')}
           style={{
@@ -54,9 +54,9 @@ export default function PerpsLanding({ onConnectWallet }) {
             { label: 'Powered by', value: 'Hyperliquid' },
             { label: 'Fee', value: '0.10%' },
           ].map(stat => (
-            <div key={stat.label} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 20, textAlign: 'center', minWidth: 160, flex: '0 0 auto' }}>
-              <div style={{ fontSize: 28, fontWeight: 800, color: '#fff' }}>{stat.value}</div>
-              <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>{stat.label}</div>
+            <div key={stat.label} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 20, textAlign: 'center', minWidth: 170, flex: '0 0 auto' }}>
+              <div style={{ fontSize: 24, fontWeight: 800, color: '#fff', whiteSpace: 'nowrap' }}>{stat.value}</div>
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{stat.label}</div>
             </div>
           ))}
         </div>
@@ -108,7 +108,7 @@ export default function PerpsLanding({ onConnectWallet }) {
       }}>
         <h2 style={{ fontSize: 28, fontWeight: 800, color: '#fff', marginBottom: 8 }}>Ready to trade?</h2>
         <p style={{ fontSize: 16, color: C.muted, marginBottom: 24 }}>
-          No KYC. Just perps.
+          No KYC. Just perps. Powered by Hyperliquid.
         </p>
         <button onClick={() => setMode('trade')}
           style={{
