@@ -11,7 +11,7 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
-
+ 
 function fmt(n, d) {
   if (n == null || !Number.isFinite(Number(n))) return '-';
   const v = Number(n);
