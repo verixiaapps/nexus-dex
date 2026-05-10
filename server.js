@@ -10,6 +10,8 @@
  * /api/dexscreener/*                - DexScreener proxy (markets, portfolio prices)
  * /api/hyperliquid                  - Hyperliquid proxy (perps info)
  * /api/hyperliquid/exchange         - Hyperliquid exchange proxy (signed orders)
+ * /api/hyperliquid-testnet          - Hyperliquid TESTNET info proxy
+ * /api/hyperliquid-testnet/exchange - Hyperliquid TESTNET exchange proxy
  * /api/pumpportal/*                 - PumpPortal trade-local
  * /api/helius/das                   - Helius DAS getAsset / Solana metadata fallback
  * /api/solana-rpc                   - Solana RPC proxy
@@ -75,6 +77,7 @@ const CSP_DIRECTIVES = [
     'https://api.jup.ag',
     'https://token.jup.ag',
     'https://api.hyperliquid.xyz',
+    'https://api.hyperliquid-testnet.xyz',
     'https://pumpportal.fun',
     'wss://pumpportal.fun',
     'https://api.dexscreener.com',
@@ -469,7 +472,7 @@ app.get('/api/dexscreener/*', async (req, res) => {
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
-/* -- HYPERLIQUID PROXY (perps info) -------------------------------------- */
+/* -- HYPERLIQUID PROXY (perps info - MAINNET) ----------------------------- */
 app.post('/api/hyperliquid', async (req, res) => {
   try {
     const body = req.body || {};
@@ -486,7 +489,7 @@ app.post('/api/hyperliquid', async (req, res) => {
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
-/* -- HYPERLIQUID EXCHANGE PROXY (signed orders) -------------------------- */
+/* -- HYPERLIQUID EXCHANGE PROXY (signed orders - MAINNET) ----------------- */
 app.post('/api/hyperliquid/exchange', async (req, res) => {
   try {
     const body = req.body || {};
@@ -507,6 +510,47 @@ app.post('/api/hyperliquid/exchange', async (req, res) => {
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'Hyperliquid exchange request timed out' });
     logError('hyperliquid-exchange', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+/* -- HYPERLIQUID TESTNET PROXY (perps info) ------------------------------ */
+app.post('/api/hyperliquid-testnet', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const response = await fetchWithTimeout('https://api.hyperliquid-testnet.xyz/info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }, 10_000);
+    const result = await safeJson(response);
+    return respondJsonOrError(res, response, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Hyperliquid testnet request timed out' });
+    logError('hyperliquid-testnet', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+/* -- HYPERLIQUID TESTNET EXCHANGE PROXY (signed orders) ----------------- */
+app.post('/api/hyperliquid-testnet/exchange', async (req, res) => {
+  try {
+    const body = req.body || {};
+    const response = await fetchWithTimeout('https://api.hyperliquid-testnet.xyz/exchange', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }, 15_000);
+    if (!response.ok) {
+      const text = await response.text();
+      return res.status(response.status).json({
+        error: 'Hyperliquid testnet exchange request failed',
+        detail: text.slice(0, 500),
+      });
+    }
+    const result = await safeJson(response);
+    return respondJsonOrError(res, response, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Hyperliquid testnet exchange request timed out' });
+    logError('hyperliquid-testnet-exchange', e);
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
@@ -689,6 +733,8 @@ app.get('/api/health', (req, res) => {
       dexscreener: true,
       hyperliquid: true,
       hyperliquidExchange: true,
+      hyperliquidTestnet: true,
+      hyperliquidTestnetExchange: true,
       pumpportal: true,
       helius: true,
       solanaRpc: true,
