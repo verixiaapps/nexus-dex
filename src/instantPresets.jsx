@@ -10,7 +10,7 @@
  *   buy  = [25, 50, 100, 250, 500]
  *   sell = [50, 100]
  */
-
+ 
 import React, { useState, useEffect } from 'react';
 import { useNexusWallet } from './WalletContext.js';
 
