@@ -7,7 +7,7 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994',
 };
-
+ 
 const topPairs = ['ETH-PERP', 'BTC-PERP', 'SOL-PERP', 'ARB-PERP', 'OP-PERP'];
 
 export default function PerpsLanding({ onConnectWallet }) {
