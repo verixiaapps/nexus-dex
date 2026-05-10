@@ -144,8 +144,9 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, pre
       const last = presetUsd && presetUsd > 0 ? presetUsd : 25;
       const m = presets.find(p => p === last);
       if (m) { setActivePreset(last); setCustomAmt(''); }
-      else { setActivePreset(null); setCustomAmt(String(last)); }
+      else { setActivePreset(null); setCustomAmt(''); }
       setStatus('idle'); setTxSig(null); setError(''); setCustomSellAmt('');
+      setSellPct(50);
     }
     prev.current = open;
   }, [open, presets, presetUsd]);
@@ -157,7 +158,7 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, pre
     return () => { document.body.style.overflow = po; };
   }, [open]);
 
-  const activeDollar = parseFloat(customAmt) || activePreset || 25;
+  const activeDollar = parseFloat(customAmt) || activePreset || 0;
   const isBuy = mode === 'buy';
 
   const exec = async () => {
@@ -197,7 +198,7 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, pre
             <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer' }}>x</button>
           </div>
         </div>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px calc(env(safe-area-inset-bottom) + 24px)' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px calc(env(safe-area-inset-bottom) + 80px)' }}>
           {!wcon && <div style={{ marginBottom: 14, padding: 14, background: 'rgba(0,229,255,.05)', border: '1px solid rgba(0,229,255,.15)', borderRadius: 12, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><span style={{ color: C.muted, fontSize: 13 }}>Connect to trade</span><button onClick={() => loginPrivy ? loginPrivy() : onConnectWallet?.()} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 8, padding: '8px 16px', color: '#fff', fontSize: 13, fontWeight: 700, cursor: 'pointer' }}>Connect</button></div>}
           {isBuy ? (
             <div style={{ marginBottom: 14 }}>
@@ -209,7 +210,7 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, pre
             <div style={{ marginBottom: 14 }}>
               <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 8 }}>SELL AMOUNT</div>
               <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>{[25, 50, 75, 100].map(p => <button key={p} onClick={() => { setSellPct(p); setCustomSellAmt(''); }} style={{ flex: 1, padding: 11, borderRadius: 10, border: '1px solid ' + (sellPct === p && !customSellAmt ? C.red : C.border), background: sellPct === p && !customSellAmt ? 'rgba(255,59,107,.15)' : C.card2, color: sellPct === p && !customSellAmt ? C.red : C.muted, fontWeight: 700, fontSize: 14, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>{p === 100 ? 'MAX' : p + '%'}</button>)}</div>
-              <div style={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 12, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 8 }}><input value={customSellAmt} onChange={e => { setCustomSellAmt(e.target.value.replace(/[^0-9.]/g, '')); setSellPct(null); }} placeholder="Custom" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 700, color: '#fff', outline: 'none' }} /><span style={{ color: C.muted, fontSize: 13 }}>{token.symbol}</span></div>
+              <div style={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 12, padding: '14px 16px', display: 'flex', alignItems: 'center', gap: 8 }}><input value={customSellAmt} onChange={e => { setCustomSellAmt(e.target.value.replace(/[^0-9.]/g, '')); setSellPct(null); }} placeholder="Custom amount" style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 700, color: '#fff', outline: 'none' }} /><span style={{ color: C.muted, fontSize: 13 }}>{token.symbol}</span></div>
             </div>
           )}
           <div style={{ background: '#050912', borderRadius: 10, padding: 12, marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}><div><div style={{ fontSize: 12, color: C.muted, fontWeight: 600 }}>Anti-MEV</div><div style={{ fontSize: 10, color: antiMev ? C.accent : C.muted }}>{antiMev ? 'ON' : 'OFF'}</div></div><button onClick={() => setAntiMev(!antiMev)} style={{ width: 44, height: 24, borderRadius: 12, border: 'none', cursor: 'pointer', background: antiMev ? C.accent : C.muted2, position: 'relative' }}><div style={{ width: 18, height: 18, borderRadius: '50%', background: '#fff', position: 'absolute', top: 3, left: antiMev ? 23 : 3 }} /></button></div>
