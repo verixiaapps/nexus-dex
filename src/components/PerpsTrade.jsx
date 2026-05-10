@@ -13,10 +13,10 @@ import { useNexusWallet } from '../WalletContext.js';
  * Deposit:  SOL → OKX swap to USDC → Hyperliquid L1
  * Withdraw: Hyperliquid L1 → OKX bridge → SOL in user wallet
  *
- * FEATURE FLAG — set ENABLE_TRADING = true to go live
+ * LIVE ON MAINNET
  * ========================================================================= */
 
-const ENABLE_TRADING = false;
+const ENABLE_TRADING = true;
 
 const BUILDER_CODE = '0x4e65787573444558000000000000000000000000000000000000000000000000';
 const MAX_FEE_RATE = '0.0005';
@@ -130,7 +130,7 @@ function storeHlWallet(walletPubkey, address, privateKey) {
 }
 
 /* ------------------------------------------------------------------ */
-/*  Hyperliquid API                                                    */
+/*  Hyperliquid API (MAINNET)                                          */
 /* ------------------------------------------------------------------ */
 async function hlRequest(body, isExchange = false) {
   const path = isExchange ? '/api/hyperliquid/exchange' : '/api/hyperliquid';
@@ -419,7 +419,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
   const execute = async () => {
     if (!wcon) { loginPrivy?.() || onConnectWallet?.(); return; }
     if (!hlWallet) { await createWallet(); return; }
-    if (!ENABLE_TRADING) { setStatus('error'); setTimeout(() => setStatus('idle'), 3000); return; }
     setStatus('loading');
     try {
       const stored = getStoredHlWallet(walletPubkey);
@@ -438,7 +437,19 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
   const closePosition = async () => {
     if (!hlWallet) return;
     setStatus('loading');
-    setTimeout(() => { setStatus('success'); setTimeout(() => { setStatus('idle'); onClose(); }, 2000); }, 1200);
+    try {
+      const stored = getStoredHlWallet(walletPubkey);
+      if (!stored) throw new Error('Wallet not found');
+      const pairIndex = PERPS_PAIRS.findIndex(p => p.id === pair.id);
+      // Close = market order with reduceOnly: true
+      await placeOrder({ privateKey: stored.privateKey, pairIndex: pairIndex >= 0 ? pairIndex : 0, isLong: !position?.side || position.side !== 'long', sz: position?.size || 0, leverage: position?.leverage || 1 });
+      setStatus('success');
+      setTimeout(() => { setStatus('idle'); onClose(); }, 2000);
+    } catch (e) {
+      console.error('Close failed:', e);
+      setStatus('error');
+      setTimeout(() => setStatus('idle'), 3000);
+    }
   };
 
   if (!open || !pair) return null;
@@ -607,13 +618,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
             </div>
           )}
 
-          {/* Beta notice */}
-          {!ENABLE_TRADING && wcon && (
-            <div style={{ marginBottom: 12, padding: 10, background: 'rgba(255,149,0,.08)', border: '1px solid rgba(255,149,0,.2)', borderRadius: 10, fontSize: 12, color: '#ff9500', textAlign: 'center', fontWeight: 600 }}>
-              Trading is in beta — coming soon
-            </div>
-          )}
-
           {/* Open Trade button */}
           {!wcon ? (
             <button onClick={() => { loginPrivy?.() || onConnectWallet?.(); }} style={{
@@ -623,22 +627,19 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
               boxShadow: '0 4px 24px rgba(153,69,255,.3)',
             }}>Connect Wallet</button>
           ) : (
-            <button onClick={execute} disabled={!amount || status === 'loading' || !ENABLE_TRADING} style={{
+            <button onClick={execute} disabled={!amount || status === 'loading'} style={{
               width: '100%', padding: 18, borderRadius: 16, border: 'none',
               background: status === 'success' ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
                 : status === 'error' ? C.sellGrad
-                : !ENABLE_TRADING ? C.card3
                 : isLong ? C.buyGrad : C.sellGrad,
-              color: !ENABLE_TRADING ? C.muted2 : '#fff',
-              fontWeight: 800, fontSize: 17,
-              cursor: status === 'loading' || !ENABLE_TRADING ? 'not-allowed' : 'pointer',
+              color: '#fff', fontWeight: 800, fontSize: 17,
+              cursor: status === 'loading' ? 'not-allowed' : 'pointer',
               minHeight: 56, fontFamily: 'Syne, sans-serif',
-              boxShadow: !ENABLE_TRADING ? 'none' : isLong ? '0 4px 24px rgba(0,229,255,.25)' : '0 4px 24px rgba(255,59,107,.25)',
+              boxShadow: isLong ? '0 4px 24px rgba(0,229,255,.25)' : '0 4px 24px rgba(255,59,107,.25)',
             }}>
               {status === 'loading' ? 'Confirming...'
                 : status === 'success' ? 'Trade Opened!'
                 : status === 'error' ? 'Failed — Retry'
-                : !ENABLE_TRADING ? 'Coming Soon'
                 : isLong ? 'Long ' + pair.base : 'Short ' + pair.base}
             </button>
           )}
