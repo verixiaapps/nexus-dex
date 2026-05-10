@@ -6,7 +6,7 @@ const C = {
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994',
 };
- 
+
 function fmt(n, d) {
   const x = Number(n);
   if (!Number.isFinite(x) || x === 0) return '-';
@@ -51,12 +51,14 @@ function Row({ c, i, isMobile, onClick }) {
 }
 
 const _priceCache = {};
-async function fetchOkxPrice(mint) {
+async function fetchOkxPrice(mint, decimals) {
   if (!mint) return 0;
   const key = mint.toLowerCase();
   if (_priceCache[key] && Date.now() - _priceCache[key].ts < 60000) return _priceCache[key].price;
+  const dec = decimals || 6;
+  const amount = Math.pow(10, dec).toString();
   try {
-    const r = await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=1000000`);
+    const r = await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=${amount}`);
     const j = await r.json();
     if (j.code === '0' && j.data) { const d = Array.isArray(j.data) ? j.data[0] : j.data; const price = Number(d.toTokenAmount) / 1e6; if (price > 0) { _priceCache[key] = { price, ts: Date.now() }; return price; } }
   } catch {}
@@ -77,7 +79,6 @@ export default function Markets({ onSelectCoin, coins }) {
     return sol && Number(sol.current_price) > 0 ? Number(sol.current_price) : 0;
   }, [coins]);
 
-  // Initial load: 20 tokens with names/logos, then prices in parallel
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
@@ -94,10 +95,9 @@ export default function Markets({ onSelectCoin, coins }) {
         }));
         raw.sort((a, b) => { if (a.symbol === 'SOL') return -1; if (b.symbol === 'SOL') return 1; if (a.symbol === 'USDC') return -1; if (b.symbol === 'USDC') return 1; if (a.symbol === 'USDT') return -1; if (b.symbol === 'USDT') return 1; return 0; });
         if (!cancelled) { setAllTokens(raw); setLoading(false); }
-        // Fetch prices in parallel
         setPricesLoading(true);
         const promises = raw.map(async (t, idx) => {
-          const p = await fetchOkxPrice(t.mint);
+          const p = await fetchOkxPrice(t.mint, t.decimals);
           if (!cancelled) setAllTokens(prev => { const next = [...prev]; if (next[idx]) next[idx] = { ...next[idx], current_price: p }; return next; });
         });
         await Promise.all(promises);
@@ -107,7 +107,6 @@ export default function Markets({ onSelectCoin, coins }) {
     return () => { cancelled = true; };
   }, []);
 
-  // Search: filter from cached OKX list
   const tokens = useMemo(() => {
     if (!q.trim()) return allTokens;
     const lower = q.toLowerCase();
