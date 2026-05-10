@@ -3,7 +3,7 @@
  * Single source of truth for wallet connection state, device policy,
  * active context, presets, and disconnect flow.
  */
-
+ 
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
