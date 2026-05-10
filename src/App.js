@@ -41,6 +41,8 @@ function WalletIcon({ src, fallbackLetter, color, size }) {
 
 const PRIVY_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="#a855f7"/><path d="M8 14l12 8 12-8v14H8V14z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/><path d="M8 14h24v0L20 22 8 14z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>');
 
+const WALLETCONNECT_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="#3b99fc"/><path d="M13 16a14 14 0 0 1 14 0l.5.4a.4.4 0 0 1 0 .6l-1.6 1.5a.24.24 0 0 1-.3 0 10 10 0 0 0-11.2 0 .24.24 0 0 1-.3 0l-1.6-1.5a.4.4 0 0 1 0-.6l.5-.4zm17.3 3.3l1.4 1.3a.4.4 0 0 1 0 .6l-6.2 5.8a.5.5 0 0 1-.7 0L21 23.2a.12.12 0 0 0-.2 0l-3.8 3.6a.5.5 0 0 1-.7 0l-6.2-5.8a.4.4 0 0 1 0-.6l1.4-1.3a.5.5 0 0 1 .7 0l6.2 5.8a.12.12 0 0 0 .2 0l3.8-3.6a.5.5 0 0 1 .7 0l3.8 3.6a.12.12 0 0 0 .2 0l6.2-5.8a.5.5 0 0 1 .7 0z" fill="#fff"/></svg>');
+
 const CONNECTION_TIMEOUT_MS = 15000;
 const WM_INITIAL = { kind: 'idle', message: '', wallet: '', target: '' };
 
@@ -63,7 +65,7 @@ function WalletModal({ open, onClose }) {
   const connectionTimerRef = useRef(null);
 
   const phantomWallet = wallets.find(w => w.adapter.name === 'Phantom');
-  const solflareWallet = wallets.find(w => w.adapter.name === 'Solflare');
+  const walletConnectWallet = wallets.find(w => w.adapter.name === 'WalletConnect');
 
   useEffect(() => { if (!open) { dispatch({ type: 'RESET' }); if (connectionTimerRef.current) { clearTimeout(connectionTimerRef.current); connectionTimerRef.current = null; } } }, [open]);
   useEffect(() => { if (!open) return; document.body.classList.add('nexus-scroll-locked'); const onKey = e => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', onKey); return () => { document.body.classList.remove('nexus-scroll-locked'); window.removeEventListener('keydown', onKey); }; }, [open, onClose]);
@@ -108,8 +110,8 @@ function WalletModal({ open, onClose }) {
 
   const allOptions = [
     { key: 'phantom', name: 'Phantom', subtitle: 'Solana wallet', color: '#ab9ff2', icon: phantomWallet?.adapter?.icon, ready: !!phantomWallet, pendingMatch: 'Phantom', onClick: () => handleSolanaConnect(phantomWallet) },
-    { key: 'solflare', name: 'Solflare', subtitle: 'Solana wallet', color: '#fc9533', icon: solflareWallet?.adapter?.icon, ready: !!solflareWallet, pendingMatch: 'Solflare', onClick: () => handleSolanaConnect(solflareWallet) },
-    { key: 'privy', name: 'Continue with email', subtitle: 'Email, Google, Apple, passkey', color: C.privy, icon: PRIVY_LOGO, ready: privyReady, pendingMatch: 'Email / Social', onClick: handlePrivyLogin },
+    { key: 'walletconnect', name: 'WalletConnect', subtitle: 'Scan QR or link any wallet', color: '#3b99fc', icon: WALLETCONNECT_LOGO, ready: !!walletConnectWallet, pendingMatch: 'WalletConnect', onClick: () => handleSolanaConnect(walletConnectWallet) },
+    { key: 'privy', name: 'Continue with email', subtitle: 'Email, Google, passkey', color: C.privy, icon: PRIVY_LOGO, ready: privyReady, pendingMatch: 'Email / Social', onClick: handlePrivyLogin },
   ];
 
   const availableOpts = allOptions.filter(o => o.ready);
@@ -118,7 +120,7 @@ function WalletModal({ open, onClose }) {
   const pendingWallet = isConnecting || isTimedOut ? mState.wallet : null;
   const anyConnected = nexusConnected || privyAuthenticated;
   const displayAddr = walletAddress ? walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4) : null;
-  const privyHandle = privyUser && (privyUser.email?.address || privyUser.google?.email || privyUser.apple?.email || null);
+  const privyHandle = privyUser && (privyUser.email?.address || privyUser.google?.email || null);
 
   if (!open) return null;
 
