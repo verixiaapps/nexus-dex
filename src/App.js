@@ -198,8 +198,6 @@ function WalletModal({ open, onClose }) {
   // Build wallet options in priority order, respecting availability
   const allOptions = [
     { key: 'phantom', name: 'Phantom', subtitle: 'Solana wallet', color: '#ab9ff2', icon: phantomWallet && phantomWallet.adapter.icon, ready: walletAvailability.phantom, pendingMatch: 'Phantom', onClick: function() { handleSolanaConnect(phantomWallet); } },
-    { key: 'solflare', name: 'Solflare', subtitle: 'Solana wallet', color: '#fc9533', icon: solflareWallet && solflareWallet.adapter.icon, ready: walletAvailability.solflare, pendingMatch: 'Solflare', onClick: function() { handleSolanaConnect(solflareWallet); } },
-    { key: 'backpack', name: 'Backpack', subtitle: 'Solana wallet', color: '#e33b3b', icon: backpackWallet && backpackWallet.adapter.icon, ready: walletAvailability.backpack, pendingMatch: 'Backpack', onClick: function() { if (backpackWallet) handleSolanaConnect(backpackWallet); } },
     { key: 'walletconnect', name: 'WalletConnect', subtitle: 'MetaMask, Trust, Rainbow & 600+', color: '#3b99fc', icon: WC_LOGO, ready: walletAvailability.walletconnect, pendingMatch: 'WalletConnect', onClick: handleWalletConnect },
     { key: 'privy', name: 'Continue with email', subtitle: 'Email, Google, Apple, passkey', color: C.privy, icon: PRIVY_LOGO, ready: walletAvailability.privy, pendingMatch: 'Email / Social', onClick: handlePrivyLogin },
   ];
