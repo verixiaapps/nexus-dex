@@ -2,7 +2,7 @@
  * NEXUS DEX - Backend Proxy Server
  * 
  * Active routes: 
- * /api/okx/*                        - OKX DEX aggregator + quote/token data
+ * /api/okx/*                        - OKX DEX aggregator + quote/token data + market data
  * /api/jupiter/quote                - Jupiter Solana quote fallback
  * /api/jupiter/swap                 - Jupiter Solana swap fallback
  * /api/jupiter/tokens/v2/toporganicscore/:timeframe - Jupiter top tokens
@@ -290,6 +290,8 @@ const OKX_ALLOWED_ENDPOINTS = new Set([
   '/dex/aggregator/pre-transaction',
   '/dex/aggregator/transaction',
   '/dex/aggregator/history',
+  '/dex/market/token/basic-info',
+  '/dex/market/candles',
 ]);
 function injectOkxFee(params) {
   if (OKX_FEE_WALLET_SOL && OKX_SOL_FEE_PCT) {
