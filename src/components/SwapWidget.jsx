@@ -8,7 +8,7 @@
  * Fees injected server-side in server.js.
  * Max slippage: 15% Solana (OKX routes at best price).
  */
- 
+
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
@@ -25,6 +25,7 @@ const TOTAL_FEE    = PLATFORM_FEE + SAFETY_FEE;
 const OKX_SOL_NATIVE = '11111111111111111111111111111111';
 const WSOL_MINT  = 'So11111111111111111111111111111111111111112';
 const USDC_SOLANA = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const USDT_SOLANA = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
 const SOL_RESERVE_LAMPORTS = 5_000_000;
 const QUOTE_DEBOUNCE_MS = 250;
 const OKX_PRICE_CACHE_MS = 60_000;
@@ -39,10 +40,12 @@ const C = { bg:'#03060f',card:'#080d1a',card2:'#0c1220',card3:'#111d30',border:'
 const POPULAR_TOKENS = [
   { mint:WSOL_MINT,symbol:'SOL',name:'Solana',decimals:9,chain:'solana',logoURI:'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png'},
   { mint:USDC_SOLANA,symbol:'USDC',name:'USD Coin',decimals:6,chain:'solana',logoURI:'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png'},
-  { mint:'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',symbol:'USDT',name:'Tether',decimals:6,chain:'solana'},
+  { mint:USDT_SOLANA,symbol:'USDT',name:'Tether',decimals:6,chain:'solana'},
   { mint:'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',symbol:'JUP',name:'Jupiter',decimals:6,chain:'solana'},
   { mint:'DezXAZ8z7PnrnRJjz3wXBoRgixCa6BFrR4Jfrj6z7m9',symbol:'BONK',name:'Bonk',decimals:5,chain:'solana'},
 ];
+
+const isStable = (mint) => mint === USDC_SOLANA || mint === USDT_SOLANA;
 
 function safeBigInt(v){if(v==null)return BigInt(0);if(typeof v==='bigint')return v;if(typeof v==='number')return Number.isFinite(v)?BigInt(Math.trunc(v)):BigInt(0);let s=String(v).trim();if(!s)return BigInt(0);if(/^-?0x[0-9a-f]+$/i.test(s))return BigInt(s);if(/^-?\d+$/.test(s))return BigInt(s);const n=Number(s);return Number.isFinite(n)?BigInt(Math.trunc(n)):BigInt(0);}
 function tokensEqual(a,b){if(!a||!b)return false;if(a.chain==='solana'&&b.chain==='solana')return a.mint===b.mint;return false;}
@@ -89,42 +92,29 @@ function loadOkxSolTokens(){
 function getTokenDecimals(mint){
   if(!mint)return 6;
   if(mint===WSOL_MINT||mint===OKX_SOL_NATIVE)return 9;
+  if(isStable(mint))return 6;
   const found=POPULAR_TOKENS.find(t=>t.mint===mint);
   if(found)return found.decimals;
-  if(_okxCache){
-    const okx=_okxCache.find(t=>t.mint===mint);
-    if(okx)return okx.decimals;
-  }
+  if(_okxCache){const okx=_okxCache.find(t=>t.mint===mint);if(okx)return okx.decimals;}
   return 6;
 }
 
 // ---------- OKX price cache ----------
 const _okxPriceCache=new Map();
-function getCachedOkxPrice(mint){
-  const e=_okxPriceCache.get(mint);
-  if(!e)return null;
-  if(Date.now()-e.ts>OKX_PRICE_CACHE_MS){_okxPriceCache.delete(mint);return null;}
-  return e.price;
-}
-function setCachedOkxPrice(mint,price){
-  if(!mint||price<=0)return;
-  _okxPriceCache.set(mint,{price,ts:Date.now()});
-}
+function getCachedOkxPrice(mint){const e=_okxPriceCache.get(mint);if(!e)return null;if(Date.now()-e.ts>OKX_PRICE_CACHE_MS){_okxPriceCache.delete(mint);return null;}return e.price;}
+function setCachedOkxPrice(mint,price){if(!mint||price<=0)return;_okxPriceCache.set(mint,{price,ts:Date.now()});}
 
 async function fetchOkxPrice(mint){
   if(!mint)return null;
   const cached=getCachedOkxPrice(mint);
   if(cached!=null)return cached;
-  
   const decimals=getTokenDecimals(mint);
   const amount=Math.pow(10,decimals).toString();
-  
   try{
     const r=await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=${USDC_SOLANA}&amount=${amount}`);
     const j=await r.json();
     if(j.code==='0'&&j.data){
       const d=Array.isArray(j.data)?j.data[0]:j.data;
-      // USDC has 6 decimals, so divide toTokenAmount by 1e6
       const price=Number(d.toTokenAmount)/1e6;
       if(price>0){setCachedOkxPrice(mint,price);return price;}
     }
@@ -217,8 +207,8 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
   useEffect(()=>{if(ss!=='success')return;if(pubkey&&connection&&ft?.chain==='solana'){connection.getBalance(pubkey).then(setSbl).catch(()=>{});if(ft.mint!==WSOL_MINT)connection.getParsedTokenAccountsByOwner(pubkey,{mint:new PublicKey(ft.mint)}).then(a=>setSsb(a.value.length?a.value[0].account.data.parsed.info.tokenAmount.uiAmount:0)).catch(()=>{});}},[ss]);
 
   // Price from OKX
-  useEffect(()=>{let c=false;fetchOkxPrice(ft?.mint).then(p=>{if(!c)setFp(p);});return()=>{c=true;};},[ft]);
-  useEffect(()=>{let c=false;fetchOkxPrice(tt?.mint).then(p=>{if(!c)setTp(p);});return()=>{c=true;};},[tt]);
+  useEffect(()=>{let c=false;if(isStable(ft?.mint)){setFp(1);return;}fetchOkxPrice(ft?.mint).then(p=>{if(!c)setFp(p);});return()=>{c=true;};},[ft]);
+  useEffect(()=>{let c=false;if(isStable(tt?.mint)){setTp(1);return;}fetchOkxPrice(tt?.mint).then(p=>{if(!c)setTp(p);});return()=>{c=true;};},[tt]);
   useEffect(()=>{loadOkxSolTokens().catch(()=>{});},[]);
 
   const fetchQ=useCallback(async()=>{
