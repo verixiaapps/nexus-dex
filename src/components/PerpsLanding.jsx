@@ -46,18 +46,20 @@ export default function PerpsLanding({ onConnectWallet }) {
         </button>
       </div>
 
-      {/* Stats */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 48 }}>
-        {[
-          { label: 'Max Leverage', value: '50x' },
-          { label: 'Powered by', value: 'Hyperliquid' },
-          { label: 'Fee', value: '0.10%' },
-        ].map(stat => (
-          <div key={stat.label} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 20, textAlign: 'center' }}>
-            <div style={{ fontSize: 28, fontWeight: 800, color: '#fff' }}>{stat.value}</div>
-            <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>{stat.label}</div>
-          </div>
-        ))}
+      {/* Stats — scrollable on mobile */}
+      <div style={{ overflowX: 'auto', marginBottom: 48, paddingBottom: 4 }}>
+        <div style={{ display: 'flex', gap: 16, minWidth: 'max-content' }}>
+          {[
+            { label: 'Max Leverage', value: '50x' },
+            { label: 'Powered by', value: 'Hyperliquid' },
+            { label: 'Fee', value: '0.10%' },
+          ].map(stat => (
+            <div key={stat.label} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 20, textAlign: 'center', minWidth: 160, flex: '0 0 auto' }}>
+              <div style={{ fontSize: 28, fontWeight: 800, color: '#fff' }}>{stat.value}</div>
+              <div style={{ fontSize: 13, color: C.muted, marginTop: 4 }}>{stat.label}</div>
+            </div>
+          ))}
+        </div>
       </div>
 
       {/* How it works */}
