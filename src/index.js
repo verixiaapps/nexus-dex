@@ -7,7 +7,7 @@ import ReactDOM from 'react-dom/client';
 import { Buffer } from 'buffer';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
-import { SolflareWalletAdapter } from '@solana/wallet-adapter-solflare';
+import { WalletConnectWalletAdapter } from '@solana/wallet-adapter-walletconnect';
 import '@solana/wallet-adapter-react-ui/styles.css';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { PrivyProvider } from '@privy-io/react-auth';
@@ -28,7 +28,7 @@ const PRIVY_APP_ID = process.env.REACT_APP_PRIVY_APP_ID || '';
 
 const solanaWallets = [
   new PhantomWalletAdapter(),
-  new SolflareWalletAdapter(),
+  new WalletConnectWalletAdapter({ network: 'mainnet-beta' }),
 ];
 
 function onWalletError(err, adapter) {
@@ -56,7 +56,7 @@ const privyConfig = {
     landingHeader: 'Sign in to Nexus DEX',
     loginMessage: 'Trade on Solana. No seed phrase needed.',
   },
-  loginMethods: ['email', 'google', 'apple', 'twitter', 'discord', 'passkey'],
+  loginMethods: ['email', 'google', 'passkey'],
   embeddedWallets: {
     solana: { createOnLogin: 'users-without-wallets' },
     requireUserPasswordOnCreate: false,
