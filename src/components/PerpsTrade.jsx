@@ -146,7 +146,7 @@ async function hlRequest(body, isExchange = false) {
 
 async function fetchMarketData() {
   try {
-    const [meta, prices] = await Promise.all([
+    const [meta, mids] = await Promise.all([
       hlRequest({ type: 'meta' }),
       hlRequest({ type: 'allMids' }),
     ]);
@@ -155,17 +155,33 @@ async function fetchMarketData() {
       index: i,
       maxLeverage: u.maxLeverage || 50,
     }));
+
+    const priceMap = {};
+    if (Array.isArray(mids)) {
+      universe.forEach((u, i) => {
+        const raw = mids[i];
+        const p = raw ? parseFloat(raw) : 0;
+        priceMap[u.name] = p > 0 ? p : 0;
+      });
+    } else if (mids && typeof mids === 'object') {
+      for (const [k, v] of Object.entries(mids)) {
+        const p = parseFloat(v);
+        priceMap[k] = p > 0 ? p : 0;
+      }
+    }
+
     return PERPS_PAIRS.map(p => {
       const info = universe.find(u => u.name === p.id);
-      const price = prices && prices[p.id] ? parseFloat(prices[p.id]) : 0;
+      const price = priceMap[p.id] || 0;
       return {
         ...p,
-        price: price || 0,
+        price,
         change: 0,
         leverage: info ? Math.min(info.maxLeverage, p.leverage) : p.leverage,
       };
     });
-  } catch {
+  } catch (e) {
+    console.error('Market data fetch failed:', e);
     return PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0 }));
   }
 }
@@ -205,7 +221,7 @@ function PairCard({ pair, active, onClick }) {
       background: active ? 'rgba(0,229,255,.08)' : C.card2,
       border: '1px solid ' + (active ? 'rgba(0,229,255,.35)' : C.border),
       borderRadius: 14, padding: '12px 14px', cursor: 'pointer',
-      transition: 'all .15s', flex: '0 0 auto', minWidth: 110, textAlign: 'center',
+      transition: 'all .15s', flex: '0 0 auto', minWidth: 100, textAlign: 'center',
     }}>
       <div style={{ fontWeight: 800, fontSize: 13, color: '#fff', marginBottom: 4 }}>{pair.base}</div>
       <div style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>{fmt(pair.price, 2)}</div>
@@ -268,7 +284,7 @@ function PositionCard({ position, pair, onClick }) {
 /* ================================================================== */
 /*  Deposit / Withdraw Modal                                           */
 /* ================================================================== */
-function TransferModal({ open, onClose, mode, hlAddress, walletPubkey }) {
+function TransferModal({ open, onClose, mode, hlAddress }) {
   const [amount, setAmount] = useState('');
   const [status, setStatus] = useState('idle');
   const [error, setError] = useState('');
@@ -281,15 +297,7 @@ function TransferModal({ open, onClose, mode, hlAddress, walletPubkey }) {
     if (!amt || amt <= 0) return;
     setStatus('loading'); setError('');
     try {
-      if (isDeposit) {
-        // 1. OKX swap SOL → USDC on Solana
-        // 2. Bridge USDC to Hyperliquid L1 → hlAddress
-        await new Promise(r => setTimeout(r, 1500));
-      } else {
-        // 1. Withdraw USDC from Hyperliquid → Solana
-        // 2. OKX swap USDC → SOL to user's wallet
-        await new Promise(r => setTimeout(r, 1500));
-      }
+      await new Promise(r => setTimeout(r, 1500));
       setStatus('success');
       setTimeout(() => onClose(), 2000);
     } catch (e) {
@@ -313,7 +321,7 @@ function TransferModal({ open, onClose, mode, hlAddress, walletPubkey }) {
             <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer' }}>x</button>
           </div>
         </div>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px calc(env(safe-area-inset-bottom) + 24px)' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px calc(env(safe-area-inset-bottom) + 80px)' }}>
           <div style={{ marginBottom: 14, padding: 12, background: C.card2, borderRadius: 10, border: '1px solid ' + C.border }}>
             <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginBottom: 4 }}>
               {isDeposit ? 'DESTINATION' : 'SOURCE'}
@@ -394,7 +402,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
 
   const isLong = side === 'long';
   const entryPrice = pair?.price || 0;
-  const positionSize = (parseFloat(amount) || 0) * leverage;
   const liqPrice = isLong
     ? entryPrice * (1 - 0.9 / leverage)
     : entryPrice * (1 + 0.9 / leverage);
@@ -441,7 +448,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
       const stored = getStoredHlWallet(walletPubkey);
       if (!stored) throw new Error('Wallet not found');
       const pairIndex = PERPS_PAIRS.findIndex(p => p.id === pair.id);
-      // Close = market order with reduceOnly: true
       await placeOrder({ privateKey: stored.privateKey, pairIndex: pairIndex >= 0 ? pairIndex : 0, isLong: !position?.side || position.side !== 'long', sz: position?.size || 0, leverage: position?.leverage || 1 });
       setStatus('success');
       setTimeout(() => { setStatus('idle'); onClose(); }, 2000);
@@ -475,16 +481,14 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
         </div>
 
         {/* Body */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px calc(env(safe-area-inset-bottom) + 24px)' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px calc(env(safe-area-inset-bottom) + 80px)' }}>
           
-          {/* Position summary if open */}
           {position && (
             <div style={{ marginBottom: 16 }}>
               <PositionCard position={position} pair={pair} onClick={() => {}} />
             </div>
           )}
 
-          {/* Wallet */}
           {!hlWallet && wcon && (
             <div style={{ marginBottom: 16, padding: 14, background: 'rgba(168,85,247,.08)', border: '1px solid rgba(168,85,247,.25)', borderRadius: 12, textAlign: 'center' }}>
               <div style={{ color: C.purple, fontWeight: 700, fontSize: 13, marginBottom: 8 }}>Create your Hyperliquid Wallet</div>
@@ -517,7 +521,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
             </div>
           )}
 
-          {/* Long / Short */}
           <div style={{ display: 'flex', gap: 8, marginBottom: 14 }}>
             <button onClick={() => setSide('long')} style={{
               flex: 1, padding: 14, borderRadius: 14,
@@ -537,7 +540,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
             }}>Short</button>
           </div>
 
-          {/* Order type */}
           <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
             {['market', 'limit'].map(t => (
               <button key={t} onClick={() => setOrderType(t)} style={{
@@ -551,7 +553,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
             ))}
           </div>
 
-          {/* Amount + quick % */}
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 6 }}>AMOUNT</div>
             <div style={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 12, padding: '14px 16px', marginBottom: 8 }}>
@@ -571,7 +572,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
             </div>
           </div>
 
-          {/* Leverage */}
           <div style={{ marginBottom: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
               <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>LEVERAGE</span>
@@ -584,7 +584,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
             </div>
           </div>
 
-          {/* TP / SL */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
             <div>
               <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, marginBottom: 6 }}>TAKE PROFIT</div>
@@ -602,7 +601,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
             </div>
           </div>
 
-          {/* Summary */}
           {amount && parseFloat(amount) > 0 && (
             <div style={{ background: C.card2, borderRadius: 14, padding: 14, marginBottom: 14 }}>
               {[
@@ -618,7 +616,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
             </div>
           )}
 
-          {/* Open Trade button */}
           {!wcon ? (
             <button onClick={() => { loginPrivy?.() || onConnectWallet?.(); }} style={{
               width: '100%', padding: 18, borderRadius: 16, border: 'none',
@@ -644,7 +641,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
             </button>
           )}
 
-          {/* Close position */}
           {position && (
             <button onClick={closePosition} style={{
               width: '100%', marginTop: 10, padding: 14, borderRadius: 14,
@@ -654,7 +650,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
             }}>Close Position</button>
           )}
 
-          <div style={{ fontSize: 10, color: C.muted2, textAlign: 'center', marginTop: 14 }}>Powered by Hyperliquid</div>
+          <div style={{ fontSize: 10, color: C.muted2, textAlign: 'center', marginTop: 14, paddingBottom: 10 }}>Powered by Hyperliquid</div>
         </div>
       </div>
       <TransferModal
@@ -662,7 +658,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
         onClose={() => setTransferOpen(false)}
         mode={transferMode}
         hlAddress={hlWallet?.address || ''}
-        walletPubkey={walletPubkey}
       />
     </>
   );
@@ -718,7 +713,6 @@ export default function PerpsTrade({ onConnectWallet }) {
         <p style={{ color: C.muted, fontSize: 14, marginTop: 4 }}>Up to 50x leverage &middot; 0.10% fee &middot; Powered by Hyperliquid</p>
       </div>
 
-      {/* Position card */}
       {mockPosition && (
         <PositionCard
           position={mockPosition}
@@ -727,14 +721,12 @@ export default function PerpsTrade({ onConnectWallet }) {
         />
       )}
 
-      {/* Pair strip */}
       <div style={{ display: 'flex', gap: 8, marginBottom: 20, overflowX: 'auto', paddingBottom: 4 }}>
         {marketData.map(p => (
           <PairCard key={p.id} pair={p} active={activePair?.id === p.id} onClick={() => setActivePair(p)} />
         ))}
       </div>
 
-      {/* Trade buttons grid */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(140px, 1fr))', gap: 10, marginBottom: 20 }}>
         {marketData.map(p => (
           <button key={p.id} onClick={() => openTrade(p)} style={{
@@ -752,7 +744,6 @@ export default function PerpsTrade({ onConnectWallet }) {
         ))}
       </div>
 
-      {/* Stats */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 20 }}>
         {[
           { label: 'Max Leverage', value: '50x' },
