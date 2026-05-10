@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef, useReducer } from 'react';
 import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { useAccount, useConnect } from 'wagmi';
+import { useAccount, useConnect, useDisconnect } from 'wagmi';
 import { useNexusWallet } from './WalletContext.js';
 import SwapWidget from './components/SwapWidget.jsx';
 import Markets from './components/Markets.js';
@@ -29,68 +29,36 @@ const GLOBAL_STYLES = `html,body{ margin:0;padding:0;width:100%; min-height:100v
 const PATH_TO_TAB = {
   '/': 'swap', '/swap': 'swap', '/markets': 'markets',
   '/launches': 'launches', '/launch': 'launch',
-  '/send': 'send', '/portfolio': 'portfolio',
-  '/perps': 'perps',
+  '/send': 'send', '/portfolio': 'portfolio', '/perps': 'perps',
 };
-
 const TAB_TO_PATH = {
   swap: '/swap', markets: '/markets', launches: '/launches',
-  launch: '/launch', send: '/send', portfolio: '/portfolio',
-  perps: '/perps',
+  launch: '/launch', send: '/send', portfolio: '/portfolio', perps: '/perps',
 };
 
-function tabFromPathname(pathname) {
-  return PATH_TO_TAB[pathname] || (pathname.startsWith('/markets/token') ? 'token' : 'swap');
-}
+function tabFromPathname(pathname) { return PATH_TO_TAB[pathname] || (pathname.startsWith('/markets/token') ? 'token' : 'swap'); }
+function getActiveTab(tab) { return tab === 'token' ? 'markets' : tab; }
 
-function getActiveTab(tab) {
-  return tab === 'token' ? 'markets' : tab;
-}
-
-export function useAppWallet() {
-  return useNexusWallet();
-}
+export function useAppWallet() { return useNexusWallet(); }
 
 function WalletIcon({ src, fallbackLetter, color, size }) {
   const [errored, setErrored] = useState(false);
   if (!src || errored) {
-    return (
-      <div style={{
-        width: size, height: size, borderRadius: Math.round(size / 4),
-        background: (color || '#586994') + '33', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        fontSize: Math.round(size * 0.42), fontWeight: 800, color: color || '#fff', flexShrink: 0,
-      }}>
-        {(fallbackLetter || '?').toString().charAt(0).toUpperCase()}
-      </div>
-    );
+    return (<div style={{ width: size, height: size, borderRadius: Math.round(size / 4), background: (color || '#586994') + '33', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: Math.round(size * 0.42), fontWeight: 800, color: color || '#fff', flexShrink: 0 }}>{(fallbackLetter || '?').toString().charAt(0).toUpperCase()}</div>);
   }
-  return (
-    <img src={src} alt={fallbackLetter || ''} style={{ width: size, height: size, borderRadius: Math.round(size / 4), flexShrink: 0, background: '#fff' }}
-      onError={function() { setErrored(true); }} />
-  );
+  return (<img src={src} alt={fallbackLetter || ''} style={{ width: size, height: size, borderRadius: Math.round(size / 4), flexShrink: 0, background: '#fff' }} onError={function() { setErrored(true); }} />);
 }
 
-const WC_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="#3b99fc"/><path d="M11 16.5c5-4.7 13-4.7 18 0l.6.6c.3.2.3.7 0 1l-2 2c-.2.2-.4.2-.5 0l-.9-.8c-3.5-3.3-9-3.3-12.4 0l-1 .9c-.1.1-.3.1-.5 0l-2-2c-.2-.3-.2-.7 0-1l.7-.7zm22.3 4.1l1.8 1.8c.3.2.3.7 0 1l-8 8c-.3.2-.7.2-1 0l-5.7-5.7c0-.1-.2-.1-.3 0l-5.7 5.7c-.2.2-.7.2-1 0l-8-8c-.3-.3-.3-.7 0-1l1.7-1.8c.3-.2.7-.2 1 0l5.7 5.7c.1.1.3.1.4 0l5.7-5.7c.2-.2.7-.2 1 0l5.6 5.7c.1.1.3.1.4 0l5.7-5.7c.2-.2.7-.2 1 0z" fill="#fff"/></svg>'
-);
+const WC_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="#3b99fc"/><path d="M11 16.5c5-4.7 13-4.7 18 0l.6.6c.3.2.3.7 0 1l-2 2c-.2.2-.4.2-.5 0l-.9-.8c-3.5-3.3-9-3.3-12.4 0l-1 .9c-.1.1-.3.1-.5 0l-2-2c-.2-.3-.2-.7 0-1l.7-.7zm22.3 4.1l1.8 1.8c.3.2.3.7 0 1l-8 8c-.3.2-.7.2-1 0l-5.7-5.7c0-.1-.2-.1-.3 0l-5.7 5.7c-.2.2-.7.2-1 0l-8-8c-.3-.3-.3-.7 0-1l1.7-1.8c.3-.2.7-.2 1 0l5.7 5.7c.1.1.3.1.4 0l5.7-5.7c.2-.2.7-.2 1 0l5.6 5.7c.1.1.3.1.4 0l5.7-5.7c.2-.2.7-.2 1 0z" fill="#fff"/></svg>');
+const PRIVY_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="#a855f7"/><path d="M8 14l12 8 12-8v14H8V14z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/><path d="M8 14h24v0L20 22 8 14z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>');
 
-const PRIVY_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent(
-  '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="#a855f7"/><path d="M8 14l12 8 12-8v14H8V14z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/><path d="M8 14h24v0L20 22 8 14z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>'
-);
-
-function pickInjectedConnector(connectors) {
-  const list = (connectors || []).filter(function(c) { return c && c.id !== 'walletConnect' && c.id !== 'walletConnectSDK'; });
-  if (!list.length) return null;
-  const eip6963 = list.find(function(c) { return c.id !== 'injected' && (c.icon || (c.name && c.name !== 'Injected')); });
-  if (eip6963) return eip6963;
-  return list.find(function(c) { return c.id === 'injected'; }) || list[0];
-}
+const CONNECTION_TIMEOUT_MS = 15000;
 
 const WM_INITIAL = { kind: 'idle', message: '', wallet: '', target: '' };
-
 function walletModalReducer(state, action) {
   switch (action.type) {
     case 'START':   return { kind: 'connecting', message: '', wallet: action.wallet, target: action.target || '' };
+    case 'TIMEOUT': return { kind: 'timeout', message: 'Taking too long? Check your wallet app and try again.', wallet: state.wallet, target: state.target };
     case 'SUCCESS': return WM_INITIAL;
     case 'ERROR':   return { kind: 'error', message: action.message || 'Connection failed', wallet: state.wallet, target: state.target };
     case 'RESET':   return WM_INITIAL;
@@ -101,17 +69,37 @@ function walletModalReducer(state, action) {
 function WalletModal({ open, onClose }) {
   const [mState, dispatch] = useReducer(walletModalReducer, WM_INITIAL);
   const nexus = useNexusWallet();
-  const { walletPolicy, privyReady, privyAuthenticated, privyUser, privyEmbeddedSol, privyEmbeddedEvm, loginPrivy, disconnectAll,
-    isConnected: nexusConnected, extSolConnected, extSolPublicKey, extEvmConnected, extEvmAddress, walletAddress, connectedWalletName } = nexus;
+  const { walletPolicy, privyReady, privyAuthenticated, privyUser, privyEmbeddedSol, loginPrivy, disconnectAll,
+    isConnected: nexusConnected, extSolConnected, extEvmConnected, walletAddress, connectedWalletName } = nexus;
   const { wallet: selectedWallet, select, wallets, connect: solConnect } = useWallet();
   const { connectAsync: evmConnectAsync, connectors: evmConnectorsRaw } = useConnect();
+  const { disconnectAsync: evmDisconnectAsync } = useDisconnect();
   const { isConnected: evmConnectedFromAccount } = useAccount();
+
+  const connectionTimerRef = useRef(null);
+  const wcCleanupRef = useRef(false);
+
   const phantomWallet  = wallets.find(function(w) { return w.adapter.name === 'Phantom'; });
   const solflareWallet = wallets.find(function(w) { return w.adapter.name === 'Solflare'; });
+  const backpackWallet  = wallets.find(function(w) { return w.adapter.name === 'Backpack'; });
   const walletConnectConnector = (evmConnectorsRaw || []).find(function(c) { return c && (c.id === 'walletConnect' || c.id === 'walletConnectSDK'); });
-  const injectedConnector = pickInjectedConnector(evmConnectorsRaw);
 
-  useEffect(function() { if (!open) dispatch({ type: 'RESET' }); }, [open]);
+  // Pre-render detection: check which wallets are actually available
+  const walletAvailability = {
+    phantom: !!phantomWallet,
+    solflare: !!solflareWallet,
+    backpack: !!backpackWallet,
+    walletconnect: !!walletConnectConnector,
+    privy: privyReady,
+  };
+
+  useEffect(function() {
+    if (!open) {
+      dispatch({ type: 'RESET' });
+      if (connectionTimerRef.current) { clearTimeout(connectionTimerRef.current); connectionTimerRef.current = null; }
+    }
+  }, [open]);
+
   useEffect(function() {
     if (!open) return;
     document.body.classList.add('nexus-scroll-locked');
@@ -120,13 +108,23 @@ function WalletModal({ open, onClose }) {
     return function() { document.body.classList.remove('nexus-scroll-locked'); window.removeEventListener('keydown', onKey); };
   }, [open, onClose]);
 
+  // Clear connection timer on unmount
+  useEffect(function() {
+    return function() { if (connectionTimerRef.current) { clearTimeout(connectionTimerRef.current); connectionTimerRef.current = null; } };
+  }, []);
+
+  // Watch for connection success
   useEffect(function() {
     if (mState.kind !== 'connecting') return;
     let matched = false;
     if (mState.target === 'evm') matched = evmConnectedFromAccount;
     else if (mState.target === 'privy') matched = privyAuthenticated;
     else if (mState.target === 'solana') matched = extSolConnected && selectedWallet && selectedWallet.adapter && selectedWallet.adapter.name === mState.wallet;
-    if (matched) { dispatch({ type: 'SUCCESS' }); onClose(); }
+    if (matched) {
+      if (connectionTimerRef.current) { clearTimeout(connectionTimerRef.current); connectionTimerRef.current = null; }
+      dispatch({ type: 'SUCCESS' });
+      onClose();
+    }
   }, [extSolConnected, evmConnectedFromAccount, privyAuthenticated, selectedWallet, mState.kind, mState.wallet, mState.target, onClose]);
 
   const targetWalletRef = useRef(null);
@@ -145,31 +143,47 @@ function WalletModal({ open, onClose }) {
     return function() { cancelled = true; };
   }, [selectedWallet, solConnect, mState.kind, mState.wallet]);
 
+  const startConnectionTimer = function(walletName) {
+    if (connectionTimerRef.current) clearTimeout(connectionTimerRef.current);
+    connectionTimerRef.current = setTimeout(function() {
+      dispatch({ type: 'TIMEOUT' });
+    }, CONNECTION_TIMEOUT_MS);
+  };
+
   const handleSolanaConnect = useCallback(function(wallet) {
-    if (!wallet || !wallet.adapter) { dispatch({ type: 'ERROR', message: 'Wallet adapter unavailable.' }); return; }
+    if (!wallet || !wallet.adapter) { dispatch({ type: 'ERROR', message: 'Wallet not detected. Please install the extension.' }); return; }
     dispatch({ type: 'START', wallet: wallet.adapter.name, target: 'solana' });
+    startConnectionTimer(wallet.adapter.name);
     targetWalletRef.current = wallet.adapter.name;
-    try { select(wallet.adapter.name); } catch (e) { dispatch({ type: 'ERROR', message: (e && e.message) || 'Failed to select wallet' }); targetWalletRef.current = null; }
+    try { select(wallet.adapter.name); }
+    catch (e) { dispatch({ type: 'ERROR', message: 'Failed to open wallet. Try refreshing the page.' }); targetWalletRef.current = null; }
   }, [select]);
 
+  // WalletConnect with stale session cleanup
   const handleWalletConnect = useCallback(async function() {
     if (!walletConnectConnector) { dispatch({ type: 'ERROR', message: 'WalletConnect not configured.' }); return; }
     dispatch({ type: 'START', wallet: 'WalletConnect', target: 'evm' });
-    try { await evmConnectAsync({ connector: walletConnectConnector }); }
-    catch (e) { const raw = (e && e.message) ? e.message : 'Failed'; dispatch({ type: 'ERROR', message: /reject|cancel|denied|user/i.test(raw) ? 'Connection cancelled' : raw }); }
-  }, [evmConnectAsync, walletConnectConnector]);
-
-  const handleInjectedConnect = useCallback(async function() {
-    if (!injectedConnector) { dispatch({ type: 'ERROR', message: 'No injected wallet detected.' }); return; }
-    dispatch({ type: 'START', wallet: injectedConnector.name || 'Wallet', target: 'evm' });
-    try { await evmConnectAsync({ connector: injectedConnector }); }
-    catch (e) { const raw = (e && e.message) ? e.message : 'Failed'; dispatch({ type: 'ERROR', message: /reject|cancel|denied|user/i.test(raw) ? 'Connection cancelled' : raw }); }
-  }, [evmConnectAsync, injectedConnector]);
+    startConnectionTimer('WalletConnect');
+    try {
+      // Kill stale WC sessions first
+      if (!wcCleanupRef.current) {
+        try { await evmDisconnectAsync(); } catch {}
+        wcCleanupRef.current = true;
+      }
+      await evmConnectAsync({ connector: walletConnectConnector });
+    } catch (e) {
+      const raw = (e && e.message) ? e.message : 'Failed';
+      const msg = /reject|cancel|denied|user/i.test(raw) ? 'Connection cancelled' : raw;
+      dispatch({ type: 'ERROR', message: msg });
+    }
+  }, [evmConnectAsync, walletConnectConnector, evmDisconnectAsync]);
 
   const handlePrivyLogin = useCallback(function() {
     if (!privyReady) { dispatch({ type: 'ERROR', message: 'Email login not configured.' }); return; }
     dispatch({ type: 'START', wallet: 'Email / Social', target: 'privy' });
-    try { loginPrivy(); } catch (e) { dispatch({ type: 'ERROR', message: (e && e.message) || 'Failed to open login' }); }
+    startConnectionTimer('Email / Social');
+    try { loginPrivy(); }
+    catch (e) { dispatch({ type: 'ERROR', message: (e && e.message) || 'Failed to open login' }); }
   }, [privyReady, loginPrivy]);
 
   const handleDisconnect = useCallback(async function() {
@@ -177,26 +191,32 @@ function WalletModal({ open, onClose }) {
     dispatch({ type: 'RESET' }); onClose();
   }, [disconnectAll, onClose]);
 
-  const optionDefs = {
-    privy: { key: 'privy', name: 'Continue with email', subtitle: 'Email, Google, Apple, passkey', color: C.privy, icon: PRIVY_LOGO, ready: privyReady, pendingMatch: 'Email / Social', onClick: handlePrivyLogin },
-    phantom: { key: 'phantom', name: 'Phantom', subtitle: 'Solana wallet', color: '#ab9ff2', icon: phantomWallet && phantomWallet.adapter.icon, ready: !!phantomWallet, pendingMatch: 'Phantom', onClick: function() { handleSolanaConnect(phantomWallet); } },
-    solflare: { key: 'solflare', name: 'Solflare', subtitle: 'Solana wallet', color: '#fc9533', icon: solflareWallet && solflareWallet.adapter.icon, ready: !!solflareWallet, pendingMatch: 'Solflare', onClick: function() { handleSolanaConnect(solflareWallet); } },
-    walletconnect: { key: 'walletconnect', name: 'WalletConnect', subtitle: 'MetaMask, Trust, Rainbow & 600+ wallets', color: '#3b99fc', icon: WC_LOGO, ready: !!walletConnectConnector, pendingMatch: 'WalletConnect', onClick: handleWalletConnect },
-    injected: { key: 'injected', name: (injectedConnector && injectedConnector.name) || 'Browser Wallet', subtitle: 'Use the wallet you opened this site with', color: '#00e5ff', icon: injectedConnector && injectedConnector.icon, ready: !!injectedConnector, pendingMatch: (injectedConnector && injectedConnector.name) || 'Wallet', onClick: handleInjectedConnect },
+  const handleRetry = function() {
+    dispatch({ type: 'RESET' });
   };
 
+  // Build wallet options in priority order, respecting availability
+  const allOptions = [
+    { key: 'phantom', name: 'Phantom', subtitle: 'Solana wallet', color: '#ab9ff2', icon: phantomWallet && phantomWallet.adapter.icon, ready: walletAvailability.phantom, pendingMatch: 'Phantom', onClick: function() { handleSolanaConnect(phantomWallet); } },
+    { key: 'solflare', name: 'Solflare', subtitle: 'Solana wallet', color: '#fc9533', icon: solflareWallet && solflareWallet.adapter.icon, ready: walletAvailability.solflare, pendingMatch: 'Solflare', onClick: function() { handleSolanaConnect(solflareWallet); } },
+    { key: 'backpack', name: 'Backpack', subtitle: 'Solana wallet', color: '#e33b3b', icon: backpackWallet && backpackWallet.adapter.icon, ready: walletAvailability.backpack, pendingMatch: 'Backpack', onClick: function() { if (backpackWallet) handleSolanaConnect(backpackWallet); } },
+    { key: 'walletconnect', name: 'WalletConnect', subtitle: 'MetaMask, Trust, Rainbow & 600+', color: '#3b99fc', icon: WC_LOGO, ready: walletAvailability.walletconnect, pendingMatch: 'WalletConnect', onClick: handleWalletConnect },
+    { key: 'privy', name: 'Continue with email', subtitle: 'Email, Google, Apple, passkey', color: C.privy, icon: PRIVY_LOGO, ready: walletAvailability.privy, pendingMatch: 'Email / Social', onClick: handlePrivyLogin },
+  ];
+
   const allowedKinds = (walletPolicy && walletPolicy.allowed) || [];
-  const allowedOpts = allowedKinds.map(function(k) { return optionDefs[k]; }).filter(Boolean);
-  const primaryOption = allowedOpts.find(function(o) { return o.key === 'privy'; });
-  const secondaryOptions = allowedOpts.filter(function(o) { return o.key !== 'privy'; });
+  const opts = allOptions.filter(function(o) { return allowedKinds.includes(o.key); });
+  // Only show wallets that are actually available
+  const availableOpts = opts.filter(function(o) { return o.ready; });
+  const hasAvailableOptions = availableOpts.length > 0;
+
   const isConnecting = mState.kind === 'connecting';
-  const pendingWallet = isConnecting ? mState.wallet : null;
+  const isTimedOut = mState.kind === 'timeout';
+  const pendingWallet = isConnecting || isTimedOut ? mState.wallet : null;
   const anyConnected = nexusConnected || privyAuthenticated;
   const displayAddr = walletAddress ? walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4) : null;
   const privyHandle = privyUser && ((privyUser.email && privyUser.email.address) || (privyUser.google && privyUser.google.email) || (privyUser.apple && privyUser.apple.email) || null);
   const showPrivyHandle = privyAuthenticated && !extSolConnected && !extEvmConnected;
-  const showWalletAppHint = !anyConnected && walletPolicy && walletPolicy.environment === 'mobile-browser' && privyReady;
-  const privyMissingOnMobile = !anyConnected && walletPolicy && walletPolicy.environment === 'mobile-browser' && !privyReady;
 
   if (!open) return null;
 
@@ -210,7 +230,7 @@ function WalletModal({ open, onClose }) {
             <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 6 }}>{anyConnected ? 'Wallet Connected' : 'Connect Wallet'}</div>
             {displayAddr && <div style={{ fontSize: 13, color: '#586994' }}>{(connectedWalletName || 'Wallet')}: {displayAddr}</div>}
             {privyHandle && showPrivyHandle && <div style={{ fontSize: 12, color: C.privy, marginTop: 2 }}>{privyHandle}</div>}
-            {!anyConnected && !privyMissingOnMobile && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>Pick one. We never see your keys.</div>}
+            {!anyConnected && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>Pick one. We never see your keys.</div>}
           </div>
         </div>
         <div className="scroll-contain" style={{ flex: 1, padding: '0 24px', paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)' }}>
@@ -225,69 +245,50 @@ function WalletModal({ open, onClose }) {
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 400, margin: '0 auto', paddingTop: 8 }}>
+              {/* Error message */}
               {mState.kind === 'error' && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, background: 'rgba(255,59,107,.10)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 12, padding: '10px 14px' }}>
                   <span style={{ color: C.red, fontSize: 12, fontWeight: 600 }}>{mState.message}</span>
-                  <button onClick={function() { dispatch({ type: 'RESET' }); }} style={{ background: 'transparent', border: '1px solid ' + C.red, color: C.red, padding: '4px 10px', borderRadius: 6, fontSize: 11, fontFamily: 'Syne, sans-serif', fontWeight: 700, cursor: 'pointer' }}>Retry</button>
+                  <button onClick={handleRetry} style={{ background: 'transparent', border: '1px solid ' + C.red, color: C.red, padding: '4px 10px', borderRadius: 6, fontSize: 11, fontFamily: 'Syne, sans-serif', fontWeight: 700, cursor: 'pointer' }}>Retry</button>
                 </div>
               )}
-              {privyMissingOnMobile && (
-                <div style={{ background: 'rgba(255,59,107,.10)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 12, padding: '14px 16px', color: C.red, fontSize: 13, lineHeight: 1.5 }}>
-                  Email login is not configured. Open this site from inside your wallet app browser.
+              {/* Timeout message */}
+              {isTimedOut && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, background: 'rgba(255,149,0,.10)', border: '1px solid rgba(255,149,0,.3)', borderRadius: 12, padding: '10px 14px' }}>
+                  <span style={{ color: '#ff9500', fontSize: 12, fontWeight: 600 }}>{mState.message}</span>
+                  <button onClick={handleRetry} style={{ background: 'transparent', border: '1px solid #ff9500', color: '#ff9500', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontFamily: 'Syne, sans-serif', fontWeight: 700, cursor: 'pointer' }}>Retry</button>
                 </div>
               )}
-              {primaryOption && (function() {
-                var opt = primaryOption; var isPending = isConnecting && pendingWallet === opt.pendingMatch; var disabled = isConnecting || !opt.ready;
-                return (
-                  <button key={opt.key} onClick={opt.onClick} disabled={disabled} style={{
-                    display: 'flex', alignItems: 'center', gap: 14,
-                    background: isPending ? 'linear-gradient(135deg, rgba(150,93,232,.35), rgba(0,229,255,.25))' : 'linear-gradient(135deg, rgba(150,93,232,.20), rgba(0,229,255,.12))',
-                    border: '1.5px solid ' + (isPending ? C.privy : 'rgba(150,93,232,.5)'), borderRadius: 16, padding: '18px 20px',
-                    cursor: disabled ? (isConnecting ? 'wait' : 'not-allowed') : 'pointer', width: '100%',
-                    opacity: (isConnecting && !isPending) || !opt.ready ? 0.55 : 1, transition: 'background .15s, border-color .15s', boxShadow: '0 4px 24px rgba(150,93,232,.15)',
-                  }}>
-                    <WalletIcon src={opt.icon} fallbackLetter={opt.name} color={opt.color} size={44} />
-                    <div style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
-                      <div style={{ color: '#fff', fontWeight: 800, fontSize: 16 }}>{opt.name}</div>
-                      <div style={{ color: opt.color, fontSize: 12, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {isPending ? 'Check your wallet...' : (opt.ready ? opt.subtitle : 'Loading...')}
+              {/* Show only available wallets */}
+              {hasAvailableOptions ? (
+                availableOpts.map(function(opt) {
+                  var isPending = isConnecting && pendingWallet === opt.pendingMatch;
+                  var disabled = isConnecting || isTimedOut;
+                  var isPrimary = opt.key === 'privy';
+                  return (
+                    <button key={opt.key} onClick={opt.onClick} disabled={disabled} style={{
+                      display: 'flex', alignItems: 'center', gap: isPrimary ? 14 : 12,
+                      background: isPending ? 'rgba(0,229,255,.12)' : (isPrimary ? 'linear-gradient(135deg, rgba(150,93,232,.20), rgba(0,229,255,.12))' : 'rgba(255,255,255,.025)'),
+                      border: (isPrimary && !isPending) ? '1.5px solid rgba(150,93,232,.5)' : '1px solid ' + (isPending ? 'rgba(0,229,255,.35)' : 'rgba(255,255,255,.06)'),
+                      borderRadius: isPrimary ? 16 : 12, padding: isPrimary ? '18px 20px' : '11px 14px',
+                      cursor: disabled ? 'wait' : 'pointer', width: '100%',
+                      opacity: isTimedOut && !isPending ? 0.55 : 1, transition: 'background .15s, border-color .15s',
+                      boxShadow: isPrimary && !isPending ? '0 4px 24px rgba(150,93,232,.15)' : 'none',
+                    }}>
+                      <WalletIcon src={opt.icon} fallbackLetter={opt.name} color={opt.color} size={isPrimary ? 44 : 32} />
+                      <div style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
+                        <div style={{ color: '#fff', fontWeight: isPrimary ? 800 : 700, fontSize: isPrimary ? 16 : 14 }}>{opt.name}</div>
+                        <div style={{ color: opt.key === 'privy' ? opt.color : C.muted, fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {isPending ? 'Check your wallet...' : opt.subtitle}
+                        </div>
                       </div>
-                    </div>
-                    {isPending && <div style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid ' + C.privy, borderTopColor: 'transparent', animation: 'wc-spin 0.8s linear infinite', flexShrink: 0 }} />}
-                  </button>
-                );
-              })()}
-              {primaryOption && secondaryOptions.length > 0 && (
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '14px 0 4px' }}>
-                  <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,.08)' }} />
-                  <div style={{ fontSize: 11, color: C.muted, fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase' }}>Already have a wallet?</div>
-                  <div style={{ flex: 1, height: 1, background: 'rgba(255,255,255,.08)' }} />
-                </div>
-              )}
-              {secondaryOptions.map(function(opt) {
-                var isPending = isConnecting && pendingWallet === opt.pendingMatch; var disabled = isConnecting || !opt.ready;
-                return (
-                  <button key={opt.key} onClick={opt.onClick} disabled={disabled} style={{
-                    display: 'flex', alignItems: 'center', gap: 12,
-                    background: isPending ? 'rgba(0,229,255,.12)' : 'rgba(255,255,255,.025)',
-                    border: '1px solid ' + (isPending ? 'rgba(0,229,255,.35)' : 'rgba(255,255,255,.06)'), borderRadius: 12, padding: '11px 14px',
-                    cursor: disabled ? (isConnecting ? 'wait' : 'not-allowed') : 'pointer', width: '100%',
-                    opacity: (isConnecting && !isPending) || !opt.ready ? 0.55 : 1, transition: 'background .15s, border-color .15s',
-                  }}>
-                    <WalletIcon src={opt.icon} fallbackLetter={opt.name} color={opt.color} size={32} />
-                    <div style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
-                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{opt.name}</div>
-                      <div style={{ color: C.muted, fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {isPending ? 'Check your wallet...' : (opt.ready ? opt.subtitle : 'Unavailable')}
-                      </div>
-                    </div>
-                    {isPending && <div style={{ width: 16, height: 16, borderRadius: '50%', border: '2px solid #00e5ff', borderTopColor: 'transparent', animation: 'wc-spin 0.8s linear infinite', flexShrink: 0 }} />}
-                  </button>
-                );
-              })}
-              {showWalletAppHint && (
-                <div style={{ fontSize: 11, color: C.muted, textAlign: 'center', marginTop: 8, lineHeight: 1.5 }}>
-                  Have Phantom or Solflare? Open this page from inside your wallet app browser to use it.
+                      {isPending && <div style={{ width: 16, height: 16, borderRadius: '50%', border: '2px solid #00e5ff', borderTopColor: 'transparent', animation: 'wc-spin 0.8s linear infinite', flexShrink: 0 }} />}
+                    </button>
+                  );
+                })
+              ) : (
+                <div style={{ background: 'rgba(255,59,107,.10)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 12, padding: '14px 16px', color: C.red, fontSize: 13, lineHeight: 1.5, textAlign: 'center' }}>
+                  No wallets detected. Install Phantom, Solflare, or open this page from inside your wallet browser.
                 </div>
               )}
               <div style={{ fontSize: 10, color: C.muted, textAlign: 'center', marginTop: 6, lineHeight: 1.5 }}>
@@ -301,6 +302,7 @@ function WalletModal({ open, onClose }) {
   );
 }
 
+// Icons, NAV_TABS, NAV_ICONS, mapJupiterTokenToCoin, AppInner — unchanged from your sent file
 function IconSwap()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M7 16V4m0 0L3 8m4-4l4 4"/><path d="M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>; }
 function IconMarkets()  { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>; }
 function IconLaunches() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>; }
@@ -310,7 +312,6 @@ function IconWallet()   { return <svg width="18" height="18" viewBox="0 0 24 24"
 function IconPerps()    { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg>; }
 
 const NAV_ICONS = { swap: IconSwap, markets: IconMarkets, launches: IconLaunches, launch: IconLaunch, send: IconSend, portfolio: IconWallet, perps: IconPerps };
-
 const NAV_TABS = [
   { id: 'swap', label: 'Swap' }, { id: 'markets', label: 'Markets' }, { id: 'launches', label: 'Launches' },
   { id: 'launch', label: 'Launch' }, { id: 'send', label: 'Send' }, { id: 'portfolio', label: 'Wallet' }, { id: 'perps', label: 'Perps' },
@@ -319,17 +320,8 @@ const NAV_TABS = [
 function mapJupiterTokenToCoin(t, idx) {
   if (!t || !t.id) return null;
   const stats24h = t.stats24h || {};
-  const buyVol = Number(stats24h.buyVolume) || 0;
-  const sellVol = Number(stats24h.sellVolume) || 0;
-  return {
-    id: t.id, symbol: t.symbol || t.id.slice(0, 4), name: t.name || 'Unknown', image: t.icon || null,
-    current_price: typeof t.usdPrice === 'number' ? t.usdPrice : (parseFloat(t.usdPrice) || 0),
-    market_cap: typeof t.mcap === 'number' ? t.mcap : (parseFloat(t.mcap) || 0),
-    market_cap_rank: idx + 1, total_volume: buyVol + sellVol,
-    high_24h: null, low_24h: null,
-    price_change_percentage_24h: typeof stats24h.priceChange === 'number' ? stats24h.priceChange : null,
-    isSolanaToken: true, liquidity: typeof t.liquidity === 'number' ? t.liquidity : (parseFloat(t.liquidity) || 0),
-  };
+  const buyVol = Number(stats24h.buyVolume) || 0; const sellVol = Number(stats24h.sellVolume) || 0;
+  return { id: t.id, symbol: t.symbol || t.id.slice(0, 4), name: t.name || 'Unknown', image: t.icon || null, current_price: typeof t.usdPrice === 'number' ? t.usdPrice : (parseFloat(t.usdPrice) || 0), market_cap: typeof t.mcap === 'number' ? t.mcap : (parseFloat(t.mcap) || 0), market_cap_rank: idx + 1, total_volume: buyVol + sellVol, high_24h: null, low_24h: null, price_change_percentage_24h: typeof stats24h.priceChange === 'number' ? stats24h.priceChange : null, isSolanaToken: true, liquidity: typeof t.liquidity === 'number' ? t.liquidity : (parseFloat(t.liquidity) || 0) };
 }
 
 function AppInner() {
@@ -341,31 +333,14 @@ function AppInner() {
   const [jupiterTokens, setJupiterTokens] = useState([]); const [jupiterLoading, setJupiterLoading] = useState(true);
   const [launchesKey, setLaunchesKey] = useState(0); const [portfolioKey, setPortfolioKey] = useState(0);
   const [isMobile, setIsMobile] = useState(function() { return typeof window !== 'undefined' && window.innerWidth < 769; });
-
-  useEffect(function() {
-    let to = null;
-    function onResize() { if (to) clearTimeout(to); to = setTimeout(function() { setIsMobile(window.innerWidth < 769); }, 150); }
-    window.addEventListener('resize', onResize);
-    return function() { window.removeEventListener('resize', onResize); if (to) clearTimeout(to); };
-  }, []);
-
+  useEffect(function() { let to = null; function onResize() { if (to) clearTimeout(to); to = setTimeout(function() { setIsMobile(window.innerWidth < 769); }, 150); } window.addEventListener('resize', onResize); return function() { window.removeEventListener('resize', onResize); if (to) clearTimeout(to); }; }, []);
   useEffect(function() { var el = document.createElement('style'); el.textContent = GLOBAL_STYLES; document.head.appendChild(el); return function() { document.head.removeChild(el); }; }, []);
-
-  useEffect(function() {
-    var newTab = tabFromPathname(location.pathname);
-    if (newTab !== tab) { setTab(newTab); if (newTab !== 'token') setSelectedToken(null); }
-  }, [location.pathname, tab]);
-
-  const switchTab = useCallback(function(newTab) {
-    if (newTab === tab && newTab !== 'token') { if (newTab === 'launches') setLaunchesKey(function(k) { return k + 1; }); if (newTab === 'portfolio') setPortfolioKey(function(k) { return k + 1; }); return; }
-    if (newTab !== 'token') setSelectedToken(null);
-    navigate(TAB_TO_PATH[newTab] || '/swap'); setTab(newTab); window.scrollTo(0, 0);
-  }, [tab, navigate]);
-
+  useEffect(function() { var newTab = tabFromPathname(location.pathname); if (newTab !== tab) { setTab(newTab); if (newTab !== 'token') setSelectedToken(null); } }, [location.pathname, tab]);
+  const switchTab = useCallback(function(newTab) { if (newTab === tab && newTab !== 'token') { if (newTab === 'launches') setLaunchesKey(function(k) { return k + 1; }); if (newTab === 'portfolio') setPortfolioKey(function(k) { return k + 1; }); return; } if (newTab !== 'token') setSelectedToken(null); navigate(TAB_TO_PATH[newTab] || '/swap'); setTab(newTab); window.scrollTo(0, 0); }, [tab, navigate]);
   const goToToken = useCallback(function(coin) { setSelectedToken(coin); setTab('token'); navigate('/markets/token'); window.scrollTo(0, 0); }, [navigate]);
   const goBack = useCallback(function() { navigate(-1); }, [navigate]);
   const openWallet = useCallback(function() { setWalletModalOpen(true); }, []);
-
+  
   useEffect(function() {
     var isMounted = true; var controller = new AbortController();
     try { var cached = JSON.parse(localStorage.getItem(MARKET_CACHE_KEY) || 'null'); if (cached && cached.v === 4 && Date.now() - cached.ts < 300000) { if (cached.coins && cached.coins.length) { setCoins(cached.coins); setLoading(false); } if (cached.jupTokens && cached.jupTokens.length) { setJupiterTokens(cached.jupTokens); setJupiterLoading(false); } } } catch (e) {}
@@ -374,14 +349,9 @@ function AppInner() {
     var flushCache = function() { try { cacheBuf.ts = Date.now(); localStorage.setItem(MARKET_CACHE_KEY, JSON.stringify(cacheBuf)); } catch (e) {} };
     var fetchMarkets = function() { return fetch(JUPITER_MARKETS_URL, { signal: controller.signal }).then(function(r) { return r.ok ? r.json() : null; }).then(function(data) { if (!isMounted || !Array.isArray(data)) return; var mapped = data.map(mapJupiterTokenToCoin).filter(Boolean); setCoins(mapped); setLoading(false); cacheBuf.coins = mapped; flushCache(); }).catch(function(e) { if (isMounted && (!e || e.name !== 'AbortError')) setLoading(false); }); };
     var fetchRegistry = function() { return fetch(JUPITER_REGISTRY_URL, { signal: controller.signal }).then(function(r) { return r.ok ? r.json() : null; }).then(function(data) { if (!isMounted || !Array.isArray(data)) return; var jupTokens = data.map(function(t) { return { mint: t.id, symbol: t.symbol, name: t.name, decimals: t.decimals, logoURI: t.icon }; }); setJupiterTokens(jupTokens); setJupiterLoading(false); cacheBuf.jupTokens = jupTokens; flushCache(); }).catch(function() { if (isMounted) setJupiterLoading(false); }); };
-    var fetchAll = function() { fetchMarkets(); fetchRegistry(); };
-    fetchAll();
-    var interval = null;
-    var startPolling = function() { if (interval) return; interval = setInterval(fetchAll, MARKET_POLL_MS); };
-    var stopPolling = function() { if (interval) { clearInterval(interval); interval = null; } };
-    startPolling();
-    var onVis = function() { if (document.visibilityState === 'visible') { fetchAll(); startPolling(); } else { stopPolling(); } };
-    document.addEventListener('visibilitychange', onVis);
+    var fetchAll = function() { fetchMarkets(); fetchRegistry(); }; fetchAll();
+    var interval = null; var startPolling = function() { if (interval) return; interval = setInterval(fetchAll, MARKET_POLL_MS); }; var stopPolling = function() { if (interval) { clearInterval(interval); interval = null; } }; startPolling();
+    var onVis = function() { if (document.visibilityState === 'visible') { fetchAll(); startPolling(); } else { stopPolling(); } }; document.addEventListener('visibilitychange', onVis);
     return function() { isMounted = false; controller.abort(); stopPolling(); document.removeEventListener('visibilitychange', onVis); };
   }, []);
 
@@ -400,10 +370,7 @@ function AppInner() {
             <span style={{ fontSize: 9, color: C.accent, background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.3)', borderRadius: 4, padding: '1px 5px', fontWeight: 600 }}>DEX</span>
           </div>
           <nav className="desktop-nav hide-scrollbar" style={{ display: 'flex', gap: 2, flex: 1, justifyContent: 'center', overflowX: 'auto' }}>
-            {NAV_TABS.map(function(t) {
-              var active = activeTab === t.id;
-              return (<button key={t.id} onClick={function() { switchTab(t.id); }} style={{ background: active ? 'rgba(0,229,255,.09)' : 'transparent', border: active ? '1px solid rgba(0,229,255,.2)' : '1px solid transparent', borderRadius: 8, padding: '5px 12px', color: active ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>{t.label}</button>);
-            })}
+            {NAV_TABS.map(function(t) { var active = activeTab === t.id; return (<button key={t.id} onClick={function() { switchTab(t.id); }} style={{ background: active ? 'rgba(0,229,255,.09)' : 'transparent', border: active ? '1px solid rgba(0,229,255,.2)' : '1px solid transparent', borderRadius: 8, padding: '5px 12px', color: active ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>{t.label}</button>); })}
           </nav>
           <div className="mobile-nav" style={{ flex: 1 }} />
           <button onClick={openWallet} style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, background: wallet.isConnected ? 'rgba(0,229,255,.08)' : 'linear-gradient(135deg,#00e5ff,#0055ff)', border: wallet.isConnected ? '1px solid rgba(0,229,255,.3)' : 'none', borderRadius: 10, padding: '7px 14px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12, color: wallet.isConnected ? C.accent : C.bg, whiteSpace: 'nowrap' }}>
@@ -422,17 +389,9 @@ function AppInner() {
         {tab === 'perps' && <PerpsLanding onConnectWallet={openWallet} />}
       </main>
       <nav className="mobile-nav" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100, background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(0,229,255,.1)', display: 'flex', alignItems: 'stretch', paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        {NAV_TABS.map(function(t) {
-          var active = activeTab === t.id; var Icon = NAV_ICONS[t.id];
-          return (<button key={t.id} onClick={function() { switchTab(t.id); }} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: active ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '8px 2px', minHeight: 54, position: 'relative' }}>
-            {active && <div style={{ position: 'absolute', top: 0, left: '25%', right: '25%', height: 2, borderRadius: '0 0 2px 2px', background: C.accent }} />}
-            {Icon && <Icon />}<span>{t.label}</span>
-          </button>);
-        })}
+        {NAV_TABS.map(function(t) { var active = activeTab === t.id; var Icon = NAV_ICONS[t.id]; return (<button key={t.id} onClick={function() { switchTab(t.id); }} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: active ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '8px 2px', minHeight: 54, position: 'relative' }}>{active && <div style={{ position: 'absolute', top: 0, left: '25%', right: '25%', height: 2, borderRadius: '0 0 2px 2px', background: C.accent }} />}{Icon && <Icon />}<span>{t.label}</span></button>); })}
         <button onClick={openWallet} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: wallet.isConnected ? C.green : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '8px 2px', minHeight: 54 }}>
-          <div style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid ' + (wallet.isConnected ? C.green : C.muted), display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            {wallet.isConnected && <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.green }} />}
-          </div>
+          <div style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid ' + (wallet.isConnected ? C.green : C.muted), display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{wallet.isConnected && <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.green }} />}</div>
           <span style={{ fontSize: 8 }}>{wallet.isConnected ? displayAddress : 'Connect'}</span>
         </button>
       </nav>
@@ -441,6 +400,4 @@ function AppInner() {
   );
 }
 
-export default function App() {
-  return (<BrowserRouter><AppInner /></BrowserRouter>);
-}
+export default function App() { return (<BrowserRouter><AppInner /></BrowserRouter>); }
