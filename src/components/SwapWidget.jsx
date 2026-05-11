@@ -2,14 +2,16 @@
  * NEXUS DEX - Unified Swap Widget (OKX DEX edition)
  *
  * Swap engine: OKX DEX API — Solana only
- * Price data: OKX quote endpoint
+ * Price data: OKX quote endpoint (direct pair quote + USD display)
  * Token search: OKX token list
- * OKX referrer tag added to all OKX requests.
- * Fees injected server-side in server.js.
- * Max slippage: 15% Solana (OKX routes at best price).
+ * OKX referrer + fees injected server-side.
  *
- * FIX: fetchQ now calls /quote for the exact swap pair to get the real output amount.
- * Default visible tokens reduced to SOL and USDC only.
+ * FIXES:
+ *  - fetchQ calls /quote for the exact pair → real output amount
+ *  - slippagePercent → slippage (matching OKX API)
+ *  - slippage removed from quote request (not required)
+ *  - chainId added to swap-instruction for safety
+ *  - Default token list reduced to SOL & USDC
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -39,7 +41,7 @@ const LAST_PAIR_LS_KEY = 'nexus_last_pair_v1';
 
 const C = { bg:'#03060f',card:'#080d1a',card2:'#0c1220',card3:'#111d30',border:'rgba(0,229,255,0.10)',borderHi:'rgba(0,229,255,0.25)',accent:'#00e5ff',green:'#00ffa3',red:'#ff3b6b',text:'#cdd6f4',muted:'#586994',muted2:'#2e3f5e',buyGrad:'linear-gradient(135deg,#00e5ff,#0055ff)',sellGrad:'linear-gradient(135deg,#ff3b6b,#cc1144)',privy:'#a855f7' };
 
-// Only SOL and USDC are shown in the quick‑pick list; other tokens still searchable via OKX
+// Quick‑pick list limited to SOL & USDC – all other tokens still searchable via OKX
 const POPULAR_TOKENS = [
   { mint:WSOL_MINT,symbol:'SOL',name:'Solana',decimals:9,chain:'solana',logoURI:'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png'},
   { mint:USDC_SOLANA,symbol:'USDC',name:'USD Coin',decimals:6,chain:'solana',logoURI:'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png'},
@@ -99,7 +101,7 @@ function getTokenDecimals(mint){
   return 6;
 }
 
-// ---------- OKX price cache ----------
+// ---------- OKX price cache (USD display only) ----------
 const _okxPriceCache=new Map();
 function getCachedOkxPrice(mint){
   const e=_okxPriceCache.get(mint);
@@ -114,6 +116,8 @@ function setCachedOkxPrice(mint,price){
 
 async function fetchOkxPrice(mint){
   if(!mint)return null;
+  // USDC is $1 – no API call needed
+  if(mint===USDC_SOLANA)return 1;
   const cached=getCachedOkxPrice(mint);
   if(cached!=null)return cached;
   
@@ -134,7 +138,16 @@ async function fetchOkxPrice(mint){
 
 // ---------- OKX swap ----------
 async function fetchOkxSolSwap({fromMint,toMint,amount,userWallet,signal}){
-  const p=new URLSearchParams({chainIndex:'501',fromTokenAddress:toOkxSolAddress(fromMint),toTokenAddress:toOkxSolAddress(toMint),amount:String(amount),slippagePercent:'0.15',userWalletAddress:userWallet,referrer:OKX_REFERRER});
+  const p=new URLSearchParams({
+    chainIndex:'501',
+    chainId:'501',                                  // required by some OKX endpoints
+    fromTokenAddress:toOkxSolAddress(fromMint),
+    toTokenAddress:toOkxSolAddress(toMint),
+    amount:String(amount),
+    slippage:'0.15',                                // ← fixed (was slippagePercent)
+    userWalletAddress:userWallet,
+    referrer:OKX_REFERRER,
+  });
   const r=await fetch('/api/okx/dex/aggregator/swap-instruction?'+p.toString(),{signal});
   const j=await r.json();
   if(j.code!=='0'||!j.data)throw new Error(j.msg||'OKX swap-instruction failed');
@@ -216,12 +229,12 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
   useEffect(()=>{if(!pubkey||!connection){setSbl(null);setSsb(null);return;}let c=false;connection.getBalance(pubkey).then(b=>{if(!c)setSbl(b);}).catch(()=>{});if(ft?.chain==='solana'&&ft.mint!==WSOL_MINT){connection.getParsedTokenAccountsByOwner(pubkey,{mint:new PublicKey(ft.mint)}).then(a=>{if(!c)setSsb(a.value.length?a.value[0].account.data.parsed.info.tokenAmount.uiAmount:0);}).catch(()=>{});}else{setSsb(null);}return()=>{c=true;};},[pubkey,connection,ft]);
   useEffect(()=>{if(ss!=='success')return;if(pubkey&&connection&&ft?.chain==='solana'){connection.getBalance(pubkey).then(setSbl).catch(()=>{});if(ft.mint!==WSOL_MINT)connection.getParsedTokenAccountsByOwner(pubkey,{mint:new PublicKey(ft.mint)}).then(a=>setSsb(a.value.length?a.value[0].account.data.parsed.info.tokenAmount.uiAmount:0)).catch(()=>{});}},[ss]);
 
-  // Price from OKX
+  // Price from OKX (for USD display only)
   useEffect(()=>{let c=false;fetchOkxPrice(ft?.mint).then(p=>{if(!c)setFp(p);});return()=>{c=true;};},[ft]);
   useEffect(()=>{let c=false;fetchOkxPrice(tt?.mint).then(p=>{if(!c)setTp(p);});return()=>{c=true;};},[tt]);
   useEffect(()=>{loadOkxSolTokens().catch(()=>{});},[]);
 
-  // ** FIX: Fetch exact quote from OKX for the pair **
+  // Corrected fetchQ – direct pair quote, no slippage parameter
   const fetchQ=useCallback(async()=>{
     setQe('');if(!fa||parseFloat(fa)<=0||tokensEqual(ft,tt)){setQ(null);if(tokensEqual(ft,tt))setQe('Cannot swap a token for itself.');return;}
     try{
@@ -231,7 +244,6 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
         fromTokenAddress:toOkxSolAddress(ft.mint),
         toTokenAddress:toOkxSolAddress(tt.mint),
         amount:raw,
-        slippagePercent:'0.15',
       }).toString();
       const r=await fetch(`/api/okx/dex/aggregator/quote?${params}`);
       const j=await r.json();
@@ -273,7 +285,7 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
   const tuv=quote&&tp>0?parseFloat(quote.outAmountDisplay)*tp:0;
   const td=quote?quote.outAmountDisplay:'0.00';
   const tc=quote?C.green:C.muted2;
-  const showBuy=ft&&/^(SOL|USDC|USDT)$/i.test(ft.symbol||'');
+  const showBuy=ft&&/^(SOL|USDC)$/i.test(ft.symbol||'');  // only these two now have quick buy
   const showSell=modeProp==='sell';
 
   return(<div style={{width:'100%',maxWidth:compact?'100%':520,margin:'0 auto'}}>
