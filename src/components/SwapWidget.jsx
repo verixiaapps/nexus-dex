@@ -311,8 +311,8 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
       const raw=toRawAmount(fa,finalFromDecimals);
       const params=new URLSearchParams({
         chainIndex:'501',
-        fromTokenAddress:toOkxSolAddress(ft.mint),
-        toTokenAddress:toOkxSolAddress(tt.mint),
+        fromTokenAddress:(ft.mint),
+        toTokenAddress:(tt.mint),
         amount:raw,
       }).toString();
 
