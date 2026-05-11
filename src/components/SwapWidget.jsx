@@ -124,6 +124,7 @@ async function fetchOkxPrice(mint){
     const j=await r.json();
     if(j.code==='0'&&j.data){
       const d=Array.isArray(j.data)?j.data[0]:j.data;
+      // USDC has 6 decimals, so divide toTokenAmount by 1e6
       const price=Number(d.toTokenAmount)/1e6;
       if(price>0){setCachedOkxPrice(mint,price);return price;}
     }
@@ -194,7 +195,7 @@ function TokenSelectModal({open,onClose,onSelect}){
 /* ===== MAIN SWAP WIDGET ===== */
 export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToToken,compact=false,mode:modeProp='swap',presets:presetsProp,onPresetsChange,onStatusChange}){
   const{publicKey:extPk,sendTransaction:extSendTx,connected:solCon}=useWallet();const{connection}=useConnection();
-  const nexus=useNexusWallet();const{activeWalletKind,privyEmbeddedSol}=nexus;
+  const nexus=useNexusWallet();const{activeWalletKind,privyEmbeddedSol,loginPrivy}=nexus;
   const pubkey=useMemo(()=>{if(extPk)return extPk;if(privyEmbeddedSol?.address){try{return new PublicKey(privyEmbeddedSol.address);}catch{return null;}}return null;},[extPk,privyEmbeddedSol]);
   const hasSol=!!(solCon||(privyEmbeddedSol&&pubkey));const wcon=!!hasSol;
 
@@ -236,7 +237,7 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
   const flip=useCallback(()=>{setFt(tt);setTt(ft);setFa('');setQ(null);setQe('');utRef.current=false;},[ft,tt]);
 
   const exec=useCallback(async()=>{
-    if(!wcon){onConnectWallet?.();return;}
+    if(!wcon){setPs(true);loginPrivy?.()||onConnectWallet?.();return;}
     setSs('loading');setSe('');setStx(null);
     try{const raw=toRawAmount(fa,ft.decimals);if(!raw||raw==='0')throw new Error('Invalid amount');
       if(!pubkey)throw new Error('Connect Solana wallet');
@@ -248,7 +249,7 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
       saveLastPair(ft,tt);setSs('success');setFa('');setQ(null);utRef.current=false;
       setTimeout(()=>{setSs('idle');setStx(null);},6000);
     }catch(e){setSe(e.message||'Swap failed');setSs('error');setTimeout(()=>{setSs('idle');setSe('');},5000);}
-  },[wcon,fa,ft,tt,pubkey,sendTx,connection,onConnectWallet]);
+  },[wcon,fa,ft,tt,pubkey,sendTx,connection,loginPrivy,onConnectWallet]);
 
   useEffect(()=>{if(wcon&&ps){setPs(false);exec();}},[wcon,ps,exec]);
 
@@ -289,7 +290,7 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
       {qe&&<div style={{marginTop:8,padding:10,background:'rgba(255,59,107,.1)',border:'1px solid rgba(255,59,107,.2)',borderRadius:8,fontSize:12,color:C.red}}>{qe}</div>}
       {quote&&fa&&<div style={{marginTop:12,background:'#050912',borderRadius:10,padding:12}}>{[['Platform fee',fuv>0?fmtUsd(fuv*PLATFORM_FEE):(PLATFORM_FEE*100)+'%'],['Anti-MEV',(SAFETY_FEE*100)+'%']].map(i=><div key={i[0]} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',fontSize:11}}><span style={{color:C.muted}}>{i[0]}</span><span style={{color:C.text}}>{i[1]}</span></div>)}</div>}
       {se&&<div style={{marginTop:10,padding:10,background:'rgba(255,59,107,.1)',border:'1px solid rgba(255,59,107,.3)',borderRadius:8,fontSize:12,color:C.red}}>{se}</div>}
-      {!wcon?<button onClick={()=>onConnectWallet?.()} style={{width:'100%',marginTop:14,padding:16,borderRadius:12,border:'none',background:'linear-gradient(135deg,#9945ff,#7c3aed)',color:'#fff',fontFamily:'Syne, sans-serif',fontWeight:800,fontSize:15,cursor:'pointer',minHeight:52}}>Sign in to Swap</button>
+      {!wcon?<button onClick={()=>{setPs(true);loginPrivy?.()||onConnectWallet?.();}} style={{width:'100%',marginTop:14,padding:16,borderRadius:12,border:'none',background:'linear-gradient(135deg,#9945ff,#7c3aed)',color:'#fff',fontFamily:'Syne, sans-serif',fontWeight:800,fontSize:15,cursor:'pointer',minHeight:52}}>Sign in to Swap</button>
       :<button onClick={exec} disabled={ss==='loading'||!fa} style={{width:'100%',marginTop:14,padding:16,borderRadius:12,border:'none',background:ss==='success'?'linear-gradient(135deg,#00ffa3,#00b36b)':ss==='error'?'rgba(255,59,107,.2)':!fa?C.card2:C.buyGrad,color:!fa?C.muted2:'#fff',fontFamily:'Syne, sans-serif',fontWeight:800,fontSize:15,cursor:ss==='loading'?'not-allowed':'pointer',minHeight:52}}>{ss==='loading'?'Confirming...':ss==='success'?'Done!':ss==='error'?'Retry':!fa?'Enter amount':'Swap '+(ft?.symbol||'')+' \u2192 '+(tt?.symbol||'')}</button>}
       {stx&&ss==='success'&&txLink&&<a href={txLink} target="_blank" rel="noreferrer" style={{display:'block',textAlign:'center',marginTop:10,fontSize:12,color:C.accent}}>View transaction</a>}
       <p style={{textAlign:'center',fontSize:10,color:C.muted2,marginTop:10}}>Non-custodial \u00b7 Powered by OKX DEX</p>
