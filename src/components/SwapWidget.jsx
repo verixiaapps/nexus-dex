@@ -1,14 +1,6 @@
 /**
  * NEXUS DEX - Unified Swap Widget (OKX DEX edition)
- *
- * Swap engine: OKX DEX API — Solana only
- * Price data: OKX quote endpoint
- * Token search: OKX token list
- * OKX referrer tag added to all OKX requests.
- * Fees injected server-side in server.js.
- * Max slippage: 15% Solana (OKX routes at best price).
  */
- 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
@@ -25,9 +17,10 @@ const TOTAL_FEE    = PLATFORM_FEE + SAFETY_FEE;
 const OKX_SOL_NATIVE = '11111111111111111111111111111111';
 const WSOL_MINT  = 'So11111111111111111111111111111111111111112';
 const USDC_SOLANA = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const USDT_SOLANA = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
 const SOL_RESERVE_LAMPORTS = 5_000_000;
 const QUOTE_DEBOUNCE_MS = 250;
-const OKX_PRICE_CACHE_MS = 60_000;
+const OKX_PRICE_CACHE_MS = 15_000;
 
 const DEFAULT_BUY_PRESETS  = [25,50,100,250,500];
 const DEFAULT_SELL_PRESETS = [50,100];
@@ -39,15 +32,17 @@ const C = { bg:'#03060f',card:'#080d1a',card2:'#0c1220',card3:'#111d30',border:'
 const POPULAR_TOKENS = [
   { mint:WSOL_MINT,symbol:'SOL',name:'Solana',decimals:9,chain:'solana',logoURI:'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png'},
   { mint:USDC_SOLANA,symbol:'USDC',name:'USD Coin',decimals:6,chain:'solana',logoURI:'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png'},
-  { mint:'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',symbol:'USDT',name:'Tether',decimals:6,chain:'solana'},
+  { mint:USDT_SOLANA,symbol:'USDT',name:'Tether',decimals:6,chain:'solana'},
   { mint:'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',symbol:'JUP',name:'Jupiter',decimals:6,chain:'solana'},
   { mint:'DezXAZ8z7PnrnRJjz3wXBoRgixCa6BFrR4Jfrj6z7m9',symbol:'BONK',name:'Bonk',decimals:5,chain:'solana'},
 ];
 
+const isStable = (mint) => mint === USDC_SOLANA || mint === USDT_SOLANA;
+
 function safeBigInt(v){if(v==null)return BigInt(0);if(typeof v==='bigint')return v;if(typeof v==='number')return Number.isFinite(v)?BigInt(Math.trunc(v)):BigInt(0);let s=String(v).trim();if(!s)return BigInt(0);if(/^-?0x[0-9a-f]+$/i.test(s))return BigInt(s);if(/^-?\d+$/.test(s))return BigInt(s);const n=Number(s);return Number.isFinite(n)?BigInt(Math.trunc(n)):BigInt(0);}
 function tokensEqual(a,b){if(!a||!b)return false;if(a.chain==='solana'&&b.chain==='solana')return a.mint===b.mint;return false;}
 function fmtUsd(n,d=2){if(n==null||isNaN(n))return'-';const v=Number(n);if(v>=1e9)return'$'+(v/1e9).toFixed(2)+'B';if(v>=1e6)return'$'+(v/1e6).toFixed(2)+'M';if(v>=1000)return'$'+v.toLocaleString('en-US',{maximumFractionDigits:d});if(v>=1)return'$'+v.toFixed(d);if(v>0)return'$'+v.toFixed(6);return'$0.00';}
-function fmtTokenAmount(n,d=4){if(n==null||isNaN(n))return'0';const v=Number(n);if(v>=1e9)return(v/1e9).toFixed(2)+'B';if(v>=1e6)return(v/1e6).toFixed(2)+'M';if(v>=1000)return v.toLocaleString('en-US',{maximumFractionDigits:2});return v.toFixed(d);}
+function fmtTokenAmount(n,d){if(n==null||isNaN(n))return'0';const v=Number(n);if(d!=null)return v.toFixed(d);if(v>=1e9)return(v/1e9).toFixed(2)+'B';if(v>=1e6)return(v/1e6).toFixed(2)+'M';if(v>=1000)return v.toLocaleString('en-US',{maximumFractionDigits:2});if(v>=1)return v.toFixed(4);if(v>=0.001)return v.toFixed(6);return v.toFixed(10);}
 function shortAddr(a,h=4,t=4){if(!a||a.length<h+t)return a||'';return a.slice(0,h)+'\u2026'+a.slice(-t);}
 function isValidSolMint(s){return!!s&&s.length>=32&&s.length<=44&&/^[1-9A-HJ-NP-Za-km-z]+$/.test(s);}
 function toRawAmount(s,dec){if(!s||dec==null)return'0';let v=String(s).trim().replace(/,/g,'.').replace(/^\+/,'');if(!v||v.startsWith('-'))return'0';if(/e/i.test(v)){const n=Number(v);if(!Number.isFinite(n)||n<0)return'0';v=n.toFixed(Math.max(Number(dec)||0,20));}const d=Math.floor(Number(dec));if(!Number.isFinite(d)||d<0||d>18)return'0';const[w,f='']=v.split('.');const sw=(w||'0').replace(/[^\d]/g,'').replace(/^0+(?=\d)/,'')||'0';const ft=(f||'').replace(/[^\d]/g,'').slice(0,d);const fp=(ft+'0'.repeat(d)).slice(0,d)||'0';try{return(BigInt(sw)*(10n**BigInt(d))+BigInt(fp)).toString();}catch{return'0';}}
@@ -67,7 +62,6 @@ function defaultTokenPair({mode,viewedToken,lastFromToken,walletState}){
 function pickRoute(){return'okx-sol';}
 function toOkxSolAddress(m){return m===WSOL_MINT?OKX_SOL_NATIVE:m;}
 
-// ---------- OKX token list (with decimals) ----------
 let _okxCache=null;let _okxLoading=null;
 function loadOkxSolTokens(){
   if(_okxCache)return Promise.resolve(_okxCache);
@@ -89,50 +83,33 @@ function loadOkxSolTokens(){
 function getTokenDecimals(mint){
   if(!mint)return 6;
   if(mint===WSOL_MINT||mint===OKX_SOL_NATIVE)return 9;
+  if(isStable(mint))return 6;
   const found=POPULAR_TOKENS.find(t=>t.mint===mint);
   if(found)return found.decimals;
-  if(_okxCache){
-    const okx=_okxCache.find(t=>t.mint===mint);
-    if(okx)return okx.decimals;
-  }
+  if(_okxCache){const okx=_okxCache.find(t=>t.mint===mint);if(okx)return okx.decimals;}
   return 6;
 }
 
-// ---------- OKX price cache ----------
-const _okxPriceCache=new Map();
-function getCachedOkxPrice(mint){
-  const e=_okxPriceCache.get(mint);
-  if(!e)return null;
-  if(Date.now()-e.ts>OKX_PRICE_CACHE_MS){_okxPriceCache.delete(mint);return null;}
-  return e.price;
-}
-function setCachedOkxPrice(mint,price){
-  if(!mint||price<=0)return;
-  _okxPriceCache.set(mint,{price,ts:Date.now()});
-}
-
-async function fetchOkxPrice(mint){
+const _priceCache=new Map();
+async function fetchOkxPrice(mint, tokenDecimals){
   if(!mint)return null;
-  const cached=getCachedOkxPrice(mint);
-  if(cached!=null)return cached;
-  
-  const decimals=getTokenDecimals(mint);
-  const amount=Math.pow(10,decimals).toString();
-  
+  const dec = tokenDecimals || getTokenDecimals(mint);
+  const cacheKey = mint + '_' + dec;
+  const cached=_priceCache.get(cacheKey);
+  if(cached&&Date.now()-cached.ts<OKX_PRICE_CACHE_MS)return cached.price;
   try{
+    const amount=Math.pow(10,Math.min(dec,9)).toString();
     const r=await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=${USDC_SOLANA}&amount=${amount}`);
     const j=await r.json();
     if(j.code==='0'&&j.data){
       const d=Array.isArray(j.data)?j.data[0]:j.data;
-      // USDC has 6 decimals, so divide toTokenAmount by 1e6
       const price=Number(d.toTokenAmount)/1e6;
-      if(price>0){setCachedOkxPrice(mint,price);return price;}
+      if(price>0){_priceCache.set(cacheKey,{price,ts:Date.now()});return price;}
     }
   }catch{}
   return null;
 }
 
-// ---------- OKX swap ----------
 async function fetchOkxSolSwap({fromMint,toMint,amount,userWallet,signal}){
   const p=new URLSearchParams({chainIndex:'501',fromTokenAddress:toOkxSolAddress(fromMint),toTokenAddress:toOkxSolAddress(toMint),amount:String(amount),slippagePercent:'0.15',userWalletAddress:userWallet,referrer:OKX_REFERRER});
   const r=await fetch('/api/okx/dex/aggregator/swap-instruction?'+p.toString(),{signal});
@@ -195,7 +172,7 @@ function TokenSelectModal({open,onClose,onSelect}){
 /* ===== MAIN SWAP WIDGET ===== */
 export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToToken,compact=false,mode:modeProp='swap',presets:presetsProp,onPresetsChange,onStatusChange}){
   const{publicKey:extPk,sendTransaction:extSendTx,connected:solCon}=useWallet();const{connection}=useConnection();
-  const nexus=useNexusWallet();const{activeWalletKind,privyEmbeddedSol,loginPrivy}=nexus;
+  const nexus=useNexusWallet();const{activeWalletKind,privyEmbeddedSol}=nexus;
   const pubkey=useMemo(()=>{if(extPk)return extPk;if(privyEmbeddedSol?.address){try{return new PublicKey(privyEmbeddedSol.address);}catch{return null;}}return null;},[extPk,privyEmbeddedSol]);
   const hasSol=!!(solCon||(privyEmbeddedSol&&pubkey));const wcon=!!hasSol;
 
@@ -216,9 +193,8 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
   useEffect(()=>{if(!pubkey||!connection){setSbl(null);setSsb(null);return;}let c=false;connection.getBalance(pubkey).then(b=>{if(!c)setSbl(b);}).catch(()=>{});if(ft?.chain==='solana'&&ft.mint!==WSOL_MINT){connection.getParsedTokenAccountsByOwner(pubkey,{mint:new PublicKey(ft.mint)}).then(a=>{if(!c)setSsb(a.value.length?a.value[0].account.data.parsed.info.tokenAmount.uiAmount:0);}).catch(()=>{});}else{setSsb(null);}return()=>{c=true;};},[pubkey,connection,ft]);
   useEffect(()=>{if(ss!=='success')return;if(pubkey&&connection&&ft?.chain==='solana'){connection.getBalance(pubkey).then(setSbl).catch(()=>{});if(ft.mint!==WSOL_MINT)connection.getParsedTokenAccountsByOwner(pubkey,{mint:new PublicKey(ft.mint)}).then(a=>setSsb(a.value.length?a.value[0].account.data.parsed.info.tokenAmount.uiAmount:0)).catch(()=>{});}},[ss]);
 
-  // Price from OKX
-  useEffect(()=>{let c=false;fetchOkxPrice(ft?.mint).then(p=>{if(!c)setFp(p);});return()=>{c=true;};},[ft]);
-  useEffect(()=>{let c=false;fetchOkxPrice(tt?.mint).then(p=>{if(!c)setTp(p);});return()=>{c=true;};},[tt]);
+  useEffect(()=>{let c=false;if(isStable(ft?.mint)){setFp(1);return;}fetchOkxPrice(ft?.mint,ft?.decimals).then(p=>{if(!c)setFp(p);});return()=>{c=true;};},[ft]);
+  useEffect(()=>{let c=false;if(isStable(tt?.mint)){setTp(1);return;}fetchOkxPrice(tt?.mint,tt?.decimals).then(p=>{if(!c)setTp(p);});return()=>{c=true;};},[tt]);
   useEffect(()=>{loadOkxSolTokens().catch(()=>{});},[]);
 
   const fetchQ=useCallback(async()=>{
@@ -237,7 +213,7 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
   const flip=useCallback(()=>{setFt(tt);setTt(ft);setFa('');setQ(null);setQe('');utRef.current=false;},[ft,tt]);
 
   const exec=useCallback(async()=>{
-    if(!wcon){setPs(true);loginPrivy?.()||onConnectWallet?.();return;}
+    if(!wcon){onConnectWallet?.();return;}
     setSs('loading');setSe('');setStx(null);
     try{const raw=toRawAmount(fa,ft.decimals);if(!raw||raw==='0')throw new Error('Invalid amount');
       if(!pubkey)throw new Error('Connect Solana wallet');
@@ -249,7 +225,7 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
       saveLastPair(ft,tt);setSs('success');setFa('');setQ(null);utRef.current=false;
       setTimeout(()=>{setSs('idle');setStx(null);},6000);
     }catch(e){setSe(e.message||'Swap failed');setSs('error');setTimeout(()=>{setSs('idle');setSe('');},5000);}
-  },[wcon,fa,ft,tt,pubkey,sendTx,connection,loginPrivy,onConnectWallet]);
+  },[wcon,fa,ft,tt,pubkey,sendTx,connection,onConnectWallet]);
 
   useEffect(()=>{if(wcon&&ps){setPs(false);exec();}},[wcon,ps,exec]);
 
@@ -266,7 +242,6 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
     <div style={{background:compact?'transparent':C.card,border:compact?'none':'1px solid '+C.border,borderRadius:compact?0:18,padding:compact?0:18}}>
       {showBuy&&<div style={{marginBottom:8}}><div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:6}}>QUICK BUY</div><div style={{display:'flex',gap:5}}>{presets.buy.map((a,i)=><button key={i} onClick={()=>applyB(a)} style={{flex:1,padding:'10px 4px',borderRadius:8,border:'1px solid '+C.border,background:C.card2,color:C.muted,fontWeight:700,fontSize:12,cursor:'pointer',fontFamily:'Syne, sans-serif',minHeight:40}}>${a}</button>)}</div></div>}
       {showSell&&fbd>0&&<div style={{marginBottom:8}}><div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:6}}>QUICK SELL</div><div style={{display:'flex',gap:5}}>{presets.sell.map((p,i)=><button key={i} onClick={()=>applyS(p)} style={{flex:1,padding:'10px 4px',borderRadius:8,border:'1px solid '+C.border,background:C.card2,color:C.muted,fontWeight:700,fontSize:12,cursor:'pointer',fontFamily:'Syne, sans-serif',minHeight:40}}>{p===100?'MAX':p+'%'}</button>)}</div></div>}
-      {/* YOU PAY */}
       <div style={{background:C.card2,borderRadius:12,padding:14,border:'1px solid '+C.border,marginBottom:4}}>
         <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}><span style={{fontSize:11,color:C.muted}}>YOU PAY</span>{fbd!=null&&<span style={{fontSize:11,color:C.muted}}>Balance: <span style={{color:C.text}}>{fmtTokenAmount(fbd)}</span></span>}</div>
         <div style={{display:'flex',alignItems:'center',gap:8}}>
@@ -276,9 +251,7 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
         </div>
         {fuv>0&&<div style={{textAlign:'right',marginTop:5,fontSize:11,color:C.muted}}>{fmtUsd(fuv)}</div>}
       </div>
-      {/* FLIP */}
       <div style={{display:'flex',justifyContent:'center',margin:'8px 0'}}><button onClick={flip} style={{width:40,height:40,borderRadius:10,background:C.card3,border:'1px solid '+C.border,cursor:'pointer',color:C.accent,fontSize:14,display:'flex',alignItems:'center',justifyContent:'center'}}>{'\u21F5'}</button></div>
-      {/* YOU RECEIVE */}
       <div style={{background:C.card2,borderRadius:12,padding:14,border:'1px solid '+C.border}}>
         <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}><span style={{fontSize:11,color:C.muted}}>YOU RECEIVE</span></div>
         <div style={{display:'flex',alignItems:'center',gap:8}}>
@@ -290,10 +263,10 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
       {qe&&<div style={{marginTop:8,padding:10,background:'rgba(255,59,107,.1)',border:'1px solid rgba(255,59,107,.2)',borderRadius:8,fontSize:12,color:C.red}}>{qe}</div>}
       {quote&&fa&&<div style={{marginTop:12,background:'#050912',borderRadius:10,padding:12}}>{[['Platform fee',fuv>0?fmtUsd(fuv*PLATFORM_FEE):(PLATFORM_FEE*100)+'%'],['Anti-MEV',(SAFETY_FEE*100)+'%']].map(i=><div key={i[0]} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',fontSize:11}}><span style={{color:C.muted}}>{i[0]}</span><span style={{color:C.text}}>{i[1]}</span></div>)}</div>}
       {se&&<div style={{marginTop:10,padding:10,background:'rgba(255,59,107,.1)',border:'1px solid rgba(255,59,107,.3)',borderRadius:8,fontSize:12,color:C.red}}>{se}</div>}
-      {!wcon?<button onClick={()=>{setPs(true);loginPrivy?.()||onConnectWallet?.();}} style={{width:'100%',marginTop:14,padding:16,borderRadius:12,border:'none',background:'linear-gradient(135deg,#9945ff,#7c3aed)',color:'#fff',fontFamily:'Syne, sans-serif',fontWeight:800,fontSize:15,cursor:'pointer',minHeight:52}}>Sign in to Swap</button>
+      {!wcon?<button onClick={()=>onConnectWallet?.()} style={{width:'100%',marginTop:14,padding:16,borderRadius:12,border:'none',background:'linear-gradient(135deg,#9945ff,#7c3aed)',color:'#fff',fontFamily:'Syne, sans-serif',fontWeight:800,fontSize:15,cursor:'pointer',minHeight:52}}>Sign in to Swap</button>
       :<button onClick={exec} disabled={ss==='loading'||!fa} style={{width:'100%',marginTop:14,padding:16,borderRadius:12,border:'none',background:ss==='success'?'linear-gradient(135deg,#00ffa3,#00b36b)':ss==='error'?'rgba(255,59,107,.2)':!fa?C.card2:C.buyGrad,color:!fa?C.muted2:'#fff',fontFamily:'Syne, sans-serif',fontWeight:800,fontSize:15,cursor:ss==='loading'?'not-allowed':'pointer',minHeight:52}}>{ss==='loading'?'Confirming...':ss==='success'?'Done!':ss==='error'?'Retry':!fa?'Enter amount':'Swap '+(ft?.symbol||'')+' \u2192 '+(tt?.symbol||'')}</button>}
       {stx&&ss==='success'&&txLink&&<a href={txLink} target="_blank" rel="noreferrer" style={{display:'block',textAlign:'center',marginTop:10,fontSize:12,color:C.accent}}>View transaction</a>}
-      <p style={{textAlign:'center',fontSize:10,color:C.muted2,marginTop:10}}>Non-custodial \u00b7 Powered by OKX DEX</p>
+      <p style={{textAlign:'center',fontSize:10,color:C.muted2,marginTop:10}}>Non-custodial \ Powered by OKX DEX</p>
     </div>
     <TokenSelectModal open={fso} onClose={()=>setFso(false)} onSelect={t=>{setFt(t);setQ(null);setQe('');}}/>
     <TokenSelectModal open={tso} onClose={()=>setTso(false)} onSelect={t=>{setTt(t);setQ(null);setQe('');}}/>
