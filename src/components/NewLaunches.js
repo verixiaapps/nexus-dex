@@ -3,7 +3,7 @@
  * 
  * Live feed: PumpPortal WebSocket (instant token discovery)
  * Data backfill: DexScreener (price, market cap, volume, liquidity, 24h change)
- * Filters: $5K min market cap, 60s min age, liquidity > $0
+ * Filters: 60s min age, liquidity > $0, DexScreener backfill required
  * Trades: pumpTrade.js -> /api/pumpportal/trade-local
  * SOL price: OKX quote (fetched independently)
  */
@@ -16,7 +16,6 @@ import { quickBuyPump, quickSellPump, PLATFORM_FEE_RATE } from '../pumpTrade.js'
 
 const PUMPPORTAL_WS = 'wss://pumpportal.fun/api/data';
 const MAX_TOKENS = 100;
-const MIN_MARKET_CAP = 5000;
 const MIN_AGE_MS = 60000;
 
 const C = {
@@ -56,7 +55,6 @@ function pctFmt(n) {
   return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 
-// SOL price cache
 let _solCache = null;
 async function getSolPrice() {
   if (_solCache && Date.now() - _solCache.ts < 30000) return _solCache.price;
@@ -72,7 +70,6 @@ async function getSolPrice() {
   return _solCache?.price || 0;
 }
 
-// DexScreener backfill
 async function backfillDsData(mint) {
   if (!mint) return null;
   try {
@@ -80,12 +77,11 @@ async function backfillDsData(mint) {
     const j = await r.json();
     if (j && j.pairs && j.pairs.length > 0) {
       const best = j.pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
-      const mc = Number(best.marketCap || best.fdv || 0);
       const liq = Number(best.liquidity?.usd || 0);
-      if (mc < MIN_MARKET_CAP || liq <= 0) return null;
+      if (liq <= 0) return null;
       return {
         price: Number(best.priceUsd || 0),
-        marketCap: mc,
+        marketCap: Number(best.marketCap || best.fdv || 0),
         volume24h: Number(best.volume?.h24 || 0),
         liquidity: liq,
         change24h: best.priceChange?.h24 != null ? Number(best.priceChange.h24) : null,
@@ -317,7 +313,6 @@ export default function NewLaunches({ onConnectWallet, resetKey }) {
             const t = setTimeout(() => { timers.delete(t); if (alive) setNewMints(p => { const n = new Set(p); n.delete(msg.mint); return n; }); }, 6000);
             timers.add(t);
 
-            // DexScreener backfill
             backfillDsData(msg.mint).then(data => {
               if (!alive || !data) return;
               const idx = tokensRef.current.findIndex(tk => tk.mint === msg.mint);
@@ -340,9 +335,8 @@ export default function NewLaunches({ onConnectWallet, resetKey }) {
     return () => { alive = false; if (reconnectTimer) clearTimeout(reconnectTimer); timers.forEach(t => clearTimeout(t)); if (ws) { try { ws.close(); } catch {} } };
   }, [solPrice]);
 
-  // Filter displayed tokens: must have backfill data, market cap, and liquidity
   const displayTokens = useMemo(() => {
-    return tokens.filter(t => t.hasBackfill && t.marketCap >= MIN_MARKET_CAP && t.liquidity > 0);
+    return tokens.filter(t => t.hasBackfill && t.liquidity > 0);
   }, [tokens]);
 
   const openBuyDrawer = (token, usd) => { if (!isValidMint(token?.mint)) return; setDrawerToken(token); setDrawerMode('buy'); setDrawerPresetUsd(usd && usd > 0 ? usd : null); setDrawerOpen(true); };
@@ -386,7 +380,7 @@ export default function NewLaunches({ onConnectWallet, resetKey }) {
             <span style={{ fontSize: 10, color: wsStatus === 'live' ? C.green : C.orange, fontWeight: 600 }}>{wsStatus === 'live' ? 'LIVE' : 'RECONNECTING'}</span>
           </div>
         </div>
-        <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>{displayTokens.length} tokens · min $5K mcap</p>
+        <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>{displayTokens.length} tokens tracked</p>
       </div>
       {displayTokens.length === 0 ? (
         <div style={{ textAlign: 'center', padding: 60, background: C.card, border: '1px solid ' + C.border, borderRadius: 16, color: C.muted, fontSize: 14 }}>{wsStatus === 'live' ? 'Waiting for new launches...' : 'Connecting...'}</div>
