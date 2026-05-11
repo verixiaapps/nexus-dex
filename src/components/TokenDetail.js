@@ -33,22 +33,21 @@ function pct(n) {
 // Fetch token info + price from OKX market endpoints
 async function fetchTokenData(mint) {
   if (!mint) return null;
-  const now = Math.floor(Date.now() / 1000);
-  const sevenDaysAgo = now - 7 * 86400;
 
   try {
     // 1. Price info (POST)
     const priceRes = await fetch('/api/okx/dex/market/price-info', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chainIndex: '501', tokenContractAddress: mint }),
+      body: JSON.stringify({ chainIndex: '501', tokenContractAddressList: [mint] }),
     });
     const priceJson = await priceRes.json();
+    console.log('price-info single response:', JSON.stringify(priceJson));
     let currentPrice = 0;
     let high24h = 0, low24h = 0, marketCap = 0, volume24h = 0;
     if (priceJson.code === '0' && priceJson.data) {
       const d = Array.isArray(priceJson.data) ? priceJson.data[0] : priceJson.data;
-      currentPrice = Number(d.price || d.last || 0);
+      currentPrice = Number(d.price || d.last || d.usdPrice || 0);
       high24h = Number(d.high24h || d.high || 0);
       low24h = Number(d.low24h || d.low || 0);
       marketCap = Number(d.marketCap || d.mcap || 0);
@@ -61,6 +60,7 @@ async function fetchTokenData(mint) {
     try {
       const candleRes = await fetch(`/api/okx/dex/market/candles?chainIndex=501&tokenContractAddress=${mint}&bar=1d&limit=7`);
       const candleJson = await candleRes.json();
+      console.log('candles response:', JSON.stringify(candleJson));
       if (candleJson.code === '0' && Array.isArray(candleJson.data) && candleJson.data.length > 0) {
         const candles = candleJson.data.sort((a, b) => (a.ts || a.t || 0) - (b.ts || b.t || 0));
         chartData = candles.map(c => ({
@@ -71,10 +71,13 @@ async function fetchTokenData(mint) {
         const lastPrice = parseFloat(candles[candles.length - 1].c || candles[candles.length - 1].close || 0);
         if (firstPrice > 0) change7d = ((lastPrice - firstPrice) / firstPrice) * 100;
       }
-    } catch {}
+    } catch(e) {
+      console.log('candles error:', e.message);
+    }
 
     return { currentPrice, high24h, low24h, marketCap, volume24h, chartData, change7d };
-  } catch {
+  } catch(e) {
+    console.log('fetchTokenData error:', e.message);
     return null;
   }
 }
