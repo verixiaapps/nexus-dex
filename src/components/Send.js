@@ -56,7 +56,7 @@ async function getSolTokenProgramId(connection, mintPk) {
 export default function Send({ onConnectWallet }) {
   const { publicKey: extPk, sendTransaction: extSendTx, connected: solCon } = useWallet();
   const { connection } = useConnection();
-  const { activeWalletKind, privyEmbeddedSol, loginPrivy } = useNexusWallet();
+  const { activeWalletKind, privyEmbeddedSol } = useNexusWallet();
 
   const pubkey = useMemo(() => {
     if (extPk) return extPk;
@@ -98,7 +98,7 @@ export default function Send({ onConnectWallet }) {
   }, [pubkey, connection]);
 
   const handleSend = async () => {
-    if (!hasSol) { setPendingSend(true); loginPrivy?.() || onConnectWallet?.(); return; }
+    if (!hasSol) { setPendingSend(true); onConnectWallet?.(); return; }
     if (!recipientValid) { setError('Invalid Solana address'); return; }
     if (!amountNum || amountNum <= 0) { setError('Enter a valid amount'); return; }
     setError(''); setTxSig(null); setStatus('loading');
@@ -142,7 +142,7 @@ export default function Send({ onConnectWallet }) {
         <div style={{ textAlign: 'center', padding: '60px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
           <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Connect Wallet</h2>
           <p style={{ color: C.muted, fontSize: 13, marginBottom: 24 }}>Connect your Solana wallet to send tokens.</p>
-          <button onClick={() => { loginPrivy?.() || onConnectWallet?.(); }} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect Wallet</button>
+          <button onClick={() => onConnectWallet?.()} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect Wallet</button>
         </div>
       </div>
     );
@@ -152,7 +152,6 @@ export default function Send({ onConnectWallet }) {
     <div style={{ maxWidth: 520, margin: '0 auto', width: '100%', boxSizing: 'border-box', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
       <div style={{ marginBottom: 20 }}><h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Send</h1><p style={{ color: C.muted, fontSize: 12 }}>Solana wallet-to-wallet transfers</p></div>
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20 }}>
-        {/* Token selector */}
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700 }}>TOKEN</div>
           <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -168,7 +167,6 @@ export default function Send({ onConnectWallet }) {
           </div>
         </div>
 
-        {/* Recipient */}
         <div style={{ marginBottom: 16 }}>
           <div style={{ fontSize: 11, color: C.muted, marginBottom: 8, fontWeight: 700 }}>RECIPIENT</div>
           <input value={recipient} onChange={e => setRecipient(e.target.value.trim())} placeholder="Solana wallet address..." style={{ width: '100%', background: C.card2, border: '1px solid ' + (recipient && !recipientValid ? C.red : C.border), borderRadius: 12, padding: '14px 16px', color: C.text, fontFamily: 'monospace', fontSize: 12, outline: 'none', boxSizing: 'border-box' }} />
@@ -176,7 +174,6 @@ export default function Send({ onConnectWallet }) {
           {recipient && recipientValid && <div style={{ color: C.green, fontSize: 11, marginTop: 4 }}>Valid address</div>}
         </div>
 
-        {/* Amount */}
         <div style={{ marginBottom: 16 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
             <span style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>AMOUNT</span>
@@ -195,7 +192,6 @@ export default function Send({ onConnectWallet }) {
           )}
         </div>
 
-        {/* Summary */}
         <div style={{ background: '#050912', borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 11, color: C.muted, lineHeight: 1.6 }}>
           No fee. Direct wallet-to-wallet transfer. You pay only the Solana network fee.
         </div>
