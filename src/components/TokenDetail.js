@@ -30,16 +30,16 @@ function pct(n) {
   return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
 }
 
-// Fetch token info + price from OKX market endpoints
+// Fetch token data from OKX — price-info (array body) + candles
 async function fetchTokenData(mint) {
   if (!mint) return null;
 
   try {
-    // 1. Price info (POST) — single token
+    // 1. Price info — batch format with single token
     const priceRes = await fetch('/api/okx/dex/market/price-info', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chainIndex: '501', tokenContractAddress: mint }),
+      body: JSON.stringify([{ chainIndex: '501', tokenContractAddress: mint }]),
     });
     const priceJson = await priceRes.json();
     let currentPrice = 0;
@@ -53,7 +53,7 @@ async function fetchTokenData(mint) {
       volume24h = Number(d.volume24h || d.volume || 0);
     }
 
-    // 2. 7-day candles for chart (GET) — array format
+    // 2. 7-day candles for chart
     let chartData = [];
     let change7d = 0;
     try {
