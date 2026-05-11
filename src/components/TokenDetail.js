@@ -25,9 +25,25 @@ function fmt(n, d) {
   return '$0.00';
 }
 
+function fmtMc(n) {
+  if (!n) return '-';
+  if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1000) return '$' + (n / 1000).toFixed(1) + 'K';
+  return '$' + n.toFixed(0);
+}
+
 function pct(n) {
   if (n == null || !Number.isFinite(Number(n))) return '-';
   return (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
+}
+
+function timeAgo(ts) {
+  if (!ts) return '';
+  const d = Math.floor((Date.now() - Number(ts)) / 1000);
+  if (d < 60) return d + 's';
+  if (d < 3600) return Math.floor(d / 60) + 'm';
+  return Math.floor(d / 3600) + 'h';
 }
 
 // Fetch quote price (proven GET)
@@ -51,10 +67,8 @@ async function fetchTokenData(mint, decimals) {
   if (!mint) return null;
 
   try {
-    // Quote for current price
     const currentPrice = await fetchQuotePrice(mint, decimals);
 
-    // Candles for chart + 24h high/low
     let chartData = [];
     let change7d = 0;
     let high24h = 0, low24h = 0;
@@ -95,6 +109,23 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState('buy');
 
+  // Pump data from Markets page
+  const pumpData = useMemo(() => {
+    if (!coin) return null;
+    if (coin.marketCap || coin.volume1h || coin.bondingPercent != null) {
+      return {
+        marketCap: coin.marketCap || 0,
+        volume1h: coin.volume1h || 0,
+        buys1h: coin.buys1h || 0,
+        sells1h: coin.sells1h || 0,
+        bondingPercent: coin.bondingPercent,
+        holders: coin.holders || 0,
+        createdTimestamp: coin.createdTimestamp || 0,
+      };
+    }
+    return null;
+  }, [coin]);
+
   const td = useMemo(() => {
     if (!coin) return null;
     return {
@@ -103,8 +134,8 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
       symbol: coin.symbol || '???',
       name: coin.name || coin.symbol || 'Unknown',
       decimals: coin.decimals || 6,
-      logoURI: coin.logoURI || coin.image || null,
-      image: coin.logoURI || coin.image || null,
+      logoURI: coin.logoURI || coin.image || coin.logoUrl || null,
+      image: coin.logoURI || coin.image || coin.logoUrl || null,
       current_price: tokenInfo?.currentPrice || coin?.current_price || 0,
     };
   }, [coin, tokenInfo]);
@@ -168,6 +199,22 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
     return (<div style={{ maxWidth: 640, margin: '0 auto', padding: 40, textAlign: 'center', color: C.muted, fontFamily: 'Syne, sans-serif', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}><button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 30, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontSize: 13, fontWeight: 600, padding: 0 }}>← Back to Markets</button><div style={{ fontSize: 16, marginBottom: 8 }}>Token not found</div></div>);
   }
 
+  // Build stats array — pump data takes priority, fallback to candle data
+  const stats = [];
+  if (pumpData) {
+    stats.push(['Market Cap', fmtMc(pumpData.marketCap)]);
+    stats.push(['Volume 1H', fmtMc(pumpData.volume1h)]);
+    stats.push(['Buys / Sells', pumpData.buys1h + ' / ' + pumpData.sells1h]);
+    if (pumpData.bondingPercent != null) stats.push(['Bonding', pct(pumpData.bondingPercent)]);
+    stats.push(['Holders', pumpData.holders > 0 ? pumpData.holders : '-']);
+    stats.push(['Age', timeAgo(pumpData.createdTimestamp)]);
+  }
+  if (tokenInfo) {
+    if (tokenInfo.high24h > 0) stats.push(['24H High', fmt(tokenInfo.high24h)]);
+    if (tokenInfo.low24h > 0) stats.push(['24H Low', fmt(tokenInfo.low24h)]);
+    if (tokenInfo.change7d !== 0) stats.push(['7D Change', pct(tokenInfo.change7d)]);
+  }
+
   return (
     <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box', fontFamily: 'Syne, sans-serif', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
       <button onClick={onBack} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 20, background: 'transparent', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 13, fontWeight: 600, padding: 0, fontFamily: 'Syne, sans-serif' }}>← Back to Markets</button>
@@ -199,13 +246,9 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
         </div>
       )}
 
-      {tokenInfo && (
+      {stats.length > 0 && (
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2,1fr)', gap: 8, marginBottom: 14 }}>
-          {[
-            ['24H High', fmt(tokenInfo.high24h)],
-            ['24H Low', fmt(tokenInfo.low24h)],
-            ['7D Change', pct(tokenInfo.change7d)],
-          ].map(([label, value]) => (
+          {stats.map(([label, value]) => (
             <div key={label} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 12, padding: 12 }}>
               <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginBottom: 4 }}>{label}</div>
               <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{value}</div>
