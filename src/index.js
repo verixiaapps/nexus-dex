@@ -28,7 +28,18 @@ const PRIVY_APP_ID = process.env.REACT_APP_PRIVY_APP_ID || '';
 
 const solanaWallets = [
   new PhantomWalletAdapter(),
-  new WalletConnectWalletAdapter({ network: 'mainnet-beta' }),
+  new WalletConnectWalletAdapter({
+    network: 'mainnet-beta',
+    options: {
+      projectId: process.env.REACT_APP_WALLETCONNECT_PROJECT_ID || '',
+      metadata: {
+        name: 'Nexus DEX',
+        description: 'Solana DEX powered by OKX',
+        url: 'https://swap.verixiaapps.com',
+        icons: ['https://swap.verixiaapps.com/icon-512.png'],
+      },
+    },
+  }),
 ];
 
 function onWalletError(err, adapter) {
