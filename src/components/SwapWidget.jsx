@@ -255,7 +255,7 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
   const txLink=useMemo(()=>stx?'https://solscan.io/tx/'+stx:null,[stx]);
   const fuv=fa&&fp>0?parseFloat(fa)*fp:0;
   const tuv=quote&&tp>0?parseFloat(quote.outAmountDisplay)*tp:0;
-  const td=quote?(quote.preview?'~'+quote.outAmountDisplay:quote.outAmountDisplay):(fa?'Loading...':'0.00');
+  const td=quote?(quote.preview?'~'+quote.outAmountDisplay:quote.outAmountDisplay):'0.00';
   const tc=quote?C.green:C.muted2;
   const showBuy=ft&&/^(SOL|USDC|USDT)$/i.test(ft.symbol||'');
   const showSell=modeProp==='sell';
