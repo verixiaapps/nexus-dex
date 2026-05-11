@@ -57,6 +57,35 @@ function walletModalReducer(state, action) {
   }
 }
 
+function TermsGate({ onAccept }) {
+  return (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(3,6,15,.98)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
+      <div style={{ maxWidth: 520, width: '100%', maxHeight: '90vh', overflowY: 'auto', background: '#080d1a', border: '1px solid rgba(0,229,255,.15)', borderRadius: 20, padding: 24, fontFamily: 'Syne, sans-serif' }}>
+        <div style={{ fontWeight: 800, fontSize: 18, color: '#fff', marginBottom: 4 }}>Terms of Use</div>
+        <div style={{ color: '#586994', fontSize: 11, marginBottom: 16 }}>Non-custodial · Third-party protocols · User assumes all risk</div>
+        <div style={{ fontSize: 12, color: '#cdd6f4', lineHeight: 1.6, marginBottom: 20 }}>
+          By clicking <strong>"Accept &amp; Continue"</strong> or by accessing or using Nexus DEX, you acknowledge and agree that:<br/><br/>
+          • Nexus DEX is a non-custodial software interface operated by Verixia Apps.<br/><br/>
+          • Verixia Apps does not custody funds, control wallets, execute trades, or provide financial, investment, legal, or tax advice.<br/><br/>
+          • All swaps, perpetual trades, routing, execution, liquidity, pricing, token launches, and blockchain interactions are handled by third-party protocols, aggregators, exchanges, smart contracts, and infrastructure providers.<br/><br/>
+          • All transactions are initiated, reviewed, authorized, and signed directly by users through their own wallets.<br/><br/>
+          • Digital assets, perpetual contracts, leverage, DeFi protocols, smart contracts, token launches, and related technologies involve substantial risk including loss of funds, liquidation, exploits, smart contract vulnerabilities, slippage, protocol failures, hacks, and complete loss of assets.<br/><br/>
+          • Users assume all risks associated with using Nexus DEX and any integrated third-party protocols or services.<br/><br/>
+          • Nexus DEX and Verixia Apps are provided on an "AS IS" and "AS AVAILABLE" basis without warranties of any kind.<br/><br/>
+          • To the fullest extent permitted by law, Verixia Apps and Nexus DEX expressly disclaim all liability for any damages, losses, liabilities, claims, costs, or expenses arising from or related to the use of Nexus DEX.<br/><br/>
+          • Users are solely responsible for complying with all laws and regulations applicable to their jurisdiction.<br/><br/>
+          • Users represent and warrant that they are not located in, residents of, citizens of, or otherwise subject to any restricted, prohibited, or sanctioned jurisdiction.<br/><br/>
+          • Verixia Apps reserves the right to restrict, block, suspend, terminate, or deny access at any time for any reason.<br/><br/>
+          • Users irrevocably waive any right to participate in any class action, class arbitration, representative action, consolidated proceeding, or jury trial against Verixia Apps or Nexus DEX.<br/><br/>
+          • Any dispute shall be resolved exclusively through final and binding individual arbitration.<br/><br/>
+          If you do not agree to these terms, you must discontinue use of Nexus DEX immediately.
+        </div>
+        <button onClick={onAccept} style={{ width: '100%', padding: 16, borderRadius: 14, border: 'none', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: '#03060f', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16, cursor: 'pointer' }}>Accept &amp; Continue</button>
+      </div>
+    </div>
+  );
+}
+
 function WalletModal({ open, onClose }) {
   const [mState, dispatch] = useReducer(walletModalReducer, WM_INITIAL);
   const nexus = useNexusWallet();
@@ -210,6 +239,10 @@ function AppInner() {
   const [walletModalOpen, setWalletModalOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 769);
 
+  const [termsAccepted, setTermsAccepted] = useState(() => {
+    try { return localStorage.getItem('nexus_terms_accepted') === '1'; } catch { return false; }
+  });
+
   useEffect(() => { let to; const h = () => { clearTimeout(to); to = setTimeout(() => setIsMobile(window.innerWidth < 769), 150); }; window.addEventListener('resize', h); return () => { window.removeEventListener('resize', h); clearTimeout(to); }; }, []);
   useEffect(() => { const el = document.createElement('style'); el.textContent = GLOBAL_STYLES; document.head.appendChild(el); return () => document.head.removeChild(el); }, []);
   useEffect(() => { const newTab = tabFromPathname(location.pathname); if (newTab !== tab) { setTab(newTab); if (newTab !== 'token') setSelectedToken(null); } }, [location.pathname, tab]);
@@ -226,6 +259,10 @@ function AppInner() {
   const sharedProps = { isConnected: wallet.isConnected, solConnected: wallet.solConnected, walletAddress: wallet.walletAddress, publicKey: wallet.publicKey, activeWalletKind: wallet.activeWalletKind, privyAuthenticated: wallet.privyAuthenticated, privyEmbeddedSol: wallet.privyEmbeddedSol, onConnectWallet: openWallet };
   const displayAddress = wallet.walletAddress ? wallet.walletAddress.slice(0, 4) + '...' + wallet.walletAddress.slice(-4) : null;
   const activeTab = getActiveTab(tab);
+
+  if (!termsAccepted) {
+    return <TermsGate onAccept={() => { try { localStorage.setItem('nexus_terms_accepted', '1'); } catch {} setTermsAccepted(true); }} />;
+  }
 
   return (
     <div style={{ minHeight: '100dvh', background: C.bg, color: C.text, fontFamily: 'Syne, sans-serif', overscrollBehavior: 'none', overflowX: 'hidden', width: '100%' }}>
