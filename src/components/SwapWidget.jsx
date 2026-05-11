@@ -98,7 +98,7 @@ function getTokenDecimals(mint){
     const okx=_okxCache.find(t=>t.mint===mint);
     if(okx)return okx.decimals;
   }
-  return 6;
+  return null;
 }
 
 // ---------- OKX price cache (USD display only) ----------
@@ -114,14 +114,16 @@ function setCachedOkxPrice(mint,price){
   _okxPriceCache.set(mint,{price,ts:Date.now()});
 }
 
-async function fetchOkxPrice(mint){
-  if(!mint)return null;
+async function fetchOkxPrice(token){
+  if(!token?.mint)return null;
+
+  const mint = token.mint;
   // USDC is $1 – no API call needed
   if(mint===USDC_SOLANA)return 1;
   const cached=getCachedOkxPrice(mint);
   if(cached!=null)return cached;
   
-  const decimals=getTokenDecimals(mint);
+  const decimals = Number(token.decimals ?? getTokenDecimals(mint));
   const amount=Math.pow(10,decimals).toString();
   
   try{
