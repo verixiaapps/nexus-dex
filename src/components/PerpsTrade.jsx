@@ -170,45 +170,13 @@ async function fetchMarketData() {
       }
     }
 
-    const now = Math.floor(Date.now() / 1000);
-    const dayAgo = now - 86400;
-    const changeMap = {};
-
-    const candleResults = await Promise.allSettled(
-      PERPS_PAIRS.map(p =>
-        hlRequest({
-          type: 'candleSnapshot',
-          req: {
-            coin: p.id,
-            interval: '1h',
-            startTime: dayAgo,
-            endTime: now,
-          },
-        })
-      )
-    );
-
-    PERPS_PAIRS.forEach((p, i) => {
-      const result = candleResults[i];
-      if (result.status === 'fulfilled' && Array.isArray(result.value) && result.value.length > 0) {
-        const candles = result.value;
-        const first = candles[0];
-        const last = candles[candles.length - 1];
-        const openPrice = parseFloat(first.o || first.open || 0);
-        const closePrice = parseFloat(last.c || last.close || 0);
-        if (openPrice > 0) {
-          changeMap[p.id] = ((closePrice - openPrice) / openPrice) * 100;
-        }
-      }
-    });
-
     return PERPS_PAIRS.map(p => {
       const info = universe.find(u => u.name === p.id);
       const price = priceMap[p.id] || 0;
       return {
         ...p,
         price,
-        change: changeMap[p.id] != null ? changeMap[p.id] : 0,
+        change: 0,
         leverage: info ? Math.min(info.maxLeverage, p.leverage) : p.leverage,
       };
     });
@@ -688,7 +656,14 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
 /*  PerpsTrade (main page)                                            */
 /* ================================================================== */
 export default function PerpsTrade({ onConnectWallet }) {
-  const [marketData, setMarketData] = useState(PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0 })));
+  const [marketData, setMarketData] = useState(() => {
+    try {
+      const cached = localStorage.getItem('nexus_perps_cache');
+      return cached ? JSON.parse(cached) : PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0 }));
+    } catch {
+      return PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0 }));
+    }
+  });
   const [activePair, setActivePair] = useState(marketData[0]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [mockPosition, setMockPosition] = useState(null);
@@ -707,10 +682,13 @@ export default function PerpsTrade({ onConnectWallet }) {
     let alive = true;
     const poll = async () => {
       const data = await fetchMarketData();
-      if (alive) setMarketData(data);
+      if (alive) {
+        setMarketData(data);
+        try { localStorage.setItem('nexus_perps_cache', JSON.stringify(data)); } catch {}
+      }
     };
     poll();
-    const interval = setInterval(poll, 5000);
+    const interval = setInterval(poll, 3000);
     return () => { alive = false; clearInterval(interval); };
   }, []);
 
