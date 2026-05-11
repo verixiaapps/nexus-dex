@@ -375,4 +375,3 @@ export function TradeDrawer({open,onClose,mode='buy',coin,onConnectWallet,preset
       </div>
     </div></>);
 }
-```
