@@ -35,14 +35,13 @@ async function fetchTokenData(mint) {
   if (!mint) return null;
 
   try {
-    // 1. Price info (POST)
+    // 1. Price info (POST) — single token
     const priceRes = await fetch('/api/okx/dex/market/price-info', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chainIndex: '501', tokenContractAddressList: [mint] }),
+      body: JSON.stringify({ chainIndex: '501', tokenContractAddress: mint }),
     });
     const priceJson = await priceRes.json();
-    console.log('price-info single response:', JSON.stringify(priceJson));
     let currentPrice = 0;
     let high24h = 0, low24h = 0, marketCap = 0, volume24h = 0;
     if (priceJson.code === '0' && priceJson.data) {
@@ -54,30 +53,26 @@ async function fetchTokenData(mint) {
       volume24h = Number(d.volume24h || d.volume || 0);
     }
 
-    // 2. 7-day candles for chart (GET)
+    // 2. 7-day candles for chart (GET) — array format
     let chartData = [];
     let change7d = 0;
     try {
-      const candleRes = await fetch(`/api/okx/dex/market/candles?chainIndex=501&tokenContractAddress=${mint}&bar=1d&limit=7`);
+      const candleRes = await fetch(`/api/okx/dex/market/candles?chainIndex=501&tokenContractAddress=${mint}&interval=1d&limit=7`);
       const candleJson = await candleRes.json();
-      console.log('candles response:', JSON.stringify(candleJson));
       if (candleJson.code === '0' && Array.isArray(candleJson.data) && candleJson.data.length > 0) {
-        const candles = candleJson.data.sort((a, b) => (a.ts || a.t || 0) - (b.ts || b.t || 0));
+        const candles = candleJson.data.sort((a, b) => a[0] - b[0]);
         chartData = candles.map(c => ({
-          time: new Date((c.ts || c.t || 0)).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-          price: parseFloat(c.c || c.close || 0),
+          time: new Date(Number(c[0])).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+          price: parseFloat(c[4]),
         }));
-        const firstPrice = parseFloat(candles[0].o || candles[0].open || 0);
-        const lastPrice = parseFloat(candles[candles.length - 1].c || candles[candles.length - 1].close || 0);
+        const firstPrice = parseFloat(candles[0][1]);
+        const lastPrice = parseFloat(candles[candles.length - 1][4]);
         if (firstPrice > 0) change7d = ((lastPrice - firstPrice) / firstPrice) * 100;
       }
-    } catch(e) {
-      console.log('candles error:', e.message);
-    }
+    } catch(e) {}
 
     return { currentPrice, high24h, low24h, marketCap, volume24h, chartData, change7d };
-  } catch(e) {
-    console.log('fetchTokenData error:', e.message);
+  } catch {
     return null;
   }
 }
