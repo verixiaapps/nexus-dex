@@ -43,7 +43,7 @@ function isPumpToken(token) {
 
 export default function InstantTrade({ token, solPrice, tokenBalance, tokenDecimals, onConnectWallet, onOpenDrawer, onTradeComplete, compact = false }) {
   const { connection } = useConnection();
-  const { isConnected, activeWalletKind, privyEmbeddedSol, publicKey, loginPrivy } = useNexusWallet();
+  const { isConnected, activeWalletKind, privyEmbeddedSol, publicKey } = useNexusWallet();
 
   const [pendingPreset, setPendingPreset] = useState(null);
   const [errorMsg, setErrorMsg] = useState('');
@@ -68,7 +68,7 @@ export default function InstantTrade({ token, solPrice, tokenBalance, tokenDecim
 
   const handleBuy = useCallback(async (usdAmount) => {
     if (pendingPreset) return;
-    if (!isConnected) { loginPrivy?.() || onConnectWallet?.(); return; }
+    if (!isConnected) { onConnectWallet?.(); return; }
     if (!isPrivy) { onOpenDrawer?.('buy', { presetUsd: usdAmount }); return; }
     if (!solPrice || solPrice <= 0) { showError('Loading price, try again', 2500); return; }
 
@@ -84,11 +84,11 @@ export default function InstantTrade({ token, solPrice, tokenBalance, tokenDecim
       const raw = e?.message || 'Trade failed';
       if (!/reject|cancel|denied|user/i.test(raw)) showError(raw.length > 60 ? raw.slice(0, 60) + '...' : raw, 4000);
     } finally { setPendingPreset(null); }
-  }, [pendingPreset, isConnected, isPrivy, solPrice, token, publicKey, connection, privyEmbeddedSol, onConnectWallet, onOpenDrawer, onTradeComplete, loginPrivy, usePumpRoute, showError]);
+  }, [pendingPreset, isConnected, isPrivy, solPrice, token, publicKey, connection, privyEmbeddedSol, onConnectWallet, onOpenDrawer, onTradeComplete, usePumpRoute, showError]);
 
   const handleSell = useCallback(async (pct) => {
     if (pendingPreset) return;
-    if (!isConnected) { loginPrivy?.() || onConnectWallet?.(); return; }
+    if (!isConnected) { onConnectWallet?.(); return; }
     if (!isPrivy) { onOpenDrawer?.('sell', { presetPct: pct }); return; }
     if (!tokenBalance || tokenBalance <= 0) { showError('No balance to sell', 2500); return; }
 
@@ -104,7 +104,7 @@ export default function InstantTrade({ token, solPrice, tokenBalance, tokenDecim
       const raw = e?.message || 'Trade failed';
       if (!/reject|cancel|denied|user/i.test(raw)) showError(raw.length > 60 ? raw.slice(0, 60) + '...' : raw, 4000);
     } finally { setPendingPreset(null); }
-  }, [pendingPreset, isConnected, isPrivy, tokenBalance, tokenDecimals, token, solPrice, publicKey, connection, privyEmbeddedSol, onConnectWallet, onOpenDrawer, onTradeComplete, loginPrivy, usePumpRoute, showError]);
+  }, [pendingPreset, isConnected, isPrivy, tokenBalance, tokenDecimals, token, solPrice, publicKey, connection, privyEmbeddedSol, onConnectWallet, onOpenDrawer, onTradeComplete, usePumpRoute, showError]);
 
   if (!token) return null;
   const showSell = !!(tokenBalance && tokenBalance > 0) && !compact;
@@ -160,7 +160,7 @@ export default function InstantTrade({ token, solPrice, tokenBalance, tokenDecim
         <>
           {!isConnected && <div style={{ marginTop: 10, fontSize: 11, color: C.muted, textAlign: 'center' }}>Connect a wallet to trade.</div>}
           {isConnected && !isPrivy && (
-            <button onClick={() => loginPrivy?.()} style={{ width: '100%', marginTop: 10, padding: '10px 12px', borderRadius: 10, background: 'rgba(168,85,247,.08)', border: '1px solid rgba(168,85,247,.30)', color: C.privy, fontFamily: 'Syne, sans-serif', fontSize: 11, fontWeight: 700, cursor: loginPrivy ? 'pointer' : 'default', textAlign: 'center', minHeight: 40 }}>
+            <button onClick={() => onConnectWallet?.()} style={{ width: '100%', marginTop: 10, padding: '10px 12px', borderRadius: 10, background: 'rgba(168,85,247,.08)', border: '1px solid rgba(168,85,247,.30)', color: C.privy, fontFamily: 'Syne, sans-serif', fontSize: 11, fontWeight: 700, cursor: 'pointer', textAlign: 'center', minHeight: 40 }}>
               Sign in with email for instant trades
             </button>
           )}
