@@ -293,6 +293,8 @@ const OKX_ALLOWED_ENDPOINTS = new Set([
   '/dex/market/token/basic-info',
   '/dex/market/candles',
   '/dex/market/price-info',
+  '/dex/market/memepump/tokenList',
+  '/dex/market/memepump/tokenDetails',
 ]);
 function injectOkxFee(params) {
   if (OKX_FEE_WALLET_SOL && OKX_SOL_FEE_PCT) {
