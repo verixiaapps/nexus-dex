@@ -20,7 +20,7 @@ const USDC_SOLANA = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const USDT_SOLANA = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
 const SOL_RESERVE_LAMPORTS = 5_000_000;
 const QUOTE_DEBOUNCE_MS = 250;
-const OKX_PRICE_CACHE_MS = 60_000;
+const OKX_PRICE_CACHE_MS = 15_000;
 
 const DEFAULT_BUY_PRESETS  = [25,50,100,250,500];
 const DEFAULT_SELL_PRESETS = [50,100];
@@ -91,22 +91,20 @@ function getTokenDecimals(mint){
 }
 
 const _priceCache=new Map();
-function getCachedPrice(mint){const e=_priceCache.get(mint);if(!e)return null;if(Date.now()-e.ts>OKX_PRICE_CACHE_MS){_priceCache.delete(mint);return null;}return e.price;}
-function setCachedPrice(mint,price){if(!mint||price<=0)return;_priceCache.set(mint,{price,ts:Date.now()});}
-
-async function fetchOkxPrice(mint){
+async function fetchOkxPrice(mint, tokenDecimals){
   if(!mint)return null;
-  const cached=getCachedPrice(mint);
-  if(cached!=null)return cached;
+  const dec = tokenDecimals || getTokenDecimals(mint);
+  const cacheKey = mint + '_' + dec;
+  const cached=_priceCache.get(cacheKey);
+  if(cached&&Date.now()-cached.ts<OKX_PRICE_CACHE_MS)return cached.price;
   try{
-    const decimals=getTokenDecimals(mint);
-    const amount=Math.pow(10,Math.min(decimals,9)).toString();
+    const amount=Math.pow(10,Math.min(dec,9)).toString();
     const r=await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=${USDC_SOLANA}&amount=${amount}`);
     const j=await r.json();
     if(j.code==='0'&&j.data){
       const d=Array.isArray(j.data)?j.data[0]:j.data;
       const price=Number(d.toTokenAmount)/1e6;
-      if(price>0){setCachedPrice(mint,price);return price;}
+      if(price>0){_priceCache.set(cacheKey,{price,ts:Date.now()});return price;}
     }
   }catch{}
   return null;
@@ -195,8 +193,8 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
   useEffect(()=>{if(!pubkey||!connection){setSbl(null);setSsb(null);return;}let c=false;connection.getBalance(pubkey).then(b=>{if(!c)setSbl(b);}).catch(()=>{});if(ft?.chain==='solana'&&ft.mint!==WSOL_MINT){connection.getParsedTokenAccountsByOwner(pubkey,{mint:new PublicKey(ft.mint)}).then(a=>{if(!c)setSsb(a.value.length?a.value[0].account.data.parsed.info.tokenAmount.uiAmount:0);}).catch(()=>{});}else{setSsb(null);}return()=>{c=true;};},[pubkey,connection,ft]);
   useEffect(()=>{if(ss!=='success')return;if(pubkey&&connection&&ft?.chain==='solana'){connection.getBalance(pubkey).then(setSbl).catch(()=>{});if(ft.mint!==WSOL_MINT)connection.getParsedTokenAccountsByOwner(pubkey,{mint:new PublicKey(ft.mint)}).then(a=>setSsb(a.value.length?a.value[0].account.data.parsed.info.tokenAmount.uiAmount:0)).catch(()=>{});}},[ss]);
 
-  useEffect(()=>{let c=false;if(isStable(ft?.mint)){setFp(1);return;}fetchOkxPrice(ft?.mint).then(p=>{if(!c)setFp(p);});return()=>{c=true;};},[ft]);
-  useEffect(()=>{let c=false;if(isStable(tt?.mint)){setTp(1);return;}fetchOkxPrice(tt?.mint).then(p=>{if(!c)setTp(p);});return()=>{c=true;};},[tt]);
+  useEffect(()=>{let c=false;if(isStable(ft?.mint)){setFp(1);return;}fetchOkxPrice(ft?.mint,ft?.decimals).then(p=>{if(!c)setFp(p);});return()=>{c=true;};},[ft]);
+  useEffect(()=>{let c=false;if(isStable(tt?.mint)){setTp(1);return;}fetchOkxPrice(tt?.mint,tt?.decimals).then(p=>{if(!c)setTp(p);});return()=>{c=true;};},[tt]);
   useEffect(()=>{loadOkxSolTokens().catch(()=>{});},[]);
 
   const fetchQ=useCallback(async()=>{
