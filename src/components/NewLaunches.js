@@ -3,6 +3,7 @@
  * 
  * Live feed: PumpPortal WebSocket (instant token discovery)
  * Data backfill: DexScreener (price, market cap, volume, liquidity, 24h change)
+ * Filters: $5K min market cap, 60s min age, liquidity > $0
  * Trades: pumpTrade.js -> /api/pumpportal/trade-local
  * SOL price: OKX quote (fetched independently)
  */
@@ -15,6 +16,8 @@ import { quickBuyPump, quickSellPump, PLATFORM_FEE_RATE } from '../pumpTrade.js'
 
 const PUMPPORTAL_WS = 'wss://pumpportal.fun/api/data';
 const MAX_TOKENS = 100;
+const MIN_MARKET_CAP = 5000;
+const MIN_AGE_MS = 60000;
 
 const C = {
   card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -77,11 +80,14 @@ async function backfillDsData(mint) {
     const j = await r.json();
     if (j && j.pairs && j.pairs.length > 0) {
       const best = j.pairs.sort((a, b) => (b.liquidity?.usd || 0) - (a.liquidity?.usd || 0))[0];
+      const mc = Number(best.marketCap || best.fdv || 0);
+      const liq = Number(best.liquidity?.usd || 0);
+      if (mc < MIN_MARKET_CAP || liq <= 0) return null;
       return {
         price: Number(best.priceUsd || 0),
-        marketCap: Number(best.marketCap || best.fdv || 0),
+        marketCap: mc,
         volume24h: Number(best.volume?.h24 || 0),
-        liquidity: Number(best.liquidity?.usd || 0),
+        liquidity: liq,
         change24h: best.priceChange?.h24 != null ? Number(best.priceChange.h24) : null,
         logoUrl: best.info?.imageUrl || null,
       };
@@ -301,6 +307,7 @@ export default function NewLaunches({ onConnectWallet, resetKey }) {
               liquidity: 0,
               change24h: null,
               createdAt: Date.now(),
+              hasBackfill: false,
             };
 
             tokensRef.current = [token].concat(tokensRef.current.filter(t => t.mint !== msg.mint)).slice(0, MAX_TOKENS);
@@ -315,8 +322,11 @@ export default function NewLaunches({ onConnectWallet, resetKey }) {
               if (!alive || !data) return;
               const idx = tokensRef.current.findIndex(tk => tk.mint === msg.mint);
               if (idx >= 0) {
-                tokensRef.current[idx] = { ...tokensRef.current[idx], ...data };
-                setTokens([].concat(tokensRef.current));
+                const ageOk = (Date.now() - tokensRef.current[idx].createdAt) >= MIN_AGE_MS;
+                if (ageOk) {
+                  tokensRef.current[idx] = { ...tokensRef.current[idx], ...data, hasBackfill: true };
+                  setTokens([].concat(tokensRef.current));
+                }
               }
             }).catch(() => {});
           } catch {}
@@ -329,6 +339,11 @@ export default function NewLaunches({ onConnectWallet, resetKey }) {
     connect();
     return () => { alive = false; if (reconnectTimer) clearTimeout(reconnectTimer); timers.forEach(t => clearTimeout(t)); if (ws) { try { ws.close(); } catch {} } };
   }, [solPrice]);
+
+  // Filter displayed tokens: must have backfill data, market cap, and liquidity
+  const displayTokens = useMemo(() => {
+    return tokens.filter(t => t.hasBackfill && t.marketCap >= MIN_MARKET_CAP && t.liquidity > 0);
+  }, [tokens]);
 
   const openBuyDrawer = (token, usd) => { if (!isValidMint(token?.mint)) return; setDrawerToken(token); setDrawerMode('buy'); setDrawerPresetUsd(usd && usd > 0 ? usd : null); setDrawerOpen(true); };
   const openSellDrawer = token => { if (!isValidMint(token?.mint)) return; setDrawerToken(token); setDrawerMode('sell'); setDrawerPresetUsd(null); setDrawerOpen(true); };
@@ -371,12 +386,12 @@ export default function NewLaunches({ onConnectWallet, resetKey }) {
             <span style={{ fontSize: 10, color: wsStatus === 'live' ? C.green : C.orange, fontWeight: 600 }}>{wsStatus === 'live' ? 'LIVE' : 'RECONNECTING'}</span>
           </div>
         </div>
-        <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>{tokens.length} tokens tracked</p>
+        <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>{displayTokens.length} tokens · min $5K mcap</p>
       </div>
-      {tokens.length === 0 ? (
+      {displayTokens.length === 0 ? (
         <div style={{ textAlign: 'center', padding: 60, background: C.card, border: '1px solid ' + C.border, borderRadius: 16, color: C.muted, fontSize: 14 }}>{wsStatus === 'live' ? 'Waiting for new launches...' : 'Connecting...'}</div>
       ) : (
-        tokens.map(t => <TokenCard key={t.mint} token={t} onCardClick={setSelectedToken} onBuyClick={openBuyDrawer} onSellClick={openSellDrawer} isNew={newMints.has(t.mint)} />)
+        displayTokens.map(t => <TokenCard key={t.mint} token={t} onCardClick={setSelectedToken} onBuyClick={openBuyDrawer} onSellClick={openSellDrawer} isNew={newMints.has(t.mint)} />)
       )}
       <PumpDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} mode={drawerMode} token={drawerToken} solPrice={solPrice} onConnectWallet={onConnectWallet} presets={presets} presetUsd={drawerPresetUsd} />
     </div>
