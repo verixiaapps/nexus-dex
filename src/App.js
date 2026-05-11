@@ -228,7 +228,7 @@ function IconPerps()    { return <svg width="18" height="18" viewBox="0 0 24 24"
 
 const NAV_ICONS = { swap: IconSwap, markets: IconMarkets, launches: IconLaunches, launch: IconLaunch, send: IconSend, portfolio: IconWallet, perps: IconPerps };
 const NAV_TABS = [
-  { id: 'swap', label: 'Swap' }, { id: 'markets', label: 'Markets' }, { id: 'launches', label: 'Launches' },
+  { id: 'swap', label: 'Swap' }, { id: 'markets', label: 'Markets' }, { id: 'launches', label: 'Trending' },
   { id: 'launch', label: 'Launch' }, { id: 'send', label: 'Send' }, { id: 'portfolio', label: 'Wallet' }, { id: 'perps', label: 'Perps' },
 ];
 
@@ -287,7 +287,7 @@ function AppInner() {
         {tab === 'swap' && <SwapWidget {...sharedProps} />}
         {tab === 'markets' && <Markets onSelectCoin={goToToken} />}
         {tab === 'token' && <TokenDetail {...sharedProps} coin={selectedToken} onBack={goBack} />}
-        {tab === 'launches' && <NewLaunches {...sharedProps} />}
+        {tab === 'launches' && <NewLaunches {...goToToken} />}
         {tab === 'launch' && <TokenLaunch {...sharedProps} />}
         {tab === 'send' && <Send {...sharedProps} />}
         {tab === 'portfolio' && <Portfolio {...sharedProps} onSend={() => switchTab('send')} />}
