@@ -178,10 +178,7 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, pre
   }, [open, pubkey, connection, token]);
 
   useEffect(() => {
-    if (open && !prev.current) {
-      // Reset state on new open
-      prev.current = open;
-    }
+    if (open && !prev.current) { prev.current = open; }
     if (!open) prev.current = false;
   }, [open]);
 
@@ -265,7 +262,6 @@ export default function NewLaunches({ onConnectWallet, resetKey }) {
   const tokensRef = useRef([]);
 
   useEffect(() => { setSelectedToken(null); }, [resetKey]);
-
   useEffect(() => { fetchSolPrice().then(setSolPrice); }, []);
 
   useEffect(() => {
