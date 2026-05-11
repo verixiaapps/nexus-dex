@@ -15,7 +15,8 @@
  *  - Quote uses real token mints
  *  - Swap instruction uses OKX native SOL placeholder when needed
  *  - slippagePercent set to 15
- *  - Simulation must pass before any wallet sends
+ *  - Transaction is signed first, then simulated, then sent
+ *  - Simulation is required for every wallet before broadcast
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -542,7 +543,7 @@ function TokenSelectModal({open,onClose,onSelect}){
 }
 
 export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToToken,compact=false,mode:modeProp='swap',presets:presetsProp,onPresetsChange,onStatusChange}){
-  const{publicKey:extPk,sendTransaction:extSendTx,connected:solCon}=useWallet();
+  const{publicKey:extPk,sendTransaction:extSendTx,signTransaction:extSignTx,connected:solCon}=useWallet();
   const{connection}=useConnection();
   const nexus=useNexusWallet();
   const{activeWalletKind,privyEmbeddedSol}=nexus;
@@ -558,29 +559,33 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
   const hasSol=!!(solCon||(privyEmbeddedSol&&pubkey));
   const wcon=!!hasSol;
 
-  const sendTx=useCallback(async(tx,conn)=>{
-    const sim=await conn.simulateTransaction(tx,{sigVerify:false});
+  const signSimulateAndSendTx=useCallback(async(tx,conn)=>{
+    let signedTx=null;
+
+    if(activeWalletKind==='privy'&&privyEmbeddedSol){
+      if(typeof privyEmbeddedSol.signTransaction!=='function'){
+        throw new Error('Wallet must support transaction signing for simulation.');
+      }
+      signedTx=await privyEmbeddedSol.signTransaction(tx);
+    }else{
+      if(typeof extSignTx!=='function'){
+        throw new Error('Wallet must support transaction signing for simulation.');
+      }
+      signedTx=await extSignTx(tx);
+    }
+
+    const sim=await conn.simulateTransaction(signedTx,{sigVerify:true});
 
     if(sim?.value?.err){
       console.error('NEXUS swap simulation failed:',sim.value.err,sim.value.logs);
       throw new Error('Transaction simulation failed. Swap not sent.');
     }
 
-    if(activeWalletKind==='privy'&&privyEmbeddedSol){
-      if(typeof privyEmbeddedSol.sendTransaction==='function'){
-        return privyEmbeddedSol.sendTransaction(tx,conn,{skipPreflight:false,maxRetries:3});
-      }
-
-      if(typeof privyEmbeddedSol.signTransaction==='function'){
-        const s=await privyEmbeddedSol.signTransaction(tx);
-        return conn.sendRawTransaction(s.serialize(),{skipPreflight:false,maxRetries:3});
-      }
-
-      throw new Error('No sign method');
-    }
-
-    return extSendTx(tx,conn,{skipPreflight:false,maxRetries:3});
-  },[activeWalletKind,privyEmbeddedSol,extSendTx]);
+    return conn.sendRawTransaction(signedTx.serialize(),{
+      skipPreflight:false,
+      maxRetries:3
+    });
+  },[activeWalletKind,privyEmbeddedSol,extSignTx]);
 
   const ip=useMemo(()=>{
     if(defaultFromToken||defaultToToken){
@@ -836,7 +841,7 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
       });
 
       const tx=await buildOkxSolTx({connection,userPubkey:pubkey,swapData:sd});
-      const sig=await sendTx(tx,connection);
+      const sig=await signSimulateAndSendTx(tx,connection);
 
       setStx(sig);
 
@@ -865,7 +870,7 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
         setSe('');
       },5000);
     }
-  },[wcon,fa,ft,tt,pubkey,sendTx,connection,onConnectWallet]);
+  },[wcon,fa,ft,tt,pubkey,signSimulateAndSendTx,connection,onConnectWallet]);
 
   useEffect(()=>{
     if(wcon&&ps){
