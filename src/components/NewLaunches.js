@@ -7,7 +7,7 @@
  * Trades: pumpTrade.js -> /api/pumpportal/trade-local
  * SOL price: OKX quote (fetched independently)
  */
- 
+  
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
