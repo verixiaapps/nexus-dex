@@ -50,28 +50,35 @@ function Row({ c, i, isMobile, onClick }) {
   return (<div onClick={() => onClick(c)} style={{ ...baseStyle, display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 120px', gap: 8, alignItems: 'center' }}><div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div><div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}><TokenImage token={c} size={32} /><div style={{ minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</div><div style={{ fontSize: 10, color: C.muted }}>{sym}</div></div></div><div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>{fmt(c.current_price)}</div></div>);
 }
 
-// Batch fetch all prices in ONE call via OKX price-info (POST)
+// Batch fetch all prices via OKX price-info (POST)
 async function fetchBatchPrices(mints) {
   if (!mints || mints.length === 0) return {};
   try {
     const r = await fetch('/api/okx/dex/market/price-info', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chainIndex: '501', tokenAddress: mints.join(',') }),
+      body: JSON.stringify({ 
+        chainIndex: '501', 
+        tokenContractAddressList: mints 
+      }),
     });
     const j = await r.json();
-    console.log('price-info response:', j);
+    console.log('price-info response:', JSON.stringify(j));
     if (j.code === '0' && j.data) {
       const priceMap = {};
       const data = Array.isArray(j.data) ? j.data : [j.data];
       data.forEach(d => {
-        const addr = (d.tokenAddress || d.tokenContractAddress || '').toLowerCase();
-        const price = Number(d.price || d.last || 0);
+        const addr = (d.tokenAddress || d.tokenContractAddress || d.instId || '').toLowerCase();
+        const price = Number(d.price || d.last || d.usdPrice || 0);
         if (addr && price > 0) priceMap[addr] = price;
       });
       return priceMap;
+    } else {
+      console.log('price-info failed:', j.msg || j.error_message || 'unknown error');
     }
-  } catch {}
+  } catch(e) {
+    console.log('price-info error:', e.message);
+  }
   return {};
 }
 
