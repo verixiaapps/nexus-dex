@@ -1,26 +1,17 @@
-/**
- * NEXUS DEX -- NewLaunches
- * 
- * Live feed: PumpPortal WebSocket (instant token discovery)
- * Data backfill: OKX memepump/tokenDetails (price, market cap, volume, image)
- * Trades: pumpTrade.js -> /api/pumpportal/trade-local
- * SOL price: OKX quote (fetched independently on mount)
- */
- 
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
 import { PublicKey } from '@solana/web3.js';
 import { quickBuyPump, quickSellPump, PLATFORM_FEE_RATE } from '../pumpTrade.js';
 
-const PUMPPORTAL_WS = 'wss://pumpportal.fun/api/data';
-const MAX_TOKENS = 100;
+const MAX_TOKENS = 50;
+const POLL_INTERVAL = 5000;
 
 const C = {
   card: '#080d1a', card2: '#0c1220', card3: '#111d30',
   border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
-  down: '#3b9eff', orange: '#ff9500', purple: '#9945ff',
+  orange: '#ff9500', purple: '#9945ff',
   text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
 };
 
@@ -49,74 +40,65 @@ function fmtPrice(n) {
   return '$' + n.toFixed(2);
 }
 
-let _solPriceCache = null;
-async function fetchSolPrice() {
-  if (_solPriceCache && Date.now() - _solPriceCache.ts < 30000) return _solPriceCache.price;
+// SOL price cache
+let _solCache = null;
+async function getSolPrice() {
+  if (_solCache && Date.now() - _solCache.ts < 30000) return _solCache.price;
   try {
     const r = await fetch('/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=So11111111111111111111111111111111111111112&toTokenAddress=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=1000000000');
     const j = await r.json();
     if (j.code === '0' && j.data) {
       const d = Array.isArray(j.data) ? j.data[0] : j.data;
       const p = Number(d.toTokenAmount) / 1e6;
-      if (p > 0) { _solPriceCache = { price: p, ts: Date.now() }; return p; }
+      if (p > 0) { _solCache = { price: p, ts: Date.now() }; return p; }
     }
   } catch {}
-  return _solPriceCache?.price || 0;
+  return _solCache?.price || 0;
 }
 
-async function backfillTokenData(mint) {
-  if (!mint) return null;
+// Fetch tokens from PumpPortal REST API
+async function fetchPumpTokens() {
   try {
-    const r = await fetch(`/api/okx/dex/market/memepump/tokenDetails?chainIndex=501&tokenContractAddress=${mint}`);
-    const j = await r.json();
-    if (j.code === '0' && j.data) {
-      const d = j.data;
+    const r = await fetch('https://pumpportal.fun/api/data/tokens?limit=' + MAX_TOKENS);
+    const data = await r.json();
+    if (!Array.isArray(data)) return [];
+    const sol = await getSolPrice();
+    return data.filter(t => t && t.mint && isValidMint(t.mint)).map(t => {
+      const vTok = Number(t.vTokensInBondingCurve || 0);
+      const vSol = Number(t.vSolInBondingCurve || 0);
+      const mcSol = Number(t.marketCapSol || 0);
+      const price = (sol > 0 && vTok > 0) ? (vSol / vTok) * sol : 0;
+      const marketCap = sol > 0 ? mcSol * sol : 0;
       return {
-        symbol: d.symbol || '',
-        name: d.name || '',
-        logoUrl: d.logoUrl || null,
-        marketCap: Number(d.market?.marketCapUsd || d.marketCapUsd || 0),
-        volume1h: Number(d.market?.volumeUsd1h || d.volumeUsd1h || 0),
-        buys1h: Number(d.market?.buyTxCount1h || d.buyTxCount1h || 0),
-        sells1h: Number(d.market?.sellTxCount1h || d.sellTxCount1h || 0),
-        bondingPercent: Number(d.bondingPercent || 0),
-        holders: Number(d.tags?.totalHolders || 0),
-        createdAt: Number(d.createdTimestamp || 0),
+        mint: t.mint,
+        symbol: t.symbol || t.mint.slice(0, 4).toUpperCase(),
+        name: t.name || t.symbol || 'Unknown',
+        logoUrl: t.image || null,
+        price,
+        marketCap,
+        createdAt: t.created_at ? new Date(t.created_at).getTime() : Date.now(),
       };
-    }
+    });
   } catch {}
-  return null;
+  return [];
 }
 
-function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
-  const [flash, setFlash] = useState(false);
-  useEffect(() => {
-    if (isNew) { setFlash(true); const t = setTimeout(() => setFlash(false), 5000); return () => clearTimeout(t); }
-  }, [isNew]);
-
-  const img = token.logoUrl || token.image;
-
+function TokenCard({ token, onCardClick, onBuyClick, onSellClick }) {
   return (
     <div onClick={() => onCardClick(token)} style={{
-      background: flash ? 'rgba(0,255,163,0.04)' : C.card,
-      border: '1px solid ' + (flash ? 'rgba(0,255,163,.2)' : C.border),
-      borderRadius: 14, padding: 12, marginBottom: 10, cursor: 'pointer',
-      width: '100%', boxSizing: 'border-box',
+      background: C.card, border: '1px solid ' + C.border, borderRadius: 14,
+      padding: 12, marginBottom: 10, cursor: 'pointer', width: '100%', boxSizing: 'border-box',
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
-        <div style={{ position: 'relative', flexShrink: 0 }}>
-          {img ? (
-            <img src={img} alt="" style={{ width: 44, height: 44, borderRadius: 10, objectFit: 'cover' }} onError={e => { e.currentTarget.style.display = 'none'; }} />
+        <div style={{ flexShrink: 0 }}>
+          {token.logoUrl ? (
+            <img src={token.logoUrl} alt="" style={{ width: 44, height: 44, borderRadius: 10, objectFit: 'cover' }} onError={e => { e.currentTarget.style.display = 'none'; }} />
           ) : (
             <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(153,69,255,.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, color: C.purple }}>{token.symbol?.charAt(0) || '?'}</div>
           )}
-          {flash && <div style={{ position: 'absolute', top: -3, right: -3, width: 9, height: 9, borderRadius: '50%', background: C.green, boxShadow: '0 0 8px ' + C.green }} />}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
-            <span style={{ color: '#fff', fontWeight: 800, fontSize: 14 }}>{token.symbol}</span>
-            {flash && <span style={{ fontSize: 10, color: C.green, fontWeight: 700 }}>NEW</span>}
-          </div>
+          <div style={{ color: '#fff', fontWeight: 800, fontSize: 14 }}>{token.symbol}</div>
           <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap', marginTop: 2 }}>
             {token.price > 0 && <span style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>{fmtPrice(token.price)}</span>}
             {token.marketCap > 0 && <span style={{ fontSize: 11, color: C.muted }}>{fmtMc(token.marketCap)}</span>}
@@ -177,10 +159,7 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, pre
     return () => { c = true; };
   }, [open, pubkey, connection, token]);
 
-  useEffect(() => {
-    if (open && !prev.current) { prev.current = open; }
-    if (!open) prev.current = false;
-  }, [open]);
+  useEffect(() => { if (open) { setStatus('idle'); setTxSig(null); setError(''); setCustomSellAmt(''); setSellPct(50); } }, [open]);
 
   const activeDollar = parseFloat(customAmt) || activePreset || 0;
   const isBuy = mode === 'buy';
@@ -254,79 +233,30 @@ export default function NewLaunches({ onConnectWallet, resetKey }) {
   const [drawerMode, setDrawerMode] = useState('buy');
   const [drawerToken, setDrawerToken] = useState(null);
   const [drawerPresetUsd, setDrawerPresetUsd] = useState(null);
-  const [newMints, setNewMints] = useState(new Set());
-  const [wsStatus, setWsStatus] = useState('connecting');
   const [solPrice, setSolPrice] = useState(0);
+  const [loading, setLoading] = useState(true);
   const [presets, setPresets] = useState(() => { try { return JSON.parse(localStorage.getItem('nexus_launch_presets') || '[5,10,25,50,100]'); } catch { return [5,10,25,50,100]; } });
 
-  const tokensRef = useRef([]);
-
   useEffect(() => { setSelectedToken(null); }, [resetKey]);
-  useEffect(() => { fetchSolPrice().then(setSolPrice); }, []);
 
   useEffect(() => {
-    let alive = true, ws = null, reconnectTimer = null;
-    const timers = new Set();
-
-    function connect() {
-      if (!alive) return;
-      try {
-        ws = new WebSocket(PUMPPORTAL_WS);
-        ws.onopen = () => { setWsStatus('live'); ws.send(JSON.stringify({ method: 'subscribeNewToken' })); };
-        ws.onmessage = e => {
-          try {
-            const msg = JSON.parse(e.data);
-            if (!msg || msg.txType !== 'create' || !isValidMint(msg.mint)) return;
-            if (tokensRef.current.find(t => t.mint === msg.mint)) return;
-
-            const sol = solPrice || 0;
-            const mcUsd = sol > 0 ? (Number(msg.marketCapSol) || 0) * sol : 0;
-            const vTok = Number(msg.vTokensInBondingCurve) || 0;
-            const vSol = Number(msg.vSolInBondingCurve) || 0;
-            const priceUsd = (sol > 0 && vTok > 0) ? (vSol / vTok) * sol : 0;
-
-            const token = {
-              mint: msg.mint,
-              symbol: msg.symbol || msg.mint.slice(0, 4).toUpperCase(),
-              name: msg.name || 'Unknown',
-              logoUrl: null,
-              image: null,
-              decimals: 6,
-              price: priceUsd,
-              marketCap: mcUsd,
-              volume1h: 0,
-              buys1h: 0,
-              sells1h: 0,
-              bondingPercent: 0,
-              holders: 0,
-              createdAt: Date.now(),
-            };
-
-            tokensRef.current = [token].concat(tokensRef.current.filter(t => t.mint !== msg.mint)).slice(0, MAX_TOKENS);
-            setTokens([].concat(tokensRef.current));
-
-            setNewMints(p => { const n = new Set(p); n.add(msg.mint); return n; });
-            const t = setTimeout(() => { timers.delete(t); if (alive) setNewMints(p => { const n = new Set(p); n.delete(msg.mint); return n; }); }, 6000);
-            timers.add(t);
-
-            backfillTokenData(msg.mint).then(data => {
-              if (!alive || !data) return;
-              const idx = tokensRef.current.findIndex(tk => tk.mint === msg.mint);
-              if (idx >= 0) {
-                tokensRef.current[idx] = { ...tokensRef.current[idx], ...data };
-                setTokens([].concat(tokensRef.current));
-              }
-            }).catch(() => {});
-          } catch {}
-        };
-        ws.onerror = () => setWsStatus('error');
-        ws.onclose = () => { setWsStatus('reconnecting'); if (!alive) return; if (reconnectTimer) clearTimeout(reconnectTimer); reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 3000); };
-      } catch { setWsStatus('error'); if (alive) { if (reconnectTimer) clearTimeout(reconnectTimer); reconnectTimer = setTimeout(() => { reconnectTimer = null; connect(); }, 5000); } }
-    }
-
-    connect();
-    return () => { alive = false; if (reconnectTimer) clearTimeout(reconnectTimer); timers.forEach(t => clearTimeout(t)); if (ws) { try { ws.close(); } catch {} } };
-  }, [solPrice]);
+    let alive = true;
+    const poll = async () => {
+      const data = await fetchPumpTokens();
+      if (alive && data.length > 0) {
+        setTokens(prev => {
+          const map = new Map();
+          [...data, ...prev].forEach(t => map.set(t.mint, t));
+          return [...map.values()].slice(0, MAX_TOKENS);
+        });
+      }
+      if (alive) setLoading(false);
+    };
+    poll();
+    getSolPrice().then(p => { if (alive) setSolPrice(p); });
+    const interval = setInterval(poll, POLL_INTERVAL);
+    return () => { alive = false; clearInterval(interval); };
+  }, []);
 
   const openBuyDrawer = (token, usd) => { if (!isValidMint(token?.mint)) return; setDrawerToken(token); setDrawerMode('buy'); setDrawerPresetUsd(usd && usd > 0 ? usd : null); setDrawerOpen(true); };
   const openSellDrawer = token => { if (!isValidMint(token?.mint)) return; setDrawerToken(token); setDrawerMode('sell'); setDrawerPresetUsd(null); setDrawerOpen(true); };
@@ -343,7 +273,7 @@ export default function NewLaunches({ onConnectWallet, resetKey }) {
           <div style={{ textAlign: 'right' }}><div style={{ fontSize: 24, fontWeight: 700, color: '#fff' }}>{fmtPrice(selectedToken.price)}</div></div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
-          {[['Mkt Cap', fmtMc(selectedToken.marketCap)], ['Age', timeAgo(selectedToken.createdAt)], ['Volume 1H', fmtMc(selectedToken.volume1h)], ['Holders', selectedToken.holders > 0 ? selectedToken.holders : '-']].map(([l, v]) => <div key={l} style={{ background: C.card2, borderRadius: 10, padding: 12 }}><div style={{ fontSize: 10, color: C.muted, fontWeight: 700 }}>{l}</div><div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{v}</div></div>)}
+          {[['Mkt Cap', fmtMc(selectedToken.marketCap)], ['Age', timeAgo(selectedToken.createdAt)]].map(([l, v]) => <div key={l} style={{ background: C.card2, borderRadius: 10, padding: 12 }}><div style={{ fontSize: 10, color: C.muted, fontWeight: 700 }}>{l}</div><div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{v}</div></div>)}
         </div>
         <div style={{ background: C.card3, borderRadius: 10, padding: '8px 12px' }}><div style={{ fontSize: 9, color: C.muted, fontWeight: 700 }}>CONTRACT</div><div style={{ fontSize: 11, color: C.accent, fontFamily: 'monospace', wordBreak: 'break-all' }}>{selectedToken.mint}</div></div>
       </div>
@@ -357,21 +287,22 @@ export default function NewLaunches({ onConnectWallet, resetKey }) {
 
   return (
     <div style={{ maxWidth: 640, margin: '0 auto', width: '100%', boxSizing: 'border-box', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
-      <style>{`@keyframes pulse{0%,100%{opacity:1}50%{opacity:0.3}}`}</style>
       <div style={{ marginBottom: 18 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>New Launches</h1>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 5, background: wsStatus === 'live' ? 'rgba(0,255,163,.08)' : 'rgba(255,149,0,.08)', border: '1px solid ' + (wsStatus === 'live' ? 'rgba(0,255,163,.2)' : 'rgba(255,149,0,.2)'), borderRadius: 20, padding: '3px 10px' }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: wsStatus === 'live' ? C.green : C.orange, animation: wsStatus === 'live' ? 'pulse 1.5s infinite' : 'none' }} />
-            <span style={{ fontSize: 10, color: wsStatus === 'live' ? C.green : C.orange, fontWeight: 600 }}>{wsStatus === 'live' ? 'LIVE' : wsStatus === 'reconnecting' ? 'RECONNECTING' : 'CONNECTING'}</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5, background: 'rgba(0,255,163,.08)', border: '1px solid rgba(0,255,163,.2)', borderRadius: 20, padding: '3px 10px' }}>
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: C.green }} />
+            <span style={{ fontSize: 10, color: C.green, fontWeight: 600 }}>LIVE</span>
           </div>
         </div>
         <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>{tokens.length} tokens tracked</p>
       </div>
-      {tokens.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: 60, background: C.card, border: '1px solid ' + C.border, borderRadius: 16, color: C.muted, fontSize: 14 }}>{wsStatus === 'live' ? 'Waiting for new launches...' : 'Connecting...'}</div>
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: 60, background: C.card, border: '1px solid ' + C.border, borderRadius: 16, color: C.muted, fontSize: 14 }}>Loading...</div>
+      ) : tokens.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: 60, background: C.card, border: '1px solid ' + C.border, borderRadius: 16, color: C.muted, fontSize: 14 }}>Waiting for new launches...</div>
       ) : (
-        tokens.map(t => <TokenCard key={t.mint} token={t} onCardClick={setSelectedToken} onBuyClick={openBuyDrawer} onSellClick={openSellDrawer} isNew={newMints.has(t.mint)} />)
+        tokens.map(t => <TokenCard key={t.mint} token={t} onCardClick={setSelectedToken} onBuyClick={openBuyDrawer} onSellClick={openSellDrawer} />)
       )}
       <PumpDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} mode={drawerMode} token={drawerToken} solPrice={solPrice} onConnectWallet={onConnectWallet} presets={presets} presetUsd={drawerPresetUsd} />
     </div>
