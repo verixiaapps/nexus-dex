@@ -170,7 +170,6 @@ async function fetchMarketData() {
       }
     }
 
-    // Fetch 24h candles for each pair to calculate percent change
     const now = Math.floor(Date.now() / 1000);
     const dayAgo = now - 86400;
     const changeMap = {};
@@ -193,8 +192,10 @@ async function fetchMarketData() {
       const result = candleResults[i];
       if (result.status === 'fulfilled' && Array.isArray(result.value) && result.value.length > 0) {
         const candles = result.value;
-        const openPrice = parseFloat(candles[0].open || 0);
-        const closePrice = parseFloat(candles[candles.length - 1].close || 0);
+        const first = candles[0];
+        const last = candles[candles.length - 1];
+        const openPrice = parseFloat(first.o || first.open || 0);
+        const closePrice = parseFloat(last.c || last.close || 0);
         if (openPrice > 0) {
           changeMap[p.id] = ((closePrice - openPrice) / openPrice) * 100;
         }
@@ -404,7 +405,7 @@ function TransferModal({ open, onClose, mode, hlAddress }) {
 /* ================================================================== */
 function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, position }) {
   const { connected } = useWallet();
-  const { activeWalletKind, privyEmbeddedSol, loginPrivy } = useNexusWallet();
+  const { activeWalletKind, privyEmbeddedSol } = useNexusWallet();
   const wcon = connected || activeWalletKind === 'privy';
 
   const [side, setSide] = useState('long');
@@ -454,7 +455,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
   };
 
   const execute = async () => {
-    if (!wcon) { loginPrivy?.() || onConnectWallet?.(); return; }
+    if (!wcon) { onConnectWallet?.(); return; }
     if (!hlWallet) { await createWallet(); return; }
     setStatus('loading');
     try {
@@ -637,7 +638,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
           )}
 
           {!wcon ? (
-            <button onClick={() => { loginPrivy?.() || onConnectWallet?.(); }} style={{
+            <button onClick={() => onConnectWallet?.()} style={{
               width: '100%', padding: 18, borderRadius: 16, border: 'none',
               background: 'linear-gradient(135deg,#9945ff,#7c3aed)', color: '#fff',
               fontWeight: 800, fontSize: 17, cursor: 'pointer', minHeight: 56, fontFamily: 'Syne, sans-serif',
