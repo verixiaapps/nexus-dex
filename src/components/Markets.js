@@ -69,7 +69,6 @@ function Row({ c, i, isMobile, onClick }) {
   const bonding = c.bondingPercent != null ? Number(c.bondingPercent) : null;
   const buys = c.buys1h || 0;
   const sells = c.sells1h || 0;
-  const holders = c.holders || 0;
   const age = timeAgo(c.createdTimestamp);
 
   const baseStyle = { padding: isMobile ? '12px 14px' : '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer', transition: 'background .15s' };
@@ -164,6 +163,7 @@ export default function Markets({ onSelectCoin }) {
               createdTimestamp: Number(t.createdTimestamp || 0),
               social: t.social || {},
             }))
+            .filter(t => t.marketCap >= 10000)
             .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
           setTokens(mapped);
         } else {
@@ -207,7 +207,7 @@ export default function Markets({ onSelectCoin }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
         <div>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Graduated</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Migrated pump tokens via OKX · {tokens.length} tokens</p>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Migrated pump tokens ≥ $10K · {tokens.length} tokens</p>
         </div>
         <div style={{ position: 'relative', width: '100%', maxWidth: isMobile ? '100%' : 320 }}>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tokens..." style={{ background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border), borderRadius: 10, padding: '10px 36px 10px 14px', color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: '100%', boxSizing: 'border-box' }} />
