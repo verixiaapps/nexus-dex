@@ -282,4 +282,4 @@ export default function TokenDetail({ coin, onBack, onConnectWallet }) {
       <TradeDrawer open={drawerOpen} onClose={closeDrawer} mode={drawerMode} coin={td} onConnectWallet={onConnectWallet} presets={presets} onPresetsChange={setPresets} />
     </div>
   );
-}
+} 
