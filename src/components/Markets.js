@@ -65,10 +65,11 @@ function Row({ c, i, isMobile, onClick }) {
   const name = String(c.name || sym);
   const displayName = name.length > 22 ? name.slice(0, 21) + '\u2026' : name;
   const mc = c.marketCap || 0;
-  const volume = c.volume24h || c.volume1h || 0;
+  const volume = c.volume1h || 0;
   const bonding = c.bondingPercent != null ? Number(c.bondingPercent) : null;
-  const buys = c.buys24h || c.buys1h || 0;
-  const sells = c.sells24h || c.sells1h || 0;
+  const buys = c.buys1h || 0;
+  const sells = c.sells1h || 0;
+  const holders = c.holders || 0;
   const age = timeAgo(c.createdTimestamp);
 
   const baseStyle = { padding: isMobile ? '12px 14px' : '12px 16px', borderBottom: '1px solid rgba(255,255,255,.025)', cursor: 'pointer', transition: 'background .15s' };
@@ -117,9 +118,7 @@ function Row({ c, i, isMobile, onClick }) {
       </div>
       <div style={{ textAlign: 'right' }}>
         {bonding !== null && (
-          <div style={{
-            fontSize: 12, fontWeight: 600, color: bonding > 0 ? C.green : C.red,
-          }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: bonding > 0 ? C.green : C.red }}>
             {bonding > 0 ? '+' : ''}{bonding.toFixed(1)}%
           </div>
         )}
@@ -140,30 +139,32 @@ export default function Markets({ onSelectCoin }) {
     setLoading(true);
     (async () => {
       try {
-        const r = await fetch('/api/okx/dex/market/memepump/tokenList?chainIndex=501&stage=NEW&limit=50');
+        const r = await fetch('/api/okx/dex/market/memepump/tokenList?chainIndex=501&stage=MIGRATED&limit=50');
         const j = await r.json();
         if (cancelled) return;
         if (j.code === '0' && Array.isArray(j.data)) {
-          const mapped = j.data.map(t => ({
-            id: t.tokenAddress,
-            chain: 'solana',
-            mint: t.tokenAddress,
-            symbol: t.symbol || '???',
-            name: t.name || t.symbol || 'Unknown',
-            decimals: 6,
-            logoUrl: t.logoUrl || null,
-            logoURI: t.logoUrl || null,
-            image: t.logoUrl || null,
-            current_price: 0,
-            marketCap: Number(t.market?.marketCapUsd || t.marketCapUsd || 0),
-            volume1h: Number(t.market?.volumeUsd1h || t.volumeUsd1h || 0),
-            buys1h: Number(t.market?.buyTxCount1h || t.buyTxCount1h || 0),
-            sells1h: Number(t.market?.sellTxCount1h || t.sellTxCount1h || 0),
-            bondingPercent: Number(t.bondingPercent || 0),
-            holders: Number(t.tags?.totalHolders || 0),
-            createdTimestamp: Number(t.createdTimestamp || 0),
-            social: t.social || {},
-          }));
+          const mapped = j.data
+            .map(t => ({
+              id: t.tokenAddress,
+              chain: 'solana',
+              mint: t.tokenAddress,
+              symbol: t.symbol || '???',
+              name: t.name || t.symbol || 'Unknown',
+              decimals: 6,
+              logoUrl: t.logoUrl || null,
+              logoURI: t.logoUrl || null,
+              image: t.logoUrl || null,
+              current_price: 0,
+              marketCap: Number(t.market?.marketCapUsd || t.marketCapUsd || 0),
+              volume1h: Number(t.market?.volumeUsd1h || t.volumeUsd1h || 0),
+              buys1h: Number(t.market?.buyTxCount1h || t.buyTxCount1h || 0),
+              sells1h: Number(t.market?.sellTxCount1h || t.sellTxCount1h || 0),
+              bondingPercent: Number(t.bondingPercent || 0),
+              holders: Number(t.tags?.totalHolders || 0),
+              createdTimestamp: Number(t.createdTimestamp || 0),
+              social: t.social || {},
+            }))
+            .sort((a, b) => b.createdTimestamp - a.createdTimestamp);
           setTokens(mapped);
         } else {
           setError(j.msg || 'Failed to load');
@@ -205,8 +206,8 @@ export default function Markets({ onSelectCoin }) {
     <div style={{ maxWidth: 900, margin: '0 auto', width: '100%', boxSizing: 'border-box', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16, flexWrap: 'wrap', gap: 10 }}>
         <div>
-          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Pump Tokens</h1>
-          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>New launches via OKX · {tokens.length} tokens</p>
+          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>Graduated</h1>
+          <p style={{ color: C.muted, fontSize: 12, marginTop: 4 }}>Migrated pump tokens via OKX · {tokens.length} tokens</p>
         </div>
         <div style={{ position: 'relative', width: '100%', maxWidth: isMobile ? '100%' : 320 }}>
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search tokens..." style={{ background: C.card, border: '1px solid ' + (q ? C.borderHi : C.border), borderRadius: 10, padding: '10px 36px 10px 14px', color: '#fff', fontFamily: 'Syne, sans-serif', fontSize: 13, outline: 'none', width: '100%', boxSizing: 'border-box' }} />
@@ -214,7 +215,7 @@ export default function Markets({ onSelectCoin }) {
         </div>
       </div>
       {loading ? (
-        <div style={{ textAlign: 'center', padding: 60, color: C.muted, fontSize: 14 }}>Loading pump tokens...</div>
+        <div style={{ textAlign: 'center', padding: 60, color: C.muted, fontSize: 14 }}>Loading graduated tokens...</div>
       ) : error ? (
         <div style={{ textAlign: 'center', padding: 60, color: C.red, fontSize: 14 }}>{error}</div>
       ) : (
