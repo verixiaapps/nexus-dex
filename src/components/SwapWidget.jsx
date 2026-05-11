@@ -7,6 +7,9 @@
  * OKX referrer tag added to all OKX requests.
  * Fees injected server-side in server.js.
  * Max slippage: 15% Solana (OKX routes at best price).
+ *
+ * FIX: fetchQ now calls /quote for the exact swap pair to get the real output amount.
+ * Default visible tokens reduced to SOL and USDC only.
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -36,12 +39,10 @@ const LAST_PAIR_LS_KEY = 'nexus_last_pair_v1';
 
 const C = { bg:'#03060f',card:'#080d1a',card2:'#0c1220',card3:'#111d30',border:'rgba(0,229,255,0.10)',borderHi:'rgba(0,229,255,0.25)',accent:'#00e5ff',green:'#00ffa3',red:'#ff3b6b',text:'#cdd6f4',muted:'#586994',muted2:'#2e3f5e',buyGrad:'linear-gradient(135deg,#00e5ff,#0055ff)',sellGrad:'linear-gradient(135deg,#ff3b6b,#cc1144)',privy:'#a855f7' };
 
+// Only SOL and USDC are shown in the quick‑pick list; other tokens still searchable via OKX
 const POPULAR_TOKENS = [
   { mint:WSOL_MINT,symbol:'SOL',name:'Solana',decimals:9,chain:'solana',logoURI:'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png'},
   { mint:USDC_SOLANA,symbol:'USDC',name:'USD Coin',decimals:6,chain:'solana',logoURI:'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png'},
-  { mint:'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',symbol:'USDT',name:'Tether',decimals:6,chain:'solana'},
-  { mint:'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',symbol:'JUP',name:'Jupiter',decimals:6,chain:'solana'},
-  { mint:'DezXAZ8z7PnrnRJjz3wXBoRgixCa6BFrR4Jfrj6z7m9',symbol:'BONK',name:'Bonk',decimals:5,chain:'solana'},
 ];
 
 function safeBigInt(v){if(v==null)return BigInt(0);if(typeof v==='bigint')return v;if(typeof v==='number')return Number.isFinite(v)?BigInt(Math.trunc(v)):BigInt(0);let s=String(v).trim();if(!s)return BigInt(0);if(/^-?0x[0-9a-f]+$/i.test(s))return BigInt(s);if(/^-?\d+$/.test(s))return BigInt(s);const n=Number(s);return Number.isFinite(n)?BigInt(Math.trunc(n)):BigInt(0);}
@@ -50,7 +51,7 @@ function fmtUsd(n,d=2){if(n==null||isNaN(n))return'-';const v=Number(n);if(v>=1e
 function fmtTokenAmount(n,d=4){if(n==null||isNaN(n))return'0';const v=Number(n);if(v>=1e9)return(v/1e9).toFixed(2)+'B';if(v>=1e6)return(v/1e6).toFixed(2)+'M';if(v>=1000)return v.toLocaleString('en-US',{maximumFractionDigits:2});return v.toFixed(d);}
 function shortAddr(a,h=4,t=4){if(!a||a.length<h+t)return a||'';return a.slice(0,h)+'\u2026'+a.slice(-t);}
 function isValidSolMint(s){return!!s&&s.length>=32&&s.length<=44&&/^[1-9A-HJ-NP-Za-km-z]+$/.test(s);}
-function toRawAmount(s,dec){if(!s||dec==null)return'0';let v=String(s).trim().replace(/,/g,'.').replace(/^\+/,'');if(!v||v.startsWith('-'))return'0';if(/e/i.test(v)){const n=Number(v);if(!Number.isFinite(n)||n<0)return'0';v=n.toFixed(Math.max(Number(dec)||0,20));}const d=Math.floor(Number(dec));if(!Number.isFinite(d)||d<0||d>18)return'0';const[w,f='']=v.split('.');const sw=(w||'0').replace(/[^\d]/g,'').replace(/^0+(?=\d)/,'')||'0';const ft=(f||'').replace(/[^\d]/g,'').slice(0,d);const fp=(ft+'0'.repeat(d)).slice(0,d)||'0';try{return(BigInt(sw)*(10n**BigInt(d))+BigInt(fp)).toString();}catch{return'0';}}
+function toRawAmount(s,dec){if(!s||dec==null)return'0';let v=String(s).trim().replace(/,/g,'.').replace(/^\+/,'');if(!v||v.startsWith('-'))return'0';if(/e/i.test(v)){const n=Number(v);if(!Number.isFinite(n)||n<0)return'0';v=n.toFixed(Math.max(Number(dec)||0,20));}const d=Math.floor(Number(dec));if(!Number.isFinite(d)||d<0||d>18)return'0';const[w,f='']=v.split('.');const sw=(w||'0').replace(/[^\d]/g,'').replace(/^0+(?=\d)/,'')||'0';const ft=(f||'').replace(/[^\d]/g,'').slice(0,d);const fp=('0'.repeat(d)+ft).slice(-d);try{return(BigInt(sw)*(10n**BigInt(d))+BigInt(fp)).toString();}catch{return'0';}}
 
 function normalizeToken(input){if(!input)return null;if(input.chain==='solana'&&input.mint)return input;const logo=input.logoURI||input.image||input.thumbnail||null;const sym=input.symbol||'TOKEN';const name=input.name||sym;const solMint=input.mint||(input.isSolanaToken?input.id:null);if(solMint&&isValidSolMint(solMint))return{chain:'solana',mint:solMint,symbol:sym,name,decimals:input.decimals||6,logoURI:logo};return null;}
 function nativeOfChain(){return POPULAR_TOKENS.find(t=>t.mint===WSOL_MINT);}
@@ -66,6 +67,37 @@ function defaultTokenPair({mode,viewedToken,lastFromToken,walletState}){
 
 function pickRoute(){return'okx-sol';}
 function toOkxSolAddress(m){return m===WSOL_MINT?OKX_SOL_NATIVE:m;}
+
+// ---------- OKX token list (with decimals) ----------
+let _okxCache=null;let _okxLoading=null;
+function loadOkxSolTokens(){
+  if(_okxCache)return Promise.resolve(_okxCache);
+  if(_okxLoading)return _okxLoading;
+  _okxLoading=fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501')
+    .then(r=>r.ok?r.json():{data:[]})
+    .catch(()=>({data:[]}))
+    .then(j=>{
+      const t=(j.data||[]).map(t=>({
+        chain:'solana',mint:t.tokenContractAddress,
+        symbol:t.tokenSymbol||'',name:t.tokenName||t.tokenSymbol||'',
+        decimals:parseInt(t.decimals)||6,logoURI:t.tokenLogoUrl||null,
+      })).filter(t=>isValidSolMint(t.mint)&&t.symbol);
+      _okxCache=t;_okxLoading=null;return t;
+    });
+  return _okxLoading;
+}
+
+function getTokenDecimals(mint){
+  if(!mint)return 6;
+  if(mint===WSOL_MINT||mint===OKX_SOL_NATIVE)return 9;
+  const found=POPULAR_TOKENS.find(t=>t.mint===mint);
+  if(found)return found.decimals;
+  if(_okxCache){
+    const okx=_okxCache.find(t=>t.mint===mint);
+    if(okx)return okx.decimals;
+  }
+  return 6;
+}
 
 // ---------- OKX price cache ----------
 const _okxPriceCache=new Map();
@@ -84,55 +116,20 @@ async function fetchOkxPrice(mint){
   if(!mint)return null;
   const cached=getCachedOkxPrice(mint);
   if(cached!=null)return cached;
-  // stablecoins
-  if(mint===USDC_SOLANA||mint==='Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB'){setCachedOkxPrice(mint,1);return 1;}
-  // SOL itself
-  if(mint===WSOL_MINT||mint===OKX_SOL_NATIVE){
-    try{
-      const r=await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${OKX_SOL_NATIVE}&toTokenAddress=${USDC_SOLANA}&amount=1000000000`);
-      const j=await r.json();
-      if(j.code==='0'&&j.data&&j.data.length>0){
-        const d=Array.isArray(j.data)?j.data[0]:j.data;
-        const amt=Number(d.toTokenAmount)/1e6;
-        const sol=1;
-        const price=amt/sol;
-        if(price>0){setCachedOkxPrice(mint,price);return price;}
-      }
-    }catch{}
-    return null;
-  }
-  // other SPL — quote against USDC
+  
+  const decimals=getTokenDecimals(mint);
+  const amount=Math.pow(10,decimals).toString();
+  
   try{
-    const r=await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=${USDC_SOLANA}&amount=${10**6}`);
+    const r=await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=${USDC_SOLANA}&amount=${amount}`);
     const j=await r.json();
     if(j.code==='0'&&j.data){
       const d=Array.isArray(j.data)?j.data[0]:j.data;
-      const toAmt=Number(d.toTokenAmount)/1e6;
-      const fromAmt=1;
-      const price=toAmt/fromAmt;
+      const price=Number(d.toTokenAmount)/1e6;
       if(price>0){setCachedOkxPrice(mint,price);return price;}
     }
   }catch{}
   return null;
-}
-
-// ---------- OKX token list ----------
-let _okxCache=null;let _okxLoading=null;
-function loadOkxSolTokens(){
-  if(_okxCache)return Promise.resolve(_okxCache);
-  if(_okxLoading)return _okxLoading;
-  _okxLoading=fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501')
-    .then(r=>r.ok?r.json():{data:[]})
-    .catch(()=>({data:[]}))
-    .then(j=>{
-      const t=(j.data||[]).map(t=>({
-        chain:'solana',mint:t.tokenContractAddress,
-        symbol:t.tokenSymbol||'',name:t.tokenName||t.tokenSymbol||'',
-        decimals:parseInt(t.decimals)||6,logoURI:t.tokenLogoUrl||null,
-      })).filter(t=>isValidSolMint(t.mint)&&t.symbol);
-      _okxCache=t;_okxLoading=null;return t;
-    });
-  return _okxLoading;
 }
 
 // ---------- OKX swap ----------
@@ -198,7 +195,7 @@ function TokenSelectModal({open,onClose,onSelect}){
 /* ===== MAIN SWAP WIDGET ===== */
 export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToToken,compact=false,mode:modeProp='swap',presets:presetsProp,onPresetsChange,onStatusChange}){
   const{publicKey:extPk,sendTransaction:extSendTx,connected:solCon}=useWallet();const{connection}=useConnection();
-  const nexus=useNexusWallet();const{activeWalletKind,privyEmbeddedSol,loginPrivy}=nexus;
+  const nexus=useNexusWallet();const{activeWalletKind,privyEmbeddedSol}=nexus;
   const pubkey=useMemo(()=>{if(extPk)return extPk;if(privyEmbeddedSol?.address){try{return new PublicKey(privyEmbeddedSol.address);}catch{return null;}}return null;},[extPk,privyEmbeddedSol]);
   const hasSol=!!(solCon||(privyEmbeddedSol&&pubkey));const wcon=!!hasSol;
 
@@ -224,14 +221,27 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
   useEffect(()=>{let c=false;fetchOkxPrice(tt?.mint).then(p=>{if(!c)setTp(p);});return()=>{c=true;};},[tt]);
   useEffect(()=>{loadOkxSolTokens().catch(()=>{});},[]);
 
+  // ** FIX: Fetch exact quote from OKX for the pair **
   const fetchQ=useCallback(async()=>{
     setQe('');if(!fa||parseFloat(fa)<=0||tokensEqual(ft,tt)){setQ(null);if(tokensEqual(ft,tt))setQe('Cannot swap a token for itself.');return;}
-    const fpEff=ft?.symbol==='USDC'||ft?.symbol==='USDT'?1:fp;
-    const tpEff=tt?.symbol==='USDC'||tt?.symbol==='USDT'?1:tp;
-    if(!(fpEff>0)||!(tpEff>0)){setQ(null);return;}
-    const g=parseFloat(fa)*fpEff/tpEff;const n=g*(1-TOTAL_FEE);
-    setQ({engine:'okx',outAmountDisplay:n.toFixed(n<.01?6:4),preview:true});
-  },[fa,ft,tt,fp,tp]);
+    try{
+      const raw=toRawAmount(fa,ft.decimals);
+      const params=new URLSearchParams({
+        chainIndex:'501',
+        fromTokenAddress:toOkxSolAddress(ft.mint),
+        toTokenAddress:toOkxSolAddress(tt.mint),
+        amount:raw,
+        slippagePercent:'0.15',
+      }).toString();
+      const r=await fetch(`/api/okx/dex/aggregator/quote?${params}`);
+      const j=await r.json();
+      if(j.code!=='0'||!j.data){setQe(j.msg||'Quote not available');setQ(null);return;}
+      const d=Array.isArray(j.data)?j.data[0]:j.data;
+      const outAmount=Number(d.toTokenAmount)/Math.pow(10,tt.decimals||6);
+      const feeAfter=outAmount*(1-TOTAL_FEE);
+      setQ({engine:'okx',outAmountDisplay:feeAfter.toFixed(feeAfter<0.01?6:4),preview:false});
+    }catch(e){setQe('Quote request failed');setQ(null);}
+  },[fa,ft,tt]);
 
   useEffect(()=>{const t=setTimeout(fetchQ,QUOTE_DEBOUNCE_MS);return()=>clearTimeout(t);},[fetchQ]);
 
@@ -242,7 +252,7 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
   const flip=useCallback(()=>{setFt(tt);setTt(ft);setFa('');setQ(null);setQe('');utRef.current=false;},[ft,tt]);
 
   const exec=useCallback(async()=>{
-    if(!wcon){setPs(true);loginPrivy?.()||onConnectWallet?.();return;}
+    if(!wcon){onConnectWallet?.();return;}
     setSs('loading');setSe('');setStx(null);
     try{const raw=toRawAmount(fa,ft.decimals);if(!raw||raw==='0')throw new Error('Invalid amount');
       if(!pubkey)throw new Error('Connect Solana wallet');
@@ -254,14 +264,14 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
       saveLastPair(ft,tt);setSs('success');setFa('');setQ(null);utRef.current=false;
       setTimeout(()=>{setSs('idle');setStx(null);},6000);
     }catch(e){setSe(e.message||'Swap failed');setSs('error');setTimeout(()=>{setSs('idle');setSe('');},5000);}
-  },[wcon,fa,ft,tt,pubkey,sendTx,connection,loginPrivy,onConnectWallet]);
+  },[wcon,fa,ft,tt,pubkey,sendTx,connection,onConnectWallet]);
 
   useEffect(()=>{if(wcon&&ps){setPs(false);exec();}},[wcon,ps,exec]);
 
   const txLink=useMemo(()=>stx?'https://solscan.io/tx/'+stx:null,[stx]);
   const fuv=fa&&fp>0?parseFloat(fa)*fp:0;
   const tuv=quote&&tp>0?parseFloat(quote.outAmountDisplay)*tp:0;
-  const td=quote?(quote.preview?'~'+quote.outAmountDisplay:quote.outAmountDisplay):'0.00';
+  const td=quote?quote.outAmountDisplay:'0.00';
   const tc=quote?C.green:C.muted2;
   const showBuy=ft&&/^(SOL|USDC|USDT)$/i.test(ft.symbol||'');
   const showSell=modeProp==='sell';
@@ -295,7 +305,7 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
       {qe&&<div style={{marginTop:8,padding:10,background:'rgba(255,59,107,.1)',border:'1px solid rgba(255,59,107,.2)',borderRadius:8,fontSize:12,color:C.red}}>{qe}</div>}
       {quote&&fa&&<div style={{marginTop:12,background:'#050912',borderRadius:10,padding:12}}>{[['Platform fee',fuv>0?fmtUsd(fuv*PLATFORM_FEE):(PLATFORM_FEE*100)+'%'],['Anti-MEV',(SAFETY_FEE*100)+'%']].map(i=><div key={i[0]} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',fontSize:11}}><span style={{color:C.muted}}>{i[0]}</span><span style={{color:C.text}}>{i[1]}</span></div>)}</div>}
       {se&&<div style={{marginTop:10,padding:10,background:'rgba(255,59,107,.1)',border:'1px solid rgba(255,59,107,.3)',borderRadius:8,fontSize:12,color:C.red}}>{se}</div>}
-      {!wcon?<button onClick={()=>{setPs(true);loginPrivy?.()||onConnectWallet?.();}} style={{width:'100%',marginTop:14,padding:16,borderRadius:12,border:'none',background:'linear-gradient(135deg,#9945ff,#7c3aed)',color:'#fff',fontFamily:'Syne, sans-serif',fontWeight:800,fontSize:15,cursor:'pointer',minHeight:52}}>Sign in to Swap</button>
+      {!wcon?<button onClick={()=>onConnectWallet?.()} style={{width:'100%',marginTop:14,padding:16,borderRadius:12,border:'none',background:'linear-gradient(135deg,#9945ff,#7c3aed)',color:'#fff',fontFamily:'Syne, sans-serif',fontWeight:800,fontSize:15,cursor:'pointer',minHeight:52}}>Sign in to Swap</button>
       :<button onClick={exec} disabled={ss==='loading'||!fa} style={{width:'100%',marginTop:14,padding:16,borderRadius:12,border:'none',background:ss==='success'?'linear-gradient(135deg,#00ffa3,#00b36b)':ss==='error'?'rgba(255,59,107,.2)':!fa?C.card2:C.buyGrad,color:!fa?C.muted2:'#fff',fontFamily:'Syne, sans-serif',fontWeight:800,fontSize:15,cursor:ss==='loading'?'not-allowed':'pointer',minHeight:52}}>{ss==='loading'?'Confirming...':ss==='success'?'Done!':ss==='error'?'Retry':!fa?'Enter amount':'Swap '+(ft?.symbol||'')+' \u2192 '+(tt?.symbol||'')}</button>}
       {stx&&ss==='success'&&txLink&&<a href={txLink} target="_blank" rel="noreferrer" style={{display:'block',textAlign:'center',marginTop:10,fontSize:12,color:C.accent}}>View transaction</a>}
       <p style={{textAlign:'center',fontSize:10,color:C.muted2,marginTop:10}}>Non-custodial \u00b7 Powered by OKX DEX</p>
