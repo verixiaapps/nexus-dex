@@ -63,7 +63,7 @@ async function fetchOkxPrice(mint) {
 export default function Portfolio({ onSend, onConnectWallet }) {
   const { publicKey: extPk, connected: solCon } = useWallet();
   const { connection } = useConnection();
-  const { privyEmbeddedSol, loginPrivy } = useNexusWallet();
+  const { privyEmbeddedSol } = useNexusWallet();
 
   const pubkey = extPk || (privyEmbeddedSol?.address ? (() => { try { return new PublicKey(privyEmbeddedSol.address); } catch { return null; } })() : null);
   const hasSol = !!(solCon || (privyEmbeddedSol && pubkey));
@@ -78,15 +78,12 @@ export default function Portfolio({ onSend, onConnectWallet }) {
     if (!pubkey || !connection) return;
     setLoading(true); setError('');
     try {
-      // SOL balance
       const lamports = await connection.getBalance(pubkey);
       setSolBalance(lamports / 1e9);
 
-      // SOL price
       const solPrice = await fetchOkxPrice(SOL_MINT);
       if (solPrice > 0) setSolPriceUsd(solPrice);
 
-      // SPL tokens
       const results = await Promise.allSettled([
         connection.getParsedTokenAccountsByOwner(pubkey, { programId: SPL_LEGACY_PROGRAM }),
         connection.getParsedTokenAccountsByOwner(pubkey, { programId: SPL_TOKEN2022_PROGRAM }),
@@ -108,7 +105,6 @@ export default function Portfolio({ onSend, onConnectWallet }) {
       });
 
       let holdings = Object.values(byMint);
-      // Fetch prices for all holdings
       const prices = {};
       for (const h of holdings) {
         const p = await fetchOkxPrice(h.mint);
@@ -146,7 +142,7 @@ export default function Portfolio({ onSend, onConnectWallet }) {
         <div style={{ textAlign: 'center', padding: '50px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
           <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Connect Wallet</h2>
           <p style={{ color: C.muted, fontSize: 13, marginBottom: 24 }}>Connect your Solana wallet to view balances.</p>
-          <button onClick={() => { loginPrivy?.() || onConnectWallet?.(); }} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect Wallet</button>
+          <button onClick={() => onConnectWallet?.()} style={{ background: 'linear-gradient(135deg,#9945ff,#7c3aed)', border: 'none', borderRadius: 10, padding: '12px 28px', color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'Syne, sans-serif' }}>Connect Wallet</button>
         </div>
       </div>
     );
@@ -181,7 +177,6 @@ export default function Portfolio({ onSend, onConnectWallet }) {
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}><div>TOKEN</div><div style={{ textAlign: 'right' }}>BALANCE</div><div style={{ textAlign: 'right' }}>PRICE</div><div style={{ textAlign: 'right' }}>VALUE</div></div>
 
-        {/* SOL row */}
         <div style={{ padding: '12px 16px', display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, alignItems: 'center', borderBottom: '1px solid rgba(255,255,255,.025)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(153,69,255,.2)', border: '1px solid rgba(153,69,255,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#9945ff', flexShrink: 0 }}>S</div>
