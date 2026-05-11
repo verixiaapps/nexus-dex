@@ -249,7 +249,7 @@ function AppInner() {
       <main style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '24px 16px 100px', width: '100%' }}>
         {tab === 'swap' && <SwapWidget {...sharedProps} />}
         {tab === 'markets' && <Markets onSelectCoin={goToToken} />}
-        {tab === 'token' && selectedToken && <TokenDetail {...sharedProps} coin={selectedToken} onBack={goBack} />}
+        {tab === 'token' && <TokenDetail {...sharedProps} coin={selectedToken} onBack={goBack} />}
         {tab === 'launches' && <NewLaunches {...sharedProps} />}
         {tab === 'launch' && <TokenLaunch {...sharedProps} />}
         {tab === 'send' && <Send {...sharedProps} />}
