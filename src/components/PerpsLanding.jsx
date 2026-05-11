@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import PerpsTrade from './PerpsTrade.js';
+import PerpsTrade from './PerpsTrade.jsx';
 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
