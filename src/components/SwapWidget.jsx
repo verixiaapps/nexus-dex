@@ -197,12 +197,55 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
   useEffect(()=>{let c=false;if(isStable(tt?.mint)){setTp(1);return;}fetchOkxPrice(tt?.mint,tt?.decimals).then(p=>{if(!c)setTp(p);});return()=>{c=true;};},[tt]);
   useEffect(()=>{loadOkxSolTokens().catch(()=>{});},[]);
 
-  const fetchQ=useCallback(async()=>{
-    setQe('');if(!fa||parseFloat(fa)<=0||tokensEqual(ft,tt)){setQ(null);if(tokensEqual(ft,tt))setQe('Cannot swap a token for itself.');return;}
-    if(!(fp>0)||!(tp>0)){setQ(null);return;}
-    const g=parseFloat(fa)*fp/tp;const n=g*(1-TOTAL_FEE);
-    setQ({engine:'okx',outAmountDisplay:n.toFixed(n<.01?6:4),preview:true});
-  },[fa,ft,tt,fp,tp]);
+  const fetchQ = useCallback(async () => {
+    setQe('');
+    if (!fa || parseFloat(fa) <= 0 || tokensEqual(ft, tt)) {
+      setQ(null);
+      if (tokensEqual(ft, tt)) setQe('Cannot swap a token for itself.');
+      return;
+    }
+
+    const raw = toRawAmount(fa, ft.decimals);
+    if (!raw || raw === '0') {
+      setQ(null);
+      return;
+    }
+
+    // Always simulate via OKX DEX for every token pair
+    try {
+      const res = await fetch(
+        `/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${toOkxSolAddress(ft.mint)}&toTokenAddress=${toOkxSolAddress(tt.mint)}&amount=${raw}`
+      );
+      const j = await res.json();
+      if (j.code === '0' && j.data) {
+        const d = Array.isArray(j.data) ? j.data[0] : j.data;
+        const outDec = getTokenDecimals(tt.mint);
+        const outAmount = Number(d.toTokenAmount) / Math.pow(10, outDec);
+        const n = outAmount * (1 - TOTAL_FEE);
+        setQ({
+          engine: 'okx',
+          outAmountDisplay: n.toFixed(n < 0.01 ? 6 : 4),
+          preview: false,
+        });
+        return;
+      }
+      throw new Error(j.msg || 'No route');
+    } catch (e) {
+      // Fallback to cached price estimate
+      if (fp > 0 && tp > 0) {
+        const g = parseFloat(fa) * fp / tp;
+        const n = g * (1 - TOTAL_FEE);
+        setQ({
+          engine: 'okx',
+          outAmountDisplay: n.toFixed(n < 0.01 ? 6 : 4),
+          preview: true,
+        });
+      } else {
+        setQ(null);
+        setQe('Unable to fetch quote for this pair');
+      }
+    }
+  }, [fa, ft, tt, fp, tp]);
 
   useEffect(()=>{const t=setTimeout(fetchQ,QUOTE_DEBOUNCE_MS);return()=>clearTimeout(t);},[fetchQ]);
 
