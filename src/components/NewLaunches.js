@@ -49,7 +49,6 @@ function fmtPrice(n) {
   return '$' + n.toFixed(2);
 }
 
-// Fetch SOL price independently
 let _solPriceCache = null;
 async function fetchSolPrice() {
   if (_solPriceCache && Date.now() - _solPriceCache.ts < 30000) return _solPriceCache.price;
@@ -65,7 +64,6 @@ async function fetchSolPrice() {
   return _solPriceCache?.price || 0;
 }
 
-// Backfill token data from OKX
 async function backfillTokenData(mint) {
   if (!mint) return null;
   try {
@@ -90,9 +88,6 @@ async function backfillTokenData(mint) {
   return null;
 }
 
-/* ============================================================================
- * TokenCard
- * ========================================================================= */
 function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
   const [flash, setFlash] = useState(false);
   useEffect(() => {
@@ -111,7 +106,7 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <div style={{ position: 'relative', flexShrink: 0 }}>
           {img ? (
-            <img src={img} alt="" style={{ width: 44, height: 44, borderRadius: 10 }} onError={e => e.currentTarget.style.display = 'none'} />
+            <img src={img} alt="" style={{ width: 44, height: 44, borderRadius: 10, objectFit: 'cover' }} onError={e => { e.currentTarget.style.display = 'none'; }} />
           ) : (
             <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(153,69,255,.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, color: C.purple }}>{token.symbol?.charAt(0) || '?'}</div>
           )}
@@ -139,9 +134,6 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
   );
 }
 
-/* ============================================================================
- * PumpDrawer
- * ========================================================================= */
 function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, presets, presetUsd }) {
   const { publicKey: extPk, signTransaction, sendTransaction, connected: solCon } = useWallet();
   const { activeWalletKind, privyEmbeddedSol, loginPrivy } = useNexusWallet();
@@ -185,24 +177,12 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, pre
     return () => { c = true; };
   }, [open, pubkey, connection, token]);
 
-  const prev = useRef(false);
   useEffect(() => {
     if (open && !prev.current) {
-      const last = presetUsd && presetUsd > 0 ? presetUsd : 25;
-      const m = presets.find(p => p === last);
-      if (m) { setActivePreset(last); setCustomAmt(''); }
-      else { setActivePreset(null); setCustomAmt(''); }
-      setStatus('idle'); setTxSig(null); setError(''); setCustomSellAmt('');
-      setSellPct(50);
+      // Reset state on new open
+      prev.current = open;
     }
-    prev.current = open;
-  }, [open, presets, presetUsd]);
-
-  useEffect(() => {
-    if (!open || typeof document === 'undefined') return;
-    const po = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = po; };
+    if (!open) prev.current = false;
   }, [open]);
 
   const activeDollar = parseFloat(customAmt) || activePreset || 0;
@@ -270,9 +250,6 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, pre
   );
 }
 
-/* ============================================================================
- * MAIN
- * ========================================================================= */
 export default function NewLaunches({ onConnectWallet, resetKey }) {
   const [tokens, setTokens] = useState([]);
   const [selectedToken, setSelectedToken] = useState(null);
@@ -289,7 +266,6 @@ export default function NewLaunches({ onConnectWallet, resetKey }) {
 
   useEffect(() => { setSelectedToken(null); }, [resetKey]);
 
-  // Fetch SOL price on mount
   useEffect(() => { fetchSolPrice().then(setSolPrice); }, []);
 
   useEffect(() => {
@@ -337,10 +313,9 @@ export default function NewLaunches({ onConnectWallet, resetKey }) {
             const t = setTimeout(() => { timers.delete(t); if (alive) setNewMints(p => { const n = new Set(p); n.delete(msg.mint); return n; }); }, 6000);
             timers.add(t);
 
-            // Backfill data from OKX
             backfillTokenData(msg.mint).then(data => {
               if (!alive || !data) return;
-              const idx = tokensRef.current.findIndex(t => t.mint === msg.mint);
+              const idx = tokensRef.current.findIndex(tk => tk.mint === msg.mint);
               if (idx >= 0) {
                 tokensRef.current[idx] = { ...tokensRef.current[idx], ...data };
                 setTokens([].concat(tokensRef.current));
@@ -366,7 +341,7 @@ export default function NewLaunches({ onConnectWallet, resetKey }) {
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            {selectedToken.logoUrl ? <img src={selectedToken.logoUrl} alt="" style={{ width: 52, height: 52, borderRadius: 12 }} onError={e => e.currentTarget.style.display = 'none'} /> : <div style={{ width: 52, height: 52, borderRadius: 12, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, color: C.purple }}>{selectedToken.symbol?.charAt(0) || '?'}</div>}
+            {selectedToken.logoUrl ? <img src={selectedToken.logoUrl} alt="" style={{ width: 52, height: 52, borderRadius: 12, objectFit: 'cover' }} onError={e => { e.currentTarget.style.display = 'none'; }} /> : <div style={{ width: 52, height: 52, borderRadius: 12, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, color: C.purple }}>{selectedToken.symbol?.charAt(0) || '?'}</div>}
             <div><div style={{ color: '#fff', fontWeight: 800, fontSize: 20 }}>{selectedToken.symbol}</div><div style={{ color: C.muted, fontSize: 12 }}>{selectedToken.name}</div></div>
           </div>
           <div style={{ textAlign: 'right' }}><div style={{ fontSize: 24, fontWeight: 700, color: '#fff' }}>{fmtPrice(selectedToken.price)}</div></div>
@@ -391,4 +366,18 @@ export default function NewLaunches({ onConnectWallet, resetKey }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>New Launches</h1>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, background: wsStatus === 'live' ? 'rgba(0,255,163,.08)' : 'rgba(255,149,0,.08)', border: '1px solid ' + (wsStatus === 'live' ? 'rgba(0,255,163,.2)' : 'rgba(255,149,0,.2)'), borderRadius: 20, padding: '3px 10px' }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: wsStatus === 'live' ? C.green : C.orange, animation:
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: wsStatus === 'live' ? C.green : C.orange, animation: wsStatus === 'live' ? 'pulse 1.5s infinite' : 'none' }} />
+            <span style={{ fontSize: 10, color: wsStatus === 'live' ? C.green : C.orange, fontWeight: 600 }}>{wsStatus === 'live' ? 'LIVE' : wsStatus === 'reconnecting' ? 'RECONNECTING' : 'CONNECTING'}</span>
+          </div>
+        </div>
+        <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>{tokens.length} tokens tracked</p>
+      </div>
+      {tokens.length === 0 ? (
+        <div style={{ textAlign: 'center', padding: 60, background: C.card, border: '1px solid ' + C.border, borderRadius: 16, color: C.muted, fontSize: 14 }}>{wsStatus === 'live' ? 'Waiting for new launches...' : 'Connecting...'}</div>
+      ) : (
+        tokens.map(t => <TokenCard key={t.mint} token={t} onCardClick={setSelectedToken} onBuyClick={openBuyDrawer} onSellClick={openSellDrawer} isNew={newMints.has(t.mint)} />)
+      )}
+      <PumpDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} mode={drawerMode} token={drawerToken} solPrice={solPrice} onConnectWallet={onConnectWallet} presets={presets} presetUsd={drawerPresetUsd} />
+    </div>
+  );
+}
