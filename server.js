@@ -356,6 +356,26 @@ async function proxyOkx(req, res) {
 }
 app.get('/api/okx/*', proxyOkx);
 app.post('/api/okx/*', proxyOkx);
+
+app.get('/api/test-price-info', async (req, res) => {
+  try {
+    const mint = req.query.mint || 'So11111111111111111111111111111111111111112';
+    const body = JSON.stringify({ chainIndex: '501', tokenContractAddress: mint });
+    const okxPath = '/api/v6/dex/market/price-info';
+    const headers = buildOkxHeaders('POST', okxPath, body);
+    const response = await fetchWithTimeout('https://web3.okx.com' + okxPath, {
+      method: 'POST',
+      headers,
+      body,
+    }, 15_000);
+    const data = await response.json();
+    res.json(data);
+  } catch(e) {
+    res.json({ error: e.message });
+  }
+});
+
+
 /* -- JUPITER FALLBACK PROXY ------------------------------------------------- */
 /*
  * Jupiter is added as a Solana-only fallback.
