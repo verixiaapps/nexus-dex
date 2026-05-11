@@ -16,13 +16,6 @@ import {
 } from '@solana/spl-token';
 import BN from 'bn.js';
 
-// NEXUS DEX launch stack:
-// - Raydium LaunchLab for Raydium launches
-// - PumpPortal through /api/pumpportal/trade-local for Pump.fun launches
-// - OKX quote proxy for SOL/USD pricing
-// - Pinata proxies for metadata/images
-// Removed: Jupiter, 0x, LiFi, CoinGecko, GeckoTerminal, DexScreener.
-
 const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const LAUNCH_FEE_SOL = 0.5;
 const PLATFORM_ID = process.env.REACT_APP_PLATFORM_ID || null;
@@ -151,7 +144,7 @@ async function bundleFeeIntoLaunchTx(connection, rawTx, payerPubkey, feeLamports
 export default function TokenLaunch({ isConnected, onConnectWallet }) {
   const { publicKey: extPublicKey, signTransaction: extSignTx, signAllTransactions: extSignAllTxs } = useWallet();
   const { connection } = useConnection();
-  const { activeWalletKind, privyEmbeddedSol, loginPrivy } = useNexusWallet();
+  const { activeWalletKind, privyEmbeddedSol } = useNexusWallet();
 
   const publicKey = useMemo(function () {
     if (extPublicKey) return extPublicKey;
@@ -175,7 +168,6 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       if (typeof privyEmbeddedSol.signTransaction === 'function') {
         const out = [];
         for (let i = 0; i < txs.length; i++) {
-          // eslint-disable-next-line no-await-in-loop
           out.push(await privyEmbeddedSol.signTransaction(txs[i]));
         }
         return out;
@@ -216,9 +208,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
   var doLaunch = useCallback(async function() {
     if (!publicKey || !signTransaction || !signAllTransactions) {
       setPendingLaunch('raydium');
-      if (loginPrivy) loginPrivy();
-      else if (onConnectWallet) onConnectWallet();
-      else setError('Connect Solana wallet first');
+      onConnectWallet?.();
       return;
     }
 
@@ -318,14 +308,12 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
     }
 
     setLaunching(false);
-  }, [publicKey, signTransaction, signAllTransactions, connection, form, imageFile, imagePreview, loginPrivy, onConnectWallet]);
+  }, [publicKey, signTransaction, signAllTransactions, connection, form, imageFile, imagePreview, onConnectWallet]);
 
   var doPumpLaunch = useCallback(async function () {
     if (!publicKey || !signTransaction) {
       setPendingLaunch('pumpfun');
-      if (loginPrivy) loginPrivy();
-      else if (onConnectWallet) onConnectWallet();
-      else setError('Connect Solana wallet first');
+      onConnectWallet?.();
       return;
     }
 
@@ -476,7 +464,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
     }
 
     setLaunching(false);
-  }, [publicKey, signTransaction, connection, form, imageFile, imagePreview, activeWalletKind, loginPrivy, onConnectWallet]);
+  }, [publicKey, signTransaction, connection, form, imageFile, imagePreview, activeWalletKind, onConnectWallet]);
 
   useEffect(function() {
     if (!publicKey || !pendingLaunch) return undefined;
@@ -719,8 +707,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
             ) : (
               <button onClick={function() {
                   setPendingLaunch(platform);
-                  if (loginPrivy) loginPrivy();
-                  else if (onConnectWallet) onConnectWallet();
+                  onConnectWallet?.();
                 }}
                 style={{ flex: 2, padding: 16, borderRadius: 12, border: 'none', background: 'linear-gradient(135deg,#9945ff,#7c3aed)', color: '#fff', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, cursor: 'pointer' }}>
                 Sign in to Launch
