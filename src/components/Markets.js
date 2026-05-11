@@ -50,32 +50,24 @@ function Row({ c, i, isMobile, onClick }) {
   return (<div onClick={() => onClick(c)} style={{ ...baseStyle, display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 120px', gap: 8, alignItems: 'center' }}><div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div><div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}><TokenImage token={c} size={32} /><div style={{ minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</div><div style={{ fontSize: 10, color: C.muted }}>{sym}</div></div></div><div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>{fmt(c.current_price)}</div></div>);
 }
 
-// Fetch all prices in ONE batch call via price-info (array body)
-async function fetchBatchPrices(mints) {
-  if (!mints || mints.length === 0) return {};
+// Proven: parallel quote calls — all fire at once, prices load fast
+const _priceCache = {};
+async function fetchOkxPrice(mint, decimals) {
+  if (!mint) return 0;
+  const key = mint.toLowerCase();
+  if (_priceCache[key] && Date.now() - _priceCache[key].ts < 60000) return _priceCache[key].price;
+  const dec = decimals || 6;
+  const amount = Math.pow(10, dec).toString();
   try {
-    const tokenList = mints.map(mint => ({
-      chainIndex: '501',
-      tokenContractAddress: mint,
-    }));
-    const r = await fetch('/api/okx/dex/market/price-info', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(tokenList),
-    });
+    const r = await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=${amount}`);
     const j = await r.json();
     if (j.code === '0' && j.data) {
-      const priceMap = {};
-      const data = Array.isArray(j.data) ? j.data : [j.data];
-      data.forEach(d => {
-        const addr = (d.tokenContractAddress || d.tokenAddress || '').toLowerCase();
-        const price = Number(d.price || d.last || d.usdPrice || 0);
-        if (addr && price > 0) priceMap[addr] = price;
-      });
-      return priceMap;
+      const d = Array.isArray(j.data) ? j.data[0] : j.data;
+      const price = Number(d.toTokenAmount) / 1e6;
+      if (price > 0) { _priceCache[key] = { price, ts: Date.now() }; return price; }
     }
   } catch {}
-  return {};
+  return 0;
 }
 
 export default function Markets({ onSelectCoin, coins }) {
@@ -109,15 +101,12 @@ export default function Markets({ onSelectCoin, coins }) {
         if (!cancelled) { setAllTokens(raw); setLoading(false); }
 
         setPricesLoading(true);
-        const mints = raw.map(t => t.mint);
-        const priceMap = await fetchBatchPrices(mints);
-        if (!cancelled) {
-          setAllTokens(prev => prev.map(t => ({
-            ...t,
-            current_price: priceMap[t.mint.toLowerCase()] || t.current_price,
-          })));
-          setPricesLoading(false);
-        }
+        const promises = raw.map(async (t, idx) => {
+          const p = await fetchOkxPrice(t.mint, t.decimals);
+          if (!cancelled) setAllTokens(prev => { const next = [...prev]; if (next[idx]) next[idx] = { ...next[idx], current_price: p }; return next; });
+        });
+        await Promise.all(promises);
+        if (!cancelled) setPricesLoading(false);
       } catch { if (!cancelled) { setAllTokens([]); setLoading(false); } }
     })();
     return () => { cancelled = true; };
