@@ -1,124 +1,82 @@
-import React, { useState } from 'react';
-import PerpsTrade from './PerpsTrade.jsx';
+import React, { useState, useEffect } from 'react';
+import PerpsTrade from './PerpsTrade.js';
 
 const C = {
-  bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
-  border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
+  bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994',
 };
 
-const topPairs = ['ETH-PERP', 'BTC-PERP', 'SOL-PERP', 'ARB-PERP', 'OP-PERP'];
+const RESTRICTED = [
+  'United States',
+  'Canada',
+  'United Kingdom',
+  'OFAC/Sanctioned Jurisdictions (Iran, North Korea, Syria, Cuba, Venezuela, Russia, Crimea, Sudan, Myanmar)',
+  'Any country restricted by Hyperliquid or OKX',
+];
+
+const LS_KEY = 'nexus_perps_accepted';
 
 export default function PerpsLanding({ onConnectWallet }) {
-  const [mode, setMode] = useState('landing');
+  const [accepted, setAccepted] = useState(false);
 
-  if (mode === 'trade') {
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(LS_KEY) === '1') setAccepted(true);
+    } catch {}
+  }, []);
+
+  const handleAccept = () => {
+    try { localStorage.setItem(LS_KEY, '1'); } catch {}
+    setAccepted(true);
+  };
+
+  const handleDecline = () => {
+    window.history.back();
+  };
+
+  if (!accepted) {
     return (
-      <div style={{ maxWidth: 900, margin: '0 auto', padding: '24px 16px', fontFamily: 'Syne, sans-serif', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
-        <button onClick={() => setMode('landing')}
-          style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 13, fontWeight: 600, marginBottom: 20, padding: 0, fontFamily: 'Syne, sans-serif' }}>
-          ← Back to Perps
-        </button>
-        <PerpsTrade onConnectWallet={onConnectWallet} />
+      <div style={{ maxWidth: 560, margin: '0 auto', width: '100%', fontFamily: 'Syne, sans-serif', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
+        <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 24 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+            <div style={{ width: 40, height: 40, borderRadius: 12, background: 'rgba(255,149,0,.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18 }}>⚠️</div>
+            <div style={{ fontWeight: 800, fontSize: 18, color: '#fff' }}>Restricted Access</div>
+          </div>
+
+          <div style={{ color: C.muted, fontSize: 13, lineHeight: 1.6, marginBottom: 16 }}>
+            Perpetuals trading on Nexus DEX is <strong style={{ color: C.red }}>not available</strong> to residents, citizens, or persons located in:
+          </div>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 20 }}>
+            {RESTRICTED.map(c => (
+              <div key={c} style={{ fontSize: 13, color: C.text, padding: '10px 14px', background: C.bg, borderRadius: 10, border: '1px solid ' + C.border }}>
+                {c}
+              </div>
+            ))}
+          </div>
+
+          <div style={{ color: C.muted, fontSize: 12, lineHeight: 1.5, marginBottom: 20 }}>
+            By clicking <strong>"I Confirm &amp; Continue"</strong> you represent that you are <strong style={{ color: C.green }}>not</strong> located in, a citizen of, or a resident of any restricted jurisdiction listed above.
+          </div>
+
+          <button onClick={handleAccept} style={{
+            width: '100%', padding: 16, borderRadius: 14, border: 'none',
+            background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg,
+            fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16, cursor: 'pointer',
+            marginBottom: 10,
+          }}>I Confirm &amp; Continue</button>
+
+          <button onClick={handleDecline} style={{
+            width: '100%', padding: 14, borderRadius: 14,
+            background: 'transparent', border: '1px solid ' + C.border,
+            color: C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600,
+            fontSize: 14, cursor: 'pointer',
+          }}>I Don't Qualify — Go Back</button>
+        </div>
       </div>
     );
   }
 
-  return (
-    <div style={{ maxWidth: 900, margin: '0 auto', padding: '40px 16px', fontFamily: 'Syne, sans-serif', color: C.text, background: C.bg, minHeight: '100vh', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
-      
-      {/* Hero */}
-      <div style={{ textAlign: 'center', marginBottom: 40 }}>
-        <h1 style={{ fontSize: 42, fontWeight: 800, color: '#fff', margin: 0 }}>
-          Nexus Perps <span style={{ color: C.accent }}>Beta</span>
-        </h1>
-        <p style={{ fontSize: 18, color: C.muted, marginTop: 8 }}>
-          Trade crypto with up to 50x leverage. Powered by Hyperliquid.
-        </p>
-        <button onClick={() => setMode('trade')}
-          style={{
-            marginTop: 24, padding: '16px 40px', borderRadius: 16, border: 'none',
-            background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg,
-            fontSize: 18, fontWeight: 800, cursor: 'pointer', fontFamily: 'Syne, sans-serif'
-          }}>
-          Start Trading
-        </button>
-      </div>
-
-      {/* Stats — scrollable on mobile */}
-      <div style={{ overflowX: 'auto', marginBottom: 48, paddingBottom: 4 }}>
-        <div style={{ display: 'flex', gap: 16, minWidth: 'max-content' }}>
-          {[
-            { label: 'Max Leverage', value: '50x' },
-            { label: 'Powered by', value: 'Hyperliquid' },
-            { label: 'Fee', value: '0.10%' },
-          ].map(stat => (
-            <div key={stat.label} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 20, textAlign: 'center', minWidth: 170, flex: '0 0 auto' }}>
-              <div style={{ fontSize: 24, fontWeight: 800, color: '#fff', whiteSpace: 'nowrap' }}>{stat.value}</div>
-              <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>{stat.label}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* How it works */}
-      <div style={{ marginBottom: 48 }}>
-        <h2 style={{ fontSize: 24, fontWeight: 800, color: '#fff', marginBottom: 20, textAlign: 'center' }}>
-          How it <span style={{ color: C.accent }}>Works</span>
-        </h2>
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
-          {[
-            { step: '1', title: 'Connect Wallet', desc: 'Link your Solana wallet in one click.' },
-            { step: '2', title: 'Deposit USDC', desc: 'Fund your Hyperliquid account with USDC.' },
-            { step: '3', title: 'Pick a Pair', desc: 'Choose from top perps pairs like ETH, BTC, SOL.' },
-            { step: '4', title: 'Go Long or Short', desc: 'Set your leverage, confirm, and you\'re trading.' },
-          ].map(item => (
-            <div key={item.step} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, padding: 20, textAlign: 'center' }}>
-              <div style={{ width: 40, height: 40, borderRadius: '50%', background: 'rgba(0,229,255,.15)', color: C.accent, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, margin: '0 auto 12px' }}>{item.step}</div>
-              <div style={{ fontWeight: 700, fontSize: 16, color: '#fff', marginBottom: 6 }}>{item.title}</div>
-              <div style={{ fontSize: 13, color: C.muted }}>{item.desc}</div>
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* Trending pairs */}
-      <div style={{ marginBottom: 48 }}>
-        <h2 style={{ fontSize: 24, fontWeight: 800, color: '#fff', marginBottom: 20, textAlign: 'center' }}>
-          Trending <span style={{ color: C.accent }}>Pairs</span>
-        </h2>
-        <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
-          {topPairs.map(pair => (
-            <div key={pair} onClick={() => setMode('trade')} style={{
-              background: C.card, border: '1px solid ' + C.border, borderRadius: 12,
-              padding: '12px 24px', cursor: 'pointer',
-              fontWeight: 700, fontSize: 14, color: C.text
-            }}>
-              {pair}
-            </div>
-          ))}
-        </div>
-      </div>
-
-      {/* CTA */}
-      <div style={{
-        background: 'linear-gradient(135deg, rgba(0,229,255,0.08) 0%, rgba(0,85,255,0.04) 100%)',
-        border: '1px solid ' + C.borderHi, borderRadius: 24, padding: 40, textAlign: 'center'
-      }}>
-        <h2 style={{ fontSize: 28, fontWeight: 800, color: '#fff', marginBottom: 8 }}>Ready to trade?</h2>
-        <p style={{ fontSize: 16, color: C.muted, marginBottom: 24 }}>
-          No KYC. Just perps. Powered by Hyperliquid.
-        </p>
-        <button onClick={() => setMode('trade')}
-          style={{
-            padding: '16px 40px', borderRadius: 16, border: 'none',
-            background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: C.bg,
-            fontSize: 18, fontWeight: 800, cursor: 'pointer', fontFamily: 'Syne, sans-serif'
-          }}>
-          Start Trading
-        </button>
-      </div>
-    </div>
-  );
+  return <PerpsTrade onConnectWallet={onConnectWallet} />;
 }
