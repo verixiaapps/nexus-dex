@@ -1,9 +1,10 @@
 /**
  * NEXUS DEX -- NewLaunches
  * 
- * Live feed of newly-launched Solana pump.fun tokens via PumpPortal WebSocket.
- * Instant display with bonding curve price. No polling.
+ * Live feed: PumpPortal WebSocket (instant token discovery)
+ * Data backfill: OKX memepump/tokenDetails (price, market cap, volume, image)
  * Trades: pumpTrade.js -> /api/pumpportal/trade-local
+ * SOL price: OKX quote (fetched independently on mount)
  */
  
 import React, { useState, useEffect, useRef, useMemo } from 'react';
@@ -11,7 +12,6 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
 import { PublicKey } from '@solana/web3.js';
 import { quickBuyPump, quickSellPump, PLATFORM_FEE_RATE } from '../pumpTrade.js';
-import { useInstantPresets, PresetsEditButton } from '../instantPresets.jsx';
 
 const PUMPPORTAL_WS = 'wss://pumpportal.fun/api/data';
 const MAX_TOKENS = 100;
@@ -35,7 +35,7 @@ function timeAgo(ts) {
   return Math.floor(d / 3600) + 'h';
 }
 function fmtMc(n) {
-  if (!n) return '-';
+  if (!n || n <= 0) return '-';
   if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
   if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
   if (n >= 1000) return '$' + (n / 1000).toFixed(1) + 'K';
@@ -49,14 +49,57 @@ function fmtPrice(n) {
   return '$' + n.toFixed(2);
 }
 
+// Fetch SOL price independently
+let _solPriceCache = null;
+async function fetchSolPrice() {
+  if (_solPriceCache && Date.now() - _solPriceCache.ts < 30000) return _solPriceCache.price;
+  try {
+    const r = await fetch('/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=So11111111111111111111111111111111111111112&toTokenAddress=EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v&amount=1000000000');
+    const j = await r.json();
+    if (j.code === '0' && j.data) {
+      const d = Array.isArray(j.data) ? j.data[0] : j.data;
+      const p = Number(d.toTokenAmount) / 1e6;
+      if (p > 0) { _solPriceCache = { price: p, ts: Date.now() }; return p; }
+    }
+  } catch {}
+  return _solPriceCache?.price || 0;
+}
+
+// Backfill token data from OKX
+async function backfillTokenData(mint) {
+  if (!mint) return null;
+  try {
+    const r = await fetch(`/api/okx/dex/market/memepump/tokenDetails?chainIndex=501&tokenContractAddress=${mint}`);
+    const j = await r.json();
+    if (j.code === '0' && j.data) {
+      const d = j.data;
+      return {
+        symbol: d.symbol || '',
+        name: d.name || '',
+        logoUrl: d.logoUrl || null,
+        marketCap: Number(d.market?.marketCapUsd || d.marketCapUsd || 0),
+        volume1h: Number(d.market?.volumeUsd1h || d.volumeUsd1h || 0),
+        buys1h: Number(d.market?.buyTxCount1h || d.buyTxCount1h || 0),
+        sells1h: Number(d.market?.sellTxCount1h || d.sellTxCount1h || 0),
+        bondingPercent: Number(d.bondingPercent || 0),
+        holders: Number(d.tags?.totalHolders || 0),
+        createdAt: Number(d.createdTimestamp || 0),
+      };
+    }
+  } catch {}
+  return null;
+}
+
 /* ============================================================================
- * TokenCard — instant buy/sell, clean display
+ * TokenCard
  * ========================================================================= */
 function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
   const [flash, setFlash] = useState(false);
   useEffect(() => {
     if (isNew) { setFlash(true); const t = setTimeout(() => setFlash(false), 5000); return () => clearTimeout(t); }
   }, [isNew]);
+
+  const img = token.logoUrl || token.image;
 
   return (
     <div onClick={() => onCardClick(token)} style={{
@@ -67,7 +110,11 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
     }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10 }}>
         <div style={{ position: 'relative', flexShrink: 0 }}>
-          <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(153,69,255,.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, color: C.purple }}>{token.symbol?.charAt(0) || '?'}</div>
+          {img ? (
+            <img src={img} alt="" style={{ width: 44, height: 44, borderRadius: 10 }} onError={e => e.currentTarget.style.display = 'none'} />
+          ) : (
+            <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(153,69,255,.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 18, fontWeight: 800, color: C.purple }}>{token.symbol?.charAt(0) || '?'}</div>
+          )}
           {flash && <div style={{ position: 'absolute', top: -3, right: -3, width: 9, height: 9, borderRadius: '50%', background: C.green, boxShadow: '0 0 8px ' + C.green }} />}
         </div>
         <div style={{ flex: 1, minWidth: 0 }}>
@@ -93,7 +140,7 @@ function TokenCard({ token, onCardClick, onBuyClick, onSellClick, isNew }) {
 }
 
 /* ============================================================================
- * PumpDrawer — buy/sell drawer with fee, anti-MEV, presets
+ * PumpDrawer
  * ========================================================================= */
 function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, presets, presetUsd }) {
   const { publicKey: extPk, signTransaction, sendTransaction, connected: solCon } = useWallet();
@@ -226,7 +273,7 @@ function PumpDrawer({ open, onClose, mode, token, solPrice, onConnectWallet, pre
 /* ============================================================================
  * MAIN
  * ========================================================================= */
-export default function NewLaunches({ coins, onConnectWallet, resetKey }) {
+export default function NewLaunches({ onConnectWallet, resetKey }) {
   const [tokens, setTokens] = useState([]);
   const [selectedToken, setSelectedToken] = useState(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -235,14 +282,15 @@ export default function NewLaunches({ coins, onConnectWallet, resetKey }) {
   const [drawerPresetUsd, setDrawerPresetUsd] = useState(null);
   const [newMints, setNewMints] = useState(new Set());
   const [wsStatus, setWsStatus] = useState('connecting');
+  const [solPrice, setSolPrice] = useState(0);
   const [presets, setPresets] = useState(() => { try { return JSON.parse(localStorage.getItem('nexus_launch_presets') || '[5,10,25,50,100]'); } catch { return [5,10,25,50,100]; } });
 
   const tokensRef = useRef([]);
-  const solPrice = useMemo(() => { const c = coins?.find(x => x?.id === 'solana' || x?.symbol === 'SOL'); return c && Number(c.current_price) > 0 ? Number(c.current_price) : 0; }, [coins]);
 
   useEffect(() => { setSelectedToken(null); }, [resetKey]);
 
-  const handlePresetsChange = p => { setPresets(p); try { localStorage.setItem('nexus_launch_presets', JSON.stringify(p)); } catch {} };
+  // Fetch SOL price on mount
+  useEffect(() => { fetchSolPrice().then(setSolPrice); }, []);
 
   useEffect(() => {
     let alive = true, ws = null, reconnectTimer = null;
@@ -269,12 +317,16 @@ export default function NewLaunches({ coins, onConnectWallet, resetKey }) {
               mint: msg.mint,
               symbol: msg.symbol || msg.mint.slice(0, 4).toUpperCase(),
               name: msg.name || 'Unknown',
+              logoUrl: null,
               image: null,
               decimals: 6,
               price: priceUsd,
               marketCap: mcUsd,
-              volume24h: 0, buys24h: 0, sells24h: 0,
-              bondingProgress: 0, graduated: false,
+              volume1h: 0,
+              buys1h: 0,
+              sells1h: 0,
+              bondingPercent: 0,
+              holders: 0,
               createdAt: Date.now(),
             };
 
@@ -284,6 +336,16 @@ export default function NewLaunches({ coins, onConnectWallet, resetKey }) {
             setNewMints(p => { const n = new Set(p); n.add(msg.mint); return n; });
             const t = setTimeout(() => { timers.delete(t); if (alive) setNewMints(p => { const n = new Set(p); n.delete(msg.mint); return n; }); }, 6000);
             timers.add(t);
+
+            // Backfill data from OKX
+            backfillTokenData(msg.mint).then(data => {
+              if (!alive || !data) return;
+              const idx = tokensRef.current.findIndex(t => t.mint === msg.mint);
+              if (idx >= 0) {
+                tokensRef.current[idx] = { ...tokensRef.current[idx], ...data };
+                setTokens([].concat(tokensRef.current));
+              }
+            }).catch(() => {});
           } catch {}
         };
         ws.onerror = () => setWsStatus('error');
@@ -304,13 +366,13 @@ export default function NewLaunches({ coins, onConnectWallet, resetKey }) {
       <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 20, padding: 20, marginBottom: 14 }}>
         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 16 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 52, height: 52, borderRadius: 12, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, color: C.purple }}>{selectedToken.symbol?.charAt(0) || '?'}</div>
+            {selectedToken.logoUrl ? <img src={selectedToken.logoUrl} alt="" style={{ width: 52, height: 52, borderRadius: 12 }} onError={e => e.currentTarget.style.display = 'none'} /> : <div style={{ width: 52, height: 52, borderRadius: 12, background: 'rgba(153,69,255,.15)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 22, fontWeight: 800, color: C.purple }}>{selectedToken.symbol?.charAt(0) || '?'}</div>}
             <div><div style={{ color: '#fff', fontWeight: 800, fontSize: 20 }}>{selectedToken.symbol}</div><div style={{ color: C.muted, fontSize: 12 }}>{selectedToken.name}</div></div>
           </div>
           <div style={{ textAlign: 'right' }}><div style={{ fontSize: 24, fontWeight: 700, color: '#fff' }}>{fmtPrice(selectedToken.price)}</div></div>
         </div>
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 14 }}>
-          {[['Mkt Cap', fmtMc(selectedToken.marketCap)], ['Age', timeAgo(selectedToken.createdAt)]].map(([l, v]) => <div key={l} style={{ background: C.card2, borderRadius: 10, padding: 12 }}><div style={{ fontSize: 10, color: C.muted, fontWeight: 700 }}>{l}</div><div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{v}</div></div>)}
+          {[['Mkt Cap', fmtMc(selectedToken.marketCap)], ['Age', timeAgo(selectedToken.createdAt)], ['Volume 1H', fmtMc(selectedToken.volume1h)], ['Holders', selectedToken.holders > 0 ? selectedToken.holders : '-']].map(([l, v]) => <div key={l} style={{ background: C.card2, borderRadius: 10, padding: 12 }}><div style={{ fontSize: 10, color: C.muted, fontWeight: 700 }}>{l}</div><div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{v}</div></div>)}
         </div>
         <div style={{ background: C.card3, borderRadius: 10, padding: '8px 12px' }}><div style={{ fontSize: 9, color: C.muted, fontWeight: 700 }}>CONTRACT</div><div style={{ fontSize: 11, color: C.accent, fontFamily: 'monospace', wordBreak: 'break-all' }}>{selectedToken.mint}</div></div>
       </div>
@@ -329,18 +391,4 @@ export default function NewLaunches({ coins, onConnectWallet, resetKey }) {
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 4 }}>
           <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0 }}>New Launches</h1>
           <div style={{ display: 'flex', alignItems: 'center', gap: 5, background: wsStatus === 'live' ? 'rgba(0,255,163,.08)' : 'rgba(255,149,0,.08)', border: '1px solid ' + (wsStatus === 'live' ? 'rgba(0,255,163,.2)' : 'rgba(255,149,0,.2)'), borderRadius: 20, padding: '3px 10px' }}>
-            <div style={{ width: 6, height: 6, borderRadius: '50%', background: wsStatus === 'live' ? C.green : C.orange, animation: wsStatus === 'live' ? 'pulse 1.5s infinite' : 'none' }} />
-            <span style={{ fontSize: 10, color: wsStatus === 'live' ? C.green : C.orange, fontWeight: 600 }}>{wsStatus === 'live' ? 'LIVE' : wsStatus === 'reconnecting' ? 'RECONNECTING' : 'CONNECTING'}</span>
-          </div>
-        </div>
-        <p style={{ color: C.muted, fontSize: 12, margin: 0 }}>{tokens.length} tokens tracked</p>
-      </div>
-      {tokens.length === 0 ? (
-        <div style={{ textAlign: 'center', padding: 60, background: C.card, border: '1px solid ' + C.border, borderRadius: 16, color: C.muted, fontSize: 14 }}>{wsStatus === 'live' ? 'Waiting for new launches...' : 'Connecting...'}</div>
-      ) : (
-        tokens.map(t => <TokenCard key={t.mint} token={t} onCardClick={setSelectedToken} onBuyClick={openBuyDrawer} onSellClick={openSellDrawer} isNew={newMints.has(t.mint)} />)
-      )}
-      <PumpDrawer open={drawerOpen} onClose={() => setDrawerOpen(false)} mode={drawerMode} token={drawerToken} solPrice={solPrice} onConnectWallet={onConnectWallet} presets={presets} presetUsd={drawerPresetUsd} />
-    </div>
-  );
-}
+            <div style={{ width: 6, height: 6, borderRadius: '50%', background: wsStatus === 'live' ? C.green : C.orange, animation:
