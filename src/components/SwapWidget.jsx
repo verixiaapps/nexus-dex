@@ -574,7 +574,7 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
       signedTx=await extSignTx(tx);
     }
 
-    const sim=await conn.simulateTransaction(signedTx,{sigVerify:true});
+    const sim=await conn.simulateTransaction(signedTx,{sigVerify:false});
 
     if(sim?.value?.err){
       console.error('NEXUS swap simulation failed:',sim.value.err,sim.value.logs);
