@@ -50,32 +50,32 @@ function Row({ c, i, isMobile, onClick }) {
   return (<div onClick={() => onClick(c)} style={{ ...baseStyle, display: 'grid', gridTemplateColumns: '28px minmax(0,1fr) 120px', gap: 8, alignItems: 'center' }}><div style={{ color: C.muted, fontSize: 11 }}>{i + 1}</div><div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}><TokenImage token={c} size={32} /><div style={{ minWidth: 0 }}><div style={{ fontWeight: 700, fontSize: 13, color: '#fff', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{displayName}</div><div style={{ fontSize: 10, color: C.muted }}>{sym}</div></div></div><div style={{ fontWeight: 600, color: '#fff', fontSize: 12, textAlign: 'right' }}>{fmt(c.current_price)}</div></div>);
 }
 
-// Fetch prices via OKX price-info — one call per token, all in parallel
+// Fetch all prices in ONE batch call via price-info (array body)
 async function fetchBatchPrices(mints) {
   if (!mints || mints.length === 0) return {};
-  const priceMap = {};
-  
-  const results = await Promise.allSettled(
-    mints.map(async (mint) => {
-      try {
-        const r = await fetch('/api/okx/dex/market/price-info', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ chainIndex: '501', tokenContractAddress: mint }),
-        });
-        const j = await r.json();
-        if (j.code === '0' && j.data) {
-          const d = Array.isArray(j.data) ? j.data[0] : j.data;
-          const price = Number(d.price || d.last || d.usdPrice || 0);
-          if (price > 0) {
-            priceMap[mint.toLowerCase()] = price;
-          }
-        }
-      } catch {}
-    })
-  );
-  
-  return priceMap;
+  try {
+    const tokenList = mints.map(mint => ({
+      chainIndex: '501',
+      tokenContractAddress: mint,
+    }));
+    const r = await fetch('/api/okx/dex/market/price-info', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(tokenList),
+    });
+    const j = await r.json();
+    if (j.code === '0' && j.data) {
+      const priceMap = {};
+      const data = Array.isArray(j.data) ? j.data : [j.data];
+      data.forEach(d => {
+        const addr = (d.tokenContractAddress || d.tokenAddress || '').toLowerCase();
+        const price = Number(d.price || d.last || d.usdPrice || 0);
+        if (addr && price > 0) priceMap[addr] = price;
+      });
+      return priceMap;
+    }
+  } catch {}
+  return {};
 }
 
 export default function Markets({ onSelectCoin, coins }) {
@@ -84,7 +84,6 @@ export default function Markets({ onSelectCoin, coins }) {
   const [loading, setLoading] = useState(true);
   const [pricesLoading, setPricesLoading] = useState(false);
   const isMobile = useIsMobile();
-  const debouncedQ = useDebounce(q, 300);
 
   const solPriceUsd = useMemo(() => {
     if (!coins || !Array.isArray(coins)) return 0;
@@ -97,7 +96,6 @@ export default function Markets({ onSelectCoin, coins }) {
     setLoading(true);
     (async () => {
       try {
-        // 1. Get token list
         const r = await fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501');
         const j = await r.json();
         if (cancelled) return;
@@ -110,7 +108,6 @@ export default function Markets({ onSelectCoin, coins }) {
         raw.sort((a, b) => { if (a.symbol === 'SOL') return -1; if (b.symbol === 'SOL') return 1; if (a.symbol === 'USDC') return -1; if (b.symbol === 'USDC') return 1; if (a.symbol === 'USDT') return -1; if (b.symbol === 'USDT') return 1; return 0; });
         if (!cancelled) { setAllTokens(raw); setLoading(false); }
 
-        // 2. Fetch all prices in parallel
         setPricesLoading(true);
         const mints = raw.map(t => t.mint);
         const priceMap = await fetchBatchPrices(mints);
