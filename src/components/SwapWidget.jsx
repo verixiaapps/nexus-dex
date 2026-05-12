@@ -4,19 +4,6 @@
  * Swap engine: OKX DEX API — Solana only
  * Price data: OKX quote endpoint
  * Token search: OKX token list
- *
- * FIXED:
- *  - Handles long decimals safely for all tokens
- *  - Trims ugly trailing zeros
- *  - Preserves tiny values like 0.0000008
- *  - SOL always 9 decimals
- *  - USDC always 6 decimals
- *  - OKX token decimals preferred when available
- *  - Quote uses real token mints
- *  - Swap instruction uses OKX native SOL placeholder when needed
- *  - slippagePercent set to 15
- *  - Transaction is signed first, then simulated, then sent
- *  - Simulation is required for every wallet before broadcast
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -51,10 +38,7 @@ const POPULAR_TOKENS = [
 ];
 
 function trimZeros(v){
-  return String(v)
-    .replace(/(\.\d*?[1-9])0+$/,'$1')
-    .replace(/\.0+$/,'')
-    .replace(/\.$/,'');
+  return String(v).replace(/(\.\d*?[1-9])0+$/,'$1').replace(/\.0+$/,'').replace(/\.$/,'');
 }
 
 function displayDecimalsForValue(n){
@@ -78,13 +62,6 @@ function fmtTokenDisplay(n){
   return trimZeros(v.toFixed(displayDecimalsForValue(v)));
 }
 
-function fmtInputAmount(n,dec=9){
-  const v=Number(n);
-  if(!Number.isFinite(v)||v<=0)return'';
-  const max=Math.min(Math.max(Number(dec)||6,0),12);
-  return trimZeros(v.toFixed(max));
-}
-
 function fmtUsd(n,d=2){
   if(n==null||isNaN(n))return'-';
   const v=Number(n);
@@ -97,25 +74,16 @@ function fmtUsd(n,d=2){
   return'$0.00';
 }
 
-function fmtTokenAmount(n,d=4){
-  if(n==null||isNaN(n))return'0';
-  return fmtTokenDisplay(n);
-}
-
+function fmtTokenAmount(n){return fmtTokenDisplay(n);}
 function safeBigInt(v){if(v==null)return BigInt(0);if(typeof v==='bigint')return v;if(typeof v==='number')return Number.isFinite(v)?BigInt(Math.trunc(v)):BigInt(0);let s=String(v).trim();if(!s)return BigInt(0);if(/^-?0x[0-9a-f]+$/i.test(s))return BigInt(s);if(/^-?\d+$/.test(s))return BigInt(s);const n=Number(s);return Number.isFinite(n)?BigInt(Math.trunc(n)):BigInt(0);}
 function tokensEqual(a,b){if(!a||!b)return false;if(a.chain==='solana'&&b.chain==='solana')return a.mint===b.mint;return false;}
-function shortAddr(a,h=4,t=4){if(!a||a.length<h+t)return a||'';return a.slice(0,h)+'\u2026'+a.slice(-t);}
 function isValidSolMint(s){return!!s&&s.length>=32&&s.length<=44&&/^[1-9A-HJ-NP-Za-km-z]+$/.test(s);}
 
 function toRawAmount(s,dec){
   if(!s||dec==null)return'0';
   let v=String(s).trim().replace(/,/g,'.').replace(/^\+/,'');
   if(!v||v.startsWith('-'))return'0';
-  if(/e/i.test(v)){
-    const n=Number(v);
-    if(!Number.isFinite(n)||n<0)return'0';
-    v=n.toFixed(Math.max(Number(dec)||0,20));
-  }
+  if(/e/i.test(v)){const n=Number(v);if(!Number.isFinite(n)||n<0)return'0';v=n.toFixed(Math.max(Number(dec)||0,20));}
   const d=Math.floor(Number(dec));
   if(!Number.isFinite(d)||d<0||d>18)return'0';
   const[w,f='']=v.split('.');
@@ -128,70 +96,30 @@ function toRawAmount(s,dec){
 let _okxCache=null;
 let _okxLoading=null;
 
-function getOkxCachedToken(mint){
-  if(!_okxCache||!mint)return null;
-  return _okxCache.find(t=>t.mint===mint)||null;
-}
+function getOkxCachedToken(mint){if(!_okxCache||!mint)return null;return _okxCache.find(t=>t.mint===mint)||null;}
 
 function normalizeToken(input){
   if(!input)return null;
-
   const logo=input.logoURI||input.image||input.thumbnail||null;
   const sym=input.symbol||'TOKEN';
   const name=input.name||sym;
   const solMint=input.mint||(input.isSolanaToken?input.id:null);
-
   if(!solMint||!isValidSolMint(solMint))return null;
-
   let decimals=null;
-
-  if(solMint===WSOL_MINT||solMint===OKX_SOL_NATIVE){
-    decimals=9;
-  }else if(solMint===USDC_SOLANA){
-    decimals=6;
-  }else{
-    const okx=getOkxCachedToken(solMint);
-    const okxDecimals=Number(okx?.decimals);
-
-    if(Number.isFinite(okxDecimals)&&okxDecimals>=0&&okxDecimals<=18){
-      decimals=okxDecimals;
-    }else{
-      const parsed=Number(input.decimals);
-      if(Number.isFinite(parsed)&&parsed>=0&&parsed<=18){
-        decimals=parsed;
-      }
-    }
-  }
-
+  if(solMint===WSOL_MINT||solMint===OKX_SOL_NATIVE)decimals=9;
+  else if(solMint===USDC_SOLANA)decimals=6;
+  else{const okx=getOkxCachedToken(solMint);const okxD=Number(okx?.decimals);if(Number.isFinite(okxD)&&okxD>=0&&okxD<=18)decimals=okxD;else{const p=Number(input.decimals);if(Number.isFinite(p)&&p>=0&&p<=18)decimals=p;}}
   if(decimals==null)decimals=6;
-
-  return {
-    chain:'solana',
-    mint:solMint===OKX_SOL_NATIVE?WSOL_MINT:solMint,
-    symbol:sym,
-    name,
-    decimals,
-    logoURI:logo
-  };
+  return{chain:'solana',mint:solMint===OKX_SOL_NATIVE?WSOL_MINT:solMint,symbol:sym,name,decimals,logoURI:logo};
 }
 
 function nativeOfChain(){return POPULAR_TOKENS.find(t=>t.mint===WSOL_MINT);}
 function usdcOfChain(){return POPULAR_TOKENS.find(t=>t.mint===USDC_SOLANA);}
 
 function defaultTokenPair({mode,viewedToken,lastFromToken,walletState}){
-  const ws=walletState||{};
-  const viewed=viewedToken?normalizeToken(viewedToken):null;
-
-  if(mode==='buy'&&viewed){
-    const f=POPULAR_TOKENS.find(t=>!tokensEqual(t,viewed))||POPULAR_TOKENS[0];
-    return{fromToken:f,toToken:viewed};
-  }
-
-  if(mode==='sell'&&viewed){
-    const t=POPULAR_TOKENS.find(t=>!tokensEqual(t,viewed))||POPULAR_TOKENS[1];
-    return{fromToken:viewed,toToken:t};
-  }
-
+  const ws=walletState||{};const viewed=viewedToken?normalizeToken(viewedToken):null;
+  if(mode==='buy'&&viewed){const f=POPULAR_TOKENS.find(t=>!tokensEqual(t,viewed))||POPULAR_TOKENS[0];return{fromToken:f,toToken:viewed};}
+  if(mode==='sell'&&viewed){const t=POPULAR_TOKENS.find(t=>!tokensEqual(t,viewed))||POPULAR_TOKENS[1];return{fromToken:viewed,toToken:t};}
   if(lastFromToken&&!tokensEqual(lastFromToken,usdcOfChain()))return{fromToken:lastFromToken,toToken:usdcOfChain()};
   return{fromToken:nativeOfChain(),toToken:usdcOfChain()};
 }
@@ -202,682 +130,208 @@ function toOkxSolAddress(m){return m===WSOL_MINT?OKX_SOL_NATIVE:m;}
 function loadOkxSolTokens(){
   if(_okxCache)return Promise.resolve(_okxCache);
   if(_okxLoading)return _okxLoading;
-
   _okxLoading=fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501')
-    .then(r=>r.ok?r.json():{data:[]})
-    .catch(()=>({data:[]}))
-    .then(j=>{
-      const t=(j.data||[]).map(t=>{
-        const decimals=parseInt(t.decimals);
-        return {
-          chain:'solana',
-          mint:t.tokenContractAddress,
-          symbol:t.tokenSymbol||'',
-          name:t.tokenName||t.tokenSymbol||'',
-          decimals:Number.isFinite(decimals)?decimals:6,
-          logoURI:t.tokenLogoUrl||null,
-        };
-      }).filter(t=>isValidSolMint(t.mint)&&t.symbol);
-
-      _okxCache=t;
-      _okxLoading=null;
-      return t;
-    })
-    .catch(e=>{
-      _okxLoading=null;
-      throw e;
-    });
-
+    .then(r=>r.ok?r.json():{data:[]}).catch(()=>({data:[]}))
+    .then(j=>{const t=(j.data||[]).map(t=>{const d=parseInt(t.decimals);return{chain:'solana',mint:t.tokenContractAddress,symbol:t.tokenSymbol||'',name:t.tokenName||t.tokenSymbol||'',decimals:Number.isFinite(d)?d:6,logoURI:t.tokenLogoUrl||null};}).filter(t=>isValidSolMint(t.mint)&&t.symbol);_okxCache=t;_okxLoading=null;return t;})
+    .catch(e=>{_okxLoading=null;throw e;});
   return _okxLoading;
-}
-
-function getTokenDecimals(mint){
-  if(!mint)return null;
-  if(mint===WSOL_MINT||mint===OKX_SOL_NATIVE)return 9;
-  if(mint===USDC_SOLANA)return 6;
-
-  const found=POPULAR_TOKENS.find(t=>t.mint===mint);
-  if(found)return found.decimals;
-
-  const okx=getOkxCachedToken(mint);
-  const okxDecimals=Number(okx?.decimals);
-
-  if(Number.isFinite(okxDecimals)&&okxDecimals>=0&&okxDecimals<=18)return okxDecimals;
-
-  return null;
 }
 
 function getResolvedDecimals(token){
   if(!token)return null;
-
   if(token.mint===WSOL_MINT||token.mint===OKX_SOL_NATIVE)return 9;
   if(token.mint===USDC_SOLANA)return 6;
-
-  const okxDecimals=getTokenDecimals(token.mint);
-  if(Number.isFinite(okxDecimals)&&okxDecimals>=0&&okxDecimals<=18)return okxDecimals;
-
-  const direct=Number(token.decimals);
-  if(Number.isFinite(direct)&&direct>=0&&direct<=18)return direct;
-
+  const okxD=getOkxCachedToken(token.mint);
+  if(okxD&&Number.isFinite(Number(okxD.decimals)))return Number(okxD.decimals);
+  const d=Number(token.decimals);
+  if(Number.isFinite(d)&&d>=0&&d<=18)return d;
   return 6;
 }
 
 const _okxPriceCache=new Map();
-
-function getCachedOkxPrice(mint){
-  const e=_okxPriceCache.get(mint);
-  if(!e)return null;
-  if(Date.now()-e.ts>OKX_PRICE_CACHE_MS){_okxPriceCache.delete(mint);return null;}
-  return e.price;
-}
-
-function setCachedOkxPrice(mint,price){
-  if(!mint||price<=0)return;
-  _okxPriceCache.set(mint,{price,ts:Date.now()});
-}
+function getCachedOkxPrice(mint){const e=_okxPriceCache.get(mint);if(!e)return null;if(Date.now()-e.ts>OKX_PRICE_CACHE_MS){_okxPriceCache.delete(mint);return null;}return e.price;}
+function setCachedOkxPrice(mint,price){if(!mint||price<=0)return;_okxPriceCache.set(mint,{price,ts:Date.now()});}
 
 async function fetchOkxPrice(token){
-  const normalized=normalizeToken(token);
-  if(!normalized?.mint)return null;
-
-  const mint=normalized.mint;
-
+  const n=normalizeToken(token);
+  if(!n?.mint)return null;
+  const mint=n.mint;
   if(mint===USDC_SOLANA)return 1;
-
   const cached=getCachedOkxPrice(mint);
   if(cached!=null)return cached;
-
   await loadOkxSolTokens().catch(()=>{});
-
-  const refreshed=normalizeToken(normalized);
-  const decimals=getResolvedDecimals(refreshed);
-
-  if(decimals==null)return null;
-
-  const amount=(10n**BigInt(decimals)).toString();
-
+  const dec=getResolvedDecimals(n);
+  if(dec==null)return null;
+  const amount=(10n**BigInt(dec)).toString();
   try{
-    const params=new URLSearchParams({
-      chainIndex:'501',
-      fromTokenAddress:mint,
-      toTokenAddress:USDC_SOLANA,
-      amount,
-    }).toString();
-
-    const r=await fetch(`/api/okx/dex/aggregator/quote?${params}`);
+    const r=await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=${USDC_SOLANA}&amount=${amount}`);
     const j=await r.json();
-
-    if(j.code==='0'&&j.data){
-      const d=Array.isArray(j.data)?j.data[0]:j.data;
-      const price=Number(d.toTokenAmount)/1e6;
-      if(price>0){
-        setCachedOkxPrice(mint,price);
-        return price;
-      }
-    }
+    if(j.code==='0'&&j.data){const d=Array.isArray(j.data)?j.data[0]:j.data;const price=Number(d.toTokenAmount)/1e6;if(price>0){setCachedOkxPrice(mint,price);return price;}}
   }catch{}
-
   return null;
 }
 
 async function fetchOkxSolSwap({fromMint,toMint,amount,userWallet,signal}){
-  const p=new URLSearchParams({
-    chainIndex:'501',
-    chainId:'501',
-    fromTokenAddress:toOkxSolAddress(fromMint),
-    toTokenAddress:toOkxSolAddress(toMint),
-    amount:String(amount),
-    slippagePercent:'.15',
-    userWalletAddress:userWallet,
-    referrer:OKX_REFERRER,
-  });
-
+  const p=new URLSearchParams({chainIndex:'501',fromTokenAddress:toOkxSolAddress(fromMint),toTokenAddress:toOkxSolAddress(toMint),amount:String(amount),slippagePercent:'0.15',userWalletAddress:userWallet,referrer:OKX_REFERRER});
   const r=await fetch('/api/okx/dex/aggregator/swap-instruction?'+p.toString(),{signal});
   const j=await r.json();
-
   if(j.code!=='0'||!j.data)throw new Error(j.msg||'OKX swap-instruction failed');
-
   return Array.isArray(j.data)?j.data[0]:j.data;
 }
 
 function deserializeOkxIx(ix){
-  try{
-    if(!ix||!ix.programId||!Array.isArray(ix.accounts)||!ix.data)return null;
-    return new TransactionInstruction({
-      programId:new PublicKey(ix.programId),
-      keys:ix.accounts.map(a=>({
-        pubkey:new PublicKey(a.pubkey||a.publicKey||a.address),
-        isSigner:!!a.isSigner,
-        isWritable:!!a.isWritable
-      })),
-      data:Buffer.from(ix.data,'base64')
-    });
-  }catch{
-    return null;
-  }
+  try{if(!ix||!ix.programId||!Array.isArray(ix.accounts)||!ix.data)return null;return new TransactionInstruction({programId:new PublicKey(ix.programId),keys:ix.accounts.map(a=>({pubkey:new PublicKey(a.pubkey||a.publicKey||a.address),isSigner:!!a.isSigner,isWritable:!!a.isWritable})),data:Buffer.from(ix.data,'base64')});}catch{return null;}
 }
 
 async function buildOkxSolTx({connection,userPubkey,swapData}){
-  if(swapData.tx&&swapData.tx.data){
-    try{return VersionedTransaction.deserialize(Buffer.from(swapData.tx.data,'base64'));}catch{}
-  }
-
-  if(swapData.data&&typeof swapData.data==='string'){
-    try{return VersionedTransaction.deserialize(Buffer.from(swapData.data,'base64'));}catch{}
-  }
-
+  if(swapData.tx&&swapData.tx.data){try{return VersionedTransaction.deserialize(Buffer.from(swapData.tx.data,'base64'));}catch{}}
+  if(swapData.data&&typeof swapData.data==='string'){try{return VersionedTransaction.deserialize(Buffer.from(swapData.data,'base64'));}catch{}}
   const ixs=(swapData.instructionLists||[]).map(deserializeOkxIx).filter(Boolean);
-
-  if(!ixs.length)throw new Error('No usable instructions in OKX response');
-
+  if(!ixs.length)throw new Error('No usable instructions');
   const lta=Array.isArray(swapData.addressLookupTableAccount)?swapData.addressLookupTableAccount:[];
-  const lts=(await Promise.all(lta.map(async a=>{
-    try{
-      const acct=await connection.getAccountInfo(new PublicKey(a));
-      if(!acct)return null;
-      return new AddressLookupTableAccount({
-        key:new PublicKey(a),
-        state:AddressLookupTableAccount.deserialize(acct.data)
-      });
-    }catch{
-      return null;
-    }
-  }))).filter(Boolean);
-
-  const {blockhash}=await connection.getLatestBlockhash('finalized');
-
-  return new VersionedTransaction(
-    new TransactionMessage({
-      payerKey:userPubkey,
-      recentBlockhash:blockhash,
-      instructions:ixs
-    }).compileToV0Message(lts)
-  );
+  const lts=(await Promise.all(lta.map(async a=>{try{const acct=await connection.getAccountInfo(new PublicKey(a));if(!acct)return null;return new AddressLookupTableAccount({key:new PublicKey(a),state:AddressLookupTableAccount.deserialize(acct.data)});}catch{return null;}}))).filter(Boolean);
+  const{blockhash}=await connection.getLatestBlockhash('finalized');
+  return new VersionedTransaction(new TransactionMessage({payerKey:userPubkey,recentBlockhash:blockhash,instructions:ixs}).compileToV0Message(lts));
 }
 
-function loadPresets(){
-  try{
-    const r=localStorage.getItem(PRESETS_LS_KEY);
-    if(!r)return{buy:DEFAULT_BUY_PRESETS.slice(),sell:DEFAULT_SELL_PRESETS.slice()};
-    const p=JSON.parse(r);
-    return{
-      buy:Array.isArray(p.buy)&&p.buy.length>=2?p.buy:DEFAULT_BUY_PRESETS.slice(),
-      sell:Array.isArray(p.sell)&&p.sell.length>=1?p.sell:DEFAULT_SELL_PRESETS.slice()
-    };
-  }catch{
-    return{buy:DEFAULT_BUY_PRESETS.slice(),sell:DEFAULT_SELL_PRESETS.slice()};
-  }
-}
-
+function loadPresets(){try{const r=localStorage.getItem(PRESETS_LS_KEY);if(!r)return{buy:DEFAULT_BUY_PRESETS.slice(),sell:DEFAULT_SELL_PRESETS.slice()};const p=JSON.parse(r);return{buy:Array.isArray(p.buy)&&p.buy.length>=2?p.buy:DEFAULT_BUY_PRESETS.slice(),sell:Array.isArray(p.sell)&&p.sell.length>=1?p.sell:DEFAULT_SELL_PRESETS.slice()};}catch{return{buy:DEFAULT_BUY_PRESETS.slice(),sell:DEFAULT_SELL_PRESETS.slice()};}}
 function savePresets(p){try{localStorage.setItem(PRESETS_LS_KEY,JSON.stringify(p));}catch{}}
 function loadLastPair(){try{const v=JSON.parse(localStorage.getItem(LAST_PAIR_LS_KEY)||'null');return(!v||!v.from)?null:v;}catch{return null;}}
 function saveLastPair(from,to){if(!from||!to)return;try{localStorage.setItem(LAST_PAIR_LS_KEY,JSON.stringify({from,to,ts:Date.now()}));}catch{}}
 function maxSafeSolBalance(lamports){return lamports?Math.max(0,lamports-SOL_RESERVE_LAMPORTS)/LAMPORTS_PER_SOL:0;}
 
-function TokenIcon({token,size=32}){
-  const[err,setErr]=useState(false);
-
-  if(token&&token.logoURI&&!err){
-    return <img src={token.logoURI} alt="" style={{width:size,height:size,borderRadius:'50%',flexShrink:0}} onError={()=>setErr(true)}/>;
-  }
-
-  const ch=(token&&token.symbol)?token.symbol.charAt(0).toUpperCase():'?';
-
-  return <div style={{width:size,height:size,borderRadius:'50%',flexShrink:0,background:'rgba(0,229,255,.1)',border:'1px solid rgba(0,229,255,.2)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:Math.round(size*.4),fontWeight:700,color:C.accent}}>{ch}</div>;
-}
+function TokenIcon({token,size=32}){const[err,setErr]=useState(false);if(token&&token.logoURI&&!err)return<img src={token.logoURI} alt="" style={{width:size,height:size,borderRadius:'50%',flexShrink:0}} onError={()=>setErr(true)}/>;const ch=(token&&token.symbol)?token.symbol.charAt(0).toUpperCase():'?';return<div style={{width:size,height:size,borderRadius:'50%',flexShrink:0,background:'rgba(0,229,255,.1)',border:'1px solid rgba(0,229,255,.2)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:Math.round(size*.4),fontWeight:700,color:C.accent}}>{ch}</div>;}
 
 let _bl=0;
-
-function useBodyScrollLock(open){
-  useEffect(()=>{
-    if(!open)return;
-    if(typeof document==='undefined')return;
-
-    if(_bl===0)document.body.classList.add('nexus-scroll-locked');
-    _bl++;
-
-    return()=>{
-      _bl=Math.max(0,_bl-1);
-      if(_bl===0)document.body.classList.remove('nexus-scroll-locked');
-    };
-  },[open]);
-}
-
-function useEscapeKey(open,handler){
-  useEffect(()=>{
-    if(!open)return;
-
-    const onKey=e=>{
-      if(e.key==='Escape'){
-        e.stopPropagation();
-        handler?.();
-      }
-    };
-
-    window.addEventListener('keydown',onKey);
-    return()=>window.removeEventListener('keydown',onKey);
-  },[open,handler]);
-}
+function useBodyScrollLock(open){useEffect(()=>{if(!open)return;if(typeof document==='undefined')return;if(_bl===0)document.body.classList.add('nexus-scroll-locked');_bl++;return()=>{_bl=Math.max(0,_bl-1);if(_bl===0)document.body.classList.remove('nexus-scroll-locked');};},[open]);}
+function useEscapeKey(open,handler){useEffect(()=>{if(!open)return;const onKey=e=>{if(e.key==='Escape'){e.stopPropagation();handler?.();}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey);},[open,handler]);}
 
 function TokenSelectModal({open,onClose,onSelect}){
-  const[q,setQ]=useState('');
-  const[sr,setSr]=useState([]);
-
-  useEffect(()=>{
-    const t=q.trim();
-
-    if(!t){
-      setSr([]);
-      return;
-    }
-
-    const h=setTimeout(()=>{
-      const sol=(_okxCache||[])
-        .filter(tk=>tk.symbol&&tk.symbol.toLowerCase().includes(t.toLowerCase()))
-        .slice(0,30)
-        .map(normalizeToken)
-        .filter(Boolean);
-
-      const pop=POPULAR_TOKENS
-        .filter(tk=>tk.symbol&&tk.symbol.toLowerCase().includes(t.toLowerCase()))
-        .map(normalizeToken)
-        .filter(Boolean);
-
-      const seen=new Set();
-      const merged=[...sol,...pop].filter(tk=>{
-        if(seen.has(tk.mint))return false;
-        seen.add(tk.mint);
-        return true;
-      });
-
-      setSr(merged);
-    },200);
-
-    return()=>clearTimeout(h);
-  },[q]);
-
-  const close=()=>{
-    setQ('');
-    setSr([]);
-    onClose();
-  };
-
-  useBodyScrollLock(open);
-  useEscapeKey(open,close);
-
-  const hs=useCallback(t=>{
-    const normalized=normalizeToken(t);
-    if(normalized)onSelect(normalized);
-    close();
-  },[onSelect]);
-
+  const[q,setQ]=useState('');const[sr,setSr]=useState([]);
+  useEffect(()=>{const t=q.trim();if(!t){setSr([]);return;}const h=setTimeout(()=>{const sol=(_okxCache||[]).filter(tk=>tk.symbol&&tk.symbol.toLowerCase().includes(t.toLowerCase())).slice(0,30).map(normalizeToken).filter(Boolean);const pop=POPULAR_TOKENS.filter(tk=>tk.symbol&&tk.symbol.toLowerCase().includes(t.toLowerCase())).map(normalizeToken).filter(Boolean);const seen=new Set();setSr([...sol,...pop].filter(tk=>{if(seen.has(tk.mint))return false;seen.add(tk.mint);return true;}));},200);return()=>clearTimeout(h);},[q]);
+  const close=()=>{setQ('');setSr([]);onClose();};useBodyScrollLock(open);useEscapeKey(open,close);
+  const hs=useCallback(t=>{const n=normalizeToken(t);if(n)onSelect(n);close();},[onSelect]);
   const disp=q.trim()?sr:POPULAR_TOKENS.map(normalizeToken).filter(Boolean);
-
   if(!open)return null;
-
-  return(<>
-    <div onClick={close} style={{position:'fixed',inset:0,zIndex:499,background:'rgba(0,0,0,.78)'}}/>
-    <div style={{position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',zIndex:500,background:C.card,border:'1px solid '+C.borderHi,borderRadius:18,width:'94vw',maxWidth:440,maxHeight:'min(85vh, 100dvh)',display:'flex',flexDirection:'column',boxShadow:'0 24px 80px rgba(0,0,0,.95)'}}>
-      <div style={{padding:'16px 16px 10px',borderBottom:'1px solid '+C.border,flexShrink:0}}>
-        <div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}>
-          <div style={{color:'#fff',fontWeight:700,fontSize:16}}>Select Token</div>
-          <button onClick={close} style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:22,padding:4}}>x</button>
-        </div>
-        <input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search name, symbol..." style={{width:'100%',background:C.card2,border:'1px solid '+C.border,borderRadius:8,padding:'10px 12px',color:'#fff',fontSize:13,outline:'none',fontFamily:'Syne, sans-serif'}}/>
-      </div>
-      <div style={{overflowY:'auto',flex:1}}>
-        {!q&&<div style={{padding:'8px 16px 4px',fontSize:10,color:C.muted,fontWeight:700}}>POPULAR</div>}
-        {disp.length===0&&<div style={{padding:24,textAlign:'center',color:C.muted}}>No matches</div>}
-        {disp.map((t,i)=>(
-          <div key={(t.mint||'')+i} onClick={()=>hs(t)} style={{padding:'12px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:10,borderBottom:'1px solid rgba(255,255,255,.03)'}}>
-            <TokenIcon token={t} size={32}/>
-            <div style={{flex:1}}>
-              <span style={{color:'#fff',fontWeight:700,fontSize:13}}>{t.symbol}</span>
-              <div style={{color:C.muted,fontSize:11}}>{t.name}</div>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  </>);
+  return(<><div onClick={close} style={{position:'fixed',inset:0,zIndex:499,background:'rgba(0,0,0,.78)'}}/><div style={{position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',zIndex:500,background:C.card,border:'1px solid '+C.borderHi,borderRadius:18,width:'94vw',maxWidth:440,maxHeight:'min(85vh, 100dvh)',display:'flex',flexDirection:'column',boxShadow:'0 24px 80px rgba(0,0,0,.95)'}}><div style={{padding:'16px 16px 10px',borderBottom:'1px solid '+C.border,flexShrink:0}}><div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}><div style={{color:'#fff',fontWeight:700,fontSize:16}}>Select Token</div><button onClick={close} style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:22,padding:4}}>x</button></div><input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search name, symbol..." style={{width:'100%',background:C.card2,border:'1px solid '+C.border,borderRadius:8,padding:'10px 12px',color:'#fff',fontSize:13,outline:'none',fontFamily:'Syne, sans-serif'}}/></div><div style={{overflowY:'auto',flex:1}}>{!q&&<div style={{padding:'8px 16px 4px',fontSize:10,color:C.muted,fontWeight:700}}>POPULAR</div>}{disp.length===0&&<div style={{padding:24,textAlign:'center',color:C.muted}}>No matches</div>}{disp.map((t,i)=>(<div key={(t.mint||'')+i} onClick={()=>hs(t)} style={{padding:'12px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:10,borderBottom:'1px solid rgba(255,255,255,.03)'}}><TokenIcon token={t} size={32}/><div style={{flex:1}}><span style={{color:'#fff',fontWeight:700,fontSize:13}}>{t.symbol}</span><div style={{color:C.muted,fontSize:11}}>{t.name}</div></div></div>))}</div></div></>);
 }
 
+/* ===== MAIN SWAP WIDGET ===== */
 export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToToken,compact=false,mode:modeProp='swap',presets:presetsProp,onPresetsChange,onStatusChange}){
   const{publicKey:extPk,sendTransaction:extSendTx,signTransaction:extSignTx,connected:solCon}=useWallet();
   const{connection}=useConnection();
   const nexus=useNexusWallet();
   const{activeWalletKind,privyEmbeddedSol}=nexus;
 
-  const pubkey=useMemo(()=>{
-    if(extPk)return extPk;
-    if(privyEmbeddedSol?.address){
-      try{return new PublicKey(privyEmbeddedSol.address);}catch{return null;}
-    }
-    return null;
-  },[extPk,privyEmbeddedSol]);
-
+  const pubkey=useMemo(()=>{if(extPk)return extPk;if(privyEmbeddedSol?.address){try{return new PublicKey(privyEmbeddedSol.address);}catch{return null;}}return null;},[extPk,privyEmbeddedSol]);
   const hasSol=!!(solCon||(privyEmbeddedSol&&pubkey));
   const wcon=!!hasSol;
 
-  const signSimulateAndSendTx=useCallback(async(tx,conn)=>{
-    let signedTx=null;
+  // Simulate first (unsigned), then sign and send
+  const simulateAndSend=useCallback(async(tx,conn)=>{
+    // 1. Simulate unsigned transaction first
+    const sim=await conn.simulateTransaction(tx,{sigVerify:false});
+    if(sim?.value?.err){
+      console.error('Simulation failed:',sim.value.err);
+      throw new Error('Transaction would fail. Try a smaller amount.');
+    }
 
+    // 2. Sign after simulation passes
+    let signedTx;
     if(activeWalletKind==='privy'&&privyEmbeddedSol){
-      if(typeof privyEmbeddedSol.signTransaction!=='function'){
-        throw new Error('Wallet must support transaction signing for simulation.');
-      }
+      if(typeof privyEmbeddedSol.signTransaction!=='function')throw new Error('Wallet does not support signing');
       signedTx=await privyEmbeddedSol.signTransaction(tx);
     }else{
-      if(typeof extSignTx!=='function'){
-        throw new Error('Wallet must support transaction signing for simulation.');
-      }
+      if(typeof extSignTx!=='function')throw new Error('Wallet does not support signing');
       signedTx=await extSignTx(tx);
     }
 
-    const sim=await conn.simulateTransaction(signedTx,{sigVerify:true});
-
-    if(sim?.value?.err){
-      console.error('NEXUS swap simulation failed:',sim.value.err,sim.value.logs);
-      throw new Error('Transaction simulation failed. Swap not sent.');
-    }
-
-    return conn.sendRawTransaction(signedTx.serialize(),{
-      skipPreflight:false,
-      maxRetries:3
-    });
+    // 3. Send
+    return conn.sendRawTransaction(signedTx.serialize(),{skipPreflight:false,maxRetries:3});
   },[activeWalletKind,privyEmbeddedSol,extSignTx]);
 
   const ip=useMemo(()=>{
-    if(defaultFromToken||defaultToToken){
-      const p=defaultTokenPair({mode:modeProp,viewedToken:defaultToToken||defaultFromToken,lastFromToken:null,walletState:{solConnected:solCon}});
-      return{
-        fromToken:defaultFromToken?normalizeToken(defaultFromToken):p.fromToken,
-        toToken:defaultToToken?normalizeToken(defaultToToken):p.toToken
-      };
-    }
-
+    if(defaultFromToken||defaultToToken){const p=defaultTokenPair({mode:modeProp,viewedToken:defaultToToken||defaultFromToken,lastFromToken:null,walletState:{solConnected:solCon}});return{fromToken:defaultFromToken?normalizeToken(defaultFromToken):p.fromToken,toToken:defaultToToken?normalizeToken(defaultToToken):p.toToken};}
     const last=loadLastPair();
-
-    return defaultTokenPair({
-      mode:modeProp,
-      viewedToken:null,
-      lastFromToken:last?.from?normalizeToken(last.from):null,
-      walletState:{solConnected:solCon}
-    });
+    return defaultTokenPair({mode:modeProp,viewedToken:null,lastFromToken:last?.from?normalizeToken(last.from):null,walletState:{solConnected:solCon}});
   },[]);
 
   const[ft,setFtRaw]=useState(normalizeToken(ip.fromToken)||POPULAR_TOKENS[0]);
   const[tt,setTtRaw]=useState(normalizeToken(ip.toToken)||POPULAR_TOKENS[1]);
-  const[fa,setFa]=useState('');
-  const utRef=useRef(false);
-  const[quote,setQ]=useState(null);
-  const[qe,setQe]=useState('');
-  const[ss,setSs]=useState('idle');
-  const[stx,setStx]=useState(null);
-  const[se,setSe]=useState('');
-  const[ps,setPs]=useState(false);
-  const[sbl,setSbl]=useState(null);
-  const[ssb,setSsb]=useState(null);
-  const[pl,setPl]=useState(()=>presetsProp||loadPresets());
-  const presets=presetsProp||pl;
-  const[fso,setFso]=useState(false);
-  const[tso,setTso]=useState(false);
-  const[fp,setFp]=useState(null);
-  const[tp,setTp]=useState(null);
+  const[fa,setFa]=useState('');const utRef=useRef(false);
+  const[quote,setQ]=useState(null);const[qe,setQe]=useState('');
+  const[ss,setSs]=useState('idle');const[stx,setStx]=useState(null);const[se,setSe]=useState('');
+  const[sbl,setSbl]=useState(null);const[ssb,setSsb]=useState(null);
+  const[pl,setPl]=useState(()=>presetsProp||loadPresets());const presets=presetsProp||pl;
+  const[fso,setFso]=useState(false);const[tso,setTso]=useState(false);
+  const[fp,setFp]=useState(null);const[tp,setTp]=useState(null);
 
   const setFt=useCallback(t=>setFtRaw(normalizeToken(t)||POPULAR_TOKENS[0]),[]);
   const setTt=useCallback(t=>setTtRaw(normalizeToken(t)||POPULAR_TOKENS[1]),[]);
+  const setPresets=useCallback(p=>{if(onPresetsChange)onPresetsChange(p);else{setPl(p);savePresets(p);}},[onPresetsChange]);
 
-  const setPresets=useCallback(p=>{
-    if(onPresetsChange)onPresetsChange(p);
-    else{
-      setPl(p);
-      savePresets(p);
-    }
-  },[onPresetsChange]);
+  useEffect(()=>{onStatusChange?.(ss);},[ss]);
 
-  useEffect(()=>{onStatusChange?.(ss);},[ss,onStatusChange]);
+  useEffect(()=>{loadOkxSolTokens().then(()=>{setFtRaw(t=>normalizeToken(t)||t);setTtRaw(t=>normalizeToken(t)||t);}).catch(()=>{});},[]);
 
-  useEffect(()=>{
-    loadOkxSolTokens().then(()=>{
-      setFtRaw(t=>normalizeToken(t)||t);
-      setTtRaw(t=>normalizeToken(t)||t);
-    }).catch(()=>{});
-  },[]);
+  useEffect(()=>{if(!pubkey||!connection){setSbl(null);setSsb(null);return;}let c=false;connection.getBalance(pubkey).then(b=>{if(!c)setSbl(b);}).catch(()=>{});if(ft?.chain==='solana'&&ft.mint!==WSOL_MINT){connection.getParsedTokenAccountsByOwner(pubkey,{mint:new PublicKey(ft.mint)}).then(a=>{if(!c)setSsb(a.value.length?a.value[0].account.data.parsed.info.tokenAmount.uiAmount:0);}).catch(()=>{});}else{setSsb(null);}return()=>{c=true;};},[pubkey,connection,ft]);
 
-  useEffect(()=>{
-    if(!pubkey||!connection){
-      setSbl(null);
-      setSsb(null);
-      return;
-    }
+  useEffect(()=>{if(ss!=='success')return;if(pubkey&&connection&&ft?.chain==='solana'){connection.getBalance(pubkey).then(setSbl).catch(()=>{});if(ft.mint!==WSOL_MINT)connection.getParsedTokenAccountsByOwner(pubkey,{mint:new PublicKey(ft.mint)}).then(a=>setSsb(a.value.length?a.value[0].account.data.parsed.info.tokenAmount.uiAmount:0)).catch(()=>{});}},[ss]);
 
-    let c=false;
-
-    connection.getBalance(pubkey).then(b=>{if(!c)setSbl(b);}).catch(()=>{});
-
-    if(ft?.chain==='solana'&&ft.mint!==WSOL_MINT){
-      connection.getParsedTokenAccountsByOwner(pubkey,{mint:new PublicKey(ft.mint)})
-        .then(a=>{
-          if(!c)setSsb(a.value.length?a.value[0].account.data.parsed.info.tokenAmount.uiAmount:0);
-        })
-        .catch(()=>{});
-    }else{
-      setSsb(null);
-    }
-
-    return()=>{c=true;};
-  },[pubkey,connection,ft]);
-
-  useEffect(()=>{
-    if(ss!=='success')return;
-
-    if(pubkey&&connection&&ft?.chain==='solana'){
-      connection.getBalance(pubkey).then(setSbl).catch(()=>{});
-
-      if(ft.mint!==WSOL_MINT){
-        connection.getParsedTokenAccountsByOwner(pubkey,{mint:new PublicKey(ft.mint)})
-          .then(a=>setSsb(a.value.length?a.value[0].account.data.parsed.info.tokenAmount.uiAmount:0))
-          .catch(()=>{});
-      }
-    }
-  },[ss,pubkey,connection,ft]);
-
-  useEffect(()=>{
-    let c=false;
-    fetchOkxPrice(ft).then(p=>{if(!c)setFp(p);});
-    return()=>{c=true;};
-  },[ft]);
-
-  useEffect(()=>{
-    let c=false;
-    fetchOkxPrice(tt).then(p=>{if(!c)setTp(p);});
-    return()=>{c=true;};
-  },[tt]);
+  useEffect(()=>{let c=false;fetchOkxPrice(ft).then(p=>{if(!c)setFp(p);});return()=>{c=true;};},[ft]);
+  useEffect(()=>{let c=false;fetchOkxPrice(tt).then(p=>{if(!c)setTp(p);});return()=>{c=true;};},[tt]);
 
   const fetchQ=useCallback(async()=>{
-    setQe('');
-
-    if(!fa||parseFloat(fa)<=0||tokensEqual(ft,tt)){
-      setQ(null);
-      if(tokensEqual(ft,tt))setQe('Cannot swap a token for itself.');
-      return;
-    }
-
+    setQe('');if(!fa||parseFloat(fa)<=0||tokensEqual(ft,tt)){setQ(null);if(tokensEqual(ft,tt))setQe('Cannot swap a token for itself.');return;}
     try{
       await loadOkxSolTokens().catch(()=>{});
-
-      const fromToken=normalizeToken(ft);
-      const toToken=normalizeToken(tt);
-
-      const fromDecimals=getResolvedDecimals(fromToken);
-      const toDecimals=getResolvedDecimals(toToken);
-
-      if(fromDecimals==null||toDecimals==null){
-        setQe('Token decimals unavailable. Try selecting the token again.');
-        setQ(null);
-        return;
-      }
-
-      const raw=toRawAmount(fa,fromDecimals);
-
-      if(!raw||raw==='0'){
-        setQe('Enter a larger amount.');
-        setQ(null);
-        return;
-      }
-
-      const params=new URLSearchParams({
-        chainIndex:'501',
-        fromTokenAddress:fromToken.mint,
-        toTokenAddress:toToken.mint,
-        amount:raw,
-      }).toString();
-
-      const r=await fetch(`/api/okx/dex/aggregator/quote?${params}`);
+      const fromToken=normalizeToken(ft);const toToken=normalizeToken(tt);
+      const fd=getResolvedDecimals(fromToken);const td=getResolvedDecimals(toToken);
+      if(fd==null||td==null){setQe('Token decimals unavailable.');setQ(null);return;}
+      const raw=toRawAmount(fa,fd);if(!raw||raw==='0'){setQe('Enter a larger amount.');setQ(null);return;}
+      const r=await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${fromToken.mint}&toTokenAddress=${toToken.mint}&amount=${raw}`);
       const j=await r.json();
-
-      if(j.code!=='0'||!j.data){
-        setQe(j.msg||'Quote not available');
-        setQ(null);
-        return;
-      }
-
+      if(j.code!=='0'||!j.data){setQe(j.msg||'Quote not available');setQ(null);return;}
       const d=Array.isArray(j.data)?j.data[0]:j.data;
-      const outAmount=Number(d.toTokenAmount)/Math.pow(10,toDecimals);
-
-      setQ({
-        engine:'okx',
-        outAmountDisplay:fmtTokenDisplay(outAmount),
-        preview:false
-      });
-    }catch(e){
-      setQe('Quote request failed');
-      setQ(null);
-    }
+      const out=Number(d.toTokenAmount)/Math.pow(10,td);
+      setQ({engine:'okx',outAmountDisplay:fmtTokenDisplay(out),preview:false});
+    }catch(e){setQe('Quote failed');setQ(null);}
   },[fa,ft,tt]);
 
-  useEffect(()=>{
-    const t=setTimeout(fetchQ,QUOTE_DEBOUNCE_MS);
-    return()=>clearTimeout(t);
-  },[fetchQ]);
+  useEffect(()=>{const t=setTimeout(fetchQ,QUOTE_DEBOUNCE_MS);return()=>clearTimeout(t);},[fetchQ]);
 
-  const fbd=useMemo(()=>{
-    if(ft?.chain==='solana')return ft.mint===WSOL_MINT?(sbl!=null?sbl/LAMPORTS_PER_SOL:null):ssb;
-    return null;
-  },[ft,sbl,ssb]);
+  const fbd=useMemo(()=>{if(ft?.chain==='solana')return ft.mint===WSOL_MINT?(sbl!=null?sbl/LAMPORTS_PER_SOL:null):ssb;return null;},[ft,sbl,ssb]);
 
-  const onMax=useCallback(()=>{
-    if(fbd==null||fbd<=0)return;
+  const onMax=useCallback(()=>{if(fbd==null||fbd<=0)return;utRef.current=true;const d=Math.min(getResolvedDecimals(ft)??6,9);if(ft?.chain==='solana'&&ft.mint===WSOL_MINT){setFa(fmtTokenDisplay(maxSafeSolBalance(sbl)));return;}setFa(fmtTokenDisplay(fbd));},[fbd,ft,sbl]);
 
-    utRef.current=true;
-    const d=Math.min(getResolvedDecimals(ft)??6,9);
+  const applyB=useCallback(d=>{if(fp>0){utRef.current=true;setFa(fmtTokenDisplay(d/fp));}},[fp]);
 
-    if(ft?.chain==='solana'&&ft.mint===WSOL_MINT){
-      setFa(fmtInputAmount(maxSafeSolBalance(sbl),d));
-      return;
-    }
+  const applyS=useCallback(pct=>{if(fbd==null||fbd<=0)return;utRef.current=true;let a=fbd*(pct/100);if(pct===100&&ft?.chain==='solana'&&ft.mint===WSOL_MINT)a=maxSafeSolBalance(sbl);setFa(fmtTokenDisplay(a));},[fbd,ft,sbl]);
 
-    setFa(fmtInputAmount(fbd,d));
-  },[fbd,ft,sbl]);
-
-  const applyB=useCallback(d=>{
-    if(fp>0){
-      utRef.current=true;
-      setFa(fmtInputAmount(d/fp,getResolvedDecimals(ft)??6));
-    }
-  },[fp,ft]);
-
-  const applyS=useCallback(pct=>{
-    if(fbd==null||fbd<=0)return;
-
-    utRef.current=true;
-    const d=Math.min(getResolvedDecimals(ft)??6,9);
-    let a=fbd*(pct/100);
-
-    if(pct===100&&ft?.chain==='solana'&&ft.mint===WSOL_MINT)a=maxSafeSolBalance(sbl);
-
-    setFa(fmtInputAmount(a,d));
-  },[fbd,ft,sbl]);
-
-  const flip=useCallback(()=>{
-    setFt(tt);
-    setTt(ft);
-    setFa('');
-    setQ(null);
-    setQe('');
-    utRef.current=false;
-  },[ft,tt,setFt,setTt]);
+  const flip=useCallback(()=>{setFt(tt);setTt(ft);setFa('');setQ(null);setQe('');utRef.current=false;},[ft,tt,setFt,setTt]);
 
   const exec=useCallback(async()=>{
-    if(!wcon){
-      onConnectWallet?.();
-      return;
-    }
-
-    setSs('loading');
-    setSe('');
-    setStx(null);
-
+    if(!wcon){onConnectWallet?.();return;}
+    setSs('loading');setSe('');setStx(null);
     try{
       await loadOkxSolTokens().catch(()=>{});
-
-      const fromToken=normalizeToken(ft);
-      const toToken=normalizeToken(tt);
-      const fromDecimals=getResolvedDecimals(fromToken);
-
-      if(fromDecimals==null)throw new Error('Token decimals unavailable');
-
-      const raw=toRawAmount(fa,fromDecimals);
-
+      const fromToken=normalizeToken(ft);const toToken=normalizeToken(tt);
+      const fd=getResolvedDecimals(fromToken);
+      if(fd==null)throw new Error('Token decimals unavailable');
+      const raw=toRawAmount(fa,fd);
       if(!raw||raw==='0')throw new Error('Invalid amount');
       if(!pubkey)throw new Error('Connect Solana wallet');
-
-      const sd=await fetchOkxSolSwap({
-        fromMint:fromToken.mint,
-        toMint:toToken.mint,
-        amount:raw,
-        userWallet:pubkey.toString()
-      });
-
+      const sd=await fetchOkxSolSwap({fromMint:fromToken.mint,toMint:toToken.mint,amount:raw,userWallet:pubkey.toString()});
       const tx=await buildOkxSolTx({connection,userPubkey:pubkey,swapData:sd});
-      const sig=await signSimulateAndSendTx(tx,connection);
-
+      // Simulate first, then sign and send
+      const sig=await simulateAndSend(tx,connection);
       setStx(sig);
-
-      connection.confirmTransaction({
-        signature:sig,
-        blockhash:tx.message.recentBlockhash,
-        lastValidBlockHeight:(await connection.getLatestBlockhash('confirmed')).lastValidBlockHeight
-      },'confirmed').catch(()=>{});
-
+      connection.confirmTransaction({signature:sig,blockhash:tx.message.recentBlockhash,lastValidBlockHeight:(await connection.getLatestBlockhash('confirmed')).lastValidBlockHeight},'confirmed').catch(()=>{});
       saveLastPair(fromToken,toToken);
-      setSs('success');
-      setFa('');
-      setQ(null);
-      utRef.current=false;
-
-      setTimeout(()=>{
-        setSs('idle');
-        setStx(null);
-      },6000);
-    }catch(e){
-      setSe(e.message||'Swap failed');
-      setSs('error');
-
-      setTimeout(()=>{
-        setSs('idle');
-        setSe('');
-      },5000);
-    }
-  },[wcon,fa,ft,tt,pubkey,signSimulateAndSendTx,connection,onConnectWallet]);
-
-  useEffect(()=>{
-    if(wcon&&ps){
-      setPs(false);
-      exec();
-    }
-  },[wcon,ps,exec]);
+      setSs('success');setFa('');setQ(null);utRef.current=false;
+      setTimeout(()=>{setSs('idle');setStx(null);},6000);
+    }catch(e){setSe(e.message||'Swap failed');setSs('error');setTimeout(()=>{setSs('idle');setSe('');},5000);}
+  },[wcon,fa,ft,tt,pubkey,simulateAndSend,connection,onConnectWallet]);
 
   const txLink=useMemo(()=>stx?'https://solscan.io/tx/'+stx:null,[stx]);
   const fuv=fa&&fp>0?parseFloat(fa)*fp:0;
@@ -889,146 +343,51 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
 
   return(<div style={{width:'100%',maxWidth:compact?'100%':520,margin:'0 auto'}}>
     {!compact&&<div style={{marginBottom:16}}><h1 style={{fontSize:22,fontWeight:800,color:'#fff',margin:0}}>Swap</h1><p style={{color:C.muted,fontSize:12,marginTop:4}}>Solana. Powered by OKX DEX.</p></div>}
-
     <div style={{background:compact?'transparent':C.card,border:compact?'none':'1px solid '+C.border,borderRadius:compact?0:18,padding:compact?0:18}}>
-      {showBuy&&<div style={{marginBottom:8}}>
-        <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:6}}>QUICK BUY</div>
-        <div style={{display:'flex',gap:5}}>
-          {presets.buy.map((a,i)=><button key={i} onClick={()=>applyB(a)} style={{flex:1,padding:'10px 4px',borderRadius:8,border:'1px solid '+C.border,background:C.card2,color:C.muted,fontWeight:700,fontSize:12,cursor:'pointer',fontFamily:'Syne, sans-serif',minHeight:40}}>${a}</button>)}
-        </div>
-      </div>}
-
-      {showSell&&fbd>0&&<div style={{marginBottom:8}}>
-        <div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:6}}>QUICK SELL</div>
-        <div style={{display:'flex',gap:5}}>
-          {presets.sell.map((p,i)=><button key={i} onClick={()=>applyS(p)} style={{flex:1,padding:'10px 4px',borderRadius:8,border:'1px solid '+C.border,background:C.card2,color:C.muted,fontWeight:700,fontSize:12,cursor:'pointer',fontFamily:'Syne, sans-serif',minHeight:40}}>{p===100?'MAX':p+'%'}</button>)}
-        </div>
-      </div>}
-
+      {showBuy&&<div style={{marginBottom:8}}><div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:6}}>QUICK BUY</div><div style={{display:'flex',gap:5}}>{presets.buy.map((a,i)=><button key={i} onClick={()=>applyB(a)} style={{flex:1,padding:'10px 4px',borderRadius:8,border:'1px solid '+C.border,background:C.card2,color:C.muted,fontWeight:700,fontSize:12,cursor:'pointer',fontFamily:'Syne, sans-serif',minHeight:40}}>${a}</button>)}</div></div>}
+      {showSell&&fbd>0&&<div style={{marginBottom:8}}><div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:6}}>QUICK SELL</div><div style={{display:'flex',gap:5}}>{presets.sell.map((p,i)=><button key={i} onClick={()=>applyS(p)} style={{flex:1,padding:'10px 4px',borderRadius:8,border:'1px solid '+C.border,background:C.card2,color:C.muted,fontWeight:700,fontSize:12,cursor:'pointer',fontFamily:'Syne, sans-serif',minHeight:40}}>{p===100?'MAX':p+'%'}</button>)}</div></div>}
       <div style={{background:C.card2,borderRadius:12,padding:14,border:'1px solid '+C.border,marginBottom:4}}>
-        <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
-          <span style={{fontSize:11,color:C.muted}}>YOU PAY</span>
-          {fbd!=null&&<span style={{fontSize:11,color:C.muted}}>Balance: <span style={{color:C.text}}>{fmtTokenAmount(fbd)}</span></span>}
-        </div>
-
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}><span style={{fontSize:11,color:C.muted}}>YOU PAY</span>{fbd!=null&&<span style={{fontSize:11,color:C.muted}}>Balance: <span style={{color:C.text}}>{fmtTokenAmount(fbd)}</span></span>}</div>
         <div style={{display:'flex',alignItems:'center',gap:8}}>
-          <button onClick={()=>setFso(true)} style={{display:'flex',alignItems:'center',gap:6,background:C.card3,border:'1px solid '+C.border,borderRadius:10,padding:'8px 10px',cursor:'pointer',flexShrink:0}}>
-            <TokenIcon token={ft} size={20}/>
-            <span style={{color:'#fff',fontWeight:700,fontSize:13}}>{ft?.symbol}</span>
-          </button>
-
+          <button onClick={()=>setFso(true)} style={{display:'flex',alignItems:'center',gap:6,background:C.card3,border:'1px solid '+C.border,borderRadius:10,padding:'8px 10px',cursor:'pointer',flexShrink:0}}><TokenIcon token={ft} size={20}/><span style={{color:'#fff',fontWeight:700,fontSize:13}}>{ft?.symbol}</span></button>
           <input value={fa} onChange={e=>{utRef.current=true;setFa(e.target.value.replace(/[^0-9.]/g,''));}} placeholder="0.00" inputMode="decimal" style={{flex:1,background:'transparent',border:'none',fontSize:22,color:'#fff',textAlign:'right',outline:'none',fontFamily:'JetBrains Mono, monospace'}}/>
-
           {fbd>0&&<button onClick={onMax} style={{background:'rgba(0,229,255,.12)',border:'1px solid rgba(0,229,255,.25)',borderRadius:6,padding:'6px 10px',color:C.accent,fontSize:11,fontWeight:700,cursor:'pointer',flexShrink:0,fontFamily:'Syne, sans-serif'}}>MAX</button>}
         </div>
-
         {fuv>0&&<div style={{textAlign:'right',marginTop:5,fontSize:11,color:C.muted}}>{fmtUsd(fuv)}</div>}
       </div>
-
-      <div style={{display:'flex',justifyContent:'center',margin:'8px 0'}}>
-        <button onClick={flip} style={{width:40,height:40,borderRadius:10,background:C.card3,border:'1px solid '+C.border,cursor:'pointer',color:C.accent,fontSize:14,display:'flex',alignItems:'center',justifyContent:'center'}}>{'\u21F5'}</button>
-      </div>
-
+      <div style={{display:'flex',justifyContent:'center',margin:'8px 0'}}><button onClick={flip} style={{width:40,height:40,borderRadius:10,background:C.card3,border:'1px solid '+C.border,cursor:'pointer',color:C.accent,fontSize:14,display:'flex',alignItems:'center',justifyContent:'center'}}>{'\u21F5'}</button></div>
       <div style={{background:C.card2,borderRadius:12,padding:14,border:'1px solid '+C.border}}>
-        <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
-          <span style={{fontSize:11,color:C.muted}}>YOU RECEIVE</span>
-        </div>
-
+        <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}><span style={{fontSize:11,color:C.muted}}>YOU RECEIVE</span></div>
         <div style={{display:'flex',alignItems:'center',gap:8}}>
-          <button onClick={()=>setTso(true)} style={{display:'flex',alignItems:'center',gap:6,background:C.card3,border:'1px solid '+C.border,borderRadius:10,padding:'8px 10px',cursor:'pointer',flexShrink:0}}>
-            <TokenIcon token={tt} size={20}/>
-            <span style={{color:'#fff',fontWeight:700,fontSize:13}}>{tt?.symbol}</span>
-          </button>
-
+          <button onClick={()=>setTso(true)} style={{display:'flex',alignItems:'center',gap:6,background:C.card3,border:'1px solid '+C.border,borderRadius:10,padding:'8px 10px',cursor:'pointer',flexShrink:0}}><TokenIcon token={tt} size={20}/><span style={{color:'#fff',fontWeight:700,fontSize:13}}>{tt?.symbol}</span></button>
           <div style={{flex:1,textAlign:'right',fontSize:22,color:tc,fontFamily:'JetBrains Mono, monospace'}}>{td}</div>
         </div>
-
         {tuv>0&&<div style={{textAlign:'right',marginTop:5,fontSize:11,color:C.muted}}>{fmtUsd(tuv)}</div>}
       </div>
-
       {qe&&<div style={{marginTop:8,padding:10,background:'rgba(255,59,107,.1)',border:'1px solid rgba(255,59,107,.2)',borderRadius:8,fontSize:12,color:C.red}}>{qe}</div>}
-
-      {quote&&fa&&<div style={{marginTop:12,background:'#050912',borderRadius:10,padding:12}}>
-        {[
-          ['Platform fee',fuv>0?fmtUsd(fuv*PLATFORM_FEE):(PLATFORM_FEE*100)+'%'],
-          ['Anti-MEV',(SAFETY_FEE*100)+'%'],
-          ['Max slippage','15%']
-        ].map(i=><div key={i[0]} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',fontSize:11}}><span style={{color:C.muted}}>{i[0]}</span><span style={{color:C.text}}>{i[1]}</span></div>)}
-      </div>}
-
+      {quote&&fa&&<div style={{marginTop:12,background:'#050912',borderRadius:10,padding:12}}>{[['Platform fee',fuv>0?fmtUsd(fuv*PLATFORM_FEE):(PLATFORM_FEE*100)+'%'],['Anti-MEV',(SAFETY_FEE*100)+'%']].map(i=><div key={i[0]} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',fontSize:11}}><span style={{color:C.muted}}>{i[0]}</span><span style={{color:C.text}}>{i[1]}</span></div>)}</div>}
       {se&&<div style={{marginTop:10,padding:10,background:'rgba(255,59,107,.1)',border:'1px solid rgba(255,59,107,.3)',borderRadius:8,fontSize:12,color:C.red}}>{se}</div>}
-
-      {!wcon?
-        <button onClick={()=>onConnectWallet?.()} style={{width:'100%',marginTop:14,padding:16,borderRadius:12,border:'none',background:'linear-gradient(135deg,#9945ff,#7c3aed)',color:'#fff',fontFamily:'Syne, sans-serif',fontWeight:800,fontSize:15,cursor:'pointer',minHeight:52}}>Sign in to Swap</button>
-        :
-        <button onClick={exec} disabled={ss==='loading'||!fa} style={{width:'100%',marginTop:14,padding:16,borderRadius:12,border:'none',background:ss==='success'?'linear-gradient(135deg,#00ffa3,#00b36b)':ss==='error'?'rgba(255,59,107,.2)':!fa?C.card2:C.buyGrad,color:!fa?C.muted2:'#fff',fontFamily:'Syne, sans-serif',fontWeight:800,fontSize:15,cursor:ss==='loading'?'not-allowed':'pointer',minHeight:52}}>
-          {ss==='loading'?'Confirming...':ss==='success'?'Done!':ss==='error'?'Retry':!fa?'Enter amount':'Swap '+(ft?.symbol||'')+' \u2192 '+(tt?.symbol||'')}
-        </button>
-      }
-
+      {!wcon?<button onClick={()=>onConnectWallet?.()} style={{width:'100%',marginTop:14,padding:16,borderRadius:12,border:'none',background:'linear-gradient(135deg,#9945ff,#7c3aed)',color:'#fff',fontFamily:'Syne, sans-serif',fontWeight:800,fontSize:15,cursor:'pointer',minHeight:52}}>Sign in to Swap</button>
+      :<button onClick={exec} disabled={ss==='loading'||!fa} style={{width:'100%',marginTop:14,padding:16,borderRadius:12,border:'none',background:ss==='success'?'linear-gradient(135deg,#00ffa3,#00b36b)':ss==='error'?'rgba(255,59,107,.2)':!fa?C.card2:C.buyGrad,color:!fa?C.muted2:'#fff',fontFamily:'Syne, sans-serif',fontWeight:800,fontSize:15,cursor:ss==='loading'?'not-allowed':'pointer',minHeight:52}}>{ss==='loading'?'Confirming...':ss==='success'?'Done!':ss==='error'?'Retry':!fa?'Enter amount':'Swap '+(ft?.symbol||'')+' \u2192 '+(tt?.symbol||'')}</button>}
       {stx&&ss==='success'&&txLink&&<a href={txLink} target="_blank" rel="noreferrer" style={{display:'block',textAlign:'center',marginTop:10,fontSize:12,color:C.accent}}>View transaction</a>}
       <p style={{textAlign:'center',fontSize:10,color:C.muted2,marginTop:10}}>Non-custodial \u00b7 Powered by OKX DEX</p>
     </div>
-
     <TokenSelectModal open={fso} onClose={()=>setFso(false)} onSelect={t=>{setFt(t);setQ(null);setQe('');}}/>
     <TokenSelectModal open={tso} onClose={()=>setTso(false)} onSelect={t=>{setTt(t);setQ(null);setQe('');}}/>
   </div>);
 }
 
+/* ===== TRADE DRAWER ===== */
 export function TradeDrawer({open,onClose,mode='buy',coin,onConnectWallet,presets,onPresetsChange}){
   const{connected:solCon}=useWallet();
   const nc=useMemo(()=>coin?normalizeToken(coin):null,[coin]);
-
-  const pair=useMemo(()=>{
-    return nc
-      ? defaultTokenPair({mode,viewedToken:nc,lastFromToken:null,walletState:{solConnected:solCon}})
-      : defaultTokenPair({mode,viewedToken:null,lastFromToken:null,walletState:{solConnected:solCon}});
-  },[nc,mode,solCon]);
-
-  const wk=useMemo(()=>{
-    const id=nc?(nc.mint||'tok'):'none';
-    return id+'-'+mode;
-  },[nc,mode]);
-
-  const[sws,setSws]=useState('idle');
-  const busy=sws==='loading';
-
-  useEffect(()=>{
-    if(open)setSws('idle');
-  },[open]);
-
-  const sc=useCallback(()=>{
-    if(busy)return;
-    onClose();
-  },[busy,onClose]);
-
-  useBodyScrollLock(open);
-  useEscapeKey(open,sc);
-
+  const pair=useMemo(()=>nc?defaultTokenPair({mode,viewedToken:nc,lastFromToken:null,walletState:{solConnected:solCon}}):defaultTokenPair({mode,viewedToken:null,lastFromToken:null,walletState:{solConnected:solCon}}),[nc,mode,solCon]);
+  const wk=useMemo(()=>{const id=nc?(nc.mint||'tok'):'none';return id+'-'+mode;},[nc,mode]);
+  const[sws,setSws]=useState('idle');const busy=sws==='loading';
+  useEffect(()=>{if(open)setSws('idle');},[open]);
+  const sc=useCallback(()=>{if(busy)return;onClose();},[busy,onClose]);
+  useBodyScrollLock(open);useEscapeKey(open,sc);
   if(!open)return null;
-
-  const sym=(nc&&nc.symbol)||(coin&&coin.symbol)||'';
-  const img=(nc&&nc.logoURI)||(coin&&(coin.image||coin.logoURI));
-
-  return(<>
-    <div onClick={sc} style={{position:'fixed',inset:0,zIndex:400,background:'rgba(0,0,0,.85)'}}/>
-    <div style={{position:'fixed',bottom:0,left:'50%',transform:'translateX(-50%)',width:'100%',maxWidth:560,zIndex:401,background:C.card,borderTop:'2px solid '+C.borderHi,borderRadius:'20px 20px 0 0',boxShadow:'0 -20px 60px rgba(0,0,0,.9)',maxHeight:'min(90vh, 100dvh)',display:'flex',flexDirection:'column',overflow:'hidden'}}>
-      <div style={{flexShrink:0,padding:'16px 20px 12px'}}>
-        <div onClick={sc} style={{width:40,height:4,background:C.muted2,borderRadius:2,margin:'0 auto 14px',cursor:busy?'default':'pointer',opacity:busy?0.4:1}}/>
-
-        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
-          <div style={{display:'flex',alignItems:'center',gap:10}}>
-            {img&&<img src={img} alt="" style={{width:28,height:28,borderRadius:'50%'}} onError={e=>e.currentTarget.style.display='none'}/>}
-            <div style={{color:mode==='buy'?C.accent:C.red,fontWeight:800,fontSize:17}}>{mode==='buy'?'Buy':'Sell'} {sym.toUpperCase()}</div>
-          </div>
-
-          <button onClick={sc} disabled={busy} style={{background:'none',border:'none',color:busy?C.muted2:C.muted,fontSize:26,cursor:busy?'not-allowed':'pointer',padding:4}}>x</button>
-        </div>
-      </div>
-
-      <div style={{flex:1,minHeight:0,overflowY:'auto',padding:'4px 20px',paddingBottom:'calc(env(safe-area-inset-bottom) + 80px)'}}>
-        <SwapWidget key={wk} onConnectWallet={onConnectWallet} defaultFromToken={pair.fromToken} defaultToToken={pair.toToken} compact={true} mode={mode} presets={presets} onPresetsChange={onPresetsChange} onStatusChange={setSws}/>
-      </div>
-    </div>
-  </>);
+  const sym=(nc&&nc.symbol)||(coin&&coin.symbol)||'';const img=(nc&&nc.logoURI)||(coin&&(coin.image||coin.logoURI));
+  return(<><div onClick={sc} style={{position:'fixed',inset:0,zIndex:400,background:'rgba(0,0,0,.85)'}}/><div style={{position:'fixed',bottom:0,left:'50%',transform:'translateX(-50%)',width:'100%',maxWidth:560,zIndex:401,background:C.card,borderTop:'2px solid '+C.borderHi,borderRadius:'20px 20px 0 0',boxShadow:'0 -20px 60px rgba(0,0,0,.9)',maxHeight:'min(90vh, 100dvh)',display:'flex',flexDirection:'column',overflow:'hidden'}}><div style={{flexShrink:0,padding:'16px 20px 12px'}}><div onClick={sc} style={{width:40,height:4,background:C.muted2,borderRadius:2,margin:'0 auto 14px',cursor:busy?'default':'pointer',opacity:busy?0.4:1}}/><div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><div style={{display:'flex',alignItems:'center',gap:10}}>{img&&<img src={img} alt="" style={{width:28,height:28,borderRadius:'50%'}} onError={e=>e.currentTarget.style.display='none'}/>}<div style={{color:mode==='buy'?C.accent:C.red,fontWeight:800,fontSize:17}}>{mode==='buy'?'Buy':'Sell'} {sym.toUpperCase()}</div></div><button onClick={sc} disabled={busy} style={{background:'none',border:'none',color:busy?C.muted2:C.muted,fontSize:26,cursor:busy?'not-allowed':'pointer',padding:4}}>x</button></div></div><div style={{flex:1,minHeight:0,overflowY:'auto',padding:'4px 20px',paddingBottom:'calc(env(safe-area-inset-bottom) + 80px)'}}><SwapWidget key={wk} onConnectWallet={onConnectWallet} defaultFromToken={pair.fromToken} defaultToToken={pair.toToken} compact={true} mode={mode} presets={presets} onPresetsChange={onPresetsChange} onStatusChange={setSws}/></div></div></>);
 }
