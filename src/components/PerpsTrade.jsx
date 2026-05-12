@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
+import { signL1Action } from '@nktkas/hyperliquid/signing';
 
 /* ============================================================================
  * NEXUS DEX -- Hyperliquid Perps Trading Interface
@@ -424,12 +425,40 @@ function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = fals
 }
 
 async function placeOrder({ pair, isLong, usdAmount, leverage, reduceOnly = false }) {
+  const stored = getStoredHlWallet('anon') || getStoredHlWallet(pair?.walletPubkey);
+
+  let walletData = stored;
+  if (!walletData?.privateKey) {
+    const activeStorageKey = Object.keys(localStorage).find(k => k.startsWith('nexus_hl_wallet_'));
+    if (activeStorageKey) {
+      const suffix = activeStorageKey.replace('nexus_hl_wallet_', '');
+      walletData = getStoredHlWallet(suffix);
+    }
+  }
+
+  if (!walletData?.privateKey) {
+    throw new Error('Hyperliquid wallet private key not found. Create wallet first.');
+  }
+
   const built = buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly });
+  const nonce = Date.now();
+
+  const mod = await getEthers();
+  const ethers = mod?.ethers;
+  if (!ethers) throw new Error('Ethers unavailable');
+
+  const wallet = new ethers.Wallet(walletData.privateKey);
+
+  const signature = await signL1Action({
+    wallet,
+    action: built.action,
+    nonce,
+  });
 
   return hlRequest({
-    type: 'placeOrder',
-    source: 'nexus-perps-ui',
-    ...built,
+    action: built.action,
+    nonce,
+    signature,
   }, true);
 }
 
