@@ -4,6 +4,18 @@
  * Swap engine: OKX DEX API — Solana only
  * Price data: OKX quote endpoint
  * Token search: OKX token list
+ *
+ * FIXED:
+ *  - Handles long decimals safely for all tokens
+ *  - Trims ugly trailing zeros
+ *  - Preserves tiny values like 0.0000008
+ *  - SOL always 9 decimals
+ *  - USDC always 6 decimals
+ *  - OKX token decimals preferred when available
+ *  - Quote uses real token mints
+ *  - Swap instruction uses OKX native SOL placeholder when needed
+ *  - slippagePercent set to 0.15 (15%)
+ *  - Simulates unsigned FIRST, then signs and sends — Phantom never sees a failing tx
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
