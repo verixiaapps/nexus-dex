@@ -310,7 +310,7 @@ async function fetchMarketData(existingOneHourMap = {}, existingSparkMap = {}) {
 }
 
 async function fetchOneHourChangeMap(markets) {
-  const limited = markets.slice(0, 28);
+  const limited = markets.slice(0, 60);
   const changes = await Promise.all(limited.map(p => fetchOneHourChange(p.id)));
   const map = {};
   limited.forEach((p, i) => { map[p.id] = Number.isFinite(changes[i]) ? changes[i] : 0; });
