@@ -1038,4 +1038,4 @@ export default function PerpsTrade({ onConnectWallet }) {
       />
     </div>
   );
-}
+} 
