@@ -327,7 +327,7 @@ async function fetchOkxSolSwap({fromMint,toMint,amount,userWallet,signal}){
     fromTokenAddress:toOkxSolAddress(fromMint),
     toTokenAddress:toOkxSolAddress(toMint),
     amount:String(amount),
-    slippagePercent:'15',
+    slippagePercent:'.15',
     userWalletAddress:userWallet,
     referrer:OKX_REFERRER,
   });
