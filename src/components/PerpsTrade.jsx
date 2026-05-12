@@ -318,7 +318,7 @@ async function fetchOneHourChangeMap(markets) {
 }
 
 async function fetchSparklineMap(markets) {
-  const limited = markets.slice(0, 14);
+  const limited = markets.slice(0, 60);
   const sparks = await Promise.all(limited.map(p => fetchSparklineData(p.id)));
   const map = {};
   limited.forEach((p, i) => { map[p.id] = Array.isArray(sparks[i]) ? sparks[i] : []; });
