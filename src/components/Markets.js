@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 
-const C = {
+const C = { 
   card: '#080d1a', card2: '#0c1220',
   border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
