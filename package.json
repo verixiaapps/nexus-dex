@@ -5,7 +5,7 @@
   "proxy": "http://localhost:3001",
   "dependencies": {
     "react": "^18.2.0",
-    "react-dom": "^18.2.0", 
+    "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",
     "react-app-rewired": "^2.2.1",
     "react-router-dom": "^6.22.0",
@@ -39,7 +39,7 @@
     "@raydium-io/raydium-sdk-v2": "0.1.131-alpha",
     "@metaplex-foundation/mpl-token-metadata": "3.4.0",
     "@privy-io/react-auth": "^2.0.0",
-    "hyperliquid": "^1.0.0",
+    "@nktkas/hyperliquid": "^0.32.2",
     "ethers": "^6.13.0"
   },
   "devDependencies": {
