@@ -48,9 +48,25 @@ function tokenAmountForOne(decimals) {
   return String(Math.round(10 ** Math.min(Math.max(d, 0), 12)));
 }
 
-function openTokenPage(mint) {
+function openTokenPage(token, onSelectCoin) {
+  if (!token || !onSelectCoin) return;
+
+  const mint = token.mint || token.address || token.tokenAddress || token.id;
   if (!mint) return;
-  window.location.href = `/token/${encodeURIComponent(mint)}`;
+
+  onSelectCoin({
+    id: mint,
+    mint,
+    address: mint,
+    tokenAddress: mint,
+    symbol: token.symbol || mint.slice(0, 4) + '...',
+    name: token.name || token.symbol || mint.slice(0, 4) + '...',
+    chain: 'solana',
+    decimals: token.decimals,
+    price: token.price,
+    value: token.value,
+    uiAmount: token.uiAmount,
+  });
 }
 
 const _priceCache = {};
@@ -97,7 +113,7 @@ async function fetchOkxPrice(mint, decimals = 6, force = false) {
   return 0;
 }
 
-export default function Portfolio({ onSend, onConnectWallet }) {
+export default function Portfolio({ onSelectCoin, onSend, onConnectWallet }) {
   const { publicKey: extPk, connected: solCon } = useWallet();
   const { connection } = useConnection();
   const { privyEmbeddedSol } = useNexusWallet();
@@ -354,11 +370,13 @@ export default function Portfolio({ onSend, onConnectWallet }) {
         </div>
 
         <div
-          onClick={() => openTokenPage(SOL_MINT)}
+          onClick={() => openTokenPage({ mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, price: solPriceUsd, value: solValue, uiAmount: solBalance }, onSelectCoin)}
           role="button"
           tabIndex={0}
           onKeyDown={e => {
-            if (e.key === 'Enter' || e.key === ' ') openTokenPage(SOL_MINT);
+            if (e.key === 'Enter' || e.key === ' ') {
+              openTokenPage({ mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, price: solPriceUsd, value: solValue, uiAmount: solBalance }, onSelectCoin);
+            }
           }}
           style={{
             padding: '12px 16px',
@@ -367,7 +385,7 @@ export default function Portfolio({ onSend, onConnectWallet }) {
             gap: 8,
             alignItems: 'center',
             borderBottom: '1px solid rgba(255,255,255,.025)',
-            cursor: 'pointer',
+            cursor: onSelectCoin ? 'pointer' : 'default',
             WebkitTapHighlightColor: 'rgba(0,229,255,.12)',
           }}
         >
@@ -396,11 +414,11 @@ export default function Portfolio({ onSend, onConnectWallet }) {
           return (
             <div
               key={token.mint}
-              onClick={() => openTokenPage(token.mint)}
+              onClick={() => openTokenPage(token, onSelectCoin)}
               role="button"
               tabIndex={0}
               onKeyDown={e => {
-                if (e.key === 'Enter' || e.key === ' ') openTokenPage(token.mint);
+                if (e.key === 'Enter' || e.key === ' ') openTokenPage(token, onSelectCoin);
               }}
               style={{
                 padding: '12px 16px',
@@ -409,7 +427,7 @@ export default function Portfolio({ onSend, onConnectWallet }) {
                 gap: 8,
                 alignItems: 'center',
                 borderBottom: '1px solid rgba(255,255,255,.025)',
-                cursor: 'pointer',
+                cursor: onSelectCoin ? 'pointer' : 'default',
                 WebkitTapHighlightColor: 'rgba(0,229,255,.12)',
               }}
             >
