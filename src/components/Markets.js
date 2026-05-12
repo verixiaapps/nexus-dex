@@ -5,7 +5,7 @@ const C = {
   border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994',
-};
+}; 
 
 function fmt(n, d) {
   const x = Number(n);
