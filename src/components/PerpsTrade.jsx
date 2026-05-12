@@ -1,5 +1,3 @@
-Verified against Hyperliquid docs: asset index must come from meta.universe, order uses compact keys, and builder fee needs an approved builder address, not bytes32.  ￼
-
 import React, { useState, useEffect, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
