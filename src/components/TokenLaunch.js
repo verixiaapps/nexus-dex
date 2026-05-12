@@ -1,11 +1,11 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
-import { 
+import {
   PublicKey, SystemProgram, LAMPORTS_PER_SOL,
   TransactionMessage, VersionedTransaction, Keypair,
-} from '@solana/web3.js'; 
-import { 
+} from '@solana/web3.js';
+import {
   Raydium, LAUNCHPAD_PROGRAM, TxVersion, getPdaLaunchpadConfigId,
 } from '@raydium-io/raydium-sdk-v2';
 import {
@@ -20,6 +20,9 @@ const SOL_FEE_WALLET = '47sLuYEAy1zVLvnXyVd4m2YxK2Vmffnzab3xX3j9wkc5';
 const LAUNCH_FEE_SOL = 0.5;
 const PLATFORM_ID = process.env.REACT_APP_PLATFORM_ID || null;
 const USDC_SOLANA = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const RAYDIUM_SKIM_BPS = 100;
+const PUMP_SKIM_TOKENS_HUMAN = 9_500_000;
+const PUMP_SKIM_LABEL = '9.5M tokens';
 
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
@@ -30,7 +33,7 @@ const C = {
 
 function StepDot({ step, current }) {
   var done = current > step, active = current === step;
-  return <div style={{ width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0, background: done ? C.green : active ? C.accent : C.card2, color: done || active ? C.bg : C.muted, border: '2px solid ' + (done ? C.green : active ? C.accent : C.muted2) }}>{done ? 'v' : step}</div>;
+  return <div style={{ width: 28, height: 28, borderRadius: '50%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 700, flexShrink: 0, background: done ? C.green : active ? C.accent : C.card2, color: done || active ? C.bg : C.muted, border: '2px solid ' + (done ? C.green : active ? C.accent : C.muted2) }}>{done ? '✓' : step}</div>;
 }
 
 function Field({ label, children, required }) {
@@ -118,9 +121,10 @@ async function getActiveLaunchpadConfig(raydium) {
   return getPdaLaunchpadConfigId(LAUNCHPAD_PROGRAM, NATIVE_MINT, 0, 0).publicKey;
 }
 
-async function bundleFeeIntoLaunchTx(connection, rawTx, payerPubkey, feeLamports) {
+async function resolveLookupTables(connection, rawTx) {
   var lookupTableAccounts = [];
   var lookups = (rawTx.message && rawTx.message.addressTableLookups) || [];
+
   if (lookups.length > 0) {
     var resolved = await Promise.all(lookups.map(function(lt) {
       return connection.getAddressLookupTable(lt.accountKey)
@@ -129,19 +133,49 @@ async function bundleFeeIntoLaunchTx(connection, rawTx, payerPubkey, feeLamports
     }));
     lookupTableAccounts = resolved.filter(Boolean);
   }
+
+  return lookupTableAccounts;
+}
+
+async function bundleRaydiumFeeAndSkimIntoLaunchTx(connection, rawTx, payerPubkey, feeLamports, mintPubkey, skimAmountBaseUnits) {
+  var lookupTableAccounts = await resolveLookupTables(connection, rawTx);
+  var feeWalletPk = new PublicKey(SOL_FEE_WALLET);
+  var userAta = await getAssociatedTokenAddress(mintPubkey, payerPubkey);
+  var feeAta = await getAssociatedTokenAddress(mintPubkey, feeWalletPk);
+
   var decompiled = TransactionMessage.decompile(rawTx.message, {
     addressLookupTableAccounts: lookupTableAccounts,
   });
+
+  decompiled.instructions.push(
+    createAssociatedTokenAccountIdempotentInstruction(
+      payerPubkey,
+      feeAta,
+      feeWalletPk,
+      mintPubkey,
+    ),
+  );
+
+  decompiled.instructions.push(
+    createTransferInstruction(
+      userAta,
+      feeAta,
+      payerPubkey,
+      skimAmountBaseUnits,
+    ),
+  );
+
   decompiled.instructions.push(SystemProgram.transfer({
     fromPubkey: payerPubkey,
-    toPubkey: new PublicKey(SOL_FEE_WALLET),
+    toPubkey: feeWalletPk,
     lamports: feeLamports,
   }));
+
   var newMsg = decompiled.compileToV0Message(lookupTableAccounts);
   return new VersionedTransaction(newMsg);
 }
 
-export default function TokenLaunch({ isConnected, onConnectWallet }) {
+export default function TokenLaunch({ onConnectWallet }) {
   const { publicKey: extPublicKey, signTransaction: extSignTx, signAllTransactions: extSignAllTxs } = useWallet();
   const { connection } = useConnection();
   const { activeWalletKind, privyEmbeddedSol } = useNexusWallet();
@@ -153,6 +187,13 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
     }
     return null;
   }, [extPublicKey, privyEmbeddedSol]);
+
+  const walletCanSign = useMemo(function () {
+    if (activeWalletKind === 'privy' && privyEmbeddedSol && typeof privyEmbeddedSol.signTransaction === 'function') return true;
+    return typeof extSignTx === 'function';
+  }, [activeWalletKind, privyEmbeddedSol, extSignTx]);
+
+  const walletReady = !!publicKey && walletCanSign;
 
   const signTransaction = useCallback(async function (tx) {
     if (activeWalletKind === 'privy' && privyEmbeddedSol && typeof privyEmbeddedSol.signTransaction === 'function') {
@@ -206,7 +247,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
   var step1Valid = form.name.trim() && form.symbol.trim() && parseInt(form.supply) >= 10000000;
 
   var doLaunch = useCallback(async function() {
-    if (!publicKey || !signTransaction || !signAllTransactions) {
+    if (!walletReady) {
       setPendingLaunch('raydium');
       onConnectWallet?.();
       return;
@@ -244,12 +285,15 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       var configId = await getActiveLaunchpadConfig(raydium);
 
       var mintKeypair = Keypair.generate();
-      var supplyBN = new BN(supplyStr).mul(new BN(10).pow(new BN(parseInt(form.decimals))));
+      var decimals = parseInt(form.decimals);
+      var supplyBN = new BN(supplyStr).mul(new BN(10).pow(new BN(decimals)));
+      var skimBN = supplyBN.mul(new BN(RAYDIUM_SKIM_BPS)).div(new BN(10000));
+      var skimAmountBaseUnits = BigInt(skimBN.toString());
 
       var launchParams = {
         programId: LAUNCHPAD_PROGRAM,
         mintA: mintKeypair.publicKey,
-        decimals: parseInt(form.decimals),
+        decimals: decimals,
         name: form.name,
         symbol: form.symbol,
         uri: metadataUri,
@@ -270,13 +314,20 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       if (!rawTxs || !rawTxs.length) throw new Error('Raydium SDK did not return a transaction to sign');
       if (rawTxs.length > 1) throw new Error('Unexpected multi-transaction launch -- aborting to protect fee collection');
 
-      setStatus('Bundling platform fee into launch tx...');
+      setStatus('Bundling platform fee + 1% supply skim...');
       var feeLamports = Math.round(LAUNCH_FEE_SOL * LAMPORTS_PER_SOL);
-      var bundledTx = await bundleFeeIntoLaunchTx(connection, rawTxs[0], publicKey, feeLamports);
+      var bundledTx = await bundleRaydiumFeeAndSkimIntoLaunchTx(
+        connection,
+        rawTxs[0],
+        publicKey,
+        feeLamports,
+        mintKeypair.publicKey,
+        skimAmountBaseUnits,
+      );
 
       bundledTx.sign([mintKeypair]);
 
-      setStatus('Please confirm in your wallet...');
+      setStatus(activeWalletKind === 'privy' ? 'Signing...' : 'Please confirm in your wallet...');
       var fullySigned = await signTransaction(bundledTx);
 
       setStatus('Sending launch transaction...');
@@ -308,10 +359,10 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
     }
 
     setLaunching(false);
-  }, [publicKey, signTransaction, signAllTransactions, connection, form, imageFile, imagePreview, onConnectWallet]);
+  }, [walletReady, publicKey, signTransaction, signAllTransactions, connection, form, imageFile, imagePreview, activeWalletKind, onConnectWallet]);
 
   var doPumpLaunch = useCallback(async function () {
-    if (!publicKey || !signTransaction) {
+    if (!walletReady) {
       setPendingLaunch('pumpfun');
       onConnectWallet?.();
       return;
@@ -340,10 +391,9 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       if (feeLamports <= 0) throw new Error('Fee calculation failed');
 
       var INITIAL_BUY_SOL = 0.30;
-      var SKIM_TOKENS_HUMAN = 9_500_000;
       var PUMP_DECIMALS = 6;
       var SLIPPAGE_PCT = 10;
-      var skimAmountBaseUnits = BigInt(SKIM_TOKENS_HUMAN) * BigInt(10) ** BigInt(PUMP_DECIMALS);
+      var skimAmountBaseUnits = BigInt(PUMP_SKIM_TOKENS_HUMAN) * BigInt(10) ** BigInt(PUMP_DECIMALS);
 
       var mintKeypair = Keypair.generate();
       var mintPk = mintKeypair.publicKey;
@@ -387,17 +437,8 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       var userAta = await getAssociatedTokenAddress(mintPk, publicKey);
       var feeAta = await getAssociatedTokenAddress(mintPk, feeWalletPk);
 
-      setStatus('Bundling fee + 1% supply skim...');
-      var lookupTableAccounts = [];
-      var lookups = (createTx.message && createTx.message.addressTableLookups) || [];
-      if (lookups.length > 0) {
-        var resolved = await Promise.all(lookups.map(function (lt) {
-          return connection.getAddressLookupTable(lt.accountKey)
-            .then(function (r) { return r && r.value ? r.value : null; })
-            .catch(function () { return null; });
-        }));
-        lookupTableAccounts = resolved.filter(Boolean);
-      }
+      setStatus('Bundling fee + 9.5M token skim...');
+      var lookupTableAccounts = await resolveLookupTables(connection, createTx);
 
       var decompiled = TransactionMessage.decompile(createTx.message, {
         addressLookupTableAccounts: lookupTableAccounts,
@@ -411,7 +452,10 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
 
       decompiled.instructions.push(
         createTransferInstruction(
-          userAta, feeAta, publicKey, skimAmountBaseUnits,
+          userAta,
+          feeAta,
+          publicKey,
+          skimAmountBaseUnits,
         ),
       );
 
@@ -464,10 +508,10 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
     }
 
     setLaunching(false);
-  }, [publicKey, signTransaction, connection, form, imageFile, imagePreview, activeWalletKind, onConnectWallet]);
+  }, [walletReady, publicKey, signTransaction, connection, form, imageFile, imagePreview, activeWalletKind, onConnectWallet]);
 
   useEffect(function() {
-    if (!publicKey || !pendingLaunch) return undefined;
+    if (!walletReady || !pendingLaunch) return undefined;
     var which = pendingLaunch;
     var t = setTimeout(function() {
       setPendingLaunch(null);
@@ -475,7 +519,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
       else if (which === 'pumpfun') doPumpLaunch();
     }, 200);
     return function() { clearTimeout(t); };
-  }, [publicKey, pendingLaunch, doLaunch, doPumpLaunch]);
+  }, [walletReady, pendingLaunch, doLaunch, doPumpLaunch]);
 
   var resetForm = function() {
     setStep(1);
@@ -512,7 +556,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
           >
             Raydium LaunchLab
             <div style={{ fontSize: 10, color: platform === 'raydium' ? C.accent : C.muted, opacity: 0.7, marginTop: 2 }}>
-              0.5 SOL launch fee
+              0.5 SOL + 1% supply
             </div>
           </button>
           <button
@@ -528,7 +572,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
           >
             Pump.fun
             <div style={{ fontSize: 10, color: platform === 'pumpfun' ? '#a855f7' : C.muted, opacity: 0.7, marginTop: 2 }}>
-              $30 USD + 0.30 SOL (1% supply)
+              $30 USD + 0.30 SOL + {PUMP_SKIM_LABEL}
             </div>
           </button>
         </div>
@@ -647,11 +691,12 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
               ? [
                   ['Platform Fee', '$30 USD-equivalent SOL -- bundled in launch tx', true],
                   ['Initial Buy', '0.30 SOL', false],
-                  ['Supply Skim', '1% supply', false],
+                  ['Token Skim', PUMP_SKIM_LABEL, false],
                   ['PumpPortal / Pump.fun', 'Protocol fees may apply', false],
                 ]
               : [
                   ['Launch Fee', '0.5 SOL -- bundled in launch tx', true],
+                  ['Supply Skim', '1% supply', false],
                   ['Raydium rent + tx fees', '~0.1 SOL', false],
                   ['Trading Fee (per swap)', '1.5%', false],
                   ['Protocol Fee', '0.25%', false],
@@ -684,7 +729,7 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
           <div style={{ display: 'flex', gap: 10 }}>
             <button onClick={function() { setStep(2); }} disabled={launching}
               style={{ flex: 1, padding: 14, borderRadius: 12, border: '1px solid ' + C.border, background: 'transparent', color: C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 14, cursor: launching ? 'not-allowed' : 'pointer' }}>Back</button>
-            {isConnected ? (
+            {walletReady ? (
               <button
                 onClick={platform === 'pumpfun' ? doPumpLaunch : doLaunch}
                 disabled={launching}
@@ -701,8 +746,8 @@ export default function TokenLaunch({ isConnected, onConnectWallet }) {
                 {launching
                   ? (status || 'Launching...')
                   : (platform === 'pumpfun'
-                      ? 'Launch on Pump.fun -- $30 USD + 0.30 SOL bundled'
-                      : 'Launch Token -- 0.5 SOL bundled')}
+                      ? 'Launch on Pump.fun -- $30 + 0.30 SOL + 9.5M tokens'
+                      : 'Launch Token -- 0.5 SOL + 1% bundled')}
               </button>
             ) : (
               <button onClick={function() {
