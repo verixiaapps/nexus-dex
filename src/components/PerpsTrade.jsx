@@ -17,7 +17,8 @@ import { useNexusWallet } from '../WalletContext.js';
  * - Live signed order submission should be handled by your backend or official SDK.
  * ========================================================================= */
 
-const ENABLE_TRADING = true;
+const ENABLE_TRADING =
+  process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
 
 const BUILDER_ADDRESS = '';
 const BUILDER_FEE_TENTHS_BP = 5;
