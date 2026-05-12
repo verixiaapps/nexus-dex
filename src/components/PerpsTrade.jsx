@@ -1,22 +1,25 @@
+Verified against Hyperliquid docs: asset index must come from meta.universe, order uses compact keys, and builder fee needs an approved builder address, not bytes32.  ￼
+
 import React, { useState, useEffect, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
 /* ============================================================================
  * NEXUS DEX -- Hyperliquid Perps Trading Interface
- * Non-custodial. User keys stay in browser. Hyperliquid executes.
+ * Non-custodial UI shell.
  *
- * Builder Code (Nexus DEX): 0x4e65787573444558000000000000000000000000000000000000000000000000
- * Trade Fee: 0.10% total (0.05% Hyperliquid + 0.05% Nexus)
- *
- * Wallet: Solana (Phantom / Solflare / Privy)
- * Deposit:  SOL → OKX swap to USDC → Hyperliquid L1
- * Withdraw: Hyperliquid L1 → OKX bridge → SOL in user wallet
- *
- * LIVE ON MAINNET
+ * IMPORTANT:
+ * - Hyperliquid asset index must come from meta.universe.
+ * - Order size must be coin size, not USD amount.
+ * - Builder fee requires approved builder address, not bytes32 builder code.
+ * - Live signed order submission should be handled by your backend or official SDK.
  * ========================================================================= */
 const ENABLE_TRADING = true;
-const BUILDER_CODE = '0x4e65787573444558000000000000000000000000000000000000000000000000';
-const MAX_FEE_RATE = '0.0005';
+/*
+ * Set this only when you have the actual approved Hyperliquid builder ADDRESS.
+ * A bytes32 builder code will break Hyperliquid order payloads.
+ */
+const BUILDER_ADDRESS = '';
+const BUILDER_FEE_TENTHS_BP = 5; // 0.5bp = 0.05%
 const C = {
   bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
   border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
@@ -37,9 +40,6 @@ const PERPS_PAIRS = [
   { id: 'POL', base: 'POL', leverage: 20 },
   { id: 'AVAX', base: 'AVAX', leverage: 15 },
 ];
-/* ------------------------------------------------------------------ */
-/* helpers                                                            */
-/* ------------------------------------------------------------------ */
 let _bodyLockCount = 0;
 function useBodyLock(open) {
   useEffect(() => {
@@ -66,8 +66,36 @@ function pct(n) {
   if (n == null || isNaN(n)) return '-';
   return (n >= 0 ? '+' : '') + Number(n).toFixed(2) + '%';
 }
+function isValidEthAddress(v) {
+  return /^0x[a-fA-F0-9]{40}$/.test(String(v || ''));
+}
+function cleanAmount(v) {
+  const s = String(v || '').replace(/[^0-9.]/g, '');
+  const parts = s.split('.');
+  if (parts.length <= 2) return s;
+  return parts[0] + '.' + parts.slice(1).join('');
+}
+function roundSize(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 100) return n.toFixed(2);
+  if (n >= 1) return n.toFixed(4);
+  return n.toFixed(6);
+}
+function roundPx(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 1000) return n.toFixed(1);
+  if (n >= 1) return n.toFixed(4);
+  return n.toFixed(6);
+}
+function getAggressiveLimitPx(midPrice, isLong) {
+  const px = Number(midPrice);
+  if (!Number.isFinite(px) || px <= 0) return '0';
+  return roundPx(isLong ? px * 1.03 : px * 0.97);
+}
 /* ------------------------------------------------------------------ */
-/*  Hyperliquid wallet                                                 */
+/* Hyperliquid wallet storage                                          */
 /* ------------------------------------------------------------------ */
 let _ethersModule = null;
 async function getEthers() {
@@ -76,11 +104,16 @@ async function getEthers() {
   return _ethersModule;
 }
 function generateHlWallet() {
-  const { ethers } = _ethersModule;
+  const mod = _ethersModule;
+  const ethers = mod?.ethers;
   if (!ethers) return null;
   const wallet = ethers.Wallet.createRandom();
   return { address: wallet.address, privateKey: wallet.privateKey };
 }
+/*
+ * This is local obfuscation, not real encryption.
+ * Do not treat browser localStorage as secure custody.
+ */
 function xorEncrypt(text, key) {
   let out = '';
   for (let i = 0; i < text.length; i++) {
@@ -104,6 +137,7 @@ function getStoredHlWallet(walletPubkey) {
     const raw = localStorage.getItem(getStorageKey(walletPubkey));
     if (!raw) return null;
     const data = JSON.parse(raw);
+    if (!data?.address || !data?.encrypted) return null;
     const pk = xorDecrypt(data.encrypted, data.address + 'nexus');
     return pk ? { address: data.address, privateKey: pk } : null;
   } catch {
@@ -123,7 +157,7 @@ function storeHlWallet(walletPubkey, address, privateKey) {
   }
 }
 /* ------------------------------------------------------------------ */
-/*  Hyperliquid API                                                    */
+/* Hyperliquid API                                                     */
 /* ------------------------------------------------------------------ */
 async function hlRequest(body, isExchange = false) {
   const path = isExchange ? '/api/hyperliquid/exchange' : '/api/hyperliquid';
@@ -132,8 +166,15 @@ async function hlRequest(body, isExchange = false) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error || data.detail || 'Hyperliquid request failed');
+  let data = null;
+  try {
+    data = await res.json();
+  } catch {
+    data = null;
+  }
+  if (!res.ok) {
+    throw new Error(data?.error || data?.detail || 'Hyperliquid request failed');
+  }
   return data;
 }
 async function fetchMarketData() {
@@ -173,6 +214,7 @@ async function fetchMarketData() {
           : 0;
       return {
         ...p,
+        assetIndex: info?.index,
         price: midPrice,
         change,
         leverage: info ? Math.min(info.maxLeverage, p.leverage) : p.leverage,
@@ -180,52 +222,63 @@ async function fetchMarketData() {
     });
   } catch (e) {
     console.error('Market data fetch failed:', e);
-    return PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0 }));
+    return PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0, assetIndex: null }));
   }
 }
-async function placeOrder({ privateKey, pairIndex, isLong, sz, leverage }) {
-  const { ethers } = await getEthers();
-  if (!ethers) throw new Error('ethers not loaded');
-  const wallet = new ethers.Wallet(privateKey);
-  const timestamp = Date.now();
-  const orderAction = {
+function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = false }) {
+  const price = Number(pair?.price || 0);
+  const notional = Number(usdAmount || 0);
+  const assetIndex = pair?.assetIndex;
+  if (!ENABLE_TRADING) throw new Error('Trading is disabled');
+  if (!Number.isInteger(assetIndex) || assetIndex < 0) throw new Error('Market asset index unavailable');
+  if (!Number.isFinite(price) || price <= 0) throw new Error('Market price unavailable');
+  if (!Number.isFinite(notional) || notional < 10) throw new Error('Minimum order value is $10');
+  const coinSize = roundSize(notional / price);
+  const limitPx = getAggressiveLimitPx(price, isLong);
+  const action = {
     type: 'order',
     orders: [{
-      asset: pairIndex,
-      isBuy: isLong,
-      limitPx: 0,
-      sz: Number(sz),
-      leverage: Number(leverage),
-      orderType: { market: {} },
-      reduceOnly: false,
-      cloid: null,
+      a: assetIndex,
+      b: Boolean(isLong),
+      p: limitPx,
+      s: coinSize,
+      r: Boolean(reduceOnly),
+      t: { limit: { tif: 'Ioc' } },
     }],
     grouping: 'na',
-    builder: BUILDER_CODE,
   };
-  const domain = {
-    name: 'Exchange',
-    version: '1',
-    chainId: 1337,
-    verifyingContract: '0x0000000000000000000000000000000000000000',
+  if (isValidEthAddress(BUILDER_ADDRESS)) {
+    action.builder = {
+      b: BUILDER_ADDRESS,
+      f: BUILDER_FEE_TENTHS_BP,
+    };
+  }
+  return {
+    action,
+    leverage: Number(leverage || 1),
+    coinSize,
+    notional,
+    limitPx,
   };
-  const types = {
-    HyperliquidTransaction: [{ name: 'txType', type: 'string' }],
-  };
-  const signature = await wallet.signTypedData(domain, types, { txType: 'order' });
-  const payload = {
-    action: orderAction,
-    signature: {
-      r: signature.slice(0, 66),
-      s: '0x' + signature.slice(66, 130),
-      v: parseInt(signature.slice(130, 132), 16),
-    },
-    nonce: timestamp,
-  };
-  return hlRequest(payload, true);
+}
+async function placeOrder({ pair, isLong, usdAmount, leverage, reduceOnly = false }) {
+  const built = buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly });
+  /*
+   * Your backend should:
+   * 1. Apply/update leverage if needed.
+   * 2. Sign using official Hyperliquid signing logic / SDK.
+   * 3. Submit { action, nonce, signature } to /exchange.
+   *
+   * This avoids using the incorrect fake typed-data signature from the old file.
+   */
+  return hlRequest({
+    type: 'placeOrder',
+    source: 'nexus-perps-ui',
+    ...built,
+  }, true);
 }
 /* ================================================================== */
-/*  PairCard                                                           */
+/* PairCard                                                            */
 /* ================================================================== */
 function PairCard({ pair, active, onClick }) {
   return (
@@ -249,16 +302,20 @@ function PairCard({ pair, active, onClick }) {
   );
 }
 /* ================================================================== */
-/*  PositionCard                                                       */
+/* PositionCard                                                        */
 /* ================================================================== */
 function PositionCard({ position, pair, onClick }) {
-  const entry = position.entryPrice || 0;
-  const current = pair?.price || 0;
+  const entry = Number(position.entryPrice || 0);
+  const current = Number(pair?.price || 0);
   const isLong = position.side === 'long';
-  const leverage = position.leverage || 1;
-  const size = position.size || 0;
-  const pnl = isLong ? ((current - entry) / entry) * size : ((entry - current) / entry) * size;
-  const pnlPct = entry > 0 ? (pnl / (size / leverage)) * 100 : 0;
+  const leverage = Number(position.leverage || 1);
+  const size = Number(position.size || 0);
+  let pnl = 0;
+  let pnlPct = 0;
+  if (entry > 0 && current > 0 && size > 0) {
+    pnl = isLong ? ((current - entry) / entry) * size : ((entry - current) / entry) * size;
+    pnlPct = size > 0 && leverage > 0 ? (pnl / (size / leverage)) * 100 : 0;
+  }
   const inProfit = pnl >= 0;
   return (
     <div
@@ -312,7 +369,7 @@ function PositionCard({ position, pair, onClick }) {
   );
 }
 /* ================================================================== */
-/*  Deposit / Withdraw Modal                                           */
+/* Deposit / Withdraw Modal                                            */
 /* ================================================================== */
 function TransferModal({ open, onClose, mode, hlAddress }) {
   const [amount, setAmount] = useState('');
@@ -330,17 +387,9 @@ function TransferModal({ open, onClose, mode, hlAddress }) {
   const handle = async () => {
     const amt = parseFloat(amount);
     if (!amt || amt <= 0) return;
-    setStatus('loading');
-    setError('');
-    try {
-      await new Promise(r => setTimeout(r, 1500));
-      setStatus('success');
-      setTimeout(() => onClose(), 2000);
-    } catch (e) {
-      setError(e.message || 'Transfer failed');
-      setStatus('error');
-      setTimeout(() => setStatus('idle'), 3000);
-    }
+    setStatus('error');
+    setError('Bridge execution is not wired yet. Connect this button to your OKX / Hyperliquid bridge backend before enabling live transfers.');
+    setTimeout(() => setStatus('idle'), 3500);
   };
   if (!open) return null;
   return (
@@ -361,7 +410,7 @@ function TransferModal({ open, onClose, mode, hlAddress }) {
             <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginBottom: 4 }}>
               {isDeposit ? 'DESTINATION' : 'SOURCE'}
             </div>
-            <div style={{ fontSize: 11, color: C.text, fontFamily: 'monospace', wordBreak: 'break-all' }}>{hlAddress}</div>
+            <div style={{ fontSize: 11, color: C.text, fontFamily: 'monospace', wordBreak: 'break-all' }}>{hlAddress || 'No Hyperliquid wallet yet'}</div>
           </div>
           <div style={{ marginBottom: 6, fontSize: 12, color: C.accent, fontWeight: 600 }}>
             {isDeposit ? 'SOL → USDC → Hyperliquid' : 'Hyperliquid → USDC → SOL'}
@@ -373,7 +422,7 @@ function TransferModal({ open, onClose, mode, hlAddress }) {
               <span style={{ color: C.muted, fontSize: 18 }}>$</span>
               <input
                 value={amount}
-                onChange={e => setAmount(e.target.value.replace(/[^0-9.]/g, ''))}
+                onChange={e => setAmount(cleanAmount(e.target.value))}
                 placeholder="0.00"
                 style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 22, fontWeight: 700, color: '#fff', outline: 'none', fontFamily: 'Syne, sans-serif' }}
               />
@@ -414,11 +463,9 @@ function TransferModal({ open, onClose, mode, hlAddress }) {
               padding: 16,
               borderRadius: 14,
               border: 'none',
-              background: status === 'success'
-                ? 'linear-gradient(135deg,#00ffa3,#00b36b)'
-                : isDeposit
-                  ? 'linear-gradient(135deg,#00e5ff,#0055ff)'
-                  : 'linear-gradient(135deg,#a855f7,#7c3aed)',
+              background: isDeposit
+                ? 'linear-gradient(135deg,#00e5ff,#0055ff)'
+                : 'linear-gradient(135deg,#a855f7,#7c3aed)',
               color: '#fff',
               fontWeight: 800,
               fontSize: 16,
@@ -427,13 +474,7 @@ function TransferModal({ open, onClose, mode, hlAddress }) {
               fontFamily: 'Syne, sans-serif',
             }}
           >
-            {status === 'loading'
-              ? 'Processing...'
-              : status === 'success'
-                ? (isDeposit ? 'Deposited!' : 'Withdrawn!')
-                : isDeposit
-                  ? 'Deposit'
-                  : 'Withdraw'}
+            {isDeposit ? 'Start Deposit' : 'Start Withdraw'}
           </button>
         </div>
       </div>
@@ -441,7 +482,7 @@ function TransferModal({ open, onClose, mode, hlAddress }) {
   );
 }
 /* ================================================================== */
-/*  TradeDrawer                                                        */
+/* TradeDrawer                                                         */
 /* ================================================================== */
 function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, position }) {
   const { connected } = useWallet();
@@ -453,6 +494,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
   const [takeProfit, setTakeProfit] = useState('');
   const [stopLoss, setStopLoss] = useState('');
   const [status, setStatus] = useState('idle');
+  const [error, setError] = useState('');
   const [hlWallet, setHlWallet] = useState(null);
   const [creatingWallet, setCreatingWallet] = useState(false);
   const [transferOpen, setTransferOpen] = useState(false);
@@ -466,25 +508,31 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
       setStopLoss('');
       setSizePct(null);
       setStatus('idle');
+      setError('');
       const stored = getStoredHlWallet(walletPubkey);
       setHlWallet(stored ? { address: stored.address } : null);
     }
   }, [open, walletPubkey]);
   const isLong = side === 'long';
-  const entryPrice = pair?.price || 0;
-  const liqPrice = isLong
-    ? entryPrice * (1 - 0.9 / leverage)
-    : entryPrice * (1 + 0.9 / leverage);
+  const entryPrice = Number(pair?.price || 0);
+  const liqPrice = entryPrice > 0
+    ? isLong
+      ? entryPrice * (1 - 0.9 / leverage)
+      : entryPrice * (1 + 0.9 / leverage)
+    : 0;
   const createWallet = async () => {
     setCreatingWallet(true);
+    setError('');
     try {
       await getEthers();
       const newWallet = generateHlWallet();
       if (!newWallet) throw new Error('Wallet generation failed');
-      storeHlWallet(walletPubkey, newWallet.address, newWallet.privateKey);
+      const ok = storeHlWallet(walletPubkey, newWallet.address, newWallet.privateKey);
+      if (!ok) throw new Error('Could not save Hyperliquid wallet');
       setHlWallet({ address: newWallet.address });
     } catch (e) {
       console.error('Wallet creation failed:', e);
+      setError(e.message || 'Wallet creation failed');
     }
     setCreatingWallet(false);
   };
@@ -501,50 +549,60 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
       await createWallet();
       return;
     }
+    const usdAmount = parseFloat(amount);
+    if (!usdAmount || usdAmount < 10) {
+      setError('Minimum order value is $10.');
+      return;
+    }
+    if (!pair?.assetIndex && pair?.assetIndex !== 0) {
+      setError('Market is still loading. Try again in a moment.');
+      return;
+    }
+    if (!pair?.price) {
+      setError('Price unavailable. Try again in a moment.');
+      return;
+    }
     setStatus('loading');
+    setError('');
     try {
-      const stored = getStoredHlWallet(walletPubkey);
-      if (!stored) throw new Error('Wallet not found');
-      const pairIndex = PERPS_PAIRS.findIndex(p => p.id === pair.id);
       await placeOrder({
-        privateKey: stored.privateKey,
-        pairIndex: pairIndex >= 0 ? pairIndex : 0,
+        pair,
         isLong,
-        sz: parseFloat(amount) || 0,
+        usdAmount,
         leverage,
       });
       setStatus('success');
       setTimeout(() => {
         setStatus('idle');
         onClose();
-      }, 2000);
+      }, 1800);
     } catch (e) {
       console.error('Trade failed:', e);
+      setError(e.message || 'Trade failed');
       setStatus('error');
       setTimeout(() => setStatus('idle'), 3000);
     }
   };
   const closePosition = async () => {
-    if (!hlWallet) return;
+    if (!hlWallet || !position) return;
     setStatus('loading');
+    setError('');
     try {
-      const stored = getStoredHlWallet(walletPubkey);
-      if (!stored) throw new Error('Wallet not found');
-      const pairIndex = PERPS_PAIRS.findIndex(p => p.id === pair.id);
       await placeOrder({
-        privateKey: stored.privateKey,
-        pairIndex: pairIndex >= 0 ? pairIndex : 0,
-        isLong: !position?.side || position.side !== 'long',
-        sz: position?.size || 0,
-        leverage: position?.leverage || 1,
+        pair,
+        isLong: position.side !== 'long',
+        usdAmount: position.size || 0,
+        leverage: position.leverage || 1,
+        reduceOnly: true,
       });
       setStatus('success');
       setTimeout(() => {
         setStatus('idle');
         onClose();
-      }, 2000);
+      }, 1800);
     } catch (e) {
       console.error('Close failed:', e);
+      setError(e.message || 'Close failed');
       setStatus('error');
       setTimeout(() => setStatus('idle'), 3000);
     }
@@ -561,6 +619,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
               <div style={{ color: '#fff', fontWeight: 800, fontSize: 20 }}>{pair.base}-PERP</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
                 <span style={{ color: C.text, fontSize: 16, fontWeight: 700 }}>{fmt(pair.price, 2)}</span>
+                <span style={{ color: pair.change >= 0 ? C.green : C.red, fontSize: 12, fontWeight: 700 }}>{pct(pair.change)}</span>
               </div>
             </div>
             <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer', padding: 4 }}>x</button>
@@ -658,14 +717,15 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
           <div style={{ marginBottom: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
               <span style={{ fontSize: 11, color: C.muted, fontWeight: 600 }}>AMOUNT</span>
-              <span style={{ fontSize: 10, color: C.accent, fontWeight: 700, background: 'rgba(0,229,255,.08)', padding: '2px 8px', borderRadius: 4 }}>Market</span>
+              <span style={{ fontSize: 10, color: C.accent, fontWeight: 700, background: 'rgba(0,229,255,.08)', padding: '2px 8px', borderRadius: 4 }}>Market IOC</span>
             </div>
             <div style={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 12, padding: '14px 16px', marginBottom: 8 }}>
               <input
                 value={amount}
                 onChange={e => {
-                  setAmount(e.target.value.replace(/[^0-9.]/g, ''));
+                  setAmount(cleanAmount(e.target.value));
                   setSizePct(null);
+                  setError('');
                 }}
                 placeholder="$0.00"
                 style={{ width: '100%', background: 'transparent', border: 'none', fontSize: 24, fontWeight: 700, color: '#fff', outline: 'none', fontFamily: 'Syne, sans-serif' }}
@@ -718,7 +778,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
               <div style={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '10px 12px' }}>
                 <input
                   value={takeProfit}
-                  onChange={e => setTakeProfit(e.target.value.replace(/[^0-9.]/g, ''))}
+                  onChange={e => setTakeProfit(cleanAmount(e.target.value))}
                   placeholder="Price"
                   style={{ width: '100%', background: 'transparent', border: 'none', fontSize: 14, fontWeight: 600, color: C.green, outline: 'none', fontFamily: 'Syne, sans-serif' }}
                 />
@@ -729,7 +789,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
               <div style={{ background: C.card2, border: '1px solid ' + C.border, borderRadius: 10, padding: '10px 12px' }}>
                 <input
                   value={stopLoss}
-                  onChange={e => setStopLoss(e.target.value.replace(/[^0-9.]/g, ''))}
+                  onChange={e => setStopLoss(cleanAmount(e.target.value))}
                   placeholder="Price"
                   style={{ width: '100%', background: 'transparent', border: 'none', fontSize: 14, fontWeight: 600, color: C.red, outline: 'none', fontFamily: 'Syne, sans-serif' }}
                 />
@@ -740,14 +800,21 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
             <div style={{ background: C.card2, borderRadius: 14, padding: 14, marginBottom: 14 }}>
               {[
                 ['Entry Price', fmt(entryPrice, 2)],
+                ['Est. Coin Size', entryPrice > 0 ? roundSize(parseFloat(amount) / entryPrice) + ' ' + pair.base : '-'],
+                ['Limit Px', entryPrice > 0 ? fmt(getAggressiveLimitPx(entryPrice, isLong), 4) : '-'],
                 ['Liquidation', fmt(liqPrice, 4)],
-                ['Trade Fee', '0.10%'],
+                ['Nexus Builder Fee', isValidEthAddress(BUILDER_ADDRESS) ? '0.05%' : 'Not set'],
               ].map(([l, v]) => (
                 <div key={l} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 12 }}>
                   <span style={{ color: C.muted }}>{l}</span>
                   <span style={{ color: C.text, fontWeight: 600 }}>{v}</span>
                 </div>
               ))}
+            </div>
+          )}
+          {error && (
+            <div style={{ marginBottom: 12, padding: 10, background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, fontSize: 12, color: C.red }}>
+              {error}
             </div>
           )}
           {!wcon ? (
@@ -798,7 +865,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
               {status === 'loading'
                 ? 'Confirming...'
                 : status === 'success'
-                  ? 'Trade Opened!'
+                  ? 'Trade Sent'
                   : status === 'error'
                     ? 'Failed — Retry'
                     : isLong
@@ -841,20 +908,20 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
   );
 }
 /* ================================================================== */
-/*  PerpsTrade main page                                               */
+/* PerpsTrade main page                                                */
 /* ================================================================== */
 export default function PerpsTrade({ onConnectWallet }) {
   const [marketData, setMarketData] = useState(() => {
     try {
       const cached = localStorage.getItem('nexus_perps_cache');
-      return cached ? JSON.parse(cached) : PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0 }));
+      return cached ? JSON.parse(cached) : PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0, assetIndex: null }));
     } catch {
-      return PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0 }));
+      return PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0, assetIndex: null }));
     }
   });
   const [activePair, setActivePair] = useState(marketData[0]);
   const [drawerOpen, setDrawerOpen] = useState(false);
-  const [mockPosition, setMockPosition] = useState(null);
+  const [mockPosition] = useState(null);
   const { publicKey: solPk } = useWallet();
   const { privyEmbeddedSol } = useNexusWallet();
   const walletPubkey = useMemo(() => {
@@ -877,7 +944,7 @@ export default function PerpsTrade({ onConnectWallet }) {
       }
     };
     poll();
-    const interval = setInterval(poll, 3000);
+    const interval = setInterval(poll, 5000);
     return () => {
       alive = false;
       clearInterval(interval);
@@ -886,9 +953,7 @@ export default function PerpsTrade({ onConnectWallet }) {
   useEffect(() => {
     if (!activePair?.id) return;
     const fresh = marketData.find(p => p.id === activePair.id);
-    if (fresh) {
-      setActivePair(fresh);
-    }
+    if (fresh) setActivePair(fresh);
   }, [marketData, activePair?.id]);
   const openTrade = (pair) => {
     setActivePair(pair);
@@ -906,7 +971,7 @@ export default function PerpsTrade({ onConnectWallet }) {
       <div style={{ marginBottom: 20 }}>
         <h1 style={{ fontSize: 28, fontWeight: 800, color: '#fff', margin: 0 }}>Perps</h1>
         <p style={{ color: C.muted, fontSize: 14, marginTop: 4 }}>
-          Up to 50x leverage &middot; 0.10% fee &middot; Powered by Hyperliquid
+          Up to 50x leverage &middot; Hyperliquid markets &middot; Nexus routing
         </p>
       </div>
       {mockPosition && (
@@ -945,15 +1010,18 @@ export default function PerpsTrade({ onConnectWallet }) {
             <div style={{ fontWeight: 800, color: '#fff', fontSize: 15, marginBottom: 4 }}>{p.base}-PERP</div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ color: C.text, fontWeight: 600, fontSize: 14 }}>{fmt(p.price, 2)}</span>
+              <span style={{ color: p.change >= 0 ? C.green : C.red, fontWeight: 700, fontSize: 11 }}>{pct(p.change)}</span>
             </div>
-            <div style={{ color: C.muted, fontSize: 10, marginTop: 4 }}>{p.leverage}x max</div>
+            <div style={{ color: C.muted, fontSize: 10, marginTop: 4 }}>
+              {p.leverage}x max · {Number.isInteger(p.assetIndex) ? 'Ready' : 'Loading'}
+            </div>
           </button>
         ))}
       </div>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 10, marginBottom: 20 }}>
         {[
           { label: 'Max Leverage', value: '50x' },
-          { label: 'Trade Fee', value: '0.10%' },
+          { label: 'Order Type', value: 'IOC' },
           { label: 'Powered by', value: 'Hyperliquid' },
         ].map(s => (
           <div key={s.label} style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 14, padding: 14, textAlign: 'center' }}>
