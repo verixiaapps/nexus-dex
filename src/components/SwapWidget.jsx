@@ -247,7 +247,7 @@ export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToTo
     }
 
     // 3. Send
-    return conn.sendRawTransaction(signedTx.serialize(),{skipPreflight:false,maxRetries:3});
+    return conn.sendRawTransaction(signedTx.serialize(),{skipPreflight:true,maxRetries:3});
   },[activeWalletKind,privyEmbeddedSol,extSignTx]);
 
   const ip=useMemo(()=>{
