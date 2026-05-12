@@ -562,9 +562,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
               <div style={{ color: '#fff', fontWeight: 800, fontSize: 20 }}>{pair.base}-PERP</div>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 2 }}>
                 <span style={{ color: C.text, fontSize: 16, fontWeight: 700 }}>{fmt(pair.price, 2)}</span>
-                <span style={{ color: (pair.change || 0) >= 0 ? C.green : C.red, fontSize: 13, fontWeight: 600 }}>
-                  {pct(pair.change)} (24H)
-                </span>
               </div>
             </div>
             <button onClick={onClose} style={{ background: 'none', border: 'none', color: C.muted, fontSize: 26, cursor: 'pointer', padding: 4 }}>x</button>
