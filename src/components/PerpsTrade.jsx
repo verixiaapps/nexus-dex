@@ -245,7 +245,6 @@ function PairCard({ pair, active, onClick }) {
     >
       <div style={{ fontWeight: 800, fontSize: 13, color: '#fff', marginBottom: 4 }}>{pair.base}</div>
       <div style={{ fontSize: 12, color: C.text, fontWeight: 600 }}>{fmt(pair.price, 2)}</div>
-      <div style={{ fontSize: 10, color: pair.change >= 0 ? C.green : C.red, marginTop: 2 }}>{pct(pair.change)}</div>
     </div>
   );
 }
@@ -946,7 +945,6 @@ export default function PerpsTrade({ onConnectWallet }) {
             <div style={{ fontWeight: 800, color: '#fff', fontSize: 15, marginBottom: 4 }}>{p.base}-PERP</div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ color: C.text, fontWeight: 600, fontSize: 14 }}>{fmt(p.price, 2)}</span>
-              <span style={{ color: p.change >= 0 ? C.green : C.red, fontSize: 11, fontWeight: 700 }}>{pct(p.change)}</span>
             </div>
             <div style={{ color: C.muted, fontSize: 10, marginTop: 4 }}>{p.leverage}x max</div>
           </button>
