@@ -178,7 +178,7 @@ async function fetchOkxPrice(token){
 }
 
 async function fetchOkxSolSwap({fromMint,toMint,amount,userWallet,signal}){
-  const p=new URLSearchParams({chainIndex:'501',fromTokenAddress:toOkxSolAddress(fromMint),toTokenAddress:toOkxSolAddress(toMint),amount:String(amount),slippagePercent:'0.15',userWalletAddress:userWallet,referrer:OKX_REFERRER});
+  const p=new URLSearchParams({chainIndex:'501',fromTokenAddress:toOkxSolAddress(fromMint),toTokenAddress:toOkxSolAddress(toMint),amount:String(amount),slippagePercent:'15',userWalletAddress:userWallet,referrer:OKX_REFERRER});
   const r=await fetch('/api/okx/dex/aggregator/swap-instruction?'+p.toString(),{signal});
   const j=await r.json();
   if(j.code!=='0'||!j.data)throw new Error(j.msg||'OKX swap-instruction failed');
