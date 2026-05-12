@@ -9,9 +9,9 @@
  * /api/jupiter/tokens/v2/tag        - Jupiter token registry
  * /api/dexscreener/*                - DexScreener proxy (markets, portfolio prices)
  * /api/hyperliquid                  - Hyperliquid proxy (perps info)
- * /api/hyperliquid/exchange         - Hyperliquid exchange proxy (signed orders)
+ * /api/hyperliquid/exchange         - Hyperliquid exchange proxy (signed orders only)
  * /api/hyperliquid-testnet          - Hyperliquid TESTNET info proxy
- * /api/hyperliquid-testnet/exchange - Hyperliquid TESTNET exchange proxy
+ * /api/hyperliquid-testnet/exchange - Hyperliquid TESTNET exchange proxy (signed orders only)
  * /api/pumpportal/*                 - PumpPortal trade-local
  * /api/helius/das                   - Helius DAS getAsset / Solana metadata fallback
  * /api/solana-rpc                   - Solana RPC proxy
@@ -25,6 +25,10 @@
  *
  * Frontend must NOT send secret API headers.
  * OKX, Jupiter, Pinata, and Helius credentials are added server-side only.
+ *
+ * Hyperliquid Option A:
+ * Frontend signs valid Hyperliquid payloads.
+ * Server validates shape and forwards signed { action, nonce, signature } payloads only.
  */
 require('dotenv').config();
 const crypto = require('crypto');
@@ -205,7 +209,9 @@ function scrubSecrets(s) {
     .replace(/OK-ACCESS-SIGN["':\s]+[^&\s"',}]+/gi, 'OK-ACCESS-SIGN=***')
     .replace(/OK-ACCESS-PASSPHRASE["':\s]+[^&\s"',}]+/gi, 'OK-ACCESS-PASSPHRASE=***')
     .replace(/api-key=[^&\s"']+/gi, 'api-key=***')
-    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer ***');
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, 'Bearer ***')
+    .replace(/privateKey["':\s]+[^&\s"',}]+/gi, 'privateKey=***')
+    .replace(/signature["':\s]+\{[^}]+\}/gi, 'signature={***}');
 }
 function logError(tag, err) {
   const msg = scrubSecrets(err && err.message ? err.message : err);
@@ -358,7 +364,6 @@ async function proxyOkx(req, res) {
 }
 app.get('/api/okx/*', proxyOkx);
 app.post('/api/okx/*', proxyOkx);
-
 app.get('/api/test-price-info', async (req, res) => {
   try {
     const mint = req.query.mint || 'So11111111111111111111111111111111111111112';
@@ -372,12 +377,10 @@ app.get('/api/test-price-info', async (req, res) => {
     }, 15_000);
     const data = await response.json();
     res.json(data);
-  } catch(e) {
+  } catch (e) {
     res.json({ error: e.message });
   }
 });
-
-
 /* -- JUPITER FALLBACK PROXY ------------------------------------------------- */
 /*
  * Jupiter is added as a Solana-only fallback.
@@ -497,6 +500,73 @@ app.get('/api/dexscreener/*', async (req, res) => {
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
+/* -- HYPERLIQUID HELPERS ---------------------------------------------------- */
+function isPlainObject(v) {
+  return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
+}
+function isHexString(v, bytes) {
+  const s = String(v || '');
+  const len = bytes ? bytes * 2 : null;
+  if (!s.startsWith('0x')) return false;
+  if (len && s.length !== 2 + len) return false;
+  return /^0x[0-9a-fA-F]+$/.test(s);
+}
+function validateHyperliquidSignature(sig) {
+  if (!isPlainObject(sig)) return 'Missing signature object';
+  if (!isHexString(sig.r, 32)) return 'Invalid signature.r';
+  if (!isHexString(sig.s, 32)) return 'Invalid signature.s';
+  const v = Number(sig.v);
+  if (!Number.isInteger(v)) return 'Invalid signature.v';
+  if (![0, 1, 27, 28].includes(v)) return 'Invalid signature.v';
+  return null;
+}
+function validateHyperliquidExchangePayload(body) {
+  if (!isPlainObject(body)) return 'Invalid request body';
+  if (body.type === 'placeOrder') {
+    return 'Unsigned router payload received. Frontend must sign Hyperliquid payload before sending to /api/hyperliquid/exchange.';
+  }
+  if (!isPlainObject(body.action)) return 'Missing action object';
+  const nonce = Number(body.nonce);
+  if (!Number.isInteger(nonce) || nonce <= 0) return 'Missing or invalid nonce';
+  const sigErr = validateHyperliquidSignature(body.signature);
+  if (sigErr) return sigErr;
+  if (body.vaultAddress != null && !/^0x[a-fA-F0-9]{40}$/.test(String(body.vaultAddress))) {
+    return 'Invalid vaultAddress';
+  }
+  if (body.expiresAfter != null) {
+    const expiresAfter = Number(body.expiresAfter);
+    if (!Number.isInteger(expiresAfter) || expiresAfter <= 0) return 'Invalid expiresAfter';
+  }
+  return null;
+}
+async function proxyHyperliquidExchange(req, res, baseUrl, tag) {
+  try {
+    const body = req.body || {};
+    const validationError = validateHyperliquidExchangePayload(body);
+    if (validationError) {
+      return res.status(400).json({ error: validationError });
+    }
+    const response = await fetchWithTimeout(baseUrl + '/exchange', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }, 15_000);
+    const result = await safeJson(response);
+    if (!response.ok) {
+      return res.status(response.status).json({
+        error: tag + ' exchange request failed',
+        detail: result.parsed || (result.raw && result.raw.slice(0, 500)),
+      });
+    }
+    return respondJsonOrError(res, response, result);
+  } catch (e) {
+    if (e.name === 'AbortError') {
+      return res.status(504).json({ error: tag + ' exchange request timed out' });
+    }
+    logError(tag + '-exchange', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+}
 /* -- HYPERLIQUID PROXY (perps info - MAINNET) ----------------------------- */
 app.post('/api/hyperliquid', async (req, res) => {
   try {
@@ -516,27 +586,7 @@ app.post('/api/hyperliquid', async (req, res) => {
 });
 /* -- HYPERLIQUID EXCHANGE PROXY (signed orders - MAINNET) ----------------- */
 app.post('/api/hyperliquid/exchange', async (req, res) => {
-  try {
-    const body = req.body || {};
-    const response = await fetchWithTimeout('https://api.hyperliquid.xyz/exchange', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }, 15_000);
-    if (!response.ok) {
-      const text = await response.text();
-      return res.status(response.status).json({
-        error: 'Hyperliquid exchange request failed',
-        detail: text.slice(0, 500),
-      });
-    }
-    const result = await safeJson(response);
-    return respondJsonOrError(res, response, result);
-  } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ error: 'Hyperliquid exchange request timed out' });
-    logError('hyperliquid-exchange', e);
-    return res.status(500).json({ error: e.message || 'Unknown error' });
-  }
+  return proxyHyperliquidExchange(req, res, 'https://api.hyperliquid.xyz', 'Hyperliquid');
 });
 /* -- HYPERLIQUID TESTNET PROXY (perps info) ------------------------------ */
 app.post('/api/hyperliquid-testnet', async (req, res) => {
@@ -557,27 +607,7 @@ app.post('/api/hyperliquid-testnet', async (req, res) => {
 });
 /* -- HYPERLIQUID TESTNET EXCHANGE PROXY (signed orders) ----------------- */
 app.post('/api/hyperliquid-testnet/exchange', async (req, res) => {
-  try {
-    const body = req.body || {};
-    const response = await fetchWithTimeout('https://api.hyperliquid-testnet.xyz/exchange', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }, 15_000);
-    if (!response.ok) {
-      const text = await response.text();
-      return res.status(response.status).json({
-        error: 'Hyperliquid testnet exchange request failed',
-        detail: text.slice(0, 500),
-      });
-    }
-    const result = await safeJson(response);
-    return respondJsonOrError(res, response, result);
-  } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ error: 'Hyperliquid testnet exchange request timed out' });
-    logError('hyperliquid-testnet-exchange', e);
-    return res.status(500).json({ error: e.message || 'Unknown error' });
-  }
+  return proxyHyperliquidExchange(req, res, 'https://api.hyperliquid-testnet.xyz', 'Hyperliquid testnet');
 });
 /* -- PUMPPORTAL PROXY ------------------------------------------------------- */
 app.post('/api/pumpportal/trade-local', async (req, res) => {
@@ -770,13 +800,14 @@ app.get('/api/health', (req, res) => {
       jupiterFallbackOnly: JUPITER_FALLBACK_ONLY,
       jupiterAccount: JUPITER_ACCOUNT,
       jupiterQuoteBase: JUPITER_QUOTE_BASE,
+      hyperliquidSigning: 'frontend-signed-forward-only',
     },
     removed: {
       lifi: true,
       zeroX: true,
     },
     fees: {
-      note: 'OKX fees are injected only into executable OKX swap routes, not quote routes. Jupiter fallback does not change OKX fee settings.',
+      note: 'OKX fees are injected only into executable OKX swap routes, not quote routes. Jupiter fallback does not change OKX fee settings. Hyperliquid builder fees must be signed/approved in the Hyperliquid order action.',
       solana: OKX_SOL_FEE_PCT + '%',
       evm: OKX_EVM_FEE_PCT + '%',
     },
@@ -834,6 +865,7 @@ app.listen(PORT, () => {
   console.log('  Jupiter:         ' + (JUPITER_ENABLED ? 'enabled' : 'disabled'));
   console.log('  Jupiter mode:    ' + (JUPITER_FALLBACK_ONLY ? 'fallback-only' : 'available'));
   console.log('  Jupiter account: ' + JUPITER_ACCOUNT);
+  console.log('  Hyperliquid:     frontend-signed forward-only');
   if (!OKX_API_KEY || !OKX_SECRET_KEY || !OKX_PASSPHRASE) {
     console.warn('  WARNING: OKX credentials missing - OKX routes will fail');
   }
