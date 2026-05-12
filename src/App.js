@@ -287,7 +287,7 @@ function AppInner() {
         {tab === 'swap' && <SwapWidget {...sharedProps} />}
         {tab === 'markets' && <Markets onSelectCoin={goToToken} />}
         {tab === 'token' && <TokenDetail {...sharedProps} coin={selectedToken} onBack={goBack} />}
-        {tab === 'launches' && <NewLaunches {...goToToken} />}
+        {tab === 'launches' && <Trending onSelectCoin={goToToken} />}
         {tab === 'launch' && <TokenLaunch {...sharedProps} />}
         {tab === 'send' && <Send {...sharedProps} />}
         {tab === 'portfolio' && <Portfolio {...sharedProps} onSend={() => switchTab('send')} />}
