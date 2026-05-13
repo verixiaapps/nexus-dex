@@ -1,8 +1,8 @@
 /**
- * NEXUS DEX — Backend Proxy Server
+ * NEXUS DEX -- Backend Proxy Server
  *
  * Active routes:
- *   /api/okx/*                        OKX DEX aggregator (v6) + cross-chain (v5)
+ *   /api/okx/*                        OKX DEX aggregator + cross-chain (both on v6)
  *   /api/jupiter/quote                Jupiter Solana quote fallback
  *   /api/jupiter/swap                 Jupiter Solana swap fallback
  *   /api/jupiter/tokens/v2/...        Jupiter top tokens + registry
@@ -19,14 +19,15 @@
  *
  * Removed: /api/0x/*, /api/lifi/*
  *
- * Frontend must NOT send secret API headers — OKX, Jupiter, Pinata, and
+ * Frontend must NOT send secret API headers -- OKX, Jupiter, Pinata, and
  * Helius credentials are injected server-side only.
  *
  * Hyperliquid Option A: frontend signs valid Hyperliquid payloads. Server
  * validates shape and forwards signed { action, nonce, signature } only.
  *
- * OKX version routing: aggregator endpoints live on /api/v6, cross-chain on
- * /api/v5. okxVersionFor() picks the right base for the upstream URL.
+ * OKX version routing: aggregator + cross-chain endpoints all live on /api/v6
+ * since the V6 upgrade. injectOkxFee only fires on aggregator SWAP endpoints,
+ * never on cross-chain.
  */
 
 require('dotenv').config();
@@ -45,7 +46,7 @@ const NODE_ENV = process.env.NODE_ENV || 'development';
 app.disable('x-powered-by');
 app.set('trust proxy', 1);
 
-/* ── SECURITY HEADERS ─────────────────────────────────────────────────── */
+/* --- SECURITY HEADERS ----------------------------------------------------- */
 
 const CSP_MODE = (process.env.CSP_MODE || 'report-only').toLowerCase();
 const CSP_REPORT_URI = (process.env.CSP_REPORT_URI || '').trim();
@@ -126,7 +127,7 @@ const CSP_HEADER_NAME = CSP_MODE === 'enforce'
 
 const HSTS_ENABLED = NODE_ENV === 'production' && process.env.HSTS_DISABLE !== '1';
 
-console.log('[security] CSP mode:', CSP_MODE, '→ header:', CSP_HEADER_NAME);
+console.log('[security] CSP mode:', CSP_MODE, '-> header:', CSP_HEADER_NAME);
 
 app.use((req, res, next) => {
   if (req.path === '/health' || req.path === '/api/health') return next();
@@ -142,7 +143,7 @@ app.use((req, res, next) => {
   next();
 });
 
-/* ── SECRETS / ENV ────────────────────────────────────────────────────── */
+/* --- SECRETS / ENV -------------------------------------------------------- */
 
 const OKX_API_KEY        = process.env.OKX_API_KEY || '';
 const OKX_SECRET_KEY     = process.env.OKX_SECRET_KEY || '';
@@ -164,7 +165,7 @@ const HELIUS_API_KEY = process.env.HELIUS_API_KEY || process.env.REACT_APP_HELIU
 const HELIUS_RPC_URL = process.env.HELIUS_RPC_URL || process.env.REACT_APP_SOLANA_RPC || '';
 const PINATA_JWT     = process.env.PINATA_JWT || '';
 
-/* ── CORS + JSON ──────────────────────────────────────────────────────── */
+/* --- CORS + JSON ---------------------------------------------------------- */
 
 const allowedOrigins = (
   process.env.ALLOWED_ORIGINS || 'https://swap.verixiaapps.com,http://localhost:3000'
@@ -187,7 +188,7 @@ app.use(cors({
 
 app.use(express.json({ limit: '256kb' }));
 
-/* ── RATE LIMITING ────────────────────────────────────────────────────── */
+/* --- RATE LIMITING -------------------------------------------------------- */
 
 const apiLimiter = rateLimit({
   windowMs: 60_000,
@@ -208,7 +209,7 @@ const uploadLimiter = rateLimit({
 
 app.use('/api/', apiLimiter);
 
-/* ── HELPERS ──────────────────────────────────────────────────────────── */
+/* --- HELPERS -------------------------------------------------------------- */
 
 async function fetchWithTimeout(url, options, timeoutMs = 12_000) {
   const controller = new AbortController();
@@ -271,7 +272,7 @@ function buildForwardedQuery(req) {
   return queryStringOf(req) || '';
 }
 
-/* ── SMALL GET CACHE ──────────────────────────────────────────────────── */
+/* --- SMALL GET CACHE ------------------------------------------------------ */
 
 const getCache = new Map();
 
@@ -293,7 +294,7 @@ function setCachedJson(url, status, payload, ttlMs) {
   }
 }
 
-/* ── OKX HMAC SIGNING ─────────────────────────────────────────────────── */
+/* --- OKX HMAC SIGNING ----------------------------------------------------- */
 
 function okxSign(timestamp, method, okxPath, body) {
   const prehash = timestamp + method.toUpperCase() + okxPath + (body || '');
@@ -313,16 +314,18 @@ function buildOkxHeaders(method, okxPath, body) {
   };
 }
 
-/* ── OKX FEE INJECTION + VERSION ROUTING ──────────────────────────────── */
+/* --- OKX FEE INJECTION ---------------------------------------------------- */
 /*
  * Fees are injected into ALL Solana swap routes.
  * DO NOT CHANGE FEE VALUES HERE UNLESS INTENTIONALLY CHANGING MONETIZATION.
  *
- * Aggregator endpoints → /api/v6.  Cross-chain endpoints → /api/v5.
- * Fee injection only fires on aggregator SWAP endpoints, never on cross-chain.
+ * All OKX DEX endpoints (aggregator + cross-chain) are on /api/v6 since
+ * the V6 upgrade. Fee injection only fires on aggregator SWAP endpoints,
+ * never on cross-chain.
  */
 
-const OKX_V6_ENDPOINTS = new Set([
+const OKX_ALLOWED_ENDPOINTS = new Set([
+  // aggregator
   '/dex/aggregator/quote',
   '/dex/aggregator/swap',
   '/dex/aggregator/swap-instruction',
@@ -334,30 +337,22 @@ const OKX_V6_ENDPOINTS = new Set([
   '/dex/aggregator/pre-transaction',
   '/dex/aggregator/transaction',
   '/dex/aggregator/history',
+  // market
   '/dex/market/token/basic-info',
   '/dex/market/candles',
   '/dex/market/price-info',
   '/dex/market/memepump/tokenList',
   '/dex/market/memepump/tokenDetails',
-]);
-
-const OKX_V5_ENDPOINTS = new Set([
+  // cross-chain (v6)
   '/dex/cross-chain/quote',
   '/dex/cross-chain/build-tx',
   '/dex/cross-chain/approve-transaction',
   '/dex/cross-chain/status',
-  '/dex/cross-chain/supported/chain',
-  '/dex/cross-chain/supported/tokens',
-  '/dex/cross-chain/supported/bridges',
-  '/dex/cross-chain/supported/bridge-tokens',
-  '/dex/cross-chain/supported/bridge-tokens-pairs',
+  '/dex/cross-chain/supported/chains',
+  '/dex/cross-chain/tokens',
+  '/dex/cross-chain/token-pairs',
+  '/dex/cross-chain/bridges',
 ]);
-
-function okxVersionFor(subPath) {
-  if (OKX_V6_ENDPOINTS.has(subPath)) return 'v6';
-  if (OKX_V5_ENDPOINTS.has(subPath)) return 'v5';
-  return null;
-}
 
 function injectOkxFee(params) {
   if (OKX_FEE_WALLET_SOL && OKX_SOL_FEE_PCT) {
@@ -367,7 +362,7 @@ function injectOkxFee(params) {
   return params;
 }
 
-/* ── OKX DEX PROXY ────────────────────────────────────────────────────── */
+/* --- OKX DEX PROXY -------------------------------------------------------- */
 
 async function proxyOkx(req, res) {
   try {
@@ -377,9 +372,8 @@ async function proxyOkx(req, res) {
 
     const subPath = req.path.replace('/api/okx', '');
     const rawQs = queryStringOf(req);
-    const version = okxVersionFor(subPath);
 
-    if (!version) {
+    if (!OKX_ALLOWED_ENDPOINTS.has(subPath)) {
       return res.status(404).json({ error: 'OKX endpoint not allowed: ' + subPath });
     }
 
@@ -390,8 +384,9 @@ async function proxyOkx(req, res) {
 
     if (isSolana && isSwapEndpoint) injectOkxFee(params);
 
-    const finalQs = '?' + params.toString();
-    const okxPath = `/api/${version}${subPath}${finalQs}`;
+    const qsString = params.toString();
+    const finalQs = qsString ? '?' + qsString : '';
+    const okxPath = '/api/v6' + subPath + finalQs;
     const okxUrl = 'https://web3.okx.com' + okxPath;
 
     console.log('[okx-debug] final URL:', okxUrl);
@@ -406,15 +401,14 @@ async function proxyOkx(req, res) {
     if (bodyStr) fetchOpts.body = bodyStr;
 
     const shouldCache = req.method === 'GET' && (
-      subPath === '/dex/aggregator/tokens'                       ||
-      subPath === '/dex/aggregator/all-tokens'                   ||
-      subPath === '/dex/aggregator/liquidity-sources'            ||
-      subPath === '/dex/aggregator/supported/chain'              ||
-      subPath === '/dex/cross-chain/supported/chain'             ||
-      subPath === '/dex/cross-chain/supported/tokens'            ||
-      subPath === '/dex/cross-chain/supported/bridges'           ||
-      subPath === '/dex/cross-chain/supported/bridge-tokens'     ||
-      subPath === '/dex/cross-chain/supported/bridge-tokens-pairs'
+      subPath === '/dex/aggregator/tokens'                ||
+      subPath === '/dex/aggregator/all-tokens'            ||
+      subPath === '/dex/aggregator/liquidity-sources'     ||
+      subPath === '/dex/aggregator/supported/chain'       ||
+      subPath === '/dex/cross-chain/supported/chains'     ||
+      subPath === '/dex/cross-chain/tokens'               ||
+      subPath === '/dex/cross-chain/token-pairs'          ||
+      subPath === '/dex/cross-chain/bridges'
     );
 
     if (shouldCache) {
@@ -459,7 +453,7 @@ app.get('/api/test-price-info', async (req, res) => {
   }
 });
 
-/* ── JUPITER FALLBACK PROXY ───────────────────────────────────────────── */
+/* --- JUPITER FALLBACK PROXY ----------------------------------------------- */
 /*
  * Jupiter is a Solana-only fallback. Not primary routing. Does not touch
  * OKX fees. Backend never signs transactions.
@@ -467,8 +461,8 @@ app.get('/api/test-price-info', async (req, res) => {
 
 function buildJupiterHeaders() {
   const headers = {
-    Accept:           'application/json',
-    'Content-Type':   'application/json',
+    Accept:            'application/json',
+    'Content-Type':    'application/json',
     'X-Nexus-Account': JUPITER_ACCOUNT,
   };
   if (JUPITER_API_KEY) headers['x-api-key'] = JUPITER_API_KEY;
@@ -522,7 +516,7 @@ app.post('/api/jupiter/swap', async (req, res) => {
   }
 });
 
-/* ── JUPITER TOKEN PROXY (markets + registry) ─────────────────────────── */
+/* --- JUPITER TOKEN PROXY (markets + registry) ----------------------------- */
 
 app.get('/api/jupiter/tokens/v2/toporganicscore/:timeframe', async (req, res) => {
   try {
@@ -558,7 +552,7 @@ app.get('/api/jupiter/tokens/v2/tag', async (req, res) => {
   }
 });
 
-/* ── DEXSCREENER PROXY ────────────────────────────────────────────────── */
+/* --- DEXSCREENER PROXY ---------------------------------------------------- */
 
 app.get('/api/dexscreener/*', async (req, res) => {
   try {
@@ -579,7 +573,7 @@ app.get('/api/dexscreener/*', async (req, res) => {
   }
 });
 
-/* ── HYPERLIQUID HELPERS ──────────────────────────────────────────────── */
+/* --- HYPERLIQUID HELPERS -------------------------------------------------- */
 
 function isPlainObject(v) {
   return Boolean(v) && typeof v === 'object' && !Array.isArray(v);
@@ -655,7 +649,7 @@ async function proxyHyperliquidExchange(req, res, baseUrl, tag) {
   }
 }
 
-/* ── HYPERLIQUID MAINNET ──────────────────────────────────────────────── */
+/* --- HYPERLIQUID MAINNET -------------------------------------------------- */
 
 app.post('/api/hyperliquid', async (req, res) => {
   try {
@@ -676,7 +670,7 @@ app.post('/api/hyperliquid/exchange', (req, res) =>
   proxyHyperliquidExchange(req, res, 'https://api.hyperliquid.xyz', 'Hyperliquid'),
 );
 
-/* ── HYPERLIQUID TESTNET ──────────────────────────────────────────────── */
+/* --- HYPERLIQUID TESTNET -------------------------------------------------- */
 
 app.post('/api/hyperliquid-testnet', async (req, res) => {
   try {
@@ -697,7 +691,7 @@ app.post('/api/hyperliquid-testnet/exchange', (req, res) =>
   proxyHyperliquidExchange(req, res, 'https://api.hyperliquid-testnet.xyz', 'Hyperliquid testnet'),
 );
 
-/* ── PUMPPORTAL PROXY ─────────────────────────────────────────────────── */
+/* --- PUMPPORTAL PROXY ----------------------------------------------------- */
 
 app.post('/api/pumpportal/trade-local', async (req, res) => {
   try {
@@ -725,7 +719,7 @@ app.post('/api/pumpportal/trade-local', async (req, res) => {
   }
 });
 
-/* ── HELIUS / SOLANA RPC ──────────────────────────────────────────────── */
+/* --- HELIUS / SOLANA RPC -------------------------------------------------- */
 
 function getSolanaRpcUrl() {
   if (HELIUS_RPC_URL) return HELIUS_RPC_URL;
@@ -763,7 +757,7 @@ app.post('/api/solana-rpc', async (req, res) => {
   }
 });
 
-/* ── PINATA ───────────────────────────────────────────────────────────── */
+/* --- PINATA --------------------------------------------------------------- */
 
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -851,7 +845,7 @@ app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, r
   }
 });
 
-/* ── HEALTHCHECK ──────────────────────────────────────────────────────── */
+/* --- HEALTHCHECK ---------------------------------------------------------- */
 
 app.get('/api/health', (req, res) => {
   res.json({
@@ -885,17 +879,16 @@ app.get('/api/health', (req, res) => {
       pinata:                     Boolean(PINATA_JWT),
     },
     mode: {
-      okxPrimary:             true,
-      okxAggregatorVersion:   'v6',
-      okxCrossChainVersion:   'v5',
-      jupiterFallbackOnly:    JUPITER_FALLBACK_ONLY,
-      jupiterAccount:         JUPITER_ACCOUNT,
-      jupiterQuoteBase:       JUPITER_QUOTE_BASE,
-      hyperliquidSigning:     'frontend-signed-forward-only',
+      okxPrimary:          true,
+      okxApiVersion:       'v6',
+      jupiterFallbackOnly: JUPITER_FALLBACK_ONLY,
+      jupiterAccount:      JUPITER_ACCOUNT,
+      jupiterQuoteBase:    JUPITER_QUOTE_BASE,
+      hyperliquidSigning:  'frontend-signed-forward-only',
     },
     removed: { lifi: true, zeroX: true },
     fees: {
-      note:   'OKX fees are injected only into executable OKX aggregator swap routes (v6), not quote routes and not cross-chain (v5). Jupiter fallback does not change OKX fee settings. Hyperliquid builder fees must be signed/approved in the Hyperliquid order action.',
+      note:   'OKX fees are injected only into executable OKX aggregator swap routes, not quote routes and not cross-chain. Jupiter fallback does not change OKX fee settings. Hyperliquid builder fees must be signed/approved in the Hyperliquid order action.',
       solana: OKX_SOL_FEE_PCT + '%',
       evm:    OKX_EVM_FEE_PCT + '%',
     },
@@ -903,13 +896,13 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-/* ── 404 FOR UNMATCHED API ROUTES ─────────────────────────────────────── */
+/* --- 404 FOR UNMATCHED API ROUTES ----------------------------------------- */
 
 app.all('/api/*', (req, res) => {
   res.status(404).json({ error: 'API route not found: ' + req.path });
 });
 
-/* ── SPA STATIC + CATCH-ALL ───────────────────────────────────────────── */
+/* --- SPA STATIC + CATCH-ALL ----------------------------------------------- */
 
 app.use(express.static(path.join(__dirname, 'build'), {
   maxAge: '7d',
@@ -924,7 +917,7 @@ app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'build', 'index.html'));
 });
 
-/* ── ERROR HANDLER ────────────────────────────────────────────────────── */
+/* --- ERROR HANDLER -------------------------------------------------------- */
 // eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   if (err && err.message && err.message.startsWith('Not allowed by CORS')) {
@@ -943,7 +936,7 @@ app.use((err, req, res, next) => {
     return res.status(413).json({ error: 'File too large (max 5MB)' });
   }
   if (err && err.code === 'LIMIT_UNEXPECTED_FILE') {
-    return res.status(400).json({ error: 'Unexpected file field — use field name "file"' });
+    return res.status(400).json({ error: 'Unexpected file field -- use field name "file"' });
   }
 
   logError('unhandled', err);
@@ -951,15 +944,14 @@ app.use((err, req, res, next) => {
   return res.status(500).json({ error: 'Internal server error' });
 });
 
-/* ── BOOT ─────────────────────────────────────────────────────────────── */
+/* --- BOOT ----------------------------------------------------------------- */
 
 app.listen(PORT, () => {
   console.log('Nexus DEX server running on port ' + PORT);
   console.log('  env:             ' + NODE_ENV);
   console.log('  allowed origins: ' + allowedOrigins.join(', '));
   console.log('  OKX fees:        Solana ' + OKX_SOL_FEE_PCT + '%  EVM ' + OKX_EVM_FEE_PCT + '%');
-  console.log('  OKX aggregator:  v6');
-  console.log('  OKX cross-chain: v5');
+  console.log('  OKX API:         v6 (aggregator + cross-chain)');
   console.log('  quote fees:      disabled');
   console.log('  Jupiter:         ' + (JUPITER_ENABLED ? 'enabled' : 'disabled'));
   console.log('  Jupiter mode:    ' + (JUPITER_FALLBACK_ONLY ? 'fallback-only' : 'available'));
@@ -967,18 +959,18 @@ app.listen(PORT, () => {
   console.log('  Hyperliquid:     frontend-signed forward-only');
 
   if (!OKX_API_KEY || !OKX_SECRET_KEY || !OKX_PASSPHRASE) {
-    console.warn('  WARNING: OKX credentials missing — OKX routes will fail');
+    console.warn('  WARNING: OKX credentials missing -- OKX routes will fail');
   }
-  if (!OKX_PROJECT_ID)     console.warn('  WARNING: OKX_PROJECT_ID not set — recommended for production');
-  if (!OKX_FEE_WALLET_SOL) console.warn('  WARNING: OKX_FEE_WALLET_SOL not set — Solana swap fees not collected');
-  if (!OKX_FEE_WALLET_EVM) console.warn('  WARNING: OKX_FEE_WALLET_EVM not set — EVM swap fees not collected');
+  if (!OKX_PROJECT_ID)     console.warn('  WARNING: OKX_PROJECT_ID not set -- recommended for production');
+  if (!OKX_FEE_WALLET_SOL) console.warn('  WARNING: OKX_FEE_WALLET_SOL not set -- Solana swap fees not collected');
+  if (!OKX_FEE_WALLET_EVM) console.warn('  WARNING: OKX_FEE_WALLET_EVM not set -- EVM swap fees not collected');
   if (JUPITER_ENABLED && !JUPITER_API_KEY) {
-    console.warn('  WARNING: JUPITER_API_KEY not set — using public Jupiter access');
+    console.warn('  WARNING: JUPITER_API_KEY not set -- using public Jupiter access');
   }
   if (!HELIUS_API_KEY && !HELIUS_RPC_URL) {
-    console.warn('  WARNING: No Helius key — falling back to public Solana RPC');
+    console.warn('  WARNING: No Helius key -- falling back to public Solana RPC');
   }
-  if (!PINATA_JWT) console.warn('  WARNING: PINATA_JWT not set — token launch uploads will fail');
+  if (!PINATA_JWT) console.warn('  WARNING: PINATA_JWT not set -- token launch uploads will fail');
 });
 
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
