@@ -494,10 +494,22 @@ async function signHlWithdraw3(privateKey, action) {
   return { r: split.r, s: split.s, v: Number(split.v) };
 }
 
-function b64ToBytes(b64) {
-  if (typeof Buffer !== 'undefined') return Buffer.from(b64, 'base64');
-  return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+function b64ToBytes(data) {
+  const s = String(data || '').trim();
+  // deBridge returns hex (with optional 0x prefix) for Solana source-chain txs.
+  // Fall back to base64 for any other source.
+  const hex = s.replace(/^0x/, '');
+  if (hex.length > 0 && hex.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(hex)) {
+    const bytes = new Uint8Array(hex.length / 2);
+    for (let i = 0; i < bytes.length; i++) {
+      bytes[i] = parseInt(hex.slice(i * 2, i * 2 + 2), 16);
+    }
+    return bytes;
+  }
+  if (typeof Buffer !== 'undefined') return Buffer.from(s, 'base64');
+  return Uint8Array.from(atob(s), c => c.charCodeAt(0));
 }
+
 
 const DEPOSIT_STATUS_TEXT = {
   awaiting_signature: 'Waiting for Solana signature...',
