@@ -39,7 +39,7 @@
     "@raydium-io/raydium-sdk-v2": "0.1.131-alpha",
     "@metaplex-foundation/mpl-token-metadata": "3.4.0",
     "@privy-io/react-auth": "^2.0.0",
-    "@mayanfinance/swap-sdk": "^11.4.0",
+    "@mayanfinance/swap-sdk": "^14.2.0",
     "@nktkas/hyperliquid": "^0.32.2",
     "ethers": "^6.13.0"
   },
