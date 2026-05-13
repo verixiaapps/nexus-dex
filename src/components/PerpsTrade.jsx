@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
 import { signL1Action } from '@nktkas/hyperliquid/signing';
- 
+
 const ENABLE_TRADING        = process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
 const BUILDER_ADDRESS       = '';
 const BUILDER_FEE_TENTHS_BP = 5;
@@ -116,10 +116,15 @@ function roundPx(v) {
 function aggressivePx(mid, isLong) {
   const px = Number(mid);
   if (!Number.isFinite(px) || px <= 0) return '0';
-  return roundPx(isLong ? px * 1.03 : px * 0.97);
+  return roundPx(isLong ? px * 1.10 : px * 0.90);
 }
 function coinAccent(s) {
-  const m = { BTC:['#f7931a','#ffbf5c'], ETH:['#627eea','#8fa8ff'], SOL:['#14f195','#9945ff'], HYPE:['#97fce4','#5ce9c8'], DOGE:['#c2a633','#e8c84a'], PEPE:['#3dd598','#5de882'], XRP:['#7989ad','#bcc6e0'], BNB:['#f0b90b','#f5d060'], SUI:['#4da2ff','#80c4ff'], LINK:['#2a5ada','#6a95ff'], AVAX:['#e84142','#ff7a7b'], ARB:['#12aaff','#60d0ff'] };
+  const m = {
+    BTC:['#f7931a','#ffbf5c'], ETH:['#627eea','#8fa8ff'], SOL:['#14f195','#9945ff'],
+    HYPE:['#97fce4','#5ce9c8'], DOGE:['#c2a633','#e8c44a'], PEPE:['#3dd598','#5de882'],
+    XRP:['#7989ad','#bcc6e0'], BNB:['#f0b90b','#f5d060'], SUI:['#4da2ff','#80c4ff'],
+    LINK:['#2a5ada','#6a95ff'], AVAX:['#e84142','#ff7a7b'], ARB:['#12aaff','#60d0ff'],
+  };
   return m[s] || ['#a87fff','#97fce4'];
 }
 
@@ -221,7 +226,7 @@ async function pollUntilFunded(hlAddress, targetUsd, timeoutMs = 240_000) {
     if (bal >= targetUsd * 0.95) return bal;
     await new Promise(r => setTimeout(r, 5_000));
   }
-  throw new Error('HyperCore did not credit in time. Funds are safe — refresh & retry.');
+  throw new Error('HyperCore did not credit in time. Funds are safe -- refresh & retry.');
 }
 
 async function getArbUsdcBalance(address) {
@@ -379,8 +384,12 @@ function saveBridge(mode, payload) {
   try { localStorage.setItem('nexus_bridge_' + mode, JSON.stringify({ ...payload, ts: Date.now() })); } catch {}
 }
 function loadBridge(mode) {
-  try { const raw = localStorage.getItem('nexus_bridge_' + mode); if (!raw) return null;
-    const d = JSON.parse(raw); return Date.now() - d.ts < 30 * 60_000 ? d : null; } catch { return null; }
+  try {
+    const raw = localStorage.getItem('nexus_bridge_' + mode);
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    return Date.now() - d.ts < 30 * 60_000 ? d : null;
+  } catch { return null; }
 }
 function clearBridge(mode) { try { localStorage.removeItem('nexus_bridge_' + mode); } catch {} }
 
@@ -430,8 +439,15 @@ async function placeOrder({ pair, isLong, usdAmount, leverage, reduceOnly = fals
     const reason = result?.response?.data?.statuses?.[0];
     throw new Error(typeof reason === 'string' ? reason : reason ? JSON.stringify(reason) : 'Order rejected');
   }
-  const first = result?.response?.data?.statuses?.[0];
-  if (first === 'cancelled' || first?.cancelled) throw new Error('Order cancelled — price moved too fast, retry');
+  const statuses = result?.response?.data?.statuses;
+  const first = statuses?.[0];
+  const wasFilled = first?.filled != null;
+  if (!wasFilled) {
+    const reason = first?.error || first?.cancelled
+      || (typeof first === 'string' ? first : null)
+      || 'Order not filled -- try again';
+    throw new Error(typeof reason === 'string' ? reason : JSON.stringify(reason));
+  }
   return result;
 }
 
@@ -725,7 +741,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
     if (!usd || usd < 5)                  { setError('Minimum withdrawal is $5'); return; }
     if (usd > hlBalance * 0.99)           { setError('Amount exceeds available balance'); return; }
     if (!isValidSolAddress(walletPubkey)) { setError('Invalid Solana destination'); return; }
-    if (!hlPrivateKey)                    { setError('Session expired — refresh page'); return; }
+    if (!hlPrivateKey)                    { setError('Session expired -- refresh page'); return; }
 
     setStatus('loading'); setError(''); setStatusMsg('Initiating withdrawal...');
     try {
@@ -919,7 +935,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, marke
       setStatus('success'); setStatusMsg('');
       const [lam, hb, pos] = await Promise.all([fetchSolBalance(connection, publicKey), fetchHlBalance(walletData.address), fetchHlPositions(walletData.address)]);
       setSolLamports(lam); setHlBalance(hb); setPositions(pos);
-      setTimeout(() => { setStatus('idle'); onClose(); window.location.reload(); }, 2000);
+      setTimeout(() => { setStatus('idle'); onClose(); }, 2000);
     } catch (e) {
       console.error('[execute]', e);
       setError(e.message || 'Trade failed');
@@ -1006,7 +1022,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, marke
             </div>
             {solVal > 0 && solPrice > 0 && <div style={{ marginBottom:9, display:'flex', justifyContent:'space-between', fontSize:11, color:C.muted, ...T.mono }}><span>Margin ~ {fmt(usdAmount, 2)}</span><span style={{ color:C.ink }}>Position ~ {fmt(notional, 2)}</span></div>}
             <div style={{ display:'flex', gap:6 }}>{[25, 50, 75, 100].map(p => <button key={p} onClick={() => quickPct(p)} disabled={isBusy || !wcon} style={{ flex:1, padding:'8px', borderRadius:10, border:`1px solid ${C.border}`, background:'rgba(255,255,255,.03)', color:C.muted, fontWeight:700, fontSize:11, cursor:'pointer', opacity: isBusy || !wcon ? 0.4 : 1, ...T.mono }}>{p === 100 ? 'Max' : p + '%'}</button>)}</div>
-            {notEnoughSol && <div style={{ marginTop:10, padding:'10px 12px', background:'rgba(255,138,158,.08)', border:'1px solid rgba(255,138,158,.28)', borderRadius:10, fontSize:12, color:C.down, ...T.body }}>Not enough SOL — you have {solBalance.toFixed(4)}</div>}
+            {notEnoughSol && <div style={{ marginTop:10, padding:'10px 12px', background:'rgba(255,138,158,.08)', border:'1px solid rgba(255,138,158,.28)', borderRadius:10, fontSize:12, color:C.down, ...T.body }}>Not enough SOL -- you have {solBalance.toFixed(4)}</div>}
           </div>
 
           <div style={{ marginBottom:14 }}>
