@@ -6,7 +6,6 @@ import { signL1Action } from '@nktkas/hyperliquid/signing';
 const ENABLE_TRADING        = process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
 const BUILDER_ADDRESS       = '';
 const BUILDER_FEE_TENTHS_BP = 5;
-const SOL_MINT              = 'So11111111111111111111111111111111111111112';
 const LAMPORTS_PER_SOL      = 1_000_000_000;
 const DERIVATION_MSG        = (pub) =>
   `Nexus DEX: Authorize HyperCore Account\n\nWallet: ${pub}\n\nThis creates your non-custodial trading account. No SOL is spent.`;
@@ -249,7 +248,7 @@ async function depositSolToHyperCore({
   const params = new URLSearchParams({
     fromChain:   'SOL',
     toChain:     '1337',
-    fromToken:   SOL_MINT,
+    fromToken:   '11111111111111111111111111111111',
     toToken:     'USDC',
     fromAmount:  String(solLamports),
     fromAddress: solPubkey,
@@ -698,7 +697,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
       if (!submit.ok) throw new Error(submitData.error || 'Submit failed');
 
       setStatus('polling');
-      setStatusMsg('Processing (~4 min)...');
+      setStatusMsg('Processing (~2 min)...');
       const tid = initData.tracking_id;
       pollRef.current = setInterval(async () => {
         try {
