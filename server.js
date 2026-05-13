@@ -19,17 +19,14 @@
  *   /api/pinata/file                  Pinata pinFileToIPFS
  *   /api/health                       healthcheck
  *
- * Removed: /api/0x/*, /api/lifi/*
- *
- * Frontend must NOT send secret API headers -- OKX, Jupiter, Pinata, and
- * Helius credentials are injected server-side only.
- *
- * Hyperliquid Option A: frontend signs valid Hyperliquid payloads. Server
- * validates shape and forwards signed { action, nonce, signature } only.
- *
  * Bridge: SOL on Solana -> USDC.arb on Arbitrum -> credited to user's HL
- * account via operator wallet. Operator wallet only holds gas + brief USDC
- * passthrough, never long-term float. Funds always recoverable.
+ * account via operator wallet (and reverse for withdrawals).
+ *
+ * Race-safe design:
+ *   - All operator-state operations serialized via single queueBridge.
+ *   - HL withdrawal arrivals detected via USDC Transfer events filtered by
+ *     from=HL_BRIDGE_ADDR (so deBridge fulfillments aren't misattributed).
+ *   - Deposit deBridge fulfillment polled OUTSIDE queue (no shared state).
  */
 
 require('dotenv').config();
@@ -175,6 +172,7 @@ const ARB_RPC_URL          = process.env.ARB_RPC_URL || 'https://arb1.arbitrum.i
 const HL_BRIDGE_ADDR       = '0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7';
 const USDC_ARB_ADDR        = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
 const DEBRIDGE_API         = 'https://api.dln.trade/v1.0';
+const DEBRIDGE_STATS_API   = 'https://stats-api.dln.trade/api';
 const DEBRIDGE_SOL_ID      = 7565164;
 const DEBRIDGE_ARB_ID      = 42161;
 const SOL_NATIVE_DEBRIDGE  = '11111111111111111111111111111111';
@@ -331,17 +329,8 @@ function buildOkxHeaders(method, okxPath, body) {
 }
 
 /* --- OKX FEE INJECTION ---------------------------------------------------- */
-/*
- * Fees are injected into ALL Solana swap routes.
- * DO NOT CHANGE FEE VALUES HERE UNLESS INTENTIONALLY CHANGING MONETIZATION.
- *
- * All OKX DEX endpoints (aggregator + cross-chain) are on /api/v6 since
- * the V6 upgrade. Fee injection only fires on aggregator SWAP endpoints,
- * never on cross-chain.
- */
 
 const OKX_ALLOWED_ENDPOINTS = new Set([
-  // aggregator
   '/dex/aggregator/quote',
   '/dex/aggregator/swap',
   '/dex/aggregator/swap-instruction',
@@ -353,13 +342,11 @@ const OKX_ALLOWED_ENDPOINTS = new Set([
   '/dex/aggregator/pre-transaction',
   '/dex/aggregator/transaction',
   '/dex/aggregator/history',
-  // market
   '/dex/market/token/basic-info',
   '/dex/market/candles',
   '/dex/market/price-info',
   '/dex/market/memepump/tokenList',
   '/dex/market/memepump/tokenDetails',
-  // cross-chain (v6)
   '/dex/cross-chain/quote',
   '/dex/cross-chain/build-tx',
   '/dex/cross-chain/approve-transaction',
@@ -385,37 +372,28 @@ async function proxyOkx(req, res) {
     if (!OKX_API_KEY || !OKX_SECRET_KEY || !OKX_PASSPHRASE) {
       return res.status(503).json({ error: 'OKX DEX API credentials not configured' });
     }
-
     const subPath = req.path.replace('/api/okx', '');
     const rawQs = queryStringOf(req);
-
     if (!OKX_ALLOWED_ENDPOINTS.has(subPath)) {
       return res.status(404).json({ error: 'OKX endpoint not allowed: ' + subPath });
     }
-
     const params = new URLSearchParams(rawQs.slice(1));
     const isSolana = params.get('chainIndex') === OKX_SOLANA_CHAIN;
     const isSwapEndpoint =
       subPath === '/dex/aggregator/swap' || subPath === '/dex/aggregator/swap-instruction';
-
     if (isSolana && isSwapEndpoint) injectOkxFee(params);
-
     const qsString = params.toString();
     const finalQs = qsString ? '?' + qsString : '';
     const okxPath = '/api/v6' + subPath + finalQs;
     const okxUrl = 'https://web3.okx.com' + okxPath;
-
     console.log('[okx-debug] final URL:', okxUrl);
-
     const bodyStr =
       req.method !== 'GET' && req.method !== 'HEAD' && req.body
         ? JSON.stringify(req.body)
         : '';
-
     const headers = buildOkxHeaders(req.method, okxPath, bodyStr);
     const fetchOpts = { method: req.method, headers };
     if (bodyStr) fetchOpts.body = bodyStr;
-
     const shouldCache = req.method === 'GET' && (
       subPath === '/dex/aggregator/tokens'                ||
       subPath === '/dex/aggregator/all-tokens'            ||
@@ -426,19 +404,15 @@ async function proxyOkx(req, res) {
       subPath === '/dex/cross-chain/token-pairs'          ||
       subPath === '/dex/cross-chain/bridges'
     );
-
     if (shouldCache) {
       const cached = getCachedJson(okxUrl);
       if (cached) return res.status(cached.status).json(cached.payload);
     }
-
     const response = await fetchWithTimeout(okxUrl, fetchOpts, 15_000);
     const result = await safeJson(response);
-
     if (shouldCache && response.ok && result.parsed !== null) {
       setCachedJson(okxUrl, response.status, result.parsed, 60_000);
     }
-
     return respondJsonOrError(res, response, result);
   } catch (e) {
     if (e.name === 'AbortError') {
@@ -470,10 +444,6 @@ app.get('/api/test-price-info', async (req, res) => {
 });
 
 /* --- JUPITER FALLBACK PROXY ----------------------------------------------- */
-/*
- * Jupiter is a Solana-only fallback. Not primary routing. Does not touch
- * OKX fees. Backend never signs transactions.
- */
 
 function buildJupiterHeaders() {
   const headers = {
@@ -488,18 +458,15 @@ function buildJupiterHeaders() {
 app.get('/api/jupiter/quote', async (req, res) => {
   try {
     if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter fallback disabled' });
-
     const url = JUPITER_QUOTE_BASE + '/quote' + buildForwardedQuery(req);
     const cached = getCachedJson(url);
     if (cached) return res.status(cached.status).json(cached.payload);
-
     const response = await fetchWithTimeout(
       url,
       { method: 'GET', headers: buildJupiterHeaders() },
       12_000,
     );
     const result = await safeJson(response);
-
     if (response.ok && result.parsed !== null) {
       setCachedJson(url, response.status, result.parsed, 8_000);
     }
@@ -514,11 +481,9 @@ app.get('/api/jupiter/quote', async (req, res) => {
 app.post('/api/jupiter/swap', async (req, res) => {
   try {
     if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter fallback disabled' });
-
     const body = req.body || {};
     if (!body.userPublicKey)  return res.status(400).json({ error: 'Missing userPublicKey for Jupiter swap' });
     if (!body.quoteResponse)  return res.status(400).json({ error: 'Missing quoteResponse for Jupiter swap' });
-
     const response = await fetchWithTimeout(
       JUPITER_QUOTE_BASE + '/swap',
       { method: 'POST', headers: buildJupiterHeaders(), body: JSON.stringify(body) },
@@ -532,14 +497,11 @@ app.post('/api/jupiter/swap', async (req, res) => {
   }
 });
 
-/* --- JUPITER TOKEN PROXY (markets + registry) ----------------------------- */
-
 app.get('/api/jupiter/tokens/v2/toporganicscore/:timeframe', async (req, res) => {
   try {
     const url = `https://lite-api.jup.ag/tokens/v2/toporganicscore/${req.params.timeframe || '24h'}${buildForwardedQuery(req)}`;
     const cached = getCachedJson(url);
     if (cached) return res.status(cached.status).json(cached.payload);
-
     const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 12_000);
     const result = await safeJson(response);
     if (response.ok && result.parsed) setCachedJson(url, response.status, result.parsed, 30_000);
@@ -556,7 +518,6 @@ app.get('/api/jupiter/tokens/v2/tag', async (req, res) => {
     const url = `https://token.jup.ag/tokens/v2/tag${buildForwardedQuery(req)}`;
     const cached = getCachedJson(url);
     if (cached) return res.status(cached.status).json(cached.payload);
-
     const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 12_000);
     const result = await safeJson(response);
     if (response.ok && result.parsed) setCachedJson(url, response.status, result.parsed, 300_000);
@@ -574,10 +535,8 @@ app.get('/api/dexscreener/*', async (req, res) => {
   try {
     const subPath = req.path.replace('/api/dexscreener', '');
     const url = 'https://api.dexscreener.com' + subPath + buildForwardedQuery(req);
-
     const cached = getCachedJson(url);
     if (cached) return res.status(cached.status).json(cached.payload);
-
     const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 10_000);
     const result = await safeJson(response);
     if (response.ok && result.parsed) setCachedJson(url, response.status, result.parsed, 15_000);
@@ -619,13 +578,10 @@ function validateHyperliquidExchangePayload(body) {
     return 'Unsigned router payload received. Frontend must sign Hyperliquid payload before sending to /api/hyperliquid/exchange.';
   }
   if (!isPlainObject(body.action)) return 'Missing action object';
-
   const nonce = Number(body.nonce);
   if (!Number.isInteger(nonce) || nonce <= 0) return 'Missing or invalid nonce';
-
   const sigErr = validateHyperliquidSignature(body.signature);
   if (sigErr) return sigErr;
-
   if (body.vaultAddress != null && !/^0x[a-fA-F0-9]{40}$/.test(String(body.vaultAddress))) {
     return 'Invalid vaultAddress';
   }
@@ -641,14 +597,12 @@ async function proxyHyperliquidExchange(req, res, baseUrl, tag) {
     const body = req.body || {};
     const validationError = validateHyperliquidExchangePayload(body);
     if (validationError) return res.status(400).json({ error: validationError });
-
     const response = await fetchWithTimeout(
       baseUrl + '/exchange',
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
       15_000,
     );
     const result = await safeJson(response);
-
     if (!response.ok) {
       return res.status(response.status).json({
         error:  `${tag} exchange request failed`,
@@ -714,13 +668,19 @@ app.post('/api/hyperliquid-testnet/exchange', (req, res) =>
  *            -> operator deposit() to HL bridge (operator HL credited)
  *            -> operator usdSend HL action -> user's HL account credited
  *   WITHDRAW: user signs HL withdraw3 (silent, localStorage HL key)
- *             -> HL sends USDC.arb to OPERATOR -> deBridge to user's Solana
+ *             -> HL validators send USDC.arb to OPERATOR (3-4 min)
+ *             -> deBridge USDC.arb -> SOL to user's Solana address
+ *
+ * Race safety:
+ *   - Strict serialization via queueBridge: all operator-state operations
+ *     (HL ops, balance checks, deBridge bridges) execute one at a time.
+ *   - HL withdrawal arrivals detected via USDC Transfer events filtered by
+ *     from=HL_BRIDGE_ADDR. deBridge fulfillments come from solver contracts
+ *     (different from address), so they cannot be misattributed.
+ *   - Deposit deBridge fulfillment polled OUTSIDE the queue (no shared state).
  *
  * Operator wallet (0xeace...) only holds gas + brief USDC passthrough.
  * Funds always recoverable because operator wallet + HL account share the key.
- *
- * Concurrent deposits are race-free: we poll deBridge orderId for fulfillment
- * (not balance watching), then serialize HL ops via a promise queue.
  *
  * Built for ethers v6 (native bigint, ethers.JsonRpcProvider, etc.)
  */
@@ -729,6 +689,7 @@ const USDC_ABI = [
   'function allowance(address,address) view returns (uint256)',
   'function approve(address,uint256) returns (bool)',
   'function balanceOf(address) view returns (uint256)',
+  'event Transfer(address indexed from, address indexed to, uint256 value)',
 ];
 const HL_BRIDGE_ABI = ['function deposit(uint64 usd)'];
 
@@ -738,6 +699,13 @@ function getOperatorWallet() {
     if (!OPERATOR_PRIVATE_KEY) throw new Error('OPERATOR_PRIVATE_KEY not set');
     _arbProvider = new ethers.JsonRpcProvider(ARB_RPC_URL);
     _operatorWallet = new ethers.Wallet(OPERATOR_PRIVATE_KEY, _arbProvider);
+    // Sanity check the operator key matches the hardcoded address
+    if (_operatorWallet.address.toLowerCase() !== OPERATOR_WALLET_ADDR.toLowerCase()) {
+      throw new Error(
+        'OPERATOR_PRIVATE_KEY mismatch: key controls ' + _operatorWallet.address +
+        ' but expected ' + OPERATOR_WALLET_ADDR
+      );
+    }
   }
   return _operatorWallet;
 }
@@ -766,7 +734,7 @@ async function fetchSolPriceUsd() {
   return p;
 }
 
-// HL EIP-712 user-signed action (server-side, signs with operator key)
+// HL EIP-712 action signing (server-side, signs with operator key)
 async function signHlActionServer(wallet, action, typeName, eipFields) {
   const domain = {
     name: 'HyperliquidSignTransaction',
@@ -782,15 +750,20 @@ async function signHlActionServer(wallet, action, typeName, eipFields) {
   return { r: split.r, s: split.s, v: split.v };
 }
 
-// Promise queue -- serialize HL on-chain operations to avoid nonce/balance races
-let _hlOpQueue = Promise.resolve();
-function queueHlOp(fn) {
-  const p = _hlOpQueue.then(fn, fn);
-  _hlOpQueue = p.catch(() => {});
+// Strict serialization queue. All operator-state operations go through this.
+// Single-flight: only one bridge op (deposit phase 2 or withdraw entire pipeline)
+// runs at a time. Errors propagate to the caller but the queue continues.
+let _bridgeQueue = Promise.resolve();
+function queueBridge(fn) {
+  const p = _bridgeQueue.then(fn, fn);
+  _bridgeQueue = p.catch(() => {});
   return p;
 }
 
-// Poll deBridge for order fulfillment
+// Poll deBridge stats API for order fulfillment.
+// Statuses: Created -> GiveOrderClaimed -> ClaimedUnlock / SentUnlock -> Fulfilled
+// Any of {Fulfilled, SentUnlock, ClaimedUnlock} = success.
+// {Cancelled, OrderCancelled, Expired} = failure.
 async function waitForDeBridgeFulfillment(orderId, timeoutMs) {
   const start = Date.now();
   const limit = timeoutMs || 15 * 60 * 1000;
@@ -798,14 +771,14 @@ async function waitForDeBridgeFulfillment(orderId, timeoutMs) {
     await sleep(8_000);
     try {
       const r = await fetchWithTimeout(
-        `${DEBRIDGE_API}/dln/order/${orderId}/status`,
+        `${DEBRIDGE_STATS_API}/Orders/${orderId}`,
         { method: 'GET' },
         8_000,
       );
       if (!r.ok) continue;
       const s = await r.json();
       if (['Fulfilled', 'SentUnlock', 'ClaimedUnlock'].includes(s.status)) return s;
-      if (['OrderCancelled', 'OrderRejected'].includes(s.status)) {
+      if (['Cancelled', 'OrderCancelled', 'Expired'].includes(s.status)) {
         throw new Error('deBridge ' + s.status);
       }
     } catch (e) {
@@ -814,6 +787,53 @@ async function waitForDeBridgeFulfillment(orderId, timeoutMs) {
     }
   }
   throw new Error('deBridge fulfillment timeout');
+}
+
+// Wait for a USDC Transfer event from HL_BRIDGE_ADDR to operator with amount >= minAmount.
+// Polls in block-range chunks to stay within RPC limits. Returns first matching event.
+async function waitForHlWithdrawArrival(usdc, fromBlock, expectedRaw, slippagePct = 15, timeoutMs = 15 * 60 * 1000) {
+  const provider = usdc.runner?.provider;
+  if (!provider) throw new Error('Contract has no provider');
+  const filter = usdc.filters.Transfer(HL_BRIDGE_ADDR, OPERATOR_WALLET_ADDR);
+  const minAmount = expectedRaw * BigInt(100 - slippagePct) / 100n;
+  const start = Date.now();
+  let cursor = fromBlock;
+
+  while (Date.now() - start < timeoutMs) {
+    await sleep(15_000);
+    let current;
+    try {
+      current = await provider.getBlockNumber();
+    } catch {
+      continue;
+    }
+    if (current < cursor) continue;
+
+    try {
+      const events = await usdc.queryFilter(filter, cursor, current);
+      for (const event of events) {
+        const amount = event.args?.value ?? event.args?.[2];
+        if (amount != null && amount >= minAmount) {
+          return { amount: BigInt(amount), txHash: event.transactionHash, blockNumber: event.blockNumber };
+        }
+      }
+      cursor = current + 1;
+    } catch {
+      // RPC error (could be range limit), shrink range next iteration
+      cursor = Math.max(cursor, current - 100);
+    }
+  }
+  throw new Error('HL withdrawal timeout');
+}
+
+// Validate a USD amount with at most 2 decimal places and >= min
+function validateUsdAmount(amount, min) {
+  const n = Number(amount);
+  if (!Number.isFinite(n) || n < min) return `minimum amount is $${min}`;
+  const str = String(amount).trim();
+  const decimals = str.includes('.') ? (str.split('.')[1] || '').length : 0;
+  if (decimals > 2) return 'maximum 2 decimal places';
+  return null;
 }
 
 // ----- DEPOSIT endpoints -----
@@ -833,10 +853,9 @@ app.post('/api/bridge/deposit/quote', async (req, res) => {
     if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(user_sol_addr))) {
       return res.status(400).json({ error: 'invalid Solana address' });
     }
+    const amountErr = validateUsdAmount(usd_amount, 10);
+    if (amountErr) return res.status(400).json({ error: amountErr });
     const usdNum = Number(usd_amount);
-    if (!Number.isFinite(usdNum) || usdNum < 10) {
-      return res.status(400).json({ error: 'minimum deposit is $10' });
-    }
 
     const solPrice = await fetchSolPriceUsd();
     const lamports = Math.ceil(((usdNum * 1.05) / solPrice) * 1e9);
@@ -920,7 +939,8 @@ app.post('/api/bridge/deposit/submit', async (req, res) => {
 });
 
 app.get('/api/bridge/deposit/status', (req, res) => {
-  const t = bridgeTracking.get(req.query.id);
+  const id = String(req.query.id || '');
+  const t = bridgeTracking.get(id);
   if (!t) return res.status(404).json({ error: 'not found' });
   res.json({
     status: t.status,
@@ -938,16 +958,18 @@ async function runDepositPipeline(tid) {
   const t = bridgeTracking.get(tid);
   if (!t) return;
 
-  // Phase 1: wait for deBridge to fulfill the order
+  // Phase 1 (outside queue): wait for deBridge fulfillment.
+  // This only polls deBridge's status API and doesn't touch operator state.
   await waitForDeBridgeFulfillment(t.order_id);
 
-  // Phase 2: serialize HL operations
-  await queueHlOp(async () => {
+  // Phase 2 (in queue): HL operations on operator wallet.
+  await queueBridge(async () => {
     const wallet = getOperatorWallet();
     const usdc = new ethers.Contract(USDC_ARB_ADDR, USDC_ABI, wallet);
     const bridge = new ethers.Contract(HL_BRIDGE_ADDR, HL_BRIDGE_ABI, wallet);
 
-    // Determine deposit amount: use expected, capped by actual balance for safety
+    // Determine deposit amount: take exactly expected (leave residual for next op),
+    // or all available balance if there was high slippage.
     const balance = await usdc.balanceOf(OPERATOR_WALLET_ADDR);
     const expected = BigInt(t.expected_usdc_raw);
     const depositAmount = expected <= balance ? expected : balance;
@@ -969,9 +991,9 @@ async function runDepositPipeline(tid) {
     const dtx = await bridge.deposit(depositAmount);
     const receipt = await dtx.wait();
     t.deposit_tx_hash = receipt.hash;
-    await sleep(8_000); // let HL recognize the deposit
+    await sleep(15_000); // HL recognition delay
 
-    // usdSend -> credits user's HL account ($1 HL flat fee)
+    // usdSend -> credits user's HL account ($1 flat fee)
     t.status = 'transferring';
     const depFloat = parseFloat(ethers.formatUnits(depositAmount, 6));
     const xferAmt = Math.max(0, depFloat - 1).toFixed(2);
@@ -1029,10 +1051,9 @@ app.post('/api/bridge/withdraw/init', async (req, res) => {
     if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(user_sol_addr))) {
       return res.status(400).json({ error: 'invalid Solana address' });
     }
+    const amountErr = validateUsdAmount(usd_amount, 5);
+    if (amountErr) return res.status(400).json({ error: amountErr });
     const usdNum = Number(usd_amount);
-    if (!Number.isFinite(usdNum) || usdNum < 5) {
-      return res.status(400).json({ error: 'minimum withdraw is $5' });
-    }
 
     const time = Date.now();
     const action = {
@@ -1086,11 +1107,13 @@ app.post('/api/bridge/withdraw/submit', async (req, res) => {
 });
 
 app.get('/api/bridge/withdraw/status', (req, res) => {
-  const t = bridgeTracking.get(req.query.id);
+  const id = String(req.query.id || '');
+  const t = bridgeTracking.get(id);
   if (!t) return res.status(404).json({ error: 'not found' });
   res.json({
     status: t.status,
     arb_received: t.arb_received_raw ? ethers.formatUnits(t.arb_received_raw, 6) : null,
+    hl_arrival_tx_hash: t.hl_arrival_tx_hash,
     debridge_order_id: t.debridge_order_id,
     debridge_arb_tx_hash: t.debridge_arb_tx_hash,
     error: t.error,
@@ -1101,48 +1124,47 @@ app.get('/api/bridge/withdraw/status', (req, res) => {
 async function runWithdrawPipeline(tid) {
   const t = bridgeTracking.get(tid);
   if (!t) return;
-  const wallet = getOperatorWallet();
-  const usdc = new ethers.Contract(USDC_ARB_ADDR, USDC_ABI, wallet);
 
-  // 1. Forward signed withdrawal to HL
-  const body = { action: t.action, nonce: t.action.time, signature: t.signature };
-  const ve = validateHyperliquidExchangePayload(body);
-  if (ve) throw new Error('Invalid HL payload: ' + ve);
+  // The entire withdraw pipeline runs in the queue except the final
+  // deBridge fulfillment poll (which doesn't touch operator state).
+  await queueBridge(async () => {
+    const wallet = getOperatorWallet();
+    const usdc = new ethers.Contract(USDC_ARB_ADDR, USDC_ABI, wallet);
+    const provider = wallet.provider;
 
-  const hlResp = await fetchWithTimeout(`${HL_API}/exchange`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }, 15_000);
-  const hlData = await hlResp.json();
-  if (hlData.status !== 'ok') {
-    throw new Error('HL withdraw3 failed: ' + JSON.stringify(hlData).slice(0, 300));
-  }
-  t.status = 'hl_settling';
+    // 1. Snapshot block number BEFORE forwarding to HL (to catch the Transfer event).
+    const fromBlock = await provider.getBlockNumber();
 
-  // 2. Wait for USDC.arb at operator (HL takes ~3-7 min, $1 fee)
-  const balanceBefore = await usdc.balanceOf(OPERATOR_WALLET_ADDR);
-  const expectedRaw = ethers.parseUnits(String(Math.max(0, t.usd_amount - 1)), 6);
-  const minInc = expectedRaw * 85n / 100n;
-  const start = Date.now();
-  let received = 0n;
-  while (Date.now() - start < 15 * 60 * 1000) {
-    await sleep(15_000);
-    const cur = await usdc.balanceOf(OPERATOR_WALLET_ADDR);
-    received = cur - balanceBefore;
-    if (received >= minInc) break;
-  }
-  if (received < minInc) throw new Error('HL withdrawal timeout');
-  t.arb_received_raw = received.toString();
+    // 2. Forward signed withdraw3 to HL.
+    const body = { action: t.action, nonce: t.action.time, signature: t.signature };
+    const ve = validateHyperliquidExchangePayload(body);
+    if (ve) throw new Error('Invalid HL payload: ' + ve);
 
-  // 3. Bridge USDC.arb -> SOL via deBridge (queued to serialize)
-  await queueHlOp(async () => {
+    const hlResp = await fetchWithTimeout(`${HL_API}/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }, 15_000);
+    const hlData = await hlResp.json();
+    if (hlData.status !== 'ok') {
+      throw new Error('HL withdraw3 failed: ' + JSON.stringify(hlData).slice(0, 300));
+    }
+    t.status = 'hl_settling';
+
+    // 3. Wait for HL's USDC Transfer event to operator (~3-4 min).
+    // Filtered by from=HL_BRIDGE_ADDR so we never misattribute deBridge fulfillments.
+    const expectedNet = Math.max(0, t.usd_amount - 1);
+    const expectedRaw = ethers.parseUnits(expectedNet.toFixed(6), 6);
+    const arrival = await waitForHlWithdrawArrival(usdc, fromBlock, expectedRaw);
+    t.arb_received_raw = arrival.amount.toString();
+    t.hl_arrival_tx_hash = arrival.txHash;
+
+    // 4. Bridge USDC.arb -> SOL via deBridge.
     t.status = 'bridging';
-
     const params = new URLSearchParams({
       srcChainId: String(DEBRIDGE_ARB_ID),
       srcChainTokenIn: USDC_ARB_ADDR,
-      srcChainTokenInAmount: received.toString(),
+      srcChainTokenInAmount: arrival.amount.toString(),
       dstChainId: String(DEBRIDGE_SOL_ID),
       dstChainTokenOut: SOL_NATIVE_DEBRIDGE,
       dstChainTokenOutAmount: 'auto',
@@ -1165,15 +1187,15 @@ async function runWithdrawPipeline(tid) {
     if (!quote.tx?.to || !quote.tx?.data) throw new Error('deBridge returned no tx');
     t.debridge_order_id = quote.orderId;
 
-    // Approve USDC to deBridge spender if needed
+    // Approve USDC to deBridge spender if needed.
     const dbSpender = quote.tx.to;
     const allow = await usdc.allowance(OPERATOR_WALLET_ADDR, dbSpender);
-    if (allow < received) {
+    if (allow < arrival.amount) {
       const tx = await usdc.approve(dbSpender, ethers.MaxUint256);
       await tx.wait();
     }
 
-    // Send the deBridge bridge tx
+    // Send the deBridge bridge tx.
     const sendTx = await wallet.sendTransaction({
       to: quote.tx.to,
       data: quote.tx.data,
@@ -1181,12 +1203,13 @@ async function runWithdrawPipeline(tid) {
     });
     await sendTx.wait();
     t.debridge_arb_tx_hash = sendTx.hash;
+    t.status = 'finalizing';
   });
 
-  // 4. Poll deBridge for SOL delivery
-  t.status = 'finalizing';
-  await waitForDeBridgeFulfillment(t.debridge_order_id, 10 * 60 * 1000).catch(() => {});
-
+  // Outside queue: poll for SOL delivery to user (doesn't affect operator state).
+  if (t.debridge_order_id) {
+    await waitForDeBridgeFulfillment(t.debridge_order_id, 10 * 60 * 1000).catch(() => {});
+  }
   t.status = 'complete';
   t.completed_at = Date.now();
 }
@@ -1200,7 +1223,6 @@ app.post('/api/pumpportal/trade-local', async (req, res) => {
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req.body || {}) },
       15_000,
     );
-
     if (!response.ok) {
       const text = await response.text();
       return res.status(response.status).json({
@@ -1208,7 +1230,6 @@ app.post('/api/pumpportal/trade-local', async (req, res) => {
         detail: text.slice(0, 300),
       });
     }
-
     const buf = Buffer.from(await response.arrayBuffer());
     res.set('Content-Type', 'application/octet-stream');
     return res.send(buf);
@@ -1273,12 +1294,10 @@ const upload = multer({
 app.post('/api/pinata/json', uploadLimiter, async (req, res) => {
   try {
     if (!PINATA_JWT) return res.status(503).json({ error: 'Pinata not configured' });
-
     const { name, content } = req.body || {};
     if (!content || typeof content !== 'object') {
       return res.status(400).json({ error: 'Missing content' });
     }
-
     const response = await fetchWithTimeout(
       'https://api.pinata.cloud/pinning/pinJSONToIPFS',
       {
@@ -1292,7 +1311,6 @@ app.post('/api/pinata/json', uploadLimiter, async (req, res) => {
       20_000,
     );
     const result = await safeJson(response);
-
     if (result.parsed && result.parsed.IpfsHash) {
       return res.json({
         ipfsHash: result.parsed.IpfsHash,
@@ -1313,22 +1331,18 @@ app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, r
   try {
     if (!PINATA_JWT) return res.status(503).json({ error: 'Pinata not configured' });
     if (!req.file)   return res.status(400).json({ error: 'No file uploaded' });
-
     const fd = new FormData();
     const blob = new Blob([req.file.buffer], { type: req.file.mimetype });
     fd.append('file', blob, req.file.originalname || 'upload');
-
     if (req.body && req.body.name) {
       fd.append('pinataMetadata', JSON.stringify({ name: String(req.body.name).slice(0, 64) }));
     }
-
     const response = await fetchWithTimeout(
       'https://api.pinata.cloud/pinning/pinFileToIPFS',
       { method: 'POST', headers: { Authorization: 'Bearer ' + PINATA_JWT }, body: fd },
       30_000,
     );
     const result = await safeJson(response);
-
     if (result.parsed && result.parsed.IpfsHash) {
       return res.json({
         ipfsHash: result.parsed.IpfsHash,
@@ -1390,13 +1404,15 @@ app.get('/api/health', (req, res) => {
       hyperliquidSigning:  'frontend-signed-forward-only',
     },
     bridge: OPERATOR_PRIVATE_KEY ? {
-      operator: OPERATOR_WALLET_ADDR,
-      arbRpc:   ARB_RPC_URL,
-      active:   bridgeTracking.size,
+      operator:        OPERATOR_WALLET_ADDR,
+      arbRpc:          ARB_RPC_URL,
+      active:          bridgeTracking.size,
+      serialization:   'strict-single-flight',
+      hlEventFiltered: true,
     } : { enabled: false },
     removed: { lifi: true, zeroX: true },
     fees: {
-      note:   'OKX fees are injected only into executable OKX aggregator swap routes, not quote routes and not cross-chain. Jupiter fallback does not change OKX fee settings. Hyperliquid builder fees must be signed/approved in the Hyperliquid order action.',
+      note:   'OKX fees inject into Solana aggregator swap routes only. Hyperliquid builder fees signed in HL order. Bridge fees ~$1.50 per direction (deBridge + $1 HL flat).',
       solana: OKX_SOL_FEE_PCT + '%',
       evm:    OKX_EVM_FEE_PCT + '%',
     },
@@ -1446,7 +1462,6 @@ app.use((err, req, res, next) => {
   if (err && err.code === 'LIMIT_UNEXPECTED_FILE') {
     return res.status(400).json({ error: 'Unexpected file field -- use field name "file"' });
   }
-
   logError('unhandled', err);
   if (res.headersSent) return next(err);
   return res.status(500).json({ error: 'Internal server error' });
@@ -1466,8 +1481,17 @@ app.listen(PORT, () => {
   console.log('  Jupiter account: ' + JUPITER_ACCOUNT);
   console.log('  Hyperliquid:     frontend-signed forward-only');
   console.log('  Bridge:          ' + (OPERATOR_PRIVATE_KEY
-    ? 'enabled (operator ' + OPERATOR_WALLET_ADDR + ')'
+    ? 'enabled (operator ' + OPERATOR_WALLET_ADDR + ', strict serialization, event-filtered)'
     : 'disabled (set OPERATOR_PRIVATE_KEY)'));
+
+  if (OPERATOR_PRIVATE_KEY) {
+    try {
+      const w = getOperatorWallet();
+      console.log('  Operator key:    verified controls ' + w.address);
+    } catch (e) {
+      console.error('  Operator key:    INVALID -- ' + e.message);
+    }
+  }
 
   if (!OKX_API_KEY || !OKX_SECRET_KEY || !OKX_PASSPHRASE) {
     console.warn('  WARNING: OKX credentials missing -- OKX routes will fail');
