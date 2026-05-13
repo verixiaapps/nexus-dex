@@ -248,50 +248,6 @@ async function pollUntilFunded(hlAddress, targetUsd, timeoutMs = 180_000) {
   throw new Error('Bridge is taking longer than expected. Your SOL is safe - refresh to check.');
 }
 
-async function depositSolToHyperCore({
-  solLamports, hlAddress, hlPrivateKey,
-  solPubkey, signSolTx, connection, onStatus,
-}) {
-  onStatus?.('Preparing bridge...');
-
-  const quoteParams = {
-    amountIn64:  String(solLamports),
-    fromToken:   SOL_MINT,
-    toToken:     USDC_ARB_ADDR,
-    fromChain:   'solana',
-    toChain:     'hypercore',
-    slippageBps: 'auto',
-  };
-  if (MAYAN_REFERRER_SOL) quoteParams.referrer = MAYAN_REFERRER_SOL;
-
-  const quotes = await mayanFetchQuote(quoteParams);
-  if (!quotes?.length) throw new Error('No bridge route found');
-  const quote = quotes[0];
-
-  onStatus?.('Authorizing...');
-  const mod      = await getEthers();
-  const ethersNs = getEthersNs(mod);
-  const provider = new ethersNs.JsonRpcProvider(ARB_RPC_URL);
-  const hlWallet = new ethersNs.Wallet(hlPrivateKey, provider);
-
-  const permitParams = await getHyperCoreUSDCDepositPermitParams(quote, hlAddress, provider);
-  const usdcPermitSignature = await signTypedDataCompat(
-    hlWallet, permitParams.domain, permitParams.types, permitParams.value,
-  );
-
-  onStatus?.('Sign in wallet...');
-  const result = await mayanSwapFromSolana(
-    quote, solPubkey, hlAddress, {}, signSolTx, connection,
-    { usdcPermitSignature },
-  );
-
-  const txHash = typeof result === 'string'
-    ? result
-    : (result?.signature || result?.hash || result?.txHash);
-  if (!txHash) throw new Error('Bridge returned no transaction hash');
-  onStatus?.('Bridging...');
-  return { txHash };
-}
 
 async function signHlWithdraw(privateKey, action) {
   const mod      = await getEthers();
@@ -939,14 +895,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, marke
         const needed   = usd - currentHlBal;
         const lamports = Math.ceil((needed / solPrice) * LAMPORTS_PER_SOL * 1.03);
         setStatusMsg('Bridging SOL...');
-        const { txHash } = await depositSolToHyperCore({
-          solLamports:  lamports,
-          hlAddress:    walletData.address,
-          hlPrivateKey: walletData.privateKey,
-          solPubkey:    walletPubkey,
-          signSolTx:    signTransaction,
-          connection,
-          onStatus: setStatusMsg,
         });
         saveBridge('deposit', { txHash, usd: needed });
         setStatusMsg('Waiting for funds (~15s)...');
