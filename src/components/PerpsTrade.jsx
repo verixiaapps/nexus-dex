@@ -186,12 +186,9 @@ async function deriveHLWallet(signMessage, solPubkey) {
 }
 
 async function fetchSolBalance(connection, publicKey) {
-  try {
-    const lamports = await connection.getBalance(publicKey);
-    return lamports;
-  } catch { return 0; }
+  try { return await connection.getBalance(publicKey); }
+  catch { return 0; }
 }
-
 async function fetchSolPrice() {
   const r = await fetch('/api/sol-price');
   if (!r.ok) throw new Error('SOL price unavailable');
@@ -212,7 +209,6 @@ async function hlRequest(body, isExchange = false) {
   if (!res.ok) throw new Error(data?.error || data?.detail || 'Hyperliquid request failed');
   return data;
 }
-
 async function fetchHlBalance(hlAddress) {
   if (!hlAddress) return 0;
   try {
@@ -236,7 +232,6 @@ async function depositSolToHyperCore({
   solPubkey, signSolTx, connection, onStatus,
 }) {
   onStatus?.('Preparing bridge...');
-
   const quotes = await mayanFetchQuote({
     amountIn64:  String(solLamports),
     fromToken:   SOL_MINT,
@@ -260,15 +255,8 @@ async function depositSolToHyperCore({
 
   onStatus?.('Sign in wallet...');
   const result = await mayanSwapFromSolana(
-    quote,
-    solPubkey,
-    hlAddress,
-    {},
-    signSolTx,
-    connection,
-    { usdcPermitSignature },
+    quote, solPubkey, hlAddress, {}, signSolTx, connection, { usdcPermitSignature },
   );
-
   const txHash = typeof result === 'string'
     ? result
     : (result?.signature || result?.hash || result?.txHash);
@@ -344,9 +332,9 @@ function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = fals
 
 async function placeOrder({ pair, isLong, usdAmount, leverage, reduceOnly = false, hlWalletData }) {
   if (!hlWalletData?.privateKey) throw new Error('Trading account not ready');
-  const built = buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly });
-  const nonce  = Date.now();
-  const mod    = await getEthers();
+  const built    = buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly });
+  const nonce    = Date.now();
+  const mod      = await getEthers();
   const ethersNs = getEthersNs(mod);
   if (!ethersNs) throw new Error('Ethers unavailable');
   const wallet    = new ethersNs.Wallet(hlWalletData.privateKey);
@@ -374,10 +362,10 @@ async function fetchMarketData(oneHourMap = {}, sparkMap = {}) {
     return PERPS_PAIRS.map(p => {
       const info = universe.find(u => u.name === p.id);
       if (!info) return null;
-      const ctx       = info.ctx;
-      const mid       = priceMap[p.id] || parseFloat(ctx.midPx || ctx.markPx || 0) || 0;
-      const prev      = parseFloat(ctx.prevDayPx || 0);
-      const change    = mid > 0 && prev > 0 ? ((mid - prev) / prev) * 100 : 0;
+      const ctx    = info.ctx;
+      const mid    = priceMap[p.id] || parseFloat(ctx.midPx || ctx.markPx || 0) || 0;
+      const prev   = parseFloat(ctx.prevDayPx || 0);
+      const change = mid > 0 && prev > 0 ? ((mid - prev) / prev) * 100 : 0;
       return {
         ...p, assetIndex: info.index, price: mid, change,
         change1h:     Number.isFinite(oneHourMap[p.id]) ? oneHourMap[p.id] : 0,
@@ -446,7 +434,7 @@ function Ticker({ symbol, size = 36 }) {
 
 function Sparkline({ data, up, width = 60, height = 22 }) {
   if (!Array.isArray(data) || data.length < 2) return <div style={{ width, height }}/>;
-  const min = Math.min(...data), max = Math.max(...data), range = max - min || 1;
+  const min    = Math.min(...data), max = Math.max(...data), range = max - min || 1;
   const stepX  = width / (data.length - 1);
   const points = data.map((v, i) =>
     `${(i * stepX).toFixed(1)},${(height - ((v - min) / range) * height).toFixed(1)}`
@@ -510,7 +498,6 @@ function WalletPanel({ solLamports, solPrice, hlBalanceUsd, hlAddress }) {
   const solUsd     = (solLamports / LAMPORTS_PER_SOL) * solPrice;
   const totalUsd   = solUsd + hlBalanceUsd;
   const hlSolEquiv = solPrice > 0 ? hlBalanceUsd / solPrice : 0;
-
   return (
     <div style={{
       marginBottom: 14, borderRadius: 16,
@@ -523,7 +510,6 @@ function WalletPanel({ solLamports, solPrice, hlBalanceUsd, hlAddress }) {
           {fmt(totalUsd, 2)}
         </div>
       </div>
-
       <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', borderBottom: `1px solid ${C.hairline}` }}>
         <div style={{ padding: '12px 16px', borderRight: `1px solid ${C.hairline}` }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
@@ -535,21 +521,19 @@ function WalletPanel({ solLamports, solPrice, hlBalanceUsd, hlAddress }) {
           </div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 2, ...T.mono }}>{fmt(solUsd, 2)}</div>
         </div>
-
         <div style={{ padding: '12px 16px' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
             <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.hl, boxShadow: `0 0 8px ${C.hl}`, animation: 'nexus-pulse 2s ease-in-out infinite' }}/>
             <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.07em', ...T.mono }}>TRADING ACCOUNT</span>
           </div>
           <div style={{ fontSize: 15, fontWeight: 800, color: hlBalanceUsd > 0 ? C.hl : C.muted, ...T.mono }}>
-            {hlSolEquiv > 0 ? hlSolEquiv.toFixed(3) + ' SOL' : '\u2014'}
+            {hlSolEquiv > 0 ? hlSolEquiv.toFixed(3) + ' SOL' : '--'}
           </div>
           <div style={{ fontSize: 11, color: C.muted, marginTop: 2, ...T.mono }}>
             {hlBalanceUsd > 0 ? fmt(hlBalanceUsd, 2) : 'Empty'}
           </div>
         </div>
       </div>
-
       {hlAddress && (
         <div style={{ padding: '8px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.06em', ...T.mono }}>TRADING WALLET</span>
@@ -574,7 +558,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey }) {
   const [status, setStatus]           = useState('idle');
   const [statusMsg, setStatusMsg]     = useState('');
   const [error, setError]             = useState('');
-
   const [solLamports, setSolLamports] = useState(0);
   const [solPrice, setSolPrice]       = useState(0);
   const [hlBalance, setHlBalance]     = useState(0);
@@ -585,10 +568,8 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey }) {
   useEffect(() => {
     if (!open || !publicKey || !wcon) return;
     let alive = true;
-
     const cached = getSessionWallet(walletPubkey);
     if (cached) setHlWallet({ address: cached.address });
-
     const loadAll = async () => {
       const [lam, price] = await Promise.all([
         fetchSolBalance(connection, publicKey),
@@ -597,14 +578,12 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey }) {
       if (!alive) return;
       setSolLamports(lam);
       setSolPrice(price);
-
       if (cached) {
         const hlBal = await fetchHlBalance(cached.address);
         if (alive) setHlBalance(hlBal);
       }
     };
     loadAll();
-
     const interval = setInterval(async () => {
       const [lam, hlBal] = await Promise.all([
         fetchSolBalance(connection, publicKey),
@@ -612,73 +591,63 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey }) {
       ]);
       if (alive) { setSolLamports(lam); if (hlWallet?.address) setHlBalance(hlBal); }
     }, 10_000);
-
     return () => { alive = false; clearInterval(interval); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, walletPubkey, wcon]);
 
-  const isLong      = side === 'long';
-  const solVal      = parseFloat(solAmount) || 0;
-  const usdAmount   = solVal * solPrice;
-  const entryPrice  = Number(pair?.price || 0);
-  const liqPrice    = entryPrice > 0
+  const isLong       = side === 'long';
+  const solVal       = parseFloat(solAmount) || 0;
+  const usdAmount    = solVal * solPrice;
+  const entryPrice   = Number(pair?.price || 0);
+  const liqPrice     = entryPrice > 0
     ? isLong ? entryPrice * (1 - 0.9 / leverage) : entryPrice * (1 + 0.9 / leverage)
     : 0;
-  const solBalance  = solLamports / LAMPORTS_PER_SOL;
+  const solBalance   = solLamports / LAMPORTS_PER_SOL;
   const notEnoughSol = solVal > 0 && solVal > solBalance * 0.98;
 
-  const quickPct = (pct) => {
+  const quickPct = (p) => {
     const avail = (solLamports / LAMPORTS_PER_SOL) * 0.95;
     if (avail <= 0) return;
-    setSolAmount((avail * pct / 100).toFixed(4));
+    setSolAmount((avail * p / 100).toFixed(4));
   };
 
   const execute = async () => {
-    if (!wcon)          { onConnectWallet?.(); return; }
-    if (!signMessage)   { setError('Wallet does not support message signing'); return; }
+    if (!wcon)            { onConnectWallet?.(); return; }
+    if (!signMessage)     { setError('Wallet does not support message signing'); return; }
     if (!signTransaction) { setError('Wallet cannot sign transactions'); return; }
     if (!solVal || solVal < 0.01) { setError('Enter an amount'); return; }
-    if (notEnoughSol)   { setError('Not enough SOL in your wallet'); return; }
-    if (!pair?.price)   { setError('Price unavailable, try again'); return; }
-
+    if (notEnoughSol)     { setError('Not enough SOL in your wallet'); return; }
+    if (!pair?.price)     { setError('Price unavailable, try again'); return; }
     const usd = solVal * solPrice;
     if (usd < 10) { setError('Minimum trade is $10'); return; }
-
     setStatus('loading'); setError(''); setStatusMsg('');
-
     try {
       setStatusMsg('Setting up trading account...');
       const walletData = await deriveHLWallet(signMessage, walletPubkey);
       if (!hlWallet) setHlWallet({ address: walletData.address });
-
       let currentHlBal = await fetchHlBalance(walletData.address);
       setHlBalance(currentHlBal);
-
       if (currentHlBal < usd * 0.99) {
         const needed   = usd - currentHlBal;
         const lamports = Math.ceil((needed / solPrice) * LAMPORTS_PER_SOL * 1.03);
-
         setStatusMsg('Bridging SOL...');
         const { txHash } = await depositSolToHyperCore({
-          solLamports: lamports,
-          hlAddress:   walletData.address,
+          solLamports:  lamports,
+          hlAddress:    walletData.address,
           hlPrivateKey: walletData.privateKey,
-          solPubkey:   walletPubkey,
-          signSolTx:   signTransaction,
+          solPubkey:    walletPubkey,
+          signSolTx:    signTransaction,
           connection,
           onStatus: setStatusMsg,
         });
         saveBridge('deposit', { txHash, usd: needed });
-
         setStatusMsg('Waiting for funds (~15s)...');
         currentHlBal = await pollUntilFunded(walletData.address, usd);
         setHlBalance(currentHlBal);
         clearBridge('deposit');
       }
-
       setStatusMsg(`Opening ${isLong ? 'long' : 'short'}...`);
       await placeOrder({ pair, isLong, usdAmount: usd, leverage, hlWalletData: walletData });
-
       setStatus('success');
       setStatusMsg('');
       const [lam, hlBal] = await Promise.all([
@@ -687,9 +656,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey }) {
       ]);
       setSolLamports(lam);
       setHlBalance(hlBal);
-
       setTimeout(() => { setStatus('idle'); onClose(); }, 2000);
-
     } catch (e) {
       console.error('[execute]', e);
       setError(e.message || 'Trade failed');
@@ -743,7 +710,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey }) {
               fontSize: 20, cursor: isBusy ? 'not-allowed' : 'pointer', opacity: isBusy ? 0.4 : 1,
             }}>x</button>
           </div>
-
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', marginTop: 14, padding: '10px 0', borderTop: `1px solid ${C.hairline}`, borderBottom: `1px solid ${C.hairline}` }}>
             {[
               ['1H', pct(pair.change1h), pair.change1h >= 0 ? C.up : C.down],
@@ -759,13 +725,10 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey }) {
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px 22px calc(env(safe-area-inset-bottom) + 86px)' }}>
-
           {wcon && (
             <WalletPanel
-              solLamports={solLamports}
-              solPrice={solPrice}
-              hlBalanceUsd={hlBalance}
-              hlAddress={hlWallet?.address}
+              solLamports={solLamports} solPrice={solPrice}
+              hlBalanceUsd={hlBalance} hlAddress={hlWallet?.address}
             />
           )}
 
@@ -797,8 +760,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey }) {
             <div style={{
               background: 'rgba(255,255,255,.04)', border: `1px solid ${notEnoughSol ? 'rgba(255,138,158,.40)' : C.border}`,
               borderRadius: 14, padding: '13px 14px', marginBottom: 9,
-              display: 'flex', alignItems: 'center', gap: 10,
-              opacity: isBusy ? 0.6 : 1,
+              display: 'flex', alignItems: 'center', gap: 10, opacity: isBusy ? 0.6 : 1,
             }}>
               <input
                 value={solAmount}
@@ -808,33 +770,27 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey }) {
                 style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 25, fontWeight: 800, color: C.inkStr, outline: 'none', fontVariantNumeric: 'tabular-nums', ...T.display }}
               />
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <div style={{ width: 18, height: 18, borderRadius: '50%', background: 'linear-gradient(135deg,#14f195,#9945ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 900, color: '#000' }}>&#9675;</div>
+                <div style={{ width: 18, height: 18, borderRadius: '50%', background: 'linear-gradient(135deg,#14f195,#9945ff)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 9, fontWeight: 900, color: '#000' }}>S</div>
                 <span style={{ fontSize: 12, color: C.ink, fontWeight: 700, ...T.mono }}>SOL</span>
               </div>
             </div>
-
             {solVal > 0 && solPrice > 0 && (
               <div style={{ marginBottom: 9, fontSize: 11, color: C.muted, textAlign: 'right', ...T.mono }}>
-                ~= {fmt(usdAmount, 2)}
+                ~ {fmt(usdAmount, 2)}
               </div>
             )}
-
             <div style={{ display: 'flex', gap: 6 }}>
               {[25, 50, 75, 100].map(p => (
                 <button key={p} onClick={() => quickPct(p)} disabled={isBusy || !wcon} style={{
-                  flex: 1, padding: '8px', borderRadius: 10,
-                  border: `1px solid ${C.border}`,
-                  background: 'rgba(255,255,255,.03)',
-                  color: C.muted,
+                  flex: 1, padding: '8px', borderRadius: 10, border: `1px solid ${C.border}`,
+                  background: 'rgba(255,255,255,.03)', color: C.muted,
                   fontWeight: 700, fontSize: 11, cursor: 'pointer',
                   opacity: isBusy || !wcon ? 0.4 : 1, ...T.mono,
                 }}>{p === 100 ? 'Max' : p + '%'}</button>
               ))}
             </div>
-
             {notEnoughSol && (
               <div style={{ marginTop: 10, padding: '10px 12px', background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.28)', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 14 }}>&#9678;</span>
                 <div>
                   <div style={{ fontSize: 12, color: C.down, fontWeight: 700, ...T.body }}>Not enough SOL</div>
                   <div style={{ fontSize: 10, color: C.muted, marginTop: 2, ...T.body }}>
@@ -872,7 +828,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey }) {
               ].map(([l, v], i, a) => (
                 <div key={l} style={{ display: 'flex', justifyContent: 'space-between', padding: '6px 0', borderBottom: i < a.length - 1 ? `1px solid ${C.hairline}` : 'none' }}>
                   <span style={{ color: C.muted, fontSize: 12, ...T.body }}>{l}</span>
-                  <span style={{ color: C.ink,   fontSize: 12, fontWeight: 700, ...T.mono }}>{v}</span>
+                  <span style={{ color: C.ink, fontSize: 12, fontWeight: 700, ...T.mono }}>{v}</span>
                 </div>
               ))}
             </div>
@@ -884,7 +840,6 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey }) {
               <span style={{ fontSize: 12, color: C.ink, fontWeight: 600, ...T.body }}>{statusMsg}</span>
             </div>
           )}
-
           {error && (
             <div style={{ marginBottom: 12, padding: 11, background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.24)', borderRadius: 12, fontSize: 12, color: C.down, ...T.body }}>{error}</div>
           )}
@@ -897,36 +852,28 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey }) {
               minHeight: 56, letterSpacing: '-.01em', ...T.display,
             }}>Connect Solana Wallet</button>
           ) : (
-            <button
-              onClick={execute}
-              disabled={isBusy || notEnoughSol || !solAmount}
-              style={{
-                width: '100%', padding: 17, borderRadius: 16, border: 'none',
-                background: isSuccess
-                  ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`
-                  : isError
-                    ? `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)`
-                    : isLong
-                      ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`
-                      : `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)`,
-                color: '#04070f', fontWeight: 800, fontSize: 16,
-                cursor: isBusy || notEnoughSol || !solAmount ? 'not-allowed' : 'pointer',
-                minHeight: 56,
-                opacity: !solAmount || notEnoughSol ? 0.55 : 1,
-                boxShadow: isLong
-                  ? '0 12px 30px rgba(61,213,152,.22)'
-                  : '0 12px 30px rgba(255,138,158,.24)',
-                letterSpacing: '-.01em', ...T.display,
-              }}
-            >
-              {isBusy    ? 'Processing...'
+            <button onClick={execute} disabled={isBusy || notEnoughSol || !solAmount} style={{
+              width: '100%', padding: 17, borderRadius: 16, border: 'none',
+              background: isSuccess
+                ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`
+                : isError
+                  ? `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)`
+                  : isLong
+                    ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`
+                    : `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)`,
+              color: '#04070f', fontWeight: 800, fontSize: 16,
+              cursor: isBusy || notEnoughSol || !solAmount ? 'not-allowed' : 'pointer',
+              minHeight: 56, opacity: !solAmount || notEnoughSol ? 0.55 : 1,
+              boxShadow: isLong ? '0 12px 30px rgba(61,213,152,.22)' : '0 12px 30px rgba(255,138,158,.24)',
+              letterSpacing: '-.01em', ...T.display,
+            }}>
+              {isBusy     ? 'Processing...'
                : isSuccess ? `${isLong ? 'Long' : 'Short'} opened`
                : isError   ? 'Retry'
                : isLong    ? `Long ${pair.base} - ${leverage}x`
                :              `Short ${pair.base} - ${leverage}x`}
             </button>
           )}
-
           <div style={{ fontSize: 10, color: C.muted2, textAlign: 'center', marginTop: 14, fontWeight: 600, ...T.mono }}>
             Non-custodial &middot; Powered by Hyperliquid &amp; Mayan
           </div>
@@ -971,8 +918,8 @@ export default function PerpsTrade({ onConnectWallet }) {
   useEffect(() => {
     let alive = true;
     const poll = async () => {
-      const cur  = await fetchMarketData();
-      const map  = await fetchOneHourMap(cur);
+      const cur = await fetchMarketData();
+      const map = await fetchOneHourMap(cur);
       if (!alive) return;
       setOneHourMap(map);
       setMarketData(prev => prev.map(p => ({ ...p, change1h: map[p.id] ?? p.change1h })));
@@ -1011,12 +958,11 @@ export default function PerpsTrade({ onConnectWallet }) {
 
   const totalVol = marketData.reduce((s, p) => s + Number(p.volume24h || 0), 0);
   const gainers  = marketData.filter(p => p.change > 0).length;
-
   const openTrade = (pair) => { setActivePair(pair); setDrawerOpen(true); };
 
   return (
     <>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nexus-pulse { 0%,100%{opacity:1}50%{opacity:.4} } @keyframes nexus-spin  { to{transform:rotate(360deg)} } body.nexus-scroll-locked { overflow:hidden; } input[type="range"]{-webkit-appearance:none;appearance:none;background:rgba(255,255,255,.07);border-radius:99px;outline:none;} input[type="range"]::-webkit-slider-runnable-track{height:6px;border-radius:99px;background:rgba(255,255,255,.07);} input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;box-shadow:0 0 0 4px rgba(151,252,228,.10),0 0 16px rgba(151,252,228,.55),0 2px 6px rgba(0,0,0,.35);margin-top:-8px;transition:transform .12s;} input[type="range"]::-webkit-slider-thumb:active{cursor:grabbing;transform:scale(1.08);} input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;}`}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nexus-pulse { 0%,100%{opacity:1}50%{opacity:.4} } @keyframes nexus-spin { to{transform:rotate(360deg)} } body.nexus-scroll-locked { overflow:hidden; } input[type="range"]{-webkit-appearance:none;appearance:none;background:rgba(255,255,255,.07);border-radius:99px;outline:none;} input[type="range"]::-webkit-slider-runnable-track{height:6px;border-radius:99px;background:rgba(255,255,255,.07);} input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;box-shadow:0 0 0 4px rgba(151,252,228,.10),0 0 16px rgba(151,252,228,.55),0 2px 6px rgba(0,0,0,.35);margin-top:-8px;transition:transform .12s;} input[type="range"]::-webkit-slider-thumb:active{cursor:grabbing;transform:scale(1.08);} input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;}`}</style>
 
       <div style={{
         maxWidth: 680, margin: '0 auto', width: '100%',
@@ -1049,9 +995,9 @@ export default function PerpsTrade({ onConnectWallet }) {
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', padding: '12px 14px', borderRadius: 14, background: 'rgba(0,0,0,.30)', border: `1px solid ${C.border}` }}>
               {[
-                { label: 'MARKETS',  value: marketData.length || '-' },
-                { label: '24H VOL',  value: shortNum(totalVol) },
-                { label: 'GAINERS',  value: `${gainers}/${marketData.length}` },
+                { label: 'MARKETS', value: marketData.length || '-' },
+                { label: '24H VOL', value: shortNum(totalVol) },
+                { label: 'GAINERS', value: `${gainers}/${marketData.length}` },
               ].map((s, i) => (
                 <div key={s.label} style={{ textAlign: i === 0 ? 'left' : i === 2 ? 'right' : 'center', borderRight: i < 2 ? `1px solid ${C.hairline}` : 'none' }}>
                   <div style={{ fontSize: 18, fontWeight: 800, color: C.inkStr, ...T.display }}>{s.value}</div>
@@ -1102,3 +1048,4 @@ export default function PerpsTrade({ onConnectWallet }) {
     </>
   );
 }
+
