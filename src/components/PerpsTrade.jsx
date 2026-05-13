@@ -231,7 +231,8 @@ async function depositSolToHyperCore({
   solLamports, hlAddress, hlPrivateKey,
   solPubkey, signSolTx, connection, onStatus,
 }) {
-  onStatus?.('Preparing bridge...');
+  onStatus?.('Preparing bridge…');
+
   const quotes = await mayanFetchQuote({
     amountIn64:  String(solLamports),
     fromToken:   SOL_MINT,
@@ -240,31 +241,44 @@ async function depositSolToHyperCore({
     toChain:     'hypercore',
     slippageBps: 'auto',
   });
-  if (!quotes?.length) throw new Error('No bridge route found. Try a larger amount.');
+  if (!quotes?.length) throw new Error('No bridge route found');
   const quote = quotes[0];
 
-  onStatus?.('Authorizing...');
+  // Sign permit silently with derived EVM key — no user popup
+  onStatus?.('Authorizing…');
   const mod      = await getEthers();
   const ethersNs = getEthersNs(mod);
   const provider = new ethersNs.JsonRpcProvider(ARB_RPC_URL);
   const hlWallet = new ethersNs.Wallet(hlPrivateKey, provider);
-  const params   = await getHyperCoreUSDCDepositPermitParams(quote, hlAddress, provider);
+
+  const permitParams = await getHyperCoreUSDCDepositPermitParams(
+    quote, hlAddress, provider,
+  );
   const usdcPermitSignature = await signTypedDataCompat(
-    hlWallet, params.domain, params.types, params.value,
+    hlWallet, permitParams.domain, permitParams.types, permitParams.value,
   );
 
-  onStatus?.('Sign in wallet...');
+  // One Solana wallet popup
+  onStatus?.('Sign in wallet…');
   const result = await mayanSwapFromSolana(
-    quote, solPubkey, hlAddress, {}, signSolTx, connection, { usdcPermitSignature },
+    quote,
+    solPubkey,
+    hlAddress,
+    {},
+    signSolTx,
+    connection,
+    { usdcPermitSignature },   // ← required for HyperCore in v13.2.0
   );
+
   const txHash = typeof result === 'string'
     ? result
     : (result?.signature || result?.hash || result?.txHash);
   if (!txHash) throw new Error('Bridge returned no transaction hash');
 
-  onStatus?.('Bridging...');
-  return { txHash, quote };
+  onStatus?.('Bridging…');
+  return { txHash };
 }
+
 
 async function signHlWithdraw(privateKey, action) {
   const mod      = await getEthers();
