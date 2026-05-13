@@ -1,5 +1,6 @@
-import React, { useState, useEffect, useMemo } from 'react';
-import { useWallet } from '@solana/wallet-adapter-react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { VersionedTransaction } from '@solana/web3.js';
 import { useNexusWallet } from '../WalletContext.js';
 import { signL1Action } from '@nktkas/hyperliquid/signing';
 
@@ -7,14 +8,7 @@ import { signL1Action } from '@nktkas/hyperliquid/signing';
  * NEXUS DEX - Hyperliquid Perps Trading Interface
  * Non-custodial UI shell. Real Hyperliquid data via fetchMarketData +
  * fetchOneHourChangeMap + fetchSparklineMap.
- * Visual: Hyperliquid mint accent, Clash Display headline, glass list view,
- * sparkline per market row, polished bottom-sheet drawer.
- *
- * IMPORTANT (preserved from prior implementation):
- *   - Hyperliquid asset index must come from meta.universe.
- *   - Order size must be coin size, not USD amount.
- *   - Builder fee requires an approved builder ADDRESS, not bytes32 code.
- *   - Live signed order submission goes through /api/hyperliquid/exchange.
+ * Bridge: SOL <-> HL via deBridge + backend operator wallet.
  * ========================================================================= */
 
 const ENABLE_TRADING = process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
@@ -120,6 +114,7 @@ function pct(n) {
   return (n >= 0 ? '+' : '') + Number(n).toFixed(2) + '%';
 }
 function isValidEthAddress(v) { return /^0x[a-fA-F0-9]{40}$/.test(String(v || '')); }
+function isValidSolAddress(v) { return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(v || '')); }
 function cleanAmount(v) {
   const s = String(v || '').replace(/[^0-9.]/g, '');
   const parts = s.split('.');
@@ -162,11 +157,34 @@ async function getEthers() {
   _ethersModule = await import('ethers');
   return _ethersModule;
 }
+
+// ethers v5/v6 compatibility helpers
+function getEthersNs(mod) {
+  if (!mod) return null;
+  if (mod.ethers?.Wallet) return mod.ethers;   // v5: namespace at mod.ethers
+  if (mod.Wallet) return mod;                  // v6: namespace IS module
+  if (mod.default?.Wallet) return mod.default; // some bundlers
+  return null;
+}
+async function signTypedDataCompat(wallet, domain, types, value) {
+  if (typeof wallet.signTypedData === 'function') {
+    return await wallet.signTypedData(domain, types, value); // v6
+  }
+  if (typeof wallet._signTypedData === 'function') {
+    return await wallet._signTypedData(domain, types, value); // v5
+  }
+  throw new Error('Wallet does not support typed data signing');
+}
+function splitSigCompat(ethersNs, sig) {
+  if (ethersNs.Signature?.from) return ethersNs.Signature.from(sig); // v6
+  if (ethersNs.utils?.splitSignature) return ethersNs.utils.splitSignature(sig); // v5
+  throw new Error('No signature splitting available');
+}
+
 function generateHlWallet() {
-  const mod = _ethersModule;
-  const ethers = mod?.ethers;
-  if (!ethers) return null;
-  const wallet = ethers.Wallet.createRandom();
+  const ethersNs = getEthersNs(_ethersModule);
+  if (!ethersNs) return null;
+  const wallet = ethersNs.Wallet.createRandom();
   return { address: wallet.address, privateKey: wallet.privateKey };
 }
 function xorEncrypt(text, key) {
@@ -357,12 +375,150 @@ async function placeOrder({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   const built = buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly });
   const nonce = Date.now();
   const mod = await getEthers();
-  const ethers = mod?.ethers;
-  if (!ethers) throw new Error('Ethers unavailable');
-  const wallet = new ethers.Wallet(walletData.privateKey);
+  const ethersNs = getEthersNs(mod);
+  if (!ethersNs) throw new Error('Ethers unavailable');
+  const wallet = new ethersNs.Wallet(walletData.privateKey);
   const signature = await signL1Action({ wallet, action: built.action, nonce });
   return hlRequest({ action: built.action, nonce, signature }, true);
 }
+
+/* --- BRIDGE: SOL <-> HL via deBridge + backend operator ------------------- */
+
+const BRIDGE_TRACK_KEY = mode => 'nexus_bridge_' + mode;
+
+function saveBridgeTracking(mode, trackingId) {
+  try {
+    localStorage.setItem(BRIDGE_TRACK_KEY(mode), JSON.stringify({ id: trackingId, ts: Date.now() }));
+  } catch {}
+}
+function loadBridgeTracking(mode) {
+  try {
+    const raw = localStorage.getItem(BRIDGE_TRACK_KEY(mode));
+    if (!raw) return null;
+    const data = JSON.parse(raw);
+    if (Date.now() - data.ts > 30 * 60 * 1000) return null; // 30 min expiry
+    return data.id;
+  } catch { return null; }
+}
+function clearBridgeTracking(mode) {
+  try { localStorage.removeItem(BRIDGE_TRACK_KEY(mode)); } catch {}
+}
+
+async function bridgeDepositQuote({ usd_amount, user_sol_addr, user_hyper_wallet }) {
+  const res = await fetch('/api/bridge/deposit/quote', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ usd_amount, user_sol_addr, user_hyper_wallet }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || data?.details || 'Quote failed');
+  return data;
+}
+
+async function bridgeDepositSubmit({ tracking_id, sol_tx_hash }) {
+  const res = await fetch('/api/bridge/deposit/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tracking_id, sol_tx_hash }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || 'Submit failed');
+  return data;
+}
+
+async function bridgeDepositStatus(tracking_id) {
+  const res = await fetch('/api/bridge/deposit/status?id=' + encodeURIComponent(tracking_id));
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || 'Status failed');
+  return data;
+}
+
+async function bridgeWithdrawInit({ hl_wallet_address, usd_amount, user_sol_addr }) {
+  const res = await fetch('/api/bridge/withdraw/init', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ hl_wallet_address, usd_amount, user_sol_addr }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || 'Init failed');
+  return data;
+}
+
+async function bridgeWithdrawSubmit({ tracking_id, signature }) {
+  const res = await fetch('/api/bridge/withdraw/submit', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ tracking_id, signature }),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || 'Submit failed');
+  return data;
+}
+
+async function bridgeWithdrawStatus(tracking_id) {
+  const res = await fetch('/api/bridge/withdraw/status?id=' + encodeURIComponent(tracking_id));
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || 'Status failed');
+  return data;
+}
+
+// Sign HL withdraw3 with the user's localStorage HL key (no popup)
+async function signHlWithdraw3(privateKey, action) {
+  const mod = await getEthers();
+  const ethersNs = getEthersNs(mod);
+  if (!ethersNs) throw new Error('Ethers unavailable');
+  const wallet = new ethersNs.Wallet(privateKey);
+
+  const domain = {
+    name: 'HyperliquidSignTransaction',
+    version: '1',
+    chainId: 42161,
+    verifyingContract: '0x0000000000000000000000000000000000000000',
+  };
+  const types = {
+    'HyperliquidTransaction:Withdraw': [
+      { name: 'hyperliquidChain', type: 'string' },
+      { name: 'destination', type: 'string' },
+      { name: 'amount', type: 'string' },
+      { name: 'time', type: 'uint64' },
+    ],
+  };
+  const message = {
+    hyperliquidChain: action.hyperliquidChain,
+    destination: action.destination,
+    amount: action.amount,
+    time: action.time,
+  };
+  const sig = await signTypedDataCompat(wallet, domain, types, message);
+  const split = splitSigCompat(ethersNs, sig);
+  return { r: split.r, s: split.s, v: Number(split.v) };
+}
+
+function b64ToBytes(b64) {
+  if (typeof Buffer !== 'undefined') return Buffer.from(b64, 'base64');
+  return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+}
+
+const DEPOSIT_STATUS_TEXT = {
+  awaiting_signature: 'Waiting for Solana signature...',
+  bridging:           'Bridging SOL to Arbitrum... (~60s)',
+  approving:          'Approving USDC...',
+  depositing:         'Depositing to Hyperliquid...',
+  transferring:       'Crediting your account...',
+  complete:           'Deposit complete!',
+  failed:             'Deposit failed',
+};
+const WITHDRAW_STATUS_TEXT = {
+  awaiting_signature: 'Signing withdrawal...',
+  withdrawing:        'Submitting to Hyperliquid...',
+  hl_settling:        'Hyperliquid processing... (~5 min)',
+  bridging:           'Bridging USDC to Solana... (~60s)',
+  finalizing:         'Finalizing...',
+  complete:           'Withdrawal complete!',
+  failed:             'Withdrawal failed',
+};
+
+/* --- VISUAL COMPONENTS ---------------------------------------------------- */
 
 function Ticker({ symbol, size = 36 }) {
   const [a, b] = coinAccent(symbol);
@@ -511,28 +667,184 @@ function MarketRow({ pair, onClick }) {
   );
 }
 
-function TransferModal({ open, onClose, mode, hlAddress }) {
-  const [amount, setAmount] = useState('');
-  const [status, setStatus] = useState('idle');
-  const [error, setError] = useState('');
+/* --- TRANSFER MODAL (wired to bridge backend) ----------------------------- */
+
+function TransferModal({ open, onClose, mode, hlAddress, walletPubkey }) {
+  const { publicKey, sendTransaction, signTransaction } = useWallet();
+  const { connection } = useConnection();
+
   const isDeposit = mode === 'deposit';
+  const [amount, setAmount] = useState('');
+  const [solDest, setSolDest] = useState('');
+  const [status, setStatus] = useState('idle');
+  const [pipelineStatus, setPipelineStatus] = useState('');
+  const [error, setError] = useState('');
+  const [trackingId, setTrackingId] = useState('');
+  const [quotePreview, setQuotePreview] = useState(null);
+
+  const pollIntervalRef = useRef(null);
   useBodyLock(open);
+
+  const stopPolling = useCallback(() => {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current);
+      pollIntervalRef.current = null;
+    }
+  }, []);
+
+  const startPolling = useCallback((id) => {
+    stopPolling();
+    const fetcher = isDeposit ? bridgeDepositStatus : bridgeWithdrawStatus;
+    const tick = async () => {
+      try {
+        const s = await fetcher(id);
+        setPipelineStatus(s.status || '');
+        if (s.status === 'complete') {
+          setStatus('complete');
+          stopPolling();
+          clearBridgeTracking(mode);
+        } else if (s.status === 'failed') {
+          setStatus('failed');
+          setError(s.error || 'Bridge failed');
+          stopPolling();
+          clearBridgeTracking(mode);
+        }
+      } catch (e) {
+        // network blip, keep polling
+      }
+    };
+    tick();
+    pollIntervalRef.current = setInterval(tick, isDeposit ? 4_000 : 6_000);
+  }, [mode, isDeposit, stopPolling]);
+
   useEffect(() => {
-    if (open) { setAmount(''); setStatus('idle'); setError(''); }
-  }, [open]);
-  const handle = async () => {
-    const amt = parseFloat(amount);
-    if (!amt || amt <= 0) return;
-    setStatus('error');
-    setError('Bridge execution is not wired yet. Connect this button to your OKX / Hyperliquid bridge backend before enabling live transfers.');
-    setTimeout(() => setStatus('idle'), 3500);
+    if (!open) { stopPolling(); return; }
+    setError('');
+    setQuotePreview(null);
+    setPipelineStatus('');
+    setSolDest(walletPubkey || '');
+    const existing = loadBridgeTracking(mode);
+    if (existing) {
+      setTrackingId(existing);
+      setStatus('processing');
+      setAmount('');
+      startPolling(existing);
+    } else {
+      setAmount('');
+      setStatus('idle');
+      setTrackingId('');
+    }
+    return () => stopPolling();
+  }, [open, mode, walletPubkey, startPolling, stopPolling]);
+
+  const handleDeposit = async () => {
+    setError('');
+    const usd = parseFloat(amount);
+    if (!usd || usd < 10) { setError('Minimum deposit is $10'); return; }
+    if (!publicKey) { setError('Connect a Solana wallet first'); return; }
+    if (!hlAddress) { setError('Create your Hyperliquid wallet first'); return; }
+
+    try {
+      setStatus('quoting');
+      setPipelineStatus('quoting');
+      const quote = await bridgeDepositQuote({
+        usd_amount: usd,
+        user_sol_addr: publicKey.toString(),
+        user_hyper_wallet: hlAddress,
+      });
+      setQuotePreview({
+        solToSend: quote.sol_to_send,
+        expectedUsdc: quote.expected_usdc,
+      });
+      setTrackingId(quote.tracking_id);
+
+      setStatus('processing');
+      setPipelineStatus('awaiting_signature');
+      const txBytes = b64ToBytes(quote.sol_tx_b64);
+      const tx = VersionedTransaction.deserialize(txBytes);
+      let sig;
+      if (sendTransaction) {
+        sig = await sendTransaction(tx, connection);
+      } else if (signTransaction) {
+        const signed = await signTransaction(tx);
+        sig = await connection.sendRawTransaction(signed.serialize());
+      } else {
+        throw new Error('Wallet does not support transaction signing');
+      }
+
+      saveBridgeTracking('deposit', quote.tracking_id);
+      await bridgeDepositSubmit({ tracking_id: quote.tracking_id, sol_tx_hash: sig });
+
+      startPolling(quote.tracking_id);
+    } catch (e) {
+      console.error('[bridge deposit]', e);
+      setError(e.message || 'Deposit failed');
+      setStatus('failed');
+      stopPolling();
+      clearBridgeTracking('deposit');
+    }
   };
+
+  const handleWithdraw = async () => {
+    setError('');
+    const usd = parseFloat(amount);
+    if (!usd || usd < 5) { setError('Minimum withdraw is $5'); return; }
+    if (!hlAddress) { setError('No Hyperliquid wallet found'); return; }
+    if (!isValidSolAddress(solDest)) { setError('Enter a valid Solana destination address'); return; }
+
+    const stored = getStoredHlWallet(walletPubkey);
+    if (!stored?.privateKey) {
+      setError('Hyperliquid wallet key not found locally. Create wallet first.');
+      return;
+    }
+    if (stored.address.toLowerCase() !== hlAddress.toLowerCase()) {
+      setError('Stored HL key does not match wallet address');
+      return;
+    }
+
+    try {
+      setStatus('quoting');
+      setPipelineStatus('quoting');
+      const init = await bridgeWithdrawInit({
+        hl_wallet_address: hlAddress,
+        usd_amount: usd,
+        user_sol_addr: solDest,
+      });
+      setTrackingId(init.tracking_id);
+
+      setStatus('processing');
+      setPipelineStatus('awaiting_signature');
+      const signature = await signHlWithdraw3(stored.privateKey, init.action);
+
+      saveBridgeTracking('withdraw', init.tracking_id);
+      await bridgeWithdrawSubmit({ tracking_id: init.tracking_id, signature });
+
+      startPolling(init.tracking_id);
+    } catch (e) {
+      console.error('[bridge withdraw]', e);
+      setError(e.message || 'Withdraw failed');
+      setStatus('failed');
+      stopPolling();
+      clearBridgeTracking('withdraw');
+    }
+  };
+
+  const handle = isDeposit ? handleDeposit : handleWithdraw;
+  const isBusy = status === 'processing' || status === 'quoting';
+  const isDone = status === 'complete';
+  const isFailed = status === 'failed';
+  const statusText = isDeposit
+    ? DEPOSIT_STATUS_TEXT[pipelineStatus] || pipelineStatus
+    : WITHDRAW_STATUS_TEXT[pipelineStatus] || pipelineStatus;
+
   if (!open) return null;
+
   return (
     <>
-      <div onClick={onClose} style={{
+      <div onClick={isBusy ? undefined : onClose} style={{
         position: 'fixed', inset: 0, zIndex: 450,
         background: 'rgba(0,0,0,.82)', backdropFilter: 'blur(12px)',
+        cursor: isBusy ? 'wait' : 'pointer',
       }}/>
       <div style={{
         position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
@@ -554,36 +866,40 @@ function TransferModal({ open, onClose, mode, hlAddress }) {
                 {isDeposit ? 'Move funds into Hyperliquid' : 'Move funds out of Hyperliquid'}
               </div>
             </div>
-            <button onClick={onClose} style={{
+            <button onClick={isBusy ? undefined : onClose} disabled={isBusy} style={{
               background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`,
-              color: C.muted, width: 32, height: 32, borderRadius: 10, fontSize: 18, cursor: 'pointer',
+              color: C.muted, width: 32, height: 32, borderRadius: 10, fontSize: 18,
+              cursor: isBusy ? 'not-allowed' : 'pointer', opacity: isBusy ? 0.4 : 1,
             }}>&times;</button>
           </div>
         </div>
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 22px calc(env(safe-area-inset-bottom) + 78px)' }}>
+
           <div style={{
             marginBottom: 14, padding: 13,
             background: 'rgba(255,255,255,.03)', borderRadius: 14, border: `1px solid ${C.border}`,
           }}>
             <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, marginBottom: 6, letterSpacing: '.06em', ...T.mono }}>
-              {isDeposit ? 'DESTINATION' : 'SOURCE'}
+              {isDeposit ? 'DESTINATION (HL WALLET)' : 'SOURCE (HL WALLET)'}
             </div>
             <div style={{ fontSize: 11, color: C.ink, fontFamily: 'monospace', wordBreak: 'break-all' }}>
               {hlAddress || 'No Hyperliquid wallet yet'}
             </div>
           </div>
+
           <div style={{
             marginBottom: 14, padding: 13, borderRadius: 14,
             background: isDeposit ? C.hlDim : 'rgba(168,127,255,.08)',
             border: `1px solid ${isDeposit ? C.borderHi : 'rgba(168,127,255,.20)'}`,
           }}>
             <div style={{ fontSize: 12, color: isDeposit ? C.hl : C.violet, fontWeight: 700, ...T.mono }}>
-              {isDeposit ? 'SOL -> USDC -> Hyperliquid' : 'Hyperliquid -> USDC -> SOL'}
+              {isDeposit ? 'SOL -> USDC.arb -> Hyperliquid' : 'Hyperliquid -> USDC.arb -> SOL'}
             </div>
             <div style={{ marginTop: 4, fontSize: 10, color: C.muted, fontWeight: 500, ...T.body }}>
-              Powered by OKX routing
+              Powered by deBridge &middot; ~$2 in fees
             </div>
           </div>
+
           <div style={{ marginBottom: 14 }}>
             <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginBottom: 7, letterSpacing: '.06em', textTransform: 'uppercase', ...T.mono }}>
               Amount
@@ -592,12 +908,14 @@ function TransferModal({ open, onClose, mode, hlAddress }) {
               background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`,
               borderRadius: 14, padding: '14px 14px',
               display: 'flex', alignItems: 'center', gap: 8,
+              opacity: isBusy ? 0.6 : 1,
             }}>
               <span style={{ color: C.muted, fontSize: 18, ...T.mono }}>$</span>
               <input
                 value={amount}
                 onChange={e => setAmount(cleanAmount(e.target.value))}
                 placeholder="0.00"
+                disabled={isBusy}
                 style={{
                   flex: 1, background: 'transparent', border: 'none',
                   fontSize: 23, fontWeight: 800, color: C.inkStr, outline: 'none',
@@ -613,16 +931,93 @@ function TransferModal({ open, onClose, mode, hlAddress }) {
             </div>
             <div style={{ display: 'flex', gap: 7, marginTop: 9 }}>
               {[25, 50, 100, 250].map(v => (
-                <button key={v} onClick={() => setAmount(String(v))} style={{
+                <button key={v} onClick={() => setAmount(String(v))} disabled={isBusy} style={{
                   flex: 1, padding: '9px', borderRadius: 10,
                   border: `1px solid ${parseFloat(amount) === v ? C.borderHi : C.border}`,
                   background: parseFloat(amount) === v ? C.hlDim : 'rgba(255,255,255,.03)',
                   color: parseFloat(amount) === v ? C.hl : C.muted,
-                  fontWeight: 700, fontSize: 11, cursor: 'pointer', ...T.mono,
+                  fontWeight: 700, fontSize: 11,
+                  cursor: isBusy ? 'not-allowed' : 'pointer',
+                  opacity: isBusy ? 0.5 : 1, ...T.mono,
                 }}>${v}</button>
               ))}
             </div>
           </div>
+
+          {!isDeposit && (
+            <div style={{ marginBottom: 14 }}>
+              <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, marginBottom: 7, letterSpacing: '.06em', textTransform: 'uppercase', ...T.mono }}>
+                Send SOL to
+              </div>
+              <input
+                value={solDest}
+                onChange={e => setSolDest(e.target.value.trim())}
+                placeholder="Solana wallet address"
+                disabled={isBusy}
+                style={{
+                  width: '100%', background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`,
+                  borderRadius: 14, padding: '12px 13px',
+                  fontSize: 11, color: C.inkStr, outline: 'none',
+                  fontFamily: 'monospace', boxSizing: 'border-box',
+                  opacity: isBusy ? 0.6 : 1,
+                }}
+              />
+              {walletPubkey && solDest !== walletPubkey && (
+                <button onClick={() => setSolDest(walletPubkey)} disabled={isBusy} style={{
+                  marginTop: 6, padding: '4px 10px', borderRadius: 8,
+                  border: `1px solid ${C.border}`, background: 'transparent',
+                  color: C.hl, fontSize: 10, fontWeight: 700,
+                  cursor: isBusy ? 'not-allowed' : 'pointer', ...T.mono,
+                }}>USE CONNECTED WALLET</button>
+              )}
+            </div>
+          )}
+
+          {quotePreview && isDeposit && (
+            <div style={{
+              marginBottom: 12, padding: '10px 13px',
+              background: 'rgba(151,252,228,.05)', border: '1px solid rgba(151,252,228,.16)',
+              borderRadius: 12,
+            }}>
+              <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, ...T.mono }}>YOU SEND</div>
+              <div style={{ fontSize: 13, color: C.ink, fontWeight: 700, ...T.mono }}>
+                ~{quotePreview.solToSend} SOL
+              </div>
+              <div style={{ fontSize: 10, color: C.muted, marginTop: 6, ...T.mono }}>YOU RECEIVE</div>
+              <div style={{ fontSize: 13, color: C.hl, fontWeight: 700, ...T.mono }}>
+                ~${parseFloat(quotePreview.expectedUsdc).toFixed(2)} USDC margin (after fees)
+              </div>
+            </div>
+          )}
+
+          {(isBusy || isDone || isFailed) && statusText && (
+            <div style={{
+              marginBottom: 12, padding: 12,
+              background: isFailed ? 'rgba(255,138,158,.08)'
+                : isDone ? 'rgba(61,213,152,.08)' : 'rgba(151,252,228,.05)',
+              border: `1px solid ${isFailed ? 'rgba(255,138,158,.24)'
+                : isDone ? 'rgba(61,213,152,.24)' : 'rgba(151,252,228,.20)'}`,
+              borderRadius: 12,
+              display: 'flex', alignItems: 'center', gap: 10,
+            }}>
+              {isBusy && (
+                <div style={{
+                  width: 14, height: 14, borderRadius: '50%',
+                  border: `2px solid ${C.hlDim}`, borderTopColor: C.hl,
+                  animation: 'nexus-spin 0.8s linear infinite',
+                }}/>
+              )}
+              {isDone && <span style={{ fontSize: 14 }}>{'\u2713'}</span>}
+              {isFailed && <span style={{ fontSize: 14 }}>{'\u2715'}</span>}
+              <span style={{
+                fontSize: 12, color: isFailed ? C.down : isDone ? C.up : C.ink,
+                fontWeight: 600, ...T.body,
+              }}>
+                {statusText}
+              </span>
+            </div>
+          )}
+
           {error && (
             <div style={{
               marginBottom: 12, padding: 11,
@@ -630,25 +1025,46 @@ function TransferModal({ open, onClose, mode, hlAddress }) {
               borderRadius: 12, fontSize: 11, color: C.down, ...T.body,
             }}>{error}</div>
           )}
-          <button onClick={handle} disabled={!amount || status === 'loading'} style={{
-            width: '100%', padding: 16, borderRadius: 16, border: 'none',
-            background: isDeposit
-              ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`
-              : `linear-gradient(135deg,${C.violet} 0%,${C.sol} 100%)`,
-            color: isDeposit ? '#04070f' : '#fff',
-            fontWeight: 800, fontSize: 15,
-            cursor: status === 'loading' ? 'not-allowed' : 'pointer',
-            minHeight: 56,
-            boxShadow: isDeposit ? '0 12px 30px rgba(61,213,152,.22)' : '0 12px 30px rgba(168,127,255,.22)',
-            letterSpacing: '-.01em', ...T.display,
-          }}>
-            {isDeposit ? 'Start Deposit' : 'Start Withdraw'}
-          </button>
+
+          {isDone ? (
+            <button onClick={() => { setStatus('idle'); setAmount(''); setPipelineStatus(''); setError(''); onClose(); }} style={{
+              width: '100%', padding: 16, borderRadius: 16, border: 'none',
+              background: `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`,
+              color: '#04070f', fontWeight: 800, fontSize: 15,
+              cursor: 'pointer', minHeight: 56, ...T.display,
+            }}>Done</button>
+          ) : (
+            <button
+              onClick={handle}
+              disabled={!amount || isBusy || (!isDeposit && !isValidSolAddress(solDest))}
+              style={{
+                width: '100%', padding: 16, borderRadius: 16, border: 'none',
+                background: isFailed
+                  ? `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)`
+                  : isDeposit
+                    ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`
+                    : `linear-gradient(135deg,${C.violet} 0%,${C.sol} 100%)`,
+                color: isDeposit && !isFailed ? '#04070f' : '#fff',
+                fontWeight: 800, fontSize: 15,
+                cursor: isBusy ? 'not-allowed' : 'pointer',
+                opacity: (!amount || isBusy) ? 0.65 : 1,
+                minHeight: 56,
+                boxShadow: isDeposit ? '0 12px 30px rgba(61,213,152,.22)' : '0 12px 30px rgba(168,127,255,.22)',
+                letterSpacing: '-.01em', ...T.display,
+              }}
+            >
+              {isBusy ? 'Processing...'
+                : isFailed ? 'Retry'
+                : isDeposit ? 'Start Deposit' : 'Start Withdraw'}
+            </button>
+          )}
         </div>
       </div>
     </>
   );
 }
+
+/* --- TRADE DRAWER --------------------------------------------------------- */
 
 function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, position }) {
   const { connected } = useWallet();
@@ -1069,6 +1485,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
         onClose={() => setTransferOpen(false)}
         mode={transferMode}
         hlAddress={hlWallet?.address || ''}
+        walletPubkey={walletPubkey}
       />
     </>
   );
@@ -1114,7 +1531,6 @@ export default function PerpsTrade({ onConnectWallet }) {
 
   useEffect(() => { getEthers().catch(() => {}); }, []);
 
-  // Price + 24H poll (8s)
   useEffect(() => {
     let alive = true;
     const poll = async () => {
@@ -1129,7 +1545,6 @@ export default function PerpsTrade({ onConnectWallet }) {
     return () => { alive = false; clearInterval(interval); };
   }, [oneHourMap, sparkMap]);
 
-  // 1H change poll (90s)
   useEffect(() => {
     let alive = true;
     const pollOneHour = async () => {
@@ -1150,7 +1565,6 @@ export default function PerpsTrade({ onConnectWallet }) {
     return () => { alive = false; clearInterval(interval); };
   }, []);
 
-  // Sparkline poll (5 min, top 14)
   useEffect(() => {
     let alive = true;
     const pollSparks = async () => {
@@ -1198,7 +1612,7 @@ export default function PerpsTrade({ onConnectWallet }) {
 
   return (
     <>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nexus-pulse { 0%,100% { opacity:1; } 50% { opacity:.4; } } body.nexus-scroll-locked { overflow:hidden; } input[type="range"] { -webkit-appearance:none; appearance:none; background:rgba(255,255,255,.07); border-radius:99px; outline:none; } input[type="range"]::-webkit-slider-runnable-track { height:6px; border-radius:99px; background:rgba(255,255,255,.07); } input[type="range"]::-moz-range-track { height:6px; border-radius:99px; background:rgba(255,255,255,.07); } input[type="range"]::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:22px; height:22px; border-radius:50%; background:#fff; cursor:grab; border:2.5px solid #97fce4; box-shadow:0 0 0 4px rgba(151,252,228,.10), 0 0 16px rgba(151,252,228,.55), 0 2px 6px rgba(0,0,0,.35); margin-top:-8px; transition:transform .12s; } input[type="range"]::-webkit-slider-thumb:active { cursor:grabbing; transform:scale(1.08); box-shadow:0 0 0 6px rgba(151,252,228,.14), 0 0 22px rgba(151,252,228,.75), 0 2px 8px rgba(0,0,0,.45); } input[type="range"]::-moz-range-thumb { width:22px; height:22px; border-radius:50%; background:#fff; cursor:grab; border:2.5px solid #97fce4; box-shadow:0 0 0 4px rgba(151,252,228,.10), 0 0 16px rgba(151,252,228,.55); }`}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nexus-pulse { 0%,100% { opacity:1; } 50% { opacity:.4; } } @keyframes nexus-spin { to { transform: rotate(360deg); } } body.nexus-scroll-locked { overflow:hidden; } input[type="range"] { -webkit-appearance:none; appearance:none; background:rgba(255,255,255,.07); border-radius:99px; outline:none; } input[type="range"]::-webkit-slider-runnable-track { height:6px; border-radius:99px; background:rgba(255,255,255,.07); } input[type="range"]::-moz-range-track { height:6px; border-radius:99px; background:rgba(255,255,255,.07); } input[type="range"]::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:22px; height:22px; border-radius:50%; background:#fff; cursor:grab; border:2.5px solid #97fce4; box-shadow:0 0 0 4px rgba(151,252,228,.10), 0 0 16px rgba(151,252,228,.55), 0 2px 6px rgba(0,0,0,.35); margin-top:-8px; transition:transform .12s; } input[type="range"]::-webkit-slider-thumb:active { cursor:grabbing; transform:scale(1.08); box-shadow:0 0 0 6px rgba(151,252,228,.14), 0 0 22px rgba(151,252,228,.75), 0 2px 8px rgba(0,0,0,.45); } input[type="range"]::-moz-range-thumb { width:22px; height:22px; border-radius:50%; background:#fff; cursor:grab; border:2.5px solid #97fce4; box-shadow:0 0 0 4px rgba(151,252,228,.10), 0 0 16px rgba(151,252,228,.55); }`}</style>
 
       <div style={{
         maxWidth: 680, margin: '0 auto', width: '100%',
