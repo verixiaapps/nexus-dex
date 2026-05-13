@@ -4,7 +4,7 @@
   "private": true,
   "proxy": "http://localhost:3001",
   "dependencies": {
-    "react": "^18.2.0", 
+    "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-scripts": "5.0.1",
     "react-app-rewired": "^2.2.1",
@@ -42,6 +42,9 @@
     "@mayanfinance/swap-sdk": "^13.2.0",
     "@nktkas/hyperliquid": "^0.32.2",
     "ethers": "^6.13.0"
+  },
+  "overrides": {
+    "uuid": "^9.0.1"
   },
   "devDependencies": {
     "concurrently": "^8.2.0"
