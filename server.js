@@ -3,11 +3,11 @@ require('dotenv').config();
 const crypto    = require('crypto');
 const express   = require('express');
 const cors      = require('cors');
-const path      = require('path'); 
+const path      = require('path');
 const rateLimit = require('express-rate-limit');
 const multer    = require('multer');
 const ethers    = require('ethers');
- 
+
 const app      = express();
 const PORT     = process.env.PORT || 3001;
 const NODE_ENV = process.env.NODE_ENV || 'development';
@@ -34,7 +34,7 @@ const CSP_DIRECTIVES = [
   ['frame-ancestors', ["'none'"]],
   ['frame-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org', 'https://challenges.cloudflare.com', ...EXTRA_FRAME_SRC]],
   ['child-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org']],
-  ['connect-src',     ["'self'", 'https://li.quest', 'https://web3.okx.com', 'https://quote-api.jup.ag', 'https://lite-api.jup.ag', 'https://api.jup.ag', 'https://token.jup.ag', 'https://api.hyperliquid.xyz', 'https://api.hyperliquid-testnet.xyz', 'https://pumpportal.fun', 'wss://pumpportal.fun', 'https://api.dexscreener.com', 'https://*.dexscreener.com', 'https://auth.privy.io', 'https://*.privy.io', 'https://*.privy.systems', 'https://*.rpc.privy.systems', 'https://explorer-api.walletconnect.com', 'https://*.walletconnect.com', 'https://*.walletconnect.org', 'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org', 'wss://*.walletconnect.com', 'wss://*.walletconnect.org', 'wss://www.walletlink.org', 'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com', 'https://api.pinata.cloud', 'https://*.publicnode.com', 'https://*.drpc.org', ...EXTRA_CONNECT_SRC]],
+  ['connect-src',     ["'self'", 'https://li.quest', 'https://arb1.arbitrum.io', 'https://web3.okx.com', 'https://quote-api.jup.ag', 'https://lite-api.jup.ag', 'https://api.jup.ag', 'https://token.jup.ag', 'https://api.hyperliquid.xyz', 'https://api.hyperliquid-testnet.xyz', 'https://pumpportal.fun', 'wss://pumpportal.fun', 'https://api.dexscreener.com', 'https://*.dexscreener.com', 'https://auth.privy.io', 'https://*.privy.io', 'https://*.privy.systems', 'https://*.rpc.privy.systems', 'https://explorer-api.walletconnect.com', 'https://*.walletconnect.com', 'https://*.walletconnect.org', 'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org', 'wss://*.walletconnect.com', 'wss://*.walletconnect.org', 'wss://www.walletlink.org', 'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com', 'https://api.pinata.cloud', 'https://*.publicnode.com', 'https://*.drpc.org', ...EXTRA_CONNECT_SRC]],
   ['worker-src',      ["'self'", 'blob:']],
   ['manifest-src',    ["'self'"]],
 ];
@@ -44,8 +44,6 @@ if (CSP_REPORT_URI) _cspParts.push(`report-uri ${CSP_REPORT_URI}`);
 const CSP_VALUE       = _cspParts.join('; ');
 const CSP_HEADER_NAME = CSP_MODE === 'enforce' ? 'Content-Security-Policy' : 'Content-Security-Policy-Report-Only';
 const HSTS_ENABLED    = NODE_ENV === 'production' && process.env.HSTS_DISABLE !== '1';
-
-console.log('[security] CSP mode:', CSP_MODE, '-> header:', CSP_HEADER_NAME);
 
 app.use((req, res, next) => {
   if (req.path === '/health' || req.path === '/api/health') return next();
@@ -78,14 +76,11 @@ const HELIUS_RPC_URL = process.env.HELIUS_RPC_URL  || process.env.REACT_APP_SOLA
 const PINATA_JWT     = process.env.PINATA_JWT      || '';
 
 const OPERATOR_PRIVATE_KEY = process.env.OPERATOR_PRIVATE_KEY || '';
-const OPERATOR_WALLET_ADDR = '0xeace360F8faB3f739CBC4e026b58efC5866fAdC1';
 const ARB_RPC_URL          = process.env.ARB_RPC_URL || 'https://arb1.arbitrum.io/rpc';
 const HL_API               = 'https://api.hyperliquid.xyz';
 const OKX_TICKER_URL       = 'https://www.okx.com/api/v5/market/ticker?instId=SOL-USDT';
 const LIFI_API             = 'https://li.quest/v1';
 const LIFI_API_KEY         = process.env.LIFI_API_KEY || '';
-// HyperCore chain ID in LI.FI = 1337
-// Solana chain ID in LI.FI    = 1151111081099710
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'https://swap.verixiaapps.com,http://localhost:3000')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -144,11 +139,8 @@ function scrubSecrets(s) {
 
 function logError(tag, err) {
   const msg = scrubSecrets(err?.message ?? err);
-  if (NODE_ENV === 'production') {
-    console.warn(`[${tag}]`, msg);
-  } else {
-    console.error(`[${tag}]`, msg, err?.stack ? '\n' + scrubSecrets(err.stack) : '');
-  }
+  if (NODE_ENV === 'production') console.warn(`[${tag}]`, msg);
+  else console.error(`[${tag}]`, msg, err?.stack ? '\n' + scrubSecrets(err.stack) : '');
 }
 
 function queryStringOf(req) {
@@ -156,12 +148,10 @@ function queryStringOf(req) {
   const i = u.indexOf('?');
   return i >= 0 ? u.slice(i) : '';
 }
-
 function respondJsonOrError(res, response, result) {
   if (result.parsed !== null) return res.status(response.status).json(result.parsed);
   return res.status(response.status).json({ error: 'Upstream returned non-JSON', body: result.raw?.slice(0, 500) });
 }
-
 function buildForwardedQuery(req) { return queryStringOf(req) || ''; }
 
 const getCache = new Map();
@@ -178,8 +168,7 @@ function setCachedJson(url, status, payload, ttlMs) {
 
 function okxSign(ts, method, okxPath, body) {
   return crypto.createHmac('sha256', OKX_SECRET_KEY)
-    .update(ts + method.toUpperCase() + okxPath + (body || ''))
-    .digest('base64');
+    .update(ts + method.toUpperCase() + okxPath + (body || '')).digest('base64');
 }
 function buildOkxHeaders(method, okxPath, body) {
   const ts = new Date().toISOString();
@@ -250,20 +239,6 @@ async function proxyOkx(req, res) {
 
 app.get('/api/okx/*',  proxyOkx);
 app.post('/api/okx/*', proxyOkx);
-
-app.get('/api/test-price-info', async (req, res) => {
-  try {
-    const mint    = req.query.mint || 'So11111111111111111111111111111111111111112';
-    const body    = JSON.stringify({ chainIndex: '501', tokenContractAddress: mint });
-    const okxPath = '/api/v6/dex/market/price-info';
-    const response = await fetchWithTimeout(
-      'https://web3.okx.com' + okxPath,
-      { method: 'POST', headers: buildOkxHeaders('POST', okxPath, body), body },
-      15_000,
-    );
-    res.json(await response.json());
-  } catch (e) { res.json({ error: e.message }); }
-});
 
 function buildJupiterHeaders() {
   const h = { Accept: 'application/json', 'Content-Type': 'application/json', 'X-Nexus-Account': JUPITER_ACCOUNT };
@@ -379,10 +354,6 @@ function validateHyperliquidExchangePayload(body) {
   if (!Number.isInteger(nonce) || nonce <= 0) return 'Missing or invalid nonce';
   const sigErr = validateHyperliquidSignature(body.signature);
   if (sigErr) return sigErr;
-  if (body.vaultAddress != null && !/^0x[a-fA-F0-9]{40}$/.test(String(body.vaultAddress)))
-    return 'Invalid vaultAddress';
-  if (body.expiresAfter != null && (!Number.isInteger(Number(body.expiresAfter)) || Number(body.expiresAfter) <= 0))
-    return 'Invalid expiresAfter';
   return null;
 }
 
@@ -420,10 +391,8 @@ app.post('/api/hyperliquid', async (req, res) => {
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
-
 app.post('/api/hyperliquid/exchange',
   (req, res) => proxyHyperliquidExchange(req, res, 'https://api.hyperliquid.xyz', 'Hyperliquid'));
-
 app.post('/api/hyperliquid-testnet', async (req, res) => {
   try {
     const response = await fetchWithTimeout(
@@ -438,7 +407,6 @@ app.post('/api/hyperliquid-testnet', async (req, res) => {
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
-
 app.post('/api/hyperliquid-testnet/exchange',
   (req, res) => proxyHyperliquidExchange(req, res, 'https://api.hyperliquid-testnet.xyz', 'Hyperliquid testnet'));
 
@@ -453,14 +421,9 @@ async function fetchSolPriceUsd() {
   _solPriceCache = { p, ts: now };
   return p;
 }
-
 app.get('/api/sol-price', async (req, res) => {
-  try {
-    res.json({ price: await fetchSolPriceUsd(), ts: Date.now() });
-  } catch (e) {
-    logError('sol-price', e);
-    res.status(500).json({ error: e.message || 'Unknown error' });
-  }
+  try { res.json({ price: await fetchSolPriceUsd(), ts: Date.now() }); }
+  catch (e) { logError('sol-price', e); res.status(500).json({ error: e.message || 'Unknown error' }); }
 });
 
 /* ── LI.FI proxy ──────────────────────────────────────────────────────── */
@@ -469,7 +432,6 @@ function buildLifiHeaders() {
   if (LIFI_API_KEY) h['x-lifi-api-key'] = LIFI_API_KEY;
   return h;
 }
-
 app.get('/api/lifi/quote', async (req, res) => {
   try {
     const params = new URLSearchParams(req.query);
@@ -482,7 +444,6 @@ app.get('/api/lifi/quote', async (req, res) => {
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
-
 app.get('/api/lifi/status', async (req, res) => {
   try {
     const params = new URLSearchParams(req.query);
@@ -495,14 +456,17 @@ app.get('/api/lifi/status', async (req, res) => {
   }
 });
 
-/* ── Withdraw (non-custodial) ─────────────────────────────────────────── */
-const bridgeTracking = new Map();
+/* ── Bridge / Operator ────────────────────────────────────────────────── */
+const bridgeTracking      = new Map();
+const gasSponsorCooldown  = new Map();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 setInterval(() => {
   const cutoff = Date.now() - 24 * 60 * 60_000;
   for (const [k, v] of bridgeTracking.entries())
     if ((v.completed_at || v.created_at) < cutoff) bridgeTracking.delete(k);
+  for (const [k, ts] of gasSponsorCooldown.entries())
+    if (Date.now() - ts > 60 * 60_000) gasSponsorCooldown.delete(k);
 }, 5 * 60_000).unref();
 
 let _arbProvider = null, _operatorWallet = null;
@@ -511,8 +475,6 @@ function getOperatorWallet() {
     if (!OPERATOR_PRIVATE_KEY) throw new Error('OPERATOR_PRIVATE_KEY not set');
     _arbProvider    = new ethers.JsonRpcProvider(ARB_RPC_URL);
     _operatorWallet = new ethers.Wallet(OPERATOR_PRIVATE_KEY, _arbProvider);
-    if (_operatorWallet.address.toLowerCase() !== OPERATOR_WALLET_ADDR.toLowerCase())
-      throw new Error('OPERATOR_PRIVATE_KEY mismatch: controls ' + _operatorWallet.address + ' expected ' + OPERATOR_WALLET_ADDR);
   }
   return _operatorWallet;
 }
@@ -547,7 +509,7 @@ app.post('/api/bridge/withdraw/init', async (req, res) => {
       hyperliquidChain: 'Mainnet',
       amount:           String(usdNum),
       time,
-      destination:      hl_wallet_address, // non-custodial: straight to user's own EVM address
+      destination:      hl_wallet_address,
     };
     const id = crypto.randomBytes(8).toString('hex');
     bridgeTracking.set(id, {
@@ -596,7 +558,6 @@ async function runWithdrawPipeline(tid) {
   const t = bridgeTracking.get(tid);
   if (!t) return;
   try {
-    // 1. Submit withdraw3 to Hyperliquid -- USDC goes straight to user's hlAddress
     const body = { action: t.action, nonce: t.action.time, signature: t.signature };
     const ve   = validateHyperliquidExchangePayload(body);
     if (ve) throw new Error('Invalid HL payload: ' + ve);
@@ -610,16 +571,6 @@ async function runWithdrawPipeline(tid) {
     if (hlData.status !== 'ok')
       throw new Error('HL withdraw3 failed: ' + JSON.stringify(hlData).slice(0, 300));
 
-    t.status = 'bridging';
-
-    // 2. Sponsor gas -- send 0.001 ETH to user's hlAddress so they can bridge ARB -> SOL
-    const wallet = getOperatorWallet();
-    const gasTx  = await wallet.sendTransaction({
-      to:    t.hl_wallet_address,
-      value: ethers.parseEther('0.001'),
-    });
-    await gasTx.wait();
-
     t.status       = 'complete';
     t.completed_at = Date.now();
   } catch (err) {
@@ -628,6 +579,25 @@ async function runWithdrawPipeline(tid) {
     logError('withdraw-pipeline', err);
   }
 }
+
+app.post('/api/bridge/sponsor-gas', async (req, res) => {
+  try {
+    const { address } = req.body || {};
+    if (!ethers.isAddress(address)) return res.status(400).json({ error: 'Invalid address' });
+    const key = address.toLowerCase();
+    const last = gasSponsorCooldown.get(key);
+    if (last && Date.now() - last < 60_000)
+      return res.status(429).json({ error: 'Gas sponsored recently, wait 1 min' });
+    const wallet = getOperatorWallet();
+    const tx     = await wallet.sendTransaction({ to: address, value: ethers.parseEther('0.001') });
+    await tx.wait();
+    gasSponsorCooldown.set(key, Date.now());
+    res.json({ ok: true, txHash: tx.hash });
+  } catch (e) {
+    logError('sponsor-gas', e);
+    res.status(500).json({ error: e.message });
+  }
+});
 
 /* ── PumpPortal ───────────────────────────────────────────────────────── */
 app.post('/api/pumpportal/trade-local', async (req, res) => {
@@ -656,7 +626,6 @@ function getSolanaRpcUrl() {
   if (HELIUS_API_KEY) return 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(HELIUS_API_KEY);
   return 'https://api.mainnet-beta.solana.com';
 }
-
 app.post('/api/helius/das', async (req, res) => {
   try {
     const response = await fetchWithTimeout(
@@ -671,7 +640,6 @@ app.post('/api/helius/das', async (req, res) => {
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
-
 app.post('/api/solana-rpc', async (req, res) => {
   try {
     const response = await fetchWithTimeout(
@@ -750,25 +718,18 @@ app.get('/api/health', (req, res) => {
     ok: true, env: NODE_ENV,
     has: {
       okx:            Boolean(OKX_API_KEY && OKX_SECRET_KEY && OKX_PASSPHRASE),
-      okxProject:     Boolean(OKX_PROJECT_ID),
       jupiter:        Boolean(JUPITER_ENABLED),
-      jupiterApiKey:  Boolean(JUPITER_API_KEY),
       helius:         Boolean(HELIUS_API_KEY || HELIUS_RPC_URL),
       pinata:         Boolean(PINATA_JWT),
-      feeWalletSol:   Boolean(OKX_FEE_WALLET_SOL),
-      feeWalletEvm:   Boolean(OKX_FEE_WALLET_EVM),
       bridgeOperator: Boolean(OPERATOR_PRIVATE_KEY),
       lifiApiKey:     Boolean(LIFI_API_KEY),
     },
     bridge: OPERATOR_PRIVATE_KEY ? {
-      operator:     OPERATOR_WALLET_ADDR,
-      arbRpc:       ARB_RPC_URL,
-      active:       bridgeTracking.size,
-      depositPath:  'frontend LI.FI API -- SOL -> HyperCore (chainId 1337)',
-      withdrawPath: 'HL withdraw3 -> user hlAddress -> operator sponsors 0.001 ETH gas -> client bridges ARB->SOL via LI.FI',
-      custodial:    false,
+      arbRpc: ARB_RPC_URL, active: bridgeTracking.size,
+      flow: 'SOL → ARB USDC (LI.FI) → HL bridge transfer → HyperCore | reverse via withdraw3 + LI.FI',
+      custodial: false,
     } : { enabled: false },
-    lifi: { baseUrl: LIFI_API, hyperCoreChainId: 1337, solanaChainId: 1151111081099710 },
+    lifi: { baseUrl: LIFI_API, hyperCoreChainId: 1337, arbChainId: 42161 },
     time: new Date().toISOString(),
   });
 });
@@ -783,7 +744,6 @@ app.use(express.static(path.join(__dirname, 'build'), {
 }));
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'build', 'index.html')));
 
-// eslint-disable-next-line no-unused-vars
 app.use((err, req, res, next) => {
   if (err?.message?.startsWith('Not allowed by CORS'))
     return res.status(403).json({ error: 'CORS: origin not allowed' });
@@ -795,8 +755,6 @@ app.use((err, req, res, next) => {
     return res.status(400).json({ error: err.message });
   if (err?.code === 'LIMIT_FILE_SIZE')
     return res.status(413).json({ error: 'File too large (max 5MB)' });
-  if (err?.code === 'LIMIT_UNEXPECTED_FILE')
-    return res.status(400).json({ error: 'Unexpected file field -- use field name "file"' });
   logError('unhandled', err);
   if (res.headersSent) return next(err);
   return res.status(500).json({ error: 'Internal server error' });
@@ -804,19 +762,12 @@ app.use((err, req, res, next) => {
 
 app.listen(PORT, () => {
   console.log('Nexus DEX server on port ' + PORT);
-  console.log('  env:             ' + NODE_ENV);
-  console.log('  allowed origins: ' + allowedOrigins.join(', '));
-  console.log('  LI.FI base:      ' + LIFI_API);
-  console.log('  LI.FI API key:   ' + (LIFI_API_KEY ? 'set' : 'not set (rate limits apply)'));
-  console.log('  HyperCore chainId: 1337');
-  console.log('  Withdraw:        ' + (OPERATOR_PRIVATE_KEY ? 'non-custodial, gas sponsor ' + OPERATOR_WALLET_ADDR : 'disabled'));
+  console.log('  env: ' + NODE_ENV);
+  console.log('  LI.FI: ' + LIFI_API + (LIFI_API_KEY ? ' (key set)' : ' (no key)'));
   if (OPERATOR_PRIVATE_KEY) {
-    try   { const w = getOperatorWallet(); console.log('  Operator key:    verified -> ' + w.address); }
-    catch (e) { console.error('  Operator key:    INVALID --', e.message); }
-  }
-  if (!OKX_API_KEY)          console.warn('  WARNING: OKX credentials missing');
-  if (!HELIUS_API_KEY && !HELIUS_RPC_URL) console.warn('  WARNING: No Helius key');
-  if (!OPERATOR_PRIVATE_KEY) console.warn('  WARNING: OPERATOR_PRIVATE_KEY not set');
+    try { const w = getOperatorWallet(); console.log('  Operator: ' + w.address); }
+    catch (e) { console.error('  Operator key INVALID:', e.message); }
+  } else console.warn('  WARNING: OPERATOR_PRIVATE_KEY not set');
 });
 
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
