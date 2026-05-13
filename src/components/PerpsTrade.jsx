@@ -2,19 +2,11 @@ import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
 import { signL1Action } from '@nktkas/hyperliquid/signing';
-import {
-  fetchQuote as mayanFetchQuote,
-  swapFromSolana as mayanSwapFromSolana,
-  getHyperCoreUSDCDepositPermitParams,
-} from '@mayanfinance/swap-sdk';
 
 const ENABLE_TRADING        = process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
 const BUILDER_ADDRESS       = '';
 const BUILDER_FEE_TENTHS_BP = 5;
-const MAYAN_REFERRER_SOL    = '';
 const SOL_MINT              = 'So11111111111111111111111111111111111111112';
-const USDC_ARB_ADDR         = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
-const ARB_RPC_URL           = 'https://arb1.arbitrum.io/rpc';
 const LAMPORTS_PER_SOL      = 1_000_000_000;
 const DERIVATION_MSG        = (pub) =>
   `Nexus DEX: Authorize HyperCore Account\n\nWallet: ${pub}\n\nThis creates your non-custodial trading account. No SOL is spent.`;
@@ -228,12 +220,12 @@ async function fetchHlPositions(hlAddress) {
         szi,
         isLong:     szi > 0,
         size:       Math.abs(szi),
-        entryPx:    parseFloat(pos.entryPx   || 0),
-        unrealPnl:  parseFloat(pos.unrealizedPnl || 0),
+        entryPx:    parseFloat(pos.entryPx        || 0),
+        unrealPnl:  parseFloat(pos.unrealizedPnl  || 0),
         leverage:   pos.leverage?.value || 1,
-        marginUsed: parseFloat(pos.marginUsed    || 0),
-        posValue:   parseFloat(pos.positionValue || 0),
-        roe:        parseFloat(pos.returnOnEquity || 0),
+        marginUsed: parseFloat(pos.marginUsed      || 0),
+        posValue:   parseFloat(pos.positionValue   || 0),
+        roe:        parseFloat(pos.returnOnEquity  || 0),
       };
     });
 }
@@ -248,6 +240,44 @@ async function pollUntilFunded(hlAddress, targetUsd, timeoutMs = 180_000) {
   throw new Error('Bridge is taking longer than expected. Your SOL is safe - refresh to check.');
 }
 
+async function depositSolToHyperCore({
+  solLamports, hlAddress,
+  solPubkey, signSolTx, connection, onStatus,
+}) {
+  onStatus?.('Getting bridge route...');
+
+  const params = new URLSearchParams({
+    fromChain:   'SOL',
+    toChain:     '1337',
+    fromToken:   SOL_MINT,
+    toToken:     'USDC',
+    fromAmount:  String(solLamports),
+    fromAddress: solPubkey,
+    toAddress:   hlAddress,
+    slippage:    '0.10',
+    integrator:  'nexus-dex',
+  });
+
+  const r = await fetch(`/api/lifi/quote?${params}`);
+  const quote = await r.json();
+  if (!r.ok) throw new Error(quote.message || quote.error || 'LI.FI quote failed');
+  if (!quote.transactionRequest?.data) throw new Error('No transaction data from LI.FI');
+
+  onStatus?.('Sign in wallet...');
+
+  const { Transaction, VersionedTransaction } = await import('@solana/web3.js');
+  const buf = Buffer.from(quote.transactionRequest.data, 'base64');
+
+  let tx;
+  try { tx = VersionedTransaction.deserialize(buf); }
+  catch { tx = Transaction.from(buf); }
+
+  const signed = await signSolTx(tx);
+  const txHash = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false });
+
+  onStatus?.('Bridging...');
+  return { txHash };
+}
 
 async function signHlWithdraw(privateKey, action) {
   const mod      = await getEthers();
@@ -299,7 +329,6 @@ function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = fals
 
   const notional = reduceOnly ? margin : margin * lev;
   const coinSize = roundSize(notional / price);
-
   if (parseFloat(coinSize) <= 0) throw new Error('Order size too small for this market');
 
   const limitPx = aggressivePx(price, isLong);
@@ -320,9 +349,9 @@ function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = fals
 }
 
 async function setLeverageOnHL({ assetIndex, leverage, isCross = false, hlWalletData }) {
-  const action = { type: 'updateLeverage', asset: assetIndex, isCross, leverage };
-  const nonce  = Date.now();
-  const mod    = await getEthers();
+  const action   = { type: 'updateLeverage', asset: assetIndex, isCross, leverage };
+  const nonce    = Date.now();
+  const mod      = await getEthers();
   const ethersNs = getEthersNs(mod);
   const wallet   = new ethersNs.Wallet(hlWalletData.privateKey);
   const signature = await signL1Action({ wallet, action, nonce });
@@ -517,10 +546,10 @@ function PositionsPanel({ positions, marketData, onClose }) {
     <div style={{ marginBottom: 14 }}>
       <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', marginBottom: 8, ...T.mono }}>OPEN POSITIONS</div>
       {positions.map(pos => {
-        const pair    = marketData.find(p => p.id === pos.coin);
-        const markPx  = Number(pair?.price || 0);
-        const pnl     = pos.unrealPnl;
-        const pnlPct  = pos.marginUsed > 0 ? (pnl / pos.marginUsed) * 100 : 0;
+        const pair     = marketData.find(p => p.id === pos.coin);
+        const markPx   = Number(pair?.price || 0);
+        const pnl      = pos.unrealPnl;
+        const pnlPct   = pos.marginUsed > 0 ? (pnl / pos.marginUsed) * 100 : 0;
         const inProfit = pnl >= 0;
         return (
           <div key={pos.coin} style={{
@@ -552,8 +581,8 @@ function PositionsPanel({ positions, marketData, onClose }) {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 4, marginBottom: 10 }}>
               {[
-                ['Mark', fmt(markPx, 2)],
-                ['Value', fmt(pos.posValue, 2)],
+                ['Mark',   fmt(markPx, 2)],
+                ['Value',  fmt(pos.posValue, 2)],
                 ['Margin', fmt(pos.marginUsed, 2)],
               ].map(([l, v]) => (
                 <div key={l} style={{ padding: '5px 0' }}>
@@ -562,18 +591,13 @@ function PositionsPanel({ positions, marketData, onClose }) {
                 </div>
               ))}
             </div>
-            <button
-              onClick={() => onClose(pos, pair)}
-              style={{
-                width: '100%', padding: '9px', borderRadius: 10,
-                border: `1px solid ${inProfit ? 'rgba(61,213,152,.30)' : 'rgba(255,138,158,.30)'}`,
-                background: inProfit ? 'rgba(61,213,152,.06)' : 'rgba(255,138,158,.06)',
-                color: inProfit ? C.up : C.down,
-                fontWeight: 700, fontSize: 12, cursor: 'pointer', ...T.body,
-              }}
-            >
-              Close Position
-            </button>
+            <button onClick={() => onClose(pos, pair)} style={{
+              width: '100%', padding: '9px', borderRadius: 10,
+              border: `1px solid ${inProfit ? 'rgba(61,213,152,.30)' : 'rgba(255,138,158,.30)'}`,
+              background: inProfit ? 'rgba(61,213,152,.06)' : 'rgba(255,138,158,.06)',
+              color: inProfit ? C.up : C.down,
+              fontWeight: 700, fontSize: 12, cursor: 'pointer', ...T.body,
+            }}>Close Position</button>
           </div>
         );
       })}
@@ -647,8 +671,8 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
 
   const handleWithdraw = async () => {
     const usd = parseFloat(amount);
-    if (!usd || usd < 5)            { setError('Minimum withdrawal is $5'); return; }
-    if (usd > hlBalance * 0.99)     { setError('Amount exceeds available balance'); return; }
+    if (!usd || usd < 5)                  { setError('Minimum withdrawal is $5'); return; }
+    if (usd > hlBalance * 0.99)           { setError('Amount exceeds available balance'); return; }
     if (!isValidSolAddress(walletPubkey)) { setError('Invalid Solana destination'); return; }
 
     setStatus('loading'); setError(''); setStatusMsg('Initiating withdrawal...');
@@ -680,7 +704,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
         try {
           const r    = await fetch('/api/bridge/withdraw/status?id=' + encodeURIComponent(tid));
           const data = await r.json();
-          if (data.status === 'bridging')   setStatusMsg('Bridging USDC to SOL via Mayan...');
+          if (data.status === 'bridging')   setStatusMsg('Sending gas to your address...');
           if (data.status === 'finalizing') setStatusMsg('Finalizing...');
           if (data.status === 'complete') {
             clearInterval(pollRef.current);
@@ -688,14 +712,10 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
             setStatusMsg('');
           } else if (data.status === 'failed') {
             clearInterval(pollRef.current);
-            throw new Error(data.error || 'Withdrawal failed');
+            setError(data.error || 'Withdrawal failed');
+            setStatus('error');
           }
-        } catch (e) {
-          if (e.message !== 'Withdrawal failed') return;
-          clearInterval(pollRef.current);
-          setError(e.message);
-          setStatus('error');
-        }
+        } catch {}
       }, 8_000);
 
     } catch (e) {
@@ -722,7 +742,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
           <div>
             <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 18, letterSpacing: '-.02em', ...T.display }}>Withdraw</div>
-            <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>HyperCore to SOL in your Solana wallet (~4 min)</div>
+            <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>HyperCore to your Arbitrum address (~2 min)</div>
           </div>
           <button onClick={isBusy ? undefined : onClose} disabled={isBusy} style={{ background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`, color: C.muted, width: 32, height: 32, borderRadius: 10, fontSize: 18, cursor: 'pointer', opacity: isBusy ? 0.4 : 1 }}>x</button>
         </div>
@@ -741,7 +761,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
         </div>
 
         <div style={{ padding: '10px 12px', background: 'rgba(245,181,61,.06)', border: '1px solid rgba(245,181,61,.20)', borderRadius: 10, marginBottom: 14, fontSize: 10, color: C.amber, fontWeight: 600, ...T.body }}>
-          HL charges a $1 flat withdrawal fee. Mayan ~0.1% bridge fee. ~4 min total.
+          HL charges a $1 flat withdrawal fee. USDC arrives on Arbitrum ready to bridge.
         </div>
 
         {(isBusy || isDone) && statusMsg && (
@@ -753,8 +773,8 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
         )}
         {isDone && (
           <div style={{ marginBottom: 12, padding: 12, background: 'rgba(61,213,152,.08)', border: `1px solid rgba(61,213,152,.24)`, borderRadius: 12, textAlign: 'center' }}>
-            <div style={{ fontSize: 14, color: C.up, fontWeight: 800, ...T.display }}>SOL on its way &#x2713;</div>
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 4, ...T.body }}>Check your Solana wallet in a moment</div>
+            <div style={{ fontSize: 14, color: C.up, fontWeight: 800, ...T.display }}>USDC on its way &#x2713;</div>
+            <div style={{ fontSize: 11, color: C.muted, marginTop: 4, ...T.body }}>Check your Arbitrum address - gas sponsored for bridge</div>
           </div>
         )}
         {error && <div style={{ marginBottom: 12, padding: 11, background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.24)', borderRadius: 12, fontSize: 12, color: C.down, ...T.body }}>{error}</div>}
@@ -769,7 +789,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
             cursor: isBusy || !amount ? 'not-allowed' : 'pointer',
             minHeight: 52, opacity: !amount || isBusy ? 0.55 : 1, ...T.display,
           }}>
-            {isBusy ? 'Processing...' : 'Withdraw to Solana'}
+            {isBusy ? 'Processing...' : 'Withdraw from HyperCore'}
           </button>
         )}
       </div>
@@ -895,9 +915,16 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, marke
         const needed   = usd - currentHlBal;
         const lamports = Math.ceil((needed / solPrice) * LAMPORTS_PER_SOL * 1.03);
         setStatusMsg('Bridging SOL...');
+        const { txHash } = await depositSolToHyperCore({
+          solLamports:  lamports,
+          hlAddress:    walletData.address,
+          solPubkey:    walletPubkey,
+          signSolTx:    signTransaction,
+          connection,
+          onStatus:     setStatusMsg,
         });
         saveBridge('deposit', { txHash, usd: needed });
-        setStatusMsg('Waiting for funds (~15s)...');
+        setStatusMsg('Waiting for funds (~30s)...');
         currentHlBal = await pollUntilFunded(walletData.address, usd);
         setHlBalance(currentHlBal);
         clearBridge('deposit');
@@ -1150,7 +1177,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, marke
           )}
 
           <div style={{ fontSize: 10, color: C.muted2, textAlign: 'center', marginTop: 14, fontWeight: 600, ...T.mono }}>
-            Non-custodial &middot; Powered by Hyperliquid &amp; Mayan
+            Non-custodial &middot; Powered by Hyperliquid &amp; LI.FI
           </div>
         </div>
       </div>
