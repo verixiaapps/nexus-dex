@@ -2,14 +2,15 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
 import { signL1Action } from '@nktkas/hyperliquid/signing';
-import {  
+import {
   fetchQuote as mayanFetchQuote,
   swapFromSolana as mayanSwapFromSolana,
+  getHyperCoreUSDCDepositPermitParams,
 } from '@mayanfinance/swap-sdk';
 
 /* NEXUS DEX — Hyperliquid Perps.
- * Bridge: Mayan Swift v13 (deposits client-side via toChain='hypercore', no
- *                          permit signature needed; withdraws server-orchestrated). */
+ * Bridge: Mayan Swift v13 (deposits client-side via toChain='hypercore' with
+ *                          USDC permit signature; withdraws server-orchestrated). */
 
 const ENABLE_TRADING = process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
 const BUILDER_ADDRESS = '';
@@ -17,6 +18,7 @@ const BUILDER_FEE_TENTHS_BP = 5;
 
 const SOL_MINT      = 'So11111111111111111111111111111111111111112';
 const USDC_ARB_ADDR = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
+const ARB_RPC_URL   = 'https://arb1.arbitrum.io/rpc';
 
 const C = {
   bg:'#04070f', bg2:'#070b16', surface:'#0a1020', surface2:'#0e1428',
@@ -440,7 +442,7 @@ async function pollMayanStatus(txHash) {
   } catch { return { status: 'INPROGRESS' }; }
 }
 
-async function executeMayanDeposit({ usdAmount, hlAddress, solPubkey, signSolTx, connection, onStatus }) {
+async function executeMayanDeposit({ usdAmount, hlAddress, hlPrivateKey, solPubkey, signSolTx, connection, onStatus }) {
   onStatus?.('preparing');
   const solPrice = await fetchSolPrice();
   const lamports = Math.ceil(((usdAmount * 1.05) / solPrice) * 1e9);
@@ -456,16 +458,25 @@ async function executeMayanDeposit({ usdAmount, hlAddress, solPubkey, signSolTx,
   if (!quotes || !quotes.length) throw new Error('No Mayan route found');
   const quote = quotes[0];
 
+  onStatus?.('signing_permit');
+  const mod = await getEthers();
+  const ethersNs = getEthersNs(mod);
+  if (!ethersNs) throw new Error('Ethers unavailable');
+
+  const arbProvider = new ethersNs.JsonRpcProvider(ARB_RPC_URL);
+  const hlWalletEvm = new ethersNs.Wallet(hlPrivateKey, arbProvider);
+
+  const permitParams = await getHyperCoreUSDCDepositPermitParams(quote, hlAddress, arbProvider);
+  const { value, domain, types } = permitParams;
+  const usdcPermitSignature = await signTypedDataCompat(hlWalletEvm, domain, types, value);
+
   onStatus?.('awaiting_signature');
   const signSolanaTransaction = async (tx) => await signSolTx(tx);
 
   const swapResult = await mayanSwapFromSolana(
-    quote,
-    solPubkey,
-    hlAddress,    // user's HL EVM address as destination — v13 handles permit internally
-    {},           // referrer addresses (none)
-    signSolanaTransaction,
-    connection,
+    quote, solPubkey, hlAddress, {},
+    signSolanaTransaction, connection,
+    { usdcPermitSignature },
   );
 
   const txHash = typeof swapResult === 'string'
@@ -539,6 +550,7 @@ async function signHlWithdraw3(privateKey, action) {
 
 const DEPOSIT_STATUS_TEXT = {
   preparing:          'Preparing quote…',
+  signing_permit:     'Authorizing HL deposit…',
   awaiting_signature: 'Waiting for Solana signature…',
   bridging:           'Bridging via Mayan… (~15s)',
   COMPLETED:          'Deposit complete!',
@@ -767,10 +779,16 @@ function TransferModal({ open, onClose, mode, hlAddress, walletPubkey }) {
     if (!hlAddress)       { setError('Create your Hyperliquid wallet first'); return; }
     if (!signTransaction) { setError('Wallet cannot sign transactions'); return; }
 
+    const stored = getStoredHlWallet(walletPubkey);
+    if (!stored?.privateKey) { setError('HL wallet key not found locally. Create wallet first.'); return; }
+    if (stored.address.toLowerCase() !== hlAddress.toLowerCase()) {
+      setError('Stored HL key does not match wallet address'); return;
+    }
+
     try {
       setStatus('processing');
       const result = await executeMayanDeposit({
-        usdAmount: usd, hlAddress,
+        usdAmount: usd, hlAddress, hlPrivateKey: stored.privateKey,
         solPubkey: publicKey.toString(), signSolTx: signTransaction,
         connection, onStatus: setPipelineStatus,
       });
@@ -1584,4 +1602,5 @@ export default function PerpsTrade({ onConnectWallet }) {
     </>
   );
 }
+
 
