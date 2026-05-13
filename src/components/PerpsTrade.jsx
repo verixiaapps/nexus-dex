@@ -5,12 +5,11 @@ import { signL1Action } from '@nktkas/hyperliquid/signing';
 import {
   fetchQuote as mayanFetchQuote,
   swapFromSolana as mayanSwapFromSolana,
-  getHyperCoreUSDCDepositPermitParams,
 } from '@mayanfinance/swap-sdk';
 
 /* NEXUS DEX — Hyperliquid Perps.
- * Bridge: Mayan Swift (deposits client-side via toChain='hypercore';
- *                      withdraws server-orchestrated using Mayan). */
+ * Bridge: Mayan Swift v13 (deposits client-side via toChain='hypercore', no
+ *                          permit signature needed; withdraws server-orchestrated). */
 
 const ENABLE_TRADING = process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
 const BUILDER_ADDRESS = '';
@@ -18,7 +17,6 @@ const BUILDER_FEE_TENTHS_BP = 5;
 
 const SOL_MINT      = 'So11111111111111111111111111111111111111112';
 const USDC_ARB_ADDR = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
-const ARB_RPC_URL   = 'https://arb1.arbitrum.io/rpc';
 
 const C = {
   bg:'#04070f', bg2:'#070b16', surface:'#0a1020', surface2:'#0e1428',
@@ -405,7 +403,7 @@ async function placeOrder({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   return hlRequest({ action: built.action, nonce, signature }, true);
 }
 
-/* BRIDGE — Mayan Swift */
+/* BRIDGE — Mayan Swift v13 */
 
 const BRIDGE_TRACK_KEY = mode => 'nexus_bridge_' + mode;
 
@@ -442,7 +440,7 @@ async function pollMayanStatus(txHash) {
   } catch { return { status: 'INPROGRESS' }; }
 }
 
-async function executeMayanDeposit({ usdAmount, hlAddress, hlPrivateKey, solPubkey, signSolTx, connection, onStatus }) {
+async function executeMayanDeposit({ usdAmount, hlAddress, solPubkey, signSolTx, connection, onStatus }) {
   onStatus?.('preparing');
   const solPrice = await fetchSolPrice();
   const lamports = Math.ceil(((usdAmount * 1.05) / solPrice) * 1e9);
@@ -458,25 +456,16 @@ async function executeMayanDeposit({ usdAmount, hlAddress, hlPrivateKey, solPubk
   if (!quotes || !quotes.length) throw new Error('No Mayan route found');
   const quote = quotes[0];
 
-  onStatus?.('signing_permit');
-  const mod = await getEthers();
-  const ethersNs = getEthersNs(mod);
-  if (!ethersNs) throw new Error('Ethers unavailable');
-
-  const arbProvider = new ethersNs.JsonRpcProvider(ARB_RPC_URL);
-  const hlWalletEvm = new ethersNs.Wallet(hlPrivateKey, arbProvider);
-
-  const permitParams = await getHyperCoreUSDCDepositPermitParams(quote, hlAddress, arbProvider);
-  const { value, domain, types } = permitParams;
-  const usdcPermitSignature = await signTypedDataCompat(hlWalletEvm, domain, types, value);
-
+  onStatus?.('awaiting_signature');
   const signSolanaTransaction = async (tx) => await signSolTx(tx);
 
-  onStatus?.('awaiting_signature');
   const swapResult = await mayanSwapFromSolana(
-    quote, solPubkey, hlAddress, {},
-    signSolanaTransaction, connection,
-    { usdcPermitSignature },
+    quote,
+    solPubkey,
+    hlAddress,    // user's HL EVM address as destination — v13 handles permit internally
+    {},           // referrer addresses (none)
+    signSolanaTransaction,
+    connection,
   );
 
   const txHash = typeof swapResult === 'string'
@@ -550,7 +539,6 @@ async function signHlWithdraw3(privateKey, action) {
 
 const DEPOSIT_STATUS_TEXT = {
   preparing:          'Preparing quote…',
-  signing_permit:     'Authorizing HL deposit…',
   awaiting_signature: 'Waiting for Solana signature…',
   bridging:           'Bridging via Mayan… (~15s)',
   COMPLETED:          'Deposit complete!',
@@ -774,21 +762,15 @@ function TransferModal({ open, onClose, mode, hlAddress, walletPubkey }) {
   const handleDeposit = async () => {
     setError('');
     const usd = parseFloat(amount);
-    if (!usd || usd < 10)    { setError('Minimum deposit is $10'); return; }
-    if (!publicKey)          { setError('Connect a Solana wallet first'); return; }
-    if (!hlAddress)          { setError('Create your Hyperliquid wallet first'); return; }
-    if (!signTransaction)    { setError('Wallet cannot sign transactions'); return; }
-
-    const stored = getStoredHlWallet(walletPubkey);
-    if (!stored?.privateKey) { setError('HL wallet key not found locally. Create wallet first.'); return; }
-    if (stored.address.toLowerCase() !== hlAddress.toLowerCase()) {
-      setError('Stored HL key does not match wallet address'); return;
-    }
+    if (!usd || usd < 10) { setError('Minimum deposit is $10'); return; }
+    if (!publicKey)       { setError('Connect a Solana wallet first'); return; }
+    if (!hlAddress)       { setError('Create your Hyperliquid wallet first'); return; }
+    if (!signTransaction) { setError('Wallet cannot sign transactions'); return; }
 
     try {
       setStatus('processing');
       const result = await executeMayanDeposit({
-        usdAmount: usd, hlAddress, hlPrivateKey: stored.privateKey,
+        usdAmount: usd, hlAddress,
         solPubkey: publicKey.toString(), signSolTx: signTransaction,
         connection, onStatus: setPipelineStatus,
       });
@@ -806,9 +788,9 @@ function TransferModal({ open, onClose, mode, hlAddress, walletPubkey }) {
   const handleWithdraw = async () => {
     setError('');
     const usd = parseFloat(amount);
-    if (!usd || usd < 5)                 { setError('Minimum withdraw is $5'); return; }
-    if (!hlAddress)                      { setError('No Hyperliquid wallet found'); return; }
-    if (!isValidSolAddress(solDest))     { setError('Enter a valid Solana destination address'); return; }
+    if (!usd || usd < 5)             { setError('Minimum withdraw is $5'); return; }
+    if (!hlAddress)                  { setError('No Hyperliquid wallet found'); return; }
+    if (!isValidSolAddress(solDest)) { setError('Enter a valid Solana destination address'); return; }
 
     const stored = getStoredHlWallet(walletPubkey);
     if (!stored?.privateKey) { setError('Hyperliquid wallet key not found locally. Create wallet first.'); return; }
