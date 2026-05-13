@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react'
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
 import { signL1Action } from '@nktkas/hyperliquid/signing';
-import {
+import { 
   fetchQuote as mayanFetchQuote,
   swapFromSolana as mayanSwapFromSolana,
 } from '@mayanfinance/swap-sdk';
