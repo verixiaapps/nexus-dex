@@ -455,8 +455,52 @@ async function executeMayanDeposit({ usdAmount, hlAddress, hlPrivateKey, solPubk
     toChain: 'hypercore',
     slippageBps: 'auto',
   });
-  if (!quotes || !quotes.length) throw new Error('No Mayan route found');
+  if (!quotes?.length) throw new Error('No Mayan route found');
   const quote = quotes[0];
+
+  onStatus?.('signing_permit');
+  const mod = await getEthers();
+  const ethersNs = getEthersNs(mod);
+  if (!ethersNs) throw new Error('Ethers unavailable');
+
+  const arbProvider = new ethersNs.JsonRpcProvider(ARB_RPC_URL);
+  const hlWalletEvm = new ethersNs.Wallet(hlPrivateKey, arbProvider);
+  const { value, domain, types } = await getHyperCoreUSDCDepositPermitParams(quote, hlAddress, arbProvider);
+  const usdcPermitSignature = await signTypedDataCompat(hlWalletEvm, domain, types, value);
+
+  onStatus?.('awaiting_signature');
+  const signSolanaTransaction = async (tx) => await signSolTx(tx);
+
+  // Try every known position/key for the permit signature
+  const attempts = [
+    { label: '7th: {usdcPermitSignature}',  fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, {}, signSolanaTransaction, connection, { usdcPermitSignature }) },
+    { label: '4th: {usdcPermitSignature}',  fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, { usdcPermitSignature }, signSolanaTransaction, connection) },
+    { label: '7th: raw string',             fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, {}, signSolanaTransaction, connection, usdcPermitSignature) },
+    { label: '7th: {permit}',               fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, {}, signSolanaTransaction, connection, { permit: usdcPermitSignature }) },
+    { label: '7th: {permitSignature}',      fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, {}, signSolanaTransaction, connection, { permitSignature: usdcPermitSignature }) },
+  ];
+
+  let lastErr = null;
+  for (const a of attempts) {
+    try {
+      const result = await a.fn();
+      console.log('[mayan deposit] succeeded with', a.label);
+      onStatus?.('bridging');
+      const txHash = typeof result === 'string'
+        ? result
+        : (result?.signature || result?.hash || result?.txHash);
+      if (!txHash) throw new Error('Mayan did not return tx hash');
+      return { txHash, quote };
+    } catch (e) {
+      lastErr = e;
+      console.warn('[mayan deposit] attempt failed:', a.label, e.message);
+      // If error is NOT about permit, it's a real failure — stop
+      if (!/permit/i.test(e.message || '')) throw e;
+    }
+  }
+  throw new Error('All permit positions failed: ' + (lastErr?.message || 'unknown'));
+}
+
 
   onStatus?.('signing_permit');
   const mod = await getEthers();
