@@ -1,8 +1,3 @@
-/**
- * NEXUS DEX -- Backend Proxy Server
- * Fixes: SOL_NATIVE_MINT (wrapped SOL, not zero addr) + swapFromEvm referrerAddress = null
- */
-
 require('dotenv').config();
 
 const crypto    = require('crypto');
@@ -12,7 +7,6 @@ const path      = require('path');
 const rateLimit = require('express-rate-limit');
 const multer    = require('multer');
 const ethers    = require('ethers');
-const mayan     = require('@mayanfinance/swap-sdk');
 
 const app      = express();
 const PORT     = process.env.PORT || 3001;
@@ -40,7 +34,7 @@ const CSP_DIRECTIVES = [
   ['frame-ancestors', ["'none'"]],
   ['frame-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org', 'https://challenges.cloudflare.com', ...EXTRA_FRAME_SRC]],
   ['child-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org']],
-  ['connect-src',     ["'self'", 'https://web3.okx.com', 'https://quote-api.jup.ag', 'https://lite-api.jup.ag', 'https://api.jup.ag', 'https://token.jup.ag', 'https://api.hyperliquid.xyz', 'https://api.hyperliquid-testnet.xyz', 'https://pumpportal.fun', 'wss://pumpportal.fun', 'https://api.dexscreener.com', 'https://*.dexscreener.com', 'https://price-api.mayan.finance', 'https://explorer-api.mayan.finance', 'https://auth.privy.io', 'https://*.privy.io', 'https://*.privy.systems', 'https://*.rpc.privy.systems', 'https://explorer-api.walletconnect.com', 'https://*.walletconnect.com', 'https://*.walletconnect.org', 'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org', 'wss://*.walletconnect.com', 'wss://*.walletconnect.org', 'wss://www.walletlink.org', 'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com', 'https://api.pinata.cloud', 'https://*.publicnode.com', 'https://*.drpc.org', ...EXTRA_CONNECT_SRC]],
+  ['connect-src',     ["'self'", 'https://li.quest', 'https://web3.okx.com', 'https://quote-api.jup.ag', 'https://lite-api.jup.ag', 'https://api.jup.ag', 'https://token.jup.ag', 'https://api.hyperliquid.xyz', 'https://api.hyperliquid-testnet.xyz', 'https://pumpportal.fun', 'wss://pumpportal.fun', 'https://api.dexscreener.com', 'https://*.dexscreener.com', 'https://auth.privy.io', 'https://*.privy.io', 'https://*.privy.systems', 'https://*.rpc.privy.systems', 'https://explorer-api.walletconnect.com', 'https://*.walletconnect.com', 'https://*.walletconnect.org', 'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org', 'wss://*.walletconnect.com', 'wss://*.walletconnect.org', 'wss://www.walletlink.org', 'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com', 'https://api.pinata.cloud', 'https://*.publicnode.com', 'https://*.drpc.org', ...EXTRA_CONNECT_SRC]],
   ['worker-src',      ["'self'", 'blob:']],
   ['manifest-src',    ["'self'"]],
 ];
@@ -74,11 +68,10 @@ const OKX_SOL_FEE_PCT    = process.env.OKX_SOL_FEE_PCT    || '5';
 const OKX_EVM_FEE_PCT    = process.env.OKX_EVM_FEE_PCT    || '3';
 const OKX_SOLANA_CHAIN   = '501';
 
-const JUPITER_ENABLED       = process.env.JUPITER_ENABLED === '1';
-const JUPITER_FALLBACK_ONLY = process.env.JUPITER_FALLBACK_ONLY !== '0';
-const JUPITER_ACCOUNT       = process.env.JUPITER_ACCOUNT    || 'NEXUS_DEX_FALLBACK';
-const JUPITER_QUOTE_BASE    = (process.env.JUPITER_QUOTE_BASE || 'https://quote-api.jup.ag/v6').replace(/\/+$/, '');
-const JUPITER_API_KEY       = process.env.JUPITER_API_KEY    || '';
+const JUPITER_ENABLED    = process.env.JUPITER_ENABLED === '1';
+const JUPITER_ACCOUNT    = process.env.JUPITER_ACCOUNT    || 'NEXUS_DEX_FALLBACK';
+const JUPITER_QUOTE_BASE = (process.env.JUPITER_QUOTE_BASE || 'https://quote-api.jup.ag/v6').replace(/\/+$/, '');
+const JUPITER_API_KEY    = process.env.JUPITER_API_KEY    || '';
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY  || process.env.REACT_APP_HELIUS_API_KEY || '';
 const HELIUS_RPC_URL = process.env.HELIUS_RPC_URL  || process.env.REACT_APP_SOLANA_RPC     || '';
@@ -87,13 +80,12 @@ const PINATA_JWT     = process.env.PINATA_JWT      || '';
 const OPERATOR_PRIVATE_KEY = process.env.OPERATOR_PRIVATE_KEY || '';
 const OPERATOR_WALLET_ADDR = '0xeace360F8faB3f739CBC4e026b58efC5866fAdC1';
 const ARB_RPC_URL          = process.env.ARB_RPC_URL || 'https://arb1.arbitrum.io/rpc';
-const HL_BRIDGE_ADDR       = '0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7';
-const USDC_ARB_ADDR        = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
 const HL_API               = 'https://api.hyperliquid.xyz';
 const OKX_TICKER_URL       = 'https://www.okx.com/api/v5/market/ticker?instId=SOL-USDT';
-const MAYAN_EXPLORER_API   = 'https://explorer-api.mayan.finance';
-// FIX 1: wrapped SOL mint -- not zero address
-const SOL_NATIVE_MINT      = 'So11111111111111111111111111111111111111112';
+const LIFI_API             = 'https://li.quest/v1';
+const LIFI_API_KEY         = process.env.LIFI_API_KEY || '';
+// HyperCore chain ID in LI.FI = 1337
+// Solana chain ID in LI.FI    = 1151111081099710
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'https://swap.verixiaapps.com,http://localhost:3000')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -113,18 +105,14 @@ app.use(cors({
 app.use(express.json({ limit: '256kb' }));
 
 const apiLimiter = rateLimit({
-  windowMs: 60_000,
-  max: 600,
-  standardHeaders: true,
-  legacyHeaders: false,
+  windowMs: 60_000, max: 600,
+  standardHeaders: true, legacyHeaders: false,
   message: { error: 'Too many requests, slow down.' },
   skip: r => r.path === '/health' || r.path === '/api/health',
 });
 const uploadLimiter = rateLimit({
-  windowMs: 60_000,
-  max: 10,
-  standardHeaders: true,
-  legacyHeaders: false,
+  windowMs: 60_000, max: 10,
+  standardHeaders: true, legacyHeaders: false,
   message: { error: 'Too many uploads.' },
 });
 app.use('/api/', apiLimiter);
@@ -177,29 +165,22 @@ function respondJsonOrError(res, response, result) {
 function buildForwardedQuery(req) { return queryStringOf(req) || ''; }
 
 const getCache = new Map();
-
 function getCachedJson(url) {
   const hit = getCache.get(url);
   if (!hit) return null;
   if (Date.now() > hit.expiresAt) { getCache.delete(url); return null; }
   return hit;
 }
-
 function setCachedJson(url, status, payload, ttlMs) {
   getCache.set(url, { status, payload, expiresAt: Date.now() + ttlMs });
-  if (getCache.size > 250) {
-    const k = getCache.keys().next().value;
-    if (k) getCache.delete(k);
-  }
+  if (getCache.size > 250) { const k = getCache.keys().next().value; if (k) getCache.delete(k); }
 }
 
 function okxSign(ts, method, okxPath, body) {
-  return crypto
-    .createHmac('sha256', OKX_SECRET_KEY)
+  return crypto.createHmac('sha256', OKX_SECRET_KEY)
     .update(ts + method.toUpperCase() + okxPath + (body || ''))
     .digest('base64');
 }
-
 function buildOkxHeaders(method, okxPath, body) {
   const ts = new Date().toISOString();
   return {
@@ -214,30 +195,15 @@ function buildOkxHeaders(method, okxPath, body) {
 }
 
 const OKX_ALLOWED_ENDPOINTS = new Set([
-  '/dex/aggregator/quote',
-  '/dex/aggregator/swap',
-  '/dex/aggregator/swap-instruction',
-  '/dex/aggregator/tokens',
-  '/dex/aggregator/all-tokens',
-  '/dex/aggregator/liquidity-sources',
-  '/dex/aggregator/supported/chain',
-  '/dex/aggregator/approve-transaction',
-  '/dex/aggregator/pre-transaction',
-  '/dex/aggregator/transaction',
-  '/dex/aggregator/history',
-  '/dex/market/token/basic-info',
-  '/dex/market/candles',
-  '/dex/market/price-info',
-  '/dex/market/memepump/tokenList',
-  '/dex/market/memepump/tokenDetails',
-  '/dex/cross-chain/quote',
-  '/dex/cross-chain/build-tx',
-  '/dex/cross-chain/approve-transaction',
-  '/dex/cross-chain/status',
-  '/dex/cross-chain/supported/chains',
-  '/dex/cross-chain/tokens',
-  '/dex/cross-chain/token-pairs',
-  '/dex/cross-chain/bridges',
+  '/dex/aggregator/quote', '/dex/aggregator/swap', '/dex/aggregator/swap-instruction',
+  '/dex/aggregator/tokens', '/dex/aggregator/all-tokens', '/dex/aggregator/liquidity-sources',
+  '/dex/aggregator/supported/chain', '/dex/aggregator/approve-transaction',
+  '/dex/aggregator/pre-transaction', '/dex/aggregator/transaction', '/dex/aggregator/history',
+  '/dex/market/token/basic-info', '/dex/market/candles', '/dex/market/price-info',
+  '/dex/market/memepump/tokenList', '/dex/market/memepump/tokenDetails',
+  '/dex/cross-chain/quote', '/dex/cross-chain/build-tx', '/dex/cross-chain/approve-transaction',
+  '/dex/cross-chain/status', '/dex/cross-chain/supported/chains', '/dex/cross-chain/tokens',
+  '/dex/cross-chain/token-pairs', '/dex/cross-chain/bridges',
 ]);
 
 function injectOkxFee(params) {
@@ -251,42 +217,25 @@ async function proxyOkx(req, res) {
   try {
     if (!OKX_API_KEY || !OKX_SECRET_KEY || !OKX_PASSPHRASE)
       return res.status(503).json({ error: 'OKX credentials not configured' });
-
     const subPath = req.path.replace('/api/okx', '');
     if (!OKX_ALLOWED_ENDPOINTS.has(subPath))
       return res.status(404).json({ error: 'OKX endpoint not allowed: ' + subPath });
-
     const params = new URLSearchParams(queryStringOf(req).slice(1));
-    if (
-      params.get('chainIndex') === OKX_SOLANA_CHAIN &&
-      (subPath === '/dex/aggregator/swap' || subPath === '/dex/aggregator/swap-instruction')
-    ) injectOkxFee(params);
-
-    const qs      = params.toString();
-    const okxPath = '/api/v6' + subPath + (qs ? '?' + qs : '');
-    const okxUrl  = 'https://web3.okx.com' + okxPath;
-    const bodyStr = req.method !== 'GET' && req.method !== 'HEAD' && req.body
-      ? JSON.stringify(req.body)
-      : '';
+    if (params.get('chainIndex') === OKX_SOLANA_CHAIN &&
+        (subPath === '/dex/aggregator/swap' || subPath === '/dex/aggregator/swap-instruction'))
+      injectOkxFee(params);
+    const qs       = params.toString();
+    const okxPath  = '/api/v6' + subPath + (qs ? '?' + qs : '');
+    const okxUrl   = 'https://web3.okx.com' + okxPath;
+    const bodyStr  = req.method !== 'GET' && req.method !== 'HEAD' && req.body ? JSON.stringify(req.body) : '';
     const fetchOpts = { method: req.method, headers: buildOkxHeaders(req.method, okxPath, bodyStr) };
     if (bodyStr) fetchOpts.body = bodyStr;
-
     const cacheable = req.method === 'GET' && [
-      '/dex/aggregator/tokens',
-      '/dex/aggregator/all-tokens',
-      '/dex/aggregator/liquidity-sources',
-      '/dex/aggregator/supported/chain',
-      '/dex/cross-chain/supported/chains',
-      '/dex/cross-chain/tokens',
-      '/dex/cross-chain/token-pairs',
-      '/dex/cross-chain/bridges',
+      '/dex/aggregator/tokens', '/dex/aggregator/all-tokens', '/dex/aggregator/liquidity-sources',
+      '/dex/aggregator/supported/chain', '/dex/cross-chain/supported/chains',
+      '/dex/cross-chain/tokens', '/dex/cross-chain/token-pairs', '/dex/cross-chain/bridges',
     ].includes(subPath);
-
-    if (cacheable) {
-      const c = getCachedJson(okxUrl);
-      if (c) return res.status(c.status).json(c.payload);
-    }
-
+    if (cacheable) { const c = getCachedJson(okxUrl); if (c) return res.status(c.status).json(c.payload); }
     const response = await fetchWithTimeout(okxUrl, fetchOpts, 15_000);
     const result   = await safeJson(response);
     if (cacheable && response.ok && result.parsed !== null)
@@ -313,17 +262,11 @@ app.get('/api/test-price-info', async (req, res) => {
       15_000,
     );
     res.json(await response.json());
-  } catch (e) {
-    res.json({ error: e.message });
-  }
+  } catch (e) { res.json({ error: e.message }); }
 });
 
 function buildJupiterHeaders() {
-  const h = {
-    Accept:            'application/json',
-    'Content-Type':    'application/json',
-    'X-Nexus-Account': JUPITER_ACCOUNT,
-  };
+  const h = { Accept: 'application/json', 'Content-Type': 'application/json', 'X-Nexus-Account': JUPITER_ACCOUNT };
   if (JUPITER_API_KEY) h['x-api-key'] = JUPITER_API_KEY;
   return h;
 }
@@ -413,14 +356,12 @@ app.get('/api/dexscreener/*', async (req, res) => {
 });
 
 function isPlainObject(v) { return Boolean(v) && typeof v === 'object' && !Array.isArray(v); }
-
 function isHexString(v, bytes) {
   const s = String(v || '');
   if (!s.startsWith('0x')) return false;
   if (bytes && s.length !== 2 + bytes * 2) return false;
   return /^0x[0-9a-fA-F]+$/.test(s);
 }
-
 function validateHyperliquidSignature(sig) {
   if (!isPlainObject(sig))         return 'Missing signature object';
   if (!isHexString(sig.r, 32))     return 'Invalid signature.r';
@@ -430,7 +371,6 @@ function validateHyperliquidSignature(sig) {
   if (![0, 1, 27, 28].includes(v)) return 'Invalid signature.v value';
   return null;
 }
-
 function validateHyperliquidExchangePayload(body) {
   if (!isPlainObject(body))        return 'Invalid request body';
   if (body.type === 'placeOrder')  return 'Unsigned router payload -- frontend must sign before sending.';
@@ -457,10 +397,7 @@ async function proxyHyperliquidExchange(req, res, baseUrl, tag) {
     );
     const result = await safeJson(response);
     if (!response.ok)
-      return res.status(response.status).json({
-        error:  `${tag} exchange failed`,
-        detail: result.parsed || result.raw?.slice(0, 500),
-      });
+      return res.status(response.status).json({ error: `${tag} exchange failed`, detail: result.parsed || result.raw?.slice(0, 500) });
     return respondJsonOrError(res, response, result);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: `${tag} exchange timed out` });
@@ -506,7 +443,6 @@ app.post('/api/hyperliquid-testnet/exchange',
   (req, res) => proxyHyperliquidExchange(req, res, 'https://api.hyperliquid-testnet.xyz', 'Hyperliquid testnet'));
 
 let _solPriceCache = { p: 0, ts: 0 };
-
 async function fetchSolPriceUsd() {
   const now = Date.now();
   if (now - _solPriceCache.ts < 30_000 && _solPriceCache.p > 0) return _solPriceCache.p;
@@ -527,15 +463,49 @@ app.get('/api/sol-price', async (req, res) => {
   }
 });
 
-const USDC_ABI = [
-  'function allowance(address,address) view returns (uint256)',
-  'function approve(address,uint256) returns (bool)',
-  'function balanceOf(address) view returns (uint256)',
-  'event Transfer(address indexed from, address indexed to, uint256 value)',
-];
+/* ── LI.FI proxy ──────────────────────────────────────────────────────── */
+function buildLifiHeaders() {
+  const h = { Accept: 'application/json' };
+  if (LIFI_API_KEY) h['x-lifi-api-key'] = LIFI_API_KEY;
+  return h;
+}
+
+app.get('/api/lifi/quote', async (req, res) => {
+  try {
+    const params = new URLSearchParams(req.query);
+    params.set('skipSimulation', 'true');
+    const r = await fetchWithTimeout(`${LIFI_API}/quote?${params}`, { headers: buildLifiHeaders() }, 15_000);
+    return respondJsonOrError(res, r, await safeJson(r));
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'LI.FI timed out' });
+    logError('lifi-quote', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+app.get('/api/lifi/status', async (req, res) => {
+  try {
+    const params = new URLSearchParams(req.query);
+    const r = await fetchWithTimeout(`${LIFI_API}/status?${params}`, { headers: buildLifiHeaders() }, 10_000);
+    return respondJsonOrError(res, r, await safeJson(r));
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'LI.FI status timed out' });
+    logError('lifi-status', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+/* ── Withdraw (non-custodial) ─────────────────────────────────────────── */
+const bridgeTracking = new Map();
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+setInterval(() => {
+  const cutoff = Date.now() - 24 * 60 * 60_000;
+  for (const [k, v] of bridgeTracking.entries())
+    if ((v.completed_at || v.created_at) < cutoff) bridgeTracking.delete(k);
+}, 5 * 60_000).unref();
 
 let _arbProvider = null, _operatorWallet = null;
-
 function getOperatorWallet() {
   if (!_operatorWallet) {
     if (!OPERATOR_PRIVATE_KEY) throw new Error('OPERATOR_PRIVATE_KEY not set');
@@ -547,64 +517,6 @@ function getOperatorWallet() {
   return _operatorWallet;
 }
 
-const bridgeTracking = new Map();
-const sleep = ms => new Promise(r => setTimeout(r, ms));
-
-setInterval(() => {
-  const cutoff = Date.now() - 24 * 60 * 60_000;
-  for (const [k, v] of bridgeTracking.entries())
-    if ((v.completed_at || v.created_at) < cutoff) bridgeTracking.delete(k);
-}, 5 * 60_000).unref();
-
-async function waitForHlWithdrawArrival(usdc, fromBlock, expectedRaw, slippagePct = 15, timeoutMs = 15 * 60_000) {
-  const provider  = usdc.runner?.provider;
-  if (!provider)  throw new Error('Contract has no provider');
-  const filter    = usdc.filters.Transfer(HL_BRIDGE_ADDR, OPERATOR_WALLET_ADDR);
-  const minAmount = expectedRaw * BigInt(100 - slippagePct) / 100n;
-  const start = Date.now();
-  let cursor  = fromBlock;
-  while (Date.now() - start < timeoutMs) {
-    await sleep(15_000);
-    let current;
-    try   { current = await provider.getBlockNumber(); } catch { continue; }
-    if (current < cursor) continue;
-    try {
-      const events = await usdc.queryFilter(filter, cursor, current);
-      for (const ev of events) {
-        const amt = ev.args?.value ?? ev.args?.[2];
-        if (amt != null && amt >= minAmount)
-          return { amount: BigInt(amt), txHash: ev.transactionHash, blockNumber: ev.blockNumber };
-      }
-      cursor = current + 1;
-    } catch {
-      cursor = Math.max(cursor, current - 100);
-    }
-  }
-  throw new Error('HL withdrawal timeout');
-}
-
-async function waitForMayanFulfillment(txHash, timeoutMs = 10 * 60_000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    await sleep(8_000);
-    try {
-      const r = await fetchWithTimeout(
-        `${MAYAN_EXPLORER_API}/v3/swaps/trx/${txHash}`,
-        { method: 'GET' },
-        8_000,
-      );
-      if (!r.ok) continue;
-      const data = await r.json();
-      const s    = data?.clientStatus || data?.status;
-      if (s === 'COMPLETED') return { status: s, data };
-      if (s === 'REFUNDED' || s === 'FAILED') throw new Error('Mayan ' + s);
-    } catch (e) {
-      if (e.message?.startsWith('Mayan ')) throw e;
-    }
-  }
-  throw new Error('Mayan fulfillment timeout');
-}
-
 function validateUsdAmount(amount, min) {
   const n = Number(amount);
   if (!Number.isFinite(n) || n < min) return `minimum amount is $${min}`;
@@ -613,18 +525,10 @@ function validateUsdAmount(amount, min) {
   return null;
 }
 
-let _bridgeQueue = Promise.resolve();
-function queueBridge(fn) {
-  const p = _bridgeQueue.then(fn, fn);
-  _bridgeQueue = p.catch(() => {});
-  return p;
-}
-
 app.post('/api/bridge/withdraw/init', async (req, res) => {
   try {
     if (!OPERATOR_PRIVATE_KEY)
       return res.status(503).json({ error: 'Bridge not configured -- set OPERATOR_PRIVATE_KEY' });
-
     const { hl_wallet_address, usd_amount, user_sol_addr } = req.body || {};
     if (!hl_wallet_address || !usd_amount || !user_sol_addr)
       return res.status(400).json({ error: 'missing params' });
@@ -632,7 +536,6 @@ app.post('/api/bridge/withdraw/init', async (req, res) => {
       return res.status(400).json({ error: 'invalid HL wallet' });
     if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(user_sol_addr)))
       return res.status(400).json({ error: 'invalid Solana address' });
-
     const amountErr = validateUsdAmount(usd_amount, 5);
     if (amountErr) return res.status(400).json({ error: amountErr });
 
@@ -644,17 +547,13 @@ app.post('/api/bridge/withdraw/init', async (req, res) => {
       hyperliquidChain: 'Mainnet',
       amount:           String(usdNum),
       time,
-      destination:      OPERATOR_WALLET_ADDR,
+      destination:      hl_wallet_address, // non-custodial: straight to user's own EVM address
     };
     const id = crypto.randomBytes(8).toString('hex');
     bridgeTracking.set(id, {
-      kind:              'withdraw',
-      status:            'awaiting_signature',
-      hl_wallet_address,
-      user_sol_addr,
-      usd_amount:        usdNum,
-      action,
-      created_at:        time,
+      kind: 'withdraw', status: 'awaiting_signature',
+      hl_wallet_address, user_sol_addr, usd_amount: usdNum,
+      action, created_at: time,
     });
     res.json({ tracking_id: id, action });
   } catch (err) {
@@ -690,94 +589,47 @@ app.post('/api/bridge/withdraw/submit', async (req, res) => {
 app.get('/api/bridge/withdraw/status', (req, res) => {
   const t = bridgeTracking.get(String(req.query.id || ''));
   if (!t) return res.status(404).json({ error: 'not found' });
-  res.json({
-    status:             t.status,
-    arb_received:       t.arb_received_raw ? ethers.formatUnits(t.arb_received_raw, 6) : null,
-    hl_arrival_tx_hash: t.hl_arrival_tx_hash,
-    mayan_tx_hash:      t.mayan_tx_hash,
-    error:              t.error,
-    completed_at:       t.completed_at,
-  });
+  res.json({ status: t.status, error: t.error || null, completed_at: t.completed_at || null });
 });
 
 async function runWithdrawPipeline(tid) {
   const t = bridgeTracking.get(tid);
   if (!t) return;
-
-  await queueBridge(async () => {
-    const wallet   = getOperatorWallet();
-    const usdc     = new ethers.Contract(USDC_ARB_ADDR, USDC_ABI, wallet);
-    const provider = wallet.provider;
-
-    // 1. Snapshot block before submitting to HL
-    const fromBlock = await provider.getBlockNumber();
-
-    // 2. Forward signed withdraw3 to HL
+  try {
+    // 1. Submit withdraw3 to Hyperliquid -- USDC goes straight to user's hlAddress
     const body = { action: t.action, nonce: t.action.time, signature: t.signature };
     const ve   = validateHyperliquidExchangePayload(body);
     if (ve) throw new Error('Invalid HL payload: ' + ve);
+
     const hlResp = await fetchWithTimeout(
       `${HL_API}/exchange`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
       15_000,
     );
     const hlData = await hlResp.json();
-    if (hlData.status !== 'ok') throw new Error('HL withdraw3 failed: ' + JSON.stringify(hlData).slice(0, 300));
-    t.status = 'hl_settling';
+    if (hlData.status !== 'ok')
+      throw new Error('HL withdraw3 failed: ' + JSON.stringify(hlData).slice(0, 300));
 
-    // 3. Wait for USDC Transfer event from HL bridge (~3-4 min)
-    const expectedRaw = ethers.parseUnits(Math.max(0, t.usd_amount - 1).toFixed(6), 6); // HL takes $1 flat fee
-    const arrival     = await waitForHlWithdrawArrival(usdc, fromBlock, expectedRaw);
-    t.arb_received_raw   = arrival.amount.toString();
-    t.hl_arrival_tx_hash = arrival.txHash;
-
-    // 4. Bridge USDC.arb -> SOL via Mayan directly to user's Solana wallet
     t.status = 'bridging';
-    const quotes = await mayan.fetchQuote({
-      amountIn64:  arrival.amount.toString(),
-      fromToken:   USDC_ARB_ADDR,
-      toToken:     SOL_NATIVE_MINT,   // FIX 1: wrapped SOL mint
-      fromChain:   'arbitrum',
-      toChain:     'solana',
-      slippageBps: 'auto',
+
+    // 2. Sponsor gas -- send 0.001 ETH to user's hlAddress so they can bridge ARB -> SOL
+    const wallet = getOperatorWallet();
+    const gasTx  = await wallet.sendTransaction({
+      to:    t.hl_wallet_address,
+      value: ethers.parseEther('0.001'),
     });
-    if (!quotes?.length) throw new Error('No Mayan route found for withdraw');
-    const quote = quotes[0];
+    await gasTx.wait();
 
-    // Approve USDC to Mayan forwarder if needed
-    const fwd = mayan.addresses?.MAYAN_FORWARDER_CONTRACT;
-    if (fwd) {
-      const allow = await usdc.allowance(OPERATOR_WALLET_ADDR, fwd);
-      if (allow < arrival.amount) {
-        const tx = await usdc.approve(fwd, ethers.MaxUint256);
-        await tx.wait();
-      }
-    }
-
-    // FIX 2: referrerAddress is a single EVM address string or null -- not an object
-    const txOrHash = await mayan.swapFromEvm(
-      quote,
-      OPERATOR_WALLET_ADDR,  // swapperAddress
-      t.user_sol_addr,       // destinationWalletAddress (user's Solana)
-      null,                  // referrerAddress -- set to your EVM address if you want referral fees
-      provider,
-      wallet,
-    );
-
-    const mayanTxHash = (txOrHash && typeof txOrHash === 'object' && txOrHash.hash) || txOrHash;
-    t.mayan_tx_hash   = mayanTxHash;
-    if (txOrHash && typeof txOrHash === 'object' && txOrHash.wait) await txOrHash.wait();
-    t.status = 'finalizing';
-  });
-
-  if (t.mayan_tx_hash) {
-    try { await waitForMayanFulfillment(t.mayan_tx_hash, 10 * 60_000); }
-    catch (e) { logError('mayan-fulfillment', e); } // mark complete optimistically; funds were committed
+    t.status       = 'complete';
+    t.completed_at = Date.now();
+  } catch (err) {
+    t.status = 'failed';
+    t.error  = err.message;
+    logError('withdraw-pipeline', err);
   }
-  t.status       = 'complete';
-  t.completed_at = Date.now();
 }
 
+/* ── PumpPortal ───────────────────────────────────────────────────────── */
 app.post('/api/pumpportal/trade-local', async (req, res) => {
   try {
     const response = await fetchWithTimeout(
@@ -798,6 +650,7 @@ app.post('/api/pumpportal/trade-local', async (req, res) => {
   }
 });
 
+/* ── Helius / Solana RPC ──────────────────────────────────────────────── */
 function getSolanaRpcUrl() {
   if (HELIUS_RPC_URL) return HELIUS_RPC_URL;
   if (HELIUS_API_KEY) return 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(HELIUS_API_KEY);
@@ -834,6 +687,7 @@ app.post('/api/solana-rpc', async (req, res) => {
   }
 });
 
+/* ── Pinata ───────────────────────────────────────────────────────────── */
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -890,10 +744,10 @@ app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, r
   }
 });
 
+/* ── Health ───────────────────────────────────────────────────────────── */
 app.get('/api/health', (req, res) => {
   res.json({
-    ok: true,
-    env: NODE_ENV,
+    ok: true, env: NODE_ENV,
     has: {
       okx:            Boolean(OKX_API_KEY && OKX_SECRET_KEY && OKX_PASSPHRASE),
       okxProject:     Boolean(OKX_PROJECT_ID),
@@ -904,33 +758,17 @@ app.get('/api/health', (req, res) => {
       feeWalletSol:   Boolean(OKX_FEE_WALLET_SOL),
       feeWalletEvm:   Boolean(OKX_FEE_WALLET_EVM),
       bridgeOperator: Boolean(OPERATOR_PRIVATE_KEY),
-    },
-    routes: {
-      okx: true, okxCrossChain: true,
-      jupiterQuote: JUPITER_ENABLED, jupiterSwap: JUPITER_ENABLED,
-      jupiterTokens: true, jupiterRegistry: true,
-      dexscreener: true,
-      hyperliquid: true, hyperliquidExchange: true,
-      hyperliquidTestnet: true, hyperliquidTestnetExchange: true,
-      solPrice: true,
-      bridgeDeposit:  'frontend-mayan-sdk',
-      bridgeWithdraw: Boolean(OPERATOR_PRIVATE_KEY),
-      pumpportal: true, helius: true, solanaRpc: true,
-      pinata: Boolean(PINATA_JWT),
+      lifiApiKey:     Boolean(LIFI_API_KEY),
     },
     bridge: OPERATOR_PRIVATE_KEY ? {
-      operator:      OPERATOR_WALLET_ADDR,
-      arbRpc:        ARB_RPC_URL,
-      active:        bridgeTracking.size,
-      depositPath:   'frontend Mayan SDK -- toChain=hypercore, no server endpoint',
-      withdrawPath:  'HL withdraw3 -> operator -> Mayan swapFromEvm -> Solana',
-      solNativeMint: SOL_NATIVE_MINT,
+      operator:     OPERATOR_WALLET_ADDR,
+      arbRpc:       ARB_RPC_URL,
+      active:       bridgeTracking.size,
+      depositPath:  'frontend LI.FI API -- SOL -> HyperCore (chainId 1337)',
+      withdrawPath: 'HL withdraw3 -> user hlAddress -> operator sponsors 0.001 ETH gas -> client bridges ARB->SOL via LI.FI',
+      custodial:    false,
     } : { enabled: false },
-    fees: {
-      solana: OKX_SOL_FEE_PCT + '%',
-      evm:    OKX_EVM_FEE_PCT + '%',
-      bridge: 'Mayan ~0.1% + $1 HL withdraw flat fee',
-    },
+    lifi: { baseUrl: LIFI_API, hyperCoreChainId: 1337, solanaChainId: 1151111081099710 },
     time: new Date().toISOString(),
   });
 });
@@ -943,7 +781,6 @@ app.use(express.static(path.join(__dirname, 'build'), {
     if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
   },
 }));
-
 app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'build', 'index.html')));
 
 // eslint-disable-next-line no-unused-vars
@@ -966,26 +803,21 @@ app.use((err, req, res, next) => {
 });
 
 app.listen(PORT, () => {
-  console.log('Nexus DEX server running on port ' + PORT);
+  console.log('Nexus DEX server on port ' + PORT);
   console.log('  env:             ' + NODE_ENV);
   console.log('  allowed origins: ' + allowedOrigins.join(', '));
-  console.log('  OKX fees:        Solana ' + OKX_SOL_FEE_PCT + '%  EVM ' + OKX_EVM_FEE_PCT + '%');
-  console.log('  Jupiter:         ' + (JUPITER_ENABLED ? 'enabled' : 'disabled'));
-  console.log('  Bridge deposit:  frontend Mayan SDK (no server endpoint)');
-  console.log('  Bridge withdraw: ' + (OPERATOR_PRIVATE_KEY ? 'enabled via operator ' + OPERATOR_WALLET_ADDR : 'disabled (set OPERATOR_PRIVATE_KEY)'));
-  console.log('  SOL native mint: ' + SOL_NATIVE_MINT);
+  console.log('  LI.FI base:      ' + LIFI_API);
+  console.log('  LI.FI API key:   ' + (LIFI_API_KEY ? 'set' : 'not set (rate limits apply)'));
+  console.log('  HyperCore chainId: 1337');
+  console.log('  Withdraw:        ' + (OPERATOR_PRIVATE_KEY ? 'non-custodial, gas sponsor ' + OPERATOR_WALLET_ADDR : 'disabled'));
   if (OPERATOR_PRIVATE_KEY) {
     try   { const w = getOperatorWallet(); console.log('  Operator key:    verified -> ' + w.address); }
     catch (e) { console.error('  Operator key:    INVALID --', e.message); }
   }
-  if (!OKX_API_KEY || !OKX_SECRET_KEY || !OKX_PASSPHRASE) console.warn('  WARNING: OKX credentials missing');
-  if (!OKX_PROJECT_ID)     console.warn('  WARNING: OKX_PROJECT_ID not set');
-  if (!OKX_FEE_WALLET_SOL) console.warn('  WARNING: OKX_FEE_WALLET_SOL not set');
-  if (!HELIUS_API_KEY && !HELIUS_RPC_URL) console.warn('  WARNING: No Helius key -- using public Solana RPC');
-  if (!PINATA_JWT)           console.warn('  WARNING: PINATA_JWT not set');
-  if (!OPERATOR_PRIVATE_KEY) console.warn('  WARNING: OPERATOR_PRIVATE_KEY not set -- withdraw returns 503');
+  if (!OKX_API_KEY)          console.warn('  WARNING: OKX credentials missing');
+  if (!HELIUS_API_KEY && !HELIUS_RPC_URL) console.warn('  WARNING: No Helius key');
+  if (!OPERATOR_PRIVATE_KEY) console.warn('  WARNING: OPERATOR_PRIVATE_KEY not set');
 });
 
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
 process.on('unhandledRejection', err => logError('unhandledRejection', err));
-
