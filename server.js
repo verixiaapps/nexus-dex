@@ -1,7 +1,7 @@
 /**
  * NEXUS DEX — Backend Proxy Server 
  * 
- * Active routes:
+ * Active routes: 
  *   /api/okx/*                        OKX DEX aggregator + cross-chain
  *   /api/jupiter/quote, /swap         Jupiter Solana fallback
  *   /api/jupiter/tokens/v2/…          Jupiter top tokens + registry
