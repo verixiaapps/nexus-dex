@@ -10,6 +10,8 @@
  *   /api/hyperliquid                  Hyperliquid info proxy
  *   /api/hyperliquid/exchange         Hyperliquid signed-order forward
  *   /api/hyperliquid-testnet[/exchange]  Testnet equivalents
+ *   /api/bridge/deposit/*             SOL -> USDC.arb -> HL deposit via operator
+ *   /api/bridge/withdraw/*            HL -> USDC.arb -> SOL withdraw via operator
  *   /api/pumpportal/*                 PumpPortal trade-local
  *   /api/helius/das                   Helius DAS / Solana metadata fallback
  *   /api/solana-rpc                   Solana RPC proxy
@@ -25,9 +27,9 @@
  * Hyperliquid Option A: frontend signs valid Hyperliquid payloads. Server
  * validates shape and forwards signed { action, nonce, signature } only.
  *
- * OKX version routing: aggregator + cross-chain endpoints all live on /api/v6
- * since the V6 upgrade. injectOkxFee only fires on aggregator SWAP endpoints,
- * never on cross-chain.
+ * Bridge: SOL on Solana -> USDC.arb on Arbitrum -> credited to user's HL
+ * account via operator wallet. Operator wallet only holds gas + brief USDC
+ * passthrough, never long-term float. Funds always recoverable.
  */
 
 require('dotenv').config();
@@ -38,6 +40,7 @@ const cors = require('cors');
 const path = require('path');
 const rateLimit = require('express-rate-limit');
 const multer = require('multer');
+const ethers = require('ethers');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -164,6 +167,19 @@ const JUPITER_API_KEY        = process.env.JUPITER_API_KEY || '';
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY || process.env.REACT_APP_HELIUS_API_KEY || '';
 const HELIUS_RPC_URL = process.env.HELIUS_RPC_URL || process.env.REACT_APP_SOLANA_RPC || '';
 const PINATA_JWT     = process.env.PINATA_JWT || '';
+
+// Bridge (SOL <-> HL via deBridge + operator wallet)
+const OPERATOR_PRIVATE_KEY = process.env.OPERATOR_PRIVATE_KEY || '';
+const OPERATOR_WALLET_ADDR = '0xeace360F8faB3f739CBC4e026b58efC5866fAdC1';
+const ARB_RPC_URL          = process.env.ARB_RPC_URL || 'https://arb1.arbitrum.io/rpc';
+const HL_BRIDGE_ADDR       = '0x2Df1c51E09aECF9cacB7bc98cB1742757f163dF7';
+const USDC_ARB_ADDR        = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
+const DEBRIDGE_API         = 'https://api.dln.trade/v1.0';
+const DEBRIDGE_SOL_ID      = 7565164;
+const DEBRIDGE_ARB_ID      = 42161;
+const SOL_NATIVE_DEBRIDGE  = '11111111111111111111111111111111';
+const HL_API               = 'https://api.hyperliquid.xyz';
+const OKX_TICKER_URL       = 'https://www.okx.com/api/v5/market/ticker?instId=SOL-USDT';
 
 /* --- CORS + JSON ---------------------------------------------------------- */
 
@@ -691,6 +707,490 @@ app.post('/api/hyperliquid-testnet/exchange', (req, res) =>
   proxyHyperliquidExchange(req, res, 'https://api.hyperliquid-testnet.xyz', 'Hyperliquid testnet'),
 );
 
+/* --- BRIDGE: SOL <-> HL via deBridge + operator wallet -------------------- */
+/*
+ * Architecture:
+ *   DEPOSIT: user signs Solana tx -> deBridge SOL -> USDC.arb to OPERATOR
+ *            -> operator deposit() to HL bridge (operator HL credited)
+ *            -> operator usdSend HL action -> user's HL account credited
+ *   WITHDRAW: user signs HL withdraw3 (silent, localStorage HL key)
+ *             -> HL sends USDC.arb to OPERATOR -> deBridge to user's Solana
+ *
+ * Operator wallet (0xeace...) only holds gas + brief USDC passthrough.
+ * Funds always recoverable because operator wallet + HL account share the key.
+ *
+ * Concurrent deposits are race-free: we poll deBridge orderId for fulfillment
+ * (not balance watching), then serialize HL ops via a promise queue.
+ *
+ * Built for ethers v6 (native bigint, ethers.JsonRpcProvider, etc.)
+ */
+
+const USDC_ABI = [
+  'function allowance(address,address) view returns (uint256)',
+  'function approve(address,uint256) returns (bool)',
+  'function balanceOf(address) view returns (uint256)',
+];
+const HL_BRIDGE_ABI = ['function deposit(uint64 usd)'];
+
+let _arbProvider = null, _operatorWallet = null;
+function getOperatorWallet() {
+  if (!_operatorWallet) {
+    if (!OPERATOR_PRIVATE_KEY) throw new Error('OPERATOR_PRIVATE_KEY not set');
+    _arbProvider = new ethers.JsonRpcProvider(ARB_RPC_URL);
+    _operatorWallet = new ethers.Wallet(OPERATOR_PRIVATE_KEY, _arbProvider);
+  }
+  return _operatorWallet;
+}
+
+const bridgeTracking = new Map();
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// TTL cleanup -- drop tracking entries older than 24h
+setInterval(() => {
+  const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+  for (const [k, v] of bridgeTracking.entries()) {
+    if ((v.completed_at || v.created_at) < cutoff) bridgeTracking.delete(k);
+  }
+}, 5 * 60 * 1000).unref();
+
+// Cached SOL price via OKX ticker (30s TTL)
+let _solPriceCache = { p: 0, ts: 0 };
+async function fetchSolPriceUsd() {
+  const now = Date.now();
+  if (now - _solPriceCache.ts < 30_000 && _solPriceCache.p > 0) return _solPriceCache.p;
+  const response = await fetchWithTimeout(OKX_TICKER_URL, { method: 'GET' }, 8_000);
+  const data = await response.json();
+  const p = Number(data?.data?.[0]?.last || 0);
+  if (!Number.isFinite(p) || p <= 0) throw new Error('SOL price unavailable');
+  _solPriceCache = { p, ts: now };
+  return p;
+}
+
+// HL EIP-712 user-signed action (server-side, signs with operator key)
+async function signHlActionServer(wallet, action, typeName, eipFields) {
+  const domain = {
+    name: 'HyperliquidSignTransaction',
+    version: '1',
+    chainId: 42161,
+    verifyingContract: '0x0000000000000000000000000000000000000000',
+  };
+  const types = { [`HyperliquidTransaction:${typeName}`]: eipFields };
+  const message = {};
+  for (const f of eipFields) message[f.name] = action[f.name];
+  const sig = await wallet.signTypedData(domain, types, message);
+  const split = ethers.Signature.from(sig);
+  return { r: split.r, s: split.s, v: split.v };
+}
+
+// Promise queue -- serialize HL on-chain operations to avoid nonce/balance races
+let _hlOpQueue = Promise.resolve();
+function queueHlOp(fn) {
+  const p = _hlOpQueue.then(fn, fn);
+  _hlOpQueue = p.catch(() => {});
+  return p;
+}
+
+// Poll deBridge for order fulfillment
+async function waitForDeBridgeFulfillment(orderId, timeoutMs) {
+  const start = Date.now();
+  const limit = timeoutMs || 15 * 60 * 1000;
+  while (Date.now() - start < limit) {
+    await sleep(8_000);
+    try {
+      const r = await fetchWithTimeout(
+        `${DEBRIDGE_API}/dln/order/${orderId}/status`,
+        { method: 'GET' },
+        8_000,
+      );
+      if (!r.ok) continue;
+      const s = await r.json();
+      if (['Fulfilled', 'SentUnlock', 'ClaimedUnlock'].includes(s.status)) return s;
+      if (['OrderCancelled', 'OrderRejected'].includes(s.status)) {
+        throw new Error('deBridge ' + s.status);
+      }
+    } catch (e) {
+      if (e.message && e.message.startsWith('deBridge ')) throw e;
+      // network blip, keep polling
+    }
+  }
+  throw new Error('deBridge fulfillment timeout');
+}
+
+// ----- DEPOSIT endpoints -----
+
+app.post('/api/bridge/deposit/quote', async (req, res) => {
+  try {
+    if (!OPERATOR_PRIVATE_KEY) {
+      return res.status(503).json({ error: 'Bridge not configured -- set OPERATOR_PRIVATE_KEY' });
+    }
+    const { usd_amount, user_sol_addr, user_hyper_wallet } = req.body || {};
+    if (!usd_amount || !user_sol_addr || !user_hyper_wallet) {
+      return res.status(400).json({ error: 'missing params' });
+    }
+    if (!ethers.isAddress(user_hyper_wallet)) {
+      return res.status(400).json({ error: 'invalid hyper wallet address' });
+    }
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(user_sol_addr))) {
+      return res.status(400).json({ error: 'invalid Solana address' });
+    }
+    const usdNum = Number(usd_amount);
+    if (!Number.isFinite(usdNum) || usdNum < 10) {
+      return res.status(400).json({ error: 'minimum deposit is $10' });
+    }
+
+    const solPrice = await fetchSolPriceUsd();
+    const lamports = Math.ceil(((usdNum * 1.05) / solPrice) * 1e9);
+
+    const params = new URLSearchParams({
+      srcChainId: String(DEBRIDGE_SOL_ID),
+      srcChainTokenIn: SOL_NATIVE_DEBRIDGE,
+      srcChainTokenInAmount: String(lamports),
+      dstChainId: String(DEBRIDGE_ARB_ID),
+      dstChainTokenOut: USDC_ARB_ADDR,
+      dstChainTokenOutAmount: 'auto',
+      dstChainTokenOutRecipient: OPERATOR_WALLET_ADDR,
+      srcChainOrderAuthorityAddress: user_sol_addr,
+      dstChainOrderAuthorityAddress: OPERATOR_WALLET_ADDR,
+      senderAddress: user_sol_addr,
+      prependOperatingExpenses: 'true',
+    });
+
+    const response = await fetchWithTimeout(
+      `${DEBRIDGE_API}/dln/order/create-tx?${params.toString()}`,
+      { method: 'GET' },
+      15_000,
+    );
+    if (!response.ok) {
+      const text = await response.text();
+      return res.status(502).json({ error: 'deBridge quote failed', details: text.slice(0, 400) });
+    }
+    const quote = await response.json();
+    if (!quote.tx?.data) return res.status(502).json({ error: 'deBridge returned no tx' });
+
+    const expectedRaw = quote.estimation?.dstChainTokenOut?.amount || '0';
+
+    const id = crypto.randomBytes(8).toString('hex');
+    bridgeTracking.set(id, {
+      kind: 'deposit',
+      status: 'awaiting_signature',
+      user_sol_addr,
+      user_hyper_wallet,
+      usd_amount: usdNum,
+      lamports,
+      sol_price: solPrice,
+      expected_usdc_raw: expectedRaw,
+      order_id: quote.orderId,
+      created_at: Date.now(),
+    });
+
+    res.json({
+      tracking_id: id,
+      sol_tx_b64: quote.tx.data,
+      expected_usdc: ethers.formatUnits(expectedRaw, 6),
+      sol_to_send: (lamports / 1e9).toFixed(6),
+      eta_s: 90,
+    });
+  } catch (err) {
+    logError('bridge-deposit-quote', err);
+    res.status(500).json({ error: err.message || 'Unknown error' });
+  }
+});
+
+app.post('/api/bridge/deposit/submit', async (req, res) => {
+  try {
+    const { tracking_id, sol_tx_hash } = req.body || {};
+    const t = bridgeTracking.get(tracking_id);
+    if (!t || t.kind !== 'deposit') return res.status(404).json({ error: 'tracking_id not found' });
+    if (!sol_tx_hash) return res.status(400).json({ error: 'missing sol_tx_hash' });
+    if (t.status !== 'awaiting_signature') {
+      return res.json({ ok: true, status: t.status, already_running: true });
+    }
+    t.status = 'bridging';
+    t.sol_tx_hash = sol_tx_hash;
+    runDepositPipeline(tracking_id).catch(err => {
+      t.status = 'failed';
+      t.error = err.message;
+      logError('bridge-deposit-pipeline', err);
+    });
+    res.json({ ok: true, status: t.status });
+  } catch (err) {
+    logError('bridge-deposit-submit', err);
+    res.status(500).json({ error: err.message || 'Unknown error' });
+  }
+});
+
+app.get('/api/bridge/deposit/status', (req, res) => {
+  const t = bridgeTracking.get(req.query.id);
+  if (!t) return res.status(404).json({ error: 'not found' });
+  res.json({
+    status: t.status,
+    sol_tx_hash: t.sol_tx_hash,
+    expected_usdc: ethers.formatUnits(t.expected_usdc_raw || '0', 6),
+    deposited_usdc: t.deposited_usdc_raw ? ethers.formatUnits(t.deposited_usdc_raw, 6) : null,
+    transferred_amount: t.transferred_amount,
+    deposit_tx_hash: t.deposit_tx_hash,
+    error: t.error,
+    completed_at: t.completed_at,
+  });
+});
+
+async function runDepositPipeline(tid) {
+  const t = bridgeTracking.get(tid);
+  if (!t) return;
+
+  // Phase 1: wait for deBridge to fulfill the order
+  await waitForDeBridgeFulfillment(t.order_id);
+
+  // Phase 2: serialize HL operations
+  await queueHlOp(async () => {
+    const wallet = getOperatorWallet();
+    const usdc = new ethers.Contract(USDC_ARB_ADDR, USDC_ABI, wallet);
+    const bridge = new ethers.Contract(HL_BRIDGE_ADDR, HL_BRIDGE_ABI, wallet);
+
+    // Determine deposit amount: use expected, capped by actual balance for safety
+    const balance = await usdc.balanceOf(OPERATOR_WALLET_ADDR);
+    const expected = BigInt(t.expected_usdc_raw);
+    const depositAmount = expected <= balance ? expected : balance;
+    if (depositAmount < ethers.parseUnits('5', 6)) {
+      throw new Error('Bridged amount too small for HL minimum ($5)');
+    }
+    t.deposited_usdc_raw = depositAmount.toString();
+
+    // Ensure USDC approval to HL bridge
+    t.status = 'approving';
+    const allow = await usdc.allowance(OPERATOR_WALLET_ADDR, HL_BRIDGE_ADDR);
+    if (allow < ethers.MaxUint256 / 2n) {
+      const tx = await usdc.approve(HL_BRIDGE_ADDR, ethers.MaxUint256);
+      await tx.wait();
+    }
+
+    // deposit() -> credits operator's HL account
+    t.status = 'depositing';
+    const dtx = await bridge.deposit(depositAmount);
+    const receipt = await dtx.wait();
+    t.deposit_tx_hash = receipt.hash;
+    await sleep(8_000); // let HL recognize the deposit
+
+    // usdSend -> credits user's HL account ($1 HL flat fee)
+    t.status = 'transferring';
+    const depFloat = parseFloat(ethers.formatUnits(depositAmount, 6));
+    const xferAmt = Math.max(0, depFloat - 1).toFixed(2);
+    if (parseFloat(xferAmt) < 1) throw new Error('Too small after HL transfer fee');
+
+    const action = {
+      type: 'usdSend',
+      signatureChainId: '0xa4b1',
+      hyperliquidChain: 'Mainnet',
+      destination: t.user_hyper_wallet,
+      amount: xferAmt,
+      time: Date.now(),
+    };
+    const signature = await signHlActionServer(wallet, action, 'UsdSend', [
+      { name: 'hyperliquidChain', type: 'string' },
+      { name: 'destination', type: 'string' },
+      { name: 'amount', type: 'string' },
+      { name: 'time', type: 'uint64' },
+    ]);
+
+    const body = { action, nonce: action.time, signature };
+    const ve = validateHyperliquidExchangePayload(body);
+    if (ve) throw new Error('built bad HL payload: ' + ve);
+
+    const hlResp = await fetchWithTimeout(`${HL_API}/exchange`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    }, 15_000);
+    const hlData = await hlResp.json();
+    if (hlData.status !== 'ok') {
+      throw new Error('HL usdSend failed: ' + JSON.stringify(hlData).slice(0, 300));
+    }
+
+    t.transferred_amount = xferAmt;
+    t.status = 'complete';
+    t.completed_at = Date.now();
+  });
+}
+
+// ----- WITHDRAW endpoints -----
+
+app.post('/api/bridge/withdraw/init', async (req, res) => {
+  try {
+    if (!OPERATOR_PRIVATE_KEY) {
+      return res.status(503).json({ error: 'Bridge not configured -- set OPERATOR_PRIVATE_KEY' });
+    }
+    const { hl_wallet_address, usd_amount, user_sol_addr } = req.body || {};
+    if (!hl_wallet_address || !usd_amount || !user_sol_addr) {
+      return res.status(400).json({ error: 'missing params' });
+    }
+    if (!ethers.isAddress(hl_wallet_address)) {
+      return res.status(400).json({ error: 'invalid HL wallet' });
+    }
+    if (!/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(user_sol_addr))) {
+      return res.status(400).json({ error: 'invalid Solana address' });
+    }
+    const usdNum = Number(usd_amount);
+    if (!Number.isFinite(usdNum) || usdNum < 5) {
+      return res.status(400).json({ error: 'minimum withdraw is $5' });
+    }
+
+    const time = Date.now();
+    const action = {
+      type: 'withdraw3',
+      signatureChainId: '0xa4b1',
+      hyperliquidChain: 'Mainnet',
+      amount: String(usdNum),
+      time,
+      destination: OPERATOR_WALLET_ADDR,
+    };
+    const id = crypto.randomBytes(8).toString('hex');
+    bridgeTracking.set(id, {
+      kind: 'withdraw',
+      status: 'awaiting_signature',
+      hl_wallet_address,
+      user_sol_addr,
+      usd_amount: usdNum,
+      action,
+      created_at: time,
+    });
+    res.json({ tracking_id: id, action });
+  } catch (err) {
+    logError('bridge-withdraw-init', err);
+    res.status(500).json({ error: err.message || 'Unknown error' });
+  }
+});
+
+app.post('/api/bridge/withdraw/submit', async (req, res) => {
+  try {
+    const { tracking_id, signature } = req.body || {};
+    const t = bridgeTracking.get(tracking_id);
+    if (!t || t.kind !== 'withdraw') return res.status(404).json({ error: 'tracking_id not found' });
+    if (!signature) return res.status(400).json({ error: 'missing signature' });
+    const sigErr = validateHyperliquidSignature(signature);
+    if (sigErr) return res.status(400).json({ error: sigErr });
+    if (t.status !== 'awaiting_signature') {
+      return res.json({ ok: true, status: t.status, already_running: true });
+    }
+    t.status = 'withdrawing';
+    t.signature = signature;
+    runWithdrawPipeline(tracking_id).catch(err => {
+      t.status = 'failed';
+      t.error = err.message;
+      logError('bridge-withdraw-pipeline', err);
+    });
+    res.json({ ok: true, status: t.status });
+  } catch (err) {
+    logError('bridge-withdraw-submit', err);
+    res.status(500).json({ error: err.message || 'Unknown error' });
+  }
+});
+
+app.get('/api/bridge/withdraw/status', (req, res) => {
+  const t = bridgeTracking.get(req.query.id);
+  if (!t) return res.status(404).json({ error: 'not found' });
+  res.json({
+    status: t.status,
+    arb_received: t.arb_received_raw ? ethers.formatUnits(t.arb_received_raw, 6) : null,
+    debridge_order_id: t.debridge_order_id,
+    debridge_arb_tx_hash: t.debridge_arb_tx_hash,
+    error: t.error,
+    completed_at: t.completed_at,
+  });
+});
+
+async function runWithdrawPipeline(tid) {
+  const t = bridgeTracking.get(tid);
+  if (!t) return;
+  const wallet = getOperatorWallet();
+  const usdc = new ethers.Contract(USDC_ARB_ADDR, USDC_ABI, wallet);
+
+  // 1. Forward signed withdrawal to HL
+  const body = { action: t.action, nonce: t.action.time, signature: t.signature };
+  const ve = validateHyperliquidExchangePayload(body);
+  if (ve) throw new Error('Invalid HL payload: ' + ve);
+
+  const hlResp = await fetchWithTimeout(`${HL_API}/exchange`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, 15_000);
+  const hlData = await hlResp.json();
+  if (hlData.status !== 'ok') {
+    throw new Error('HL withdraw3 failed: ' + JSON.stringify(hlData).slice(0, 300));
+  }
+  t.status = 'hl_settling';
+
+  // 2. Wait for USDC.arb at operator (HL takes ~3-7 min, $1 fee)
+  const balanceBefore = await usdc.balanceOf(OPERATOR_WALLET_ADDR);
+  const expectedRaw = ethers.parseUnits(String(Math.max(0, t.usd_amount - 1)), 6);
+  const minInc = expectedRaw * 85n / 100n;
+  const start = Date.now();
+  let received = 0n;
+  while (Date.now() - start < 15 * 60 * 1000) {
+    await sleep(15_000);
+    const cur = await usdc.balanceOf(OPERATOR_WALLET_ADDR);
+    received = cur - balanceBefore;
+    if (received >= minInc) break;
+  }
+  if (received < minInc) throw new Error('HL withdrawal timeout');
+  t.arb_received_raw = received.toString();
+
+  // 3. Bridge USDC.arb -> SOL via deBridge (queued to serialize)
+  await queueHlOp(async () => {
+    t.status = 'bridging';
+
+    const params = new URLSearchParams({
+      srcChainId: String(DEBRIDGE_ARB_ID),
+      srcChainTokenIn: USDC_ARB_ADDR,
+      srcChainTokenInAmount: received.toString(),
+      dstChainId: String(DEBRIDGE_SOL_ID),
+      dstChainTokenOut: SOL_NATIVE_DEBRIDGE,
+      dstChainTokenOutAmount: 'auto',
+      dstChainTokenOutRecipient: t.user_sol_addr,
+      srcChainOrderAuthorityAddress: OPERATOR_WALLET_ADDR,
+      dstChainOrderAuthorityAddress: t.user_sol_addr,
+      senderAddress: OPERATOR_WALLET_ADDR,
+      prependOperatingExpenses: 'true',
+    });
+    const dbResp = await fetchWithTimeout(
+      `${DEBRIDGE_API}/dln/order/create-tx?${params.toString()}`,
+      { method: 'GET' },
+      15_000,
+    );
+    if (!dbResp.ok) {
+      const txt = await dbResp.text();
+      throw new Error('deBridge quote failed: ' + txt.slice(0, 200));
+    }
+    const quote = await dbResp.json();
+    if (!quote.tx?.to || !quote.tx?.data) throw new Error('deBridge returned no tx');
+    t.debridge_order_id = quote.orderId;
+
+    // Approve USDC to deBridge spender if needed
+    const dbSpender = quote.tx.to;
+    const allow = await usdc.allowance(OPERATOR_WALLET_ADDR, dbSpender);
+    if (allow < received) {
+      const tx = await usdc.approve(dbSpender, ethers.MaxUint256);
+      await tx.wait();
+    }
+
+    // Send the deBridge bridge tx
+    const sendTx = await wallet.sendTransaction({
+      to: quote.tx.to,
+      data: quote.tx.data,
+      value: quote.tx.value || 0,
+    });
+    await sendTx.wait();
+    t.debridge_arb_tx_hash = sendTx.hash;
+  });
+
+  // 4. Poll deBridge for SOL delivery
+  t.status = 'finalizing';
+  await waitForDeBridgeFulfillment(t.debridge_order_id, 10 * 60 * 1000).catch(() => {});
+
+  t.status = 'complete';
+  t.completed_at = Date.now();
+}
+
 /* --- PUMPPORTAL PROXY ----------------------------------------------------- */
 
 app.post('/api/pumpportal/trade-local', async (req, res) => {
@@ -852,14 +1352,15 @@ app.get('/api/health', (req, res) => {
     ok:  true,
     env: NODE_ENV,
     has: {
-      okx:          Boolean(OKX_API_KEY && OKX_SECRET_KEY && OKX_PASSPHRASE),
-      okxProject:   Boolean(OKX_PROJECT_ID),
-      jupiter:      Boolean(JUPITER_ENABLED),
-      jupiterApiKey: Boolean(JUPITER_API_KEY),
-      helius:       Boolean(HELIUS_API_KEY || HELIUS_RPC_URL),
-      pinata:       Boolean(PINATA_JWT),
-      feeWalletSol: Boolean(OKX_FEE_WALLET_SOL),
-      feeWalletEvm: Boolean(OKX_FEE_WALLET_EVM),
+      okx:            Boolean(OKX_API_KEY && OKX_SECRET_KEY && OKX_PASSPHRASE),
+      okxProject:     Boolean(OKX_PROJECT_ID),
+      jupiter:        Boolean(JUPITER_ENABLED),
+      jupiterApiKey:  Boolean(JUPITER_API_KEY),
+      helius:         Boolean(HELIUS_API_KEY || HELIUS_RPC_URL),
+      pinata:         Boolean(PINATA_JWT),
+      feeWalletSol:   Boolean(OKX_FEE_WALLET_SOL),
+      feeWalletEvm:   Boolean(OKX_FEE_WALLET_EVM),
+      bridgeOperator: Boolean(OPERATOR_PRIVATE_KEY),
     },
     routes: {
       okx:                        true,
@@ -873,6 +1374,8 @@ app.get('/api/health', (req, res) => {
       hyperliquidExchange:        true,
       hyperliquidTestnet:         true,
       hyperliquidTestnetExchange: true,
+      bridgeDeposit:              Boolean(OPERATOR_PRIVATE_KEY),
+      bridgeWithdraw:             Boolean(OPERATOR_PRIVATE_KEY),
       pumpportal:                 true,
       helius:                     true,
       solanaRpc:                  true,
@@ -886,6 +1389,11 @@ app.get('/api/health', (req, res) => {
       jupiterQuoteBase:    JUPITER_QUOTE_BASE,
       hyperliquidSigning:  'frontend-signed-forward-only',
     },
+    bridge: OPERATOR_PRIVATE_KEY ? {
+      operator: OPERATOR_WALLET_ADDR,
+      arbRpc:   ARB_RPC_URL,
+      active:   bridgeTracking.size,
+    } : { enabled: false },
     removed: { lifi: true, zeroX: true },
     fees: {
       note:   'OKX fees are injected only into executable OKX aggregator swap routes, not quote routes and not cross-chain. Jupiter fallback does not change OKX fee settings. Hyperliquid builder fees must be signed/approved in the Hyperliquid order action.',
@@ -957,6 +1465,9 @@ app.listen(PORT, () => {
   console.log('  Jupiter mode:    ' + (JUPITER_FALLBACK_ONLY ? 'fallback-only' : 'available'));
   console.log('  Jupiter account: ' + JUPITER_ACCOUNT);
   console.log('  Hyperliquid:     frontend-signed forward-only');
+  console.log('  Bridge:          ' + (OPERATOR_PRIVATE_KEY
+    ? 'enabled (operator ' + OPERATOR_WALLET_ADDR + ')'
+    : 'disabled (set OPERATOR_PRIVATE_KEY)'));
 
   if (!OKX_API_KEY || !OKX_SECRET_KEY || !OKX_PASSPHRASE) {
     console.warn('  WARNING: OKX credentials missing -- OKX routes will fail');
@@ -971,6 +1482,7 @@ app.listen(PORT, () => {
     console.warn('  WARNING: No Helius key -- falling back to public Solana RPC');
   }
   if (!PINATA_JWT) console.warn('  WARNING: PINATA_JWT not set -- token launch uploads will fail');
+  if (!OPERATOR_PRIVATE_KEY) console.warn('  WARNING: OPERATOR_PRIVATE_KEY not set -- bridge endpoints return 503');
 });
 
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
