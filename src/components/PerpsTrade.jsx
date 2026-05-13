@@ -8,9 +8,7 @@ import {
   getHyperCoreUSDCDepositPermitParams,
 } from '@mayanfinance/swap-sdk';
 
-/* NEXUS DEX — Hyperliquid Perps.
- * Bridge: Mayan Swift v13 (deposits client-side via toChain='hypercore' with
- *                          USDC permit signature; withdraws server-orchestrated). */
+/* NEXUS DEX — Hyperliquid Perps with Mayan deposit bridge. */
 
 const ENABLE_TRADING = process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
 const BUILDER_ADDRESS = '';
@@ -244,6 +242,14 @@ async function hlRequest(body, isExchange = false) {
   return data;
 }
 
+async function fetchHlAccountValue(hlAddress) {
+  if (!hlAddress) return 0;
+  try {
+    const data = await hlRequest({ type: 'clearinghouseState', user: hlAddress });
+    return parseFloat(data?.marginSummary?.accountValue || 0);
+  } catch { return 0; }
+}
+
 async function fetchOneHourChange(coin) {
   try {
     const now = Date.now();
@@ -405,7 +411,7 @@ async function placeOrder({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   return hlRequest({ action: built.action, nonce, signature }, true);
 }
 
-/* BRIDGE — Mayan Swift v13 */
+/* BRIDGE — Mayan Swift (brute-force across SDK versions) */
 
 const BRIDGE_TRACK_KEY = mode => 'nexus_bridge_' + mode;
 
@@ -465,71 +471,53 @@ async function executeMayanDeposit({ usdAmount, hlAddress, hlPrivateKey, solPubk
 
   const arbProvider = new ethersNs.JsonRpcProvider(ARB_RPC_URL);
   const hlWalletEvm = new ethersNs.Wallet(hlPrivateKey, arbProvider);
-  const { value, domain, types } = await getHyperCoreUSDCDepositPermitParams(quote, hlAddress, arbProvider);
-  const usdcPermitSignature = await signTypedDataCompat(hlWalletEvm, domain, types, value);
+
+  let usdcPermitSignature = null;
+  try {
+    if (typeof getHyperCoreUSDCDepositPermitParams === 'function') {
+      const params = await getHyperCoreUSDCDepositPermitParams(quote, hlAddress, arbProvider);
+      if (params?.domain && params?.types && params?.value) {
+        usdcPermitSignature = await signTypedDataCompat(hlWalletEvm, params.domain, params.types, params.value);
+      }
+    }
+  } catch (e) {
+    console.warn('[mayan] permit signing failed, will try without:', e.message);
+  }
 
   onStatus?.('awaiting_signature');
   const signSolanaTransaction = async (tx) => await signSolTx(tx);
+  const enrichedQuote = usdcPermitSignature ? { ...quote, usdcPermitSignature } : quote;
 
-  // Try every known position/key for the permit signature
   const attempts = [
-    { label: '7th: {usdcPermitSignature}',  fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, {}, signSolanaTransaction, connection, { usdcPermitSignature }) },
-    { label: '4th: {usdcPermitSignature}',  fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, { usdcPermitSignature }, signSolanaTransaction, connection) },
-    { label: '7th: raw string',             fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, {}, signSolanaTransaction, connection, usdcPermitSignature) },
-    { label: '7th: {permit}',               fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, {}, signSolanaTransaction, connection, { permit: usdcPermitSignature }) },
-    { label: '7th: {permitSignature}',      fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, {}, signSolanaTransaction, connection, { permitSignature: usdcPermitSignature }) },
+    { label: '6 args: no permit (v14)',           fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, {}, signSolanaTransaction, connection) },
+    { label: '7th arg: {usdcPermitSignature}',    fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, {}, signSolanaTransaction, connection, { usdcPermitSignature }) },
+    { label: '4th arg: {usdcPermitSignature}',    fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, { usdcPermitSignature }, signSolanaTransaction, connection) },
+    { label: '7th arg: raw string',               fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, {}, signSolanaTransaction, connection, usdcPermitSignature) },
+    { label: '7th arg: {permit}',                 fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, {}, signSolanaTransaction, connection, { permit: usdcPermitSignature }) },
+    { label: '7th arg: {permitSignature}',        fn: () => mayanSwapFromSolana(quote, solPubkey, hlAddress, {}, signSolanaTransaction, connection, { permitSignature: usdcPermitSignature }) },
+    { label: 'permit IN quote, 6 args',           fn: () => mayanSwapFromSolana(enrichedQuote, solPubkey, hlAddress, {}, signSolanaTransaction, connection) },
+    { label: 'permit IN quote, 7th arg blank',    fn: () => mayanSwapFromSolana(enrichedQuote, solPubkey, hlAddress, {}, signSolanaTransaction, connection, {}) },
   ];
 
   let lastErr = null;
   for (const a of attempts) {
     try {
+      console.log('[mayan deposit] trying:', a.label);
       const result = await a.fn();
-      console.log('[mayan deposit] succeeded with', a.label);
+      console.log('[mayan deposit] SUCCESS with:', a.label);
       onStatus?.('bridging');
       const txHash = typeof result === 'string'
         ? result
         : (result?.signature || result?.hash || result?.txHash);
-      if (!txHash) throw new Error('Mayan did not return tx hash');
+      if (!txHash) throw new Error('Mayan returned no tx hash');
       return { txHash, quote };
     } catch (e) {
       lastErr = e;
-      console.warn('[mayan deposit] attempt failed:', a.label, e.message);
-      // If error is NOT about permit, it's a real failure — stop
-      if (!/permit/i.test(e.message || '')) throw e;
+      console.warn('[mayan deposit] failed:', a.label, '—', e.message);
+      if (!/permit|signature|required/i.test(e.message || '')) throw e;
     }
   }
-  throw new Error('All permit positions failed: ' + (lastErr?.message || 'unknown'));
-}
-
-
-  onStatus?.('signing_permit');
-  const mod = await getEthers();
-  const ethersNs = getEthersNs(mod);
-  if (!ethersNs) throw new Error('Ethers unavailable');
-
-  const arbProvider = new ethersNs.JsonRpcProvider(ARB_RPC_URL);
-  const hlWalletEvm = new ethersNs.Wallet(hlPrivateKey, arbProvider);
-
-  const permitParams = await getHyperCoreUSDCDepositPermitParams(quote, hlAddress, arbProvider);
-  const { value, domain, types } = permitParams;
-  const usdcPermitSignature = await signTypedDataCompat(hlWalletEvm, domain, types, value);
-
-  onStatus?.('awaiting_signature');
-  const signSolanaTransaction = async (tx) => await signSolTx(tx);
-
-  const swapResult = await mayanSwapFromSolana(
-    quote, solPubkey, hlAddress, {},
-    signSolanaTransaction, connection,
-    { usdcPermitSignature },
-  );
-
-  const txHash = typeof swapResult === 'string'
-    ? swapResult
-    : (swapResult?.signature || swapResult?.hash || swapResult?.txHash);
-  if (!txHash) throw new Error('Mayan did not return a transaction hash');
-
-  onStatus?.('bridging');
-  return { txHash, quote };
+  throw new Error('Bridge failed: ' + (lastErr?.message || 'unknown'));
 }
 
 async function bridgeWithdrawInit({ hl_wallet_address, usd_amount, user_sol_addr }) {
@@ -1076,6 +1064,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
   const [transferOpen, setTransferOpen]       = useState(false);
   const [transferMode, setTransferMode]       = useState('deposit');
   const [sizePct, setSizePct]                 = useState(null);
+  const [hlBalance, setHlBalance]             = useState(0);
 
   useBodyLock(open);
 
@@ -1091,6 +1080,18 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
   useEffect(() => {
     if (pair?.leverage && leverage > pair.leverage) setLeverage(pair.leverage);
   }, [pair?.leverage, leverage]);
+
+  useEffect(() => {
+    if (!open || !hlWallet?.address) { setHlBalance(0); return; }
+    let alive = true;
+    const tick = async () => {
+      const v = await fetchHlAccountValue(hlWallet.address);
+      if (alive) setHlBalance(v);
+    };
+    tick();
+    const id = setInterval(tick, 8000);
+    return () => { alive = false; clearInterval(id); };
+  }, [open, hlWallet?.address]);
 
   const isLong     = side === 'long';
   const entryPrice = Number(pair?.price || 0);
@@ -1235,16 +1236,22 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, posit
 
           {hlWallet && (
             <div style={{ marginBottom: 14, padding: '12px 14px', background: 'rgba(151,252,228,.04)', border: '1px solid rgba(151,252,228,.14)', borderRadius: 14 }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
-                <div>
-                  <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.06em', ...T.mono }}>HYPERLIQUID WALLET</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10, gap: 10 }}>
+                <div style={{ minWidth: 0 }}>
+                  <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.06em', ...T.mono }}>HL WALLET</div>
                   <div style={{ fontSize: 11, color: C.ink, marginTop: 3, ...T.mono }}>
                     {hlWallet.address.slice(0, 6)}...{hlWallet.address.slice(-4)}
                   </div>
                 </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.06em', ...T.mono }}>BALANCE</div>
+                  <div style={{ fontSize: 14, color: hlBalance > 0 ? C.hl : C.muted, fontWeight: 800, marginTop: 2, ...T.mono }}>
+                    {fmt(hlBalance, 2)}
+                  </div>
+                </div>
                 <div style={{ fontSize: 10, color: C.hl, fontWeight: 700, display: 'flex', alignItems: 'center', gap: 5, ...T.mono }}>
                   <span style={{ width: 5, height: 5, borderRadius: '50%', background: C.hl, boxShadow: `0 0 6px ${C.hl}` }}/>
-                  Active
+                  Live
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8 }}>
@@ -1646,5 +1653,4 @@ export default function PerpsTrade({ onConnectWallet }) {
     </>
   );
 }
-
 
