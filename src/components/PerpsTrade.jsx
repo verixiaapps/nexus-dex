@@ -1,4 +1,3 @@
-Final perfect file in 3 parts. All changes integrated: withdrawable/marginUsed split, centralized refreshAfterAction helper, available-balance validation in execute, plus everything from before.
 Part 1:
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -14,12 +13,6 @@ import {
   getChains as lifiGetChains,
   getTokens as lifiGetTokens,
 } from '@lifi/sdk';
-
-/* -- NEXUS DEX -----------------------------------------------------
-   Connect Solana wallet -> pick market -> Long / Short -> done.
-   Bridge: Li.Fi (Solana -> HyperCore, one signature in user's Solana wallet).
-   Non-custodial: HL EVM wallet derived from Solana signMessage (session only).
-------------------------------------------------------------------- */
 
 const ENABLE_TRADING        = process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
 const BUILDER_ADDRESS       = '';
@@ -47,7 +40,6 @@ const HYPERCORE_FALLBACK_USDC     = '0xb88339CB7199b77E23DB6E890353E22632Ba630f'
 const DERIVATION_MSG = (pub) =>
   `Nexus DEX: Authorize HyperCore Account\n\nWallet: ${pub}\n\nThis creates your non-custodial trading account. No SOL is spent.`;
 
-/* -- Monotonic nonce ---------------------------------------------- */
 let _lastNonce = 0;
 function nextNonce() {
   const now = Date.now();
@@ -56,7 +48,6 @@ function nextNonce() {
   return n;
 }
 
-/* -- Client order ID generator (idempotency) ---------------------- */
 function generateCloid() {
   const bytes = new Uint8Array(16);
   crypto.getRandomValues(bytes);
@@ -66,7 +57,6 @@ function isDuplicateCloidError(msg) {
   return /cloid|already exists|duplicate.*order/i.test(String(msg || ''));
 }
 
-/* -- Li.Fi one-time SDK config ------------------------------------ */
 let _lifiConfigured = false;
 function ensureLifiConfig() {
   if (_lifiConfigured) return;
@@ -79,7 +69,6 @@ function ensureLifiConfig() {
   _lifiConfigured = true;
 }
 
-/* -- Design tokens ------------------------------------------------ */
 const C = {
   bg:'#04070f', bg2:'#070b16', surface:'#0a1020', surface2:'#0e1428',
   ink:'#e6efff', inkStr:'#f5fafe',
@@ -134,7 +123,6 @@ function useBodyLock(open) {
   }, [open]);
 }
 
-/* -- Formatters --------------------------------------------------- */
 function fmt(n, d) {
   if (n == null || isNaN(n)) return '-';
   n = Number(n);
@@ -199,7 +187,6 @@ function coinAccent(symbol) {
   return map[symbol] || ['#a87fff','#97fce4'];
 }
 
-/* -- Ethers lazy-load --------------------------------------------- */
 let _ethersModule = null;
 async function getEthers() {
   if (_ethersModule) return _ethersModule;
@@ -224,7 +211,6 @@ function splitSigCompat(ethersNs, sig) {
   throw new Error('Cannot split signature');
 }
 
-/* -- Session wallet ----------------------------------------------- */
 function getSessionWallet(solPubkey) {
   try {
     const raw = sessionStorage.getItem('nexus_hl_' + solPubkey);
@@ -261,7 +247,6 @@ async function deriveHLWallet(signMessage, solPubkey) {
   return result;
 }
 
-/* -- Cached account snapshot -------------------------------------- */
 function loadCachedAccount(walletPubkey) {
   if (!walletPubkey) return null;
   try {
@@ -319,7 +304,6 @@ async function fetchHlState(hlAddress) {
   catch { return null; }
 }
 
-// Now returns balance + withdrawable (free to trade) + marginUsed (locked in positions)
 async function fetchHlBalanceAndPositions(hlAddress) {
   const state = await fetchHlState(hlAddress);
   const balance      = parseFloat(state?.marginSummary?.accountValue || 0);
@@ -830,7 +814,6 @@ async function fetchSparkMap(markets) {
   return map;
 }
 
-/* -- Visual components -------------------------------------------- */
 function Ticker({ symbol, size = 36 }) {
   const [a, b] = coinAccent(symbol);
   return (
@@ -978,9 +961,6 @@ function PositionsPanel({ positions, marketData, onClose }) {
   );
 }
 
-/* -- Wallet panel ------------------------------------------------- */
-// Now shows Available (free to trade) + In Positions (locked margin) instead
-// of just total. Total equity stays at the top of the panel.
 function WalletPanel({
   solLamports, solPrice,
   hlBalanceUsd, hlAvailableUsd, hlMarginUsedUsd,
@@ -1062,7 +1042,6 @@ function WalletPanel({
   );
 }
 
-/* -- Withdraw modal ----------------------------------------------- */
 function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, signMessage, refreshAfterAction }) {
   const [amount, setAmount]         = useState('');
   const [status, setStatus]         = useState('idle');
@@ -1122,8 +1101,6 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
       const submitData = await submit.json();
       if (!submit.ok) throw new Error(submitData.error || 'Submit failed');
 
-      // HL balance drops as soon as withdraw is submitted -- refresh immediately
-      // so the user sees the decrement, then keep polling for the bridge status.
       refreshAfterAction?.();
 
       setStatus('polling');
@@ -1136,7 +1113,6 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
           clearInterval(pollRef.current);
           setError('Still processing. Check your Solana wallet in a few minutes.');
           setStatus('error');
-          // Final refresh in case the SOL did land
           refreshAfterAction?.();
           return;
         }
@@ -1150,7 +1126,6 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
             clearInterval(pollRef.current);
             setStatus('complete');
             setStatusMsg('');
-            // SOL has arrived -- refresh wallet + trading balances
             refreshAfterAction?.();
           } else if (data.status === 'failed') {
             failedRef.current = true;
@@ -1159,9 +1134,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
             setStatus('error');
             refreshAfterAction?.();
           }
-        } catch {
-          // transient: keep polling until deadline
-        }
+        } catch {}
       }, 8_000);
 
     } catch (e) {
@@ -1180,7 +1153,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
       <div style={{
         position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
         width: '100%', maxWidth: 500, zIndex: 451,
-        maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        maxHeight: '88dvh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
         background: `linear-gradient(180deg,${C.surface2} 0%,${C.bg} 100%)`,
         borderTop: '1px solid rgba(168,127,255,.30)', borderRadius: '26px 26px 0 0',
         boxShadow: '0 -24px 70px rgba(0,0,0,.6)',
@@ -1205,6 +1178,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
           <div style={{ background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, borderRadius: 14, padding: '13px 14px', marginBottom: 14, display: 'flex', alignItems: 'center', gap: 8, opacity: isBusy ? 0.6 : 1 }}>
             <span style={{ color: C.muted, fontSize: 18, ...T.mono }}>$</span>
             <input value={amount} onChange={e => { setAmount(cleanAmount(e.target.value)); setError(''); }} placeholder="0.00" disabled={isBusy}
+              inputMode="decimal" enterKeyHint="done"
               style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 23, fontWeight: 800, color: C.inkStr, outline: 'none', fontVariantNumeric: 'tabular-nums', ...T.display }}
             />
             <button onClick={() => setAmount(Math.floor(hlBalance * 0.99).toString())} disabled={isBusy} style={{ padding: '4px 10px', borderRadius: 7, border: `1px solid ${C.border}`, background: 'transparent', color: C.muted, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>MAX</button>
@@ -1255,7 +1229,6 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
   );
 }
 
-/* -- Deposit modal ------------------------------------------------ */
 function DepositModal({
   open, onClose, walletPubkey,
   hlWallet, setHlWallet,
@@ -1310,8 +1283,6 @@ function DepositModal({
       setStatusMsg('Waiting for funds...');
       await pollUntilFunded(walletData.address, usdValue);
       clearBridge('deposit');
-      // Funds landed -- triple refresh catches SOL wallet decrement +
-      // HL balance increment + any positions update
       refreshAfterAction?.();
       setStatus('complete'); setStatusMsg('');
     } catch (e) {
@@ -1332,7 +1303,7 @@ function DepositModal({
       <div style={{
         position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
         width: '100%', maxWidth: 500, zIndex: 451,
-        maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        maxHeight: '88dvh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
         background: `linear-gradient(180deg,${C.surface2} 0%,${C.bg} 100%)`,
         borderTop: `1px solid ${C.borderHi}`, borderRadius: '26px 26px 0 0',
         boxShadow: '0 -24px 70px rgba(0,0,0,.6)',
@@ -1358,6 +1329,7 @@ function DepositModal({
 
           <div style={{ background: 'rgba(255,255,255,.04)', border: `1px solid ${notEnoughSol ? 'rgba(255,138,158,.40)' : C.border}`, borderRadius: 14, padding: '13px 14px', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 10, opacity: isBusy ? 0.6 : 1 }}>
             <input value={amount} onChange={e => { setAmount(cleanAmount(e.target.value)); setError(''); }} placeholder="0.00" disabled={isBusy}
+              inputMode="decimal" enterKeyHint="done"
               style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 23, fontWeight: 800, color: C.inkStr, outline: 'none', fontVariantNumeric: 'tabular-nums', ...T.display }}
             />
             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1432,7 +1404,6 @@ function DepositModal({
   );
 }
 
-/* -- Trade Drawer ------------------------------------------------- */
 function TradeDrawer({
   open, onClose, pair, onConnectWallet, walletPubkey,
   marketData, allPerps,
@@ -1516,7 +1487,13 @@ function TradeDrawer({
     ? isLong ? entryPrice * (1 - 0.9 / leverage) : entryPrice * (1 + 0.9 / leverage)
     : 0;
   const solBalance   = solLamports / LAMPORTS_PER_SOL;
-  const notEnoughSol = solVal > 0 && solVal > solBalance * 0.98;
+
+  // Only flag "not enough SOL" if HL balance can't cover the trade either.
+  // If hlAvailable covers it, no SOL needed from wallet.
+  const usdNeededFromWallet = Math.max(0, usdAmount - hlAvailable);
+  const solNeededFromWallet = solPrice > 0 ? usdNeededFromWallet / solPrice : 0;
+  const notEnoughSol = solNeededFromWallet > 0 && solNeededFromWallet > solBalance * 0.98;
+
   const fundingRate  = pair?.funding || 0;
 
   const quickPct = (p) => {
@@ -1542,9 +1519,6 @@ function TradeDrawer({
       const walletData = await deriveHLWallet(signMessage, walletPubkey);
       if (!hlWallet) setHlWallet({ address: walletData.address });
 
-      // Check AVAILABLE (withdrawable) not total balance. If positions are open,
-      // some balance is locked. Bridging based on total would skip the bridge
-      // when user can't actually open the trade.
       let bp = await fetchHlBalanceAndPositions(walletData.address);
       setHlBalance(bp.balance);
       setHlAvailable(bp.withdrawable);
@@ -1571,8 +1545,6 @@ function TradeDrawer({
       }
 
       setStatusMsg(`Opening ${isLong ? 'long' : 'short'}...`);
-      // safeMargin based on AVAILABLE, not total. Total includes locked margin
-      // which HL won't let us use for a new trade.
       const safeMargin = Math.min(usd, bp.withdrawable * 0.99);
       if (safeMargin < 10) {
         throw new Error('Available balance below minimum after fees. Wait a moment and try again.');
@@ -1617,7 +1589,6 @@ function TradeDrawer({
         setStatusMsg(`Closing ${pos.coin} position...`);
       }
 
-      // Fetch LIVE position size right before placing the close
       const fresh = await fetchHlBalanceAndPositions(walletData.address);
       const live  = fresh.positions.find(p => p.coin === pos.coin);
       if (!live) {
@@ -1663,7 +1634,7 @@ function TradeDrawer({
         width: '100%', maxWidth: 540, zIndex: 401,
         background: `linear-gradient(180deg,${C.surface2} 0%,${C.bg} 100%)`,
         borderTop: `1px solid ${C.borderHi}`, borderRadius: '26px 26px 0 0',
-        maxHeight: '88vh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        maxHeight: '88dvh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
         boxShadow: `0 -28px 80px rgba(0,0,0,.7), ${C.glow}`,
       }}>
         <div style={{ flexShrink: 0, padding: '14px 22px' }}>
@@ -1752,6 +1723,7 @@ function TradeDrawer({
             </div>
             <div style={{ background: 'rgba(255,255,255,.04)', border: `1px solid ${notEnoughSol ? 'rgba(255,138,158,.40)' : C.border}`, borderRadius: 14, padding: '13px 14px', marginBottom: 9, display: 'flex', alignItems: 'center', gap: 10, opacity: isBusy ? 0.6 : 1 }}>
               <input value={solAmount} onChange={e => { setSolAmount(cleanAmount(e.target.value)); setError(''); }} placeholder="0.00" disabled={isBusy}
+                inputMode="decimal" enterKeyHint="done"
                 style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 25, fontWeight: 800, color: C.inkStr, outline: 'none', fontVariantNumeric: 'tabular-nums', ...T.display }}
               />
               <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
@@ -1855,7 +1827,6 @@ function TradeDrawer({
         </div>
       </div>
 
-      {/* Withdraw modal sees AVAILABLE balance, not total. User can't withdraw locked margin. */}
       <WithdrawModal
         open={withdrawOpen}
         onClose={() => setWithdrawOpen(false)}
@@ -1879,7 +1850,6 @@ function TradeDrawer({
   );
 }
 
-/* -- Main page ---------------------------------------------------- */
 export default function PerpsTrade({ onConnectWallet }) {
   const [oneHourMap, setOneHourMap] = useState({});
   const [sparkMap,   setSparkMap]   = useState({});
@@ -1955,10 +1925,6 @@ export default function PerpsTrade({ onConnectWallet }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletPubkey, solPk, connection]);
 
-  // Centralized refresh-after-action: three staggered refreshes catch HL's
-  // clearinghouseState lag (acks land before settled state propagates).
-  // Called from every completion path: open, close, deposit, withdraw,
-  // bridge resume, plus error paths.
   const refreshAfterAction = useCallback(() => {
     refreshAccount?.();
     setTimeout(() => refreshAccount?.(), 1500);
@@ -1974,7 +1940,6 @@ export default function PerpsTrade({ onConnectWallet }) {
     return () => { alive = false; clearInterval(id); };
   }, [walletPubkey, refreshAccount]);
 
-  // Resume in-flight deposit on page refresh
   useEffect(() => {
     if (!walletPubkey) return;
     const addr = getResolvedHlAddress(walletPubkey);
@@ -2037,7 +2002,6 @@ export default function PerpsTrade({ onConnectWallet }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // On-demand 1h fetch for active pair if not in curated map
   useEffect(() => {
     if (!activePair?.id) return;
     if (oneHourMap[activePair.id] != null) return;
@@ -2075,7 +2039,6 @@ export default function PerpsTrade({ onConnectWallet }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // On-demand sparkline for active pair
   useEffect(() => {
     if (!activePair?.id) return;
     if (Array.isArray(sparkMap[activePair.id]) && sparkMap[activePair.id].length > 0) return;
