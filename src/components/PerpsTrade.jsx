@@ -21,12 +21,11 @@ const LIFI_FEE              = 0;
 
 const SOL_MINT              = 'So11111111111111111111111111111111111111112';
 const LAMPORTS_PER_SOL      = 1_000_000_000;
+
 const LIFI_SOLANA_CHAIN_ID  = 1151111081099710;
+
 const HYPERCORE_FALLBACK_CHAIN_ID = 1337;
 const HYPERCORE_FALLBACK_USDC     = '0x0000000000000000000000000000000000000000';
-
-// FIX: minimum SOL to keep in wallet for Solana tx fees + rent
-const FEE_RESERVE_SOL = 0.012;
 
 const DERIVATION_MSG = (pub) =>
   `Nexus DEX: Authorize HyperCore Account\n\nWallet: ${pub}\n\nThis creates your non-custodial trading account. No SOL is spent.`;
@@ -301,7 +300,7 @@ async function pollUntilFunded(hlAddress, targetUsd, timeoutMs = 300_000) {
     if (balance >= targetUsd * 0.97) return balance;
     await new Promise(r => setTimeout(r, 4_000));
   }
-  throw new Error('Bridge is taking longer than expected. Your SOL is safe -- refresh to check.');
+  throw new Error('Bridge is taking longer than expected. Your SOL is safe - refresh to check.');
 }
 
 let _hyperCoreResolved = null;
@@ -333,9 +332,7 @@ async function resolveHyperCoreChain() {
   return _hyperCoreResolved;
 }
 
-async function depositSolToHyperCore({
-  solLamports, hlAddress, solPubkey, onStatus,
-}) {
+async function depositSolToHyperCore({ solLamports, hlAddress, solPubkey, onStatus }) {
   ensureLifiConfig();
 
   onStatus?.('Finding route...');
@@ -427,11 +424,12 @@ function clearBridge(mode) {
 }
 
 function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = false }) {
-  if (!ENABLE_TRADING) throw new Error('Trading is disabled -- set REACT_APP_HYPERLIQUID_LIVE_TRADING=1');
+  if (!ENABLE_TRADING) throw new Error('Trading is disabled - set REACT_APP_HYPERLIQUID_LIVE_TRADING=1');
   const assetIndex = pair?.assetIndex;
   const price      = Number(pair?.price || 0);
   const margin     = Number(usdAmount || 0);
-  const lev        = Number(leverage || 1);
+  const maxLev     = Math.max(1, Math.floor(Number(pair?.leverage || 1)));
+  const lev        = Math.min(Math.max(1, Number(leverage || 1)), maxLev);
   const szDecimals = Number.isInteger(pair?.szDecimals) ? pair.szDecimals : 4;
 
   if (!Number.isInteger(assetIndex) || assetIndex < 0) throw new Error('Market loading, try again');
@@ -439,10 +437,8 @@ function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   if (!Number.isFinite(margin) || margin < 10)         throw new Error('Minimum order is $10');
 
   const notional = reduceOnly ? margin : margin * lev * 0.97;
-  const limitPx  = aggressivePx(price, isLong, szDecimals);
-  const sizingPx = isLong
-    ? Math.max(price, parseFloat(limitPx))
-    : Math.min(price, parseFloat(limitPx));
+  const limitPx = aggressivePx(price, isLong, szDecimals);
+  const sizingPx = isLong ? Math.max(price, parseFloat(limitPx)) : Math.min(price, parseFloat(limitPx));
   const coinSize = roundSize(notional / sizingPx, szDecimals);
 
   if (parseFloat(coinSize) <= 0) throw new Error('Order size too small for this market');
@@ -841,38 +837,38 @@ function WalletPanel({ solLamports, solPrice, hlBalanceUsd, hlAddress, onWithdra
             {needsSync ? 'Not synced' : (hlBalanceUsd > 0 ? fmt(hlBalanceUsd, 2) : 'Empty')}
           </div>
         </div>
-      </div>
-      <div style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
-          {hlAddress
-            ? <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>{hlAddress.slice(0, 6)}...{hlAddress.slice(-4)}</span>
-            : <span style={{ fontSize: 10, color: C.amber, ...T.mono }}>Sign to view positions</span>}
-          {onSync && (
-            <button onClick={syncing ? undefined : onSync} disabled={syncing} style={{
-              padding: '4px 9px', borderRadius: 7,
-              border: `1px solid ${needsSync ? 'rgba(245,181,61,.40)' : C.border}`,
-              background: needsSync ? 'rgba(245,181,61,.10)' : 'transparent',
-              color: needsSync ? C.amber : C.muted,
-              fontSize: 10, fontWeight: 700, cursor: syncing ? 'wait' : 'pointer',
-              opacity: syncing ? 0.5 : 1, ...T.mono,
-            }}>{syncing ? '...' : (needsSync ? 'Sync' : 'Refresh')}</button>
-          )}
-        </div>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button onClick={onDeposit} style={{
-            padding: '6px 14px', borderRadius: 8,
-            border: '1px solid rgba(151,252,228,.30)',
-            background: 'rgba(151,252,228,.10)',
-            color: C.hl, fontWeight: 700, fontSize: 11, cursor: 'pointer', ...T.mono,
-          }}>+ Deposit</button>
-          <button onClick={canWithdraw ? onWithdraw : undefined} disabled={!canWithdraw} style={{
-            padding: '6px 14px', borderRadius: 8,
-            border: `1px solid ${canWithdraw ? 'rgba(168,127,255,.30)' : C.border}`,
-            background: canWithdraw ? 'rgba(168,127,255,.08)' : 'rgba(255,255,255,.02)',
-            color: canWithdraw ? C.violet : C.muted2,
-            fontWeight: 700, fontSize: 11, cursor: canWithdraw ? 'pointer' : 'not-allowed',
-            opacity: canWithdraw ? 1 : 0.55, ...T.mono,
-          }}>{'Withdraw ->'}</button>
+        <div style={{ padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, minWidth: 0 }}>
+            {hlAddress
+              ? <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>{hlAddress.slice(0, 6)}...{hlAddress.slice(-4)}</span>
+              : <span style={{ fontSize: 10, color: C.amber, ...T.mono }}>Sign to view positions</span>}
+            {onSync && (
+              <button onClick={syncing ? undefined : onSync} disabled={syncing} style={{
+                padding: '4px 9px', borderRadius: 7,
+                border: `1px solid ${needsSync ? 'rgba(245,181,61,.40)' : C.border}`,
+                background: needsSync ? 'rgba(245,181,61,.10)' : 'transparent',
+                color: needsSync ? C.amber : C.muted,
+                fontSize: 10, fontWeight: 700, cursor: syncing ? 'wait' : 'pointer',
+                opacity: syncing ? 0.5 : 1, ...T.mono,
+              }}>{syncing ? '...' : (needsSync ? 'Sync' : 'R')}</button>
+            )}
+          </div>
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button onClick={onDeposit} style={{
+              padding: '6px 14px', borderRadius: 8,
+              border: '1px solid rgba(151,252,228,.30)',
+              background: 'rgba(151,252,228,.10)',
+              color: C.hl, fontWeight: 700, fontSize: 11, cursor: 'pointer', ...T.mono,
+            }}>+ Deposit</button>
+            <button onClick={canWithdraw ? onWithdraw : undefined} disabled={!canWithdraw} style={{
+              padding: '6px 14px', borderRadius: 8,
+              border: `1px solid ${canWithdraw ? 'rgba(168,127,255,.30)' : C.border}`,
+              background: canWithdraw ? 'rgba(168,127,255,.08)' : 'rgba(255,255,255,.02)',
+              color: canWithdraw ? C.violet : C.muted2,
+              fontWeight: 700, fontSize: 11, cursor: canWithdraw ? 'pointer' : 'not-allowed',
+              opacity: canWithdraw ? 1 : 0.55, ...T.mono,
+            }}>Withdraw -&gt;</button>
+          </div>
         </div>
       </div>
     </div>
@@ -978,7 +974,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
           <div>
             <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 18, letterSpacing: '-.02em', ...T.display }}>Withdraw</div>
-            <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>HyperCore -> SOL in your Solana wallet (~4 min)</div>
+            <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>HyperCore -&gt; SOL in your Solana wallet (~4 min)</div>
           </div>
           <button onClick={isBusy ? undefined : onClose} disabled={isBusy} style={{ background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`, color: C.muted, width: 32, height: 32, borderRadius: 10, fontSize: 18, cursor: 'pointer', opacity: isBusy ? 0.4 : 1 }}>X</button>
         </div>
@@ -1015,10 +1011,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
         )}
         {error && <div style={{ marginBottom: 12, padding: 11, background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.24)', borderRadius: 12, fontSize: 12, color: C.down, ...T.body }}>{error}</div>}
 
-        <div style={{
-          position: 'sticky', bottom: 0, paddingTop: 4, marginTop: 4,
-          background: `linear-gradient(180deg, transparent 0%, ${C.bg} 30%)`,
-        }}>
+        <div style={{ position: 'sticky', bottom: 0, paddingTop: 4, marginTop: 4, background: `linear-gradient(180deg, transparent 0%, ${C.bg} 30%)` }}>
           {isDone ? (
             <button onClick={onClose} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', background: `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`, color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display }}>Done</button>
           ) : (
@@ -1038,7 +1031,6 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
   );
 }
 
-// ─── FIX: DepositModal — reserve SOL for Solana tx fees ───────────────────────
 function DepositModal({
   open, onClose, walletPubkey,
   hlWallet, setHlWallet,
@@ -1060,31 +1052,27 @@ function DepositModal({
   const solVal       = parseFloat(amount) || 0;
   const usdValue     = solVal * solPrice;
   const solBalance   = solLamports / LAMPORTS_PER_SOL;
-  // FIX: enforce fee reserve so Li.Fi never sees a balance-too-low error
-  const maxSpendable = Math.max(0, solBalance - FEE_RESERVE_SOL);
-  const notEnoughSol = solVal > 0 && solVal > maxSpendable;
+  const notEnoughSol = solVal > 0 && solVal > solBalance * 0.98;
   const isBusy       = status === 'loading';
   const isDone       = status === 'complete';
 
-  // FIX: quickPct now respects the fee reserve
   const quickPct = (p) => {
-    if (maxSpendable <= 0) return;
-    setAmount((maxSpendable * p / 100).toFixed(4));
+    const avail = solBalance * 0.95;
+    if (avail <= 0) return;
+    setAmount((avail * p / 100).toFixed(4));
   };
 
   const handleDeposit = async () => {
-    if (!signMessage)              { setError('Wallet does not support message signing'); return; }
-    if (!solVal || solVal < 0.01)  { setError('Enter an amount'); return; }
-    // FIX: block submit if the amount would leave no SOL for fees
-    if (solVal > maxSpendable)     { setError(`Reserve ${FEE_RESERVE_SOL} SOL for fees. Max deposit: ${maxSpendable.toFixed(4)} SOL`); return; }
-    if (usdValue < 10)             { setError('Minimum deposit is $10'); return; }
+    if (!signMessage)             { setError('Wallet does not support message signing'); return; }
+    if (!solVal || solVal < 0.01) { setError('Enter an amount'); return; }
+    if (notEnoughSol)             { setError('Not enough SOL in your wallet'); return; }
+    if (usdValue < 10)            { setError('Minimum deposit is $10'); return; }
 
     setStatus('loading'); setError(''); setStatusMsg('Setting up account...');
     try {
       const walletData = await deriveHLWallet(signMessage, walletPubkey);
       if (!hlWallet) setHlWallet({ address: walletData.address });
 
-      // FIX: use exact requested lamports (fee reserve already enforced above)
       const lamports = Math.floor(solVal * LAMPORTS_PER_SOL);
       setStatusMsg('Bridging SOL...');
       const { txHash } = await depositSolToHyperCore({
@@ -1126,7 +1114,7 @@ function DepositModal({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
           <div>
             <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 18, letterSpacing: '-.02em', ...T.display }}>Deposit</div>
-            <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>SOL -> HyperCore trading account</div>
+            <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>SOL -&gt; HyperCore trading account</div>
           </div>
           <button onClick={isBusy ? undefined : onClose} disabled={isBusy} style={{ background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`, color: C.muted, width: 32, height: 32, borderRadius: 10, fontSize: 18, cursor: 'pointer', opacity: isBusy ? 0.4 : 1 }}>X</button>
         </div>
@@ -1168,8 +1156,7 @@ function DepositModal({
 
         {notEnoughSol && (
           <div style={{ marginBottom: 12, padding: 11, background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.24)', borderRadius: 12, fontSize: 12, color: C.down, ...T.body }}>
-            {/* FIX: show the correct spendable amount including fee reserve */}
-            Not enough SOL. Max deposit: {maxSpendable.toFixed(4)} SOL ({FEE_RESERVE_SOL} SOL reserved for fees).
+            Not enough SOL. You have {solBalance.toFixed(4)} SOL.
           </div>
         )}
 
@@ -1188,10 +1175,7 @@ function DepositModal({
         )}
         {error && <div style={{ marginBottom: 12, padding: 11, background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.24)', borderRadius: 12, fontSize: 12, color: C.down, ...T.body }}>{error}</div>}
 
-        <div style={{
-          position: 'sticky', bottom: 0, paddingTop: 4, marginTop: 4,
-          background: `linear-gradient(180deg, transparent 0%, ${C.bg} 30%)`,
-        }}>
+        <div style={{ position: 'sticky', bottom: 0, paddingTop: 4, marginTop: 4, background: `linear-gradient(180deg, transparent 0%, ${C.bg} 30%)` }}>
           {isDone ? (
             <button onClick={onClose} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', background: `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`, color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display }}>Done</button>
           ) : (
@@ -1211,7 +1195,6 @@ function DepositModal({
   );
 }
 
-// ─── FIX: TradeDrawer — clamp leverage to pair max on pair change ─────────────
 function TradeDrawer({
   open, onClose, pair, onConnectWallet, walletPubkey, marketData,
   hlWallet, setHlWallet,
@@ -1238,12 +1221,13 @@ function TradeDrawer({
 
   useBodyLock(open && !withdrawOpen && !depositOpen);
 
-  // FIX: clamp leverage state whenever the active pair changes
   useEffect(() => {
-    if (pair?.leverage) {
-      setLeverage(prev => Math.min(prev, pair.leverage));
-    }
-  }, [pair?.leverage]);
+    if (!pair?.leverage) return;
+    setLeverage(prev => {
+      const max = Math.max(1, Math.floor(pair.leverage));
+      return prev > max ? max : prev;
+    });
+  }, [pair?.id, pair?.leverage]);
 
   const handleSync = async () => {
     if (!walletPubkey) return;
@@ -1270,22 +1254,20 @@ function TradeDrawer({
     ? isLong ? entryPrice * (1 - 0.9 / leverage) : entryPrice * (1 + 0.9 / leverage)
     : 0;
   const solBalance   = solLamports / LAMPORTS_PER_SOL;
-  // FIX: apply the same fee reserve in the trade drawer
-  const maxSpendable = Math.max(0, solBalance - FEE_RESERVE_SOL);
-  const notEnoughSol = solVal > 0 && solVal > maxSpendable;
+  const notEnoughSol = solVal > 0 && solVal > solBalance * 0.98;
   const fundingRate  = pair?.funding || 0;
 
-  // FIX: quickPct respects fee reserve
   const quickPct = (p) => {
-    if (maxSpendable <= 0) return;
-    setSolAmount((maxSpendable * p / 100).toFixed(4));
+    const avail = (solLamports / LAMPORTS_PER_SOL) * 0.95;
+    if (avail <= 0) return;
+    setSolAmount((avail * p / 100).toFixed(4));
   };
 
   const execute = async () => {
     if (!wcon)            { onConnectWallet?.(); return; }
     if (!signMessage)     { setError('Wallet does not support message signing'); return; }
     if (!solVal || solVal < 0.01) { setError('Enter an amount'); return; }
-    if (notEnoughSol)     { setError(`Reserve ${FEE_RESERVE_SOL} SOL for fees. Max: ${maxSpendable.toFixed(4)} SOL`); return; }
+    if (notEnoughSol)     { setError('Not enough SOL in your wallet'); return; }
     if (!pair?.price)     { setError('Price unavailable, try again'); return; }
     const usd = solVal * solPrice;
     if (usd < 10) { setError('Minimum trade is $10'); return; }
@@ -1301,11 +1283,7 @@ function TradeDrawer({
 
       if (currentHlBal < usd * 0.99) {
         const needed   = usd - currentHlBal;
-        // FIX: cap lamports so we never exceed maxSpendable (fee reserve preserved)
-        const rawLamports = Math.ceil((needed / solPrice) * LAMPORTS_PER_SOL * 1.05);
-        const maxLamports = Math.floor(maxSpendable * LAMPORTS_PER_SOL);
-        const lamports    = Math.min(rawLamports, maxLamports);
-        if (lamports <= 0) throw new Error(`Not enough SOL after fee reserve. Need more SOL in your wallet.`);
+        const lamports = Math.ceil((needed / solPrice) * LAMPORTS_PER_SOL * 1.05);
         setStatusMsg('Bridging SOL...');
         const { txHash } = await depositSolToHyperCore({
           solLamports: lamports,
@@ -1327,9 +1305,7 @@ function TradeDrawer({
       if (safeMargin < 10) {
         throw new Error('Balance settled below minimum after fees. Wait a moment and try again.');
       }
-      // FIX: pass the clamped leverage (already clamped by useEffect, but double-safe)
-      const clampedLeverage = Math.min(leverage, pair.leverage);
-      await placeOrder({ pair, isLong, usdAmount: safeMargin, leverage: clampedLeverage, hlWalletData: walletData });
+      await placeOrder({ pair, isLong, usdAmount: safeMargin, leverage, hlWalletData: walletData });
 
       setStatus('success');
       setStatusMsg('');
@@ -1347,7 +1323,7 @@ function TradeDrawer({
 
   const closePosition = async (pos, posPair) => {
     const walletData = getSessionWallet(walletPubkey);
-    if (!walletData?.privateKey) { setError('Session expired -- refresh page'); return; }
+    if (!walletData?.privateKey) { setError('Session expired - refresh page'); return; }
     const targetPair = posPair || marketData.find(p => p.id === pos.coin);
     if (!targetPair) { setError('Market data unavailable'); return; }
 
@@ -1430,7 +1406,6 @@ function TradeDrawer({
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px 22px calc(env(safe-area-inset-bottom) + 86px)' }}>
-
           {wcon && (
             <WalletPanel
               solLamports={solLamports} solPrice={solPrice}
@@ -1504,8 +1479,7 @@ function TradeDrawer({
             {notEnoughSol && (
               <div style={{ marginTop: 10, padding: '10px 12px', background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.28)', borderRadius: 10 }}>
                 <div style={{ fontSize: 12, color: C.down, fontWeight: 700, ...T.body }}>Not enough SOL</div>
-                {/* FIX: show correct max including fee reserve */}
-                <div style={{ fontSize: 10, color: C.muted, marginTop: 2, ...T.body }}>Max: {maxSpendable.toFixed(4)} SOL ({FEE_RESERVE_SOL} SOL reserved for fees).</div>
+                <div style={{ fontSize: 10, color: C.muted, marginTop: 2, ...T.body }}>Add more SOL to your wallet. You have {solBalance.toFixed(4)} SOL.</div>
               </div>
             )}
           </div>
@@ -1515,7 +1489,6 @@ function TradeDrawer({
               <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: '.06em', ...T.mono }}>LEVERAGE</span>
               <span style={{ fontSize: 13, color: C.hl, fontWeight: 800, padding: '4px 10px', borderRadius: 8, background: C.hlDim, border: `1px solid ${C.borderHi}`, ...T.mono }}>{leverage}x</span>
             </div>
-            {/* FIX: slider max is pair.leverage; state is already clamped via useEffect */}
             <input type="range" min="1" max={pair.leverage} value={leverage} onChange={e => setLeverage(Number(e.target.value))} disabled={isBusy} style={{ width: '100%', height: 6, padding: '8px 0' }}/>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontSize: 9, color: C.muted2, ...T.mono }}>
               <span style={{ fontWeight: 700 }}>1x</span>
@@ -1598,16 +1571,15 @@ function TradeDrawer({
 export default function PerpsTrade({ onConnectWallet }) {
   const [oneHourMap, setOneHourMap] = useState({});
   const [sparkMap,   setSparkMap]   = useState({});
-  const [allPerps,   setAllPerps]   = useState([]);
   const allPerpsRef = useRef(allPerps);
   useEffect(() => { allPerpsRef.current = allPerps; }, [allPerps]);
-
   const [marketData, setMarketData] = useState(() =>
     PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0, change1h: 0, spark: [], volume24h: 0, openInterest: 0, funding: 0, assetIndex: null, szDecimals: 4 }))
   );
   const [activePair, setActivePair] = useState(marketData[0]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [filter, setFilter]         = useState('All');
+  const [allPerps, setAllPerps]     = useState([]);
   const [spotSymbols, setSpotSymbols] = useState(() => new Set());
 
   const { publicKey: solPk, wallet: solWallet } = useWallet();
