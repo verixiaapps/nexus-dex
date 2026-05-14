@@ -145,6 +145,7 @@ function roundSize(value, szDecimals = 4) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return '0';
   const d = Math.max(0, Math.min(szDecimals, 8));
+  // Truncate (don't round up) so we never exceed available margin
   const factor = Math.pow(10, d);
   const truncated = Math.floor(n * factor) / factor;
   return truncated.toFixed(d);
@@ -152,9 +153,12 @@ function roundSize(value, szDecimals = 4) {
 function roundHlPx(value, szDecimals = 4) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return '0';
+  // Max 5 sig figs
   const sigFigs = 5;
   let s = n.toPrecision(sigFigs);
+  // Convert away from scientific notation
   s = Number(s).toString();
+  // Cap decimals at (6 - szDecimals) for perps
   const maxDecimals = Math.max(0, 6 - szDecimals);
   const num = Number(s);
   const factor = Math.pow(10, maxDecimals);
@@ -220,6 +224,7 @@ function getKnownHlAddress(solPubkey) {
 function setKnownHlAddress(solPubkey, address) {
   try { localStorage.setItem('nexus_hl_addr_' + solPubkey, address); } catch {}
 }
+// Returns HL address from session (with private key) or localStorage (address only)
 function getResolvedHlAddress(solPubkey) {
   return getSessionWallet(solPubkey)?.address || getKnownHlAddress(solPubkey);
 }
@@ -246,6 +251,7 @@ function loadCachedAccount(walletPubkey) {
     const raw = localStorage.getItem('nexus_acct_' + walletPubkey);
     if (!raw) return null;
     const d = JSON.parse(raw);
+    // Cache TTL: 24h. Stale data is fine for first paint; fresh data overwrites in seconds.
     if (Date.now() - (d.ts || 0) > 24 * 3_600_000) return null;
     return d;
   } catch { return null; }
@@ -424,6 +430,10 @@ async function signHlWithdraw(privateKey, action) {
       { name: 'time',             type: 'uint64'  },
     ],
   };
+  // EIP-712 message is exactly these 4 fields. The action object from the
+  // backend may also carry `type` and `signatureChainId` -- those go in the
+  // outer request body but are NOT part of the typed-data hash. Pass only the
+  // signed fields so strict signers don't choke on extras.
   const message = {
     hyperliquidChain: action.hyperliquidChain,
     destination:      action.destination,
@@ -464,6 +474,7 @@ function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   if (!Number.isFinite(price) || price <= 0)           throw new Error('Price unavailable, try again');
   if (!Number.isFinite(margin) || margin < 10)         throw new Error('Minimum order is $10');
 
+  // For new orders: notional = margin * leverage. For close: pass the position value directly.
   const notional = reduceOnly ? margin : margin * lev;
   const coinSize = roundSize(notional / price, szDecimals);
 
@@ -496,6 +507,7 @@ async function setLeverageOnHL({ assetIndex, leverage, isCross = false, hlWallet
   return hlRequest({ action, nonce, signature }, true);
 }
 
+// Cache per-asset leverage so we only call updateLeverage on change
 const _leverageCache = new Map();
 async function placeOrder({ pair, isLong, usdAmount, leverage, reduceOnly = false, hlWalletData }) {
   if (!hlWalletData?.privateKey) throw new Error('Trading account not ready');
@@ -529,6 +541,10 @@ async function placeOrder({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   return result;
 }
 
+// One API hit -> both views. Returns { curated, all }.
+// Curated = the 18 in PERPS_PAIRS for the All/Hot/Gainers/Losers tabs.
+// All     = the full HL universe for the New tab.
+// THROWS on failure so the caller can keep prior good data (no zero-flicker).
 async function fetchMarketSnapshot({ spotSymbols = new Set(), oneHourMap = {}, sparkMap = {} } = {}) {
   const [metaAndCtxs, mids] = await Promise.all([
     hlRequest({ type: 'metaAndAssetCtxs' }),
@@ -571,8 +587,6 @@ async function fetchMarketSnapshot({ spotSymbols = new Set(), oneHourMap = {}, s
       hot:         false,
     };
   });
-  const rankSorted = [...all].sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0));
-  rankSorted.forEach((p, idx) => { p.newnessRank = idx; });
   const allById = new Map(all.map(p => [p.id, p]));
   const curated = PERPS_PAIRS.map(p => {
     const found = allById.get(p.id);
@@ -580,6 +594,7 @@ async function fetchMarketSnapshot({ spotSymbols = new Set(), oneHourMap = {}, s
     return {
       ...found,
       hot: !!p.hot,
+      // honor the curated leverage cap
       leverage: Math.min(found.leverage, p.leverage),
     };
   }).filter(Boolean);
@@ -630,6 +645,8 @@ function updateFirstSeenRegistry(coinNames) {
   } catch { return {}; }
 }
 
+// HL uses "k" prefix for 1000x memecoin perps (kPEPE, kBONK, kSHIB) while spot
+// lists the base name. Match both ways.
 function hasSpotMatch(perpName, spotSymbols) {
   if (!perpName) return false;
   if (spotSymbols.has(perpName)) return true;
@@ -637,15 +654,24 @@ function hasSpotMatch(perpName, spotSymbols) {
   return false;
 }
 
+// "New" tab: sort by HL asset index descending (newer = higher index), apply
+// quality filters, take top 15. We don't filter by first-seen age because we
+// can't know the real listing age on day-one visits.
+// Ranks are assigned by FILTERED position so badges match display order
+// (top row = rank 0 = JUST LISTED, regardless of global asset index gaps).
 function filterNewListings(allPerps) {
   return allPerps
     .filter(p => p.hasSpot)
     .filter(p => p.volume24h >= 500_000)
     .filter(p => p.price > 0)
     .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0))
-    .slice(0, 15);
+    .slice(0, 15)
+    .map((p, idx) => ({ ...p, newnessRank: idx }));
 }
 
+// Freshness badge by asset-index rank: highest index = newest listing on HL.
+// Top 3 = JUST LISTED, next 4 = NEW, next 5 = FRESH. Anything below rank 12
+// gets no badge. The pair's `newnessRank` is set in filterNewListings.
 function freshnessTag(perp) {
   if (!perp || typeof perp.newnessRank !== 'number') return null;
   const r = perp.newnessRank;
@@ -884,7 +910,7 @@ function WalletPanel({ solLamports, solPrice, hlBalanceUsd, hlAddress, onWithdra
               color: needsSync ? C.amber : C.muted,
               fontSize: 10, fontWeight: 700, cursor: syncing ? 'wait' : 'pointer',
               opacity: syncing ? 0.5 : 1, ...T.mono,
-            }}>{syncing ? '...' : (needsSync ? 'Sync' : 'r')}</button>
+            }}>{syncing ? '...' : (needsSync ? 'Sync' : 'Refresh')}</button>
           )}
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
@@ -966,7 +992,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
         if (failedRef.current) return;
         try {
           const r    = await fetch('/api/bridge/withdraw/status?id=' + encodeURIComponent(tid));
-          if (!r.ok) return;
+          if (!r.ok) return; // ignore transient network errors
           const data = await r.json();
           if (data.status === 'bridging')   setStatusMsg('Bridging USDC -> SOL...');
           if (data.status === 'finalizing') setStatusMsg('Finalizing...');
@@ -1307,6 +1333,8 @@ function TradeDrawer({
       let { balance: currentHlBal } = await fetchHlBalanceAndPositions(walletData.address);
       setHlBalance(currentHlBal);
 
+      // Deposit margin if needed. Over-fund 5% to absorb Li.Fi fees + slippage so
+      // the landed balance reliably covers the requested margin in one shot.
       if (currentHlBal < usd * 0.99) {
         const needed   = usd - currentHlBal;
         const lamports = Math.ceil((needed / solPrice) * LAMPORTS_PER_SOL * 1.05);
@@ -1320,6 +1348,7 @@ function TradeDrawer({
         saveBridge('deposit', { txHash, usd: needed });
         setStatusMsg('Waiting for funds...');
         currentHlBal = await pollUntilFunded(walletData.address, usd);
+        // Refetch once more in case the poll returned at the threshold
         const fresh = await fetchHlBalanceAndPositions(walletData.address);
         currentHlBal = fresh.balance;
         setHlBalance(currentHlBal);
@@ -1327,6 +1356,9 @@ function TradeDrawer({
       }
 
       setStatusMsg(`Opening ${isLong ? 'long' : 'short'}...`);
+      // Cap margin at 98% of actual landed balance so HL always has a fee reserve.
+      // Without this, the first trade after a bridge can fail with "insufficient margin"
+      // because fees nibble a few cents off the deposit -- forcing the user to click twice.
       const safeMargin = Math.min(usd, currentHlBal * 0.98);
       if (safeMargin < 10) {
         throw new Error('Balance settled below minimum after fees. Wait a moment and try again.');
@@ -1357,8 +1389,8 @@ function TradeDrawer({
     try {
       await placeOrder({
         pair:       targetPair,
-        isLong:     !pos.isLong,
-        usdAmount:  pos.posValue,
+        isLong:     !pos.isLong,       // opposite side closes
+        usdAmount:  pos.posValue,      // full position value
         leverage:   pos.leverage,
         reduceOnly: true,
         hlWalletData: walletData,
@@ -1632,6 +1664,7 @@ export default function PerpsTrade({ onConnectWallet }) {
   const [solLamports, setSolLamports] = useState(0);
   const [solPrice, setSolPrice]       = useState(0);
 
+  // INSTANT first paint: hydrate from localStorage cache before any network call.
   useEffect(() => {
     if (!walletPubkey) return;
     const addr = getResolvedHlAddress(walletPubkey);
@@ -1645,6 +1678,8 @@ export default function PerpsTrade({ onConnectWallet }) {
     }
   }, [walletPubkey]);
 
+  // Background fetch + 15s poll. Kicks off the moment the wallet is connected --
+  // does NOT wait for the trade drawer to open.
   const refreshAccount = useCallback(async () => {
     if (!walletPubkey) return;
     const addr = getResolvedHlAddress(walletPubkey);
@@ -1675,6 +1710,7 @@ export default function PerpsTrade({ onConnectWallet }) {
     return () => { alive = false; clearInterval(id); };
   }, [walletPubkey, refreshAccount]);
 
+  // Resume in-flight deposit (page refresh mid-bridge)
   useEffect(() => {
     if (!walletPubkey) return;
     const addr = getResolvedHlAddress(walletPubkey);
@@ -1687,8 +1723,11 @@ export default function PerpsTrade({ onConnectWallet }) {
     return () => { alive = false; };
   }, [walletPubkey]);
 
+  // Ethers preload (still used for HL withdrawal signing)
   useEffect(() => { getEthers().catch(() => {}); }, []);
 
+  // Configure Li.Fi SDK once + (re)register Solana provider when the wallet adapter changes.
+  // executeRoute() will then trigger one popup on the user's Solana wallet for the bridge.
   useEffect(() => {
     ensureLifiConfig();
     if (!solWallet?.adapter) return;
@@ -1705,6 +1744,9 @@ export default function PerpsTrade({ onConnectWallet }) {
     }
   }, [solWallet?.adapter]);
 
+  // Single consolidated market poll: one API hit -> both marketData (curated)
+  // and allPerps (full universe). Falls back to keeping prior good data on
+  // transient errors (no zero-flicker).
   useEffect(() => {
     let alive = true;
     const poll = async () => {
@@ -1713,6 +1755,7 @@ export default function PerpsTrade({ onConnectWallet }) {
         if (alive) { setMarketData(curated); setAllPerps(all); }
       } catch (e) {
         console.warn('[market poll]', e?.message || e);
+        // keep prior state - don't wipe to zeros
       }
     };
     poll();
@@ -1721,6 +1764,7 @@ export default function PerpsTrade({ onConnectWallet }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spotSymbols, oneHourMap, sparkMap]);
 
+  // 1-hour change map (slow). Only fetches change data for curated pairs.
   useEffect(() => {
     let alive = true;
     const poll = async () => {
@@ -1737,6 +1781,7 @@ export default function PerpsTrade({ onConnectWallet }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Sparkline map (slowest). Fetched once on mount, then every 5 min.
   useEffect(() => {
     let alive = true;
     const poll = async () => {
@@ -1759,6 +1804,7 @@ export default function PerpsTrade({ onConnectWallet }) {
     if (fresh) setActivePair(fresh);
   }, [marketData, activePair?.id]);
 
+  // Spot universe (very slow-changing, used to flag perps with a spot pair)
   useEffect(() => {
     let alive = true;
     const load = async () => {
@@ -1854,4 +1900,3 @@ export default function PerpsTrade({ onConnectWallet }) {
     </>
   );
 }
-
