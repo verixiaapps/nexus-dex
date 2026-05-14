@@ -766,7 +766,7 @@ function filterNewListings(allPerps) {
     .filter(p => p.volume24h >= 50_000)
     .filter(p => p.price > 0)
     .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0))
-    .slice(0, 20)
+    .slice(0, 60)
     .map((p, idx) => ({ ...p, newnessRank: idx }));
 }
 
