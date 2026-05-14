@@ -41,29 +41,18 @@ function ensureLifiConfig() {
 }
 
 const C = {
-  bg:        '#04070f',
-  bg2:       '#070b16',
-  surface:   '#0a1020',
-  surface2:  '#0e1428',
-  ink:       '#e6efff',
-  inkStr:    '#f5fafe',
-  muted:     '#7a92b3',
-  muted2:    '#475670',
-  hl:        '#97fce4',
-  hl2:       '#5ce9c8',
-  hlDim:     'rgba(151,252,228,.14)',
-  violet:    '#a87fff',
-  sol:       '#9945ff',
-  up:        '#3dd598',
-  down:      '#ff8a9e',
-  amber:     '#f5b53d',
-  border:    'rgba(255,255,255,.06)',
-  borderHi:  'rgba(151,252,228,.24)',
-  hairline:  'rgba(255,255,255,.05)',
-  glow:      '0 0 24px rgba(151,252,228,.18),0 0 48px rgba(151,252,228,.06)',
-  shadowLg:  '0 20px 60px rgba(0,0,0,.55)',
+  bg: '#04070f', bg2: '#070b16', surface: '#0a1020', surface2: '#0e1428',
+  ink: '#e6efff', inkStr: '#f5fafe',
+  muted: '#7a92b3', muted2: '#475670',
+  hl: '#97fce4', hl2: '#5ce9c8', hlDim: 'rgba(151,252,228,.14)',
+  violet: '#a87fff', sol: '#9945ff',
+  up: '#3dd598', down: '#ff8a9e',
+  amber: '#f5b53d',
+  border: 'rgba(255,255,255,.06)', borderHi: 'rgba(151,252,228,.24)',
+  hairline: 'rgba(255,255,255,.05)',
+  glow: '0 0 24px rgba(151,252,228,.18),0 0 48px rgba(151,252,228,.06)',
+  shadowLg: '0 20px 60px rgba(0,0,0,.55)',
 };
-
 const T = {
   display: { fontFamily: "'Syne', system-ui, sans-serif" },
   body:    { fontFamily: "'DM Sans', system-ui, sans-serif" },
@@ -115,7 +104,6 @@ function fmt(n, d) {
   if (n >= 1)    return '$' + n.toFixed(d);
   return '$' + n.toFixed(6);
 }
-
 function shortNum(n) {
   const x = Number(n);
   if (!Number.isFinite(x)) return '-';
@@ -124,15 +112,12 @@ function shortNum(n) {
   if (x >= 1e3) return '$' + (x / 1e3).toFixed(0) + 'K';
   return '$' + x.toFixed(0);
 }
-
 function pct(n) {
   if (n == null || isNaN(n)) return '-';
   return (n >= 0 ? '+' : '') + Number(n).toFixed(2) + '%';
 }
-
 function isValidEthAddress(v) { return /^0x[a-fA-F0-9]{40}$/.test(String(v || '')); }
 function isValidSolAddress(v) { return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(v || '')); }
-
 function cleanAmount(v) {
   const s = String(v || '').replace(/[^0-9.]/g, '');
   const p = s.split('.');
@@ -147,7 +132,6 @@ function roundSize(value, szDecimals = 4) {
   const truncated = Math.floor(n * factor) / factor;
   return truncated.toFixed(d);
 }
-
 function roundHlPx(value, szDecimals = 4) {
   const n = Number(value);
   if (!Number.isFinite(n) || n <= 0) return '0';
@@ -159,27 +143,17 @@ function roundHlPx(value, szDecimals = 4) {
   const factor = Math.pow(10, maxDecimals);
   return (Math.round(num * factor) / factor).toString();
 }
-
 function aggressivePx(mid, isLong, szDecimals = 4) {
   const px = Number(mid);
   if (!Number.isFinite(px) || px <= 0) return '0';
   return roundHlPx(isLong ? px * 1.10 : px * 0.90, szDecimals);
 }
-
 function coinAccent(symbol) {
   const map = {
-    BTC:  ['#f7931a', '#ffbf5c'],
-    ETH:  ['#627eea', '#8fa8ff'],
-    SOL:  ['#14f195', '#9945ff'],
-    HYPE: ['#97fce4', '#5ce9c8'],
-    DOGE: ['#c2a633', '#e8c84a'],
-    PEPE: ['#3dd598', '#5de882'],
-    XRP:  ['#7989ad', '#bcc6e0'],
-    BNB:  ['#f0b90b', '#f5d060'],
-    SUI:  ['#4da2ff', '#80c4ff'],
-    LINK: ['#2a5ada', '#6a95ff'],
-    AVAX: ['#e84142', '#ff7a7b'],
-    ARB:  ['#12aaff', '#60d0ff'],
+    BTC:  ['#f7931a', '#ffbf5c'], ETH:  ['#627eea', '#8fa8ff'], SOL:  ['#14f195', '#9945ff'],
+    HYPE: ['#97fce4', '#5ce9c8'], DOGE: ['#c2a633', '#e8c84a'], PEPE: ['#3dd598', '#5de882'],
+    XRP:  ['#7989ad', '#bcc6e0'], BNB:  ['#f0b90b', '#f5d060'], SUI:  ['#4da2ff', '#80c4ff'],
+    LINK: ['#2a5ada', '#6a95ff'], AVAX: ['#e84142', '#ff7a7b'], ARB:  ['#12aaff', '#60d0ff'],
   };
   return map[symbol] || ['#a87fff', '#97fce4'];
 }
@@ -190,7 +164,6 @@ async function getEthers() {
   _ethersModule = await import('ethers');
   return _ethersModule;
 }
-
 function getEthersNs(mod) {
   if (!mod) return null;
   if (mod.ethers?.Wallet) return mod.ethers;
@@ -198,13 +171,11 @@ function getEthersNs(mod) {
   if (mod.default?.Wallet) return mod.default;
   return null;
 }
-
 async function signTypedDataCompat(wallet, domain, types, value) {
   if (typeof wallet.signTypedData === 'function')  return wallet.signTypedData(domain, types, value);
   if (typeof wallet._signTypedData === 'function') return wallet._signTypedData(domain, types, value);
   throw new Error('Wallet does not support typed data signing');
 }
-
 function splitSigCompat(ethersNs, sig) {
   if (ethersNs.Signature?.from)       return ethersNs.Signature.from(sig);
   if (ethersNs.utils?.splitSignature) return ethersNs.utils.splitSignature(sig);
@@ -217,13 +188,10 @@ function getSessionWallet(solPubkey) {
     return raw ? JSON.parse(raw) : null;
   } catch { return null; }
 }
-
 function setSessionWallet(solPubkey, address, privateKey) {
-  try {
-    sessionStorage.setItem('nexus_hl_' + solPubkey, JSON.stringify({ address, privateKey }));
-  } catch {}
+  try { sessionStorage.setItem('nexus_hl_' + solPubkey, JSON.stringify({ address, privateKey })); }
+  catch {}
 }
-
 async function deriveHLWallet(signMessage, solPubkey) {
   const cached = getSessionWallet(solPubkey);
   if (cached) return cached;
@@ -248,7 +216,6 @@ function loadCachedAccount(walletPubkey) {
     return d;
   } catch { return null; }
 }
-
 function saveCachedAccount(walletPubkey, data) {
   if (!walletPubkey) return;
   try {
@@ -260,7 +227,6 @@ async function fetchSolBalance(connection, publicKey) {
   try { return await connection.getBalance(publicKey); }
   catch { return 0; }
 }
-
 async function fetchSolPrice() {
   const r = await fetch('/api/sol-price');
   if (!r.ok) throw new Error('SOL price unavailable');
@@ -272,9 +238,9 @@ async function fetchSolPrice() {
 async function hlRequest(body, isExchange = false) {
   const path = isExchange ? '/api/hyperliquid/exchange' : '/api/hyperliquid';
   const res  = await fetch(path, {
-    method:  'POST',
+    method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body:    JSON.stringify(body),
+    body: JSON.stringify(body),
   });
   let data = null;
   try { data = await res.json(); } catch {}
@@ -289,7 +255,7 @@ async function fetchHlState(hlAddress) {
 }
 
 async function fetchHlBalanceAndPositions(hlAddress) {
-  const state   = await fetchHlState(hlAddress);
+  const state = await fetchHlState(hlAddress);
   const balance = parseFloat(state?.marginSummary?.accountValue || 0);
   const positions = !state ? [] : (state.assetPositions || [])
     .filter(p => parseFloat(p.position?.szi || 0) !== 0)
@@ -301,12 +267,12 @@ async function fetchHlBalanceAndPositions(hlAddress) {
         szi,
         isLong:     szi > 0,
         size:       Math.abs(szi),
-        entryPx:    parseFloat(pos.entryPx         || 0),
-        unrealPnl:  parseFloat(pos.unrealizedPnl   || 0),
+        entryPx:    parseFloat(pos.entryPx   || 0),
+        unrealPnl:  parseFloat(pos.unrealizedPnl || 0),
         leverage:   pos.leverage?.value || 1,
-        marginUsed: parseFloat(pos.marginUsed      || 0),
-        posValue:   parseFloat(pos.positionValue   || 0),
-        roe:        parseFloat(pos.returnOnEquity  || 0),
+        marginUsed: parseFloat(pos.marginUsed    || 0),
+        posValue:   parseFloat(pos.positionValue || 0),
+        roe:        parseFloat(pos.returnOnEquity || 0),
       };
     });
   return { balance, positions };
@@ -327,7 +293,7 @@ async function resolveHyperCoreChain() {
   if (_hyperCoreResolved) return _hyperCoreResolved;
   try {
     const chains = await lifiGetChains();
-    const match  = (chains || []).find(c => {
+    const match = (chains || []).find(c => {
       const name = String(c.name || '').toLowerCase();
       const key  = String(c.key  || '').toLowerCase();
       return name.includes('hypercore') || name.includes('hyperliquid')
@@ -337,7 +303,7 @@ async function resolveHyperCoreChain() {
 
     let usdcAddr = HYPERCORE_FALLBACK_USDC;
     try {
-      const t    = await lifiGetTokens({ chains: [match.id] });
+      const t = await lifiGetTokens({ chains: [match.id] });
       const list = t?.tokens?.[match.id] || [];
       const usdc = list.find(x => /^usdc(\.e)?$/i.test(x.symbol)) || list.find(x => x.symbol === 'USDC');
       if (usdc?.address) usdcAddr = usdc.address;
@@ -356,7 +322,7 @@ async function depositSolToHyperCore({ solLamports, hlAddress, solPubkey, onStat
 
   onStatus?.('Finding route...');
   const hyperCore = await resolveHyperCoreChain();
-  const result    = await lifiGetRoutes({
+  const result = await lifiGetRoutes({
     fromChainId:      LIFI_SOLANA_CHAIN_ID,
     toChainId:        hyperCore.chainId,
     fromTokenAddress: SOL_MINT,
@@ -365,8 +331,8 @@ async function depositSolToHyperCore({ solLamports, hlAddress, solPubkey, onStat
     fromAddress:      solPubkey,
     toAddress:        hlAddress,
     options: {
-      slippage:         0.01,
-      order:            'CHEAPEST',
+      slippage: 0.01,
+      order: 'CHEAPEST',
       allowSwitchChain: false,
     },
   });
@@ -379,10 +345,10 @@ async function depositSolToHyperCore({ solLamports, hlAddress, solPubkey, onStat
   onStatus?.('Sign in wallet...');
   const executed = await lifiExecuteRoute(route, {
     updateRouteHook(updated) {
-      const step   = updated?.steps?.[updated.steps.length - 1];
-      const procs  = step?.execution?.process || [];
+      const step = updated?.steps?.[updated.steps.length - 1];
+      const procs = step?.execution?.process || [];
       const active = procs.find(p => p.status === 'PENDING' || p.status === 'STARTED');
-      if (active?.message)              onStatus?.(active.message);
+      if (active?.message) onStatus?.(active.message);
       else if (procs.some(p => p.status === 'DONE')) onStatus?.('Bridging...');
     },
   });
@@ -404,9 +370,8 @@ async function signHlWithdraw(privateKey, action) {
   const ethersNs = getEthersNs(mod);
   const wallet   = new ethersNs.Wallet(privateKey);
   const domain   = {
-    name:              'HyperliquidSignTransaction',
-    version:           '1',
-    chainId:           42161,
+    name: 'HyperliquidSignTransaction', version: '1',
+    chainId: 42161,
     verifyingContract: '0x0000000000000000000000000000000000000000',
   };
   const types = {
@@ -417,7 +382,13 @@ async function signHlWithdraw(privateKey, action) {
       { name: 'time',             type: 'uint64'  },
     ],
   };
-  const sig   = await signTypedDataCompat(wallet, domain, types, action);
+  const message = {
+    hyperliquidChain: action.hyperliquidChain,
+    destination:      action.destination,
+    amount:           action.amount,
+    time:             action.time,
+  };
+  const sig   = await signTypedDataCompat(wallet, domain, types, message);
   const split = splitSigCompat(ethersNs, sig);
   return { r: split.r, s: split.s, v: Number(split.v) };
 }
@@ -441,13 +412,13 @@ function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   if (!ENABLE_TRADING) throw new Error('Trading is disabled - set REACT_APP_HYPERLIQUID_LIVE_TRADING=1');
   const assetIndex = pair?.assetIndex;
   const price      = Number(pair?.price || 0);
-  const margin     = Number(usdAmount   || 0);
-  const lev        = Number(leverage    || 1);
+  const margin     = Number(usdAmount || 0);
+  const lev        = Number(leverage || 1);
   const szDecimals = Number.isInteger(pair?.szDecimals) ? pair.szDecimals : 4;
 
   if (!Number.isInteger(assetIndex) || assetIndex < 0) throw new Error('Market loading, try again');
-  if (!Number.isFinite(price)       || price <= 0)     throw new Error('Price unavailable, try again');
-  if (!Number.isFinite(margin)      || margin < 10)    throw new Error('Minimum order is $10');
+  if (!Number.isFinite(price) || price <= 0)           throw new Error('Price unavailable, try again');
+  if (!Number.isFinite(margin) || margin < 10)         throw new Error('Minimum order is $10');
 
   const notional = reduceOnly ? margin : margin * lev;
   const coinSize = roundSize(notional / price, szDecimals);
@@ -456,12 +427,10 @@ function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = fals
 
   const limitPx = aggressivePx(price, isLong, szDecimals);
   const action  = {
-    type:   'order',
+    type: 'order',
     orders: [{
-      a: assetIndex,
-      b: Boolean(isLong),
-      p: limitPx,
-      s: coinSize,
+      a: assetIndex, b: Boolean(isLong),
+      p: limitPx, s: coinSize,
       r: Boolean(reduceOnly),
       t: { limit: { tif: 'Ioc' } },
     }],
@@ -474,10 +443,10 @@ function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = fals
 }
 
 async function setLeverageOnHL({ assetIndex, leverage, isCross = false, hlWalletData }) {
-  const action   = { type: 'updateLeverage', asset: assetIndex, isCross, leverage };
-  const nonce    = Date.now();
+  const action = { type: 'updateLeverage', asset: assetIndex, isCross, leverage };
+  const nonce  = Date.now();
   const ethersNs = getEthersNs(await getEthers());
-  const wallet   = new ethersNs.Wallet(hlWalletData.privateKey);
+  const wallet = new ethersNs.Wallet(hlWalletData.privateKey);
   const signature = await signL1Action({ wallet, action, nonce });
   return hlRequest({ action, nonce, signature }, true);
 }
@@ -492,19 +461,19 @@ async function placeOrder({ pair, isLong, usdAmount, leverage, reduceOnly = fals
       _leverageCache.set(cacheKey, leverage);
     } catch (e) { console.warn('[leverage]', e.message); }
   }
-  const built     = buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly });
-  const nonce     = Date.now();
-  const ethersNs  = getEthersNs(await getEthers());
-  const wallet    = new ethersNs.Wallet(hlWalletData.privateKey);
+  const built  = buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly });
+  const nonce  = Date.now();
+  const ethersNs = getEthersNs(await getEthers());
+  const wallet = new ethersNs.Wallet(hlWalletData.privateKey);
   const signature = await signL1Action({ wallet, action: built.action, nonce });
-  const result    = await hlRequest({ action: built.action, nonce, signature }, true);
+  const result = await hlRequest({ action: built.action, nonce, signature }, true);
   if (result?.status === 'err') {
     const reason = typeof result?.response === 'string'
       ? result.response
       : JSON.stringify(result);
     throw new Error(reason);
   }
-  const first    = result?.response?.data?.statuses?.[0];
+  const first = result?.response?.data?.statuses?.[0];
   const wasFilled = first?.filled != null;
   if (!wasFilled) {
     const reason = first?.error || first?.cancelled
@@ -515,57 +484,59 @@ async function placeOrder({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   return result;
 }
 
-async function fetchMarketData(oneHourMap = {}, sparkMap = {}) {
-  try {
-    const [metaAndCtxs, mids] = await Promise.all([
-      hlRequest({ type: 'metaAndAssetCtxs' }),
-      hlRequest({ type: 'allMids' }),
-    ]);
-    const meta      = Array.isArray(metaAndCtxs) ? metaAndCtxs[0] : {};
-    const assetCtxs = Array.isArray(metaAndCtxs) ? metaAndCtxs[1] || [] : [];
-    const universe  = (meta.universe || []).map((u, i) => ({
-      name:        u.name,
-      index:       i,
-      maxLeverage: u.maxLeverage || 50,
-      szDecimals:  Number.isInteger(u.szDecimals) ? u.szDecimals : 4,
-      ctx:         assetCtxs[i] || {},
-    }));
-    const priceMap = {};
-    if (mids && !Array.isArray(mids)) {
-      for (const [k, v] of Object.entries(mids)) { const p = parseFloat(v); priceMap[k] = p > 0 ? p : 0; }
-    } else if (Array.isArray(mids)) {
-      universe.forEach((u, i) => { const p = parseFloat(mids[i]); priceMap[u.name] = p > 0 ? p : 0; });
-    }
-    return PERPS_PAIRS.map(p => {
-      const info   = universe.find(u => u.name === p.id);
-      if (!info) return null;
-      const ctx    = info.ctx;
-      const mid    = priceMap[p.id] || parseFloat(ctx.midPx || ctx.markPx || 0) || 0;
-      const prev   = parseFloat(ctx.prevDayPx || 0);
-      const change = mid > 0 && prev > 0 ? ((mid - prev) / prev) * 100 : 0;
-      return {
-        ...p,
-        assetIndex:   info.index,
-        szDecimals:   info.szDecimals,
-        price:        mid,
-        change,
-        change1h:     Number.isFinite(oneHourMap[p.id]) ? oneHourMap[p.id] : 0,
-        spark:        Array.isArray(sparkMap[p.id])     ? sparkMap[p.id]   : [],
-        volume24h:    parseFloat(ctx.dayNtlVlm    || 0),
-        openInterest: parseFloat(ctx.openInterest || 0),
-        funding:      parseFloat(ctx.funding      || 0),
-        leverage:     Math.min(info.maxLeverage, p.leverage),
-      };
-    }).filter(Boolean);
-  } catch {
-    return PERPS_PAIRS.map(p => ({
-      ...p,
-      price: 0, change: 0,
-      change1h:     Number.isFinite(oneHourMap[p.id]) ? oneHourMap[p.id] : 0,
-      spark:        Array.isArray(sparkMap[p.id])     ? sparkMap[p.id]   : [],
-      volume24h: 0, openInterest: 0, funding: 0, assetIndex: null, szDecimals: 4,
-    }));
+async function fetchMarketSnapshot({ spotSymbols = new Set(), oneHourMap = {}, sparkMap = {} } = {}) {
+  const [metaAndCtxs, mids] = await Promise.all([
+    hlRequest({ type: 'metaAndAssetCtxs' }),
+    hlRequest({ type: 'allMids' }),
+  ]);
+  const meta      = Array.isArray(metaAndCtxs) ? metaAndCtxs[0] : {};
+  const assetCtxs = Array.isArray(metaAndCtxs) ? metaAndCtxs[1] || [] : [];
+  const universe  = (meta.universe || []).map((u, i) => ({
+    name: u.name, index: i,
+    maxLeverage: u.maxLeverage || 10,
+    szDecimals:  Number.isInteger(u.szDecimals) ? u.szDecimals : 4,
+    ctx: assetCtxs[i] || {},
+  }));
+  const firstSeen = updateFirstSeenRegistry(universe.map(u => u.name));
+  const priceMap  = {};
+  if (mids && !Array.isArray(mids)) {
+    for (const [k, v] of Object.entries(mids)) { const p = parseFloat(v); priceMap[k] = p > 0 ? p : 0; }
+  } else if (Array.isArray(mids)) {
+    universe.forEach((u, i) => { const p = parseFloat(mids[i]); priceMap[u.name] = p > 0 ? p : 0; });
   }
+  const all = universe.map(u => {
+    const ctx = u.ctx;
+    const mid = priceMap[u.name] || parseFloat(ctx.midPx || ctx.markPx || 0) || 0;
+    const prev = parseFloat(ctx.prevDayPx || 0);
+    const change = mid > 0 && prev > 0 ? ((mid - prev) / prev) * 100 : 0;
+    return {
+      id: u.name, base: u.name,
+      assetIndex:   u.index,
+      szDecimals:   u.szDecimals,
+      leverage:     u.maxLeverage,
+      price:        mid,
+      change,
+      change1h:     Number.isFinite(oneHourMap[u.name]) ? oneHourMap[u.name] : 0,
+      spark:        Array.isArray(sparkMap[u.name]) ? sparkMap[u.name] : [],
+      volume24h:    parseFloat(ctx.dayNtlVlm    || 0),
+      openInterest: parseFloat(ctx.openInterest || 0),
+      funding:      parseFloat(ctx.funding      || 0),
+      hasSpot:      hasSpotMatch(u.name, spotSymbols),
+      firstSeenAt:  firstSeen[u.name] || null,
+      hot:          false,
+    };
+  });
+  const allById = new Map(all.map(p => [p.id, p]));
+  const curated = PERPS_PAIRS.map(p => {
+    const found = allById.get(p.id);
+    if (!found) return null;
+    return {
+      ...found,
+      hot: !!p.hot,
+      leverage: Math.min(found.leverage, p.leverage),
+    };
+  }).filter(Boolean);
+  return { curated, all };
 }
 
 async function fetchSpotSymbols() {
@@ -573,10 +544,10 @@ async function fetchSpotSymbols() {
     const spotMeta = await hlRequest({ type: 'spotMeta' });
     const tokens   = spotMeta?.tokens   || [];
     const universe = spotMeta?.universe || [];
-    const out      = new Set();
+    const out = new Set();
     universe.forEach(u => {
       const baseIdx = Array.isArray(u.tokens) ? u.tokens[0] : null;
-      const t       = baseIdx != null ? tokens[baseIdx] : null;
+      const t = baseIdx != null ? tokens[baseIdx] : null;
       if (t?.name) out.add(t.name);
     });
     return out;
@@ -587,23 +558,25 @@ function getFirstSeenRegistry() {
   try { return JSON.parse(localStorage.getItem('nexus_first_seen') || '{}'); }
   catch { return {}; }
 }
-
 function getInstallTs() {
   try {
     const v = localStorage.getItem('nexus_install_ts');
     return v ? parseInt(v, 10) : null;
   } catch { return null; }
 }
-
 function updateFirstSeenRegistry(coinNames) {
   try {
-    const raw        = localStorage.getItem('nexus_first_seen');
+    const raw = localStorage.getItem('nexus_first_seen');
     const isFirstRun = !raw;
-    const reg        = raw ? JSON.parse(raw) : {};
-    const now        = Date.now();
-    if (isFirstRun) localStorage.setItem('nexus_install_ts', String(now));
+    const reg = raw ? JSON.parse(raw) : {};
+    const now = Date.now();
+    if (isFirstRun) {
+      localStorage.setItem('nexus_install_ts', String(now));
+    }
     let changed = false;
-    coinNames.forEach(name => { if (!reg[name]) { reg[name] = now; changed = true; } });
+    coinNames.forEach(name => {
+      if (!reg[name]) { reg[name] = now; changed = true; }
+    });
     if (changed) localStorage.setItem('nexus_first_seen', JSON.stringify(reg));
     return reg;
   } catch { return {}; }
@@ -614,53 +587,6 @@ function hasSpotMatch(perpName, spotSymbols) {
   if (spotSymbols.has(perpName)) return true;
   if (perpName.startsWith('k') && spotSymbols.has(perpName.slice(1))) return true;
   return false;
-}
-
-async function fetchAllPerps(spotSymbols) {
-  try {
-    const [metaAndCtxs, mids] = await Promise.all([
-      hlRequest({ type: 'metaAndAssetCtxs' }),
-      hlRequest({ type: 'allMids' }),
-    ]);
-    const meta      = Array.isArray(metaAndCtxs) ? metaAndCtxs[0] : {};
-    const assetCtxs = Array.isArray(metaAndCtxs) ? metaAndCtxs[1] || [] : [];
-    const universe  = (meta.universe || []).map((u, i) => ({
-      name:        u.name,
-      index:       i,
-      maxLeverage: u.maxLeverage || 10,
-      szDecimals:  Number.isInteger(u.szDecimals) ? u.szDecimals : 4,
-      ctx:         assetCtxs[i] || {},
-    }));
-    const firstSeen = updateFirstSeenRegistry(universe.map(u => u.name));
-    const priceMap  = {};
-    if (mids && !Array.isArray(mids)) {
-      for (const [k, v] of Object.entries(mids)) { const p = parseFloat(v); priceMap[k] = p > 0 ? p : 0; }
-    } else if (Array.isArray(mids)) {
-      universe.forEach((u, i) => { const p = parseFloat(mids[i]); priceMap[u.name] = p > 0 ? p : 0; });
-    }
-    return universe.map(u => {
-      const ctx    = u.ctx;
-      const mid    = priceMap[u.name] || parseFloat(ctx.midPx || ctx.markPx || 0) || 0;
-      const prev   = parseFloat(ctx.prevDayPx || 0);
-      const change = mid > 0 && prev > 0 ? ((mid - prev) / prev) * 100 : 0;
-      return {
-        id:           u.name,
-        base:         u.name,
-        assetIndex:   u.index,
-        szDecimals:   u.szDecimals,
-        leverage:     u.maxLeverage,
-        price:        mid,
-        change,
-        change1h:     0,
-        spark:        [],
-        volume24h:    parseFloat(ctx.dayNtlVlm    || 0),
-        openInterest: parseFloat(ctx.openInterest || 0),
-        funding:      parseFloat(ctx.funding      || 0),
-        hasSpot:      hasSpotMatch(u.name, spotSymbols),
-        firstSeenAt:  firstSeen[u.name] || null,
-      };
-    });
-  } catch { return []; }
 }
 
 function filterNewListings(allPerps) {
@@ -693,7 +619,6 @@ async function fetchOneHourChange(coin) {
     return o > 0 ? ((cl - o) / o) * 100 : 0;
   } catch { return 0; }
 }
-
 async function fetchSparkline(coin) {
   try {
     const now = Date.now();
@@ -701,7 +626,6 @@ async function fetchSparkline(coin) {
     return Array.isArray(c) ? c.map(x => Number(x.c)).filter(v => v > 0) : [];
   } catch { return []; }
 }
-
 async function fetchOneHourMap(markets) {
   const limited = markets.slice(0, 40);
   const vals    = await Promise.all(limited.map(p => fetchOneHourChange(p.id)));
@@ -709,7 +633,6 @@ async function fetchOneHourMap(markets) {
   limited.forEach((p, i) => { map[p.id] = Number.isFinite(vals[i]) ? vals[i] : 0; });
   return map;
 }
-
 async function fetchSparkMap(markets) {
   const limited = markets.slice(0, 40);
   const vals    = await Promise.all(limited.map(p => fetchSparkline(p.id)));
@@ -757,11 +680,10 @@ function Sparkline({ data, up, width = 60, height = 22 }) {
 }
 
 function MarketRow({ pair, onClick }) {
-  const up    = pair.change >= 0;
+  const up = pair.change >= 0;
   const fresh = freshnessTag(pair.firstSeenAt);
   return (
-    <button
-      onClick={onClick}
+    <button onClick={onClick}
       onMouseEnter={e => { e.currentTarget.style.background = 'rgba(151,252,228,.025)'; }}
       onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}
       style={{
@@ -776,16 +698,8 @@ function MarketRow({ pair, onClick }) {
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 700, color: C.inkStr, fontSize: 15, letterSpacing: '-.02em', ...T.body }}>{pair.base}</span>
           <span style={{ color: C.muted2, fontSize: 10, fontWeight: 600, ...T.mono }}>PERP</span>
-          {fresh && (
-            <span style={{ color: fresh.color, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4, background: fresh.bg, border: `1px solid ${fresh.bd}`, ...T.mono }}>
-              {fresh.label}
-            </span>
-          )}
-          {!fresh && pair.hot && (
-            <span style={{ color: C.amber, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4, background: 'rgba(245,181,61,.10)', border: '1px solid rgba(245,181,61,.20)', ...T.mono }}>
-              HOT
-            </span>
-          )}
+          {fresh && <span style={{ color: fresh.color, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4, background: fresh.bg, border: `1px solid ${fresh.bd}`, ...T.mono }}>{fresh.label}</span>}
+          {!fresh && pair.hot && <span style={{ color: C.amber, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4, background: 'rgba(245,181,61,.10)', border: '1px solid rgba(245,181,61,.20)', ...T.mono }}>HOT</span>}
         </div>
         <div style={{ marginTop: 3, color: C.muted, fontSize: 10, fontWeight: 500, ...T.mono }}>
           Up to {pair.leverage}x | {shortNum(pair.volume24h)} vol
@@ -808,14 +722,12 @@ function PositionsPanel({ positions, marketData, onClose }) {
   if (!positions.length) return null;
   return (
     <div style={{ marginBottom: 14 }}>
-      <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', marginBottom: 8, ...T.mono }}>
-        OPEN POSITIONS
-      </div>
+      <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', marginBottom: 8, ...T.mono }}>OPEN POSITIONS</div>
       {positions.map(pos => {
-        const pair     = marketData.find(p => p.id === pos.coin);
-        const markPx   = Number(pair?.price || 0);
-        const pnl      = pos.unrealPnl;
-        const pnlPct   = pos.marginUsed > 0 ? (pnl / pos.marginUsed) * 100 : 0;
+        const pair    = marketData.find(p => p.id === pos.coin);
+        const markPx  = Number(pair?.price || 0);
+        const pnl     = pos.unrealPnl;
+        const pnlPct  = pos.marginUsed > 0 ? (pnl / pos.marginUsed) * 100 : 0;
         const inProfit = pnl >= 0;
         return (
           <div key={pos.coin} style={{
@@ -847,8 +759,8 @@ function PositionsPanel({ positions, marketData, onClose }) {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 4, marginBottom: 10 }}>
               {[
-                ['Mark',   fmt(markPx,       2)],
-                ['Value',  fmt(pos.posValue,  2)],
+                ['Mark',   fmt(markPx, 2)],
+                ['Value',  fmt(pos.posValue, 2)],
                 ['Margin', fmt(pos.marginUsed, 2)],
               ].map(([l, v]) => (
                 <div key={l} style={{ padding: '5px 0' }}>
@@ -861,9 +773,9 @@ function PositionsPanel({ positions, marketData, onClose }) {
               onClick={() => onClose(pos, pair)}
               style={{
                 width: '100%', padding: '9px', borderRadius: 10,
-                border:      `1px solid ${inProfit ? 'rgba(61,213,152,.30)' : 'rgba(255,138,158,.30)'}`,
-                background:  inProfit ? 'rgba(61,213,152,.06)' : 'rgba(255,138,158,.06)',
-                color:       inProfit ? C.up : C.down,
+                border: `1px solid ${inProfit ? 'rgba(61,213,152,.30)' : 'rgba(255,138,158,.30)'}`,
+                background: inProfit ? 'rgba(61,213,152,.06)' : 'rgba(255,138,158,.06)',
+                color: inProfit ? C.up : C.down,
                 fontWeight: 700, fontSize: 12, cursor: 'pointer', ...T.body,
               }}
             >
@@ -877,9 +789,9 @@ function PositionsPanel({ positions, marketData, onClose }) {
 }
 
 function WalletPanel({ solLamports, solPrice, hlBalanceUsd, hlAddress, onWithdraw, onDeposit }) {
-  const solUsd      = (solLamports / LAMPORTS_PER_SOL) * solPrice;
-  const totalUsd    = solUsd + hlBalanceUsd;
-  const hlSolEquiv  = solPrice > 0 ? hlBalanceUsd / solPrice : 0;
+  const solUsd     = (solLamports / LAMPORTS_PER_SOL) * solPrice;
+  const totalUsd   = solUsd + hlBalanceUsd;
+  const hlSolEquiv = solPrice > 0 ? hlBalanceUsd / solPrice : 0;
   const canWithdraw = hlBalanceUsd > 0;
   return (
     <div style={{ marginBottom: 14, borderRadius: 16, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: `1px solid ${C.border}`, overflow: 'hidden' }}>
@@ -914,15 +826,15 @@ function WalletPanel({ solLamports, solPrice, hlBalanceUsd, hlAddress, onWithdra
         <div style={{ display: 'flex', gap: 6 }}>
           <button onClick={onDeposit} style={{
             padding: '6px 14px', borderRadius: 8,
-            border:     '1px solid rgba(151,252,228,.30)',
+            border: '1px solid rgba(151,252,228,.30)',
             background: 'rgba(151,252,228,.10)',
             color: C.hl, fontWeight: 700, fontSize: 11, cursor: 'pointer', ...T.mono,
           }}>+ Deposit</button>
           <button onClick={canWithdraw ? onWithdraw : undefined} disabled={!canWithdraw} style={{
             padding: '6px 14px', borderRadius: 8,
-            border:     `1px solid ${canWithdraw ? 'rgba(168,127,255,.30)' : C.border}`,
+            border: `1px solid ${canWithdraw ? 'rgba(168,127,255,.30)' : C.border}`,
             background: canWithdraw ? 'rgba(168,127,255,.08)' : 'rgba(255,255,255,.02)',
-            color:      canWithdraw ? C.violet : C.muted2,
+            color: canWithdraw ? C.violet : C.muted2,
             fontWeight: 700, fontSize: 11, cursor: canWithdraw ? 'pointer' : 'not-allowed',
             opacity: canWithdraw ? 1 : 0.55, ...T.mono,
           }}>Withdraw -&gt;</button>
@@ -933,12 +845,12 @@ function WalletPanel({ solLamports, solPrice, hlBalanceUsd, hlAddress, onWithdra
 }
 
 function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, walletPubkey }) {
-  const [amount,    setAmount]    = useState('');
-  const [status,    setStatus]    = useState('idle');
+  const [amount, setAmount]       = useState('');
+  const [status, setStatus]       = useState('idle');
   const [statusMsg, setStatusMsg] = useState('');
-  const [error,     setError]     = useState('');
-  const pollRef   = useRef(null);
-  const failedRef = useRef(false);
+  const [error, setError]         = useState('');
+  const pollRef                   = useRef(null);
+  const failedRef                 = useRef(false);
 
   useBodyLock(open);
 
@@ -955,17 +867,17 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
 
   const handleWithdraw = async () => {
     const usd = parseFloat(amount);
-    if (!usd || usd < 2)          { setError('Minimum withdrawal is $2'); return; }
-    if (usd > hlBalance * 0.99)   { setError('Amount exceeds available balance'); return; }
+    if (!usd || usd < 2)        { setError('Minimum withdrawal is $2'); return; }
+    if (usd > hlBalance * 0.99) { setError('Amount exceeds available balance'); return; }
     if (!isValidSolAddress(walletPubkey)) { setError('Invalid Solana destination'); return; }
 
     setStatus('loading'); setError(''); setStatusMsg('Initiating withdrawal...');
     failedRef.current = false;
     try {
       const init = await fetch('/api/bridge/withdraw/init', {
-        method:  'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ hl_wallet_address: hlAddress, usd_amount: usd, user_sol_addr: walletPubkey }),
+        body: JSON.stringify({ hl_wallet_address: hlAddress, usd_amount: usd, user_sol_addr: walletPubkey }),
       });
       const initData = await init.json();
       if (!init.ok) throw new Error(initData.error || 'Init failed');
@@ -975,9 +887,9 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
 
       setStatusMsg('Submitting to Hyperliquid...');
       const submit = await fetch('/api/bridge/withdraw/submit', {
-        method:  'POST',
+        method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ tracking_id: initData.tracking_id, signature }),
+        body: JSON.stringify({ tracking_id: initData.tracking_id, signature }),
       });
       const submitData = await submit.json();
       if (!submit.ok) throw new Error(submitData.error || 'Submit failed');
@@ -1005,6 +917,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
           }
         } catch {}
       }, 8_000);
+
     } catch (e) {
       console.error('[withdraw]', e);
       setError(e.message || 'Withdrawal failed');
@@ -1020,6 +933,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
       <div style={{
         position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
         width: '100%', maxWidth: 500, zIndex: 451,
+        maxHeight: '92vh', overflowY: 'auto', WebkitOverflowScrolling: 'touch',
         background: `linear-gradient(180deg,${C.surface2} 0%,${C.bg} 100%)`,
         borderTop: '1px solid rgba(168,127,255,.30)', borderRadius: '26px 26px 0 0',
         padding: '20px 22px calc(env(safe-area-inset-bottom) + 22px)',
@@ -1091,10 +1005,10 @@ function DepositModal({
   signMessage,
   refreshAccount,
 }) {
-  const [amount,    setAmount]    = useState('');
-  const [status,    setStatus]    = useState('idle');
+  const [amount, setAmount]       = useState('');
+  const [status, setStatus]       = useState('idle');
   const [statusMsg, setStatusMsg] = useState('');
-  const [error,     setError]     = useState('');
+  const [error, setError]         = useState('');
 
   useBodyLock(open);
 
@@ -1157,6 +1071,7 @@ function DepositModal({
       <div style={{
         position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
         width: '100%', maxWidth: 500, zIndex: 451,
+        maxHeight: '92vh', overflowY: 'auto', WebkitOverflowScrolling: 'touch',
         background: `linear-gradient(180deg,${C.surface2} 0%,${C.bg} 100%)`,
         borderTop: `1px solid ${C.borderHi}`, borderRadius: '26px 26px 0 0',
         padding: '20px 22px calc(env(safe-area-inset-bottom) + 22px)',
@@ -1259,23 +1174,23 @@ function TradeDrawer({
   const { activeWalletKind } = useNexusWallet();
   const wcon = connected || activeWalletKind === 'privy';
 
-  const [side,          setSide]          = useState('long');
-  const [solAmount,     setSolAmount]     = useState('');
-  const [leverage,      setLeverage]      = useState(5);
-  const [status,        setStatus]        = useState('idle');
-  const [statusMsg,     setStatusMsg]     = useState('');
-  const [error,         setError]         = useState('');
-  const [withdrawOpen,  setWithdrawOpen]  = useState(false);
-  const [depositOpen,   setDepositOpen]   = useState(false);
+  const [side, setSide]               = useState('long');
+  const [solAmount, setSolAmount]     = useState('');
+  const [leverage, setLeverage]       = useState(5);
+  const [status, setStatus]           = useState('idle');
+  const [statusMsg, setStatusMsg]     = useState('');
+  const [error, setError]             = useState('');
+  const [withdrawOpen, setWithdrawOpen] = useState(false);
+  const [depositOpen,  setDepositOpen]  = useState(false);
 
   useBodyLock(open && !withdrawOpen && !depositOpen);
 
-  const isLong      = side === 'long';
-  const solVal      = parseFloat(solAmount) || 0;
-  const usdAmount   = solVal * solPrice;
-  const notionalUsd = usdAmount * leverage;
-  const entryPrice  = Number(pair?.price || 0);
-  const liqPrice    = entryPrice > 0
+  const isLong       = side === 'long';
+  const solVal       = parseFloat(solAmount) || 0;
+  const usdAmount    = solVal * solPrice;
+  const notionalUsd  = usdAmount * leverage;
+  const entryPrice   = Number(pair?.price || 0);
+  const liqPrice     = entryPrice > 0
     ? isLong ? entryPrice * (1 - 0.9 / leverage) : entryPrice * (1 + 0.9 / leverage)
     : 0;
   const solBalance   = solLamports / LAMPORTS_PER_SOL;
@@ -1289,11 +1204,11 @@ function TradeDrawer({
   };
 
   const execute = async () => {
-    if (!wcon)                    { onConnectWallet?.(); return; }
-    if (!signMessage)             { setError('Wallet does not support message signing'); return; }
+    if (!wcon)            { onConnectWallet?.(); return; }
+    if (!signMessage)     { setError('Wallet does not support message signing'); return; }
     if (!solVal || solVal < 0.01) { setError('Enter an amount'); return; }
-    if (notEnoughSol)             { setError('Not enough SOL in your wallet'); return; }
-    if (!pair?.price)             { setError('Price unavailable, try again'); return; }
+    if (notEnoughSol)     { setError('Not enough SOL in your wallet'); return; }
+    if (!pair?.price)     { setError('Price unavailable, try again'); return; }
     const usd = solVal * solPrice;
     if (usd < 10) { setError('Minimum trade is $10'); return; }
 
@@ -1319,7 +1234,7 @@ function TradeDrawer({
         saveBridge('deposit', { txHash, usd: needed });
         setStatusMsg('Waiting for funds...');
         currentHlBal = await pollUntilFunded(walletData.address, usd);
-        const fresh  = await fetchHlBalanceAndPositions(walletData.address);
+        const fresh = await fetchHlBalanceAndPositions(walletData.address);
         currentHlBal = fresh.balance;
         setHlBalance(currentHlBal);
         clearBridge('deposit');
@@ -1347,7 +1262,7 @@ function TradeDrawer({
   };
 
   const closePosition = async (pos, posPair) => {
-    const walletData  = getSessionWallet(walletPubkey);
+    const walletData = getSessionWallet(walletPubkey);
     if (!walletData?.privateKey) { setError('Session expired - refresh page'); return; }
     const targetPair = posPair || marketData.find(p => p.id === pos.coin);
     if (!targetPair) { setError('Market data unavailable'); return; }
@@ -1355,11 +1270,11 @@ function TradeDrawer({
     setStatus('loading'); setError(''); setStatusMsg(`Closing ${pos.coin} position...`);
     try {
       await placeOrder({
-        pair:         targetPair,
-        isLong:       !pos.isLong,
-        usdAmount:    pos.posValue,
-        leverage:     pos.leverage,
-        reduceOnly:   true,
+        pair:       targetPair,
+        isLong:     !pos.isLong,
+        usdAmount:  pos.posValue,
+        leverage:   pos.leverage,
+        reduceOnly: true,
         hlWalletData: walletData,
       });
       setStatus('success');
@@ -1376,10 +1291,10 @@ function TradeDrawer({
   };
 
   if (!open || !pair) return null;
-  const dayUp         = pair.change >= 0;
-  const isBusy        = status === 'loading';
-  const isSuccess     = status === 'success';
-  const isError       = status === 'error';
+  const dayUp     = pair.change >= 0;
+  const isBusy    = status === 'loading';
+  const isSuccess = status === 'success';
+  const isError   = status === 'error';
   const sessionWallet = getSessionWallet(walletPubkey);
 
   return (
@@ -1393,7 +1308,6 @@ function TradeDrawer({
         maxHeight: '92vh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
         boxShadow: `0 -28px 80px rgba(0,0,0,.7), ${C.glow}`,
       }}>
-        {/* Header */}
         <div style={{ flexShrink: 0, padding: '14px 22px' }}>
           <div style={{ width: 36, height: 4, background: 'rgba(255,255,255,.12)', borderRadius: 99, margin: '0 auto 18px' }}/>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12 }}>
@@ -1419,9 +1333,9 @@ function TradeDrawer({
           </div>
           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', marginTop: 14, padding: '10px 0', borderTop: `1px solid ${C.hairline}`, borderBottom: `1px solid ${C.hairline}` }}>
             {[
-              ['1H',      pct(pair.change1h),       pair.change1h >= 0 ? C.up : C.down],
-              ['VOLUME',  shortNum(pair.volume24h),  C.ink],
-              ['MAX LEV', `${pair.leverage}x`,       C.hl],
+              ['1H',      pct(pair.change1h),      pair.change1h >= 0 ? C.up : C.down],
+              ['VOLUME',  shortNum(pair.volume24h), C.ink],
+              ['MAX LEV', `${pair.leverage}x`,      C.hl],
             ].map(([l, v, c], i) => (
               <div key={l} style={{ textAlign: i === 0 ? 'left' : i === 2 ? 'right' : 'center', borderRight: i < 2 ? `1px solid ${C.hairline}` : 'none' }}>
                 <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>{l}</div>
@@ -1431,7 +1345,6 @@ function TradeDrawer({
           </div>
         </div>
 
-        {/* Scrollable body */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px 22px calc(env(safe-area-inset-bottom) + 86px)' }}>
 
           {wcon && (
@@ -1449,7 +1362,6 @@ function TradeDrawer({
             onClose={closePosition}
           />
 
-          {/* Long / Short */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
             {[
               ['long',  C.up,   'rgba(61,213,152,.10)',  'rgba(61,213,152,.42)'],
@@ -1459,9 +1371,9 @@ function TradeDrawer({
               return (
                 <button key={s} onClick={() => setSide(s)} disabled={isBusy} style={{
                   padding: 14, borderRadius: 14,
-                  border:     `1px solid ${active ? bdr : C.border}`,
+                  border: `1px solid ${active ? bdr : C.border}`,
                   background: active ? bg : 'rgba(255,255,255,.03)',
-                  color:      active ? color : C.muted,
+                  color: active ? color : C.muted,
                   fontWeight: 800, fontSize: 15, cursor: isBusy ? 'not-allowed' : 'pointer',
                   textTransform: 'capitalize', transition: 'all .15s',
                   boxShadow: active ? `0 0 20px ${color}1c` : 'none', ...T.display,
@@ -1470,7 +1382,6 @@ function TradeDrawer({
             })}
           </div>
 
-          {/* Amount */}
           <div style={{ marginBottom: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: '.06em', ...T.mono }}>MARGIN (SOL)</span>
@@ -1512,7 +1423,6 @@ function TradeDrawer({
             )}
           </div>
 
-          {/* Leverage */}
           <div style={{ marginBottom: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
               <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: '.06em', ...T.mono }}>LEVERAGE</span>
@@ -1526,7 +1436,6 @@ function TradeDrawer({
             </div>
           </div>
 
-          {/* Order summary */}
           {solVal > 0 && solPrice > 0 && entryPrice > 0 && (
             <div style={{ background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, borderRadius: 14, padding: '12px 14px', marginBottom: 14 }}>
               {[
@@ -1544,7 +1453,6 @@ function TradeDrawer({
             </div>
           )}
 
-          {/* Status */}
           {(isBusy || isSuccess) && statusMsg && (
             <div style={{ marginBottom: 12, padding: 12, background: 'rgba(151,252,228,.05)', border: '1px solid rgba(151,252,228,.20)', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.hlDim}`, borderTopColor: C.hl, animation: 'nexus-spin 0.8s linear infinite', flexShrink: 0 }}/>
@@ -1553,7 +1461,6 @@ function TradeDrawer({
           )}
           {error && <div style={{ marginBottom: 12, padding: 11, background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.24)', borderRadius: 12, fontSize: 12, color: C.down, ...T.body }}>{error}</div>}
 
-          {/* CTA */}
           {!wcon ? (
             <button onClick={() => onConnectWallet?.()} style={{ width: '100%', padding: 17, borderRadius: 16, border: 'none', background: `linear-gradient(135deg,${C.violet} 0%,${C.hl2} 100%)`, color: '#04070f', fontWeight: 800, fontSize: 16, cursor: 'pointer', minHeight: 56, letterSpacing: '-.01em', ...T.display }}>
               Connect Solana Wallet
@@ -1561,28 +1468,14 @@ function TradeDrawer({
           ) : (
             <button onClick={execute} disabled={isBusy || notEnoughSol || !solAmount} style={{
               width: '100%', padding: 17, borderRadius: 16, border: 'none',
-              background: isSuccess
-                ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`
-                : isError
-                  ? `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)`
-                  : isLong
-                    ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`
-                    : `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)`,
+              background: isSuccess ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)` : isError ? `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)` : isLong ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)` : `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)`,
               color: '#04070f', fontWeight: 800, fontSize: 16,
               cursor: isBusy || notEnoughSol || !solAmount ? 'not-allowed' : 'pointer',
               minHeight: 56, opacity: !solAmount || notEnoughSol ? 0.55 : 1,
               boxShadow: isLong ? '0 12px 30px rgba(61,213,152,.22)' : '0 12px 30px rgba(255,138,158,.24)',
               letterSpacing: '-.01em', ...T.display,
             }}>
-              {isBusy
-                ? 'Processing...'
-                : isSuccess
-                  ? `${isLong ? 'Long' : 'Short'} opened`
-                  : isError
-                    ? 'Retry'
-                    : isLong
-                      ? `Long ${pair.base} | ${leverage}x`
-                      : `Short ${pair.base} | ${leverage}x`}
+              {isBusy ? 'Processing...' : isSuccess ? `${isLong ? 'Long' : 'Short'} opened` : isError ? 'Retry' : isLong ? `Long ${pair.base} | ${leverage}x` : `Short ${pair.base} | ${leverage}x`}
             </button>
           )}
 
@@ -1615,16 +1508,16 @@ function TradeDrawer({
 }
 
 export default function PerpsTrade({ onConnectWallet }) {
-  const [oneHourMap,   setOneHourMap]   = useState({});
-  const [sparkMap,     setSparkMap]     = useState({});
-  const [marketData,   setMarketData]   = useState(() =>
+  const [oneHourMap, setOneHourMap] = useState({});
+  const [sparkMap,   setSparkMap]   = useState({});
+  const [marketData, setMarketData] = useState(() =>
     PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0, change1h: 0, spark: [], volume24h: 0, openInterest: 0, funding: 0, assetIndex: null, szDecimals: 4 }))
   );
-  const [activePair,   setActivePair]   = useState(marketData[0]);
-  const [drawerOpen,   setDrawerOpen]   = useState(false);
-  const [filter,       setFilter]       = useState('All');
-  const [allPerps,     setAllPerps]     = useState([]);
-  const [spotSymbols,  setSpotSymbols]  = useState(() => new Set());
+  const [activePair, setActivePair] = useState(marketData[0]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [filter, setFilter]         = useState('All');
+  const [allPerps, setAllPerps]     = useState([]);
+  const [spotSymbols, setSpotSymbols] = useState(() => new Set());
 
   const { publicKey: solPk, wallet: solWallet } = useWallet();
   const { connection } = useConnection();
@@ -1635,11 +1528,11 @@ export default function PerpsTrade({ onConnectWallet }) {
     return null;
   }, [solPk, privyEmbeddedSol]);
 
-  const [hlWallet,     setHlWallet]     = useState(null);
-  const [hlBalance,    setHlBalance]    = useState(0);
-  const [positions,    setPositions]    = useState([]);
-  const [solLamports,  setSolLamports]  = useState(0);
-  const [solPrice,     setSolPrice]     = useState(0);
+  const [hlWallet, setHlWallet]       = useState(null);
+  const [hlBalance, setHlBalance]     = useState(0);
+  const [positions, setPositions]     = useState([]);
+  const [solLamports, setSolLamports] = useState(0);
+  const [solPrice, setSolPrice]       = useState(0);
 
   useEffect(() => {
     if (!walletPubkey) return;
@@ -1647,9 +1540,9 @@ export default function PerpsTrade({ onConnectWallet }) {
     if (sess) setHlWallet({ address: sess.address });
     const cached = loadCachedAccount(walletPubkey);
     if (cached) {
-      if (typeof cached.balance === 'number')                      setHlBalance(cached.balance);
-      if (Array.isArray(cached.positions))                         setPositions(cached.positions);
-      if (typeof cached.solLamports === 'number')                  setSolLamports(cached.solLamports);
+      if (typeof cached.balance === 'number')         setHlBalance(cached.balance);
+      if (Array.isArray(cached.positions))            setPositions(cached.positions);
+      if (typeof cached.solLamports === 'number')     setSolLamports(cached.solLamports);
       if (typeof cached.solPrice === 'number' && cached.solPrice > 0) setSolPrice(cached.solPrice);
     }
   }, [walletPubkey]);
@@ -1661,18 +1554,18 @@ export default function PerpsTrade({ onConnectWallet }) {
     const [lam, price, bp] = await Promise.all([
       solPk ? fetchSolBalance(connection, solPk) : Promise.resolve(0),
       fetchSolPrice().catch(() => 0),
-      addr  ? fetchHlBalanceAndPositions(addr)   : Promise.resolve(null),
+      addr ? fetchHlBalanceAndPositions(addr) : Promise.resolve(null),
     ]);
     setSolLamports(lam);
     if (price > 0) setSolPrice(price);
     if (bp) { setHlBalance(bp.balance); setPositions(bp.positions); }
     saveCachedAccount(walletPubkey, {
-      balance:     bp?.balance    ?? 0,
-      positions:   bp?.positions  ?? [],
+      balance:     bp?.balance ?? 0,
+      positions:   bp?.positions ?? [],
       solLamports: lam,
       solPrice:    price > 0 ? price : undefined,
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletPubkey, solPk, connection]);
 
   useEffect(() => {
@@ -1680,19 +1573,19 @@ export default function PerpsTrade({ onConnectWallet }) {
     let alive = true;
     const tick = () => { if (alive) refreshAccount(); };
     tick();
-    const id = setInterval(tick, 10_000);
+    const id = setInterval(tick, 15_000);
     return () => { alive = false; clearInterval(id); };
   }, [walletPubkey, refreshAccount]);
 
   useEffect(() => {
     if (!walletPubkey) return;
-    const sess     = getSessionWallet(walletPubkey);
+    const sess = getSessionWallet(walletPubkey);
     const inFlight = loadBridge('deposit');
     if (!sess || !inFlight) return;
     let alive = true;
     pollUntilFunded(sess.address, inFlight.usd)
       .then(bal => { if (alive) { setHlBalance(bal); clearBridge('deposit'); } })
-      .catch(()  => { if (alive) clearBridge('deposit'); });
+      .catch(() => { if (alive) clearBridge('deposit'); });
     return () => { alive = false; };
   }, [walletPubkey]);
 
@@ -1704,47 +1597,62 @@ export default function PerpsTrade({ onConnectWallet }) {
     try {
       lifiConfig.setProviders([
         LifiSolana({
-          async getWalletAdapter() { return solWallet.adapter; },
+          async getWalletAdapter() {
+            return solWallet.adapter;
+          },
         }),
       ]);
-    } catch (e) { console.warn('[lifi setProviders]', e); }
+    } catch (e) {
+      console.warn('[lifi setProviders]', e);
+    }
   }, [solWallet?.adapter]);
 
   useEffect(() => {
     let alive = true;
-    const poll = async () => { const data = await fetchMarketData(oneHourMap, sparkMap); if (alive) setMarketData(data); };
+    const poll = async () => {
+      try {
+        const { curated, all } = await fetchMarketSnapshot({ spotSymbols, oneHourMap, sparkMap });
+        if (alive) { setMarketData(curated); setAllPerps(all); }
+      } catch (e) {
+        console.warn('[market poll]', e?.message || e);
+      }
+    };
     poll();
-    const id = setInterval(poll, 8_000);
+    const id = setInterval(poll, 10_000);
     return () => { alive = false; clearInterval(id); };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [oneHourMap, sparkMap]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [spotSymbols, oneHourMap, sparkMap]);
 
   useEffect(() => {
     let alive = true;
     const poll = async () => {
-      const cur = await fetchMarketData();
-      const map = await fetchOneHourMap(cur);
-      if (!alive) return;
-      setOneHourMap(map);
-      setMarketData(prev => prev.map(p => ({ ...p, change1h: map[p.id] ?? p.change1h })));
+      if (!marketData.length) return;
+      try {
+        const map = await fetchOneHourMap(marketData);
+        if (!alive) return;
+        setOneHourMap(map);
+      } catch {}
     };
     poll();
-    const id = setInterval(poll, 90_000);
+    const id = setInterval(poll, 120_000);
     return () => { alive = false; clearInterval(id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     let alive = true;
     const poll = async () => {
-      const cur = await fetchMarketData();
-      const map = await fetchSparkMap(cur);
-      if (!alive) return;
-      setSparkMap(map);
-      setMarketData(prev => prev.map(p => ({ ...p, spark: map[p.id] ?? p.spark })));
+      if (!marketData.length) return;
+      try {
+        const map = await fetchSparkMap(marketData);
+        if (!alive) return;
+        setSparkMap(map);
+      } catch {}
     };
     poll();
     const id = setInterval(poll, 300_000);
     return () => { alive = false; clearInterval(id); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1755,22 +1663,14 @@ export default function PerpsTrade({ onConnectWallet }) {
 
   useEffect(() => {
     let alive = true;
-    const load = async () => { const s = await fetchSpotSymbols(); if (alive) setSpotSymbols(s); };
+    const load = async () => {
+      try { const s = await fetchSpotSymbols(); if (alive) setSpotSymbols(s); }
+      catch {}
+    };
     load();
-    const id = setInterval(load, 5 * 60_000);
+    const id = setInterval(load, 10 * 60_000);
     return () => { alive = false; clearInterval(id); };
   }, []);
-
-  useEffect(() => {
-    let alive = true;
-    const poll = async () => {
-      const data = await fetchAllPerps(spotSymbols);
-      if (alive) setAllPerps(data);
-    };
-    poll();
-    const id = setInterval(poll, 30_000);
-    return () => { alive = false; clearInterval(id); };
-  }, [spotSymbols]);
 
   const filtered = useMemo(() => {
     if (filter === 'New')     return filterNewListings(allPerps);
@@ -1786,18 +1686,7 @@ export default function PerpsTrade({ onConnectWallet }) {
 
   return (
     <>
-      <style>{`
-        @import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap');
-        @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap');
-        @keyframes nexus-pulse { 0%,100%{opacity:1}50%{opacity:.4} }
-        @keyframes nexus-spin  { to{transform:rotate(360deg)} }
-        body.nexus-scroll-locked { overflow:hidden; }
-        input[type="range"]{-webkit-appearance:none;appearance:none;background:rgba(255,255,255,.07);border-radius:99px;outline:none;}
-        input[type="range"]::-webkit-slider-runnable-track{height:6px;border-radius:99px;background:rgba(255,255,255,.07);}
-        input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;box-shadow:0 0 0 4px rgba(151,252,228,.10),0 0 16px rgba(151,252,228,.55),0 2px 6px rgba(0,0,0,.35);margin-top:-8px;transition:transform .12s;}
-        input[type="range"]::-webkit-slider-thumb:active{cursor:grabbing;transform:scale(1.08);}
-        input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;}
-      `}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nexus-pulse { 0%,100%{opacity:1}50%{opacity:.4} } @keyframes nexus-spin  { to{transform:rotate(360deg)} } body.nexus-scroll-locked { overflow:hidden; } input[type="range"]{-webkit-appearance:none;appearance:none;background:rgba(255,255,255,.07);border-radius:99px;outline:none;} input[type="range"]::-webkit-slider-runnable-track{height:6px;border-radius:99px;background:rgba(255,255,255,.07);} input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;box-shadow:0 0 0 4px rgba(151,252,228,.10),0 0 16px rgba(151,252,228,.55),0 2px 6px rgba(0,0,0,.35);margin-top:-8px;transition:transform .12s;} input[type="range"]::-webkit-slider-thumb:active{cursor:grabbing;transform:scale(1.08);} input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;}`}</style>
 
       <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)', color: C.ink, backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(151,252,228,.10),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 20%,rgba(168,127,255,.06),transparent 50%)' }}>
 
@@ -1816,11 +1705,7 @@ export default function PerpsTrade({ onConnectWallet }) {
               Connect your Solana wallet. Pick a market. Long or short -- that's it.
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', padding: '12px 14px', borderRadius: 14, background: 'rgba(0,0,0,.30)', border: `1px solid ${C.border}` }}>
-              {[
-                { label: 'MARKETS', value: marketData.length || '-' },
-                { label: '24H VOL', value: shortNum(totalVol) },
-                { label: 'GAINERS', value: `${gainers}/${marketData.length}` },
-              ].map((s, i) => (
+              {[{ label: 'MARKETS', value: marketData.length || '-' }, { label: '24H VOL', value: shortNum(totalVol) }, { label: 'GAINERS', value: `${gainers}/${marketData.length}` }].map((s, i) => (
                 <div key={s.label} style={{ textAlign: i === 0 ? 'left' : i === 2 ? 'right' : 'center', borderRight: i < 2 ? `1px solid ${C.hairline}` : 'none' }}>
                   <div style={{ fontSize: 18, fontWeight: 800, color: C.inkStr, ...T.display }}>{s.value}</div>
                   <div style={{ fontSize: 9, color: C.muted2, marginTop: 3, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>{s.label}</div>
@@ -1860,9 +1745,9 @@ export default function PerpsTrade({ onConnectWallet }) {
           onConnectWallet={onConnectWallet}
           walletPubkey={walletPubkey}
           marketData={marketData}
-          hlWallet={hlWallet}      setHlWallet={setHlWallet}
-          hlBalance={hlBalance}    setHlBalance={setHlBalance}
-          positions={positions}    setPositions={setPositions}
+          hlWallet={hlWallet} setHlWallet={setHlWallet}
+          hlBalance={hlBalance} setHlBalance={setHlBalance}
+          positions={positions} setPositions={setPositions}
           solLamports={solLamports} setSolLamports={setSolLamports}
           solPrice={solPrice}
           refreshAccount={refreshAccount}
