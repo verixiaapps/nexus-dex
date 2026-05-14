@@ -763,11 +763,10 @@ function hasSpotMatch(perpName, spotSymbols) {
 
 function filterNewListings(allPerps) {
   return allPerps
-    .filter(p => p.hasSpot)
-    .filter(p => p.volume24h >= 500_000)
+    .filter(p => p.volume24h >= 50_000)
     .filter(p => p.price > 0)
     .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0))
-    .slice(0, 6)
+    .slice(0, 20)
     .map((p, idx) => ({ ...p, newnessRank: idx }));
 }
 
