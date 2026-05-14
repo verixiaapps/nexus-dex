@@ -8,6 +8,8 @@ import {
   Solana as LifiSolana,
   getRoutes as lifiGetRoutes,
   executeRoute as lifiExecuteRoute,
+  getChains as lifiGetChains,
+  getTokens as lifiGetTokens,
 } from '@lifi/sdk';
 
 /* -- NEXUS DEX -----------------------------------------------------
@@ -26,13 +28,13 @@ const LIFI_FEE              = 0;    // <- optional, e.g. 0.0025 = 25 bps
 const SOL_MINT              = 'So11111111111111111111111111111111111111112';
 const LAMPORTS_PER_SOL      = 1_000_000_000;
 
-// Li.Fi chain ids. Solana is well-known; HyperCore should be verified against
-// https://li.quest/v1/chains?chainTypes=SVM,EVM,HYP and updated if Li.Fi
-// publishes a different numeric id for HyperCore.
+// Solana in Li.Fi
 const LIFI_SOLANA_CHAIN_ID  = 1151111081099710;
-const LIFI_HYPERCORE_CHAIN_ID = 1337; // verify against Li.Fi chain list
-// Perps USDC on HyperCore uses the zero address by convention in the bridge layer.
-const HYPERCORE_USDC_ADDR   = '0x0000000000000000000000000000000000000000';
+
+// HyperCore chain id + USDC token address are discovered at runtime from Li.Fi
+// so we don't have to hardcode anything. Fallbacks below are last-resort.
+const HYPERCORE_FALLBACK_CHAIN_ID = 1337;
+const HYPERCORE_FALLBACK_USDC     = '0x0000000000000000000000000000000000000000';
 
 const DERIVATION_MSG        = (pub) =>
   `Nexus DEX: Authorize HyperCore Account\n\nWallet: ${pub}\n\nThis creates your non-custodial trading account. No SOL is spent.`;
@@ -295,6 +297,36 @@ async function pollUntilFunded(hlAddress, targetUsd, timeoutMs = 300_000) {
   throw new Error('Bridge is taking longer than expected. Your SOL is safe - refresh to check.');
 }
 
+/* -- Discover HyperCore chain + USDC address from Li.Fi at runtime - */
+let _hyperCoreResolved = null;
+async function resolveHyperCoreChain() {
+  if (_hyperCoreResolved) return _hyperCoreResolved;
+  try {
+    const chains = await lifiGetChains();
+    const match = (chains || []).find(c => {
+      const name = String(c.name || '').toLowerCase();
+      const key  = String(c.key  || '').toLowerCase();
+      return name.includes('hypercore') || name.includes('hyperliquid')
+          || ['hyp', 'hco', 'hcore'].includes(key);
+    });
+    if (!match) throw new Error('HyperCore chain not in Li.Fi registry');
+
+    let usdcAddr = HYPERCORE_FALLBACK_USDC;
+    try {
+      const t = await lifiGetTokens({ chains: [match.id] });
+      const list = t?.tokens?.[match.id] || [];
+      const usdc = list.find(x => /^usdc(\.e)?$/i.test(x.symbol)) || list.find(x => x.symbol === 'USDC');
+      if (usdc?.address) usdcAddr = usdc.address;
+    } catch {}
+
+    _hyperCoreResolved = { chainId: match.id, usdcAddress: usdcAddr };
+  } catch (e) {
+    console.warn('[hypercore resolve fallback]', e?.message || e);
+    _hyperCoreResolved = { chainId: HYPERCORE_FALLBACK_CHAIN_ID, usdcAddress: HYPERCORE_FALLBACK_USDC };
+  }
+  return _hyperCoreResolved;
+}
+
 /* -- Li.Fi deposit: SOL -> HyperCore (one wallet popup) ------------ */
 async function depositSolToHyperCore({
   solLamports, hlAddress, solPubkey, onStatus,
@@ -302,22 +334,25 @@ async function depositSolToHyperCore({
   ensureLifiConfig();
 
   onStatus?.('Finding route...');
+  const hyperCore = await resolveHyperCoreChain();
   const result = await lifiGetRoutes({
     fromChainId:      LIFI_SOLANA_CHAIN_ID,
-    toChainId:        LIFI_HYPERCORE_CHAIN_ID,
+    toChainId:        hyperCore.chainId,
     fromTokenAddress: SOL_MINT,
-    toTokenAddress:   HYPERCORE_USDC_ADDR,
+    toTokenAddress:   hyperCore.usdcAddress,
     fromAmount:       String(solLamports),
     fromAddress:      solPubkey,
     toAddress:        hlAddress,
     options: {
-      slippage: 0.01,           // 1%
+      slippage: 0.01,
       order: 'CHEAPEST',
-      allowSwitchChain: false,  // Solana-origin, no chain switch needed
+      allowSwitchChain: false,
     },
   });
 
-  if (!result?.routes?.length) throw new Error('No bridge route found');
+  if (!result?.routes?.length) {
+    throw new Error('No bridge route found. Try a larger amount or check Li.Fi status.');
+  }
   const route = result.routes[0];
 
   onStatus?.('Sign in wallet...');
@@ -331,7 +366,6 @@ async function depositSolToHyperCore({
     },
   });
 
-  // Find the last on-chain tx hash across all steps/processes
   let txHash = null;
   for (const step of (executed?.steps || [])) {
     for (const proc of (step?.execution?.process || [])) {
@@ -1456,4 +1490,3 @@ export default function PerpsTrade({ onConnectWallet }) {
     </>
   );
 }
-
