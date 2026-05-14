@@ -475,12 +475,15 @@ function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   if (!Number.isFinite(margin) || margin < 10)         throw new Error('Minimum order is $10');
 
   // For new orders: notional = margin * leverage. For close: pass the position value directly.
-  const notional = reduceOnly ? margin : margin * lev;
+  // 3% safety buffer on opens so HL's margin engine doesn't reject for fee/rounding slop.
+  const notional = reduceOnly ? margin : margin * lev * 0.97;
   // Size against LIMIT price (worst-case fill), not mid. HL evaluates margin
   // requirement at the limit price, so sizing from mid blows past available
   // margin when the slippage buffer pushes max notional above margin*leverage.
   const limitPx  = aggressivePx(price, isLong, szDecimals);
-  const sizingPx = isLong ? Math.max(price, parseFloat(limitPx)) : Math.min(price, parseFloat(limitPx));
+  const sizingPx = isLong
+    ? Math.max(price, parseFloat(limitPx))
+    : Math.min(price, parseFloat(limitPx));
   const coinSize = roundSize(notional / sizingPx, szDecimals);
 
   if (parseFloat(coinSize) <= 0) throw new Error('Order size too small for this market');
@@ -1076,19 +1079,24 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
         )}
         {error && <div style={{ marginBottom: 12, padding: 11, background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.24)', borderRadius: 12, fontSize: 12, color: C.down, ...T.body }}>{error}</div>}
 
-        {isDone ? (
-          <button onClick={onClose} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', background: `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`, color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display }}>Done</button>
-        ) : (
-          <button onClick={handleWithdraw} disabled={isBusy || !amount} style={{
-            width: '100%', padding: 16, borderRadius: 16, border: 'none',
-            background: `linear-gradient(135deg,${C.violet} 0%,${C.sol} 100%)`,
-            color: '#fff', fontWeight: 800, fontSize: 15,
-            cursor: isBusy || !amount ? 'not-allowed' : 'pointer',
-            minHeight: 52, opacity: !amount || isBusy ? 0.55 : 1, ...T.display,
-          }}>
-            {isBusy ? 'Processing...' : 'Withdraw to Solana'}
-          </button>
-        )}
+        <div style={{
+          position: 'sticky', bottom: 0, paddingTop: 4, marginTop: 4,
+          background: `linear-gradient(180deg, transparent 0%, ${C.bg} 30%)`,
+        }}>
+          {isDone ? (
+            <button onClick={onClose} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', background: `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`, color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display }}>Done</button>
+          ) : (
+            <button onClick={handleWithdraw} disabled={isBusy || !amount} style={{
+              width: '100%', padding: 16, borderRadius: 16, border: 'none',
+              background: `linear-gradient(135deg,${C.violet} 0%,${C.sol} 100%)`,
+              color: '#fff', fontWeight: 800, fontSize: 15,
+              cursor: isBusy || !amount ? 'not-allowed' : 'pointer',
+              minHeight: 52, opacity: !amount || isBusy ? 0.55 : 1, ...T.display,
+            }}>
+              {isBusy ? 'Processing...' : 'Withdraw to Solana'}
+            </button>
+          )}
+        </div>
       </div>
     </>
   );
@@ -1130,7 +1138,7 @@ function DepositModal({
     if (!signMessage)             { setError('Wallet does not support message signing'); return; }
     if (!solVal || solVal < 0.01) { setError('Enter an amount'); return; }
     if (notEnoughSol)             { setError('Not enough SOL in your wallet'); return; }
-    if (usdValue < 5)             { setError('Minimum deposit is $5'); return; }
+    if (usdValue < 10)            { setError('Minimum deposit is $10'); return; }
 
     setStatus('loading'); setError(''); setStatusMsg('Setting up account...');
     try {
@@ -1239,19 +1247,24 @@ function DepositModal({
         )}
         {error && <div style={{ marginBottom: 12, padding: 11, background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.24)', borderRadius: 12, fontSize: 12, color: C.down, ...T.body }}>{error}</div>}
 
-        {isDone ? (
-          <button onClick={onClose} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', background: `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`, color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display }}>Done</button>
-        ) : (
-          <button onClick={handleDeposit} disabled={isBusy || !amount || notEnoughSol} style={{
-            width: '100%', padding: 16, borderRadius: 16, border: 'none',
-            background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`,
-            color: '#04070f', fontWeight: 800, fontSize: 15,
-            cursor: isBusy || !amount || notEnoughSol ? 'not-allowed' : 'pointer',
-            minHeight: 52, opacity: !amount || isBusy || notEnoughSol ? 0.55 : 1, ...T.display,
-          }}>
-            {isBusy ? 'Processing...' : 'Deposit to Trading Account'}
-          </button>
-        )}
+        <div style={{
+          position: 'sticky', bottom: 0, paddingTop: 4, marginTop: 4,
+          background: `linear-gradient(180deg, transparent 0%, ${C.bg} 30%)`,
+        }}>
+          {isDone ? (
+            <button onClick={onClose} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', background: `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`, color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display }}>Done</button>
+          ) : (
+            <button onClick={handleDeposit} disabled={isBusy || !amount || notEnoughSol} style={{
+              width: '100%', padding: 16, borderRadius: 16, border: 'none',
+              background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`,
+              color: '#04070f', fontWeight: 800, fontSize: 15,
+              cursor: isBusy || !amount || notEnoughSol ? 'not-allowed' : 'pointer',
+              minHeight: 52, opacity: !amount || isBusy || notEnoughSol ? 0.55 : 1, ...T.display,
+            }}>
+              {isBusy ? 'Processing...' : 'Deposit to Trading Account'}
+            </button>
+          )}
+        </div>
       </div>
     </>
   );
@@ -1642,13 +1655,16 @@ function TradeDrawer({
 export default function PerpsTrade({ onConnectWallet }) {
   const [oneHourMap, setOneHourMap] = useState({});
   const [sparkMap,   setSparkMap]   = useState({});
+  const [allPerps,   setAllPerps]   = useState([]);
+  const allPerpsRef = useRef(allPerps);
+  useEffect(() => { allPerpsRef.current = allPerps; }, [allPerps]);
+
   const [marketData, setMarketData] = useState(() =>
     PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0, change1h: 0, spark: [], volume24h: 0, openInterest: 0, funding: 0, assetIndex: null, szDecimals: 4 }))
   );
   const [activePair, setActivePair] = useState(marketData[0]);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [filter, setFilter]         = useState('All');
-  const [allPerps, setAllPerps]     = useState([]);
   const [spotSymbols, setSpotSymbols] = useState(() => new Set());
 
   const { publicKey: solPk, wallet: solWallet } = useWallet();
@@ -1785,12 +1801,24 @@ export default function PerpsTrade({ onConnectWallet }) {
   }, []);
 
   // Sparkline map (slowest). Fetched once on mount, then every 5 min.
+  // Covers curated markets AND top-by-asset-index so the New tab gets charts.
   useEffect(() => {
     let alive = true;
     const poll = async () => {
-      if (!marketData.length) return;
+      const allNow = allPerpsRef.current || [];
+      if (!marketData.length && !allNow.length) return;
       try {
-        const map = await fetchSparkMap(marketData);
+        // Top 8 by asset index desc -> covers everything visible in the New tab
+        const newest = [...allNow]
+          .filter(p => p.hasSpot && p.volume24h >= 500_000 && p.price > 0)
+          .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0))
+          .slice(0, 8);
+        const seen = new Set();
+        const combined = [];
+        [...marketData, ...newest].forEach(p => {
+          if (!seen.has(p.id)) { seen.add(p.id); combined.push(p); }
+        });
+        const map = await fetchSparkMap(combined);
         if (!alive) return;
         setSparkMap(map);
       } catch {}
@@ -1800,6 +1828,30 @@ export default function PerpsTrade({ onConnectWallet }) {
     return () => { alive = false; clearInterval(id); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Re-fetch sparks the first time allPerps populates (otherwise New-tab charts
+  // stay empty for up to 5 min until the next interval tick).
+  const sparkSeededRef = useRef(false);
+  useEffect(() => {
+    if (sparkSeededRef.current) return;
+    if (allPerps.length === 0) return;
+    sparkSeededRef.current = true;
+    (async () => {
+      try {
+        const newest = [...allPerps]
+          .filter(p => p.hasSpot && p.volume24h >= 500_000 && p.price > 0)
+          .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0))
+          .slice(0, 8);
+        const seen = new Set();
+        const combined = [];
+        [...marketData, ...newest].forEach(p => {
+          if (!seen.has(p.id)) { seen.add(p.id); combined.push(p); }
+        });
+        const map = await fetchSparkMap(combined);
+        setSparkMap(prev => ({ ...prev, ...map }));
+      } catch {}
+    })();
+  }, [allPerps, marketData]);
 
   useEffect(() => {
     if (!activePair?.id) return;
