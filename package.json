@@ -40,7 +40,8 @@
     "@metaplex-foundation/mpl-token-metadata": "3.4.0",
     "@privy-io/react-auth": "^2.0.0",
     "@nktkas/hyperliquid": "^0.32.2",
-    "ethers": "^6.13.0"
+    "ethers": "^6.13.0",
+    "@lifi/sdk": "^3.6.0"
   },
   "overrides": {
     "uuid": "^9.0.1"
