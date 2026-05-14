@@ -12,21 +12,21 @@ import {
   getTokens as lifiGetTokens,
 } from '@lifi/sdk';
 
-/* -- NEXUS DEX -----------------------------------------------------------
+/* -- NEXUS DEX -----------------------------------------------------
    Connect Solana wallet -> pick market -> Long / Short -> done.
    Bridge: Li.Fi (Solana -> HyperCore, one signature in user's Solana wallet).
    Non-custodial: HL EVM wallet derived from Solana signMessage (session only).
-   ------------------------------------------------------------------------ */
+------------------------------------------------------------------- */
 
 const ENABLE_TRADING        = process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
-const BUILDER_ADDRESS       = '';   // <-- set your EVM address to earn builder fees
+const BUILDER_ADDRESS       = '';   // <- set your EVM address to earn builder fees
 const BUILDER_FEE_TENTHS_BP = 5;
 const LIFI_INTEGRATOR       = 'NexusDEX';
-const LIFI_FEE_RECIPIENT    = '';   // <-- optional Li.Fi integrator fee recipient (EVM addr)
-const LIFI_FEE              = 0;    // <-- optional, e.g. 0.0025 = 25 bps
+const LIFI_FEE_RECIPIENT    = '';   // <- optional Li.Fi integrator fee recipient (EVM addr)
+const LIFI_FEE              = 0;    // <- optional, e.g. 0.0025 = 25 bps
 
 // Native SOL on Solana = System Program address. Li.Fi treats this as native.
-// (We previously used the wSOL mint -- some Li.Fi route validators interpret
+// (We previously used the wSOL mint - some Li.Fi route validators interpret
 // that as the SPL token, fail to find a wSOL token account, and report a
 // misleading 'balance is too low' error.)
 const SOL_MINT              = '11111111111111111111111111111111';
@@ -41,10 +41,10 @@ const LIFI_SOLANA_CHAIN_ID  = 1151111081099710;
 const HYPERCORE_FALLBACK_CHAIN_ID = 1337;
 const HYPERCORE_FALLBACK_USDC     = '0x0000000000000000000000000000000000000000';
 
-const DERIVATION_MSG = (pub) =>
+const DERIVATION_MSG        = (pub) =>
   `Nexus DEX: Authorize HyperCore Account\n\nWallet: ${pub}\n\nThis creates your non-custodial trading account. No SOL is spent.`;
 
-/* -- Li.Fi one-time SDK config ------------------------------------------ */
+/* -- Li.Fi one-time SDK config ------------------------------------ */
 let _lifiConfigured = false;
 function ensureLifiConfig() {
   if (_lifiConfigured) return;
@@ -57,49 +57,49 @@ function ensureLifiConfig() {
   _lifiConfigured = true;
 }
 
-/* -- Design tokens ------------------------------------------------------- */
+/* -- Design tokens ------------------------------------------------ */
 const C = {
-  bg: '#04070f', bg2: '#070b16', surface: '#0a1020', surface2: '#0e1428',
-  ink: '#e6efff', inkStr: '#f5fafe',
-  muted: '#7a92b3', muted2: '#475670',
-  hl: '#97fce4', hl2: '#5ce9c8', hlDim: 'rgba(151,252,228,.14)',
-  violet: '#a87fff', sol: '#9945ff',
-  up: '#3dd598', down: '#ff8a9e',
-  amber: '#f5b53d',
-  border: 'rgba(255,255,255,.06)', borderHi: 'rgba(151,252,228,.24)',
-  hairline: 'rgba(255,255,255,.05)',
-  glow: '0 0 24px rgba(151,252,228,.18),0 0 48px rgba(151,252,228,.06)',
-  shadowLg: '0 20px 60px rgba(0,0,0,.55)',
+  bg:'#04070f', bg2:'#070b16', surface:'#0a1020', surface2:'#0e1428',
+  ink:'#e6efff', inkStr:'#f5fafe',
+  muted:'#7a92b3', muted2:'#475670',
+  hl:'#97fce4', hl2:'#5ce9c8', hlDim:'rgba(151,252,228,.14)',
+  violet:'#a87fff', sol:'#9945ff',
+  up:'#3dd598', down:'#ff8a9e',
+  amber:'#f5b53d',
+  border:'rgba(255,255,255,.06)', borderHi:'rgba(151,252,228,.24)',
+  hairline:'rgba(255,255,255,.05)',
+  glow:'0 0 24px rgba(151,252,228,.18),0 0 48px rgba(151,252,228,.06)',
+  shadowLg:'0 20px 60px rgba(0,0,0,.55)',
 };
 const T = {
-  display: { fontFamily: "'Syne', system-ui, sans-serif" },
-  body:    { fontFamily: "'DM Sans', system-ui, sans-serif" },
-  mono:    { fontFamily: "'IBM Plex Mono', monospace" },
-  hero:    { fontFamily: "'Clash Display', 'Syne', system-ui, sans-serif" },
+  display:{ fontFamily:"'Syne', system-ui, sans-serif" },
+  body:   { fontFamily:"'DM Sans', system-ui, sans-serif" },
+  mono:   { fontFamily:"'IBM Plex Mono', monospace" },
+  hero:   { fontFamily:"'Clash Display', 'Syne', system-ui, sans-serif" },
 };
 
 const PERPS_PAIRS = [
-  { id: 'BTC',  base: 'BTC',  leverage: 50, hot: true },
-  { id: 'ETH',  base: 'ETH',  leverage: 50, hot: true },
-  { id: 'SOL',  base: 'SOL',  leverage: 20, hot: true },
-  { id: 'HYPE', base: 'HYPE', leverage: 10, hot: true },
-  { id: 'BNB',  base: 'BNB',  leverage: 20 },
-  { id: 'XRP',  base: 'XRP',  leverage: 20 },
-  { id: 'DOGE', base: 'DOGE', leverage: 20 },
-  { id: 'AVAX', base: 'AVAX', leverage: 15 },
-  { id: 'LINK', base: 'LINK', leverage: 20 },
-  { id: 'SUI',  base: 'SUI',  leverage: 20 },
-  { id: 'ADA',  base: 'ADA',  leverage: 20 },
-  { id: 'TRX',  base: 'TRX',  leverage: 10 },
-  { id: 'ARB',  base: 'ARB',  leverage: 20 },
-  { id: 'OP',   base: 'OP',   leverage: 15 },
-  { id: 'WIF',  base: 'WIF',  leverage: 10 },
-  { id: 'PEPE', base: 'PEPE', leverage: 10 },
-  { id: 'JUP',  base: 'JUP',  leverage: 10 },
-  { id: 'PYTH', base: 'PYTH', leverage: 10 },
+  { id:'BTC',  base:'BTC',  leverage:50, hot:true },
+  { id:'ETH',  base:'ETH',  leverage:50, hot:true },
+  { id:'SOL',  base:'SOL',  leverage:20, hot:true },
+  { id:'HYPE', base:'HYPE', leverage:10, hot:true },
+  { id:'BNB',  base:'BNB',  leverage:20 },
+  { id:'XRP',  base:'XRP',  leverage:20 },
+  { id:'DOGE', base:'DOGE', leverage:20 },
+  { id:'AVAX', base:'AVAX', leverage:15 },
+  { id:'LINK', base:'LINK', leverage:20 },
+  { id:'SUI',  base:'SUI',  leverage:20 },
+  { id:'ADA',  base:'ADA',  leverage:20 },
+  { id:'TRX',  base:'TRX',  leverage:10 },
+  { id:'ARB',  base:'ARB',  leverage:20 },
+  { id:'OP',   base:'OP',   leverage:15 },
+  { id:'WIF',  base:'WIF',  leverage:10 },
+  { id:'PEPE', base:'PEPE', leverage:10 },
+  { id:'JUP',  base:'JUP',  leverage:10 },
+  { id:'PYTH', base:'PYTH', leverage:10 },
 ];
 
-/* -- Scroll lock --------------------------------------------------------- */
+/* -- Scroll lock -------------------------------------------------- */
 let _bodyLockCount = 0;
 function useBodyLock(open) {
   useEffect(() => {
@@ -113,7 +113,7 @@ function useBodyLock(open) {
   }, [open]);
 }
 
-/* -- Formatters ---------------------------------------------------------- */
+/* -- Formatters --------------------------------------------------- */
 function fmt(n, d) {
   if (n == null || isNaN(n)) return '-';
   n = Number(n);
@@ -176,15 +176,15 @@ function aggressivePx(mid, isLong, szDecimals = 4) {
 }
 function coinAccent(symbol) {
   const map = {
-    BTC:  ['#f7931a', '#ffbf5c'], ETH:  ['#627eea', '#8fa8ff'], SOL:  ['#14f195', '#9945ff'],
-    HYPE: ['#97fce4', '#5ce9c8'], DOGE: ['#c2a633', '#e8c84a'], PEPE: ['#3dd598', '#5de882'],
-    XRP:  ['#7989ad', '#bcc6e0'], BNB:  ['#f0b90b', '#f5d060'], SUI:  ['#4da2ff', '#80c4ff'],
-    LINK: ['#2a5ada', '#6a95ff'], AVAX: ['#e84142', '#ff7a7b'], ARB:  ['#12aaff', '#60d0ff'],
+    BTC:['#f7931a','#ffbf5c'], ETH:['#627eea','#8fa8ff'], SOL:['#14f195','#9945ff'],
+    HYPE:['#97fce4','#5ce9c8'], DOGE:['#c2a633','#e8c84a'], PEPE:['#3dd598','#5de882'],
+    XRP:['#7989ad','#bcc6e0'], BNB:['#f0b90b','#f5d060'], SUI:['#4da2ff','#80c4ff'],
+    LINK:['#2a5ada','#6a95ff'], AVAX:['#e84142','#ff7a7b'], ARB:['#12aaff','#60d0ff'],
   };
-  return map[symbol] || ['#a87fff', '#97fce4'];
+  return map[symbol] || ['#a87fff','#97fce4'];
 }
 
-/* -- Ethers lazy-load (only for HL withdrawal EIP-712 signing) ----------- */
+/* -- Ethers lazy-load (only for HL withdrawal EIP-712 signing) ---- */
 let _ethersModule = null;
 async function getEthers() {
   if (_ethersModule) return _ethersModule;
@@ -209,7 +209,7 @@ function splitSigCompat(ethersNs, sig) {
   throw new Error('Cannot split signature');
 }
 
-/* -- Session wallet (derived from Solana key, never persisted) ----------- */
+/* -- Session wallet (derived from Solana key, never persisted) ---- */
 function getSessionWallet(solPubkey) {
   try {
     const raw = sessionStorage.getItem('nexus_hl_' + solPubkey);
@@ -221,7 +221,7 @@ function setSessionWallet(solPubkey, address, privateKey) {
   catch {}
 }
 
-/* -- Cached HL address (public info; survives browser restart) ----------- */
+/* -- Cached HL address (public info; survives browser restart) ---- */
 function getKnownHlAddress(solPubkey) {
   try { return localStorage.getItem('nexus_hl_addr_' + solPubkey) || null; }
   catch { return null; }
@@ -249,7 +249,7 @@ async function deriveHLWallet(signMessage, solPubkey) {
   return result;
 }
 
-/* -- Cached account snapshot (instant first paint) ----------------------- */
+/* -- Cached account snapshot (instant first paint) ---------------- */
 function loadCachedAccount(walletPubkey) {
   if (!walletPubkey) return null;
   try {
@@ -268,7 +268,7 @@ function saveCachedAccount(walletPubkey, data) {
   } catch {}
 }
 
-/* -- Solana balance ------------------------------------------------------- */
+/* -- Solana balance ----------------------------------------------- */
 async function fetchSolBalance(connection, publicKey) {
   try { return await connection.getBalance(publicKey); }
   catch { return 0; }
@@ -281,7 +281,7 @@ async function fetchSolPrice() {
   return Number(d.price);
 }
 
-/* -- Hyperliquid API ------------------------------------------------------ */
+/* -- Hyperliquid API ---------------------------------------------- */
 async function hlRequest(body, isExchange = false) {
   const path = isExchange ? '/api/hyperliquid/exchange' : '/api/hyperliquid';
   const res  = await fetch(path, {
@@ -307,8 +307,8 @@ async function fetchHlBalanceAndPositions(hlAddress) {
   const positions = !state ? [] : (state.assetPositions || [])
     .filter(p => parseFloat(p.position?.szi || 0) !== 0)
     .map(p => {
-      const pos = p.position;
-      const szi = parseFloat(pos.szi || 0);
+      const pos  = p.position;
+      const szi  = parseFloat(pos.szi || 0);
       return {
         coin:       pos.coin,
         szi,
@@ -325,7 +325,7 @@ async function fetchHlBalanceAndPositions(hlAddress) {
   return { balance, positions };
 }
 
-/* -- Poll until funded --------------------------------------------------- */
+/* -- Poll until funded -------------------------------------------- */
 async function pollUntilFunded(hlAddress, targetUsd, timeoutMs = 300_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -333,10 +333,10 @@ async function pollUntilFunded(hlAddress, targetUsd, timeoutMs = 300_000) {
     if (balance >= targetUsd * 0.97) return balance;
     await new Promise(r => setTimeout(r, 4_000));
   }
-  throw new Error('Bridge is taking longer than expected. Your SOL is safe -- refresh to check.');
+  throw new Error('Bridge is taking longer than expected. Your SOL is safe - refresh to check.');
 }
 
-/* -- Discover HyperCore chain + USDC address from Li.Fi at runtime ------- */
+/* -- Discover HyperCore chain + USDC address from Li.Fi at runtime  */
 let _hyperCoreResolved = null;
 async function resolveHyperCoreChain() {
   if (_hyperCoreResolved) return _hyperCoreResolved;
@@ -366,7 +366,8 @@ async function resolveHyperCoreChain() {
   return _hyperCoreResolved;
 }
 
-/* -- Resolve native SOL address from Li.Fi at runtime ------------------- */
+/* -- Li.Fi deposit: SOL -> HyperCore (one wallet popup) ----------- */
+/* -- Resolve native SOL address from Li.Fi at runtime ------------- */
 let _solAddrCache = null;
 async function resolveSolNativeAddress() {
   if (_solAddrCache) return _solAddrCache;
@@ -381,7 +382,6 @@ async function resolveSolNativeAddress() {
   return SOL_MINT;
 }
 
-/* -- Li.Fi deposit: SOL -> HyperCore (one wallet popup) ------------------ */
 async function depositSolToHyperCore({
   solLamports, hlAddress, solPubkey, onStatus,
 }) {
@@ -413,7 +413,7 @@ async function depositSolToHyperCore({
   onStatus?.('Sign in wallet...');
   const executed = await lifiExecuteRoute(route, {
     updateRouteHook(updated) {
-      const step  = updated?.steps?.[updated.steps.length - 1];
+      const step = updated?.steps?.[updated.steps.length - 1];
       const procs = step?.execution?.process || [];
       const active = procs.find(p => p.status === 'PENDING' || p.status === 'STARTED');
       if (active?.message) onStatus?.(active.message);
@@ -433,7 +433,7 @@ async function depositSolToHyperCore({
   return { txHash };
 }
 
-/* -- Withdraw: sign withdraw3 with derived EVM key ----------------------- */
+/* -- Withdraw: sign withdraw3 with derived EVM key ---------------- */
 async function signHlWithdraw(privateKey, action) {
   const mod      = await getEthers();
   const ethersNs = getEthersNs(mod);
@@ -452,7 +452,7 @@ async function signHlWithdraw(privateKey, action) {
     ],
   };
   // EIP-712 message is exactly these 4 fields. The action object from the
-  // backend may also carry `type` and `signatureChainId` -- those go in the
+  // backend may also carry `type` and `signatureChainId` - those go in the
   // outer request body but are NOT part of the typed-data hash. Pass only the
   // signed fields so strict signers don't choke on extras.
   const message = {
@@ -466,7 +466,7 @@ async function signHlWithdraw(privateKey, action) {
   return { r: split.r, s: split.s, v: Number(split.v) };
 }
 
-/* -- Bridge tracking ----------------------------------------------------- */
+/* -- Bridge tracking ---------------------------------------------- */
 function saveBridge(mode, payload) {
   try { localStorage.setItem('nexus_bridge_' + mode, JSON.stringify({ ...payload, ts: Date.now() })); } catch {}
 }
@@ -482,13 +482,13 @@ function clearBridge(mode) {
   try { localStorage.removeItem('nexus_bridge_' + mode); } catch {}
 }
 
-/* -- Order building (notional = margin * leverage for opens) ------------- */
+/* -- Order building (notional = margin * leverage for opens) ------ */
 function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = false }) {
-  if (!ENABLE_TRADING) throw new Error('Trading is disabled -- set REACT_APP_HYPERLIQUID_LIVE_TRADING=1');
+  if (!ENABLE_TRADING) throw new Error('Trading is disabled - set REACT_APP_HYPERLIQUID_LIVE_TRADING=1');
   const assetIndex = pair?.assetIndex;
   const price      = Number(pair?.price || 0);
   const margin     = Number(usdAmount || 0);
-  // Clamp leverage to pair's max -- HL silently caps and would otherwise reject
+  // Clamp leverage to pair's max - HL silently caps and would otherwise reject
   // the order for insufficient margin against the EFFECTIVE leverage.
   const maxLev     = Math.max(1, Math.floor(Number(pair?.leverage || 1)));
   const lev        = Math.min(Math.max(1, Number(leverage || 1)), maxLev);
@@ -504,13 +504,13 @@ function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   // Size against LIMIT price (worst-case fill), not mid. HL evaluates margin
   // requirement at the limit price, so sizing from mid blows past available
   // margin when the slippage buffer pushes max notional above margin*leverage.
-  const limitPx  = aggressivePx(price, isLong, szDecimals);
+  const limitPx = aggressivePx(price, isLong, szDecimals);
   const sizingPx = isLong ? Math.max(price, parseFloat(limitPx)) : Math.min(price, parseFloat(limitPx));
   const coinSize = roundSize(notional / sizingPx, szDecimals);
 
   if (parseFloat(coinSize) <= 0) throw new Error('Order size too small for this market');
 
-  const action = {
+  const action  = {
     type: 'order',
     orders: [{
       a: assetIndex, b: Boolean(isLong),
@@ -526,9 +526,9 @@ function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   return { action, coinSize, notional, limitPx, margin };
 }
 
-/* -- Set leverage on HL account ------------------------------------------ */
+/* -- Set leverage on HL account ----------------------------------- */
 async function setLeverageOnHL({ assetIndex, leverage, isCross = false, hlWalletData }) {
-  const action = { type: 'updateLeverage', asset: assetIndex, isCross, leverage };
+  const action = { type:'updateLeverage', asset:assetIndex, isCross, leverage };
   const nonce  = Date.now();
   const ethersNs = getEthersNs(await getEthers());
   const wallet = new ethersNs.Wallet(hlWalletData.privateKey);
@@ -543,7 +543,7 @@ async function placeOrder({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   const cacheKey = `${hlWalletData.address}:${pair.assetIndex}`;
   if (_leverageCache.get(cacheKey) !== leverage) {
     try {
-      await setLeverageOnHL({ assetIndex: pair.assetIndex, leverage, hlWalletData });
+      await setLeverageOnHL({ assetIndex:pair.assetIndex, leverage, hlWalletData });
       _leverageCache.set(cacheKey, leverage);
     } catch (e) { console.warn('[leverage]', e.message); }
   }
@@ -569,7 +569,6 @@ async function placeOrder({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   }
   return result;
 }
-
 // One API hit -> both views. Returns { curated, all }.
 // Curated = the 18 in PERPS_PAIRS for the All/Hot/Gainers/Losers tabs.
 // All     = the full HL universe for the New tab.
@@ -595,25 +594,25 @@ async function fetchMarketSnapshot({ spotSymbols = new Set(), oneHourMap = {}, s
     universe.forEach((u, i) => { const p = parseFloat(mids[i]); priceMap[u.name] = p > 0 ? p : 0; });
   }
   const all = universe.map(u => {
-    const ctx  = u.ctx;
-    const mid  = priceMap[u.name] || parseFloat(ctx.midPx || ctx.markPx || 0) || 0;
+    const ctx = u.ctx;
+    const mid = priceMap[u.name] || parseFloat(ctx.midPx || ctx.markPx || 0) || 0;
     const prev = parseFloat(ctx.prevDayPx || 0);
     const change = mid > 0 && prev > 0 ? ((mid - prev) / prev) * 100 : 0;
     return {
       id: u.name, base: u.name,
-      assetIndex:   u.index,
-      szDecimals:   u.szDecimals,
-      leverage:     u.maxLeverage,
-      price:        mid,
+      assetIndex:  u.index,
+      szDecimals:  u.szDecimals,
+      leverage:    u.maxLeverage,
+      price:       mid,
       change,
-      change1h:     Number.isFinite(oneHourMap[u.name]) ? oneHourMap[u.name] : 0,
-      spark:        Array.isArray(sparkMap[u.name]) ? sparkMap[u.name] : [],
-      volume24h:    parseFloat(ctx.dayNtlVlm    || 0),
-      openInterest: parseFloat(ctx.openInterest || 0),
-      funding:      parseFloat(ctx.funding      || 0),
-      hasSpot:      hasSpotMatch(u.name, spotSymbols),
-      firstSeenAt:  firstSeen[u.name] || null,
-      hot:          false,
+      change1h:    Number.isFinite(oneHourMap[u.name]) ? oneHourMap[u.name] : 0,
+      spark:       Array.isArray(sparkMap[u.name]) ? sparkMap[u.name] : [],
+      volume24h:   parseFloat(ctx.dayNtlVlm    || 0),
+      openInterest:parseFloat(ctx.openInterest || 0),
+      funding:     parseFloat(ctx.funding      || 0),
+      hasSpot:     hasSpotMatch(u.name, spotSymbols),
+      firstSeenAt: firstSeen[u.name] || null,
+      hot:         false,
     };
   });
   const allById = new Map(all.map(p => [p.id, p]));
@@ -630,7 +629,7 @@ async function fetchMarketSnapshot({ spotSymbols = new Set(), oneHourMap = {}, s
   return { curated, all };
 }
 
-/* -- Spot universe + first-seen registry for "New" tab ------------------- */
+/* -- Spot universe + first-seen registry for "New" tab ------------ */
 async function fetchSpotSymbols() {
   try {
     const spotMeta = await hlRequest({ type: 'spotMeta' });
@@ -685,7 +684,7 @@ function hasSpotMatch(perpName, spotSymbols) {
 
 // "New" tab: sort by HL asset index descending (newer = higher index), apply
 // quality filters, take top 6. Cap is intentionally tight so only genuinely
-// new HL listings show -- older popular perps don't bubble up to fill slots.
+// new HL listings show - older popular perps don't bubble up to fill slots.
 // Ranks are assigned by FILTERED position so badges match display order.
 function filterNewListings(allPerps) {
   return allPerps
@@ -741,7 +740,7 @@ async function fetchSparkMap(markets) {
   return map;
 }
 
-/* -- Visual components --------------------------------------------------- */
+/* -- Visual components -------------------------------------------- */
 function Ticker({ symbol, size = 36 }) {
   const [a, b] = coinAccent(symbol);
   return (
@@ -819,7 +818,7 @@ function MarketRow({ pair, onClick }) {
   );
 }
 
-/* -- Positions panel ----------------------------------------------------- */
+/* -- Positions panel ---------------------------------------------- */
 function PositionsPanel({ positions, marketData, onClose }) {
   if (!positions.length) return null;
   return (
@@ -861,8 +860,8 @@ function PositionsPanel({ positions, marketData, onClose }) {
             </div>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 4, marginBottom: 10 }}>
               {[
-                ['Mark',   fmt(markPx, 2)],
-                ['Value',  fmt(pos.posValue, 2)],
+                ['Mark', fmt(markPx, 2)],
+                ['Value', fmt(pos.posValue, 2)],
                 ['Margin', fmt(pos.marginUsed, 2)],
               ].map(([l, v]) => (
                 <div key={l} style={{ padding: '5px 0' }}>
@@ -890,7 +889,7 @@ function PositionsPanel({ positions, marketData, onClose }) {
   );
 }
 
-/* -- Wallet panel -------------------------------------------------------- */
+/* -- Wallet panel ------------------------------------------------- */
 function WalletPanel({ solLamports, solPrice, hlBalanceUsd, hlAddress, onWithdraw, onDeposit, onSync, syncing }) {
   const solUsd     = (solLamports / LAMPORTS_PER_SOL) * solPrice;
   const totalUsd   = solUsd + hlBalanceUsd;
@@ -938,7 +937,7 @@ function WalletPanel({ solLamports, solPrice, hlBalanceUsd, hlAddress, onWithdra
               color: needsSync ? C.amber : C.muted,
               fontSize: 10, fontWeight: 700, cursor: syncing ? 'wait' : 'pointer',
               opacity: syncing ? 0.5 : 1, ...T.mono,
-            }}>{syncing ? '...' : (needsSync ? 'Sync' : 'Refresh')}</button>
+            }}>{syncing ? '...' : (needsSync ? 'Sync' : 'R')}</button>
           )}
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
@@ -955,21 +954,21 @@ function WalletPanel({ solLamports, solPrice, hlBalanceUsd, hlAddress, onWithdra
             color: canWithdraw ? C.violet : C.muted2,
             fontWeight: 700, fontSize: 11, cursor: canWithdraw ? 'pointer' : 'not-allowed',
             opacity: canWithdraw ? 1 : 0.55, ...T.mono,
-          }}>Withdraw</button>
+          }}>{'Withdraw ->'}</button>
         </div>
       </div>
     </div>
   );
 }
 
-/* -- Withdraw modal ------------------------------------------------------ */
+/* -- Withdraw modal ----------------------------------------------- */
 function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, walletPubkey }) {
-  const [amount, setAmount]       = useState('');
-  const [status, setStatus]       = useState('idle');
-  const [statusMsg, setStatusMsg] = useState('');
-  const [error, setError]         = useState('');
-  const pollRef                   = useRef(null);
-  const failedRef                 = useRef(false);
+  const [amount, setAmount]         = useState('');
+  const [status, setStatus]         = useState('idle');
+  const [statusMsg, setStatusMsg]   = useState('');
+  const [error, setError]           = useState('');
+  const pollRef                     = useRef(null);
+  const failedRef                   = useRef(false);
 
   useBodyLock(open);
 
@@ -1064,7 +1063,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
           <div>
             <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 18, letterSpacing: '-.02em', ...T.display }}>Withdraw</div>
-            <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>HyperCore -&gt; SOL in your Solana wallet (~4 min)</div>
+            <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>HyperCore -> SOL in your Solana wallet (~4 min)</div>
           </div>
           <button onClick={isBusy ? undefined : onClose} disabled={isBusy} style={{ background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`, color: C.muted, width: 32, height: 32, borderRadius: 10, fontSize: 18, cursor: 'pointer', opacity: isBusy ? 0.4 : 1 }}>X</button>
         </div>
@@ -1105,26 +1104,26 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
           position: 'sticky', bottom: 0, paddingTop: 4, marginTop: 4,
           background: `linear-gradient(180deg, transparent 0%, ${C.bg} 30%)`,
         }}>
-          {isDone ? (
-            <button onClick={onClose} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', background: `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`, color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display }}>Done</button>
-          ) : (
-            <button onClick={handleWithdraw} disabled={isBusy || !amount} style={{
-              width: '100%', padding: 16, borderRadius: 16, border: 'none',
-              background: `linear-gradient(135deg,${C.violet} 0%,${C.sol} 100%)`,
-              color: '#fff', fontWeight: 800, fontSize: 15,
-              cursor: isBusy || !amount ? 'not-allowed' : 'pointer',
-              minHeight: 52, opacity: !amount || isBusy ? 0.55 : 1, ...T.display,
-            }}>
-              {isBusy ? 'Processing...' : 'Withdraw to Solana'}
-            </button>
-          )}
+        {isDone ? (
+          <button onClick={onClose} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', background: `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`, color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display }}>Done</button>
+        ) : (
+          <button onClick={handleWithdraw} disabled={isBusy || !amount} style={{
+            width: '100%', padding: 16, borderRadius: 16, border: 'none',
+            background: `linear-gradient(135deg,${C.violet} 0%,${C.sol} 100%)`,
+            color: '#fff', fontWeight: 800, fontSize: 15,
+            cursor: isBusy || !amount ? 'not-allowed' : 'pointer',
+            minHeight: 52, opacity: !amount || isBusy ? 0.55 : 1, ...T.display,
+          }}>
+            {isBusy ? 'Processing...' : 'Withdraw to Solana'}
+          </button>
+        )}
         </div>
       </div>
     </>
   );
 }
 
-/* -- Deposit modal ------------------------------------------------------- */
+/* -- Deposit modal ------------------------------------------------ */
 function DepositModal({
   open, onClose, walletPubkey,
   hlWallet, setHlWallet,
@@ -1208,7 +1207,7 @@ function DepositModal({
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
           <div>
             <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 18, letterSpacing: '-.02em', ...T.display }}>Deposit</div>
-            <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>SOL -&gt; HyperCore trading account</div>
+            <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>SOL -> HyperCore trading account</div>
           </div>
           <button onClick={isBusy ? undefined : onClose} disabled={isBusy} style={{ background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`, color: C.muted, width: 32, height: 32, borderRadius: 10, fontSize: 18, cursor: 'pointer', opacity: isBusy ? 0.4 : 1 }}>X</button>
         </div>
@@ -1273,26 +1272,26 @@ function DepositModal({
           position: 'sticky', bottom: 0, paddingTop: 4, marginTop: 4,
           background: `linear-gradient(180deg, transparent 0%, ${C.bg} 30%)`,
         }}>
-          {isDone ? (
-            <button onClick={onClose} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', background: `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`, color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display }}>Done</button>
-          ) : (
-            <button onClick={handleDeposit} disabled={isBusy || !amount || notEnoughSol} style={{
-              width: '100%', padding: 16, borderRadius: 16, border: 'none',
-              background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`,
-              color: '#04070f', fontWeight: 800, fontSize: 15,
-              cursor: isBusy || !amount || notEnoughSol ? 'not-allowed' : 'pointer',
-              minHeight: 52, opacity: !amount || isBusy || notEnoughSol ? 0.55 : 1, ...T.display,
-            }}>
-              {isBusy ? 'Processing...' : 'Deposit to Trading Account'}
-            </button>
-          )}
+        {isDone ? (
+          <button onClick={onClose} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', background: `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`, color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display }}>Done</button>
+        ) : (
+          <button onClick={handleDeposit} disabled={isBusy || !amount || notEnoughSol} style={{
+            width: '100%', padding: 16, borderRadius: 16, border: 'none',
+            background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`,
+            color: '#04070f', fontWeight: 800, fontSize: 15,
+            cursor: isBusy || !amount || notEnoughSol ? 'not-allowed' : 'pointer',
+            minHeight: 52, opacity: !amount || isBusy || notEnoughSol ? 0.55 : 1, ...T.display,
+          }}>
+            {isBusy ? 'Processing...' : 'Deposit to Trading Account'}
+          </button>
+        )}
         </div>
       </div>
     </>
   );
 }
 
-/* -- Trade Drawer -------------------------------------------------------- */
+/* -- Trade Drawer ------------------------------------------------- */
 function TradeDrawer({
   open, onClose, pair, onConnectWallet, walletPubkey, marketData,
   hlWallet, setHlWallet,
@@ -1431,7 +1430,7 @@ function TradeDrawer({
 
   const closePosition = async (pos, posPair) => {
     const walletData = getSessionWallet(walletPubkey);
-    if (!walletData?.privateKey) { setError('Session expired -- refresh page'); return; }
+    if (!walletData?.privateKey) { setError('Session expired - refresh page'); return; }
     const targetPair = posPair || marketData.find(p => p.id === pos.coin);
     if (!targetPair) { setError('Market data unavailable'); return; }
 
@@ -1515,7 +1514,7 @@ function TradeDrawer({
         </div>
 
         {/* Scrollable body */}
-        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 22px calc(env(safe-area-inset-bottom) + 86px)' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '8px 22px 14px', WebkitOverflowScrolling: 'touch', minHeight: 0 }}>
 
           {wcon && (
             <WalletPanel
@@ -1628,15 +1627,23 @@ function TradeDrawer({
               ))}
             </div>
           )}
+        </div>
 
+        {/* Fixed footer: status, error, CTA always visible regardless of scroll position */}
+        <div style={{
+          flexShrink: 0,
+          padding: '12px 22px calc(env(safe-area-inset-bottom) + 14px)',
+          borderTop: `1px solid ${C.hairline}`,
+          background: `linear-gradient(180deg, transparent 0%, ${C.bg} 20%)`,
+        }}>
           {/* Status */}
           {(isBusy || isSuccess) && statusMsg && (
-            <div style={{ marginBottom: 12, padding: 12, background: 'rgba(151,252,228,.05)', border: '1px solid rgba(151,252,228,.20)', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ marginBottom: 10, padding: 10, background: 'rgba(151,252,228,.05)', border: '1px solid rgba(151,252,228,.20)', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.hlDim}`, borderTopColor: C.hl, animation: 'nexus-spin 0.8s linear infinite', flexShrink: 0 }}/>
               <span style={{ fontSize: 12, color: C.ink, fontWeight: 600, ...T.body }}>{statusMsg}</span>
             </div>
           )}
-          {error && <div style={{ marginBottom: 12, padding: 11, background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.24)', borderRadius: 12, fontSize: 12, color: C.down, ...T.body }}>{error}</div>}
+          {error && <div style={{ marginBottom: 10, padding: 10, background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.24)', borderRadius: 12, fontSize: 12, color: C.down, ...T.body }}>{error}</div>}
 
           {/* CTA */}
           {!wcon ? (
@@ -1657,7 +1664,7 @@ function TradeDrawer({
             </button>
           )}
 
-          <div style={{ fontSize: 10, color: C.muted2, textAlign: 'center', marginTop: 14, fontWeight: 600, ...T.mono }}>
+          <div style={{ fontSize: 10, color: C.muted2, textAlign: 'center', marginTop: 10, fontWeight: 600, ...T.mono }}>
             Non-custodial | Powered by Hyperliquid &amp; Li.Fi
           </div>
         </div>
@@ -1685,21 +1692,23 @@ function TradeDrawer({
   );
 }
 
-/* -- Main page ----------------------------------------------------------- */
+/* -- Main page ---------------------------------------------------- */
 export default function PerpsTrade({ onConnectWallet }) {
   const [oneHourMap, setOneHourMap] = useState({});
   const [sparkMap,   setSparkMap]   = useState({});
-  const [allPerps,   setAllPerps]   = useState([]);
-  const allPerpsRef = useRef(allPerps);
-  useEffect(() => { allPerpsRef.current = allPerps; }, [allPerps]);
-
   const [marketData, setMarketData] = useState(() =>
     PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0, change1h: 0, spark: [], volume24h: 0, openInterest: 0, funding: 0, assetIndex: null, szDecimals: 4 }))
   );
-  const [activePair,   setActivePair]   = useState(marketData[0]);
-  const [drawerOpen,   setDrawerOpen]   = useState(false);
-  const [filter,       setFilter]       = useState('All');
-  const [spotSymbols,  setSpotSymbols]  = useState(() => new Set());
+  const [activePair, setActivePair] = useState(marketData[0]);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [filter, setFilter]         = useState('All');
+  const [allPerps, setAllPerps]     = useState([]);
+  const [spotSymbols, setSpotSymbols] = useState(() => new Set());
+
+  // Ref to current allPerps so the spark polling closure always reads fresh data
+  // without re-creating the 5-min interval on every market refresh.
+  const allPerpsRef = useRef(allPerps);
+  useEffect(() => { allPerpsRef.current = allPerps; }, [allPerps]);
 
   const { publicKey: solPk, wallet: solWallet } = useWallet();
   const { connection } = useConnection();
@@ -1710,12 +1719,12 @@ export default function PerpsTrade({ onConnectWallet }) {
     return null;
   }, [solPk, privyEmbeddedSol]);
 
-  /* -- Trading account state (lifted up so it loads before drawer opens) - */
-  const [hlWallet,    setHlWallet]    = useState(null);
-  const [hlBalance,   setHlBalance]   = useState(0);
-  const [positions,   setPositions]   = useState([]);
+  /* -- Trading account state (lifted up so it loads before drawer opens) -- */
+  const [hlWallet, setHlWallet]       = useState(null);
+  const [hlBalance, setHlBalance]     = useState(0);
+  const [positions, setPositions]     = useState([]);
   const [solLamports, setSolLamports] = useState(0);
-  const [solPrice,    setSolPrice]    = useState(0);
+  const [solPrice, setSolPrice]       = useState(0);
 
   // INSTANT first paint: hydrate from localStorage cache before any network call.
   useEffect(() => {
@@ -1724,9 +1733,9 @@ export default function PerpsTrade({ onConnectWallet }) {
     if (addr) setHlWallet({ address: addr });
     const cached = loadCachedAccount(walletPubkey);
     if (cached) {
-      if (typeof cached.balance === 'number')                       setHlBalance(cached.balance);
-      if (Array.isArray(cached.positions))                          setPositions(cached.positions);
-      if (typeof cached.solLamports === 'number')                   setSolLamports(cached.solLamports);
+      if (typeof cached.balance === 'number')         setHlBalance(cached.balance);
+      if (Array.isArray(cached.positions))            setPositions(cached.positions);
+      if (typeof cached.solLamports === 'number')     setSolLamports(cached.solLamports);
       if (typeof cached.solPrice === 'number' && cached.solPrice > 0) setSolPrice(cached.solPrice);
     }
   }, [walletPubkey]);
@@ -1919,7 +1928,7 @@ export default function PerpsTrade({ onConnectWallet }) {
 
   return (
     <>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nexus-pulse { 0%,100%{opacity:1}50%{opacity:.4} } @keyframes nexus-spin { to{transform:rotate(360deg)} } body.nexus-scroll-locked { overflow:hidden; } input[type="range"]{-webkit-appearance:none;appearance:none;background:rgba(255,255,255,.07);border-radius:99px;outline:none;} input[type="range"]::-webkit-slider-runnable-track{height:6px;border-radius:99px;background:rgba(255,255,255,.07);} input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;box-shadow:0 0 0 4px rgba(151,252,228,.10),0 0 16px rgba(151,252,228,.55),0 2px 6px rgba(0,0,0,.35);margin-top:-8px;transition:transform .12s;} input[type="range"]::-webkit-slider-thumb:active{cursor:grabbing;transform:scale(1.08);} input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;}`}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nexus-pulse { 0%,100%{opacity:1}50%{opacity:.4} } @keyframes nexus-spin  { to{transform:rotate(360deg)} } body.nexus-scroll-locked { overflow:hidden; } input[type="range"]{-webkit-appearance:none;appearance:none;background:rgba(255,255,255,.07);border-radius:99px;outline:none;} input[type="range"]::-webkit-slider-runnable-track{height:6px;border-radius:99px;background:rgba(255,255,255,.07);} input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;box-shadow:0 0 0 4px rgba(151,252,228,.10),0 0 16px rgba(151,252,228,.55),0 2px 6px rgba(0,0,0,.35);margin-top:-8px;transition:transform .12s;} input[type="range"]::-webkit-slider-thumb:active{cursor:grabbing;transform:scale(1.08);} input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;}`}</style>
 
       <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)', color: C.ink, backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(151,252,228,.10),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 20%,rgba(168,127,255,.06),transparent 50%)' }}>
 
@@ -1938,11 +1947,7 @@ export default function PerpsTrade({ onConnectWallet }) {
               Connect your Solana wallet. Pick a market. Long or short -- that's it.
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', padding: '12px 14px', borderRadius: 14, background: 'rgba(0,0,0,.30)', border: `1px solid ${C.border}` }}>
-              {[
-                { label: 'MARKETS', value: marketData.length || '-' },
-                { label: '24H VOL', value: shortNum(totalVol) },
-                { label: 'GAINERS', value: `${gainers}/${marketData.length}` },
-              ].map((s, i) => (
+              {[{ label: 'MARKETS', value: marketData.length || '-' }, { label: '24H VOL', value: shortNum(totalVol) }, { label: 'GAINERS', value: `${gainers}/${marketData.length}` }].map((s, i) => (
                 <div key={s.label} style={{ textAlign: i === 0 ? 'left' : i === 2 ? 'right' : 'center', borderRight: i < 2 ? `1px solid ${C.hairline}` : 'none' }}>
                   <div style={{ fontSize: 18, fontWeight: 800, color: C.inkStr, ...T.display }}>{s.value}</div>
                   <div style={{ fontSize: 9, color: C.muted2, marginTop: 3, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>{s.label}</div>
