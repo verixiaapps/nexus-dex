@@ -21,7 +21,7 @@ import {
 const ENABLE_TRADING        = process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
 const BUILDER_ADDRESS       = '';   // <-- set your EVM address to earn builder fees
 const BUILDER_FEE_TENTHS_BP = 5;
-const LIFI_INTEGRATOR       = 'Nexus DEX';
+const LIFI_INTEGRATOR       = 'NexusDEX';
 const LIFI_FEE_RECIPIENT    = '';   // <-- optional Li.Fi integrator fee recipient (EVM addr)
 const LIFI_FEE              = 0;    // <-- optional, e.g. 0.0025 = 25 bps
 
@@ -476,12 +476,16 @@ function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = fals
 
   // For new orders: notional = margin * leverage. For close: pass the position value directly.
   const notional = reduceOnly ? margin : margin * lev;
-  const coinSize = roundSize(notional / price, szDecimals);
+  // Size against LIMIT price (worst-case fill), not mid. HL evaluates margin
+  // requirement at the limit price, so sizing from mid blows past available
+  // margin when the slippage buffer pushes max notional above margin*leverage.
+  const limitPx  = aggressivePx(price, isLong, szDecimals);
+  const sizingPx = isLong ? Math.max(price, parseFloat(limitPx)) : Math.min(price, parseFloat(limitPx));
+  const coinSize = roundSize(notional / sizingPx, szDecimals);
 
   if (parseFloat(coinSize) <= 0) throw new Error('Order size too small for this market');
 
-  const limitPx = aggressivePx(price, isLong, szDecimals);
-  const action  = {
+  const action = {
     type: 'order',
     orders: [{
       a: assetIndex, b: Boolean(isLong),
@@ -655,17 +659,16 @@ function hasSpotMatch(perpName, spotSymbols) {
 }
 
 // "New" tab: sort by HL asset index descending (newer = higher index), apply
-// quality filters, take top 15. We don't filter by first-seen age because we
-// can't know the real listing age on day-one visits.
-// Ranks are assigned by FILTERED position so badges match display order
-// (top row = rank 0 = JUST LISTED, regardless of global asset index gaps).
+// quality filters, take top 6. Cap is intentionally tight so only genuinely
+// new HL listings show -- older popular perps don't bubble up to fill slots.
+// Ranks are assigned by FILTERED position so badges match display order.
 function filterNewListings(allPerps) {
   return allPerps
     .filter(p => p.hasSpot)
     .filter(p => p.volume24h >= 500_000)
     .filter(p => p.price > 0)
     .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0))
-    .slice(0, 15)
+    .slice(0, 6)
     .map((p, idx) => ({ ...p, newnessRank: idx }));
 }
 
@@ -1678,7 +1681,7 @@ export default function PerpsTrade({ onConnectWallet }) {
     }
   }, [walletPubkey]);
 
-  // Background fetch + 15s poll. Kicks off the moment the wallet is connected --
+  // Background fetch + 10s poll. Kicks off the moment the wallet is connected --
   // does NOT wait for the trade drawer to open.
   const refreshAccount = useCallback(async () => {
     if (!walletPubkey) return;
