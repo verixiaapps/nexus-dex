@@ -1,5 +1,3 @@
-Here is the full revised file with both fixes applied (marked with // FIX comments):
-
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
