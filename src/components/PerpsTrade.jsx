@@ -12,18 +12,18 @@ import {
   getTokens as lifiGetTokens,
 } from '@lifi/sdk';
 
-/* -- NEXUS DEX -----------------------------------------------------
+/* -- NEXUS DEX -----------------------------------------------------------
    Connect Solana wallet -> pick market -> Long / Short -> done.
    Bridge: Li.Fi (Solana -> HyperCore, one signature in user's Solana wallet).
    Non-custodial: HL EVM wallet derived from Solana signMessage (session only).
-   ----------------------------------------------------------------- */
+   ----------------------------------------------------------------------- */
 
 const ENABLE_TRADING        = process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
-const BUILDER_ADDRESS       = '';   // <- set your EVM address to earn builder fees
+const BUILDER_ADDRESS       = '';   // <-- set your EVM address to earn builder fees
 const BUILDER_FEE_TENTHS_BP = 5;
 const LIFI_INTEGRATOR       = 'Nexus DEX';
-const LIFI_FEE_RECIPIENT    = '';   // <- optional Li.Fi integrator fee recipient (EVM addr)
-const LIFI_FEE              = 0;    // <- optional, e.g. 0.0025 = 25 bps
+const LIFI_FEE_RECIPIENT    = '';   // <-- optional Li.Fi integrator fee recipient (EVM addr)
+const LIFI_FEE              = 0;    // <-- optional, e.g. 0.0025 = 25 bps
 
 const SOL_MINT              = 'So11111111111111111111111111111111111111112';
 const LAMPORTS_PER_SOL      = 1_000_000_000;
@@ -39,7 +39,7 @@ const HYPERCORE_FALLBACK_USDC     = '0x0000000000000000000000000000000000000000'
 const DERIVATION_MSG        = (pub) =>
   `Nexus DEX: Authorize HyperCore Account\n\nWallet: ${pub}\n\nThis creates your non-custodial trading account. No SOL is spent.`;
 
-/* -- Li.Fi one-time SDK config ------------------------------------- */
+/* -- Li.Fi one-time SDK config ------------------------------------------ */
 let _lifiConfigured = false;
 function ensureLifiConfig() {
   if (_lifiConfigured) return;
@@ -52,7 +52,7 @@ function ensureLifiConfig() {
   _lifiConfigured = true;
 }
 
-/* -- Design tokens ------------------------------------------------- */
+/* -- Design tokens ------------------------------------------------------ */
 const C = {
   bg:'#04070f', bg2:'#070b16', surface:'#0a1020', surface2:'#0e1428',
   ink:'#e6efff', inkStr:'#f5fafe',
@@ -94,7 +94,7 @@ const PERPS_PAIRS = [
   { id:'PYTH', base:'PYTH', leverage:10 },
 ];
 
-/* -- Scroll lock --------------------------------------------------- */
+/* -- Scroll lock -------------------------------------------------------- */
 let _bodyLockCount = 0;
 function useBodyLock(open) {
   useEffect(() => {
@@ -108,7 +108,7 @@ function useBodyLock(open) {
   }, [open]);
 }
 
-/* -- Formatters ---------------------------------------------------- */
+/* -- Formatters --------------------------------------------------------- */
 function fmt(n, d) {
   if (n == null || isNaN(n)) return '-';
   n = Number(n);
@@ -179,7 +179,7 @@ function coinAccent(symbol) {
   return map[symbol] || ['#a87fff','#97fce4'];
 }
 
-/* -- Ethers lazy-load (only for HL withdrawal EIP-712 signing) ----- */
+/* -- Ethers lazy-load (only for HL withdrawal EIP-712 signing) ---------- */
 let _ethersModule = null;
 async function getEthers() {
   if (_ethersModule) return _ethersModule;
@@ -204,7 +204,7 @@ function splitSigCompat(ethersNs, sig) {
   throw new Error('Cannot split signature');
 }
 
-/* -- Session wallet (derived from Solana key, never persisted) ----- */
+/* -- Session wallet (derived from Solana key, never persisted) ---------- */
 function getSessionWallet(solPubkey) {
   try {
     const raw = sessionStorage.getItem('nexus_hl_' + solPubkey);
@@ -229,7 +229,7 @@ async function deriveHLWallet(signMessage, solPubkey) {
   return result;
 }
 
-/* -- Solana balance ------------------------------------------------ */
+/* -- Solana balance ----------------------------------------------------- */
 async function fetchSolBalance(connection, publicKey) {
   try { return await connection.getBalance(publicKey); }
   catch { return 0; }
@@ -242,7 +242,7 @@ async function fetchSolPrice() {
   return Number(d.price);
 }
 
-/* -- Hyperliquid API ----------------------------------------------- */
+/* -- Hyperliquid API ---------------------------------------------------- */
 async function hlRequest(body, isExchange = false) {
   const path = isExchange ? '/api/hyperliquid/exchange' : '/api/hyperliquid';
   const res  = await fetch(path, {
@@ -286,7 +286,7 @@ async function fetchHlBalanceAndPositions(hlAddress) {
   return { balance, positions };
 }
 
-/* -- Poll until funded --------------------------------------------- */
+/* -- Poll until funded -------------------------------------------------- */
 async function pollUntilFunded(hlAddress, targetUsd, timeoutMs = 300_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -294,10 +294,10 @@ async function pollUntilFunded(hlAddress, targetUsd, timeoutMs = 300_000) {
     if (balance >= targetUsd * 0.97) return balance;
     await new Promise(r => setTimeout(r, 4_000));
   }
-  throw new Error('Bridge is taking longer than expected. Your SOL is safe - refresh to check.');
+  throw new Error('Bridge is taking longer than expected. Your SOL is safe -- refresh to check.');
 }
 
-/* -- Discover HyperCore chain + USDC address from Li.Fi at runtime - */
+/* -- Discover HyperCore chain + USDC address from Li.Fi at runtime ------ */
 let _hyperCoreResolved = null;
 async function resolveHyperCoreChain() {
   if (_hyperCoreResolved) return _hyperCoreResolved;
@@ -327,7 +327,7 @@ async function resolveHyperCoreChain() {
   return _hyperCoreResolved;
 }
 
-/* -- Li.Fi deposit: SOL -> HyperCore (one wallet popup) ------------ */
+/* -- Li.Fi deposit: SOL -> HyperCore (one wallet popup) ----------------- */
 async function depositSolToHyperCore({
   solLamports, hlAddress, solPubkey, onStatus,
 }) {
@@ -378,7 +378,7 @@ async function depositSolToHyperCore({
   return { txHash };
 }
 
-/* -- Withdraw: sign withdraw3 with derived EVM key ----------------- */
+/* -- Withdraw: sign withdraw3 with derived EVM key ---------------------- */
 async function signHlWithdraw(privateKey, action) {
   const mod      = await getEthers();
   const ethersNs = getEthersNs(mod);
@@ -401,7 +401,7 @@ async function signHlWithdraw(privateKey, action) {
   return { r: split.r, s: split.s, v: Number(split.v) };
 }
 
-/* -- Bridge tracking ----------------------------------------------- */
+/* -- Bridge tracking ---------------------------------------------------- */
 function saveBridge(mode, payload) {
   try { localStorage.setItem('nexus_bridge_' + mode, JSON.stringify({ ...payload, ts: Date.now() })); } catch {}
 }
@@ -417,9 +417,9 @@ function clearBridge(mode) {
   try { localStorage.removeItem('nexus_bridge_' + mode); } catch {}
 }
 
-/* -- Order building (notional = margin * leverage for opens) ------- */
+/* -- Order building (notional = margin * leverage for opens) ----------- */
 function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = false }) {
-  if (!ENABLE_TRADING) throw new Error('Trading is disabled - set REACT_APP_HYPERLIQUID_LIVE_TRADING=1');
+  if (!ENABLE_TRADING) throw new Error('Trading is disabled -- set REACT_APP_HYPERLIQUID_LIVE_TRADING=1');
   const assetIndex = pair?.assetIndex;
   const price      = Number(pair?.price || 0);
   const margin     = Number(usdAmount || 0);
@@ -453,12 +453,12 @@ function buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   return { action, coinSize, notional, limitPx, margin };
 }
 
-/* -- Set leverage on HL account ------------------------------------ */
+/* -- Set leverage on HL account ----------------------------------------- */
 async function setLeverageOnHL({ assetIndex, leverage, isCross = false, hlWalletData }) {
   const action = { type:'updateLeverage', asset:assetIndex, isCross, leverage };
   const nonce  = Date.now();
-  const { PrivateKeySigner } = await import('@nktkas/hyperliquid/signing');
-  const wallet = new PrivateKeySigner(hlWalletData.privateKey);
+  const ethersNs = getEthersNs(await getEthers());
+  const wallet = new ethersNs.Wallet(hlWalletData.privateKey);
   const signature = await signL1Action({ wallet, action, nonce });
   return hlRequest({ action, nonce, signature }, true);
 }
@@ -476,8 +476,8 @@ async function placeOrder({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   }
   const built  = buildOrderAction({ pair, isLong, usdAmount, leverage, reduceOnly });
   const nonce  = Date.now();
-  const { PrivateKeySigner } = await import('@nktkas/hyperliquid/signing');
-  const wallet = new PrivateKeySigner(hlWalletData.privateKey);
+  const ethersNs = getEthersNs(await getEthers());
+  const wallet = new ethersNs.Wallet(hlWalletData.privateKey);
   const signature = await signL1Action({ wallet, action: built.action, nonce });
   const result = await hlRequest({ action: built.action, nonce, signature }, true);
   if (result?.status === 'err') {
@@ -496,7 +496,6 @@ async function placeOrder({ pair, isLong, usdAmount, leverage, reduceOnly = fals
   }
   return result;
 }
-
 async function fetchMarketData(oneHourMap = {}, sparkMap = {}) {
   try {
     const [metaAndCtxs, mids] = await Promise.all([
@@ -579,7 +578,7 @@ async function fetchSparkMap(markets) {
   return map;
 }
 
-/* -- Visual components --------------------------------------------- */
+/* -- Visual components -------------------------------------------------- */
 function Ticker({ symbol, size = 36 }) {
   const [a, b] = coinAccent(symbol);
   return (
@@ -655,7 +654,7 @@ function MarketRow({ pair, onClick }) {
   );
 }
 
-/* -- Positions panel ----------------------------------------------- */
+/* -- Positions panel ---------------------------------------------------- */
 function PositionsPanel({ positions, marketData, onClose }) {
   if (!positions.length) return null;
   return (
@@ -726,7 +725,7 @@ function PositionsPanel({ positions, marketData, onClose }) {
   );
 }
 
-/* -- Wallet panel -------------------------------------------------- */
+/* -- Wallet panel ------------------------------------------------------- */
 function WalletPanel({ solLamports, solPrice, hlBalanceUsd, hlAddress, onWithdraw }) {
   const solUsd     = (solLamports / LAMPORTS_PER_SOL) * solPrice;
   const totalUsd   = solUsd + hlBalanceUsd;
@@ -774,7 +773,7 @@ function WalletPanel({ solLamports, solPrice, hlBalanceUsd, hlAddress, onWithdra
   );
 }
 
-/* -- Withdraw modal ------------------------------------------------ */
+/* -- Withdraw modal ----------------------------------------------------- */
 function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, walletPubkey }) {
   const [amount, setAmount]         = useState('');
   const [status, setStatus]         = useState('idle');
@@ -930,7 +929,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlPrivateKey, hlBalance, wall
   );
 }
 
-/* -- Trade Drawer -------------------------------------------------- */
+/* -- Trade Drawer ------------------------------------------------------- */
 function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, marketData }) {
   const { connected, signMessage, publicKey } = useWallet();
   const { connection } = useConnection();
@@ -1087,7 +1086,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, marke
 
   const closePosition = async (pos, posPair) => {
     const walletData = getSessionWallet(walletPubkey);
-    if (!walletData?.privateKey) { setError('Session expired - refresh page'); return; }
+    if (!walletData?.privateKey) { setError('Session expired -- refresh page'); return; }
     const targetPair = posPair || marketData.find(p => p.id === pos.coin);
     if (!targetPair) { setError('Market data unavailable'); return; }
 
@@ -1330,7 +1329,7 @@ function TradeDrawer({ open, onClose, pair, onConnectWallet, walletPubkey, marke
   );
 }
 
-/* -- Main page ----------------------------------------------------- */
+/* -- Main page ---------------------------------------------------------- */
 export default function PerpsTrade({ onConnectWallet }) {
   const [oneHourMap, setOneHourMap] = useState({});
   const [sparkMap,   setSparkMap]   = useState({});
@@ -1490,3 +1489,4 @@ export default function PerpsTrade({ onConnectWallet }) {
     </>
   );
 }
+
