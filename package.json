@@ -41,7 +41,7 @@
     "@privy-io/react-auth": "^2.0.0",
     "@nktkas/hyperliquid": "^0.32.2",
     "ethers": "^6.13.0",
-    "@lifi/sdk": "^3.6.0",
+    "@lifi/sdk": "^3.40.2",
     "viem": "^2.0.0"
   },
   "overrides": {
