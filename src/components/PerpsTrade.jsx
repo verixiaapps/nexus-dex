@@ -1,5 +1,3 @@
-Full file in 3 parts. Part 1:
-
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
