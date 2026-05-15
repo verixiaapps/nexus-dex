@@ -1,3 +1,5 @@
+Full file in 3 parts. Part 1:
+
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
@@ -13,12 +15,12 @@ import {
 } from '@lifi/sdk';
 
 const ENABLE_TRADING        = process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
-const BUILDER_ADDRESS       = '';
-const BUILDER_FEE_TENTHS_BP = 50;
+const BUILDER_ADDRESS       = '0xeace360F8faB3f739CBC4e026b58efC5866fAdC1';
+const BUILDER_FEE_TENTHS_BP = 100;
 const BUILDER_MAX_FEE_RATE  = '0.1%';
 const LIFI_INTEGRATOR       = 'NexusDEX';
-const LIFI_FEE_RECIPIENT    = '';
-const LIFI_FEE              = 0;
+const LIFI_FEE_RECIPIENT    = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
+const LIFI_FEE              = 0.01;
 
 const TAKER_FEE_NO_BUILDER = 0.00045;
 const TAKER_FEE_W_BUILDER  = 0.000252;
@@ -262,6 +264,19 @@ function saveCachedAccount(walletPubkey, data) {
   } catch {}
 }
 
+function loadCachedCharts() {
+  try {
+    const raw = localStorage.getItem('nexus_charts');
+    if (!raw) return { sparks: {}, hours: {} };
+    const d = JSON.parse(raw);
+    if (Date.now() - (d.ts || 0) > 30 * 60_000) return { sparks: {}, hours: {} };
+    return { sparks: d.sparks || {}, hours: d.hours || {} };
+  } catch { return { sparks: {}, hours: {} }; }
+}
+function saveCachedCharts(sparks, hours) {
+  try { localStorage.setItem('nexus_charts', JSON.stringify({ ts: Date.now(), sparks, hours })); } catch {}
+}
+
 async function fetchSolBalance(connection, publicKey) {
   try { return await connection.getBalance(publicKey); }
   catch { return 0; }
@@ -304,10 +319,11 @@ async function fetchHlState(hlAddress) {
 
 async function fetchHlBalanceAndPositions(hlAddress) {
   const state = await fetchHlState(hlAddress);
+  if (!state) return null;
   const balance      = parseFloat(state?.marginSummary?.accountValue || 0);
   const withdrawable = parseFloat(state?.withdrawable || 0);
   const marginUsed   = parseFloat(state?.crossMarginSummary?.totalMarginUsed || 0);
-  const positions = !state ? [] : (state.assetPositions || [])
+  const positions = (state.assetPositions || [])
     .filter(p => parseFloat(p.position?.szi || 0) !== 0)
     .map(p => {
       const pos  = p.position;
@@ -331,8 +347,8 @@ async function fetchHlBalanceAndPositions(hlAddress) {
 async function pollUntilFunded(hlAddress, targetUsd, timeoutMs = 300_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const { balance } = await fetchHlBalanceAndPositions(hlAddress);
-    if (balance >= targetUsd * 0.97) return balance;
+    const bp = await fetchHlBalanceAndPositions(hlAddress);
+    if (bp && bp.balance >= targetUsd * 0.97) return bp.balance;
     await new Promise(r => setTimeout(r, 4_000));
   }
   throw new Error('Bridge is taking longer than expected. Your SOL is safe - refresh to check.');
@@ -797,17 +813,25 @@ async function fetchSparkline(coin) {
   } catch { return []; }
 }
 async function fetchOneHourMap(markets) {
-  const limited = markets.slice(0, 40);
-  const vals    = await Promise.all(limited.map(p => fetchOneHourChange(p.id)));
-  const map     = {};
-  limited.forEach((p, i) => { map[p.id] = Number.isFinite(vals[i]) ? vals[i] : 0; });
+  const limited = markets.slice(0, 200);
+  const map = {};
+  const BATCH = 10;
+  for (let i = 0; i < limited.length; i += BATCH) {
+    const batch = limited.slice(i, i + BATCH);
+    const vals  = await Promise.all(batch.map(p => fetchOneHourChange(p.id)));
+    batch.forEach((p, j) => { map[p.id] = Number.isFinite(vals[j]) ? vals[j] : 0; });
+  }
   return map;
 }
 async function fetchSparkMap(markets) {
-  const limited = markets.slice(0, 40);
-  const vals    = await Promise.all(limited.map(p => fetchSparkline(p.id)));
-  const map     = {};
-  limited.forEach((p, i) => { map[p.id] = Array.isArray(vals[i]) ? vals[i] : []; });
+  const limited = markets.slice(0, 200);
+  const map = {};
+  const BATCH = 10;
+  for (let i = 0; i < limited.length; i += BATCH) {
+    const batch = limited.slice(i, i + BATCH);
+    const vals  = await Promise.all(batch.map(p => fetchSparkline(p.id)));
+    batch.forEach((p, j) => { map[p.id] = Array.isArray(vals[j]) ? vals[j] : []; });
+  }
   return map;
 }
 
@@ -1009,13 +1033,13 @@ function WalletPanel({
             : <span style={{ fontSize: 10, color: C.amber, ...T.mono }}>Sign to view positions</span>}
           {onSync && (
             <button onClick={syncing ? undefined : onSync} disabled={syncing} style={{
-              padding: '4px 9px', borderRadius: 7,
+              padding: '4px 11px', borderRadius: 7,
               border: `1px solid ${needsSync ? 'rgba(245,181,61,.40)' : C.border}`,
               background: needsSync ? 'rgba(245,181,61,.10)' : 'transparent',
               color: needsSync ? C.amber : C.muted,
               fontSize: 10, fontWeight: 700, cursor: syncing ? 'wait' : 'pointer',
               opacity: syncing ? 0.5 : 1, ...T.mono,
-            }}>{syncing ? '...' : (needsSync ? 'Sync' : 'R')}</button>
+            }}>{syncing ? '...' : (needsSync ? 'Sync' : 'Refresh')}</button>
           )}
         </div>
         <div style={{ display: 'flex', gap: 6 }}>
@@ -1401,6 +1425,8 @@ function DepositModal({
   );
 }
 
+Part 3:
+
 function TradeDrawer({
   open, onClose, pair, onConnectWallet, walletPubkey,
   marketData, allPerps,
@@ -1485,8 +1511,6 @@ function TradeDrawer({
     : 0;
   const solBalance   = solLamports / LAMPORTS_PER_SOL;
 
-  // Only flag "not enough SOL" if HL balance can't cover the trade either.
-  // If hlAvailable covers it, no SOL needed from wallet.
   const usdNeededFromWallet = Math.max(0, usdAmount - hlAvailable);
   const solNeededFromWallet = solPrice > 0 ? usdNeededFromWallet / solPrice : 0;
   const notEnoughSol = solNeededFromWallet > 0 && solNeededFromWallet > solBalance * 0.98;
@@ -1517,6 +1541,7 @@ function TradeDrawer({
       if (!hlWallet) setHlWallet({ address: walletData.address });
 
       let bp = await fetchHlBalanceAndPositions(walletData.address);
+      if (!bp) throw new Error('Could not load balance, try again');
       setHlBalance(bp.balance);
       setHlAvailable(bp.withdrawable);
       setHlMarginUsed(bp.marginUsed);
@@ -1534,10 +1559,13 @@ function TradeDrawer({
         saveBridge('deposit', { txHash, usd: needed });
         setStatusMsg('Waiting for funds...');
         await pollUntilFunded(walletData.address, bp.balance + needed);
-        bp = await fetchHlBalanceAndPositions(walletData.address);
-        setHlBalance(bp.balance);
-        setHlAvailable(bp.withdrawable);
-        setHlMarginUsed(bp.marginUsed);
+        const refreshed = await fetchHlBalanceAndPositions(walletData.address);
+        if (refreshed) {
+          bp = refreshed;
+          setHlBalance(bp.balance);
+          setHlAvailable(bp.withdrawable);
+          setHlMarginUsed(bp.marginUsed);
+        }
         clearBridge('deposit');
       }
 
@@ -1587,6 +1615,7 @@ function TradeDrawer({
       }
 
       const fresh = await fetchHlBalanceAndPositions(walletData.address);
+      if (!fresh) throw new Error('Could not load position, try again');
       const live  = fresh.positions.find(p => p.coin === pos.coin);
       if (!live) {
         refreshAfterAction?.();
@@ -1848,8 +1877,8 @@ function TradeDrawer({
 }
 
 export default function PerpsTrade({ onConnectWallet }) {
-  const [oneHourMap, setOneHourMap] = useState({});
-  const [sparkMap,   setSparkMap]   = useState({});
+  const [oneHourMap, setOneHourMap] = useState(() => loadCachedCharts().hours);
+  const [sparkMap,   setSparkMap]   = useState(() => loadCachedCharts().sparks);
   const [marketData, setMarketData] = useState(() =>
     PERPS_PAIRS.map(p => ({ ...p, price: 0, change: 0, change1h: 0, spark: [], volume24h: 0, openInterest: 0, funding: 0, assetIndex: null, szDecimals: 4 }))
   );
@@ -1911,13 +1940,14 @@ export default function PerpsTrade({ onConnectWallet }) {
       setHlMarginUsed(bp.marginUsed);
       setPositions(bp.positions);
     }
+    const existing = loadCachedAccount(walletPubkey) || {};
     saveCachedAccount(walletPubkey, {
-      balance:      bp?.balance ?? 0,
-      withdrawable: bp?.withdrawable ?? 0,
-      marginUsed:   bp?.marginUsed ?? 0,
-      positions:    bp?.positions ?? [],
+      balance:      bp ? bp.balance      : existing.balance      ?? 0,
+      withdrawable: bp ? bp.withdrawable : existing.withdrawable ?? 0,
+      marginUsed:   bp ? bp.marginUsed   : existing.marginUsed   ?? 0,
+      positions:    bp ? bp.positions    : existing.positions    ?? [],
       solLamports:  lam,
-      solPrice:     price > 0 ? price : undefined,
+      solPrice:     price > 0 ? price : existing.solPrice,
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [walletPubkey, solPk, connection]);
@@ -2016,10 +2046,7 @@ export default function PerpsTrade({ onConnectWallet }) {
       const allNow = allPerpsRef.current || [];
       if (!marketData.length && !allNow.length) return;
       try {
-        const newest = [...allNow]
-          .filter(p => p.hasSpot && p.volume24h >= 500_000 && p.price > 0)
-          .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0))
-          .slice(0, 8);
+        const newest = filterNewListings(allNow);
         const seen = new Set();
         const combined = [];
         [...marketData, ...newest].forEach(p => {
@@ -2054,10 +2081,7 @@ export default function PerpsTrade({ onConnectWallet }) {
     sparkSeededRef.current = true;
     (async () => {
       try {
-        const newest = [...allPerps]
-          .filter(p => p.hasSpot && p.volume24h >= 500_000 && p.price > 0)
-          .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0))
-          .slice(0, 8);
+        const newest = filterNewListings(allPerps);
         const seen = new Set();
         const combined = [];
         [...marketData, ...newest].forEach(p => {
@@ -2068,6 +2092,40 @@ export default function PerpsTrade({ onConnectWallet }) {
       } catch {}
     })();
   }, [allPerps, marketData]);
+
+  useEffect(() => {
+    if (filter !== 'New') return;
+    const newRows = filterNewListings(allPerps);
+    const missingSpark = newRows.filter(p => !Array.isArray(sparkMap[p.id]) || sparkMap[p.id].length === 0);
+    const missingHour  = newRows.filter(p => oneHourMap[p.id] == null);
+    if (missingSpark.length === 0 && missingHour.length === 0) return;
+    let alive = true;
+    (async () => {
+      if (missingSpark.length > 0) {
+        const vals = await Promise.all(missingSpark.map(p => fetchSparkline(p.id)));
+        if (!alive) return;
+        setSparkMap(prev => {
+          const next = { ...prev };
+          missingSpark.forEach((p, i) => { next[p.id] = Array.isArray(vals[i]) ? vals[i] : []; });
+          return next;
+        });
+      }
+      if (missingHour.length > 0) {
+        const vals = await Promise.all(missingHour.map(p => fetchOneHourChange(p.id)));
+        if (!alive) return;
+        setOneHourMap(prev => {
+          const next = { ...prev };
+          missingHour.forEach((p, i) => { next[p.id] = Number.isFinite(vals[i]) ? vals[i] : 0; });
+          return next;
+        });
+      }
+    })();
+    return () => { alive = false; };
+  }, [filter, allPerps, sparkMap, oneHourMap]);
+
+  useEffect(() => {
+    saveCachedCharts(sparkMap, oneHourMap);
+  }, [sparkMap, oneHourMap]);
 
   useEffect(() => {
     if (!activePair?.id) return;
@@ -2175,3 +2233,4 @@ export default function PerpsTrade({ onConnectWallet }) {
     </>
   );
 }
+
