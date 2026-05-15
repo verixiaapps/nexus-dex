@@ -1,3 +1,6 @@
+4 blocks.
+Block 1/4 — requires, app setup, CSP/security headers, env vars, CORS, rate limit, helpers, cache, OKX signing:
+
 require('dotenv').config();
 
 const crypto    = require('crypto');
@@ -81,6 +84,7 @@ const HL_API               = 'https://api.hyperliquid.xyz';
 const OKX_TICKER_URL       = 'https://www.okx.com/api/v5/market/ticker?instId=SOL-USDT';
 const LIFI_API             = 'https://li.quest/v1';
 const LIFI_API_KEY         = process.env.LIFI_API_KEY || '';
+const UNIT_API_BASE        = process.env.UNIT_API_BASE || 'https://api.hyperunit.xyz';
 
 const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'https://swap.verixiaapps.com,http://localhost:3000')
   .split(',').map(s => s.trim()).filter(Boolean);
@@ -131,10 +135,10 @@ function scrubSecrets(s) {
     .replace(/OK-ACCESS-KEY["':\s]+[^&\s"',}]+/gi,        'OK-ACCESS-KEY=***')
     .replace(/OK-ACCESS-SIGN["':\s]+[^&\s"',}]+/gi,       'OK-ACCESS-SIGN=***')
     .replace(/OK-ACCESS-PASSPHRASE["':\s]+[^&\s"',}]+/gi, 'OK-ACCESS-PASSPHRASE=***')
-    .replace(/api-key=[^&\s"']+/gi,                        'api-key=***')
+    .replace(/api-key=[^&\s"']+/gi,                       'api-key=***')
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi,                'Bearer ***')
     .replace(/privateKey["':\s]+[^&\s"',}]+/gi,           'privateKey=***')
-    .replace(/signature["':\s]+{[^}]+}/gi,                'signature={***}');
+    .replace(/signature["':\s]+\{[^}]+\}/gi,              'signature={***}');
 }
 
 function logError(tag, err) {
@@ -182,6 +186,9 @@ function buildOkxHeaders(method, okxPath, body) {
     Accept:                 'application/json',
   };
 }
+
+
+Block 2/4 — OKX proxy, Jupiter routes, DexScreener:
 
 const OKX_ALLOWED_ENDPOINTS = new Set([
   '/dex/aggregator/quote', '/dex/aggregator/swap', '/dex/aggregator/swap-instruction',
@@ -267,7 +274,7 @@ app.post('/api/jupiter/swap', async (req, res) => {
   try {
     if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter fallback disabled' });
     const body = req.body || {};
-    if (!body.userPublicKey) return res.status(400).json({ error: 'Missing userPublicKey' });
+    if (!body.userPublicKey)  return res.status(400).json({ error: 'Missing userPublicKey' });
     if (!body.quoteResponse)  return res.status(400).json({ error: 'Missing quoteResponse' });
     const response = await fetchWithTimeout(
       JUPITER_QUOTE_BASE + '/swap',
@@ -330,6 +337,9 @@ app.get('/api/dexscreener/*', async (req, res) => {
   }
 });
 
+
+Block 3/4 — Hyperliquid validation/proxies, SOL price, LI.FI, Hyperunit:
+
 function isPlainObject(v) { return Boolean(v) && typeof v === 'object' && !Array.isArray(v); }
 function isHexString(v, bytes) {
   const s = String(v || '');
@@ -348,7 +358,7 @@ function validateHyperliquidSignature(sig) {
 }
 function validateHyperliquidExchangePayload(body) {
   if (!isPlainObject(body))        return 'Invalid request body';
-  if (body.type === 'placeOrder')  return 'Unsigned router payload -- frontend must sign before sending.';
+  if (body.type === 'placeOrder')  return 'Unsigned router payload - frontend must sign before sending.';
   if (!isPlainObject(body.action)) return 'Missing action object';
   const nonce = Number(body.nonce);
   if (!Number.isInteger(nonce) || nonce <= 0) return 'Missing or invalid nonce';
@@ -426,7 +436,7 @@ app.get('/api/sol-price', async (req, res) => {
   catch (e) { logError('sol-price', e); res.status(500).json({ error: e.message || 'Unknown error' }); }
 });
 
-/* ── LI.FI proxy ──────────────────────────────────────────────────────── */
+/* --- LI.FI proxy ----------------------------------------------------- */
 function buildLifiHeaders() {
   const h = { Accept: 'application/json' };
   if (LIFI_API_KEY) h['x-lifi-api-key'] = LIFI_API_KEY;
@@ -456,7 +466,88 @@ app.get('/api/lifi/status', async (req, res) => {
   }
 });
 
-/* ── Bridge / Operator ────────────────────────────────────────────────── */
+/* --- Hyperunit proxy (replaces LI.FI for Solana <-> HL native SOL) --- */
+function safeUnitAddress(addr) {
+  if (typeof addr !== 'string') return null;
+  if (addr.length < 16 || addr.length > 64) return null;
+  if (!/^[A-Za-z0-9]+$/.test(addr.replace(/^0x/, ''))) return null;
+  return addr;
+}
+
+async function fetchUnitJson(url, cacheKey, ttlMs) {
+  if (cacheKey && ttlMs > 0) {
+    const c = getCachedJson(cacheKey);
+    if (c) return { status: c.status, parsed: c.payload, raw: null };
+  }
+  const r = await fetchWithTimeout(url, { method: 'GET', headers: { Accept: 'application/json' } }, 10_000);
+  const result = await safeJson(r);
+  if (r.ok && result.parsed && cacheKey && ttlMs > 0)
+    setCachedJson(cacheKey, r.status, result.parsed, ttlMs);
+  return { status: r.status, parsed: result.parsed, raw: result.raw };
+}
+
+app.post('/api/unit/deposit-address', async (req, res) => {
+  try {
+    const hlAddress = safeUnitAddress(req.body?.hlAddress);
+    if (!hlAddress || !hlAddress.startsWith('0x'))
+      return res.status(400).json({ error: 'invalid hlAddress' });
+    const url      = `${UNIT_API_BASE}/gen/solana/hyperliquid/sol/${hlAddress}`;
+    const cacheKey = `unit:deposit:${hlAddress.toLowerCase()}`;
+    const { status, parsed, raw } = await fetchUnitJson(url, cacheKey, 7 * 24 * 60 * 60_000);
+    if (status >= 400 || !parsed)
+      return res.status(status || 502).json({ error: 'unit deposit-address failed', detail: parsed || raw?.slice(0, 200) });
+    return res.json({ address: parsed.address, coinType: parsed.coinType });
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Unit timed out' });
+    logError('unit-deposit-address', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+app.post('/api/unit/withdraw-address', async (req, res) => {
+  try {
+    const solanaAddress = safeUnitAddress(req.body?.solanaAddress);
+    if (!solanaAddress || solanaAddress.length < 32 || solanaAddress.length > 44)
+      return res.status(400).json({ error: 'invalid solanaAddress' });
+    const url      = `${UNIT_API_BASE}/gen/hyperliquid/solana/sol/${solanaAddress}`;
+    const cacheKey = `unit:withdraw:${solanaAddress}`;
+    const { status, parsed, raw } = await fetchUnitJson(url, cacheKey, 7 * 24 * 60 * 60_000);
+    if (status >= 400 || !parsed)
+      return res.status(status || 502).json({ error: 'unit withdraw-address failed', detail: parsed || raw?.slice(0, 200) });
+    return res.json({ address: parsed.address, coinType: parsed.coinType });
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Unit timed out' });
+    logError('unit-withdraw-address', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+app.post('/api/unit/operations', async (req, res) => {
+  try {
+    const hlAddress = safeUnitAddress(req.body?.hlAddress);
+    if (!hlAddress || !hlAddress.startsWith('0x'))
+      return res.status(400).json({ error: 'invalid hlAddress' });
+    const url      = `${UNIT_API_BASE}/operations/${hlAddress}`;
+    const cacheKey = `unit:ops:${hlAddress.toLowerCase()}`;
+    // Short TTL: operations change frequently during a bridge.
+    const { status, parsed, raw } = await fetchUnitJson(url, cacheKey, 5_000);
+    if (status >= 400 || !parsed)
+      return res.status(status || 502).json({ error: 'unit operations failed', detail: parsed || raw?.slice(0, 200) });
+    const operations = Array.isArray(parsed?.operations) ? parsed.operations
+                     : Array.isArray(parsed)             ? parsed
+                     : [];
+    return res.json({ operations });
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Unit timed out' });
+    logError('unit-operations', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+
+Block 4/4 — Bridge/Operator, PumpPortal, Helius/Solana RPC, Pinata, Health, error handler, listen:
+
+/* --- Bridge / Operator ----------------------------------------------- */
 const bridgeTracking      = new Map();
 const gasSponsorCooldown  = new Map();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -490,7 +581,7 @@ function validateUsdAmount(amount, min) {
 app.post('/api/bridge/withdraw/init', async (req, res) => {
   try {
     if (!OPERATOR_PRIVATE_KEY)
-      return res.status(503).json({ error: 'Bridge not configured -- set OPERATOR_PRIVATE_KEY' });
+      return res.status(503).json({ error: 'Bridge not configured - set OPERATOR_PRIVATE_KEY' });
     const { hl_wallet_address, usd_amount, user_sol_addr } = req.body || {};
     if (!hl_wallet_address || !usd_amount || !user_sol_addr)
       return res.status(400).json({ error: 'missing params' });
@@ -599,7 +690,7 @@ app.post('/api/bridge/sponsor-gas', async (req, res) => {
   }
 });
 
-/* ── PumpPortal ───────────────────────────────────────────────────────── */
+/* --- PumpPortal ------------------------------------------------------ */
 app.post('/api/pumpportal/trade-local', async (req, res) => {
   try {
     const response = await fetchWithTimeout(
@@ -620,7 +711,7 @@ app.post('/api/pumpportal/trade-local', async (req, res) => {
   }
 });
 
-/* ── Helius / Solana RPC ──────────────────────────────────────────────── */
+/* --- Helius / Solana RPC -------------------------------------------- */
 function getSolanaRpcUrl() {
   if (HELIUS_RPC_URL) return HELIUS_RPC_URL;
   if (HELIUS_API_KEY) return 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(HELIUS_API_KEY);
@@ -655,7 +746,7 @@ app.post('/api/solana-rpc', async (req, res) => {
   }
 });
 
-/* ── Pinata ───────────────────────────────────────────────────────────── */
+/* --- Pinata --------------------------------------------------------- */
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -712,7 +803,7 @@ app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, r
   }
 });
 
-/* ── Health ───────────────────────────────────────────────────────────── */
+/* --- Health --------------------------------------------------------- */
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true, env: NODE_ENV,
@@ -723,13 +814,15 @@ app.get('/api/health', (req, res) => {
       pinata:         Boolean(PINATA_JWT),
       bridgeOperator: Boolean(OPERATOR_PRIVATE_KEY),
       lifiApiKey:     Boolean(LIFI_API_KEY),
+      unit:           true,
     },
     bridge: OPERATOR_PRIVATE_KEY ? {
       arbRpc: ARB_RPC_URL, active: bridgeTracking.size,
-      flow: 'SOL → ARB USDC (LI.FI) → HL bridge transfer → HyperCore | reverse via withdraw3 + LI.FI',
+      flow: 'SOL -> ARB USDC (LI.FI) -> HL bridge transfer -> HyperCore | reverse via withdraw3 + LI.FI',
       custodial: false,
     } : { enabled: false },
     lifi: { baseUrl: LIFI_API, hyperCoreChainId: 1337, arbChainId: 42161 },
+    unit: { baseUrl: UNIT_API_BASE, flow: 'SOL <-> HL native via Hyperunit Guardian network' },
     time: new Date().toISOString(),
   });
 });
@@ -764,6 +857,7 @@ app.listen(PORT, () => {
   console.log('Nexus DEX server on port ' + PORT);
   console.log('  env: ' + NODE_ENV);
   console.log('  LI.FI: ' + LIFI_API + (LIFI_API_KEY ? ' (key set)' : ' (no key)'));
+  console.log('  Unit:  ' + UNIT_API_BASE);
   if (OPERATOR_PRIVATE_KEY) {
     try { const w = getOperatorWallet(); console.log('  Operator: ' + w.address); }
     catch (e) { console.error('  Operator key INVALID:', e.message); }
@@ -772,3 +866,4 @@ app.listen(PORT, () => {
 
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
 process.on('unhandledRejection', err => logError('unhandledRejection', err));
+
