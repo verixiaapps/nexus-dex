@@ -1423,8 +1423,6 @@ function DepositModal({
   );
 }
 
-Part 3:
-
 function TradeDrawer({
   open, onClose, pair, onConnectWallet, walletPubkey,
   marketData, allPerps,
