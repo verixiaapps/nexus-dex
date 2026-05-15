@@ -7,11 +7,14 @@ import {
   createConfig as lifiCreateConfig,
   config as lifiConfig,
   Solana as LifiSolana,
+  EVM as LifiEVM,
   getRoutes as lifiGetRoutes,
   executeRoute as lifiExecuteRoute,
   getChains as lifiGetChains,
   getTokens as lifiGetTokens,
 } from '@lifi/sdk';
+import { createWalletClient, http } from 'viem';
+import { privateKeyToAccount } from 'viem/accounts';
 
 const ENABLE_TRADING        = process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
 const BUILDER_ADDRESS       = '';
@@ -35,6 +38,8 @@ const LIFI_SOLANA_CHAIN_ID  = 1151111081099710;
 
 const HYPERCORE_FALLBACK_CHAIN_ID = 999;
 const HYPERCORE_FALLBACK_USDC     = '0xb88339CB7199b77E23DB6E890353E22632Ba630f';
+const HYPERCORE_RPC               = 'https://rpc.hyperliquid.xyz/evm';
+const ARBITRUM_RPC                = 'https://arb1.arbitrum.io/rpc';
 
 const DERIVATION_MSG = (pub) =>
   `Nexus DEX: Authorize HyperCore Account\n\nWallet: ${pub}\n\nThis creates your non-custodial trading account. No SOL is spent.`;
@@ -66,6 +71,17 @@ function ensureLifiConfig() {
       : {}),
   });
   _lifiConfigured = true;
+}
+
+function makeEvmWalletClient(privateKey, chainId, rpcUrl) {
+  const account = privateKeyToAccount(privateKey);
+  const chain = {
+    id: chainId,
+    name: 'chain' + chainId,
+    nativeCurrency: { decimals: 18, name: 'ETH', symbol: 'ETH' },
+    rpcUrls: { default: { http: [rpcUrl] } },
+  };
+  return createWalletClient({ account, chain, transport: http(rpcUrl) });
 }
 
 const C = {
@@ -450,6 +466,73 @@ async function depositSolToHyperCore({
     onStatus?.('Blockhash expired - preparing fresh route...');
     return await runOnce('Sign again to retry...');
   }
+}
+
+async function withdrawHyperCoreToSol({
+  usdAmount, hlWalletData, solPubkey, solWalletAdapter, onStatus,
+}) {
+  ensureLifiConfig();
+  const hyperCore = await resolveHyperCoreChain();
+  const solAddr   = await resolveSolNativeAddress();
+
+  const hcClient  = makeEvmWalletClient(hlWalletData.privateKey, hyperCore.chainId, HYPERCORE_RPC);
+  const arbClient = makeEvmWalletClient(hlWalletData.privateKey, 42161, ARBITRUM_RPC);
+
+  const providers = [
+    LifiEVM({
+      getWalletClient: async () => hcClient,
+      switchChain: async (chainId) => {
+        if (chainId === 42161) return arbClient;
+        return hcClient;
+      },
+    }),
+  ];
+  if (solWalletAdapter) {
+    providers.push(LifiSolana({
+      async getWalletAdapter() { return solWalletAdapter; },
+    }));
+  }
+  lifiConfig.setProviders(providers);
+
+  onStatus?.('Finding withdrawal route...');
+  const fromAmount6 = String(Math.floor(usdAmount * 1e6));
+  const result = await lifiGetRoutes({
+    fromChainId:      hyperCore.chainId,
+    toChainId:        LIFI_SOLANA_CHAIN_ID,
+    fromTokenAddress: hyperCore.usdcAddress,
+    toTokenAddress:   solAddr,
+    fromAmount:       fromAmount6,
+    fromAddress:      hlWalletData.address,
+    toAddress:        solPubkey,
+    options: {
+      slippage: 0.01,
+      order: 'CHEAPEST',
+      allowSwitchChain: false,
+    },
+  });
+
+  if (!result?.routes?.length) {
+    throw new Error('No withdrawal route found. Try a different amount or check Li.Fi status.');
+  }
+
+  onStatus?.('Sign withdrawal...');
+  const executed = await lifiExecuteRoute(result.routes[0], {
+    updateRouteHook(updated) {
+      const step = updated?.steps?.[updated.steps.length - 1];
+      const procs = step?.execution?.process || [];
+      const active = procs.find(p => p.status === 'PENDING' || p.status === 'STARTED');
+      if (active?.message) onStatus?.(active.message);
+      else if (procs.some(p => p.status === 'DONE')) onStatus?.('Bridging USDC -> SOL...');
+    },
+  });
+
+  let txHash = null;
+  for (const step of (executed?.steps || [])) {
+    for (const proc of (step?.execution?.process || [])) {
+      if (proc.txHash) txHash = proc.txHash;
+    }
+  }
+  return { txHash };
 }
 
 async function signHlWithdraw(privateKey, action) {
@@ -1068,30 +1151,26 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
   const [statusMsg, setStatusMsg]   = useState('');
   const [error, setError]           = useState('');
   const [warning, setWarning]       = useState('');
-  const pollRef                     = useRef(null);
   const verifyRef                   = useRef(null);
-  const pollDeadlineRef             = useRef(0);
   const verifyDeadlineRef           = useRef(0);
-  const failedRef                   = useRef(false);
   const preBalanceRef               = useRef(0);
   const expectedLamportsRef         = useRef(0);
 
   const { connection } = useConnection();
+  const { wallet: solWallet } = useWallet();
 
   useBodyLock(open);
 
   useEffect(() => {
     if (!open) {
       setAmount(''); setStatus('idle'); setError(''); setStatusMsg(''); setWarning('');
-      failedRef.current = false;
     }
     return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
       if (verifyRef.current) clearInterval(verifyRef.current);
     };
   }, [open]);
 
-  const isBusy    = status === 'loading' || status === 'polling' || status === 'verifying';
+  const isBusy    = status === 'loading' || status === 'verifying';
   const isDone    = status === 'complete';
   const isWarning = status === 'warning';
 
@@ -1101,15 +1180,12 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
     if (usd > hlBalance * 0.99) { setError('Amount exceeds available balance'); return; }
     if (!isValidSolAddress(walletPubkey)) { setError('Invalid Solana destination'); return; }
 
-    setStatus('loading'); setError(''); setWarning(''); setStatusMsg('Initiating withdrawal...');
-    failedRef.current = false;
+    setStatus('loading'); setError(''); setWarning(''); setStatusMsg('Unlocking trading account...');
     try {
       let session = getSessionWallet(walletPubkey);
       if (!session?.privateKey) {
         if (!signMessage) throw new Error('Wallet does not support message signing');
-        setStatusMsg('Unlocking trading account...');
         session = await deriveHLWallet(signMessage, walletPubkey);
-        setStatusMsg('Initiating withdrawal...');
       }
 
       try {
@@ -1122,82 +1198,40 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
         ? Math.floor((netUsd / solPrice) * LAMPORTS_PER_SOL * 0.85)
         : 0;
 
-      const init = await fetchWithTimeout('/api/bridge/withdraw/init', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ hl_wallet_address: hlAddress, usd_amount: usd, user_sol_addr: walletPubkey }),
-      }, 15_000);
-      const initData = await init.json();
-      if (!init.ok) throw new Error(initData.error || 'Init failed');
-
-      setStatusMsg('Signing withdrawal...');
-      const signature = await signHlWithdraw(session.privateKey, initData.action);
-
-      setStatusMsg('Submitting to Hyperliquid...');
-      const submit = await fetchWithTimeout('/api/bridge/withdraw/submit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ tracking_id: initData.tracking_id, signature }),
-      }, 15_000);
-      const submitData = await submit.json();
-      if (!submit.ok) throw new Error(submitData.error || 'Submit failed');
+      setStatusMsg('Finding withdrawal route...');
+      await withdrawHyperCoreToSol({
+        usdAmount: usd,
+        hlWalletData: session,
+        solPubkey: walletPubkey,
+        solWalletAdapter: solWallet?.adapter,
+        onStatus: setStatusMsg,
+      });
 
       refreshAfterAction?.();
 
-      setStatus('polling');
-      setStatusMsg('Processing (~4 min)...');
-      const tid = initData.tracking_id;
-      pollDeadlineRef.current = Date.now() + 15 * 60_000;
-      pollRef.current = setInterval(async () => {
-        if (failedRef.current) return;
-        if (Date.now() > pollDeadlineRef.current) {
-          clearInterval(pollRef.current);
-          setError('Still processing after 15 min. Funds are safe but stuck - contact support with the time of this withdrawal.');
-          setStatus('error');
+      setStatus('verifying');
+      setStatusMsg('Verifying SOL arrived...');
+      verifyDeadlineRef.current = Date.now() + 180_000;
+      verifyRef.current = setInterval(async () => {
+        if (Date.now() > verifyDeadlineRef.current) {
+          clearInterval(verifyRef.current);
+          setStatus('warning');
+          setStatusMsg('');
+          setWarning('Bridge submitted but SOL did not arrive in 3 min. Check your Solana wallet. If still missing in 15 min, contact support.');
           refreshAfterAction?.();
           return;
         }
         try {
-          const r = await fetchWithTimeout('/api/bridge/withdraw/status?id=' + encodeURIComponent(tid), {}, 8_000);
-          if (!r.ok) return;
-          const data = await r.json();
-          if (data.status === 'bridging')   setStatusMsg('Bridging USDC -> SOL...');
-          if (data.status === 'finalizing') setStatusMsg('Finalizing...');
-          if (data.status === 'complete') {
-            clearInterval(pollRef.current);
-            setStatus('verifying');
-            setStatusMsg('Verifying SOL arrived...');
-            verifyDeadlineRef.current = Date.now() + 180_000;
-            verifyRef.current = setInterval(async () => {
-              if (Date.now() > verifyDeadlineRef.current) {
-                clearInterval(verifyRef.current);
-                setStatus('warning');
-                setStatusMsg('');
-                setWarning('Server reported complete but SOL did not arrive in 3 min. Check your Solana wallet. If still missing in 15 min, contact support.');
-                refreshAfterAction?.();
-                return;
-              }
-              try {
-                const current = await connection.getBalance(new PublicKey(walletPubkey));
-                const delta = current - (preBalanceRef.current || 0);
-                if (delta >= expectedLamportsRef.current) {
-                  clearInterval(verifyRef.current);
-                  setStatus('complete');
-                  setStatusMsg('');
-                  refreshAfterAction?.();
-                }
-              } catch {}
-            }, 5_000);
-          } else if (data.status === 'failed') {
-            failedRef.current = true;
-            clearInterval(pollRef.current);
-            setError(data.error || 'Withdrawal failed - funds returned to trading account.');
-            setStatus('error');
+          const current = await connection.getBalance(new PublicKey(walletPubkey));
+          const delta = current - (preBalanceRef.current || 0);
+          if (delta >= expectedLamportsRef.current) {
+            clearInterval(verifyRef.current);
+            setStatus('complete');
+            setStatusMsg('');
             refreshAfterAction?.();
           }
         } catch {}
-      }, 8_000);
-
+      }, 5_000);
     } catch (e) {
       console.error('[withdraw]', e);
       setError(e.message || 'Withdrawal failed');
@@ -1224,7 +1258,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
             <div>
               <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 18, letterSpacing: '-.02em', ...T.display }}>Withdraw</div>
-              <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>HyperCore -> SOL in your Solana wallet (~4 min)</div>
+              <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>HyperCore -> SOL in your Solana wallet</div>
             </div>
             <button onClick={isBusy ? undefined : onClose} disabled={isBusy} style={{ background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`, color: C.muted, width: 32, height: 32, borderRadius: 10, fontSize: 18, cursor: 'pointer', opacity: isBusy ? 0.4 : 1 }}>X</button>
           </div>
@@ -1246,7 +1280,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
           </div>
 
           <div style={{ padding: '10px 12px', background: 'rgba(245,181,61,.06)', border: '1px solid rgba(245,181,61,.20)', borderRadius: 10, marginBottom: 14, fontSize: 10, color: C.amber, fontWeight: 600, ...T.body }}>
-            HL charges a $1 flat withdrawal fee. Bridge ~0.3% fee. ~4 min total.
+            HL charges a $1 flat withdrawal fee. Bridge ~0.3% fee.
           </div>
 
           {isBusy && statusMsg && (
@@ -1469,7 +1503,6 @@ function DepositModal({
     </>
   );
 }
-
 
 function TradeDrawer({
   open, onClose, pair, onConnectWallet, walletPubkey,
@@ -2206,7 +2239,7 @@ export default function PerpsTrade({ onConnectWallet }) {
 
   return (
     <>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nexus-pulse { 0%,100%{opacity:1}50%{opacity:.4} } @keyframes nexus-spin  { to{transform:rotate(360deg)} } body.nexus-scroll-locked { overflow:hidden; } input[type="range"]{-webkit-appearance:none;appearance:none;background:rgba(255,255,255,.07);border-radius:99px;outline:none;} input[type="range"]::-webkit-slider-runnable-track{height:6px;border-radius:99px;background:rgba(255,255,255,.07);} input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;box-shadow:0 0 0 4px rgba(151,252,228,.10),0 0 16px rgba(151,252,228,.55),0 2px 6px rgba(0,0,0,.35);margin-top:-8px;transition:transform .12s;} input[type="range"]::-webkit-slider-thumb:active{cursor:grabbing;transform:scale(1.08);} input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;}`}</style>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nexus-pulse { 0%,100%{opacity:1}50%{opacity:.4} } @keyframes nexus-spin  { to{transform:rotate(360deg)} } body.nexus-scroll-locked { overflow:hidden; } input[type="range"]{-webkit-appearance:none;appearance:none;background:rgba(255,255,255,.07);border-radius:99px;outline:none;} input[type="range"]::-webkit-slider-runnable-track{height:6px;border-radius:99px;background:rgba(255,255,255,.07);} input[type="range"]::-webkit-slider-thumb{-webkit-appearance:none;appearance:none;width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;box-shadow:0 0 0 4px rgba(151,252,228,.55),0 2px 6px rgba(0,0,0,.35);margin-top:-8px;transition:transform .12s;} input[type="range"]::-webkit-slider-thumb:active{cursor:grabbing;transform:scale(1.08);} input[type="range"]::-moz-range-thumb{width:22px;height:22px;border-radius:50%;background:#fff;cursor:grab;border:2.5px solid #97fce4;}`}</style>
 
       <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)', color: C.ink, backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(151,252,228,.10),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 20%,rgba(168,127,255,.06),transparent 50%)' }}>
 
@@ -2280,3 +2313,4 @@ export default function PerpsTrade({ onConnectWallet }) {
     </>
   );
 }
+
