@@ -1,3 +1,5 @@
+Part 1:
+
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
@@ -13,7 +15,7 @@ import {
   getChains as lifiGetChains,
   getTokens as lifiGetTokens,
 } from '@lifi/sdk';
-import { createWalletClient, http } from 'viem';
+import { createWalletClient, createPublicClient, http } from 'viem';
 import { privateKeyToAccount } from 'viem/accounts';
 
 const ENABLE_TRADING        = process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
@@ -40,6 +42,7 @@ const HYPERCORE_FALLBACK_CHAIN_ID = 999;
 const HYPERCORE_FALLBACK_USDC     = '0xb88339CB7199b77E23DB6E890353E22632Ba630f';
 const HYPERCORE_RPC               = 'https://rpc.hyperliquid.xyz/evm';
 const ARBITRUM_RPC                = 'https://arb1.arbitrum.io/rpc';
+const ARBITRUM_USDC               = '0xaf88d065e77c8cC2239327C5EDb3A432268e5831';
 
 const DERIVATION_MSG = (pub) =>
   `Nexus DEX: Authorize HyperCore Account\n\nWallet: ${pub}\n\nThis creates your non-custodial trading account. No SOL is spent.`;
@@ -468,23 +471,77 @@ async function depositSolToHyperCore({
   }
 }
 
+// Plan B: HL withdraw3 -> USDC on Arbitrum -> Li.Fi to Solana SOL
+// Sweeps full Arb USDC balance, recovering stuck funds from prior failures.
 async function withdrawHyperCoreToSol({
   usdAmount, hlWalletData, solPubkey, solWalletAdapter, onStatus,
 }) {
   ensureLifiConfig();
-  const hyperCore = await resolveHyperCoreChain();
-  const solAddr   = await resolveSolNativeAddress();
 
-  const hcClient  = makeEvmWalletClient(hlWalletData.privateKey, hyperCore.chainId, HYPERCORE_RPC);
+  const arbChain = {
+    id: 42161,
+    name: 'Arbitrum',
+    nativeCurrency: { decimals: 18, name: 'ETH', symbol: 'ETH' },
+    rpcUrls: { default: { http: [ARBITRUM_RPC] } },
+  };
+  const arbPublic = createPublicClient({ chain: arbChain, transport: http(ARBITRUM_RPC) });
+  const balanceOfAbi = [{
+    name: 'balanceOf', type: 'function', stateMutability: 'view',
+    inputs: [{ name: '', type: 'address' }],
+    outputs: [{ name: '', type: 'uint256' }],
+  }];
+
+  const readArbUsdc = async () => {
+    try {
+      return await arbPublic.readContract({
+        address: ARBITRUM_USDC, abi: balanceOfAbi,
+        functionName: 'balanceOf', args: [hlWalletData.address],
+      });
+    } catch { return 0n; }
+  };
+
+  const preBalance = await readArbUsdc();
+
+  onStatus?.('Signing withdrawal...');
+  const time = nextNonce();
+  const action = {
+    type:             'withdraw3',
+    hyperliquidChain: 'Mainnet',
+    signatureChainId: '0xa4b1',
+    destination:      hlWalletData.address.toLowerCase(),
+    amount:           usdAmount.toFixed(2),
+    time,
+  };
+  const signature = await signHlWithdraw(hlWalletData.privateKey, action);
+
+  onStatus?.('Submitting to Hyperliquid...');
+  const hlResult = await hlRequest({ action, nonce: time, signature }, true);
+  if (hlResult?.status === 'err') {
+    const reason = typeof hlResult?.response === 'string' ? hlResult.response : JSON.stringify(hlResult);
+    throw new Error('HL withdraw failed: ' + reason);
+  }
+
+  onStatus?.('Waiting for USDC on Arbitrum (~4 min)...');
+  const expectedDelta = BigInt(Math.floor((usdAmount - 1) * 1e6 * 0.95));
+  const deadline = Date.now() + 12 * 60_000;
+  let arbBalance = preBalance;
+  while (Date.now() < deadline) {
+    arbBalance = await readArbUsdc();
+    if (arbBalance - preBalance >= expectedDelta) break;
+    await new Promise(r => setTimeout(r, 8_000));
+  }
+  if (arbBalance - preBalance < expectedDelta) {
+    throw new Error('USDC did not arrive on Arbitrum in 12 min. Funds are safe at ' + hlWalletData.address + ' on Arbitrum.');
+  }
+
+  onStatus?.('Bridging to Solana...');
+  const solAddr   = await resolveSolNativeAddress();
   const arbClient = makeEvmWalletClient(hlWalletData.privateKey, 42161, ARBITRUM_RPC);
 
   const providers = [
     LifiEVM({
-      getWalletClient: async () => hcClient,
-      switchChain: async (chainId) => {
-        if (chainId === 42161) return arbClient;
-        return hcClient;
-      },
+      getWalletClient: async () => arbClient,
+      switchChain: async () => arbClient,
     }),
   ];
   if (solWalletAdapter) {
@@ -494,35 +551,27 @@ async function withdrawHyperCoreToSol({
   }
   lifiConfig.setProviders(providers);
 
-  onStatus?.('Finding withdrawal route...');
-  const fromAmount6 = String(Math.floor(usdAmount * 1e6));
-  const result = await lifiGetRoutes({
-    fromChainId:      hyperCore.chainId,
+  const route = await lifiGetRoutes({
+    fromChainId:      42161,
     toChainId:        LIFI_SOLANA_CHAIN_ID,
-    fromTokenAddress: hyperCore.usdcAddress,
+    fromTokenAddress: ARBITRUM_USDC,
     toTokenAddress:   solAddr,
-    fromAmount:       fromAmount6,
+    fromAmount:       arbBalance.toString(),
     fromAddress:      hlWalletData.address,
     toAddress:        solPubkey,
-    options: {
-      slippage: 0.01,
-      order: 'CHEAPEST',
-      allowSwitchChain: false,
-    },
+    options: { slippage: 0.01, order: 'CHEAPEST', allowSwitchChain: false },
   });
 
-  if (!result?.routes?.length) {
-    throw new Error('No withdrawal route found. Try a different amount or check Li.Fi status.');
+  if (!route?.routes?.length) {
+    throw new Error('No bridge route Arbitrum -> Solana. USDC at ' + hlWalletData.address + ' on Arbitrum.');
   }
 
-  onStatus?.('Sign withdrawal...');
-  const executed = await lifiExecuteRoute(result.routes[0], {
+  const executed = await lifiExecuteRoute(route.routes[0], {
     updateRouteHook(updated) {
       const step = updated?.steps?.[updated.steps.length - 1];
       const procs = step?.execution?.process || [];
       const active = procs.find(p => p.status === 'PENDING' || p.status === 'STARTED');
       if (active?.message) onStatus?.(active.message);
-      else if (procs.some(p => p.status === 'DONE')) onStatus?.('Bridging USDC -> SOL...');
     },
   });
 
@@ -1198,7 +1247,6 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
         ? Math.floor((netUsd / solPrice) * LAMPORTS_PER_SOL * 0.85)
         : 0;
 
-      setStatusMsg('Finding withdrawal route...');
       await withdrawHyperCoreToSol({
         usdAmount: usd,
         hlWalletData: session,
@@ -1258,7 +1306,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
             <div>
               <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 18, letterSpacing: '-.02em', ...T.display }}>Withdraw</div>
-              <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>HyperCore -> SOL in your Solana wallet</div>
+              <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>HyperCore -> SOL in your Solana wallet (~5 min)</div>
             </div>
             <button onClick={isBusy ? undefined : onClose} disabled={isBusy} style={{ background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`, color: C.muted, width: 32, height: 32, borderRadius: 10, fontSize: 18, cursor: 'pointer', opacity: isBusy ? 0.4 : 1 }}>X</button>
           </div>
@@ -1279,8 +1327,9 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
             <button onClick={() => setAmount(Math.floor(hlBalance * 0.99).toString())} disabled={isBusy} style={{ padding: '4px 10px', borderRadius: 7, border: `1px solid ${C.border}`, background: 'transparent', color: C.muted, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>MAX</button>
           </div>
 
-          <div style={{ padding: '10px 12px', background: 'rgba(245,181,61,.06)', border: '1px solid rgba(245,181,61,.20)', borderRadius: 10, marginBottom: 14, fontSize: 10, color: C.amber, fontWeight: 600, ...T.body }}>
-            HL charges a $1 flat withdrawal fee. Bridge ~0.3% fee.
+          <div style={{ padding: '10px 12px', background: 'rgba(245,181,61,.06)', border: '1px solid rgba(245,181,61,.20)', borderRadius: 10, marginBottom: 14, fontSize: 10, color: C.amber, fontWeight: 600, lineHeight: 1.5, ...T.body }}>
+            Two-step bridge: HyperCore -&gt; Arbitrum -&gt; Solana. Takes ~5 min. Stay on this screen, do not close.
+            <br/>Fees: $1 HL withdrawal + ~0.3% bridge.
           </div>
 
           {isBusy && statusMsg && (
@@ -1503,6 +1552,8 @@ function DepositModal({
     </>
   );
 }
+
+Part 3:
 
 function TradeDrawer({
   open, onClose, pair, onConnectWallet, walletPubkey,
@@ -1946,7 +1997,8 @@ function TradeDrawer({
         onClose={() => setDepositOpen(false)}
         walletPubkey={walletPubkey}
         hlWallet={hlWallet} setHlWallet={setHlWallet}
-        solLamports={solLamports} solPrice={solPrice}
+        solLamports={solLamports} setSolLamports={setSolLamports}
+        solPrice={solPrice}
         signMessage={signMessage}
         refreshAfterAction={refreshAfterAction}
       />
@@ -2313,4 +2365,3 @@ export default function PerpsTrade({ onConnectWallet }) {
     </>
   );
 }
-
