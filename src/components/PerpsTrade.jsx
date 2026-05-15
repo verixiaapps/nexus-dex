@@ -1,3 +1,5 @@
+Part 1:
+
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
@@ -469,6 +471,72 @@ async function depositSolToHyperCore({
   }
 }
 
+// Pre-fund ETH on HL derived Arbitrum address using user's Solana wallet
+async function prefundArbGasFromSol({
+  hlEvmAddress, solPubkey, solWalletAdapter, onStatus,
+}) {
+  ensureLifiConfig();
+
+  const arbChain = {
+    id: 42161,
+    name: 'Arbitrum',
+    nativeCurrency: { decimals: 18, name: 'ETH', symbol: 'ETH' },
+    rpcUrls: { default: { http: [ARBITRUM_RPC] } },
+  };
+  const arbPublic = createPublicClient({ chain: arbChain, transport: http(ARBITRUM_RPC) });
+
+  let ethBalance = 0n;
+  try { ethBalance = await arbPublic.getBalance({ address: hlEvmAddress }); } catch {}
+
+  const minEth = 200_000_000_000_000n; // ~0.0002 ETH (~$0.60)
+  if (ethBalance >= minEth) return;
+
+  if (!solWalletAdapter) {
+    throw new Error('Need Solana wallet connection to fund Arbitrum gas. Reconnect and try again.');
+  }
+
+  onStatus?.('Funding bridge gas (sign in wallet)...');
+  lifiConfig.setProviders([
+    LifiSolana({ async getWalletAdapter() { return solWalletAdapter; } }),
+  ]);
+
+  const solAddr = await resolveSolNativeAddress();
+  const route = await lifiGetRoutes({
+    fromChainId:      LIFI_SOLANA_CHAIN_ID,
+    toChainId:        42161,
+    fromTokenAddress: solAddr,
+    toTokenAddress:   '0x0000000000000000000000000000000000000000',
+    fromAmount:       '5000000', // 0.005 SOL ~ $1
+    fromAddress:      solPubkey,
+    toAddress:        hlEvmAddress,
+    options: { slippage: 0.02, order: 'CHEAPEST', allowSwitchChain: false },
+  });
+
+  if (!route?.routes?.length) {
+    throw new Error('No gas funding route. Try again.');
+  }
+
+  await lifiExecuteRoute(route.routes[0], {
+    updateRouteHook(updated) {
+      const step = updated?.steps?.[updated.steps.length - 1];
+      const procs = step?.execution?.process || [];
+      const active = procs.find(p => p.status === 'PENDING' || p.status === 'STARTED');
+      if (active?.message) onStatus?.(active.message);
+    },
+  });
+
+  onStatus?.('Waiting for gas to arrive on Arbitrum...');
+  const deadline = Date.now() + 4 * 60_000;
+  while (Date.now() < deadline) {
+    try {
+      const bal = await arbPublic.getBalance({ address: hlEvmAddress });
+      if (bal >= minEth) return;
+    } catch {}
+    await new Promise(r => setTimeout(r, 5_000));
+  }
+  throw new Error('Gas funding did not arrive. Try the withdraw again.');
+}
+
 // Plan B: HL withdraw3 -> USDC on Arbitrum -> Li.Fi to Solana SOL
 // Sweeps full Arb USDC balance, recovering stuck funds from prior failures.
 async function withdrawHyperCoreToSol({
@@ -532,6 +600,14 @@ async function withdrawHyperCoreToSol({
     throw new Error('USDC did not arrive on Arbitrum in 12 min. Funds are safe at ' + hlWalletData.address + ' on Arbitrum.');
   }
 
+  // Pre-fund ETH for gas on Arbitrum if needed
+  await prefundArbGasFromSol({
+    hlEvmAddress:    hlWalletData.address,
+    solPubkey,
+    solWalletAdapter,
+    onStatus,
+  });
+
   onStatus?.('Bridging to Solana...');
   const solAddr   = await resolveSolNativeAddress();
   const arbClient = makeEvmWalletClient(hlWalletData.privateKey, 42161, ARBITRUM_RPC);
@@ -543,9 +619,7 @@ async function withdrawHyperCoreToSol({
     }),
   ];
   if (solWalletAdapter) {
-    providers.push(LifiSolana({
-      async getWalletAdapter() { return solWalletAdapter; },
-    }));
+    providers.push(LifiSolana({ async getWalletAdapter() { return solWalletAdapter; } }));
   }
   lifiConfig.setProviders(providers);
 
@@ -1198,6 +1272,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
   const [statusMsg, setStatusMsg]   = useState('');
   const [error, setError]           = useState('');
   const [warning, setWarning]       = useState('');
+  const [needsGasFunding, setNeedsGasFunding] = useState(true);
   const verifyRef                   = useRef(null);
   const verifyDeadlineRef           = useRef(0);
   const preBalanceRef               = useRef(0);
@@ -1207,6 +1282,29 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
   const { wallet: solWallet } = useWallet();
 
   useBodyLock(open);
+
+  // Check ETH balance on HL derived Arbitrum address to see if gas pre-fund is needed
+  useEffect(() => {
+    if (!open || !isValidEthAddress(hlAddress)) return;
+    let alive = true;
+    (async () => {
+      try {
+        const arbPublic = createPublicClient({
+          chain: {
+            id: 42161, name: 'Arbitrum',
+            nativeCurrency: { decimals: 18, name: 'ETH', symbol: 'ETH' },
+            rpcUrls: { default: { http: [ARBITRUM_RPC] } },
+          },
+          transport: http(ARBITRUM_RPC),
+        });
+        const bal = await arbPublic.getBalance({ address: hlAddress });
+        if (alive) setNeedsGasFunding(bal < 200_000_000_000_000n);
+      } catch {
+        if (alive) setNeedsGasFunding(true);
+      }
+    })();
+    return () => { alive = false; };
+  }, [open, hlAddress]);
 
   useEffect(() => {
     if (!open) {
@@ -1221,11 +1319,24 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
   const isDone    = status === 'complete';
   const isWarning = status === 'warning';
 
+  // Live fee breakdown
+  const usd        = parseFloat(amount) || 0;
+  const hlFee      = usd > 0 ? 1.00 : 0;
+  const bridgeFee  = Math.max(0, (usd - hlFee) * 0.013); // 1% Li.Fi + ~0.3% bridge
+  const gasPrefund = needsGasFunding && usd > 0 ? 1.00 : 0;
+  const netUsd     = Math.max(0, usd - hlFee - bridgeFee);
+  const estSol     = solPrice > 0 ? netUsd / solPrice : 0;
+  const totalCost  = hlFee + bridgeFee + gasPrefund;
+  const tooSmall   = usd > 0 && netUsd < 2;
+
   const handleWithdraw = async () => {
-    const usd = parseFloat(amount);
-    if (!usd || usd < 5)        { setError('Minimum withdrawal is $5'); return; }
-    if (usd > hlBalance * 0.99) { setError('Amount exceeds available balance'); return; }
+    if (!usd || usd < 5)            { setError('Minimum withdrawal is $5'); return; }
+    if (usd > hlBalance * 0.99)     { setError('Amount exceeds available balance'); return; }
     if (!isValidSolAddress(walletPubkey)) { setError('Invalid Solana destination'); return; }
+    if (tooSmall) {
+      setError('After fees, you would receive less than $2. Increase amount.');
+      return;
+    }
 
     setStatus('loading'); setError(''); setWarning(''); setStatusMsg('Unlocking trading account...');
     try {
@@ -1240,7 +1351,6 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
       } catch {
         preBalanceRef.current = 0;
       }
-      const netUsd = Math.max(0, usd - 1) * 0.997;
       expectedLamportsRef.current = solPrice > 0
         ? Math.floor((netUsd / solPrice) * LAMPORTS_PER_SOL * 0.85)
         : 0;
@@ -1304,7 +1414,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
             <div>
               <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 18, letterSpacing: '-.02em', ...T.display }}>Withdraw</div>
-              <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>HyperCore -> SOL in your Solana wallet (~5 min)</div>
+              <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>HyperCore -&gt; SOL in your Solana wallet (~5 min)</div>
             </div>
             <button onClick={isBusy ? undefined : onClose} disabled={isBusy} style={{ background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`, color: C.muted, width: 32, height: 32, borderRadius: 10, fontSize: 18, cursor: 'pointer', opacity: isBusy ? 0.4 : 1 }}>X</button>
           </div>
@@ -1312,7 +1422,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 22px 8px', WebkitOverflowScrolling: 'touch', minHeight: 0 }}>
           <div style={{ padding: 12, background: 'rgba(255,255,255,.03)', borderRadius: 12, border: `1px solid ${C.border}`, marginBottom: 14 }}>
-            <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.06em', marginBottom: 4, ...T.mono }}>AVAILABLE</div>
+            <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.06em', marginBottom: 4, ...T.mono }}>AVAILABLE ON HYPERCORE</div>
             <div style={{ fontSize: 15, color: C.hl, fontWeight: 800, ...T.mono }}>{fmt(hlBalance, 2)}</div>
           </div>
 
@@ -1325,9 +1435,47 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
             <button onClick={() => setAmount(Math.floor(hlBalance * 0.99).toString())} disabled={isBusy} style={{ padding: '4px 10px', borderRadius: 7, border: `1px solid ${C.border}`, background: 'transparent', color: C.muted, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>MAX</button>
           </div>
 
+          {usd > 0 && (
+            <div style={{ marginBottom: 14, padding: 14, background: 'rgba(255,255,255,.03)', borderRadius: 12, border: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', marginBottom: 10, ...T.mono }}>BREAKDOWN</div>
+              {[
+                ['Amount',              fmt(usd, 2),        C.ink],
+                ['HL withdrawal fee',  '-' + fmt(hlFee, 2),  C.muted],
+                ['Bridge fee (~1.3%)', '-' + fmt(bridgeFee, 2), C.muted],
+              ].map(([l, v, c]) => (
+                <div key={l} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 12, ...T.mono }}>
+                  <span style={{ color: C.muted }}>{l}</span>
+                  <span style={{ color: c, fontWeight: 700 }}>{v}</span>
+                </div>
+              ))}
+              <div style={{ borderTop: `1px solid ${C.hairline}`, marginTop: 6, paddingTop: 8, display: 'flex', justifyContent: 'space-between' }}>
+                <span style={{ color: C.ink, fontWeight: 700, fontSize: 12, ...T.body }}>You receive</span>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ color: tooSmall ? C.down : C.up, fontWeight: 800, fontSize: 14, ...T.mono }}>~ {fmt(netUsd, 2)}</div>
+                  <div style={{ color: C.muted, fontSize: 10, marginTop: 2, ...T.mono }}>{solPrice > 0 ? estSol.toFixed(4) + ' SOL' : ''}</div>
+                </div>
+              </div>
+
+              {needsGasFunding && (
+                <div style={{ marginTop: 10, paddingTop: 8, borderTop: `1px solid ${C.hairline}` }}>
+                  <div style={{ fontSize: 10, color: C.amber, fontWeight: 700, lineHeight: 1.5, ...T.body }}>
+                    One-time setup: also costs ~$1.00 SOL from your wallet to fund Arbitrum gas. Future withdraws skip this.
+                  </div>
+                </div>
+              )}
+
+              {tooSmall && (
+                <div style={{ marginTop: 10, paddingTop: 8, borderTop: '1px solid rgba(255,138,158,.30)' }}>
+                  <div style={{ fontSize: 11, color: C.down, fontWeight: 700, ...T.body }}>
+                    Too small. Try at least $10 to make fees worth it.
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           <div style={{ padding: '10px 12px', background: 'rgba(245,181,61,.06)', border: '1px solid rgba(245,181,61,.20)', borderRadius: 10, marginBottom: 14, fontSize: 10, color: C.amber, fontWeight: 600, lineHeight: 1.5, ...T.body }}>
             Two-step bridge: HyperCore -&gt; Arbitrum -&gt; Solana. Takes ~5 min. Stay on this screen, do not close.
-            <br/>Fees: $1 HL withdrawal + ~0.3% bridge.
           </div>
 
           {isBusy && statusMsg && (
@@ -1360,12 +1508,12 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
           {(isDone || isWarning) ? (
             <button onClick={onClose} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', background: isDone ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)` : `linear-gradient(135deg,${C.amber} 0%,${C.violet} 100%)`, color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display }}>{isDone ? 'Done' : 'Close'}</button>
           ) : (
-            <button onClick={handleWithdraw} disabled={isBusy || !amount} style={{
+            <button onClick={handleWithdraw} disabled={isBusy || !amount || tooSmall} style={{
               width: '100%', padding: 16, borderRadius: 16, border: 'none',
               background: `linear-gradient(135deg,${C.violet} 0%,${C.sol} 100%)`,
               color: '#fff', fontWeight: 800, fontSize: 15,
-              cursor: isBusy || !amount ? 'not-allowed' : 'pointer',
-              minHeight: 52, opacity: !amount || isBusy ? 0.55 : 1, ...T.display,
+              cursor: isBusy || !amount || tooSmall ? 'not-allowed' : 'pointer',
+              minHeight: 52, opacity: !amount || isBusy || tooSmall ? 0.55 : 1, ...T.display,
             }}>
               {isBusy ? 'Processing...' : 'Withdraw to Solana'}
             </button>
@@ -1460,7 +1608,7 @@ function DepositModal({
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 18 }}>
             <div>
               <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 18, letterSpacing: '-.02em', ...T.display }}>Deposit</div>
-              <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>SOL -> HyperCore trading account</div>
+              <div style={{ color: C.muted, fontSize: 11, marginTop: 3, ...T.body }}>SOL -&gt; HyperCore trading account</div>
             </div>
             <button onClick={isBusy ? undefined : onClose} disabled={isBusy} style={{ background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`, color: C.muted, width: 32, height: 32, borderRadius: 10, fontSize: 18, cursor: 'pointer', opacity: isBusy ? 0.4 : 1 }}>X</button>
           </div>
@@ -1501,7 +1649,7 @@ function DepositModal({
           </div>
 
           <div style={{ padding: '10px 12px', background: 'rgba(245,181,61,.06)', border: '1px solid rgba(245,181,61,.20)', borderRadius: 10, marginBottom: 14, fontSize: 10, color: C.amber, fontWeight: 600, ...T.body }}>
-            One Solana wallet popup. Funds land on HyperCore in ~15-30s.
+            One Solana wallet popup. Funds land on HyperCore in ~15-30s. Bridge fee ~0.3%.
           </div>
 
           {notEnoughSol && (
@@ -1551,7 +1699,7 @@ function DepositModal({
   );
 }
 
-
+Part 3:
 
 function TradeDrawer({
   open, onClose, pair, onConnectWallet, walletPubkey,
