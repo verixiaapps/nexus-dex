@@ -1,5 +1,3 @@
-Part 1:
-
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
@@ -1553,7 +1551,7 @@ function DepositModal({
   );
 }
 
-Part 3:
+
 
 function TradeDrawer({
   open, onClose, pair, onConnectWallet, walletPubkey,
