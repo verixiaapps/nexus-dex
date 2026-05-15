@@ -1,5 +1,8 @@
+Part 1:
+
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+import { PublicKey } from '@solana/web3.js';
 import { useNexusWallet } from '../WalletContext.js';
 import { signL1Action } from '@nktkas/hyperliquid/signing';
 import {
@@ -1061,27 +1064,38 @@ function WalletPanel({
   );
 }
 
-function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, signMessage, refreshAfterAction }) {
+function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, signMessage, refreshAfterAction, solPrice }) {
   const [amount, setAmount]         = useState('');
   const [status, setStatus]         = useState('idle');
   const [statusMsg, setStatusMsg]   = useState('');
   const [error, setError]           = useState('');
+  const [warning, setWarning]       = useState('');
   const pollRef                     = useRef(null);
+  const verifyRef                   = useRef(null);
   const pollDeadlineRef             = useRef(0);
+  const verifyDeadlineRef           = useRef(0);
   const failedRef                   = useRef(false);
+  const preBalanceRef               = useRef(0);
+  const expectedLamportsRef         = useRef(0);
+
+  const { connection } = useConnection();
 
   useBodyLock(open);
 
   useEffect(() => {
     if (!open) {
-      setAmount(''); setStatus('idle'); setError(''); setStatusMsg('');
+      setAmount(''); setStatus('idle'); setError(''); setStatusMsg(''); setWarning('');
       failedRef.current = false;
     }
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+      if (verifyRef.current) clearInterval(verifyRef.current);
+    };
   }, [open]);
 
-  const isBusy = status === 'loading' || status === 'polling';
-  const isDone = status === 'complete';
+  const isBusy    = status === 'loading' || status === 'polling' || status === 'verifying';
+  const isDone    = status === 'complete';
+  const isWarning = status === 'warning';
 
   const handleWithdraw = async () => {
     const usd = parseFloat(amount);
@@ -1089,7 +1103,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
     if (usd > hlBalance * 0.99) { setError('Amount exceeds available balance'); return; }
     if (!isValidSolAddress(walletPubkey)) { setError('Invalid Solana destination'); return; }
 
-    setStatus('loading'); setError(''); setStatusMsg('Initiating withdrawal...');
+    setStatus('loading'); setError(''); setWarning(''); setStatusMsg('Initiating withdrawal...');
     failedRef.current = false;
     try {
       let session = getSessionWallet(walletPubkey);
@@ -1099,6 +1113,16 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
         session = await deriveHLWallet(signMessage, walletPubkey);
         setStatusMsg('Initiating withdrawal...');
       }
+
+      try {
+        preBalanceRef.current = await connection.getBalance(new PublicKey(walletPubkey));
+      } catch {
+        preBalanceRef.current = 0;
+      }
+      const netUsd = Math.max(0, usd - 1) * 0.997;
+      expectedLamportsRef.current = solPrice > 0
+        ? Math.floor((netUsd / solPrice) * LAMPORTS_PER_SOL * 0.85)
+        : 0;
 
       const init = await fetchWithTimeout('/api/bridge/withdraw/init', {
         method: 'POST',
@@ -1130,7 +1154,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
         if (failedRef.current) return;
         if (Date.now() > pollDeadlineRef.current) {
           clearInterval(pollRef.current);
-          setError('Still processing. Check your Solana wallet in a few minutes.');
+          setError('Still processing after 15 min. Funds are safe but stuck - contact support with the time of this withdrawal.');
           setStatus('error');
           refreshAfterAction?.();
           return;
@@ -1143,13 +1167,33 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
           if (data.status === 'finalizing') setStatusMsg('Finalizing...');
           if (data.status === 'complete') {
             clearInterval(pollRef.current);
-            setStatus('complete');
-            setStatusMsg('');
-            refreshAfterAction?.();
+            setStatus('verifying');
+            setStatusMsg('Verifying SOL arrived...');
+            verifyDeadlineRef.current = Date.now() + 180_000;
+            verifyRef.current = setInterval(async () => {
+              if (Date.now() > verifyDeadlineRef.current) {
+                clearInterval(verifyRef.current);
+                setStatus('warning');
+                setStatusMsg('');
+                setWarning('Server reported complete but SOL did not arrive in 3 min. Check your Solana wallet. If still missing in 15 min, contact support.');
+                refreshAfterAction?.();
+                return;
+              }
+              try {
+                const current = await connection.getBalance(new PublicKey(walletPubkey));
+                const delta = current - (preBalanceRef.current || 0);
+                if (delta >= expectedLamportsRef.current) {
+                  clearInterval(verifyRef.current);
+                  setStatus('complete');
+                  setStatusMsg('');
+                  refreshAfterAction?.();
+                }
+              } catch {}
+            }, 5_000);
           } else if (data.status === 'failed') {
             failedRef.current = true;
             clearInterval(pollRef.current);
-            setError(data.error || 'Withdrawal failed');
+            setError(data.error || 'Withdrawal failed - funds returned to trading account.');
             setStatus('error');
             refreshAfterAction?.();
           }
@@ -1204,20 +1248,25 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
           </div>
 
           <div style={{ padding: '10px 12px', background: 'rgba(245,181,61,.06)', border: '1px solid rgba(245,181,61,.20)', borderRadius: 10, marginBottom: 14, fontSize: 10, color: C.amber, fontWeight: 600, ...T.body }}>
-            HL charges a $1 flat withdrawal fee. Bridge ~0.1% fee. ~4 min total.
+            HL charges a $1 flat withdrawal fee. Bridge ~0.3% fee. ~4 min total.
           </div>
 
-          {(isBusy || isDone) && statusMsg && (
+          {isBusy && statusMsg && (
             <div style={{ marginBottom: 12, padding: 12, background: 'rgba(151,252,228,.05)', border: '1px solid rgba(151,252,228,.20)', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
-              {!isDone && <div style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.hlDim}`, borderTopColor: C.hl, animation: 'nexus-spin 0.8s linear infinite', flexShrink: 0 }}/>}
-              {isDone  && <span style={{ fontSize: 14 }}>OK</span>}
-              <span style={{ fontSize: 12, color: isDone ? C.up : C.ink, fontWeight: 600, ...T.body }}>{statusMsg}</span>
+              <div style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.hlDim}`, borderTopColor: C.hl, animation: 'nexus-spin 0.8s linear infinite', flexShrink: 0 }}/>
+              <span style={{ fontSize: 12, color: C.ink, fontWeight: 600, ...T.body }}>{statusMsg}</span>
             </div>
           )}
           {isDone && (
             <div style={{ marginBottom: 12, padding: 12, background: 'rgba(61,213,152,.08)', border: '1px solid rgba(61,213,152,.24)', borderRadius: 12, textAlign: 'center' }}>
-              <div style={{ fontSize: 14, color: C.up, fontWeight: 800, ...T.display }}>SOL on its way</div>
-              <div style={{ fontSize: 11, color: C.muted, marginTop: 4, ...T.body }}>Check your Solana wallet in a moment</div>
+              <div style={{ fontSize: 14, color: C.up, fontWeight: 800, ...T.display }}>SOL received</div>
+              <div style={{ fontSize: 11, color: C.muted, marginTop: 4, ...T.body }}>Funds verified in your Solana wallet</div>
+            </div>
+          )}
+          {isWarning && warning && (
+            <div style={{ marginBottom: 12, padding: 12, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', borderRadius: 12 }}>
+              <div style={{ fontSize: 13, color: C.amber, fontWeight: 800, marginBottom: 4, ...T.display }}>Verification timed out</div>
+              <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.4, ...T.body }}>{warning}</div>
             </div>
           )}
         </div>
@@ -1229,8 +1278,8 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
           background: C.bg,
         }}>
           {error && <div style={{ marginBottom: 10, padding: 10, background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.24)', borderRadius: 12, fontSize: 12, color: C.down, ...T.body }}>{error}</div>}
-          {isDone ? (
-            <button onClick={onClose} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', background: `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`, color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display }}>Done</button>
+          {(isDone || isWarning) ? (
+            <button onClick={onClose} style={{ width: '100%', padding: 16, borderRadius: 16, border: 'none', background: isDone ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)` : `linear-gradient(135deg,${C.amber} 0%,${C.violet} 100%)`, color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display }}>{isDone ? 'Done' : 'Close'}</button>
           ) : (
             <button onClick={handleWithdraw} disabled={isBusy || !amount} style={{
               width: '100%', padding: 16, borderRadius: 16, border: 'none',
@@ -1422,6 +1471,8 @@ function DepositModal({
     </>
   );
 }
+
+Part 3:
 
 function TradeDrawer({
   open, onClose, pair, onConnectWallet, walletPubkey,
@@ -1857,6 +1908,7 @@ function TradeDrawer({
         walletPubkey={walletPubkey}
         signMessage={signMessage}
         refreshAfterAction={refreshAfterAction}
+        solPrice={solPrice}
       />
 
       <DepositModal
@@ -1952,6 +2004,8 @@ export default function PerpsTrade({ onConnectWallet }) {
     refreshAccount?.();
     setTimeout(() => refreshAccount?.(), 1500);
     setTimeout(() => refreshAccount?.(), 3500);
+    setTimeout(() => refreshAccount?.(), 7000);
+    setTimeout(() => refreshAccount?.(), 12000);
   }, [refreshAccount]);
 
   useEffect(() => {
@@ -2229,4 +2283,3 @@ export default function PerpsTrade({ onConnectWallet }) {
     </>
   );
 }
-
