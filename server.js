@@ -1,6 +1,3 @@
-4 blocks.
-Block 1/4 — requires, app setup, CSP/security headers, env vars, CORS, rate limit, helpers, cache, OKX signing:
-
 require('dotenv').config();
 
 const crypto    = require('crypto');
