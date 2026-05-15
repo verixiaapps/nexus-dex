@@ -13,7 +13,7 @@ import {
 } from '@lifi/sdk';
 
 const ENABLE_TRADING        = process.env.REACT_APP_HYPERLIQUID_LIVE_TRADING === '1';
-const BUILDER_ADDRESS       = '0xeace360F8faB3f739CBC4e026b58efC5866fAdC1';
+const BUILDER_ADDRESS       = '';
 const BUILDER_FEE_TENTHS_BP = 100;
 const BUILDER_MAX_FEE_RATE  = '0.1%';
 const LIFI_INTEGRATOR       = 'NexusDEX';
