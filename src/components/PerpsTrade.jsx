@@ -252,7 +252,6 @@ function coinAccent(symbol) {
   return map[symbol] || ['#a87fff','#97fce4'];
 }
 
-Block 2/8:
 
 let _ethersModule = null;
 async function getEthers() {
@@ -1558,7 +1557,6 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
           </div>
         </div>
 
-Block 6/8:
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 22px 8px', WebkitOverflowScrolling: 'touch', minHeight: 0 }}>
 
