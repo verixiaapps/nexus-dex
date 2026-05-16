@@ -48,6 +48,16 @@ const ARB_RPC_PRIMARY = process.env.REACT_APP_ARB_RPC || ARBITRUM_RPC;
 // Minimum stuck USDC (in 6-decimal units) before "bring home" banner shows
 const SWEEP_MIN_USDC_UNITS = 1_000_000n; // $1.00
 
+// HIP-3 builder-deployed perp DEXs. Each entry maps a DEX short-name (from HL's
+// perpDexs response) to a user-facing category. Unknown DEXs fall through.
+//   asset ID schema: 100000 + dexIndex * 10000 + indexInMeta
+//   coin format:     {dex}:{coin}  e.g. xyz:TSLA, ventuals:SPACEX
+// volMin = minimum 24h USD volume to surface a market in that tab
+const HIP3_BUILDERS = {
+  xyz:      { tab: 'xStocks', label: 'xSTOCK', badge: '#12aaff', volMin: 500, leverageCap: 10 },
+  ventuals: { tab: 'Pre-IPO', label: 'PRE-IPO', badge: '#ff8a9e', volMin: 0,   leverageCap: 10 },
+};
+
 const DERIVATION_MSG = (pub) =>
   `Nexus DEX: Authorize HyperCore Account\n\nWallet: ${pub}\n\nThis creates your non-custodial trading account. No SOL is spent.`;
 
@@ -685,7 +695,7 @@ async function bridgeFullArbUsdcToSol({ hlWalletData, solPubkey, solWalletAdapte
       },
     }),
     new Promise((_, reject) => setTimeout(
-      () => reject(new Error('Bridge timed out after 4 min. Funds safe at ' + hlWalletData.address + ' on Arbitrum - reopen Withdraw to bring home.')),
+      () => reject(new Error('Bridge timed out after 4 min. Funds safe at ' + hlWalletData.address + ' on Arbitrum -- reopen Withdraw to bring home.')),
       EXEC_TIMEOUT_MS,
     )),
   ]);
@@ -699,7 +709,7 @@ async function bridgeFullArbUsdcToSol({ hlWalletData, solPubkey, solWalletAdapte
   return { txHash, usdcSwept: arbBalance };
 }
 
-// "Bring home" - bridges any stuck USDC on Arb back to Solana.
+// "Bring home" -- bridges any stuck USDC on Arb back to Solana.
 // Used for BOTH freshly-arrived USDC (after step 1) and recovery sweeps.
 async function bringHomeStuckArbUsdc({ hlWalletData, solPubkey, solWalletAdapter, onStatus }) {
   onStatus?.('Checking Arbitrum balance...');
@@ -713,7 +723,7 @@ async function bringHomeStuckArbUsdc({ hlWalletData, solPubkey, solWalletAdapter
 
 // STEP 1 of the two-step withdraw: just sign withdraw3 and submit to HL.
 // No waiting, no bridging. Returns immediately after HL accepts.
-// USDC will land on Arbitrum in ~4 min - user comes back for step 2.
+// USDC will land on Arbitrum in ~4 min -- user comes back for step 2.
 async function initiateHlWithdraw({ usdAmount, hlWalletData, onStatus }) {
   onStatus?.('Signing withdrawal...');
   const time = nextNonce();
@@ -842,7 +852,7 @@ function loadPendingWithdraw(hlAddress) {
     const raw = localStorage.getItem('nexus_pending_withdraw_' + (hlAddress || '').toLowerCase());
     if (!raw) return null;
     const d = JSON.parse(raw);
-    // expire after 30 min - by then it should have landed on Arb (or failed)
+    // expire after 30 min -- by then it should have landed on Arb (or failed)
     if (Date.now() - d.ts > 30 * 60_000) return null;
     return d;
   } catch { return null; }
@@ -878,9 +888,11 @@ function buildOrderAction({
     coinSize = roundSize(sizeOverride, szDecimals);
     notional = parseFloat(coinSize) * parseFloat(limitPx);
   } else {
-    const takerFee = (withBuilder && isValidEthAddress(BUILDER_ADDRESS))
+    const baseTakerFee = (withBuilder && isValidEthAddress(BUILDER_ADDRESS))
       ? TAKER_FEE_W_BUILDER
       : TAKER_FEE_NO_BUILDER;
+    // HIP-3 markets charge 2x the validator-operated perp fees
+    const takerFee = pair?.hip3 ? baseTakerFee * 2 : baseTakerFee;
     const feeBuffer = 1 - (takerFee * lev) - 0.001;
     notional = margin * lev * feeBuffer;
     const sizingPx = isLong ? Math.max(price, parseFloat(limitPx)) : Math.min(price, parseFloat(limitPx));
@@ -920,6 +932,16 @@ async function placeOrder({
   hlWalletData, cloid = null, slippage,
 }) {
   if (!hlWalletData?.privateKey) throw new Error('Trading account not ready');
+
+  // HIP-3 markets need DEX abstraction so the user's main perp USDC balance
+  // auto-routes to whichever HIP-3 DEX they're trading on. One-time per account.
+  if (pair?.hip3 && !reduceOnly) {
+    try { await ensureDexAbstraction(hlWalletData); }
+    catch (e) {
+      console.warn('[dex abstraction]', e.message);
+      throw new Error('Enable DEX abstraction to trade ' + (pair.hip3Label || 'HIP-3') + ': ' + e.message);
+    }
+  }
 
   let builderApproved = true;
   if (!reduceOnly && isValidEthAddress(BUILDER_ADDRESS)) {
@@ -1046,6 +1068,180 @@ async function fetchSpotSymbols() {
   } catch { return new Set(); }
 }
 
+// =====================================================================
+// HIP-3 -- builder-deployed perp DEXs (Stocks via Trade[XYZ], Pre-IPO via
+// Ventuals, etc.). Each DEX has its own meta/orderbook/margin. Trades use
+// asset ID = 100000 + dexIndex * 10000 + indexInMeta. DEX abstraction lets
+// the user's main perp USDC balance auto-route to whichever DEX they trade.
+// =====================================================================
+
+// Returns array: [null, {name, fullName, deployer, ...}, {...}, ...]
+// Index 0 is always null (represents main validator-operated DEX).
+async function fetchPerpDexs() {
+  try {
+    const list = await hlRequest({ type: 'perpDexs' });
+    return Array.isArray(list) ? list : [null];
+  } catch { return [null]; }
+}
+
+// Build a snapshot of one HIP-3 DEX's markets, identical shape to the main
+// DEX snapshot but each market is tagged with .dex, .dexIndex, .hip3AssetId.
+async function fetchHip3Snapshot(dexName, dexIndex) {
+  if (!dexName || !Number.isInteger(dexIndex) || dexIndex < 1) return [];
+  let metaAndCtxs;
+  try {
+    metaAndCtxs = await hlRequest({ type: 'metaAndAssetCtxs', dex: dexName });
+  } catch { return []; }
+  if (!Array.isArray(metaAndCtxs)) return [];
+  const meta      = metaAndCtxs[0] || {};
+  const assetCtxs = metaAndCtxs[1] || [];
+  const universe  = meta.universe || [];
+  const builder   = HIP3_BUILDERS[dexName] || {};
+  return universe.map((u, i) => {
+    const ctx    = assetCtxs[i] || {};
+    const mid    = parseFloat(ctx.midPx || ctx.markPx || 0) || 0;
+    const prev   = parseFloat(ctx.prevDayPx || 0);
+    const change = mid > 0 && prev > 0 ? ((mid - prev) / prev) * 100 : 0;
+    return {
+      id:           `${dexName}:${u.name}`,
+      base:         u.name,                     // display name without prefix
+      coin:         `${dexName}:${u.name}`,     // full coin name for HL queries
+      dex:          dexName,
+      dexIndex,
+      indexInMeta:  i,
+      assetIndex:   100000 + dexIndex * 10000 + i,
+      hip3:         true,
+      hip3Label:    builder.label || 'HIP-3',
+      hip3Badge:    builder.badge || '#a87fff',
+      hip3Tab:      builder.tab,
+      szDecimals:   Number.isInteger(u.szDecimals) ? u.szDecimals : 4,
+      leverage:     Math.min(u.maxLeverage || builder.leverageCap || 5, builder.leverageCap || 50),
+      price:        mid,
+      change,
+      change1h:     0,
+      spark:        [],
+      volume24h:    parseFloat(ctx.dayNtlVlm    || 0),
+      openInterest: parseFloat(ctx.openInterest || 0),
+      funding:      parseFloat(ctx.funding      || 0),
+      hot:          false,
+    };
+  });
+}
+
+// Fetch all HIP-3 markets we care about (known builders only), in parallel.
+async function fetchAllHip3Markets() {
+  const dexs = await fetchPerpDexs();
+  const tasks = [];
+  dexs.forEach((entry, idx) => {
+    if (idx === 0 || !entry?.name) return; // skip main DEX
+    if (!HIP3_BUILDERS[entry.name])  return; // skip unknown builders for now
+    tasks.push(fetchHip3Snapshot(entry.name, idx));
+  });
+  if (tasks.length === 0) return [];
+  const results = await Promise.all(tasks);
+  return results.flat();
+}
+
+// HIP-3 user state -- per-DEX positions/balance via clearinghouseState with dex param
+async function fetchHip3UserState(hlAddress, dexName) {
+  if (!hlAddress || !dexName) return null;
+  try {
+    return await hlRequest({ type: 'clearinghouseState', user: hlAddress, dex: dexName });
+  } catch { return null; }
+}
+
+// Combined position list across main DEX + every known HIP-3 DEX. Each
+// position gets a .dex field ('' = main, 'xyz', 'ventuals', etc.).
+async function fetchAllPositionsForUser(hlAddress) {
+  if (!hlAddress) return [];
+  const tasks = [
+    hlRequest({ type: 'clearinghouseState', user: hlAddress }).then(s => ({ dex: '', state: s })).catch(() => null),
+  ];
+  Object.keys(HIP3_BUILDERS).forEach(dexName => {
+    tasks.push(
+      fetchHip3UserState(hlAddress, dexName).then(s => ({ dex: dexName, state: s })).catch(() => null)
+    );
+  });
+  const results = await Promise.all(tasks);
+  const positions = [];
+  for (const r of results) {
+    if (!r?.state) continue;
+    const { dex, state } = r;
+    (state.assetPositions || [])
+      .filter(p => parseFloat(p.position?.szi || 0) !== 0)
+      .forEach(p => {
+        const pos = p.position;
+        const szi = parseFloat(pos.szi || 0);
+        positions.push({
+          coin:       pos.coin,            // includes prefix for HIP-3 (e.g. "xyz:TSLA")
+          displayCoin: dex ? (pos.coin || '').split(':').pop() : pos.coin,
+          dex,
+          szi,
+          isLong:     szi > 0,
+          size:       Math.abs(szi),
+          entryPx:    parseFloat(pos.entryPx       || 0),
+          unrealPnl:  parseFloat(pos.unrealizedPnl || 0),
+          leverage:   pos.leverage?.value || 1,
+          marginUsed: parseFloat(pos.marginUsed    || 0),
+          posValue:   parseFloat(pos.positionValue || 0),
+          roe:        parseFloat(pos.returnOnEquity || 0),
+        });
+      });
+  }
+  return positions;
+}
+
+// Sign userDexAbstraction action -- one-time per user, lets HIP-3 trades
+// auto-pull collateral from main perp USDC balance.
+async function signUserDexAbstraction(privateKey, action) {
+  const mod      = await getEthers();
+  const ethersNs = getEthersNs(mod);
+  const wallet   = new ethersNs.Wallet(privateKey);
+  const domain   = {
+    name: 'HyperliquidSignTransaction', version: '1',
+    chainId: 42161,
+    verifyingContract: '0x0000000000000000000000000000000000000000',
+  };
+  const types = {
+    'HyperliquidTransaction:UserDexAbstraction': [
+      { name: 'hyperliquidChain', type: 'string' },
+      { name: 'enabled',          type: 'bool'   },
+      { name: 'nonce',            type: 'uint64' },
+    ],
+  };
+  const message = {
+    hyperliquidChain: action.hyperliquidChain,
+    enabled:          action.enabled,
+    nonce:            action.nonce,
+  };
+  const sig   = await signTypedDataCompat(wallet, domain, types, message);
+  const split = splitSigCompat(ethersNs, sig);
+  return { r: split.r, s: split.s, v: Number(split.v) };
+}
+
+// Enable DEX abstraction for this HL account (idempotent -- cached after success).
+async function ensureDexAbstraction(hlWalletData) {
+  const cacheKey = `nexus_dex_abstraction_${hlWalletData.address.toLowerCase()}`;
+  try { if (localStorage.getItem(cacheKey) === '1') return; } catch {}
+  const nonce = nextNonce();
+  const action = {
+    type:             'userDexAbstraction',
+    hyperliquidChain: 'Mainnet',
+    signatureChainId: '0xa4b1',
+    enabled:          true,
+    nonce,
+  };
+  const signature = await signUserDexAbstraction(hlWalletData.privateKey, action);
+  const result = await hlRequest({ action, nonce, signature }, true);
+  if (result?.status === 'err') {
+    const reason = typeof result?.response === 'string' ? result.response : JSON.stringify(result);
+    console.warn('[dex abstraction]', reason);
+    throw new Error(`DEX abstraction enable failed: ${reason}`);
+  }
+  try { localStorage.setItem(cacheKey, '1'); } catch {}
+}
+
+
 function getFirstSeenRegistry() {
   try { return JSON.parse(localStorage.getItem('nexus_first_seen') || '{}'); }
   catch { return {}; }
@@ -1083,9 +1279,24 @@ function hasSpotMatch(perpName, spotSymbols) {
 
 function filterNewListings(allPerps) {
   return allPerps
+    .filter(p => p.volume24h >= 500)
     .filter(p => p.price > 0)
     .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0))
     .slice(0, 60)
+    .map((p, idx) => ({ ...p, newnessRank: idx }));
+}
+
+// Filter markets to a single HIP-3 tab ("Stocks" or "Pre-IPO"), sorted newest first.
+// Per-builder volume floor (Pre-IPO is 0 since pre-IPO catalogs are inherently low-vol).
+function filterHip3Tab(hip3Markets, tabName) {
+  return (hip3Markets || [])
+    .filter(p => p.hip3Tab === tabName)
+    .filter(p => {
+      const cfg = HIP3_BUILDERS[p.dex] || {};
+      return p.volume24h >= (cfg.volMin ?? 500);
+    })
+    .filter(p => p.price > 0)
+    .sort((a, b) => (b.indexInMeta || 0) - (a.indexInMeta || 0))
     .map((p, idx) => ({ ...p, newnessRank: idx }));
 }
 
@@ -1194,9 +1405,18 @@ function MarketRow({ pair, onClick }) {
       <div style={{ minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'baseline', gap: 7, flexWrap: 'wrap' }}>
           <span style={{ fontWeight: 700, color: C.inkStr, fontSize: 15, letterSpacing: '-.02em', ...T.body }}>{pair.base}</span>
-          <span style={{ color: C.muted2, fontSize: 10, fontWeight: 600, ...T.mono }}>PERP</span>
+          {pair.hip3 ? (
+            <span style={{
+              color: pair.hip3Badge || '#a87fff', fontSize: 9, fontWeight: 800, padding: '1px 6px', borderRadius: 4,
+              background: `${pair.hip3Badge || '#a87fff'}1a`,
+              border: `1px solid ${pair.hip3Badge || '#a87fff'}40`,
+              letterSpacing: '.04em', ...T.mono,
+            }}>{pair.hip3Label || 'HIP-3'}</span>
+          ) : (
+            <span style={{ color: C.muted2, fontSize: 10, fontWeight: 600, ...T.mono }}>PERP</span>
+          )}
           {fresh && <span style={{ color: fresh.color, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4, background: fresh.bg, border: `1px solid ${fresh.bd}`, ...T.mono }}>{fresh.label}</span>}
-          {!fresh && pair.hot && <span style={{ color: C.amber, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4, background: 'rgba(245,181,61,.10)', border: '1px solid rgba(245,181,61,.20)', ...T.mono }}>HOT</span>}
+          {!fresh && !pair.hip3 && pair.hot && <span style={{ color: C.amber, fontSize: 9, fontWeight: 700, padding: '1px 5px', borderRadius: 4, background: 'rgba(245,181,61,.10)', border: '1px solid rgba(245,181,61,.20)', ...T.mono }}>HOT</span>}
         </div>
         <div style={{ marginTop: 3, color: C.muted, fontSize: 10, fontWeight: 500, ...T.mono }}>
           Up to {pair.leverage}x | {shortNum(pair.volume24h)} vol
@@ -1221,11 +1441,15 @@ function PositionsPanel({ positions, marketData, onClose }) {
     <div style={{ marginBottom: 14 }}>
       <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', marginBottom: 8, ...T.mono }}>OPEN POSITIONS</div>
       {positions.map(pos => {
-        const pair    = marketData.find(p => p.id === pos.coin);
+        // pos.coin may be "xyz:TSLA" (HIP-3) or "BTC" (main). pos.displayCoin
+        // is the clean ticker if it's HIP-3, else same as coin.
+        const display = pos.displayCoin || pos.coin;
+        const pair    = marketData.find(p => p.id === pos.coin || p.id === display);
         const markPx  = Number(pair?.price || 0);
         const pnl     = pos.unrealPnl;
         const pnlPct  = pos.marginUsed > 0 ? (pnl / pos.marginUsed) * 100 : 0;
         const inProfit = pnl >= 0;
+        const isHip3   = !!pos.dex;
         return (
           <div key={pos.coin} style={{
             marginBottom: 8, padding: '12px 14px', borderRadius: 14,
@@ -1234,16 +1458,24 @@ function PositionsPanel({ positions, marketData, onClose }) {
           }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <Ticker symbol={pos.coin} size={28}/>
+                <Ticker symbol={display} size={28}/>
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
-                    <span style={{ fontWeight: 800, fontSize: 13, color: C.inkStr, ...T.display }}>{pos.coin}</span>
+                    <span style={{ fontWeight: 800, fontSize: 13, color: C.inkStr, ...T.display }}>{display}</span>
+                    {isHip3 && pair?.hip3Label && (
+                      <span style={{
+                        fontSize: 8, fontWeight: 800, color: pair.hip3Badge || '#a87fff',
+                        padding: '1px 5px', borderRadius: 4,
+                        background: `${pair.hip3Badge || '#a87fff'}1a`,
+                        border: `1px solid ${pair.hip3Badge || '#a87fff'}40`, ...T.mono,
+                      }}>{pair.hip3Label}</span>
+                    )}
                     <span style={{ fontSize: 9, fontWeight: 700, color: pos.isLong ? C.up : C.down, padding: '1px 5px', borderRadius: 4, background: pos.isLong ? 'rgba(61,213,152,.12)' : 'rgba(255,138,158,.12)', ...T.mono }}>
                       {pos.isLong ? 'LONG' : 'SHORT'} {pos.leverage}x
                     </span>
                   </div>
                   <div style={{ fontSize: 10, color: C.muted, marginTop: 2, ...T.mono }}>
-                    {pos.size.toFixed(4)} {pos.coin} | Entry {fmt(pos.entryPx, 2)}
+                    {pos.size.toFixed(4)} {display} | Entry {fmt(pos.entryPx, 2)}
                   </div>
                 </div>
               </div>
@@ -1359,13 +1591,13 @@ function WalletPanel({
 }
 
 // =====================================================================
-// WithdrawModal - TWO-STEP withdraw flow
+// WithdrawModal -- TWO-STEP withdraw flow
 //
 // Step 1: User taps Withdraw, enters amount, signs HL withdraw3. Done.
 //         USDC will land on Arbitrum in ~4 min. They can close the app.
 //
 // Step 2: When user reopens the modal (or refreshes), we detect USDC on
-//         Arb and show "Bring home" - bridges to Solana with 1 more sig.
+//         Arb and show "Bring home" -- bridges to Solana with 1 more sig.
 //
 // Each step is fully independent. State persists via on-chain Arb USDC
 // balance + a small localStorage pending-marker.
@@ -1556,10 +1788,9 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
           </div>
         </div>
 
-
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 22px 8px', WebkitOverflowScrolling: 'touch', minHeight: 0 }}>
 
-          {/* === BRING HOME (Step 2) - only shows when USDC has landed on Arb === */}
+          {/* === BRING HOME (Step 2) -- only shows when USDC has landed on Arb === */}
           {hasStuckUsdc && step !== 'bringing' && !isStep2Done && (
             <div style={{
               marginBottom: 16, padding: 16, borderRadius: 16,
@@ -1621,7 +1852,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
                 <span style={{ fontSize: 12, color: C.amber, fontWeight: 800, letterSpacing: '.04em', ...T.display }}>BRIDGING TO ARBITRUM</span>
               </div>
               <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.5, ...T.body }}>
-                <strong style={{ color: C.inkStr }}>{fmt(pending.usdAmount, 2)}</strong> on the way. Check back in a few minutes - we'll show a button to bring it home.
+                <strong style={{ color: C.inkStr }}>{fmt(pending.usdAmount, 2)}</strong> on the way. Check back in a few minutes -- we'll show a button to bring it home.
               </div>
             </div>
           )}
@@ -1632,7 +1863,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
             <div style={{ fontSize: 15, color: C.hl, fontWeight: 800, ...T.mono }}>{fmt(hlBalance, 2)}</div>
           </div>
 
-          {/* === STEP 1 input - hidden after success === */}
+          {/* === STEP 1 input -- hidden after success === */}
           {!isStep1Done && (
             <>
               <div style={{ marginBottom: 8, fontSize: 11, color: C.muted, fontWeight: 600, ...T.body }}>
@@ -1677,13 +1908,13 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
                 </div>
               )}
 
-              {/* === HOW IT WORKS - friendly explainer === */}
+              {/* === HOW IT WORKS -- friendly explainer === */}
               <div style={{ padding: '12px 14px', background: 'rgba(168,127,255,.06)', border: '1px solid rgba(168,127,255,.20)', borderRadius: 12, marginBottom: 14 }}>
                 <div style={{ fontSize: 10, color: C.violet, fontWeight: 800, letterSpacing: '.06em', marginBottom: 8, ...T.mono }}>HOW IT WORKS</div>
                 <div style={{ fontSize: 11.5, color: C.ink, lineHeight: 1.6, ...T.body }}>
                   <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
                     <span style={{ color: C.violet, fontWeight: 800, minWidth: 14 }}>1</span>
-                    <span>Sign once on Hyperliquid (now). USDC bridges to Arbitrum - takes ~4 min.</span>
+                    <span>Sign once on Hyperliquid (now). USDC bridges to Arbitrum -- takes ~4 min.</span>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
                     <span style={{ color: C.violet, fontWeight: 800, minWidth: 14 }}>2</span>
@@ -1725,7 +1956,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
               width: '100%', padding: 16, borderRadius: 16, border: 'none',
               background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`,
               color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display,
-            }}>Got it - close</button>
+            }}>Got it -- close</button>
           ) : isStep2Done ? (
             <button onClick={onClose} style={{
               width: '100%', padding: 16, borderRadius: 16, border: 'none',
@@ -1751,7 +1982,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
 
 function TradeDrawer({
   open, onClose, pair, onConnectWallet, walletPubkey,
-  marketData, allPerps,
+  marketData, allPerps, hip3Markets,
   hlWallet, setHlWallet,
   hlBalance, setHlBalance,
   hlAvailable, setHlAvailable,
@@ -1786,10 +2017,11 @@ function TradeDrawer({
 
   const allMarkets = useMemo(() => {
     const map = new Map();
-    (marketData || []).forEach(p => map.set(p.id, p));
-    (allPerps   || []).forEach(p => { if (!map.has(p.id)) map.set(p.id, p); });
+    (marketData  || []).forEach(p => map.set(p.id, p));
+    (allPerps    || []).forEach(p => { if (!map.has(p.id)) map.set(p.id, p); });
+    (hip3Markets || []).forEach(p => { if (!map.has(p.id)) map.set(p.id, p); });
     return [...map.values()];
-  }, [marketData, allPerps]);
+  }, [marketData, allPerps, hip3Markets]);
 
   useEffect(() => {
     if (!pair?.leverage) return;
@@ -1995,7 +2227,16 @@ function TradeDrawer({
               <div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
                   <span style={{ color: C.inkStr, fontWeight: 800, fontSize: 20, letterSpacing: '-.03em', ...T.display }}>{pair.base}</span>
-                  <span style={{ color: C.hl, fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 6, background: C.hlDim, border: `1px solid ${C.borderHi}`, letterSpacing: '.06em', ...T.mono }}>PERP</span>
+                  {pair.hip3 ? (
+                    <span style={{
+                      color: pair.hip3Badge || '#a87fff', fontSize: 9, fontWeight: 800, padding: '2px 7px', borderRadius: 6,
+                      background: `${pair.hip3Badge || '#a87fff'}1a`,
+                      border: `1px solid ${pair.hip3Badge || '#a87fff'}40`,
+                      letterSpacing: '.06em', ...T.mono,
+                    }}>{pair.hip3Label || 'HIP-3'}</span>
+                  ) : (
+                    <span style={{ color: C.hl, fontSize: 9, fontWeight: 700, padding: '2px 7px', borderRadius: 6, background: C.hlDim, border: `1px solid ${C.borderHi}`, letterSpacing: '.06em', ...T.mono }}>PERP</span>
+                  )}
                 </div>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 4 }}>
                   <span style={{ color: C.ink, fontSize: 14, fontWeight: 700, ...T.mono }}>{fmt(pair.price, 2)}</span>
@@ -2200,6 +2441,7 @@ export default function PerpsTrade({ onConnectWallet }) {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [filter, setFilter]         = useState('All');
   const [allPerps, setAllPerps]     = useState([]);
+  const [hip3Markets, setHip3Markets] = useState([]);
   const [spotSymbols, setSpotSymbols] = useState(() => new Set());
 
   const allPerpsRef = useRef(allPerps);
@@ -2241,10 +2483,11 @@ export default function PerpsTrade({ onConnectWallet }) {
     if (!walletPubkey) return;
     const addr = getResolvedHlAddress(walletPubkey);
     if (addr && !hlWallet) setHlWallet({ address: addr });
-    const [lam, price, bp] = await Promise.all([
+    const [lam, price, bp, hip3Positions] = await Promise.all([
       solPk ? fetchSolBalance(connection, solPk) : Promise.resolve(0),
       fetchSolPrice().catch(() => 0),
       addr ? fetchHlBalanceAndPositions(addr) : Promise.resolve(null),
+      addr ? fetchAllPositionsForUser(addr).catch(() => []) : Promise.resolve([]),
     ]);
     setSolLamports(lam);
     if (price > 0) setSolPrice(price);
@@ -2252,14 +2495,17 @@ export default function PerpsTrade({ onConnectWallet }) {
       setHlBalance(bp.balance);
       setHlAvailable(bp.withdrawable);
       setHlMarginUsed(bp.marginUsed);
-      setPositions(bp.positions);
+      // Merge main DEX positions with HIP-3 positions. Main DEX positions
+      // returned from fetchAllPositionsForUser already have .dex = '' so we
+      // can use that as the source of truth and skip the bp.positions list.
+      setPositions(hip3Positions.length > 0 ? hip3Positions : bp.positions);
     }
     const existing = loadCachedAccount(walletPubkey) || {};
     saveCachedAccount(walletPubkey, {
       balance:      bp ? bp.balance      : existing.balance      ?? 0,
       withdrawable: bp ? bp.withdrawable : existing.withdrawable ?? 0,
       marginUsed:   bp ? bp.marginUsed   : existing.marginUsed   ?? 0,
-      positions:    bp ? bp.positions    : existing.positions    ?? [],
+      positions:    hip3Positions.length > 0 ? hip3Positions : (bp ? bp.positions : existing.positions ?? []),
       solLamports:  lam,
       solPrice:     price > 0 ? price : existing.solPrice,
     });
@@ -2328,6 +2574,22 @@ export default function PerpsTrade({ onConnectWallet }) {
     return () => { alive = false; clearInterval(id); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [spotSymbols, oneHourMap, sparkMap]);
+
+  // HIP-3 markets poll separately -- different endpoint per DEX, slower cadence.
+  useEffect(() => {
+    let alive = true;
+    const poll = async () => {
+      try {
+        const markets = await fetchAllHip3Markets();
+        if (alive) setHip3Markets(markets);
+      } catch (e) {
+        console.warn('[hip3 poll]', e?.message || e);
+      }
+    };
+    poll();
+    const id = setInterval(poll, 15_000);
+    return () => { alive = false; clearInterval(id); };
+  }, []);
 
   useEffect(() => {
     let alive = true;
@@ -2446,9 +2708,10 @@ export default function PerpsTrade({ onConnectWallet }) {
   useEffect(() => {
     if (!activePair?.id) return;
     const fresh = marketData.find(p => p.id === activePair.id)
-      || allPerps.find(p => p.id === activePair.id);
+      || allPerps.find(p => p.id === activePair.id)
+      || hip3Markets.find(p => p.id === activePair.id);
     if (fresh) setActivePair(prev => ({ ...prev, ...fresh }));
-  }, [marketData, allPerps, activePair?.id]);
+  }, [marketData, allPerps, hip3Markets, activePair?.id]);
 
   useEffect(() => {
     let alive = true;
@@ -2462,12 +2725,11 @@ export default function PerpsTrade({ onConnectWallet }) {
   }, []);
 
   const filtered = useMemo(() => {
+    if (filter === 'xStocks') return filterHip3Tab(hip3Markets, 'xStocks');
+    if (filter === 'Pre-IPO') return filterHip3Tab(hip3Markets, 'Pre-IPO');
     if (filter === 'New')     return filterNewListings(allPerps);
-    if (filter === 'Hot')     return marketData.filter(p => p.hot);
-    if (filter === 'Gainers') return [...marketData].filter(p => p.change > 0).sort((a, b) => b.change - a.change);
-    if (filter === 'Losers')  return [...marketData].filter(p => p.change < 0).sort((a, b) => a.change - b.change);
     return marketData;
-  }, [marketData, allPerps, filter]);
+  }, [marketData, allPerps, hip3Markets, filter]);
 
   const totalVol = marketData.reduce((s, p) => s + Number(p.volume24h || 0), 0);
   const gainers  = marketData.filter(p => p.change > 0).length;
@@ -2510,7 +2772,7 @@ export default function PerpsTrade({ onConnectWallet }) {
             <div style={{ color: C.muted2, fontSize: 10, fontWeight: 600, marginTop: 2, ...T.mono }}>Tap any market to trade</div>
           </div>
           <div style={{ display: 'flex', gap: 5 }}>
-            {['All', 'New', 'Hot', 'Gainers', 'Losers'].map(f => (
+            {['All', 'New', 'Pre-IPO', 'xStocks'].map(f => (
               <button key={f} onClick={() => setFilter(f)} style={{ padding: '7px 11px', borderRadius: 999, border: `1px solid ${filter === f ? C.borderHi : C.border}`, background: filter === f ? C.hlDim : 'rgba(255,255,255,.03)', color: filter === f ? C.hl : C.muted, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.body }}>{f}</button>
             ))}
           </div>
@@ -2535,6 +2797,7 @@ export default function PerpsTrade({ onConnectWallet }) {
           walletPubkey={walletPubkey}
           marketData={marketData}
           allPerps={allPerps}
+          hip3Markets={hip3Markets}
           hlWallet={hlWallet} setHlWallet={setHlWallet}
           hlBalance={hlBalance} setHlBalance={setHlBalance}
           hlAvailable={hlAvailable} setHlAvailable={setHlAvailable}
