@@ -185,7 +185,6 @@ function buildOkxHeaders(method, okxPath, body) {
 }
 
 
-Block 2/4 — OKX proxy, Jupiter routes, DexScreener:
 
 const OKX_ALLOWED_ENDPOINTS = new Set([
   '/dex/aggregator/quote', '/dex/aggregator/swap', '/dex/aggregator/swap-instruction',
@@ -335,7 +334,6 @@ app.get('/api/dexscreener/*', async (req, res) => {
 });
 
 
-Block 3/4 — Hyperliquid validation/proxies, SOL price, LI.FI, Hyperunit:
 
 function isPlainObject(v) { return Boolean(v) && typeof v === 'object' && !Array.isArray(v); }
 function isHexString(v, bytes) {
@@ -541,8 +539,6 @@ app.post('/api/unit/operations', async (req, res) => {
   }
 });
 
-
-Block 4/4 — Bridge/Operator, PumpPortal, Helius/Solana RPC, Pinata, Health, error handler, listen:
 
 /* --- Bridge / Operator ----------------------------------------------- */
 const bridgeTracking      = new Map();
