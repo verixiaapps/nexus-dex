@@ -48,6 +48,15 @@ const ARB_RPC_PRIMARY = process.env.REACT_APP_ARB_RPC || ARBITRUM_RPC;
 // Minimum stuck USDC (in 6-decimal units) before "bring home" banner shows
 const SWEEP_MIN_USDC_UNITS = 1_000_000n; // $1.00
 
+// Freshness thresholds (ms)
+const HOURS_24 = 24 * 3_600_000;
+const DAYS_3   = 3  * 24 * 3_600_000;
+const DAYS_7   = 7  * 24 * 3_600_000;
+const DAYS_14  = 14 * 24 * 3_600_000;
+// Perps first seen within this many ms of install are treated as "existed at install"
+// (so we don't flag every perp as new on first run).
+const INSTALL_GRACE_MS = 5 * 60_000;
+
 const DERIVATION_MSG = (pub) =>
   `Nexus DEX: Authorize HyperCore Account\n\nWallet: ${pub}\n\nThis creates your non-custodial trading account. No SOL is spent.`;
 
@@ -1098,21 +1107,84 @@ function hasSpotMatch(perpName, spotSymbols) {
   return false;
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// NEW LISTINGS DETECTION
+//
+// Old behavior: sorted by assetIndex desc with a $50/24h volume floor.
+// Two problems:
+//   1. Freshly listed perps have tiny volume — they were being filtered out.
+//   2. assetIndex only roughly tracks listing order, and we already had
+//      firstSeenAt data sitting in the registry going unused.
+//
+// New behavior: primary signal is firstSeenAt (when WE first saw the coin).
+// Install-guard: perps seen within the first INSTALL_GRACE_MS of install are
+// treated as "existed at install" and excluded from the truly-new set (so
+// first-run users don't see every perp tagged "JUST LISTED").
+//
+// If the install is recent and we don't yet have enough truly-new perps to
+// fill the list, we fall back to assetIndex-desc — but with no volume floor,
+// so brand-new low-volume listings still surface.
+// ─────────────────────────────────────────────────────────────────────
 function filterNewListings(allPerps) {
-  return allPerps
-    .filter(p => p.volume24h >= 50) // low threshold - catches freshly listed perps before they accumulate volume
-    .filter(p => p.price > 0)
-    .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0))
+  if (!Array.isArray(allPerps) || allPerps.length === 0) return [];
+  const installTs = getInstallTs();
+  const now = Date.now();
+
+  // Coins that appeared AFTER install (i.e. genuinely new listings observed by this client).
+  // A coin counts as "post-install" if firstSeenAt > installTs + INSTALL_GRACE_MS.
+  // If installTs is null (no registry yet), nothing can be post-install yet — fallback only.
+  const trulyNew = allPerps.filter(p => {
+    if (!(p.price > 0)) return false;
+    if (!p.firstSeenAt) return false;
+    if (!installTs) return false;
+    if ((p.firstSeenAt - installTs) <= INSTALL_GRACE_MS) return false;
+    if ((now - p.firstSeenAt) > DAYS_14) return false;
+    return true;
+  });
+  // newest first
+  trulyNew.sort((a, b) => (b.firstSeenAt || 0) - (a.firstSeenAt || 0));
+
+  // If we have plenty of truly-new perps, that's the whole list.
+  if (trulyNew.length >= 8) {
+    return trulyNew.slice(0, 60).map((p, idx) => ({ ...p, newnessRank: idx }));
+  }
+
+  // Otherwise, top up with highest-assetIndex perps the user hasn't seen first.
+  // Drop the volume floor so brand-new low-volume listings can appear.
+  const trulyNewIds = new Set(trulyNew.map(p => p.id));
+  const byIndex = allPerps
+    .filter(p => p.price > 0 && !trulyNewIds.has(p.id))
+    .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0));
+
+  return [...trulyNew, ...byIndex]
     .slice(0, 60)
     .map((p, idx) => ({ ...p, newnessRank: idx }));
 }
 
+// Freshness tag — prefer real age (hours since firstSeenAt) when we have it.
+// Fall back to rank position so the first-install case still looks alive.
 function freshnessTag(perp) {
-  if (!perp || typeof perp.newnessRank !== 'number') return null;
-  const r = perp.newnessRank;
-  if (r < 3)  return { label: 'JUST LISTED', color: '#ff8a9e', bg: 'rgba(255,138,158,.12)', bd: 'rgba(255,138,158,.30)' };
-  if (r < 7)  return { label: 'NEW',         color: '#f5b53d', bg: 'rgba(245,181,61,.12)',  bd: 'rgba(245,181,61,.30)' };
-  if (r < 12) return { label: 'FRESH',       color: '#97fce4', bg: 'rgba(151,252,228,.12)', bd: 'rgba(151,252,228,.30)' };
+  if (!perp) return null;
+  const installTs = getInstallTs();
+  const now = Date.now();
+  const postInstall = !!(perp.firstSeenAt && installTs
+    && (perp.firstSeenAt - installTs) > INSTALL_GRACE_MS);
+
+  if (postInstall) {
+    const age = now - perp.firstSeenAt;
+    if (age < HOURS_24) return { label: 'JUST LISTED', color: '#ff8a9e', bg: 'rgba(255,138,158,.12)', bd: 'rgba(255,138,158,.30)' };
+    if (age < DAYS_3)   return { label: 'NEW',         color: '#f5b53d', bg: 'rgba(245,181,61,.12)',  bd: 'rgba(245,181,61,.30)' };
+    if (age < DAYS_7)   return { label: 'FRESH',       color: '#97fce4', bg: 'rgba(151,252,228,.12)', bd: 'rgba(151,252,228,.30)' };
+    return null;
+  }
+
+  // Fallback for pre-install perps and first-run users.
+  if (typeof perp.newnessRank === 'number') {
+    const r = perp.newnessRank;
+    if (r < 3)  return { label: 'JUST LISTED', color: '#ff8a9e', bg: 'rgba(255,138,158,.12)', bd: 'rgba(255,138,158,.30)' };
+    if (r < 7)  return { label: 'NEW',         color: '#f5b53d', bg: 'rgba(245,181,61,.12)',  bd: 'rgba(245,181,61,.30)' };
+    if (r < 12) return { label: 'FRESH',       color: '#97fce4', bg: 'rgba(151,252,228,.12)', bd: 'rgba(151,252,228,.30)' };
+  }
   return null;
 }
 
@@ -2412,10 +2484,6 @@ export default function PerpsTrade({ onConnectWallet }) {
     });
     return () => { alive = false; };
   }, [activePair?.id, sparkMap]);
-
-  // Removed: sparkSeededRef effect — was redundantly fetching sparks for
-  // the New listings on first allPerps load. The lazy effect below handles
-  // it when user actually opens the New tab, which is faster on mount.
 
   useEffect(() => {
     if (filter !== 'New') return;
