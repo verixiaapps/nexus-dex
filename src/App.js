@@ -5,9 +5,9 @@ import { useNexusWallet } from './WalletContext.js';
 import SwapWidget from './components/SwapWidget.jsx';
 import Portfolio from './components/Portfolio.js';
 import TokenDetail from './components/TokenDetail.js';
-import Send from './components/Send.js';
-import TokenLaunch from './components/TokenLaunch.js';
 import PerpsLanding from './components/PerpsLanding.jsx';
+import DeFiPredict from './components/DeFiPredict.jsx';
+import PredictionsTonight from './components/PredictionsTonight.jsx';
 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
@@ -59,11 +59,17 @@ async function screenAddress(address) {
 
 const PATH_TO_TAB = {
   '/': 'swap', '/swap': 'swap',
-  '/launch': 'launch',
-  '/send': 'send', '/portfolio': 'portfolio', '/perps': 'perps',
+  '/predictions': 'predictions',
+  '/defipredict': 'defipredict',
+  '/perps': 'perps',
+  '/portfolio': 'portfolio',
 };
 const TAB_TO_PATH = {
-  swap: '/swap', launch: '/launch', send: '/send', portfolio: '/portfolio', perps: '/perps',
+  swap: '/swap',
+  predictions: '/predictions',
+  defipredict: '/defipredict',
+  perps: '/perps',
+  portfolio: '/portfolio',
 };
 
 function tabFromPathname(pathname) { return PATH_TO_TAB[pathname] || (pathname.startsWith('/token') ? 'token' : 'swap'); }
@@ -97,7 +103,8 @@ function walletModalReducer(state, action) {
 }
 
 // =====================================================================
-// TermsGate — PancakeSwap-style centered card, scroll-to-bottom required
+// TermsGate — PancakeSwap-style centered card. Scroll-to-bottom required
+// before Accept enables.
 // =====================================================================
 function TermsGate({ onAccept }) {
   const scrollRef = useRef(null);
@@ -154,9 +161,9 @@ function TermsGate({ onAccept }) {
 
             • <strong style={{ color: '#fff' }}>You are 18 or older</strong> and have full legal capacity to enter this agreement.<br/><br/>
 
-            • All swaps, perpetual trades, routing, execution, liquidity, pricing, token launches, and blockchain interactions are handled by third-party protocols, aggregators, exchanges, smart contracts, and infrastructure providers. All transactions are initiated, reviewed, authorized, and signed directly by you through your own wallet.<br/><br/>
+            • All swaps, perpetual trades, routing, execution, liquidity, pricing, prediction markets, and blockchain interactions are handled by third-party protocols, aggregators, exchanges, smart contracts, and infrastructure providers. All transactions are initiated, reviewed, authorized, and signed directly by you through your own wallet.<br/><br/>
 
-            • Digital assets, perpetuals, leverage, DeFi protocols, smart contracts, and token launches carry substantial risk including total loss of funds from liquidation, exploits, smart-contract vulnerabilities, slippage, protocol failures, hacks, MEV, frontrunning, network outages, oracle errors, and human error. <strong style={{ color: '#fff' }}>You assume all risk.</strong><br/><br/>
+            • Digital assets, perpetuals, leverage, DeFi protocols, smart contracts, and prediction markets carry substantial risk including total loss of funds from liquidation, exploits, smart-contract vulnerabilities, slippage, protocol failures, hacks, MEV, frontrunning, network outages, oracle errors, and human error. <strong style={{ color: '#fff' }}>You assume all risk.</strong><br/><br/>
 
             • <strong style={{ color: '#fff' }}>No reimbursement for losses.</strong> Verixia Apps will not refund, reimburse, or compensate you for any loss of funds or value, regardless of cause — including failed transactions, slippage, smart-contract exploits, third-party protocol failures, network outages, market volatility, liquidation, frontrunning, MEV, or human error.<br/><br/>
 
@@ -166,11 +173,9 @@ function TermsGate({ onAccept }) {
 
             • <strong style={{ color: '#fff' }}>No liability.</strong> To the fullest extent permitted by law, Verixia Apps, Nexus DEX, their operators, affiliates, contributors, and service providers are not liable for any damages, losses, claims, costs, or expenses of any kind — direct, indirect, incidental, consequential, special, exemplary, or punitive — arising from or related to your use of Nexus DEX, regardless of the cause of action.<br/><br/>
 
-            • <strong style={{ color: '#fff' }}>Token launches.</strong> Users launching tokens represent and warrant that any token launched (a) is not a security, investment contract, or other regulated financial instrument under any applicable law; (b) complies with all applicable laws including securities, commodities, anti-fraud, and anti-money-laundering laws; (c) is not designed to defraud, deceive, or mislead users; and (d) does not infringe any intellectual property rights.<br/><br/>
+            • <strong style={{ color: '#fff' }}>Misrepresentation.</strong> If any representation you make in these terms is false (including jurisdiction, age, or sanctions status), Verixia Apps may immediately terminate your access, cooperate with law enforcement, and seek full indemnification from you. All losses, fines, penalties, or damages arising from your misrepresentation are your sole responsibility.<br/><br/>
 
-            • <strong style={{ color: '#fff' }}>Misrepresentation.</strong> If any representation you make in these terms is false (including jurisdiction, age, sanctions status, or token-launch eligibility), Verixia Apps may immediately terminate your access, cooperate with law enforcement, and seek full indemnification from you. All losses, fines, penalties, or damages arising from your misrepresentation are your sole responsibility.<br/><br/>
-
-            • <strong style={{ color: '#fff' }}>Indemnification.</strong> You will indemnify and hold harmless Verixia Apps, Nexus DEX, their operators, affiliates, contributors, and service providers from any and all claims, damages, costs, fines, penalties, or liabilities arising from your use of Nexus DEX, your violation of these terms, your token launches, or your violation of any law or third-party right.<br/><br/>
+            • <strong style={{ color: '#fff' }}>Indemnification.</strong> You will indemnify and hold harmless Verixia Apps, Nexus DEX, their operators, affiliates, contributors, and service providers from any and all claims, damages, costs, fines, penalties, or liabilities arising from your use of Nexus DEX, your violation of these terms, or your violation of any law or third-party right.<br/><br/>
 
             • You are solely responsible for compliance with all laws and regulations applicable to your jurisdiction.<br/><br/>
 
@@ -378,19 +383,19 @@ function WalletModal({ open, onClose }) {
   );
 }
 
-function IconSwap()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M7 16V4m0 0L3 8m4-4l4 4"/><path d="M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>; }
-function IconLaunch() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>; }
-function IconSend()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>; }
-function IconWallet() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
-function IconPerps()  { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg>; }
+function IconSwap()        { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M7 16V4m0 0L3 8m4-4l4 4"/><path d="M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>; }
+function IconPredictions() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>; }
+function IconDeFiPredict() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="3" y1="20" x2="21" y2="20"/><line x1="6" y1="20" x2="6" y2="13"/><line x1="12" y1="20" x2="12" y2="7"/><line x1="18" y1="20" x2="18" y2="15"/></svg>; }
+function IconPerps()       { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg>; }
+function IconWallet()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
 
-const NAV_ICONS = { swap: IconSwap, launch: IconLaunch, send: IconSend, portfolio: IconWallet, perps: IconPerps };
+const NAV_ICONS = { swap: IconSwap, predictions: IconPredictions, defipredict: IconDeFiPredict, perps: IconPerps, portfolio: IconWallet };
 const NAV_TABS = [
-  { id: 'swap', label: 'Swap' },
-  { id: 'launch', label: 'Launch' },
-  { id: 'send', label: 'Send' },
-  { id: 'portfolio', label: 'Wallet' },
-  { id: 'perps', label: 'Perps' },
+  { id: 'swap',        label: 'Swap' },
+  { id: 'predictions', label: 'Predictions' },
+  { id: 'defipredict', label: 'DeFi Predict' },
+  { id: 'perps',       label: 'Perps' },
+  { id: 'portfolio',   label: 'Wallet' },
 ];
 
 function AppInner() {
@@ -446,11 +451,11 @@ function AppInner() {
       </header>
       <main style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '24px 16px 100px', width: '100%' }}>
         {tab === 'swap' && <SwapWidget {...sharedProps} />}
-        {tab === 'token' && <TokenDetail {...sharedProps} coin={selectedToken} onBack={goBack} />}
-        {tab === 'launch' && <TokenLaunch {...sharedProps} />}
-        {tab === 'send' && <Send {...sharedProps} />}
-        {tab === 'portfolio' && <Portfolio onSelectCoin={goToToken} onSend={() => switchTab('send')} />}
+        {tab === 'predictions' && <PredictionsTonight onConnectWallet={openWallet} />}
+        {tab === 'defipredict' && <DeFiPredict onConnectWallet={openWallet} />}
         {tab === 'perps' && <PerpsLanding onConnectWallet={openWallet} />}
+        {tab === 'portfolio' && <Portfolio onSelectCoin={goToToken} />}
+        {tab === 'token' && <TokenDetail {...sharedProps} coin={selectedToken} onBack={goBack} />}
       </main>
       <nav className="mobile-nav" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100, background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(0,229,255,.1)', display: 'flex', alignItems: 'stretch', paddingBottom: 'env(safe-area-inset-bottom)' }}>
         {NAV_TABS.map(t => { const Icon = NAV_ICONS[t.id]; return (<button key={t.id} onClick={() => switchTab(t.id)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: activeTab === t.id ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '8px 2px', minHeight: 54, position: 'relative' }}>{activeTab === t.id && <div style={{ position: 'absolute', top: 0, left: '25%', right: '25%', height: 2, borderRadius: '0 0 2px 2px', background: C.accent }} />}<Icon /><span>{t.label}</span></button>); })}
