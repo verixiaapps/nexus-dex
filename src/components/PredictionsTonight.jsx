@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey, VersionedTransaction, Transaction } from '@solana/web3.js';
 import { useNexusWallet } from '../WalletContext.js';
+import ParlayBuilder from './ParlayBuilder.jsx';
 
 // =====================================================================
 // CONFIG — same backbone as DeFiPredict.jsx (Kalshi via DFlow on Solana).
@@ -1210,6 +1211,7 @@ export default function PredictionsTonight({ onConnectWallet }) {
   const [activeMarket, setActiveMarket]   = useState(null);
   const [initialSide, setInitialSide]     = useState('YES');
   const [tosOpen, setTosOpen]             = useState(false);
+  const [mode, setMode]                   = useState('singles'); // 'singles' | 'parlay'
 
   const { publicKey: solPk } = useWallet();
   const { privyEmbeddedSol } = useNexusWallet();
@@ -1330,6 +1332,38 @@ export default function PredictionsTonight({ onConnectWallet }) {
     <>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nexus-pulse { 0%,100%{opacity:1}50%{opacity:.4} } @keyframes nexus-spin { to{transform:rotate(360deg)} } body.nexus-scroll-locked { overflow:hidden; }`}</style>
 
+      {/* MODE TOGGLE — Singles | Parlay */}
+      <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: '12px 16px 4px', display: 'flex', justifyContent: 'center' }}>
+        <div style={{ display: 'inline-flex', padding: 4, background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, borderRadius: 999, gap: 4 }}>
+          {[
+            { id: 'singles', label: 'Singles' },
+            { id: 'parlay',  label: 'Parlay' },
+          ].map(opt => {
+            const isActive = mode === opt.id;
+            const isParlay = opt.id === 'parlay';
+            return (
+              <button key={opt.id} onClick={() => setMode(opt.id)} style={{
+                padding: '8px 22px', borderRadius: 999, border: 'none',
+                background: isActive
+                  ? (isParlay ? `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)` : 'rgba(151,252,228,.14)')
+                  : 'transparent',
+                color: isActive ? (isParlay ? '#04070f' : C.hl) : C.muted,
+                fontWeight: 800, fontSize: 12, cursor: 'pointer', letterSpacing: '-.01em',
+                transition: 'all .15s', ...T.display,
+              }}>
+                {opt.label}
+                {isParlay && !isActive && (
+                  <span style={{ marginLeft: 6, fontSize: 8, padding: '1px 5px', borderRadius: 999, background: 'rgba(255,205,60,.15)', color: C.gold, fontWeight: 800, letterSpacing: '.06em', ...T.mono }}>NEW</span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {mode === 'parlay' ? (
+        <ParlayBuilder onConnectWallet={onConnectWallet}/>
+      ) : (
       <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)', color: C.ink, backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(151,252,228,.10),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 20%,rgba(168,127,255,.06),transparent 50%)' }}>
 
         {/* HERO */}
@@ -1434,6 +1468,7 @@ export default function PredictionsTonight({ onConnectWallet }) {
           onClose={() => setTosOpen(false)}
         />
       </div>
+      )}
     </>
   );
 }
