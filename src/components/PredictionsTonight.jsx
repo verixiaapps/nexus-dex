@@ -1266,6 +1266,8 @@ export default function PredictionsTonight({ onConnectWallet }) {
   };
 
   // Live > Tonight > Volume-ranked ordering. Live games always hero.
+  // A single market can fit multiple sections (e.g. isLive AND a prop) — we
+  // dedupe by id so it only renders in its highest-priority section.
   const ordered = useMemo(() => {
     if (!markets.length) return [];
     const liveGames = markets.filter(m => m.isLive)
@@ -1274,7 +1276,7 @@ export default function PredictionsTonight({ onConnectWallet }) {
       .sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
     const tonightRest = markets.filter(m => !m.isLive && !m.primetime && m.category === 'tonight')
       .sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
-    const props = markets.filter(m => m.category === 'props')
+    const props = markets.filter(m => !m.isLive && m.category === 'props')
       .sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
     const politics = markets.filter(m => m.category === 'politics')
       .sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
@@ -1282,7 +1284,13 @@ export default function PredictionsTonight({ onConnectWallet }) {
       .sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
     const futures = markets.filter(m => m.category === 'futures')
       .sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
-    return [...liveGames, ...tonightPrimetime, ...tonightRest, ...props, ...politics, ...events, ...futures];
+    const all = [...liveGames, ...tonightPrimetime, ...tonightRest, ...props, ...politics, ...events, ...futures];
+    const seen = new Set();
+    return all.filter(m => {
+      if (seen.has(m.id)) return false;
+      seen.add(m.id);
+      return true;
+    });
   }, [markets]);
 
   // Filter logic — handles "All", "Live", "Tonight", "Props", category, and league
