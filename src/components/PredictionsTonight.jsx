@@ -3,7 +3,7 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey, VersionedTransaction, Transaction } from '@solana/web3.js';
 import { useNexusWallet } from '../WalletContext.js';
 import ParlayBuilder from './ParlayBuilder.jsx';
-
+ 
 // =====================================================================
 // CONFIG — same backbone as DeFiPredict.jsx (Kalshi via DFlow on Solana).
 // Same builder code, same treasury, same 1.5% fee. This page is the
