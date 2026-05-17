@@ -343,13 +343,13 @@ function saveCachedCharts(sparks, hours) {
 }
 
 // Cache full market snapshots so first render shows real prices instantly.
-// 5-min TTL — beyond that we don't trust the cached prices.
+// 60-sec TTL — short enough that new HL listings appear quickly on next open.
 function loadCachedMarkets(key) {
   try {
     const raw = localStorage.getItem(key);
     if (!raw) return null;
     const d = JSON.parse(raw);
-    if (Date.now() - (d.ts || 0) > 5 * 60_000) return null;
+    if (Date.now() - (d.ts || 0) > 60_000) return null;
     return Array.isArray(d.data) ? d.data : null;
   } catch { return null; }
 }
