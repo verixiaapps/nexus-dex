@@ -3,14 +3,12 @@ import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from './WalletContext.js';
 import SwapWidget from './components/SwapWidget.jsx';
-import Markets from './components/Markets.js';
 import Portfolio from './components/Portfolio.js';
 import TokenDetail from './components/TokenDetail.js';
 import Send from './components/Send.js';
-import NewLaunches from './components/NewLaunches.js';
 import TokenLaunch from './components/TokenLaunch.js';
 import PerpsLanding from './components/PerpsLanding.jsx';
-  
+
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b', text: '#cdd6f4', muted: '#586994',
@@ -19,18 +17,57 @@ const C = {
 
 const GLOBAL_STYLES = `html,body{ margin:0;padding:0;width:100%; min-height:100vh; min-height:100dvh; overflow-x:hidden; overscroll-behavior:none; -webkit-text-size-adjust:100%; text-size-adjust:100%; } body{ -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; } body.nexus-scroll-locked{ overflow:hidden !important; } #root{ min-height:100vh; min-height:100dvh; display:flex; flex-direction:column; } *,*::before,*::after{box-sizing:border-box;} *{ -webkit-tap-highlight-color:transparent; } button,a,[role="button"]{ touch-action:manipulation; } input,button,select,textarea{ font-family:'Syne',sans-serif; font-size:16px; } input[type="text"],input[type="number"],input[type="email"],input[type="password"],input[type="search"],input:not([type]),textarea{ font-size:16px !important; } ::-webkit-scrollbar{width:3px;height:3px;} ::-webkit-scrollbar-track{background:#03060f;} ::-webkit-scrollbar-thumb{background:#1e2d4a;border-radius:2px;} .hide-scrollbar{scrollbar-width:none;} .hide-scrollbar::-webkit-scrollbar{display:none;} .scroll-contain{ overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; } @media(max-width:768px){.desktop-nav{display:none!important;}} @media(min-width:769px){.mobile-nav{display:none!important;}} @keyframes wc-spin { to { transform: rotate(360deg); } }`;
 
+// =====================================================================
+// Inline sanctions screening — Chainalysis free public API. Fail-open
+// if API is unreachable. Results cached 24h in localStorage.
+// =====================================================================
+const SANCTIONS_URL = 'https://public.chainalysis.com/api/v1/address/';
+const SANCTIONS_CACHE_PREFIX = 'nx_sanctions_';
+const SANCTIONS_CACHE_TTL = 24 * 60 * 60 * 1000;
+const SANCTIONS_TIMEOUT = 5000;
+
+async function screenAddress(address) {
+  if (!address || typeof address !== 'string') return { clean: true };
+  try {
+    const raw = localStorage.getItem(SANCTIONS_CACHE_PREFIX + address);
+    if (raw) {
+      const { result, ts } = JSON.parse(raw);
+      if (Date.now() - ts < SANCTIONS_CACHE_TTL) return result;
+    }
+  } catch {}
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), SANCTIONS_TIMEOUT);
+    const res = await fetch(SANCTIONS_URL + encodeURIComponent(address), {
+      signal: controller.signal,
+      headers: { Accept: 'application/json' },
+    });
+    clearTimeout(timeoutId);
+    if (!res.ok) return { clean: true };
+    const data = await res.json();
+    const ids = Array.isArray(data?.identifications) ? data.identifications : [];
+    const result = ids.length > 0
+      ? { clean: false, reason: ids[0]?.name || ids[0]?.category || 'Sanctioned' }
+      : { clean: true };
+    try { localStorage.setItem(SANCTIONS_CACHE_PREFIX + address, JSON.stringify({ result, ts: Date.now() })); } catch {}
+    return result;
+  } catch (e) {
+    console.warn('[sanctions screen]', e?.message || e);
+    return { clean: true };
+  }
+}
+
 const PATH_TO_TAB = {
-  '/': 'swap', '/swap': 'swap', '/markets': 'markets',
-  '/launches': 'launches', '/launch': 'launch',
+  '/': 'swap', '/swap': 'swap',
+  '/launch': 'launch',
   '/send': 'send', '/portfolio': 'portfolio', '/perps': 'perps',
 };
 const TAB_TO_PATH = {
-  swap: '/swap', markets: '/markets', launches: '/launches',
-  launch: '/launch', send: '/send', portfolio: '/portfolio', perps: '/perps',
+  swap: '/swap', launch: '/launch', send: '/send', portfolio: '/portfolio', perps: '/perps',
 };
 
-function tabFromPathname(pathname) { return PATH_TO_TAB[pathname] || (pathname.startsWith('/markets/token') ? 'token' : 'swap'); }
-function getActiveTab(tab) { return tab === 'token' ? 'markets' : tab; }
+function tabFromPathname(pathname) { return PATH_TO_TAB[pathname] || (pathname.startsWith('/token') ? 'token' : 'swap'); }
+function getActiveTab(tab) { return tab === 'token' ? 'portfolio' : tab; }
 export function useAppWallet() { return useNexusWallet(); }
 
 function WalletIcon({ src, fallbackLetter, color, size }) {
@@ -48,41 +85,126 @@ const WM_INITIAL = { kind: 'idle', message: '', wallet: '', target: '' };
 
 function walletModalReducer(state, action) {
   switch (action.type) {
-    case 'START':   return { kind: 'connecting', message: '', wallet: action.wallet, target: action.target || '' };
-    case 'TIMEOUT': return { kind: 'timeout', message: 'Taking too long? Check your wallet and try again.', wallet: state.wallet, target: state.target };
-    case 'SUCCESS': return WM_INITIAL;
-    case 'ERROR':   return { kind: 'error', message: action.message || 'Connection failed', wallet: state.wallet, target: state.target };
-    case 'RESET':   return WM_INITIAL;
-    default:        return state;
+    case 'START':     return { kind: 'connecting', message: '', wallet: action.wallet, target: action.target || '' };
+    case 'SCREENING': return { kind: 'screening', message: '', wallet: state.wallet, target: state.target };
+    case 'TIMEOUT':   return { kind: 'timeout', message: 'Taking too long? Check your wallet and try again.', wallet: state.wallet, target: state.target };
+    case 'SUCCESS':   return WM_INITIAL;
+    case 'ERROR':     return { kind: 'error', message: action.message || 'Connection failed', wallet: state.wallet, target: state.target };
+    case 'BLOCKED':   return { kind: 'blocked', message: action.message || 'Access restricted from this wallet.', wallet: state.wallet, target: state.target };
+    case 'RESET':     return WM_INITIAL;
+    default:          return state;
   }
 }
 
+// =====================================================================
+// TermsGate — PancakeSwap-style centered card, scroll-to-bottom required
+// =====================================================================
 function TermsGate({ onAccept }) {
+  const scrollRef = useRef(null);
+  const [canAccept, setCanAccept] = useState(false);
+
+  useEffect(() => {
+    document.body.classList.add('nexus-scroll-locked');
+    return () => document.body.classList.remove('nexus-scroll-locked');
+  }, []);
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    if (el.scrollHeight <= el.clientHeight + 8) setCanAccept(true);
+  }, []);
+
+  const handleScroll = () => {
+    if (canAccept) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    if (el.scrollTop + el.clientHeight >= el.scrollHeight - 8) setCanAccept(true);
+  };
+
   return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 1000, background: 'rgba(3,6,15,.98)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}>
-      <div style={{ maxWidth: 520, width: '100%', maxHeight: '90vh', overflowY: 'auto', background: '#080d1a', border: '1px solid rgba(0,229,255,.15)', borderRadius: 20, padding: 24, fontFamily: 'Syne, sans-serif' }}>
-        <div style={{ fontWeight: 800, fontSize: 18, color: '#fff', marginBottom: 4 }}>Terms of Use</div>
-        <div style={{ color: '#586994', fontSize: 11, marginBottom: 16 }}>Non-custodial · Third-party protocols · User assumes all risk</div>
-        <div style={{ fontSize: 12, color: '#cdd6f4', lineHeight: 1.6, marginBottom: 20 }}>
-          By clicking <strong>"Accept &amp; Continue"</strong> or by accessing or using Nexus DEX, you acknowledge and agree that:<br/><br/>
-          • Nexus DEX is a non-custodial software interface operated by Verixia Apps.<br/><br/>
-          • Verixia Apps does not custody funds, control wallets, execute trades, or provide financial, investment, legal, or tax advice.<br/><br/>
-          • All swaps, perpetual trades, routing, execution, liquidity, pricing, token launches, and blockchain interactions are handled by third-party protocols, aggregators, exchanges, smart contracts, and infrastructure providers.<br/><br/>
-          • All transactions are initiated, reviewed, authorized, and signed directly by users through their own wallets.<br/><br/>
-          • Digital assets, perpetual contracts, leverage, DeFi protocols, smart contracts, token launches, and related technologies involve substantial risk including loss of funds, liquidation, exploits, smart contract vulnerabilities, slippage, protocol failures, hacks, and complete loss of assets.<br/><br/>
-          • Users assume all risks associated with using Nexus DEX and any integrated third-party protocols or services.<br/><br/>
-          • Nexus DEX and Verixia Apps are provided on an "AS IS" and "AS AVAILABLE" basis without warranties of any kind.<br/><br/>
-          • To the fullest extent permitted by law, Verixia Apps and Nexus DEX expressly disclaim all liability for any damages, losses, liabilities, claims, costs, or expenses arising from or related to the use of Nexus DEX.<br/><br/>
-          • Users are solely responsible for complying with all laws and regulations applicable to their jurisdiction.<br/><br/>
-          • Users represent and warrant that they are not located in, residents of, citizens of, or otherwise subject to any restricted, prohibited, or sanctioned jurisdiction.<br/><br/>
-          • Verixia Apps reserves the right to restrict, block, suspend, terminate, or deny access at any time for any reason.<br/><br/>
-          • Users irrevocably waive any right to participate in any class action, class arbitration, representative action, consolidated proceeding, or jury trial against Verixia Apps or Nexus DEX.<br/><br/>
-          • Any dispute shall be resolved exclusively through final and binding individual arbitration.<br/><br/>
-          If you do not agree to these terms, you must discontinue use of Nexus DEX immediately.
+    <>
+      <div style={{ position: 'fixed', inset: 0, zIndex: 999, background: 'rgba(3,6,15,.78)', backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)' }}/>
+      <div style={{
+        position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+        width: 'calc(100% - 24px)', maxWidth: 440, maxHeight: '82dvh',
+        zIndex: 1000, display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        background: '#080d1a', border: '1px solid rgba(0,229,255,.22)',
+        borderRadius: 20,
+        boxShadow: '0 30px 80px rgba(0,0,0,.7), 0 0 32px rgba(0,229,255,.12)',
+        fontFamily: 'Syne, sans-serif',
+      }}>
+        <div style={{ flexShrink: 0, padding: '20px 22px 10px' }}>
+          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '3px 10px', borderRadius: 999, background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.22)', marginBottom: 10 }}>
+            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#00e5ff' }}/>
+            <span style={{ color: '#00e5ff', fontSize: 9, fontWeight: 700, letterSpacing: '.10em' }}>TERMS OF USE</span>
+          </div>
+          <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', letterSpacing: '-.02em', lineHeight: 1.15, marginBottom: 4 }}>Welcome to Nexus DEX</div>
+          <div style={{ fontSize: 11.5, color: '#586994', lineHeight: 1.45 }}>Non-custodial · Third-party protocols · You assume all risk</div>
         </div>
-        <button onClick={onAccept} style={{ width: '100%', padding: 16, borderRadius: 14, border: 'none', background: 'linear-gradient(135deg,#00e5ff,#0055ff)', color: '#03060f', fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 16, cursor: 'pointer' }}>Accept &amp; Continue</button>
+
+        <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '6px 22px 14px', WebkitOverflowScrolling: 'touch' }}>
+          <div style={{ fontSize: 11.5, color: '#cdd6f4', lineHeight: 1.6 }}>
+            By clicking <strong style={{ color: '#fff' }}>"Accept &amp; Continue"</strong> or by accessing or using Nexus DEX, you acknowledge and agree that:<br/><br/>
+
+            • Nexus DEX is a non-custodial software interface operated by Verixia Apps. We do not custody funds, control wallets, execute trades, or provide financial, investment, legal, or tax advice.<br/><br/>
+
+            • <strong style={{ color: '#fff' }}>Compliance &amp; wallet screening.</strong> All wallet addresses are automatically screened against U.S. OFAC, U.N., E.U., and U.K. sanctions lists at connection time using Chainalysis. Flagged wallets are denied access before any transaction is possible.<br/><br/>
+
+            • <strong style={{ color: '#fff' }}>Restricted jurisdictions.</strong> You represent and warrant you are not located in, a resident of, citizen of, or accessing Nexus DEX from: Iran, North Korea, Cuba, Syria, the Crimea, Donetsk, Luhansk, and Sevastopol regions of Ukraine, or any other jurisdiction subject to comprehensive U.S., U.N., E.U., or U.K. sanctions.<br/><br/>
+
+            • <strong style={{ color: '#fff' }}>You are 18 or older</strong> and have full legal capacity to enter this agreement.<br/><br/>
+
+            • All swaps, perpetual trades, routing, execution, liquidity, pricing, token launches, and blockchain interactions are handled by third-party protocols, aggregators, exchanges, smart contracts, and infrastructure providers. All transactions are initiated, reviewed, authorized, and signed directly by you through your own wallet.<br/><br/>
+
+            • Digital assets, perpetuals, leverage, DeFi protocols, smart contracts, and token launches carry substantial risk including total loss of funds from liquidation, exploits, smart-contract vulnerabilities, slippage, protocol failures, hacks, MEV, frontrunning, network outages, oracle errors, and human error. <strong style={{ color: '#fff' }}>You assume all risk.</strong><br/><br/>
+
+            • <strong style={{ color: '#fff' }}>No reimbursement for losses.</strong> Verixia Apps will not refund, reimburse, or compensate you for any loss of funds or value, regardless of cause — including failed transactions, slippage, smart-contract exploits, third-party protocol failures, network outages, market volatility, liquidation, frontrunning, MEV, or human error.<br/><br/>
+
+            • <strong style={{ color: '#fff' }}>AS-IS / AS-AVAILABLE.</strong> Nexus DEX is provided without warranties of any kind, express or implied, including merchantability, fitness for a particular purpose, non-infringement, accuracy, and uninterrupted operation.<br/><br/>
+
+            • <strong style={{ color: '#fff' }}>No fiduciary duty.</strong> Verixia Apps owes you no fiduciary duty. To the extent any such duty may exist at law or in equity, it is irrevocably waived and disclaimed.<br/><br/>
+
+            • <strong style={{ color: '#fff' }}>No liability.</strong> To the fullest extent permitted by law, Verixia Apps, Nexus DEX, their operators, affiliates, contributors, and service providers are not liable for any damages, losses, claims, costs, or expenses of any kind — direct, indirect, incidental, consequential, special, exemplary, or punitive — arising from or related to your use of Nexus DEX, regardless of the cause of action.<br/><br/>
+
+            • <strong style={{ color: '#fff' }}>Token launches.</strong> Users launching tokens represent and warrant that any token launched (a) is not a security, investment contract, or other regulated financial instrument under any applicable law; (b) complies with all applicable laws including securities, commodities, anti-fraud, and anti-money-laundering laws; (c) is not designed to defraud, deceive, or mislead users; and (d) does not infringe any intellectual property rights.<br/><br/>
+
+            • <strong style={{ color: '#fff' }}>Misrepresentation.</strong> If any representation you make in these terms is false (including jurisdiction, age, sanctions status, or token-launch eligibility), Verixia Apps may immediately terminate your access, cooperate with law enforcement, and seek full indemnification from you. All losses, fines, penalties, or damages arising from your misrepresentation are your sole responsibility.<br/><br/>
+
+            • <strong style={{ color: '#fff' }}>Indemnification.</strong> You will indemnify and hold harmless Verixia Apps, Nexus DEX, their operators, affiliates, contributors, and service providers from any and all claims, damages, costs, fines, penalties, or liabilities arising from your use of Nexus DEX, your violation of these terms, your token launches, or your violation of any law or third-party right.<br/><br/>
+
+            • You are solely responsible for compliance with all laws and regulations applicable to your jurisdiction.<br/><br/>
+
+            • Verixia Apps reserves the right to restrict, block, suspend, terminate, or deny access at any time for any reason.<br/><br/>
+
+            • <strong style={{ color: '#fff' }}>No class actions.</strong> You irrevocably waive any right to participate in any class action, class arbitration, representative action, consolidated proceeding, or jury trial against Verixia Apps or Nexus DEX.<br/><br/>
+
+            • <strong style={{ color: '#fff' }}>Binding individual arbitration.</strong> Any dispute shall be resolved exclusively through final and binding individual arbitration.<br/><br/>
+
+            If you do not agree to these terms, you must discontinue use of Nexus DEX immediately.
+          </div>
+        </div>
+
+        <div style={{ flexShrink: 0, padding: '12px 22px 18px', borderTop: '1px solid rgba(255,255,255,.04)', background: '#080d1a' }}>
+          {!canAccept && (
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 10.5, color: '#586994', marginBottom: 10, fontWeight: 600, letterSpacing: '.04em' }}>
+              <span>↓</span>Scroll to the bottom to continue
+            </div>
+          )}
+          <button onClick={canAccept ? onAccept : undefined} disabled={!canAccept} style={{
+            width: '100%', padding: 14, borderRadius: 12, border: 'none',
+            background: canAccept ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'rgba(255,255,255,.05)',
+            color: canAccept ? '#03060f' : '#586994',
+            fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, letterSpacing: '-.01em',
+            cursor: canAccept ? 'pointer' : 'not-allowed',
+            boxShadow: canAccept ? '0 8px 24px rgba(0,229,255,.25)' : 'none',
+            transition: 'all .2s',
+          }}>Accept &amp; Continue</button>
+          <div style={{ fontSize: 9, color: '#586994', textAlign: 'center', marginTop: 10, fontWeight: 600, letterSpacing: '.06em' }}>
+            NON-CUSTODIAL · NO ACCOUNT · YOUR KEYS
+          </div>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
 
@@ -105,8 +227,32 @@ function WalletModal({ open, onClose }) {
     let matched = false;
     if (mState.target === 'privy') matched = privyAuthenticated;
     else if (mState.target === 'solana') matched = extSolConnected && selectedWallet && selectedWallet.adapter && selectedWallet.adapter.name === mState.wallet;
-    if (matched) { if (connectionTimerRef.current) { clearTimeout(connectionTimerRef.current); connectionTimerRef.current = null; } dispatch({ type: 'SUCCESS' }); onClose(); }
-  }, [extSolConnected, privyAuthenticated, selectedWallet, mState.kind, mState.wallet, mState.target, onClose]);
+    if (matched) {
+      if (connectionTimerRef.current) { clearTimeout(connectionTimerRef.current); connectionTimerRef.current = null; }
+      dispatch({ type: 'SCREENING' });
+    }
+  }, [extSolConnected, privyAuthenticated, selectedWallet, mState.kind, mState.wallet, mState.target]);
+
+  useEffect(() => {
+    if (mState.kind !== 'screening') return;
+    if (!walletAddress) return;
+    let cancelled = false;
+    screenAddress(walletAddress).then(({ clean }) => {
+      if (cancelled) return;
+      if (clean) {
+        dispatch({ type: 'SUCCESS' });
+        onClose();
+      } else {
+        disconnectAll().catch(() => {});
+        dispatch({ type: 'BLOCKED', message: 'This wallet is on a sanctioned addresses list. Access is denied.' });
+      }
+    }).catch(() => {
+      if (cancelled) return;
+      dispatch({ type: 'SUCCESS' });
+      onClose();
+    });
+    return () => { cancelled = true; };
+  }, [mState.kind, walletAddress, disconnectAll, onClose]);
 
   const targetWalletRef = useRef(null);
   useEffect(() => {
@@ -144,9 +290,11 @@ function WalletModal({ open, onClose }) {
   ];
 
   const availableOpts = allOptions.filter(o => o.ready);
-  const isConnecting = mState.kind === 'connecting';
-  const isTimedOut = mState.kind === 'timeout';
-  const pendingWallet = isConnecting || isTimedOut ? mState.wallet : null;
+  const isConnecting = mState.kind === 'connecting' || mState.kind === 'screening';
+  const isTimedOut   = mState.kind === 'timeout';
+  const isBlocked    = mState.kind === 'blocked';
+  const isScreening  = mState.kind === 'screening';
+  const pendingWallet = (isConnecting || isTimedOut) ? mState.wallet : null;
   const anyConnected = nexusConnected || privyAuthenticated;
   const displayAddr = walletAddress ? walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4) : null;
   const privyHandle = privyUser && (privyUser.email?.address || privyUser.google?.email || null);
@@ -160,14 +308,26 @@ function WalletModal({ open, onClose }) {
         <div style={{ flexShrink: 0, padding: '20px 24px 16px' }}>
           <div onClick={onClose} style={{ width: 40, height: 4, background: '#2e3f5e', borderRadius: 2, margin: '0 auto 20px', cursor: 'pointer', padding: '8px 0', boxSizing: 'content-box' }} />
           <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 6 }}>{anyConnected ? 'Wallet Connected' : 'Connect Wallet'}</div>
-            {displayAddr && <div style={{ fontSize: 13, color: '#586994' }}>{(connectedWalletName || 'Wallet')}: {displayAddr}</div>}
-            {privyHandle && !anyConnected && <div style={{ fontSize: 12, color: C.privy, marginTop: 2 }}>{privyHandle}</div>}
-            {!anyConnected && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>Pick one. We never see your keys.</div>}
+            <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 6 }}>
+              {isBlocked ? 'Access Restricted' : anyConnected ? 'Wallet Connected' : 'Connect Wallet'}
+            </div>
+            {displayAddr && !isBlocked && <div style={{ fontSize: 13, color: '#586994' }}>{(connectedWalletName || 'Wallet')}: {displayAddr}</div>}
+            {privyHandle && !anyConnected && !isBlocked && <div style={{ fontSize: 12, color: C.privy, marginTop: 2 }}>{privyHandle}</div>}
+            {isScreening && <div style={{ fontSize: 12, color: C.accent, marginTop: 4 }}>Verifying wallet address...</div>}
+            {!anyConnected && !isBlocked && !isScreening && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>Pick one. We never see your keys.</div>}
           </div>
         </div>
         <div className="scroll-contain" style={{ flex: 1, padding: '0 24px', paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)' }}>
-          {anyConnected ? (
+          {isBlocked ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 400, margin: '0 auto', paddingTop: 8 }}>
+              <div style={{ background: 'rgba(255,59,107,.10)', border: '1px solid rgba(255,59,107,.35)', borderRadius: 16, padding: '16px 18px' }}>
+                <div style={{ color: '#ff3b6b', fontWeight: 800, fontSize: 14, marginBottom: 6 }}>Wallet not eligible</div>
+                <div style={{ color: '#cdd6f4', fontSize: 12, lineHeight: 1.55 }}>{mState.message} This is automated screening against major sanctions lists. If you believe this is an error, please try a different wallet.</div>
+              </div>
+              <button onClick={handleRetry} style={{ background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.30)', borderRadius: 16, padding: 14, cursor: 'pointer', width: '100%', color: C.accent, fontWeight: 700, fontSize: 14, fontFamily: 'Syne, sans-serif' }}>Try a different wallet</button>
+              <button onClick={onClose} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,.1)', borderRadius: 16, padding: 12, cursor: 'pointer', color: '#586994', fontSize: 13, fontFamily: 'Syne, sans-serif' }}>Close</button>
+            </div>
+          ) : anyConnected ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 400, margin: '0 auto', paddingTop: 8 }}>
               <div style={{ background: 'rgba(0,255,163,.08)', border: '1px solid rgba(0,255,163,.2)', borderRadius: 16, padding: '16px 20px' }}>
                 <div style={{ color: '#00ffa3', fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Connected</div>
@@ -201,7 +361,7 @@ function WalletModal({ open, onClose }) {
                     <WalletIcon src={opt.icon} fallbackLetter={opt.name} color={opt.color} size={isPrimary ? 44 : 32} />
                     <div style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
                       <div style={{ color: '#fff', fontWeight: isPrimary ? 800 : 700, fontSize: isPrimary ? 16 : 14 }}>{opt.name}</div>
-                      <div style={{ color: opt.key === 'privy' ? opt.color : C.muted, fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isPending ? 'Check your wallet...' : opt.subtitle}</div>
+                      <div style={{ color: opt.key === 'privy' ? opt.color : C.muted, fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isPending ? (isScreening ? 'Verifying address...' : 'Check your wallet...') : opt.subtitle}</div>
                     </div>
                     {isPending && <div style={{ width: 16, height: 16, borderRadius: '50%', border: '2px solid #00e5ff', borderTopColor: 'transparent', animation: 'wc-spin 0.8s linear infinite', flexShrink: 0 }} />}
                   </button>
@@ -218,18 +378,19 @@ function WalletModal({ open, onClose }) {
   );
 }
 
-function IconSwap()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M7 16V4m0 0L3 8m4-4l4 4"/><path d="M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>; }
-function IconMarkets()  { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>; }
-function IconLaunches() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/></svg>; }
-function IconLaunch()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>; }
-function IconSend()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>; }
-function IconWallet()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
-function IconPerps()    { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg>; }
+function IconSwap()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M7 16V4m0 0L3 8m4-4l4 4"/><path d="M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>; }
+function IconLaunch() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="16"/><line x1="8" y1="12" x2="16" y2="12"/></svg>; }
+function IconSend()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>; }
+function IconWallet() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
+function IconPerps()  { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg>; }
 
-const NAV_ICONS = { swap: IconSwap, markets: IconMarkets, launches: IconLaunches, launch: IconLaunch, send: IconSend, portfolio: IconWallet, perps: IconPerps };
+const NAV_ICONS = { swap: IconSwap, launch: IconLaunch, send: IconSend, portfolio: IconWallet, perps: IconPerps };
 const NAV_TABS = [
-  { id: 'swap', label: 'Swap' }, { id: 'markets', label: 'Markets' }, { id: 'launches', label: 'Trending' },
-  { id: 'launch', label: 'Launch' }, { id: 'send', label: 'Send' }, { id: 'portfolio', label: 'Wallet' }, { id: 'perps', label: 'Perps' },
+  { id: 'swap', label: 'Swap' },
+  { id: 'launch', label: 'Launch' },
+  { id: 'send', label: 'Send' },
+  { id: 'portfolio', label: 'Wallet' },
+  { id: 'perps', label: 'Perps' },
 ];
 
 function AppInner() {
@@ -252,7 +413,7 @@ function AppInner() {
     if (newTab !== 'token') setSelectedToken(null);
     navigate(TAB_TO_PATH[newTab] || '/swap'); setTab(newTab); window.scrollTo(0, 0);
   }, [tab, navigate]);
-  const goToToken = useCallback(coin => { setSelectedToken(coin); setTab('token'); navigate('/markets/token'); window.scrollTo(0, 0); }, [navigate]);
+  const goToToken = useCallback(coin => { setSelectedToken(coin); setTab('token'); navigate('/token'); window.scrollTo(0, 0); }, [navigate]);
   const goBack = useCallback(() => navigate(-1), [navigate]);
   const openWallet = useCallback(() => setWalletModalOpen(true), []);
 
@@ -285,9 +446,7 @@ function AppInner() {
       </header>
       <main style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '24px 16px 100px', width: '100%' }}>
         {tab === 'swap' && <SwapWidget {...sharedProps} />}
-        {tab === 'markets' && <Markets onSelectCoin={goToToken} />}
         {tab === 'token' && <TokenDetail {...sharedProps} coin={selectedToken} onBack={goBack} />}
-        {tab === 'launches' && <NewLaunches onSelectCoin={goToToken} />}
         {tab === 'launch' && <TokenLaunch {...sharedProps} />}
         {tab === 'send' && <Send {...sharedProps} />}
         {tab === 'portfolio' && <Portfolio onSelectCoin={goToToken} onSend={() => switchTab('send')} />}
