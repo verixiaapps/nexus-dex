@@ -3,23 +3,56 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
 import { PublicKey } from '@solana/web3.js';
 
+// =====================================================================
+// DESIGN TOKENS — match PredictionsTonight/PerpsTrade exactly
+// =====================================================================
 const C = {
-  card:     '#080d1a',
-  card2:    '#0c1220',
-  border:   'rgba(0,229,255,0.10)',
-  borderHi: 'rgba(0,229,255,0.25)',
-  accent:   '#00e5ff',
-  green:    '#00ffa3',
-  red:      '#ff3b6b',
-  text:     '#cdd6f4',
-  muted:    '#586994',
+  bg:'#04070f', bg2:'#070b16', surface:'#0a1020', surface2:'#0e1428',
+  ink:'#e6efff', inkStr:'#f5fafe',
+  muted:'#7a92b3', muted2:'#475670',
+  hl:'#97fce4', hl2:'#5ce9c8', hlDim:'rgba(151,252,228,.14)',
+  violet:'#a87fff', sol:'#9945ff',
+  up:'#3dd598', down:'#ff8a9e',
+  amber:'#f5b53d', live:'#ff3d5d', gold:'#ffcd3c',
+  border:'rgba(255,255,255,.06)', borderHi:'rgba(151,252,228,.24)',
+  hairline:'rgba(255,255,255,.05)',
+  glow:'0 0 24px rgba(151,252,228,.18),0 0 48px rgba(151,252,228,.06)',
+  shadowLg:'0 20px 60px rgba(0,0,0,.55)',
+};
+const T = {
+  display:{ fontFamily:"'Syne', system-ui, sans-serif" },
+  body:   { fontFamily:"'DM Sans', system-ui, sans-serif" },
+  mono:   { fontFamily:"'IBM Plex Mono', monospace" },
+  hero:   { fontFamily:"'Clash Display', 'Syne', system-ui, sans-serif" },
 };
 
-const SOL_MINT             = 'So11111111111111111111111111111111111111112';
-const USDC_SOLANA          = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-const SPL_LEGACY_PROGRAM   = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+// =====================================================================
+// CONSTANTS
+// =====================================================================
+const SOL_MINT              = 'So11111111111111111111111111111111111111112';
+const USDC_SOLANA           = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const SPL_LEGACY_PROGRAM    = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const SPL_TOKEN2022_PROGRAM = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 
+// Known tokens — gives top holdings real names + brand colors.
+// Long tail falls back to first-letter badge.
+const KNOWN_TOKENS = {
+  [SOL_MINT]:                                       { symbol:'SOL',    name:'Solana',           color:'#9945ff', textColor:'#fff' },
+  [USDC_SOLANA]:                                    { symbol:'USDC',   name:'USD Coin',         color:'#2775ca', textColor:'#fff' },
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB':   { symbol:'USDT',   name:'Tether USD',       color:'#26a17b', textColor:'#fff' },
+  'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263':   { symbol:'BONK',   name:'Bonk',             color:'#fcb017', textColor:'#000' },
+  'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL':    { symbol:'JTO',    name:'Jito',             color:'#7dffb5', textColor:'#000' },
+  'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN':    { symbol:'JUP',    name:'Jupiter',          color:'#c7f284', textColor:'#000' },
+  'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm':   { symbol:'WIF',    name:'dogwifhat',        color:'#ffba00', textColor:'#000' },
+  '7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr':   { symbol:'POPCAT', name:'Popcat',           color:'#ffd700', textColor:'#000' },
+  'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3':   { symbol:'PYTH',   name:'Pyth Network',     color:'#e6c5ff', textColor:'#000' },
+  'MEW1gQWJ3nEXg2qgERiKu7FAFj79PHvQVREQUzScPP5':    { symbol:'MEW',    name:'cat in dogs world',color:'#9b4dca', textColor:'#fff' },
+  '85VBFQZC9TZkfaptBWjvUw7YbZjy52A6mjtPGjstQAmQ':   { symbol:'W',      name:'Wormhole',         color:'#3b5dab', textColor:'#fff' },
+};
+
+// =====================================================================
+// UTILS
+// =====================================================================
 function fmt(n, d = 2) {
   if (n == null || !Number.isFinite(Number(n))) return '$0.00';
   n = Number(n);
@@ -30,7 +63,6 @@ function fmt(n, d = 2) {
   if (n > 0)      return '$' + n.toFixed(6);
   return '$0.00';
 }
-
 function fmtTokenAmt(n) {
   if (n == null || !Number.isFinite(Number(n))) return '0';
   n = Number(n);
@@ -41,16 +73,32 @@ function fmtTokenAmt(n) {
   if (n > 0)     return n.toFixed(6);
   return '0';
 }
-
 function shortAddr(s) {
   if (!s || typeof s !== 'string') return '';
   if (s.length <= 14) return s;
   return s.slice(0, 6) + '...' + s.slice(-4);
 }
-
 function tokenAmountForOne(decimals) {
   const d = Number.isFinite(Number(decimals)) ? Number(decimals) : 6;
   return String(Math.round(10 ** Math.min(Math.max(d, 0), 12)));
+}
+function tokenMeta(mint, fallbackSym) {
+  const k = KNOWN_TOKENS[mint];
+  if (k) return k;
+  return { symbol: fallbackSym || (mint || '').slice(0, 4) + '...', name: 'SPL Token', color: '#97fce4', textColor: '#04070f' };
+}
+async function copyText(text) {
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+    const ta = document.createElement('textarea');
+    ta.value = text; ta.style.position = 'fixed'; ta.style.left = '-9999px';
+    document.body.appendChild(ta); ta.select();
+    document.execCommand('copy'); document.body.removeChild(ta);
+    return true;
+  } catch { return false; }
 }
 
 function openTokenPage(token, onSelectCoin) {
@@ -72,49 +120,32 @@ function openTokenPage(token, onSelectCoin) {
   });
 }
 
+// =====================================================================
+// PRICE FETCHING (unchanged from production version)
+// =====================================================================
 const _priceCache = {};
-
-function clearPriceCache() {
-  Object.keys(_priceCache).forEach(k => delete _priceCache[k]);
-}
-
+function clearPriceCache() { Object.keys(_priceCache).forEach(k => delete _priceCache[k]); }
 function readOkxToTokenAmount(data) {
   const d = Array.isArray(data) ? data[0] : data;
-  return Number(
-    d?.toTokenAmount ||
-    d?.routerResult?.toTokenAmount ||
-    d?.quoteCompareList?.[0]?.toTokenAmount ||
-    0
-  );
+  return Number(d?.toTokenAmount || d?.routerResult?.toTokenAmount || d?.quoteCompareList?.[0]?.toTokenAmount || 0);
 }
-
-// Fallback: Jupiter Price API -- covers pump.fun and long-tail Solana tokens
 async function fetchJupiterPrice(mint) {
   try {
     const r = await fetch(`https://api.jup.ag/price/v2?ids=${mint}`);
     const j = await r.json();
     const price = j?.data?.[mint]?.price;
-    if (price && Number.isFinite(Number(price)) && Number(price) > 0) {
-      return Number(price);
-    }
+    if (price && Number.isFinite(Number(price)) && Number(price) > 0) return Number(price);
   } catch {}
   return 0;
 }
-
 async function fetchOkxPrice(mint, decimals = 6, force = false) {
   if (!mint) return 0;
   const key = `${String(mint).toLowerCase()}:${decimals}`;
-  if (!force && _priceCache[key] && Date.now() - _priceCache[key].ts < 60000) {
-    return _priceCache[key].price;
-  }
-
+  if (!force && _priceCache[key] && Date.now() - _priceCache[key].ts < 60000) return _priceCache[key].price;
   try {
     const amount = mint === SOL_MINT ? '1000000000' : tokenAmountForOne(decimals);
-    const r = await fetch(
-      `/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=${USDC_SOLANA}&amount=${amount}`
-    );
+    const r = await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=${USDC_SOLANA}&amount=${amount}`);
     const j = await r.json();
-
     if (j.code === '0' && j.data) {
       const toTokenAmount = readOkxToTokenAmount(j.data);
       const price = toTokenAmount / 1e6;
@@ -124,18 +155,84 @@ async function fetchOkxPrice(mint, decimals = 6, force = false) {
       }
     }
   } catch {}
-
-  // Fallback to Jupiter for tokens OKX can't price (e.g. pump.fun tokens)
   const jupPrice = await fetchJupiterPrice(mint);
-  if (jupPrice > 0) {
-    _priceCache[key] = { price: jupPrice, ts: Date.now() };
-    return jupPrice;
-  }
-
+  if (jupPrice > 0) { _priceCache[key] = { price: jupPrice, ts: Date.now() }; return jupPrice; }
   return 0;
 }
 
-export default function Portfolio({ onSelectCoin, onSend, onConnectWallet }) {
+// =====================================================================
+// SUB-COMPONENTS
+// =====================================================================
+function TokenBadge({ mint, fallbackSym, size = 36 }) {
+  const meta = tokenMeta(mint, fallbackSym);
+  const letter = (meta.symbol || '?').charAt(0).toUpperCase();
+  return (
+    <div style={{
+      width: size, height: size, borderRadius: '50%',
+      background: `linear-gradient(135deg, ${meta.color}, ${meta.color}dd)`,
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      color: meta.textColor, fontWeight: 900, fontSize: Math.round(size * 0.38),
+      flexShrink: 0, letterSpacing: '-.02em',
+      boxShadow: `0 4px 12px ${meta.color}40`,
+      ...T.display,
+    }}>{letter}</div>
+  );
+}
+
+function SkeletonRow() {
+  return (
+    <div style={{ padding: '14px 18px', display: 'grid', gridTemplateColumns: '36px 1fr 80px', gap: 12, alignItems: 'center', borderBottom: `1px solid ${C.hairline}` }}>
+      <div style={{ width: 36, height: 36, borderRadius: '50%', background: 'rgba(255,255,255,.04)' }}/>
+      <div>
+        <div style={{ height: 12, width: 64, borderRadius: 4, background: 'rgba(255,255,255,.05)', marginBottom: 6 }}/>
+        <div style={{ height: 10, width: 96, borderRadius: 4, background: 'rgba(255,255,255,.035)' }}/>
+      </div>
+      <div style={{ height: 12, width: 60, borderRadius: 4, background: 'rgba(255,255,255,.05)', justifySelf: 'end' }}/>
+    </div>
+  );
+}
+
+function TokenRow({ token, onClick }) {
+  const meta = tokenMeta(token.mint, token.symbol);
+  const val  = token.value || 0;
+  return (
+    <button onClick={onClick} style={{
+      padding: '14px 18px', display: 'grid', gridTemplateColumns: '36px 1fr auto', gap: 12, alignItems: 'center',
+      borderBottom: `1px solid ${C.hairline}`,
+      background: 'transparent', border: 'none', borderBottom: `1px solid ${C.hairline}`,
+      borderLeft: 'none', borderRight: 'none', borderTop: 'none',
+      width: '100%', textAlign: 'left',
+      cursor: onClick ? 'pointer' : 'default',
+      WebkitTapHighlightColor: 'rgba(151,252,228,.10)',
+      transition: 'background .15s',
+    }}
+    onMouseEnter={e => e.currentTarget.style.background = 'rgba(151,252,228,.03)'}
+    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
+      <TokenBadge mint={token.mint} fallbackSym={token.symbol} size={36}/>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span style={{ color: C.inkStr, fontWeight: 800, fontSize: 14, letterSpacing: '-.01em', ...T.display }}>{meta.symbol}</span>
+          <span style={{ color: C.muted, fontSize: 10, fontWeight: 600, ...T.mono }}>
+            {token.price > 0 ? fmt(token.price) : '—'}
+          </span>
+        </div>
+        <div style={{ color: C.muted, fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180, ...T.body }}>
+          {fmtTokenAmt(token.uiAmount)} {meta.symbol} · {meta.name}
+        </div>
+      </div>
+      <div style={{ textAlign: 'right' }}>
+        <div style={{ color: val > 0 ? C.inkStr : C.muted, fontWeight: 800, fontSize: 14, fontVariantNumeric: 'tabular-nums', ...T.mono }}>
+          {val > 0 ? fmt(val) : '—'}
+        </div>
+      </div>
+    </button>
+  );
+}
+
+// =====================================================================
+// MAIN
+// =====================================================================
+export default function Portfolio({ onSelectCoin, onConnectWallet }) {
   const { publicKey: extPk, connected: solCon } = useWallet();
   const { connection } = useConnection();
   const { privyEmbeddedSol } = useNexusWallet();
@@ -151,25 +248,22 @@ export default function Portfolio({ onSelectCoin, onSend, onConnectWallet }) {
 
   const hasSol = !!(solCon || (privyEmbeddedSol && pubkey));
 
-  const [solBalance, setSolBalance] = useState(0);
-  const [solPriceUsd, setSolPriceUsd] = useState(0);
-  const [solBalances, setSolBalances] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState('');
+  const [solBalance, setSolBalance]     = useState(0);
+  const [solPriceUsd, setSolPriceUsd]   = useState(0);
+  const [solBalances, setSolBalances]   = useState([]);
+  const [loading, setLoading]           = useState(true);
+  const [refreshing, setRefreshing]     = useState(false);
+  const [error, setError]               = useState('');
+  const [copied, setCopied]             = useState(false);
 
   const fetchPortfolio = useCallback(async (force = false) => {
     if (!pubkey || !connection) { setLoading(false); return; }
-
     if (force) clearPriceCache();
-    setLoading(true);
-    setRefreshing(true);
-    setError('');
+    setLoading(true); setRefreshing(true); setError('');
 
     try {
       const lamports = await connection.getBalance(pubkey);
-      const nextSolBalance = lamports / 1e9;
-      setSolBalance(nextSolBalance);
+      setSolBalance(lamports / 1e9);
 
       const solPrice = await fetchOkxPrice(SOL_MINT, 9, force);
       setSolPriceUsd(solPrice > 0 ? solPrice : 0);
@@ -180,11 +274,7 @@ export default function Portfolio({ onSelectCoin, onSend, onConnectWallet }) {
       ]);
 
       let allAccounts = [];
-      results.forEach(r => {
-        if (r.status === 'fulfilled' && r.value?.value) {
-          allAccounts = allAccounts.concat(r.value.value);
-        }
-      });
+      results.forEach(r => { if (r.status === 'fulfilled' && r.value?.value) allAccounts = allAccounts.concat(r.value.value); });
 
       const byMint = {};
       allAccounts.forEach(acc => {
@@ -193,42 +283,32 @@ export default function Portfolio({ onSelectCoin, onSend, onConnectWallet }) {
           const ta   = info.tokenAmount || {};
           const ui   = Number(ta.uiAmountString || ta.uiAmount || 0);
           const mint = info.mint;
-
           if (!mint || !Number.isFinite(ui) || ui <= 0.000001) return;
-
-          if (!byMint[mint]) {
-            byMint[mint] = {
-              mint,
-              uiAmount: 0,
-              decimals: Number.isFinite(Number(ta.decimals)) ? Number(ta.decimals) : 6,
-            };
-          }
+          if (!byMint[mint]) byMint[mint] = { mint, uiAmount: 0, decimals: Number.isFinite(Number(ta.decimals)) ? Number(ta.decimals) : 6 };
           byMint[mint].uiAmount += ui;
         } catch {}
       });
 
-      let holdings = Object.values(byMint).filter(h => h.mint !== SOL_MINT);
+      // Filter to curated known tokens only — hides unknown SPLs / airdrop junk
+      const holdings = Object.values(byMint).filter(h => h.mint !== SOL_MINT && KNOWN_TOKENS[h.mint]);
       const priced = [];
-
       for (const h of holdings) {
         const price = await fetchOkxPrice(h.mint, h.decimals, force);
-        const value = h.uiAmount * price;
+        const meta = tokenMeta(h.mint);
         priced.push({
           ...h,
-          price:  price > 0 && Number.isFinite(price) ? price : 0,
-          value:  value > 0 && Number.isFinite(value) ? value : 0,
-          symbol: h.mint.slice(0, 4) + '...',
-          name:   '',
+          price: price > 0 && Number.isFinite(price) ? price : 0,
+          value: h.uiAmount * (price > 0 ? price : 0),
+          symbol: meta.symbol,
+          name: meta.name,
         });
       }
-
       priced.sort((a, b) => b.value - a.value);
       setSolBalances(priced);
     } catch (e) {
       setError('Failed to load portfolio');
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      setLoading(false); setRefreshing(false);
     }
   }, [pubkey, connection]);
 
@@ -239,224 +319,181 @@ export default function Portfolio({ onSelectCoin, onSend, onConnectWallet }) {
     return () => clearInterval(i);
   }, [pubkey, connection, fetchPortfolio]);
 
-  const handleRefresh = useCallback(() => fetchPortfolio(true), [fetchPortfolio]);
+  const handleRefresh    = useCallback(() => fetchPortfolio(true), [fetchPortfolio]);
+  const displayAddr      = pubkey ? pubkey.toString() : null;
+  const handleCopyAddr   = useCallback(async () => {
+    if (!displayAddr) return;
+    const ok = await copyText(displayAddr);
+    if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1600); }
+  }, [displayAddr]);
 
   const solValue    = solBalance * solPriceUsd;
   const tokensTotal = solBalances.reduce((s, h) => s + (h.value || 0), 0);
   const totalValue  = solValue + tokensTotal;
-  const displayAddr = pubkey ? pubkey.toString() : null;
+  const tokenCount  = solBalances.length + (solBalance > 0 ? 1 : 0);
 
-  /* ---- Not connected ---- */
+  // ===================================================================
+  // DISCONNECTED STATE
+  // ===================================================================
   if (!hasSol) {
     return (
-      <div style={{ maxWidth: 520, margin: '0 auto', width: '100%', boxSizing: 'border-box', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
-        <div style={{ marginBottom: 20 }}>
-          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
-          <p style={{ color: C.muted, fontSize: 12 }}>Solana wallet balances via OKX</p>
+      <>
+        <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap');`}</style>
+        <div style={{ maxWidth: 520, margin: '0 auto', width: '100%', padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)', color: C.ink, backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(151,252,228,.10),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 20%,rgba(168,127,255,.06),transparent 50%)' }}>
+          <div style={{ textAlign: 'center', padding: '60px 24px 40px', borderRadius: 26, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: '1px solid rgba(255,255,255,.07)', boxShadow: C.shadowLg, marginTop: 24 }}>
+            <div style={{ width: 60, height: 60, borderRadius: '50%', background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, margin: '0 auto 18px', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: C.glow }}>
+              <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="#04070f" strokeWidth="2.5">
+                <rect x="2" y="6" width="20" height="14" rx="2"/>
+                <path d="M2 12h20"/>
+              </svg>
+            </div>
+            <h1 style={{ fontSize: 28, fontWeight: 600, color: C.inkStr, margin: '0 0 8px', letterSpacing: '-.04em', ...T.hero }}>
+              Connect your{' '}
+              <span style={{ fontStyle: 'italic', background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>wallet</span>
+            </h1>
+            <p style={{ color: C.muted, fontSize: 13, margin: '0 0 28px', lineHeight: 1.5, ...T.body }}>
+              See your SOL balance, token holdings, and live valuations powered by OKX + Jupiter price feeds.
+            </p>
+            <button onClick={() => onConnectWallet?.()} style={{
+              background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, border: 'none', borderRadius: 14,
+              padding: '14px 32px', color: '#04070f', fontWeight: 800, fontSize: 15,
+              cursor: 'pointer', boxShadow: C.glow, letterSpacing: '-.01em', ...T.display,
+            }}>Connect Wallet</button>
+          </div>
         </div>
-        <div style={{ textAlign: 'center', padding: '50px 30px', background: C.card, border: '1px solid ' + C.border, borderRadius: 20 }}>
-          <h2 style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 10 }}>Connect Wallet</h2>
-          <p style={{ color: C.muted, fontSize: 13, marginBottom: 24 }}>Connect your Solana wallet to view balances.</p>
-          <button
-            onClick={() => onConnectWallet?.()}
-            style={{
-              background:  'linear-gradient(135deg,#9945ff,#7c3aed)',
-              border:      'none',
-              borderRadius: 10,
-              padding:     '12px 28px',
-              color:       '#fff',
-              fontSize:    14,
-              fontWeight:  700,
-              cursor:      'pointer',
-              fontFamily:  'Syne, sans-serif',
-            }}
-          >
-            Connect Wallet
-          </button>
-        </div>
-      </div>
+      </>
     );
   }
 
-  /* ---- Connected ---- */
+  // ===================================================================
+  // CONNECTED STATE
+  // ===================================================================
   return (
-    <div style={{ maxWidth: 600, margin: '0 auto', width: '100%', boxSizing: 'border-box', paddingBottom: 'calc(env(safe-area-inset-bottom) + 80px)' }}>
+    <>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nx-spin { to{transform:rotate(360deg)} }`}</style>
 
-      {/* Header row */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 18, flexWrap: 'wrap', gap: 10 }}>
-        <div>
-          <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff' }}>Portfolio</h1>
-          <p style={{ color: C.muted, fontSize: 12 }}>Solana - OKX + Jupiter prices - auto-refresh 30s</p>
-        </div>
-        <button
-          onClick={handleRefresh}
-          disabled={refreshing}
-          style={{
-            background:   'rgba(0,229,255,.08)',
-            border:       '1px solid rgba(0,229,255,.2)',
-            borderRadius: 8,
-            padding:      '7px 14px',
-            color:        C.accent,
-            fontSize:     12,
-            cursor:       refreshing ? 'not-allowed' : 'pointer',
-            opacity:      refreshing ? 0.65 : 1,
-            fontFamily:   'Syne, sans-serif',
-            fontWeight:   600,
-          }}
-        >
-          {refreshing ? 'Refreshing...' : 'Refresh'}
-        </button>
-      </div>
+      <div style={{ maxWidth: 600, margin: '0 auto', width: '100%', padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)', color: C.ink, backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(151,252,228,.10),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 20%,rgba(168,127,255,.06),transparent 50%)' }}>
 
-      {/* Total value + Send */}
-      <div style={{ background: 'linear-gradient(135deg,rgba(0,229,255,.08),rgba(0,85,255,.04))', border: '1px solid ' + C.borderHi, borderRadius: 18, padding: 20, marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
-        <div style={{ flex: 1 }}>
-          <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 4 }}>TOTAL PORTFOLIO VALUE</div>
-          <div style={{ fontSize: 28, fontWeight: 800, color: '#fff' }}>{fmt(totalValue)}</div>
-        </div>
-        <button
-          onClick={() => onSend && onSend()}
-          disabled={!onSend}
-          style={{
-            background:   onSend ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'rgba(255,255,255,.04)',
-            border:       'none',
-            borderRadius: 12,
-            padding:      '14px 22px',
-            color:        onSend ? '#03060f' : C.muted,
-            fontSize:     14,
-            fontWeight:   800,
-            cursor:       onSend ? 'pointer' : 'not-allowed',
-            fontFamily:   'Syne, sans-serif',
-            display:      'inline-flex',
-            alignItems:   'center',
-            gap:          8,
-            minHeight:    48,
-          }}
-        >
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
-            <line x1="22" y1="2" x2="11" y2="13" />
-            <polygon points="22 2 15 22 11 13 2 9 22 2" />
-          </svg>
-          Send
-        </button>
-      </div>
+        {/* HERO */}
+        <div style={{ marginTop: 10, padding: '24px 22px 22px', borderRadius: 26, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: '1px solid rgba(255,255,255,.07)', boxShadow: C.shadowLg, position: 'relative', overflow: 'hidden' }}>
+          {/* Radial overlay */}
+          <div style={{ position: 'absolute', right: -50, top: -60, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle,rgba(168,127,255,.16),transparent 65%)', pointerEvents: 'none' }}/>
+          <div style={{ position: 'absolute', left: -80, bottom: -80, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle,rgba(151,252,228,.10),transparent 65%)', pointerEvents: 'none' }}/>
 
-      {/* Wallet address bar */}
-      <div style={{ background: C.card, border: '1px solid rgba(153,69,255,.2)', borderRadius: 12, padding: '10px 14px', marginBottom: 16, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{ width: 26, height: 26, borderRadius: '50%', background: 'rgba(153,69,255,.2)', border: '1px solid rgba(153,69,255,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, fontWeight: 800, color: '#9945ff' }}>
-            S
-          </div>
-          <div>
-            <div style={{ fontSize: 10, color: C.muted, fontWeight: 700 }}>SOLANA</div>
-            <div style={{ fontSize: 12, color: C.text, fontFamily: 'monospace' }}>{shortAddr(displayAddr)}</div>
-          </div>
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 11, color: C.muted }}>{solBalance.toFixed(4)} SOL</div>
-          <div style={{ fontSize: 12, color: C.green, fontWeight: 700 }}>{fmt(totalValue)}</div>
-        </div>
-      </div>
-
-      {/* Error */}
-      {error && (
-        <div style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 10, padding: 12, marginBottom: 16, fontSize: 13, color: C.red }}>
-          {error}
-        </div>
-      )}
-
-      {/* Token list */}
-      <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8, marginBottom: 8 }}>SOLANA TOKENS</div>
-
-      <div style={{ background: C.card, border: '1px solid ' + C.border, borderRadius: 16, overflow: 'hidden' }}>
-
-        {/* Table header */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 80px 80px 90px', gap: 8, padding: '10px 16px', borderBottom: '1px solid rgba(0,229,255,.06)', fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: .8 }}>
-          <div>TOKEN</div>
-          <div style={{ textAlign: 'right' }}>BALANCE</div>
-          <div style={{ textAlign: 'right' }}>PRICE</div>
-          <div style={{ textAlign: 'right' }}>VALUE</div>
-        </div>
-
-        {/* SOL row */}
-        <div
-          onClick={() => openTokenPage({ mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, price: solPriceUsd, value: solValue, uiAmount: solBalance }, onSelectCoin)}
-          role="button"
-          tabIndex={0}
-          onKeyDown={e => {
-            if (e.key === 'Enter' || e.key === ' ') {
-              openTokenPage({ mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, price: solPriceUsd, value: solValue, uiAmount: solBalance }, onSelectCoin);
-            }
-          }}
-          style={{
-            padding:              '12px 16px',
-            display:              'grid',
-            gridTemplateColumns:  '1fr 80px 80px 90px',
-            gap:                  8,
-            alignItems:           'center',
-            borderBottom:         '1px solid rgba(255,255,255,.025)',
-            cursor:               onSelectCoin ? 'pointer' : 'default',
-            WebkitTapHighlightColor: 'rgba(0,229,255,.12)',
-          }}
-        >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(153,69,255,.2)', border: '1px solid rgba(153,69,255,.4)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 700, color: '#9945ff', flexShrink: 0 }}>
-              S
-            </div>
-            <div>
-              <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>SOL</div>
-              <div style={{ color: C.muted, fontSize: 10 }}>Solana</div>
-            </div>
-          </div>
-          <div style={{ textAlign: 'right', color: C.text,  fontSize: 12 }}>{solBalance.toFixed(4)}</div>
-          <div style={{ textAlign: 'right', color: C.text,  fontSize: 12 }}>{solPriceUsd > 0 ? fmt(solPriceUsd) : '-'}</div>
-          <div style={{ textAlign: 'right', color: solValue > 0 ? C.green : C.muted, fontSize: 13, fontWeight: 600 }}>{solValue > 0 ? fmt(solValue) : '-'}</div>
-        </div>
-
-        {/* SPL token rows */}
-        {loading && !solBalances.length ? (
-          <div style={{ padding: 30, textAlign: 'center', color: C.muted, fontSize: 13 }}>Loading tokens...</div>
-        ) : !solBalances.length ? (
-          <div style={{ padding: 20, textAlign: 'center', color: C.muted, fontSize: 12 }}>No SPL tokens found</div>
-        ) : solBalances.map(token => {
-          const val    = token.value || 0;
-          const symbol = token.symbol || token.mint.slice(0, 4) + '...';
-          return (
-            <div
-              key={token.mint}
-              onClick={() => openTokenPage(token, onSelectCoin)}
-              role="button"
-              tabIndex={0}
-              onKeyDown={e => {
-                if (e.key === 'Enter' || e.key === ' ') openTokenPage(token, onSelectCoin);
-              }}
-              style={{
-                padding:              '12px 16px',
-                display:              'grid',
-                gridTemplateColumns:  '1fr 80px 80px 90px',
-                gap:                  8,
-                alignItems:           'center',
-                borderBottom:         '1px solid rgba(255,255,255,.025)',
-                cursor:               onSelectCoin ? 'pointer' : 'default',
-                WebkitTapHighlightColor: 'rgba(0,229,255,.12)',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
-                <div style={{ width: 32, height: 32, borderRadius: '50%', background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.2)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 12, fontWeight: 700, color: C.accent, flexShrink: 0 }}>
-                  {symbol.charAt(0)}
-                </div>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ color: '#fff', fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{symbol}</div>
-                  <div style={{ color: C.muted, fontSize: 9, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 120 }}>{shortAddr(token.mint)}</div>
-                </div>
+          <div style={{ position: 'relative' }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 999, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)' }}>
+                <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.up, boxShadow: `0 0 8px ${C.up}` }}/>
+                <span style={{ color: C.up, fontSize: 9, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>SOLANA · LIVE</span>
               </div>
-              <div style={{ textAlign: 'right', color: C.text,  fontSize: 12 }}>{fmtTokenAmt(token.uiAmount)}</div>
-              <div style={{ textAlign: 'right', color: C.text,  fontSize: 12 }}>{token.price > 0 ? fmt(token.price) : '-'}</div>
-              <div style={{ textAlign: 'right', color: val > 0 ? C.green : C.muted, fontSize: 12, fontWeight: 600 }}>{val > 0 ? fmt(val) : '-'}</div>
+              <button onClick={handleRefresh} disabled={refreshing} style={{
+                background: 'rgba(151,252,228,.06)', border: `1px solid ${C.borderHi}`,
+                borderRadius: 999, width: 32, height: 32, padding: 0,
+                cursor: refreshing ? 'wait' : 'pointer', opacity: refreshing ? 0.6 : 1,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: C.hl,
+              }}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" style={refreshing ? { animation: 'nx-spin 1s linear infinite' } : null}>
+                  <polyline points="23 4 23 10 17 10"/>
+                  <polyline points="1 20 1 14 7 14"/>
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+                </svg>
+              </button>
             </div>
-          );
-        })}
+
+            <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.12em', marginBottom: 4, ...T.mono }}>PORTFOLIO VALUE</div>
+            <div style={{ fontSize: 44, fontWeight: 500, color: C.inkStr, letterSpacing: '-.04em', lineHeight: 1.0, marginBottom: 14, fontVariantNumeric: 'tabular-nums', ...T.hero }}>
+              {fmt(totalValue)}
+            </div>
+
+            {/* Address pill — tap to copy */}
+            <button onClick={handleCopyAddr} style={{
+              background: 'rgba(0,0,0,.30)', border: `1px solid ${C.border}`,
+              borderRadius: 12, padding: '9px 13px', cursor: 'pointer', width: '100%',
+              display: 'flex', alignItems: 'center', gap: 10, transition: 'all .15s',
+            }}
+            onMouseEnter={e => e.currentTarget.style.borderColor = C.borderHi}
+            onMouseLeave={e => e.currentTarget.style.borderColor = C.border}>
+              <div style={{ width: 26, height: 26, borderRadius: '50%', background: `linear-gradient(135deg,${C.sol},#7c3aed)`, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, boxShadow: `0 2px 8px ${C.sol}40` }}>
+                <span style={{ fontSize: 11, fontWeight: 800, color: '#fff', ...T.display }}>S</span>
+              </div>
+              <div style={{ flex: 1, textAlign: 'left', minWidth: 0 }}>
+                <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>WALLET ADDRESS</div>
+                <div style={{ fontSize: 12, color: C.ink, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...T.mono }}>{shortAddr(displayAddr)}</div>
+              </div>
+              <span style={{ fontSize: 10, fontWeight: 700, color: copied ? C.up : C.hl, padding: '4px 9px', borderRadius: 8, background: copied ? 'rgba(61,213,152,.10)' : C.hlDim, border: `1px solid ${copied ? 'rgba(61,213,152,.30)' : C.borderHi}`, letterSpacing: '.06em', flexShrink: 0, ...T.mono }}>
+                {copied ? 'COPIED' : 'COPY'}
+              </span>
+            </button>
+          </div>
+        </div>
+
+        {/* QUICK STATS STRIP */}
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginTop: 12, marginBottom: 18 }}>
+          {[
+            { label: 'SOL',        value: solBalance.toFixed(3),       sub: solValue > 0 ? fmt(solValue) : '—', color: C.sol },
+            { label: 'HOLDINGS',   value: String(tokenCount),          sub: tokenCount === 1 ? 'asset' : 'assets', color: C.hl },
+            { label: 'TOKEN VAL',  value: tokensTotal > 0 ? fmt(tokensTotal) : '$0', sub: solBalances.length + ' SPL', color: C.violet },
+          ].map(s => (
+            <div key={s.label} style={{ padding: '10px 12px', borderRadius: 14, background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, backdropFilter: 'blur(12px)' }}>
+              <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>{s.label}</div>
+              <div style={{ fontSize: 17, fontWeight: 800, color: s.color, lineHeight: 1.1, marginTop: 4, fontVariantNumeric: 'tabular-nums', ...T.display }}>{s.value}</div>
+              <div style={{ fontSize: 9, color: C.muted, marginTop: 2, fontWeight: 600, ...T.mono }}>{s.sub}</div>
+            </div>
+          ))}
+        </div>
+
+        {/* ERROR */}
+        {error && (
+          <div style={{ background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.24)', borderRadius: 12, padding: 12, marginBottom: 14, fontSize: 12, color: C.down, ...T.body }}>
+            {error}
+          </div>
+        )}
+
+        {/* HOLDINGS HEADER */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px', marginBottom: 8 }}>
+          <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.12em', ...T.mono }}>HOLDINGS</div>
+          <div style={{ fontSize: 9, color: C.muted2, fontWeight: 600, ...T.mono }}>OKX + JUPITER · AUTO 30s</div>
+        </div>
+
+        {/* HOLDINGS LIST */}
+        <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', backdropFilter: 'blur(12px)' }}>
+
+          {/* SOL row — always shown if connected */}
+          <TokenRow
+            token={{ mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, price: solPriceUsd, value: solValue, uiAmount: solBalance }}
+            onClick={() => openTokenPage({ mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, price: solPriceUsd, value: solValue, uiAmount: solBalance }, onSelectCoin)}
+          />
+
+          {/* SPL tokens */}
+          {loading && !solBalances.length ? (
+            <>
+              <SkeletonRow/>
+              <SkeletonRow/>
+              <SkeletonRow/>
+            </>
+          ) : !solBalances.length ? (
+            <div style={{ padding: '28px 18px', textAlign: 'center' }}>
+              <div style={{ color: C.muted, fontSize: 12.5, marginBottom: 6, fontWeight: 600, ...T.body }}>No SPL tokens yet.</div>
+              <div style={{ color: C.muted2, fontSize: 11, ...T.body }}>Buy something on the Swap tab to get started.</div>
+            </div>
+          ) : solBalances.map(token => (
+            <TokenRow
+              key={token.mint}
+              token={token}
+              onClick={() => openTokenPage(token, onSelectCoin)}
+            />
+          ))}
+        </div>
+
+        {/* FOOTER */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: '14px 16px', marginTop: 18, borderRadius: 14, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}` }}>
+          <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>POWERED BY</span>
+          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text', ...T.mono }}>OKX + JUPITER</span>
+          <span style={{ color: C.muted2, fontSize: 9 }}>|</span>
+          <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>NON-CUSTODIAL</span>
+        </div>
       </div>
-    </div>
+    </>
   );
 }
