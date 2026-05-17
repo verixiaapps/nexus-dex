@@ -343,7 +343,7 @@ function saveCachedCharts(sparks, hours) {
 }
 
 // Cache full market snapshots so first render shows real prices instantly.
-// 5-min TTL -- beyond that we don't trust the cached prices.
+// 5-min TTL — beyond that we don't trust the cached prices.
 function loadCachedMarkets(key) {
   try {
     const raw = localStorage.getItem(key);
@@ -716,7 +716,7 @@ async function bridgeFullArbUsdcToSol({ hlWalletData, solPubkey, solWalletAdapte
   return { txHash, usdcSwept: arbBalance };
 }
 
-// "Bring home" -- bridges any stuck USDC on Arb back to Solana.
+// "Bring home" — bridges any stuck USDC on Arb back to Solana.
 // Used for BOTH freshly-arrived USDC (after step 1) and recovery sweeps.
 async function bringHomeStuckArbUsdc({ hlWalletData, solPubkey, solWalletAdapter, onStatus }) {
   onStatus?.('Checking Arbitrum balance...');
@@ -730,7 +730,7 @@ async function bringHomeStuckArbUsdc({ hlWalletData, solPubkey, solWalletAdapter
 
 // STEP 1 of the two-step withdraw: just sign withdraw3 and submit to HL.
 // No waiting, no bridging. Returns immediately after HL accepts.
-// USDC will land on Arbitrum in ~4 min -- user comes back for step 2.
+// USDC will land on Arbitrum in ~4 min — user comes back for step 2.
 async function initiateHlWithdraw({ usdAmount, hlWalletData, onStatus }) {
   onStatus?.('Signing withdrawal...');
   const time = nextNonce();
@@ -859,7 +859,7 @@ function loadPendingWithdraw(hlAddress) {
     const raw = localStorage.getItem('nexus_pending_withdraw_' + (hlAddress || '').toLowerCase());
     if (!raw) return null;
     const d = JSON.parse(raw);
-    // expire after 30 min -- by then it should have landed on Arb (or failed)
+    // expire after 30 min — by then it should have landed on Arb (or failed)
     if (Date.now() - d.ts > 30 * 60_000) return null;
     return d;
   } catch { return null; }
@@ -1100,7 +1100,7 @@ function hasSpotMatch(perpName, spotSymbols) {
 
 function filterNewListings(allPerps) {
   return allPerps
-    .filter(p => p.volume24h >= 500)
+    .filter(p => p.volume24h >= 50) // low threshold - catches freshly listed perps before they accumulate volume
     .filter(p => p.price > 0)
     .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0))
     .slice(0, 60)
@@ -1377,13 +1377,13 @@ function WalletPanel({
 }
 
 // =====================================================================
-// WithdrawModal -- TWO-STEP withdraw flow
+// WithdrawModal — TWO-STEP withdraw flow
 //
 // Step 1: User taps Withdraw, enters amount, signs HL withdraw3. Done.
 //         USDC will land on Arbitrum in ~4 min. They can close the app.
 //
 // Step 2: When user reopens the modal (or refreshes), we detect USDC on
-//         Arb and show "Bring home" -- bridges to Solana with 1 more sig.
+//         Arb and show "Bring home" — bridges to Solana with 1 more sig.
 //
 // Each step is fully independent. State persists via on-chain Arb USDC
 // balance + a small localStorage pending-marker.
@@ -1447,7 +1447,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
   const stuckUsdcAmount  = Number(stuckUsdcUnits) / 1e6;
   const hasPending       = !!pending && !hasStuckUsdc;
 
-  // --- STEP 1: initiate HL withdraw3 ---
+  // ─── STEP 1: initiate HL withdraw3 ───
   const usd        = parseFloat(amount) || 0;
   const hlFee      = usd > 0 ? 1.00 : 0;
   const bridgeFee  = Math.max(0, (usd - hlFee) * 0.013);
@@ -1486,7 +1486,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
     }
   };
 
-  // --- STEP 2: bring home from Arbitrum ---
+  // ─── STEP 2: bring home from Arbitrum ───
   const handleBringHome = async () => {
     if (!hasStuckUsdc) return;
     if (!isValidSolAddress(walletPubkey)) { setError('Invalid Solana destination'); return; }
@@ -1576,7 +1576,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 22px 8px', WebkitOverflowScrolling: 'touch', minHeight: 0 }}>
 
-          {/* === BRING HOME (Step 2) -- only shows when USDC has landed on Arb === */}
+          {/* === BRING HOME (Step 2) — only shows when USDC has landed on Arb === */}
           {hasStuckUsdc && step !== 'bringing' && !isStep2Done && (
             <div style={{
               marginBottom: 16, padding: 16, borderRadius: 16,
@@ -1614,7 +1614,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
               border: '1px solid rgba(151,252,228,.30)',
             }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <span style={{ fontSize: 16 }}>OK</span>
+                <span style={{ fontSize: 16 }}>✓</span>
                 <span style={{ fontSize: 13, color: C.hl, fontWeight: 800, letterSpacing: '.04em', ...T.display }}>WITHDRAWAL REQUESTED</span>
               </div>
               <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.55, marginBottom: 10, ...T.body }}>
@@ -1638,7 +1638,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
                 <span style={{ fontSize: 12, color: C.amber, fontWeight: 800, letterSpacing: '.04em', ...T.display }}>BRIDGING TO ARBITRUM</span>
               </div>
               <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.5, ...T.body }}>
-                <strong style={{ color: C.inkStr }}>{fmt(pending.usdAmount, 2)}</strong> on the way. Check back in a few minutes -- we'll show a button to bring it home.
+                <strong style={{ color: C.inkStr }}>{fmt(pending.usdAmount, 2)}</strong> on the way. Check back in a few minutes — we'll show a button to bring it home.
               </div>
             </div>
           )}
@@ -1649,7 +1649,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
             <div style={{ fontSize: 15, color: C.hl, fontWeight: 800, ...T.mono }}>{fmt(hlBalance, 2)}</div>
           </div>
 
-          {/* === STEP 1 input -- hidden after success === */}
+          {/* === STEP 1 input — hidden after success === */}
           {!isStep1Done && (
             <>
               <div style={{ marginBottom: 8, fontSize: 11, color: C.muted, fontWeight: 600, ...T.body }}>
@@ -1694,13 +1694,13 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
                 </div>
               )}
 
-              {/* === HOW IT WORKS -- friendly explainer === */}
+              {/* === HOW IT WORKS — friendly explainer === */}
               <div style={{ padding: '12px 14px', background: 'rgba(168,127,255,.06)', border: '1px solid rgba(168,127,255,.20)', borderRadius: 12, marginBottom: 14 }}>
                 <div style={{ fontSize: 10, color: C.violet, fontWeight: 800, letterSpacing: '.06em', marginBottom: 8, ...T.mono }}>HOW IT WORKS</div>
                 <div style={{ fontSize: 11.5, color: C.ink, lineHeight: 1.6, ...T.body }}>
                   <div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
                     <span style={{ color: C.violet, fontWeight: 800, minWidth: 14 }}>1</span>
-                    <span>Sign once on Hyperliquid (now). USDC bridges to Arbitrum -- takes ~4 min.</span>
+                    <span>Sign once on Hyperliquid (now). USDC bridges to Arbitrum — takes ~4 min.</span>
                   </div>
                   <div style={{ display: 'flex', gap: 8 }}>
                     <span style={{ color: C.violet, fontWeight: 800, minWidth: 14 }}>2</span>
@@ -1723,7 +1723,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
 
           {isStep2Done && (
             <div style={{ marginBottom: 12, padding: 14, background: 'rgba(61,213,152,.08)', border: '1px solid rgba(61,213,152,.30)', borderRadius: 12, textAlign: 'center' }}>
-              <div style={{ fontSize: 15, color: C.up, fontWeight: 800, ...T.display }}>SOL in your wallet</div>
+              <div style={{ fontSize: 15, color: C.up, fontWeight: 800, ...T.display }}>✓ SOL in your wallet</div>
               <div style={{ fontSize: 11, color: C.muted, marginTop: 4, ...T.body }}>Done</div>
             </div>
           )}
@@ -1742,7 +1742,7 @@ function WithdrawModal({ open, onClose, hlAddress, hlBalance, walletPubkey, sign
               width: '100%', padding: 16, borderRadius: 16, border: 'none',
               background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`,
               color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display,
-            }}>Got it -- close</button>
+            }}>Got it — close</button>
           ) : isStep2Done ? (
             <button onClick={onClose} style={{
               width: '100%', padding: 16, borderRadius: 16, border: 'none',
@@ -2413,7 +2413,7 @@ export default function PerpsTrade({ onConnectWallet }) {
     return () => { alive = false; };
   }, [activePair?.id, sparkMap]);
 
-  // Removed: sparkSeededRef effect -- was redundantly fetching sparks for
+  // Removed: sparkSeededRef effect — was redundantly fetching sparks for
   // the New listings on first allPerps load. The lazy effect below handles
   // it when user actually opens the New tab, which is faster on mount.
 
@@ -2521,7 +2521,7 @@ export default function PerpsTrade({ onConnectWallet }) {
       const curatedIds = new Set(marketData.map(p => p.id));
       const q = discoverSearch.trim().toUpperCase();
       if (q.length > 0) {
-        // Search any coin -- match base name (BTC, FARTCOIN, etc.). Up to 50 results.
+        // Search any coin — match base name (BTC, FARTCOIN, etc.). Up to 50 results.
         return allPerps
           .filter(p => p.price > 0 && (p.base || '').toUpperCase().includes(q))
           .sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0))
@@ -2592,7 +2592,7 @@ export default function PerpsTrade({ onConnectWallet }) {
               inputMode="search"
               enterKeyHint="search"
               style={{
-                width: '100%', padding: '11px 14px',
+                width: '100%', padding: '11px 14px 11px 38px',
                 background: 'rgba(255,255,255,.04)',
                 border: `1px solid ${C.border}`,
                 borderRadius: 12, fontSize: 13, fontWeight: 600,
@@ -2600,16 +2600,17 @@ export default function PerpsTrade({ onConnectWallet }) {
                 ...T.body,
               }}
             />
+            <div style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', color: C.muted2, fontSize: 14, fontWeight: 700, ...T.mono }}>{'🔍'}</div>
             {discoverSearch && (
               <button onClick={() => setDiscoverSearch('')} style={{
                 position: 'absolute', right: 8, top: '50%', transform: 'translateY(-50%)',
                 background: 'rgba(255,255,255,.06)', border: 'none',
                 color: C.muted, width: 24, height: 24, borderRadius: 6,
                 fontSize: 14, cursor: 'pointer',
-              }}>X</button>
+              }}>×</button>
             )}
             <div style={{ marginTop: 6, fontSize: 10, color: C.muted2, fontWeight: 600, ...T.mono }}>
-              {discoverSearch.trim() ? `${filtered.length} match${filtered.length === 1 ? '' : 'es'}` : `Top 15 by volume -- search to find any of ${allPerps.length} markets`}
+              {discoverSearch.trim() ? `${filtered.length} match${filtered.length === 1 ? '' : 'es'}` : `Top 15 by volume — search to find any of ${allPerps.length} markets`}
             </div>
           </div>
         )}
@@ -2647,4 +2648,3 @@ export default function PerpsTrade({ onConnectWallet }) {
     </>
   );
 }
-
