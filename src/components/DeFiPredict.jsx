@@ -187,9 +187,21 @@ async function dflowRequest(path, body, opts = {}) {
 async function fetchKalshiCryptoMarkets() {
   if (!ENABLE_TRADING) return getMockMarkets();
   try {
-    const data = await dflowRequest('/prediction/markets?category=crypto');
-    if (Array.isArray(data?.markets) && data.markets.length > 0) {
-      return data.markets.map(normalizeMarket);
+    // DFlow Metadata API: /api/v1/markets — fetch all initialized active
+    // markets and client-side filter to crypto. Crypto markets are mostly
+    // short-duration (5/15-min price brackets) tagged 'crypto' OR with a
+    // recognizable base symbol.
+    const data = await dflowRequest('/markets?isInitialized=true&status=active&limit=200');
+    const list = Array.isArray(data?.markets) ? data.markets
+               : Array.isArray(data?.data)    ? data.data
+               : Array.isArray(data)          ? data
+               : [];
+    if (list.length > 0) {
+      const normalized = list.map(normalizeMarket).filter(m =>
+        String(m.category || '').toLowerCase() === 'crypto'
+        || /^(BTC|ETH|SOL|XRP|DOGE|ADA|AVAX|MATIC|LINK|DOT)$/i.test(m.base || '')
+      );
+      if (normalized.length > 0) return normalized;
     }
     return getMockMarkets();
   } catch (e) {
@@ -199,14 +211,10 @@ async function fetchKalshiCryptoMarkets() {
 }
 
 async function fetchUserPositions(walletPubkey) {
-  if (!walletPubkey || !ENABLE_TRADING) return [];
-  try {
-    const data = await dflowRequest('/prediction/positions?wallet=' + encodeURIComponent(walletPubkey));
-    return Array.isArray(data?.positions) ? data.positions : [];
-  } catch (e) {
-    console.warn('[dflow positions]', e?.message || e);
-    return [];
-  }
+  // Positions endpoint will be wired in a later phase — DFlow derives them
+  // from on-chain token accounts (getTokenAccountsByOwner) filtered through
+  // /api/v1/filter_outcome_mints, not from a single REST endpoint.
+  return [];
 }
 
 async function buildOrderTx({ market, side, usdcAmount, walletPubkey }) {
@@ -406,16 +414,22 @@ function parseSimError(err, logs) {
 }
 
 function normalizeMarket(raw) {
+  // DFlow's /api/v1/markets returns fields like ticker, eventTicker, title,
+  // yesMint, noMint, volume, status, closeTime. Multiple aliases let mock
+  // and real data flow through the same UI.
+  const yesMint = raw.yesMint || raw.yes_mint || raw.yesTokenMint || null;
+  const noMint  = raw.noMint  || raw.no_mint  || raw.noTokenMint  || null;
   return {
-    id:           raw.id || raw.ticker || raw.market_id,
-    base:         raw.base || raw.symbol || raw.asset || 'BTC',
-    category:     raw.category || categorizeMarket(raw),
-    question:     raw.question || raw.title || raw.name || '',
+    id:           raw.id || raw.ticker || raw.eventTicker || raw.market_id || yesMint,
+    yesMint, noMint,
+    base:         raw.base || raw.symbol || raw.asset || raw.underlying || 'BTC',
+    category:     raw.category || raw.eventCategory || categorizeMarket(raw),
+    question:     raw.question || raw.title || raw.name || raw.eventTitle || '',
     description:  raw.description || raw.subtitle || '',
-    yesPrice:     Number(raw.yesPrice ?? raw.yes_price ?? raw.lastPriceYes ?? 0.5),
-    noPrice:      Number(raw.noPrice  ?? raw.no_price  ?? raw.lastPriceNo  ?? 0.5),
-    closeTs:      Number(raw.closeTs  ?? raw.close_time ?? raw.expiry ?? Date.now() + 3600_000),
-    volume24h:    Number(raw.volume24h ?? raw.volume_24h ?? raw.vol ?? 0),
+    yesPrice:     Number(raw.yesPrice ?? raw.yes_price ?? raw.lastPriceYes ?? raw.lastYesPrice ?? raw.markPriceYes ?? 0.5),
+    noPrice:      Number(raw.noPrice  ?? raw.no_price  ?? raw.lastPriceNo  ?? raw.lastNoPrice  ?? raw.markPriceNo  ?? 0.5),
+    closeTs:      Number(raw.closeTs  ?? raw.close_time ?? raw.closeTime ?? raw.expiry ?? raw.expirationTime ?? Date.now() + 3600_000),
+    volume24h:    Number(raw.volume24h ?? raw.volume_24h ?? raw.volume ?? raw.vol ?? 0),
     openInterest: Number(raw.openInterest ?? raw.open_interest ?? 0),
     hot:          Boolean(raw.hot ?? raw.featured),
   };
