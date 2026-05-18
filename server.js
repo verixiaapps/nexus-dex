@@ -560,15 +560,26 @@ app.post('/api/unit/operations', async (req, res) => {
 });
 
 /* -- DFlow proxy (Kalshi predictions via Solana) ------------------------ */
-const DFLOW_API_BASE     = (process.env.DFLOW_API_BASE || 'https://api.dflow.net/v1').replace(/\/+$/, '');
+// Metadata API base: market discovery, events, series, outcome mints.
+// Trade API base (quote-api.dflow.net) is wired in Phase 2 — orders use a
+// separate subdomain with its own /order endpoint.
+const DFLOW_API_BASE     = (process.env.DFLOW_API_BASE || 'https://prediction-markets-api.dflow.net/api/v1').replace(/\/+$/, '');
 const DFLOW_API_KEY      = process.env.DFLOW_API_KEY || '';
 const DFLOW_BUILDER_CODE = process.env.DFLOW_BUILDER_CODE || '';
 
-const DFLOW_ALLOWED_PATHS = new Set([
-  'prediction/markets',
-  'prediction/order/build',
-  'prediction/order/submit',
-  'prediction/positions',
+// Allow any subpath whose first segment is in this set. Lets us hit
+// /markets, /markets/batch, /market/by-mint/{mint}, /events/{id}, etc.
+// without needing an entry per dynamic path.
+const DFLOW_ALLOWED_PREFIXES = new Set([
+  'markets',
+  'market',
+  'events',
+  'event',
+  'series',
+  'outcome_mints',
+  'filter_outcome_mints',
+  'tags_by_categories',
+  'filters_by_sports',
 ]);
 
 function buildDflowHeaders() {
@@ -580,7 +591,8 @@ function buildDflowHeaders() {
 async function proxyDflow(req, res) {
   try {
     const subPath = req.path.replace(/^\/api\/dflow\//, '').replace(/\?.*$/, '');
-    if (!DFLOW_ALLOWED_PATHS.has(subPath))
+    const firstSegment = subPath.split('/')[0];
+    if (!DFLOW_ALLOWED_PREFIXES.has(firstSegment))
       return res.status(404).json({ error: 'DFlow endpoint not allowed: ' + subPath });
     if (!DFLOW_API_KEY)
       return res.status(503).json({ error: 'DFlow not configured - set DFLOW_API_KEY' });
@@ -588,14 +600,13 @@ async function proxyDflow(req, res) {
     const url = DFLOW_API_BASE + '/' + subPath + buildForwardedQuery(req);
     let bodyStr = '';
     if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
-      const merged = { ...req.body };
-      if (!merged.builderCode && DFLOW_BUILDER_CODE) merged.builderCode = DFLOW_BUILDER_CODE;
-      bodyStr = JSON.stringify(merged);
+      bodyStr = JSON.stringify(req.body);
     }
     const fetchOpts = { method: req.method, headers: buildDflowHeaders() };
     if (bodyStr) fetchOpts.body = bodyStr;
 
-    const cacheable = req.method === 'GET' && subPath === 'prediction/markets';
+    // Cache markets listings for 10s — they don't change tick-by-tick
+    const cacheable = req.method === 'GET' && firstSegment === 'markets';
     if (cacheable) { const c = getCachedJson(url); if (c) return res.status(c.status).json(c.payload); }
 
     const response = await fetchWithTimeout(url, fetchOpts, 15_000);
@@ -610,16 +621,18 @@ async function proxyDflow(req, res) {
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 }
-app.get('/api/dflow/prediction/*',  proxyDflow);
-app.post('/api/dflow/prediction/*', proxyDflow);
+app.get('/api/dflow/*',  proxyDflow);
+app.post('/api/dflow/*', proxyDflow);
 
 /* -- Parlay sweep bonus tracker (local, not proxied) -------------------- */
+// Moved out of /api/dflow/ namespace so it doesn't collide with the DFlow
+// catch-all proxy above. Frontend now calls /api/parlay/bonus/register.
 // In-memory log of users who opted into Sweep Bonus on a parlay. When
 // every leg settles YES, you owe the bonus payout from your treasury.
 // MVP storage: in-memory + size cap. Swap to a DB row when ready.
 const parlayBonusLog = [];
 
-app.post('/api/dflow/parlay/bonus/register', (req, res) => {
+app.post('/api/parlay/bonus/register', (req, res) => {
   try {
     const { wallet, stake, legs, bonusBps } = req.body || {};
     if (!wallet || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(wallet)))
