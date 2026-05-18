@@ -34,7 +34,7 @@ const CSP_DIRECTIVES = [
   ['frame-ancestors', ["'none'"]],
   ['frame-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org', 'https://challenges.cloudflare.com', ...EXTRA_FRAME_SRC]],
   ['child-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org']],
-  ['connect-src',     ["'self'", 'https://li.quest', 'https://arb1.arbitrum.io', 'https://web3.okx.com', 'https://quote-api.jup.ag', 'https://lite-api.jup.ag', 'https://api.jup.ag', 'https://token.jup.ag', 'https://api.hyperliquid.xyz', 'https://api.hyperliquid-testnet.xyz', 'https://pumpportal.fun', 'wss://pumpportal.fun', 'https://api.dexscreener.com', 'https://*.dexscreener.com', 'https://auth.privy.io', 'https://*.privy.io', 'https://*.privy.systems', 'https://*.rpc.privy.systems', 'https://explorer-api.walletconnect.com', 'https://*.walletconnect.com', 'https://*.walletconnect.org', 'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org', 'wss://*.walletconnect.com', 'wss://*.walletconnect.org', 'wss://www.walletlink.org', 'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com', 'https://api.pinata.cloud', 'https://*.publicnode.com', 'https://*.drpc.org', 'https://api.dflow.net', 'https://*.dflow.net', 'https://public.chainalysis.com', ...EXTRA_CONNECT_SRC]],
+  ['connect-src',     ["'self'", 'https://li.quest', 'https://arb1.arbitrum.io', 'https://web3.okx.com', 'https://quote-api.jup.ag', 'https://lite-api.jup.ag', 'https://api.jup.ag', 'https://token.jup.ag', 'https://api.hyperliquid.xyz', 'https://api.hyperliquid-testnet.xyz', 'https://pumpportal.fun', 'wss://pumpportal.fun', 'https://api.dexscreener.com', 'https://*.dexscreener.com', 'https://auth.privy.io', 'https://*.privy.io', 'https://*.privy.systems', 'https://*.rpc.privy.systems', 'https://explorer-api.walletconnect.com', 'https://*.walletconnect.com', 'https://*.walletconnect.org', 'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org', 'wss://*.walletconnect.com', 'wss://*.walletconnect.org', 'wss://www.walletlink.org', 'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com', 'https://api.pinata.cloud', 'https://*.publicnode.com', 'https://*.drpc.org', 'https://public.chainalysis.com', ...EXTRA_CONNECT_SRC]],
   ['worker-src',      ["'self'", 'blob:']],
   ['manifest-src',    ["'self'"]],
 ];
@@ -559,122 +559,6 @@ app.post('/api/unit/operations', async (req, res) => {
   }
 });
 
-/* -- DFlow proxy (Kalshi predictions via Solana) ------------------------ */
-// Metadata API base: market discovery, events, series, outcome mints.
-// Trade API base (quote-api.dflow.net) is wired in Phase 2 — orders use a
-// separate subdomain with its own /order endpoint.
-const DFLOW_API_BASE     = (process.env.DFLOW_API_BASE || 'https://prediction-markets-api.dflow.net/api/v1').replace(/\/+$/, '');
-const DFLOW_API_KEY      = process.env.DFLOW_API_KEY || '';
-const DFLOW_BUILDER_CODE = process.env.DFLOW_BUILDER_CODE || '';
-
-// Allow any subpath whose first segment is in this set. Lets us hit
-// /markets, /markets/batch, /market/by-mint/{mint}, /events/{id}, etc.
-// without needing an entry per dynamic path.
-const DFLOW_ALLOWED_PREFIXES = new Set([
-  'markets',
-  'market',
-  'events',
-  'event',
-  'series',
-  'outcome_mints',
-  'filter_outcome_mints',
-  'tags_by_categories',
-  'filters_by_sports',
-]);
-
-function buildDflowHeaders() {
-  const h = { Accept: 'application/json', 'Content-Type': 'application/json' };
-  if (DFLOW_API_KEY) h['x-api-key'] = DFLOW_API_KEY;
-  return h;
-}
-
-async function proxyDflow(req, res) {
-  try {
-    const subPath = req.path.replace(/^\/api\/dflow\//, '').replace(/\?.*$/, '');
-    const firstSegment = subPath.split('/')[0];
-    if (!DFLOW_ALLOWED_PREFIXES.has(firstSegment))
-      return res.status(404).json({ error: 'DFlow endpoint not allowed: ' + subPath });
-    if (!DFLOW_API_KEY)
-      return res.status(503).json({ error: 'DFlow not configured - set DFLOW_API_KEY' });
-
-    const url = DFLOW_API_BASE + '/' + subPath + buildForwardedQuery(req);
-    let bodyStr = '';
-    if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
-      bodyStr = JSON.stringify(req.body);
-    }
-    const fetchOpts = { method: req.method, headers: buildDflowHeaders() };
-    if (bodyStr) fetchOpts.body = bodyStr;
-
-    // Cache markets listings for 10s — they don't change tick-by-tick
-    const cacheable = req.method === 'GET' && firstSegment === 'markets';
-    if (cacheable) { const c = getCachedJson(url); if (c) return res.status(c.status).json(c.payload); }
-
-    const response = await fetchWithTimeout(url, fetchOpts, 15_000);
-    const result   = await safeJson(response);
-    if (cacheable && response.ok && result.parsed !== null)
-      setCachedJson(url, response.status, result.parsed, 10_000);
-
-    return respondJsonOrError(res, response, result);
-  } catch (e) {
-    if (e.name === 'AbortError') return res.status(504).json({ error: 'DFlow timed out' });
-    logError('dflow', e);
-    return res.status(500).json({ error: e.message || 'Unknown error' });
-  }
-}
-app.get('/api/dflow/*',  proxyDflow);
-app.post('/api/dflow/*', proxyDflow);
-
-/* -- Parlay sweep bonus tracker (local, not proxied) -------------------- */
-// Moved out of /api/dflow/ namespace so it doesn't collide with the DFlow
-// catch-all proxy above. Frontend now calls /api/parlay/bonus/register.
-// In-memory log of users who opted into Sweep Bonus on a parlay. When
-// every leg settles YES, you owe the bonus payout from your treasury.
-// MVP storage: in-memory + size cap. Swap to a DB row when ready.
-const parlayBonusLog = [];
-
-app.post('/api/parlay/bonus/register', (req, res) => {
-  try {
-    const { wallet, stake, legs, bonusBps } = req.body || {};
-    if (!wallet || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(wallet)))
-      return res.status(400).json({ error: 'Invalid wallet' });
-    if (!Array.isArray(legs) || legs.length < 2 || legs.length > 10)
-      return res.status(400).json({ error: 'Need 2-10 legs' });
-    const numStake = Number(stake);
-    if (!Number.isFinite(numStake) || numStake < 5 || numStake > 5000)
-      return res.status(400).json({ error: 'Invalid stake ($5-$5000)' });
-
-    const entry = {
-      id: crypto.randomBytes(8).toString('hex'),
-      wallet: String(wallet),
-      stake: numStake,
-      legs: legs.slice(0, 10).map(l => ({
-        marketId: String(l.marketId || '').slice(0, 200),
-        side:     l.side === 'YES' ? 'YES' : 'NO',
-        price:    Number(l.price),
-      })),
-      bonusBps:   Math.min(Math.max(Number(bonusBps) || 1000, 0), 5000),
-      created_at: Date.now(),
-      status:     'pending',
-    };
-    parlayBonusLog.push(entry);
-    if (parlayBonusLog.length > 10_000) parlayBonusLog.splice(0, parlayBonusLog.length - 10_000);
-
-    res.json({ ok: true, id: entry.id });
-  } catch (err) {
-    logError('parlay-bonus-register', err);
-    res.status(500).json({ error: err.message || 'Unknown error' });
-  }
-});
-
-// Admin-only: list pending sweep bonuses for payout reconciliation.
-// Set ADMIN_KEY env var, then: curl -H "x-admin-key: $ADMIN_KEY" /api/admin/parlay/bonuses
-app.get('/api/admin/parlay/bonuses', (req, res) => {
-  const adminKey = req.headers['x-admin-key'] || '';
-  if (!process.env.ADMIN_KEY || adminKey !== process.env.ADMIN_KEY)
-    return res.status(403).json({ error: 'Forbidden' });
-  res.json({ entries: parlayBonusLog, count: parlayBonusLog.length });
-});
-
 /* -- Bridge / Operator -------------------------------------------------- */
 const bridgeTracking      = new Map();
 const gasSponsorCooldown  = new Map();
@@ -943,8 +827,6 @@ app.get('/api/health', (req, res) => {
       bridgeOperator: Boolean(OPERATOR_PRIVATE_KEY),
       lifiApiKey:     Boolean(LIFI_API_KEY),
       unit:           true,
-      dflow:          Boolean(DFLOW_API_KEY),
-      dflowBuilder:   Boolean(DFLOW_BUILDER_CODE),
       adminKey:       Boolean(process.env.ADMIN_KEY),
     },
     bridge: OPERATOR_PRIVATE_KEY ? {
