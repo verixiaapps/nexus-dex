@@ -195,6 +195,8 @@ async function getJupiterQuote({ inputMint, outputMint, amountAtomic, slippageBp
 // =====================================================================
 
 const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+// Token-2022 program (xStocks live here, they use the Transfer Hook extension).
+const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 
 // Build an SPL Token Transfer instruction without pulling in @solana/spl-token.
 // Layout: [opcode=3, amount as u64 little-endian].
@@ -293,6 +295,34 @@ function deriveUsdcAta(ownerPubkeyB58) {
     ATA_PROGRAM_ID,
   );
   return ata;
+}
+
+// Fetch a wallet's holdings for any SPL or Token-2022 mint. Returns the
+// human-readable balance (e.g. 0.00247) and the atomic amount (BigInt).
+// Used to display "You own X" on the trade modal and power Sell quick-picks.
+async function fetchTokenBalance({ ownerPubkey, mint, isToken2022, decimals }) {
+  const programId = (isToken2022 ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID).toBase58();
+  const res = await fetchWithTimeout('/api/solana-rpc', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'getTokenAccountsByOwner',
+      params: [
+        ownerPubkey,
+        { mint, programId },
+        { encoding: 'jsonParsed', commitment: 'confirmed' },
+      ],
+    }),
+  }, 8_000);
+  const json = await res.json();
+  const accs = json?.result?.value || [];
+  // Aggregate across accounts (usually one ATA, but be safe).
+  let atomic = 0n;
+  for (const a of accs) {
+    const raw = a?.account?.data?.parsed?.info?.tokenAmount?.amount;
+    if (raw) atomic += BigInt(raw);
+  }
+  const ui = Number(atomic) / 10 ** decimals;
+  return { atomic, ui };
 }
 
 // Assemble the final versioned transaction: fee instruction bundled with
@@ -491,6 +521,10 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
   const [quoting, setQuoting] = useState(false);
   const [submitState, setSubmitState] = useState({ kind: 'idle', message: '' });
   const [error, setError]     = useState('');
+  // User's current holdings of this stock + their USDC balance, used to
+  // display "You own X" on both sides and power Sell quick-picks.
+  const [stockBal, setStockBal] = useState({ atomic: 0n, ui: 0, loaded: false });
+  const [usdcBal,  setUsdcBal]  = useState({ atomic: 0n, ui: 0, loaded: false });
   const quoteSeq = useRef(0);
 
   useBodyLock(open);
@@ -499,8 +533,30 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
     if (!open) {
       setAmount(''); setQuote(null); setError(''); setSubmitState({ kind: 'idle', message: '' });
       setSide('BUY');
+      setStockBal({ atomic: 0n, ui: 0, loaded: false });
+      setUsdcBal({ atomic: 0n, ui: 0, loaded: false });
     }
   }, [open]);
+
+  // Fetch both balances on open / wallet change. xStocks are Token-2022;
+  // USDC is regular SPL. We use Promise.allSettled so one failure doesn't
+  // hide the other balance.
+  useEffect(() => {
+    if (!open || !stock || !walletPubkey) return;
+    let cancelled = false;
+    (async () => {
+      const [s, u] = await Promise.allSettled([
+        fetchTokenBalance({ ownerPubkey: walletPubkey, mint: stock.mint, isToken2022: true,  decimals: stock.decimals }),
+        fetchTokenBalance({ ownerPubkey: walletPubkey, mint: USDC_MINT,  isToken2022: false, decimals: USDC_DECIMALS }),
+      ]);
+      if (cancelled) return;
+      if (s.status === 'fulfilled') setStockBal({ ...s.value, loaded: true });
+      else                          setStockBal({ atomic: 0n, ui: 0, loaded: true });
+      if (u.status === 'fulfilled') setUsdcBal({ ...u.value, loaded: true });
+      else                          setUsdcBal({ atomic: 0n, ui: 0, loaded: true });
+    })();
+    return () => { cancelled = true; };
+  }, [open, stock, walletPubkey, submitState.kind]);  // refetch after swap completes
 
   // Debounced quote fetch
   useEffect(() => {
@@ -550,7 +606,18 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
     : platformFeeAtomic / 10 ** USDC_DECIMALS; // both sides take fee in USDC
   const priceImpactPct = quote?.priceImpactPct ? Number(quote.priceImpactPct) * 100 : 0;
 
-  const validStake = isBuy ? (usd >= MIN_USDC && usd <= MAX_USDC) : usd > 0;
+  // Validation: BUY needs $1–$50k USDC. SELL needs the user to own at least
+  // the input amount of the stock (compared against atomic balance to avoid
+  // floating-point dust traps). Empty/zero inputs are invalid on both sides.
+  const inputAtomic = (() => {
+    if (!stock || !(usd > 0)) return 0n;
+    const decimals = isBuy ? USDC_DECIMALS : stock.decimals;
+    try { return BigInt(Math.round(usd * 10 ** decimals)); } catch { return 0n; }
+  })();
+  const validStake = isBuy
+    ? (usd >= MIN_USDC && usd <= MAX_USDC)
+    : (inputAtomic > 0n && inputAtomic <= stockBal.atomic);
+  const insufficientStock = !isBuy && stockBal.loaded && inputAtomic > stockBal.atomic;
 
   const handleSubmit = async () => {
     if (!wcon) { onConnectWallet?.(); return; }
@@ -637,7 +704,28 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
     }
   };
 
-  const quickChips = isBuy ? [50, 100, 500, 1000] : [0.1, 1, 5, 10];
+  // Quick picks: BUY uses fixed USD amounts. SELL uses percentages of the
+  // user's actual balance, since users rarely own round numbers (0.00247
+  // GOOGLx, not "1 GOOGLx" worth $400). MAX uses the full atomic amount
+  // to avoid floating-point dust leaving behind unsellable fractions.
+  const sellPct = (pct) => {
+    if (!stockBal.loaded || stockBal.atomic <= 0n) return '';
+    if (pct === 100) {
+      // Full balance: emit max precision so we sell every atom.
+      return (Number(stockBal.atomic) / 10 ** stock.decimals).toFixed(stock.decimals);
+    }
+    const part = Number(stockBal.atomic) * (pct / 100) / 10 ** stock.decimals;
+    // Round to 6 dp for readability; user can edit if they want more precision.
+    return part.toFixed(6).replace(/\.?0+$/, '');
+  };
+  const buyChips  = [{ label: '$50', val: '50' }, { label: '$100', val: '100' }, { label: '$500', val: '500' }, { label: '$1000', val: '1000' }];
+  const sellChips = [
+    { label: '25%',  val: sellPct(25)  },
+    { label: '50%',  val: sellPct(50)  },
+    { label: '75%',  val: sellPct(75)  },
+    { label: 'MAX',  val: sellPct(100) },
+  ];
+  const chips = isBuy ? buyChips : sellChips;
 
   return (
     <>
@@ -668,6 +756,27 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
             <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 12, background: 'rgba(0,0,0,.30)', border: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>LIVE PRICE</span>
               <span style={{ fontSize: 16, color: C.inkStr, fontWeight: 800, fontVariantNumeric: 'tabular-nums', ...T.mono }}>{fmtUsd(price)}</span>
+            </div>
+          )}
+          {/* Balance row — visible whenever wallet is connected so users
+              know what they own before picking a side. The displayed value
+              is in tokens for the stock + USD equivalent for clarity. */}
+          {wcon && (
+            <div style={{ marginTop: 8, padding: '9px 12px', borderRadius: 12, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.borderHi}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: 10, color: C.hl, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>
+                YOU OWN
+              </span>
+              <span style={{ fontSize: 12.5, color: C.inkStr, fontWeight: 700, fontVariantNumeric: 'tabular-nums', textAlign: 'right', ...T.mono }}>
+                {!stockBal.loaded
+                  ? '...'
+                  : stockBal.ui > 0
+                    ? <>{fmtAmt(stockBal.ui, 6)} {stock.symbol} <span style={{ color: C.muted, fontWeight: 600 }}>· {fmtUsd(stockBal.ui * price, 2)}</span></>
+                    : <span style={{ color: C.muted }}>0 {stock.symbol}</span>}
+                {' '}
+                <span style={{ color: C.muted2, fontWeight: 600 }}>
+                  · {usdcBal.loaded ? fmtUsd(usdcBal.ui, 2) : '...'} USDC
+                </span>
+              </span>
             </div>
           )}
         </div>
@@ -705,9 +814,12 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
               <span style={{ color: C.ink, fontSize: 12, fontWeight: 700, ...T.mono }}>{isBuy ? 'USDC' : stock.symbol}</span>
             </div>
             <div style={{ display: 'flex', gap: 6 }}>
-              {quickChips.map(c => (
-                <button key={c} onClick={() => { setAmount(String(c)); setError(''); }} disabled={isBusy} style={{ flex: 1, padding: 8, borderRadius: 10, border: `1px solid ${C.border}`, background: 'rgba(255,255,255,.03)', color: C.muted, fontWeight: 700, fontSize: 11, cursor: 'pointer', opacity: isBusy ? 0.4 : 1, ...T.mono }}>{isBuy ? '$' + c : c}</button>
-              ))}
+              {chips.map(c => {
+                const disabled = isBusy || !c.val;
+                return (
+                  <button key={c.label} onClick={() => { if (c.val) { setAmount(c.val); setError(''); } }} disabled={disabled} style={{ flex: 1, padding: 8, borderRadius: 10, border: `1px solid ${C.border}`, background: 'rgba(255,255,255,.03)', color: c.val ? C.muted : C.muted2, fontWeight: 700, fontSize: 11, cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.4 : 1, ...T.mono }}>{c.label}</button>
+                );
+              })}
             </div>
           </div>
 
@@ -773,6 +885,7 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
             }}>
               {isBusy ? 'Processing...' :
                isSuccess ? 'Swap placed' :
+               insufficientStock ? `Insufficient ${stock.symbol}` :
                !validStake ? `Enter ${isBuy ? 'USDC' : stock.symbol} amount` :
                !quote ? (quoting ? 'Getting quote...' : 'No quote') :
                `${side === 'BUY' ? 'Buy' : 'Sell'} ${stock.symbol} · ${fmtUsd(usd, 2)}`}
@@ -930,4 +1043,3 @@ export default function Stocks({ onConnectWallet }) {
     </>
   );
 }
- 
