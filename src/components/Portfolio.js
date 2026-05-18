@@ -207,6 +207,66 @@ async function fetchTokenPriceUsd(mint, decimals = 6, force = false) {
 }
 
 // =====================================================================
+// HYPERLIQUID PERPS
+// Perps live on a separate L1 (HyperCore). The user's HL address is
+// derived from a Solana signature on the Perps tab and cached locally.
+// We READ ONLY here — no signing on this page. If the user has never
+// visited Perps, no HL address exists and we skip the section.
+// =====================================================================
+function getHlAddress(solPubkey) {
+  if (!solPubkey) return null;
+  try { return localStorage.getItem('nexus_hl_addr_' + solPubkey) || null; }
+  catch { return null; }
+}
+async function fetchHlState(hlAddress) {
+  if (!hlAddress) return null;
+  try {
+    const res = await fetch('/api/hyperliquid', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type: 'clearinghouseState', user: hlAddress }),
+    });
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
+}
+function parseHlState(state) {
+  if (!state) return null;
+  const balance      = parseFloat(state?.marginSummary?.accountValue || 0);
+  const withdrawable = parseFloat(state?.withdrawable || 0);
+  const marginUsed   = parseFloat(state?.crossMarginSummary?.totalMarginUsed || 0);
+  const positions = (state.assetPositions || [])
+    .filter(p => parseFloat(p.position?.szi || 0) !== 0)
+    .map(p => {
+      const pos = p.position;
+      const szi = parseFloat(pos.szi || 0);
+      return {
+        coin:       pos.coin,
+        isLong:     szi > 0,
+        size:       Math.abs(szi),
+        entryPx:    parseFloat(pos.entryPx       || 0),
+        unrealPnl:  parseFloat(pos.unrealizedPnl || 0),
+        leverage:   pos.leverage?.value || 1,
+        marginUsed: parseFloat(pos.marginUsed    || 0),
+        posValue:   parseFloat(pos.positionValue || 0),
+      };
+    });
+  return { balance, withdrawable, marginUsed, positions };
+}
+// Brand colors for the top perp tickers — matches PerpsTrade.js. Falls
+// back to a violet/teal gradient for anything not in the list so new
+// listings still render without code changes.
+function coinAccent(symbol) {
+  const map = {
+    BTC:['#f7931a','#ffbf5c'], ETH:['#627eea','#8fa8ff'], SOL:['#14f195','#9945ff'],
+    HYPE:['#97fce4','#5ce9c8'], DOGE:['#c2a633','#e8c84a'], PEPE:['#3dd598','#5de882'],
+    XRP:['#7989ad','#bcc6e0'], BNB:['#f0b90b','#f5d060'], SUI:['#4da2ff','#80c4ff'],
+    LINK:['#2a5ada','#6a95ff'], AVAX:['#e84142','#ff7a7b'], ARB:['#12aaff','#60d0ff'],
+  };
+  return map[symbol] || ['#a87fff','#97fce4'];
+}
+
+// =====================================================================
 // SUB-COMPONENTS
 // =====================================================================
 function TokenBadge({ mint, fallbackSym, size = 36 }) {
@@ -280,6 +340,52 @@ function TokenRow({ token, onClick }) {
   );
 }
 
+// Compact PERPS row — coin badge, side+leverage chip, size/entry, PnL$ + ROE%.
+// Read-only on this page (no close button); user manages positions on Perps tab.
+function PerpRow({ pos }) {
+  const [a, b]   = coinAccent(pos.coin);
+  const profit   = pos.unrealPnl >= 0;
+  const pnlPct   = pos.marginUsed > 0 ? (pos.unrealPnl / pos.marginUsed) * 100 : 0;
+  return (
+    <div style={{
+      padding: '12px 16px', display: 'grid', gridTemplateColumns: '36px 1fr auto',
+      gap: 12, alignItems: 'center', borderBottom: `1px solid ${C.hairline}`,
+    }}>
+      <div style={{
+        width: 36, height: 36, borderRadius: '50%',
+        background: `linear-gradient(135deg,${a},${b})`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: 'rgba(0,0,0,.78)', fontWeight: 900, fontSize: 11,
+        flexShrink: 0, letterSpacing: '-.02em',
+        boxShadow: `0 4px 12px ${a}30`, ...T.display,
+      }}>{(pos.coin || '?').slice(0, 3)}</div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span style={{ color: C.inkStr, fontWeight: 800, fontSize: 14, letterSpacing: '-.01em', ...T.display }}>{pos.coin}</span>
+          <span style={{
+            color: pos.isLong ? C.up : C.down,
+            fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
+            background: pos.isLong ? 'rgba(61,213,152,.12)' : 'rgba(255,138,158,.12)',
+            border: `1px solid ${pos.isLong ? 'rgba(61,213,152,.30)' : 'rgba(255,138,158,.30)'}`,
+            letterSpacing: '.04em', ...T.mono,
+          }}>{pos.isLong ? 'LONG' : 'SHORT'} {pos.leverage}x</span>
+        </div>
+        <div style={{ color: C.muted, fontSize: 11, marginTop: 2, ...T.body }}>
+          {pos.size.toFixed(4)} {pos.coin} · entry {fmt(pos.entryPx, 2)}
+        </div>
+      </div>
+      <div style={{ textAlign: 'right' }}>
+        <div style={{ color: profit ? C.up : C.down, fontWeight: 800, fontSize: 14, fontVariantNumeric: 'tabular-nums', ...T.mono }}>
+          {profit ? '+' : ''}{fmt(pos.unrealPnl, 2)}
+        </div>
+        <div style={{ color: profit ? C.up : C.down, fontSize: 10, fontWeight: 700, marginTop: 2, fontVariantNumeric: 'tabular-nums', ...T.mono }}>
+          {(pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2)}%
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // =====================================================================
 // MAIN
 // =====================================================================
@@ -306,6 +412,10 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
   const [refreshing, setRefreshing]     = useState(false);
   const [error, setError]               = useState('');
   const [copied, setCopied]             = useState(false);
+  // HL Perps state — populated only if user has previously derived their HL
+  // address via the Perps tab (we never sign on this page).
+  const [hlAccountValue, setHlAccountValue] = useState(0);
+  const [hlPositions, setHlPositions]       = useState([]);
 
   const fetchPortfolio = useCallback(async (force = false) => {
     if (!pubkey || !connection) { setLoading(false); return; }
@@ -366,6 +476,24 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
         return b.value - a.value;
       });
       setSolBalances(priced);
+
+      // Fetch HL Perps state in parallel. Only attempts if we have a cached
+      // HL address — otherwise the Perps section just stays hidden.
+      const hlAddr = getHlAddress(pubkey.toString());
+      if (hlAddr) {
+        const state = await fetchHlState(hlAddr);
+        const parsed = parseHlState(state);
+        if (parsed) {
+          setHlAccountValue(parsed.balance);
+          setHlPositions(parsed.positions);
+        } else {
+          setHlAccountValue(0);
+          setHlPositions([]);
+        }
+      } else {
+        setHlAccountValue(0);
+        setHlPositions([]);
+      }
     } catch (e) {
       setError('Failed to load portfolio');
     } finally {
@@ -390,9 +518,12 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
 
   const solValue    = solBalance * solPriceUsd;
   const tokensTotal = solBalances.reduce((s, h) => s + (h.value || 0), 0);
-  const totalValue  = solValue + tokensTotal;
+  // HL account value already includes both available + position margin + PnL,
+  // so adding it once to the total is correct (no double-counting positions).
+  const totalValue  = solValue + tokensTotal + hlAccountValue;
   const tokenCount  = solBalances.length + (solBalance > 0 ? 1 : 0);
   const stockCount  = solBalances.filter(h => KNOWN_TOKENS[h.mint]?.isStock).length;
+  const perpsCount  = hlPositions.length;
 
   // ===================================================================
   // DISCONNECTED STATE
@@ -495,7 +626,7 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
           {[
             { label: 'SOL',        value: solBalance.toFixed(3),       sub: solValue > 0 ? fmt(solValue) : '—', color: C.sol },
             { label: 'HOLDINGS',   value: String(tokenCount),          sub: tokenCount === 1 ? 'asset' : 'assets', color: C.hl },
-            { label: 'STOCKS',     value: String(stockCount),          sub: stockCount === 1 ? 'xStock' : 'xStocks', color: C.violet },
+            { label: 'PERPS',      value: String(perpsCount),          sub: hlAccountValue > 0 ? fmt(hlAccountValue) : (perpsCount === 1 ? 'position' : 'positions'), color: C.violet },
           ].map(s => (
             <div key={s.label} style={{ padding: '10px 12px', borderRadius: 14, background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, backdropFilter: 'blur(12px)' }}>
               <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>{s.label}</div>
@@ -510,6 +641,38 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
           <div style={{ background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.24)', borderRadius: 12, padding: 12, marginBottom: 14, fontSize: 12, color: C.down, ...T.body }}>
             {error}
           </div>
+        )}
+
+        {/* PERPS SECTION — only shows when user has HL data (positions or
+            account value). Hidden cleanly for users who haven't visited the
+            Perps tab yet (no signature required to render this page). */}
+        {(hlAccountValue > 0 || hlPositions.length > 0) && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px', marginBottom: 8 }}>
+              <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.12em', ...T.mono }}>PERPS</div>
+              <div style={{ fontSize: 9, color: C.muted2, fontWeight: 600, ...T.mono }}>HYPERLIQUID · AUTO 30s</div>
+            </div>
+            <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', marginBottom: 18, backdropFilter: 'blur(12px)' }}>
+              {/* Account summary row */}
+              <div style={{
+                padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                borderBottom: hlPositions.length > 0 ? `1px solid ${C.hairline}` : 'none',
+                background: 'rgba(168,127,255,.03)',
+              }}>
+                <div>
+                  <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>ACCOUNT VALUE</div>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: C.inkStr, fontVariantNumeric: 'tabular-nums', marginTop: 2, ...T.display }}>{fmt(hlAccountValue)}</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>OPEN</div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: C.violet, fontVariantNumeric: 'tabular-nums', marginTop: 2, ...T.mono }}>
+                    {hlPositions.length} {hlPositions.length === 1 ? 'position' : 'positions'}
+                  </div>
+                </div>
+              </div>
+              {hlPositions.map(p => <PerpRow key={p.coin} pos={p}/>)}
+            </div>
+          </>
         )}
 
         {/* HOLDINGS HEADER */}
