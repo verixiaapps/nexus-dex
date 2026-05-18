@@ -8,6 +8,7 @@ import TokenDetail from './components/TokenDetail.js';
 import PerpsLanding from './components/PerpsLanding.jsx';
 import DeFiPredict from './components/DeFiPredict.jsx';
 import PredictionsTonight from './components/PredictionsTonight.jsx';
+import Stocks from './components/Stocks.jsx';
 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
@@ -61,6 +62,7 @@ const PATH_TO_TAB = {
   '/': 'swap', '/swap': 'swap',
   '/predictions': 'predictions',
   '/defipredict': 'defipredict',
+  '/stocks': 'stocks',
   '/perps': 'perps',
   '/portfolio': 'portfolio',
 };
@@ -68,6 +70,7 @@ const TAB_TO_PATH = {
   swap: '/swap',
   predictions: '/predictions',
   defipredict: '/defipredict',
+  stocks: '/stocks',
   perps: '/perps',
   portfolio: '/portfolio',
 };
@@ -387,13 +390,15 @@ function IconSwap()        { return <svg width="18" height="18" viewBox="0 0 24 
 function IconPredictions() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>; }
 function IconDeFiPredict() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><line x1="3" y1="20" x2="21" y2="20"/><line x1="6" y1="20" x2="6" y2="13"/><line x1="12" y1="20" x2="12" y2="7"/><line x1="18" y1="20" x2="18" y2="15"/></svg>; }
 function IconPerps()       { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg>; }
+function IconStocks()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-5"/></svg>; }
 function IconWallet()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
 
-const NAV_ICONS = { swap: IconSwap, predictions: IconPredictions, defipredict: IconDeFiPredict, perps: IconPerps, portfolio: IconWallet };
+const NAV_ICONS = { swap: IconSwap, predictions: IconPredictions, defipredict: IconDeFiPredict, stocks: IconStocks, perps: IconPerps, portfolio: IconWallet };
 const NAV_TABS = [
   { id: 'swap',        label: 'Swap' },
   { id: 'predictions', label: 'Predictions' },
   { id: 'defipredict', label: 'DeFi Predict' },
+  { id: 'stocks',      label: 'Stocks' },
   { id: 'perps',       label: 'Perps' },
   { id: 'portfolio',   label: 'Wallet' },
 ];
@@ -453,8 +458,9 @@ function AppInner() {
         {tab === 'swap' && <SwapWidget {...sharedProps} />}
         {tab === 'predictions' && <PredictionsTonight onConnectWallet={openWallet} />}
         {tab === 'defipredict' && <DeFiPredict onConnectWallet={openWallet} />}
+        {tab === 'stocks' && <Stocks onConnectWallet={openWallet} />}
         {tab === 'perps' && <PerpsLanding onConnectWallet={openWallet} />}
-        {tab === 'portfolio' && <Portfolio onSelectCoin={goToToken} />}
+        {tab === 'portfolio' && <Portfolio onSelectCoin={goToToken} onConnectWallet={openWallet} />}
         {tab === 'token' && <TokenDetail {...sharedProps} coin={selectedToken} onBack={goBack} />}
       </main>
       <nav className="mobile-nav" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100, background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(0,229,255,.1)', display: 'flex', alignItems: 'stretch', paddingBottom: 'env(safe-area-inset-bottom)' }}>
