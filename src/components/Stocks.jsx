@@ -581,7 +581,13 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
         const outputMint = isBuy ? stock.mint : USDC_MINT;
         let atomic;
         if (isBuy) {
-          atomic = Math.round(n * 10 ** USDC_DECIMALS);
+          // Pre-fee: the user types the TOTAL amount they want to spend. We
+          // skim 2.55% off the top for the fee (separate SPL Transfer) and
+          // ask Jupiter to quote only the remaining 97.45%. Total wallet
+          // outflow = typed amount exactly.
+          const grossUsdcAtomic = Math.round(n * 10 ** USDC_DECIMALS);
+          const feeUsdcAtomic   = Math.floor(grossUsdcAtomic * PLATFORM_FEE_BPS / 10000);
+          atomic = grossUsdcAtomic - feeUsdcAtomic;
         } else {
           // SELL: convert the USDC amount the user typed into stock atomic
           // via live price. If price isn't loaded yet, skip — the price prop
@@ -614,12 +620,25 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
   const outAtomic   = quote ? Number(quote.outAmount) : 0;
   const isBuy       = side === 'BUY';
   const outDecimals = isBuy ? stock.decimals : USDC_DECIMALS;
-  const outAmount   = outAtomic / 10 ** outDecimals;
+  const grossOut    = outAtomic / 10 ** outDecimals;
 
-  const platformFeeAtomic = quote?.platformFee?.amount ? Number(quote.platformFee.amount) : 0;
-  const platformFeeUsd    = isBuy
-    ? platformFeeAtomic / 10 ** USDC_DECIMALS
-    : platformFeeAtomic / 10 ** USDC_DECIMALS; // both sides take fee in USDC
+  // Platform fee — we compute it ourselves now since Jupiter's quote no longer
+  // returns platformFee (we strip platformFeeBps because Token-2022 isn't
+  // supported on V1 swap; fee is handled via custom SPL Transfer instruction).
+  //
+  // BUY:  fee = 2.55% of the user's typed USDC. Total wallet outflow = typed
+  //       (Jupiter swap input is pre-fee'd to typed × (1 - 0.0255), see the
+  //       quote useEffect above).
+  // SELL: fee = 2.55% of gross USDC output. User receives gross × (1 - 0.0255)
+  //       net of fee, which we display as YOU RECEIVE.
+  const feeBpsRatio    = PLATFORM_FEE_BPS / 10000;
+  const platformFeeUsd = isBuy
+    ? usd * feeBpsRatio
+    : grossOut * feeBpsRatio;
+  // Net display amount for SELL is gross − fee. For BUY the display is GOOGLx
+  // count (no fee subtraction on that side; fee was already taken in USDC).
+  const netOutUsdc  = !isBuy ? Math.max(0, grossOut - platformFeeUsd) : 0;
+  const outAmount   = isBuy ? grossOut : netOutUsdc;
   const priceImpactPct = quote?.priceImpactPct ? Number(quote.priceImpactPct) * 100 : 0;
 
   // Validation: amount is in USDC on both sides. BUY needs $1–$50k of USDC
@@ -651,14 +670,16 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
 
     try {
       // ── Calculate the fee amount ────────────────────────────────────
-      // BUY  (USDC → stock): fee = 2.55% of input USDC, taken BEFORE swap.
-      // SELL (stock → USDC): fee = 2.55% of MIN output USDC (otherAmountThreshold),
-      //                      taken AFTER swap. Using min output guarantees the
-      //                      user has enough USDC for the fee transfer even at
-      //                      worst-case slippage — tx never fails on fee step.
+      // BUY:  Jupiter's quote.inAmount is already pre-fee'd (we send 97.45%
+      //       to Jupiter). The fee instruction transfers the remaining 2.55%
+      //       so total wallet outflow = user's typed amount exactly. We
+      //       compute the fee from the gross typed amount, not quote.inAmount.
+      // SELL: fee = 2.55% of min output (otherAmountThreshold) — using min
+      //       guarantees the user has enough USDC for the fee transfer even
+      //       at worst-case slippage.
       const isBuyTx = side === 'BUY';
       const baseAtomic = isBuyTx
-        ? BigInt(quote.inAmount || '0')
+        ? BigInt(Math.round(usd * 10 ** USDC_DECIMALS))
         : BigInt(quote.otherAmountThreshold || quote.outAmount || '0');
       const feeAtomic = (baseAtomic * BigInt(PLATFORM_FEE_BPS)) / 10000n;
       if (feeAtomic <= 0n) throw new Error('Fee calculation failed');
@@ -864,7 +885,7 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
               {quote && (
                 <div style={{ borderTop: `1px solid ${C.hairline}`, paddingTop: 8 }}>
                   {[
-                    ['Platform fee (2.55%)', '-' + fmtUsd(platformFeeUsd || 0, 2)],
+                    ['Platform fee (2.55%)', '-' + fmtUsd(platformFeeUsd || 0, 4)],
                     ['Price impact', (priceImpactPct >= 0 ? '' : '') + priceImpactPct.toFixed(2) + '%'],
                     ['Route', (quote.routePlan?.length || 1) + ' hop' + ((quote.routePlan?.length || 1) === 1 ? '' : 's')],
                   ].map(([l, v]) => (
