@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { PublicKey, VersionedTransaction, Transaction } from '@solana/web3.js';
+import { PublicKey, VersionedTransaction, Transaction, TransactionInstruction, TransactionMessage, AddressLookupTableAccount } from '@solana/web3.js';
 import { useNexusWallet } from '../WalletContext.js';
 
 // =====================================================================
@@ -20,6 +20,9 @@ const DFLOW_BUILDER_FEE_BPS = 150; // 1.5% — stacks on Kalshi's per-contract f
 const DFLOW_API_BASE        = process.env.REACT_APP_DFLOW_API_BASE || '/api/dflow';
 
 const TREASURY_ADDRESS      = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
+// Treasury's USDC associated token account — bundled-fee destination.
+// Shared env var across Stocks + ParlayBuilder + PredictionsTonight.
+const TREASURY_USDC_ATA     = process.env.REACT_APP_TREASURY_USDC_ATA || '';
 const USDC_MINT_SOL         = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const USDC_DECIMALS         = 6;
 const LAMPORTS_PER_SOL      = 1_000_000_000;
@@ -212,16 +215,16 @@ async function buildOrderTx({ market, side, usdcAmount, walletPubkey }) {
   if (!(usdcAmount >= MIN_ORDER_USDC)) throw new Error(`Minimum order is $${MIN_ORDER_USDC}`);
   if (usdcAmount > MAX_ORDER_USDC) throw new Error(`Maximum order is $${MAX_ORDER_USDC.toLocaleString()}`);
   if (!ENABLE_TRADING) {
-    throw new Error('Live trading is disabled. Set REACT_APP_KALSHI_LIVE_TRADING=1 and REACT_APP_DFLOW_BUILDER_CODE in env.');
+    throw new Error('Live trading is disabled. Set REACT_APP_KALSHI_LIVE_TRADING=1 in env.');
   }
+  // We do NOT pass builderFeeBps/feeRecipient — fee is injected as an SPL
+  // Transfer instruction prepended to DFlow's order in the same atomic tx
+  // (see decompileVersionedTx + assembleOrderTx).
   return await dflowRequest('/prediction/order/build', {
-    marketId:      market.id,
-    side:          side === 'YES' ? 'YES' : 'NO',
-    usdcAmount:    Number(usdcAmount.toFixed(2)),
-    userWallet:    walletPubkey,
-    builderCode:   DFLOW_BUILDER_CODE,
-    builderFeeBps: DFLOW_BUILDER_FEE_BPS,
-    feeRecipient:  TREASURY_ADDRESS,
+    marketId:   market.id,
+    side:       side === 'YES' ? 'YES' : 'NO',
+    usdcAmount: Number(usdcAmount.toFixed(2)),
+    userWallet: walletPubkey,
   });
 }
 
@@ -229,13 +232,13 @@ async function buildSellTx({ position, walletPubkey, contracts }) {
   if (!position?.id) throw new Error('Position unavailable');
   if (!walletPubkey) throw new Error('Wallet not connected');
   if (!ENABLE_TRADING) throw new Error('Live trading is disabled');
+  // Reserved for future direct-sell flow; current sell UX routes through
+  // buildOrderTx with the opposite side via handleSell. Fee still bundled
+  // atomically the same way when this path is wired up.
   return await dflowRequest('/prediction/position/sell', {
-    positionId:    position.id,
-    contracts:     Number(contracts || position.contracts),
-    userWallet:    walletPubkey,
-    builderCode:   DFLOW_BUILDER_CODE,
-    builderFeeBps: DFLOW_BUILDER_FEE_BPS,
-    feeRecipient:  TREASURY_ADDRESS,
+    positionId: position.id,
+    contracts:  Number(contracts || position.contracts),
+    userWallet: walletPubkey,
   });
 }
 
@@ -243,6 +246,163 @@ async function submitSignedTx(serializedTx) {
   return await dflowRequest('/prediction/order/submit', {
     signedTxBase64: serializedTx,
   }, { timeoutMs: 20_000 });
+}
+
+// =====================================================================
+// ATOMIC FEE PIPELINE — same pattern as Stocks.jsx, ParlayBuilder.jsx,
+// PredictionsTonight.jsx. DFlow returns a serialized VersionedTransaction;
+// we deserialize, decompile to instructions + ALTs, prepend our SPL
+// Transfer (USDC → treasury), recompile, pre-sim, then user signs once.
+// Atomic: if order fails, fee reverts. Same sim contract as Stocks for
+// consistent Phantom UX across all four products.
+// =====================================================================
+const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+const ATA_PROGRAM_ID   = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
+
+function deriveUsdcAta(ownerB58) {
+  const owner        = new PublicKey(ownerB58);
+  const mint         = new PublicKey(USDC_MINT_SOL);
+  const tokenProgram = new PublicKey(TOKEN_PROGRAM_ID);
+  const ataProgram   = new PublicKey(ATA_PROGRAM_ID);
+  const [ata] = PublicKey.findProgramAddressSync(
+    [owner.toBuffer(), tokenProgram.toBuffer(), mint.toBuffer()],
+    ataProgram
+  );
+  return ata.toBase58();
+}
+
+function createSplTransferInstruction(sourceB58, destinationB58, ownerB58, amountAtomic) {
+  // SPL Token Transfer: discriminator (3) + u64 amount little-endian
+  const data = new Uint8Array(9);
+  data[0] = 3;
+  let amt = BigInt(amountAtomic);
+  for (let i = 0; i < 8; i++) {
+    data[1 + i] = Number(amt & 0xffn);
+    amt >>= 8n;
+  }
+  return new TransactionInstruction({
+    programId: new PublicKey(TOKEN_PROGRAM_ID),
+    keys: [
+      { pubkey: new PublicKey(sourceB58),      isSigner: false, isWritable: true },
+      { pubkey: new PublicKey(destinationB58), isSigner: false, isWritable: true },
+      { pubkey: new PublicKey(ownerB58),       isSigner: true,  isWritable: false },
+    ],
+    data,
+  });
+}
+
+async function fetchLookupTableAccounts(altAddresses) {
+  if (!altAddresses || altAddresses.length === 0) return [];
+  const accounts = [];
+  for (const addr of altAddresses) {
+    try {
+      const res = await fetchWithTimeout('/api/solana-rpc', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          jsonrpc: '2.0', id: 1, method: 'getAccountInfo',
+          params: [addr, { encoding: 'base64' }],
+        }),
+      }, 8_000);
+      const data = await res.json();
+      const raw = data?.result?.value?.data?.[0];
+      if (!raw) continue;
+      const buf = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
+      const state = AddressLookupTableAccount.deserialize(buf);
+      accounts.push(new AddressLookupTableAccount({ key: new PublicKey(addr), state }));
+    } catch (e) {
+      console.warn('[ALT fetch fail]', addr, e?.message);
+    }
+  }
+  return accounts;
+}
+
+async function decompileVersionedTx(versionedTx) {
+  const message = versionedTx.message;
+  const altLookups = message.addressTableLookups || [];
+  const altAddresses = altLookups.map(l =>
+    typeof l.accountKey === 'string' ? l.accountKey : l.accountKey.toBase58()
+  );
+  const altAccounts = await fetchLookupTableAccounts(altAddresses);
+  const accountKeys = message.getAccountKeys({ addressLookupTableAccounts: altAccounts });
+  const instructions = message.compiledInstructions.map(ci => {
+    const programId = accountKeys.get(ci.programIdIndex);
+    const keys = Array.from(ci.accountKeyIndexes).map(idx => ({
+      pubkey:     accountKeys.get(idx),
+      isSigner:   message.isAccountSigner(idx),
+      isWritable: message.isAccountWritable(idx),
+    }));
+    return new TransactionInstruction({ programId, keys, data: Buffer.from(ci.data) });
+  });
+  return {
+    instructions,
+    payerKey:   accountKeys.get(0),
+    altAccounts,
+    blockhash:  message.recentBlockhash,
+  };
+}
+
+function assembleOrderTx({ instructions, payerKey, altAccounts, blockhash, feeInstruction }) {
+  const allInstructions = [feeInstruction, ...instructions];
+  const msg = new TransactionMessage({
+    payerKey,
+    recentBlockhash: blockhash,
+    instructions: allInstructions,
+  }).compileToV0Message(altAccounts);
+  return new VersionedTransaction(msg);
+}
+
+async function simulateBeforeSign(serializedTxBase64) {
+  try {
+    const res = await fetchWithTimeout('/api/solana-rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'simulateTransaction',
+        params: [serializedTxBase64, {
+          encoding:               'base64',
+          commitment:             'processed',
+          replaceRecentBlockhash: true,
+          sigVerify:              false,
+        }],
+      }),
+    }, 12_000);
+    const json = await res.json();
+    if (json?.error) return { ok: false, message: json.error.message || 'Simulation RPC error' };
+    const value = json?.result?.value;
+    if (!value)     return { ok: true,  warning: 'No sim result' };
+    if (value.err)  return { ok: false, message: parseSimError(value.err, value.logs) };
+    return { ok: true };
+  } catch (e) {
+    console.warn('[sim]', e?.message || e);
+    return { ok: true, warning: 'Pre-sim unavailable' };
+  }
+}
+
+const DFLOW_ERROR_CODES = {
+  // 6000-6099 reserved for DFlow CLP program errors (populate as observed)
+  // 6100-6199 reserved for Kalshi outcome-token program errors
+};
+
+function parseSimError(err, logs) {
+  if (!err) return 'Transaction would fail';
+  if (typeof err === 'string') return err;
+  if (err?.InstructionError) {
+    const [idx, detail] = err.InstructionError;
+    if (detail && typeof detail === 'object' && 'Custom' in detail) {
+      const code  = Number(detail.Custom);
+      const known = DFLOW_ERROR_CODES[code];
+      if (known) return known;
+      if (code === 1)  return 'Not enough USDC for stake + fee';
+      if (code === 3)  return 'Token account not found — fund USDC first';
+      return `Program error 0x${code.toString(16)} at instruction ${idx}`;
+    }
+    if (typeof detail === 'string') return `${detail} at instruction ${idx}`;
+  }
+  const arr = Array.isArray(logs) ? logs : [];
+  const errLog = arr.find(l => /error|failed|insufficient|slippage|liquidity/i.test(String(l)));
+  if (errLog) return String(errLog).slice(0, 140);
+  return 'Order unavailable — try a different stake or market';
 }
 
 function normalizeMarket(raw) {
@@ -731,22 +891,54 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, onConnectW
     if (!isValidSolAddress(walletPubkey)) { setError('Invalid Solana address'); return; }
     if (!usd || tooSmall) { setError(`Minimum order is $${MIN_ORDER_USDC}`); return; }
     if (tooLarge)         { setError(`Maximum order is $${MAX_ORDER_USDC.toLocaleString()}`); return; }
+    if (!TREASURY_USDC_ATA) { setError('Treasury not configured'); return; }
+    if (!signTransaction)   { setError('Wallet cannot sign transactions'); return; }
 
-    setStatus('loading'); setError(''); setStatusMsg('Building order...');
+    setStatus('loading'); setError(''); setStatusMsg('Building order…');
     try {
+      // 1. Get DFlow's order tx (raw, no builder-fee args)
       const built = await buildOrderTx({ market, side, usdcAmount: usd, walletPubkey });
       if (!built?.serializedTx) throw new Error('Order builder returned no transaction');
 
-      setStatusMsg('Sign in your wallet...');
+      // 2. Deserialize DFlow's tx
       const txBytes = Uint8Array.from(atob(built.serializedTx), c => c.charCodeAt(0));
-      let tx;
-      try { tx = VersionedTransaction.deserialize(txBytes); }
-      catch { tx = Transaction.from(txBytes); }
+      let originalTx;
+      try { originalTx = VersionedTransaction.deserialize(txBytes); }
+      catch { throw new Error('Unsupported transaction format from order builder'); }
 
-      if (!signTransaction) throw new Error('Wallet cannot sign transactions');
-      const signed = await signTransaction(tx);
+      // 3. Decompile → raw instructions + ALTs
+      const decompiled = await decompileVersionedTx(originalTx);
 
-      setStatusMsg('Submitting order...');
+      // 4. Build SPL Transfer fee (USDC: user ATA → treasury ATA)
+      const userUsdcAta = deriveUsdcAta(walletPubkey);
+      const feeAtomic = Math.floor(
+        usd * (DFLOW_BUILDER_FEE_BPS / 10_000) * Math.pow(10, USDC_DECIMALS)
+      );
+      const feeIx = createSplTransferInstruction(
+        userUsdcAta, TREASURY_USDC_ATA, walletPubkey, feeAtomic
+      );
+
+      // 5. Recompile with fee prepended
+      const wrappedTx = assembleOrderTx({
+        instructions: decompiled.instructions,
+        payerKey:     decompiled.payerKey,
+        altAccounts:  decompiled.altAccounts,
+        blockhash:    decompiled.blockhash,
+        feeInstruction: feeIx,
+      });
+
+      // 6. Pre-sim — never trigger Phantom if sim fails
+      setStatusMsg('Checking order…');
+      const serializedForSim = btoa(String.fromCharCode(...wrappedTx.serialize()));
+      const sim = await simulateBeforeSign(serializedForSim);
+      if (!sim.ok) throw new Error(sim.message || 'Simulation failed');
+
+      // 7. User signs once
+      setStatusMsg('Sign in your wallet…');
+      const signed = await signTransaction(wrappedTx);
+
+      // 8. Submit
+      setStatusMsg('Submitting order…');
       const serialized = btoa(String.fromCharCode(...signed.serialize()));
       const result = await submitSignedTx(serialized);
       if (!result?.ok) throw new Error(result?.error || 'Order rejected');
