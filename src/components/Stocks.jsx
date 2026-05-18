@@ -134,17 +134,18 @@ async function fetchWithTimeout(url, opts = {}, timeoutMs = 12_000) {
   finally { clearTimeout(id); }
 }
 
-// Pull live USD prices from Jupiter Price API V2
+// Pull live USD prices from Jupiter Price API V3
+// V3 response: { [mint]: { usdPrice, blockId, decimals, priceChange24h } }
 async function fetchStockPrices(mints) {
   if (!mints.length) return {};
   try {
-    const url = `https://api.jup.ag/price/v2?ids=${mints.join(',')}`;
+    const url = `https://api.jup.ag/price/v3?ids=${mints.join(',')}`;
     const res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 8_000);
     if (!res.ok) return {};
     const json = await res.json();
     const out = {};
-    Object.entries(json?.data || {}).forEach(([mint, info]) => {
-      const p = Number(info?.price);
+    Object.entries(json || {}).forEach(([mint, info]) => {
+      const p = Number(info?.usdPrice);
       if (Number.isFinite(p) && p > 0) out[mint] = p;
     });
     return out;
