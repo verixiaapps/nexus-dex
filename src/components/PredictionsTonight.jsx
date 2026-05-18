@@ -212,9 +212,21 @@ async function dflowRequest(path, body, opts = {}) {
 async function fetchKalshiSportsMarkets() {
   if (!ENABLE_TRADING) return getMockSportsMarkets();
   try {
-    const data = await dflowRequest('/prediction/markets?category=sports,politics,events');
-    if (Array.isArray(data?.markets) && data.markets.length > 0) {
-      return data.markets.map(normalizeMarket);
+    // DFlow Metadata API: /api/v1/markets with isInitialized=true to skip
+    // markets that haven't been tokenized yet (no liquidity = no trading).
+    // We filter to sports/politics/events client-side via normalizeMarket's
+    // category field since DFlow doesn't take a category filter at this path.
+    const data = await dflowRequest('/markets?isInitialized=true&status=active&limit=200');
+    const list = Array.isArray(data?.markets) ? data.markets
+               : Array.isArray(data?.data)    ? data.data
+               : Array.isArray(data)          ? data
+               : [];
+    if (list.length > 0) {
+      return list.map(normalizeMarket).filter(m =>
+        ['sports', 'politics', 'events', 'tonight', 'nfl', 'nba', 'nhl', 'mlb', 'ufc', 'soccer', 'tennis']
+          .includes(String(m.category || '').toLowerCase())
+        || ['NFL', 'NBA', 'NHL', 'MLB', 'UFC', 'SOCCER', 'TENNIS'].includes(m.league)
+      );
     }
     return getMockSportsMarkets();
   } catch (e) {
@@ -224,11 +236,11 @@ async function fetchKalshiSportsMarkets() {
 }
 
 async function fetchUserPositions(walletPubkey) {
-  if (!walletPubkey || !ENABLE_TRADING) return [];
-  try {
-    const data = await dflowRequest('/prediction/positions?wallet=' + encodeURIComponent(walletPubkey));
-    return Array.isArray(data?.positions) ? data.positions : [];
-  } catch (e) { console.warn('[dflow positions]', e?.message || e); return []; }
+  // Positions endpoint will be wired in a later phase — DFlow derives them
+  // from on-chain token accounts (getTokenAccountsByOwner) filtered through
+  // /api/v1/filter_outcome_mints, not from a single REST endpoint. Stubbed
+  // to empty so the UI doesn't show stale errors.
+  return [];
 }
 
 async function buildOrderTx({ market, side, usdcAmount, walletPubkey }) {
@@ -413,23 +425,31 @@ function parseSimError(err, logs) {
 }
 
 function normalizeMarket(raw) {
+  // DFlow's /api/v1/markets returns fields like ticker, eventTicker, title,
+  // yesMint, noMint, volume, status, closeTime. We try multiple aliases so
+  // mock data and real data both flow through the same UI.
+  const yesMint = raw.yesMint || raw.yes_mint || raw.yesTokenMint || null;
+  const noMint  = raw.noMint  || raw.no_mint  || raw.noTokenMint  || null;
   return {
-    id:           raw.id || raw.ticker || raw.market_id,
-    league:       (raw.league || raw.sport || raw.category || '').toUpperCase(),
-    category:     raw.category || categorizeMarket(raw),
-    question:     raw.question || raw.title || raw.name || '',
+    // Use eventTicker as the canonical id — that's what DFlow uses across
+    // its API surface to identify a market.
+    id:           raw.id || raw.ticker || raw.eventTicker || raw.market_id || yesMint,
+    yesMint, noMint,
+    league:       String(raw.league || raw.sport || raw.category || raw.eventCategory || '').toUpperCase(),
+    category:     raw.category || raw.eventCategory || categorizeMarket(raw),
+    question:     raw.question || raw.title || raw.name || raw.eventTitle || '',
     description:  raw.description || raw.subtitle || '',
-    subtitle:     raw.subtitle || raw.matchup || '',
-    yesPrice:     Number(raw.yesPrice ?? raw.yes_price ?? raw.lastPriceYes ?? 0.5),
-    noPrice:      Number(raw.noPrice  ?? raw.no_price  ?? raw.lastPriceNo  ?? 0.5),
-    closeTs:      Number(raw.closeTs  ?? raw.close_time ?? raw.expiry ?? Date.now() + 3600_000),
-    gameStartTs:  Number(raw.gameStartTs ?? raw.game_start ?? raw.start_time ?? 0) || null,
+    subtitle:     raw.subtitle || raw.matchup || raw.eventSubtitle || '',
+    yesPrice:     Number(raw.yesPrice ?? raw.yes_price ?? raw.lastPriceYes ?? raw.lastYesPrice ?? raw.markPriceYes ?? 0.5),
+    noPrice:      Number(raw.noPrice  ?? raw.no_price  ?? raw.lastPriceNo  ?? raw.lastNoPrice  ?? raw.markPriceNo  ?? 0.5),
+    closeTs:      Number(raw.closeTs  ?? raw.close_time ?? raw.closeTime ?? raw.expiry ?? raw.expirationTime ?? Date.now() + 3600_000),
+    gameStartTs:  Number(raw.gameStartTs ?? raw.game_start ?? raw.start_time ?? raw.gameStartTime ?? 0) || null,
     isLive:       Boolean(raw.isLive ?? raw.is_live ?? raw.live),
     liveStatus:   raw.liveStatus || raw.live_status || '',
     homeTeam:     raw.homeTeam || raw.home_team || null,
     awayTeam:     raw.awayTeam || raw.away_team || null,
     player:       raw.player || null,
-    volume24h:    Number(raw.volume24h ?? raw.volume_24h ?? raw.vol ?? 0),
+    volume24h:    Number(raw.volume24h ?? raw.volume_24h ?? raw.volume ?? raw.vol ?? 0),
     openInterest: Number(raw.openInterest ?? raw.open_interest ?? 0),
     hot:          Boolean(raw.hot ?? raw.featured),
     primetime:    Boolean(raw.primetime),
