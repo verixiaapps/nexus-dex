@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { VersionedTransaction, Transaction, PublicKey } from '@solana/web3.js';
+import { VersionedTransaction, Transaction, TransactionInstruction, TransactionMessage, AddressLookupTableAccount, PublicKey } from '@solana/web3.js';
 import { useNexusWallet } from '../WalletContext.js';
 
 // =====================================================================
@@ -159,13 +159,15 @@ async function fetchStockPrices(mints) {
 }
 
 // Get Jupiter quote — buy = USDC → stock, sell = stock → USDC. Always ExactIn.
+// No platformFeeBps: we handle the fee as a separate SPL Transfer instruction
+// bundled into the same atomic transaction. Jupiter Swap V1 doesn't support
+// platform fees on Token-2022 tokens (xStocks), so this is the path.
 async function getJupiterQuote({ inputMint, outputMint, amountAtomic, slippageBps }) {
   const params = new URLSearchParams({
     inputMint, outputMint,
-    amount:        String(amountAtomic),
-    slippageBps:   String(slippageBps),
-    platformFeeBps: String(PLATFORM_FEE_BPS),
-    swapMode:      'ExactIn',
+    amount:       String(amountAtomic),
+    slippageBps:  String(slippageBps),
+    swapMode:     'ExactIn',
   });
   const res = await fetchWithTimeout(`/api/jupiter/quote?${params}`, { headers: { Accept: 'application/json' } }, 12_000);
   const json = await res.json();
@@ -173,34 +175,170 @@ async function getJupiterQuote({ inputMint, outputMint, amountAtomic, slippageBp
   return json;
 }
 
-async function getJupiterSwap({ quoteResponse, userPublicKey, feeAccount }) {
+// =====================================================================
+// CUSTOM TX ASSEMBLY — Jupiter swap-instructions + our own SPL Transfer
+// (fee → treasury) bundled into ONE atomic versioned transaction.
+//
+// Why we don't use Jupiter's platformFeeBps:
+//   Jupiter Swap V1 throws IncorrectTokenProgramID (0x177e) when the
+//   swap involves Token-2022 mints. xStocks are Token-2022.
+//
+// Why we don't use Jupiter Ultra:
+//   Ultra's referral fee flow requires a manual "claim" step. Fees
+//   accumulate in a Jupiter-managed referral account and must be swept
+//   periodically. We want fees to land directly in the treasury wallet
+//   on every trade — no manual claim.
+//
+// Solution: get raw instructions from /swap-instructions, prepend our
+// own SPL Transfer (BUY: from input) or append (SELL: from output USDC).
+// User signs once, both happen atomically.
+// =====================================================================
+
+const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+
+// Build an SPL Token Transfer instruction without pulling in @solana/spl-token.
+// Layout: [opcode=3, amount as u64 little-endian].
+function createSplTransferInstruction(source, destination, owner, amountAtomic) {
+  const data = new Uint8Array(9);
+  data[0] = 3; // SPL Token Transfer opcode
+  const amt = BigInt(amountAtomic);
+  for (let i = 0; i < 8; i++) data[1 + i] = Number((amt >> BigInt(i * 8)) & 0xffn);
+  return new TransactionInstruction({
+    keys: [
+      { pubkey: new PublicKey(source),      isSigner: false, isWritable: true  },
+      { pubkey: new PublicKey(destination), isSigner: false, isWritable: true  },
+      { pubkey: new PublicKey(owner),       isSigner: true,  isWritable: false },
+    ],
+    programId: TOKEN_PROGRAM_ID,
+    data,
+  });
+}
+
+// Deserialize a Jupiter-returned instruction (JSON shape) into a Solana
+// TransactionInstruction object suitable for inclusion in a message.
+function deserializeJupInstruction(ix) {
+  return new TransactionInstruction({
+    programId: new PublicKey(ix.programId),
+    keys: (ix.accounts || []).map(a => ({
+      pubkey:     new PublicKey(a.pubkey),
+      isSigner:   Boolean(a.isSigner),
+      isWritable: Boolean(a.isWritable),
+    })),
+    data: Uint8Array.from(atob(ix.data), c => c.charCodeAt(0)),
+  });
+}
+
+// Fetch address lookup table accounts via our Solana RPC proxy. Jupiter
+// references ALTs to fit complex swaps within the tx size limit; we must
+// load them so TransactionMessage.compileToV0Message() can resolve keys.
+async function fetchLookupTableAccounts(altAddresses) {
+  if (!altAddresses?.length) return [];
+  // Batch via getMultipleAccounts for efficiency.
+  const res = await fetchWithTimeout('/api/solana-rpc', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'getMultipleAccounts',
+      params: [altAddresses, { encoding: 'base64', commitment: 'confirmed' }],
+    }),
+  }, 10_000);
+  const json = await res.json();
+  const values = json?.result?.value || [];
+  const out = [];
+  for (let i = 0; i < altAddresses.length; i++) {
+    const acc = values[i];
+    if (!acc?.data?.[0]) continue;
+    const dataBytes = Uint8Array.from(atob(acc.data[0]), c => c.charCodeAt(0));
+    out.push(new AddressLookupTableAccount({
+      key:   new PublicKey(altAddresses[i]),
+      state: AddressLookupTableAccount.deserialize(dataBytes),
+    }));
+  }
+  return out;
+}
+
+// Call Jupiter /swap-instructions to get raw instructions (not a serialized tx).
+async function getJupiterSwapInstructions({ quoteResponse, userPublicKey }) {
   const body = {
     quoteResponse,
     userPublicKey,
-    feeAccount,
     wrapAndUnwrapSol:        true,
     dynamicComputeUnitLimit: true,
-    // Reliability stack: cap slippage at 5%, let Jupiter pick the tightest
-    // viable slippage at execution time, and pay a high priority fee so the
-    // tx lands during congestion.
     dynamicSlippage: { maxBps: SLIPPAGE_BPS_MAX },
     prioritizationFeeLamports: {
       priorityLevelWithMaxLamports: {
-        maxLamports:   10_000_000,  // cap at 0.01 SOL
+        maxLamports:   10_000_000,
         priorityLevel: 'high',
       },
     },
-    // xStocks are Token-2022 with Transfer Hook extension; Jupiter's
-    // shared-account optimization is built for standard SPL Token and
-    // throws IncorrectTokenProgramID (0x177e) without this flag.
+    // No feeAccount, no platformFeeBps — fee handled via custom instruction.
     useSharedAccounts: false,
   };
-  const res = await fetchWithTimeout('/api/jupiter/swap', {
+  const res = await fetchWithTimeout('/api/jupiter/swap-instructions', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   }, 15_000);
   const json = await res.json();
-  if (!res.ok) throw new Error(json?.error || `Swap build failed (${res.status})`);
+  if (!res.ok) throw new Error(json?.error || `Swap-instructions failed (${res.status})`);
   return json;
+}
+
+// Get the user's ATA for a given mint. Standard SPL Token Associated Token
+// Program derivation. For Token-2022 mints, derivation is the same but with
+// a different token program — but we only need this for USDC (regular SPL).
+const ATA_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+function deriveUsdcAta(ownerPubkeyB58) {
+  const owner = new PublicKey(ownerPubkeyB58);
+  const mint  = new PublicKey(USDC_MINT);
+  const [ata] = PublicKey.findProgramAddressSync(
+    [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
+    ATA_PROGRAM_ID,
+  );
+  return ata;
+}
+
+// Assemble the final versioned transaction: fee instruction bundled with
+// Jupiter's instructions, ALTs loaded, blockhash fetched.
+async function assembleSwapTx({ swapInstructions, feeInstruction, userPublicKey, prependFee }) {
+  const altAddrs = swapInstructions.addressLookupTableAddresses || [];
+  const altAccounts = await fetchLookupTableAccounts(altAddrs);
+
+  // Collect Jupiter's instructions in canonical order.
+  const jupIxs = [];
+  if (swapInstructions.tokenLedgerInstruction)
+    jupIxs.push(deserializeJupInstruction(swapInstructions.tokenLedgerInstruction));
+  if (Array.isArray(swapInstructions.computeBudgetInstructions))
+    swapInstructions.computeBudgetInstructions.forEach(ix => jupIxs.push(deserializeJupInstruction(ix)));
+  if (Array.isArray(swapInstructions.setupInstructions))
+    swapInstructions.setupInstructions.forEach(ix => jupIxs.push(deserializeJupInstruction(ix)));
+  if (swapInstructions.swapInstruction)
+    jupIxs.push(deserializeJupInstruction(swapInstructions.swapInstruction));
+  if (swapInstructions.cleanupInstruction)
+    jupIxs.push(deserializeJupInstruction(swapInstructions.cleanupInstruction));
+
+  // For BUY: fee comes off the input USDC BEFORE swap → prepend.
+  // For SELL: fee comes off the output USDC AFTER swap → append.
+  const allIxs = prependFee
+    ? [feeInstruction, ...jupIxs]
+    : [...jupIxs, feeInstruction];
+
+  // Fetch a recent blockhash for the tx (must be fresh enough to land).
+  const bhRes = await fetchWithTimeout('/api/solana-rpc', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash',
+      params: [{ commitment: 'confirmed' }],
+    }),
+  }, 8_000);
+  const bhJson = await bhRes.json();
+  const blockhash = bhJson?.result?.value?.blockhash;
+  if (!blockhash) throw new Error('Could not fetch recent blockhash');
+
+  const message = new TransactionMessage({
+    payerKey:        new PublicKey(userPublicKey),
+    recentBlockhash: blockhash,
+    instructions:    allIxs,
+  }).compileToV0Message(altAccounts);
+
+  return new VersionedTransaction(message);
 }
 
 // =====================================================================
@@ -425,30 +563,58 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
     setError('');
 
     try {
-      const built = await getJupiterSwap({ quoteResponse: quote, userPublicKey: walletPubkey, feeAccount: TREASURY_USDC_ATA });
-      if (!built?.swapTransaction) throw new Error('Build returned no transaction');
+      // ── Calculate the fee amount ────────────────────────────────────
+      // BUY  (USDC → stock): fee = 2.55% of input USDC, taken BEFORE swap.
+      // SELL (stock → USDC): fee = 2.55% of MIN output USDC (otherAmountThreshold),
+      //                      taken AFTER swap. Using min output guarantees the
+      //                      user has enough USDC for the fee transfer even at
+      //                      worst-case slippage — tx never fails on fee step.
+      const isBuyTx = side === 'BUY';
+      const baseAtomic = isBuyTx
+        ? BigInt(quote.inAmount || '0')
+        : BigInt(quote.otherAmountThreshold || quote.outAmount || '0');
+      const feeAtomic = (baseAtomic * BigInt(PLATFORM_FEE_BPS)) / 10000n;
+      if (feeAtomic <= 0n) throw new Error('Fee calculation failed');
 
-      // ── Pre-wallet simulation ────────────────────────────────────────
-      // Run the EXACT serialized bytes through Solana RPC simulateTransaction
-      // before triggering Phantom. RPC substitutes a fresh blockhash so the
-      // sim reflects current chain state; we sign the SAME bytes after.
-      // If sim fails, we surface a clean error and never trigger the wallet.
+      // User's USDC ATA is the source (BUY) or pre-existing destination (SELL
+      // pre-fee, post-swap). Derived from the user's wallet + USDC mint.
+      const userUsdcAta = deriveUsdcAta(walletPubkey);
+      const feeInstruction = createSplTransferInstruction(
+        userUsdcAta,           // source: user's USDC ATA
+        TREASURY_USDC_ATA,     // destination: treasury USDC ATA
+        walletPubkey,          // owner / signer
+        feeAtomic,
+      );
+
+      // ── Get raw Jupiter swap instructions (not serialized tx) ───────
+      const swapIxs = await getJupiterSwapInstructions({
+        quoteResponse: quote,
+        userPublicKey: walletPubkey,
+      });
+
+      // ── Assemble: fee instruction + Jupiter instructions in one tx ──
+      // BUY: prepend fee (input side). SELL: append fee (output side).
+      const tx = await assembleSwapTx({
+        swapInstructions: swapIxs,
+        feeInstruction,
+        userPublicKey:    walletPubkey,
+        prependFee:       isBuyTx,
+      });
+
+      // ── Pre-wallet simulation of the EXACT assembled tx ─────────────
+      // Same bytes will be signed. If sim fails, surface a clean error
+      // and never trigger Phantom.
       setSubmitState({ kind: 'loading', message: 'Simulating...' });
-      const sim = await simulateBeforeSign(built.swapTransaction);
+      const serializedForSim = btoa(String.fromCharCode(...tx.serialize()));
+      const sim = await simulateBeforeSign(serializedForSim);
       if (!sim.ok) throw new Error(sim.message || 'Simulation failed');
 
       setSubmitState({ kind: 'loading', message: 'Confirm in your wallet...' });
-      const txBytes = Uint8Array.from(atob(built.swapTransaction), c => c.charCodeAt(0));
-      let tx;
-      try { tx = VersionedTransaction.deserialize(txBytes); }
-      catch { tx = Transaction.from(txBytes); }
-
       const signed = await signTransaction(tx);
 
       setSubmitState({ kind: 'loading', message: 'Submitting on Solana...' });
-      // We already pre-simulated successfully, so skipPreflight is safe and
-      // saves a round-trip. Higher maxRetries helps the tx land during
-      // congestion (paired with the high priority fee in the swap build).
+      // Pre-simmed, so skipPreflight is safe and faster. High maxRetries
+      // + the priority fee inside Jupiter's instructions = reliable landing.
       const serialized = btoa(String.fromCharCode(...signed.serialize()));
       const submitRes = await fetchWithTimeout('/api/solana-rpc', {
         method: 'POST',
