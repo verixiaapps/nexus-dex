@@ -8,7 +8,7 @@ import TokenDetail from './components/TokenDetail.js';
 import PerpsLanding from './components/PerpsLanding.jsx';
 import Stocks from './components/Stocks.jsx';
 import PancakePredict from './components/PancakePredict.jsx';
-
+ 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b', text: '#cdd6f4', muted: '#586994',
