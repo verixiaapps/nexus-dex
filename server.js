@@ -34,7 +34,7 @@ const CSP_DIRECTIVES = [
   ['frame-ancestors', ["'none'"]],
   ['frame-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org', 'https://challenges.cloudflare.com', ...EXTRA_FRAME_SRC]],
   ['child-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org']],
-  ['connect-src',     ["'self'", 'https://li.quest', 'https://arb1.arbitrum.io', 'https://web3.okx.com', 'https://quote-api.jup.ag', 'https://lite-api.jup.ag', 'https://api.jup.ag', 'https://token.jup.ag', 'https://api.hyperliquid.xyz', 'https://api.hyperliquid-testnet.xyz', 'https://pumpportal.fun', 'wss://pumpportal.fun', 'https://api.dexscreener.com', 'https://*.dexscreener.com', 'https://auth.privy.io', 'https://*.privy.io', 'https://*.privy.systems', 'https://*.rpc.privy.systems', 'https://explorer-api.walletconnect.com', 'https://*.walletconnect.com', 'https://*.walletconnect.org', 'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org', 'wss://*.walletconnect.com', 'wss://*.walletconnect.org', 'wss://www.walletlink.org', 'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com', 'https://api.pinata.cloud', 'https://*.publicnode.com', 'https://*.drpc.org', ...EXTRA_CONNECT_SRC]],
+  ['connect-src',     ["'self'", 'https://li.quest', 'https://arb1.arbitrum.io', 'https://web3.okx.com', 'https://quote-api.jup.ag', 'https://lite-api.jup.ag', 'https://api.jup.ag', 'https://token.jup.ag', 'https://api.hyperliquid.xyz', 'https://api.hyperliquid-testnet.xyz', 'https://pumpportal.fun', 'wss://pumpportal.fun', 'https://api.dexscreener.com', 'https://*.dexscreener.com', 'https://auth.privy.io', 'https://*.privy.io', 'https://*.privy.systems', 'https://*.rpc.privy.systems', 'https://explorer-api.walletconnect.com', 'https://*.walletconnect.com', 'https://*.walletconnect.org', 'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org', 'wss://*.walletconnect.com', 'wss://*.walletconnect.org', 'wss://www.walletlink.org', 'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com', 'https://api.pinata.cloud', 'https://*.publicnode.com', 'https://*.drpc.org', 'https://api.dflow.net', 'https://*.dflow.net', 'https://public.chainalysis.com', ...EXTRA_CONNECT_SRC]],
   ['worker-src',      ["'self'", 'blob:']],
   ['manifest-src',    ["'self'"]],
 ];
@@ -132,10 +132,10 @@ function scrubSecrets(s) {
     .replace(/OK-ACCESS-KEY["':\s]+[^&\s"',}]+/gi,        'OK-ACCESS-KEY=***')
     .replace(/OK-ACCESS-SIGN["':\s]+[^&\s"',}]+/gi,       'OK-ACCESS-SIGN=***')
     .replace(/OK-ACCESS-PASSPHRASE["':\s]+[^&\s"',}]+/gi, 'OK-ACCESS-PASSPHRASE=***')
-    .replace(/api-key=[^&\s"']+/gi,                       'api-key=***')
+    .replace(/api-key=[^&\s"']+/gi,                        'api-key=***')
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi,                'Bearer ***')
     .replace(/privateKey["':\s]+[^&\s"',}]+/gi,           'privateKey=***')
-    .replace(/signature["':\s]+\{[^}]+\}/gi,              'signature={***}');
+    .replace(/signature["':\s]+{[^}]+}/gi,                'signature={***}');
 }
 
 function logError(tag, err) {
@@ -183,8 +183,6 @@ function buildOkxHeaders(method, okxPath, body) {
     Accept:                 'application/json',
   };
 }
-
-
 
 const OKX_ALLOWED_ENDPOINTS = new Set([
   '/dex/aggregator/quote', '/dex/aggregator/swap', '/dex/aggregator/swap-instruction',
@@ -270,7 +268,7 @@ app.post('/api/jupiter/swap', async (req, res) => {
   try {
     if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter fallback disabled' });
     const body = req.body || {};
-    if (!body.userPublicKey)  return res.status(400).json({ error: 'Missing userPublicKey' });
+    if (!body.userPublicKey) return res.status(400).json({ error: 'Missing userPublicKey' });
     if (!body.quoteResponse)  return res.status(400).json({ error: 'Missing quoteResponse' });
     const response = await fetchWithTimeout(
       JUPITER_QUOTE_BASE + '/swap',
@@ -333,8 +331,6 @@ app.get('/api/dexscreener/*', async (req, res) => {
   }
 });
 
-
-
 function isPlainObject(v) { return Boolean(v) && typeof v === 'object' && !Array.isArray(v); }
 function isHexString(v, bytes) {
   const s = String(v || '');
@@ -353,7 +349,7 @@ function validateHyperliquidSignature(sig) {
 }
 function validateHyperliquidExchangePayload(body) {
   if (!isPlainObject(body))        return 'Invalid request body';
-  if (body.type === 'placeOrder')  return 'Unsigned router payload - frontend must sign before sending.';
+  if (body.type === 'placeOrder')  return 'Unsigned router payload -- frontend must sign before sending.';
   if (!isPlainObject(body.action)) return 'Missing action object';
   const nonce = Number(body.nonce);
   if (!Number.isInteger(nonce) || nonce <= 0) return 'Missing or invalid nonce';
@@ -431,7 +427,7 @@ app.get('/api/sol-price', async (req, res) => {
   catch (e) { logError('sol-price', e); res.status(500).json({ error: e.message || 'Unknown error' }); }
 });
 
-/* --- LI.FI proxy ----------------------------------------------------- */
+/* ── LI.FI proxy ──────────────────────────────────────────────────────── */
 function buildLifiHeaders() {
   const h = { Accept: 'application/json' };
   if (LIFI_API_KEY) h['x-lifi-api-key'] = LIFI_API_KEY;
@@ -461,7 +457,7 @@ app.get('/api/lifi/status', async (req, res) => {
   }
 });
 
-/* --- Hyperunit proxy (replaces LI.FI for Solana <-> HL native SOL) --- */
+/* ── Hyperunit proxy (replaces LI.FI for Solana ↔ HL native SOL) ──────── */
 function safeUnitAddress(addr) {
   if (typeof addr !== 'string') return null;
   if (addr.length < 16 || addr.length > 64) return null;
@@ -529,7 +525,7 @@ app.post('/api/unit/operations', async (req, res) => {
     if (status >= 400 || !parsed)
       return res.status(status || 502).json({ error: 'unit operations failed', detail: parsed || raw?.slice(0, 200) });
     const operations = Array.isArray(parsed?.operations) ? parsed.operations
-                     : Array.isArray(parsed)             ? parsed
+                     : Array.isArray(parsed)            ? parsed
                      : [];
     return res.json({ operations });
   } catch (e) {
@@ -539,8 +535,110 @@ app.post('/api/unit/operations', async (req, res) => {
   }
 });
 
+/* ── DFlow proxy (Kalshi predictions via Solana) ─────────────────────── */
+const DFLOW_API_BASE     = (process.env.DFLOW_API_BASE || 'https://api.dflow.net/v1').replace(/\/+$/, '');
+const DFLOW_API_KEY      = process.env.DFLOW_API_KEY || '';
+const DFLOW_BUILDER_CODE = process.env.DFLOW_BUILDER_CODE || '';
 
-/* --- Bridge / Operator ----------------------------------------------- */
+const DFLOW_ALLOWED_PATHS = new Set([
+  'prediction/markets',
+  'prediction/order/build',
+  'prediction/order/submit',
+  'prediction/positions',
+]);
+
+function buildDflowHeaders() {
+  const h = { Accept: 'application/json', 'Content-Type': 'application/json' };
+  if (DFLOW_API_KEY) h['x-api-key'] = DFLOW_API_KEY;
+  return h;
+}
+
+async function proxyDflow(req, res) {
+  try {
+    const subPath = req.path.replace(/^\/api\/dflow\//, '').replace(/\?.*$/, '');
+    if (!DFLOW_ALLOWED_PATHS.has(subPath))
+      return res.status(404).json({ error: 'DFlow endpoint not allowed: ' + subPath });
+    if (!DFLOW_API_KEY)
+      return res.status(503).json({ error: 'DFlow not configured - set DFLOW_API_KEY' });
+
+    const url = DFLOW_API_BASE + '/' + subPath + buildForwardedQuery(req);
+    let bodyStr = '';
+    if (req.method !== 'GET' && req.method !== 'HEAD' && req.body) {
+      const merged = { ...req.body };
+      if (!merged.builderCode && DFLOW_BUILDER_CODE) merged.builderCode = DFLOW_BUILDER_CODE;
+      bodyStr = JSON.stringify(merged);
+    }
+    const fetchOpts = { method: req.method, headers: buildDflowHeaders() };
+    if (bodyStr) fetchOpts.body = bodyStr;
+
+    const cacheable = req.method === 'GET' && subPath === 'prediction/markets';
+    if (cacheable) { const c = getCachedJson(url); if (c) return res.status(c.status).json(c.payload); }
+
+    const response = await fetchWithTimeout(url, fetchOpts, 15_000);
+    const result   = await safeJson(response);
+    if (cacheable && response.ok && result.parsed !== null)
+      setCachedJson(url, response.status, result.parsed, 10_000);
+
+    return respondJsonOrError(res, response, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'DFlow timed out' });
+    logError('dflow', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+}
+app.get('/api/dflow/prediction/*',  proxyDflow);
+app.post('/api/dflow/prediction/*', proxyDflow);
+
+/* ── Parlay sweep bonus tracker (local, not proxied) ─────────────────── */
+// In-memory log of users who opted into Sweep Bonus on a parlay. When
+// every leg settles YES, you owe the bonus payout from your treasury.
+// MVP storage: in-memory + size cap. Swap to a DB row when ready.
+const parlayBonusLog = [];
+
+app.post('/api/dflow/parlay/bonus/register', (req, res) => {
+  try {
+    const { wallet, stake, legs, bonusBps } = req.body || {};
+    if (!wallet || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(wallet)))
+      return res.status(400).json({ error: 'Invalid wallet' });
+    if (!Array.isArray(legs) || legs.length < 2 || legs.length > 10)
+      return res.status(400).json({ error: 'Need 2-10 legs' });
+    const numStake = Number(stake);
+    if (!Number.isFinite(numStake) || numStake < 5 || numStake > 5000)
+      return res.status(400).json({ error: 'Invalid stake ($5-$5000)' });
+
+    const entry = {
+      id: crypto.randomBytes(8).toString('hex'),
+      wallet: String(wallet),
+      stake: numStake,
+      legs: legs.slice(0, 10).map(l => ({
+        marketId: String(l.marketId || '').slice(0, 200),
+        side:     l.side === 'YES' ? 'YES' : 'NO',
+        price:    Number(l.price),
+      })),
+      bonusBps:   Math.min(Math.max(Number(bonusBps) || 1000, 0), 5000),
+      created_at: Date.now(),
+      status:     'pending',
+    };
+    parlayBonusLog.push(entry);
+    if (parlayBonusLog.length > 10_000) parlayBonusLog.splice(0, parlayBonusLog.length - 10_000);
+
+    res.json({ ok: true, id: entry.id });
+  } catch (err) {
+    logError('parlay-bonus-register', err);
+    res.status(500).json({ error: err.message || 'Unknown error' });
+  }
+});
+
+// Admin-only: list pending sweep bonuses for payout reconciliation.
+// Set ADMIN_KEY env var, then: curl -H "x-admin-key: $ADMIN_KEY" /api/admin/parlay/bonuses
+app.get('/api/admin/parlay/bonuses', (req, res) => {
+  const adminKey = req.headers['x-admin-key'] || '';
+  if (!process.env.ADMIN_KEY || adminKey !== process.env.ADMIN_KEY)
+    return res.status(403).json({ error: 'Forbidden' });
+  res.json({ entries: parlayBonusLog, count: parlayBonusLog.length });
+});
+
+/* ── Bridge / Operator ────────────────────────────────────────────────── */
 const bridgeTracking      = new Map();
 const gasSponsorCooldown  = new Map();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -574,7 +672,7 @@ function validateUsdAmount(amount, min) {
 app.post('/api/bridge/withdraw/init', async (req, res) => {
   try {
     if (!OPERATOR_PRIVATE_KEY)
-      return res.status(503).json({ error: 'Bridge not configured - set OPERATOR_PRIVATE_KEY' });
+      return res.status(503).json({ error: 'Bridge not configured -- set OPERATOR_PRIVATE_KEY' });
     const { hl_wallet_address, usd_amount, user_sol_addr } = req.body || {};
     if (!hl_wallet_address || !usd_amount || !user_sol_addr)
       return res.status(400).json({ error: 'missing params' });
@@ -683,7 +781,7 @@ app.post('/api/bridge/sponsor-gas', async (req, res) => {
   }
 });
 
-/* --- PumpPortal ------------------------------------------------------ */
+/* ── PumpPortal ───────────────────────────────────────────────────────── */
 app.post('/api/pumpportal/trade-local', async (req, res) => {
   try {
     const response = await fetchWithTimeout(
@@ -704,7 +802,7 @@ app.post('/api/pumpportal/trade-local', async (req, res) => {
   }
 });
 
-/* --- Helius / Solana RPC -------------------------------------------- */
+/* ── Helius / Solana RPC ──────────────────────────────────────────────── */
 function getSolanaRpcUrl() {
   if (HELIUS_RPC_URL) return HELIUS_RPC_URL;
   if (HELIUS_API_KEY) return 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(HELIUS_API_KEY);
@@ -739,7 +837,7 @@ app.post('/api/solana-rpc', async (req, res) => {
   }
 });
 
-/* --- Pinata --------------------------------------------------------- */
+/* ── Pinata ───────────────────────────────────────────────────────────── */
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -796,7 +894,7 @@ app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, r
   }
 });
 
-/* --- Health --------------------------------------------------------- */
+/* ── Health ───────────────────────────────────────────────────────────── */
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true, env: NODE_ENV,
@@ -808,14 +906,17 @@ app.get('/api/health', (req, res) => {
       bridgeOperator: Boolean(OPERATOR_PRIVATE_KEY),
       lifiApiKey:     Boolean(LIFI_API_KEY),
       unit:           true,
+      dflow:          Boolean(DFLOW_API_KEY),
+      dflowBuilder:   Boolean(DFLOW_BUILDER_CODE),
+      adminKey:       Boolean(process.env.ADMIN_KEY),
     },
     bridge: OPERATOR_PRIVATE_KEY ? {
       arbRpc: ARB_RPC_URL, active: bridgeTracking.size,
-      flow: 'SOL -> ARB USDC (LI.FI) -> HL bridge transfer -> HyperCore | reverse via withdraw3 + LI.FI',
+      flow: 'SOL → ARB USDC (LI.FI) → HL bridge transfer → HyperCore | reverse via withdraw3 + LI.FI',
       custodial: false,
     } : { enabled: false },
     lifi: { baseUrl: LIFI_API, hyperCoreChainId: 1337, arbChainId: 42161 },
-    unit: { baseUrl: UNIT_API_BASE, flow: 'SOL <-> HL native via Hyperunit Guardian network' },
+    unit: { baseUrl: UNIT_API_BASE, flow: 'SOL ↔ HL native via Hyperunit Guardian network' },
     time: new Date().toISOString(),
   });
 });
@@ -859,4 +960,3 @@ app.listen(PORT, () => {
 
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
 process.on('unhandledRejection', err => logError('unhandledRejection', err));
-
