@@ -160,9 +160,20 @@ async function dflowRequest(path, body, opts = {}) {
 async function fetchSportsMarkets() {
   if (!ENABLE_TRADING) return getMockMarkets();
   try {
-    const data = await dflowRequest('/prediction/markets?category=sports,politics');
-    if (Array.isArray(data?.markets) && data.markets.length > 0) {
-      return data.markets.map(normalizeMarket);
+    // DFlow Metadata API: /api/v1/markets. Fetch all initialized active
+    // markets, client-side filter to sports/politics for parlay legs.
+    const data = await dflowRequest('/markets?isInitialized=true&status=active&limit=200');
+    const list = Array.isArray(data?.markets) ? data.markets
+               : Array.isArray(data?.data)    ? data.data
+               : Array.isArray(data)          ? data
+               : [];
+    if (list.length > 0) {
+      const normalized = list.map(normalizeMarket).filter(m =>
+        ['sports', 'politics', 'events', 'tonight', 'nfl', 'nba', 'nhl', 'mlb', 'ufc', 'soccer', 'tennis']
+          .includes(String(m.category || '').toLowerCase())
+        || ['NFL', 'NBA', 'NHL', 'MLB', 'UFC', 'SOCCER', 'TENNIS'].includes(m.league)
+      );
+      if (normalized.length > 0) return normalized;
     }
     return getMockMarkets();
   } catch (e) {
@@ -353,19 +364,25 @@ function parseSimError(err, logs) {
 }
 
 function normalizeMarket(raw) {
+  // DFlow's /api/v1/markets returns fields like ticker, eventTicker, title,
+  // yesMint, noMint, volume, status, closeTime. Multiple aliases let mock
+  // and real data flow through the same UI.
+  const yesMint = raw.yesMint || raw.yes_mint || raw.yesTokenMint || null;
+  const noMint  = raw.noMint  || raw.no_mint  || raw.noTokenMint  || null;
   return {
-    id:           raw.id || raw.ticker || raw.market_id,
-    league:       (raw.league || raw.sport || raw.category || '').toUpperCase(),
-    category:     raw.category || 'tonight',
-    question:     raw.question || raw.title || '',
-    subtitle:     raw.subtitle || raw.matchup || '',
-    yesPrice:     Number(raw.yesPrice ?? raw.yes_price ?? 0.5),
-    noPrice:      Number(raw.noPrice ?? raw.no_price ?? 0.5),
-    closeTs:      Number(raw.closeTs ?? raw.close_time ?? Date.now() + 3600_000),
-    gameStartTs:  Number(raw.gameStartTs ?? raw.game_start ?? 0) || null,
-    isLive:       Boolean(raw.isLive ?? raw.is_live),
-    liveStatus:   raw.liveStatus || '',
-    volume24h:    Number(raw.volume24h ?? raw.vol ?? 0),
+    id:           raw.id || raw.ticker || raw.eventTicker || raw.market_id || yesMint,
+    yesMint, noMint,
+    league:       String(raw.league || raw.sport || raw.category || raw.eventCategory || '').toUpperCase(),
+    category:     raw.category || raw.eventCategory || 'tonight',
+    question:     raw.question || raw.title || raw.eventTitle || '',
+    subtitle:     raw.subtitle || raw.matchup || raw.eventSubtitle || '',
+    yesPrice:     Number(raw.yesPrice ?? raw.yes_price ?? raw.lastPriceYes ?? raw.lastYesPrice ?? raw.markPriceYes ?? 0.5),
+    noPrice:      Number(raw.noPrice  ?? raw.no_price  ?? raw.lastPriceNo  ?? raw.lastNoPrice  ?? raw.markPriceNo  ?? 0.5),
+    closeTs:      Number(raw.closeTs  ?? raw.close_time ?? raw.closeTime ?? raw.expiry ?? raw.expirationTime ?? Date.now() + 3600_000),
+    gameStartTs:  Number(raw.gameStartTs ?? raw.game_start ?? raw.gameStartTime ?? 0) || null,
+    isLive:       Boolean(raw.isLive ?? raw.is_live ?? raw.live),
+    liveStatus:   raw.liveStatus || raw.live_status || '',
+    volume24h:    Number(raw.volume24h ?? raw.volume_24h ?? raw.volume ?? raw.vol ?? 0),
     primetime:    Boolean(raw.primetime),
   };
 }
@@ -901,13 +918,19 @@ export default function ParlayBuilder({ onConnectWallet }) {
         if (!result?.ok) throw new Error(`${legLabel}: ${result?.error || 'rejected'}`);
       }
 
-      // Sweep-bonus opt-in: record server-side for payout tracking after settlement
+      // Sweep-bonus opt-in: record server-side for payout tracking after
+      // settlement. Endpoint lives at /api/parlay/bonus/register (NOT under
+      // /api/dflow/ since it's a local-only tracker, not a DFlow proxy).
       if (bonusEnabled) {
         try {
-          await dflowRequest('/parlay/bonus/register', {
-            wallet: walletPubkey, stake,
-            legs: parlayLegs.map(l => ({ marketId: l.market.id, side: l.side, price: l.price })),
-            bonusBps: SWEEP_BONUS_PAYOUT_BPS,
+          await fetchWithTimeout('/api/parlay/bonus/register', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              wallet: walletPubkey, stake,
+              legs: parlayLegs.map(l => ({ marketId: l.market.id, side: l.side, price: l.price })),
+              bonusBps: SWEEP_BONUS_PAYOUT_BPS,
+            }),
           });
         } catch (e) { console.warn('[bonus register]', e?.message || e); }
       }
