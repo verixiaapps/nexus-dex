@@ -31,15 +31,41 @@ const T = {
 // =====================================================================
 const SOL_MINT              = 'So11111111111111111111111111111111111111112';
 const USDC_SOLANA           = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const USDT_SOLANA           = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
 const SPL_LEGACY_PROGRAM    = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const SPL_TOKEN2022_PROGRAM = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 
+// xStocks (tokenized equities, Token-2022). Same 18 mints as Stocks.jsx —
+// keeping them here so Portfolio can name + price holdings. isStock + isT22
+// flags drive special handling (Jupiter Price V3 routing, stock badge).
+const XSTOCKS = {
+  'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB': { symbol:'TSLAx',  name:'Tesla',                color:'#e31837', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
+  'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp': { symbol:'AAPLx',  name:'Apple',                color:'#a2aaad', textColor:'#000', isStock:true, isT22:true, decimals:8 },
+  'Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh': { symbol:'NVDAx',  name:'NVIDIA',               color:'#76b900', textColor:'#000', isStock:true, isT22:true, decimals:8 },
+  'Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu': { symbol:'METAx',  name:'Meta Platforms',       color:'#0866ff', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
+  'XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN': { symbol:'GOOGLx', name:'Alphabet',             color:'#4285f4', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
+  'Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg': { symbol:'AMZNx',  name:'Amazon',               color:'#ff9900', textColor:'#000', isStock:true, isT22:true, decimals:8 },
+  'XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX': { symbol:'MSFTx',  name:'Microsoft',            color:'#00a4ef', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
+  'XsEH7wWfJJu2ZT3UCFeVfALnVA6CP5ur7Ee11KmzVpL': { symbol:'NFLXx',  name:'Netflix',              color:'#e50914', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
+  'XsoBhf2ufR8fTyNSjqfU71DYGaE6Z3SUGAidpzriAA4': { symbol:'PLTRx',  name:'Palantir',             color:'#404040', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
+  'XsgSaSvNSqLTtFuyWPBhK9196Xb9Bbdyjj4fH3cPJGo': { symbol:'AVGOx',  name:'Broadcom',             color:'#cc092f', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
+  'Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu': { symbol:'COINx',  name:'Coinbase',             color:'#0052ff', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
+  'XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ': { symbol:'MSTRx',  name:'MicroStrategy',        color:'#fcb017', textColor:'#000', isStock:true, isT22:true, decimals:8 },
+  'XsueG8BtpquVJX9LVLLEGuViXUungE6WmK5YZ3p3bd1': { symbol:'CRCLx',  name:'Circle',               color:'#3399ff', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
+  'XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg': { symbol:'HOODx',  name:'Robinhood',            color:'#cdff00', textColor:'#000', isStock:true, isT22:true, decimals:8 },
+  'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W': { symbol:'SPYx',   name:'S&P 500 ETF',          color:'#1c4f9c', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
+  'Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ': { symbol:'QQQx',   name:'Nasdaq 100 ETF',       color:'#003b71', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
+  'Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re': { symbol:'GLDx',   name:'Gold Trust',           color:'#d4af37', textColor:'#000', isStock:true, isT22:true, decimals:8 },
+  'XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp': { symbol:'TBLLx',  name:'1-3 Month T-Bill ETF', color:'#2a4d6e', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
+};
+
 // Known tokens — gives top holdings real names + brand colors.
-// Long tail falls back to first-letter badge.
+// xStocks merged in so they render with proper names + colors and pass the
+// curated-filter check below. Long tail falls back to first-letter badge.
 const KNOWN_TOKENS = {
   [SOL_MINT]:                                       { symbol:'SOL',    name:'Solana',           color:'#9945ff', textColor:'#fff' },
-  [USDC_SOLANA]:                                    { symbol:'USDC',   name:'USD Coin',         color:'#2775ca', textColor:'#fff' },
-  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB':   { symbol:'USDT',   name:'Tether USD',       color:'#26a17b', textColor:'#fff' },
+  [USDC_SOLANA]:                                    { symbol:'USDC',   name:'USD Coin',         color:'#2775ca', textColor:'#fff', isStable:true },
+  [USDT_SOLANA]:                                    { symbol:'USDT',   name:'Tether USD',       color:'#26a17b', textColor:'#fff', isStable:true },
   'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263':   { symbol:'BONK',   name:'Bonk',             color:'#fcb017', textColor:'#000' },
   'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL':    { symbol:'JTO',    name:'Jito',             color:'#7dffb5', textColor:'#000' },
   'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN':    { symbol:'JUP',    name:'Jupiter',          color:'#c7f284', textColor:'#000' },
@@ -48,6 +74,7 @@ const KNOWN_TOKENS = {
   'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3':   { symbol:'PYTH',   name:'Pyth Network',     color:'#e6c5ff', textColor:'#000' },
   'MEW1gQWJ3nEXg2qgERiKu7FAFj79PHvQVREQUzScPP5':    { symbol:'MEW',    name:'cat in dogs world',color:'#9b4dca', textColor:'#fff' },
   '85VBFQZC9TZkfaptBWjvUw7YbZjy52A6mjtPGjstQAmQ':   { symbol:'W',      name:'Wormhole',         color:'#3b5dab', textColor:'#fff' },
+  ...XSTOCKS,
 };
 
 // =====================================================================
@@ -121,7 +148,10 @@ function openTokenPage(token, onSelectCoin) {
 }
 
 // =====================================================================
-// PRICE FETCHING (unchanged from production version)
+// PRICE FETCHING
+// Stablecoins shortcut to $1 (OKX can't quote USDC↔USDC). xStocks route
+// through Jupiter Price V3 since OKX doesn't have Token-2022 pricing.
+// Everything else: OKX first, Jupiter V3 fallback.
 // =====================================================================
 const _priceCache = {};
 function clearPriceCache() { Object.keys(_priceCache).forEach(k => delete _priceCache[k]); }
@@ -129,19 +159,34 @@ function readOkxToTokenAmount(data) {
   const d = Array.isArray(data) ? data[0] : data;
   return Number(d?.toTokenAmount || d?.routerResult?.toTokenAmount || d?.quoteCompareList?.[0]?.toTokenAmount || 0);
 }
-async function fetchJupiterPrice(mint) {
+async function fetchJupiterPriceV3(mint) {
   try {
-    const r = await fetch(`https://api.jup.ag/price/v2?ids=${mint}`);
+    // V3 was launched Oct 2025 — V2 is deprecated and returns 410. Field
+    // renamed from `price` to `usdPrice`, no nested `data` wrapper.
+    const r = await fetch(`https://api.jup.ag/price/v3?ids=${mint}`);
     const j = await r.json();
-    const price = j?.data?.[mint]?.price;
+    const price = j?.[mint]?.usdPrice;
     if (price && Number.isFinite(Number(price)) && Number(price) > 0) return Number(price);
   } catch {}
   return 0;
 }
-async function fetchOkxPrice(mint, decimals = 6, force = false) {
+async function fetchTokenPriceUsd(mint, decimals = 6, force = false) {
   if (!mint) return 0;
+  // Stablecoin shortcut — never call the network for these.
+  const meta = KNOWN_TOKENS[mint];
+  if (meta?.isStable) return 1;
+
   const key = `${String(mint).toLowerCase()}:${decimals}`;
   if (!force && _priceCache[key] && Date.now() - _priceCache[key].ts < 60000) return _priceCache[key].price;
+
+  // xStocks (Token-2022) — OKX doesn't price them, go straight to Jupiter V3.
+  if (meta?.isT22 || meta?.isStock) {
+    const p = await fetchJupiterPriceV3(mint);
+    if (p > 0) { _priceCache[key] = { price: p, ts: Date.now() }; return p; }
+    return 0;
+  }
+
+  // Regular SPL: OKX aggregator quote first (best for liquid SPL tokens).
   try {
     const amount = mint === SOL_MINT ? '1000000000' : tokenAmountForOne(decimals);
     const r = await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=${USDC_SOLANA}&amount=${amount}`);
@@ -155,7 +200,8 @@ async function fetchOkxPrice(mint, decimals = 6, force = false) {
       }
     }
   } catch {}
-  const jupPrice = await fetchJupiterPrice(mint);
+  // Fallback: Jupiter V3 (covers anything OKX missed).
+  const jupPrice = await fetchJupiterPriceV3(mint);
   if (jupPrice > 0) { _priceCache[key] = { price: jupPrice, ts: Date.now() }; return jupPrice; }
   return 0;
 }
@@ -165,7 +211,9 @@ async function fetchOkxPrice(mint, decimals = 6, force = false) {
 // =====================================================================
 function TokenBadge({ mint, fallbackSym, size = 36 }) {
   const meta = tokenMeta(mint, fallbackSym);
-  const letter = (meta.symbol || '?').charAt(0).toUpperCase();
+  // Stock badges use ticker letters (G for GOOGL) instead of first letter
+  // of the xStock symbol (which is also G). Same outcome, clearer intent.
+  const letter = (meta.symbol || '?').replace(/x$/, '').charAt(0).toUpperCase() || '?';
   return (
     <div style={{
       width: size, height: size, borderRadius: '50%',
@@ -195,12 +243,12 @@ function SkeletonRow() {
 function TokenRow({ token, onClick }) {
   const meta = tokenMeta(token.mint, token.symbol);
   const val  = token.value || 0;
+  const isStock = meta.isStock;
   return (
     <button onClick={onClick} style={{
       padding: '14px 18px', display: 'grid', gridTemplateColumns: '36px 1fr auto', gap: 12, alignItems: 'center',
-      borderBottom: `1px solid ${C.hairline}`,
-      background: 'transparent', border: 'none', borderBottom: `1px solid ${C.hairline}`,
-      borderLeft: 'none', borderRight: 'none', borderTop: 'none',
+      background: 'transparent',
+      border: 'none', borderBottom: `1px solid ${C.hairline}`,
       width: '100%', textAlign: 'left',
       cursor: onClick ? 'pointer' : 'default',
       WebkitTapHighlightColor: 'rgba(151,252,228,.10)',
@@ -212,11 +260,14 @@ function TokenRow({ token, onClick }) {
       <div style={{ minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ color: C.inkStr, fontWeight: 800, fontSize: 14, letterSpacing: '-.01em', ...T.display }}>{meta.symbol}</span>
+          {isStock && (
+            <span style={{ color: C.hl, fontSize: 8, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: C.hlDim, border: `1px solid ${C.borderHi}`, letterSpacing: '.06em', ...T.mono }}>STOCK</span>
+          )}
           <span style={{ color: C.muted, fontSize: 10, fontWeight: 600, ...T.mono }}>
             {token.price > 0 ? fmt(token.price) : '—'}
           </span>
         </div>
-        <div style={{ color: C.muted, fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 180, ...T.body }}>
+        <div style={{ color: C.muted, fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200, ...T.body }}>
           {fmtTokenAmt(token.uiAmount)} {meta.symbol} · {meta.name}
         </div>
       </div>
@@ -265,9 +316,11 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
       const lamports = await connection.getBalance(pubkey);
       setSolBalance(lamports / 1e9);
 
-      const solPrice = await fetchOkxPrice(SOL_MINT, 9, force);
+      const solPrice = await fetchTokenPriceUsd(SOL_MINT, 9, force);
       setSolPriceUsd(solPrice > 0 ? solPrice : 0);
 
+      // Fetch BOTH legacy SPL and Token-2022 accounts. Token-2022 covers
+      // xStocks; without this branch the wallet won't list them.
       const results = await Promise.allSettled([
         connection.getParsedTokenAccountsByOwner(pubkey, { programId: SPL_LEGACY_PROGRAM }),
         connection.getParsedTokenAccountsByOwner(pubkey, { programId: SPL_TOKEN2022_PROGRAM }),
@@ -289,11 +342,12 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
         } catch {}
       });
 
-      // Filter to curated known tokens only — hides unknown SPLs / airdrop junk
+      // Filter to curated known tokens (USDC/USDT/popular SPL/xStocks).
+      // Hides airdrop junk / scam tokens automatically.
       const holdings = Object.values(byMint).filter(h => h.mint !== SOL_MINT && KNOWN_TOKENS[h.mint]);
       const priced = [];
       for (const h of holdings) {
-        const price = await fetchOkxPrice(h.mint, h.decimals, force);
+        const price = await fetchTokenPriceUsd(h.mint, h.decimals, force);
         const meta = tokenMeta(h.mint);
         priced.push({
           ...h,
@@ -303,7 +357,14 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
           name: meta.name,
         });
       }
-      priced.sort((a, b) => b.value - a.value);
+      // Sort: stablecoins first, then stocks, then by value desc.
+      priced.sort((a, b) => {
+        const ma = tokenMeta(a.mint), mb = tokenMeta(b.mint);
+        const rank = m => m.isStable ? 0 : m.isStock ? 1 : 2;
+        const ra = rank(ma), rb = rank(mb);
+        if (ra !== rb) return ra - rb;
+        return b.value - a.value;
+      });
       setSolBalances(priced);
     } catch (e) {
       setError('Failed to load portfolio');
@@ -331,6 +392,7 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
   const tokensTotal = solBalances.reduce((s, h) => s + (h.value || 0), 0);
   const totalValue  = solValue + tokensTotal;
   const tokenCount  = solBalances.length + (solBalance > 0 ? 1 : 0);
+  const stockCount  = solBalances.filter(h => KNOWN_TOKENS[h.mint]?.isStock).length;
 
   // ===================================================================
   // DISCONNECTED STATE
@@ -433,7 +495,7 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
           {[
             { label: 'SOL',        value: solBalance.toFixed(3),       sub: solValue > 0 ? fmt(solValue) : '—', color: C.sol },
             { label: 'HOLDINGS',   value: String(tokenCount),          sub: tokenCount === 1 ? 'asset' : 'assets', color: C.hl },
-            { label: 'TOKEN VAL',  value: tokensTotal > 0 ? fmt(tokensTotal) : '$0', sub: solBalances.length + ' SPL', color: C.violet },
+            { label: 'STOCKS',     value: String(stockCount),          sub: stockCount === 1 ? 'xStock' : 'xStocks', color: C.violet },
           ].map(s => (
             <div key={s.label} style={{ padding: '10px 12px', borderRadius: 14, background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, backdropFilter: 'blur(12px)' }}>
               <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>{s.label}</div>
@@ -465,7 +527,7 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
             onClick={() => openTokenPage({ mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, price: solPriceUsd, value: solValue, uiAmount: solBalance }, onSelectCoin)}
           />
 
-          {/* SPL tokens */}
+          {/* SPL + Token-2022 tokens (USDC, USDT, xStocks, etc.) */}
           {loading && !solBalances.length ? (
             <>
               <SkeletonRow/>
@@ -474,8 +536,8 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
             </>
           ) : !solBalances.length ? (
             <div style={{ padding: '28px 18px', textAlign: 'center' }}>
-              <div style={{ color: C.muted, fontSize: 12.5, marginBottom: 6, fontWeight: 600, ...T.body }}>No SPL tokens yet.</div>
-              <div style={{ color: C.muted2, fontSize: 11, ...T.body }}>Buy something on the Swap tab to get started.</div>
+              <div style={{ color: C.muted, fontSize: 12.5, marginBottom: 6, fontWeight: 600, ...T.body }}>No tokens yet.</div>
+              <div style={{ color: C.muted2, fontSize: 11, ...T.body }}>Buy something on the Swap or Stocks tab to get started.</div>
             </div>
           ) : solBalances.map(token => (
             <TokenRow
