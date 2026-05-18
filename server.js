@@ -283,6 +283,30 @@ app.post('/api/jupiter/swap', async (req, res) => {
   }
 });
 
+// Jupiter swap-instructions: returns raw instructions (not a serialized tx)
+// so the frontend can bundle them with a custom SPL Transfer instruction
+// (fee -> treasury) into one atomic, user-signed versioned transaction.
+// Used by Stocks.jsx because Jupiter Swap V1's platformFee feature does NOT
+// support Token-2022 tokens (xStocks) -- throws error 0x177e otherwise.
+app.post('/api/jupiter/swap-instructions', async (req, res) => {
+  try {
+    if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter fallback disabled' });
+    const body = req.body || {};
+    if (!body.userPublicKey) return res.status(400).json({ error: 'Missing userPublicKey' });
+    if (!body.quoteResponse)  return res.status(400).json({ error: 'Missing quoteResponse' });
+    const response = await fetchWithTimeout(
+      JUPITER_QUOTE_BASE + '/swap-instructions',
+      { method: 'POST', headers: buildJupiterHeaders(), body: JSON.stringify(body) },
+      15_000,
+    );
+    return respondJsonOrError(res, response, await safeJson(response));
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Jupiter swap-instructions timed out' });
+    logError('jupiter-swap-instructions', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
 app.get('/api/jupiter/tokens/v2/toporganicscore/:timeframe', async (req, res) => {
   try {
     const url = `https://lite-api.jup.ag/tokens/v2/toporganicscore/${req.params.timeframe || '24h'}${buildForwardedQuery(req)}`;
@@ -427,7 +451,7 @@ app.get('/api/sol-price', async (req, res) => {
   catch (e) { logError('sol-price', e); res.status(500).json({ error: e.message || 'Unknown error' }); }
 });
 
-/* ── LI.FI proxy ──────────────────────────────────────────────────────── */
+/* -- LI.FI proxy -------------------------------------------------------- */
 function buildLifiHeaders() {
   const h = { Accept: 'application/json' };
   if (LIFI_API_KEY) h['x-lifi-api-key'] = LIFI_API_KEY;
@@ -457,7 +481,7 @@ app.get('/api/lifi/status', async (req, res) => {
   }
 });
 
-/* ── Hyperunit proxy (replaces LI.FI for Solana ↔ HL native SOL) ──────── */
+/* -- Hyperunit proxy (replaces LI.FI for Solana <-> HL native SOL) ------ */
 function safeUnitAddress(addr) {
   if (typeof addr !== 'string') return null;
   if (addr.length < 16 || addr.length > 64) return null;
@@ -535,7 +559,7 @@ app.post('/api/unit/operations', async (req, res) => {
   }
 });
 
-/* ── DFlow proxy (Kalshi predictions via Solana) ─────────────────────── */
+/* -- DFlow proxy (Kalshi predictions via Solana) ------------------------ */
 const DFLOW_API_BASE     = (process.env.DFLOW_API_BASE || 'https://api.dflow.net/v1').replace(/\/+$/, '');
 const DFLOW_API_KEY      = process.env.DFLOW_API_KEY || '';
 const DFLOW_BUILDER_CODE = process.env.DFLOW_BUILDER_CODE || '';
@@ -589,7 +613,7 @@ async function proxyDflow(req, res) {
 app.get('/api/dflow/prediction/*',  proxyDflow);
 app.post('/api/dflow/prediction/*', proxyDflow);
 
-/* ── Parlay sweep bonus tracker (local, not proxied) ─────────────────── */
+/* -- Parlay sweep bonus tracker (local, not proxied) -------------------- */
 // In-memory log of users who opted into Sweep Bonus on a parlay. When
 // every leg settles YES, you owe the bonus payout from your treasury.
 // MVP storage: in-memory + size cap. Swap to a DB row when ready.
@@ -638,7 +662,7 @@ app.get('/api/admin/parlay/bonuses', (req, res) => {
   res.json({ entries: parlayBonusLog, count: parlayBonusLog.length });
 });
 
-/* ── Bridge / Operator ────────────────────────────────────────────────── */
+/* -- Bridge / Operator -------------------------------------------------- */
 const bridgeTracking      = new Map();
 const gasSponsorCooldown  = new Map();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -781,7 +805,7 @@ app.post('/api/bridge/sponsor-gas', async (req, res) => {
   }
 });
 
-/* ── PumpPortal ───────────────────────────────────────────────────────── */
+/* -- PumpPortal --------------------------------------------------------- */
 app.post('/api/pumpportal/trade-local', async (req, res) => {
   try {
     const response = await fetchWithTimeout(
@@ -802,7 +826,7 @@ app.post('/api/pumpportal/trade-local', async (req, res) => {
   }
 });
 
-/* ── Helius / Solana RPC ──────────────────────────────────────────────── */
+/* -- Helius / Solana RPC ----------------------------------------------- */
 function getSolanaRpcUrl() {
   if (HELIUS_RPC_URL) return HELIUS_RPC_URL;
   if (HELIUS_API_KEY) return 'https://mainnet.helius-rpc.com/?api-key=' + encodeURIComponent(HELIUS_API_KEY);
@@ -837,7 +861,7 @@ app.post('/api/solana-rpc', async (req, res) => {
   }
 });
 
-/* ── Pinata ───────────────────────────────────────────────────────────── */
+/* -- Pinata ------------------------------------------------------------- */
 const upload = multer({
   storage: multer.memoryStorage(),
   limits: { fileSize: 5 * 1024 * 1024 },
@@ -894,7 +918,7 @@ app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, r
   }
 });
 
-/* ── Health ───────────────────────────────────────────────────────────── */
+/* -- Health ------------------------------------------------------------- */
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true, env: NODE_ENV,
@@ -912,11 +936,11 @@ app.get('/api/health', (req, res) => {
     },
     bridge: OPERATOR_PRIVATE_KEY ? {
       arbRpc: ARB_RPC_URL, active: bridgeTracking.size,
-      flow: 'SOL → ARB USDC (LI.FI) → HL bridge transfer → HyperCore | reverse via withdraw3 + LI.FI',
+      flow: 'SOL -> ARB USDC (LI.FI) -> HL bridge transfer -> HyperCore | reverse via withdraw3 + LI.FI',
       custodial: false,
     } : { enabled: false },
     lifi: { baseUrl: LIFI_API, hyperCoreChainId: 1337, arbChainId: 42161 },
-    unit: { baseUrl: UNIT_API_BASE, flow: 'SOL ↔ HL native via Hyperunit Guardian network' },
+    unit: { baseUrl: UNIT_API_BASE, flow: 'SOL <-> HL native via Hyperunit Guardian network' },
     time: new Date().toISOString(),
   });
 });
@@ -960,4 +984,3 @@ app.listen(PORT, () => {
 
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
 process.on('unhandledRejection', err => logError('unhandledRejection', err));
- 
