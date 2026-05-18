@@ -22,36 +22,34 @@ const MIN_USDC = 1;
 const MAX_USDC = 50_000;
 
 // =====================================================================
-// XSTOCKS LIST
-//
-// ⚠️ TODO BEFORE LIVE: verify every mint address against the official
-//    Solana case study: https://solana.com/news/case-study-xstocks
-//    OR Phantom's Tokenized Stocks list. The placeholders below have
-//    the correct SHAPE but need to be replaced with verified mints.
-//
-// Token decimals for xStocks are 8 (Token-2022 standard for these).
+// XSTOCKS LIST — verified mints from solana.com/news/case-study-xstocks
+// 60+ tickers exist; we ship with the top 18 by relevance + volume.
+// Decimals: 8 (Token-2022 standard for xStocks).
 // =====================================================================
 const STOCKS = [
-  // ------ TECH ------
-  { mint: 'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp', symbol: 'TSLAx',  name: 'Tesla',           ticker: 'TSLA',  decimals: 8, sector: 'Tech',     color: '#e31837' },
-  { mint: 'XsAAPLxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', symbol: 'AAPLx',  name: 'Apple',           ticker: 'AAPL',  decimals: 8, sector: 'Tech',     color: '#a2aaad' },
-  { mint: 'XsNVDAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', symbol: 'NVDAx',  name: 'NVIDIA',          ticker: 'NVDA',  decimals: 8, sector: 'Tech',     color: '#76b900' },
-  { mint: 'XsMETAxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', symbol: 'METAx',  name: 'Meta Platforms',  ticker: 'META',  decimals: 8, sector: 'Tech',     color: '#0866ff' },
-  { mint: 'XsGOOGLxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', symbol: 'GOOGLx', name: 'Alphabet',        ticker: 'GOOGL', decimals: 8, sector: 'Tech',     color: '#4285f4' },
-  { mint: 'XsAMZNxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', symbol: 'AMZNx',  name: 'Amazon',          ticker: 'AMZN',  decimals: 8, sector: 'Tech',     color: '#ff9900' },
-  { mint: 'XsMSFTxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', symbol: 'MSFTx',  name: 'Microsoft',       ticker: 'MSFT',  decimals: 8, sector: 'Tech',     color: '#00a4ef' },
-  { mint: 'XsNFLXxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', symbol: 'NFLXx',  name: 'Netflix',         ticker: 'NFLX',  decimals: 8, sector: 'Tech',     color: '#e50914' },
+  // ------ TECH MEGACAPS ------
+  { mint: 'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB', symbol: 'TSLAx',  name: 'Tesla',                 ticker: 'TSLA',  decimals: 8, sector: 'Tech',   color: '#e31837' },
+  { mint: 'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp', symbol: 'AAPLx',  name: 'Apple',                 ticker: 'AAPL',  decimals: 8, sector: 'Tech',   color: '#a2aaad' },
+  { mint: 'Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh', symbol: 'NVDAx',  name: 'NVIDIA',                ticker: 'NVDA',  decimals: 8, sector: 'Tech',   color: '#76b900' },
+  { mint: 'Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu', symbol: 'METAx',  name: 'Meta Platforms',        ticker: 'META',  decimals: 8, sector: 'Tech',   color: '#0866ff' },
+  { mint: 'XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN', symbol: 'GOOGLx', name: 'Alphabet',              ticker: 'GOOGL', decimals: 8, sector: 'Tech',   color: '#4285f4' },
+  { mint: 'Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg', symbol: 'AMZNx',  name: 'Amazon',                ticker: 'AMZN',  decimals: 8, sector: 'Tech',   color: '#ff9900' },
+  { mint: 'XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX', symbol: 'MSFTx',  name: 'Microsoft',             ticker: 'MSFT',  decimals: 8, sector: 'Tech',   color: '#00a4ef' },
+  { mint: 'XsEH7wWfJJu2ZT3UCFeVfALnVA6CP5ur7Ee11KmzVpL', symbol: 'NFLXx',  name: 'Netflix',               ticker: 'NFLX',  decimals: 8, sector: 'Tech',   color: '#e50914' },
+  { mint: 'XsoBhf2ufR8fTyNSjqfU71DYGaE6Z3SUGAidpzriAA4', symbol: 'PLTRx',  name: 'Palantir',              ticker: 'PLTR',  decimals: 8, sector: 'Tech',   color: '#0a0a0a' },
+  { mint: 'XsgSaSvNSqLTtFuyWPBhK9196Xb9Bbdyjj4fH3cPJGo', symbol: 'AVGOx',  name: 'Broadcom',              ticker: 'AVGO',  decimals: 8, sector: 'Tech',   color: '#cc092f' },
 
   // ------ CRYPTO-ADJACENT ------
-  { mint: 'XsCOINxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', symbol: 'COINx',  name: 'Coinbase',        ticker: 'COIN',  decimals: 8, sector: 'Crypto',   color: '#0052ff' },
-  { mint: 'XsMSTRxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', symbol: 'MSTRx',  name: 'MicroStrategy',   ticker: 'MSTR',  decimals: 8, sector: 'Crypto',   color: '#fcb017' },
-  { mint: 'XsCRCLxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', symbol: 'CRCLx',  name: 'Circle',          ticker: 'CRCL',  decimals: 8, sector: 'Crypto',   color: '#3399ff' },
+  { mint: 'Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu', symbol: 'COINx',  name: 'Coinbase',              ticker: 'COIN',  decimals: 8, sector: 'Crypto', color: '#0052ff' },
+  { mint: 'XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ', symbol: 'MSTRx',  name: 'MicroStrategy',         ticker: 'MSTR',  decimals: 8, sector: 'Crypto', color: '#fcb017' },
+  { mint: 'XsueG8BtpquVJX9LVLLEGuViXUungE6WmK5YZ3p3bd1', symbol: 'CRCLx',  name: 'Circle',                ticker: 'CRCL',  decimals: 8, sector: 'Crypto', color: '#3399ff' },
+  { mint: 'XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg', symbol: 'HOODx',  name: 'Robinhood',             ticker: 'HOOD',  decimals: 8, sector: 'Crypto', color: '#cdff00' },
 
   // ------ ETFs ------
-  { mint: 'XsSPYxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', symbol: 'SPYx',   name: 'S&P 500 ETF',     ticker: 'SPY',   decimals: 8, sector: 'ETF',      color: '#1c4f9c' },
-  { mint: 'XsQQQxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', symbol: 'QQQx',   name: 'Nasdaq 100 ETF',  ticker: 'QQQ',   decimals: 8, sector: 'ETF',      color: '#003b71' },
-  { mint: 'XsGLDxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', symbol: 'GLDx',   name: 'Gold Trust',      ticker: 'GLD',   decimals: 8, sector: 'ETF',      color: '#d4af37' },
-  { mint: 'XsTLTxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx', symbol: 'TLTx',   name: '20Y Treasury',    ticker: 'TLT',   decimals: 8, sector: 'ETF',      color: '#2a4d6e' },
+  { mint: 'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W', symbol: 'SPYx',   name: 'S&P 500 ETF',           ticker: 'SPY',   decimals: 8, sector: 'ETF',    color: '#1c4f9c' },
+  { mint: 'Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ', symbol: 'QQQx',   name: 'Nasdaq 100 ETF',        ticker: 'QQQ',   decimals: 8, sector: 'ETF',    color: '#003b71' },
+  { mint: 'Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re', symbol: 'GLDx',   name: 'Gold Trust',            ticker: 'GLD',   decimals: 8, sector: 'ETF',    color: '#d4af37' },
+  { mint: 'XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp', symbol: 'TBLLx',  name: '1-3 Month T-Bill ETF',  ticker: 'TBLL',  decimals: 8, sector: 'ETF',    color: '#2a4d6e' },
 ];
 
 const FILTERS = [
