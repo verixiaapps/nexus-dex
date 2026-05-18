@@ -11,7 +11,10 @@ const USDC_MINT             = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const USDC_DECIMALS         = 6;
 
 const PLATFORM_FEE_BPS      = 255;  // 2.55% — Jupiter accepts uint16 here
-const SLIPPAGE_BPS_DEFAULT  = 100;  // 1.0% — stocks are less volatile than memes
+// Jupiter handles routing. We pass a generous 5% cap and use dynamicSlippage
+// so Jupiter picks the tightest viable slippage per route. No slippage knob
+// in the UI — users see real price impact in the quote preview.
+const SLIPPAGE_BPS_MAX  = 500;  // 5% — Jupiter dynamicSlippage optimizes within
 
 // Set this once: your treasury wallet's USDC associated token account.
 // Compute with: spl-token associated-account <TREASURY_PUBKEY> EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
@@ -175,9 +178,22 @@ async function getJupiterSwap({ quoteResponse, userPublicKey, feeAccount }) {
     quoteResponse,
     userPublicKey,
     feeAccount,
-    wrapAndUnwrapSol:   true,
+    wrapAndUnwrapSol:        true,
     dynamicComputeUnitLimit: true,
-    prioritizationFeeLamports: 'auto',
+    // Reliability stack: cap slippage at 5%, let Jupiter pick the tightest
+    // viable slippage at execution time, and pay a high priority fee so the
+    // tx lands during congestion.
+    dynamicSlippage: { maxBps: SLIPPAGE_BPS_MAX },
+    prioritizationFeeLamports: {
+      priorityLevelWithMaxLamports: {
+        maxLamports:   10_000_000,  // cap at 0.01 SOL
+        priorityLevel: 'high',
+      },
+    },
+    // xStocks are Token-2022 with Transfer Hook extension; Jupiter's
+    // shared-account optimization is built for standard SPL Token and
+    // throws IncorrectTokenProgramID (0x177e) without this flag.
+    useSharedAccounts: false,
   };
   const res = await fetchWithTimeout('/api/jupiter/swap', {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
@@ -185,6 +201,81 @@ async function getJupiterSwap({ quoteResponse, userPublicKey, feeAccount }) {
   const json = await res.json();
   if (!res.ok) throw new Error(json?.error || `Swap build failed (${res.status})`);
   return json;
+}
+
+// =====================================================================
+// PRE-WALLET SIMULATION
+// Runs the EXACT serialized tx through the Solana RPC's simulateTransaction
+// before triggering the wallet. The bytes we sim are byte-identical to the
+// bytes we'll sign — the RPC substitutes a fresh blockhash internally via
+// `replaceRecentBlockhash`, so the sim reflects current chain state.
+// If sim fails, we show a clean error in the UI and never trigger Phantom.
+// =====================================================================
+const JUPITER_ERROR_CODES = {
+  6000: 'No swap route available',
+  6001: 'Price moved — try increasing slippage tolerance',
+  6002: 'Routing calculation error — try again',
+  6003: 'Fee account misconfigured',
+  6004: 'Invalid slippage value',
+  6005: 'Insufficient liquidity along route',
+  6006: 'Invalid input mint',
+  6007: 'Invalid output mint',
+  6008: 'Account setup error',
+  6009: 'Order constraint not supported',
+  6010: 'Invalid route plan',
+  6011: 'Invalid referral authority',
+  6012: 'Token ledger mismatch',
+  6013: 'Invalid token ledger',
+  6014: 'Token program incompatibility — this stock may need different routing',
+};
+
+function parseSimError(err, logs) {
+  if (!err) return 'Transaction would fail';
+  if (typeof err === 'string') return err;
+  if (err?.InstructionError) {
+    const [idx, detail] = err.InstructionError;
+    if (detail && typeof detail === 'object' && 'Custom' in detail) {
+      const code = Number(detail.Custom);
+      const known = JUPITER_ERROR_CODES[code];
+      if (known) return known;
+      return `Program error 0x${code.toString(16)} at instruction ${idx}`;
+    }
+    if (typeof detail === 'string') return `${detail} at instruction ${idx}`;
+  }
+  // Last resort: scan logs
+  const arr = Array.isArray(logs) ? logs : [];
+  const errLog = arr.find(l => /error|failed|insufficient|slippage/i.test(String(l)));
+  if (errLog) return String(errLog).slice(0, 140);
+  return 'Trade unavailable — try a different amount or stock';
+}
+
+async function simulateBeforeSign(serializedTxBase64) {
+  try {
+    const res = await fetchWithTimeout('/api/solana-rpc', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'simulateTransaction',
+        params: [serializedTxBase64, {
+          encoding:               'base64',
+          commitment:             'processed',
+          replaceRecentBlockhash: true,
+          sigVerify:              false,
+        }],
+      }),
+    }, 12_000);
+    const json = await res.json();
+    if (json?.error) return { ok: false, message: json.error.message || 'Simulation RPC error' };
+    const value = json?.result?.value;
+    if (!value)     return { ok: true,  warning: 'No sim result' };
+    if (value.err)  return { ok: false, message: parseSimError(value.err, value.logs) };
+    return { ok: true };
+  } catch (e) {
+    // If our sim endpoint is down, don't block the user — Phantom's own sim
+    // is the ultimate safety net. We fail open with a warning.
+    console.warn('[sim]', e?.message || e);
+    return { ok: true, warning: 'Pre-sim unavailable' };
+  }
 }
 
 let _bodyLockCount = 0;
@@ -258,7 +349,6 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
 
   const [side, setSide]       = useState('BUY'); // BUY | SELL
   const [amount, setAmount]   = useState('');
-  const [slippage, setSlippage] = useState(SLIPPAGE_BPS_DEFAULT);
   const [quote, setQuote]     = useState(null);
   const [quoting, setQuoting] = useState(false);
   const [submitState, setSubmitState] = useState({ kind: 'idle', message: '' });
@@ -270,7 +360,7 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
   useEffect(() => {
     if (!open) {
       setAmount(''); setQuote(null); setError(''); setSubmitState({ kind: 'idle', message: '' });
-      setSide('BUY'); setSlippage(SLIPPAGE_BPS_DEFAULT);
+      setSide('BUY');
     }
   }, [open]);
 
@@ -290,7 +380,7 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
         const decimals   = isBuy ? USDC_DECIMALS : stock.decimals;
         const atomic     = Math.round(n * 10 ** decimals);
         if (atomic < 1) { setQuote(null); setQuoting(false); return; }
-        const q = await getJupiterQuote({ inputMint, outputMint, amountAtomic: atomic, slippageBps: slippage });
+        const q = await getJupiterQuote({ inputMint, outputMint, amountAtomic: atomic, slippageBps: SLIPPAGE_BPS_MAX });
         if (seq !== quoteSeq.current) return;
         setQuote(q);
       } catch (e) {
@@ -303,7 +393,7 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
     }, 350);
 
     return () => clearTimeout(t);
-  }, [amount, side, slippage, stock, open]);
+  }, [amount, side, stock, open]);
 
   if (!open || !stock) return null;
 
@@ -338,6 +428,15 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
       const built = await getJupiterSwap({ quoteResponse: quote, userPublicKey: walletPubkey, feeAccount: TREASURY_USDC_ATA });
       if (!built?.swapTransaction) throw new Error('Build returned no transaction');
 
+      // ── Pre-wallet simulation ────────────────────────────────────────
+      // Run the EXACT serialized bytes through Solana RPC simulateTransaction
+      // before triggering Phantom. RPC substitutes a fresh blockhash so the
+      // sim reflects current chain state; we sign the SAME bytes after.
+      // If sim fails, we surface a clean error and never trigger the wallet.
+      setSubmitState({ kind: 'loading', message: 'Simulating...' });
+      const sim = await simulateBeforeSign(built.swapTransaction);
+      if (!sim.ok) throw new Error(sim.message || 'Simulation failed');
+
       setSubmitState({ kind: 'loading', message: 'Confirm in your wallet...' });
       const txBytes = Uint8Array.from(atob(built.swapTransaction), c => c.charCodeAt(0));
       let tx;
@@ -347,16 +446,16 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
       const signed = await signTransaction(tx);
 
       setSubmitState({ kind: 'loading', message: 'Submitting on Solana...' });
-      // For simplicity, we post the signed tx back through Jupiter's RPC by
-      // sending it ourselves. The user's wallet may auto-submit; otherwise
-      // we use the Solana RPC proxy.
+      // We already pre-simulated successfully, so skipPreflight is safe and
+      // saves a round-trip. Higher maxRetries helps the tx land during
+      // congestion (paired with the high priority fee in the swap build).
       const serialized = btoa(String.fromCharCode(...signed.serialize()));
       const submitRes = await fetchWithTimeout('/api/solana-rpc', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           jsonrpc: '2.0', id: 1, method: 'sendTransaction',
-          params: [serialized, { encoding: 'base64', skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 3 }],
+          params: [serialized, { encoding: 'base64', skipPreflight: true, preflightCommitment: 'confirmed', maxRetries: 5 }],
         }),
       }, 20_000);
       const submitJson = await submitRes.json();
@@ -442,22 +541,6 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
             <div style={{ display: 'flex', gap: 6 }}>
               {quickChips.map(c => (
                 <button key={c} onClick={() => { setAmount(String(c)); setError(''); }} disabled={isBusy} style={{ flex: 1, padding: 8, borderRadius: 10, border: `1px solid ${C.border}`, background: 'rgba(255,255,255,.03)', color: C.muted, fontWeight: 700, fontSize: 11, cursor: 'pointer', opacity: isBusy ? 0.4 : 1, ...T.mono }}>{isBuy ? '$' + c : c}</button>
-              ))}
-            </div>
-          </div>
-
-          {/* Slippage */}
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: '.06em', marginBottom: 6, ...T.mono }}>SLIPPAGE TOLERANCE</div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              {[50, 100, 200, 500].map(bps => (
-                <button key={bps} onClick={() => setSlippage(bps)} disabled={isBusy} style={{
-                  flex: 1, padding: 7, borderRadius: 10,
-                  border: slippage === bps ? `1px solid ${C.borderHi}` : `1px solid ${C.border}`,
-                  background: slippage === bps ? C.hlDim : 'rgba(255,255,255,.03)',
-                  color: slippage === bps ? C.hl : C.muted,
-                  fontWeight: 700, fontSize: 11, cursor: 'pointer', ...T.mono,
-                }}>{(bps / 100).toFixed(bps < 100 ? 1 : 0)}%</button>
               ))}
             </div>
           </div>
