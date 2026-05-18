@@ -1,32 +1,31 @@
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
   createPublicClient, http, encodeFunctionData,
-  parseEther, formatEther, isAddress, decodeErrorResult,
+  parseEther, formatEther, isAddress,
 } from 'viem';
 import { bsc } from 'viem/chains';
 
 // =====================================================================
 // CONFIG — PancakeSwap Prediction on BNB Chain. Isolated EVM wallet flow
-// (window.ethereum) — does NOT touch the app's Solana wallet stack.
+// — does NOT touch the app's Solana wallet stack.
 // =====================================================================
 const ENABLE_TRADING   = process.env.REACT_APP_PANCAKE_LIVE_TRADING === '1';
 const TREASURY_BSC     = process.env.REACT_APP_PANCAKE_TREASURY_BSC || '';
-const ENTRY_FEE_BPS    = Number(process.env.REACT_APP_PANCAKE_FEE_BPS || 150);     // 1.5%
-const WIN_FEE_BPS      = Number(process.env.REACT_APP_PANCAKE_WIN_FEE_BPS || 1000); // 10%
-const BSC_RPC_URL      = process.env.REACT_APP_BSC_RPC_URL || 'https://bsc-dataseed.binance.org';
+const ENTRY_FEE_BPS    = Number(process.env.REACT_APP_PANCAKE_FEE_BPS || 150);
+const WIN_FEE_BPS      = Number(process.env.REACT_APP_PANCAKE_WIN_FEE_BPS || 1000);
+const BSC_RPC_URL      = process.env.REACT_APP_BSC_RPC_URL || 'https://bsc-rpc.publicnode.com';
+const WC_PROJECT_ID    = process.env.REACT_APP_WALLETCONNECT_PROJECT_ID || '';
 
 const BSC_CHAIN_ID     = 56;
 const BSC_CHAIN_ID_HEX = '0x38';
 
-const MIN_BET_BNB      = 0.001;   // matches PancakeSwap's on-chain minBetAmount (~$0.60). Bump once live tests pass.
+const MIN_BET_BNB      = 0.001;
 const MAX_BET_BNB      = 100;
-const STALE_STATE_MS   = 30_000;  // disable betting if round data hasn't refreshed in this long
 const BET_CUTOFF_SECS  = 30;
 const ROUND_REFRESH_MS = 5_000;
 const BETS_REFRESH_MS  = 15_000;
+const STALE_STATE_MS   = 30_000;
 
-// Verify on bscscan.com/address/... before going live with real funds.
-// V2 contract has the highest volume; V3 is newer with different fee handling.
 const PREDICTION_CONTRACTS = {
   BNB: '0x18B2A687610328590Bc8F2e5fEdDe3b582A49cdA',
   BTC: process.env.REACT_APP_PANCAKE_BTC_CONTRACT || '',
@@ -39,9 +38,6 @@ const ASSETS = [
   { id: 'ETH', label: 'ETH/USD', enabled: Boolean(PREDICTION_CONTRACTS.ETH) },
 ];
 
-// =====================================================================
-// MINIMAL ABI — only what we call
-// =====================================================================
 const PREDICTION_ABI = [
   { name: 'currentEpoch',    type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
   { name: 'intervalSeconds', type: 'function', stateMutability: 'view', inputs: [], outputs: [{ type: 'uint256' }] },
@@ -91,7 +87,7 @@ const PREDICTION_ABI = [
 ];
 
 // =====================================================================
-// DESIGN TOKENS — match Nexus DEX palette from App.js
+// DESIGN TOKENS — match Nexus DEX
 // =====================================================================
 const C = {
   bg:'#03060f', card:'#080d1a',
@@ -99,7 +95,6 @@ const C = {
   muted:'#586994', muted2:'#3e4c6b',
   accent:'#00e5ff', accent2:'#0066ff',
   green:'#00ffa3', red:'#ff3b6b', amber:'#ffb84d',
-  // PancakeSwap brand cameo only
   pcsYellow:'#f0b90b', pcsPink:'#1fc7d4',
   border:'rgba(0,229,255,.10)', borderHi:'rgba(0,229,255,.30)',
   hairline:'rgba(255,255,255,.04)',
@@ -122,7 +117,7 @@ function fmtBnb(v, decimals = 4) {
   return n.toFixed(decimals).replace(/\.?0+$/, '');
 }
 function fmtUsd(rawPrice) {
-  const n = Number(rawPrice) / 1e8;  // Chainlink price feeds = 8 decimals
+  const n = Number(rawPrice) / 1e8;
   if (!Number.isFinite(n) || n === 0) return '-';
   if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
   return '$' + n.toFixed(2);
@@ -141,21 +136,21 @@ function formatCountdown(ms) {
   if (m >= 1) return `${m}:${sec.toString().padStart(2, '0')}`;
   return `${sec}s`;
 }
-// Pool-based payout multiplier. Pancake protocol fee = 3% off the pool.
-// (totalPool × 0.97) / sideAmount = payout per BNB bet on that side.
 function computeMultiplier(totalAmount, sideAmount) {
   const total = Number(totalAmount);
   const side  = Number(sideAmount);
   if (side <= 0 || total <= 0) return 0;
   return (total * 0.97) / side;
 }
-
-async function fetchWithTimeout(url, opts = {}, timeoutMs = 12_000) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
-  try { return await fetch(url, { ...opts, signal: controller.signal }); }
-  finally { clearTimeout(id); }
+function isIos() {
+  if (typeof navigator === 'undefined') return false;
+  return /iphone|ipad|ipod/i.test(navigator.userAgent);
 }
+function isAndroid() {
+  if (typeof navigator === 'undefined') return false;
+  return /android/i.test(navigator.userAgent);
+}
+function isMobile() { return isIos() || isAndroid(); }
 
 let _bodyLockCount = 0;
 function useBodyLock(open) {
@@ -171,59 +166,139 @@ function useBodyLock(open) {
 }
 
 // =====================================================================
-// EVM CLIENT — viem read client + window.ethereum write helpers
+// EIP-6963 WALLET DISCOVERY
+//
+// Modern wallets announce themselves via the eip6963:announceProvider
+// event instead of (or in addition to) window.ethereum injection. We
+// listen for these announcements + fall back to window.ethereum scan
+// for legacy wallets.
+// =====================================================================
+function useInjectedWallets() {
+  const [wallets, setWallets] = useState([]);
+  const seenUuidsRef = useRef(new Set());
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    // Handler for EIP-6963 announcements
+    const onAnnounce = (event) => {
+      const detail = event.detail;
+      if (!detail?.info || !detail?.provider) return;
+      const uuid = detail.info.uuid;
+      if (seenUuidsRef.current.has(uuid)) return;
+      seenUuidsRef.current.add(uuid);
+      setWallets(prev => [...prev, {
+        key:      uuid,
+        name:     detail.info.name,
+        icon:     detail.info.icon,
+        rdns:     detail.info.rdns,
+        provider: detail.provider,
+        source:   'eip6963',
+      }]);
+    };
+
+    window.addEventListener('eip6963:announceProvider', onAnnounce);
+    // Ask any installed wallets to announce themselves
+    window.dispatchEvent(new Event('eip6963:requestProvider'));
+
+    // Legacy fallback: after a short delay, if no EIP-6963 wallets
+    // showed up, check window.ethereum directly.
+    const fallbackTimer = setTimeout(() => {
+      setWallets(prev => {
+        if (prev.length > 0) return prev;
+        const eth = window.ethereum;
+        if (!eth) return prev;
+        // window.ethereum might be a single provider or have .providers[]
+        const providers = Array.isArray(eth.providers) ? eth.providers : [eth];
+        const legacy = providers.map((p, i) => {
+          let name = 'Wallet';
+          if (p.isMetaMask)        name = 'MetaMask';
+          else if (p.isRabby)      name = 'Rabby';
+          else if (p.isCoinbaseWallet) name = 'Coinbase Wallet';
+          else if (p.isTrust || p.isTrustWallet) name = 'Trust Wallet';
+          else if (p.isOKExWallet) name = 'OKX Wallet';
+          else if (p.isBraveWallet) name = 'Brave Wallet';
+          else if (p.isPhantom && !p.isMetaMask) name = 'Phantom';
+          return {
+            key:      `legacy-${i}`,
+            name,
+            icon:     null,
+            provider: p,
+            source:   'legacy',
+          };
+        });
+        return legacy;
+      });
+    }, 800);
+
+    return () => {
+      window.removeEventListener('eip6963:announceProvider', onAnnounce);
+      clearTimeout(fallbackTimer);
+    };
+  }, []);
+
+  return wallets;
+}
+
+// =====================================================================
+// WALLETCONNECT — for Safari and browsers without injected wallets.
+// Lazy-loaded so the WC bundle doesn't slow the initial page load.
+// =====================================================================
+let _wcProviderPromise = null;
+async function getWalletConnectProvider() {
+  if (!WC_PROJECT_ID) throw new Error('WalletConnect not configured');
+  if (_wcProviderPromise) return _wcProviderPromise;
+  _wcProviderPromise = (async () => {
+    const { EthereumProvider } = await import('@walletconnect/ethereum-provider');
+    const provider = await EthereumProvider.init({
+      projectId: WC_PROJECT_ID,
+      chains: [BSC_CHAIN_ID],
+      showQrModal: true,
+      metadata: {
+        name: 'Nexus DEX · Pancake Predict',
+        description: '5-minute price predictions on BNB Chain',
+        url: typeof window !== 'undefined' ? window.location.origin : 'https://nexus.dex',
+        icons: [],
+      },
+    });
+    return provider;
+  })();
+  return _wcProviderPromise;
+}
+
+// =====================================================================
+// EVM CLIENT
 // =====================================================================
 const publicClient = createPublicClient({
   chain: bsc,
   transport: http(BSC_RPC_URL),
 });
 
-function getInjectedProvider() {
-  if (typeof window === 'undefined') return null;
-  return window.ethereum || null;
+async function evmRequestAccounts(provider) {
+  if (!provider) throw new Error('No EVM provider');
+  return provider.request({ method: 'eth_requestAccounts' });
 }
-
-function detectWalletName() {
-  const p = getInjectedProvider();
-  if (!p) return null;
-  if (p.isMetaMask)       return 'MetaMask';
-  if (p.isRabby)          return 'Rabby';
-  if (p.isCoinbaseWallet) return 'Coinbase Wallet';
-  if (p.isTrust)          return 'Trust Wallet';
-  if (p.isOKExWallet)     return 'OKX Wallet';
-  return 'Wallet';
-}
-
-async function evmRequestAccounts() {
-  const p = getInjectedProvider();
-  if (!p) throw new Error('No EVM wallet detected');
-  return p.request({ method: 'eth_requestAccounts' });
-}
-
-async function evmCurrentChainId() {
-  const p = getInjectedProvider();
-  if (!p) return null;
-  const hex = await p.request({ method: 'eth_chainId' });
+async function evmCurrentChainId(provider) {
+  if (!provider) return null;
+  const hex = await provider.request({ method: 'eth_chainId' });
   return parseInt(hex, 16);
 }
-
-async function evmSwitchToBsc() {
-  const p = getInjectedProvider();
-  if (!p) throw new Error('No EVM wallet detected');
+async function evmSwitchToBsc(provider) {
+  if (!provider) throw new Error('No EVM provider');
   try {
-    await p.request({
+    await provider.request({
       method: 'wallet_switchEthereumChain',
       params: [{ chainId: BSC_CHAIN_ID_HEX }],
     });
   } catch (err) {
     if (err?.code === 4902) {
-      await p.request({
+      await provider.request({
         method: 'wallet_addEthereumChain',
         params: [{
           chainId: BSC_CHAIN_ID_HEX,
           chainName: 'BNB Smart Chain',
           nativeCurrency: { name: 'BNB', symbol: 'BNB', decimals: 18 },
-          rpcUrls: ['https://bsc-dataseed.binance.org'],
+          rpcUrls: ['https://bsc-rpc.publicnode.com'],
           blockExplorerUrls: ['https://bscscan.com'],
         }],
       });
@@ -232,16 +307,13 @@ async function evmSwitchToBsc() {
 }
 
 // =====================================================================
-// PRE-WALLET SIMULATION — mirrors the Stocks.jsx simulateBeforeSign flow,
-// adapted for EVM. We dry-run the exact bet (betBull/betBear with the
-// stake as msg.value) via eth_call BEFORE triggering the wallet. If sim
-// reverts, surface a clean error in the UI and never open MetaMask.
+// PRE-SIM + REVERT PARSING (mirrors Stocks.jsx error mapping pattern)
 // =====================================================================
 const PANCAKE_REVERT_MESSAGES = {
   'Bet is too early/late':       'Round closed for betting',
   'Round not bettable':          'Round closed for betting',
   'Bet amount must be greater than minBetAmount':
-                                 'Bet below minimum (try at least 0.001 BNB)',
+                                 'Bet below minimum',
   'Can only bet once per round': 'You already bet this round',
   'Pausable: paused':            'Market is paused — try again later',
   'Not eligible for claim':      'Nothing to claim for this round',
@@ -250,26 +322,16 @@ const PANCAKE_REVERT_MESSAGES = {
 };
 
 function parseEvmRevert(err) {
-  // Wallet user rejection — not a contract revert
   if (err?.code === 4001) return 'Cancelled';
-
-  // viem surfaces revert reasons via shortMessage / cause.reason / details
   const candidates = [
-    err?.cause?.reason,
-    err?.cause?.shortMessage,
-    err?.reason,
-    err?.shortMessage,
-    err?.details,
-    err?.message,
+    err?.cause?.reason, err?.cause?.shortMessage,
+    err?.reason, err?.shortMessage, err?.details, err?.message,
   ].filter(Boolean);
-
   for (const c of candidates) {
-    // Direct match against known Pancake revert strings
     for (const [key, friendly] of Object.entries(PANCAKE_REVERT_MESSAGES)) {
       if (String(c).includes(key)) return friendly;
     }
   }
-
   const msg = String(err?.message || '');
   if (/insufficient funds/i.test(msg))   return 'Not enough BNB for bet + gas';
   if (/gas required exceeds/i.test(msg)) return 'Gas estimation failed';
@@ -284,18 +346,12 @@ function parseEvmRevert(err) {
 
 async function simulateBet({ from, contractAddress, calldata, valueWei }) {
   try {
-    await publicClient.call({
-      account: from,
-      to: contractAddress,
-      data: calldata,
-      value: valueWei,
-    });
+    await publicClient.call({ account: from, to: contractAddress, data: calldata, value: valueWei });
     return { ok: true };
   } catch (e) {
     return { ok: false, message: parseEvmRevert(e) };
   }
 }
-
 async function simulateClaim({ from, contractAddress, calldata }) {
   try {
     await publicClient.call({ account: from, to: contractAddress, data: calldata });
@@ -306,24 +362,13 @@ async function simulateClaim({ from, contractAddress, calldata }) {
 }
 
 // =====================================================================
-// BUNDLED TX — EIP-5792 wallet_sendCalls (atomic) with sequential fallback.
-// Same atomic-fee philosophy as Stocks.jsx: stake to contract + fee to
-// treasury in one signature flow.
-//
-// For BETS: stake goes to Pancake contract (with betBull/betBear calldata),
-// fee goes to treasury. Both succeed or both fail (when EIP-5792 supported).
-//
-// For CLAIMS: claim() pays winnings to msg.sender. Then a SECOND tx sends
-// X% of winnings from user to treasury. Sequential is safer here — fee tx
-// fires AFTER claim confirms and balance updates.
+// BUNDLED TXS — EIP-5792 wallet_sendCalls (atomic) with sequential fallback
 // =====================================================================
-async function sendBundledTxs({ from, calls }) {
-  const p = getInjectedProvider();
-  if (!p) throw new Error('No EVM wallet detected');
+async function sendBundledTxs({ provider, from, calls }) {
+  if (!provider) throw new Error('No EVM provider');
 
-  // Try EIP-5792 batched send first
   try {
-    const result = await p.request({
+    const result = await provider.request({
       method: 'wallet_sendCalls',
       params: [{
         version: '1.0',
@@ -339,20 +384,17 @@ async function sendBundledTxs({ from, calls }) {
     return { type: 'batched', id: result?.id || result, hashes: [] };
   } catch (err) {
     const notSupported =
-      err?.code === -32601 ||
-      err?.code === -32602 ||
+      err?.code === -32601 || err?.code === -32602 ||
       /not supported|unknown method|unsupported|method not found/i.test(err?.message || '');
     if (!notSupported) throw err;
   }
 
-  // Sequential fallback
   const hashes = [];
   for (const c of calls) {
-    const hash = await p.request({
+    const hash = await provider.request({
       method: 'eth_sendTransaction',
       params: [{
-        from,
-        to:    c.to,
+        from, to: c.to,
         value: '0x' + BigInt(c.valueWei || 0n).toString(16),
         data:  c.data || '0x',
       }],
@@ -363,7 +405,7 @@ async function sendBundledTxs({ from, calls }) {
 }
 
 // =====================================================================
-// CONTRACT READS — round state + user bets
+// CONTRACT READS
 // =====================================================================
 function parseRound(r) {
   if (!r) return null;
@@ -443,9 +485,6 @@ async function fetchRecentUserBets(asset, userAddress, count = 10) {
   }
 }
 
-// Compute expected payout for a winning bet — used to size the win-fee tx.
-// Pancake formula: (totalPool × 0.97 × userBet) / winningSideTotal.
-// We use this to estimate; actual payout from claim() is what's authoritative.
 async function fetchExpectedPayout(asset, epoch, userAddress) {
   const address = PREDICTION_CONTRACTS[asset];
   if (!address || !userAddress) return 0n;
@@ -459,7 +498,7 @@ async function fetchExpectedPayout(asset, epoch, userAddress) {
     const bearAmount  = BigInt(roundData.bearAmount  ?? roundData[10]);
     const lockPrice   = BigInt(roundData.lockPrice  ?? roundData[4]);
     const closePrice  = BigInt(roundData.closePrice ?? roundData[5]);
-    const userPos     = Number(ledger.position ?? ledger[0]);  // 0 = Bull, 1 = Bear
+    const userPos     = Number(ledger.position ?? ledger[0]);
     const userAmount  = BigInt(ledger.amount ?? ledger[1]);
     if (userAmount <= 0n) return 0n;
     const userWon = (userPos === 0 && closePrice > lockPrice) ||
@@ -467,18 +506,11 @@ async function fetchExpectedPayout(asset, epoch, userAddress) {
     if (!userWon) return 0n;
     const winningSide = userPos === 0 ? bullAmount : bearAmount;
     if (winningSide <= 0n) return 0n;
-    // (totalAmount × 97 × userAmount) / (100 × winningSide)
     return (totalAmount * 97n * userAmount) / (100n * winningSide);
   } catch (e) {
-    console.warn('[fetchExpectedPayout]', e?.message);
     return 0n;
   }
 }
-
-// =====================================================================
-// (Mock state removed for live build — null state surfaces RPC issues
-// to the user instead of showing fake prices/pools)
-// =====================================================================
 
 // =====================================================================
 // SUB-COMPONENTS
@@ -519,7 +551,7 @@ function CountdownText({ targetMs, urgent }) {
   );
 }
 
-function LiveRoundCard({ state, onBet, account, onBsc, isStale }) {
+function LiveRoundCard({ state, onBet, isStale }) {
   if (!state?.live) return null;
   const { live, next } = state;
   const livePool = live.totalAmount;
@@ -673,14 +705,165 @@ function PositionsPanel({ bets, onClaim, claiming }) {
 }
 
 // =====================================================================
-// BetModal — mirrors Stocks.jsx TradeModal flow:
-//   1. User types amount → we compute fee + stake
-//   2. Pre-simulate the EXACT call via eth_call
-//   3. If sim fails → clean error, never trigger wallet
-//   4. If sim passes → "Confirm in your wallet..." → submit
-//   5. On success → refetch state
+// WALLET PICKER MODAL — opens when user taps "Connect"
+// Shows: detected EIP-6963 wallets + WalletConnect option + legacy fallback
 // =====================================================================
-function BetModal({ open, onClose, asset, side, epoch, account, onSuccess }) {
+function WalletPickerModal({ open, onClose, injectedWallets, onConnectInjected, onConnectWalletConnect, connecting, mobileDeepLink, error }) {
+  useBodyLock(open);
+  if (!open) return null;
+
+  const safariWithNoWallets = isIos() && injectedWallets.length === 0;
+  const wcAvailable = Boolean(WC_PROJECT_ID);
+
+  return (
+    <>
+      <div onClick={connecting ? undefined : onClose} style={{
+        position: 'fixed', inset: 0, zIndex: 400,
+        background: 'rgba(0,0,0,.85)', backdropFilter: 'blur(12px)',
+        cursor: connecting ? 'wait' : 'pointer',
+      }}/>
+      <div style={{
+        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
+        width: '100%', maxWidth: 480, zIndex: 401,
+        background: C.card, borderTop: `2px solid ${C.borderHi}`,
+        borderRadius: '20px 20px 0 0',
+        maxHeight: '85dvh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
+      }}>
+        <div style={{ flexShrink: 0, padding: '16px 22px 12px' }}>
+          <div onClick={connecting ? undefined : onClose} style={{
+            width: 40, height: 4, background: '#2e3f5e', borderRadius: 2,
+            margin: '0 auto 18px', cursor: connecting ? 'wait' : 'pointer',
+            padding: '8px 0', boxSizing: 'content-box',
+          }}/>
+          <div style={{ fontSize: 17, fontWeight: 800, color: C.inkStr, letterSpacing: '-.02em', ...T.display }}>
+            Connect EVM Wallet
+          </div>
+          <div style={{ fontSize: 11.5, color: C.muted, marginTop: 4, ...T.body }}>
+            Pancake Predict needs an EVM wallet to bet on BNB Chain.
+          </div>
+        </div>
+
+        <div style={{ flex: 1, overflowY: 'auto', padding: '6px 22px 14px', minHeight: 0, WebkitOverflowScrolling: 'touch' }}>
+          {error && (
+            <div style={{
+              marginBottom: 10, padding: 10,
+              background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.24)',
+              borderRadius: 10, fontSize: 12, color: C.red, ...T.body,
+            }}>{error}</div>
+          )}
+
+          {/* Detected injected wallets */}
+          {injectedWallets.map(w => (
+            <button
+              key={w.key}
+              onClick={() => onConnectInjected(w)}
+              disabled={connecting}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                width: '100%', padding: '12px 14px', marginBottom: 8,
+                background: 'rgba(255,255,255,.025)',
+                border: `1px solid ${C.border}`, borderRadius: 12,
+                cursor: connecting ? 'wait' : 'pointer',
+                opacity: connecting ? 0.5 : 1, ...T.display,
+              }}>
+              {w.icon ? (
+                <img src={w.icon} alt={w.name} style={{ width: 32, height: 32, borderRadius: 8, flexShrink: 0 }}/>
+              ) : (
+                <div style={{
+                  width: 32, height: 32, borderRadius: 8,
+                  background: 'rgba(0,229,255,.10)',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: C.accent, fontWeight: 800, fontSize: 14, flexShrink: 0, ...T.display,
+                }}>{(w.name || '?').charAt(0).toUpperCase()}</div>
+              )}
+              <div style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
+                <div style={{ color: C.inkStr, fontSize: 14, fontWeight: 700 }}>{w.name}</div>
+                <div style={{ color: C.muted, fontSize: 10, marginTop: 1, ...T.mono }}>
+                  {w.source === 'eip6963' ? 'Browser extension' : 'Detected wallet'}
+                </div>
+              </div>
+            </button>
+          ))}
+
+          {/* WalletConnect option (always shown if configured) */}
+          {wcAvailable && (
+            <button
+              onClick={onConnectWalletConnect}
+              disabled={connecting}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 12,
+                width: '100%', padding: '12px 14px', marginBottom: 8,
+                background: 'linear-gradient(135deg,rgba(59,153,252,.15),rgba(0,229,255,.06))',
+                border: '1px solid rgba(59,153,252,.40)',
+                borderRadius: 12,
+                cursor: connecting ? 'wait' : 'pointer',
+                opacity: connecting ? 0.5 : 1, ...T.display,
+              }}>
+              <div style={{
+                width: 32, height: 32, borderRadius: 8,
+                background: '#3b99fc',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                color: '#fff', fontWeight: 800, fontSize: 14, flexShrink: 0, ...T.display,
+              }}>WC</div>
+              <div style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
+                <div style={{ color: C.inkStr, fontSize: 14, fontWeight: 700 }}>WalletConnect</div>
+                <div style={{ color: C.muted, fontSize: 10, marginTop: 1, ...T.mono }}>
+                  Scan QR code from your mobile wallet
+                </div>
+              </div>
+            </button>
+          )}
+
+          {/* Mobile deeplinks for Safari users with no wallets */}
+          {safariWithNoWallets && !wcAvailable && (
+            <div style={{
+              padding: 12, borderRadius: 10, marginTop: 8,
+              background: 'rgba(255,184,77,.08)', border: '1px solid rgba(255,184,77,.30)',
+            }}>
+              <div style={{ fontSize: 11, color: C.amber, fontWeight: 700, marginBottom: 6, letterSpacing: '.06em', ...T.mono }}>
+                NO WALLET DETECTED
+              </div>
+              <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.55, marginBottom: 10, ...T.body }}>
+                Safari doesn't support EVM wallet extensions. To bet, open this page in a wallet's browser:
+              </div>
+              <a
+                href={mobileDeepLink('metamask')}
+                style={{
+                  display: 'block', padding: '10px 12px', borderRadius: 10, marginBottom: 6,
+                  background: 'rgba(0,229,255,.08)', border: `1px solid ${C.borderHi}`,
+                  color: C.accent, fontSize: 12, fontWeight: 700, textDecoration: 'none', ...T.display,
+                }}>Open in MetaMask →</a>
+              <a
+                href={mobileDeepLink('trust')}
+                style={{
+                  display: 'block', padding: '10px 12px', borderRadius: 10,
+                  background: 'rgba(0,229,255,.08)', border: `1px solid ${C.borderHi}`,
+                  color: C.accent, fontSize: 12, fontWeight: 700, textDecoration: 'none', ...T.display,
+                }}>Open in Trust Wallet →</a>
+            </div>
+          )}
+
+          {/* No wallets at all + no WalletConnect */}
+          {injectedWallets.length === 0 && !wcAvailable && !safariWithNoWallets && (
+            <div style={{
+              padding: 12, borderRadius: 10, marginTop: 4,
+              background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.24)',
+              fontSize: 12, color: C.red, ...T.body,
+            }}>
+              No EVM wallet detected. Install MetaMask, Rabby, or Trust Wallet.
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
+// =====================================================================
+// BET MODAL
+// =====================================================================
+function BetModal({ open, onClose, asset, side, epoch, account, provider, onSuccess }) {
   const [amount, setAmount] = useState('');
   const [submitState, setSubmitState] = useState({ kind: 'idle', message: '' });
   const [error, setError]   = useState('');
@@ -696,8 +879,6 @@ function BetModal({ open, onClose, asset, side, epoch, account, onSuccess }) {
 
   if (!open) return null;
 
-  // User types TOTAL bnb they want to spend. We skim the fee off the top,
-  // forward the remainder to Pancake. Total wallet outflow = typed amount.
   const totalBnb  = parseFloat(amount) || 0;
   const feeBnb    = totalBnb * (ENTRY_FEE_BPS / 10_000);
   const stakeBnb  = totalBnb - feeBnb;
@@ -710,11 +891,9 @@ function BetModal({ open, onClose, asset, side, epoch, account, onSuccess }) {
 
   const execute = async () => {
     setError('');
-
-    // ── Validation ──────────────────────────────────────────────────
-    if (!ENABLE_TRADING)      return setError('Live trading disabled (set REACT_APP_PANCAKE_LIVE_TRADING=1)');
-    if (!account)             return setError('Wallet not connected');
-    if (!isAddress(account))  return setError('Invalid account address');
+    if (!ENABLE_TRADING)      return setError('Live trading disabled');
+    if (!account || !provider) return setError('Wallet not connected');
+    if (!isAddress(account))  return setError('Invalid account');
     if (!TREASURY_BSC || !isAddress(TREASURY_BSC)) return setError('Treasury not configured');
     const contractAddress = PREDICTION_CONTRACTS[asset];
     if (!contractAddress || !isAddress(contractAddress)) return setError(`${asset} contract not configured`);
@@ -724,30 +903,21 @@ function BetModal({ open, onClose, asset, side, epoch, account, onSuccess }) {
     setSubmitState({ kind: 'loading', message: 'Building transaction...' });
 
     try {
-      // toFixed(18) avoids floating-point precision issues with parseEther
       const stakeWei = parseEther(stakeBnb.toFixed(18));
       const feeWei   = parseEther(feeBnb.toFixed(18));
-
       const calldata = encodeFunctionData({
         abi: PREDICTION_ABI,
         functionName: isUp ? 'betBull' : 'betBear',
         args: [BigInt(epoch)],
       });
 
-      // ── Pre-simulate the bet via eth_call ────────────────────────
-      // Catches: round closed, paused, below contract minBet, duplicate bet.
       setSubmitState({ kind: 'loading', message: 'Checking round...' });
-      const sim = await simulateBet({
-        from:            account,
-        contractAddress, calldata,
-        valueWei:        stakeWei,
-      });
+      const sim = await simulateBet({ from: account, contractAddress, calldata, valueWei: stakeWei });
       if (!sim.ok) throw new Error(sim.message || 'Simulation failed');
 
-      // ── Bundle bet + fee in one signature flow ───────────────────
       setSubmitState({ kind: 'loading', message: 'Confirm in your wallet...' });
       const result = await sendBundledTxs({
-        from: account,
+        provider, from: account,
         calls: [
           { to: contractAddress, valueWei: stakeWei, data: calldata },
           { to: TREASURY_BSC,    valueWei: feeWei,   data: '0x' },
@@ -759,7 +929,6 @@ function BetModal({ open, onClose, asset, side, epoch, account, onSuccess }) {
       onSuccess?.();
       setTimeout(() => onClose(), 2200);
     } catch (e) {
-      console.error('[pancake bet]', e);
       const friendly = parseEvmRevert(e);
       setError(friendly);
       setSubmitState({ kind: 'error', message: friendly });
@@ -791,9 +960,7 @@ function BetModal({ open, onClose, asset, side, epoch, account, onSuccess }) {
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <AssetIcon symbol={asset} size={42}/>
             <div>
-              <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>
-                BET · ROUND #{epoch}
-              </div>
+              <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>BET · ROUND #{epoch}</div>
               <div style={{ fontSize: 17, fontWeight: 800, color: C.inkStr, marginTop: 2, letterSpacing: '-.02em', ...T.display }}>
                 {asset} closes {isUp ? 'HIGHER' : 'LOWER'}
               </div>
@@ -889,9 +1056,7 @@ function BetModal({ open, onClose, asset, side, epoch, account, onSuccess }) {
               marginBottom: 10, padding: 10,
               background: 'rgba(0,255,163,.08)', border: '1px solid rgba(0,255,163,.24)',
               borderRadius: 10, fontSize: 11, color: C.green, ...T.mono,
-            }}>
-              {txInfo.type === 'batched' ? 'Batched atomically' : `Sent ${txInfo.hashes.length} txs`}
-            </div>
+            }}>{txInfo.type === 'batched' ? 'Batched atomically' : `Sent ${txInfo.hashes.length} txs`}</div>
           )}
 
           <button onClick={execute} disabled={isBusy || !amount || tooSmall || tooLarge} style={{
@@ -919,8 +1084,16 @@ function BetModal({ open, onClose, asset, side, epoch, account, onSuccess }) {
 // MAIN COMPONENT
 // =====================================================================
 export default function PancakePredict() {
-  const [account, setAccount]         = useState(null);
-  const [chainId, setChainId]         = useState(null);
+  // ── EVM wallet state — fully isolated to this page ────────────────
+  const injectedWallets = useInjectedWallets();
+  const [activeProvider, setActiveProvider] = useState(null);
+  const [account, setAccount]   = useState(null);
+  const [chainId, setChainId]   = useState(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [connecting, setConnecting] = useState(false);
+  const [connectError, setConnectError] = useState('');
+
+  // ── App state ─────────────────────────────────────────────────────
   const [activeAsset, setActiveAsset] = useState('BNB');
   const [roundState, setRoundState]   = useState(null);
   const [userBets, setUserBets]       = useState([]);
@@ -928,16 +1101,14 @@ export default function PancakePredict() {
   const [betCtx, setBetCtx]           = useState(null);
   const [claiming, setClaiming]       = useState(false);
   const [error, setError]             = useState('');
-  const [refetchTick, setRefetchTick] = useState(0);  // bumped after bet/claim
+  const [refetchTick, setRefetchTick] = useState(0);
 
-  const walletName = useMemo(detectWalletName, []);
-  const onBsc      = chainId === BSC_CHAIN_ID;
-  const isStale    = roundState?.fetchedAt
+  const onBsc = chainId === BSC_CHAIN_ID;
+  const isStale = roundState?.fetchedAt
     ? (Date.now() - roundState.fetchedAt) > STALE_STATE_MS
     : false;
   const [, forceStaleCheck] = useState(0);
 
-  // Re-render every 5s so isStale stays accurate even if the polling fails
   useEffect(() => {
     const id = setInterval(() => forceStaleCheck(x => x + 1), 5_000);
     return () => clearInterval(id);
@@ -947,53 +1118,99 @@ export default function PancakePredict() {
     ENABLE_TRADING && TREASURY_BSC && isAddress(TREASURY_BSC)
   );
 
-  // ── Wallet event listeners ──────────────────────────────────────────
-  useEffect(() => {
-    const p = getInjectedProvider();
-    if (!p) return;
-    const onAccountsChanged = accs => setAccount(accs?.[0] || null);
-    const onChainChanged    = hex  => setChainId(parseInt(hex, 16));
-    p.on?.('accountsChanged', onAccountsChanged);
-    p.on?.('chainChanged',    onChainChanged);
-    (async () => {
-      try {
-        const accs = await p.request({ method: 'eth_accounts' });
-        if (accs?.[0]) setAccount(accs[0]);
-        setChainId(await evmCurrentChainId());
-      } catch {}
-    })();
-    return () => {
-      p.removeListener?.('accountsChanged', onAccountsChanged);
-      p.removeListener?.('chainChanged',    onChainChanged);
-    };
+  // ── Mobile deeplinks for Safari users ────────────────────────────
+  const mobileDeepLink = useCallback((wallet) => {
+    if (typeof window === 'undefined') return '#';
+    const host = window.location.host;
+    const path = window.location.pathname + window.location.search;
+    const url  = host + path;
+    if (wallet === 'metamask') return `https://metamask.app.link/dapp/${url}`;
+    if (wallet === 'trust')    return `https://link.trustwallet.com/open_url?coin_id=20000714&url=${encodeURIComponent('https://' + url)}`;
+    return '#';
   }, []);
 
-  const handleConnect = useCallback(async () => {
-    setError('');
+  // ── Wire provider event listeners ────────────────────────────────
+  useEffect(() => {
+    if (!activeProvider) return;
+    const onAccountsChanged = accs => setAccount(accs?.[0] || null);
+    const onChainChanged    = hex  => setChainId(typeof hex === 'string' ? parseInt(hex, 16) : Number(hex));
+    const onDisconnect      = () => { setAccount(null); setActiveProvider(null); setChainId(null); };
+
+    activeProvider.on?.('accountsChanged', onAccountsChanged);
+    activeProvider.on?.('chainChanged',    onChainChanged);
+    activeProvider.on?.('disconnect',      onDisconnect);
+
+    return () => {
+      activeProvider.removeListener?.('accountsChanged', onAccountsChanged);
+      activeProvider.removeListener?.('chainChanged',    onChainChanged);
+      activeProvider.removeListener?.('disconnect',      onDisconnect);
+    };
+  }, [activeProvider]);
+
+  // ── Connect via injected wallet ──────────────────────────────────
+  const handleConnectInjected = useCallback(async (wallet) => {
+    setConnectError('');
+    setConnecting(true);
     try {
-      if (!getInjectedProvider()) {
-        setError('No EVM wallet found. Install MetaMask, Rabby, or Trust Wallet.');
-        return;
-      }
-      const accs = await evmRequestAccounts();
-      setAccount(accs?.[0] || null);
-      setChainId(await evmCurrentChainId());
+      const accs = await evmRequestAccounts(wallet.provider);
+      if (!accs?.[0]) throw new Error('No account returned');
+      setActiveProvider(wallet.provider);
+      setAccount(accs[0]);
+      setChainId(await evmCurrentChainId(wallet.provider));
+      setPickerOpen(false);
     } catch (e) {
-      if (e?.code === 4001) return;
-      setError(e?.message || 'Connection failed');
+      if (e?.code === 4001) {
+        setConnectError('Connection cancelled');
+      } else {
+        setConnectError(e?.message || 'Connection failed');
+      }
+    } finally {
+      setConnecting(false);
     }
   }, []);
+
+  // ── Connect via WalletConnect ────────────────────────────────────
+  const handleConnectWalletConnect = useCallback(async () => {
+    setConnectError('');
+    setConnecting(true);
+    try {
+      const provider = await getWalletConnectProvider();
+      await provider.connect();  // opens QR modal
+      const accs = await provider.request({ method: 'eth_accounts' });
+      if (!accs?.[0]) throw new Error('No account returned');
+      setActiveProvider(provider);
+      setAccount(accs[0]);
+      setChainId(await evmCurrentChainId(provider));
+      setPickerOpen(false);
+    } catch (e) {
+      if (e?.code === 4001 || /reject|cancel/i.test(e?.message || '')) {
+        setConnectError('Connection cancelled');
+      } else {
+        setConnectError(e?.message || 'WalletConnect failed');
+      }
+    } finally {
+      setConnecting(false);
+    }
+  }, []);
+
+  const handleDisconnect = useCallback(async () => {
+    try {
+      if (activeProvider?.disconnect) await activeProvider.disconnect();
+    } catch {}
+    setActiveProvider(null);
+    setAccount(null);
+    setChainId(null);
+  }, [activeProvider]);
 
   const handleSwitchNetwork = useCallback(async () => {
     setError('');
-    try { await evmSwitchToBsc(); }
+    try { await evmSwitchToBsc(activeProvider); }
     catch (e) {
-      if (e?.code === 4001) return;
-      setError(e?.message || 'Network switch failed');
+      if (e?.code !== 4001) setError(e?.message || 'Network switch failed');
     }
-  }, []);
+  }, [activeProvider]);
 
-  // ── Round state polling (every 5s) ──────────────────────────────────
+  // ── Round state polling ───────────────────────────────────────────
   useEffect(() => {
     let alive = true;
     const tick = async () => {
@@ -1005,7 +1222,7 @@ export default function PancakePredict() {
     return () => { alive = false; clearInterval(id); };
   }, [activeAsset, refetchTick]);
 
-  // ── User bets polling (every 15s) ───────────────────────────────────
+  // ── User bets polling ─────────────────────────────────────────────
   const refreshBets = useCallback(async () => {
     if (!account || !ENABLE_TRADING) { setUserBets([]); return; }
     const allBets = [];
@@ -1024,44 +1241,32 @@ export default function PancakePredict() {
     return () => clearInterval(id);
   }, [account, refreshBets, refetchTick]);
 
-  // ── Bet trigger ─────────────────────────────────────────────────────
+  // ── Bet trigger ───────────────────────────────────────────────────
   const handleBet = (asset, side, epoch) => {
     setError('');
-    if (!account) { handleConnect(); return; }
+    if (!account) { setPickerOpen(true); return; }
     if (!onBsc)   { handleSwitchNetwork(); return; }
     setBetCtx({ asset, side, epoch });
     setBetOpen(true);
   };
 
-  // ── Claim flow ──────────────────────────────────────────────────────
-  // Claim through our site = we sequentially call claim() and then the
-  // win-fee transfer. Win fee is 10% of estimated payout per round.
-  //
-  // Sequential is intentional: claim() pays winnings to user's wallet,
-  // THEN we send fee. If user cancels the fee tx, they kept their
-  // winnings — we just don't get the fee. Acceptable leak vs custodial
-  // alternatives.
+  // ── Claim flow ────────────────────────────────────────────────────
   const handleClaim = async (bets) => {
     if (!bets?.length || !account) return;
     if (!onBsc) { handleSwitchNetwork(); return; }
 
-    // Group epochs by asset (one claim() call per contract)
     const byAsset = {};
     bets.forEach(b => { (byAsset[b.asset] = byAsset[b.asset] || []).push(b.epoch); });
 
     setClaiming(true);
     setError('');
-
     try {
       let totalPayoutWei = 0n;
-
-      // Estimate total expected payout across all claimed rounds → for win fee
       for (const b of bets) {
         const payout = await fetchExpectedPayout(b.asset, b.epoch, account);
         totalPayoutWei += payout;
       }
 
-      // Build claim calls (one per asset contract) + one fee call
       const calls = [];
       for (const [asset, epochs] of Object.entries(byAsset)) {
         const address = PREDICTION_CONTRACTS[asset];
@@ -1071,21 +1276,17 @@ export default function PancakePredict() {
           functionName: 'claim',
           args: [epochs.map(e => BigInt(e))],
         });
-
-        // Pre-sim each claim — bail before triggering wallet if any would revert
         const sim = await simulateClaim({ from: account, contractAddress: address, calldata });
         if (!sim.ok) throw new Error(sim.message || 'Claim simulation failed');
-
         calls.push({ to: address, valueWei: 0n, data: calldata });
       }
 
-      // Append win fee transfer if applicable
       const winFeeWei = (totalPayoutWei * BigInt(WIN_FEE_BPS)) / 10000n;
       if (winFeeWei > 0n && TREASURY_BSC && isAddress(TREASURY_BSC)) {
         calls.push({ to: TREASURY_BSC, valueWei: winFeeWei, data: '0x' });
       }
 
-      await sendBundledTxs({ from: account, calls });
+      await sendBundledTxs({ provider: activeProvider, from: account, calls });
       setRefetchTick(t => t + 1);
     } catch (e) {
       const friendly = parseEvmRevert(e);
@@ -1164,14 +1365,14 @@ export default function PancakePredict() {
         }}>
           <div style={{ minWidth: 0, flex: 1 }}>
             <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.06em', ...T.mono }}>
-              {account ? (onBsc ? 'CONNECTED · BNB CHAIN' : 'WRONG NETWORK') : 'NOT CONNECTED'}
+              {account ? (onBsc ? 'CONNECTED · BNB CHAIN' : 'WRONG NETWORK') : 'EVM WALLET'}
             </div>
             <div style={{ fontSize: 12, color: C.inkStr, fontWeight: 700, marginTop: 3, ...T.mono }}>
-              {account ? shortAddr(account) : walletName ? `${walletName} detected` : 'No EVM wallet'}
+              {account ? shortAddr(account) : 'Not connected'}
             </div>
           </div>
           {!account ? (
-            <button onClick={handleConnect} style={{
+            <button onClick={() => setPickerOpen(true)} style={{
               padding: '8px 14px', borderRadius: 99, border: 'none',
               background: `linear-gradient(135deg,${C.accent},${C.accent2})`,
               color: C.bg, fontWeight: 800, fontSize: 12, cursor: 'pointer', ...T.display,
@@ -1183,7 +1384,7 @@ export default function PancakePredict() {
               color: C.bg, fontWeight: 800, fontSize: 12, cursor: 'pointer', ...T.display,
             }}>Switch to BSC</button>
           ) : (
-            <button onClick={() => setAccount(null)} style={{
+            <button onClick={handleDisconnect} style={{
               padding: '8px 12px', borderRadius: 99,
               border: `1px solid ${C.border}`, background: 'transparent',
               color: C.muted, fontWeight: 700, fontSize: 11, cursor: 'pointer', ...T.mono,
@@ -1197,6 +1398,24 @@ export default function PancakePredict() {
             background: 'rgba(255,59,107,.08)', border: '1px solid rgba(255,59,107,.24)',
             fontSize: 12, color: C.red, ...T.body,
           }}>{error}</div>
+        )}
+
+        {!tradingConfigured && (
+          <div style={{
+            marginBottom: 14, padding: 10, borderRadius: 10,
+            background: 'rgba(255,184,77,.08)', border: '1px solid rgba(255,184,77,.30)',
+            fontSize: 12, color: C.amber, fontWeight: 600, ...T.body,
+          }}>
+            Trading not configured — set <code style={{ fontSize: 10, ...T.mono }}>REACT_APP_PANCAKE_LIVE_TRADING=1</code> and <code style={{ fontSize: 10, ...T.mono }}>REACT_APP_PANCAKE_TREASURY_BSC</code>.
+          </div>
+        )}
+
+        {isStale && roundState && (
+          <div style={{
+            marginBottom: 14, padding: 10, borderRadius: 10,
+            background: 'rgba(255,184,77,.08)', border: '1px solid rgba(255,184,77,.30)',
+            fontSize: 12, color: C.amber, fontWeight: 600, ...T.body,
+          }}>Round data is stale. Reconnecting to BSC RPC…</div>
         )}
 
         <PositionsPanel bets={userBets} onClaim={handleClaim} claiming={claiming}/>
@@ -1223,26 +1442,8 @@ export default function PancakePredict() {
           ))}
         </div>
 
-        {!tradingConfigured && (
-          <div style={{
-            marginBottom: 14, padding: 10, borderRadius: 10,
-            background: 'rgba(255,184,77,.08)', border: '1px solid rgba(255,184,77,.30)',
-            fontSize: 12, color: C.amber, fontWeight: 600, ...T.body,
-          }}>
-            Trading not configured — set <code style={{ fontSize: 10, ...T.mono }}>REACT_APP_PANCAKE_LIVE_TRADING=1</code> and <code style={{ fontSize: 10, ...T.mono }}>REACT_APP_PANCAKE_TREASURY_BSC</code>.
-          </div>
-        )}
-
-        {isStale && roundState && (
-          <div style={{
-            marginBottom: 14, padding: 10, borderRadius: 10,
-            background: 'rgba(255,184,77,.08)', border: '1px solid rgba(255,184,77,.30)',
-            fontSize: 12, color: C.amber, fontWeight: 600, ...T.body,
-          }}>Round data is stale. Reconnecting to BSC RPC…</div>
-        )}
-
         {roundState ? (
-          <LiveRoundCard state={roundState} onBet={handleBet} account={account} onBsc={onBsc} isStale={isStale}/>
+          <LiveRoundCard state={roundState} onBet={handleBet} isStale={isStale}/>
         ) : (
           <div style={{
             padding: '30px 16px', borderRadius: 16, textAlign: 'center',
@@ -1253,11 +1454,21 @@ export default function PancakePredict() {
 
         <div style={{
           fontSize: 9.5, color: C.muted2, lineHeight: 1.5,
-          textAlign: 'center', padding: '12px 8px',
-          marginTop: 6,
+          textAlign: 'center', padding: '12px 8px', marginTop: 6,
         }}>
           Bets settle on PancakeSwap Prediction on BNB Chain. {(ENTRY_FEE_BPS / 100).toFixed(2)}% service fee on entry, {(WIN_FEE_BPS / 100).toFixed(0)}% on winnings claimed through this site.
         </div>
+
+        <WalletPickerModal
+          open={pickerOpen}
+          onClose={() => setPickerOpen(false)}
+          injectedWallets={injectedWallets}
+          onConnectInjected={handleConnectInjected}
+          onConnectWalletConnect={handleConnectWalletConnect}
+          connecting={connecting}
+          mobileDeepLink={mobileDeepLink}
+          error={connectError}
+        />
 
         <BetModal
           open={betOpen}
@@ -1266,6 +1477,7 @@ export default function PancakePredict() {
           side={betCtx?.side}
           epoch={betCtx?.epoch}
           account={account}
+          provider={activeProvider}
           onSuccess={() => setRefetchTick(t => t + 1)}
         />
       </div>
