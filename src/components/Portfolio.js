@@ -521,10 +521,10 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
         {/* HOLDINGS LIST */}
         <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', backdropFilter: 'blur(12px)' }}>
 
-          {/* SOL row — always shown if connected */}
+          {/* SOL row — always shown if connected. Not clickable: this is a
+              read-only wallet view; trading happens on Swap / Stocks tabs. */}
           <TokenRow
             token={{ mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, price: solPriceUsd, value: solValue, uiAmount: solBalance }}
-            onClick={() => openTokenPage({ mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, price: solPriceUsd, value: solValue, uiAmount: solBalance }, onSelectCoin)}
           />
 
           {/* SPL + Token-2022 tokens (USDC, USDT, xStocks, etc.) */}
@@ -543,7 +543,6 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
             <TokenRow
               key={token.mint}
               token={token}
-              onClick={() => openTokenPage(token, onSelectCoin)}
             />
           ))}
         </div>
