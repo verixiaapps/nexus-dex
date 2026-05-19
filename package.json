@@ -42,7 +42,6 @@
     "@nktkas/hyperliquid": "^0.32.2",
     "ethers": "^6.13.0",
     "@lifi/sdk": "^3.16.3",
-    "@mayanfinance/swap-sdk": "^10.6.1",
     "@polymarket/clob-client-v2": "^1.0.0", 
     "viem": "^2.0.0"
   },
