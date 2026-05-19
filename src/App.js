@@ -166,7 +166,7 @@ function TermsGate({ onAccept }) {
 
             • All swaps, perpetual trades, routing, execution, liquidity, pricing, prediction markets, and blockchain interactions are handled by third-party protocols, aggregators, exchanges, smart contracts, and infrastructure providers. All transactions are initiated, reviewed, authorized, and signed directly by you through your own wallet.<br/><br/>
 
-            • <strong style={{ color: '#fff' }}>Prediction market bridging.</strong> Prediction market trades on Nexus route through a third-party cross-chain bridge to Polymarket on Polygon. Bridge typical delivery is 1–3 minutes. Bridge failures auto-refund the bridged USDC directly to your Solana wallet via the bridge protocol. Nexus charges a non-refundable service fee on successful Solana-side execution; if the bridge fails to deliver to your destination within 24 hours, Nexus will return the service fee to your Solana wallet. Position settlement occurs on Polymarket; Nexus is non-custodial and cannot recover, modify, or cancel positions held on Polymarket.<br/><br/>
+            • <strong style={{ color: '#fff' }}>Prediction market bridging.</strong> Prediction market trades on Nexus route through Polymarket's own multi-chain bridge (operated by a third party, fun.xyz, on Polymarket's behalf) from your Solana wallet to USDC.e on Polygon. Bridge typical delivery is 1–3 minutes. Bridge failure handling, refunds, and timing are entirely controlled by Polymarket and its bridge provider — Nexus is not party to the bridge. The Nexus service fee is captured atomically on the Solana side and is non-refundable regardless of bridge outcome. Position settlement occurs on Polymarket; Nexus is non-custodial and cannot recover, modify, or cancel positions held on Polymarket. Withdrawals from Polymarket back to your Solana wallet are routed through the same Polymarket bridge.<br/><br/>
 
             • Digital assets, perpetuals, leverage, DeFi protocols, smart contracts, and prediction markets carry substantial risk including total loss of funds from liquidation, exploits, smart-contract vulnerabilities, slippage, protocol failures, hacks, MEV, frontrunning, network outages, oracle errors, and human error. <strong style={{ color: '#fff' }}>You assume all risk.</strong><br/><br/>
 
@@ -400,7 +400,6 @@ const NAV_TABS = [
   { id: 'swap',        label: 'Swap' },
   { id: 'stocks',      label: 'Stocks' },
   { id: 'perps',       label: 'Perps' },
-  { id: 'sports',      label: 'Sports' },
   { id: 'predict',     label: 'Predict' },
   { id: 'portfolio',   label: 'Wallet' },
 ];
@@ -413,7 +412,7 @@ function AppInner() {
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 769);
 
   const [termsAccepted, setTermsAccepted] = useState(() => {
-    try { return localStorage.getItem('nexus_terms_accepted') === '1'; } catch { return false; }
+    try { return localStorage.getItem('nexus_terms_accepted_v3') === '1'; } catch { return false; }
   });
 
   useEffect(() => { let to; const h = () => { clearTimeout(to); to = setTimeout(() => setIsMobile(window.innerWidth < 769), 150); }; window.addEventListener('resize', h); return () => { window.removeEventListener('resize', h); clearTimeout(to); }; }, []);
@@ -434,7 +433,7 @@ function AppInner() {
   const activeTab = getActiveTab(tab);
 
   if (!termsAccepted) {
-    return <TermsGate onAccept={() => { try { localStorage.setItem('nexus_terms_accepted', '1'); } catch {} setTermsAccepted(true); }} />;
+    return <TermsGate onAccept={() => { try { localStorage.setItem('nexus_terms_accepted_v3', '1'); } catch {} setTermsAccepted(true); }} />;
   }
 
   return (
@@ -474,4 +473,3 @@ function AppInner() {
 }
 
 export default function App() { return (<BrowserRouter><AppInner /></BrowserRouter>); }
- 
