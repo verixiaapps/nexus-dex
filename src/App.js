@@ -7,8 +7,9 @@ import Portfolio from './components/Portfolio.js';
 import TokenDetail from './components/TokenDetail.js';
 import PerpsLanding from './components/PerpsLanding.jsx';
 import Stocks from './components/Stocks.jsx';
-import PancakePredict from './components/PancakePredict.jsx';
- 
+import PredictionsTonight from './components/PredictionsTonight.jsx';
+import DeFiPredict from './components/DeFiPredict.jsx';
+
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b', text: '#cdd6f4', muted: '#586994',
@@ -61,6 +62,7 @@ const PATH_TO_TAB = {
   '/': 'swap', '/swap': 'swap',
   '/stocks': 'stocks',
   '/perps': 'perps',
+  '/sports': 'sports',
   '/predict': 'predict',
   '/portfolio': 'portfolio',
 };
@@ -68,6 +70,7 @@ const TAB_TO_PATH = {
   swap: '/swap',
   stocks: '/stocks',
   perps: '/perps',
+  sports: '/sports',
   predict: '/predict',
   portfolio: '/portfolio',
 };
@@ -162,6 +165,8 @@ function TermsGate({ onAccept }) {
             • <strong style={{ color: '#fff' }}>You are 18 or older</strong> and have full legal capacity to enter this agreement.<br/><br/>
 
             • All swaps, perpetual trades, routing, execution, liquidity, pricing, prediction markets, and blockchain interactions are handled by third-party protocols, aggregators, exchanges, smart contracts, and infrastructure providers. All transactions are initiated, reviewed, authorized, and signed directly by you through your own wallet.<br/><br/>
+
+            • <strong style={{ color: '#fff' }}>Prediction market bridging.</strong> Prediction market trades on Nexus route through a third-party cross-chain bridge to Polymarket on Polygon. Bridge typical delivery is 1–3 minutes. Bridge failures auto-refund the bridged USDC directly to your Solana wallet via the bridge protocol. Nexus charges a non-refundable service fee on successful Solana-side execution; if the bridge fails to deliver to your destination within 24 hours, Nexus will return the service fee to your Solana wallet. Position settlement occurs on Polymarket; Nexus is non-custodial and cannot recover, modify, or cancel positions held on Polymarket.<br/><br/>
 
             • Digital assets, perpetuals, leverage, DeFi protocols, smart contracts, and prediction markets carry substantial risk including total loss of funds from liquidation, exploits, smart-contract vulnerabilities, slippage, protocol failures, hacks, MEV, frontrunning, network outages, oracle errors, and human error. <strong style={{ color: '#fff' }}>You assume all risk.</strong><br/><br/>
 
@@ -386,14 +391,16 @@ function WalletModal({ open, onClose }) {
 function IconSwap()        { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M7 16V4m0 0L3 8m4-4l4 4"/><path d="M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>; }
 function IconPerps()       { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg>; }
 function IconStocks()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-5"/></svg>; }
+function IconSports()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 6.5l11 11"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96L12 12.01l8.73-5.05"/><path d="M12 22.08V12"/></svg>; }
 function IconPredict()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><circle cx="12" cy="12" r="4"/></svg>; }
 function IconWallet()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
 
-const NAV_ICONS = { swap: IconSwap, stocks: IconStocks, perps: IconPerps, predict: IconPredict, portfolio: IconWallet };
+const NAV_ICONS = { swap: IconSwap, stocks: IconStocks, perps: IconPerps, sports: IconSports, predict: IconPredict, portfolio: IconWallet };
 const NAV_TABS = [
   { id: 'swap',        label: 'Swap' },
   { id: 'stocks',      label: 'Stocks' },
   { id: 'perps',       label: 'Perps' },
+  { id: 'sports',      label: 'Sports' },
   { id: 'predict',     label: 'Predict' },
   { id: 'portfolio',   label: 'Wallet' },
 ];
@@ -453,16 +460,13 @@ function AppInner() {
         {tab === 'swap' && <SwapWidget {...sharedProps} />}
         {tab === 'stocks' && <Stocks onConnectWallet={openWallet} />}
         {tab === 'perps' && <PerpsLanding onConnectWallet={openWallet} />}
-        {tab === 'predict' && <PancakePredict />}
+        {tab === 'sports' && <PredictionsTonight onConnectWallet={openWallet} />}
+        {tab === 'predict' && <DeFiPredict onConnectWallet={openWallet} />}
         {tab === 'portfolio' && <Portfolio onSelectCoin={goToToken} onConnectWallet={openWallet} />}
         {tab === 'token' && <TokenDetail {...sharedProps} coin={selectedToken} onBack={goBack} />}
       </main>
       <nav className="mobile-nav" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100, background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(0,229,255,.1)', display: 'flex', alignItems: 'stretch', paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        {NAV_TABS.map(t => { const Icon = NAV_ICONS[t.id]; return (<button key={t.id} onClick={() => switchTab(t.id)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: activeTab === t.id ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '8px 2px', minHeight: 54, position: 'relative' }}>{activeTab === t.id && <div style={{ position: 'absolute', top: 0, left: '25%', right: '25%', height: 2, borderRadius: '0 0 2px 2px', background: C.accent }} />}<Icon /><span>{t.label}</span></button>); })}
-        <button onClick={openWallet} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: wallet.isConnected ? C.green : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '8px 2px', minHeight: 54 }}>
-          <div style={{ width: 18, height: 18, borderRadius: '50%', border: '2px solid ' + (wallet.isConnected ? C.green : C.muted), display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{wallet.isConnected && <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.green }} />}</div>
-          <span style={{ fontSize: 8 }}>{wallet.isConnected ? displayAddress : 'Connect'}</span>
-        </button>
+        {NAV_TABS.map(t => { const Icon = NAV_ICONS[t.id]; return (<button key={t.id} onClick={() => switchTab(t.id)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: activeTab === t.id ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '6px 2px', minHeight: 54, position: 'relative' }}>{activeTab === t.id && <div style={{ position: 'absolute', top: 0, left: '25%', right: '25%', height: 2, borderRadius: '0 0 2px 2px', background: C.accent }} />}<Icon /><span>{t.label}</span></button>); })}
       </nav>
       <WalletModal open={walletModalOpen} onClose={() => setWalletModalOpen(false)} />
     </div>
