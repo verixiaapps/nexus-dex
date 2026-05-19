@@ -7,7 +7,6 @@ import Portfolio from './components/Portfolio.js';
 import TokenDetail from './components/TokenDetail.js';
 import PerpsLanding from './components/PerpsLanding.jsx';
 import Stocks from './components/Stocks.jsx';
-import PredictionsTonight from './components/PredictionsTonight.jsx';
 import DeFiPredict from './components/DeFiPredict.jsx';
 
 const C = {
@@ -459,7 +458,6 @@ function AppInner() {
         {tab === 'swap' && <SwapWidget {...sharedProps} />}
         {tab === 'stocks' && <Stocks onConnectWallet={openWallet} />}
         {tab === 'perps' && <PerpsLanding onConnectWallet={openWallet} />}
-        {tab === 'sports' && <PredictionsTonight onConnectWallet={openWallet} />}
         {tab === 'predict' && <DeFiPredict onConnectWallet={openWallet} />}
         {tab === 'portfolio' && <Portfolio onSelectCoin={goToToken} onConnectWallet={openWallet} />}
         {tab === 'token' && <TokenDetail {...sharedProps} coin={selectedToken} onBack={goBack} />}
