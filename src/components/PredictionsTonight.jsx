@@ -2,7 +2,6 @@ import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey, VersionedTransaction, TransactionInstruction, TransactionMessage, AddressLookupTableAccount } from '@solana/web3.js';
 import { useNexusWallet } from '../WalletContext.js';
-import ParlayBuilder from './ParlayBuilder.jsx';
 
 // =====================================================================
 // Predictions Tonight — Polymarket sports + politics + events surface.
@@ -200,12 +199,6 @@ function loadCached(k, ttl) {
 }
 function saveCached(k, data) {
   try { localStorage.setItem(k, JSON.stringify({ ts: Date.now(), data })); } catch {}
-}
-
-function mergeRefunds(prev, next) {
-  const seen = new Set(prev.map(r => r.id));
-  const add = next.filter(r => r && r.id && !seen.has(r.id));
-  return add.length ? [...prev, ...add] : prev;
 }
 
 // =====================================================================
@@ -497,39 +490,57 @@ async function bridgeStatus(trackerId) {
   return data;
 }
 
-// Fire-and-forget. Backend reconciler refunds the Solana fee on bridge
-// failure. No frontend polling.
-async function trackBridge({ trackerId, userWallet, feeAtomic, marketId, marketSlug }) {
-  try {
-    await fetchWithTimeout(`${BRIDGE_API_BASE}/track`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        trackerId, userWallet,
-        feeAtomicUsdc: String(feeAtomic || 0),
-        marketId, marketSlug,
-      }),
-    }, 6_000);
-  } catch (e) { console.warn('[trackBridge]', e?.message); }
-}
+// =====================================================================
+// useEvmDestination — silently derive the user's Polygon address from
+// Phantom's multichain EVM provider. No UI prompt — the user signs in
+// with their Solana wallet via App.js's existing modal, and the EVM
+// destination is read off the same Phantom wallet (Phantom Multichain
+// gives the same secret a Solana side and an EVM side). If the user
+// hasn't authorized EVM access yet, authorizeEvm() triggers Phantom's
+// one-time popup. Subscribes to accountsChanged so we stay in sync.
+// Other Solana wallets (Solflare, Backpack, etc.) won't expose an EVM
+// account here — BuyModal surfaces a clear inline error in that case.
+// =====================================================================
+function useEvmDestination() {
+  const [evm, setEvm] = useState(null);
 
-async function fetchUnseenRefunds(walletPubkey) {
-  if (!walletPubkey) return [];
-  try {
-    const res = await fetchWithTimeout(`${BRIDGE_API_BASE}/refunds?wallet=${encodeURIComponent(walletPubkey)}`, {}, 6_000);
-    if (!res.ok) return [];
-    const data = await res.json().catch(() => ({}));
-    return Array.isArray(data?.refunds) ? data.refunds : [];
-  } catch { return []; }
-}
-async function ackRefund(walletPubkey, refundId) {
-  try {
-    await fetchWithTimeout(`${BRIDGE_API_BASE}/refunds/ack`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ wallet: walletPubkey, refundId }),
-    }, 6_000);
-  } catch {}
+  useEffect(() => {
+    let alive = true;
+    const provider = typeof window !== 'undefined' ? window.phantom?.ethereum : null;
+    if (!provider) return;
+
+    // Passive read — does NOT prompt the user.
+    provider.request({ method: 'eth_accounts' })
+      .then(accs => { if (alive && Array.isArray(accs) && accs[0]) setEvm(accs[0]); })
+      .catch(() => {});
+
+    const onChange = (accs) => { if (alive) setEvm(Array.isArray(accs) && accs[0] ? accs[0] : null); };
+    provider.on?.('accountsChanged', onChange);
+    return () => {
+      alive = false;
+      provider.removeListener?.('accountsChanged', onChange);
+    };
+  }, []);
+
+  // Triggers Phantom's EVM authorization popup. Resolves to
+  // { ok, address?, error? }. Safe to call repeatedly.
+  const authorize = useCallback(async () => {
+    const provider = typeof window !== 'undefined' ? window.phantom?.ethereum : null;
+    if (!provider) {
+      return { ok: false, error: 'Phantom EVM not detected. Enable Multichain in Phantom settings, or use Phantom for predictions.' };
+    }
+    try {
+      const accs = await provider.request({ method: 'eth_requestAccounts' });
+      const addr = Array.isArray(accs) ? accs[0] : null;
+      if (!addr) return { ok: false, error: 'No EVM account authorized' };
+      setEvm(addr);
+      return { ok: true, address: addr };
+    } catch (e) {
+      return { ok: false, error: e?.message || 'EVM authorization rejected' };
+    }
+  }, []);
+
+  return { evmAddress: evm, authorizeEvm: authorize };
 }
 
 // =====================================================================
@@ -780,7 +791,7 @@ function MarketRow({ market, onClick }) {
 // =====================================================================
 // BUY MODAL — one signature fee+bridge. Identical to DeFiPredict modal.
 // =====================================================================
-function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress, onConnectWallet, onAddEvm }) {
+function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress, onConnectWallet, onAuthorizeEvm }) {
   const { connected, signTransaction } = useWallet();
   const { activeWalletKind } = useNexusWallet();
   const wcon = connected || activeWalletKind === 'privy';
@@ -800,7 +811,7 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress
   }, [open, initialSide, market?.id]);
 
   // No frontend bridge polling. Tracker handed off to backend; modal
-  // closes on submit; refunds (if any) surface via RefundToast.
+  // closes on submit. Mayan auto-refunds bridged USDC on failure.
 
   if (!open || !market) return null;
 
@@ -824,15 +835,26 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress
     if (!wcon)                    { onConnectWallet?.(); return; }
     if (!walletPubkey)            { setError('Wallet not connected'); return; }
     if (!isValidSolAddress(walletPubkey)) { setError('Invalid Solana address'); return; }
-    if (!evmAddress || !isValidEvmAddress(evmAddress)) {
-      setError('Add a Polygon address to receive bridged USDC');
-      onAddEvm?.(); return;
-    }
     if (!usd || tooSmall) { setError(`Minimum order is $${MIN_ORDER_USDC}`); return; }
     if (tooLarge)         { setError(`Maximum order is $${MAX_ORDER_USDC.toLocaleString()}`); return; }
     if (!TREASURY_USDC_ATA) { setError('Treasury not configured'); return; }
     if (!signTransaction)   { setError('Wallet cannot sign transactions'); return; }
     if (!ENABLE_TRADING)    { setError('Live trading disabled — set REACT_APP_NEXUS_PREDICT_LIVE=1'); return; }
+
+    // Derive the EVM destination silently from Phantom multichain. If
+    // not already authorized, trigger one Phantom popup right before
+    // the Solana signing popup. No separate modal.
+    let dstEvm = evmAddress;
+    if (!dstEvm || !isValidEvmAddress(dstEvm)) {
+      setStatus('quoting'); setStatusMsg('Authorizing EVM destination…');
+      const r = await onAuthorizeEvm?.();
+      if (!r?.ok || !r.address || !isValidEvmAddress(r.address)) {
+        setStatus('error'); setStatusMsg('');
+        setError(r?.error || 'Phantom EVM not available. Use Phantom with Multichain enabled to trade prediction markets.');
+        return;
+      }
+      dstEvm = r.address;
+    }
 
     setStatus('quoting'); setError(''); setStatusMsg('Getting bridge quote…');
     try {
@@ -844,7 +866,7 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress
       const quote = await bridgeQuote({
         amountUsdcAtomic: netAtomic,
         srcAddress:       walletPubkey,
-        dstAddress:       evmAddress,
+        dstAddress:       dstEvm,
       });
       if (!quote?.serializedTx) throw new Error('Bridge returned no transaction');
 
@@ -881,18 +903,11 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress
       const submit = await bridgeSubmit(serialized);
       if (!submit?.trackerId) throw new Error('Bridge submit returned no tracker');
 
-      // 6. Hand off the tracker to backend. Fire-and-forget. Backend's
-      //    cron reconciles bridge outcomes and refunds the Solana fee
-      //    on failure. Frontend never polls.
-      void trackBridge({
-        trackerId:    submit.trackerId,
-        userWallet:   walletPubkey,
-        feeAtomic,
-        marketId:     market.id,
-        marketSlug:   market.slug,
-      });
-
-      // 7. Close the modal immediately. User moves on.
+      // 6. Close the modal immediately. User moves on. Mayan delivers
+      //    USDC to Polygon in 1–3 min; if it fails, Mayan auto-refunds
+      //    the bridged USDC to the user's Solana wallet via the
+      //    protocol. The Nexus service fee was captured atomically on
+      //    the Solana side and is non-refundable.
       setStatus('idle'); setStatusMsg('');
       onClose();
     } catch (e) {
@@ -1022,16 +1037,18 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress
             </div>
           )}
 
-          {/* EVM destination */}
+          {/* EVM destination — auto-derived from Phantom multichain */}
           <div style={{ background: 'rgba(168,127,255,.04)', border: '1px solid rgba(168,127,255,.18)', borderRadius: 14, padding: '11px 13px', marginBottom: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
               <span style={{ fontSize: 9, color: C.violet, fontWeight: 800, letterSpacing: '.08em', ...T.mono }}>BRIDGE DESTINATION (POLYGON)</span>
               {!evmAddress && (
-                <button onClick={() => onAddEvm?.()} style={{ background: 'transparent', border: 'none', color: C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>+ Add</button>
+                <button onClick={() => onAuthorizeEvm?.()} style={{ background: 'transparent', border: 'none', color: C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>ACTIVATE PHANTOM EVM</button>
               )}
             </div>
             <div style={{ fontSize: 11, color: evmAddress ? C.ink : C.muted2, fontFamily: 'monospace', wordBreak: 'break-all', ...T.mono }}>
-              {evmAddress || 'No EVM address linked — required to receive bridged USDC.'}
+              {evmAddress
+                ? `${evmAddress.slice(0, 6)}…${evmAddress.slice(-4)}  ·  Phantom Multichain`
+                : 'Auto-derived from Phantom. You\'ll get one popup to authorize EVM side on first trade.'}
             </div>
           </div>
         </div>
@@ -1055,7 +1072,7 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress
               Connect Solana Wallet
             </button>
           ) : (
-            <button onClick={execute} disabled={isBusy || !amount || tooSmall || tooLarge || !evmAddress} style={{
+            <button onClick={execute} disabled={isBusy || !amount || tooSmall || tooLarge} style={{
               width: '100%', padding: 17, borderRadius: 16, border: 'none',
               background: isError
                 ? `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)`
@@ -1063,8 +1080,8 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress
                 ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`
                 : `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)`,
               color: '#04070f', fontWeight: 800, fontSize: 16,
-              cursor: isBusy || !amount || tooSmall || tooLarge || !evmAddress ? 'not-allowed' : 'pointer',
-              minHeight: 56, opacity: !amount || tooSmall || tooLarge || !evmAddress ? 0.55 : 1,
+              cursor: isBusy || !amount || tooSmall || tooLarge ? 'not-allowed' : 'pointer',
+              minHeight: 56, opacity: !amount || tooSmall || tooLarge ? 0.55 : 1,
               boxShadow: isYes ? '0 12px 30px rgba(61,213,152,.22)' : '0 12px 30px rgba(255,138,158,.24)',
               letterSpacing: '-.01em', ...T.display,
             }}>
@@ -1084,91 +1101,6 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress
 }
 
 // =====================================================================
-// RefundToastStack — only async outcome the user sees. Backend has
-// already returned the USDC fee to their Solana wallet; this surfaces
-// that. Bottom-right corner, dismissible, stacks.
-// =====================================================================
-function RefundToastStack({ refunds, onDismiss }) {
-  if (!refunds || refunds.length === 0) return null;
-  return (
-    <div style={{
-      position: 'fixed', right: 14,
-      bottom: 'calc(env(safe-area-inset-bottom) + 96px)',
-      zIndex: 380, display: 'flex', flexDirection: 'column', gap: 8,
-      maxWidth: 360,
-    }}>
-      {refunds.slice(-3).map(r => (
-        <div key={r.id} style={{
-          padding: '12px 14px', borderRadius: 14,
-          background: 'linear-gradient(145deg,rgba(61,213,152,.10),rgba(151,252,228,.06))',
-          border: '1px solid rgba(61,213,152,.32)',
-          boxShadow: '0 12px 36px rgba(0,0,0,.55), 0 0 24px rgba(61,213,152,.18)',
-          display: 'flex', alignItems: 'flex-start', gap: 10,
-          backdropFilter: 'blur(10px)',
-        }}>
-          <div style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(61,213,152,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <span style={{ color: C.up, fontSize: 14, fontWeight: 900 }}>↺</span>
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 11, fontWeight: 800, color: C.up, letterSpacing: '.06em', ...T.mono, marginBottom: 2 }}>FEE REFUNDED</div>
-            <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.4, ...T.body }}>
-              Bridge didn't complete on a recent trade. We returned {fmt(Number(r.feeUsd || 0), 2)} USDC to your Solana wallet.
-            </div>
-            {r.marketSlug && (
-              <div style={{ fontSize: 10, color: C.muted2, marginTop: 3, ...T.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {r.marketSlug}
-              </div>
-            )}
-          </div>
-          <button onClick={() => onDismiss(r.id)} style={{ background: 'transparent', border: 'none', color: C.muted, fontSize: 18, cursor: 'pointer', padding: 0, lineHeight: 1, flexShrink: 0 }}>×</button>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-// =====================================================================
-// EvmAddressPrompt — capture/edit the user's Polygon destination
-// =====================================================================
-function EvmAddressPrompt({ open, onClose, onSave, current }) {
-  const [val, setVal] = useState(current || '');
-  const [err, setErr] = useState('');
-  useBodyLock(open);
-  useEffect(() => { if (open) { setVal(current || ''); setErr(''); } }, [open, current]);
-  if (!open) return null;
-  const handleSave = () => {
-    if (!isValidEvmAddress(val.trim())) { setErr('Not a valid Polygon address'); return; }
-    if (!onSave(val.trim())) setErr('Could not save address');
-  };
-  return (
-    <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 470, background: 'rgba(0,0,0,.86)', backdropFilter: 'blur(14px)', cursor: 'pointer' }}/>
-      <div style={{
-        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
-        width: '100%', maxWidth: 500, zIndex: 471,
-        background: `linear-gradient(180deg,${C.surface2} 0%,${C.bg} 100%)`,
-        borderTop: '1px solid rgba(168,127,255,.30)', borderRadius: '26px 26px 0 0',
-        padding: '20px 22px calc(env(safe-area-inset-bottom) + 90px)',
-      }}>
-        <div style={{ width: 36, height: 4, background: 'rgba(255,255,255,.12)', borderRadius: 99, margin: '0 auto 18px' }}/>
-        <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 19, letterSpacing: '-.02em', marginBottom: 6, ...T.display }}>Add Polygon address</div>
-        <div style={{ color: C.muted, fontSize: 12, marginBottom: 16, lineHeight: 1.5, ...T.body }}>
-          Where your bridged USDC lands. Phantom Multichain users: paste your Ethereum/Polygon address from Phantom (same wallet, EVM side).
-        </div>
-        <input value={val} onChange={e => { setVal(e.target.value); setErr(''); }} placeholder="0x…"
-          style={{ width: '100%', padding: '13px 14px', borderRadius: 14, border: `1px solid ${err ? 'rgba(255,138,158,.40)' : C.border}`, background: 'rgba(255,255,255,.04)', color: C.inkStr, fontSize: 13, ...T.mono, outline: 'none', marginBottom: err ? 6 : 12 }}/>
-        {err && <div style={{ fontSize: 11, color: C.down, marginBottom: 12, ...T.body }}>{err}</div>}
-        <button onClick={handleSave} style={{
-          width: '100%', padding: 16, borderRadius: 16, border: 'none',
-          background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`,
-          color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display,
-        }}>Save address</button>
-      </div>
-    </>
-  );
-}
-
-// =====================================================================
 // MAIN COMPONENT — Predictions Tonight
 // =====================================================================
 export default function PredictionsTonight({ onConnectWallet }) {
@@ -1177,12 +1109,11 @@ export default function PredictionsTonight({ onConnectWallet }) {
   const [buyOpen, setBuyOpen]     = useState(false);
   const [activeMarket, setActive] = useState(null);
   const [initialSide, setSide]    = useState('YES');
-  const [mode, setMode]           = useState('singles'); // 'singles' | 'parlay'
-  const [evmAddress, setEvmAddr]  = useState(() => {
-    try { return localStorage.getItem('nexus_evm_address') || ''; } catch { return ''; }
-  });
-  const [evmPromptOpen, setEvmPromptOpen] = useState(false);
-  const [refunds, setRefunds]             = useState([]);
+  // Parlay mode removed in v1 — Singles only.
+
+  // Solana wallet only — EVM destination is silently derived from
+  // Phantom multichain. No separate wallet modal for predictions.
+  const { evmAddress, authorizeEvm } = useEvmDestination();
 
   const { publicKey: solPk } = useWallet();
   const { privyEmbeddedSol } = useNexusWallet();
@@ -1191,26 +1122,6 @@ export default function PredictionsTonight({ onConnectWallet }) {
     if (privyEmbeddedSol?.address) return privyEmbeddedSol.address;
     return null;
   }, [solPk, privyEmbeddedSol]);
-
-  // Refunds: poll on wallet connect, then every 5 min. Backend has
-  // already credited the fee back to the user's Solana wallet — this
-  // surface only notifies them.
-  useEffect(() => {
-    if (!walletPubkey) { setRefunds([]); return; }
-    let alive = true;
-    const tick = async () => {
-      const list = await fetchUnseenRefunds(walletPubkey);
-      if (alive && list.length) setRefunds(prev => mergeRefunds(prev, list));
-    };
-    tick();
-    const id = setInterval(tick, 5 * 60_000);
-    return () => { alive = false; clearInterval(id); };
-  }, [walletPubkey]);
-
-  const dismissRefund = useCallback((refundId) => {
-    setRefunds(prev => prev.filter(r => r.id !== refundId));
-    if (walletPubkey) void ackRefund(walletPubkey, refundId);
-  }, [walletPubkey]);
 
   // Single fetch of top-volume markets. We categorize and filter
   // client-side (Live/Tonight/NFL/NBA/Props/Politics/etc.) so flipping
@@ -1232,15 +1143,6 @@ export default function PredictionsTonight({ onConnectWallet }) {
 
   const handleBuy = (market, sideArg) => {
     setActive(market); setSide(sideArg); setBuyOpen(true);
-  };
-  const handleAddEvm = () => setEvmPromptOpen(true);
-  const saveEvm = (addr) => {
-    const a = String(addr || '').trim();
-    if (!isValidEvmAddress(a)) return false;
-    setEvmAddr(a);
-    try { localStorage.setItem('nexus_evm_address', a); } catch {}
-    setEvmPromptOpen(false);
-    return true;
   };
 
   // Ordering: Live → Primetime → Tonight → Props → Politics → Events → Futures
@@ -1296,39 +1198,8 @@ export default function PredictionsTonight({ onConnectWallet }) {
     <>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nexus-pulse { 0%,100%{opacity:1}50%{opacity:.4} } @keyframes nexus-spin { to{transform:rotate(360deg)} } body.nexus-scroll-locked { overflow:hidden; }`}</style>
 
-      {/* MODE TOGGLE — Singles | Parlay */}
-      <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: '12px 16px 4px', display: 'flex', justifyContent: 'center' }}>
-        <div style={{ display: 'inline-flex', padding: 4, background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, borderRadius: 999, gap: 4 }}>
-          {[
-            { id: 'singles', label: 'Singles' },
-            { id: 'parlay',  label: 'Parlay'  },
-          ].map(opt => {
-            const isActive = mode === opt.id;
-            const isParlay = opt.id === 'parlay';
-            return (
-              <button key={opt.id} onClick={() => setMode(opt.id)} style={{
-                padding: '8px 22px', borderRadius: 999, border: 'none',
-                background: isActive
-                  ? (isParlay ? `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)` : 'rgba(151,252,228,.14)')
-                  : 'transparent',
-                color: isActive ? (isParlay ? '#04070f' : C.hl) : C.muted,
-                fontWeight: 800, fontSize: 12, cursor: 'pointer', letterSpacing: '-.01em',
-                transition: 'all .15s', ...T.display,
-              }}>
-                {opt.label}
-                {isParlay && !isActive && (
-                  <span style={{ marginLeft: 6, fontSize: 8, padding: '1px 5px', borderRadius: 999, background: 'rgba(245,181,61,.15)', color: C.gold, fontWeight: 800, letterSpacing: '.06em', ...T.mono }}>NEW</span>
-                )}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-
-      {mode === 'parlay' ? (
-        <ParlayBuilder onConnectWallet={onConnectWallet}/>
-      ) : (
-        <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)', color: C.ink, backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(151,252,228,.10),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 20%,rgba(168,127,255,.06),transparent 50%)' }}>
+      {/* Singles only — Parlay mode removed in v1 */}
+      <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)', color: C.ink, backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(151,252,228,.10),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 20%,rgba(168,127,255,.06),transparent 50%)' }}>
 
           {/* HERO */}
           <div style={{ marginTop: 8, marginBottom: 18, padding: '22px 20px 20px', borderRadius: 26, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: '1px solid rgba(255,255,255,.07)', boxShadow: C.shadowLg, position: 'relative', overflow: 'hidden' }}>
@@ -1423,13 +1294,9 @@ export default function PredictionsTonight({ onConnectWallet }) {
             walletPubkey={walletPubkey}
             evmAddress={evmAddress}
             onConnectWallet={onConnectWallet}
-            onAddEvm={handleAddEvm}
+            onAuthorizeEvm={authorizeEvm}
           />
-          <EvmAddressPrompt open={evmPromptOpen} onClose={() => setEvmPromptOpen(false)} onSave={saveEvm} current={evmAddress}/>
-          <RefundToastStack refunds={refunds} onDismiss={dismissRefund}/>
         </div>
-      )}
     </>
   );
 }
- 
