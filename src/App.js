@@ -7,7 +7,6 @@ import Portfolio from './components/Portfolio.js';
 import TokenDetail from './components/TokenDetail.js';
 import PerpsLanding from './components/PerpsLanding.jsx';
 import Stocks from './components/Stocks.jsx';
-import DeFiPredict from './components/DeFiPredict.jsx';
 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
@@ -62,7 +61,6 @@ const PATH_TO_TAB = {
   '/stocks': 'stocks',
   '/perps': 'perps',
   '/sports': 'sports',
-  '/predict': 'predict',
   '/portfolio': 'portfolio',
 };
 const TAB_TO_PATH = {
@@ -70,7 +68,6 @@ const TAB_TO_PATH = {
   stocks: '/stocks',
   perps: '/perps',
   sports: '/sports',
-  predict: '/predict',
   portfolio: '/portfolio',
 };
 
@@ -163,11 +160,9 @@ function TermsGate({ onAccept }) {
 
             • <strong style={{ color: '#fff' }}>You are 18 or older</strong> and have full legal capacity to enter this agreement.<br/><br/>
 
-            • All swaps, perpetual trades, routing, execution, liquidity, pricing, prediction markets, and blockchain interactions are handled by third-party protocols, aggregators, exchanges, smart contracts, and infrastructure providers. All transactions are initiated, reviewed, authorized, and signed directly by you through your own wallet.<br/><br/>
+            • All swaps, perpetual trades, routing, execution, liquidity, pricing, and blockchain interactions are handled by third-party protocols, aggregators, exchanges, smart contracts, and infrastructure providers. All transactions are initiated, reviewed, authorized, and signed directly by you through your own wallet.<br/><br/>
 
-            • <strong style={{ color: '#fff' }}>Prediction market bridging.</strong> Prediction market trades on Nexus route through Polymarket's own multi-chain bridge (operated by a third party, fun.xyz, on Polymarket's behalf) from your Solana wallet to USDC.e on Polygon. Bridge typical delivery is 1–3 minutes. Bridge failure handling, refunds, and timing are entirely controlled by Polymarket and its bridge provider — Nexus is not party to the bridge. The Nexus service fee is captured atomically on the Solana side and is non-refundable regardless of bridge outcome. Position settlement occurs on Polymarket; Nexus is non-custodial and cannot recover, modify, or cancel positions held on Polymarket. Withdrawals from Polymarket back to your Solana wallet are routed through the same Polymarket bridge.<br/><br/>
-
-            • Digital assets, perpetuals, leverage, DeFi protocols, smart contracts, and prediction markets carry substantial risk including total loss of funds from liquidation, exploits, smart-contract vulnerabilities, slippage, protocol failures, hacks, MEV, frontrunning, network outages, oracle errors, and human error. <strong style={{ color: '#fff' }}>You assume all risk.</strong><br/><br/>
+            • Digital assets, perpetuals, leverage, DeFi protocols, and smart contracts carry substantial risk including total loss of funds from liquidation, exploits, smart-contract vulnerabilities, slippage, protocol failures, hacks, MEV, frontrunning, network outages, oracle errors, and human error. <strong style={{ color: '#fff' }}>You assume all risk.</strong><br/><br/>
 
             • <strong style={{ color: '#fff' }}>No reimbursement for losses.</strong> Verixia Apps will not refund, reimburse, or compensate you for any loss of funds or value, regardless of cause — including failed transactions, slippage, smart-contract exploits, third-party protocol failures, network outages, market volatility, liquidation, frontrunning, MEV, or human error.<br/><br/>
 
@@ -391,15 +386,13 @@ function IconSwap()        { return <svg width="18" height="18" viewBox="0 0 24 
 function IconPerps()       { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg>; }
 function IconStocks()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-5"/></svg>; }
 function IconSports()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 6.5l11 11"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96L12 12.01l8.73-5.05"/><path d="M12 22.08V12"/></svg>; }
-function IconPredict()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><circle cx="12" cy="12" r="4"/></svg>; }
 function IconWallet()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
 
-const NAV_ICONS = { swap: IconSwap, stocks: IconStocks, perps: IconPerps, sports: IconSports, predict: IconPredict, portfolio: IconWallet };
+const NAV_ICONS = { swap: IconSwap, stocks: IconStocks, perps: IconPerps, sports: IconSports, portfolio: IconWallet };
 const NAV_TABS = [
   { id: 'swap',        label: 'Swap' },
   { id: 'stocks',      label: 'Stocks' },
   { id: 'perps',       label: 'Perps' },
-  { id: 'predict',     label: 'Predict' },
   { id: 'portfolio',   label: 'Wallet' },
 ];
 
@@ -458,7 +451,6 @@ function AppInner() {
         {tab === 'swap' && <SwapWidget {...sharedProps} />}
         {tab === 'stocks' && <Stocks onConnectWallet={openWallet} />}
         {tab === 'perps' && <PerpsLanding onConnectWallet={openWallet} />}
-        {tab === 'predict' && <DeFiPredict onConnectWallet={openWallet} />}
         {tab === 'portfolio' && <Portfolio onSelectCoin={goToToken} onConnectWallet={openWallet} />}
         {tab === 'token' && <TokenDetail {...sharedProps} coin={selectedToken} onBack={goBack} />}
       </main>
