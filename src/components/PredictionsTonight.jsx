@@ -1432,3 +1432,4 @@ export default function PredictionsTonight({ onConnectWallet }) {
     </>
   );
 }
+ 
