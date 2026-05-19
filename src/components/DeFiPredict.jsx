@@ -1,30 +1,52 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { PublicKey, VersionedTransaction, TransactionInstruction, TransactionMessage, AddressLookupTableAccount } from '@solana/web3.js';
+import { PublicKey, VersionedTransaction, TransactionInstruction, TransactionMessage } from '@solana/web3.js';
 import { useNexusWallet } from '../WalletContext.js';
+import { getOrDeriveEvmKey, peekDerivedAddress, peekDerivedKey } from '../derived-key.js';
+import {
+  fetchCryptoMarkets,
+  getDepositAddresses,
+  placeMarketOrder,
+  getPositions,
+  getResolvedPositions,
+  initiateWithdrawal,
+} from '../polymarket-client.js';
 
 // =====================================================================
-// DeFi Predict — Polymarket markets, our own route + bridge.
+// DeFi Predict — Polymarket crypto markets via Polymarket Bridge API.
 //
-// Architecture (the "our own route" pattern, not Polymarket Builders):
+// Architecture (non-custodial router, get-in-get-out):
 //
-//   1. Pull market data from Polymarket's public Gamma API (no auth).
+//   1. Pull crypto markets from Polymarket's Gamma API (public, no auth).
+//      Filter to Hourly / Weekly / Monthly / Milestones tiers only.
 //   2. User picks a market, enters a stake, taps Buy.
-//   3. We build ONE Solana VersionedTransaction containing:
-//         a. SPL Transfer  — our fee (USDC) to TREASURY_USDC_ATA on Solana
-//         b. Bridge call   — remaining USDC via Mayan/Wormhole CCTP to the
-//                            user's Polygon address (their Phantom EVM addr)
-//   4. User signs once. Both effects are atomic — if the bridge fails, the
-//      fee reverts. Pre-sim before signing so we never trigger Phantom on a
-//      tx that would fail.
-//   5. We poll the bridge and once USDC lands on Polygon we deep-link the
-//      user to polymarket.com with our builder code in the URL for any
-//      attribution rewards Polymarket pays on top.
+//   3. Derive a Polygon EVM address from the user's Solana sig (first
+//      time only, cached in localStorage). The user's Solana wallet is
+//      the only wallet they connect — no Phantom multichain, no MetaMask.
+//   4. Get a Polymarket Solana deposit address mapped to the derived EVM
+//      via bridge.polymarket.com (Polymarket's own Bridge API, no KYB).
+//   5. Build ONE Solana VersionedTransaction:
+//         a. SPL Transfer — Nexus fee (USDC) to TREASURY_USDC_ATA
+//         b. SPL Transfer — net USDC to the Polymarket deposit address
+//   6. Pre-sim, user signs once, submit to Solana RPC.
+//   7. Background: poll the derived EVM for PUSD arrival (1-3 min). When
+//      it lands, fire a Polymarket CLOB market order automatically using
+//      the derived key (no user sig). Aggressive limit (0.99 BUY / 0.01
+//      SELL) + FAK sweeps the book; no slippage failure surfaced.
+//   8. On winning resolution, auto-sweep: next app open detects a
+//      redeemable position, redeems shares to PUSD, initiates Polymarket
+//      Bridge withdrawal back to user's Solana wallet. User sees one
+//      "Sweeping $X back to Solana" toast; USDC arrives in 1-3 min.
 //
-// We bypass Polymarket's Builder Program for the fee itself. Our fee is
-// captured 100% on the Solana side before any cross-chain hop. No KYB,
-// no Verified-tier approval, no rate limits from Polymarket, no risk of
-// builder code revocation. We set our own rate.
+// Sig count: 2 sigs on first ever trade (derive + bridge tx), 1 sig on
+// subsequent trades, 0 sigs on auto-sweeps. Withdrawals are signed by
+// the cached derived key (the user's tap is consent).
+//
+// Stuck-bridge handling: Polymarket's bridge handles all cross-chain
+// recovery via fun.xyz support. Nexus is non-custodial and cannot
+// recover funds in transit. UI surfaces the bridge tx hash and a
+// support link on pending rows >15 min. Nexus fee may be refunded
+// from treasury as a goodwill policy (not a TOS commitment).
 // =====================================================================
 
 // ---- Fee config -----------------------------------------------------
@@ -49,12 +71,13 @@ const USDC_DECIMALS     = 6;
 const TOKEN_PROGRAM_ID  = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 const ATA_PROGRAM_ID    = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
 
-// ---- Bridge config (Mayan Swap; swappable for Wormhole CCTP/deBridge) -
-// The bridge module exposes two methods used here:
-//   await bridge.quote({ amountAtomic, destAddress }) -> { fees, txBase64, alts }
-//   await bridge.status({ txid }) -> { state: 'pending'|'confirmed'|'failed', destTxHash? }
-// In production this hits /api/bridge (Express proxy on server.js) which
-// wraps @mayanfinance/swap-sdk. The frontend never holds API keys.
+// ---- Bridge config — Polymarket Bridge API (no Mayan) -----------------
+// Endpoints proxied through /api/bridge by predict-bridge.js:
+//   POST /deposit-addresses  -> Polymarket's Solana deposit addr for our EVM
+//   POST /withdraw/prepare   -> challenge to sign for a Solana withdrawal
+//   POST /withdraw/submit    -> submit signed challenge
+//   GET  /status/:id         -> bridge tracking
+// All routed via bridge.polymarket.com (fun.xyz). Public, no auth.
 const BRIDGE_API_BASE = process.env.REACT_APP_BRIDGE_API_BASE || '/api/bridge';
 
 const MIN_ORDER_USDC = 5;
@@ -87,24 +110,23 @@ const T = {
 // Category surface — each maps to a Polymarket Gamma tag/slug.
 // Order is by typical engagement (Trending first, Crypto second since we
 // have the highest expected vol there from our own user base).
+// Tier pills for the Predict UI. v1 surfaces crypto markets only,
+// classified into the four engagement tiers we've prioritized.
 const CATEGORIES = [
-  { id: 'all',         label: 'Trending',     tag: null },
-  { id: 'crypto',      label: 'Crypto',       tag: 'crypto' },
-  { id: 'politics',    label: 'Politics',     tag: 'politics' },
-  { id: 'economics',   label: 'Economics',    tag: 'economy' },
-  { id: 'geopolitics', label: 'Geopolitics',  tag: 'geopolitics' },
-  { id: 'culture',     label: 'Culture',      tag: 'culture' },
-  { id: 'tech',        label: 'Tech',         tag: 'tech' },
+  { id: 'all',        label: 'All',        tag: null },
+  { id: 'hourly',     label: 'Hourly',     tag: 'hourly' },
+  { id: 'weekly',     label: 'Weekly',     tag: 'weekly' },
+  { id: 'monthly',    label: 'Monthly',    tag: 'monthly' },
+  { id: 'milestones', label: 'Milestones', tag: 'milestones' },
 ];
 
 const CAT_META = {
-  crypto:      { label: 'CRYPTO',   color: '#f5b53d', bg: 'rgba(245,181,61,.12)',  bd: 'rgba(245,181,61,.30)'  },
-  politics:    { label: 'POLITICS', color: '#a87fff', bg: 'rgba(168,127,255,.12)', bd: 'rgba(168,127,255,.30)' },
-  economics:   { label: 'ECON',     color: '#97fce4', bg: 'rgba(151,252,228,.12)', bd: 'rgba(151,252,228,.30)' },
-  geopolitics: { label: 'GEO',      color: '#5ce9c8', bg: 'rgba(92,233,200,.12)',  bd: 'rgba(92,233,200,.30)'  },
-  culture:     { label: 'CULTURE',  color: '#ff8a9e', bg: 'rgba(255,138,158,.12)', bd: 'rgba(255,138,158,.30)' },
-  tech:        { label: 'TECH',     color: '#97fce4', bg: 'rgba(151,252,228,.12)', bd: 'rgba(151,252,228,.30)' },
-  trending:    { label: 'HOT',      color: '#ff3d5d', bg: 'rgba(255,61,93,.12)',   bd: 'rgba(255,61,93,.30)'   },
+  hourly:     { label: 'HOURLY',     color: '#f5b53d', bg: 'rgba(245,181,61,.12)',  bd: 'rgba(245,181,61,.30)'  },
+  weekly:     { label: 'WEEKLY',     color: '#97fce4', bg: 'rgba(151,252,228,.12)', bd: 'rgba(151,252,228,.30)' },
+  monthly:    { label: 'MONTHLY',    color: '#a87fff', bg: 'rgba(168,127,255,.12)', bd: 'rgba(168,127,255,.30)' },
+  milestones: { label: 'MILESTONE',  color: '#ff8a9e', bg: 'rgba(255,138,158,.12)', bd: 'rgba(255,138,158,.30)' },
+  crypto:     { label: 'CRYPTO',     color: '#f5b53d', bg: 'rgba(245,181,61,.12)',  bd: 'rgba(245,181,61,.30)'  },
+  trending:   { label: 'HOT',        color: '#ff3d5d', bg: 'rgba(255,61,93,.12)',   bd: 'rgba(255,61,93,.30)'   },
 };
 
 function coinAccent(symbol) {
@@ -193,13 +215,6 @@ function saveCached(k, data) {
   try { localStorage.setItem(k, JSON.stringify({ ts: Date.now(), data })); } catch {}
 }
 
-// De-dupes incoming refund toasts against what's already rendered.
-function mergeRefunds(prev, next) {
-  const seen = new Set(prev.map(r => r.id));
-  const add = next.filter(r => r && r.id && !seen.has(r.id));
-  return add.length ? [...prev, ...add] : prev;
-}
-
 // =====================================================================
 // POLYMARKET GAMMA API — public, no auth (CORS open as of 2026). We pull
 // markets, normalize to our internal shape, and cache.
@@ -279,19 +294,28 @@ function normalizePolyMarket(m) {
 }
 
 function detectCategory(m) {
-  // Polymarket's /markets response doesn't include top-level tags in the
-  // default payload — we have to categorize from question/event text.
-  // It's heuristic; for finer control add tag fetching via /tags later.
+  // v1 ships crypto-only. Classify into the four engagement tiers the
+  // Predict UI surfaces: hourly, weekly, monthly, milestones. Regex
+  // matches the canonical Polymarket question patterns; fallback uses
+  // endDate proximity.
   const events = Array.isArray(m.events) ? m.events : [];
   const eventTitle = events[0]?.title || '';
-  const text = `${m.question || ''} ${eventTitle} ${m.description || ''}`.toLowerCase();
-  if (/\b(bitcoin|btc|ethereum|eth|solana|sol|xrp|doge|crypto|usdc|stablecoin)\b/.test(text)) return 'crypto';
-  if (/\b(election|president|congress|senate|gop|democrat|republican|trump|biden|harris)\b/.test(text)) return 'politics';
-  if (/\b(fed|cpi|inflation|gdp|rate cut|recession|jobs report|payrolls)\b/.test(text)) return 'economics';
-  if (/\b(russia|ukraine|china|israel|iran|war|invasion|hormuz|taiwan|nato)\b/.test(text)) return 'geopolitics';
-  if (/\b(oscar|grammy|emmy|movie|song|album|netflix|spotify|grammy|gta)\b/.test(text)) return 'culture';
-  if (/\b(openai|gpt|google|apple|tesla|nvidia| ai |chatgpt|claude)\b/.test(text)) return 'tech';
-  return 'trending';
+  const text  = `${m.question || ''} ${eventTitle} ${m.description || ''}`.toLowerCase();
+  const q     = (m.question || '').toLowerCase();
+
+  if (/up or down\s+hourly|up or down\s+\d?\s*hour/.test(q)) return 'hourly';
+  if (/up or down/.test(q) && /\d{1,2}:\d{2}/.test(q))       return 'hourly';
+  if (/above\s+[\d_]+\s+on/.test(q) || /\bweekly\b/.test(text)) return 'weekly';
+  if (/what price will .+ hit in (jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)/.test(q)) return 'monthly';
+  if (/will .+ hit \$[\d,]+/.test(q) || /all time high/.test(q) || /before gta vi/.test(q) || /\bin 20\d{2}\b/.test(q)) return 'milestones';
+
+  // Fallback: endDate proximity
+  const end = new Date(m.endDate || 0).getTime();
+  const days = (end - Date.now()) / 86_400_000;
+  if (days > 60) return 'milestones';
+  if (days > 7)  return 'monthly';
+  if (days > 1)  return 'weekly';
+  return 'hourly';
 }
 
 function detectBase(m, cat) {
@@ -473,48 +497,51 @@ async function bridgeStatus(trackerId) {
   return data;
 }
 
-// Fire-and-forget. Frontend hands the trackerId + fee details to the
-// backend so its cron job can reconcile bridge outcomes and refund the
-// Solana-side fee on failure. We do NOT poll for outcomes here.
-async function trackBridge({ trackerId, userWallet, feeAtomic, marketId, marketSlug }) {
-  try {
-    await fetchWithTimeout(`${BRIDGE_API_BASE}/track`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        trackerId, userWallet,
-        feeAtomicUsdc: String(feeAtomic || 0),
-        marketId, marketSlug,
-      }),
-    }, 6_000);
-  } catch (e) {
-    // Non-fatal: if /track fails, backend reconciler picks up the
-    // pending Mayan tx by polling its own state. Refunds still work.
-    console.warn('[trackBridge]', e?.message);
-  }
-}
+// =====================================================================
+// useDerivedKey — deterministically derive a Polygon EVM key from the
+// user's Solana signature. Same Solana wallet always yields the same
+// EVM address. Cached in localStorage after the first derive, so the
+// user signs the derivation message exactly once per device.
+// =====================================================================
+function useDerivedKey() {
+  const { publicKey, signMessage } = useWallet();
+  const { privyEmbeddedSol, activeWalletKind } = useNexusWallet() || {};
+  const solPubkey = useMemo(() => {
+    if (publicKey?.toBase58)         return publicKey.toBase58();
+    if (typeof publicKey === 'string') return publicKey;
+    if (privyEmbeddedSol?.address)   return privyEmbeddedSol.address;
+    return '';
+  }, [publicKey, privyEmbeddedSol?.address]);
 
-// On page load, ask the backend whether any pending refunds exist for
-// this wallet that the user hasn't been shown yet. Backend returns a
-// list of { id, marketSlug, feeUsd, refundedAt } entries; we render a
-// RefundToast for each and call /ack to mark them seen.
-async function fetchUnseenRefunds(walletPubkey) {
-  if (!walletPubkey) return [];
-  try {
-    const res = await fetchWithTimeout(`${BRIDGE_API_BASE}/refunds?wallet=${encodeURIComponent(walletPubkey)}`, {}, 6_000);
-    if (!res.ok) return [];
-    const data = await res.json().catch(() => ({}));
-    return Array.isArray(data?.refunds) ? data.refunds : [];
-  } catch { return []; }
-}
-async function ackRefund(walletPubkey, refundId) {
-  try {
-    await fetchWithTimeout(`${BRIDGE_API_BASE}/refunds/ack`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ wallet: walletPubkey, refundId }),
-    }, 6_000);
-  } catch {}
+  const [derivedKey, setDerivedKey] = useState(() => {
+    if (!solPubkey) return null;
+    return peekDerivedKey(solPubkey);
+  });
+
+  // Refresh cached state when wallet changes (connect, switch, disconnect)
+  useEffect(() => {
+    if (!solPubkey) { setDerivedKey(null); return; }
+    setDerivedKey(peekDerivedKey(solPubkey));
+  }, [solPubkey]);
+
+  // Explicit derive — triggers Solana signMessage popup. Returns the
+  // freshly derived { privateKey, address } so callers don't need to
+  // wait for the next render to use it.
+  const derive = useCallback(async () => {
+    if (!solPubkey)    throw new Error('Wallet not connected');
+    if (!signMessage)  throw new Error('Wallet does not support signMessage (try Phantom or a compatible wallet)');
+    const r = await getOrDeriveEvmKey({ solPubkey, signMessage });
+    setDerivedKey({ privateKey: r.privateKey, address: r.address });
+    return r;
+  }, [solPubkey, signMessage]);
+
+  return {
+    solPubkey,
+    derivedKey,                                   // { privateKey, address } or null
+    evmAddress: derivedKey?.address || '',
+    isDerived: !!derivedKey,
+    derive,
+  };
 }
 
 // =====================================================================
@@ -683,7 +710,7 @@ function MarketRow({ market, onClick }) {
 // to Polymarket with funds already in flight. Builder code attached in
 // URL for any attribution-based rewards Polymarket pays on top.
 // =====================================================================
-function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress, onConnectWallet, onAddEvm }) {
+function BuyModal({ open, onClose, market, initialSide, walletPubkey, derivedKey, onDeriveKey, onConnectWallet, onTradeSubmitted }) {
   const { connected, signTransaction } = useWallet();
   const { activeWalletKind } = useNexusWallet();
   const wcon = connected || activeWalletKind === 'privy';
@@ -702,11 +729,12 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress
     }
   }, [open, initialSide, market?.id]);
 
-  // No bridge polling on the frontend. After the user signs and we
-  // hand off the trackerId to the backend, the modal closes and the
-  // user is free. Bridge outcomes (delivery / refund) are reconciled
-  // by the backend cron job against /api/bridge/track and surfaced
-  // only on refund via the main page's RefundToast.
+  // No bridge polling in the modal. The moment the Solana tx submits,
+  // the modal closes and the user sees a toast. Polymarket's bridge
+  // delivers USDC to the derived EVM in 1-3 min; a background poller
+  // in the parent component (DeFiPredict) auto-fires the CLOB order
+  // once funds land. If the bridge stalls, the user sees a pending
+  // row with the bridge tx hash and a Polymarket support link.
 
   if (!open || !market) return null;
 
@@ -730,83 +758,136 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress
     if (!wcon)                    { onConnectWallet?.(); return; }
     if (!walletPubkey)            { setError('Wallet not connected'); return; }
     if (!isValidSolAddress(walletPubkey)) { setError('Invalid Solana address'); return; }
-    if (!evmAddress || !isValidEvmAddress(evmAddress)) {
-      setError('Add a Polygon (EVM) address to receive bridged USDC');
-      onAddEvm?.();
-      return;
-    }
     if (!usd || tooSmall) { setError(`Minimum order is $${MIN_ORDER_USDC}`); return; }
     if (tooLarge)         { setError(`Maximum order is $${MAX_ORDER_USDC.toLocaleString()}`); return; }
     if (!TREASURY_USDC_ATA) { setError('Treasury not configured'); return; }
     if (!signTransaction)   { setError('Wallet cannot sign transactions'); return; }
     if (!ENABLE_TRADING)    { setError('Live trading disabled — set REACT_APP_NEXUS_PREDICT_LIVE=1'); return; }
 
-    setStatus('quoting'); setError(''); setStatusMsg('Getting bridge quote…');
+    setError('');
+
     try {
-      // 1. Quote the bridge for net amount (post-fee USDC, in atomic units)
+      // 1. Derive Polygon EVM key if not cached. First time only — this
+      //    is the "second signature" on first-ever trade. Subsequent
+      //    trades skip this entire block since the key is in localStorage.
+      let dk = derivedKey;
+      if (!dk?.address || !dk?.privateKey) {
+        setStatus('quoting'); setStatusMsg('Sign to set up your Polygon address…');
+        const r = await onDeriveKey?.();
+        if (!r?.address || !r?.privateKey) {
+          throw new Error('Polygon address derivation cancelled');
+        }
+        dk = { address: r.address, privateKey: r.privateKey };
+      }
+
+      // 2. Ask Polymarket's Bridge API for the Solana deposit address
+      //    mapped to our derived EVM. Same EVM always returns the same
+      //    Solana address (idempotent).
+      setStatus('quoting'); setStatusMsg('Getting deposit address…');
+      const addrs = await getDepositAddresses(dk.address);
+      const polyDepositSol = addrs?.svm || addrs?.solana || addrs?.SOL;
+      if (!polyDepositSol || !isValidSolAddress(polyDepositSol)) {
+        throw new Error('Polymarket returned an invalid Solana deposit address');
+      }
+
+      // 3. Build ONE Solana tx with two SPL Transfers:
+      //      a. Nexus fee USDC -> TREASURY_USDC_ATA
+      //      b. Net USDC      -> Polymarket's Solana deposit address (its USDC ATA)
+      //    User signs once. Both transfers settle atomically.
       const netAtomic = Math.floor(netUsd * Math.pow(10, USDC_DECIMALS));
       const feeAtomic = Math.floor(feeUsd * Math.pow(10, USDC_DECIMALS));
-      if (feeAtomic <= 0) throw new Error('Fee too small to compute');
+      if (feeAtomic <= 0)  throw new Error('Fee too small to compute');
+      if (netAtomic <= 0)  throw new Error('Net amount too small');
 
-      const quote = await bridgeQuote({
-        amountUsdcAtomic: netAtomic,
-        srcAddress:       walletPubkey,
-        dstAddress:       evmAddress,
+      const userUsdcAta  = deriveUsdcAta(walletPubkey);
+      const polyUsdcAta  = deriveUsdcAta(polyDepositSol);
+      const feeIx        = createSplTransferInstruction(userUsdcAta, TREASURY_USDC_ATA, walletPubkey, feeAtomic);
+      const depositIx    = createSplTransferInstruction(userUsdcAta, polyUsdcAta,        walletPubkey, netAtomic);
+
+      // 4. Assemble + fetch a recent blockhash via the Helius RPC
+      setStatusMsg('Building transaction…');
+      const rpcEndpoint = '/api/solana-rpc'; // server.js proxy
+      const bhResp = await fetch(rpcEndpoint, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash',
+          params: [{ commitment: 'finalized' }],
+        }),
       });
-      if (!quote?.serializedTx) throw new Error('Bridge returned no transaction');
+      const bhJson = await bhResp.json().catch(() => ({}));
+      const blockhash = bhJson?.result?.value?.blockhash;
+      if (!blockhash) throw new Error('Failed to fetch recent blockhash');
 
-      // 2. Deserialize the bridge tx
-      const txBytes = Uint8Array.from(atob(quote.serializedTx), c => c.charCodeAt(0));
-      let bridgeTx;
-      try { bridgeTx = VersionedTransaction.deserialize(txBytes); }
-      catch { throw new Error('Bridge returned an unsupported tx format'); }
+      const payerKey = new PublicKey(walletPubkey);
+      const msg = new TransactionMessage({
+        payerKey,
+        recentBlockhash: blockhash,
+        instructions:    [feeIx, depositIx],
+      }).compileToV0Message([]);
+      const tx = new VersionedTransaction(msg);
 
-      // 3. Decompile, prepend our fee SPL transfer
-      const decompiled = await decompileVersionedTx(bridgeTx);
-      const userUsdcAta = deriveUsdcAta(walletPubkey);
-      const feeIx = createSplTransferInstruction(userUsdcAta, TREASURY_USDC_ATA, walletPubkey, feeAtomic);
-      const wrapped = assembleFeeAndBridgeTx({
-        instructions:    decompiled.instructions,
-        payerKey:        decompiled.payerKey,
-        altAccounts:     decompiled.altAccounts,
-        blockhash:       decompiled.blockhash,
-        feeInstruction:  feeIx,
-      });
-
-      // 4. Pre-sim
+      // 5. Pre-sim so we never trigger the wallet popup on a tx that
+      //    would fail (e.g., insufficient USDC, wrong ATA).
       setStatusMsg('Checking transaction…');
-      const serializedForSim = btoa(String.fromCharCode(...wrapped.serialize()));
+      const serializedForSim = btoa(String.fromCharCode(...tx.serialize()));
       const sim = await simulateBeforeSign(serializedForSim);
       if (!sim.ok) throw new Error(sim.message || 'Simulation failed');
 
-      // 5. User signs once
+      // 6. User signs once
       setStatus('signing'); setStatusMsg('Sign in your wallet…');
-      const signed = await signTransaction(wrapped);
+      const signed = await signTransaction(tx);
 
-      // 6. Submit
+      // 7. Submit directly to Solana RPC (we own the entire tx, no
+      //    bridge proxy needs to relay it).
       setStatus('submitting'); setStatusMsg('Submitting transaction…');
-      const serialized = btoa(String.fromCharCode(...signed.serialize()));
-      const submit = await bridgeSubmit(serialized);
-      if (!submit?.trackerId) throw new Error('Bridge submit returned no tracker');
-
-      // 7. Hand the tracker off to backend (fire-and-forget).
-      //    Backend cron polls Mayan; on bridge failure it refunds the
-      //    Solana fee from treasury and the user gets notified via
-      //    RefundToast on their next visit. No frontend polling.
-      void trackBridge({
-        trackerId:    submit.trackerId,
-        userWallet:   walletPubkey,
-        feeAtomic,
-        marketId:     market.id,
-        marketSlug:   market.slug,
+      const rawB64 = btoa(String.fromCharCode(...signed.serialize()));
+      const sendResp = await fetch(rpcEndpoint, {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          jsonrpc: '2.0', id: 2, method: 'sendTransaction',
+          params: [rawB64, { encoding: 'base64', skipPreflight: false, maxRetries: 3 }],
+        }),
       });
+      const sendJson = await sendResp.json().catch(() => ({}));
+      if (sendJson?.error) throw new Error(sendJson.error.message || 'Submit failed');
+      const txSig = sendJson?.result;
+      if (!txSig) throw new Error('Submit returned no signature');
 
-      // 8. Close the modal immediately. User moves on.
+      // 8. Record a pending trade so the parent can poll the derived
+      //    EVM for PUSD arrival, then fire the CLOB order automatically.
+      //    Cached in localStorage so a tab close + reopen still resumes.
+      const pending = {
+        txSig,
+        marketId:     market.id,
+        conditionId:  market.conditionId,
+        tokenId:      isYes ? (market.clobTokenIds?.[0]) : (market.clobTokenIds?.[1]),
+        side:         'BUY',
+        sizeUsdc:     netUsd,
+        tickSize:     market.tickSize || '0.01',
+        negRisk:      !!market.negRisk,
+        derivedEvm:   dk.address,
+        polyDepositSol,
+        intentLabel:  `${isYes ? 'YES' : 'NO'} on ${market.question}`,
+        createdAt:    Date.now(),
+      };
+      try {
+        const key = 'nexus_pending_trades_v1_' + walletPubkey;
+        const existing = JSON.parse(localStorage.getItem(key) || '[]');
+        existing.push(pending);
+        localStorage.setItem(key, JSON.stringify(existing));
+      } catch {}
+
+      // 9. Done. Close modal, let the parent show a toast and start
+      //    polling. No more sigs needed from here — the CLOB order
+      //    will fire automatically when PUSD arrives at the derived EVM.
       setStatus('idle'); setStatusMsg('');
+      onTradeSubmitted?.(pending);
       onClose();
     } catch (e) {
       console.error('[buy]', e);
-      setError(e.message || 'Order failed');
+      setError(e?.message || 'Order failed');
       setStatus('error'); setStatusMsg('');
     }
   };
@@ -928,17 +1009,28 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress
             </div>
           )}
 
-          {/* EVM destination panel */}
+          {/* Polygon address — deterministically derived from the user's
+              Solana signature. Cached after first derive, so it shows
+              automatically on subsequent trades. On first-ever trade
+              the execute() flow handles the derive signature inline. */}
           <div style={{ background: 'rgba(168,127,255,.04)', border: '1px solid rgba(168,127,255,.18)', borderRadius: 14, padding: '11px 13px', marginBottom: 14 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
-              <span style={{ fontSize: 9, color: C.violet, fontWeight: 800, letterSpacing: '.08em', ...T.mono }}>BRIDGE DESTINATION (POLYGON)</span>
-              {!evmAddress && (
-                <button onClick={() => onAddEvm?.()} style={{ background: 'transparent', border: 'none', color: C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>+ Add</button>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10 }}>
+              <span style={{ fontSize: 9, color: C.violet, fontWeight: 800, letterSpacing: '.08em', ...T.mono }}>POLYGON DESTINATION</span>
+              {derivedKey?.address ? (
+                <span style={{ fontSize: 11, color: C.ink, fontFamily: 'monospace', ...T.mono }}>
+                  {derivedKey.address.slice(0, 6)}…{derivedKey.address.slice(-4)}
+                </span>
+              ) : (
+                <span style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.04em', ...T.mono }}>
+                  Created on first trade
+                </span>
               )}
             </div>
-            <div style={{ fontSize: 11, color: evmAddress ? C.ink : C.muted2, fontFamily: 'monospace', wordBreak: 'break-all', ...T.mono }}>
-              {evmAddress || 'No EVM address linked — required to receive bridged USDC.'}
-            </div>
+            {!derivedKey?.address && (
+              <div style={{ fontSize: 10, color: C.muted2, marginTop: 5, lineHeight: 1.45, ...T.body }}>
+                Your Polygon address is derived from your Solana wallet on first trade. One quick signature, then never again.
+              </div>
+            )}
           </div>
         </div>
 
@@ -961,7 +1053,7 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress
               Connect Solana Wallet
             </button>
           ) : (
-            <button onClick={execute} disabled={isBusy || !amount || tooSmall || tooLarge || !evmAddress} style={{
+            <button onClick={execute} disabled={isBusy || !amount || tooSmall || tooLarge} style={{
               width: '100%', padding: 17, borderRadius: 16, border: 'none',
               background: isError
                 ? `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)`
@@ -969,8 +1061,8 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress
                 ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`
                 : `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)`,
               color: '#04070f', fontWeight: 800, fontSize: 16,
-              cursor: isBusy || !amount || tooSmall || tooLarge || !evmAddress ? 'not-allowed' : 'pointer',
-              minHeight: 56, opacity: !amount || tooSmall || tooLarge || !evmAddress ? 0.55 : 1,
+              cursor: isBusy || !amount || tooSmall || tooLarge ? 'not-allowed' : 'pointer',
+              minHeight: 56, opacity: !amount || tooSmall || tooLarge ? 0.55 : 1,
               boxShadow: isYes ? '0 12px 30px rgba(61,213,152,.22)' : '0 12px 30px rgba(255,138,158,.24)',
               letterSpacing: '-.01em', ...T.display,
             }}>
@@ -994,17 +1086,19 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress
 // =====================================================================
 export default function DeFiPredict({ onConnectWallet }) {
   const [markets, setMarkets]     = useState(() => loadCached('nexus_poly_predict_v2', 45_000) || []);
-  const [filter, setFilter]       = useState('all');
+  const [filter, setFilter]       = useState('all');     // all | hourly | weekly | monthly | milestones
   const [buyOpen, setBuyOpen]     = useState(false);
   const [activeMarket, setActive] = useState(null);
   const [initialSide, setSide]    = useState('YES');
-  const [evmAddress, setEvmAddr]  = useState(() => {
-    try { return localStorage.getItem('nexus_evm_address') || ''; } catch { return ''; }
-  });
-  const [evmPromptOpen, setEvmPromptOpen] = useState(false);
-  const [refunds, setRefunds]             = useState([]); // queued refund toasts
+  const [toast, setToast]         = useState(null);      // { text, ts } or null
+  const [pendingTrades, setPendingTrades] = useState([]); // mirrors localStorage
 
-  const { publicKey: solPk } = useWallet();
+  // Solana wallet only. Polygon EVM is deterministically derived from
+  // the user's Solana signature (one-time popup), cached in localStorage.
+  // No Phantom multichain, no MetaMask, no separate EVM connect modal.
+  const { derivedKey, derive, evmAddress } = useDerivedKey();
+
+  const { publicKey: solPk, signTransaction } = useWallet();
   const { privyEmbeddedSol } = useNexusWallet();
   const walletPubkey = useMemo(() => {
     if (solPk) return solPk.toString();
@@ -1012,35 +1106,18 @@ export default function DeFiPredict({ onConnectWallet }) {
     return null;
   }, [solPk, privyEmbeddedSol]);
 
-  // On wallet connect (and again every 5 min), pull any unseen refund
-  // entries the backend has reconciled for this wallet. Backend already
-  // sent USDC back to the user's Solana wallet — this is just the UX
-  // notification so they know it happened.
-  useEffect(() => {
-    if (!walletPubkey) { setRefunds([]); return; }
-    let alive = true;
-    const tick = async () => {
-      const list = await fetchUnseenRefunds(walletPubkey);
-      if (alive && list.length) setRefunds(prev => mergeRefunds(prev, list));
-    };
-    tick();
-    const id = setInterval(tick, 5 * 60_000);
-    return () => { alive = false; clearInterval(id); };
-  }, [walletPubkey]);
-
-  const dismissRefund = useCallback((refundId) => {
-    setRefunds(prev => prev.filter(r => r.id !== refundId));
-    if (walletPubkey) void ackRefund(walletPubkey, refundId);
-  }, [walletPubkey]);
-
-  // Polymarket Gamma poll — every 30s. Single pull of top-volume markets,
-  // we categorize client-side so changing the filter pill doesn't refetch.
+  // ----------------------------------------------------------------
+  // Crypto-only market polling (Hourly/Weekly/Monthly/Milestones).
+  // Filter applies client-side after fetch so flipping pills doesn't
+  // hit the network.
+  // ----------------------------------------------------------------
   useEffect(() => {
     let alive = true;
     const tick = async () => {
       try {
-        const data = await fetchPolymarketMarkets({ limit: 150 });
-        if (!alive || !data?.length) return;
+        const raw = await fetchCryptoMarkets({ tier: 'all', limit: 100 });
+        if (!alive || !raw?.length) return;
+        const data = raw.map(normalizePolyMarket).filter(Boolean);
         setMarkets(data);
         saveCached('nexus_poly_predict_v2', data);
       } catch (e) { console.warn('[gamma poll]', e?.message); }
@@ -1050,18 +1127,117 @@ export default function DeFiPredict({ onConnectWallet }) {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
+  // ----------------------------------------------------------------
+  // Pending-trade poller. After the user submits a Buy, the Solana tx
+  // confirms in seconds but the bridge takes 1-3 min. This loop polls
+  // the derived EVM's PUSD balance via Polymarket's Data API; once funds
+  // land, it auto-fires the CLOB order using the cached derived key
+  // (no user sig). On success the pending trade is dropped.
+  // ----------------------------------------------------------------
+  const refreshPending = useCallback(() => {
+    if (!walletPubkey) { setPendingTrades([]); return; }
+    try {
+      const raw = localStorage.getItem('nexus_pending_trades_v1_' + walletPubkey) || '[]';
+      setPendingTrades(JSON.parse(raw));
+    } catch { setPendingTrades([]); }
+  }, [walletPubkey]);
+
+  useEffect(() => { refreshPending(); }, [refreshPending]);
+
+  useEffect(() => {
+    if (!walletPubkey || !derivedKey?.address) return;
+    let alive = true;
+    const tick = async () => {
+      let list = [];
+      try { list = JSON.parse(localStorage.getItem('nexus_pending_trades_v1_' + walletPubkey) || '[]'); } catch {}
+      if (!alive || !list.length) return;
+      // Poll once per cycle for the derived address's positions/balance.
+      // If our PUSD balance can cover the pending trade, fire it.
+      let positions = [];
+      try { positions = await getPositions(derivedKey.address, { limit: 50 }); } catch {}
+      const remaining = [];
+      for (const p of list) {
+        // Skip if this pending trade is already represented in positions
+        // (same tokenId, freshly created since the pending was queued).
+        const matched = positions.find(pos =>
+          (pos?.asset === p.tokenId || pos?.tokenID === p.tokenId) &&
+          Number(pos?.size || 0) > 0
+        );
+        if (matched) continue; // already on-chain, drop
+        // Otherwise attempt to fire the CLOB order. If the order errors
+        // (typically because PUSD hasn't bridged yet), keep it pending.
+        try {
+          await placeMarketOrder({
+            derivedKey,
+            tokenId:  p.tokenId,
+            sizeUsdc: p.sizeUsdc,
+            side:     p.side || 'BUY',
+            tickSize: p.tickSize || '0.01',
+            negRisk:  !!p.negRisk,
+          });
+          // success — don't re-add to remaining
+          setToast({ text: `✓ Position taken: ${p.intentLabel || 'trade filled'}`, ts: Date.now() });
+        } catch (e) {
+          const m = String(e?.message || '');
+          // "insufficient balance" or similar => bridge hasn't landed
+          // yet; keep pending. After 30 min, mark as stuck.
+          const ageMs = Date.now() - (p.createdAt || 0);
+          if (ageMs > 30 * 60_000 && /balance|funds|insufficient/i.test(m)) {
+            // Mark as stuck — surface support link in UI
+            remaining.push({ ...p, stuck: true });
+          } else {
+            remaining.push(p);
+          }
+        }
+      }
+      if (!alive) return;
+      try { localStorage.setItem('nexus_pending_trades_v1_' + walletPubkey, JSON.stringify(remaining)); } catch {}
+      setPendingTrades(remaining);
+    };
+    tick();
+    const id = setInterval(tick, 25_000);
+    return () => { alive = false; clearInterval(id); };
+  }, [walletPubkey, derivedKey?.address]);
+
+  // ----------------------------------------------------------------
+  // Backwards sweep — on app open, if the derived EVM has any
+  // redeemable winnings, auto-redeem + bridge back to Solana.
+  // ----------------------------------------------------------------
+  const sweptRef = useRef(false);
+  useEffect(() => {
+    if (sweptRef.current) return;
+    if (!walletPubkey || !derivedKey?.privateKey || !derivedKey?.address) return;
+    sweptRef.current = true;
+    (async () => {
+      try {
+        const resolved = await getResolvedPositions(derivedKey.address);
+        if (!resolved?.length) return;
+        // Compute total winnings to withdraw. Polymarket auto-redeems
+        // resolved YES shares into PUSD at $1 each on first interaction;
+        // we initiate a single withdrawal for the aggregate amount.
+        const totalAtomic = resolved.reduce((sum, p) => {
+          const winShares = Number(p?.size || 0);
+          const winnerSide = (p?.outcome || '').toLowerCase() === 'yes' ? 'yes' : 'no';
+          const isWinner = (p?.resolution || '').toLowerCase().includes(winnerSide);
+          if (!isWinner || winShares <= 0) return sum;
+          return sum + Math.floor(winShares * Math.pow(10, USDC_DECIMALS));
+        }, 0);
+        if (totalAtomic < 1_000_000) return; // <$1, skip sweep (dust)
+        setToast({ text: `Sweeping winnings back to Solana…`, ts: Date.now() });
+        await initiateWithdrawal({
+          derivedKey,
+          amountAtomicUsdc: String(totalAtomic),
+          destSolanaAddress: walletPubkey,
+        });
+        setToast({ text: `✓ Winnings withdrawn — USDC arrives in ~3 min`, ts: Date.now() });
+      } catch (e) {
+        console.warn('[backwards-sweep]', e?.message);
+      }
+    })();
+  }, [walletPubkey, derivedKey?.privateKey, derivedKey?.address]);
+
   const handleBuy = (market, sideArg) => {
     setActive(market); setSide(sideArg); setBuyOpen(true);
-  };
-
-  const handleAddEvm = () => setEvmPromptOpen(true);
-  const saveEvm = (addr) => {
-    const a = String(addr || '').trim();
-    if (!isValidEvmAddress(a)) return false;
-    setEvmAddr(a);
-    try { localStorage.setItem('nexus_evm_address', a); } catch {}
-    setEvmPromptOpen(false);
-    return true;
   };
 
   const filtered = useMemo(() => {
@@ -1117,6 +1293,33 @@ export default function DeFiPredict({ onConnectWallet }) {
           </div>
         </div>
 
+        {/* PENDING TRADES — surfaced when a user has submitted a Buy but
+            the bridge hasn't delivered USDC to the derived EVM yet. After
+            30 min the row turns into a "stuck" state with a Polymarket
+            support link. */}
+        {pendingTrades.length > 0 && (
+          <div style={{ marginBottom: 14, padding: '12px 14px', borderRadius: 14, background: 'rgba(151,252,228,.05)', border: '1px solid rgba(151,252,228,.20)' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+              <div style={{ width: 7, height: 7, borderRadius: '50%', background: C.hl, boxShadow: `0 0 10px ${C.hl}`, animation: 'nexus-pulse 1.6s ease-in-out infinite' }}/>
+              <span style={{ color: C.hl, fontSize: 10, fontWeight: 800, letterSpacing: '.10em', ...T.mono }}>BRIDGING — {pendingTrades.length} TRADE{pendingTrades.length > 1 ? 'S' : ''}</span>
+            </div>
+            {pendingTrades.slice(0, 3).map((p, i) => {
+              const ageMin = Math.floor((Date.now() - (p.createdAt || 0)) / 60_000);
+              return (
+                <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 10, padding: '6px 0', borderTop: i ? `1px solid ${C.hairline}` : 'none' }}>
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 12, color: C.ink, fontWeight: 600, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', ...T.body }}>{p.intentLabel || 'Pending trade'}</div>
+                    <div style={{ fontSize: 10, color: C.muted2, marginTop: 2, ...T.mono }}>{p.stuck ? 'STUCK — contact Polymarket support' : `${ageMin} min ago • ~${Math.max(0, 3 - ageMin)} min remaining`}</div>
+                  </div>
+                  {p.stuck && p.txSig && (
+                    <a href={`https://help.polymarket.com/?tx=${p.txSig}`} target="_blank" rel="noopener noreferrer" style={{ fontSize: 10, color: C.hl, fontWeight: 700, letterSpacing: '.04em', textDecoration: 'none', ...T.mono }}>SUPPORT →</a>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+
         {/* CATEGORY FILTER */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
           <div>
@@ -1167,103 +1370,45 @@ export default function DeFiPredict({ onConnectWallet }) {
           market={activeMarket}
           initialSide={initialSide}
           walletPubkey={walletPubkey}
-          evmAddress={evmAddress}
+          derivedKey={derivedKey}
+          onDeriveKey={derive}
           onConnectWallet={onConnectWallet}
-          onAddEvm={handleAddEvm}
+          onTradeSubmitted={(pending) => {
+            setToast({ text: `Trade submitted ✓ Position arrives in ~3 min`, ts: Date.now() });
+            refreshPending();
+          }}
         />
-        <EvmAddressPrompt open={evmPromptOpen} onClose={() => setEvmPromptOpen(false)} onSave={saveEvm} current={evmAddress}/>
-        <RefundToastStack refunds={refunds} onDismiss={dismissRefund}/>
+
+        {/* TOAST — transient status messages (trade submitted, sweep
+            in progress, etc). Auto-dismisses after 5s. */}
+        {toast && (
+          <Toast text={toast.text} ts={toast.ts} onDone={() => setToast(null)} />
+        )}
       </div>
     </>
   );
 }
 
-// =====================================================================
-// RefundToastStack — the only async outcome the user sees. If the
-// bridge fails for any of their trades, the backend has already
-// returned the USDC fee to their Solana wallet; this surfaces that.
-// Renders in the bottom-right corner, dismissible, stacks if many.
-// =====================================================================
-function RefundToastStack({ refunds, onDismiss }) {
-  if (!refunds || refunds.length === 0) return null;
+// Toast component — renders a fixed pill at the bottom of the viewport.
+// Disappears after 5s or when manually closed.
+function Toast({ text, ts, onDone }) {
+  useEffect(() => {
+    const id = setTimeout(() => onDone?.(), 5_000);
+    return () => clearTimeout(id);
+  }, [ts, onDone]);
   return (
     <div style={{
-      position: 'fixed', right: 14,
-      bottom: 'calc(env(safe-area-inset-bottom) + 96px)',
-      zIndex: 380, display: 'flex', flexDirection: 'column', gap: 8,
-      maxWidth: 360,
+      position: 'fixed', bottom: 'calc(env(safe-area-inset-bottom) + 100px)',
+      left: '50%', transform: 'translateX(-50%)', zIndex: 500,
+      background: 'linear-gradient(135deg,rgba(14,20,40,.98),rgba(7,11,22,.99))',
+      border: `1px solid ${C.borderHi}`,
+      color: C.ink, padding: '11px 18px', borderRadius: 999,
+      fontSize: 12, fontWeight: 600, letterSpacing: '-.01em',
+      boxShadow: '0 16px 50px rgba(0,0,0,.6), 0 0 0 1px rgba(151,252,228,.08)',
+      maxWidth: 'calc(100vw - 32px)', textAlign: 'center',
+      ...T.body,
     }}>
-      {refunds.slice(-3).map(r => (
-        <div key={r.id} style={{
-          padding: '12px 14px', borderRadius: 14,
-          background: 'linear-gradient(145deg,rgba(61,213,152,.10),rgba(151,252,228,.06))',
-          border: '1px solid rgba(61,213,152,.32)',
-          boxShadow: '0 12px 36px rgba(0,0,0,.55), 0 0 24px rgba(61,213,152,.18)',
-          display: 'flex', alignItems: 'flex-start', gap: 10,
-          backdropFilter: 'blur(10px)',
-        }}>
-          <div style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(61,213,152,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-            <span style={{ color: C.up, fontSize: 14, fontWeight: 900 }}>↺</span>
-          </div>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 11, fontWeight: 800, color: C.up, letterSpacing: '.06em', ...T.mono, marginBottom: 2 }}>FEE REFUNDED</div>
-            <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.4, ...T.body }}>
-              Bridge didn't complete on a recent trade. We returned {fmt(Number(r.feeUsd || 0), 2)} USDC to your Solana wallet.
-            </div>
-            {r.marketSlug && (
-              <div style={{ fontSize: 10, color: C.muted2, marginTop: 3, ...T.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                {r.marketSlug}
-              </div>
-            )}
-          </div>
-          <button onClick={() => onDismiss(r.id)} style={{ background: 'transparent', border: 'none', color: C.muted, fontSize: 18, cursor: 'pointer', padding: 0, lineHeight: 1, flexShrink: 0 }}>×</button>
-        </div>
-      ))}
+      {text}
     </div>
   );
 }
-
-// =====================================================================
-// EvmAddressPrompt — once-per-device modal to capture/edit the user's
-// Polygon address. Stored in localStorage as 'nexus_evm_address'. Phantom
-// users can use their existing multichain EVM address (same secret, same
-// wallet, just the EVM side of it).
-// =====================================================================
-function EvmAddressPrompt({ open, onClose, onSave, current }) {
-  const [val, setVal] = useState(current || '');
-  const [err, setErr] = useState('');
-  useBodyLock(open);
-  useEffect(() => { if (open) { setVal(current || ''); setErr(''); } }, [open, current]);
-  if (!open) return null;
-  const handleSave = () => {
-    if (!isValidEvmAddress(val.trim())) { setErr('Not a valid Polygon address'); return; }
-    if (!onSave(val.trim())) setErr('Could not save address');
-  };
-  return (
-    <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 470, background: 'rgba(0,0,0,.86)', backdropFilter: 'blur(14px)', cursor: 'pointer' }}/>
-      <div style={{
-        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
-        width: '100%', maxWidth: 500, zIndex: 471,
-        background: `linear-gradient(180deg,${C.surface2} 0%,${C.bg} 100%)`,
-        borderTop: '1px solid rgba(168,127,255,.30)', borderRadius: '26px 26px 0 0',
-        padding: '20px 22px calc(env(safe-area-inset-bottom) + 90px)',
-      }}>
-        <div style={{ width: 36, height: 4, background: 'rgba(255,255,255,.12)', borderRadius: 99, margin: '0 auto 18px' }}/>
-        <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 19, letterSpacing: '-.02em', marginBottom: 6, ...T.display }}>Add Polygon address</div>
-        <div style={{ color: C.muted, fontSize: 12, marginBottom: 16, lineHeight: 1.5, ...T.body }}>
-          Where your bridged USDC lands. Phantom Multichain users: paste your Ethereum/Polygon address from Phantom (same wallet, EVM side).
-        </div>
-        <input value={val} onChange={e => { setVal(e.target.value); setErr(''); }} placeholder="0x…"
-          style={{ width: '100%', padding: '13px 14px', borderRadius: 14, border: `1px solid ${err ? 'rgba(255,138,158,.40)' : C.border}`, background: 'rgba(255,255,255,.04)', color: C.inkStr, fontSize: 13, ...T.mono, outline: 'none', marginBottom: err ? 6 : 12 }}/>
-        {err && <div style={{ fontSize: 11, color: C.down, marginBottom: 12, ...T.body }}>{err}</div>}
-        <button onClick={handleSave} style={{
-          width: '100%', padding: 16, borderRadius: 16, border: 'none',
-          background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`,
-          color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display,
-        }}>Save address</button>
-      </div>
-    </>
-  );
-}
- 
