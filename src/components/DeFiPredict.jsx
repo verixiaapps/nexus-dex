@@ -1,39 +1,68 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
-import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { PublicKey, VersionedTransaction, Transaction, TransactionInstruction, TransactionMessage, AddressLookupTableAccount } from '@solana/web3.js';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { PublicKey, VersionedTransaction, TransactionInstruction, TransactionMessage, AddressLookupTableAccount } from '@solana/web3.js';
 import { useNexusWallet } from '../WalletContext.js';
 
 // =====================================================================
-// CONFIG — Kalshi prediction markets via DFlow API on Solana
+// DeFi Predict — Polymarket markets, our own route + bridge.
 //
-// DFlow tokenizes Kalshi markets as SPL tokens on Solana and routes
-// liquidity through Jupiter. Builder code = our 1.5% revenue share on
-// every order. Builder code is permissionless — generate at docs.dflow.net.
-// Fees stream to TREASURY_ADDRESS in USDC automatically, no claim step.
+// Architecture (the "our own route" pattern, not Polymarket Builders):
 //
-// API is plain REST/JSON over the /api/dflow Express proxy — same
-// pattern as /api/hyperliquid in PerpsTrade.jsx. No SDK to babysit.
+//   1. Pull market data from Polymarket's public Gamma API (no auth).
+//   2. User picks a market, enters a stake, taps Buy.
+//   3. We build ONE Solana VersionedTransaction containing:
+//         a. SPL Transfer  — our fee (USDC) to TREASURY_USDC_ATA on Solana
+//         b. Bridge call   — remaining USDC via Mayan/Wormhole CCTP to the
+//                            user's Polygon address (their Phantom EVM addr)
+//   4. User signs once. Both effects are atomic — if the bridge fails, the
+//      fee reverts. Pre-sim before signing so we never trigger Phantom on a
+//      tx that would fail.
+//   5. We poll the bridge and once USDC lands on Polygon we deep-link the
+//      user to polymarket.com with our builder code in the URL for any
+//      attribution rewards Polymarket pays on top.
+//
+// We bypass Polymarket's Builder Program for the fee itself. Our fee is
+// captured 100% on the Solana side before any cross-chain hop. No KYB,
+// no Verified-tier approval, no rate limits from Polymarket, no risk of
+// builder code revocation. We set our own rate.
 // =====================================================================
-const ENABLE_TRADING        = process.env.REACT_APP_KALSHI_LIVE_TRADING === '1';
-const DFLOW_BUILDER_CODE    = process.env.REACT_APP_DFLOW_BUILDER_CODE || ''; // TODO: paste after generating at docs.dflow.net
-const DFLOW_BUILDER_FEE_BPS = 150; // 1.5% — stacks on Kalshi's per-contract fee
-const DFLOW_API_BASE        = process.env.REACT_APP_DFLOW_API_BASE || '/api/dflow';
 
-const TREASURY_ADDRESS      = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
-// Treasury's USDC associated token account — bundled-fee destination.
-// Shared env var across Stocks + ParlayBuilder + PredictionsTonight.
-const TREASURY_USDC_ATA     = process.env.REACT_APP_TREASURY_USDC_ATA || '';
-const USDC_MINT_SOL         = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-const USDC_DECIMALS         = 6;
-const LAMPORTS_PER_SOL      = 1_000_000_000;
+// ---- Fee config -----------------------------------------------------
+const FEE_BPS_DEFAULT = Number(process.env.REACT_APP_NEXUS_PREDICT_FEE_BPS || 200);   // 2.00%
+const FEE_BPS_CRYPTO  = Number(process.env.REACT_APP_NEXUS_PREDICT_FEE_BPS_CRYPTO || 100); // 1.00%
+function feeBpsFor(category) {
+  return String(category || '').toLowerCase() === 'crypto' ? FEE_BPS_CRYPTO : FEE_BPS_DEFAULT;
+}
 
-const RESTRICTED_STATES = ['AZ', 'IL', 'MD', 'MI', 'MT', 'NJ', 'OH', 'MA', 'NV'];
-const TOS_VERSION       = 1;
-const MIN_ORDER_USDC    = 1;
-const MAX_ORDER_USDC    = 25000;
+// ---- Provider config ------------------------------------------------
+const GAMMA_API_BASE   = process.env.REACT_APP_POLYMARKET_GAMMA_BASE || 'https://gamma-api.polymarket.com';
+const POLY_HOST        = 'https://polymarket.com';
+// REACT_APP_POLYMARKET_BUILDER_CODE is reserved for a future CLOB
+// integration. Polymarket's builder code is a bytes32 attached to signed
+// orders (not a URL query param), so this env var is currently unused.
+const POLY_BUILDER_REF = process.env.REACT_APP_POLYMARKET_BUILDER_CODE || '';
+
+// ---- Treasury & token config ----------------------------------------
+const TREASURY_USDC_ATA = process.env.REACT_APP_TREASURY_USDC_ATA || '';
+const USDC_MINT_SOL     = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const USDC_DECIMALS     = 6;
+const TOKEN_PROGRAM_ID  = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+const ATA_PROGRAM_ID    = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
+
+// ---- Bridge config (Mayan Swap; swappable for Wormhole CCTP/deBridge) -
+// The bridge module exposes two methods used here:
+//   await bridge.quote({ amountAtomic, destAddress }) -> { fees, txBase64, alts }
+//   await bridge.status({ txid }) -> { state: 'pending'|'confirmed'|'failed', destTxHash? }
+// In production this hits /api/bridge (Express proxy on server.js) which
+// wraps @mayanfinance/swap-sdk. The frontend never holds API keys.
+const BRIDGE_API_BASE = process.env.REACT_APP_BRIDGE_API_BASE || '/api/bridge';
+
+const MIN_ORDER_USDC = 5;
+const MAX_ORDER_USDC = 25000;
+const ENABLE_TRADING = process.env.REACT_APP_NEXUS_PREDICT_LIVE === '1';
 
 // =====================================================================
-// DESIGN TOKENS — must stay identical to PerpsTrade.jsx
+// DESIGN TOKENS — identical to Stocks/PerpsTrade/scaffolding files
 // =====================================================================
 const C = {
   bg:'#04070f', bg2:'#070b16', surface:'#0a1020', surface2:'#0e1428',
@@ -42,7 +71,7 @@ const C = {
   hl:'#97fce4', hl2:'#5ce9c8', hlDim:'rgba(151,252,228,.14)',
   violet:'#a87fff', sol:'#9945ff',
   up:'#3dd598', down:'#ff8a9e',
-  amber:'#f5b53d',
+  amber:'#f5b53d', live:'#ff3d5d',
   border:'rgba(255,255,255,.06)', borderHi:'rgba(151,252,228,.24)',
   hairline:'rgba(255,255,255,.05)',
   glow:'0 0 24px rgba(151,252,228,.18),0 0 48px rgba(151,252,228,.06)',
@@ -55,35 +84,42 @@ const T = {
   hero:   { fontFamily:"'Clash Display', 'Syne', system-ui, sans-serif" },
 };
 
+// Category surface — each maps to a Polymarket Gamma tag/slug.
+// Order is by typical engagement (Trending first, Crypto second since we
+// have the highest expected vol there from our own user base).
 const CATEGORIES = [
-  { id: 'All',    label: 'All' },
-  { id: '5min',   label: '5-Min' },
-  { id: 'hourly', label: 'Hourly' },
-  { id: 'daily',  label: 'Daily' },
-  { id: 'events', label: 'Events' },
-  { id: 'weekly', label: 'Weekly' },
+  { id: 'all',         label: 'Trending',     tag: null },
+  { id: 'crypto',      label: 'Crypto',       tag: 'crypto' },
+  { id: 'politics',    label: 'Politics',     tag: 'politics' },
+  { id: 'economics',   label: 'Economics',    tag: 'economy' },
+  { id: 'geopolitics', label: 'Geopolitics',  tag: 'geopolitics' },
+  { id: 'culture',     label: 'Culture',      tag: 'culture' },
+  { id: 'tech',        label: 'Tech',         tag: 'tech' },
 ];
 
 const CAT_META = {
-  '5min':   { label: '5-MIN',  color: '#ff8a9e', bg: 'rgba(255,138,158,.12)', bd: 'rgba(255,138,158,.30)' },
-  'hourly': { label: 'HOURLY', color: '#f5b53d', bg: 'rgba(245,181,61,.12)',  bd: 'rgba(245,181,61,.30)'  },
-  'daily':  { label: 'DAILY',  color: '#97fce4', bg: 'rgba(151,252,228,.12)', bd: 'rgba(151,252,228,.30)' },
-  'weekly': { label: 'WEEKLY', color: '#a87fff', bg: 'rgba(168,127,255,.12)', bd: 'rgba(168,127,255,.30)' },
-  'events': { label: 'EVENT',  color: '#5ce9c8', bg: 'rgba(92,233,200,.12)',  bd: 'rgba(92,233,200,.30)'  },
+  crypto:      { label: 'CRYPTO',   color: '#f5b53d', bg: 'rgba(245,181,61,.12)',  bd: 'rgba(245,181,61,.30)'  },
+  politics:    { label: 'POLITICS', color: '#a87fff', bg: 'rgba(168,127,255,.12)', bd: 'rgba(168,127,255,.30)' },
+  economics:   { label: 'ECON',     color: '#97fce4', bg: 'rgba(151,252,228,.12)', bd: 'rgba(151,252,228,.30)' },
+  geopolitics: { label: 'GEO',      color: '#5ce9c8', bg: 'rgba(92,233,200,.12)',  bd: 'rgba(92,233,200,.30)'  },
+  culture:     { label: 'CULTURE',  color: '#ff8a9e', bg: 'rgba(255,138,158,.12)', bd: 'rgba(255,138,158,.30)' },
+  tech:        { label: 'TECH',     color: '#97fce4', bg: 'rgba(151,252,228,.12)', bd: 'rgba(151,252,228,.30)' },
+  trending:    { label: 'HOT',      color: '#ff3d5d', bg: 'rgba(255,61,93,.12)',   bd: 'rgba(255,61,93,.30)'   },
 };
 
 function coinAccent(symbol) {
   const map = {
     BTC:['#f7931a','#ffbf5c'], ETH:['#627eea','#8fa8ff'], SOL:['#14f195','#9945ff'],
-    HYPE:['#97fce4','#5ce9c8'], DOGE:['#c2a633','#e8c84a'],
-    XRP:['#7989ad','#bcc6e0'], BNB:['#f0b90b','#f5d060'], SUI:['#4da2ff','#80c4ff'],
-    FED:['#a87fff','#97fce4'], CPI:['#f5b53d','#ff8a9e'],
+    DOGE:['#c2a633','#e8c84a'], XRP:['#7989ad','#bcc6e0'],
+    POLITICS:['#a87fff','#97fce4'], ECON:['#97fce4','#5ce9c8'],
+    GEO:['#5ce9c8','#97fce4'], CULTURE:['#ff8a9e','#a87fff'], TECH:['#97fce4','#a87fff'],
+    DEFAULT:['#a87fff','#97fce4'],
   };
-  return map[(symbol || '').toUpperCase()] || ['#a87fff','#97fce4'];
+  return map[(symbol || 'DEFAULT').toUpperCase()] || map.DEFAULT;
 }
 
 // =====================================================================
-// HOOKS / UTILS
+// HOOKS / UTILS — same shapes as the scaffolding
 // =====================================================================
 let _bodyLockCount = 0;
 function useBodyLock(open) {
@@ -122,13 +158,14 @@ function cleanAmount(v) {
   return p.length <= 2 ? s : p[0] + '.' + p.slice(1).join('');
 }
 function isValidSolAddress(v) { return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(v || '')); }
+function isValidEvmAddress(v) { return /^0x[a-fA-F0-9]{40}$/.test(String(v || '')); }
 function priceToCents(price) {
   const p = Math.max(0, Math.min(1, Number(price) || 0));
   return Math.round(p * 100);
 }
-function formatCountdown(msRemaining) {
-  if (msRemaining <= 0) return 'CLOSED';
-  const s = Math.floor(msRemaining / 1000);
+function formatCountdown(ms) {
+  if (ms <= 0) return 'CLOSED';
+  const s = Math.floor(ms / 1000);
   const d = Math.floor(s / 86400);
   const h = Math.floor((s % 86400) / 3600);
   const m = Math.floor((s % 3600) / 60);
@@ -138,406 +175,346 @@ function formatCountdown(msRemaining) {
   if (m >= 1) return `${m}m ${sec.toString().padStart(2, '0')}s`;
   return `${sec}s`;
 }
-async function fetchWithTimeout(url, opts = {}, timeoutMs = 12_000) {
-  const controller = new AbortController();
-  const id = setTimeout(() => controller.abort(), timeoutMs);
-  try { return await fetch(url, { ...opts, signal: controller.signal }); }
+async function fetchWithTimeout(url, opts = {}, ms = 12_000) {
+  const ac = new AbortController();
+  const id = setTimeout(() => ac.abort(), ms);
+  try { return await fetch(url, { ...opts, signal: ac.signal }); }
   finally { clearTimeout(id); }
 }
-
-function loadCached(key, ttlMs) {
+function loadCached(k, ttl) {
   try {
-    const raw = localStorage.getItem(key);
+    const raw = localStorage.getItem(k);
     if (!raw) return null;
     const d = JSON.parse(raw);
-    if (Date.now() - (d.ts || 0) > ttlMs) return null;
-    return d.data;
+    return Date.now() - (d.ts || 0) > ttl ? null : d.data;
   } catch { return null; }
 }
-function saveCached(key, data) {
-  try { localStorage.setItem(key, JSON.stringify({ ts: Date.now(), data })); } catch {}
+function saveCached(k, data) {
+  try { localStorage.setItem(k, JSON.stringify({ ts: Date.now(), data })); } catch {}
 }
 
-function hasAcceptedTos() {
-  try { return localStorage.getItem('nexus_kalshi_tos_v' + TOS_VERSION) === '1'; }
-  catch { return false; }
-}
-function acceptTos() {
-  try { localStorage.setItem('nexus_kalshi_tos_v' + TOS_VERSION, '1'); } catch {}
+// De-dupes incoming refund toasts against what's already rendered.
+function mergeRefunds(prev, next) {
+  const seen = new Set(prev.map(r => r.id));
+  const add = next.filter(r => r && r.id && !seen.has(r.id));
+  return add.length ? [...prev, ...add] : prev;
 }
 
 // =====================================================================
-// DFLOW API CLIENT
+// POLYMARKET GAMMA API — public, no auth (CORS open as of 2026). We pull
+// markets, normalize to our internal shape, and cache.
+// Reference: https://docs.polymarket.com/developers/gamma-markets-api/get-markets
+//
+// Verified against real Gamma response (May 2026):
+//   - order=volume_24hr  (snake_case in query, camelCase in response)
+//   - tag_id, not tag_slug — we skip tag filtering at the API level and
+//     categorize client-side because we don't keep a tag-ID table.
+//   - response fields are stringified JSON for outcomes/outcomePrices
+//   - acceptingOrders + enableOrderBook must both be true for the market
+//     to be tradeable on polymarket.com
 // =====================================================================
-async function dflowRequest(path, body, opts = {}) {
-  const url = DFLOW_API_BASE + path;
-  const res = await fetchWithTimeout(url, {
-    method: body ? 'POST' : 'GET',
-    headers: { 'Content-Type': 'application/json' },
-    ...(body ? { body: JSON.stringify(body) } : {}),
-  }, opts.timeoutMs || 12_000);
-  let data = null;
-  try { data = await res.json(); } catch {}
-  if (!res.ok) {
-    throw new Error(data?.error || data?.detail || `DFlow request failed (${res.status})`);
-  }
-  return data;
+async function fetchPolymarketMarkets({ limit = 100 } = {}) {
+  const params = new URLSearchParams({
+    active: 'true',
+    closed: 'false',
+    archived: 'false',
+    limit: String(limit),
+    order: 'volume_24hr',
+    ascending: 'false',
+  });
+  const url = `${GAMMA_API_BASE}/markets?${params.toString()}`;
+  const res = await fetchWithTimeout(url, { headers: { 'accept': 'application/json' } }, 10_000);
+  if (!res.ok) throw new Error(`Gamma ${res.status}`);
+  const data = await res.json();
+  const list = Array.isArray(data) ? data : (Array.isArray(data?.data) ? data.data : []);
+  return list.map(normalizePolyMarket).filter(Boolean);
 }
 
-async function fetchKalshiCryptoMarkets() {
-  if (!ENABLE_TRADING) return getMockMarkets();
+function normalizePolyMarket(m) {
+  if (!m) return null;
+  // Skip non-tradeable markets — Polymarket UI grays these out too.
+  if (m.acceptingOrders === false) return null;
+  if (m.enableOrderBook === false) return null;
+  if (m.closed === true || m.archived === true || m.active === false) return null;
+  // Gamma returns outcomes/outcomePrices as stringified JSON arrays.
+  let outcomes = [];
+  let prices = [];
   try {
-    // DFlow Metadata API: /api/v1/markets — fetch all initialized active
-    // markets and client-side filter to crypto. Crypto markets are mostly
-    // short-duration (5/15-min price brackets) tagged 'crypto' OR with a
-    // recognizable base symbol.
-    const data = await dflowRequest('/markets?isInitialized=true&status=active&limit=200');
-    const list = Array.isArray(data?.markets) ? data.markets
-               : Array.isArray(data?.data)    ? data.data
-               : Array.isArray(data)          ? data
-               : [];
-    if (list.length > 0) {
-      const normalized = list.map(normalizeMarket).filter(m =>
-        String(m.category || '').toLowerCase() === 'crypto'
-        || /^(BTC|ETH|SOL|XRP|DOGE|ADA|AVAX|MATIC|LINK|DOT)$/i.test(m.base || '')
-      );
-      if (normalized.length > 0) return normalized;
-    }
-    return getMockMarkets();
-  } catch (e) {
-    console.warn('[dflow markets — using mocks]', e?.message || e);
-    return getMockMarkets();
+    outcomes = typeof m.outcomes === 'string' ? JSON.parse(m.outcomes) : (m.outcomes || []);
+    prices   = typeof m.outcomePrices === 'string' ? JSON.parse(m.outcomePrices) : (m.outcomePrices || []);
+  } catch {}
+  // Binary markets only on this page; skip multi-outcome.
+  if (outcomes.length !== 2) return null;
+  const yesIdx = outcomes.findIndex(o => String(o).toLowerCase() === 'yes');
+  if (yesIdx < 0) return null;
+  const noIdx = yesIdx === 0 ? 1 : 0;
+  const yesPrice = Number(prices[yesIdx]) || 0.5;
+  const noPrice  = Number(prices[noIdx])  || (1 - yesPrice);
+  const closeTs  = m.endDate ? new Date(m.endDate).getTime() : Date.now() + 86_400_000;
+  const cat      = detectCategory(m);
+  if (!m.slug && !m.conditionId) return null;
+  // Deep-link target: prefer event slug (the canonical Polymarket URL),
+  // fall back to market slug. Event slug groups related markets so the
+  // user lands on the parent page when one exists.
+  const events    = Array.isArray(m.events) ? m.events : [];
+  const eventSlug = events[0]?.slug || '';
+  return {
+    id:           m.conditionId || m.id || m.slug,
+    slug:         eventSlug || m.slug || '',
+    marketSlug:   m.slug || '',
+    question:     m.question || m.title || '',
+    description:  m.description || '',
+    category:     cat,
+    base:         detectBase(m, cat),
+    yesPrice, noPrice,
+    closeTs,
+    volume24h:    Number(m.volume24hr || m.volume24h || m.volume || 0),
+    volumeAll:    Number(m.volume || 0),
+    liquidity:    Number(m.liquidity || m.liquidityNum || 0),
+    openInterest: Number(m.openInterest || 0),
+    hot:          Boolean(m.featured) || Number(m.volume24hr || 0) > 250_000,
+    eventTitle:   events[0]?.title || '',
+    image:        m.image || m.icon || null,
+  };
+}
+
+function detectCategory(m) {
+  // Polymarket's /markets response doesn't include top-level tags in the
+  // default payload — we have to categorize from question/event text.
+  // It's heuristic; for finer control add tag fetching via /tags later.
+  const events = Array.isArray(m.events) ? m.events : [];
+  const eventTitle = events[0]?.title || '';
+  const text = `${m.question || ''} ${eventTitle} ${m.description || ''}`.toLowerCase();
+  if (/\b(bitcoin|btc|ethereum|eth|solana|sol|xrp|doge|crypto|usdc|stablecoin)\b/.test(text)) return 'crypto';
+  if (/\b(election|president|congress|senate|gop|democrat|republican|trump|biden|harris)\b/.test(text)) return 'politics';
+  if (/\b(fed|cpi|inflation|gdp|rate cut|recession|jobs report|payrolls)\b/.test(text)) return 'economics';
+  if (/\b(russia|ukraine|china|israel|iran|war|invasion|hormuz|taiwan|nato)\b/.test(text)) return 'geopolitics';
+  if (/\b(oscar|grammy|emmy|movie|song|album|netflix|spotify|grammy|gta)\b/.test(text)) return 'culture';
+  if (/\b(openai|gpt|google|apple|tesla|nvidia| ai |chatgpt|claude)\b/.test(text)) return 'tech';
+  return 'trending';
+}
+
+function detectBase(m, cat) {
+  const text = `${m.question || ''} ${m.eventTitle || ''}`.toUpperCase();
+  if (cat === 'crypto') {
+    if (text.includes('BITCOIN') || text.includes('BTC')) return 'BTC';
+    if (text.includes('ETHEREUM') || text.includes('ETH')) return 'ETH';
+    if (text.includes('SOLANA') || text.includes('SOL')) return 'SOL';
+    if (text.includes('XRP')) return 'XRP';
+    if (text.includes('DOGE')) return 'DOGE';
+    return 'CRYPTO';
   }
-}
-
-async function fetchUserPositions(walletPubkey) {
-  // Positions endpoint will be wired in a later phase — DFlow derives them
-  // from on-chain token accounts (getTokenAccountsByOwner) filtered through
-  // /api/v1/filter_outcome_mints, not from a single REST endpoint.
-  return [];
-}
-
-async function buildOrderTx({ market, side, usdcAmount, walletPubkey }) {
-  if (!market?.id) throw new Error('Market unavailable');
-  if (!walletPubkey) throw new Error('Wallet not connected');
-  if (!(usdcAmount >= MIN_ORDER_USDC)) throw new Error(`Minimum order is $${MIN_ORDER_USDC}`);
-  if (usdcAmount > MAX_ORDER_USDC) throw new Error(`Maximum order is $${MAX_ORDER_USDC.toLocaleString()}`);
-  if (!ENABLE_TRADING) {
-    throw new Error('Live trading is disabled. Set REACT_APP_KALSHI_LIVE_TRADING=1 in env.');
-  }
-  // We do NOT pass builderFeeBps/feeRecipient — fee is injected as an SPL
-  // Transfer instruction prepended to DFlow's order in the same atomic tx
-  // (see decompileVersionedTx + assembleOrderTx).
-  return await dflowRequest('/prediction/order/build', {
-    marketId:   market.id,
-    side:       side === 'YES' ? 'YES' : 'NO',
-    usdcAmount: Number(usdcAmount.toFixed(2)),
-    userWallet: walletPubkey,
-  });
-}
-
-async function buildSellTx({ position, walletPubkey, contracts }) {
-  if (!position?.id) throw new Error('Position unavailable');
-  if (!walletPubkey) throw new Error('Wallet not connected');
-  if (!ENABLE_TRADING) throw new Error('Live trading is disabled');
-  // Reserved for future direct-sell flow; current sell UX routes through
-  // buildOrderTx with the opposite side via handleSell. Fee still bundled
-  // atomically the same way when this path is wired up.
-  return await dflowRequest('/prediction/position/sell', {
-    positionId: position.id,
-    contracts:  Number(contracts || position.contracts),
-    userWallet: walletPubkey,
-  });
-}
-
-async function submitSignedTx(serializedTx) {
-  return await dflowRequest('/prediction/order/submit', {
-    signedTxBase64: serializedTx,
-  }, { timeoutMs: 20_000 });
+  return (cat || 'TRENDING').toUpperCase();
 }
 
 // =====================================================================
-// ATOMIC FEE PIPELINE — same pattern as Stocks.jsx, ParlayBuilder.jsx,
-// PredictionsTonight.jsx. DFlow returns a serialized VersionedTransaction;
-// we deserialize, decompile to instructions + ALTs, prepend our SPL
-// Transfer (USDC → treasury), recompile, pre-sim, then user signs once.
-// Atomic: if order fails, fee reverts. Same sim contract as Stocks for
-// consistent Phantom UX across all four products.
+// SOLANA FEE+BRIDGE PIPELINE — one signature, atomic. Fee SPL transfer
+// is prepended to the bridge's serialized tx so either both succeed or
+// both revert. Same shape as Stocks.jsx / ParlayBuilder.jsx.
 // =====================================================================
-const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
-const ATA_PROGRAM_ID   = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
-
 function deriveUsdcAta(ownerB58) {
-  const owner        = new PublicKey(ownerB58);
-  const mint         = new PublicKey(USDC_MINT_SOL);
-  const tokenProgram = new PublicKey(TOKEN_PROGRAM_ID);
-  const ataProgram   = new PublicKey(ATA_PROGRAM_ID);
+  const owner    = new PublicKey(ownerB58);
+  const mint     = new PublicKey(USDC_MINT_SOL);
+  const tokProg  = new PublicKey(TOKEN_PROGRAM_ID);
+  const ataProg  = new PublicKey(ATA_PROGRAM_ID);
   const [ata] = PublicKey.findProgramAddressSync(
-    [owner.toBuffer(), tokenProgram.toBuffer(), mint.toBuffer()],
-    ataProgram
+    [owner.toBuffer(), tokProg.toBuffer(), mint.toBuffer()],
+    ataProg,
   );
   return ata.toBase58();
 }
 
-function createSplTransferInstruction(sourceB58, destinationB58, ownerB58, amountAtomic) {
-  // SPL Token Transfer: discriminator (3) + u64 amount little-endian
+function createSplTransferInstruction(srcB58, dstB58, ownerB58, amountAtomic) {
+  // SPL Transfer: discriminator (3) + u64 amount LE
   const data = new Uint8Array(9);
   data[0] = 3;
   let amt = BigInt(amountAtomic);
-  for (let i = 0; i < 8; i++) {
-    data[1 + i] = Number(amt & 0xffn);
-    amt >>= 8n;
-  }
+  for (let i = 0; i < 8; i++) { data[1 + i] = Number(amt & 0xffn); amt >>= 8n; }
   return new TransactionInstruction({
     programId: new PublicKey(TOKEN_PROGRAM_ID),
     keys: [
-      { pubkey: new PublicKey(sourceB58),      isSigner: false, isWritable: true },
-      { pubkey: new PublicKey(destinationB58), isSigner: false, isWritable: true },
-      { pubkey: new PublicKey(ownerB58),       isSigner: true,  isWritable: false },
+      { pubkey: new PublicKey(srcB58),   isSigner: false, isWritable: true  },
+      { pubkey: new PublicKey(dstB58),   isSigner: false, isWritable: true  },
+      { pubkey: new PublicKey(ownerB58), isSigner: true,  isWritable: false },
     ],
     data,
   });
 }
 
-async function fetchLookupTableAccounts(altAddresses) {
-  if (!altAddresses || altAddresses.length === 0) return [];
-  const accounts = [];
-  for (const addr of altAddresses) {
+async function fetchLookupTableAccounts(addrs) {
+  if (!addrs?.length) return [];
+  const out = [];
+  for (const addr of addrs) {
     try {
       const res = await fetchWithTimeout('/api/solana-rpc', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0', id: 1, method: 'getAccountInfo',
-          params: [addr, { encoding: 'base64' }],
-        }),
+        body: JSON.stringify({ jsonrpc:'2.0', id:1, method:'getAccountInfo', params:[addr,{encoding:'base64'}] }),
       }, 8_000);
       const data = await res.json();
       const raw = data?.result?.value?.data?.[0];
       if (!raw) continue;
       const buf = Uint8Array.from(atob(raw), c => c.charCodeAt(0));
       const state = AddressLookupTableAccount.deserialize(buf);
-      accounts.push(new AddressLookupTableAccount({ key: new PublicKey(addr), state }));
-    } catch (e) {
-      console.warn('[ALT fetch fail]', addr, e?.message);
-    }
+      out.push(new AddressLookupTableAccount({ key: new PublicKey(addr), state }));
+    } catch (e) { console.warn('[ALT fetch]', addr, e?.message); }
   }
-  return accounts;
+  return out;
 }
 
-async function decompileVersionedTx(versionedTx) {
-  const message = versionedTx.message;
+async function decompileVersionedTx(vtx) {
+  const message = vtx.message;
   const altLookups = message.addressTableLookups || [];
-  const altAddresses = altLookups.map(l =>
-    typeof l.accountKey === 'string' ? l.accountKey : l.accountKey.toBase58()
-  );
-  const altAccounts = await fetchLookupTableAccounts(altAddresses);
-  const accountKeys = message.getAccountKeys({ addressLookupTableAccounts: altAccounts });
-  const instructions = message.compiledInstructions.map(ci => {
-    const programId = accountKeys.get(ci.programIdIndex);
-    const keys = Array.from(ci.accountKeyIndexes).map(idx => ({
-      pubkey:     accountKeys.get(idx),
+  const altAddrs = altLookups.map(l => typeof l.accountKey === 'string' ? l.accountKey : l.accountKey.toBase58());
+  const altAccounts = await fetchLookupTableAccounts(altAddrs);
+  const keys = message.getAccountKeys({ addressLookupTableAccounts: altAccounts });
+  const instructions = message.compiledInstructions.map(ci => ({
+    programId: keys.get(ci.programIdIndex),
+    keys: Array.from(ci.accountKeyIndexes).map(idx => ({
+      pubkey:     keys.get(idx),
       isSigner:   message.isAccountSigner(idx),
       isWritable: message.isAccountWritable(idx),
-    }));
-    return new TransactionInstruction({ programId, keys, data: Buffer.from(ci.data) });
-  });
+    })),
+    data: Buffer.from(ci.data),
+  })).map(i => new TransactionInstruction(i));
   return {
     instructions,
-    payerKey:   accountKeys.get(0),
+    payerKey:  keys.get(0),
     altAccounts,
-    blockhash:  message.recentBlockhash,
+    blockhash: message.recentBlockhash,
   };
 }
 
-function assembleOrderTx({ instructions, payerKey, altAccounts, blockhash, feeInstruction }) {
-  const allInstructions = [feeInstruction, ...instructions];
+function assembleFeeAndBridgeTx({ instructions, payerKey, altAccounts, blockhash, feeInstruction }) {
+  const all = [feeInstruction, ...instructions];
   const msg = new TransactionMessage({
     payerKey,
     recentBlockhash: blockhash,
-    instructions: allInstructions,
+    instructions: all,
   }).compileToV0Message(altAccounts);
   return new VersionedTransaction(msg);
 }
 
-async function simulateBeforeSign(serializedTxBase64) {
+async function simulateBeforeSign(serializedBase64) {
   try {
     const res = await fetchWithTimeout('/api/solana-rpc', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        jsonrpc: '2.0', id: 1, method: 'simulateTransaction',
-        params: [serializedTxBase64, {
-          encoding:               'base64',
-          commitment:             'processed',
-          replaceRecentBlockhash: true,
-          sigVerify:              false,
-        }],
+        jsonrpc:'2.0', id:1, method:'simulateTransaction',
+        params:[serializedBase64, { encoding:'base64', commitment:'processed', replaceRecentBlockhash:true, sigVerify:false }],
       }),
     }, 12_000);
     const json = await res.json();
-    if (json?.error) return { ok: false, message: json.error.message || 'Simulation RPC error' };
-    const value = json?.result?.value;
-    if (!value)     return { ok: true,  warning: 'No sim result' };
-    if (value.err)  return { ok: false, message: parseSimError(value.err, value.logs) };
+    if (json?.error) return { ok: false, message: json.error.message };
+    const v = json?.result?.value;
+    if (!v) return { ok: true };
+    if (v.err) return { ok: false, message: parseSimError(v.err, v.logs) };
     return { ok: true };
   } catch (e) {
-    console.warn('[sim]', e?.message || e);
-    return { ok: true, warning: 'Pre-sim unavailable' };
+    return { ok: true, warning: 'sim unavailable' };
   }
 }
-
-const DFLOW_ERROR_CODES = {
-  // 6000-6099 reserved for DFlow CLP program errors (populate as observed)
-  // 6100-6199 reserved for Kalshi outcome-token program errors
-};
 
 function parseSimError(err, logs) {
   if (!err) return 'Transaction would fail';
   if (typeof err === 'string') return err;
   if (err?.InstructionError) {
     const [idx, detail] = err.InstructionError;
-    if (detail && typeof detail === 'object' && 'Custom' in detail) {
-      const code  = Number(detail.Custom);
-      const known = DFLOW_ERROR_CODES[code];
-      if (known) return known;
-      if (code === 1)  return 'Not enough USDC for stake + fee';
-      if (code === 3)  return 'Token account not found — fund USDC first';
-      return `Program error 0x${code.toString(16)} at instruction ${idx}`;
+    if (detail?.Custom != null) {
+      const code = Number(detail.Custom);
+      if (code === 1) return 'Not enough USDC for stake + fee + bridge';
+      if (code === 3) return 'USDC account not found — fund USDC first';
+      return `Program error 0x${code.toString(16)} at ix ${idx}`;
     }
-    if (typeof detail === 'string') return `${detail} at instruction ${idx}`;
+    if (typeof detail === 'string') return `${detail} at ix ${idx}`;
   }
   const arr = Array.isArray(logs) ? logs : [];
-  const errLog = arr.find(l => /error|failed|insufficient|slippage|liquidity/i.test(String(l)));
-  if (errLog) return String(errLog).slice(0, 140);
-  return 'Order unavailable — try a different stake or market';
+  const errLog = arr.find(l => /error|failed|insufficient|slippage/i.test(String(l)));
+  return errLog ? String(errLog).slice(0, 140) : 'Order unavailable';
 }
 
-function normalizeMarket(raw) {
-  // DFlow's /api/v1/markets returns fields like ticker, eventTicker, title,
-  // yesMint, noMint, volume, status, closeTime. Multiple aliases let mock
-  // and real data flow through the same UI.
-  const yesMint = raw.yesMint || raw.yes_mint || raw.yesTokenMint || null;
-  const noMint  = raw.noMint  || raw.no_mint  || raw.noTokenMint  || null;
-  return {
-    id:           raw.id || raw.ticker || raw.eventTicker || raw.market_id || yesMint,
-    yesMint, noMint,
-    base:         raw.base || raw.symbol || raw.asset || raw.underlying || 'BTC',
-    category:     raw.category || raw.eventCategory || categorizeMarket(raw),
-    question:     raw.question || raw.title || raw.name || raw.eventTitle || '',
-    description:  raw.description || raw.subtitle || '',
-    yesPrice:     Number(raw.yesPrice ?? raw.yes_price ?? raw.lastPriceYes ?? raw.lastYesPrice ?? raw.markPriceYes ?? 0.5),
-    noPrice:      Number(raw.noPrice  ?? raw.no_price  ?? raw.lastPriceNo  ?? raw.lastNoPrice  ?? raw.markPriceNo  ?? 0.5),
-    closeTs:      Number(raw.closeTs  ?? raw.close_time ?? raw.closeTime ?? raw.expiry ?? raw.expirationTime ?? Date.now() + 3600_000),
-    volume24h:    Number(raw.volume24h ?? raw.volume_24h ?? raw.volume ?? raw.vol ?? 0),
-    openInterest: Number(raw.openInterest ?? raw.open_interest ?? 0),
-    hot:          Boolean(raw.hot ?? raw.featured),
-  };
+// ---- Bridge client (Mayan Swap via our /api/bridge Express proxy) ----
+async function bridgeQuote({ amountUsdcAtomic, srcAddress, dstAddress }) {
+  const res = await fetchWithTimeout(`${BRIDGE_API_BASE}/quote`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fromChain: 'solana',
+      toChain:   'polygon',
+      fromToken: USDC_MINT_SOL,
+      toToken:   'native-usdc', // backend resolves to Polygon native USDC mint
+      amountAtomic: String(amountUsdcAtomic),
+      srcAddress, dstAddress,
+      slippageBps: 50,
+    }),
+  }, 15_000);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Bridge quote failed (${res.status})`);
+  // Backend returns { serializedTx: base64, expectedOutAtomic, etaSeconds, route }
+  return data;
+}
+async function bridgeSubmit(serializedSignedTxB64) {
+  const res = await fetchWithTimeout(`${BRIDGE_API_BASE}/submit`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ signedTxBase64: serializedSignedTxB64 }),
+  }, 20_000);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data?.error || `Bridge submit failed (${res.status})`);
+  // Backend returns { txid, trackerId }
+  return data;
+}
+async function bridgeStatus(trackerId) {
+  const res = await fetchWithTimeout(`${BRIDGE_API_BASE}/status?id=${encodeURIComponent(trackerId)}`, {}, 8_000);
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) return { state: 'pending' };
+  // { state: 'pending'|'confirmed'|'failed', destTxHash? }
+  return data;
 }
 
-function categorizeMarket(m) {
-  const closeMs = Number(m.closeTs ?? m.close_time ?? 0) - Date.now();
-  if (closeMs <= 0) return 'events';
-  if (closeMs < 10 * 60_000) return '5min';
-  if (closeMs < 90 * 60_000) return 'hourly';
-  if (closeMs < 36 * 3600_000) return 'daily';
-  if (closeMs < 14 * 86400_000) return 'weekly';
-  return 'events';
+// Fire-and-forget. Frontend hands the trackerId + fee details to the
+// backend so its cron job can reconcile bridge outcomes and refund the
+// Solana-side fee on failure. We do NOT poll for outcomes here.
+async function trackBridge({ trackerId, userWallet, feeAtomic, marketId, marketSlug }) {
+  try {
+    await fetchWithTimeout(`${BRIDGE_API_BASE}/track`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        trackerId, userWallet,
+        feeAtomicUsdc: String(feeAtomic || 0),
+        marketId, marketSlug,
+      }),
+    }, 6_000);
+  } catch (e) {
+    // Non-fatal: if /track fails, backend reconciler picks up the
+    // pending Mayan tx by polling its own state. Refunds still work.
+    console.warn('[trackBridge]', e?.message);
+  }
 }
 
-// =====================================================================
-// MOCK MARKETS — used until DFlow endpoints are live
-// =====================================================================
-function getMockMarkets() {
-  const now = Date.now();
-  return [
-    { id:'BTC-5M-NEXT', base:'BTC', category:'5min',
-      question:'Bitcoin up at next 5-min close?',
-      description:'Resolves YES if BTC at the next 5-minute candle close is higher than current price.',
-      yesPrice:0.51, noPrice:0.49,
-      closeTs: now + 4 * 60_000 + 30_000,
-      volume24h: 482_000, openInterest: 96_000, hot: true },
-    { id:'ETH-5M-NEXT', base:'ETH', category:'5min',
-      question:'Ethereum up at next 5-min close?',
-      description:'Resolves YES if ETH at the next 5-minute candle close is higher than current price.',
-      yesPrice:0.48, noPrice:0.52,
-      closeTs: now + 4 * 60_000 + 30_000,
-      volume24h: 287_000, openInterest: 54_000, hot: true },
-    { id:'SOL-5M-NEXT', base:'SOL', category:'5min',
-      question:'Solana up at next 5-min close?',
-      description:'Resolves YES if SOL at the next 5-minute candle close is higher than current price.',
-      yesPrice:0.50, noPrice:0.50,
-      closeTs: now + 4 * 60_000 + 30_000,
-      volume24h: 64_000, openInterest: 18_000 },
-    { id:'BTC-1H-UP', base:'BTC', category:'hourly',
-      question:'Bitcoin up over the next hour?',
-      description:'Resolves YES if BTC closes higher 1 hour from now than right now.',
-      yesPrice:0.53, noPrice:0.47,
-      closeTs: now + 47 * 60_000,
-      volume24h: 168_000, openInterest: 42_000 },
-    { id:'ETH-1H-UP', base:'ETH', category:'hourly',
-      question:'Ethereum up over the next hour?',
-      description:'Resolves YES if ETH closes higher 1 hour from now than right now.',
-      yesPrice:0.49, noPrice:0.51,
-      closeTs: now + 47 * 60_000,
-      volume24h: 98_000, openInterest: 21_000 },
-    { id:'BTC-EOD-UP', base:'BTC', category:'daily',
-      question:'Bitcoin closes green today?',
-      description:'Resolves YES if BTC at 5pm ET close is above the 12am ET open.',
-      yesPrice:0.56, noPrice:0.44,
-      closeTs: nextHourAt(17),
-      volume24h: 924_000, openInterest: 215_000, hot: true },
-    { id:'ETH-EOD-UP', base:'ETH', category:'daily',
-      question:'Ethereum closes green today?',
-      description:'Resolves YES if ETH at 5pm ET close is above the 12am ET open.',
-      yesPrice:0.52, noPrice:0.48,
-      closeTs: nextHourAt(17),
-      volume24h: 412_000, openInterest: 88_000 },
-    { id:'FED-RATE-CUT', base:'FED', category:'events',
-      question:'Will the Fed cut rates at next FOMC?',
-      description:'Resolves YES if FOMC announces a rate cut at the next scheduled meeting.',
-      yesPrice:0.62, noPrice:0.38,
-      closeTs: now + 21 * 86400_000,
-      volume24h: 1_240_000, openInterest: 890_000, hot: true },
-    { id:'CPI-ABOVE-3', base:'CPI', category:'events',
-      question:'Next CPI print above 3.0%?',
-      description:'Resolves YES if headline CPI YoY is above 3.0% in the next release.',
-      yesPrice:0.34, noPrice:0.66,
-      closeTs: now + 11 * 86400_000,
-      volume24h: 480_000, openInterest: 220_000 },
-    { id:'BTC-WK-100K', base:'BTC', category:'weekly',
-      question:'BTC above $100,000 at Friday close?',
-      description:'Resolves YES if BTC closes above $100,000 on Friday 5pm ET.',
-      yesPrice:0.41, noPrice:0.59,
-      closeTs: nextFridayAt(17),
-      volume24h: 312_000, openInterest: 184_000 },
-    { id:'ETH-WK-4K', base:'ETH', category:'weekly',
-      question:'ETH above $4,000 at Friday close?',
-      description:'Resolves YES if ETH closes above $4,000 on Friday 5pm ET.',
-      yesPrice:0.36, noPrice:0.64,
-      closeTs: nextFridayAt(17),
-      volume24h: 158_000, openInterest: 72_000 },
-    { id:'SOL-WK-250', base:'SOL', category:'weekly',
-      question:'SOL above $250 at Friday close?',
-      description:'Resolves YES if SOL closes above $250 on Friday 5pm ET.',
-      yesPrice:0.29, noPrice:0.71,
-      closeTs: nextFridayAt(17),
-      volume24h: 64_000, openInterest: 38_000 },
-  ];
+// On page load, ask the backend whether any pending refunds exist for
+// this wallet that the user hasn't been shown yet. Backend returns a
+// list of { id, marketSlug, feeUsd, refundedAt } entries; we render a
+// RefundToast for each and call /ack to mark them seen.
+async function fetchUnseenRefunds(walletPubkey) {
+  if (!walletPubkey) return [];
+  try {
+    const res = await fetchWithTimeout(`${BRIDGE_API_BASE}/refunds?wallet=${encodeURIComponent(walletPubkey)}`, {}, 6_000);
+    if (!res.ok) return [];
+    const data = await res.json().catch(() => ({}));
+    return Array.isArray(data?.refunds) ? data.refunds : [];
+  } catch { return []; }
 }
-function nextHourAt(hourET) {
-  const d = new Date();
-  d.setHours(hourET, 0, 0, 0);
-  if (d.getTime() < Date.now()) d.setDate(d.getDate() + 1);
-  return d.getTime();
-}
-function nextFridayAt(hourET) {
-  const d = new Date();
-  const day = d.getDay();
-  const daysUntilFri = (5 - day + 7) % 7 || 7;
-  d.setDate(d.getDate() + daysUntilFri);
-  d.setHours(hourET, 0, 0, 0);
-  return d.getTime();
+async function ackRefund(walletPubkey, refundId) {
+  try {
+    await fetchWithTimeout(`${BRIDGE_API_BASE}/refunds/ack`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ wallet: walletPubkey, refundId }),
+    }, 6_000);
+  } catch {}
 }
 
 // =====================================================================
@@ -572,36 +549,27 @@ function CountdownText({ closeTs, style }) {
     <span style={{
       color: closed ? C.muted2 : urgent ? C.down : C.muted,
       fontWeight: urgent ? 800 : 600, ...style,
-    }}>
-      {closed ? 'CLOSED' : formatCountdown(remaining)}
-    </span>
+    }}>{closed ? 'CLOSED' : formatCountdown(remaining)}</span>
   );
 }
 
-function YesNoPills({ yesPrice, noPrice, large }) {
-  const sz = large ? { fs: 13, py: '5px 11px' } : { fs: 11, py: '3px 8px' };
+function YesNoPills({ yesPrice, noPrice }) {
   return (
     <div style={{ display: 'flex', gap: 6 }}>
-      <div style={{
-        padding: sz.py, borderRadius: 8,
-        background: 'rgba(61,213,152,.10)', border: '1px solid rgba(61,213,152,.28)', ...T.mono,
-      }}>
-        <span style={{ color: C.muted2, fontSize: sz.fs - 3, fontWeight: 700, marginRight: 4 }}>YES</span>
-        <span style={{ color: C.up, fontSize: sz.fs, fontWeight: 800 }}>{priceToCents(yesPrice)}¢</span>
+      <div style={{ padding: '3px 8px', borderRadius: 8, background: 'rgba(61,213,152,.10)', border: '1px solid rgba(61,213,152,.28)', ...T.mono }}>
+        <span style={{ color: C.muted2, fontSize: 8, fontWeight: 700, marginRight: 4 }}>YES</span>
+        <span style={{ color: C.up, fontSize: 11, fontWeight: 800 }}>{priceToCents(yesPrice)}¢</span>
       </div>
-      <div style={{
-        padding: sz.py, borderRadius: 8,
-        background: 'rgba(255,138,158,.10)', border: '1px solid rgba(255,138,158,.28)', ...T.mono,
-      }}>
-        <span style={{ color: C.muted2, fontSize: sz.fs - 3, fontWeight: 700, marginRight: 4 }}>NO</span>
-        <span style={{ color: C.down, fontSize: sz.fs, fontWeight: 800 }}>{priceToCents(noPrice)}¢</span>
+      <div style={{ padding: '3px 8px', borderRadius: 8, background: 'rgba(255,138,158,.10)', border: '1px solid rgba(255,138,158,.28)', ...T.mono }}>
+        <span style={{ color: C.muted2, fontSize: 8, fontWeight: 700, marginRight: 4 }}>NO</span>
+        <span style={{ color: C.down, fontSize: 11, fontWeight: 800 }}>{priceToCents(noPrice)}¢</span>
       </div>
     </div>
   );
 }
 
 function CategoryBadge({ category, small }) {
-  const meta = CAT_META[category];
+  const meta = CAT_META[category] || CAT_META.trending;
   if (!meta) return null;
   return (
     <span style={{
@@ -710,263 +678,136 @@ function MarketRow({ market, onClick }) {
   );
 }
 
-function PositionsPanel({ positions, markets, onSell }) {
-  if (!positions || positions.length === 0) return null;
-  return (
-    <div style={{ marginBottom: 14 }}>
-      <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', marginBottom: 8, ...T.mono }}>YOUR POSITIONS</div>
-      {positions.map(pos => {
-        const market = markets.find(m => m.id === pos.marketId);
-        const livePx = pos.side === 'YES' ? (market?.yesPrice ?? pos.entryPrice) : (market?.noPrice ?? pos.entryPrice);
-        const cost   = pos.contracts * pos.entryPrice;
-        const value  = pos.contracts * livePx;
-        const pnl    = value - cost;
-        const pnlPct = cost > 0 ? (pnl / cost) * 100 : 0;
-        const inProfit = pnl >= 0;
-        return (
-          <div key={pos.id} style={{
-            marginBottom: 8, padding: '12px 14px', borderRadius: 14,
-            background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))',
-            border: `1px solid ${inProfit ? 'rgba(61,213,152,.24)' : 'rgba(255,138,158,.24)'}`,
-          }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 10, marginBottom: 8 }}>
-              <div style={{ minWidth: 0, flex: 1 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 4 }}>
-                  <span style={{ fontSize: 9, fontWeight: 700, color: pos.side === 'YES' ? C.up : C.down, padding: '1px 6px', borderRadius: 4, background: pos.side === 'YES' ? 'rgba(61,213,152,.12)' : 'rgba(255,138,158,.12)', ...T.mono }}>
-                    {pos.side}
-                  </span>
-                  <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, ...T.mono }}>{pos.contracts} contracts</span>
-                </div>
-                <div style={{ fontSize: 12, color: C.ink, fontWeight: 600, lineHeight: 1.3, ...T.body }}>
-                  {market?.question || pos.question || pos.marketId}
-                </div>
-              </div>
-              <div style={{ textAlign: 'right', flexShrink: 0 }}>
-                <div style={{ fontSize: 15, fontWeight: 800, color: inProfit ? C.up : C.down, ...T.display }}>
-                  {inProfit ? '+' : ''}{fmt(pnl, 2)}
-                </div>
-                <div style={{ fontSize: 10, color: inProfit ? C.up : C.down, marginTop: 2, ...T.mono }}>
-                  {pnlPct >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%
-                </div>
-              </div>
-            </div>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 4, marginBottom: 10 }}>
-              {[['ENTRY', priceToCents(pos.entryPrice) + '¢'], ['NOW', priceToCents(livePx) + '¢'], ['COST', fmt(cost, 2)]].map(([l, v]) => (
-                <div key={l}>
-                  <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: '.06em', ...T.mono }}>{l}</div>
-                  <div style={{ fontSize: 11, color: C.ink, fontWeight: 700, marginTop: 2, ...T.mono }}>{v}</div>
-                </div>
-              ))}
-            </div>
-            <button onClick={() => onSell(pos, market)} style={{
-              width: '100%', padding: 9, borderRadius: 10,
-              border: `1px solid ${inProfit ? 'rgba(61,213,152,.30)' : 'rgba(255,138,158,.30)'}`,
-              background: inProfit ? 'rgba(61,213,152,.06)' : 'rgba(255,138,158,.06)',
-              color: inProfit ? C.up : C.down,
-              fontWeight: 700, fontSize: 12, cursor: 'pointer', ...T.body,
-            }}>Sell position</button>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function TosModal({ open, onAccept, onClose }) {
-  const [checked, setChecked] = useState(false);
-  useBodyLock(open);
-  useEffect(() => { if (!open) setChecked(false); }, [open]);
-  if (!open) return null;
-  return (
-    <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 460, background: 'rgba(0,0,0,.86)', backdropFilter: 'blur(14px)', cursor: 'pointer' }}/>
-      <div style={{
-        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
-        width: '100%', maxWidth: 500, zIndex: 461,
-        maxHeight: '88dvh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
-        background: `linear-gradient(180deg,${C.surface2} 0%,${C.bg} 100%)`,
-        borderTop: '1px solid rgba(168,127,255,.30)', borderRadius: '26px 26px 0 0',
-        boxShadow: '0 -24px 70px rgba(0,0,0,.6)',
-      }}>
-        <div style={{ flexShrink: 0, padding: '20px 22px 0' }}>
-          <div style={{ width: 36, height: 4, background: 'rgba(255,255,255,.12)', borderRadius: 99, margin: '0 auto 18px' }}/>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-            <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 19, letterSpacing: '-.02em', ...T.display }}>Before you start</div>
-            <button onClick={onClose} style={{ background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`, color: C.muted, width: 32, height: 32, borderRadius: 10, fontSize: 18, cursor: 'pointer' }}>×</button>
-          </div>
-          <div style={{ color: C.muted, fontSize: 12, marginBottom: 16, ...T.body }}>
-            One-time acknowledgement. We won't ask again on this device.
-          </div>
-        </div>
-
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 22px 8px', WebkitOverflowScrolling: 'touch', minHeight: 0 }}>
-          <div style={{ padding: 14, borderRadius: 14, background: 'rgba(151,252,228,.06)', border: '1px solid rgba(151,252,228,.20)', marginBottom: 12 }}>
-            <div style={{ fontSize: 11, color: C.hl, fontWeight: 800, letterSpacing: '.06em', marginBottom: 8, ...T.mono }}>POWERED BY KALSHI</div>
-            <div style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.55, ...T.body }}>
-              Trades execute on <strong style={{ color: C.inkStr }}>Kalshi</strong>, a CFTC-regulated event-contract exchange. NexusDEX is a non-custodial frontend and is not affiliated with Kalshi Inc.
-            </div>
-          </div>
-
-          <div style={{ padding: 14, borderRadius: 14, background: 'rgba(245,181,61,.06)', border: '1px solid rgba(245,181,61,.20)', marginBottom: 12 }}>
-            <div style={{ fontSize: 11, color: C.amber, fontWeight: 800, letterSpacing: '.06em', marginBottom: 8, ...T.mono }}>U.S. STATE RESTRICTIONS</div>
-            <div style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.55, marginBottom: 8, ...T.body }}>
-              Kalshi prediction markets are not available to residents of:
-            </div>
-            <div style={{ fontSize: 12, color: C.inkStr, fontWeight: 700, letterSpacing: '.04em', ...T.mono }}>
-              {RESTRICTED_STATES.join(' · ')}
-            </div>
-            <div style={{ fontSize: 11, color: C.muted, marginTop: 8, lineHeight: 1.5, ...T.body }}>
-              By continuing you confirm you do not reside in any of the above.
-            </div>
-          </div>
-
-          <div style={{ padding: 14, borderRadius: 14, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, marginBottom: 12 }}>
-            <div style={{ fontSize: 11, color: C.muted2, fontWeight: 800, letterSpacing: '.06em', marginBottom: 8, ...T.mono }}>WHAT YOU AGREE TO</div>
-            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, color: C.ink, lineHeight: 1.7, ...T.body }}>
-              <li>You are 18 or older.</li>
-              <li>You may lose the full amount you spend on any contract.</li>
-              <li>NexusDEX charges a 1.5% builder fee per trade in addition to Kalshi's exchange fees.</li>
-              <li>You waive any claim against NexusDEX for losses from trading on Kalshi.</li>
-              <li>You will not use this app while located in a restricted jurisdiction.</li>
-            </ul>
-          </div>
-        </div>
-
-        <div style={{
-          flexShrink: 0,
-          padding: '14px 22px calc(env(safe-area-inset-bottom) + 90px)',
-          borderTop: `1px solid ${C.hairline}`,
-          background: C.bg,
-        }}>
-          <label style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 14, cursor: 'pointer' }}>
-            <input type="checkbox" checked={checked} onChange={e => setChecked(e.target.checked)}
-              style={{ width: 20, height: 20, marginTop: 1, accentColor: C.hl, cursor: 'pointer', flexShrink: 0 }}/>
-            <span style={{ fontSize: 12.5, color: C.ink, lineHeight: 1.5, fontWeight: 600, ...T.body }}>
-              I have read and accept the above terms.
-            </span>
-          </label>
-          <button onClick={checked ? onAccept : undefined} disabled={!checked} style={{
-            width: '100%', padding: 16, borderRadius: 16, border: 'none',
-            background: checked ? `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)` : 'rgba(255,255,255,.06)',
-            color: checked ? '#04070f' : C.muted2,
-            fontWeight: 800, fontSize: 15,
-            cursor: checked ? 'pointer' : 'not-allowed', minHeight: 52, ...T.display,
-          }}>Continue</button>
-        </div>
-      </div>
-    </>
-  );
-}
-
-function BuyModal({ open, onClose, market, initialSide, walletPubkey, onConnectWallet, refreshPositions }) {
+// =====================================================================
+// BUY MODAL — the trade flow. Fee+bridge atomic on Solana, then redirect
+// to Polymarket with funds already in flight. Builder code attached in
+// URL for any attribution-based rewards Polymarket pays on top.
+// =====================================================================
+function BuyModal({ open, onClose, market, initialSide, walletPubkey, evmAddress, onConnectWallet, onAddEvm }) {
   const { connected, signTransaction } = useWallet();
   const { activeWalletKind } = useNexusWallet();
   const wcon = connected || activeWalletKind === 'privy';
 
   const [side, setSide]           = useState('YES');
   const [amount, setAmount]       = useState('');
-  const [status, setStatus]       = useState('idle');
+  const [status, setStatus]       = useState('idle'); // idle|quoting|signing|submitting|error
   const [statusMsg, setStatusMsg] = useState('');
   const [error, setError]         = useState('');
 
   useBodyLock(open);
-
   useEffect(() => {
     if (open) {
       setSide(initialSide || 'YES');
-      setAmount('');
-      setStatus('idle');
-      setError('');
-      setStatusMsg('');
+      setAmount(''); setStatus('idle'); setError(''); setStatusMsg('');
     }
   }, [open, initialSide, market?.id]);
+
+  // No bridge polling on the frontend. After the user signs and we
+  // hand off the trackerId to the backend, the modal closes and the
+  // user is free. Bridge outcomes (delivery / refund) are reconciled
+  // by the backend cron job against /api/bridge/track and surfaced
+  // only on refund via the main page's RefundToast.
 
   if (!open || !market) return null;
 
   const isYes      = side === 'YES';
   const livePrice  = isYes ? market.yesPrice : market.noPrice;
   const usd        = parseFloat(amount) || 0;
-  const contracts  = livePrice > 0 ? usd / livePrice : 0;
-  const maxPayout  = contracts * 1;
+  const feeBps     = feeBpsFor(market.category);
+  const feeUsd     = usd * (feeBps / 10_000);
+  const netUsd     = Math.max(0, usd - feeUsd);
+  const contracts  = livePrice > 0 ? netUsd / livePrice : 0;
+  const maxPayout  = contracts;
   const profitIfWin = Math.max(0, maxPayout - usd);
-  const builderFee = usd * (DFLOW_BUILDER_FEE_BPS / 10_000);
   const tooSmall   = usd > 0 && usd < MIN_ORDER_USDC;
   const tooLarge   = usd > MAX_ORDER_USDC;
 
-  const isBusy    = status === 'loading';
-  const isSuccess = status === 'success';
+  const isBusy    = ['quoting','signing','submitting'].includes(status);
   const isError   = status === 'error';
-
-  const quickChips = [5, 25, 100, 500];
+  const quickChips = [10, 50, 250, 1000];
 
   const execute = async () => {
-    if (!wcon)            { onConnectWallet?.(); return; }
-    if (!walletPubkey)    { setError('Wallet not connected'); return; }
+    if (!wcon)                    { onConnectWallet?.(); return; }
+    if (!walletPubkey)            { setError('Wallet not connected'); return; }
     if (!isValidSolAddress(walletPubkey)) { setError('Invalid Solana address'); return; }
+    if (!evmAddress || !isValidEvmAddress(evmAddress)) {
+      setError('Add a Polygon (EVM) address to receive bridged USDC');
+      onAddEvm?.();
+      return;
+    }
     if (!usd || tooSmall) { setError(`Minimum order is $${MIN_ORDER_USDC}`); return; }
     if (tooLarge)         { setError(`Maximum order is $${MAX_ORDER_USDC.toLocaleString()}`); return; }
     if (!TREASURY_USDC_ATA) { setError('Treasury not configured'); return; }
     if (!signTransaction)   { setError('Wallet cannot sign transactions'); return; }
+    if (!ENABLE_TRADING)    { setError('Live trading disabled — set REACT_APP_NEXUS_PREDICT_LIVE=1'); return; }
 
-    setStatus('loading'); setError(''); setStatusMsg('Building order…');
+    setStatus('quoting'); setError(''); setStatusMsg('Getting bridge quote…');
     try {
-      // 1. Get DFlow's order tx (raw, no builder-fee args)
-      const built = await buildOrderTx({ market, side, usdcAmount: usd, walletPubkey });
-      if (!built?.serializedTx) throw new Error('Order builder returned no transaction');
+      // 1. Quote the bridge for net amount (post-fee USDC, in atomic units)
+      const netAtomic = Math.floor(netUsd * Math.pow(10, USDC_DECIMALS));
+      const feeAtomic = Math.floor(feeUsd * Math.pow(10, USDC_DECIMALS));
+      if (feeAtomic <= 0) throw new Error('Fee too small to compute');
 
-      // 2. Deserialize DFlow's tx
-      const txBytes = Uint8Array.from(atob(built.serializedTx), c => c.charCodeAt(0));
-      let originalTx;
-      try { originalTx = VersionedTransaction.deserialize(txBytes); }
-      catch { throw new Error('Unsupported transaction format from order builder'); }
+      const quote = await bridgeQuote({
+        amountUsdcAtomic: netAtomic,
+        srcAddress:       walletPubkey,
+        dstAddress:       evmAddress,
+      });
+      if (!quote?.serializedTx) throw new Error('Bridge returned no transaction');
 
-      // 3. Decompile → raw instructions + ALTs
-      const decompiled = await decompileVersionedTx(originalTx);
+      // 2. Deserialize the bridge tx
+      const txBytes = Uint8Array.from(atob(quote.serializedTx), c => c.charCodeAt(0));
+      let bridgeTx;
+      try { bridgeTx = VersionedTransaction.deserialize(txBytes); }
+      catch { throw new Error('Bridge returned an unsupported tx format'); }
 
-      // 4. Build SPL Transfer fee (USDC: user ATA → treasury ATA)
+      // 3. Decompile, prepend our fee SPL transfer
+      const decompiled = await decompileVersionedTx(bridgeTx);
       const userUsdcAta = deriveUsdcAta(walletPubkey);
-      const feeAtomic = Math.floor(
-        usd * (DFLOW_BUILDER_FEE_BPS / 10_000) * Math.pow(10, USDC_DECIMALS)
-      );
-      const feeIx = createSplTransferInstruction(
-        userUsdcAta, TREASURY_USDC_ATA, walletPubkey, feeAtomic
-      );
-
-      // 5. Recompile with fee prepended
-      const wrappedTx = assembleOrderTx({
-        instructions: decompiled.instructions,
-        payerKey:     decompiled.payerKey,
-        altAccounts:  decompiled.altAccounts,
-        blockhash:    decompiled.blockhash,
-        feeInstruction: feeIx,
+      const feeIx = createSplTransferInstruction(userUsdcAta, TREASURY_USDC_ATA, walletPubkey, feeAtomic);
+      const wrapped = assembleFeeAndBridgeTx({
+        instructions:    decompiled.instructions,
+        payerKey:        decompiled.payerKey,
+        altAccounts:     decompiled.altAccounts,
+        blockhash:       decompiled.blockhash,
+        feeInstruction:  feeIx,
       });
 
-      // 6. Pre-sim — never trigger Phantom if sim fails
-      setStatusMsg('Checking order…');
-      const serializedForSim = btoa(String.fromCharCode(...wrappedTx.serialize()));
+      // 4. Pre-sim
+      setStatusMsg('Checking transaction…');
+      const serializedForSim = btoa(String.fromCharCode(...wrapped.serialize()));
       const sim = await simulateBeforeSign(serializedForSim);
       if (!sim.ok) throw new Error(sim.message || 'Simulation failed');
 
-      // 7. User signs once
-      setStatusMsg('Sign in your wallet…');
-      const signed = await signTransaction(wrappedTx);
+      // 5. User signs once
+      setStatus('signing'); setStatusMsg('Sign in your wallet…');
+      const signed = await signTransaction(wrapped);
 
-      // 8. Submit
-      setStatusMsg('Submitting order…');
+      // 6. Submit
+      setStatus('submitting'); setStatusMsg('Submitting transaction…');
       const serialized = btoa(String.fromCharCode(...signed.serialize()));
-      const result = await submitSignedTx(serialized);
-      if (!result?.ok) throw new Error(result?.error || 'Order rejected');
+      const submit = await bridgeSubmit(serialized);
+      if (!submit?.trackerId) throw new Error('Bridge submit returned no tracker');
 
-      setStatus('success');
-      setStatusMsg('');
-      refreshPositions?.();
-      setTimeout(() => { setStatus('idle'); onClose(); }, 2200);
+      // 7. Hand the tracker off to backend (fire-and-forget).
+      //    Backend cron polls Mayan; on bridge failure it refunds the
+      //    Solana fee from treasury and the user gets notified via
+      //    RefundToast on their next visit. No frontend polling.
+      void trackBridge({
+        trackerId:    submit.trackerId,
+        userWallet:   walletPubkey,
+        feeAtomic,
+        marketId:     market.id,
+        marketSlug:   market.slug,
+      });
+
+      // 8. Close the modal immediately. User moves on.
+      setStatus('idle'); setStatusMsg('');
+      onClose();
     } catch (e) {
       console.error('[buy]', e);
       setError(e.message || 'Order failed');
-      setStatus('error');
-      setStatusMsg('');
-      setTimeout(() => setStatus('idle'), 4000);
+      setStatus('error'); setStatusMsg('');
     }
   };
 
@@ -1014,7 +855,6 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, onConnectW
         </div>
 
         <div style={{ flex: 1, overflowY: 'auto', padding: '8px 22px 14px', WebkitOverflowScrolling: 'touch', minHeight: 0 }}>
-
           {/* YES/NO toggle */}
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginBottom: 14 }}>
             {[
@@ -1038,8 +878,10 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, onConnectW
           {/* Amount input */}
           <div style={{ marginBottom: 14 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: '.06em', ...T.mono }}>AMOUNT (USDC)</span>
-              <span style={{ fontSize: 9, color: C.hl, fontWeight: 700, background: C.hlDim, border: `1px solid ${C.borderHi}`, padding: '3px 8px', borderRadius: 6, ...T.mono }}>1.5% FEE</span>
+              <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: '.06em', ...T.mono }}>AMOUNT (USDC ON SOLANA)</span>
+              <span style={{ fontSize: 9, color: C.hl, fontWeight: 700, background: C.hlDim, border: `1px solid ${C.borderHi}`, padding: '3px 8px', borderRadius: 6, ...T.mono }}>
+                {(feeBps / 100).toFixed(2)}% FEE
+              </span>
             </div>
             <div style={{ background: 'rgba(255,255,255,.04)', border: `1px solid ${tooSmall || tooLarge ? 'rgba(255,138,158,.40)' : C.border}`, borderRadius: 14, padding: '13px 14px', marginBottom: 9, display: 'flex', alignItems: 'center', gap: 10, opacity: isBusy ? 0.6 : 1 }}>
               <span style={{ color: C.muted, fontSize: 18, ...T.mono }}>$</span>
@@ -1049,30 +891,30 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, onConnectW
               />
               <span style={{ color: C.ink, fontSize: 12, fontWeight: 700, ...T.mono }}>USDC</span>
             </div>
-
             <div style={{ display: 'flex', gap: 6 }}>
               {quickChips.map(c => (
                 <button key={c} onClick={() => { setAmount(String(c)); setError(''); }} disabled={isBusy} style={{
-                  flex: 1, padding: '8px', borderRadius: 10, border: `1px solid ${C.border}`,
+                  flex: 1, padding: 8, borderRadius: 10, border: `1px solid ${C.border}`,
                   background: 'rgba(255,255,255,.03)', color: C.muted,
                   fontWeight: 700, fontSize: 11, cursor: 'pointer', opacity: isBusy ? 0.4 : 1, ...T.mono,
                 }}>${c}</button>
               ))}
             </div>
-
             {tooSmall && <div style={{ marginTop: 8, fontSize: 11, color: C.down, fontWeight: 700, ...T.body }}>Minimum order is ${MIN_ORDER_USDC}</div>}
             {tooLarge && <div style={{ marginTop: 8, fontSize: 11, color: C.down, fontWeight: 700, ...T.body }}>Max order is ${MAX_ORDER_USDC.toLocaleString()}</div>}
           </div>
 
-          {/* Preview */}
+          {/* Order preview */}
           {usd > 0 && !tooSmall && !tooLarge && (
             <div style={{ background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, borderRadius: 14, padding: '12px 14px', marginBottom: 14 }}>
               <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', marginBottom: 10, ...T.mono }}>ORDER PREVIEW</div>
               {[
-                ['You buy',          contracts.toFixed(2) + ' ' + side + ' contracts'],
-                ['Price per share',  priceToCents(livePrice) + '¢'],
-                ['Builder fee 1.5%', '-' + fmt(builderFee, 2)],
-                ['Max payout',       fmt(maxPayout, 2)],
+                ['Stake',                fmt(usd, 2)],
+                [`Nexus fee ${(feeBps/100).toFixed(2)}%`, '-' + fmt(feeUsd, 2)],
+                ['Bridged to Polygon',   fmt(netUsd, 2)],
+                ['Buys',                 contracts.toFixed(2) + ' ' + side + ' contracts'],
+                ['Price per share',      priceToCents(livePrice) + '¢'],
+                ['Max payout',           fmt(maxPayout, 2)],
               ].map(([l, v], i, a) => (
                 <div key={l} style={{ display: 'flex', justifyContent: 'space-between', padding: '5px 0', borderBottom: i < a.length - 1 ? `1px solid ${C.hairline}` : 'none' }}>
                   <span style={{ color: C.muted, fontSize: 12, ...T.body }}>{l}</span>
@@ -1081,12 +923,23 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, onConnectW
               ))}
               <div style={{ display: 'flex', justifyContent: 'space-between', padding: '8px 0 0', marginTop: 6, borderTop: `1px solid ${C.hairline}` }}>
                 <span style={{ color: C.ink, fontWeight: 700, fontSize: 12, ...T.body }}>Profit if {side === 'YES' ? 'yes' : 'no'}</span>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ color: C.up, fontWeight: 800, fontSize: 14, ...T.mono }}>+{fmt(profitIfWin, 2)}</div>
-                </div>
+                <div style={{ color: C.up, fontWeight: 800, fontSize: 14, ...T.mono }}>+{fmt(profitIfWin, 2)}</div>
               </div>
             </div>
           )}
+
+          {/* EVM destination panel */}
+          <div style={{ background: 'rgba(168,127,255,.04)', border: '1px solid rgba(168,127,255,.18)', borderRadius: 14, padding: '11px 13px', marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 4 }}>
+              <span style={{ fontSize: 9, color: C.violet, fontWeight: 800, letterSpacing: '.08em', ...T.mono }}>BRIDGE DESTINATION (POLYGON)</span>
+              {!evmAddress && (
+                <button onClick={() => onAddEvm?.()} style={{ background: 'transparent', border: 'none', color: C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>+ Add</button>
+              )}
+            </div>
+            <div style={{ fontSize: 11, color: evmAddress ? C.ink : C.muted2, fontFamily: 'monospace', wordBreak: 'break-all', ...T.mono }}>
+              {evmAddress || 'No EVM address linked — required to receive bridged USDC.'}
+            </div>
+          </div>
         </div>
 
         <div style={{
@@ -1095,7 +948,7 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, onConnectW
           borderTop: `1px solid ${C.hairline}`,
           background: `linear-gradient(180deg, transparent 0%, ${C.bg} 20%)`,
         }}>
-          {(isBusy || isSuccess) && statusMsg && (
+          {(isBusy) && statusMsg && (
             <div style={{ marginBottom: 10, padding: 10, background: 'rgba(151,252,228,.05)', border: '1px solid rgba(151,252,228,.20)', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
               <div style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.hlDim}`, borderTopColor: C.hl, animation: 'nexus-spin 0.8s linear infinite', flexShrink: 0 }}/>
               <span style={{ fontSize: 12, color: C.ink, fontWeight: 600, ...T.body }}>{statusMsg}</span>
@@ -1108,27 +961,27 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, onConnectW
               Connect Solana Wallet
             </button>
           ) : (
-            <button onClick={execute} disabled={isBusy || !amount || tooSmall || tooLarge} style={{
+            <button onClick={execute} disabled={isBusy || !amount || tooSmall || tooLarge || !evmAddress} style={{
               width: '100%', padding: 17, borderRadius: 16, border: 'none',
-              background: isSuccess
-                ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`
-                : isError
+              background: isError
                 ? `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)`
                 : isYes
                 ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`
                 : `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)`,
               color: '#04070f', fontWeight: 800, fontSize: 16,
-              cursor: isBusy || !amount || tooSmall || tooLarge ? 'not-allowed' : 'pointer',
-              minHeight: 56, opacity: !amount || tooSmall || tooLarge ? 0.55 : 1,
+              cursor: isBusy || !amount || tooSmall || tooLarge || !evmAddress ? 'not-allowed' : 'pointer',
+              minHeight: 56, opacity: !amount || tooSmall || tooLarge || !evmAddress ? 0.55 : 1,
               boxShadow: isYes ? '0 12px 30px rgba(61,213,152,.22)' : '0 12px 30px rgba(255,138,158,.24)',
               letterSpacing: '-.01em', ...T.display,
             }}>
-              {isBusy ? 'Processing...' : isSuccess ? `${side} bought` : isError ? 'Retry' : usd > 0 && !tooSmall && !tooLarge ? `Buy ${contracts.toFixed(1)} ${side} for ${fmt(usd, 2)}` : `Buy ${side}`}
+              {isBusy ? 'Processing…' : isError ? 'Retry' : usd > 0 && !tooSmall && !tooLarge
+                ? `Stake ${fmt(usd, 2)} on ${side}`
+                : `Buy ${side}`}
             </button>
           )}
 
           <div style={{ fontSize: 10, color: C.muted2, textAlign: 'center', marginTop: 10, fontWeight: 600, ...T.mono }}>
-            Non-custodial | Powered by Kalshi
+            Non-custodial · Solana fee + Polygon bridge · One signature
           </div>
         </div>
       </div>
@@ -1140,13 +993,16 @@ function BuyModal({ open, onClose, market, initialSide, walletPubkey, onConnectW
 // MAIN COMPONENT — DeFi Predict
 // =====================================================================
 export default function DeFiPredict({ onConnectWallet }) {
-  const [markets, setMarkets]       = useState(() => loadCached('nexus_kalshi_crypto', 60_000) || []);
-  const [positions, setPositions]   = useState([]);
-  const [filter, setFilter]         = useState('All');
-  const [buyOpen, setBuyOpen]       = useState(false);
-  const [activeMarket, setActiveMarket]   = useState(null);
-  const [initialSide, setInitialSide]     = useState('YES');
-  const [tosOpen, setTosOpen]       = useState(false);
+  const [markets, setMarkets]     = useState(() => loadCached('nexus_poly_predict_v2', 45_000) || []);
+  const [filter, setFilter]       = useState('all');
+  const [buyOpen, setBuyOpen]     = useState(false);
+  const [activeMarket, setActive] = useState(null);
+  const [initialSide, setSide]    = useState('YES');
+  const [evmAddress, setEvmAddr]  = useState(() => {
+    try { return localStorage.getItem('nexus_evm_address') || ''; } catch { return ''; }
+  });
+  const [evmPromptOpen, setEvmPromptOpen] = useState(false);
+  const [refunds, setRefunds]             = useState([]); // queued refund toasts
 
   const { publicKey: solPk } = useWallet();
   const { privyEmbeddedSol } = useNexusWallet();
@@ -1156,91 +1012,68 @@ export default function DeFiPredict({ onConnectWallet }) {
     return null;
   }, [solPk, privyEmbeddedSol]);
 
-  // Poll markets every 10 sec
+  // On wallet connect (and again every 5 min), pull any unseen refund
+  // entries the backend has reconciled for this wallet. Backend already
+  // sent USDC back to the user's Solana wallet — this is just the UX
+  // notification so they know it happened.
+  useEffect(() => {
+    if (!walletPubkey) { setRefunds([]); return; }
+    let alive = true;
+    const tick = async () => {
+      const list = await fetchUnseenRefunds(walletPubkey);
+      if (alive && list.length) setRefunds(prev => mergeRefunds(prev, list));
+    };
+    tick();
+    const id = setInterval(tick, 5 * 60_000);
+    return () => { alive = false; clearInterval(id); };
+  }, [walletPubkey]);
+
+  const dismissRefund = useCallback((refundId) => {
+    setRefunds(prev => prev.filter(r => r.id !== refundId));
+    if (walletPubkey) void ackRefund(walletPubkey, refundId);
+  }, [walletPubkey]);
+
+  // Polymarket Gamma poll — every 30s. Single pull of top-volume markets,
+  // we categorize client-side so changing the filter pill doesn't refetch.
   useEffect(() => {
     let alive = true;
     const tick = async () => {
       try {
-        const data = await fetchKalshiCryptoMarkets();
-        if (!alive || !Array.isArray(data) || data.length === 0) return;
+        const data = await fetchPolymarketMarkets({ limit: 150 });
+        if (!alive || !data?.length) return;
         setMarkets(data);
-        saveCached('nexus_kalshi_crypto', data);
-      } catch (e) { console.warn('[markets poll]', e?.message || e); }
+        saveCached('nexus_poly_predict_v2', data);
+      } catch (e) { console.warn('[gamma poll]', e?.message); }
     };
     tick();
-    const id = setInterval(tick, 10_000);
+    const id = setInterval(tick, 30_000);
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  // Poll positions every 15 sec when wallet is connected
-  const refreshPositions = useCallback(async () => {
-    if (!walletPubkey) { setPositions([]); return; }
-    try {
-      const pos = await fetchUserPositions(walletPubkey);
-      setPositions(pos);
-    } catch (e) { console.warn('[positions]', e?.message || e); }
-  }, [walletPubkey]);
-
-  useEffect(() => {
-    if (!walletPubkey) return;
-    refreshPositions();
-    const id = setInterval(refreshPositions, 15_000);
-    return () => clearInterval(id);
-  }, [walletPubkey, refreshPositions]);
-
-  const handleBuy = (market, side) => {
-    // Global TermsGate in App.js covers all ToS — no per-page modal needed.
-    setActiveMarket(market);
-    setInitialSide(side);
-    setBuyOpen(true);
+  const handleBuy = (market, sideArg) => {
+    setActive(market); setSide(sideArg); setBuyOpen(true);
   };
 
-  const handleTosAccept = () => {
-    acceptTos();
-    setTosOpen(false);
-    if (activeMarket) setBuyOpen(true);
+  const handleAddEvm = () => setEvmPromptOpen(true);
+  const saveEvm = (addr) => {
+    const a = String(addr || '').trim();
+    if (!isValidEvmAddress(a)) return false;
+    setEvmAddr(a);
+    try { localStorage.setItem('nexus_evm_address', a); } catch {}
+    setEvmPromptOpen(false);
+    return true;
   };
-
-  const handleSell = async (pos, market) => {
-    // Open the buy modal in reverse: selling YES = buying NO at current price
-    // For simplicity, we open BuyModal pre-filled with the opposite side.
-    if (!market) return;
-    setActiveMarket(market);
-    setInitialSide(pos.side === 'YES' ? 'NO' : 'YES');
-    setBuyOpen(true);
-  };
-
-  // Apply "live > closing-soon > profit-ranked categories" ordering
-  const ordered = useMemo(() => {
-    if (!markets.length) return [];
-    const now = Date.now();
-    // Live = closing within 10 min, sorted by soonest first
-    const live = markets.filter(m => m.closeTs - now > 0 && m.closeTs - now < 10 * 60_000)
-      .sort((a, b) => a.closeTs - b.closeTs);
-    // Closing-soon = 10min - 90min
-    const closingSoon = markets.filter(m => m.closeTs - now >= 10 * 60_000 && m.closeTs - now < 90 * 60_000)
-      .sort((a, b) => a.closeTs - b.closeTs);
-    // Everything else, sorted by 24h volume (most profitable first)
-    const rest = markets.filter(m => m.closeTs - now >= 90 * 60_000)
-      .sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
-    return [...live, ...closingSoon, ...rest];
-  }, [markets]);
 
   const filtered = useMemo(() => {
-    if (filter === 'All') return ordered;
-    return ordered.filter(m => m.category === filter);
-  }, [ordered, filter]);
+    if (filter === 'all') return markets;
+    return markets.filter(m => m.category === filter);
+  }, [markets, filter]);
 
   const featured = useMemo(() => {
-    // Always feature the highest-vol live or closing-soon market, fallback to highest-vol overall
-    if (!ordered.length) return null;
-    const now = Date.now();
-    const live = ordered.filter(m => m.closeTs - now > 0 && m.closeTs - now < 90 * 60_000);
-    const pool = live.length ? live : ordered;
-    return pool.slice().sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0))[0] || null;
-  }, [ordered]);
+    if (!filtered.length) return null;
+    return filtered.slice().sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0))[0];
+  }, [filtered]);
 
-  // Markets to show in the row list = filtered, excluding the featured one
   const listMarkets = useMemo(() => {
     if (!featured) return filtered;
     return filtered.filter(m => m.id !== featured.id);
@@ -1260,20 +1093,20 @@ export default function DeFiPredict({ onConnectWallet }) {
           <div style={{ position: 'relative' }}>
             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '5px 11px', borderRadius: 999, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)', marginBottom: 16 }}>
               <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.hl, boxShadow: `0 0 10px ${C.hl}`, animation: 'nexus-pulse 2s ease-in-out infinite' }}/>
-              <span style={{ color: C.hl, fontSize: 10, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>POWERED BY KALSHI</span>
+              <span style={{ color: C.hl, fontSize: 10, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>POLYMARKET LIQUIDITY</span>
             </div>
             <h1 style={{ fontSize: 34, lineHeight: 1.0, fontWeight: 600, color: C.inkStr, margin: '0 0 8px', letterSpacing: '-.045em', ...T.hero }}>
               DeFi{' '}
               <span style={{ fontStyle: 'italic', fontWeight: 500, background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>Predict</span>
             </h1>
             <p style={{ color: C.muted, fontSize: 13, margin: '0 0 18px', fontWeight: 500, lineHeight: 1.5, ...T.body }}>
-              Trade BTC, ETH and SOL prediction markets from your Solana wallet. Settles on Kalshi.
+              Trade crypto, politics, economics and culture markets. Stake in USDC on Solana, we route to Polymarket on Polygon — one signature.
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', padding: '12px 14px', borderRadius: 14, background: 'rgba(0,0,0,.30)', border: `1px solid ${C.border}` }}>
               {[
                 { label: 'MARKETS', value: markets.length || '-' },
                 { label: '24H VOL', value: shortNum(totalVol) },
-                { label: 'POSITIONS', value: positions.length || '0' },
+                { label: 'CHAIN',   value: 'SOL→POL' },
               ].map((s, i) => (
                 <div key={s.label} style={{ textAlign: i === 0 ? 'left' : i === 2 ? 'right' : 'center', borderRight: i < 2 ? `1px solid ${C.hairline}` : 'none' }}>
                   <div style={{ fontSize: 18, fontWeight: 800, color: C.inkStr, ...T.display }}>{s.value}</div>
@@ -1283,9 +1116,6 @@ export default function DeFiPredict({ onConnectWallet }) {
             </div>
           </div>
         </div>
-
-        {/* POSITIONS (if any) */}
-        <PositionsPanel positions={positions} markets={markets} onSell={handleSell}/>
 
         {/* CATEGORY FILTER */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
@@ -1305,14 +1135,14 @@ export default function DeFiPredict({ onConnectWallet }) {
           ))}
         </div>
 
-        {/* FEATURED (when "All" filter) */}
-        {filter === 'All' && featured && <FeaturedMarketCard market={featured} onBuy={handleBuy}/>}
+        {/* FEATURED */}
+        {featured && <FeaturedMarketCard market={featured} onBuy={handleBuy}/>}
 
         {/* MARKET LIST */}
         <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', marginBottom: 18, backdropFilter: 'blur(12px)' }}>
           {listMarkets.length === 0 ? (
             <div style={{ padding: '30px 16px', textAlign: 'center', color: C.muted, fontSize: 12, ...T.body }}>
-              No markets in this category right now.
+              {markets.length === 0 ? 'Loading markets from Polymarket…' : 'No markets in this category right now.'}
             </div>
           ) : listMarkets.map(m => (
             <MarketRow key={m.id} market={m} onClick={() => handleBuy(m, 'YES')}/>
@@ -1321,13 +1151,14 @@ export default function DeFiPredict({ onConnectWallet }) {
 
         {/* FOOTER */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: '12px 16px', borderRadius: 14, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`, marginBottom: 8 }}>
-          <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>POWERED BY</span>
-          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text', ...T.mono }}>KALSHI</span>
+          <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>MARKETS</span>
+          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text', ...T.mono }}>POLYMARKET</span>
           <span style={{ color: C.muted2, fontSize: 9 }}>|</span>
-          <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>NON-CUSTODIAL</span>
+          <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>BRIDGE</span>
+          <span style={{ fontSize: 11, fontWeight: 800, color: C.ink, letterSpacing: '.04em', ...T.mono }}>MAYAN</span>
         </div>
         <div style={{ fontSize: 9.5, color: C.muted2, lineHeight: 1.5, textAlign: 'center', padding: '4px 8px 0', ...T.body }}>
-          Trades execute on Kalshi, a CFTC-regulated exchange. NexusDEX is a non-custodial frontend and is not affiliated with Kalshi Inc. 1.5% builder fee applies.
+          Stake USDC on Solana. Atomic fee + cross-chain bridge in one signature. Position settles on Polymarket. Nexus is non-custodial and not affiliated with Polymarket Inc.
         </div>
 
         <BuyModal
@@ -1336,14 +1167,101 @@ export default function DeFiPredict({ onConnectWallet }) {
           market={activeMarket}
           initialSide={initialSide}
           walletPubkey={walletPubkey}
+          evmAddress={evmAddress}
           onConnectWallet={onConnectWallet}
-          refreshPositions={refreshPositions}
+          onAddEvm={handleAddEvm}
         />
-        <TosModal
-          open={tosOpen}
-          onAccept={handleTosAccept}
-          onClose={() => setTosOpen(false)}
-        />
+        <EvmAddressPrompt open={evmPromptOpen} onClose={() => setEvmPromptOpen(false)} onSave={saveEvm} current={evmAddress}/>
+        <RefundToastStack refunds={refunds} onDismiss={dismissRefund}/>
+      </div>
+    </>
+  );
+}
+
+// =====================================================================
+// RefundToastStack — the only async outcome the user sees. If the
+// bridge fails for any of their trades, the backend has already
+// returned the USDC fee to their Solana wallet; this surfaces that.
+// Renders in the bottom-right corner, dismissible, stacks if many.
+// =====================================================================
+function RefundToastStack({ refunds, onDismiss }) {
+  if (!refunds || refunds.length === 0) return null;
+  return (
+    <div style={{
+      position: 'fixed', right: 14,
+      bottom: 'calc(env(safe-area-inset-bottom) + 96px)',
+      zIndex: 380, display: 'flex', flexDirection: 'column', gap: 8,
+      maxWidth: 360,
+    }}>
+      {refunds.slice(-3).map(r => (
+        <div key={r.id} style={{
+          padding: '12px 14px', borderRadius: 14,
+          background: 'linear-gradient(145deg,rgba(61,213,152,.10),rgba(151,252,228,.06))',
+          border: '1px solid rgba(61,213,152,.32)',
+          boxShadow: '0 12px 36px rgba(0,0,0,.55), 0 0 24px rgba(61,213,152,.18)',
+          display: 'flex', alignItems: 'flex-start', gap: 10,
+          backdropFilter: 'blur(10px)',
+        }}>
+          <div style={{ width: 28, height: 28, borderRadius: 8, background: 'rgba(61,213,152,.18)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+            <span style={{ color: C.up, fontSize: 14, fontWeight: 900 }}>↺</span>
+          </div>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 11, fontWeight: 800, color: C.up, letterSpacing: '.06em', ...T.mono, marginBottom: 2 }}>FEE REFUNDED</div>
+            <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.4, ...T.body }}>
+              Bridge didn't complete on a recent trade. We returned {fmt(Number(r.feeUsd || 0), 2)} USDC to your Solana wallet.
+            </div>
+            {r.marketSlug && (
+              <div style={{ fontSize: 10, color: C.muted2, marginTop: 3, ...T.mono, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                {r.marketSlug}
+              </div>
+            )}
+          </div>
+          <button onClick={() => onDismiss(r.id)} style={{ background: 'transparent', border: 'none', color: C.muted, fontSize: 18, cursor: 'pointer', padding: 0, lineHeight: 1, flexShrink: 0 }}>×</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// =====================================================================
+// EvmAddressPrompt — once-per-device modal to capture/edit the user's
+// Polygon address. Stored in localStorage as 'nexus_evm_address'. Phantom
+// users can use their existing multichain EVM address (same secret, same
+// wallet, just the EVM side of it).
+// =====================================================================
+function EvmAddressPrompt({ open, onClose, onSave, current }) {
+  const [val, setVal] = useState(current || '');
+  const [err, setErr] = useState('');
+  useBodyLock(open);
+  useEffect(() => { if (open) { setVal(current || ''); setErr(''); } }, [open, current]);
+  if (!open) return null;
+  const handleSave = () => {
+    if (!isValidEvmAddress(val.trim())) { setErr('Not a valid Polygon address'); return; }
+    if (!onSave(val.trim())) setErr('Could not save address');
+  };
+  return (
+    <>
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 470, background: 'rgba(0,0,0,.86)', backdropFilter: 'blur(14px)', cursor: 'pointer' }}/>
+      <div style={{
+        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
+        width: '100%', maxWidth: 500, zIndex: 471,
+        background: `linear-gradient(180deg,${C.surface2} 0%,${C.bg} 100%)`,
+        borderTop: '1px solid rgba(168,127,255,.30)', borderRadius: '26px 26px 0 0',
+        padding: '20px 22px calc(env(safe-area-inset-bottom) + 90px)',
+      }}>
+        <div style={{ width: 36, height: 4, background: 'rgba(255,255,255,.12)', borderRadius: 99, margin: '0 auto 18px' }}/>
+        <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 19, letterSpacing: '-.02em', marginBottom: 6, ...T.display }}>Add Polygon address</div>
+        <div style={{ color: C.muted, fontSize: 12, marginBottom: 16, lineHeight: 1.5, ...T.body }}>
+          Where your bridged USDC lands. Phantom Multichain users: paste your Ethereum/Polygon address from Phantom (same wallet, EVM side).
+        </div>
+        <input value={val} onChange={e => { setVal(e.target.value); setErr(''); }} placeholder="0x…"
+          style={{ width: '100%', padding: '13px 14px', borderRadius: 14, border: `1px solid ${err ? 'rgba(255,138,158,.40)' : C.border}`, background: 'rgba(255,255,255,.04)', color: C.inkStr, fontSize: 13, ...T.mono, outline: 'none', marginBottom: err ? 6 : 12 }}/>
+        {err && <div style={{ fontSize: 11, color: C.down, marginBottom: 12, ...T.body }}>{err}</div>}
+        <button onClick={handleSave} style={{
+          width: '100%', padding: 16, borderRadius: 16, border: 'none',
+          background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`,
+          color: '#04070f', fontWeight: 800, fontSize: 15, cursor: 'pointer', minHeight: 52, ...T.display,
+        }}>Save address</button>
       </div>
     </>
   );
