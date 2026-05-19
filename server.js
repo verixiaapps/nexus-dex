@@ -34,7 +34,7 @@ const CSP_DIRECTIVES = [
   ['frame-ancestors', ["'none'"]],
   ['frame-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org', 'https://challenges.cloudflare.com', ...EXTRA_FRAME_SRC]],
   ['child-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org']],
-  ['connect-src',     ["'self'", 'https://li.quest', 'https://arb1.arbitrum.io', 'https://web3.okx.com', 'https://quote-api.jup.ag', 'https://lite-api.jup.ag', 'https://api.jup.ag', 'https://token.jup.ag', 'https://api.hyperliquid.xyz', 'https://api.hyperliquid-testnet.xyz', 'https://pumpportal.fun', 'wss://pumpportal.fun', 'https://api.dexscreener.com', 'https://*.dexscreener.com', 'https://auth.privy.io', 'https://*.privy.io', 'https://*.privy.systems', 'https://*.rpc.privy.systems', 'https://explorer-api.walletconnect.com', 'https://*.walletconnect.com', 'https://*.walletconnect.org', 'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org', 'wss://*.walletconnect.com', 'wss://*.walletconnect.org', 'wss://www.walletlink.org', 'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com', 'https://api.pinata.cloud', 'https://*.publicnode.com', 'https://*.drpc.org', 'https://public.chainalysis.com', ...EXTRA_CONNECT_SRC]],
+  ['connect-src',     ["'self'", 'https://li.quest', 'https://arb1.arbitrum.io', 'https://web3.okx.com', 'https://quote-api.jup.ag', 'https://lite-api.jup.ag', 'https://api.jup.ag', 'https://token.jup.ag', 'https://api.hyperliquid.xyz', 'https://api.hyperliquid-testnet.xyz', 'https://pumpportal.fun', 'wss://pumpportal.fun', 'https://api.dexscreener.com', 'https://*.dexscreener.com', 'https://auth.privy.io', 'https://*.privy.io', 'https://*.privy.systems', 'https://*.rpc.privy.systems', 'https://explorer-api.walletconnect.com', 'https://*.walletconnect.com', 'https://*.walletconnect.org', 'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org', 'wss://*.walletconnect.com', 'wss://*.walletconnect.org', 'wss://www.walletlink.org', 'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com', 'https://api.pinata.cloud', 'https://*.publicnode.com', 'https://*.drpc.org', 'https://public.chainalysis.com', 'https://gamma-api.polymarket.com', 'https://explorer-api.mayan.finance', ...EXTRA_CONNECT_SRC]],
   ['worker-src',      ["'self'", 'blob:']],
   ['manifest-src',    ["'self'"]],
 ];
@@ -815,6 +815,12 @@ app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, r
   }
 });
 
+/* -- Predict bridge (Polymarket via Mayan) ------------------------------ */
+// Installs /api/bridge/quote, /api/bridge/submit, /api/bridge/track,
+// /api/bridge/refunds, /api/bridge/refunds/ack, /api/gamma/*.
+// Module is self-contained; mounts cleanly without touching state above.
+require('./predict-bridge')(app);
+
 /* -- Health ------------------------------------------------------------- */
 app.get('/api/health', (req, res) => {
   res.json({
@@ -828,6 +834,7 @@ app.get('/api/health', (req, res) => {
       lifiApiKey:     Boolean(LIFI_API_KEY),
       unit:           true,
       adminKey:       Boolean(process.env.ADMIN_KEY),
+      predictBridge:  Boolean(process.env.NEXUS_PREDICT_TREASURY_KEY && process.env.NEXUS_PREDICT_TREASURY_ATA),
     },
     bridge: OPERATOR_PRIVATE_KEY ? {
       arbRpc: ARB_RPC_URL, active: bridgeTracking.size,
@@ -836,6 +843,10 @@ app.get('/api/health', (req, res) => {
     } : { enabled: false },
     lifi: { baseUrl: LIFI_API, hyperCoreChainId: 1337, arbChainId: 42161 },
     unit: { baseUrl: UNIT_API_BASE, flow: 'SOL <-> HL native via Hyperunit Guardian network' },
+    predict: process.env.NEXUS_PREDICT_TREASURY_KEY ? {
+      flow: 'Solana USDC -> Polygon USDC via Mayan, atomic Nexus fee on Solana, auto-refund on bridge failure',
+      reconcileEveryMs: 300_000,
+    } : { enabled: false },
     time: new Date().toISOString(),
   });
 });
