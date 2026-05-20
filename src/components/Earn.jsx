@@ -6,7 +6,6 @@ import {
 import {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountIdempotentInstruction,
-  createTransferInstruction,
 } from '@solana/spl-token';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 
@@ -24,25 +23,21 @@ const C = {
 };
 
 // =====================================================================
-// Nexus Earn — Kamino USDC routing via Kamino's public REST API.
-//
-// Why the REST API instead of the SDK:
-//   - No SDK version drift
-//   - No LUT handling complexity (API returns lookup tables for us)
-//   - Kamino maintains the endpoint; we just sign and send
+// Nexus Earn — SOL-only deposit, swapped to USDC, supplied to Kamino.
 //
 // Flow:
-//   1. User enters USDC amount
-//   2. POST to api.kamino.finance/ktx/klend/deposit-instructions
-//      with { wallet, market, reserve, amount: "<decimal>" }
-//   3. We get back { instructions, lutsByAddress }
-//   4. Prepend our own ixs: compute budget, treasury ATA (idempotent),
-//      fee transfer (3% to treasury)
-//   5. Fetch the LUT accounts from chain
-//   6. Compile + sign + send one V0 transaction
+//   1. User enters SOL amount.
+//   2. OKX swap SOL -> USDC.
+//   3. Kamino deposit-instructions API returns ixs + LUTs to supply USDC.
+//   4. Compile + sign + send one V0 transaction for the deposit.
 //
-// Non-custodial: position is in user's wallet at Kamino. We take only
-// the 3% fee. Withdrawals happen on app.kamino.finance directly.
+// SOL is the only accepted input. Simplest reliable path: no token
+// selector, no decimal juggling per token, no edge cases for USDC-as-input.
+// User holds SOL in their wallet, we route to Kamino USDC yield.
+//
+// Non-custodial: position is in user's wallet at Kamino. We take no
+// fee from the deposit itself — OKX takes its swap fee, that's it.
+// Withdrawals happen on app.kamino.finance directly.
 // =====================================================================
 
 // ---------- Config ----------
@@ -50,19 +45,21 @@ const C = {
 // We use useConnection() below to consume the same shared connection as the
 // rest of the app — no separate env var, no duplicate Connection instance.
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
+const SOL_MINT  = 'So11111111111111111111111111111111111111112';
+const SOL_DECIMALS = 9;
 
 // Kamino main market + USDC reserve (mainnet)
 const KAMINO_MAIN_MARKET = '7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF';
 const KAMINO_USDC_RESERVE = 'D6q6wuQSrifJKZYpR1M8R4YawnLDtDsMmWM1NbBmgJ59';
 const KAMINO_API = 'https://api.kamino.finance';
 
-// IMPORTANT: this MUST be set via env. If unset, deposits fail loudly
-// rather than silently sending fees to System Program (lost forever).
-const TREASURY_RAW = process.env.REACT_APP_NEXUS_TREASURY;
-const TREASURY = TREASURY_RAW ? new PublicKey(TREASURY_RAW) : null;
-
-const ROUTING_FEE_BPS = 300; // 3% of deposit
 const KAMINO_USDC_POOL = 'd9c395b9-00d0-4426-a6b3-572a6dd68e54'; // DefiLlama
+
+// Pick SOL from the okxSwap token registry if present, otherwise fall
+// back to an inline definition. Keeps okxSwap.js as the source of truth.
+const SOL_TOKEN =
+  (SUPPORTED_INPUT_TOKENS || []).find(t => t.symbol === 'SOL') ||
+  { symbol: 'SOL', mint: SOL_MINT, decimals: SOL_DECIMALS };
 
 // =====================================================================
 // Consent — one-time per browser
@@ -129,7 +126,6 @@ async function fetchKaminoDepositIxs({ connection, walletAddress, amountDecimal 
   //   instructions: [{ accounts: [{ address, role, signer? }], data, programAddress }]
   //   lutsByAddress: { [lutAddress]: [refAddress, ...] }
 
-  // Convert API "instruction" objects into TransactionInstruction
   const instructions = body.instructions.map((ix, i) => {
     if (!ix.data) {
       throw new Error(`Kamino returned instruction #${i} with no data field`);
@@ -138,7 +134,6 @@ async function fetchKaminoDepositIxs({ connection, walletAddress, amountDecimal 
       programId: new PublicKey(ix.programAddress),
       keys: ix.accounts.map(a => ({
         pubkey:     new PublicKey(a.address),
-        // 'role' values per Solana spec: READONLY, WRITABLE, READONLY_SIGNER, WRITABLE_SIGNER
         isSigner:   /SIGNER$/.test(a.role || ''),
         isWritable: /^WRITABLE/.test(a.role || ''),
       })),
@@ -183,8 +178,8 @@ function DisclosureModal({ onAccept, onCancel }) {
           Before you deposit
         </div>
         <div style={{ fontSize: 13, color: C.text, lineHeight: 1.55, marginBottom: 14 }}>
-          Your USDC will be deposited into <strong style={{ color: '#fff' }}>Kamino</strong> using your own wallet.
-          The position lives in <strong style={{ color: '#fff' }}>your wallet</strong>, not ours.
+          Your SOL will be swapped to USDC and deposited into <strong style={{ color: '#fff' }}>Kamino</strong> using
+          your own wallet. The position lives in <strong style={{ color: '#fff' }}>your wallet</strong>, not ours.
         </div>
         <div style={{
           background: 'rgba(0,229,255,.06)', border: '1px solid rgba(0,229,255,.18)',
@@ -199,7 +194,6 @@ function DisclosureModal({ onAccept, onCancel }) {
         </div>
         <div style={{ fontSize: 11.5, color: C.muted, lineHeight: 1.5, marginBottom: 18 }}>
           Nexus is non-custodial: we cannot withdraw your funds for you. Smart contract risk of Kamino applies.
-          The 3% routing fee is non-refundable.
         </div>
         <button onClick={onAccept} style={{
           width: '100%', padding: 14, borderRadius: 12, border: 'none',
@@ -222,7 +216,6 @@ function DisclosureModal({ onAccept, onCancel }) {
 // =====================================================================
 export default function Earn({ isConnected, onConnectWallet }) {
   const { publicKey: walletPk, sendTransaction } = useWallet();
-  // Shared RPC connection from ConnectionProvider (uses REACT_APP_SOLANA_RPC).
   const { connection } = useConnection();
   const walletAddress = walletPk ? walletPk.toBase58() : null;
 
@@ -233,13 +226,10 @@ export default function Earn({ isConnected, onConnectWallet }) {
   const [msg, setMsg]               = useState('');
   const [txSig, setTxSig]           = useState('');
   // status: 'idle' | 'swapping' | 'swapped' | 'depositing' | 'done'
-  // Used to render the friendly two-step UI for non-USDC deposits.
   const [status, setStatus]         = useState('idle');
   const [positions, setPositions]   = useState([]);
   const [pendingDeposit, setPendingDeposit] = useState(false);
-  const [selectedToken, setSelectedToken]   = useState(SUPPORTED_INPUT_TOKENS[0]); // default USDC
-  const [showTokenMenu, setShowTokenMenu]   = useState(false);
-  const [quote, setQuote]                   = useState(null);  // estimated USDC out for non-USDC deposits
+  const [quote, setQuote]                   = useState(null);  // estimated USDC out
   const [quoteLoading, setQuoteLoading]     = useState(false);
   const runDepositRef = useRef(null);
 
@@ -278,25 +268,24 @@ export default function Earn({ isConnected, onConnectWallet }) {
     } catch {}
   }, [walletAddress]);
 
-  // Debounced OKX quote fetch for non-USDC deposits.
-  // Updates the "you'll deposit ~$X USDC" preview as user types.
+  // Debounced OKX quote fetch — updates the "you'll deposit ~$X USDC" preview.
   useEffect(() => {
-    if (selectedToken.symbol === 'USDC' || !amount || Number(amount) <= 0) {
+    if (!amount || Number(amount) <= 0) {
       setQuote(null); setQuoteLoading(false);
       return;
     }
     setQuoteLoading(true);
     const handle = setTimeout(async () => {
-      const lamports = BigInt(Math.round(Number(amount) * 10 ** selectedToken.decimals));
+      const lamports = BigInt(Math.round(Number(amount) * 10 ** SOL_TOKEN.decimals));
       const out = await fetchOkxQuote({
-        fromTokenMint:   selectedToken.mint,
+        fromTokenMint:   SOL_TOKEN.mint,
         amountLamports:  lamports.toString(),
       });
       setQuote(out);
       setQuoteLoading(false);
     }, 400);
     return () => clearTimeout(handle);
-  }, [amount, selectedToken]);
+  }, [amount]);
 
   const onDepositClick = useCallback(() => {
     if (!isConnected || !walletPk) { onConnectWallet?.(); return; }
@@ -322,74 +311,49 @@ export default function Earn({ isConnected, onConnectWallet }) {
   const runDeposit = useCallback(async () => {
     if (!sendTransaction) { setMsg('Wallet cannot send transactions'); return; }
     if (!connection)      { setMsg('RPC connection not ready');         return; }
-    if (!TREASURY) {
-      setMsg('Treasury wallet not configured (set REACT_APP_NEXUS_TREASURY)');
-      return;
-    }
     const amt = Number(amount);
     setBusy(true); setMsg(''); setTxSig(''); setStatus('idle');
 
     try {
       const user = toPublicKey(walletPk);
-      const isUsdc = selectedToken.symbol === 'USDC';
 
       // ================================================================
-      // STEP 1 (non-USDC only): SWAP to USDC via OKX
-      // Uses the exact wallet-adapter sendTransaction pattern from
-      // the working Swap.jsx, including preflight simulation enabled.
+      // STEP 1: SWAP SOL -> USDC via OKX
       // ================================================================
-      if (!isUsdc) {
-        setStatus('swapping');
-        setMsg('Step 1 of 2: Swapping to USDC…');
+      setStatus('swapping');
+      setMsg('Step 1 of 2: Swapping SOL to USDC…');
 
-        const inputLamports = BigInt(Math.round(amt * 10 ** selectedToken.decimals));
-        const swapData = await fetchOkxSwapInstructions({
-          fromTokenMint:    selectedToken.mint,
-          amountLamports:   inputLamports.toString(),
-          userWalletAddress: walletAddress,
-        });
-        const swapTx = await buildOkxSolTx({
-          connection, userPubkey: user, swapData,
-        });
-        const swapSig = await sendTransaction(swapTx, connection, {
-          skipPreflight:       false,   // run preflight simulation
-          preflightCommitment: 'processed',
-          maxRetries:          3,
-        });
-        setTxSig(swapSig);
-        await connection.confirmTransaction(swapSig, 'confirmed');
-        setStatus('swapped');
-      }
+      const inputLamports = BigInt(Math.round(amt * 10 ** SOL_TOKEN.decimals));
+      const swapData = await fetchOkxSwapInstructions({
+        fromTokenMint:    SOL_TOKEN.mint,
+        amountLamports:   inputLamports.toString(),
+        userWalletAddress: walletAddress,
+      });
+      const swapTx = await buildOkxSolTx({
+        connection, userPubkey: user, swapData,
+      });
+      const swapSig = await sendTransaction(swapTx, connection, {
+        skipPreflight:       false,
+        preflightCommitment: 'processed',
+        maxRetries:          3,
+      });
+      setTxSig(swapSig);
+      await connection.confirmTransaction(swapSig, 'confirmed');
+      setStatus('swapped');
 
       // ================================================================
       // STEP 2: KAMINO DEPOSIT
-      // For USDC path: take 3% routing fee, deposit 97%.
-      // For swap path: deposit whatever USDC the user now has in wallet
-      // (we read the real balance after swap, no slippage guessing).
+      // Read user's real USDC balance after the swap and deposit all of it.
       // ================================================================
       setStatus('depositing');
-      setMsg(isUsdc ? 'Depositing into Kamino…' : 'Step 2 of 2: Depositing into Kamino…');
+      setMsg('Step 2 of 2: Depositing into Kamino…');
 
-      const userUsdcAta     = await getAssociatedTokenAddress(USDC_MINT, user);
-      const treasuryUsdcAta = await getAssociatedTokenAddress(USDC_MINT, TREASURY);
+      const userUsdcAta = await getAssociatedTokenAddress(USDC_MINT, user);
 
-      let depositLamports;
-      let feeLamports = 0n;
-
-      if (isUsdc) {
-        const inputLamports = BigInt(Math.round(amt * 1e6));
-        feeLamports     = (inputLamports * BigInt(ROUTING_FEE_BPS)) / 10000n;
-        depositLamports = inputLamports - feeLamports;
-      } else {
-        // Read the user's REAL USDC balance after the swap. This is the
-        // only way to know exactly what they got (slippage is unpredictable).
-        const bal = await connection.getTokenAccountBalance(userUsdcAta);
-        const realBalLamports = BigInt(bal?.value?.amount || '0');
-        if (realBalLamports === 0n) {
-          throw new Error('Swap completed but no USDC found in wallet. Check the swap tx and retry.');
-        }
-        // Deposit all USDC the user has. OKX took its 5% already.
-        depositLamports = realBalLamports;
+      const bal = await connection.getTokenAccountBalance(userUsdcAta);
+      const depositLamports = BigInt(bal?.value?.amount || '0');
+      if (depositLamports === 0n) {
+        throw new Error('Swap completed but no USDC found in wallet. Check the swap tx and retry.');
       }
 
       const depositDecimal = (Number(depositLamports) / 1e6).toFixed(6).replace(/\.?0+$/, '');
@@ -398,16 +362,6 @@ export default function Earn({ isConnected, onConnectWallet }) {
         ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
         ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10_000 }),
       ];
-
-      // USDC path: 3% fee transfer to treasury (atomic with deposit).
-      if (isUsdc) {
-        ixs.push(createAssociatedTokenAccountIdempotentInstruction(
-          user, treasuryUsdcAta, TREASURY, USDC_MINT,
-        ));
-        ixs.push(createTransferInstruction(
-          userUsdcAta, treasuryUsdcAta, user, feeLamports,
-        ));
-      }
 
       const { instructions: depositIxs, lookupTables: kaminoLuts } = await fetchKaminoDepositIxs({
         connection, walletAddress, amountDecimal: depositDecimal,
@@ -422,7 +376,7 @@ export default function Earn({ isConnected, onConnectWallet }) {
       }).compileToV0Message(kaminoLuts));
 
       const depositSig = await sendTransaction(vtx, connection, {
-        skipPreflight:       false,   // run preflight simulation
+        skipPreflight:       false,
         preflightCommitment: 'processed',
         maxRetries:          3,
       });
@@ -434,12 +388,10 @@ export default function Earn({ isConnected, onConnectWallet }) {
       setAmount('');
       // Give Kamino's API a few seconds to index the new deposit, then refresh.
       setTimeout(refreshPositions, 3000);
-      // Auto-clear the "done" state after a few seconds
       setTimeout(() => setStatus('idle'), 6000);
     } catch (e) {
       console.error('[earn deposit]', e);
       const errMsg = e?.message || String(e);
-      // User-friendly cancellation message
       if (/reject|cancel|denied|user/i.test(errMsg)) {
         setMsg(status === 'swapping' ? 'Swap cancelled' : 'Deposit cancelled');
       } else {
@@ -449,7 +401,7 @@ export default function Earn({ isConnected, onConnectWallet }) {
     } finally {
       setBusy(false);
     }
-  }, [amount, walletPk, sendTransaction, walletAddress, refreshPositions, selectedToken, status, connection]);
+  }, [amount, walletPk, sendTransaction, walletAddress, refreshPositions, status, connection]);
 
   useEffect(() => { runDepositRef.current = runDeposit; }, [runDeposit]);
 
@@ -493,49 +445,15 @@ export default function Earn({ isConnected, onConnectWallet }) {
             DEPOSIT
           </div>
 
-          {/* Token selector */}
-          <div style={{ position: 'relative' }}>
-            <button
-              type="button"
-              onClick={() => setShowTokenMenu(s => !s)}
-              style={{
-                background: 'rgba(255,255,255,.04)',
-                border: '1px solid rgba(255,255,255,.08)',
-                borderRadius: 8, padding: '5px 10px',
-                color: '#fff', fontSize: 12, fontWeight: 700,
-                cursor: 'pointer', fontFamily: 'Syne, sans-serif',
-              }}>
-              {selectedToken.symbol} ▾
-            </button>
-            {showTokenMenu && (
-              <div style={{
-                position: 'absolute', top: '100%', right: 0, marginTop: 4,
-                background: C.card, border: '1px solid ' + C.border,
-                borderRadius: 10, padding: 4, zIndex: 10, minWidth: 100,
-                boxShadow: '0 8px 24px rgba(0,0,0,.5)',
-              }}>
-                {SUPPORTED_INPUT_TOKENS.map(t => (
-                  <button
-                    key={t.mint}
-                    onClick={() => {
-                      setSelectedToken(t);
-                      setShowTokenMenu(false);
-                      setAmount('');
-                      setQuote(null);
-                      setMsg('');
-                    }}
-                    style={{
-                      display: 'block', width: '100%', textAlign: 'left',
-                      background: t.symbol === selectedToken.symbol ? 'rgba(0,229,255,.08)' : 'transparent',
-                      border: 'none', padding: '8px 10px', borderRadius: 6,
-                      color: '#fff', fontSize: 12, fontWeight: 600,
-                      cursor: 'pointer', fontFamily: 'Syne, sans-serif',
-                    }}>
-                    {t.symbol}
-                  </button>
-                ))}
-              </div>
-            )}
+          {/* SOL-only label — no dropdown, no token switching. */}
+          <div style={{
+            background: 'rgba(255,255,255,.04)',
+            border: '1px solid rgba(255,255,255,.08)',
+            borderRadius: 8, padding: '5px 12px',
+            color: '#fff', fontSize: 12, fontWeight: 700,
+            fontFamily: 'Syne, sans-serif',
+          }}>
+            SOL
           </div>
         </div>
 
@@ -550,23 +468,16 @@ export default function Earn({ isConnected, onConnectWallet }) {
           }}
         />
 
-        {/* Cost preview — differs by path */}
-        {amount && Number(amount) > 0 && selectedToken.symbol === 'USDC' && (
-          <div style={{ display: 'flex', justifyContent: 'space-between',
-            fontSize: 11, color: C.muted, marginBottom: 12 }}>
-            <span>3% routing fee</span>
-            <span>{fmtUSD(Number(amount) * 0.03)}</span>
-          </div>
-        )}
-        {amount && Number(amount) > 0 && selectedToken.symbol !== 'USDC' && (
+        {/* Cost preview */}
+        {amount && Number(amount) > 0 && (
           <div style={{ marginBottom: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between',
               fontSize: 11, color: C.muted, marginBottom: 4 }}>
               <span>You'll deposit at least</span>
-              <span>{quoteLoading ? '...' : quote ? `~${fmtUSD(quote * 0.995)} USDC` : '—'}</span>
+              <span>{quoteLoading ? '…' : quote ? `~${fmtUSD(quote * 0.995)} USDC` : '—'}</span>
             </div>
             <div style={{ fontSize: 10, color: C.muted }}>
-              5% OKX swap fee · No Kamino routing fee
+              Includes OKX swap fee · No Nexus routing fee
             </div>
           </div>
         )}
@@ -592,7 +503,7 @@ export default function Earn({ isConnected, onConnectWallet }) {
           cursor: (busy || loading) ? 'wait' : 'pointer',
           boxShadow: (busy || loading) ? 'none' : '0 8px 24px rgba(0,229,255,.25)',
         }}>{!isConnected ? 'Connect Wallet to Deposit'
-              : status === 'swapping'   ? 'Swapping to USDC…'
+              : status === 'swapping'   ? 'Swapping SOL to USDC…'
               : status === 'swapped'    ? 'Preparing deposit…'
               : status === 'depositing' ? 'Depositing into Kamino…'
               : status === 'done'       ? 'Done ✓'
@@ -648,9 +559,9 @@ export default function Earn({ isConnected, onConnectWallet }) {
       )}
 
       <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.6, padding: '0 4px' }}>
-        <span style={{ color: C.text, fontWeight: 600 }}>One-time 3% routing fee.</span>{' '}
-        No yield fees. Swap fees apply when converting other tokens to USDC.
-        Funds are deposited into Kamino with your own wallet as owner — Nexus is non-custodial.
+        <span style={{ color: C.text, fontWeight: 600 }}>Deposit SOL.</span>{' '}
+        We swap to USDC (OKX swap fee applies) and supply it to Kamino in your own wallet.
+        No yield fees, no Nexus routing fee. Funds are non-custodial.
         Smart contract risk of Kamino applies.
       </div>
 
