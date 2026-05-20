@@ -2247,7 +2247,7 @@ function VipComingSoon({ onConnectWallet, walletPubkey }) {
 
       <div style={{
         width: '100%', maxWidth: 480,
-        padding: '38px 28px 32px', borderRadius: 28,
+        padding: '54px 28px 50px', borderRadius: 28,
         background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))',
         border: '1px solid rgba(168,127,255,.22)',
         boxShadow: '0 24px 80px rgba(0,0,0,.55), 0 0 60px rgba(168,127,255,.10)',
@@ -2256,62 +2256,15 @@ function VipComingSoon({ onConnectWallet, walletPubkey }) {
         <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse 100% 60% at 50% -10%,rgba(151,252,228,.10),transparent 70%)', pointerEvents: 'none' }}/>
 
         <div style={{ position: 'relative' }}>
-          <div style={{
-            display: 'inline-flex', alignItems: 'center', gap: 8,
-            padding: '6px 14px', borderRadius: 999,
-            background: 'rgba(168,127,255,.10)',
-            border: '1px solid rgba(168,127,255,.30)',
-            marginBottom: 22,
-          }}>
-            <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.violet, boxShadow: `0 0 10px ${C.violet}`, animation: 'nexus-pulse 2s ease-in-out infinite' }}/>
-            <span style={{ color: C.violet, fontSize: 10, fontWeight: 800, letterSpacing: '.14em', ...T.mono }}>VIP ACCESS</span>
-          </div>
-
           <h1 style={{
             fontSize: 38, lineHeight: 1.0, fontWeight: 600,
-            margin: '0 0 12px', letterSpacing: '-.045em',
+            margin: 0, letterSpacing: '-.045em',
             background: `linear-gradient(135deg,${C.inkStr} 0%,${C.violet} 100%)`,
             WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
             ...T.hero,
           }}>
             Coming soon
           </h1>
-
-          <p style={{ color: C.muted, fontSize: 14, margin: '0 0 26px', lineHeight: 1.55, fontWeight: 500, ...T.body }}>
-            Perpetuals trading is in private beta.<br/>
-            Available to VIP wallets only.
-          </p>
-
-          {connected ? (
-            <div style={{
-              padding: '14px 16px', borderRadius: 14,
-              background: 'rgba(255,255,255,.03)',
-              border: `1px solid ${C.border}`,
-              marginBottom: 18,
-            }}>
-              <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', marginBottom: 6, ...T.mono }}>YOUR WALLET</div>
-              <div style={{ fontSize: 12, color: C.ink, fontWeight: 700, ...T.mono, wordBreak: 'break-all' }}>
-                {walletPubkey.slice(0, 8)}...{walletPubkey.slice(-8)}
-              </div>
-              <div style={{ fontSize: 11, color: C.amber, fontWeight: 600, marginTop: 8, ...T.body }}>
-                Not on the VIP list yet.
-              </div>
-            </div>
-          ) : (
-            <button onClick={() => onConnectWallet?.()} style={{
-              width: '100%', padding: 15, borderRadius: 14, border: 'none',
-              background: `linear-gradient(135deg,${C.violet} 0%,${C.sol} 100%)`,
-              color: '#fff', fontWeight: 800, fontSize: 14, cursor: 'pointer',
-              boxShadow: '0 12px 32px rgba(168,127,255,.30)',
-              marginBottom: 18, letterSpacing: '-.01em', ...T.display,
-            }}>
-              Connect wallet to check access
-            </button>
-          )}
-
-          <div style={{ fontSize: 10, color: C.muted2, fontWeight: 600, letterSpacing: '.06em', ...T.mono }}>
-            POWERED BY HYPERLIQUID · NON-CUSTODIAL
-          </div>
         </div>
       </div>
     </div>
