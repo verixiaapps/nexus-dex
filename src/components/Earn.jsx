@@ -15,6 +15,7 @@ import {
   SUPPORTED_INPUT_TOKENS,
   fetchOkxSwapInstructions,
   fetchOkxQuote,
+  buildOkxSolTx,
 } from './okxSwap';
 
 const C = {
@@ -218,7 +219,7 @@ function DisclosureModal({ onAccept, onCancel }) {
 // Component
 // =====================================================================
 export default function Earn({ isConnected, onConnectWallet }) {
-  const { publicKey: walletPk, signTransaction } = useWallet();
+  const { publicKey: walletPk, sendTransaction } = useWallet();
   const walletAddress = walletPk ? walletPk.toBase58() : null;
 
   const [apy, setApy]               = useState(null);
@@ -227,6 +228,9 @@ export default function Earn({ isConnected, onConnectWallet }) {
   const [busy, setBusy]             = useState(false);
   const [msg, setMsg]               = useState('');
   const [txSig, setTxSig]           = useState('');
+  // status: 'idle' | 'swapping' | 'swapped' | 'depositing' | 'done'
+  // Used to render the friendly two-step UI for non-USDC deposits.
+  const [status, setStatus]         = useState('idle');
   const [positions, setPositions]   = useState([]);
   const [pendingDeposit, setPendingDeposit] = useState(false);
   const [selectedToken, setSelectedToken]   = useState(SUPPORTED_INPUT_TOKENS[0]); // default USDC
@@ -312,150 +316,136 @@ export default function Earn({ isConnected, onConnectWallet }) {
   const onModalCancel = () => setPendingDeposit(false);
 
   const runDeposit = useCallback(async () => {
-    if (!signTransaction) { setMsg('Wallet cannot sign transactions'); return; }
+    if (!sendTransaction) { setMsg('Wallet cannot send transactions'); return; }
     if (!TREASURY) {
       setMsg('Treasury wallet not configured (set REACT_APP_NEXUS_TREASURY)');
       return;
     }
     const amt = Number(amount);
-    setBusy(true); setMsg(''); setTxSig('');
+    setBusy(true); setMsg(''); setTxSig(''); setStatus('idle');
 
     try {
       const conn = new Connection(RPC_URL, 'confirmed');
       const user = toPublicKey(walletPk);
       const isUsdc = selectedToken.symbol === 'USDC';
 
-      // ---- Compute amounts ----
-      const inputLamports = BigInt(Math.round(amt * 10 ** selectedToken.decimals));
+      // ================================================================
+      // STEP 1 (non-USDC only): SWAP to USDC via OKX
+      // Uses the exact wallet-adapter sendTransaction pattern from
+      // the working Swap.jsx, including preflight simulation enabled.
+      // ================================================================
+      if (!isUsdc) {
+        setStatus('swapping');
+        setMsg('Step 1 of 2: Swapping to USDC…');
 
-      let depositLamports;       // USDC base units we'll instruct Kamino to deposit
-      let feeLamports = 0n;      // Kamino routing fee (USDC base units); only USDC path
-      let okxSwap = null;        // { instructions, lutAddresses, minUsdcOut } when applicable
-
-      if (isUsdc) {
-        // Direct USDC path: take 3% routing fee, deposit the rest.
-        feeLamports     = (inputLamports * BigInt(ROUTING_FEE_BPS)) / 10000n;
-        depositLamports = inputLamports - feeLamports;
-      } else {
-        // Non-USDC path: OKX swap takes 5% via referral fee (server-side).
-        // No additional Kamino routing fee on our end; revenue comes from OKX spread.
-        okxSwap = await fetchOkxSwapInstructions({
+        const inputLamports = BigInt(Math.round(amt * 10 ** selectedToken.decimals));
+        const swapData = await fetchOkxSwapInstructions({
           fromTokenMint:    selectedToken.mint,
           amountLamports:   inputLamports.toString(),
           userWalletAddress: walletAddress,
-          slippagePercent:  '0.5',
         });
-        if (!okxSwap.minUsdcOut || okxSwap.minUsdcOut <= 0) {
-          throw new Error('OKX did not return a valid swap output amount');
-        }
-        // minUsdcOut is the worst-case post-slippage output. Safe to deposit.
-        // Convert from human-readable USDC to base units.
-        depositLamports = BigInt(Math.round(okxSwap.minUsdcOut * 1e6));
+        const swapTx = await buildOkxSolTx({
+          connection: conn, userPubkey: user, swapData,
+        });
+        const swapSig = await sendTransaction(swapTx, conn, {
+          skipPreflight:       false,   // run preflight simulation
+          preflightCommitment: 'processed',
+          maxRetries:          3,
+        });
+        setTxSig(swapSig);
+        await conn.confirmTransaction(swapSig, 'confirmed');
+        setStatus('swapped');
       }
 
-      // Kamino API takes decimal strings.
-      const depositDecimal = (Number(depositLamports) / 1e6).toFixed(6).replace(/\.?0+$/, '');
+      // ================================================================
+      // STEP 2: KAMINO DEPOSIT
+      // For USDC path: take 3% routing fee, deposit 97%.
+      // For swap path: deposit whatever USDC the user now has in wallet
+      // (we read the real balance after swap, no slippage guessing).
+      // ================================================================
+      setStatus('depositing');
+      setMsg(isUsdc ? 'Depositing into Kamino…' : 'Step 2 of 2: Depositing into Kamino…');
 
-      // ATAs
       const userUsdcAta     = await getAssociatedTokenAddress(USDC_MINT, user);
       const treasuryUsdcAta = await getAssociatedTokenAddress(USDC_MINT, TREASURY);
 
-      // For USDC path, pre-check user has enough. For swap path, OKX validates.
+      let depositLamports;
+      let feeLamports = 0n;
+
       if (isUsdc) {
-        const userBal = await conn.getTokenAccountBalance(userUsdcAta).catch(() => null);
-        if (!userBal) throw new Error('No USDC account found in wallet');
-        if (BigInt(userBal.value.amount) < inputLamports) throw new Error('Insufficient USDC balance');
+        const inputLamports = BigInt(Math.round(amt * 1e6));
+        feeLamports     = (inputLamports * BigInt(ROUTING_FEE_BPS)) / 10000n;
+        depositLamports = inputLamports - feeLamports;
+      } else {
+        // Read the user's REAL USDC balance after the swap. This is the
+        // only way to know exactly what they got (slippage is unpredictable).
+        const bal = await conn.getTokenAccountBalance(userUsdcAta);
+        const realBalLamports = BigInt(bal?.value?.amount || '0');
+        if (realBalLamports === 0n) {
+          throw new Error('Swap completed but no USDC found in wallet. Check the swap tx and retry.');
+        }
+        // Deposit all USDC the user has. OKX took its 5% already.
+        depositLamports = realBalLamports;
       }
 
-      // ---- Build instruction list ----
-      const ixs = [];
-      ixs.push(ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }));
-      ixs.push(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10_000 }));
+      const depositDecimal = (Number(depositLamports) / 1e6).toFixed(6).replace(/\.?0+$/, '');
 
+      const ixs = [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }),
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 10_000 }),
+      ];
+
+      // USDC path: 3% fee transfer to treasury (atomic with deposit).
       if (isUsdc) {
-        // Idempotent treasury ATA — no-op if exists, no race
         ixs.push(createAssociatedTokenAccountIdempotentInstruction(
           user, treasuryUsdcAta, TREASURY, USDC_MINT,
         ));
-        // 3% fee transfer to treasury (atomic with deposit)
         ixs.push(createTransferInstruction(
           userUsdcAta, treasuryUsdcAta, user, feeLamports,
         ));
-      } else {
-        // Prepend OKX swap instructions. OKX's instruction list includes all
-        // setup ixs (ATAs, etc.) — we don't need to add any of our own.
-        ixs.push(...okxSwap.instructions);
       }
 
-      // Kamino deposit ixs + LUTs from the public API
       const { instructions: depositIxs, lookupTables: kaminoLuts } = await fetchKaminoDepositIxs({
-        connection: conn,
-        walletAddress,
-        amountDecimal: depositDecimal,
+        connection: conn, walletAddress, amountDecimal: depositDecimal,
       });
       ixs.push(...depositIxs);
 
-      // ---- Merge LUTs from OKX + Kamino ----
-      // OKX returns LUT *addresses*; we fetch them. Kamino's helper already
-      // returns AddressLookupTableAccount objects.
-      let allLuts = [...kaminoLuts];
-      if (okxSwap && okxSwap.lutAddresses.length > 0) {
-        const okxLutAccounts = await Promise.all(
-          okxSwap.lutAddresses.map(addr =>
-            conn.getAddressLookupTable(new PublicKey(addr)).then(r => r.value).catch(() => null)
-          )
-        );
-        allLuts = [...allLuts, ...okxLutAccounts.filter(Boolean)];
-      }
-
-      // ---- Compile + sign + send ----
-      const { blockhash, lastValidBlockHeight } = await conn.getLatestBlockhash();
-      const messageV0 = new TransactionMessage({
-        payerKey: user,
+      const { blockhash } = await conn.getLatestBlockhash('finalized');
+      const vtx = new VersionedTransaction(new TransactionMessage({
+        payerKey:        user,
         recentBlockhash: blockhash,
-        instructions: ixs,
-      }).compileToV0Message(allLuts);
+        instructions:    ixs,
+      }).compileToV0Message(kaminoLuts));
 
-      const vtx = new VersionedTransaction(messageV0);
-
-      // Detect tx size overflow EARLY (before asking user to sign).
-      // 1232 bytes is the Solana mainnet limit. If we exceed, we'd need a
-      // two-tx flow (swap first, then deposit) — not implemented yet.
-      // Surface a clear error so user knows to try smaller amount or USDC direct.
-      const txSize = vtx.serialize().length;
-      if (txSize > 1232) {
-        throw new Error(
-          `Swap + deposit too large for one transaction (${txSize} bytes). ` +
-          `Try depositing USDC directly, or use a smaller amount.`
-        );
-      }
-
-      const signed = await signTransaction(vtx);
-      const sig = await conn.sendRawTransaction(signed.serialize(), {
-        skipPreflight: false,
-        maxRetries: 3,
+      const depositSig = await sendTransaction(vtx, conn, {
+        skipPreflight:       false,   // run preflight simulation
+        preflightCommitment: 'processed',
+        maxRetries:          3,
       });
+      setTxSig(depositSig);
+      await conn.confirmTransaction(depositSig, 'confirmed');
 
-      // Surface sig immediately so user can debug even if confirmation fails
-      setTxSig(sig);
-
-      await conn.confirmTransaction({
-        signature: sig,
-        blockhash,
-        lastValidBlockHeight,
-      }, 'confirmed');
-
+      setStatus('done');
+      setMsg('');
       setAmount('');
       // Give Kamino's API a few seconds to index the new deposit, then refresh.
       setTimeout(refreshPositions, 3000);
+      // Auto-clear the "done" state after a few seconds
+      setTimeout(() => setStatus('idle'), 6000);
     } catch (e) {
       console.error('[earn deposit]', e);
       const errMsg = e?.message || String(e);
-      setMsg(/reject|cancel|denied|user/i.test(errMsg) ? 'Cancelled' : errMsg);
+      // User-friendly cancellation message
+      if (/reject|cancel|denied|user/i.test(errMsg)) {
+        setMsg(status === 'swapping' ? 'Swap cancelled' : 'Deposit cancelled');
+      } else {
+        setMsg(errMsg);
+      }
+      setStatus('idle');
     } finally {
       setBusy(false);
     }
-  }, [amount, walletPk, signTransaction, walletAddress, refreshPositions, selectedToken]);
+  }, [amount, walletPk, sendTransaction, walletAddress, refreshPositions, selectedToken, status]);
 
   useEffect(() => { runDepositRef.current = runDeposit; }, [runDeposit]);
 
@@ -577,7 +567,12 @@ export default function Earn({ isConnected, onConnectWallet }) {
           </div>
         )}
 
-        {msg && <div style={{ color: C.red, fontSize: 12, marginBottom: 8 }}>{msg}</div>}
+        {msg && (
+          <div style={{
+            color: status === 'idle' ? C.red : C.accent,
+            fontSize: 12, marginBottom: 8, fontWeight: status === 'idle' ? 600 : 700,
+          }}>{msg}</div>
+        )}
         {txSig && (
           <div style={{ color: msg ? C.muted : C.green, fontSize: 12, marginBottom: 8 }}>
             {msg ? 'Tx sent (see error above):' : 'Deposited.'}{' '}
@@ -592,7 +587,13 @@ export default function Earn({ isConnected, onConnectWallet }) {
           fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
           cursor: (busy || loading) ? 'wait' : 'pointer',
           boxShadow: (busy || loading) ? 'none' : '0 8px 24px rgba(0,229,255,.25)',
-        }}>{!isConnected ? 'Connect Wallet to Deposit' : busy ? 'Routing...' : 'Deposit & Earn'}</button>
+        }}>{!isConnected ? 'Connect Wallet to Deposit'
+              : status === 'swapping'   ? 'Swapping to USDC…'
+              : status === 'swapped'    ? 'Preparing deposit…'
+              : status === 'depositing' ? 'Depositing into Kamino…'
+              : status === 'done'       ? 'Done ✓'
+              : busy                    ? 'Working…'
+              : 'Deposit & Earn'}</button>
       </div>
 
       {positions.length > 0 ? (
