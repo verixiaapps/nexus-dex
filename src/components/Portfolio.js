@@ -769,3 +769,4 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
     </>
   );
 }
+ 
