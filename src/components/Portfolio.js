@@ -3,6 +3,8 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
 import { PublicKey } from '@solana/web3.js';
 
+import { readEarnPositions } from './earnPositions';
+
 // =====================================================================
 // DESIGN TOKENS — match PredictionsTonight/PerpsTrade exactly
 // =====================================================================
@@ -35,9 +37,11 @@ const USDT_SOLANA           = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
 const SPL_LEGACY_PROGRAM    = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const SPL_TOKEN2022_PROGRAM = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 
-// xStocks (tokenized equities, Token-2022). Same 18 mints as Stocks.jsx —
-// keeping them here so Portfolio can name + price holdings. isStock + isT22
-// flags drive special handling (Jupiter Price V3 routing, stock badge).
+// Filter dust holdings under this USD value to keep the UI clean.
+// $0.10 catches airdrop dust and rounding leftovers without hiding real positions.
+const DUST_THRESHOLD_USD = 0.10;
+
+// xStocks (Token-2022) — same 18 mints as Stocks.jsx.
 const XSTOCKS = {
   'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB': { symbol:'TSLAx',  name:'Tesla',                color:'#e31837', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
   'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp': { symbol:'AAPLx',  name:'Apple',                color:'#a2aaad', textColor:'#000', isStock:true, isT22:true, decimals:8 },
@@ -59,9 +63,6 @@ const XSTOCKS = {
   'XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp': { symbol:'TBLLx',  name:'1-3 Month T-Bill ETF', color:'#2a4d6e', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
 };
 
-// Known tokens — gives top holdings real names + brand colors.
-// xStocks merged in so they render with proper names + colors and pass the
-// curated-filter check below. Long tail falls back to first-letter badge.
 const KNOWN_TOKENS = {
   [SOL_MINT]:                                       { symbol:'SOL',    name:'Solana',           color:'#9945ff', textColor:'#fff' },
   [USDC_SOLANA]:                                    { symbol:'USDC',   name:'USD Coin',         color:'#2775ca', textColor:'#fff', isStable:true },
@@ -128,30 +129,8 @@ async function copyText(text) {
   } catch { return false; }
 }
 
-function openTokenPage(token, onSelectCoin) {
-  if (!token || !onSelectCoin) return;
-  const mint = token.mint || token.address || token.tokenAddress || token.id;
-  if (!mint) return;
-  onSelectCoin({
-    id:           mint,
-    mint,
-    address:      mint,
-    tokenAddress: mint,
-    symbol:       token.symbol || mint.slice(0, 4) + '...',
-    name:         token.name || token.symbol || mint.slice(0, 4) + '...',
-    chain:        'solana',
-    decimals:     token.decimals,
-    price:        token.price,
-    value:        token.value,
-    uiAmount:     token.uiAmount,
-  });
-}
-
 // =====================================================================
-// PRICE FETCHING
-// Stablecoins shortcut to $1 (OKX can't quote USDC↔USDC). xStocks route
-// through Jupiter Price V3 since OKX doesn't have Token-2022 pricing.
-// Everything else: OKX first, Jupiter V3 fallback.
+// PRICE FETCHING — unchanged from previous version
 // =====================================================================
 const _priceCache = {};
 function clearPriceCache() { Object.keys(_priceCache).forEach(k => delete _priceCache[k]); }
@@ -161,8 +140,6 @@ function readOkxToTokenAmount(data) {
 }
 async function fetchJupiterPriceV3(mint) {
   try {
-    // V3 was launched Oct 2025 — V2 is deprecated and returns 410. Field
-    // renamed from `price` to `usdPrice`, no nested `data` wrapper.
     const r = await fetch(`https://api.jup.ag/price/v3?ids=${mint}`);
     const j = await r.json();
     const price = j?.[mint]?.usdPrice;
@@ -172,21 +149,18 @@ async function fetchJupiterPriceV3(mint) {
 }
 async function fetchTokenPriceUsd(mint, decimals = 6, force = false) {
   if (!mint) return 0;
-  // Stablecoin shortcut — never call the network for these.
   const meta = KNOWN_TOKENS[mint];
   if (meta?.isStable) return 1;
 
   const key = `${String(mint).toLowerCase()}:${decimals}`;
   if (!force && _priceCache[key] && Date.now() - _priceCache[key].ts < 60000) return _priceCache[key].price;
 
-  // xStocks (Token-2022) — OKX doesn't price them, go straight to Jupiter V3.
   if (meta?.isT22 || meta?.isStock) {
     const p = await fetchJupiterPriceV3(mint);
     if (p > 0) { _priceCache[key] = { price: p, ts: Date.now() }; return p; }
     return 0;
   }
 
-  // Regular SPL: OKX aggregator quote first (best for liquid SPL tokens).
   try {
     const amount = mint === SOL_MINT ? '1000000000' : tokenAmountForOne(decimals);
     const r = await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=${USDC_SOLANA}&amount=${amount}`);
@@ -200,18 +174,13 @@ async function fetchTokenPriceUsd(mint, decimals = 6, force = false) {
       }
     }
   } catch {}
-  // Fallback: Jupiter V3 (covers anything OKX missed).
   const jupPrice = await fetchJupiterPriceV3(mint);
   if (jupPrice > 0) { _priceCache[key] = { price: jupPrice, ts: Date.now() }; return jupPrice; }
   return 0;
 }
 
 // =====================================================================
-// HYPERLIQUID PERPS
-// Perps live on a separate L1 (HyperCore). The user's HL address is
-// derived from a Solana signature on the Perps tab and cached locally.
-// We READ ONLY here — no signing on this page. If the user has never
-// visited Perps, no HL address exists and we skip the section.
+// HYPERLIQUID PERPS — unchanged
 // =====================================================================
 function getHlAddress(solPubkey) {
   if (!solPubkey) return null;
@@ -245,17 +214,12 @@ function parseHlState(state) {
         isLong:     szi > 0,
         size:       Math.abs(szi),
         entryPx:    parseFloat(pos.entryPx       || 0),
-        unrealPnl:  parseFloat(pos.unrealizedPnl || 0),
         leverage:   pos.leverage?.value || 1,
-        marginUsed: parseFloat(pos.marginUsed    || 0),
         posValue:   parseFloat(pos.positionValue || 0),
       };
     });
   return { balance, withdrawable, marginUsed, positions };
 }
-// Brand colors for the top perp tickers — matches PerpsTrade.js. Falls
-// back to a violet/teal gradient for anything not in the list so new
-// listings still render without code changes.
 function coinAccent(symbol) {
   const map = {
     BTC:['#f7931a','#ffbf5c'], ETH:['#627eea','#8fa8ff'], SOL:['#14f195','#9945ff'],
@@ -271,8 +235,6 @@ function coinAccent(symbol) {
 // =====================================================================
 function TokenBadge({ mint, fallbackSym, size = 36 }) {
   const meta = tokenMeta(mint, fallbackSym);
-  // Stock badges use ticker letters (G for GOOGL) instead of first letter
-  // of the xStock symbol (which is also G). Same outcome, clearer intent.
   const letter = (meta.symbol || '?').replace(/x$/, '').charAt(0).toUpperCase() || '?';
   return (
     <div style={{
@@ -340,12 +302,11 @@ function TokenRow({ token, onClick }) {
   );
 }
 
-// Compact PERPS row — coin badge, side+leverage chip, size/entry, PnL$ + ROE%.
-// Read-only on this page (no close button); user manages positions on Perps tab.
+// PERPS row — read-only. PnL/ROE intentionally hidden per product decision;
+// users see PnL on the Perps tab where they can act on it. Here we just
+// show position size + entry to confirm "yes, this position exists."
 function PerpRow({ pos }) {
-  const [a, b]   = coinAccent(pos.coin);
-  const profit   = pos.unrealPnl >= 0;
-  const pnlPct   = pos.marginUsed > 0 ? (pos.unrealPnl / pos.marginUsed) * 100 : 0;
+  const [a, b] = coinAccent(pos.coin);
   return (
     <div style={{
       padding: '12px 16px', display: 'grid', gridTemplateColumns: '36px 1fr auto',
@@ -375,13 +336,54 @@ function PerpRow({ pos }) {
         </div>
       </div>
       <div style={{ textAlign: 'right' }}>
-        <div style={{ color: profit ? C.up : C.down, fontWeight: 800, fontSize: 14, fontVariantNumeric: 'tabular-nums', ...T.mono }}>
-          {profit ? '+' : ''}{fmt(pos.unrealPnl, 2)}
-        </div>
-        <div style={{ color: profit ? C.up : C.down, fontSize: 10, fontWeight: 700, marginTop: 2, fontVariantNumeric: 'tabular-nums', ...T.mono }}>
-          {(pnlPct >= 0 ? '+' : '') + pnlPct.toFixed(2)}%
+        <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 14, fontVariantNumeric: 'tabular-nums', ...T.mono }}>
+          {fmt(pos.posValue, 2)}
         </div>
       </div>
+    </div>
+  );
+}
+
+// EARN row — Kamino USDC deposit. Value-only, no APY (lives on Earn tab).
+// "Manage ↗" opens Kamino's app since withdrawals happen there.
+function EarnRow({ position }) {
+  return (
+    <div style={{
+      padding: '12px 16px', display: 'grid', gridTemplateColumns: '36px 1fr auto',
+      gap: 12, alignItems: 'center', borderBottom: `1px solid ${C.hairline}`,
+    }}>
+      <div style={{
+        width: 36, height: 36, borderRadius: '50%',
+        background: `linear-gradient(135deg,${position.color || '#7a5af8'},${position.color || '#7a5af8'}dd)`,
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        color: '#fff', fontWeight: 900, fontSize: 13,
+        flexShrink: 0, letterSpacing: '-.02em',
+        boxShadow: `0 4px 12px ${(position.color || '#7a5af8')}40`,
+        ...T.display,
+      }}>K</div>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
+          <span style={{ color: C.inkStr, fontWeight: 800, fontSize: 14, letterSpacing: '-.01em', ...T.display }}>
+            {position.protocol}
+          </span>
+          <span style={{
+            color: C.hl, fontSize: 9, fontWeight: 700, padding: '2px 6px',
+            borderRadius: 4, background: C.hlDim, border: `1px solid ${C.borderHi}`,
+            letterSpacing: '.04em', ...T.mono,
+          }}>EARNING</span>
+        </div>
+        <div style={{ color: C.muted, fontSize: 11, marginTop: 2, ...T.body }}>
+          USDC supplied · live balance
+        </div>
+      </div>
+      <a href={position.withdrawUrl} target="_blank" rel="noreferrer" style={{ textDecoration: 'none', textAlign: 'right' }}>
+        <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 14, fontVariantNumeric: 'tabular-nums', ...T.mono }}>
+          {fmt(position.amount)}
+        </div>
+        <div style={{ color: C.hl, fontSize: 10, fontWeight: 700, marginTop: 2, ...T.mono, letterSpacing: '.04em' }}>
+          MANAGE ↗
+        </div>
+      </a>
     </div>
   );
 }
@@ -412,10 +414,12 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
   const [refreshing, setRefreshing]     = useState(false);
   const [error, setError]               = useState('');
   const [copied, setCopied]             = useState(false);
-  // HL Perps state — populated only if user has previously derived their HL
-  // address via the Perps tab (we never sign on this page).
+
   const [hlAccountValue, setHlAccountValue] = useState(0);
   const [hlPositions, setHlPositions]       = useState([]);
+  // Earn positions — sourced from Kamino REST API via readEarnPositions.
+  // Survives across devices since it queries on-chain state, not localStorage.
+  const [earnPositions, setEarnPositions]   = useState([]);
 
   const fetchPortfolio = useCallback(async (force = false) => {
     if (!pubkey || !connection) { setLoading(false); return; }
@@ -429,8 +433,6 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
       const solPrice = await fetchTokenPriceUsd(SOL_MINT, 9, force);
       setSolPriceUsd(solPrice > 0 ? solPrice : 0);
 
-      // Fetch BOTH legacy SPL and Token-2022 accounts. Token-2022 covers
-      // xStocks; without this branch the wallet won't list them.
       const results = await Promise.allSettled([
         connection.getParsedTokenAccountsByOwner(pubkey, { programId: SPL_LEGACY_PROGRAM }),
         connection.getParsedTokenAccountsByOwner(pubkey, { programId: SPL_TOKEN2022_PROGRAM }),
@@ -452,33 +454,47 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
         } catch {}
       });
 
-      // Filter to curated known tokens (USDC/USDT/popular SPL/xStocks).
-      // Hides airdrop junk / scam tokens automatically.
       const holdings = Object.values(byMint).filter(h => h.mint !== SOL_MINT && KNOWN_TOKENS[h.mint]);
       const priced = [];
       for (const h of holdings) {
         const price = await fetchTokenPriceUsd(h.mint, h.decimals, force);
         const meta = tokenMeta(h.mint);
+        const value = h.uiAmount * (price > 0 ? price : 0);
         priced.push({
           ...h,
           price: price > 0 && Number.isFinite(price) ? price : 0,
-          value: h.uiAmount * (price > 0 ? price : 0),
+          value,
           symbol: meta.symbol,
           name: meta.name,
         });
       }
-      // Sort: stablecoins first, then stocks, then by value desc.
-      priced.sort((a, b) => {
+      // Filter dust before sorting. Keeps the holdings list focused on
+      // positions that actually matter; airdrop scraps disappear cleanly.
+      // Stablecoins always show (they're rarely dust and users expect them).
+      const filtered = priced.filter(h => {
+        const meta = tokenMeta(h.mint);
+        return meta.isStable || h.value >= DUST_THRESHOLD_USD;
+      });
+
+      filtered.sort((a, b) => {
         const ma = tokenMeta(a.mint), mb = tokenMeta(b.mint);
         const rank = m => m.isStable ? 0 : m.isStock ? 1 : 2;
         const ra = rank(ma), rb = rank(mb);
         if (ra !== rb) return ra - rb;
         return b.value - a.value;
       });
-      setSolBalances(priced);
+      setSolBalances(filtered);
 
-      // Fetch HL Perps state in parallel. Only attempts if we have a cached
-      // HL address — otherwise the Perps section just stays hidden.
+      // ----- Earn positions (Kamino) -----
+      // Parallel-friendly: failure doesn't break anything else on the page.
+      try {
+        const ePos = await readEarnPositions({ walletAddress: pubkey.toString() });
+        setEarnPositions(Array.isArray(ePos) ? ePos : []);
+      } catch {
+        setEarnPositions([]);
+      }
+
+      // ----- Hyperliquid Perps -----
       const hlAddr = getHlAddress(pubkey.toString());
       if (hlAddr) {
         const state = await fetchHlState(hlAddr);
@@ -518,15 +534,16 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
 
   const solValue    = solBalance * solPriceUsd;
   const tokensTotal = solBalances.reduce((s, h) => s + (h.value || 0), 0);
-  // HL account value already includes both available + position margin + PnL,
-  // so adding it once to the total is correct (no double-counting positions).
-  const totalValue  = solValue + tokensTotal + hlAccountValue;
+  const earnTotal   = earnPositions.reduce((s, p) => s + (p.amount || 0), 0);
+  // Total includes everything: wallet SOL + SPL tokens + Earn + Perps margin.
+  // No double-counting; each source contributes independently.
+  const totalValue  = solValue + tokensTotal + earnTotal + hlAccountValue;
   const tokenCount  = solBalances.length + (solBalance > 0 ? 1 : 0);
-  const stockCount  = solBalances.filter(h => KNOWN_TOKENS[h.mint]?.isStock).length;
+  const earnCount   = earnPositions.length;
   const perpsCount  = hlPositions.length;
 
   // ===================================================================
-  // DISCONNECTED STATE
+  // DISCONNECTED STATE — unchanged
   // ===================================================================
   if (!hasSol) {
     return (
@@ -545,7 +562,7 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
               <span style={{ fontStyle: 'italic', background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>wallet</span>
             </h1>
             <p style={{ color: C.muted, fontSize: 13, margin: '0 0 28px', lineHeight: 1.5, ...T.body }}>
-              See your SOL balance, token holdings, and live valuations powered by OKX + Jupiter price feeds.
+              See your SOL balance, token holdings, Earn deposits, and Perps positions in one place.
             </p>
             <button onClick={() => onConnectWallet?.()} style={{
               background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, border: 'none', borderRadius: 14,
@@ -561,6 +578,8 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
   // ===================================================================
   // CONNECTED STATE
   // ===================================================================
+  // Stats strip: SOL / HOLDINGS / EARN / PERPS — 4 cards on a phone
+  // would be too tight, so we use 2x2 grid for the quick stats.
   return (
     <>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nx-spin { to{transform:rotate(360deg)} }`}</style>
@@ -569,7 +588,6 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
 
         {/* HERO */}
         <div style={{ marginTop: 10, padding: '24px 22px 22px', borderRadius: 26, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: '1px solid rgba(255,255,255,.07)', boxShadow: C.shadowLg, position: 'relative', overflow: 'hidden' }}>
-          {/* Radial overlay */}
           <div style={{ position: 'absolute', right: -50, top: -60, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle,rgba(168,127,255,.16),transparent 65%)', pointerEvents: 'none' }}/>
           <div style={{ position: 'absolute', left: -80, bottom: -80, width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle,rgba(151,252,228,.10),transparent 65%)', pointerEvents: 'none' }}/>
 
@@ -599,7 +617,6 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
               {fmt(totalValue)}
             </div>
 
-            {/* Address pill — tap to copy */}
             <button onClick={handleCopyAddr} style={{
               background: 'rgba(0,0,0,.30)', border: `1px solid ${C.border}`,
               borderRadius: 12, padding: '9px 13px', cursor: 'pointer', width: '100%',
@@ -621,12 +638,21 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
           </div>
         </div>
 
-        {/* QUICK STATS STRIP */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', gap: 8, marginTop: 12, marginBottom: 18 }}>
+        {/* QUICK STATS STRIP — 2x2 grid when Earn or Perps active, else 3-col */}
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: (earnCount > 0 && perpsCount > 0) ? 'repeat(2,1fr)' : 'repeat(3,1fr)',
+          gap: 8, marginTop: 12, marginBottom: 18,
+        }}>
           {[
-            { label: 'SOL',        value: solBalance.toFixed(3),       sub: solValue > 0 ? fmt(solValue) : '—', color: C.sol },
-            { label: 'HOLDINGS',   value: String(tokenCount),          sub: tokenCount === 1 ? 'asset' : 'assets', color: C.hl },
-            { label: 'PERPS',      value: String(perpsCount),          sub: hlAccountValue > 0 ? fmt(hlAccountValue) : (perpsCount === 1 ? 'position' : 'positions'), color: C.violet },
+            { label: 'SOL',      value: solBalance.toFixed(3), sub: solValue > 0 ? fmt(solValue) : '—',                     color: C.sol },
+            { label: 'HOLDINGS', value: String(tokenCount),    sub: tokenCount === 1 ? 'asset' : 'assets',                  color: C.hl },
+            ...(earnCount > 0 ? [{
+              label: 'EARN',     value: String(earnCount),     sub: earnTotal > 0 ? fmt(earnTotal) : '—',                   color: '#7a5af8',
+            }] : []),
+            ...(perpsCount > 0 || hlAccountValue > 0 ? [{
+              label: 'PERPS',    value: String(perpsCount),    sub: hlAccountValue > 0 ? fmt(hlAccountValue) : (perpsCount === 1 ? 'position' : 'positions'), color: C.violet,
+            }] : []),
           ].map(s => (
             <div key={s.label} style={{ padding: '10px 12px', borderRadius: 14, background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, backdropFilter: 'blur(12px)' }}>
               <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>{s.label}</div>
@@ -643,9 +669,36 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
           </div>
         )}
 
-        {/* PERPS SECTION — only shows when user has HL data (positions or
-            account value). Hidden cleanly for users who haven't visited the
-            Perps tab yet (no signature required to render this page). */}
+        {/* EARN SECTION — above Perps. Hidden when no positions. */}
+        {earnPositions.length > 0 && (
+          <>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px', marginBottom: 8 }}>
+              <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.12em', ...T.mono }}>EARN</div>
+              <div style={{ fontSize: 9, color: C.muted2, fontWeight: 600, ...T.mono }}>KAMINO · AUTO 30s</div>
+            </div>
+            <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', marginBottom: 18, backdropFilter: 'blur(12px)' }}>
+              <div style={{
+                padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                borderBottom: `1px solid ${C.hairline}`,
+                background: 'rgba(122,90,248,.04)',
+              }}>
+                <div>
+                  <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>SUPPLIED VALUE</div>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: C.inkStr, fontVariantNumeric: 'tabular-nums', marginTop: 2, ...T.display }}>{fmt(earnTotal)}</div>
+                </div>
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>POSITIONS</div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: '#7a5af8', fontVariantNumeric: 'tabular-nums', marginTop: 2, ...T.mono }}>
+                    {earnPositions.length} {earnPositions.length === 1 ? 'position' : 'positions'}
+                  </div>
+                </div>
+              </div>
+              {earnPositions.map(p => <EarnRow key={p.protocol} position={p}/>)}
+            </div>
+          </>
+        )}
+
+        {/* PERPS SECTION */}
         {(hlAccountValue > 0 || hlPositions.length > 0) && (
           <>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px', marginBottom: 8 }}>
@@ -653,7 +706,6 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
               <div style={{ fontSize: 9, color: C.muted2, fontWeight: 600, ...T.mono }}>HYPERLIQUID · AUTO 30s</div>
             </div>
             <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', marginBottom: 18, backdropFilter: 'blur(12px)' }}>
-              {/* Account summary row */}
               <div style={{
                 padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 borderBottom: hlPositions.length > 0 ? `1px solid ${C.hairline}` : 'none',
@@ -683,14 +735,10 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
 
         {/* HOLDINGS LIST */}
         <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', backdropFilter: 'blur(12px)' }}>
-
-          {/* SOL row — always shown if connected. Not clickable: this is a
-              read-only wallet view; trading happens on Swap / Stocks tabs. */}
           <TokenRow
             token={{ mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, price: solPriceUsd, value: solValue, uiAmount: solBalance }}
           />
 
-          {/* SPL + Token-2022 tokens (USDC, USDT, xStocks, etc.) */}
           {loading && !solBalances.length ? (
             <>
               <SkeletonRow/>
