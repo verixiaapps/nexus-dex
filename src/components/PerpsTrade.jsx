@@ -1111,28 +1111,48 @@ function hasSpotMatch(perpName, spotSymbols) {
 // localStorage eviction (iOS Safari): if registry vanishes, we just
 // re-bootstrap. Tab is never empty.
 // ─────────────────────────────────────────────────────────────────────
-const NEW_WINDOW_MS    = 7 * 24 * 60 * 60_000;
-const INSTALL_GRACE_MS = 7 * 24 * 60 * 60_000;
-const REGISTRY_KEY     = 'nexus_perp_first_seen_v3';
-const INSTALL_KEY      = 'nexus_install_ts_v3';
+// ─────────────────────────────────────────────────────────────────────
+// NEW LISTINGS — strict 3-day window using real listing dates from
+// Hyperliquid's candleSnapshot endpoint.
+//
+// We fetch the earliest 1d candle for each perp; its timestamp is the
+// effective listing date. Cached forever in localStorage per coin.
+// Only perps with listing date within NEW_WINDOW_MS show in the tab.
+// ─────────────────────────────────────────────────────────────────────
+const NEW_WINDOW_MS    = 3 * 24 * 60 * 60_000;  // 3 days, strict
+const LISTING_KEY      = 'nexus_perp_listing_dates_v1';
+const HL_INFO_URL      = '/api/hyperliquid';
 
-function loadFirstSeenRegistry() {
+function loadListingDates() {
   try {
-    const raw = localStorage.getItem(REGISTRY_KEY);
+    const raw = localStorage.getItem(LISTING_KEY);
     return raw ? JSON.parse(raw) : {};
   } catch { return {}; }
 }
-function saveFirstSeenRegistry(reg) {
-  try { localStorage.setItem(REGISTRY_KEY, JSON.stringify(reg)); } catch {}
+function saveListingDates(map) {
+  try { localStorage.setItem(LISTING_KEY, JSON.stringify(map)); } catch {}
 }
-function getOrSetInstallTs() {
+
+// Fetch listing date for a single coin via candleSnapshot.
+// Returns timestamp (ms) of earliest 1d candle, or null on failure.
+async function fetchListingDate(coin) {
   try {
-    const v = localStorage.getItem(INSTALL_KEY);
-    if (v) return Number(v);
-    const now = Date.now();
-    localStorage.setItem(INSTALL_KEY, String(now));
-    return now;
-  } catch { return Date.now(); }
+    const res = await fetch(HL_INFO_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'candleSnapshot',
+        req: { coin, interval: '1d', startTime: 0, endTime: Date.now() }
+      })
+    });
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data) || data.length === 0) return null;
+    // Each candle: { t: openTime, T: closeTime, s: coin, ... }
+    const first = data[0];
+    const ts = first?.t || first?.T;
+    return typeof ts === 'number' && ts > 0 ? ts : null;
+  } catch { return null; }
 }
 
 function passesBaseFilter(p) {
@@ -1146,42 +1166,27 @@ function passesBaseFilter(p) {
   return true;
 }
 
-function filterNewListings(allPerps) {
+// Filter to perps listed within NEW_WINDOW_MS. Requires a populated
+// listingDateMap — perps without a known listing date are excluded
+// (the effect that calls fetchListingDate will fill them in).
+function filterNewListings(allPerps, listingDateMap) {
   if (!Array.isArray(allPerps) || allPerps.length === 0) return [];
-
-  // Step 1: live, tradeable, non-HIP-3 perps.
+  const now = Date.now();
   const live = allPerps.filter(passesBaseFilter);
 
-  // Step 2: record first-seen for anything new this fetch.
-  const reg = loadFirstSeenRegistry();
-  const now = Date.now();
-  let changed = false;
-  for (const p of live) {
-    if (!reg[p.id]) { reg[p.id] = now; changed = true; }
-  }
-  if (changed) saveFirstSeenRegistry(reg);
+  const candidates = live
+    .filter(p => {
+      const listedAt = listingDateMap[p.id];
+      if (!listedAt) return false;
+      return (now - listedAt) < NEW_WINDOW_MS;
+    })
+    .sort((a, b) => (listingDateMap[b.id] || 0) - (listingDateMap[a.id] || 0));
 
-  // Step 3: pick "new" perps.
-  const installTs = getOrSetInstallTs();
-  const inGrace   = (now - installTs) < INSTALL_GRACE_MS;
-
-  let candidates;
-  if (inGrace) {
-    // Bootstrap window: show recent additions by assetIndex desc.
-    // (HL adds new perps at higher indices, so this is a decent proxy
-    // until our registry has 7+ days of real first-seen data.)
-    candidates = live
-      .slice()
-      .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0))
-      .slice(0, 20);
-  } else {
-    // Steady state: only perps first seen in the last 7 days.
-    candidates = live
-      .filter(p => reg[p.id] && (now - reg[p.id]) < NEW_WINDOW_MS)
-      .sort((a, b) => (reg[b.id] || 0) - (reg[a.id] || 0));
-  }
-
-  return candidates.slice(0, 30).map((p, idx) => ({ ...p, newnessRank: idx }));
+  return candidates.slice(0, 30).map((p, idx) => ({
+    ...p,
+    newnessRank: idx,
+    listedAt: listingDateMap[p.id],
+  }));
 }
 
 // Freshness tag — rank-based only, no date math, no localStorage.
@@ -2347,6 +2352,7 @@ function PerpsTradeInner({ onConnectWallet }) {
   const [discoverSearch, setDiscoverSearch] = useState('');
   const [allPerps, setAllPerps]     = useState(() => loadCachedMarkets('nexus_allperps') || []);
   const [spotSymbols, setSpotSymbols] = useState(() => new Set());
+  const [listingDateMap, setListingDateMap] = useState(() => loadListingDates());
 
   const allPerpsRef = useRef(allPerps);
   useEffect(() => { allPerpsRef.current = allPerps; }, [allPerps]);
@@ -2560,9 +2566,54 @@ function PerpsTradeInner({ onConnectWallet }) {
     return () => { alive = false; };
   }, [activePair?.id, sparkMap]);
 
+  // When the New tab opens, fetch real listing dates for any perps we
+  // don't yet have. Cached forever in localStorage per coin.
   useEffect(() => {
     if (filter !== 'New') return;
-    const newRows = filterNewListings(allPerps);
+    if (!Array.isArray(allPerps) || allPerps.length === 0) return;
+
+    const live = allPerps.filter(passesBaseFilter);
+    // Only fetch for perps with high assetIndex (recently added) that we
+    // haven't already resolved. HL adds new perps at higher indices, so
+    // scanning the top 60 covers the realistic "recent" window cheaply.
+    const sorted = live.slice().sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0));
+    const unknown = sorted
+      .filter(p => listingDateMap[p.id] == null)
+      .slice(0, 60);
+    if (unknown.length === 0) return;
+
+    let alive = true;
+    (async () => {
+      // Throttle: 5 at a time
+      const chunkSize = 5;
+      const updates = {};
+      for (let i = 0; i < unknown.length; i += chunkSize) {
+        const chunk = unknown.slice(i, i + chunkSize);
+        const results = await Promise.all(chunk.map(p => fetchListingDate(p.base || p.id)));
+        if (!alive) return;
+        chunk.forEach((p, idx) => {
+          const ts = results[idx];
+          if (typeof ts === 'number' && ts > 0) {
+            updates[p.id] = ts;
+          } else {
+            // Mark as resolved-but-old so we don't refetch.
+            updates[p.id] = 1;
+          }
+        });
+      }
+      if (!alive || Object.keys(updates).length === 0) return;
+      setListingDateMap(prev => {
+        const next = { ...prev, ...updates };
+        saveListingDates(next);
+        return next;
+      });
+    })();
+    return () => { alive = false; };
+  }, [filter, allPerps]);
+
+  useEffect(() => {
+    if (filter !== 'New') return;
+    const newRows = filterNewListings(allPerps, listingDateMap);
     const missingSpark = newRows.filter(p => !Array.isArray(sparkMap[p.id]) || sparkMap[p.id].length === 0);
     const missingHour  = newRows.filter(p => oneHourMap[p.id] == null);
     if (missingSpark.length === 0 && missingHour.length === 0) return;
@@ -2588,7 +2639,7 @@ function PerpsTradeInner({ onConnectWallet }) {
       }
     })();
     return () => { alive = false; };
-  }, [filter, allPerps, sparkMap, oneHourMap]);
+  }, [filter, allPerps, sparkMap, oneHourMap, listingDateMap]);
 
   // Discover tab: lazy-fetch spark + 1h change for the currently filtered rows
   // (top 15 or search results). Limits to 30 max per pass to keep snappy.
@@ -2659,7 +2710,7 @@ function PerpsTradeInner({ onConnectWallet }) {
   // anything already in the curated "All" list. If user types a search, filter the
   // full universe by name instead of capping at 15.
   const filtered = useMemo(() => {
-    if (filter === 'New') return filterNewListings(allPerps);
+    if (filter === 'New') return filterNewListings(allPerps, listingDateMap);
     if (filter === 'Discover') {
       const curatedIds = new Set(marketData.map(p => p.id));
       const q = discoverSearch.trim().toUpperCase();
@@ -2677,7 +2728,7 @@ function PerpsTradeInner({ onConnectWallet }) {
         .slice(0, 15);
     }
     return marketData;
-  }, [marketData, allPerps, filter, discoverSearch]);
+  }, [marketData, allPerps, filter, discoverSearch, listingDateMap]);
 
   const totalVol = marketData.reduce((s, p) => s + Number(p.volume24h || 0), 0);
   const gainers  = marketData.filter(p => p.change > 0).length;
