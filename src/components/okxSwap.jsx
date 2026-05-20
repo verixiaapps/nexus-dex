@@ -1,166 +1,158 @@
 // =====================================================================
-// okxSwap.js — fetch OKX DEX aggregator swap instructions via our backend.
-//
-// The Nexus backend at /api/okx/dex/aggregator/swap-instruction handles:
-//   - HMAC signing with OKX credentials
-//   - Automatic 5% referral fee injection (server's OKX_SOL_FEE_PCT)
-//   - Routing the fee to OKX_FEE_WALLET_SOL (treasury)
-//
-// We just call our own backend and convert the response to web3.js
-// instruction objects ready to be added to a versioned transaction.
-//
-// Reference: OKX swap-instruction endpoint
-//   GET /api/v6/dex/aggregator/swap-instruction
-//   Returns: {
-//     code: "0",
-//     data: {
-//       addressLookupTableAccount: [<lut_address>, ...],
-//       createTokenAccountList: [<token_account>, ...],
-//       instructionLists: [
-//         { data: "<base64>", accounts: [{pubkey, isSigner, isWritable}], programId }
-//       ]
-//     }
-//   }
+// okxSwap.js — uses the EXACT same pattern as the working Swap.jsx.
+// All design choices below are copied verbatim from production code
+// that already executes OKX swaps successfully.
 // =====================================================================
 
-import { PublicKey, TransactionInstruction } from '@solana/web3.js';
+import { Buffer } from 'buffer';
+import {
+  PublicKey,
+  TransactionInstruction,
+  TransactionMessage,
+  VersionedTransaction,
+  AddressLookupTableAccount,
+} from '@solana/web3.js';
 
-const OKX_SOLANA_CHAIN = '501';
-const USDC_MINT_STR    = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const OKX_REFERRER     = 'nexus-dex';
+const OKX_SOL_NATIVE   = '11111111111111111111111111111111';
+const WSOL_MINT        = 'So11111111111111111111111111111111111111112';
+const USDC_SOLANA      = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
-// SUPPORTED INPUT TOKENS (extend later — keep small for fewer edge cases)
-// Native SOL uses the special "11111111111111111111111111111111" address.
+// Supported input tokens for Earn deposits. SOL uses the WSOL mint for
+// display/state, but gets translated to OKX's native placeholder via
+// toOkxSolAddress() before being sent to OKX.
 export const SUPPORTED_INPUT_TOKENS = [
-  { symbol: 'USDC', mint: USDC_MINT_STR,                                   decimals: 6, isNative: false },
-  { symbol: 'SOL',  mint: '11111111111111111111111111111111',               decimals: 9, isNative: true  },
-  { symbol: 'USDT', mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB',  decimals: 6, isNative: false },
-  { symbol: 'JUP',  mint: 'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN',   decimals: 6, isNative: false },
-  { symbol: 'BONK', mint: 'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263', decimals: 5, isNative: false },
+  { symbol: 'USDC', mint: USDC_SOLANA, decimals: 6 },
+  { symbol: 'SOL',  mint: WSOL_MINT,   decimals: 9 },
+  { symbol: 'USDT', mint: 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', decimals: 6 },
 ];
+
+// OKX expects "11111...111" for native SOL, not the WSOL mint.
+function toOkxSolAddress(mint) {
+  return mint === WSOL_MINT ? OKX_SOL_NATIVE : mint;
+}
 
 // =====================================================================
 // fetchOkxSwapInstructions
 //
-// Returns:
-//   {
-//     instructions: TransactionInstruction[],
-//     lutAddresses: string[],
-//     estimatedUsdcOut: number  (in human-readable USDC, not lamports)
-//   }
+// Returns { swapData } — the full OKX response. The caller uses
+// buildOkxSolTx to assemble the actual VersionedTransaction.
 // =====================================================================
 export async function fetchOkxSwapInstructions({
   fromTokenMint,
-  amountLamports,       // BigInt or string — raw smallest-unit amount of input token
+  amountLamports,
   userWalletAddress,
-  slippagePercent = '0.5',
 }) {
-  if (!fromTokenMint || !amountLamports || !userWalletAddress) {
-    throw new Error('Missing required OKX swap params');
-  }
-
   const params = new URLSearchParams({
-    chainIndex:       OKX_SOLANA_CHAIN,
-    amount:           String(amountLamports),
-    fromTokenAddress: fromTokenMint,
-    toTokenAddress:   USDC_MINT_STR,
-    slippagePercent,
-    userWalletAddress,
-    autoSlippage:     'false',
-    // NOTE: feePercent + toTokenReferrerWalletAddress are injected
-    // server-side by /api/okx proxy (injectOkxFee). We don't set them here.
+    chainIndex:        '501',
+    fromTokenAddress:  toOkxSolAddress(fromTokenMint),
+    toTokenAddress:    toOkxSolAddress(USDC_SOLANA),
+    amount:            String(amountLamports),
+    slippagePercent:   '15',                  // matches working Swap.jsx
+    userWalletAddress: userWalletAddress,
+    referrer:          OKX_REFERRER,
   });
 
-  const url = `/api/okx/dex/aggregator/swap-instruction?${params}`;
-  const res = await fetch(url);
+  const res = await fetch('/api/okx/dex/aggregator/swap-instruction?' + params.toString());
+  const j   = await res.json();
 
-  if (!res.ok) {
-    const text = await res.text().catch(() => '');
-    throw new Error(`OKX swap-instruction failed (${res.status}): ${text.slice(0, 200)}`);
+  if (j.code !== '0' || !j.data) {
+    throw new Error(j.msg || 'OKX swap-instruction failed');
   }
-
-  const body = await res.json();
-
-  // OKX returns { code: "0", data: { ... } } on success.
-  // On error it returns { code: "nonzero", msg: "..." } or { error: "..." }
-  if (body.code && body.code !== '0') {
-    throw new Error(`OKX error: ${body.msg || body.code}`);
-  }
-  if (body.error) {
-    throw new Error(`OKX error: ${body.error}`);
-  }
-
-  const data = body.data;
-  if (!data || !data.instructionLists || !Array.isArray(data.instructionLists)) {
-    throw new Error('OKX returned no instructions');
-  }
-
-  // Convert OKX's instruction format to web3.js TransactionInstruction
-  const instructions = data.instructionLists.map(ix => new TransactionInstruction({
-    programId: new PublicKey(ix.programId),
-    keys: (ix.accounts || []).map(k => ({
-      pubkey:     new PublicKey(k.pubkey),
-      isSigner:   Boolean(k.isSigner),
-      isWritable: Boolean(k.isWritable),
-    })),
-    data: Buffer.from(ix.data || '', 'base64'),
-  }));
-
-  // Worst-case USDC output (after slippage). This is the amount we can SAFELY
-  // tell Kamino to deposit, because the swap guarantees AT LEAST this much.
-  // If we use the estimate instead, slippage variance can cause the Kamino
-  // deposit to fail mid-tx with "insufficient USDC".
-  const minOutRaw = Number(
-    data.tx?.minToTokenAmount ||
-    data.routerResult?.minToTokenAmount ||
-    data.minToTokenAmount ||
-    0
-  );
-  const minUsdcOut = minOutRaw / 1e6;
-
-  // Estimated USDC output (after slippage) for UI preview. OKX returns this
-  // in various places depending on endpoint version; we try a few keys.
-  const estimatedRaw = Number(
-    data.toTokenAmount ||
-    data.tx?.minToTokenAmount ||
-    data.routerResult?.toTokenAmount ||
-    0
-  );
-  const estimatedUsdcOut = estimatedRaw / 1e6; // USDC has 6 decimals
-
-  return {
-    instructions,
-    lutAddresses: data.addressLookupTableAccount || [],
-    estimatedUsdcOut,
-    minUsdcOut,
-  };
+  return Array.isArray(j.data) ? j.data[0] : j.data;
 }
 
 // =====================================================================
-// fetchOkxQuote — lightweight quote for UI display only.
-// Doesn't return instructions. Used to show "~$X USDC" preview.
+// fetchOkxQuote — used for the live preview only (best-case estimate).
 // =====================================================================
 export async function fetchOkxQuote({ fromTokenMint, amountLamports }) {
   if (!fromTokenMint || !amountLamports) return null;
-  if (fromTokenMint === USDC_MINT_STR) return null; // no swap needed for USDC
+  if (fromTokenMint === USDC_SOLANA) return null;
 
   const params = new URLSearchParams({
-    chainIndex:       OKX_SOLANA_CHAIN,
+    chainIndex:       '501',
+    fromTokenAddress: toOkxSolAddress(fromTokenMint),
+    toTokenAddress:   USDC_SOLANA,
     amount:           String(amountLamports),
-    fromTokenAddress: fromTokenMint,
-    toTokenAddress:   USDC_MINT_STR,
-    slippagePercent:  '0.5',
   });
-
   try {
-    const res = await fetch(`/api/okx/dex/aggregator/quote?${params}`);
-    if (!res.ok) return null;
-    const body = await res.json();
-    if (body.code && body.code !== '0') return null;
-    const data = body.data?.[0] || body.data;
-    if (!data) return null;
-    const amt = Number(data.toTokenAmount || 0) / 1e6;
-    return amt > 0 ? amt : null;
+    const res = await fetch('/api/okx/dex/aggregator/quote?' + params.toString());
+    const j   = await res.json();
+    if (j.code !== '0' || !j.data) return null;
+    const d = Array.isArray(j.data) ? j.data[0] : j.data;
+    const out = Number(d.toTokenAmount) / 1e6;
+    return out > 0 ? out : null;
   } catch {
     return null;
   }
+}
+
+// =====================================================================
+// Convert one OKX instruction to a web3.js TransactionInstruction.
+// =====================================================================
+function deserializeOkxIx(ix) {
+  try {
+    if (!ix || !ix.programId || !Array.isArray(ix.accounts) || !ix.data) return null;
+    return new TransactionInstruction({
+      programId: new PublicKey(ix.programId),
+      keys: ix.accounts.map(a => ({
+        pubkey:     new PublicKey(a.pubkey || a.publicKey || a.address),
+        isSigner:   !!a.isSigner,
+        isWritable: !!a.isWritable,
+      })),
+      data: Buffer.from(ix.data, 'base64'),
+    });
+  } catch {
+    return null;
+  }
+}
+
+// =====================================================================
+// buildOkxSolTx — build a signed-ready VersionedTransaction from OKX's
+// swap-instruction response. Pattern copied directly from Swap.jsx.
+//
+// OKX can return one of two shapes:
+//   1. A pre-serialized tx (swapData.tx.data or swapData.data) — we just
+//      deserialize and return.
+//   2. instructionLists[] + addressLookupTableAccount[] — we build it
+//      ourselves from the parts.
+// =====================================================================
+export async function buildOkxSolTx({ connection, userPubkey, swapData }) {
+  // Try pre-serialized tx first
+  if (swapData.tx && swapData.tx.data) {
+    try { return VersionedTransaction.deserialize(Buffer.from(swapData.tx.data, 'base64')); }
+    catch {}
+  }
+  if (swapData.data && typeof swapData.data === 'string') {
+    try { return VersionedTransaction.deserialize(Buffer.from(swapData.data, 'base64')); }
+    catch {}
+  }
+
+  // Build from instructions
+  const ixs = (swapData.instructionLists || []).map(deserializeOkxIx).filter(Boolean);
+  if (!ixs.length) throw new Error('No usable instructions from OKX');
+
+  // Fetch LUT accounts. Pattern from Swap.jsx: getAccountInfo +
+  // AddressLookupTableAccount.deserialize, not getAddressLookupTable.
+  const lutAddrs = Array.isArray(swapData.addressLookupTableAccount)
+    ? swapData.addressLookupTableAccount : [];
+  const luts = (await Promise.all(lutAddrs.map(async addr => {
+    try {
+      const acct = await connection.getAccountInfo(new PublicKey(addr));
+      if (!acct) return null;
+      return new AddressLookupTableAccount({
+        key: new PublicKey(addr),
+        state: AddressLookupTableAccount.deserialize(acct.data),
+      });
+    } catch { return null; }
+  }))).filter(Boolean);
+
+  const { blockhash } = await connection.getLatestBlockhash('finalized');
+  return new VersionedTransaction(
+    new TransactionMessage({
+      payerKey:        userPubkey,
+      recentBlockhash: blockhash,
+      instructions:    ixs,
+    }).compileToV0Message(luts),
+  );
 }
