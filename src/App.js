@@ -6,7 +6,6 @@ import SwapWidget from './components/SwapWidget.jsx';
 import Portfolio from './components/Portfolio.js';
 import TokenDetail from './components/TokenDetail.js';
 import PerpsLanding from './components/PerpsLanding.jsx';
-import Stocks from './components/Stocks.jsx';
 import Earn from './components/Earn.jsx';
 
 const C = {
@@ -59,16 +58,15 @@ async function screenAddress(address) {
 
 const PATH_TO_TAB = {
   '/': 'swap', '/swap': 'swap',
-  '/stocks': 'stocks',
   '/perps': 'perps',
+  '/vip': 'perps',
   '/sports': 'sports',
   '/earn': 'earn',
   '/portfolio': 'portfolio',
 };
 const TAB_TO_PATH = {
   swap: '/swap',
-  stocks: '/stocks',
-  perps: '/perps',
+  perps: '/vip',
   sports: '/sports',
   earn: '/earn',
   portfolio: '/portfolio',
@@ -386,17 +384,15 @@ function WalletModal({ open, onClose }) {
 }
 
 function IconSwap()        { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M7 16V4m0 0L3 8m4-4l4 4"/><path d="M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>; }
-function IconPerps()       { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><polyline points="22 7 13.5 15.5 8.5 10.5 2 17" /><polyline points="16 7 22 7 22 13" /></svg>; }
-function IconStocks()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"><path d="M3 3v18h18"/><path d="M7 14l4-4 4 4 5-5"/></svg>; }
+function IconVip()         { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M2 7l4 10 6-13 6 13 4-10"/><path d="M2 21h20"/></svg>; }
 function IconSports()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 6.5l11 11"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96L12 12.01l8.73-5.05"/><path d="M12 22.08V12"/></svg>; }
 function IconWallet()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
 function IconEarn()        { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 6v12"/><path d="M15 9.5c0-1.4-1.3-2.5-3-2.5s-3 1.1-3 2.5S10.3 12 12 12s3 1.1 3 2.5-1.3 2.5-3 2.5-3-1.1-3-2.5"/></svg>; }
 
-const NAV_ICONS = { swap: IconSwap, stocks: IconStocks, perps: IconPerps, sports: IconSports, earn: IconEarn, portfolio: IconWallet };
+const NAV_ICONS = { swap: IconSwap, perps: IconVip, sports: IconSports, earn: IconEarn, portfolio: IconWallet };
 const NAV_TABS = [
   { id: 'swap',        label: 'Swap' },
-  { id: 'stocks',      label: 'Stocks' },
-  { id: 'perps',       label: 'Perps' },
+  { id: 'perps',       label: 'VIP' },
   { id: 'earn',        label: 'Earn' },
   { id: 'portfolio',   label: 'Wallet' },
 ];
@@ -454,7 +450,6 @@ function AppInner() {
       </header>
       <main style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '24px 16px 100px', width: '100%' }}>
         {tab === 'swap' && <SwapWidget {...sharedProps} />}
-        {tab === 'stocks' && <Stocks onConnectWallet={openWallet} />}
         {tab === 'perps' && <PerpsLanding onConnectWallet={openWallet} />}
         {tab === 'earn' && <Earn {...sharedProps} />}
         {tab === 'portfolio' && <Portfolio onSelectCoin={goToToken} onConnectWallet={openWallet} />}
