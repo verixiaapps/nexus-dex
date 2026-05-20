@@ -2863,3 +2863,4 @@ export default function PerpsTrade({ onConnectWallet }) {
   }
   return <PerpsTradeInner onConnectWallet={onConnectWallet}/>;
 }
+ 
