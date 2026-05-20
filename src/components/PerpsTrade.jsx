@@ -3,7 +3,7 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
 import { useNexusWallet } from '../WalletContext.js';
 import { signL1Action } from '@nktkas/hyperliquid/signing';
-import { 
+import {
   createConfig as lifiCreateConfig,
   config as lifiConfig,
   Solana as LifiSolana,
@@ -1092,34 +1092,96 @@ function hasSpotMatch(perpName, spotSymbols) {
 // isolated mode), then by assetIndex desc. Surfaces actual recent
 // additions instead of zombie listings.
 // ─────────────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────────────
+// NEW LISTINGS — 7-day rolling window via first-seen tracking
+//
+// Hyperliquid does NOT expose listing timestamps on regular perps
+// (verified against the live meta endpoint — only `xyz:` HIP-3 perps
+// carry timestamps). So we track first-seen times ourselves.
+//
+// Every market refresh, `updateFirstSeen` records any perp not yet in
+// the registry. After 7 days the perp drops off the NEW tab.
+//
+// Bootstrap problem: on first install, everything is "first seen now",
+// which would show 200+ perps as new. Solution: record install time;
+// during the first 7 days, ignore first-seen and fall back to
+// assetIndex desc among live (non-delisted, non-HIP-3) markets — gives
+// a reasonable approximation of recent listings.
+//
+// localStorage eviction (iOS Safari): if registry vanishes, we just
+// re-bootstrap. Tab is never empty.
+// ─────────────────────────────────────────────────────────────────────
+const NEW_WINDOW_MS    = 7 * 24 * 60 * 60_000;
+const INSTALL_GRACE_MS = 7 * 24 * 60 * 60_000;
+const REGISTRY_KEY     = 'nexus_perp_first_seen_v3';
+const INSTALL_KEY      = 'nexus_install_ts_v3';
+
+function loadFirstSeenRegistry() {
+  try {
+    const raw = localStorage.getItem(REGISTRY_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch { return {}; }
+}
+function saveFirstSeenRegistry(reg) {
+  try { localStorage.setItem(REGISTRY_KEY, JSON.stringify(reg)); } catch {}
+}
+function getOrSetInstallTs() {
+  try {
+    const v = localStorage.getItem(INSTALL_KEY);
+    if (v) return Number(v);
+    const now = Date.now();
+    localStorage.setItem(INSTALL_KEY, String(now));
+    return now;
+  } catch { return Date.now(); }
+}
+
+function passesBaseFilter(p) {
+  if (!(p.price > 0) || !Number.isInteger(p.assetIndex)) return false;
+  if (p.isDelisted === true) return false;
+  // No HIP-3 builder perps.
+  if (typeof p.id === 'string' && p.id.includes(':')) return false;
+  if (p.assetIndex >= 100000) return false;
+  // Drop dead markets.
+  if (!(p.volume24h >= 10_000)) return false;
+  return true;
+}
+
 function filterNewListings(allPerps) {
   if (!Array.isArray(allPerps) || allPerps.length === 0) return [];
 
-  return allPerps
-    .filter(p => {
-      if (!(p.price > 0) || !Number.isInteger(p.assetIndex)) return false;
+  // Step 1: live, tradeable, non-HIP-3 perps.
+  const live = allPerps.filter(passesBaseFilter);
 
-      // Drop delisted markets (kills LIT and similar zombies).
-      if (p.isDelisted === true) return false;
+  // Step 2: record first-seen for anything new this fetch.
+  const reg = loadFirstSeenRegistry();
+  const now = Date.now();
+  let changed = false;
+  for (const p of live) {
+    if (!reg[p.id]) { reg[p.id] = now; changed = true; }
+  }
+  if (changed) saveFirstSeenRegistry(reg);
 
-      // Drop HIP-3 builder perps (separate category).
-      if (typeof p.id === 'string' && p.id.includes(':')) return false;
-      if (p.assetIndex >= 100000) return false;
+  // Step 3: pick "new" perps.
+  const installTs = getOrSetInstallTs();
+  const inGrace   = (now - installTs) < INSTALL_GRACE_MS;
 
-      // ISOLATED-ONLY: HL launches every new perp in isolated-margin mode
-      // before graduating it to cross-margin. So onlyIsolated == genuinely
-      // new (or recently added). This is the cleanest newness signal HL
-      // gives us — no listing timestamps exist in their API.
-      if (p.onlyIsolated !== true) return false;
+  let candidates;
+  if (inGrace) {
+    // Bootstrap window: show recent additions by assetIndex desc.
+    // (HL adds new perps at higher indices, so this is a decent proxy
+    // until our registry has 7+ days of real first-seen data.)
+    candidates = live
+      .slice()
+      .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0))
+      .slice(0, 20);
+  } else {
+    // Steady state: only perps first seen in the last 7 days.
+    candidates = live
+      .filter(p => reg[p.id] && (now - reg[p.id]) < NEW_WINDOW_MS)
+      .sort((a, b) => (reg[b.id] || 0) - (reg[a.id] || 0));
+  }
 
-      // Drop dead markets.
-      if (!(p.volume24h >= 10_000)) return false;
-
-      return true;
-    })
-    .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0))
-    .slice(0, 30)
-    .map((p, idx) => ({ ...p, newnessRank: idx }));
+  return candidates.slice(0, 30).map((p, idx) => ({ ...p, newnessRank: idx }));
 }
 
 // Freshness tag — rank-based only, no date math, no localStorage.
