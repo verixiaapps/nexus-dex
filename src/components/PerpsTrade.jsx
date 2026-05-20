@@ -994,9 +994,10 @@ async function placeOrder({
 }
 
 async function fetchMarketSnapshot({ spotSymbols = new Set(), oneHourMap = {}, sparkMap = {} } = {}) {
-  const [metaAndCtxs, mids] = await Promise.all([
+  const [metaAndCtxs, mids, perpDexsRaw] = await Promise.all([
     hlRequest({ type: 'metaAndAssetCtxs' }),
     hlRequest({ type: 'allMids' }),
+    hlRequest({ type: 'perpDexs' }).catch(() => null),
   ]);
   const meta      = Array.isArray(metaAndCtxs) ? metaAndCtxs[0] : {};
   const assetCtxs = Array.isArray(metaAndCtxs) ? metaAndCtxs[1] || [] : [];
@@ -1034,12 +1035,62 @@ async function fetchMarketSnapshot({ spotSymbols = new Set(), oneHourMap = {}, s
       funding:     parseFloat(ctx.funding      || 0),
       hasSpot:     hasSpotMatch(u.name, spotSymbols),
       hot:         false,
-      // Universe flags from meta.universe — used by filterNewListings to
-      // drop delisted markets and prioritize isolated-mode newcomers.
       isDelisted:   u.isDelisted,
       onlyIsolated: u.onlyIsolated,
     };
   });
+
+  // HIP-3 builder dexes — pre-IPO, commodities, etc. Each builder dex
+  // has its own universe; we fetch each, prefix perp names with
+  // `<dex>:` per HL convention, and merge into the result.
+  const hip3Names = Array.isArray(perpDexsRaw)
+    ? perpDexsRaw.filter(d => d && typeof d === 'object' && d.name).map(d => d.name)
+    : [];
+  if (hip3Names.length > 0) {
+    const hip3Results = await Promise.allSettled(
+      hip3Names.map(dexName => hlRequest({ type: 'metaAndAssetCtxs', dex: dexName }))
+    );
+    hip3Results.forEach((res, dexIdx) => {
+      if (res.status !== 'fulfilled' || !Array.isArray(res.value)) return;
+      const dexName = hip3Names[dexIdx];
+      const dMeta   = res.value[0] || {};
+      const dCtxs   = res.value[1] || [];
+      const dUniv   = (dMeta.universe || []).map((u, i) => ({
+        name: u.name, index: i,
+        maxLeverage: u.maxLeverage || 5,
+        szDecimals: Number.isInteger(u.szDecimals) ? u.szDecimals : 4,
+        isDelisted: u.isDelisted === true,
+        onlyIsolated: u.onlyIsolated === true,
+        ctx: dCtxs[i] || {},
+      }));
+      dUniv.forEach((u, i) => {
+        const ctx = u.ctx;
+        const mid = parseFloat(ctx.midPx || ctx.markPx || 0) || 0;
+        const prev = parseFloat(ctx.prevDayPx || 0);
+        const change = mid > 0 && prev > 0 ? ((mid - prev) / prev) * 100 : 0;
+        const fullName = `${dexName}:${u.name}`;
+        all.push({
+          id: fullName, base: u.name,
+          assetIndex: 100000 + (dexIdx * 1000) + i, // synthetic, >= 100000 = HIP-3
+          szDecimals: u.szDecimals,
+          leverage: u.maxLeverage,
+          price: mid,
+          change,
+          change1h: 0,
+          spark: [],
+          volume24h: parseFloat(ctx.dayNtlVlm || 0),
+          openInterest: parseFloat(ctx.openInterest || 0),
+          funding: parseFloat(ctx.funding || 0),
+          hasSpot: false,
+          hot: false,
+          isDelisted: u.isDelisted,
+          onlyIsolated: u.onlyIsolated,
+          dexName, // HIP-3 marker
+        });
+      });
+    });
+  }
+
   const allById = new Map(all.map(p => [p.id, p]));
   const curated = PERPS_PAIRS.map(p => {
     const found = allById.get(p.id);
@@ -1173,13 +1224,12 @@ function passesBaseFilter(p) {
 }
 
 // HIP-3 perp filter — used by the Funding tab.
-// More permissive volume floor since new HIP-3s often have thin
-// volume in the first hours but extreme funding is the signal.
+// No volume floor: brand-new launches need to surface immediately
+// (the first hour often has near-zero volume but extreme funding).
 function passesHip3Filter(p) {
   if (!(p.price > 0) || !Number.isInteger(p.assetIndex)) return false;
   if (p.isDelisted === true) return false;
   if (!isHip3(p)) return false;
-  if (!(p.volume24h >= 5_000)) return false;
   return true;
 }
 
@@ -2631,7 +2681,12 @@ function PerpsTradeInner({ onConnectWallet }) {
       const updates = {};
       for (let i = 0; i < unknown.length; i += chunkSize) {
         const chunk = unknown.slice(i, i + chunkSize);
-        const results = await Promise.all(chunk.map(p => fetchListingDate(p.base || p.id)));
+        const results = await Promise.all(chunk.map(p => {
+          // HIP-3 candles need the full prefixed name (e.g. "xyz:XYZ100");
+          // regular perps use the bare symbol (e.g. "CHIP").
+          const coin = isHip3(p) ? p.id : (p.base || p.id);
+          return fetchListingDate(coin);
+        }));
         if (!alive) return;
         chunk.forEach((p, idx) => {
           const ts = results[idx];
@@ -2825,6 +2880,23 @@ function PerpsTradeInner({ onConnectWallet }) {
             ))}
           </div>
         </div>
+
+        {(filter === 'New' || filter === 'Funding') && (() => {
+          const totalPerps = allPerps.length;
+          const regular    = allPerps.filter(passesBaseFilter).length;
+          const hip3       = allPerps.filter(p => isHip3(p) && p.price > 0).length;
+          const dexes      = new Set(allPerps.filter(isHip3).map(p => p.dexName || (p.id || '').split(':')[0])).size;
+          const resolved   = Object.keys(listingDateMap).length;
+          const inWindow   = filter === 'Funding'
+            ? filterFundingHip3(allPerps, listingDateMap).length
+            : filterNewListings(allPerps, listingDateMap).length;
+          return (
+            <div style={{ margin: '0 0 10px', padding: '8px 10px', borderRadius: 10, background: 'rgba(151,252,228,.06)', border: '1px solid rgba(151,252,228,.20)', fontSize: 10, color: C.muted, fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.5 }}>
+              <div>perps:{totalPerps} · regular:{regular} · hip3:{hip3} · dexes:{dexes}</div>
+              <div>listing-dates-resolved:{resolved} · in-7d-window:{inWindow} · tab:{filter}</div>
+            </div>
+          );
+        })()}
 
         {filter === 'Discover' && (
           <div style={{ marginBottom: 10, position: 'relative' }}>
