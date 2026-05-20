@@ -295,7 +295,7 @@ function deriveUsdcAta(ownerPubkeyB58) {
     ATA_PROGRAM_ID,
   );
   return ata;
-}
+} 
 
 // Fetch a wallet's holdings for any SPL or Token-2022 mint. Returns the
 // human-readable balance (e.g. 0.00247) and the atomic amount (BigInt).
