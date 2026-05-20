@@ -1,15 +1,15 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
-  Connection, PublicKey, TransactionMessage, VersionedTransaction,
+  PublicKey, TransactionMessage, VersionedTransaction,
   ComputeBudgetProgram,
-} from '@solana/web3.js'; 
+} from '@solana/web3.js';
 import {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountIdempotentInstruction,
   createTransferInstruction,
 } from '@solana/spl-token';
-import { useWallet } from '@solana/wallet-adapter-react';
- 
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
+
 import { readEarnPositions } from './earnPositions';
 import {
   SUPPORTED_INPUT_TOKENS,
@@ -46,7 +46,9 @@ const C = {
 // =====================================================================
 
 // ---------- Config ----------
-const RPC_URL   = process.env.REACT_APP_RPC_URL || 'https://api.mainnet-beta.solana.com';
+// RPC is provided by ConnectionProvider in index.js (reads REACT_APP_SOLANA_RPC).
+// We use useConnection() below to consume the same shared connection as the
+// rest of the app — no separate env var, no duplicate Connection instance.
 const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v');
 
 // Kamino main market + USDC reserve (mainnet)
@@ -220,6 +222,8 @@ function DisclosureModal({ onAccept, onCancel }) {
 // =====================================================================
 export default function Earn({ isConnected, onConnectWallet }) {
   const { publicKey: walletPk, sendTransaction } = useWallet();
+  // Shared RPC connection from ConnectionProvider (uses REACT_APP_SOLANA_RPC).
+  const { connection } = useConnection();
   const walletAddress = walletPk ? walletPk.toBase58() : null;
 
   const [apy, setApy]               = useState(null);
@@ -317,6 +321,7 @@ export default function Earn({ isConnected, onConnectWallet }) {
 
   const runDeposit = useCallback(async () => {
     if (!sendTransaction) { setMsg('Wallet cannot send transactions'); return; }
+    if (!connection)      { setMsg('RPC connection not ready');         return; }
     if (!TREASURY) {
       setMsg('Treasury wallet not configured (set REACT_APP_NEXUS_TREASURY)');
       return;
@@ -325,7 +330,6 @@ export default function Earn({ isConnected, onConnectWallet }) {
     setBusy(true); setMsg(''); setTxSig(''); setStatus('idle');
 
     try {
-      const conn = new Connection(RPC_URL, 'confirmed');
       const user = toPublicKey(walletPk);
       const isUsdc = selectedToken.symbol === 'USDC';
 
@@ -345,15 +349,15 @@ export default function Earn({ isConnected, onConnectWallet }) {
           userWalletAddress: walletAddress,
         });
         const swapTx = await buildOkxSolTx({
-          connection: conn, userPubkey: user, swapData,
+          connection, userPubkey: user, swapData,
         });
-        const swapSig = await sendTransaction(swapTx, conn, {
+        const swapSig = await sendTransaction(swapTx, connection, {
           skipPreflight:       false,   // run preflight simulation
           preflightCommitment: 'processed',
           maxRetries:          3,
         });
         setTxSig(swapSig);
-        await conn.confirmTransaction(swapSig, 'confirmed');
+        await connection.confirmTransaction(swapSig, 'confirmed');
         setStatus('swapped');
       }
 
@@ -379,7 +383,7 @@ export default function Earn({ isConnected, onConnectWallet }) {
       } else {
         // Read the user's REAL USDC balance after the swap. This is the
         // only way to know exactly what they got (slippage is unpredictable).
-        const bal = await conn.getTokenAccountBalance(userUsdcAta);
+        const bal = await connection.getTokenAccountBalance(userUsdcAta);
         const realBalLamports = BigInt(bal?.value?.amount || '0');
         if (realBalLamports === 0n) {
           throw new Error('Swap completed but no USDC found in wallet. Check the swap tx and retry.');
@@ -406,24 +410,24 @@ export default function Earn({ isConnected, onConnectWallet }) {
       }
 
       const { instructions: depositIxs, lookupTables: kaminoLuts } = await fetchKaminoDepositIxs({
-        connection: conn, walletAddress, amountDecimal: depositDecimal,
+        connection, walletAddress, amountDecimal: depositDecimal,
       });
       ixs.push(...depositIxs);
 
-      const { blockhash } = await conn.getLatestBlockhash('finalized');
+      const { blockhash } = await connection.getLatestBlockhash('finalized');
       const vtx = new VersionedTransaction(new TransactionMessage({
         payerKey:        user,
         recentBlockhash: blockhash,
         instructions:    ixs,
       }).compileToV0Message(kaminoLuts));
 
-      const depositSig = await sendTransaction(vtx, conn, {
+      const depositSig = await sendTransaction(vtx, connection, {
         skipPreflight:       false,   // run preflight simulation
         preflightCommitment: 'processed',
         maxRetries:          3,
       });
       setTxSig(depositSig);
-      await conn.confirmTransaction(depositSig, 'confirmed');
+      await connection.confirmTransaction(depositSig, 'confirmed');
 
       setStatus('done');
       setMsg('');
@@ -445,7 +449,7 @@ export default function Earn({ isConnected, onConnectWallet }) {
     } finally {
       setBusy(false);
     }
-  }, [amount, walletPk, sendTransaction, walletAddress, refreshPositions, selectedToken, status]);
+  }, [amount, walletPk, sendTransaction, walletAddress, refreshPositions, selectedToken, status, connection]);
 
   useEffect(() => { runDepositRef.current = runDeposit; }, [runDeposit]);
 
