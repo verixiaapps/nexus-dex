@@ -127,16 +127,21 @@ async function fetchKaminoDepositIxs({ connection, walletAddress, amountDecimal 
   //   lutsByAddress: { [lutAddress]: [refAddress, ...] }
 
   // Convert API "instruction" objects into TransactionInstruction
-  const instructions = body.instructions.map(ix => ({
-    programId: new PublicKey(ix.programAddress),
-    keys: ix.accounts.map(a => ({
-      pubkey:     new PublicKey(a.address),
-      // 'role' values per Solana spec: READONLY, WRITABLE, READONLY_SIGNER, WRITABLE_SIGNER
-      isSigner:   /SIGNER$/.test(a.role || ''),
-      isWritable: /^WRITABLE/.test(a.role || ''),
-    })),
-    data: ix.data ? Buffer.from(ix.data, 'base64') : Buffer.alloc(0),
-  }));
+  const instructions = body.instructions.map((ix, i) => {
+    if (!ix.data) {
+      throw new Error(`Kamino returned instruction #${i} with no data field`);
+    }
+    return {
+      programId: new PublicKey(ix.programAddress),
+      keys: ix.accounts.map(a => ({
+        pubkey:     new PublicKey(a.address),
+        // 'role' values per Solana spec: READONLY, WRITABLE, READONLY_SIGNER, WRITABLE_SIGNER
+        isSigner:   /SIGNER$/.test(a.role || ''),
+        isWritable: /^WRITABLE/.test(a.role || ''),
+      })),
+      data: Buffer.from(ix.data, 'base64'),
+    };
+  });
 
   // Fetch each LUT account from chain
   const lutAddresses = Object.keys(body.lutsByAddress || {});
@@ -563,11 +568,11 @@ export default function Earn({ isConnected, onConnectWallet }) {
           <div style={{ marginBottom: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between',
               fontSize: 11, color: C.muted, marginBottom: 4 }}>
-              <span>Swap to USDC via OKX</span>
-              <span>{quoteLoading ? '...' : quote ? `~${fmtUSD(quote)}` : '—'}</span>
+              <span>You'll deposit at least</span>
+              <span>{quoteLoading ? '...' : quote ? `~${fmtUSD(quote * 0.995)} USDC` : '—'}</span>
             </div>
             <div style={{ fontSize: 10, color: C.muted }}>
-              Includes 5% swap fee · 0% Kamino fee on swapped deposits
+              5% OKX swap fee · No Kamino routing fee
             </div>
           </div>
         )}
