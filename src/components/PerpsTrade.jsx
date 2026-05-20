@@ -2706,7 +2706,7 @@ function PerpsTradeInner({ onConnectWallet }) {
       });
     })();
     return () => { alive = false; };
-  }, [filter, allPerps]);
+  }, [filter, allPerps, listingDateMap]);
 
   useEffect(() => {
     if (filter !== 'New' && filter !== 'Funding') return;
@@ -2890,10 +2890,22 @@ function PerpsTradeInner({ onConnectWallet }) {
           const inWindow   = filter === 'Funding'
             ? filterFundingHip3(allPerps, listingDateMap).length
             : filterNewListings(allPerps, listingDateMap).length;
+          // Newest 3 resolved listings (excluding sentinel "1")
+          const now = Date.now();
+          const newest = Object.entries(listingDateMap)
+            .filter(([, ts]) => ts > 1000)
+            .sort((a, b) => b[1] - a[1])
+            .slice(0, 3)
+            .map(([id, ts]) => {
+              const days = Math.floor((now - ts) / 86_400_000);
+              return `${id}(${days}d)`;
+            })
+            .join(' ');
           return (
             <div style={{ margin: '0 0 10px', padding: '8px 10px', borderRadius: 10, background: 'rgba(151,252,228,.06)', border: '1px solid rgba(151,252,228,.20)', fontSize: 10, color: C.muted, fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.5 }}>
               <div>perps:{totalPerps} · regular:{regular} · hip3:{hip3} · dexes:{dexes}</div>
-              <div>listing-dates-resolved:{resolved} · in-7d-window:{inWindow} · tab:{filter}</div>
+              <div>resolved:{resolved} · in-{Math.round(NEW_WINDOW_MS/86_400_000)}d-window:{inWindow} · tab:{filter}</div>
+              <div>newest: {newest || '(none)'}</div>
             </div>
           );
         })()}
