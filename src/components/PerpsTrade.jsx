@@ -1171,7 +1171,7 @@ function hasSpotMatch(perpName, spotSymbols) {
 //              sorted by absolute funding rate desc — catches pre-IPO
 //              and other builder-deployed launches at peak euphoria
 // ─────────────────────────────────────────────────────────────────────
-const NEW_WINDOW_MS    = 7 * 24 * 60 * 60_000;  // 7 days
+const NEW_WINDOW_MS    = 14 * 24 * 60 * 60_000;  // 14 days
 const LISTING_KEY      = 'nexus_perp_listing_dates_v1';
 
 function loadListingDates() {
