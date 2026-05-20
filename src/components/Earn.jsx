@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Connection, PublicKey, TransactionMessage, VersionedTransaction,
   ComputeBudgetProgram,
-} from '@solana/web3.js';
+} from '@solana/web3.js'; 
 import {
   getAssociatedTokenAddress,
   createAssociatedTokenAccountIdempotentInstruction,
