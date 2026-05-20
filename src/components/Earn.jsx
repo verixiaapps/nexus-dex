@@ -4,7 +4,7 @@ const C = {
   ink: '#e6efff', inkStr: '#f5fafe',
   hl: '#97fce4',
 };
-
+ 
 export default function Earn() {
   return (
     <div style={{
