@@ -3,7 +3,7 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
 import { useNexusWallet } from '../WalletContext.js';
 import { signL1Action } from '@nktkas/hyperliquid/signing';
-import {  
+import {
   createConfig as lifiCreateConfig,
   config as lifiConfig,
   Solana as LifiSolana,
@@ -1001,10 +1001,13 @@ async function fetchMarketSnapshot({ spotSymbols = new Set(), oneHourMap = {}, s
   const meta      = Array.isArray(metaAndCtxs) ? metaAndCtxs[0] : {};
   const assetCtxs = Array.isArray(metaAndCtxs) ? metaAndCtxs[1] || [] : [];
   const universe  = (meta.universe || []).map((u, i) => ({
-    name: u.name, index: i,
-    maxLeverage: u.maxLeverage || 10,
-    szDecimals:  Number.isInteger(u.szDecimals) ? u.szDecimals : 4,
-    ctx: assetCtxs[i] || {},
+    name:         u.name,
+    index:        i,
+    maxLeverage:  u.maxLeverage || 10,
+    szDecimals:   Number.isInteger(u.szDecimals) ? u.szDecimals : 4,
+    isDelisted:   u.isDelisted   === true,
+    onlyIsolated: u.onlyIsolated === true,
+    ctx:          assetCtxs[i] || {},
   }));
   const priceMap  = {};
   if (mids && !Array.isArray(mids)) {
@@ -1031,6 +1034,10 @@ async function fetchMarketSnapshot({ spotSymbols = new Set(), oneHourMap = {}, s
       funding:     parseFloat(ctx.funding      || 0),
       hasSpot:     hasSpotMatch(u.name, spotSymbols),
       hot:         false,
+      // Universe flags from meta.universe — used by filterNewListings to
+      // drop delisted markets and prioritize isolated-mode newcomers.
+      isDelisted:   u.isDelisted,
+      onlyIsolated: u.onlyIsolated,
     };
   });
   const allById = new Map(all.map(p => [p.id, p]));
@@ -1069,24 +1076,49 @@ function hasSpotMatch(perpName, spotSymbols) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// NEW LISTINGS DETECTION — no browser state
+// NEW LISTINGS DETECTION
 //
-// Old version used a localStorage "firstSeenAt" registry + an install
-// timestamp to figure out which perps were genuinely new. iOS Safari
-// regularly evicts localStorage (storage pressure, private mode, ITP,
-// "Clear History and Website Data"), which made the two keys desync and
-// caused every perp to look like it existed at install -> New tab froze.
+// First attempt sorted by assetIndex desc with no filtering, which
+// surfaced stale markets like LIT, DASH, AXS, XMR. The HL universe
+// array includes long-delisted markets and the index isn't a clean
+// listing-order signal on its own.
 //
-// New approach: Hyperliquid assigns monotonically increasing assetIndex
-// values to new listings. So assetIndex desc IS the newness order — no
-// browser state required, no install timestamps, no first-seen registry.
+// This version filters out:
+//   - delisted markets (isDelisted flag from meta.universe — kills LIT)
+//   - HIP-3 builder-deployed perps (names like "dex:COIN", index >= 100000)
+//   - markets with no real trading activity (< $10k 24h volume)
+//
+// Then sorts isolated-only markets first (HL launches new perps in
+// isolated mode), then by assetIndex desc. Surfaces actual recent
+// additions instead of zombie listings.
 // ─────────────────────────────────────────────────────────────────────
 function filterNewListings(allPerps) {
   if (!Array.isArray(allPerps) || allPerps.length === 0) return [];
+
   return allPerps
-    .filter(p => p.price > 0 && Number.isInteger(p.assetIndex))
+    .filter(p => {
+      if (!(p.price > 0) || !Number.isInteger(p.assetIndex)) return false;
+
+      // Drop delisted markets (kills LIT and similar zombies).
+      if (p.isDelisted === true) return false;
+
+      // Drop HIP-3 builder perps (separate category).
+      if (typeof p.id === 'string' && p.id.includes(':')) return false;
+      if (p.assetIndex >= 100000) return false;
+
+      // ISOLATED-ONLY: HL launches every new perp in isolated-margin mode
+      // before graduating it to cross-margin. So onlyIsolated == genuinely
+      // new (or recently added). This is the cleanest newness signal HL
+      // gives us — no listing timestamps exist in their API.
+      if (p.onlyIsolated !== true) return false;
+
+      // Drop dead markets.
+      if (!(p.volume24h >= 10_000)) return false;
+
+      return true;
+    })
     .sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0))
-    .slice(0, 60)
+    .slice(0, 30)
     .map((p, idx) => ({ ...p, newnessRank: idx }));
 }
 
@@ -2192,7 +2224,101 @@ function TradeDrawer({
   );
 }
 
-export default function PerpsTrade({ onConnectWallet }) {
+// ─────────────────────────────────────────────────────────────────────
+// VIP ALLOWLIST
+// Add Solana wallet pubkeys here to grant access to perps trading.
+// Anyone else sees the "Coming Soon" screen.
+// ─────────────────────────────────────────────────────────────────────
+const VIP_WALLETS = new Set([
+  'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV',
+]);
+
+function VipComingSoon({ onConnectWallet, walletPubkey }) {
+  const connected = !!walletPubkey;
+  return (
+    <div style={{
+      maxWidth: 680, margin: '0 auto', width: '100%',
+      padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)',
+      color: C.ink, minHeight: '80vh',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% 10%,rgba(168,127,255,.14),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 30%,rgba(151,252,228,.08),transparent 50%)',
+    }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600;700&display=swap');@import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap');@keyframes nexus-pulse{0%,100%{opacity:1}50%{opacity:.4}}@keyframes nexus-shimmer{0%{background-position:-200% 0}100%{background-position:200% 0}}`}</style>
+
+      <div style={{
+        width: '100%', maxWidth: 480,
+        padding: '38px 28px 32px', borderRadius: 28,
+        background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))',
+        border: '1px solid rgba(168,127,255,.22)',
+        boxShadow: '0 24px 80px rgba(0,0,0,.55), 0 0 60px rgba(168,127,255,.10)',
+        textAlign: 'center', position: 'relative', overflow: 'hidden',
+      }}>
+        <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse 100% 60% at 50% -10%,rgba(151,252,228,.10),transparent 70%)', pointerEvents: 'none' }}/>
+
+        <div style={{ position: 'relative' }}>
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: 8,
+            padding: '6px 14px', borderRadius: 999,
+            background: 'rgba(168,127,255,.10)',
+            border: '1px solid rgba(168,127,255,.30)',
+            marginBottom: 22,
+          }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: C.violet, boxShadow: `0 0 10px ${C.violet}`, animation: 'nexus-pulse 2s ease-in-out infinite' }}/>
+            <span style={{ color: C.violet, fontSize: 10, fontWeight: 800, letterSpacing: '.14em', ...T.mono }}>VIP ACCESS</span>
+          </div>
+
+          <h1 style={{
+            fontSize: 38, lineHeight: 1.0, fontWeight: 600,
+            margin: '0 0 12px', letterSpacing: '-.045em',
+            background: `linear-gradient(135deg,${C.inkStr} 0%,${C.violet} 100%)`,
+            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
+            ...T.hero,
+          }}>
+            Coming soon
+          </h1>
+
+          <p style={{ color: C.muted, fontSize: 14, margin: '0 0 26px', lineHeight: 1.55, fontWeight: 500, ...T.body }}>
+            Perpetuals trading is in private beta.<br/>
+            Available to VIP wallets only.
+          </p>
+
+          {connected ? (
+            <div style={{
+              padding: '14px 16px', borderRadius: 14,
+              background: 'rgba(255,255,255,.03)',
+              border: `1px solid ${C.border}`,
+              marginBottom: 18,
+            }}>
+              <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', marginBottom: 6, ...T.mono }}>YOUR WALLET</div>
+              <div style={{ fontSize: 12, color: C.ink, fontWeight: 700, ...T.mono, wordBreak: 'break-all' }}>
+                {walletPubkey.slice(0, 8)}...{walletPubkey.slice(-8)}
+              </div>
+              <div style={{ fontSize: 11, color: C.amber, fontWeight: 600, marginTop: 8, ...T.body }}>
+                Not on the VIP list yet.
+              </div>
+            </div>
+          ) : (
+            <button onClick={() => onConnectWallet?.()} style={{
+              width: '100%', padding: 15, borderRadius: 14, border: 'none',
+              background: `linear-gradient(135deg,${C.violet} 0%,${C.sol} 100%)`,
+              color: '#fff', fontWeight: 800, fontSize: 14, cursor: 'pointer',
+              boxShadow: '0 12px 32px rgba(168,127,255,.30)',
+              marginBottom: 18, letterSpacing: '-.01em', ...T.display,
+            }}>
+              Connect wallet to check access
+            </button>
+          )}
+
+          <div style={{ fontSize: 10, color: C.muted2, fontWeight: 600, letterSpacing: '.06em', ...T.mono }}>
+            POWERED BY HYPERLIQUID · NON-CUSTODIAL
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function PerpsTradeInner({ onConnectWallet }) {
   const [oneHourMap, setOneHourMap] = useState(() => loadCachedCharts().hours);
   const [sparkMap,   setSparkMap]   = useState(() => loadCachedCharts().sparks);
   const [marketData, setMarketData] = useState(() => {
@@ -2649,4 +2775,25 @@ export default function PerpsTrade({ onConnectWallet }) {
       </div>
     </>
   );
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// VIP gate: checks connected wallet against VIP_WALLETS.
+// Non-VIPs get "Coming Soon", VIPs get full perps trading.
+// ─────────────────────────────────────────────────────────────────────
+export default function PerpsTrade({ onConnectWallet }) {
+  const { publicKey: solPk } = useWallet();
+  const { privyEmbeddedSol } = useNexusWallet();
+  const walletPubkey = useMemo(() => {
+    if (solPk) return solPk.toString();
+    if (privyEmbeddedSol?.address) return privyEmbeddedSol.address;
+    return null;
+  }, [solPk, privyEmbeddedSol]);
+
+  const isVip = walletPubkey && VIP_WALLETS.has(walletPubkey);
+
+  if (!isVip) {
+    return <VipComingSoon onConnectWallet={onConnectWallet} walletPubkey={walletPubkey}/>;
+  }
+  return <PerpsTradeInner onConnectWallet={onConnectWallet}/>;
 }
