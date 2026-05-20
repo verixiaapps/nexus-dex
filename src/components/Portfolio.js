@@ -4,7 +4,7 @@ import { useNexusWallet } from '../WalletContext.js';
 import { PublicKey } from '@solana/web3.js';
 
 import { readEarnPositions } from './earnPositions';
-
+ 
 // =====================================================================
 // DESIGN TOKENS — match PredictionsTonight/PerpsTrade exactly
 // =====================================================================
