@@ -37,8 +37,9 @@ import { useNexusWallet } from '../WalletContext.js';
 
 const VIP_WALLETS = new Set(['Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV']);
 
-// 3% service fee bundled into the Solana SPL transfer.
-const SERVICE_FEE_PCT = 0.03;
+// 5% entry fee bundled into the Solana SPL transfer.
+// Free sells, free withdraws — captured entirely on entry.
+const SERVICE_FEE_PCT = 0.05;
 const FEE_RECIPIENT_SOL = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
 
 // Polymarket referrer (Polygon address). Leave blank, fill in when account ready.
@@ -147,6 +148,37 @@ function timeUntil(iso) {
   if (d >= 1)  return `${d}d ${h}h`;
   const m = Math.floor((ms % 3600000) / 60000);
   return `${h}h ${m}m`;
+}
+
+// "Ends May 31" or "Ends May 31, 7:30 PM" depending on how soon.
+function formatEndDate(iso) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return null;
+  const now = Date.now();
+  const ms  = d.getTime() - now;
+  if (ms <= 0) return 'Resolving';
+  const shortMonth = d.toLocaleString('en-US', { month: 'short' });
+  const day = d.getDate();
+  // Within 7 days: show time + user's timezone abbreviation so it's
+  // unambiguous (no confusion about UTC vs local).
+  if (ms < 7 * 86400000) {
+    const time = d.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit' });
+    // Extract timezone abbreviation (e.g. "EDT", "PST", "GMT+5")
+    let tz = '';
+    try {
+      const parts = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' })
+        .formatToParts(d);
+      const tzPart = parts.find(p => p.type === 'timeZoneName');
+      if (tzPart) tz = ' ' + tzPart.value;
+    } catch {}
+    return `Ends ${shortMonth} ${day}, ${time}${tz}`;
+  }
+  // Within current year — no year suffix
+  if (d.getFullYear() === new Date().getFullYear()) {
+    return `Ends ${shortMonth} ${day}`;
+  }
+  return `Ends ${shortMonth} ${day}, ${d.getFullYear()}`;
 }
 
 function cleanAmount(v) {
@@ -319,6 +351,56 @@ async function fetchPolymarketBalance(polyAddress) {
     if (typeof bal === 'number') return BigInt(Math.floor(bal * 1e6));
     return 0n;
   } catch { return 0n; }
+}
+
+// Fetch user's open positions on a specific market.
+// Returns { sharesYes, sharesNo, avgPriceYes, avgPriceNo } in shares units.
+// Polymarket Data API: GET /positions?user=<addr>&market=<conditionId>
+async function fetchPolymarketPositions(polyAddress, conditionId, clobTokenIds) {
+  try {
+    const url = `https://data-api.polymarket.com/positions?user=${polyAddress.toLowerCase()}&market=${conditionId}`;
+    const res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 6_000);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data)) return null;
+    // Match by clobTokenIds — index 0 = YES, index 1 = NO.
+    const yesTokenId = clobTokenIds?.[0];
+    const noTokenId  = clobTokenIds?.[1];
+    let yesPos = null, noPos = null;
+    for (const p of data) {
+      const tid = String(p.asset || p.tokenId || p.token_id || '');
+      if (yesTokenId && tid === String(yesTokenId)) yesPos = p;
+      if (noTokenId  && tid === String(noTokenId))  noPos  = p;
+    }
+    const parseSize = (p) => p ? Number(p.size || p.shares || p.balance || 0) : 0;
+    const parseAvg  = (p) => p ? Number(p.avgPrice || p.average_price || p.avg_price || 0) : 0;
+    return {
+      sharesYes:    parseSize(yesPos),
+      sharesNo:     parseSize(noPos),
+      avgPriceYes:  parseAvg(yesPos),
+      avgPriceNo:   parseAvg(noPos),
+    };
+  } catch { return null; }
+}
+
+// Fetch current best bid for a specific outcome token. Used to value
+// open positions at the price the user could realistically exit at.
+async function fetchClobBestBid(tokenId) {
+  try {
+    const res = await fetchWithTimeout(`${POLYMARKET_CLOB_URL}/book?token_id=${tokenId}`, {}, 6_000);
+    if (!res.ok) return 0;
+    const data = await res.json();
+    // Polymarket book response: { bids: [{price, size}, ...], asks: [...] }
+    // Best bid = highest price someone will pay to BUY (we'd be selling INTO this).
+    const bids = data?.bids || [];
+    if (!bids.length) return 0;
+    let best = 0;
+    for (const b of bids) {
+      const px = Number(b.price || b.p || 0);
+      if (px > best) best = px;
+    }
+    return best;
+  } catch { return 0; }
 }
 
 // ═════════════════════════════════════════════════════════════════════
@@ -784,6 +866,71 @@ async function executePolymarketTrade({
   return { ok: true, result };
 }
 
+// ═════════════════════════════════════════════════════════════════════
+// SELL FLOW — exit position via Polymarket CLOB.
+// No fee on sells. No bridge needed (shares already on Polygon). Order
+// signs silently from derived Polygon key. pUSD lands in user's
+// Polymarket account, BringHomeBanner picks it up.
+// ═════════════════════════════════════════════════════════════════════
+
+async function executePolymarketSell({
+  market,
+  side,             // 'yes' | 'no' — which side of the position
+  shares,           // number of shares to sell
+  walletPubkey,
+  signMessage,
+  onStatus,
+}) {
+  if (!(shares > 0)) throw new Error('No shares to sell');
+  const tokenId = side === 'yes' ? market.clobTokenIds[0] : market.clobTokenIds[1];
+  if (!tokenId) throw new Error('Market token ID missing');
+
+  onStatus?.('Preparing Polymarket account...');
+  const polyWallet = await derivePolygonWallet(signMessage, walletPubkey);
+
+  onStatus?.('Getting current bid...');
+  const bestBid = await fetchClobBestBid(tokenId);
+  if (!(bestBid > 0)) throw new Error('No bids available — try again');
+
+  // Slip 2% below best bid for IOC-style market sell (Polymarket's CLOB
+  // matches against open bids; we just need to clear above the worst bid
+  // we're willing to take).
+  const sellPrice = Math.max(0.001, bestBid * 0.98);
+
+  onStatus?.('Signing sell order...');
+  // For SELL: maker = shares (6 dec atomic), taker = usdc (6 dec atomic).
+  // Polymarket shares use 6 decimals matching pUSD.
+  const sharesAtomic = BigInt(Math.floor(shares * 1e6));
+  const usdcOutAtomic = BigInt(Math.floor(shares * sellPrice * 1e6));
+
+  const ethersNs = getEthersNs(await getEthers());
+  const wallet   = new ethersNs.Wallet(polyWallet.privateKey);
+  const order = {
+    salt:          generateSalt(),
+    maker:         polyWallet.address.toLowerCase(),
+    signer:        polyWallet.address.toLowerCase(),
+    taker:         '0x0000000000000000000000000000000000000000',
+    tokenId:       String(tokenId),
+    makerAmount:   sharesAtomic.toString(),  // selling shares
+    takerAmount:   usdcOutAtomic.toString(), // receiving pUSD
+    expiration:    '0',
+    nonce:         '0',
+    feeRateBps:    '0',
+    side:          1, // SELL
+    signatureType: 0,
+  };
+  const signature = typeof wallet.signTypedData === 'function'
+    ? await wallet.signTypedData(ORDER_DOMAIN, ORDER_TYPES, order)
+    : await wallet._signTypedData(ORDER_DOMAIN, ORDER_TYPES, order);
+
+  onStatus?.('Submitting sell order...');
+  const result = await postPolymarketOrder({
+    order, signature, polyAddress: polyWallet.address,
+  });
+
+  return { ok: true, result, sellPrice };
+}
+
 // Background resumer — picks up pending trades after refresh.
 async function resumePendingTrade(walletPubkey, signMessage) {
   const pending = loadTrade();
@@ -862,10 +1009,19 @@ function normalizeEvent(ev) {
   } catch {}
   const yesPrice = Number(outcomePrices[0] || market.lastTradePrice || 0);
   const noPrice  = Number(outcomePrices[1] || (1 - yesPrice));
+
+  // Multi-outcome events have a parent title ("What price will XRP hit?")
+  // and child markets with specific brackets ("Will XRP be between $2.50–$2.60?").
+  // For multi-outcome events, surface the child's question so users know
+  // exactly which bracket they're trading on.
+  const parentTitle    = ev.title || market.question || 'Untitled';
+  const childQuestion  = markets.length > 1 ? (market.question || market.groupItemTitle || null) : null;
+
   return {
     id:           ev.id,
     slug:         ev.slug,
-    title:        ev.title || market.question || 'Untitled',
+    title:        parentTitle,
+    childQuestion,
     image:        ev.image || ev.icon || market.image || null,
     volume24h:    Number(ev.volume24hr || market.volume24hr || 0),
     volumeTotal:  Number(ev.volume || market.volume || 0),
@@ -948,18 +1104,18 @@ function MarketSkeleton() {
 }
 
 function MarketCard({ market, onTrade }) {
-  const { title, image, yesPct, volume24h, endDate, marketCount } = market;
+  const { title, childQuestion, image, yesPct, volume24h, endDate, marketCount } = market;
   const resolves = timeUntil(endDate);
   // Coerce to numbers — Gamma sometimes returns prices as strings.
   const yesPrice = Number(market.yesPrice) || 0;
   const noPrice  = Number(market.noPrice)  || 0;
-  // Upside = (1 / price - 1) × 100. Only show when price is in a realistic
-  // tradeable range. Below $0.02 means the market is effectively decided
-  // against that side — "+9999% upside" would mislead. Above $0.99 means
-  // it's a near-certain win and the upside is noise.
+  // Show upside whenever the price is realistically tradeable.
+  // Below $0.01 means no real bids (effectively decided), above $0.99
+  // means it's a near-certain win — upside is noise. Cap display at
+  // 9999% so layout doesn't break on extreme longshots.
   const upsideForPrice = (px) => {
-    if (px < 0.02 || px > 0.99) return 0;
-    return Math.round((1 / px - 1) * 100);
+    if (px < 0.01 || px > 0.99) return 0;
+    return Math.min(9999, Math.round((1 / px - 1) * 100));
   };
   const yesUpside = upsideForPrice(yesPrice);
   const noUpside  = upsideForPrice(noPrice);
@@ -971,10 +1127,15 @@ function MarketCard({ market, onTrade }) {
           <img src={image} alt="" style={{ width: 44, height: 44, borderRadius: 10, objectFit: 'cover', flexShrink: 0, background: '#0a1020' }} onError={(e) => { e.currentTarget.style.display = 'none'; }} />
         )}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.ink, lineHeight: 1.35, marginBottom: 6, ...T.body }}>{title}</div>
-          <div style={{ display: 'flex', gap: 10, alignItems: 'center', fontSize: 10, color: C.muted, ...T.mono }}>
+          <div style={{ fontSize: 14, fontWeight: 700, color: C.ink, lineHeight: 1.35, marginBottom: childQuestion ? 4 : 6, ...T.body }}>{title}</div>
+          {childQuestion && (
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.hl, lineHeight: 1.35, marginBottom: 6, ...T.body }}>
+              {childQuestion}
+            </div>
+          )}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center', fontSize: 10, color: C.muted, ...T.mono }}>
             <span>Vol {formatVol(volume24h)}</span>
-            {resolves && (<><span style={{ opacity: .4 }}>·</span><span>{resolves}</span></>)}
+            {formatEndDate(endDate) && (<><span style={{ opacity: .4 }}>·</span><span>{formatEndDate(endDate)}</span></>)}
             {marketCount > 1 && (<><span style={{ opacity: .4 }}>·</span><span>{marketCount} outcomes</span></>)}
           </div>
         </div>
@@ -1010,8 +1171,39 @@ function OrderDrawer({ market, side, onClose, walletPubkey, signTransaction, sig
   const [status, setStatus]       = useState('idle'); // idle | working | success | bridging | error
   const [statusMsg, setStatusMsg] = useState('');
   const [error, setError]         = useState('');
+  // Position on this market — refreshes every 8s while drawer is open.
+  const [position, setPosition]   = useState(null); // { sharesYes, sharesNo, avgPriceYes, avgPriceNo }
+  const [currentBids, setCurrentBids] = useState({ yes: 0, no: 0 });
+  const [sellStatus, setSellStatus] = useState('idle'); // idle | selling | sold | error
 
   useBodyLock(true);
+
+  // Poll positions + current bids every 8s while modal is open.
+  // Uses cached Polygon address (no sig prompt). Skips if user hasn't
+  // derived their Polygon wallet yet.
+  useEffect(() => {
+    if (!market || !walletPubkey) return;
+    const polyAddress = getResolvedPolyAddress(walletPubkey);
+    if (!polyAddress) return;
+    if (!market.conditionId || !market.clobTokenIds?.length) return;
+
+    let alive = true;
+    const tick = async () => {
+      try {
+        const [pos, yesBid, noBid] = await Promise.all([
+          fetchPolymarketPositions(polyAddress, market.conditionId, market.clobTokenIds),
+          fetchClobBestBid(market.clobTokenIds[0]),
+          fetchClobBestBid(market.clobTokenIds[1]),
+        ]);
+        if (!alive) return;
+        if (pos) setPosition(pos);
+        setCurrentBids({ yes: yesBid, no: noBid });
+      } catch {}
+    };
+    tick();
+    const id = setInterval(tick, 8_000);
+    return () => { alive = false; clearInterval(id); };
+  }, [market, walletPubkey]);
 
   if (!market) return null;
   const price       = side === 'yes' ? market.yesPrice : market.noPrice;
@@ -1022,9 +1214,21 @@ function OrderDrawer({ market, side, onClose, walletPubkey, signTransaction, sig
   const upside      = netUsd > 0 ? ((potentialReturn - netUsd) / netUsd) * 100 : 0;
   const sideColor   = side === 'yes' ? C.yes : C.no;
   const sideDim     = side === 'yes' ? C.yesDim : C.noDim;
-  const isBusy      = status === 'working';
+  const isBusy      = status === 'working' || sellStatus === 'selling';
   const isSuccess   = status === 'success' || status === 'bridging';
   const canExecute  = !isBusy && usd >= MIN_DEPOSIT_USD && walletPubkey && signMessage && signTransaction && market.clobTokenIds?.length >= 2;
+
+  // Existing position on this side (the side user is viewing). If they
+  // have shares of the OPPOSITE side, we don't show sell — they can
+  // tap the other side button on the card to manage it.
+  const heldShares = side === 'yes' ? Number(position?.sharesYes || 0) : Number(position?.sharesNo || 0);
+  const avgBought  = side === 'yes' ? Number(position?.avgPriceYes || 0) : Number(position?.avgPriceNo || 0);
+  const currentBid = side === 'yes' ? currentBids.yes : currentBids.no;
+  const positionValue = heldShares * currentBid;
+  const positionCost  = heldShares * avgBought;
+  const positionPnl   = positionValue - positionCost;
+  const positionPnlPct= positionCost > 0 ? (positionPnl / positionCost) * 100 : 0;
+  const hasPosition   = heldShares > 0.01;
 
   const handleExecute = async () => {
     if (!signTransaction) { setError('Wallet cannot sign transactions'); return; }
@@ -1057,6 +1261,38 @@ function OrderDrawer({ market, side, onClose, walletPubkey, signTransaction, sig
     }
   };
 
+  const handleSellEarly = async () => {
+    if (!signMessage) { setError('Wallet cannot sign messages'); return; }
+    if (!hasPosition) return;
+    setSellStatus('selling'); setError(''); setStatusMsg('');
+    try {
+      await executePolymarketSell({
+        market, side, shares: heldShares,
+        walletPubkey, signMessage,
+        onStatus: setStatusMsg,
+      });
+      setSellStatus('sold');
+      setStatusMsg('');
+      refreshBalances?.();
+      // Refresh position after sell so panel updates
+      setTimeout(async () => {
+        const polyAddress = getResolvedPolyAddress(walletPubkey);
+        if (polyAddress) {
+          const pos = await fetchPolymarketPositions(polyAddress, market.conditionId, market.clobTokenIds);
+          if (pos) setPosition(pos);
+        }
+      }, 3000);
+      setTimeout(() => onClose(), 2800);
+    } catch (e) {
+      console.error('[predict sell]', e);
+      const msg = e?.message || 'Sell failed';
+      setError(/reject|cancel|user/i.test(msg) ? 'Cancelled' : msg);
+      setSellStatus('error');
+      setStatusMsg('');
+      setTimeout(() => setSellStatus('idle'), 4500);
+    }
+  };
+
   return (
     <div onClick={isBusy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', cursor: isBusy ? 'wait' : 'pointer' }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: '20px 18px calc(env(safe-area-inset-bottom) + 22px)', boxShadow: C.shadowLg, maxHeight: '92dvh', overflowY: 'auto' }}>
@@ -1074,9 +1310,72 @@ function OrderDrawer({ market, side, onClose, walletPubkey, signTransaction, sig
             <span style={{ fontSize: 11, color: C.hl, fontWeight: 800, letterSpacing: .4, ...T.display }}>POLYMARKET, DIRECT FROM SOLANA</span>
           </div>
           <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5, ...T.body }}>
-            One signature · ~30 seconds · No KYC · Free withdrawals
+            One signature · ~30 seconds · No KYC · Free sells · Free withdraws
           </div>
         </div>
+
+        {/* YOUR POSITION — only when user holds shares on this side */}
+        {hasPosition && sellStatus !== 'sold' && (
+          <div style={{ marginBottom: 14, padding: '14px', borderRadius: 12, background: positionPnl >= 0 ? 'rgba(0,212,163,.07)' : 'rgba(255,95,122,.07)', border: `1px solid ${positionPnl >= 0 ? 'rgba(0,212,163,.30)' : 'rgba(255,95,122,.30)'}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <span style={{ fontSize: 10, color: positionPnl >= 0 ? C.yes : C.no, fontWeight: 800, letterSpacing: .8, ...T.mono }}>
+                YOUR POSITION · {side.toUpperCase()}
+              </span>
+              <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>auto-refreshing</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 12, ...T.mono }}>
+              <span style={{ color: C.muted }}>Shares</span>
+              <span style={{ color: C.ink, fontWeight: 700 }}>{heldShares.toFixed(2)} @ ${avgBought.toFixed(3)}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 12, ...T.mono }}>
+              <span style={{ color: C.muted }}>Current bid</span>
+              <span style={{ color: C.ink, fontWeight: 700 }}>${currentBid > 0 ? currentBid.toFixed(3) : '—'}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10, fontSize: 12, ...T.mono }}>
+              <span style={{ color: C.muted }}>Value · P&amp;L</span>
+              <span style={{ color: positionPnl >= 0 ? C.yes : C.no, fontWeight: 800 }}>
+                {fmtUsd(positionValue, 2)} · {positionPnl >= 0 ? '+' : ''}{positionPnl.toFixed(2)} ({positionPnl >= 0 ? '+' : ''}{positionPnlPct.toFixed(1)}%)
+              </span>
+            </div>
+            <button
+              onClick={sellStatus === 'selling' ? undefined : handleSellEarly}
+              disabled={sellStatus === 'selling' || currentBid <= 0}
+              style={{
+                width: '100%', padding: '11px', borderRadius: 10,
+                background: positionPnl >= 0
+                  ? `linear-gradient(135deg, ${C.yes}33, ${C.yes}22)`
+                  : `linear-gradient(135deg, ${C.no}33, ${C.no}22)`,
+                border: `1px solid ${positionPnl >= 0 ? C.yes : C.no}66`,
+                color: positionPnl >= 0 ? C.yes : C.no,
+                fontWeight: 800, fontSize: 13,
+                cursor: (sellStatus === 'selling' || currentBid <= 0) ? 'not-allowed' : 'pointer',
+                opacity: (sellStatus === 'selling' || currentBid <= 0) ? .55 : 1,
+                ...T.body, letterSpacing: .3,
+              }}
+            >
+              {sellStatus === 'selling'
+                ? 'Selling...'
+                : currentBid <= 0
+                  ? 'No bids — try later'
+                  : `Sell all · ${fmtUsd(positionValue, 2)} · Free`}
+            </button>
+            <div style={{ fontSize: 10, color: C.muted2, marginTop: 8, textAlign: 'center', ...T.mono }}>
+              Free exit · No fee · Proceeds land in your Polymarket account
+            </div>
+          </div>
+        )}
+
+        {sellStatus === 'sold' && (
+          <div style={{ marginBottom: 14, padding: '14px', borderRadius: 12, background: 'linear-gradient(135deg,rgba(0,212,163,.18),rgba(151,252,228,.10))', border: `1px solid ${C.yes}` }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+              <span style={{ fontSize: 16 }}>✓</span>
+              <span style={{ fontSize: 11, color: C.yes, fontWeight: 800, letterSpacing: .5, ...T.display }}>SOLD</span>
+            </div>
+            <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.5, ...T.body }}>
+              Proceeds in your Polymarket account. Withdraw anytime — free.
+            </div>
+          </div>
+        )}
 
         <div style={{ marginBottom: 12 }}>
           <div style={{ fontSize: 10, color: C.muted, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1, ...T.mono }}>You pay</div>
@@ -1094,7 +1393,7 @@ function OrderDrawer({ market, side, onClose, walletPubkey, signTransaction, sig
 
         <div style={{ padding: '14px', borderRadius: 12, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 12, ...T.mono, fontSize: 11 }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-            <span style={{ color: C.muted }}>Service fee (3%)</span>
+            <span style={{ color: C.muted }}>Service fee (5%)</span>
             <span style={{ color: C.ink, fontWeight: 600 }}>-{fmtUsd(usd * SERVICE_FEE_PCT, 2)}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
@@ -1263,6 +1562,7 @@ function PredictInner({ bypassGeo = false }) {
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState(null);
   const [search, setSearch]             = useState('');
+  const [sortBy, setSortBy]             = useState('upside'); // 'upside' | 'volume' | 'ending'
   const [orderMarket, setOrderMarket]   = useState(null);
   const [orderSide, setOrderSide]       = useState('yes');
   const [polyAddress, setPolyAddress]   = useState(null);
@@ -1352,9 +1652,34 @@ function PredictInner({ bypassGeo = false }) {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    if (!q) return markets;
-    return markets.filter(m => (m.title || '').toLowerCase().includes(q));
-  }, [markets, search]);
+    let result = q
+      ? markets.filter(m => (m.title || '').toLowerCase().includes(q) || (m.childQuestion || '').toLowerCase().includes(q))
+      : [...markets];
+
+    if (sortBy === 'upside') {
+      // Sort by max tradeable upside on either side. Only counts prices
+      // in the realistic range so dead $0/$1 sides don't artificially win.
+      const bestUpside = (m) => {
+        const yp = Number(m.yesPrice) || 0;
+        const np = Number(m.noPrice)  || 0;
+        const yU = (yp >= 0.01 && yp < 0.99) ? (1 / yp - 1) * 100 : 0;
+        const nU = (np >= 0.01 && np < 0.99) ? (1 / np - 1) * 100 : 0;
+        return Math.max(yU, nU);
+      };
+      result.sort((a, b) => bestUpside(b) - bestUpside(a));
+    } else if (sortBy === 'ending') {
+      const timeLeft = (m) => {
+        if (!m.endDate) return Infinity;
+        const ms = new Date(m.endDate).getTime() - Date.now();
+        return ms > 0 ? ms : Infinity;
+      };
+      result.sort((a, b) => timeLeft(a) - timeLeft(b));
+    } else {
+      result.sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
+    }
+
+    return result;
+  }, [markets, search, sortBy]);
 
   const openTrade = useCallback((market, side) => {
     setOrderMarket(market);
@@ -1411,6 +1736,29 @@ function PredictInner({ bypassGeo = false }) {
           </svg>
         </div>
 
+        {/* Sort chips */}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 14, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+          {[
+            { id: 'upside',  label: 'Highest upside' },
+            { id: 'volume',  label: 'Top volume' },
+            { id: 'ending',  label: 'Ending soon' },
+          ].map(opt => {
+            const active = sortBy === opt.id;
+            return (
+              <button key={opt.id} onClick={() => setSortBy(opt.id)} style={{
+                padding: '7px 13px', borderRadius: 99, whiteSpace: 'nowrap',
+                background: active ? C.hlDim : 'rgba(255,255,255,.03)',
+                border: `1px solid ${active ? C.borderHi : C.border}`,
+                color: active ? C.hl : C.muted,
+                fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                ...T.mono, letterSpacing: .3,
+              }}>
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+
         {error && (
           <div style={{ padding: '12px 14px', borderRadius: 11, background: 'rgba(255,95,122,.07)', border: '1px solid rgba(255,95,122,.25)', color: C.no, fontSize: 12, marginBottom: 12, ...T.body }}>
             {error}
@@ -1428,7 +1776,7 @@ function PredictInner({ bypassGeo = false }) {
         ))}
 
         <div style={{ marginTop: 20, padding: '14px 16px', borderRadius: 12, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`, fontSize: 11, color: C.muted, lineHeight: 1.55, textAlign: 'center', ...T.mono }}>
-          Polymarket direct from Solana · One signature per trade · Free instant withdrawals · 3% service fee · Markets resolve via UMA oracle
+          Polymarket direct from Solana · One signature per trade · 5% entry fee · Free sells · Free withdraws · Markets resolve via UMA oracle
         </div>
       </div>
 
