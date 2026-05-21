@@ -10,12 +10,11 @@
 //   • We derive the owner EOA from the user's Solana wallet signature.
 //     EOA private key lives in sessionStorage only (non-custodial).
 //   • All Polygon-side ops use Polymarket's official SDKs:
-//     - @polymarket/clob-client-v2       (orders, CLOB API)
+//     - @polymarket/clob-client-v2       (orders, CLOB API — V2, Safe sig type 2)
 //     - @polymarket/builder-relayer-client (safe deploy, approvals batch)
-//     - @polymarket/builder-signing-sdk   (HMAC config for relayer auth)
-//     Relayer SDK auto-signs via remote endpoint at /api/poly/sign.
-//     CLOB V2 builder attribution is via `builderCode` field per order.
-//   • Builder secrets stay on backend. Frontend never sees them.
+//     - @polymarket/builder-signing-sdk   (HMAC BuilderConfig for relayer)
+//     Backend exposes /api/poly/sign for HMAC headers; secrets stay server-side.
+//     Order attribution via builderCode field per order.
 //
 // FLOW per new user (FIRST TRADE):
 //   1. Phantom prompt #1: derivation message → EOA private key in sessionStorage
@@ -320,21 +319,19 @@ async function deriveEoa(signMessage, solPub) {
 // ═══════════════════════════════════════════════════════════════════
 // POLYMARKET SDK LOADING (lazy — only when trade fires)
 //
-// V2 architecture (post April 28 2026 cutover):
-//   • @polymarket/clob-client-v2       — orders + API creds. Takes a viem
-//                                        walletClient. BuilderConfig is just
-//                                        { builderCode } — NO HMAC for orders.
-//   • @polymarket/builder-relayer-client — safe deploy + batched approvals.
-//                                        STILL uses ethers v5 signer and the
-//                                        HMAC-based BuilderConfig from
-//                                        @polymarket/builder-signing-sdk for
-//                                        relayer auth (gasless).
-//   • @polymarket/builder-signing-sdk  — HMAC BuilderConfig for the relayer
-//                                        ONLY (CLOB no longer uses HMAC headers).
+// Polymarket V2 cutover was April 28, 2026. V1 SDK no longer works in
+// production — must use clob-client-v2 for orders.
 //
-// V1 clob-client stopped working at the April 28 cutover. The official
-// reference examples (privy-safe-builder-example, etc) haven't been
-// updated yet — don't trust their package versions. We use V2 here.
+//   • @polymarket/clob-client-v2       — orders + L1 API creds (V2).
+//                                        Constructor takes options object.
+//                                        Accepts viem walletClient.
+//                                        Supports signatureType 2 (Safe).
+//   • @polymarket/builder-relayer-client — safe deploy + batched approvals.
+//                                        Uses ethers v5 signer + HMAC BuilderConfig.
+//   • @polymarket/builder-signing-sdk  — BuilderConfig with remoteBuilderConfig
+//                                        points SDK to our /api/poly/sign so
+//                                        the builder secret never reaches browser.
+//   • viem                              — wallet client for the V2 SDK.
 // ═══════════════════════════════════════════════════════════════════
 
 let _clobSdk = null;
@@ -360,17 +357,18 @@ async function loadSdks() {
     import('@polymarket/builder-relayer-client/dist/builder/derive').catch(() => null),
     import('@polymarket/builder-relayer-client/dist/config').catch(() => null),
   ]);
-  _clobSdk      = clob;
-  _relayerSdk   = { ...relayer, _derive: deriveMod, _config: configMod };
-  _signingSdk   = signing;
-  _viem         = viem;
-  _viemAccounts = viemAccounts;
+  _clobSdk       = clob;
+  _relayerSdk    = { ...relayer, _derive: deriveMod, _config: configMod };
+  _signingSdk    = signing;
+  _viem          = viem;
+  _viemAccounts  = viemAccounts;
   return { clob, relayer: _relayerSdk, signing, viem, viemAccounts };
 }
 
-// BuilderConfig for the Relayer (still uses HMAC via remote signing).
+// BuilderConfig for the Relayer (HMAC via remote signing).
 // Points the SDK at our /api/poly/sign endpoint; builder secret never
-// touches the browser.
+// touches the browser. ALSO used by the authenticated CLOB client for
+// builder order attribution per Polymarket reference example.
 function buildRelayerBuilderConfig(signing) {
   const { BuilderConfig } = signing;
   return new BuilderConfig({
@@ -378,21 +376,7 @@ function buildRelayerBuilderConfig(signing) {
   });
 }
 
-// BuilderConfig for CLOB V2 — V2 just needs { builderCode } on each order.
-// We attach builderCode per-order in postMarketBuy/postMarketSell instead
-// of via BuilderConfig; this matches the new V2 docs exactly.
-
-// Build a viem walletClient (clob-client-v2 expects viem, not ethers).
-async function buildViemWalletClient(eoaPrivateKey) {
-  const { viem, viemAccounts } = await loadSdks();
-  const { createWalletClient, http } = viem;
-  const { privateKeyToAccount } = viemAccounts;
-  const pk = eoaPrivateKey.startsWith('0x') ? eoaPrivateKey : ('0x' + eoaPrivateKey);
-  const account = privateKeyToAccount(pk);
-  return createWalletClient({ account, transport: http('https://polygon-rpc.com') });
-}
-
-// Build an ethers v5 signer (builder-relayer-client still expects ethers).
+// Build an ethers v5 signer for builder-relayer-client (still ethers-based).
 async function buildEthersSigner(eoaPrivateKey) {
   const ethersNs = getEthersNs(await getEthers());
   let provider = null;
@@ -405,6 +389,16 @@ async function buildEthersSigner(eoaPrivateKey) {
   } catch {}
   const pk = eoaPrivateKey.startsWith('0x') ? eoaPrivateKey : ('0x' + eoaPrivateKey);
   return new ethersNs.Wallet(pk, provider);
+}
+
+// Build a viem walletClient for clob-client-v2.
+async function buildViemWalletClient(eoaPrivateKey) {
+  const { viem, viemAccounts } = await loadSdks();
+  const { createWalletClient, http } = viem;
+  const { privateKeyToAccount } = viemAccounts;
+  const pk = eoaPrivateKey.startsWith('0x') ? eoaPrivateKey : ('0x' + eoaPrivateKey);
+  const account = privateKeyToAccount(pk);
+  return createWalletClient({ account, transport: http('https://polygon-rpc.com') });
 }
 
 // ═══════════════════════════════════════════════════════════════════
@@ -468,8 +462,8 @@ async function ensureSafeDeployed(eoa, solPub, onStatus) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// CLOB API CREDS (L1)
-// Temporary ClobClient with just signer → createOrDeriveApiKey()
+// CLOB API CREDS (L1) — uses clob-client-v2 with viem walletClient
+// V2 constructor takes options object. Temp client (no creds) derives.
 // ═══════════════════════════════════════════════════════════════════
 
 async function getOrDeriveClobCreds(eoa) {
@@ -480,16 +474,22 @@ async function getOrDeriveClobCreds(eoa) {
   const { ClobClient } = clob;
   const signer = await buildViemWalletClient(eoa.privateKey);
 
-  // V2 SDK constructor: options object, not positional.
+  // V2 constructor: options object, no creds for L1 derivation.
   const tempClient = new ClobClient({
     host:  POLYMARKET_CLOB_URL,
     chain: POLYGON_CHAIN_ID,
     signer,
   });
 
-  const creds = await tempClient.createOrDeriveApiKey();
+  let creds;
+  try {
+    creds = await tempClient.createOrDeriveApiKey();
+  } catch {
+    try { creds = await tempClient.deriveApiKey(); }
+    catch { creds = await tempClient.createApiKey(); }
+  }
   const normalized = {
-    key:        creds.key,
+    key:        creds.key || creds.apiKey,
     secret:     creds.secret,
     passphrase: creds.passphrase,
   };
@@ -771,22 +771,26 @@ async function fetchClobBestBid(tokenId) {
 }
 
 // ═══════════════════════════════════════════════════════════════════
-// AUTHENTICATED CLOB CLIENT (V2 SDK, Safe / signatureType 2)
-// V2 constructor takes options object. funderAddress (not funder).
-// No builderConfig needed — we attach builderCode directly to orders.
+// AUTHENTICATED CLOB CLIENT (V2 SDK, Safe wallet, signatureType 2)
+//
+// V2 constructor takes options object. funderAddress holds the funds
+// (the Safe), signer signs orders (the user's EOA).
+// SignatureTypeV2 enum: EOA=0, POLY_PROXY=1, POLY_GNOSIS_SAFE=2, POLY_1271=3.
+// We use 2 because we deployed a Gnosis Safe for the user.
 // ═══════════════════════════════════════════════════════════════════
 
 async function buildAuthenticatedClobClient(eoa, safeAddress, creds) {
   const { clob } = await loadSdks();
   const { ClobClient } = clob;
   const signer = await buildViemWalletClient(eoa.privateKey);
+
   return new ClobClient({
     host:           POLYMARKET_CLOB_URL,
     chain:          POLYGON_CHAIN_ID,
     signer,
     creds,
-    signatureType:  2,            // EOA-associated Gnosis Safe proxy
-    funderAddress:  safeAddress,
+    signatureType:  2,           // POLY_GNOSIS_SAFE
+    funderAddress:  safeAddress, // Safe holds the pUSD
   });
 }
 
@@ -799,7 +803,6 @@ async function updateClobBalance(eoa, safeAddress, creds) {
   try {
     const client = await buildAuthenticatedClobClient(eoa, safeAddress, creds);
     if (typeof client.updateBalanceAllowance === 'function') {
-      // For Safe wallets (sig type 2): asset_type COLLATERAL, signature_type 2.
       await client.updateBalanceAllowance({
         asset_type:     'COLLATERAL',
         signature_type: 2,
@@ -812,9 +815,9 @@ async function updateClobBalance(eoa, safeAddress, creds) {
 
 // ═══════════════════════════════════════════════════════════════════
 // ORDER PLACEMENT (via @polymarket/clob-client-v2)
-// Buys and sells are FAK market orders — the SDK reads the orderbook
-// and fills against existing depth at best available prices.
-// builderCode is attached per-order (V2 architecture).
+// Buys and sells are FAK market orders — SDK reads orderbook and fills
+// against existing depth at best available prices.
+// builderCode is attached per-order for attribution (V2 architecture).
 // ═══════════════════════════════════════════════════════════════════
 
 async function getBuilderCode() {
@@ -838,14 +841,12 @@ async function postMarketBuy({
   const builderCode = await getBuilderCode();
   const client = await buildAuthenticatedClobClient(eoa, safeAddress, creds);
 
-  // V2 market order: no feeRateBps (protocol-set), no price (SDK reads orderbook).
-  // userUSDCBalance enables fee-adjusted fills; we use usdcSpend as the budget.
+  // V2 SDK: createAndPostMarketOrder takes (UserMarketOrder, options, orderType).
+  // No price field — SDK calculates from orderbook for FAK.
   const marketOrder = {
-    tokenID:           String(tokenId),
-    amount:            Number(usdcSpend),
-    side:              Side.BUY,
-    orderType:         OrderType.FAK,
-    userUSDCBalance:   Number(usdcSpend),
+    tokenID: String(tokenId),
+    amount:  Number(usdcSpend),  // USDC notional for BUY
+    side:    Side.BUY,
     ...(builderCode ? { builderCode } : {}),
   };
   const opts = {
@@ -854,7 +855,7 @@ async function postMarketBuy({
   };
 
   if (typeof client.createAndPostMarketOrder !== 'function') {
-    throw new Error('SDK version too old: createAndPostMarketOrder missing. Upgrade @polymarket/clob-client-v2.');
+    throw new Error('clob-client-v2 missing createAndPostMarketOrder — upgrade SDK');
   }
   const resp = await client.createAndPostMarketOrder(marketOrder, opts, OrderType.FAK);
   if (resp?.error || resp?.errorMsg) throw new Error(resp.error || resp.errorMsg);
@@ -874,12 +875,11 @@ async function postMarketSell({
   const builderCode = await getBuilderCode();
   const client = await buildAuthenticatedClobClient(eoa, safeAddress, creds);
 
-  // V2 market sell: amount = number of shares to sell.
+  // For SELL market orders: amount = number of shares to sell.
   const marketOrder = {
-    tokenID:    String(tokenId),
-    amount:     Number(shares),
-    side:       Side.SELL,
-    orderType:  OrderType.FAK,
+    tokenID: String(tokenId),
+    amount:  Number(shares),
+    side:    Side.SELL,
     ...(builderCode ? { builderCode } : {}),
   };
   const opts = {
@@ -888,7 +888,7 @@ async function postMarketSell({
   };
 
   if (typeof client.createAndPostMarketOrder !== 'function') {
-    throw new Error('SDK version too old: createAndPostMarketOrder missing. Upgrade @polymarket/clob-client-v2.');
+    throw new Error('clob-client-v2 missing createAndPostMarketOrder — upgrade SDK');
   }
   const resp = await client.createAndPostMarketOrder(marketOrder, opts, OrderType.FAK);
   if (resp?.error || resp?.errorMsg) throw new Error(resp.error || resp.errorMsg);
