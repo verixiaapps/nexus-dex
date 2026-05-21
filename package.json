@@ -4,15 +4,15 @@
   "private": true,
   "proxy": "http://localhost:3001",
   "dependencies": {
-    "react": "^18.2.0", 
-    "react-dom": "^18.2.0", 
-    "react-scripts": "5.0.1", 
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-scripts": "5.0.1",
     "react-app-rewired": "^2.2.1",
     "react-router-dom": "^6.22.0",
     "ajv": "^8.12.0",
     "dotenv": "^16.4.5",
     "express": "^4.21.0",
-    "express-rate-limit": "^7.4.0", 
+    "express-rate-limit": "^7.4.0",
     "cors": "^2.8.5",
     "multer": "^1.4.5-lts.1",
     "bs58": "^5.0.0",
@@ -42,8 +42,10 @@
     "@nktkas/hyperliquid": "^0.32.2",
     "ethers": "^6.13.0",
     "@lifi/sdk": "^3.16.3",
-    "@polymarket/clob-client-v2": "^1.0.0", 
-    "viem": "^2.0.0"
+    "@polymarket/clob-client": "^4.22.8",
+    "@polymarket/builder-relayer-client": "^0.0.6",
+    "@polymarket/builder-signing-sdk": "^0.0.8",
+    "viem": "^2.39.2"
   },
   "overrides": {
     "uuid": "^9.0.1"
@@ -57,8 +59,14 @@
     "dev": "concurrently \"react-app-rewired start\" \"node server.js\""
   },
   "browserslist": {
-    "production": [">0.2%", "not dead", "not op_mini all"],
-    "development": ["last 1 chrome version"]
+    "production": [
+      ">0.2%",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version"
+    ]
   },
   "engines": {
     "node": "20.x"
