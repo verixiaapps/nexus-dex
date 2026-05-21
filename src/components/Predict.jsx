@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────
 // Predict.jsx — Polymarket prediction markets via Solana + Safe wallets.
-// 
+//
 // ARCHITECTURE (v3 — Safe path, matches Polymarket's official reference
 // examples privy-safe-builder-example, turnkey-safe-builder-example, etc):
 //   • Each user has a Polymarket Safe wallet (Gnosis Safe proxy) on Polygon.
@@ -100,7 +100,7 @@ const GEO_CACHE_TTL = 12 * 60 * 60 * 1000;
 const US_BLOCK      = new Set(['US']);
 
 const DERIVATION_MSG = (pub) =>
-  `Verixia Predict: Authorize Polymarket Account\n\nWallet: ${pub}\n\nThis creates your non-custodial Polymarket deposit wallet on Polygon. No funds are moved by this signature.`;
+  `Authorize Polymarket Account\n\nCreates your trading wallet on Polygon. Only you control it. No funds move with this signature.`;
 
 // ═══════════════════════════════════════════════════════════════════
 // DESIGN TOKENS (unchanged from v1)
