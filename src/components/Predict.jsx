@@ -953,14 +953,16 @@ function MarketCard({ market, onTrade }) {
   // Coerce to numbers — Gamma sometimes returns prices as strings.
   const yesPrice = Number(market.yesPrice) || 0;
   const noPrice  = Number(market.noPrice)  || 0;
-  // Upside = (1 / price - 1) × 100. Show whenever price is in (0, 1).
-  // Cap at 9999% so absurd longshots don't break layout.
-  const yesUpside = yesPrice > 0 && yesPrice < 1
-    ? Math.min(9999, Math.round((1 / yesPrice - 1) * 100))
-    : 0;
-  const noUpside = noPrice > 0 && noPrice < 1
-    ? Math.min(9999, Math.round((1 / noPrice - 1) * 100))
-    : 0;
+  // Upside = (1 / price - 1) × 100. Only show when price is in a realistic
+  // tradeable range. Below $0.02 means the market is effectively decided
+  // against that side — "+9999% upside" would mislead. Above $0.99 means
+  // it's a near-certain win and the upside is noise.
+  const upsideForPrice = (px) => {
+    if (px < 0.02 || px > 0.99) return 0;
+    return Math.round((1 / px - 1) * 100);
+  };
+  const yesUpside = upsideForPrice(yesPrice);
+  const noUpside  = upsideForPrice(noPrice);
 
   return (
     <div style={{ padding: 16, borderRadius: 16, background: `linear-gradient(145deg, ${C.card}, ${C.cardHi})`, border: `1px solid ${C.border}`, marginBottom: 10, boxShadow: C.shadow }}>
