@@ -1,54 +1,75 @@
 // ─────────────────────────────────────────────────────────────────────
-// Predict — Polymarket prediction markets, crypto focus.
+// Predict.jsx — Polymarket prediction markets via Solana + Safe wallets.
 //
-// FLOW (one user signature per trade):
-//   1. User taps Buy YES/NO $X
-//   2. POST bridge.polymarket.com/deposit → get a Solana deposit address
-//      that funnels USDC → pUSD on Polygon at user's Polymarket account
-//   3. Build ONE Solana versioned tx with TWO SPL transfer ixs:
-//        • $X × 0.97 → Polymarket's Solana bridge address
-//        • $X × 0.03 → our fee wallet on Solana
-//   4. ALWAYS pre-sim the exact tx bytes via Solana RPC simulateTransaction
-//      (same pattern as Stocks.jsx — catches failures BEFORE Phantom prompt,
-//      keeps Blowfish output clean since we already validated everything)
-//   5. User signs ONCE in Phantom
-//   6. ~30 seconds later, pUSD lands in user's Polymarket account
-//   7. Sign + post the Polymarket CLOB order silently from derived Polygon
-//      key (one-time derivation, cached in sessionStorage)
+// ARCHITECTURE (v3 — Safe path, matches Polymarket's official reference
+// examples privy-safe-builder-example, turnkey-safe-builder-example, etc):
+//   • Each user has a Polymarket Safe wallet (Gnosis Safe proxy) on Polygon.
+//     Address is deterministic from owner EOA via deriveSafe(). Same EOA
+//     always gets same safe — meaning a user who has used polymarket.com
+//     before will land in their existing safe with their existing balance.
+//   • We derive the owner EOA from the user's Solana wallet signature.
+//     EOA private key lives in sessionStorage only (non-custodial).
+//   • All Polygon-side ops use Polymarket's official SDKs:
+//     - @polymarket/clob-client-v2       (orders, CLOB API)
+//     - @polymarket/builder-relayer-client (safe deploy, approvals batch)
+//     - @polymarket/builder-signing-sdk   (HMAC config for relayer auth)
+//     Relayer SDK auto-signs via remote endpoint at /api/poly/sign.
+//     CLOB V2 builder attribution is via `builderCode` field per order.
+//   • Builder secrets stay on backend. Frontend never sees them.
 //
-// No LI.FI, no gas sponsorship, no Polygon RPC, no viem, no ethers Wallet
-// for bridging. Polymarket's Bridge API (fun.xyz under the hood) handles
-// everything once funds reach their Solana address.
+// FLOW per new user (FIRST TRADE):
+//   1. Phantom prompt #1: derivation message → EOA private key in sessionStorage
+//   2. SILENT: derive safe address (deterministic from EOA via CREATE2)
+//   3. SILENT: deploy safe via RelayClient.deploy() (gasless, ~30s)
+//   4. SILENT: derive CLOB API creds via L1 EIP-712 (signed by EOA)
+//   5. SILENT: batch-approve USDC.e + ERC-1155 contracts via RelayClient.execute()
+//   6. Phantom prompt #2: signed Solana SPL tx (bridge USDC + 5% to our wallet)
+//   7. Bridge converts USDC → pUSD into the user's safe (~30s)
+//   8. SILENT: SDK signs order + posts to CLOB with builder code attribution
 //
-// Withdrawals: free, instant. POST /withdraw to Polymarket's API with the
-// user's Solana wallet as recipient. No fee, matches Polymarket's own UX.
+// FLOW per existing user (SUBSEQUENT TRADES):
+//   Same but steps 1, 3, 4, 5 skip if cached. Result: ONE Phantom prompt
+//   per trade (the Solana tx). Existing polymarket.com users skip 3+5.
+//
+// FEES:
+//   • 5% on Solana deposits → our fee wallet, same atomic tx as bridge
+//   • Sells: free
+//   • Withdraws: free (Polymarket pays gas via relayer)
+//
+// NON-CUSTODIAL:
+//   • EOA private key derived from user's Solana signature (browser only).
+//   • Safe is owned 1-of-1 by user's EOA. We can't move funds.
+//   • Our role: bridge fee skim on Solana + interface only.
 // ─────────────────────────────────────────────────────────────────────
 
-import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
   VersionedTransaction, TransactionInstruction, TransactionMessage, PublicKey,
 } from '@solana/web3.js';
 import { useNexusWallet } from '../WalletContext.js';
 
-// ═════════════════════════════════════════════════════════════════════
+// CLOB SDK + viem are loaded lazily (only when a trade actually fires),
+// so they don't bloat the initial bundle and don't interfere with market
+// browsing for non-trading users.
+
+// ═══════════════════════════════════════════════════════════════════
 // CONFIG
-// ═════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
 
 const VIP_WALLETS = new Set(['Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV']);
 
-// 5% entry fee bundled into the Solana SPL transfer.
-// Free sells, free withdraws — captured entirely on entry.
-const SERVICE_FEE_PCT = 0.05;
-const FEE_RECIPIENT_SOL = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
+// 5% Solana-side fee, captured in the same atomic SPL tx as the bridge deposit.
+const SERVICE_FEE_PCT    = 0.05;
+const FEE_RECIPIENT_SOL  = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
 
-// Polymarket referrer (Polygon address). Leave blank, fill in when account ready.
-const POLYMARKET_REFERRER = ''; // TODO: your Polymarket Polygon address
+// Backend proxy (Express on Railway). Holds builder API creds.
+const POLY_PROXY = '/api/poly';
 
-// Polymarket APIs
-const BRIDGE_URL          = 'https://bridge.polymarket.com';
+// Public Polymarket APIs (no auth needed for these).
 const POLYMARKET_CLOB_URL = 'https://clob.polymarket.com';
 const GAMMA_URL           = 'https://gamma-api.polymarket.com';
+const DATA_API_URL        = 'https://data-api.polymarket.com';
 const CRYPTO_TAG_ID       = 21;
 
 // Solana constants
@@ -56,12 +77,21 @@ const USDC_SOLANA_MINT = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const USDC_DECIMALS    = 6;
 const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const ATA_PROGRAM_ID   = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+const SOL_RPC          = '/api/solana-rpc';
 
-// Polymarket settles in pUSD (6 decimals on Polygon).
-const POLYGON_CHAIN_ID    = 137;
-const POLYMARKET_EXCHANGE = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
+// Polygon contracts — verified against https://docs.polymarket.com/resources/contracts (May 2026)
+const POLYGON_CHAIN_ID            = 137;
+const SAFE_FACTORY                = '0xaacfeea03eb1561c4e67d661e40682bd20e3541b';
+const CTF_EXCHANGE                = '0xE111180000d2663C0091e4f400237545B87B996B';  // CTF Exchange V2
+const NEG_RISK_CTF_EXCHANGE       = '0xe2222d279d744050d28e00520010520000310F59';
+const NEG_RISK_ADAPTER            = '0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296';
+const CONDITIONAL_TOKENS_ADDRESS  = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045';
+const USDC_E_ADDRESS              = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
+const PUSD_ADDRESS                = '0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB';
 
-// Minimum deposit Polymarket accepts (per their /supported-assets) — $5 typical.
+const RELAYER_URL = 'https://relayer-v2.polymarket.com/';
+
+// Minimum deposit accepted by the bridge for Solana USDC.
 const MIN_DEPOSIT_USD = 5;
 
 // Geo block
@@ -71,47 +101,33 @@ const GEO_CACHE_TTL = 12 * 60 * 60 * 1000;
 const US_BLOCK      = new Set(['US']);
 
 const DERIVATION_MSG = (pub) =>
-  `Verixia Predict: Authorize Polymarket Account\n\nWallet: ${pub}\n\nThis creates your non-custodial Polymarket account on Polygon. No funds are moved.`;
+  `Verixia Predict: Authorize Polymarket Account\n\nWallet: ${pub}\n\nThis creates your non-custodial Polymarket deposit wallet on Polygon. No funds are moved by this signature.`;
 
-// ═════════════════════════════════════════════════════════════════════
-// DESIGN TOKENS
-// ═════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// DESIGN TOKENS (unchanged from v1)
+// ═══════════════════════════════════════════════════════════════════
 
 const C = {
-  bg:        '#03060f',
-  card:      '#080d1a',
-  cardHi:    '#0c1428',
-  ink:       '#e8ecf5',
-  inkStr:    '#f5fafe',
-  muted:     '#8a96b8',
-  muted2:    '#475670',
-  border:    'rgba(151,252,228,.10)',
-  borderHi:  'rgba(151,252,228,.30)',
-  hl:        '#97fce4',
-  hl2:       '#5ce9c8',
-  hlDim:     'rgba(151,252,228,.10)',
-  violet:    '#a87fff',
-  yes:       '#00d4a3',
-  yesDim:    'rgba(0,212,163,.12)',
-  no:        '#ff5f7a',
-  noDim:     'rgba(255,95,122,.12)',
-  amber:     '#f5b53d',
-  shadow:    '0 8px 28px rgba(0,0,0,.45)',
-  shadowLg:  '0 18px 56px rgba(0,0,0,.55)',
+  bg: '#03060f', card: '#080d1a', cardHi: '#0c1428',
+  ink: '#e8ecf5', inkStr: '#f5fafe', muted: '#8a96b8', muted2: '#475670',
+  border: 'rgba(151,252,228,.10)', borderHi: 'rgba(151,252,228,.30)',
+  hl: '#97fce4', hl2: '#5ce9c8', hlDim: 'rgba(151,252,228,.10)',
+  violet: '#a87fff',
+  yes: '#00d4a3', yesDim: 'rgba(0,212,163,.12)',
+  no: '#ff5f7a', noDim: 'rgba(255,95,122,.12)',
+  amber: '#f5b53d',
+  shadow: '0 8px 28px rgba(0,0,0,.45)',
+  shadowLg: '0 18px 56px rgba(0,0,0,.55)',
 };
 const T = {
   body:    { fontFamily: 'DM Sans, system-ui, sans-serif' },
   display: { fontFamily: 'Syne, Inter, sans-serif' },
   mono:    { fontFamily: 'IBM Plex Mono, monospace' },
-  hero:    { fontFamily: "'Clash Display', 'Syne', system-ui, sans-serif" },
 };
 
-// ═════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
 // UTILS
-// ═════════════════════════════════════════════════════════════════════
-
-function isValidEthAddress(v) { return /^0x[a-fA-F0-9]{40}$/.test(String(v || '')); }
-function isValidSolAddress(v) { return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(v || '')); }
+// ═══════════════════════════════════════════════════════════════════
 
 async function fetchWithTimeout(url, opts = {}, timeoutMs = 12_000) {
   const controller = new AbortController();
@@ -123,10 +139,10 @@ async function fetchWithTimeout(url, opts = {}, timeoutMs = 12_000) {
 function fmtUsd(n, d = 2) {
   if (n == null || !Number.isFinite(Number(n))) return '$0.00';
   n = Number(n);
-  if (n >= 1e9)  return '$' + (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6)  return '$' + (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3)  return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
-  if (n >= 1)    return '$' + n.toFixed(d);
+  if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
+  if (n >= 1)   return '$' + n.toFixed(d);
   return '$' + n.toFixed(4);
 }
 
@@ -150,34 +166,25 @@ function timeUntil(iso) {
   return `${h}h ${m}m`;
 }
 
-// "Ends May 31" or "Ends May 31, 7:30 PM" depending on how soon.
 function formatEndDate(iso) {
   if (!iso) return null;
   const d = new Date(iso);
   if (!Number.isFinite(d.getTime())) return null;
-  const now = Date.now();
-  const ms  = d.getTime() - now;
+  const ms = d.getTime() - Date.now();
   if (ms <= 0) return 'Resolving';
   const shortMonth = d.toLocaleString('en-US', { month: 'short' });
   const day = d.getDate();
-  // Within 7 days: show time + user's timezone abbreviation so it's
-  // unambiguous (no confusion about UTC vs local).
   if (ms < 7 * 86400000) {
     const time = d.toLocaleString('en-US', { hour: 'numeric', minute: '2-digit' });
-    // Extract timezone abbreviation (e.g. "EDT", "PST", "GMT+5")
     let tz = '';
     try {
-      const parts = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' })
-        .formatToParts(d);
+      const parts = new Intl.DateTimeFormat('en-US', { timeZoneName: 'short' }).formatToParts(d);
       const tzPart = parts.find(p => p.type === 'timeZoneName');
       if (tzPart) tz = ' ' + tzPart.value;
     } catch {}
     return `Ends ${shortMonth} ${day}, ${time}${tz}`;
   }
-  // Within current year — no year suffix
-  if (d.getFullYear() === new Date().getFullYear()) {
-    return `Ends ${shortMonth} ${day}`;
-  }
+  if (d.getFullYear() === new Date().getFullYear()) return `Ends ${shortMonth} ${day}`;
   return `Ends ${shortMonth} ${day}, ${d.getFullYear()}`;
 }
 
@@ -200,9 +207,9 @@ function useBodyLock(open) {
   }, [open]);
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// GEO DETECTION
-// ═════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// GEO
+// ═══════════════════════════════════════════════════════════════════
 
 async function detectCountry() {
   try {
@@ -226,11 +233,9 @@ async function detectCountry() {
   } catch { return null; }
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// POLYGON WALLET DERIVATION (for CLOB order signing only — no on-chain
-// Polygon txs ever happen from the app's side, so we don't need viem/
-// ethers Wallet for funding. Just signing typed data.)
-// ═════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// ETHERS (lazy loaded — only when needed for trading)
+// ═══════════════════════════════════════════════════════════════════
 
 let _ethersModule = null;
 async function getEthers() {
@@ -246,169 +251,325 @@ function getEthersNs(mod) {
   return null;
 }
 
-function getSessionPolyWallet(solPubkey) {
+// ═══════════════════════════════════════════════════════════════════
+// SESSION STORAGE (EOA private key + L2 creds)
+// Non-custodial: key derived deterministically from user's Solana sig,
+// kept in sessionStorage only. We never see it.
+// ═══════════════════════════════════════════════════════════════════
+
+function getSessionEoa(solPub) {
   try {
-    const raw = sessionStorage.getItem('verixia_poly_' + solPubkey);
+    const raw = sessionStorage.getItem('verixia_poly_eoa_' + solPub);
     return raw ? JSON.parse(raw) : null;
   } catch { return null; }
 }
-function setSessionPolyWallet(solPubkey, address, privateKey) {
-  try { sessionStorage.setItem('verixia_poly_' + solPubkey, JSON.stringify({ address, privateKey })); }
-  catch {}
+function setSessionEoa(solPub, address, privateKey) {
+  try { sessionStorage.setItem('verixia_poly_eoa_' + solPub, JSON.stringify({ address, privateKey })); } catch {}
 }
-function getKnownPolyAddress(solPubkey) {
-  try { return localStorage.getItem('verixia_poly_addr_' + solPubkey) || null; }
+function getSessionCreds(eoaAddr) {
+  try {
+    const raw = sessionStorage.getItem('verixia_clob_creds_' + eoaAddr.toLowerCase());
+    return raw ? JSON.parse(raw) : null;
+  } catch { return null; }
+}
+function setSessionCreds(eoaAddr, creds) {
+  try { sessionStorage.setItem('verixia_clob_creds_' + eoaAddr.toLowerCase(), JSON.stringify(creds)); } catch {}
+}
+function getKnownSafe(solPub) {
+  try { return localStorage.getItem('verixia_safe_' + solPub) || null; }
   catch { return null; }
 }
-function setKnownPolyAddress(solPubkey, address) {
-  try { localStorage.setItem('verixia_poly_addr_' + solPubkey, address); } catch {}
+function setKnownSafe(solPub, addr) {
+  try { localStorage.setItem('verixia_safe_' + solPub, addr); } catch {}
 }
-function getResolvedPolyAddress(solPubkey) {
-  return getSessionPolyWallet(solPubkey)?.address || getKnownPolyAddress(solPubkey);
+function getSafeDeployed(solPub) {
+  try { return localStorage.getItem('verixia_safe_deployed_' + solPub) === '1'; }
+  catch { return false; }
+}
+function setSafeDeployed(solPub) {
+  try { localStorage.setItem('verixia_safe_deployed_' + solPub, '1'); } catch {}
+}
+function getApprovalsSet(solPub) {
+  try { return localStorage.getItem('verixia_safe_approvals_' + solPub) === '1'; }
+  catch { return false; }
+}
+function setApprovalsSet(solPub) {
+  try { localStorage.setItem('verixia_safe_approvals_' + solPub, '1'); } catch {}
 }
 
-async function derivePolygonWallet(signMessage, solPubkey) {
-  const cached = getSessionPolyWallet(solPubkey);
+// ═══════════════════════════════════════════════════════════════════
+// EOA DERIVATION FROM SOLANA SIG
+// One Solana signature → deterministic Ethereum private key.
+// User can always regenerate the same EOA from the same Solana wallet.
+// ═══════════════════════════════════════════════════════════════════
+
+async function deriveEoa(signMessage, solPub) {
+  const cached = getSessionEoa(solPub);
   if (cached) return cached;
-  const encoded  = new TextEncoder().encode(DERIVATION_MSG(solPubkey));
-  const sig      = await signMessage(encoded);
-  const hash     = await crypto.subtle.digest('SHA-256', sig);
-  const pk       = '0x' + [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, '0')).join('');
+  const encoded = new TextEncoder().encode(DERIVATION_MSG(solPub));
+  const sig     = await signMessage(encoded);
+  const hash    = await crypto.subtle.digest('SHA-256', sig);
+  const pk      = '0x' + [...new Uint8Array(hash)].map(b => b.toString(16).padStart(2, '0')).join('');
   const ethersNs = getEthersNs(await getEthers());
-  const wallet   = new ethersNs.Wallet(pk);
-  const result   = { address: wallet.address, privateKey: pk };
-  setSessionPolyWallet(solPubkey, wallet.address, pk);
-  setKnownPolyAddress(solPubkey, wallet.address);
+  const wallet  = new ethersNs.Wallet(pk);
+  const result  = { address: wallet.address, privateKey: pk };
+  setSessionEoa(solPub, wallet.address, pk);
   return result;
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// POLYMARKET BRIDGE API
-// ═════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// POLYMARKET SDK LOADING (lazy — only when trade fires)
+//
+// V2 architecture (post April 28 2026 cutover):
+//   • @polymarket/clob-client-v2       — orders + API creds. Takes a viem
+//                                        walletClient. BuilderConfig is just
+//                                        { builderCode } — NO HMAC for orders.
+//   • @polymarket/builder-relayer-client — safe deploy + batched approvals.
+//                                        STILL uses ethers v5 signer and the
+//                                        HMAC-based BuilderConfig from
+//                                        @polymarket/builder-signing-sdk for
+//                                        relayer auth (gasless).
+//   • @polymarket/builder-signing-sdk  — HMAC BuilderConfig for the relayer
+//                                        ONLY (CLOB no longer uses HMAC headers).
+//
+// V1 clob-client stopped working at the April 28 cutover. The official
+// reference examples (privy-safe-builder-example, etc) haven't been
+// updated yet — don't trust their package versions. We use V2 here.
+// ═══════════════════════════════════════════════════════════════════
 
-// Generate deposit addresses for the user's Polymarket Polygon wallet.
-// Returns { evm, svm, btc, tvm } — we only use `svm` (Solana address).
-async function fetchPolymarketDepositAddresses(polyAddress) {
-  const res = await fetchWithTimeout(`${BRIDGE_URL}/deposit`, {
+let _clobSdk = null;
+let _relayerSdk = null;
+let _signingSdk = null;
+let _viem = null;
+let _viemAccounts = null;
+
+async function loadSdks() {
+  if (_clobSdk && _relayerSdk && _signingSdk && _viem && _viemAccounts) {
+    return {
+      clob: _clobSdk, relayer: _relayerSdk, signing: _signingSdk,
+      viem: _viem, viemAccounts: _viemAccounts,
+    };
+  }
+  const [clob, relayer, signing, viem, viemAccounts, deriveMod, configMod] = await Promise.all([
+    import('@polymarket/clob-client-v2'),
+    import('@polymarket/builder-relayer-client'),
+    import('@polymarket/builder-signing-sdk'),
+    import('viem'),
+    import('viem/accounts'),
+    // deriveSafe and getContractConfig live in subpath imports per reference example.
+    import('@polymarket/builder-relayer-client/dist/builder/derive').catch(() => null),
+    import('@polymarket/builder-relayer-client/dist/config').catch(() => null),
+  ]);
+  _clobSdk      = clob;
+  _relayerSdk   = { ...relayer, _derive: deriveMod, _config: configMod };
+  _signingSdk   = signing;
+  _viem         = viem;
+  _viemAccounts = viemAccounts;
+  return { clob, relayer: _relayerSdk, signing, viem, viemAccounts };
+}
+
+// BuilderConfig for the Relayer (still uses HMAC via remote signing).
+// Points the SDK at our /api/poly/sign endpoint; builder secret never
+// touches the browser.
+function buildRelayerBuilderConfig(signing) {
+  const { BuilderConfig } = signing;
+  return new BuilderConfig({
+    remoteBuilderConfig: { url: `${POLY_PROXY}/sign` },
+  });
+}
+
+// BuilderConfig for CLOB V2 — V2 just needs { builderCode } on each order.
+// We attach builderCode per-order in postMarketBuy/postMarketSell instead
+// of via BuilderConfig; this matches the new V2 docs exactly.
+
+// Build a viem walletClient (clob-client-v2 expects viem, not ethers).
+async function buildViemWalletClient(eoaPrivateKey) {
+  const { viem, viemAccounts } = await loadSdks();
+  const { createWalletClient, http } = viem;
+  const { privateKeyToAccount } = viemAccounts;
+  const pk = eoaPrivateKey.startsWith('0x') ? eoaPrivateKey : ('0x' + eoaPrivateKey);
+  const account = privateKeyToAccount(pk);
+  return createWalletClient({ account, transport: http('https://polygon-rpc.com') });
+}
+
+// Build an ethers v5 signer (builder-relayer-client still expects ethers).
+async function buildEthersSigner(eoaPrivateKey) {
+  const ethersNs = getEthersNs(await getEthers());
+  let provider = null;
+  try {
+    if (ethersNs.providers?.JsonRpcProvider) {
+      provider = new ethersNs.providers.JsonRpcProvider('https://polygon-rpc.com', POLYGON_CHAIN_ID);
+    } else if (ethersNs.JsonRpcProvider) {
+      provider = new ethersNs.JsonRpcProvider('https://polygon-rpc.com');
+    }
+  } catch {}
+  const pk = eoaPrivateKey.startsWith('0x') ? eoaPrivateKey : ('0x' + eoaPrivateKey);
+  return new ethersNs.Wallet(pk, provider);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SAFE ADDRESS DERIVATION + DEPLOYMENT
+// Same EOA → same safe address always (CREATE2). User who has used
+// polymarket.com before with this EOA lands in their existing safe
+// with their existing balance.
+// ═══════════════════════════════════════════════════════════════════
+
+async function deriveSafeAddress(eoaAddress) {
+  const { relayer } = await loadSdks();
+  const derive = relayer._derive;
+  const cfg    = relayer._config;
+  if (!derive?.deriveSafe || !cfg?.getContractConfig) {
+    throw new Error('SDK derive helpers not available — check @polymarket/builder-relayer-client version');
+  }
+  const config = cfg.getContractConfig(POLYGON_CHAIN_ID);
+  return derive.deriveSafe(eoaAddress, config.SafeContracts.SafeFactory);
+}
+
+async function buildRelayClient(eoaPrivateKey) {
+  const { relayer, signing } = await loadSdks();
+  const { RelayClient } = relayer;
+  const signer = await buildEthersSigner(eoaPrivateKey);
+  const builderConfig = buildRelayerBuilderConfig(signing);
+  // 5th arg defaults to RelayerTxType.SAFE per SDK README.
+  return new RelayClient(RELAYER_URL, POLYGON_CHAIN_ID, signer, builderConfig);
+}
+
+async function ensureSafeDeployed(eoa, solPub, onStatus) {
+  // Determine safe address (deterministic).
+  let safe = getKnownSafe(solPub);
+  if (!safe) {
+    safe = await deriveSafeAddress(eoa.address);
+    setKnownSafe(solPub, safe);
+  }
+
+  // Skip deploy if we've already done it locally.
+  if (getSafeDeployed(solPub)) return safe;
+
+  const relayClient = await buildRelayClient(eoa.privateKey);
+
+  // Check onchain whether it's already deployed (existing polymarket.com user).
+  try {
+    const deployed = await relayClient.getDeployed(safe);
+    if (deployed) {
+      setSafeDeployed(solPub);
+      return safe;
+    }
+  } catch {
+    // getDeployed may not exist in older SDK versions — fall through to deploy.
+  }
+
+  onStatus?.('Deploying Polymarket account...');
+  const response = await relayClient.deploy();
+  const result   = await response.wait();
+  const proxyAddr = result?.proxyAddress || safe;
+  setKnownSafe(solPub, proxyAddr);
+  setSafeDeployed(solPub);
+  return proxyAddr;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CLOB API CREDS (L1)
+// Temporary ClobClient with just signer → createOrDeriveApiKey()
+// ═══════════════════════════════════════════════════════════════════
+
+async function getOrDeriveClobCreds(eoa) {
+  const cached = getSessionCreds(eoa.address);
+  if (cached?.key && cached?.secret && cached?.passphrase) return cached;
+
+  const { clob } = await loadSdks();
+  const { ClobClient } = clob;
+  const signer = await buildViemWalletClient(eoa.privateKey);
+
+  // V2 SDK constructor: options object, not positional.
+  const tempClient = new ClobClient({
+    host:  POLYMARKET_CLOB_URL,
+    chain: POLYGON_CHAIN_ID,
+    signer,
+  });
+
+  const creds = await tempClient.createOrDeriveApiKey();
+  const normalized = {
+    key:        creds.key,
+    secret:     creds.secret,
+    passphrase: creds.passphrase,
+  };
+  setSessionCreds(eoa.address, normalized);
+  return normalized;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// TOKEN APPROVALS (batched via RelayClient.execute)
+// USDC.e (ERC-20)  → CTF, CTF Exchange, Neg Risk CTF Exchange, Neg Risk Adapter
+// CTF tokens (ERC-1155) → CTF Exchange, Neg Risk CTF Exchange, Neg Risk Adapter
+// ═══════════════════════════════════════════════════════════════════
+
+const MAX_UINT256 = (1n << 256n) - 1n;
+
+// approve(address,uint256) selector = 0x095ea7b3
+function encodeErc20Approve(spender, amount) {
+  const selector = '095ea7b3';
+  const spenderPad = spender.replace(/^0x/, '').toLowerCase().padStart(64, '0');
+  const amtHex     = BigInt(amount).toString(16).padStart(64, '0');
+  return '0x' + selector + spenderPad + amtHex;
+}
+// setApprovalForAll(address,bool) selector = 0xa22cb465
+function encodeErc1155SetApprovalForAll(operator, approved) {
+  const selector = 'a22cb465';
+  const op = operator.replace(/^0x/, '').toLowerCase().padStart(64, '0');
+  const ap = (approved ? '1' : '0').padStart(64, '0');
+  return '0x' + selector + op + ap;
+}
+
+function buildApprovalTxs() {
+  // Order copied from Polymarket's official reference (safe-wallet-integration repo).
+  return [
+    // USDC.e ERC-20 approvals (4 spenders).
+    { to: USDC_E_ADDRESS, value: '0', data: encodeErc20Approve(CONDITIONAL_TOKENS_ADDRESS, MAX_UINT256.toString()) },
+    { to: USDC_E_ADDRESS, value: '0', data: encodeErc20Approve(CTF_EXCHANGE,               MAX_UINT256.toString()) },
+    { to: USDC_E_ADDRESS, value: '0', data: encodeErc20Approve(NEG_RISK_CTF_EXCHANGE,      MAX_UINT256.toString()) },
+    { to: USDC_E_ADDRESS, value: '0', data: encodeErc20Approve(NEG_RISK_ADAPTER,           MAX_UINT256.toString()) },
+    // CTF ERC-1155 approvals (3 operators).
+    { to: CONDITIONAL_TOKENS_ADDRESS, value: '0', data: encodeErc1155SetApprovalForAll(CTF_EXCHANGE,          true) },
+    { to: CONDITIONAL_TOKENS_ADDRESS, value: '0', data: encodeErc1155SetApprovalForAll(NEG_RISK_CTF_EXCHANGE, true) },
+    { to: CONDITIONAL_TOKENS_ADDRESS, value: '0', data: encodeErc1155SetApprovalForAll(NEG_RISK_ADAPTER,      true) },
+  ];
+}
+
+async function ensureApprovals(eoa, solPub, onStatus) {
+  if (getApprovalsSet(solPub)) return;
+  onStatus?.('Approving Polymarket contracts...');
+  const relayClient = await buildRelayClient(eoa.privateKey);
+  const txs = buildApprovalTxs();
+  // RelayClient.execute submits a single Safe multi-call → one signature from EOA.
+  const response = await relayClient.execute(txs, 'Set Polymarket trading approvals');
+  await response.wait();
+  setApprovalsSet(solPub);
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// BRIDGE: get user's Solana deposit address for their safe
+// ═══════════════════════════════════════════════════════════════════
+
+async function fetchPolymarketDepositAddresses(safeAddr) {
+  const r = await fetchWithTimeout(`${POLY_PROXY}/deposit`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ address: polyAddress.toLowerCase() }),
+    body: JSON.stringify({ address: safeAddr.toLowerCase() }),
   }, 10_000);
-  if (!res.ok) {
-    let detail = '';
-    try { detail = (await res.json())?.error || ''; } catch {}
-    throw new Error(`Polymarket bridge ${res.status}${detail ? ' — ' + detail : ''}`);
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    throw new Error(`Bridge ${r.status}: ${t.slice(0, 160)}`);
   }
-  const data = await res.json();
-  // Response shape per Polymarket docs:
-  //   { address: { evm, svm, btc, tvm }, ... }
+  const data = await r.json();
   const addrs = data?.address || data;
   if (!addrs?.svm) throw new Error('Polymarket did not return a Solana deposit address');
   return addrs;
 }
 
-// Initiate a withdrawal from user's Polymarket account back to their Solana wallet.
-// Free, instant per Polymarket docs.
-async function initiatePolymarketWithdraw({ polyAddress, solRecipient, amountAtomic }) {
-  const res = await fetchWithTimeout(`${BRIDGE_URL}/withdraw`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      address:        polyAddress.toLowerCase(),
-      toChainId:      'solana',           // per Polymarket docs
-      toTokenAddress: USDC_SOLANA_MINT,   // USDC on Solana
-      recipientAddr:  solRecipient,
-      ...(amountAtomic ? { amount: String(amountAtomic) } : {}),
-    }),
-  }, 12_000);
-  if (!res.ok) {
-    let detail = '';
-    try { detail = (await res.json())?.error || ''; } catch {}
-    throw new Error(`Withdraw ${res.status}${detail ? ' — ' + detail : ''}`);
-  }
-  return await res.json();
-}
+// ═══════════════════════════════════════════════════════════════════
+// SOLANA TX ASSEMBLY (Polymarket bridge + 5% fee, atomic)
+// ═══════════════════════════════════════════════════════════════════
 
-// Poll Polymarket's status endpoint after deposit.
-async function fetchDepositStatus(svmDepositAddress) {
-  try {
-    const res = await fetchWithTimeout(`${BRIDGE_URL}/status/${svmDepositAddress}`, {}, 6_000);
-    if (!res.ok) return null;
-    return await res.json();
-  } catch { return null; }
-}
-
-// Read user's pUSD balance on Polymarket — used to detect funds arrival
-// and to power bring-home banner.
-async function fetchPolymarketBalance(polyAddress) {
-  try {
-    const res = await fetchWithTimeout(`${POLYMARKET_CLOB_URL}/balance/${polyAddress.toLowerCase()}`, {}, 6_000);
-    if (!res.ok) return 0n;
-    const data = await res.json();
-    const bal = data?.balance ?? data?.pusd ?? data?.usdc ?? 0;
-    // Return as atomic units (6 decimals)
-    if (typeof bal === 'string') return BigInt(bal);
-    if (typeof bal === 'number') return BigInt(Math.floor(bal * 1e6));
-    return 0n;
-  } catch { return 0n; }
-}
-
-// Fetch user's open positions on a specific market.
-// Returns { sharesYes, sharesNo, avgPriceYes, avgPriceNo } in shares units.
-// Polymarket Data API: GET /positions?user=<addr>&market=<conditionId>
-async function fetchPolymarketPositions(polyAddress, conditionId, clobTokenIds) {
-  try {
-    const url = `https://data-api.polymarket.com/positions?user=${polyAddress.toLowerCase()}&market=${conditionId}`;
-    const res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 6_000);
-    if (!res.ok) return null;
-    const data = await res.json();
-    if (!Array.isArray(data)) return null;
-    // Match by clobTokenIds — index 0 = YES, index 1 = NO.
-    const yesTokenId = clobTokenIds?.[0];
-    const noTokenId  = clobTokenIds?.[1];
-    let yesPos = null, noPos = null;
-    for (const p of data) {
-      const tid = String(p.asset || p.tokenId || p.token_id || '');
-      if (yesTokenId && tid === String(yesTokenId)) yesPos = p;
-      if (noTokenId  && tid === String(noTokenId))  noPos  = p;
-    }
-    const parseSize = (p) => p ? Number(p.size || p.shares || p.balance || 0) : 0;
-    const parseAvg  = (p) => p ? Number(p.avgPrice || p.average_price || p.avg_price || 0) : 0;
-    return {
-      sharesYes:    parseSize(yesPos),
-      sharesNo:     parseSize(noPos),
-      avgPriceYes:  parseAvg(yesPos),
-      avgPriceNo:   parseAvg(noPos),
-    };
-  } catch { return null; }
-}
-
-// Fetch current best bid for a specific outcome token. Used to value
-// open positions at the price the user could realistically exit at.
-async function fetchClobBestBid(tokenId) {
-  try {
-    const res = await fetchWithTimeout(`${POLYMARKET_CLOB_URL}/book?token_id=${tokenId}`, {}, 6_000);
-    if (!res.ok) return 0;
-    const data = await res.json();
-    // Polymarket book response: { bids: [{price, size}, ...], asks: [...] }
-    // Best bid = highest price someone will pay to BUY (we'd be selling INTO this).
-    const bids = data?.bids || [];
-    if (!bids.length) return 0;
-    let best = 0;
-    for (const b of bids) {
-      const px = Number(b.price || b.p || 0);
-      if (px > best) best = px;
-    }
-    return best;
-  } catch { return 0; }
-}
-
-// ═════════════════════════════════════════════════════════════════════
-// SOLANA TX ASSEMBLY (bundled bridge + fee transfer)
-// ═════════════════════════════════════════════════════════════════════
-
-// Build SPL Token Transfer instruction without pulling @solana/spl-token.
-// Layout: [opcode=3, amount as u64 little-endian].
 function createSplTransferInstruction(source, destination, owner, amountAtomic) {
   const data = new Uint8Array(9);
   data[0] = 3;
@@ -424,27 +585,22 @@ function createSplTransferInstruction(source, destination, owner, amountAtomic) 
     data,
   });
 }
-
-// Create-ATA-if-needed instruction (idempotent — succeeds if ATA already exists).
 function createAtaIfNeededInstruction(payer, ata, owner, mint) {
   return new TransactionInstruction({
     keys: [
-      { pubkey: new PublicKey(payer),  isSigner: true,  isWritable: true  },
-      { pubkey: new PublicKey(ata),    isSigner: false, isWritable: true  },
-      { pubkey: new PublicKey(owner),  isSigner: false, isWritable: false },
-      { pubkey: new PublicKey(mint),   isSigner: false, isWritable: false },
-      { pubkey: new PublicKey('11111111111111111111111111111111'), isSigner: false, isWritable: false }, // System Program
+      { pubkey: new PublicKey(payer), isSigner: true,  isWritable: true  },
+      { pubkey: new PublicKey(ata),   isSigner: false, isWritable: true  },
+      { pubkey: new PublicKey(owner), isSigner: false, isWritable: false },
+      { pubkey: new PublicKey(mint),  isSigner: false, isWritable: false },
+      { pubkey: new PublicKey('11111111111111111111111111111111'), isSigner: false, isWritable: false },
       { pubkey: TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
     ],
     programId: ATA_PROGRAM_ID,
-    // Empty data = "CreateIdempotent" variant in newer ATA program, but for
-    // wide compat we use the legacy Create instruction (single byte 0x01).
     data: new Uint8Array([1]),
   });
 }
-
-function deriveUsdcAta(ownerPubkeyB58) {
-  const owner = new PublicKey(ownerPubkeyB58);
+function deriveUsdcAta(ownerB58) {
+  const owner = new PublicKey(ownerB58);
   const mint  = new PublicKey(USDC_SOLANA_MINT);
   const [ata] = PublicKey.findProgramAddressSync(
     [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
@@ -452,12 +608,9 @@ function deriveUsdcAta(ownerPubkeyB58) {
   );
   return ata.toBase58();
 }
-
-// Check if a token account already exists. Needed so we don't waste lamports
-// trying to re-create existing ATAs.
 async function ataExists(ataAddress) {
   try {
-    const res = await fetchWithTimeout('/api/solana-rpc', {
+    const res = await fetchWithTimeout(SOL_RPC, {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         jsonrpc: '2.0', id: 1, method: 'getAccountInfo',
@@ -468,33 +621,8 @@ async function ataExists(ataAddress) {
     return !!json?.result?.value;
   } catch { return false; }
 }
-
-async function fetchUsdcBalance(walletPubkey) {
-  try {
-    const res = await fetchWithTimeout('/api/solana-rpc', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0', id: 1, method: 'getTokenAccountsByOwner',
-        params: [
-          walletPubkey,
-          { mint: USDC_SOLANA_MINT },
-          { encoding: 'jsonParsed', commitment: 'confirmed' },
-        ],
-      }),
-    }, 6_000);
-    const json = await res.json();
-    const accs = json?.result?.value || [];
-    let atomic = 0n;
-    for (const a of accs) {
-      const raw = a?.account?.data?.parsed?.info?.tokenAmount?.amount;
-      if (raw) atomic += BigInt(raw);
-    }
-    return atomic;
-  } catch { return 0n; }
-}
-
 async function getRecentBlockhash() {
-  const res = await fetchWithTimeout('/api/solana-rpc', {
+  const res = await fetchWithTimeout(SOL_RPC, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash',
@@ -507,42 +635,24 @@ async function getRecentBlockhash() {
   return bh;
 }
 
-// Assemble the trade tx: ensure recipient ATAs exist + fee transfer + Polymarket transfer.
-// Order matters: Polymarket's tx parser expects clean SPL transfers, so we put any
-// ATA creation first, then both transfers.
-async function buildBundledDepositTx({
-  userPubkey,
-  polymarketSvmAddress,    // base58 — the OWNER (Polymarket bridge wallet on Solana)
-  totalUsdcAtomic,         // BigInt — total user wants to spend (gross)
-}) {
-  const feeAtomic     = (totalUsdcAtomic * BigInt(Math.round(SERVICE_FEE_PCT * 10000))) / 10000n;
-  const polyAtomic    = totalUsdcAtomic - feeAtomic;
-  if (polyAtomic <= 0n || feeAtomic <= 0n) {
-    throw new Error('Amount too small after fee split');
-  }
+async function buildBundledDepositTx({ userPubkey, polymarketSvmAddress, totalUsdcAtomic }) {
+  const feeAtomic  = (totalUsdcAtomic * BigInt(Math.round(SERVICE_FEE_PCT * 10000))) / 10000n;
+  const polyAtomic = totalUsdcAtomic - feeAtomic;
+  if (polyAtomic <= 0n || feeAtomic <= 0n) throw new Error('Amount too small after fee split');
 
-  const userAta       = deriveUsdcAta(userPubkey);
-  const polyOwnerAta  = deriveUsdcAta(polymarketSvmAddress);
-  const feeOwnerAta   = deriveUsdcAta(FEE_RECIPIENT_SOL);
+  const userAta      = deriveUsdcAta(userPubkey);
+  const polyOwnerAta = deriveUsdcAta(polymarketSvmAddress);
+  const feeOwnerAta  = deriveUsdcAta(FEE_RECIPIENT_SOL);
 
   const ixs = [];
-
-  // Create-ATA-if-needed for Polymarket's USDC account. Most likely exists
-  // since they use a single funnel address, but cheap insurance.
-  const polyExists = await ataExists(polyOwnerAta);
-  if (!polyExists) {
+  if (!(await ataExists(polyOwnerAta))) {
     ixs.push(createAtaIfNeededInstruction(userPubkey, polyOwnerAta, polymarketSvmAddress, USDC_SOLANA_MINT));
   }
-  // Same for our fee recipient.
-  const feeExists = await ataExists(feeOwnerAta);
-  if (!feeExists) {
+  if (!(await ataExists(feeOwnerAta))) {
     ixs.push(createAtaIfNeededInstruction(userPubkey, feeOwnerAta, FEE_RECIPIENT_SOL, USDC_SOLANA_MINT));
   }
-
-  // SPL Transfer 1: Polymarket bridge address (the larger chunk)
   ixs.push(createSplTransferInstruction(userAta, polyOwnerAta, userPubkey, polyAtomic));
-  // SPL Transfer 2: our fee wallet
-  ixs.push(createSplTransferInstruction(userAta, feeOwnerAta, userPubkey, feeAtomic));
+  ixs.push(createSplTransferInstruction(userAta, feeOwnerAta,  userPubkey, feeAtomic));
 
   const blockhash = await getRecentBlockhash();
   const message = new TransactionMessage({
@@ -551,444 +661,435 @@ async function buildBundledDepositTx({
     instructions:    ixs,
   }).compileToV0Message();
 
-  return {
-    tx: new VersionedTransaction(message),
-    feeAtomic,
-    polyAtomic,
-  };
+  return { tx: new VersionedTransaction(message), feeAtomic, polyAtomic };
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// PRE-SIGN SIMULATION (Stocks-style)
-// Same bytes we sim are the bytes user will sign. RPC substitutes a fresh
-// blockhash internally via `replaceRecentBlockhash`, so sim reflects current
-// chain state. If sim fails → clean error in UI, Phantom never triggered.
-// ═════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// PRE-SIGN SIMULATION
+// ═══════════════════════════════════════════════════════════════════
 
-const SPL_ERROR_CODES = {
-  1: 'Insufficient USDC balance — top up your wallet',
-  2: 'USDC account is frozen',
-  3: 'Owner mismatch on token account',
-  4: 'Amount overflow',
-  5: 'Required signature missing',
-};
-
-function parseSimError(err, logs) {
-  if (!err) return 'Transaction would fail';
-  if (typeof err === 'string') return err;
-  if (err?.InstructionError) {
-    const [idx, detail] = err.InstructionError;
-    if (detail && typeof detail === 'object' && 'Custom' in detail) {
-      const code = Number(detail.Custom);
-      const known = SPL_ERROR_CODES[code];
-      if (known) return known;
-      return `Program error at instruction ${idx} (code ${code})`;
-    }
-    if (typeof detail === 'string') return `${detail} at instruction ${idx}`;
-  }
-  const arr = Array.isArray(logs) ? logs : [];
-  const errLog = arr.find(l => /error|failed|insufficient/i.test(String(l)));
-  if (errLog) {
-    const msg = String(errLog);
-    if (/insufficient.*funds|insufficient.*lamports/i.test(msg)) return 'Not enough SOL for transaction fees';
-    if (/insufficient.*tokens|insufficient.*balance/i.test(msg)) return 'Not enough USDC';
-    return msg.slice(0, 140);
-  }
-  return 'Trade would fail — try a different amount';
-}
-
-async function simulateBeforeSign(serializedTxBase64) {
+async function simulateBeforeSign(serializedB64) {
   try {
-    const res = await fetchWithTimeout('/api/solana-rpc', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+    const res = await fetchWithTimeout(SOL_RPC, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         jsonrpc: '2.0', id: 1, method: 'simulateTransaction',
-        params: [serializedTxBase64, {
-          encoding:               'base64',
-          commitment:             'processed',
-          replaceRecentBlockhash: true,
-          sigVerify:              false,
+        params: [serializedB64, {
+          encoding: 'base64', commitment: 'processed',
+          replaceRecentBlockhash: true, sigVerify: false,
         }],
       }),
     }, 10_000);
     const json = await res.json();
     if (json?.error) return { ok: false, message: json.error.message || 'Simulation RPC error' };
     const value = json?.result?.value;
-    if (!value)    return { ok: true,  warning: 'No sim result' };
-    if (value.err) return { ok: false, message: parseSimError(value.err, value.logs) };
+    if (!value)    return { ok: true };
+    if (value.err) {
+      const logs = Array.isArray(value.logs) ? value.logs : [];
+      const errLog = logs.find(l => /error|failed|insufficient/i.test(String(l)));
+      if (errLog && /insufficient.*tokens|insufficient.*balance/i.test(errLog)) {
+        return { ok: false, message: 'Not enough USDC' };
+      }
+      if (errLog && /insufficient.*lamports/i.test(errLog)) {
+        return { ok: false, message: 'Not enough SOL for fees' };
+      }
+      return { ok: false, message: 'Trade would fail — try a different amount' };
+    }
     return { ok: true };
-  } catch (e) {
-    // If our sim endpoint is down, don't block — Phantom's own sim is the
-    // ultimate safety net. Fail-open with a warning.
-    console.warn('[sim]', e?.message || e);
+  } catch {
     return { ok: true, warning: 'Pre-sim unavailable' };
   }
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// POLYMARKET CLOB ORDER SIGNING (silent, from derived Polygon key)
-// ═════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// POLYMARKET BALANCE / POSITIONS (read-only, public APIs)
+// ═══════════════════════════════════════════════════════════════════
 
-const ORDER_TYPES = {
-  Order: [
-    { name: 'salt',          type: 'uint256' },
-    { name: 'maker',         type: 'address' },
-    { name: 'signer',        type: 'address' },
-    { name: 'taker',         type: 'address' },
-    { name: 'tokenId',       type: 'uint256' },
-    { name: 'makerAmount',   type: 'uint256' },
-    { name: 'takerAmount',   type: 'uint256' },
-    { name: 'expiration',    type: 'uint256' },
-    { name: 'nonce',         type: 'uint256' },
-    { name: 'feeRateBps',    type: 'uint256' },
-    { name: 'side',          type: 'uint8'   },
-    { name: 'signatureType', type: 'uint8'   },
-  ],
-};
-
-const ORDER_DOMAIN = {
-  name:              'Polymarket CTF Exchange',
-  version:           '1',
-  chainId:           POLYGON_CHAIN_ID,
-  verifyingContract: POLYMARKET_EXCHANGE,
-};
-
-function generateSalt() {
-  const bytes = new Uint8Array(16);
-  crypto.getRandomValues(bytes);
-  return BigInt('0x' + [...bytes].map(b => b.toString(16).padStart(2, '0')).join('')).toString();
-}
-
-async function signPolymarketOrder({
-  polyPrivateKey,
-  polyAddress,
-  tokenId,
-  side,           // 'BUY' or 'SELL'
-  usdcAtomic,     // pUSD atomic units (6 dec) the user is committing to spend
-  sharePrice,     // 0.0 to 1.0
-}) {
-  const ethersNs = getEthersNs(await getEthers());
-  const wallet   = new ethersNs.Wallet(polyPrivateKey);
-  const isBuy    = String(side).toUpperCase() === 'BUY' || side === 0;
-
-  const usdcAmt  = BigInt(usdcAtomic);
-  const shareAmt = BigInt(Math.floor(Number(usdcAtomic) / sharePrice));
-
-  const order = {
-    salt:          generateSalt(),
-    maker:         polyAddress.toLowerCase(),
-    signer:        polyAddress.toLowerCase(),
-    taker:         '0x0000000000000000000000000000000000000000',
-    tokenId:       String(tokenId),
-    makerAmount:   isBuy ? usdcAmt.toString()  : shareAmt.toString(),
-    takerAmount:   isBuy ? shareAmt.toString() : usdcAmt.toString(),
-    expiration:    '0',
-    nonce:         '0',
-    feeRateBps:    '0',
-    side:          isBuy ? 0 : 1,
-    signatureType: 0,
-  };
-
-  const signature = typeof wallet.signTypedData === 'function'
-    ? await wallet.signTypedData(ORDER_DOMAIN, ORDER_TYPES, order)
-    : await wallet._signTypedData(ORDER_DOMAIN, ORDER_TYPES, order);
-
-  return { order, signature };
-}
-
-async function postPolymarketOrder({ order, signature, polyAddress }) {
-  const body = {
-    order: { ...order, signature },
-    owner: polyAddress.toLowerCase(),
-    orderType: 'GTC',
-    ...(POLYMARKET_REFERRER ? { referrer: POLYMARKET_REFERRER.toLowerCase() } : {}),
-  };
-  const res = await fetchWithTimeout(`${POLYMARKET_CLOB_URL}/order`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }, 15_000);
-  const data = await res.json().catch(() => ({}));
-  if (!res.ok || data?.error) {
-    throw new Error(data?.error || data?.errorMsg || `CLOB returned ${res.status}`);
-  }
-  return data;
-}
-
-// ═════════════════════════════════════════════════════════════════════
-// BRIDGE STATE PERSISTENCE
-// User signs → we save intent → background poller waits for pUSD to land
-// at user's Polymarket account → fires the order silently. Survives modal
-// close + app refresh. Never shows "timed out" errors.
-// ═════════════════════════════════════════════════════════════════════
-
-function saveTrade(payload) {
-  try { localStorage.setItem('verixia_predict_pending_trade', JSON.stringify({ ...payload, ts: Date.now() })); } catch {}
-}
-function loadTrade() {
+// Fetch the safe's pUSD cash balance by reading the ERC-20 balanceOf() directly
+// on Polygon via public RPC. No auth needed, no Data API quirks.
+async function fetchPolymarketBalance(safeAddress) {
   try {
-    const raw = localStorage.getItem('verixia_predict_pending_trade');
-    if (!raw) return null;
-    const d = JSON.parse(raw);
-    // Auto-expire after 1 hour. By then Polymarket has either bridged or
-    // their support tool needs to be used.
-    return Date.now() - d.ts < 60 * 60_000 ? d : null;
+    const safe = safeAddress.toLowerCase().replace(/^0x/, '').padStart(64, '0');
+    // balanceOf(address) selector = 0x70a08231
+    const data = '0x70a08231' + safe;
+    const r = await fetchWithTimeout('https://polygon-rpc.com', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'eth_call',
+        params: [{ to: PUSD_ADDRESS, data }, 'latest'],
+      }),
+    }, 6_000);
+    if (!r.ok) return 0n;
+    const j = await r.json();
+    const hex = j?.result;
+    if (!hex || typeof hex !== 'string' || !hex.startsWith('0x')) return 0n;
+    return BigInt(hex);   // pUSD has 6 decimals, same scale we use throughout
+  } catch { return 0n; }
+}
+
+async function fetchPolymarketPositions(safeAddress, conditionId, clobTokenIds) {
+  try {
+    const url = `${DATA_API_URL}/positions?user=${safeAddress.toLowerCase()}&market=${conditionId}`;
+    const res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 6_000);
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (!Array.isArray(data)) return null;
+    const yesTokenId = clobTokenIds?.[0];
+    const noTokenId  = clobTokenIds?.[1];
+    let yesPos = null, noPos = null;
+    for (const p of data) {
+      const tid = String(p.asset || p.tokenId || p.token_id || '');
+      if (yesTokenId && tid === String(yesTokenId)) yesPos = p;
+      if (noTokenId  && tid === String(noTokenId))  noPos  = p;
+    }
+    const parseSize = (p) => p ? Number(p.size || p.shares || p.balance || 0) : 0;
+    const parseAvg  = (p) => p ? Number(p.avgPrice || p.average_price || p.avg_price || 0) : 0;
+    return {
+      sharesYes:   parseSize(yesPos),
+      sharesNo:    parseSize(noPos),
+      avgPriceYes: parseAvg(yesPos),
+      avgPriceNo:  parseAvg(noPos),
+    };
   } catch { return null; }
 }
-function clearTrade() {
-  try { localStorage.removeItem('verixia_predict_pending_trade'); } catch {}
+
+async function fetchClobBestBid(tokenId) {
+  try {
+    const res = await fetchWithTimeout(`${POLYMARKET_CLOB_URL}/book?token_id=${tokenId}`, {}, 6_000);
+    if (!res.ok) return 0;
+    const data = await res.json();
+    const bids = data?.bids || [];
+    if (!bids.length) return 0;
+    let best = 0;
+    for (const b of bids) {
+      const px = Number(b.price || b.p || 0);
+      if (px > best) best = px;
+    }
+    return best;
+  } catch { return 0; }
 }
 
-async function pollUntilPolymarketFunded(polyAddress, targetIncreaseAtomic, baselineAtomic, timeoutMs = 5 * 60_000) {
+// ═══════════════════════════════════════════════════════════════════
+// AUTHENTICATED CLOB CLIENT (V2 SDK, Safe / signatureType 2)
+// V2 constructor takes options object. funderAddress (not funder).
+// No builderConfig needed — we attach builderCode directly to orders.
+// ═══════════════════════════════════════════════════════════════════
+
+async function buildAuthenticatedClobClient(eoa, safeAddress, creds) {
+  const { clob } = await loadSdks();
+  const { ClobClient } = clob;
+  const signer = await buildViemWalletClient(eoa.privateKey);
+  return new ClobClient({
+    host:           POLYMARKET_CLOB_URL,
+    chain:          POLYGON_CHAIN_ID,
+    signer,
+    creds,
+    signatureType:  2,            // EOA-associated Gnosis Safe proxy
+    funderAddress:  safeAddress,
+  });
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// CLOB BALANCE-ALLOWANCE UPDATE (after deposit lands)
+// Tells CLOB matching engine to re-read on-chain balances.
+// ═══════════════════════════════════════════════════════════════════
+
+async function updateClobBalance(eoa, safeAddress, creds) {
+  try {
+    const client = await buildAuthenticatedClobClient(eoa, safeAddress, creds);
+    if (typeof client.updateBalanceAllowance === 'function') {
+      // For Safe wallets (sig type 2): asset_type COLLATERAL, signature_type 2.
+      await client.updateBalanceAllowance({
+        asset_type:     'COLLATERAL',
+        signature_type: 2,
+      });
+    }
+  } catch (e) {
+    console.warn('[updateClobBalance]', e?.message || e);
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// ORDER PLACEMENT (via @polymarket/clob-client-v2)
+// Buys and sells are FAK market orders — the SDK reads the orderbook
+// and fills against existing depth at best available prices.
+// builderCode is attached per-order (V2 architecture).
+// ═══════════════════════════════════════════════════════════════════
+
+async function getBuilderCode() {
+  try {
+    const r = await fetchWithTimeout(`${POLY_PROXY}/builder-code`, {}, 4_000);
+    if (!r.ok) return null;
+    const { builderCode } = await r.json();
+    return builderCode || null;
+  } catch { return null; }
+}
+
+async function postMarketBuy({
+  eoa, safeAddress, creds, market, side, usdcSpend,
+}) {
+  const tokenId = side === 'yes' ? market.clobTokenIds[0] : market.clobTokenIds[1];
+  if (!tokenId) throw new Error('Token ID missing');
+
+  const { clob } = await loadSdks();
+  const Side      = clob.Side      || { BUY: 'BUY', SELL: 'SELL' };
+  const OrderType = clob.OrderType || { FAK: 'FAK', FOK: 'FOK', GTC: 'GTC' };
+  const builderCode = await getBuilderCode();
+  const client = await buildAuthenticatedClobClient(eoa, safeAddress, creds);
+
+  // V2 market order: no feeRateBps (protocol-set), no price (SDK reads orderbook).
+  // userUSDCBalance enables fee-adjusted fills; we use usdcSpend as the budget.
+  const marketOrder = {
+    tokenID:           String(tokenId),
+    amount:            Number(usdcSpend),
+    side:              Side.BUY,
+    orderType:         OrderType.FAK,
+    userUSDCBalance:   Number(usdcSpend),
+    ...(builderCode ? { builderCode } : {}),
+  };
+  const opts = {
+    tickSize: market.tickSize || '0.01',
+    negRisk:  !!market.negRisk,
+  };
+
+  if (typeof client.createAndPostMarketOrder !== 'function') {
+    throw new Error('SDK version too old: createAndPostMarketOrder missing. Upgrade @polymarket/clob-client-v2.');
+  }
+  const resp = await client.createAndPostMarketOrder(marketOrder, opts, OrderType.FAK);
+  if (resp?.error || resp?.errorMsg) throw new Error(resp.error || resp.errorMsg);
+  if (resp?.success === false)        throw new Error(resp?.errorMsg || 'Order rejected');
+  return resp;
+}
+
+async function postMarketSell({
+  eoa, safeAddress, creds, market, side, shares,
+}) {
+  const tokenId = side === 'yes' ? market.clobTokenIds[0] : market.clobTokenIds[1];
+  if (!tokenId) throw new Error('Token ID missing');
+
+  const { clob } = await loadSdks();
+  const Side      = clob.Side      || { BUY: 'BUY', SELL: 'SELL' };
+  const OrderType = clob.OrderType || { FAK: 'FAK', FOK: 'FOK', GTC: 'GTC' };
+  const builderCode = await getBuilderCode();
+  const client = await buildAuthenticatedClobClient(eoa, safeAddress, creds);
+
+  // V2 market sell: amount = number of shares to sell.
+  const marketOrder = {
+    tokenID:    String(tokenId),
+    amount:     Number(shares),
+    side:       Side.SELL,
+    orderType:  OrderType.FAK,
+    ...(builderCode ? { builderCode } : {}),
+  };
+  const opts = {
+    tickSize: market.tickSize || '0.01',
+    negRisk:  !!market.negRisk,
+  };
+
+  if (typeof client.createAndPostMarketOrder !== 'function') {
+    throw new Error('SDK version too old: createAndPostMarketOrder missing. Upgrade @polymarket/clob-client-v2.');
+  }
+  const resp = await client.createAndPostMarketOrder(marketOrder, opts, OrderType.FAK);
+  if (resp?.error || resp?.errorMsg) throw new Error(resp.error || resp.errorMsg);
+  if (resp?.success === false)        throw new Error(resp?.errorMsg || 'Order rejected');
+  return resp;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// BRIDGE POLLING
+// ═══════════════════════════════════════════════════════════════════
+
+async function pollUntilBridgeCompletes(svmDepositAddr, timeoutMs = 5 * 60_000) {
   const deadline = Date.now() + timeoutMs;
-  const target = BigInt(baselineAtomic) + BigInt(targetIncreaseAtomic);
   while (Date.now() < deadline) {
     try {
-      const bal = await fetchPolymarketBalance(polyAddress);
-      // Tolerate ~3% slippage from Polymarket's swap path.
-      if (bal >= (target * 97n) / 100n) return { ok: true, balance: bal };
+      const r = await fetchWithTimeout(`${POLY_PROXY}/status/${encodeURIComponent(svmDepositAddr)}`, {}, 6_000);
+      if (r.ok) {
+        const d = await r.json();
+        const txs = d?.transactions || [];
+        if (txs.length > 0) {
+          const latest = txs[txs.length - 1];
+          if (latest.status === 'COMPLETED') return { ok: true };
+          if (latest.status === 'FAILED')    return { ok: false, reason: 'Bridge failed' };
+        }
+      }
     } catch {}
     await new Promise(r => setTimeout(r, 4_000));
   }
-  return { ok: false };
+  return { ok: false, reason: 'Bridge timeout' };
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// END-TO-END TRADE
-// ═════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// PENDING TRADE PERSISTENCE
+// ═══════════════════════════════════════════════════════════════════
 
-async function executePolymarketTrade({
-  market,
-  side,           // 'yes' | 'no'
-  usdAmount,
-  walletPubkey,
-  signTransaction,    // Solana wallet adapter
-  signMessage,        // for Polygon derivation
-  onStatus,
+function savePending(payload) {
+  try { localStorage.setItem('verixia_predict_pending', JSON.stringify({ ...payload, ts: Date.now() })); } catch {}
+}
+function loadPending() {
+  try {
+    const raw = localStorage.getItem('verixia_predict_pending');
+    if (!raw) return null;
+    const d = JSON.parse(raw);
+    return Date.now() - d.ts < 60 * 60_000 ? d : null;
+  } catch { return null; }
+}
+function clearPending() {
+  try { localStorage.removeItem('verixia_predict_pending'); } catch {}
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// END-TO-END TRADE
+// ═══════════════════════════════════════════════════════════════════
+
+async function ensureSetup({ solPub, signMessage, onStatus }) {
+  onStatus?.('Preparing Polymarket account...');
+  const eoa = await deriveEoa(signMessage, solPub);
+
+  // Step 1: derive + deploy safe (skips if already deployed onchain).
+  const safeAddress = await ensureSafeDeployed(eoa, solPub, onStatus);
+
+  // Step 2: derive CLOB API creds (cached after first call).
+  const creds = await getOrDeriveClobCreds(eoa);
+
+  // Step 3: token approvals (batched, one signature, cached after first call).
+  await ensureApprovals(eoa, solPub, onStatus);
+
+  return { eoa, safeAddress, creds };
+}
+
+async function executeTrade({
+  market, side, usdAmount, walletPubkey, signTransaction, signMessage, onStatus,
 }) {
-  // ── 1. Validate inputs ─────────────────────────────────────────────
   const tokenId = side === 'yes' ? market.clobTokenIds[0] : market.clobTokenIds[1];
   const price   = side === 'yes' ? market.yesPrice : market.noPrice;
-  if (!tokenId)                  throw new Error('Market token ID missing');
-  if (!(price > 0 && price < 1)) throw new Error('Invalid market price');
+  if (!tokenId)                  throw new Error('Token ID missing');
+  if (!(price > 0 && price < 1)) throw new Error('Invalid price');
   if (usdAmount < MIN_DEPOSIT_USD) throw new Error(`Minimum trade is $${MIN_DEPOSIT_USD}`);
 
   const totalAtomic = BigInt(Math.floor(usdAmount * 1e6));
 
-  // ── 2. Derive Polygon wallet (silent if cached) ────────────────────
-  onStatus?.('Preparing Polymarket account...');
-  const polyWallet = await derivePolygonWallet(signMessage, walletPubkey);
+  // 1. Setup (safe + creds + approvals) — silent after first time.
+  const { eoa, safeAddress, creds } = await ensureSetup({ solPub: walletPubkey, signMessage, onStatus });
 
-  // ── 3. Get Solana deposit address from Polymarket ──────────────────
-  onStatus?.('Getting Polymarket bridge address...');
-  const addrs = await fetchPolymarketDepositAddresses(polyWallet.address);
-  const polymarketSvmAddress = addrs.svm;
+  // 2. Bridge addresses for the safe.
+  onStatus?.('Getting bridge address...');
+  const addrs = await fetchPolymarketDepositAddresses(safeAddress);
+  const svmDepositAddr = addrs.svm;
 
-  // ── 4. Record current Polymarket balance baseline ──────────────────
-  const baselineBalance = await fetchPolymarketBalance(polyWallet.address);
-
-  // ── 5. Build the bundled SPL tx (Polymarket transfer + fee transfer) ─
+  // 3. Build + simulate + sign Solana tx.
   onStatus?.('Building transaction...');
-  const { tx, feeAtomic, polyAtomic } = await buildBundledDepositTx({
-    userPubkey:           walletPubkey,
-    polymarketSvmAddress,
-    totalUsdcAtomic:      totalAtomic,
+  const { tx, polyAtomic } = await buildBundledDepositTx({
+    userPubkey: walletPubkey,
+    polymarketSvmAddress: svmDepositAddr,
+    totalUsdcAtomic: totalAtomic,
   });
 
-  // ── 6. Pre-sign simulation ─────────────────────────────────────────
   onStatus?.('Simulating...');
-  const serializedForSim = btoa(String.fromCharCode(...tx.serialize()));
-  const sim = await simulateBeforeSign(serializedForSim);
+  const sim = await simulateBeforeSign(btoa(String.fromCharCode(...tx.serialize())));
   if (!sim.ok) throw new Error(sim.message || 'Pre-sim failed');
 
-  // ── 7. User signs (ONE prompt) ─────────────────────────────────────
   onStatus?.('Confirm in your wallet...');
   const signed = await signTransaction(tx);
 
-  // ── 8. Persist trade intent BEFORE submitting (in case user refreshes) ─
-  saveTrade({
-    polyAddress:        polyWallet.address,
-    tokenId:            String(tokenId),
+  // 4. Persist intent.
+  savePending({
+    safeAddress,
+    tokenId: String(tokenId),
     side,
-    sharePrice:         price,
-    polyAtomic:         polyAtomic.toString(),
-    baselineBalance:    baselineBalance.toString(),
-    marketTitle:        market.title,
+    sharePrice: price,
+    polyAtomic: polyAtomic.toString(),
+    svmDepositAddr,
+    marketTitle: market.title,
+    negRisk: !!market.negRisk,
   });
 
-  // ── 9. Submit on Solana ────────────────────────────────────────────
+  // 5. Submit on Solana.
   onStatus?.('Submitting on Solana...');
-  const serialized = btoa(String.fromCharCode(...signed.serialize()));
-  const submitRes = await fetchWithTimeout('/api/solana-rpc', {
+  const submitRes = await fetchWithTimeout(SOL_RPC, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       jsonrpc: '2.0', id: 1, method: 'sendTransaction',
-      params: [serialized, { encoding: 'base64', skipPreflight: true, preflightCommitment: 'confirmed', maxRetries: 5 }],
+      params: [btoa(String.fromCharCode(...signed.serialize())), {
+        encoding: 'base64', skipPreflight: true, preflightCommitment: 'confirmed', maxRetries: 5,
+      }],
     }),
   }, 20_000);
   const submitJson = await submitRes.json();
   if (submitJson.error) {
-    clearTrade();
+    clearPending();
     throw new Error(submitJson.error.message || 'Submit failed');
   }
 
-  // ── 10. Wait for Polymarket to bridge ──────────────────────────────
+  // 6. Wait for bridge.
   onStatus?.('Bridging to Polymarket (~30s)...');
-  const landed = await pollUntilPolymarketFunded(
-    polyWallet.address,
-    polyAtomic.toString(),
-    baselineBalance.toString(),
-    5 * 60_000,
-  );
+  const landed = await pollUntilBridgeCompletes(svmDepositAddr);
+  if (!landed.ok) return { bridging: true };
 
-  // If still hasn't landed in 5 min, hand off to background poller and return.
-  if (!landed.ok) {
-    return { bridging: true };
-  }
+  // 7. Sync CLOB balance so it sees the new pUSD in the safe.
+  await updateClobBalance(eoa, safeAddress, creds);
 
-  // ── 11. Sign + post Polymarket order (silent) ──────────────────────
-  onStatus?.('Placing order on Polymarket...');
-  const { order, signature } = await signPolymarketOrder({
-    polyPrivateKey: polyWallet.privateKey,
-    polyAddress:    polyWallet.address,
-    tokenId,
-    side:           'BUY',
-    usdcAtomic:     polyAtomic.toString(),
-    sharePrice:     price,
-  });
-  const result = await postPolymarketOrder({
-    order, signature, polyAddress: polyWallet.address,
+  // 8. Place market buy via SDK.
+  onStatus?.('Placing order...');
+  const result = await postMarketBuy({
+    eoa, safeAddress, creds,
+    market, side,
+    usdcSpend: Number(polyAtomic) / 1e6,
   });
 
-  clearTrade();
+  clearPending();
   return { ok: true, result };
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// SELL FLOW — exit position via Polymarket CLOB.
-// No fee on sells. No bridge needed (shares already on Polygon). Order
-// signs silently from derived Polygon key. pUSD lands in user's
-// Polymarket account, BringHomeBanner picks it up.
-// ═════════════════════════════════════════════════════════════════════
-
-async function executePolymarketSell({
-  market,
-  side,             // 'yes' | 'no' — which side of the position
-  shares,           // number of shares to sell
-  walletPubkey,
-  signMessage,
-  onStatus,
+async function executeSell({
+  market, side, shares, walletPubkey, signMessage, onStatus,
 }) {
   if (!(shares > 0)) throw new Error('No shares to sell');
   const tokenId = side === 'yes' ? market.clobTokenIds[0] : market.clobTokenIds[1];
-  if (!tokenId) throw new Error('Market token ID missing');
+  if (!tokenId) throw new Error('Token ID missing');
 
-  onStatus?.('Preparing Polymarket account...');
-  const polyWallet = await derivePolygonWallet(signMessage, walletPubkey);
+  const { eoa, safeAddress, creds } = await ensureSetup({ solPub: walletPubkey, signMessage, onStatus });
 
-  onStatus?.('Getting current bid...');
-  const bestBid = await fetchClobBestBid(tokenId);
-  if (!(bestBid > 0)) throw new Error('No bids available — try again');
-
-  // Slip 2% below best bid for IOC-style market sell (Polymarket's CLOB
-  // matches against open bids; we just need to clear above the worst bid
-  // we're willing to take).
-  const sellPrice = Math.max(0.001, bestBid * 0.98);
-
-  onStatus?.('Signing sell order...');
-  // For SELL: maker = shares (6 dec atomic), taker = usdc (6 dec atomic).
-  // Polymarket shares use 6 decimals matching pUSD.
-  const sharesAtomic = BigInt(Math.floor(shares * 1e6));
-  const usdcOutAtomic = BigInt(Math.floor(shares * sellPrice * 1e6));
-
-  const ethersNs = getEthersNs(await getEthers());
-  const wallet   = new ethersNs.Wallet(polyWallet.privateKey);
-  const order = {
-    salt:          generateSalt(),
-    maker:         polyWallet.address.toLowerCase(),
-    signer:        polyWallet.address.toLowerCase(),
-    taker:         '0x0000000000000000000000000000000000000000',
-    tokenId:       String(tokenId),
-    makerAmount:   sharesAtomic.toString(),  // selling shares
-    takerAmount:   usdcOutAtomic.toString(), // receiving pUSD
-    expiration:    '0',
-    nonce:         '0',
-    feeRateBps:    '0',
-    side:          1, // SELL
-    signatureType: 0,
-  };
-  const signature = typeof wallet.signTypedData === 'function'
-    ? await wallet.signTypedData(ORDER_DOMAIN, ORDER_TYPES, order)
-    : await wallet._signTypedData(ORDER_DOMAIN, ORDER_TYPES, order);
-
-  onStatus?.('Submitting sell order...');
-  const result = await postPolymarketOrder({
-    order, signature, polyAddress: polyWallet.address,
+  onStatus?.('Placing sell...');
+  const result = await postMarketSell({
+    eoa, safeAddress, creds,
+    market, side, shares,
   });
-
-  return { ok: true, result, sellPrice };
+  return { ok: true, result };
 }
 
-// Background resumer — picks up pending trades after refresh.
-async function resumePendingTrade(walletPubkey, signMessage) {
-  const pending = loadTrade();
-  if (!pending) return;
-  if (!signMessage) return;
+async function executeWithdraw({ solPub, signMessage, onStatus, recipientSol }) {
+  const { safeAddress } = await ensureSetup({ solPub, signMessage, onStatus });
 
-  let polyWallet;
-  try {
-    polyWallet = getSessionPolyWallet(walletPubkey);
-    if (!polyWallet) {
-      // Don't auto-trigger sig prompt on resume — wait for user activity.
-      return;
-    }
-  } catch { return; }
-
-  if (polyWallet.address.toLowerCase() !== pending.polyAddress.toLowerCase()) return;
-
-  const landed = await pollUntilPolymarketFunded(
-    polyWallet.address,
-    pending.polyAtomic,
-    pending.baselineBalance,
-    30 * 60_000,
-  );
-  if (!landed.ok) {
-    // Funds may have arrived already by another path or Polymarket support
-    // routed manually. Clear the marker; bring-home banner will catch it.
-    clearTrade();
-    return;
+  onStatus?.('Requesting withdrawal...');
+  const r = await fetchWithTimeout(`${POLY_PROXY}/withdraw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      address:        safeAddress.toLowerCase(),
+      toChainId:      '1151111081099710',  // Solana chain ID per Polymarket bridge API
+      toTokenAddress: USDC_SOLANA_MINT,
+      recipientAddr:  recipientSol,
+    }),
+  }, 15_000);
+  if (!r.ok) {
+    const t = await r.text().catch(() => '');
+    throw new Error(`Withdraw ${r.status}: ${t.slice(0, 160)}`);
   }
-
-  try {
-    const { order, signature } = await signPolymarketOrder({
-      polyPrivateKey: polyWallet.privateKey,
-      polyAddress:    polyWallet.address,
-      tokenId:        pending.tokenId,
-      side:           'BUY',
-      usdcAtomic:     pending.polyAtomic,
-      sharePrice:     pending.sharePrice,
-    });
-    await postPolymarketOrder({
-      order, signature, polyAddress: polyWallet.address,
-    });
-  } catch (e) {
-    console.warn('[resume order]', e?.message || e);
-  }
-  clearTrade();
+  return await r.json();
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// GAMMA MARKETS
-// ═════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// MARKETS (Gamma — public)
+// ═══════════════════════════════════════════════════════════════════
 
 async function fetchCryptoMarkets() {
   const url = `${GAMMA_URL}/events?tag_id=${CRYPTO_TAG_ID}&related_tags=true&closed=false&order=volume24hr&ascending=false&limit=50`;
   const res = await fetch(url, { headers: { Accept: 'application/json' } });
   if (!res.ok) throw new Error(`Gamma ${res.status}`);
-  const data = await res.json();
-  return Array.isArray(data) ? data : [];
+  return await res.json();
 }
 
 function normalizeEvent(ev) {
@@ -997,49 +1098,37 @@ function normalizeEvent(ev) {
   const market = markets[0];
   let outcomePrices = [];
   try {
-    outcomePrices = typeof market.outcomePrices === 'string'
-      ? JSON.parse(market.outcomePrices)
-      : (market.outcomePrices || []);
+    outcomePrices = typeof market.outcomePrices === 'string' ? JSON.parse(market.outcomePrices) : (market.outcomePrices || []);
   } catch {}
   let clobTokenIds = [];
   try {
-    clobTokenIds = typeof market.clobTokenIds === 'string'
-      ? JSON.parse(market.clobTokenIds)
-      : (market.clobTokenIds || []);
+    clobTokenIds = typeof market.clobTokenIds === 'string' ? JSON.parse(market.clobTokenIds) : (market.clobTokenIds || []);
   } catch {}
   const yesPrice = Number(outcomePrices[0] || market.lastTradePrice || 0);
   const noPrice  = Number(outcomePrices[1] || (1 - yesPrice));
-
-  // Multi-outcome events have a parent title ("What price will XRP hit?")
-  // and child markets with specific brackets ("Will XRP be between $2.50–$2.60?").
-  // For multi-outcome events, surface the child's question so users know
-  // exactly which bracket they're trading on.
-  const parentTitle    = ev.title || market.question || 'Untitled';
-  const childQuestion  = markets.length > 1 ? (market.question || market.groupItemTitle || null) : null;
-
+  const parentTitle   = ev.title || market.question || 'Untitled';
+  const childQuestion = markets.length > 1 ? (market.question || market.groupItemTitle || null) : null;
   return {
-    id:           ev.id,
-    slug:         ev.slug,
-    title:        parentTitle,
-    childQuestion,
+    id: ev.id, slug: ev.slug, title: parentTitle, childQuestion,
     image:        ev.image || ev.icon || market.image || null,
     volume24h:    Number(ev.volume24hr || market.volume24hr || 0),
     volumeTotal:  Number(ev.volume || market.volume || 0),
     liquidity:    Number(ev.liquidity || market.liquidity || 0),
     endDate:      ev.endDate || market.endDate || null,
-    yesPrice,
-    noPrice,
-    yesPct:       Math.round(yesPrice * 100),
-    noPct:        Math.round(noPrice * 100),
-    marketCount:  markets.length,
-    conditionId:  market.conditionId,
+    yesPrice, noPrice,
+    yesPct: Math.round(yesPrice * 100),
+    noPct:  Math.round(noPrice * 100),
+    marketCount: markets.length,
+    conditionId: market.conditionId,
     clobTokenIds,
+    negRisk: !!(market.negRisk || ev.negRisk),
+    tickSize: String(market.orderPriceMinTickSize || market.minimum_tick_size || market.tickSize || '0.01'),
   };
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// UI: Gate screens
-// ═════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════
+// UI
+// ═══════════════════════════════════════════════════════════════════
 
 function RegionBlock() {
   return (
@@ -1054,7 +1143,7 @@ function RegionBlock() {
         </div>
         <div style={{ fontSize: 22, fontWeight: 800, color: C.ink, marginBottom: 10, ...T.display }}>Predict isn't available here</div>
         <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6, ...T.body }}>
-          Prediction markets are restricted in your region. Swap, VIP, and Wallet remain fully available.
+          Prediction markets are restricted in your region.
         </div>
       </div>
     </div>
@@ -1065,25 +1154,14 @@ function ComingSoon() {
   return (
     <div style={{ maxWidth: 480, margin: '0 auto', width: '100%', padding: '60px 16px 100px', textAlign: 'center' }}>
       <div style={{ padding: '40px 28px', borderRadius: 22, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: `1px solid ${C.border}`, boxShadow: C.shadowLg }}>
-        <div style={{ width: 56, height: 56, margin: '0 auto 20px', borderRadius: 14, background: C.hlDim, border: `1px solid ${C.borderHi}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke={C.hl} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M3 3v18h18"/>
-            <path d="M7 14l3-3 4 4 6-7"/>
-            <circle cx="20" cy="8" r="1.5" fill={C.hl}/>
-          </svg>
-        </div>
-        <div style={{ fontSize: 24, fontWeight: 800, color: C.ink, marginBottom: 10, ...T.display, letterSpacing: -.5 }}>Predict</div>
+        <div style={{ fontSize: 24, fontWeight: 800, color: C.ink, marginBottom: 10, ...T.display }}>Predict</div>
         <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6, ...T.body }}>
-          Coming soon. Trade crypto prediction markets directly from your Solana wallet.
+          Coming soon. Trade crypto prediction markets from your Solana wallet.
         </div>
       </div>
     </div>
   );
 }
-
-// ═════════════════════════════════════════════════════════════════════
-// UI: Market list
-// ═════════════════════════════════════════════════════════════════════
 
 function MarketSkeleton() {
   return (
@@ -1105,20 +1183,11 @@ function MarketSkeleton() {
 
 function MarketCard({ market, onTrade }) {
   const { title, childQuestion, image, yesPct, volume24h, endDate, marketCount } = market;
-  const resolves = timeUntil(endDate);
-  // Coerce to numbers — Gamma sometimes returns prices as strings.
   const yesPrice = Number(market.yesPrice) || 0;
   const noPrice  = Number(market.noPrice)  || 0;
-  // Show upside whenever the price is realistically tradeable.
-  // Below $0.01 means no real bids (effectively decided), above $0.99
-  // means it's a near-certain win — upside is noise. Cap display at
-  // 9999% so layout doesn't break on extreme longshots.
-  const upsideForPrice = (px) => {
-    if (px < 0.01 || px > 0.99) return 0;
-    return Math.min(9999, Math.round((1 / px - 1) * 100));
-  };
-  const yesUpside = upsideForPrice(yesPrice);
-  const noUpside  = upsideForPrice(noPrice);
+  const upsideFor = (px) => (px < 0.01 || px > 0.99) ? 0 : Math.min(9999, Math.round((1 / px - 1) * 100));
+  const yesUpside = upsideFor(yesPrice);
+  const noUpside  = upsideFor(noPrice);
 
   return (
     <div style={{ padding: 16, borderRadius: 16, background: `linear-gradient(145deg, ${C.card}, ${C.cardHi})`, border: `1px solid ${C.border}`, marginBottom: 10, boxShadow: C.shadow }}>
@@ -1145,53 +1214,40 @@ function MarketCard({ market, onTrade }) {
         </div>
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={() => onTrade(market, 'yes')} style={{ flex: 1, padding: '10px 10px 11px', borderRadius: 11, background: C.yesDim, border: `1px solid rgba(0,212,163,.30)`, color: C.yes, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, ...T.body }}>
+        <button onClick={() => onTrade(market, 'yes')} style={{ flex: 1, padding: '10px', borderRadius: 11, background: C.yesDim, border: `1px solid rgba(0,212,163,.30)`, color: C.yes, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, ...T.body }}>
           <span style={{ fontWeight: 700, fontSize: 13 }}>Yes · ${yesPrice.toFixed(2)}</span>
-          {yesUpside > 0 && (
-            <span style={{ fontSize: 10, fontWeight: 600, opacity: .8, ...T.mono }}>+{yesUpside}% upside</span>
-          )}
+          {yesUpside > 0 && <span style={{ fontSize: 10, fontWeight: 600, opacity: .8, ...T.mono }}>+{yesUpside}% upside</span>}
         </button>
-        <button onClick={() => onTrade(market, 'no')} style={{ flex: 1, padding: '10px 10px 11px', borderRadius: 11, background: C.noDim, border: `1px solid rgba(255,95,122,.30)`, color: C.no, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, ...T.body }}>
+        <button onClick={() => onTrade(market, 'no')} style={{ flex: 1, padding: '10px', borderRadius: 11, background: C.noDim, border: `1px solid rgba(255,95,122,.30)`, color: C.no, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, ...T.body }}>
           <span style={{ fontWeight: 700, fontSize: 13 }}>No · ${noPrice.toFixed(2)}</span>
-          {noUpside > 0 && (
-            <span style={{ fontSize: 10, fontWeight: 600, opacity: .8, ...T.mono }}>+{noUpside}% upside</span>
-          )}
+          {noUpside > 0 && <span style={{ fontSize: 10, fontWeight: 600, opacity: .8, ...T.mono }}>+{noUpside}% upside</span>}
         </button>
       </div>
     </div>
   );
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// UI: Order drawer
-// ═════════════════════════════════════════════════════════════════════
-
 function OrderDrawer({ market, side, onClose, walletPubkey, signTransaction, signMessage, refreshBalances }) {
   const [amount, setAmount]       = useState('10');
-  const [status, setStatus]       = useState('idle'); // idle | working | success | bridging | error
+  const [status, setStatus]       = useState('idle');
   const [statusMsg, setStatusMsg] = useState('');
   const [error, setError]         = useState('');
-  // Position on this market — refreshes every 8s while drawer is open.
-  const [position, setPosition]   = useState(null); // { sharesYes, sharesNo, avgPriceYes, avgPriceNo }
+  const [position, setPosition]   = useState(null);
   const [currentBids, setCurrentBids] = useState({ yes: 0, no: 0 });
-  const [sellStatus, setSellStatus] = useState('idle'); // idle | selling | sold | error
+  const [sellStatus, setSellStatus] = useState('idle');
 
   useBodyLock(true);
 
-  // Poll positions + current bids every 8s while modal is open.
-  // Uses cached Polygon address (no sig prompt). Skips if user hasn't
-  // derived their Polygon wallet yet.
+  // Poll positions while drawer is open (silent, no sigs).
   useEffect(() => {
     if (!market || !walletPubkey) return;
-    const polyAddress = getResolvedPolyAddress(walletPubkey);
-    if (!polyAddress) return;
-    if (!market.conditionId || !market.clobTokenIds?.length) return;
-
+    const safeAddr = getKnownSafe(walletPubkey);
+    if (!safeAddr || !market.conditionId || !market.clobTokenIds?.length) return;
     let alive = true;
     const tick = async () => {
       try {
         const [pos, yesBid, noBid] = await Promise.all([
-          fetchPolymarketPositions(polyAddress, market.conditionId, market.clobTokenIds),
+          fetchPolymarketPositions(safeAddr, market.conditionId, market.clobTokenIds),
           fetchClobBestBid(market.clobTokenIds[0]),
           fetchClobBestBid(market.clobTokenIds[1]),
         ]);
@@ -1210,20 +1266,15 @@ function OrderDrawer({ market, side, onClose, walletPubkey, signTransaction, sig
   const usd         = Number(amount) || 0;
   const netUsd      = usd * (1 - SERVICE_FEE_PCT);
   const shares      = price > 0 ? netUsd / price : 0;
-  const potentialReturn = shares;
-  const upside      = netUsd > 0 ? ((potentialReturn - netUsd) / netUsd) * 100 : 0;
+  const upside      = netUsd > 0 ? ((shares - netUsd) / netUsd) * 100 : 0;
   const sideColor   = side === 'yes' ? C.yes : C.no;
   const sideDim     = side === 'yes' ? C.yesDim : C.noDim;
   const isBusy      = status === 'working' || sellStatus === 'selling';
-  const isSuccess   = status === 'success' || status === 'bridging';
   const canExecute  = !isBusy && usd >= MIN_DEPOSIT_USD && walletPubkey && signMessage && signTransaction && market.clobTokenIds?.length >= 2;
 
-  // Existing position on this side (the side user is viewing). If they
-  // have shares of the OPPOSITE side, we don't show sell — they can
-  // tap the other side button on the card to manage it.
-  const heldShares = side === 'yes' ? Number(position?.sharesYes || 0) : Number(position?.sharesNo || 0);
-  const avgBought  = side === 'yes' ? Number(position?.avgPriceYes || 0) : Number(position?.avgPriceNo || 0);
-  const currentBid = side === 'yes' ? currentBids.yes : currentBids.no;
+  const heldShares    = side === 'yes' ? Number(position?.sharesYes || 0) : Number(position?.sharesNo || 0);
+  const avgBought     = side === 'yes' ? Number(position?.avgPriceYes || 0) : Number(position?.avgPriceNo || 0);
+  const currentBid    = side === 'yes' ? currentBids.yes : currentBids.no;
   const positionValue = heldShares * currentBid;
   const positionCost  = heldShares * avgBought;
   const positionPnl   = positionValue - positionCost;
@@ -1231,23 +1282,18 @@ function OrderDrawer({ market, side, onClose, walletPubkey, signTransaction, sig
   const hasPosition   = heldShares > 0.01;
 
   const handleExecute = async () => {
-    if (!signTransaction) { setError('Wallet cannot sign transactions'); return; }
-    if (!signMessage)     { setError('Wallet cannot sign messages'); return; }
     if (usd < MIN_DEPOSIT_USD) { setError(`Minimum trade is $${MIN_DEPOSIT_USD}`); return; }
-
     setStatus('working'); setError(''); setStatusMsg('');
     try {
-      const result = await executePolymarketTrade({
+      const result = await executeTrade({
         market, side, usdAmount: usd,
         walletPubkey, signTransaction, signMessage,
         onStatus: setStatusMsg,
       });
       if (result?.bridging) {
-        setStatus('bridging');
-        setStatusMsg('Order will fire automatically when funds land.');
+        setStatus('bridging'); setStatusMsg('Order will fire automatically when funds land.');
       } else {
-        setStatus('success');
-        setStatusMsg('');
+        setStatus('success'); setStatusMsg('');
       }
       refreshBalances?.();
       setTimeout(() => onClose(), result?.bridging ? 4500 : 2500);
@@ -1255,40 +1301,26 @@ function OrderDrawer({ market, side, onClose, walletPubkey, signTransaction, sig
       console.error('[predict trade]', e);
       const msg = e?.message || 'Trade failed';
       setError(/reject|cancel|user/i.test(msg) ? 'Cancelled' : msg);
-      setStatus('error');
-      setStatusMsg('');
+      setStatus('error'); setStatusMsg('');
       setTimeout(() => setStatus('idle'), 4500);
     }
   };
 
   const handleSellEarly = async () => {
-    if (!signMessage) { setError('Wallet cannot sign messages'); return; }
     if (!hasPosition) return;
     setSellStatus('selling'); setError(''); setStatusMsg('');
     try {
-      await executePolymarketSell({
+      await executeSell({
         market, side, shares: heldShares,
-        walletPubkey, signMessage,
-        onStatus: setStatusMsg,
+        walletPubkey, signMessage, onStatus: setStatusMsg,
       });
-      setSellStatus('sold');
-      setStatusMsg('');
+      setSellStatus('sold'); setStatusMsg('');
       refreshBalances?.();
-      // Refresh position after sell so panel updates
-      setTimeout(async () => {
-        const polyAddress = getResolvedPolyAddress(walletPubkey);
-        if (polyAddress) {
-          const pos = await fetchPolymarketPositions(polyAddress, market.conditionId, market.clobTokenIds);
-          if (pos) setPosition(pos);
-        }
-      }, 3000);
       setTimeout(() => onClose(), 2800);
     } catch (e) {
-      console.error('[predict sell]', e);
       const msg = e?.message || 'Sell failed';
       setError(/reject|cancel|user/i.test(msg) ? 'Cancelled' : msg);
-      setSellStatus('error');
-      setStatusMsg('');
+      setSellStatus('error'); setStatusMsg('');
       setTimeout(() => setSellStatus('idle'), 4500);
     }
   };
@@ -1303,33 +1335,21 @@ function OrderDrawer({ market, side, onClose, walletPubkey, signTransaction, sig
           <div style={{ fontSize: 11, color: C.muted, ...T.mono }}>${price.toFixed(3)} · {Math.round(price * 100)}%</div>
         </div>
 
-        {/* Feel-good marketing — trade Polymarket direct from Solana */}
         <div style={{ marginBottom: 14, padding: '10px 12px', borderRadius: 11, background: 'linear-gradient(135deg,rgba(151,252,228,.08),rgba(168,127,255,.06))', border: `1px solid ${C.borderHi}` }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-            <span style={{ fontSize: 14 }}>⚡</span>
-            <span style={{ fontSize: 11, color: C.hl, fontWeight: 800, letterSpacing: .4, ...T.display }}>POLYMARKET, DIRECT FROM SOLANA</span>
-          </div>
+          <div style={{ fontSize: 11, color: C.hl, fontWeight: 800, letterSpacing: .4, marginBottom: 4, ...T.display }}>⚡ POLYMARKET, DIRECT FROM SOLANA</div>
           <div style={{ fontSize: 11, color: C.muted, lineHeight: 1.5, ...T.body }}>
-            One signature · ~30 seconds · No KYC · Free sells · Free withdraws
+            Two signatures · ~30 seconds · Non-custodial · Free sells · Free withdraws
           </div>
         </div>
 
-        {/* YOUR POSITION — only when user holds shares on this side */}
         {hasPosition && sellStatus !== 'sold' && (
           <div style={{ marginBottom: 14, padding: '14px', borderRadius: 12, background: positionPnl >= 0 ? 'rgba(0,212,163,.07)' : 'rgba(255,95,122,.07)', border: `1px solid ${positionPnl >= 0 ? 'rgba(0,212,163,.30)' : 'rgba(255,95,122,.30)'}` }}>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
-              <span style={{ fontSize: 10, color: positionPnl >= 0 ? C.yes : C.no, fontWeight: 800, letterSpacing: .8, ...T.mono }}>
-                YOUR POSITION · {side.toUpperCase()}
-              </span>
-              <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>auto-refreshing</span>
+            <div style={{ fontSize: 10, color: positionPnl >= 0 ? C.yes : C.no, fontWeight: 800, letterSpacing: .8, marginBottom: 10, ...T.mono }}>
+              YOUR POSITION · {side.toUpperCase()}
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 12, ...T.mono }}>
               <span style={{ color: C.muted }}>Shares</span>
               <span style={{ color: C.ink, fontWeight: 700 }}>{heldShares.toFixed(2)} @ ${avgBought.toFixed(3)}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 12, ...T.mono }}>
-              <span style={{ color: C.muted }}>Current bid</span>
-              <span style={{ color: C.ink, fontWeight: 700 }}>${currentBid > 0 ? currentBid.toFixed(3) : '—'}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10, fontSize: 12, ...T.mono }}>
               <span style={{ color: C.muted }}>Value · P&amp;L</span>
@@ -1337,43 +1357,21 @@ function OrderDrawer({ market, side, onClose, walletPubkey, signTransaction, sig
                 {fmtUsd(positionValue, 2)} · {positionPnl >= 0 ? '+' : ''}{positionPnl.toFixed(2)} ({positionPnl >= 0 ? '+' : ''}{positionPnlPct.toFixed(1)}%)
               </span>
             </div>
-            <button
-              onClick={sellStatus === 'selling' ? undefined : handleSellEarly}
-              disabled={sellStatus === 'selling' || currentBid <= 0}
-              style={{
-                width: '100%', padding: '11px', borderRadius: 10,
-                background: positionPnl >= 0
-                  ? `linear-gradient(135deg, ${C.yes}33, ${C.yes}22)`
-                  : `linear-gradient(135deg, ${C.no}33, ${C.no}22)`,
+            <button onClick={sellStatus === 'selling' ? undefined : handleSellEarly} disabled={sellStatus === 'selling' || currentBid <= 0}
+              style={{ width: '100%', padding: '11px', borderRadius: 10,
+                background: positionPnl >= 0 ? `linear-gradient(135deg, ${C.yes}33, ${C.yes}22)` : `linear-gradient(135deg, ${C.no}33, ${C.no}22)`,
                 border: `1px solid ${positionPnl >= 0 ? C.yes : C.no}66`,
-                color: positionPnl >= 0 ? C.yes : C.no,
-                fontWeight: 800, fontSize: 13,
+                color: positionPnl >= 0 ? C.yes : C.no, fontWeight: 800, fontSize: 13,
                 cursor: (sellStatus === 'selling' || currentBid <= 0) ? 'not-allowed' : 'pointer',
-                opacity: (sellStatus === 'selling' || currentBid <= 0) ? .55 : 1,
-                ...T.body, letterSpacing: .3,
-              }}
-            >
-              {sellStatus === 'selling'
-                ? 'Selling...'
-                : currentBid <= 0
-                  ? 'No bids — try later'
-                  : `Sell all · ${fmtUsd(positionValue, 2)} · Free`}
+                opacity: (sellStatus === 'selling' || currentBid <= 0) ? .55 : 1, ...T.body }}>
+              {sellStatus === 'selling' ? 'Selling...' : currentBid <= 0 ? 'No bids — try later' : `Sell all · ${fmtUsd(positionValue, 2)} · Free`}
             </button>
-            <div style={{ fontSize: 10, color: C.muted2, marginTop: 8, textAlign: 'center', ...T.mono }}>
-              Free exit · No fee · Proceeds land in your Polymarket account
-            </div>
           </div>
         )}
 
         {sellStatus === 'sold' && (
-          <div style={{ marginBottom: 14, padding: '14px', borderRadius: 12, background: 'linear-gradient(135deg,rgba(0,212,163,.18),rgba(151,252,228,.10))', border: `1px solid ${C.yes}` }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-              <span style={{ fontSize: 16 }}>✓</span>
-              <span style={{ fontSize: 11, color: C.yes, fontWeight: 800, letterSpacing: .5, ...T.display }}>SOLD</span>
-            </div>
-            <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.5, ...T.body }}>
-              Proceeds in your Polymarket account. Withdraw anytime — free.
-            </div>
+          <div style={{ marginBottom: 14, padding: '14px', borderRadius: 12, background: 'rgba(0,212,163,.18)', border: `1px solid ${C.yes}` }}>
+            <div style={{ fontSize: 12, color: C.ink, ...T.body }}>✓ Sold. Proceeds in your Polymarket account.</div>
           </div>
         )}
 
@@ -1406,7 +1404,7 @@ function OrderDrawer({ market, side, onClose, walletPubkey, signTransaction, sig
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
             <span style={{ color: C.muted }}>If {side.toUpperCase()} wins</span>
-            <span style={{ color: sideColor, fontWeight: 700 }}>{fmtUsd(potentialReturn, 2)}</span>
+            <span style={{ color: sideColor, fontWeight: 700 }}>{fmtUsd(shares, 2)}</span>
           </div>
           <div style={{ display: 'flex', justifyContent: 'space-between' }}>
             <span style={{ color: C.muted }}>Upside</span>
@@ -1421,22 +1419,18 @@ function OrderDrawer({ market, side, onClose, walletPubkey, signTransaction, sig
           </div>
         )}
         {error && (
-          <div style={{ marginBottom: 10, padding: 10, background: 'rgba(255,95,122,.08)', border: '1px solid rgba(255,95,122,.25)', borderRadius: 12, fontSize: 12, color: C.no, ...T.body }}>
-            {error}
-          </div>
+          <div style={{ marginBottom: 10, padding: 10, background: 'rgba(255,95,122,.08)', border: '1px solid rgba(255,95,122,.25)', borderRadius: 12, fontSize: 12, color: C.no, ...T.body }}>{error}</div>
         )}
 
         <button onClick={canExecute ? handleExecute : undefined} disabled={!canExecute} style={{
           width: '100%', padding: '14px', borderRadius: 13,
-          background: isSuccess
+          background: status === 'success' || status === 'bridging'
             ? `linear-gradient(135deg, ${C.yes}33, ${C.yes}22)`
             : `linear-gradient(135deg, ${sideColor}33, ${sideColor}22)`,
-          border: `1px solid ${sideColor}66`,
-          color: sideColor,
+          border: `1px solid ${sideColor}66`, color: sideColor,
           fontWeight: 800, fontSize: 14,
           cursor: canExecute ? 'pointer' : 'not-allowed',
-          opacity: canExecute ? 1 : .55,
-          ...T.body, letterSpacing: .5,
+          opacity: canExecute ? 1 : .55, ...T.body, letterSpacing: .5,
         }}>
           {isBusy ? 'Processing...' :
            status === 'success' ? '✓ Order placed' :
@@ -1444,18 +1438,14 @@ function OrderDrawer({ market, side, onClose, walletPubkey, signTransaction, sig
            `Buy ${side.toUpperCase()} · ${fmtUsd(usd, 2)}`}
         </button>
         <div style={{ fontSize: 10, color: C.muted2, marginTop: 10, textAlign: 'center', lineHeight: 1.5, ...T.mono }}>
-          One signature on Solana · Polymarket bridges + settles automatically
+          Two signatures · Polymarket bridges + settles automatically · Non-custodial
         </div>
       </div>
     </div>
   );
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// UI: Bring-home banner (free withdraw, matches Polymarket's policy)
-// ═════════════════════════════════════════════════════════════════════
-
-function BringHomeBanner({ polyAddress, polyBalance, walletPubkey, signMessage, refreshBalances }) {
+function BringHomeBanner({ safeAddress, polyBalance, walletPubkey, signMessage, refreshBalances }) {
   const [busy, setBusy]   = useState(false);
   const [msg, setMsg]     = useState('');
   const [error, setError] = useState('');
@@ -1465,17 +1455,12 @@ function BringHomeBanner({ polyAddress, polyBalance, walletPubkey, signMessage, 
   if (usd < 1 && !done && !busy) return null;
 
   const handleWithdraw = async () => {
-    if (!signMessage) { setError('Wallet cannot sign'); return; }
-    setBusy(true); setError(''); setMsg('Unlocking Polymarket account...');
+    setBusy(true); setError(''); setMsg('Requesting withdrawal...');
     try {
-      const polyWallet = await derivePolygonWallet(signMessage, walletPubkey);
-      setMsg('Requesting withdrawal...');
-      await initiatePolymarketWithdraw({
-        polyAddress: polyWallet.address,
-        solRecipient: walletPubkey,
+      await executeWithdraw({
+        solPub: walletPubkey, signMessage, onStatus: setMsg, recipientSol: walletPubkey,
       });
-      setMsg('');
-      setDone(true);
+      setMsg(''); setDone(true);
       refreshBalances?.();
       setTimeout(() => setDone(false), 10_000);
     } catch (e) {
@@ -1488,33 +1473,22 @@ function BringHomeBanner({ polyAddress, polyBalance, walletPubkey, signMessage, 
 
   if (done) {
     return (
-      <div style={{ marginBottom: 14, padding: 14, borderRadius: 14, background: 'linear-gradient(145deg,rgba(0,212,163,.16),rgba(151,252,228,.08))', border: `1px solid ${C.yes}`, boxShadow: '0 0 24px rgba(0,212,163,.18)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-          <span style={{ fontSize: 16 }}>✓</span>
-          <span style={{ fontSize: 12, color: C.yes, fontWeight: 800, letterSpacing: .5, ...T.display }}>WITHDRAW INITIATED</span>
-        </div>
-        <div style={{ fontSize: 12, color: C.ink, lineHeight: 1.5, ...T.body }}>
-          USDC will land in your Solana wallet in about <strong>30 seconds</strong>. Free, instant, no fees.
-        </div>
+      <div style={{ marginBottom: 14, padding: 14, borderRadius: 14, background: 'linear-gradient(145deg,rgba(0,212,163,.16),rgba(151,252,228,.08))', border: `1px solid ${C.yes}` }}>
+        <div style={{ fontSize: 12, color: C.yes, fontWeight: 800, marginBottom: 6, ...T.display }}>✓ WITHDRAW INITIATED</div>
+        <div style={{ fontSize: 12, color: C.ink, ...T.body }}>USDC lands in your Solana wallet in ~30s. Free.</div>
       </div>
     );
   }
 
   return (
-    <div style={{ marginBottom: 14, padding: 14, borderRadius: 14, background: 'linear-gradient(145deg,rgba(0,212,163,.10),rgba(151,252,228,.06))', border: `1px solid ${C.yes}55`, boxShadow: '0 0 20px rgba(0,212,163,.08)' }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-        <div style={{ width: 8, height: 8, borderRadius: '50%', background: C.yes, boxShadow: `0 0 8px ${C.yes}`, animation: 'nexus-pulse 1.6s ease-in-out infinite' }} />
-        <span style={{ fontSize: 11, color: C.yes, fontWeight: 800, letterSpacing: .5, ...T.display }}>FUNDS ON POLYMARKET</span>
-      </div>
+    <div style={{ marginBottom: 14, padding: 14, borderRadius: 14, background: 'linear-gradient(145deg,rgba(0,212,163,.10),rgba(151,252,228,.06))', border: `1px solid ${C.yes}55` }}>
+      <div style={{ fontSize: 11, color: C.yes, fontWeight: 800, marginBottom: 8, ...T.display }}>FUNDS ON POLYMARKET</div>
       <div style={{ fontSize: 22, fontWeight: 800, color: C.ink, marginBottom: 6, ...T.display }}>{fmtUsd(usd)}</div>
-      <div style={{ fontSize: 12, color: C.muted, lineHeight: 1.5, marginBottom: 10, ...T.body }}>
-        Withdraw to your Solana wallet — free and instant, takes ~30 seconds.
+      <div style={{ fontSize: 12, color: C.muted, marginBottom: 10, ...T.body }}>
+        Withdraw to Solana — free, ~30s.
       </div>
       {msg && (
-        <div style={{ marginBottom: 8, padding: 8, background: 'rgba(151,252,228,.05)', borderRadius: 8, fontSize: 11, color: C.muted, display: 'flex', alignItems: 'center', gap: 8, ...T.body }}>
-          <div style={{ width: 12, height: 12, borderRadius: '50%', border: `2px solid ${C.hlDim}`, borderTopColor: C.hl, animation: 'nexus-spin .8s linear infinite', flexShrink: 0 }} />
-          <span>{msg}</span>
-        </div>
+        <div style={{ marginBottom: 8, padding: 8, background: 'rgba(151,252,228,.05)', borderRadius: 8, fontSize: 11, color: C.muted, ...T.body }}>{msg}</div>
       )}
       {error && (
         <div style={{ marginBottom: 8, padding: 8, background: 'rgba(255,95,122,.08)', borderRadius: 8, fontSize: 11, color: C.no, ...T.body }}>{error}</div>
@@ -1523,37 +1497,26 @@ function BringHomeBanner({ polyAddress, polyBalance, walletPubkey, signMessage, 
         width: '100%', padding: '12px', borderRadius: 10,
         background: `linear-gradient(135deg, ${C.yes}, ${C.hl})`,
         color: C.bg, fontWeight: 800, fontSize: 14, border: 'none',
-        cursor: busy ? 'wait' : 'pointer',
-        opacity: busy ? .65 : 1, ...T.body,
-      }}>
-        {busy ? 'Processing...' : `Bring ${fmtUsd(usd)} home — free`}
-      </button>
+        cursor: busy ? 'wait' : 'pointer', opacity: busy ? .65 : 1, ...T.body,
+      }}>{busy ? 'Processing...' : `Bring ${fmtUsd(usd)} home — free`}</button>
     </div>
   );
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// UI: Header
-// ═════════════════════════════════════════════════════════════════════
-
-function Header({ polyAddress }) {
+function Header() {
   return (
     <div style={{ marginTop: 8, marginBottom: 18, padding: '22px 20px 20px', borderRadius: 26, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: `1px solid ${C.border}`, boxShadow: C.shadowLg, position: 'relative', overflow: 'hidden' }}>
       <div style={{ position: 'absolute', right: -40, top: -50, width: 200, height: 200, borderRadius: '50%', background: 'radial-gradient(circle,rgba(151,252,228,.14),transparent 65%)', pointerEvents: 'none' }} />
       <div style={{ position: 'relative' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', marginBottom: 4 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between' }}>
           <h1 style={{ margin: 0, fontSize: 32, fontWeight: 900, color: C.ink, letterSpacing: -1, ...T.display }}>Predict</h1>
           <div style={{ fontSize: 10, color: C.hl, background: C.hlDim, border: `1px solid ${C.borderHi}`, padding: '3px 8px', borderRadius: 99, fontWeight: 700, letterSpacing: 1, ...T.mono }}>CRYPTO</div>
         </div>
-        <div style={{ fontSize: 12, color: C.muted, ...T.mono, marginTop: 6 }}>Polymarket direct from Solana · One sig · ~30s</div>
+        <div style={{ fontSize: 12, color: C.muted, ...T.mono, marginTop: 6 }}>Polymarket direct from Solana · Two sigs · ~30s</div>
       </div>
     </div>
   );
 }
-
-// ═════════════════════════════════════════════════════════════════════
-// MAIN (gated)
-// ═════════════════════════════════════════════════════════════════════
 
 function PredictInner({ bypassGeo = false }) {
   const [country, setCountry]           = useState(null);
@@ -1562,13 +1525,13 @@ function PredictInner({ bypassGeo = false }) {
   const [loading, setLoading]           = useState(true);
   const [error, setError]               = useState(null);
   const [search, setSearch]             = useState('');
-  const [sortBy, setSortBy]             = useState('upside'); // 'upside' | 'volume' | 'ending'
+  const [sortBy, setSortBy]             = useState('upside');
   const [orderMarket, setOrderMarket]   = useState(null);
   const [orderSide, setOrderSide]       = useState('yes');
-  const [polyAddress, setPolyAddress]   = useState(null);
+  const [safeAddress, setSafeAddress] = useState(null);
   const [polyBalance, setPolyBalance]   = useState(0n);
 
-  const { publicKey: solPk, wallet: solWallet, signMessage, signTransaction } = useWallet();
+  const { publicKey: solPk, signMessage, signTransaction } = useWallet();
   const { privyEmbeddedSol } = useNexusWallet();
   const walletPubkey = useMemo(() => {
     if (solPk) return solPk.toString();
@@ -1576,57 +1539,40 @@ function PredictInner({ bypassGeo = false }) {
     return null;
   }, [solPk, privyEmbeddedSol]);
 
-  // Resolve cached Polygon address.
   useEffect(() => {
     if (!walletPubkey) return;
-    const addr = getResolvedPolyAddress(walletPubkey);
-    if (addr) setPolyAddress(addr);
+    const addr = getKnownSafe(walletPubkey);
+    if (addr) setSafeAddress(addr);
   }, [walletPubkey]);
 
-  // Poll Polymarket balance every 10s — drives the bring-home banner.
   useEffect(() => {
-    if (!polyAddress) return;
+    if (!safeAddress) return;
     let alive = true;
     const tick = async () => {
       try {
-        const bal = await fetchPolymarketBalance(polyAddress);
+        const bal = await fetchPolymarketBalance(safeAddress);
         if (alive) setPolyBalance(bal);
       } catch {}
     };
     tick();
     const id = setInterval(tick, 10_000);
     return () => { alive = false; clearInterval(id); };
-  }, [polyAddress]);
+  }, [safeAddress]);
 
   const refreshBalances = useCallback(async () => {
-    if (!polyAddress) return;
-    try { setPolyBalance(await fetchPolymarketBalance(polyAddress)); } catch {}
-  }, [polyAddress]);
+    if (!safeAddress) return;
+    try { setPolyBalance(await fetchPolymarketBalance(safeAddress)); } catch {}
+  }, [safeAddress]);
 
-  // Background trade resumer — if user signed earlier and closed app
-  // before Polymarket bridged, this picks up and fires the CLOB order.
-  useEffect(() => {
-    if (!walletPubkey || !signMessage) return;
-    let alive = true;
-    (async () => {
-      try { await resumePendingTrade(walletPubkey, signMessage); }
-      catch (e) { if (alive) console.warn('[resume]', e?.message || e); }
-    })();
-    return () => { alive = false; };
-  }, [walletPubkey, signMessage]);
-
-  // Geo detection.
   useEffect(() => {
     let alive = true;
     detectCountry().then(c => {
       if (!alive) return;
-      setCountry(c);
-      setGeoChecked(true);
+      setCountry(c); setGeoChecked(true);
     });
     return () => { alive = false; };
   }, []);
 
-  // Fetch markets after geo passes. Refresh every 30s.
   useEffect(() => {
     if (!geoChecked) return;
     if (!bypassGeo && country && US_BLOCK.has(country)) return;
@@ -1635,8 +1581,7 @@ function PredictInner({ bypassGeo = false }) {
       try {
         const events = await fetchCryptoMarkets();
         if (!alive) return;
-        const normalized = events.map(normalizeEvent).filter(Boolean);
-        setMarkets(normalized);
+        setMarkets((Array.isArray(events) ? events : []).map(normalizeEvent).filter(Boolean));
         setError(null);
       } catch (e) {
         if (!alive) return;
@@ -1655,13 +1600,9 @@ function PredictInner({ bypassGeo = false }) {
     let result = q
       ? markets.filter(m => (m.title || '').toLowerCase().includes(q) || (m.childQuestion || '').toLowerCase().includes(q))
       : [...markets];
-
     if (sortBy === 'upside') {
-      // Sort by max tradeable upside on either side. Only counts prices
-      // in the realistic range so dead $0/$1 sides don't artificially win.
       const bestUpside = (m) => {
-        const yp = Number(m.yesPrice) || 0;
-        const np = Number(m.noPrice)  || 0;
+        const yp = Number(m.yesPrice) || 0, np = Number(m.noPrice) || 0;
         const yU = (yp >= 0.01 && yp < 0.99) ? (1 / yp - 1) * 100 : 0;
         const nU = (np >= 0.01 && np < 0.99) ? (1 / np - 1) * 100 : 0;
         return Math.max(yU, nU);
@@ -1677,23 +1618,19 @@ function PredictInner({ bypassGeo = false }) {
     } else {
       result.sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
     }
-
     return result;
   }, [markets, search, sortBy]);
 
   const openTrade = useCallback((market, side) => {
-    setOrderMarket(market);
-    setOrderSide(side);
+    setOrderMarket(market); setOrderSide(side);
   }, []);
 
-  if (!bypassGeo && geoChecked && country && US_BLOCK.has(country)) {
-    return <RegionBlock />;
-  }
+  if (!bypassGeo && geoChecked && country && US_BLOCK.has(country)) return <RegionBlock />;
 
   if (!geoChecked || loading) {
     return (
       <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: '0 16px calc(env(safe-area-inset-bottom) + 100px)' }}>
-        <Header polyAddress={polyAddress} />
+        <Header />
         {[1,2,3,4,5].map(i => <MarketSkeleton key={i} />)}
       </div>
     );
@@ -1703,11 +1640,11 @@ function PredictInner({ bypassGeo = false }) {
     <>
       <style>{`@keyframes nexus-spin { to { transform: rotate(360deg); } } @keyframes nexus-pulse { 0%,100% { opacity: 1; } 50% { opacity: .4; } }`}</style>
       <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: '0 16px calc(env(safe-area-inset-bottom) + 100px)', color: C.ink, backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(151,252,228,.10),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 20%,rgba(168,127,255,.06),transparent 50%)' }}>
-        <Header polyAddress={polyAddress} />
+        <Header />
 
-        {polyAddress && (
+        {safeAddress && (
           <BringHomeBanner
-            polyAddress={polyAddress}
+            safeAddress={safeAddress}
             polyBalance={polyBalance}
             walletPubkey={walletPubkey}
             signMessage={signMessage}
@@ -1716,32 +1653,19 @@ function PredictInner({ bypassGeo = false }) {
         )}
 
         <div style={{ marginBottom: 14, position: 'relative' }}>
-          <input
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search crypto markets..."
-            inputMode="search"
-            enterKeyHint="search"
-            style={{
-              width: '100%', padding: '11px 14px 11px 38px',
-              background: 'rgba(255,255,255,.04)',
-              border: `1px solid ${C.border}`,
-              borderRadius: 12, color: C.ink, fontSize: 13, outline: 'none',
-              ...T.body,
-            }}
-          />
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search crypto markets..."
+            inputMode="search" enterKeyHint="search"
+            style={{ width: '100%', padding: '11px 14px 11px 38px', background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, borderRadius: 12, color: C.ink, fontSize: 13, outline: 'none', ...T.body }} />
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2" style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}>
-            <circle cx="11" cy="11" r="8"/>
-            <path d="M21 21l-4.35-4.35"/>
+            <circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/>
           </svg>
         </div>
 
-        {/* Sort chips */}
         <div style={{ display: 'flex', gap: 6, marginBottom: 14, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
           {[
-            { id: 'upside',  label: 'Highest upside' },
-            { id: 'volume',  label: 'Top volume' },
-            { id: 'ending',  label: 'Ending soon' },
+            { id: 'upside', label: 'Highest upside' },
+            { id: 'volume', label: 'Top volume' },
+            { id: 'ending', label: 'Ending soon' },
           ].map(opt => {
             const active = sortBy === opt.id;
             return (
@@ -1750,40 +1674,30 @@ function PredictInner({ bypassGeo = false }) {
                 background: active ? C.hlDim : 'rgba(255,255,255,.03)',
                 border: `1px solid ${active ? C.borderHi : C.border}`,
                 color: active ? C.hl : C.muted,
-                fontSize: 11, fontWeight: 700, cursor: 'pointer',
-                ...T.mono, letterSpacing: .3,
-              }}>
-                {opt.label}
-              </button>
+                fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono,
+              }}>{opt.label}</button>
             );
           })}
         </div>
 
         {error && (
-          <div style={{ padding: '12px 14px', borderRadius: 11, background: 'rgba(255,95,122,.07)', border: '1px solid rgba(255,95,122,.25)', color: C.no, fontSize: 12, marginBottom: 12, ...T.body }}>
-            {error}
-          </div>
+          <div style={{ padding: '12px 14px', borderRadius: 11, background: 'rgba(255,95,122,.07)', border: '1px solid rgba(255,95,122,.25)', color: C.no, fontSize: 12, marginBottom: 12, ...T.body }}>{error}</div>
         )}
-
         {filtered.length === 0 && !error && (
           <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13, ...T.body }}>
-            {search ? `No markets match "${search}"` : 'No active crypto markets right now.'}
+            {search ? `No markets match "${search}"` : 'No active markets right now.'}
           </div>
         )}
+        {filtered.map(m => <MarketCard key={m.id || m.slug} market={m} onTrade={openTrade} />)}
 
-        {filtered.map(m => (
-          <MarketCard key={m.id || m.slug} market={m} onTrade={openTrade} />
-        ))}
-
-        <div style={{ marginTop: 20, padding: '14px 16px', borderRadius: 12, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`, fontSize: 11, color: C.muted, lineHeight: 1.55, textAlign: 'center', ...T.mono }}>
-          Polymarket direct from Solana · One signature per trade · 5% entry fee · Free sells · Free withdraws · Markets resolve via UMA oracle
+        <div style={{ marginTop: 20, padding: '14px 16px', borderRadius: 12, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`, fontSize: 11, color: C.muted, textAlign: 'center', ...T.mono }}>
+          Polymarket direct from Solana · Two signatures · 5% entry fee · Free sells · Free withdraws · Non-custodial
         </div>
       </div>
 
       {orderMarket && (
         <OrderDrawer
-          market={orderMarket}
-          side={orderSide}
+          market={orderMarket} side={orderSide}
           onClose={() => { setOrderMarket(null); refreshBalances(); }}
           walletPubkey={walletPubkey}
           signTransaction={signTransaction}
@@ -1795,18 +1709,12 @@ function PredictInner({ bypassGeo = false }) {
   );
 }
 
-// ═════════════════════════════════════════════════════════════════════
-// GATED EXPORT
-// ═════════════════════════════════════════════════════════════════════
-
 export default function Predict(props) {
   const solWallet = useWallet();
   const nexus     = useNexusWallet();
   const address =
     (solWallet?.publicKey && solWallet.publicKey.toBase58 && solWallet.publicKey.toBase58()) ||
-    nexus?.walletAddress ||
-    nexus?.privyEmbeddedSol ||
-    null;
+    nexus?.walletAddress || nexus?.privyEmbeddedSol || null;
   const isVip = !!address && VIP_WALLETS.has(address);
   return isVip ? <PredictInner {...props} bypassGeo /> : <ComingSoon />;
 }
