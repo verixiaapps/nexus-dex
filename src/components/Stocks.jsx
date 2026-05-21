@@ -25,6 +25,41 @@ const MIN_USDC = 1;
 const MAX_USDC = 50_000;
 
 // =====================================================================
+// GEO BLOCK + VIP — US users get region screen, non-VIPs get coming-soon.
+// Same Cloudflare detection + cache as Predict / PerpsTrade.
+// =====================================================================
+const GEO_URL = 'https://www.cloudflare.com/cdn-cgi/trace';
+const GEO_CACHE_KEY = 'verixia_geo_country_v1';
+const GEO_CACHE_TTL = 12 * 60 * 60 * 1000;
+const GEO_BLOCKED = new Set(['US']);
+
+const VIP_WALLETS = new Set([
+  'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV',
+]);
+
+async function detectCountry() {
+  try {
+    const raw = localStorage.getItem(GEO_CACHE_KEY);
+    if (raw) {
+      const { country, ts } = JSON.parse(raw);
+      if (country && Date.now() - ts < GEO_CACHE_TTL) return country;
+    }
+  } catch {}
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(GEO_URL, { signal: ctrl.signal });
+    clearTimeout(timer);
+    const text = await res.text();
+    const loc = (text.match(/loc=([A-Z]{2})/) || [])[1] || null;
+    if (loc) {
+      try { localStorage.setItem(GEO_CACHE_KEY, JSON.stringify({ country: loc, ts: Date.now() })); } catch {}
+    }
+    return loc;
+  } catch { return null; }
+}
+
+// =====================================================================
 // XSTOCKS LIST — verified mints from solana.com/news/case-study-xstocks
 // 60+ tickers exist; we ship with the top 18 by relevance + volume.
 // Decimals: 8 (Token-2022 standard for xStocks).
@@ -116,7 +151,6 @@ function isValidSolAddr(v) { return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(
 // US market hours (informational only — xStocks trade 24/7 regardless)
 function getUsMarketStatus() {
   const now = new Date();
-  // Convert to Eastern Time using Intl
   const fmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: 'numeric', hour12: false });
   const parts = fmt.formatToParts(now).reduce((acc, p) => { acc[p.type] = p.value; return acc; }, {});
   const day = parts.weekday;
@@ -137,8 +171,6 @@ async function fetchWithTimeout(url, opts = {}, timeoutMs = 12_000) {
   finally { clearTimeout(id); }
 }
 
-// Pull live USD prices from Jupiter Price API V3
-// V3 response: { [mint]: { usdPrice, blockId, decimals, priceChange24h } }
 async function fetchStockPrices(mints) {
   if (!mints.length) return {};
   try {
@@ -158,10 +190,6 @@ async function fetchStockPrices(mints) {
   }
 }
 
-// Get Jupiter quote — buy = USDC → stock, sell = stock → USDC. Always ExactIn.
-// No platformFeeBps: we handle the fee as a separate SPL Transfer instruction
-// bundled into the same atomic transaction. Jupiter Swap V1 doesn't support
-// platform fees on Token-2022 tokens (xStocks), so this is the path.
 async function getJupiterQuote({ inputMint, outputMint, amountAtomic, slippageBps }) {
   const params = new URLSearchParams({
     inputMint, outputMint,
@@ -175,34 +203,12 @@ async function getJupiterQuote({ inputMint, outputMint, amountAtomic, slippageBp
   return json;
 }
 
-// =====================================================================
-// CUSTOM TX ASSEMBLY — Jupiter swap-instructions + our own SPL Transfer
-// (fee → treasury) bundled into ONE atomic versioned transaction.
-//
-// Why we don't use Jupiter's platformFeeBps:
-//   Jupiter Swap V1 throws IncorrectTokenProgramID (0x177e) when the
-//   swap involves Token-2022 mints. xStocks are Token-2022.
-//
-// Why we don't use Jupiter Ultra:
-//   Ultra's referral fee flow requires a manual "claim" step. Fees
-//   accumulate in a Jupiter-managed referral account and must be swept
-//   periodically. We want fees to land directly in the treasury wallet
-//   on every trade — no manual claim.
-//
-// Solution: get raw instructions from /swap-instructions, prepend our
-// own SPL Transfer (BUY: from input) or append (SELL: from output USDC).
-// User signs once, both happen atomically.
-// =====================================================================
-
 const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-// Token-2022 program (xStocks live here, they use the Transfer Hook extension).
 const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 
-// Build an SPL Token Transfer instruction without pulling in @solana/spl-token.
-// Layout: [opcode=3, amount as u64 little-endian].
 function createSplTransferInstruction(source, destination, owner, amountAtomic) {
   const data = new Uint8Array(9);
-  data[0] = 3; // SPL Token Transfer opcode
+  data[0] = 3;
   const amt = BigInt(amountAtomic);
   for (let i = 0; i < 8; i++) data[1 + i] = Number((amt >> BigInt(i * 8)) & 0xffn);
   return new TransactionInstruction({
@@ -216,8 +222,6 @@ function createSplTransferInstruction(source, destination, owner, amountAtomic) 
   });
 }
 
-// Deserialize a Jupiter-returned instruction (JSON shape) into a Solana
-// TransactionInstruction object suitable for inclusion in a message.
 function deserializeJupInstruction(ix) {
   return new TransactionInstruction({
     programId: new PublicKey(ix.programId),
@@ -230,12 +234,8 @@ function deserializeJupInstruction(ix) {
   });
 }
 
-// Fetch address lookup table accounts via our Solana RPC proxy. Jupiter
-// references ALTs to fit complex swaps within the tx size limit; we must
-// load them so TransactionMessage.compileToV0Message() can resolve keys.
 async function fetchLookupTableAccounts(altAddresses) {
   if (!altAddresses?.length) return [];
-  // Batch via getMultipleAccounts for efficiency.
   const res = await fetchWithTimeout('/api/solana-rpc', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -258,7 +258,6 @@ async function fetchLookupTableAccounts(altAddresses) {
   return out;
 }
 
-// Call Jupiter /swap-instructions to get raw instructions (not a serialized tx).
 async function getJupiterSwapInstructions({ quoteResponse, userPublicKey }) {
   const body = {
     quoteResponse,
@@ -272,7 +271,6 @@ async function getJupiterSwapInstructions({ quoteResponse, userPublicKey }) {
         priorityLevel: 'high',
       },
     },
-    // No feeAccount, no platformFeeBps — fee handled via custom instruction.
     useSharedAccounts: false,
   };
   const res = await fetchWithTimeout('/api/jupiter/swap-instructions', {
@@ -283,9 +281,6 @@ async function getJupiterSwapInstructions({ quoteResponse, userPublicKey }) {
   return json;
 }
 
-// Get the user's ATA for a given mint. Standard SPL Token Associated Token
-// Program derivation. For Token-2022 mints, derivation is the same but with
-// a different token program — but we only need this for USDC (regular SPL).
 const ATA_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 function deriveUsdcAta(ownerPubkeyB58) {
   const owner = new PublicKey(ownerPubkeyB58);
@@ -295,16 +290,8 @@ function deriveUsdcAta(ownerPubkeyB58) {
     ATA_PROGRAM_ID,
   );
   return ata;
-} 
+}
 
-// Fetch a wallet's holdings for any SPL or Token-2022 mint. Returns the
-// human-readable balance (e.g. 0.00247) and the atomic amount (BigInt).
-// Used to display "You own X" on the trade modal and power Sell quick-picks.
-//
-// Solana RPC quirk: getTokenAccountsByOwner's filter accepts EITHER `{ mint }`
-// OR `{ programId }` — combining them silently returns 0 results. Filter by
-// mint since that's the exact account we want; the RPC finds it whether it
-// lives under the legacy SPL Token program or Token-2022.
 async function fetchTokenBalance({ ownerPubkey, mint, decimals }) {
   const res = await fetchWithTimeout('/api/solana-rpc', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -319,7 +306,6 @@ async function fetchTokenBalance({ ownerPubkey, mint, decimals }) {
   }, 8_000);
   const json = await res.json();
   const accs = json?.result?.value || [];
-  // Aggregate across accounts (usually one ATA, but be safe).
   let atomic = 0n;
   for (const a of accs) {
     const raw = a?.account?.data?.parsed?.info?.tokenAmount?.amount;
@@ -329,13 +315,10 @@ async function fetchTokenBalance({ ownerPubkey, mint, decimals }) {
   return { atomic, ui };
 }
 
-// Assemble the final versioned transaction: fee instruction bundled with
-// Jupiter's instructions, ALTs loaded, blockhash fetched.
 async function assembleSwapTx({ swapInstructions, feeInstruction, userPublicKey, prependFee }) {
   const altAddrs = swapInstructions.addressLookupTableAddresses || [];
   const altAccounts = await fetchLookupTableAccounts(altAddrs);
 
-  // Collect Jupiter's instructions in canonical order.
   const jupIxs = [];
   if (swapInstructions.tokenLedgerInstruction)
     jupIxs.push(deserializeJupInstruction(swapInstructions.tokenLedgerInstruction));
@@ -348,13 +331,10 @@ async function assembleSwapTx({ swapInstructions, feeInstruction, userPublicKey,
   if (swapInstructions.cleanupInstruction)
     jupIxs.push(deserializeJupInstruction(swapInstructions.cleanupInstruction));
 
-  // For BUY: fee comes off the input USDC BEFORE swap → prepend.
-  // For SELL: fee comes off the output USDC AFTER swap → append.
   const allIxs = prependFee
     ? [feeInstruction, ...jupIxs]
     : [...jupIxs, feeInstruction];
 
-  // Fetch a recent blockhash for the tx (must be fresh enough to land).
   const bhRes = await fetchWithTimeout('/api/solana-rpc', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -375,14 +355,6 @@ async function assembleSwapTx({ swapInstructions, feeInstruction, userPublicKey,
   return new VersionedTransaction(message);
 }
 
-// =====================================================================
-// PRE-WALLET SIMULATION
-// Runs the EXACT serialized tx through the Solana RPC's simulateTransaction
-// before triggering the wallet. The bytes we sim are byte-identical to the
-// bytes we'll sign — the RPC substitutes a fresh blockhash internally via
-// `replaceRecentBlockhash`, so the sim reflects current chain state.
-// If sim fails, we show a clean error in the UI and never trigger Phantom.
-// =====================================================================
 const JUPITER_ERROR_CODES = {
   6000: 'No swap route available',
   6001: 'Price moved — try increasing slippage tolerance',
@@ -414,7 +386,6 @@ function parseSimError(err, logs) {
     }
     if (typeof detail === 'string') return `${detail} at instruction ${idx}`;
   }
-  // Last resort: scan logs
   const arr = Array.isArray(logs) ? logs : [];
   const errLog = arr.find(l => /error|failed|insufficient|slippage/i.test(String(l)));
   if (errLog) return String(errLog).slice(0, 140);
@@ -443,8 +414,6 @@ async function simulateBeforeSign(serializedTxBase64) {
     if (value.err)  return { ok: false, message: parseSimError(value.err, value.logs) };
     return { ok: true };
   } catch (e) {
-    // If our sim endpoint is down, don't block the user — Phantom's own sim
-    // is the ultimate safety net. We fail open with a warning.
     console.warn('[sim]', e?.message || e);
     return { ok: true, warning: 'Pre-sim unavailable' };
   }
@@ -511,22 +480,17 @@ function StockTile({ stock, price, onClick }) {
   );
 }
 
-// =====================================================================
-// TradeModal — buy or sell flow with Jupiter quote + signed swap
-// =====================================================================
 function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet }) {
   const { signTransaction, connected } = useWallet();
   const { activeWalletKind } = useNexusWallet();
   const wcon = connected || activeWalletKind === 'privy';
 
-  const [side, setSide]       = useState('BUY'); // BUY | SELL
+  const [side, setSide]       = useState('BUY');
   const [amount, setAmount]   = useState('');
   const [quote, setQuote]     = useState(null);
   const [quoting, setQuoting] = useState(false);
   const [submitState, setSubmitState] = useState({ kind: 'idle', message: '' });
   const [error, setError]     = useState('');
-  // User's current holdings of this stock + their USDC balance, used to
-  // display "You own X" on both sides and power Sell quick-picks.
   const [stockBal, setStockBal] = useState({ atomic: 0n, ui: 0, loaded: false });
   const [usdcBal,  setUsdcBal]  = useState({ atomic: 0n, ui: 0, loaded: false });
   const quoteSeq = useRef(0);
@@ -542,9 +506,6 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
     }
   }, [open]);
 
-  // Fetch both balances on open / wallet change. xStocks are Token-2022;
-  // USDC is regular SPL. We use Promise.allSettled so one failure doesn't
-  // hide the other balance.
   useEffect(() => {
     if (!open || !stock || !walletPubkey) return;
     let cancelled = false;
@@ -560,13 +521,8 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
       else                          setUsdcBal({ atomic: 0n, ui: 0, loaded: true });
     })();
     return () => { cancelled = true; };
-  }, [open, stock, walletPubkey, submitState.kind]);  // refetch after swap completes
+  }, [open, stock, walletPubkey, submitState.kind]);
 
-  // Debounced quote fetch. Both BUY and SELL inputs are denominated in USDC
-  // so users always think in dollars. On SELL we convert USDC → stock atomic
-  // via the live price; the user types "$50" and we ask Jupiter to swap the
-  // equivalent GOOGLx amount. Loses < 1¢ to rounding which Jupiter eats in
-  // dynamic slippage anyway.
   useEffect(() => {
     if (!open || !stock) return;
     const n = parseFloat(amount);
@@ -581,17 +537,10 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
         const outputMint = isBuy ? stock.mint : USDC_MINT;
         let atomic;
         if (isBuy) {
-          // Pre-fee: the user types the TOTAL amount they want to spend. We
-          // skim 2.55% off the top for the fee (separate SPL Transfer) and
-          // ask Jupiter to quote only the remaining 97.45%. Total wallet
-          // outflow = typed amount exactly.
           const grossUsdcAtomic = Math.round(n * 10 ** USDC_DECIMALS);
           const feeUsdcAtomic   = Math.floor(grossUsdcAtomic * PLATFORM_FEE_BPS / 10000);
           atomic = grossUsdcAtomic - feeUsdcAtomic;
         } else {
-          // SELL: convert the USDC amount the user typed into stock atomic
-          // via live price. If price isn't loaded yet, skip — the price prop
-          // is required for SELL pricing.
           if (!(price > 0)) { setQuote(null); setQuoting(false); return; }
           atomic = Math.round((n / price) * 10 ** stock.decimals);
         }
@@ -622,30 +571,14 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
   const outDecimals = isBuy ? stock.decimals : USDC_DECIMALS;
   const grossOut    = outAtomic / 10 ** outDecimals;
 
-  // Platform fee — we compute it ourselves now since Jupiter's quote no longer
-  // returns platformFee (we strip platformFeeBps because Token-2022 isn't
-  // supported on V1 swap; fee is handled via custom SPL Transfer instruction).
-  //
-  // BUY:  fee = 2.55% of the user's typed USDC. Total wallet outflow = typed
-  //       (Jupiter swap input is pre-fee'd to typed × (1 - 0.0255), see the
-  //       quote useEffect above).
-  // SELL: fee = 2.55% of gross USDC output. User receives gross × (1 - 0.0255)
-  //       net of fee, which we display as YOU RECEIVE.
   const feeBpsRatio    = PLATFORM_FEE_BPS / 10000;
   const platformFeeUsd = isBuy
     ? usd * feeBpsRatio
     : grossOut * feeBpsRatio;
-  // Net display amount for SELL is gross − fee. For BUY the display is GOOGLx
-  // count (no fee subtraction on that side; fee was already taken in USDC).
   const netOutUsdc  = !isBuy ? Math.max(0, grossOut - platformFeeUsd) : 0;
   const outAmount   = isBuy ? grossOut : netOutUsdc;
   const priceImpactPct = quote?.priceImpactPct ? Number(quote.priceImpactPct) * 100 : 0;
 
-  // Validation: amount is in USDC on both sides. BUY needs $1–$50k of USDC
-  // available (and quote routes via Jupiter). SELL converts the USDC value
-  // to stock atomic via live price and checks against the user's atomic
-  // balance — comparison done in atomic to avoid floating-point dust traps
-  // where 0.0024740001 GOOGLx looks like "not enough" for a $0.99 sell.
   const stockAtomicNeeded = (() => {
     if (isBuy || !(usd > 0) || !(price > 0) || !stock) return 0n;
     try { return BigInt(Math.round((usd / price) * 10 ** stock.decimals)); } catch { return 0n; }
@@ -654,8 +587,6 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
     ? (usd >= MIN_USDC && usd <= MAX_USDC)
     : (stockAtomicNeeded > 0n && stockAtomicNeeded <= stockBal.atomic);
   const insufficientStock = !isBuy && stockBal.loaded && stockAtomicNeeded > stockBal.atomic;
-  // Display the equivalent GOOGLx amount under the input on SELL so the user
-  // sees both sides of the conversion.
   const sellStockEquiv = !isBuy && usd > 0 && price > 0 ? usd / price : 0;
 
   const handleSubmit = async () => {
@@ -669,14 +600,6 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
     setError('');
 
     try {
-      // ── Calculate the fee amount ────────────────────────────────────
-      // BUY:  Jupiter's quote.inAmount is already pre-fee'd (we send 97.45%
-      //       to Jupiter). The fee instruction transfers the remaining 2.55%
-      //       so total wallet outflow = user's typed amount exactly. We
-      //       compute the fee from the gross typed amount, not quote.inAmount.
-      // SELL: fee = 2.55% of min output (otherAmountThreshold) — using min
-      //       guarantees the user has enough USDC for the fee transfer even
-      //       at worst-case slippage.
       const isBuyTx = side === 'BUY';
       const baseAtomic = isBuyTx
         ? BigInt(Math.round(usd * 10 ** USDC_DECIMALS))
@@ -684,24 +607,19 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
       const feeAtomic = (baseAtomic * BigInt(PLATFORM_FEE_BPS)) / 10000n;
       if (feeAtomic <= 0n) throw new Error('Fee calculation failed');
 
-      // User's USDC ATA is the source (BUY) or pre-existing destination (SELL
-      // pre-fee, post-swap). Derived from the user's wallet + USDC mint.
       const userUsdcAta = deriveUsdcAta(walletPubkey);
       const feeInstruction = createSplTransferInstruction(
-        userUsdcAta,           // source: user's USDC ATA
-        TREASURY_USDC_ATA,     // destination: treasury USDC ATA
-        walletPubkey,          // owner / signer
+        userUsdcAta,
+        TREASURY_USDC_ATA,
+        walletPubkey,
         feeAtomic,
       );
 
-      // ── Get raw Jupiter swap instructions (not serialized tx) ───────
       const swapIxs = await getJupiterSwapInstructions({
         quoteResponse: quote,
         userPublicKey: walletPubkey,
       });
 
-      // ── Assemble: fee instruction + Jupiter instructions in one tx ──
-      // BUY: prepend fee (input side). SELL: append fee (output side).
       const tx = await assembleSwapTx({
         swapInstructions: swapIxs,
         feeInstruction,
@@ -709,9 +627,6 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
         prependFee:       isBuyTx,
       });
 
-      // ── Pre-wallet simulation of the EXACT assembled tx ─────────────
-      // Same bytes will be signed. If sim fails, surface a clean error
-      // and never trigger Phantom.
       setSubmitState({ kind: 'loading', message: 'Simulating...' });
       const serializedForSim = btoa(String.fromCharCode(...tx.serialize()));
       const sim = await simulateBeforeSign(serializedForSim);
@@ -721,8 +636,6 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
       const signed = await signTransaction(tx);
 
       setSubmitState({ kind: 'loading', message: 'Submitting on Solana...' });
-      // Pre-simmed, so skipPreflight is safe and faster. High maxRetries
-      // + the priority fee inside Jupiter's instructions = reliable landing.
       const serialized = btoa(String.fromCharCode(...signed.serialize()));
       const submitRes = await fetchWithTimeout('/api/solana-rpc', {
         method: 'POST',
@@ -745,16 +658,10 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
     }
   };
 
-  // Quick picks: BUY uses fixed USD amounts. SELL also uses USD amounts —
-  // computed as a percentage of the user's holdings' USD value. MAX uses
-  // the EXACT atomic balance × price so we sell every atom (no dust left).
   const sellPctUsd = (pct) => {
     if (!stockBal.loaded || stockBal.atomic <= 0n || !(price > 0)) return '';
     if (pct === 100) {
-      // Use atomic to avoid losing precision on conversion.
       const exactUsd = (Number(stockBal.atomic) / 10 ** stock.decimals) * price;
-      // Floor cents so the resulting USDC→atomic re-conversion never exceeds
-      // the user's actual balance (avoids "insufficient" on MAX click).
       return (Math.floor(exactUsd * 100) / 100).toFixed(2);
     }
     const partUsd = (Number(stockBal.atomic) * (pct / 100) / 10 ** stock.decimals) * price;
@@ -780,7 +687,6 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
         maxHeight: '92dvh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
         boxShadow: `0 -28px 80px rgba(0,0,0,.7), ${C.glow}`,
       }}>
-        {/* Header */}
         <div style={{ flexShrink: 0, padding: '14px 22px 12px' }}>
           <div style={{ width: 36, height: 4, background: 'rgba(255,255,255,.12)', borderRadius: 99, margin: '0 auto 16px' }}/>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
@@ -800,9 +706,6 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
               <span style={{ fontSize: 16, color: C.inkStr, fontWeight: 800, fontVariantNumeric: 'tabular-nums', ...T.mono }}>{fmtUsd(price)}</span>
             </div>
           )}
-          {/* Balance row — visible whenever wallet is connected so users
-              know what they own before picking a side. The displayed value
-              is in tokens for the stock + USD equivalent for clarity. */}
           {wcon && (
             <div style={{ marginTop: 8, padding: '9px 12px', borderRadius: 12, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.borderHi}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
               <span style={{ fontSize: 10, color: C.hl, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>
@@ -823,9 +726,7 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
           )}
         </div>
 
-        {/* Body */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '4px 22px 14px', minHeight: 0 }}>
-          {/* Side toggle */}
           <div style={{ display: 'inline-flex', padding: 3, marginBottom: 14, background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, borderRadius: 999, gap: 3, width: '100%' }}>
             {['BUY', 'SELL'].map(s => {
               const active = side === s;
@@ -841,9 +742,6 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
             })}
           </div>
 
-          {/* Amount input — denominated in USDC on BOTH sides for consistent
-              UX. On SELL we show the GOOGLx-equivalent below so the user
-              sees how much stock they're actually selling. */}
           <div style={{ marginBottom: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
               <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: '.06em', ...T.mono }}>
@@ -872,7 +770,6 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
             </div>
           </div>
 
-          {/* Quote preview */}
           {usd > 0 && (
             <div style={{ background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, borderRadius: 14, padding: '12px 14px', marginBottom: 12 }}>
               <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', ...T.mono }}>
@@ -900,7 +797,6 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
           )}
         </div>
 
-        {/* Footer / submit */}
         <div style={{ flexShrink: 0, padding: '12px 22px calc(env(safe-area-inset-bottom) + 90px)', borderTop: `1px solid ${C.hairline}`, background: `linear-gradient(180deg,transparent 0%,${C.bg} 20%)` }}>
           {submitState.kind === 'loading' && submitState.message && (
             <div style={{ marginBottom: 10, padding: 10, background: 'rgba(151,252,228,.05)', border: '1px solid rgba(151,252,228,.20)', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -951,12 +847,95 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
 }
 
 // =====================================================================
-// MAIN
+// GATE SCREENS
 // =====================================================================
-export default function Stocks({ onConnectWallet }) {
+function StocksRegionBlock() {
+  return (
+    <div style={{
+      maxWidth: 680, margin: '0 auto', width: '100%',
+      padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)',
+      color: C.ink, minHeight: '80vh',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% 10%,rgba(168,127,255,.14),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 30%,rgba(151,252,228,.08),transparent 50%)',
+    }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600;700&display=swap');@import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap')`}</style>
+      <div style={{
+        width: '100%', maxWidth: 480,
+        padding: '44px 28px 40px', borderRadius: 28,
+        background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))',
+        border: '1px solid rgba(168,127,255,.22)',
+        boxShadow: '0 24px 80px rgba(0,0,0,.55), 0 0 60px rgba(168,127,255,.10)',
+        textAlign: 'center', position: 'relative', overflow: 'hidden',
+      }}>
+        <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse 100% 60% at 50% -10%,rgba(151,252,228,.10),transparent 70%)', pointerEvents: 'none' }}/>
+        <div style={{ position: 'relative' }}>
+          <div style={{ width: 56, height: 56, margin: '0 auto 20px', borderRadius: 14, background: C.hlDim, border: `1px solid ${C.borderHi}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke={C.hl} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="2" y1="12" x2="22" y2="12"/>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+            </svg>
+          </div>
+          <h1 style={{
+            fontSize: 28, lineHeight: 1.05, fontWeight: 600,
+            margin: '0 0 12px', letterSpacing: '-.045em',
+            background: `linear-gradient(135deg,${C.inkStr} 0%,${C.violet} 100%)`,
+            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
+            ...T.hero,
+          }}>
+            Stocks isn't available here
+          </h1>
+          <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6, ...T.body }}>
+            Tokenized equities are restricted in your region. Swap, VIP, Predict, and Wallet remain fully available.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function StocksComingSoon() {
+  return (
+    <div style={{
+      maxWidth: 680, margin: '0 auto', width: '100%',
+      padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)',
+      color: C.ink, minHeight: '80vh',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% 10%,rgba(168,127,255,.14),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 30%,rgba(151,252,228,.08),transparent 50%)',
+    }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600;700&display=swap');@import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap')`}</style>
+      <div style={{
+        width: '100%', maxWidth: 480,
+        padding: '54px 28px 50px', borderRadius: 28,
+        background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))',
+        border: '1px solid rgba(168,127,255,.22)',
+        boxShadow: '0 24px 80px rgba(0,0,0,.55), 0 0 60px rgba(168,127,255,.10)',
+        textAlign: 'center', position: 'relative', overflow: 'hidden',
+      }}>
+        <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse 100% 60% at 50% -10%,rgba(151,252,228,.10),transparent 70%)', pointerEvents: 'none' }}/>
+        <div style={{ position: 'relative' }}>
+          <h1 style={{
+            fontSize: 38, lineHeight: 1.0, fontWeight: 600,
+            margin: 0, letterSpacing: '-.045em',
+            background: `linear-gradient(135deg,${C.inkStr} 0%,${C.violet} 100%)`,
+            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
+            ...T.hero,
+          }}>
+            Coming soon
+          </h1>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// MAIN (gated)
+// =====================================================================
+function StocksInner({ onConnectWallet }) {
   const [filter, setFilter]   = useState('All');
   const [prices, setPrices]   = useState({});
-  const [active, setActive]   = useState(null); // active stock for modal
+  const [active, setActive]   = useState(null);
   const [marketStatus, setMarketStatus] = useState(() => getUsMarketStatus());
 
   const { publicKey: solPk } = useWallet();
@@ -967,7 +946,6 @@ export default function Stocks({ onConnectWallet }) {
     return null;
   }, [solPk, privyEmbeddedSol]);
 
-  // Poll prices every 30s
   useEffect(() => {
     let alive = true;
     const mints = STOCKS.map(s => s.mint);
@@ -981,7 +959,6 @@ export default function Stocks({ onConnectWallet }) {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  // Update market status every minute
   useEffect(() => {
     const id = setInterval(() => setMarketStatus(getUsMarketStatus()), 60_000);
     return () => clearInterval(id);
@@ -1002,7 +979,6 @@ export default function Stocks({ onConnectWallet }) {
 
       <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)', color: C.ink, backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(151,252,228,.10),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 20%,rgba(168,127,255,.06),transparent 50%)' }}>
 
-        {/* HERO */}
         <div style={{ marginTop: 10, marginBottom: 18, padding: '22px 20px 20px', borderRadius: 26, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: '1px solid rgba(255,255,255,.07)', boxShadow: C.shadowLg, position: 'relative', overflow: 'hidden' }}>
           <div style={{ position: 'absolute', right: -40, top: -50, width: 200, height: 200, borderRadius: '50%', background: 'radial-gradient(circle,rgba(168,127,255,.16),transparent 65%)', pointerEvents: 'none' }}/>
           <div style={{ position: 'absolute', left: -60, bottom: -80, width: 200, height: 200, borderRadius: '50%', background: 'radial-gradient(circle,rgba(151,252,228,.10),transparent 65%)', pointerEvents: 'none' }}/>
@@ -1038,7 +1014,6 @@ export default function Stocks({ onConnectWallet }) {
           </div>
         </div>
 
-        {/* FILTERS */}
         <div style={{ display: 'flex', gap: 5, marginBottom: 12, overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 4 }}>
           {FILTERS.map(f => (
             <button key={f.id} onClick={() => setFilter(f.id)} style={{
@@ -1051,14 +1026,12 @@ export default function Stocks({ onConnectWallet }) {
           ))}
         </div>
 
-        {/* CONFIG WARNING (only shows if treasury ATA not set) */}
         {!TREASURY_USDC_ATA && (
           <div style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 12, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', fontSize: 11, color: C.amber, fontWeight: 600, lineHeight: 1.4, ...T.body }}>
             ⚠️ Trading disabled — set <code style={{ ...T.mono, fontSize: 10 }}>REACT_APP_TREASURY_USDC_ATA</code> before going live.
           </div>
         )}
 
-        {/* STOCK LIST */}
         <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', marginBottom: 18, backdropFilter: 'blur(12px)' }}>
           {filtered.length === 0 ? (
             <div style={{ padding: '30px 16px', textAlign: 'center', color: C.muted, fontSize: 12, ...T.body }}>
@@ -1069,7 +1042,6 @@ export default function Stocks({ onConnectWallet }) {
           ))}
         </div>
 
-        {/* FOOTER */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: '12px 16px', borderRadius: 14, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`, marginBottom: 8 }}>
           <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>POWERED BY</span>
           <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text', ...T.mono }}>JUPITER · xSTOCKS</span>
@@ -1091,4 +1063,50 @@ export default function Stocks({ onConnectWallet }) {
       />
     </>
   );
+}
+
+// =====================================================================
+// Gate order:
+//   1. Geo block — US blocked unless VIP wallet
+//   2. VIP gate — non-VIPs see "Coming Soon"
+//   3. VIPs get full stocks trading
+// =====================================================================
+export default function Stocks({ onConnectWallet }) {
+  const { publicKey: solPk } = useWallet();
+  const { privyEmbeddedSol } = useNexusWallet();
+  const walletPubkey = useMemo(() => {
+    if (solPk) return solPk.toString();
+    if (privyEmbeddedSol?.address) return privyEmbeddedSol.address;
+    return null;
+  }, [solPk, privyEmbeddedSol]);
+
+  const isVip = !!walletPubkey && VIP_WALLETS.has(walletPubkey);
+
+  const [country, setCountry] = useState(null);
+  const [geoChecked, setGeoChecked] = useState(false);
+
+  useEffect(() => {
+    if (isVip) { setGeoChecked(true); return; }
+    let alive = true;
+    detectCountry().then(c => {
+      if (!alive) return;
+      setCountry(c);
+      setGeoChecked(true);
+    });
+    return () => { alive = false; };
+  }, [isVip]);
+
+  if (!geoChecked) {
+    return <StocksComingSoon/>;
+  }
+
+  if (!isVip && country && GEO_BLOCKED.has(country)) {
+    return <StocksRegionBlock/>;
+  }
+
+  if (!isVip) {
+    return <StocksComingSoon/>;
+  }
+
+  return <StocksInner onConnectWallet={onConnectWallet}/>;
 }
