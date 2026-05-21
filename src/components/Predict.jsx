@@ -286,7 +286,7 @@ function OrderDrawer({ market, side, onClose }) {
 }
 
 // ─── Main tab (gated) ───────────────────────────────────────────────
-function PredictInner() {
+function PredictInner({ bypassGeo = false }) {
   const [country, setCountry] = useState(null);
   const [geoChecked, setGeoChecked] = useState(false);
   const [markets, setMarkets] = useState([]);
@@ -311,7 +311,7 @@ function PredictInner() {
   // Fetch markets after geo passes. Refresh every 30s.
   useEffect(() => {
     if (!geoChecked) return;
-    if (country && US_BLOCK.has(country)) return; // blocked, no fetch
+    if (!bypassGeo && country && US_BLOCK.has(country)) return; // blocked, no fetch
     let alive = true;
     const load = async () => {
       try {
@@ -330,7 +330,7 @@ function PredictInner() {
     load();
     const id = setInterval(load, 30_000);
     return () => { alive = false; clearInterval(id); };
-  }, [geoChecked, country]);
+  }, [geoChecked, country, bypassGeo]);
 
   useEffect(() => () => { mountedRef.current = false; }, []);
 
@@ -345,8 +345,8 @@ function PredictInner() {
     setOrderSide(side);
   }, []);
 
-  // Geo block.
-  if (geoChecked && country && US_BLOCK.has(country)) {
+  // Geo block (VIP wallets bypass).
+  if (!bypassGeo && geoChecked && country && US_BLOCK.has(country)) {
     return <RegionBlock />;
   }
 
@@ -464,5 +464,5 @@ export default function Predict(props) {
     nexus?.privyEmbeddedSol ||
     null;
   const isVip = !!address && VIP_WALLETS.has(address);
-  return isVip ? <PredictInner {...props} /> : <ComingSoon />;
+  return isVip ? <PredictInner {...props} bypassGeo /> : <ComingSoon />;
 }
