@@ -948,8 +948,20 @@ function MarketSkeleton() {
 }
 
 function MarketCard({ market, onTrade }) {
-  const { title, image, yesPct, yesPrice, noPrice, volume24h, endDate, marketCount } = market;
+  const { title, image, yesPct, volume24h, endDate, marketCount } = market;
   const resolves = timeUntil(endDate);
+  // Coerce to numbers — Gamma sometimes returns prices as strings.
+  const yesPrice = Number(market.yesPrice) || 0;
+  const noPrice  = Number(market.noPrice)  || 0;
+  // Upside = (1 / price - 1) × 100. Show whenever price is in (0, 1).
+  // Cap at 9999% so absurd longshots don't break layout.
+  const yesUpside = yesPrice > 0 && yesPrice < 1
+    ? Math.min(9999, Math.round((1 / yesPrice - 1) * 100))
+    : 0;
+  const noUpside = noPrice > 0 && noPrice < 1
+    ? Math.min(9999, Math.round((1 / noPrice - 1) * 100))
+    : 0;
+
   return (
     <div style={{ padding: 16, borderRadius: 16, background: `linear-gradient(145deg, ${C.card}, ${C.cardHi})`, border: `1px solid ${C.border}`, marginBottom: 10, boxShadow: C.shadow }}>
       <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', marginBottom: 14 }}>
@@ -970,11 +982,17 @@ function MarketCard({ market, onTrade }) {
         </div>
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={() => onTrade(market, 'yes')} style={{ flex: 1, padding: '11px 12px', borderRadius: 11, background: C.yesDim, border: `1px solid rgba(0,212,163,.30)`, color: C.yes, fontWeight: 700, fontSize: 13, cursor: 'pointer', ...T.body }}>
-          Yes · ${yesPrice.toFixed(2)}
+        <button onClick={() => onTrade(market, 'yes')} style={{ flex: 1, padding: '10px 10px 11px', borderRadius: 11, background: C.yesDim, border: `1px solid rgba(0,212,163,.30)`, color: C.yes, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, ...T.body }}>
+          <span style={{ fontWeight: 700, fontSize: 13 }}>Yes · ${yesPrice.toFixed(2)}</span>
+          {yesUpside > 0 && (
+            <span style={{ fontSize: 10, fontWeight: 600, opacity: .8, ...T.mono }}>+{yesUpside}% upside</span>
+          )}
         </button>
-        <button onClick={() => onTrade(market, 'no')} style={{ flex: 1, padding: '11px 12px', borderRadius: 11, background: C.noDim, border: `1px solid rgba(255,95,122,.30)`, color: C.no, fontWeight: 700, fontSize: 13, cursor: 'pointer', ...T.body }}>
-          No · ${noPrice.toFixed(2)}
+        <button onClick={() => onTrade(market, 'no')} style={{ flex: 1, padding: '10px 10px 11px', borderRadius: 11, background: C.noDim, border: `1px solid rgba(255,95,122,.30)`, color: C.no, cursor: 'pointer', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1, ...T.body }}>
+          <span style={{ fontWeight: 700, fontSize: 13 }}>No · ${noPrice.toFixed(2)}</span>
+          {noUpside > 0 && (
+            <span style={{ fontSize: 10, fontWeight: 600, opacity: .8, ...T.mono }}>+{noUpside}% upside</span>
+          )}
         </button>
       </div>
     </div>
