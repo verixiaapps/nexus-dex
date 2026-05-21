@@ -432,3 +432,37 @@ function Header() {
     </div>
   );
 }
+
+// ─── Coming soon (non-VIP) ──────────────────────────────────────────
+function ComingSoon() {
+  return (
+    <div style={{ maxWidth: 480, margin: '0 auto', width: '100%', padding: '60px 16px 100px', textAlign: 'center' }}>
+      <div style={{ padding: '40px 28px', borderRadius: 22, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: `1px solid ${C.border}`, boxShadow: C.shadowLg }}>
+        <div style={{ width: 56, height: 56, margin: '0 auto 20px', borderRadius: 14, background: C.hlDim, border: `1px solid ${C.borderHi}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke={C.hl} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3 3v18h18"/>
+            <path d="M7 14l3-3 4 4 6-7"/>
+            <circle cx="20" cy="8" r="1.5" fill={C.hl}/>
+          </svg>
+        </div>
+        <div style={{ fontSize: 24, fontWeight: 800, color: C.ink, marginBottom: 10, ...T.display, letterSpacing: -.5 }}>Predict</div>
+        <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6, ...T.body }}>
+          Coming soon. Trade crypto prediction markets directly from your Solana wallet.
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Gated default export ───────────────────────────────────────────
+export default function Predict(props) {
+  const solWallet = useWallet();
+  const nexus = useNexusWallet();
+  const address =
+    (solWallet?.publicKey && solWallet.publicKey.toBase58 && solWallet.publicKey.toBase58()) ||
+    nexus?.walletAddress ||
+    nexus?.privyEmbeddedSol ||
+    null;
+  const isVip = !!address && VIP_WALLETS.has(address);
+  return isVip ? <PredictInner {...props} /> : <ComingSoon />;
+}
