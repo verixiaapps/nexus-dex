@@ -4,7 +4,6 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from './WalletContext.js';
 import SwapWidget from './components/SwapWidget.jsx';
 import Portfolio from './components/Portfolio.js';
-import TokenDetail from './components/TokenDetail.js';
 import PerpsLanding from './components/PerpsLanding.jsx';
 import Predict from './components/Predict.jsx';
 import Stocks from './components/Stocks.jsx';
@@ -61,14 +60,13 @@ async function screenAddress(address) {
 // Routing — paths in repo:
 //   /            → swap
 //   /swap        → swap
-//   /stack       → Hyperliquid perps (renamed from "perps"/"vip")
-//   /call        → Polymarket UI (renamed from "predict")
+//   /stack       → Hyperliquid perps
+//   /call        → Polymarket UI
 //   /markets     → Stocks.jsx (Tokenized Markets — xStocks, etc.)
 //   /portfolio   → Portfolio (wallet)
-//   /token       → TokenDetail (deep-link from Portfolio)
 //
-// Legacy paths (/vip, /perps, /predict, /tokenized) still map so old
-// links keep working.
+// Legacy paths (/vip, /perps, /predict, /tokenized, /token) still map
+// so old links don't 404.
 // =====================================================================
 const PATH_TO_TAB = {
   '/':           'swap',
@@ -81,6 +79,7 @@ const PATH_TO_TAB = {
   '/markets':    'markets',
   '/tokenized':  'markets',   // legacy
   '/portfolio':  'portfolio',
+  '/token':      'portfolio', // legacy — TokenDetail removed, route to portfolio
 };
 const TAB_TO_PATH = {
   swap:      '/swap',
@@ -90,8 +89,7 @@ const TAB_TO_PATH = {
   portfolio: '/portfolio',
 };
 
-function tabFromPathname(pathname) { return PATH_TO_TAB[pathname] || (pathname.startsWith('/token') ? 'token' : 'swap'); }
-function getActiveTab(tab) { return tab === 'token' ? 'portfolio' : tab; }
+function tabFromPathname(pathname) { return PATH_TO_TAB[pathname] || 'swap'; }
 export function useAppWallet() { return useNexusWallet(); }
 
 function WalletIcon({ src, fallbackLetter, color, size }) {
@@ -429,7 +427,6 @@ const NAV_TABS = [
 function AppInner() {
   const navigate = useNavigate(); const location = useLocation(); const wallet = useAppWallet();
   const [tab, setTab] = useState(() => tabFromPathname(location.pathname));
-  const [selectedToken, setSelectedToken] = useState(null);
   const [walletModalOpen, setWalletModalOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 769);
 
@@ -439,20 +436,16 @@ function AppInner() {
 
   useEffect(() => { let to; const h = () => { clearTimeout(to); to = setTimeout(() => setIsMobile(window.innerWidth < 769), 150); }; window.addEventListener('resize', h); return () => { window.removeEventListener('resize', h); clearTimeout(to); }; }, []);
   useEffect(() => { const el = document.createElement('style'); el.textContent = GLOBAL_STYLES; document.head.appendChild(el); return () => document.head.removeChild(el); }, []);
-  useEffect(() => { const newTab = tabFromPathname(location.pathname); if (newTab !== tab) { setTab(newTab); if (newTab !== 'token') setSelectedToken(null); } }, [location.pathname, tab]);
+  useEffect(() => { const newTab = tabFromPathname(location.pathname); if (newTab !== tab) setTab(newTab); }, [location.pathname, tab]);
 
   const switchTab = useCallback(newTab => {
-    if (newTab === tab && newTab !== 'token') return;
-    if (newTab !== 'token') setSelectedToken(null);
+    if (newTab === tab) return;
     navigate(TAB_TO_PATH[newTab] || '/swap'); setTab(newTab); window.scrollTo(0, 0);
   }, [tab, navigate]);
-  const goToToken = useCallback(coin => { setSelectedToken(coin); setTab('token'); navigate('/token'); window.scrollTo(0, 0); }, [navigate]);
-  const goBack = useCallback(() => navigate(-1), [navigate]);
   const openWallet = useCallback(() => setWalletModalOpen(true), []);
 
   const sharedProps = { isConnected: wallet.isConnected, solConnected: wallet.solConnected, walletAddress: wallet.walletAddress, publicKey: wallet.publicKey, activeWalletKind: wallet.activeWalletKind, privyAuthenticated: wallet.privyAuthenticated, privyEmbeddedSol: wallet.privyEmbeddedSol, onConnectWallet: openWallet };
   const displayAddress = wallet.walletAddress ? wallet.walletAddress.slice(0, 4) + '...' + wallet.walletAddress.slice(-4) : null;
-  const activeTab = getActiveTab(tab);
 
   if (!termsAccepted) {
     return <TermsGate onAccept={() => { try { localStorage.setItem('nexus_terms_accepted_v3', '1'); } catch {} setTermsAccepted(true); }} />;
@@ -469,7 +462,7 @@ function AppInner() {
             <span style={{ fontSize: 9, color: C.accent, background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.3)', borderRadius: 4, padding: '1px 5px', fontWeight: 600 }}>DEX</span>
           </div>
           <nav className="desktop-nav hide-scrollbar" style={{ display: 'flex', gap: 2, flex: 1, justifyContent: 'center', overflowX: 'auto' }}>
-            {NAV_TABS.map(t => (<button key={t.id} onClick={() => switchTab(t.id)} style={{ background: activeTab === t.id ? 'rgba(0,229,255,.09)' : 'transparent', border: activeTab === t.id ? '1px solid rgba(0,229,255,.2)' : '1px solid transparent', borderRadius: 8, padding: '5px 12px', color: activeTab === t.id ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>{t.label}</button>))}
+            {NAV_TABS.map(t => (<button key={t.id} onClick={() => switchTab(t.id)} style={{ background: tab === t.id ? 'rgba(0,229,255,.09)' : 'transparent', border: tab === t.id ? '1px solid rgba(0,229,255,.2)' : '1px solid transparent', borderRadius: 8, padding: '5px 12px', color: tab === t.id ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>{t.label}</button>))}
           </nav>
           <div className="mobile-nav" style={{ flex: 1 }} />
           <button onClick={openWallet} style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, background: wallet.isConnected ? 'rgba(0,229,255,.08)' : 'linear-gradient(135deg,#00e5ff,#0055ff)', border: wallet.isConnected ? '1px solid rgba(0,229,255,.3)' : 'none', borderRadius: 10, padding: '7px 14px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12, color: wallet.isConnected ? C.accent : C.bg, whiteSpace: 'nowrap' }}>
@@ -482,11 +475,10 @@ function AppInner() {
         {tab === 'stack'     && <PerpsLanding onConnectWallet={openWallet} />}
         {tab === 'call'      && <Predict {...sharedProps} />}
         {tab === 'markets'   && <Stocks {...sharedProps} />}
-        {tab === 'portfolio' && <Portfolio onSelectCoin={goToToken} onConnectWallet={openWallet} />}
-        {tab === 'token'     && <TokenDetail {...sharedProps} coin={selectedToken} onBack={goBack} />}
+        {tab === 'portfolio' && <Portfolio onConnectWallet={openWallet} />}
       </main>
       <nav className="mobile-nav" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100, background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(0,229,255,.1)', display: 'flex', alignItems: 'stretch', paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        {NAV_TABS.map(t => { const Icon = NAV_ICONS[t.id]; return (<button key={t.id} onClick={() => switchTab(t.id)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: activeTab === t.id ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '6px 2px', minHeight: 54, position: 'relative' }}>{activeTab === t.id && <div style={{ position: 'absolute', top: 0, left: '25%', right: '25%', height: 2, borderRadius: '0 0 2px 2px', background: C.accent }} />}<Icon /><span>{t.label}</span></button>); })}
+        {NAV_TABS.map(t => { const Icon = NAV_ICONS[t.id]; return (<button key={t.id} onClick={() => switchTab(t.id)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: tab === t.id ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '6px 2px', minHeight: 54, position: 'relative' }}>{tab === t.id && <div style={{ position: 'absolute', top: 0, left: '25%', right: '25%', height: 2, borderRadius: '0 0 2px 2px', background: C.accent }} />}<Icon /><span>{t.label}</span></button>); })}
       </nav>
       <WalletModal open={walletModalOpen} onClose={() => setWalletModalOpen(false)} />
     </div>
