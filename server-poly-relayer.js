@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────
 // server-poly-relayer.js — Express router for Polymarket builder ops.
-//
+// 
 // ARCHITECTURE (V2 — post April 28 2026 cutover):
 //   • Frontend uses @polymarket/builder-relayer-client SDK to deploy the
 //     user's safe and submit gasless approvals batches. That SDK still
