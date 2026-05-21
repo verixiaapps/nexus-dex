@@ -48,6 +48,36 @@ const ARB_RPC_PRIMARY = process.env.REACT_APP_ARB_RPC || ARBITRUM_RPC;
 // Minimum stuck USDC (in 6-decimal units) before "bring home" banner shows
 const SWEEP_MIN_USDC_UNITS = 1_000_000n; // $1.00
 
+// ─────────────────────────────────────────────────────────────────────
+// GEO BLOCK — VIP wallets bypass. Same Cloudflare trace as Predict.
+// ─────────────────────────────────────────────────────────────────────
+const GEO_URL = 'https://www.cloudflare.com/cdn-cgi/trace';
+const GEO_CACHE_KEY = 'verixia_geo_country_v1';
+const GEO_CACHE_TTL = 12 * 60 * 60 * 1000;
+const GEO_BLOCKED = new Set(['US']);
+
+async function detectCountry() {
+  try {
+    const raw = localStorage.getItem(GEO_CACHE_KEY);
+    if (raw) {
+      const { country, ts } = JSON.parse(raw);
+      if (country && Date.now() - ts < GEO_CACHE_TTL) return country;
+    }
+  } catch {}
+  try {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), 4000);
+    const res = await fetch(GEO_URL, { signal: ctrl.signal });
+    clearTimeout(timer);
+    const text = await res.text();
+    const loc = (text.match(/loc=([A-Z]{2})/) || [])[1] || null;
+    if (loc) {
+      try { localStorage.setItem(GEO_CACHE_KEY, JSON.stringify({ country: loc, ts: Date.now() })); } catch {}
+    }
+    return loc;
+  } catch { return null; }
+}
+
 const DERIVATION_MSG = (pub) =>
   `Nexus DEX: Authorize HyperCore Account\n\nWallet: ${pub}\n\nThis creates your non-custodial trading account. No SOL is spent.`;
 
@@ -2325,6 +2355,51 @@ const VIP_WALLETS = new Set([
   'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV',
 ]);
 
+function VipRegionBlock() {
+  return (
+    <div style={{
+      maxWidth: 680, margin: '0 auto', width: '100%',
+      padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)',
+      color: C.ink, minHeight: '80vh',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% 10%,rgba(168,127,255,.14),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 30%,rgba(151,252,228,.08),transparent 50%)',
+    }}>
+      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600;700&display=swap');@import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap')`}</style>
+      <div style={{
+        width: '100%', maxWidth: 480,
+        padding: '44px 28px 40px', borderRadius: 28,
+        background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))',
+        border: '1px solid rgba(168,127,255,.22)',
+        boxShadow: '0 24px 80px rgba(0,0,0,.55), 0 0 60px rgba(168,127,255,.10)',
+        textAlign: 'center', position: 'relative', overflow: 'hidden',
+      }}>
+        <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse 100% 60% at 50% -10%,rgba(151,252,228,.10),transparent 70%)', pointerEvents: 'none' }}/>
+        <div style={{ position: 'relative' }}>
+          <div style={{ width: 56, height: 56, margin: '0 auto 20px', borderRadius: 14, background: C.hlDim, border: `1px solid ${C.borderHi}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke={C.hl} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/>
+              <line x1="2" y1="12" x2="22" y2="12"/>
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+            </svg>
+          </div>
+          <h1 style={{
+            fontSize: 30, lineHeight: 1.05, fontWeight: 600,
+            margin: '0 0 12px', letterSpacing: '-.045em',
+            background: `linear-gradient(135deg,${C.inkStr} 0%,${C.violet} 100%)`,
+            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
+            ...T.hero,
+          }}>
+            VIP isn't available here
+          </h1>
+          <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6, ...T.body }}>
+            Perpetual trading is restricted in your region. Swap, Predict, and Wallet remain fully available.
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function VipComingSoon({ onConnectWallet, walletPubkey }) {
   const connected = !!walletPubkey;
   return (
@@ -2830,8 +2905,10 @@ function PerpsTradeInner({ onConnectWallet }) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// VIP gate: checks connected wallet against VIP_WALLETS.
-// Non-VIPs get "Coming Soon", VIPs get full perps trading.
+// Gate order:
+//   1. Geo block — US blocked unless wallet is on VIP allowlist
+//   2. VIP gate — non-VIPs see "Coming Soon"
+//   3. VIPs get full perps trading
 // ─────────────────────────────────────────────────────────────────────
 export default function PerpsTrade({ onConnectWallet }) {
   const { publicKey: solPk } = useWallet();
@@ -2842,10 +2919,38 @@ export default function PerpsTrade({ onConnectWallet }) {
     return null;
   }, [solPk, privyEmbeddedSol]);
 
-  const isVip = walletPubkey && VIP_WALLETS.has(walletPubkey);
+  const isVip = !!walletPubkey && VIP_WALLETS.has(walletPubkey);
 
+  const [country, setCountry] = useState(null);
+  const [geoChecked, setGeoChecked] = useState(false);
+
+  useEffect(() => {
+    // VIPs skip geo detection entirely.
+    if (isVip) { setGeoChecked(true); return; }
+    let alive = true;
+    detectCountry().then(c => {
+      if (!alive) return;
+      setCountry(c);
+      setGeoChecked(true);
+    });
+    return () => { alive = false; };
+  }, [isVip]);
+
+  // While geo resolves, show the coming-soon shell so the page doesn't flash empty.
+  if (!geoChecked) {
+    return <VipComingSoon onConnectWallet={onConnectWallet} walletPubkey={walletPubkey}/>;
+  }
+
+  // Non-VIPs in blocked regions get the region screen.
+  if (!isVip && country && GEO_BLOCKED.has(country)) {
+    return <VipRegionBlock/>;
+  }
+
+  // Non-VIPs anywhere else get coming-soon.
   if (!isVip) {
     return <VipComingSoon onConnectWallet={onConnectWallet} walletPubkey={walletPubkey}/>;
   }
+
+  // VIPs only beyond this point.
   return <PerpsTradeInner onConnectWallet={onConnectWallet}/>;
 }
