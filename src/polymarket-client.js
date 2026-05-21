@@ -2,7 +2,7 @@
 //
 // Browser-side Polymarket client for Nexus DEX. Wraps two Polymarket
 // services with our specific operational profile:
-//
+// 
 //   1. Bridge API at bridge.polymarket.com (proxy of fun.xyz)
 //      - Maps a user's derived EVM address to a Solana deposit address
 //      - Polymarket auto-bridges USDC Solana -> USDC.e Polygon and
