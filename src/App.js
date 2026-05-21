@@ -7,7 +7,8 @@ import Portfolio from './components/Portfolio.js';
 import TokenDetail from './components/TokenDetail.js';
 import PerpsLanding from './components/PerpsLanding.jsx';
 import Earn from './components/Earn.jsx';
- 
+import Predict from './components/Predict.jsx';
+
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b', text: '#cdd6f4', muted: '#586994',
@@ -62,6 +63,7 @@ const PATH_TO_TAB = {
   '/vip': 'perps',
   '/sports': 'sports',
   '/earn': 'earn',
+  '/predict': 'predict',
   '/portfolio': 'portfolio',
 };
 const TAB_TO_PATH = {
@@ -69,6 +71,7 @@ const TAB_TO_PATH = {
   perps: '/vip',
   sports: '/sports',
   earn: '/earn',
+  predict: '/predict',
   portfolio: '/portfolio',
 };
 
@@ -388,12 +391,13 @@ function IconVip()         { return <svg width="18" height="18" viewBox="0 0 24 
 function IconSports()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M6.5 6.5l11 11"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96L12 12.01l8.73-5.05"/><path d="M12 22.08V12"/></svg>; }
 function IconWallet()      { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
 function IconEarn()        { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 6v12"/><path d="M15 9.5c0-1.4-1.3-2.5-3-2.5s-3 1.1-3 2.5S10.3 12 12 12s3 1.1 3 2.5-1.3 2.5-3 2.5-3-1.1-3-2.5"/></svg>; }
+function IconPredict()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="M7 14l3-3 4 4 6-7"/><circle cx="20" cy="8" r="1.5" fill="currentColor"/></svg>; }
 
-const NAV_ICONS = { swap: IconSwap, perps: IconVip, sports: IconSports, earn: IconEarn, portfolio: IconWallet };
+const NAV_ICONS = { swap: IconSwap, perps: IconVip, sports: IconSports, earn: IconEarn, predict: IconPredict, portfolio: IconWallet };
 const NAV_TABS = [
   { id: 'swap',        label: 'Swap' },
   { id: 'perps',       label: 'VIP' },
-  { id: 'earn',        label: 'Earn' },
+  { id: 'predict',     label: 'Predict' },
   { id: 'portfolio',   label: 'Wallet' },
 ];
 
@@ -452,6 +456,7 @@ function AppInner() {
         {tab === 'swap' && <SwapWidget {...sharedProps} />}
         {tab === 'perps' && <PerpsLanding onConnectWallet={openWallet} />}
         {tab === 'earn' && <Earn {...sharedProps} />}
+        {tab === 'predict' && <Predict {...sharedProps} />}
         {tab === 'portfolio' && <Portfolio onSelectCoin={goToToken} onConnectWallet={openWallet} />}
         {tab === 'token' && <TokenDetail {...sharedProps} coin={selectedToken} onBack={goBack} />}
       </main>
@@ -464,4 +469,3 @@ function AppInner() {
 }
 
 export default function App() { return (<BrowserRouter><AppInner /></BrowserRouter>); }
- 
