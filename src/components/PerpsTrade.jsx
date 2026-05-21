@@ -1163,118 +1163,55 @@ function hasSpotMatch(perpName, spotSymbols) {
 // re-bootstrap. Tab is never empty.
 // ─────────────────────────────────────────────────────────────────────
 // ─────────────────────────────────────────────────────────────────────
-// NEW LISTINGS + FUNDING HEAT — real listing dates via candleSnapshot,
-// cached forever per coin in localStorage.
-//
-// NEW tab:     regular HL perps, listed in last 7 days
-// FUNDING tab: HIP-3 perps (xyz:/trade:/etc), listed in last 7 days,
-//              sorted by absolute funding rate desc — catches pre-IPO
-//              and other builder-deployed launches at peak euphoria
+// NEW + FUNDING tabs — surface fresh listings via the low-volume signal.
+// New perps haven't built volume yet, so under $1M 24h vol = likely fresh.
+// Sorted low to high (newest = thinnest volume) so brand-new launches
+// float to the top.
 // ─────────────────────────────────────────────────────────────────────
-const NEW_WINDOW_MS    = 14 * 24 * 60 * 60_000;  // 14 days
-const LISTING_KEY      = 'nexus_perp_listing_dates_v1';
 
-function loadListingDates() {
-  try {
-    const raw = localStorage.getItem(LISTING_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
-}
-function saveListingDates(map) {
-  try { localStorage.setItem(LISTING_KEY, JSON.stringify(map)); } catch {}
-}
+const VOLUME_CAP = 1_000_000; // $1M
 
-// Fetch listing date for a single coin via candleSnapshot.
-// Uses a 90-day lookback. If the earliest candle in that window is
-// close to startTime, the coin was already trading then (>90 days old).
-// If it's later, that's the real listing date.
-async function fetchListingDate(coin) {
-  try {
-    const now = Date.now();
-    const startTime = now - 90 * 24 * 60 * 60_000;
-    const data = await hlRequest({
-      type: 'candleSnapshot',
-      req: { coin, interval: '1d', startTime, endTime: now }
-    });
-    if (!Array.isArray(data) || data.length === 0) return null;
-    const first = data[0];
-    const ts = first?.t || first?.T;
-    if (typeof ts !== 'number' || ts <= 0) return null;
-    // If earliest candle is within 2 days of startTime, the coin was
-    // already trading at the lookback boundary — older than 90d.
-    if (ts - startTime < 2 * 24 * 60 * 60_000) return 1; // sentinel: "old"
-    return ts;
-  } catch { return null; }
-}
-
-// HIP-3 detection: builder-deployed perps have a deployer prefix and
-// a colon in the name (e.g. "xyz:XYZ100", "trade:SPACEX").
 function isHip3(p) {
   return typeof p.id === 'string' && p.id.includes(':');
 }
 
-// Regular HL perp filter — used by the New tab.
+// Regular HL perps under volume cap.
 function passesBaseFilter(p) {
   if (!(p.price > 0) || !Number.isInteger(p.assetIndex)) return false;
   if (p.isDelisted === true) return false;
   if (isHip3(p)) return false;
   if (p.assetIndex >= 100000) return false;
-  if (!(p.volume24h >= 10_000)) return false;
+  if (!(p.volume24h > 0)) return false;        // must have some activity
+  if (p.volume24h >= VOLUME_CAP) return false; // skip established markets
   return true;
 }
 
-// HIP-3 perp filter — used by the Funding tab.
-// No volume floor: brand-new launches need to surface immediately
-// (the first hour often has near-zero volume but extreme funding).
+// HIP-3 builder perps (pre-IPO, commodities, etc) under volume cap.
 function passesHip3Filter(p) {
   if (!(p.price > 0) || !Number.isInteger(p.assetIndex)) return false;
   if (p.isDelisted === true) return false;
   if (!isHip3(p)) return false;
+  if (!(p.volume24h > 0)) return false;
+  if (p.volume24h >= VOLUME_CAP) return false;
   return true;
 }
 
-// Filter to regular perps listed within NEW_WINDOW_MS.
-function filterNewListings(allPerps, listingDateMap) {
+function filterNewListings(allPerps) {
   if (!Array.isArray(allPerps) || allPerps.length === 0) return [];
-  const now = Date.now();
-  const live = allPerps.filter(passesBaseFilter);
-
-  const candidates = live
-    .filter(p => {
-      const listedAt = listingDateMap[p.id];
-      if (!listedAt) return false;
-      return (now - listedAt) < NEW_WINDOW_MS;
-    })
-    .sort((a, b) => (listingDateMap[b.id] || 0) - (listingDateMap[a.id] || 0));
-
-  return candidates.slice(0, 30).map((p, idx) => ({
-    ...p,
-    newnessRank: idx,
-    listedAt: listingDateMap[p.id],
-  }));
+  return allPerps
+    .filter(passesBaseFilter)
+    .sort((a, b) => (a.volume24h || 0) - (b.volume24h || 0))
+    .slice(0, 30)
+    .map((p, idx) => ({ ...p, newnessRank: idx }));
 }
 
-// Filter to fresh HIP-3 perps with non-trivial funding, sorted by
-// absolute funding rate desc. Catches pre-IPO and builder launches
-// during their high-funding window.
-function filterFundingHip3(allPerps, listingDateMap) {
+function filterFundingHip3(allPerps) {
   if (!Array.isArray(allPerps) || allPerps.length === 0) return [];
-  const now = Date.now();
-  const live = allPerps.filter(passesHip3Filter);
-
-  const candidates = live
-    .filter(p => {
-      const listedAt = listingDateMap[p.id];
-      if (!listedAt) return false;
-      return (now - listedAt) < NEW_WINDOW_MS;
-    })
-    .sort((a, b) => Math.abs(Number(b.funding) || 0) - Math.abs(Number(a.funding) || 0));
-
-  return candidates.slice(0, 30).map((p, idx) => ({
-    ...p,
-    newnessRank: idx,
-    listedAt: listingDateMap[p.id],
-  }));
+  return allPerps
+    .filter(passesHip3Filter)
+    .sort((a, b) => (a.volume24h || 0) - (b.volume24h || 0))
+    .slice(0, 30)
+    .map((p, idx) => ({ ...p, newnessRank: idx }));
 }
 
 // Freshness tag — rank-based only, no date math, no localStorage.
@@ -2440,7 +2377,6 @@ function PerpsTradeInner({ onConnectWallet }) {
   const [discoverSearch, setDiscoverSearch] = useState('');
   const [allPerps, setAllPerps]     = useState(() => loadCachedMarkets('nexus_allperps') || []);
   const [spotSymbols, setSpotSymbols] = useState(() => new Set());
-  const [listingDateMap, setListingDateMap] = useState(() => loadListingDates());
 
   const allPerpsRef = useRef(allPerps);
   useEffect(() => { allPerpsRef.current = allPerps; }, [allPerps]);
@@ -2654,65 +2590,11 @@ function PerpsTradeInner({ onConnectWallet }) {
     return () => { alive = false; };
   }, [activePair?.id, sparkMap]);
 
-  // When the New or Funding tab opens, fetch real listing dates for any
-  // perps we don't yet have. Cached forever in localStorage per coin.
-  useEffect(() => {
-    if (filter !== 'New' && filter !== 'Funding') return;
-    if (!Array.isArray(allPerps) || allPerps.length === 0) return;
-
-    // Pick the pool to scan based on which tab is open.
-    const live = filter === 'Funding'
-      ? allPerps.filter(passesHip3Filter)
-      : allPerps.filter(passesBaseFilter);
-
-    // Only fetch for perps with high assetIndex (recently added) that we
-    // haven't already resolved. HL adds new perps at higher indices, so
-    // scanning the top 60 covers the realistic "recent" window cheaply.
-    const sorted = live.slice().sort((a, b) => (b.assetIndex || 0) - (a.assetIndex || 0));
-    const unknown = sorted
-      .filter(p => listingDateMap[p.id] == null)
-      .slice(0, 60);
-    if (unknown.length === 0) return;
-
-    let alive = true;
-    (async () => {
-      // Throttle: 5 at a time
-      const chunkSize = 5;
-      const updates = {};
-      for (let i = 0; i < unknown.length; i += chunkSize) {
-        const chunk = unknown.slice(i, i + chunkSize);
-        const results = await Promise.all(chunk.map(p => {
-          // HIP-3 candles need the full prefixed name (e.g. "xyz:XYZ100");
-          // regular perps use the bare symbol (e.g. "CHIP").
-          const coin = isHip3(p) ? p.id : (p.base || p.id);
-          return fetchListingDate(coin);
-        }));
-        if (!alive) return;
-        chunk.forEach((p, idx) => {
-          const ts = results[idx];
-          if (typeof ts === 'number' && ts > 0) {
-            updates[p.id] = ts;
-          } else {
-            // Mark as resolved-but-old so we don't refetch.
-            updates[p.id] = 1;
-          }
-        });
-      }
-      if (!alive || Object.keys(updates).length === 0) return;
-      setListingDateMap(prev => {
-        const next = { ...prev, ...updates };
-        saveListingDates(next);
-        return next;
-      });
-    })();
-    return () => { alive = false; };
-  }, [filter, allPerps, listingDateMap]);
-
   useEffect(() => {
     if (filter !== 'New' && filter !== 'Funding') return;
     const rows = filter === 'Funding'
-      ? filterFundingHip3(allPerps, listingDateMap)
-      : filterNewListings(allPerps, listingDateMap);
+      ? filterFundingHip3(allPerps)
+      : filterNewListings(allPerps);
     const missingSpark = rows.filter(p => !Array.isArray(sparkMap[p.id]) || sparkMap[p.id].length === 0);
     const missingHour  = rows.filter(p => oneHourMap[p.id] == null);
     if (missingSpark.length === 0 && missingHour.length === 0) return;
@@ -2738,7 +2620,7 @@ function PerpsTradeInner({ onConnectWallet }) {
       }
     })();
     return () => { alive = false; };
-  }, [filter, allPerps, sparkMap, oneHourMap, listingDateMap]);
+  }, [filter, allPerps, sparkMap, oneHourMap]);
 
   // Discover tab: lazy-fetch spark + 1h change for the currently filtered rows
   // (top 15 or search results). Limits to 30 max per pass to keep snappy.
@@ -2809,11 +2691,11 @@ function PerpsTradeInner({ onConnectWallet }) {
   // anything already in the curated "All" list. If user types a search, filter the
   // full universe by name instead of capping at 15.
   const filtered = useMemo(() => {
-    if (filter === 'New') return filterNewListings(allPerps, listingDateMap);
+    if (filter === 'New') return filterNewListings(allPerps);
     if (filter === 'Funding') {
       // Fresh HIP-3 perps (pre-IPO and other builder launches) sorted
       // by absolute funding rate. Catches them at peak euphoria.
-      return filterFundingHip3(allPerps, listingDateMap);
+      return filterFundingHip3(allPerps);
     }
     if (filter === 'Discover') {
       const curatedIds = new Set(marketData.map(p => p.id));
@@ -2832,7 +2714,7 @@ function PerpsTradeInner({ onConnectWallet }) {
         .slice(0, 15);
     }
     return marketData;
-  }, [marketData, allPerps, filter, discoverSearch, listingDateMap]);
+  }, [marketData, allPerps, filter, discoverSearch]);
 
   const totalVol = marketData.reduce((s, p) => s + Number(p.volume24h || 0), 0);
   const gainers  = marketData.filter(p => p.change > 0).length;
@@ -2880,35 +2762,6 @@ function PerpsTradeInner({ onConnectWallet }) {
             ))}
           </div>
         </div>
-
-        {(filter === 'New' || filter === 'Funding') && (() => {
-          const totalPerps = allPerps.length;
-          const regular    = allPerps.filter(passesBaseFilter).length;
-          const hip3       = allPerps.filter(p => isHip3(p) && p.price > 0).length;
-          const dexes      = new Set(allPerps.filter(isHip3).map(p => p.dexName || (p.id || '').split(':')[0])).size;
-          const resolved   = Object.keys(listingDateMap).length;
-          const inWindow   = filter === 'Funding'
-            ? filterFundingHip3(allPerps, listingDateMap).length
-            : filterNewListings(allPerps, listingDateMap).length;
-          // Newest 3 resolved listings (excluding sentinel "1")
-          const now = Date.now();
-          const newest = Object.entries(listingDateMap)
-            .filter(([, ts]) => ts > 1000)
-            .sort((a, b) => b[1] - a[1])
-            .slice(0, 3)
-            .map(([id, ts]) => {
-              const days = Math.floor((now - ts) / 86_400_000);
-              return `${id}(${days}d)`;
-            })
-            .join(' ');
-          return (
-            <div style={{ margin: '0 0 10px', padding: '8px 10px', borderRadius: 10, background: 'rgba(151,252,228,.06)', border: '1px solid rgba(151,252,228,.20)', fontSize: 10, color: C.muted, fontFamily: 'IBM Plex Mono, monospace', lineHeight: 1.5 }}>
-              <div>perps:{totalPerps} · regular:{regular} · hip3:{hip3} · dexes:{dexes}</div>
-              <div>resolved:{resolved} · in-{Math.round(NEW_WINDOW_MS/86_400_000)}d-window:{inWindow} · tab:{filter}</div>
-              <div>newest: {newest || '(none)'}</div>
-            </div>
-          );
-        })()}
 
         {filter === 'Discover' && (
           <div style={{ marginBottom: 10, position: 'relative' }}>
