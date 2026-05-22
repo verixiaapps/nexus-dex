@@ -41,7 +41,6 @@
     "@privy-io/react-auth": "^2.0.0",
     "@nktkas/hyperliquid": "^0.32.2",
     "ethers": "^6.13.0",
-    "ethers-v5": "npm:ethers@^5.8.0",
     "@lifi/sdk": "^3.16.3",
     "@polymarket/clob-client": "^4.22.8",
     "@polymarket/clob-client-v2": "^1.0.0",
