@@ -1371,6 +1371,7 @@ function FundingSheet({
   signSolanaTx,
   onFunded, onWithdrawn,
   refreshAll,
+  onLoginPrivy,
 }) {
   const [amount, setAmount]       = useState('25');
   const [status, setStatus]       = useState('idle');     // idle | bridging | done | error
@@ -1540,6 +1541,31 @@ function FundingSheet({
         </div>
 
         <DebugPanel open={debugOpen} onToggle={() => setDebugOpen(o => !o)} />
+
+        {/* Not-ready states — surface the actual reason so the user isn't staring at a broken UI */}
+        {!evmAddress && (
+          <div style={{ padding: 16, borderRadius: 14, background: 'linear-gradient(135deg, rgba(168,127,255,.10), rgba(151,252,228,.06))', border: `1px solid ${C.borderHi}`, marginBottom: 12 }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.violet, marginBottom: 4, ...T.display }}>Sign in to fund</div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 12, lineHeight: 1.5, ...T.body }}>
+              We'll create a Solana + Polygon wallet for you automatically. No seed phrase, no extension.
+            </div>
+            <button onClick={onLoginPrivy} style={{
+              width: '100%', padding: '11px', borderRadius: 10,
+              background: `linear-gradient(135deg, ${C.violet}, ${C.hl})`,
+              color: C.bg, fontWeight: 800, fontSize: 13, border: 'none',
+              cursor: 'pointer', ...T.body,
+            }}>Sign in with email / Google</button>
+          </div>
+        )}
+        {evmAddress && !safeAddress && (
+          <div style={{ padding: 14, borderRadius: 14, background: 'rgba(245,181,61,.06)', border: `1px solid ${C.amber}44`, marginBottom: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.amber}33`, borderTopColor: C.amber, animation: 'nexus-spin .8s linear infinite' }} />
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 12, fontWeight: 700, color: C.amber, ...T.body }}>Preparing your trading account…</div>
+              <div style={{ fontSize: 10, color: C.muted, marginTop: 2, ...T.mono }}>Deriving Polymarket Safe — a few seconds</div>
+            </div>
+          </div>
+        )}
 
         {/* Bridge from Solana */}
         <div style={{ padding: 14, borderRadius: 14, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 12 }}>
@@ -2174,7 +2200,7 @@ function PredictInner({ bypassGeo = false }) {
         <Header
           polyBalance={polyBalance}
           onOpenFund={() => setFundOpen(true)}
-          canFund={!!evmAddress && !!safeAddress}
+          canFund={true}
         />
 
         {!privyAuthenticated && (
@@ -2279,6 +2305,7 @@ function PredictInner({ bypassGeo = false }) {
         onFunded={refreshAll}
         onWithdrawn={refreshAll}
         refreshAll={refreshAll}
+        onLoginPrivy={loginPrivy}
       />
     </>
   );
