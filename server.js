@@ -1,5 +1,5 @@
 require('dotenv').config();
- 
+
 const crypto    = require('crypto');
 const express   = require('express');
 const cors      = require('cors');
@@ -22,6 +22,8 @@ const EXTRA_CONNECT_SRC = _csv(process.env.EXTRA_CSP_CONNECT_SRC);
 const EXTRA_FRAME_SRC   = _csv(process.env.EXTRA_CSP_FRAME_SRC);
 const EXTRA_SCRIPT_SRC  = _csv(process.env.EXTRA_CSP_SCRIPT_SRC);
 
+// NOTE: added 'https://buy.moonpay.com' for the on-ramp link-out in Predict.jsx.
+// MoonPay opens in a new tab so this is precautionary; harmless if unused.
 const CSP_DIRECTIVES = [
   ['default-src',     ["'self'"]],
   ['script-src',      ["'self'", "'unsafe-inline'", 'https://challenges.cloudflare.com', ...EXTRA_SCRIPT_SRC]],
@@ -32,7 +34,7 @@ const CSP_DIRECTIVES = [
   ['base-uri',        ["'self'"]],
   ['form-action',     ["'self'"]],
   ['frame-ancestors', ["'none'"]],
-  ['frame-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org', 'https://challenges.cloudflare.com', ...EXTRA_FRAME_SRC]],
+  ['frame-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org', 'https://challenges.cloudflare.com', 'https://buy.moonpay.com', ...EXTRA_FRAME_SRC]],
   ['child-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org']],
   ['connect-src',     ["'self'", 'https://li.quest', 'https://arb1.arbitrum.io', 'https://web3.okx.com', 'https://quote-api.jup.ag', 'https://lite-api.jup.ag', 'https://api.jup.ag', 'https://token.jup.ag', 'https://api.hyperliquid.xyz', 'https://api.hyperliquid-testnet.xyz', 'https://pumpportal.fun', 'wss://pumpportal.fun', 'https://api.dexscreener.com', 'https://*.dexscreener.com', 'https://auth.privy.io', 'https://*.privy.io', 'https://*.privy.systems', 'https://*.rpc.privy.systems', 'https://explorer-api.walletconnect.com', 'https://*.walletconnect.com', 'https://*.walletconnect.org', 'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org', 'wss://*.walletconnect.com', 'wss://*.walletconnect.org', 'wss://www.walletlink.org', 'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com', 'https://api.pinata.cloud', 'https://*.publicnode.com', 'https://*.drpc.org', 'https://public.chainalysis.com', 'https://gamma-api.polymarket.com', 'https://clob.polymarket.com', 'https://bridge.polymarket.com', 'https://data-api.polymarket.com', 'https://relayer-v2.polymarket.com', 'https://polygon-rpc.com', 'https://polygon.llamarpc.com', 'https://rpc.ankr.com', ...EXTRA_CONNECT_SRC]],
   ['worker-src',      ["'self'", 'blob:']],
@@ -825,10 +827,13 @@ app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, r
 // fetches HMAC headers from /api/poly/sign per relayer/CLOB call.
 app.use('/api/poly', require('./server-poly-relayer'));
 
-/* -- Predict bridge (Polymarket via Mayan) ------------------------------ */
-// Installs /api/bridge/quote, /api/bridge/submit, /api/gamma/*.
-// Module is self-contained; mounts cleanly without touching state above.
-require('./predict-bridge')(app);
+/* -- Predict bridge (Mayan path — DISABLED) ----------------------------- */
+// Mayan path disabled per design decision (2026-05-22). Predict.jsx v4 now
+// bridges Solana -> Polygon via LI.FI (Mayan denylisted) for better
+// reliability. predict-bridge.js stays on disk for reference; uncomment
+// the require below to re-enable.
+//
+// require('./predict-bridge')(app);
 
 /* -- Health ------------------------------------------------------------- */
 app.get('/api/health', (req, res) => {
@@ -843,7 +848,7 @@ app.get('/api/health', (req, res) => {
       lifiApiKey:     Boolean(LIFI_API_KEY),
       unit:           true,
       adminKey:       Boolean(process.env.ADMIN_KEY),
-      predictBridge:  Boolean(HELIUS_API_KEY || HELIUS_RPC_URL),
+      predictBridge:  false, // Mayan path disabled — LI.FI used instead
       polyBuilder:    Boolean(process.env.POLY_BUILDER_API_KEY && process.env.POLY_BUILDER_SECRET && process.env.POLY_BUILDER_PASSPHRASE),
       polyBuilderCode:Boolean(process.env.POLY_BUILDER_CODE),
     },
@@ -855,10 +860,12 @@ app.get('/api/health', (req, res) => {
     lifi: { baseUrl: LIFI_API, hyperCoreChainId: 1337, arbChainId: 42161 },
     unit: { baseUrl: UNIT_API_BASE, flow: 'SOL <-> HL native via Hyperunit Guardian network' },
     predict: {
-      flow: 'Solana USDC -> Polygon USDC via Mayan; Nexus fee captured atomically Solana-side; Mayan auto-refunds bridged USDC on failure; Nexus fee non-refundable',
+      flow: 'Solana USDC -> Polygon USDC.e via LI.FI (Mayan denylisted); 5% service fee captured Solana-side; CLOB orders signed silently by Privy embedded EVM wallet (Safe sig type 2); builder code attribution',
+      relayer: 'https://relayer-v2.polymarket.com/',
+      bridgeProvider: 'LI.FI (denylist: mayan)',
     },
     polymarket: process.env.POLY_BUILDER_API_KEY ? {
-      flow: 'Solana USDC -> Polymarket Safe via bridge.polymarket.com; CLOB orders via @polymarket/clob-client (sig type 2); builder code attribution',
+      flow: 'Privy embedded EVM owns Safe; CLOB orders via @polymarket/clob-client-v2; builder code attached per order',
       relayer: 'https://relayer-v2.polymarket.com/',
     } : { enabled: false },
     time: new Date().toISOString(),
@@ -896,6 +903,7 @@ app.listen(PORT, () => {
   console.log('  env: ' + NODE_ENV);
   console.log('  LI.FI: ' + LIFI_API + (LIFI_API_KEY ? ' (key set)' : ' (no key)'));
   console.log('  Unit:  ' + UNIT_API_BASE);
+  console.log('  Predict bridge (Mayan): DISABLED — using LI.FI');
   if (process.env.POLY_BUILDER_API_KEY) {
     console.log('  Poly builder: ' + process.env.POLY_BUILDER_API_KEY.slice(0, 8) + '...' + (process.env.POLY_BUILDER_CODE ? ' (builder code set)' : ' (NO builder code)'));
   } else {
@@ -909,4 +917,3 @@ app.listen(PORT, () => {
 
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
 process.on('unhandledRejection', err => logError('unhandledRejection', err));
- 
