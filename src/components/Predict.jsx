@@ -47,11 +47,11 @@ const BRIDGE_STATUS = '/api/poly/status';
 const BRIDGE_WITHDRAW = '/api/poly/withdraw';
 
 const OKX_SWAP_PATH = '/api/okx/dex/aggregator/swap';
+const OKX_SWAP_INSTRUCTION_PATH = '/api/okx/dex/aggregator/swap-instruction';
 const OKX_SOL_CHAIN = '501';
 
-// High slippage tolerance to ensure swaps go through. OKX will still route
-// to the best available path; this is just the max acceptable price impact.
-const OKX_SLIPPAGE = '0.5';
+// Slippage as a percent string. "15" = 15% — high so swaps always route through.
+const OKX_SLIPPAGE = '15';
 
 const FEE_WALLET_SOL =
   'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
@@ -1439,6 +1439,111 @@ async function submitSolTx(signedTx) {
   return j.result;
 }
 
+// Build a TransactionInstruction from OKX's instruction format.
+// Mirrors deserializeOkxIx() from the working SwapWidget.
+async function deserializeOkxIx(ix) {
+  try {
+    if (!ix || !ix.programId || !Array.isArray(ix.accounts) || !ix.data) {
+      return null;
+    }
+
+    const web3 = await import('@solana/web3.js');
+    const { TransactionInstruction, PublicKey: PK } = web3;
+
+    return new TransactionInstruction({
+      programId: new PK(ix.programId),
+      keys: ix.accounts.map((a) => ({
+        pubkey: new PK(a.pubkey || a.publicKey || a.address),
+        isSigner: !!a.isSigner,
+        isWritable: !!a.isWritable,
+      })),
+      data: Uint8Array.from(atob(ix.data), (c) => c.charCodeAt(0)),
+    });
+  } catch (e) {
+    dbgErr('okx-ix', 'failed to deserialize', e);
+    return null;
+  }
+}
+
+// Build a VersionedTransaction from OKX's swap-instruction response.
+// Mirrors buildOkxSolTx() from the working SwapWidget.
+async function buildOkxSolTxFromInstructions({ userPubkey, swapData }) {
+  const web3 = await import('@solana/web3.js');
+  const {
+    Connection,
+    PublicKey: PK,
+    VersionedTransaction: VTx,
+    TransactionMessage,
+    AddressLookupTableAccount,
+  } = web3;
+
+  const origin =
+    (typeof window !== 'undefined' && window.location?.origin) || '';
+  const conn = new Connection(origin + SOL_RPC, 'confirmed');
+
+  // Some OKX responses include a pre-built tx blob — try that first.
+  if (swapData?.tx?.data) {
+    try {
+      const bytes = Uint8Array.from(atob(swapData.tx.data), (c) =>
+        c.charCodeAt(0)
+      );
+      const tx = VTx.deserialize(bytes);
+      dbg('okx-build', 'used pre-built tx blob');
+      return tx;
+    } catch (e) {
+      dbg('okx-build', 'pre-built tx blob failed, falling back to instructions');
+    }
+  }
+
+  const rawIxs = swapData?.instructionLists || [];
+  const ixs = (
+    await Promise.all(rawIxs.map(deserializeOkxIx))
+  ).filter(Boolean);
+
+  if (!ixs.length) {
+    throw new Error('OKX returned no usable instructions');
+  }
+
+  // Fetch ALTs in parallel.
+  const ltAddrs = Array.isArray(swapData.addressLookupTableAccount)
+    ? swapData.addressLookupTableAccount
+    : [];
+
+  const lts = (
+    await Promise.all(
+      ltAddrs.map(async (a) => {
+        try {
+          const key = new PK(a);
+          const acct = await conn.getAccountInfo(key);
+          if (!acct) return null;
+          return new AddressLookupTableAccount({
+            key,
+            state: AddressLookupTableAccount.deserialize(acct.data),
+          });
+        } catch (e) {
+          dbgErr('okx-lt', 'failed to load ALT ' + a, e);
+          return null;
+        }
+      })
+    )
+  ).filter(Boolean);
+
+  const { blockhash } = await conn.getLatestBlockhash('finalized');
+
+  const msg = new TransactionMessage({
+    payerKey: userPubkey,
+    recentBlockhash: blockhash,
+    instructions: ixs,
+  }).compileToV0Message(lts);
+
+  dbg('okx-build', 'built v0 tx', {
+    ixCount: ixs.length,
+    ltCount: lts.length,
+  });
+
+  return new VTx(msg);
+}
+
 async function depositFromSol({
   ownerB58,
   evm,
@@ -1457,22 +1562,23 @@ async function depositFromSol({
 
   onStatus?.('Quoting swap (5% fee included)…');
 
-  // OKX expects `slippage` as a decimal (e.g. 0.5 = 50%). We also send
-  // `slippagePercent` to support newer/alternate endpoint versions.
+  // Use /swap-instruction (same endpoint as the working SwapWidget).
+  // Output goes directly to the Polymarket bridge SVM address.
+  // NOTE: server.js automatically injects feePercent + toTokenReferrerWalletAddress
+  // for all Solana swaps via injectOkxFee(). Do NOT send fee params from here
+  // or they'll be overwritten / cause double config.
   const params = new URLSearchParams({
     chainIndex: OKX_SOL_CHAIN,
-    chainId: OKX_SOL_CHAIN,
+    amount: String(solAtomic),
     fromTokenAddress: SOL_NATIVE_MINT,
     toTokenAddress: USDC_SOLANA_MINT,
-    amount: String(solAtomic),
     userWalletAddress: ownerB58,
     swapReceiverAddress: addrs.svm,
-    slippage: OKX_SLIPPAGE,
     slippagePercent: OKX_SLIPPAGE,
   });
 
   const r = await jfetch(
-    `${OKX_SWAP_PATH}?${params}`,
+    `${OKX_SWAP_INSTRUCTION_PATH}?${params}`,
     {},
     15000
   );
@@ -1483,27 +1589,27 @@ async function depositFromSol({
     throw new Error('OKX swap: ' + (j.msg || j.code));
   }
 
-  const swap = j.data?.[0];
+  const swapData = Array.isArray(j.data) ? j.data[0] : j.data;
 
-  const txData =
-    swap?.tx?.data ||
-    swap?.transaction?.data ||
-    swap?.data;
-
-  if (!txData) {
-    throw new Error('OKX returned no tx data');
+  if (!swapData) {
+    throw new Error('OKX returned no swap data');
   }
 
+  dbg('deposit-sol', 'okx response', {
+    hasInstructions: !!swapData.instructionLists?.length,
+    instructionCount: swapData.instructionLists?.length || 0,
+    altCount: swapData.addressLookupTableAccount?.length || 0,
+    hasPreBuiltTx: !!swapData.tx?.data,
+  });
+
+  const userPubkey = new PublicKey(ownerB58);
+
+  const tx = await buildOkxSolTxFromInstructions({
+    userPubkey,
+    swapData,
+  });
+
   onStatus?.('Confirm in your wallet…');
-
-  const rawBytes =
-    typeof txData === 'string'
-      ? Uint8Array.from(atob(txData), (c) =>
-          c.charCodeAt(0)
-        )
-      : new Uint8Array(txData);
-
-  const tx = VersionedTransaction.deserialize(rawBytes);
 
   const signed = await signFn(tx);
 
