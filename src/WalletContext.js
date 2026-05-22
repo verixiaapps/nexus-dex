@@ -15,7 +15,7 @@
 import React, { createContext, useContext, useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
-import { usePrivy as _usePrivy, useWallets as _useEvmWalletsPrivy } from '@privy-io/react-auth';
+import { usePrivy as _usePrivy, useWallets as _useEvmWalletsPrivy, useCreateWallet as _useCreateWalletPrivy } from '@privy-io/react-auth';
 import { useSolanaWallets as _useSolanaWalletsPrivy } from '@privy-io/react-auth/solana';
 
 const WalletContext = createContext(null);
@@ -33,6 +33,12 @@ const PRIVY_FALLBACK = {
 function useSafePrivy()         { try { return _usePrivy(); }                       catch { return PRIVY_FALLBACK; } }
 function useSafePrivySolWallets(){ try { const r = _useSolanaWalletsPrivy(); return (r && r.wallets) || []; } catch { return []; } }
 function useSafePrivyEvmWallets(){ try { const r = _useEvmWalletsPrivy();    return (r && r.wallets) || []; } catch { return []; } }
+function useSafePrivyCreateWallet() {
+  try {
+    const r = _useCreateWalletPrivy();
+    return (r && typeof r.createWallet === 'function') ? r.createWallet : null;
+  } catch { return null; }
+}
 
 /* ============================================================================
  * STORAGE KEYS + DEFAULTS
@@ -112,6 +118,26 @@ export function WalletContextProvider({ children }) {
     if (!privy.authenticated) return null;
     return privyEvmWallets.find(w => w && w.walletClientType === 'privy') || null;
   }, [privy.authenticated, privyEvmWallets]);
+
+  // BACKFILL: existing Privy users who signed up before EVM was enabled
+  // will be authenticated but missing an EVM wallet. Create one for them
+  // automatically. Runs once per session, guarded by a ref to avoid loops.
+  const createWallet = useSafePrivyCreateWallet();
+  const evmCreateAttemptedRef = useRef(false);
+  useEffect(() => {
+    if (!privy.ready || !privy.authenticated) return;
+    if (privyEmbeddedEvm) return;          // already have one
+    if (!createWallet) return;              // hook unavailable
+    if (evmCreateAttemptedRef.current) return;
+    evmCreateAttemptedRef.current = true;
+    console.log('[WalletContext] backfilling missing Privy EVM wallet…');
+    Promise.resolve(createWallet({ chainType: 'ethereum' }))
+      .then((w) => console.log('[WalletContext] EVM wallet created:', w?.address || w))
+      .catch((e) => {
+        console.warn('[WalletContext] EVM wallet creation failed:', e?.message || e);
+        evmCreateAttemptedRef.current = false; // allow retry next mount
+      });
+  }, [privy.ready, privy.authenticated, privyEmbeddedEvm, createWallet]);
 
   const solConnected = extSolConnected || !!privyEmbeddedSol;
   const isConnected  = solConnected;
