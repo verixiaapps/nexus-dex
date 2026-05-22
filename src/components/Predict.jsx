@@ -168,45 +168,49 @@ function ssDel(k){ try{sessionStorage.removeItem(k);}catch{} }
 function wipeUserCache(evm){ if(!evm) return; lsDel(LS.safe(evm)); lsDel(LS.deployed(evm)); lsDel(LS.approvals(evm)); lsDel(LS.bridgeAddr(evm)); ssDel(SS.creds(evm)); dbg('cache','wiped for '+evm); }
 
 // ─── SDK LOADING ──────────────────────────────────────────────────
+// Polymarket's official privy-safe-builder-example passes a VIEM
+// walletClient (not ethers) directly to the SDK. That's the working
+// signing path for Privy embedded wallets. We mirror it exactly.
 let _sdks=null;
 async function loadSdks(){
   if(_sdks) return _sdks;
   dbg('sdk','loading');
-  const [clob,relayer,signing,derive,config,ethersMod]=await Promise.all([
+  const [clob,relayer,signing,derive,config,viem,viemChains]=await Promise.all([
     import('@polymarket/clob-client'),
     import('@polymarket/builder-relayer-client'),
     import('@polymarket/builder-signing-sdk'),
     import('@polymarket/builder-relayer-client/dist/builder/derive'),
     import('@polymarket/builder-relayer-client/dist/config'),
-    // ethers v5 (npm alias) — Polymarket SDKs are built for v5
-    import('ethers-v5'),
+    import('viem'),
+    import('viem/chains'),
   ]);
-  _sdks={clob,relayer,signing,derive,config,ethers:ethersMod};
-  dbg('sdk','loaded',{clob:!!clob?.ClobClient,relay:!!relayer?.RelayClient,signing:!!signing?.BuilderConfig,derive:!!derive?.deriveSafe,config:!!config?.getContractConfig,ethers5:!!ethersMod?.providers?.Web3Provider,ethers6:!!ethersMod?.BrowserProvider});
+  _sdks={clob,relayer,signing,derive,config,viem,viemChains};
+  dbg('sdk','loaded',{clob:!!clob?.ClobClient,relay:!!relayer?.RelayClient,signing:!!signing?.BuilderConfig,derive:!!derive?.deriveSafe,viem:!!viem?.createWalletClient,polygon:!!viemChains?.polygon});
   return _sdks;
 }
 
-async function buildEthersSigner(getEvmProvider){
-  const {ethers}=await loadSdks();
+async function buildSigner(getEvmProvider, evmAddress){
+  const {viem,viemChains}=await loadSdks();
   const provider=await getEvmProvider();
   if(!provider) throw new Error('Privy EVM provider unavailable — sign in first');
-  // Prefer ethers v5 (providers.Web3Provider) since Polymarket SDKs target v5.
-  // Fall back to v6 (BrowserProvider) if v5 isn't loaded.
-  if(ethers.providers?.Web3Provider){
-    const wp=new ethers.providers.Web3Provider(provider);
-    return wp.getSigner();
-  } else if(ethers.BrowserProvider){
-    const bp=new ethers.BrowserProvider(provider);
-    return await bp.getSigner();
-  } else throw new Error('Unrecognized ethers version');
+  if(!evmAddress) throw new Error('No EOA address');
+  // Mirror Polymarket/privy-safe-builder-example exactly:
+  //   createWalletClient({ account, chain: polygon, transport: custom(provider) })
+  const walletClient = viem.createWalletClient({
+    account: evmAddress,
+    chain: viemChains.polygon,
+    transport: viem.custom(provider),
+  });
+  dbg('signer','viem walletClient built',{account: evmAddress});
+  return walletClient;
 }
 
 // ─── RELAY CLIENT ─────────────────────────────────────────────────
-async function buildRelayClient(getEvmProvider){
+async function buildRelayClient(getEvmProvider, evmAddress){
   const {relayer,signing}=await loadSdks();
   if(!relayer?.RelayClient)   throw new Error('RelayClient missing');
   if(!signing?.BuilderConfig) throw new Error('BuilderConfig missing');
-  const signer=await buildEthersSigner(getEvmProvider);
+  const signer=await buildSigner(getEvmProvider, evmAddress);
   const origin=(typeof window!=='undefined'&&window.location?.origin)||'';
   const builderConfig=new signing.BuilderConfig({ remoteBuilderConfig:{ url: origin+'/api/poly/sign' } });
   return new relayer.RelayClient(RELAYER_URL+'/', POLYGON_CHAIN_ID, signer, builderConfig);
@@ -229,7 +233,7 @@ async function ensureSafeDeployed(evm,getEvmProvider,onStatus){
   let safe=lsGet(LS.safe(evm));
   if(!safe){ safe=await deriveSafeAddress(evm); lsSet(LS.safe(evm),safe); }
   if(lsGet(LS.deployed(evm))==='1') return safe;
-  const relay=await buildRelayClient(getEvmProvider);
+  const relay=await buildRelayClient(getEvmProvider, evm);
   try{
     if(typeof relay.getDeployed==='function'){
       const deployed=await relay.getDeployed(safe);
@@ -264,7 +268,7 @@ function buildApprovalTxs(){
 async function ensureApprovals(evm,getEvmProvider,safeAddress,onStatus){
   if(lsGet(LS.approvals(evm))==='1') return;
   onStatus?.('Approving contracts…');
-  const relay=await buildRelayClient(getEvmProvider);
+  const relay=await buildRelayClient(getEvmProvider, evm);
   if(typeof relay.execute!=='function') throw new Error('relay.execute missing');
   const txs=buildApprovalTxs();
   const resp=await relay.execute(txs,'Polymarket trading approvals');
@@ -278,7 +282,7 @@ async function getOrDeriveCreds(evm,getEvmProvider){
   const cached=ssGetJson(SS.creds(evm));
   if(cached?.key&&cached?.secret&&cached?.passphrase) return cached;
   const {clob}=await loadSdks();
-  const signer=await buildEthersSigner(getEvmProvider);
+  const signer=await buildSigner(getEvmProvider, evm);
   const temp=new clob.ClobClient(CLOB_URL, POLYGON_CHAIN_ID, signer);
   let creds;
   try{ creds=await temp.createOrDeriveApiKey(); }
@@ -298,9 +302,9 @@ async function getOrDeriveCreds(evm,getEvmProvider){
 }
 
 // ─── AUTHENTICATED CLOB CLIENT ────────────────────────────────────
-async function buildClobClient(getEvmProvider,safeAddress,creds){
+async function buildClobClient(getEvmProvider,evmAddress,safeAddress,creds){
   const {clob,signing}=await loadSdks();
-  const signer=await buildEthersSigner(getEvmProvider);
+  const signer=await buildSigner(getEvmProvider, evmAddress);
   const origin=(typeof window!=='undefined'&&window.location?.origin)||'';
   const builderConfig=new signing.BuilderConfig({ remoteBuilderConfig:{ url: origin+'/api/poly/sign' } });
   return new clob.ClobClient(
@@ -538,13 +542,13 @@ function isTradableMarket(m,h){
 }
 
 // ─── ORDERS ───────────────────────────────────────────────────────
-async function placeMarketOrder({ getEvmProvider, safeAddress, creds, market, side, amountUsd, isBuy }){
+async function placeMarketOrder({ getEvmProvider, evmAddress, safeAddress, creds, market, side, amountUsd, isBuy }){
   const tokenId=side==='yes'?market.clobTokenIds[0]:market.clobTokenIds[1];
   if(!tokenId) throw new Error('Token ID missing');
   const {clob}=await loadSdks();
   const Side=clob.Side||{BUY:'BUY',SELL:'SELL'};
   const OrderType=clob.OrderType||{FOK:'FOK',FAK:'FAK',GTC:'GTC'};
-  const client=await buildClobClient(getEvmProvider,safeAddress,creds);
+  const client=await buildClobClient(getEvmProvider,evmAddress,safeAddress,creds);
   const price=side==='yes'?Number(market.yesPrice):Number(market.noPrice);
   const orderArgs={ tokenID: String(tokenId), price, size: isBuy?amountUsd/price:amountUsd, side: isBuy?Side.BUY:Side.SELL, feeRateBps: 0, expiration: 0, taker: '0x0000000000000000000000000000000000000000', builderCode: BUILDER_CODE };
   const opts={ tickSize: market.tickSize||'0.01', negRisk: !!market.negRisk };
@@ -919,7 +923,7 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, safeAd
     try{
       const setup=await ensureSetup(evmAddress,getEvmProvider,setStatusMsg);
       setStatusMsg('Placing order…');
-      await placeMarketOrder({ getEvmProvider, safeAddress: setup.safeAddress, creds: setup.creds, market, side, amountUsd: usd, isBuy: true });
+      await placeMarketOrder({ getEvmProvider, evmAddress, safeAddress: setup.safeAddress, creds: setup.creds, market, side, amountUsd: usd, isBuy: true });
       setStatus('success'); setStatusMsg('');
       refreshAll?.();
       setTimeout(()=>onClose(),2200);
@@ -936,7 +940,7 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, safeAd
     try{
       const setup=await ensureSetup(evmAddress,getEvmProvider,setStatusMsg);
       setStatusMsg('Selling…');
-      await placeMarketOrder({ getEvmProvider, safeAddress: setup.safeAddress, creds: setup.creds, market, side, amountUsd: held, isBuy: false });
+      await placeMarketOrder({ getEvmProvider, evmAddress, safeAddress: setup.safeAddress, creds: setup.creds, market, side, amountUsd: held, isBuy: false });
       setSellStatus('sold'); setStatusMsg('');
       refreshAll?.();
       setTimeout(()=>onClose(),2200);
@@ -950,45 +954,51 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, safeAd
 
   return (
     <div onClick={busy?undefined:onClose} style={{position:'fixed',inset:0,zIndex:200,background:'rgba(3,6,15,.74)',backdropFilter:'blur(14px)',display:'flex',alignItems:'flex-end',justifyContent:'center',cursor:busy?'wait':'pointer'}}>
-      <div onClick={(e)=>e.stopPropagation()} style={{width:'100%',maxWidth:520,background:`linear-gradient(180deg, ${C.cardHi}, ${C.card})`,borderTop:`1px solid ${C.borderHi}`,borderTopLeftRadius:22,borderTopRightRadius:22,padding:'20px 18px calc(env(safe-area-inset-bottom) + 22px)',boxShadow:C.shadowLg,maxHeight:'92dvh',overflowY:'auto'}}>
-        <div style={{width:36,height:4,borderRadius:99,background:'rgba(255,255,255,.14)',margin:'0 auto 14px'}} />
-        <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:4,lineHeight:1.35,...T.body}}>{market.title}</div>
-        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14}}>
-          <div style={{padding:'4px 10px',borderRadius:99,background:sideDim,border:`1px solid ${sideColor}55`,color:sideColor,fontSize:10,fontWeight:800,letterSpacing:1,...T.mono}}>{side.toUpperCase()}</div>
-          <div style={{fontSize:11,color:C.muted,...T.mono}}>${price.toFixed(3)} · {Math.round(price*100)}%</div>
-          <div style={{marginLeft:'auto',fontSize:10,color:C.muted,...T.mono}}>Bal {fmtUsd(tradeUsd,2)}</div>
-        </div>
-        <DebugPanel open={dbgOpen} onToggle={()=>setDbgOpen(o=>!o)} />
-        {hasPos && sellStatus!=='sold' && (
-          <div style={{marginBottom:14,padding:14,borderRadius:12,background:pnl>=0?'rgba(0,212,163,.07)':'rgba(255,95,122,.07)',border:`1px solid ${pnl>=0?'rgba(0,212,163,.30)':'rgba(255,95,122,.30)'}`}}>
-            <div style={{fontSize:10,color:pnl>=0?C.yes:C.no,fontWeight:800,marginBottom:10,...T.mono}}>YOUR POSITION · {side.toUpperCase()}</div>
-            <div style={{display:'flex',justifyContent:'space-between',marginBottom:6,fontSize:12,...T.mono}}><span style={{color:C.muted}}>Shares</span><span style={{color:C.ink,fontWeight:700}}>{held.toFixed(2)} @ ${avgPx.toFixed(3)}</span></div>
-            <div style={{display:'flex',justifyContent:'space-between',marginBottom:10,fontSize:12,...T.mono}}><span style={{color:C.muted}}>Value · P&amp;L</span><span style={{color:pnl>=0?C.yes:C.no,fontWeight:800}}>{fmtUsd(value,2)} · {pnl>=0?'+':''}{pnl.toFixed(2)} ({pnl>=0?'+':''}{pnlPct.toFixed(1)}%)</span></div>
-            <button onClick={sellStatus==='selling'?undefined:handleSell} disabled={sellStatus==='selling'||bid<=0} style={{width:'100%',padding:11,borderRadius:10,background:pnl>=0?`linear-gradient(135deg, ${C.yes}33, ${C.yes}22)`:`linear-gradient(135deg, ${C.no}33, ${C.no}22)`,border:`1px solid ${pnl>=0?C.yes:C.no}66`,color:pnl>=0?C.yes:C.no,fontWeight:800,fontSize:13,cursor:(sellStatus==='selling'||bid<=0)?'not-allowed':'pointer',opacity:(sellStatus==='selling'||bid<=0)?.55:1,...T.body}}>{sellStatus==='selling'?'Selling…':bid<=0?'No bids':`Sell all · ${fmtUsd(value,2)}`}</button>
-          </div>
-        )}
-        <div style={{marginBottom:12}}>
-          <div style={{fontSize:10,color:C.muted,marginBottom:6,textTransform:'uppercase',letterSpacing:1,...T.mono}}>You pay</div>
-          <div style={{display:'flex',alignItems:'center',gap:10,padding:'12px 14px',borderRadius:12,background:'rgba(255,255,255,.03)',border:`1px solid ${C.border}`}}>
-            <span style={{fontSize:20,color:C.muted,...T.display}}>$</span>
-            <input value={amount} onChange={(e)=>{setAmount(cleanAmount(e.target.value));setError('');}} disabled={busy} inputMode="decimal" style={{flex:1,background:'none',border:'none',outline:'none',color:C.ink,fontSize:22,fontWeight:700,...T.display}} />
-            <span style={{fontSize:11,color:C.muted,...T.mono}}>USDC</span>
-          </div>
-          <div style={{display:'flex',gap:6,marginTop:8}}>
-            {['5','10','25','100'].map(v=>(
-              <button key={v} onClick={()=>setAmount(v)} disabled={busy} style={{flex:1,padding:7,borderRadius:8,background:'rgba(255,255,255,.03)',border:`1px solid ${C.border}`,color:C.muted,fontSize:11,fontWeight:600,cursor:'pointer',...T.mono}}>${v}</button>
-            ))}
-            <button onClick={()=>setAmount(String(Math.floor(tradeUsd*100)/100))} disabled={busy||tradeUsd<=0} style={{flex:1,padding:7,borderRadius:8,background:C.hlDim,border:`1px solid ${C.borderHi}`,color:C.hl,fontSize:11,fontWeight:700,cursor:'pointer',...T.mono}}>Max</button>
+      <div onClick={(e)=>e.stopPropagation()} style={{width:'100%',maxWidth:520,background:`linear-gradient(180deg, ${C.cardHi}, ${C.card})`,borderTop:`1px solid ${C.borderHi}`,borderTopLeftRadius:22,borderTopRightRadius:22,boxShadow:C.shadowLg,maxHeight:'92dvh',display:'flex',flexDirection:'column'}}>
+        <div style={{padding:'14px 18px 0',flexShrink:0}}>
+          <div style={{width:36,height:4,borderRadius:99,background:'rgba(255,255,255,.14)',margin:'0 auto 14px'}} />
+          <div style={{fontSize:13,fontWeight:700,color:C.ink,marginBottom:4,lineHeight:1.35,...T.body}}>{market.title}</div>
+          <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:14}}>
+            <div style={{padding:'4px 10px',borderRadius:99,background:sideDim,border:`1px solid ${sideColor}55`,color:sideColor,fontSize:10,fontWeight:800,letterSpacing:1,...T.mono}}>{side.toUpperCase()}</div>
+            <div style={{fontSize:11,color:C.muted,...T.mono}}>${price.toFixed(3)} · {Math.round(price*100)}%</div>
+            <div style={{marginLeft:'auto',fontSize:10,color:C.muted,...T.mono}}>Bal {fmtUsd(tradeUsd,2)}</div>
           </div>
         </div>
-        <div style={{padding:14,borderRadius:12,background:'rgba(151,252,228,.04)',border:`1px solid ${C.border}`,marginBottom:12,...T.mono,fontSize:11}}>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}><span style={{color:C.muted}}>Shares</span><span style={{color:C.ink,fontWeight:600}}>{shares.toFixed(2)}</span></div>
-          <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}><span style={{color:C.muted}}>If {side.toUpperCase()} wins</span><span style={{color:sideColor,fontWeight:700}}>{fmtUsd(shares,2)}</span></div>
-          <div style={{display:'flex',justifyContent:'space-between'}}><span style={{color:C.muted}}>Upside</span><span style={{color:sideColor,fontWeight:700}}>+{upside.toFixed(1)}%</span></div>
+        <div style={{flex:1,overflowY:'auto',padding:'0 18px'}}>
+          <DebugPanel open={dbgOpen} onToggle={()=>setDbgOpen(o=>!o)} />
+          {hasPos && sellStatus!=='sold' && (
+            <div style={{marginBottom:14,padding:14,borderRadius:12,background:pnl>=0?'rgba(0,212,163,.07)':'rgba(255,95,122,.07)',border:`1px solid ${pnl>=0?'rgba(0,212,163,.30)':'rgba(255,95,122,.30)'}`}}>
+              <div style={{fontSize:10,color:pnl>=0?C.yes:C.no,fontWeight:800,marginBottom:10,...T.mono}}>YOUR POSITION · {side.toUpperCase()}</div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:6,fontSize:12,...T.mono}}><span style={{color:C.muted}}>Shares</span><span style={{color:C.ink,fontWeight:700}}>{held.toFixed(2)} @ ${avgPx.toFixed(3)}</span></div>
+              <div style={{display:'flex',justifyContent:'space-between',marginBottom:10,fontSize:12,...T.mono}}><span style={{color:C.muted}}>Value · P&amp;L</span><span style={{color:pnl>=0?C.yes:C.no,fontWeight:800}}>{fmtUsd(value,2)} · {pnl>=0?'+':''}{pnl.toFixed(2)} ({pnl>=0?'+':''}{pnlPct.toFixed(1)}%)</span></div>
+              <button onClick={sellStatus==='selling'?undefined:handleSell} disabled={sellStatus==='selling'||bid<=0} style={{width:'100%',padding:11,borderRadius:10,background:pnl>=0?`linear-gradient(135deg, ${C.yes}33, ${C.yes}22)`:`linear-gradient(135deg, ${C.no}33, ${C.no}22)`,border:`1px solid ${pnl>=0?C.yes:C.no}66`,color:pnl>=0?C.yes:C.no,fontWeight:800,fontSize:13,cursor:(sellStatus==='selling'||bid<=0)?'not-allowed':'pointer',opacity:(sellStatus==='selling'||bid<=0)?.55:1,...T.body}}>{sellStatus==='selling'?'Selling…':bid<=0?'No bids':`Sell all · ${fmtUsd(value,2)}`}</button>
+            </div>
+          )}
+          <div style={{marginBottom:12}}>
+            <div style={{fontSize:10,color:C.muted,marginBottom:6,textTransform:'uppercase',letterSpacing:1,...T.mono}}>You pay</div>
+            <div style={{display:'flex',alignItems:'center',gap:10,padding:'12px 14px',borderRadius:12,background:'rgba(255,255,255,.03)',border:`1px solid ${C.border}`}}>
+              <span style={{fontSize:20,color:C.muted,...T.display}}>$</span>
+              <input value={amount} onChange={(e)=>{setAmount(cleanAmount(e.target.value));setError('');}} disabled={busy} inputMode="decimal" style={{flex:1,background:'none',border:'none',outline:'none',color:C.ink,fontSize:22,fontWeight:700,...T.display}} />
+              <span style={{fontSize:11,color:C.muted,...T.mono}}>USDC</span>
+            </div>
+            <div style={{display:'flex',gap:6,marginTop:8}}>
+              {['5','10','25','100'].map(v=>(
+                <button key={v} onClick={()=>setAmount(v)} disabled={busy} style={{flex:1,padding:7,borderRadius:8,background:'rgba(255,255,255,.03)',border:`1px solid ${C.border}`,color:C.muted,fontSize:11,fontWeight:600,cursor:'pointer',...T.mono}}>${v}</button>
+              ))}
+              <button onClick={()=>setAmount(String(Math.floor(tradeUsd*100)/100))} disabled={busy||tradeUsd<=0} style={{flex:1,padding:7,borderRadius:8,background:C.hlDim,border:`1px solid ${C.borderHi}`,color:C.hl,fontSize:11,fontWeight:700,cursor:'pointer',...T.mono}}>Max</button>
+            </div>
+          </div>
+          <div style={{padding:14,borderRadius:12,background:'rgba(151,252,228,.04)',border:`1px solid ${C.border}`,marginBottom:12,...T.mono,fontSize:11}}>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}><span style={{color:C.muted}}>Shares</span><span style={{color:C.ink,fontWeight:600}}>{shares.toFixed(2)}</span></div>
+            <div style={{display:'flex',justifyContent:'space-between',marginBottom:6}}><span style={{color:C.muted}}>If {side.toUpperCase()} wins</span><span style={{color:sideColor,fontWeight:700}}>{fmtUsd(shares,2)}</span></div>
+            <div style={{display:'flex',justifyContent:'space-between'}}><span style={{color:C.muted}}>Upside</span><span style={{color:sideColor,fontWeight:700}}>+{upside.toFixed(1)}%</span></div>
+          </div>
+          {statusMsg && <StatusLine msg={statusMsg} />}
+          {error && <div style={{marginBottom:10,padding:10,background:'rgba(255,95,122,.08)',border:'1px solid rgba(255,95,122,.25)',borderRadius:12,fontSize:12,color:C.no}}>{error}<div style={{marginTop:6,fontSize:10,color:C.muted,...T.mono}}>See Debug panel above for details.</div></div>}
         </div>
-        {statusMsg && <StatusLine msg={statusMsg} />}
-        {error && <div style={{marginBottom:10,padding:10,background:'rgba(255,95,122,.08)',border:'1px solid rgba(255,95,122,.25)',borderRadius:12,fontSize:12,color:C.no}}>{error}<div style={{marginTop:6,fontSize:10,color:C.muted,...T.mono}}>See Debug panel above for details.</div></div>}
-        <button onClick={canBuy?handleBuy:needsFunds?onNeedFunds:undefined} disabled={busy||(!canBuy&&!needsFunds)} style={{width:'100%',padding:14,borderRadius:13,background:status==='success'?`linear-gradient(135deg, ${C.yes}33, ${C.yes}22)`:needsFunds?`linear-gradient(135deg, ${C.amber}33, ${C.amber}22)`:`linear-gradient(135deg, ${sideColor}33, ${sideColor}22)`,border:`1px solid ${needsFunds?C.amber:sideColor}66`,color:needsFunds?C.amber:sideColor,fontWeight:800,fontSize:14,cursor:(canBuy||needsFunds)?'pointer':'not-allowed',opacity:(canBuy||needsFunds)?1:.55,...T.body}}>{busy?'Placing order…':status==='success'?'✓ Order placed':needsFunds?`Fund · need ${fmtUsd(usd-tradeUsd,2)} more`:`Buy ${side.toUpperCase()} · ${fmtUsd(usd,2)}`}</button>
+        <div style={{padding:'12px 18px calc(env(safe-area-inset-bottom) + 14px)',borderTop:`1px solid ${C.border}`,background:C.card,flexShrink:0}}>
+          <button onClick={canBuy?handleBuy:needsFunds?onNeedFunds:undefined} disabled={busy||(!canBuy&&!needsFunds)} style={{width:'100%',padding:14,borderRadius:13,background:status==='success'?`linear-gradient(135deg, ${C.yes}33, ${C.yes}22)`:needsFunds?`linear-gradient(135deg, ${C.amber}33, ${C.amber}22)`:`linear-gradient(135deg, ${sideColor}33, ${sideColor}22)`,border:`1px solid ${needsFunds?C.amber:sideColor}66`,color:needsFunds?C.amber:sideColor,fontWeight:800,fontSize:14,cursor:(canBuy||needsFunds)?'pointer':'not-allowed',opacity:(canBuy||needsFunds)?1:.55,...T.body}}>{busy?'Placing order…':status==='success'?'✓ Order placed':needsFunds?`Fund · need ${fmtUsd(usd-tradeUsd,2)} more`:`Buy ${side.toUpperCase()} · ${fmtUsd(usd,2)}`}</button>
+        </div>
       </div>
     </div>
   );
