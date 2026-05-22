@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────
 // Predict.jsx — Polymarket prediction markets via Solana + Safe wallets.
-//
+// 
 // ARCHITECTURE (v3 — Safe path, matches Polymarket's official reference
 // examples privy-safe-builder-example, turnkey-safe-builder-example, etc):
 //   • Each user has a Polymarket Safe wallet (Gnosis Safe proxy) on Polygon.
