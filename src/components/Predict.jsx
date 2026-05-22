@@ -444,8 +444,18 @@ async function ethCallBalance(token, holder) {
     return BigInt(hex);
   } catch { return 0n; }
 }
-const fetchPolymarketBalance = (safe) => ethCallBalance(PUSD_ADDRESS, safe);
-const fetchUsdceBalance      = (addr) => ethCallBalance(USDC_E_ADDRESS, addr);
+// Polymarket balance = pUSD (what Polymarket trades against) + USDC.e
+// (what the bridge actually drops at the Safe before Polymarket converts).
+// Reading both means bridged funds appear in the UI the moment they
+// land, instead of waiting for Polymarket's relayer to swap USDC.e → pUSD.
+async function fetchPolymarketBalance(safe) {
+  const [pusd, usdce] = await Promise.all([
+    ethCallBalance(PUSD_ADDRESS,   safe),
+    ethCallBalance(USDC_E_ADDRESS, safe),
+  ]);
+  return pusd + usdce;
+}
+const fetchUsdceBalance = (addr) => ethCallBalance(USDC_E_ADDRESS, addr);
 
 // Solana USDC balance (for users who want to bridge from Phantom)
 function deriveSolanaAta(ownerB58) {
@@ -735,21 +745,27 @@ function MarketCard({ market, onTrade }) {
   const yp = Number(market.yesPrice) || 0;
   const np = Number(market.noPrice)  || 0;
   const upside = (p) => (p < 0.02 || p > 0.98) ? 0 : Math.min(9999, Math.round((1 / p - 1) * 100));
+  // Title clamp — 2-line ellipsis, prevents long market names from
+  // pushing the YES% off-balance on narrow phone widths.
+  const clamp2 = {
+    display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+    overflow: 'hidden', textOverflow: 'ellipsis',
+  };
   return (
-    <div style={{ padding: 16, borderRadius: 16, background: `linear-gradient(145deg, ${C.card}, ${C.cardHi})`, border: `1px solid ${C.border}`, marginBottom: 10, boxShadow: C.shadow }}>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 14 }}>
-        {image && <img src={image} alt="" onError={(e) => e.currentTarget.style.display = 'none'} style={{ width: 44, height: 44, borderRadius: 10, objectFit: 'cover', flexShrink: 0, background: '#0a1020' }} />}
+    <div style={{ padding: 14, borderRadius: 16, background: `linear-gradient(145deg, ${C.card}, ${C.cardHi})`, border: `1px solid ${C.border}`, marginBottom: 10, boxShadow: C.shadow }}>
+      <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
+        {image && <img src={image} alt="" onError={(e) => e.currentTarget.style.display = 'none'} style={{ width: 38, height: 38, borderRadius: 9, objectFit: 'cover', flexShrink: 0, background: '#0a1020' }} />}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 14, fontWeight: 700, color: C.ink, lineHeight: 1.35, marginBottom: childQuestion ? 4 : 6, ...T.body }}>{title}</div>
-          {childQuestion && <div style={{ fontSize: 11, fontWeight: 600, color: C.hl, marginBottom: 6, ...T.body }}>{childQuestion}</div>}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, fontSize: 10, color: C.muted, ...T.mono }}>
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, lineHeight: 1.3, marginBottom: childQuestion ? 3 : 5, ...T.body, ...clamp2 }}>{title}</div>
+          {childQuestion && <div style={{ fontSize: 10.5, fontWeight: 600, color: C.hl, marginBottom: 5, ...T.body, ...clamp2 }}>{childQuestion}</div>}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 9.5, color: C.muted, ...T.mono }}>
             <span>Vol {formatVol(volume24h)}</span>
             {formatEndDate(endDate) && <><span style={{ opacity: .4 }}>·</span><span>{formatEndDate(endDate)}</span></>}
             {marketCount > 1 && <><span style={{ opacity: .4 }}>·</span><span>{marketCount} outcomes</span></>}
           </div>
         </div>
-        <div style={{ textAlign: 'right', flexShrink: 0 }}>
-          <div style={{ fontSize: 18, fontWeight: 800, color: yesPct >= 50 ? C.yes : C.no, lineHeight: 1, ...T.display }}>{yesPct}%</div>
+        <div style={{ textAlign: 'right', flexShrink: 0, minWidth: 44 }}>
+          <div style={{ fontSize: 17, fontWeight: 800, color: yesPct >= 50 ? C.yes : C.no, lineHeight: 1, ...T.display }}>{yesPct}%</div>
           <div style={{ fontSize: 9, color: C.muted, marginTop: 2, ...T.mono }}>YES</div>
         </div>
       </div>
