@@ -1,23 +1,27 @@
 // ─────────────────────────────────────────────────────────────────────
 // server-poly-relayer.js — Express router for Polymarket builder ops.
+//
+// Uses @polymarket/builder-signing-sdk's buildHmacSignature directly
+// instead of hand-rolling the HMAC. Matches every official Polymarket
+// reference example byte-for-byte.
 // ─────────────────────────────────────────────────────────────────────
 
 const express = require('express');
-const crypto  = require('crypto');
 const router  = express.Router();
+const { buildHmacSignature } = require('@polymarket/builder-signing-sdk');
 
 const BRIDGE_URL = 'https://bridge.polymarket.com';
 
 const BUILDER_KEY        = process.env.POLY_BUILDER_API_KEY    || '';
 const BUILDER_SECRET     = process.env.POLY_BUILDER_SECRET     || '';
 const BUILDER_PASSPHRASE = process.env.POLY_BUILDER_PASSPHRASE || '';
-const BUILDER_ADDRESS    = process.env.POLY_BUILDER_ADDRESS    || '';
 const BUILDER_CODE       = process.env.POLY_BUILDER_CODE       || '';
 
 function ok() {
-  return !!(BUILDER_KEY && BUILDER_SECRET && BUILDER_PASSPHRASE && BUILDER_ADDRESS);
+  return !!(BUILDER_KEY && BUILDER_SECRET && BUILDER_PASSPHRASE);
 }
 
+// Per-IP rate limiter for /sign.
 const _signRate = new Map();
 function checkSignRate(ip) {
   const now = Date.now();
@@ -34,17 +38,6 @@ function checkSignRate(ip) {
   return true;
 }
 
-// Polymarket HMAC: SHA256(base64-decoded secret, ts + method + path + body)
-// — timestamp in SECONDS, output as base64url.
-function buildHmacSignature(secret, timestampSec, method, path, body) {
-  const message = String(timestampSec) + String(method).toUpperCase() + String(path) + (body || '');
-  const normalized = secret.replace(/-/g, '+').replace(/_/g, '/');
-  const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4);
-  const secretBytes = Buffer.from(padded, 'base64');
-  return crypto.createHmac('sha256', secretBytes).update(message).digest('base64')
-    .replace(/\+/g, '-').replace(/\//g, '_');
-}
-
 async function fetchWithTimeout(url, opts = {}, ms = 12_000) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
@@ -58,16 +51,15 @@ async function fetchWithTimeout(url, opts = {}, ms = 12_000) {
 router.get('/health', (_req, res) => {
   res.json({
     ok: true,
-    hasCreds:        ok(),
-    hasBuilderCode:  !!BUILDER_CODE,
-    hasAddress:      !!BUILDER_ADDRESS,
-    builderKeyTail:  BUILDER_KEY ? '...' + BUILDER_KEY.slice(-6) : null,
-    builderAddrTail: BUILDER_ADDRESS ? '...' + BUILDER_ADDRESS.slice(-6) : null,
+    hasCreds:       ok(),
+    hasBuilderCode: !!BUILDER_CODE,
+    builderKeyTail: BUILDER_KEY ? '...' + BUILDER_KEY.slice(-6) : null,
+    sdkLoaded:      typeof buildHmacSignature === 'function',
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// BUILDER CODE — public
+// BUILDER CODE — public, frontend attaches to orders
 // ═══════════════════════════════════════════════════════════════════
 router.get('/builder-code', (_req, res) => {
   if (!BUILDER_CODE) return res.json({ builderCode: null });
@@ -75,37 +67,42 @@ router.get('/builder-code', (_req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// REMOTE SIGNING — called by @polymarket/builder-signing-sdk
+// REMOTE SIGNING — called by SDK's BuilderConfig({ remoteBuilderConfig })
 // SDK posts: { method, path, body }
-// Must return EXACTLY these keys — the SDK forwards them as headers.
+// Returns the four POLY_BUILDER_* headers exactly as the SDK expects.
 // ═══════════════════════════════════════════════════════════════════
-router.post('/sign', express.json({ limit: '1mb' }), (req, res) => {
+router.post('/sign', express.json({ limit: '1mb' }), async (req, res) => {
   try {
     if (!ok()) return res.status(500).json({ error: 'Builder credentials not configured' });
     const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 'unknown';
     if (!checkSignRate(ip)) return res.status(429).json({ error: 'Too many sign requests' });
+
     const { method, path, body } = req.body || {};
     if (!method || !path) return res.status(400).json({ error: 'method and path required' });
 
-    const timestampSec = Math.floor(Date.now() / 1000);
-    const nonce = crypto.randomBytes(16).toString('hex');
-    const signature = buildHmacSignature(BUILDER_SECRET, timestampSec, method, path, body || '');
+    const timestamp = Date.now().toString();
+    const signature = await buildHmacSignature(
+      BUILDER_SECRET,
+      parseInt(timestamp, 10),
+      method,
+      path,
+      body,
+    );
 
     res.json({
-      POLY_ADDRESS:    BUILDER_ADDRESS,
-      POLY_SIGNATURE:  signature,
-      POLY_TIMESTAMP:  String(timestampSec),
-      POLY_API_KEY:    BUILDER_KEY,
-      POLY_PASSPHRASE: BUILDER_PASSPHRASE,
-      POLY_NONCE:      nonce,
+      POLY_BUILDER_SIGNATURE:  signature,
+      POLY_BUILDER_TIMESTAMP:  timestamp,
+      POLY_BUILDER_API_KEY:    BUILDER_KEY,
+      POLY_BUILDER_PASSPHRASE: BUILDER_PASSPHRASE,
     });
   } catch (e) {
+    console.error('[poly/sign]', e);
     res.status(500).json({ error: 'sign_failed', detail: String(e?.message || e) });
   }
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// BRIDGE PROXIES (unchanged)
+// BRIDGE PROXIES — public Polymarket endpoints, CORS-fronted.
 // ═══════════════════════════════════════════════════════════════════
 
 router.post('/deposit', express.json(), async (req, res) => {
