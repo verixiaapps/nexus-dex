@@ -2184,10 +2184,28 @@ function PredictInner({ bypassGeo = false }) {
 
   if (!geoChecked || loading) {
     return (
-      <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: '0 16px calc(env(safe-area-inset-bottom) + 100px)' }}>
-        <Header polyBalance={0n} onOpenFund={() => {}} canFund={false} />
-        {[1,2,3,4,5].map(i => <MarketSkeleton key={i} />)}
-      </div>
+      <>
+        <style>{`@keyframes nexus-spin { to { transform: rotate(360deg); } }`}</style>
+        <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: '0 16px calc(env(safe-area-inset-bottom) + 100px)' }}>
+          <Header polyBalance={polyBalance} onOpenFund={() => setFundOpen(true)} canFund={true} />
+          {[1,2,3,4,5].map(i => <MarketSkeleton key={i} />)}
+        </div>
+        <FundingSheet
+          open={fundOpen}
+          onClose={() => setFundOpen(false)}
+          evmAddress={evmAddress}
+          safeAddress={safeAddress}
+          polyBalance={polyBalance}
+          fundingPubkey={fundingPubkey}
+          solUsdcBalance={solUsdcBalance}
+          fundingSourceLabel={fundingSourceLabel}
+          signSolanaTx={signSolanaTx}
+          onFunded={refreshAll}
+          onWithdrawn={refreshAll}
+          refreshAll={refreshAll}
+          onLoginPrivy={loginPrivy}
+        />
+      </>
     );
   }
 
