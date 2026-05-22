@@ -15,6 +15,14 @@ const RELAYER_URL  = 'https://relayer-v2.polymarket.com';
 const GAMMA_URL    = 'https://gamma-api.polymarket.com';
 const DATA_API_URL = 'https://data-api.polymarket.com';
 const POLYGON_RPC  = 'https://polygon-rpc.com';
+// Fallback Polygon RPCs (CSP-allowed in server.js). Used in rotation if
+// the primary returns 401/429.
+const POLYGON_RPCS = [
+  'https://polygon.llamarpc.com',
+  'https://polygon-bor-rpc.publicnode.com',
+  'https://rpc.ankr.com/polygon',
+  'https://polygon-rpc.com',
+];
 const POLYGON_CHAIN_ID = 137;
 
 const USDC_E_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
@@ -125,6 +133,28 @@ async function copyToClipboard(text){
 }
 
 // ─── PERSISTENCE ──────────────────────────────────────────────────
+// Schema version — bump this whenever a cached value's shape changes.
+// On page load, any cache keys from an older schema are purged so users
+// never have to manually clear localStorage. This is the fix-forward
+// mechanism for cache-shape bugs.
+const SCHEMA_VERSION = 2;
+const SCHEMA_KEY = 'pm_schema_v';
+(function migrateSchema(){
+  try {
+    const current = parseInt(localStorage.getItem(SCHEMA_KEY) || '0', 10);
+    if (current === SCHEMA_VERSION) return;
+    // Wipe all pm_* keys; they'll regenerate on next use.
+    const toDel = [];
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i);
+      if (k && k.startsWith('pm_') && k !== SCHEMA_KEY) toDel.push(k);
+    }
+    toDel.forEach(k => { try { localStorage.removeItem(k); } catch {} });
+    localStorage.setItem(SCHEMA_KEY, String(SCHEMA_VERSION));
+    dbg('migrate', `cache schema ${current} → ${SCHEMA_VERSION}, purged ${toDel.length} keys`);
+  } catch (e) { dbgErr('migrate', 'failed', e); }
+})();
+
 const LS={safe:(evm)=>'pm_safe_'+evm.toLowerCase(),deployed:(evm)=>'pm_safe_dep_'+evm.toLowerCase(),approvals:(evm)=>'pm_safe_appr_'+evm.toLowerCase(),bridgeAddr:(evm)=>'pm_br_addrs_'+evm.toLowerCase()};
 const SS={creds:(evm)=>'pm_creds_'+evm.toLowerCase()};
 function lsGet(k){ try{return localStorage.getItem(k);}catch{return null;} }
@@ -148,10 +178,11 @@ async function loadSdks(){
     import('@polymarket/builder-signing-sdk'),
     import('@polymarket/builder-relayer-client/dist/builder/derive'),
     import('@polymarket/builder-relayer-client/dist/config'),
-    import('ethers'),
+    // ethers v5 (npm alias) — Polymarket SDKs are built for v5
+    import('ethers-v5'),
   ]);
   _sdks={clob,relayer,signing,derive,config,ethers:ethersMod};
-  dbg('sdk','loaded',{clob:!!clob?.ClobClient,relay:!!relayer?.RelayClient,signing:!!signing?.BuilderConfig,derive:!!derive?.deriveSafe,config:!!config?.getContractConfig,ethers6:!!ethersMod?.BrowserProvider});
+  dbg('sdk','loaded',{clob:!!clob?.ClobClient,relay:!!relayer?.RelayClient,signing:!!signing?.BuilderConfig,derive:!!derive?.deriveSafe,config:!!config?.getContractConfig,ethers5:!!ethersMod?.providers?.Web3Provider,ethers6:!!ethersMod?.BrowserProvider});
   return _sdks;
 }
 
@@ -159,12 +190,14 @@ async function buildEthersSigner(getEvmProvider){
   const {ethers}=await loadSdks();
   const provider=await getEvmProvider();
   if(!provider) throw new Error('Privy EVM provider unavailable — sign in first');
-  if(ethers.BrowserProvider){
-    const bp=new ethers.BrowserProvider(provider);
-    return await bp.getSigner();
-  } else if(ethers.providers?.Web3Provider){
+  // Prefer ethers v5 (providers.Web3Provider) since Polymarket SDKs target v5.
+  // Fall back to v6 (BrowserProvider) if v5 isn't loaded.
+  if(ethers.providers?.Web3Provider){
     const wp=new ethers.providers.Web3Provider(provider);
     return wp.getSigner();
+  } else if(ethers.BrowserProvider){
+    const bp=new ethers.BrowserProvider(provider);
+    return await bp.getSigner();
   } else throw new Error('Unrecognized ethers version');
 }
 
@@ -287,10 +320,16 @@ async function ensureSetup(evm,getEvmProvider,onStatus){
 
 // ─── BALANCES ─────────────────────────────────────────────────────
 async function rpc(method,params,ms=8000){
-  const r=await jfetch(POLYGON_RPC,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:Date.now(),method,params})},ms);
-  const j=await r.json();
-  if(j.error) throw new Error(`RPC ${method}: ${j.error.message}`);
-  return j.result;
+  let lastErr;
+  for(const url of POLYGON_RPCS){
+    try{
+      const r=await jfetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({jsonrpc:'2.0',id:Date.now(),method,params})},ms);
+      const j=await r.json();
+      if(j.error){ lastErr=new Error(`RPC ${method}: ${j.error.message}`); continue; }
+      return j.result;
+    } catch(e){ lastErr=e; }
+  }
+  throw lastErr||new Error('All Polygon RPCs failed');
 }
 async function ethCallBalance(token,holder){
   try{
@@ -331,13 +370,26 @@ async function fetchBridgeAddresses(safe){
   const r=await jfetch(BRIDGE_DEPOSIT,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({address:safe})},15000);
   const j=await r.json();
   dbg('bridge','addresses',j);
-  return { evm: j.evm||j.evmAddress||j.evm_address||null, svm: j.svm||j.svmAddress||j.svm_address||null };
+  // Polymarket's response wraps the addresses under an `address` key.
+  // Some older versions returned them at the top level — handle both.
+  const a = j.address && typeof j.address === 'object' ? j.address : j;
+  return {
+    evm: a.evm || a.evmAddress || a.evm_address || null,
+    svm: a.svm || a.svmAddress || a.svm_address || null,
+  };
 }
 async function getBridgeAddressesCached(evm,safe){
   const cached=lsGetJson(LS.bridgeAddr(evm));
-  if(cached?.svm&&cached?.evm) return cached;
+  // Validate cache: must have non-empty evm + svm strings. Bad/stale
+  // cache (from earlier buggy versions) gets purged automatically so
+  // users never have to clear localStorage manually.
+  const cacheValid = cached
+    && typeof cached.svm === 'string' && cached.svm.length >= 32
+    && typeof cached.evm === 'string' && cached.evm.startsWith('0x');
+  if(cacheValid) return cached;
+  if(cached){ dbg('bridge','purging bad cache',cached); lsDel(LS.bridgeAddr(evm)); }
   const addrs=await fetchBridgeAddresses(safe);
-  lsSetJson(LS.bridgeAddr(evm),addrs);
+  if(addrs.svm&&addrs.evm) lsSetJson(LS.bridgeAddr(evm),addrs);
   return addrs;
 }
 async function fetchBridgeStatus(safe){
