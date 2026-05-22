@@ -1,4 +1,3 @@
-// BLOCK 1 OF 5
 // Predict.jsx
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
@@ -49,6 +48,10 @@ const BRIDGE_WITHDRAW = '/api/poly/withdraw';
 
 const OKX_SWAP_PATH = '/api/okx/dex/aggregator/swap';
 const OKX_SOL_CHAIN = '501';
+
+// High slippage tolerance to ensure swaps go through. OKX will still route
+// to the best available path; this is just the max acceptable price impact.
+const OKX_SLIPPAGE = '0.5';
 
 const FEE_WALLET_SOL =
   'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
@@ -347,8 +350,6 @@ function formatVol(n) {
 
   return `$${n.toFixed(0)}`;
 }
-
-// BLOCK 2 OF 5
 
 function formatEndDate(iso) {
   if (!iso) return null;
@@ -749,8 +750,6 @@ async function buildRelayClient(
     builderConfig
   );
 }
-
-// BLOCK 3 OF 5
 
 async function deriveSafeAddress(eoa) {
   const { derive, config } = await loadSdks();
@@ -1316,8 +1315,6 @@ async function fetchBridgeAddresses(safe) {
   };
 }
 
-// BLOCK 4 OF 5
-
 async function getBridgeAddressesCached(evm, safe) {
   const cached = lsGetJson(LS.bridgeAddr(evm));
 
@@ -1460,14 +1457,18 @@ async function depositFromSol({
 
   onStatus?.('Quoting swap (5% fee included)…');
 
+  // OKX expects `slippage` as a decimal (e.g. 0.5 = 50%). We also send
+  // `slippagePercent` to support newer/alternate endpoint versions.
   const params = new URLSearchParams({
     chainIndex: OKX_SOL_CHAIN,
+    chainId: OKX_SOL_CHAIN,
     fromTokenAddress: SOL_NATIVE_MINT,
     toTokenAddress: USDC_SOLANA_MINT,
     amount: String(solAtomic),
     userWalletAddress: ownerB58,
     swapReceiverAddress: addrs.svm,
-    slippage: '5',
+    slippage: OKX_SLIPPAGE,
+    slippagePercent: OKX_SLIPPAGE,
   });
 
   const r = await jfetch(
@@ -1844,8 +1845,6 @@ function normalizeEvent(ev) {
     ),
   };
 }
-
-// BLOCK 5 OF 5
 
 function isTradableMarket(m, h) {
   if (!m || !m.clobTokenIds || m.clobTokenIds.length < 2 || !m.conditionId) return false;
