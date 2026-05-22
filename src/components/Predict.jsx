@@ -4,7 +4,7 @@
 //
 // REQUIRED INSTALL: npm install @polymarket/clob-client@^4.22.8
 // ─────────────────────────────────────────────────────────────────────
-
+ 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
