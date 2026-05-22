@@ -1467,7 +1467,7 @@ async function depositFromSol({
     amount: String(solAtomic),
     userWalletAddress: ownerB58,
     swapReceiverAddress: addrs.svm,
-    slippage: '1',
+    slippage: '5',
   });
 
   const r = await jfetch(
