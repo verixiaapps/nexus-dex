@@ -1,19 +1,7 @@
-// Predict.jsx - Native SOL deposit, sim-before-sign for every action.
-//
-// Design rules (locked in by user, do not violate):
-//   1. Every signed action must be: build tx -> WE simulate it -> user signs
-//      THAT SAME tx object -> we submit THAT SAME signed tx. No rebuilding
-//      between sim and sign. No relying on RPC preflight as our "sim."
-//   2. User's SOL stays in Privy Solana wallet (trading wallet).
-//      Funds only move to Polymarket when user explicitly clicks Buy.
-//   3. Buy: one Solana tx = 95% SOL -> Polymarket bridge, 5% SOL -> fee wallet.
-//      Polymarket converts SOL -> USDC.e on Polygon, credits the Safe,
-//      then CLOB order is placed from the Safe.
-//   4. Sell: CLOB order. USDC.e stays in Safe until user clicks Collect Winnings.
-//   5. Safe gets deployed + approved IMMEDIATELY on Privy auth, not lazily
-//      on first trade. Verified on-chain (eth_getCode + allowance reads).
-//   6. 5% fee on bridge step. If Polymarket's conversion has a spread,
-//      we keep it. User-facing fee is the 5%.
+// Predict.jsx - Self-contained. No WalletContext, no Privy.
+// User clicks Connect → EVM wallet (MetaMask/Rabby/Phantom EVM) connects for
+// Polymarket. Separately clicks Connect Solana → Phantom connects for SOL.
+// Both buttons live on this page.
 
 import React, {
   useEffect,
@@ -22,14 +10,13 @@ import React, {
   useMemo,
   useRef,
 } from 'react';
-import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import {
   PublicKey,
   SystemProgram,
   Transaction,
   ComputeBudgetProgram,
+  Connection,
 } from '@solana/web3.js';
-import { useNexusWallet } from '../WalletContext.js';
 
 /* ============================================================
    Constants
@@ -48,6 +35,7 @@ const POLYGON_RPCS = [
 ];
 
 const POLYGON_CHAIN_ID = 137;
+const POLYGON_CHAIN_HEX = '0x89';
 
 const USDC_E_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 const CTF_EXCHANGE = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
@@ -60,25 +48,16 @@ const BUILDER_CODE =
 
 const SOL_RPC = '/api/solana-rpc';
 
-// Bridge endpoints
 const BRIDGE_DEPOSIT = '/api/poly/deposit';
 const BRIDGE_STATUS = '/api/poly/status';
 const BRIDGE_WITHDRAW = '/api/poly/withdraw';
 
-// Fee policy
-const FEE_WALLET_SOL =
-  'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
-const FEE_PCT = 5; // 5% on every deposit-to-Polymarket flow
-const FEE_BPS = BigInt(FEE_PCT * 100); // 500 bps
+const FEE_WALLET_SOL = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
+const FEE_PCT = 5;
+const FEE_BPS = BigInt(FEE_PCT * 100);
 
 const CRYPTO_TAG_ID = 21;
-const MIN_TRADE_USD = 5;
-
-// Minimum total SOL per trade. Polymarket requires >= $2 on Solana,
-// but we add a buffer to cover network fees + their conversion spread.
-const MIN_SOL_LAMPORTS_PER_TRADE = 50_000_000; // 0.05 SOL ~ $5-10
-
-// Reserve enough SOL for network fees on the user's wallet.
+const MIN_SOL_LAMPORTS_PER_TRADE = 50_000_000; // 0.05 SOL
 const SOL_NETWORK_RESERVE_LAMPORTS = 5_000_000; // 0.005 SOL
 
 const HORIZONS = [
@@ -90,38 +69,24 @@ const HORIZONS = [
 ];
 
 /* ============================================================
-   Debug log (kept from original - copy/clear buttons in UI)
+   Debug log
    ============================================================ */
 
 const DBG_MAX = 400;
 const _dbgListeners = new Set();
 
-function _emit(e) {
-  for (const fn of _dbgListeners) {
-    try { fn(e); } catch {}
-  }
-}
-
+function _emit(e) { for (const fn of _dbgListeners) { try { fn(e); } catch {} } }
 function _redact(v) {
   if (typeof v !== 'object' || v == null) return v;
   const out = Array.isArray(v) ? [] : {};
   for (const k of Object.keys(v)) {
-    if (/secret|passphrase|private|seed|mnemonic|api[_-]?key/i.test(k)) {
-      out[k] = '***';
-    } else {
-      out[k] = v[k];
-    }
+    if (/secret|passphrase|private|seed|mnemonic|api[_-]?key/i.test(k)) out[k] = '***';
+    else out[k] = v[k];
   }
   return out;
 }
-
 function dbg(scope, msg, data) {
-  const entry = {
-    ts: Date.now(),
-    scope,
-    msg,
-    data: data === undefined ? undefined : _redact(data),
-  };
+  const entry = { ts: Date.now(), scope, msg, data: data === undefined ? undefined : _redact(data) };
   try {
     if (typeof window !== 'undefined') {
       window.__predictDebug = window.__predictDebug || [];
@@ -129,12 +94,9 @@ function dbg(scope, msg, data) {
       if (window.__predictDebug.length > DBG_MAX) window.__predictDebug.shift();
     }
   } catch {}
-  try {
-    console.log(`[predict:${scope}]`, msg, entry.data !== undefined ? entry.data : '');
-  } catch {}
+  try { console.log(`[predict:${scope}]`, msg, entry.data !== undefined ? entry.data : ''); } catch {}
   _emit(entry);
 }
-
 function dbgErr(scope, msg, err) {
   dbg(scope, 'ERROR: ' + msg, {
     name: err?.name,
@@ -144,14 +106,10 @@ function dbgErr(scope, msg, err) {
     body: err?.body || err?.response?.data || err?.data,
   });
 }
-
 function dbgClear() {
-  try {
-    if (typeof window !== 'undefined') window.__predictDebug = [];
-  } catch {}
+  try { if (typeof window !== 'undefined') window.__predictDebug = []; } catch {}
   _emit({ ts: Date.now(), scope: 'debug', msg: '— cleared —' });
 }
-
 function useDbgLog() {
   const [, force] = useState(0);
   const ref = useRef([]);
@@ -162,9 +120,8 @@ function useDbgLog() {
       }
     } catch {}
     const fn = (entry) => {
-      if (entry.msg === '— cleared —') {
-        ref.current = [];
-      } else {
+      if (entry.msg === '— cleared —') ref.current = [];
+      else {
         ref.current = [...ref.current, entry];
         if (ref.current.length > DBG_MAX) ref.current = ref.current.slice(-DBG_MAX);
       }
@@ -181,22 +138,13 @@ function useDbgLog() {
    ============================================================ */
 
 const C = {
-  bg: '#03060f',
-  card: '#080d1a',
-  cardHi: '#0c1428',
-  ink: '#e8ecf5',
-  muted: '#8a96b8',
-  muted2: '#475670',
-  border: 'rgba(151,252,228,.10)',
-  borderHi: 'rgba(151,252,228,.30)',
-  hl: '#97fce4',
-  hl2: '#5ce9c8',
-  hlDim: 'rgba(151,252,228,.10)',
+  bg: '#03060f', card: '#080d1a', cardHi: '#0c1428',
+  ink: '#e8ecf5', muted: '#8a96b8', muted2: '#475670',
+  border: 'rgba(151,252,228,.10)', borderHi: 'rgba(151,252,228,.30)',
+  hl: '#97fce4', hl2: '#5ce9c8', hlDim: 'rgba(151,252,228,.10)',
   violet: '#a87fff',
-  yes: '#00d4a3',
-  yesDim: 'rgba(0,212,163,.12)',
-  no: '#ff5f7a',
-  noDim: 'rgba(255,95,122,.12)',
+  yes: '#00d4a3', yesDim: 'rgba(0,212,163,.12)',
+  no: '#ff5f7a', noDim: 'rgba(255,95,122,.12)',
   amber: '#f5b53d',
   shadow: '0 8px 28px rgba(0,0,0,.45)',
   shadowLg: '0 18px 56px rgba(0,0,0,.55)',
@@ -209,7 +157,7 @@ const T = {
 };
 
 /* ============================================================
-   HTTP helpers
+   HTTP / format helpers
    ============================================================ */
 
 async function jfetch(url, opts = {}, ms = 12000) {
@@ -224,20 +172,13 @@ async function jfetch(url, opts = {}, ms = 12000) {
       try { body = await r.text(); } catch {}
       dbg('http', `${opts.method || 'GET'} ${url} → ${r.status}`, { dur, body: body.slice(0, 500) });
       const err = new Error(`HTTP ${r.status}: ${body.slice(0, 300) || r.statusText}`);
-      err.status = r.status;
-      err.body = body;
+      err.status = r.status; err.body = body;
       throw err;
     }
     dbg('http', `${opts.method || 'GET'} ${url} → ${r.status}`, { dur });
     return r;
-  } finally {
-    clearTimeout(id);
-  }
+  } finally { clearTimeout(id); }
 }
-
-/* ============================================================
-   Formatting
-   ============================================================ */
 
 function fmtUsd(n, d = 2) {
   if (n == null || !Number.isFinite(Number(n))) return '$0.00';
@@ -248,13 +189,6 @@ function fmtUsd(n, d = 2) {
   if (n >= 1) return '$' + n.toFixed(d);
   return '$' + n.toFixed(4);
 }
-
-function fmtSol(lamports, d = 4) {
-  const sol = Number(lamports) / 1e9;
-  if (!Number.isFinite(sol)) return '0 SOL';
-  return sol.toFixed(d) + ' SOL';
-}
-
 function formatVol(n) {
   if (!n || n <= 0) return '$0';
   if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
@@ -262,7 +196,6 @@ function formatVol(n) {
   if (n >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
   return `$${n.toFixed(0)}`;
 }
-
 function formatEndDate(iso) {
   if (!iso) return null;
   const d = new Date(iso);
@@ -279,16 +212,15 @@ function formatEndDate(iso) {
   }
   return `Ends ${mo} ${day}`;
 }
-
 function cleanAmount(v) {
   const s = String(v || '').replace(/[^0-9.]/g, '');
   const p = s.split('.');
   return p.length <= 2 ? s : p[0] + '.' + p.slice(1).join('');
 }
-
-/* ============================================================
-   Body lock + clipboard
-   ============================================================ */
+function shortAddr(a) {
+  if (!a) return '';
+  return a.slice(0, 6) + '…' + a.slice(-4);
+}
 
 let _bodyLockCount = 0;
 function useBodyLock(open) {
@@ -302,34 +234,25 @@ function useBodyLock(open) {
     };
   }, [open]);
 }
-
 async function copyToClipboard(text) {
   try {
-    if (navigator.clipboard?.writeText) {
-      await navigator.clipboard.writeText(text);
-      return true;
-    }
+    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; }
   } catch {}
   try {
     const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.position = 'fixed';
-    ta.style.opacity = '0';
-    document.body.appendChild(ta);
-    ta.select();
+    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select();
     const ok = document.execCommand('copy');
     document.body.removeChild(ta);
     return ok;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
 
 /* ============================================================
-   Storage / cache (Safe addr, approvals, creds, bridge addrs)
+   Cache helpers
    ============================================================ */
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 const SCHEMA_KEY = 'pm_schema_v';
 
 (function migrateSchema() {
@@ -344,18 +267,13 @@ const SCHEMA_KEY = 'pm_schema_v';
     toDel.forEach((k) => { try { localStorage.removeItem(k); } catch {} });
     localStorage.setItem(SCHEMA_KEY, String(SCHEMA_VERSION));
     dbg('migrate', `cache schema ${current} → ${SCHEMA_VERSION}, purged ${toDel.length} keys`);
-  } catch (e) {
-    dbgErr('migrate', 'failed', e);
-  }
+  } catch (e) { dbgErr('migrate', 'failed', e); }
 })();
 
 const LS = {
   safe: (evm) => 'pm_safe_' + evm.toLowerCase(),
-  deployed: (evm) => 'pm_safe_dep_' + evm.toLowerCase(),
-  approvals: (evm) => 'pm_safe_appr_' + evm.toLowerCase(),
   bridgeAddr: (evm) => 'pm_br_addrs_' + evm.toLowerCase(),
 };
-
 const SS = {
   creds: (evm) => 'pm_creds_' + evm.toLowerCase(),
 };
@@ -363,30 +281,191 @@ const SS = {
 function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
 function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
 function lsDel(k) { try { localStorage.removeItem(k); } catch {} }
-function lsGetJson(k) {
-  try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : null; }
-  catch { return null; }
-}
+function lsGetJson(k) { try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : null; } catch { return null; } }
 function lsSetJson(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
-function ssGetJson(k) {
-  try { const r = sessionStorage.getItem(k); return r ? JSON.parse(r) : null; }
-  catch { return null; }
-}
+function ssGetJson(k) { try { const r = sessionStorage.getItem(k); return r ? JSON.parse(r) : null; } catch { return null; } }
 function ssSetJson(k, v) { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch {} }
 function ssDel(k) { try { sessionStorage.removeItem(k); } catch {} }
 
-function wipeUserCache(evm) {
-  if (!evm) return;
-  lsDel(LS.safe(evm));
-  lsDel(LS.deployed(evm));
-  lsDel(LS.approvals(evm));
-  lsDel(LS.bridgeAddr(evm));
-  ssDel(SS.creds(evm));
-  dbg('cache', 'wiped for ' + evm);
+/* ============================================================
+   EIP-6963 EVM wallet discovery + connect
+   ============================================================ */
+
+function useEvmConnection() {
+  const [providers, setProviders] = useState([]); // EIP-6963 announced
+  const [evmProvider, setEvmProvider] = useState(null);
+  const [evmAddress, setEvmAddress] = useState(null);
+  const [evmChainId, setEvmChainId] = useState(null);
+  const [evmName, setEvmName] = useState(null);
+  const seenRef = useRef(new Set());
+
+  // Discover EIP-6963 providers
+  useEffect(() => {
+    const onAnnounce = (event) => {
+      const detail = event.detail;
+      if (!detail || !detail.info || !detail.provider) return;
+      const rdns = detail.info.rdns || detail.info.name;
+      if (!rdns || seenRef.current.has(rdns)) return;
+      seenRef.current.add(rdns);
+      setProviders((prev) => [...prev, detail]);
+    };
+    window.addEventListener('eip6963:announceProvider', onAnnounce);
+    window.dispatchEvent(new Event('eip6963:requestProvider'));
+    return () => window.removeEventListener('eip6963:announceProvider', onAnnounce);
+  }, []);
+
+  const connectWith = useCallback(async (detail) => {
+    try {
+      const provider = detail.provider;
+      const accounts = await provider.request({ method: 'eth_requestAccounts' });
+      if (!accounts || !accounts[0]) throw new Error('No account returned');
+      const addr = accounts[0];
+      let chainId = null;
+      try {
+        chainId = await provider.request({ method: 'eth_chainId' });
+      } catch {}
+
+      // Switch to Polygon if needed
+      if (chainId !== POLYGON_CHAIN_HEX) {
+        try {
+          await provider.request({
+            method: 'wallet_switchEthereumChain',
+            params: [{ chainId: POLYGON_CHAIN_HEX }],
+          });
+          chainId = POLYGON_CHAIN_HEX;
+        } catch (switchErr) {
+          // 4902 = chain not added
+          if (switchErr?.code === 4902) {
+            try {
+              await provider.request({
+                method: 'wallet_addEthereumChain',
+                params: [{
+                  chainId: POLYGON_CHAIN_HEX,
+                  chainName: 'Polygon',
+                  nativeCurrency: { name: 'POL', symbol: 'POL', decimals: 18 },
+                  rpcUrls: ['https://polygon-rpc.com'],
+                  blockExplorerUrls: ['https://polygonscan.com'],
+                }],
+              });
+              chainId = POLYGON_CHAIN_HEX;
+            } catch (addErr) {
+              dbgErr('evm', 'add chain failed', addErr);
+            }
+          } else {
+            dbgErr('evm', 'switch chain failed', switchErr);
+          }
+        }
+      }
+
+      // Listeners
+      provider.on?.('accountsChanged', (accts) => {
+        setEvmAddress(accts?.[0] || null);
+      });
+      provider.on?.('chainChanged', (cid) => {
+        setEvmChainId(cid);
+      });
+
+      setEvmProvider(provider);
+      setEvmAddress(addr);
+      setEvmChainId(chainId);
+      setEvmName(detail.info.name || 'EVM Wallet');
+      lsSet('pm_evm_last_rdns', detail.info.rdns || '');
+      dbg('evm', 'connected', { name: detail.info.name, addr, chainId });
+      return { provider, addr };
+    } catch (e) {
+      dbgErr('evm', 'connectWith failed', e);
+      throw e;
+    }
+  }, []);
+
+  const disconnect = useCallback(() => {
+    setEvmProvider(null);
+    setEvmAddress(null);
+    setEvmChainId(null);
+    setEvmName(null);
+    lsDel('pm_evm_last_rdns');
+  }, []);
+
+  return { providers, evmProvider, evmAddress, evmChainId, evmName, connectWith, disconnect };
 }
 
 /* ============================================================
-   SDK loaders (Polymarket builder/relayer SDKs, viem)
+   Solana wallet via window.phantom.solana (or window.solana)
+   Kept simple — no wallet-adapter-react dependency.
+   ============================================================ */
+
+function getPhantomSol() {
+  if (typeof window === 'undefined') return null;
+  if (window.phantom?.solana?.isPhantom) return window.phantom.solana;
+  if (window.solana?.isPhantom) return window.solana;
+  return null;
+}
+
+function useSolConnection() {
+  const [solProvider, setSolProvider] = useState(null);
+  const [solAddress, setSolAddress] = useState(null);
+  const [solName, setSolName] = useState(null);
+
+  const connect = useCallback(async () => {
+    const p = getPhantomSol();
+    if (!p) {
+      throw new Error('Phantom not detected. Install Phantom and reload.');
+    }
+    try {
+      const resp = await p.connect();
+      const addr = resp?.publicKey?.toString() || p.publicKey?.toString();
+      if (!addr) throw new Error('No Solana address returned');
+      setSolProvider(p);
+      setSolAddress(addr);
+      setSolName('Phantom');
+      lsSet('pm_sol_connected', '1');
+      dbg('sol', 'connected', { addr });
+
+      p.on?.('disconnect', () => {
+        setSolProvider(null);
+        setSolAddress(null);
+        lsDel('pm_sol_connected');
+      });
+      p.on?.('accountChanged', (pub) => {
+        setSolAddress(pub ? pub.toString() : null);
+      });
+      return addr;
+    } catch (e) {
+      dbgErr('sol', 'connect failed', e);
+      throw e;
+    }
+  }, []);
+
+  const disconnect = useCallback(async () => {
+    try { await solProvider?.disconnect?.(); } catch {}
+    setSolProvider(null);
+    setSolAddress(null);
+    setSolName(null);
+    lsDel('pm_sol_connected');
+  }, [solProvider]);
+
+  // Auto-reconnect (silent) if user previously connected
+  useEffect(() => {
+    if (lsGet('pm_sol_connected') !== '1') return;
+    const p = getPhantomSol();
+    if (!p) return;
+    p.connect({ onlyIfTrusted: true })
+      .then((resp) => {
+        const addr = resp?.publicKey?.toString() || p.publicKey?.toString();
+        if (addr) {
+          setSolProvider(p);
+          setSolAddress(addr);
+          setSolName('Phantom');
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  return { solProvider, solAddress, solName, connect, disconnect };
+}
+
+/* ============================================================
+   SDK loaders (Polymarket builder/relayer + viem)
    ============================================================ */
 
 let _sdks = null;
@@ -407,23 +486,22 @@ async function loadSdks() {
   return _sdks;
 }
 
-async function buildSigner(getEvmProvider, evmAddress) {
+async function buildSigner(evmProvider, evmAddress) {
   const { viem, viemChains } = await loadSdks();
-  const provider = await getEvmProvider();
-  if (!provider) throw new Error('Privy EVM provider unavailable — sign in first');
-  if (!evmAddress) throw new Error('No EOA address');
+  if (!evmProvider) throw new Error('EVM provider not available');
+  if (!evmAddress) throw new Error('EVM address not available');
   return viem.createWalletClient({
     account: evmAddress,
     chain: viemChains.polygon,
-    transport: viem.custom(provider),
+    transport: viem.custom(evmProvider),
   });
 }
 
-async function buildRelayClient(getEvmProvider, evmAddress) {
+async function buildRelayClient(evmProvider, evmAddress) {
   const { relayer, signing } = await loadSdks();
   if (!relayer?.RelayClient) throw new Error('RelayClient missing');
   if (!signing?.BuilderConfig) throw new Error('BuilderConfig missing');
-  const signer = await buildSigner(getEvmProvider, evmAddress);
+  const signer = await buildSigner(evmProvider, evmAddress);
   const origin = (typeof window !== 'undefined' && window.location?.origin) || '';
   const builderConfig = new signing.BuilderConfig({
     remoteBuilderConfig: { url: origin + '/api/poly/sign' },
@@ -432,28 +510,22 @@ async function buildRelayClient(getEvmProvider, evmAddress) {
 }
 
 /* ============================================================
-   Polygon RPC (for verification reads)
+   Polygon RPC + on-chain verification
    ============================================================ */
 
 async function rpc(method, params, ms = 8000) {
   let lastErr;
   for (const url of POLYGON_RPCS) {
     try {
-      const r = await jfetch(
-        url,
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
-        },
-        ms
-      );
+      const r = await jfetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
+      }, ms);
       const j = await r.json();
       if (j.error) { lastErr = new Error(`RPC ${method}: ${j.error.message}`); continue; }
       return j.result;
-    } catch (e) {
-      lastErr = e;
-    }
+    } catch (e) { lastErr = e; }
   }
   throw lastErr || new Error('All Polygon RPCs failed');
 }
@@ -462,12 +534,8 @@ async function ethGetCode(address) {
   try {
     const hex = await rpc('eth_getCode', [address, 'latest']);
     return hex && hex !== '0x' ? hex : null;
-  } catch (e) {
-    dbgErr('rpc', 'eth_getCode failed', e);
-    return null;
-  }
+  } catch { return null; }
 }
-
 async function ethCallBalance(token, holder) {
   try {
     const addr = holder.toLowerCase().replace(/^0x/, '').padStart(64, '0');
@@ -475,11 +543,8 @@ async function ethCallBalance(token, holder) {
     const hex = await rpc('eth_call', [{ to: token, data }, 'latest']);
     if (!hex || !hex.startsWith('0x')) return 0n;
     return BigInt(hex);
-  } catch {
-    return 0n;
-  }
+  } catch { return 0n; }
 }
-
 async function ethCallAllowance(token, owner, spender) {
   try {
     const o = owner.toLowerCase().replace(/^0x/, '').padStart(64, '0');
@@ -488,11 +553,8 @@ async function ethCallAllowance(token, owner, spender) {
     const hex = await rpc('eth_call', [{ to: token, data }, 'latest']);
     if (!hex || !hex.startsWith('0x')) return 0n;
     return BigInt(hex);
-  } catch {
-    return 0n;
-  }
+  } catch { return 0n; }
 }
-
 async function ethCallIsApprovedForAll(token, owner, operator) {
   try {
     const o = owner.toLowerCase().replace(/^0x/, '').padStart(64, '0');
@@ -501,18 +563,15 @@ async function ethCallIsApprovedForAll(token, owner, operator) {
     const hex = await rpc('eth_call', [{ to: token, data }, 'latest']);
     if (!hex || !hex.startsWith('0x')) return false;
     return BigInt(hex) === 1n;
-  } catch {
-    return false;
-  }
+  } catch { return false; }
 }
-
 async function fetchSafeBalance(safe) {
   if (!safe) return 0n;
   return await ethCallBalance(USDC_E_ADDRESS, safe);
 }
 
 /* ============================================================
-   Safe setup + on-chain verification
+   Safe setup + verification
    ============================================================ */
 
 async function deriveSafeAddress(eoa) {
@@ -527,22 +586,15 @@ async function deriveSafeAddress(eoa) {
   return safe;
 }
 
-// Verify the Safe is actually deployed on-chain (not just our cache flag).
 async function verifySafeDeployed(safeAddress) {
   const code = await ethGetCode(safeAddress);
-  const isDeployed = !!code;
-  dbg('verify', 'safe deployed', { safeAddress, isDeployed });
-  return isDeployed;
+  const ok = !!code;
+  dbg('verify', 'safe deployed', { safeAddress, ok });
+  return ok;
 }
 
-// All 7 approvals we need:
-// 4 ERC20 USDC.e approvals (to CTF_EXCHANGE, NEG_RISK_CTF_EXCHANGE,
-//   NEG_RISK_ADAPTER, CONDITIONAL_TOKENS), all expected to be max uint256
-// 3 ERC1155 isApprovedForAll on CONDITIONAL_TOKENS for CTF_EXCHANGE,
-//   NEG_RISK_CTF_EXCHANGE, NEG_RISK_ADAPTER
 async function verifyApprovals(safeAddress) {
-  const MIN_OK = (1n << 200n); // anything roughly max uint256 is fine
-
+  const MIN_OK = (1n << 200n);
   const [a1, a2, a3, a4, ia1, ia2, ia3] = await Promise.all([
     ethCallAllowance(USDC_E_ADDRESS, safeAddress, CTF_EXCHANGE),
     ethCallAllowance(USDC_E_ADDRESS, safeAddress, NEG_RISK_CTF_EXCHANGE),
@@ -552,17 +604,10 @@ async function verifyApprovals(safeAddress) {
     ethCallIsApprovedForAll(CONDITIONAL_TOKENS, safeAddress, NEG_RISK_CTF_EXCHANGE),
     ethCallIsApprovedForAll(CONDITIONAL_TOKENS, safeAddress, NEG_RISK_ADAPTER),
   ]);
-
   const checks = {
-    usdc_ctf: a1 >= MIN_OK,
-    usdc_neg: a2 >= MIN_OK,
-    usdc_adp: a3 >= MIN_OK,
-    usdc_con: a4 >= MIN_OK,
-    ctf_ctf: ia1,
-    ctf_neg: ia2,
-    ctf_adp: ia3,
+    usdc_ctf: a1 >= MIN_OK, usdc_neg: a2 >= MIN_OK, usdc_adp: a3 >= MIN_OK, usdc_con: a4 >= MIN_OK,
+    ctf_ctf: ia1, ctf_neg: ia2, ctf_adp: ia3,
   };
-
   const ok = Object.values(checks).every(Boolean);
   dbg('verify', 'approvals', { safeAddress, ok, checks });
   return ok;
@@ -571,21 +616,15 @@ async function verifyApprovals(safeAddress) {
 const MAX_UINT256 = (1n << 256n) - 1n;
 
 function encErc20Approve(spender, amount) {
-  return (
-    '0x095ea7b3' +
+  return '0x095ea7b3' +
     spender.replace(/^0x/, '').toLowerCase().padStart(64, '0') +
-    BigInt(amount).toString(16).padStart(64, '0')
-  );
+    BigInt(amount).toString(16).padStart(64, '0');
 }
-
 function encErc1155SetApprovalForAll(operator, approved) {
-  return (
-    '0xa22cb465' +
+  return '0xa22cb465' +
     operator.replace(/^0x/, '').toLowerCase().padStart(64, '0') +
-    (approved ? '1' : '0').padStart(64, '0')
-  );
+    (approved ? '1' : '0').padStart(64, '0');
 }
-
 function buildApprovalTxs() {
   return [
     { to: USDC_E_ADDRESS, value: '0', data: encErc20Approve(CTF_EXCHANGE, MAX_UINT256.toString()) },
@@ -598,129 +637,90 @@ function buildApprovalTxs() {
   ];
 }
 
-async function ensureSafeDeployed(evm, getEvmProvider, onStatus) {
-  let safe = lsGet(LS.safe(evm));
+async function ensureSafeDeployed(evmProvider, evmAddress, onStatus) {
+  let safe = lsGet(LS.safe(evmAddress));
   if (!safe) {
-    safe = await deriveSafeAddress(evm);
-    lsSet(LS.safe(evm), safe);
+    safe = await deriveSafeAddress(evmAddress);
+    lsSet(LS.safe(evmAddress), safe);
   }
-
-  // VERIFY on-chain, ignore stale cache
   const alreadyDeployed = await verifySafeDeployed(safe);
-  if (alreadyDeployed) {
-    lsSet(LS.deployed(evm), '1');
-    return safe;
-  }
+  if (alreadyDeployed) return safe;
 
-  // Not deployed on-chain — clear cache flag and deploy
-  lsDel(LS.deployed(evm));
-  onStatus?.('Deploying trading account…');
-
-  const relay = await buildRelayClient(getEvmProvider, evm);
+  onStatus?.('Deploying trading account (sign in wallet)…');
+  const relay = await buildRelayClient(evmProvider, evmAddress);
   const resp = await relay.deploy();
   const res = await resp.wait();
   const final = res?.proxyAddress || safe;
+  lsSet(LS.safe(evmAddress), final);
 
-  lsSet(LS.safe(evm), final);
-
-  // VERIFY again on-chain before marking complete
   const verified = await verifySafeDeployed(final);
-  if (!verified) {
-    throw new Error('Safe deployment tx succeeded but eth_getCode shows no contract');
-  }
-
-  lsSet(LS.deployed(evm), '1');
+  if (!verified) throw new Error('Safe deploy succeeded but eth_getCode shows no contract');
   dbg('safe', 'deployed + verified', { safe: final });
   return final;
 }
 
-async function ensureApprovals(evm, getEvmProvider, safeAddress, onStatus) {
-  // VERIFY on-chain, ignore stale cache
-  const alreadyOk = await verifyApprovals(safeAddress);
-  if (alreadyOk) {
-    lsSet(LS.approvals(evm), '1');
-    return;
-  }
+async function ensureApprovals(evmProvider, evmAddress, safeAddress, onStatus) {
+  const ok = await verifyApprovals(safeAddress);
+  if (ok) return;
 
-  lsDel(LS.approvals(evm));
-  onStatus?.('Approving contracts…');
-
-  const relay = await buildRelayClient(getEvmProvider, evm);
+  onStatus?.('Approving contracts (sign in wallet)…');
+  const relay = await buildRelayClient(evmProvider, evmAddress);
   if (typeof relay.execute !== 'function') throw new Error('relay.execute missing');
-
   const txs = buildApprovalTxs();
   const resp = await relay.execute(txs, 'Polymarket trading approvals');
   await resp.wait();
 
-  // VERIFY on-chain that approvals took effect
   const verified = await verifyApprovals(safeAddress);
-  if (!verified) {
-    throw new Error('Approval txs succeeded but on-chain verification failed');
-  }
-
-  lsSet(LS.approvals(evm), '1');
-  dbg('approvals', 'done + verified', { txs: txs.length, safeAddress });
+  if (!verified) throw new Error('Approvals tx succeeded but on-chain verification failed');
+  dbg('approvals', 'done + verified', { txs: txs.length });
 }
 
-async function getOrDeriveCreds(evm, getEvmProvider) {
-  const cached = ssGetJson(SS.creds(evm));
+async function getOrDeriveCreds(evmProvider, evmAddress) {
+  const cached = ssGetJson(SS.creds(evmAddress));
   if (cached?.key && cached?.secret && cached?.passphrase) return cached;
 
   const { clob } = await loadSdks();
-  const signer = await buildSigner(getEvmProvider, evm);
+  const signer = await buildSigner(evmProvider, evmAddress);
   const temp = new clob.ClobClient(CLOB_URL, POLYGON_CHAIN_ID, signer);
 
   let creds;
-  try {
-    creds = await temp.createOrDeriveApiKey();
-  } catch (e) {
-    dbgErr('creds', 'createOrDeriveApiKey failed, trying deriveApiKey', e);
+  try { creds = await temp.createOrDeriveApiKey(); }
+  catch (e) {
+    dbgErr('creds', 'createOrDeriveApiKey failed', e);
     try { creds = await temp.deriveApiKey(); }
     catch (e2) {
-      dbgErr('creds', 'deriveApiKey failed, trying createApiKey', e2);
+      dbgErr('creds', 'deriveApiKey failed', e2);
       creds = await temp.createApiKey();
     }
   }
-
   const norm = {
     key: creds.key || creds.apiKey,
     secret: creds.secret,
     passphrase: creds.passphrase,
   };
   if (!norm.key || !norm.secret || !norm.passphrase) throw new Error('Incomplete creds');
-
-  ssSetJson(SS.creds(evm), norm);
-  dbg('creds', 'stored session creds');
+  ssSetJson(SS.creds(evmAddress), norm);
+  dbg('creds', 'stored');
   return norm;
 }
 
-async function buildClobClient(getEvmProvider, evmAddress, safeAddress, creds) {
+async function buildClobClient(evmProvider, evmAddress, safeAddress, creds) {
   const { clob, signing } = await loadSdks();
-  const signer = await buildSigner(getEvmProvider, evmAddress);
+  const signer = await buildSigner(evmProvider, evmAddress);
   const origin = (typeof window !== 'undefined' && window.location?.origin) || '';
   const builderConfig = new signing.BuilderConfig({
     remoteBuilderConfig: { url: origin + '/api/poly/sign' },
   });
   return new clob.ClobClient(
-    CLOB_URL,
-    POLYGON_CHAIN_ID,
-    signer,
-    creds,
-    2,
-    safeAddress,
-    undefined,
-    false,
-    builderConfig
+    CLOB_URL, POLYGON_CHAIN_ID, signer, creds, 2, safeAddress, undefined, false, builderConfig
   );
 }
 
-// Full setup: deploy Safe -> verify -> approve -> verify -> derive creds.
-// Called proactively on Privy auth, NOT lazily on first trade.
-async function ensureSetup(evm, getEvmProvider, onStatus) {
-  dbg('setup', 'start', { evm });
-  const safe = await ensureSafeDeployed(evm, getEvmProvider, onStatus);
-  const creds = await getOrDeriveCreds(evm, getEvmProvider);
-  await ensureApprovals(evm, getEvmProvider, safe, onStatus);
+async function ensureSetup(evmProvider, evmAddress, onStatus) {
+  dbg('setup', 'start', { evmAddress });
+  const safe = await ensureSafeDeployed(evmProvider, evmAddress, onStatus);
+  const creds = await getOrDeriveCreds(evmProvider, evmAddress);
+  await ensureApprovals(evmProvider, evmAddress, safe, onStatus);
   dbg('setup', 'done', { safe });
   return { safeAddress: safe, creds };
 }
@@ -730,15 +730,11 @@ async function ensureSetup(evm, getEvmProvider, onStatus) {
    ============================================================ */
 
 async function fetchBridgeAddresses(safe) {
-  const r = await jfetch(
-    BRIDGE_DEPOSIT,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ address: safe }),
-    },
-    15000
-  );
+  const r = await jfetch(BRIDGE_DEPOSIT, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ address: safe }),
+  }, 15000);
   const j = await r.json();
   dbg('bridge', 'addresses', j);
   const a = j.address && typeof j.address === 'object' ? j.address : j;
@@ -750,12 +746,8 @@ async function fetchBridgeAddresses(safe) {
 
 async function getBridgeAddressesCached(evm, safe) {
   const cached = lsGetJson(LS.bridgeAddr(evm));
-  const valid =
-    cached &&
-    typeof cached.svm === 'string' &&
-    cached.svm.length >= 32 &&
-    typeof cached.evm === 'string' &&
-    cached.evm.startsWith('0x');
+  const valid = cached && typeof cached.svm === 'string' && cached.svm.length >= 32
+    && typeof cached.evm === 'string' && cached.evm.startsWith('0x');
   if (valid) return cached;
   if (cached) { dbg('bridge', 'purging bad cache', cached); lsDel(LS.bridgeAddr(evm)); }
   const addrs = await fetchBridgeAddresses(safe);
@@ -765,98 +757,55 @@ async function getBridgeAddressesCached(evm, safe) {
 
 async function fetchBridgeStatus(statusAddress) {
   try {
-    const r = await jfetch(
-      `${BRIDGE_STATUS}/${encodeURIComponent(statusAddress)}`,
-      {},
-      8000
-    );
+    const r = await jfetch(`${BRIDGE_STATUS}/${encodeURIComponent(statusAddress)}`, {}, 8000);
     return await r.json();
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
-// Poll bridge status until COMPLETED or timeout
-async function waitForBridge(statusAddress, sourceSig, timeoutMs = 90_000) {
+async function waitForBridge(statusAddress, sourceSig, timeoutMs = 120_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     try {
       const s = await fetchBridgeStatus(statusAddress);
-      const arr = Array.isArray(s?.transactions)
-        ? s.transactions
-        : Array.isArray(s?.deposits)
-          ? s.deposits
-          : Array.isArray(s)
-            ? s
-            : [];
+      const arr = Array.isArray(s?.transactions) ? s.transactions
+        : Array.isArray(s?.deposits) ? s.deposits
+        : Array.isArray(s) ? s : [];
       const hit = arr.find((d) => {
-        const status = String(
-          d.status || d.state || d.bridgeStatus || ''
-        ).toUpperCase();
-        return (
-          d.txHash === sourceSig ||
-          d.sourceTxHash === sourceSig ||
-          d.sigSrc === sourceSig ||
-          status === 'COMPLETED' ||
-          status === 'CONFIRMED' ||
-          status === 'SUCCESS'
-        );
+        const status = String(d.status || d.state || d.bridgeStatus || '').toUpperCase();
+        return d.txHash === sourceSig || d.sourceTxHash === sourceSig || d.sigSrc === sourceSig
+          || status === 'COMPLETED' || status === 'CONFIRMED' || status === 'SUCCESS';
       });
-      if (hit) {
-        dbg('bridge', 'completed', hit);
-        return true;
-      }
+      if (hit) { dbg('bridge', 'completed', hit); return true; }
     } catch {}
     await new Promise((r) => setTimeout(r, 2500));
   }
-  dbg('bridge', 'wait timed out');
   return false;
 }
 
 /* ============================================================
-   Solana balance reads
+   Solana balance
    ============================================================ */
 
 async function fetchSolanaSolBalance(ownerB58) {
   try {
-    const r = await jfetch(
-      SOL_RPC,
-      {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          jsonrpc: '2.0',
-          id: 1,
-          method: 'getBalance',
-          params: [ownerB58, { commitment: 'confirmed' }],
-        }),
-      },
-      6000
-    );
+    const r = await jfetch(SOL_RPC, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'getBalance',
+        params: [ownerB58, { commitment: 'confirmed' }],
+      }),
+    }, 6000);
     const j = await r.json();
     return j?.result?.value ? BigInt(j.result.value) : 0n;
-  } catch {
-    return 0n;
-  }
+  } catch { return 0n; }
 }
 
 /* ============================================================
-   SOL DEPOSIT TX BUILDER (the new core flow)
-   ============================================================
-   Build ONE Solana transaction with TWO transfers:
-   - 95% SOL -> Polymarket bridge SVM address
-   - 5% SOL  -> our fee wallet
+   Build SOL deposit tx (95% to bridge, 5% to fee wallet)
+   ============================================================ */
 
-   Returns the unsigned Transaction object. Caller will sim it,
-   then have user sign that exact object, then submit.
-*/
-
-async function buildSolDepositTx({
-  ownerB58,
-  bridgeSvm,
-  totalLamports,
-  connection,
-}) {
+async function buildSolDepositTx({ ownerB58, bridgeSvm, totalLamports, connection }) {
   const owner = new PublicKey(ownerB58);
   const bridge = new PublicKey(bridgeSvm);
   const fee = new PublicKey(FEE_WALLET_SOL);
@@ -864,170 +813,103 @@ async function buildSolDepositTx({
   const total = BigInt(totalLamports);
   const feeAmt = (total * FEE_BPS) / 10000n;
   const sendAmt = total - feeAmt;
+  if (sendAmt <= 0n) throw new Error('Amount too small after fee');
 
-  if (sendAmt <= 0n) throw new Error('Deposit amount too small after fee');
+  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
 
-  const { blockhash, lastValidBlockHeight } =
-    await connection.getLatestBlockhash('confirmed');
-
-  const tx = new Transaction({
-    recentBlockhash: blockhash,
-    feePayer: owner,
-  });
-
-  // Add priority fee (cheap, helps inclusion)
+  const tx = new Transaction({ recentBlockhash: blockhash, feePayer: owner });
   tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }));
-
-  // 95% -> Polymarket bridge
-  tx.add(
-    SystemProgram.transfer({
-      fromPubkey: owner,
-      toPubkey: bridge,
-      lamports: Number(sendAmt),
-    })
-  );
-
-  // 5% -> fee wallet
-  tx.add(
-    SystemProgram.transfer({
-      fromPubkey: owner,
-      toPubkey: fee,
-      lamports: Number(feeAmt),
-    })
-  );
+  tx.add(SystemProgram.transfer({ fromPubkey: owner, toPubkey: bridge, lamports: Number(sendAmt) }));
+  tx.add(SystemProgram.transfer({ fromPubkey: owner, toPubkey: fee, lamports: Number(feeAmt) }));
 
   dbg('deposit-sol', 'tx built', {
-    total: total.toString(),
-    sendAmt: sendAmt.toString(),
-    feeAmt: feeAmt.toString(),
-    bridgeSvm,
-    blockhash,
-    lastValidBlockHeight,
+    total: total.toString(), sendAmt: sendAmt.toString(), feeAmt: feeAmt.toString(),
+    bridgeSvm, blockhash,
   });
-
   return { tx, sendAmt, feeAmt, lastValidBlockHeight };
 }
 
 /* ============================================================
-   SIM + SIGN + SUBMIT (the locked-in rule)
-   ============================================================
-   Same tx object end to end:
-     1. We call simulateTransaction(tx)
-     2. If sim fails, throw -- never ask user to sign a doomed tx
-     3. User signs THAT EXACT tx
-     4. We submit THAT EXACT signed tx
-*/
+   Simulate + sign + submit (same tx end-to-end)
+   ============================================================ */
 
-async function simulateSignSubmit({
-  tx,
-  signTransaction,
-  connection,
-  onStatus,
-  label = 'transaction',
-}) {
+async function simulateSignSubmit({ tx, solProvider, connection, onStatus, label = 'tx' }) {
   onStatus?.(`Simulating ${label}…`);
-
-  // 1. SIMULATE
   let simResult;
   try {
     simResult = await connection.simulateTransaction(tx, undefined, false);
   } catch (e) {
-    dbgErr('sim', `${label} simulate threw`, e);
     throw new Error(`Could not simulate ${label}: ${e?.message || 'unknown'}`);
   }
-
   dbg('sim', `${label} result`, {
     err: simResult?.value?.err,
     logs: simResult?.value?.logs?.slice(0, 12),
     unitsConsumed: simResult?.value?.unitsConsumed,
   });
-
   if (simResult?.value?.err) {
     const errStr = JSON.stringify(simResult.value.err);
     const logs = (simResult.value.logs || []).slice(-3).join(' | ');
     throw new Error(`Simulation failed: ${errStr}${logs ? ' — ' + logs : ''}`);
   }
 
-  // 2. SIGN (same tx object)
-  onStatus?.(`Confirm ${label} in your wallet…`);
-  const signed = await signTransaction(tx);
+  onStatus?.(`Confirm ${label} in Phantom…`);
+  // Phantom's signTransaction signs the EXACT tx object we just simulated
+  const signed = await solProvider.signTransaction(tx);
 
-  // 3. SUBMIT (same signed tx)
   onStatus?.(`Submitting ${label}…`);
-  const raw = signed.serialize();
-  const sig = await connection.sendRawTransaction(raw, {
+  const sig = await connection.sendRawTransaction(signed.serialize(), {
     skipPreflight: false,
     preflightCommitment: 'confirmed',
     maxRetries: 3,
   });
-
   dbg('submit', `${label} sent`, { sig });
-  return { sig, signed };
+  return { sig };
 }
 
 /* ============================================================
-   Markets fetching + normalization
+   Markets fetching
    ============================================================ */
 
 async function fetchMarketsByTagSlug(slug) {
-  const url =
-    `${GAMMA_URL}/events?tag_slug=${encodeURIComponent(slug)}` +
-    '&closed=false&order=volume24hr&ascending=false&limit=60';
+  const url = `${GAMMA_URL}/events?tag_slug=${encodeURIComponent(slug)}&closed=false&order=volume24hr&ascending=false&limit=60`;
   const r = await fetch(url, { headers: { Accept: 'application/json' } });
   if (!r.ok) return [];
   return await r.json();
 }
-
 async function fetchMarketsByTagId(tagId) {
-  const url =
-    `${GAMMA_URL}/events?tag_id=${tagId}` +
-    '&related_tags=true&closed=false&order=volume24hr&ascending=false&limit=80';
+  const url = `${GAMMA_URL}/events?tag_id=${tagId}&related_tags=true&closed=false&order=volume24hr&ascending=false&limit=80`;
   const r = await fetch(url, { headers: { Accept: 'application/json' } });
   if (!r.ok) throw new Error(`Gamma ${r.status}`);
   return await r.json();
 }
-
 function normalizeEvent(ev) {
   const ms = Array.isArray(ev.markets) ? ev.markets : [];
   if (ms.length === 0) return null;
   const m = ms[0];
   let outcomePrices = [];
   try {
-    outcomePrices = typeof m.outcomePrices === 'string'
-      ? JSON.parse(m.outcomePrices)
-      : m.outcomePrices || [];
+    outcomePrices = typeof m.outcomePrices === 'string' ? JSON.parse(m.outcomePrices) : m.outcomePrices || [];
   } catch {}
   let clobTokenIds = [];
   try {
-    clobTokenIds = typeof m.clobTokenIds === 'string'
-      ? JSON.parse(m.clobTokenIds)
-      : m.clobTokenIds || [];
+    clobTokenIds = typeof m.clobTokenIds === 'string' ? JSON.parse(m.clobTokenIds) : m.clobTokenIds || [];
   } catch {}
   const yesPrice = Number(outcomePrices[0] || m.lastTradePrice || 0);
   const noPrice = Number(outcomePrices[1] || 1 - yesPrice);
   return {
-    id: ev.id,
-    slug: ev.slug,
-    title: ev.title || m.question || 'Untitled',
+    id: ev.id, slug: ev.slug, title: ev.title || m.question || 'Untitled',
     childQuestion: ms.length > 1 ? m.question || m.groupItemTitle || null : null,
     image: ev.image || ev.icon || m.image || null,
     volume24h: Number(ev.volume24hr || m.volume24hr || 0),
     liquidity: Number(ev.liquidity || m.liquidity || 0),
     endDate: ev.endDate || m.endDate || null,
-    yesPrice,
-    noPrice,
-    yesPct: Math.round(yesPrice * 100),
-    noPct: Math.round(noPrice * 100),
+    yesPrice, noPrice,
+    yesPct: Math.round(yesPrice * 100), noPct: Math.round(noPrice * 100),
     marketCount: ms.length,
-    conditionId: m.conditionId,
-    clobTokenIds,
-    negRisk: !!(m.negRisk || ev.negRisk),
-    tickSize: String(
-      m.orderPriceMinTickSize || m.minimum_tick_size || m.tickSize || '0.01'
-    ),
+    conditionId: m.conditionId, clobTokenIds, negRisk: !!(m.negRisk || ev.negRisk),
+    tickSize: String(m.orderPriceMinTickSize || m.minimum_tick_size || m.tickSize || '0.01'),
   };
 }
-
 function isTradableMarket(m, h) {
   if (!m || !m.clobTokenIds || m.clobTokenIds.length < 2 || !m.conditionId) return false;
   const y = Number(m.yesPrice) || 0;
@@ -1045,57 +927,43 @@ function isTradableMarket(m, h) {
    CLOB order placement
    ============================================================ */
 
-async function placeMarketOrder({
-  getEvmProvider, evmAddress, safeAddress, creds,
-  market, side, amountUsd, isBuy,
-}) {
+async function placeMarketOrder({ evmProvider, evmAddress, safeAddress, creds, market, side, amountUsd, isBuy }) {
   const tokenId = side === 'yes' ? market.clobTokenIds[0] : market.clobTokenIds[1];
   if (!tokenId) throw new Error('Token ID missing');
 
   const { clob } = await loadSdks();
   const Side = clob.Side || { BUY: 'BUY', SELL: 'SELL' };
   const OrderType = clob.OrderType || { FOK: 'FOK', FAK: 'FAK', GTC: 'GTC' };
-  const client = await buildClobClient(getEvmProvider, evmAddress, safeAddress, creds);
+  const client = await buildClobClient(evmProvider, evmAddress, safeAddress, creds);
   const price = side === 'yes' ? Number(market.yesPrice) : Number(market.noPrice);
 
-  if (!Number.isFinite(price) || price <= 0 || price >= 1) {
-    throw new Error('Invalid market price');
-  }
+  if (!Number.isFinite(price) || price <= 0 || price >= 1) throw new Error('Invalid price');
 
   const orderArgs = {
-    tokenID: String(tokenId),
-    price,
+    tokenID: String(tokenId), price,
     size: isBuy ? amountUsd / price : amountUsd,
     side: isBuy ? Side.BUY : Side.SELL,
-    feeRateBps: 0,
-    expiration: 0,
+    feeRateBps: 0, expiration: 0,
     taker: '0x0000000000000000000000000000000000000000',
     builderCode: BUILDER_CODE,
   };
-
-  const opts = {
-    tickSize: market.tickSize || '0.01',
-    negRisk: !!market.negRisk,
-  };
+  const opts = { tickSize: market.tickSize || '0.01', negRisk: !!market.negRisk };
 
   dbg('order', 'submitting', { side, isBuy, amount: amountUsd, price, safeAddress });
 
   const type = OrderType.FAK || OrderType.FOK || OrderType.GTC;
   const resp = await client.createAndPostOrder(orderArgs, opts, type);
-
   if (resp?.error || resp?.errorMsg) throw new Error(resp.error || resp.errorMsg);
   if (resp?.success === false) throw new Error(resp?.errorMsg || 'Order rejected');
-
   dbg('order', 'placed', resp);
   return resp;
 }
 
 async function fetchPositions(safe, conditionId, clobTokenIds) {
   try {
-    const r = await fetch(
-      `${DATA_API_URL}/positions?user=${safe.toLowerCase()}&market=${conditionId}`,
-      { headers: { Accept: 'application/json' } }
-    );
+    const r = await fetch(`${DATA_API_URL}/positions?user=${safe.toLowerCase()}&market=${conditionId}`, {
+      headers: { Accept: 'application/json' },
+    });
     if (!r.ok) return null;
     const data = await r.json();
     if (!Array.isArray(data)) return null;
@@ -1109,14 +977,10 @@ async function fetchPositions(safe, conditionId, clobTokenIds) {
     const sz = (p) => p ? Number(p.size || p.shares || p.balance || 0) : 0;
     const av = (p) => p ? Number(p.avgPrice || p.average_price || p.avg_price || 0) : 0;
     return {
-      sharesYes: sz(yPos),
-      sharesNo: sz(nPos),
-      avgPriceYes: av(yPos),
-      avgPriceNo: av(nPos),
+      sharesYes: sz(yPos), sharesNo: sz(nPos),
+      avgPriceYes: av(yPos), avgPriceNo: av(nPos),
     };
-  } catch {
-    return null;
-  }
+  } catch { return null; }
 }
 
 async function fetchBestBid(tokenId) {
@@ -1126,38 +990,22 @@ async function fetchBestBid(tokenId) {
     const d = await r.json();
     const bids = d?.bids || [];
     let best = 0;
-    for (const b of bids) {
-      const p = Number(b.price || b.p || 0);
-      if (p > best) best = p;
-    }
+    for (const b of bids) { const p = Number(b.price || b.p || 0); if (p > best) best = p; }
     return best;
-  } catch {
-    return 0;
-  }
+  } catch { return 0; }
 }
-
-/* ============================================================
-   Withdraw (Collect Winnings): Safe USDC.e -> user's Solana addr
-   ============================================================ */
 
 async function requestWithdrawToSolana({ safe, solanaAddress, amountAtomic, onStatus }) {
   onStatus?.('Initiating withdrawal…');
   const body = {
-    from: safe,
-    to: solanaAddress,
-    chain: 'solana',
-    asset: 'USDC',
+    from: safe, to: solanaAddress, chain: 'solana', asset: 'USDC',
     amount: amountAtomic.toString(),
   };
-  const r = await jfetch(
-    BRIDGE_WITHDRAW,
-    {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    },
-    20000
-  );
+  const r = await jfetch(BRIDGE_WITHDRAW, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, 20000);
   const j = await r.json();
   if (j?.error) throw new Error(j.error);
   dbg('withdraw', 'submitted', j);
@@ -1165,7 +1013,7 @@ async function requestWithdrawToSolana({ safe, solanaAddress, amountAtomic, onSt
 }
 
 /* ============================================================
-   UI Components
+   UI bits
    ============================================================ */
 
 function MarketSkeleton() {
@@ -1192,7 +1040,6 @@ function MarketCard({ market, onTrade }) {
   const np = Number(market.noPrice) || 0;
   const upside = (p) => (p < 0.02 || p > 0.98) ? 0 : Math.min(9999, Math.round((1 / p - 1) * 100));
   const clamp2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis' };
-
   return (
     <div style={{ padding: 14, borderRadius: 16, background: `linear-gradient(145deg, ${C.card}, ${C.cardHi})`, border: `1px solid ${C.border}`, marginBottom: 10, boxShadow: C.shadow }}>
       <div style={{ display: 'flex', gap: 10, marginBottom: 12 }}>
@@ -1228,14 +1075,10 @@ function MarketCard({ market, onTrade }) {
 function DebugPanel({ open, onToggle }) {
   const log = useDbgLog();
   const ref = useRef(null);
-  useEffect(() => {
-    if (open && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
-  }, [log.length, open]);
+  useEffect(() => { if (open && ref.current) ref.current.scrollTop = ref.current.scrollHeight; }, [log.length, open]);
   const copy = () => {
     try {
-      const t = log.map((e) =>
-        `${new Date(e.ts).toISOString().slice(11, 23)} [${e.scope}] ${e.msg}${e.data ? ' ' + JSON.stringify(e.data) : ''}`
-      ).join('\n');
+      const t = log.map((e) => `${new Date(e.ts).toISOString().slice(11, 23)} [${e.scope}] ${e.msg}${e.data ? ' ' + JSON.stringify(e.data) : ''}`).join('\n');
       navigator.clipboard?.writeText(t);
     } catch {}
   };
@@ -1276,31 +1119,142 @@ function StatusLine({ msg }) {
     </div>
   );
 }
-
 function ErrorLine({ msg }) {
   return <div style={{ marginBottom: 8, padding: 8, background: 'rgba(255,95,122,.08)', border: '1px solid rgba(255,95,122,.25)', borderRadius: 10, fontSize: 11, color: C.no }}>{msg}</div>;
 }
 
-function PrimaryButton({ onClick, disabled, label }) {
+/* ============================================================
+   Connect bar (the new core piece)
+   ============================================================ */
+
+function ConnectBar({
+  evmProviders, evmAddress, evmName, onConnectEvm, onDisconnectEvm,
+  solAddress, solName, onConnectSol, onDisconnectSol,
+  setupStatus, setupError, onRetrySetup,
+  safeAddress, tradingBalance, solBalance,
+}) {
+  const [showEvmPicker, setShowEvmPicker] = useState(false);
+
+  const evmConnected = !!evmAddress;
+  const solConnected = !!solAddress;
+
   return (
-    <button onClick={disabled ? undefined : onClick} disabled={disabled} style={{ width: '100%', padding: 12, borderRadius: 11, background: `linear-gradient(135deg, ${C.hl}, ${C.hl2})`, color: C.bg, fontWeight: 800, fontSize: 14, border: 'none', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? .55 : 1, ...T.body }}>
-      {label}
-    </button>
+    <div style={{ marginTop: 8, marginBottom: 16, padding: '20px 18px', borderRadius: 22, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: `1px solid ${C.border}`, boxShadow: C.shadowLg, position: 'relative', overflow: 'hidden' }}>
+      <div style={{ position: 'absolute', right: -40, top: -50, width: 200, height: 200, borderRadius: '50%', background: 'radial-gradient(circle,rgba(151,252,228,.14),transparent 65%)', pointerEvents: 'none' }} />
+      <div style={{ position: 'relative' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 14 }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: 26, fontWeight: 900, color: C.ink, letterSpacing: -1, ...T.display }}>Predict</h1>
+            <div style={{ fontSize: 11, color: C.muted, ...T.mono, marginTop: 4 }}>Trade Polymarket with SOL · 5% fee</div>
+          </div>
+        </div>
+
+        {/* EVM */}
+        <div style={{ marginBottom: 10, padding: '12px 14px', borderRadius: 12, background: 'rgba(151,252,228,.05)', border: `1px solid ${C.border}` }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 9, color: C.muted, fontWeight: 800, letterSpacing: 1.2, ...T.mono, marginBottom: 2 }}>POLYGON WALLET (TRADES)</div>
+              {evmConnected ? (
+                <>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, ...T.mono }}>{shortAddr(evmAddress)}</div>
+                  <div style={{ fontSize: 10, color: C.muted, marginTop: 2, ...T.mono }}>
+                    {evmName} · Safe: {safeAddress ? shortAddr(safeAddress) : '—'} · {fmtUsd(Number(tradingBalance) / 1e6, 2)} USDC
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 12, color: C.muted, ...T.body }}>Not connected</div>
+              )}
+            </div>
+            {evmConnected ? (
+              <button onClick={onDisconnectEvm} style={{ padding: '7px 12px', borderRadius: 9, background: 'rgba(255,95,122,.08)', border: `1px solid ${C.no}33`, color: C.no, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono, whiteSpace: 'nowrap' }}>Disconnect</button>
+            ) : (
+              <button
+                onClick={() => {
+                  if (evmProviders.length === 1) onConnectEvm(evmProviders[0]);
+                  else setShowEvmPicker(true);
+                }}
+                style={{ padding: '9px 14px', borderRadius: 10, background: `linear-gradient(135deg, ${C.hl}, ${C.hl2})`, color: C.bg, fontWeight: 800, fontSize: 12, border: 'none', cursor: 'pointer', ...T.body, whiteSpace: 'nowrap' }}
+              >
+                Connect EVM
+              </button>
+            )}
+          </div>
+          {setupStatus === 'working' && <div style={{ fontSize: 10, color: C.amber, marginTop: 6, ...T.mono }}>Setting up trading account…</div>}
+          {setupStatus === 'ready' && <div style={{ fontSize: 10, color: C.yes, marginTop: 6, ...T.mono }}>✓ Trading account ready</div>}
+          {setupStatus === 'error' && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ fontSize: 10, color: C.no, ...T.mono, marginBottom: 6 }}>Setup failed: {setupError}</div>
+              <button onClick={onRetrySetup} style={{ padding: '4px 10px', borderRadius: 6, background: C.no + '22', border: `1px solid ${C.no}55`, color: C.no, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>↻ Retry</button>
+            </div>
+          )}
+        </div>
+
+        {/* SOL */}
+        <div style={{ padding: '12px 14px', borderRadius: 12, background: 'rgba(168,127,255,.05)', border: '1px solid rgba(168,127,255,.20)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10 }}>
+            <div>
+              <div style={{ fontSize: 9, color: C.muted, fontWeight: 800, letterSpacing: 1.2, ...T.mono, marginBottom: 2 }}>SOLANA WALLET (FUNDS)</div>
+              {solConnected ? (
+                <>
+                  <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, ...T.mono }}>{shortAddr(solAddress)}</div>
+                  <div style={{ fontSize: 10, color: C.muted, marginTop: 2, ...T.mono }}>{solName} · {(Number(solBalance) / 1e9).toFixed(4)} SOL</div>
+                </>
+              ) : (
+                <div style={{ fontSize: 12, color: C.muted, ...T.body }}>Not connected</div>
+              )}
+            </div>
+            {solConnected ? (
+              <button onClick={onDisconnectSol} style={{ padding: '7px 12px', borderRadius: 9, background: 'rgba(255,95,122,.08)', border: `1px solid ${C.no}33`, color: C.no, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono, whiteSpace: 'nowrap' }}>Disconnect</button>
+            ) : (
+              <button onClick={onConnectSol} style={{ padding: '9px 14px', borderRadius: 10, background: `linear-gradient(135deg, ${C.violet}, ${C.hl})`, color: C.bg, fontWeight: 800, fontSize: 12, border: 'none', cursor: 'pointer', ...T.body, whiteSpace: 'nowrap' }}>Connect Phantom</button>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* EVM picker modal */}
+      {showEvmPicker && (
+        <div
+          onClick={() => setShowEvmPicker(false)}
+          style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(3,6,15,.78)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{ width: '94vw', maxWidth: 380, background: 'linear-gradient(180deg,#0c1428,#080d1a)', border: `1px solid ${C.borderHi}`, borderRadius: 18, padding: 18 }}
+          >
+            <div style={{ fontSize: 16, fontWeight: 800, color: C.ink, marginBottom: 14, ...T.display }}>Choose EVM wallet</div>
+            {evmProviders.length === 0 ? (
+              <div style={{ padding: 12, borderRadius: 10, background: 'rgba(255,95,122,.08)', border: `1px solid ${C.no}33`, color: C.no, fontSize: 12, ...T.body }}>No EVM wallets detected. Install MetaMask, Rabby, or Phantom.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                {evmProviders.map((p) => (
+                  <button
+                    key={p.info.rdns || p.info.uuid}
+                    onClick={() => { setShowEvmPicker(false); onConnectEvm(p); }}
+                    style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '11px 12px', borderRadius: 11, background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, color: C.ink, cursor: 'pointer', textAlign: 'left' }}
+                  >
+                    {p.info.icon && <img src={p.info.icon} alt="" style={{ width: 24, height: 24, borderRadius: 5 }} />}
+                    <span style={{ fontWeight: 700, fontSize: 13, ...T.body }}>{p.info.name}</span>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
 /* ============================================================
-   Funding sheet: Receive (show Privy Solana addr) +
-                  Collect Winnings + Address display
+   Funding sheet (Collect Winnings only — deposit is "send SOL to your wallet")
    ============================================================ */
 
 function FundingSheet({
   open, onClose,
   evmAddress, safeAddress, tradingBalance,
-  fundingPubkey, solBalance,
+  solAddress, solBalance,
   onCollectWinnings, collectStatus, collectStatusMsg, collectError,
-  onReset,
-  setupStatus, setupError, onRetrySetup,
 }) {
   const [tab, setTab] = useState('receive');
   const [withdrawSolAddr, setWithdrawSolAddr] = useState('');
@@ -1311,70 +1265,50 @@ function FundingSheet({
   useBodyLock(open);
 
   useEffect(() => {
-    if (open && fundingPubkey && !withdrawSolAddr) setWithdrawSolAddr(fundingPubkey);
-  }, [open, fundingPubkey, withdrawSolAddr]);
+    if (open && solAddress && !withdrawSolAddr) setWithdrawSolAddr(solAddress);
+  }, [open, solAddress, withdrawSolAddr]);
 
   if (!open) return null;
 
   const tradeUsd = Number(tradingBalance) / 1e6;
-  const solUi = Number(solBalance) / 1e9;
   const usd = Number(withdrawUsd) || 0;
+  const busy = collectStatus === 'working';
 
   const handleCopy = async (text) => {
     const ok = await copyToClipboard(text);
     if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1500); }
   };
 
-  const handleWithdraw = async () => {
-    if (!safeAddress) return;
-    if (!withdrawSolAddr || withdrawSolAddr.length < 32) return;
+  const handleWithdraw = () => {
+    if (!safeAddress || !withdrawSolAddr || withdrawSolAddr.length < 32) return;
     if (usd < 1 || usd > tradeUsd) return;
-    const amountAtomic = BigInt(Math.floor(usd * 1e6));
-    onCollectWinnings?.({ solanaAddress: withdrawSolAddr, amountAtomic });
+    onCollectWinnings?.({ solanaAddress: withdrawSolAddr, amountAtomic: BigInt(Math.floor(usd * 1e6)) });
   };
-
-  const busy = collectStatus === 'working' || setupStatus === 'working';
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', cursor: busy ? 'wait' : 'pointer' }}>
       <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: '20px 18px calc(env(safe-area-inset-bottom) + 22px)', boxShadow: C.shadowLg, maxHeight: '92dvh', overflowY: 'auto' }}>
         <div style={{ width: 36, height: 4, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 14px' }} />
-        <div style={{ fontSize: 18, fontWeight: 800, color: C.ink, marginBottom: 4, ...T.display }}>Account</div>
-        <div style={{ fontSize: 12, color: C.muted, marginBottom: 4, ...T.body }}>
-          Trading wallet: <span style={{ color: C.hl, fontWeight: 700 }}>{solUi.toFixed(4)} SOL</span>
-        </div>
-        <div style={{ fontSize: 12, color: C.muted, marginBottom: 14, ...T.body }}>
-          In Polymarket: <span style={{ color: C.hl, fontWeight: 700 }}>{fmtUsd(tradeUsd, 2)} USDC</span>
-        </div>
+        <div style={{ fontSize: 18, fontWeight: 800, color: C.ink, marginBottom: 14, ...T.display }}>Account</div>
 
         <DebugPanel open={dbgOpen} onToggle={() => setDbgOpen((o) => !o)} />
-
-        {setupStatus === 'error' && setupError && (
-          <div style={{ marginBottom: 12, padding: 10, borderRadius: 10, background: 'rgba(255,95,122,.07)', border: `1px solid ${C.no}33` }}>
-            <div style={{ fontSize: 11, color: C.no, fontWeight: 700, marginBottom: 4 }}>Trading account setup failed</div>
-            <div style={{ fontSize: 10, color: C.muted, marginBottom: 8, ...T.mono }}>{setupError}</div>
-            <button onClick={onRetrySetup} style={{ padding: '6px 12px', borderRadius: 8, background: C.no + '22', border: `1px solid ${C.no}55`, color: C.no, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>↻ Retry setup</button>
-          </div>
-        )}
 
         <div style={{ display: 'flex', gap: 4, marginBottom: 14, padding: 3, background: 'rgba(255,255,255,.03)', borderRadius: 10 }}>
           {[
             { id: 'receive', label: 'Receive SOL' },
             { id: 'collect', label: 'Collect Winnings' },
-            { id: 'addr', label: 'Safe address' },
+            { id: 'addr', label: 'Safe' },
           ].map((t) => (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{ flex: 1, padding: '8px 4px', borderRadius: 8, background: tab === t.id ? C.hlDim : 'transparent', border: `1px solid ${tab === t.id ? C.borderHi : 'transparent'}`, color: tab === t.id ? C.hl : C.muted, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>
-              {t.label}
-            </button>
+            <button key={t.id} onClick={() => setTab(t.id)} style={{ flex: 1, padding: '8px 4px', borderRadius: 8, background: tab === t.id ? C.hlDim : 'transparent', border: `1px solid ${tab === t.id ? C.borderHi : 'transparent'}`, color: tab === t.id ? C.hl : C.muted, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>{t.label}</button>
           ))}
         </div>
 
         {tab === 'receive' && (
           <div style={{ padding: 14, borderRadius: 14, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 12 }}>
-            <div style={{ fontSize: 11, color: C.hl, fontWeight: 800, marginBottom: 8, ...T.display }}>YOUR TRADING WALLET (SOLANA)</div>
-            <div style={{ padding: '10px 12px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, ...T.mono, fontSize: 11, color: C.ink, wordBreak: 'break-all', marginBottom: 10 }}>{fundingPubkey || 'Loading…'}</div>
-            <button onClick={() => fundingPubkey && handleCopy(fundingPubkey)} disabled={!fundingPubkey} style={{ width: '100%', padding: 10, borderRadius: 10, background: copied ? C.yesDim : C.hlDim, border: `1px solid ${copied ? C.yes + '55' : C.borderHi}`, color: copied ? C.yes : C.hl, fontSize: 12, fontWeight: 700, cursor: fundingPubkey ? 'pointer' : 'not-allowed', ...T.mono }}>{copied ? '✓ Copied' : 'Copy address'}</button>
-            <div style={{ fontSize: 10, color: C.muted2, marginTop: 8, ...T.mono }}>Send SOL on the Solana network to this address. When you click Buy on a market, 5% fee is taken and the rest is sent to Polymarket.</div>
+            <div style={{ fontSize: 11, color: C.hl, fontWeight: 800, marginBottom: 8, ...T.display }}>YOUR SOLANA ADDRESS</div>
+            <div style={{ padding: '10px 12px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, ...T.mono, fontSize: 11, color: C.ink, wordBreak: 'break-all', marginBottom: 10 }}>{solAddress || 'Connect Solana wallet'}</div>
+            <button onClick={() => solAddress && handleCopy(solAddress)} disabled={!solAddress} style={{ width: '100%', padding: 10, borderRadius: 10, background: copied ? C.yesDim : C.hlDim, border: `1px solid ${copied ? C.yes + '55' : C.borderHi}`, color: copied ? C.yes : C.hl, fontSize: 12, fontWeight: 700, cursor: solAddress ? 'pointer' : 'not-allowed', ...T.mono }}>{copied ? '✓ Copied' : 'Copy address'}</button>
+            <div style={{ fontSize: 10, color: C.muted2, marginTop: 8, ...T.mono }}>Send SOL to this address. When you click Buy on a market, 5% fee is taken and the rest goes to Polymarket.</div>
           </div>
         )}
 
@@ -1396,38 +1330,35 @@ function FundingSheet({
             <button onClick={() => setWithdrawUsd(String(Math.floor(tradeUsd * 100) / 100))} disabled={busy || tradeUsd <= 0} style={{ width: '100%', padding: 7, borderRadius: 8, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 11, fontWeight: 700, cursor: 'pointer', marginBottom: 10, ...T.mono }}>Max</button>
             {collectStatusMsg && <StatusLine msg={collectStatusMsg} />}
             {collectError && <ErrorLine msg={collectError} />}
-            {collectStatus === 'done' && <div style={{ marginBottom: 8, padding: 8, background: 'rgba(0,212,163,.10)', border: `1px solid ${C.yes}55`, borderRadius: 10, fontSize: 11, color: C.yes, fontWeight: 700 }}>✓ Withdrawal submitted — funds arrive in 2-5 min</div>}
-            <PrimaryButton onClick={handleWithdraw} disabled={busy || usd < 1 || usd > tradeUsd || !withdrawSolAddr} label={busy ? 'Working…' : `Withdraw ${fmtUsd(usd, 2)}`} />
+            {collectStatus === 'done' && <div style={{ marginBottom: 8, padding: 8, background: 'rgba(0,212,163,.10)', border: `1px solid ${C.yes}55`, borderRadius: 10, fontSize: 11, color: C.yes, fontWeight: 700 }}>✓ Withdrawal submitted</div>}
+            <button onClick={handleWithdraw} disabled={busy || usd < 1 || usd > tradeUsd || !withdrawSolAddr} style={{ width: '100%', padding: 12, borderRadius: 11, background: `linear-gradient(135deg, ${C.hl}, ${C.hl2})`, color: C.bg, fontWeight: 800, fontSize: 14, border: 'none', cursor: (busy || usd < 1 || usd > tradeUsd || !withdrawSolAddr) ? 'not-allowed' : 'pointer', opacity: (busy || usd < 1 || usd > tradeUsd || !withdrawSolAddr) ? .55 : 1, ...T.body }}>{busy ? 'Working…' : `Withdraw ${fmtUsd(usd, 2)}`}</button>
           </div>
         )}
 
         {tab === 'addr' && (
           <div style={{ padding: 14, borderRadius: 14, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 12 }}>
-            <div style={{ fontSize: 11, color: C.hl, fontWeight: 800, marginBottom: 8, ...T.display }}>YOUR POLYMARKET SAFE (POLYGON)</div>
+            <div style={{ fontSize: 11, color: C.hl, fontWeight: 800, marginBottom: 8, ...T.display }}>POLYMARKET SAFE (POLYGON)</div>
             <div style={{ padding: '10px 12px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, ...T.mono, fontSize: 11, color: C.ink, wordBreak: 'break-all', marginBottom: 10 }}>{safeAddress || 'Setting up…'}</div>
             <button onClick={() => safeAddress && handleCopy(safeAddress)} disabled={!safeAddress} style={{ width: '100%', padding: 10, borderRadius: 10, background: copied ? C.yesDim : C.hlDim, border: `1px solid ${copied ? C.yes + '55' : C.borderHi}`, color: copied ? C.yes : C.hl, fontSize: 12, fontWeight: 700, cursor: safeAddress ? 'pointer' : 'not-allowed', ...T.mono }}>{copied ? '✓ Copied' : 'Copy address'}</button>
           </div>
         )}
-
-        <button onClick={onReset} style={{ width: '100%', padding: 10, borderRadius: 10, background: 'rgba(255,95,122,.05)', border: `1px solid ${C.no}33`, color: C.no, fontSize: 11, fontWeight: 600, cursor: 'pointer', marginTop: 6, ...T.mono }}>↻ Reset trading account (if stuck)</button>
       </div>
     </div>
   );
 }
 
 /* ============================================================
-   Order drawer (Buy/Sell)
+   Order drawer (Buy / Sell)
    ============================================================ */
 
 function OrderDrawer({
   market, side, onClose,
-  evmAddress, getEvmProvider, safeAddress, creds,
-  solBalance, fundingPubkey,
-  signSolanaTx, solConnection,
+  evmProvider, evmAddress, safeAddress, creds,
+  solProvider, solAddress, solBalance,
   refreshAll,
 }) {
   const [amountSol, setAmountSol] = useState('0.05');
-  const [status, setStatus] = useState('idle'); // idle | working | success | error
+  const [status, setStatus] = useState('idle');
   const [statusMsg, setStatusMsg] = useState('');
   const [error, setError] = useState('');
   const [pos, setPos] = useState(null);
@@ -1464,12 +1395,9 @@ function OrderDrawer({
   const solLamports = BigInt(Math.floor(sol * 1e9));
   const sideColor = side === 'yes' ? C.yes : C.no;
   const sideDim = side === 'yes' ? C.yesDim : C.noDim;
-
-  const solUi = Number(solBalance) / 1e9;
   const solAvailableLamports = Math.max(0, Number(solBalance) - SOL_NETWORK_RESERVE_LAMPORTS);
   const solAvailableUi = solAvailableLamports / 1e9;
 
-  // Held position (for sell)
   const held = side === 'yes' ? Number(pos?.sharesYes || 0) : Number(pos?.sharesNo || 0);
   const avgPx = side === 'yes' ? Number(pos?.avgPriceYes || 0) : Number(pos?.avgPriceNo || 0);
   const bid = side === 'yes' ? bids.yes : bids.no;
@@ -1481,152 +1409,84 @@ function OrderDrawer({
 
   const busy = status === 'working' || sellStatus === 'selling';
 
-  // ---------- BUY HANDLER ----------
-  // User picks SOL amount. We send that amount as ONE tx:
-  //   95% -> Polymarket bridge (converts to USDC.e in Safe)
-  //   5%  -> our fee wallet
-  // After bridge confirms USDC.e in Safe, we read the actual USDC.e
-  // balance delta and size the CLOB order at exactly that amount.
-  // This avoids needing a SOL/USD price oracle on the client.
-
   const handleBuy = async () => {
     if (busy) return;
-    if (!fundingPubkey || !safeAddress || !creds) {
-      setError('Wallet not ready');
-      return;
-    }
-    if (sol <= 0) {
-      setError('Enter a SOL amount');
-      return;
-    }
-    if (Number(solLamports) > solAvailableLamports) {
-      setError(`Not enough SOL. Available: ${solAvailableUi.toFixed(4)} SOL`);
-      return;
-    }
-    if (Number(solLamports) < MIN_SOL_LAMPORTS_PER_TRADE) {
-      setError(`Min ${(MIN_SOL_LAMPORTS_PER_TRADE / 1e9).toFixed(3)} SOL`);
-      return;
-    }
+    if (!solProvider || !solAddress) { setError('Connect Phantom first'); return; }
+    if (!evmAddress || !safeAddress || !creds) { setError('Connect EVM wallet first'); return; }
+    if (sol <= 0) { setError('Enter SOL amount'); return; }
+    if (Number(solLamports) > solAvailableLamports) { setError(`Max ${solAvailableUi.toFixed(4)} SOL`); return; }
+    if (Number(solLamports) < MIN_SOL_LAMPORTS_PER_TRADE) { setError(`Min ${(MIN_SOL_LAMPORTS_PER_TRADE / 1e9).toFixed(3)} SOL`); return; }
 
-    setStatus('working');
-    setError('');
-    setStatusMsg('');
-
+    setStatus('working'); setError(''); setStatusMsg('');
     try {
-      // Get the bridge SVM address
       setStatusMsg('Getting bridge address…');
       const addrs = await getBridgeAddressesCached(evmAddress, safeAddress);
       if (!addrs.svm) throw new Error('No SVM bridge address');
 
-      // Snapshot Safe USDC.e balance BEFORE deposit so we know
-      // exactly how much arrived and can size the CLOB order.
       const balanceBefore = await fetchSafeBalance(safeAddress);
-      dbg('buy', 'starting', {
-        solLamports: solLamports.toString(),
-        safeBalanceBefore: balanceBefore.toString(),
-        side,
+      dbg('buy', 'starting', { solLamports: solLamports.toString(), safeBalanceBefore: balanceBefore.toString() });
+
+      // Build Solana connection from server proxy
+      const origin = (typeof window !== 'undefined' && window.location?.origin) || '';
+      const connection = new Connection(origin + SOL_RPC, 'confirmed');
+
+      const { tx } = await buildSolDepositTx({
+        ownerB58: solAddress, bridgeSvm: addrs.svm,
+        totalLamports: solLamports, connection,
       });
 
-      // Build the deposit tx (95% bridge / 5% fee)
-      const { tx, sendAmt, feeAmt } = await buildSolDepositTx({
-        ownerB58: fundingPubkey,
-        bridgeSvm: addrs.svm,
-        totalLamports: solLamports,
-        connection: solConnection,
-      });
-
-      // SIM → SIGN → SUBMIT (same tx object)
       const { sig } = await simulateSignSubmit({
-        tx,
-        signTransaction: signSolanaTx,
-        connection: solConnection,
-        onStatus: setStatusMsg,
-        label: 'SOL deposit',
+        tx, solProvider, connection, onStatus: setStatusMsg, label: 'SOL deposit',
       });
 
-      // Wait for bridge to credit USDC.e to Safe
       setStatusMsg('Bridging SOL → USDC.e (~30-60s)…');
-      const bridged = await waitForBridge(addrs.svm, sig, 120_000);
-      if (!bridged) {
-        dbg('buy', 'bridge timeout, polling balance directly', { sig });
-      }
+      await waitForBridge(addrs.svm, sig, 120_000);
 
-      // Wait until Safe balance actually increases (poll up to 90s)
       setStatusMsg('Confirming USDC.e in Safe…');
       let balanceAfter = balanceBefore;
-      const pollDeadline = Date.now() + 90_000;
-      while (Date.now() < pollDeadline) {
+      const deadline = Date.now() + 90_000;
+      while (Date.now() < deadline) {
         balanceAfter = await fetchSafeBalance(safeAddress);
         if (balanceAfter > balanceBefore) break;
         await new Promise((r) => setTimeout(r, 3000));
       }
-
       const usdcArrived = balanceAfter - balanceBefore;
-      if (usdcArrived <= 0n) {
-        throw new Error('USDC.e did not arrive in Safe in time. Check bridge status; CLOB order not placed.');
-      }
+      if (usdcArrived <= 0n) throw new Error('USDC.e did not arrive in Safe. CLOB order not placed.');
 
-      // Size the CLOB order at the actual USDC.e that arrived
       const orderUsd = Number(usdcArrived) / 1e6;
-      dbg('buy', 'usdc arrived, placing order', {
-        usdcArrived: usdcArrived.toString(),
-        orderUsd,
-      });
-
       setStatusMsg(`Placing trade for ${fmtUsd(orderUsd, 2)}…`);
       await placeMarketOrder({
-        getEvmProvider,
-        evmAddress,
-        safeAddress,
-        creds,
-        market,
-        side,
-        amountUsd: orderUsd,
-        isBuy: true,
+        evmProvider, evmAddress, safeAddress, creds, market, side,
+        amountUsd: orderUsd, isBuy: true,
       });
 
-      setStatus('success');
-      setStatusMsg('');
+      setStatus('success'); setStatusMsg('');
       refreshAll?.();
       setTimeout(() => onClose(), 2500);
     } catch (e) {
       const m = e?.message || 'Trade failed';
       setError(/reject|cancel|user/i.test(m) ? 'Cancelled' : m);
-      setStatus('error');
-      setStatusMsg('');
-      setDbgOpen(true);
+      setStatus('error'); setStatusMsg(''); setDbgOpen(true);
       setTimeout(() => setStatus('idle'), 6000);
     }
   };
 
-  // ---------- SELL HANDLER ----------
   const handleSell = async () => {
     if (!hasPos || busy) return;
-    setSellStatus('selling');
-    setError('');
-    setStatusMsg('');
+    setSellStatus('selling'); setError(''); setStatusMsg('');
     try {
       setStatusMsg('Placing sell order…');
       await placeMarketOrder({
-        getEvmProvider,
-        evmAddress,
-        safeAddress,
-        creds,
-        market,
-        side,
-        amountUsd: held,
-        isBuy: false,
+        evmProvider, evmAddress, safeAddress, creds, market, side,
+        amountUsd: held, isBuy: false,
       });
-      setSellStatus('sold');
-      setStatusMsg('');
+      setSellStatus('sold'); setStatusMsg('');
       refreshAll?.();
       setTimeout(() => onClose(), 2200);
     } catch (e) {
       const m = e?.message || 'Sell failed';
       setError(/reject|cancel|user/i.test(m) ? 'Cancelled' : m);
-      setSellStatus('error');
-      setStatusMsg('');
-      setDbgOpen(true);
+      setSellStatus('error'); setStatusMsg(''); setDbgOpen(true);
       setTimeout(() => setSellStatus('idle'), 5000);
     }
   };
@@ -1640,7 +1500,7 @@ function OrderDrawer({
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
             <div style={{ padding: '4px 10px', borderRadius: 99, background: sideDim, border: `1px solid ${sideColor}55`, color: sideColor, fontSize: 10, fontWeight: 800, letterSpacing: 1, ...T.mono }}>{side.toUpperCase()}</div>
             <div style={{ fontSize: 11, color: C.muted, ...T.mono }}>${price.toFixed(3)} · {Math.round(price * 100)}%</div>
-            <div style={{ marginLeft: 'auto', fontSize: 10, color: C.muted, ...T.mono }}>{solUi.toFixed(4)} SOL</div>
+            <div style={{ marginLeft: 'auto', fontSize: 10, color: C.muted, ...T.mono }}>{(Number(solBalance)/1e9).toFixed(4)} SOL</div>
           </div>
         </div>
 
@@ -1668,13 +1528,7 @@ function OrderDrawer({
               {['0.05', '0.1', '0.5', '1'].map((v) => (
                 <button key={v} onClick={() => setAmountSol(v)} disabled={busy} style={{ flex: 1, padding: 7, borderRadius: 8, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 11, fontWeight: 600, cursor: 'pointer', ...T.mono }}>{v}</button>
               ))}
-              <button
-                onClick={() => setAmountSol(solAvailableUi > 0 ? solAvailableUi.toFixed(4) : '0')}
-                disabled={busy || solAvailableLamports <= 0}
-                style={{ flex: 1, padding: 7, borderRadius: 8, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}
-              >
-                Max
-              </button>
+              <button onClick={() => setAmountSol(solAvailableUi > 0 ? solAvailableUi.toFixed(4) : '0')} disabled={busy || solAvailableLamports <= 0} style={{ flex: 1, padding: 7, borderRadius: 8, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>Max</button>
             </div>
           </div>
 
@@ -1682,25 +1536,21 @@ function OrderDrawer({
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}><span style={{ color: C.muted }}>SOL available</span><span style={{ color: C.ink, fontWeight: 600 }}>{solAvailableUi.toFixed(4)}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}><span style={{ color: C.muted }}>Service fee</span><span style={{ color: C.ink, fontWeight: 600 }}>{FEE_PCT}% ({(sol * FEE_PCT / 100).toFixed(4)} SOL)</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}><span style={{ color: C.muted }}>To Polymarket</span><span style={{ color: C.ink, fontWeight: 600 }}>{(sol * (100 - FEE_PCT) / 100).toFixed(4)} SOL</span></div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: C.muted }}>Order will trigger</span><span style={{ color: sideColor, fontWeight: 700 }}>Buy {side.toUpperCase()} at ${price.toFixed(3)}</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: C.muted }}>Order</span><span style={{ color: sideColor, fontWeight: 700 }}>Buy {side.toUpperCase()} at ${price.toFixed(3)}</span></div>
           </div>
 
           {statusMsg && <StatusLine msg={statusMsg} />}
           {error && (
             <div style={{ marginBottom: 10, padding: 10, background: 'rgba(255,95,122,.08)', border: '1px solid rgba(255,95,122,.25)', borderRadius: 12, fontSize: 12, color: C.no }}>
               {error}
-              <div style={{ marginTop: 6, fontSize: 10, color: C.muted, ...T.mono }}>See Debug panel above for details.</div>
+              <div style={{ marginTop: 6, fontSize: 10, color: C.muted, ...T.mono }}>See Debug panel for details.</div>
             </div>
           )}
         </div>
 
         <div style={{ padding: '12px 18px calc(env(safe-area-inset-bottom) + 14px)', borderTop: `1px solid ${C.border}`, background: C.card, flexShrink: 0 }}>
-          <button
-            onClick={busy ? undefined : handleBuy}
-            disabled={busy || sol <= 0 || Number(solLamports) > solAvailableLamports || Number(solLamports) < MIN_SOL_LAMPORTS_PER_TRADE || !creds}
-            style={{ width: '100%', padding: 14, borderRadius: 13, background: status === 'success' ? `linear-gradient(135deg, ${C.yes}33, ${C.yes}22)` : `linear-gradient(135deg, ${sideColor}33, ${sideColor}22)`, border: `1px solid ${sideColor}66`, color: sideColor, fontWeight: 800, fontSize: 14, cursor: busy ? 'not-allowed' : 'pointer', opacity: (busy || sol <= 0 || Number(solLamports) > solAvailableLamports || Number(solLamports) < MIN_SOL_LAMPORTS_PER_TRADE || !creds) ? .55 : 1, ...T.body }}
-          >
-            {busy ? statusMsg || 'Working…' : status === 'success' ? '✓ Trade placed' : !creds ? 'Setting up account…' : `Buy ${side.toUpperCase()} · ${sol.toFixed(4)} SOL`}
+          <button onClick={busy ? undefined : handleBuy} disabled={busy || sol <= 0 || Number(solLamports) > solAvailableLamports || Number(solLamports) < MIN_SOL_LAMPORTS_PER_TRADE || !creds || !solAddress} style={{ width: '100%', padding: 14, borderRadius: 13, background: status === 'success' ? `linear-gradient(135deg, ${C.yes}33, ${C.yes}22)` : `linear-gradient(135deg, ${sideColor}33, ${sideColor}22)`, border: `1px solid ${sideColor}66`, color: sideColor, fontWeight: 800, fontSize: 14, cursor: busy ? 'not-allowed' : 'pointer', opacity: (busy || sol <= 0 || Number(solLamports) > solAvailableLamports || Number(solLamports) < MIN_SOL_LAMPORTS_PER_TRADE || !creds || !solAddress) ? .55 : 1, ...T.body }}>
+            {busy ? statusMsg || 'Working…' : status === 'success' ? '✓ Trade placed' : !solAddress ? 'Connect Phantom' : !creds ? 'Connect EVM' : `Buy ${side.toUpperCase()} · ${sol.toFixed(4)} SOL`}
           </button>
         </div>
       </div>
@@ -1709,46 +1559,7 @@ function OrderDrawer({
 }
 
 /* ============================================================
-   Header
-   ============================================================ */
-
-function Header({ tradingBalance, solBalance, onOpenFund, canFund, signedIn, onSignIn, signingIn, setupStatus }) {
-  const usd = Number(tradingBalance) / 1e6;
-  const solUi = Number(solBalance) / 1e9;
-  return (
-    <div style={{ marginTop: 8, marginBottom: 18, padding: '22px 20px 20px', borderRadius: 26, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: `1px solid ${C.border}`, boxShadow: C.shadowLg, position: 'relative', overflow: 'hidden' }}>
-      <div style={{ position: 'absolute', right: -40, top: -50, width: 200, height: 200, borderRadius: '50%', background: 'radial-gradient(circle,rgba(151,252,228,.14),transparent 65%)', pointerEvents: 'none' }} />
-      <div style={{ position: 'relative' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
-          <div>
-            <h1 style={{ margin: 0, fontSize: 30, fontWeight: 900, color: C.ink, letterSpacing: -1, ...T.display }}>Predict</h1>
-            <div style={{ fontSize: 11, color: C.muted, ...T.mono, marginTop: 4 }}>Trade Polymarket with SOL · 5% fee · 0% trading</div>
-          </div>
-          <div style={{ fontSize: 10, color: C.hl, background: C.hlDim, border: `1px solid ${C.borderHi}`, padding: '3px 8px', borderRadius: 99, fontWeight: 700, letterSpacing: 1, ...T.mono }}>CRYPTO</div>
-        </div>
-        {signedIn ? (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderRadius: 14, background: 'rgba(151,252,228,.05)', border: `1px solid ${C.border}` }}>
-            <div>
-              <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: 1.2, ...T.mono, marginBottom: 2 }}>TRADING SOL · POLYMARKET USDC</div>
-              <div style={{ fontSize: 18, fontWeight: 800, color: C.ink, ...T.display, lineHeight: 1.2 }}>{solUi.toFixed(4)} SOL · {fmtUsd(usd, 2)}</div>
-              {setupStatus === 'working' && <div style={{ fontSize: 10, color: C.amber, marginTop: 4, ...T.mono }}>Setting up trading account…</div>}
-              {setupStatus === 'ready' && <div style={{ fontSize: 10, color: C.yes, marginTop: 4, ...T.mono }}>✓ Ready to trade</div>}
-              {setupStatus === 'error' && <div style={{ fontSize: 10, color: C.no, marginTop: 4, ...T.mono }}>Setup failed — open Account to retry</div>}
-            </div>
-            <button onClick={canFund ? onOpenFund : undefined} disabled={!canFund} style={{ padding: '10px 18px', borderRadius: 11, background: canFund ? `linear-gradient(135deg, ${C.hl}, ${C.hl2})` : 'rgba(255,255,255,.04)', color: canFund ? C.bg : C.muted2, fontWeight: 800, fontSize: 13, border: 'none', cursor: canFund ? 'pointer' : 'not-allowed', opacity: canFund ? 1 : .55, ...T.body, whiteSpace: 'nowrap' }}>Account</button>
-          </div>
-        ) : (
-          <button onClick={onSignIn} disabled={signingIn} style={{ width: '100%', padding: '14px', borderRadius: 12, background: `linear-gradient(135deg, ${C.violet}, ${C.hl})`, color: C.bg, fontWeight: 800, fontSize: 14, border: 'none', cursor: signingIn ? 'wait' : 'pointer', opacity: signingIn ? .7 : 1, ...T.body }}>
-            {signingIn ? 'Signing in…' : 'Sign in to trade'}
-          </button>
-        )}
-      </div>
-    </div>
-  );
-}
-
-/* ============================================================
-   Main component
+   Main
    ============================================================ */
 
 function PredictInner() {
@@ -1761,91 +1572,50 @@ function PredictInner() {
   const [orderMarket, setOrderMarket] = useState(null);
   const [orderSide, setOrderSide] = useState('yes');
   const [fundOpen, setFundOpen] = useState(false);
+
   const [safeAddress, setSafeAddress] = useState(null);
   const [creds, setCreds] = useState(null);
-  const [setupStatus, setSetupStatus] = useState('idle'); // idle | working | ready | error
+  const [setupStatus, setSetupStatus] = useState('idle');
   const [setupError, setSetupError] = useState(null);
+
   const [tradingBalance, setTradingBalance] = useState(0n);
   const [solBalance, setSolBalance] = useState(0n);
-  const [autoPrompted, setAutoPrompted] = useState(false);
+
   const [collectStatus, setCollectStatus] = useState('idle');
   const [collectStatusMsg, setCollectStatusMsg] = useState('');
   const [collectError, setCollectError] = useState('');
 
-  const { publicKey: extSolPk, sendTransaction: extSendTx, signTransaction: extSignTx } = useWallet();
-  const { connection } = useConnection();
-  const {
-    privyAuthenticated,
-    privyEmbeddedSol,
-    privyEmbeddedEvm,
-    activeWalletKind,
-    getEvmAddress,
-    getEvmProvider,
-    loginPrivy,
-    privyReady,
-  } = useNexusWallet();
+  // EVM connection (EIP-6963)
+  const { providers: evmProviders, evmProvider, evmAddress, evmName, connectWith: connectEvmWith, disconnect: disconnectEvm } = useEvmConnection();
+  // Solana connection (Phantom)
+  const { solProvider, solAddress, solName, connect: connectSol, disconnect: disconnectSol } = useSolConnection();
 
-  const evmAddress = useMemo(() => {
-    if (!privyAuthenticated) return null;
-    return getEvmAddress?.() || privyEmbeddedEvm?.address || null;
-  }, [privyAuthenticated, getEvmAddress, privyEmbeddedEvm]);
-
-  // Auto-login Privy on first visit
-  useEffect(() => {
-    if (!privyReady || privyAuthenticated || autoPrompted) return;
-    setAutoPrompted(true);
-    try { loginPrivy?.(); }
-    catch (e) { dbgErr('auth', 'auto loginPrivy failed', e); }
-  }, [privyReady, privyAuthenticated, autoPrompted, loginPrivy]);
-
-  // Solana trading wallet pubkey -- prefer Privy embedded
-  const fundingPubkey = useMemo(() => {
-    if (privyEmbeddedSol?.address) return privyEmbeddedSol.address;
-    if (extSolPk) return extSolPk.toString();
-    return null;
-  }, [extSolPk, privyEmbeddedSol]);
-
-  // Sign-only callback (used by simulateSignSubmit)
-  const signSolanaTx = useCallback(async (tx) => {
-    if (privyEmbeddedSol?.signTransaction) {
-      return await privyEmbeddedSol.signTransaction(tx);
-    }
-    if (extSignTx) return await extSignTx(tx);
-    throw new Error('No Solana signer available');
-  }, [privyEmbeddedSol, extSignTx]);
-
-  // PROACTIVE Safe setup as soon as we have evmAddress
+  // Auto-setup Safe when EVM connects
   const runSetup = useCallback(async () => {
-    if (!evmAddress) return;
-    setSetupStatus('working');
-    setSetupError(null);
+    if (!evmAddress || !evmProvider) return;
+    setSetupStatus('working'); setSetupError(null);
     try {
-      const result = await ensureSetup(evmAddress, getEvmProvider, (msg) => {
-        dbg('setup', 'status', { msg });
-      });
+      const result = await ensureSetup(evmProvider, evmAddress, (msg) => dbg('setup', 'status', { msg }));
       setSafeAddress(result.safeAddress);
       setCreds(result.creds);
       setSetupStatus('ready');
-      dbg('setup', 'complete + verified');
     } catch (e) {
+      const msg = e?.message || e?.error?.message || e?.reason || (e?.name ? e.name + ' (no message)' : '') || 'Unknown error';
       dbgErr('setup', 'failed', e);
-      setSetupError(e?.message || 'Setup failed');
+      setSetupError(msg);
       setSetupStatus('error');
     }
-  }, [evmAddress, getEvmProvider]);
+  }, [evmAddress, evmProvider]);
 
   useEffect(() => {
-    if (!evmAddress) {
-      setSafeAddress(null);
-      setCreds(null);
-      setSetupStatus('idle');
-      setSetupError(null);
+    if (!evmAddress || !evmProvider) {
+      setSafeAddress(null); setCreds(null); setSetupStatus('idle'); setSetupError(null);
       return;
     }
     runSetup();
-  }, [evmAddress, runSetup]);
+  }, [evmAddress, evmProvider, runSetup]);
 
-  // Poll trading balance (USDC.e in Safe)
+  // Poll Safe balance
   useEffect(() => {
     if (!safeAddress) return;
     let alive = true;
@@ -1862,69 +1632,47 @@ function PredictInner() {
 
   // Poll Solana SOL balance
   useEffect(() => {
-    if (!fundingPubkey) return;
+    if (!solAddress) { setSolBalance(0n); return; }
     let alive = true;
     const tick = async () => {
       try {
-        const s = await fetchSolanaSolBalance(fundingPubkey);
+        const s = await fetchSolanaSolBalance(solAddress);
         if (alive) setSolBalance(s);
       } catch {}
     };
     tick();
     const id = setInterval(tick, 5000);
     return () => { alive = false; clearInterval(id); };
-  }, [fundingPubkey]);
+  }, [solAddress]);
 
   const refreshAll = useCallback(async () => {
-    if (safeAddress) {
-      try { setTradingBalance(await fetchSafeBalance(safeAddress)); } catch {}
-    }
-    if (fundingPubkey) {
-      try { setSolBalance(await fetchSolanaSolBalance(fundingPubkey)); } catch {}
-    }
-  }, [safeAddress, fundingPubkey]);
+    if (safeAddress) { try { setTradingBalance(await fetchSafeBalance(safeAddress)); } catch {} }
+    if (solAddress) { try { setSolBalance(await fetchSolanaSolBalance(solAddress)); } catch {} }
+  }, [safeAddress, solAddress]);
 
-  const handleReset = useCallback(() => {
-    if (!evmAddress) return;
-    wipeUserCache(evmAddress);
-    setSafeAddress(null);
-    setCreds(null);
-    setSetupStatus('idle');
-    setSetupError(null);
-    setFundOpen(false);
-    setTimeout(() => runSetup(), 300);
-  }, [evmAddress, runSetup]);
-
-  // Collect Winnings handler
+  // Collect winnings
   const handleCollectWinnings = useCallback(async ({ solanaAddress, amountAtomic }) => {
     if (!safeAddress) return;
-    setCollectStatus('working');
-    setCollectError('');
-    setCollectStatusMsg('');
+    setCollectStatus('working'); setCollectError(''); setCollectStatusMsg('');
     try {
-      await requestWithdrawToSolana({
-        safe: safeAddress,
-        solanaAddress,
-        amountAtomic,
-        onStatus: setCollectStatusMsg,
-      });
-      setCollectStatus('done');
-      setCollectStatusMsg('Withdrawal submitted — funds arrive in 2-5 min');
-      setTimeout(() => {
-        refreshAll();
-        setCollectStatus('idle');
-        setCollectStatusMsg('');
-      }, 6000);
+      await requestWithdrawToSolana({ safe: safeAddress, solanaAddress, amountAtomic, onStatus: setCollectStatusMsg });
+      setCollectStatus('done'); setCollectStatusMsg('Withdrawal submitted — funds arrive in 2-5 min');
+      setTimeout(() => { refreshAll(); setCollectStatus('idle'); setCollectStatusMsg(''); }, 6000);
     } catch (e) {
       const m = e?.message || 'Withdraw failed';
       setCollectError(/reject|cancel|user/i.test(m) ? 'Cancelled' : m);
-      setCollectStatus('error');
-      setCollectStatusMsg('');
+      setCollectStatus('error'); setCollectStatusMsg('');
       setTimeout(() => setCollectStatus('idle'), 5000);
     }
   }, [safeAddress, refreshAll]);
 
-  // Markets load
+  // EVM connect wrapper
+  const onConnectEvm = useCallback(async (detail) => {
+    try { await connectEvmWith(detail); }
+    catch (e) { dbgErr('evm', 'connect failed', e); }
+  }, [connectEvmWith]);
+
+  // Markets
   useEffect(() => {
     let alive = true;
     const h = HORIZONS.find((x) => x.id === horizonId) || HORIZONS[1];
@@ -1957,10 +1705,7 @@ function PredictInner() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     let r = q
-      ? markets.filter((m) =>
-          (m.title || '').toLowerCase().includes(q) ||
-          (m.childQuestion || '').toLowerCase().includes(q)
-        )
+      ? markets.filter((m) => (m.title || '').toLowerCase().includes(q) || (m.childQuestion || '').toLowerCase().includes(q))
       : [...markets];
     if (sortBy === 'upside') {
       const u = (m) => {
@@ -1984,46 +1729,35 @@ function PredictInner() {
     return r;
   }, [markets, search, sortBy]);
 
-  const openTrade = useCallback((m, s) => {
-    setOrderMarket(m);
-    setOrderSide(s);
-  }, []);
-
-  if (loading) {
-    return (
-      <>
-        <style>{`@keyframes nexus-spin { to { transform: rotate(360deg); } }`}</style>
-        <div style={{ maxWidth: 680, margin: '0 auto', padding: '0 16px calc(env(safe-area-inset-bottom) + 100px)' }}>
-          <Header
-            tradingBalance={tradingBalance}
-            solBalance={solBalance}
-            onOpenFund={() => setFundOpen(true)}
-            canFund={!!safeAddress}
-            signedIn={!!privyAuthenticated}
-            onSignIn={loginPrivy}
-            signingIn={!privyReady}
-            setupStatus={setupStatus}
-          />
-          {[1, 2, 3, 4, 5].map((i) => <MarketSkeleton key={i} />)}
-        </div>
-      </>
-    );
-  }
+  const openTrade = useCallback((m, s) => { setOrderMarket(m); setOrderSide(s); }, []);
 
   return (
     <>
       <style>{`@keyframes nexus-spin { to { transform: rotate(360deg); } }`}</style>
       <div style={{ maxWidth: 680, margin: '0 auto', padding: '0 16px calc(env(safe-area-inset-bottom) + 100px)', color: C.ink, backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(151,252,228,.10),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 20%,rgba(168,127,255,.06),transparent 50%)' }}>
-        <Header
+        <ConnectBar
+          evmProviders={evmProviders}
+          evmAddress={evmAddress}
+          evmName={evmName}
+          onConnectEvm={onConnectEvm}
+          onDisconnectEvm={disconnectEvm}
+          solAddress={solAddress}
+          solName={solName}
+          onConnectSol={connectSol}
+          onDisconnectSol={disconnectSol}
+          setupStatus={setupStatus}
+          setupError={setupError}
+          onRetrySetup={runSetup}
+          safeAddress={safeAddress}
           tradingBalance={tradingBalance}
           solBalance={solBalance}
-          onOpenFund={() => setFundOpen(true)}
-          canFund={!!safeAddress}
-          signedIn={!!privyAuthenticated}
-          onSignIn={loginPrivy}
-          signingIn={!privyReady}
-          setupStatus={setupStatus}
         />
+
+        {(evmAddress || solAddress) && (
+          <div style={{ marginBottom: 14, display: 'flex', justifyContent: 'flex-end' }}>
+            <button onClick={() => setFundOpen(true)} style={{ padding: '8px 14px', borderRadius: 10, background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, color: C.ink, fontSize: 12, fontWeight: 700, cursor: 'pointer', ...T.body }}>Account</button>
+          </div>
+        )}
 
         <div style={{ display: 'flex', gap: 6, marginBottom: 12, overflowX: 'auto' }}>
           {HORIZONS.map((h) => {
@@ -2055,17 +1789,12 @@ function PredictInner() {
           })}
         </div>
 
-        {error && (
-          <div style={{ padding: '12px 14px', borderRadius: 11, background: 'rgba(255,95,122,.07)', border: '1px solid rgba(255,95,122,.25)', color: C.no, fontSize: 12, marginBottom: 12 }}>{error}</div>
-        )}
+        {loading && [1,2,3,4,5].map((i) => <MarketSkeleton key={i} />)}
+        {!loading && error && <div style={{ padding: '12px 14px', borderRadius: 11, background: 'rgba(255,95,122,.07)', border: '1px solid rgba(255,95,122,.25)', color: C.no, fontSize: 12, marginBottom: 12 }}>{error}</div>}
+        {!loading && !error && filtered.length === 0 && <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13, ...T.body }}>{search ? `No markets match "${search}"` : 'No active markets.'}</div>}
+        {!loading && filtered.map((m) => <MarketCard key={m.id || m.slug} market={m} onTrade={openTrade} />)}
 
-        {filtered.length === 0 && !error && (
-          <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13, ...T.body }}>{search ? `No markets match "${search}"` : 'No active markets.'}</div>
-        )}
-
-        {filtered.map((m) => <MarketCard key={m.id || m.slug} market={m} onTrade={openTrade} />)}
-
-        <div style={{ marginTop: 20, padding: '12px 14px', borderRadius: 12, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`, fontSize: 10, color: C.muted, textAlign: 'center', ...T.mono }}>Powered by Polymarket · Safe v1.3 · Builder Code Attribution</div>
+        <div style={{ marginTop: 20, padding: '12px 14px', borderRadius: 12, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`, fontSize: 10, color: C.muted, textAlign: 'center', ...T.mono }}>Powered by Polymarket · Safe v1.3 · Builder Code</div>
       </div>
 
       {orderMarket && (
@@ -2073,14 +1802,13 @@ function PredictInner() {
           market={orderMarket}
           side={orderSide}
           onClose={() => { setOrderMarket(null); refreshAll(); }}
+          evmProvider={evmProvider}
           evmAddress={evmAddress}
-          getEvmProvider={getEvmProvider}
           safeAddress={safeAddress}
           creds={creds}
+          solProvider={solProvider}
+          solAddress={solAddress}
           solBalance={solBalance}
-          fundingPubkey={fundingPubkey}
-          signSolanaTx={signSolanaTx}
-          solConnection={connection}
           refreshAll={refreshAll}
         />
       )}
@@ -2091,16 +1819,12 @@ function PredictInner() {
         evmAddress={evmAddress}
         safeAddress={safeAddress}
         tradingBalance={tradingBalance}
-        fundingPubkey={fundingPubkey}
+        solAddress={solAddress}
         solBalance={solBalance}
         onCollectWinnings={handleCollectWinnings}
         collectStatus={collectStatus}
         collectStatusMsg={collectStatusMsg}
         collectError={collectError}
-        onReset={handleReset}
-        setupStatus={setupStatus}
-        setupError={setupError}
-        onRetrySetup={runSetup}
       />
     </>
   );
