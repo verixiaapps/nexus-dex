@@ -1,6 +1,6 @@
 // ─────────────────────────────────────────────────────────────────────
 // Predict.jsx — Polymarket prediction markets via Solana + Safe wallets.
-// 
+//
 // ARCHITECTURE (v3 — Safe path, matches Polymarket's official reference
 // examples privy-safe-builder-example, turnkey-safe-builder-example, etc):
 //   • Each user has a Polymarket Safe wallet (Gnosis Safe proxy) on Polygon.
@@ -422,7 +422,9 @@ async function deriveSafeAddress(eoaAddress) {
 async function buildRelayClient(eoaPrivateKey) {
   const { relayer, signing } = await loadSdks();
   const { RelayClient } = relayer;
-  const signer = await buildEthersSigner(eoaPrivateKey);
+  // V2 RelayClient takes a viem WalletClient, same as clob-client-v2.
+  // Per docs (privy-safe-builder-example, turnkey-safe-builder-example).
+  const signer = await buildViemWalletClient(eoaPrivateKey);
   const builderConfig = buildRelayerBuilderConfig(signing);
   // 5th arg defaults to RelayerTxType.SAFE per SDK README.
   return new RelayClient(RELAYER_URL, POLYGON_CHAIN_ID, signer, builderConfig);
