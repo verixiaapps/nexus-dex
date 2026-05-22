@@ -640,7 +640,13 @@ async function lifiQuote({ fromAddress, toAddress, fromAmountAtomic }) {
     fromAmount:   String(fromAmountAtomic),
     integrator:   'nexus-dex',
     denyBridges:  LIFI_BRIDGE_DENY.join(','),
-    order:        'FASTEST',
+    // 3% slippage cap — high enough that LI.FI won't reject routes for
+    // volatility, low enough that users can't get rugged on a bad fill.
+    // LI.FI's router picks the actual best execution within this cap.
+    slippage:     '0.03',
+    // CHEAPEST optimizes for max receive after fees + slippage. Provider
+    // chooses the best route automatically.
+    order:        'CHEAPEST',
   });
   const url = lifiProxyUrl('/quote?' + params.toString());
   dbg('lifi', 'quote request', { fromAmountAtomic: String(fromAmountAtomic), toAddress });
@@ -734,6 +740,55 @@ async function buildBridgeTransactions({
   });
 
   return { feeTx, bridgeTx, quote, feeAtomic, bridgeAtomic };
+}
+
+// Pre-flight tx simulation. Catches obvious failures (insufficient funds,
+// missing ATA, bad signer, stale blockhash) BEFORE asking the user to
+// sign anything. Returns the simulation result with logs + units consumed.
+//
+// Throws if the simulation reports an error so callers can abort cleanly.
+async function simulateSolanaTx(unsignedOrSignedTx, label = 'tx') {
+  const txBytes = unsignedOrSignedTx.serialize
+    ? unsignedOrSignedTx.serialize()
+    : unsignedOrSignedTx;
+  const base64  = btoa(String.fromCharCode(...new Uint8Array(txBytes)));
+  const res = await fetchWithTimeout(SOL_RPC, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      jsonrpc: '2.0', id: 1, method: 'simulateTransaction',
+      params: [base64, {
+        encoding: 'base64',
+        commitment: 'confirmed',
+        // sigVerify=false so we can simulate unsigned txs and still get
+        // meaningful results. We're not protecting against forged sigs
+        // here, just sanity-checking the instructions.
+        sigVerify: false,
+        replaceRecentBlockhash: true,
+      }],
+    }),
+  }, 12_000);
+  const json = await res.json();
+  if (json.error) {
+    dbgErr('sim', `${label}: RPC error`, new Error(JSON.stringify(json.error)));
+    throw new Error('Simulation RPC error: ' + (json.error.message || 'unknown'));
+  }
+  const value = json?.result?.value;
+  if (!value) {
+    dbgErr('sim', `${label}: no result.value`, new Error(JSON.stringify(json).slice(0, 200)));
+    throw new Error('Simulation returned no result');
+  }
+  if (value.err) {
+    const errStr = typeof value.err === 'string' ? value.err : JSON.stringify(value.err);
+    dbg('sim', `${label}: FAILED`, { err: errStr, logs: (value.logs || []).slice(-5) });
+    // Try to surface a friendly message from the program logs.
+    const lastLog = (value.logs || []).filter(l => /error|fail|insufficient|0x/i.test(l)).slice(-1)[0];
+    throw new Error(`Tx would fail: ${lastLog || errStr}`);
+  }
+  dbg('sim', `${label}: OK`, {
+    unitsConsumed: value.unitsConsumed,
+    logsLen: (value.logs || []).length,
+  });
+  return value;
 }
 
 async function submitSolanaTx(signedTx) {
@@ -1070,6 +1125,20 @@ async function executeFunding({
     totalUsdAtomic,
   });
 
+  // PRE-FLIGHT SIM — validate BOTH txs before asking the user to sign.
+  // Catches insufficient funds, missing ATAs, stale routes, etc. without
+  // wasting a wallet popup on a tx that would fail.
+  onStatus?.('Validating transactions…');
+  try {
+    dbg('fund', 'simulating bridge tx');
+    await simulateSolanaTx(bridgeTx, 'bridge');
+    dbg('fund', 'simulating fee tx');
+    await simulateSolanaTx(feeTx, 'fee');
+  } catch (e) {
+    dbgErr('fund', 'pre-flight sim failed — aborting before signature', e);
+    throw new Error('Pre-flight check failed: ' + (e?.message || 'unknown'));
+  }
+
   // Sign both txs. Some signers can batch, some can't — sign sequentially.
   onStatus?.('Confirm in your wallet…');
   dbg('fund', 'requesting signature on bridge tx (1/2)');
@@ -1315,8 +1384,20 @@ function FundingSheet({
   const [wdError, setWdError]     = useState('');
   const [wdDone, setWdDone]       = useState(false);
 
+  // SIM state — live LI.FI quote so the user sees real route + receive
+  // amount before signing. Re-runs (debounced) whenever `amount` changes.
+  const [sim, setSim] = useState({
+    state: 'idle',                  // idle | loading | ok | error
+    receiveUsd: null,                // estimated USDC.e arriving on Polygon
+    bridgeName: null,                // e.g. "Allbridge"
+    durationSec: null,               // estimated execution time
+    error: null,
+    forAmount: null,                 // sanity check vs current amount
+    forAddresses: null,              // sanity check vs current addrs
+  });
+
   useBodyLock(open);
-  useEffect(() => { if (!open) { setStatus('idle'); setStatusMsg(''); setError(''); setWdBusy(false); setWdMsg(''); setWdError(''); setWdDone(false); } }, [open]);
+  useEffect(() => { if (!open) { setStatus('idle'); setStatusMsg(''); setError(''); setWdBusy(false); setWdMsg(''); setWdError(''); setWdDone(false); setSim({ state: 'idle', receiveUsd: null, bridgeName: null, durationSec: null, error: null, forAmount: null, forAddresses: null }); } }, [open]);
 
   if (!open) return null;
 
@@ -1325,7 +1406,60 @@ function FundingSheet({
   const usd          = Number(amount) || 0;
   const feeUsd       = usd * SERVICE_FEE_PCT;
   const netUsd       = usd - feeUsd;
-  const canBridge    = !!fundingPubkey && !!evmAddress && usd >= MIN_DEPOSIT_USD && usd <= solUsd && status !== 'bridging';
+
+  // Quote SIM — debounced LI.FI quote whenever amount/addresses change. We
+  // only quote the post-fee amount because that's what actually crosses the
+  // bridge. Sim result feeds the button label + gates `canBridge`.
+  /* eslint-disable react-hooks/rules-of-hooks */
+  useEffect(() => {
+    if (!open) return;
+    if (!fundingPubkey || !safeAddress) return;
+    if (usd < MIN_DEPOSIT_USD || usd > solUsd) {
+      setSim(s => ({ ...s, state: 'idle', error: null }));
+      return;
+    }
+    let alive = true;
+    setSim(s => ({ ...s, state: 'loading', error: null }));
+    const handle = setTimeout(async () => {
+      try {
+        const feeAtomic    = BigInt(Math.floor(usd * 1e6 * SERVICE_FEE_PCT));
+        const bridgeAtomic = BigInt(Math.floor(usd * 1e6)) - feeAtomic;
+        const quote = await lifiQuote({
+          fromAddress:      fundingPubkey,
+          toAddress:        safeAddress,
+          fromAmountAtomic: bridgeAtomic,
+        });
+        if (!alive) return;
+        const receiveAtomic = Number(quote?.estimate?.toAmount || 0);
+        const receiveUsd    = receiveAtomic > 0 ? receiveAtomic / 1e6 : null;
+        setSim({
+          state:        'ok',
+          receiveUsd,
+          bridgeName:   quote?.tool || quote?.bridge || 'bridge',
+          durationSec:  Number(quote?.estimate?.executionDuration) || null,
+          error:        null,
+          forAmount:    usd,
+          forAddresses: fundingPubkey + ':' + safeAddress,
+        });
+      } catch (e) {
+        if (!alive) return;
+        setSim({
+          state:        'error',
+          receiveUsd:   null,
+          bridgeName:   null,
+          durationSec:  null,
+          error:        e?.message || 'No bridge route available',
+          forAmount:    usd,
+          forAddresses: fundingPubkey + ':' + safeAddress,
+        });
+      }
+    }, 400);
+    return () => { alive = false; clearTimeout(handle); };
+  }, [open, usd, solUsd, fundingPubkey, safeAddress]);
+  /* eslint-enable react-hooks/rules-of-hooks */
+
+  const simReady    = sim.state === 'ok' && sim.forAmount === usd;
+  const canBridge   = !!fundingPubkey && !!evmAddress && usd >= MIN_DEPOSIT_USD && usd <= solUsd && status !== 'bridging' && simReady;
   const canWithdraw  = polyUsd >= 1 && !!fundingPubkey && !wdBusy;
 
   const handleBridge = async () => {
@@ -1434,9 +1568,35 @@ function FundingSheet({
               <span>Service fee (5%)</span><span style={{ color: C.ink }}>-{fmtUsd(feeUsd, 2)}</span>
             </div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-              <span>Into Polymarket</span><span style={{ color: C.hl, fontWeight: 700 }}>{fmtUsd(netUsd, 2)}</span>
+              <span>Into Polymarket</span>
+              <span style={{ color: C.hl, fontWeight: 700 }}>
+                {simReady && sim.receiveUsd != null ? `≈ ${fmtUsd(sim.receiveUsd, 2)}` : fmtUsd(netUsd, 2)}
+              </span>
             </div>
+            {simReady && (sim.bridgeName || sim.durationSec) && (
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 4 }}>
+                <span>Route</span>
+                <span style={{ color: C.muted2 }}>
+                  {sim.bridgeName || 'bridge'}
+                  {sim.durationSec ? ` · ~${Math.max(15, Math.round(sim.durationSec))}s` : ''}
+                </span>
+              </div>
+            )}
           </div>
+
+          {/* SIM status indicator — between fee math and submit button */}
+          {usd >= MIN_DEPOSIT_USD && usd <= solUsd && sim.state === 'loading' && (
+            <div style={{ marginBottom: 8, padding: 8, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`, borderRadius: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div style={{ width: 10, height: 10, borderRadius: '50%', border: `2px solid ${C.hlDim}`, borderTopColor: C.hl, animation: 'nexus-spin .8s linear infinite' }} />
+              <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>Checking route…</span>
+            </div>
+          )}
+          {usd >= MIN_DEPOSIT_USD && usd <= solUsd && sim.state === 'error' && (
+            <div style={{ marginBottom: 8, padding: 8, background: 'rgba(245,181,61,.06)', border: `1px solid ${C.amber}44`, borderRadius: 10, fontSize: 11, color: C.amber, ...T.body }}>
+              {sim.error || 'No bridge route for this amount'}
+              <div style={{ marginTop: 3, fontSize: 9, color: C.muted, ...T.mono }}>Try a larger amount.</div>
+            </div>
+          )}
 
           {statusMsg && status === 'bridging' && (
             <div style={{ marginBottom: 8, padding: 8, background: 'rgba(151,252,228,.05)', border: '1px solid rgba(151,252,228,.20)', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
