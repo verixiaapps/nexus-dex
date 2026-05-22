@@ -2493,3 +2493,386 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, safeAd
     </div>
   );
 }
+
+Add this as BLOCK 6, directly after your current OrderDrawer closing }.
+
+function Header({ tradingBalance, onOpenFund, canFund, signedIn, onSignIn, signingIn }) {
+  const usd = Number(tradingBalance) / 1e6;
+  return (
+    <div style={{ marginTop: 8, marginBottom: 18, padding: '22px 20px 20px', borderRadius: 26, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: `1px solid ${C.border}`, boxShadow: C.shadowLg, position: 'relative', overflow: 'hidden' }}>
+      <div style={{ position: 'absolute', right: -40, top: -50, width: 200, height: 200, borderRadius: '50%', background: 'radial-gradient(circle,rgba(151,252,228,.14),transparent 65%)', pointerEvents: 'none' }} />
+      <div style={{ position: 'relative' }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
+          <div>
+            <h1 style={{ margin: 0, fontSize: 30, fontWeight: 900, color: C.ink, letterSpacing: -1, ...T.display }}>Predict</h1>
+            <div style={{ fontSize: 11, color: C.muted, ...T.mono, marginTop: 4 }}>Crypto prediction markets · 5% deposit · 0% trading</div>
+          </div>
+          <div style={{ fontSize: 10, color: C.hl, background: C.hlDim, border: `1px solid ${C.borderHi}`, padding: '3px 8px', borderRadius: 99, fontWeight: 700, letterSpacing: 1, ...T.mono }}>CRYPTO</div>
+        </div>
+        {signedIn ? (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px 14px', borderRadius: 14, background: 'rgba(151,252,228,.05)', border: `1px solid ${C.border}` }}>
+            <div>
+              <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: 1.2, ...T.mono, marginBottom: 2 }}>BALANCE</div>
+              <div style={{ fontSize: 22, fontWeight: 800, color: C.ink, ...T.display, lineHeight: 1 }}>{fmtUsd(usd, 2)}</div>
+            </div>
+            <button onClick={canFund ? onOpenFund : undefined} disabled={!canFund} style={{ padding: '10px 18px', borderRadius: 11, background: canFund ? `linear-gradient(135deg, ${C.hl}, ${C.hl2})` : 'rgba(255,255,255,.04)', color: canFund ? C.bg : C.muted2, fontWeight: 800, fontSize: 13, border: 'none', cursor: canFund ? 'pointer' : 'not-allowed', opacity: canFund ? 1 : .55, ...T.body, whiteSpace: 'nowrap' }}>
+              Manage
+            </button>
+          </div>
+        ) : (
+          <button onClick={onSignIn} disabled={signingIn} style={{ width: '100%', padding: '14px', borderRadius: 12, background: `linear-gradient(135deg, ${C.violet}, ${C.hl})`, color: C.bg, fontWeight: 800, fontSize: 14, border: 'none', cursor: signingIn ? 'wait' : 'pointer', opacity: signingIn ? .7 : 1, ...T.body }}>
+            {signingIn ? 'Signing in…' : 'Sign in to trade'}
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+function PredictInner() {
+  const [markets, setMarkets] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [search, setSearch] = useState('');
+  const [horizonId, setHorizonId] = useState('daily');
+  const [sortBy, setSortBy] = useState('volume');
+  const [orderMarket, setOrderMarket] = useState(null);
+  const [orderSide, setOrderSide] = useState('yes');
+  const [fundOpen, setFundOpen] = useState(false);
+  const [safeAddress, setSafeAddress] = useState(null);
+  const [safeDeriving, setSafeDeriving] = useState(false);
+  const [safeError, setSafeError] = useState(null);
+  const [tradingBalance, setTradingBalance] = useState(0n);
+  const [solBalance, setSolBalance] = useState(0n);
+  const [usdcBalance, setUsdcBalance] = useState(0n);
+  const [autoPrompted, setAutoPrompted] = useState(false);
+  const { publicKey: extSolPk, signTransaction: extSolSignTx } = useWallet();
+  const {
+    privyAuthenticated,
+    privyEmbeddedSol,
+    privyEmbeddedEvm,
+    getEvmAddress,
+    getEvmProvider,
+    loginPrivy,
+    privyReady,
+  } = useNexusWallet();
+  const evmAddress = useMemo(() => {
+    if (!privyAuthenticated) return null;
+    return getEvmAddress?.() || privyEmbeddedEvm?.address || null;
+  }, [privyAuthenticated, getEvmAddress, privyEmbeddedEvm]);
+  useEffect(() => {
+    if (!privyReady || privyAuthenticated || autoPrompted) return;
+    setAutoPrompted(true);
+    try { loginPrivy?.(); } catch (e) { dbgErr('auth', 'auto loginPrivy failed', e); }
+  }, [privyReady, privyAuthenticated, autoPrompted, loginPrivy]);
+  const fundingPubkey = useMemo(() => {
+    if (extSolPk) return extSolPk.toString();
+    if (privyEmbeddedSol?.address) return privyEmbeddedSol.address;
+    return null;
+  }, [extSolPk, privyEmbeddedSol]);
+  const signSolanaTx = useCallback(async (tx) => {
+    if (extSolPk && extSolSignTx) return await extSolSignTx(tx);
+    if (privyEmbeddedSol?.signTransaction) return await privyEmbeddedSol.signTransaction(tx);
+    throw new Error('No Solana signer');
+  }, [extSolPk, extSolSignTx, privyEmbeddedSol]);
+  useEffect(() => {
+    if (!evmAddress) {
+      setSafeAddress(null);
+      setSafeError(null);
+      return;
+    }
+    let alive = true;
+    const cached = lsGet(LS.safe(evmAddress));
+    if (cached) {
+      setSafeAddress(cached);
+      setSafeError(null);
+      return;
+    }
+    setSafeDeriving(true);
+    deriveSafeAddress(evmAddress)
+      .then((addr) => {
+        if (!alive) return;
+        setSafeAddress(addr);
+        lsSet(LS.safe(evmAddress), addr);
+        setSafeError(null);
+      })
+      .catch((e) => {
+        if (!alive) return;
+        dbgErr('safe', 'derive failed', e);
+        setSafeError(e?.message || 'Failed to derive Safe');
+      })
+      .finally(() => {
+        if (alive) setSafeDeriving(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [evmAddress]);
+  useEffect(() => {
+    if (!safeAddress) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const b = await fetchSafeBalance(safeAddress);
+        if (alive) setTradingBalance(b);
+      } catch {}
+    };
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [safeAddress]);
+  useEffect(() => {
+    if (!fundingPubkey) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const [u, s] = await Promise.all([
+          fetchSolanaUsdcBalance(fundingPubkey),
+          fetchSolanaSolBalance(fundingPubkey),
+        ]);
+        if (alive) {
+          setUsdcBalance(u);
+          setSolBalance(s);
+        }
+      } catch {}
+    };
+    tick();
+    const id = setInterval(tick, 5000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [fundingPubkey]);
+  const refreshAll = useCallback(async () => {
+    if (safeAddress) {
+      try { setTradingBalance(await fetchSafeBalance(safeAddress)); } catch {}
+    }
+    if (fundingPubkey) {
+      try {
+        const [u, s] = await Promise.all([
+          fetchSolanaUsdcBalance(fundingPubkey),
+          fetchSolanaSolBalance(fundingPubkey),
+        ]);
+        setUsdcBalance(u);
+        setSolBalance(s);
+      } catch {}
+    }
+  }, [safeAddress, fundingPubkey]);
+  const handleReset = useCallback(() => {
+    if (!evmAddress) return;
+    wipeUserCache(evmAddress);
+    setSafeAddress(null);
+    setSafeError(null);
+    setFundOpen(false);
+    setTimeout(() => {
+      setSafeDeriving(true);
+      deriveSafeAddress(evmAddress)
+        .then((addr) => {
+          setSafeAddress(addr);
+          lsSet(LS.safe(evmAddress), addr);
+        })
+        .catch((e) => setSafeError(e?.message || 'Reset failed'))
+        .finally(() => setSafeDeriving(false));
+    }, 200);
+  }, [evmAddress]);
+  useEffect(() => {
+    let alive = true;
+    const h = HORIZONS.find((x) => x.id === horizonId) || HORIZONS[1];
+    const load = async () => {
+      try {
+        let raw = [];
+        if (h.slug) {
+          raw = await fetchMarketsByTagSlug(h.slug);
+          if (!Array.isArray(raw) || raw.length === 0) {
+            raw = await fetchMarketsByTagId(CRYPTO_TAG_ID);
+          }
+        } else {
+          raw = await fetchMarketsByTagId(CRYPTO_TAG_ID);
+        }
+        if (!alive) return;
+        const norm = (Array.isArray(raw) ? raw : [])
+          .map(normalizeEvent)
+          .filter(Boolean);
+        setMarkets(norm.filter((m) => isTradableMarket(m, h)));
+        setError(null);
+      } catch (e) {
+        if (!alive) return;
+        setError(e?.message || 'Failed to load markets');
+      } finally {
+        if (alive) setLoading(false);
+      }
+    };
+    setLoading(true);
+    load();
+    const id = setInterval(load, 30000);
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [horizonId]);
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    let r = q
+      ? markets.filter((m) =>
+          (m.title || '').toLowerCase().includes(q) ||
+          (m.childQuestion || '').toLowerCase().includes(q)
+        )
+      : [...markets];
+    if (sortBy === 'upside') {
+      const u = (m) => {
+        const y = Number(m.yesPrice) || 0;
+        const n = Number(m.noPrice) || 0;
+        const yU = y >= 0.02 && y < 0.98 ? (1 / y - 1) * 100 : 0;
+        const nU = n >= 0.02 && n < 0.98 ? (1 / n - 1) * 100 : 0;
+        return Math.max(yU, nU);
+      };
+      r.sort((a, b) => u(b) - u(a));
+    } else if (sortBy === 'ending') {
+      const t = (m) => {
+        if (!m.endDate) return Infinity;
+        const ms = new Date(m.endDate).getTime() - Date.now();
+        return ms > 0 ? ms : Infinity;
+      };
+      r.sort((a, b) => t(a) - t(b));
+    } else {
+      r.sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
+    }
+    return r;
+  }, [markets, search, sortBy]);
+  const openTrade = useCallback((m, s) => {
+    setOrderMarket(m);
+    setOrderSide(s);
+  }, []);
+  if (loading) {
+    return (
+      <>
+        <style>{`@keyframes nexus-spin { to { transform: rotate(360deg); } }`}</style>
+        <div style={{ maxWidth: 680, margin: '0 auto', padding: '0 16px calc(env(safe-area-inset-bottom) + 100px)' }}>
+          <Header
+            tradingBalance={tradingBalance}
+            onOpenFund={() => setFundOpen(true)}
+            canFund={!!safeAddress}
+            signedIn={!!privyAuthenticated}
+            onSignIn={loginPrivy}
+            signingIn={!privyReady}
+          />
+          {[1, 2, 3, 4, 5].map((i) => (
+            <MarketSkeleton key={i} />
+          ))}
+        </div>
+      </>
+    );
+  }
+  return (
+    <>
+      <style>{`@keyframes nexus-spin { to { transform: rotate(360deg); } }`}</style>
+      <div style={{ maxWidth: 680, margin: '0 auto', padding: '0 16px calc(env(safe-area-inset-bottom) + 100px)', color: C.ink, backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(151,252,228,.10),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 20%,rgba(168,127,255,.06),transparent 50%)' }}>
+        <Header
+          tradingBalance={tradingBalance}
+          onOpenFund={() => setFundOpen(true)}
+          canFund={!!safeAddress && !safeDeriving}
+          signedIn={!!privyAuthenticated}
+          onSignIn={loginPrivy}
+          signingIn={!privyReady}
+        />
+        {safeError && privyAuthenticated && (
+          <div style={{ marginBottom: 14, padding: 12, borderRadius: 12, background: 'rgba(255,95,122,.07)', border: `1px solid ${C.no}33` }}>
+            <div style={{ fontSize: 12, color: C.no, fontWeight: 700, marginBottom: 6, ...T.body }}>Couldn't set up trading account</div>
+            <div style={{ fontSize: 10, color: C.muted, marginBottom: 8, ...T.mono }}>{safeError}</div>
+            <button onClick={handleReset} style={{ padding: '6px 12px', borderRadius: 8, background: C.no + '22', border: `1px solid ${C.no}55`, color: C.no, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>↻ Retry</button>
+          </div>
+        )}
+        {safeDeriving && privyAuthenticated && (
+          <div style={{ marginBottom: 14, padding: 12, borderRadius: 12, background: 'rgba(245,181,61,.06)', border: `1px solid ${C.amber}44`, display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.amber}33`, borderTopColor: C.amber, animation: 'nexus-spin .8s linear infinite' }} />
+            <div style={{ fontSize: 12, color: C.amber, fontWeight: 700, ...T.body }}>Setting up your trading account…</div>
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 12, overflowX: 'auto' }}>
+          {HORIZONS.map((h) => {
+            const active = horizonId === h.id;
+            return (
+              <button key={h.id} onClick={() => setHorizonId(h.id)} style={{ padding: '8px 14px', borderRadius: 99, whiteSpace: 'nowrap', background: active ? C.hlDim : 'rgba(255,255,255,.03)', border: `1px solid ${active ? C.borderHi : C.border}`, color: active ? C.hl : C.muted, fontSize: 11, fontWeight: 800, cursor: 'pointer', ...T.mono }}>
+                {h.label}
+              </button>
+            );
+          })}
+        </div>
+        <div style={{ marginBottom: 12, position: 'relative' }}>
+          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…" inputMode="search" style={{ width: '100%', padding: '10px 14px 10px 36px', background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, borderRadius: 11, color: C.ink, fontSize: 13, outline: 'none', ...T.body }} />
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2" style={{ position: 'absolute', left: 13, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}>
+            <circle cx="11" cy="11" r="8" />
+            <path d="M21 21l-4.35-4.35" />
+          </svg>
+        </div>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 14, overflowX: 'auto' }}>
+          {[
+            { id: 'volume', label: '📊 Volume' },
+            { id: 'upside', label: '🔥 Upside' },
+            { id: 'ending', label: '⏱ Ending' },
+          ].map((o) => {
+            const a = sortBy === o.id;
+            return (
+              <button key={o.id} onClick={() => setSortBy(o.id)} style={{ padding: '6px 11px', borderRadius: 99, whiteSpace: 'nowrap', background: a ? 'rgba(255,255,255,.06)' : 'rgba(255,255,255,.02)', border: `1px solid ${a ? C.border : 'transparent'}`, color: a ? C.ink : C.muted2, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>
+                {o.label}
+              </button>
+            );
+          })}
+        </div>
+        {error && (
+          <div style={{ padding: '12px 14px', borderRadius: 11, background: 'rgba(255,95,122,.07)', border: '1px solid rgba(255,95,122,.25)', color: C.no, fontSize: 12, marginBottom: 12 }}>
+            {error}
+          </div>
+        )}
+        {filtered.length === 0 && !error && (
+          <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13, ...T.body }}>
+            {search ? `No markets match "${search}"` : 'No active markets.'}
+          </div>
+        )}
+        {filtered.map((m) => (
+          <MarketCard key={m.id || m.slug} market={m} onTrade={openTrade} />
+        ))}
+        <div style={{ marginTop: 20, padding: '12px 14px', borderRadius: 12, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`, fontSize: 10, color: C.muted, textAlign: 'center', ...T.mono }}>
+          Powered by Polymarket · Safe v1.3 · Builder Code Attribution
+        </div>
+      </div>
+      {orderMarket && (
+        <OrderDrawer
+          market={orderMarket}
+          side={orderSide}
+          onClose={() => {
+            setOrderMarket(null);
+            refreshAll();
+          }}
+          evmAddress={evmAddress}
+          getEvmProvider={getEvmProvider}
+          safeAddress={safeAddress}
+          tradingBalance={tradingBalance}
+          onNeedFunds={() => {
+            setOrderMarket(null);
+            setFundOpen(true);
+          }}
+          refreshAll={refreshAll}
+        />
+      )}
+      <FundingSheet
+        open={fundOpen}
+        onClose={() => setFundOpen(false)}
+        evmAddress={evmAddress}
+        safeAddress={safeAddress}
+        tradingBalance={tradingBalance}
+        fundingPubkey={fundingPubkey}
+        solBalance={solBalance}
+        usdcBalance={usdcBalance}
+        signSolanaTx={signSolanaTx}
+        onReset={handleReset}
+        refreshAll={refreshAll}
+      />
+    </>
+  );
+}
+export default function Predict() {
+  return <PredictInner />;
+}
