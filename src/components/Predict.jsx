@@ -2494,7 +2494,6 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, safeAd
   );
 }
 
-Add this as BLOCK 6, directly after your current OrderDrawer closing }.
 
 function Header({ tradingBalance, onOpenFund, canFund, signedIn, onSignIn, signingIn }) {
   const usd = Number(tradingBalance) / 1e6;
