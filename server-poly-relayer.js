@@ -1,43 +1,23 @@
 // ─────────────────────────────────────────────────────────────────────
 // server-poly-relayer.js — Express router for Polymarket builder ops.
-// 
-// ARCHITECTURE (V2 — post April 28 2026 cutover):
-//   • Frontend uses @polymarket/builder-relayer-client SDK to deploy the
-//     user's safe and submit gasless approvals batches. That SDK still
-//     requires HMAC-signed builder headers to authenticate with the
-//     relayer (this part of the auth flow did NOT change in V2).
-//   • Frontend uses @polymarket/clob-client-v2 to place orders. V2 orders
-//     attach the builderCode directly to the order struct — NO HMAC
-//     headers needed for CLOB calls (the V2 cutover removed those).
-//   • We expose:
-//       - POST /api/poly/sign    → returns HMAC headers for the relayer
-//       - GET  /api/poly/builder-code → returns the public builderCode
-//   • Builder secret + passphrase NEVER leave the server.
-//
-// Plus bridge endpoints (deposit address, status, withdraw, quote) which
-// are unauthenticated public Polymarket APIs we proxy so the frontend
-// doesn't need to know URLs / handle CORS.
 // ─────────────────────────────────────────────────────────────────────
 
 const express = require('express');
 const crypto  = require('crypto');
 const router  = express.Router();
 
-const BRIDGE_URL  = 'https://bridge.polymarket.com';
+const BRIDGE_URL = 'https://bridge.polymarket.com';
 
-const BUILDER_KEY        = process.env.POLY_BUILDER_API_KEY        || '';
-const BUILDER_SECRET     = process.env.POLY_BUILDER_SECRET         || '';
-const BUILDER_PASSPHRASE = process.env.POLY_BUILDER_PASSPHRASE     || '';
-const BUILDER_CODE       = process.env.POLY_BUILDER_CODE           || '';
+const BUILDER_KEY        = process.env.POLY_BUILDER_API_KEY    || '';
+const BUILDER_SECRET     = process.env.POLY_BUILDER_SECRET     || '';
+const BUILDER_PASSPHRASE = process.env.POLY_BUILDER_PASSPHRASE || '';
+const BUILDER_ADDRESS    = process.env.POLY_BUILDER_ADDRESS    || '';
+const BUILDER_CODE       = process.env.POLY_BUILDER_CODE       || '';
 
 function ok() {
-  return !!(BUILDER_KEY && BUILDER_SECRET && BUILDER_PASSPHRASE);
+  return !!(BUILDER_KEY && BUILDER_SECRET && BUILDER_PASSPHRASE && BUILDER_ADDRESS);
 }
 
-// Per-IP rate limiter for /sign. CORS already prevents browser abuse
-// from other origins; this prevents someone scripting against the
-// endpoint directly. ~600 requests/min is plenty for any single user
-// (a trade triggers maybe 5-10 signs).
 const _signRate = new Map();
 function checkSignRate(ip) {
   const now = Date.now();
@@ -46,7 +26,6 @@ function checkSignRate(ip) {
   if (hits.length >= 600) return false;
   hits.push(now);
   _signRate.set(ip, hits);
-  // Trim map to prevent unbounded growth.
   if (_signRate.size > 5000) {
     for (const [k, arr] of _signRate.entries()) {
       if (!arr.some(t => t > windowStart)) _signRate.delete(k);
@@ -55,19 +34,15 @@ function checkSignRate(ip) {
   return true;
 }
 
-// Polymarket HMAC signature: SHA256(secret, timestamp + method + path + body).
-// Matches @polymarket/builder-signing-sdk's buildHmacSignature() exactly.
-// Secret is base64-encoded (the value from polymarket.com/settings?tab=builder),
-// we decode it before keying the HMAC.
-function buildHmacSignature(secret, timestampMs, method, path, body) {
-  const message = String(timestampMs) + String(method).toUpperCase() + String(path) + (body || '');
-  // Builder secrets are base64; accept both base64 and base64url to be safe.
+// Polymarket HMAC: SHA256(base64-decoded secret, ts + method + path + body)
+// — timestamp in SECONDS, output as base64url.
+function buildHmacSignature(secret, timestampSec, method, path, body) {
+  const message = String(timestampSec) + String(method).toUpperCase() + String(path) + (body || '');
   const normalized = secret.replace(/-/g, '+').replace(/_/g, '/');
   const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4);
   const secretBytes = Buffer.from(padded, 'base64');
-  const sig = crypto.createHmac('sha256', secretBytes).update(message).digest('base64');
-  // The SDK / Polymarket relayer accepts standard base64; return as-is.
-  return sig;
+  return crypto.createHmac('sha256', secretBytes).update(message).digest('base64')
+    .replace(/\+/g, '-').replace(/\//g, '_');
 }
 
 async function fetchWithTimeout(url, opts = {}, ms = 12_000) {
@@ -83,14 +58,16 @@ async function fetchWithTimeout(url, opts = {}, ms = 12_000) {
 router.get('/health', (_req, res) => {
   res.json({
     ok: true,
-    hasCreds:       ok(),
-    hasBuilderCode: !!BUILDER_CODE,
-    builderKeyTail: BUILDER_KEY ? '...' + BUILDER_KEY.slice(-6) : null,
+    hasCreds:        ok(),
+    hasBuilderCode:  !!BUILDER_CODE,
+    hasAddress:      !!BUILDER_ADDRESS,
+    builderKeyTail:  BUILDER_KEY ? '...' + BUILDER_KEY.slice(-6) : null,
+    builderAddrTail: BUILDER_ADDRESS ? '...' + BUILDER_ADDRESS.slice(-6) : null,
   });
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// BUILDER CODE — public, frontend reads this to attach to orders.
+// BUILDER CODE — public
 // ═══════════════════════════════════════════════════════════════════
 router.get('/builder-code', (_req, res) => {
   if (!BUILDER_CODE) return res.json({ builderCode: null });
@@ -98,12 +75,9 @@ router.get('/builder-code', (_req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// REMOTE BUILDER SIGNING ENDPOINT — used by SDK's BuilderConfig.
-//
-// SDK posts: { method, path, body }  (body is the raw stringified JSON)
-// We return: signed HMAC headers, SDK attaches them to the relayer call.
-//
-// This is the EXACT shape Polymarket's reference examples expect.
+// REMOTE SIGNING — called by @polymarket/builder-signing-sdk
+// SDK posts: { method, path, body }
+// Must return EXACTLY these keys — the SDK forwards them as headers.
 // ═══════════════════════════════════════════════════════════════════
 router.post('/sign', express.json({ limit: '1mb' }), (req, res) => {
   try {
@@ -113,13 +87,17 @@ router.post('/sign', express.json({ limit: '1mb' }), (req, res) => {
     const { method, path, body } = req.body || {};
     if (!method || !path) return res.status(400).json({ error: 'method and path required' });
 
-    const timestampMs = Date.now();
-    const signature = buildHmacSignature(BUILDER_SECRET, timestampMs, method, path, body || '');
+    const timestampSec = Math.floor(Date.now() / 1000);
+    const nonce = crypto.randomBytes(16).toString('hex');
+    const signature = buildHmacSignature(BUILDER_SECRET, timestampSec, method, path, body || '');
+
     res.json({
-      POLY_BUILDER_SIGNATURE:  signature,
-      POLY_BUILDER_TIMESTAMP:  String(timestampMs),
-      POLY_BUILDER_API_KEY:    BUILDER_KEY,
-      POLY_BUILDER_PASSPHRASE: BUILDER_PASSPHRASE,
+      POLY_ADDRESS:    BUILDER_ADDRESS,
+      POLY_SIGNATURE:  signature,
+      POLY_TIMESTAMP:  String(timestampSec),
+      POLY_API_KEY:    BUILDER_KEY,
+      POLY_PASSPHRASE: BUILDER_PASSPHRASE,
+      POLY_NONCE:      nonce,
     });
   } catch (e) {
     res.status(500).json({ error: 'sign_failed', detail: String(e?.message || e) });
@@ -127,10 +105,9 @@ router.post('/sign', express.json({ limit: '1mb' }), (req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
-// BRIDGE PROXIES — public Polymarket endpoints, just CORS-fronted.
+// BRIDGE PROXIES (unchanged)
 // ═══════════════════════════════════════════════════════════════════
 
-// Get a deposit address for the user's safe.
 router.post('/deposit', express.json(), async (req, res) => {
   try {
     const { address } = req.body || {};
@@ -147,7 +124,6 @@ router.post('/deposit', express.json(), async (req, res) => {
   }
 });
 
-// Bridge status for a SVM (Solana) deposit address.
 router.get('/status/:svm', async (req, res) => {
   try {
     const svm = req.params.svm;
@@ -162,7 +138,6 @@ router.get('/status/:svm', async (req, res) => {
   }
 });
 
-// Withdraw pUSD → Solana USDC (free, instant).
 router.post('/withdraw', express.json(), async (req, res) => {
   try {
     const body = req.body || {};
@@ -178,7 +153,6 @@ router.post('/withdraw', express.json(), async (req, res) => {
   }
 });
 
-// Withdraw quote (preview fees / minimums).
 router.post('/quote', express.json(), async (req, res) => {
   try {
     const r = await fetchWithTimeout(`${BRIDGE_URL}/quote`, {
@@ -193,7 +167,6 @@ router.post('/quote', express.json(), async (req, res) => {
   }
 });
 
-// Supported bridge assets (cached 10min).
 let _saCache = null, _saTs = 0;
 router.get('/supported-assets', async (_req, res) => {
   try {
@@ -209,4 +182,3 @@ router.get('/supported-assets', async (_req, res) => {
 });
 
 module.exports = router;
- 
