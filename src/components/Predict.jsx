@@ -287,16 +287,18 @@ let _sdks = null;
 async function loadSdks() {
   if (_sdks) return _sdks;
   dbg('sdk', 'loading');
-  const [clob, relayer, viem] = await Promise.all([
+  const [clob, relayer, signing, viem] = await Promise.all([
     import('@polymarket/clob-client-v2'),
     import('@polymarket/builder-relayer-client'),
+    import('@polymarket/builder-signing-sdk'),
     import('viem'),
   ]);
-  _sdks = { clob, relayer, viem };
+  _sdks = { clob, relayer, signing, viem };
   dbg('sdk', 'loaded', {
     clob:     !!clob?.ClobClient,
     sigType3: !!clob?.SignatureTypeV2?.POLY_1271,
     relay:    !!relayer?.RelayClient,
+    signing:  !!signing?.BuilderConfig,
   });
   return _sdks;
 }
@@ -313,10 +315,17 @@ async function buildViemClient(getEvmProvider) {
 }
 
 async function buildRelayer(getEvmProvider) {
-  const { relayer } = await loadSdks();
+  const { relayer, signing } = await loadSdks();
   if (!relayer?.RelayClient) throw new Error('RelayClient missing — upgrade @polymarket/builder-relayer-client');
+  if (!signing?.BuilderConfig) throw new Error('BuilderConfig missing — upgrade @polymarket/builder-signing-sdk');
   const signer = await buildViemClient(getEvmProvider);
-  return new relayer.RelayClient(RELAYER_URL + '/', POLYGON_CHAIN_ID, signer);
+  // Builder credentials live on the server. The SDK will POST to
+  // /api/poly/sign whenever the relayer requires HMAC headers.
+  const origin = (typeof window !== 'undefined' && window.location?.origin) || '';
+  const builderConfig = new signing.BuilderConfig({
+    remoteBuilderConfig: { url: origin + '/api/poly/sign' },
+  });
+  return new relayer.RelayClient(RELAYER_URL + '/', POLYGON_CHAIN_ID, signer, builderConfig);
 }
 
 // ═══════════════════════════════════════════════════════════════════
