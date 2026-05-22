@@ -249,25 +249,35 @@ function wipeUserCache(evm) {
 // SDK LOADING (lazy)
 // ═══════════════════════════════════════════════════════════════════
 
-let _clobSdk = null, _relayerSdk = null, _viem = null;
+let _clobSdk = null, _relayerSdk = null, _viem = null, _deriveMod = null, _configMod = null;
 
 async function loadSdks() {
-  if (_clobSdk && _relayerSdk && _viem) return { clob: _clobSdk, relayer: _relayerSdk, viem: _viem };
+  if (_clobSdk && _relayerSdk && _viem && _deriveMod && _configMod) {
+    return { clob: _clobSdk, relayer: _relayerSdk, viem: _viem, derive: _deriveMod, config: _configMod };
+  }
   dbg('sdks', 'loading');
-  const [clob, relayer, viem] = await Promise.all([
+  const [clob, relayer, viem, deriveMod, configMod] = await Promise.all([
     import('@polymarket/clob-client-v2'),
     import('@polymarket/builder-relayer-client'),
     import('viem'),
+    // Official Polymarket pattern — these submodule imports are documented
+    // in their reference repos (privy-safe-builder-example, etc.)
+    import('@polymarket/builder-relayer-client/dist/builder/derive'),
+    import('@polymarket/builder-relayer-client/dist/config'),
   ]);
   _clobSdk    = clob;
   _relayerSdk = relayer;
   _viem       = viem;
+  _deriveMod  = deriveMod;
+  _configMod  = configMod;
   dbg('sdks', 'loaded', {
-    clob: !!clob?.ClobClient,
-    relay: !!relayer?.RelayClient,
-    viem: !!viem?.createWalletClient,
+    clob:    !!clob?.ClobClient,
+    relay:   !!relayer?.RelayClient,
+    viem:    !!viem?.createWalletClient,
+    derive:  !!deriveMod?.deriveSafe,
+    config:  !!configMod?.getContractConfig,
   });
-  return { clob, relayer, viem };
+  return { clob, relayer, viem, derive: deriveMod, config: configMod };
 }
 
 async function buildPrivyViemClient(getEvmProvider) {
@@ -284,47 +294,23 @@ async function buildPrivyViemClient(getEvmProvider) {
 // ═══════════════════════════════════════════════════════════════════
 // SAFE DERIVATION + DEPLOY
 //
-// Try the relayer SDK first; if its internals aren't where we expect
-// (versions vary), fall back to RelayClient.getSafeAddress(). If that
-// also fails, we let the caller surface the error and user can hit
-// "Reset trading account" to retry.
+// Uses Polymarket's official deriveSafe(eoaAddress, factoryAddress)
+// from the builder-relayer-client SDK. This is the same pattern shown
+// in all Polymarket reference repos (privy-safe-builder-example etc).
+// CREATE2-deterministic — no signature, no network call.
 // ═══════════════════════════════════════════════════════════════════
 
-async function deriveSafeAddress(evm, getEvmProvider) {
-  const { relayer } = await loadSdks();
-
-  // Attempt 1: RelayClient method (most common in v0.6+)
-  try {
-    const { RelayClient } = relayer;
-    if (RelayClient) {
-      const signer = await buildPrivyViemClient(getEvmProvider);
-      const client = new RelayClient(RELAYER_URL, POLYGON_CHAIN_ID, signer);
-      if (typeof client.getSafeAddress === 'function') {
-        const safe = await client.getSafeAddress();
-        if (safe) { dbg('safe', 'derived via getSafeAddress', { safe }); return safe; }
-      }
-      if (typeof client.deriveSafe === 'function') {
-        const safe = await client.deriveSafe();
-        if (safe) { dbg('safe', 'derived via client.deriveSafe', { safe }); return safe; }
-      }
-    }
-  } catch (e) { dbgErr('safe', 'RelayClient derive path failed', e); }
-
-  // Attempt 2: Polymarket's REST endpoint that returns Safe for an EOA
-  try {
-    const r = await fetchWithTimeout(
-      `${RELAYER_URL}safe/${evm}`,
-      { headers: { Accept: 'application/json' } },
-      8_000,
-    );
-    if (r.ok) {
-      const j = await r.json();
-      const safe = j?.safe || j?.proxyAddress || j?.address;
-      if (safe) { dbg('safe', 'derived via REST', { safe }); return safe; }
-    }
-  } catch (e) { dbgErr('safe', 'REST derive path failed', e); }
-
-  throw new Error('Unable to derive Safe address — try Reset trading account');
+async function deriveSafeAddress(evm /* getEvmProvider unused — pure CREATE2 */) {
+  const { derive, config } = await loadSdks();
+  if (!derive?.deriveSafe || !config?.getContractConfig) {
+    throw new Error('Polymarket SDK helpers unavailable — check @polymarket/builder-relayer-client version');
+  }
+  const cfg = config.getContractConfig(POLYGON_CHAIN_ID);
+  const factory = cfg?.SafeContracts?.SafeFactory;
+  if (!factory) throw new Error('Safe factory address missing from SDK config');
+  const safe = derive.deriveSafe(evm, factory);
+  dbg('safe', 'derived', { evm, safe });
+  return safe;
 }
 
 async function buildRelayClient(getEvmProvider) {
