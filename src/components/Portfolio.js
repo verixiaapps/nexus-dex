@@ -3,10 +3,8 @@ import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
 import { PublicKey } from '@solana/web3.js';
 
-import { readEarnPositions } from './earnPositions';
- 
 // =====================================================================
-// DESIGN TOKENS — match PredictionsTonight/PerpsTrade exactly
+// DESIGN TOKENS
 // =====================================================================
 const C = {
   bg:'#04070f', bg2:'#070b16', surface:'#0a1020', surface2:'#0e1428',
@@ -37,9 +35,11 @@ const USDT_SOLANA           = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
 const SPL_LEGACY_PROGRAM    = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
 const SPL_TOKEN2022_PROGRAM = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 
-// Filter dust holdings under this USD value to keep the UI clean.
-// $0.10 catches airdrop dust and rounding leftovers without hiding real positions.
 const DUST_THRESHOLD_USD = 0.10;
+
+// Polymarket positions are pulled from their Data API by Safe address.
+// Same source polymarket.com uses for its portfolio screen.
+const POLY_DATA_API = 'https://data-api.polymarket.com';
 
 // xStocks (Token-2022) — same 18 mints as Stocks.jsx.
 const XSTOCKS = {
@@ -130,7 +130,7 @@ async function copyText(text) {
 }
 
 // =====================================================================
-// PRICE FETCHING — unchanged from previous version
+// PRICE FETCHING
 // =====================================================================
 const _priceCache = {};
 function clearPriceCache() { Object.keys(_priceCache).forEach(k => delete _priceCache[k]); }
@@ -180,7 +180,7 @@ async function fetchTokenPriceUsd(mint, decimals = 6, force = false) {
 }
 
 // =====================================================================
-// HYPERLIQUID PERPS — unchanged
+// HYPERLIQUID PERPS
 // =====================================================================
 function getHlAddress(solPubkey) {
   if (!solPubkey) return null;
@@ -228,6 +228,41 @@ function coinAccent(symbol) {
     LINK:['#2a5ada','#6a95ff'], AVAX:['#e84142','#ff7a7b'], ARB:['#12aaff','#60d0ff'],
   };
   return map[symbol] || ['#a87fff','#97fce4'];
+}
+
+// =====================================================================
+// POLYMARKET POSITIONS (CALL section)
+// Same as Predict.jsx: derive Safe from EOA → query Data API for positions.
+// We look up the safe address from localStorage where Predict.jsx caches it
+// after derivation. If user hasn't opened Call yet, no positions are shown.
+// =====================================================================
+function getPolymarketSafe(solPubkey) {
+  if (!solPubkey) return null;
+  try { return localStorage.getItem('verixia_safe_' + solPubkey) || null; }
+  catch { return null; }
+}
+async function fetchPolymarketPositions(safeAddress) {
+  if (!safeAddress) return [];
+  try {
+    const url = `${POLY_DATA_API}/positions?user=${safeAddress}&sizeThreshold=0.01`;
+    const r = await fetch(url, { headers: { Accept: 'application/json' } });
+    if (!r.ok) return [];
+    const data = await r.json();
+    if (!Array.isArray(data)) return [];
+    return data
+      .filter(p => Number(p?.size || 0) > 0)
+      .map(p => ({
+        conditionId:  p.conditionId || p.condition_id,
+        tokenId:      p.asset || p.tokenId,
+        outcome:      p.outcome || (p.side === 'YES' ? 'Yes' : 'No'),
+        title:        p.title || p.market || p.eventTitle || 'Polymarket position',
+        shares:       Number(p.size || 0),
+        avgPrice:     Number(p.avgPrice || p.avg_price || 0),
+        currentPrice: Number(p.curPrice || p.current_price || 0),
+        currentValue: Number(p.currentValue || p.current_value || (Number(p.size||0) * Number(p.curPrice||p.current_price||0))),
+      }))
+      .filter(p => p.shares > 0);
+  } catch { return []; }
 }
 
 // =====================================================================
@@ -302,9 +337,7 @@ function TokenRow({ token, onClick }) {
   );
 }
 
-// PERPS row — read-only. PnL/ROE intentionally hidden per product decision;
-// users see PnL on the Perps tab where they can act on it. Here we just
-// show position size + entry to confirm "yes, this position exists."
+// PERPS row — read-only.
 function PerpRow({ pos }) {
   const [a, b] = coinAccent(pos.coin);
   return (
@@ -344,9 +377,10 @@ function PerpRow({ pos }) {
   );
 }
 
-// EARN row — Kamino USDC deposit. Value-only, no APY (lives on Earn tab).
-// "Manage ↗" opens Kamino's app since withdrawals happen there.
-function EarnRow({ position }) {
+// CALL row — Polymarket prediction-market position. Shares + outcome (Yes/No)
+// + current market price. No PnL — user can act on it via the Call tab.
+function CallRow({ pos }) {
+  const isYes = (pos.outcome || '').toLowerCase() === 'yes';
   return (
     <div style={{
       padding: '12px 16px', display: 'grid', gridTemplateColumns: '36px 1fr auto',
@@ -354,36 +388,27 @@ function EarnRow({ position }) {
     }}>
       <div style={{
         width: 36, height: 36, borderRadius: '50%',
-        background: `linear-gradient(135deg,${position.color || '#7a5af8'},${position.color || '#7a5af8'}dd)`,
+        background: `linear-gradient(135deg, ${isYes ? '#3dd598' : '#ff8a9e'}, ${isYes ? '#5de882' : '#ff6b88'})`,
         display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: '#fff', fontWeight: 900, fontSize: 13,
+        color: '#04070f', fontWeight: 900, fontSize: 11,
         flexShrink: 0, letterSpacing: '-.02em',
-        boxShadow: `0 4px 12px ${(position.color || '#7a5af8')}40`,
-        ...T.display,
-      }}>K</div>
+        boxShadow: `0 4px 12px ${isYes ? '#3dd59830' : '#ff8a9e30'}`, ...T.display,
+      }}>{isYes ? 'YES' : 'NO'}</div>
       <div style={{ minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          <span style={{ color: C.inkStr, fontWeight: 800, fontSize: 14, letterSpacing: '-.01em', ...T.display }}>
-            {position.protocol}
+          <span style={{ color: C.inkStr, fontWeight: 700, fontSize: 13, letterSpacing: '-.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200, ...T.display }}>
+            {pos.title}
           </span>
-          <span style={{
-            color: C.hl, fontSize: 9, fontWeight: 700, padding: '2px 6px',
-            borderRadius: 4, background: C.hlDim, border: `1px solid ${C.borderHi}`,
-            letterSpacing: '.04em', ...T.mono,
-          }}>EARNING</span>
         </div>
         <div style={{ color: C.muted, fontSize: 11, marginTop: 2, ...T.body }}>
-          USDC supplied · live balance
+          {fmtTokenAmt(pos.shares)} shares · {pos.currentPrice > 0 ? (pos.currentPrice * 100).toFixed(0) + '¢' : '—'}
         </div>
       </div>
-      <a href={position.withdrawUrl} target="_blank" rel="noreferrer" style={{ textDecoration: 'none', textAlign: 'right' }}>
+      <div style={{ textAlign: 'right' }}>
         <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 14, fontVariantNumeric: 'tabular-nums', ...T.mono }}>
-          {fmt(position.amount)}
+          {fmt(pos.currentValue)}
         </div>
-        <div style={{ color: C.hl, fontSize: 10, fontWeight: 700, marginTop: 2, ...T.mono, letterSpacing: '.04em' }}>
-          MANAGE ↗
-        </div>
-      </a>
+      </div>
     </div>
   );
 }
@@ -391,7 +416,7 @@ function EarnRow({ position }) {
 // =====================================================================
 // MAIN
 // =====================================================================
-export default function Portfolio({ onSelectCoin, onConnectWallet }) {
+export default function Portfolio({ onConnectWallet }) {
   const { publicKey: extPk, connected: solCon } = useWallet();
   const { connection } = useConnection();
   const { privyEmbeddedSol } = useNexusWallet();
@@ -417,9 +442,9 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
 
   const [hlAccountValue, setHlAccountValue] = useState(0);
   const [hlPositions, setHlPositions]       = useState([]);
-  // Earn positions — sourced from Kamino REST API via readEarnPositions.
-  // Survives across devices since it queries on-chain state, not localStorage.
-  const [earnPositions, setEarnPositions]   = useState([]);
+
+  // Polymarket "Call" positions — read from Data API by Safe address.
+  const [callPositions, setCallPositions] = useState([]);
 
   const fetchPortfolio = useCallback(async (force = false) => {
     if (!pubkey || !connection) { setLoading(false); return; }
@@ -468,9 +493,7 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
           name: meta.name,
         });
       }
-      // Filter dust before sorting. Keeps the holdings list focused on
-      // positions that actually matter; airdrop scraps disappear cleanly.
-      // Stablecoins always show (they're rarely dust and users expect them).
+      // Filter dust before sorting. Stablecoins always show.
       const filtered = priced.filter(h => {
         const meta = tokenMeta(h.mint);
         return meta.isStable || h.value >= DUST_THRESHOLD_USD;
@@ -485,16 +508,7 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
       });
       setSolBalances(filtered);
 
-      // ----- Earn positions (Kamino) -----
-      // Parallel-friendly: failure doesn't break anything else on the page.
-      try {
-        const ePos = await readEarnPositions({ walletAddress: pubkey.toString() });
-        setEarnPositions(Array.isArray(ePos) ? ePos : []);
-      } catch {
-        setEarnPositions([]);
-      }
-
-      // ----- Hyperliquid Perps -----
+      // ----- Hyperliquid Perps (Stack) -----
       const hlAddr = getHlAddress(pubkey.toString());
       if (hlAddr) {
         const state = await fetchHlState(hlAddr);
@@ -509,6 +523,15 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
       } else {
         setHlAccountValue(0);
         setHlPositions([]);
+      }
+
+      // ----- Polymarket positions (Call) -----
+      const polySafe = getPolymarketSafe(pubkey.toString());
+      if (polySafe) {
+        const positions = await fetchPolymarketPositions(polySafe);
+        setCallPositions(positions);
+      } else {
+        setCallPositions([]);
       }
     } catch (e) {
       setError('Failed to load portfolio');
@@ -534,16 +557,15 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
 
   const solValue    = solBalance * solPriceUsd;
   const tokensTotal = solBalances.reduce((s, h) => s + (h.value || 0), 0);
-  const earnTotal   = earnPositions.reduce((s, p) => s + (p.amount || 0), 0);
-  // Total includes everything: wallet SOL + SPL tokens + Earn + Perps margin.
-  // No double-counting; each source contributes independently.
-  const totalValue  = solValue + tokensTotal + earnTotal + hlAccountValue;
+  const callTotal   = callPositions.reduce((s, p) => s + (p.currentValue || 0), 0);
+  // Total: wallet SOL + SPL tokens + Polymarket positions + Hyperliquid margin.
+  const totalValue  = solValue + tokensTotal + callTotal + hlAccountValue;
   const tokenCount  = solBalances.length + (solBalance > 0 ? 1 : 0);
-  const earnCount   = earnPositions.length;
+  const callCount   = callPositions.length;
   const perpsCount  = hlPositions.length;
 
   // ===================================================================
-  // DISCONNECTED STATE — unchanged
+  // DISCONNECTED STATE
   // ===================================================================
   if (!hasSol) {
     return (
@@ -562,7 +584,7 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
               <span style={{ fontStyle: 'italic', background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>wallet</span>
             </h1>
             <p style={{ color: C.muted, fontSize: 13, margin: '0 0 28px', lineHeight: 1.5, ...T.body }}>
-              See your SOL balance, token holdings, Earn deposits, and Perps positions in one place.
+              See your SOL, tokens, stocks, Call positions, and Stack positions in one place.
             </p>
             <button onClick={() => onConnectWallet?.()} style={{
               background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, border: 'none', borderRadius: 14,
@@ -578,8 +600,6 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
   // ===================================================================
   // CONNECTED STATE
   // ===================================================================
-  // Stats strip: SOL / HOLDINGS / EARN / PERPS — 4 cards on a phone
-  // would be too tight, so we use 2x2 grid for the quick stats.
   return (
     <>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nx-spin { to{transform:rotate(360deg)} }`}</style>
@@ -638,20 +658,20 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
           </div>
         </div>
 
-        {/* QUICK STATS STRIP — 2x2 grid when Earn or Perps active, else 3-col */}
+        {/* QUICK STATS STRIP */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: (earnCount > 0 && perpsCount > 0) ? 'repeat(2,1fr)' : 'repeat(3,1fr)',
+          gridTemplateColumns: (callCount > 0 && perpsCount > 0) ? 'repeat(2,1fr)' : 'repeat(3,1fr)',
           gap: 8, marginTop: 12, marginBottom: 18,
         }}>
           {[
-            { label: 'SOL',      value: solBalance.toFixed(3), sub: solValue > 0 ? fmt(solValue) : '—',                     color: C.sol },
-            { label: 'HOLDINGS', value: String(tokenCount),    sub: tokenCount === 1 ? 'asset' : 'assets',                  color: C.hl },
-            ...(earnCount > 0 ? [{
-              label: 'EARN',     value: String(earnCount),     sub: earnTotal > 0 ? fmt(earnTotal) : '—',                   color: '#7a5af8',
+            { label: 'SOL',      value: solBalance.toFixed(3), sub: solValue > 0 ? fmt(solValue) : '—',                                                       color: C.sol },
+            { label: 'HOLDINGS', value: String(tokenCount),    sub: tokenCount === 1 ? 'asset' : 'assets',                                                    color: C.hl },
+            ...(callCount > 0 ? [{
+              label: 'CALL',     value: String(callCount),     sub: callTotal > 0 ? fmt(callTotal) : '—',                                                     color: C.amber,
             }] : []),
             ...(perpsCount > 0 || hlAccountValue > 0 ? [{
-              label: 'PERPS',    value: String(perpsCount),    sub: hlAccountValue > 0 ? fmt(hlAccountValue) : (perpsCount === 1 ? 'position' : 'positions'), color: C.violet,
+              label: 'STACK',    value: String(perpsCount),    sub: hlAccountValue > 0 ? fmt(hlAccountValue) : (perpsCount === 1 ? 'position' : 'positions'), color: C.violet,
             }] : []),
           ].map(s => (
             <div key={s.label} style={{ padding: '10px 12px', borderRadius: 14, background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, backdropFilter: 'blur(12px)' }}>
@@ -669,40 +689,40 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
           </div>
         )}
 
-        {/* EARN SECTION — above Perps. Hidden when no positions. */}
-        {earnPositions.length > 0 && (
+        {/* CALL SECTION — Polymarket positions */}
+        {callPositions.length > 0 && (
           <>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px', marginBottom: 8 }}>
-              <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.12em', ...T.mono }}>EARN</div>
-              <div style={{ fontSize: 9, color: C.muted2, fontWeight: 600, ...T.mono }}>KAMINO · AUTO 30s</div>
+              <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.12em', ...T.mono }}>CALL</div>
+              <div style={{ fontSize: 9, color: C.muted2, fontWeight: 600, ...T.mono }}>POLYMARKET · AUTO 30s</div>
             </div>
             <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', marginBottom: 18, backdropFilter: 'blur(12px)' }}>
               <div style={{
                 padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
                 borderBottom: `1px solid ${C.hairline}`,
-                background: 'rgba(122,90,248,.04)',
+                background: 'rgba(245,181,61,.04)',
               }}>
                 <div>
-                  <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>SUPPLIED VALUE</div>
-                  <div style={{ fontSize: 17, fontWeight: 800, color: C.inkStr, fontVariantNumeric: 'tabular-nums', marginTop: 2, ...T.display }}>{fmt(earnTotal)}</div>
+                  <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>POSITION VALUE</div>
+                  <div style={{ fontSize: 17, fontWeight: 800, color: C.inkStr, fontVariantNumeric: 'tabular-nums', marginTop: 2, ...T.display }}>{fmt(callTotal)}</div>
                 </div>
                 <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>POSITIONS</div>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: '#7a5af8', fontVariantNumeric: 'tabular-nums', marginTop: 2, ...T.mono }}>
-                    {earnPositions.length} {earnPositions.length === 1 ? 'position' : 'positions'}
+                  <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>OPEN</div>
+                  <div style={{ fontSize: 14, fontWeight: 800, color: C.amber, fontVariantNumeric: 'tabular-nums', marginTop: 2, ...T.mono }}>
+                    {callPositions.length} {callPositions.length === 1 ? 'position' : 'positions'}
                   </div>
                 </div>
               </div>
-              {earnPositions.map(p => <EarnRow key={p.protocol} position={p}/>)}
+              {callPositions.map((p, idx) => <CallRow key={p.tokenId || idx} pos={p}/>)}
             </div>
           </>
         )}
 
-        {/* PERPS SECTION */}
+        {/* STACK SECTION — Hyperliquid perps */}
         {(hlAccountValue > 0 || hlPositions.length > 0) && (
           <>
             <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px', marginBottom: 8 }}>
-              <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.12em', ...T.mono }}>PERPS</div>
+              <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.12em', ...T.mono }}>STACK</div>
               <div style={{ fontSize: 9, color: C.muted2, fontWeight: 600, ...T.mono }}>HYPERLIQUID · AUTO 30s</div>
             </div>
             <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', marginBottom: 18, backdropFilter: 'blur(12px)' }}>
@@ -733,7 +753,7 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
           <div style={{ fontSize: 9, color: C.muted2, fontWeight: 600, ...T.mono }}>OKX + JUPITER · AUTO 30s</div>
         </div>
 
-        {/* HOLDINGS LIST */}
+        {/* HOLDINGS LIST — SOL + SPL tokens + xStocks (all in one) */}
         <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', backdropFilter: 'blur(12px)' }}>
           <TokenRow
             token={{ mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, price: solPriceUsd, value: solValue, uiAmount: solBalance }}
@@ -748,7 +768,7 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
           ) : !solBalances.length ? (
             <div style={{ padding: '28px 18px', textAlign: 'center' }}>
               <div style={{ color: C.muted, fontSize: 12.5, marginBottom: 6, fontWeight: 600, ...T.body }}>No tokens yet.</div>
-              <div style={{ color: C.muted2, fontSize: 11, ...T.body }}>Buy something on the Swap or Stocks tab to get started.</div>
+              <div style={{ color: C.muted2, fontSize: 11, ...T.body }}>Buy something on Swap or Markets to get started.</div>
             </div>
           ) : solBalances.map(token => (
             <TokenRow
@@ -769,4 +789,3 @@ export default function Portfolio({ onSelectCoin, onConnectWallet }) {
     </>
   );
 }
- 
