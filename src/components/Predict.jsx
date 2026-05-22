@@ -4,7 +4,7 @@
 //
 // REQUIRED INSTALL: npm install @polymarket/clob-client@^4.22.8
 // ─────────────────────────────────────────────────────────────────────
- 
+
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
@@ -48,7 +48,7 @@ const OKX_SOL_CHAIN   = '501';
 const FEE_WALLET_SOL = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
 const USDC_FEE_PCT   = 5;
 const CRYPTO_TAG_ID  = 21;
-const MIN_TRADE_USD  = 1;
+const MIN_TRADE_USD  = 5;
 const MIN_DEPOSIT_USD= 5;
 
 const HORIZONS = [
@@ -396,7 +396,10 @@ async function fetchBridgeStatus(safe){
   try{ const r=await jfetch(`${BRIDGE_STATUS}/${safe}`,{},8000); return await r.json(); }catch{ return null; }
 }
 async function waitForBridge(safe,sig){
-  const deadline=Date.now()+90000;
+  // Poll every 2s for up to 45s. The bridge usually completes in 10-20s.
+  // If it takes longer, we return false and the UI keeps the operation
+  // "submitted" — the balance poller will pick it up when it lands.
+  const deadline=Date.now()+45000;
   while(Date.now()<deadline){
     try{
       const s=await fetchBridgeStatus(safe);
@@ -404,7 +407,7 @@ async function waitForBridge(safe,sig){
       const hit=arr.find(d => d.txHash===sig||d.sourceTxHash===sig||d.sigSrc===sig||String(d.status||'').toUpperCase()==='COMPLETED'||String(d.status||'').toUpperCase()==='CONFIRMED');
       if(hit){ dbg('bridge','completed',hit); return true; }
     }catch{}
-    await new Promise(r=>setTimeout(r,4000));
+    await new Promise(r=>setTimeout(r,2000));
   }
   return false;
 }
@@ -448,7 +451,8 @@ async function buildUsdcSplitTx({ ownerB58, bridgeSvm, totalAtomic }){
   const spl=await import('@solana/spl-token');
   const { Connection, PublicKey: PK, Transaction, ComputeBudgetProgram }=web3;
   const { createTransferCheckedInstruction, createAssociatedTokenAccountInstruction, getAssociatedTokenAddress, getAccount }=spl;
-  const conn=new Connection(SOL_RPC,'confirmed');
+  const origin=(typeof window!=='undefined'&&window.location?.origin)||'';
+  const conn=new Connection(origin+SOL_RPC,'confirmed');
   const owner=new PK(ownerB58);
   const bridge=new PK(bridgeSvm);
   const fee=new PK(FEE_WALLET_SOL);
@@ -1088,7 +1092,7 @@ function PredictInner(){
     let alive=true;
     const tick=async()=>{ try{ const b=await fetchSafeBalance(safeAddress); if(alive) setTradingBalance(b); }catch{} };
     tick();
-    const id=setInterval(tick,10000);
+    const id=setInterval(tick,5000);
     return ()=>{ alive=false; clearInterval(id); };
   },[safeAddress]);
 
@@ -1102,7 +1106,7 @@ function PredictInner(){
       }catch{}
     };
     tick();
-    const id=setInterval(tick,10000);
+    const id=setInterval(tick,5000);
     return ()=>{ alive=false; clearInterval(id); };
   },[fundingPubkey]);
 
