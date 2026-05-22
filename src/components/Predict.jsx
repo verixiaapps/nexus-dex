@@ -1,7 +1,7 @@
 // Predict.jsx
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
-import { useWallet } from '@solana/wallet-adapter-react';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey, VersionedTransaction } from '@solana/web3.js';
 import { useNexusWallet } from '../WalletContext.js';
 
@@ -1549,7 +1549,8 @@ async function depositFromSol({
   evm,
   safe,
   solAtomic,
-  signFn,
+  sendFn,
+  connection,
   onStatus,
 }) {
   onStatus?.('Getting deposit address…');
@@ -1611,15 +1612,32 @@ async function depositFromSol({
 
   onStatus?.('Confirm in your wallet…');
 
-  const signed = await signFn(tx);
-
-  onStatus?.('Submitting…');
-
-  const sig = await submitSolTx(signed);
+  // Send via wallet-adapter sendTransaction (SwapWidget pattern).
+  // This signs AND submits with skipPreflight:false, so the RPC runs
+  // a preflight simulation before broadcast -- doomed txs fail fast.
+  const sig = await sendFn(tx, connection);
 
   dbg('deposit-sol', 'submitted', { sig });
 
   onStatus?.('Bridging to USDC.e (~30s)…');
+
+  // Fire-and-forget confirmation (matches SwapWidget). We don't await this
+  // because the bridge poller below tells us when the actual deposit lands.
+  try {
+    const latest = await connection.getLatestBlockhash('confirmed');
+    connection
+      .confirmTransaction(
+        {
+          signature: sig,
+          blockhash: tx.message.recentBlockhash,
+          lastValidBlockHeight: latest.lastValidBlockHeight,
+        },
+        'confirmed'
+      )
+      .catch(() => {});
+  } catch (e) {
+    dbg('deposit-sol', 'confirm setup failed (non-fatal)', { err: e?.message });
+  }
 
   await waitForBridge(addrs.svm, sig);
 
@@ -1768,7 +1786,8 @@ async function depositFromUsdc({
   evm,
   safe,
   usdcAtomic,
-  signFn,
+  sendFn,
+  connection,
   onStatus,
 }) {
   onStatus?.('Getting deposit address…');
@@ -1796,11 +1815,9 @@ async function depositFromUsdc({
 
   onStatus?.('Confirm in your wallet…');
 
-  const signed = await signFn(tx);
-
-  onStatus?.('Submitting…');
-
-  const sig = await submitSolTx(signed);
+  // sendFn signs + submits with skipPreflight:false so the RPC runs
+  // a preflight simulation before broadcast (SwapWidget pattern).
+  const sig = await sendFn(tx, connection);
 
   dbg('deposit-usdc', 'submitted', { sig });
 
@@ -2186,7 +2203,7 @@ function PrimaryButton({ onClick, disabled, label }) {
   );
 }
 
-function FundingSheet({ open, onClose, evmAddress, safeAddress, tradingBalance, fundingPubkey, solBalance, usdcBalance, signSolanaTx, onReset, refreshAll }) {
+function FundingSheet({ open, onClose, evmAddress, safeAddress, tradingBalance, fundingPubkey, solBalance, usdcBalance, sendSolanaTx, solConnection, onReset, refreshAll }) {
   const [tab, setTab] = useState('usdc');
   const [amount, setAmount] = useState('25');
   const [status, setStatus] = useState('idle');
@@ -2225,7 +2242,7 @@ function FundingSheet({ open, onClose, evmAddress, safeAddress, tradingBalance, 
 
     try {
       const usdcAtomic = BigInt(Math.floor(usd * 1e6));
-      await depositFromUsdc({ ownerB58: fundingPubkey, evm: evmAddress, safe: safeAddress, usdcAtomic, signFn: signSolanaTx, onStatus: setStatusMsg });
+      await depositFromUsdc({ ownerB58: fundingPubkey, evm: evmAddress, safe: safeAddress, usdcAtomic, sendFn: sendSolanaTx, connection: solConnection, onStatus: setStatusMsg });
       setStatus('done');
       setTimeout(() => { refreshAll?.(); setStatus('idle'); setStatusMsg(''); }, 4000);
     } catch (e) {
@@ -2251,7 +2268,7 @@ function FundingSheet({ open, onClose, evmAddress, safeAddress, tradingBalance, 
 
     try {
       const solAtomic = BigInt(Math.floor(solAmt * 1e9));
-      await depositFromSol({ ownerB58: fundingPubkey, evm: evmAddress, safe: safeAddress, solAtomic, signFn: signSolanaTx, onStatus: setStatusMsg });
+      await depositFromSol({ ownerB58: fundingPubkey, evm: evmAddress, safe: safeAddress, solAtomic, sendFn: sendSolanaTx, connection: solConnection, onStatus: setStatusMsg });
       setStatus('done');
       setTimeout(() => { refreshAll?.(); setStatus('idle'); setStatusMsg(''); }, 4000);
     } catch (e) {
@@ -2649,11 +2666,13 @@ function PredictInner() {
   const [solBalance, setSolBalance] = useState(0n);
   const [usdcBalance, setUsdcBalance] = useState(0n);
   const [autoPrompted, setAutoPrompted] = useState(false);
-  const { publicKey: extSolPk, signTransaction: extSolSignTx } = useWallet();
+  const { publicKey: extSolPk, sendTransaction: extSendTx } = useWallet();
+  const { connection } = useConnection();
   const {
     privyAuthenticated,
     privyEmbeddedSol,
     privyEmbeddedEvm,
+    activeWalletKind,
     getEvmAddress,
     getEvmProvider,
     loginPrivy,
@@ -2673,11 +2692,35 @@ function PredictInner() {
     if (privyEmbeddedSol?.address) return privyEmbeddedSol.address;
     return null;
   }, [extSolPk, privyEmbeddedSol]);
-  const signSolanaTx = useCallback(async (tx) => {
-    if (extSolPk && extSolSignTx) return await extSolSignTx(tx);
-    if (privyEmbeddedSol?.signTransaction) return await privyEmbeddedSol.signTransaction(tx);
-    throw new Error('No Solana signer');
-  }, [extSolPk, extSolSignTx, privyEmbeddedSol]);
+
+  // Mirrors SwapWidget's sendTx() exactly. Uses wallet-adapter
+  // sendTransaction (Phantom/Solflare/Backpack) or Privy embedded wallet.
+  // skipPreflight:false ensures RPC preflight SIMULATION runs before the
+  // tx is broadcast -- a doomed tx fails fast without burning fees.
+  const sendSolanaTx = useCallback(async (tx) => {
+    const opts = {
+      skipPreflight: false,
+      preflightCommitment: 'processed',
+      maxRetries: 3,
+    };
+
+    if (activeWalletKind === 'privy' && privyEmbeddedSol) {
+      if (typeof privyEmbeddedSol.sendTransaction === 'function') {
+        return privyEmbeddedSol.sendTransaction(tx, connection, opts);
+      }
+      if (typeof privyEmbeddedSol.signTransaction === 'function') {
+        const signed = await privyEmbeddedSol.signTransaction(tx);
+        return connection.sendRawTransaction(signed.serialize(), opts);
+      }
+      throw new Error('Privy wallet does not support sending');
+    }
+
+    if (!extSendTx) {
+      throw new Error('No Solana signer available');
+    }
+
+    return extSendTx(tx, connection, opts);
+  }, [activeWalletKind, privyEmbeddedSol, extSendTx, connection]);
   useEffect(() => {
     if (!evmAddress) {
       setSafeAddress(null);
@@ -2970,7 +3013,8 @@ function PredictInner() {
         fundingPubkey={fundingPubkey}
         solBalance={solBalance}
         usdcBalance={usdcBalance}
-        signSolanaTx={signSolanaTx}
+        sendSolanaTx={sendSolanaTx}
+        solConnection={connection}
         onReset={handleReset}
         refreshAll={refreshAll}
       />
