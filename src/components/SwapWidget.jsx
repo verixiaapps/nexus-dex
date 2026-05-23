@@ -15,6 +15,7 @@ import {
   VersionedTransaction,
   TransactionMessage,
   SystemProgram,
+  ComputeBudgetProgram,
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddressSync,
@@ -31,6 +32,10 @@ const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV')
 const FEE_BPS    = 500; // 5%
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+
+// Priority fee: ~0.001 SOL (~$0.17) ceiling for fast confirmation on our fee tx.
+const PRIORITY_FEE_MICROLAMPORTS = 5_000;
+const PRIORITY_FEE_CU_LIMIT      = 200_000;
 
 const RPC_URL =
   process.env.REACT_APP_SOLANA_RPC ||
@@ -225,6 +230,7 @@ export default function Swap() {
           taker:       wallet.publicKey
             ? wallet.publicKey.toBase58()
             : '11111111111111111111111111111111',
+          computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
         });
         const r = await fetch(`/api/jupiter/build?${params}`, { signal: ac.signal });
         if (!r.ok) {
@@ -300,13 +306,16 @@ export default function Swap() {
       const netRaw = quote.netRaw ||
         ((BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n).toString();
 
-      // 1) Fresh /build call for the NET amount (locks in the actual route)
+      // 1) Fresh /build call for the NET amount (locks in the actual route).
+      // computeUnitPriceMicroLamports targets ~0.001 SOL (~$0.17) priority fee
+      // on Jupiter's swap tx — matches our fee tx for consistent fast confirms.
       const params = new URLSearchParams({
         inputMint,
         outputMint,
         amount:      netRaw,
         slippageBps: String(slippageBps),
         taker:       wallet.publicKey.toBase58(),
+        computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
       });
       const r = await fetch(`/api/jupiter/build?${params}`);
       if (!r.ok) {
@@ -362,7 +371,10 @@ export default function Swap() {
       const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
       if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
 
-      const feeIxs = [];
+      const feeIxs = [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: PRIORITY_FEE_CU_LIMIT }),
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
+      ];
       if (inputMint === SOL_MINT) {
         // Native SOL transfer
         feeIxs.push(SystemProgram.transfer({
