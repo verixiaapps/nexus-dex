@@ -1,72 +1,113 @@
-// ─── Replace formatEndDate (around line 70) ──────────────────────────────────
-function formatEndDate(iso) {
-  if (iso == null) return null;
-  let d;
-  if (typeof iso === 'number') {
-    // Jupiter returns Unix seconds; JS Date wants ms.
-    d = new Date(iso < 1e12 ? iso * 1000 : iso);
-  } else {
-    d = new Date(iso);
+// server-predict.js
+// Express router for Jupiter Prediction Market + Jupiter Ultra swap proxy.
+// Mount in server.js with:   app.use('/api/predict', require('./server-predict'));
+//
+// Env (optional):
+//   JUPITER_API_KEY    -- from https://developers.jup.ag/portal
+//                         Prediction endpoints currently work without a key.
+//                         If set, the key is attached as x-api-key.
+//                         If empty/unset, no x-api-key header is sent (which
+//                         is required — sending an empty header value causes
+//                         Jupiter to return HTTP 401 Unauthorized).
+//
+// All endpoints proxy to Jupiter so the API key (if any) never reaches the browser.
+
+const express = require('express');
+const router  = express.Router();
+
+const JUP_API_KEY  = (process.env.JUPITER_API_KEY || '').trim();
+const PRED_BASE    = 'https://api.jup.ag/prediction/v1';
+const ULTRA_BASE   = 'https://api.jup.ag/ultra/v1';
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+async function fwd(req, res, url, method = 'GET', body = undefined) {
+  try {
+    const headers = { 'Content-Type': 'application/json' };
+    // Only attach x-api-key if it's actually set. Sending x-api-key: ""
+    // causes Jupiter to 401 even though the endpoints are otherwise public.
+    if (JUP_API_KEY) headers['x-api-key'] = JUP_API_KEY;
+
+    const opts = { method, headers };
+    if (body !== undefined) opts.body = typeof body === 'string' ? body : JSON.stringify(body);
+
+    const r   = await fetch(url, opts);
+    const txt = await r.text();
+    res.status(r.status);
+    res.setHeader('Content-Type', r.headers.get('content-type') || 'application/json');
+    res.send(txt);
+  } catch (e) {
+    console.error('[predict] fwd error', url, e?.message);
+    res.status(502).json({ error: 'upstream_failed', message: e?.message || String(e) });
   }
-  if (!Number.isFinite(d.getTime())) return null;
-  const ms = d.getTime() - Date.now();
-  if (ms <= 0) return 'Closed';
-  if (ms < 60 * 60_000) return `Ends in ${Math.floor(ms / 60_000)}m`;
-  if (ms < 24 * 60 * 60_000) {
-    const h  = Math.floor(ms / 3_600_000);
-    const mm = Math.floor((ms % 3_600_000) / 60_000);
-    return `Ends in ${h}h ${mm}m`;
-  }
-  const mo  = d.toLocaleString('en-US', { month: 'short' });
-  const day = d.getDate();
-  return `Ends ${mo} ${day}`;
 }
 
-// ─── Replace pickEventFields (around line 215) ───────────────────────────────
-function pickEventFields(ev) {
-  const market = (ev.markets && ev.markets[0]) || ev.market || null;
-  if (!market) return null;
+// ── Health ───────────────────────────────────────────────────────────────────
+router.get('/health', (req, res) => {
+  res.json({
+    ok: true,
+    hasKey: !!JUP_API_KEY,
+    keyLen: JUP_API_KEY.length,
+  });
+});
 
-  // Jupiter (polymarket-backed) returns prices in micro-USD (6 decimals).
-  const fromMicro = v => {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return 0;
-    return n > 1.5 ? n / 1e6 : n;   // tolerate either scale
-  };
-  const fromMicroVol = v => {
-    const n = Number(v);
-    if (!Number.isFinite(n)) return 0;
-    return n / 1e6;
-  };
+// ── Events / Markets discovery ───────────────────────────────────────────────
+// GET /api/predict/events?category=crypto&limit=20
+router.get('/events', (req, res) => {
+  const q = new URLSearchParams(req.query);
+  if (!q.has('limit')) q.set('limit', '80');
+  return fwd(req, res, `${PRED_BASE}/events?${q.toString()}`);
+});
 
-  const pricing = market.pricing || market;
-  const yesPrice = fromMicro(pricing.buyYesPriceUsd ?? pricing.yesBuyPriceUsd ?? pricing.yesPrice ?? pricing.priceYes ?? 0);
-  let   noPrice  = fromMicro(pricing.buyNoPriceUsd  ?? pricing.noBuyPriceUsd  ?? pricing.noPrice  ?? pricing.priceNo  ?? 0);
-  if (!noPrice && yesPrice) noPrice = 1 - yesPrice;
+// GET /api/predict/markets?eventId=...
+router.get('/markets', (req, res) => {
+  const qs = new URLSearchParams(req.query).toString();
+  return fwd(req, res, `${PRED_BASE}/markets?${qs}`);
+});
 
-  // Prefer event-level title (e.g. "2026 FIFA World Cup Winner"),
-  // never the market-level title (which is the outcome name like "France").
-  const meta  = ev.metadata || {};
-  const title = meta.title || ev.title || ev.name || market.title || 'Untitled';
-  const image = meta.imageUrl || ev.imageUrl || ev.image || ev.icon || market.imageUrl || market.image || null;
+// GET /api/predict/market/:marketId
+router.get('/market/:marketId', (req, res) => {
+  return fwd(req, res, `${PRED_BASE}/markets/${encodeURIComponent(req.params.marketId)}`);
+});
 
-  return {
-    eventId:   ev.eventId || ev.id || market.eventId,
-    title,
-    image,
-    category:  String(ev.category || market.category || '').toLowerCase(),
-    series:    ev.series || ev.seriesName || meta.series || null,
-    closeTime: meta.closeTime || ev.closeTime || market.closeTime || ev.endDate || market.endDate || null,
-    createdAt: ev.createdAt || market.createdAt || null,
-    volume24h: fromMicroVol(ev.volume24hr || ev.volume24h || ev.volumeUsd || market.volume || 0),
-    liquidity: fromMicroVol(ev.liquidity || market.liquidity || 0),
-    market: {
-      marketId: market.marketId || market.id,
-      status:   market.status || 'open',
-      result:   market.result || null,
-      yesPrice, noPrice,
-      yesPct:   Math.max(0, Math.min(99, Math.round(yesPrice * 100))),
-      noPct:    Math.max(0, Math.min(99, Math.round(noPrice  * 100))),
-    },
-  };
-}
+// ── Orders ───────────────────────────────────────────────────────────────────
+// POST /api/predict/orders   -- create buy/sell order, returns base64 tx
+router.post('/orders', express.json(), (req, res) => {
+  return fwd(req, res, `${PRED_BASE}/orders`, 'POST', req.body);
+});
+
+// GET /api/predict/orders/status/:orderPubkey
+router.get('/orders/status/:orderPubkey', (req, res) => {
+  return fwd(req, res, `${PRED_BASE}/orders/status/${encodeURIComponent(req.params.orderPubkey)}`);
+});
+
+// ── Positions ────────────────────────────────────────────────────────────────
+// GET /api/predict/positions?owner=...
+router.get('/positions', (req, res) => {
+  const qs = new URLSearchParams(req.query).toString();
+  return fwd(req, res, `${PRED_BASE}/positions?${qs}`);
+});
+
+// POST /api/predict/positions/sell   -- close/sell a position
+router.post('/positions/sell', express.json(), (req, res) => {
+  // Sell uses the same /orders endpoint with isBuy:false and positionPubkey set.
+  return fwd(req, res, `${PRED_BASE}/orders`, 'POST', req.body);
+});
+
+// POST /api/predict/positions/claim
+router.post('/positions/claim', express.json(), (req, res) => {
+  return fwd(req, res, `${PRED_BASE}/positions/claim`, 'POST', req.body);
+});
+
+// ── Jupiter Ultra swap (SOL → USDC) ──────────────────────────────────────────
+// GET /api/predict/ultra/order?inputMint=...&outputMint=...&amount=...&taker=...
+router.get('/ultra/order', (req, res) => {
+  const qs = new URLSearchParams(req.query).toString();
+  return fwd(req, res, `${ULTRA_BASE}/order?${qs}`);
+});
+
+// POST /api/predict/ultra/execute   -- submit signed tx via Ultra
+router.post('/ultra/execute', express.json(), (req, res) => {
+  return fwd(req, res, `${ULTRA_BASE}/execute`, 'POST', req.body);
+});
+
+module.exports = router;
