@@ -626,12 +626,61 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection 
       const signed = await signAllTransactions(txs);
 
       setStMsg('Submitting…');
-      for (const stx of signed) {
-        const sig = await connection.sendRawTransaction(stx.serialize(), {
-          maxRetries: 3, preflightCommitment: 'confirmed',
-        });
-        await connection.confirmTransaction(sig, 'confirmed');
+      const sigs = await Promise.all(signed.map(stx =>
+        connection.sendRawTransaction(stx.serialize(), {
+          maxRetries: 5, skipPreflight: true, preflightCommitment: 'confirmed',
+        })
+      ));
+
+      setStMsg('Confirming…');
+      // Solana's confirmTransaction auto-times-out when blockhash expires
+      // (~60-90s). If that happens, the tx MAY still land — poll status
+      // for another 15s before giving up and showing Solscan link.
+      const bh = await connection.getLatestBlockhash('confirmed');
+      const results = await Promise.allSettled(sigs.map(sig =>
+        connection.confirmTransaction({
+          signature: sig,
+          blockhash: bh.blockhash,
+          lastValidBlockHeight: bh.lastValidBlockHeight,
+        }, 'confirmed')
+      ));
+
+      // Outcome 1: any tx returned an explicit on-chain error → show it.
+      const onchainErr = results.find(r => r.status === 'fulfilled' && r.value?.value?.err);
+      if (onchainErr) {
+        throw new Error('On-chain error: ' + JSON.stringify(onchainErr.value.value.err));
       }
+
+      // Outcome 2: some tx didn't confirm before blockhash expired.
+      // Double-check by polling getSignatureStatus for a bit.
+      const expired = results
+        .map((r, i) => r.status === 'rejected' ? sigs[i] : null)
+        .filter(Boolean);
+      if (expired.length) {
+        setStMsg('Verifying on-chain…');
+        const deadline = Date.now() + 15_000;
+        let allLanded = true;
+        while (Date.now() < deadline) {
+          const { value } = await connection.getSignatureStatuses(expired);
+          const stillPending = value.some(s => !s || (!s.confirmationStatus && !s.err));
+          const anyErr       = value.find(s => s?.err);
+          if (anyErr) {
+            throw new Error('On-chain error: ' + JSON.stringify(anyErr.err));
+          }
+          if (!stillPending) break;
+          await new Promise(r => setTimeout(r, 1500));
+          if (Date.now() >= deadline) { allLanded = false; }
+        }
+        if (!allLanded) {
+          const primary = sigs[sigs.length - 1];
+          setError(`Submitted but still confirming. View on Solscan: https://solscan.io/tx/${primary}`);
+          setStatus('idle'); setStMsg('');
+          onDone?.();
+          return;
+        }
+      }
+
+      // Outcome 3: all confirmed cleanly.
 
       setStatus('success'); setStMsg('');
       onDone?.();
