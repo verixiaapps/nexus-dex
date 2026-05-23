@@ -22,8 +22,6 @@ const EXTRA_CONNECT_SRC = _csv(process.env.EXTRA_CSP_CONNECT_SRC);
 const EXTRA_FRAME_SRC   = _csv(process.env.EXTRA_CSP_FRAME_SRC);
 const EXTRA_SCRIPT_SRC  = _csv(process.env.EXTRA_CSP_SCRIPT_SRC);
 
-// CSP: Polymarket domains removed (no longer used).
-// Jupiter Predict already covered by https://api.jup.ag.
 const CSP_DIRECTIVES = [
   ['default-src',     ["'self'"]],
   ['script-src',      ["'self'", "'unsafe-inline'", 'https://challenges.cloudflare.com', ...EXTRA_SCRIPT_SRC]],
@@ -68,10 +66,14 @@ const OKX_SOL_FEE_PCT    = process.env.OKX_SOL_FEE_PCT    || '5';
 const OKX_EVM_FEE_PCT    = process.env.OKX_EVM_FEE_PCT    || '3';
 const OKX_SOLANA_CHAIN   = '501';
 
-const JUPITER_ENABLED    = process.env.JUPITER_ENABLED === '1';
-const JUPITER_ACCOUNT    = process.env.JUPITER_ACCOUNT    || 'NEXUS_DEX_FALLBACK';
-const JUPITER_QUOTE_BASE = (process.env.JUPITER_QUOTE_BASE || 'https://quote-api.jup.ag/v6').replace(/\/+$/, '');
-const JUPITER_API_KEY    = process.env.JUPITER_API_KEY    || '';
+// Jupiter Swap V2 (the new unified API). Old default was quote-api.jup.ag/v6
+// which is the legacy Metis Swap API and is no longer actively maintained.
+const JUPITER_ENABLED        = process.env.JUPITER_ENABLED !== '0';   // default on
+const JUPITER_ACCOUNT        = process.env.JUPITER_ACCOUNT || 'NEXUS_DEX';
+const JUPITER_API_KEY        = process.env.JUPITER_API_KEY || '';
+const JUPITER_SWAP_V2_BASE   = 'https://api.jup.ag/swap/v2';
+const JUPITER_LEGACY_BASE    = (process.env.JUPITER_QUOTE_BASE || 'https://api.jup.ag/swap/v1').replace(/\/+$/, '');
+const JUPITER_TOKENS_BASE    = 'https://lite-api.jup.ag/tokens/v2';
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY  || process.env.REACT_APP_HELIUS_API_KEY || '';
 const HELIUS_RPC_URL = process.env.HELIUS_RPC_URL  || process.env.REACT_APP_SOLANA_RPC     || '';
@@ -244,16 +246,77 @@ async function proxyOkx(req, res) {
 app.get('/api/okx/*',  proxyOkx);
 app.post('/api/okx/*', proxyOkx);
 
+/* -- Jupiter Swap (V2 Router + legacy V1 fallback) ---------------------- */
 function buildJupiterHeaders() {
   const h = { Accept: 'application/json', 'Content-Type': 'application/json', 'X-Nexus-Account': JUPITER_ACCOUNT };
   if (JUPITER_API_KEY) h['x-api-key'] = JUPITER_API_KEY;
   return h;
 }
 
+// Jupiter Swap V2 — Router /build endpoint.
+// GET /api/jupiter/build?inputMint=&outputMint=&amount=&taker=&slippageBps=&platformFeeBps=&feeAccount=...
+// Returns raw instructions (computeBudgetInstructions, setupInstructions,
+// swapInstruction, cleanupInstruction, otherInstructions, blockhashWithMetadata,
+// addressesByLookupTableAddress) plus quote details.
+app.get('/api/jupiter/build', async (req, res) => {
+  try {
+    const url = JUPITER_SWAP_V2_BASE + '/build' + buildForwardedQuery(req);
+    const c   = getCachedJson(url);
+    if (c) return res.status(c.status).json(c.payload);
+    const response = await fetchWithTimeout(url, { method: 'GET', headers: buildJupiterHeaders() }, 12_000);
+    const result   = await safeJson(response);
+    if (response.ok && result.parsed !== null) setCachedJson(url, response.status, result.parsed, 4_000);
+    return respondJsonOrError(res, response, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Jupiter build timed out' });
+    logError('jupiter-build', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+// Verified token list (used to populate the Swap UI token picker).
+// Proxies https://lite-api.jup.ag/tokens/v2/tag?query=verified
+app.get('/api/jupiter/tokens', async (req, res) => {
+  try {
+    const params = new URLSearchParams(req.query);
+    if (!params.has('query')) params.set('query', 'verified');
+    const url = `${JUPITER_TOKENS_BASE}/tag?${params.toString()}`;
+    const c   = getCachedJson(url);
+    if (c) return res.status(c.status).json(c.payload);
+    const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 15_000);
+    const result   = await safeJson(response);
+    if (response.ok && result.parsed) setCachedJson(url, response.status, result.parsed, 300_000); // 5 min
+    return respondJsonOrError(res, response, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Jupiter tokens timed out' });
+    logError('jupiter-tokens', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+// Search tokens by name/symbol/mint. Proxies https://lite-api.jup.ag/tokens/v2/search?query=...
+app.get('/api/jupiter/tokens/search', async (req, res) => {
+  try {
+    const params = new URLSearchParams(req.query);
+    const url    = `${JUPITER_TOKENS_BASE}/search?${params.toString()}`;
+    const c      = getCachedJson(url);
+    if (c) return res.status(c.status).json(c.payload);
+    const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 10_000);
+    const result   = await safeJson(response);
+    if (response.ok && result.parsed) setCachedJson(url, response.status, result.parsed, 30_000);
+    return respondJsonOrError(res, response, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Jupiter token search timed out' });
+    logError('jupiter-token-search', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+/* -- Legacy Jupiter routes (kept for Stocks.jsx etc.) ------------------- */
 app.get('/api/jupiter/quote', async (req, res) => {
   try {
-    if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter fallback disabled' });
-    const url = JUPITER_QUOTE_BASE + '/quote' + buildForwardedQuery(req);
+    if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter disabled' });
+    const url = JUPITER_LEGACY_BASE + '/quote' + buildForwardedQuery(req);
     const c   = getCachedJson(url);
     if (c) return res.status(c.status).json(c.payload);
     const response = await fetchWithTimeout(url, { method: 'GET', headers: buildJupiterHeaders() }, 12_000);
@@ -269,12 +332,12 @@ app.get('/api/jupiter/quote', async (req, res) => {
 
 app.post('/api/jupiter/swap', async (req, res) => {
   try {
-    if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter fallback disabled' });
+    if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter disabled' });
     const body = req.body || {};
     if (!body.userPublicKey) return res.status(400).json({ error: 'Missing userPublicKey' });
-    if (!body.quoteResponse)  return res.status(400).json({ error: 'Missing quoteResponse' });
+    if (!body.quoteResponse) return res.status(400).json({ error: 'Missing quoteResponse' });
     const response = await fetchWithTimeout(
-      JUPITER_QUOTE_BASE + '/swap',
+      JUPITER_LEGACY_BASE + '/swap',
       { method: 'POST', headers: buildJupiterHeaders(), body: JSON.stringify(body) },
       15_000,
     );
@@ -286,19 +349,14 @@ app.post('/api/jupiter/swap', async (req, res) => {
   }
 });
 
-// Jupiter swap-instructions: returns raw instructions (not a serialized tx)
-// so the frontend can bundle them with a custom SPL Transfer instruction
-// (fee -> treasury) into one atomic, user-signed versioned transaction.
-// Used by Stocks.jsx because Jupiter Swap V1's platformFee feature does NOT
-// support Token-2022 tokens (xStocks) -- throws error 0x177e otherwise.
 app.post('/api/jupiter/swap-instructions', async (req, res) => {
   try {
-    if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter fallback disabled' });
+    if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter disabled' });
     const body = req.body || {};
     if (!body.userPublicKey) return res.status(400).json({ error: 'Missing userPublicKey' });
-    if (!body.quoteResponse)  return res.status(400).json({ error: 'Missing quoteResponse' });
+    if (!body.quoteResponse) return res.status(400).json({ error: 'Missing quoteResponse' });
     const response = await fetchWithTimeout(
-      JUPITER_QUOTE_BASE + '/swap-instructions',
+      JUPITER_LEGACY_BASE + '/swap-instructions',
       { method: 'POST', headers: buildJupiterHeaders(), body: JSON.stringify(body) },
       15_000,
     );
@@ -321,7 +379,7 @@ app.get('/api/jupiter/tokens/v2/toporganicscore/:timeframe', async (req, res) =>
     return respondJsonOrError(res, response, result);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'Jupiter tokens timed out' });
-    logError('jupiter-tokens', e);
+    logError('jupiter-tokens-organic', e);
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
@@ -463,14 +521,12 @@ function buildLifiHeaders() {
 
 app.get('/api/lifi/tokens', async (req, res) => {
   try {
-    // Large response — cache for 5 minutes server-side.
     const cacheKey = 'lifi:tokens';
     const c = getCachedJson(cacheKey);
     if (c) return res.status(c.status).json(c.payload);
     const r = await fetchWithTimeout(`${LIFI_API}/tokens`, { headers: buildLifiHeaders() }, 20_000);
     const result = await safeJson(r);
-    if (r.ok && result.parsed !== null)
-      setCachedJson(cacheKey, r.status, result.parsed, 300_000); // 5 min
+    if (r.ok && result.parsed !== null) setCachedJson(cacheKey, r.status, result.parsed, 300_000);
     return respondJsonOrError(res, r, result);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'LI.FI tokens timed out' });
@@ -504,7 +560,7 @@ app.get('/api/lifi/status', async (req, res) => {
   }
 });
 
-/* -- Hyperunit proxy (replaces LI.FI for Solana <-> HL native SOL) ------ */
+/* -- Hyperunit proxy ---------------------------------------------------- */
 function safeUnitAddress(addr) {
   if (typeof addr !== 'string') return null;
   if (addr.length < 16 || addr.length > 64) return null;
@@ -567,7 +623,6 @@ app.post('/api/unit/operations', async (req, res) => {
       return res.status(400).json({ error: 'invalid hlAddress' });
     const url      = `${UNIT_API_BASE}/operations/${hlAddress}`;
     const cacheKey = `unit:ops:${hlAddress.toLowerCase()}`;
-    // Short TTL: operations change frequently during a bridge.
     const { status, parsed, raw } = await fetchUnitJson(url, cacheKey, 5_000);
     if (status >= 400 || !parsed)
       return res.status(status || 502).json({ error: 'unit operations failed', detail: parsed || raw?.slice(0, 200) });
@@ -839,9 +894,6 @@ app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, r
 });
 
 /* -- Predict (Jupiter Prediction Markets) ------------------------------- */
-// Mounts /api/predict/* — proxies Jupiter Predict API (events, markets,
-// orders, positions) plus Jupiter Ultra swap (for SOL→USDC fallback in
-// Predict.jsx). API key held server-side; never reaches browser.
 app.use('/api/predict', require('./server-predict'));
 
 /* -- Health ------------------------------------------------------------- */
@@ -867,11 +919,15 @@ app.get('/api/health', (req, res) => {
     } : { enabled: false },
     lifi: { baseUrl: LIFI_API, hyperCoreChainId: 1337, arbChainId: 42161 },
     unit: { baseUrl: UNIT_API_BASE, flow: 'SOL <-> HL native via Hyperunit Guardian network' },
+    jupiter: {
+      swapV2:  JUPITER_SWAP_V2_BASE,
+      tokens:  JUPITER_TOKENS_BASE,
+      legacy:  JUPITER_LEGACY_BASE,
+      keySet:  Boolean(JUPITER_API_KEY),
+    },
     predict: JUPITER_API_KEY ? {
       provider: 'Jupiter Prediction Market API (beta)',
       base: 'https://api.jup.ag/prediction/v1',
-      flow: 'Solana wallet -> USDC or auto SOL->USDC swap (Jupiter Ultra) -> Jupiter Predict order + 5% fee transfer atomically in one tx',
-      fee: '5% of trade size to FEE_WALLET_SOL',
       note: 'US and South Korea IPs are geo-blocked upstream',
     } : { enabled: false },
     time: new Date().toISOString(),
@@ -907,13 +963,11 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log('Nexus DEX server on port ' + PORT);
   console.log('  env: ' + NODE_ENV);
+  console.log('  Jupiter Swap V2: ' + JUPITER_SWAP_V2_BASE + (JUPITER_API_KEY ? ' (key set)' : ' (no key)'));
   console.log('  LI.FI: ' + LIFI_API + (LIFI_API_KEY ? ' (key set)' : ' (no key)'));
   console.log('  Unit:  ' + UNIT_API_BASE);
-  if (JUPITER_API_KEY) {
-    console.log('  Predict: Jupiter Prediction API enabled');
-  } else {
-    console.warn('  WARNING: JUPITER_API_KEY not set -- Predict page will not work');
-  }
+  if (JUPITER_API_KEY) console.log('  Predict: Jupiter Prediction API enabled');
+  else                 console.warn('  WARNING: JUPITER_API_KEY not set -- Predict page will not work');
   if (OPERATOR_PRIVATE_KEY) {
     try { const w = getOperatorWallet(); console.log('  Operator: ' + w.address); }
     catch (e) { console.error('  Operator key INVALID:', e.message); }
