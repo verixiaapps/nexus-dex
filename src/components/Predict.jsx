@@ -42,15 +42,6 @@ const NAV_CLEARANCE = 120;
 const PRIORITY_FEE_MICROLAMPORTS = 5_000;
 const PRIORITY_FEE_CU_LIMIT      = 200_000;
 
-// ─── Access control (compliance) ──────────────────────────────────────────────
-// Predict is geoblocked in the US + South Korea per Jupiter's terms.
-// During beta, only allowlisted wallets can trade.
-const BLOCKED_COUNTRIES = ['US', 'KR'];
-const ALLOWED_WALLETS = new Set([
-  'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV',
-]);
-const ATTEST_STORAGE_KEY = 'nexus-predict-attest-v1';
-
 const CATEGORIES = [
   { id: 'all',       label: 'All' },
   { id: 'sports',    label: 'Sports' },
@@ -176,45 +167,6 @@ function useBodyLock(open) {
 async function copyToClipboard(text) {
   try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; } } catch {}
   return false;
-}
-
-// Quick country lookup via free geolocation API. Returns ISO country code
-// (e.g. 'US', 'KR', 'GB') or null on failure (fail-open by design).
-async function fetchCountryCode() {
-  try {
-    const r = await fetch('https://ipapi.co/json/', { cache: 'no-store' });
-    if (!r.ok) return null;
-    const j = await r.json();
-    return j?.country_code || j?.country || null;
-  } catch { return null; }
-}
-
-// Attestation: stored locally for UX (don't re-prompt), POSTed to server for
-// audit log. Server appends to a JSON file with wallet, timestamp, IP, UA.
-function readLocalAttest() {
-  try {
-    const raw = localStorage.getItem(ATTEST_STORAGE_KEY);
-    if (!raw) return null;
-    const obj = JSON.parse(raw);
-    return obj?.wallet && obj?.timestamp ? obj : null;
-  } catch { return null; }
-}
-function writeLocalAttest(wallet) {
-  try {
-    localStorage.setItem(ATTEST_STORAGE_KEY, JSON.stringify({
-      wallet, timestamp: new Date().toISOString(), version: 1,
-    }));
-  } catch {}
-}
-async function postAttestation(wallet) {
-  try {
-    await fetch('/api/predict/attest', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ wallet, timestamp: new Date().toISOString() }),
-      keepalive: true,
-    });
-  } catch {}
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1137,31 +1089,6 @@ export default function Predict() {
   const [actionPos, setActionPos] = useState(null);   // { kind: 'sell'|'claim', position }
   const [toast, setToast] = useState('');
 
-  // ─── Compliance gates ─────────────────────────────────────────────────────
-  const [country, setCountry]     = useState(null);  // ISO code, null = unknown
-  const [geoChecked, setGeoChecked] = useState(false);
-  const [attested, setAttested]   = useState(false);  // from localStorage on mount
-
-  useEffect(() => {
-    fetchCountryCode().then(cc => {
-      setCountry(cc);
-      setGeoChecked(true);
-    });
-    setAttested(!!readLocalAttest());
-  }, []);
-
-  const isBlockedCountry = geoChecked && country && BLOCKED_COUNTRIES.includes(country);
-  const isAllowedWallet  = publicKey && ALLOWED_WALLETS.has(publicKey.toBase58());
-
-  const handleAttest = useCallback(() => {
-    if (!publicKey) return;
-    const wallet = publicKey.toBase58();
-    writeLocalAttest(wallet);
-    postAttestation(wallet);
-    setAttested(true);
-  }, [publicKey]);
-  // ──────────────────────────────────────────────────────────────────────────
-
   const connection = useMemo(() => {
     const origin = (typeof window !== 'undefined' && window.location?.origin) || '';
     return new Connection(origin + SOL_RPC, 'confirmed');
@@ -1271,42 +1198,6 @@ export default function Predict() {
           </div>
         )}
 
-        {/* Compliance: geoblock banner */}
-        {isBlockedCountry && (
-          <div style={{ marginBottom: 8, padding: '10px 12px', background: 'rgba(255,95,122,.08)', border: `1px solid ${C.no}55`, borderRadius: 10, fontSize: 11, color: C.ink, lineHeight: 1.45, ...T.body }}>
-            <div style={{ fontWeight: 700, color: C.no, marginBottom: 2, fontSize: 10, letterSpacing: 0.5, ...T.mono }}>
-              ⛔ NOT AVAILABLE IN YOUR REGION
-            </div>
-            Prediction markets are not available to users in {country === 'US' ? 'the United States' : country === 'KR' ? 'South Korea' : 'your region'}. You can still browse markets but cannot place trades.
-          </div>
-        )}
-
-        {/* Compliance: attestation banner (shown to wallet-connected users who haven't agreed yet, in non-blocked regions) */}
-        {!isBlockedCountry && connected && !attested && (
-          <div style={{ marginBottom: 8, padding: '10px 12px', background: 'rgba(245,181,61,.06)', border: `1px solid ${C.amber}55`, borderRadius: 10, fontSize: 11, color: C.ink, lineHeight: 1.45, ...T.body }}>
-            <div style={{ fontWeight: 700, color: C.amber, marginBottom: 4, fontSize: 10, letterSpacing: 0.5, ...T.mono }}>
-              ⓘ ELIGIBILITY CONFIRMATION
-            </div>
-            <div style={{ marginBottom: 8 }}>
-              By clicking below, you confirm you are <strong>not a US or South Korea person</strong> and are legally permitted to trade prediction markets in your jurisdiction.
-            </div>
-            <button onClick={handleAttest}
-              style={{ padding: '7px 14px', borderRadius: 8, background: C.amber, border: 'none', color: C.bg, fontSize: 11, fontWeight: 800, cursor: 'pointer', ...T.mono }}>
-              I AGREE
-            </button>
-          </div>
-        )}
-
-        {/* Beta allowlist: wallet not authorized for trading */}
-        {connected && !isAllowedWallet && (
-          <div style={{ marginBottom: 8, padding: '10px 12px', background: 'rgba(168,127,255,.06)', border: '1px solid rgba(168,127,255,.30)', borderRadius: 10, fontSize: 11, color: C.ink, lineHeight: 1.45, ...T.body }}>
-            <div style={{ fontWeight: 700, color: C.violet, marginBottom: 2, fontSize: 10, letterSpacing: 0.5, ...T.mono }}>
-              🔒 PRIVATE BETA
-            </div>
-            Predict is in private beta. Trading is currently restricted to allowlisted wallets. You can browse markets — trade access is coming soon.
-          </div>
-        )}
-
         {tab === 'markets' && (
           <>
             <div style={{ display: 'flex', gap: 6, marginBottom: 8, overflowX: 'auto', paddingBottom: 4 }}>
@@ -1354,9 +1245,6 @@ export default function Predict() {
                 event={ev}
                 onTrade={(event, isYes) => {
                   if (!connected) { setToast('Connect wallet first'); setTimeout(() => setToast(''), 1500); return; }
-                  if (isBlockedCountry) { setToast('Not available in your region'); setTimeout(() => setToast(''), 2000); return; }
-                  if (!isAllowedWallet) { setToast('Wallet not authorized in beta'); setTimeout(() => setToast(''), 2000); return; }
-                  if (!attested) { setToast('Confirm eligibility above first'); setTimeout(() => setToast(''), 2000); return; }
                   setBuyState({ event, isYes });
                 }}
               />
@@ -1368,12 +1256,7 @@ export default function Predict() {
           <PositionsList
             positions={positions}
             loading={posLoading}
-            onAction={(kind, p) => {
-              if (isBlockedCountry) { setToast('Not available in your region'); setTimeout(() => setToast(''), 2000); return; }
-              if (!isAllowedWallet) { setToast('Wallet not authorized in beta'); setTimeout(() => setToast(''), 2000); return; }
-              if (!attested) { setToast('Confirm eligibility above first'); setTimeout(() => setToast(''), 2000); return; }
-              setActionPos({ kind, position: p });
-            }}
+            onAction={(kind, p) => setActionPos({ kind, position: p })}
           />
         )}
 
