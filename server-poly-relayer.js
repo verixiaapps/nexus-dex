@@ -4,7 +4,19 @@
 
 const express = require('express');
 const router = express.Router();
-const { buildHmacSignature } = require('@polymarket/builder-signing-sdk');
+const crypto = require('crypto');
+
+// Try to load the SDK helper; if it's not exported (depending on version),
+// fall back to a manual HMAC implementation that matches the spec.
+let sdkBuildHmacSignature = null;
+try {
+  const sdk = require('@polymarket/builder-signing-sdk');
+  if (typeof sdk.buildHmacSignature === 'function') {
+    sdkBuildHmacSignature = sdk.buildHmacSignature;
+  }
+} catch (e) {
+  console.warn('[poly] builder-signing-sdk not loadable, using manual HMAC:', e.message);
+}
 
 const BRIDGE_URL = 'https://bridge.polymarket.com';
 
@@ -23,6 +35,32 @@ function isEvmAddress(v) {
 
 function isLikelySolanaAddress(v) {
   return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(v || '').trim());
+}
+
+// ─────────────────────────────────────────────────────────────────────
+// Manual HMAC signature, matches Polymarket builder spec:
+//   message = `${timestamp}${method.toUpperCase()}${requestPath}${bodyJSON}`
+//   signature = HMAC-SHA256(base64-decoded-secret, message) → base64url
+// (The signature for builder uses the secret as a base64 string that must be
+//  decoded before HMAC. Matches go/py/rs Polymarket SDKs.)
+// ─────────────────────────────────────────────────────────────────────
+function manualHmac(secret, timestamp, method, requestPath, body) {
+  const bodyStr = body == null
+    ? ''
+    : (typeof body === 'string' ? body : JSON.stringify(body));
+  const message = `${timestamp}${String(method).toUpperCase()}${requestPath}${bodyStr}`;
+
+  let key;
+  try {
+    key = Buffer.from(secret, 'base64');
+    if (key.length === 0) key = Buffer.from(secret, 'utf8');
+  } catch {
+    key = Buffer.from(secret, 'utf8');
+  }
+
+  const digest = crypto.createHmac('sha256', key).update(message).digest('base64');
+  // base64url
+  return digest.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
 const _signRate = new Map();
@@ -108,7 +146,8 @@ router.get('/health', (_req, res) => {
     hasCreds: ok(),
     hasBuilderCode: Boolean(BUILDER_CODE),
     builderKeyTail: BUILDER_KEY ? '...' + BUILDER_KEY.slice(-6) : null,
-    sdkLoaded: typeof buildHmacSignature === 'function',
+    sdkLoaded: Boolean(sdkBuildHmacSignature),
+    signMode: sdkBuildHmacSignature ? 'sdk' : 'manual',
     bridge: BRIDGE_URL,
   });
 });
@@ -123,6 +162,20 @@ router.get('/builder-code', (_req, res) => {
 
 // ═══════════════════════════════════════════════════════════════════
 // REMOTE BUILDER SIGNING
+//
+// The Polymarket builder-signing-sdk on the client calls this endpoint
+// with: { method, requestPath, body, timestamp? }
+//
+// It expects back a JSON object with the keys:
+//   { signature, timestamp, apiKey, passphrase }
+//
+// The SDK then attaches these as the appropriate HMAC headers
+// (POLY_ADDRESS, POLY_SIGNATURE, POLY_TIMESTAMP, POLY_API_KEY,
+// POLY_PASSPHRASE) on the actual relayer/CLOB request.
+//
+// Returning POLY_BUILDER_* keys (as the previous version did) is wrong:
+// the SDK ignores those names and sends no auth headers, hence
+// "401 invalid authorization" from the relayer.
 // ═══════════════════════════════════════════════════════════════════
 
 router.post('/sign', express.json({ limit: '1mb' }), async (req, res) => {
@@ -137,23 +190,53 @@ router.post('/sign', express.json({ limit: '1mb' }), async (req, res) => {
       return res.status(429).json({ error: 'Too many sign requests' });
     }
 
-    const { method, path, body } = req.body || {};
+    // Accept both `path` (old) and `requestPath` (current SDK)
+    const body = req.body || {};
+    const method = body.method;
+    const requestPath = body.requestPath || body.path;
+    const payload = body.body;
+    const clientTs = body.timestamp;
 
-    if (!method || !path) {
-      return res.status(400).json({ error: 'method and path required' });
+    if (!method || !requestPath) {
+      return res.status(400).json({ error: 'method and requestPath required' });
     }
 
-    const timestamp = Date.now().toString();
+    const timestamp = String(clientTs || Math.floor(Date.now() / 1000));
 
-    const signature = await buildHmacSignature(
-      BUILDER_SECRET,
-      parseInt(timestamp, 10),
-      String(method).toUpperCase(),
-      String(path),
-      body,
-    );
+    let signature;
+    if (sdkBuildHmacSignature) {
+      // Use SDK if available — it knows the canonical scheme
+      try {
+        signature = await sdkBuildHmacSignature(
+          BUILDER_SECRET,
+          parseInt(timestamp, 10),
+          String(method).toUpperCase(),
+          String(requestPath),
+          payload,
+        );
+      } catch (e) {
+        console.warn('[poly/sign] SDK failed, falling back to manual:', e.message);
+        signature = manualHmac(BUILDER_SECRET, timestamp, method, requestPath, payload);
+      }
+    } else {
+      signature = manualHmac(BUILDER_SECRET, timestamp, method, requestPath, payload);
+    }
 
+    // Return BOTH naming conventions so SDK versions old & new work.
     return res.json({
+      // Lowercase keys (current SDK)
+      signature,
+      timestamp,
+      apiKey: BUILDER_KEY,
+      passphrase: BUILDER_PASSPHRASE,
+      // Header-style keys (some SDK versions read these instead)
+      headers: {
+        POLY_SIGNATURE: signature,
+        POLY_TIMESTAMP: timestamp,
+        POLY_API_KEY: BUILDER_KEY,
+        POLY_PASSPHRASE: BUILDER_PASSPHRASE,
+      },
+      // Legacy POLY_BUILDER_* keys (kept for backward compat)
       POLY_BUILDER_SIGNATURE: signature,
       POLY_BUILDER_TIMESTAMP: timestamp,
       POLY_BUILDER_API_KEY: BUILDER_KEY,
@@ -196,15 +279,6 @@ router.post('/deposit', express.json({ limit: '64kb' }), async (req, res) => {
 
 // ═══════════════════════════════════════════════════════════════════
 // BRIDGE: STATUS
-//
-// IMPORTANT FIX:
-// Frontend currently calls /api/poly/status/:safeAddress.
-// Polymarket Bridge status expects the SVM/Solana bridge address.
-// This route now accepts either:
-// - /status/:svmAddress
-// - /status/:evmSafeAddress
-//
-// If EVM is passed, we first resolve the SVM deposit address.
 // ═══════════════════════════════════════════════════════════════════
 
 router.get('/status/:address', async (req, res) => {
@@ -349,4 +423,4 @@ router.get('/supported-assets', async (_req, res) => {
   }
 });
 
-module.exports = router; 
+module.exports = router;
