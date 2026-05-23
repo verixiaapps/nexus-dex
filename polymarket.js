@@ -4,6 +4,9 @@
  * Mirrors the official guide at:
  *   https://docs.polymarket.com/trading/deposit-wallets
  *
+ * Contract addresses verified against:
+ *   https://docs.polymarket.com/resources/contracts
+ *
  * Requires (versions aligned in package.json):
  *   @polymarket/builder-relayer-client ^0.0.8
  *   @polymarket/builder-signing-sdk    ^0.0.8
@@ -13,17 +16,21 @@
  * Required env vars (server-side only — never expose builder creds to the browser):
  *   RELAYER_URL              e.g. https://relayer-v2.polymarket.com/
  *   CLOB_API_URL             e.g. https://clob.polymarket.com
- *   CHAIN_ID                 137
- *   RPC_URL                  Polygon RPC
+ *   CHAIN_ID                 137 (Polygon mainnet)
+ *   RPC_URL                  Polygon RPC endpoint
  *   PRIVATE_KEY              0x-prefixed owner/session signer key
- *   BUILDER_API_KEY
+ *   BUILDER_API_KEY          From polymarket.com/settings?tab=builder
  *   BUILDER_SECRET
  *   BUILDER_PASS_PHRASE
- *   CLOB_API_KEY
+ *   CLOB_API_KEY             From CLOB API key creation
  *   CLOB_SECRET
  *   CLOB_PASS_PHRASE
- *   PUSD_ADDRESS             pUSD ERC-20 on Polygon
- *   CTF_ADDRESS              CTF exchange / spender to approve
+ *
+ * Optional env vars (verified defaults provided):
+ *   PUSD_ADDRESS              default 0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB
+ *   CTF_EXCHANGE_ADDRESS      default 0xE111180000d2663C0091e4f400237545B87B996B
+ *   NEG_RISK_EXCHANGE_ADDRESS default 0xe2222d279d744050d28e00520010520000310F59
+ *   CTF_ADDRESS               default 0x4D97DCd97eC945f40cF65F87097ACe5EA0476045 (ERC-1155)
  */
 
 const {
@@ -47,6 +54,17 @@ const {
 const { privateKeyToAccount } = require('viem/accounts');
 const { polygon } = require('viem/chains');
 
+// ---------- verified Polymarket contracts on Polygon mainnet (chain 137) ----------
+// Source: https://docs.polymarket.com/resources/contracts
+
+const CONTRACTS = {
+  PUSD: '0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB',
+  CTF_EXCHANGE: '0xE111180000d2663C0091e4f400237545B87B996B',
+  NEG_RISK_EXCHANGE: '0xe2222d279d744050d28e00520010520000310F59',
+  CTF_ERC1155: '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045',
+  DEPOSIT_WALLET_FACTORY: '0x00000000000Fb5C9ADea0298D729A0CB3823Cc07',
+};
+
 // ---------- env ----------
 
 function requireEnv(name) {
@@ -60,6 +78,13 @@ const CLOB_API_URL = requireEnv('CLOB_API_URL');
 const CHAIN_ID = Number(process.env.CHAIN_ID ?? 137);
 const RPC_URL = requireEnv('RPC_URL');
 const PRIVATE_KEY = requireEnv('PRIVATE_KEY');
+
+const PUSD_ADDRESS = process.env.PUSD_ADDRESS ?? CONTRACTS.PUSD;
+const CTF_EXCHANGE_ADDRESS =
+  process.env.CTF_EXCHANGE_ADDRESS ?? CONTRACTS.CTF_EXCHANGE;
+const NEG_RISK_EXCHANGE_ADDRESS =
+  process.env.NEG_RISK_EXCHANGE_ADDRESS ?? CONTRACTS.NEG_RISK_EXCHANGE;
+const CTF_ERC1155_ADDRESS = process.env.CTF_ADDRESS ?? CONTRACTS.CTF_ERC1155;
 
 // ---------- clients ----------
 
@@ -81,8 +106,8 @@ const builderConfig = new BuilderConfig({
   localBuilderCreds: builderCreds,
 });
 
-// Positional constructor — this is the 0.0.8 signature documented in the
-// Polymarket deposit-wallet guide. Do NOT pass an options object.
+// Positional constructor — the 0.0.8 signature documented in the
+// Polymarket deposit-wallet guide. Do NOT pass an options object here.
 const relayer = new RelayClient(
   RELAYER_URL,
   CHAIN_ID,
@@ -92,17 +117,13 @@ const relayer = new RelayClient(
 
 // ---------- deposit wallet: address + deploy ----------
 
-/**
- * Returns the deterministic deposit wallet address for the configured signer.
- * Does NOT submit any transaction.
- */
+/** Deterministic deposit wallet address for the configured signer. No tx submitted. */
 async function getDepositWalletAddress() {
   return relayer.deriveDepositWalletAddress();
 }
 
 /**
- * Deploys the deposit wallet via a WALLET-CREATE relayer tx.
- * Idempotent on the chain side — if already deployed, the relayer no-ops.
+ * Deploys the deposit wallet via a WALLET-CREATE relayer tx if needed.
  * Returns the deposit wallet address.
  */
 async function ensureDepositWalletDeployed() {
@@ -112,7 +133,7 @@ async function ensureDepositWalletDeployed() {
   return depositWalletAddress;
 }
 
-// ---------- deposit wallet: approvals ----------
+// ---------- ABI fragments ----------
 
 const ERC20_APPROVE_ABI = [
   {
@@ -127,10 +148,23 @@ const ERC20_APPROVE_ABI = [
   },
 ];
 
-/**
- * Builds an ERC-20 approve() DepositWalletCall (max allowance by default).
- */
-function buildApproveCall(tokenAddress, spenderAddress, amount = maxUint256) {
+const ERC1155_SET_APPROVAL_FOR_ALL_ABI = [
+  {
+    name: 'setApprovalForAll',
+    type: 'function',
+    stateMutability: 'nonpayable',
+    inputs: [
+      { name: 'operator', type: 'address' },
+      { name: 'approved', type: 'bool' },
+    ],
+    outputs: [],
+  },
+];
+
+// ---------- call builders ----------
+
+/** ERC-20 approve() DepositWalletCall (max allowance by default). */
+function buildErc20ApproveCall(tokenAddress, spenderAddress, amount = maxUint256) {
   return {
     target: tokenAddress,
     value: '0',
@@ -142,33 +176,65 @@ function buildApproveCall(tokenAddress, spenderAddress, amount = maxUint256) {
   };
 }
 
+/** ERC-1155 setApprovalForAll() DepositWalletCall — used for CTF outcome tokens. */
+function buildErc1155SetApprovalForAllCall(
+  tokenAddress,
+  operatorAddress,
+  approved = true
+) {
+  return {
+    target: tokenAddress,
+    value: '0',
+    data: encodeFunctionData({
+      abi: ERC1155_SET_APPROVAL_FOR_ALL_ABI,
+      functionName: 'setApprovalForAll',
+      args: [operatorAddress, approved],
+    }),
+  };
+}
+
+// ---------- approval batches ----------
+
 /**
- * Approves the CTF exchange to spend pUSD from the deposit wallet.
- * Pulls PUSD_ADDRESS + CTF_ADDRESS from env. Approvals must come FROM the
- * deposit wallet, not the owner EOA — that's exactly what this batch does.
+ * Approves both CTF exchanges to spend pUSD AND sets ERC-1155 operator
+ * approval on the CTF for outcome-token transfers. Approvals come FROM the
+ * deposit wallet (correct), not from the EOA.
+ *
+ * Pass { includeNegRisk: false } to skip the neg-risk exchange.
  */
-async function approvePUSDForCTF({ deadlineSeconds = 600 } = {}) {
+async function approveTradingContracts({
+  includeNegRisk = true,
+  deadlineSeconds = 600,
+} = {}) {
   const depositWalletAddress = await relayer.deriveDepositWalletAddress();
 
-  const approveCall = buildApproveCall(
-    requireEnv('PUSD_ADDRESS'),
-    requireEnv('CTF_ADDRESS')
-  );
+  const calls = [
+    // pUSD spending approval for the standard CTF Exchange
+    buildErc20ApproveCall(PUSD_ADDRESS, CTF_EXCHANGE_ADDRESS),
+    // CTF ERC-1155 operator approval for the standard CTF Exchange
+    buildErc1155SetApprovalForAllCall(CTF_ERC1155_ADDRESS, CTF_EXCHANGE_ADDRESS),
+  ];
+
+  if (includeNegRisk) {
+    calls.push(
+      buildErc20ApproveCall(PUSD_ADDRESS, NEG_RISK_EXCHANGE_ADDRESS),
+      buildErc1155SetApprovalForAllCall(
+        CTF_ERC1155_ADDRESS,
+        NEG_RISK_EXCHANGE_ADDRESS
+      )
+    );
+  }
 
   const deadline = Math.floor(Date.now() / 1000 + deadlineSeconds).toString();
-
   const response = await relayer.executeDepositWalletBatch(
-    [approveCall],
+    calls,
     depositWalletAddress,
     deadline
   );
   return response.wait();
 }
 
-/**
- * Generic batch executor — useful for redeem, transfer, multi-approve, etc.
- * `calls` must be DepositWalletCall[].
- */
+/** Generic batch executor for redeem / transfer / custom calls. */
 async function executeBatch(calls, { deadlineSeconds = 600 } = {}) {
   const depositWalletAddress = await relayer.deriveDepositWalletAddress();
   const deadline = Math.floor(Date.now() / 1000 + deadlineSeconds).toString();
@@ -183,9 +249,9 @@ async function executeBatch(calls, { deadlineSeconds = 600 } = {}) {
 // ---------- CLOB client (POLY_1271) ----------
 
 /**
- * Build a CLOB v2 client configured for deposit-wallet POLY_1271 orders.
- * The funder is the deposit wallet address — both order.maker and order.signer
- * are set to it by the SDK, which is required for ERC-1271 validation.
+ * CLOB v2 client configured for deposit-wallet POLY_1271 orders.
+ * Funder = deposit wallet address; SDK sets order.maker and order.signer
+ * to the funder, as required for ERC-1271 validation.
  */
 async function createClobClient() {
   const depositWalletAddress = await relayer.deriveDepositWalletAddress();
@@ -206,23 +272,20 @@ async function createClobClient() {
   });
 }
 
-/**
- * Sync CLOB balance/allowance cache for the deposit wallet's pUSD.
- * Must be called after funding or after running approvePUSDForCTF.
- */
+/** Sync CLOB collateral balance/allowance cache for the deposit wallet. */
 async function syncCollateralBalance(clob) {
   return clob.updateBalanceAllowance({ asset_type: AssetType.COLLATERAL });
 }
 
-/**
- * Place a single GTC limit order from the deposit wallet.
- *   tokenId   — outcome token id (string)
- *   price     — 0..1
- *   size      — base units (whole tokens, not wei)
- *   side      — 'BUY' or 'SELL'
- *   tickSize  — '0.01' | '0.001' | etc.
- *   negRisk   — true for neg-risk markets
- */
+/** Sync CLOB conditional-token balance/allowance for a specific outcome token. */
+async function syncConditionalBalance(clob, tokenId) {
+  return clob.updateBalanceAllowance({
+    asset_type: AssetType.CONDITIONAL,
+    token_id: tokenId,
+  });
+}
+
+/** Place a single GTC limit order from the deposit wallet. */
 async function placeLimitOrder(clob, {
   tokenId,
   price,
@@ -242,19 +305,20 @@ async function placeLimitOrder(clob, {
 // ---------- bootstrap helper ----------
 
 /**
- * One-shot setup for a new user: derive wallet -> deploy -> approve pUSD ->
- * build CLOB client -> sync balance. Returns { depositWalletAddress, clob }.
- * Safe to call repeatedly; relayer/CLOB calls are idempotent in practice.
+ * One-shot setup for a new user:
+ *   derive wallet -> deploy -> approve exchanges -> build CLOB -> sync balance
+ * Safe to call repeatedly.
  */
-async function bootstrapDepositWalletUser() {
+async function bootstrapDepositWalletUser({ includeNegRisk = true } = {}) {
   const depositWalletAddress = await ensureDepositWalletDeployed();
-  await approvePUSDForCTF();
+  await approveTradingContracts({ includeNegRisk });
   const clob = await createClobClient();
   await syncCollateralBalance(clob);
   return { depositWalletAddress, clob };
 }
 
 module.exports = {
+  CONTRACTS,
   // low-level
   relayer,
   walletClient,
@@ -262,36 +326,36 @@ module.exports = {
   // address + deploy
   getDepositWalletAddress,
   ensureDepositWalletDeployed,
+  // call builders
+  buildErc20ApproveCall,
+  buildErc1155SetApprovalForAllCall,
   // batches
-  buildApproveCall,
-  approvePUSDForCTF,
+  approveTradingContracts,
   executeBatch,
   // clob
   createClobClient,
   syncCollateralBalance,
+  syncConditionalBalance,
   placeLimitOrder,
   // bootstrap
   bootstrapDepositWalletUser,
 };
 
 // ---------- CLI smoke test ----------
-// node polymarket.js               -> prints derived deposit wallet
-// node polymarket.js deploy        -> derive + deploy if needed
-// node polymarket.js approve       -> approve pUSD for CTF
-// node polymarket.js bootstrap     -> full setup
+// node polymarket.js                -> derived deposit wallet
+// node polymarket.js deploy         -> derive + deploy
+// node polymarket.js approve        -> approve both exchanges
+// node polymarket.js bootstrap      -> full setup
 if (require.main === module) {
   (async () => {
     const cmd = process.argv[2] || 'address';
     try {
       if (cmd === 'address') {
-        const addr = await getDepositWalletAddress();
-        console.log('Deposit wallet:', addr);
+        console.log('Deposit wallet:', await getDepositWalletAddress());
       } else if (cmd === 'deploy') {
-        const addr = await ensureDepositWalletDeployed();
-        console.log('Deployed/confirmed deposit wallet:', addr);
+        console.log('Deployed:', await ensureDepositWalletDeployed());
       } else if (cmd === 'approve') {
-        const res = await approvePUSDForCTF();
-        console.log('Approve batch confirmed:', res);
+        console.log('Approve batch:', await approveTradingContracts());
       } else if (cmd === 'bootstrap') {
         const { depositWalletAddress } = await bootstrapDepositWalletUser();
         console.log('Bootstrap complete. Deposit wallet:', depositWalletAddress);
