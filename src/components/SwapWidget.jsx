@@ -1,425 +1,1013 @@
-/**
- * NEXUS DEX - Unified Swap Widget (OKX DEX edition)
- *
- * Swap engine: OKX DEX API — Solana only
- * Price data: OKX quote endpoint for ESTIMATE only
- * Token search: OKX token list
- *
- * Final direction:
- *  - Preview quote is only an estimate
- *  - On Swap click, only ONE executable OKX call is made: /swap-instruction
- *  - No manual unsigned simulation
- *  - Wallet-standard sendTransaction for Phantom / Solflare / Backpack
- *  - skipPreflight:false so RPC preflight simulation still runs
- *  - MAX / quick buttons use input-safe formatting, not display formatting
- */
+// Swap.jsx — Jupiter Swap V2 Router (single signature, atomic 5% fee)
+//
+// Flow:
+//   1. User picks input + output tokens + amount
+//   2. We call /api/jupiter/build (proxies api.jup.ag/swap/v2/build) with
+//      platformFeeBps=500 + feeAccount=<our fee ATA for output mint>
+//   3. Jupiter returns raw instructions. We assemble them into a single
+//      VersionedTransaction.
+//   4. Simulate to estimate compute units, then rebuild with 1.2x CU.
+//   5. User signs once. We broadcast via RPC.
+//   6. Confirm with Solscan-link fallback on timeout.
+//
+// Fee policy:
+//   - 5% taken in the OUTPUT mint via Jupiter's native platformFeeBps.
+//   - Fee account is the ATA of FEE_WALLET for the output mint. Jupiter
+//     creates it via setupInstructions if it doesn't exist (user pays
+//     ~0.002 SOL rent).
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Buffer } from 'buffer';
-import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { useNexusWallet } from '../WalletContext.js';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import {
-  VersionedTransaction, PublicKey, LAMPORTS_PER_SOL,
-  TransactionInstruction, TransactionMessage, AddressLookupTableAccount,
+  Connection,
+  PublicKey,
+  VersionedTransaction,
+  TransactionMessage,
+  TransactionInstruction,
+  ComputeBudgetProgram,
+  AddressLookupTableAccount,
 } from '@solana/web3.js';
+import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
+import { useWallet } from '@solana/wallet-adapter-react';
 
-const OKX_REFERRER = 'nexus-dex';
-const PLATFORM_FEE = 0.03;
-const SAFETY_FEE = 0.02;
-const OKX_SOL_NATIVE = '11111111111111111111111111111111';
-const WSOL_MINT = 'So11111111111111111111111111111111111111112';
-const USDC_SOLANA = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-const SOL_RESERVE_LAMPORTS = 1_000_000;
-const QUOTE_DEBOUNCE_MS = 250;
-const OKX_PRICE_CACHE_MS = 60_000;
+const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
+const FEE_BPS    = 500;
+const SOL_MINT   = 'So11111111111111111111111111111111111111112';
+const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
-const DEFAULT_BUY_PRESETS = [25, 50, 100, 250, 500];
-const DEFAULT_SELL_PRESETS = [50, 100];
-const PRESETS_LS_KEY = 'nexus_presets_v2';
-const LAST_PAIR_LS_KEY = 'nexus_last_pair_v1';
+const RPC_URL =
+  process.env.REACT_APP_SOLANA_RPC ||
+  (process.env.REACT_APP_HELIUS_API_KEY
+    ? `https://mainnet.helius-rpc.com/?api-key=${process.env.REACT_APP_HELIUS_API_KEY}`
+    : 'https://api.mainnet-beta.solana.com');
 
-const C = { bg:'#03060f',card:'#080d1a',card2:'#0c1220',card3:'#111d30',border:'rgba(0,229,255,0.10)',borderHi:'rgba(0,229,255,0.25)',accent:'#00e5ff',green:'#00ffa3',red:'#ff3b6b',text:'#cdd6f4',muted:'#586994',muted2:'#2e3f5e',buyGrad:'linear-gradient(135deg,#00e5ff,#0055ff)',sellGrad:'linear-gradient(135deg,#ff3b6b,#cc1144)',privy:'#a855f7' };
+const C = {
+  bg:        '#0a0a0c',
+  panel:     '#101015',
+  panel2:    '#15151c',
+  border:    '#26262f',
+  text:      '#f5f5f7',
+  textDim:   '#8a8a92',
+  textFaint: '#5a5a62',
+  accent:    '#7c5cff',
+  green:     '#22c55e',
+  red:       '#ef4444',
+  amber:     '#f59e0b',
+};
+const T = {
+  display: { fontFamily: 'system-ui, -apple-system, sans-serif', fontWeight: 700, letterSpacing: '-0.02em' },
+  body:    { fontFamily: 'system-ui, -apple-system, sans-serif' },
+};
 
-const POPULAR_TOKENS = [
-  { mint:WSOL_MINT,symbol:'SOL',name:'Solana',decimals:9,chain:'solana',logoURI:'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png' },
-  { mint:USDC_SOLANA,symbol:'USDC',name:'USD Coin',decimals:6,chain:'solana',logoURI:'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png' },
-];
+/* helpers --------------------------------------------------------------- */
 
-function trimZeros(v){
-  return String(v).replace(/(\.\d*?[1-9])0+$/,'$1').replace(/\.0+$/,'').replace(/\.$/,'');
+const fmtAmount = (n, decimals = 6) => {
+  if (n == null || isNaN(n)) return '0';
+  const num = Number(n);
+  if (num === 0) return '0';
+  if (num < 0.000001) return num.toExponential(2);
+  if (num < 1)        return num.toFixed(Math.min(6, decimals));
+  if (num < 1000)     return num.toFixed(Math.min(4, decimals));
+  if (num < 1_000_000) return num.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  return (num / 1_000_000).toFixed(2) + 'M';
+};
+
+const friendlyError = (err) => {
+  const m = String(err?.message || err || '').toLowerCase();
+  if (m.includes('insufficient'))      return 'Insufficient balance for this swap.';
+  if (m.includes('slippage'))          return 'Price moved too much. Try again or increase slippage.';
+  if (m.includes('blockhash'))         return 'Transaction expired. Please try again.';
+  if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled'))
+    return 'Transaction cancelled.';
+  if (m.includes('simulation failed')) return 'Swap simulation failed — the price may have moved.';
+  if (m.includes('account not'))       return 'Token account not ready. Please try again in a moment.';
+  if (m.includes('rate'))              return 'Too many requests — please wait a moment.';
+  return err?.message || 'Swap failed. Please try again.';
+};
+
+function deserializeInstruction(ix) {
+  return new TransactionInstruction({
+    programId: new PublicKey(ix.programId),
+    keys: ix.accounts.map(a => ({
+      pubkey:     new PublicKey(a.pubkey),
+      isSigner:   a.isSigner,
+      isWritable: a.isWritable,
+    })),
+    data: Buffer.from(ix.data, 'base64'),
+  });
 }
 
-function displayDecimalsForValue(n){
-  const v=Number(n);
-  if(!Number.isFinite(v))return 4;
-  if(v===0)return 2;
-  if(v<0.00000001)return 12;
-  if(v<0.000001)return 10;
-  if(v<0.01)return 8;
-  if(v<1)return 6;
-  return 4;
+async function getAltAccounts(connection, addressesByLut) {
+  if (!addressesByLut) return [];
+  const keys = Object.keys(addressesByLut);
+  if (keys.length === 0) return [];
+  const infos = await connection.getMultipleAccountsInfo(keys.map(k => new PublicKey(k)));
+  const out = [];
+  for (let i = 0; i < keys.length; i++) {
+    if (!infos[i]) continue;
+    out.push(new AddressLookupTableAccount({
+      key:   new PublicKey(keys[i]),
+      state: AddressLookupTableAccount.deserialize(infos[i].data),
+    }));
+  }
+  return out;
 }
 
-function fmtTokenDisplay(n){
-  if(n==null||isNaN(n))return'0';
-  const v=Number(n);
-  if(!Number.isFinite(v))return'0';
-  if(v>=1e9)return trimZeros((v/1e9).toFixed(2))+'B';
-  if(v>=1e6)return trimZeros((v/1e6).toFixed(2))+'M';
-  if(v>=1000)return v.toLocaleString('en-US',{maximumFractionDigits:2});
-  return trimZeros(v.toFixed(displayDecimalsForValue(v)));
-}
+/* component ------------------------------------------------------------- */
 
-function fmtInputAmount(n,dec=9){
-  const v=Number(n);
-  if(!Number.isFinite(v)||v<=0)return'';
-  const max=Math.min(Math.max(Number(dec)||6,0),12);
-  return trimZeros(v.toFixed(max));
-}
+export default function Swap() {
+  const wallet = useWallet();
+  const connection = useMemo(() => new Connection(RPC_URL, 'confirmed'), []);
 
-function fmtUsd(n,d=2){
-  if(n==null||isNaN(n))return'-';
-  const v=Number(n);
-  if(!Number.isFinite(v))return'-';
-  if(v>=1e9)return'$'+trimZeros((v/1e9).toFixed(2))+'B';
-  if(v>=1e6)return'$'+trimZeros((v/1e6).toFixed(2))+'M';
-  if(v>=1000)return'$'+v.toLocaleString('en-US',{maximumFractionDigits:d});
-  if(v>=1)return'$'+v.toFixed(d);
-  if(v>0)return'$'+trimZeros(v.toFixed(v<0.000001?10:8));
-  return'$0.00';
-}
+  const [tokens, setTokens]               = useState([]);
+  const [tokensLoading, setTokensLoading] = useState(true);
 
-function fmtTokenAmount(n){return fmtTokenDisplay(n);}
-function safeBigInt(v){if(v==null)return BigInt(0);if(typeof v==='bigint')return v;if(typeof v==='number')return Number.isFinite(v)?BigInt(Math.trunc(v)):BigInt(0);let s=String(v).trim();if(!s)return BigInt(0);if(/^-?0x[0-9a-f]+$/i.test(s))return BigInt(s);if(/^-?\d+$/.test(s))return BigInt(s);const n=Number(s);return Number.isFinite(n)?BigInt(Math.trunc(n)):BigInt(0);}
-function tokensEqual(a,b){if(!a||!b)return false;if(a.chain==='solana'&&b.chain==='solana')return a.mint===b.mint;return false;}
-function isValidSolMint(s){return!!s&&s.length>=32&&s.length<=44&&/^[1-9A-HJ-NP-Za-km-z]+$/.test(s);}
+  const [inputMint,  setInputMint]   = useState(SOL_MINT);
+  const [outputMint, setOutputMint]  = useState(USDC_MINT);
+  const [amount,     setAmount]      = useState('');
+  const [slippageBps, setSlippageBps] = useState(50);
 
-function toRawAmount(s,dec){
-  if(!s||dec==null)return'0';
-  let v=String(s).trim().replace(/,/g,'.').replace(/^\+/,'');
-  if(!v||v.startsWith('-'))return'0';
-  if(/e/i.test(v)){const n=Number(v);if(!Number.isFinite(n)||n<0)return'0';v=n.toFixed(Math.max(Number(dec)||0,20));}
-  const d=Math.floor(Number(dec));
-  if(!Number.isFinite(d)||d<0||d>18)return'0';
-  const[w,f='']=v.split('.');
-  const sw=(w||'0').replace(/[^\d]/g,'').replace(/^0+(?=\d)/,'')||'0';
-  const ft=(f||'').replace(/[^\d]/g,'').slice(0,d);
-  const fp=(ft+'0'.repeat(d)).slice(0,d);
-  try{return(BigInt(sw)*(10n**BigInt(d))+BigInt(fp)).toString();}catch{return'0';}
-}
+  const [showPicker,   setShowPicker]   = useState(null);
+  const [showSettings, setShowSettings] = useState(false);
 
-let _okxCache=null;
-let _okxLoading=null;
+  const [quote, setQuote]           = useState(null);
+  const [quoting, setQuoting]       = useState(false);
+  const [quoteError, setQuoteError] = useState(null);
 
-function getOkxCachedToken(mint){if(!_okxCache||!mint)return null;return _okxCache.find(t=>t.mint===mint)||null;}
+  const [swapping, setSwapping]     = useState(false);
+  const [swapError, setSwapError]   = useState(null);
+  const [swapResult, setSwapResult] = useState(null);
 
-function normalizeToken(input){
-  if(!input)return null;
-  const logo=input.logoURI||input.image||input.thumbnail||null;
-  const sym=input.symbol||'TOKEN';
-  const name=input.name||sym;
-  const solMint=input.mint||(input.isSolanaToken?input.id:null);
-  if(!solMint||!isValidSolMint(solMint))return null;
-  let decimals=null;
-  if(solMint===WSOL_MINT||solMint===OKX_SOL_NATIVE)decimals=9;
-  else if(solMint===USDC_SOLANA)decimals=6;
-  else{const okx=getOkxCachedToken(solMint);const okxD=Number(okx?.decimals);if(Number.isFinite(okxD)&&okxD>=0&&okxD<=18)decimals=okxD;else{const p=Number(input.decimals);if(Number.isFinite(p)&&p>=0&&p<=18)decimals=p;}}
-  if(decimals==null)decimals=6;
-  return{chain:'solana',mint:solMint===OKX_SOL_NATIVE?WSOL_MINT:solMint,symbol:sym,name,decimals,logoURI:logo};
-}
+  const [balances, setBalances] = useState({});
 
-function nativeOfChain(){return POPULAR_TOKENS.find(t=>t.mint===WSOL_MINT);}
-function usdcOfChain(){return POPULAR_TOKENS.find(t=>t.mint===USDC_SOLANA);}
-
-function defaultTokenPair({mode,viewedToken,lastFromToken,walletState}){
-  const ws=walletState||{};const viewed=viewedToken?normalizeToken(viewedToken):null;
-  if(mode==='buy'&&viewed){const f=POPULAR_TOKENS.find(t=>!tokensEqual(t,viewed))||POPULAR_TOKENS[0];return{fromToken:f,toToken:viewed};}
-  if(mode==='sell'&&viewed){const t=POPULAR_TOKENS.find(t=>!tokensEqual(t,viewed))||POPULAR_TOKENS[1];return{fromToken:viewed,toToken:t};}
-  if(lastFromToken&&!tokensEqual(lastFromToken,usdcOfChain()))return{fromToken:lastFromToken,toToken:usdcOfChain()};
-  return{fromToken:nativeOfChain(),toToken:usdcOfChain()};
-}
-
-function pickRoute(){return'okx-sol';}
-function toOkxSolAddress(m){return m===WSOL_MINT?OKX_SOL_NATIVE:m;}
-
-function loadOkxSolTokens(){
-  if(_okxCache)return Promise.resolve(_okxCache);
-  if(_okxLoading)return _okxLoading;
-  _okxLoading=fetch('/api/okx/dex/aggregator/all-tokens?chainIndex=501')
-    .then(r=>r.ok?r.json():{data:[]}).catch(()=>({data:[]}))
-    .then(j=>{const t=(j.data||[]).map(t=>{const d=parseInt(t.decimals);return{chain:'solana',mint:t.tokenContractAddress,symbol:t.tokenSymbol||'',name:t.tokenName||t.tokenSymbol||'',decimals:Number.isFinite(d)?d:6,logoURI:t.tokenLogoUrl||null};}).filter(t=>isValidSolMint(t.mint)&&t.symbol);_okxCache=t;_okxLoading=null;return t;})
-    .catch(e=>{_okxLoading=null;throw e;});
-  return _okxLoading;
-}
-
-function getResolvedDecimals(token){
-  if(!token)return null;
-  if(token.mint===WSOL_MINT||token.mint===OKX_SOL_NATIVE)return 9;
-  if(token.mint===USDC_SOLANA)return 6;
-  const okxD=getOkxCachedToken(token.mint);
-  if(okxD&&Number.isFinite(Number(okxD.decimals)))return Number(okxD.decimals);
-  const d=Number(token.decimals);
-  if(Number.isFinite(d)&&d>=0&&d<=18)return d;
-  return 6;
-}
-
-const _okxPriceCache=new Map();
-function getCachedOkxPrice(mint){const e=_okxPriceCache.get(mint);if(!e)return null;if(Date.now()-e.ts>OKX_PRICE_CACHE_MS){_okxPriceCache.delete(mint);return null;}return e.price;}
-function setCachedOkxPrice(mint,price){if(!mint||price<=0)return;_okxPriceCache.set(mint,{price,ts:Date.now()});}
-
-async function fetchOkxPrice(token){
-  const n=normalizeToken(token);
-  if(!n?.mint)return null;
-  const mint=n.mint;
-  if(mint===USDC_SOLANA)return 1;
-  const cached=getCachedOkxPrice(mint);
-  if(cached!=null)return cached;
-  await loadOkxSolTokens().catch(()=>{});
-  const dec=getResolvedDecimals(n);
-  if(dec==null)return null;
-  const amount=(10n**BigInt(dec)).toString();
-  try{
-    const r=await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${toOkxSolAddress(mint)}&toTokenAddress=${USDC_SOLANA}&amount=${amount}`);
-    const j=await r.json();
-    if(j.code==='0'&&j.data){const d=Array.isArray(j.data)?j.data[0]:j.data;const price=Number(d.toTokenAmount)/1e6;if(price>0){setCachedOkxPrice(mint,price);return price;}}
-  }catch{}
-  return null;
-}
-
-async function fetchOkxSolSwap({fromMint,toMint,amount,userWallet,signal}){
-  const p=new URLSearchParams({chainIndex:'501',fromTokenAddress:toOkxSolAddress(fromMint),toTokenAddress:toOkxSolAddress(toMint),amount:String(amount),slippagePercent:'15',userWalletAddress:userWallet,referrer:OKX_REFERRER});
-  const r=await fetch('/api/okx/dex/aggregator/swap-instruction?'+p.toString(),{signal});
-  const j=await r.json();
-  if(j.code!=='0'||!j.data)throw new Error(j.msg||'OKX swap-instruction failed');
-  return Array.isArray(j.data)?j.data[0]:j.data;
-}
-
-function deserializeOkxIx(ix){
-  try{if(!ix||!ix.programId||!Array.isArray(ix.accounts)||!ix.data)return null;return new TransactionInstruction({programId:new PublicKey(ix.programId),keys:ix.accounts.map(a=>({pubkey:new PublicKey(a.pubkey||a.publicKey||a.address),isSigner:!!a.isSigner,isWritable:!!a.isWritable})),data:Buffer.from(ix.data,'base64')});}catch{return null;}
-}
-
-async function buildOkxSolTx({connection,userPubkey,swapData}){
-  if(swapData.tx&&swapData.tx.data){try{return VersionedTransaction.deserialize(Buffer.from(swapData.tx.data,'base64'));}catch{}}
-  if(swapData.data&&typeof swapData.data==='string'){try{return VersionedTransaction.deserialize(Buffer.from(swapData.data,'base64'));}catch{}}
-  const ixs=(swapData.instructionLists||[]).map(deserializeOkxIx).filter(Boolean);
-  if(!ixs.length)throw new Error('No usable instructions');
-  const lta=Array.isArray(swapData.addressLookupTableAccount)?swapData.addressLookupTableAccount:[];
-  const lts=(await Promise.all(lta.map(async a=>{try{const acct=await connection.getAccountInfo(new PublicKey(a));if(!acct)return null;return new AddressLookupTableAccount({key:new PublicKey(a),state:AddressLookupTableAccount.deserialize(acct.data)});}catch{return null;}}))).filter(Boolean);
-  const{blockhash}=await connection.getLatestBlockhash('finalized');
-  return new VersionedTransaction(new TransactionMessage({payerKey:userPubkey,recentBlockhash:blockhash,instructions:ixs}).compileToV0Message(lts));
-}
-
-function loadPresets(){try{const r=localStorage.getItem(PRESETS_LS_KEY);if(!r)return{buy:DEFAULT_BUY_PRESETS.slice(),sell:DEFAULT_SELL_PRESETS.slice()};const p=JSON.parse(r);return{buy:Array.isArray(p.buy)&&p.buy.length>=2?p.buy:DEFAULT_BUY_PRESETS.slice(),sell:Array.isArray(p.sell)&&p.sell.length>=1?p.sell:DEFAULT_SELL_PRESETS.slice()};}catch{return{buy:DEFAULT_BUY_PRESETS.slice(),sell:DEFAULT_SELL_PRESETS.slice()};}}
-function savePresets(p){try{localStorage.setItem(PRESETS_LS_KEY,JSON.stringify(p));}catch{}}
-function loadLastPair(){try{const v=JSON.parse(localStorage.getItem(LAST_PAIR_LS_KEY)||'null');return(!v||!v.from)?null:v;}catch{return null;}}
-function saveLastPair(from,to){if(!from||!to)return;try{localStorage.setItem(LAST_PAIR_LS_KEY,JSON.stringify({from,to,ts:Date.now()}));}catch{}}
-function maxSafeSolBalance(lamports){return lamports?Math.max(0,lamports-SOL_RESERVE_LAMPORTS)/LAMPORTS_PER_SOL:0;}
-
-function TokenIcon({token,size=32}){const[err,setErr]=useState(false);if(token&&token.logoURI&&!err)return<img src={token.logoURI} alt="" style={{width:size,height:size,borderRadius:'50%',flexShrink:0}} onError={()=>setErr(true)}/>;const ch=(token&&token.symbol)?token.symbol.charAt(0).toUpperCase():'?';return<div style={{width:size,height:size,borderRadius:'50%',flexShrink:0,background:'rgba(0,229,255,.1)',border:'1px solid rgba(0,229,255,.2)',display:'flex',alignItems:'center',justifyContent:'center',fontSize:Math.round(size*.4),fontWeight:700,color:C.accent}}>{ch}</div>;}
-
-let _bl=0;
-function useBodyScrollLock(open){useEffect(()=>{if(!open)return;if(typeof document==='undefined')return;if(_bl===0)document.body.classList.add('nexus-scroll-locked');_bl++;return()=>{_bl=Math.max(0,_bl-1);if(_bl===0)document.body.classList.remove('nexus-scroll-locked');};},[open]);}
-function useEscapeKey(open,handler){useEffect(()=>{if(!open)return;const onKey=e=>{if(e.key==='Escape'){e.stopPropagation();handler?.();}};window.addEventListener('keydown',onKey);return()=>window.removeEventListener('keydown',onKey);},[open,handler]);}
-
-function TokenSelectModal({open,onClose,onSelect}){
-  const[q,setQ]=useState('');const[sr,setSr]=useState([]);
-  useEffect(()=>{const t=q.trim();if(!t){setSr([]);return;}const h=setTimeout(()=>{const sol=(_okxCache||[]).filter(tk=>tk.symbol&&tk.symbol.toLowerCase().includes(t.toLowerCase())).slice(0,30).map(normalizeToken).filter(Boolean);const pop=POPULAR_TOKENS.filter(tk=>tk.symbol&&tk.symbol.toLowerCase().includes(t.toLowerCase())).map(normalizeToken).filter(Boolean);const seen=new Set();setSr([...sol,...pop].filter(tk=>{if(seen.has(tk.mint))return false;seen.add(tk.mint);return true;}));},200);return()=>clearTimeout(h);},[q]);
-  const close=()=>{setQ('');setSr([]);onClose();};useBodyScrollLock(open);useEscapeKey(open,close);
-  const hs=useCallback(t=>{const n=normalizeToken(t);if(n)onSelect(n);close();},[onSelect]);
-  const disp=q.trim()?sr:POPULAR_TOKENS.map(normalizeToken).filter(Boolean);
-  if(!open)return null;
-  return(<><div onClick={close} style={{position:'fixed',inset:0,zIndex:499,background:'rgba(0,0,0,.78)'}}/><div style={{position:'fixed',top:'50%',left:'50%',transform:'translate(-50%,-50%)',zIndex:500,background:C.card,border:'1px solid '+C.borderHi,borderRadius:18,width:'94vw',maxWidth:440,maxHeight:'min(85vh, 100dvh)',display:'flex',flexDirection:'column',boxShadow:'0 24px 80px rgba(0,0,0,.95)'}}><div style={{padding:'16px 16px 10px',borderBottom:'1px solid '+C.border,flexShrink:0}}><div style={{display:'flex',justifyContent:'space-between',marginBottom:10}}><div style={{color:'#fff',fontWeight:700,fontSize:16}}>Select Token</div><button onClick={close} style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:22,padding:4}}>x</button></div><input autoFocus value={q} onChange={e=>setQ(e.target.value)} placeholder="Search name, symbol..." style={{width:'100%',background:C.card2,border:'1px solid '+C.border,borderRadius:8,padding:'10px 12px',color:'#fff',fontSize:13,outline:'none',fontFamily:'Syne, sans-serif'}}/></div><div style={{overflowY:'auto',flex:1}}>{!q&&<div style={{padding:'8px 16px 4px',fontSize:10,color:C.muted,fontWeight:700}}>POPULAR</div>}{disp.length===0&&<div style={{padding:24,textAlign:'center',color:C.muted}}>No matches</div>}{disp.map((t,i)=>(<div key={(t.mint||'')+i} onClick={()=>hs(t)} style={{padding:'12px 16px',cursor:'pointer',display:'flex',alignItems:'center',gap:10,borderBottom:'1px solid rgba(255,255,255,.03)'}}><TokenIcon token={t} size={32}/><div style={{flex:1}}><span style={{color:'#fff',fontWeight:700,fontSize:13}}>{t.symbol}</span><div style={{color:C.muted,fontSize:11}}>{t.name}</div></div></div>))}</div></div></>);
-}
-
-/* ===== MAIN SWAP WIDGET ===== */
-export default function SwapWidget({onConnectWallet,defaultFromToken,defaultToToken,compact=false,mode:modeProp='swap',presets:presetsProp,onPresetsChange,onStatusChange}){
-  const{publicKey:extPk,sendTransaction:extSendTx,connected:solCon}=useWallet();
-  const{connection}=useConnection();
-  const nexus=useNexusWallet();
-  const{activeWalletKind,privyEmbeddedSol}=nexus;
-
-  const pubkey=useMemo(()=>{if(extPk)return extPk;if(privyEmbeddedSol?.address){try{return new PublicKey(privyEmbeddedSol.address);}catch{return null;}}return null;},[extPk,privyEmbeddedSol]);
-  const hasSol=!!(solCon||(privyEmbeddedSol&&pubkey));
-  const wcon=!!hasSol;
-
-  const sendTx=useCallback(async(tx,conn)=>{
-    if(activeWalletKind==='privy'&&privyEmbeddedSol){
-      if(typeof privyEmbeddedSol.sendTransaction==='function'){
-        return privyEmbeddedSol.sendTransaction(tx,conn,{skipPreflight:false,preflightCommitment:'processed',maxRetries:3});
+  /* tokens */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/jupiter/tokens');
+        const data = await r.json();
+        if (cancelled) return;
+        const list = Array.isArray(data) ? data : (data?.tokens || []);
+        const norm = list.map(t => ({
+          address:  t.id || t.address || t.mint,
+          symbol:   t.symbol,
+          name:     t.name,
+          decimals: t.decimals,
+          logoURI:  t.icon || t.logoURI || null,
+        })).filter(t => t.address && t.symbol && t.decimals != null);
+        setTokens(norm);
+      } catch (e) {
+        console.warn('[swap] token list failed', e);
+        setTokens([
+          { address: SOL_MINT,  symbol: 'SOL',  name: 'Solana',   decimals: 9, logoURI: null },
+          { address: USDC_MINT, symbol: 'USDC', name: 'USD Coin', decimals: 6, logoURI: null },
+        ]);
+      } finally {
+        if (!cancelled) setTokensLoading(false);
       }
+    })();
+    return () => { cancelled = true; };
+  }, []);
 
-      if(typeof privyEmbeddedSol.signTransaction==='function'){
-        const signedTx=await privyEmbeddedSol.signTransaction(tx);
-        return conn.sendRawTransaction(signedTx.serialize(),{skipPreflight:false,preflightCommitment:'processed',maxRetries:3});
-      }
-
-      throw new Error('Wallet does not support sending');
+  /* balances */
+  const refreshBalances = useCallback(async () => {
+    if (!wallet.publicKey) { setBalances({}); return; }
+    try {
+      const owner = wallet.publicKey;
+      const [solBal, tokenAccs] = await Promise.all([
+        connection.getBalance(owner),
+        connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }),
+      ]);
+      let token22Accs = { value: [] };
+      try {
+        token22Accs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID });
+      } catch {}
+      const out = {};
+      out[SOL_MINT] = { amount: solBal, decimals: 9, uiAmount: solBal / 1e9 };
+      const merge = (accs) => {
+        for (const acc of accs.value) {
+          const info = acc.account.data.parsed?.info;
+          if (!info) continue;
+          const mint     = info.mint;
+          const amount   = info.tokenAmount?.amount;
+          const decimals = info.tokenAmount?.decimals;
+          const uiAmount = info.tokenAmount?.uiAmount;
+          if (!mint || amount == null) continue;
+          out[mint] = { amount: Number(amount), decimals, uiAmount };
+        }
+      };
+      merge(tokenAccs);
+      merge(token22Accs);
+      setBalances(out);
+    } catch (e) {
+      console.warn('[swap] balances failed', e);
     }
+  }, [wallet.publicKey, connection]);
 
-    return extSendTx(tx,conn,{skipPreflight:false,preflightCommitment:'processed',maxRetries:3});
-  },[activeWalletKind,privyEmbeddedSol,extSendTx]);
+  useEffect(() => { refreshBalances(); }, [refreshBalances]);
 
-  const ip=useMemo(()=>{
-    if(defaultFromToken||defaultToToken){const p=defaultTokenPair({mode:modeProp,viewedToken:defaultToToken||defaultFromToken,lastFromToken:null,walletState:{solConnected:solCon}});return{fromToken:defaultFromToken?normalizeToken(defaultFromToken):p.fromToken,toToken:defaultToToken?normalizeToken(defaultToToken):p.toToken};}
-    const last=loadLastPair();
-    return defaultTokenPair({mode:modeProp,viewedToken:null,lastFromToken:last?.from?normalizeToken(last.from):null,walletState:{solConnected:solCon}});
-  },[]);
+  const inputToken  = useMemo(() => tokens.find(t => t.address === inputMint)  || null, [tokens, inputMint]);
+  const outputToken = useMemo(() => tokens.find(t => t.address === outputMint) || null, [tokens, outputMint]);
 
-  const[ft,setFtRaw]=useState(normalizeToken(ip.fromToken)||POPULAR_TOKENS[0]);
-  const[tt,setTtRaw]=useState(normalizeToken(ip.toToken)||POPULAR_TOKENS[1]);
-  const[fa,setFa]=useState('');const utRef=useRef(false);
-  const[quote,setQ]=useState(null);const[qe,setQe]=useState('');
-  const[ss,setSs]=useState('idle');const[stx,setStx]=useState(null);const[se,setSe]=useState('');
-  const[sbl,setSbl]=useState(null);const[ssb,setSsb]=useState(null);
-  const[pl,setPl]=useState(()=>presetsProp||loadPresets());const presets=presetsProp||pl;
-  const[fso,setFso]=useState(false);const[tso,setTso]=useState(false);
-  const[fp,setFp]=useState(null);const[tp,setTp]=useState(null);
+  const inputBalance = balances[inputMint];
 
-  const setFt=useCallback(t=>setFtRaw(normalizeToken(t)||POPULAR_TOKENS[0]),[]);
-  const setTt=useCallback(t=>setTtRaw(normalizeToken(t)||POPULAR_TOKENS[1]),[]);
-  const setPresets=useCallback(p=>{if(onPresetsChange)onPresetsChange(p);else{setPl(p);savePresets(p);}},[onPresetsChange]);
+  const rawAmount = useMemo(() => {
+    if (!amount || !inputToken) return '';
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    return Math.floor(n * Math.pow(10, inputToken.decimals)).toString();
+  }, [amount, inputToken]);
 
-  useEffect(()=>{onStatusChange?.(ss);},[ss,onStatusChange]);
+  /* quote */
+  const quoteAbortRef = useRef(null);
+  useEffect(() => {
+    if (!rawAmount || inputMint === outputMint) {
+      setQuote(null); setQuoteError(null); return;
+    }
+    if (quoteAbortRef.current) quoteAbortRef.current.abort();
+    const ac = new AbortController();
+    quoteAbortRef.current = ac;
+    setQuoting(true); setQuoteError(null);
+    const t = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({
+          inputMint,
+          outputMint,
+          amount:         rawAmount,
+          slippageBps:    String(slippageBps),
+          taker:          wallet.publicKey ? wallet.publicKey.toBase58() : '11111111111111111111111111111111',
+          platformFeeBps: String(FEE_BPS),
+        });
+        const r = await fetch(`/api/jupiter/build?${params}`, { signal: ac.signal });
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.error || `Quote failed (${r.status})`);
+        }
+        const data = await r.json();
+        if (!ac.signal.aborted) { setQuote(data); setQuoteError(null); }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        if (!ac.signal.aborted) { setQuote(null); setQuoteError(friendlyError(e)); }
+      } finally {
+        if (!ac.signal.aborted) setQuoting(false);
+      }
+    }, 350);
+    return () => { clearTimeout(t); ac.abort(); };
+  }, [rawAmount, inputMint, outputMint, slippageBps, wallet.publicKey]);
 
-  useEffect(()=>{loadOkxSolTokens().then(()=>{setFtRaw(t=>normalizeToken(t)||t);setTtRaw(t=>normalizeToken(t)||t);}).catch(()=>{});},[]);
+  const outAmountUi = useMemo(() => {
+    if (!quote || !outputToken) return null;
+    return Number(quote.outAmount) / Math.pow(10, outputToken.decimals);
+  }, [quote, outputToken]);
 
-  useEffect(()=>{if(!pubkey||!connection){setSbl(null);setSsb(null);return;}let c=false;connection.getBalance(pubkey).then(b=>{if(!c)setSbl(b);}).catch(()=>{});if(ft?.chain==='solana'&&ft.mint!==WSOL_MINT){connection.getParsedTokenAccountsByOwner(pubkey,{mint:new PublicKey(ft.mint)}).then(a=>{if(!c)setSsb(a.value.length?a.value[0].account.data.parsed.info.tokenAmount.uiAmount:0);}).catch(()=>{});}else{setSsb(null);}return()=>{c=true;};},[pubkey,connection,ft]);
+  const priceImpact = useMemo(() => {
+    if (!quote || quote.priceImpactPct == null) return null;
+    const n = Number(quote.priceImpactPct);
+    return Number.isFinite(n) ? n * (Math.abs(n) <= 1 ? 100 : 1) : null; // some APIs return 0-1 fraction
+  }, [quote]);
 
-  useEffect(()=>{if(ss!=='success')return;if(pubkey&&connection&&ft?.chain==='solana'){connection.getBalance(pubkey).then(setSbl).catch(()=>{});if(ft.mint!==WSOL_MINT)connection.getParsedTokenAccountsByOwner(pubkey,{mint:new PublicKey(ft.mint)}).then(a=>setSsb(a.value.length?a.value[0].account.data.parsed.info.tokenAmount.uiAmount:0)).catch(()=>{});}},[ss,pubkey,connection,ft]);
+  const minReceived = useMemo(() => {
+    if (!quote || !outputToken) return null;
+    return Number(quote.otherAmountThreshold) / Math.pow(10, outputToken.decimals);
+  }, [quote, outputToken]);
 
-  useEffect(()=>{let c=false;fetchOkxPrice(ft).then(p=>{if(!c)setFp(p);});return()=>{c=true;};},[ft]);
-  useEffect(()=>{let c=false;fetchOkxPrice(tt).then(p=>{if(!c)setTp(p);});return()=>{c=true;};},[tt]);
+  const flip = () => {
+    setInputMint(outputMint);
+    setOutputMint(inputMint);
+    setAmount('');
+    setQuote(null);
+  };
 
-  const fetchQ=useCallback(async()=>{
-    setQe('');if(!fa||parseFloat(fa)<=0||tokensEqual(ft,tt)){setQ(null);if(tokensEqual(ft,tt))setQe('Cannot swap a token for itself.');return;}
-    try{
-      await loadOkxSolTokens().catch(()=>{});
-      const fromToken=normalizeToken(ft);const toToken=normalizeToken(tt);
-      const fd=getResolvedDecimals(fromToken);const td=getResolvedDecimals(toToken);
-      if(fd==null||td==null){setQe('Token decimals unavailable.');setQ(null);return;}
-      const raw=toRawAmount(fa,fd);if(!raw||raw==='0'){setQe('Enter a larger amount.');setQ(null);return;}
-      const r=await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${toOkxSolAddress(fromToken.mint)}&toTokenAddress=${toOkxSolAddress(toToken.mint)}&amount=${raw}`);
-      const j=await r.json();
-      if(j.code!=='0'||!j.data){setQe(j.msg||'Estimate not available');setQ(null);return;}
-      const d=Array.isArray(j.data)?j.data[0]:j.data;
-      const out=Number(d.toTokenAmount)/Math.pow(10,td);
-      setQ({engine:'okx',outAmountDisplay:fmtTokenDisplay(out),preview:true});
-    }catch(e){setQe('Estimate failed');setQ(null);}
-  },[fa,ft,tt]);
+  const setMax = () => {
+    if (!inputBalance) return;
+    let maxAmt = inputBalance.uiAmount;
+    if (inputMint === SOL_MINT) maxAmt = Math.max(0, maxAmt - 0.01);
+    setAmount(String(maxAmt));
+  };
 
-  useEffect(()=>{const t=setTimeout(fetchQ,QUOTE_DEBOUNCE_MS);return()=>clearTimeout(t);},[fetchQ]);
-
-  const fbd=useMemo(()=>{if(ft?.chain==='solana')return ft.mint===WSOL_MINT?(sbl!=null?sbl/LAMPORTS_PER_SOL:null):ssb;return null;},[ft,sbl,ssb]);
-
-  const onMax=useCallback(()=>{
-    if(fbd==null||fbd<=0)return;
-    utRef.current=true;
-    const d=Math.min(getResolvedDecimals(ft)??6,9);
-    if(ft?.chain==='solana'&&ft.mint===WSOL_MINT){
-      setFa(fmtInputAmount(maxSafeSolBalance(sbl),d));
+  /* swap */
+  const handleSwap = useCallback(async () => {
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      setSwapError('Please connect a wallet first.');
       return;
     }
-    setFa(fmtInputAmount(fbd,d));
-  },[fbd,ft,sbl]);
-
-  const applyB=useCallback(d=>{
-    if(fp>0){
-      utRef.current=true;
-      setFa(fmtInputAmount(d/fp,getResolvedDecimals(ft)??6));
+    if (!quote || !outputToken || !inputToken) {
+      setSwapError('No quote available — try again.');
+      return;
     }
-  },[fp,ft]);
+    setSwapping(true);
+    setSwapError(null);
+    setSwapResult(null);
+    try {
+      // Determine output token program (Token or Token-2022) to derive correct ATA
+      const outputMintInfo = await connection.getAccountInfo(new PublicKey(outputMint));
+      if (!outputMintInfo) throw new Error('Output mint not found on-chain.');
+      const outputTokenProgram = outputMintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+        ? TOKEN_2022_PROGRAM_ID
+        : TOKEN_PROGRAM_ID;
+      const feeAccount = getAssociatedTokenAddressSync(
+        new PublicKey(outputMint),
+        FEE_WALLET,
+        true,
+        outputTokenProgram,
+      );
 
-  const applyS=useCallback(pct=>{
-    if(fbd==null||fbd<=0)return;
-    utRef.current=true;
-    const d=Math.min(getResolvedDecimals(ft)??6,9);
-    let a=fbd*(pct/100);
-    if(pct===100&&ft?.chain==='solana'&&ft.mint===WSOL_MINT)a=maxSafeSolBalance(sbl);
-    setFa(fmtInputAmount(a,d));
-  },[fbd,ft,sbl]);
+      const buildParams = new URLSearchParams({
+        inputMint,
+        outputMint,
+        amount:          rawAmount,
+        slippageBps:     String(slippageBps),
+        taker:           wallet.publicKey.toBase58(),
+        platformFeeBps:  String(FEE_BPS),
+        feeAccount:      feeAccount.toBase58(),
+      });
+      const r = await fetch(`/api/jupiter/build?${buildParams}`);
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.error || `Build failed (${r.status})`);
+      }
+      const build = await r.json();
 
-  const flip=useCallback(()=>{setFt(tt);setTt(ft);setFa('');setQ(null);setQe('');utRef.current=false;},[ft,tt,setFt,setTt]);
+      // assemble instructions
+      const ixs = [];
+      if (Array.isArray(build.computeBudgetInstructions))
+        for (const ix of build.computeBudgetInstructions) ixs.push(deserializeInstruction(ix));
+      if (Array.isArray(build.setupInstructions))
+        for (const ix of build.setupInstructions) ixs.push(deserializeInstruction(ix));
+      if (build.swapInstruction) ixs.push(deserializeInstruction(build.swapInstruction));
+      if (build.cleanupInstruction) ixs.push(deserializeInstruction(build.cleanupInstruction));
+      if (Array.isArray(build.otherInstructions))
+        for (const ix of build.otherInstructions) ixs.push(deserializeInstruction(ix));
 
-  const exec=useCallback(async()=>{
-    if(!wcon){onConnectWallet?.();return;}
-    setSs('loading');setSe('');setStx(null);
-    try{
-      await loadOkxSolTokens().catch(()=>{});
-      const fromToken=normalizeToken(ft);const toToken=normalizeToken(tt);
-      const fd=getResolvedDecimals(fromToken);
-      if(fd==null)throw new Error('Token decimals unavailable');
-      const raw=toRawAmount(fa,fd);
-      if(!raw||raw==='0')throw new Error('Invalid amount');
-      if(!pubkey)throw new Error('Connect Solana wallet');
+      const alts = await getAltAccounts(connection, build.addressesByLookupTableAddress || null);
+      const latest = await connection.getLatestBlockhash('confirmed');
 
-      // ONE executable OKX call. Preview quote above is estimate only.
-      const sd=await fetchOkxSolSwap({fromMint:fromToken.mint,toMint:toToken.mint,amount:raw,userWallet:pubkey.toString()});
-      const tx=await buildOkxSolTx({connection,userPubkey:pubkey,swapData:sd});
-      const sig=await sendTx(tx,connection);
+      // Simulate with max CU to estimate
+      const simMsg = new TransactionMessage({
+        payerKey:        wallet.publicKey,
+        recentBlockhash: latest.blockhash,
+        instructions:    [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), ...ixs],
+      }).compileToV0Message(alts);
+      const simTx = new VersionedTransaction(simMsg);
 
-      setStx(sig);
-      connection.confirmTransaction({signature:sig,blockhash:tx.message.recentBlockhash,lastValidBlockHeight:(await connection.getLatestBlockhash('confirmed')).lastValidBlockHeight},'confirmed').catch(()=>{});
-      saveLastPair(fromToken,toToken);
-      setSs('success');setFa('');setQ(null);utRef.current=false;
-      setTimeout(()=>{setSs('idle');setStx(null);},6000);
-    }catch(e){setSe(e.message||'Swap failed');setSs('error');setTimeout(()=>{setSs('idle');setSe('');},5000);}
-  },[wcon,fa,ft,tt,pubkey,sendTx,connection,onConnectWallet]);
+      let estimatedCu = 600_000;
+      try {
+        const sim = await connection.simulateTransaction(simTx, {
+          replaceRecentBlockhash: true,
+          sigVerify: false,
+        });
+        if (sim.value.err) {
+          const logs = (sim.value.logs || []).join('\n');
+          if (/insufficient/i.test(logs)) throw new Error('Insufficient balance for this swap.');
+          if (/slippage/i.test(logs))     throw new Error('Slippage exceeded — price moved.');
+          throw new Error('Simulation failed: ' + JSON.stringify(sim.value.err));
+        }
+        if (sim.value.unitsConsumed) {
+          estimatedCu = Math.min(1_400_000, Math.ceil(sim.value.unitsConsumed * 1.2));
+        }
+      } catch (simErr) {
+        if (/insufficient|slippage|simulation failed/i.test(String(simErr.message))) throw simErr;
+        console.warn('[swap] sim non-fatal', simErr);
+      }
 
-  const txLink=useMemo(()=>stx?'https://solscan.io/tx/'+stx:null,[stx]);
-  const fuv=fa&&fp>0?parseFloat(fa)*fp:0;
-  const tuv=quote&&tp>0?parseFloat(quote.outAmountDisplay)*tp:0;
-  const td=quote?quote.outAmountDisplay:'0';
-  const tc=quote?C.green:C.muted2;
-  const showBuy=ft&&/^(SOL|USDC)$/i.test(ft.symbol||'');
-  const showSell=modeProp==='sell';
+      // Final tx — strip any compute-unit-limit instruction from build's CB ixs
+      // (we replace it with our simulated value). Keep priority-fee instructions.
+      const finalIxs = [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: estimatedCu }),
+        ...ixs.filter(ix => {
+          if (!ix.programId.equals(ComputeBudgetProgram.programId)) return true;
+          return ix.data[0] !== 0x02; // 0x02 = setComputeUnitLimit
+        }),
+      ];
+      const finalMsg = new TransactionMessage({
+        payerKey:        wallet.publicKey,
+        recentBlockhash: latest.blockhash,
+        instructions:    finalIxs,
+      }).compileToV0Message(alts);
+      const finalTx = new VersionedTransaction(finalMsg);
 
-  return(<div style={{width:'100%',maxWidth:compact?'100%':520,margin:'0 auto'}}>
-    {!compact&&<div style={{marginBottom:16}}><h1 style={{fontSize:22,fontWeight:800,color:'#fff',margin:0}}>Swap</h1><p style={{color:C.muted,fontSize:12,marginTop:4}}>Solana. Powered by OKX DEX.</p></div>}
-    <div style={{background:compact?'transparent':C.card,border:compact?'none':'1px solid '+C.border,borderRadius:compact?0:18,padding:compact?0:18}}>
-      {showBuy&&<div style={{marginBottom:8}}><div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:6}}>QUICK BUY</div><div style={{display:'flex',gap:5}}>{presets.buy.map((a,i)=><button key={i} onClick={()=>applyB(a)} style={{flex:1,padding:'10px 4px',borderRadius:8,border:'1px solid '+C.border,background:C.card2,color:C.muted,fontWeight:700,fontSize:12,cursor:'pointer',fontFamily:'Syne, sans-serif',minHeight:40}}>${a}</button>)}</div></div>}
-      {showSell&&fbd>0&&<div style={{marginBottom:8}}><div style={{fontSize:10,color:C.muted,fontWeight:700,marginBottom:6}}>QUICK SELL</div><div style={{display:'flex',gap:5}}>{presets.sell.map((p,i)=><button key={i} onClick={()=>applyS(p)} style={{flex:1,padding:'10px 4px',borderRadius:8,border:'1px solid '+C.border,background:C.card2,color:C.muted,fontWeight:700,fontSize:12,cursor:'pointer',fontFamily:'Syne, sans-serif',minHeight:40}}>{p===100?'MAX':p+'%'}</button>)}</div></div>}
-      <div style={{background:C.card2,borderRadius:12,padding:14,border:'1px solid '+C.border,marginBottom:4}}>
-        <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}><span style={{fontSize:11,color:C.muted}}>YOU PAY</span>{fbd!=null&&<span style={{fontSize:11,color:C.muted}}>Balance: <span style={{color:C.text}}>{fmtTokenAmount(fbd)}</span></span>}</div>
-        <div style={{display:'flex',alignItems:'center',gap:8}}>
-          <button onClick={()=>setFso(true)} style={{display:'flex',alignItems:'center',gap:6,background:C.card3,border:'1px solid '+C.border,borderRadius:10,padding:'8px 10px',cursor:'pointer',flexShrink:0}}><TokenIcon token={ft} size={20}/><span style={{color:'#fff',fontWeight:700,fontSize:13}}>{ft?.symbol}</span></button>
-          <input value={fa} onChange={e=>{utRef.current=true;setFa(e.target.value.replace(/[^0-9.]/g,''));}} placeholder="0.00" inputMode="decimal" style={{flex:1,background:'transparent',border:'none',fontSize:22,color:'#fff',textAlign:'right',outline:'none',fontFamily:'JetBrains Mono, monospace'}}/>
-          {fbd>0&&<button onClick={onMax} style={{background:'rgba(0,229,255,.12)',border:'1px solid rgba(0,229,255,.25)',borderRadius:6,padding:'6px 10px',color:C.accent,fontSize:11,fontWeight:700,cursor:'pointer',flexShrink:0,fontFamily:'Syne, sans-serif'}}>MAX</button>}
+      const signed = await wallet.signTransaction(finalTx);
+      const signature = await connection.sendRawTransaction(signed.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
+
+      // Confirm + fallback
+      let confirmed = false;
+      try {
+        const result = await Promise.race([
+          connection.confirmTransaction({
+            signature,
+            blockhash:           latest.blockhash,
+            lastValidBlockHeight: latest.lastValidBlockHeight,
+          }, 'confirmed'),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
+        ]);
+        if (result?.value?.err) {
+          throw new Error('Transaction failed on-chain: ' + JSON.stringify(result.value.err));
+        }
+        confirmed = true;
+      } catch (cfErr) {
+        const deadline = Date.now() + 20_000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            const st = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
+            const cs = st?.value?.confirmationStatus;
+            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+            if (st?.value?.err) throw new Error('Transaction failed on-chain.');
+          } catch (pollErr) {
+            if (/failed on-chain/i.test(String(pollErr.message))) throw pollErr;
+          }
+        }
+      }
+
+      setSwapResult({ signature, pending: !confirmed });
+
+      if (confirmed) {
+        setAmount('');
+        setQuote(null);
+        setTimeout(() => { refreshBalances(); }, 2000);
+      }
+    } catch (e) {
+      console.error('[swap] failed', e);
+      setSwapError(friendlyError(e));
+    } finally {
+      setSwapping(false);
+    }
+  }, [wallet, quote, outputToken, inputToken, inputMint, outputMint, rawAmount, slippageBps, connection, refreshBalances]);
+
+  const hasFunds = inputBalance && Number(amount) > 0 && inputBalance.uiAmount >= Number(amount);
+  const canSwap  = !!wallet.publicKey && !!quote && !quoting && !swapping &&
+                   Number(amount) > 0 && inputMint !== outputMint && hasFunds;
+
+  /* render */
+  return (
+    <div style={{ minHeight: '100vh', background: C.bg, color: C.text, ...T.body, paddingBottom: 80 }}>
+      <div style={{ maxWidth: 480, margin: '0 auto', padding: '24px 16px' }}>
+
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
+          <h1 style={{ ...T.display, fontSize: 28, margin: 0 }}>Swap</h1>
+          <button onClick={() => setShowSettings(true)} style={iconBtn} aria-label="Settings">
+            <SettingsIcon />
+          </button>
         </div>
-        {fuv>0&&<div style={{textAlign:'right',marginTop:5,fontSize:11,color:C.muted}}>{fmtUsd(fuv)}</div>}
-      </div>
-      <div style={{display:'flex',justifyContent:'center',margin:'8px 0'}}><button onClick={flip} style={{width:40,height:40,borderRadius:10,background:C.card3,border:'1px solid '+C.border,cursor:'pointer',color:C.accent,fontSize:14,display:'flex',alignItems:'center',justifyContent:'center'}}>{'\u21F5'}</button></div>
-      <div style={{background:C.card2,borderRadius:12,padding:14,border:'1px solid '+C.border}}>
-        <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}><span style={{fontSize:11,color:C.muted}}>ESTIMATED RECEIVE</span></div>
-        <div style={{display:'flex',alignItems:'center',gap:8}}>
-          <button onClick={()=>setTso(true)} style={{display:'flex',alignItems:'center',gap:6,background:C.card3,border:'1px solid '+C.border,borderRadius:10,padding:'8px 10px',cursor:'pointer',flexShrink:0}}><TokenIcon token={tt} size={20}/><span style={{color:'#fff',fontWeight:700,fontSize:13}}>{tt?.symbol}</span></button>
-          <div style={{flex:1,textAlign:'right',fontSize:22,color:tc,fontFamily:'JetBrains Mono, monospace'}}>{td}</div>
+
+        <div style={{
+          background: C.panel,
+          border: `1px solid ${C.border}`,
+          borderRadius: 20,
+          padding: 16,
+        }}>
+          <SwapRow
+            label="You pay"
+            token={inputToken}
+            amount={amount}
+            onAmountChange={setAmount}
+            onPickerOpen={() => setShowPicker('input')}
+            balance={inputBalance}
+            onMax={setMax}
+            editable
+          />
+
+          <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0' }}>
+            <button onClick={flip} style={flipBtn} aria-label="Flip tokens">
+              <FlipIcon />
+            </button>
+          </div>
+
+          <SwapRow
+            label="You receive"
+            token={outputToken}
+            amount={outAmountUi != null ? fmtAmount(outAmountUi, outputToken?.decimals) : (quoting ? '…' : '')}
+            onPickerOpen={() => setShowPicker('output')}
+            balance={balances[outputMint]}
+            editable={false}
+          />
         </div>
-        {tuv>0&&<div style={{textAlign:'right',marginTop:5,fontSize:11,color:C.muted}}>{fmtUsd(tuv)}</div>}
+
+        {quote && outputToken && inputToken && Number(amount) > 0 && (
+          <div style={{
+            marginTop: 12,
+            padding: 14,
+            background: C.panel,
+            border: `1px solid ${C.border}`,
+            borderRadius: 16,
+            fontSize: 13,
+            color: C.textDim,
+          }}>
+            <Row label="Rate">
+              1 {inputToken.symbol} ≈ {fmtAmount((outAmountUi / Number(amount)) || 0, outputToken.decimals)} {outputToken.symbol}
+            </Row>
+            <Row label="Minimum received">
+              {fmtAmount(minReceived, outputToken.decimals)} {outputToken.symbol}
+            </Row>
+            <Row label="Price impact">
+              <span style={{
+                color: priceImpact == null ? C.textDim
+                     : priceImpact > 5 ? C.red
+                     : priceImpact > 1 ? C.amber
+                     : C.green,
+              }}>
+                {priceImpact != null ? `${priceImpact.toFixed(2)}%` : '—'}
+              </span>
+            </Row>
+            <Row label="Slippage tolerance">{(slippageBps / 100).toFixed(2)}%</Row>
+            <Row label="Platform fee">{(FEE_BPS / 100).toFixed(1)}% (in {outputToken.symbol})</Row>
+          </div>
+        )}
+
+        {quoteError && !swapping && !swapResult && <Banner kind="error">{quoteError}</Banner>}
+        {swapError && <Banner kind="error">{swapError}</Banner>}
+        {swapResult && (
+          <Banner kind={swapResult.pending ? 'pending' : 'success'}>
+            {swapResult.pending ? 'Submitted but still confirming. ' : 'Swap confirmed. '}
+            <a
+              href={`https://solscan.io/tx/${swapResult.signature}`}
+              target="_blank"
+              rel="noreferrer"
+              style={{ color: '#fff', textDecoration: 'underline' }}
+            >
+              View on Solscan
+            </a>
+          </Banner>
+        )}
+
+        <button
+          onClick={handleSwap}
+          disabled={!canSwap}
+          style={{
+            ...primaryBtn,
+            opacity: canSwap ? 1 : 0.5,
+            cursor:  canSwap ? 'pointer' : 'not-allowed',
+            marginTop: 16,
+          }}
+        >
+          {swapping
+            ? 'Swapping…'
+            : !wallet.publicKey
+              ? 'Connect Wallet'
+              : inputMint === outputMint
+                ? 'Select different tokens'
+                : !amount || Number(amount) <= 0
+                  ? 'Enter amount'
+                  : !quote && quoting
+                    ? 'Getting quote…'
+                    : !quote
+                      ? 'No route available'
+                      : !hasFunds
+                        ? `Insufficient ${inputToken?.symbol || ''}`
+                        : 'Swap'}
+        </button>
+
+        <p style={{ marginTop: 16, fontSize: 12, color: C.textFaint, textAlign: 'center' }}>
+          Powered by Jupiter — Solana's leading DEX aggregator
+        </p>
       </div>
-      {qe&&<div style={{marginTop:8,padding:10,background:'rgba(255,59,107,.1)',border:'1px solid rgba(255,59,107,.2)',borderRadius:8,fontSize:12,color:C.red}}>{qe}</div>}
-      {quote&&fa&&<div style={{marginTop:12,background:'#050912',borderRadius:10,padding:12}}>{[['Platform fee',fuv>0?fmtUsd(fuv*PLATFORM_FEE):(PLATFORM_FEE*100)+'%'],['Anti-MEV',(SAFETY_FEE*100)+'%'],['Final route','Built on swap click']].map(i=><div key={i[0]} style={{display:'flex',justifyContent:'space-between',padding:'3px 0',fontSize:11}}><span style={{color:C.muted}}>{i[0]}</span><span style={{color:C.text}}>{i[1]}</span></div>)}</div>}
-      {se&&<div style={{marginTop:10,padding:10,background:'rgba(255,59,107,.1)',border:'1px solid rgba(255,59,107,.3)',borderRadius:8,fontSize:12,color:C.red}}>{se}</div>}
-      {!wcon?<button onClick={()=>onConnectWallet?.()} style={{width:'100%',marginTop:14,padding:16,borderRadius:12,border:'none',background:'linear-gradient(135deg,#9945ff,#7c3aed)',color:'#fff',fontFamily:'Syne, sans-serif',fontWeight:800,fontSize:15,cursor:'pointer',minHeight:52}}>Sign in to Swap</button>
-      :<button onClick={exec} disabled={ss==='loading'||!fa} style={{width:'100%',marginTop:14,padding:16,borderRadius:12,border:'none',background:ss==='success'?'linear-gradient(135deg,#00ffa3,#00b36b)':ss==='error'?'rgba(255,59,107,.2)':!fa?C.card2:C.buyGrad,color:!fa?C.muted2:'#fff',fontFamily:'Syne, sans-serif',fontWeight:800,fontSize:15,cursor:ss==='loading'?'not-allowed':'pointer',minHeight:52}}>{ss==='loading'?'Confirming...':ss==='success'?'Done!':ss==='error'?'Retry':!fa?'Enter amount':'Swap '+(ft?.symbol||'')+' \u2192 '+(tt?.symbol||'')}</button>}
-      {stx&&ss==='success'&&txLink&&<a href={txLink} target="_blank" rel="noreferrer" style={{display:'block',textAlign:'center',marginTop:10,fontSize:12,color:C.accent}}>View transaction</a>}
-      <p style={{textAlign:'center',fontSize:10,color:C.muted2,marginTop:10}}>Non-custodial \u00b7 Powered by OKX DEX</p>
+
+      {showPicker && (
+        <TokenPicker
+          tokens={tokens}
+          loading={tokensLoading}
+          balances={balances}
+          excludeMint={showPicker === 'input' ? outputMint : inputMint}
+          onSelect={(mint) => {
+            if (showPicker === 'input') setInputMint(mint);
+            else                         setOutputMint(mint);
+            setShowPicker(null);
+          }}
+          onClose={() => setShowPicker(null)}
+        />
+      )}
+
+      {showSettings && (
+        <SettingsModal
+          slippageBps={slippageBps}
+          onChange={setSlippageBps}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
     </div>
-    <TokenSelectModal open={fso} onClose={()=>setFso(false)} onSelect={t=>{setFt(t);setQ(null);setQe('');}}/>
-    <TokenSelectModal open={tso} onClose={()=>setTso(false)} onSelect={t=>{setTt(t);setQ(null);setQe('');}}/>
-  </div>);
+  );
 }
 
-/* ===== TRADE DRAWER ===== */
-export function TradeDrawer({open,onClose,mode='buy',coin,onConnectWallet,presets,onPresetsChange}){
-  const{connected:solCon}=useWallet();
-  const nc=useMemo(()=>coin?normalizeToken(coin):null,[coin]);
-  const pair=useMemo(()=>nc?defaultTokenPair({mode,viewedToken:nc,lastFromToken:null,walletState:{solConnected:solCon}}):defaultTokenPair({mode,viewedToken:null,lastFromToken:null,walletState:{solConnected:solCon}}),[nc,mode,solCon]);
-  const wk=useMemo(()=>{const id=nc?(nc.mint||'tok'):'none';return id+'-'+mode;},[nc,mode]);
-  const[sws,setSws]=useState('idle');const busy=sws==='loading';
-  useEffect(()=>{if(open)setSws('idle');},[open]);
-  const sc=useCallback(()=>{if(busy)return;onClose();},[busy,onClose]);
-  useBodyScrollLock(open);useEscapeKey(open,sc);
-  if(!open)return null;
-  const sym=(nc&&nc.symbol)||(coin&&coin.symbol)||'';const img=(nc&&nc.logoURI)||(coin&&(coin.image||coin.logoURI));
-  return(<><div onClick={sc} style={{position:'fixed',inset:0,zIndex:400,background:'rgba(0,0,0,.85)'}}/><div style={{position:'fixed',bottom:0,left:'50%',transform:'translateX(-50%)',width:'100%',maxWidth:560,zIndex:401,background:C.card,borderTop:'2px solid '+C.borderHi,borderRadius:'20px 20px 0 0',boxShadow:'0 -20px 60px rgba(0,0,0,.9)',maxHeight:'min(90vh, 100dvh)',display:'flex',flexDirection:'column',overflow:'hidden'}}><div style={{flexShrink:0,padding:'16px 20px 12px'}}><div onClick={sc} style={{width:40,height:4,background:C.muted2,borderRadius:2,margin:'0 auto 14px',cursor:busy?'default':'pointer',opacity:busy?0.4:1}}/><div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}><div style={{display:'flex',alignItems:'center',gap:10}}>{img&&<img src={img} alt="" style={{width:28,height:28,borderRadius:'50%'}} onError={e=>e.currentTarget.style.display='none'}/>}<div style={{color:mode==='buy'?C.accent:C.red,fontWeight:800,fontSize:17}}>{mode==='buy'?'Buy':'Sell'} {sym.toUpperCase()}</div></div><button onClick={sc} disabled={busy} style={{background:'none',border:'none',color:busy?C.muted2:C.muted,fontSize:26,cursor:busy?'not-allowed':'pointer',padding:4}}>x</button></div></div><div style={{flex:1,minHeight:0,overflowY:'auto',padding:'4px 20px',paddingBottom:'calc(env(safe-area-inset-bottom) + 80px)'}}><SwapWidget key={wk} onConnectWallet={onConnectWallet} defaultFromToken={pair.fromToken} defaultToToken={pair.toToken} compact={true} mode={mode} presets={presets} onPresetsChange={onPresetsChange} onStatusChange={setSws}/></div></div></>);
+/* sub-components -------------------------------------------------------- */
+
+function SwapRow({ label, token, amount, onAmountChange, onPickerOpen, balance, onMax, editable }) {
+  return (
+    <div style={{
+      background: C.panel2,
+      border: `1px solid ${C.border}`,
+      borderRadius: 14,
+      padding: 14,
+    }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+        <span style={{ fontSize: 13, color: C.textDim }}>{label}</span>
+        {balance && (
+          <span style={{ fontSize: 12, color: C.textDim }}>
+            Balance: {fmtAmount(balance.uiAmount, balance.decimals)}
+            {editable && onMax && balance.uiAmount > 0 && (
+              <button
+                onClick={onMax}
+                style={{
+                  marginLeft: 6,
+                  background: 'transparent',
+                  border: `1px solid ${C.border}`,
+                  borderRadius: 6,
+                  padding: '2px 6px',
+                  color: C.accent,
+                  fontSize: 11,
+                  cursor: 'pointer',
+                  ...T.body,
+                }}
+              >
+                MAX
+              </button>
+            )}
+          </span>
+        )}
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+        <button onClick={onPickerOpen} style={tokenPickerBtn}>
+          {token?.logoURI && (
+            <img
+              src={token.logoURI}
+              alt=""
+              style={{ width: 22, height: 22, borderRadius: '50%' }}
+              onError={(e) => { e.target.style.display = 'none'; }}
+            />
+          )}
+          <span>{token?.symbol || 'Select'}</span>
+          <ChevronIcon />
+        </button>
+        {editable ? (
+          <input
+            type="text"
+            inputMode="decimal"
+            placeholder="0.00"
+            value={amount}
+            onChange={(e) => {
+              const v = e.target.value.replace(/[^\d.]/g, '');
+              const parts = v.split('.');
+              if (parts.length > 2) return;
+              onAmountChange(v);
+            }}
+            style={amountInputStyle}
+          />
+        ) : (
+          <input
+            type="text"
+            readOnly
+            value={amount}
+            placeholder="0.00"
+            style={amountInputStyle}
+          />
+        )}
+      </div>
+    </div>
+  );
 }
+
+function TokenPicker({ tokens, loading, balances, excludeMint, onSelect, onClose }) {
+  const [query, setQuery] = useState('');
+  const [searchResults, setSearchResults] = useState(null);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    if (!query.trim()) { setSearchResults(null); return; }
+    const t = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const r = await fetch(`/api/jupiter/tokens/search?query=${encodeURIComponent(query.trim())}`);
+        const data = await r.json();
+        const list = Array.isArray(data) ? data : (data?.tokens || []);
+        setSearchResults(list.map(t => ({
+          address:  t.id || t.address || t.mint,
+          symbol:   t.symbol,
+          name:     t.name,
+          decimals: t.decimals,
+          logoURI:  t.icon || t.logoURI || null,
+        })).filter(t => t.address && t.symbol && t.decimals != null));
+      } catch (e) {
+        console.warn('[swap] search failed', e);
+      } finally {
+        setSearching(false);
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  const list = useMemo(() => {
+    const base = searchResults != null
+      ? searchResults
+      : tokens.filter(t => {
+          if (!query.trim()) return true;
+          const q = query.toLowerCase();
+          return t.symbol.toLowerCase().includes(q) ||
+                 t.name.toLowerCase().includes(q)   ||
+                 t.address.toLowerCase().startsWith(q);
+        });
+    return base
+      .filter(t => t.address !== excludeMint)
+      .sort((a, b) => {
+        const ab = balances[a.address]?.uiAmount || 0;
+        const bb = balances[b.address]?.uiAmount || 0;
+        if (ab > 0 && bb === 0) return -1;
+        if (bb > 0 && ab === 0) return 1;
+        if (ab !== bb) return bb - ab;
+        return a.symbol.localeCompare(b.symbol);
+      })
+      .slice(0, 150);
+  }, [tokens, searchResults, query, excludeMint, balances]);
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div
+        style={{ ...modalCard, padding: 0, maxWidth: 480, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div style={{ padding: 16, borderBottom: `1px solid ${C.border}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+            <h3 style={{ ...T.display, fontSize: 18, margin: 0 }}>Select token</h3>
+            <button onClick={onClose} style={iconBtn}><CloseIcon /></button>
+          </div>
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search name, symbol, or paste address"
+            style={{
+              width: '100%',
+              padding: '10px 12px',
+              background: C.panel2,
+              border: `1px solid ${C.border}`,
+              borderRadius: 10,
+              color: C.text,
+              fontSize: 14,
+              outline: 'none',
+              ...T.body,
+              boxSizing: 'border-box',
+            }}
+          />
+        </div>
+        <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
+          {loading && <div style={{ padding: 16, color: C.textDim }}>Loading tokens…</div>}
+          {!loading && list.length === 0 && (
+            <div style={{ padding: 16, color: C.textDim }}>
+              {searching ? 'Searching…' : 'No tokens found.'}
+            </div>
+          )}
+          {list.map(t => {
+            const bal = balances[t.address];
+            return (
+              <button
+                key={t.address}
+                onClick={() => onSelect(t.address)}
+                style={tokenRowBtn}
+                onMouseEnter={(e) => { e.currentTarget.style.background = C.panel2; }}
+                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+              >
+                {t.logoURI
+                  ? <img src={t.logoURI} alt="" style={{ width: 32, height: 32, borderRadius: '50%' }}
+                         onError={(e) => { e.target.style.visibility = 'hidden'; }} />
+                  : <div style={{ width: 32, height: 32, borderRadius: '50%', background: C.panel2 }} />
+                }
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontWeight: 600, fontSize: 15 }}>{t.symbol}</div>
+                  <div style={{ fontSize: 12, color: C.textDim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    {t.name}
+                  </div>
+                </div>
+                {bal && bal.uiAmount > 0 && (
+                  <div style={{ textAlign: 'right', fontWeight: 600, fontSize: 14 }}>
+                    {fmtAmount(bal.uiAmount, bal.decimals)}
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SettingsModal({ slippageBps, onChange, onClose }) {
+  const [custom, setCustom] = useState((slippageBps / 100).toString());
+  const presets = [10, 50, 100, 500];
+
+  return (
+    <div style={modalOverlay} onClick={onClose}>
+      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
+        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+          <h3 style={{ ...T.display, fontSize: 18, margin: 0 }}>Settings</h3>
+          <button onClick={onClose} style={iconBtn}><CloseIcon /></button>
+        </div>
+
+        <div style={{ marginBottom: 8, fontSize: 13, color: C.textDim }}>Slippage tolerance</div>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+          {presets.map(bps => (
+            <button
+              key={bps}
+              onClick={() => { onChange(bps); setCustom((bps / 100).toString()); }}
+              style={{
+                flex: 1,
+                padding: '8px',
+                borderRadius: 10,
+                border: `1px solid ${slippageBps === bps ? C.accent : C.border}`,
+                background: slippageBps === bps ? C.accent : C.panel2,
+                color: C.text,
+                fontSize: 13,
+                cursor: 'pointer',
+                ...T.body,
+              }}
+            >
+              {bps / 100}%
+            </button>
+          ))}
+        </div>
+        <div style={{ position: 'relative' }}>
+          <input
+            value={custom}
+            onChange={(e) => {
+              const v = e.target.value.replace(/[^\d.]/g, '');
+              setCustom(v);
+              const n = Number(v);
+              if (Number.isFinite(n) && n >= 0 && n <= 50) onChange(Math.round(n * 100));
+            }}
+            placeholder="Custom"
+            style={{
+              width: '100%',
+              padding: '10px 32px 10px 12px',
+              background: C.panel2,
+              border: `1px solid ${C.border}`,
+              borderRadius: 10,
+              color: C.text,
+              fontSize: 14,
+              outline: 'none',
+              ...T.body,
+              boxSizing: 'border-box',
+            }}
+          />
+          <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: C.textDim }}>
+            %
+          </span>
+        </div>
+
+        <p style={{ marginTop: 16, fontSize: 12, color: C.textFaint }}>
+          Higher slippage helps transactions land in volatile markets but means you may receive less than quoted.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, children }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
+      <span>{label}</span>
+      <span style={{ color: C.text, fontWeight: 500 }}>{children}</span>
+    </div>
+  );
+}
+
+function Banner({ kind, children }) {
+  const colors = {
+    error:   { bg: '#2a1416', border: '#5a2630', fg: '#fca5a5' },
+    success: { bg: '#0f2418', border: '#1f5238', fg: '#86efac' },
+    pending: { bg: '#241f0d', border: '#52431f', fg: '#fcd34d' },
+  };
+  const c = colors[kind] || colors.error;
+  return (
+    <div style={{
+      marginTop: 12,
+      padding: 12,
+      background: c.bg,
+      border: `1px solid ${c.border}`,
+      borderRadius: 12,
+      color: c.fg,
+      fontSize: 14,
+    }}>
+      {children}
+    </div>
+  );
+}
+
+/* styles ---------------------------------------------------------------- */
+
+const primaryBtn = {
+  width: '100%',
+  padding: '16px',
+  background: C.accent,
+  border: 'none',
+  borderRadius: 14,
+  color: '#fff',
+  fontSize: 16,
+  fontWeight: 600,
+  ...T.body,
+};
+
+const iconBtn = {
+  background: C.panel,
+  border: `1px solid ${C.border}`,
+  borderRadius: 10,
+  width: 36, height: 36,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  cursor: 'pointer',
+  color: C.text,
+};
+
+const flipBtn = {
+  background: C.panel2,
+  border: `1px solid ${C.border}`,
+  borderRadius: 10,
+  width: 36, height: 36,
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  cursor: 'pointer',
+  color: C.text,
+};
+
+const tokenPickerBtn = {
+  display: 'flex',
+  alignItems: 'center',
+  gap: 6,
+  padding: '8px 12px',
+  background: C.panel,
+  border: `1px solid ${C.border}`,
+  borderRadius: 10,
+  color: C.text,
+  fontSize: 15,
+  fontWeight: 600,
+  cursor: 'pointer',
+  ...T.body,
+};
+
+const amountInputStyle = {
+  flex: 1,
+  background: 'transparent',
+  border: 'none',
+  outline: 'none',
+  color: C.text,
+  fontSize: 24,
+  textAlign: 'right',
+  fontWeight: 600,
+  ...T.body,
+  minWidth: 0,
+};
+
+const tokenRowBtn = {
+  width: '100%',
+  display: 'flex',
+  alignItems: 'center',
+  gap: 12,
+  padding: '10px 12px',
+  background: 'transparent',
+  border: 'none',
+  borderRadius: 10,
+  cursor: 'pointer',
+  color: C.text,
+  textAlign: 'left',
+  ...T.body,
+};
+
+const modalOverlay = {
+  position: 'fixed', inset: 0,
+  background: 'rgba(0,0,0,0.6)',
+  display: 'flex', alignItems: 'center', justifyContent: 'center',
+  padding: 16, zIndex: 1000,
+};
+
+const modalCard = {
+  width: '100%',
+  maxWidth: 400,
+  background: C.panel,
+  border: `1px solid ${C.border}`,
+  borderRadius: 18,
+  padding: 20,
+  color: C.text,
+};
+
+/* icons ----------------------------------------------------------------- */
+
+const ChevronIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="6 9 12 15 18 9" />
+  </svg>
+);
+const FlipIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M7 4v16M7 4l-3 3M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3" />
+  </svg>
+);
+const SettingsIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="12" cy="12" r="3" />
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+  </svg>
+);
+const CloseIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="18" y1="6"  x2="6"  y2="18" />
+    <line x1="6"  y1="6"  x2="18" y2="18" />
+  </svg>
+);
