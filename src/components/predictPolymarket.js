@@ -1,12 +1,14 @@
 // src/components/predictPolymarket.js
 //
-// Isolated Polymarket module for the Predict page.
-// - Solana-only auth (uses @solana/wallet-adapter-react)
-// - Derives an EVM key in memory from a single Solana signature
-// - Never persists the key anywhere
-// - All Polymarket protocol calls go through /api/poly proxy
+// Solana-only, non-custodial Polymarket wallet for the Predict page.
 //
-// The rest of the app keeps using WalletContext.js untouched.
+// User connects a Solana wallet, signs ONE deterministic message, and we
+// derive an EVM private key from that signature. The key lives in React
+// state only — never persisted, never sent anywhere.
+//
+// Exposes an EIP-1193 provider so the existing Polymarket SDK code in
+// Predict.jsx (createWalletClient + viem.custom(provider)) works without
+// changes.
 
 import { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
@@ -20,25 +22,65 @@ const SIGN_MESSAGE =
   'Only sign this on apps you trust.\n' +
   'Solana: ';
 
-const POLY_API = '/api/poly';
-
-// ─── Public hook ────────────────────────────────────────────────────────────
+const POLYGON_RPC = 'https://polygon-rpc.com';
 
 export function usePolymarketWallet() {
   const { publicKey, signMessage, connected } = useWallet();
   const [evmAccount, setEvmAccount] = useState(null);
-  const [signingIn, setSigningIn] = useState(false);
-  const [error, setError] = useState(null);
+  const [signingIn, setSigningIn]   = useState(false);
+  const [error, setError]           = useState(null);
+  const providerRef = useRef(null);
 
-  // Drop derived key whenever the Solana wallet disconnects or switches.
+  // Drop derived key when the Solana wallet disconnects or switches.
   const lastPk = useRef(null);
   useEffect(() => {
     const pk = publicKey?.toBase58() || null;
     if (lastPk.current !== pk) {
       lastPk.current = pk;
       setEvmAccount(null);
+      providerRef.current = null;
     }
   }, [publicKey]);
+
+  // Build a minimal EIP-1193 provider over the derived account.
+  // The Polymarket SDK only needs: eth_accounts, eth_chainId, personal_sign,
+  // eth_signTypedData_v4. Everything else falls through to the public RPC.
+  const buildProvider = useCallback((account) => {
+    return {
+      request: async ({ method, params }) => {
+        switch (method) {
+          case 'eth_requestAccounts':
+          case 'eth_accounts':
+            return [account.address];
+          case 'eth_chainId':
+            return '0x89';
+          case 'personal_sign': {
+            const [data] = params || [];
+            return account.signMessage({ message: { raw: data } });
+          }
+          case 'eth_signTypedData_v4':
+          case 'eth_signTypedData': {
+            const [, json] = params || [];
+            const typed = typeof json === 'string' ? JSON.parse(json) : json;
+            return account.signTypedData(typed);
+          }
+          default: {
+            const r = await fetch(POLYGON_RPC, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
+            });
+            const j = await r.json();
+            if (j.error) throw new Error(j.error.message || 'RPC error');
+            return j.result;
+          }
+        }
+      },
+      on:             () => {},
+      removeListener: () => {},
+      isMetaMask:     false,
+    };
+  }, []);
 
   const signIn = useCallback(async () => {
     if (!publicKey) { setError('Connect a Solana wallet first'); return null; }
@@ -48,12 +90,10 @@ export function usePolymarketWallet() {
     try {
       const msg = new TextEncoder().encode(SIGN_MESSAGE + publicKey.toBase58());
       const sig = await signMessage(msg);
-      // 32-byte EVM private key derived from the signature.
       const hex = keccak_256(sig);
-      const pk  = '0x' + hex;
-      const account = privateKeyToAccount(pk);
-      // Best-effort wipe of the raw signature buffer.
+      const account = privateKeyToAccount('0x' + hex);
       try { sig.fill?.(0); } catch {}
+      providerRef.current = buildProvider(account);
       setEvmAccount(account);
       return account;
     } catch (e) {
@@ -63,150 +103,24 @@ export function usePolymarketWallet() {
     } finally {
       setSigningIn(false);
     }
-  }, [publicKey, signMessage]);
+  }, [publicKey, signMessage, buildProvider]);
 
   const signOut = useCallback(() => {
     setEvmAccount(null);
+    providerRef.current = null;
     setError(null);
   }, []);
 
   return useMemo(() => ({
     solanaConnected: connected,
     solanaPubkey: publicKey?.toBase58() || null,
-    evmAddress: evmAccount?.address || null,
-    evmAccount,        // viem LocalAccount — used to sign EIP-712 / messages
     authenticated: !!evmAccount,
     signingIn,
     error,
     signIn,
     signOut,
+    // Shape matches what original Predict.jsx expects from useNexusWallet:
+    getEvmAddress:  () => evmAccount?.address || null,
+    getEvmProvider: async () => providerRef.current || null,
   }), [connected, publicKey, evmAccount, signingIn, error, signIn, signOut]);
-}
-
-// ─── Proxy API helpers ──────────────────────────────────────────────────────
-
-async function postJson(path, body) {
-  const r = await fetch(POLY_API + path, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-    body: JSON.stringify(body || {}),
-  });
-  const text = await r.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; }
-  catch { throw new Error(`Non-JSON ${r.status}: ${text.slice(0, 200)}`); }
-  if (!r.ok) {
-    const msg = data?.detail || data?.error || data?.message || `HTTP ${r.status}`;
-    const err = new Error(msg);
-    err.status = r.status;
-    err.body = data;
-    throw err;
-  }
-  return data;
-}
-
-async function getJson(path) {
-  const r = await fetch(POLY_API + path, { headers: { Accept: 'application/json' } });
-  const text = await r.text();
-  let data = null;
-  try { data = text ? JSON.parse(text) : null; }
-  catch { throw new Error(`Non-JSON ${r.status}: ${text.slice(0, 200)}`); }
-  if (!r.ok) {
-    const msg = data?.detail || data?.error || data?.message || `HTTP ${r.status}`;
-    const err = new Error(msg);
-    err.status = r.status;
-    err.body = data;
-    throw err;
-  }
-  return data;
-}
-
-// ─── High-level operations ──────────────────────────────────────────────────
-//
-// Pattern: every state-changing call is server-orchestrated. The server
-// returns either { ok: true } (gasless via builder relayer, no user sig
-// needed) or { needsSignature: { typedData } } — in which case we ask the
-// user's derived EVM key to sign and POST it back.
-
-async function signAndSubmit(path, evmAccount, prep) {
-  // Server may return { ok: true, ... } directly for gasless ops.
-  if (prep?.ok && !prep?.needsSignature) return prep;
-
-  const ns = prep?.needsSignature;
-  if (!ns) return prep;
-
-  let signature;
-  if (ns.typedData) {
-    signature = await evmAccount.signTypedData(ns.typedData);
-  } else if (ns.message) {
-    signature = await evmAccount.signMessage({ message: { raw: ns.message } });
-  } else {
-    throw new Error('Server requested a signature but provided no payload');
-  }
-
-  return await postJson(path + '/submit', {
-    requestId: ns.requestId,
-    signature,
-  });
-}
-
-/**
- * Idempotent: derive + deploy deposit wallet, approve trading contracts,
- * derive CLOB credentials. Returns { depositWallet }.
- */
-export async function setupAccount(evmAddress, evmAccount) {
-  if (!evmAddress) throw new Error('No EVM address');
-  const prep = await postJson('/setup', { owner: evmAddress });
-  await signAndSubmit('/setup', evmAccount, prep);
-  return prep;
-}
-
-/** Returns { balance: "string-pUSD-atomic", depositWallet } */
-export async function getBalance(evmAddress) {
-  if (!evmAddress) return { balance: '0', depositWallet: null };
-  return await getJson(`/balance/${encodeURIComponent(evmAddress)}`);
-}
-
-export async function getPositions(evmAddress, conditionId) {
-  if (!evmAddress) return [];
-  const q = conditionId ? `?conditionId=${encodeURIComponent(conditionId)}` : '';
-  const r = await getJson(`/positions/${encodeURIComponent(evmAddress)}${q}`);
-  return Array.isArray(r) ? r : (r?.positions || []);
-}
-
-export async function buy({ evmAddress, evmAccount, market, side, usd }) {
-  const prep = await postJson('/buy', {
-    owner: evmAddress,
-    conditionId: market.conditionId,
-    tokenId: side === 'yes' ? market.clobTokenIds[0] : market.clobTokenIds[1],
-    side: 'BUY',
-    usd,
-    price: side === 'yes' ? market.yesPrice : market.noPrice,
-    tickSize: market.tickSize || '0.01',
-    negRisk: !!market.negRisk,
-  });
-  return await signAndSubmit('/buy', evmAccount, prep);
-}
-
-export async function sell({ evmAddress, evmAccount, market, side, shares }) {
-  const prep = await postJson('/sell', {
-    owner: evmAddress,
-    conditionId: market.conditionId,
-    tokenId: side === 'yes' ? market.clobTokenIds[0] : market.clobTokenIds[1],
-    side: 'SELL',
-    shares,
-    price: side === 'yes' ? market.yesPrice : market.noPrice,
-    tickSize: market.tickSize || '0.01',
-    negRisk: !!market.negRisk,
-  });
-  return await signAndSubmit('/sell', evmAccount, prep);
-}
-
-export async function redeem({ evmAddress, evmAccount, market }) {
-  const prep = await postJson('/redeem', {
-    owner: evmAddress,
-    conditionId: market.conditionId,
-    negRisk: !!market.negRisk,
-  });
-  return await signAndSubmit('/redeem', evmAccount, prep);
 }
