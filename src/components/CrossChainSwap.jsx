@@ -796,23 +796,27 @@ export default function CrossChainSwap({ onConnectWallet }) {
       try{
         const q=await fetchOkxCrossQuote({fromToken,toToken,amount:raw,userWallet:wallet});
         const d=q.raw;
-        const outAmt=d.toTokenAmount
-          ?Number(d.toTokenAmount)/Math.pow(10,toToken.decimals||6)
-          :(d.estimateAmount?Number(d.estimateAmount)/Math.pow(10,toToken.decimals||6):null);
+        console.log('[CrossChain] OKX quote raw:', JSON.stringify(d).slice(0,400));
+        // OKX cross-chain quote response fields vary — check all known fields
+        const toDec=Number(toToken.decimals)||6;
+        const rawOut=d.toTokenAmount||d.estimateAmount||d.receiveAmount||d.toAmount||null;
+        const outAmt=rawOut?Number(rawOut)/Math.pow(10,toDec):null;
         setQuote({engine:'okx',outAmount:outAmt,outAmountDisplay:outAmt!=null?fmtTokenDisplay(outAmt):'~',estimatedTime:d.estimatedTime||d.crossChainFee?.estimatedTime||null,fee:d.crossChainFee?.totalFee||null});
       }catch(okxErr){
         console.warn('[CrossChain] OKX quote failed, trying Li.Fi:',okxErr.message);
         try{
           const q=await fetchLifiQuote({fromToken,toToken,amount:raw,userWallet:wallet,destAddress:dest});
+          console.log('[CrossChain] LiFi quote raw:', JSON.stringify(q.raw?.estimate).slice(0,400));
           const rawOut=q.raw?.estimate?.toAmount||q.raw?.estimate?.toAmountMin;
           const toDec=Number(toToken.decimals)||18;
           const outAmt=rawOut?Number(rawOut)/Math.pow(10,toDec):null;
           setQuote({engine:'lifi',outAmount:outAmt,outAmountDisplay:outAmt!=null?fmtTokenDisplay(outAmt):'~',estimatedTime:q.raw?.estimate?.executionDuration||null,fee:null,lifiQuote:q.raw});
-        }catch{
-          setQuote(null); // silent — both failed, try again on next keystroke
+        }catch(lifiErr){
+          console.warn('[CrossChain] LiFi quote also failed:',lifiErr.message);
+          setQuote(null);
         }
       }
-    }catch{ setQuote(null); }
+    }catch(e){ console.error('[CrossChain] fetchQuote outer error:',e.message); setQuote(null); }
     finally{ setQuoting(false); }
   },[fromAmt,fromToken,toToken,destAddr,pubkey]);
 
