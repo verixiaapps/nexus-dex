@@ -143,57 +143,107 @@ router.get('/test-creds', async (_req, res) => {
       return res.json({ step: 'env', ok: false, error: 'creds not loaded' });
     }
 
-    const timestamp = String(Math.floor(Date.now() / 1000));
     const method = 'GET';
     const requestPath = '/transactions';
 
-    let signature;
-    let signMode = 'manual';
+    // Try both signing modes against the relayer to isolate signing vs. creds.
+    const attempts = [];
+
+    // Attempt 1: SDK signing (if available)
     if (sdkBuildHmacSignature) {
+      const timestamp = String(Math.floor(Date.now() / 1000));
       try {
-        signature = await sdkBuildHmacSignature(
+        const signature = await sdkBuildHmacSignature(
           BUILDER_SECRET,
           parseInt(timestamp, 10),
           method,
           requestPath,
           undefined,
         );
-        signMode = 'sdk';
+        const r = await fetchWithTimeout(
+          'https://relayer-v2.polymarket.com/transactions',
+          {
+            method,
+            headers: {
+              'POLY_SIGNATURE': signature,
+              'POLY_TIMESTAMP': timestamp,
+              'POLY_API_KEY': BUILDER_KEY,
+              'POLY_PASSPHRASE': BUILDER_PASSPHRASE,
+              'Accept': 'application/json',
+            },
+          },
+          10_000,
+        );
+        const text = await r.text();
+        attempts.push({
+          mode: 'sdk',
+          status: r.status,
+          ok: r.ok,
+          sigPreview: signature.slice(0, 24) + '...',
+          body: text.slice(0, 300),
+        });
       } catch (e) {
-        signature = manualHmac(BUILDER_SECRET, timestamp, method, requestPath, undefined);
-        signMode = 'manual-fallback: ' + e.message;
+        attempts.push({ mode: 'sdk', error: String(e?.message || e) });
       }
-    } else {
-      signature = manualHmac(BUILDER_SECRET, timestamp, method, requestPath, undefined);
     }
 
-    const r = await fetchWithTimeout(
-      'https://relayer-v2.polymarket.com/transactions',
-      {
-        method,
-        headers: {
-          'POLY_SIGNATURE': signature,
-          'POLY_TIMESTAMP': timestamp,
-          'POLY_API_KEY': BUILDER_KEY,
-          'POLY_PASSPHRASE': BUILDER_PASSPHRASE,
-          'Accept': 'application/json',
-        },
-      },
-      10_000,
-    );
+    // Attempt 2: Manual signing
+    {
+      const timestamp = String(Math.floor(Date.now() / 1000));
+      try {
+        const signature = manualHmac(BUILDER_SECRET, timestamp, method, requestPath, undefined);
+        const r = await fetchWithTimeout(
+          'https://relayer-v2.polymarket.com/transactions',
+          {
+            method,
+            headers: {
+              'POLY_SIGNATURE': signature,
+              'POLY_TIMESTAMP': timestamp,
+              'POLY_API_KEY': BUILDER_KEY,
+              'POLY_PASSPHRASE': BUILDER_PASSPHRASE,
+              'Accept': 'application/json',
+            },
+          },
+          10_000,
+        );
+        const text = await r.text();
+        attempts.push({
+          mode: 'manual',
+          status: r.status,
+          ok: r.ok,
+          sigPreview: signature.slice(0, 24) + '...',
+          body: text.slice(0, 300),
+        });
+      } catch (e) {
+        attempts.push({ mode: 'manual', error: String(e?.message || e) });
+      }
+    }
 
-    const text = await r.text();
+    // Attempt 3: No signature at all (control - should always fail differently)
+    {
+      try {
+        const r = await fetchWithTimeout(
+          'https://relayer-v2.polymarket.com/transactions',
+          { method, headers: { Accept: 'application/json' } },
+          10_000,
+        );
+        const text = await r.text();
+        attempts.push({
+          mode: 'no-auth',
+          status: r.status,
+          ok: r.ok,
+          body: text.slice(0, 300),
+        });
+      } catch (e) {
+        attempts.push({ mode: 'no-auth', error: String(e?.message || e) });
+      }
+    }
+
     return res.json({
-      step: 'relayer',
-      status: r.status,
-      ok: r.ok,
       keyTail: '...' + BUILDER_KEY.slice(-6),
       passphraseTail: '...' + BUILDER_PASSPHRASE.slice(-4),
       secretLen: BUILDER_SECRET.length,
-      signMode,
-      timestamp,
-      signaturePreview: signature.slice(0, 24) + '...',
-      body: text.slice(0, 600),
+      attempts,
     });
   } catch (e) {
     return res.status(500).json({
