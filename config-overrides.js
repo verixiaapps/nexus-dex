@@ -17,11 +17,31 @@ const NODE_POLYFILLS = {
   path:          require.resolve('path-browserify'),
   assert:        require.resolve('assert'),
   url:           require.resolve('url'),
+  util:          require.resolve('util'),
   zlib:          false,
   fs:            false,
   net:           false,
   tls:           false,
   child_process: false,
+};
+
+// Map `node:foo` imports to their browser polyfill equivalents.
+// Aliases don't work for `node:` scheme URIs in webpack 5 because the scheme
+// is resolved before the alias pass. NormalModuleReplacementPlugin rewrites
+// the request earlier in the pipeline.
+const NODE_SCHEME_MAP = {
+  crypto:  require.resolve('crypto-browserify'),
+  buffer:  require.resolve('buffer'),
+  stream:  require.resolve('stream-browserify'),
+  util:    require.resolve('util'),
+  assert:  require.resolve('assert'),
+  http:    require.resolve('stream-http'),
+  https:   require.resolve('https-browserify'),
+  os:      require.resolve('os-browserify/browser'),
+  path:    require.resolve('path-browserify'),
+  process: require.resolve('process/browser.js'),
+  url:     require.resolve('url'),
+  events:  require.resolve('events'),
 };
 
 // @web3modal stub (unchanged from original)
@@ -90,29 +110,18 @@ module.exports = function override(config) {
 
   config.resolve.fallback = Object.assign({}, config.resolve.fallback || {}, NODE_POLYFILLS);
 
-  // ── node: URI scheme aliases ──────────────────────────────────────────────
-  // Webpack 5 does not handle `node:crypto`, `node:buffer`, etc. by default.
-  // The new @polymarket/* packages (clob-client-v2, builder-signing-sdk 1.x)
-  // use `node:` prefixed imports. Map each one to the same polyfill that the
-  // bare name resolves to above.
-  config.resolve.alias = Object.assign(config.resolve.alias, {
-    'node:crypto':        require.resolve('crypto-browserify'),
-    'node:buffer':        require.resolve('buffer'),
-    'node:stream':        require.resolve('stream-browserify'),
-    'node:util':          require.resolve('util'),
-    'node:assert':        require.resolve('assert'),
-    'node:http':          require.resolve('stream-http'),
-    'node:https':         require.resolve('https-browserify'),
-    'node:os':            require.resolve('os-browserify/browser'),
-    'node:path':          require.resolve('path-browserify'),
-    'node:process':       require.resolve('process/browser.js'),
-    'node:url':           require.resolve('url'),
-  });
-
   config.plugins = (config.plugins || []).concat([
     new webpack.ProvidePlugin({
       Buffer:  ['buffer', 'Buffer'],
       process: 'process/browser.js',
+    }),
+    // Rewrite `node:foo` -> polyfill path. Runs before resolution, so it
+    // handles the scheme that webpack 5 otherwise refuses to read.
+    new webpack.NormalModuleReplacementPlugin(/^node:(.+)$/, function (resource) {
+      const mod = resource.request.replace(/^node:/, '');
+      if (NODE_SCHEME_MAP[mod]) {
+        resource.request = NODE_SCHEME_MAP[mod];
+      }
     }),
   ]);
 
