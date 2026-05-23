@@ -1,14 +1,14 @@
 {
   "name": "nexus-dex",
   "version": "1.0.0",
-  "private": true, 
+  "private": true,
   "proxy": "http://localhost:3001",
-  "dependencies": { 
+  "dependencies": {
     "@lifi/sdk": "^3.16.3",
     "@metaplex-foundation/mpl-token-metadata": "3.4.0",
     "@nktkas/hyperliquid": "^0.32.2",
     "@polymarket/builder-relayer-client": "^0.0.8",
-    "@polymarket/builder-signing-sdk": "^1.0.0",
+    "@polymarket/builder-signing-sdk": "^0.0.8",
     "@polymarket/clob-client-v2": "^1.0.6",
     "@privy-io/react-auth": "^2.0.0",
     "@raydium-io/raydium-sdk-v2": "0.1.131-alpha",
@@ -49,7 +49,8 @@
     "viem": "^2.39.2"
   },
   "overrides": {
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "@polymarket/builder-signing-sdk": "^0.0.8"
   },
   "devDependencies": {
     "concurrently": "^8.2.0"
@@ -57,7 +58,8 @@
   "scripts": {
     "start": "node server.js",
     "build": "react-app-rewired build",
-    "dev": "concurrently \"react-app-rewired start\" \"node server.js\""
+    "dev": "concurrently \"react-app-rewired start\" \"node server.js\"",
+    "polymarket:verify": "node -e \"const m=require('@polymarket/builder-relayer-client');console.log('RelayClient:',typeof m.RelayClient);console.log('deriveDepositWallet:',typeof m.deriveDepositWallet);const r=m.RelayClient&&m.RelayClient.prototype;console.log('deriveDepositWalletAddress:',r&&typeof r.deriveDepositWalletAddress);console.log('deployDepositWallet:',r&&typeof r.deployDepositWallet);console.log('executeDepositWalletBatch:',r&&typeof r.executeDepositWalletBatch);\""
   },
   "browserslist": {
     "production": [
