@@ -18,6 +18,7 @@ import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from '../WalletContext.js';
 import { PublicKey, LAMPORTS_PER_SOL, VersionedTransaction } from '@solana/web3.js';
+import bs58 from 'bs58';
 
 /* ─── CONSTANTS ─── */
 const WSOL_MINT      = 'So11111111111111111111111111111111111111112';
@@ -169,17 +170,32 @@ async function fetchPrice(token){
 
 /* ═══════════ AGGREGATORS ═══════════ */
 
-async function okxQuote({ fromMint, toChainId, toAddress, amount }){
-  const okxTo = OKX_CHAIN_INDEX[String(toChainId)];
-  if (!okxTo) throw new Error('OKX: unsupported chain');
-  const p = new URLSearchParams({
+/* OKX V6 cross-chain API — verified from live error responses:
+ *   V6 cross-chain uses fromChainIndex/toChainIndex (V5 docs lie — they say chainId)
+ *   Live error confirmed: "Parameter fromChainIndex cannot be empty"
+ *   slippagePercent name comes from V6 changelog (V5 used slippage)
+ *   We send BOTH old and new names so it works on either version.
+ */
+const SLIPPAGE_FRACTION = '0.05'; // 5%
+function buildOkxXChainParams(extra){
+  return new URLSearchParams({
     fromChainIndex: OKX_SOLANA_IDX,
-    toChainIndex:   okxTo,
-    fromTokenAddress: toOkxSol(fromMint),
-    toTokenAddress:   toAddress,
-    amount: String(amount),
-    slippage: SLIPPAGE,
+    toChainIndex:   String(extra.toChainId),
+    // Also send V5 names defensively — extra params are ignored by upstream
+    fromChainId:    OKX_SOLANA_IDX,
+    toChainId:      String(extra.toChainId),
+    fromTokenAddress: toOkxSol(extra.fromMint),
+    toTokenAddress:   extra.toAddress || extra.toTokenAddress,
+    amount: String(extra.amount),
+    slippagePercent: SLIPPAGE_FRACTION,
+    slippage:        SLIPPAGE_FRACTION,
+    sort: '1',
+    ...(extra.sender   ? { userWalletAddress: extra.sender }   : {}),
+    ...(extra.receiver ? { receiveAddress:    extra.receiver } : {}),
   });
+}
+async function okxQuote({ fromMint, toChainId, toAddress, amount }){
+  const p = buildOkxXChainParams({ fromMint, toChainId, toAddress, amount });
   const r = await fetch('/api/okx/dex/cross-chain/quote?'+p.toString());
   const j = await r.json();
   if (j.code !== '0' || !j.data) throw new Error('OKX quote: '+(j.msg || JSON.stringify(j).slice(0,200)));
@@ -187,54 +203,71 @@ async function okxQuote({ fromMint, toChainId, toAddress, amount }){
 }
 
 async function okxBuild({ fromMint, toChainId, toTokenAddress, amount, sender, receiver }){
-  const okxTo = OKX_CHAIN_INDEX[String(toChainId)];
-  const p = new URLSearchParams({
-    fromChainIndex: OKX_SOLANA_IDX,
-    toChainIndex:   okxTo,
-    fromTokenAddress: toOkxSol(fromMint),
-    toTokenAddress:   toTokenAddress,
-    amount: String(amount),
-    slippage: SLIPPAGE,
-    sort: '1',
-    userWalletAddress: sender,
-    receiveAddress: receiver,
-  });
+  const p = buildOkxXChainParams({ fromMint, toChainId, toTokenAddress, amount, sender, receiver });
   const r = await fetch('/api/okx/dex/cross-chain/build-tx?'+p.toString());
   const j = await r.json();
   if (j.code !== '0' || !j.data) throw new Error('OKX build: '+(j.msg || JSON.stringify(j).slice(0,200)));
   return Array.isArray(j.data) ? j.data[0] : j.data;
 }
 
+/* LI.FI Solana note (from docs):
+ *   - Native SOL: use System Program "11111111111111111111111111111111"
+ *   - Wrapped SOL: use "So11111111111111111111111111111111111111112"
+ *   Most users hold native SOL, not wSOL. When the UI passes wSOL mint,
+ *   we silently translate to native for LI.FI so quotes succeed.
+ * Order values (verified from LI.FI docs/examples):
+ *   CHEAPEST | FASTEST | SAFEST | RECOMMENDED  (RECOMMENDED is valid;
+ *   was previously BEST_VALUE — LI.FI accepts both per their SDK source)
+ */
+function lifiFromToken(mint){
+  // LI.FI treats the wSOL mint as the wrapped token, NOT native SOL.
+  // If user means native SOL (UI default), pass system program.
+  return mint === WSOL_MINT ? SOL_MINT_OKX : mint;
+}
 async function lifiQuote({ fromMint, toChainId, toAddress, amount, sender, receiver }){
   if (!sender) throw new Error('LI.FI requires connected wallet');
   const p = new URLSearchParams({
     fromChain: String(LIFI_SOLANA_ID),
     toChain:   String(toChainId),
-    fromToken: fromMint,
+    fromToken: lifiFromToken(fromMint),
     toToken:   toAddress,
     fromAmount: String(amount),
     fromAddress: sender,
     toAddress: receiver || sender,
-    slippage: '0.01',
+    slippage: SLIPPAGE_FRACTION,
     integrator: 'NexusDEX',
-    order: 'RECOMMENDED',
+    order: 'FASTEST',
+    skipSimulation: 'true',
   });
   const r = await fetch('/api/lifi/quote?'+p.toString());
   const j = await r.json().catch(()=>({}));
   if (!r.ok) {
-    const detail = j?.message || j?.errors?.[0]?.message || j?.error || JSON.stringify(j).slice(0,200);
+    const detail = j?.message || j?.errors?.[0]?.message || j?.error || `HTTP ${r.status}`;
     throw new Error('LI.FI quote: '+detail);
   }
   return j;
 }
 
-async function sendSolanaTx({ connection, txBase64, sendTx }){
-  const buf = Buffer.from(txBase64, 'base64');
+/* Solana tx decoder.
+ * OKX returns base58-encoded VersionedTransaction in tx.data.
+ * LI.FI returns base64-encoded VersionedTransaction in transactionRequest.data.
+ * Wrong decoder = corrupt tx = "invalid account data" on chain.
+ */
+async function sendSolanaTx({ connection, txData, encoding, sendTx }){
+  let bytes;
+  if (encoding === 'base58') {
+    bytes = bs58.decode(txData);
+  } else {
+    bytes = Buffer.from(txData, 'base64');
+  }
   let tx;
-  try { tx = VersionedTransaction.deserialize(buf); }
-  catch (e) { throw new Error('Failed to deserialize tx: '+e.message); }
+  try { tx = VersionedTransaction.deserialize(bytes); }
+  catch (e) { throw new Error('Failed to deserialize ('+encoding+'): '+e.message); }
+
+  // Refresh blockhash so the tx doesn't expire while user signs
   const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('finalized');
   tx.message.recentBlockhash = blockhash;
+
   const sig = await sendTx(tx, connection, { skipPreflight:false, preflightCommitment:'processed', maxRetries:3 });
   connection.confirmTransaction({ signature:sig, blockhash, lastValidBlockHeight }, 'confirmed').catch(()=>{});
   return sig;
@@ -256,14 +289,16 @@ async function getUnifiedQuote({ fromToken, toToken, amount, sender, receiver })
   if (OKX_CHAIN_INDEX[String(toToken.chainId)]) {
     try {
       const q = await okxQuote({ fromMint, toChainId: toToken.chainId, toAddress: toToken.address, amount });
-      const toAmtRaw = q.toTokenAmount || q.toTokenAmountMin || q.toAmount;
+      // Per docs: response is { fromTokenAmount, fromToken, toToken, routerList:[{router:{bridgeName,...}, toTokenAmount, minimumReceived, estimateTime, ...}], toChainId }
+      const route = q?.routerList?.[0];
+      const toAmtRaw = route?.toTokenAmount || q.toTokenAmount;
       if (toAmtRaw) {
         const outAmt = Number(toAmtRaw) / Math.pow(10, toDec);
-        const dur = Number(q.estimatedTime || q.estimateTime || q.routerList?.[0]?.estimateTime || 0);
+        const dur = Number(route?.estimateTime || 0);
         return {
           aggregator:'okx', outAmt, outDisplay:fmtTok(outAmt),
           estTime: dur > 0 ? dur : null,
-          bridge: q.router?.bridgeName || q.routerList?.[0]?.router?.bridgeName || 'OKX',
+          bridge: route?.router?.bridgeName || 'OKX',
         };
       }
       errors.push('OKX: empty response');
@@ -575,6 +610,18 @@ export default function CrossChainSwap({ onConnectWallet }){
     }
     if (!quote) { setSwapErr('No route. Wait for routing.'); return; }
 
+    // Minimum amount guard: cross-chain bridges have minimum fees of
+    // several dollars (gas on destination + bridge fee). Anything below
+    // ~$1 will succeed on Solana side but fail at the bridge instruction
+    // with "invalid account data" because the amount is dust after fees.
+    const inUsd = fromAmt && fp > 0 ? +fromAmt * fp : 0;
+    if (inUsd > 0 && inUsd < 1) {
+      setSwapErr(`Minimum bridge amount is ~$1 (you're sending ~${fmtUsd(inUsd)}). Cross-chain fees would exceed the swap.`);
+      setStep(-1);
+      setTimeout(()=>{ setStep(0); setSwapErr(''); }, 6000);
+      return;
+    }
+
     setStep(1); setSwapErr(''); setStatusMsg('Building route…'); setTxHash(null);
     try {
       const dec = resolveDecimals(fromToken);
@@ -595,19 +642,19 @@ export default function CrossChainSwap({ onConnectWallet }){
         if (ve) throw new Error(ve);
       }
 
-      let txBase64 = null;
+      let txData = null;
+      let txEncoding = null;
       let usedAggregator = null;
 
-      // Prefer the aggregator that produced the quote, but try both
       const tryOkx = async () => {
         setStatusMsg('Building OKX route…');
         const built = await okxBuild({
           fromMint, toChainId: toToken.chainId, toTokenAddress: toToken.address,
           amount: raw, sender, receiver,
         });
-        const b64 = built?.tx?.data || built?.data || null;
-        if (!b64) throw new Error('OKX: no tx data');
-        return b64;
+        const data = built?.tx?.data || built?.data || null;
+        if (!data) throw new Error('OKX: no tx data');
+        return { data, encoding: 'base58' }; // OKX returns base58 for Solana
       };
       const tryLifi = async () => {
         setStatusMsg('Building LI.FI route…');
@@ -615,9 +662,9 @@ export default function CrossChainSwap({ onConnectWallet }){
           fromMint, toChainId: toToken.chainId, toAddress: toToken.address,
           amount: raw, sender, receiver,
         });
-        const b64 = j?.transactionRequest?.data;
-        if (!b64) throw new Error('LI.FI: no tx data');
-        return b64;
+        const data = j?.transactionRequest?.data;
+        if (!data) throw new Error('LI.FI: no tx data');
+        return { data, encoding: 'base64' }; // LI.FI returns base64
       };
 
       const okxSupported = !!OKX_CHAIN_INDEX[String(toToken.chainId)];
@@ -628,7 +675,9 @@ export default function CrossChainSwap({ onConnectWallet }){
       for (const a of order) {
         try {
           if (a === 'okx' && !okxSupported) continue;
-          txBase64 = a === 'okx' ? await tryOkx() : await tryLifi();
+          const result = a === 'okx' ? await tryOkx() : await tryLifi();
+          txData = result.data;
+          txEncoding = result.encoding;
           usedAggregator = a;
           break;
         } catch (err) {
@@ -636,10 +685,10 @@ export default function CrossChainSwap({ onConnectWallet }){
           setStatusMsg((a==='okx'?'OKX':'LI.FI')+' unavailable, trying other…');
         }
       }
-      if (!txBase64) throw new Error('Both aggregators failed to build a transaction');
+      if (!txData) throw new Error('Both aggregators failed to build a transaction');
 
       setStep(2); setStatusMsg('Sign in wallet…');
-      const sig = await sendSolanaTx({ connection, txBase64, sendTx: sendTransaction });
+      const sig = await sendSolanaTx({ connection, txData, encoding: txEncoding, sendTx: sendTransaction });
       setTxHash(sig);
 
       setStep(3); setStatusMsg(`Bridging via ${usedAggregator === 'okx' ? 'OKX' : 'LI.FI'}…`);
