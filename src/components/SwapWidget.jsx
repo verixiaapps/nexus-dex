@@ -1,36 +1,34 @@
-// Swap.jsx — Jupiter Swap V2 Router (single signature, atomic 5% fee)
+// Swap.jsx — matches Predict pattern exactly:
+//   1. Get a Jupiter swap tx untouched (no platformFeeBps/feeAccount)
+//   2. Build a SEPARATE fee tx (5% of input mint -> FEE_WALLET)
+//   3. signAllTransactions([swapTx, feeTx]) — ONE popup
+//   4. Broadcast both via RPC in parallel
+//   5. Confirm with Solscan-link fallback
 //
-// Flow:
-//   1. User picks input + output tokens + amount
-//   2. We call /api/jupiter/build (proxies api.jup.ag/swap/v2/build) with
-//      platformFeeBps=500 + feeAccount=<our fee ATA for output mint>
-//   3. Jupiter returns raw instructions. We assemble them into a single
-//      VersionedTransaction.
-//   4. Simulate to estimate compute units, then rebuild with 1.2x CU.
-//   5. User signs once. We broadcast via RPC.
-//   6. Confirm with Solscan-link fallback on timeout.
-//
-// Fee policy:
-//   - 5% taken in the OUTPUT mint via Jupiter's native platformFeeBps.
-//   - Fee account is the ATA of FEE_WALLET for the output mint. Jupiter
-//     creates it via setupInstructions if it doesn't exist (user pays
-//     ~0.002 SOL rent).
+// No Jupiter native fee mechanism. No referral SDK. Just like Predict.
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import { Buffer } from 'buffer';
 import {
   Connection,
   PublicKey,
   VersionedTransaction,
   TransactionMessage,
-  TransactionInstruction,
-  ComputeBudgetProgram,
-  AddressLookupTableAccount,
+  SystemProgram,
 } from '@solana/web3.js';
-import { getAssociatedTokenAddressSync, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
+import {
+  getAssociatedTokenAddressSync,
+  createAssociatedTokenAccountIdempotentInstruction,
+  createTransferCheckedInstruction,
+  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
 import { useWallet } from '@solana/wallet-adapter-react';
 
+/* ─── CONFIG ──────────────────────────────────────────────────────── */
+
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS    = 500;
+const FEE_BPS    = 500; // 5%
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
@@ -58,7 +56,7 @@ const T = {
   body:    { fontFamily: 'system-ui, -apple-system, sans-serif' },
 };
 
-/* helpers --------------------------------------------------------------- */
+/* ─── HELPERS ──────────────────────────────────────────────────────── */
 
 const fmtAmount = (n, decimals = 6) => {
   if (n == null || isNaN(n)) return '0';
@@ -75,44 +73,19 @@ const friendlyError = (err) => {
   const m = String(err?.message || err || '').toLowerCase();
   if (m.includes('insufficient'))      return 'Insufficient balance for this swap.';
   if (m.includes('slippage'))          return 'Price moved too much. Try again or increase slippage.';
-  if (m.includes('blockhash'))         return 'Transaction expired. Please try again.';
+  if (m.includes('blockhash') || m.includes('expired'))
+    return 'Transaction expired. Please try again.';
   if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled'))
     return 'Transaction cancelled.';
   if (m.includes('simulation failed')) return 'Swap simulation failed — the price may have moved.';
   if (m.includes('account not'))       return 'Token account not ready. Please try again in a moment.';
   if (m.includes('rate'))              return 'Too many requests — please wait a moment.';
+  if (m.includes('could not find any route') || m.includes('no route'))
+    return 'No route available for this pair.';
   return err?.message || 'Swap failed. Please try again.';
 };
 
-function deserializeInstruction(ix) {
-  return new TransactionInstruction({
-    programId: new PublicKey(ix.programId),
-    keys: ix.accounts.map(a => ({
-      pubkey:     new PublicKey(a.pubkey),
-      isSigner:   a.isSigner,
-      isWritable: a.isWritable,
-    })),
-    data: Buffer.from(ix.data, 'base64'),
-  });
-}
-
-async function getAltAccounts(connection, addressesByLut) {
-  if (!addressesByLut) return [];
-  const keys = Object.keys(addressesByLut);
-  if (keys.length === 0) return [];
-  const infos = await connection.getMultipleAccountsInfo(keys.map(k => new PublicKey(k)));
-  const out = [];
-  for (let i = 0; i < keys.length; i++) {
-    if (!infos[i]) continue;
-    out.push(new AddressLookupTableAccount({
-      key:   new PublicKey(keys[i]),
-      state: AddressLookupTableAccount.deserialize(infos[i].data),
-    }));
-  }
-  return out;
-}
-
-/* component ------------------------------------------------------------- */
+/* ─── COMPONENT ───────────────────────────────────────────────────── */
 
 export default function Swap() {
   const wallet = useWallet();
@@ -208,9 +181,9 @@ export default function Swap() {
 
   const inputToken  = useMemo(() => tokens.find(t => t.address === inputMint)  || null, [tokens, inputMint]);
   const outputToken = useMemo(() => tokens.find(t => t.address === outputMint) || null, [tokens, outputMint]);
-
   const inputBalance = balances[inputMint];
 
+  /* user input -> raw amount (smallest units, as string) */
   const rawAmount = useMemo(() => {
     if (!amount || !inputToken) return '';
     const n = Number(amount);
@@ -218,25 +191,40 @@ export default function Swap() {
     return Math.floor(n * Math.pow(10, inputToken.decimals)).toString();
   }, [amount, inputToken]);
 
-  /* quote */
+  /* QUOTE — no fee params. Jupiter sees a clean, normal swap.
+   * We deduct the 5% from rawAmount before sending so the quote
+   * reflects what the user will actually receive after our fee. */
   const quoteAbortRef = useRef(null);
   useEffect(() => {
     if (!rawAmount || inputMint === outputMint) {
-      setQuote(null); setQuoteError(null); return;
+      setQuote(null);
+      setQuoteError(null);
+      return;
     }
     if (quoteAbortRef.current) quoteAbortRef.current.abort();
     const ac = new AbortController();
     quoteAbortRef.current = ac;
-    setQuoting(true); setQuoteError(null);
+
+    setQuoting(true);
+    setQuoteError(null);
+
     const t = setTimeout(async () => {
       try {
+        // Net amount = input minus our 5% fee (taken in INPUT mint)
+        const net = (BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n;
+        if (net <= 0n) {
+          setQuote(null);
+          setQuoting(false);
+          return;
+        }
         const params = new URLSearchParams({
           inputMint,
           outputMint,
-          amount:         rawAmount,
-          slippageBps:    String(slippageBps),
-          taker:          wallet.publicKey ? wallet.publicKey.toBase58() : '11111111111111111111111111111111',
-          platformFeeBps: String(FEE_BPS),
+          amount:      net.toString(),
+          slippageBps: String(slippageBps),
+          taker:       wallet.publicKey
+            ? wallet.publicKey.toBase58()
+            : '11111111111111111111111111111111',
         });
         const r = await fetch(`/api/jupiter/build?${params}`, { signal: ac.signal });
         if (!r.ok) {
@@ -244,14 +232,21 @@ export default function Swap() {
           throw new Error(body.error || `Quote failed (${r.status})`);
         }
         const data = await r.json();
-        if (!ac.signal.aborted) { setQuote(data); setQuoteError(null); }
+        if (!ac.signal.aborted) {
+          setQuote({ ...data, netRaw: net.toString() });
+          setQuoteError(null);
+        }
       } catch (e) {
         if (e.name === 'AbortError') return;
-        if (!ac.signal.aborted) { setQuote(null); setQuoteError(friendlyError(e)); }
+        if (!ac.signal.aborted) {
+          setQuote(null);
+          setQuoteError(friendlyError(e));
+        }
       } finally {
         if (!ac.signal.aborted) setQuoting(false);
       }
     }, 350);
+
     return () => { clearTimeout(t); ac.abort(); };
   }, [rawAmount, inputMint, outputMint, slippageBps, wallet.publicKey]);
 
@@ -260,16 +255,16 @@ export default function Swap() {
     return Number(quote.outAmount) / Math.pow(10, outputToken.decimals);
   }, [quote, outputToken]);
 
-  const priceImpact = useMemo(() => {
-    if (!quote || quote.priceImpactPct == null) return null;
-    const n = Number(quote.priceImpactPct);
-    return Number.isFinite(n) ? n * (Math.abs(n) <= 1 ? 100 : 1) : null; // some APIs return 0-1 fraction
-  }, [quote]);
-
   const minReceived = useMemo(() => {
     if (!quote || !outputToken) return null;
     return Number(quote.otherAmountThreshold) / Math.pow(10, outputToken.decimals);
   }, [quote, outputToken]);
+
+  const priceImpact = useMemo(() => {
+    if (!quote || quote.priceImpactPct == null) return null;
+    const n = Number(quote.priceImpactPct);
+    return Number.isFinite(n) ? n * (Math.abs(n) <= 1 ? 100 : 1) : null;
+  }, [quote]);
 
   const flip = () => {
     setInputMint(outputMint);
@@ -285,163 +280,219 @@ export default function Swap() {
     setAmount(String(maxAmt));
   };
 
-  /* swap */
+  /* SWAP — build fee tx separately, bundle with Jupiter's tx, sign once */
   const handleSwap = useCallback(async () => {
-    if (!wallet.publicKey || !wallet.signTransaction) {
-      setSwapError('Please connect a wallet first.');
+    if (!wallet.publicKey || !wallet.signAllTransactions) {
+      setSwapError('Please connect a wallet that supports multi-tx signing (Phantom, Solflare, Backpack).');
       return;
     }
     if (!quote || !outputToken || !inputToken) {
       setSwapError('No quote available — try again.');
       return;
     }
+
     setSwapping(true);
     setSwapError(null);
     setSwapResult(null);
-    try {
-      // Determine output token program (Token or Token-2022) to derive correct ATA
-      const outputMintInfo = await connection.getAccountInfo(new PublicKey(outputMint));
-      if (!outputMintInfo) throw new Error('Output mint not found on-chain.');
-      const outputTokenProgram = outputMintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
-        ? TOKEN_2022_PROGRAM_ID
-        : TOKEN_PROGRAM_ID;
-      const feeAccount = getAssociatedTokenAddressSync(
-        new PublicKey(outputMint),
-        FEE_WALLET,
-        true,
-        outputTokenProgram,
-      );
 
-      const buildParams = new URLSearchParams({
+    try {
+      const dec = inputToken.decimals;
+      const netRaw = quote.netRaw ||
+        ((BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n).toString();
+
+      // 1) Fresh /build call for the NET amount (locks in the actual route)
+      const params = new URLSearchParams({
         inputMint,
         outputMint,
-        amount:          rawAmount,
-        slippageBps:     String(slippageBps),
-        taker:           wallet.publicKey.toBase58(),
-        platformFeeBps:  String(FEE_BPS),
-        feeAccount:      feeAccount.toBase58(),
+        amount:      netRaw,
+        slippageBps: String(slippageBps),
+        taker:       wallet.publicKey.toBase58(),
       });
-      const r = await fetch(`/api/jupiter/build?${buildParams}`);
+      const r = await fetch(`/api/jupiter/build?${params}`);
       if (!r.ok) {
         const body = await r.json().catch(() => ({}));
         throw new Error(body.error || `Build failed (${r.status})`);
       }
       const build = await r.json();
 
-      // assemble instructions
+      // 2) Reconstruct Jupiter's tx from raw instructions.
+      // /build returns instructions, not a serialized tx, so we assemble.
       const ixs = [];
+      const deser = (ix) => ({
+        programId: new PublicKey(ix.programId),
+        keys: ix.accounts.map(a => ({
+          pubkey:     new PublicKey(a.pubkey),
+          isSigner:   a.isSigner,
+          isWritable: a.isWritable,
+        })),
+        data: Buffer.from(ix.data, 'base64'),
+      });
       if (Array.isArray(build.computeBudgetInstructions))
-        for (const ix of build.computeBudgetInstructions) ixs.push(deserializeInstruction(ix));
+        for (const ix of build.computeBudgetInstructions) ixs.push(deser(ix));
       if (Array.isArray(build.setupInstructions))
-        for (const ix of build.setupInstructions) ixs.push(deserializeInstruction(ix));
-      if (build.swapInstruction) ixs.push(deserializeInstruction(build.swapInstruction));
-      if (build.cleanupInstruction) ixs.push(deserializeInstruction(build.cleanupInstruction));
+        for (const ix of build.setupInstructions) ixs.push(deser(ix));
+      if (build.swapInstruction) ixs.push(deser(build.swapInstruction));
+      if (build.cleanupInstruction) ixs.push(deser(build.cleanupInstruction));
       if (Array.isArray(build.otherInstructions))
-        for (const ix of build.otherInstructions) ixs.push(deserializeInstruction(ix));
+        for (const ix of build.otherInstructions) ixs.push(deser(ix));
 
-      const alts = await getAltAccounts(connection, build.addressesByLookupTableAddress || null);
+      // ALTs
+      const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+      const { AddressLookupTableAccount } = await import('@solana/web3.js');
+      let alts = [];
+      if (altKeys.length > 0) {
+        const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
+        alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+          key:   new PublicKey(k),
+          state: AddressLookupTableAccount.deserialize(infos[i].data),
+        }) : null).filter(Boolean);
+      }
+
+      // Fresh blockhash to stamp both txs (so they share validity window)
       const latest = await connection.getLatestBlockhash('confirmed');
 
-      // Simulate with max CU to estimate
-      const simMsg = new TransactionMessage({
+      const swapMsg = new TransactionMessage({
         payerKey:        wallet.publicKey,
         recentBlockhash: latest.blockhash,
-        instructions:    [ComputeBudgetProgram.setComputeUnitLimit({ units: 1_400_000 }), ...ixs],
+        instructions:    ixs.map(i => i),
       }).compileToV0Message(alts);
-      const simTx = new VersionedTransaction(simMsg);
+      const swapTx = new VersionedTransaction(swapMsg);
 
-      let estimatedCu = 600_000;
+      // 3) Build fee tx — 5% of full input amount in input mint
+      const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
+      if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
+
+      const feeIxs = [];
+      if (inputMint === SOL_MINT) {
+        // Native SOL transfer
+        feeIxs.push(SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey:   FEE_WALLET,
+          lamports:   Number(feeAmount),
+        }));
+      } else {
+        // SPL transfer — determine token program
+        const mintPk = new PublicKey(inputMint);
+        const mintInfo = await connection.getAccountInfo(mintPk);
+        if (!mintInfo) throw new Error('Input mint not found on-chain.');
+        const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+          ? TOKEN_2022_PROGRAM_ID
+          : TOKEN_PROGRAM_ID;
+
+        const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
+        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
+
+        // Idempotent ATA create — no-op if already exists, costs user ~0.002 SOL first time
+        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+          wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
+        ));
+        feeIxs.push(createTransferCheckedInstruction(
+          sourceAta, mintPk, destAta, wallet.publicKey,
+          feeAmount, dec, [], tokenProgram,
+        ));
+      }
+
+      const feeMsg = new TransactionMessage({
+        payerKey:        wallet.publicKey,
+        recentBlockhash: latest.blockhash,
+        instructions:    feeIxs,
+      }).compileToV0Message();
+      const feeTx = new VersionedTransaction(feeMsg);
+
+      // 4) SIMULATE both txs before showing the wallet popup, so we catch
+      //    insufficient-balance / slippage / account-not-ready errors with
+      //    plain-English messages instead of opaque on-chain failures.
+      const mapSimErr = (logs) => {
+        const j = (logs || []).join('\n').toLowerCase();
+        if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+        if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
+        if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+        if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
+        return null;
+      };
       try {
-        const sim = await connection.simulateTransaction(simTx, {
-          replaceRecentBlockhash: true,
-          sigVerify: false,
-        });
-        if (sim.value.err) {
-          const logs = (sim.value.logs || []).join('\n');
-          if (/insufficient/i.test(logs)) throw new Error('Insufficient balance for this swap.');
-          if (/slippage/i.test(logs))     throw new Error('Slippage exceeded — price moved.');
-          throw new Error('Simulation failed: ' + JSON.stringify(sim.value.err));
+        const [simSwap, simFee] = await Promise.all([
+          connection.simulateTransaction(swapTx, { replaceRecentBlockhash: true, sigVerify: false }),
+          connection.simulateTransaction(feeTx,  { replaceRecentBlockhash: true, sigVerify: false }),
+        ]);
+        if (simSwap.value.err) {
+          throw new Error(mapSimErr(simSwap.value.logs) || 'Swap simulation failed — the price may have moved.');
         }
-        if (sim.value.unitsConsumed) {
-          estimatedCu = Math.min(1_400_000, Math.ceil(sim.value.unitsConsumed * 1.2));
+        if (simFee.value.err) {
+          throw new Error(mapSimErr(simFee.value.logs) || 'Fee transaction simulation failed.');
         }
       } catch (simErr) {
-        if (/insufficient|slippage|simulation failed/i.test(String(simErr.message))) throw simErr;
+        // Don't block on network simulation failures (RPC hiccups); only
+        // surface explicit on-chain sim errors.
+        if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
+          throw simErr;
+        }
         console.warn('[swap] sim non-fatal', simErr);
       }
 
-      // Final tx — strip any compute-unit-limit instruction from build's CB ixs
-      // (we replace it with our simulated value). Keep priority-fee instructions.
-      const finalIxs = [
-        ComputeBudgetProgram.setComputeUnitLimit({ units: estimatedCu }),
-        ...ixs.filter(ix => {
-          if (!ix.programId.equals(ComputeBudgetProgram.programId)) return true;
-          return ix.data[0] !== 0x02; // 0x02 = setComputeUnitLimit
-        }),
-      ];
-      const finalMsg = new TransactionMessage({
-        payerKey:        wallet.publicKey,
-        recentBlockhash: latest.blockhash,
-        instructions:    finalIxs,
-      }).compileToV0Message(alts);
-      const finalTx = new VersionedTransaction(finalMsg);
+      // 5) ONE wallet popup
+      const [signedSwap, signedFee] = await wallet.signAllTransactions([swapTx, feeTx]);
 
-      const signed = await wallet.signTransaction(finalTx);
-      const signature = await connection.sendRawTransaction(signed.serialize(), {
-        skipPreflight: false,
-        maxRetries: 3,
-      });
+      // 6) Broadcast both in parallel
+      const [swapSig, feeSig] = await Promise.all([
+        connection.sendRawTransaction(signedSwap.serialize(), { skipPreflight: false, maxRetries: 3 }),
+        connection.sendRawTransaction(signedFee.serialize(),  { skipPreflight: false, maxRetries: 3 }),
+      ]);
 
-      // Confirm + fallback
+      // 7) Confirm swap tx (the one that matters); fall back to polling
       let confirmed = false;
       try {
-        const result = await Promise.race([
+        const conf = await Promise.race([
           connection.confirmTransaction({
-            signature,
-            blockhash:           latest.blockhash,
+            signature: swapSig,
+            blockhash: latest.blockhash,
             lastValidBlockHeight: latest.lastValidBlockHeight,
           }, 'confirmed'),
           new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
         ]);
-        if (result?.value?.err) {
-          throw new Error('Transaction failed on-chain: ' + JSON.stringify(result.value.err));
-        }
+        if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
         confirmed = true;
       } catch (cfErr) {
+        // Fallback poll
         const deadline = Date.now() + 20_000;
         while (Date.now() < deadline) {
           await new Promise(r => setTimeout(r, 2000));
           try {
-            const st = await connection.getSignatureStatus(signature, { searchTransactionHistory: true });
+            const st = await connection.getSignatureStatus(swapSig, { searchTransactionHistory: true });
             const cs = st?.value?.confirmationStatus;
             if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-            if (st?.value?.err) throw new Error('Transaction failed on-chain.');
-          } catch (pollErr) {
-            if (/failed on-chain/i.test(String(pollErr.message))) throw pollErr;
+            if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
+          } catch (e) {
+            if (/failed on-chain/i.test(String(e.message))) throw e;
           }
         }
       }
 
-      setSwapResult({ signature, pending: !confirmed });
+      setSwapResult({ signature: swapSig, feeSig, pending: !confirmed });
 
       if (confirmed) {
         setAmount('');
         setQuote(null);
-        setTimeout(() => { refreshBalances(); }, 2000);
+        setTimeout(() => refreshBalances(), 2000);
       }
     } catch (e) {
-      console.error('[swap] failed', e);
+      console.error('[swap]', e);
       setSwapError(friendlyError(e));
     } finally {
       setSwapping(false);
     }
-  }, [wallet, quote, outputToken, inputToken, inputMint, outputMint, rawAmount, slippageBps, connection, refreshBalances]);
+  }, [
+    wallet, quote, outputToken, inputToken,
+    inputMint, outputMint, rawAmount, slippageBps,
+    connection, refreshBalances,
+  ]);
 
   const hasFunds = inputBalance && Number(amount) > 0 && inputBalance.uiAmount >= Number(amount);
   const canSwap  = !!wallet.publicKey && !!quote && !quoting && !swapping &&
                    Number(amount) > 0 && inputMint !== outputMint && hasFunds;
 
-  /* render */
+  /* ─── RENDER ─── */
+
   return (
     <div style={{ minHeight: '100vh', background: C.bg, color: C.text, ...T.body, paddingBottom: 80 }}>
       <div style={{ maxWidth: 480, margin: '0 auto', padding: '24px 16px' }}>
@@ -449,16 +500,11 @@ export default function Swap() {
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
           <h1 style={{ ...T.display, fontSize: 28, margin: 0 }}>Swap</h1>
           <button onClick={() => setShowSettings(true)} style={iconBtn} aria-label="Settings">
-            <SettingsIcon />
+            <SettingsIcon/>
           </button>
         </div>
 
-        <div style={{
-          background: C.panel,
-          border: `1px solid ${C.border}`,
-          borderRadius: 20,
-          padding: 16,
-        }}>
+        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 20, padding: 16 }}>
           <SwapRow
             label="You pay"
             token={inputToken}
@@ -471,9 +517,7 @@ export default function Swap() {
           />
 
           <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0' }}>
-            <button onClick={flip} style={flipBtn} aria-label="Flip tokens">
-              <FlipIcon />
-            </button>
+            <button onClick={flip} style={flipBtn} aria-label="Flip tokens"><FlipIcon/></button>
           </div>
 
           <SwapRow
@@ -513,7 +557,7 @@ export default function Swap() {
               </span>
             </Row>
             <Row label="Slippage tolerance">{(slippageBps / 100).toFixed(2)}%</Row>
-            <Row label="Platform fee">{(FEE_BPS / 100).toFixed(1)}% (in {outputToken.symbol})</Row>
+            <Row label="Platform fee">{(FEE_BPS / 100).toFixed(1)}% (in {inputToken.symbol})</Row>
           </div>
         )}
 
@@ -591,16 +635,11 @@ export default function Swap() {
   );
 }
 
-/* sub-components -------------------------------------------------------- */
+/* ─── SUB-COMPONENTS ────────────────────────────────────────── */
 
 function SwapRow({ label, token, amount, onAmountChange, onPickerOpen, balance, onMax, editable }) {
   return (
-    <div style={{
-      background: C.panel2,
-      border: `1px solid ${C.border}`,
-      borderRadius: 14,
-      padding: 14,
-    }}>
+    <div style={{ background: C.panel2, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
         <span style={{ fontSize: 13, color: C.textDim }}>{label}</span>
         {balance && (
@@ -610,19 +649,12 @@ function SwapRow({ label, token, amount, onAmountChange, onPickerOpen, balance, 
               <button
                 onClick={onMax}
                 style={{
-                  marginLeft: 6,
-                  background: 'transparent',
-                  border: `1px solid ${C.border}`,
-                  borderRadius: 6,
-                  padding: '2px 6px',
-                  color: C.accent,
-                  fontSize: 11,
-                  cursor: 'pointer',
-                  ...T.body,
+                  marginLeft: 6, background: 'transparent',
+                  border: `1px solid ${C.border}`, borderRadius: 6,
+                  padding: '2px 6px', color: C.accent, fontSize: 11,
+                  cursor: 'pointer', ...T.body,
                 }}
-              >
-                MAX
-              </button>
+              >MAX</button>
             )}
           </span>
         )}
@@ -638,7 +670,7 @@ function SwapRow({ label, token, amount, onAmountChange, onPickerOpen, balance, 
             />
           )}
           <span>{token?.symbol || 'Select'}</span>
-          <ChevronIcon />
+          <ChevronIcon/>
         </button>
         {editable ? (
           <input
@@ -655,13 +687,7 @@ function SwapRow({ label, token, amount, onAmountChange, onPickerOpen, balance, 
             style={amountInputStyle}
           />
         ) : (
-          <input
-            type="text"
-            readOnly
-            value={amount}
-            placeholder="0.00"
-            style={amountInputStyle}
-          />
+          <input type="text" readOnly value={amount} placeholder="0.00" style={amountInputStyle}/>
         )}
       </div>
     </div>
@@ -729,7 +755,7 @@ function TokenPicker({ tokens, loading, balances, excludeMint, onSelect, onClose
         <div style={{ padding: 16, borderBottom: `1px solid ${C.border}` }}>
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <h3 style={{ ...T.display, fontSize: 18, margin: 0 }}>Select token</h3>
-            <button onClick={onClose} style={iconBtn}><CloseIcon /></button>
+            <button onClick={onClose} style={iconBtn}><CloseIcon/></button>
           </div>
           <input
             autoFocus
@@ -737,16 +763,10 @@ function TokenPicker({ tokens, loading, balances, excludeMint, onSelect, onClose
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search name, symbol, or paste address"
             style={{
-              width: '100%',
-              padding: '10px 12px',
-              background: C.panel2,
-              border: `1px solid ${C.border}`,
-              borderRadius: 10,
-              color: C.text,
-              fontSize: 14,
-              outline: 'none',
-              ...T.body,
-              boxSizing: 'border-box',
+              width: '100%', padding: '10px 12px',
+              background: C.panel2, border: `1px solid ${C.border}`,
+              borderRadius: 10, color: C.text, fontSize: 14,
+              outline: 'none', ...T.body, boxSizing: 'border-box',
             }}
           />
         </div>
@@ -774,9 +794,10 @@ function TokenPicker({ tokens, loading, balances, excludeMint, onSelect, onClose
                 }
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontWeight: 600, fontSize: 15 }}>{t.symbol}</div>
-                  <div style={{ fontSize: 12, color: C.textDim, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                    {t.name}
-                  </div>
+                  <div style={{
+                    fontSize: 12, color: C.textDim,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  }}>{t.name}</div>
                 </div>
                 {bal && bal.uiAmount > 0 && (
                   <div style={{ textAlign: 'right', fontWeight: 600, fontSize: 14 }}>
@@ -801,7 +822,7 @@ function SettingsModal({ slippageBps, onChange, onClose }) {
       <div style={modalCard} onClick={(e) => e.stopPropagation()}>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
           <h3 style={{ ...T.display, fontSize: 18, margin: 0 }}>Settings</h3>
-          <button onClick={onClose} style={iconBtn}><CloseIcon /></button>
+          <button onClick={onClose} style={iconBtn}><CloseIcon/></button>
         </div>
 
         <div style={{ marginBottom: 8, fontSize: 13, color: C.textDim }}>Slippage tolerance</div>
@@ -811,19 +832,12 @@ function SettingsModal({ slippageBps, onChange, onClose }) {
               key={bps}
               onClick={() => { onChange(bps); setCustom((bps / 100).toString()); }}
               style={{
-                flex: 1,
-                padding: '8px',
-                borderRadius: 10,
+                flex: 1, padding: '8px', borderRadius: 10,
                 border: `1px solid ${slippageBps === bps ? C.accent : C.border}`,
                 background: slippageBps === bps ? C.accent : C.panel2,
-                color: C.text,
-                fontSize: 13,
-                cursor: 'pointer',
-                ...T.body,
+                color: C.text, fontSize: 13, cursor: 'pointer', ...T.body,
               }}
-            >
-              {bps / 100}%
-            </button>
+            >{bps / 100}%</button>
           ))}
         </div>
         <div style={{ position: 'relative' }}>
@@ -837,21 +851,13 @@ function SettingsModal({ slippageBps, onChange, onClose }) {
             }}
             placeholder="Custom"
             style={{
-              width: '100%',
-              padding: '10px 32px 10px 12px',
-              background: C.panel2,
-              border: `1px solid ${C.border}`,
-              borderRadius: 10,
-              color: C.text,
-              fontSize: 14,
-              outline: 'none',
-              ...T.body,
-              boxSizing: 'border-box',
+              width: '100%', padding: '10px 32px 10px 12px',
+              background: C.panel2, border: `1px solid ${C.border}`,
+              borderRadius: 10, color: C.text, fontSize: 14,
+              outline: 'none', ...T.body, boxSizing: 'border-box',
             }}
           />
-          <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: C.textDim }}>
-            %
-          </span>
+          <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: C.textDim }}>%</span>
         </div>
 
         <p style={{ marginTop: 16, fontSize: 12, color: C.textFaint }}>
@@ -880,94 +886,56 @@ function Banner({ kind, children }) {
   const c = colors[kind] || colors.error;
   return (
     <div style={{
-      marginTop: 12,
-      padding: 12,
-      background: c.bg,
-      border: `1px solid ${c.border}`,
-      borderRadius: 12,
-      color: c.fg,
-      fontSize: 14,
-    }}>
-      {children}
-    </div>
+      marginTop: 12, padding: 12,
+      background: c.bg, border: `1px solid ${c.border}`,
+      borderRadius: 12, color: c.fg, fontSize: 14,
+    }}>{children}</div>
   );
 }
 
-/* styles ---------------------------------------------------------------- */
+/* ─── STYLES ───────────────────────────────────────────────── */
 
 const primaryBtn = {
-  width: '100%',
-  padding: '16px',
-  background: C.accent,
-  border: 'none',
-  borderRadius: 14,
-  color: '#fff',
-  fontSize: 16,
-  fontWeight: 600,
-  ...T.body,
+  width: '100%', padding: '16px',
+  background: C.accent, border: 'none',
+  borderRadius: 14, color: '#fff',
+  fontSize: 16, fontWeight: 600, ...T.body,
 };
 
 const iconBtn = {
-  background: C.panel,
-  border: `1px solid ${C.border}`,
-  borderRadius: 10,
-  width: 36, height: 36,
+  background: C.panel, border: `1px solid ${C.border}`,
+  borderRadius: 10, width: 36, height: 36,
   display: 'flex', alignItems: 'center', justifyContent: 'center',
-  cursor: 'pointer',
-  color: C.text,
+  cursor: 'pointer', color: C.text,
 };
 
 const flipBtn = {
-  background: C.panel2,
-  border: `1px solid ${C.border}`,
-  borderRadius: 10,
-  width: 36, height: 36,
+  background: C.panel2, border: `1px solid ${C.border}`,
+  borderRadius: 10, width: 36, height: 36,
   display: 'flex', alignItems: 'center', justifyContent: 'center',
-  cursor: 'pointer',
-  color: C.text,
+  cursor: 'pointer', color: C.text,
 };
 
 const tokenPickerBtn = {
-  display: 'flex',
-  alignItems: 'center',
-  gap: 6,
-  padding: '8px 12px',
-  background: C.panel,
-  border: `1px solid ${C.border}`,
-  borderRadius: 10,
-  color: C.text,
-  fontSize: 15,
-  fontWeight: 600,
-  cursor: 'pointer',
-  ...T.body,
+  display: 'flex', alignItems: 'center', gap: 6,
+  padding: '8px 12px', background: C.panel,
+  border: `1px solid ${C.border}`, borderRadius: 10,
+  color: C.text, fontSize: 15, fontWeight: 600,
+  cursor: 'pointer', ...T.body,
 };
 
 const amountInputStyle = {
-  flex: 1,
-  background: 'transparent',
-  border: 'none',
-  outline: 'none',
-  color: C.text,
-  fontSize: 24,
-  textAlign: 'right',
-  fontWeight: 600,
-  ...T.body,
+  flex: 1, background: 'transparent', border: 'none',
+  outline: 'none', color: C.text, fontSize: 24,
+  textAlign: 'right', fontWeight: 600, ...T.body,
   minWidth: 0,
 };
 
 const tokenRowBtn = {
-  width: '100%',
-  display: 'flex',
-  alignItems: 'center',
-  gap: 12,
-  padding: '10px 12px',
-  background: 'transparent',
-  border: 'none',
-  borderRadius: 10,
-  cursor: 'pointer',
-  color: C.text,
-  textAlign: 'left',
-  ...T.body,
+  width: '100%', display: 'flex', alignItems: 'center', gap: 12,
+  padding: '10px 12px', background: 'transparent', border: 'none',
+  borderRadius: 10, cursor: 'pointer', color: C.text,
+  textAlign: 'left', ...T.body,
 };
 
 const modalOverlay = {
@@ -978,36 +946,32 @@ const modalOverlay = {
 };
 
 const modalCard = {
-  width: '100%',
-  maxWidth: 400,
-  background: C.panel,
-  border: `1px solid ${C.border}`,
-  borderRadius: 18,
-  padding: 20,
-  color: C.text,
+  width: '100%', maxWidth: 400,
+  background: C.panel, border: `1px solid ${C.border}`,
+  borderRadius: 18, padding: 20, color: C.text,
 };
 
-/* icons ----------------------------------------------------------------- */
+/* ─── ICONS ────────────────────────────────────────────────── */
 
 const ChevronIcon = () => (
   <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
-    <polyline points="6 9 12 15 18 9" />
+    <polyline points="6 9 12 15 18 9"/>
   </svg>
 );
 const FlipIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M7 4v16M7 4l-3 3M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3" />
+    <path d="M7 4v16M7 4l-3 3M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3" transform="rotate(90 12 12)"/>
   </svg>
 );
 const SettingsIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="3" />
-    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    <circle cx="12" cy="12" r="3"/>
+    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
   </svg>
 );
 const CloseIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <line x1="18" y1="6"  x2="6"  y2="18" />
-    <line x1="6"  y1="6"  x2="18" y2="18" />
+    <line x1="18" y1="6" x2="6"  y2="18"/>
+    <line x1="6"  y1="6" x2="18" y2="18"/>
   </svg>
 );
