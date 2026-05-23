@@ -1,27 +1,22 @@
 // Predict.jsx — Jupiter Prediction Markets on Solana.
 //
-// Features:
-//   - Solana wallet (Phantom etc.) connects, SOL + USDC balances shown
-//   - Markets browsable by category (Sports, Crypto, Politics, …)
-//   - Sort by Volume / Ending soon / Newest
-//   - Buy YES/NO with auto-pick USDC or SOL→USDC swap fallback
-//   - Atomic 5% platform fee inside the same signed tx
-//   - Positions tab: P&L, mark-to-market, sell + claim flows
-//   - Always simulate before showing the wallet popup
+// Spec: https://dev.jup.ag/docs/prediction
 //
-// Backend endpoints (mounted in server.js):
-//   GET    /api/predict/events
-//   GET    /api/predict/markets
-//   POST   /api/predict/orders                   -> base64 tx
-//   GET    /api/predict/orders/status/:pubkey
-//   GET    /api/predict/positions?owner=...
-//   POST   /api/predict/positions/sell
-//   POST   /api/predict/positions/claim
-//   GET    /api/predict/ultra/order              (Jupiter Ultra swap)
+// All USD-like values from Jupiter are in *micro-USD* (1,000,000 = $1.00),
+// often as STRINGS. Always parse with toUsd() before display/math.
+// closeTime / openTime are Unix SECONDS.
+//
+// Backend endpoints (server-predict.js):
+//   GET    /api/predict/events?category=&filter=&includeMarkets=true
+//   GET    /api/predict/markets/:marketId
+//   POST   /api/predict/orders                          -> base64 tx
+//   GET    /api/predict/orders/status/:orderPubkey
+//   GET    /api/predict/positions?ownerPubkey=...
+//   DELETE /api/predict/positions/:positionPubkey       (sell/close)
+//   POST   /api/predict/positions/:positionPubkey/claim
+//   GET    /api/predict/ultra/order                     (SOL→USDC swap)
 
-import React, {
-  useEffect, useState, useCallback, useMemo, useRef,
-} from 'react';
+import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
   Connection, PublicKey, VersionedTransaction, TransactionMessage,
@@ -81,6 +76,14 @@ const T = {
 // SECTION 1: Utilities
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// All Jupiter USD-like values are micro-USD (1e6 = $1.00). Often strings.
+function toUsd(v) {
+  if (v == null) return 0;
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 0;
+  return n / 1e6;
+}
+
 function fmtUsd(n, d = 2) {
   if (n == null || !Number.isFinite(Number(n))) return '$0.00';
   n = Number(n);
@@ -96,22 +99,35 @@ function formatVol(n) {
   if (n >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
   return `$${n.toFixed(0)}`;
 }
-function formatEndDate(iso) {
-  if (!iso) return null;
-  const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return null;
-  const ms = d.getTime() - Date.now();
-  if (ms <= 0) return 'Closed';
-  if (ms < 60 * 60_000) return `Ends in ${Math.floor(ms / 60_000)}m`;
-  if (ms < 24 * 60 * 60_000) {
-    const h = Math.floor(ms / 3_600_000);
-    const mm = Math.floor((ms % 3_600_000) / 60_000);
+
+// Jupiter close/open times are Unix seconds. Handle ms-as-fallback for safety.
+function toMs(v) {
+  if (v == null) return null;
+  if (typeof v === 'string') {
+    const t = new Date(v).getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+  const n = Number(v);
+  if (!Number.isFinite(n)) return null;
+  return n < 1e12 ? n * 1000 : n;
+}
+function formatEndDate(closeTime) {
+  const ms = toMs(closeTime);
+  if (ms == null) return null;
+  const diff = ms - Date.now();
+  if (diff <= 0) return 'Closed';
+  if (diff < 60 * 60_000) return `Ends in ${Math.floor(diff / 60_000)}m`;
+  if (diff < 24 * 60 * 60_000) {
+    const h  = Math.floor(diff / 3_600_000);
+    const mm = Math.floor((diff % 3_600_000) / 60_000);
     return `Ends in ${h}h ${mm}m`;
   }
+  const d   = new Date(ms);
   const mo  = d.toLocaleString('en-US', { month: 'short' });
   const day = d.getDate();
   return `Ends ${mo} ${day}`;
 }
+
 function cleanAmount(v) {
   const s = String(v || '').replace(/[^0-9.]/g, '');
   const p = s.split('.');
@@ -148,7 +164,7 @@ async function copyToClipboard(text) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 2: Solana data
+// SECTION 2: Solana balances
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function fetchSolBalance(connection, ownerB58) {
@@ -167,46 +183,62 @@ async function fetchUsdcBalance(connection, ownerB58) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 3: Jupiter Predict API wrappers
+// SECTION 3: Jupiter Predict API wrappers + field normalizers
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function fetchEvents(category) {
-  const qs = new URLSearchParams({ limit: '80' });
+  const qs = new URLSearchParams();
   if (category && category !== 'all') qs.set('category', category);
   const r = await jfetch('/api/predict/events?' + qs.toString());
   const j = await r.json();
-  return Array.isArray(j) ? j : (j?.events || j?.data || []);
+  return Array.isArray(j) ? j : (j?.data || j?.events || []);
 }
 
 async function fetchPositions(ownerB58) {
   if (!ownerB58) return [];
   try {
-    const r = await jfetch(`/api/predict/positions?owner=${encodeURIComponent(ownerB58)}`);
+    const r = await jfetch(`/api/predict/positions?ownerPubkey=${encodeURIComponent(ownerB58)}`);
     const j = await r.json();
-    return Array.isArray(j) ? j : (j?.positions || j?.data || []);
+    return Array.isArray(j) ? j : (j?.data || j?.positions || []);
   } catch { return []; }
 }
 
-// Normalize Jupiter's event shape so the UI doesn't care about field renames.
+// Event shape from Jupiter (with includeMarkets=true):
+//   { eventId, title, category, subcategory, imageUrl, closeTime (sec),
+//     volume, volume24hr, liquidity, markets: [ {
+//       marketId, status, result, openTime, closeTime, resolveAt,
+//       metadata: { title, status, result, closeTime, isTeamMarket, ... },
+//       pricing: { buyYesPriceUsd, buyNoPriceUsd, sellYesPriceUsd,
+//                  sellNoPriceUsd, volume }  -- all micro-USD
+//     } ] }
 function pickEventFields(ev) {
+  if (!ev) return null;
   const market = (ev.markets && ev.markets[0]) || ev.market || null;
   if (!market) return null;
-  const yesPrice = Number(market.yesBuyPriceUsd ?? market.yesPrice ?? market.priceYes ?? 0);
-  const noPrice  = Number(market.noBuyPriceUsd  ?? market.noPrice  ?? market.priceNo  ?? (1 - yesPrice));
+
+  const pricing = market.pricing || {};
+  const yesPrice = toUsd(pricing.buyYesPriceUsd);
+  let   noPrice  = toUsd(pricing.buyNoPriceUsd);
+  if (!noPrice && yesPrice) noPrice = +(1 - yesPrice).toFixed(4);
+
+  const meta  = market.metadata || ev.metadata || {};
+  const title = ev.title || meta.title || market.title || 'Untitled';
+  const image = ev.imageUrl || meta.imageUrl || ev.image || market.imageUrl || null;
+
   return {
-    eventId:   ev.eventId || ev.id || market.eventId,
-    title:     ev.title || ev.name || market.title || 'Untitled',
-    image:     ev.image || ev.icon || market.image || null,
-    category:  String(ev.category || market.category || '').toLowerCase(),
+    eventId:   ev.eventId || ev.id,
+    title,
+    image,
+    category:  String(ev.category || meta.category || '').toLowerCase(),
     series:    ev.series || ev.seriesName || null,
-    closeTime: ev.closeTime || market.closeTime || ev.endDate || market.endDate || null,
+    closeTime: meta.closeTime ?? market.closeTime ?? ev.closeTime ?? null,
     createdAt: ev.createdAt || market.createdAt || null,
-    volume24h: Number(ev.volume24h || ev.volume || market.volume || 0),
-    liquidity: Number(ev.liquidity || market.liquidity || 0),
+    volume24h: toUsd(ev.volume24hr ?? ev.volume24h ?? pricing.volume ?? market.volume ?? 0),
+    liquidity: toUsd(ev.liquidity ?? market.liquidity ?? 0),
     market: {
       marketId: market.marketId || market.id,
-      status:   market.status || 'open',
-      result:   market.result || null,
+      status:   market.status || meta.status || 'open',
+      result:   market.result || meta.result || null,
       yesPrice, noPrice,
       yesPct:   Math.max(0, Math.min(99, Math.round(yesPrice * 100))),
       noPct:    Math.max(0, Math.min(99, Math.round(noPrice  * 100))),
@@ -214,22 +246,32 @@ function pickEventFields(ev) {
   };
 }
 
+// Position shape from Jupiter:
+//   { pubkey, ownerPubkey, marketId, isYes,
+//     contracts (string), totalCostUsd (string micro), avgPriceUsd (string micro),
+//     markPriceUsd (string micro), valueUsd, payoutUsd, unrealizedPnlUsd,
+//     claimable, claimed, claimedUsd,
+//     marketMetadata: { title, status, result } }
 function pickPositionFields(p) {
+  if (!p) return null;
+  const contracts    = Number(p.contracts || 0);
+  const avgPriceUsd  = toUsd(p.avgPriceUsd);
+  const markPriceUsd = toUsd(p.markPriceUsd);
+  const costUsd      = toUsd(p.totalCostUsd) || contracts * avgPriceUsd;
+  const valueUsd     = toUsd(p.valueUsd)     || contracts * markPriceUsd;
+  const pnlUsd       = toUsd(p.unrealizedPnlUsd) || (valueUsd - costUsd);
+  const payoutUsd    = toUsd(p.payoutUsd);
+  const meta         = p.marketMetadata || {};
   return {
-    positionPubkey: p.positionPubkey || p.id,
-    marketId:    p.marketId || p.market?.marketId,
-    title:       p.market?.title || p.marketTitle || p.title || 'Position',
-    isYes:       p.isYes ?? (p.side === 'yes'),
-    contracts:   Number(p.contracts || 0),
-    avgPriceUsd: Number(p.avgPriceUsd || p.avgPrice || 0),
-    markPriceUsd:Number(p.markPriceUsd || p.markPrice || 0),
-    valueUsd:    Number(p.valueUsd || (Number(p.contracts || 0) * Number(p.markPriceUsd || 0))),
-    costUsd:     Number(p.totalCostUsd || (Number(p.contracts || 0) * Number(p.avgPriceUsd || 0))),
-    pnlUsd:      Number(p.unrealizedPnlUsd || p.pnlUsd || 0),
+    positionPubkey: p.pubkey || p.positionPubkey,
+    marketId:    p.marketId,
+    title:       meta.title || p.title || 'Position',
+    marketResult: meta.result || null,
+    isYes:       !!p.isYes,
+    contracts, avgPriceUsd, markPriceUsd, costUsd, valueUsd, pnlUsd, payoutUsd,
     claimable:   !!p.claimable,
     claimed:     !!p.claimed,
-    payoutUsd:   Number(p.payoutUsd || 0),
-    status:      p.status || (p.claimable ? 'claimable' : 'active'),
+    status:      p.claimed ? 'claimed' : (p.claimable ? 'claimable' : 'active'),
   };
 }
 
@@ -279,26 +321,24 @@ async function buildBuyWithFeeTx({
   return { tx: new VersionedTransaction(newMsg), orderInfo: j.order || null };
 }
 
-async function buildSellTx({ ownerPubkey, positionPubkey, marketId, isYes, contracts }) {
-  const r = await jfetch('/api/predict/positions/sell', {
-    method: 'POST',
+async function buildSellTx({ ownerPubkey, positionPubkey }) {
+  // Jupiter: DELETE /positions/{positionPubkey}, body has ownerPubkey.
+  const r = await jfetch(`/api/predict/positions/${encodeURIComponent(positionPubkey)}`, {
+    method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      ownerPubkey, marketId, positionPubkey,
-      isBuy: false, isYes,
-      contracts: String(contracts),
-    }),
+    body: JSON.stringify({ ownerPubkey }),
   });
   const j = await r.json();
   if (!j?.transaction) throw new Error('No sell tx returned');
-  return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)), orderInfo: j.order || null };
+  return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)) };
 }
 
-async function buildClaimTx({ ownerPubkey, positionPubkey, marketId }) {
-  const r = await jfetch('/api/predict/positions/claim', {
+async function buildClaimTx({ ownerPubkey, positionPubkey }) {
+  // Jupiter: POST /positions/{positionPubkey}/claim, body has ownerPubkey.
+  const r = await jfetch(`/api/predict/positions/${encodeURIComponent(positionPubkey)}/claim`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ownerPubkey, positionPubkey, marketId }),
+    body: JSON.stringify({ ownerPubkey }),
   });
   const j = await r.json();
   if (!j?.transaction) throw new Error('No claim tx returned');
@@ -330,7 +370,7 @@ async function simulateOrThrow(connection, tx, label) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 5: Small UI atoms
+// SECTION 5: UI atoms
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function Spinner({ size = 12, color = C.hl }) {
@@ -392,6 +432,15 @@ function Skeleton() {
   );
 }
 
+function Row({ label, value, valueColor, bold }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+      <span style={{ color: C.muted }}>{label}</span>
+      <span style={{ color: valueColor || C.ink, fontWeight: bold ? 700 : 600 }}>{value}</span>
+    </div>
+  );
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 6: Page header (balances + tabs)
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -448,7 +497,7 @@ function PageHeader({ connected, solBal, usdcBal, tab, setTab, pubkey, onCopy })
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 7: Market card + buy drawer
+// SECTION 7: Market card + Buy drawer
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function MarketCard({ event, onTrade }) {
@@ -566,8 +615,8 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection 
       onDone?.();
       setTimeout(() => onClose(), 2200);
     } catch (e) {
-      const m = e?.message || 'Order failed';
-      setError(/reject|cancel|user/i.test(m) ? 'Cancelled' : m);
+      const msg = e?.message || 'Order failed';
+      setError(/reject|cancel|user/i.test(msg) ? 'Cancelled' : msg);
       setStatus('error'); setStMsg('');
       setTimeout(() => setStatus('idle'), 5000);
     }
@@ -629,23 +678,12 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection 
   );
 }
 
-function Row({ label, value, valueColor, bold }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-      <span style={{ color: C.muted }}>{label}</span>
-      <span style={{ color: valueColor || C.ink, fontWeight: bold ? 700 : 600 }}>{value}</span>
-    </div>
-  );
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 8: Positions
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function PositionsList({ positions, loading, onAction }) {
-  if (loading) {
-    return <>{[1,2,3].map(i => <Skeleton key={i} />)}</>;
-  }
+  if (loading) return <>{[1,2,3].map(i => <Skeleton key={i} />)}</>;
   if (positions.length === 0) {
     return (
       <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13, ...T.body }}>
@@ -719,11 +757,8 @@ function SellDrawer({ position, onClose, onDone, connection }) {
     setStatus('working'); setError(''); setStMsg('Building sell…');
     try {
       const { tx } = await buildSellTx({
-        ownerPubkey: publicKey.toBase58(),
+        ownerPubkey:    publicKey.toBase58(),
         positionPubkey: position.positionPubkey,
-        marketId: position.marketId,
-        isYes: position.isYes,
-        contracts: position.contracts,
       });
       setStMsg('Simulating…');
       await simulateOrThrow(connection, tx, 'sell');
@@ -736,8 +771,8 @@ function SellDrawer({ position, onClose, onDone, connection }) {
       onDone?.();
       setTimeout(() => onClose(), 2200);
     } catch (e) {
-      const m = e?.message || 'Sell failed';
-      setError(/reject|cancel|user/i.test(m) ? 'Cancelled' : m);
+      const msg = e?.message || 'Sell failed';
+      setError(/reject|cancel|user/i.test(msg) ? 'Cancelled' : msg);
       setStatus('error'); setStMsg('');
       setTimeout(() => setStatus('idle'), 5000);
     }
@@ -785,9 +820,8 @@ function ClaimDrawer({ position, onClose, onDone, connection }) {
     setStatus('working'); setError(''); setStMsg('Building claim…');
     try {
       const { tx } = await buildClaimTx({
-        ownerPubkey: publicKey.toBase58(),
+        ownerPubkey:    publicKey.toBase58(),
         positionPubkey: position.positionPubkey,
-        marketId: position.marketId,
       });
       setStMsg('Simulating…');
       await simulateOrThrow(connection, tx, 'claim');
@@ -800,8 +834,8 @@ function ClaimDrawer({ position, onClose, onDone, connection }) {
       onDone?.();
       setTimeout(() => onClose(), 2500);
     } catch (e) {
-      const m = e?.message || 'Claim failed';
-      setError(/reject|cancel|user/i.test(m) ? 'Cancelled' : m);
+      const msg = e?.message || 'Claim failed';
+      setError(/reject|cancel|user/i.test(msg) ? 'Cancelled' : msg);
       setStatus('error'); setStMsg('');
       setTimeout(() => setStatus('idle'), 5000);
     }
@@ -851,9 +885,9 @@ export default function Predict() {
   const [solBal, setSolBal]   = useState(0n);
   const [usdcBal, setUsdcBal] = useState(0n);
 
-  const [buyState, setBuyState] = useState(null);   // { event, isYes }
-  const [actionPos, setActionPos] = useState(null);  // { kind: 'sell'|'claim', position }
-  const [toast, setToast]   = useState('');
+  const [buyState, setBuyState]   = useState(null);   // { event, isYes }
+  const [actionPos, setActionPos] = useState(null);   // { kind: 'sell'|'claim', position }
+  const [toast, setToast] = useState('');
 
   const connection = useMemo(() => {
     const origin = (typeof window !== 'undefined' && window.location?.origin) || '';
@@ -881,7 +915,12 @@ export default function Predict() {
     try {
       setEvError(null);
       const raw = await fetchEvents(category);
-      const normalized = raw.map(pickEventFields).filter(Boolean);
+      const normalized = raw
+        .map((ev, i) => {
+          try { return pickEventFields(ev); }
+          catch (e) { console.warn('pickEventFields failed', i, e?.message); return null; }
+        })
+        .filter(Boolean);
       setEvents(normalized);
     } catch (e) {
       setEvError(e?.message || 'Failed to load markets');
@@ -902,7 +941,7 @@ export default function Predict() {
     setPosLoading(true);
     try {
       const raw = await fetchPositions(publicKey.toBase58());
-      setPositions(raw.map(pickPositionFields));
+      setPositions(raw.map(pickPositionFields).filter(Boolean));
     } catch {
       setPositions([]);
     } finally {
@@ -918,16 +957,18 @@ export default function Predict() {
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    let r = q ? events.filter(e => e.title.toLowerCase().includes(q)) : [...events];
-    if (sortBy === 'volume') r.sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
-    else if (sortBy === 'ending') {
-      const t = e => e.closeTime ? new Date(e.closeTime).getTime() - Date.now() : Infinity;
+    let r = q ? events.filter(e => (e.title || '').toLowerCase().includes(q)) : [...events];
+    if (sortBy === 'volume') {
+      r.sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
+    } else if (sortBy === 'ending') {
       r.sort((a, b) => {
-        const ta = t(a), tb = t(b);
-        return (ta > 0 ? ta : Infinity) - (tb > 0 ? tb : Infinity);
+        const ta = toMs(a.closeTime); const tb = toMs(b.closeTime);
+        const da = ta ? ta - Date.now() : Infinity;
+        const db = tb ? tb - Date.now() : Infinity;
+        return (da > 0 ? da : Infinity) - (db > 0 ? db : Infinity);
       });
     } else if (sortBy === 'new') {
-      r.sort((a, b) => (new Date(b.createdAt || 0).getTime()) - (new Date(a.createdAt || 0).getTime()));
+      r.sort((a, b) => (toMs(b.createdAt) || 0) - (toMs(a.createdAt) || 0));
     }
     return r;
   }, [events, search, sortBy]);
@@ -945,10 +986,8 @@ export default function Predict() {
 
         <PageHeader
           connected={connected}
-          solBal={solBal}
-          usdcBal={usdcBal}
-          tab={tab}
-          setTab={setTab}
+          solBal={solBal} usdcBal={usdcBal}
+          tab={tab} setTab={setTab}
           pubkey={publicKey?.toBase58()}
           onCopy={handleCopyAddr}
         />
