@@ -14,20 +14,11 @@
 // outbound IP is what's checked, not the user's.
 
 const express = require('express');
-const fs      = require('fs');
-const path    = require('path');
 const router  = express.Router();
 
 const JUP_API_KEY = (process.env.JUPITER_API_KEY || '').trim();
 const PRED_BASE   = 'https://api.jup.ag/prediction/v1';
 const ULTRA_BASE  = 'https://api.jup.ag/ultra/v1';
-
-// Attestation log. Path can be overridden via env to point at a Railway Volume
-// mount (e.g. ATTEST_LOG_PATH=/data/attestations.jsonl) so records survive
-// redeploys. Default writes to /tmp which is wiped on container restart —
-// for production, configure a volume.
-const ATTEST_LOG_PATH = process.env.ATTEST_LOG_PATH ||
-  path.join(process.env.HOME || '/tmp', 'predict-attestations.jsonl');
 
 // ── Forwarder ────────────────────────────────────────────────────────────────
 async function fwd(req, res, url, method = 'GET', body = undefined) {
@@ -52,37 +43,6 @@ async function fwd(req, res, url, method = 'GET', body = undefined) {
 // ── Health ───────────────────────────────────────────────────────────────────
 router.get('/health', (req, res) => {
   res.json({ ok: true, hasKey: !!JUP_API_KEY, keyLen: JUP_API_KEY.length });
-});
-
-// ── Attestation log ──────────────────────────────────────────────────────────
-// POST /api/predict/attest  { wallet, timestamp }
-// Appends a single JSON line per attestation with wallet, client timestamp,
-// server timestamp, IP, and user-agent. JSONL format so it's easy to grep,
-// tail, or parse later. Failures are logged but never error the client.
-router.post('/attest', express.json(), (req, res) => {
-  try {
-    const { wallet, timestamp } = req.body || {};
-    if (!wallet || typeof wallet !== 'string' || wallet.length < 32) {
-      return res.status(400).json({ error: 'invalid_wallet' });
-    }
-    const record = {
-      wallet,
-      clientTimestamp: timestamp || null,
-      serverTimestamp: new Date().toISOString(),
-      ip: req.headers['x-forwarded-for']?.toString().split(',')[0].trim()
-          || req.socket?.remoteAddress
-          || null,
-      userAgent: req.headers['user-agent'] || null,
-      country: req.headers['cf-ipcountry'] || req.headers['x-vercel-ip-country'] || null,
-    };
-    fs.appendFile(ATTEST_LOG_PATH, JSON.stringify(record) + '\n', err => {
-      if (err) console.error('[predict] attest log write failed:', err.message);
-    });
-    res.json({ ok: true });
-  } catch (e) {
-    console.error('[predict] attest error:', e?.message);
-    res.status(500).json({ error: 'log_failed' });
-  }
 });
 
 // ── Events ───────────────────────────────────────────────────────────────────
