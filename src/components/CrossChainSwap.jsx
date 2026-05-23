@@ -586,6 +586,15 @@ export default function CrossChainSwap({ onConnectWallet }){
       const receiver = needsDest ? destAddr.trim() : sender;
       const fromMint = fromToken.mint || fromToken.address;
 
+      // Hard safety: never let quote-time placeholders reach the build step.
+      if (receiver === QUOTE_PLACEHOLDER_EVM || receiver === QUOTE_PLACEHOLDER_SOL || !receiver) {
+        throw new Error('Enter a destination address before bridging');
+      }
+      if (needsDest) {
+        const ve = validateDest(receiver, toToken?.chainId);
+        if (ve) throw new Error(ve);
+      }
+
       let txBase64 = null;
       let usedAggregator = null;
 
