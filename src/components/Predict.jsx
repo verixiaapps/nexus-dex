@@ -1,28 +1,9 @@
-// Predict.jsx - External wallets only. No Privy. No embedded wallet SDK.
-//
-// User connects two wallets:
-//   - Solana: Phantom/Solflare/Backpack via @solana/wallet-adapter-react
-//   - EVM:    MetaMask/Rabby/Phantom-EVM via EIP-6963 (window.ethereum fallback)
-//
-// Locked rules:
-//   1. Every signed Solana action: build tx -> WE simulate -> user signs
-//      THAT SAME tx -> we submit THAT SAME signed tx. Same object end-to-end.
-//   2. SOL stays in user's Solana wallet until they click Buy.
-//   3. Buy = ONE Solana tx with TWO transfers: 95% -> Polymarket bridge,
-//      5% -> our fee wallet. Then CLOB order signed by EVM wallet.
-//   4. Sell = CLOB order signed by EVM wallet. USDC.e stays in Safe.
-//   5. Collect Winnings = explicit withdraw, USDC.e -> user's Solana addr as SOL.
-//   6. Safe deployed + approved on EVM wallet connect. Verified on-chain.
+// Predict.jsx
 
-import React, {
-  useEffect, useState, useCallback, useMemo, useRef,
-} from 'react';
-import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import {
-  PublicKey, SystemProgram, Transaction, ComputeBudgetProgram,
-} from '@solana/web3.js';
-
-/* ============================================================ Constants */
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { PublicKey, VersionedTransaction } from '@solana/web3.js';
+import { useNexusWallet } from '../WalletContext.js';
 
 const CLOB_URL = 'https://clob.polymarket.com';
 const RELAYER_URL = 'https://relayer-v2.polymarket.com';
@@ -35,802 +16,1836 @@ const POLYGON_RPCS = [
   'https://rpc.ankr.com/polygon',
   'https://polygon-rpc.com',
 ];
+
 const POLYGON_CHAIN_ID = 137;
-const POLYGON_CHAIN_HEX = '0x89';
 
 const USDC_E_ADDRESS = '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174';
 const CTF_EXCHANGE = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
 const NEG_RISK_CTF_EXCHANGE = '0xC5d563A36AE78145C45a50134d48A1215220f80a';
 const NEG_RISK_ADAPTER = '0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296';
 const CONDITIONAL_TOKENS = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045';
-const BUILDER_CODE = '0x6e656750ed8970d584732af619cb7a4d493e18bc9cbf4fd866eb9594f92569fa';
+
+const BUILDER_CODE =
+  '0x6e656750ed8970d584732af619cb7a4d493e18bc9cbf4fd866eb9594f92569fa';
+
+const USDC_SOLANA_MINT =
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+
+const SOL_NATIVE_MINT =
+  'So11111111111111111111111111111111111111112';
 
 const SOL_RPC = '/api/solana-rpc';
+
+const TOKEN_PROGRAM_ID =
+  'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+
+const ATA_PROGRAM_ID =
+  'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
+
 const BRIDGE_DEPOSIT = '/api/poly/deposit';
 const BRIDGE_STATUS = '/api/poly/status';
 const BRIDGE_WITHDRAW = '/api/poly/withdraw';
 
-const FEE_WALLET_SOL = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
-const FEE_PCT = 5;
-const FEE_BPS = BigInt(FEE_PCT * 100);
+const OKX_SWAP_PATH = '/api/okx/dex/aggregator/swap';
+const OKX_SOL_CHAIN = '501';
 
+// High slippage tolerance to ensure swaps go through. OKX will still route
+// to the best available path; this is just the max acceptable price impact.
+const OKX_SLIPPAGE = '0.5';
+
+const FEE_WALLET_SOL =
+  'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
+
+const USDC_FEE_PCT = 5;
 const CRYPTO_TAG_ID = 21;
-const MIN_SOL_LAMPORTS_PER_TRADE = 50_000_000;
-const SOL_NETWORK_RESERVE_LAMPORTS = 5_000_000;
+const MIN_TRADE_USD = 5;
+const MIN_DEPOSIT_USD = 5;
 
 const HORIZONS = [
-  { id: 'hourly', label: 'Hourly', slug: '15-min-crypto', maxMs: 2 * 60 * 60_000 },
-  { id: 'daily', label: 'Daily', slug: 'daily-crypto', maxMs: 36 * 60 * 60_000 },
-  { id: 'weekly', label: 'Weekly', slug: 'weekly-crypto', maxMs: 8 * 24 * 60 * 60_000 },
-  { id: 'monthly', label: 'Monthly', slug: 'monthly-crypto', maxMs: 45 * 24 * 60 * 60_000 },
-  { id: 'all', label: 'All', slug: null, maxMs: Infinity },
+  {
+    id: 'hourly',
+    label: 'Hourly',
+    slug: '15-min-crypto',
+    maxMs: 2 * 60 * 60_000,
+  },
+  {
+    id: 'daily',
+    label: 'Daily',
+    slug: 'daily-crypto',
+    maxMs: 36 * 60 * 60_000,
+  },
+  {
+    id: 'weekly',
+    label: 'Weekly',
+    slug: 'weekly-crypto',
+    maxMs: 8 * 24 * 60 * 60_000,
+  },
+  {
+    id: 'monthly',
+    label: 'Monthly',
+    slug: 'monthly-crypto',
+    maxMs: 45 * 24 * 60 * 60_000,
+  },
+  {
+    id: 'all',
+    label: 'All',
+    slug: null,
+    maxMs: Infinity,
+  },
 ];
 
-/* ============================================================ Debug log */
-
 const DBG_MAX = 400;
+
 const _dbgListeners = new Set();
-function _emit(e) { for (const fn of _dbgListeners) { try { fn(e); } catch {} } }
+
+function _emit(e) {
+  for (const fn of _dbgListeners) {
+    try {
+      fn(e);
+    } catch {}
+  }
+}
+
 function _redact(v) {
   if (typeof v !== 'object' || v == null) return v;
+
   const out = Array.isArray(v) ? [] : {};
+
   for (const k of Object.keys(v)) {
-    if (/secret|passphrase|private|seed|mnemonic|api[_-]?key/i.test(k)) out[k] = '***';
-    else out[k] = v[k];
+    if (/secret|passphrase|private|seed|mnemonic|api[_-]?key/i.test(k)) {
+      out[k] = '***';
+    } else {
+      out[k] = v[k];
+    }
   }
+
   return out;
 }
+
 function dbg(scope, msg, data) {
-  const entry = { ts: Date.now(), scope, msg, data: data === undefined ? undefined : _redact(data) };
+  const entry = {
+    ts: Date.now(),
+    scope,
+    msg,
+    data: data === undefined ? undefined : _redact(data),
+  };
+
   try {
     if (typeof window !== 'undefined') {
       window.__predictDebug = window.__predictDebug || [];
       window.__predictDebug.push(entry);
-      if (window.__predictDebug.length > DBG_MAX) window.__predictDebug.shift();
+
+      if (window.__predictDebug.length > DBG_MAX) {
+        window.__predictDebug.shift();
+      }
     }
   } catch {}
-  try { console.log(`[predict:${scope}]`, msg, entry.data !== undefined ? entry.data : ''); } catch {}
+
+  try {
+    console.log(
+      `[predict:${scope}]`,
+      msg,
+      entry.data !== undefined ? entry.data : ''
+    );
+  } catch {}
+
   _emit(entry);
 }
+
 function dbgErr(scope, msg, err) {
   dbg(scope, 'ERROR: ' + msg, {
-    name: err?.name, message: err?.message || String(err),
-    code: err?.code, status: err?.status || err?.response?.status,
+    name: err?.name,
+    message: err?.message || String(err),
+    code: err?.code,
+    status: err?.status || err?.response?.status,
     body: err?.body || err?.response?.data || err?.data,
   });
 }
+
 function dbgClear() {
-  try { if (typeof window !== 'undefined') window.__predictDebug = []; } catch {}
-  _emit({ ts: Date.now(), scope: 'debug', msg: '— cleared —' });
+  try {
+    if (typeof window !== 'undefined') {
+      window.__predictDebug = [];
+    }
+  } catch {}
+
+  _emit({
+    ts: Date.now(),
+    scope: 'debug',
+    msg: '— cleared —',
+  });
 }
+
 function useDbgLog() {
   const [, force] = useState(0);
   const ref = useRef([]);
+
   useEffect(() => {
     try {
-      if (typeof window !== 'undefined' && Array.isArray(window.__predictDebug)) {
+      if (
+        typeof window !== 'undefined' &&
+        Array.isArray(window.__predictDebug)
+      ) {
         ref.current = [...window.__predictDebug];
       }
     } catch {}
+
     const fn = (entry) => {
-      if (entry.msg === '— cleared —') ref.current = [];
-      else {
+      if (entry.msg === '— cleared —') {
+        ref.current = [];
+      } else {
         ref.current = [...ref.current, entry];
-        if (ref.current.length > DBG_MAX) ref.current = ref.current.slice(-DBG_MAX);
+
+        if (ref.current.length > DBG_MAX) {
+          ref.current = ref.current.slice(-DBG_MAX);
+        }
       }
+
       force((x) => x + 1);
     };
+
     _dbgListeners.add(fn);
-    return () => { _dbgListeners.delete(fn); };
+
+    return () => {
+      _dbgListeners.delete(fn);
+    };
   }, []);
+
   return ref.current;
 }
 
-/* ============================================================ Theme */
-
 const C = {
-  bg: '#03060f', card: '#080d1a', cardHi: '#0c1428',
-  ink: '#e8ecf5', muted: '#8a96b8', muted2: '#475670',
-  border: 'rgba(151,252,228,.10)', borderHi: 'rgba(151,252,228,.30)',
-  hl: '#97fce4', hl2: '#5ce9c8', hlDim: 'rgba(151,252,228,.10)',
+  bg: '#03060f',
+  card: '#080d1a',
+  cardHi: '#0c1428',
+  ink: '#e8ecf5',
+  muted: '#8a96b8',
+  muted2: '#475670',
+  border: 'rgba(151,252,228,.10)',
+  borderHi: 'rgba(151,252,228,.30)',
+  hl: '#97fce4',
+  hl2: '#5ce9c8',
+  hlDim: 'rgba(151,252,228,.10)',
   violet: '#a87fff',
-  yes: '#00d4a3', yesDim: 'rgba(0,212,163,.12)',
-  no: '#ff5f7a', noDim: 'rgba(255,95,122,.12)',
+  yes: '#00d4a3',
+  yesDim: 'rgba(0,212,163,.12)',
+  no: '#ff5f7a',
+  noDim: 'rgba(255,95,122,.12)',
   amber: '#f5b53d',
   shadow: '0 8px 28px rgba(0,0,0,.45)',
   shadowLg: '0 18px 56px rgba(0,0,0,.55)',
 };
-const T = {
-  body: { fontFamily: 'DM Sans, system-ui, sans-serif' },
-  display: { fontFamily: 'Syne, Inter, sans-serif' },
-  mono: { fontFamily: 'IBM Plex Mono, monospace' },
-};
 
-/* ============================================================ HTTP */
+const T = {
+  body: {
+    fontFamily: 'DM Sans, system-ui, sans-serif',
+  },
+
+  display: {
+    fontFamily: 'Syne, Inter, sans-serif',
+  },
+
+  mono: {
+    fontFamily: 'IBM Plex Mono, monospace',
+  },
+};
 
 async function jfetch(url, opts = {}, ms = 12000) {
   const c = new AbortController();
+
   const id = setTimeout(() => c.abort(), ms);
+
   const t0 = Date.now();
+
   try {
-    const r = await fetch(url, { ...opts, signal: c.signal });
+    const r = await fetch(url, {
+      ...opts,
+      signal: c.signal,
+    });
+
     const dur = Date.now() - t0;
+
     if (!r.ok) {
       let body = '';
-      try { body = await r.text(); } catch {}
-      dbg('http', `${opts.method || 'GET'} ${url} → ${r.status}`, { dur, body: body.slice(0, 500) });
-      const err = new Error(`HTTP ${r.status}: ${body.slice(0, 300) || r.statusText}`);
-      err.status = r.status; err.body = body;
+
+      try {
+        body = await r.text();
+      } catch {}
+
+      dbg(
+        'http',
+        `${opts.method || 'GET'} ${url} → ${r.status}`,
+        {
+          dur,
+          body: body.slice(0, 500),
+        }
+      );
+
+      const err = new Error(
+        `HTTP ${r.status}: ${
+          body.slice(0, 300) || r.statusText
+        }`
+      );
+
+      err.status = r.status;
+      err.body = body;
+
       throw err;
     }
-    dbg('http', `${opts.method || 'GET'} ${url} → ${r.status}`, { dur });
-    return r;
-  } finally { clearTimeout(id); }
-}
 
-/* ============================================================ Format */
+    dbg(
+      'http',
+      `${opts.method || 'GET'} ${url} → ${r.status}`,
+      { dur }
+    );
+
+    return r;
+  } finally {
+    clearTimeout(id);
+  }
+}
 
 function fmtUsd(n, d = 2) {
-  if (n == null || !Number.isFinite(Number(n))) return '$0.00';
+  if (n == null || !Number.isFinite(Number(n))) {
+    return '$0.00';
+  }
+
   n = Number(n);
-  if (n >= 1e9) return '$' + (n / 1e9).toFixed(2) + 'B';
-  if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
-  if (n >= 1) return '$' + n.toFixed(d);
+
+  if (n >= 1e9) {
+    return '$' + (n / 1e9).toFixed(2) + 'B';
+  }
+
+  if (n >= 1e6) {
+    return '$' + (n / 1e6).toFixed(2) + 'M';
+  }
+
+  if (n >= 1e3) {
+    return '$' + n.toLocaleString('en-US', {
+      maximumFractionDigits: d,
+    });
+  }
+
+  if (n >= 1) {
+    return '$' + n.toFixed(d);
+  }
+
   return '$' + n.toFixed(4);
 }
+
 function formatVol(n) {
   if (!n || n <= 0) return '$0';
-  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
-  if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
-  if (n >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
+
+  if (n >= 1e9) {
+    return `$${(n / 1e9).toFixed(2)}B`;
+  }
+
+  if (n >= 1e6) {
+    return `$${(n / 1e6).toFixed(2)}M`;
+  }
+
+  if (n >= 1e3) {
+    return `$${(n / 1e3).toFixed(1)}K`;
+  }
+
   return `$${n.toFixed(0)}`;
 }
+
 function formatEndDate(iso) {
   if (!iso) return null;
+
   const d = new Date(iso);
-  if (!Number.isFinite(d.getTime())) return null;
+
+  if (!Number.isFinite(d.getTime())) {
+    return null;
+  }
+
   const ms = d.getTime() - Date.now();
-  if (ms <= 0) return 'Closed';
-  const mo = d.toLocaleString('en-US', { month: 'short' });
+
+  if (ms <= 0) {
+    return 'Closed';
+  }
+
+  const mo = d.toLocaleString('en-US', {
+    month: 'short',
+  });
+
   const day = d.getDate();
-  if (ms < 60 * 60_000) return `Ends in ${Math.floor(ms / 60_000)}m`;
+
+  if (ms < 60 * 60_000) {
+    return `Ends in ${Math.floor(ms / 60_000)}m`;
+  }
+
   if (ms < 24 * 60 * 60_000) {
     const h = Math.floor(ms / 3_600_000);
-    const mm = Math.floor((ms % 3_600_000) / 60_000);
+
+    const mm = Math.floor(
+      (ms % 3_600_000) / 60_000
+    );
+
     return `Ends in ${h}h ${mm}m`;
   }
+
   return `Ends ${mo} ${day}`;
 }
+
 function cleanAmount(v) {
   const s = String(v || '').replace(/[^0-9.]/g, '');
+
   const p = s.split('.');
-  return p.length <= 2 ? s : p[0] + '.' + p.slice(1).join('');
-}
-function shortAddr(a) {
-  if (!a) return '';
-  return a.length > 12 ? a.slice(0, 6) + '…' + a.slice(-4) : a;
+
+  return p.length <= 2
+    ? s
+    : p[0] + '.' + p.slice(1).join('');
 }
 
 let _bodyLockCount = 0;
+
 function useBodyLock(open) {
   useEffect(() => {
-    if (!open || typeof document === 'undefined') return;
-    if (_bodyLockCount === 0) document.body.style.overflow = 'hidden';
+    if (!open || typeof document === 'undefined') {
+      return;
+    }
+
+    if (_bodyLockCount === 0) {
+      document.body.style.overflow = 'hidden';
+    }
+
     _bodyLockCount++;
+
     return () => {
-      _bodyLockCount = Math.max(0, _bodyLockCount - 1);
-      if (_bodyLockCount === 0) document.body.style.overflow = '';
+      _bodyLockCount = Math.max(
+        0,
+        _bodyLockCount - 1
+      );
+
+      if (_bodyLockCount === 0) {
+        document.body.style.overflow = '';
+      }
     };
   }, [open]);
 }
 
 async function copyToClipboard(text) {
   try {
-    if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; }
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
   } catch {}
+
   try {
     const ta = document.createElement('textarea');
-    ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
-    document.body.appendChild(ta); ta.select();
+
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+
+    document.body.appendChild(ta);
+
+    ta.select();
+
     const ok = document.execCommand('copy');
+
     document.body.removeChild(ta);
+
     return ok;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }
 
-/* ============================================================ Storage */
+function bytesToBase64(bytes) {
+  let binary = '';
 
-const SCHEMA_VERSION = 5;
+  const chunkSize = 0x8000;
+
+  for (
+    let i = 0;
+    i < bytes.length;
+    i += chunkSize
+  ) {
+    binary += String.fromCharCode(
+      ...bytes.subarray(i, i + chunkSize)
+    );
+  }
+
+  return btoa(binary);
+}
+
+const SCHEMA_VERSION = 3;
+
 const SCHEMA_KEY = 'pm_schema_v';
+
 (function migrateSchema() {
   try {
-    const current = parseInt(localStorage.getItem(SCHEMA_KEY) || '0', 10);
-    if (current === SCHEMA_VERSION) return;
-    const toDel = [];
-    for (let i = 0; i < localStorage.length; i++) {
-      const k = localStorage.key(i);
-      if (k && k.startsWith('pm_') && k !== SCHEMA_KEY) toDel.push(k);
+    const current = parseInt(
+      localStorage.getItem(SCHEMA_KEY) || '0',
+      10
+    );
+
+    if (current === SCHEMA_VERSION) {
+      return;
     }
-    toDel.forEach((k) => { try { localStorage.removeItem(k); } catch {} });
-    localStorage.setItem(SCHEMA_KEY, String(SCHEMA_VERSION));
-    dbg('migrate', `cache schema ${current} → ${SCHEMA_VERSION}, purged ${toDel.length} keys`);
-  } catch (e) { dbgErr('migrate', 'failed', e); }
+
+    const toDel = [];
+
+    for (
+      let i = 0;
+      i < localStorage.length;
+      i++
+    ) {
+      const k = localStorage.key(i);
+
+      if (
+        k &&
+        k.startsWith('pm_') &&
+        k !== SCHEMA_KEY
+      ) {
+        toDel.push(k);
+      }
+    }
+
+    toDel.forEach((k) => {
+      try {
+        localStorage.removeItem(k);
+      } catch {}
+    });
+
+    localStorage.setItem(
+      SCHEMA_KEY,
+      String(SCHEMA_VERSION)
+    );
+
+    dbg(
+      'migrate',
+      `cache schema ${current} → ${SCHEMA_VERSION}, purged ${toDel.length} keys`
+    );
+  } catch (e) {
+    dbgErr('migrate', 'failed', e);
+  }
 })();
 
 const LS = {
-  safe: (evm) => 'pm_safe_' + evm.toLowerCase(),
-  bridgeAddr: (evm) => 'pm_br_addrs_' + evm.toLowerCase(),
-  evmRdns: 'pm_evm_rdns',
+  safe: (evm) =>
+    'pm_safe_' + evm.toLowerCase(),
+
+  deployed: (evm) =>
+    'pm_safe_dep_' + evm.toLowerCase(),
+
+  approvals: (evm) =>
+    'pm_safe_appr_' + evm.toLowerCase(),
+
+  bridgeAddr: (evm) =>
+    'pm_br_addrs_' + evm.toLowerCase(),
 };
-const SS = { creds: (evm) => 'pm_creds_' + evm.toLowerCase() };
-function lsGet(k) { try { return localStorage.getItem(k); } catch { return null; } }
-function lsSet(k, v) { try { localStorage.setItem(k, v); } catch {} }
-function lsDel(k) { try { localStorage.removeItem(k); } catch {} }
+
+const SS = {
+  creds: (evm) =>
+    'pm_creds_' + evm.toLowerCase(),
+};
+
+function lsGet(k) {
+  try {
+    return localStorage.getItem(k);
+  } catch {
+    return null;
+  }
+}
+
+function lsSet(k, v) {
+  try {
+    localStorage.setItem(k, v);
+  } catch {}
+}
+
+function lsDel(k) {
+  try {
+    localStorage.removeItem(k);
+  } catch {}
+}
+
 function lsGetJson(k) {
-  try { const r = localStorage.getItem(k); return r ? JSON.parse(r) : null; } catch { return null; }
+  try {
+    const r = localStorage.getItem(k);
+
+    return r ? JSON.parse(r) : null;
+  } catch {
+    return null;
+  }
 }
-function lsSetJson(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); } catch {} }
+
+function lsSetJson(k, v) {
+  try {
+    localStorage.setItem(k, JSON.stringify(v));
+  } catch {}
+}
+
 function ssGetJson(k) {
-  try { const r = sessionStorage.getItem(k); return r ? JSON.parse(r) : null; } catch { return null; }
+  try {
+    const r = sessionStorage.getItem(k);
+
+    return r ? JSON.parse(r) : null;
+  } catch {
+    return null;
+  }
 }
-function ssSetJson(k, v) { try { sessionStorage.setItem(k, JSON.stringify(v)); } catch {} }
-function ssDel(k) { try { sessionStorage.removeItem(k); } catch {} }
+
+function ssSetJson(k, v) {
+  try {
+    sessionStorage.setItem(k, JSON.stringify(v));
+  } catch {}
+}
+
+function ssDel(k) {
+  try {
+    sessionStorage.removeItem(k);
+  } catch {}
+}
+
 function wipeUserCache(evm) {
   if (!evm) return;
+
   lsDel(LS.safe(evm));
+  lsDel(LS.deployed(evm));
+  lsDel(LS.approvals(evm));
   lsDel(LS.bridgeAddr(evm));
+
   ssDel(SS.creds(evm));
+
   dbg('cache', 'wiped for ' + evm);
 }
 
-/* ============================================================ EIP-6963 discovery */
-
-function useDiscoveredEvmWallets() {
-  const [wallets, setWallets] = useState([]);
-  const seenRef = useRef(new Set());
-  useEffect(() => {
-    const onAnnounce = (event) => {
-      const detail = event.detail;
-      if (!detail || !detail.info || !detail.provider) return;
-      const rdns = detail.info.rdns || detail.info.name;
-      if (!rdns || seenRef.current.has(rdns)) return;
-      seenRef.current.add(rdns);
-      setWallets((prev) => [...prev, detail]);
-    };
-    window.addEventListener('eip6963:announceProvider', onAnnounce);
-    window.dispatchEvent(new Event('eip6963:requestProvider'));
-    const fallbackTimer = setTimeout(() => {
-      if (seenRef.current.size === 0 && window.ethereum) {
-        const legacy = {
-          info: { uuid: 'legacy', name: 'Browser Wallet', rdns: 'legacy.ethereum', icon: '' },
-          provider: window.ethereum,
-        };
-        seenRef.current.add('legacy.ethereum');
-        setWallets([legacy]);
-      }
-    }, 400);
-    return () => {
-      window.removeEventListener('eip6963:announceProvider', onAnnounce);
-      clearTimeout(fallbackTimer);
-    };
-  }, []);
-  return wallets;
-}
-
-/* ============================================================ EVM wallet state */
-
-function useEvmWallet() {
-  const wallets = useDiscoveredEvmWallets();
-  const [provider, setProvider] = useState(null);
-  const [address, setAddress] = useState(null);
-  const [rdns, setRdns] = useState(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
-  const [connecting, setConnecting] = useState(false);
-
-  // Auto-reconnect previously-used wallet
-  useEffect(() => {
-    if (provider || wallets.length === 0) return;
-    const lastRdns = lsGet(LS.evmRdns);
-    if (!lastRdns) return;
-    const match = wallets.find((w) => w.info.rdns === lastRdns);
-    if (!match) return;
-    (async () => {
-      try {
-        const accounts = await match.provider.request({ method: 'eth_accounts' });
-        if (accounts && accounts.length > 0) {
-          setProvider(match.provider);
-          setAddress(accounts[0]);
-          setRdns(match.info.rdns);
-          dbg('evm', 'auto-reconnected', { rdns: match.info.rdns, address: accounts[0] });
-        }
-      } catch (e) { dbgErr('evm', 'auto-reconnect failed', e); }
-    })();
-  }, [wallets, provider]);
-
-  // Listen for account/chain changes
-  useEffect(() => {
-    if (!provider) return;
-    const onAccounts = (accs) => {
-      if (!accs || accs.length === 0) {
-        setAddress(null); setProvider(null); setRdns(null);
-        lsDel(LS.evmRdns);
-        dbg('evm', 'disconnected via event');
-      } else {
-        setAddress(accs[0]);
-        dbg('evm', 'account changed', { address: accs[0] });
-      }
-    };
-    const onChain = (chainId) => dbg('evm', 'chain changed', { chainId });
-    provider.on?.('accountsChanged', onAccounts);
-    provider.on?.('chainChanged', onChain);
-    return () => {
-      provider.removeListener?.('accountsChanged', onAccounts);
-      provider.removeListener?.('chainChanged', onChain);
-    };
-  }, [provider]);
-
-  const connect = useCallback(async (walletDetail) => {
-    setConnecting(true);
-    try {
-      const p = walletDetail.provider;
-      const accounts = await p.request({ method: 'eth_requestAccounts' });
-      if (!accounts || accounts.length === 0) throw new Error('No account returned');
-      // Switch to Polygon
-      try {
-        await p.request({
-          method: 'wallet_switchEthereumChain',
-          params: [{ chainId: POLYGON_CHAIN_HEX }],
-        });
-      } catch (switchErr) {
-        if (switchErr?.code === 4902) {
-          await p.request({
-            method: 'wallet_addEthereumChain',
-            params: [{
-              chainId: POLYGON_CHAIN_HEX,
-              chainName: 'Polygon',
-              nativeCurrency: { name: 'POL', symbol: 'POL', decimals: 18 },
-              rpcUrls: ['https://polygon-rpc.com'],
-              blockExplorerUrls: ['https://polygonscan.com'],
-            }],
-          });
-        } else {
-          dbgErr('evm', 'chain switch failed (non-fatal)', switchErr);
-        }
-      }
-      setProvider(p);
-      setAddress(accounts[0]);
-      setRdns(walletDetail.info.rdns);
-      lsSet(LS.evmRdns, walletDetail.info.rdns);
-      dbg('evm', 'connected', { rdns: walletDetail.info.rdns, address: accounts[0] });
-      setPickerOpen(false);
-    } catch (e) {
-      dbgErr('evm', 'connect failed', e);
-      throw e;
-    } finally { setConnecting(false); }
-  }, []);
-
-  const disconnect = useCallback(() => {
-    setProvider(null); setAddress(null); setRdns(null);
-    lsDel(LS.evmRdns);
-    dbg('evm', 'disconnected manually');
-  }, []);
-
-  return { wallets, provider, address, rdns, pickerOpen, setPickerOpen, connect, disconnect, connecting };
-}
-
-/* ============================================================ SDK loaders */
-
 let _sdks = null;
+
 async function loadSdks() {
   if (_sdks) return _sdks;
+
   dbg('sdk', 'loading');
-  const [clob, relayer, signing, derive, config, viem, viemChains] = await Promise.all([
+
+  const [
+    clob,
+    relayer,
+    signing,
+    derive,
+    config,
+    viem,
+    viemChains,
+  ] = await Promise.all([
     import('@polymarket/clob-client'),
-    import('@polymarket/builder-relayer-client'),
-    import('@polymarket/builder-signing-sdk'),
-    import('@polymarket/builder-relayer-client/dist/builder/derive'),
-    import('@polymarket/builder-relayer-client/dist/config'),
+
+    import(
+      '@polymarket/builder-relayer-client'
+    ),
+
+    import(
+      '@polymarket/builder-signing-sdk'
+    ),
+
+    import(
+      '@polymarket/builder-relayer-client/dist/builder/derive'
+    ),
+
+    import(
+      '@polymarket/builder-relayer-client/dist/config'
+    ),
+
     import('viem'),
+
     import('viem/chains'),
   ]);
-  _sdks = { clob, relayer, signing, derive, config, viem, viemChains };
-  dbg('sdk', 'loaded');
+
+  _sdks = {
+    clob,
+    relayer,
+    signing,
+    derive,
+    config,
+    viem,
+    viemChains,
+  };
+
+  dbg('sdk', 'loaded', {
+    clob: !!clob?.ClobClient,
+    relay: !!relayer?.RelayClient,
+    signing: !!signing?.BuilderConfig,
+    derive: !!derive?.deriveSafe,
+    viem: !!viem?.createWalletClient,
+    polygon: !!viemChains?.polygon,
+  });
+
   return _sdks;
 }
 
-async function buildSigner(evmProvider, evmAddress) {
-  const { viem, viemChains } = await loadSdks();
-  if (!evmProvider) throw new Error('EVM provider not connected');
-  if (!evmAddress) throw new Error('No EVM address');
-  return viem.createWalletClient({
-    account: evmAddress,
-    chain: viemChains.polygon,
-    transport: viem.custom(evmProvider),
-  });
-}
+async function buildSigner(
+  getEvmProvider,
+  evmAddress
+) {
+  const { viem, viemChains } =
+    await loadSdks();
 
-async function buildRelayClient(evmProvider, evmAddress) {
-  const { relayer, signing } = await loadSdks();
-  if (!relayer?.RelayClient) throw new Error('RelayClient missing');
-  const signer = await buildSigner(evmProvider, evmAddress);
-  const origin = (typeof window !== 'undefined' && window.location?.origin) || '';
-  // builderConfig tells the SDK to fetch HMAC headers from our server's
-  // /api/poly/sign endpoint, which holds the Builder API key/secret/passphrase.
-  // Without this, the relayer returns 401 invalid authorization.
-  const builderConfig = new signing.BuilderConfig({
-    remoteBuilderConfig: { url: origin + '/api/poly/sign' },
-  });
-  return new relayer.RelayClient(RELAYER_URL + '/', POLYGON_CHAIN_ID, signer, builderConfig);
-}
+  const provider = await getEvmProvider();
 
-/* ============================================================ Polygon RPC */
-
-async function rpc(method, params, ms = 8000) {
-  let lastErr;
-  for (const url of POLYGON_RPCS) {
-    try {
-      const r = await jfetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jsonrpc: '2.0', id: Date.now(), method, params }),
-      }, ms);
-      const j = await r.json();
-      if (j.error) { lastErr = new Error(`RPC ${method}: ${j.error.message}`); continue; }
-      return j.result;
-    } catch (e) { lastErr = e; }
+  if (!provider) {
+    throw new Error(
+      'Privy EVM provider unavailable — sign in first'
+    );
   }
-  throw lastErr || new Error('All Polygon RPCs failed');
+
+  if (!evmAddress) {
+    throw new Error('No EOA address');
+  }
+
+  const walletClient =
+    viem.createWalletClient({
+      account: evmAddress,
+      chain: viemChains.polygon,
+      transport: viem.custom(provider),
+    });
+
+  dbg('signer', 'viem walletClient built', {
+    account: evmAddress,
+  });
+
+  return walletClient;
 }
 
-async function ethGetCode(address) {
-  try {
-    const hex = await rpc('eth_getCode', [address, 'latest']);
-    return hex && hex !== '0x' ? hex : null;
-  } catch (e) { dbgErr('rpc', 'eth_getCode failed', e); return null; }
-}
-async function ethCallBalance(token, holder) {
-  try {
-    const addr = holder.toLowerCase().replace(/^0x/, '').padStart(64, '0');
-    const data = '0x70a08231' + addr;
-    const hex = await rpc('eth_call', [{ to: token, data }, 'latest']);
-    if (!hex || !hex.startsWith('0x')) return 0n;
-    return BigInt(hex);
-  } catch { return 0n; }
-}
-async function ethCallAllowance(token, owner, spender) {
-  try {
-    const o = owner.toLowerCase().replace(/^0x/, '').padStart(64, '0');
-    const s = spender.toLowerCase().replace(/^0x/, '').padStart(64, '0');
-    const data = '0xdd62ed3e' + o + s;
-    const hex = await rpc('eth_call', [{ to: token, data }, 'latest']);
-    if (!hex || !hex.startsWith('0x')) return 0n;
-    return BigInt(hex);
-  } catch { return 0n; }
-}
-async function ethCallIsApprovedForAll(token, owner, operator) {
-  try {
-    const o = owner.toLowerCase().replace(/^0x/, '').padStart(64, '0');
-    const op = operator.toLowerCase().replace(/^0x/, '').padStart(64, '0');
-    const data = '0xe985e9c5' + o + op;
-    const hex = await rpc('eth_call', [{ to: token, data }, 'latest']);
-    if (!hex || !hex.startsWith('0x')) return false;
-    return BigInt(hex) === 1n;
-  } catch { return false; }
-}
-async function fetchSafeBalance(safe) {
-  if (!safe) return 0n;
-  return await ethCallBalance(USDC_E_ADDRESS, safe);
-}
+async function buildRelayClient(
+  getEvmProvider,
+  evmAddress
+) {
+  const { relayer, signing } =
+    await loadSdks();
 
-/* ============================================================ Safe setup */
+  if (!relayer?.RelayClient) {
+    throw new Error('RelayClient missing');
+  }
+
+  if (!signing?.BuilderConfig) {
+    throw new Error('BuilderConfig missing');
+  }
+
+  const signer = await buildSigner(
+    getEvmProvider,
+    evmAddress
+  );
+
+  const origin =
+    (
+      typeof window !== 'undefined' &&
+      window.location?.origin
+    ) || '';
+
+  const builderConfig =
+    new signing.BuilderConfig({
+      remoteBuilderConfig: {
+        url: origin + '/api/poly/sign',
+      },
+    });
+
+  return new relayer.RelayClient(
+    RELAYER_URL + '/',
+    POLYGON_CHAIN_ID,
+    signer,
+    builderConfig
+  );
+}
 
 async function deriveSafeAddress(eoa) {
   const { derive, config } = await loadSdks();
-  if (!derive?.deriveSafe) throw new Error('deriveSafe missing');
+
+  if (!derive?.deriveSafe) {
+    throw new Error('deriveSafe missing');
+  }
+
+  if (!config?.getContractConfig) {
+    throw new Error('getContractConfig missing');
+  }
+
   const cfg = config.getContractConfig(POLYGON_CHAIN_ID);
-  const factory = cfg?.SafeContracts?.SafeFactory || cfg?.SafeFactory;
-  if (!factory) throw new Error('Safe factory missing');
+
+  const factory =
+    cfg?.SafeContracts?.SafeFactory ||
+    cfg?.SafeFactory;
+
+  if (!factory) {
+    throw new Error('Safe factory missing from config');
+  }
+
   const safe = derive.deriveSafe(eoa, factory);
-  dbg('safe', 'derived', { eoa, safe });
+
+  dbg('safe', 'derived', {
+    eoa,
+    safe,
+  });
+
   return safe;
 }
 
-async function verifySafeDeployed(safeAddress) {
-  const code = await ethGetCode(safeAddress);
-  const isDeployed = !!code;
-  dbg('verify', 'safe deployed', { safeAddress, isDeployed });
-  return isDeployed;
-}
-
-async function verifyApprovals(safeAddress) {
-  const MIN_OK = 1n << 200n;
-  const [a1, a2, a3, a4, ia1, ia2, ia3] = await Promise.all([
-    ethCallAllowance(USDC_E_ADDRESS, safeAddress, CTF_EXCHANGE),
-    ethCallAllowance(USDC_E_ADDRESS, safeAddress, NEG_RISK_CTF_EXCHANGE),
-    ethCallAllowance(USDC_E_ADDRESS, safeAddress, NEG_RISK_ADAPTER),
-    ethCallAllowance(USDC_E_ADDRESS, safeAddress, CONDITIONAL_TOKENS),
-    ethCallIsApprovedForAll(CONDITIONAL_TOKENS, safeAddress, CTF_EXCHANGE),
-    ethCallIsApprovedForAll(CONDITIONAL_TOKENS, safeAddress, NEG_RISK_CTF_EXCHANGE),
-    ethCallIsApprovedForAll(CONDITIONAL_TOKENS, safeAddress, NEG_RISK_ADAPTER),
-  ]);
-  const checks = {
-    usdc_ctf: a1 >= MIN_OK, usdc_neg: a2 >= MIN_OK,
-    usdc_adp: a3 >= MIN_OK, usdc_con: a4 >= MIN_OK,
-    ctf_ctf: ia1, ctf_neg: ia2, ctf_adp: ia3,
-  };
-  const ok = Object.values(checks).every(Boolean);
-  dbg('verify', 'approvals', { safeAddress, ok, checks });
-  return ok;
-}
-
-const MAX_UINT256 = (1n << 256n) - 1n;
-function encErc20Approve(spender, amount) {
-  return '0x095ea7b3' +
-    spender.replace(/^0x/, '').toLowerCase().padStart(64, '0') +
-    BigInt(amount).toString(16).padStart(64, '0');
-}
-function encErc1155SetApprovalForAll(operator, approved) {
-  return '0xa22cb465' +
-    operator.replace(/^0x/, '').toLowerCase().padStart(64, '0') +
-    (approved ? '1' : '0').padStart(64, '0');
-}
-function buildApprovalTxs() {
-  return [
-    { to: USDC_E_ADDRESS, value: '0', data: encErc20Approve(CTF_EXCHANGE, MAX_UINT256.toString()) },
-    { to: USDC_E_ADDRESS, value: '0', data: encErc20Approve(NEG_RISK_CTF_EXCHANGE, MAX_UINT256.toString()) },
-    { to: USDC_E_ADDRESS, value: '0', data: encErc20Approve(NEG_RISK_ADAPTER, MAX_UINT256.toString()) },
-    { to: USDC_E_ADDRESS, value: '0', data: encErc20Approve(CONDITIONAL_TOKENS, MAX_UINT256.toString()) },
-    { to: CONDITIONAL_TOKENS, value: '0', data: encErc1155SetApprovalForAll(CTF_EXCHANGE, true) },
-    { to: CONDITIONAL_TOKENS, value: '0', data: encErc1155SetApprovalForAll(NEG_RISK_CTF_EXCHANGE, true) },
-    { to: CONDITIONAL_TOKENS, value: '0', data: encErc1155SetApprovalForAll(NEG_RISK_ADAPTER, true) },
-  ];
-}
-
-async function ensureSafeDeployed(evm, evmProvider, onStatus) {
+async function ensureSafeDeployed(
+  evm,
+  getEvmProvider,
+  onStatus
+) {
   let safe = lsGet(LS.safe(evm));
-  if (!safe) { safe = await deriveSafeAddress(evm); lsSet(LS.safe(evm), safe); }
-  const alreadyDeployed = await verifySafeDeployed(safe);
-  if (alreadyDeployed) return safe;
-  onStatus?.('Deploying Safe (sign in your wallet)…');
-  const relay = await buildRelayClient(evmProvider, evm);
+
+  if (!safe) {
+    safe = await deriveSafeAddress(evm);
+    lsSet(LS.safe(evm), safe);
+  }
+
+  if (lsGet(LS.deployed(evm)) === '1') {
+    return safe;
+  }
+
+  const relay = await buildRelayClient(
+    getEvmProvider,
+    evm
+  );
+
+  try {
+    if (typeof relay.getDeployed === 'function') {
+      const deployed = await relay.getDeployed(safe);
+
+      if (deployed) {
+        lsSet(LS.deployed(evm), '1');
+        dbg('safe', 'already deployed');
+        return safe;
+      }
+    }
+  } catch (e) {
+    dbgErr('safe', 'getDeployed failed', e);
+  }
+
+  onStatus?.('Setting up trading account…');
+
   const resp = await relay.deploy();
   const res = await resp.wait();
+
   const final = res?.proxyAddress || safe;
+
   lsSet(LS.safe(evm), final);
-  const verified = await verifySafeDeployed(final);
-  if (!verified) throw new Error('Safe deploy tx ran but eth_getCode shows no contract');
-  dbg('safe', 'deployed + verified', { safe: final });
+  lsSet(LS.deployed(evm), '1');
+
+  dbg('safe', 'deployed', {
+    safe: final,
+  });
+
   return final;
 }
 
-async function ensureApprovals(evm, evmProvider, safeAddress, onStatus) {
-  const alreadyOk = await verifyApprovals(safeAddress);
-  if (alreadyOk) return;
-  onStatus?.('Approving contracts (sign in your wallet)…');
-  const relay = await buildRelayClient(evmProvider, evm);
-  if (typeof relay.execute !== 'function') throw new Error('relay.execute missing');
-  const txs = buildApprovalTxs();
-  const resp = await relay.execute(txs, 'Polymarket trading approvals');
-  await resp.wait();
-  const verified = await verifyApprovals(safeAddress);
-  if (!verified) throw new Error('Approval txs ran but verification failed');
-  dbg('approvals', 'done + verified');
+const MAX_UINT256 = (1n << 256n) - 1n;
+
+function encErc20Approve(spender, amount) {
+  return (
+    '0x095ea7b3' +
+    spender
+      .replace(/^0x/, '')
+      .toLowerCase()
+      .padStart(64, '0') +
+    BigInt(amount).toString(16).padStart(64, '0')
+  );
 }
 
-async function getOrDeriveCreds(evm, evmProvider) {
+function encErc1155SetApprovalForAll(
+  operator,
+  approved
+) {
+  return (
+    '0xa22cb465' +
+    operator
+      .replace(/^0x/, '')
+      .toLowerCase()
+      .padStart(64, '0') +
+    (approved ? '1' : '0').padStart(64, '0')
+  );
+}
+
+function buildApprovalTxs() {
+  return [
+    {
+      to: USDC_E_ADDRESS,
+      value: '0',
+      data: encErc20Approve(
+        CTF_EXCHANGE,
+        MAX_UINT256.toString()
+      ),
+    },
+    {
+      to: USDC_E_ADDRESS,
+      value: '0',
+      data: encErc20Approve(
+        NEG_RISK_CTF_EXCHANGE,
+        MAX_UINT256.toString()
+      ),
+    },
+    {
+      to: USDC_E_ADDRESS,
+      value: '0',
+      data: encErc20Approve(
+        NEG_RISK_ADAPTER,
+        MAX_UINT256.toString()
+      ),
+    },
+    {
+      to: USDC_E_ADDRESS,
+      value: '0',
+      data: encErc20Approve(
+        CONDITIONAL_TOKENS,
+        MAX_UINT256.toString()
+      ),
+    },
+    {
+      to: CONDITIONAL_TOKENS,
+      value: '0',
+      data: encErc1155SetApprovalForAll(
+        CTF_EXCHANGE,
+        true
+      ),
+    },
+    {
+      to: CONDITIONAL_TOKENS,
+      value: '0',
+      data: encErc1155SetApprovalForAll(
+        NEG_RISK_CTF_EXCHANGE,
+        true
+      ),
+    },
+    {
+      to: CONDITIONAL_TOKENS,
+      value: '0',
+      data: encErc1155SetApprovalForAll(
+        NEG_RISK_ADAPTER,
+        true
+      ),
+    },
+  ];
+}
+
+async function ensureApprovals(
+  evm,
+  getEvmProvider,
+  safeAddress,
+  onStatus
+) {
+  if (lsGet(LS.approvals(evm)) === '1') {
+    return;
+  }
+
+  onStatus?.('Approving contracts…');
+
+  const relay = await buildRelayClient(
+    getEvmProvider,
+    evm
+  );
+
+  if (typeof relay.execute !== 'function') {
+    throw new Error('relay.execute missing');
+  }
+
+  const txs = buildApprovalTxs();
+
+  const resp = await relay.execute(
+    txs,
+    'Polymarket trading approvals'
+  );
+
+  await resp.wait();
+
+  lsSet(LS.approvals(evm), '1');
+
+  dbg('approvals', 'done', {
+    txs: txs.length,
+    safeAddress,
+  });
+}
+
+async function getOrDeriveCreds(
+  evm,
+  getEvmProvider
+) {
   const cached = ssGetJson(SS.creds(evm));
-  if (cached?.key && cached?.secret && cached?.passphrase) return cached;
+
+  if (
+    cached?.key &&
+    cached?.secret &&
+    cached?.passphrase
+  ) {
+    return cached;
+  }
+
   const { clob } = await loadSdks();
-  const signer = await buildSigner(evmProvider, evm);
-  const temp = new clob.ClobClient(CLOB_URL, POLYGON_CHAIN_ID, signer);
+
+  const signer = await buildSigner(
+    getEvmProvider,
+    evm
+  );
+
+  const temp = new clob.ClobClient(
+    CLOB_URL,
+    POLYGON_CHAIN_ID,
+    signer
+  );
+
   let creds;
-  try { creds = await temp.createOrDeriveApiKey(); }
-  catch (e) {
-    dbgErr('creds', 'createOrDeriveApiKey failed, trying deriveApiKey', e);
-    try { creds = await temp.deriveApiKey(); }
-    catch (e2) {
-      dbgErr('creds', 'deriveApiKey failed, trying createApiKey', e2);
+
+  try {
+    creds = await temp.createOrDeriveApiKey();
+  } catch (e) {
+    dbgErr(
+      'creds',
+      'createOrDeriveApiKey failed, trying deriveApiKey',
+      e
+    );
+
+    try {
+      creds = await temp.deriveApiKey();
+    } catch (e2) {
+      dbgErr(
+        'creds',
+        'deriveApiKey failed, trying createApiKey',
+        e2
+      );
+
       creds = await temp.createApiKey();
     }
   }
+
   const norm = {
     key: creds.key || creds.apiKey,
     secret: creds.secret,
     passphrase: creds.passphrase,
   };
-  if (!norm.key || !norm.secret || !norm.passphrase) throw new Error('Incomplete creds');
+
+  if (
+    !norm.key ||
+    !norm.secret ||
+    !norm.passphrase
+  ) {
+    throw new Error('Incomplete creds');
+  }
+
   ssSetJson(SS.creds(evm), norm);
-  dbg('creds', 'stored');
+
+  dbg('creds', 'stored session creds');
+
   return norm;
 }
 
-async function buildClobClient(evmProvider, evmAddress, safeAddress, creds) {
+async function buildClobClient(
+  getEvmProvider,
+  evmAddress,
+  safeAddress,
+  creds
+) {
   const { clob, signing } = await loadSdks();
-  const signer = await buildSigner(evmProvider, evmAddress);
-  const origin = (typeof window !== 'undefined' && window.location?.origin) || '';
-  const builderConfig = new signing.BuilderConfig({
-    remoteBuilderConfig: { url: origin + '/api/poly/sign' },
-  });
-  // signatureType 2 = GNOSIS_SAFE (funder is the Safe, signer is the EOA owner)
+
+  const signer = await buildSigner(
+    getEvmProvider,
+    evmAddress
+  );
+
+  const origin =
+    (
+      typeof window !== 'undefined' &&
+      window.location?.origin
+    ) || '';
+
+  const builderConfig =
+    new signing.BuilderConfig({
+      remoteBuilderConfig: {
+        url: origin + '/api/poly/sign',
+      },
+    });
+
   return new clob.ClobClient(
-    CLOB_URL, POLYGON_CHAIN_ID, signer, creds, 2, safeAddress, undefined, false, builderConfig
+    CLOB_URL,
+    POLYGON_CHAIN_ID,
+    signer,
+    creds,
+    2,
+    safeAddress,
+    undefined,
+    false,
+    builderConfig
   );
 }
 
-async function ensureSetup(evm, evmProvider, onStatus) {
-  dbg('setup', 'start', { evm });
-  const safe = await ensureSafeDeployed(evm, evmProvider, onStatus);
-  const creds = await getOrDeriveCreds(evm, evmProvider);
-  await ensureApprovals(evm, evmProvider, safe, onStatus);
-  dbg('setup', 'done', { safe });
-  return { safeAddress: safe, creds };
-}
+async function ensureSetup(
+  evm,
+  getEvmProvider,
+  onStatus
+) {
+  dbg('setup', 'start', {
+    evm,
+  });
 
-/* ============================================================ Bridge */
+  const safe = await ensureSafeDeployed(
+    evm,
+    getEvmProvider,
+    onStatus
+  );
 
-async function fetchBridgeAddresses(safe) {
-  const r = await jfetch(BRIDGE_DEPOSIT, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ address: safe }),
-  }, 15000);
-  const j = await r.json();
-  dbg('bridge', 'addresses', j);
-  const a = j.address && typeof j.address === 'object' ? j.address : j;
+  const creds = await getOrDeriveCreds(
+    evm,
+    getEvmProvider
+  );
+
+  await ensureApprovals(
+    evm,
+    getEvmProvider,
+    safe,
+    onStatus
+  );
+
+  dbg('setup', 'done', {
+    safe,
+  });
+
   return {
-    evm: a.evm || a.evmAddress || a.evm_address || null,
-    svm: a.svm || a.svmAddress || a.svm_address || null,
+    safeAddress: safe,
+    creds,
   };
 }
-async function getBridgeAddressesCached(evm, safe) {
-  const cached = lsGetJson(LS.bridgeAddr(evm));
-  const valid = cached && typeof cached.svm === 'string' && cached.svm.length >= 32 &&
-    typeof cached.evm === 'string' && cached.evm.startsWith('0x');
-  if (valid) return cached;
-  if (cached) { dbg('bridge', 'purging bad cache', cached); lsDel(LS.bridgeAddr(evm)); }
-  const addrs = await fetchBridgeAddresses(safe);
-  if (addrs.svm && addrs.evm) lsSetJson(LS.bridgeAddr(evm), addrs);
-  return addrs;
-}
-async function fetchBridgeStatus(statusAddress) {
-  try {
-    const r = await jfetch(`${BRIDGE_STATUS}/${encodeURIComponent(statusAddress)}`, {}, 8000);
-    return await r.json();
-  } catch { return null; }
-}
-async function waitForBridge(statusAddress, sourceSig, timeoutMs = 120_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
+
+async function rpc(method, params, ms = 8000) {
+  let lastErr;
+
+  for (const url of POLYGON_RPCS) {
     try {
-      const s = await fetchBridgeStatus(statusAddress);
-      const arr = Array.isArray(s?.transactions) ? s.transactions
-        : Array.isArray(s?.deposits) ? s.deposits
-          : Array.isArray(s) ? s : [];
-      const hit = arr.find((d) => {
-        const status = String(d.status || d.state || d.bridgeStatus || '').toUpperCase();
-        return d.txHash === sourceSig || d.sourceTxHash === sourceSig || d.sigSrc === sourceSig ||
-          status === 'COMPLETED' || status === 'CONFIRMED' || status === 'SUCCESS';
-      });
-      if (hit) { dbg('bridge', 'completed', hit); return true; }
-    } catch {}
-    await new Promise((r) => setTimeout(r, 2500));
+      const r = await jfetch(
+        url,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            jsonrpc: '2.0',
+            id: Date.now(),
+            method,
+            params,
+          }),
+        },
+        ms
+      );
+
+      const j = await r.json();
+
+      if (j.error) {
+        lastErr = new Error(
+          `RPC ${method}: ${j.error.message}`
+        );
+
+        continue;
+      }
+
+      return j.result;
+    } catch (e) {
+      lastErr = e;
+    }
   }
-  dbg('bridge', 'wait timed out');
-  return false;
+
+  throw lastErr || new Error('All Polygon RPCs failed');
 }
 
-/* ============================================================ Solana balances */
+async function ethCallBalance(token, holder) {
+  try {
+    const addr = holder
+      .toLowerCase()
+      .replace(/^0x/, '')
+      .padStart(64, '0');
+
+    const data = '0x70a08231' + addr;
+
+    const hex = await rpc('eth_call', [
+      {
+        to: token,
+        data,
+      },
+      'latest',
+    ]);
+
+    if (!hex || !hex.startsWith('0x')) {
+      return 0n;
+    }
+
+    return BigInt(hex);
+  } catch {
+    return 0n;
+  }
+}
+
+async function fetchSafeBalance(safe) {
+  if (!safe) return 0n;
+
+  return await ethCallBalance(USDC_E_ADDRESS, safe);
+}
+
+function deriveSolanaAta(
+  ownerB58,
+  mint = USDC_SOLANA_MINT
+) {
+  const TOKEN = new PublicKey(TOKEN_PROGRAM_ID);
+  const ATA = new PublicKey(ATA_PROGRAM_ID);
+  const owner = new PublicKey(ownerB58);
+  const mintK = new PublicKey(mint);
+
+  const [ata] = PublicKey.findProgramAddressSync(
+    [
+      owner.toBuffer(),
+      TOKEN.toBuffer(),
+      mintK.toBuffer(),
+    ],
+    ATA
+  );
+
+  return ata.toBase58();
+}
+
+async function fetchSolanaUsdcBalance(ownerB58) {
+  try {
+    const ata = deriveSolanaAta(
+      ownerB58,
+      USDC_SOLANA_MINT
+    );
+
+    const r = await jfetch(
+      SOL_RPC,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getTokenAccountBalance',
+          params: [
+            ata,
+            {
+              commitment: 'confirmed',
+            },
+          ],
+        }),
+      },
+      6000
+    );
+
+    const j = await r.json();
+
+    return j?.result?.value?.amount
+      ? BigInt(j.result.value.amount)
+      : 0n;
+  } catch {
+    return 0n;
+  }
+}
 
 async function fetchSolanaSolBalance(ownerB58) {
   try {
-    const r = await jfetch(SOL_RPC, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        jsonrpc: '2.0', id: 1, method: 'getBalance',
-        params: [ownerB58, { commitment: 'confirmed' }],
-      }),
-    }, 6000);
+    const r = await jfetch(
+      SOL_RPC,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id: 1,
+          method: 'getBalance',
+          params: [
+            ownerB58,
+            {
+              commitment: 'confirmed',
+            },
+          ],
+        }),
+      },
+      6000
+    );
+
     const j = await r.json();
-    return j?.result?.value ? BigInt(j.result.value) : 0n;
-  } catch { return 0n; }
+
+    return j?.result?.value
+      ? BigInt(j.result.value)
+      : 0n;
+  } catch {
+    return 0n;
+  }
 }
 
-/* ============================================================ SOL deposit tx */
+async function fetchBridgeAddresses(safe) {
+  const r = await jfetch(
+    BRIDGE_DEPOSIT,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        address: safe,
+      }),
+    },
+    15000
+  );
 
-async function buildSolDepositTx({ ownerB58, bridgeSvm, totalLamports, connection }) {
-  const owner = new PublicKey(ownerB58);
-  const bridge = new PublicKey(bridgeSvm);
-  const fee = new PublicKey(FEE_WALLET_SOL);
-  const total = BigInt(totalLamports);
-  const feeAmt = (total * FEE_BPS) / 10000n;
-  const sendAmt = total - feeAmt;
-  if (sendAmt <= 0n) throw new Error('Deposit amount too small after fee');
-  const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
-  const tx = new Transaction({ recentBlockhash: blockhash, feePayer: owner });
-  tx.add(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 }));
-  tx.add(SystemProgram.transfer({ fromPubkey: owner, toPubkey: bridge, lamports: Number(sendAmt) }));
-  tx.add(SystemProgram.transfer({ fromPubkey: owner, toPubkey: fee, lamports: Number(feeAmt) }));
-  dbg('deposit-sol', 'tx built', {
-    total: total.toString(), sendAmt: sendAmt.toString(), feeAmt: feeAmt.toString(),
-    bridgeSvm, blockhash, lastValidBlockHeight,
-  });
-  return { tx, sendAmt, feeAmt, lastValidBlockHeight };
+  const j = await r.json();
+
+  dbg('bridge', 'addresses', j);
+
+  const a =
+    j.address && typeof j.address === 'object'
+      ? j.address
+      : j;
+
+  return {
+    evm:
+      a.evm ||
+      a.evmAddress ||
+      a.evm_address ||
+      null,
+
+    svm:
+      a.svm ||
+      a.svmAddress ||
+      a.svm_address ||
+      null,
+  };
 }
 
-/* ============================================================ Sim → sign → submit */
+async function getBridgeAddressesCached(evm, safe) {
+  const cached = lsGetJson(LS.bridgeAddr(evm));
 
-async function simulateSignSubmit({ tx, signTransaction, connection, onStatus, label = 'transaction' }) {
-  onStatus?.(`Simulating ${label}…`);
-  let simResult;
+  const cacheValid =
+    cached &&
+    typeof cached.svm === 'string' &&
+    cached.svm.length >= 32 &&
+    typeof cached.evm === 'string' &&
+    cached.evm.startsWith('0x');
+
+  if (cacheValid) return cached;
+
+  if (cached) {
+    dbg('bridge', 'purging bad cache', cached);
+    lsDel(LS.bridgeAddr(evm));
+  }
+
+  const addrs = await fetchBridgeAddresses(safe);
+
+  if (addrs.svm && addrs.evm) {
+    lsSetJson(LS.bridgeAddr(evm), addrs);
+  }
+
+  return addrs;
+}
+
+async function fetchBridgeStatus(statusAddress) {
   try {
-    simResult = await connection.simulateTransaction(tx, undefined, false);
-  } catch (e) {
-    dbgErr('sim', `${label} simulate threw`, e);
-    throw new Error(`Could not simulate ${label}: ${e?.message || 'unknown'}`);
+    const r = await jfetch(
+      `${BRIDGE_STATUS}/${encodeURIComponent(statusAddress)}`,
+      {},
+      8000
+    );
+
+    return await r.json();
+  } catch {
+    return null;
   }
-  dbg('sim', `${label} result`, {
-    err: simResult?.value?.err,
-    logs: simResult?.value?.logs?.slice(0, 12),
-    unitsConsumed: simResult?.value?.unitsConsumed,
-  });
-  if (simResult?.value?.err) {
-    const errStr = JSON.stringify(simResult.value.err);
-    const logs = (simResult.value.logs || []).slice(-3).join(' | ');
-    throw new Error(`Simulation failed: ${errStr}${logs ? ' — ' + logs : ''}`);
-  }
-  onStatus?.(`Confirm ${label} in your wallet…`);
-  const signed = await signTransaction(tx);
-  onStatus?.(`Submitting ${label}…`);
-  const raw = signed.serialize();
-  const sig = await connection.sendRawTransaction(raw, {
-    skipPreflight: false, preflightCommitment: 'confirmed', maxRetries: 3,
-  });
-  dbg('submit', `${label} sent`, { sig });
-  return { sig, signed };
 }
 
-/* ============================================================ Markets */
+async function waitForBridge(statusAddress, sig) {
+  const deadline = Date.now() + 45_000;
+
+  while (Date.now() < deadline) {
+    try {
+      const s = await fetchBridgeStatus(statusAddress);
+
+      const arr = Array.isArray(s?.deposits)
+        ? s.deposits
+        : Array.isArray(s)
+          ? s
+          : [];
+
+      const hit = arr.find((d) => {
+        const status = String(
+          d.status ||
+          d.state ||
+          d.bridgeStatus ||
+          ''
+        ).toUpperCase();
+
+        return (
+          d.txHash === sig ||
+          d.sourceTxHash === sig ||
+          d.sigSrc === sig ||
+          status === 'COMPLETED' ||
+          status === 'CONFIRMED' ||
+          status === 'SUCCESS'
+        );
+      });
+
+      if (hit) {
+        dbg('bridge', 'completed', hit);
+        return true;
+      }
+    } catch {}
+
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+
+  dbg('bridge', 'wait timed out; balance poller will continue');
+
+  return false;
+}
+
+async function submitSolTx(signedTx) {
+  const raw = signedTx.serialize();
+
+  const b64 = bytesToBase64(new Uint8Array(raw));
+
+  const r = await jfetch(
+    SOL_RPC,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'sendTransaction',
+        params: [
+          b64,
+          {
+            encoding: 'base64',
+            skipPreflight: false,
+            preflightCommitment: 'confirmed',
+            maxRetries: 5,
+          },
+        ],
+      }),
+    },
+    20000
+  );
+
+  const j = await r.json();
+
+  if (j.error) {
+    throw new Error(j.error.message || 'Solana submit failed');
+  }
+
+  return j.result;
+}
+
+async function depositFromSol({
+  ownerB58,
+  evm,
+  safe,
+  solAtomic,
+  signFn,
+  onStatus,
+}) {
+  onStatus?.('Getting deposit address…');
+
+  const addrs = await getBridgeAddressesCached(evm, safe);
+
+  if (!addrs.svm) {
+    throw new Error('No svm deposit address');
+  }
+
+  onStatus?.('Quoting swap (5% fee included)…');
+
+  // OKX expects `slippage` as a decimal (e.g. 0.5 = 50%). We also send
+  // `slippagePercent` to support newer/alternate endpoint versions.
+  const params = new URLSearchParams({
+    chainIndex: OKX_SOL_CHAIN,
+    chainId: OKX_SOL_CHAIN,
+    fromTokenAddress: SOL_NATIVE_MINT,
+    toTokenAddress: USDC_SOLANA_MINT,
+    amount: String(solAtomic),
+    userWalletAddress: ownerB58,
+    swapReceiverAddress: addrs.svm,
+    slippage: OKX_SLIPPAGE,
+    slippagePercent: OKX_SLIPPAGE,
+  });
+
+  const r = await jfetch(
+    `${OKX_SWAP_PATH}?${params}`,
+    {},
+    15000
+  );
+
+  const j = await r.json();
+
+  if (j.code && j.code !== '0') {
+    throw new Error('OKX swap: ' + (j.msg || j.code));
+  }
+
+  const swap = j.data?.[0];
+
+  const txData =
+    swap?.tx?.data ||
+    swap?.transaction?.data ||
+    swap?.data;
+
+  if (!txData) {
+    throw new Error('OKX returned no tx data');
+  }
+
+  onStatus?.('Confirm in your wallet…');
+
+  const rawBytes =
+    typeof txData === 'string'
+      ? Uint8Array.from(atob(txData), (c) =>
+          c.charCodeAt(0)
+        )
+      : new Uint8Array(txData);
+
+  const tx = VersionedTransaction.deserialize(rawBytes);
+
+  const signed = await signFn(tx);
+
+  onStatus?.('Submitting…');
+
+  const sig = await submitSolTx(signed);
+
+  dbg('deposit-sol', 'submitted', { sig });
+
+  onStatus?.('Bridging to USDC.e (~30s)…');
+
+  await waitForBridge(addrs.svm, sig);
+
+  return { sig };
+}
+
+async function buildUsdcSplitTx({
+  ownerB58,
+  bridgeSvm,
+  totalAtomic,
+}) {
+  const web3 = await import('@solana/web3.js');
+  const spl = await import('@solana/spl-token');
+
+  const {
+    Connection,
+    PublicKey: PK,
+    Transaction,
+    ComputeBudgetProgram,
+  } = web3;
+
+  const {
+    createTransferCheckedInstruction,
+    createAssociatedTokenAccountInstruction,
+    getAssociatedTokenAddress,
+    getAccount,
+  } = spl;
+
+  const origin =
+    (
+      typeof window !== 'undefined' &&
+      window.location?.origin
+    ) || '';
+
+  const conn = new Connection(
+    origin + SOL_RPC,
+    'confirmed'
+  );
+
+  const owner = new PK(ownerB58);
+  const bridge = new PK(bridgeSvm);
+  const fee = new PK(FEE_WALLET_SOL);
+  const mint = new PK(USDC_SOLANA_MINT);
+
+  const total = BigInt(totalAtomic);
+
+  const feeAmt =
+    (total * BigInt(USDC_FEE_PCT * 100)) / 10000n;
+
+  const sendAmt = total - feeAmt;
+
+  if (sendAmt <= 0n) {
+    throw new Error('Deposit amount too small after fee');
+  }
+
+  const fromAta = await getAssociatedTokenAddress(
+    mint,
+    owner
+  );
+
+  const bridgeAta = await getAssociatedTokenAddress(
+    mint,
+    bridge
+  );
+
+  const feeAta = await getAssociatedTokenAddress(
+    mint,
+    fee
+  );
+
+  const ixs = [
+    ComputeBudgetProgram.setComputeUnitPrice({
+      microLamports: 50000,
+    }),
+  ];
+
+  try {
+    await getAccount(conn, bridgeAta);
+  } catch {
+    ixs.push(
+      createAssociatedTokenAccountInstruction(
+        owner,
+        bridgeAta,
+        bridge,
+        mint
+      )
+    );
+  }
+
+  try {
+    await getAccount(conn, feeAta);
+  } catch {
+    ixs.push(
+      createAssociatedTokenAccountInstruction(
+        owner,
+        feeAta,
+        fee,
+        mint
+      )
+    );
+  }
+
+  ixs.push(
+    createTransferCheckedInstruction(
+      fromAta,
+      mint,
+      bridgeAta,
+      owner,
+      sendAmt,
+      6
+    )
+  );
+
+  ixs.push(
+    createTransferCheckedInstruction(
+      fromAta,
+      mint,
+      feeAta,
+      owner,
+      feeAmt,
+      6
+    )
+  );
+
+  const { blockhash } =
+    await conn.getLatestBlockhash('confirmed');
+
+  const tx = new Transaction({
+    recentBlockhash: blockhash,
+    feePayer: owner,
+  });
+
+  for (const ix of ixs) {
+    tx.add(ix);
+  }
+
+  return {
+    tx,
+    sendAmt,
+    feeAmt,
+  };
+}
+
+async function depositFromUsdc({
+  ownerB58,
+  evm,
+  safe,
+  usdcAtomic,
+  signFn,
+  onStatus,
+}) {
+  onStatus?.('Getting deposit address…');
+
+  const addrs = await getBridgeAddressesCached(evm, safe);
+
+  if (!addrs.svm) {
+    throw new Error('No svm deposit address');
+  }
+
+  onStatus?.('Building transfer (95% bridge + 5% fee)…');
+
+  const { tx, sendAmt, feeAmt } =
+    await buildUsdcSplitTx({
+      ownerB58,
+      bridgeSvm: addrs.svm,
+      totalAtomic: usdcAtomic,
+    });
+
+  dbg('deposit-usdc', 'amounts', {
+    sendAmt: sendAmt.toString(),
+    feeAmt: feeAmt.toString(),
+    bridgeSvm: addrs.svm,
+  });
+
+  onStatus?.('Confirm in your wallet…');
+
+  const signed = await signFn(tx);
+
+  onStatus?.('Submitting…');
+
+  const sig = await submitSolTx(signed);
+
+  dbg('deposit-usdc', 'submitted', { sig });
+
+  onStatus?.('Bridging to USDC.e (~30s)…');
+
+  await waitForBridge(addrs.svm, sig);
+
+  return { sig };
+}
+
+async function requestWithdraw({
+  safe,
+  solanaAddress,
+  amountAtomic,
+  onStatus,
+}) {
+  onStatus?.('Initiating withdrawal…');
+
+  const body = {
+    from: safe,
+    to: solanaAddress,
+    chain: 'solana',
+    asset: 'USDC',
+    amount: amountAtomic.toString(),
+  };
+
+  const r = await jfetch(
+    BRIDGE_WITHDRAW,
+    {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(body),
+    },
+    20000
+  );
+
+  const j = await r.json();
+
+  if (j?.error) {
+    throw new Error(j.error);
+  }
+
+  dbg('withdraw', 'submitted', j);
+
+  return j;
+}
 
 async function fetchMarketsByTagSlug(slug) {
-  const url = `${GAMMA_URL}/events?tag_slug=${encodeURIComponent(slug)}&closed=false&order=volume24hr&ascending=false&limit=60`;
-  const r = await fetch(url, { headers: { Accept: 'application/json' } });
-  if (!r.ok) return [];
+  const url =
+    `${GAMMA_URL}/events?tag_slug=${encodeURIComponent(slug)}` +
+    '&closed=false&order=volume24hr&ascending=false&limit=60';
+
+  const r = await fetch(url, {
+    headers: {
+      Accept: 'application/json',
+    },
+  });
+
+  if (!r.ok) {
+    return [];
+  }
+
   return await r.json();
 }
+
 async function fetchMarketsByTagId(tagId) {
-  const url = `${GAMMA_URL}/events?tag_id=${tagId}&related_tags=true&closed=false&order=volume24hr&ascending=false&limit=80`;
-  const r = await fetch(url, { headers: { Accept: 'application/json' } });
-  if (!r.ok) throw new Error(`Gamma ${r.status}`);
+  const url =
+    `${GAMMA_URL}/events?tag_id=${tagId}` +
+    '&related_tags=true&closed=false&order=volume24hr&ascending=false&limit=80';
+
+  const r = await fetch(url, {
+    headers: {
+      Accept: 'application/json',
+    },
+  });
+
+  if (!r.ok) {
+    throw new Error(`Gamma ${r.status}`);
+  }
+
   return await r.json();
 }
+
 function normalizeEvent(ev) {
-  const ms = Array.isArray(ev.markets) ? ev.markets : [];
-  if (ms.length === 0) return null;
+  const ms = Array.isArray(ev.markets)
+    ? ev.markets
+    : [];
+
+  if (ms.length === 0) {
+    return null;
+  }
+
   const m = ms[0];
+
   let outcomePrices = [];
-  try { outcomePrices = typeof m.outcomePrices === 'string' ? JSON.parse(m.outcomePrices) : m.outcomePrices || []; } catch {}
+
+  try {
+    outcomePrices =
+      typeof m.outcomePrices === 'string'
+        ? JSON.parse(m.outcomePrices)
+        : m.outcomePrices || [];
+  } catch {}
+
   let clobTokenIds = [];
-  try { clobTokenIds = typeof m.clobTokenIds === 'string' ? JSON.parse(m.clobTokenIds) : m.clobTokenIds || []; } catch {}
-  const yesPrice = Number(outcomePrices[0] || m.lastTradePrice || 0);
-  const noPrice = Number(outcomePrices[1] || 1 - yesPrice);
+
+  try {
+    clobTokenIds =
+      typeof m.clobTokenIds === 'string'
+        ? JSON.parse(m.clobTokenIds)
+        : m.clobTokenIds || [];
+  } catch {}
+
+  const yesPrice = Number(
+    outcomePrices[0] || m.lastTradePrice || 0
+  );
+
+  const noPrice = Number(
+    outcomePrices[1] || 1 - yesPrice
+  );
+
   return {
-    id: ev.id, slug: ev.slug,
+    id: ev.id,
+    slug: ev.slug,
     title: ev.title || m.question || 'Untitled',
-    childQuestion: ms.length > 1 ? m.question || m.groupItemTitle || null : null,
+    childQuestion:
+      ms.length > 1
+        ? m.question || m.groupItemTitle || null
+        : null,
     image: ev.image || ev.icon || m.image || null,
     volume24h: Number(ev.volume24hr || m.volume24hr || 0),
     liquidity: Number(ev.liquidity || m.liquidity || 0),
     endDate: ev.endDate || m.endDate || null,
-    yesPrice, noPrice,
-    yesPct: Math.round(yesPrice * 100), noPct: Math.round(noPrice * 100),
+    yesPrice,
+    noPrice,
+    yesPct: Math.round(yesPrice * 100),
+    noPct: Math.round(noPrice * 100),
     marketCount: ms.length,
-    conditionId: m.conditionId, clobTokenIds,
+    conditionId: m.conditionId,
+    clobTokenIds,
     negRisk: !!(m.negRisk || ev.negRisk),
-    tickSize: String(m.orderPriceMinTickSize || m.minimum_tick_size || m.tickSize || '0.01'),
+    tickSize: String(
+      m.orderPriceMinTickSize ||
+      m.minimum_tick_size ||
+      m.tickSize ||
+      '0.01'
+    ),
   };
 }
+
 function isTradableMarket(m, h) {
   if (!m || !m.clobTokenIds || m.clobTokenIds.length < 2 || !m.conditionId) return false;
   const y = Number(m.yesPrice) || 0;
@@ -844,31 +1859,51 @@ function isTradableMarket(m, h) {
   return true;
 }
 
-/* ============================================================ CLOB orders */
-
-async function placeMarketOrder({ evmProvider, evmAddress, safeAddress, creds, market, side, amountUsd, isBuy }) {
+async function placeMarketOrder({ getEvmProvider, evmAddress, safeAddress, creds, market, side, amountUsd, isBuy }) {
   const tokenId = side === 'yes' ? market.clobTokenIds[0] : market.clobTokenIds[1];
   if (!tokenId) throw new Error('Token ID missing');
+
   const { clob } = await loadSdks();
   const Side = clob.Side || { BUY: 'BUY', SELL: 'SELL' };
   const OrderType = clob.OrderType || { FOK: 'FOK', FAK: 'FAK', GTC: 'GTC' };
-  const client = await buildClobClient(evmProvider, evmAddress, safeAddress, creds);
+  const client = await buildClobClient(getEvmProvider, evmAddress, safeAddress, creds);
   const price = side === 'yes' ? Number(market.yesPrice) : Number(market.noPrice);
-  if (!Number.isFinite(price) || price <= 0 || price >= 1) throw new Error('Invalid market price');
+
+  if (!Number.isFinite(price) || price <= 0 || price >= 1) {
+    throw new Error('Invalid market price');
+  }
+
   const orderArgs = {
-    tokenID: String(tokenId), price,
+    tokenID: String(tokenId),
+    price,
     size: isBuy ? amountUsd / price : amountUsd,
     side: isBuy ? Side.BUY : Side.SELL,
-    feeRateBps: 0, expiration: 0,
+    feeRateBps: 0,
+    expiration: 0,
     taker: '0x0000000000000000000000000000000000000000',
     builderCode: BUILDER_CODE,
   };
-  const opts = { tickSize: market.tickSize || '0.01', negRisk: !!market.negRisk };
-  dbg('order', 'submitting', { side, isBuy, amount: amountUsd, price, safeAddress });
+
+  const opts = {
+    tickSize: market.tickSize || '0.01',
+    negRisk: !!market.negRisk,
+  };
+
+  dbg('order', 'submitting', {
+    side,
+    isBuy,
+    amount: amountUsd,
+    price,
+    safeAddress,
+    builderCode: BUILDER_CODE,
+  });
+
   const type = OrderType.FAK || OrderType.FOK || OrderType.GTC;
   const resp = await client.createAndPostOrder(orderArgs, opts, type);
+
   if (resp?.error || resp?.errorMsg) throw new Error(resp.error || resp.errorMsg);
   if (resp?.success === false) throw new Error(resp?.errorMsg || 'Order rejected');
+
   dbg('order', 'placed', resp);
   return resp;
 }
@@ -881,20 +1916,29 @@ async function fetchPositions(safe, conditionId, clobTokenIds) {
     if (!r.ok) return null;
     const data = await r.json();
     if (!Array.isArray(data)) return null;
+
     const [yesTid, noTid] = clobTokenIds || [];
-    let yPos = null, nPos = null;
+    let yPos = null;
+    let nPos = null;
+
     for (const p of data) {
       const tid = String(p.asset || p.tokenId || p.token_id || '');
       if (yesTid && tid === String(yesTid)) yPos = p;
       if (noTid && tid === String(noTid)) nPos = p;
     }
-    const sz = (p) => p ? Number(p.size || p.shares || p.balance || 0) : 0;
-    const av = (p) => p ? Number(p.avgPrice || p.average_price || p.avg_price || 0) : 0;
+
+    const sz = p => p ? Number(p.size || p.shares || p.balance || 0) : 0;
+    const av = p => p ? Number(p.avgPrice || p.average_price || p.avg_price || 0) : 0;
+
     return {
-      sharesYes: sz(yPos), sharesNo: sz(nPos),
-      avgPriceYes: av(yPos), avgPriceNo: av(nPos),
+      sharesYes: sz(yPos),
+      sharesNo: sz(nPos),
+      avgPriceYes: av(yPos),
+      avgPriceNo: av(nPos),
     };
-  } catch { return null; }
+  } catch {
+    return null;
+  }
 }
 
 async function fetchBestBid(tokenId) {
@@ -904,45 +1948,29 @@ async function fetchBestBid(tokenId) {
     const d = await r.json();
     const bids = d?.bids || [];
     let best = 0;
-    for (const b of bids) { const p = Number(b.price || b.p || 0); if (p > best) best = p; }
+    for (const b of bids) {
+      const p = Number(b.price || b.p || 0);
+      if (p > best) best = p;
+    }
     return best;
-  } catch { return 0; }
+  } catch {
+    return 0;
+  }
 }
-
-/* ============================================================ Withdraw */
-
-async function requestWithdrawToSolana({ safe, solanaAddress, amountAtomic, onStatus }) {
-  onStatus?.('Initiating withdrawal…');
-  const body = {
-    from: safe, to: solanaAddress, chain: 'solana',
-    asset: 'USDC', amount: amountAtomic.toString(),
-  };
-  const r = await jfetch(BRIDGE_WITHDRAW, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  }, 20000);
-  const j = await r.json();
-  if (j?.error) throw new Error(j.error);
-  dbg('withdraw', 'submitted', j);
-  return j;
-}
-
-/* ============================================================ UI bits */
 
 function MarketSkeleton() {
   return (
-    <div style={{ padding: 10, borderRadius: 13, background: C.card, border: `1px solid ${C.border}`, marginBottom: 7 }}>
+    <div style={{ padding: 10, borderRadius: 14, background: C.card, border: `1px solid ${C.border}`, marginBottom: 7 }}>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-        <div style={{ width: 32, height: 32, borderRadius: 7, background: 'rgba(255,255,255,.04)' }} />
+        <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,.04)' }} />
         <div style={{ flex: 1 }}>
-          <div style={{ height: 10, width: '85%', background: 'rgba(255,255,255,.06)', borderRadius: 4, marginBottom: 5 }} />
-          <div style={{ height: 9, width: '50%', background: 'rgba(255,255,255,.03)', borderRadius: 4 }} />
+          <div style={{ height: 12, width: '85%', background: 'rgba(255,255,255,.06)', borderRadius: 4, marginBottom: 6 }} />
+          <div style={{ height: 10, width: '50%', background: 'rgba(255,255,255,.03)', borderRadius: 4 }} />
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 6 }}>
-        <div style={{ flex: 1, height: 34, background: 'rgba(255,255,255,.03)', borderRadius: 9 }} />
-        <div style={{ flex: 1, height: 34, background: 'rgba(255,255,255,.03)', borderRadius: 9 }} />
+      <div style={{ display: 'flex', gap: 8 }}>
+        <div style={{ flex: 1, height: 34, background: 'rgba(255,255,255,.03)', borderRadius: 10 }} />
+        <div style={{ flex: 1, height: 34, background: 'rgba(255,255,255,.03)', borderRadius: 10 }} />
       </div>
     </div>
   );
@@ -952,16 +1980,17 @@ function MarketCard({ market, onTrade }) {
   const { title, childQuestion, image, yesPct, volume24h, endDate, marketCount } = market;
   const yp = Number(market.yesPrice) || 0;
   const np = Number(market.noPrice) || 0;
-  const upside = (p) => (p < 0.02 || p > 0.98) ? 0 : Math.min(9999, Math.round((1 / p - 1) * 100));
+  const upside = p => (p < 0.02 || p > 0.98) ? 0 : Math.min(9999, Math.round((1 / p - 1) * 100));
   const clamp2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden', textOverflow: 'ellipsis' };
+
   return (
-    <div style={{ padding: 10, borderRadius: 13, background: `linear-gradient(145deg, ${C.card}, ${C.cardHi})`, border: `1px solid ${C.border}`, marginBottom: 7, boxShadow: C.shadow }}>
+    <div style={{ padding: 10, borderRadius: 14, background: `linear-gradient(145deg, ${C.card}, ${C.cardHi})`, border: `1px solid ${C.border}`, marginBottom: 7, boxShadow: C.shadow }}>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-        {image && <img src={image} alt="" onError={(e) => { e.currentTarget.style.display = 'none'; }} style={{ width: 32, height: 32, borderRadius: 7, objectFit: 'cover', flexShrink: 0, background: '#0a1020' }} />}
+        {image && <img src={image} alt="" onError={(e) => { e.currentTarget.style.display = 'none'; }} style={{ width: 32, height: 32, borderRadius: 8, objectFit: 'cover', flexShrink: 0, background: '#0a1020' }} />}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, lineHeight: 1.25, marginBottom: childQuestion ? 2 : 3, ...T.body, ...clamp2 }}>{title}</div>
-          {childQuestion && <div style={{ fontSize: 10, fontWeight: 600, color: C.hl, marginBottom: 3, ...T.body, ...clamp2 }}>{childQuestion}</div>}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, fontSize: 9, color: C.muted, ...T.mono }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, lineHeight: 1.3, marginBottom: childQuestion ? 2 : 4, ...T.body, ...clamp2 }}>{title}</div>
+          {childQuestion && <div style={{ fontSize: 10, fontWeight: 600, color: C.hl, marginBottom: 4, ...T.body, ...clamp2 }}>{childQuestion}</div>}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 9, color: C.muted, ...T.mono }}>
             <span>Vol {formatVol(volume24h)}</span>
             {formatEndDate(endDate) && <><span style={{ opacity: .4 }}>·</span><span>{formatEndDate(endDate)}</span></>}
             {marketCount > 1 && <><span style={{ opacity: .4 }}>·</span><span>{marketCount} outcomes</span></>}
@@ -969,17 +1998,17 @@ function MarketCard({ market, onTrade }) {
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0, minWidth: 38 }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: yesPct >= 50 ? C.yes : C.no, lineHeight: 1, ...T.display }}>{yesPct}%</div>
-          <div style={{ fontSize: 8, color: C.muted, marginTop: 2, ...T.mono }}>YES</div>
+          <div style={{ fontSize: 9, color: C.muted, marginTop: 2, ...T.mono }}>YES</div>
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 6 }}>
-        <button onClick={() => onTrade(market, 'yes')} style={{ flex: 1, padding: '7px 8px', borderRadius: 9, background: C.yesDim, border: '1px solid rgba(0,212,163,.30)', color: C.yes, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 0, ...T.body }}>
+      <div style={{ display: 'flex', gap: 8 }}>
+        <button onClick={() => onTrade(market, 'yes')} style={{ flex: 1, padding: 8, borderRadius: 10, background: C.yesDim, border: '1px solid rgba(0,212,163,.30)', color: C.yes, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 1, ...T.body }}>
           <span style={{ fontWeight: 700, fontSize: 12 }}>Yes · ${yp.toFixed(2)}</span>
-          {upside(yp) > 0 && <span style={{ fontSize: 9, fontWeight: 600, opacity: .8, ...T.mono }}>+{upside(yp)}%</span>}
+          {upside(yp) > 0 && <span style={{ fontSize: 10, fontWeight: 600, opacity: .8, ...T.mono }}>+{upside(yp)}% upside</span>}
         </button>
-        <button onClick={() => onTrade(market, 'no')} style={{ flex: 1, padding: '7px 8px', borderRadius: 9, background: C.noDim, border: '1px solid rgba(255,95,122,.30)', color: C.no, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 0, ...T.body }}>
+        <button onClick={() => onTrade(market, 'no')} style={{ flex: 1, padding: 8, borderRadius: 10, background: C.noDim, border: '1px solid rgba(255,95,122,.30)', color: C.no, cursor: 'pointer', display: 'flex', flexDirection: 'column', gap: 1, ...T.body }}>
           <span style={{ fontWeight: 700, fontSize: 12 }}>No · ${np.toFixed(2)}</span>
-          {upside(np) > 0 && <span style={{ fontSize: 9, fontWeight: 600, opacity: .8, ...T.mono }}>+{upside(np)}%</span>}
+          {upside(np) > 0 && <span style={{ fontSize: 10, fontWeight: 600, opacity: .8, ...T.mono }}>+{upside(np)}% upside</span>}
         </button>
       </div>
     </div>
@@ -989,13 +2018,18 @@ function MarketCard({ market, onTrade }) {
 function DebugPanel({ open, onToggle }) {
   const log = useDbgLog();
   const ref = useRef(null);
-  useEffect(() => { if (open && ref.current) ref.current.scrollTop = ref.current.scrollHeight; }, [log.length, open]);
+
+  useEffect(() => {
+    if (open && ref.current) ref.current.scrollTop = ref.current.scrollHeight;
+  }, [log.length, open]);
+
   const copy = () => {
     try {
-      const t = log.map((e) => `${new Date(e.ts).toISOString().slice(11, 23)} [${e.scope}] ${e.msg}${e.data ? ' ' + JSON.stringify(e.data) : ''}`).join('\n');
+      const t = log.map(e => `${new Date(e.ts).toISOString().slice(11, 23)} [${e.scope}] ${e.msg}${e.data ? ' ' + JSON.stringify(e.data) : ''}`).join('\n');
       navigator.clipboard?.writeText(t);
     } catch {}
   };
+
   return (
     <div style={{ marginBottom: 12, borderRadius: 12, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`, overflow: 'hidden' }}>
       <div onClick={onToggle} style={{ padding: '9px 12px', display: 'flex', justifyContent: 'space-between', cursor: 'pointer' }}>
@@ -1040,178 +2074,248 @@ function ErrorLine({ msg }) {
 
 function PrimaryButton({ onClick, disabled, label }) {
   return (
-    <button onClick={disabled ? undefined : onClick} disabled={disabled} style={{ width: '100%', padding: 12, borderRadius: 11, background: `linear-gradient(135deg, ${C.hl}, ${C.hl2})`, color: C.bg, fontWeight: 800, fontSize: 14, border: 'none', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? .55 : 1, ...T.body }}>
+    <button onClick={disabled ? undefined : onClick} disabled={disabled} style={{ width: '100%', padding: 11, borderRadius: 10, background: `linear-gradient(135deg, ${C.hl}, ${C.hl2})`, color: C.bg, fontWeight: 800, fontSize: 13, border: 'none', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? .55 : 1, ...T.body }}>
       {label}
     </button>
   );
 }
 
-/* ============================================================ EVM wallet picker modal */
-
-function EvmWalletPicker({ open, wallets, onPick, onClose, connecting }) {
-  if (!open) return null;
-  const sorted = [...wallets].sort((a, b) => {
-    const order = { 'io.metamask': 0, 'app.phantom': 1, 'io.rabby': 2, 'com.coinbase.wallet': 3 };
-    return (order[a.info.rdns] ?? 99) - (order[b.info.rdns] ?? 99);
-  });
-  return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(3,6,15,.78)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 340, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, border: `1px solid ${C.borderHi}`, borderRadius: 14, padding: 14, boxShadow: C.shadowLg, ...T.body }}>
-        <div style={{ fontSize: 14, fontWeight: 800, color: C.ink, marginBottom: 3, ...T.display }}>Connect EVM wallet</div>
-        <div style={{ fontSize: 10, color: C.muted, marginBottom: 10 }}>Polymarket trades on Polygon.</div>
-        {sorted.length === 0 ? (
-          <div style={{ padding: 12, borderRadius: 8, background: 'rgba(255,95,122,.08)', border: '1px solid rgba(255,95,122,.25)', color: C.no, fontSize: 11 }}>
-            No EVM wallets detected. Install MetaMask, Rabby, or Phantom (with EVM mode).
-          </div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
-            {sorted.map((w) => (
-              <button key={w.info.rdns || w.info.uuid} onClick={() => !connecting && onPick(w)} disabled={connecting}
-                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderRadius: 9, background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, color: C.ink, cursor: connecting ? 'wait' : 'pointer', textAlign: 'left' }}>
-                {w.info.icon
-                  ? <img src={w.info.icon} alt="" style={{ width: 22, height: 22, borderRadius: 5 }} />
-                  : <div style={{ width: 22, height: 22, borderRadius: 5, background: C.hlDim }} />}
-                <span style={{ flex: 1, fontWeight: 700, fontSize: 12 }}>{w.info.name}</span>
-              </button>
-            ))}
-          </div>
-        )}
-        <button onClick={onClose} style={{ marginTop: 10, width: '100%', padding: 8, borderRadius: 8, background: 'transparent', border: `1px solid ${C.border}`, color: C.muted, fontSize: 11, fontWeight: 600, cursor: 'pointer', ...T.mono }}>Cancel</button>
-      </div>
-    </div>
-  );
-}
-
-/* ============================================================ Funding sheet */
-
-function FundingSheet({
-  open, onClose,
-  evmAddress, safeAddress, tradingBalance,
-  solanaAddress, solBalance,
-  onCollectWinnings, collectStatus, collectStatusMsg, collectError,
-  setupStatus, setupError, onRetrySetup, onReset,
-  onDisconnectEvm, onDisconnectSol,
-}) {
-  const [tab, setTab] = useState('receive');
-  const [withdrawSolAddr, setWithdrawSolAddr] = useState('');
-  const [withdrawUsd, setWithdrawUsd] = useState('');
-  const [copied, setCopied] = useState('');
+function FundingSheet({ open, onClose, evmAddress, safeAddress, tradingBalance, fundingPubkey, solBalance, usdcBalance, signSolanaTx, onReset, refreshAll }) {
+  const [tab, setTab] = useState('usdc');
+  const [amount, setAmount] = useState('25');
+  const [status, setStatus] = useState('idle');
+  const [statusMsg, setStatusMsg] = useState('');
+  const [error, setError] = useState('');
+  const [copied, setCopied] = useState(false);
   const [dbgOpen, setDbgOpen] = useState(false);
+  const [withdrawSolAddr, setWithdrawSolAddr] = useState('');
+
   useBodyLock(open);
+
   useEffect(() => {
-    if (open && solanaAddress && !withdrawSolAddr) setWithdrawSolAddr(solanaAddress);
-  }, [open, solanaAddress, withdrawSolAddr]);
+    if (!open) {
+      setStatus('idle');
+      setStatusMsg('');
+      setError('');
+    }
+    if (open && fundingPubkey && !withdrawSolAddr) setWithdrawSolAddr(fundingPubkey);
+  }, [open, fundingPubkey, withdrawSolAddr]);
+
   if (!open) return null;
+
+  const usdcUsd = Number(usdcBalance) / 1e6;
   const tradeUsd = Number(tradingBalance) / 1e6;
-  const solUi = Number(solBalance) / 1e9;
-  const usd = Number(withdrawUsd) || 0;
-  const handleCopy = async (text, kind) => {
-    const ok = await copyToClipboard(text);
-    if (ok) { setCopied(kind); setTimeout(() => setCopied(''), 1500); }
+  const usd = Number(amount) || 0;
+  const busy = status === 'working';
+
+  const handleDepositUsdc = async () => {
+    if (!fundingPubkey || !safeAddress) return;
+    if (usd < MIN_DEPOSIT_USD) { setError(`Min $${MIN_DEPOSIT_USD}`); return; }
+    if (usd > usdcUsd) { setError(`Max ${fmtUsd(usdcUsd, 2)}`); return; }
+
+    setStatus('working');
+    setError('');
+    setStatusMsg('');
+
+    try {
+      const usdcAtomic = BigInt(Math.floor(usd * 1e6));
+      await depositFromUsdc({ ownerB58: fundingPubkey, evm: evmAddress, safe: safeAddress, usdcAtomic, signFn: signSolanaTx, onStatus: setStatusMsg });
+      setStatus('done');
+      setTimeout(() => { refreshAll?.(); setStatus('idle'); setStatusMsg(''); }, 4000);
+    } catch (e) {
+      const m = e?.message || 'Deposit failed';
+      setError(/reject|cancel|user/i.test(m) ? 'Cancelled' : m);
+      setStatus('error');
+      setStatusMsg('');
+      setDbgOpen(true);
+      setTimeout(() => setStatus('idle'), 5000);
+    }
   };
-  const busy = collectStatus === 'working' || setupStatus === 'working';
-  const handleWithdraw = () => {
-    if (!safeAddress || !withdrawSolAddr || withdrawSolAddr.length < 32) return;
-    if (usd < 1 || usd > tradeUsd) return;
-    const amountAtomic = BigInt(Math.floor(usd * 1e6));
-    onCollectWinnings?.({ solanaAddress: withdrawSolAddr, amountAtomic });
+
+  const handleDepositSol = async () => {
+    if (!fundingPubkey || !safeAddress) return;
+    const solAmt = Number(amount);
+    if (!(solAmt > 0)) { setError('Invalid amount'); return; }
+    const solBal = Number(solBalance) / 1e9;
+    if (solAmt > solBal - 0.005) { setError('Insufficient SOL (leave 0.005 for fees)'); return; }
+
+    setStatus('working');
+    setError('');
+    setStatusMsg('');
+
+    try {
+      const solAtomic = BigInt(Math.floor(solAmt * 1e9));
+      await depositFromSol({ ownerB58: fundingPubkey, evm: evmAddress, safe: safeAddress, solAtomic, signFn: signSolanaTx, onStatus: setStatusMsg });
+      setStatus('done');
+      setTimeout(() => { refreshAll?.(); setStatus('idle'); setStatusMsg(''); }, 4000);
+    } catch (e) {
+      const m = e?.message || 'Deposit failed';
+      setError(/reject|cancel|user/i.test(m) ? 'Cancelled' : m);
+      setStatus('error');
+      setStatusMsg('');
+      setDbgOpen(true);
+      setTimeout(() => setStatus('idle'), 5000);
+    }
   };
+
+  const handleWithdraw = async () => {
+    if (!safeAddress) return;
+    if (!withdrawSolAddr || withdrawSolAddr.length < 32) { setError('Invalid Solana address'); return; }
+    if (usd < 1) { setError('Min $1'); return; }
+    if (usd > tradeUsd) { setError(`Max ${fmtUsd(tradeUsd, 2)}`); return; }
+
+    setStatus('working');
+    setError('');
+    setStatusMsg('');
+
+    try {
+      const amountAtomic = BigInt(Math.floor(usd * 1e6));
+      await requestWithdraw({ safe: safeAddress, solanaAddress: withdrawSolAddr, amountAtomic, onStatus: setStatusMsg });
+      setStatus('done');
+      setStatusMsg('Withdrawal submitted — funds arrive in 2-5 min');
+      setTimeout(() => { refreshAll?.(); setStatus('idle'); setStatusMsg(''); }, 6000);
+    } catch (e) {
+      const m = e?.message || 'Withdraw failed';
+      setError(/reject|cancel|user/i.test(m) ? 'Cancelled' : m);
+      setStatus('error');
+      setStatusMsg('');
+      setDbgOpen(true);
+      setTimeout(() => setStatus('idle'), 5000);
+    }
+  };
+
+  const handleCopy = async () => {
+    if (!safeAddress) return;
+    const ok = await copyToClipboard(safeAddress);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    }
+  };
+
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', cursor: busy ? 'wait' : 'pointer' }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: '12px 12px calc(env(safe-area-inset-bottom) + 14px)', boxShadow: C.shadowLg, maxHeight: '92dvh', overflowY: 'auto' }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: '12px 12px calc(env(safe-area-inset-bottom) + 16px)', boxShadow: C.shadowLg, maxHeight: '92dvh', overflowY: 'auto' }}>
         <div style={{ width: 32, height: 3, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 10px' }} />
-        <div style={{ fontSize: 15, fontWeight: 800, color: C.ink, marginBottom: 3, ...T.display }}>Account</div>
-        <div style={{ fontSize: 11, color: C.muted, marginBottom: 2, ...T.body }}>SOL: <span style={{ color: C.hl, fontWeight: 700 }}>{solUi.toFixed(4)}</span></div>
-        <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, ...T.body }}>Polymarket: <span style={{ color: C.hl, fontWeight: 700 }}>{fmtUsd(tradeUsd, 2)}</span></div>
-        <DebugPanel open={dbgOpen} onToggle={() => setDbgOpen((o) => !o)} />
-        {setupStatus === 'error' && setupError && (
-          <div style={{ marginBottom: 10, padding: 8, borderRadius: 8, background: 'rgba(255,95,122,.07)', border: `1px solid ${C.no}33` }}>
-            <div style={{ fontSize: 10, color: C.no, fontWeight: 700, marginBottom: 3 }}>Safe setup failed</div>
-            <div style={{ fontSize: 9.5, color: C.muted, marginBottom: 6, ...T.mono, wordBreak: 'break-word' }}>{setupError}</div>
-            <button onClick={onRetrySetup} style={{ padding: '5px 10px', borderRadius: 6, background: C.no + '22', border: `1px solid ${C.no}55`, color: C.no, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>↻ Retry</button>
-          </div>
-        )}
-        <div style={{ display: 'flex', gap: 3, marginBottom: 10, padding: 2, background: 'rgba(255,255,255,.03)', borderRadius: 8 }}>
+        <div style={{ fontSize: 15, fontWeight: 800, color: C.ink, marginBottom: 2, ...T.display }}>Account</div>
+        <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, ...T.body }}>Balance: <span style={{ color: C.hl, fontWeight: 700 }}>{fmtUsd(tradeUsd, 2)}</span></div>
+
+        <DebugPanel open={dbgOpen} onToggle={() => setDbgOpen(o => !o)} />
+
+        <div style={{ display: 'flex', gap: 4, marginBottom: 10, padding: 2, background: 'rgba(255,255,255,.03)', borderRadius: 9 }}>
           {[
-            { id: 'receive', label: 'Wallets' },
-            { id: 'collect', label: 'Collect' },
-            { id: 'addr', label: 'Safe' },
-          ].map((t) => (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{ flex: 1, padding: '7px 4px', borderRadius: 6, background: tab === t.id ? C.hlDim : 'transparent', border: `1px solid ${tab === t.id ? C.borderHi : 'transparent'}`, color: tab === t.id ? C.hl : C.muted, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>{t.label}</button>
+            { id: 'usdc', label: 'USDC' },
+            { id: 'sol', label: 'SOL' },
+            { id: 'addr', label: 'Address' },
+            { id: 'wd', label: 'Withdraw' },
+          ].map(t => (
+            <button key={t.id} onClick={() => { setTab(t.id); setAmount(t.id === 'sol' ? '0.1' : t.id === 'wd' ? String(Math.floor(tradeUsd)) : '25'); setError(''); }} disabled={t.id === 'sol' && !fundingPubkey} style={{ flex: 1, padding: '6px 4px', borderRadius: 7, background: tab === t.id ? C.hlDim : 'transparent', border: `1px solid ${tab === t.id ? C.borderHi : 'transparent'}`, color: tab === t.id ? C.hl : C.muted, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>
+              {t.label}
+            </button>
           ))}
         </div>
 
-        {tab === 'receive' && (
-          <div style={{ padding: 10, borderRadius: 10, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
-            <div style={{ fontSize: 10, color: C.hl, fontWeight: 800, marginBottom: 6, ...T.display }}>SOLANA WALLET</div>
-            <div style={{ padding: '8px 10px', borderRadius: 8, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, ...T.mono, fontSize: 10, color: C.ink, wordBreak: 'break-all', marginBottom: 6 }}>{solanaAddress || 'Not connected'}</div>
-            {solanaAddress && (
-              <div style={{ display: 'flex', gap: 5, marginBottom: 10 }}>
-                <button onClick={() => handleCopy(solanaAddress, 'sol')} style={{ flex: 1, padding: 7, borderRadius: 7, background: copied === 'sol' ? C.yesDim : C.hlDim, border: `1px solid ${copied === 'sol' ? C.yes + '55' : C.borderHi}`, color: copied === 'sol' ? C.yes : C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>{copied === 'sol' ? '✓ Copied' : 'Copy'}</button>
-                <button onClick={onDisconnectSol} style={{ flex: 1, padding: 7, borderRadius: 7, background: 'transparent', border: `1px solid ${C.no}33`, color: C.no, fontSize: 10, fontWeight: 600, cursor: 'pointer', ...T.mono }}>Disconnect</button>
-              </div>
-            )}
-            <div style={{ fontSize: 10, color: C.hl, fontWeight: 800, marginBottom: 6, ...T.display }}>EVM WALLET (POLYGON)</div>
-            <div style={{ padding: '8px 10px', borderRadius: 8, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, ...T.mono, fontSize: 10, color: C.ink, wordBreak: 'break-all', marginBottom: 6 }}>{evmAddress || 'Not connected'}</div>
-            {evmAddress && (
-              <div style={{ display: 'flex', gap: 5 }}>
-                <button onClick={() => handleCopy(evmAddress, 'evm')} style={{ flex: 1, padding: 7, borderRadius: 7, background: copied === 'evm' ? C.yesDim : C.hlDim, border: `1px solid ${copied === 'evm' ? C.yes + '55' : C.borderHi}`, color: copied === 'evm' ? C.yes : C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>{copied === 'evm' ? '✓ Copied' : 'Copy'}</button>
-                <button onClick={onDisconnectEvm} style={{ flex: 1, padding: 7, borderRadius: 7, background: 'transparent', border: `1px solid ${C.no}33`, color: C.no, fontSize: 10, fontWeight: 600, cursor: 'pointer', ...T.mono }}>Disconnect</button>
-              </div>
-            )}
-            <div style={{ fontSize: 9, color: C.muted2, marginTop: 8, ...T.mono }}>Send SOL to your Solana wallet. On Buy, 5% fee, 95% to Polymarket.</div>
+        {tab === 'usdc' && (
+          <div style={{ padding: 10, borderRadius: 12, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+              <div style={{ fontSize: 10, color: C.hl, fontWeight: 800, ...T.display }}>DEPOSIT USDC (SOLANA)</div>
+              <div style={{ fontSize: 10, color: C.muted, ...T.mono }}>{fmtUsd(usdcUsd, 2)} available</div>
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 9, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, marginBottom: 6 }}>
+              <span style={{ fontSize: 15, color: C.muted, ...T.display }}>$</span>
+              <input value={amount} onChange={(e) => { setAmount(cleanAmount(e.target.value)); setError(''); }} disabled={busy} inputMode="decimal" style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 18, fontWeight: 700, ...T.display }} />
+              <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>USDC</span>
+            </div>
+
+            <div style={{ fontSize: 10, color: C.muted2, marginBottom: 10, ...T.mono }}>5% fee · You receive {fmtUsd(usd * 0.95, 2)} for trading</div>
+
+            <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+              {['10', '25', '100', '250'].map(v => (
+                <button key={v} onClick={() => setAmount(v)} disabled={busy} style={{ flex: 1, padding: 7, borderRadius: 8, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 11, fontWeight: 600, cursor: 'pointer', ...T.mono }}>${v}</button>
+              ))}
+              <button onClick={() => setAmount(String(Math.floor(usdcUsd * 100) / 100))} disabled={busy || usdcUsd <= 0} style={{ flex: 1, padding: 7, borderRadius: 8, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>Max</button>
+            </div>
+
+            {statusMsg && <StatusLine msg={statusMsg} />}
+            {error && <ErrorLine msg={error} />}
+            {status === 'done' && <div style={{ marginBottom: 8, padding: 8, background: 'rgba(0,212,163,.10)', border: `1px solid ${C.yes}55`, borderRadius: 10, fontSize: 11, color: C.yes, fontWeight: 700 }}>✓ Deposit submitted</div>}
+            <PrimaryButton onClick={handleDepositUsdc} disabled={busy || !fundingPubkey} label={busy ? 'Depositing…' : `Deposit ${fmtUsd(usd, 2)}`} />
           </div>
         )}
 
-        {tab === 'collect' && (
-          <div style={{ padding: 10, borderRadius: 10, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-              <div style={{ fontSize: 10, color: C.hl, fontWeight: 800, ...T.display }}>COLLECT WINNINGS</div>
-              <div style={{ fontSize: 9, color: C.muted, ...T.mono }}>{fmtUsd(tradeUsd, 2)}</div>
+        {tab === 'sol' && (
+          <div style={{ padding: 10, borderRadius: 12, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+              <div style={{ fontSize: 10, color: C.hl, fontWeight: 800, ...T.display }}>DEPOSIT SOL</div>
+              <div style={{ fontSize: 10, color: C.muted, ...T.mono }}>{(Number(solBalance) / 1e9).toFixed(4)} SOL available</div>
             </div>
-            <div style={{ padding: '7px 9px', borderRadius: 8, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, marginBottom: 6 }}>
-              <div style={{ fontSize: 8.5, color: C.muted2, marginBottom: 2, ...T.mono }}>SOLANA ADDRESS</div>
-              <input value={withdrawSolAddr} onChange={(e) => setWithdrawSolAddr(e.target.value.trim())} disabled={busy} placeholder="Solana address…" style={{ width: '100%', background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 10, ...T.mono }} />
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 9, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, marginBottom: 6 }}>
+              <input value={amount} onChange={(e) => { setAmount(cleanAmount(e.target.value)); setError(''); }} disabled={busy} inputMode="decimal" style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 18, fontWeight: 700, ...T.display }} />
+              <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>SOL</span>
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 8, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, marginBottom: 8 }}>
-              <span style={{ fontSize: 16, color: C.muted, ...T.display }}>$</span>
-              <input value={withdrawUsd} onChange={(e) => setWithdrawUsd(cleanAmount(e.target.value))} disabled={busy} inputMode="decimal" placeholder="0.00" style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 17, fontWeight: 700, ...T.display }} />
-              <span style={{ fontSize: 9, color: C.muted, ...T.mono }}>USDC</span>
+
+            <div style={{ fontSize: 10, color: C.muted2, marginBottom: 10, ...T.mono }}>Auto-swap to USDC · 5% fee included</div>
+
+            <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
+              {['0.1', '0.5', '1', '5'].map(v => (
+                <button key={v} onClick={() => setAmount(v)} disabled={busy} style={{ flex: 1, padding: 7, borderRadius: 8, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 11, fontWeight: 600, cursor: 'pointer', ...T.mono }}>{v}</button>
+              ))}
+              <button onClick={() => setAmount(String(Math.max(0, Number(solBalance) / 1e9 - 0.005).toFixed(4)))} disabled={busy} style={{ flex: 1, padding: 7, borderRadius: 8, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>Max</button>
             </div>
-            <button onClick={() => setWithdrawUsd(String(Math.floor(tradeUsd * 100) / 100))} disabled={busy || tradeUsd <= 0} style={{ width: '100%', padding: 6, borderRadius: 7, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', marginBottom: 8, ...T.mono }}>Max</button>
-            {collectStatusMsg && <StatusLine msg={collectStatusMsg} />}
-            {collectError && <ErrorLine msg={collectError} />}
-            {collectStatus === 'done' && <div style={{ marginBottom: 6, padding: 7, background: 'rgba(0,212,163,.10)', border: `1px solid ${C.yes}55`, borderRadius: 8, fontSize: 10, color: C.yes, fontWeight: 700 }}>✓ Withdrawal submitted</div>}
-            <PrimaryButton onClick={handleWithdraw} disabled={busy || usd < 1 || usd > tradeUsd || !withdrawSolAddr} label={busy ? 'Working…' : `Withdraw ${fmtUsd(usd, 2)}`} />
+
+            {statusMsg && <StatusLine msg={statusMsg} />}
+            {error && <ErrorLine msg={error} />}
+            {status === 'done' && <div style={{ marginBottom: 8, padding: 8, background: 'rgba(0,212,163,.10)', border: `1px solid ${C.yes}55`, borderRadius: 10, fontSize: 11, color: C.yes, fontWeight: 700 }}>✓ Deposit submitted</div>}
+            <PrimaryButton onClick={handleDepositSol} disabled={busy || !fundingPubkey} label={busy ? 'Depositing…' : `Deposit ${amount} SOL`} />
           </div>
         )}
 
         {tab === 'addr' && (
-          <div style={{ padding: 10, borderRadius: 10, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
-            <div style={{ fontSize: 10, color: C.hl, fontWeight: 800, marginBottom: 6, ...T.display }}>POLYMARKET SAFE</div>
-            <div style={{ padding: '8px 10px', borderRadius: 8, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, ...T.mono, fontSize: 10, color: C.ink, wordBreak: 'break-all', marginBottom: 8 }}>{safeAddress || 'Connect EVM wallet first'}</div>
-            {safeAddress && (
-              <button onClick={() => handleCopy(safeAddress, 'safe')} style={{ width: '100%', padding: 8, borderRadius: 8, background: copied === 'safe' ? C.yesDim : C.hlDim, border: `1px solid ${copied === 'safe' ? C.yes + '55' : C.borderHi}`, color: copied === 'safe' ? C.yes : C.hl, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>{copied === 'safe' ? '✓ Copied' : 'Copy Safe address'}</button>
-            )}
+          <div style={{ padding: 10, borderRadius: 12, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
+            <div style={{ fontSize: 10, color: C.hl, fontWeight: 800, marginBottom: 6, ...T.display }}>YOUR POLYGON TRADING ADDRESS</div>
+            <div style={{ padding: '10px 12px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, ...T.mono, fontSize: 11, color: C.ink, wordBreak: 'break-all', marginBottom: 10 }}>{safeAddress || 'Setting up…'}</div>
+            <button onClick={handleCopy} disabled={!safeAddress} style={{ width: '100%', padding: 10, borderRadius: 10, background: copied ? C.yesDim : C.hlDim, border: `1px solid ${copied ? C.yes + '55' : C.borderHi}`, color: copied ? C.yes : C.hl, fontSize: 12, fontWeight: 700, cursor: safeAddress ? 'pointer' : 'not-allowed', ...T.mono }}>{copied ? '✓ Copied' : 'Copy address'}</button>
+            <div style={{ fontSize: 10, color: C.muted2, marginTop: 8, ...T.mono }}>⚠ Send USDC.e on Polygon ONLY. Wrong token/network = lost funds.</div>
           </div>
         )}
 
-        <button onClick={onReset} style={{ width: '100%', padding: 8, borderRadius: 8, background: 'rgba(255,95,122,.05)', border: `1px solid ${C.no}33`, color: C.no, fontSize: 10, fontWeight: 600, cursor: 'pointer', marginTop: 4, ...T.mono }}>↻ Reset Polymarket account</button>
+        {tab === 'wd' && (
+          <div style={{ padding: 10, borderRadius: 12, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
+              <div style={{ fontSize: 10, color: C.hl, fontWeight: 800, ...T.display }}>WITHDRAW TO SOLANA</div>
+              <div style={{ fontSize: 10, color: C.muted, ...T.mono }}>{fmtUsd(tradeUsd, 2)} available</div>
+            </div>
+
+            <div style={{ padding: '8px 10px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, marginBottom: 8 }}>
+              <div style={{ fontSize: 9, color: C.muted2, marginBottom: 2, ...T.mono }}>SOLANA ADDRESS</div>
+              <input value={withdrawSolAddr} onChange={(e) => { setWithdrawSolAddr(e.target.value.trim()); setError(''); }} disabled={busy} placeholder="Solana address…" style={{ width: '100%', background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 11, ...T.mono }} />
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 9, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, marginBottom: 8 }}>
+              <span style={{ fontSize: 15, color: C.muted, ...T.display }}>$</span>
+              <input value={amount} onChange={(e) => { setAmount(cleanAmount(e.target.value)); setError(''); }} disabled={busy} inputMode="decimal" style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 18, fontWeight: 700, ...T.display }} />
+              <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>USDC</span>
+            </div>
+
+            <button onClick={() => setAmount(String(Math.floor(tradeUsd * 100) / 100))} disabled={busy || tradeUsd <= 0} style={{ width: '100%', padding: 7, borderRadius: 8, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 11, fontWeight: 700, cursor: 'pointer', marginBottom: 10, ...T.mono }}>Max</button>
+
+            {statusMsg && <StatusLine msg={statusMsg} />}
+            {error && <ErrorLine msg={error} />}
+            {status === 'done' && <div style={{ marginBottom: 8, padding: 8, background: 'rgba(0,212,163,.10)', border: `1px solid ${C.yes}55`, borderRadius: 10, fontSize: 11, color: C.yes, fontWeight: 700 }}>{statusMsg || '✓ Withdrawal submitted'}</div>}
+            <PrimaryButton onClick={handleWithdraw} disabled={busy} label={busy ? 'Withdrawing…' : `Withdraw ${fmtUsd(usd, 2)}`} />
+          </div>
+        )}
+
+        <button onClick={onReset} style={{ width: '100%', padding: 10, borderRadius: 10, background: 'rgba(255,95,122,.05)', border: `1px solid ${C.no}33`, color: C.no, fontSize: 11, fontWeight: 600, cursor: 'pointer', marginTop: 6, ...T.mono }}>↻ Reset trading account (if stuck)</button>
       </div>
     </div>
   );
 }
 
-/* ============================================================ Order drawer */
-
-function OrderDrawer({
-  market, side, onClose,
-  evmAddress, evmProvider, safeAddress, creds,
-  solBalance, solanaAddress,
-  signSolanaTx, solConnection,
-  refreshAll,
-}) {
-  const [amountSol, setAmountSol] = useState('0.05');
+function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, safeAddress, tradingBalance, onNeedFunds, refreshAll }) {
+  const [amount, setAmount] = useState('10');
   const [status, setStatus] = useState('idle');
   const [statusMsg, setStatusMsg] = useState('');
   const [error, setError] = useState('');
@@ -1219,10 +2323,13 @@ function OrderDrawer({
   const [bids, setBids] = useState({ yes: 0, no: 0 });
   const [sellStatus, setSellStatus] = useState('idle');
   const [dbgOpen, setDbgOpen] = useState(false);
+
   useBodyLock(!!market);
+
   useEffect(() => {
     if (!market || !safeAddress) return;
     let alive = true;
+
     const tick = async () => {
       try {
         const [p, yb, nb] = await Promise.all([
@@ -1235,19 +2342,28 @@ function OrderDrawer({
         setBids({ yes: yb, no: nb });
       } catch {}
     };
+
     tick();
     const id = setInterval(tick, 8000);
-    return () => { alive = false; clearInterval(id); };
+
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
   }, [market, safeAddress]);
+
   if (!market) return null;
+
   const price = side === 'yes' ? market.yesPrice : market.noPrice;
-  const sol = Number(amountSol) || 0;
-  const solLamports = BigInt(Math.floor(sol * 1e9));
+  const usd = Number(amount) || 0;
+  const shares = price > 0 ? usd / price : 0;
+  const upside = usd > 0 ? ((shares - usd) / usd) * 100 : 0;
   const sideColor = side === 'yes' ? C.yes : C.no;
   const sideDim = side === 'yes' ? C.yesDim : C.noDim;
-  const solUi = Number(solBalance) / 1e9;
-  const solAvailableLamports = Math.max(0, Number(solBalance) - SOL_NETWORK_RESERVE_LAMPORTS);
-  const solAvailableUi = solAvailableLamports / 1e9;
+  const tradeUsd = Number(tradingBalance) / 1e6;
+  const needsFunds = usd > tradeUsd;
+  const busy = status === 'working' || sellStatus === 'selling';
+  const canBuy = !busy && usd >= MIN_TRADE_USD && evmAddress && safeAddress && !needsFunds && market.clobTokenIds?.length >= 2;
   const held = side === 'yes' ? Number(pos?.sharesYes || 0) : Number(pos?.sharesNo || 0);
   const avgPx = side === 'yes' ? Number(pos?.avgPriceYes || 0) : Number(pos?.avgPriceNo || 0);
   const bid = side === 'yes' ? bids.yes : bids.no;
@@ -1256,77 +2372,61 @@ function OrderDrawer({
   const pnl = value - cost;
   const pnlPct = cost > 0 ? (pnl / cost) * 100 : 0;
   const hasPos = held > 0.01;
-  const busy = status === 'working' || sellStatus === 'selling';
 
   const handleBuy = async () => {
-    if (busy) return;
-    if (!solanaAddress || !safeAddress || !creds) { setError('Wallets not ready'); return; }
-    if (sol <= 0) { setError('Enter a SOL amount'); return; }
-    if (Number(solLamports) > solAvailableLamports) { setError(`Not enough SOL. Available: ${solAvailableUi.toFixed(4)}`); return; }
-    if (Number(solLamports) < MIN_SOL_LAMPORTS_PER_TRADE) { setError(`Min ${(MIN_SOL_LAMPORTS_PER_TRADE / 1e9).toFixed(3)} SOL`); return; }
-    setStatus('working'); setError(''); setStatusMsg('');
+    if (needsFunds) {
+      onNeedFunds?.();
+      return;
+    }
+    if (usd < MIN_TRADE_USD) {
+      setError(`Min $${MIN_TRADE_USD}`);
+      return;
+    }
+
+    setStatus('working');
+    setError('');
+    setStatusMsg('');
+
     try {
-      setStatusMsg('Getting bridge address…');
-      const addrs = await getBridgeAddressesCached(evmAddress, safeAddress);
-      if (!addrs.svm) throw new Error('No SVM bridge address');
-      const balanceBefore = await fetchSafeBalance(safeAddress);
-      dbg('buy', 'starting', { solLamports: solLamports.toString(), safeBalanceBefore: balanceBefore.toString(), side });
-      const { tx } = await buildSolDepositTx({
-        ownerB58: solanaAddress, bridgeSvm: addrs.svm,
-        totalLamports: solLamports, connection: solConnection,
-      });
-      const { sig } = await simulateSignSubmit({
-        tx, signTransaction: signSolanaTx, connection: solConnection,
-        onStatus: setStatusMsg, label: 'SOL deposit',
-      });
-      setStatusMsg('Bridging SOL → USDC.e (~30-60s)…');
-      const bridged = await waitForBridge(addrs.svm, sig, 120_000);
-      if (!bridged) dbg('buy', 'bridge timeout, will poll balance', { sig });
-      setStatusMsg('Confirming USDC.e in Safe…');
-      let balanceAfter = balanceBefore;
-      const pollDeadline = Date.now() + 90_000;
-      while (Date.now() < pollDeadline) {
-        balanceAfter = await fetchSafeBalance(safeAddress);
-        if (balanceAfter > balanceBefore) break;
-        await new Promise((r) => setTimeout(r, 3000));
-      }
-      const usdcArrived = balanceAfter - balanceBefore;
-      if (usdcArrived <= 0n) throw new Error('USDC.e did not arrive in Safe in time. Tx hash: ' + sig);
-      const orderUsd = Number(usdcArrived) / 1e6;
-      dbg('buy', 'usdc arrived, placing order', { usdcArrived: usdcArrived.toString(), orderUsd });
-      setStatusMsg(`Placing trade for ${fmtUsd(orderUsd, 2)}…`);
-      await placeMarketOrder({
-        evmProvider, evmAddress, safeAddress, creds,
-        market, side, amountUsd: orderUsd, isBuy: true,
-      });
-      setStatus('success'); setStatusMsg('');
+      const setup = await ensureSetup(evmAddress, getEvmProvider, setStatusMsg);
+      setStatusMsg('Placing order…');
+      await placeMarketOrder({ getEvmProvider, evmAddress, safeAddress: setup.safeAddress, creds: setup.creds, market, side, amountUsd: usd, isBuy: true });
+      setStatus('success');
+      setStatusMsg('');
       refreshAll?.();
-      setTimeout(() => onClose(), 2500);
+      setTimeout(() => onClose(), 2200);
     } catch (e) {
       const m = e?.message || 'Trade failed';
       setError(/reject|cancel|user/i.test(m) ? 'Cancelled' : m);
-      setStatus('error'); setStatusMsg(''); setDbgOpen(true);
-      setTimeout(() => setStatus('idle'), 6000);
+      setStatus('error');
+      setStatusMsg('');
+      setDbgOpen(true);
+      setTimeout(() => setStatus('idle'), 4500);
     }
   };
 
   const handleSell = async () => {
-    if (!hasPos || busy) return;
-    setSellStatus('selling'); setError(''); setStatusMsg('');
+    if (!hasPos) return;
+
+    setSellStatus('selling');
+    setError('');
+    setStatusMsg('');
+
     try {
-      setStatusMsg('Placing sell order…');
-      await placeMarketOrder({
-        evmProvider, evmAddress, safeAddress, creds,
-        market, side, amountUsd: held, isBuy: false,
-      });
-      setSellStatus('sold'); setStatusMsg('');
+      const setup = await ensureSetup(evmAddress, getEvmProvider, setStatusMsg);
+      setStatusMsg('Selling…');
+      await placeMarketOrder({ getEvmProvider, evmAddress, safeAddress: setup.safeAddress, creds: setup.creds, market, side, amountUsd: held, isBuy: false });
+      setSellStatus('sold');
+      setStatusMsg('');
       refreshAll?.();
       setTimeout(() => onClose(), 2200);
     } catch (e) {
       const m = e?.message || 'Sell failed';
       setError(/reject|cancel|user/i.test(m) ? 'Cancelled' : m);
-      setSellStatus('error'); setStatusMsg(''); setDbgOpen(true);
-      setTimeout(() => setSellStatus('idle'), 5000);
+      setSellStatus('error');
+      setStatusMsg('');
+      setDbgOpen(true);
+      setTimeout(() => setSellStatus('idle'), 4500);
     }
   };
 
@@ -1335,56 +2435,57 @@ function OrderDrawer({
       <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 16, borderTopRightRadius: 16, boxShadow: C.shadowLg, maxHeight: '92dvh', display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '10px 12px 0', flexShrink: 0 }}>
           <div style={{ width: 32, height: 3, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 10px' }} />
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 4, lineHeight: 1.3, ...T.body }}>{market.title}</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 4, lineHeight: 1.35, ...T.body }}>{market.title}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
             <div style={{ padding: '3px 8px', borderRadius: 99, background: sideDim, border: `1px solid ${sideColor}55`, color: sideColor, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>{side.toUpperCase()}</div>
-            <div style={{ fontSize: 10, color: C.muted, ...T.mono }}>${price.toFixed(3)} · {Math.round(price * 100)}%</div>
-            <div style={{ marginLeft: 'auto', fontSize: 9.5, color: C.muted, ...T.mono }}>{solUi.toFixed(4)} SOL</div>
+            <div style={{ fontSize: 11, color: C.muted, ...T.mono }}>${price.toFixed(3)} · {Math.round(price * 100)}%</div>
+            <div style={{ marginLeft: 'auto', fontSize: 10, color: C.muted, ...T.mono }}>Bal {fmtUsd(tradeUsd, 2)}</div>
           </div>
         </div>
+
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 12px' }}>
-          <DebugPanel open={dbgOpen} onToggle={() => setDbgOpen((o) => !o)} />
+          <DebugPanel open={dbgOpen} onToggle={() => setDbgOpen(o => !o)} />
+
           {hasPos && sellStatus !== 'sold' && (
-            <div style={{ marginBottom: 10, padding: 10, borderRadius: 10, background: pnl >= 0 ? 'rgba(0,212,163,.07)' : 'rgba(255,95,122,.07)', border: `1px solid ${pnl >= 0 ? 'rgba(0,212,163,.30)' : 'rgba(255,95,122,.30)'}` }}>
-              <div style={{ fontSize: 9, color: pnl >= 0 ? C.yes : C.no, fontWeight: 800, marginBottom: 7, ...T.mono }}>YOUR POSITION · {side.toUpperCase()}</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5, fontSize: 11, ...T.mono }}><span style={{ color: C.muted }}>Shares</span><span style={{ color: C.ink, fontWeight: 700 }}>{held.toFixed(2)} @ ${avgPx.toFixed(3)}</span></div>
+            <div style={{ marginBottom: 10, padding: 10, borderRadius: 11, background: pnl >= 0 ? 'rgba(0,212,163,.07)' : 'rgba(255,95,122,.07)', border: `1px solid ${pnl >= 0 ? 'rgba(0,212,163,.30)' : 'rgba(255,95,122,.30)'}` }}>
+              <div style={{ fontSize: 10, color: pnl >= 0 ? C.yes : C.no, fontWeight: 800, marginBottom: 10, ...T.mono }}>YOUR POSITION · {side.toUpperCase()}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4, fontSize: 11, ...T.mono }}><span style={{ color: C.muted }}>Shares</span><span style={{ color: C.ink, fontWeight: 700 }}>{held.toFixed(2)} @ ${avgPx.toFixed(3)}</span></div>
               <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 11, ...T.mono }}><span style={{ color: C.muted }}>Value · P&amp;L</span><span style={{ color: pnl >= 0 ? C.yes : C.no, fontWeight: 800 }}>{fmtUsd(value, 2)} · {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} ({pnl >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%)</span></div>
-              <button onClick={sellStatus === 'selling' ? undefined : handleSell} disabled={sellStatus === 'selling' || bid <= 0} style={{ width: '100%', padding: 9, borderRadius: 8, background: pnl >= 0 ? `linear-gradient(135deg, ${C.yes}33, ${C.yes}22)` : `linear-gradient(135deg, ${C.no}33, ${C.no}22)`, border: `1px solid ${pnl >= 0 ? C.yes : C.no}66`, color: pnl >= 0 ? C.yes : C.no, fontWeight: 800, fontSize: 12, cursor: (sellStatus === 'selling' || bid <= 0) ? 'not-allowed' : 'pointer', opacity: (sellStatus === 'selling' || bid <= 0) ? .55 : 1, ...T.body }}>
+              <button onClick={sellStatus === 'selling' ? undefined : handleSell} disabled={sellStatus === 'selling' || bid <= 0} style={{ width: '100%', padding: 10, borderRadius: 10, background: pnl >= 0 ? `linear-gradient(135deg, ${C.yes}33, ${C.yes}22)` : `linear-gradient(135deg, ${C.no}33, ${C.no}22)`, border: `1px solid ${pnl >= 0 ? C.yes : C.no}66`, color: pnl >= 0 ? C.yes : C.no, fontWeight: 800, fontSize: 13, cursor: (sellStatus === 'selling' || bid <= 0) ? 'not-allowed' : 'pointer', opacity: (sellStatus === 'selling' || bid <= 0) ? .55 : 1, ...T.body }}>
                 {sellStatus === 'selling' ? 'Selling…' : bid <= 0 ? 'No bids' : `Sell all · ${fmtUsd(value, 2)}`}
               </button>
             </div>
           )}
-          <div style={{ marginBottom: 10 }}>
-            <div style={{ fontSize: 9, color: C.muted, marginBottom: 5, textTransform: 'uppercase', letterSpacing: 1, ...T.mono }}>SOL to spend</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 11px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}` }}>
-              <input value={amountSol} onChange={(e) => { setAmountSol(cleanAmount(e.target.value)); setError(''); }} disabled={busy} inputMode="decimal" placeholder="0.05" style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 18, fontWeight: 700, ...T.display }} />
-              <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>SOL</span>
+
+          <div style={{ marginBottom: 12 }}>
+            <div style={{ fontSize: 10, color: C.muted, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1, ...T.mono }}>You pay</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '10px 12px', borderRadius: 11, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}` }}>
+              <span style={{ fontSize: 16, color: C.muted, ...T.display }}>$</span>
+              <input value={amount} onChange={(e) => { setAmount(cleanAmount(e.target.value)); setError(''); }} disabled={busy} inputMode="decimal" style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 18, fontWeight: 700, ...T.display }} />
+              <span style={{ fontSize: 11, color: C.muted, ...T.mono }}>USDC</span>
             </div>
-            <div style={{ display: 'flex', gap: 5, marginTop: 6 }}>
-              {['0.05', '0.1', '0.5', '1'].map((v) => (
-                <button key={v} onClick={() => setAmountSol(v)} disabled={busy} style={{ flex: 1, padding: 6, borderRadius: 7, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 10, fontWeight: 600, cursor: 'pointer', ...T.mono }}>{v}</button>
+
+            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+              {['5', '10', '25', '100'].map(v => (
+                <button key={v} onClick={() => setAmount(v)} disabled={busy} style={{ flex: 1, padding: 7, borderRadius: 8, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 11, fontWeight: 600, cursor: 'pointer', ...T.mono }}>${v}</button>
               ))}
-              <button onClick={() => setAmountSol(solAvailableUi > 0 ? solAvailableUi.toFixed(4) : '0')} disabled={busy || solAvailableLamports <= 0} style={{ flex: 1, padding: 6, borderRadius: 7, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>Max</button>
+              <button onClick={() => setAmount(String(Math.floor(tradeUsd * 100) / 100))} disabled={busy || tradeUsd <= 0} style={{ flex: 1, padding: 7, borderRadius: 8, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>Max</button>
             </div>
           </div>
-          <div style={{ padding: 10, borderRadius: 10, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10, ...T.mono, fontSize: 10 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}><span style={{ color: C.muted }}>SOL available</span><span style={{ color: C.ink, fontWeight: 600 }}>{solAvailableUi.toFixed(4)}</span></div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}><span style={{ color: C.muted }}>Service fee</span><span style={{ color: C.ink, fontWeight: 600 }}>{FEE_PCT}% ({(sol * FEE_PCT / 100).toFixed(4)} SOL)</span></div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}><span style={{ color: C.muted }}>To Polymarket</span><span style={{ color: C.ink, fontWeight: 600 }}>{(sol * (100 - FEE_PCT) / 100).toFixed(4)} SOL</span></div>
-            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: C.muted }}>Will trigger</span><span style={{ color: sideColor, fontWeight: 700 }}>Buy {side.toUpperCase()} at ${price.toFixed(3)}</span></div>
+
+          <div style={{ padding: 10, borderRadius: 11, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10, ...T.mono, fontSize: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}><span style={{ color: C.muted }}>Shares</span><span style={{ color: C.ink, fontWeight: 600 }}>{shares.toFixed(2)}</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}><span style={{ color: C.muted }}>If {side.toUpperCase()} wins</span><span style={{ color: sideColor, fontWeight: 700 }}>{fmtUsd(shares, 2)}</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: C.muted }}>Upside</span><span style={{ color: sideColor, fontWeight: 700 }}>+{upside.toFixed(1)}%</span></div>
           </div>
+
           {statusMsg && <StatusLine msg={statusMsg} />}
-          {error && (
-            <div style={{ marginBottom: 8, padding: 8, background: 'rgba(255,95,122,.08)', border: '1px solid rgba(255,95,122,.25)', borderRadius: 10, fontSize: 11, color: C.no }}>
-              {error}
-              <div style={{ marginTop: 4, fontSize: 9, color: C.muted, ...T.mono }}>See Debug panel above.</div>
-            </div>
-          )}
+          {error && <div style={{ marginBottom: 10, padding: 10, background: 'rgba(255,95,122,.08)', border: '1px solid rgba(255,95,122,.25)', borderRadius: 12, fontSize: 12, color: C.no }}>{error}<div style={{ marginTop: 6, fontSize: 10, color: C.muted, ...T.mono }}>See Debug panel above for details.</div></div>}
         </div>
+
         <div style={{ padding: '10px 12px calc(env(safe-area-inset-bottom) + 12px)', borderTop: `1px solid ${C.border}`, background: C.card, flexShrink: 0 }}>
-          <button onClick={busy ? undefined : handleBuy} disabled={busy || sol <= 0 || Number(solLamports) > solAvailableLamports || Number(solLamports) < MIN_SOL_LAMPORTS_PER_TRADE || !creds}
-            style={{ width: '100%', padding: 12, borderRadius: 11, background: status === 'success' ? `linear-gradient(135deg, ${C.yes}33, ${C.yes}22)` : `linear-gradient(135deg, ${sideColor}33, ${sideColor}22)`, border: `1px solid ${sideColor}66`, color: sideColor, fontWeight: 800, fontSize: 13, cursor: busy ? 'not-allowed' : 'pointer', opacity: (busy || sol <= 0 || Number(solLamports) > solAvailableLamports || Number(solLamports) < MIN_SOL_LAMPORTS_PER_TRADE || !creds) ? .55 : 1, ...T.body }}>
-            {busy ? statusMsg || 'Working…' : status === 'success' ? '✓ Trade placed' : !creds ? 'Setting up account…' : `Buy ${side.toUpperCase()} · ${sol.toFixed(4)} SOL`}
+          <button onClick={canBuy ? handleBuy : needsFunds ? onNeedFunds : undefined} disabled={busy || (!canBuy && !needsFunds)} style={{ width: '100%', padding: 12, borderRadius: 12, background: status === 'success' ? `linear-gradient(135deg, ${C.yes}33, ${C.yes}22)` : needsFunds ? `linear-gradient(135deg, ${C.amber}33, ${C.amber}22)` : `linear-gradient(135deg, ${sideColor}33, ${sideColor}22)`, border: `1px solid ${needsFunds ? C.amber : sideColor}66`, color: needsFunds ? C.amber : sideColor, fontWeight: 800, fontSize: 14, cursor: (canBuy || needsFunds) ? 'pointer' : 'not-allowed', opacity: (canBuy || needsFunds) ? 1 : .55, ...T.body }}>
+            {busy ? 'Placing order…' : status === 'success' ? '✓ Order placed' : needsFunds ? `Fund · need ${fmtUsd(usd - tradeUsd, 2)} more` : `Buy ${side.toUpperCase()} · ${fmtUsd(usd, 2)}`}
           </button>
         </div>
       </div>
@@ -1392,60 +2493,40 @@ function OrderDrawer({
   );
 }
 
-/* ============================================================ Header */
 
-function Header({
-  tradingBalance, solBalance,
-  solanaAddress, evmAddress,
-  onOpenFund, onConnectSol, onConnectEvm,
-  setupStatus,
-}) {
+function Header({ tradingBalance, onOpenFund, canFund, signedIn, onSignIn, signingIn }) {
   const usd = Number(tradingBalance) / 1e6;
-  const solUi = Number(solBalance) / 1e9;
-  const bothConnected = !!solanaAddress && !!evmAddress;
   return (
-    <div style={{ marginTop: 4, marginBottom: 10, padding: '14px 16px 14px', borderRadius: 18, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: `1px solid ${C.border}`, boxShadow: C.shadow, position: 'relative', overflow: 'hidden' }}>
+    <div style={{ marginTop: 4, marginBottom: 10, padding: '14px 14px 12px', borderRadius: 18, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: `1px solid ${C.border}`, boxShadow: C.shadowLg, position: 'relative', overflow: 'hidden' }}>
       <div style={{ position: 'absolute', right: -40, top: -50, width: 160, height: 160, borderRadius: '50%', background: 'radial-gradient(circle,rgba(151,252,228,.14),transparent 65%)', pointerEvents: 'none' }} />
       <div style={{ position: 'relative' }}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: bothConnected ? 10 : 8 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 12 }}>
           <div>
-            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 900, color: C.ink, letterSpacing: -.5, ...T.display }}>Predict</h1>
-            <div style={{ fontSize: 10, color: C.muted, ...T.mono, marginTop: 2 }}>Polymarket · SOL · 5% fee</div>
+            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 900, color: C.ink, letterSpacing: -0.5, ...T.display }}>Predict</h1>
+            <div style={{ fontSize: 11, color: C.muted, ...T.mono, marginTop: 4 }}>Crypto prediction markets · 5% deposit · 0% trading</div>
           </div>
-          <div style={{ fontSize: 9, color: C.hl, background: C.hlDim, border: `1px solid ${C.borderHi}`, padding: '3px 7px', borderRadius: 99, fontWeight: 700, letterSpacing: 1, ...T.mono }}>CRYPTO</div>
+          <div style={{ fontSize: 10, color: C.hl, background: C.hlDim, border: `1px solid ${C.borderHi}`, padding: '2px 7px', borderRadius: 99, fontWeight: 700, letterSpacing: 1, ...T.mono }}>CRYPTO</div>
         </div>
-
-        {!solanaAddress && (
-          <button onClick={onConnectSol} style={{ width: '100%', padding: '10px', borderRadius: 11, background: `linear-gradient(135deg, ${C.violet}, ${C.hl})`, color: C.bg, fontWeight: 800, fontSize: 13, border: 'none', cursor: 'pointer', ...T.body }}>
-            Connect Solana wallet
-          </button>
-        )}
-        {solanaAddress && !evmAddress && (
-          <button onClick={onConnectEvm} style={{ width: '100%', padding: '10px', borderRadius: 11, background: `linear-gradient(135deg, ${C.violet}, ${C.hl})`, color: C.bg, fontWeight: 800, fontSize: 13, border: 'none', cursor: 'pointer', ...T.body }}>
-            Connect EVM wallet (Polygon)
-          </button>
-        )}
-
-        {bothConnected && (
+        {signedIn ? (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '10px 12px', borderRadius: 12, background: 'rgba(151,252,228,.05)', border: `1px solid ${C.border}` }}>
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, letterSpacing: 1.2, ...T.mono, marginBottom: 2 }}>SOL · POLYMARKET</div>
-              <div style={{ fontSize: 15, fontWeight: 800, color: C.ink, ...T.display, lineHeight: 1.2 }}>{solUi.toFixed(4)} · {fmtUsd(usd, 2)}</div>
-              {setupStatus === 'working' && <div style={{ fontSize: 9, color: C.amber, marginTop: 2, ...T.mono }}>Setting up Safe…</div>}
-              {setupStatus === 'ready' && <div style={{ fontSize: 9, color: C.yes, marginTop: 2, ...T.mono }}>✓ Ready</div>}
-              {setupStatus === 'error' && <div style={{ fontSize: 9, color: C.no, marginTop: 2, ...T.mono }}>Setup failed</div>}
+            <div>
+              <div style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: 1.2, ...T.mono, marginBottom: 2 }}>BALANCE</div>
+              <div style={{ fontSize: 20, fontWeight: 800, color: C.ink, ...T.display, lineHeight: 1 }}>{fmtUsd(usd, 2)}</div>
             </div>
-            <button onClick={onOpenFund} style={{ padding: '8px 14px', borderRadius: 10, background: `linear-gradient(135deg, ${C.hl}, ${C.hl2})`, color: C.bg, fontWeight: 800, fontSize: 12, border: 'none', cursor: 'pointer', ...T.body, whiteSpace: 'nowrap' }}>Account</button>
+            <button onClick={canFund ? onOpenFund : undefined} disabled={!canFund} style={{ padding: '8px 14px', borderRadius: 10, background: canFund ? `linear-gradient(135deg, ${C.hl}, ${C.hl2})` : 'rgba(255,255,255,.04)', color: canFund ? C.bg : C.muted2, fontWeight: 800, fontSize: 13, border: 'none', cursor: canFund ? 'pointer' : 'not-allowed', opacity: canFund ? 1 : .55, ...T.body, whiteSpace: 'nowrap' }}>
+              Manage
+            </button>
           </div>
+        ) : (
+          <button onClick={onSignIn} disabled={signingIn} style={{ width: '100%', padding: '12px', borderRadius: 11, background: `linear-gradient(135deg, ${C.violet}, ${C.hl})`, color: C.bg, fontWeight: 800, fontSize: 13, border: 'none', cursor: signingIn ? 'wait' : 'pointer', opacity: signingIn ? .7 : 1, ...T.body }}>
+            {signingIn ? 'Signing in…' : 'Sign in to trade'}
+          </button>
         )}
       </div>
     </div>
   );
 }
-
-/* ============================================================ Main */
-
-export default function Predict() {
+function PredictInner() {
   const [markets, setMarkets] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -1456,124 +2537,144 @@ export default function Predict() {
   const [orderSide, setOrderSide] = useState('yes');
   const [fundOpen, setFundOpen] = useState(false);
   const [safeAddress, setSafeAddress] = useState(null);
-  const [creds, setCreds] = useState(null);
-  const [setupStatus, setSetupStatus] = useState('idle');
-  const [setupError, setSetupError] = useState(null);
+  const [safeDeriving, setSafeDeriving] = useState(false);
+  const [safeError, setSafeError] = useState(null);
   const [tradingBalance, setTradingBalance] = useState(0n);
   const [solBalance, setSolBalance] = useState(0n);
-  const [collectStatus, setCollectStatus] = useState('idle');
-  const [collectStatusMsg, setCollectStatusMsg] = useState('');
-  const [collectError, setCollectError] = useState('');
-
-  const solWallet = useWallet();
-  const { connection } = useConnection();
-  const solanaAddress = solWallet.publicKey?.toString() || null;
-
-  const evm = useEvmWallet();
-  const evmAddress = evm.address;
-  const evmProvider = evm.provider;
-
-  const signSolanaTx = useCallback(async (tx) => {
-    if (!solWallet.signTransaction) throw new Error('Solana wallet cannot sign');
-    return await solWallet.signTransaction(tx);
-  }, [solWallet]);
-
-  const onConnectSol = useCallback(() => {
-    if (solWallet.wallet) {
-      solWallet.connect().catch((e) => dbgErr('sol', 'connect failed', e));
-    } else {
-      const trigger = document.querySelector('.wallet-adapter-button-trigger') ||
-                      document.querySelector('.wallet-adapter-modal-list-more');
-      trigger?.click?.();
-    }
-  }, [solWallet]);
-
-  const runSetup = useCallback(async () => {
-    if (!evmAddress || !evmProvider) return;
-    setSetupStatus('working');
-    setSetupError(null);
-    try {
-      const result = await ensureSetup(evmAddress, evmProvider, (msg) => dbg('setup', 'status', { msg }));
-      setSafeAddress(result.safeAddress);
-      setCreds(result.creds);
-      setSetupStatus('ready');
-      dbg('setup', 'complete + verified');
-    } catch (e) {
-      dbgErr('setup', 'failed', e);
-      const msg = e?.message || e?.error?.message || e?.reason ||
-        (typeof e === 'string' ? e : '') ||
-        (e?.code ? `code ${e.code}` : '') ||
-        JSON.stringify(e).slice(0, 200) || 'Unknown setup error';
-      setSetupError(msg);
-      setSetupStatus('error');
-    }
-  }, [evmAddress, evmProvider]);
-
+  const [usdcBalance, setUsdcBalance] = useState(0n);
+  const [autoPrompted, setAutoPrompted] = useState(false);
+  const { publicKey: extSolPk, signTransaction: extSolSignTx } = useWallet();
+  const {
+    privyAuthenticated,
+    privyEmbeddedSol,
+    privyEmbeddedEvm,
+    getEvmAddress,
+    getEvmProvider,
+    loginPrivy,
+    privyReady,
+  } = useNexusWallet();
+  const evmAddress = useMemo(() => {
+    if (!privyAuthenticated) return null;
+    return getEvmAddress?.() || privyEmbeddedEvm?.address || null;
+  }, [privyAuthenticated, getEvmAddress, privyEmbeddedEvm]);
   useEffect(() => {
-    if (!evmAddress || !evmProvider) {
+    if (!privyReady || privyAuthenticated || autoPrompted) return;
+    setAutoPrompted(true);
+    try { loginPrivy?.(); } catch (e) { dbgErr('auth', 'auto loginPrivy failed', e); }
+  }, [privyReady, privyAuthenticated, autoPrompted, loginPrivy]);
+  const fundingPubkey = useMemo(() => {
+    if (extSolPk) return extSolPk.toString();
+    if (privyEmbeddedSol?.address) return privyEmbeddedSol.address;
+    return null;
+  }, [extSolPk, privyEmbeddedSol]);
+  const signSolanaTx = useCallback(async (tx) => {
+    if (extSolPk && extSolSignTx) return await extSolSignTx(tx);
+    if (privyEmbeddedSol?.signTransaction) return await privyEmbeddedSol.signTransaction(tx);
+    throw new Error('No Solana signer');
+  }, [extSolPk, extSolSignTx, privyEmbeddedSol]);
+  useEffect(() => {
+    if (!evmAddress) {
       setSafeAddress(null);
-      setCreds(null);
-      setSetupStatus('idle');
-      setSetupError(null);
+      setSafeError(null);
       return;
     }
-    runSetup();
-  }, [evmAddress, evmProvider, runSetup]);
-
+    let alive = true;
+    const cached = lsGet(LS.safe(evmAddress));
+    if (cached) {
+      setSafeAddress(cached);
+      setSafeError(null);
+      return;
+    }
+    setSafeDeriving(true);
+    deriveSafeAddress(evmAddress)
+      .then((addr) => {
+        if (!alive) return;
+        setSafeAddress(addr);
+        lsSet(LS.safe(evmAddress), addr);
+        setSafeError(null);
+      })
+      .catch((e) => {
+        if (!alive) return;
+        dbgErr('safe', 'derive failed', e);
+        setSafeError(e?.message || 'Failed to derive Safe');
+      })
+      .finally(() => {
+        if (alive) setSafeDeriving(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [evmAddress]);
   useEffect(() => {
     if (!safeAddress) return;
     let alive = true;
     const tick = async () => {
-      try { const b = await fetchSafeBalance(safeAddress); if (alive) setTradingBalance(b); } catch {}
+      try {
+        const b = await fetchSafeBalance(safeAddress);
+        if (alive) setTradingBalance(b);
+      } catch {}
     };
     tick();
     const id = setInterval(tick, 5000);
-    return () => { alive = false; clearInterval(id); };
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
   }, [safeAddress]);
-
   useEffect(() => {
-    if (!solanaAddress) return;
+    if (!fundingPubkey) return;
     let alive = true;
     const tick = async () => {
-      try { const s = await fetchSolanaSolBalance(solanaAddress); if (alive) setSolBalance(s); } catch {}
+      try {
+        const [u, s] = await Promise.all([
+          fetchSolanaUsdcBalance(fundingPubkey),
+          fetchSolanaSolBalance(fundingPubkey),
+        ]);
+        if (alive) {
+          setUsdcBalance(u);
+          setSolBalance(s);
+        }
+      } catch {}
     };
     tick();
     const id = setInterval(tick, 5000);
-    return () => { alive = false; clearInterval(id); };
-  }, [solanaAddress]);
-
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
+  }, [fundingPubkey]);
   const refreshAll = useCallback(async () => {
-    if (safeAddress) { try { setTradingBalance(await fetchSafeBalance(safeAddress)); } catch {} }
-    if (solanaAddress) { try { setSolBalance(await fetchSolanaSolBalance(solanaAddress)); } catch {} }
-  }, [safeAddress, solanaAddress]);
-
+    if (safeAddress) {
+      try { setTradingBalance(await fetchSafeBalance(safeAddress)); } catch {}
+    }
+    if (fundingPubkey) {
+      try {
+        const [u, s] = await Promise.all([
+          fetchSolanaUsdcBalance(fundingPubkey),
+          fetchSolanaSolBalance(fundingPubkey),
+        ]);
+        setUsdcBalance(u);
+        setSolBalance(s);
+      } catch {}
+    }
+  }, [safeAddress, fundingPubkey]);
   const handleReset = useCallback(() => {
     if (!evmAddress) return;
     wipeUserCache(evmAddress);
-    setSafeAddress(null); setCreds(null);
-    setSetupStatus('idle'); setSetupError(null);
+    setSafeAddress(null);
+    setSafeError(null);
     setFundOpen(false);
-    setTimeout(() => runSetup(), 300);
-  }, [evmAddress, runSetup]);
-
-  const handleCollectWinnings = useCallback(async ({ solanaAddress: addr, amountAtomic }) => {
-    if (!safeAddress) return;
-    setCollectStatus('working'); setCollectError(''); setCollectStatusMsg('');
-    try {
-      await requestWithdrawToSolana({
-        safe: safeAddress, solanaAddress: addr, amountAtomic, onStatus: setCollectStatusMsg,
-      });
-      setCollectStatus('done');
-      setCollectStatusMsg('Withdrawal submitted — funds arrive in 2-5 min');
-      setTimeout(() => { refreshAll(); setCollectStatus('idle'); setCollectStatusMsg(''); }, 6000);
-    } catch (e) {
-      const m = e?.message || 'Withdraw failed';
-      setCollectError(/reject|cancel|user/i.test(m) ? 'Cancelled' : m);
-      setCollectStatus('error'); setCollectStatusMsg('');
-      setTimeout(() => setCollectStatus('idle'), 5000);
-    }
-  }, [safeAddress, refreshAll]);
-
+    setTimeout(() => {
+      setSafeDeriving(true);
+      deriveSafeAddress(evmAddress)
+        .then((addr) => {
+          setSafeAddress(addr);
+          lsSet(LS.safe(evmAddress), addr);
+        })
+        .catch((e) => setSafeError(e?.message || 'Reset failed'))
+        .finally(() => setSafeDeriving(false));
+    }, 200);
+  }, [evmAddress]);
   useEffect(() => {
     let alive = true;
     const h = HORIZONS.find((x) => x.id === horizonId) || HORIZONS[1];
@@ -1582,12 +2683,16 @@ export default function Predict() {
         let raw = [];
         if (h.slug) {
           raw = await fetchMarketsByTagSlug(h.slug);
-          if (!Array.isArray(raw) || raw.length === 0) raw = await fetchMarketsByTagId(CRYPTO_TAG_ID);
+          if (!Array.isArray(raw) || raw.length === 0) {
+            raw = await fetchMarketsByTagId(CRYPTO_TAG_ID);
+          }
         } else {
           raw = await fetchMarketsByTagId(CRYPTO_TAG_ID);
         }
         if (!alive) return;
-        const norm = (Array.isArray(raw) ? raw : []).map(normalizeEvent).filter(Boolean);
+        const norm = (Array.isArray(raw) ? raw : [])
+          .map(normalizeEvent)
+          .filter(Boolean);
         setMarkets(norm.filter((m) => isTradableMarket(m, h)));
         setError(null);
       } catch (e) {
@@ -1597,17 +2702,21 @@ export default function Predict() {
         if (alive) setLoading(false);
       }
     };
-    setLoading(true); load();
+    setLoading(true);
+    load();
     const id = setInterval(load, 30000);
-    return () => { alive = false; clearInterval(id); };
+    return () => {
+      alive = false;
+      clearInterval(id);
+    };
   }, [horizonId]);
-
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     let r = q
       ? markets.filter((m) =>
-        (m.title || '').toLowerCase().includes(q) ||
-        (m.childQuestion || '').toLowerCase().includes(q))
+          (m.title || '').toLowerCase().includes(q) ||
+          (m.childQuestion || '').toLowerCase().includes(q)
+        )
       : [...markets];
     if (sortBy === 'upside') {
       const u = (m) => {
@@ -1630,73 +2739,73 @@ export default function Predict() {
     }
     return r;
   }, [markets, search, sortBy]);
-
-  const openTrade = useCallback((m, s) => { setOrderMarket(m); setOrderSide(s); }, []);
-
+  const openTrade = useCallback((m, s) => {
+    setOrderMarket(m);
+    setOrderSide(s);
+  }, []);
   if (loading) {
     return (
       <>
         <style>{`@keyframes nexus-spin { to { transform: rotate(360deg); } }`}</style>
         <div style={{ maxWidth: 680, margin: '0 auto', padding: '0 12px calc(env(safe-area-inset-bottom) + 100px)' }}>
           <Header
-            tradingBalance={tradingBalance} solBalance={solBalance}
-            solanaAddress={solanaAddress} evmAddress={evmAddress}
+            tradingBalance={tradingBalance}
             onOpenFund={() => setFundOpen(true)}
-            onConnectSol={onConnectSol}
-            onConnectEvm={() => evm.setPickerOpen(true)}
-            setupStatus={setupStatus}
+            canFund={!!safeAddress}
+            signedIn={!!privyAuthenticated}
+            onSignIn={loginPrivy}
+            signingIn={!privyReady}
           />
-          {[1, 2, 3, 4, 5].map((i) => <MarketSkeleton key={i} />)}
+          {[1, 2, 3, 4, 5].map((i) => (
+            <MarketSkeleton key={i} />
+          ))}
         </div>
       </>
     );
   }
-
   return (
     <>
       <style>{`@keyframes nexus-spin { to { transform: rotate(360deg); } }`}</style>
       <div style={{ maxWidth: 680, margin: '0 auto', padding: '0 12px calc(env(safe-area-inset-bottom) + 100px)', color: C.ink, backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(151,252,228,.10),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 20%,rgba(168,127,255,.06),transparent 50%)' }}>
         <Header
-          tradingBalance={tradingBalance} solBalance={solBalance}
-          solanaAddress={solanaAddress} evmAddress={evmAddress}
+          tradingBalance={tradingBalance}
           onOpenFund={() => setFundOpen(true)}
-          onConnectSol={onConnectSol}
-          onConnectEvm={() => evm.setPickerOpen(true)}
-          setupStatus={setupStatus}
+          canFund={!!safeAddress && !safeDeriving}
+          signedIn={!!privyAuthenticated}
+          onSignIn={loginPrivy}
+          signingIn={!privyReady}
         />
-
-        {setupStatus === 'error' && setupError && (
-          <div style={{ marginBottom: 10, padding: 12, borderRadius: 12, background: 'rgba(255,95,122,.10)', border: `1px solid ${C.no}55` }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <span style={{ fontSize: 11, color: C.no, fontWeight: 800, letterSpacing: 1, ...T.mono }}>POLYMARKET SAFE SETUP FAILED</span>
-              <button onClick={() => copyToClipboard(setupError)} style={{ padding: '3px 8px', borderRadius: 6, background: C.no + '22', border: `1px solid ${C.no}55`, color: C.no, fontSize: 9, fontWeight: 700, cursor: 'pointer', ...T.mono }}>COPY</button>
-            </div>
-            <div style={{ fontSize: 11, color: C.ink, marginBottom: 8, ...T.mono, wordBreak: 'break-word', maxHeight: 120, overflowY: 'auto', padding: 8, background: 'rgba(0,0,0,.3)', borderRadius: 6, border: `1px solid ${C.no}22` }}>{setupError}</div>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <button onClick={runSetup} style={{ flex: 1, padding: '8px', borderRadius: 8, background: C.no + '22', border: `1px solid ${C.no}55`, color: C.no, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>↻ Retry setup</button>
-              <button onClick={() => setFundOpen(true)} style={{ flex: 1, padding: '8px', borderRadius: 8, background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>Open debug</button>
-            </div>
+        {safeError && privyAuthenticated && (
+          <div style={{ marginBottom: 10, padding: 10, borderRadius: 11, background: 'rgba(255,95,122,.07)', border: `1px solid ${C.no}33` }}>
+            <div style={{ fontSize: 12, color: C.no, fontWeight: 700, marginBottom: 6, ...T.body }}>Couldn't set up trading account</div>
+            <div style={{ fontSize: 10, color: C.muted, marginBottom: 8, ...T.mono }}>{safeError}</div>
+            <button onClick={handleReset} style={{ padding: '6px 12px', borderRadius: 8, background: C.no + '22', border: `1px solid ${C.no}55`, color: C.no, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>↻ Retry</button>
           </div>
         )}
-
-        <div style={{ display: 'flex', gap: 5, marginBottom: 8, overflowX: 'auto' }}>
+        {safeDeriving && privyAuthenticated && (
+          <div style={{ marginBottom: 10, padding: 10, borderRadius: 11, background: 'rgba(245,181,61,.06)', border: `1px solid ${C.amber}44`, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.amber}33`, borderTopColor: C.amber, animation: 'nexus-spin .8s linear infinite' }} />
+            <div style={{ fontSize: 12, color: C.amber, fontWeight: 700, ...T.body }}>Setting up your trading account…</div>
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 6, marginBottom: 8, overflowX: 'auto' }}>
           {HORIZONS.map((h) => {
             const active = horizonId === h.id;
             return (
-              <button key={h.id} onClick={() => setHorizonId(h.id)} style={{ padding: '6px 12px', borderRadius: 99, whiteSpace: 'nowrap', background: active ? C.hlDim : 'rgba(255,255,255,.03)', border: `1px solid ${active ? C.borderHi : C.border}`, color: active ? C.hl : C.muted, fontSize: 10, fontWeight: 800, cursor: 'pointer', ...T.mono }}>{h.label}</button>
+              <button key={h.id} onClick={() => setHorizonId(h.id)} style={{ padding: '6px 11px', borderRadius: 99, whiteSpace: 'nowrap', background: active ? C.hlDim : 'rgba(255,255,255,.03)', border: `1px solid ${active ? C.borderHi : C.border}`, color: active ? C.hl : C.muted, fontSize: 10, fontWeight: 800, cursor: 'pointer', ...T.mono }}>
+                {h.label}
+              </button>
             );
           })}
         </div>
-
         <div style={{ marginBottom: 8, position: 'relative' }}>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search…" inputMode="search" style={{ width: '100%', padding: '8px 12px 8px 32px', background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, borderRadius: 10, color: C.ink, fontSize: 12, outline: 'none', ...T.body }} />
-          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2" style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2" style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}>
             <circle cx="11" cy="11" r="8" />
             <path d="M21 21l-4.35-4.35" />
           </svg>
         </div>
-
-        <div style={{ display: 'flex', gap: 5, marginBottom: 10, overflowX: 'auto' }}>
+        <div style={{ display: 'flex', gap: 6, marginBottom: 10, overflowX: 'auto' }}>
           {[
             { id: 'volume', label: '📊 Volume' },
             { id: 'upside', label: '🔥 Upside' },
@@ -1704,46 +2813,64 @@ export default function Predict() {
           ].map((o) => {
             const a = sortBy === o.id;
             return (
-              <button key={o.id} onClick={() => setSortBy(o.id)} style={{ padding: '5px 10px', borderRadius: 99, whiteSpace: 'nowrap', background: a ? 'rgba(255,255,255,.06)' : 'rgba(255,255,255,.02)', border: `1px solid ${a ? C.border : 'transparent'}`, color: a ? C.ink : C.muted2, fontSize: 9.5, fontWeight: 700, cursor: 'pointer', ...T.mono }}>{o.label}</button>
+              <button key={o.id} onClick={() => setSortBy(o.id)} style={{ padding: '6px 11px', borderRadius: 99, whiteSpace: 'nowrap', background: a ? 'rgba(255,255,255,.06)' : 'rgba(255,255,255,.02)', border: `1px solid ${a ? C.border : 'transparent'}`, color: a ? C.ink : C.muted2, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>
+                {o.label}
+              </button>
             );
           })}
         </div>
-
-        {error && <div style={{ padding: '12px 14px', borderRadius: 11, background: 'rgba(255,95,122,.07)', border: '1px solid rgba(255,95,122,.25)', color: C.no, fontSize: 12, marginBottom: 12 }}>{error}</div>}
-        {filtered.length === 0 && !error && <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13, ...T.body }}>{search ? `No markets match "${search}"` : 'No active markets.'}</div>}
-        {filtered.map((m) => <MarketCard key={m.id || m.slug} market={m} onTrade={openTrade} />)}
-        <div style={{ marginTop: 20, padding: '12px 14px', borderRadius: 12, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`, fontSize: 10, color: C.muted, textAlign: 'center', ...T.mono }}>Powered by Polymarket · External wallets · No embedded SDK</div>
+        {error && (
+          <div style={{ padding: '12px 14px', borderRadius: 11, background: 'rgba(255,95,122,.07)', border: '1px solid rgba(255,95,122,.25)', color: C.no, fontSize: 12, marginBottom: 12 }}>
+            {error}
+          </div>
+        )}
+        {filtered.length === 0 && !error && (
+          <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13, ...T.body }}>
+            {search ? `No markets match "${search}"` : 'No active markets.'}
+          </div>
+        )}
+        {filtered.map((m) => (
+          <MarketCard key={m.id || m.slug} market={m} onTrade={openTrade} />
+        ))}
+        <div style={{ marginTop: 14, padding: '10px 12px', borderRadius: 11, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`, fontSize: 9, color: C.muted, textAlign: 'center', ...T.mono }}>
+          Powered by Polymarket · Safe v1.3 · Builder Code Attribution
+        </div>
       </div>
-
       {orderMarket && (
         <OrderDrawer
-          market={orderMarket} side={orderSide}
-          onClose={() => { setOrderMarket(null); refreshAll(); }}
-          evmAddress={evmAddress} evmProvider={evmProvider}
-          safeAddress={safeAddress} creds={creds}
-          solBalance={solBalance} solanaAddress={solanaAddress}
-          signSolanaTx={signSolanaTx} solConnection={connection}
+          market={orderMarket}
+          side={orderSide}
+          onClose={() => {
+            setOrderMarket(null);
+            refreshAll();
+          }}
+          evmAddress={evmAddress}
+          getEvmProvider={getEvmProvider}
+          safeAddress={safeAddress}
+          tradingBalance={tradingBalance}
+          onNeedFunds={() => {
+            setOrderMarket(null);
+            setFundOpen(true);
+          }}
           refreshAll={refreshAll}
         />
       )}
-
       <FundingSheet
-        open={fundOpen} onClose={() => setFundOpen(false)}
-        evmAddress={evmAddress} safeAddress={safeAddress} tradingBalance={tradingBalance}
-        solanaAddress={solanaAddress} solBalance={solBalance}
-        onCollectWinnings={handleCollectWinnings}
-        collectStatus={collectStatus} collectStatusMsg={collectStatusMsg} collectError={collectError}
-        setupStatus={setupStatus} setupError={setupError} onRetrySetup={runSetup}
+        open={fundOpen}
+        onClose={() => setFundOpen(false)}
+        evmAddress={evmAddress}
+        safeAddress={safeAddress}
+        tradingBalance={tradingBalance}
+        fundingPubkey={fundingPubkey}
+        solBalance={solBalance}
+        usdcBalance={usdcBalance}
+        signSolanaTx={signSolanaTx}
         onReset={handleReset}
-        onDisconnectEvm={evm.disconnect}
-        onDisconnectSol={() => solWallet.disconnect?.()}
-      />
-
-      <EvmWalletPicker
-        open={evm.pickerOpen} wallets={evm.wallets}
-        onPick={evm.connect} onClose={() => evm.setPickerOpen(false)}
-        connecting={evm.connecting}
+        refreshAll={refreshAll}
       />
     </>
   );
+}
+export default function Predict() {
+  return <PredictInner />;
 }
