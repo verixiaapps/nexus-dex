@@ -1,77 +1,77 @@
 {
-  "name": "nexus-dex",
-  "version": "1.0.0",
-  "private": true,
-  "proxy": "http://localhost:3001",
-  "dependencies": {
-    "@lifi/sdk": "^3.16.3",
-    "@metaplex-foundation/mpl-token-metadata": "3.4.0",
-    "@nktkas/hyperliquid": "^0.32.2",
-    "@polymarket/builder-relayer-client": "github:Polymarket/builder-relayer-client#main",
-    "@polymarket/builder-signing-sdk": "github:Polymarket/builder-signing-sdk#main",
-    "@polymarket/clob-client-v2": "github:Polymarket/clob-client-v2#main",
-    "@privy-io/react-auth": "^2.0.0",
-    "@raydium-io/raydium-sdk-v2": "0.1.131-alpha",
-    "@solana/spl-token": "^0.4.6",
-    "@solana/wallet-adapter-base": "^0.9.23",
-    "@solana/wallet-adapter-phantom": "^0.9.24",
-    "@solana/wallet-adapter-react": "^0.15.35",
-    "@solana/wallet-adapter-react-ui": "^0.9.35",
-    "@solana/wallet-adapter-walletconnect": "^0.1.16",
-    "@solana/web3.js": "^1.95.0",
-    "@tanstack/react-query": "^5.56.0",
-    "ajv": "^8.12.0",
-    "assert": "^2.1.0",
-    "bn.js": "^5.2.1",
-    "bs58": "^5.0.0",
-    "buffer": "^6.0.3",
-    "cors": "^2.8.5",
-    "crypto-browserify": "^3.12.0",
-    "dotenv": "^16.4.5",
-    "ethers": "^6.13.0",
-    "express": "^4.21.0",
-    "express-rate-limit": "^7.4.0",
-    "https-browserify": "^1.0.0",
-    "js-sha3": "^0.9.3",
-    "multer": "^1.4.5-lts.1",
-    "os-browserify": "^0.3.0",
-    "path-browserify": "^1.0.1",
-    "process": "^0.11.10",
-    "react": "^18.2.0",
-    "react-app-rewired": "^2.2.1",
-    "react-dom": "^18.2.0",
-    "react-router-dom": "^6.22.0",
-    "react-scripts": "5.0.1",
-    "recharts": "^2.10.0",
-    "stream-browserify": "^3.0.0",
-    "stream-http": "^3.2.0",
-    "url": "^0.11.3",
-    "util": "^0.12.5",
-    "viem": "^2.39.2"
-  },
-  "overrides": {
-    "uuid": "^9.0.1"
-  },
-  "devDependencies": {
-    "concurrently": "^8.2.0"
-  },
-  "scripts": {
-    "start": "node server.js",
-    "build": "react-app-rewired build",
-    "dev": "concurrently \"react-app-rewired start\" \"node server.js\"",
-    "polymarket:verify": "node -e \"const m=require('@polymarket/builder-relayer-client');const r=m.RelayClient&&m.RelayClient.prototype;console.log('RelayClient:',typeof m.RelayClient);console.log('deriveDepositWalletAddress:',r&&typeof r.deriveDepositWalletAddress);console.log('deployDepositWallet:',r&&typeof r.deployDepositWallet);console.log('executeDepositWalletBatch:',r&&typeof r.executeDepositWalletBatch);\""
-  },
-  "browserslist": {
-    "production": [
-      ">0.2%",
-      "not dead",
-      "not op_mini all"
-    ],
-    "development": [
-      "last 1 chrome version"
-    ]
-  },
-  "engines": {
-    "node": "20.x"
-  }
+ "name": "nexus-dex",
+ "version": "1.0.0",
+ "private": true,
+ "proxy": "http://localhost:3001",
+ "dependencies": {
+   "@lifi/sdk": "^3.16.3",
+   "@metaplex-foundation/mpl-token-metadata": "3.4.0",
+   "@nktkas/hyperliquid": "^0.32.2",
+   "@polymarket/builder-relayer-client": "canary",
+   "@polymarket/builder-signing-sdk": "canary",
+   "@polymarket/clob-client-v2": "canary",
+   "@privy-io/react-auth": "^2.0.0",
+   "@raydium-io/raydium-sdk-v2": "0.1.131-alpha",
+   "@solana/spl-token": "^0.4.6",
+   "@solana/wallet-adapter-base": "^0.9.23",
+   "@solana/wallet-adapter-phantom": "^0.9.24",
+   "@solana/wallet-adapter-react": "^0.15.35",
+   "@solana/wallet-adapter-react-ui": "^0.9.35",
+   "@solana/wallet-adapter-walletconnect": "^0.1.16",
+   "@solana/web3.js": "^1.95.0",
+   "@tanstack/react-query": "^5.56.0",
+   "ajv": "^8.12.0",
+   "assert": "^2.1.0",
+   "bn.js": "^5.2.1",
+   "bs58": "^5.0.0",
+   "buffer": "^6.0.3",
+   "cors": "^2.8.5",
+   "crypto-browserify": "^3.12.0",
+   "dotenv": "^16.4.5",
+   "ethers": "^6.13.0",
+   "express": "^4.21.0",
+   "express-rate-limit": "^7.4.0",
+   "https-browserify": "^1.0.0",
+   "js-sha3": "^0.9.3",
+   "multer": "^1.4.5-lts.1",
+   "os-browserify": "^0.3.0",
+   "path-browserify": "^1.0.1",
+   "process": "^0.11.10",
+   "react": "^18.2.0",
+   "react-app-rewired": "^2.2.1",
+   "react-dom": "^18.2.0",
+   "react-router-dom": "^6.22.0",
+   "react-scripts": "5.0.1",
+   "recharts": "^2.10.0",
+   "stream-browserify": "^3.0.0",
+   "stream-http": "^3.2.0",
+   "url": "^0.11.3",
+   "util": "^0.12.5",
+   "viem": "^2.39.2"
+ },
+ "overrides": {
+   "uuid": "^9.0.1"
+ },
+ "devDependencies": {
+   "concurrently": "^8.2.0"
+ },
+ "scripts": {
+   "start": "node server.js",
+   "build": "react-app-rewired build",
+   "dev": "concurrently \"react-app-rewired start\" \"node server.js\"",
+   "polymarket:verify": "node -e \"const m=require('@polymarket/builder-relayer-client');const r=m.RelayClient&&m.RelayClient.prototype;console.log('RelayClient:',typeof m.RelayClient);console.log('deriveDepositWalletAddress:',r&&typeof r.deriveDepositWalletAddress);console.log('deployDepositWallet:',r&&typeof r.deployDepositWallet);console.log('executeDepositWalletBatch:',r&&typeof r.executeDepositWalletBatch);\""
+ },
+ "browserslist": {
+   "production": [
+     ">0.2%",
+     "not dead",
+     "not op_mini all"
+   ],
+   "development": [
+     "last 1 chrome version"
+   ]
+ },
+ "engines": {
+   "node": "20.x"
+ }
 }
