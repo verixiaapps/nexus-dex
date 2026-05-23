@@ -7,6 +7,7 @@ import Portfolio from './components/Portfolio.js';
 import PerpsLanding from './components/PerpsLanding.jsx';
 import Predict from './components/Predict.jsx';
 import Stocks from './components/Stocks.jsx';
+import CrossChainSwap from './components/CrossChainSwap.jsx';
 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
@@ -60,6 +61,7 @@ async function screenAddress(address) {
 // Routing — paths in repo:
 //   /            → swap
 //   /swap        → swap
+//   /bridge      → cross-chain swap
 //   /stack       → Hyperliquid perps
 //   /call        → Polymarket UI
 //   /markets     → Stocks.jsx (Tokenized Markets — xStocks, etc.)
@@ -71,6 +73,7 @@ async function screenAddress(address) {
 const PATH_TO_TAB = {
   '/':           'swap',
   '/swap':       'swap',
+  '/bridge':     'bridge',
   '/stack':      'stack',
   '/vip':        'stack',     // legacy
   '/perps':      'stack',     // legacy
@@ -83,6 +86,7 @@ const PATH_TO_TAB = {
 };
 const TAB_TO_PATH = {
   swap:      '/swap',
+  bridge:    '/bridge',
   stack:     '/stack',
   call:      '/call',
   markets:   '/markets',
@@ -407,9 +411,11 @@ function IconStack()   { return <svg width="18" height="18" viewBox="0 0 24 24" 
 function IconWallet()  { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
 function IconCall()    { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="M7 14l3-3 4 4 6-7"/><circle cx="20" cy="8" r="1.5" fill="currentColor"/></svg>; }
 function IconMarkets() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>; }
+function IconBridge()  { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12 Q12 4 20 12"/><path d="M4 12v4"/><path d="M20 12v4"/><path d="M4 16h16"/><path d="M9 12v4"/><path d="M15 12v4"/></svg>; }
 
 const NAV_ICONS = {
   swap:      IconSwap,
+  bridge:    IconBridge,
   stack:     IconStack,
   call:      IconCall,
   markets:   IconMarkets,
@@ -418,6 +424,7 @@ const NAV_ICONS = {
 
 const NAV_TABS = [
   { id: 'swap',      label: 'Swap' },
+  { id: 'bridge',    label: 'Bridge' },
   { id: 'stack',     label: 'Stack' },
   { id: 'call',      label: 'Call' },
   { id: 'markets',   label: 'Markets' },
@@ -472,6 +479,7 @@ function AppInner() {
       </header>
       <main style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '24px 16px 100px', width: '100%' }}>
         {tab === 'swap'      && <SwapWidget {...sharedProps} />}
+        {tab === 'bridge'    && <CrossChainSwap onConnectWallet={openWallet} />}
         {tab === 'stack'     && <PerpsLanding onConnectWallet={openWallet} />}
         {tab === 'call'      && <Predict {...sharedProps} />}
         {tab === 'markets'   && <Stocks {...sharedProps} />}
