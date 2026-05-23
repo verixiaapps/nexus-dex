@@ -38,11 +38,7 @@ function isLikelySolanaAddress(v) {
 }
 
 // ─────────────────────────────────────────────────────────────────────
-// Manual HMAC signature, matches Polymarket builder spec:
-//   message = `${timestamp}${method.toUpperCase()}${requestPath}${bodyJSON}`
-//   signature = HMAC-SHA256(base64-decoded-secret, message) → base64url
-// (The signature for builder uses the secret as a base64 string that must be
-//  decoded before HMAC. Matches go/py/rs Polymarket SDKs.)
+// Manual HMAC signature, matches Polymarket builder spec.
 // ─────────────────────────────────────────────────────────────────────
 function manualHmac(secret, timestamp, method, requestPath, body) {
   const bodyStr = body == null
@@ -59,7 +55,6 @@ function manualHmac(secret, timestamp, method, requestPath, body) {
   }
 
   const digest = crypto.createHmac('sha256', key).update(message).digest('base64');
-  // base64url
   return digest.replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
@@ -69,25 +64,20 @@ function checkSignRate(ip) {
   const now = Date.now();
   const windowStart = now - 60_000;
   const hits = (_signRate.get(ip) || []).filter(t => t > windowStart);
-
   if (hits.length >= 600) return false;
-
   hits.push(now);
   _signRate.set(ip, hits);
-
   if (_signRate.size > 5000) {
     for (const [k, arr] of _signRate.entries()) {
       if (!arr.some(t => t > windowStart)) _signRate.delete(k);
     }
   }
-
   return true;
 }
 
 async function fetchWithTimeout(url, opts = {}, ms = 12_000) {
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
-
   try {
     return await fetch(url, { ...opts, signal: ctrl.signal });
   } finally {
@@ -103,10 +93,7 @@ async function forwardResponse(res, upstream) {
 
 async function bridgeDepositAddress(address) {
   const clean = String(address || '').trim();
-
-  if (!isEvmAddress(clean)) {
-    throw new Error('Valid EVM address required');
-  }
+  if (!isEvmAddress(clean)) throw new Error('Valid EVM address required');
 
   const r = await fetchWithTimeout(`${BRIDGE_URL}/deposit`, {
     method: 'POST',
@@ -115,20 +102,13 @@ async function bridgeDepositAddress(address) {
   }, 10_000);
 
   const text = await r.text();
-
   let data;
-  try {
-    data = JSON.parse(text);
-  } catch {
-    throw new Error(`Bridge deposit returned non-JSON: ${text.slice(0, 200)}`);
-  }
+  try { data = JSON.parse(text); }
+  catch { throw new Error(`Bridge deposit returned non-JSON: ${text.slice(0, 200)}`); }
 
-  if (!r.ok) {
-    throw new Error(`Bridge deposit failed ${r.status}: ${text.slice(0, 300)}`);
-  }
+  if (!r.ok) throw new Error(`Bridge deposit failed ${r.status}: ${text.slice(0, 300)}`);
 
   const a = data && typeof data.address === 'object' ? data.address : data;
-
   return {
     raw: data,
     evm: a.evm || a.evmAddress || a.evm_address || null,
@@ -153,6 +133,77 @@ router.get('/health', (_req, res) => {
 });
 
 // ═══════════════════════════════════════════════════════════════════
+// DIAGNOSTIC: Test credentials against the live relayer.
+// GET /api/poly/test-creds
+// ═══════════════════════════════════════════════════════════════════
+
+router.get('/test-creds', async (_req, res) => {
+  try {
+    if (!ok()) {
+      return res.json({ step: 'env', ok: false, error: 'creds not loaded' });
+    }
+
+    const timestamp = String(Math.floor(Date.now() / 1000));
+    const method = 'GET';
+    const requestPath = '/transactions';
+
+    let signature;
+    let signMode = 'manual';
+    if (sdkBuildHmacSignature) {
+      try {
+        signature = await sdkBuildHmacSignature(
+          BUILDER_SECRET,
+          parseInt(timestamp, 10),
+          method,
+          requestPath,
+          undefined,
+        );
+        signMode = 'sdk';
+      } catch (e) {
+        signature = manualHmac(BUILDER_SECRET, timestamp, method, requestPath, undefined);
+        signMode = 'manual-fallback: ' + e.message;
+      }
+    } else {
+      signature = manualHmac(BUILDER_SECRET, timestamp, method, requestPath, undefined);
+    }
+
+    const r = await fetchWithTimeout(
+      'https://relayer-v2.polymarket.com/transactions',
+      {
+        method,
+        headers: {
+          'POLY_SIGNATURE': signature,
+          'POLY_TIMESTAMP': timestamp,
+          'POLY_API_KEY': BUILDER_KEY,
+          'POLY_PASSPHRASE': BUILDER_PASSPHRASE,
+          'Accept': 'application/json',
+        },
+      },
+      10_000,
+    );
+
+    const text = await r.text();
+    return res.json({
+      step: 'relayer',
+      status: r.status,
+      ok: r.ok,
+      keyTail: '...' + BUILDER_KEY.slice(-6),
+      passphraseTail: '...' + BUILDER_PASSPHRASE.slice(-4),
+      secretLen: BUILDER_SECRET.length,
+      signMode,
+      timestamp,
+      signaturePreview: signature.slice(0, 24) + '...',
+      body: text.slice(0, 600),
+    });
+  } catch (e) {
+    return res.status(500).json({
+      step: 'exception',
+      error: String(e?.message || e),
+    });
+  }
+});
+
+// ═══════════════════════════════════════════════════════════════════
 // BUILDER CODE
 // ═══════════════════════════════════════════════════════════════════
 
@@ -162,20 +213,6 @@ router.get('/builder-code', (_req, res) => {
 
 // ═══════════════════════════════════════════════════════════════════
 // REMOTE BUILDER SIGNING
-//
-// The Polymarket builder-signing-sdk on the client calls this endpoint
-// with: { method, requestPath, body, timestamp? }
-//
-// It expects back a JSON object with the keys:
-//   { signature, timestamp, apiKey, passphrase }
-//
-// The SDK then attaches these as the appropriate HMAC headers
-// (POLY_ADDRESS, POLY_SIGNATURE, POLY_TIMESTAMP, POLY_API_KEY,
-// POLY_PASSPHRASE) on the actual relayer/CLOB request.
-//
-// Returning POLY_BUILDER_* keys (as the previous version did) is wrong:
-// the SDK ignores those names and sends no auth headers, hence
-// "401 invalid authorization" from the relayer.
 // ═══════════════════════════════════════════════════════════════════
 
 router.post('/sign', express.json({ limit: '1mb' }), async (req, res) => {
@@ -185,12 +222,10 @@ router.post('/sign', express.json({ limit: '1mb' }), async (req, res) => {
     }
 
     const ip = req.ip || req.headers['x-forwarded-for']?.split(',')[0]?.trim() || 'unknown';
-
     if (!checkSignRate(ip)) {
       return res.status(429).json({ error: 'Too many sign requests' });
     }
 
-    // Accept both `path` (old) and `requestPath` (current SDK)
     const body = req.body || {};
     const method = body.method;
     const requestPath = body.requestPath || body.path;
@@ -205,7 +240,6 @@ router.post('/sign', express.json({ limit: '1mb' }), async (req, res) => {
 
     let signature;
     if (sdkBuildHmacSignature) {
-      // Use SDK if available — it knows the canonical scheme
       try {
         signature = await sdkBuildHmacSignature(
           BUILDER_SECRET,
@@ -222,21 +256,17 @@ router.post('/sign', express.json({ limit: '1mb' }), async (req, res) => {
       signature = manualHmac(BUILDER_SECRET, timestamp, method, requestPath, payload);
     }
 
-    // Return BOTH naming conventions so SDK versions old & new work.
     return res.json({
-      // Lowercase keys (current SDK)
       signature,
       timestamp,
       apiKey: BUILDER_KEY,
       passphrase: BUILDER_PASSPHRASE,
-      // Header-style keys (some SDK versions read these instead)
       headers: {
         POLY_SIGNATURE: signature,
         POLY_TIMESTAMP: timestamp,
         POLY_API_KEY: BUILDER_KEY,
         POLY_PASSPHRASE: BUILDER_PASSPHRASE,
       },
-      // Legacy POLY_BUILDER_* keys (kept for backward compat)
       POLY_BUILDER_SIGNATURE: signature,
       POLY_BUILDER_TIMESTAMP: timestamp,
       POLY_BUILDER_API_KEY: BUILDER_KEY,
@@ -258,22 +288,12 @@ router.post('/sign', express.json({ limit: '1mb' }), async (req, res) => {
 router.post('/deposit', express.json({ limit: '64kb' }), async (req, res) => {
   try {
     const { address } = req.body || {};
-
-    if (!address) {
-      return res.status(400).json({ error: 'address required' });
-    }
-
-    if (!isEvmAddress(address)) {
-      return res.status(400).json({ error: 'valid EVM address required' });
-    }
-
+    if (!address) return res.status(400).json({ error: 'address required' });
+    if (!isEvmAddress(address)) return res.status(400).json({ error: 'valid EVM address required' });
     const result = await bridgeDepositAddress(address);
     return res.json(result.raw);
   } catch (e) {
-    return res.status(502).json({
-      error: 'deposit_failed',
-      detail: String(e?.message || e),
-    });
+    return res.status(502).json({ error: 'deposit_failed', detail: String(e?.message || e) });
   }
 });
 
@@ -284,16 +304,11 @@ router.post('/deposit', express.json({ limit: '64kb' }), async (req, res) => {
 router.get('/status/:address', async (req, res) => {
   try {
     const input = String(req.params.address || '').trim();
-
-    if (!input) {
-      return res.status(400).json({ error: 'address required' });
-    }
+    if (!input) return res.status(400).json({ error: 'address required' });
 
     let svm = input;
-
     if (isEvmAddress(input)) {
       const addrs = await bridgeDepositAddress(input);
-
       if (!addrs.svm) {
         return res.status(502).json({
           error: 'bridge_svm_missing',
@@ -301,7 +316,6 @@ router.get('/status/:address', async (req, res) => {
           address: addrs,
         });
       }
-
       svm = addrs.svm;
     }
 
@@ -316,17 +330,12 @@ router.get('/status/:address', async (req, res) => {
       { method: 'GET', headers: { Accept: 'application/json' } },
       8_000,
     );
-
     return forwardResponse(res, r);
   } catch (e) {
-    return res.status(502).json({
-      error: 'status_failed',
-      detail: String(e?.message || e),
-    });
+    return res.status(502).json({ error: 'status_failed', detail: String(e?.message || e) });
   }
 });
 
-// Backward-compatible alias.
 router.get('/status-by-safe/:safe', async (req, res) => {
   req.params.address = req.params.safe;
   return router.handle(req, res);
@@ -339,19 +348,14 @@ router.get('/status-by-safe/:safe', async (req, res) => {
 router.post('/withdraw', express.json({ limit: '128kb' }), async (req, res) => {
   try {
     const body = req.body || {};
-
     const r = await fetchWithTimeout(`${BRIDGE_URL}/withdraw`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(body),
     }, 15_000);
-
     return forwardResponse(res, r);
   } catch (e) {
-    return res.status(502).json({
-      error: 'withdraw_failed',
-      detail: String(e?.message || e),
-    });
+    return res.status(502).json({ error: 'withdraw_failed', detail: String(e?.message || e) });
   }
 });
 
@@ -366,13 +370,9 @@ router.post('/quote', express.json({ limit: '128kb' }), async (req, res) => {
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify(req.body || {}),
     }, 10_000);
-
     return forwardResponse(res, r);
   } catch (e) {
-    return res.status(502).json({
-      error: 'quote_failed',
-      detail: String(e?.message || e),
-    });
+    return res.status(502).json({ error: 'quote_failed', detail: String(e?.message || e) });
   }
 });
 
@@ -386,40 +386,28 @@ let _saTs = 0;
 router.get('/supported-assets', async (_req, res) => {
   try {
     const now = Date.now();
-
-    if (_saCache && now - _saTs < 600_000) {
-      return res.json(_saCache);
-    }
+    if (_saCache && now - _saTs < 600_000) return res.json(_saCache);
 
     const r = await fetchWithTimeout(
       `${BRIDGE_URL}/supported-assets`,
       { method: 'GET', headers: { Accept: 'application/json' } },
       8_000,
     );
-
     const text = await r.text();
 
     let data;
-    try {
-      data = JSON.parse(text);
-    } catch {
+    try { data = JSON.parse(text); }
+    catch {
       return res.status(r.status).json({
         error: 'supported_assets_non_json',
         body: text.slice(0, 500),
       });
     }
 
-    if (r.ok) {
-      _saCache = data;
-      _saTs = now;
-    }
-
+    if (r.ok) { _saCache = data; _saTs = now; }
     return res.status(r.status).json(data);
   } catch (e) {
-    return res.status(502).json({
-      error: 'supported_assets_failed',
-      detail: String(e?.message || e),
-    });
+    return res.status(502).json({ error: 'supported_assets_failed', detail: String(e?.message || e) });
   }
 });
 
