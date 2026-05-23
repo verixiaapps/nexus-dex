@@ -13,7 +13,7 @@ const router  = express.Router();
 const JUP_API_KEY  = process.env.JUPITER_API_KEY || '';
 const PRED_BASE    = 'https://api.jup.ag/prediction/v1';
 const ULTRA_BASE   = 'https://api.jup.ag/ultra/v1';
- 
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function need(key) {
   if (!JUP_API_KEY) {
@@ -46,8 +46,10 @@ router.get('/health', (req, res) => {
 // ── Events / Markets discovery ───────────────────────────────────────────────
 // GET /api/predict/events?category=crypto&limit=20
 router.get('/events', (req, res) => {
-  const qs = new URLSearchParams(req.query).toString();
-  return fwd(req, res, `${PRED_BASE}/events?${qs}`);
+  const q = new URLSearchParams(req.query);
+  if (!q.has('provider')) q.set('provider', 'polymarket');
+  if (!q.has('limit'))    q.set('limit', '80');
+  return fwd(req, res, `${PRED_BASE}/events?${q.toString()}`);
 });
 
 // GET /api/predict/markets?eventId=...
