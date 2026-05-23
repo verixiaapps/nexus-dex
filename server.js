@@ -1,5 +1,5 @@
 require('dotenv').config();
- 
+
 const crypto    = require('crypto');
 const express   = require('express');
 const cors      = require('cors');
@@ -22,8 +22,8 @@ const EXTRA_CONNECT_SRC = _csv(process.env.EXTRA_CSP_CONNECT_SRC);
 const EXTRA_FRAME_SRC   = _csv(process.env.EXTRA_CSP_FRAME_SRC);
 const EXTRA_SCRIPT_SRC  = _csv(process.env.EXTRA_CSP_SCRIPT_SRC);
 
-// NOTE: added 'https://buy.moonpay.com' for the on-ramp link-out in Predict.jsx.
-// MoonPay opens in a new tab so this is precautionary; harmless if unused.
+// CSP: Polymarket domains removed (no longer used).
+// Jupiter Predict already covered by https://api.jup.ag.
 const CSP_DIRECTIVES = [
   ['default-src',     ["'self'"]],
   ['script-src',      ["'self'", "'unsafe-inline'", 'https://challenges.cloudflare.com', ...EXTRA_SCRIPT_SRC]],
@@ -36,7 +36,7 @@ const CSP_DIRECTIVES = [
   ['frame-ancestors', ["'none'"]],
   ['frame-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org', 'https://challenges.cloudflare.com', 'https://buy.moonpay.com', ...EXTRA_FRAME_SRC]],
   ['child-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org']],
-  ['connect-src',     ["'self'", 'https://li.quest', 'https://arb1.arbitrum.io', 'https://web3.okx.com', 'https://quote-api.jup.ag', 'https://lite-api.jup.ag', 'https://api.jup.ag', 'https://token.jup.ag', 'https://api.hyperliquid.xyz', 'https://api.hyperliquid-testnet.xyz', 'https://pumpportal.fun', 'wss://pumpportal.fun', 'https://api.dexscreener.com', 'https://*.dexscreener.com', 'https://auth.privy.io', 'https://*.privy.io', 'https://*.privy.systems', 'https://*.rpc.privy.systems', 'https://explorer-api.walletconnect.com', 'https://*.walletconnect.com', 'https://*.walletconnect.org', 'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org', 'wss://*.walletconnect.com', 'wss://*.walletconnect.org', 'wss://www.walletlink.org', 'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com', 'https://api.pinata.cloud', 'https://*.publicnode.com', 'https://*.drpc.org', 'https://public.chainalysis.com', 'https://gamma-api.polymarket.com', 'https://clob.polymarket.com', 'https://bridge.polymarket.com', 'https://data-api.polymarket.com', 'https://relayer-v2.polymarket.com', 'https://polygon-rpc.com', 'https://polygon.llamarpc.com', 'https://rpc.ankr.com', ...EXTRA_CONNECT_SRC]],
+  ['connect-src',     ["'self'", 'https://li.quest', 'https://arb1.arbitrum.io', 'https://web3.okx.com', 'https://quote-api.jup.ag', 'https://lite-api.jup.ag', 'https://api.jup.ag', 'https://token.jup.ag', 'https://api.hyperliquid.xyz', 'https://api.hyperliquid-testnet.xyz', 'https://pumpportal.fun', 'wss://pumpportal.fun', 'https://api.dexscreener.com', 'https://*.dexscreener.com', 'https://auth.privy.io', 'https://*.privy.io', 'https://*.privy.systems', 'https://*.rpc.privy.systems', 'https://explorer-api.walletconnect.com', 'https://*.walletconnect.com', 'https://*.walletconnect.org', 'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org', 'wss://*.walletconnect.com', 'wss://*.walletconnect.org', 'wss://www.walletlink.org', 'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com', 'https://api.pinata.cloud', 'https://*.publicnode.com', 'https://*.drpc.org', 'https://public.chainalysis.com', ...EXTRA_CONNECT_SRC]],
   ['worker-src',      ["'self'", 'blob:']],
   ['manifest-src',    ["'self'"]],
 ];
@@ -134,8 +134,8 @@ function scrubSecrets(s) {
     .replace(/OK-ACCESS-KEY["':\s]+[^&\s"',}]+/gi,        'OK-ACCESS-KEY=***')
     .replace(/OK-ACCESS-SIGN["':\s]+[^&\s"',}]+/gi,       'OK-ACCESS-SIGN=***')
     .replace(/OK-ACCESS-PASSPHRASE["':\s]+[^&\s"',}]+/gi, 'OK-ACCESS-PASSPHRASE=***')
-    .replace(/POLY_BUILDER_[A-Z_]+["':\s]+[^&\s"',}]+/gi, 'POLY_BUILDER_***=***')
     .replace(/api-key=[^&\s"']+/gi,                        'api-key=***')
+    .replace(/x-api-key["':\s]+[^&\s"',}]+/gi,             'x-api-key=***')
     .replace(/Bearer\s+[A-Za-z0-9._-]+/gi,                'Bearer ***')
     .replace(/privateKey["':\s]+[^&\s"',}]+/gi,           'privateKey=***')
     .replace(/signature["':\s]+{[^}]+}/gi,                'signature={***}');
@@ -838,22 +838,11 @@ app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, r
   }
 });
 
-/* -- Polymarket builder relayer ----------------------------------------- */
-// Mounts /api/poly/sign, /api/poly/builder-code, /api/poly/deposit,
-// /api/poly/status/:svm, /api/poly/withdraw, /api/poly/quote,
-// /api/poly/supported-assets, /api/poly/health.
-// Holds Polymarket builder API creds server-side; builder secret never
-// reaches the browser. SDK on the frontend (via BuilderConfig.remoteBuilderConfig)
-// fetches HMAC headers from /api/poly/sign per relayer/CLOB call.
-app.use('/api/poly', require('./server-poly-relayer'));
-
-/* -- Predict bridge (Mayan path — DISABLED) ----------------------------- */
-// Mayan path disabled per design decision (2026-05-22). Predict.jsx v4 now
-// bridges Solana -> Polygon via LI.FI (Mayan denylisted) for better
-// reliability. predict-bridge.js stays on disk for reference; uncomment
-// the require below to re-enable.
-//
-// require('./predict-bridge')(app);
+/* -- Predict (Jupiter Prediction Markets) ------------------------------- */
+// Mounts /api/predict/* — proxies Jupiter Predict API (events, markets,
+// orders, positions) plus Jupiter Ultra swap (for SOL→USDC fallback in
+// Predict.jsx). API key held server-side; never reaches browser.
+app.use('/api/predict', require('./server-predict'));
 
 /* -- Health ------------------------------------------------------------- */
 app.get('/api/health', (req, res) => {
@@ -862,15 +851,14 @@ app.get('/api/health', (req, res) => {
     has: {
       okx:            Boolean(OKX_API_KEY && OKX_SECRET_KEY && OKX_PASSPHRASE),
       jupiter:        Boolean(JUPITER_ENABLED),
+      jupiterApiKey:  Boolean(JUPITER_API_KEY),
       helius:         Boolean(HELIUS_API_KEY || HELIUS_RPC_URL),
       pinata:         Boolean(PINATA_JWT),
       bridgeOperator: Boolean(OPERATOR_PRIVATE_KEY),
       lifiApiKey:     Boolean(LIFI_API_KEY),
       unit:           true,
       adminKey:       Boolean(process.env.ADMIN_KEY),
-      predictBridge:  false, // Mayan path disabled — LI.FI used instead
-      polyBuilder:    Boolean(process.env.POLY_BUILDER_API_KEY && process.env.POLY_BUILDER_SECRET && process.env.POLY_BUILDER_PASSPHRASE),
-      polyBuilderCode:Boolean(process.env.POLY_BUILDER_CODE),
+      predict:        Boolean(JUPITER_API_KEY),
     },
     bridge: OPERATOR_PRIVATE_KEY ? {
       arbRpc: ARB_RPC_URL, active: bridgeTracking.size,
@@ -879,14 +867,12 @@ app.get('/api/health', (req, res) => {
     } : { enabled: false },
     lifi: { baseUrl: LIFI_API, hyperCoreChainId: 1337, arbChainId: 42161 },
     unit: { baseUrl: UNIT_API_BASE, flow: 'SOL <-> HL native via Hyperunit Guardian network' },
-    predict: {
-      flow: 'Solana USDC -> Polygon USDC.e via LI.FI (Mayan denylisted); 5% service fee captured Solana-side; CLOB orders signed silently by Privy embedded EVM wallet (Safe sig type 2); builder code attribution',
-      relayer: 'https://relayer-v2.polymarket.com/',
-      bridgeProvider: 'LI.FI (denylist: mayan)',
-    },
-    polymarket: process.env.POLY_BUILDER_API_KEY ? {
-      flow: 'Privy embedded EVM owns Safe; CLOB orders via @polymarket/clob-client-v2; builder code attached per order',
-      relayer: 'https://relayer-v2.polymarket.com/',
+    predict: JUPITER_API_KEY ? {
+      provider: 'Jupiter Prediction Market API (beta)',
+      base: 'https://api.jup.ag/prediction/v1',
+      flow: 'Solana wallet -> USDC or auto SOL->USDC swap (Jupiter Ultra) -> Jupiter Predict order + 5% fee transfer atomically in one tx',
+      fee: '5% of trade size to FEE_WALLET_SOL',
+      note: 'US and South Korea IPs are geo-blocked upstream',
     } : { enabled: false },
     time: new Date().toISOString(),
   });
@@ -923,11 +909,10 @@ app.listen(PORT, () => {
   console.log('  env: ' + NODE_ENV);
   console.log('  LI.FI: ' + LIFI_API + (LIFI_API_KEY ? ' (key set)' : ' (no key)'));
   console.log('  Unit:  ' + UNIT_API_BASE);
-  console.log('  Predict bridge (Mayan): DISABLED — using LI.FI');
-  if (process.env.POLY_BUILDER_API_KEY) {
-    console.log('  Poly builder: ' + process.env.POLY_BUILDER_API_KEY.slice(0, 8) + '...' + (process.env.POLY_BUILDER_CODE ? ' (builder code set)' : ' (NO builder code)'));
+  if (JUPITER_API_KEY) {
+    console.log('  Predict: Jupiter Prediction API enabled');
   } else {
-    console.warn('  WARNING: POLY_BUILDER_API_KEY not set -- Polymarket trading disabled');
+    console.warn('  WARNING: JUPITER_API_KEY not set -- Predict page will not work');
   }
   if (OPERATOR_PRIVATE_KEY) {
     try { const w = getOperatorWallet(); console.log('  Operator: ' + w.address); }
