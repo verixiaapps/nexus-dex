@@ -460,6 +460,25 @@ function buildLifiHeaders() {
   if (LIFI_API_KEY) h['x-lifi-api-key'] = LIFI_API_KEY;
   return h;
 }
+
+app.get('/api/lifi/tokens', async (req, res) => {
+  try {
+    // Large response — cache for 5 minutes server-side.
+    const cacheKey = 'lifi:tokens';
+    const c = getCachedJson(cacheKey);
+    if (c) return res.status(c.status).json(c.payload);
+    const r = await fetchWithTimeout(`${LIFI_API}/tokens`, { headers: buildLifiHeaders() }, 20_000);
+    const result = await safeJson(r);
+    if (r.ok && result.parsed !== null)
+      setCachedJson(cacheKey, r.status, result.parsed, 300_000); // 5 min
+    return respondJsonOrError(res, r, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'LI.FI tokens timed out' });
+    logError('lifi-tokens', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
 app.get('/api/lifi/quote', async (req, res) => {
   try {
     const params = new URLSearchParams(req.query);
@@ -472,6 +491,7 @@ app.get('/api/lifi/quote', async (req, res) => {
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
+
 app.get('/api/lifi/status', async (req, res) => {
   try {
     const params = new URLSearchParams(req.query);
@@ -917,4 +937,3 @@ app.listen(PORT, () => {
 
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
 process.on('unhandledRejection', err => logError('unhandledRejection', err));
- 
