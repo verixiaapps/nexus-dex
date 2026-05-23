@@ -20,6 +20,7 @@ import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
   Connection, PublicKey, VersionedTransaction, TransactionMessage,
+  ComputeBudgetProgram,
 } from '@solana/web3.js';
 import {
   createTransferCheckedInstruction,
@@ -35,6 +36,11 @@ const FEE_BPS       = 500;   // 5%
 const SOL_RPC       = '/api/solana-rpc';
 const MIN_TRADE_USD = 5;
 const NAV_CLEARANCE = 120;
+
+// Priority fee: target ~0.001 SOL (~$0.17) per fee-tx for fast confirmation.
+// 5000 micro-lamports/CU × 200K CU limit = 0.001 SOL ceiling.
+const PRIORITY_FEE_MICROLAMPORTS = 5_000;
+const PRIORITY_FEE_CU_LIMIT      = 200_000;
 
 const CATEGORIES = [
   { id: 'all',       label: 'All' },
@@ -246,27 +252,36 @@ function pickEventFields(ev) {
   };
 }
 
-// Position shape from Jupiter:
+// Position shape from Jupiter (per /docs/prediction/position-data):
 //   { pubkey, ownerPubkey, marketId, isYes,
-//     contracts (string), totalCostUsd (string micro), avgPriceUsd (string micro),
-//     markPriceUsd (string micro), valueUsd, payoutUsd, unrealizedPnlUsd,
+//     contracts (string),
+//     totalCostUsd (string micro), avgPriceUsd (string micro),
+//     markPriceUsd (string micro, nullable when closed),
+//     valueUsd (string micro, nullable when closed),
+//     payoutUsd (string micro), pnlUsd (string micro, nullable when closed),
 //     claimable, claimed, claimedUsd,
-//     marketMetadata: { title, status, result } }
+//     eventMetadata:  { eventId, title, subtitle, imageUrl, category, ... },
+//     marketMetadata: { marketId, title, status, result, openTime, closeTime } }
 function pickPositionFields(p) {
   if (!p) return null;
   const contracts    = Number(p.contracts || 0);
   const avgPriceUsd  = toUsd(p.avgPriceUsd);
-  const markPriceUsd = toUsd(p.markPriceUsd);
+  const markPriceUsd = toUsd(p.markPriceUsd);    // 0 if market closed
   const costUsd      = toUsd(p.totalCostUsd) || contracts * avgPriceUsd;
   const valueUsd     = toUsd(p.valueUsd)     || contracts * markPriceUsd;
-  const pnlUsd       = toUsd(p.unrealizedPnlUsd) || (valueUsd - costUsd);
+  const pnlUsd       = toUsd(p.pnlUsd)       || (valueUsd - costUsd);
   const payoutUsd    = toUsd(p.payoutUsd);
-  const meta         = p.marketMetadata || {};
+  const evMeta       = p.eventMetadata  || {};
+  const mktMeta      = p.marketMetadata || {};
+  // Show the event title ("What price will Bitcoin hit in 2026?")
+  // not the outcome name ("90,000") which lives in marketMetadata.title.
+  const title = evMeta.title || mktMeta.title || p.title || 'Position';
   return {
     positionPubkey: p.pubkey || p.positionPubkey,
     marketId:    p.marketId,
-    title:       meta.title || p.title || 'Position',
-    marketResult: meta.result || null,
+    title,
+    outcomeLabel: mktMeta.title || null,  // e.g. "90,000" or "France"
+    marketResult: mktMeta.result || null,
     isYes:       !!p.isYes,
     contracts, avgPriceUsd, markPriceUsd, costUsd, valueUsd, pnlUsd, payoutUsd,
     claimable:   !!p.claimable,
@@ -293,6 +308,8 @@ async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomi
       ownerPubkey, marketId, isYes, isBuy: true,
       depositAmount: String(depositAmountUsdcAtomic),
       depositMint:   USDC_MINT,
+      // Cap priority fee at ~0.001 SOL (~$0.17) for fast confirms.
+      prioritizationFeeLamports: 1_000_000,
     }),
   });
   const j = await r.json();
@@ -312,6 +329,8 @@ async function buildFeeTx({ ownerPubkey, feeAmountUsdcAtomic, connection }) {
     payerKey: owner,
     recentBlockhash: blockhash,
     instructions: [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: PRIORITY_FEE_CU_LIMIT }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
       createAssociatedTokenAccountIdempotentInstruction(owner, feeAta, feeWal, mint),
       createTransferCheckedInstruction(fromAta, mint, feeAta, owner, feeAmountUsdcAtomic, 6),
     ],
@@ -324,7 +343,7 @@ async function buildSellTx({ ownerPubkey, positionPubkey }) {
   const r = await jfetch(`/api/predict/positions/${encodeURIComponent(positionPubkey)}`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ownerPubkey }),
+    body: JSON.stringify({ ownerPubkey, prioritizationFeeLamports: 1_000_000 }),
   });
   const j = await r.json();
   if (!j?.transaction) throw new Error('No sell tx returned');
@@ -336,7 +355,7 @@ async function buildClaimTx({ ownerPubkey, positionPubkey }) {
   const r = await jfetch(`/api/predict/positions/${encodeURIComponent(positionPubkey)}/claim`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ownerPubkey }),
+    body: JSON.stringify({ ownerPubkey, prioritizationFeeLamports: 1_000_000 }),
   });
   const j = await r.json();
   if (!j?.transaction) throw new Error('No claim tx returned');
@@ -350,6 +369,7 @@ async function buildUltraSwapTx({ ownerPubkey, usdcAtomicNeeded }) {
     amount:     String(usdcAtomicNeeded),
     swapMode:   'ExactOut',
     taker:      ownerPubkey,
+    prioritizationFeeLamports: '1000000',
   });
   const r = await jfetch('/api/predict/ultra/order?' + params.toString());
   const j = await r.json();
@@ -628,7 +648,7 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection 
       setStMsg('Submitting…');
       const sigs = await Promise.all(signed.map(stx =>
         connection.sendRawTransaction(stx.serialize(), {
-          maxRetries: 5, skipPreflight: true, preflightCommitment: 'confirmed',
+          maxRetries: 5, skipPreflight: false, preflightCommitment: 'confirmed',
         })
       ));
 
@@ -781,6 +801,9 @@ function PositionCard({ p, onAction }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, lineHeight: 1.3, marginBottom: 4, ...T.body }}>{p.title}</div>
+          {p.outcomeLabel && p.outcomeLabel !== p.title && (
+            <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, ...T.mono }}>{p.outcomeLabel}</div>
+          )}
           <div style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 99, background: sideDim, border: `1px solid ${sideColor}55`, color: sideColor, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>{p.isYes ? 'YES' : 'NO'}</div>
         </div>
         <div style={{ textAlign: 'right' }}>
@@ -835,9 +858,49 @@ function SellDrawer({ position, onClose, onDone, connection }) {
       await simulateOrThrow(connection, tx, 'sell');
       setStMsg('Confirm in your wallet…');
       const signed = await signTransaction(tx);
+
       setStMsg('Submitting…');
-      const sig = await connection.sendRawTransaction(signed.serialize(), { maxRetries: 3, preflightCommitment: 'confirmed' });
-      await connection.confirmTransaction(sig, 'confirmed');
+      const sig = await connection.sendRawTransaction(signed.serialize(), {
+        maxRetries: 5, skipPreflight: false, preflightCommitment: 'confirmed',
+      });
+
+      setStMsg('Confirming…');
+      // Use blockhash-based confirm so it doesn't hard-fail at 30s. If the
+      // blockhash expires, poll getSignatureStatus for another 15s. If it
+      // STILL hasn't landed, show Solscan link — the tx may still confirm.
+      const bh = await connection.getLatestBlockhash('confirmed');
+      let result;
+      try {
+        result = await connection.confirmTransaction({
+          signature: sig,
+          blockhash: bh.blockhash,
+          lastValidBlockHeight: bh.lastValidBlockHeight,
+        }, 'confirmed');
+      } catch (_expired) {
+        // Blockhash expired — poll status for 15s.
+        setStMsg('Verifying on-chain…');
+        const deadline = Date.now() + 15_000;
+        let landed = false;
+        while (Date.now() < deadline) {
+          const { value } = await connection.getSignatureStatuses([sig]);
+          const s = value?.[0];
+          if (s?.err) throw new Error('On-chain error: ' + JSON.stringify(s.err));
+          if (s?.confirmationStatus === 'confirmed' || s?.confirmationStatus === 'finalized') {
+            landed = true; break;
+          }
+          await new Promise(r => setTimeout(r, 1500));
+        }
+        if (!landed) {
+          setError(`Submitted but still confirming. View on Solscan: https://solscan.io/tx/${sig}`);
+          setStatus('idle'); setStMsg('');
+          onDone?.();
+          return;
+        }
+      }
+      if (result?.value?.err) {
+        throw new Error('On-chain error: ' + JSON.stringify(result.value.err));
+      }
+
       setStatus('success'); setStMsg('');
       onDone?.();
       setTimeout(() => onClose(), 2200);
@@ -860,6 +923,19 @@ function SellDrawer({ position, onClose, onDone, connection }) {
           <Row label="Avg price" value={`$${position.avgPriceUsd.toFixed(3)}`} />
           <Row label="Mark price" value={`$${position.markPriceUsd.toFixed(3)}`} />
           <Row label="Sell value" value={fmtUsd(position.valueUsd)} bold />
+        </div>
+
+        <div style={{
+          padding: '9px 11px', borderRadius: 10,
+          background: 'rgba(168,127,255,.06)',
+          border: '1px solid rgba(168,127,255,.25)',
+          marginBottom: 10, fontSize: 10, color: C.ink, lineHeight: 1.4, ...T.body,
+        }}>
+          <div style={{ fontWeight: 700, color: C.violet, marginBottom: 3, fontSize: 10, letterSpacing: 0.5, ...T.mono }}>
+            ⓘ HOW PAYOUT WORKS
+          </div>
+          You'll receive <strong>JupUSD</strong> (Jupiter's stablecoin) in your wallet — 1 JupUSD = $1.
+          Swap it to USDC anytime on the Swap page with near-zero fees.
         </div>
 
         {statusMsg && <StatusLine msg={statusMsg} />}
@@ -898,9 +974,45 @@ function ClaimDrawer({ position, onClose, onDone, connection }) {
       await simulateOrThrow(connection, tx, 'claim');
       setStMsg('Confirm in your wallet…');
       const signed = await signTransaction(tx);
+
       setStMsg('Submitting…');
-      const sig = await connection.sendRawTransaction(signed.serialize(), { maxRetries: 3, preflightCommitment: 'confirmed' });
-      await connection.confirmTransaction(sig, 'confirmed');
+      const sig = await connection.sendRawTransaction(signed.serialize(), {
+        maxRetries: 5, skipPreflight: false, preflightCommitment: 'confirmed',
+      });
+
+      setStMsg('Confirming…');
+      const bh = await connection.getLatestBlockhash('confirmed');
+      let result;
+      try {
+        result = await connection.confirmTransaction({
+          signature: sig,
+          blockhash: bh.blockhash,
+          lastValidBlockHeight: bh.lastValidBlockHeight,
+        }, 'confirmed');
+      } catch (_expired) {
+        setStMsg('Verifying on-chain…');
+        const deadline = Date.now() + 15_000;
+        let landed = false;
+        while (Date.now() < deadline) {
+          const { value } = await connection.getSignatureStatuses([sig]);
+          const s = value?.[0];
+          if (s?.err) throw new Error('On-chain error: ' + JSON.stringify(s.err));
+          if (s?.confirmationStatus === 'confirmed' || s?.confirmationStatus === 'finalized') {
+            landed = true; break;
+          }
+          await new Promise(r => setTimeout(r, 1500));
+        }
+        if (!landed) {
+          setError(`Submitted but still confirming. View on Solscan: https://solscan.io/tx/${sig}`);
+          setStatus('idle'); setStMsg('');
+          onDone?.();
+          return;
+        }
+      }
+      if (result?.value?.err) {
+        throw new Error('On-chain error: ' + JSON.stringify(result.value.err));
+      }
+
       setStatus('success'); setStMsg('');
       onDone?.();
       setTimeout(() => onClose(), 2500);
@@ -922,6 +1034,23 @@ function ClaimDrawer({ position, onClose, onDone, connection }) {
           <Row label="Contracts won" value={position.contracts.toFixed(2)} />
           <Row label="Payout" value={fmtUsd(position.payoutUsd)} valueColor={C.yes} bold />
         </div>
+
+        <div style={{
+          padding: '9px 11px', borderRadius: 10,
+          background: 'rgba(168,127,255,.06)',
+          border: '1px solid rgba(168,127,255,.25)',
+          marginBottom: 10, fontSize: 10, color: C.ink, lineHeight: 1.5, ...T.body,
+        }}>
+          <div style={{ fontWeight: 700, color: C.violet, marginBottom: 3, fontSize: 10, letterSpacing: 0.5, ...T.mono }}>
+            ⓘ HOW PAYOUTS WORK
+          </div>
+          Each winning contract = $1.00 paid in <strong>JupUSD</strong> (Jupiter's stablecoin) to your wallet. No fees on claims.
+          Swap JupUSD → USDC anytime on the Swap page with near-zero fees.
+          <div style={{ marginTop: 5, color: C.muted, fontSize: 9 }}>
+            Don't claim within 24h? Jupiter auto-claims for you — same payout, no action needed.
+          </div>
+        </div>
+
         {statusMsg && <StatusLine msg={statusMsg} />}
         {error && <ErrorLine msg={error} />}
         <PrimaryButton
