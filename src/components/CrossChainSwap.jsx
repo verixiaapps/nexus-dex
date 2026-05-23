@@ -337,61 +337,81 @@ const DEFAULT_TO = {
    QUOTE / SWAP API CALLS
 ───────────────────────────────────────────── */
 async function fetchOkxCrossQuote({ fromToken, toToken, amount, userWallet }) {
-  const params=new URLSearchParams({
-    fromChainIndex:   OKX_SOLANA_IDX,
-    toChainIndex:     toToken.chainId,
-    fromTokenAddress: toOkxSolAddress(fromToken.mint||fromToken.address),
+  // OKX cross-chain uses fromChainId/toChainId (NOT fromChainIndex/toChainIndex)
+  const params = new URLSearchParams({
+    fromChainId:      OKX_SOLANA_IDX,
+    toChainId:        toToken.chainId,
+    fromTokenAddress: toOkxSolAddress(fromToken.mint || fromToken.address),
     toTokenAddress:   toToken.address,
     amount:           String(amount),
     slippage:         SLIPPAGE,
   });
-  // userWalletAddress optional for quote — OKX rejects dummy addresses
-  if(userWallet && !/^1{32}$/.test(userWallet)) params.set('userWalletAddress',userWallet);
-  const r=await fetch('/api/okx/dex/cross-chain/quote?'+params);
-  const j=await r.json();
-  if(j.code!=='0'||!j.data) throw new Error(j.msg||'OKX cross-chain quote failed');
-  const d=Array.isArray(j.data)?j.data[0]:j.data;
-  return { engine:'okx', raw:d };
+  if(userWallet && userWallet.length > 10 && !/^1+$/.test(userWallet))
+    params.set('userWalletAddress', userWallet);
+  const r = await fetch('/api/okx/dex/cross-chain/quote?' + params);
+  const j = await r.json();
+  if(j.code !== '0' || !j.data) throw new Error((j.msg || j.error || 'OKX cross-chain quote failed') + ' [code=' + j.code + ']');
+  const d = Array.isArray(j.data) ? j.data[0] : j.data;
+  const toDec = Number(toToken.decimals) || 6;
+  // OKX cross-chain response uses toTokenAmount at top level
+  const rawOut = d.toTokenAmount ?? d.estimateAmount ?? d.receiveAmount ?? d.toAmount ?? d.minReceiveAmount ?? null;
+  if(rawOut == null) throw new Error('OKX cross-chain: no output amount. Keys: ' + Object.keys(d).join(','));
+  const outAmt = Number(rawOut) / Math.pow(10, toDec);
+  return {
+    engine: 'okx',
+    outAmt,
+    estimatedTime: d.estimatedTime || d.crossChainFee?.estimatedTime || null,
+    fee: d.crossChainFee?.totalFee || null,
+  };
 }
 
 async function fetchOkxCrossBuildTx({ fromToken, toToken, amount, userWallet, destAddress }) {
-  const params=new URLSearchParams({
-    fromChainIndex:   OKX_SOLANA_IDX,
-    toChainIndex:     toToken.chainId,
-    fromTokenAddress: toOkxSolAddress(fromToken.mint||fromToken.address),
+  // OKX cross-chain uses fromChainId/toChainId (NOT fromChainIndex/toChainIndex)
+  const params = new URLSearchParams({
+    fromChainId:      OKX_SOLANA_IDX,
+    toChainId:        toToken.chainId,
+    fromTokenAddress: toOkxSolAddress(fromToken.mint || fromToken.address),
     toTokenAddress:   toToken.address,
     amount:           String(amount),
     slippage:         SLIPPAGE,
-    userWalletAddress:userWallet,
-    receiveAddress:   destAddress||userWallet,
+    userWalletAddress: userWallet,
+    receiveAddress:   destAddress || userWallet,
   });
-  const r=await fetch('/api/okx/dex/cross-chain/build-tx?'+params);
-  const j=await r.json();
-  if(j.code!=='0'||!j.data) throw new Error(j.msg||'OKX build-tx failed');
-  return Array.isArray(j.data)?j.data[0]:j.data;
+  const r = await fetch('/api/okx/dex/cross-chain/build-tx?' + params);
+  const j = await r.json();
+  if(j.code !== '0' || !j.data) throw new Error(j.msg || 'OKX build-tx failed');
+  return Array.isArray(j.data) ? j.data[0] : j.data;
 }
 
 // Li.Fi uses 'SOL' as the chain key for Solana, not '501'
-const LIFI_SOLANA_CHAIN='SOL';
+const LIFI_SOLANA_CHAIN = 'SOL';
 
 async function fetchLifiQuote({ fromToken, toToken, amount, userWallet, destAddress }) {
-  const params=new URLSearchParams({
+  const params = new URLSearchParams({
     fromChain:  LIFI_SOLANA_CHAIN,
     toChain:    toToken.chainId,
-    fromToken:  fromToken.mint||fromToken.address,
+    fromToken:  fromToken.mint || fromToken.address,
     toToken:    toToken.address,
     fromAmount: String(amount),
     slippage:   '0.05',
   });
-  // fromAddress/toAddress optional for quote
-  if(userWallet && !/^1{32}$/.test(userWallet)){
-    params.set('fromAddress',userWallet);
-    params.set('toAddress',destAddress||userWallet);
+  if(userWallet && userWallet.length > 10 && !/^1+$/.test(userWallet)){
+    params.set('fromAddress', userWallet);
+    params.set('toAddress', destAddress || userWallet);
   }
-  const r=await fetch('/api/lifi/quote?'+params);
-  const j=await r.json();
-  if(!j.estimate) throw new Error(j.message||'LI.FI quote failed');
-  return { engine:'lifi', raw:j };
+  const r = await fetch('/api/lifi/quote?' + params);
+  const j = await r.json();
+  if(!j.estimate) throw new Error((j.message || j.error || 'LiFi quote failed'));
+  const toDec = Number(toToken.decimals) || 18;
+  const rawOut = j.estimate?.toAmount || j.estimate?.toAmountMin || null;
+  if(rawOut == null) throw new Error('LiFi quote: no output amount');
+  const outAmt = Number(rawOut) / Math.pow(10, toDec);
+  return {
+    engine: 'lifi',
+    outAmt,
+    estimatedTime: j.estimate?.executionDuration || null,
+    lifiQuote: j,
+  };
 }
 
 async function pollOkxCrossStatus(orderId) {
@@ -792,31 +812,39 @@ export default function CrossChainSwap({ onConnectWallet }) {
       const wallet=pubkey?.toString()||'';
       const dest=destAddr.trim()||wallet;
 
-      // OKX first
+      // OKX first — already parses outAmt internally
       try{
         const q=await fetchOkxCrossQuote({fromToken,toToken,amount:raw,userWallet:wallet});
-        const d=q.raw;
-        console.log('[CrossChain] OKX quote raw:', JSON.stringify(d).slice(0,400));
-        // OKX cross-chain quote response fields vary — check all known fields
-        const toDec=Number(toToken.decimals)||6;
-        const rawOut=d.toTokenAmount||d.estimateAmount||d.receiveAmount||d.toAmount||null;
-        const outAmt=rawOut?Number(rawOut)/Math.pow(10,toDec):null;
-        setQuote({engine:'okx',outAmount:outAmt,outAmountDisplay:outAmt!=null?fmtTokenDisplay(outAmt):'~',estimatedTime:d.estimatedTime||d.crossChainFee?.estimatedTime||null,fee:d.crossChainFee?.totalFee||null});
+        setQuote({
+          engine:'okx',
+          outAmount:q.outAmt,
+          outAmountDisplay:fmtTokenDisplay(q.outAmt),
+          estimatedTime:q.estimatedTime,
+          fee:q.fee,
+        });
+        return;
       }catch(okxErr){
-        console.warn('[CrossChain] OKX quote failed, trying Li.Fi:',okxErr.message);
-        try{
-          const q=await fetchLifiQuote({fromToken,toToken,amount:raw,userWallet:wallet,destAddress:dest});
-          console.log('[CrossChain] LiFi quote raw:', JSON.stringify(q.raw?.estimate).slice(0,400));
-          const rawOut=q.raw?.estimate?.toAmount||q.raw?.estimate?.toAmountMin;
-          const toDec=Number(toToken.decimals)||18;
-          const outAmt=rawOut?Number(rawOut)/Math.pow(10,toDec):null;
-          setQuote({engine:'lifi',outAmount:outAmt,outAmountDisplay:outAmt!=null?fmtTokenDisplay(outAmt):'~',estimatedTime:q.raw?.estimate?.executionDuration||null,fee:null,lifiQuote:q.raw});
-        }catch(lifiErr){
-          console.warn('[CrossChain] LiFi quote also failed:',lifiErr.message);
-          setQuote(null);
-        }
+        console.warn('[CrossChain] OKX:',okxErr.message);
       }
-    }catch(e){ console.error('[CrossChain] fetchQuote outer error:',e.message); setQuote(null); }
+
+      // Li.Fi fallback
+      try{
+        const q=await fetchLifiQuote({fromToken,toToken,amount:raw,userWallet:wallet,destAddress:dest});
+        setQuote({
+          engine:'lifi',
+          outAmount:q.outAmt,
+          outAmountDisplay:fmtTokenDisplay(q.outAmt),
+          estimatedTime:q.estimatedTime,
+          fee:null,
+          lifiQuote:q.lifiQuote,
+        });
+        return;
+      }catch(lifiErr){
+        console.warn('[CrossChain] LiFi:',lifiErr.message);
+      }
+
+      setQuote(null);
+    }catch(e){ console.error('[CrossChain] fetchQuote:',e.message); setQuote(null); }
     finally{ setQuoting(false); }
   },[fromAmt,fromToken,toToken,destAddr,pubkey]);
 
