@@ -173,8 +173,8 @@ async function okxQuote({ fromMint, toChainId, toAddress, amount }){
   const okxTo = OKX_CHAIN_INDEX[String(toChainId)];
   if (!okxTo) throw new Error('OKX: unsupported chain');
   const p = new URLSearchParams({
-    fromChainId: OKX_SOLANA_IDX,
-    toChainId:   okxTo,
+    fromChainIndex: OKX_SOLANA_IDX,
+    toChainIndex:   okxTo,
     fromTokenAddress: toOkxSol(fromMint),
     toTokenAddress:   toAddress,
     amount: String(amount),
@@ -189,8 +189,8 @@ async function okxQuote({ fromMint, toChainId, toAddress, amount }){
 async function okxBuild({ fromMint, toChainId, toTokenAddress, amount, sender, receiver }){
   const okxTo = OKX_CHAIN_INDEX[String(toChainId)];
   const p = new URLSearchParams({
-    fromChainId: OKX_SOLANA_IDX,
-    toChainId:   okxTo,
+    fromChainIndex: OKX_SOLANA_IDX,
+    toChainIndex:   okxTo,
     fromTokenAddress: toOkxSol(fromMint),
     toTokenAddress:   toTokenAddress,
     amount: String(amount),
@@ -238,6 +238,13 @@ async function sendSolanaTx({ connection, txBase64, sendTx }){
   const sig = await sendTx(tx, connection, { skipPreflight:false, preflightCommitment:'processed', maxRetries:3 });
   connection.confirmTransaction({ signature:sig, blockhash, lastValidBlockHeight }, 'confirmed').catch(()=>{});
   return sig;
+}
+
+/* placeholder receiver for QUOTING ONLY (must be valid for dest chain type) */
+const QUOTE_PLACEHOLDER_EVM = '0x000000000000000000000000000000000000dEaD';
+const QUOTE_PLACEHOLDER_SOL = '11111111111111111111111111111111';
+function placeholderReceiver(chainId){
+  return isEvm(chainId) ? QUOTE_PLACEHOLDER_EVM : QUOTE_PLACEHOLDER_SOL;
 }
 
 async function getUnifiedQuote({ fromToken, toToken, amount, sender, receiver }){
@@ -524,15 +531,20 @@ export default function CrossChainSwap({ onConnectWallet }){
   const fetchQuote = useCallback(async ()=>{
     setQuoteErr('');
     if (!fromAmt || +fromAmt <= 0 || !fromToken || !toToken) { setQuote(null); return; }
-    if (!pubkey) { setQuote(null); setQuoteErr('Connect your wallet to get a quote.'); return; }
     const myReq = ++reqIdRef.current;
     setQuoting(true);
     try {
       const dec = resolveDecimals(fromToken);
       const raw = toRaw(fromAmt, dec);
       if (!raw || raw === '0') { setQuote(null); setQuoting(false); return; }
-      const sender   = pubkey.toString();
-      const receiver = (destAddr.trim() && !validateDest(destAddr, toToken?.chainId)) ? destAddr.trim() : sender;
+      // For quoting only: aggregators need valid-format sender/receiver to
+      // return route estimates. If wallet isn't connected or destination
+      // isn't entered, use chain-appropriate placeholders. Real addresses
+      // are enforced at execute time.
+      const sender = pubkey ? pubkey.toString() : QUOTE_PLACEHOLDER_SOL;
+      const userDest = destAddr.trim();
+      const userDestOk = userDest && !validateDest(userDest, toToken?.chainId);
+      const receiver = userDestOk ? userDest : placeholderReceiver(toToken?.chainId);
       const q = await getUnifiedQuote({ fromToken, toToken, amount: raw, sender, receiver });
       if (myReq !== reqIdRef.current) return;
       setQuote(q);
