@@ -1655,6 +1655,20 @@ export default function Predict() {
           setupStatus={setupStatus}
         />
 
+        {setupStatus === 'error' && setupError && (
+          <div style={{ marginBottom: 10, padding: 12, borderRadius: 12, background: 'rgba(255,95,122,.10)', border: `1px solid ${C.no}55` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <span style={{ fontSize: 11, color: C.no, fontWeight: 800, letterSpacing: 1, ...T.mono }}>POLYMARKET SAFE SETUP FAILED</span>
+              <button onClick={() => copyToClipboard(setupError)} style={{ padding: '3px 8px', borderRadius: 6, background: C.no + '22', border: `1px solid ${C.no}55`, color: C.no, fontSize: 9, fontWeight: 700, cursor: 'pointer', ...T.mono }}>COPY</button>
+            </div>
+            <div style={{ fontSize: 11, color: C.ink, marginBottom: 8, ...T.mono, wordBreak: 'break-word', maxHeight: 120, overflowY: 'auto', padding: 8, background: 'rgba(0,0,0,.3)', borderRadius: 6, border: `1px solid ${C.no}22` }}>{setupError}</div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button onClick={runSetup} style={{ flex: 1, padding: '8px', borderRadius: 8, background: C.no + '22', border: `1px solid ${C.no}55`, color: C.no, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>↻ Retry setup</button>
+              <button onClick={() => setFundOpen(true)} style={{ flex: 1, padding: '8px', borderRadius: 8, background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>Open debug</button>
+            </div>
+          </div>
+        )}
+
         <div style={{ display: 'flex', gap: 5, marginBottom: 8, overflowX: 'auto' }}>
           {HORIZONS.map((h) => {
             const active = horizonId === h.id;
