@@ -521,16 +521,36 @@ function buildLifiHeaders() {
 
 app.get('/api/lifi/tokens', async (req, res) => {
   try {
-    const cacheKey = 'lifi:tokens';
+    // Allow client to filter by chain(s) and chainTypes (EVM, SVM, UTXO, MVM)
+    const qs = queryStringOf(req);
+    const cacheKey = 'lifi:tokens' + qs;
     const c = getCachedJson(cacheKey);
     if (c) return res.status(c.status).json(c.payload);
-    const r = await fetchWithTimeout(`${LIFI_API}/tokens`, { headers: buildLifiHeaders() }, 20_000);
+    const r = await fetchWithTimeout(`${LIFI_API}/tokens${qs}`, { headers: buildLifiHeaders() }, 20_000);
     const result = await safeJson(r);
     if (r.ok && result.parsed !== null) setCachedJson(cacheKey, r.status, result.parsed, 300_000);
     return respondJsonOrError(res, r, result);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'LI.FI tokens timed out' });
     logError('lifi-tokens', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+// All supported LI.FI chains. Supports chainTypes filter (EVM, SVM, UTXO, MVM).
+app.get('/api/lifi/chains', async (req, res) => {
+  try {
+    const qs = queryStringOf(req);
+    const cacheKey = 'lifi:chains' + qs;
+    const c = getCachedJson(cacheKey);
+    if (c) return res.status(c.status).json(c.payload);
+    const r = await fetchWithTimeout(`${LIFI_API}/chains${qs}`, { headers: buildLifiHeaders() }, 12_000);
+    const result = await safeJson(r);
+    if (r.ok && result.parsed !== null) setCachedJson(cacheKey, r.status, result.parsed, 600_000); // 10 min
+    return respondJsonOrError(res, r, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'LI.FI chains timed out' });
+    logError('lifi-chains', e);
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
