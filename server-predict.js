@@ -47,13 +47,13 @@ router.get('/health', (req, res) => {
 
 // ── Events ───────────────────────────────────────────────────────────────────
 // GET /api/predict/events?category=crypto
-// Always asks Jupiter to include markets so cards show pricing. Default filter
-// is 'open' (all open markets, including short-dated). The UI sorts by
-// Volume / Ending / New on the client side.
+// Always asks Jupiter to include markets so cards show pricing. No default
+// filter — Jupiter's filter values (new|live|trending|upcoming) are curated
+// subsets, not strict status filters; omitting the param returns everything
+// currently trading so short-dated markets show up too. UI sorts client-side.
 router.get('/events', (req, res) => {
   const q = new URLSearchParams(req.query);
   if (!q.has('includeMarkets')) q.set('includeMarkets', 'true');
-  if (!q.has('filter'))         q.set('filter', 'open');
   if (!q.has('limit'))          q.set('limit', '200');
   return fwd(req, res, `${PRED_BASE}/events?${q.toString()}`);
 });
