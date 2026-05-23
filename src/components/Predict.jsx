@@ -279,9 +279,13 @@ function pickPositionFields(p) {
 // SECTION 4: Transaction building
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function buildBuyWithFeeTx({
-  ownerPubkey, marketId, isYes, depositAmountUsdcAtomic, feeAmountUsdcAtomic, connection,
-}) {
+// Jupiter's /orders response is a co-signed VersionedTransaction (their keeper
+// or program already signed the message). We MUST NOT mutate it -- any change
+// to the message invalidates that signature. So we leave it alone and send
+// the platform fee as a separate transaction, bundled into one wallet popup
+// via signAllTransactions.
+
+async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomic }) {
   const r = await jfetch('/api/predict/orders', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -293,32 +297,26 @@ async function buildBuyWithFeeTx({
   });
   const j = await r.json();
   if (!j?.transaction) throw new Error('Jupiter returned no transaction');
+  return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)), orderInfo: j.order || null };
+}
 
-  const vtx = VersionedTransaction.deserialize(b64ToBytes(j.transaction));
-  const msg = vtx.message;
-  let lookupTables = [];
-  if (msg.addressTableLookups?.length) {
-    lookupTables = await Promise.all(msg.addressTableLookups.map(async ltl => {
-      const r = await connection.getAddressLookupTable(ltl.accountKey);
-      return r.value;
-    }));
-    lookupTables = lookupTables.filter(Boolean);
-  }
-
-  const decompiled = TransactionMessage.decompile(msg, { addressLookupTableAccounts: lookupTables });
-  const owner = new PublicKey(ownerPubkey);
-  const fee   = new PublicKey(FEE_WALLET);
-  const mint  = new PublicKey(USDC_MINT);
+async function buildFeeTx({ ownerPubkey, feeAmountUsdcAtomic, connection }) {
+  const owner   = new PublicKey(ownerPubkey);
+  const feeWal  = new PublicKey(FEE_WALLET);
+  const mint    = new PublicKey(USDC_MINT);
   const fromAta = getAssociatedTokenAddressSync(mint, owner);
-  const feeAta  = getAssociatedTokenAddressSync(mint, fee);
+  const feeAta  = getAssociatedTokenAddressSync(mint, feeWal);
 
-  decompiled.instructions.push(
-    createAssociatedTokenAccountIdempotentInstruction(owner, feeAta, fee, mint),
-    createTransferCheckedInstruction(fromAta, mint, feeAta, owner, feeAmountUsdcAtomic, 6),
-  );
-
-  const newMsg = decompiled.compileToV0Message(lookupTables);
-  return { tx: new VersionedTransaction(newMsg), orderInfo: j.order || null };
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  const msg = new TransactionMessage({
+    payerKey: owner,
+    recentBlockhash: blockhash,
+    instructions: [
+      createAssociatedTokenAccountIdempotentInstruction(owner, feeAta, feeWal, mint),
+      createTransferCheckedInstruction(fromAta, mint, feeAta, owner, feeAmountUsdcAtomic, 6),
+    ],
+  }).compileToV0Message();
+  return { tx: new VersionedTransaction(msg) };
 }
 
 async function buildSellTx({ ownerPubkey, positionPubkey }) {
@@ -363,10 +361,31 @@ async function simulateOrThrow(connection, tx, label) {
   const sim = await connection.simulateTransaction(tx, {
     sigVerify: false, replaceRecentBlockhash: true, commitment: 'confirmed',
   });
-  if (sim.value.err) {
-    const logs = (sim.value.logs || []).slice(-4).join(' | ');
-    throw new Error(`${label} sim failed: ${JSON.stringify(sim.value.err)} ${logs}`);
-  }
+  if (!sim.value.err) return;
+
+  const logs    = sim.value.logs || [];
+  const logBlob = logs.join(' ').toLowerCase();
+  const errStr  = JSON.stringify(sim.value.err).toLowerCase();
+
+  // Map common Solana errors to human-readable messages.
+  if (/insufficient (?:lamports|funds)/.test(logBlob) || /insufficientfunds/.test(errStr))
+    throw new Error(`Not enough balance to cover this ${label}.`);
+  if (/0x1|custom.*1\b/.test(errStr) && /token/.test(logBlob))
+    throw new Error('Not enough USDC.');
+  if (/market.*(closed|not.*open)/.test(logBlob))
+    throw new Error('Market is closed.');
+  if (/slippage|price.*(moved|changed)/.test(logBlob))
+    throw new Error('Price moved — try again.');
+  if (/account.*not.*found|uninitialized/.test(logBlob))
+    throw new Error('Account not ready — try once more in a moment.');
+  if (/blockhash.*not.*found|expired/.test(logBlob))
+    throw new Error('Network busy — try again.');
+
+  // Fallback: show last useful log line.
+  const tail = logs.slice(-3).filter(l => l && !l.startsWith('Program ')).pop()
+            || logs.slice(-1)[0]
+            || JSON.stringify(sim.value.err);
+  throw new Error(`${label} would fail: ${tail.slice(0, 160)}`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -551,9 +570,9 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection 
   useBodyLock(true);
 
   const m         = event.market;
-  const usd       = Number(amount) || 0;
-  const feeUsd    = usd * (FEE_BPS / 10000);
-  const depUsd    = usd - feeUsd;
+  const depUsd    = Number(amount) || 0;            // what goes to Jupiter
+  const feeUsd    = depUsd * (FEE_BPS / 10000);     // 5% on top
+  const usd       = depUsd + feeUsd;                // total user pays
   const price     = isYes ? m.yesPrice : m.noPrice;
   const contracts = price > 0 ? depUsd / price : 0;
   const upside    = depUsd > 0 ? ((contracts - depUsd) / depUsd) * 100 : 0;
@@ -573,45 +592,48 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection 
 
   const placeOrder = useCallback(async () => {
     if (!publicKey) { setError('Connect wallet first'); return; }
-    if (usd < MIN_TRADE_USD) { setError(`Min $${MIN_TRADE_USD}`); return; }
     setStatus('working'); setError(''); setStMsg('Preparing order…');
     try {
       const ownerPubkey = publicKey.toBase58();
+      if (!signAllTransactions) throw new Error('Wallet lacks signAllTransactions');
+
       setStMsg('Building order…');
-      const { tx: buyTx } = await buildBuyWithFeeTx({
+      const { tx: buyTx } = await buildBuyTx({
         ownerPubkey, marketId: m.marketId, isYes,
         depositAmountUsdcAtomic: depAtm.toString(),
-        feeAmountUsdcAtomic:     feeAtm,
-        connection,
+      });
+      const { tx: feeTx } = await buildFeeTx({
+        ownerPubkey, feeAmountUsdcAtomic: feeAtm, connection,
       });
 
+      // Bundle order + (optional swap) + fee into ONE wallet popup.
+      const txs = [];
       if (needsSwap) {
         setStMsg('Building SOL→USDC swap…');
         const { tx: swapTx } = await buildUltraSwapTx({ ownerPubkey, usdcAtomicNeeded: shortAtm.toString() });
-        setStMsg('Simulating swap…');
-        await simulateOrThrow(connection, swapTx, 'swap');
-        if (!signAllTransactions) throw new Error('Wallet lacks signAllTransactions');
-        setStMsg('Confirm in your wallet…');
-        const signed = await signAllTransactions([swapTx, buyTx]);
-        setStMsg('Submitting swap…');
-        const sig1 = await connection.sendRawTransaction(signed[0].serialize(), { maxRetries: 3, preflightCommitment: 'confirmed' });
-        await connection.confirmTransaction(sig1, 'confirmed');
-        setStMsg('Submitting order…');
-        const sig2 = await connection.sendRawTransaction(signed[1].serialize(), { maxRetries: 3, preflightCommitment: 'confirmed' });
-        await connection.confirmTransaction(sig2, 'confirmed');
-      } else {
-        setStMsg('Simulating…');
-        await simulateOrThrow(connection, buyTx, 'order');
-        if (!signTransaction) throw new Error('Wallet lacks signTransaction');
-        setStMsg('Confirm in your wallet…');
-        const signed = await signTransaction(buyTx);
-        setStMsg('Submitting…');
-        const sig = await connection.sendRawTransaction(signed.serialize(), { maxRetries: 3, preflightCommitment: 'confirmed' });
+        txs.push(swapTx);
+      }
+      txs.push(buyTx, feeTx);
+
+      // Pre-flight: simulate each tx so the user sees clear errors before
+      // we open the wallet popup. Catches balance, market-closed, slippage.
+      setStMsg('Checking…');
+      for (const stx of txs) {
+        await simulateOrThrow(connection, stx, 'order');
+      }
+
+      setStMsg('Confirm in your wallet…');
+      const signed = await signAllTransactions(txs);
+
+      setStMsg('Submitting…');
+      for (const stx of signed) {
+        const sig = await connection.sendRawTransaction(stx.serialize(), {
+          maxRetries: 3, preflightCommitment: 'confirmed',
+        });
         await connection.confirmTransaction(sig, 'confirmed');
       }
 
-      setStMsg('Filling…');
-      setStatus('success');
+      setStatus('success'); setStMsg('');
       onDone?.();
       setTimeout(() => onClose(), 2200);
     } catch (e) {
@@ -620,7 +642,7 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection 
       setStatus('error'); setStMsg('');
       setTimeout(() => setStatus('idle'), 5000);
     }
-  }, [publicKey, signTransaction, signAllTransactions, m, isYes, usd, depAtm, feeAtm, needsSwap, shortAtm, connection, onClose, onDone]);
+  }, [publicKey, signAllTransactions, m, isYes, depAtm, feeAtm, needsSwap, shortAtm, connection, onClose, onDone]);
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
