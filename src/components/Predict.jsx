@@ -8,7 +8,7 @@
 //               @solana/web3.js \
 //               @solana/spl-token \
 //               @solana/wallet-adapter-react
-//
+// 
 // V2 key changes vs old code:
 //   • No Gnosis Safe (signatureType 2) — deposit wallet (signatureType 3 / POLY_1271)
 //   • @polymarket/clob-client-v2  (object config, not positional args)
