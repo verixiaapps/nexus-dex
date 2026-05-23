@@ -1,23 +1,13 @@
 // Predict.jsx — Polymarket V2 deposit-wallet flow.
 //
-// Package requirements (install these):
+// Package requirements:
 //   npm install @polymarket/clob-client-v2 \
 //               @polymarket/builder-relayer-client \
 //               @polymarket/builder-signing-sdk \
-//               viem \
-//               @solana/web3.js \
-//               @solana/spl-token \
-//               @solana/wallet-adapter-react
-// 
-// V2 key changes vs old code:
-//   • No Gnosis Safe (signatureType 2) — deposit wallet (signatureType 3 / POLY_1271)
-//   • @polymarket/clob-client-v2  (object config, not positional args)
-//   • @polymarket/builder-relayer-client deployDepositWallet + executeDepositWalletBatch
-//   • BuilderConfig remoteBuilderConfig → /api/poly/sign (millisecond timestamps)
-//   • Approvals go through executeDepositWalletBatch FROM the deposit wallet
-//   • Orders: maker + signer both set to deposit wallet address
-//   • Sell = createAndPostOrder with Side.SELL, size = shares (not amountUsd)
-//   • Redeem winning positions via executeDepositWalletBatch → CTF redeemPositions
+//               viem
+//
+// V2 reference: https://docs.polymarket.com/trading/deposit-wallets
+// Contracts:    https://docs.polymarket.com/resources/contracts
 
 import React, {
   useEffect, useState, useCallback, useMemo, useRef,
@@ -34,14 +24,15 @@ const DATA_API_URL = 'https://data-api.polymarket.com';
 
 const POLYGON_CHAIN_ID = 137;
 
-// pUSD is the V2 collateral (1:1 USDC backing). CTF address is unchanged.
-const PUSD_ADDRESS        = '0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB';
-const CTF_EXCHANGE        = '0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E';
-const NEG_RISK_CTF        = '0xC5d563A36AE78145C45a50134d48A1215220f80a';
-const NEG_RISK_ADAPTER    = '0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296';
-const CONDITIONAL_TOKENS  = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045';
+// ─── Polymarket V2 contract addresses (Polygon mainnet) ──────────────────────
+// Source: https://docs.polymarket.com/resources/contracts
+const PUSD_ADDRESS          = '0xC011a7E12a19f7B1f670d46F03B03f3342E82DFB';
+const CTF_EXCHANGE_V2       = '0xE111180000d2663C0091e4f400237545B87B996B';
+const NEG_RISK_CTF_EXCHANGE = '0xe2222d279d744050d28e00520010520000310F59';
+const NEG_RISK_ADAPTER      = '0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296';
+const CONDITIONAL_TOKENS    = '0x4D97DCd97eC945f40cF65F87097ACe5EA0476045';
 
-// Builder code for V2 order attribution (bytes32 hex)
+// Builder code for V2 order attribution (bytes32 hex). Set yours here.
 const BUILDER_CODE = '0x6e656750ed8970d584732af619cb7a4d493e18bc9cbf4fd866eb9594f92569fa';
 
 // Solana
@@ -52,21 +43,20 @@ const TOKEN_PROGRAM_ID = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
 const ATA_PROGRAM_ID   = 'ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL';
 
 // Our server routes
-const BRIDGE_DEPOSIT = '/api/poly/deposit';
-const BRIDGE_STATUS  = '/api/poly/status';
+const BRIDGE_DEPOSIT  = '/api/poly/deposit';
+const BRIDGE_STATUS   = '/api/poly/status';
 const BRIDGE_WITHDRAW = '/api/poly/withdraw';
-const OKX_SWAP_PATH  = '/api/okx/dex/aggregator/swap';
-const OKX_SOL_CHAIN  = '501';
-const OKX_SLIPPAGE   = '0.5';
+const OKX_SWAP_PATH   = '/api/okx/dex/aggregator/swap';
+const OKX_SOL_CHAIN   = '501';
+const OKX_SLIPPAGE    = '0.5';
 
-const FEE_WALLET_SOL = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
-const USDC_FEE_PCT   = 5;
-const CRYPTO_TAG_ID  = 21;
-const MIN_TRADE_USD  = 5;
+const FEE_WALLET_SOL  = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
+const USDC_FEE_PCT    = 5;
+const CRYPTO_TAG_ID   = 21;
+const MIN_TRADE_USD   = 5;
 const MIN_DEPOSIT_USD = 5;
-const NAV_CLEARANCE  = 120;
+const NAV_CLEARANCE   = 120;
 
-// Polygon RPCs (fallback chain)
 const POLYGON_RPCS = [
   'https://polygon.llamarpc.com',
   'https://polygon-bor-rpc.publicnode.com',
@@ -246,7 +236,7 @@ function bytesToBase64(bytes) {
 }
 
 // ─── LocalStorage / SessionStorage helpers ────────────────────────────────────
-const SCHEMA_VERSION = 4; // bump whenever cache shape changes
+const SCHEMA_VERSION = 5; // bumped: re-derive deposit wallet with correct addresses
 const SCHEMA_KEY = 'pm_schema_v';
 (function migrateSchema() {
   try {
@@ -329,32 +319,31 @@ async function buildBuilderConfig() {
   });
 }
 
-// ─── Derive deposit wallet address (deterministic, no network call) ───────────
-async function deriveDepositWalletAddress(evm) {
+// ─── Build a RelayClient (deposit wallet flow) ───────────────────────────────
+async function buildRelayClient(evmAddress, getEvmProvider) {
   const { relayer } = await loadSdks();
-  // builder-relayer-client exports deriveDepositWallet helper
-  if (typeof relayer.deriveDepositWallet === 'function') {
-    // Needs factory + implementation from chain config
-    // These are stable Polymarket V2 addresses on Polygon
-    const DEPOSIT_WALLET_FACTORY     = '0x9F8E05e7Bd35B2d26028E8b1A71BB10FC02b1f5c';
-    const DEPOSIT_WALLET_IMPL        = '0x5E5FD9f87fe2B91e50A32C2e6b0bB48b1f3A30d';
-    return relayer.deriveDepositWallet(evm, DEPOSIT_WALLET_FACTORY, DEPOSIT_WALLET_IMPL);
-  }
-  // If the helper isn't exposed, derive via the relay client itself
+  const signer        = await buildViemSigner(getEvmProvider, evmAddress);
   const builderConfig = await buildBuilderConfig();
-  const signer = { getAddress: async () => evm, signTypedData: async () => '0x' }; // dummy — only for derive
-  const rc = new relayer.RelayClient(RELAYER_URL, POLYGON_CHAIN_ID, signer, builderConfig);
-  if (typeof rc.deriveDepositWalletAddress === 'function') {
-    return await rc.deriveDepositWalletAddress();
+  // Per docs: RelayClient(relayerUrl, chainId, walletClient, builderConfig)
+  // No fifth arg → uses default WALLET (deposit wallet) flow.
+  return new relayer.RelayClient(RELAYER_URL, POLYGON_CHAIN_ID, signer, builderConfig);
+}
+
+// ─── Derive deposit wallet address (deterministic, no network call) ───────────
+// Per docs: relayer.deriveDepositWalletAddress() is an instance method.
+async function deriveDepositWalletAddress(evmAddress, getEvmProvider) {
+  const rc = await buildRelayClient(evmAddress, getEvmProvider);
+  if (typeof rc.deriveDepositWalletAddress !== 'function') {
+    throw new Error('SDK missing deriveDepositWalletAddress — update @polymarket/builder-relayer-client');
   }
-  throw new Error('Cannot derive deposit wallet address — update @polymarket/builder-relayer-client');
+  return await rc.deriveDepositWalletAddress();
 }
 
 // ─── Deploy deposit wallet (WALLET-CREATE — no user signature required) ───────
 async function ensureDepositWalletDeployed(evm, getEvmProvider, onStatus) {
   let dw = lsGet(LS.depositWallet(evm));
   if (!dw) {
-    dw = await deriveDepositWalletAddress(evm);
+    dw = await deriveDepositWalletAddress(evm, getEvmProvider);
     lsSet(LS.depositWallet(evm), dw);
   }
   if (lsGet(LS.deployed(evm)) === '1') {
@@ -362,15 +351,12 @@ async function ensureDepositWalletDeployed(evm, getEvmProvider, onStatus) {
     return dw;
   }
   onStatus?.('Setting up your trading account…');
-  const { relayer } = await loadSdks();
-  const signer        = await buildViemSigner(getEvmProvider, evm);
-  const builderConfig = await buildBuilderConfig();
-  const rc = new relayer.RelayClient(RELAYER_URL, POLYGON_CHAIN_ID, signer, builderConfig);
+  const rc = await buildRelayClient(evm, getEvmProvider);
 
   const resp = await rc.deployDepositWallet();
-  await resp.wait();
+  const confirmed = await resp.wait();
   lsSet(LS.deployed(evm), '1');
-  dbg('wallet', 'deployed', { dw });
+  dbg('wallet', 'deployed', { dw, confirmed });
   return dw;
 }
 
@@ -392,20 +378,20 @@ async function ensureApprovals(evm, getEvmProvider, depositWallet, onStatus) {
   if (lsGet(LS.approvals(evm)) === '1') return;
   onStatus?.('Approving trading contracts…');
 
-  const { relayer } = await loadSdks();
-  const signer        = await buildViemSigner(getEvmProvider, evm);
-  const builderConfig = await buildBuilderConfig();
-  const rc = new relayer.RelayClient(RELAYER_URL, POLYGON_CHAIN_ID, signer, builderConfig);
+  const rc = await buildRelayClient(evm, getEvmProvider);
 
-  // In V2, approvals go through executeDepositWalletBatch, not execute()
-  // Each call uses { target, value, data } (not { to, value, data })
+  // Approvals must come FROM the deposit wallet (per V2 docs).
+  // pUSD spending: both V2 exchanges + the neg-risk adapter (which moves pUSD).
+  // CTF token spending: both V2 exchanges + the neg-risk adapter.
   const calls = [
-    { target: PUSD_ADDRESS,       value: '0', data: encErc20Approve(CTF_EXCHANGE,     MAX_UINT256.toString()) },
-    { target: PUSD_ADDRESS,       value: '0', data: encErc20Approve(NEG_RISK_CTF,     MAX_UINT256.toString()) },
-    { target: PUSD_ADDRESS,       value: '0', data: encErc20Approve(NEG_RISK_ADAPTER, MAX_UINT256.toString()) },
-    { target: CONDITIONAL_TOKENS, value: '0', data: encErc1155SetApprovalForAll(CTF_EXCHANGE,  true) },
-    { target: CONDITIONAL_TOKENS, value: '0', data: encErc1155SetApprovalForAll(NEG_RISK_CTF,  true) },
-    { target: CONDITIONAL_TOKENS, value: '0', data: encErc1155SetApprovalForAll(NEG_RISK_ADAPTER, true) },
+    // pUSD ERC-20 approvals
+    { target: PUSD_ADDRESS,       value: '0', data: encErc20Approve(CTF_EXCHANGE_V2,       MAX_UINT256.toString()) },
+    { target: PUSD_ADDRESS,       value: '0', data: encErc20Approve(NEG_RISK_CTF_EXCHANGE, MAX_UINT256.toString()) },
+    { target: PUSD_ADDRESS,       value: '0', data: encErc20Approve(NEG_RISK_ADAPTER,      MAX_UINT256.toString()) },
+    // CTF ERC-1155 approvals
+    { target: CONDITIONAL_TOKENS, value: '0', data: encErc1155SetApprovalForAll(CTF_EXCHANGE_V2,       true) },
+    { target: CONDITIONAL_TOKENS, value: '0', data: encErc1155SetApprovalForAll(NEG_RISK_CTF_EXCHANGE, true) },
+    { target: CONDITIONAL_TOKENS, value: '0', data: encErc1155SetApprovalForAll(NEG_RISK_ADAPTER,      true) },
   ];
 
   const deadline = String(Math.floor(Date.now() / 1000) + 600);
@@ -416,20 +402,23 @@ async function ensureApprovals(evm, getEvmProvider, depositWallet, onStatus) {
 }
 
 // ─── Derive / create user CLOB API credentials (L1 auth) ─────────────────────
-async function getOrDeriveCreds(evm, getEvmProvider) {
+async function getOrDeriveCreds(evm, getEvmProvider, depositWallet) {
   const cached = ssGetJson(SS.creds(evm));
   if (cached?.key && cached?.secret && cached?.passphrase) return cached;
 
-  const { clob }      = await loadSdks();
+  const { clob, signing }      = await loadSdks();
   const signer        = await buildViemSigner(getEvmProvider, evm);
   const builderConfig = await buildBuilderConfig();
 
-  // Temp client — no creds yet, just for L1 key derivation
-  // Pass builderConfig so key derivation also goes through our sign server
+  // Temp client — POLY_1271 / deposit-wallet funder so the L1 key derivation
+  // signs against the correct domain for a deposit wallet user.
+  const sigType = clob.SignatureTypeV2?.POLY_1271 ?? 3;
   const temp = new clob.ClobClient({
     host:          CLOB_URL,
     chain:         POLYGON_CHAIN_ID,
     signer,
+    signatureType: sigType,
+    funderAddress: depositWallet,
     builderConfig,
   });
 
@@ -456,34 +445,38 @@ async function getOrDeriveCreds(evm, getEvmProvider) {
 
 // ─── Build authenticated ClobClient V2 (POLY_1271, deposit wallet as funder) ──
 async function buildClobClient(getEvmProvider, evmAddress, depositWallet, creds) {
-  const { clob, signing } = await loadSdks();
+  const { clob } = await loadSdks();
   const signer        = await buildViemSigner(getEvmProvider, evmAddress);
   const builderConfig = await buildBuilderConfig();
+  const sigType = clob.SignatureTypeV2?.POLY_1271 ?? 3;
 
   return new clob.ClobClient({
     host:          CLOB_URL,
     chain:         POLYGON_CHAIN_ID,
     signer,
     creds,
-    signatureType: 3,           // POLY_1271 — deposit wallet ERC-1271
+    signatureType: sigType,
     funderAddress: depositWallet,
     builderConfig,
     throwOnError:  true,
   });
 }
 
-// ─── Full setup: deploy wallet → derive creds → approve contracts ─────────────
+// ─── Full setup: deploy wallet → derive creds → approve → sync balance ────────
 async function ensureSetup(evm, getEvmProvider, onStatus) {
   dbg('setup', 'start', { evm });
   const depositWallet = await ensureDepositWalletDeployed(evm, getEvmProvider, onStatus);
-  const creds         = await getOrDeriveCreds(evm, getEvmProvider);
+  const creds         = await getOrDeriveCreds(evm, getEvmProvider, depositWallet);
   await ensureApprovals(evm, getEvmProvider, depositWallet, onStatus);
 
-  // Sync CLOB balance cache after first setup (required by V2)
+  // Sync CLOB balance cache (required after funding / first setup).
+  // Must pass asset_type and use signature_type=3 implicitly via the client.
   try {
+    const { clob } = await loadSdks();
     const client = await buildClobClient(getEvmProvider, evm, depositWallet, creds);
+    const assetType = clob.AssetType?.COLLATERAL ?? 'COLLATERAL';
     if (typeof client.updateBalanceAllowance === 'function') {
-      await client.updateBalanceAllowance({ asset_type: 'COLLATERAL' });
+      await client.updateBalanceAllowance({ asset_type: assetType });
       dbg('setup', 'balance synced');
     }
   } catch (e) {
@@ -599,7 +592,6 @@ async function fetchBridgeStatus(addr) {
   } catch { return null; }
 }
 
-// Poll bridge for up to 60s (was 45s — bridge can be slow)
 async function waitForBridge(statusAddress, sig) {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
@@ -616,7 +608,6 @@ async function waitForBridge(statusAddress, sig) {
     await new Promise(r => setTimeout(r, 2500));
   }
   dbg('bridge', 'wait timed out — deposit may still arrive');
-  // Return true anyway — funds usually arrive, just slowly
   return true;
 }
 
@@ -636,7 +627,6 @@ async function submitSolTx(signedTx) {
   return j.result;
 }
 
-// ─── Deposit: SOL → swap via OKX → bridge SVM → pUSD in deposit wallet ───────
 async function depositFromSol({ ownerB58, evm, depositWallet, solAtomic, signFn, onStatus }) {
   onStatus?.('Getting deposit address…');
   const addrs = await getBridgeAddressesCached(evm, depositWallet);
@@ -673,7 +663,6 @@ async function depositFromSol({ ownerB58, evm, depositWallet, solAtomic, signFn,
   return { sig };
 }
 
-// ─── Deposit: USDC (Solana) → split (95% bridge + 5% fee) → bridge → deposit wallet ─
 async function buildUsdcSplitTx({ ownerB58, bridgeSvm, totalAtomic }) {
   const web3 = await import('@solana/web3.js');
   const spl  = await import('@solana/spl-token');
@@ -733,7 +722,6 @@ async function depositFromUsdc({ ownerB58, evm, depositWallet, usdcAtomic, signF
   return { sig };
 }
 
-// ─── Withdraw: pUSD from deposit wallet → Solana USDC ────────────────────────
 async function requestWithdraw({ depositWallet, solanaAddress, amountAtomic, onStatus }) {
   onStatus?.('Initiating withdrawal…');
   const r = await jfetch(BRIDGE_WITHDRAW, {
@@ -825,13 +813,13 @@ async function placeOrder({ getEvmProvider, evmAddress, depositWallet, creds, ma
     price,
     size:        isBuy ? amountOrShares / price : amountOrShares, // buy: USD → shares; sell: shares directly
     side:        isBuy ? Side.BUY : Side.SELL,
-    builderCode: BUILDER_CODE, // V2 attribution via order field, not headers
+    builderCode: BUILDER_CODE,
   };
   const opts = { tickSize: market.tickSize || '0.01', negRisk: !!market.negRisk };
 
   dbg('order', isBuy ? 'buying' : 'selling', { side, amount: amountOrShares, price, depositWallet });
 
-  // Use FAK (Fill-And-Kill) for market orders — fills as much as possible
+  // FAK = Fill-And-Kill (market-like). Use FOK for all-or-nothing.
   const resp = await client.createAndPostOrder(orderArgs, opts, OrderType.FAK);
   if (resp?.error || resp?.errorMsg) throw new Error(resp.error || resp.errorMsg);
   if (resp?.success === false)       throw new Error(resp?.errorMsg || 'Order rejected');
@@ -840,39 +828,38 @@ async function placeOrder({ getEvmProvider, evmAddress, depositWallet, creds, ma
 }
 
 // ─── Redeem winning positions ─────────────────────────────────────────────────
-// Calls CTF redeemPositions through the deposit wallet WALLET batch.
-// indexSets [1,2] = both YES and NO outcomes (standard binary market).
+// Calls CTF.redeemPositions(collateralToken, parentCollectionId, conditionId, indexSets)
+// through the deposit wallet WALLET batch.
 async function redeemWinnings({ getEvmProvider, evmAddress, depositWallet, conditionId, negRisk, onStatus }) {
   onStatus?.('Redeeming winning positions…');
-  const { relayer } = await loadSdks();
-  const signer        = await buildViemSigner(getEvmProvider, evmAddress);
-  const builderConfig = await buildBuilderConfig();
-  const rc = new relayer.RelayClient(RELAYER_URL, POLYGON_CHAIN_ID, signer, builderConfig);
+  const rc = await buildRelayClient(evmAddress, getEvmProvider);
 
-  // CTF redeemPositions(collateralToken, parentCollectionId, conditionId, indexSets)
-  const ctfRedeemSig = '0xed0825ef'; // redeemPositions selector
-  function encodeRedeem(ctfAddr, collateral, cId) {
-    const pad = s => s.replace(/^0x/, '').padStart(64, '0');
-    const encodeUintArray = arr => {
-      const offset = (64 * 4).toString(16).padStart(64, '0'); // offset for dynamic array
-      const len    = arr.length.toString(16).padStart(64, '0');
-      const items  = arr.map(n => n.toString(16).padStart(64, '0')).join('');
-      return ctfRedeemSig
-        + pad(collateral)                           // collateralToken
-        + '0'.padStart(64, '0')                     // parentCollectionId (zeroHash)
-        + pad(cId)                                  // conditionId
-        + offset                                    // offset for indexSets
-        + len + items;                              // indexSets length + items
-    };
-    return encodeUintArray([1, 2]);
-  }
+  // redeemPositions(address,bytes32,bytes32,uint256[])
+  // Function selector: 0xed0825ef (verified against IConditionalTokens ABI)
+  // ABI-encoded args:
+  //   [0x00..0x20)  address  collateralToken   (left-padded)
+  //   [0x20..0x40)  bytes32  parentCollectionId (zero)
+  //   [0x40..0x60)  bytes32  conditionId
+  //   [0x60..0x80)  uint256  offset to uint256[]  (= 0x80, since 4 head words follow the selector)
+  //   [0x80..0xa0)  uint256  array length         (= 2)
+  //   [0xa0..0xc0)  uint256  indexSets[0]         (= 1, YES)
+  //   [0xc0..0xe0)  uint256  indexSets[1]         (= 2, NO)
+  const selector = 'ed0825ef';
+  const pad32 = (hex) => hex.replace(/^0x/, '').toLowerCase().padStart(64, '0');
+  const u256  = (n)   => BigInt(n).toString(16).padStart(64, '0');
 
-  const ctfAddr = negRisk ? NEG_RISK_CTF : CTF_EXCHANGE;
-  const call = {
-    target: ctfAddr,
-    value:  '0',
-    data:   encodeRedeem(ctfAddr, PUSD_ADDRESS, conditionId),
-  };
+  const data = '0x' + selector
+    + pad32(PUSD_ADDRESS)                                     // collateralToken
+    + '0'.padStart(64, '0')                                   // parentCollectionId
+    + pad32(conditionId)                                      // conditionId
+    + u256(128)                                               // offset = 0x80 = 128 bytes
+    + u256(2)                                                 // indexSets.length
+    + u256(1)                                                 // indexSets[0] = YES
+    + u256(2);                                                // indexSets[1] = NO
+
+  // For neg-risk markets, redemption goes through NegRiskAdapter; otherwise CTF.
+  const target = negRisk ? NEG_RISK_ADAPTER : CONDITIONAL_TOKENS;
+  const call = { target, value: '0', data };
 
   const deadline = String(Math.floor(Date.now() / 1000) + 600);
   const resp = await rc.executeDepositWalletBatch([call], depositWallet, deadline);
@@ -1153,7 +1140,6 @@ function FundingSheet({ open, onClose, evmAddress, depositWallet, tradingBalance
           ))}
         </div>
 
-        {/* ── USDC tab ── */}
         {tab === 'usdc' && (
           <div style={{ padding: 10, borderRadius: 12, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -1179,7 +1165,6 @@ function FundingSheet({ open, onClose, evmAddress, depositWallet, tradingBalance
           </div>
         )}
 
-        {/* ── SOL tab ── */}
         {tab === 'sol' && (
           <div style={{ padding: 10, borderRadius: 12, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -1204,7 +1189,6 @@ function FundingSheet({ open, onClose, evmAddress, depositWallet, tradingBalance
           </div>
         )}
 
-        {/* ── Address tab ── */}
         {tab === 'addr' && (
           <div style={{ padding: 10, borderRadius: 12, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
             <div style={{ fontSize: 10, color: C.hl, fontWeight: 800, marginBottom: 6, ...T.display }}>YOUR POLYGON DEPOSIT WALLET (V2)</div>
@@ -1212,11 +1196,10 @@ function FundingSheet({ open, onClose, evmAddress, depositWallet, tradingBalance
             <button onClick={handleCopy} disabled={!depositWallet} style={{ width: '100%', padding: 10, borderRadius: 10, background: copied ? C.yesDim : C.hlDim, border: `1px solid ${copied ? C.yes + '55' : C.borderHi}`, color: copied ? C.yes : C.hl, fontSize: 12, fontWeight: 700, cursor: depositWallet ? 'pointer' : 'not-allowed', ...T.mono }}>
               {copied ? '✓ Copied' : 'Copy address'}
             </button>
-            <div style={{ fontSize: 10, color: C.muted2, marginTop: 8, ...T.mono }}>⚠ Send pUSD or USDC.e on Polygon only. Wrong network = lost funds.</div>
+            <div style={{ fontSize: 10, color: C.muted2, marginTop: 8, ...T.mono }}>⚠ Send pUSD on Polygon only. Wrong network = lost funds.</div>
           </div>
         )}
 
-        {/* ── Withdraw tab ── */}
         {tab === 'wd' && (
           <div style={{ padding: 10, borderRadius: 12, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
@@ -1260,7 +1243,6 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, deposi
 
   useBodyLock(!!market);
 
-  // Refresh position + bids whenever market or side changes
   useEffect(() => {
     if (!market || !depositWallet) return;
     let alive = true;
@@ -1279,7 +1261,7 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, deposi
     tick();
     const id = setInterval(tick, 8000);
     return () => { alive = false; clearInterval(id); };
-  }, [market, side, depositWallet]); // side included to reset stale position display
+  }, [market, side, depositWallet]);
 
   if (!market) return null;
 
@@ -1302,7 +1284,6 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, deposi
   const pnlPct = cost > 0 ? (pnl / cost) * 100 : 0;
   const hasPos = held > 0.01;
 
-  // Market resolved + user holds the winning side
   const isResolved = pos?.resolved;
   const isWinner   = isResolved && pos?.winningSide === side;
 
@@ -1340,7 +1321,6 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, deposi
     try {
       const setup = await ensureSetup(evmAddress, getEvmProvider, setStatusMsg);
       setStatusMsg('Selling…');
-      // Sell: size = actual shares held, isBuy = false
       await placeOrder({
         getEvmProvider, evmAddress,
         depositWallet: setup.depositWallet,
@@ -1386,7 +1366,6 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, deposi
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
       <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 16, borderTopRightRadius: 16, boxShadow: C.shadowLg, maxHeight: `calc(100dvh - ${NAV_CLEARANCE}px - 24px)`, display: 'flex', flexDirection: 'column' }}>
 
-        {/* ── Header ── */}
         <div style={{ padding: '10px 12px 0', flexShrink: 0 }}>
           <div style={{ width: 32, height: 3, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 8px' }} />
           <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 4, lineHeight: 1.35, ...T.body }}>{market.title}</div>
@@ -1397,11 +1376,9 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, deposi
           </div>
         </div>
 
-        {/* ── Scrollable body ── */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 12px' }}>
           <DebugPanel open={dbgOpen} onToggle={() => setDbgOpen(o => !o)} />
 
-          {/* ── Winning position — redeem button ── */}
           {isWinner && redeemStatus !== 'redeemed' && (
             <div style={{ marginBottom: 10, padding: 10, borderRadius: 11, background: 'rgba(0,212,163,.10)', border: '1px solid rgba(0,212,163,.40)' }}>
               <div style={{ fontSize: 10, color: C.yes, fontWeight: 800, marginBottom: 6, ...T.mono }}>🏆 MARKET RESOLVED — YOU WON</div>
@@ -1416,7 +1393,6 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, deposi
             </div>
           )}
 
-          {/* ── Open position — sell button ── */}
           {hasPos && !isResolved && sellStatus !== 'sold' && (
             <div style={{ marginBottom: 10, padding: 10, borderRadius: 11, background: pnl >= 0 ? 'rgba(0,212,163,.07)' : 'rgba(255,95,122,.07)', border: `1px solid ${pnl >= 0 ? 'rgba(0,212,163,.30)' : 'rgba(255,95,122,.30)'}` }}>
               <div style={{ fontSize: 10, color: pnl >= 0 ? C.yes : C.no, fontWeight: 800, marginBottom: 8, ...T.mono }}>YOUR POSITION · {side.toUpperCase()}</div>
@@ -1439,7 +1415,6 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, deposi
             </div>
           )}
 
-          {/* ── Buy input ── */}
           <div style={{ marginBottom: 10 }}>
             <div style={{ fontSize: 9, color: C.muted, marginBottom: 5, textTransform: 'uppercase', letterSpacing: 1, ...T.mono }}>You pay</div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 11px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}` }}>
@@ -1456,7 +1431,6 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, deposi
             </div>
           </div>
 
-          {/* ── Order summary ── */}
           <div style={{ padding: 9, borderRadius: 10, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10, ...T.mono, fontSize: 10 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}><span style={{ color: C.muted }}>Shares</span><span style={{ color: C.ink, fontWeight: 600 }}>{shares.toFixed(2)}</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}><span style={{ color: C.muted }}>If {side.toUpperCase()} wins</span><span style={{ color: sideColor, fontWeight: 700 }}>{fmtUsd(shares, 2)}</span></div>
@@ -1472,7 +1446,6 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, deposi
           )}
         </div>
 
-        {/* ── Buy button (pinned footer) ── */}
         <div style={{ padding: '10px 12px 12px', borderTop: `1px solid ${C.border}`, background: C.card, flexShrink: 0 }}>
           <button
             onClick={canBuy ? handleBuy : needsFunds ? onNeedFunds : undefined}
@@ -1489,7 +1462,6 @@ function OrderDrawer({ market, side, onClose, evmAddress, getEvmProvider, deposi
   );
 }
 
-// ── Header ───────────────────────────────────────────────────────────────────
 function Header({ tradingBalance, onOpenFund, canFund, signedIn, onSignIn, signingIn }) {
   const usd = Number(tradingBalance) / 1e6;
   return (
@@ -1540,7 +1512,6 @@ function PredictInner() {
   const [orderSide, setOrderSide]   = useState('yes');
   const [fundOpen, setFundOpen]     = useState(false);
 
-  // Deposit wallet (V2)
   const [depositWallet, setDepositWallet]     = useState(null);
   const [walletDeriving, setWalletDeriving]   = useState(false);
   const [walletError, setWalletError]         = useState(null);
@@ -1561,7 +1532,6 @@ function PredictInner() {
     return getEvmAddress?.() || privyEmbeddedEvm?.address || null;
   }, [privyAuthenticated, getEvmAddress, privyEmbeddedEvm]);
 
-  // Auto-prompt login once
   useEffect(() => {
     if (!privyReady || privyAuthenticated || autoPrompted) return;
     setAutoPrompted(true);
@@ -1580,14 +1550,15 @@ function PredictInner() {
     throw new Error('No Solana signer available');
   }, [extSolPk, extSolSignTx, privyEmbeddedSol]);
 
-  // Derive deposit wallet address when EOA is available
+  // Derive deposit wallet address when EOA + EVM provider are available.
+  // Needs the provider because the SDK builds the address from a viem signer.
   useEffect(() => {
-    if (!evmAddress) { setDepositWallet(null); setWalletError(null); return; }
+    if (!evmAddress || !getEvmProvider) { setDepositWallet(null); setWalletError(null); return; }
     let alive = true;
     const cached = lsGet(LS.depositWallet(evmAddress));
     if (cached) { setDepositWallet(cached); setWalletError(null); return; }
     setWalletDeriving(true);
-    deriveDepositWalletAddress(evmAddress)
+    deriveDepositWalletAddress(evmAddress, getEvmProvider)
       .then(addr => {
         if (!alive) return;
         setDepositWallet(addr);
@@ -1601,9 +1572,8 @@ function PredictInner() {
       })
       .finally(() => { if (alive) setWalletDeriving(false); });
     return () => { alive = false; };
-  }, [evmAddress]);
+  }, [evmAddress, getEvmProvider]);
 
-  // Poll trading balance (pUSD in deposit wallet)
   useEffect(() => {
     if (!depositWallet) return;
     let alive = true;
@@ -1615,7 +1585,6 @@ function PredictInner() {
     return () => { alive = false; clearInterval(id); };
   }, [depositWallet]);
 
-  // Poll Solana balances
   useEffect(() => {
     if (!fundingPubkey) return;
     let alive = true;
@@ -1654,14 +1623,13 @@ function PredictInner() {
     setDepositWallet(null); setWalletError(null); setFundOpen(false);
     setTimeout(() => {
       setWalletDeriving(true);
-      deriveDepositWalletAddress(evmAddress)
+      deriveDepositWalletAddress(evmAddress, getEvmProvider)
         .then(addr => { setDepositWallet(addr); lsSet(LS.depositWallet(evmAddress), addr); })
         .catch(e => setWalletError(e?.message || 'Reset failed'))
         .finally(() => setWalletDeriving(false));
     }, 200);
-  }, [evmAddress]);
+  }, [evmAddress, getEvmProvider]);
 
-  // Market loading
   useEffect(() => {
     let alive = true;
     const h = HORIZONS.find(x => x.id === horizonId) || HORIZONS[1];
@@ -1750,7 +1718,6 @@ function PredictInner() {
           </div>
         )}
 
-        {/* Horizon filter */}
         <div style={{ display: 'flex', gap: 6, marginBottom: 8, overflowX: 'auto' }}>
           {HORIZONS.map(h => {
             const active = horizonId === h.id;
@@ -1763,7 +1730,6 @@ function PredictInner() {
           })}
         </div>
 
-        {/* Search */}
         <div style={{ marginBottom: 8, position: 'relative' }}>
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search…" inputMode="search"
             style={{ width: '100%', padding: '8px 12px 8px 32px', background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, borderRadius: 10, color: C.ink, fontSize: 12, outline: 'none', ...T.body }} />
@@ -1772,7 +1738,6 @@ function PredictInner() {
           </svg>
         </div>
 
-        {/* Sort */}
         <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
           {[
             { id: 'volume', label: '📊 Volume' },
