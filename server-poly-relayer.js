@@ -53,35 +53,39 @@ function credsOk() {
   return Boolean(BUILDER_KEY && BUILDER_SECRET && BUILDER_PASSPHRASE);
 }
 
-// ── Validation helpers ────────────────────────────────────────────────────────
-function isEvmAddress(v) {
-  return /^0x[a-fA-F0-9]{40}$/.test(String(v || '').trim());
-}
-function isLikelySolanaAddress(v) {
-  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(v || '').trim());
+// ── Validate + decode the builder secret ONCE at startup ─────────────────────
+// V2 spec: POLY_BUILDER_SECRET is base64-encoded raw key bytes (>=16 bytes).
+// Fail loud on bad input rather than silently signing with the wrong key.
+let _decodedSecret = null;
+let _secretError   = null;
+if (BUILDER_SECRET) {
+  try {
+    const buf = Buffer.from(BUILDER_SECRET, 'base64');
+    if (buf.length < 16) throw new Error(`decoded length ${buf.length} < 16 bytes`);
+    // Reject if it doesn't round-trip cleanly (catches non-base64 inputs)
+    if (Buffer.from(buf.toString('base64'), 'base64').compare(buf) !== 0) {
+      throw new Error('does not round-trip as base64');
+    }
+    _decodedSecret = buf;
+  } catch (e) {
+    _secretError = e.message;
+    console.error('[poly/sign] POLY_BUILDER_SECRET invalid:', e.message);
+  }
 }
 
-// ── HMAC signing — V2 uses millisecond timestamps ─────────────────────────────
-function manualHmac(secret, timestampMs, method, requestPath, body) {
+// ── HMAC signing — V2 uses millisecond timestamps + standard base64 ──────────
+function manualHmac(timestampMs, method, requestPath, body) {
+  if (!_decodedSecret) {
+    throw new Error('POLY_BUILDER_SECRET not decoded: ' + (_secretError || 'unset'));
+  }
   const bodyStr = body == null
     ? ''
     : (typeof body === 'string' ? body : JSON.stringify(body));
   const message = `${timestampMs}${String(method).toUpperCase()}${requestPath}${bodyStr}`;
 
-  // Validate base64: real secrets decode to >= 16 bytes and re-encode cleanly
-  const decoded = Buffer.from(secret, 'base64');
-  const key = (decoded.length >= 16 &&
-    Buffer.from(decoded.toString('base64'), 'base64').equals(decoded))
-    ? decoded
-    : Buffer.from(secret, 'utf8');
-
-  return crypto
-    .createHmac('sha256', key)
-    .update(message)
-    .digest('base64')
-    .replace(/\+/g, '-')
-    .replace(/\//g, '_')
-    .replace(/=+$/, '');
+  // Standard base64 (matches Python/Rust reference clients).
+  // Do NOT base64url-encode — that breaks signature verification on the server.
+  return crypto.createHmac('sha256', _decodedSecret).update(message).digest('base64');
 }
 
 // ── Per-IP rate limiter (600 req/min) ─────────────────────────────────────────
@@ -120,7 +124,16 @@ async function forwardResponse(res, upstream) {
   return res.status(upstream.status).type(ct).send(text);
 }
 
+// ── Validation helpers ────────────────────────────────────────────────────────
+function isEvmAddress(v) {
+  return /^0x[a-fA-F0-9]{40}$/.test(String(v || '').trim());
+}
+function isLikelySolanaAddress(v) {
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(v || '').trim());
+}
+
 // ── Bridge deposit address lookup ─────────────────────────────────────────────
+// Returns { evm, svm, raw } — pick one shape and use it everywhere.
 async function bridgeDepositAddress(depositWallet) {
   const clean = String(depositWallet || '').trim().toLowerCase();
   if (!isEvmAddress(clean)) throw new Error('Valid EVM deposit wallet address required');
@@ -154,14 +167,16 @@ router.get('/health', (_req, res) => {
   res.json({
     ok: true,
     v: 2,
-    hasCreds:      credsOk(),
+    hasCreds:       credsOk(),
     hasBuilderCode: Boolean(BUILDER_CODE),
     builderKeyTail: BUILDER_KEY ? '…' + BUILDER_KEY.slice(-6) : null,
-    sdkLoaded:     Boolean(sdkHmac),
-    signMode:      sdkHmac ? 'sdk' : 'manual',
-    timestampMode: 'milliseconds (V2)',
-    bridge:        BRIDGE_URL,
-    relayer:       RELAYER_URL,
+    secretDecoded:  Boolean(_decodedSecret),
+    secretError:    _secretError,
+    sdkLoaded:      Boolean(sdkHmac),
+    signMode:       sdkHmac ? 'sdk' : 'manual',
+    timestampMode:  'milliseconds (V2)',
+    bridge:         BRIDGE_URL,
+    relayer:        RELAYER_URL,
   });
 });
 
@@ -173,14 +188,14 @@ router.get('/health', (_req, res) => {
 router.get('/test-creds', async (_req, res) => {
   const attempts = [];
 
-  if (credsOk()) {
+  if (credsOk() && _decodedSecret) {
     const method = 'GET';
     const path   = '/api-keys';
-    const tsMs   = String(Date.now()); // V2: milliseconds
+    const tsMs   = String(Date.now());
     try {
       const sig = sdkHmac
         ? await sdkHmac(BUILDER_SECRET, parseInt(tsMs, 10), method, path, undefined)
-        : manualHmac(BUILDER_SECRET, tsMs, method, path, undefined);
+        : manualHmac(tsMs, method, path, undefined);
 
       const r = await fetchWithTimeout(`https://clob.polymarket.com${path}`, {
         method,
@@ -197,12 +212,15 @@ router.get('/test-creds', async (_req, res) => {
         test:       'CLOB /api-keys (builder HMAC, ms timestamp)',
         status:     r.status,
         ok:         r.ok,
+        signMode:   sdkHmac ? 'sdk' : 'manual',
         sigPreview: sig.slice(0, 24) + '…',
         body:       body.slice(0, 300),
       });
     } catch (e) {
       attempts.push({ test: 'CLOB /api-keys', error: String(e?.message || e) });
     }
+  } else if (!_decodedSecret && BUILDER_SECRET) {
+    attempts.push({ test: 'CLOB /api-keys', skipped: 'POLY_BUILDER_SECRET decode failed: ' + _secretError });
   } else {
     attempts.push({ test: 'CLOB /api-keys', skipped: 'Builder creds not set' });
   }
@@ -213,18 +231,19 @@ router.get('/test-creds', async (_req, res) => {
       hasBuilderSecret:     Boolean(BUILDER_SECRET),
       hasBuilderPassphrase: Boolean(BUILDER_PASSPHRASE),
       hasBuilderCode:       Boolean(BUILDER_CODE),
+      secretDecoded:        Boolean(_decodedSecret),
+      secretError:          _secretError,
       builderKeyTail:       BUILDER_KEY ? '…' + BUILDER_KEY.slice(-6) : null,
     },
     attempts,
     verdict: attempts[0]?.ok
       ? 'Builder HMAC working — V2 trading should succeed'
-      : 'Builder HMAC FAILED — check POLY_BUILDER_* env vars',
+      : 'Builder HMAC FAILED — check POLY_BUILDER_* env vars + signMode',
   });
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// BUILDER CODE — returned to client for order attribution
-// GET /api/poly/builder-code
+// BUILDER CODE
 // ═════════════════════════════════════════════════════════════════════════════
 
 router.get('/builder-code', (_req, res) => {
@@ -232,40 +251,27 @@ router.get('/builder-code', (_req, res) => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// SIGN — remote builder HMAC signing endpoint
-//
-// Called by both @polymarket/builder-relayer-client (RelayClient) and
-// @polymarket/clob-client-v2 (ClobClient) via BuilderConfig remoteBuilderConfig.
-//
-// Request body (from SDK): { method, path, body? }
-// Response (exact shape the SDK expects):
-//   { POLY_BUILDER_SIGNATURE, POLY_BUILDER_TIMESTAMP,
-//     POLY_BUILDER_API_KEY,   POLY_BUILDER_PASSPHRASE }
-//
-// IMPORTANT: timestamp is milliseconds in V2, not seconds.
+// SIGN — remote builder HMAC endpoint (called by both SDKs)
+// Body: { method, path, body? }   |   Returns POLY_BUILDER_* headers
+// Timestamp: MILLISECONDS         |   Signature: standard base64
 // ═════════════════════════════════════════════════════════════════════════════
 
-router.post('/sign', express.json({ limit: '1mb' }), async (req, res) => {
+router.post('/sign', async (req, res) => {
   try {
-    if (!credsOk()) {
-      return res.status(500).json({ error: 'Builder credentials not configured' });
-    }
+    if (!credsOk()) return res.status(500).json({ error: 'Builder credentials not configured' });
+    if (!_decodedSecret) return res.status(500).json({ error: 'Builder secret invalid: ' + _secretError });
 
     const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.ip || 'unknown';
-    if (!checkSignRate(ip)) {
-      return res.status(429).json({ error: 'Too many sign requests' });
-    }
+    if (!checkSignRate(ip)) return res.status(429).json({ error: 'Too many sign requests' });
 
     const body    = req.body || {};
     const method  = body.method;
-    const path    = body.path || body.requestPath; // SDK sends 'path'; be tolerant of older 'requestPath'
+    const path    = body.path || body.requestPath; // tolerate legacy 'requestPath'
     const payload = body.body;
 
-    if (!method || !path) {
-      return res.status(400).json({ error: 'method and path required' });
-    }
+    if (!method || !path) return res.status(400).json({ error: 'method and path required' });
 
-    const tsMs = String(Date.now()); // V2: milliseconds
+    const tsMs = String(Date.now());
 
     let signature;
     if (sdkHmac) {
@@ -279,15 +285,15 @@ router.post('/sign', express.json({ limit: '1mb' }), async (req, res) => {
         );
       } catch (e) {
         console.warn('[poly/sign] SDK HMAC failed, falling back to manual:', e.message);
-        signature = manualHmac(BUILDER_SECRET, tsMs, method, path, payload);
+        signature = manualHmac(tsMs, method, path, payload);
       }
     } else {
-      signature = manualHmac(BUILDER_SECRET, tsMs, method, path, payload);
+      signature = manualHmac(tsMs, method, path, payload);
     }
 
-    console.log('[poly/sign]', method, path);
+    // Log enough to debug auth failures but never log the signature or secret
+    console.log('[poly/sign]', method, path, payload ? `(body ${JSON.stringify(payload).length}b)` : '(no body)');
 
-    // Exact shape the SDK expects — nothing extra
     return res.json({
       POLY_BUILDER_SIGNATURE:  signature,
       POLY_BUILDER_TIMESTAMP:  tsMs,
@@ -303,25 +309,23 @@ router.post('/sign', express.json({ limit: '1mb' }), async (req, res) => {
 // ═════════════════════════════════════════════════════════════════════════════
 // BRIDGE: DEPOSIT ADDRESS
 // POST /api/poly/deposit  { address: depositWalletAddress }
-// Returns bridge deposit addresses (EVM + SVM) for the deposit wallet.
+// Returns normalized { evm, svm } — frontend reads either of those.
 // ═════════════════════════════════════════════════════════════════════════════
 
-router.post('/deposit', express.json({ limit: '64kb' }), async (req, res) => {
+router.post('/deposit', async (req, res) => {
   try {
     const { address } = req.body || {};
     if (!address) return res.status(400).json({ error: 'address required' });
     if (!isEvmAddress(address)) return res.status(400).json({ error: 'valid EVM address required' });
-    const result = await bridgeDepositAddress(address);
-    return res.json(result.raw);
+    const { evm, svm, raw } = await bridgeDepositAddress(address);
+    return res.json({ evm, svm, raw });
   } catch (e) {
     return res.status(502).json({ error: 'deposit_failed', detail: String(e?.message || e) });
   }
 });
 
 // ═════════════════════════════════════════════════════════════════════════════
-// BRIDGE: STATUS
-// GET /api/poly/status/:address
-// Accepts EVM deposit wallet (looks up SVM) or raw Solana address.
+// BRIDGE: STATUS  GET /api/poly/status/:address
 // ═════════════════════════════════════════════════════════════════════════════
 
 async function handleBridgeStatus(address, res) {
@@ -360,10 +364,9 @@ router.get('/status/:address', async (req, res) => {
 
 // ═════════════════════════════════════════════════════════════════════════════
 // BRIDGE: WITHDRAW
-// POST /api/poly/withdraw  { from, to, chain, asset, amount }
 // ═════════════════════════════════════════════════════════════════════════════
 
-router.post('/withdraw', express.json({ limit: '128kb' }), async (req, res) => {
+router.post('/withdraw', async (req, res) => {
   try {
     const r = await fetchWithTimeout(`${BRIDGE_URL}/withdraw`, {
       method: 'POST',
@@ -378,10 +381,9 @@ router.post('/withdraw', express.json({ limit: '128kb' }), async (req, res) => {
 
 // ═════════════════════════════════════════════════════════════════════════════
 // BRIDGE: QUOTE
-// POST /api/poly/quote
 // ═════════════════════════════════════════════════════════════════════════════
 
-router.post('/quote', express.json({ limit: '128kb' }), async (req, res) => {
+router.post('/quote', async (req, res) => {
   try {
     const r = await fetchWithTimeout(`${BRIDGE_URL}/quote`, {
       method: 'POST',
@@ -396,7 +398,6 @@ router.post('/quote', express.json({ limit: '128kb' }), async (req, res) => {
 
 // ═════════════════════════════════════════════════════════════════════════════
 // BRIDGE: SUPPORTED ASSETS  (10-min cache, deduped in-flight)
-// GET /api/poly/supported-assets
 // ═════════════════════════════════════════════════════════════════════════════
 
 let _saCache    = null;
