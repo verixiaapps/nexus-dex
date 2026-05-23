@@ -26,6 +26,7 @@ import {
   VersionedTransaction,
   TransactionMessage,
   SystemProgram,
+  ComputeBudgetProgram,
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddressSync,
@@ -40,6 +41,10 @@ import {
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS    = 500;
 const SLIPPAGE   = 0.005;
+
+// Priority fee: ~0.001 SOL (~$0.17) ceiling for fast confirmation on our fee tx.
+const PRIORITY_FEE_MICROLAMPORTS = 5_000;
+const PRIORITY_FEE_CU_LIMIT      = 200_000;
 
 const SOL_NATIVE      = '11111111111111111111111111111111';
 const WSOL_MINT       = 'So11111111111111111111111111111111111111112';
@@ -299,7 +304,10 @@ const buildFeeTx = async ({
   const feeAmount = (BigInt(amountRaw) * BigInt(FEE_BPS)) / 10000n;
   if (feeAmount <= 0n) throw new Error('Fee rounds to zero — amount too small.');
 
-  const ixs = [];
+  const ixs = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: PRIORITY_FEE_CU_LIMIT }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
+  ];
 
   if (inputMint === WSOL_MINT || inputMint === SOL_NATIVE) {
     ixs.push(SystemProgram.transfer({
