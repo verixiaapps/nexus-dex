@@ -173,8 +173,8 @@ async function okxQuote({ fromMint, toChainId, toAddress, amount }){
   const okxTo = OKX_CHAIN_INDEX[String(toChainId)];
   if (!okxTo) throw new Error('OKX: unsupported chain');
   const p = new URLSearchParams({
-    fromChainIndex: OKX_SOLANA_IDX,
-    toChainIndex:   okxTo,
+    fromChainId: OKX_SOLANA_IDX,
+    toChainId:   okxTo,
     fromTokenAddress: toOkxSol(fromMint),
     toTokenAddress:   toAddress,
     amount: String(amount),
@@ -182,15 +182,15 @@ async function okxQuote({ fromMint, toChainId, toAddress, amount }){
   });
   const r = await fetch('/api/okx/dex/cross-chain/quote?'+p.toString());
   const j = await r.json();
-  if (j.code !== '0' || !j.data) throw new Error(j.msg || 'OKX no route');
+  if (j.code !== '0' || !j.data) throw new Error('OKX quote: '+(j.msg || JSON.stringify(j).slice(0,200)));
   return Array.isArray(j.data) ? j.data[0] : j.data;
 }
 
 async function okxBuild({ fromMint, toChainId, toTokenAddress, amount, sender, receiver }){
   const okxTo = OKX_CHAIN_INDEX[String(toChainId)];
   const p = new URLSearchParams({
-    fromChainIndex: OKX_SOLANA_IDX,
-    toChainIndex:   okxTo,
+    fromChainId: OKX_SOLANA_IDX,
+    toChainId:   okxTo,
     fromTokenAddress: toOkxSol(fromMint),
     toTokenAddress:   toTokenAddress,
     amount: String(amount),
@@ -201,11 +201,12 @@ async function okxBuild({ fromMint, toChainId, toTokenAddress, amount, sender, r
   });
   const r = await fetch('/api/okx/dex/cross-chain/build-tx?'+p.toString());
   const j = await r.json();
-  if (j.code !== '0' || !j.data) throw new Error(j.msg || 'OKX build failed');
+  if (j.code !== '0' || !j.data) throw new Error('OKX build: '+(j.msg || JSON.stringify(j).slice(0,200)));
   return Array.isArray(j.data) ? j.data[0] : j.data;
 }
 
 async function lifiQuote({ fromMint, toChainId, toAddress, amount, sender, receiver }){
+  if (!sender) throw new Error('LI.FI requires connected wallet');
   const p = new URLSearchParams({
     fromChain: String(LIFI_SOLANA_ID),
     toChain:   String(toChainId),
@@ -213,17 +214,18 @@ async function lifiQuote({ fromMint, toChainId, toAddress, amount, sender, recei
     toToken:   toAddress,
     fromAmount: String(amount),
     fromAddress: sender,
-    toAddress: receiver,
+    toAddress: receiver || sender,
     slippage: '0.01',
     integrator: 'NexusDEX',
     order: 'RECOMMENDED',
   });
   const r = await fetch('/api/lifi/quote?'+p.toString());
+  const j = await r.json().catch(()=>({}));
   if (!r.ok) {
-    const errJ = await r.json().catch(()=>({}));
-    throw new Error(errJ.message || errJ.error || 'LI.FI no route');
+    const detail = j?.message || j?.errors?.[0]?.message || j?.error || JSON.stringify(j).slice(0,200);
+    throw new Error('LI.FI quote: '+detail);
   }
-  return r.json();
+  return j;
 }
 
 async function sendSolanaTx({ connection, txBase64, sendTx }){
@@ -241,6 +243,7 @@ async function sendSolanaTx({ connection, txBase64, sendTx }){
 async function getUnifiedQuote({ fromToken, toToken, amount, sender, receiver }){
   const fromMint = fromToken.mint || fromToken.address;
   const toDec    = +toToken.decimals || 18;
+  const errors   = [];
 
   // 1. OKX first
   if (OKX_CHAIN_INDEX[String(toToken.chainId)]) {
@@ -256,14 +259,24 @@ async function getUnifiedQuote({ fromToken, toToken, amount, sender, receiver })
           bridge: q.router?.bridgeName || q.routerList?.[0]?.router?.bridgeName || 'OKX',
         };
       }
-    } catch (e) { console.warn('[OKX quote]', e.message); }
+      errors.push('OKX: empty response');
+    } catch (e) {
+      console.warn('[OKX quote]', e.message);
+      errors.push(e.message);
+    }
+  } else {
+    errors.push('OKX: chain '+toToken.chainId+' not supported');
   }
 
-  // 2. LI.FI fallback
-  const s = sender || '11111111111111111111111111111111';
-  const r = receiver || s;
+  // 2. LI.FI fallback — requires real sender
+  if (!sender) {
+    errors.push('LI.FI: connect wallet to get a quote');
+    const err = new Error(errors.join(' | '));
+    err.errors = errors;
+    throw err;
+  }
   try {
-    const j = await lifiQuote({ fromMint, toChainId: toToken.chainId, toAddress: toToken.address, amount, sender:s, receiver:r });
+    const j = await lifiQuote({ fromMint, toChainId: toToken.chainId, toAddress: toToken.address, amount, sender, receiver: receiver || sender });
     if (j && j.estimate) {
       const outAmt = Number(j.estimate.toAmountMin || j.estimate.toAmount) / Math.pow(10, toDec);
       return {
@@ -272,9 +285,15 @@ async function getUnifiedQuote({ fromToken, toToken, amount, sender, receiver })
         bridge: j.toolDetails?.name || j.tool || 'LI.FI',
       };
     }
-  } catch (e) { console.warn('[LI.FI quote]', e.message); }
+    errors.push('LI.FI: empty estimate');
+  } catch (e) {
+    console.warn('[LI.FI quote]', e.message);
+    errors.push(e.message);
+  }
 
-  return null;
+  const err = new Error(errors.join(' | '));
+  err.errors = errors;
+  throw err;
 }
 
 /* ─── DEFAULTS ─── */
@@ -505,20 +524,23 @@ export default function CrossChainSwap({ onConnectWallet }){
   const fetchQuote = useCallback(async ()=>{
     setQuoteErr('');
     if (!fromAmt || +fromAmt <= 0 || !fromToken || !toToken) { setQuote(null); return; }
+    if (!pubkey) { setQuote(null); setQuoteErr('Connect your wallet to get a quote.'); return; }
     const myReq = ++reqIdRef.current;
     setQuoting(true);
     try {
       const dec = resolveDecimals(fromToken);
       const raw = toRaw(fromAmt, dec);
       if (!raw || raw === '0') { setQuote(null); setQuoting(false); return; }
-      const sender   = pubkey?.toString();
+      const sender   = pubkey.toString();
       const receiver = (destAddr.trim() && !validateDest(destAddr, toToken?.chainId)) ? destAddr.trim() : sender;
       const q = await getUnifiedQuote({ fromToken, toToken, amount: raw, sender, receiver });
       if (myReq !== reqIdRef.current) return;
-      if (!q) { setQuote(null); setQuoteErr('No route found.'); }
-      else    { setQuote(q); }
+      setQuote(q);
     } catch (e) {
-      if (myReq === reqIdRef.current) { setQuote(null); setQuoteErr(e.message || 'Quote failed'); }
+      if (myReq === reqIdRef.current) {
+        setQuote(null);
+        setQuoteErr(e.message || 'Quote failed');
+      }
     } finally {
       if (myReq === reqIdRef.current) setQuoting(false);
     }
