@@ -25,6 +25,13 @@ const BUILDER_SECRET = process.env.POLY_BUILDER_SECRET || '';
 const BUILDER_PASSPHRASE = process.env.POLY_BUILDER_PASSPHRASE || '';
 const BUILDER_CODE = process.env.POLY_BUILDER_CODE || '';
 
+// Relayer uses a DIFFERENT auth scheme than CLOB:
+//   - CLOB: POLY_API_KEY + HMAC signature (BUILDER_* values above)
+//   - Relayer: RELAYER_API_KEY + RELAYER_API_KEY_ADDRESS (owner EOA)
+// These are issued separately in the Polymarket builder dashboard.
+const RELAYER_API_KEY = process.env.RELAYER_API_KEY || '';
+const RELAYER_API_KEY_ADDRESS = process.env.RELAYER_API_KEY_ADDRESS || '';
+
 function ok() {
   return Boolean(BUILDER_KEY && BUILDER_SECRET && BUILDER_PASSPHRASE);
 }
@@ -126,6 +133,10 @@ router.get('/health', (_req, res) => {
     hasCreds: ok(),
     hasBuilderCode: Boolean(BUILDER_CODE),
     builderKeyTail: BUILDER_KEY ? '...' + BUILDER_KEY.slice(-6) : null,
+    hasRelayerKey: Boolean(RELAYER_API_KEY),
+    hasRelayerAddress: Boolean(RELAYER_API_KEY_ADDRESS),
+    relayerKeyTail: RELAYER_API_KEY ? '...' + RELAYER_API_KEY.slice(-6) : null,
+    relayerAddress: RELAYER_API_KEY_ADDRESS || null,
     sdkLoaded: Boolean(sdkBuildHmacSignature),
     signMode: sdkBuildHmacSignature ? 'sdk' : 'manual',
     bridge: BRIDGE_URL,
@@ -139,111 +150,117 @@ router.get('/health', (_req, res) => {
 
 router.get('/test-creds', async (_req, res) => {
   try {
-    if (!ok()) {
-      return res.json({ step: 'env', ok: false, error: 'creds not loaded' });
-    }
-
-    const method = 'GET';
-    const requestPath = '/transactions';
-
-    // Try both signing modes against the relayer to isolate signing vs. creds.
     const attempts = [];
 
-    // Attempt 1: SDK signing (if available)
-    if (sdkBuildHmacSignature) {
+    // ── CLOB TEST: HMAC against clob.polymarket.com ────────────────
+    if (ok()) {
+      const method = 'GET';
+      const requestPath = '/api-keys';
       const timestamp = String(Math.floor(Date.now() / 1000));
       try {
-        const signature = await sdkBuildHmacSignature(
-          BUILDER_SECRET,
-          parseInt(timestamp, 10),
-          method,
-          requestPath,
-          undefined,
-        );
+        const signature = sdkBuildHmacSignature
+          ? await sdkBuildHmacSignature(BUILDER_SECRET, parseInt(timestamp, 10), method, requestPath, undefined)
+          : manualHmac(BUILDER_SECRET, timestamp, method, requestPath, undefined);
         const r = await fetchWithTimeout(
-          'https://relayer-v2.polymarket.com/transactions',
+          `https://clob.polymarket.com${requestPath}`,
           {
             method,
             headers: {
-              'POLY_SIGNATURE': signature,
-              'POLY_TIMESTAMP': timestamp,
-              'POLY_API_KEY': BUILDER_KEY,
-              'POLY_PASSPHRASE': BUILDER_PASSPHRASE,
-              'Accept': 'application/json',
+              POLY_SIGNATURE: signature,
+              POLY_TIMESTAMP: timestamp,
+              POLY_API_KEY: BUILDER_KEY,
+              POLY_PASSPHRASE: BUILDER_PASSPHRASE,
+              Accept: 'application/json',
             },
           },
           10_000,
         );
         const text = await r.text();
         attempts.push({
-          mode: 'sdk',
+          test: 'CLOB /api-keys (HMAC)',
+          target: 'https://clob.polymarket.com',
           status: r.status,
           ok: r.ok,
           sigPreview: signature.slice(0, 24) + '...',
           body: text.slice(0, 300),
         });
       } catch (e) {
-        attempts.push({ mode: 'sdk', error: String(e?.message || e) });
+        attempts.push({ test: 'CLOB /api-keys (HMAC)', error: String(e?.message || e) });
       }
+    } else {
+      attempts.push({ test: 'CLOB /api-keys (HMAC)', skipped: 'BUILDER creds missing' });
     }
 
-    // Attempt 2: Manual signing
-    {
-      const timestamp = String(Math.floor(Date.now() / 1000));
+    // ── RELAYER TEST: static headers against relayer-v2.polymarket.com ──
+    if (RELAYER_API_KEY && RELAYER_API_KEY_ADDRESS) {
       try {
-        const signature = manualHmac(BUILDER_SECRET, timestamp, method, requestPath, undefined);
         const r = await fetchWithTimeout(
           'https://relayer-v2.polymarket.com/transactions',
           {
-            method,
+            method: 'GET',
             headers: {
-              'POLY_SIGNATURE': signature,
-              'POLY_TIMESTAMP': timestamp,
-              'POLY_API_KEY': BUILDER_KEY,
-              'POLY_PASSPHRASE': BUILDER_PASSPHRASE,
-              'Accept': 'application/json',
+              RELAYER_API_KEY: RELAYER_API_KEY,
+              RELAYER_API_KEY_ADDRESS: RELAYER_API_KEY_ADDRESS,
+              Accept: 'application/json',
             },
           },
           10_000,
         );
         const text = await r.text();
         attempts.push({
-          mode: 'manual',
+          test: 'Relayer /transactions (static)',
+          target: 'https://relayer-v2.polymarket.com',
           status: r.status,
           ok: r.ok,
-          sigPreview: signature.slice(0, 24) + '...',
+          keyTail: '...' + RELAYER_API_KEY.slice(-6),
+          address: RELAYER_API_KEY_ADDRESS,
           body: text.slice(0, 300),
         });
       } catch (e) {
-        attempts.push({ mode: 'manual', error: String(e?.message || e) });
+        attempts.push({ test: 'Relayer /transactions (static)', error: String(e?.message || e) });
       }
+    } else {
+      attempts.push({ test: 'Relayer /transactions (static)', skipped: 'RELAYER creds missing' });
     }
 
-    // Attempt 3: No signature at all (control - should always fail differently)
-    {
-      try {
-        const r = await fetchWithTimeout(
-          'https://relayer-v2.polymarket.com/transactions',
-          { method, headers: { Accept: 'application/json' } },
-          10_000,
-        );
-        const text = await r.text();
-        attempts.push({
-          mode: 'no-auth',
-          status: r.status,
-          ok: r.ok,
-          body: text.slice(0, 300),
-        });
-      } catch (e) {
-        attempts.push({ mode: 'no-auth', error: String(e?.message || e) });
-      }
+    // ── CONTROL: no auth ──────────────────────────────────────────
+    try {
+      const r = await fetchWithTimeout(
+        'https://relayer-v2.polymarket.com/transactions',
+        { method: 'GET', headers: { Accept: 'application/json' } },
+        10_000,
+      );
+      const text = await r.text();
+      attempts.push({
+        test: 'Relayer /transactions (no-auth control)',
+        status: r.status,
+        ok: r.ok,
+        body: text.slice(0, 300),
+      });
+    } catch (e) {
+      attempts.push({ test: 'Relayer /transactions (no-auth control)', error: String(e?.message || e) });
     }
 
     return res.json({
-      keyTail: '...' + BUILDER_KEY.slice(-6),
-      passphraseTail: '...' + BUILDER_PASSPHRASE.slice(-4),
-      secretLen: BUILDER_SECRET.length,
+      env: {
+        hasBuilderKey: Boolean(BUILDER_KEY),
+        hasBuilderSecret: Boolean(BUILDER_SECRET),
+        hasBuilderPassphrase: Boolean(BUILDER_PASSPHRASE),
+        hasRelayerKey: Boolean(RELAYER_API_KEY),
+        hasRelayerAddress: Boolean(RELAYER_API_KEY_ADDRESS),
+        builderKeyTail: BUILDER_KEY ? '...' + BUILDER_KEY.slice(-6) : null,
+        relayerKeyTail: RELAYER_API_KEY ? '...' + RELAYER_API_KEY.slice(-6) : null,
+        relayerAddress: RELAYER_API_KEY_ADDRESS || null,
+      },
       attempts,
+      verdict: (() => {
+        const clob = attempts.find((a) => a.test?.startsWith('CLOB'));
+        const relayer = attempts.find((a) => a.test?.startsWith('Relayer /transactions (static)'));
+        if (clob?.ok && relayer?.ok) return 'BOTH WORKING — trades should succeed';
+        if (clob?.ok && !relayer?.ok) return 'CLOB ok, RELAYER failed — Safe deploy will fail';
+        if (!clob?.ok && relayer?.ok) return 'Relayer ok, CLOB failed — orders will fail';
+        return 'BOTH FAILING — fix credentials';
+      })(),
     });
   } catch (e) {
     return res.status(500).json({
@@ -264,6 +281,33 @@ router.get('/builder-code', (_req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // REMOTE BUILDER SIGNING
 // ═══════════════════════════════════════════════════════════════════
+
+// ─────────────────────────────────────────────────────────────────────
+// URL-aware /sign endpoint. The Polymarket builder-signing-sdk asks us
+// to provide auth headers for two DIFFERENT endpoints:
+//
+//   1. CLOB (clob.polymarket.com): HMAC-signed headers
+//      POLY_API_KEY + POLY_PASSPHRASE + POLY_SIGNATURE + POLY_TIMESTAMP
+//
+//   2. Relayer (relayer-v2.polymarket.com): static headers
+//      RELAYER_API_KEY + RELAYER_API_KEY_ADDRESS
+//
+// We detect which one based on the URL/host the SDK passes. If the SDK
+// doesn't pass a URL/host (older versions), we fall back to HMAC.
+// ─────────────────────────────────────────────────────────────────────
+
+function looksLikeRelayerRequest(body) {
+  const url = String(body.url || body.host || body.endpoint || '').toLowerCase();
+  if (url.includes('relayer')) return true;
+  // The relayer transactions endpoint has paths like:
+  //   /wallets, /transactions, /relay, /safes
+  // CLOB paths include: /order, /book, /markets, /auth, /api-keys
+  const path = String(body.requestPath || body.path || '').toLowerCase();
+  if (path.startsWith('/wallets') || path.startsWith('/relay') || path.startsWith('/safes')) {
+    return true;
+  }
+  return false;
+}
 
 router.post('/sign', express.json({ limit: '1mb' }), async (req, res) => {
   try {
@@ -286,6 +330,29 @@ router.post('/sign', express.json({ limit: '1mb' }), async (req, res) => {
       return res.status(400).json({ error: 'method and requestPath required' });
     }
 
+    // ── RELAYER REQUESTS: static API key + address ─────────────────
+    if (looksLikeRelayerRequest(body)) {
+      if (!RELAYER_API_KEY || !RELAYER_API_KEY_ADDRESS) {
+        return res.status(500).json({
+          error: 'Relayer credentials not configured',
+          detail: 'Set RELAYER_API_KEY and RELAYER_API_KEY_ADDRESS env vars',
+        });
+      }
+      console.log('[poly/sign] relayer auth →', method, requestPath);
+      return res.json({
+        // Multiple shapes for SDK compatibility
+        headers: {
+          RELAYER_API_KEY: RELAYER_API_KEY,
+          RELAYER_API_KEY_ADDRESS: RELAYER_API_KEY_ADDRESS,
+        },
+        RELAYER_API_KEY: RELAYER_API_KEY,
+        RELAYER_API_KEY_ADDRESS: RELAYER_API_KEY_ADDRESS,
+        apiKey: RELAYER_API_KEY,
+        apiKeyAddress: RELAYER_API_KEY_ADDRESS,
+      });
+    }
+
+    // ── CLOB REQUESTS: HMAC-signed headers ─────────────────────────
     const timestamp = String(clientTs || Math.floor(Date.now() / 1000));
 
     let signature;
@@ -306,6 +373,8 @@ router.post('/sign', express.json({ limit: '1mb' }), async (req, res) => {
       signature = manualHmac(BUILDER_SECRET, timestamp, method, requestPath, payload);
     }
 
+    console.log('[poly/sign] clob hmac →', method, requestPath);
+
     return res.json({
       signature,
       timestamp,
@@ -317,6 +386,10 @@ router.post('/sign', express.json({ limit: '1mb' }), async (req, res) => {
         POLY_API_KEY: BUILDER_KEY,
         POLY_PASSPHRASE: BUILDER_PASSPHRASE,
       },
+      POLY_SIGNATURE: signature,
+      POLY_TIMESTAMP: timestamp,
+      POLY_API_KEY: BUILDER_KEY,
+      POLY_PASSPHRASE: BUILDER_PASSPHRASE,
       POLY_BUILDER_SIGNATURE: signature,
       POLY_BUILDER_TIMESTAMP: timestamp,
       POLY_BUILDER_API_KEY: BUILDER_KEY,
