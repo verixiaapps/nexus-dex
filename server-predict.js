@@ -2,32 +2,35 @@
 // Express router for Jupiter Prediction Market + Jupiter Ultra swap proxy.
 // Mount in server.js with:   app.use('/api/predict', require('./server-predict'));
 //
-// Env required:
+// Env (optional):
 //   JUPITER_API_KEY    -- from https://developers.jup.ag/portal
+//                         Prediction endpoints currently work without a key.
+//                         If set, the key is attached as x-api-key.
+//                         If empty/unset, no x-api-key header is sent (which
+//                         is required — sending an empty header value causes
+//                         Jupiter to return HTTP 401 Unauthorized).
 //
-// All endpoints proxy to Jupiter so the API key never reaches the browser.
+// All endpoints proxy to Jupiter so the API key (if any) never reaches the browser.
 
 const express = require('express');
 const router  = express.Router();
 
-const JUP_API_KEY  = process.env.JUPITER_API_KEY || '';
+const JUP_API_KEY  = (process.env.JUPITER_API_KEY || '').trim();
 const PRED_BASE    = 'https://api.jup.ag/prediction/v1';
 const ULTRA_BASE   = 'https://api.jup.ag/ultra/v1';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
-function need(key) {
-  if (!JUP_API_KEY) {
-    console.warn('[predict] JUPITER_API_KEY not set — requests will fail');
-  }
-  return JUP_API_KEY;
-}
-
 async function fwd(req, res, url, method = 'GET', body = undefined) {
   try {
-    const headers = { 'x-api-key': need(), 'Content-Type': 'application/json' };
+    const headers = { 'Content-Type': 'application/json' };
+    // Only attach x-api-key if it's actually set. Sending x-api-key: ""
+    // causes Jupiter to 401 even though the endpoints are otherwise public.
+    if (JUP_API_KEY) headers['x-api-key'] = JUP_API_KEY;
+
     const opts = { method, headers };
     if (body !== undefined) opts.body = typeof body === 'string' ? body : JSON.stringify(body);
-    const r = await fetch(url, opts);
+
+    const r   = await fetch(url, opts);
     const txt = await r.text();
     res.status(r.status);
     res.setHeader('Content-Type', r.headers.get('content-type') || 'application/json');
@@ -40,15 +43,18 @@ async function fwd(req, res, url, method = 'GET', body = undefined) {
 
 // ── Health ───────────────────────────────────────────────────────────────────
 router.get('/health', (req, res) => {
-  res.json({ ok: true, hasKey: !!JUP_API_KEY });
+  res.json({
+    ok: true,
+    hasKey: !!JUP_API_KEY,
+    keyLen: JUP_API_KEY.length,
+  });
 });
 
 // ── Events / Markets discovery ───────────────────────────────────────────────
 // GET /api/predict/events?category=crypto&limit=20
 router.get('/events', (req, res) => {
   const q = new URLSearchParams(req.query);
-  if (!q.has('provider')) q.set('provider', 'polymarket');
-  if (!q.has('limit'))    q.set('limit', '80');
+  if (!q.has('limit')) q.set('limit', '80');
   return fwd(req, res, `${PRED_BASE}/events?${q.toString()}`);
 });
 
