@@ -425,15 +425,16 @@ let _sdks = null;
 async function loadSdks() {
   if (_sdks) return _sdks;
   dbg('sdk', 'loading');
-  const [clob, relayer, derive, config, viem, viemChains] = await Promise.all([
+  const [clob, relayer, signing, derive, config, viem, viemChains] = await Promise.all([
     import('@polymarket/clob-client'),
     import('@polymarket/builder-relayer-client'),
+    import('@polymarket/builder-signing-sdk'),
     import('@polymarket/builder-relayer-client/dist/builder/derive'),
     import('@polymarket/builder-relayer-client/dist/config'),
     import('viem'),
     import('viem/chains'),
   ]);
-  _sdks = { clob, relayer, derive, config, viem, viemChains };
+  _sdks = { clob, relayer, signing, derive, config, viem, viemChains };
   dbg('sdk', 'loaded');
   return _sdks;
 }
@@ -450,13 +451,17 @@ async function buildSigner(evmProvider, evmAddress) {
 }
 
 async function buildRelayClient(evmProvider, evmAddress) {
-  const { relayer } = await loadSdks();
+  const { relayer, signing } = await loadSdks();
   if (!relayer?.RelayClient) throw new Error('RelayClient missing');
   const signer = await buildSigner(evmProvider, evmAddress);
-  // NO builderConfig - basic Safe deploy and approvals sign locally via the
-  // wallet's EIP-712. The remote builder URL was failing because /api/poly/sign
-  // isn't a Polymarket builder endpoint, it was breaking everything.
-  return new relayer.RelayClient(RELAYER_URL + '/', POLYGON_CHAIN_ID, signer);
+  const origin = (typeof window !== 'undefined' && window.location?.origin) || '';
+  // builderConfig tells the SDK to fetch HMAC headers from our server's
+  // /api/poly/sign endpoint, which holds the Builder API key/secret/passphrase.
+  // Without this, the relayer returns 401 invalid authorization.
+  const builderConfig = new signing.BuilderConfig({
+    remoteBuilderConfig: { url: origin + '/api/poly/sign' },
+  });
+  return new relayer.RelayClient(RELAYER_URL + '/', POLYGON_CHAIN_ID, signer, builderConfig);
 }
 
 /* ============================================================ Polygon RPC */
@@ -641,11 +646,15 @@ async function getOrDeriveCreds(evm, evmProvider) {
 }
 
 async function buildClobClient(evmProvider, evmAddress, safeAddress, creds) {
-  const { clob } = await loadSdks();
+  const { clob, signing } = await loadSdks();
   const signer = await buildSigner(evmProvider, evmAddress);
+  const origin = (typeof window !== 'undefined' && window.location?.origin) || '';
+  const builderConfig = new signing.BuilderConfig({
+    remoteBuilderConfig: { url: origin + '/api/poly/sign' },
+  });
   // signatureType 2 = GNOSIS_SAFE (funder is the Safe, signer is the EOA owner)
   return new clob.ClobClient(
-    CLOB_URL, POLYGON_CHAIN_ID, signer, creds, 2, safeAddress
+    CLOB_URL, POLYGON_CHAIN_ID, signer, creds, 2, safeAddress, undefined, false, builderConfig
   );
 }
 
@@ -852,6 +861,7 @@ async function placeMarketOrder({ evmProvider, evmAddress, safeAddress, creds, m
     side: isBuy ? Side.BUY : Side.SELL,
     feeRateBps: 0, expiration: 0,
     taker: '0x0000000000000000000000000000000000000000',
+    builderCode: BUILDER_CODE,
   };
   const opts = { tickSize: market.tickSize || '0.01', negRisk: !!market.negRisk };
   dbg('order', 'submitting', { side, isBuy, amount: amountUsd, price, safeAddress });
@@ -922,17 +932,17 @@ async function requestWithdrawToSolana({ safe, solanaAddress, amountAtomic, onSt
 
 function MarketSkeleton() {
   return (
-    <div style={{ padding: 16, borderRadius: 16, background: C.card, border: `1px solid ${C.border}`, marginBottom: 10 }}>
-      <div style={{ display: 'flex', gap: 12, marginBottom: 12 }}>
-        <div style={{ width: 44, height: 44, borderRadius: 10, background: 'rgba(255,255,255,.04)' }} />
+    <div style={{ padding: 10, borderRadius: 13, background: C.card, border: `1px solid ${C.border}`, marginBottom: 7 }}>
+      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
+        <div style={{ width: 32, height: 32, borderRadius: 7, background: 'rgba(255,255,255,.04)' }} />
         <div style={{ flex: 1 }}>
-          <div style={{ height: 12, width: '85%', background: 'rgba(255,255,255,.06)', borderRadius: 4, marginBottom: 6 }} />
-          <div style={{ height: 10, width: '50%', background: 'rgba(255,255,255,.03)', borderRadius: 4 }} />
+          <div style={{ height: 10, width: '85%', background: 'rgba(255,255,255,.06)', borderRadius: 4, marginBottom: 5 }} />
+          <div style={{ height: 9, width: '50%', background: 'rgba(255,255,255,.03)', borderRadius: 4 }} />
         </div>
       </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <div style={{ flex: 1, height: 42, background: 'rgba(255,255,255,.03)', borderRadius: 10 }} />
-        <div style={{ flex: 1, height: 42, background: 'rgba(255,255,255,.03)', borderRadius: 10 }} />
+      <div style={{ display: 'flex', gap: 6 }}>
+        <div style={{ flex: 1, height: 34, background: 'rgba(255,255,255,.03)', borderRadius: 9 }} />
+        <div style={{ flex: 1, height: 34, background: 'rgba(255,255,255,.03)', borderRadius: 9 }} />
       </div>
     </div>
   );
@@ -1045,28 +1055,28 @@ function EvmWalletPicker({ open, wallets, onPick, onClose, connecting }) {
     return (order[a.info.rdns] ?? 99) - (order[b.info.rdns] ?? 99);
   });
   return (
-    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(3,6,15,.78)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: '94vw', maxWidth: 380, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, border: `1px solid ${C.borderHi}`, borderRadius: 18, padding: 18, boxShadow: C.shadowLg, ...T.body }}>
-        <div style={{ fontSize: 16, fontWeight: 800, color: C.ink, marginBottom: 4, ...T.display }}>Connect EVM wallet</div>
-        <div style={{ fontSize: 11, color: C.muted, marginBottom: 14 }}>Polymarket trades on Polygon. Choose your wallet to sign orders.</div>
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(3,6,15,.78)', backdropFilter: 'blur(12px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 12 }}>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 340, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, border: `1px solid ${C.borderHi}`, borderRadius: 14, padding: 14, boxShadow: C.shadowLg, ...T.body }}>
+        <div style={{ fontSize: 14, fontWeight: 800, color: C.ink, marginBottom: 3, ...T.display }}>Connect EVM wallet</div>
+        <div style={{ fontSize: 10, color: C.muted, marginBottom: 10 }}>Polymarket trades on Polygon.</div>
         {sorted.length === 0 ? (
-          <div style={{ padding: 16, borderRadius: 10, background: 'rgba(255,95,122,.08)', border: '1px solid rgba(255,95,122,.25)', color: C.no, fontSize: 12 }}>
-            No EVM wallets detected. Install MetaMask, Rabby, or Phantom (with EVM mode) and reload.
+          <div style={{ padding: 12, borderRadius: 8, background: 'rgba(255,95,122,.08)', border: '1px solid rgba(255,95,122,.25)', color: C.no, fontSize: 11 }}>
+            No EVM wallets detected. Install MetaMask, Rabby, or Phantom (with EVM mode).
           </div>
         ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
             {sorted.map((w) => (
               <button key={w.info.rdns || w.info.uuid} onClick={() => !connecting && onPick(w)} disabled={connecting}
-                style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '11px 12px', borderRadius: 11, background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, color: C.ink, cursor: connecting ? 'wait' : 'pointer', textAlign: 'left' }}>
+                style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '9px 10px', borderRadius: 9, background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, color: C.ink, cursor: connecting ? 'wait' : 'pointer', textAlign: 'left' }}>
                 {w.info.icon
-                  ? <img src={w.info.icon} alt="" style={{ width: 28, height: 28, borderRadius: 6 }} />
-                  : <div style={{ width: 28, height: 28, borderRadius: 6, background: C.hlDim }} />}
-                <span style={{ flex: 1, fontWeight: 700, fontSize: 14 }}>{w.info.name}</span>
+                  ? <img src={w.info.icon} alt="" style={{ width: 22, height: 22, borderRadius: 5 }} />
+                  : <div style={{ width: 22, height: 22, borderRadius: 5, background: C.hlDim }} />}
+                <span style={{ flex: 1, fontWeight: 700, fontSize: 12 }}>{w.info.name}</span>
               </button>
             ))}
           </div>
         )}
-        <button onClick={onClose} style={{ marginTop: 14, width: '100%', padding: 10, borderRadius: 10, background: 'transparent', border: `1px solid ${C.border}`, color: C.muted, fontSize: 12, fontWeight: 600, cursor: 'pointer', ...T.mono }}>Cancel</button>
+        <button onClick={onClose} style={{ marginTop: 10, width: '100%', padding: 8, borderRadius: 8, background: 'transparent', border: `1px solid ${C.border}`, color: C.muted, fontSize: 11, fontWeight: 600, cursor: 'pointer', ...T.mono }}>Cancel</button>
       </div>
     </div>
   );
@@ -1108,85 +1118,85 @@ function FundingSheet({
   };
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', cursor: busy ? 'wait' : 'pointer' }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 22, borderTopRightRadius: 22, padding: '20px 18px calc(env(safe-area-inset-bottom) + 22px)', boxShadow: C.shadowLg, maxHeight: '92dvh', overflowY: 'auto' }}>
-        <div style={{ width: 36, height: 4, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 14px' }} />
-        <div style={{ fontSize: 18, fontWeight: 800, color: C.ink, marginBottom: 4, ...T.display }}>Account</div>
-        <div style={{ fontSize: 12, color: C.muted, marginBottom: 4, ...T.body }}>SOL wallet: <span style={{ color: C.hl, fontWeight: 700 }}>{solUi.toFixed(4)} SOL</span></div>
-        <div style={{ fontSize: 12, color: C.muted, marginBottom: 14, ...T.body }}>In Polymarket: <span style={{ color: C.hl, fontWeight: 700 }}>{fmtUsd(tradeUsd, 2)} USDC</span></div>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: '12px 12px calc(env(safe-area-inset-bottom) + 14px)', boxShadow: C.shadowLg, maxHeight: '92dvh', overflowY: 'auto' }}>
+        <div style={{ width: 32, height: 3, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 10px' }} />
+        <div style={{ fontSize: 15, fontWeight: 800, color: C.ink, marginBottom: 3, ...T.display }}>Account</div>
+        <div style={{ fontSize: 11, color: C.muted, marginBottom: 2, ...T.body }}>SOL: <span style={{ color: C.hl, fontWeight: 700 }}>{solUi.toFixed(4)}</span></div>
+        <div style={{ fontSize: 11, color: C.muted, marginBottom: 10, ...T.body }}>Polymarket: <span style={{ color: C.hl, fontWeight: 700 }}>{fmtUsd(tradeUsd, 2)}</span></div>
         <DebugPanel open={dbgOpen} onToggle={() => setDbgOpen((o) => !o)} />
         {setupStatus === 'error' && setupError && (
-          <div style={{ marginBottom: 12, padding: 10, borderRadius: 10, background: 'rgba(255,95,122,.07)', border: `1px solid ${C.no}33` }}>
-            <div style={{ fontSize: 11, color: C.no, fontWeight: 700, marginBottom: 4 }}>Polymarket Safe setup failed</div>
-            <div style={{ fontSize: 10, color: C.muted, marginBottom: 8, ...T.mono, wordBreak: 'break-word' }}>{setupError}</div>
-            <button onClick={onRetrySetup} style={{ padding: '6px 12px', borderRadius: 8, background: C.no + '22', border: `1px solid ${C.no}55`, color: C.no, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>↻ Retry setup</button>
+          <div style={{ marginBottom: 10, padding: 8, borderRadius: 8, background: 'rgba(255,95,122,.07)', border: `1px solid ${C.no}33` }}>
+            <div style={{ fontSize: 10, color: C.no, fontWeight: 700, marginBottom: 3 }}>Safe setup failed</div>
+            <div style={{ fontSize: 9.5, color: C.muted, marginBottom: 6, ...T.mono, wordBreak: 'break-word' }}>{setupError}</div>
+            <button onClick={onRetrySetup} style={{ padding: '5px 10px', borderRadius: 6, background: C.no + '22', border: `1px solid ${C.no}55`, color: C.no, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>↻ Retry</button>
           </div>
         )}
-        <div style={{ display: 'flex', gap: 4, marginBottom: 14, padding: 3, background: 'rgba(255,255,255,.03)', borderRadius: 10 }}>
+        <div style={{ display: 'flex', gap: 3, marginBottom: 10, padding: 2, background: 'rgba(255,255,255,.03)', borderRadius: 8 }}>
           {[
             { id: 'receive', label: 'Wallets' },
             { id: 'collect', label: 'Collect' },
             { id: 'addr', label: 'Safe' },
           ].map((t) => (
-            <button key={t.id} onClick={() => setTab(t.id)} style={{ flex: 1, padding: '8px 4px', borderRadius: 8, background: tab === t.id ? C.hlDim : 'transparent', border: `1px solid ${tab === t.id ? C.borderHi : 'transparent'}`, color: tab === t.id ? C.hl : C.muted, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>{t.label}</button>
+            <button key={t.id} onClick={() => setTab(t.id)} style={{ flex: 1, padding: '7px 4px', borderRadius: 6, background: tab === t.id ? C.hlDim : 'transparent', border: `1px solid ${tab === t.id ? C.borderHi : 'transparent'}`, color: tab === t.id ? C.hl : C.muted, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>{t.label}</button>
           ))}
         </div>
 
         {tab === 'receive' && (
-          <div style={{ padding: 14, borderRadius: 14, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 12 }}>
-            <div style={{ fontSize: 11, color: C.hl, fontWeight: 800, marginBottom: 8, ...T.display }}>SOLANA WALLET</div>
-            <div style={{ padding: '10px 12px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, ...T.mono, fontSize: 11, color: C.ink, wordBreak: 'break-all', marginBottom: 8 }}>{solanaAddress || 'Not connected'}</div>
+          <div style={{ padding: 10, borderRadius: 10, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
+            <div style={{ fontSize: 10, color: C.hl, fontWeight: 800, marginBottom: 6, ...T.display }}>SOLANA WALLET</div>
+            <div style={{ padding: '8px 10px', borderRadius: 8, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, ...T.mono, fontSize: 10, color: C.ink, wordBreak: 'break-all', marginBottom: 6 }}>{solanaAddress || 'Not connected'}</div>
             {solanaAddress && (
-              <div style={{ display: 'flex', gap: 6, marginBottom: 14 }}>
-                <button onClick={() => handleCopy(solanaAddress, 'sol')} style={{ flex: 1, padding: 8, borderRadius: 8, background: copied === 'sol' ? C.yesDim : C.hlDim, border: `1px solid ${copied === 'sol' ? C.yes + '55' : C.borderHi}`, color: copied === 'sol' ? C.yes : C.hl, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>{copied === 'sol' ? '✓ Copied' : 'Copy'}</button>
-                <button onClick={onDisconnectSol} style={{ flex: 1, padding: 8, borderRadius: 8, background: 'transparent', border: `1px solid ${C.no}33`, color: C.no, fontSize: 11, fontWeight: 600, cursor: 'pointer', ...T.mono }}>Disconnect</button>
+              <div style={{ display: 'flex', gap: 5, marginBottom: 10 }}>
+                <button onClick={() => handleCopy(solanaAddress, 'sol')} style={{ flex: 1, padding: 7, borderRadius: 7, background: copied === 'sol' ? C.yesDim : C.hlDim, border: `1px solid ${copied === 'sol' ? C.yes + '55' : C.borderHi}`, color: copied === 'sol' ? C.yes : C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>{copied === 'sol' ? '✓ Copied' : 'Copy'}</button>
+                <button onClick={onDisconnectSol} style={{ flex: 1, padding: 7, borderRadius: 7, background: 'transparent', border: `1px solid ${C.no}33`, color: C.no, fontSize: 10, fontWeight: 600, cursor: 'pointer', ...T.mono }}>Disconnect</button>
               </div>
             )}
-            <div style={{ fontSize: 11, color: C.hl, fontWeight: 800, marginBottom: 8, ...T.display }}>EVM WALLET (POLYGON)</div>
-            <div style={{ padding: '10px 12px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, ...T.mono, fontSize: 11, color: C.ink, wordBreak: 'break-all', marginBottom: 8 }}>{evmAddress || 'Not connected'}</div>
+            <div style={{ fontSize: 10, color: C.hl, fontWeight: 800, marginBottom: 6, ...T.display }}>EVM WALLET (POLYGON)</div>
+            <div style={{ padding: '8px 10px', borderRadius: 8, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, ...T.mono, fontSize: 10, color: C.ink, wordBreak: 'break-all', marginBottom: 6 }}>{evmAddress || 'Not connected'}</div>
             {evmAddress && (
-              <div style={{ display: 'flex', gap: 6 }}>
-                <button onClick={() => handleCopy(evmAddress, 'evm')} style={{ flex: 1, padding: 8, borderRadius: 8, background: copied === 'evm' ? C.yesDim : C.hlDim, border: `1px solid ${copied === 'evm' ? C.yes + '55' : C.borderHi}`, color: copied === 'evm' ? C.yes : C.hl, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>{copied === 'evm' ? '✓ Copied' : 'Copy'}</button>
-                <button onClick={onDisconnectEvm} style={{ flex: 1, padding: 8, borderRadius: 8, background: 'transparent', border: `1px solid ${C.no}33`, color: C.no, fontSize: 11, fontWeight: 600, cursor: 'pointer', ...T.mono }}>Disconnect</button>
+              <div style={{ display: 'flex', gap: 5 }}>
+                <button onClick={() => handleCopy(evmAddress, 'evm')} style={{ flex: 1, padding: 7, borderRadius: 7, background: copied === 'evm' ? C.yesDim : C.hlDim, border: `1px solid ${copied === 'evm' ? C.yes + '55' : C.borderHi}`, color: copied === 'evm' ? C.yes : C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>{copied === 'evm' ? '✓ Copied' : 'Copy'}</button>
+                <button onClick={onDisconnectEvm} style={{ flex: 1, padding: 7, borderRadius: 7, background: 'transparent', border: `1px solid ${C.no}33`, color: C.no, fontSize: 10, fontWeight: 600, cursor: 'pointer', ...T.mono }}>Disconnect</button>
               </div>
             )}
-            <div style={{ fontSize: 10, color: C.muted2, marginTop: 10, ...T.mono }}>Send SOL to your Solana wallet. On Buy, 5% fee is taken and 95% goes to Polymarket.</div>
+            <div style={{ fontSize: 9, color: C.muted2, marginTop: 8, ...T.mono }}>Send SOL to your Solana wallet. On Buy, 5% fee, 95% to Polymarket.</div>
           </div>
         )}
 
         {tab === 'collect' && (
-          <div style={{ padding: 14, borderRadius: 14, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 12 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-              <div style={{ fontSize: 11, color: C.hl, fontWeight: 800, ...T.display }}>COLLECT WINNINGS</div>
-              <div style={{ fontSize: 10, color: C.muted, ...T.mono }}>{fmtUsd(tradeUsd, 2)} available</div>
+          <div style={{ padding: 10, borderRadius: 10, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+              <div style={{ fontSize: 10, color: C.hl, fontWeight: 800, ...T.display }}>COLLECT WINNINGS</div>
+              <div style={{ fontSize: 9, color: C.muted, ...T.mono }}>{fmtUsd(tradeUsd, 2)}</div>
             </div>
-            <div style={{ padding: '8px 10px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, marginBottom: 8 }}>
-              <div style={{ fontSize: 9, color: C.muted2, marginBottom: 2, ...T.mono }}>SOLANA ADDRESS</div>
-              <input value={withdrawSolAddr} onChange={(e) => setWithdrawSolAddr(e.target.value.trim())} disabled={busy} placeholder="Solana address…" style={{ width: '100%', background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 11, ...T.mono }} />
+            <div style={{ padding: '7px 9px', borderRadius: 8, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, marginBottom: 6 }}>
+              <div style={{ fontSize: 8.5, color: C.muted2, marginBottom: 2, ...T.mono }}>SOLANA ADDRESS</div>
+              <input value={withdrawSolAddr} onChange={(e) => setWithdrawSolAddr(e.target.value.trim())} disabled={busy} placeholder="Solana address…" style={{ width: '100%', background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 10, ...T.mono }} />
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 12px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
-              <span style={{ fontSize: 18, color: C.muted, ...T.display }}>$</span>
-              <input value={withdrawUsd} onChange={(e) => setWithdrawUsd(cleanAmount(e.target.value))} disabled={busy} inputMode="decimal" placeholder="0.00" style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 20, fontWeight: 700, ...T.display }} />
-              <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>USDC</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '8px 10px', borderRadius: 8, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, marginBottom: 8 }}>
+              <span style={{ fontSize: 16, color: C.muted, ...T.display }}>$</span>
+              <input value={withdrawUsd} onChange={(e) => setWithdrawUsd(cleanAmount(e.target.value))} disabled={busy} inputMode="decimal" placeholder="0.00" style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 17, fontWeight: 700, ...T.display }} />
+              <span style={{ fontSize: 9, color: C.muted, ...T.mono }}>USDC</span>
             </div>
-            <button onClick={() => setWithdrawUsd(String(Math.floor(tradeUsd * 100) / 100))} disabled={busy || tradeUsd <= 0} style={{ width: '100%', padding: 7, borderRadius: 8, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 11, fontWeight: 700, cursor: 'pointer', marginBottom: 10, ...T.mono }}>Max</button>
+            <button onClick={() => setWithdrawUsd(String(Math.floor(tradeUsd * 100) / 100))} disabled={busy || tradeUsd <= 0} style={{ width: '100%', padding: 6, borderRadius: 7, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', marginBottom: 8, ...T.mono }}>Max</button>
             {collectStatusMsg && <StatusLine msg={collectStatusMsg} />}
             {collectError && <ErrorLine msg={collectError} />}
-            {collectStatus === 'done' && <div style={{ marginBottom: 8, padding: 8, background: 'rgba(0,212,163,.10)', border: `1px solid ${C.yes}55`, borderRadius: 10, fontSize: 11, color: C.yes, fontWeight: 700 }}>✓ Withdrawal submitted — funds arrive in 2-5 min</div>}
+            {collectStatus === 'done' && <div style={{ marginBottom: 6, padding: 7, background: 'rgba(0,212,163,.10)', border: `1px solid ${C.yes}55`, borderRadius: 8, fontSize: 10, color: C.yes, fontWeight: 700 }}>✓ Withdrawal submitted</div>}
             <PrimaryButton onClick={handleWithdraw} disabled={busy || usd < 1 || usd > tradeUsd || !withdrawSolAddr} label={busy ? 'Working…' : `Withdraw ${fmtUsd(usd, 2)}`} />
           </div>
         )}
 
         {tab === 'addr' && (
-          <div style={{ padding: 14, borderRadius: 14, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 12 }}>
-            <div style={{ fontSize: 11, color: C.hl, fontWeight: 800, marginBottom: 8, ...T.display }}>POLYMARKET SAFE (POLYGON)</div>
-            <div style={{ padding: '10px 12px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, ...T.mono, fontSize: 11, color: C.ink, wordBreak: 'break-all', marginBottom: 10 }}>{safeAddress || 'Connect EVM wallet first'}</div>
+          <div style={{ padding: 10, borderRadius: 10, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
+            <div style={{ fontSize: 10, color: C.hl, fontWeight: 800, marginBottom: 6, ...T.display }}>POLYMARKET SAFE</div>
+            <div style={{ padding: '8px 10px', borderRadius: 8, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, ...T.mono, fontSize: 10, color: C.ink, wordBreak: 'break-all', marginBottom: 8 }}>{safeAddress || 'Connect EVM wallet first'}</div>
             {safeAddress && (
-              <button onClick={() => handleCopy(safeAddress, 'safe')} style={{ width: '100%', padding: 10, borderRadius: 10, background: copied === 'safe' ? C.yesDim : C.hlDim, border: `1px solid ${copied === 'safe' ? C.yes + '55' : C.borderHi}`, color: copied === 'safe' ? C.yes : C.hl, fontSize: 12, fontWeight: 700, cursor: 'pointer', ...T.mono }}>{copied === 'safe' ? '✓ Copied' : 'Copy Safe address'}</button>
+              <button onClick={() => handleCopy(safeAddress, 'safe')} style={{ width: '100%', padding: 8, borderRadius: 8, background: copied === 'safe' ? C.yesDim : C.hlDim, border: `1px solid ${copied === 'safe' ? C.yes + '55' : C.borderHi}`, color: copied === 'safe' ? C.yes : C.hl, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>{copied === 'safe' ? '✓ Copied' : 'Copy Safe address'}</button>
             )}
           </div>
         )}
 
-        <button onClick={onReset} style={{ width: '100%', padding: 10, borderRadius: 10, background: 'rgba(255,95,122,.05)', border: `1px solid ${C.no}33`, color: C.no, fontSize: 11, fontWeight: 600, cursor: 'pointer', marginTop: 6, ...T.mono }}>↻ Reset Polymarket account (if stuck)</button>
+        <button onClick={onReset} style={{ width: '100%', padding: 8, borderRadius: 8, background: 'rgba(255,95,122,.05)', border: `1px solid ${C.no}33`, color: C.no, fontSize: 10, fontWeight: 600, cursor: 'pointer', marginTop: 4, ...T.mono }}>↻ Reset Polymarket account</button>
       </div>
     </div>
   );
@@ -1322,58 +1332,58 @@ function OrderDrawer({
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', cursor: busy ? 'wait' : 'pointer' }}>
-      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 22, borderTopRightRadius: 22, boxShadow: C.shadowLg, maxHeight: '92dvh', display: 'flex', flexDirection: 'column' }}>
-        <div style={{ padding: '14px 18px 0', flexShrink: 0 }}>
-          <div style={{ width: 36, height: 4, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 14px' }} />
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.ink, marginBottom: 4, lineHeight: 1.35, ...T.body }}>{market.title}</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-            <div style={{ padding: '4px 10px', borderRadius: 99, background: sideDim, border: `1px solid ${sideColor}55`, color: sideColor, fontSize: 10, fontWeight: 800, letterSpacing: 1, ...T.mono }}>{side.toUpperCase()}</div>
-            <div style={{ fontSize: 11, color: C.muted, ...T.mono }}>${price.toFixed(3)} · {Math.round(price * 100)}%</div>
-            <div style={{ marginLeft: 'auto', fontSize: 10, color: C.muted, ...T.mono }}>{solUi.toFixed(4)} SOL</div>
+      <div onClick={(e) => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 16, borderTopRightRadius: 16, boxShadow: C.shadowLg, maxHeight: '92dvh', display: 'flex', flexDirection: 'column' }}>
+        <div style={{ padding: '10px 12px 0', flexShrink: 0 }}>
+          <div style={{ width: 32, height: 3, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 10px' }} />
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 4, lineHeight: 1.3, ...T.body }}>{market.title}</div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+            <div style={{ padding: '3px 8px', borderRadius: 99, background: sideDim, border: `1px solid ${sideColor}55`, color: sideColor, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>{side.toUpperCase()}</div>
+            <div style={{ fontSize: 10, color: C.muted, ...T.mono }}>${price.toFixed(3)} · {Math.round(price * 100)}%</div>
+            <div style={{ marginLeft: 'auto', fontSize: 9.5, color: C.muted, ...T.mono }}>{solUi.toFixed(4)} SOL</div>
           </div>
         </div>
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 18px' }}>
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0 12px' }}>
           <DebugPanel open={dbgOpen} onToggle={() => setDbgOpen((o) => !o)} />
           {hasPos && sellStatus !== 'sold' && (
-            <div style={{ marginBottom: 14, padding: 14, borderRadius: 12, background: pnl >= 0 ? 'rgba(0,212,163,.07)' : 'rgba(255,95,122,.07)', border: `1px solid ${pnl >= 0 ? 'rgba(0,212,163,.30)' : 'rgba(255,95,122,.30)'}` }}>
-              <div style={{ fontSize: 10, color: pnl >= 0 ? C.yes : C.no, fontWeight: 800, marginBottom: 10, ...T.mono }}>YOUR POSITION · {side.toUpperCase()}</div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6, fontSize: 12, ...T.mono }}><span style={{ color: C.muted }}>Shares</span><span style={{ color: C.ink, fontWeight: 700 }}>{held.toFixed(2)} @ ${avgPx.toFixed(3)}</span></div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10, fontSize: 12, ...T.mono }}><span style={{ color: C.muted }}>Value · P&amp;L</span><span style={{ color: pnl >= 0 ? C.yes : C.no, fontWeight: 800 }}>{fmtUsd(value, 2)} · {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} ({pnl >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%)</span></div>
-              <button onClick={sellStatus === 'selling' ? undefined : handleSell} disabled={sellStatus === 'selling' || bid <= 0} style={{ width: '100%', padding: 11, borderRadius: 10, background: pnl >= 0 ? `linear-gradient(135deg, ${C.yes}33, ${C.yes}22)` : `linear-gradient(135deg, ${C.no}33, ${C.no}22)`, border: `1px solid ${pnl >= 0 ? C.yes : C.no}66`, color: pnl >= 0 ? C.yes : C.no, fontWeight: 800, fontSize: 13, cursor: (sellStatus === 'selling' || bid <= 0) ? 'not-allowed' : 'pointer', opacity: (sellStatus === 'selling' || bid <= 0) ? .55 : 1, ...T.body }}>
+            <div style={{ marginBottom: 10, padding: 10, borderRadius: 10, background: pnl >= 0 ? 'rgba(0,212,163,.07)' : 'rgba(255,95,122,.07)', border: `1px solid ${pnl >= 0 ? 'rgba(0,212,163,.30)' : 'rgba(255,95,122,.30)'}` }}>
+              <div style={{ fontSize: 9, color: pnl >= 0 ? C.yes : C.no, fontWeight: 800, marginBottom: 7, ...T.mono }}>YOUR POSITION · {side.toUpperCase()}</div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 5, fontSize: 11, ...T.mono }}><span style={{ color: C.muted }}>Shares</span><span style={{ color: C.ink, fontWeight: 700 }}>{held.toFixed(2)} @ ${avgPx.toFixed(3)}</span></div>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, fontSize: 11, ...T.mono }}><span style={{ color: C.muted }}>Value · P&amp;L</span><span style={{ color: pnl >= 0 ? C.yes : C.no, fontWeight: 800 }}>{fmtUsd(value, 2)} · {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} ({pnl >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%)</span></div>
+              <button onClick={sellStatus === 'selling' ? undefined : handleSell} disabled={sellStatus === 'selling' || bid <= 0} style={{ width: '100%', padding: 9, borderRadius: 8, background: pnl >= 0 ? `linear-gradient(135deg, ${C.yes}33, ${C.yes}22)` : `linear-gradient(135deg, ${C.no}33, ${C.no}22)`, border: `1px solid ${pnl >= 0 ? C.yes : C.no}66`, color: pnl >= 0 ? C.yes : C.no, fontWeight: 800, fontSize: 12, cursor: (sellStatus === 'selling' || bid <= 0) ? 'not-allowed' : 'pointer', opacity: (sellStatus === 'selling' || bid <= 0) ? .55 : 1, ...T.body }}>
                 {sellStatus === 'selling' ? 'Selling…' : bid <= 0 ? 'No bids' : `Sell all · ${fmtUsd(value, 2)}`}
               </button>
             </div>
           )}
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ fontSize: 10, color: C.muted, marginBottom: 6, textTransform: 'uppercase', letterSpacing: 1, ...T.mono }}>SOL to spend</div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 14px', borderRadius: 12, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}` }}>
-              <input value={amountSol} onChange={(e) => { setAmountSol(cleanAmount(e.target.value)); setError(''); }} disabled={busy} inputMode="decimal" placeholder="0.05" style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 22, fontWeight: 700, ...T.display }} />
-              <span style={{ fontSize: 11, color: C.muted, ...T.mono }}>SOL</span>
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 9, color: C.muted, marginBottom: 5, textTransform: 'uppercase', letterSpacing: 1, ...T.mono }}>SOL to spend</div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 11px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}` }}>
+              <input value={amountSol} onChange={(e) => { setAmountSol(cleanAmount(e.target.value)); setError(''); }} disabled={busy} inputMode="decimal" placeholder="0.05" style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 18, fontWeight: 700, ...T.display }} />
+              <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>SOL</span>
             </div>
-            <div style={{ display: 'flex', gap: 6, marginTop: 8 }}>
+            <div style={{ display: 'flex', gap: 5, marginTop: 6 }}>
               {['0.05', '0.1', '0.5', '1'].map((v) => (
-                <button key={v} onClick={() => setAmountSol(v)} disabled={busy} style={{ flex: 1, padding: 7, borderRadius: 8, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 11, fontWeight: 600, cursor: 'pointer', ...T.mono }}>{v}</button>
+                <button key={v} onClick={() => setAmountSol(v)} disabled={busy} style={{ flex: 1, padding: 6, borderRadius: 7, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 10, fontWeight: 600, cursor: 'pointer', ...T.mono }}>{v}</button>
               ))}
-              <button onClick={() => setAmountSol(solAvailableUi > 0 ? solAvailableUi.toFixed(4) : '0')} disabled={busy || solAvailableLamports <= 0} style={{ flex: 1, padding: 7, borderRadius: 8, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 11, fontWeight: 700, cursor: 'pointer', ...T.mono }}>Max</button>
+              <button onClick={() => setAmountSol(solAvailableUi > 0 ? solAvailableUi.toFixed(4) : '0')} disabled={busy || solAvailableLamports <= 0} style={{ flex: 1, padding: 6, borderRadius: 7, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>Max</button>
             </div>
           </div>
-          <div style={{ padding: 14, borderRadius: 12, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 12, ...T.mono, fontSize: 11 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}><span style={{ color: C.muted }}>SOL available</span><span style={{ color: C.ink, fontWeight: 600 }}>{solAvailableUi.toFixed(4)}</span></div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}><span style={{ color: C.muted }}>Service fee</span><span style={{ color: C.ink, fontWeight: 600 }}>{FEE_PCT}% ({(sol * FEE_PCT / 100).toFixed(4)} SOL)</span></div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}><span style={{ color: C.muted }}>To Polymarket</span><span style={{ color: C.ink, fontWeight: 600 }}>{(sol * (100 - FEE_PCT) / 100).toFixed(4)} SOL</span></div>
+          <div style={{ padding: 10, borderRadius: 10, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10, ...T.mono, fontSize: 10 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}><span style={{ color: C.muted }}>SOL available</span><span style={{ color: C.ink, fontWeight: 600 }}>{solAvailableUi.toFixed(4)}</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}><span style={{ color: C.muted }}>Service fee</span><span style={{ color: C.ink, fontWeight: 600 }}>{FEE_PCT}% ({(sol * FEE_PCT / 100).toFixed(4)} SOL)</span></div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}><span style={{ color: C.muted }}>To Polymarket</span><span style={{ color: C.ink, fontWeight: 600 }}>{(sol * (100 - FEE_PCT) / 100).toFixed(4)} SOL</span></div>
             <div style={{ display: 'flex', justifyContent: 'space-between' }}><span style={{ color: C.muted }}>Will trigger</span><span style={{ color: sideColor, fontWeight: 700 }}>Buy {side.toUpperCase()} at ${price.toFixed(3)}</span></div>
           </div>
           {statusMsg && <StatusLine msg={statusMsg} />}
           {error && (
-            <div style={{ marginBottom: 10, padding: 10, background: 'rgba(255,95,122,.08)', border: '1px solid rgba(255,95,122,.25)', borderRadius: 12, fontSize: 12, color: C.no }}>
+            <div style={{ marginBottom: 8, padding: 8, background: 'rgba(255,95,122,.08)', border: '1px solid rgba(255,95,122,.25)', borderRadius: 10, fontSize: 11, color: C.no }}>
               {error}
-              <div style={{ marginTop: 6, fontSize: 10, color: C.muted, ...T.mono }}>See Debug panel above.</div>
+              <div style={{ marginTop: 4, fontSize: 9, color: C.muted, ...T.mono }}>See Debug panel above.</div>
             </div>
           )}
         </div>
-        <div style={{ padding: '12px 18px calc(env(safe-area-inset-bottom) + 14px)', borderTop: `1px solid ${C.border}`, background: C.card, flexShrink: 0 }}>
+        <div style={{ padding: '10px 12px calc(env(safe-area-inset-bottom) + 12px)', borderTop: `1px solid ${C.border}`, background: C.card, flexShrink: 0 }}>
           <button onClick={busy ? undefined : handleBuy} disabled={busy || sol <= 0 || Number(solLamports) > solAvailableLamports || Number(solLamports) < MIN_SOL_LAMPORTS_PER_TRADE || !creds}
-            style={{ width: '100%', padding: 14, borderRadius: 13, background: status === 'success' ? `linear-gradient(135deg, ${C.yes}33, ${C.yes}22)` : `linear-gradient(135deg, ${sideColor}33, ${sideColor}22)`, border: `1px solid ${sideColor}66`, color: sideColor, fontWeight: 800, fontSize: 14, cursor: busy ? 'not-allowed' : 'pointer', opacity: (busy || sol <= 0 || Number(solLamports) > solAvailableLamports || Number(solLamports) < MIN_SOL_LAMPORTS_PER_TRADE || !creds) ? .55 : 1, ...T.body }}>
+            style={{ width: '100%', padding: 12, borderRadius: 11, background: status === 'success' ? `linear-gradient(135deg, ${C.yes}33, ${C.yes}22)` : `linear-gradient(135deg, ${sideColor}33, ${sideColor}22)`, border: `1px solid ${sideColor}66`, color: sideColor, fontWeight: 800, fontSize: 13, cursor: busy ? 'not-allowed' : 'pointer', opacity: (busy || sol <= 0 || Number(solLamports) > solAvailableLamports || Number(solLamports) < MIN_SOL_LAMPORTS_PER_TRADE || !creds) ? .55 : 1, ...T.body }}>
             {busy ? statusMsg || 'Working…' : status === 'success' ? '✓ Trade placed' : !creds ? 'Setting up account…' : `Buy ${side.toUpperCase()} · ${sol.toFixed(4)} SOL`}
           </button>
         </div>
@@ -1737,4 +1747,3 @@ export default function Predict() {
     </>
   );
 }
- 
