@@ -47,6 +47,9 @@ const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 // tx would either be rejected or double-charge.
 const PRIORITY_FEE_MICROLAMPORTS = 5_000;
 
+// Fixed slippage — high enough that the tx almost always lands. No user setting.
+const SLIPPAGE_BPS = 500; // 5%
+
 const RPC_URL =
   process.env.REACT_APP_SOLANA_RPC ||
   (process.env.REACT_APP_HELIUS_API_KEY
@@ -125,10 +128,8 @@ export default function Swap() {
   const [inputMint,  setInputMint]   = useState(SOL_MINT);
   const [outputMint, setOutputMint]  = useState(USDC_MINT);
   const [amount,     setAmount]      = useState('');
-  const [slippageBps, setSlippageBps] = useState(50);
 
   const [showPicker,   setShowPicker]   = useState(null);
-  const [showSettings, setShowSettings] = useState(false);
 
   const [quote, setQuote]           = useState(null);
   const [quoting, setQuoting]       = useState(false);
@@ -246,7 +247,7 @@ export default function Swap() {
           inputMint,
           outputMint,
           amount:      net.toString(),
-          slippageBps: String(slippageBps),
+          slippageBps: String(SLIPPAGE_BPS),
           taker:       wallet.publicKey
             ? wallet.publicKey.toBase58()
             : '11111111111111111111111111111111',
@@ -274,7 +275,7 @@ export default function Swap() {
     }, 350);
 
     return () => { clearTimeout(t); ac.abort(); };
-  }, [rawAmount, inputMint, outputMint, slippageBps, wallet.publicKey]);
+  }, [rawAmount, inputMint, outputMint, wallet.publicKey]);
 
   const outAmountUi = useMemo(() => {
     if (!quote || !outputToken) return null;
@@ -329,21 +330,9 @@ export default function Swap() {
       const netRaw = quote.netRaw ||
         ((BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n).toString();
 
-      // 1) Fresh /build for the NET amount (locks in the actual route).
-      const params = new URLSearchParams({
-        inputMint,
-        outputMint,
-        amount:      netRaw,
-        slippageBps: String(slippageBps),
-        taker:       wallet.publicKey.toBase58(),
-        computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
-      });
-      const r = await fetch(`/api/jupiter/build?${params}`);
-      if (!r.ok) {
-        const body = await r.json().catch(() => ({}));
-        throw new Error(body.error || `Build failed (${r.status})`);
-      }
-      const build = await r.json();
+      // Use the SAME quote the user is looking at. No re-fetch — the build
+      // response stored in `quote` is what the user sees and what we sign.
+      const build = quote;
 
       // 2) Build the fee instructions FIRST (they go at the front of the tx).
       const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
@@ -501,7 +490,7 @@ export default function Swap() {
     }
   }, [
     wallet, quote, outputToken, inputToken,
-    inputMint, outputMint, rawAmount, slippageBps,
+    inputMint, outputMint, rawAmount,
     connection, refreshBalances,
   ]);
 
@@ -517,9 +506,6 @@ export default function Swap() {
 
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
           <h1 style={{ ...T.display, fontSize: 28, margin: 0 }}>Swap</h1>
-          <button onClick={() => setShowSettings(true)} style={iconBtn} aria-label="Settings">
-            <SettingsIcon/>
-          </button>
         </div>
 
         <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 20, padding: 16 }}>
@@ -574,7 +560,6 @@ export default function Swap() {
                 {priceImpact != null ? `${priceImpact.toFixed(2)}%` : '—'}
               </span>
             </Row>
-            <Row label="Slippage tolerance">{(slippageBps / 100).toFixed(2)}%</Row>
             <Row label="Platform fee">{(FEE_BPS / 100).toFixed(1)}% (in {inputToken.symbol})</Row>
           </div>
         )}
@@ -639,14 +624,6 @@ export default function Swap() {
             setShowPicker(null);
           }}
           onClose={() => setShowPicker(null)}
-        />
-      )}
-
-      {showSettings && (
-        <SettingsModal
-          slippageBps={slippageBps}
-          onChange={setSlippageBps}
-          onClose={() => setShowSettings(false)}
         />
       )}
     </div>
@@ -831,60 +808,8 @@ function TokenPicker({ tokens, loading, balances, excludeMint, onSelect, onClose
   );
 }
 
-function SettingsModal({ slippageBps, onChange, onClose }) {
-  const [custom, setCustom] = useState((slippageBps / 100).toString());
-  const presets = [10, 50, 100, 500];
+function SettingsModal() { return null; } // removed — slippage hardcoded
 
-  return (
-    <div style={modalOverlay} onClick={onClose}>
-      <div style={modalCard} onClick={(e) => e.stopPropagation()}>
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-          <h3 style={{ ...T.display, fontSize: 18, margin: 0 }}>Settings</h3>
-          <button onClick={onClose} style={iconBtn}><CloseIcon/></button>
-        </div>
-
-        <div style={{ marginBottom: 8, fontSize: 13, color: C.textDim }}>Slippage tolerance</div>
-        <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
-          {presets.map(bps => (
-            <button
-              key={bps}
-              onClick={() => { onChange(bps); setCustom((bps / 100).toString()); }}
-              style={{
-                flex: 1, padding: '8px', borderRadius: 10,
-                border: `1px solid ${slippageBps === bps ? C.accent : C.border}`,
-                background: slippageBps === bps ? C.accent : C.panel2,
-                color: C.text, fontSize: 13, cursor: 'pointer', ...T.body,
-              }}
-            >{bps / 100}%</button>
-          ))}
-        </div>
-        <div style={{ position: 'relative' }}>
-          <input
-            value={custom}
-            onChange={(e) => {
-              const v = e.target.value.replace(/[^\d.]/g, '');
-              setCustom(v);
-              const n = Number(v);
-              if (Number.isFinite(n) && n >= 0 && n <= 50) onChange(Math.round(n * 100));
-            }}
-            placeholder="Custom"
-            style={{
-              width: '100%', padding: '10px 32px 10px 12px',
-              background: C.panel2, border: `1px solid ${C.border}`,
-              borderRadius: 10, color: C.text, fontSize: 14,
-              outline: 'none', ...T.body, boxSizing: 'border-box',
-            }}
-          />
-          <span style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: C.textDim }}>%</span>
-        </div>
-
-        <p style={{ marginTop: 16, fontSize: 12, color: C.textFaint }}>
-          Higher slippage helps transactions land in volatile markets but means you may receive less than quoted.
-        </p>
-      </div>
-    </div>
-  );
-}
 
 function Row({ label, children }) {
   return (
