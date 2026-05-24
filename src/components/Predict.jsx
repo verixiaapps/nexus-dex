@@ -1051,6 +1051,15 @@ export default function Predict() {
     return new Connection(origin + SOL_RPC, 'confirmed');
   }, []);
 
+  const refreshBalances = useCallback(async () => {
+    if (!publicKey) { setSolBal(0n); setUsdcBal(0n); return; }
+    const [s, u] = await Promise.all([
+      fetchSolBalance(connection, publicKey.toBase58()),
+      fetchUsdcBalance(connection, publicKey.toBase58()),
+    ]);
+    setSolBal(s); setUsdcBal(u);
+  }, [publicKey, connection]);
+
   useEffect(() => {
     if (!publicKey) { setSolBal(0n); setUsdcBal(0n); return; }
     let alive = true;
@@ -1062,7 +1071,7 @@ export default function Predict() {
       if (alive) { setSolBal(s); setUsdcBal(u); }
     };
     tick();
-    const id = setInterval(tick, 20000);
+    const id = setInterval(tick, 300000);
     return () => { alive = false; clearInterval(id); };
   }, [publicKey, connection]);
 
@@ -1086,7 +1095,7 @@ export default function Predict() {
   useEffect(() => {
     setEvLoading(true);
     reloadEvents();
-    const id = setInterval(reloadEvents, 90000);
+    const id = setInterval(reloadEvents, 300000);
     return () => clearInterval(id);
   }, [reloadEvents]);
 
@@ -1105,7 +1114,7 @@ export default function Predict() {
   useEffect(() => {
     if (tab !== 'positions' || !publicKey) return;
     reloadPositions();
-    const id = setInterval(reloadPositions, 30000);
+    const id = setInterval(reloadPositions, 300000);
     return () => clearInterval(id);
   }, [tab, publicKey, reloadPositions]);
 
@@ -1224,7 +1233,7 @@ export default function Predict() {
           event={buyState.event}
           isYes={buyState.isYes}
           onClose={() => setBuyState(null)}
-          onDone={() => { reloadEvents(); reloadPositions(); }}
+          onDone={() => { reloadEvents(); reloadPositions(); refreshBalances(); }}
           solBal={solBal} usdcBal={usdcBal}
           connection={connection}
         />
