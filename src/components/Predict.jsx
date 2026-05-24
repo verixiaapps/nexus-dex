@@ -39,6 +39,7 @@ const SOL_MINT      = 'So11111111111111111111111111111111111111112';
 const JUPUSD_MINT   = 'JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD';
 const FEE_WALLET    = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
 const FEE_BPS       = 500;   // 5% — collected via Metis platformFeeBps
+const SLIPPAGE_BPS  = 1000;  // 10% swap slippage tolerance
 const SOL_RPC       = '/api/solana-rpc';
 const MIN_TRADE_USD = 5;
 const NAV_CLEARANCE = 120;
@@ -342,7 +343,6 @@ async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomi
       ownerPubkey, marketId, isYes, isBuy: true,
       depositAmount: String(depositAmountUsdcAtomic),
       depositMint:   USDC_MINT,
-      prioritizationFeeLamports: JUPITER_PRIORITY_LAMPORTS,
     }),
   });
   const j = await r.json();
@@ -354,7 +354,7 @@ async function buildSellTx({ ownerPubkey, positionPubkey }) {
   const r = await jfetch(`/api/predict/positions/${encodeURIComponent(positionPubkey)}`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ownerPubkey, prioritizationFeeLamports: JUPITER_PRIORITY_LAMPORTS }),
+    body: JSON.stringify({ ownerPubkey }),
   });
   const j = await r.json();
   if (!j?.transaction) throw new Error('No sell tx returned');
@@ -365,7 +365,7 @@ async function buildClaimTx({ ownerPubkey, positionPubkey }) {
   const r = await jfetch(`/api/predict/positions/${encodeURIComponent(positionPubkey)}/claim`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ownerPubkey, prioritizationFeeLamports: JUPITER_PRIORITY_LAMPORTS }),
+    body: JSON.stringify({ ownerPubkey }),
   });
   const j = await r.json();
   if (!j?.transaction) throw new Error('No claim tx returned');
@@ -374,15 +374,14 @@ async function buildClaimTx({ ownerPubkey, positionPubkey }) {
 
 // ─── JupUSD → SOL swap with 5% platform fee ──────────────────────────────────
 // Called after sell/claim confirms. Quotes JupUSD→SOL via Metis with
-// platformFeeBps=500, fee goes to FEE_WALLET's SOL ATA (native SOL account).
-// For ExactIn swaps the feeAccount mint must be input or output mint —
-// we use the SOL wsol ATA of FEE_WALLET to collect fees in SOL.
+// platformFeeBps=500. Fee is collected in JupUSD (the input mint) — docs allow
+// either input or output mint for ExactIn swaps; using input mint avoids
+// wSOL ATA initialization complexity.
 async function buildJupUsdToSolSwapTx({ ownerPubkey, jupUsdAtomic }) {
-  // For SOL output, fee is collected in the output mint (SOL/wSOL).
-  // We use FEE_WALLET's associated wSOL account as feeAccount.
-  const feeWallet  = new PublicKey(FEE_WALLET);
-  const solMint    = new PublicKey(SOL_MINT);
-  const feeAccount = getAssociatedTokenAddressSync(solMint, feeWallet).toBase58();
+  const feeWallet    = new PublicKey(FEE_WALLET);
+  const jupUsdMint   = new PublicKey(JUPUSD_MINT);
+  // Fee collected in JupUSD (input mint) — simpler than wSOL ATA
+  const feeAccount   = getAssociatedTokenAddressSync(jupUsdMint, feeWallet).toBase58();
 
   // Step 1: Quote JupUSD → SOL with 5% platform fee
   const quoteParams = new URLSearchParams({
@@ -400,7 +399,7 @@ async function buildJupUsdToSolSwapTx({ ownerPubkey, jupUsdAtomic }) {
 
   const postFeeSolLamports = BigInt(quote.outAmount);
 
-  // Step 2: Build swap tx — fee goes to FEE_WALLET wSOL ATA
+  // Step 2: Build swap tx — fee goes to FEE_WALLET JupUSD ATA
   const swapRes  = await jfetch('/api/jupiter/swap', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -513,19 +512,6 @@ function ErrorLine({ msg }) {
   return (
     <div style={{ marginBottom: 8, padding: 8, background: 'rgba(255,95,122,.08)', border: '1px solid rgba(255,95,122,.25)', borderRadius: 10, fontSize: 11, color: C.no, wordBreak: 'break-word' }}>
       {msg}
-    </div>
-  );
-}
-
-function SimNoticeBanner() {
-  return (
-    <div style={{
-      marginBottom: 8, padding: '8px 10px',
-      background: 'rgba(151,252,228,.05)',
-      border: `1px solid ${C.border}`,
-      borderRadius: 10, fontSize: 10, color: C.muted, lineHeight: 1.5, ...T.body,
-    }}>
-      Your wallet may show "simulation failed" — this is normal for Solana prediction markets. Nexus DEX is fully verified with Phantom.
     </div>
   );
 }
@@ -754,10 +740,23 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
       setStMsg('Confirm in your wallet…');
       const signed = await signAllTransactions([swapTx, buyTx]);
 
-      const { pending, sigs } = await submitAndConfirm(connection, signed, setStMsg);
-      if (pending) {
-        const primary = sigs[sigs.length - 1];
-        setError(`Submitted but still confirming. View on Solscan: https://solscan.io/tx/${primary}`);
+      // Submit swap first and wait for confirmation BEFORE buy tx,
+      // since the buy needs USDC from the swap to exist in the user's ATA.
+      setStMsg('Swapping SOL → USDC…');
+      const swapResult = await submitAndConfirm(connection, [signed[0]], setStMsg);
+      if (swapResult.pending) {
+        setError(`Swap submitted but still confirming. Solscan: https://solscan.io/tx/${swapResult.sigs[0]}`);
+        setStatus('idle'); setStMsg('');
+        onDone?.();
+        return;
+      }
+
+      // Swap confirmed — now submit buy. Refresh blockhash since the original
+      // may have expired during swap confirmation.
+      setStMsg('Placing order…');
+      const buyResult = await submitAndConfirm(connection, [signed[1]], setStMsg);
+      if (buyResult.pending) {
+        setError(`Order submitted but still confirming. Solscan: https://solscan.io/tx/${buyResult.sigs[0]}`);
         setStatus('idle'); setStMsg('');
         onDone?.();
         return;
@@ -952,37 +951,34 @@ function JupUsdSwapModal({ jupUsdAmount, label, onClose, connection }) {
   }, [publicKey, signAllTransactions, jupUsdAmount, connection, onClose]);
 
   return (
-    <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(3,6,15,.82)', backdropFilter: 'blur(16px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 16px', cursor: busy ? 'wait' : 'pointer' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 380, background: `linear-gradient(160deg, ${C.cardHi}, ${C.card})`, border: `1px solid ${C.borderHi}`, borderRadius: 20, padding: '20px 16px 16px', boxShadow: C.shadowLg, textAlign: 'center' }}>
+    <div style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(3,6,15,.82)', backdropFilter: 'blur(16px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 16px' }}>
+      <div style={{ width: '100%', maxWidth: 380, background: `linear-gradient(160deg, ${C.cardHi}, ${C.card})`, border: `1px solid ${C.borderHi}`, borderRadius: 20, padding: '20px 16px 16px', boxShadow: C.shadowLg, textAlign: 'center' }}>
 
         {/* Icon */}
-        <div style={{ fontSize: 36, marginBottom: 8 }}>
-          {status === 'success' ? '✅' : label === 'claim' ? '🏆' : '💰'}
+        <div style={{ fontSize: 40, marginBottom: 8 }}>
+          {status === 'success' ? '✅' : label === 'claim' ? '🏆' : '🎉'}
         </div>
 
         {status === 'success' ? (
           <>
-            <div style={{ fontSize: 15, fontWeight: 800, color: C.yes, marginBottom: 4, ...T.display }}>Swapped to SOL!</div>
+            <div style={{ fontSize: 16, fontWeight: 800, color: C.yes, marginBottom: 4, ...T.display }}>Collected!</div>
             <div style={{ fontSize: 11, color: C.muted, ...T.mono }}>SOL is in your wallet</div>
           </>
         ) : (
           <>
-            <div style={{ fontSize: 15, fontWeight: 800, color: C.ink, marginBottom: 4, ...T.display }}>
-              {label === 'claim' ? 'You won!' : 'Nice trade!'} Swap to SOL?
+            <div style={{ fontSize: 17, fontWeight: 800, color: C.ink, marginBottom: 6, ...T.display }}>
+              {label === 'claim' ? 'You won!' : 'Trade closed!'}
             </div>
-            <div style={{ fontSize: 12, color: C.muted, marginBottom: 14, ...T.body }}>
-              You received <strong style={{ color: C.hl }}>{fmtUsd(jupUsdAmount)} JupUSD</strong>.<br />
-              Swap to SOL now — fast, one tap.
+            <div style={{ fontSize: 13, color: C.ink, marginBottom: 14, ...T.body, lineHeight: 1.4 }}>
+              You earned <strong style={{ color: C.hl }}>{fmtUsd(jupUsdAmount)}</strong>!<br />
+              Convert to <strong>SOL</strong> to collect your winnings.
             </div>
 
             {/* Summary */}
             <div style={{ padding: '9px 12px', borderRadius: 12, background: 'rgba(151,252,228,.05)', border: `1px solid ${C.border}`, marginBottom: 12, ...T.mono, fontSize: 10, textAlign: 'left' }}>
-              <Row label="You have" value={`${fmtUsd(jupUsdAmount)} JupUSD`} />
-              <Row label="Platform fee (5%)" value={fmtUsd(feeUsd)} />
-              <Row label="Est. you receive" value={`~${netSolEst.toFixed(4)} SOL`} valueColor={C.hl} bold />
-              <div style={{ marginTop: 5, paddingTop: 5, borderTop: `1px solid ${C.border}`, fontSize: 9, color: C.muted2 }}>
-                Exact SOL amount confirmed at swap time.
-              </div>
+              <Row label="Winnings" value={fmtUsd(jupUsdAmount)} />
+              <Row label="Fee (5%)" value={fmtUsd(feeUsd)} />
+              <Row label="You collect" value={`~${netSolEst.toFixed(4)} SOL`} valueColor={C.hl} bold />
             </div>
 
             {statusMsg && <StatusLine msg={statusMsg} />}
@@ -992,12 +988,8 @@ function JupUsdSwapModal({ jupUsdAmount, label, onClose, connection }) {
               onClick={busy ? undefined : doSwap}
               disabled={busy}
               color="yes"
-              label={busy ? (statusMsg || 'Working…') : `Swap ${fmtUsd(jupUsdAmount)} JupUSD → SOL`}
+              label={busy ? (statusMsg || 'Working…') : `Collect ${fmtUsd(jupUsdAmount)} → SOL`}
             />
-
-            <button onClick={onClose} disabled={busy} style={{ marginTop: 8, width: '100%', padding: '8px', borderRadius: 10, background: 'transparent', border: `1px solid ${C.border}`, color: C.muted, fontSize: 11, fontWeight: 600, cursor: 'pointer', ...T.body }}>
-              Skip for now
-            </button>
           </>
         )}
       </div>
