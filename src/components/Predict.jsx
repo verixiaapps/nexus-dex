@@ -15,6 +15,19 @@
 //   DELETE /api/predict/positions/:positionPubkey       (sell/close)
 //   POST   /api/predict/positions/:positionPubkey/claim
 //   GET    /api/predict/ultra/order                     (SOL→USDC swap)
+//
+// FEE MODEL: 5% USDC platform fee on buys, sells, and claims.
+//   - Buys:   fee = 5% of buy amount. Bundled [buyTx, feeTx].
+//   - Sells:  fee = 5% of estimated sell value (in USDC, taken from user's
+//             existing USDC balance — NOT from the JupUSD payout, since that
+//             payout doesn't exist until after the sell tx lands).
+//             Bundled [sellTx, feeTx].
+//   - Claims: fee = 5% of payout. Same model as sells.
+//             Bundled [claimTx, feeTx].
+//   Single wallet signature per action via signAllTransactions.
+//
+// IMPORTANT: FEE_WALLET's USDC ATA must already exist on-chain. Send any
+// amount of USDC to FEE_WALLET once before going live so the ATA is created.
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
@@ -24,7 +37,6 @@ import {
 } from '@solana/web3.js';
 import {
   createTransferCheckedInstruction,
-  createAssociatedTokenAccountIdempotentInstruction,
   getAssociatedTokenAddressSync,
 } from '@solana/spl-token';
 
@@ -37,10 +49,11 @@ const SOL_RPC       = '/api/solana-rpc';
 const MIN_TRADE_USD = 5;
 const NAV_CLEARANCE = 120;
 
-// Priority fee: aggressive for fast confirms on prediction trades.
-// 50000 micro-lamports/CU × 200K CU limit = 0.01 SOL ceiling.
-const PRIORITY_FEE_MICROLAMPORTS = 50_000;
+// Priority fee: kept low to reduce Blowfish "abnormal fee" heuristics.
+// 5k µL × 200K CU = 0.001 SOL ceiling, still fast under normal congestion.
+const PRIORITY_FEE_MICROLAMPORTS = 5_000;
 const PRIORITY_FEE_CU_LIMIT      = 200_000;
+const JUPITER_PRIORITY_LAMPORTS  = 1_000_000;
 
 const CATEGORIES = [
   { id: 'all',       label: 'All' },
@@ -286,7 +299,7 @@ async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomi
       ownerPubkey, marketId, isYes, isBuy: true,
       depositAmount: String(depositAmountUsdcAtomic),
       depositMint:   USDC_MINT,
-      prioritizationFeeLamports: 10_000_000,
+      prioritizationFeeLamports: JUPITER_PRIORITY_LAMPORTS,
     }),
   });
   const j = await r.json();
@@ -294,6 +307,10 @@ async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomi
   return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)), orderInfo: j.order || null };
 }
 
+// Single transferChecked fee tx in USDC. Requires FEE_WALLET's USDC ATA to
+// already exist on-chain (one-time setup). No ATA-create ix here -- keeps
+// the tx minimal and avoids the Blowfish "creates account + transfers
+// token" heuristic.
 async function buildFeeTx({ ownerPubkey, feeAmountUsdcAtomic, connection }) {
   const owner   = new PublicKey(ownerPubkey);
   const feeWal  = new PublicKey(FEE_WALLET);
@@ -308,7 +325,6 @@ async function buildFeeTx({ ownerPubkey, feeAmountUsdcAtomic, connection }) {
     instructions: [
       ComputeBudgetProgram.setComputeUnitLimit({ units: PRIORITY_FEE_CU_LIMIT }),
       ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
-      createAssociatedTokenAccountIdempotentInstruction(owner, feeAta, feeWal, mint),
       createTransferCheckedInstruction(fromAta, mint, feeAta, owner, feeAmountUsdcAtomic, 6),
     ],
   }).compileToV0Message();
@@ -319,7 +335,7 @@ async function buildSellTx({ ownerPubkey, positionPubkey }) {
   const r = await jfetch(`/api/predict/positions/${encodeURIComponent(positionPubkey)}`, {
     method: 'DELETE',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ownerPubkey, prioritizationFeeLamports: 10_000_000 }),
+    body: JSON.stringify({ ownerPubkey, prioritizationFeeLamports: JUPITER_PRIORITY_LAMPORTS }),
   });
   const j = await r.json();
   if (!j?.transaction) throw new Error('No sell tx returned');
@@ -330,7 +346,7 @@ async function buildClaimTx({ ownerPubkey, positionPubkey }) {
   const r = await jfetch(`/api/predict/positions/${encodeURIComponent(positionPubkey)}/claim`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ownerPubkey, prioritizationFeeLamports: 10_000_000 }),
+    body: JSON.stringify({ ownerPubkey, prioritizationFeeLamports: JUPITER_PRIORITY_LAMPORTS }),
   });
   const j = await r.json();
   if (!j?.transaction) throw new Error('No claim tx returned');
@@ -344,7 +360,7 @@ async function buildUltraSwapTx({ ownerPubkey, usdcAtomicNeeded }) {
     amount:     String(usdcAtomicNeeded),
     swapMode:   'ExactOut',
     taker:      ownerPubkey,
-    prioritizationFeeLamports: '10000000',
+    prioritizationFeeLamports: String(JUPITER_PRIORITY_LAMPORTS),
   });
   const r = await jfetch('/api/predict/ultra/order?' + params.toString());
   const j = await r.json();
@@ -367,6 +383,57 @@ async function simulateOrThrow(connection, tx, label) {
   } catch (e) {
     console.warn(`[predict] ${label} sim threw, proceeding:`, e?.message);
   }
+}
+
+// Shared submit-and-confirm helper for bundled txs. Caller passes already-
+// signed txs (from signAllTransactions). Returns when all land or signals
+// pending state.
+async function submitAndConfirm(connection, signedTxs, setStMsg) {
+  setStMsg('Submitting…');
+  const sigs = await Promise.all(signedTxs.map(stx =>
+    connection.sendRawTransaction(stx.serialize(), {
+      maxRetries: 5, skipPreflight: false, preflightCommitment: 'confirmed',
+    })
+  ));
+
+  setStMsg('Confirming…');
+  const bh = await connection.getLatestBlockhash('confirmed');
+  const results = await Promise.allSettled(sigs.map(sig =>
+    connection.confirmTransaction({
+      signature: sig,
+      blockhash: bh.blockhash,
+      lastValidBlockHeight: bh.lastValidBlockHeight,
+    }, 'confirmed')
+  ));
+
+  const onchainErr = results.find(r => r.status === 'fulfilled' && r.value?.value?.err);
+  if (onchainErr) {
+    throw new Error('On-chain error: ' + JSON.stringify(onchainErr.value.value.err));
+  }
+
+  const expired = results
+    .map((r, i) => r.status === 'rejected' ? sigs[i] : null)
+    .filter(Boolean);
+  if (expired.length) {
+    setStMsg('Verifying on-chain…');
+    const deadline = Date.now() + 15_000;
+    let allLanded = true;
+    while (Date.now() < deadline) {
+      const { value } = await connection.getSignatureStatuses(expired);
+      const stillPending = value.some(s => !s || (!s.confirmationStatus && !s.err));
+      const anyErr       = value.find(s => s?.err);
+      if (anyErr) {
+        throw new Error('On-chain error: ' + JSON.stringify(anyErr.err));
+      }
+      if (!stillPending) break;
+      await new Promise(r => setTimeout(r, 1500));
+      if (Date.now() >= deadline) { allLanded = false; }
+    }
+    if (!allLanded) {
+      return { pending: true, sigs };
+    }
+  }
+  return { pending: false, sigs };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -542,7 +609,7 @@ function MarketCard({ event, onTrade }) {
 }
 
 function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection }) {
-  const { publicKey, signTransaction, signAllTransactions } = useWallet();
+  const { publicKey, signAllTransactions } = useWallet();
   const [amount, setAmount]   = useState('10');
   const [status, setStatus]   = useState('idle');
   const [statusMsg, setStMsg] = useState('');
@@ -603,53 +670,13 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection 
       setStMsg('Confirm in your wallet…');
       const signed = await signAllTransactions(txs);
 
-      setStMsg('Submitting…');
-      const sigs = await Promise.all(signed.map(stx =>
-        connection.sendRawTransaction(stx.serialize(), {
-          maxRetries: 5, skipPreflight: false, preflightCommitment: 'confirmed',
-        })
-      ));
-
-      setStMsg('Confirming…');
-      const bh = await connection.getLatestBlockhash('confirmed');
-      const results = await Promise.allSettled(sigs.map(sig =>
-        connection.confirmTransaction({
-          signature: sig,
-          blockhash: bh.blockhash,
-          lastValidBlockHeight: bh.lastValidBlockHeight,
-        }, 'confirmed')
-      ));
-
-      const onchainErr = results.find(r => r.status === 'fulfilled' && r.value?.value?.err);
-      if (onchainErr) {
-        throw new Error('On-chain error: ' + JSON.stringify(onchainErr.value.value.err));
-      }
-
-      const expired = results
-        .map((r, i) => r.status === 'rejected' ? sigs[i] : null)
-        .filter(Boolean);
-      if (expired.length) {
-        setStMsg('Verifying on-chain…');
-        const deadline = Date.now() + 15_000;
-        let allLanded = true;
-        while (Date.now() < deadline) {
-          const { value } = await connection.getSignatureStatuses(expired);
-          const stillPending = value.some(s => !s || (!s.confirmationStatus && !s.err));
-          const anyErr       = value.find(s => s?.err);
-          if (anyErr) {
-            throw new Error('On-chain error: ' + JSON.stringify(anyErr.err));
-          }
-          if (!stillPending) break;
-          await new Promise(r => setTimeout(r, 1500));
-          if (Date.now() >= deadline) { allLanded = false; }
-        }
-        if (!allLanded) {
-          const primary = sigs[sigs.length - 1];
-          setError(`Submitted but still confirming. View on Solscan: https://solscan.io/tx/${primary}`);
-          setStatus('idle'); setStMsg('');
-          onDone?.();
-          return;
-        }
+      const { pending, sigs } = await submitAndConfirm(connection, signed, setStMsg);
+      if (pending) {
+        const primary = sigs[sigs.length - 1];
+        setError(`Submitted but still confirming. View on Solscan: https://solscan.io/tx/${primary}`);
+        setStatus('idle'); setStMsg('');
+        onDone?.();
+        return;
       }
 
       setStatus('success'); setStMsg('');
@@ -786,8 +813,8 @@ function PositionCard({ p, onAction }) {
   );
 }
 
-function SellDrawer({ position, onClose, onDone, connection }) {
-  const { publicKey, signTransaction } = useWallet();
+function SellDrawer({ position, onClose, onDone, connection, usdcBal }) {
+  const { publicKey, signAllTransactions } = useWallet();
   const [status, setStatus] = useState('idle');
   const [statusMsg, setStMsg] = useState('');
   const [error, setError] = useState('');
@@ -796,55 +823,41 @@ function SellDrawer({ position, onClose, onDone, connection }) {
 
   const busy = status === 'working';
 
+  // Fee = 5% of sell value, paid in USDC from user's existing balance.
+  const feeUsd      = position.valueUsd * (FEE_BPS / 10000);
+  const feeAtm      = BigInt(Math.floor(feeUsd * 1e6));
+  const netUsd      = position.valueUsd - feeUsd;
+  const hasFeeFunds = usdcBal >= feeAtm;
+
   const doSell = useCallback(async () => {
     if (!publicKey) return;
+    if (!signAllTransactions) { setError('Wallet lacks signAllTransactions'); return; }
+    if (!hasFeeFunds) { setError(`Need ${fmtUsd(feeUsd)} USDC for platform fee`); return; }
     setStatus('working'); setError(''); setStMsg('Building sell…');
     try {
-      const { tx } = await buildSellTx({
-        ownerPubkey:    publicKey.toBase58(),
-        positionPubkey: position.positionPubkey,
+      const ownerPubkey = publicKey.toBase58();
+
+      const { tx: sellTx } = await buildSellTx({
+        ownerPubkey, positionPubkey: position.positionPubkey,
       });
-      setStMsg('Simulating…');
-      await simulateOrThrow(connection, tx, 'sell');
+      const { tx: feeTx } = await buildFeeTx({
+        ownerPubkey, feeAmountUsdcAtomic: feeAtm, connection,
+      });
+
+      setStMsg('Checking…');
+      await simulateOrThrow(connection, sellTx, 'sell');
+      await simulateOrThrow(connection, feeTx,  'sell-fee');
+
       setStMsg('Confirm in your wallet…');
-      const signed = await signTransaction(tx);
+      const signed = await signAllTransactions([sellTx, feeTx]);
 
-      setStMsg('Submitting…');
-      const sig = await connection.sendRawTransaction(signed.serialize(), {
-        maxRetries: 5, skipPreflight: false, preflightCommitment: 'confirmed',
-      });
-
-      setStMsg('Confirming…');
-      const bh = await connection.getLatestBlockhash('confirmed');
-      let result;
-      try {
-        result = await connection.confirmTransaction({
-          signature: sig,
-          blockhash: bh.blockhash,
-          lastValidBlockHeight: bh.lastValidBlockHeight,
-        }, 'confirmed');
-      } catch (_expired) {
-        setStMsg('Verifying on-chain…');
-        const deadline = Date.now() + 15_000;
-        let landed = false;
-        while (Date.now() < deadline) {
-          const { value } = await connection.getSignatureStatuses([sig]);
-          const s = value?.[0];
-          if (s?.err) throw new Error('On-chain error: ' + JSON.stringify(s.err));
-          if (s?.confirmationStatus === 'confirmed' || s?.confirmationStatus === 'finalized') {
-            landed = true; break;
-          }
-          await new Promise(r => setTimeout(r, 1500));
-        }
-        if (!landed) {
-          setError(`Submitted but still confirming. View on Solscan: https://solscan.io/tx/${sig}`);
-          setStatus('idle'); setStMsg('');
-          onDone?.();
-          return;
-        }
-      }
-      if (result?.value?.err) {
-        throw new Error('On-chain error: ' + JSON.stringify(result.value.err));
+      const { pending, sigs } = await submitAndConfirm(connection, signed, setStMsg);
+      if (pending) {
+        const primary = sigs[0];
+        setError(`Submitted but still confirming. View on Solscan: https://solscan.io/tx/${primary}`);
+        setStatus('idle'); setStMsg('');
+        onDone?.();
+        return;
       }
 
       setStatus('success'); setStMsg('');
@@ -856,7 +869,7 @@ function SellDrawer({ position, onClose, onDone, connection }) {
       setStatus('error'); setStMsg('');
       setTimeout(() => setStatus('idle'), 5000);
     }
-  }, [publicKey, signTransaction, position, connection, onClose, onDone]);
+  }, [publicKey, signAllTransactions, position, feeAtm, hasFeeFunds, feeUsd, connection, onClose, onDone]);
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
@@ -868,7 +881,9 @@ function SellDrawer({ position, onClose, onDone, connection }) {
           <Row label="Contracts" value={position.contracts.toFixed(2)} />
           <Row label="Avg price" value={`$${position.avgPriceUsd.toFixed(3)}`} />
           <Row label="Mark price" value={`$${position.markPriceUsd.toFixed(3)}`} />
-          <Row label="Sell value" value={fmtUsd(position.valueUsd)} bold />
+          <Row label="Gross sell value" value={fmtUsd(position.valueUsd)} />
+          <Row label="Platform fee (5%)" value={fmtUsd(feeUsd)} />
+          <Row label="Net to wallet" value={fmtUsd(netUsd)} valueColor={C.hl} bold />
         </div>
 
         <div style={{
@@ -880,26 +895,32 @@ function SellDrawer({ position, onClose, onDone, connection }) {
           <div style={{ fontWeight: 700, color: C.violet, marginBottom: 3, fontSize: 10, letterSpacing: 0.5, ...T.mono }}>
             ⓘ HOW PAYOUT WORKS
           </div>
-          You'll receive <strong>JupUSD</strong> (Jupiter's stablecoin) in your wallet — 1 JupUSD = $1.
-          Swap it to USDC anytime on the Swap page with near-zero fees.
+          You'll receive <strong>JupUSD</strong> from Jupiter (1 JupUSD = $1) and the 5% fee is paid in <strong>USDC</strong> from your existing balance.
+          Swap JupUSD → USDC anytime on the Swap page with near-zero fees.
         </div>
+
+        {!hasFeeFunds && (
+          <div style={{ marginBottom: 8, padding: 8, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', borderRadius: 10, fontSize: 11, color: C.amber, fontWeight: 600 }}>
+            Need {fmtUsd(feeUsd)} USDC in wallet to cover platform fee. You have {fmtUsd(Number(usdcBal)/1e6)}.
+          </div>
+        )}
 
         {statusMsg && <StatusLine msg={statusMsg} />}
         {error && <ErrorLine msg={error} />}
 
         <PrimaryButton
           onClick={busy ? undefined : doSell}
-          disabled={busy || status === 'success'}
+          disabled={busy || status === 'success' || !hasFeeFunds}
           color={position.pnlUsd >= 0 ? 'yes' : 'no'}
-          label={busy ? (statusMsg || 'Working…') : status === 'success' ? '✓ Sold' : `Sell all · ${fmtUsd(position.valueUsd)}`}
+          label={busy ? (statusMsg || 'Working…') : status === 'success' ? '✓ Sold' : `Sell all · Net ${fmtUsd(netUsd)}`}
         />
       </div>
     </div>
   );
 }
 
-function ClaimDrawer({ position, onClose, onDone, connection }) {
-  const { publicKey, signTransaction } = useWallet();
+function ClaimDrawer({ position, onClose, onDone, connection, usdcBal }) {
+  const { publicKey, signAllTransactions } = useWallet();
   const [status, setStatus] = useState('idle');
   const [statusMsg, setStMsg] = useState('');
   const [error, setError] = useState('');
@@ -908,55 +929,41 @@ function ClaimDrawer({ position, onClose, onDone, connection }) {
 
   const busy = status === 'working';
 
+  // Fee = 5% of payout, paid in USDC from user's existing balance.
+  const feeUsd      = position.payoutUsd * (FEE_BPS / 10000);
+  const feeAtm      = BigInt(Math.floor(feeUsd * 1e6));
+  const netUsd      = position.payoutUsd - feeUsd;
+  const hasFeeFunds = usdcBal >= feeAtm;
+
   const doClaim = useCallback(async () => {
     if (!publicKey) return;
+    if (!signAllTransactions) { setError('Wallet lacks signAllTransactions'); return; }
+    if (!hasFeeFunds) { setError(`Need ${fmtUsd(feeUsd)} USDC for platform fee`); return; }
     setStatus('working'); setError(''); setStMsg('Building claim…');
     try {
-      const { tx } = await buildClaimTx({
-        ownerPubkey:    publicKey.toBase58(),
-        positionPubkey: position.positionPubkey,
+      const ownerPubkey = publicKey.toBase58();
+
+      const { tx: claimTx } = await buildClaimTx({
+        ownerPubkey, positionPubkey: position.positionPubkey,
       });
-      setStMsg('Simulating…');
-      await simulateOrThrow(connection, tx, 'claim');
+      const { tx: feeTx } = await buildFeeTx({
+        ownerPubkey, feeAmountUsdcAtomic: feeAtm, connection,
+      });
+
+      setStMsg('Checking…');
+      await simulateOrThrow(connection, claimTx, 'claim');
+      await simulateOrThrow(connection, feeTx,   'claim-fee');
+
       setStMsg('Confirm in your wallet…');
-      const signed = await signTransaction(tx);
+      const signed = await signAllTransactions([claimTx, feeTx]);
 
-      setStMsg('Submitting…');
-      const sig = await connection.sendRawTransaction(signed.serialize(), {
-        maxRetries: 5, skipPreflight: false, preflightCommitment: 'confirmed',
-      });
-
-      setStMsg('Confirming…');
-      const bh = await connection.getLatestBlockhash('confirmed');
-      let result;
-      try {
-        result = await connection.confirmTransaction({
-          signature: sig,
-          blockhash: bh.blockhash,
-          lastValidBlockHeight: bh.lastValidBlockHeight,
-        }, 'confirmed');
-      } catch (_expired) {
-        setStMsg('Verifying on-chain…');
-        const deadline = Date.now() + 15_000;
-        let landed = false;
-        while (Date.now() < deadline) {
-          const { value } = await connection.getSignatureStatuses([sig]);
-          const s = value?.[0];
-          if (s?.err) throw new Error('On-chain error: ' + JSON.stringify(s.err));
-          if (s?.confirmationStatus === 'confirmed' || s?.confirmationStatus === 'finalized') {
-            landed = true; break;
-          }
-          await new Promise(r => setTimeout(r, 1500));
-        }
-        if (!landed) {
-          setError(`Submitted but still confirming. View on Solscan: https://solscan.io/tx/${sig}`);
-          setStatus('idle'); setStMsg('');
-          onDone?.();
-          return;
-        }
-      }
-      if (result?.value?.err) {
-        throw new Error('On-chain error: ' + JSON.stringify(result.value.err));
+      const { pending, sigs } = await submitAndConfirm(connection, signed, setStMsg);
+      if (pending) {
+        const primary = sigs[0];
+        setError(`Submitted but still confirming. View on Solscan: https://solscan.io/tx/${primary}`);
+        setStatus('idle'); setStMsg('');
+        onDone?.();
+        return;
       }
 
       setStatus('success'); setStMsg('');
@@ -968,7 +975,7 @@ function ClaimDrawer({ position, onClose, onDone, connection }) {
       setStatus('error'); setStMsg('');
       setTimeout(() => setStatus('idle'), 5000);
     }
-  }, [publicKey, signTransaction, position, connection, onClose, onDone]);
+  }, [publicKey, signAllTransactions, position, feeAtm, hasFeeFunds, feeUsd, connection, onClose, onDone]);
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
@@ -978,7 +985,9 @@ function ClaimDrawer({ position, onClose, onDone, connection }) {
         <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 8, ...T.body }}>{position.title}</div>
         <div style={{ padding: 10, borderRadius: 10, background: 'rgba(0,212,163,.05)', border: `1px solid rgba(0,212,163,.20)`, marginBottom: 10, ...T.mono, fontSize: 11 }}>
           <Row label="Contracts won" value={position.contracts.toFixed(2)} />
-          <Row label="Payout" value={fmtUsd(position.payoutUsd)} valueColor={C.yes} bold />
+          <Row label="Gross payout" value={fmtUsd(position.payoutUsd)} />
+          <Row label="Platform fee (5%)" value={fmtUsd(feeUsd)} />
+          <Row label="Net to wallet" value={fmtUsd(netUsd)} valueColor={C.yes} bold />
         </div>
 
         <div style={{
@@ -990,20 +999,26 @@ function ClaimDrawer({ position, onClose, onDone, connection }) {
           <div style={{ fontWeight: 700, color: C.violet, marginBottom: 3, fontSize: 10, letterSpacing: 0.5, ...T.mono }}>
             ⓘ HOW PAYOUTS WORK
           </div>
-          Each winning contract = $1.00 paid in <strong>JupUSD</strong> (Jupiter's stablecoin) to your wallet. No fees on claims.
+          Each winning contract = $1.00 paid in <strong>JupUSD</strong> from Jupiter. 5% platform fee is paid in <strong>USDC</strong> from your existing balance.
           Swap JupUSD → USDC anytime on the Swap page with near-zero fees.
           <div style={{ marginTop: 5, color: C.muted, fontSize: 9 }}>
-            Don't claim within 24h? Jupiter auto-claims for you — same payout, no action needed.
+            Don't claim within 24h? Jupiter auto-claims for you — no platform fee applies in that case.
           </div>
         </div>
+
+        {!hasFeeFunds && (
+          <div style={{ marginBottom: 8, padding: 8, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', borderRadius: 10, fontSize: 11, color: C.amber, fontWeight: 600 }}>
+            Need {fmtUsd(feeUsd)} USDC in wallet to cover platform fee. You have {fmtUsd(Number(usdcBal)/1e6)}.
+          </div>
+        )}
 
         {statusMsg && <StatusLine msg={statusMsg} />}
         {error && <ErrorLine msg={error} />}
         <PrimaryButton
           onClick={busy ? undefined : doClaim}
-          disabled={busy || status === 'success'}
+          disabled={busy || status === 'success' || !hasFeeFunds}
           color="yes"
-          label={busy ? (statusMsg || 'Working…') : status === 'success' ? '✓ Claimed' : `Claim ${fmtUsd(position.payoutUsd)}`}
+          label={busy ? (statusMsg || 'Working…') : status === 'success' ? '✓ Claimed' : `Claim · Net ${fmtUsd(netUsd)}`}
         />
       </div>
     </div>
@@ -1225,6 +1240,7 @@ export default function Predict() {
           onClose={() => setActionPos(null)}
           onDone={() => reloadPositions()}
           connection={connection}
+          usdcBal={usdcBal}
         />
       )}
 
@@ -1234,6 +1250,7 @@ export default function Predict() {
           onClose={() => setActionPos(null)}
           onDone={() => reloadPositions()}
           connection={connection}
+          usdcBal={usdcBal}
         />
       )}
     </>
