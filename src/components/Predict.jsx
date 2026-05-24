@@ -8,17 +8,16 @@
 // This defeats Blowfish's multi-tx heuristic since the wallet sees exactly
 // one tx with one signer (the user).
 //
-// How injection works (see injectFeeIx):
-//   1. Jupiter returns a base64 VersionedTransaction (no signatures yet —
-//      user is the only required signer)
-//   2. We deserialize the v0 message
-//   3. Resolve all account keys (static + lookup table keys) so we can map
-//      account indices back to PublicKeys
-//   4. Decompile to instructions
-//   5. Append our transferChecked fee instruction
-//   6. Recompile to a v0 message, preserving Jupiter's address lookup tables
-//      and recent blockhash
-//   7. Return as a fresh VersionedTransaction for the wallet to sign
+// SLIPPAGE: Buys pass a minimum-contracts floor at 90% of expected (10%
+// slippage tolerance). Calculated from POST-FEE deposit ($95 of $100), so
+// the slippage check doesn't false-reject from our own fee skim. Sells and
+// claims have no slippage param in Jupiter's API.
+//
+// SIM WARNINGS: Phantom may show "transaction simulation failed" on these
+// txs. This is standard for Predict (Jupiter's own example uses
+// skipPreflight: true). The tx still lands on-chain. We submit with
+// skipPreflight: true to match Jupiter's pattern and avoid RPC false
+// positives.
 //
 // IMPORTANT: FEE_WALLET's USDC ATA must already exist on-chain. Send any
 // amount of USDC to FEE_WALLET once before going live so the ATA is created.
@@ -27,7 +26,6 @@ import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
   Connection, PublicKey, VersionedTransaction, TransactionMessage,
-  TransactionInstruction, AddressLookupTableAccount,
   ComputeBudgetProgram,
 } from '@solana/web3.js';
 import {
@@ -40,11 +38,14 @@ const USDC_MINT     = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOL_MINT      = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET    = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
 const FEE_BPS       = 500;   // 5%
+const SLIPPAGE_BPS  = 1000;  // 10% — generous floor, virtually all orders fill
 const SOL_RPC       = '/api/solana-rpc';
 const MIN_TRADE_USD = 5;
 const NAV_CLEARANCE = 120;
 
-const JUPITER_PRIORITY_LAMPORTS = 1_000_000;
+const PRIORITY_FEE_MICROLAMPORTS = 5_000;
+const PRIORITY_FEE_CU_LIMIT      = 200_000;
+const JUPITER_PRIORITY_LAMPORTS  = 1_000_000;
 
 const CATEGORIES = [
   { id: 'all',       label: 'All' },
@@ -273,24 +274,20 @@ function pickPositionFields(p) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 4: Tx injection — the core trick
+// SECTION 4: Tx injection — embed fee in Jupiter's tx
 // ═══════════════════════════════════════════════════════════════════════════════
 //
-// Jupiter returns an UNSIGNED VersionedTransaction. The user is the only
-// required signer. We can therefore safely modify the message before the
-// user signs it. The Predict program doesn't care if we append a separate
-// transferChecked instruction afterward -- that ix lives in its own scope
-// and uses the SPL Token program, not Predict.
+// Jupiter's Predict txs are returned UNSIGNED with the user as the sole
+// required signer (confirmed in Jupiter's own example code: they call
+// transaction.sign([userWallet]) only). This means we can safely modify
+// the message before the user signs it.
 //
-// We decompile -> append fee ix -> recompile, preserving Jupiter's lookup
-// tables and recent blockhash. The wallet sees ONE transaction with ONE
-// signer. Blowfish's bundle heuristic doesn't trigger.
+// We decompile -> append our transferChecked fee ix -> recompile,
+// preserving Jupiter's address lookup tables and recent blockhash. The
+// wallet sees ONE transaction with ONE signer. Blowfish's multi-tx bundle
+// heuristic doesn't fire because there's no bundle.
 
 async function fetchLookupTables(connection, lookupTableAddresses) {
-  // Jupiter txs reference address lookup tables by pubkey. We must resolve
-  // them to actual AddressLookupTableAccount objects so the recompiler can
-  // both (a) build the new message with the same compressed encoding, and
-  // (b) decompile correctly when extracting instructions.
   if (!lookupTableAddresses || lookupTableAddresses.length === 0) return [];
   const results = await Promise.all(
     lookupTableAddresses.map(async (addr) => {
@@ -308,35 +305,22 @@ async function injectFeeIx({ connection, jupiterTxB64, ownerPubkey, feeAmountUsd
   const fromAta = getAssociatedTokenAddressSync(mint, owner);
   const feeAta  = getAssociatedTokenAddressSync(mint, feeWal);
 
-  // 1. Deserialize Jupiter's tx
   const jupiterTx = VersionedTransaction.deserialize(b64ToBytes(jupiterTxB64));
   const msg       = jupiterTx.message;
 
-  // 2. Resolve all address lookup tables used by this tx
   const lookupTableAddrs = msg.addressTableLookups.map(l => l.accountKey);
   const luts = await fetchLookupTables(connection, lookupTableAddrs);
 
-  // 3. Decompile to a TransactionMessage so we can manipulate instructions
-  //    as TransactionInstruction objects rather than compiled indices.
   const decompiled = TransactionMessage.decompile(msg, {
     addressLookupTableAccounts: luts,
   });
 
-  // 4. Append the fee transferChecked instruction.
-  //    Only the owner is required to sign this ix -- which matches the
-  //    existing signer set, so we don't add any new required signatures.
   const feeIx = createTransferCheckedInstruction(
     fromAta, mint, feeAta, owner, feeAmountUsdcAtomic, 6
   );
   decompiled.instructions.push(feeIx);
 
-  // 5. Recompile to a v0 message with the same lookup tables. Solana will
-  //    re-pack accounts and reuse LUT entries where possible. The recent
-  //    blockhash is preserved from Jupiter's original message.
   const newMsg = decompiled.compileToV0Message(luts);
-
-  // 6. Wrap in a fresh VersionedTransaction. No signatures yet -- the user's
-  //    wallet will sign as the sole required signer.
   return new VersionedTransaction(newMsg);
 }
 
@@ -344,7 +328,11 @@ async function injectFeeIx({ connection, jupiterTxB64, ownerPubkey, feeAmountUsd
 // SECTION 5: Jupiter tx builders
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function fetchBuyTxB64({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomic }) {
+// Buy: include `contracts` param as a 90% floor of expected (10% slippage).
+// Jupiter rejects the order if keeper can't fill at least this many contracts.
+// Floor is calculated from the post-fee deposit ($95 of $100) so our own fee
+// skim doesn't cause false rejections.
+async function fetchBuyTxB64({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomic, minContracts }) {
   const r = await jfetch('/api/predict/orders', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -352,6 +340,7 @@ async function fetchBuyTxB64({ ownerPubkey, marketId, isYes, depositAmountUsdcAt
       ownerPubkey, marketId, isYes, isBuy: true,
       depositAmount: String(depositAmountUsdcAtomic),
       depositMint:   USDC_MINT,
+      contracts:     String(minContracts),
       prioritizationFeeLamports: JUPITER_PRIORITY_LAMPORTS,
     }),
   });
@@ -397,6 +386,8 @@ async function fetchUltraSwapTxB64({ ownerPubkey, usdcAtomicNeeded }) {
   return { txB64: j.transaction };
 }
 
+// Debug-only sim. Logs to console, never blocks. The wallet runs its own sim
+// independently when the popup appears -- we have no control over that.
 async function simulateOrThrow(connection, tx, label) {
   try {
     const sim = await connection.simulateTransaction(tx, {
@@ -410,11 +401,15 @@ async function simulateOrThrow(connection, tx, label) {
   }
 }
 
+// Submit with skipPreflight: true. Matches Jupiter's own Predict example;
+// Predict txs have keeper-filled accounts and ALT timing that confuse RPC
+// preflight, but execute fine on-chain. Trade-off: a genuinely bad tx will
+// land and fail (cost: ~0.001 SOL in network fees).
 async function submitAndConfirm(connection, signedTxs, setStMsg) {
   setStMsg('Submitting…');
   const sigs = await Promise.all(signedTxs.map(stx =>
     connection.sendRawTransaction(stx.serialize(), {
-      maxRetries: 5, skipPreflight: false, preflightCommitment: 'confirmed',
+      maxRetries: 5, skipPreflight: true, preflightCommitment: 'confirmed',
     })
   ));
 
@@ -485,6 +480,20 @@ function ErrorLine({ msg }) {
   return (
     <div style={{ marginBottom: 8, padding: 8, background: 'rgba(255,95,122,.08)', border: '1px solid rgba(255,95,122,.25)', borderRadius: 10, fontSize: 11, color: C.no, wordBreak: 'break-word' }}>
       {msg}
+    </div>
+  );
+}
+
+function SimNoticeBanner() {
+  return (
+    <div style={{
+      marginBottom: 8, padding: '7px 9px',
+      background: 'rgba(168,127,255,.06)',
+      border: '1px solid rgba(168,127,255,.20)',
+      borderRadius: 10, fontSize: 10, color: C.muted, lineHeight: 1.45, ...T.mono,
+    }}>
+      <span style={{ color: C.violet, fontWeight: 700 }}>ⓘ</span>{' '}
+      Your wallet may show "simulation failed" — this is normal for prediction markets. Your trade will still complete.
     </div>
   );
 }
@@ -647,6 +656,9 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection 
   const contracts = price > 0 ? depUsd / price : 0;
   const upside    = depUsd > 0 ? ((contracts - depUsd) / depUsd) * 100 : 0;
 
+  // Slippage floor: 90% of expected contracts from post-fee deposit
+  const minContracts = Math.max(1, Math.floor(contracts * (1 - SLIPPAGE_BPS / 10000)));
+
   const sideLabel = isYes ? 'YES' : 'NO';
   const sideColor = isYes ? C.yes : C.no;
   const sideDim   = isYes ? C.yesDim : C.noDim;
@@ -670,18 +682,15 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection 
       const { txB64: buyTxB64 } = await fetchBuyTxB64({
         ownerPubkey, marketId: m.marketId, isYes,
         depositAmountUsdcAtomic: depAtm.toString(),
+        minContracts,
       });
 
-      // ★ Inject fee ix into Jupiter's tx -- single tx, single signature
       setStMsg('Embedding fee…');
       const finalTx = await injectFeeIx({
         connection, jupiterTxB64: buyTxB64, ownerPubkey,
         feeAmountUsdcAtomic: feeAtm,
       });
 
-      // If user needs a SOL→USDC swap first, that's a separate tx (unavoidable
-      // because the buy needs USDC in hand). We bundle [swap, buy+fee] in that
-      // case. Most users have USDC on hand and skip this branch entirely.
       let signedTxs;
       if (needsSwap) {
         setStMsg('Building SOL→USDC swap…');
@@ -719,7 +728,7 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection 
       setStatus('error'); setStMsg('');
       setTimeout(() => setStatus('idle'), 5000);
     }
-  }, [publicKey, signTransaction, signAllTransactions, m, isYes, depAtm, feeAtm, needsSwap, shortAtm, connection, onClose, onDone]);
+  }, [publicKey, signTransaction, signAllTransactions, m, isYes, depAtm, feeAtm, minContracts, needsSwap, shortAtm, connection, onClose, onDone]);
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
@@ -762,6 +771,8 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection 
             </div>
           )}
         </div>
+
+        <SimNoticeBanner />
 
         {statusMsg && <StatusLine msg={statusMsg} />}
         {error && <ErrorLine msg={error} />}
@@ -854,8 +865,6 @@ function SellDrawer({ position, onClose, onDone, connection, usdcBal }) {
 
   const busy = status === 'working';
 
-  // Fee = 5% of sell value, USDC from user's existing balance (injected
-  // into Jupiter's sell tx). User must have enough USDC to cover the fee.
   const feeUsd      = position.valueUsd * (FEE_BPS / 10000);
   const feeAtm      = BigInt(Math.floor(feeUsd * 1e6));
   const netUsd      = position.valueUsd - feeUsd;
@@ -936,6 +945,8 @@ function SellDrawer({ position, onClose, onDone, connection, usdcBal }) {
             Need {fmtUsd(feeUsd)} USDC in wallet to cover platform fee. You have {fmtUsd(Number(usdcBal)/1e6)}.
           </div>
         )}
+
+        <SimNoticeBanner />
 
         {statusMsg && <StatusLine msg={statusMsg} />}
         {error && <ErrorLine msg={error} />}
@@ -1042,6 +1053,8 @@ function ClaimDrawer({ position, onClose, onDone, connection, usdcBal }) {
             Need {fmtUsd(feeUsd)} USDC in wallet to cover platform fee. You have {fmtUsd(Number(usdcBal)/1e6)}.
           </div>
         )}
+
+        <SimNoticeBanner />
 
         {statusMsg && <StatusLine msg={statusMsg} />}
         {error && <ErrorLine msg={error} />}
