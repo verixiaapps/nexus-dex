@@ -740,9 +740,9 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
       if (postFeeUsdcNum < MIN_TRADE_USD * 1e6)
         throw new Error(`Minimum trade is $${MIN_TRADE_USD}. Try a larger SOL amount.`);
 
-      // minContracts = floor with 10% slippage tolerance, passed as decimal string
+      // minContracts must be a whole integer — Jupiter Predict API requirement
       const contractsExpected = postFeeUsdcNum / 1e6 / price;
-      const minContracts = Math.max(0.01, contractsExpected * (1 - SLIPPAGE_BPS / 10000)).toFixed(4);
+      const minContracts = Math.max(1, Math.floor(contractsExpected * (1 - SLIPPAGE_BPS / 10000)));
       const { tx: buyTx } = await buildBuyTx({
         ownerPubkey,
         marketId: m.marketId,
