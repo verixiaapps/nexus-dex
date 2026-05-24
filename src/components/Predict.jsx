@@ -29,7 +29,8 @@
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
-  Connection, PublicKey, VersionedTransaction,
+  Connection, PublicKey, VersionedTransaction, TransactionMessage,
+  SystemProgram, TransactionInstruction, AddressLookupTableAccount,
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddressSync,
@@ -284,17 +285,42 @@ function pickPositionFields(p) {
 // Jupiter Predict requires JupUSD as depositMint — USDC is not accepted.
 // solLamports stays BigInt throughout — String(BigInt) = clean integer string.
 
-async function swapSolToUsdcViaJupiter({ ownerPubkey, solLamports }) {
-  const feeWallet  = new PublicKey(FEE_WALLET);
-  const usdcMint   = new PublicKey(USDC_MINT);
-  const feeAccount = getAssociatedTokenAddressSync(usdcMint, feeWallet).toBase58();
+// Helper: deserialize Jupiter instruction format into web3.js TransactionInstruction
+function deserializeJupiterIx(ix) {
+  return new TransactionInstruction({
+    programId: new PublicKey(ix.programId),
+    keys: ix.accounts.map(a => ({
+      pubkey: new PublicKey(a.pubkey),
+      isSigner: a.isSigner,
+      isWritable: a.isWritable,
+    })),
+    data: Buffer.from(ix.data, 'base64'),
+  });
+}
 
+// Fetch address lookup tables referenced by the swap
+async function fetchLookupTables(connection, addresses) {
+  if (!addresses?.length) return [];
+  const result = await Promise.all(
+    addresses.map(addr =>
+      connection.getAddressLookupTable(new PublicKey(addr)).then(r => r.value).catch(() => null)
+    )
+  );
+  return result.filter(Boolean);
+}
+
+async function swapSolToUsdcViaJupiter({ ownerPubkey, solLamports, connection }) {
+  // Calculate 5% fee in SOL — taken via direct transfer to FEE_WALLET
+  const feeLamports  = (solLamports * BigInt(FEE_BPS)) / 10000n;
+  const swapLamports = solLamports - feeLamports;
+
+  // Step 1: Quote SOL→USDC for the post-fee amount, no platformFeeBps
   const quoteParams = new URLSearchParams({
-    inputMint:                  SOL_MINT,
-    outputMint:                 USDC_MINT,
-    amount:                     String(solLamports),
-    swapMode:                   'ExactIn',
-    slippageBps:                String(SLIPPAGE_BPS),
+    inputMint:   SOL_MINT,
+    outputMint:  USDC_MINT,
+    amount:      String(swapLamports),
+    swapMode:    'ExactIn',
+    slippageBps: String(SLIPPAGE_BPS),
   });
   const quoteRes = await jfetch(`/api/jupiter/quote?${quoteParams}`);
   const quote    = await quoteRes.json();
@@ -302,14 +328,14 @@ async function swapSolToUsdcViaJupiter({ ownerPubkey, solLamports }) {
 
   const postFeeUsdcAtomic = BigInt(quote.outAmount);
 
-  const swapRes = await jfetch('/api/jupiter/swap', {
+  // Step 2: Get raw swap instructions (not pre-assembled tx)
+  const swapIxRes = await jfetch('/api/jupiter/swap-instructions', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      quoteResponse:             quote,
-      userPublicKey:             ownerPubkey,
-      feeAccount,
-      dynamicComputeUnitLimit:   true,
+      quoteResponse:           quote,
+      userPublicKey:           ownerPubkey,
+      dynamicComputeUnitLimit: true,
       prioritizationFeeLamports: {
         priorityLevelWithMaxLamports: {
           maxLamports:   JUPITER_PRIORITY_LAMPORTS,
@@ -318,9 +344,35 @@ async function swapSolToUsdcViaJupiter({ ownerPubkey, solLamports }) {
       },
     }),
   });
-  const swapData = await swapRes.json();
-  if (!swapData?.swapTransaction) throw new Error('Jupiter: no swapTransaction');
-  const swapTx = VersionedTransaction.deserialize(b64ToBytes(swapData.swapTransaction));
+  const ix = await swapIxRes.json();
+  if (!ix?.swapInstruction) throw new Error('Jupiter: no swapInstruction');
+
+  // Step 3: Build the fee transfer instruction (SOL → FEE_WALLET)
+  const feeTransferIx = SystemProgram.transfer({
+    fromPubkey: new PublicKey(ownerPubkey),
+    toPubkey:   new PublicKey(FEE_WALLET),
+    lamports:   feeLamports,
+  });
+
+  // Step 4: Assemble instructions in order
+  const instructions = [
+    ...(ix.computeBudgetInstructions  || []).map(deserializeJupiterIx),
+    ...(ix.setupInstructions          || []).map(deserializeJupiterIx),
+    feeTransferIx,
+    deserializeJupiterIx(ix.swapInstruction),
+    ...(ix.cleanupInstruction ? [deserializeJupiterIx(ix.cleanupInstruction)] : []),
+  ];
+
+  // Step 5: Fetch ALTs and compile a v0 transaction
+  const lookupTables = await fetchLookupTables(connection, ix.addressLookupTableAddresses || []);
+  const { blockhash } = await connection.getLatestBlockhash('confirmed');
+  const message = new TransactionMessage({
+    payerKey: new PublicKey(ownerPubkey),
+    recentBlockhash: blockhash,
+    instructions,
+  }).compileToV0Message(lookupTables);
+
+  const swapTx = new VersionedTransaction(message);
   return { swapTx, postFeeUsdcAtomic };
 }
 
@@ -357,9 +409,9 @@ async function swapSolToJupUsdViaOkx({ ownerPubkey, solLamports }) {
   return { swapTx, postFeeUsdcAtomic };
 }
 
-async function buildMetisSwapTx({ ownerPubkey, solLamports }) {
+async function buildMetisSwapTx({ ownerPubkey, solLamports, connection }) {
   const attempts = [
-    { name: 'Jupiter', fn: () => swapSolToUsdcViaJupiter({ ownerPubkey, solLamports }) },
+    { name: 'Jupiter', fn: () => swapSolToUsdcViaJupiter({ ownerPubkey, solLamports, connection }) },
     { name: 'OKX',     fn: () => swapSolToJupUsdViaOkx({ ownerPubkey, solLamports }) },
   ];
   const errors = [];
@@ -429,6 +481,7 @@ async function swapJupUsdToSolViaJupiter({ ownerPubkey, jupUsdAtomic }) {
     amount:                     String(jupUsdAtomic),
     swapMode:                   'ExactIn',
     slippageBps:                String(SLIPPAGE_BPS),
+    platformFeeBps:             String(FEE_BPS),
   });
   const quoteRes = await jfetch(`/api/jupiter/quote?${quoteParams}`);
   const quote    = await quoteRes.json();
@@ -796,6 +849,7 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
       const { swapTx, postFeeUsdcAtomic } = await buildMetisSwapTx({
         ownerPubkey,
         solLamports,  // already BigInt
+        connection,
       });
 
       if (postFeeUsdcAtomic <= 0n) throw new Error('Swap quote returned zero USDC');
