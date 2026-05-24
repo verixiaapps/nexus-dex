@@ -3,14 +3,16 @@
 // Spec: https://dev.jup.ag/docs/prediction
 //
 // FEE MODEL: 5% platform fee on buys, collected via Jupiter Metis swap
-// platformFeeBps=500. Fee is baked into the SOL→USDC swap — no separate
-// transfer instruction. FEE_WALLET's USDC ATA receives fees directly from
+// platformFeeBps=500. Fee is baked into the SOL→JupUSD swap — no separate
+// transfer instruction. FEE_WALLET's JupUSD ATA receives fees directly from
 // Jupiter's swap program. Blowfish sees two clean Jupiter transactions.
 //
 // BUY FLOW (SOL only):
-//   Tx 1: Metis swap SOL→USDC (ExactIn, platformFeeBps=500) — fee to FEE_WALLET
-//   Tx 2: Jupiter Predict order with post-fee USDC output
+//   Tx 1: Metis swap SOL→JupUSD (ExactIn, platformFeeBps=500) — fee to FEE_WALLET
+//   Tx 2: Jupiter Predict order with post-fee JupUSD output (depositMint=JUPUSD)
 //   Both submitted via signAllTransactions — one wallet popup.
+//
+// Jupiter Predict requires JupUSD as the deposit mint — USDC is not accepted.
 //
 // SELLS / CLAIMS: No platform fee. Transactions untouched.
 //
@@ -21,8 +23,8 @@
 // The tx still lands on-chain. We display a friendly banner before the
 // signature popup to set user expectations.
 //
-// IMPORTANT: FEE_WALLET's USDC ATA must already exist on-chain. Send any
-// amount of USDC to FEE_WALLET once before going live so the ATA is created.
+// IMPORTANT: FEE_WALLET's JupUSD ATA must already exist on-chain. Send any
+// amount of JupUSD to FEE_WALLET once before going live so the ATA is created.
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
@@ -276,64 +278,122 @@ function pickPositionFields(p) {
 // SECTION 4: Transaction building
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ─── Metis swap: SOL → USDC with 5% platform fee baked in ───────────────────
-// FIX: solLamports is kept as BigInt all the way through — never cast to Number.
-// String(BigInt) always produces a clean integer string with no decimals.
-async function buildMetisSwapTx({ ownerPubkey, solLamports }) {
-  const feeWallet  = new PublicKey(FEE_WALLET);
-  const usdcMint   = new PublicKey(USDC_MINT);
-  const feeAccount = getAssociatedTokenAddressSync(usdcMint, feeWallet).toBase58();
+// ─── SOL → JupUSD swap: Jupiter → OKX → LiFi fallback ───────────────────────
+// Fee taken in SOL (input token) via platformFeeBps where supported.
+// OKX and LiFi collect fee via their own referral/fee mechanisms.
+// Jupiter Predict requires JupUSD as depositMint — USDC is not accepted.
+// solLamports stays BigInt throughout — String(BigInt) = clean integer string.
 
-  const quoteParams = new URLSearchParams({
+async function swapSolToJupUsdViaJupiter({ ownerPubkey, solLamports }) {
+  const feeWallet  = new PublicKey(FEE_WALLET);
+  const wsolMint   = new PublicKey(SOL_MINT);
+  const feeAccount = getAssociatedTokenAddressSync(wsolMint, feeWallet).toBase58();
+  const buildParams = new URLSearchParams({
     inputMint:                  SOL_MINT,
-    outputMint:                 USDC_MINT,
-    amount:                     String(solLamports),   // BigInt → clean integer string
-    swapMode:                   'ExactIn',
+    outputMint:                 JUPUSD_MINT,
+    amount:                     String(solLamports),
+    taker:                      ownerPubkey,
     slippageBps:                String(SLIPPAGE_BPS),
     platformFeeBps:             String(FEE_BPS),
-    restrictIntermediateTokens: 'true',
+    feeAccount,
+    computeUnitPricePercentile: 'veryHigh',
   });
-  const quoteRes = await jfetch(`/api/jupiter/quote?${quoteParams}`);
-  const quote    = await quoteRes.json();
-  if (!quote?.outAmount) throw new Error('Swap quote failed — no outAmount');
+  const buildRes  = await jfetch(`/api/jupiter/build?${buildParams}`);
+  const buildData = await buildRes.json();
+  if (!buildData?.swapTransaction) throw new Error('Jupiter: no swapTransaction');
+  const postFeeJupUsdAtomic = BigInt(buildData.outAmount);
+  const swapTx = VersionedTransaction.deserialize(b64ToBytes(buildData.swapTransaction));
+  return { swapTx, postFeeJupUsdAtomic };
+}
 
-  // outAmount comes back as a string integer from Jupiter — wrap directly in BigInt
-  const postFeeUsdcAtomic = BigInt(quote.outAmount);
-
-  const swapRes  = await jfetch('/api/jupiter/swap', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      quoteResponse:             quote,
-      userPublicKey:             ownerPubkey,
-      feeAccount,
-      dynamicComputeUnitLimit:   true,
-      prioritizationFeeLamports: {
-        priorityLevelWithMaxLamports: {
-          maxLamports:   JUPITER_PRIORITY_LAMPORTS,
-          priorityLevel: 'veryHigh',
-        },
-      },
-    }),
+async function swapSolToJupUsdViaOkx({ ownerPubkey, solLamports }) {
+  // OKX Solana DEX aggregator — fee injected server-side via OKX_FEE_WALLET_SOL
+  const quoteParams = new URLSearchParams({
+    chainIndex:      '501',
+    fromTokenAddress: SOL_MINT,
+    toTokenAddress:   JUPUSD_MINT,
+    amount:           String(solLamports),
+    slippage:         '0.1',
+    userWalletAddress: ownerPubkey,
   });
+  const quoteRes  = await jfetch(`/api/okx/dex/aggregator/quote?${quoteParams}`);
+  const quoteData = await quoteRes.json();
+  const route = quoteData?.data?.[0];
+  if (!route?.toTokenAmount) throw new Error('OKX: no quote');
+
+  const swapParams = new URLSearchParams({
+    chainIndex:        '501',
+    fromTokenAddress:  SOL_MINT,
+    toTokenAddress:    JUPUSD_MINT,
+    amount:            String(solLamports),
+    slippage:          '0.1',
+    userWalletAddress: ownerPubkey,
+  });
+  const swapRes  = await jfetch(`/api/okx/dex/aggregator/swap?${swapParams}`);
   const swapData = await swapRes.json();
-  if (!swapData?.swapTransaction) throw new Error('Swap build failed — no swapTransaction');
+  const txData   = swapData?.data?.[0]?.tx?.data;
+  if (!txData) throw new Error('OKX: no transaction data');
 
-  const swapTx = VersionedTransaction.deserialize(b64ToBytes(swapData.swapTransaction));
+  const postFeeJupUsdAtomic = BigInt(route.toTokenAmount);
+  const swapTx = VersionedTransaction.deserialize(b64ToBytes(txData));
+  return { swapTx, postFeeJupUsdAtomic };
+}
 
-  return { swapTx, postFeeUsdcAtomic };
+async function swapSolToJupUsdViaLifi({ ownerPubkey, solLamports }) {
+  // LiFi Solana swap — fee address passed as integrator
+  const params = new URLSearchParams({
+    fromChain:       'SOL',
+    toChain:         'SOL',
+    fromToken:       SOL_MINT,
+    toToken:         JUPUSD_MINT,
+    fromAmount:      String(solLamports),
+    fromAddress:     ownerPubkey,
+    toAddress:       ownerPubkey,
+    integrator:      'verixia',
+    fee:             String(FEE_BPS / 10000),
+    feeRecipient:    FEE_WALLET,
+    slippage:        '0.1',
+  });
+  const quoteRes  = await jfetch(`/api/lifi/quote?${params}`);
+  const quoteData = await quoteRes.json();
+  const txData    = quoteData?.transactionRequest?.data;
+  if (!txData) throw new Error('LiFi: no transaction data');
+
+  const postFeeJupUsdAtomic = BigInt(quoteData?.estimate?.toAmount || '0');
+  const swapTx = VersionedTransaction.deserialize(b64ToBytes(txData));
+  return { swapTx, postFeeJupUsdAtomic };
+}
+
+async function buildMetisSwapTx({ ownerPubkey, solLamports }) {
+  const attempts = [
+    { name: 'Jupiter', fn: () => swapSolToJupUsdViaJupiter({ ownerPubkey, solLamports }) },
+    { name: 'OKX',     fn: () => swapSolToJupUsdViaOkx({ ownerPubkey, solLamports }) },
+    { name: 'LiFi',    fn: () => swapSolToJupUsdViaLifi({ ownerPubkey, solLamports }) },
+  ];
+  let lastErr;
+  for (const { name, fn } of attempts) {
+    try {
+      console.log(`[swap] trying ${name}…`);
+      return await fn();
+    } catch (e) {
+      console.warn(`[swap] ${name} failed:`, e?.message);
+      lastErr = e;
+    }
+  }
+  throw new Error('All swap providers failed. Last error: ' + (lastErr?.message || 'unknown'));
 }
 
 // ─── Jupiter Predict buy order ───────────────────────────────────────────────
-// FIX: depositAmountUsdcAtomic is a BigInt — String(BigInt) is a clean integer.
-async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomic }) {
+// depositAmountJupUsdAtomic is a BigInt — String(BigInt) is a clean integer.
+// depositMint must be JUPUSD_MINT — Jupiter Predict does not accept USDC.
+async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountJupUsdAtomic }) {
   const r = await jfetch('/api/predict/orders', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       ownerPubkey, marketId, isYes, isBuy: true,
-      depositAmount: String(depositAmountUsdcAtomic),  // BigInt → clean integer string
-      depositMint:   USDC_MINT,
+      depositAmount: String(depositAmountJupUsdAtomic), // BigInt → clean integer string
+      depositMint:   JUPUSD_MINT,                       // JupUSD required, not USDC
     }),
   });
   const j = await r.json();
@@ -363,52 +423,104 @@ async function buildClaimTx({ ownerPubkey, positionPubkey }) {
   return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)) };
 }
 
-// ─── JupUSD → SOL swap with 5% platform fee ──────────────────────────────────
-// FIX: jupUsdAtomic is derived via BigInt arithmetic only — no float rounding.
-// jupUsdAmount (USD float) × 1e6 is done with Math.round then wrapped in BigInt
-// to avoid the float→integer conversion error.
-async function buildJupUsdToSolSwapTx({ ownerPubkey, jupUsdAtomic }) {
-  const feeWallet    = new PublicKey(FEE_WALLET);
-  const jupUsdMint   = new PublicKey(JUPUSD_MINT);
-  const feeAccount   = getAssociatedTokenAddressSync(jupUsdMint, feeWallet).toBase58();
+// ─── JupUSD → SOL swap: Jupiter → OKX → LiFi fallback ───────────────────────
+// Fee taken in JupUSD (input token). Used after sell/claim to convert winnings.
 
-  const quoteParams = new URLSearchParams({
+async function swapJupUsdToSolViaJupiter({ ownerPubkey, jupUsdAtomic }) {
+  const feeWallet  = new PublicKey(FEE_WALLET);
+  const jupUsdMint = new PublicKey(JUPUSD_MINT);
+  const feeAccount = getAssociatedTokenAddressSync(jupUsdMint, feeWallet).toBase58();
+  const buildParams = new URLSearchParams({
     inputMint:                  JUPUSD_MINT,
     outputMint:                 SOL_MINT,
-    amount:                     String(jupUsdAtomic),  // BigInt → clean integer string
-    swapMode:                   'ExactIn',
+    amount:                     String(jupUsdAtomic),
+    taker:                      ownerPubkey,
     slippageBps:                String(SLIPPAGE_BPS),
     platformFeeBps:             String(FEE_BPS),
-    restrictIntermediateTokens: 'true',
+    feeAccount,
+    computeUnitPricePercentile: 'veryHigh',
   });
-  const quoteRes = await jfetch(`/api/jupiter/quote?${quoteParams}`);
-  const quote    = await quoteRes.json();
-  if (!quote?.outAmount) throw new Error('JupUSD→SOL quote failed');
-
-  // outAmount from Jupiter is a string integer — wrap directly in BigInt
-  const postFeeSolLamports = BigInt(quote.outAmount);
-
-  const swapRes  = await jfetch('/api/jupiter/swap', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      quoteResponse:             quote,
-      userPublicKey:             ownerPubkey,
-      feeAccount,
-      dynamicComputeUnitLimit:   true,
-      prioritizationFeeLamports: {
-        priorityLevelWithMaxLamports: {
-          maxLamports:   JUPITER_PRIORITY_LAMPORTS,
-          priorityLevel: 'veryHigh',
-        },
-      },
-    }),
-  });
-  const swapData = await swapRes.json();
-  if (!swapData?.swapTransaction) throw new Error('JupUSD→SOL swap build failed');
-
-  const swapTx = VersionedTransaction.deserialize(b64ToBytes(swapData.swapTransaction));
+  const buildRes  = await jfetch(`/api/jupiter/build?${buildParams}`);
+  const buildData = await buildRes.json();
+  if (!buildData?.swapTransaction) throw new Error('Jupiter: no swapTransaction');
+  const postFeeSolLamports = BigInt(buildData.outAmount);
+  const swapTx = VersionedTransaction.deserialize(b64ToBytes(buildData.swapTransaction));
   return { swapTx, postFeeSolLamports };
+}
+
+async function swapJupUsdToSolViaOkx({ ownerPubkey, jupUsdAtomic }) {
+  const quoteParams = new URLSearchParams({
+    chainIndex:        '501',
+    fromTokenAddress:  JUPUSD_MINT,
+    toTokenAddress:    SOL_MINT,
+    amount:            String(jupUsdAtomic),
+    slippage:          '0.1',
+    userWalletAddress: ownerPubkey,
+  });
+  const quoteRes  = await jfetch(`/api/okx/dex/aggregator/quote?${quoteParams}`);
+  const quoteData = await quoteRes.json();
+  const route     = quoteData?.data?.[0];
+  if (!route?.toTokenAmount) throw new Error('OKX: no quote');
+
+  const swapParams = new URLSearchParams({
+    chainIndex:        '501',
+    fromTokenAddress:  JUPUSD_MINT,
+    toTokenAddress:    SOL_MINT,
+    amount:            String(jupUsdAtomic),
+    slippage:          '0.1',
+    userWalletAddress: ownerPubkey,
+  });
+  const swapRes  = await jfetch(`/api/okx/dex/aggregator/swap?${swapParams}`);
+  const swapData = await swapRes.json();
+  const txData   = swapData?.data?.[0]?.tx?.data;
+  if (!txData) throw new Error('OKX: no transaction data');
+
+  const postFeeSolLamports = BigInt(route.toTokenAmount);
+  const swapTx = VersionedTransaction.deserialize(b64ToBytes(txData));
+  return { swapTx, postFeeSolLamports };
+}
+
+async function swapJupUsdToSolViaLifi({ ownerPubkey, jupUsdAtomic }) {
+  const params = new URLSearchParams({
+    fromChain:    'SOL',
+    toChain:      'SOL',
+    fromToken:    JUPUSD_MINT,
+    toToken:      SOL_MINT,
+    fromAmount:   String(jupUsdAtomic),
+    fromAddress:  ownerPubkey,
+    toAddress:    ownerPubkey,
+    integrator:   'verixia',
+    fee:          String(FEE_BPS / 10000),
+    feeRecipient: FEE_WALLET,
+    slippage:     '0.1',
+  });
+  const quoteRes  = await jfetch(`/api/lifi/quote?${params}`);
+  const quoteData = await quoteRes.json();
+  const txData    = quoteData?.transactionRequest?.data;
+  if (!txData) throw new Error('LiFi: no transaction data');
+
+  const postFeeSolLamports = BigInt(quoteData?.estimate?.toAmount || '0');
+  const swapTx = VersionedTransaction.deserialize(b64ToBytes(txData));
+  return { swapTx, postFeeSolLamports };
+}
+
+async function buildJupUsdToSolSwapTx({ ownerPubkey, jupUsdAtomic }) {
+  const attempts = [
+    { name: 'Jupiter', fn: () => swapJupUsdToSolViaJupiter({ ownerPubkey, jupUsdAtomic }) },
+    { name: 'OKX',     fn: () => swapJupUsdToSolViaOkx({ ownerPubkey, jupUsdAtomic }) },
+    { name: 'LiFi',    fn: () => swapJupUsdToSolViaLifi({ ownerPubkey, jupUsdAtomic }) },
+  ];
+  let lastErr;
+  for (const { name, fn } of attempts) {
+    try {
+      console.log(`[swap] trying ${name}…`);
+      return await fn();
+    } catch (e) {
+      console.warn(`[swap] ${name} failed:`, e?.message);
+      lastErr = e;
+    }
+  }
+  throw new Error('All swap providers failed. Last error: ' + (lastErr?.message || 'unknown'));
 }
 
 // Debug-only sim. Logs to console; doesn't affect wallet flow.
@@ -644,11 +756,12 @@ function MarketCard({ event, onTrade }) {
 }
 
 // ─── BuyDrawer ────────────────────────────────────────────────────────────────
-// FIX SUMMARY:
+// BUY SUMMARY:
 //   1. solLamports stays BigInt — computed via BigInt(Math.round(solAmount * 1e9))
-//   2. postFeeUsdcAtomic stays BigInt from buildMetisSwapTx — never cast to Number
+//   2. postFeeJupUsdAtomic stays BigInt from buildMetisSwapTx — never cast to Number
 //   3. Minimum check uses BigInt comparison
-//   4. depositAmountUsdcAtomic passed as BigInt — String(BigInt) is a clean integer
+//   4. depositAmountJupUsdAtomic passed as BigInt — String(BigInt) is a clean integer
+//   5. depositMint=JUPUSD_MINT — Jupiter Predict requires JupUSD, not USDC
 function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
   const { publicKey, signAllTransactions } = useWallet();
 
@@ -695,25 +808,25 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
       const ownerPubkey = publicKey.toBase58();
 
       setStMsg('Building swap…');
-      const { swapTx, postFeeUsdcAtomic } = await buildMetisSwapTx({
+      const { swapTx, postFeeJupUsdAtomic } = await buildMetisSwapTx({
         ownerPubkey,
         solLamports,  // already BigInt
       });
 
-      if (postFeeUsdcAtomic <= 0n) throw new Error('Swap quote returned zero USDC');
+      if (postFeeJupUsdAtomic <= 0n) throw new Error('Swap quote returned zero JupUSD');
 
-      // FIX 2: Compare BigInt to BigInt — no Number() cast needed
-      const minUsdcAtomic = BigInt(Math.round(MIN_TRADE_USD * 1e6));
-      if (postFeeUsdcAtomic < minUsdcAtomic)
+      // Compare BigInt to BigInt — no Number() cast needed
+      const minJupUsdAtomic = BigInt(Math.round(MIN_TRADE_USD * 1e6));
+      if (postFeeJupUsdAtomic < minJupUsdAtomic)
         throw new Error(`Minimum trade is $${MIN_TRADE_USD}. Try a larger SOL amount.`);
 
       setStMsg('Building order…');
-      // FIX 3: Pass BigInt directly — buildBuyTx calls String() on it internally
+      // Pass BigInt directly — buildBuyTx calls String() on it internally
       const { tx: buyTx } = await buildBuyTx({
         ownerPubkey,
         marketId: m.marketId,
         isYes,
-        depositAmountUsdcAtomic: postFeeUsdcAtomic,  // BigInt, no Number() cast
+        depositAmountJupUsdAtomic: postFeeJupUsdAtomic,  // BigInt, no Number() cast
       });
 
       setStMsg('Checking…');
@@ -723,7 +836,7 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
       setStMsg('Confirm in your wallet…');
       const signed = await signAllTransactions([swapTx, buyTx]);
 
-      setStMsg('Swapping SOL → USDC…');
+      setStMsg('Swapping SOL → JupUSD…');
       const swapResult = await submitAndConfirm(connection, [signed[0]], setStMsg);
       if (swapResult.pending) {
         setError(`Swap submitted but still confirming. Solscan: https://solscan.io/tx/${swapResult.sigs[0]}`);
@@ -788,7 +901,7 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
           <Row label={`Est. contracts`} value={`~${contractsEst.toFixed(2)}`} />
           <Row label={`If ${sideLabel} wins`} value={`~${fmtUsd(contractsEst)}`} valueColor={sideColor} bold />
           <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}`, color: C.muted, fontSize: 9 }}>
-            Exact USDC amount confirmed at swap time. Est. values shown above.
+            Exact JupUSD amount confirmed at swap time. Est. values shown above.
           </div>
         </div>
 
