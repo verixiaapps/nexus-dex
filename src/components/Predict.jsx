@@ -711,6 +711,15 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
   const placeOrder = useCallback(async () => {
     if (!publicKey) { setError('Connect wallet first'); return; }
     if (!signAllTransactions) { setError('Wallet lacks signAllTransactions'); return; }
+
+    // Rough minimum check upfront — $5 minimum after 5% fee
+    // Uses conservative $100 SOL floor just to catch obviously too-small amounts
+    const estUsdcRough = solAmount * 100 * 0.95;
+    if (estUsdcRough < MIN_TRADE_USD) {
+      setError(`Minimum trade is $${MIN_TRADE_USD}. Try a larger SOL amount.`);
+      return;
+    }
+
     setStatus('working'); setError(''); setStMsg('Getting swap quote…');
 
     try {
@@ -725,16 +734,15 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
 
       if (postFeeUsdcAtomic <= 0n) throw new Error('Swap quote returned zero USDC');
 
-      // Convert to number for safe arithmetic — USDC atomic values fit in JS number
+      // Step 3: Predict buy order using post-fee USDC amount
+      setStMsg('Building order…');
       const postFeeUsdcNum = Number(postFeeUsdcAtomic);
       if (postFeeUsdcNum < MIN_TRADE_USD * 1e6)
         throw new Error(`Minimum trade is $${MIN_TRADE_USD}. Try a larger SOL amount.`);
 
-      // Step 3: Predict buy order using post-fee USDC amount
-      setStMsg('Building order…');
-      const minContracts = Math.max(1, Math.floor(
-        (postFeeUsdcNum / 1e6 / price) * (1 - SLIPPAGE_BPS / 10000)
-      ));
+      // minContracts = floor with 10% slippage tolerance, passed as decimal string
+      const contractsExpected = postFeeUsdcNum / 1e6 / price;
+      const minContracts = Math.max(0.01, contractsExpected * (1 - SLIPPAGE_BPS / 10000)).toFixed(4);
       const { tx: buyTx } = await buildBuyTx({
         ownerPubkey,
         marketId: m.marketId,
