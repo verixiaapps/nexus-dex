@@ -2,33 +2,34 @@
 //
 // Spec: https://dev.jup.ag/docs/prediction
 //
-// FEE MODEL: 5% USDC platform fee on buys, sells, and claims.
-// Bundled via signAllTransactions -- one wallet popup containing both
-// Jupiter's tx and our fee transferChecked tx. Each tx is independently
-// simulatable so the wallet treats them as a normal multi-step approval.
+// FEE MODEL: 5% platform fee on buys, collected via Jupiter Metis swap
+// platformFeeBps=500. Fee is baked into the SOL→USDC swap — no separate
+// transfer instruction. FEE_WALLET's USDC ATA receives fees directly from
+// Jupiter's swap program. Blowfish sees two clean Jupiter transactions.
 //
-// SLIPPAGE: Buys pass a minimum-contracts floor at 90% of expected (10%
-// slippage tolerance). Calculated from POST-FEE deposit so our own skim
-// doesn't false-reject orders. Sells/claims have no slippage param.
+// BUY FLOW (SOL only):
+//   Tx 1: Metis swap SOL→USDC (ExactIn, platformFeeBps=500) — fee to FEE_WALLET
+//   Tx 2: Jupiter Predict order with post-fee USDC output
+//   Both submitted via signAllTransactions — one wallet popup.
+//
+// SELLS / CLAIMS: No platform fee. Transactions untouched.
+//
+// SLIPPAGE: 10% tolerance on the Predict order's minContracts floor.
 //
 // PHANTOM SIM: Phantom's wallet sim can't fully resolve Predict txs
 // (keeper-filled accounts, async fills) and shows "simulation failed."
 // The tx still lands on-chain. We display a friendly banner before the
-// signature popup to set user expectations. Submit uses preflight = false
-// (default) since bundled txs are simpler and sim-friendly at the RPC.
+// signature popup to set user expectations.
 //
 // IMPORTANT: FEE_WALLET's USDC ATA must already exist on-chain. Send any
-// amount of USDC to FEE_WALLET once before going live so the ATA is
-// created.
+// amount of USDC to FEE_WALLET once before going live so the ATA is created.
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
-  Connection, PublicKey, VersionedTransaction, TransactionMessage,
-  ComputeBudgetProgram,
+  Connection, PublicKey, VersionedTransaction,
 } from '@solana/web3.js';
 import {
-  createTransferCheckedInstruction,
   getAssociatedTokenAddressSync,
 } from '@solana/spl-token';
 
@@ -36,14 +37,12 @@ import {
 const USDC_MINT     = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOL_MINT      = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET    = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
-const FEE_BPS       = 500;   // 5%
-const SLIPPAGE_BPS  = 1000;  // 10% — generous floor, virtually all orders fill
+const FEE_BPS       = 500;   // 5% — collected via Metis platformFeeBps
+const SLIPPAGE_BPS  = 1000;  // 10% on Predict minContracts
 const SOL_RPC       = '/api/solana-rpc';
 const MIN_TRADE_USD = 5;
 const NAV_CLEARANCE = 120;
 
-const PRIORITY_FEE_MICROLAMPORTS = 5_000;
-const PRIORITY_FEE_CU_LIMIT      = 200_000;
 const JUPITER_PRIORITY_LAMPORTS  = 1_000_000;
 
 const CATEGORIES = [
@@ -273,13 +272,68 @@ function pickPositionFields(p) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 4: Transaction building (bundled fee model)
+// SECTION 4: Transaction building
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Jupiter's tx is unsigned and immutable to us. We build our own fee tx and
-// bundle both into one signAllTransactions call -- one wallet popup, two
-// independent txs that each simulate cleanly in isolation.
+// ─── Metis swap: SOL → USDC with 5% platform fee baked in ───────────────────
+// Uses existing backend routes:
+//   GET  /api/jupiter/quote → https://api.jup.ag/swap/v1/quote
+//   POST /api/jupiter/swap  → https://api.jup.ag/swap/v1/swap
+//
+// platformFeeBps=500 tells Jupiter to deduct 5% from the USDC output and
+// send it directly to feeAccount (FEE_WALLET's USDC ATA).
+// No separate transfer instruction — fee is baked into the swap itself.
+// outAmount in the quote response is what the user receives AFTER the fee.
+async function buildMetisSwapTx({ ownerPubkey, solLamports }) {
+  const feeWallet  = new PublicKey(FEE_WALLET);
+  const usdcMint   = new PublicKey(USDC_MINT);
 
+  // FEE_WALLET's USDC ATA — must exist on-chain before going live
+  const feeAccount = getAssociatedTokenAddressSync(usdcMint, feeWallet).toBase58();
+
+  // Step 1: Quote — platformFeeBps=500 → Jupiter deducts 5% from USDC output
+  const quoteParams = new URLSearchParams({
+    inputMint:                  SOL_MINT,
+    outputMint:                 USDC_MINT,
+    amount:                     String(solLamports),
+    swapMode:                   'ExactIn',
+    slippageBps:                String(SLIPPAGE_BPS),
+    platformFeeBps:             String(FEE_BPS),
+    restrictIntermediateTokens: 'true',
+  });
+  const quoteRes = await jfetch(`/api/jupiter/quote?${quoteParams}`);
+  const quote    = await quoteRes.json();
+  if (!quote?.outAmount) throw new Error('Swap quote failed — no outAmount');
+
+  // outAmount = USDC the user receives after the 5% platform fee
+  const postFeeUsdcAtomic = BigInt(quote.outAmount);
+
+  // Step 2: Build serialized swap tx — feeAccount receives the 5% cut
+  const swapRes  = await jfetch('/api/jupiter/swap', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      quoteResponse:             quote,
+      userPublicKey:             ownerPubkey,
+      feeAccount,                // USDC ATA of FEE_WALLET
+      dynamicComputeUnitLimit:   true,
+      prioritizationFeeLamports: {
+        priorityLevelWithMaxLamports: {
+          maxLamports:   JUPITER_PRIORITY_LAMPORTS,
+          priorityLevel: 'veryHigh',
+        },
+      },
+    }),
+  });
+  const swapData = await swapRes.json();
+  if (!swapData?.swapTransaction) throw new Error('Swap build failed — no swapTransaction');
+
+  const swapTx = VersionedTransaction.deserialize(b64ToBytes(swapData.swapTransaction));
+
+  return { swapTx, postFeeUsdcAtomic };
+}
+
+// ─── Jupiter Predict buy order ───────────────────────────────────────────────
 async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomic, minContracts }) {
   const r = await jfetch('/api/predict/orders', {
     method: 'POST',
@@ -295,28 +349,6 @@ async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomi
   const j = await r.json();
   if (!j?.transaction) throw new Error('Jupiter returned no transaction');
   return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)), orderInfo: j.order || null };
-}
-
-// Single transferChecked fee tx in USDC. Requires FEE_WALLET's USDC ATA to
-// already exist on-chain (one-time setup -- send any USDC to FEE_WALLET once).
-async function buildFeeTx({ ownerPubkey, feeAmountUsdcAtomic, connection }) {
-  const owner   = new PublicKey(ownerPubkey);
-  const feeWal  = new PublicKey(FEE_WALLET);
-  const mint    = new PublicKey(USDC_MINT);
-  const fromAta = getAssociatedTokenAddressSync(mint, owner);
-  const feeAta  = getAssociatedTokenAddressSync(mint, feeWal);
-
-  const { blockhash } = await connection.getLatestBlockhash('confirmed');
-  const msg = new TransactionMessage({
-    payerKey: owner,
-    recentBlockhash: blockhash,
-    instructions: [
-      ComputeBudgetProgram.setComputeUnitLimit({ units: PRIORITY_FEE_CU_LIMIT }),
-      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
-      createTransferCheckedInstruction(fromAta, mint, feeAta, owner, feeAmountUsdcAtomic, 6),
-    ],
-  }).compileToV0Message();
-  return { tx: new VersionedTransaction(msg) };
 }
 
 async function buildSellTx({ ownerPubkey, positionPubkey }) {
@@ -341,21 +373,6 @@ async function buildClaimTx({ ownerPubkey, positionPubkey }) {
   return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)) };
 }
 
-async function buildUltraSwapTx({ ownerPubkey, usdcAtomicNeeded }) {
-  const params = new URLSearchParams({
-    inputMint:  SOL_MINT,
-    outputMint: USDC_MINT,
-    amount:     String(usdcAtomicNeeded),
-    swapMode:   'ExactOut',
-    taker:      ownerPubkey,
-    prioritizationFeeLamports: String(JUPITER_PRIORITY_LAMPORTS),
-  });
-  const r = await jfetch('/api/predict/ultra/order?' + params.toString());
-  const j = await r.json();
-  if (!j?.transaction) throw new Error('Ultra returned no transaction');
-  return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)) };
-}
-
 // Debug-only sim. Logs to console; doesn't affect wallet flow.
 async function simulateOrThrow(connection, tx, label) {
   try {
@@ -370,9 +387,6 @@ async function simulateOrThrow(connection, tx, label) {
   }
 }
 
-// Standard submit with RPC preflight ON. Bundled txs are simpler than
-// injected ones and pass RPC sim cleanly. We accept occasional false
-// rejections in exchange for safety on the rare genuinely broken tx.
 async function submitAndConfirm(connection, signedTxs, setStMsg) {
   setStMsg('Submitting…');
   const sigs = await Promise.all(signedTxs.map(stx =>
@@ -452,7 +466,6 @@ function ErrorLine({ msg }) {
   );
 }
 
-// Pre-sign banner. Friendly, no scary language, no fee mention.
 function SimNoticeBanner() {
   return (
     <div style={{
@@ -511,9 +524,8 @@ function Row({ label, value, valueColor, bold }) {
 // SECTION 6: Page header
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function PageHeader({ connected, solBal, usdcBal, tab, setTab, pubkey, onCopy }) {
-  const sol  = Number(solBal) / 1e9;
-  const usdc = Number(usdcBal) / 1e6;
+function PageHeader({ connected, solBal, tab, setTab, pubkey, onCopy }) {
+  const sol = Number(solBal) / 1e9;
   return (
     <div style={{ marginTop: 4, marginBottom: 10, padding: '14px 14px 12px', borderRadius: 18, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: `1px solid ${C.border}`, boxShadow: C.shadowLg, position: 'relative', overflow: 'hidden' }}>
       <div style={{ position: 'absolute', right: -40, top: -50, width: 160, height: 160, borderRadius: '50%', background: 'radial-gradient(circle,rgba(151,252,228,.14),transparent 65%)', pointerEvents: 'none' }} />
@@ -532,9 +544,8 @@ function PageHeader({ connected, solBal, usdcBal, tab, setTab, pubkey, onCopy })
               <div>
                 <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, letterSpacing: 1.2, ...T.mono, marginBottom: 2 }}>BALANCE</div>
                 <div style={{ fontSize: 16, fontWeight: 800, color: C.ink, ...T.display, lineHeight: 1 }}>
-                  {fmtUsd(usdc)} <span style={{ fontSize: 10, color: C.muted, ...T.mono, marginLeft: 4 }}>USDC</span>
+                  {sol.toFixed(4)} <span style={{ fontSize: 10, color: C.muted, ...T.mono, marginLeft: 4 }}>SOL</span>
                 </div>
-                <div style={{ fontSize: 10, color: C.muted, ...T.mono, marginTop: 2 }}>+ {sol.toFixed(4)} SOL</div>
               </div>
               {pubkey && (
                 <button onClick={onCopy} style={{ padding: '5px 9px', borderRadius: 8, background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 9, fontWeight: 700, cursor: 'pointer', ...T.mono }}>
@@ -607,70 +618,81 @@ function MarketCard({ event, onTrade }) {
   );
 }
 
-function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection }) {
+// ─── BuyDrawer ────────────────────────────────────────────────────────────────
+// User pays in SOL only. Flow:
+//   1. Metis quote SOL→USDC with platformFeeBps=500 → get postFeeUsdcAtomic
+//   2. Build Metis swap tx (fee baked in, goes to FEE_WALLET USDC ATA)
+//   3. Build Predict buy tx using postFeeUsdcAtomic as deposit
+//   4. signAllTransactions([swapTx, buyTx]) — one wallet popup
+function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
   const { publicKey, signAllTransactions } = useWallet();
-  const [amount, setAmount]   = useState('10');
+
+  // Amount is in SOL
+  const [amount, setAmount]   = useState('0.1');
   const [status, setStatus]   = useState('idle');
   const [statusMsg, setStMsg] = useState('');
   const [error, setError]     = useState('');
 
   useBodyLock(true);
 
-  const m         = event.market;
-  const depUsd    = Number(amount) || 0;
-  const feeUsd    = depUsd * (FEE_BPS / 10000);
-  const usd       = depUsd + feeUsd;
-  const price     = isYes ? m.yesPrice : m.noPrice;
-  const contracts = price > 0 ? depUsd / price : 0;
-  const upside    = depUsd > 0 ? ((contracts - depUsd) / depUsd) * 100 : 0;
+  const m          = event.market;
+  const solAmount  = Number(amount) || 0;
+  const solLamports = BigInt(Math.floor(solAmount * 1e9));
 
-  const minContracts = Math.max(1, Math.floor(contracts * (1 - SLIPPAGE_BPS / 10000)));
+  // Estimate post-fee USDC for display only (actual comes from Metis quote)
+  // We show approximate values; real numbers confirmed at quote time
+  const estUsdcOut   = solAmount * 150; // rough SOL price placeholder for display
+  const feeEstUsd    = estUsdcOut * (FEE_BPS / 10000);
+  const depositEstUsd = estUsdcOut - feeEstUsd;
+  const price        = isYes ? m.yesPrice : m.noPrice;
+  const contractsEst = price > 0 ? depositEstUsd / price : 0;
 
   const sideLabel = isYes ? 'YES' : 'NO';
   const sideColor = isYes ? C.yes : C.no;
   const sideDim   = isYes ? C.yesDim : C.noDim;
 
-  const totalAtm  = BigInt(Math.floor(usd * 1e6));
-  const feeAtm    = BigInt(Math.floor(feeUsd * 1e6));
-  const depAtm    = totalAtm - feeAtm;
-  const needsSwap = usdcBal < totalAtm;
-  const shortAtm  = needsSwap ? totalAtm - usdcBal : 0n;
-
+  const hasSol = solBal >= solLamports && solLamports > 0n;
   const busy   = status === 'working';
-  const canBuy = !busy && usd >= MIN_TRADE_USD && publicKey && m.marketId;
+  const canBuy = !busy && solAmount > 0 && publicKey && m.marketId && hasSol;
 
   const placeOrder = useCallback(async () => {
     if (!publicKey) { setError('Connect wallet first'); return; }
-    setStatus('working'); setError(''); setStMsg('Preparing order…');
+    if (!signAllTransactions) { setError('Wallet lacks signAllTransactions'); return; }
+    setStatus('working'); setError(''); setStMsg('Getting swap quote…');
+
     try {
       const ownerPubkey = publicKey.toBase58();
-      if (!signAllTransactions) throw new Error('Wallet lacks signAllTransactions');
 
+      // Step 1 & 2: Metis swap SOL→USDC with 5% fee baked in
+      setStMsg('Building swap…');
+      const { swapTx, postFeeUsdcAtomic } = await buildMetisSwapTx({
+        ownerPubkey,
+        solLamports,
+      });
+
+      if (postFeeUsdcAtomic <= 0n) throw new Error('Swap quote returned zero USDC');
+
+      // Step 3: Predict buy order using post-fee USDC amount
       setStMsg('Building order…');
+      const minContracts = Math.max(1, Math.floor(
+        (Number(postFeeUsdcAtomic) / 1e6 / price) * (1 - SLIPPAGE_BPS / 10000)
+      ));
       const { tx: buyTx } = await buildBuyTx({
-        ownerPubkey, marketId: m.marketId, isYes,
-        depositAmountUsdcAtomic: depAtm.toString(),
+        ownerPubkey,
+        marketId: m.marketId,
+        isYes,
+        depositAmountUsdcAtomic: postFeeUsdcAtomic.toString(),
         minContracts,
       });
-      const { tx: feeTx } = await buildFeeTx({
-        ownerPubkey, feeAmountUsdcAtomic: feeAtm, connection,
-      });
 
-      const txs = [];
-      if (needsSwap) {
-        setStMsg('Building SOL→USDC swap…');
-        const { tx: swapTx } = await buildUltraSwapTx({ ownerPubkey, usdcAtomicNeeded: shortAtm.toString() });
-        txs.push(swapTx);
-      }
-      txs.push(buyTx, feeTx);
-
+      // Step 4: Simulate both (debug only, non-blocking)
       setStMsg('Checking…');
-      for (const stx of txs) {
-        await simulateOrThrow(connection, stx, 'order');
-      }
+      await simulateOrThrow(connection, swapTx, 'swap');
+      await simulateOrThrow(connection, buyTx,  'predict-buy');
 
+      // Step 5: One wallet popup — user signs both
       setStMsg('Confirm in your wallet…');
-      const signed = await signAllTransactions(txs);
+      const signed = await signAllTransactions([swapTx, buyTx]);
 
       const { pending, sigs } = await submitAndConfirm(connection, signed, setStMsg);
       if (pending) {
@@ -690,7 +712,10 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection 
       setStatus('error'); setStMsg('');
       setTimeout(() => setStatus('idle'), 5000);
     }
-  }, [publicKey, signAllTransactions, m, isYes, depAtm, feeAtm, minContracts, needsSwap, shortAtm, connection, onClose, onDone]);
+  }, [publicKey, signAllTransactions, m, isYes, solLamports, price, connection, onClose, onDone]);
+
+  // Quick-select SOL amounts
+  const solPresets = ['0.05', '0.1', '0.25', '0.5'];
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
@@ -701,37 +726,33 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection 
           <div style={{ padding: '3px 8px', borderRadius: 99, background: sideDim, border: `1px solid ${sideColor}55`, color: sideColor, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>{sideLabel}</div>
           <div style={{ fontSize: 11, color: C.muted, ...T.mono }}>${price.toFixed(3)} · {Math.round(price * 100)}%</div>
           <div style={{ marginLeft: 'auto', fontSize: 10, color: C.muted, ...T.mono }}>
-            {(Number(usdcBal)/1e6).toFixed(2)} USDC · {(Number(solBal)/1e9).toFixed(3)} SOL
+            {(Number(solBal) / 1e9).toFixed(4)} SOL
           </div>
         </div>
 
         <div style={{ marginBottom: 10 }}>
           <div style={{ fontSize: 9, color: C.muted, marginBottom: 5, textTransform: 'uppercase', letterSpacing: 1, ...T.mono }}>You pay</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 11px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}` }}>
-            <span style={{ fontSize: 15, color: C.muted, ...T.display }}>$</span>
             <input value={amount} onChange={e => { setAmount(cleanAmount(e.target.value)); setError(''); }} disabled={busy} inputMode="decimal"
               style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 18, fontWeight: 700, ...T.display }} />
-            <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>USDC</span>
+            <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>SOL</span>
           </div>
           <div style={{ display: 'flex', gap: 5, marginTop: 6 }}>
-            {['5', '10', '25', '100'].map(v => (
-              <button key={v} onClick={() => setAmount(v)} disabled={busy} style={{ flex: 1, padding: 6, borderRadius: 7, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 10, fontWeight: 600, cursor: 'pointer', ...T.mono }}>${v}</button>
+            {solPresets.map(v => (
+              <button key={v} onClick={() => setAmount(v)} disabled={busy} style={{ flex: 1, padding: 6, borderRadius: 7, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 10, fontWeight: 600, cursor: 'pointer', ...T.mono }}>{v}</button>
             ))}
-            <button onClick={() => setAmount(((Number(usdcBal)/1e6) || 0).toFixed(2))} disabled={busy || usdcBal <= 0n} style={{ flex: 1, padding: 6, borderRadius: 7, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>Max</button>
+            <button onClick={() => setAmount(((Number(solBal) / 1e9) || 0).toFixed(4))} disabled={busy || solBal <= 0n} style={{ flex: 1, padding: 6, borderRadius: 7, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>Max</button>
           </div>
         </div>
 
         <div style={{ padding: 9, borderRadius: 10, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10, ...T.mono, fontSize: 10 }}>
-          <Row label="Buy amount" value={fmtUsd(depUsd)} />
-          <Row label="Platform fee (5%)" value={fmtUsd(feeUsd)} />
-          <Row label="Contracts" value={contracts.toFixed(2)} />
-          <Row label={`If ${sideLabel} wins`} value={fmtUsd(contracts)} valueColor={sideColor} bold />
-          <Row label="Upside" value={`+${upside.toFixed(1)}%`} valueColor={sideColor} bold />
-          {needsSwap && (
-            <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}`, color: C.amber, fontSize: 9 }}>
-              ↳ Will swap ~{(Number(shortAtm) / 1e6).toFixed(2)} USDC worth of SOL first
-            </div>
-          )}
+          <Row label="You pay" value={`${solAmount.toFixed(4)} SOL`} />
+          <Row label="Platform fee (5%)" value="via swap · to wallet" />
+          <Row label={`Est. contracts`} value={`~${contractsEst.toFixed(2)}`} />
+          <Row label={`If ${sideLabel} wins`} value={`~${fmtUsd(contractsEst)}`} valueColor={sideColor} bold />
+          <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}`, color: C.muted, fontSize: 9 }}>
+            Exact USDC amount confirmed at swap time. Est. values shown above.
+          </div>
         </div>
 
         <SimNoticeBanner />
@@ -739,11 +760,17 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, usdcBal, connection 
         {statusMsg && <StatusLine msg={statusMsg} />}
         {error && <ErrorLine msg={error} />}
 
+        {!hasSol && solAmount > 0 && (
+          <div style={{ marginBottom: 8, padding: 8, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', borderRadius: 10, fontSize: 11, color: C.amber, fontWeight: 600 }}>
+            Insufficient SOL balance.
+          </div>
+        )}
+
         <PrimaryButton
           onClick={canBuy ? placeOrder : undefined}
           disabled={!canBuy}
           color={isYes ? 'yes' : 'no'}
-          label={busy ? (statusMsg || 'Working…') : status === 'success' ? '✓ Order placed' : `Buy ${sideLabel} · ${fmtUsd(usd)}`}
+          label={busy ? (statusMsg || 'Working…') : status === 'success' ? '✓ Order placed' : `Buy ${sideLabel} · ${solAmount.toFixed(4)} SOL`}
         />
       </div>
     </div>
@@ -817,7 +844,7 @@ function PositionCard({ p, onAction }) {
   );
 }
 
-function SellDrawer({ position, onClose, onDone, connection, usdcBal }) {
+function SellDrawer({ position, onClose, onDone, connection }) {
   const { publicKey, signAllTransactions } = useWallet();
   const [status, setStatus] = useState('idle');
   const [statusMsg, setStMsg] = useState('');
@@ -825,30 +852,22 @@ function SellDrawer({ position, onClose, onDone, connection, usdcBal }) {
 
   useBodyLock(true);
 
-  const busy = status === 'working';
-
-  const feeUsd      = position.valueUsd * (FEE_BPS / 10000);
-  const feeAtm      = BigInt(Math.floor(feeUsd * 1e6));
-  const netUsd      = position.valueUsd - feeUsd;
-  const hasFeeFunds = usdcBal >= feeAtm;
+  const busy   = status === 'working';
+  const netUsd = position.valueUsd;
 
   const doSell = useCallback(async () => {
     if (!publicKey) return;
     if (!signAllTransactions) { setError('Wallet lacks signAllTransactions'); return; }
-    if (!hasFeeFunds) { setError(`Need ${fmtUsd(feeUsd)} USDC for platform fee`); return; }
     setStatus('working'); setError(''); setStMsg('Building sell…');
     try {
       const ownerPubkey = publicKey.toBase58();
-
       const { tx: sellTx } = await buildSellTx({ ownerPubkey, positionPubkey: position.positionPubkey });
-      const { tx: feeTx }  = await buildFeeTx({ ownerPubkey, feeAmountUsdcAtomic: feeAtm, connection });
 
       setStMsg('Checking…');
       await simulateOrThrow(connection, sellTx, 'sell');
-      await simulateOrThrow(connection, feeTx,  'sell-fee');
 
       setStMsg('Confirm in your wallet…');
-      const signed = await signAllTransactions([sellTx, feeTx]);
+      const signed = await signAllTransactions([sellTx]);
 
       const { pending, sigs } = await submitAndConfirm(connection, signed, setStMsg);
       if (pending) {
@@ -867,7 +886,7 @@ function SellDrawer({ position, onClose, onDone, connection, usdcBal }) {
       setStatus('error'); setStMsg('');
       setTimeout(() => setStatus('idle'), 5000);
     }
-  }, [publicKey, signAllTransactions, position, feeAtm, hasFeeFunds, feeUsd, connection, onClose, onDone]);
+  }, [publicKey, signAllTransactions, position, connection, onClose, onDone]);
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
@@ -879,47 +898,30 @@ function SellDrawer({ position, onClose, onDone, connection, usdcBal }) {
           <Row label="Contracts" value={position.contracts.toFixed(2)} />
           <Row label="Avg price" value={`$${position.avgPriceUsd.toFixed(3)}`} />
           <Row label="Mark price" value={`$${position.markPriceUsd.toFixed(3)}`} />
-          <Row label="Gross sell value" value={fmtUsd(position.valueUsd)} />
-          <Row label="Platform fee (5%)" value={fmtUsd(feeUsd)} />
-          <Row label="Net to wallet" value={fmtUsd(netUsd)} valueColor={C.hl} bold />
+          <Row label="Sell value" value={fmtUsd(netUsd)} valueColor={C.hl} bold />
         </div>
 
-        <div style={{
-          padding: '9px 11px', borderRadius: 10,
-          background: 'rgba(168,127,255,.06)',
-          border: '1px solid rgba(168,127,255,.25)',
-          marginBottom: 10, fontSize: 10, color: C.ink, lineHeight: 1.4, ...T.body,
-        }}>
-          <div style={{ fontWeight: 700, color: C.violet, marginBottom: 3, fontSize: 10, letterSpacing: 0.5, ...T.mono }}>
-            ⓘ HOW PAYOUT WORKS
-          </div>
-          You'll receive <strong>JupUSD</strong> from Jupiter (1 JupUSD = $1). The 5% platform fee is paid in <strong>USDC</strong> from your existing balance.
-          Swap JupUSD → USDC anytime on the Swap page with near-zero fees.
+        <div style={{ padding: '9px 11px', borderRadius: 10, background: 'rgba(168,127,255,.06)', border: '1px solid rgba(168,127,255,.25)', marginBottom: 10, fontSize: 10, color: C.ink, lineHeight: 1.4, ...T.body }}>
+          <div style={{ fontWeight: 700, color: C.violet, marginBottom: 3, fontSize: 10, letterSpacing: 0.5, ...T.mono }}>ⓘ HOW PAYOUT WORKS</div>
+          You'll receive <strong>JupUSD</strong> from Jupiter (1 JupUSD = $1). Swap JupUSD → USDC anytime on the Swap page with near-zero fees.
         </div>
-
-        {!hasFeeFunds && (
-          <div style={{ marginBottom: 8, padding: 8, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', borderRadius: 10, fontSize: 11, color: C.amber, fontWeight: 600 }}>
-            Need {fmtUsd(feeUsd)} USDC in wallet to cover platform fee. You have {fmtUsd(Number(usdcBal)/1e6)}.
-          </div>
-        )}
 
         <SimNoticeBanner />
-
         {statusMsg && <StatusLine msg={statusMsg} />}
         {error && <ErrorLine msg={error} />}
 
         <PrimaryButton
           onClick={busy ? undefined : doSell}
-          disabled={busy || status === 'success' || !hasFeeFunds}
+          disabled={busy || status === 'success'}
           color={position.pnlUsd >= 0 ? 'yes' : 'no'}
-          label={busy ? (statusMsg || 'Working…') : status === 'success' ? '✓ Sold' : `Sell all · Net ${fmtUsd(netUsd)}`}
+          label={busy ? (statusMsg || 'Working…') : status === 'success' ? '✓ Sold' : `Sell all · ${fmtUsd(netUsd)}`}
         />
       </div>
     </div>
   );
 }
 
-function ClaimDrawer({ position, onClose, onDone, connection, usdcBal }) {
+function ClaimDrawer({ position, onClose, onDone, connection }) {
   const { publicKey, signAllTransactions } = useWallet();
   const [status, setStatus] = useState('idle');
   const [statusMsg, setStMsg] = useState('');
@@ -927,30 +929,22 @@ function ClaimDrawer({ position, onClose, onDone, connection, usdcBal }) {
 
   useBodyLock(true);
 
-  const busy = status === 'working';
-
-  const feeUsd      = position.payoutUsd * (FEE_BPS / 10000);
-  const feeAtm      = BigInt(Math.floor(feeUsd * 1e6));
-  const netUsd      = position.payoutUsd - feeUsd;
-  const hasFeeFunds = usdcBal >= feeAtm;
+  const busy   = status === 'working';
+  const netUsd = position.payoutUsd;
 
   const doClaim = useCallback(async () => {
     if (!publicKey) return;
     if (!signAllTransactions) { setError('Wallet lacks signAllTransactions'); return; }
-    if (!hasFeeFunds) { setError(`Need ${fmtUsd(feeUsd)} USDC for platform fee`); return; }
     setStatus('working'); setError(''); setStMsg('Building claim…');
     try {
       const ownerPubkey = publicKey.toBase58();
-
       const { tx: claimTx } = await buildClaimTx({ ownerPubkey, positionPubkey: position.positionPubkey });
-      const { tx: feeTx }   = await buildFeeTx({ ownerPubkey, feeAmountUsdcAtomic: feeAtm, connection });
 
       setStMsg('Checking…');
       await simulateOrThrow(connection, claimTx, 'claim');
-      await simulateOrThrow(connection, feeTx,   'claim-fee');
 
       setStMsg('Confirm in your wallet…');
-      const signed = await signAllTransactions([claimTx, feeTx]);
+      const signed = await signAllTransactions([claimTx]);
 
       const { pending, sigs } = await submitAndConfirm(connection, signed, setStMsg);
       if (pending) {
@@ -969,7 +963,7 @@ function ClaimDrawer({ position, onClose, onDone, connection, usdcBal }) {
       setStatus('error'); setStMsg('');
       setTimeout(() => setStatus('idle'), 5000);
     }
-  }, [publicKey, signAllTransactions, position, feeAtm, hasFeeFunds, feeUsd, connection, onClose, onDone]);
+  }, [publicKey, signAllTransactions, position, connection, onClose, onDone]);
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
@@ -979,42 +973,26 @@ function ClaimDrawer({ position, onClose, onDone, connection, usdcBal }) {
         <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 8, ...T.body }}>{position.title}</div>
         <div style={{ padding: 10, borderRadius: 10, background: 'rgba(0,212,163,.05)', border: `1px solid rgba(0,212,163,.20)`, marginBottom: 10, ...T.mono, fontSize: 11 }}>
           <Row label="Contracts won" value={position.contracts.toFixed(2)} />
-          <Row label="Gross payout" value={fmtUsd(position.payoutUsd)} />
-          <Row label="Platform fee (5%)" value={fmtUsd(feeUsd)} />
-          <Row label="Net to wallet" value={fmtUsd(netUsd)} valueColor={C.yes} bold />
+          <Row label="Payout" value={fmtUsd(netUsd)} valueColor={C.yes} bold />
         </div>
 
-        <div style={{
-          padding: '9px 11px', borderRadius: 10,
-          background: 'rgba(168,127,255,.06)',
-          border: '1px solid rgba(168,127,255,.25)',
-          marginBottom: 10, fontSize: 10, color: C.ink, lineHeight: 1.5, ...T.body,
-        }}>
-          <div style={{ fontWeight: 700, color: C.violet, marginBottom: 3, fontSize: 10, letterSpacing: 0.5, ...T.mono }}>
-            ⓘ HOW PAYOUTS WORK
-          </div>
-          Each winning contract = $1.00 paid in <strong>JupUSD</strong> from Jupiter. 5% platform fee is paid in <strong>USDC</strong> from your existing balance.
-          Swap JupUSD → USDC anytime on the Swap page with near-zero fees.
+        <div style={{ padding: '9px 11px', borderRadius: 10, background: 'rgba(168,127,255,.06)', border: '1px solid rgba(168,127,255,.25)', marginBottom: 10, fontSize: 10, color: C.ink, lineHeight: 1.5, ...T.body }}>
+          <div style={{ fontWeight: 700, color: C.violet, marginBottom: 3, fontSize: 10, letterSpacing: 0.5, ...T.mono }}>ⓘ HOW PAYOUTS WORK</div>
+          Each winning contract = $1.00 paid in <strong>JupUSD</strong> from Jupiter. Swap JupUSD → USDC anytime on the Swap page with near-zero fees.
           <div style={{ marginTop: 5, color: C.muted, fontSize: 9 }}>
-            Don't claim within 24h? Jupiter auto-claims for you — no platform fee applies in that case.
+            Don't claim within 24h? Jupiter auto-claims for you.
           </div>
         </div>
-
-        {!hasFeeFunds && (
-          <div style={{ marginBottom: 8, padding: 8, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', borderRadius: 10, fontSize: 11, color: C.amber, fontWeight: 600 }}>
-            Need {fmtUsd(feeUsd)} USDC in wallet to cover platform fee. You have {fmtUsd(Number(usdcBal)/1e6)}.
-          </div>
-        )}
 
         <SimNoticeBanner />
-
         {statusMsg && <StatusLine msg={statusMsg} />}
         {error && <ErrorLine msg={error} />}
+
         <PrimaryButton
           onClick={busy ? undefined : doClaim}
-          disabled={busy || status === 'success' || !hasFeeFunds}
+          disabled={busy || status === 'success'}
           color="yes"
-          label={busy ? (statusMsg || 'Working…') : status === 'success' ? '✓ Claimed' : `Claim · Net ${fmtUsd(netUsd)}`}
+          label={busy ? (statusMsg || 'Working…') : status === 'success' ? '✓ Claimed' : `Claim · ${fmtUsd(netUsd)}`}
         />
       </div>
     </div>
@@ -1027,24 +1005,23 @@ function ClaimDrawer({ position, onClose, onDone, connection, usdcBal }) {
 
 export default function Predict() {
   const { publicKey, connected } = useWallet();
-  const [tab, setTab]         = useState('markets');
+  const [tab, setTab]           = useState('markets');
   const [category, setCategory] = useState('all');
-  const [sortBy, setSortBy]   = useState('volume');
-  const [search, setSearch]   = useState('');
+  const [sortBy, setSortBy]     = useState('volume');
+  const [search, setSearch]     = useState('');
 
-  const [events, setEvents]   = useState([]);
-  const [evLoading, setEvLoading] = useState(true);
-  const [evError, setEvError] = useState(null);
+  const [events, setEvents]         = useState([]);
+  const [evLoading, setEvLoading]   = useState(true);
+  const [evError, setEvError]       = useState(null);
 
-  const [positions, setPositions] = useState([]);
+  const [positions, setPositions]   = useState([]);
   const [posLoading, setPosLoading] = useState(false);
 
-  const [solBal, setSolBal]   = useState(0n);
-  const [usdcBal, setUsdcBal] = useState(0n);
+  const [solBal, setSolBal] = useState(0n);
 
   const [buyState, setBuyState]   = useState(null);
   const [actionPos, setActionPos] = useState(null);
-  const [toast, setToast] = useState('');
+  const [toast, setToast]         = useState('');
 
   const connection = useMemo(() => {
     const origin = (typeof window !== 'undefined' && window.location?.origin) || '';
@@ -1052,23 +1029,17 @@ export default function Predict() {
   }, []);
 
   const refreshBalances = useCallback(async () => {
-    if (!publicKey) { setSolBal(0n); setUsdcBal(0n); return; }
-    const [s, u] = await Promise.all([
-      fetchSolBalance(connection, publicKey.toBase58()),
-      fetchUsdcBalance(connection, publicKey.toBase58()),
-    ]);
-    setSolBal(s); setUsdcBal(u);
+    if (!publicKey) { setSolBal(0n); return; }
+    const s = await fetchSolBalance(connection, publicKey.toBase58());
+    setSolBal(s);
   }, [publicKey, connection]);
 
   useEffect(() => {
-    if (!publicKey) { setSolBal(0n); setUsdcBal(0n); return; }
+    if (!publicKey) { setSolBal(0n); return; }
     let alive = true;
     const tick = async () => {
-      const [s, u] = await Promise.all([
-        fetchSolBalance(connection, publicKey.toBase58()),
-        fetchUsdcBalance(connection, publicKey.toBase58()),
-      ]);
-      if (alive) { setSolBal(s); setUsdcBal(u); }
+      const s = await fetchSolBalance(connection, publicKey.toBase58());
+      if (alive) setSolBal(s);
     };
     tick();
     const id = setInterval(tick, 300000);
@@ -1092,6 +1063,7 @@ export default function Predict() {
       setEvLoading(false);
     }
   }, [category]);
+
   useEffect(() => {
     setEvLoading(true);
     reloadEvents();
@@ -1111,6 +1083,7 @@ export default function Predict() {
       setPosLoading(false);
     }
   }, [publicKey]);
+
   useEffect(() => {
     if (tab !== 'positions' || !publicKey) return;
     reloadPositions();
@@ -1149,7 +1122,7 @@ export default function Predict() {
 
         <PageHeader
           connected={connected}
-          solBal={solBal} usdcBal={usdcBal}
+          solBal={solBal}
           tab={tab} setTab={setTab}
           pubkey={publicKey?.toBase58()}
           onCopy={handleCopyAddr}
@@ -1234,7 +1207,7 @@ export default function Predict() {
           isYes={buyState.isYes}
           onClose={() => setBuyState(null)}
           onDone={() => { reloadEvents(); reloadPositions(); refreshBalances(); }}
-          solBal={solBal} usdcBal={usdcBal}
+          solBal={solBal}
           connection={connection}
         />
       )}
@@ -1245,7 +1218,6 @@ export default function Predict() {
           onClose={() => setActionPos(null)}
           onDone={() => reloadPositions()}
           connection={connection}
-          usdcBal={usdcBal}
         />
       )}
 
@@ -1255,7 +1227,6 @@ export default function Predict() {
           onClose={() => setActionPos(null)}
           onDone={() => reloadPositions()}
           connection={connection}
-          usdcBal={usdcBal}
         />
       )}
     </>
