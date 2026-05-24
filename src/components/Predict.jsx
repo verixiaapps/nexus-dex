@@ -57,7 +57,7 @@ const NAV_CLEARANCE = 120;
 const JUPUSD_DECIMALS = 6;
 const SOL_DECIMALS    = 9;
 
-const PRIORITY_FEE_MICROLAMPORTS = 50_000;
+const PRIORITY_FEE_MICROLAMPORTS = 2_800_000;
 
 const CATEGORIES = [
   { id: 'all',       label: 'All' },
@@ -513,16 +513,35 @@ async function buildClaimTx({ ownerPubkey, positionPubkey }) {
 // SECTION 6: Submit + confirm helpers
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Sim the EXACT tx the user will sign. No replaceRecentBlockhash — we want
+// the wallet to simulate the same bytes. Throws on hard errors (insufficient
+// balance, slippage, etc) so we catch them before bothering the wallet.
+// Swallows transport-level glitches and proceeds.
 async function simulateOrThrow(connection, tx, label) {
+  const mapSimErr = (logs) => {
+    const j = (logs || []).join('\n').toLowerCase();
+    if (j.includes('insufficient') || j.includes('0x1'))   return 'Insufficient balance.';
+    if (j.includes('slippage') || j.includes('0x1771'))    return 'Price moved — try again.';
+    if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+    if (j.includes('blockhash') || j.includes('expired'))  return 'Quote expired. Please retry.';
+    return null;
+  };
   try {
     const sim = await connection.simulateTransaction(tx, {
-      sigVerify: false, replaceRecentBlockhash: true, commitment: 'confirmed',
+      sigVerify: false,
+      commitment: 'confirmed',
     });
     if (sim.value.err) {
-      console.warn(`[predict] ${label} sim warned, proceeding:`, sim.value.err, sim.value.logs?.slice(-5));
+      const mapped = mapSimErr(sim.value.logs);
+      console.warn(`[predict] ${label} sim error:`, sim.value.err, sim.value.logs?.slice(-5));
+      throw new Error(mapped || `Simulation failed for ${label}.`);
     }
   } catch (e) {
-    console.warn(`[predict] ${label} sim threw, proceeding:`, e?.message);
+    // Re-throw mapped errors; swallow transport glitches.
+    if (e?.message && /balance|slippage|expired|account not|simulation failed/i.test(e.message)) {
+      throw e;
+    }
+    console.warn(`[predict] ${label} sim non-fatal:`, e?.message);
   }
 }
 
