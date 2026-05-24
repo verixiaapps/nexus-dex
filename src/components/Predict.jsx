@@ -2,52 +2,62 @@
 //
 // Spec: https://dev.jup.ag/docs/prediction
 //
-// FEE MODEL: 5% platform fee on buys, collected via Jupiter Metis swap
-// platformFeeBps=500. Fee is baked into the SOL→JupUSD swap — no separate
-// transfer instruction. FEE_WALLET's JupUSD ATA receives fees directly from
-// Jupiter's swap program. Blowfish sees two clean Jupiter transactions.
+// ─── FLOW ────────────────────────────────────────────────────────────────────
+// BUY (SOL only, two signatures):
+//   Sig 1 — ATOMIC: SOL fee → FEE_WALLET + SOL → JupUSD swap (one tx, one sig)
+//           Built from Jupiter /build instructions, fee is a manual
+//           SystemProgram.transfer BEFORE Jupiter's setup ixs. Blowfish sees
+//           the full net effect (fee + swap) in one simulation.
+//   Sig 2 — Jupiter Predict order with JupUSD deposit (sealed tx from /orders)
 //
-// BUY FLOW (SOL only):
-//   Tx 1: Metis swap SOL→JupUSD (ExactIn, platformFeeBps=500) — fee to FEE_WALLET
-//   Tx 2: Jupiter Predict order with post-fee JupUSD output (depositMint=JUPUSD)
-//   Both submitted via signAllTransactions — one wallet popup.
+// SELL / CLAIM (two signatures):
+//   Sig 1 — Sell or claim tx from Jupiter Predict (sealed)
+//   Sig 2 — ATOMIC: JupUSD fee → FEE_WALLET + JupUSD → SOL swap (one tx, one sig)
 //
-// Jupiter Predict requires JupUSD as the deposit mint — USDC is not accepted.
+// ─── FEE MODEL ──────────────────────────────────────────────────────────────
+// 5% fee on every swap leg, taken in the INPUT mint, via manual transfer
+// instruction composed INTO the swap tx. Same pattern as Swap.jsx widget.
+// No platformFeeBps. Fee lands in FEE_WALLET before Jupiter touches anything.
 //
-// SELLS / CLAIMS: No platform fee. Transactions untouched.
+// ─── DEPOSIT MINT ───────────────────────────────────────────────────────────
+// Jupiter Predict accepts USDC or JupUSD as depositMint. We use JupUSD
+// throughout — single mint pipeline keeps the code clean and matches the
+// swap target.
 //
-// SLIPPAGE: 10% tolerance on the Predict order's minContracts floor.
-//
-// PHANTOM SIM: Phantom's wallet sim can't fully resolve Predict txs
-// (keeper-filled accounts, async fills) and shows "simulation failed."
-// The tx still lands on-chain. We display a friendly banner before the
-// signature popup to set user expectations.
-//
-// IMPORTANT: FEE_WALLET's JupUSD ATA must already exist on-chain. Send any
-// amount of JupUSD to FEE_WALLET once before going live so the ATA is created.
+// ─── WHY TWO SIGS ───────────────────────────────────────────────────────────
+// Predict /orders returns a sealed (pre-built) transaction. It cannot be
+// composed with the swap, and the API validates JupUSD balance at build time.
+// So the swap must land BEFORE we ask Predict to build the order. Two
+// signatures, clearly labeled "Step 1 of 2: Swap" and "Step 2 of 2: Order".
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import { Buffer } from 'buffer';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
   Connection, PublicKey, VersionedTransaction, TransactionMessage,
-  SystemProgram, TransactionInstruction, AddressLookupTableAccount,
+  SystemProgram, AddressLookupTableAccount,
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddressSync,
+  createAssociatedTokenAccountIdempotentInstruction,
+  createTransferCheckedInstruction,
+  TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const USDC_MINT     = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOL_MINT      = 'So11111111111111111111111111111111111111112';
 const JUPUSD_MINT   = 'JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD';
-const FEE_WALLET    = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
-const FEE_BPS       = 500;   // 5% — collected via Metis platformFeeBps
+const FEE_WALLET_B58 = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
+const FEE_WALLET    = new PublicKey(FEE_WALLET_B58);
+const FEE_BPS       = 500;   // 5% — taken in input mint
 const SLIPPAGE_BPS  = 1000;  // 10% swap slippage tolerance
 const SOL_RPC       = '/api/solana-rpc';
 const MIN_TRADE_USD = 5;
 const NAV_CLEARANCE = 120;
+const JUPUSD_DECIMALS = 6;
+const SOL_DECIMALS    = 9;
 
-const JUPITER_PRIORITY_LAMPORTS  = 1_000_000;
+const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 
 const CATEGORIES = [
   { id: 'all',       label: 'All' },
@@ -174,6 +184,31 @@ async function copyToClipboard(text) {
   return false;
 }
 
+function friendlyError(err) {
+  const m = String(err?.message || err || '').toLowerCase();
+  if (m.includes('insufficient'))      return 'Insufficient balance.';
+  if (m.includes('slippage'))          return 'Price moved too much. Try again.';
+  if (m.includes('blockhash') || m.includes('expired'))
+    return 'Transaction expired. Please try again.';
+  if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled') || m.includes('cancel'))
+    return 'Cancelled.';
+  if (m.includes('simulation failed')) return 'Simulation failed — the price may have moved.';
+  if (m.includes('no route'))          return 'No swap route available right now.';
+  if (m.includes('too large'))         return 'Transaction too complex. Try a smaller amount.';
+  return err?.message || 'Something went wrong. Please try again.';
+}
+
+// Deserialize a Jupiter /build instruction into a web3.js TransactionInstruction-shaped object.
+const deserIx = (ix) => ({
+  programId: new PublicKey(ix.programId),
+  keys: ix.accounts.map(a => ({
+    pubkey:     new PublicKey(a.pubkey),
+    isSigner:   a.isSigner,
+    isWritable: a.isWritable,
+  })),
+  data: Buffer.from(ix.data, 'base64'),
+});
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 2: Solana balances
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -184,10 +219,11 @@ async function fetchSolBalance(connection, ownerB58) {
     return BigInt(lamports);
   } catch { return 0n; }
 }
-async function fetchUsdcBalance(connection, ownerB58) {
+
+async function fetchJupUsdBalance(connection, ownerB58) {
   try {
     const owner = new PublicKey(ownerB58);
-    const ata   = getAssociatedTokenAddressSync(new PublicKey(USDC_MINT), owner);
+    const ata   = getAssociatedTokenAddressSync(new PublicKey(JUPUSD_MINT), owner);
     const bal   = await connection.getTokenAccountBalance(ata, 'confirmed');
     return BigInt(bal.value.amount || 0);
   } catch { return 0n; }
@@ -276,172 +312,178 @@ function pickPositionFields(p) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 4: Transaction building
+// SECTION 4: ATOMIC SWAP — fee + swap composed into one signed transaction
+// ═══════════════════════════════════════════════════════════════════════════════
+//
+// Same pattern as the Swap.jsx widget:
+//   1. Compute fee in input mint (5% of gross)
+//   2. Quote Jupiter for the NET amount (95%)
+//   3. Build single tx: [computeBudget] [fee transfer] [Jupiter setup] [swap] [cleanup]
+//   4. One signature, atomic on-chain, clean Blowfish sim.
+
+/**
+ * SOL → JupUSD atomic swap with 5% SOL fee.
+ *
+ * @param {Object} args
+ * @param {Connection} args.connection
+ * @param {PublicKey}  args.ownerPubkey
+ * @param {bigint}     args.grossLamports   total SOL the user is spending (fee + swap)
+ * @returns {Promise<{tx: VersionedTransaction, expectedJupUsdAtomic: bigint, latestBlockhash: object}>}
+ */
+async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }) {
+  const feeLamports = (grossLamports * BigInt(FEE_BPS)) / 10000n;
+  const netLamports = grossLamports - feeLamports;
+  if (feeLamports <= 0n) throw new Error('Fee rounds to zero — amount too small.');
+  if (netLamports <= 0n) throw new Error('Net amount after fee is zero.');
+
+  // Ask Jupiter to route ONLY the net amount.
+  const params = new URLSearchParams({
+    inputMint:   SOL_MINT,
+    outputMint:  JUPUSD_MINT,
+    amount:      netLamports.toString(),
+    slippageBps: String(SLIPPAGE_BPS),
+    taker:       ownerPubkey.toBase58(),
+    computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
+  });
+  const r = await jfetch(`/api/jupiter/build?${params}`);
+  const build = await r.json();
+  if (!build?.swapInstruction) throw new Error('Jupiter /build returned no swapInstruction');
+
+  const expectedJupUsdAtomic = BigInt(build.outAmount || 0);
+  if (expectedJupUsdAtomic <= 0n) throw new Error('Jupiter quote returned zero output');
+
+  // Build the fee transfer (SOL → FEE_WALLET) BEFORE Jupiter wraps the rest.
+  const feeIx = SystemProgram.transfer({
+    fromPubkey: ownerPubkey,
+    toPubkey:   FEE_WALLET,
+    lamports:   Number(feeLamports),   // safe: 5% of a reasonable SOL trade fits in Number
+  });
+
+  // Assemble: compute-budget → fee → setup → swap → cleanup → other
+  const ixs = [];
+  if (Array.isArray(build.computeBudgetInstructions))
+    for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
+  ixs.push(feeIx);
+  if (Array.isArray(build.setupInstructions))
+    for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+  if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+  if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+  if (Array.isArray(build.otherInstructions))
+    for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+
+  // Resolve ALTs
+  const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+  let alts = [];
+  if (altKeys.length > 0) {
+    const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
+    alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+      key:   new PublicKey(k),
+      state: AddressLookupTableAccount.deserialize(infos[i].data),
+    }) : null).filter(Boolean);
+  }
+
+  const latestBlockhash = await connection.getLatestBlockhash('confirmed');
+  const message = new TransactionMessage({
+    payerKey:        ownerPubkey,
+    recentBlockhash: latestBlockhash.blockhash,
+    instructions:    ixs,
+  }).compileToV0Message(alts);
+
+  const tx = new VersionedTransaction(message);
+  return { tx, expectedJupUsdAtomic, latestBlockhash };
+}
+
+/**
+ * JupUSD → SOL atomic swap with 5% JupUSD fee.
+ * Used after sell / claim to convert winnings back to SOL.
+ *
+ * @param {Object} args
+ * @param {Connection} args.connection
+ * @param {PublicKey}  args.ownerPubkey
+ * @param {bigint}     args.grossJupUsdAtomic   total JupUSD to spend (fee + swap)
+ */
+async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtomic }) {
+  const feeAtomic = (grossJupUsdAtomic * BigInt(FEE_BPS)) / 10000n;
+  const netAtomic = grossJupUsdAtomic - feeAtomic;
+  if (feeAtomic <= 0n) throw new Error('Fee rounds to zero — amount too small.');
+  if (netAtomic <= 0n) throw new Error('Net amount after fee is zero.');
+
+  const params = new URLSearchParams({
+    inputMint:   JUPUSD_MINT,
+    outputMint:  SOL_MINT,
+    amount:      netAtomic.toString(),
+    slippageBps: String(SLIPPAGE_BPS),
+    taker:       ownerPubkey.toBase58(),
+    computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
+  });
+  const r = await jfetch(`/api/jupiter/build?${params}`);
+  const build = await r.json();
+  if (!build?.swapInstruction) throw new Error('Jupiter /build returned no swapInstruction');
+
+  const expectedSolLamports = BigInt(build.outAmount || 0);
+
+  // Fee is an SPL transfer in JupUSD. Need source/dest ATAs.
+  const mintPk    = new PublicKey(JUPUSD_MINT);
+  const sourceAta = getAssociatedTokenAddressSync(mintPk, ownerPubkey, true, TOKEN_PROGRAM_ID);
+  const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,  true, TOKEN_PROGRAM_ID);
+
+  const ataIx = createAssociatedTokenAccountIdempotentInstruction(
+    ownerPubkey, destAta, FEE_WALLET, mintPk, TOKEN_PROGRAM_ID,
+  );
+  const transferIx = createTransferCheckedInstruction(
+    sourceAta, mintPk, destAta, ownerPubkey,
+    feeAtomic, JUPUSD_DECIMALS, [], TOKEN_PROGRAM_ID,
+  );
+
+  const ixs = [];
+  if (Array.isArray(build.computeBudgetInstructions))
+    for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
+  ixs.push(ataIx);
+  ixs.push(transferIx);
+  if (Array.isArray(build.setupInstructions))
+    for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+  if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+  if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+  if (Array.isArray(build.otherInstructions))
+    for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+
+  const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+  let alts = [];
+  if (altKeys.length > 0) {
+    const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
+    alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+      key:   new PublicKey(k),
+      state: AddressLookupTableAccount.deserialize(infos[i].data),
+    }) : null).filter(Boolean);
+  }
+
+  const latestBlockhash = await connection.getLatestBlockhash('confirmed');
+  const message = new TransactionMessage({
+    payerKey:        ownerPubkey,
+    recentBlockhash: latestBlockhash.blockhash,
+    instructions:    ixs,
+  }).compileToV0Message(alts);
+
+  const tx = new VersionedTransaction(message);
+  return { tx, expectedSolLamports, latestBlockhash };
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 5: Predict order builders (sealed txs from /orders, /positions/...)
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// ─── SOL → JupUSD swap: Jupiter → OKX → LiFi fallback ───────────────────────
-// Fee taken in SOL (input token) via platformFeeBps where supported.
-// OKX and LiFi collect fee via their own referral/fee mechanisms.
-// Jupiter Predict requires JupUSD as depositMint — USDC is not accepted.
-// solLamports stays BigInt throughout — String(BigInt) = clean integer string.
-
-// Helper: deserialize Jupiter instruction format into web3.js TransactionInstruction
-function deserializeJupiterIx(ix) {
-  return new TransactionInstruction({
-    programId: new PublicKey(ix.programId),
-    keys: ix.accounts.map(a => ({
-      pubkey: new PublicKey(a.pubkey),
-      isSigner: a.isSigner,
-      isWritable: a.isWritable,
-    })),
-    data: Buffer.from(ix.data, 'base64'),
-  });
-}
-
-// Fetch address lookup tables referenced by the swap
-async function fetchLookupTables(connection, addresses) {
-  if (!addresses?.length) return [];
-  const result = await Promise.all(
-    addresses.map(addr =>
-      connection.getAddressLookupTable(new PublicKey(addr)).then(r => r.value).catch(() => null)
-    )
-  );
-  return result.filter(Boolean);
-}
-
-async function swapSolToUsdcViaJupiter({ ownerPubkey, solLamports, connection }) {
-  // Calculate 5% fee in SOL — taken via direct transfer to FEE_WALLET
-  const feeLamports  = (solLamports * BigInt(FEE_BPS)) / 10000n;
-  const swapLamports = solLamports - feeLamports;
-
-  // Step 1: Quote SOL→USDC for the post-fee amount, no platformFeeBps
-  const quoteParams = new URLSearchParams({
-    inputMint:   SOL_MINT,
-    outputMint:  USDC_MINT,
-    amount:      String(swapLamports),
-    swapMode:    'ExactIn',
-    slippageBps: String(SLIPPAGE_BPS),
-  });
-  const quoteRes = await jfetch(`/api/jupiter/quote?${quoteParams}`);
-  const quote    = await quoteRes.json();
-  if (!quote?.outAmount) throw new Error('Jupiter: quote failed');
-
-  const postFeeUsdcAtomic = BigInt(quote.outAmount);
-
-  // Step 2: Get raw swap instructions (not pre-assembled tx)
-  const swapIxRes = await jfetch('/api/jupiter/swap-instructions', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      quoteResponse:           quote,
-      userPublicKey:           ownerPubkey,
-      dynamicComputeUnitLimit: true,
-      prioritizationFeeLamports: {
-        priorityLevelWithMaxLamports: {
-          maxLamports:   JUPITER_PRIORITY_LAMPORTS,
-          priorityLevel: 'veryHigh',
-        },
-      },
-    }),
-  });
-  const ix = await swapIxRes.json();
-  if (!ix?.swapInstruction) throw new Error('Jupiter: no swapInstruction');
-
-  // Step 3: Build the fee transfer instruction (SOL → FEE_WALLET)
-  const feeTransferIx = SystemProgram.transfer({
-    fromPubkey: new PublicKey(ownerPubkey),
-    toPubkey:   new PublicKey(FEE_WALLET),
-    lamports:   feeLamports,
-  });
-
-  // Step 4: Assemble instructions in order
-  const instructions = [
-    ...(ix.computeBudgetInstructions  || []).map(deserializeJupiterIx),
-    ...(ix.setupInstructions          || []).map(deserializeJupiterIx),
-    feeTransferIx,
-    deserializeJupiterIx(ix.swapInstruction),
-    ...(ix.cleanupInstruction ? [deserializeJupiterIx(ix.cleanupInstruction)] : []),
-  ];
-
-  // Step 5: Fetch ALTs and compile a v0 transaction
-  const lookupTables = await fetchLookupTables(connection, ix.addressLookupTableAddresses || []);
-  const { blockhash } = await connection.getLatestBlockhash('confirmed');
-  const message = new TransactionMessage({
-    payerKey: new PublicKey(ownerPubkey),
-    recentBlockhash: blockhash,
-    instructions,
-  }).compileToV0Message(lookupTables);
-
-  const swapTx = new VersionedTransaction(message);
-  return { swapTx, postFeeUsdcAtomic };
-}
-
-async function swapSolToJupUsdViaOkx({ ownerPubkey, solLamports }) {
-  // OKX Solana DEX aggregator — fee injected server-side via OKX_FEE_WALLET_SOL
-  const quoteParams = new URLSearchParams({
-    chainIndex:      '501',
-    fromTokenAddress: SOL_MINT,
-    toTokenAddress:   USDC_MINT,
-    amount:           String(solLamports),
-    slippagePercent:  '0.1',
-    userWalletAddress: ownerPubkey,
-  });
-  const quoteRes  = await jfetch(`/api/okx/dex/aggregator/quote?${quoteParams}`);
-  const quoteData = await quoteRes.json();
-  const route = quoteData?.data?.[0];
-  if (!route?.toTokenAmount) throw new Error('OKX: no quote');
-
-  const swapParams = new URLSearchParams({
-    chainIndex:        '501',
-    fromTokenAddress:  SOL_MINT,
-    toTokenAddress:    USDC_MINT,
-    amount:            String(solLamports),
-    slippagePercent:   '0.1',
-    userWalletAddress: ownerPubkey,
-  });
-  const swapRes  = await jfetch(`/api/okx/dex/aggregator/swap?${swapParams}`);
-  const swapData = await swapRes.json();
-  const txData   = swapData?.data?.[0]?.tx?.data;
-  if (!txData) throw new Error('OKX: no transaction data');
-
-  const postFeeUsdcAtomic = BigInt(route.toTokenAmount);
-  const swapTx = VersionedTransaction.deserialize(b64ToBytes(txData));
-  return { swapTx, postFeeUsdcAtomic };
-}
-
-async function buildMetisSwapTx({ ownerPubkey, solLamports, connection }) {
-  const attempts = [
-    { name: 'Jupiter', fn: () => swapSolToUsdcViaJupiter({ ownerPubkey, solLamports, connection }) },
-    { name: 'OKX',     fn: () => swapSolToJupUsdViaOkx({ ownerPubkey, solLamports }) },
-  ];
-  const errors = [];
-  for (const { name, fn } of attempts) {
-    try {
-      console.log(`[swap] trying ${name}…`);
-      return await fn();
-    } catch (e) {
-      console.warn(`[swap] ${name} failed:`, e?.message);
-      errors.push(`${name}: ${e?.message || 'unknown'}`);
-    }
-  }
-  throw new Error('All swap providers failed. ' + errors.join(' | '));
-}
-
-// ─── Jupiter Predict buy order ───────────────────────────────────────────────
-// depositAmountJupUsdAtomic is a BigInt — String(BigInt) is a clean integer.
-// depositMint must be JUPUSD_MINT — Jupiter Predict does not accept USDC.
-async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomic }) {
+async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountJupUsdAtomic }) {
   const r = await jfetch('/api/predict/orders', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       ownerPubkey, marketId, isYes, isBuy: true,
-      depositAmount: String(depositAmountUsdcAtomic),  // BigInt → clean integer string
-      depositMint:   USDC_MINT,                         // USDC for Jupiter Predict
+      depositAmount: depositAmountJupUsdAtomic.toString(),  // BigInt → integer string
+      depositMint:   JUPUSD_MINT,
     }),
   });
   const j = await r.json();
-  if (!j?.transaction) throw new Error('Jupiter returned no transaction');
+  if (!j?.transaction) throw new Error('Jupiter Predict returned no transaction');
   return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)), orderInfo: j.order || null };
 }
 
@@ -467,101 +509,10 @@ async function buildClaimTx({ ownerPubkey, positionPubkey }) {
   return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)) };
 }
 
-// ─── JupUSD → SOL swap: Jupiter → OKX → LiFi fallback ───────────────────────
-// Fee taken in JupUSD (input token). Used after sell/claim to convert winnings.
+// ═══════════════════════════════════════════════════════════════════════════════
+// SECTION 6: Submit + confirm helpers
+// ═══════════════════════════════════════════════════════════════════════════════
 
-async function swapJupUsdToSolViaJupiter({ ownerPubkey, jupUsdAtomic }) {
-  const feeWallet  = new PublicKey(FEE_WALLET);
-  const jupUsdMint = new PublicKey(JUPUSD_MINT);
-  const feeAccount = getAssociatedTokenAddressSync(jupUsdMint, feeWallet).toBase58();
-
-  const quoteParams = new URLSearchParams({
-    inputMint:                  JUPUSD_MINT,
-    outputMint:                 SOL_MINT,
-    amount:                     String(jupUsdAtomic),
-    swapMode:                   'ExactIn',
-    slippageBps:                String(SLIPPAGE_BPS),
-    platformFeeBps:             String(FEE_BPS),
-  });
-  const quoteRes = await jfetch(`/api/jupiter/quote?${quoteParams}`);
-  const quote    = await quoteRes.json();
-  if (!quote?.outAmount) throw new Error('Jupiter: quote failed');
-
-  const postFeeSolLamports = BigInt(quote.outAmount);
-
-  const swapRes = await jfetch('/api/jupiter/swap', {
-    method:  'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      quoteResponse:             quote,
-      userPublicKey:             ownerPubkey,
-      feeAccount,
-      dynamicComputeUnitLimit:   true,
-      prioritizationFeeLamports: {
-        priorityLevelWithMaxLamports: {
-          maxLamports:   JUPITER_PRIORITY_LAMPORTS,
-          priorityLevel: 'veryHigh',
-        },
-      },
-    }),
-  });
-  const swapData = await swapRes.json();
-  if (!swapData?.swapTransaction) throw new Error('Jupiter: no swapTransaction');
-  const swapTx = VersionedTransaction.deserialize(b64ToBytes(swapData.swapTransaction));
-  return { swapTx, postFeeSolLamports };
-}
-
-async function swapJupUsdToSolViaOkx({ ownerPubkey, jupUsdAtomic }) {
-  const quoteParams = new URLSearchParams({
-    chainIndex:        '501',
-    fromTokenAddress:  JUPUSD_MINT,
-    toTokenAddress:    SOL_MINT,
-    amount:            String(jupUsdAtomic),
-    slippagePercent:   '0.1',
-    userWalletAddress: ownerPubkey,
-  });
-  const quoteRes  = await jfetch(`/api/okx/dex/aggregator/quote?${quoteParams}`);
-  const quoteData = await quoteRes.json();
-  const route     = quoteData?.data?.[0];
-  if (!route?.toTokenAmount) throw new Error('OKX: no quote');
-
-  const swapParams = new URLSearchParams({
-    chainIndex:        '501',
-    fromTokenAddress:  JUPUSD_MINT,
-    toTokenAddress:    SOL_MINT,
-    amount:            String(jupUsdAtomic),
-    slippagePercent:   '0.1',
-    userWalletAddress: ownerPubkey,
-  });
-  const swapRes  = await jfetch(`/api/okx/dex/aggregator/swap?${swapParams}`);
-  const swapData = await swapRes.json();
-  const txData   = swapData?.data?.[0]?.tx?.data;
-  if (!txData) throw new Error('OKX: no transaction data');
-
-  const postFeeSolLamports = BigInt(route.toTokenAmount);
-  const swapTx = VersionedTransaction.deserialize(b64ToBytes(txData));
-  return { swapTx, postFeeSolLamports };
-}
-
-async function buildJupUsdToSolSwapTx({ ownerPubkey, jupUsdAtomic }) {
-  const attempts = [
-    { name: 'Jupiter', fn: () => swapJupUsdToSolViaJupiter({ ownerPubkey, jupUsdAtomic }) },
-    { name: 'OKX',     fn: () => swapJupUsdToSolViaOkx({ ownerPubkey, jupUsdAtomic }) },
-  ];
-  const errors = [];
-  for (const { name, fn } of attempts) {
-    try {
-      console.log(`[swap] trying ${name}…`);
-      return await fn();
-    } catch (e) {
-      console.warn(`[swap] ${name} failed:`, e?.message);
-      errors.push(`${name}: ${e?.message || 'unknown'}`);
-    }
-  }
-  throw new Error('All swap providers failed. ' + errors.join(' | '));
-}
-
-// Debug-only sim. Logs to console; doesn't affect wallet flow.
 async function simulateOrThrow(connection, tx, label) {
   try {
     const sim = await connection.simulateTransaction(tx, {
@@ -575,56 +526,47 @@ async function simulateOrThrow(connection, tx, label) {
   }
 }
 
-async function submitAndConfirm(connection, signedTxs, setStMsg) {
+async function sendAndConfirm(connection, signedTx, blockhashInfo, setStMsg) {
   setStMsg('Submitting…');
-  const sigs = await Promise.all(signedTxs.map(stx =>
-    connection.sendRawTransaction(stx.serialize(), {
-      maxRetries: 5, skipPreflight: false, preflightCommitment: 'confirmed',
-    })
-  ));
+  const sig = await connection.sendRawTransaction(signedTx.serialize(), {
+    maxRetries: 5, skipPreflight: false, preflightCommitment: 'confirmed',
+  });
 
   setStMsg('Confirming…');
-  const bh = await connection.getLatestBlockhash('confirmed');
-  const results = await Promise.allSettled(sigs.map(sig =>
-    connection.confirmTransaction({
-      signature: sig,
-      blockhash: bh.blockhash,
-      lastValidBlockHeight: bh.lastValidBlockHeight,
-    }, 'confirmed')
-  ));
-
-  const onchainErr = results.find(r => r.status === 'fulfilled' && r.value?.value?.err);
-  if (onchainErr) {
-    throw new Error('On-chain error: ' + JSON.stringify(onchainErr.value.value.err));
-  }
-
-  const expired = results
-    .map((r, i) => r.status === 'rejected' ? sigs[i] : null)
-    .filter(Boolean);
-  if (expired.length) {
-    setStMsg('Verifying on-chain…');
-    const deadline = Date.now() + 15_000;
-    let allLanded = true;
+  const bh = blockhashInfo || await connection.getLatestBlockhash('confirmed');
+  try {
+    const conf = await Promise.race([
+      connection.confirmTransaction({
+        signature: sig,
+        blockhash: bh.blockhash,
+        lastValidBlockHeight: bh.lastValidBlockHeight,
+      }, 'confirmed'),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
+    ]);
+    if (conf?.value?.err) {
+      throw new Error('On-chain error: ' + JSON.stringify(conf.value.err));
+    }
+    return { sig, pending: false };
+  } catch (e) {
+    // Poll status as fallback
+    const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
-      const { value } = await connection.getSignatureStatuses(expired);
-      const stillPending = value.some(s => !s || (!s.confirmationStatus && !s.err));
-      const anyErr       = value.find(s => s?.err);
-      if (anyErr) {
-        throw new Error('On-chain error: ' + JSON.stringify(anyErr.err));
+      await new Promise(r => setTimeout(r, 2000));
+      try {
+        const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+        const cs = st?.value?.confirmationStatus;
+        if (st?.value?.err) throw new Error('On-chain error: ' + JSON.stringify(st.value.err));
+        if (cs === 'confirmed' || cs === 'finalized') return { sig, pending: false };
+      } catch (inner) {
+        if (/on-chain/i.test(String(inner?.message))) throw inner;
       }
-      if (!stillPending) break;
-      await new Promise(r => setTimeout(r, 1500));
-      if (Date.now() >= deadline) { allLanded = false; }
     }
-    if (!allLanded) {
-      return { pending: true, sigs };
-    }
+    return { sig, pending: true };
   }
-  return { pending: false, sigs };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 5: UI atoms
+// SECTION 7: UI atoms
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function Spinner({ size = 12, color = C.hl }) {
@@ -637,11 +579,14 @@ function Spinner({ size = 12, color = C.hl }) {
   );
 }
 
-function StatusLine({ msg }) {
+function StatusLine({ msg, step }) {
   return (
     <div style={{ marginBottom: 8, padding: 8, background: 'rgba(151,252,228,.05)', border: '1px solid rgba(151,252,228,.20)', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
       <Spinner />
-      <span style={{ fontSize: 11, color: C.ink, fontWeight: 600 }}>{msg}</span>
+      <div style={{ flex: 1 }}>
+        {step && <div style={{ fontSize: 9, color: C.hl, fontWeight: 800, letterSpacing: 1.2, ...T.mono, marginBottom: 1 }}>{step}</div>}
+        <span style={{ fontSize: 11, color: C.ink, fontWeight: 600 }}>{msg}</span>
+      </div>
     </div>
   );
 }
@@ -650,6 +595,24 @@ function ErrorLine({ msg }) {
   return (
     <div style={{ marginBottom: 8, padding: 8, background: 'rgba(255,95,122,.08)', border: '1px solid rgba(255,95,122,.25)', borderRadius: 10, fontSize: 11, color: C.no, wordBreak: 'break-word' }}>
       {msg}
+    </div>
+  );
+}
+
+function StepBadge({ current, total }) {
+  return (
+    <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
+      {Array.from({ length: total }).map((_, i) => {
+        const done   = i < current - 1;
+        const active = i === current - 1;
+        return (
+          <div key={i} style={{
+            flex: 1, height: 3, borderRadius: 2,
+            background: done ? C.hl : active ? C.hl2 : 'rgba(255,255,255,.08)',
+            transition: 'background .2s',
+          }} />
+        );
+      })}
     </div>
   );
 }
@@ -696,7 +659,7 @@ function Row({ label, value, valueColor, bold }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 6: Page header
+// SECTION 8: Page header
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function PageHeader({ connected, solBal, tab, setTab, pubkey, onCopy }) {
@@ -749,7 +712,7 @@ function PageHeader({ connected, solBal, tab, setTab, pubkey, onCopy }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 7: Market card + Buy drawer
+// SECTION 9: Market card + Buy drawer
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function MarketCard({ event, onTrade }) {
@@ -794,17 +757,14 @@ function MarketCard({ event, onTrade }) {
 }
 
 // ─── BuyDrawer ────────────────────────────────────────────────────────────────
-// BUY SUMMARY:
-//   1. solLamports stays BigInt — computed via BigInt(Math.round(solAmount * 1e9))
-//   2. postFeeJupUsdAtomic stays BigInt from buildMetisSwapTx — never cast to Number
-//   3. Minimum check uses BigInt comparison
-//   4. depositAmountJupUsdAtomic passed as BigInt — String(BigInt) is a clean integer
-//   5. depositMint=JUPUSD_MINT — Jupiter Predict requires JupUSD, not USDC
+// BUY FLOW:
+//   Step 1 of 2 — SIGN: Atomic [fee + swap] tx. SOL leaves wallet, JupUSD arrives.
+//   Step 2 of 2 — SIGN: Predict /orders tx. JupUSD deposited, contracts issued.
 function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
-  const { publicKey, signAllTransactions } = useWallet();
+  const { publicKey, signTransaction } = useWallet();
 
   const [amount, setAmount]   = useState('0.1');
-  const [status, setStatus]   = useState('idle');
+  const [step, setStep]       = useState(0);          // 0 idle, 1 swap, 2 order, 3 done
   const [statusMsg, setStMsg] = useState('');
   const [error, setError]     = useState('');
 
@@ -812,97 +772,114 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
 
   const m          = event.market;
   const solAmount  = Number(amount) || 0;
-  // FIX 1: Use BigInt arithmetic — Math.round avoids float edge cases like
-  // 0.1 * 1e9 = 99999999.99999999 before truncation.
-  const solLamports = BigInt(Math.round(solAmount * 1e9));
+  const grossLamports = BigInt(Math.round(solAmount * 1e9));
 
-  const estUsdcOut   = solAmount * 150;
-  const feeEstUsd    = estUsdcOut * (FEE_BPS / 10000);
-  const depositEstUsd = estUsdcOut - feeEstUsd;
-  const price        = isYes ? m.yesPrice : m.noPrice;
-  const contractsEst = price > 0 ? depositEstUsd / price : 0;
+  // Display-only estimates
+  const SOL_PRICE_GUESS = 150;
+  const estGrossUsd   = solAmount * SOL_PRICE_GUESS;
+  const estFeeUsd     = estGrossUsd * (FEE_BPS / 10000);
+  const estDepositUsd = estGrossUsd - estFeeUsd;
+  const price         = isYes ? m.yesPrice : m.noPrice;
+  const contractsEst  = price > 0 ? estDepositUsd / price : 0;
 
   const sideLabel = isYes ? 'YES' : 'NO';
   const sideColor = isYes ? C.yes : C.no;
   const sideDim   = isYes ? C.yesDim : C.noDim;
 
-  const hasSol = solBal >= solLamports && solLamports > 0n;
-  const busy   = status === 'working';
+  const hasSol = solBal >= grossLamports && grossLamports > 0n;
+  const busy   = step > 0 && step < 3;
   const canBuy = !busy && solAmount > 0 && publicKey && m.marketId && hasSol;
 
   const placeOrder = useCallback(async () => {
-    if (!publicKey) { setError('Connect wallet first'); return; }
-    if (!signAllTransactions) { setError('Wallet lacks signAllTransactions'); return; }
-
-    const estUsdcRough = solAmount * 100 * 0.95;
-    if (estUsdcRough < MIN_TRADE_USD) {
+    if (!publicKey || !signTransaction) {
+      setError('Connect a wallet that supports signTransaction.');
+      return;
+    }
+    if (estGrossUsd < MIN_TRADE_USD) {
       setError(`Minimum trade is $${MIN_TRADE_USD}. Try a larger SOL amount.`);
       return;
     }
 
-    setStatus('working'); setError(''); setStMsg('Getting swap quote…');
+    setError('');
 
     try {
-      const ownerPubkey = publicKey.toBase58();
-
+      // ─── STEP 1 of 2: ATOMIC SWAP (fee + SOL→JupUSD) ────────────────────
+      setStep(1);
       setStMsg('Building swap…');
-      const { swapTx, postFeeUsdcAtomic } = await buildMetisSwapTx({
-        ownerPubkey,
-        solLamports,  // already BigInt
-        connection,
-      });
 
-      if (postFeeUsdcAtomic <= 0n) throw new Error('Swap quote returned zero USDC');
+      const { tx: swapTx, expectedJupUsdAtomic, latestBlockhash: swapBh } =
+        await buildSolToJupUsdSwapTx({
+          connection,
+          ownerPubkey: publicKey,
+          grossLamports,
+        });
 
-      // Compare BigInt to BigInt — no Number() cast needed
-      const minUsdcAtomic = BigInt(Math.round(MIN_TRADE_USD * 1e6));
-      if (postFeeUsdcAtomic < minUsdcAtomic)
+      // Sanity: post-fee output should exceed minimum trade size
+      const minJupUsdAtomic = BigInt(Math.round(MIN_TRADE_USD * 1e6));
+      if (expectedJupUsdAtomic < minJupUsdAtomic) {
         throw new Error(`Minimum trade is $${MIN_TRADE_USD}. Try a larger SOL amount.`);
-
-      setStMsg('Building order…');
-      // Pass BigInt directly — buildBuyTx calls String() on it internally
-      const { tx: buyTx } = await buildBuyTx({
-        ownerPubkey,
-        marketId: m.marketId,
-        isYes,
-        depositAmountUsdcAtomic: postFeeUsdcAtomic,  // BigInt, no Number() cast
-      });
+      }
 
       setStMsg('Checking…');
       await simulateOrThrow(connection, swapTx, 'swap');
-      await simulateOrThrow(connection, buyTx,  'predict-buy');
 
-      setStMsg('Confirm in your wallet…');
-      const signed = await signAllTransactions([swapTx, buyTx]);
+      setStMsg('Confirm Step 1 of 2 in your wallet — Swap SOL → JupUSD');
+      const signedSwap = await signTransaction(swapTx);
 
-      setStMsg('Swapping SOL → USDC…');
-      const swapResult = await submitAndConfirm(connection, [signed[0]], setStMsg);
+      setStMsg('Swapping SOL → JupUSD…');
+      const swapResult = await sendAndConfirm(connection, signedSwap, swapBh, setStMsg);
       if (swapResult.pending) {
-        setError(`Swap submitted but still confirming. Solscan: https://solscan.io/tx/${swapResult.sigs[0]}`);
-        setStatus('idle'); setStMsg('');
-        onDone?.();
-        return;
+        throw new Error(`Swap submitted but still confirming. Solscan: https://solscan.io/tx/${swapResult.sig}`);
       }
+
+      // ─── STEP 2 of 2: PREDICT ORDER ─────────────────────────────────────
+      setStep(2);
+      setStMsg('Reading JupUSD balance…');
+
+      // Read actual on-chain JupUSD balance (more accurate than the quote estimate)
+      const ownerB58 = publicKey.toBase58();
+      let actualJupUsd = await fetchJupUsdBalance(connection, ownerB58);
+
+      // Use whichever is smaller — the new swap output, or the wallet's total.
+      // Cap to expectedJupUsdAtomic so we don't accidentally deposit pre-existing JupUSD.
+      const depositAtomic = actualJupUsd < expectedJupUsdAtomic ? actualJupUsd : expectedJupUsdAtomic;
+
+      if (depositAtomic <= 0n) {
+        throw new Error('Swap landed but no JupUSD found. Please refresh.');
+      }
+
+      setStMsg('Building order…');
+      const { tx: buyTx } = await buildBuyTx({
+        ownerPubkey: ownerB58,
+        marketId: m.marketId,
+        isYes,
+        depositAmountJupUsdAtomic: depositAtomic,
+      });
+
+      setStMsg('Checking…');
+      await simulateOrThrow(connection, buyTx, 'predict-buy');
+
+      setStMsg(`Confirm Step 2 of 2 in your wallet — Buy ${sideLabel}`);
+      const signedBuy = await signTransaction(buyTx);
 
       setStMsg('Placing order…');
-      const buyResult = await submitAndConfirm(connection, [signed[1]], setStMsg);
-      if (buyResult.pending) {
-        setError(`Order submitted but still confirming. Solscan: https://solscan.io/tx/${buyResult.sigs[0]}`);
-        setStatus('idle'); setStMsg('');
-        onDone?.();
-        return;
+      const orderResult = await sendAndConfirm(connection, signedBuy, null, setStMsg);
+      if (orderResult.pending) {
+        throw new Error(`Order submitted but still confirming. Solscan: https://solscan.io/tx/${orderResult.sig}`);
       }
 
-      setStatus('success'); setStMsg('');
+      // ─── DONE ───────────────────────────────────────────────────────────
+      setStep(3); setStMsg('');
       onDone?.();
       setTimeout(() => onClose(), 2200);
     } catch (e) {
-      const msg = e?.message || 'Order failed';
-      setError(/reject|cancel|user/i.test(msg) ? 'Cancelled' : msg);
-      setStatus('error'); setStMsg('');
-      setTimeout(() => setStatus('idle'), 5000);
+      setError(friendlyError(e));
+      setStep(0); setStMsg('');
     }
-  }, [publicKey, signAllTransactions, m, isYes, solLamports, price, connection, onClose, onDone]);
+  }, [
+    publicKey, signTransaction, m, isYes, grossLamports, estGrossUsd,
+    connection, onClose, onDone, sideLabel,
+  ]);
 
   const solPresets = ['0.05', '0.1', '0.25', '0.5'];
 
@@ -910,6 +887,9 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
       <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: '12px 12px 14px', boxShadow: C.shadowLg, maxHeight: `calc(100dvh - ${NAV_CLEARANCE}px - 24px)`, overflowY: 'auto' }}>
         <div style={{ width: 32, height: 3, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 8px' }} />
+
+        {busy && <StepBadge current={step} total={2} />}
+
         <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 4, lineHeight: 1.35, ...T.body }}>{event.title}</div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
           <div style={{ padding: '3px 8px', borderRadius: 99, background: sideDim, border: `1px solid ${sideColor}55`, color: sideColor, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>{sideLabel}</div>
@@ -930,24 +910,25 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
             {solPresets.map(v => (
               <button key={v} onClick={() => setAmount(v)} disabled={busy} style={{ flex: 1, padding: 6, borderRadius: 7, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 10, fontWeight: 600, cursor: 'pointer', ...T.mono }}>{v}</button>
             ))}
-            <button onClick={() => setAmount(((Number(solBal) / 1e9) || 0).toFixed(4))} disabled={busy || solBal <= 0n} style={{ flex: 1, padding: 6, borderRadius: 7, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>Max</button>
+            <button onClick={() => setAmount(Math.max(0, (Number(solBal) / 1e9) - 0.01).toFixed(4))} disabled={busy || solBal <= 0n} style={{ flex: 1, padding: 6, borderRadius: 7, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>Max</button>
           </div>
         </div>
 
         <div style={{ padding: 9, borderRadius: 10, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10, ...T.mono, fontSize: 10 }}>
           <Row label="You pay" value={`${solAmount.toFixed(4)} SOL`} />
-          <Row label="Platform fee (5%)" value="via swap · to wallet" />
-          <Row label={`Est. contracts`} value={`~${contractsEst.toFixed(2)}`} />
+          <Row label="Platform fee (5%)" value={`~${(solAmount * FEE_BPS / 10000).toFixed(4)} SOL`} />
+          <Row label="Est. deposit" value={`~${fmtUsd(estDepositUsd)} JupUSD`} />
+          <Row label="Est. contracts" value={`~${contractsEst.toFixed(2)}`} />
           <Row label={`If ${sideLabel} wins`} value={`~${fmtUsd(contractsEst)}`} valueColor={sideColor} bold />
           <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}`, color: C.muted, fontSize: 9 }}>
-            Exact JupUSD amount confirmed at swap time. Est. values shown above.
+            Two signatures: Swap SOL → JupUSD, then place order.
           </div>
         </div>
 
-        {statusMsg && <StatusLine msg={statusMsg} />}
+        {statusMsg && <StatusLine msg={statusMsg} step={busy ? `STEP ${step} OF 2` : null} />}
         {error && <ErrorLine msg={error} />}
 
-        {!hasSol && solAmount > 0 && (
+        {!hasSol && solAmount > 0 && !busy && (
           <div style={{ marginBottom: 8, padding: 8, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', borderRadius: 10, fontSize: 11, color: C.amber, fontWeight: 600 }}>
             Insufficient SOL balance.
           </div>
@@ -957,7 +938,11 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
           onClick={canBuy ? placeOrder : undefined}
           disabled={!canBuy}
           color={isYes ? 'yes' : 'no'}
-          label={busy ? (statusMsg || 'Working…') : status === 'success' ? '✓ Order placed' : `Buy ${sideLabel} · ${solAmount.toFixed(4)} SOL`}
+          label={
+            busy ? (statusMsg || 'Working…')
+            : step === 3 ? '✓ Order placed'
+            : `Buy ${sideLabel} · ${solAmount.toFixed(4)} SOL`
+          }
         />
       </div>
     </div>
@@ -965,7 +950,7 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 8: Positions
+// SECTION 10: Positions
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function PositionsList({ positions, loading, onAction }) {
@@ -1031,271 +1016,130 @@ function PositionCard({ p, onAction }) {
   );
 }
 
-// ─── JupUSD → SOL swap modal (post-sell / post-claim) ────────────────────────
-// FIX: jupUsdAtomic is now passed in as a BigInt from the caller (SellDrawer /
-// ClaimDrawer), computed via BigInt(Math.round(jupUsdAmount * 1e6)).
-// This modal no longer does any float→integer conversion itself.
-function JupUsdSwapModal({ jupUsdAtomic, jupUsdAmount, label, onClose, connection }) {
-  const { publicKey, signAllTransactions } = useWallet();
-  const [status, setStatus]   = useState('idle');
+// ─── Sell + Claim drawers ────────────────────────────────────────────────────
+// Both follow the same two-step shape as Buy, but in reverse:
+//   Step 1 of 2 — Sell or Claim tx from Predict (JupUSD lands in wallet)
+//   Step 2 of 2 — Atomic JupUSD → SOL swap (5% fee in JupUSD)
+
+function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
+  const { publicKey, signTransaction } = useWallet();
+  const [step, setStep]       = useState(0);  // 0 idle, 1 predict tx, 2 swap, 3 done
   const [statusMsg, setStMsg] = useState('');
   const [error, setError]     = useState('');
 
   useBodyLock(true);
 
-  const busy     = status === 'working';
-  const feeUsd   = jupUsdAmount * (FEE_BPS / 10000);
-  const netSolEst = jupUsdAmount * 0.95;
+  const busy   = step > 0 && step < 3;
+  const isClaim = kind === 'claim';
+  const grossUsd = isClaim ? position.payoutUsd : position.valueUsd;
 
-  const doSwap = useCallback(async () => {
-    if (!publicKey) return;
-    if (!signAllTransactions) { setError('Wallet lacks signAllTransactions'); return; }
-    setStatus('working'); setError(''); setStMsg('Getting quote…');
+  const handleAction = useCallback(async () => {
+    if (!publicKey || !signTransaction) {
+      setError('Connect a wallet that supports signTransaction.');
+      return;
+    }
+    setError('');
+
     try {
-      const ownerPubkey = publicKey.toBase58();
+      // ─── STEP 1 of 2: Predict (sell or claim) ──────────────────────────
+      setStep(1);
+      setStMsg(`Building ${isClaim ? 'claim' : 'sell'}…`);
+
+      const ownerB58 = publicKey.toBase58();
+      const { tx: predictTx } = isClaim
+        ? await buildClaimTx({ ownerPubkey: ownerB58, positionPubkey: position.positionPubkey })
+        : await buildSellTx({ ownerPubkey: ownerB58, positionPubkey: position.positionPubkey });
+
+      setStMsg('Checking…');
+      await simulateOrThrow(connection, predictTx, kind);
+
+      setStMsg(`Confirm Step 1 of 2 in your wallet — ${isClaim ? 'Claim winnings' : 'Sell contracts'}`);
+      const signedPredict = await signTransaction(predictTx);
+
+      setStMsg(isClaim ? 'Claiming…' : 'Selling…');
+      const predictResult = await sendAndConfirm(connection, signedPredict, null, setStMsg);
+      if (predictResult.pending) {
+        throw new Error(`${isClaim ? 'Claim' : 'Sell'} submitted but still confirming. Solscan: https://solscan.io/tx/${predictResult.sig}`);
+      }
+
+      // ─── STEP 2 of 2: Atomic JupUSD → SOL swap (5% fee) ────────────────
+      setStep(2);
+      setStMsg('Reading JupUSD balance…');
+
+      // Read actual JupUSD balance — what Predict actually paid out, may differ
+      // slightly from the displayed value.
+      const actualJupUsd = await fetchJupUsdBalance(connection, ownerB58);
+      if (actualJupUsd <= 0n) {
+        throw new Error('No JupUSD found to swap. Refresh and try again.');
+      }
 
       setStMsg('Building swap…');
-      // FIX: jupUsdAtomic is already a BigInt — no conversion needed here
-      const { swapTx, postFeeSolLamports } = await buildJupUsdToSolSwapTx({
-        ownerPubkey, jupUsdAtomic,
+      const { tx: swapTx, latestBlockhash: swapBh } = await buildJupUsdToSolSwapTx({
+        connection,
+        ownerPubkey: publicKey,
+        grossJupUsdAtomic: actualJupUsd,
       });
 
       setStMsg('Checking…');
       await simulateOrThrow(connection, swapTx, 'jupusd-sol');
 
-      setStMsg('Confirm in your wallet…');
-      const signed = await signAllTransactions([swapTx]);
+      setStMsg('Confirm Step 2 of 2 in your wallet — Swap JupUSD → SOL');
+      const signedSwap = await signTransaction(swapTx);
 
-      const { pending, sigs } = await submitAndConfirm(connection, signed, setStMsg);
-      if (pending) {
-        setError(`Submitted but confirming. Solscan: https://solscan.io/tx/${sigs[0]}`);
-        setStatus('idle'); setStMsg('');
-        return;
+      setStMsg('Swapping JupUSD → SOL…');
+      const swapResult = await sendAndConfirm(connection, signedSwap, swapBh, setStMsg);
+      if (swapResult.pending) {
+        throw new Error(`Swap submitted but still confirming. Solscan: https://solscan.io/tx/${swapResult.sig}`);
       }
 
-      setStatus('success'); setStMsg('');
-      setTimeout(() => onClose(), 2500);
-    } catch (e) {
-      const msg = e?.message || 'Swap failed';
-      setError(/reject|cancel|user/i.test(msg) ? 'Cancelled' : msg);
-      setStatus('error'); setStMsg('');
-      setTimeout(() => setStatus('idle'), 5000);
-    }
-  }, [publicKey, signAllTransactions, jupUsdAtomic, connection, onClose]);
-
-  return (
-    <div style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(3,6,15,.82)', backdropFilter: 'blur(16px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 16px' }}>
-      <div style={{ width: '100%', maxWidth: 380, background: `linear-gradient(160deg, ${C.cardHi}, ${C.card})`, border: `1px solid ${C.borderHi}`, borderRadius: 20, padding: '20px 16px 16px', boxShadow: C.shadowLg, textAlign: 'center' }}>
-
-        <div style={{ fontSize: 40, marginBottom: 8 }}>
-          {status === 'success' ? '✅' : label === 'claim' ? '🏆' : '🎉'}
-        </div>
-
-        {status === 'success' ? (
-          <>
-            <div style={{ fontSize: 16, fontWeight: 800, color: C.yes, marginBottom: 4, ...T.display }}>Collected!</div>
-            <div style={{ fontSize: 11, color: C.muted, ...T.mono }}>SOL is in your wallet</div>
-          </>
-        ) : (
-          <>
-            <div style={{ fontSize: 17, fontWeight: 800, color: C.ink, marginBottom: 6, ...T.display }}>
-              {label === 'claim' ? 'You won!' : 'Trade closed!'}
-            </div>
-            <div style={{ fontSize: 13, color: C.ink, marginBottom: 14, ...T.body, lineHeight: 1.4 }}>
-              You earned <strong style={{ color: C.hl }}>{fmtUsd(jupUsdAmount)}</strong>!<br />
-              Convert to <strong>SOL</strong> to collect your winnings.
-            </div>
-
-            <div style={{ padding: '9px 12px', borderRadius: 12, background: 'rgba(151,252,228,.05)', border: `1px solid ${C.border}`, marginBottom: 12, ...T.mono, fontSize: 10, textAlign: 'left' }}>
-              <Row label="Winnings" value={fmtUsd(jupUsdAmount)} />
-              <Row label="Fee (5%)" value={fmtUsd(feeUsd)} />
-              <Row label="You collect" value={`~${netSolEst.toFixed(4)} SOL`} valueColor={C.hl} bold />
-            </div>
-
-            {statusMsg && <StatusLine msg={statusMsg} />}
-            {error && <ErrorLine msg={error} />}
-
-            <PrimaryButton
-              onClick={busy ? undefined : doSwap}
-              disabled={busy}
-              color="yes"
-              label={busy ? (statusMsg || 'Working…') : `Collect ${fmtUsd(jupUsdAmount)} → SOL`}
-            />
-          </>
-        )}
-      </div>
-    </div>
-  );
-}
-
-function SellDrawer({ position, onClose, onDone, connection }) {
-  const { publicKey, signAllTransactions } = useWallet();
-  const [status, setStatus] = useState('idle');
-  const [statusMsg, setStMsg] = useState('');
-  const [error, setError] = useState('');
-  const [swapAtomic, setSwapAtomic] = useState(null);
-  const [showSwapModal, setShowSwapModal] = useState(false);
-
-  useBodyLock(true);
-
-  const busy   = status === 'working';
-  const netUsd = position.valueUsd;
-
-  const doSell = useCallback(async () => {
-    if (!publicKey) return;
-    if (!signAllTransactions) { setError('Wallet lacks signAllTransactions'); return; }
-    setStatus('working'); setError(''); setStMsg('Building sell…');
-    try {
-      const ownerPubkey = publicKey.toBase58();
-      const { tx: sellTx } = await buildSellTx({ ownerPubkey, positionPubkey: position.positionPubkey });
-
-      setStMsg('Checking…');
-      await simulateOrThrow(connection, sellTx, 'sell');
-
-      setStMsg('Confirm in your wallet…');
-      const signed = await signAllTransactions([sellTx]);
-
-      const { pending, sigs } = await submitAndConfirm(connection, signed, setStMsg);
-      if (pending) {
-        setError(`Submitted but still confirming. View on Solscan: https://solscan.io/tx/${sigs[0]}`);
-        setStatus('idle'); setStMsg('');
-        onDone?.();
-        return;
-      }
-
-      setStatus('success'); setStMsg('');
+      setStep(3); setStMsg('');
       onDone?.();
-      // FIX: Compute atomic amount as BigInt here, pass to modal — no float conversion inside modal
-      const atomic = BigInt(Math.round(netUsd * 1e6));
-      setSwapAtomic(atomic);
-      setTimeout(() => setShowSwapModal(true), 800);
+      setTimeout(() => onClose(), 2200);
     } catch (e) {
-      const msg = e?.message || 'Sell failed';
-      setError(/reject|cancel|user/i.test(msg) ? 'Cancelled' : msg);
-      setStatus('error'); setStMsg('');
-      setTimeout(() => setStatus('idle'), 5000);
+      setError(friendlyError(e));
+      setStep(0); setStMsg('');
     }
-  }, [publicKey, signAllTransactions, position, connection, onDone, netUsd]);
+  }, [publicKey, signTransaction, position, isClaim, kind, connection, onDone, onClose]);
 
-  if (showSwapModal) {
-    return (
-      <JupUsdSwapModal
-        jupUsdAtomic={swapAtomic}   // BigInt
-        jupUsdAmount={netUsd}       // float, for display only
-        label="sell"
-        onClose={onClose}
-        connection={connection}
-      />
-    );
-  }
+  const feeUsd  = grossUsd * (FEE_BPS / 10000);
+  const netUsd  = grossUsd - feeUsd;
+  const headerBadge = isClaim
+    ? <div style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 99, background: C.yesDim, border: `1px solid ${C.yes}55`, color: C.yes, fontSize: 9, fontWeight: 800, letterSpacing: 1, marginBottom: 6, ...T.mono }}>🏆 RESOLVED — YOU WON</div>
+    : null;
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
       <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: '12px 12px 14px', boxShadow: C.shadowLg }}>
         <div style={{ width: 32, height: 3, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 8px' }} />
+
+        {busy && <StepBadge current={step} total={2} />}
+
+        {headerBadge}
         <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 8, ...T.body }}>{position.title}</div>
 
-        <div style={{ padding: 10, borderRadius: 10, background: 'rgba(255,255,255,.02)', marginBottom: 10, ...T.mono, fontSize: 11 }}>
+        <div style={{ padding: 10, borderRadius: 10, background: isClaim ? 'rgba(0,212,163,.05)' : 'rgba(255,255,255,.02)', border: isClaim ? '1px solid rgba(0,212,163,.20)' : `1px solid ${C.border}`, marginBottom: 10, ...T.mono, fontSize: 11 }}>
           <Row label="Contracts" value={position.contracts.toFixed(2)} />
-          <Row label="Avg price" value={`$${position.avgPriceUsd.toFixed(3)}`} />
-          <Row label="Mark price" value={`$${position.markPriceUsd.toFixed(3)}`} />
-          <Row label="Sell value" value={fmtUsd(netUsd)} valueColor={C.hl} bold />
+          {!isClaim && <Row label="Mark price" value={`$${position.markPriceUsd.toFixed(3)}`} />}
+          <Row label={isClaim ? 'Payout' : 'Sell value'} value={fmtUsd(grossUsd)} />
+          <Row label="Fee (5%)" value={fmtUsd(feeUsd)} />
+          <Row label="You collect" value={`~${fmtUsd(netUsd)} in SOL`} valueColor={C.hl} bold />
+          <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}`, color: C.muted, fontSize: 9 }}>
+            Two signatures: {isClaim ? 'Claim' : 'Sell'} then swap JupUSD → SOL.
+          </div>
         </div>
 
-        {statusMsg && <StatusLine msg={statusMsg} />}
+        {statusMsg && <StatusLine msg={statusMsg} step={busy ? `STEP ${step} OF 2` : null} />}
         {error && <ErrorLine msg={error} />}
 
         <PrimaryButton
-          onClick={busy ? undefined : doSell}
-          disabled={busy || status === 'success'}
-          color={position.pnlUsd >= 0 ? 'yes' : 'no'}
-          label={busy ? (statusMsg || 'Working…') : status === 'success' ? '✓ Sold' : `Sell all · ${fmtUsd(netUsd)}`}
-        />
-      </div>
-    </div>
-  );
-}
-
-function ClaimDrawer({ position, onClose, onDone, connection }) {
-  const { publicKey, signAllTransactions } = useWallet();
-  const [status, setStatus] = useState('idle');
-  const [statusMsg, setStMsg] = useState('');
-  const [error, setError] = useState('');
-  const [swapAtomic, setSwapAtomic] = useState(null);
-  const [showSwapModal, setShowSwapModal] = useState(false);
-
-  useBodyLock(true);
-
-  const busy   = status === 'working';
-  const netUsd = position.payoutUsd;
-
-  const doClaim = useCallback(async () => {
-    if (!publicKey) return;
-    if (!signAllTransactions) { setError('Wallet lacks signAllTransactions'); return; }
-    setStatus('working'); setError(''); setStMsg('Building claim…');
-    try {
-      const ownerPubkey = publicKey.toBase58();
-      const { tx: claimTx } = await buildClaimTx({ ownerPubkey, positionPubkey: position.positionPubkey });
-
-      setStMsg('Checking…');
-      await simulateOrThrow(connection, claimTx, 'claim');
-
-      setStMsg('Confirm in your wallet…');
-      const signed = await signAllTransactions([claimTx]);
-
-      const { pending, sigs } = await submitAndConfirm(connection, signed, setStMsg);
-      if (pending) {
-        setError(`Submitted but still confirming. View on Solscan: https://solscan.io/tx/${sigs[0]}`);
-        setStatus('idle'); setStMsg('');
-        onDone?.();
-        return;
-      }
-
-      setStatus('success'); setStMsg('');
-      onDone?.();
-      // FIX: Compute atomic amount as BigInt here, pass to modal — no float conversion inside modal
-      const atomic = BigInt(Math.round(netUsd * 1e6));
-      setSwapAtomic(atomic);
-      setTimeout(() => setShowSwapModal(true), 800);
-    } catch (e) {
-      const msg = e?.message || 'Claim failed';
-      setError(/reject|cancel|user/i.test(msg) ? 'Cancelled' : msg);
-      setStatus('error'); setStMsg('');
-      setTimeout(() => setStatus('idle'), 5000);
-    }
-  }, [publicKey, signAllTransactions, position, connection, onDone, netUsd]);
-
-  if (showSwapModal) {
-    return (
-      <JupUsdSwapModal
-        jupUsdAtomic={swapAtomic}   // BigInt
-        jupUsdAmount={netUsd}       // float, for display only
-        label="claim"
-        onClose={onClose}
-        connection={connection}
-      />
-    );
-  }
-
-  return (
-    <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: '12px 12px 14px', boxShadow: C.shadowLg }}>
-        <div style={{ width: 32, height: 3, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 8px' }} />
-        <div style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 99, background: C.yesDim, border: `1px solid ${C.yes}55`, color: C.yes, fontSize: 9, fontWeight: 800, letterSpacing: 1, marginBottom: 6, ...T.mono }}>🏆 RESOLVED — YOU WON</div>
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 8, ...T.body }}>{position.title}</div>
-        <div style={{ padding: 10, borderRadius: 10, background: 'rgba(0,212,163,.05)', border: `1px solid rgba(0,212,163,.20)`, marginBottom: 10, ...T.mono, fontSize: 11 }}>
-          <Row label="Contracts won" value={position.contracts.toFixed(2)} />
-          <Row label="Payout" value={fmtUsd(netUsd)} valueColor={C.yes} bold />
-        </div>
-
-        {statusMsg && <StatusLine msg={statusMsg} />}
-        {error && <ErrorLine msg={error} />}
-
-        <PrimaryButton
-          onClick={busy ? undefined : doClaim}
-          disabled={busy || status === 'success'}
-          color="yes"
-          label={busy ? (statusMsg || 'Working…') : status === 'success' ? '✓ Claimed' : `Claim · ${fmtUsd(netUsd)}`}
+          onClick={busy ? undefined : handleAction}
+          disabled={busy || step === 3}
+          color={isClaim || position.pnlUsd >= 0 ? 'yes' : 'no'}
+          label={
+            busy ? (statusMsg || 'Working…')
+            : step === 3 ? `✓ ${isClaim ? 'Claimed' : 'Sold'}`
+            : isClaim ? `Claim · ${fmtUsd(grossUsd)}` : `Sell all · ${fmtUsd(grossUsd)}`
+          }
         />
       </div>
     </div>
@@ -1303,7 +1147,7 @@ function ClaimDrawer({ position, onClose, onDone, connection }) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 9: Top-level page
+// SECTION 11: Top-level page
 // ═══════════════════════════════════════════════════════════════════════════════
 
 export default function Predict() {
@@ -1515,20 +1359,12 @@ export default function Predict() {
         />
       )}
 
-      {actionPos?.kind === 'sell' && (
-        <SellDrawer
+      {actionPos && (
+        <SellOrClaimDrawer
           position={actionPos.position}
+          kind={actionPos.kind}
           onClose={() => setActionPos(null)}
-          onDone={() => reloadPositions()}
-          connection={connection}
-        />
-      )}
-
-      {actionPos?.kind === 'claim' && (
-        <ClaimDrawer
-          position={actionPos.position}
-          onClose={() => setActionPos(null)}
-          onDone={() => reloadPositions()}
+          onDone={() => { reloadPositions(); refreshBalances(); }}
           connection={connection}
         />
       )}
