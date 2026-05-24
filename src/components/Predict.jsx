@@ -287,6 +287,11 @@ async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomi
       depositAmount: String(depositAmountUsdcAtomic),
       depositMint:   USDC_MINT,
       prioritizationFeeLamports: 10_000_000,
+    }),
+  });
+  const j = await r.json();
+  if (!j?.transaction) throw new Error('Jupiter returned no transaction');
+  return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)), orderInfo: j.order || null };
 }
 
 async function buildFeeTx({ ownerPubkey, feeAmountUsdcAtomic, connection }) {
