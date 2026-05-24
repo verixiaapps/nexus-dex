@@ -364,17 +364,17 @@ async function buildMetisSwapTx({ ownerPubkey, solLamports }) {
     { name: 'Jupiter', fn: () => swapSolToUsdcViaJupiter({ ownerPubkey, solLamports }) },
     { name: 'OKX',     fn: () => swapSolToJupUsdViaOkx({ ownerPubkey, solLamports }) },
   ];
-  let lastErr;
+  const errors = [];
   for (const { name, fn } of attempts) {
     try {
       console.log(`[swap] trying ${name}…`);
       return await fn();
     } catch (e) {
       console.warn(`[swap] ${name} failed:`, e?.message);
-      lastErr = e;
+      errors.push(`${name}: ${e?.message || 'unknown'}`);
     }
   }
-  throw new Error('All swap providers failed. Last error: ' + (lastErr?.message || 'unknown'));
+  throw new Error('All swap providers failed. ' + errors.join(' | '));
 }
 
 // ─── Jupiter Predict buy order ───────────────────────────────────────────────
@@ -499,17 +499,17 @@ async function buildJupUsdToSolSwapTx({ ownerPubkey, jupUsdAtomic }) {
     { name: 'Jupiter', fn: () => swapJupUsdToSolViaJupiter({ ownerPubkey, jupUsdAtomic }) },
     { name: 'OKX',     fn: () => swapJupUsdToSolViaOkx({ ownerPubkey, jupUsdAtomic }) },
   ];
-  let lastErr;
+  const errors = [];
   for (const { name, fn } of attempts) {
     try {
       console.log(`[swap] trying ${name}…`);
       return await fn();
     } catch (e) {
       console.warn(`[swap] ${name} failed:`, e?.message);
-      lastErr = e;
+      errors.push(`${name}: ${e?.message || 'unknown'}`);
     }
   }
-  throw new Error('All swap providers failed. Last error: ' + (lastErr?.message || 'unknown'));
+  throw new Error('All swap providers failed. ' + errors.join(' | '));
 }
 
 // Debug-only sim. Logs to console; doesn't affect wallet flow.
