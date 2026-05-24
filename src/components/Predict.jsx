@@ -277,26 +277,17 @@ function pickPositionFields(p) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 // ─── Metis swap: SOL → USDC with 5% platform fee baked in ───────────────────
-// Uses existing backend routes:
-//   GET  /api/jupiter/quote → https://api.jup.ag/swap/v1/quote
-//   POST /api/jupiter/swap  → https://api.jup.ag/swap/v1/swap
-//
-// platformFeeBps=500 tells Jupiter to deduct 5% from the USDC output and
-// send it directly to feeAccount (FEE_WALLET's USDC ATA).
-// No separate transfer instruction — fee is baked into the swap itself.
-// outAmount in the quote response is what the user receives AFTER the fee.
+// FIX: solLamports is kept as BigInt all the way through — never cast to Number.
+// String(BigInt) always produces a clean integer string with no decimals.
 async function buildMetisSwapTx({ ownerPubkey, solLamports }) {
   const feeWallet  = new PublicKey(FEE_WALLET);
   const usdcMint   = new PublicKey(USDC_MINT);
-
-  // FEE_WALLET's USDC ATA — must exist on-chain before going live
   const feeAccount = getAssociatedTokenAddressSync(usdcMint, feeWallet).toBase58();
 
-  // Step 1: Quote — platformFeeBps=500 → Jupiter deducts 5% from USDC output
   const quoteParams = new URLSearchParams({
     inputMint:                  SOL_MINT,
     outputMint:                 USDC_MINT,
-    amount:                     String(solLamports),
+    amount:                     String(solLamports),   // BigInt → clean integer string
     swapMode:                   'ExactIn',
     slippageBps:                String(SLIPPAGE_BPS),
     platformFeeBps:             String(FEE_BPS),
@@ -306,17 +297,16 @@ async function buildMetisSwapTx({ ownerPubkey, solLamports }) {
   const quote    = await quoteRes.json();
   if (!quote?.outAmount) throw new Error('Swap quote failed — no outAmount');
 
-  // outAmount = USDC the user receives after the 5% platform fee
+  // outAmount comes back as a string integer from Jupiter — wrap directly in BigInt
   const postFeeUsdcAtomic = BigInt(quote.outAmount);
 
-  // Step 2: Build serialized swap tx — feeAccount receives the 5% cut
   const swapRes  = await jfetch('/api/jupiter/swap', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       quoteResponse:             quote,
       userPublicKey:             ownerPubkey,
-      feeAccount,                // USDC ATA of FEE_WALLET
+      feeAccount,
       dynamicComputeUnitLimit:   true,
       prioritizationFeeLamports: {
         priorityLevelWithMaxLamports: {
@@ -335,13 +325,14 @@ async function buildMetisSwapTx({ ownerPubkey, solLamports }) {
 }
 
 // ─── Jupiter Predict buy order ───────────────────────────────────────────────
+// FIX: depositAmountUsdcAtomic is a BigInt — String(BigInt) is a clean integer.
 async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomic }) {
   const r = await jfetch('/api/predict/orders', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       ownerPubkey, marketId, isYes, isBuy: true,
-      depositAmount: String(depositAmountUsdcAtomic),
+      depositAmount: String(depositAmountUsdcAtomic),  // BigInt → clean integer string
       depositMint:   USDC_MINT,
     }),
   });
@@ -373,21 +364,18 @@ async function buildClaimTx({ ownerPubkey, positionPubkey }) {
 }
 
 // ─── JupUSD → SOL swap with 5% platform fee ──────────────────────────────────
-// Called after sell/claim confirms. Quotes JupUSD→SOL via Metis with
-// platformFeeBps=500. Fee is collected in JupUSD (the input mint) — docs allow
-// either input or output mint for ExactIn swaps; using input mint avoids
-// wSOL ATA initialization complexity.
+// FIX: jupUsdAtomic is derived via BigInt arithmetic only — no float rounding.
+// jupUsdAmount (USD float) × 1e6 is done with Math.round then wrapped in BigInt
+// to avoid the float→integer conversion error.
 async function buildJupUsdToSolSwapTx({ ownerPubkey, jupUsdAtomic }) {
   const feeWallet    = new PublicKey(FEE_WALLET);
   const jupUsdMint   = new PublicKey(JUPUSD_MINT);
-  // Fee collected in JupUSD (input mint) — simpler than wSOL ATA
   const feeAccount   = getAssociatedTokenAddressSync(jupUsdMint, feeWallet).toBase58();
 
-  // Step 1: Quote JupUSD → SOL with 5% platform fee
   const quoteParams = new URLSearchParams({
     inputMint:                  JUPUSD_MINT,
     outputMint:                 SOL_MINT,
-    amount:                     String(jupUsdAtomic),
+    amount:                     String(jupUsdAtomic),  // BigInt → clean integer string
     swapMode:                   'ExactIn',
     slippageBps:                String(SLIPPAGE_BPS),
     platformFeeBps:             String(FEE_BPS),
@@ -397,9 +385,9 @@ async function buildJupUsdToSolSwapTx({ ownerPubkey, jupUsdAtomic }) {
   const quote    = await quoteRes.json();
   if (!quote?.outAmount) throw new Error('JupUSD→SOL quote failed');
 
+  // outAmount from Jupiter is a string integer — wrap directly in BigInt
   const postFeeSolLamports = BigInt(quote.outAmount);
 
-  // Step 2: Build swap tx — fee goes to FEE_WALLET JupUSD ATA
   const swapRes  = await jfetch('/api/jupiter/swap', {
     method:  'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -656,15 +644,14 @@ function MarketCard({ event, onTrade }) {
 }
 
 // ─── BuyDrawer ────────────────────────────────────────────────────────────────
-// User pays in SOL only. Flow:
-//   1. Metis quote SOL→USDC with platformFeeBps=500 → get postFeeUsdcAtomic
-//   2. Build Metis swap tx (fee baked in, goes to FEE_WALLET USDC ATA)
-//   3. Build Predict buy tx using postFeeUsdcAtomic as deposit
-//   4. signAllTransactions([swapTx, buyTx]) — one wallet popup
+// FIX SUMMARY:
+//   1. solLamports stays BigInt — computed via BigInt(Math.round(solAmount * 1e9))
+//   2. postFeeUsdcAtomic stays BigInt from buildMetisSwapTx — never cast to Number
+//   3. Minimum check uses BigInt comparison
+//   4. depositAmountUsdcAtomic passed as BigInt — String(BigInt) is a clean integer
 function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
   const { publicKey, signAllTransactions } = useWallet();
 
-  // Amount is in SOL
   const [amount, setAmount]   = useState('0.1');
   const [status, setStatus]   = useState('idle');
   const [statusMsg, setStMsg] = useState('');
@@ -674,11 +661,11 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
 
   const m          = event.market;
   const solAmount  = Number(amount) || 0;
-  const solLamports = BigInt(Math.floor(solAmount * 1e9));
+  // FIX 1: Use BigInt arithmetic — Math.round avoids float edge cases like
+  // 0.1 * 1e9 = 99999999.99999999 before truncation.
+  const solLamports = BigInt(Math.round(solAmount * 1e9));
 
-  // Estimate post-fee USDC for display only (actual comes from Metis quote)
-  // We show approximate values; real numbers confirmed at quote time
-  const estUsdcOut   = solAmount * 150; // rough SOL price placeholder for display
+  const estUsdcOut   = solAmount * 150;
   const feeEstUsd    = estUsdcOut * (FEE_BPS / 10000);
   const depositEstUsd = estUsdcOut - feeEstUsd;
   const price        = isYes ? m.yesPrice : m.noPrice;
@@ -696,8 +683,6 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
     if (!publicKey) { setError('Connect wallet first'); return; }
     if (!signAllTransactions) { setError('Wallet lacks signAllTransactions'); return; }
 
-    // Rough minimum check upfront — $5 minimum after 5% fee
-    // Uses conservative $100 SOL floor just to catch obviously too-small amounts
     const estUsdcRough = solAmount * 100 * 0.95;
     if (estUsdcRough < MIN_TRADE_USD) {
       setError(`Minimum trade is $${MIN_TRADE_USD}. Try a larger SOL amount.`);
@@ -709,39 +694,35 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
     try {
       const ownerPubkey = publicKey.toBase58();
 
-      // Step 1 & 2: Metis swap SOL→USDC with 5% fee baked in
       setStMsg('Building swap…');
       const { swapTx, postFeeUsdcAtomic } = await buildMetisSwapTx({
         ownerPubkey,
-        solLamports,
+        solLamports,  // already BigInt
       });
 
       if (postFeeUsdcAtomic <= 0n) throw new Error('Swap quote returned zero USDC');
 
-      // Step 3: Predict buy order using post-fee USDC amount
-      setStMsg('Building order…');
-      const postFeeUsdcNum = Number(postFeeUsdcAtomic);
-      if (postFeeUsdcNum < MIN_TRADE_USD * 1e6)
+      // FIX 2: Compare BigInt to BigInt — no Number() cast needed
+      const minUsdcAtomic = BigInt(Math.round(MIN_TRADE_USD * 1e6));
+      if (postFeeUsdcAtomic < minUsdcAtomic)
         throw new Error(`Minimum trade is $${MIN_TRADE_USD}. Try a larger SOL amount.`);
 
+      setStMsg('Building order…');
+      // FIX 3: Pass BigInt directly — buildBuyTx calls String() on it internally
       const { tx: buyTx } = await buildBuyTx({
         ownerPubkey,
         marketId: m.marketId,
         isYes,
-        depositAmountUsdcAtomic: Math.floor(postFeeUsdcNum).toString(),
+        depositAmountUsdcAtomic: postFeeUsdcAtomic,  // BigInt, no Number() cast
       });
 
-      // Step 4: Simulate both (debug only, non-blocking)
       setStMsg('Checking…');
       await simulateOrThrow(connection, swapTx, 'swap');
       await simulateOrThrow(connection, buyTx,  'predict-buy');
 
-      // Step 5: One wallet popup — user signs both
       setStMsg('Confirm in your wallet…');
       const signed = await signAllTransactions([swapTx, buyTx]);
 
-      // Submit swap first and wait for confirmation BEFORE buy tx,
-      // since the buy needs USDC from the swap to exist in the user's ATA.
       setStMsg('Swapping SOL → USDC…');
       const swapResult = await submitAndConfirm(connection, [signed[0]], setStMsg);
       if (swapResult.pending) {
@@ -751,8 +732,6 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
         return;
       }
 
-      // Swap confirmed — now submit buy. Refresh blockhash since the original
-      // may have expired during swap confirmation.
       setStMsg('Placing order…');
       const buyResult = await submitAndConfirm(connection, [signed[1]], setStMsg);
       if (buyResult.pending) {
@@ -773,7 +752,6 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
     }
   }, [publicKey, signAllTransactions, m, isYes, solLamports, price, connection, onClose, onDone]);
 
-  // Quick-select SOL amounts
   const solPresets = ['0.05', '0.1', '0.25', '0.5'];
 
   return (
@@ -902,7 +880,10 @@ function PositionCard({ p, onAction }) {
 }
 
 // ─── JupUSD → SOL swap modal (post-sell / post-claim) ────────────────────────
-function JupUsdSwapModal({ jupUsdAmount, label, onClose, connection }) {
+// FIX: jupUsdAtomic is now passed in as a BigInt from the caller (SellDrawer /
+// ClaimDrawer), computed via BigInt(Math.round(jupUsdAmount * 1e6)).
+// This modal no longer does any float→integer conversion itself.
+function JupUsdSwapModal({ jupUsdAtomic, jupUsdAmount, label, onClose, connection }) {
   const { publicKey, signAllTransactions } = useWallet();
   const [status, setStatus]   = useState('idle');
   const [statusMsg, setStMsg] = useState('');
@@ -912,17 +893,17 @@ function JupUsdSwapModal({ jupUsdAmount, label, onClose, connection }) {
 
   const busy     = status === 'working';
   const feeUsd   = jupUsdAmount * (FEE_BPS / 10000);
-  const netSolEst = jupUsdAmount * 0.95; // rough estimate for display
+  const netSolEst = jupUsdAmount * 0.95;
 
   const doSwap = useCallback(async () => {
     if (!publicKey) return;
     if (!signAllTransactions) { setError('Wallet lacks signAllTransactions'); return; }
     setStatus('working'); setError(''); setStMsg('Getting quote…');
     try {
-      const ownerPubkey     = publicKey.toBase58();
-      const jupUsdAtomic    = BigInt(Math.floor(jupUsdAmount * 1e6));
+      const ownerPubkey = publicKey.toBase58();
 
       setStMsg('Building swap…');
+      // FIX: jupUsdAtomic is already a BigInt — no conversion needed here
       const { swapTx, postFeeSolLamports } = await buildJupUsdToSolSwapTx({
         ownerPubkey, jupUsdAtomic,
       });
@@ -948,13 +929,12 @@ function JupUsdSwapModal({ jupUsdAmount, label, onClose, connection }) {
       setStatus('error'); setStMsg('');
       setTimeout(() => setStatus('idle'), 5000);
     }
-  }, [publicKey, signAllTransactions, jupUsdAmount, connection, onClose]);
+  }, [publicKey, signAllTransactions, jupUsdAtomic, connection, onClose]);
 
   return (
     <div style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(3,6,15,.82)', backdropFilter: 'blur(16px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 16px' }}>
       <div style={{ width: '100%', maxWidth: 380, background: `linear-gradient(160deg, ${C.cardHi}, ${C.card})`, border: `1px solid ${C.borderHi}`, borderRadius: 20, padding: '20px 16px 16px', boxShadow: C.shadowLg, textAlign: 'center' }}>
 
-        {/* Icon */}
         <div style={{ fontSize: 40, marginBottom: 8 }}>
           {status === 'success' ? '✅' : label === 'claim' ? '🏆' : '🎉'}
         </div>
@@ -974,7 +954,6 @@ function JupUsdSwapModal({ jupUsdAmount, label, onClose, connection }) {
               Convert to <strong>SOL</strong> to collect your winnings.
             </div>
 
-            {/* Summary */}
             <div style={{ padding: '9px 12px', borderRadius: 12, background: 'rgba(151,252,228,.05)', border: `1px solid ${C.border}`, marginBottom: 12, ...T.mono, fontSize: 10, textAlign: 'left' }}>
               <Row label="Winnings" value={fmtUsd(jupUsdAmount)} />
               <Row label="Fee (5%)" value={fmtUsd(feeUsd)} />
@@ -1002,6 +981,7 @@ function SellDrawer({ position, onClose, onDone, connection }) {
   const [status, setStatus] = useState('idle');
   const [statusMsg, setStMsg] = useState('');
   const [error, setError] = useState('');
+  const [swapAtomic, setSwapAtomic] = useState(null);
   const [showSwapModal, setShowSwapModal] = useState(false);
 
   useBodyLock(true);
@@ -1033,7 +1013,9 @@ function SellDrawer({ position, onClose, onDone, connection }) {
 
       setStatus('success'); setStMsg('');
       onDone?.();
-      // Show JupUSD → SOL swap prompt
+      // FIX: Compute atomic amount as BigInt here, pass to modal — no float conversion inside modal
+      const atomic = BigInt(Math.round(netUsd * 1e6));
+      setSwapAtomic(atomic);
       setTimeout(() => setShowSwapModal(true), 800);
     } catch (e) {
       const msg = e?.message || 'Sell failed';
@@ -1041,12 +1023,13 @@ function SellDrawer({ position, onClose, onDone, connection }) {
       setStatus('error'); setStMsg('');
       setTimeout(() => setStatus('idle'), 5000);
     }
-  }, [publicKey, signAllTransactions, position, connection, onDone]);
+  }, [publicKey, signAllTransactions, position, connection, onDone, netUsd]);
 
   if (showSwapModal) {
     return (
       <JupUsdSwapModal
-        jupUsdAmount={netUsd}
+        jupUsdAtomic={swapAtomic}   // BigInt
+        jupUsdAmount={netUsd}       // float, for display only
         label="sell"
         onClose={onClose}
         connection={connection}
@@ -1086,6 +1069,7 @@ function ClaimDrawer({ position, onClose, onDone, connection }) {
   const [status, setStatus] = useState('idle');
   const [statusMsg, setStMsg] = useState('');
   const [error, setError] = useState('');
+  const [swapAtomic, setSwapAtomic] = useState(null);
   const [showSwapModal, setShowSwapModal] = useState(false);
 
   useBodyLock(true);
@@ -1117,7 +1101,9 @@ function ClaimDrawer({ position, onClose, onDone, connection }) {
 
       setStatus('success'); setStMsg('');
       onDone?.();
-      // Show JupUSD → SOL swap prompt
+      // FIX: Compute atomic amount as BigInt here, pass to modal — no float conversion inside modal
+      const atomic = BigInt(Math.round(netUsd * 1e6));
+      setSwapAtomic(atomic);
       setTimeout(() => setShowSwapModal(true), 800);
     } catch (e) {
       const msg = e?.message || 'Claim failed';
@@ -1125,12 +1111,13 @@ function ClaimDrawer({ position, onClose, onDone, connection }) {
       setStatus('error'); setStMsg('');
       setTimeout(() => setStatus('idle'), 5000);
     }
-  }, [publicKey, signAllTransactions, position, connection, onDone]);
+  }, [publicKey, signAllTransactions, position, connection, onDone, netUsd]);
 
   if (showSwapModal) {
     return (
       <JupUsdSwapModal
-        jupUsdAmount={netUsd}
+        jupUsdAtomic={swapAtomic}   // BigInt
+        jupUsdAmount={netUsd}       // float, for display only
         label="claim"
         onClose={onClose}
         connection={connection}
