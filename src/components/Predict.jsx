@@ -295,8 +295,6 @@ async function swapSolToUsdcViaJupiter({ ownerPubkey, solLamports }) {
     amount:                     String(solLamports),
     swapMode:                   'ExactIn',
     slippageBps:                String(SLIPPAGE_BPS),
-    platformFeeBps:             String(FEE_BPS),
-    restrictIntermediateTokens: 'true',
   });
   const quoteRes = await jfetch(`/api/jupiter/quote?${quoteParams}`);
   const quote    = await quoteRes.json();
@@ -431,8 +429,6 @@ async function swapJupUsdToSolViaJupiter({ ownerPubkey, jupUsdAtomic }) {
     amount:                     String(jupUsdAtomic),
     swapMode:                   'ExactIn',
     slippageBps:                String(SLIPPAGE_BPS),
-    platformFeeBps:             String(FEE_BPS),
-    restrictIntermediateTokens: 'true',
   });
   const quoteRes = await jfetch(`/api/jupiter/quote?${quoteParams}`);
   const quote    = await quoteRes.json();
