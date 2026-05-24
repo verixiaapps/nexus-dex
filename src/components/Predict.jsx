@@ -36,6 +36,7 @@ import {
 // ─── Constants ────────────────────────────────────────────────────────────────
 const USDC_MINT     = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOL_MINT      = 'So11111111111111111111111111111111111111112';
+const JUPUSD_MINT   = 'JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD';
 const FEE_WALLET    = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
 const FEE_BPS       = 500;   // 5% — collected via Metis platformFeeBps
 const SLIPPAGE_BPS  = 1000;  // 10% on Predict minContracts
@@ -373,6 +374,58 @@ async function buildClaimTx({ ownerPubkey, positionPubkey }) {
   return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)) };
 }
 
+// ─── JupUSD → SOL swap with 5% platform fee ──────────────────────────────────
+// Called after sell/claim confirms. Quotes JupUSD→SOL via Metis with
+// platformFeeBps=500, fee goes to FEE_WALLET's SOL ATA (native SOL account).
+// For ExactIn swaps the feeAccount mint must be input or output mint —
+// we use the SOL wsol ATA of FEE_WALLET to collect fees in SOL.
+async function buildJupUsdToSolSwapTx({ ownerPubkey, jupUsdAtomic }) {
+  // For SOL output, fee is collected in the output mint (SOL/wSOL).
+  // We use FEE_WALLET's associated wSOL account as feeAccount.
+  const feeWallet  = new PublicKey(FEE_WALLET);
+  const solMint    = new PublicKey(SOL_MINT);
+  const feeAccount = getAssociatedTokenAddressSync(solMint, feeWallet).toBase58();
+
+  // Step 1: Quote JupUSD → SOL with 5% platform fee
+  const quoteParams = new URLSearchParams({
+    inputMint:                  JUPUSD_MINT,
+    outputMint:                 SOL_MINT,
+    amount:                     String(jupUsdAtomic),
+    swapMode:                   'ExactIn',
+    slippageBps:                String(SLIPPAGE_BPS),
+    platformFeeBps:             String(FEE_BPS),
+    restrictIntermediateTokens: 'true',
+  });
+  const quoteRes = await jfetch(`/api/jupiter/quote?${quoteParams}`);
+  const quote    = await quoteRes.json();
+  if (!quote?.outAmount) throw new Error('JupUSD→SOL quote failed');
+
+  const postFeeSolLamports = BigInt(quote.outAmount);
+
+  // Step 2: Build swap tx — fee goes to FEE_WALLET wSOL ATA
+  const swapRes  = await jfetch('/api/jupiter/swap', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      quoteResponse:             quote,
+      userPublicKey:             ownerPubkey,
+      feeAccount,
+      dynamicComputeUnitLimit:   true,
+      prioritizationFeeLamports: {
+        priorityLevelWithMaxLamports: {
+          maxLamports:   JUPITER_PRIORITY_LAMPORTS,
+          priorityLevel: 'veryHigh',
+        },
+      },
+    }),
+  });
+  const swapData = await swapRes.json();
+  if (!swapData?.swapTransaction) throw new Error('JupUSD→SOL swap build failed');
+
+  const swapTx = VersionedTransaction.deserialize(b64ToBytes(swapData.swapTransaction));
+  return { swapTx, postFeeSolLamports };
+}
+
 // Debug-only sim. Logs to console; doesn't affect wallet flow.
 async function simulateOrThrow(connection, tx, label) {
   try {
@@ -672,16 +725,21 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
 
       if (postFeeUsdcAtomic <= 0n) throw new Error('Swap quote returned zero USDC');
 
+      // Convert to number for safe arithmetic — USDC atomic values fit in JS number
+      const postFeeUsdcNum = Number(postFeeUsdcAtomic);
+      if (postFeeUsdcNum < MIN_TRADE_USD * 1e6)
+        throw new Error(`Minimum trade is $${MIN_TRADE_USD}. Try a larger SOL amount.`);
+
       // Step 3: Predict buy order using post-fee USDC amount
       setStMsg('Building order…');
       const minContracts = Math.max(1, Math.floor(
-        (Number(postFeeUsdcAtomic) / 1e6 / price) * (1 - SLIPPAGE_BPS / 10000)
+        (postFeeUsdcNum / 1e6 / price) * (1 - SLIPPAGE_BPS / 10000)
       ));
       const { tx: buyTx } = await buildBuyTx({
         ownerPubkey,
         marketId: m.marketId,
         isYes,
-        depositAmountUsdcAtomic: postFeeUsdcAtomic.toString(),
+        depositAmountUsdcAtomic: Math.floor(postFeeUsdcNum).toString(),
         minContracts,
       });
 
@@ -754,8 +812,6 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
             Exact USDC amount confirmed at swap time. Est. values shown above.
           </div>
         </div>
-
-        <SimNoticeBanner />
 
         {statusMsg && <StatusLine msg={statusMsg} />}
         {error && <ErrorLine msg={error} />}
@@ -844,11 +900,115 @@ function PositionCard({ p, onAction }) {
   );
 }
 
+// ─── JupUSD → SOL swap modal (post-sell / post-claim) ────────────────────────
+function JupUsdSwapModal({ jupUsdAmount, label, onClose, connection }) {
+  const { publicKey, signAllTransactions } = useWallet();
+  const [status, setStatus]   = useState('idle');
+  const [statusMsg, setStMsg] = useState('');
+  const [error, setError]     = useState('');
+
+  useBodyLock(true);
+
+  const busy     = status === 'working';
+  const feeUsd   = jupUsdAmount * (FEE_BPS / 10000);
+  const netSolEst = jupUsdAmount * 0.95; // rough estimate for display
+
+  const doSwap = useCallback(async () => {
+    if (!publicKey) return;
+    if (!signAllTransactions) { setError('Wallet lacks signAllTransactions'); return; }
+    setStatus('working'); setError(''); setStMsg('Getting quote…');
+    try {
+      const ownerPubkey     = publicKey.toBase58();
+      const jupUsdAtomic    = BigInt(Math.floor(jupUsdAmount * 1e6));
+
+      setStMsg('Building swap…');
+      const { swapTx, postFeeSolLamports } = await buildJupUsdToSolSwapTx({
+        ownerPubkey, jupUsdAtomic,
+      });
+
+      setStMsg('Checking…');
+      await simulateOrThrow(connection, swapTx, 'jupusd-sol');
+
+      setStMsg('Confirm in your wallet…');
+      const signed = await signAllTransactions([swapTx]);
+
+      const { pending, sigs } = await submitAndConfirm(connection, signed, setStMsg);
+      if (pending) {
+        setError(`Submitted but confirming. Solscan: https://solscan.io/tx/${sigs[0]}`);
+        setStatus('idle'); setStMsg('');
+        return;
+      }
+
+      setStatus('success'); setStMsg('');
+      setTimeout(() => onClose(), 2500);
+    } catch (e) {
+      const msg = e?.message || 'Swap failed';
+      setError(/reject|cancel|user/i.test(msg) ? 'Cancelled' : msg);
+      setStatus('error'); setStMsg('');
+      setTimeout(() => setStatus('idle'), 5000);
+    }
+  }, [publicKey, signAllTransactions, jupUsdAmount, connection, onClose]);
+
+  return (
+    <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(3,6,15,.82)', backdropFilter: 'blur(16px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '0 16px', cursor: busy ? 'wait' : 'pointer' }}>
+      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 380, background: `linear-gradient(160deg, ${C.cardHi}, ${C.card})`, border: `1px solid ${C.borderHi}`, borderRadius: 20, padding: '20px 16px 16px', boxShadow: C.shadowLg, textAlign: 'center' }}>
+
+        {/* Icon */}
+        <div style={{ fontSize: 36, marginBottom: 8 }}>
+          {status === 'success' ? '✅' : label === 'claim' ? '🏆' : '💰'}
+        </div>
+
+        {status === 'success' ? (
+          <>
+            <div style={{ fontSize: 15, fontWeight: 800, color: C.yes, marginBottom: 4, ...T.display }}>Swapped to SOL!</div>
+            <div style={{ fontSize: 11, color: C.muted, ...T.mono }}>SOL is in your wallet</div>
+          </>
+        ) : (
+          <>
+            <div style={{ fontSize: 15, fontWeight: 800, color: C.ink, marginBottom: 4, ...T.display }}>
+              {label === 'claim' ? 'You won!' : 'Nice trade!'} Swap to SOL?
+            </div>
+            <div style={{ fontSize: 12, color: C.muted, marginBottom: 14, ...T.body }}>
+              You received <strong style={{ color: C.hl }}>{fmtUsd(jupUsdAmount)} JupUSD</strong>.<br />
+              Swap to SOL now — fast, one tap.
+            </div>
+
+            {/* Summary */}
+            <div style={{ padding: '9px 12px', borderRadius: 12, background: 'rgba(151,252,228,.05)', border: `1px solid ${C.border}`, marginBottom: 12, ...T.mono, fontSize: 10, textAlign: 'left' }}>
+              <Row label="You have" value={`${fmtUsd(jupUsdAmount)} JupUSD`} />
+              <Row label="Platform fee (5%)" value={fmtUsd(feeUsd)} />
+              <Row label="Est. you receive" value={`~${netSolEst.toFixed(4)} SOL`} valueColor={C.hl} bold />
+              <div style={{ marginTop: 5, paddingTop: 5, borderTop: `1px solid ${C.border}`, fontSize: 9, color: C.muted2 }}>
+                Exact SOL amount confirmed at swap time.
+              </div>
+            </div>
+
+            {statusMsg && <StatusLine msg={statusMsg} />}
+            {error && <ErrorLine msg={error} />}
+
+            <PrimaryButton
+              onClick={busy ? undefined : doSwap}
+              disabled={busy}
+              color="yes"
+              label={busy ? (statusMsg || 'Working…') : `Swap ${fmtUsd(jupUsdAmount)} JupUSD → SOL`}
+            />
+
+            <button onClick={onClose} disabled={busy} style={{ marginTop: 8, width: '100%', padding: '8px', borderRadius: 10, background: 'transparent', border: `1px solid ${C.border}`, color: C.muted, fontSize: 11, fontWeight: 600, cursor: 'pointer', ...T.body }}>
+              Skip for now
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SellDrawer({ position, onClose, onDone, connection }) {
   const { publicKey, signAllTransactions } = useWallet();
   const [status, setStatus] = useState('idle');
   const [statusMsg, setStMsg] = useState('');
   const [error, setError] = useState('');
+  const [showSwapModal, setShowSwapModal] = useState(false);
 
   useBodyLock(true);
 
@@ -879,14 +1039,26 @@ function SellDrawer({ position, onClose, onDone, connection }) {
 
       setStatus('success'); setStMsg('');
       onDone?.();
-      setTimeout(() => onClose(), 2200);
+      // Show JupUSD → SOL swap prompt
+      setTimeout(() => setShowSwapModal(true), 800);
     } catch (e) {
       const msg = e?.message || 'Sell failed';
       setError(/reject|cancel|user/i.test(msg) ? 'Cancelled' : msg);
       setStatus('error'); setStMsg('');
       setTimeout(() => setStatus('idle'), 5000);
     }
-  }, [publicKey, signAllTransactions, position, connection, onClose, onDone]);
+  }, [publicKey, signAllTransactions, position, connection, onDone]);
+
+  if (showSwapModal) {
+    return (
+      <JupUsdSwapModal
+        jupUsdAmount={netUsd}
+        label="sell"
+        onClose={onClose}
+        connection={connection}
+      />
+    );
+  }
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
@@ -901,12 +1073,6 @@ function SellDrawer({ position, onClose, onDone, connection }) {
           <Row label="Sell value" value={fmtUsd(netUsd)} valueColor={C.hl} bold />
         </div>
 
-        <div style={{ padding: '9px 11px', borderRadius: 10, background: 'rgba(168,127,255,.06)', border: '1px solid rgba(168,127,255,.25)', marginBottom: 10, fontSize: 10, color: C.ink, lineHeight: 1.4, ...T.body }}>
-          <div style={{ fontWeight: 700, color: C.violet, marginBottom: 3, fontSize: 10, letterSpacing: 0.5, ...T.mono }}>ⓘ HOW PAYOUT WORKS</div>
-          You'll receive <strong>JupUSD</strong> from Jupiter (1 JupUSD = $1). Swap JupUSD → USDC anytime on the Swap page with near-zero fees.
-        </div>
-
-        <SimNoticeBanner />
         {statusMsg && <StatusLine msg={statusMsg} />}
         {error && <ErrorLine msg={error} />}
 
@@ -926,6 +1092,7 @@ function ClaimDrawer({ position, onClose, onDone, connection }) {
   const [status, setStatus] = useState('idle');
   const [statusMsg, setStMsg] = useState('');
   const [error, setError] = useState('');
+  const [showSwapModal, setShowSwapModal] = useState(false);
 
   useBodyLock(true);
 
@@ -956,14 +1123,26 @@ function ClaimDrawer({ position, onClose, onDone, connection }) {
 
       setStatus('success'); setStMsg('');
       onDone?.();
-      setTimeout(() => onClose(), 2500);
+      // Show JupUSD → SOL swap prompt
+      setTimeout(() => setShowSwapModal(true), 800);
     } catch (e) {
       const msg = e?.message || 'Claim failed';
       setError(/reject|cancel|user/i.test(msg) ? 'Cancelled' : msg);
       setStatus('error'); setStMsg('');
       setTimeout(() => setStatus('idle'), 5000);
     }
-  }, [publicKey, signAllTransactions, position, connection, onClose, onDone]);
+  }, [publicKey, signAllTransactions, position, connection, onDone]);
+
+  if (showSwapModal) {
+    return (
+      <JupUsdSwapModal
+        jupUsdAmount={netUsd}
+        label="claim"
+        onClose={onClose}
+        connection={connection}
+      />
+    );
+  }
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
@@ -976,15 +1155,6 @@ function ClaimDrawer({ position, onClose, onDone, connection }) {
           <Row label="Payout" value={fmtUsd(netUsd)} valueColor={C.yes} bold />
         </div>
 
-        <div style={{ padding: '9px 11px', borderRadius: 10, background: 'rgba(168,127,255,.06)', border: '1px solid rgba(168,127,255,.25)', marginBottom: 10, fontSize: 10, color: C.ink, lineHeight: 1.5, ...T.body }}>
-          <div style={{ fontWeight: 700, color: C.violet, marginBottom: 3, fontSize: 10, letterSpacing: 0.5, ...T.mono }}>ⓘ HOW PAYOUTS WORK</div>
-          Each winning contract = $1.00 paid in <strong>JupUSD</strong> from Jupiter. Swap JupUSD → USDC anytime on the Swap page with near-zero fees.
-          <div style={{ marginTop: 5, color: C.muted, fontSize: 9 }}>
-            Don't claim within 24h? Jupiter auto-claims for you.
-          </div>
-        </div>
-
-        <SimNoticeBanner />
         {statusMsg && <StatusLine msg={statusMsg} />}
         {error && <ErrorLine msg={error} />}
 
