@@ -1,11 +1,18 @@
-// Swap.jsx — matches Predict pattern exactly:
-//   1. Get a Jupiter swap tx untouched (no platformFeeBps/feeAccount)
-//   2. Build a SEPARATE fee tx (5% of input mint -> FEE_WALLET)
-//   3. signAllTransactions([swapTx, feeTx]) — ONE popup
-//   4. Broadcast both via RPC in parallel
-//   5. Confirm with Solscan-link fallback
+// Swap.jsx — ATOMIC single-transaction version.
 //
-// No Jupiter native fee mechanism. No referral SDK. Just like Predict.
+// Flow:
+//   1. Get Jupiter swap instructions via /api/jupiter/build (no platformFeeBps)
+//   2. Build fee instructions (5% of input mint -> FEE_WALLET)
+//   3. Combine into ONE TransactionMessage with shared ALTs
+//   4. Wallet simulates the SAME bytes the user signs — Blowfish sees full
+//      net effect (X in, Y out, Z to fee wallet) instead of two opaque txs.
+//   5. Atomic on-chain: swap and fee succeed together or revert together.
+//
+// Fee ordering:
+//   - SOL input: fee transfer goes FIRST, from native SOL, before Jupiter
+//     wraps the remaining lamports.
+//   - SPL input: fee ATA-create + transferChecked go FIRST, before Jupiter's
+//     setup ixs touch the source ATA. Jupiter routes `netRaw` after fee.
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -16,6 +23,7 @@ import {
   TransactionMessage,
   SystemProgram,
   ComputeBudgetProgram,
+  AddressLookupTableAccount,
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddressSync,
@@ -33,9 +41,11 @@ const FEE_BPS    = 500; // 5%
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
-// Priority fee: ~0.001 SOL (~$0.17) ceiling for fast confirmation on our fee tx.
+// Priority fee target ~0.001 SOL on Jupiter's swap tx via the /build endpoint.
+// We do NOT add our own compute budget ixs anymore — Jupiter already includes
+// them in build.computeBudgetInstructions, and duplicating them in the same
+// tx would either be rejected or double-charge.
 const PRIORITY_FEE_MICROLAMPORTS = 5_000;
-const PRIORITY_FEE_CU_LIMIT      = 200_000;
 
 const RPC_URL =
   process.env.REACT_APP_SOLANA_RPC ||
@@ -87,8 +97,21 @@ const friendlyError = (err) => {
   if (m.includes('rate'))              return 'Too many requests — please wait a moment.';
   if (m.includes('could not find any route') || m.includes('no route'))
     return 'No route available for this pair.';
+  if (m.includes('too large') || m.includes('transaction too large'))
+    return 'Route is too complex to fit in one transaction. Try a different amount or token.';
   return err?.message || 'Swap failed. Please try again.';
 };
+
+// Deserialize a Jupiter /build instruction into a web3.js-compatible ix.
+const deserIx = (ix) => ({
+  programId: new PublicKey(ix.programId),
+  keys: ix.accounts.map(a => ({
+    pubkey:     new PublicKey(a.pubkey),
+    isSigner:   a.isSigner,
+    isWritable: a.isWritable,
+  })),
+  data: Buffer.from(ix.data, 'base64'),
+});
 
 /* ─── COMPONENT ───────────────────────────────────────────────────── */
 
@@ -196,9 +219,7 @@ export default function Swap() {
     return Math.floor(n * Math.pow(10, inputToken.decimals)).toString();
   }, [amount, inputToken]);
 
-  /* QUOTE — no fee params. Jupiter sees a clean, normal swap.
-   * We deduct the 5% from rawAmount before sending so the quote
-   * reflects what the user will actually receive after our fee. */
+  /* QUOTE — Jupiter routes the NET amount (after our 5% fee). */
   const quoteAbortRef = useRef(null);
   useEffect(() => {
     if (!rawAmount || inputMint === outputMint) {
@@ -215,7 +236,6 @@ export default function Swap() {
 
     const t = setTimeout(async () => {
       try {
-        // Net amount = input minus our 5% fee (taken in INPUT mint)
         const net = (BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n;
         if (net <= 0n) {
           setQuote(null);
@@ -286,10 +306,13 @@ export default function Swap() {
     setAmount(String(maxAmt));
   };
 
-  /* SWAP — build fee tx separately, bundle with Jupiter's tx, sign once */
+  /* SWAP — single atomic transaction.
+   * Fee ixs are prepended to Jupiter's instructions so they share the same
+   * tx, the same blockhash, and the same simulation. What the wallet shows
+   * the user IS what executes on-chain. */
   const handleSwap = useCallback(async () => {
-    if (!wallet.publicKey || !wallet.signAllTransactions) {
-      setSwapError('Please connect a wallet that supports multi-tx signing (Phantom, Solflare, Backpack).');
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      setSwapError('Please connect a wallet (Phantom, Solflare, Backpack).');
       return;
     }
     if (!quote || !outputToken || !inputToken) {
@@ -306,9 +329,7 @@ export default function Swap() {
       const netRaw = quote.netRaw ||
         ((BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n).toString();
 
-      // 1) Fresh /build call for the NET amount (locks in the actual route).
-      // computeUnitPriceMicroLamports targets ~0.001 SOL (~$0.17) priority fee
-      // on Jupiter's swap tx — matches our fee tx for consistent fast confirms.
+      // 1) Fresh /build for the NET amount (locks in the actual route).
       const params = new URLSearchParams({
         inputMint,
         outputMint,
@@ -324,66 +345,21 @@ export default function Swap() {
       }
       const build = await r.json();
 
-      // 2) Reconstruct Jupiter's tx from raw instructions.
-      // /build returns instructions, not a serialized tx, so we assemble.
-      const ixs = [];
-      const deser = (ix) => ({
-        programId: new PublicKey(ix.programId),
-        keys: ix.accounts.map(a => ({
-          pubkey:     new PublicKey(a.pubkey),
-          isSigner:   a.isSigner,
-          isWritable: a.isWritable,
-        })),
-        data: Buffer.from(ix.data, 'base64'),
-      });
-      if (Array.isArray(build.computeBudgetInstructions))
-        for (const ix of build.computeBudgetInstructions) ixs.push(deser(ix));
-      if (Array.isArray(build.setupInstructions))
-        for (const ix of build.setupInstructions) ixs.push(deser(ix));
-      if (build.swapInstruction) ixs.push(deser(build.swapInstruction));
-      if (build.cleanupInstruction) ixs.push(deser(build.cleanupInstruction));
-      if (Array.isArray(build.otherInstructions))
-        for (const ix of build.otherInstructions) ixs.push(deser(ix));
-
-      // ALTs
-      const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
-      const { AddressLookupTableAccount } = await import('@solana/web3.js');
-      let alts = [];
-      if (altKeys.length > 0) {
-        const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
-        alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
-          key:   new PublicKey(k),
-          state: AddressLookupTableAccount.deserialize(infos[i].data),
-        }) : null).filter(Boolean);
-      }
-
-      // Fresh blockhash to stamp both txs (so they share validity window)
-      const latest = await connection.getLatestBlockhash('confirmed');
-
-      const swapMsg = new TransactionMessage({
-        payerKey:        wallet.publicKey,
-        recentBlockhash: latest.blockhash,
-        instructions:    ixs.map(i => i),
-      }).compileToV0Message(alts);
-      const swapTx = new VersionedTransaction(swapMsg);
-
-      // 3) Build fee tx — 5% of full input amount in input mint
+      // 2) Build the fee instructions FIRST (they go at the front of the tx).
       const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
       if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
 
-      const feeIxs = [
-        ComputeBudgetProgram.setComputeUnitLimit({ units: PRIORITY_FEE_CU_LIMIT }),
-        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
-      ];
+      const feeIxs = [];
       if (inputMint === SOL_MINT) {
-        // Native SOL transfer
+        // Native SOL transfer from the user's wallet. Jupiter's setup ixs
+        // will then wrap the remaining SOL for the swap.
         feeIxs.push(SystemProgram.transfer({
           fromPubkey: wallet.publicKey,
           toPubkey:   FEE_WALLET,
           lamports:   Number(feeAmount),
         }));
       } else {
-        // SPL transfer — determine token program
+        // SPL transfer — determine token program from the mint owner.
         const mintPk = new PublicKey(inputMint);
         const mintInfo = await connection.getAccountInfo(mintPk);
         if (!mintInfo) throw new Error('Input mint not found on-chain.');
@@ -394,7 +370,7 @@ export default function Swap() {
         const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
         const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
 
-        // Idempotent ATA create — no-op if already exists, costs user ~0.002 SOL first time
+        // Idempotent: no-op if fee wallet's ATA already exists.
         feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
           wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
         ));
@@ -404,16 +380,51 @@ export default function Swap() {
         ));
       }
 
-      const feeMsg = new TransactionMessage({
+      // 3) Assemble the full instruction list.
+      // Order:
+      //   [Jupiter compute-budget ixs]   (must come first for the runtime)
+      //   [our fee ixs]                  (taken from user's balance up-front)
+      //   [Jupiter setup ixs]            (wrap SOL / create ATAs / etc)
+      //   [Jupiter swap ix]
+      //   [Jupiter cleanup ix]           (unwrap leftover wSOL / close ATA)
+      //   [Jupiter other ixs]
+      const ixs = [];
+      if (Array.isArray(build.computeBudgetInstructions))
+        for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
+
+      // Fee goes RIGHT AFTER compute budget — before Jupiter touches anything.
+      for (const ix of feeIxs) ixs.push(ix);
+
+      if (Array.isArray(build.setupInstructions))
+        for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+      if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+      if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+      if (Array.isArray(build.otherInstructions))
+        for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+
+      // 4) Resolve Jupiter's address lookup tables.
+      const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+      let alts = [];
+      if (altKeys.length > 0) {
+        const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
+        alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+          key:   new PublicKey(k),
+          state: AddressLookupTableAccount.deserialize(infos[i].data),
+        }) : null).filter(Boolean);
+      }
+
+      // 5) Compile ONE v0 transaction.
+      const latest = await connection.getLatestBlockhash('confirmed');
+      const message = new TransactionMessage({
         payerKey:        wallet.publicKey,
         recentBlockhash: latest.blockhash,
-        instructions:    feeIxs,
-      }).compileToV0Message();
-      const feeTx = new VersionedTransaction(feeMsg);
+        instructions:    ixs,
+      }).compileToV0Message(alts);
+      const tx = new VersionedTransaction(message);
 
-      // 4) SIMULATE both txs before showing the wallet popup, so we catch
-      //    insufficient-balance / slippage / account-not-ready errors with
-      //    plain-English messages instead of opaque on-chain failures.
+      // 6) Pre-flight simulation — catches insufficient balance / slippage
+      //    BEFORE we bother the wallet. This is the same tx the wallet will
+      //    simulate (and the user will sign).
       const mapSimErr = (logs) => {
         const j = (logs || []).join('\n').toLowerCase();
         if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
@@ -423,40 +434,36 @@ export default function Swap() {
         return null;
       };
       try {
-        const [simSwap, simFee] = await Promise.all([
-          connection.simulateTransaction(swapTx, { replaceRecentBlockhash: true, sigVerify: false }),
-          connection.simulateTransaction(feeTx,  { replaceRecentBlockhash: true, sigVerify: false }),
-        ]);
-        if (simSwap.value.err) {
-          throw new Error(mapSimErr(simSwap.value.logs) || 'Swap simulation failed — the price may have moved.');
-        }
-        if (simFee.value.err) {
-          throw new Error(mapSimErr(simFee.value.logs) || 'Fee transaction simulation failed.');
+        const sim = await connection.simulateTransaction(tx, {
+          replaceRecentBlockhash: true,
+          sigVerify: false,
+        });
+        if (sim.value.err) {
+          throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
         }
       } catch (simErr) {
-        // Don't block on network simulation failures (RPC hiccups); only
-        // surface explicit on-chain sim errors.
         if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
           throw simErr;
         }
         console.warn('[swap] sim non-fatal', simErr);
       }
 
-      // 5) ONE wallet popup
-      const [signedSwap, signedFee] = await wallet.signAllTransactions([swapTx, feeTx]);
+      // 7) Sign — wallet now simulates the FULL tx (swap + fee) and Blowfish
+      //    sees the complete net effect. One popup, one signature.
+      const signed = await wallet.signTransaction(tx);
 
-      // 6) Broadcast both in parallel
-      const [swapSig, feeSig] = await Promise.all([
-        connection.sendRawTransaction(signedSwap.serialize(), { skipPreflight: false, maxRetries: 3 }),
-        connection.sendRawTransaction(signedFee.serialize(),  { skipPreflight: false, maxRetries: 3 }),
-      ]);
+      // 8) Broadcast.
+      const sig = await connection.sendRawTransaction(signed.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
 
-      // 7) Confirm swap tx (the one that matters); fall back to polling
+      // 9) Confirm with polling fallback.
       let confirmed = false;
       try {
         const conf = await Promise.race([
           connection.confirmTransaction({
-            signature: swapSig,
+            signature: sig,
             blockhash: latest.blockhash,
             lastValidBlockHeight: latest.lastValidBlockHeight,
           }, 'confirmed'),
@@ -465,12 +472,11 @@ export default function Swap() {
         if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
         confirmed = true;
       } catch (cfErr) {
-        // Fallback poll
         const deadline = Date.now() + 20_000;
         while (Date.now() < deadline) {
           await new Promise(r => setTimeout(r, 2000));
           try {
-            const st = await connection.getSignatureStatus(swapSig, { searchTransactionHistory: true });
+            const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
             const cs = st?.value?.confirmationStatus;
             if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
             if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
@@ -480,7 +486,7 @@ export default function Swap() {
         }
       }
 
-      setSwapResult({ signature: swapSig, feeSig, pending: !confirmed });
+      setSwapResult({ signature: sig, pending: !confirmed });
 
       if (confirmed) {
         setAmount('');
