@@ -1,20 +1,22 @@
 /**
- * NEXUS DEX — Cross-Chain (LI.FI, source-chain 5% fee, one signature)
+ * NEXUS DEX — Cross-Chain (LI.FI, atomic single-tx, fee in SOL)
  *
- * Mirrors Predict's pattern:
- *   1. LI.FI /quote with NET amount (after our 5%) — so the displayed
- *      output reflects what the user actually receives.
- *   2. Build a separate fee tx on Solana (5% of input mint -> FEE_WALLET).
- *   3. SIMULATE both txs before showing the wallet popup. Map common
- *      on-chain errors to plain English. (Same as Predict.)
- *   4. signAllTransactions([bridgeTx, feeTx]) — ONE Phantom popup.
- *   5. Broadcast both via RPC in parallel.
- *   6. Confirm with Solscan-link fallback on timeout. (Same as Predict.)
+ * Atomic flow:
+ *   1. LI.FI /quote with FULL amount — fee is taken in SOL separately,
+ *      so the user bridges 100% of their input token.
+ *   2. Deserialize LI.FI's bridge tx, decompile its message (with ALTs).
+ *   3. Prepend a SystemProgram.transfer for 5% of fromAmountUSD worth of SOL
+ *      to FEE_WALLET.
+ *   4. Recompile to a v0 message with the same ALTs and a fresh blockhash.
+ *   5. Simulate ONCE on the exact bytes the user will sign.
+ *   6. wallet.signTransaction — one popup, wallet simulates the full tx,
+ *      Blowfish sees the complete net effect.
+ *   7. Send, confirm with Solscan fallback.
  *
- * Chain coverage: ALL chains LI.FI supports — pulled live from /chains.
- * Token coverage: ALL tokens LI.FI supports — pulled live from /tokens.
+ * Fee unit: ALWAYS SOL. User needs SOL beyond what they're bridging to
+ * cover the platform fee. UI surfaces this clearly when input isn't SOL.
  *
- * No OKX. No LI.FI native fee mechanism.
+ * If the bridge tx reverts, the fee transfer reverts with it — atomic.
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -26,15 +28,8 @@ import {
   VersionedTransaction,
   TransactionMessage,
   SystemProgram,
-  ComputeBudgetProgram,
+  AddressLookupTableAccount,
 } from '@solana/web3.js';
-import {
-  getAssociatedTokenAddressSync,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createTransferCheckedInstruction,
-  TOKEN_PROGRAM_ID,
-  TOKEN_2022_PROGRAM_ID,
-} from '@solana/spl-token';
 
 /* ─── CONSTANTS ─── */
 
@@ -42,15 +37,12 @@ const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV')
 const FEE_BPS    = 500;
 const SLIPPAGE   = 0.005;
 
-// Priority fee: ~0.001 SOL (~$0.17) ceiling for fast confirmation on our fee tx.
-const PRIORITY_FEE_MICROLAMPORTS = 5_000;
-const PRIORITY_FEE_CU_LIMIT      = 200_000;
-
 const SOL_NATIVE      = '11111111111111111111111111111111';
 const WSOL_MINT       = 'So11111111111111111111111111111111111111112';
 const USDC_SOLANA     = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const LIFI_SOLANA_ID  = 1151111081099710;
-const SOL_RESERVE     = 1_500_000;
+const SOL_RESERVE     = 1_500_000;            // 0.0015 SOL kept for network fees
+const MIN_FEE_LAMPORTS = 1_000_000;            // 0.001 SOL fee floor (~$0.15)
 const QUOTE_DEBOUNCE  = 400;
 
 /* ─── STYLE ─── */
@@ -127,8 +119,6 @@ const maxSafeSol = lamports =>
 const isValidSolMint = s =>
   !!s && s.length >= 32 && s.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
 
-/* Address validators per chain type. LI.FI's /chains lists `chainType` as
- * EVM | SVM | UTXO | MVM. */
 const validateDest = (addr, chainType) => {
   if (!addr || !addr.trim()) return 'Destination address required';
   const a = addr.trim();
@@ -137,22 +127,21 @@ const validateDest = (addr, chainType) => {
   } else if (chainType === 'SVM') {
     if (!isValidSolMint(a)) return 'Invalid Solana address';
   } else if (chainType === 'UTXO') {
-    // Bitcoin: P2PKH/P2SH (1.../3...) or bech32 (bc1...). Loose check.
     if (!/^(bc1|[13])[a-zA-HJ-NP-Z0-9]{20,80}$/.test(a)) return 'Invalid Bitcoin address';
   } else if (chainType === 'MVM') {
-    // SUI: 0x + 64 hex chars
     if (!/^0x[0-9a-fA-F]{64}$/.test(a)) return 'Invalid SUI address';
   }
   return null;
 };
 
-/* LI.FI uses native System Program for SOL; wSOL stays as-is */
 const lifiFromToken = mint => (mint === WSOL_MINT ? SOL_NATIVE : mint);
 
 /* ─── ERRORS ─── */
 
 const friendlyError = err => {
   const m = String(err?.message || err || '').toLowerCase();
+  if (m.includes('insufficient sol') || m.includes('not enough sol'))
+    return 'Not enough SOL to cover the platform fee and network fee.';
   if (m.includes('insufficient') || m.includes('not enough'))
     return 'Insufficient balance for this bridge.';
   if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled'))
@@ -171,6 +160,8 @@ const friendlyError = err => {
     return 'Network is slow — please try again.';
   if (m.includes('account not') || m.includes('uninitialized'))
     return 'Token account not ready. Try again in a moment.';
+  if (m.includes('too large') || m.includes('transaction too large'))
+    return 'Route is too complex to fit our fee in one transaction. Try a different token or amount.';
   return err?.message || 'Bridge failed. Please try again.';
 };
 
@@ -191,7 +182,6 @@ const loadChains = () => {
           key:      c.key || c.coin || String(c.id),
           name:     c.name || ('Chain ' + c.id),
           chainType: c.chainType || 'EVM',
-          color:    c.logoURI ? null : null,
           logoURI:  c.logoURI || c.iconUrl || null,
         };
       }
@@ -201,7 +191,6 @@ const loadChains = () => {
     })
     .catch(e => {
       _chainsLoading = null;
-      // Minimal fallback so the UI still works if /chains fails
       _chainsCache = {
         '1':     { id:'1',     name:'Ethereum',  chainType:'EVM' },
         '56':    { id:'56',    name:'BNB Chain', chainType:'EVM' },
@@ -265,10 +254,15 @@ const loadAllTokens = () => {
   return _tokensLoading;
 };
 
-/* Convenience: get tokens for a specific chain (returns [] until loaded). */
-const tokensForChain = (chainId) => {
-  if (!_tokensCache) return [];
-  return _tokensCache[String(chainId)] || [];
+/* SOL price lookup from cached LI.FI tokens. Returns null if unknown. */
+const getSolPriceUSD = () => {
+  const solTokens = _tokensCache?.[String(LIFI_SOLANA_ID)] || [];
+  const sol = solTokens.find(t =>
+    t.address === SOL_NATIVE || t.address === WSOL_MINT ||
+    t.symbol?.toUpperCase() === 'SOL'
+  );
+  const p = sol?.priceUSD ? Number(sol.priceUSD) : null;
+  return Number.isFinite(p) && p > 0 ? p : null;
 };
 
 /* ─── LI.FI QUOTE ─── */
@@ -296,52 +290,68 @@ const lifiQuote = async ({ fromChainId, fromMint, toChainId, toAddress, amount, 
   return j;
 };
 
-/* ─── FEE TX BUILDER ─── */
+/* ─── FEE CALCULATION ─── *
+ *
+ * Returns the SOL fee in lamports given the bridge input's USD value.
+ * Falls back to MIN_FEE_LAMPORTS if USD value or SOL price is unknown.
+ */
+const computeSolFeeLamports = (fromAmountUSD, solPriceUSD) => {
+  if (!fromAmountUSD || !solPriceUSD || fromAmountUSD <= 0 || solPriceUSD <= 0) {
+    return MIN_FEE_LAMPORTS;
+  }
+  const feeUSD = fromAmountUSD * (FEE_BPS / 10000);
+  const feeSOL = feeUSD / solPriceUSD;
+  const lamports = Math.floor(feeSOL * LAMPORTS_PER_SOL);
+  return Math.max(lamports, MIN_FEE_LAMPORTS);
+};
 
-const buildFeeTx = async ({
-  connection, payer, inputMint, decimals, amountRaw, recentBlockhash,
+/* ─── ATOMIC TX BUILDER ─── *
+ *
+ * Decompiles LI.FI's bridge tx, prepends a SOL fee transfer ix,
+ * recompiles to a v0 transaction sharing the same ALTs and blockhash.
+ */
+const buildAtomicTx = async ({
+  connection, payer, bridgeTxBase64, feeLamports, blockhash,
 }) => {
-  const feeAmount = (BigInt(amountRaw) * BigInt(FEE_BPS)) / 10000n;
-  if (feeAmount <= 0n) throw new Error('Fee rounds to zero — amount too small.');
+  // 1) Deserialize LI.FI's bridge tx
+  const bridgeTx = VersionedTransaction.deserialize(Buffer.from(bridgeTxBase64, 'base64'));
 
-  const ixs = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: PRIORITY_FEE_CU_LIMIT }),
-    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
-  ];
-
-  if (inputMint === WSOL_MINT || inputMint === SOL_NATIVE) {
-    ixs.push(SystemProgram.transfer({
-      fromPubkey: payer,
-      toPubkey:   FEE_WALLET,
-      lamports:   Number(feeAmount),
-    }));
-  } else {
-    const mintPk = new PublicKey(inputMint);
-    const mintInfo = await connection.getAccountInfo(mintPk);
-    if (!mintInfo) throw new Error('Input mint not found on-chain');
-    const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
-      ? TOKEN_2022_PROGRAM_ID
-      : TOKEN_PROGRAM_ID;
-
-    const sourceAta = getAssociatedTokenAddressSync(mintPk, payer,      true, tokenProgram);
-    const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET, true, tokenProgram);
-
-    ixs.push(createAssociatedTokenAccountIdempotentInstruction(
-      payer, destAta, FEE_WALLET, mintPk, tokenProgram,
-    ));
-    ixs.push(createTransferCheckedInstruction(
-      sourceAta, mintPk, destAta, payer,
-      feeAmount, decimals, [], tokenProgram,
-    ));
+  // 2) Resolve any ALTs the bridge tx references
+  const altLookups = bridgeTx.message.addressTableLookups || [];
+  let alts = [];
+  if (altLookups.length > 0) {
+    const altKeys = altLookups.map(l => l.accountKey);
+    const infos = await connection.getMultipleAccountsInfo(altKeys);
+    alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+      key:   k,
+      state: AddressLookupTableAccount.deserialize(infos[i].data),
+    }) : null).filter(Boolean);
+    if (alts.length !== altKeys.length) {
+      throw new Error('Could not resolve all address lookup tables for bridge tx');
+    }
   }
 
-  const msg = new TransactionMessage({
-    payerKey: payer,
-    recentBlockhash,
-    instructions: ixs,
-  }).compileToV0Message();
+  // 3) Decompile to a regular message we can edit
+  const decompiled = TransactionMessage.decompile(bridgeTx.message, {
+    addressLookupTableAccounts: alts,
+  });
 
-  return new VersionedTransaction(msg);
+  // 4) Prepend the SOL fee transfer. Going at index 0 means the fee leaves
+  //    the user's wallet before LI.FI's bridge ix touches anything — and
+  //    if the bridge ix reverts later in the tx, the fee transfer reverts
+  //    atomically with it.
+  const feeIx = SystemProgram.transfer({
+    fromPubkey: payer,
+    toPubkey:   FEE_WALLET,
+    lamports:   feeLamports,
+  });
+  decompiled.instructions = [feeIx, ...decompiled.instructions];
+  decompiled.recentBlockhash = blockhash;
+  decompiled.payerKey = payer;
+
+  // 5) Recompile to v0 with the same ALTs
+  const newMessage = decompiled.compileToV0Message(alts);
+  return new VersionedTransaction(newMessage);
 };
 
 /* ─── DEFAULTS ─── */
@@ -615,10 +625,8 @@ const ToTokenModal = ({ open, onClose, onSelect, chains }) => {
       .finally(() => setL(false));
   }, [open]);
 
-  /* Build chain filter chips dynamically from /chains + tokens we have */
   const chainChips = useMemo(() => {
     const seen = new Set(tokens.map(t => t.chainId));
-    // Put common EVM chains first, then the rest alphabetically
     const order = ['1', '56', '137', '42161', '10', '43114', '8453', '324', '59144', '100'];
     const all = Array.from(seen);
     const known   = all.filter(c => order.includes(c)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
@@ -634,7 +642,6 @@ const ToTokenModal = ({ open, onClose, onSelect, chains }) => {
     const t    = q.trim().toLowerCase();
     const filt = sel === 'all' ? tokens : tokens.filter(tk => tk.chainId === sel);
     if (!t) {
-      // No query: show stablecoins + bluechips first
       setR(filt
         .filter(tk => ['USDC', 'USDT', 'ETH', 'BNB', 'MATIC', 'AVAX', 'WETH', 'DAI', 'WBTC', 'BTC'].includes(tk.symbol?.toUpperCase()))
         .slice(0, 30));
@@ -743,13 +750,13 @@ const ToTokenModal = ({ open, onClose, onSelect, chains }) => {
 /* ═══════════ MAIN ═══════════ */
 
 export default function CrossChain({ onConnectWallet }) {
-  const { publicKey, signAllTransactions, connected } = useWallet();
+  const { publicKey, signTransaction, connected } = useWallet();
   const { connection } = useConnection();
 
   const pubkey = publicKey || null;
   const wcon   = !!connected && !!pubkey;
 
-  const [chains, setChains]       = useState(null);  // {id: chain}
+  const [chains, setChains]       = useState(null);
   const [chainsLoading, setChainsLoading] = useState(true);
 
   const [fromToken, setFromToken] = useState(DEFAULT_FROM);
@@ -784,7 +791,6 @@ export default function CrossChain({ onConnectWallet }) {
     loadAllTokens().catch(() => {});
   }, []);
 
-  /* destination chain type */
   const toChain = chains?.[String(toToken?.chainId)] || null;
   const toChainType = toChain?.chainType || 'EVM';
   const needsDest = toToken && String(toToken.chainId) !== String(LIFI_SOLANA_ID);
@@ -822,7 +828,8 @@ export default function CrossChain({ onConnectWallet }) {
     setAddrErr(validateDest(destAddr, toChainType) || '');
   }, [destAddr, toChainType, needsDest]);
 
-  /* QUOTE */
+  /* QUOTE — FULL amount (no fee deduction). User bridges 100% of input;
+   * fee comes from their separate SOL balance. */
   const fetchQuote = useCallback(async () => {
     setQuoteErr('');
     if (!fromAmt || +fromAmt <= 0 || !fromToken || !toToken) { setQuote(null); return; }
@@ -835,8 +842,6 @@ export default function CrossChain({ onConnectWallet }) {
       const dec = fromToken.decimals;
       const raw = toRaw(fromAmt, dec);
       if (!raw || raw === '0') { setQuote(null); setQuoting(false); return; }
-      const net = (BigInt(raw) * BigInt(10000 - FEE_BPS)) / 10000n;
-      if (net <= 0n) { setQuote(null); setQuoting(false); return; }
 
       const sender   = pubkey.toString();
       const userDest = destAddr.trim();
@@ -850,7 +855,7 @@ export default function CrossChain({ onConnectWallet }) {
         fromMint:    fromToken.mint || fromToken.address,
         toChainId:   toToken.chainId,
         toAddress:   toToken.address,
-        amount:      net.toString(),
+        amount:      raw,
         sender, receiver,
       });
       if (myReq !== reqIdRef.current) return;
@@ -858,6 +863,11 @@ export default function CrossChain({ onConnectWallet }) {
       if (!j?.estimate) throw new Error('No route available');
       const outAmt = Number(j.estimate.toAmountMin || j.estimate.toAmount) /
                      Math.pow(10, toToken.decimals);
+      const fromUSD = Number(j.estimate.fromAmountUSD) || 0;
+      const solPrice = getSolPriceUSD();
+      const feeLamports = computeSolFeeLamports(fromUSD, solPrice);
+      const feeSOL = feeLamports / LAMPORTS_PER_SOL;
+      const feeUSD = solPrice ? feeSOL * solPrice : null;
 
       setQuote({
         outAmt,
@@ -865,7 +875,11 @@ export default function CrossChain({ onConnectWallet }) {
         estTime:    j.estimate.executionDuration || null,
         bridge:     j.toolDetails?.name || j.tool || 'LI.FI',
         raw:        j,
-        netRaw:     net.toString(),
+        rawAmount:  raw,
+        feeLamports,
+        feeSOL,
+        feeUSD,
+        fromUSD,
       });
     } catch (e) {
       if (e.name === 'AbortError') return;
@@ -888,13 +902,30 @@ export default function CrossChain({ onConnectWallet }) {
     if (fbd == null || fbd <= 0) return;
     const dec = Math.min(fromToken.decimals, 9);
     if (fromToken?.mint === WSOL_MINT) {
-      setFromAmt(fmtInput(maxSafeSol(sbl), dec));
+      // Reserve network fee + estimated platform fee (use min fee as safe lower bound).
+      const reserveLamports = SOL_RESERVE + MIN_FEE_LAMPORTS;
+      setFromAmt(fmtInput(Math.max(0, (sbl - reserveLamports)) / LAMPORTS_PER_SOL, dec));
     } else {
       setFromAmt(fmtInput(fbd, dec));
     }
   }, [fbd, fromToken, sbl]);
 
-  /* EXECUTE — mirrors Predict pattern */
+  /* SOL-balance check for non-SOL inputs. The fee is paid in SOL even when
+   * bridging USDC/etc., so the user needs separate SOL for it + network fees. */
+  const solShortfall = useMemo(() => {
+    if (!quote || sbl == null) return null;
+    const need = quote.feeLamports + SOL_RESERVE;
+    // When input IS SOL, the input amount already comes out of SOL balance,
+    // so we need to check separately that the input + fee + reserve fit.
+    if (fromToken?.mint === WSOL_MINT) {
+      const inputLamports = Math.floor(Number(fromAmt) * LAMPORTS_PER_SOL);
+      const total = inputLamports + quote.feeLamports + SOL_RESERVE;
+      return sbl < total ? (total - sbl) : 0;
+    }
+    return sbl < need ? (need - sbl) : 0;
+  }, [quote, sbl, fromToken, fromAmt]);
+
+  /* EXECUTE — atomic single tx */
   const execute = useCallback(async () => {
     if (!wcon) { onConnectWallet?.(); return; }
     if (needsDest) {
@@ -902,8 +933,12 @@ export default function CrossChain({ onConnectWallet }) {
       if (e) { setAddrErr(e); return; }
     }
     if (!quote) { setSwapErr('No route. Wait for routing.'); return; }
-    if (!signAllTransactions) {
-      setSwapErr('Wallet does not support multi-tx signing. Use Phantom or Solflare.');
+    if (!signTransaction) {
+      setSwapErr('Wallet does not support signing. Use Phantom or Solflare.');
+      return;
+    }
+    if (solShortfall && solShortfall > 0) {
+      setSwapErr(`Not enough SOL — need ~${(solShortfall / LAMPORTS_PER_SOL).toFixed(4)} more SOL to cover the platform + network fee.`);
       return;
     }
 
@@ -917,62 +952,51 @@ export default function CrossChain({ onConnectWallet }) {
       const dec = fromToken.decimals;
       const raw = toRaw(fromAmt, dec);
       if (!raw || raw === '0') throw new Error('Invalid amount');
-      const netRaw = quote.netRaw || ((BigInt(raw) * BigInt(10000 - FEE_BPS)) / 10000n).toString();
 
       const sender   = pubkey.toString();
       const receiver = needsDest ? destAddr.trim() : sender;
       const fromMint = fromToken.mint || fromToken.address;
 
-      // 1) Fresh LI.FI quote at execute time
+      // 1) Fresh LI.FI quote at execute time (full amount, no fee deduction).
       const j = await lifiQuote({
         fromChainId: LIFI_SOLANA_ID,
         fromMint, toChainId: toToken.chainId, toAddress: toToken.address,
-        amount: netRaw, sender, receiver,
+        amount: raw, sender, receiver,
       });
       const txData = j?.transactionRequest?.data;
       if (!txData) throw new Error('LI.FI returned no transaction');
 
-      // 2) Deserialize bridge tx
-      let bridgeTx;
-      try {
-        bridgeTx = VersionedTransaction.deserialize(Buffer.from(txData, 'base64'));
-      } catch (e) {
-        throw new Error('Failed to deserialize bridge tx: ' + e.message);
-      }
+      // 2) Compute fee in SOL from this fresh quote's USD value.
+      const fromUSD = Number(j?.estimate?.fromAmountUSD) || quote.fromUSD || 0;
+      const solPrice = getSolPriceUSD();
+      const feeLamports = computeSolFeeLamports(fromUSD, solPrice);
 
-      // 3) Fresh blockhash; stamp BOTH txs with it
+      // 3) Fresh blockhash, then build the atomic tx.
+      setStatusMsg('Combining bridge + fee into one transaction…');
       const latest = await connection.getLatestBlockhash('confirmed');
-      bridgeTx.message.recentBlockhash = latest.blockhash;
-
-      // 4) Build fee tx (5% of input in input mint)
-      setStatusMsg('Preparing fee transaction…');
-      const feeTx = await buildFeeTx({
+      const tx = await buildAtomicTx({
         connection, payer: pubkey,
-        inputMint: fromMint, decimals: dec,
-        amountRaw: raw,
-        recentBlockhash: latest.blockhash,
+        bridgeTxBase64: txData,
+        feeLamports,
+        blockhash: latest.blockhash,
       });
-      if (!feeTx) throw new Error('Could not build fee transaction');
 
-      // 5) SIMULATE both txs before showing wallet popup (Predict pattern)
+      // 4) Simulate the EXACT bytes the wallet will sign.
       const mapSimErr = (logs) => {
         const t = (logs || []).join('\n').toLowerCase();
-        if (t.includes('insufficient') || t.includes('0x1')) return 'Insufficient balance for this bridge.';
+        if (t.includes('insufficient') || t.includes('0x1')) return 'Insufficient balance (need SOL for fee + bridge).';
         if (t.includes('slippage') || t.includes('0x1771'))  return 'Price moved — try a smaller amount or wait a moment.';
         if (t.includes('account not') || t.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
         if (t.includes('blockhash') || t.includes('expired')) return 'Quote expired. Please refresh and retry.';
         return null;
       };
       try {
-        const [simBridge, simFee] = await Promise.all([
-          connection.simulateTransaction(bridgeTx, { replaceRecentBlockhash: true, sigVerify: false }),
-          connection.simulateTransaction(feeTx,    { replaceRecentBlockhash: true, sigVerify: false }),
-        ]);
-        if (simBridge.value.err) {
-          throw new Error(mapSimErr(simBridge.value.logs) || 'Bridge simulation failed — the price may have moved.');
-        }
-        if (simFee.value.err) {
-          throw new Error(mapSimErr(simFee.value.logs) || 'Fee transaction simulation failed.');
+        const sim = await connection.simulateTransaction(tx, {
+          replaceRecentBlockhash: true,
+          sigVerify: false,
+        });
+        if (sim.value.err) {
+          throw new Error(mapSimErr(sim.value.logs) || 'Bridge simulation failed — the price may have moved.');
         }
       } catch (simErr) {
         if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
@@ -981,35 +1005,28 @@ export default function CrossChain({ onConnectWallet }) {
         console.warn('[crosschain] sim non-fatal', simErr);
       }
 
-      // 6) ONE wallet popup
+      // 5) Sign — one popup, wallet sees full tx including fee transfer.
       setStep(2);
-      setStatusMsg('Sign in wallet (one approval)…');
-      const [signedBridge, signedFee] = await signAllTransactions([bridgeTx, feeTx]);
+      setStatusMsg('Sign in wallet…');
+      const signed = await signTransaction(tx);
 
-      // 7) Broadcast both in parallel
+      // 6) Broadcast.
       setStep(3);
-      setStatusMsg('Submitting transactions…');
-      const [bridgeSig, feeSig] = await Promise.all([
-        connection.sendRawTransaction(signedBridge.serialize(), {
-          skipPreflight: false, maxRetries: 3,
-        }),
-        connection.sendRawTransaction(signedFee.serialize(), {
-          skipPreflight: false, maxRetries: 3,
-        }),
-      ]);
-      setTxSig(bridgeSig);
+      setStatusMsg('Submitting transaction…');
+      const sig = await connection.sendRawTransaction(signed.serialize(), {
+        skipPreflight: false, maxRetries: 3,
+      });
+      setTxSig(sig);
 
-      // 8) Confirm bridge tx; poll fallback (Predict pattern)
-      const confirmStrategy = (sig) => connection.confirmTransaction({
-        signature: sig,
-        blockhash: latest.blockhash,
-        lastValidBlockHeight: latest.lastValidBlockHeight,
-      }, 'confirmed');
-
+      // 7) Confirm with polling fallback.
       let bridgeOk = false;
       try {
         const result = await Promise.race([
-          confirmStrategy(bridgeSig),
+          connection.confirmTransaction({
+            signature: sig,
+            blockhash: latest.blockhash,
+            lastValidBlockHeight: latest.lastValidBlockHeight,
+          }, 'confirmed'),
           new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 35_000)),
         ]);
         bridgeOk = !result?.value?.err;
@@ -1019,7 +1036,7 @@ export default function CrossChain({ onConnectWallet }) {
         while (Date.now() < deadline) {
           await new Promise(r => setTimeout(r, 2000));
           try {
-            const st = await connection.getSignatureStatus(bridgeSig, { searchTransactionHistory: true });
+            const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
             const cs = st?.value?.confirmationStatus;
             if (cs === 'confirmed' || cs === 'finalized') { bridgeOk = true; break; }
             if (st?.value?.err) throw new Error('Bridge tx failed on-chain.');
@@ -1045,7 +1062,7 @@ export default function CrossChain({ onConnectWallet }) {
     }
   }, [
     wcon, needsDest, destAddr, toToken, fromToken, fromAmt,
-    pubkey, signAllTransactions, connection, quote, onConnectWallet, toChainType,
+    pubkey, signTransaction, connection, quote, onConnectWallet, toChainType, solShortfall,
   ]);
 
   const reset = useCallback(() => {
@@ -1055,7 +1072,7 @@ export default function CrossChain({ onConnectWallet }) {
 
   /* derived */
   const tuv = quote?.raw?.estimate?.toAmountUSD ? Number(quote.raw.estimate.toAmountUSD) : 0;
-  const fromUsd = quote?.raw?.estimate?.fromAmountUSD ? Number(quote.raw.estimate.fromAmountUSD) : 0;
+  const fromUsd = quote?.fromUSD || 0;
   const busy      = step > 0 && step < 4 && step !== -1;
   const isSuccess = step === 4;
   const isError   = step === -1;
@@ -1072,11 +1089,12 @@ export default function CrossChain({ onConnectWallet }) {
     if (needsDest && !destAddr.trim()) return 'Enter Destination';
     if (addrErr)      return 'Invalid Address';
     if (!quote)       return quoting ? 'Finding Route…' : 'No Route';
+    if (solShortfall) return 'Need more SOL';
     return `Bridge ${fromToken?.symbol || ''} → ${toToken?.symbol || ''}`;
   };
   const btnDisabled = busy ||
     (wcon && (!fromAmt || (needsDest && !destAddr.trim()) || !!addrErr ||
-              (!quote && !isError && !isSuccess)));
+              (!quote && !isError && !isSuccess) || !!solShortfall));
   const btnBg = () => {
     if (isSuccess)            return C.successGrad;
     if (isError)              return 'rgba(255,59,107,.2)';
@@ -1284,7 +1302,7 @@ export default function CrossChain({ onConnectWallet }) {
           }}>
             {[
               ['Route',        quote.bridge],
-              ['Platform fee', '5% (in ' + (fromToken?.symbol || '?') + ')'],
+              ['Platform fee', `${quote.feeSOL.toFixed(4)} SOL` + (quote.feeUSD ? ` (${fmtUsd(quote.feeUSD)})` : '')],
               ['Slippage',     (SLIPPAGE * 100).toFixed(1) + '%'],
               ['Est. time',    quote.estTime ? '~' + Math.max(1, Math.ceil(quote.estTime / 60)) + ' min' : '—'],
             ].map(([k, v]) => (
@@ -1293,6 +1311,25 @@ export default function CrossChain({ onConnectWallet }) {
                 <span style={{ color: C.text }}>{v}</span>
               </div>
             ))}
+            {fromToken?.mint !== WSOL_MINT && (
+              <div style={{
+                marginTop: 8, paddingTop: 8, borderTop: '1px solid ' + C.border,
+                fontSize: 10, color: C.muted, lineHeight: 1.4,
+              }}>
+                Fee paid in SOL from your wallet — you bridge 100% of your {fromToken?.symbol}.
+              </div>
+            )}
+          </div>
+        )}
+
+        {solShortfall > 0 && quote && (
+          <div style={{
+            marginTop: 10, padding: '10px 12px',
+            background: 'rgba(255,149,0,.08)',
+            border: '1px solid rgba(255,149,0,.2)',
+            borderRadius: 8, fontSize: 12, color: '#ff9500',
+          }}>
+            You need ~{(solShortfall / LAMPORTS_PER_SOL).toFixed(4)} more SOL in your wallet to cover the platform fee.
           </div>
         )}
 
