@@ -45,7 +45,7 @@ const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 // We do NOT add our own compute budget ixs anymore — Jupiter already includes
 // them in build.computeBudgetInstructions, and duplicating them in the same
 // tx would either be rejected or double-charge.
-const PRIORITY_FEE_MICROLAMPORTS = 5_000;
+const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 
 // Fixed slippage — high enough that the tx almost always lands. No user setting.
 const SLIPPAGE_BPS = 500; // 5%
