@@ -284,25 +284,45 @@ function pickPositionFields(p) {
 // Jupiter Predict requires JupUSD as depositMint — USDC is not accepted.
 // solLamports stays BigInt throughout — String(BigInt) = clean integer string.
 
-async function swapSolToJupUsdViaJupiter({ ownerPubkey, solLamports }) {
+async function swapSolToUsdcViaJupiter({ ownerPubkey, solLamports }) {
   const feeWallet  = new PublicKey(FEE_WALLET);
-  const wsolMint   = new PublicKey(SOL_MINT);
-  const feeAccount = getAssociatedTokenAddressSync(wsolMint, feeWallet).toBase58();
-  const buildParams = new URLSearchParams({
+  const usdcMint   = new PublicKey(USDC_MINT);
+  const feeAccount = getAssociatedTokenAddressSync(usdcMint, feeWallet).toBase58();
+
+  const quoteParams = new URLSearchParams({
     inputMint:                  SOL_MINT,
     outputMint:                 USDC_MINT,
     amount:                     String(solLamports),
-    taker:                      ownerPubkey,
+    swapMode:                   'ExactIn',
     slippageBps:                String(SLIPPAGE_BPS),
     platformFeeBps:             String(FEE_BPS),
-    feeAccount,
-    computeUnitPricePercentile: 'veryHigh',
+    restrictIntermediateTokens: 'true',
   });
-  const buildRes  = await jfetch(`/api/jupiter/build?${buildParams}`);
-  const buildData = await buildRes.json();
-  if (!buildData?.swapTransaction) throw new Error('Jupiter: no swapTransaction');
-  const postFeeUsdcAtomic = BigInt(buildData.outAmount);
-  const swapTx = VersionedTransaction.deserialize(b64ToBytes(buildData.swapTransaction));
+  const quoteRes = await jfetch(`/api/jupiter/quote?${quoteParams}`);
+  const quote    = await quoteRes.json();
+  if (!quote?.outAmount) throw new Error('Jupiter: quote failed');
+
+  const postFeeUsdcAtomic = BigInt(quote.outAmount);
+
+  const swapRes = await jfetch('/api/jupiter/swap', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      quoteResponse:             quote,
+      userPublicKey:             ownerPubkey,
+      feeAccount,
+      dynamicComputeUnitLimit:   true,
+      prioritizationFeeLamports: {
+        priorityLevelWithMaxLamports: {
+          maxLamports:   JUPITER_PRIORITY_LAMPORTS,
+          priorityLevel: 'veryHigh',
+        },
+      },
+    }),
+  });
+  const swapData = await swapRes.json();
+  if (!swapData?.swapTransaction) throw new Error('Jupiter: no swapTransaction');
+  const swapTx = VersionedTransaction.deserialize(b64ToBytes(swapData.swapTransaction));
   return { swapTx, postFeeUsdcAtomic };
 }
 
@@ -341,7 +361,7 @@ async function swapSolToJupUsdViaOkx({ ownerPubkey, solLamports }) {
 
 async function buildMetisSwapTx({ ownerPubkey, solLamports }) {
   const attempts = [
-    { name: 'Jupiter', fn: () => swapSolToJupUsdViaJupiter({ ownerPubkey, solLamports }) },
+    { name: 'Jupiter', fn: () => swapSolToUsdcViaJupiter({ ownerPubkey, solLamports }) },
     { name: 'OKX',     fn: () => swapSolToJupUsdViaOkx({ ownerPubkey, solLamports }) },
   ];
   let lastErr;
@@ -404,21 +424,41 @@ async function swapJupUsdToSolViaJupiter({ ownerPubkey, jupUsdAtomic }) {
   const feeWallet  = new PublicKey(FEE_WALLET);
   const jupUsdMint = new PublicKey(JUPUSD_MINT);
   const feeAccount = getAssociatedTokenAddressSync(jupUsdMint, feeWallet).toBase58();
-  const buildParams = new URLSearchParams({
+
+  const quoteParams = new URLSearchParams({
     inputMint:                  JUPUSD_MINT,
     outputMint:                 SOL_MINT,
     amount:                     String(jupUsdAtomic),
-    taker:                      ownerPubkey,
+    swapMode:                   'ExactIn',
     slippageBps:                String(SLIPPAGE_BPS),
     platformFeeBps:             String(FEE_BPS),
-    feeAccount,
-    computeUnitPricePercentile: 'veryHigh',
+    restrictIntermediateTokens: 'true',
   });
-  const buildRes  = await jfetch(`/api/jupiter/build?${buildParams}`);
-  const buildData = await buildRes.json();
-  if (!buildData?.swapTransaction) throw new Error('Jupiter: no swapTransaction');
-  const postFeeSolLamports = BigInt(buildData.outAmount);
-  const swapTx = VersionedTransaction.deserialize(b64ToBytes(buildData.swapTransaction));
+  const quoteRes = await jfetch(`/api/jupiter/quote?${quoteParams}`);
+  const quote    = await quoteRes.json();
+  if (!quote?.outAmount) throw new Error('Jupiter: quote failed');
+
+  const postFeeSolLamports = BigInt(quote.outAmount);
+
+  const swapRes = await jfetch('/api/jupiter/swap', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      quoteResponse:             quote,
+      userPublicKey:             ownerPubkey,
+      feeAccount,
+      dynamicComputeUnitLimit:   true,
+      prioritizationFeeLamports: {
+        priorityLevelWithMaxLamports: {
+          maxLamports:   JUPITER_PRIORITY_LAMPORTS,
+          priorityLevel: 'veryHigh',
+        },
+      },
+    }),
+  });
+  const swapData = await swapRes.json();
+  if (!swapData?.swapTransaction) throw new Error('Jupiter: no swapTransaction');
+  const swapTx = VersionedTransaction.deserialize(b64ToBytes(swapData.swapTransaction));
   return { swapTx, postFeeSolLamports };
 }
 
