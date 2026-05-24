@@ -1062,7 +1062,7 @@ export default function Predict() {
       if (alive) { setSolBal(s); setUsdcBal(u); }
     };
     tick();
-    const id = setInterval(tick, 6000);
+    const id = setInterval(tick, 20000);
     return () => { alive = false; clearInterval(id); };
   }, [publicKey, connection]);
 
@@ -1086,7 +1086,7 @@ export default function Predict() {
   useEffect(() => {
     setEvLoading(true);
     reloadEvents();
-    const id = setInterval(reloadEvents, 30000);
+    const id = setInterval(reloadEvents, 90000);
     return () => clearInterval(id);
   }, [reloadEvents]);
 
@@ -1105,7 +1105,7 @@ export default function Predict() {
   useEffect(() => {
     if (tab !== 'positions' || !publicKey) return;
     reloadPositions();
-    const id = setInterval(reloadPositions, 12000);
+    const id = setInterval(reloadPositions, 30000);
     return () => clearInterval(id);
   }, [tab, publicKey, reloadPositions]);
 
