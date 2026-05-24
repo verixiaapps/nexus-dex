@@ -35,7 +35,7 @@ import {
 
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS    = 500;
-const SLIPPAGE   = 0.005;
+const SLIPPAGE   = 0.05; // 5% — high enough that bridges almost always land
 
 const SOL_NATIVE      = '11111111111111111111111111111111';
 const WSOL_MINT       = 'So11111111111111111111111111111111111111112';
@@ -953,23 +953,14 @@ export default function CrossChain({ onConnectWallet }) {
       const raw = toRaw(fromAmt, dec);
       if (!raw || raw === '0') throw new Error('Invalid amount');
 
-      const sender   = pubkey.toString();
-      const receiver = needsDest ? destAddr.trim() : sender;
-      const fromMint = fromToken.mint || fromToken.address;
-
-      // 1) Fresh LI.FI quote at execute time (full amount, no fee deduction).
-      const j = await lifiQuote({
-        fromChainId: LIFI_SOLANA_ID,
-        fromMint, toChainId: toToken.chainId, toAddress: toToken.address,
-        amount: raw, sender, receiver,
-      });
+      // Use the SAME quote the user is looking at. No re-fetch — what
+      // they see is what they sign.
+      const j = quote.raw;
       const txData = j?.transactionRequest?.data;
       if (!txData) throw new Error('LI.FI returned no transaction');
 
-      // 2) Compute fee in SOL from this fresh quote's USD value.
-      const fromUSD = Number(j?.estimate?.fromAmountUSD) || quote.fromUSD || 0;
-      const solPrice = getSolPriceUSD();
-      const feeLamports = computeSolFeeLamports(fromUSD, solPrice);
+      // Use the fee already computed from this quote.
+      const feeLamports = quote.feeLamports;
 
       // 3) Fresh blockhash, then build the atomic tx.
       setStatusMsg('Combining bridge + fee into one transaction…');
