@@ -39,7 +39,6 @@ const SOL_MINT      = 'So11111111111111111111111111111111111111112';
 const JUPUSD_MINT   = 'JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD';
 const FEE_WALLET    = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
 const FEE_BPS       = 500;   // 5% — collected via Metis platformFeeBps
-const SLIPPAGE_BPS  = 1000;  // 10% on Predict minContracts
 const SOL_RPC       = '/api/solana-rpc';
 const MIN_TRADE_USD = 5;
 const NAV_CLEARANCE = 120;
@@ -335,7 +334,7 @@ async function buildMetisSwapTx({ ownerPubkey, solLamports }) {
 }
 
 // ─── Jupiter Predict buy order ───────────────────────────────────────────────
-async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomic, minContracts }) {
+async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomic }) {
   const r = await jfetch('/api/predict/orders', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -343,7 +342,6 @@ async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountUsdcAtomi
       ownerPubkey, marketId, isYes, isBuy: true,
       depositAmount: String(depositAmountUsdcAtomic),
       depositMint:   USDC_MINT,
-      contracts:     String(minContracts),
       prioritizationFeeLamports: JUPITER_PRIORITY_LAMPORTS,
     }),
   });
@@ -740,15 +738,11 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
       if (postFeeUsdcNum < MIN_TRADE_USD * 1e6)
         throw new Error(`Minimum trade is $${MIN_TRADE_USD}. Try a larger SOL amount.`);
 
-      // minContracts must be a whole integer — Jupiter Predict API requirement
-      const contractsExpected = postFeeUsdcNum / 1e6 / price;
-      const minContracts = Math.max(1, Math.floor(contractsExpected * (1 - SLIPPAGE_BPS / 10000)));
       const { tx: buyTx } = await buildBuyTx({
         ownerPubkey,
         marketId: m.marketId,
         isYes,
         depositAmountUsdcAtomic: Math.floor(postFeeUsdcNum).toString(),
-        minContracts,
       });
 
       // Step 4: Simulate both (debug only, non-blocking)
