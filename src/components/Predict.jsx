@@ -5,7 +5,7 @@
 // All USD-like values from Jupiter are in *micro-USD* (1,000,000 = $1.00),
 // often as STRINGS. Always parse with toUsd() before display/math.
 // closeTime / openTime are Unix SECONDS.
-//
+// 
 // Backend endpoints (server-predict.js):
 //   GET    /api/predict/events?category=&filter=&includeMarkets=true
 //   GET    /api/predict/markets/:marketId
