@@ -234,30 +234,11 @@ async function fetchJupUsdBalance(connection, ownerB58) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function fetchEvents(category) {
-  // Pull from all three buckets in parallel and dedupe — the API filter param
-  // is an OR-bucket, not a status field, so we need to merge to get the full
-  // picture of currently-trading markets (especially short-dated crypto ones
-  // that only show up under `live`).
-  const buckets = ['live', 'trending', 'new'];
-  const results = await Promise.allSettled(buckets.map(filter => {
-    const qs = new URLSearchParams();
-    qs.set('filter', filter);
-    qs.set('start', '0');
-    qs.set('end', '200');
-    if (category && category !== 'all') qs.set('category', category);
-    return jfetch('/api/predict/events?' + qs.toString()).then(r => r.json());
-  }));
-
-  const merged = new Map();
-  for (const r of results) {
-    if (r.status !== 'fulfilled') continue;
-    const arr = Array.isArray(r.value) ? r.value : (r.value?.data || r.value?.events || []);
-    for (const ev of arr) {
-      const id = ev?.eventId || ev?.id;
-      if (id && !merged.has(id)) merged.set(id, ev);
-    }
-  }
-  return Array.from(merged.values());
+  const qs = new URLSearchParams();
+  if (category && category !== 'all') qs.set('category', category);
+  const r = await jfetch('/api/predict/events?' + qs.toString());
+  const j = await r.json();
+  return Array.isArray(j) ? j : (j?.data || j?.events || []);
 }
 
 async function fetchPositions(ownerB58) {
