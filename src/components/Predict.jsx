@@ -333,7 +333,7 @@ async function swapSolToJupUsdViaOkx({ ownerPubkey, solLamports }) {
     fromTokenAddress: SOL_MINT,
     toTokenAddress:   USDC_MINT,
     amount:           String(solLamports),
-    slippage:         '0.1',
+    slippagePercent:  '0.1',
     userWalletAddress: ownerPubkey,
   });
   const quoteRes  = await jfetch(`/api/okx/dex/aggregator/quote?${quoteParams}`);
@@ -346,7 +346,7 @@ async function swapSolToJupUsdViaOkx({ ownerPubkey, solLamports }) {
     fromTokenAddress:  SOL_MINT,
     toTokenAddress:    USDC_MINT,
     amount:            String(solLamports),
-    slippage:          '0.1',
+    slippagePercent:   '0.1',
     userWalletAddress: ownerPubkey,
   });
   const swapRes  = await jfetch(`/api/okx/dex/aggregator/swap?${swapParams}`);
@@ -468,7 +468,7 @@ async function swapJupUsdToSolViaOkx({ ownerPubkey, jupUsdAtomic }) {
     fromTokenAddress:  JUPUSD_MINT,
     toTokenAddress:    SOL_MINT,
     amount:            String(jupUsdAtomic),
-    slippage:          '0.1',
+    slippagePercent:   '0.1',
     userWalletAddress: ownerPubkey,
   });
   const quoteRes  = await jfetch(`/api/okx/dex/aggregator/quote?${quoteParams}`);
@@ -481,7 +481,7 @@ async function swapJupUsdToSolViaOkx({ ownerPubkey, jupUsdAtomic }) {
     fromTokenAddress:  JUPUSD_MINT,
     toTokenAddress:    SOL_MINT,
     amount:            String(jupUsdAtomic),
-    slippage:          '0.1',
+    slippagePercent:   '0.1',
     userWalletAddress: ownerPubkey,
   });
   const swapRes  = await jfetch(`/api/okx/dex/aggregator/swap?${swapParams}`);
