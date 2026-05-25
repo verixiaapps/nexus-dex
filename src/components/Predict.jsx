@@ -1,34 +1,35 @@
 // Predict.jsx — Jupiter Prediction Markets on Solana.
 //
 // Spec: https://dev.jup.ag/docs/prediction
+// Get Events: https://dev.jup.ag/docs/api-reference/prediction/get-events
 //
 // ─── FLOW ────────────────────────────────────────────────────────────────────
 // BUY (SOL only, two signatures):
-//   Sig 1 — ATOMIC: SOL fee → FEE_WALLET + SOL → JupUSD swap (one tx, one sig)
-//           Built from Jupiter /build instructions, fee is a manual
-//           SystemProgram.transfer BEFORE Jupiter's setup ixs. Blowfish sees
-//           the full net effect (fee + swap) in one simulation.
+//   Sig 1 — ATOMIC: SOL fee → FEE_WALLET + SOL → JupUSD swap (one tx)
 //   Sig 2 — Jupiter Predict order with JupUSD deposit (sealed tx from /orders)
 //
 // SELL / CLAIM (two signatures):
 //   Sig 1 — Sell or claim tx from Jupiter Predict (sealed)
-//   Sig 2 — ATOMIC: JupUSD fee → FEE_WALLET + JupUSD → SOL swap (one tx, one sig)
+//   Sig 2 — ATOMIC: JupUSD fee → FEE_WALLET + JupUSD → SOL swap (one tx)
 //
 // ─── FEE MODEL ──────────────────────────────────────────────────────────────
-// 5% fee on every swap leg, taken in the INPUT mint, via manual transfer
-// instruction composed INTO the swap tx. Same pattern as Swap.jsx widget.
-// No platformFeeBps. Fee lands in FEE_WALLET before Jupiter touches anything.
+// 5% fee on every swap leg, taken in input mint, manual transfer composed
+// into the swap tx. Same pattern as Swap.jsx widget.
 //
-// ─── DEPOSIT MINT ───────────────────────────────────────────────────────────
-// Jupiter Predict accepts USDC or JupUSD as depositMint. We use JupUSD
-// throughout — single mint pipeline keeps the code clean and matches the
-// swap target.
+// ─── MARKETS ────────────────────────────────────────────────────────────────
+// Live crypto only. Sorted client-side by closeTime ascending. Auto-refresh
+// every 5 min, 30s when anything closes within 15 min.
 //
-// ─── WHY TWO SIGS ───────────────────────────────────────────────────────────
-// Predict /orders returns a sealed (pre-built) transaction. It cannot be
-// composed with the swap, and the API validates JupUSD balance at build time.
-// So the swap must land BEFORE we ask Predict to build the order. Two
-// signatures, clearly labeled "Step 1 of 2: Swap" and "Step 2 of 2: Order".
+// ─── DATA SHAPE (from API spec) ─────────────────────────────────────────────
+// Event:   eventId, isActive, isLive, category, subcategory, volumeUsd,
+//          closeCondition, beginAt, rulesPdf, tags[]
+// Event metadata: title, subtitle, slug, series, closeTime, imageUrl, isLive
+// Market:  marketId, openTime, closeTime, resolveAt, marketResultPubkey,
+//          imageUrl
+// Market metadata: title (the prediction question), status, result,
+//          rulesPrimary, rulesSecondary, isTeamMarket
+// Market pricing: buyYesPriceUsd, buyNoPriceUsd, sellYesPriceUsd,
+//          sellNoPriceUsd, volume (all in micro-USD, ÷1e6 = $)
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { Buffer } from 'buffer';
@@ -49,8 +50,8 @@ const SOL_MINT      = 'So11111111111111111111111111111111111111112';
 const JUPUSD_MINT   = 'JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD';
 const FEE_WALLET_B58 = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
 const FEE_WALLET    = new PublicKey(FEE_WALLET_B58);
-const FEE_BPS       = 500;   // 5% — taken in input mint
-const SLIPPAGE_BPS  = 1000;  // 10% swap slippage tolerance
+const FEE_BPS       = 500;
+const SLIPPAGE_BPS  = 1000;
 const SOL_RPC       = '/api/solana-rpc';
 const MIN_TRADE_USD = 5;
 const NAV_CLEARANCE = 120;
@@ -59,24 +60,10 @@ const SOL_DECIMALS    = 9;
 
 const PRIORITY_FEE_MICROLAMPORTS = 2_800_000;
 
-const CATEGORIES = [
-  { id: 'all',       label: 'All' },
-  { id: 'sports',    label: 'Sports' },
-  { id: 'crypto',    label: 'Crypto' },
-  { id: 'politics',  label: 'Politics' },
-  { id: 'esports',   label: 'E-sports' },
-  { id: 'culture',   label: 'Culture' },
-  { id: 'economics', label: 'Economics' },
-  { id: 'tech',      label: 'Tech' },
-];
+const REFRESH_NORMAL_MS = 300_000;
+const REFRESH_URGENT_MS = 30_000;
+const URGENT_WINDOW_MS  = 15 * 60_000;
 
-const SORTS = [
-  { id: 'volume', label: '📊 Volume' },
-  { id: 'ending', label: '⏱ Ending' },
-  { id: 'new',    label: '✨ New' },
-];
-
-// ─── Design tokens ────────────────────────────────────────────────────────────
 const C = {
   bg: '#03060f', card: '#080d1a', cardHi: '#0c1428',
   ink: '#e8ecf5', muted: '#8a96b8', muted2: '#475670',
@@ -137,11 +124,11 @@ function formatEndDate(closeTime) {
   if (ms == null) return null;
   const diff = ms - Date.now();
   if (diff <= 0) return 'Closed';
-  if (diff < 60 * 60_000) return `Ends in ${Math.floor(diff / 60_000)}m`;
+  if (diff < 60 * 60_000) return `${Math.floor(diff / 60_000)}m left`;
   if (diff < 24 * 60 * 60_000) {
     const h  = Math.floor(diff / 3_600_000);
     const mm = Math.floor((diff % 3_600_000) / 60_000);
-    return `Ends in ${h}h ${mm}m`;
+    return `${h}h ${mm}m left`;
   }
   const d   = new Date(ms);
   const mo  = d.toLocaleString('en-US', { month: 'short' });
@@ -157,21 +144,37 @@ function cleanAmount(v) {
 function b64ToBytes(b64) {
   return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 }
+
 async function jfetch(url, opts = {}, ms = 15000) {
-  const c  = new AbortController();
-  const id = setTimeout(() => c.abort(), ms);
-  try {
-    const r = await fetch(url, { ...opts, signal: c.signal });
-    if (!r.ok) {
-      let body = '';
-      try { body = await r.text(); } catch {}
-      const err = new Error(`HTTP ${r.status}: ${body.slice(0, 300) || r.statusText}`);
-      err.status = r.status; err.body = body;
-      throw err;
-    }
-    return r;
-  } finally { clearTimeout(id); }
+  const maxAttempts = 4;
+  let attempt = 0;
+  while (true) {
+    attempt++;
+    const c = new AbortController();
+    const id = setTimeout(() => c.abort(), ms);
+    try {
+      const r = await fetch(url, { ...opts, signal: c.signal });
+      if (r.status === 429 && attempt < maxAttempts) {
+        const ra = Number(r.headers.get('retry-after'));
+        const wait = Number.isFinite(ra) && ra > 0
+          ? ra * 1000
+          : Math.min(8000, 600 * 2 ** (attempt - 1)) + Math.random() * 250;
+        clearTimeout(id);
+        await new Promise(res => setTimeout(res, wait));
+        continue;
+      }
+      if (!r.ok) {
+        let body = '';
+        try { body = await r.text(); } catch {}
+        const err = new Error(`HTTP ${r.status}: ${body.slice(0, 300) || r.statusText}`);
+        err.status = r.status; err.body = body;
+        throw err;
+      }
+      return r;
+    } finally { clearTimeout(id); }
+  }
 }
+
 function useBodyLock(open) {
   useEffect(() => {
     if (!open || typeof document === 'undefined') return;
@@ -186,6 +189,8 @@ async function copyToClipboard(text) {
 
 function friendlyError(err) {
   const m = String(err?.message || err || '').toLowerCase();
+  if (err?.status === 429 || m.includes('too many requests') || m.includes('slow down'))
+    return 'Rate limited. Wait a few seconds and try again.';
   if (m.includes('insufficient'))      return 'Insufficient balance.';
   if (m.includes('slippage'))          return 'Price moved too much. Try again.';
   if (m.includes('blockhash') || m.includes('expired'))
@@ -198,7 +203,6 @@ function friendlyError(err) {
   return err?.message || 'Something went wrong. Please try again.';
 }
 
-// Deserialize a Jupiter /build instruction into a web3.js TransactionInstruction-shaped object.
 const deserIx = (ix) => ({
   programId: new PublicKey(ix.programId),
   keys: ix.accounts.map(a => ({
@@ -230,12 +234,17 @@ async function fetchJupUsdBalance(connection, ownerB58) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 3: Jupiter Predict API wrappers + field normalizers
+// SECTION 3: Jupiter Predict API + normalizers
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function fetchEvents(category) {
-  const qs = new URLSearchParams();
-  if (category && category !== 'all') qs.set('category', category);
+async function fetchEvents() {
+  const qs = new URLSearchParams({
+    category: 'crypto',
+    filter: 'live',
+    includeMarkets: 'true',
+    start: '0',
+    end: '50',
+  });
   const r = await jfetch('/api/predict/events?' + qs.toString());
   const j = await r.json();
   return Array.isArray(j) ? j : (j?.data || j?.events || []);
@@ -250,6 +259,9 @@ async function fetchPositions(ownerB58) {
   } catch { return []; }
 }
 
+// Normalize an event from the Jupiter /events response. Captures every
+// field documented in the API spec so the UI can surface what the user
+// needs to understand the prediction.
 function pickEventFields(ev) {
   if (!ev) return null;
   const market = (ev.markets && ev.markets[0]) || ev.market || null;
@@ -260,83 +272,176 @@ function pickEventFields(ev) {
   let   noPrice  = toUsd(pricing.buyNoPriceUsd);
   if (!noPrice && yesPrice) noPrice = +(1 - yesPrice).toFixed(4);
 
-  const meta  = market.metadata || ev.metadata || {};
-  const title = ev.title || meta.title || market.title || 'Untitled';
-  const image = ev.imageUrl || meta.imageUrl || ev.image || market.imageUrl || null;
+  const evMeta  = ev.metadata || {};
+  const mktMeta = market.metadata || {};
+
+  // Event title = broad topic. Market title = the actual YES/NO question.
+  const eventTitle  = ev.title || evMeta.title || 'Untitled';
+  const marketTitle = mktMeta.title || market.title || null;
+
+  const image = evMeta.imageUrl || ev.imageUrl || market.imageUrl || ev.image || null;
 
   return {
-    eventId:   ev.eventId || ev.id,
-    title,
+    // — Event identification —
+    eventId:     ev.eventId || ev.id,
+    title:       eventTitle,
+    subtitle:    evMeta.subtitle || null,
+    slug:        evMeta.slug || null,
     image,
-    category:  String(ev.category || meta.category || '').toLowerCase(),
-    series:    ev.series || ev.seriesName || null,
-    closeTime: meta.closeTime ?? market.closeTime ?? ev.closeTime ?? null,
-    createdAt: ev.createdAt || market.createdAt || null,
-    volume24h: toUsd(ev.volume24hr ?? ev.volume24h ?? pricing.volume ?? market.volume ?? 0),
-    liquidity: toUsd(ev.liquidity ?? market.liquidity ?? 0),
+
+    // — Classification —
+    category:    String(ev.category || '').toLowerCase(),
+    subcategory: ev.subcategory || null,
+    series:      evMeta.series || ev.series || null,
+    tags:        Array.isArray(ev.tags) ? ev.tags.filter(Boolean) : [],
+
+    // — Resolution —
+    closeCondition: ev.closeCondition || null,
+    rulesPdf:       ev.rulesPdf || null,
+
+    // — Timing —
+    closeTime: evMeta.closeTime ?? mktMeta.closeTime ?? market.closeTime ?? ev.closeTime ?? null,
+    beginAt:   ev.beginAt || null,
+
+    // — Stats —
+    volume24h: toUsd(ev.volumeUsd ?? pricing.volume ?? 0),
+    isLive:    ev.isLive !== false,
+    isActive:  ev.isActive !== false,
+
+    // — Market —
     market: {
-      marketId: market.marketId || market.id,
-      status:   market.status || meta.status || 'open',
-      result:   market.result || meta.result || null,
+      marketId:    market.marketId || market.id,
+      title:       marketTitle,
+      subtitle:    mktMeta.subtitle || null,
+      description: mktMeta.description || null,
+      rulesPrimary:   mktMeta.rulesPrimary || null,
+      rulesSecondary: mktMeta.rulesSecondary || null,
+      status:      mktMeta.status || market.status || 'open',
+      result:      mktMeta.result || market.result || null,
+      isTeamMarket:!!mktMeta.isTeamMarket,
+      openTime:    market.openTime || mktMeta.openTime || null,
+      closeTime:   market.closeTime || mktMeta.closeTime || null,
+      resolveAt:   market.resolveAt || null,
+      resultPubkey:market.marketResultPubkey || null,
+
       yesPrice, noPrice,
-      yesPct:   Math.max(0, Math.min(99, Math.round(yesPrice * 100))),
-      noPct:    Math.max(0, Math.min(99, Math.round(noPrice  * 100))),
+      sellYesPrice: toUsd(pricing.sellYesPriceUsd),
+      sellNoPrice:  toUsd(pricing.sellNoPriceUsd),
+      volume:       toUsd(pricing.volume || 0),
+
+      yesPct: Math.max(0, Math.min(99, Math.round(yesPrice * 100))),
+      noPct:  Math.max(0, Math.min(99, Math.round(noPrice  * 100))),
     },
   };
 }
 
 function pickPositionFields(p) {
   if (!p) return null;
-  const contracts    = Number(p.contracts || 0);
-  const avgPriceUsd  = toUsd(p.avgPriceUsd);
-  const markPriceUsd = toUsd(p.markPriceUsd);
-  const costUsd      = toUsd(p.totalCostUsd) || contracts * avgPriceUsd;
-  const valueUsd     = toUsd(p.valueUsd)     || contracts * markPriceUsd;
-  const pnlUsd       = toUsd(p.pnlUsd)       || (valueUsd - costUsd);
-  const payoutUsd    = toUsd(p.payoutUsd);
-  const evMeta       = p.eventMetadata  || {};
-  const mktMeta      = p.marketMetadata || {};
-  const title = evMeta.title || mktMeta.title || p.title || 'Position';
+
+  // Numerics — contracts is u64 as string per spec
+  const contracts     = Number(p.contracts || 0);
+  const openOrders    = Number(p.openOrders || 0);
+
+  // All micro-USD strings → USD numbers
+  const avgPriceUsd   = toUsd(p.avgPriceUsd);
+  const markPriceUsd  = p.markPriceUsd != null ? toUsd(p.markPriceUsd) : null;
+  const sellPriceUsd  = p.sellPriceUsd != null ? toUsd(p.sellPriceUsd) : null;
+
+  const costUsd       = toUsd(p.totalCostUsd ?? p.sizeUsd) || contracts * avgPriceUsd;
+  const valueUsd      = p.valueUsd != null
+    ? toUsd(p.valueUsd)
+    : (markPriceUsd != null ? contracts * markPriceUsd : null);
+
+  // Prefer server-computed P&L; fall back to client calc only if missing.
+  const pnlUsd        = p.pnlUsd != null
+    ? toUsd(p.pnlUsd)
+    : (valueUsd != null ? (valueUsd - costUsd) : null);
+  const pnlUsdPercent = p.pnlUsdPercent != null
+    ? Number(p.pnlUsdPercent)
+    : (costUsd > 0 && pnlUsd != null ? (pnlUsd / costUsd) * 100 : null);
+
+  // Fee-adjusted P&L — what they'd actually realize on exit
+  const pnlAfterFeesUsd     = p.pnlUsdAfterFees != null ? toUsd(p.pnlUsdAfterFees) : null;
+  const pnlAfterFeesPercent = p.pnlUsdAfterFeesPercent != null
+    ? Number(p.pnlUsdAfterFeesPercent) : null;
+
+  // Already-realized P&L from closed portions + fees paid
+  const realizedPnlUsd = p.realizedPnlUsd != null ? toUsd(p.realizedPnlUsd) : 0;
+  const feesPaidUsd    = toUsd(p.feesPaidUsd || 0);
+
+  const payoutUsd      = toUsd(p.payoutUsd);
+  const claimedUsd     = toUsd(p.claimedUsd || 0);
+
+  const evMeta  = p.eventMetadata  || {};
+  const mktMeta = p.marketMetadata || {};
+  const title         = evMeta.title || mktMeta.title || p.title || 'Position';
+  const eventSubtitle = evMeta.subtitle || null;
+  const eventImage    = evMeta.imageUrl || null;
+  const marketStatus  = mktMeta.status || null;
+  const marketResult  = mktMeta.result || null;
+
   return {
+    // — Identity —
     positionPubkey: p.pubkey || p.positionPubkey,
-    marketId:    p.marketId,
+    ownerPubkey:    p.ownerPubkey || null,
+    marketId:       p.marketId,
+    isYes:          !!p.isYes,
+
+    // — Display —
     title,
+    eventSubtitle,
+    eventImage,
+    eventId:      evMeta.eventId || null,
+    eventCategory:    evMeta.category || null,
+    eventSubcategory: evMeta.subcategory || null,
+    closeCondition:   evMeta.closeCondition || null,
     outcomeLabel: mktMeta.title || null,
-    marketResult: mktMeta.result || null,
-    isYes:       !!p.isYes,
-    contracts, avgPriceUsd, markPriceUsd, costUsd, valueUsd, pnlUsd, payoutUsd,
-    claimable:   !!p.claimable,
-    claimed:     !!p.claimed,
-    status:      p.claimed ? 'claimed' : (p.claimable ? 'claimable' : 'active'),
+    marketDescription: mktMeta.description || null,
+    marketStatus,
+    marketResult,
+    marketCloseTime:  mktMeta.closeTime || null,
+
+    // — State —
+    contracts,
+    openOrders,
+    claimable: !!p.claimable,
+    claimed:   !!p.claimed,
+    status:    p.claimed ? 'claimed' : (p.claimable ? 'claimable' : 'active'),
+
+    // — Timestamps —
+    openedAt:       p.openedAt || null,
+    updatedAt:      p.updatedAt || null,
+    claimableAt:    p.claimableAt || null,
+    settlementDate: p.settlementDate || null,
+
+    // — Pricing / P&L —
+    avgPriceUsd,
+    markPriceUsd,
+    sellPriceUsd,
+    costUsd,
+    valueUsd,
+    payoutUsd,
+    claimedUsd,
+
+    pnlUsd,
+    pnlUsdPercent,
+    pnlAfterFeesUsd,
+    pnlAfterFeesPercent,
+    realizedPnlUsd,
+    feesPaidUsd,
   };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 4: ATOMIC SWAP — fee + swap composed into one signed transaction
+// SECTION 4: ATOMIC SWAP
 // ═══════════════════════════════════════════════════════════════════════════════
-//
-// Same pattern as the Swap.jsx widget:
-//   1. Compute fee in input mint (5% of gross)
-//   2. Quote Jupiter for the NET amount (95%)
-//   3. Build single tx: [computeBudget] [fee transfer] [Jupiter setup] [swap] [cleanup]
-//   4. One signature, atomic on-chain, clean Blowfish sim.
 
-/**
- * SOL → JupUSD atomic swap with 5% SOL fee.
- *
- * @param {Object} args
- * @param {Connection} args.connection
- * @param {PublicKey}  args.ownerPubkey
- * @param {bigint}     args.grossLamports   total SOL the user is spending (fee + swap)
- * @returns {Promise<{tx: VersionedTransaction, expectedJupUsdAtomic: bigint, latestBlockhash: object}>}
- */
 async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }) {
   const feeLamports = (grossLamports * BigInt(FEE_BPS)) / 10000n;
   const netLamports = grossLamports - feeLamports;
   if (feeLamports <= 0n) throw new Error('Fee rounds to zero — amount too small.');
   if (netLamports <= 0n) throw new Error('Net amount after fee is zero.');
 
-  // Ask Jupiter to route ONLY the net amount.
   const params = new URLSearchParams({
     inputMint:   SOL_MINT,
     outputMint:  JUPUSD_MINT,
@@ -352,14 +457,12 @@ async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }
   const expectedJupUsdAtomic = BigInt(build.outAmount || 0);
   if (expectedJupUsdAtomic <= 0n) throw new Error('Jupiter quote returned zero output');
 
-  // Build the fee transfer (SOL → FEE_WALLET) BEFORE Jupiter wraps the rest.
   const feeIx = SystemProgram.transfer({
     fromPubkey: ownerPubkey,
     toPubkey:   FEE_WALLET,
-    lamports:   Number(feeLamports),   // safe: 5% of a reasonable SOL trade fits in Number
+    lamports:   Number(feeLamports),
   });
 
-  // Assemble: compute-budget → fee → setup → swap → cleanup → other
   const ixs = [];
   if (Array.isArray(build.computeBudgetInstructions))
     for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
@@ -371,7 +474,6 @@ async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }
   if (Array.isArray(build.otherInstructions))
     for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
 
-  // Resolve ALTs
   const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
   let alts = [];
   if (altKeys.length > 0) {
@@ -393,15 +495,6 @@ async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }
   return { tx, expectedJupUsdAtomic, latestBlockhash };
 }
 
-/**
- * JupUSD → SOL atomic swap with 5% JupUSD fee.
- * Used after sell / claim to convert winnings back to SOL.
- *
- * @param {Object} args
- * @param {Connection} args.connection
- * @param {PublicKey}  args.ownerPubkey
- * @param {bigint}     args.grossJupUsdAtomic   total JupUSD to spend (fee + swap)
- */
 async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtomic }) {
   const feeAtomic = (grossJupUsdAtomic * BigInt(FEE_BPS)) / 10000n;
   const netAtomic = grossJupUsdAtomic - feeAtomic;
@@ -422,7 +515,6 @@ async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtom
 
   const expectedSolLamports = BigInt(build.outAmount || 0);
 
-  // Fee is an SPL transfer in JupUSD. Need source/dest ATAs.
   const mintPk    = new PublicKey(JUPUSD_MINT);
   const sourceAta = getAssociatedTokenAddressSync(mintPk, ownerPubkey, true, TOKEN_PROGRAM_ID);
   const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,  true, TOKEN_PROGRAM_ID);
@@ -469,7 +561,7 @@ async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtom
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 5: Predict order builders (sealed txs from /orders, /positions/...)
+// SECTION 5: Predict order builders
 // ═══════════════════════════════════════════════════════════════════════════════
 
 async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountJupUsdAtomic }) {
@@ -478,7 +570,7 @@ async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountJupUsdAto
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       ownerPubkey, marketId, isYes, isBuy: true,
-      depositAmount: depositAmountJupUsdAtomic.toString(),  // BigInt → integer string
+      depositAmount: depositAmountJupUsdAtomic.toString(),
       depositMint:   JUPUSD_MINT,
     }),
   });
@@ -513,10 +605,6 @@ async function buildClaimTx({ ownerPubkey, positionPubkey }) {
 // SECTION 6: Submit + confirm helpers
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Sim the EXACT tx the user will sign. No replaceRecentBlockhash — we want
-// the wallet to simulate the same bytes. Throws on hard errors (insufficient
-// balance, slippage, etc) so we catch them before bothering the wallet.
-// Swallows transport-level glitches and proceeds.
 async function simulateOrThrow(connection, tx, label) {
   const mapSimErr = (logs) => {
     const j = (logs || []).join('\n').toLowerCase();
@@ -537,7 +625,6 @@ async function simulateOrThrow(connection, tx, label) {
       throw new Error(mapped || `Simulation failed for ${label}.`);
     }
   } catch (e) {
-    // Re-throw mapped errors; swallow transport glitches.
     if (e?.message && /balance|slippage|expired|account not|simulation failed/i.test(e.message)) {
       throw e;
     }
@@ -567,7 +654,6 @@ async function sendAndConfirm(connection, signedTx, blockhashInfo, setStMsg) {
     }
     return { sig, pending: false };
   } catch (e) {
-    // Poll status as fallback
     const deadline = Date.now() + 20_000;
     while (Date.now() < deadline) {
       await new Promise(r => setTimeout(r, 2000));
@@ -690,7 +776,7 @@ function PageHeader({ connected, solBal, tab, setTab, pubkey, onCopy }) {
         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 10 }}>
           <div>
             <h1 style={{ margin: 0, fontSize: 22, fontWeight: 900, color: C.ink, letterSpacing: -0.5, ...T.display }}>Predict</h1>
-            <div style={{ fontSize: 11, color: C.muted, ...T.mono, marginTop: 4 }}>Solana prediction markets · 5% fee · $1 per winning contract</div>
+            <div style={{ fontSize: 11, color: C.muted, ...T.mono, marginTop: 4 }}>Crypto markets · live · ending soonest</div>
           </div>
           <div style={{ fontSize: 10, color: C.hl, background: C.hlDim, border: `1px solid ${C.borderHi}`, padding: '2px 7px', borderRadius: 99, fontWeight: 700, letterSpacing: 1, ...T.mono }}>JUPITER</div>
         </div>
@@ -741,17 +827,48 @@ function MarketCard({ event, onTrade }) {
   const yPct = m.yesPct;
   const upside = p => (p < 0.02 || p > 0.98) ? 0 : Math.min(9999, Math.round((1 / p - 1) * 100));
   const clamp2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' };
+  const clamp1 = { display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical', overflow: 'hidden' };
   const closed = m.status !== 'open';
+
+  const closeMs = toMs(event.closeTime);
+  const isUrgent = closeMs && (closeMs - Date.now()) > 0 && (closeMs - Date.now()) < URGENT_WINDOW_MS;
+
   return (
-    <div style={{ padding: 10, borderRadius: 14, background: `linear-gradient(145deg, ${C.card}, ${C.cardHi})`, border: `1px solid ${C.border}`, marginBottom: 7, boxShadow: C.shadow, opacity: closed ? 0.55 : 1 }}>
+    <div style={{
+      padding: 10, borderRadius: 14,
+      background: `linear-gradient(145deg, ${C.card}, ${C.cardHi})`,
+      border: `1px solid ${isUrgent ? 'rgba(245,181,61,.40)' : C.border}`,
+      marginBottom: 7,
+      boxShadow: C.shadow,
+      opacity: closed ? 0.55 : 1,
+    }}>
       <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
         {event.image && <img src={event.image} alt="" onError={e => e.currentTarget.style.display = 'none'} style={{ width: 32, height: 32, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }} />}
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, lineHeight: 1.3, marginBottom: 4, ...T.body, ...clamp2 }}>{event.title}</div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 9, color: C.muted, ...T.mono }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, lineHeight: 1.3, marginBottom: 3, ...T.body, ...clamp2 }}>
+            {event.title}
+          </div>
+          {m.title && m.title !== event.title && (
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.hl, lineHeight: 1.3, marginBottom: 4, ...T.body, ...clamp1 }}>
+              {m.title}
+            </div>
+          )}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 9, color: C.muted, ...T.mono, alignItems: 'center' }}>
+            {event.subcategory && (
+              <span style={{ color: C.hl, textTransform: 'uppercase', fontWeight: 700, letterSpacing: 0.5 }}>
+                {event.subcategory}
+              </span>
+            )}
+            {event.subcategory && <span style={{ opacity: .4 }}>·</span>}
             <span>Vol {formatVol(event.volume24h)}</span>
-            {formatEndDate(event.closeTime) && <><span style={{ opacity: .4 }}>·</span><span>{formatEndDate(event.closeTime)}</span></>}
-            {event.category && <><span style={{ opacity: .4 }}>·</span><span style={{ textTransform: 'capitalize' }}>{event.category}</span></>}
+            {formatEndDate(event.closeTime) && (
+              <>
+                <span style={{ opacity: .4 }}>·</span>
+                <span style={{ color: isUrgent ? C.amber : C.muted, fontWeight: isUrgent ? 700 : 400 }}>
+                  {formatEndDate(event.closeTime)}
+                </span>
+              </>
+            )}
           </div>
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0, minWidth: 38 }}>
@@ -775,17 +892,14 @@ function MarketCard({ event, onTrade }) {
   );
 }
 
-// ─── BuyDrawer ────────────────────────────────────────────────────────────────
-// BUY FLOW:
-//   Step 1 of 2 — SIGN: Atomic [fee + swap] tx. SOL leaves wallet, JupUSD arrives.
-//   Step 2 of 2 — SIGN: Predict /orders tx. JupUSD deposited, contracts issued.
 function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
   const { publicKey, signTransaction } = useWallet();
 
   const [amount, setAmount]   = useState('0.1');
-  const [step, setStep]       = useState(0);          // 0 idle, 1 swap, 2 order, 3 done
+  const [step, setStep]       = useState(0);
   const [statusMsg, setStMsg] = useState('');
   const [error, setError]     = useState('');
+  const [showRules, setShowRules] = useState(false);
 
   useBodyLock(true);
 
@@ -793,7 +907,6 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
   const solAmount  = Number(amount) || 0;
   const grossLamports = BigInt(Math.round(solAmount * 1e9));
 
-  // Display-only estimates
   const SOL_PRICE_GUESS = 150;
   const estGrossUsd   = solAmount * SOL_PRICE_GUESS;
   const estFeeUsd     = estGrossUsd * (FEE_BPS / 10000);
@@ -822,7 +935,6 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
     setError('');
 
     try {
-      // ─── STEP 1 of 2: ATOMIC SWAP (fee + SOL→JupUSD) ────────────────────
       setStep(1);
       setStMsg('Building swap…');
 
@@ -833,7 +945,6 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
           grossLamports,
         });
 
-      // Sanity: post-fee output should exceed minimum trade size
       const minJupUsdAtomic = BigInt(Math.round(MIN_TRADE_USD * 1e6));
       if (expectedJupUsdAtomic < minJupUsdAtomic) {
         throw new Error(`Minimum trade is $${MIN_TRADE_USD}. Try a larger SOL amount.`);
@@ -851,16 +962,12 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
         throw new Error(`Swap submitted but still confirming. Solscan: https://solscan.io/tx/${swapResult.sig}`);
       }
 
-      // ─── STEP 2 of 2: PREDICT ORDER ─────────────────────────────────────
       setStep(2);
       setStMsg('Reading JupUSD balance…');
 
-      // Read actual on-chain JupUSD balance (more accurate than the quote estimate)
       const ownerB58 = publicKey.toBase58();
       let actualJupUsd = await fetchJupUsdBalance(connection, ownerB58);
 
-      // Use whichever is smaller — the new swap output, or the wallet's total.
-      // Cap to expectedJupUsdAtomic so we don't accidentally deposit pre-existing JupUSD.
       const depositAtomic = actualJupUsd < expectedJupUsdAtomic ? actualJupUsd : expectedJupUsdAtomic;
 
       if (depositAtomic <= 0n) {
@@ -887,7 +994,6 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
         throw new Error(`Order submitted but still confirming. Solscan: https://solscan.io/tx/${orderResult.sig}`);
       }
 
-      // ─── DONE ───────────────────────────────────────────────────────────
       setStep(3); setStMsg('');
       onDone?.();
       setTimeout(() => onClose(), 2200);
@@ -901,6 +1007,7 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
   ]);
 
   const solPresets = ['0.05', '0.1', '0.25', '0.5'];
+  const rulesText = m.rulesPrimary || event.closeCondition;
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
@@ -909,14 +1016,52 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
 
         {busy && <StepBadge current={step} total={2} />}
 
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 4, lineHeight: 1.35, ...T.body }}>{event.title}</div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 4, lineHeight: 1.35, ...T.body }}>
+          {event.title}
+        </div>
+
+        {event.subtitle && (
+          <div style={{ fontSize: 10, color: C.muted, marginBottom: 6, ...T.body }}>{event.subtitle}</div>
+        )}
+
+        {m.title && m.title !== event.title && (
+          <div style={{ fontSize: 13, fontWeight: 700, color: C.hl, marginBottom: 8, lineHeight: 1.3, ...T.body }}>
+            {m.title}
+          </div>
+        )}
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
           <div style={{ padding: '3px 8px', borderRadius: 99, background: sideDim, border: `1px solid ${sideColor}55`, color: sideColor, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>{sideLabel}</div>
           <div style={{ fontSize: 11, color: C.muted, ...T.mono }}>${price.toFixed(3)} · {Math.round(price * 100)}%</div>
+          {event.subcategory && (
+            <div style={{ fontSize: 9, color: C.hl, ...T.mono, fontWeight: 700, padding: '2px 6px', background: C.hlDim, borderRadius: 99 }}>{event.subcategory}</div>
+          )}
           <div style={{ marginLeft: 'auto', fontSize: 10, color: C.muted, ...T.mono }}>
             {(Number(solBal) / 1e9).toFixed(4)} SOL
           </div>
         </div>
+
+        {rulesText && (
+          <div style={{ marginBottom: 10, padding: 8, borderRadius: 8, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}` }}>
+            <button onClick={() => setShowRules(!showRules)} style={{ width: '100%', background: 'none', border: 'none', color: C.muted, fontSize: 9, fontWeight: 700, letterSpacing: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 0, ...T.mono }}>
+              <span>RESOLUTION</span>
+              <span style={{ fontSize: 11 }}>{showRules ? '−' : '+'}</span>
+            </button>
+            {showRules && (
+              <>
+                <div style={{ marginTop: 6, fontSize: 10, color: C.ink, lineHeight: 1.5, ...T.body }}>{rulesText}</div>
+                {m.rulesSecondary && m.rulesSecondary !== rulesText && (
+                  <div style={{ marginTop: 6, fontSize: 10, color: C.muted, lineHeight: 1.5, ...T.body }}>{m.rulesSecondary}</div>
+                )}
+                {event.rulesPdf && (
+                  <a href={event.rulesPdf} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 6, fontSize: 10, color: C.hl, textDecoration: 'underline', ...T.mono }}>
+                    Full rules ↗
+                  </a>
+                )}
+              </>
+            )}
+          </div>
+        )}
 
         <div style={{ marginBottom: 10 }}>
           <div style={{ fontSize: 9, color: C.muted, marginBottom: 5, textTransform: 'uppercase', letterSpacing: 1, ...T.mono }}>You pay</div>
@@ -939,6 +1084,9 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
           <Row label="Est. deposit" value={`~${fmtUsd(estDepositUsd)} JupUSD`} />
           <Row label="Est. contracts" value={`~${contractsEst.toFixed(2)}`} />
           <Row label={`If ${sideLabel} wins`} value={`~${fmtUsd(contractsEst)}`} valueColor={sideColor} bold />
+          {formatEndDate(event.closeTime) && (
+            <Row label="Closes" value={formatEndDate(event.closeTime)} />
+          )}
           <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}`, color: C.muted, fontSize: 9 }}>
             Two signatures: Swap SOL → JupUSD, then place order.
           </div>
@@ -1035,14 +1183,9 @@ function PositionCard({ p, onAction }) {
   );
 }
 
-// ─── Sell + Claim drawers ────────────────────────────────────────────────────
-// Both follow the same two-step shape as Buy, but in reverse:
-//   Step 1 of 2 — Sell or Claim tx from Predict (JupUSD lands in wallet)
-//   Step 2 of 2 — Atomic JupUSD → SOL swap (5% fee in JupUSD)
-
 function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
   const { publicKey, signTransaction } = useWallet();
-  const [step, setStep]       = useState(0);  // 0 idle, 1 predict tx, 2 swap, 3 done
+  const [step, setStep]       = useState(0);
   const [statusMsg, setStMsg] = useState('');
   const [error, setError]     = useState('');
 
@@ -1060,7 +1203,6 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
     setError('');
 
     try {
-      // ─── STEP 1 of 2: Predict (sell or claim) ──────────────────────────
       setStep(1);
       setStMsg(`Building ${isClaim ? 'claim' : 'sell'}…`);
 
@@ -1081,12 +1223,9 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
         throw new Error(`${isClaim ? 'Claim' : 'Sell'} submitted but still confirming. Solscan: https://solscan.io/tx/${predictResult.sig}`);
       }
 
-      // ─── STEP 2 of 2: Atomic JupUSD → SOL swap (5% fee) ────────────────
       setStep(2);
       setStMsg('Reading JupUSD balance…');
 
-      // Read actual JupUSD balance — what Predict actually paid out, may differ
-      // slightly from the displayed value.
       const actualJupUsd = await fetchJupUsdBalance(connection, ownerB58);
       if (actualJupUsd <= 0n) {
         throw new Error('No JupUSD found to swap. Refresh and try again.');
@@ -1171,10 +1310,8 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
 
 export default function Predict() {
   const { publicKey, connected } = useWallet();
-  const [tab, setTab]           = useState('markets');
-  const [category, setCategory] = useState('all');
-  const [sortBy, setSortBy]     = useState('volume');
-  const [search, setSearch]     = useState('');
+  const [tab, setTab]     = useState('markets');
+  const [search, setSearch] = useState('');
 
   const [events, setEvents]         = useState([]);
   const [evLoading, setEvLoading]   = useState(true);
@@ -1208,14 +1345,14 @@ export default function Predict() {
       if (alive) setSolBal(s);
     };
     tick();
-    const id = setInterval(tick, 300000);
+    const id = setInterval(tick, 300_000);
     return () => { alive = false; clearInterval(id); };
   }, [publicKey, connection]);
 
   const reloadEvents = useCallback(async () => {
     try {
       setEvError(null);
-      const raw = await fetchEvents(category);
+      const raw = await fetchEvents();
       const normalized = raw
         .map((ev, i) => {
           try { return pickEventFields(ev); }
@@ -1228,14 +1365,26 @@ export default function Predict() {
     } finally {
       setEvLoading(false);
     }
-  }, [category]);
+  }, []);
 
   useEffect(() => {
     setEvLoading(true);
     reloadEvents();
-    const id = setInterval(reloadEvents, 30_000);
-    return () => clearInterval(id);
   }, [reloadEvents]);
+
+  useEffect(() => {
+    const hasUrgent = events.some(e => {
+      const ms = toMs(e.closeTime);
+      return ms && ms - Date.now() < URGENT_WINDOW_MS && ms > Date.now();
+    });
+    const tick = () => {
+      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
+      if (buyState || actionPos) return;
+      reloadEvents();
+    };
+    const id = setInterval(tick, hasUrgent ? REFRESH_URGENT_MS : REFRESH_NORMAL_MS);
+    return () => clearInterval(id);
+  }, [reloadEvents, buyState, actionPos, events]);
 
   const reloadPositions = useCallback(async () => {
     if (!publicKey) { setPositions([]); return; }
@@ -1253,27 +1402,41 @@ export default function Predict() {
   useEffect(() => {
     if (tab !== 'positions' || !publicKey) return;
     reloadPositions();
-    const id = setInterval(reloadPositions, 300000);
+    const id = setInterval(reloadPositions, 300_000);
     return () => clearInterval(id);
   }, [tab, publicKey, reloadPositions]);
 
+  // Sort: active markets first, ascending close time. Search filters by event
+  // title, market title (the prediction), subcategory (the token), and tags.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    let r = q ? events.filter(e => (e.title || '').toLowerCase().includes(q)) : [...events];
-    if (sortBy === 'volume') {
-      r.sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
-    } else if (sortBy === 'ending') {
-      r.sort((a, b) => {
-        const ta = toMs(a.closeTime); const tb = toMs(b.closeTime);
-        const da = ta ? ta - Date.now() : Infinity;
-        const db = tb ? tb - Date.now() : Infinity;
-        return (da > 0 ? da : Infinity) - (db > 0 ? db : Infinity);
+    let r = events;
+    if (q) {
+      r = events.filter(e => {
+        const fields = [
+          e.title,
+          e.market?.title,
+          e.subcategory,
+          ...(e.tags || []),
+        ].filter(Boolean).join(' ').toLowerCase();
+        return fields.includes(q);
       });
-    } else if (sortBy === 'new') {
-      r.sort((a, b) => (toMs(b.createdAt) || 0) - (toMs(a.createdAt) || 0));
+    } else {
+      r = [...events];
     }
+    const now = Date.now();
+    r.sort((a, b) => {
+      const ta = toMs(a.closeTime);
+      const tb = toMs(b.closeTime);
+      const da = ta ? ta - now : Infinity;
+      const db = tb ? tb - now : Infinity;
+      const aClosed = da <= 0 ? 1 : 0;
+      const bClosed = db <= 0 ? 1 : 0;
+      if (aClosed !== bClosed) return aClosed - bClosed;
+      return da - db;
+    });
     return r;
-  }, [events, search, sortBy]);
+  }, [events, search]);
 
   const handleCopyAddr = useCallback(async () => {
     if (!publicKey) return;
@@ -1302,43 +1465,19 @@ export default function Predict() {
 
         {tab === 'markets' && (
           <>
-            <div style={{ display: 'flex', gap: 6, marginBottom: 8, overflowX: 'auto', paddingBottom: 4 }}>
-              {CATEGORIES.map(c => {
-                const active = category === c.id;
-                return (
-                  <button key={c.id} onClick={() => setCategory(c.id)}
-                    style={{ padding: '6px 11px', borderRadius: 99, whiteSpace: 'nowrap', background: active ? C.hlDim : 'rgba(255,255,255,.03)', border: `1px solid ${active ? C.borderHi : C.border}`, color: active ? C.hl : C.muted, fontSize: 10, fontWeight: 800, cursor: 'pointer', ...T.mono }}>
-                    {c.label}
-                  </button>
-                );
-              })}
-            </div>
-
-            <div style={{ marginBottom: 8, position: 'relative' }}>
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search markets…" inputMode="search"
+            <div style={{ marginBottom: 10, position: 'relative' }}>
+              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search BTC, ETH, SOL, JUP…" inputMode="search"
                 style={{ width: '100%', padding: '8px 12px 8px 32px', background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, borderRadius: 10, color: C.ink, fontSize: 12, outline: 'none', ...T.body }} />
               <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2" style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}>
                 <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" />
               </svg>
             </div>
 
-            <div style={{ display: 'flex', gap: 6, marginBottom: 10 }}>
-              {SORTS.map(s => {
-                const a = sortBy === s.id;
-                return (
-                  <button key={s.id} onClick={() => setSortBy(s.id)}
-                    style={{ padding: '6px 11px', borderRadius: 99, background: a ? 'rgba(255,255,255,.06)' : 'rgba(255,255,255,.02)', border: `1px solid ${a ? C.border : 'transparent'}`, color: a ? C.ink : C.muted2, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>
-                    {s.label}
-                  </button>
-                );
-              })}
-            </div>
-
             {evLoading && [1, 2, 3, 4].map(i => <Skeleton key={i} />)}
             {evError && <ErrorLine msg={evError} />}
             {!evLoading && !evError && filtered.length === 0 && (
               <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13, ...T.body }}>
-                {search ? `No markets match "${search}"` : 'No active markets in this category.'}
+                {search ? `No markets match "${search}"` : 'No live crypto markets right now — new ones drop constantly. Auto-refreshing…'}
               </div>
             )}
             {!evLoading && filtered.map(ev => (
