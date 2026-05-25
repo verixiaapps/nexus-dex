@@ -64,6 +64,63 @@ const REFRESH_NORMAL_MS = 300_000;
 const REFRESH_URGENT_MS = 30_000;
 const URGENT_WINDOW_MS  = 15 * 60_000;
 
+// ─── Polymarket integration ─────────────────────────────────────────────────
+// Polymarket is Jupiter's upstream provider. Their public Gamma API gives us
+// the full description text (which states the starting price for short
+// up/down markets), the outcome labels, and group thresholds. Their RTDS
+// WebSocket streams live Chainlink oracle prices — the same feed used for
+// settlement, so the "current price" we show matches what the market resolves
+// against.
+const POLY_GAMMA_BASE = 'https://gamma-api.polymarket.com';
+const POLY_RTDS_WSS   = 'wss://ws-live-data.polymarket.com';
+const POLY_RTDS_TOPIC = 'crypto_prices_chainlink';
+const POLY_RTDS_PING_MS = 5000;     // docs: send PING every 5 seconds
+const POLY_PRICE_TO_BEAT_BASE = 'https://polymarket.com/api/equity/price-to-beat';
+
+// Regex to extract a USD price from descriptive text. Handles "$108,432.50",
+// "108,432", "starting price of 108432.5", etc. Picks the LARGEST plausible
+// number — token thresholds are usually the biggest figure in the rules.
+function extractStartingPrice(text) {
+  if (!text || typeof text !== 'string') return null;
+  // Match $-prefixed or plain decimal numbers with optional commas/decimals.
+  const matches = text.match(/\$?\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]+)?)/g);
+  if (!matches) return null;
+  let best = 0;
+  for (const raw of matches) {
+    const n = Number(raw.replace(/[$,\s]/g, ''));
+    if (Number.isFinite(n) && n > best && n < 10_000_000) best = n;
+  }
+  return best > 0 ? best : null;
+}
+
+// Map a subcategory tag like "BTC" or "Bitcoin" to a Chainlink RTDS symbol
+// like "btc/usd". Returns null for unknown assets so we just skip the price
+// chip rather than guessing.
+function symbolFromSubcategory(sub) {
+  if (!sub) return null;
+  const s = String(sub).toLowerCase().trim();
+  // Common aliases — Polymarket uses tickers in their tags.
+  const map = {
+    bitcoin: 'btc/usd', btc: 'btc/usd',
+    ethereum: 'eth/usd', eth: 'eth/usd',
+    solana: 'sol/usd', sol: 'sol/usd',
+    jupiter: 'jup/usd', jup: 'jup/usd',
+    dogecoin: 'doge/usd', doge: 'doge/usd',
+    ripple: 'xrp/usd', xrp: 'xrp/usd',
+    cardano: 'ada/usd', ada: 'ada/usd',
+    binancecoin: 'bnb/usd', bnb: 'bnb/usd',
+    avalanche: 'avax/usd', avax: 'avax/usd',
+    polkadot: 'dot/usd', dot: 'dot/usd',
+    chainlink: 'link/usd', link: 'link/usd',
+    matic: 'matic/usd', polygon: 'matic/usd',
+    litecoin: 'ltc/usd', ltc: 'ltc/usd',
+  };
+  if (map[s]) return map[s];
+  // Fallback: if it looks like a 3-5 char ticker, try `<ticker>/usd`.
+  if (/^[a-z]{2,6}$/.test(s)) return `${s}/usd`;
+  return null;
+}
+
 const C = {
   bg: '#03060f', card: '#080d1a', cardHi: '#0c1428',
   ink: '#e8ecf5', muted: '#8a96b8', muted2: '#475670',
@@ -189,7 +246,13 @@ async function copyToClipboard(text) {
 
 function friendlyError(err) {
   const m = String(err?.message || err || '').toLowerCase();
-  if (err?.status === 429 || m.includes('too many requests') || m.includes('slow down'))
+  const status = err?.status;
+  // Per Jupiter Predict docs (developers.jup.ag/docs/prediction), US and South
+  // Korean IPs are blocked from the Prediction Market API. Detect and surface
+  // a clearer message.
+  if (status === 451 || status === 403 || m.includes('geographic') || m.includes('region') || m.includes('forbidden region') || m.includes('not available in your'))
+    return 'Predict is not available in your region (US / South Korea blocked by Jupiter).';
+  if (status === 429 || m.includes('too many requests') || m.includes('slow down'))
     return 'Rate limited. Wait a few seconds and try again.';
   if (m.includes('insufficient'))      return 'Insufficient balance.';
   if (m.includes('slippage'))          return 'Price moved too much. Try again.';
@@ -333,6 +396,217 @@ function pickEventFields(ev) {
       noPct:  Math.max(0, Math.min(99, Math.round(noPrice  * 100))),
     },
   };
+}
+
+// ─── Open-market filter ──────────────────────────────────────────────────────
+// Per Jupiter Predict docs, market.status can be: open | closed | settled |
+// cancelled. We only want 'open' for trading. Jupiter's filter=live param
+// only means the event has begun — it does NOT mean the market is still
+// tradeable. So we check every signal locally and drop anything that's
+// settled, cancelled, past close, or already has a YES/NO result.
+function isMarketOpen(event) {
+  if (!event) return false;
+  if (event.isActive === false) return false;
+  if (event.isLive === false)   return false;
+  const m = event.market;
+  if (!m) return false;
+  if (m.status && m.status !== 'open') return false;     // closed | settled | cancelled
+  if (m.result && m.result !== 'pending' && m.result !== '') return false;  // 'yes' or 'no' → settled
+  const ms = toMs(event.closeTime);
+  if (ms != null && ms <= Date.now()) return false;
+  return true;
+}
+
+// ─── Polymarket Gamma supplement ─────────────────────────────────────────────
+// Jupiter passes Polymarket data through but strips the long-form description,
+// outcome labels, group thresholds, and short-window price changes. We hit
+// gamma-api.polymarket.com directly by slug to fill those gaps so users can
+// actually see what they're betting on.
+//
+// One batched fetch per page load. Result cached by slug for the refresh
+// cycle. Failures are silent — Jupiter's data is enough on its own, this is
+// purely additive context.
+async function fetchPolymarketEvent(slug) {
+  if (!slug) return null;
+  try {
+    const url = `${POLY_GAMMA_BASE}/events/slug/${encodeURIComponent(slug)}`;
+    const r = await fetch(url, { method: 'GET' });
+    if (!r.ok) return null;
+    const j = await r.json();
+    return Array.isArray(j) ? j[0] : j;
+  } catch { return null; }
+}
+
+// Polymarket-side "still tradeable" check. The Gamma API has a known bug
+// where eliminated/settled markets can still report active=true; acceptingOrders
+// is the most reliable flag. We also reject anything UMA has resolved.
+function isPolymarketOpen(pmEvent, pmMarket) {
+  if (pmEvent) {
+    if (pmEvent.closed === true)   return false;
+    if (pmEvent.archived === true) return false;
+    if (pmEvent.active === false)  return false;
+  }
+  if (pmMarket) {
+    if (pmMarket.closed === true)        return false;
+    if (pmMarket.archived === true)      return false;
+    if (pmMarket.active === false)       return false;
+    if (pmMarket.acceptingOrders === false) return false;
+    const ums = String(pmMarket.umaResolutionStatus || '').toLowerCase();
+    if (ums === 'resolved' || ums === 'proposed') return false;
+  }
+  return true;
+}
+
+// Extract the field set we actually use from a Polymarket event response.
+// First market in the array is the one Jupiter's first market mirrors —
+// they're indexed in the same order.
+function pickPolymarketFields(pmEvent) {
+  if (!pmEvent) return null;
+  const pmMkt = (pmEvent.markets && pmEvent.markets[0]) || null;
+  if (!isPolymarketOpen(pmEvent, pmMkt)) return { settled: true };
+
+  // outcomes / outcomePrices are JSON-encoded strings in the response.
+  let outcomes = null, outcomePrices = null;
+  try { outcomes      = pmMkt?.outcomes      ? JSON.parse(pmMkt.outcomes)      : null; } catch {}
+  try { outcomePrices = pmMkt?.outcomePrices ? JSON.parse(pmMkt.outcomePrices) : null; } catch {}
+
+  const description = pmEvent.description || pmMkt?.description || null;
+
+  return {
+    settled: false,
+    description,
+    startingPrice: extractStartingPrice(description),
+    outcomes,                                  // ["Yes","No"] or ["Up","Down"] or team names
+    outcomePrices: Array.isArray(outcomePrices) ? outcomePrices.map(Number) : null,
+    groupItemTitle:  pmMkt?.groupItemTitle  || null,  // "$150k" / "March 31" / team name
+    lastTradePrice:  pmMkt?.lastTradePrice  != null ? Number(pmMkt.lastTradePrice)  : null,
+    bestBid:         pmMkt?.bestBid         != null ? Number(pmMkt.bestBid)         : null,
+    bestAsk:         pmMkt?.bestAsk         != null ? Number(pmMkt.bestAsk)         : null,
+    spread:          pmMkt?.spread          != null ? Number(pmMkt.spread)          : null,
+    oneHourPriceChange:  pmMkt?.oneHourPriceChange  != null ? Number(pmMkt.oneHourPriceChange)  : null,
+    oneDayPriceChange:   pmMkt?.oneDayPriceChange   != null ? Number(pmMkt.oneDayPriceChange)   : null,
+    oneWeekPriceChange:  pmMkt?.oneWeekPriceChange  != null ? Number(pmMkt.oneWeekPriceChange)  : null,
+    volume24hr:      pmMkt?.volume24hr      != null ? Number(pmMkt.volume24hr)      : (pmEvent.volume24hr != null ? Number(pmEvent.volume24hr) : null),
+    liquidity:       pmMkt?.liquidityNum    != null ? Number(pmMkt.liquidityNum)    : (pmEvent.liquidity  != null ? Number(pmEvent.liquidity)  : null),
+    competitive:     pmEvent.competitive    != null ? Number(pmEvent.competitive)   : null,
+    commentCount:    pmEvent.commentCount   != null ? Number(pmEvent.commentCount)  : null,
+  };
+}
+
+// ─── Price-to-beat (reference price) ─────────────────────────────────────────
+// Per Polymarket docs (https://docs.polymarket.com/market-data/websocket/rtds):
+//   GET https://polymarket.com/api/equity/price-to-beat/{slug}
+// Returns the opening "price to beat" for an up/down market. This is THE
+// reference price the user is betting against. Works for any market with a
+// slug — crypto, equity, commodity, forex. The exact response shape isn't
+// in the public docs, so we look for the price under several plausible
+// keys (value, price, priceToBeat) and ignore anything else.
+async function fetchPriceToBeat(slug) {
+  if (!slug) return null;
+  try {
+    const r = await fetch(`${POLY_PRICE_TO_BEAT_BASE}/${encodeURIComponent(slug)}`);
+    if (!r.ok) return null;
+    const j = await r.json().catch(() => null);
+    if (j == null) return null;
+    if (typeof j === 'number' && Number.isFinite(j)) return j;
+    // Try common field names defensively.
+    const candidates = [j.value, j.price, j.priceToBeat, j.price_to_beat, j.startingPrice, j.starting_price, j.openPrice, j.open_price];
+    for (const c of candidates) {
+      const n = typeof c === 'string' ? Number(c) : c;
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+    return null;
+  } catch { return null; }
+}
+
+// ─── Live crypto prices via Polymarket RTDS WebSocket ────────────────────────
+// Endpoint:  wss://ws-live-data.polymarket.com  (no auth)
+// Topic:     crypto_prices_chainlink            (same feed Polymarket settles on)
+// Symbols:   slash-separated, e.g. btc/usd, eth/usd, sol/usd, xrp/usd, doge/usd
+// Subscribe with empty filters to receive every symbol the topic carries.
+// Send PING every 5s per docs to keep the connection alive.
+// Reconnect with exponential backoff on close/error.
+//
+// Returns a Map<symbol, { value, timestamp }> updated in place via React state.
+function useLiveCryptoPrices(enabled) {
+  const [prices, setPrices] = useState(() => new Map());
+
+  useEffect(() => {
+    if (!enabled || typeof window === 'undefined' || typeof WebSocket === 'undefined') return;
+
+    let ws = null;
+    let pingId = null;
+    let reconnectId = null;
+    let attempt = 0;
+    let closed = false;
+
+    const connect = () => {
+      if (closed) return;
+      try { ws = new WebSocket(POLY_RTDS_WSS); }
+      catch (e) { scheduleReconnect(); return; }
+
+      ws.onopen = () => {
+        attempt = 0;
+        try {
+          ws.send(JSON.stringify({
+            action: 'subscribe',
+            subscriptions: [{ topic: POLY_RTDS_TOPIC, type: '*', filters: '' }],
+          }));
+        } catch {}
+        // PING loop per docs (every 5s).
+        pingId = setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            try { ws.send('PING'); } catch {}
+          }
+        }, POLY_RTDS_PING_MS);
+      };
+
+      ws.onmessage = (ev) => {
+        // PONG / non-JSON frames — skip.
+        if (typeof ev.data !== 'string') return;
+        if (ev.data === 'PONG' || ev.data === 'PING') return;
+        let msg;
+        try { msg = JSON.parse(ev.data); } catch { return; }
+        if (!msg || msg.topic !== POLY_RTDS_TOPIC) return;
+        const p = msg.payload;
+        if (!p || typeof p.symbol !== 'string' || typeof p.value !== 'number') return;
+        const sym = p.symbol.toLowerCase();
+        const value = p.value;
+        const ts    = Number(p.timestamp) || Date.now();
+        setPrices(prev => {
+          const next = new Map(prev);
+          next.set(sym, { value, timestamp: ts });
+          return next;
+        });
+      };
+
+      ws.onclose = () => {
+        if (pingId) { clearInterval(pingId); pingId = null; }
+        scheduleReconnect();
+      };
+      ws.onerror = () => { /* onclose handles reconnect */ };
+    };
+
+    const scheduleReconnect = () => {
+      if (closed) return;
+      attempt += 1;
+      const wait = Math.min(30_000, 1000 * 2 ** Math.min(attempt - 1, 5)) + Math.random() * 500;
+      reconnectId = setTimeout(connect, wait);
+    };
+
+    connect();
+
+    return () => {
+      closed = true;
+      if (pingId)      clearInterval(pingId);
+      if (reconnectId) clearTimeout(reconnectId);
+      if (ws) {
+        try { ws.close(); } catch {}
+      }
+    };
+  }, [enabled]);
+
+  return prices;
 }
 
 function pickPositionFields(p) {
@@ -820,8 +1094,9 @@ function PageHeader({ connected, solBal, tab, setTab, pubkey, onCopy }) {
 // SECTION 9: Market card + Buy drawer
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function MarketCard({ event, onTrade }) {
+function MarketCard({ event, livePrices, onTrade }) {
   const m = event.market;
+  const poly = event.poly || null;
   const yp = m.yesPrice;
   const np = m.noPrice;
   const yPct = m.yesPct;
@@ -832,6 +1107,40 @@ function MarketCard({ event, onTrade }) {
 
   const closeMs = toMs(event.closeTime);
   const isUrgent = closeMs && (closeMs - Date.now()) > 0 && (closeMs - Date.now()) < URGENT_WINDOW_MS;
+
+  // Outcome labels — Polymarket gives the real labels (e.g., "Up"/"Down",
+  // team names, "Trump"/"Harris"). Fall back to YES/NO if missing.
+  const yesLabel = poly?.outcomes?.[0] || 'Yes';
+  const noLabel  = poly?.outcomes?.[1] || 'No';
+
+  // Price-to-beat (the reference) and the current live Chainlink price for
+  // the asset. Both can be null — if they are, the price strip just doesn't
+  // render. Reference is per-market (Polymarket endpoint); current is from
+  // the RTDS WebSocket, keyed by symbol.
+  const priceToBeat = poly?.priceToBeat ?? poly?.startingPrice ?? null;
+  const symbol      = symbolFromSubcategory(event.subcategory);
+  const live        = symbol ? livePrices?.get(symbol) : null;
+  const currentPrice = live?.value ?? null;
+  const hasPrices    = priceToBeat != null && currentPrice != null;
+  const priceDelta   = hasPrices ? currentPrice - priceToBeat : null;
+  const priceDeltaPct = hasPrices && priceToBeat > 0 ? (priceDelta / priceToBeat) * 100 : null;
+  const isUp = priceDelta != null && priceDelta >= 0;
+  const fmtPrice = (n) => {
+    if (n == null) return '—';
+    if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    if (n >= 1)    return '$' + n.toFixed(2);
+    if (n >= 0.01) return '$' + n.toFixed(4);
+    return '$' + n.toFixed(6);
+  };
+
+  // First sentence of the description — so the user sees the resolution
+  // criteria right on the card, not just an abstract question.
+  const ruleSnippet = (() => {
+    const txt = poly?.description || m.rulesPrimary || event.closeCondition;
+    if (!txt) return null;
+    const firstSentence = String(txt).trim().split(/(?<=[.!?])\s/)[0];
+    return firstSentence.length > 160 ? firstSentence.slice(0, 157) + '…' : firstSentence;
+  })();
 
   return (
     <div style={{
@@ -853,6 +1162,15 @@ function MarketCard({ event, onTrade }) {
               {m.title}
             </div>
           )}
+
+          {/* Threshold / differentiator chip — most meaningful for grouped
+              markets ("$150k" / "March 31" / a player name). */}
+          {poly?.groupItemTitle && (
+            <div style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 99, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 10, fontWeight: 700, letterSpacing: 0.4, marginBottom: 4, ...T.mono }}>
+              {poly.groupItemTitle}
+            </div>
+          )}
+
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 9, color: C.muted, ...T.mono, alignItems: 'center' }}>
             {event.subcategory && (
               <span style={{ color: C.hl, textTransform: 'uppercase', fontWeight: 700, letterSpacing: 0.5 }}>
@@ -873,18 +1191,70 @@ function MarketCard({ event, onTrade }) {
         </div>
         <div style={{ textAlign: 'right', flexShrink: 0, minWidth: 38 }}>
           <div style={{ fontSize: 15, fontWeight: 800, color: yPct >= 50 ? C.yes : C.no, lineHeight: 1, ...T.display }}>{yPct}%</div>
-          <div style={{ fontSize: 9, color: C.muted, marginTop: 2, ...T.mono }}>YES</div>
+          <div style={{ fontSize: 9, color: C.muted, marginTop: 2, ...T.mono, textTransform: 'uppercase' }}>{yesLabel}</div>
         </div>
       </div>
+
+      {/* Price strip — the ACTUAL bet. Reference (price-to-beat) on the
+          left, live current price on the right, delta in the middle.
+          Live current price comes from the Polymarket RTDS Chainlink
+          stream — the same feed the market resolves against. */}
+      {(priceToBeat != null || currentPrice != null) && (
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8,
+          padding: '7px 10px', borderRadius: 10,
+          background: hasPrices
+            ? (isUp ? 'rgba(0,212,163,.06)' : 'rgba(255,95,122,.06)')
+            : 'rgba(255,255,255,.02)',
+          border: `1px solid ${hasPrices ? (isUp ? 'rgba(0,212,163,.25)' : 'rgba(255,95,122,.25)') : C.border}`,
+          ...T.mono,
+        }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
+            <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1 }}>PRICE TO BEAT</div>
+            <div style={{ fontSize: 12, color: C.ink, fontWeight: 700, ...T.display }}>
+              {priceToBeat != null ? fmtPrice(priceToBeat) : '—'}
+            </div>
+          </div>
+          <div style={{ textAlign: 'center', minWidth: 60 }}>
+            {priceDelta != null ? (
+              <>
+                <div style={{ fontSize: 13, fontWeight: 800, color: isUp ? C.yes : C.no, lineHeight: 1, ...T.display }}>
+                  {isUp ? '▲' : '▼'} {Math.abs(priceDeltaPct).toFixed(2)}%
+                </div>
+                <div style={{ fontSize: 8, color: isUp ? C.yes : C.no, marginTop: 2, opacity: .8 }}>
+                  {isUp ? '+' : '−'}{fmtPrice(Math.abs(priceDelta))}
+                </div>
+              </>
+            ) : (
+              <div style={{ fontSize: 9, color: C.muted2 }}>—</div>
+            )}
+          </div>
+          <div style={{ flex: 1, minWidth: 0, textAlign: 'right' }}>
+            <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1 }}>NOW</div>
+            <div style={{ fontSize: 12, fontWeight: 700, color: hasPrices ? (isUp ? C.yes : C.no) : C.ink, ...T.display }}>
+              {currentPrice != null ? fmtPrice(currentPrice) : '—'}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* First sentence of resolution rules — so the user sees what they're
+          betting on without having to open the drawer. */}
+      {ruleSnippet && (
+        <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.4, marginBottom: 8, padding: '5px 7px', borderLeft: `2px solid ${C.hlDim}`, ...T.body, ...clamp2 }}>
+          {ruleSnippet}
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: 8 }}>
         <button onClick={() => !closed && onTrade(event, true)} disabled={closed}
           style={{ flex: 1, padding: 8, borderRadius: 10, background: C.yesDim, border: '1px solid rgba(0,212,163,.30)', color: C.yes, cursor: closed ? 'not-allowed' : 'pointer', display: 'flex', flexDirection: 'column', gap: 1, ...T.body }}>
-          <span style={{ fontWeight: 700, fontSize: 12 }}>Yes · ${yp.toFixed(2)}</span>
+          <span style={{ fontWeight: 700, fontSize: 12 }}>{yesLabel} · ${yp.toFixed(2)}</span>
           {upside(yp) > 0 && <span style={{ fontSize: 10, fontWeight: 600, opacity: .8, ...T.mono }}>+{upside(yp)}% upside</span>}
         </button>
         <button onClick={() => !closed && onTrade(event, false)} disabled={closed}
           style={{ flex: 1, padding: 8, borderRadius: 10, background: C.noDim, border: '1px solid rgba(255,95,122,.30)', color: C.no, cursor: closed ? 'not-allowed' : 'pointer', display: 'flex', flexDirection: 'column', gap: 1, ...T.body }}>
-          <span style={{ fontWeight: 700, fontSize: 12 }}>No · ${np.toFixed(2)}</span>
+          <span style={{ fontWeight: 700, fontSize: 12 }}>{noLabel} · ${np.toFixed(2)}</span>
           {upside(np) > 0 && <span style={{ fontSize: 10, fontWeight: 600, opacity: .8, ...T.mono }}>+{upside(np)}% upside</span>}
         </button>
       </div>
@@ -892,7 +1262,7 @@ function MarketCard({ event, onTrade }) {
   );
 }
 
-function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
+function BuyDrawer({ event, isYes, livePrices, onClose, onDone, solBal, connection }) {
   const { publicKey, signTransaction } = useWallet();
 
   const [amount, setAmount]   = useState('0.1');
@@ -904,6 +1274,7 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
   useBodyLock(true);
 
   const m          = event.market;
+  const poly       = event.poly || null;
   const solAmount  = Number(amount) || 0;
   const grossLamports = BigInt(Math.round(solAmount * 1e9));
 
@@ -914,7 +1285,9 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
   const price         = isYes ? m.yesPrice : m.noPrice;
   const contractsEst  = price > 0 ? estDepositUsd / price : 0;
 
-  const sideLabel = isYes ? 'YES' : 'NO';
+  // Use Polymarket's actual outcome labels (e.g., "Up"/"Down", team names)
+  // instead of generic YES/NO whenever they're available.
+  const sideLabel = (poly?.outcomes && poly.outcomes[isYes ? 0 : 1]) || (isYes ? 'YES' : 'NO');
   const sideColor = isYes ? C.yes : C.no;
   const sideDim   = isYes ? C.yesDim : C.noDim;
 
@@ -1007,7 +1380,29 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
   ]);
 
   const solPresets = ['0.05', '0.1', '0.25', '0.5'];
-  const rulesText = m.rulesPrimary || event.closeCondition;
+
+  // Prefer Polymarket's full description — it contains the threshold price,
+  // resolution source, and exact criteria. Fall back to Jupiter's truncated
+  // rulesPrimary / closeCondition only if Polymarket is unavailable.
+  const rulesText = poly?.description || m.rulesPrimary || event.closeCondition;
+  const threshold = poly?.groupItemTitle;       // e.g. "$150k", "March 31"
+
+  // Live price comparison — what the user is actually betting on.
+  const priceToBeat = poly?.priceToBeat ?? poly?.startingPrice ?? null;
+  const symbol      = symbolFromSubcategory(event.subcategory);
+  const live        = symbol ? livePrices?.get(symbol) : null;
+  const currentPrice = live?.value ?? null;
+  const hasPrices    = priceToBeat != null && currentPrice != null;
+  const priceDelta   = hasPrices ? currentPrice - priceToBeat : null;
+  const priceDeltaPct = hasPrices && priceToBeat > 0 ? (priceDelta / priceToBeat) * 100 : null;
+  const isUp = priceDelta != null && priceDelta >= 0;
+  const fmtPrice = (n) => {
+    if (n == null) return '—';
+    if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    if (n >= 1)    return '$' + n.toFixed(2);
+    if (n >= 0.01) return '$' + n.toFixed(4);
+    return '$' + n.toFixed(6);
+  };
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
@@ -1030,8 +1425,59 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
           </div>
         )}
 
+        {/* Live price strip — bigger here than on the card since this is the
+            confirm step. Reference → live current → delta. Updates in real
+            time from the same Chainlink feed the market resolves against. */}
+        {(priceToBeat != null || currentPrice != null) && (
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10,
+            padding: '10px 12px', borderRadius: 12,
+            background: hasPrices
+              ? (isUp ? 'rgba(0,212,163,.08)' : 'rgba(255,95,122,.08)')
+              : 'rgba(255,255,255,.03)',
+            border: `1px solid ${hasPrices ? (isUp ? 'rgba(0,212,163,.30)' : 'rgba(255,95,122,.30)') : C.border}`,
+            ...T.mono,
+          }}>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1.2, marginBottom: 2 }}>PRICE TO BEAT</div>
+              <div style={{ fontSize: 16, color: C.ink, fontWeight: 800, ...T.display, lineHeight: 1 }}>
+                {priceToBeat != null ? fmtPrice(priceToBeat) : '—'}
+              </div>
+            </div>
+            <div style={{ textAlign: 'center', minWidth: 70 }}>
+              {priceDelta != null ? (
+                <>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: isUp ? C.yes : C.no, lineHeight: 1, ...T.display }}>
+                    {isUp ? '▲' : '▼'} {Math.abs(priceDeltaPct).toFixed(2)}%
+                  </div>
+                  <div style={{ fontSize: 9, color: isUp ? C.yes : C.no, marginTop: 3, opacity: .85 }}>
+                    {isUp ? '+' : '−'}{fmtPrice(Math.abs(priceDelta))}
+                  </div>
+                </>
+              ) : (
+                <div style={{ fontSize: 11, color: C.muted2 }}>—</div>
+              )}
+            </div>
+            <div style={{ flex: 1, minWidth: 0, textAlign: 'right' }}>
+              <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1.2, marginBottom: 2 }}>NOW</div>
+              <div style={{ fontSize: 16, fontWeight: 800, color: hasPrices ? (isUp ? C.yes : C.no) : C.ink, ...T.display, lineHeight: 1 }}>
+                {currentPrice != null ? fmtPrice(currentPrice) : '—'}
+              </div>
+              {currentPrice != null && (
+                <div style={{ fontSize: 8, color: C.muted2, marginTop: 3 }}>chainlink · live</div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {threshold && (
+          <div style={{ display: 'inline-block', padding: '4px 10px', borderRadius: 8, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 11, fontWeight: 800, letterSpacing: 0.4, marginBottom: 8, ...T.mono }}>
+            {threshold}
+          </div>
+        )}
+
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-          <div style={{ padding: '3px 8px', borderRadius: 99, background: sideDim, border: `1px solid ${sideColor}55`, color: sideColor, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>{sideLabel}</div>
+          <div style={{ padding: '3px 8px', borderRadius: 99, background: sideDim, border: `1px solid ${sideColor}55`, color: sideColor, fontSize: 9, fontWeight: 800, letterSpacing: 1, textTransform: 'uppercase', ...T.mono }}>{sideLabel}</div>
           <div style={{ fontSize: 11, color: C.muted, ...T.mono }}>${price.toFixed(3)} · {Math.round(price * 100)}%</div>
           {event.subcategory && (
             <div style={{ fontSize: 9, color: C.hl, ...T.mono, fontWeight: 700, padding: '2px 6px', background: C.hlDim, borderRadius: 99 }}>{event.subcategory}</div>
@@ -1044,13 +1490,15 @@ function BuyDrawer({ event, isYes, onClose, onDone, solBal, connection }) {
         {rulesText && (
           <div style={{ marginBottom: 10, padding: 8, borderRadius: 8, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}` }}>
             <button onClick={() => setShowRules(!showRules)} style={{ width: '100%', background: 'none', border: 'none', color: C.muted, fontSize: 9, fontWeight: 700, letterSpacing: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 0, ...T.mono }}>
-              <span>RESOLUTION</span>
+              <span>{poly ? 'FULL RULES (from Polymarket)' : 'RESOLUTION'}</span>
               <span style={{ fontSize: 11 }}>{showRules ? '−' : '+'}</span>
             </button>
             {showRules && (
               <>
-                <div style={{ marginTop: 6, fontSize: 10, color: C.ink, lineHeight: 1.5, ...T.body }}>{rulesText}</div>
-                {m.rulesSecondary && m.rulesSecondary !== rulesText && (
+                <div style={{ marginTop: 6, fontSize: 10, color: C.ink, lineHeight: 1.5, whiteSpace: 'pre-wrap', maxHeight: 260, overflowY: 'auto', ...T.body }}>
+                  {rulesText}
+                </div>
+                {m.rulesSecondary && m.rulesSecondary !== rulesText && !poly && (
                   <div style={{ marginTop: 6, fontSize: 10, color: C.muted, lineHeight: 1.5, ...T.body }}>{m.rulesSecondary}</div>
                 )}
                 {event.rulesPdf && (
@@ -1326,6 +1774,11 @@ export default function Predict() {
   const [actionPos, setActionPos] = useState(null);
   const [toast, setToast]         = useState('');
 
+  // Live crypto prices streamed from Polymarket's RTDS Chainlink topic.
+  // Only connect when the user is viewing markets to save bandwidth and a
+  // WS connection slot.
+  const livePrices = useLiveCryptoPrices(tab === 'markets');
+
   const connection = useMemo(() => {
     const origin = (typeof window !== 'undefined' && window.location?.origin) || '';
     return new Connection(origin + SOL_RPC, 'confirmed');
@@ -1353,15 +1806,48 @@ export default function Predict() {
     try {
       setEvError(null);
       const raw = await fetchEvents();
+
+      // Pass 1: normalize Jupiter fields, drop anything closed/cancelled/settled
+      // before we even consider rendering it.
       const normalized = raw
         .map((ev, i) => {
           try { return pickEventFields(ev); }
           catch (e) { console.warn('pickEventFields failed', i, e?.message); return null; }
         })
+        .filter(Boolean)
+        .filter(isMarketOpen);
+
+      // Pass 2: enrich with Polymarket Gamma data AND fetch each market's
+      // price-to-beat (the reference price the user is betting against).
+      // Both calls run in parallel per event. Failures are silent — Jupiter's
+      // data alone is enough to render. We also use Polymarket's flags to
+      // drop any market THEIR side considers settled (catches the known
+      // Gamma-bug cases Jupiter still relays).
+      const slugs = normalized.map(e => e.slug).filter(Boolean);
+      const pmResults = await Promise.all(
+        slugs.map(async (s) => {
+          const [gamma, ptb] = await Promise.all([
+            fetchPolymarketEvent(s).then(pickPolymarketFields).catch(() => null),
+            fetchPriceToBeat(s).catch(() => null),
+          ]);
+          if (!gamma && ptb == null) return null;
+          return { ...(gamma || {}), priceToBeat: ptb };
+        })
+      );
+      const pmBySlug = new Map();
+      slugs.forEach((s, i) => { if (pmResults[i]) pmBySlug.set(s, pmResults[i]); });
+
+      const enriched = normalized
+        .map(e => {
+          const pm = e.slug ? pmBySlug.get(e.slug) : null;
+          if (pm?.settled) return null;       // Polymarket says it's done
+          return pm ? { ...e, poly: pm } : e;
+        })
         .filter(Boolean);
-      setEvents(normalized);
+
+      setEvents(enriched);
     } catch (e) {
-      setEvError(e?.message || 'Failed to load markets');
+      setEvError(friendlyError(e));
     } finally {
       setEvLoading(false);
     }
@@ -1406,13 +1892,15 @@ export default function Predict() {
     return () => clearInterval(id);
   }, [tab, publicKey, reloadPositions]);
 
-  // Sort: active markets first, ascending close time. Search filters by event
-  // title, market title (the prediction), subcategory (the token), and tags.
+  // Sort: ascending close time. Search filters by event title, market title
+  // (the prediction), subcategory (the token), and tags. Safety net: re-apply
+  // isMarketOpen at render so anything that ticks past its close while the
+  // user is viewing the list disappears without waiting for the next refresh.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    let r = events;
+    let r = events.filter(isMarketOpen);
     if (q) {
-      r = events.filter(e => {
+      r = r.filter(e => {
         const fields = [
           e.title,
           e.market?.title,
@@ -1421,8 +1909,6 @@ export default function Predict() {
         ].filter(Boolean).join(' ').toLowerCase();
         return fields.includes(q);
       });
-    } else {
-      r = [...events];
     }
     const now = Date.now();
     r.sort((a, b) => {
@@ -1430,9 +1916,6 @@ export default function Predict() {
       const tb = toMs(b.closeTime);
       const da = ta ? ta - now : Infinity;
       const db = tb ? tb - now : Infinity;
-      const aClosed = da <= 0 ? 1 : 0;
-      const bClosed = db <= 0 ? 1 : 0;
-      if (aClosed !== bClosed) return aClosed - bClosed;
       return da - db;
     });
     return r;
@@ -1484,6 +1967,7 @@ export default function Predict() {
               <MarketCard
                 key={ev.eventId}
                 event={ev}
+                livePrices={livePrices}
                 onTrade={(event, isYes) => {
                   if (!connected) { setToast('Connect wallet first'); setTimeout(() => setToast(''), 1500); return; }
                   setBuyState({ event, isYes });
@@ -1510,6 +1994,7 @@ export default function Predict() {
         <BuyDrawer
           event={buyState.event}
           isYes={buyState.isYes}
+          livePrices={livePrices}
           onClose={() => setBuyState(null)}
           onDone={() => { reloadEvents(); reloadPositions(); refreshBalances(); }}
           solBal={solBal}
