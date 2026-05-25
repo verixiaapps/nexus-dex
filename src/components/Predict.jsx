@@ -81,13 +81,13 @@ const POLY_PRICE_TO_BEAT_BASE = 'https://polymarket.com/api/equity/price-to-beat
 //
 // Polymarket's up/down crypto markets explicitly state the reference value
 // using consistent phrasing — every market page reads "above or below the
-// opening 'Price to Beat' of $X". Threshold markets ("Will BTC hit $150k by
-// Dec 31") put the target in plain prose like "above $150,000" or in
-// groupItemTitle. We try the most specific patterns first and only fall
-// back to "largest plausible number" if nothing matches the explicit phrases.
+// opening 'Price to Beat' of $X". We match every form of that phrasing
+// (and similar: "starting price", "opening price", "above $X", "hit $X",
+// "reaches $X", "crosses $X"). If none match, we return null rather than
+// guessing — descriptions often contain unrelated numbers like "resolve
+// 50-50" that fallback heuristics would wrongly pick up.
 function extractStartingPrice(text) {
   if (!text || typeof text !== 'string') return null;
-  const numRe = /\$?\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]{1,8})?)/;
   const parseNum = (raw) => {
     if (!raw) return null;
     const n = Number(String(raw).replace(/[$,\s]/g, ''));
@@ -117,66 +117,77 @@ function extractStartingPrice(text) {
     }
   }
 
-  // Last resort: pick the largest plausible USD-looking number.
-  const all = text.match(new RegExp(numRe.source, 'g'));
-  if (!all) return null;
-  let best = 0;
-  for (const raw of all) {
-    const n = parseNum(raw);
-    if (n != null && n > best) best = n;
+  // No fallback. Polymarket descriptions routinely contain phrases like
+  // "the market will resolve 50-50" or "55-45 in favor of No" — picking the
+  // largest number in the text catches those and produces "50" for every
+  // market that doesn't have an explicit Price-to-Beat phrase. Better to
+  // return null and let the caller skip the price strip entirely.
+  return null;
+}
+
+// True iff this looks like an up/down market — i.e., one where the user is
+// betting whether the asset's price will be higher or lower than an opening
+// reference at the close of a fixed window. For these markets, comparing
+// reference vs live spot is meaningful. For threshold markets ("Will BTC
+// hit $150k by Dec 31"), it isn't: the threshold is a future target, not
+// an opening reference, so subtracting live spot from it is misleading.
+function isUpDownMarket(event) {
+  if (!event) return false;
+  const haystack = [
+    event.title,
+    event.market?.title,
+    event.poly?.description,
+  ].filter(Boolean).join(' ').toLowerCase();
+  if (!haystack) return false;
+  // Polymarket up/down markets always have these exact phrases.
+  if (haystack.includes('up or down')) return true;
+  if (haystack.includes('price to beat')) return true;
+  // Outcome labels are another tell — Up/Down rather than Yes/No.
+  const outcomes = event.poly?.outcomes;
+  if (Array.isArray(outcomes)) {
+    const set = outcomes.map(o => String(o).toLowerCase());
+    if (set.includes('up') && set.includes('down')) return true;
   }
-  return best > 0 ? best : null;
+  return false;
 }
 
-// Parse a price from a Polymarket groupItemTitle. These are short strings
-// like "$150k", "$108,432", "March 31", "Trump", "50+ bps decrease".
-// Returns null for non-price titles.
-function priceFromGroupItemTitle(title) {
-  if (!title || typeof title !== 'string') return null;
-  const m = title.match(/\$?\s*([0-9][0-9.,]*)\s*([kKmMbB])?/);
-  if (!m) return null;
-  const base = Number(String(m[1]).replace(/,/g, ''));
-  if (!Number.isFinite(base) || base <= 0) return null;
-  const suffix = (m[2] || '').toLowerCase();
-  const mult = suffix === 'k' ? 1_000 : suffix === 'm' ? 1_000_000 : suffix === 'b' ? 1_000_000_000 : 1;
-  return base * mult;
-}
-
-// Resolve the reference price ("Price to Beat") for an event from any
-// available source. Tries each in order and returns the first that yields a
-// usable number:
-//   1. The Polymarket /api/equity/price-to-beat endpoint (explicit)
-//   2. Parsing the Polymarket description for "Price to Beat: $X" phrases
-//   3. Parsing the market title (e.g. "BTC above $150,000?")
-//   4. groupItemTitle as a numeric threshold (e.g. "$150k")
-//   5. The Jupiter event title (last resort for non-Polymarket markets)
-// Returns null if nothing yields a number.
+// Resolve the reference price ("Price to Beat") for an up/down market.
+// Strictly only returns a number for up/down markets — threshold markets
+// like "Will BTC hit $150k by Dec 31" return null because $150k is a future
+// target, not an opening reference, and comparing it to live spot would be
+// misleading.
+//
+// For an up/down market, sources in order:
+//   1. The Polymarket /api/equity/price-to-beat endpoint
+//   2. Parsing "Price to Beat" / "opening price" phrases out of the
+//      Polymarket description (explicit phrase required — we do NOT fall
+//      back to "the largest number in the text" because that picks up
+//      unrelated figures and produces wildly wrong references).
 function resolvePriceToBeat(event) {
   if (!event) return null;
+  if (!isUpDownMarket(event)) return null;
   const poly = event.poly || null;
-  if (poly?.priceToBeat != null) return poly.priceToBeat;
-  if (poly?.startingPrice != null) return poly.startingPrice;
+  if (poly?.priceToBeat != null && Number.isFinite(poly.priceToBeat) && poly.priceToBeat > 0) {
+    return poly.priceToBeat;
+  }
+  if (poly?.startingPrice != null && Number.isFinite(poly.startingPrice) && poly.startingPrice > 0) {
+    return poly.startingPrice;
+  }
+  // Only the explicit "Price to Beat" phrase in the description is reliable.
   if (poly?.description) {
-    const n = extractStartingPrice(poly.description);
-    if (n != null) return n;
-  }
-  const marketTitle = event.market?.title;
-  if (marketTitle) {
-    const n = extractStartingPrice(marketTitle);
-    if (n != null) return n;
-  }
-  const gi = priceFromGroupItemTitle(poly?.groupItemTitle);
-  if (gi != null) return gi;
-  if (event.title) {
-    const n = extractStartingPrice(event.title);
-    if (n != null) return n;
-  }
-  if (event.closeCondition) {
-    const n = extractStartingPrice(event.closeCondition);
-    if (n != null) return n;
+    const m = poly.description.match(/price\s+to\s+beat[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i);
+    if (m) {
+      const n = Number(String(m[1]).replace(/[$,\s]/g, ''));
+      if (Number.isFinite(n) && n > 0) return n;
+    }
   }
   return null;
 }
+
+// For threshold markets ("Will BTC hit $150k by Dec 31"), the threshold is
+// already surfaced via the `groupItemTitle` chip in the card and drawer.
+// We deliberately do NOT compare it against live spot — that would be
+// misleading, since $150k is a future target, not an opening reference.
 
 // Map a subcategory tag like "BTC" or "Bitcoin" to a Chainlink RTDS symbol
 // like "btc/usd". Returns null for unknown assets so we just skip the price
@@ -2103,4 +2114,3 @@ export default function Predict() {
     </>
   );
 }
- 
