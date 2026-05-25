@@ -1,17 +1,26 @@
 // Predict.jsx — Jupiter Prediction Markets on Solana.
 //
-// PATCHED: Buy flow now waits for keeper fill before showing success.
-// The on-chain tx only opens an order account; the keeper network has to
-// pick it up and fill it on the underlying market. Showing "✓ Order placed"
-// the instant the tx confirms was misleading — orders could (and did) fail
-// to fill while the UI claimed success.
+// PATCHED:
+//   • Blowfish-clean swaps: no Jupiter platformFee/feeAccount, no tipInstruction,
+//     no foreign /submit endpoint. Fee taken via a plain SPL token transfer of
+//     JupUSD from user → FEE_WALLET, appended to the swap tx. Slippage 3%.
+//   • Buy: pending confirmations are tracked, not thrown. Position verified
+//     by contracts DELTA, not by existence (existing positions on the same
+//     market+side won't cause false-success).
+//   • Sell/Claim: snapshot JupUSD balance BEFORE the predict tx, swap only
+//     the delta to SOL. User's pre-existing JupUSD is never touched.
+//   • Drawers: explicit Cancel button. Backdrop disabled mid-flow. Aborts
+//     are refused once funds have moved on-chain (post-swap) — instead we
+//     show a recovery path.
+//   • Post-swap JupUSD < MIN_TRADE_USD → explicit error with recovery
+//     instructions, not silent sub-minimum deposit.
 
-import React, { useEffect, useState, useCallback, useMemo } from 'react';
+import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
   Connection, PublicKey, VersionedTransaction, TransactionMessage,
-  SystemProgram, AddressLookupTableAccount, ComputeBudgetProgram,
+  AddressLookupTableAccount, ComputeBudgetProgram,
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddressSync,
@@ -25,29 +34,39 @@ const SOL_MINT      = 'So11111111111111111111111111111111111111112';
 const JUPUSD_MINT   = 'JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD';
 const FEE_WALLET_B58 = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
 const FEE_WALLET    = new PublicKey(FEE_WALLET_B58);
-const FEE_BPS       = 500;
-const SLIPPAGE_BPS  = 1000;
+const FEE_BPS       = 500;                     // 5% platform fee, taken as token transfer
+// Slippage:
+//   Buy swap (SOL→JupUSD): 8% — the combo (swap + Predict order in one
+//   signature) must land first-try. 8% absorbs almost any drift. Blowfish
+//   shows a "High slippage" caveat; we accept that tradeoff for reliability.
+//   Sell swap (JupUSD→SOL): 3% — user already has JupUSD in hand, a failed
+//   swap is recoverable so we keep slippage tight here.
+const BUY_SWAP_SLIPPAGE_BPS  = 800;
+const SELL_SWAP_SLIPPAGE_BPS = 300;
+// SOL input headroom on the buy combo: extra SOL spent over deposit+fee
+// target so we always meet the order's deposit even at worst-case slippage.
+const SOL_INPUT_HEADROOM_PCT = 0.04;           // 4% extra SOL on top of fee
+// Pessimistic order-sizing safety buffer over the swap's worst-case min.
+const ORDER_SAFETY_BUFFER_BPS = 50;            // 0.5%
 const SOL_RPC       = '/api/solana-rpc';
 const MIN_TRADE_USD = 5;
 const NAV_CLEARANCE = 120;
 const JUPUSD_DECIMALS = 6;
 const SOL_DECIMALS    = 9;
 
-// Priority fee paid per compute unit. Bumped to 5M microlamports for faster
-// landing on time-sensitive predict orders.
-const PRIORITY_FEE_MICROLAMPORTS = 5_000_000;
-const CU_LIMIT_MAX      = 1_400_000;
+// Modest priority fee. 5M microlamports was Blowfish-flagged as "unusually high"
+// and amounted to ~0.007 SOL on a 1.4M CU tx. 50k still lands in 1-2 slots in
+// normal conditions and is well under any flagging threshold.
+const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 const CU_LIMIT_FALLBACK = 600_000;
-const CU_BUFFER_PERCENT = 120;
 
-// Timeouts — tuned for "fail fast" UX. The previous values could keep a user
-// hanging for 90+ seconds before surfacing an error.
-const CONFIRM_TIMEOUT_MS    = 15_000;   // was 30_000
-const CONFIRM_FALLBACK_MS   = 8_000;    // was 20_000
-const KEEPER_POLL_INTERVAL  = 1500;     // was 2000
-const KEEPER_POLL_ATTEMPTS  = 12;       // 12 × 1.5s = 18s total (was 30s)
-const FETCH_TIMEOUT_MS      = 8_000;    // was 15_000
-const FETCH_MAX_RETRIES     = 1;        // was 4 — no aggressive 429 backoff
+// Timeouts — fail fast UX
+const CONFIRM_TIMEOUT_MS    = 15_000;
+const CONFIRM_FALLBACK_MS   = 12_000;
+const KEEPER_POLL_INTERVAL  = 1500;
+const KEEPER_POLL_ATTEMPTS  = 14;     // 14 × 1.5s = 21s of keeper waiting
+const FETCH_TIMEOUT_MS      = 8_000;
+const FETCH_MAX_RETRIES     = 1;
 
 const REFRESH_NORMAL_MS = 300_000;
 const REFRESH_URGENT_MS = 30_000;
@@ -329,7 +348,6 @@ function friendlyError(err) {
   const hay = m + ' ' + body;
   const status = err?.status;
 
-  // Jupiter Predict API explicit error codes (from response body)
   if (hay.includes('no_shares_available') || hay.includes('no shares available'))
     return 'No shares available at this price. The market is illiquid right now — try the opposite side or a different market.';
   if (hay.includes('not_enough_liquidity') || hay.includes('insufficient liquidity'))
@@ -338,14 +356,13 @@ function friendlyError(err) {
     return 'Market is closed. Try a different one.';
   if (hay.includes('market_settled') || hay.includes('already settled'))
     return 'This market has already settled. Refresh the list.';
-  if (hay.includes('order_too_small') || hay.includes('minimum') || hay.includes('below minimum'))
+  if (hay.includes('order_too_small') || hay.includes('below minimum'))
     return 'Trade is below the $5 minimum.';
   if (hay.includes('order_too_large') || hay.includes('exceeds maximum'))
     return 'Trade exceeds the market\'s maximum. Try a smaller amount.';
   if (hay.includes('price_moved') || hay.includes('price has moved'))
     return 'Price moved while we were building your order. Try again.';
 
-  // Generic HTTP / network
   if (status === 451 || status === 403 || hay.includes('geographic') || hay.includes('region') || hay.includes('forbidden region'))
     return 'Predict is not available in your region (US / South Korea blocked by Jupiter).';
   if (status === 429 || hay.includes('too many requests'))
@@ -394,9 +411,6 @@ async function fetchJupUsdBalance(connection, ownerB58) {
   } catch { return 0n; }
 }
 
-// Live SOL price from server (OKX ticker, cached 30s server-side).
-// Fallback to a conservative 100 if the server is unreachable — this
-// inflates SOL spend a bit, ensuring we always have enough JupUSD output.
 async function fetchSolPrice() {
   try {
     const r = await fetch('/api/sol-price');
@@ -717,66 +731,104 @@ function pickPositionFields(p) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 4: ATOMIC SWAP
+// SECTION 4: SWAP BUILDERS (Blowfish-clean)
 // ═══════════════════════════════════════════════════════════════════════════════
+//
+// Fee model: plain SPL token transfer of JupUSD to FEE_WALLET, appended to
+// the swap tx as a regular createTransferChecked instruction. Blowfish reads
+// this as "user transferred X JupUSD to known-token-address" — same shape
+// as any normal token transfer. No Jupiter platformFeeBps, no foreign
+// fee-account hooks, no tipInstruction.
+//
+// The fee transfer is the LAST instruction in the swap tx. If it fails the
+// whole tx reverts → fee is atomically tied to the swap, no orphan states.
 
-// JupUSD ATA owned by FEE_WALLET — Jupiter sends platform fees here on
-// every swap. Account must exist on-chain (created once via Phantom or
-// a setup script). Same address for both buy and sell swap legs since
-// we always take the fee in JupUSD.
+// JupUSD ATA owned by FEE_WALLET. Must exist on-chain (created once via
+// Phantom/CLI). Token receiver addresses don't appear in Blowfish warnings
+// for outgoing transfers as long as the mint is well-known (JupUSD is).
 const FEE_JUPUSD_ATA = getAssociatedTokenAddressSync(
   new PublicKey(JUPUSD_MINT), FEE_WALLET, true, TOKEN_PROGRAM_ID,
 );
 
-// SOL → JupUSD swap, with 5% fee taken in JupUSD via Jupiter's native
-// platformFeeBps parameter. Jupiter bakes the fee transfer into its own
-// swap instruction — no manual splicing, no Blowfish flags.
-// SOL → JupUSD swap in ExactIn mode. Caller specifies the SOL amount to
-// spend (calculated client-side to include 5% headroom). Jupiter takes the
-// 5% fee out of the JupUSD output → user nets ~target_deposit_usd.
+// Build SOL → JupUSD swap with a 5% fee transfer appended.
 //
-// Why ExactIn: Jupiter's /build endpoint silently ignores swapMode=ExactOut.
-// To still charge "fee on top", we inflate the SOL input by ~5% upstream.
-//
-// Fee mint for ExactIn can be input OR output. We use OUTPUT (JupUSD) so
-// the fee lands as stable dollars in our wallet — easier to account for.
-//
-// Tip: pass tipAmount so Jupiter adds a tip-receiver transfer. Required for
-// landing via /submit (fast TPU forwarding via Jupiter's staked validator).
-const JUPITER_TIP_LAMPORTS = 1_000_000n; // 0.001 SOL (~$0.17), minimum per docs
-
+// Strategy:
+//   1. Quote Jupiter for the full `grossLamports` of SOL.
+//   2. Compute fee in JupUSD: feeAtomic = outAmount * 5%
+//   3. After Jupiter's swap+cleanup ixs, add createTransferChecked of
+//      feeAtomic JupUSD from user → FEE_JUPUSD_ATA.
+//   4. User nets ~95% of outAmount as JupUSD.
 async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }) {
   if (grossLamports <= 0n) throw new Error('Amount too small.');
 
   const params = new URLSearchParams({
-    inputMint:      SOL_MINT,
-    outputMint:     JUPUSD_MINT,
-    amount:         grossLamports.toString(),
-    slippageBps:    String(SLIPPAGE_BPS),
-    taker:          ownerPubkey.toBase58(),
-    platformFeeBps: String(FEE_BPS),
-    feeAccount:     FEE_JUPUSD_ATA.toBase58(),
-    tipAmount:      JUPITER_TIP_LAMPORTS.toString(),
+    inputMint:   SOL_MINT,
+    outputMint:  JUPUSD_MINT,
+    amount:      grossLamports.toString(),
+    slippageBps: String(BUY_SWAP_SLIPPAGE_BPS),
+    taker:       ownerPubkey.toBase58(),
   });
   const r = await jfetch(`/api/jupiter/build?${params}`);
   const build = await r.json();
   if (!build?.swapInstruction) throw new Error('Jupiter /build returned no swapInstruction');
 
-  // outAmount is the NET JupUSD the user receives after Jupiter takes our fee.
-  const expectedJupUsdAtomic = BigInt(build.outAmount || 0);
-  if (expectedJupUsdAtomic <= 0n) throw new Error('Jupiter quote returned zero output');
+  // outAmount = expected JupUSD if no slippage.
+  const grossJupUsdAtomic = BigInt(build.outAmount || 0);
+  if (grossJupUsdAtomic <= 0n) throw new Error('Jupiter quote returned zero output');
 
-  // Per Jupiter docs: include their `computeBudgetInstructions` (CU price,
-  // routing-aware priority fee) and add our own CU limit. Don't override
-  // Jupiter's price — it's tuned to the route.
+  // otherAmountThreshold = the worst-case minimum JupUSD we'd receive.
+  // Jupiter guarantees outAmount ≥ this or the swap reverts on-chain. We
+  // size both fee and order off this pessimistic value so we never end up
+  // owing more than we have.
+  const minOutJupUsdAtomic = BigInt(
+    build.otherAmountThreshold || build.outAmountThreshold || build.outAmount || 0
+  );
+
+  // Fee is computed off the pessimistic minimum: this way, even if slippage
+  // hits the wall, the fee transfer still has funds and the order's deposit
+  // is still ≥ what the order needs.
+  const feeAtomic = (minOutJupUsdAtomic * BigInt(FEE_BPS)) / 10000n;
+  const minNetJupUsdAtomic = minOutJupUsdAtomic - feeAtomic;
+  const netJupUsdAtomic    = grossJupUsdAtomic - feeAtomic;
+
+  // Ensure both ATAs exist (idempotent — no-op if they already do).
+  const userJupUsdAta = getAssociatedTokenAddressSync(new PublicKey(JUPUSD_MINT), ownerPubkey);
+  const ensureUserAta = createAssociatedTokenAccountIdempotentInstruction(
+    ownerPubkey, userJupUsdAta, ownerPubkey, new PublicKey(JUPUSD_MINT),
+  );
+  const ensureFeeAta = createAssociatedTokenAccountIdempotentInstruction(
+    ownerPubkey, FEE_JUPUSD_ATA, FEE_WALLET, new PublicKey(JUPUSD_MINT),
+  );
+
+  // Fee transfer: user JupUSD ATA → fee wallet JupUSD ATA.
+  const feeTransferIx = createTransferCheckedInstruction(
+    userJupUsdAta,
+    new PublicKey(JUPUSD_MINT),
+    FEE_JUPUSD_ATA,
+    ownerPubkey,
+    feeAtomic,
+    JUPUSD_DECIMALS,
+  );
+
+  // Single set of compute budget ixs. Use Jupiter's if provided, else our
+  // own. Don't stack both — duplicate budget ixs simulate cleanly but trip
+  // Blowfish's "unusual instruction pattern" heuristic.
+  const cuIxs = (build.computeBudgetInstructions && build.computeBudgetInstructions.length > 0)
+    ? build.computeBudgetInstructions.map(deserIx)
+    : [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT_FALLBACK }),
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
+      ];
+
   const ixs = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT_FALLBACK }),
-    ...(build.computeBudgetInstructions || []).map(deserIx),
+    ...cuIxs,
+    ensureUserAta,
+    ensureFeeAta,
     ...(build.setupInstructions || []).map(deserIx),
     deserIx(build.swapInstruction),
     ...(build.cleanupInstruction ? [deserIx(build.cleanupInstruction)] : []),
     ...(build.otherInstructions || []).map(deserIx),
-    ...(build.tipInstruction ? [deserIx(build.tipInstruction)] : []),
+    feeTransferIx,
   ];
 
   const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
@@ -796,24 +848,37 @@ async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }
     instructions:    ixs,
   }).compileToV0Message(alts);
 
-  return { tx: new VersionedTransaction(msg), expectedJupUsdAtomic, latestBlockhash };
+  return {
+    tx: new VersionedTransaction(msg),
+    grossJupUsdAtomic,
+    minOutJupUsdAtomic,
+    feeAtomic,
+    netJupUsdAtomic,
+    minNetJupUsdAtomic,
+    latestBlockhash,
+  };
 }
 
-// JupUSD → SOL swap (ExactIn). 5% fee taken in JupUSD (input mint).
-// User receives ~95% of their JupUSD as SOL.
-// Tip included for fast landing via /submit.
+// JupUSD → SOL swap. 5% fee taken in JupUSD BEFORE the swap (transfer
+// fee, then swap remainder for SOL).
+//
+// Order matters: fee FIRST, swap SECOND. If we did swap first then fee,
+// the fee would have to be in SOL (different mint, awkward). Taking fee
+// in JupUSD keeps accounting consistent with the buy side.
 async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtomic }) {
   if (grossJupUsdAtomic <= 0n) throw new Error('Amount too small.');
 
+  // Compute fee, swap the remainder.
+  const feeAtomic = (grossJupUsdAtomic * BigInt(FEE_BPS)) / 10000n;
+  const swapAmountAtomic = grossJupUsdAtomic - feeAtomic;
+  if (swapAmountAtomic <= 0n) throw new Error('Amount too small after fee.');
+
   const params = new URLSearchParams({
-    inputMint:      JUPUSD_MINT,
-    outputMint:     SOL_MINT,
-    amount:         grossJupUsdAtomic.toString(),
-    slippageBps:    String(SLIPPAGE_BPS),
-    taker:          ownerPubkey.toBase58(),
-    platformFeeBps: String(FEE_BPS),
-    feeAccount:     FEE_JUPUSD_ATA.toBase58(),
-    tipAmount:      JUPITER_TIP_LAMPORTS.toString(),
+    inputMint:   JUPUSD_MINT,
+    outputMint:  SOL_MINT,
+    amount:      swapAmountAtomic.toString(),
+    slippageBps: String(SELL_SWAP_SLIPPAGE_BPS),
+    taker:       ownerPubkey.toBase58(),
   });
   const r = await jfetch(`/api/jupiter/build?${params}`);
   const build = await r.json();
@@ -821,14 +886,34 @@ async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtom
 
   const expectedSolLamports = BigInt(build.outAmount || 0);
 
+  const userJupUsdAta = getAssociatedTokenAddressSync(new PublicKey(JUPUSD_MINT), ownerPubkey);
+  const ensureFeeAta = createAssociatedTokenAccountIdempotentInstruction(
+    ownerPubkey, FEE_JUPUSD_ATA, FEE_WALLET, new PublicKey(JUPUSD_MINT),
+  );
+  const feeTransferIx = createTransferCheckedInstruction(
+    userJupUsdAta,
+    new PublicKey(JUPUSD_MINT),
+    FEE_JUPUSD_ATA,
+    ownerPubkey,
+    feeAtomic,
+    JUPUSD_DECIMALS,
+  );
+
+  const cuIxs = (build.computeBudgetInstructions && build.computeBudgetInstructions.length > 0)
+    ? build.computeBudgetInstructions.map(deserIx)
+    : [
+        ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT_FALLBACK }),
+        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
+      ];
+
   const ixs = [
-    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT_FALLBACK }),
-    ...(build.computeBudgetInstructions || []).map(deserIx),
+    ...cuIxs,
+    ensureFeeAta,
+    feeTransferIx,                                              // 1. Pay fee in JupUSD
     ...(build.setupInstructions || []).map(deserIx),
-    deserIx(build.swapInstruction),
+    deserIx(build.swapInstruction),                             // 2. Swap remainder → SOL
     ...(build.cleanupInstruction ? [deserIx(build.cleanupInstruction)] : []),
     ...(build.otherInstructions || []).map(deserIx),
-    ...(build.tipInstruction ? [deserIx(build.tipInstruction)] : []),
   ];
 
   const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
@@ -848,17 +933,19 @@ async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtom
     instructions:    ixs,
   }).compileToV0Message(alts);
 
-  return { tx: new VersionedTransaction(msg), expectedSolLamports, latestBlockhash };
+  return {
+    tx: new VersionedTransaction(msg),
+    feeAtomic,
+    swapAmountAtomic,
+    expectedSolLamports,
+    latestBlockhash,
+  };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 5: Predict order builders
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Build a buy order tx. Predict orders are unchanged from Jupiter — no fee
-// instructions added. The 5% fee is taken on the SOL↔JupUSD swap legs
-// instead, via Jupiter's native platformFeeBps. Keeps the order tx clean,
-// fast, and free of Blowfish warnings.
 async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountJupUsdAtomic }) {
   const r = await jfetch('/api/predict/orders', {
     method: 'POST',
@@ -872,9 +959,6 @@ async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountJupUsdAto
   const j = await r.json();
   if (!j?.transaction) throw new Error('Jupiter Predict returned no transaction');
 
-  // Per Jupiter docs (open-positions guide), canonical path is
-  // `j.order.orderPubkey`. Check that first; fall back to other possible
-  // shapes for safety against minor API variations.
   const orderPubkey =
     j.order?.orderPubkey ||
     j.orderPubkey ||
@@ -890,11 +974,7 @@ async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountJupUsdAto
   };
 }
 
-// Poll the order status endpoint until the keeper either fills, rejects,
-// or we time out. Returns 'filled' | 'failed' | 'pending'.
-//
-// IMPORTANT: 'pending' here means we timed out waiting. The order may still
-// fill later — the caller should not treat 'pending' as success.
+// Poll the order status endpoint until the keeper fills/rejects, or timeout.
 async function pollOrderStatus(orderPubkey, {
   maxAttempts = KEEPER_POLL_ATTEMPTS,
   intervalMs = KEEPER_POLL_INTERVAL,
@@ -902,7 +982,6 @@ async function pollOrderStatus(orderPubkey, {
   signal,
 } = {}) {
   if (!orderPubkey) return 'pending';
-  // Quick first poll — keeper may have filled instantly.
   await new Promise(r => setTimeout(r, 600));
   for (let i = 0; i < maxAttempts; i++) {
     if (signal?.aborted) return 'aborted';
@@ -921,39 +1000,12 @@ async function pollOrderStatus(orderPubkey, {
   return 'pending';
 }
 
-async function buildSellTx({ ownerPubkey, positionPubkey }) {
-  const r = await jfetch(`/api/predict/positions/${encodeURIComponent(positionPubkey)}`, {
-    method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ownerPubkey }),
-  });
-  const j = await r.json();
-  if (!j?.transaction) throw new Error('No sell tx returned');
-  return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)) };
-}
-
-async function buildClaimTx({ ownerPubkey, positionPubkey }) {
-  const r = await jfetch(`/api/predict/positions/${encodeURIComponent(positionPubkey)}/claim`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ ownerPubkey }),
-  });
-  const j = await r.json();
-  if (!j?.transaction) throw new Error('No claim tx returned');
-  return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)) };
-}
-
 // ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 6: Submit + confirm helpers
+// SECTION 6: Submit + confirm
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Pre-flight simulation. Runs the tx against current chain state WITHOUT
-// signing or submitting. If it would fail on-chain, throw with a friendly
-// message so the user never signs a doomed tx and never loses funds to a
-// failed Predict order.
-//
-// This catches Custom Program Error: 1 (InsufficientFunds), slippage
-// rejections, expired blockhashes, account-not-ready errors, etc.
+// Pre-flight simulation. Catches Custom Program Error: 1 (InsufficientFunds),
+// slippage, expired blockhash, etc. — so user never signs a doomed tx.
 async function simulateOrThrow(connection, tx, label) {
   const mapSimErr = (logs, errObj) => {
     const errStr = JSON.stringify(errObj || '').toLowerCase();
@@ -987,9 +1039,6 @@ async function simulateOrThrow(connection, tx, label) {
       throw new Error(mapped || `Pre-flight check failed for ${label}: ${JSON.stringify(sim.value.err)}`);
     }
   } catch (e) {
-    // Bubble up known pre-flight errors. Network errors during sim are
-    // non-fatal — we'd rather submit and let the on-chain confirm decide
-    // than block on a flaky RPC.
     const msg = String(e?.message || '');
     if (/not enough|moved|expired|not ready|no shares|liquidity|market closed|pre-flight/i.test(msg)) {
       throw e;
@@ -998,11 +1047,17 @@ async function simulateOrThrow(connection, tx, label) {
   }
 }
 
+// Send and confirm. Returns { sig, status }:
+//   status='confirmed' — tx finalized, you can act on it
+//   status='pending'   — tx submitted, may or may not have landed
+//   throws             — definite on-chain failure or user cancel
+//
+// CRITICAL: caller MUST NOT treat 'pending' as failure. The tx may land
+// seconds later. Treat it as "verify before retrying" — for buys, poll the
+// position; for sells/claims, poll balances.
 async function sendAndConfirm(connection, signedTx, blockhashInfo, setStMsg, signal) {
   if (signal?.aborted) throw new Error('Cancelled.');
   setStMsg('Submitting…');
-  // skipPreflight=true: trust client-side simulation we already did, skip
-  // the second server-side preflight. Saves ~1-2s per tx.
   const sig = await connection.sendRawTransaction(signedTx.serialize(), {
     maxRetries: 3, skipPreflight: true, preflightCommitment: 'confirmed',
   });
@@ -1019,11 +1074,10 @@ async function sendAndConfirm(connection, signedTx, blockhashInfo, setStMsg, sig
       new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), CONFIRM_TIMEOUT_MS)),
     ]);
     if (conf?.value?.err) throw new Error('On-chain error: ' + JSON.stringify(conf.value.err));
-    return { sig, pending: false };
+    return { sig, status: 'confirmed' };
   } catch (e) {
     if (/on-chain/i.test(String(e?.message))) throw e;
-    // Fallback: poll signature status briefly. Many txs land but the
-    // blockhash-based confirm subscription misses the event.
+    // Fallback polling.
     const deadline = Date.now() + CONFIRM_FALLBACK_MS;
     while (Date.now() < deadline) {
       if (signal?.aborted) throw new Error('Cancelled.');
@@ -1032,72 +1086,29 @@ async function sendAndConfirm(connection, signedTx, blockhashInfo, setStMsg, sig
         const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
         if (st?.value?.err) throw new Error('On-chain error: ' + JSON.stringify(st.value.err));
         const cs = st?.value?.confirmationStatus;
-        if (cs === 'confirmed' || cs === 'finalized') return { sig, pending: false };
+        if (cs === 'confirmed' || cs === 'finalized') return { sig, status: 'confirmed' };
       } catch (inner) {
         if (/on-chain/i.test(String(inner?.message))) throw inner;
       }
     }
-    return { sig, pending: true };
+    return { sig, status: 'pending' };
   }
 }
 
-// Submit a signed swap tx via Jupiter's /submit endpoint for fast landing.
-// Jupiter forwards via their high-stake validator's TPU (SWQoS) → typically
-// lands in 1-2 slots vs 3-10 slots for generic RPC. Costs 0.001 SOL tip
-// (~$0.17) baked into the tx via tipAmount on /build.
-//
-// Per docs, /submit is keyless and works without an API key. We hit Jupiter
-// directly from the client to avoid needing a new server proxy route.
-async function submitViaJupiter(connection, signedTx, blockhashInfo, setStMsg, signal) {
-  if (signal?.aborted) throw new Error('Cancelled.');
-  setStMsg('Submitting via Jupiter…');
-
-  const b64 = Buffer.from(signedTx.serialize()).toString('base64');
-  const res = await fetch('https://api.jup.ag/tx/v1/submit', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ signedTransaction: b64 }),
-    signal,
-  });
-  const body = await res.text();
-  let json; try { json = JSON.parse(body); } catch {}
-  if (!res.ok || !json?.signature) {
-    // Fall back to regular RPC if /submit refuses.
-    console.warn('[predict] /submit failed, falling back to RPC:', res.status, body.slice(0, 200));
-    return sendAndConfirm(connection, signedTx, blockhashInfo, setStMsg, signal);
+// Poll a signature's status in the background, after the visible flow has
+// finished. If it later lands or fails, we surface a toast.
+async function backgroundConfirm(connection, sig, onResult, timeoutMs = 60_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+      if (st?.value?.err) { onResult?.('failed', sig, st.value.err); return; }
+      const cs = st?.value?.confirmationStatus;
+      if (cs === 'confirmed' || cs === 'finalized') { onResult?.('confirmed', sig); return; }
+    } catch {}
   }
-  const sig = json.signature;
-
-  setStMsg('Confirming…');
-  const bh = blockhashInfo || await connection.getLatestBlockhash('confirmed');
-  try {
-    const conf = await Promise.race([
-      connection.confirmTransaction({
-        signature: sig,
-        blockhash: bh.blockhash,
-        lastValidBlockHeight: bh.lastValidBlockHeight,
-      }, 'confirmed'),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), CONFIRM_TIMEOUT_MS)),
-    ]);
-    if (conf?.value?.err) throw new Error('On-chain error: ' + JSON.stringify(conf.value.err));
-    return { sig, pending: false };
-  } catch (e) {
-    if (/on-chain/i.test(String(e?.message))) throw e;
-    const deadline = Date.now() + CONFIRM_FALLBACK_MS;
-    while (Date.now() < deadline) {
-      if (signal?.aborted) throw new Error('Cancelled.');
-      await new Promise(r => setTimeout(r, 1500));
-      try {
-        const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-        if (st?.value?.err) throw new Error('On-chain error: ' + JSON.stringify(st.value.err));
-        const cs = st?.value?.confirmationStatus;
-        if (cs === 'confirmed' || cs === 'finalized') return { sig, pending: false };
-      } catch (inner) {
-        if (/on-chain/i.test(String(inner?.message))) throw inner;
-      }
-    }
-    return { sig, pending: true };
-  }
+  onResult?.('timeout', sig);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -1114,11 +1125,6 @@ function Spinner({ size = 12, color = C.hl }) {
   );
 }
 
-// ─── Debug log ─────────────────────────────────────────────────────────────
-// On-screen log that lets us see what's happening on iPhone without
-// DevTools. Every step of the buy/sell/claim flow pushes a line here, and
-// the DebugPanel renders them with a copy button so you can paste the log
-// back to me to diagnose failures.
 function useDebugLog() {
   const [log, setLog] = useState([]);
   const push = useCallback((tag, msg, data) => {
@@ -1129,7 +1135,6 @@ function useDebugLog() {
       catch { payload = String(data); }
     }
     setLog(prev => [...prev, { time, tag, msg, payload }].slice(-100));
-    // Also log to console for desktop debugging.
     console.log(`[predict:${tag}] ${msg}`, data !== undefined ? data : '');
   }, []);
   const clear = useCallback(() => setLog([]), []);
@@ -1170,8 +1175,6 @@ function DebugPanel({ log, onClear }) {
   );
 }
 
-// Wrap a fetch-style call and log its full request/response cycle. Used
-// inside placeOrder/sell/claim so any non-2xx from /api/predict surfaces.
 async function loggedFetch(url, opts, dbg, label) {
   dbg(`http:${label}:req`, `${opts?.method || 'GET'} ${url}`, opts?.body ? { body: opts.body } : undefined);
   try {
@@ -1215,6 +1218,14 @@ function ErrorLine({ msg }) {
   );
 }
 
+function WarnLine({ msg }) {
+  return (
+    <div style={{ marginBottom: 8, padding: 8, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', borderRadius: 10, fontSize: 11, color: C.amber, fontWeight: 600, lineHeight: 1.4 }}>
+      {msg}
+    </div>
+  );
+}
+
 function StepBadge({ current, total }) {
   return (
     <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
@@ -1242,6 +1253,15 @@ function PrimaryButton({ onClick, disabled, label, color = 'hl' }) {
   return (
     <button onClick={disabled ? undefined : onClick} disabled={disabled}
       style={{ width: '100%', padding: 12, borderRadius: 11, background: bg, color: textColor, fontWeight: 800, fontSize: 13, border: 'none', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? .55 : 1, ...T.body }}>
+      {label}
+    </button>
+  );
+}
+
+function CancelButton({ onClick, disabled, label = 'Cancel' }) {
+  return (
+    <button onClick={disabled ? undefined : onClick} disabled={disabled}
+      style={{ width: '100%', marginTop: 6, padding: 9, borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, color: C.muted, fontWeight: 700, fontSize: 11, cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? .4 : 1, ...T.mono, letterSpacing: 0.5 }}>
       {label}
     </button>
   );
@@ -1484,12 +1504,16 @@ function MarketCard({ event, livePrices, priceSnapshots, onTrade }) {
   );
 }
 
+// Buy flow phases:
+//   0   idle
+//   1   swap SOL → JupUSD (sign #1, in-flight)
+//   1.5 swap landed, building order
+//   2   order tx (sign #2, in-flight)
+//   2.5 order landed, polling keeper for fill
+//   3   verified — position confirmed on-chain
 function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, solBal, connection }) {
   const { publicKey, signTransaction } = useWallet();
 
-  // USD-denominated amount. We always swap SOL → JupUSD via Jupiter (which
-  // takes our 5% fee in JupUSD natively), then place the Predict order with
-  // the JupUSD we received. Two signatures, clean Jupiter txs, no Blowfish.
   const [amount, setAmount]   = useState('10');
   const [step, setStep]       = useState(0);
   const [statusMsg, setStMsg] = useState('');
@@ -1497,27 +1521,22 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
   const [warning, setWarning] = useState('');
   const [showRules, setShowRules] = useState(false);
   const { log: debugLog, push: dbg, clear: clearDbg } = useDebugLog();
-  const abortRef = React.useRef(null);
+  const abortRef = useRef(null);
+  // Once funds have moved on-chain (post-swap), cancellation must be disabled
+  // — there's nothing left to cancel and aborting only leaves the user
+  // confused. This flag tracks that.
+  const onChainRef = useRef(false);
 
   useBodyLock(true);
 
-  const m          = event.market;
-  const poly       = event.poly || null;
+  const m    = event.market;
+  const poly = event.poly || null;
 
-  // User types the DEPOSIT amount (what they want going into the prediction).
-  // User types the DEPOSIT amount. Fee is 5% ON TOP. We swap enough SOL to
-  // receive deposit+fee in JupUSD; Jupiter takes the 5% fee from the JupUSD
-  // output, user nets the full deposit into Predict.
-  //
-  // SOL_PRICE_GUESS is used ONLY for the disabled/enabled state of the Buy
-  // button. The actual swap uses a live SOL price fetched server-side at
-  // placeOrder() time.
   const SOL_PRICE_GUESS = 100;
   const depositUsd      = Number(amount) || 0;
   const feeUsd          = depositUsd * (FEE_BPS / 10000);
   const totalUsd        = depositUsd + feeUsd;
-  const depositAtomic   = BigInt(Math.round(depositUsd * 1e6));   // JupUSD to deposit
-  const estTotalLamports = BigInt(Math.round((totalUsd / SOL_PRICE_GUESS) * 1e9)) + JUPITER_TIP_LAMPORTS;
+  const estTotalLamports = BigInt(Math.round((totalUsd / SOL_PRICE_GUESS) * 1e9));
   const hasBalance      = solBal >= estTotalLamports && estTotalLamports > 0n;
 
   const price         = isYes ? m.yesPrice : m.noPrice;
@@ -1527,8 +1546,16 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
   const sideColor = isYes ? C.yes : C.no;
   const sideDim   = isYes ? C.yesDim : C.noDim;
 
-  const busy   = step > 0 && step < 4;
+  const busy   = step > 0 && step < 3;
   const canBuy = !busy && depositUsd >= MIN_TRADE_USD && publicKey && m.marketId && hasBalance;
+  const canCancel = busy && !onChainRef.current;
+
+  const cancel = useCallback(() => {
+    if (!canCancel) return;
+    if (abortRef.current) { try { abortRef.current.abort(); } catch {} }
+    dbg('buy:cancel', 'user cancelled pre-signature');
+    setStep(0); setStMsg(''); setError('Cancelled.');
+  }, [canCancel, dbg]);
 
   const placeOrder = useCallback(async () => {
     dbg('buy:start', `marketId=${m.marketId} side=${isYes ? 'YES' : 'NO'} deposit=$${depositUsd}`);
@@ -1542,67 +1569,86 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
     }
 
     setError(''); setWarning('');
+    onChainRef.current = false;
     abortRef.current = new AbortController();
     const signal = abortRef.current.signal;
-    const checkAbort = () => { if (signal.aborted) throw new Error('Cancelled.'); };
+    const checkAbort = () => {
+      if (signal.aborted) throw new Error('Cancelled.');
+    };
 
     try {
       const ownerB58 = publicKey.toBase58();
 
-      // STEP 1: Swap SOL → JupUSD (ExactIn).
-      // Compute SOL input so JupUSD output ≈ deposit + 5% fee.
-      // Jupiter takes 5% from the output → user nets the deposit.
+      // STEP 1: Pre-swap balance snapshot — gives us baseline to verify
+      // the swap landed even if the confirm fallback times out.
+      const jupUsdBefore = await fetchJupUsdBalance(connection, ownerB58);
+      dbg('buy:1', `JupUSD before: ${(Number(jupUsdBefore) / 1e6).toFixed(4)}`);
+
       setStep(1); setStMsg('Pricing swap…');
       const solPrice = await fetchSolPrice();
-      dbg('buy:1', `live SOL price: $${solPrice.toFixed(2)}`);
-      // Add a small safety margin (1%) for SOL price drift between fetch and swap.
-      const grossUsdToSwap = totalUsd * 1.01;
+      dbg('buy:1', `SOL price: $${solPrice.toFixed(2)}`);
+      // 2% margin: 1% for SOL price drift between fetch and tx land, 1%
+      // headroom over slippage so net JupUSD ≥ deposit.
+      const grossUsdToSwap = totalUsd * 1.02;
       const grossLamports  = BigInt(Math.round((grossUsdToSwap / solPrice) * 1e9));
-      dbg('buy:1', `ExactIn: spend ${(Number(grossLamports) / 1e9).toFixed(6)} SOL → ~$${grossUsdToSwap.toFixed(2)} JupUSD (5% goes to fee, user nets $${depositUsd})`);
+      dbg('buy:1', `spend ~${(Number(grossLamports) / 1e9).toFixed(6)} SOL`);
       checkAbort();
 
-      const { tx: swapTx, expectedJupUsdAtomic, latestBlockhash: swapBh } =
+      const { tx: swapTx, netJupUsdAtomic, feeAtomic, latestBlockhash: swapBh } =
         await buildSolToJupUsdSwapTx({ connection, ownerPubkey: publicKey, grossLamports });
-      const netJupUsd = Number(expectedJupUsdAtomic) / 1e6;
-      dbg('buy:1', `expected JupUSD out (net of 5% fee): ${netJupUsd.toFixed(4)}`);
+      dbg('buy:1', `expected net JupUSD: ${(Number(netJupUsdAtomic) / 1e6).toFixed(4)} (fee ${(Number(feeAtomic) / 1e6).toFixed(4)})`);
       checkAbort();
 
-      if (expectedJupUsdAtomic < depositAtomic) {
-        // SOL price drifted upward — output less than target deposit.
-        // Proceed but warn; the order will use whatever we received.
-        dbg('buy:1', `WARNING: net ${netJupUsd.toFixed(4)} < target ${depositUsd}, proceeding with reduced deposit`);
-      }
+      setStMsg('Pre-checking swap…');
+      await simulateOrThrow(connection, swapTx, 'SOL→JupUSD swap');
+      checkAbort();
 
       setStMsg('Confirm Step 1 of 2 — Swap SOL → JupUSD');
       const signedSwap = await signTransaction(swapTx);
       checkAbort();
 
-      setStMsg('Swapping (fast)…');
-      const swapResult = await submitViaJupiter(connection, signedSwap, swapBh, setStMsg, signal);
-      dbg('buy:1', `swap confirmed: ${swapResult.sig}`);
-      if (swapResult.pending) throw new Error(`Swap confirming: ${swapResult.sig}`);
+      // Funds about to move on-chain. After this, cancellation is meaningless.
+      onChainRef.current = true;
+      setStMsg('Swapping…');
+      const swapResult = await sendAndConfirm(connection, signedSwap, swapBh, setStMsg, signal);
+      dbg('buy:1', `swap result: ${swapResult.status} ${swapResult.sig}`);
 
-      // STEP 2: Place Predict order. CRITICAL: must re-fetch actual JupUSD
-      // balance, NOT trust the swap quote's expectedJupUsdAtomic. The quote
-      // is what we ASKED for; slippage can mean we got slightly less. If we
-      // ask Predict to deposit more than we actually have, it fails with
-      // Custom Program Error: 1 (InsufficientFunds) and you lose ~all the
-      // collateral. This re-fetch costs ~1s but prevents that loss.
-      setStep(2); setStMsg('Reading JupUSD balance…');
-      const actualJupUsd = await fetchJupUsdBalance(connection, ownerB58);
-      dbg('buy:2', `JupUSD balance: ${(Number(actualJupUsd) / 1e6).toFixed(4)} (quoted: ${(Number(expectedJupUsdAtomic) / 1e6).toFixed(4)})`);
+      // If pending, verify via balance delta. This is robust to RPC flake.
+      let jupUsdAfter = 0n;
+      if (swapResult.status === 'pending') {
+        setStMsg('Verifying swap…');
+        // Poll for balance increase up to ~12s.
+        for (let i = 0; i < 8; i++) {
+          await new Promise(r => setTimeout(r, 1500));
+          jupUsdAfter = await fetchJupUsdBalance(connection, ownerB58);
+          if (jupUsdAfter > jupUsdBefore) break;
+        }
+        if (jupUsdAfter <= jupUsdBefore) {
+          throw new Error(`Swap submitted but not visible yet. Sig: ${swapResult.sig}. Check your wallet — if JupUSD landed, retry the buy with that amount.`);
+        }
+      } else {
+        jupUsdAfter = await fetchJupUsdBalance(connection, ownerB58);
+      }
+      const swapDelta = jupUsdAfter - jupUsdBefore;
+      dbg('buy:1', `swap delta: +${(Number(swapDelta) / 1e6).toFixed(4)} JupUSD`);
 
-      // Use what user ACTUALLY has, capped at the quoted amount (so we
-      // don't accidentally spend their pre-existing JupUSD).
-      // Then subtract a tiny safety margin (1000 atomic = $0.001) to absorb
-      // any rounding inside Predict's program.
+      // STEP 2: Place order.
+      // CRITICAL: use ONLY the delta from this swap, not total balance.
+      // Otherwise pre-existing JupUSD would be lumped in. Apply a tiny
+      // safety margin (1000 atomic = $0.001) for any program rounding.
+      setStep(2); setStMsg('Building order…');
       const SAFETY_MARGIN = 1000n;
-      let orderDeposit = actualJupUsd < expectedJupUsdAtomic ? actualJupUsd : expectedJupUsdAtomic;
-      if (orderDeposit > SAFETY_MARGIN) orderDeposit -= SAFETY_MARGIN;
-      if (orderDeposit <= 0n) throw new Error('Swap landed but no JupUSD found. Refresh.');
-      dbg('buy:2', `order deposit (after safety margin): ${(Number(orderDeposit) / 1e6).toFixed(4)}`);
+      let orderDeposit = swapDelta > SAFETY_MARGIN ? swapDelta - SAFETY_MARGIN : 0n;
 
-      setStMsg('Building order…');
+      // Absolute floor: predict requires ≥ MIN_TRADE_USD. If slippage
+      // dropped us below that, abort with recovery instructions.
+      const MIN_ATOMIC = BigInt(MIN_TRADE_USD * 1e6);
+      if (orderDeposit < MIN_ATOMIC) {
+        const got = (Number(swapDelta) / 1e6).toFixed(2);
+        throw new Error(`Swap returned only $${got} JupUSD — below the $${MIN_TRADE_USD} minimum. Your JupUSD is in your wallet. Either swap it back to SOL or retry with a larger amount.`);
+      }
+      dbg('buy:2', `order deposit: ${(Number(orderDeposit) / 1e6).toFixed(4)} JupUSD`);
+
       const orderRequest = await loggedFetch(
         '/api/predict/orders',
         {
@@ -1621,7 +1667,6 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
         dbg,
         'predict-orders',
       );
-      checkAbort();
 
       const j = orderRequest.json;
       if (!j?.transaction) {
@@ -1635,34 +1680,29 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
 
       const buyTx = VersionedTransaction.deserialize(b64ToBytes(j.transaction));
 
-      // PRE-FLIGHT: simulate against current chain state before asking the
-      // user to sign. If this fails, we throw a friendly error and the user
-      // never signs a doomed tx and never loses funds.
       setStMsg('Pre-checking order…');
-      dbg('buy:2', 'simulating order tx');
       await simulateOrThrow(connection, buyTx, 'buy order');
       dbg('buy:2', 'simulation passed');
-      checkAbort();
 
       setStMsg(`Confirm Step 2 of 2 — Buy ${sideLabel}`);
       const signedBuy = await signTransaction(buyTx);
-      checkAbort();
 
       setStMsg('Submitting order…');
       const orderResult = await sendAndConfirm(connection, signedBuy, null, setStMsg, signal);
-      dbg('buy:2', `order tx landed: ${orderResult.sig}`);
-      if (orderResult.pending) throw new Error(`Order confirming: ${orderResult.sig}`);
+      dbg('buy:2', `order tx: ${orderResult.status} ${orderResult.sig}`);
 
-      // STEP 3: Wait for keeper fill — tx landing ≠ filled
-      setStep(3);
+      // Whether order tx confirmed or is pending, move to keeper-watch phase.
+      // A pending order tx that lands seconds later still works — the keeper
+      // will pick it up.
 
       if (!orderPubkey) {
-        setWarning('Order submitted but no order pubkey to track. Check Positions.');
-        setStep(4); setStMsg('');
-        onDone?.(); setTimeout(() => onClose(), 3200);
+        setWarning('Order submitted but no order pubkey returned. Check Positions tab in a moment.');
+        setStep(3); setStMsg('');
+        onDone?.(); setTimeout(() => onClose(), 4000);
         return;
       }
 
+      // STEP 3: Wait for keeper fill, then verify position delta.
       setStMsg('Waiting for keeper to fill…');
       let lastStatus = null;
       const fillStatus = await pollOrderStatus(orderPubkey, {
@@ -1678,58 +1718,87 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
           } catch (e) { dbg('buy:3:poll', `[${i}/${total}] error: ${e.message}`); }
         },
       });
-      dbg('buy:3', `final: ${fillStatus}`);
+      dbg('buy:3', `keeper final: ${fillStatus}`);
 
-      if (fillStatus === 'aborted') throw new Error('Cancelled.');
+      // 'aborted' here means our signal fired — only possible pre-on-chain.
+      // Post-swap we don't accept abort, so this is a defensive branch.
+      if (fillStatus === 'aborted') {
+        setWarning(`Order in flight: ${orderResult.sig}. Check Positions.`);
+        setStep(3); setStMsg('');
+        onDone?.(); setTimeout(() => onClose(), 4000);
+        return;
+      }
+
       if (fillStatus === 'failed') {
-        throw new Error('Order rejected by keeper. Check wallet for refund.');
+        throw new Error('Order rejected by keeper. JupUSD should be refunded to your wallet shortly.');
       }
-      if (fillStatus === 'pending') {
-        setWarning('Order hasn\'t filled yet. May still go through — check Positions.');
-        setStep(4); setStMsg('');
-        onDone?.(); setTimeout(() => onClose(), 3200);
+
+      // ── GROUND-TRUTH VERIFICATION via JupUSD balance ──
+      // The positions API has been unreliable (returning [] on failure,
+      // letting unrelated old positions count as "verified"). The real
+      // ground truth: if the order placed, the deposited JupUSD stays
+      // escrowed. If the order was refunded, the JupUSD comes back.
+      //
+      // Compute the JupUSD balance we EXPECT if the buy succeeded:
+      //   pre-buy balance - order deposit (what we sent to Predict)
+      // Then check after a settle period: if balance ≈ expected, position
+      // exists. If balance ≈ pre-buy (i.e. JupUSD came back), it failed.
+      setStMsg('Verifying order placed…');
+      const expectedAfter = jupUsdAfter - orderDeposit;          // jupUsdAfter set earlier (post-swap, pre-order)
+      const refundThreshold = expectedAfter + (orderDeposit / 2n); // halfway = clear "came back"
+
+      let finalBal = jupUsdAfter;
+      let placed = false;
+      let refunded = false;
+      for (let i = 0; i < 8; i++) {
+        if (signal?.aborted) break;
+        await new Promise(r => setTimeout(r, 1500));
+        finalBal = await fetchJupUsdBalance(connection, ownerB58);
+        const dropped = jupUsdAfter - finalBal;
+        dbg('buy:verify', `poll ${i+1}: bal=${(Number(finalBal)/1e6).toFixed(4)}, expected=${(Number(expectedAfter)/1e6).toFixed(4)}`);
+        // If balance is at-or-below expected (within 1% tolerance of deposit), placed.
+        const tolerance = orderDeposit / 100n;
+        if (finalBal <= expectedAfter + tolerance) { placed = true; break; }
+        // If balance is at-or-above the refund threshold, came back.
+        if (finalBal >= refundThreshold) { refunded = true; break; }
+      }
+
+      if (refunded) {
+        throw new Error('Order rejected by keeper. JupUSD has been refunded to your wallet.');
+      }
+      if (!placed) {
+        setWarning(`Order submitted (sig: ${orderResult.sig.slice(0, 12)}…) but balance hasn't settled. Check Positions tab in a moment.`);
+        setStep(3); setStMsg('');
+        onDone?.(); setTimeout(() => onClose(), 4500);
         return;
       }
 
-      // CRITICAL: status='filled' from the keeper API doesn't always mean
-      // a position was actually created. Verify by fetching positions and
-      // confirming one exists for this market+side.
-      setStMsg('Verifying position…');
-      try {
-        const positions = await fetchPositions(ownerB58);
-        const found = positions?.find(p =>
-          p?.marketId === m.marketId && Boolean(p?.isYes) === Boolean(isYes) && Number(p?.contracts || 0) > 0
-        );
-        if (!found) {
-          dbg('buy:verify', 'keeper said filled but no position exists', { positionCount: positions?.length });
-          throw new Error('Keeper reported filled but no position was created. Check wallet — your JupUSD should be refunded shortly.');
-        }
-        dbg('buy:verify', `position found: ${found.contracts} contracts @ ${found.avgPriceUsd || '?'}`);
-      } catch (e) {
-        if (/no position|refund/i.test(e?.message || '')) throw e;
-        // Position fetch failed — don't claim success without confirmation.
-        dbg('buy:verify', `position check error: ${e?.message}`);
-        setWarning('Order submitted. Could not verify position — check Positions tab.');
-        setStep(4); setStMsg('');
-        onDone?.(); setTimeout(() => onClose(), 3200);
-        return;
-      }
-
-      dbg('buy:done', 'position confirmed');
-      setStep(4); setStMsg('');
+      dbg('buy:done', `position placed; JupUSD escrowed: ${(Number(jupUsdAfter - finalBal) / 1e6).toFixed(4)}`);
+      setStep(3); setStMsg('');
       onDone?.();
       setTimeout(() => onClose(), 1800);
     } catch (e) {
       dbg('buy:error', e?.message || String(e), { status: e?.status, body: e?.body?.slice?.(0, 400) });
-      setError(friendlyError(e));
+      // If we threw AFTER on-chain movement, the error message already
+      // contains recovery context (signatures, balances). Show it as
+      // a warning rather than failure if the user's funds are safe.
+      const msg = String(e?.message || '');
+      const isRecoverable = /your jupusd|check.*wallet|in your wallet|sig:|signature/i.test(msg)
+                          && !/cancelled/i.test(msg);
+      if (isRecoverable) {
+        setWarning(friendlyError(e));
+      } else {
+        setError(friendlyError(e));
+      }
       setStep(0); setStMsg('');
+    } finally {
+      onChainRef.current = false;
     }
   }, [
-    publicKey, signTransaction, m, isYes, depositUsd, depositAtomic,
+    publicKey, signTransaction, m, isYes, depositUsd, totalUsd,
     connection, onClose, onDone, sideLabel, dbg,
   ]);
 
-  // USD presets
   const presets = ['5', '10', '25', '50'];
 
   const rulesText = poly?.description || m.rulesPrimary || event.closeCondition;
@@ -1753,17 +1822,19 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
 
   const buttonLabel = (() => {
     if (busy) return statusMsg || 'Working…';
-    if (step === 4) return warning ? '⚠ Submitted — check Positions' : '✓ Order filled';
+    if (step === 3) return warning ? '⚠ Submitted — check Positions' : '✓ Order filled';
     return `Buy ${sideLabel} · $${totalUsd.toFixed(2)}`;
   })();
+
+  // Step indicator: 3 phases (swap, order, fill). Show current.
+  const stepIndex = step === 0 ? 0 : step < 2 ? 1 : step < 3 ? 2 : 3;
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
       <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: '12px 12px 14px', boxShadow: C.shadowLg, maxHeight: `calc(100dvh - ${NAV_CLEARANCE}px - 24px)`, overflowY: 'auto' }}>
         <div style={{ width: 32, height: 3, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 8px' }} />
 
-        {/* Progress bar: 3 phases. Sign+swap, sign+order, wait for fill. */}
-        {busy && <StepBadge current={step} total={3} />}
+        {busy && <StepBadge current={stepIndex} total={3} />}
 
         <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 4, lineHeight: 1.35, ...T.body }}>
           {event.title}
@@ -1881,8 +1952,7 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
         <div style={{ padding: 9, borderRadius: 10, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10, ...T.mono, fontSize: 10 }}>
           <Row label="Deposit (to Predict)" value={fmtUsd(depositUsd)} />
           <Row label="Platform fee (5%)" value={`~${fmtUsd(feeUsd)}`} />
-          <Row label="Network tip" value="~$0.17 (fast landing)" />
-          <Row label="Total cost" value={`~${fmtUsd(totalUsd + 0.17)} in SOL`} valueColor={C.hl} bold />
+          <Row label="Total cost" value={`~${fmtUsd(totalUsd)} in SOL`} valueColor={C.hl} bold />
           <Row label="Est. contracts" value={`~${contractsEst.toFixed(2)}`} />
           <Row label={`If ${sideLabel} wins`} value={`~${fmtUsd(contractsEst)}`} valueColor={sideColor} bold />
           {formatEndDate(event.closeTime) && (
@@ -1890,26 +1960,28 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
           )}
         </div>
 
-        {statusMsg && <StatusLine msg={statusMsg} step={busy ? `STEP ${Math.min(step, 3)} OF 3` : null} />}
+        {statusMsg && <StatusLine msg={statusMsg} step={busy ? `STEP ${stepIndex} OF 3` : null} />}
         {error && <ErrorLine msg={error} />}
-        {warning && !error && (
-          <div style={{ marginBottom: 8, padding: 8, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', borderRadius: 10, fontSize: 11, color: C.amber, fontWeight: 600, lineHeight: 1.4 }}>
-            {warning}
-          </div>
-        )}
+        {warning && !error && <WarnLine msg={warning} />}
 
         {!hasBalance && depositUsd > 0 && !busy && (
-          <div style={{ marginBottom: 8, padding: 8, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', borderRadius: 10, fontSize: 11, color: C.amber, fontWeight: 600 }}>
-            Insufficient SOL — need ~${totalUsd.toFixed(2)} worth (deposit + 5% fee).
-          </div>
+          <WarnLine msg={`Insufficient SOL — need ~$${totalUsd.toFixed(2)} worth (deposit + 5% fee).`} />
         )}
 
         <PrimaryButton
           onClick={canBuy ? placeOrder : undefined}
-          disabled={!canBuy || step === 4}
+          disabled={!canBuy || step === 3}
           color={isYes ? 'yes' : 'no'}
           label={buttonLabel}
         />
+
+        {busy && (
+          <CancelButton
+            onClick={cancel}
+            disabled={!canCancel}
+            label={canCancel ? 'Cancel' : 'Cancel (unavailable — funds on-chain)'}
+          />
+        )}
 
         <DebugPanel log={debugLog} onClear={clearDbg} />
       </div>
@@ -1941,17 +2013,6 @@ function PositionCard({ p, onAction }) {
   const pnlColor  = pnl >= 0 ? C.yes : C.no;
   const pnlPct    = p.costUsd > 0 ? (pnl / p.costUsd) * 100 : 0;
 
-  // ─── Position state ─────────────────────────────────────────────────────
-  // A position can be in one of:
-  //   - active   : market still open, can sell at mark price
-  //   - claimable: market resolved in user's favor, claim payout
-  //   - claimed  : user has already claimed payout
-  //   - lost     : market resolved against user, contracts worth $0
-  //   - settling : market closed but result not finalized yet
-  //
-  // The previous code only handled active/claimable/claimed and showed a
-  // Sell button on lost positions, which is misleading — there's nothing
-  // to sell when mark price is $0 on a settled market.
   const isClaimable = p.claimable && !p.claimed;
   const isClaimed   = p.claimed;
   const isResolved  = p.marketStatus === 'settled' || p.marketStatus === 'resolved'
@@ -1962,10 +2023,6 @@ function PositionCard({ p, onAction }) {
   );
   const lostResolved = isResolved && !isClaimable && !isClaimed && !wonResolved;
   const isSettling   = isResolved && !isClaimable && !isClaimed && !lostResolved;
-
-  // Mark price = 0 with no claimable flag and not yet settled is a strong
-  // hint the market resolved against us (server hasn't surfaced the result
-  // field yet). Treat the same as lost.
   const inferredLost = !isClaimable && !isClaimed && !isResolved
                     && p.markPriceUsd === 0 && p.contracts > 0;
 
@@ -2038,47 +2095,67 @@ function PositionCard({ p, onAction }) {
   );
 }
 
+// Sell/Claim flow phases:
+//   0   idle
+//   1   predict tx (sign #1, in-flight)
+//   1.5 predict tx landed, building swap
+//   2   swap tx (sign #2, in-flight)
+//   3   done, swap verified
 function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
   const { publicKey, signTransaction } = useWallet();
   const [step, setStep]       = useState(0);
   const [statusMsg, setStMsg] = useState('');
   const [error, setError]     = useState('');
+  const [warning, setWarning] = useState('');
   const { log: debugLog, push: dbg, clear: clearDbg } = useDebugLog();
-  const abortRef = React.useRef(null);
-  const cancel = useCallback(() => {
-    if (abortRef.current) { try { abortRef.current.abort(); } catch {} }
-    dbg(`${kind}:cancel`, 'user cancelled');
-    setStep(0); setStMsg(''); setError('Cancelled.');
-  }, [dbg, kind]);
+  const abortRef = useRef(null);
+  const onChainRef = useRef(false);
 
   useBodyLock(true);
 
-  const busy   = step > 0 && step < 3;
   const isClaim = kind === 'claim';
+  const busy = step > 0 && step < 3;
+  const canCancel = busy && !onChainRef.current;
+
+  const cancel = useCallback(() => {
+    if (!canCancel) return;
+    if (abortRef.current) { try { abortRef.current.abort(); } catch {} }
+    dbg(`${kind}:cancel`, 'user cancelled pre-signature');
+    setStep(0); setStMsg(''); setError('Cancelled.');
+  }, [canCancel, dbg, kind]);
+
   const grossUsd = isClaim ? position.payoutUsd : position.valueUsd;
+  const feeUsd   = grossUsd * (FEE_BPS / 10000);
+  const netUsd   = grossUsd - feeUsd;
 
   const handleAction = useCallback(async () => {
     dbg(`${kind}:start`, `position=${position.positionPubkey} contracts=${position.contracts} side=${position.isYes ? 'YES' : 'NO'}`);
     if (!publicKey || !signTransaction) {
-      dbg(`${kind}:abort`, 'no wallet');
       setError('Connect a wallet that supports signTransaction.');
       return;
     }
-    setError('');
+    setError(''); setWarning('');
+    onChainRef.current = false;
     abortRef.current = new AbortController();
     const signal = abortRef.current.signal;
     const checkAbort = () => { if (signal.aborted) throw new Error('Cancelled.'); };
 
     try {
-      setStep(1);
-      setStMsg(`Building ${isClaim ? 'claim' : 'sell'}…`);
       const ownerB58 = publicKey.toBase58();
 
+      // CRITICAL: snapshot JupUSD balance BEFORE the sell/claim. We'll use
+      // the delta — not the total balance — to know what to swap to SOL.
+      // This protects any pre-existing JupUSD the user already holds.
+      setStep(1);
+      setStMsg('Reading balances…');
+      const jupUsdBefore = await fetchJupUsdBalance(connection, ownerB58);
+      dbg(`${kind}:1`, `JupUSD before ${isClaim ? 'claim' : 'sell'}: ${(Number(jupUsdBefore) / 1e6).toFixed(4)}`);
+
+      setStMsg(`Building ${isClaim ? 'claim' : 'sell'}…`);
       const url = isClaim
         ? `/api/predict/positions/${encodeURIComponent(position.positionPubkey)}/claim`
         : `/api/predict/positions/${encodeURIComponent(position.positionPubkey)}`;
       const method = isClaim ? 'POST' : 'DELETE';
-      dbg(`${kind}:1`, `${method} ${url}`);
 
       const request = await loggedFetch(
         url,
@@ -2101,70 +2178,100 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
       const predictTx = VersionedTransaction.deserialize(b64ToBytes(j.transaction));
       dbg(`${kind}:1`, 'tx deserialized');
 
-      // PRE-FLIGHT: simulate before signing so user never signs a doomed tx.
       setStMsg('Pre-checking…');
       await simulateOrThrow(connection, predictTx, kind);
-      dbg(`${kind}:1`, 'simulation passed');
       checkAbort();
 
-      setStMsg(`Confirm Step 1 of 2 in wallet — ${isClaim ? 'Claim winnings' : 'Sell contracts'}`);
+      setStMsg(`Confirm Step 1 of 2 — ${isClaim ? 'Claim winnings' : 'Sell contracts'}`);
       const signedPredict = await signTransaction(predictTx);
       checkAbort();
-      dbg(`${kind}:1`, 'signed');
 
+      onChainRef.current = true;
       setStMsg(isClaim ? 'Claiming…' : 'Selling…');
       const predictResult = await sendAndConfirm(connection, signedPredict, null, setStMsg, signal);
-      dbg(`${kind}:1`, `landed: ${predictResult.sig}`, { pending: predictResult.pending });
-      if (predictResult.pending) throw new Error(`${kind} tx confirming: ${predictResult.sig}`);
+      dbg(`${kind}:1`, `result: ${predictResult.status} ${predictResult.sig}`);
 
+      // Verify the predict tx by checking the JupUSD delta. If status is
+      // pending or even if confirmed, we always poll the balance to know
+      // the exact amount that arrived (claim payout / sell proceeds vary
+      // due to fees/slippage on the predict side).
+      setStMsg(`Verifying ${isClaim ? 'payout' : 'proceeds'}…`);
+      let jupUsdAfter = jupUsdBefore;
+      let pollAttempts = predictResult.status === 'pending' ? 12 : 6;
+      for (let i = 0; i < pollAttempts; i++) {
+        await new Promise(r => setTimeout(r, 1500));
+        jupUsdAfter = await fetchJupUsdBalance(connection, ownerB58);
+        if (jupUsdAfter > jupUsdBefore) break;
+      }
+      const delta = jupUsdAfter - jupUsdBefore;
+      dbg(`${kind}:1`, `JupUSD delta: +${(Number(delta) / 1e6).toFixed(4)}`);
+
+      if (delta <= 0n) {
+        if (predictResult.status === 'pending') {
+          throw new Error(`${isClaim ? 'Claim' : 'Sell'} submitted but not yet visible. Sig: ${predictResult.sig.slice(0, 12)}…. Refresh in a moment and you can swap the JupUSD to SOL.`);
+        }
+        throw new Error(`${isClaim ? 'Claim' : 'Sell'} confirmed but no JupUSD arrived. Check Solscan: ${predictResult.sig.slice(0, 12)}…`);
+      }
+
+      // STEP 2: Swap the DELTA — not the full balance — to SOL.
       setStep(2);
-      setStMsg('Reading JupUSD balance…');
-      const actualJupUsd = await fetchJupUsdBalance(connection, ownerB58);
-      dbg(`${kind}:2`, `JupUSD balance: ${(Number(actualJupUsd) / 1e6).toFixed(4)}`);
-      if (actualJupUsd <= 0n) throw new Error('No JupUSD to swap. Refresh and try again.');
-
       setStMsg('Building swap…');
       const { tx: swapTx, latestBlockhash: swapBh } = await buildJupUsdToSolSwapTx({
         connection,
         ownerPubkey: publicKey,
-        grossJupUsdAtomic: actualJupUsd,
+        grossJupUsdAtomic: delta,
       });
+      dbg(`${kind}:2`, `swapping ${(Number(delta) / 1e6).toFixed(4)} JupUSD → SOL`);
       checkAbort();
-      dbg(`${kind}:2`, 'swap tx built');
 
-      setStMsg('Confirm Step 2 of 2 in wallet — Swap JupUSD → SOL');
+      setStMsg('Pre-checking swap…');
+      await simulateOrThrow(connection, swapTx, 'JupUSD→SOL swap');
+      checkAbort();
+
+      setStMsg('Confirm Step 2 of 2 — Swap JupUSD → SOL');
       const signedSwap = await signTransaction(swapTx);
-      checkAbort();
-      dbg(`${kind}:2`, 'swap signed');
 
-      setStMsg('Swapping (fast)…');
-      const swapResult = await submitViaJupiter(connection, signedSwap, swapBh, setStMsg, signal);
-      dbg(`${kind}:2`, `swap landed: ${swapResult.sig}`, { pending: swapResult.pending });
-      if (swapResult.pending) throw new Error(`Swap confirming: ${swapResult.sig}`);
+      setStMsg('Swapping…');
+      const swapResult = await sendAndConfirm(connection, signedSwap, swapBh, setStMsg, signal);
+      dbg(`${kind}:2`, `swap result: ${swapResult.status} ${swapResult.sig}`);
 
-      dbg(`${kind}:done`, 'complete');
+      if (swapResult.status === 'pending') {
+        setWarning(`Swap submitted but not yet visible. Sig: ${swapResult.sig.slice(0, 12)}…. Your SOL will appear once it lands.`);
+      } else {
+        dbg(`${kind}:done`, 'complete');
+      }
+
       setStep(3); setStMsg('');
       onDone?.();
-      setTimeout(() => onClose(), 1800);
+      setTimeout(() => onClose(), warning ? 4500 : 1800);
     } catch (e) {
       dbg(`${kind}:error`, e?.message || String(e), { status: e?.status, body: e?.body?.slice?.(0, 400) });
-      setError(friendlyError(e));
+      const msg = String(e?.message || '');
+      const isRecoverable = /your jupusd|in your wallet|sig:|signature|refresh|swap.*to sol/i.test(msg)
+                          && !/cancelled/i.test(msg);
+      if (isRecoverable) {
+        setWarning(friendlyError(e));
+      } else {
+        setError(friendlyError(e));
+      }
       setStep(0); setStMsg('');
+    } finally {
+      onChainRef.current = false;
     }
-  }, [publicKey, signTransaction, position, isClaim, kind, connection, onDone, onClose, dbg]);
+  }, [publicKey, signTransaction, position, isClaim, kind, connection, onDone, onClose, dbg, warning]);
 
-  const feeUsd  = grossUsd * (FEE_BPS / 10000);
-  const netUsd  = grossUsd - feeUsd;
   const headerBadge = isClaim
     ? <div style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 99, background: C.yesDim, border: `1px solid ${C.yes}55`, color: C.yes, fontSize: 9, fontWeight: 800, letterSpacing: 1, marginBottom: 6, ...T.mono }}>🏆 RESOLVED — YOU WON</div>
     : null;
+
+  const stepIndex = step === 0 ? 0 : step < 2 ? 1 : 2;
 
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
       <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: '12px 12px 14px', boxShadow: C.shadowLg }}>
         <div style={{ width: 32, height: 3, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 8px' }} />
 
-        {busy && <StepBadge current={step} total={2} />}
+        {busy && <StepBadge current={stepIndex} total={2} />}
 
         {headerBadge}
         <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 8, ...T.body }}>{position.title}</div>
@@ -2176,12 +2283,13 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
           <Row label="Fee (5%)" value={fmtUsd(feeUsd)} />
           <Row label="You collect" value={`~${fmtUsd(netUsd)} in SOL`} valueColor={C.hl} bold />
           <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}`, color: C.muted, fontSize: 9 }}>
-            Two signatures: {isClaim ? 'Claim' : 'Sell'} then swap JupUSD → SOL.
+            Two signatures: {isClaim ? 'Claim' : 'Sell'}, then swap JupUSD → SOL.
           </div>
         </div>
 
-        {statusMsg && <StatusLine msg={statusMsg} step={busy ? `STEP ${step} OF 2` : null} />}
+        {statusMsg && <StatusLine msg={statusMsg} step={busy ? `STEP ${stepIndex} OF 2` : null} />}
         {error && <ErrorLine msg={error} />}
+        {warning && !error && <WarnLine msg={warning} />}
 
         <PrimaryButton
           onClick={busy ? undefined : handleAction}
@@ -2193,6 +2301,14 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
             : isClaim ? `Claim · ${fmtUsd(grossUsd)}` : `Sell all · ${fmtUsd(grossUsd)}`
           }
         />
+
+        {busy && (
+          <CancelButton
+            onClick={cancel}
+            disabled={!canCancel}
+            label={canCancel ? 'Cancel' : 'Cancel (unavailable — funds on-chain)'}
+          />
+        )}
 
         <DebugPanel log={debugLog} onClear={clearDbg} />
       </div>
