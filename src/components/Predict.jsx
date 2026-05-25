@@ -2,7 +2,7 @@
 //
 // ARCHITECTURE:
 //   Access fee: $1.99/day in SOL on wallet connect → fee wallet
-//   Buy: 1 sig — Predict order tx only (no swap needed, user pays in JupUSD)
+//   Buy: 1 sig — Predict order tx only (user pays in USDC)
 //   Sell: 1 sig — Predict sell ix + Jupiter swap ix merged into one tx (5% fee)
 //   Claim: 1 sig — Predict claim ix + Jupiter swap ix merged into one tx (5% fee)
 
@@ -21,7 +21,10 @@ import {
 } from '@solana/spl-token';
 
 const SOL_MINT        = 'So11111111111111111111111111111111111111112';
-const JUPUSD_MINT     = 'JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD';
+const JUPUSD_MINT     = 'JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD'; // kept for sell/claim swap
+const USDC_MINT       = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const DEPOSIT_MINT    = USDC_MINT; // users deposit USDC
+const DEPOSIT_DECIMALS = 6;
 const FEE_WALLET_B58  = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
 const FEE_WALLET      = new PublicKey(FEE_WALLET_B58);
 const FEE_BPS         = 500; // 5% on sell/claim swap
@@ -151,7 +154,7 @@ const deserIx=(ix)=>({programId:new PublicKey(ix.programId),keys:ix.accounts.map
 // ── Solana helpers ───────────────────────────────────────────────────────────
 async function fetchSolBalance(connection,ownerB58){try{return BigInt(await connection.getBalance(new PublicKey(ownerB58),'confirmed'));}catch{return 0n;}}
 async function fetchJupUsdBalance(connection,ownerB58){
-  try{const ata=getAssociatedTokenAddressSync(new PublicKey(JUPUSD_MINT),new PublicKey(ownerB58));const bal=await connection.getTokenAccountBalance(ata,'confirmed');return BigInt(bal.value.amount||0);}
+  try{const ata=getAssociatedTokenAddressSync(new PublicKey(DEPOSIT_MINT),new PublicKey(ownerB58));const bal=await connection.getTokenAccountBalance(ata,'confirmed');return BigInt(bal.value.amount||0);}
   catch{return 0n;}
 }
 async function fetchSolPrice(){
@@ -172,29 +175,29 @@ async function buildAccessFeeTx({connection, ownerPubkey}) {
   return { tx: new VersionedTransaction(msg), lamports, latestBlockhash };
 }
 
-// ── Build JupUSD→SOL swap instructions (returns raw ixs + alts) ─────────────
+// ── Build USDC→SOL swap instructions (returns raw ixs + alts) ─────────────
 async function buildSellSwapIxs({ connection, ownerPubkey, grossJupUsdAtomic }) {
   if (grossJupUsdAtomic <= 0n) throw new Error('Amount too small.');
   const feeAtomic = (grossJupUsdAtomic * BigInt(FEE_BPS)) / 10000n;
   const swapAmountAtomic = grossJupUsdAtomic - feeAtomic;
   if (swapAmountAtomic <= 0n) throw new Error('Amount too small after fee.');
   const params = new URLSearchParams({
-    inputMint: JUPUSD_MINT, outputMint: SOL_MINT,
+    inputMint: DEPOSIT_MINT, outputMint: SOL_MINT,
     amount: swapAmountAtomic.toString(), slippageBps: String(SELL_SWAP_SLIPPAGE_BPS),
     taker: ownerPubkey.toBase58(),
   });
   const r = await jfetch(`/api/jupiter/build?${params}`);
   const build = await r.json();
   if (!build?.swapInstruction) throw new Error('Jupiter /build returned no swapInstruction');
-  const FEE_JUPUSD_ATA = getFeeJupUsdAta();
-  const userJupUsdAta = getAssociatedTokenAddressSync(new PublicKey(JUPUSD_MINT), ownerPubkey);
+  const FEE_DEPOSIT_ATA = getAssociatedTokenAddressSync(new PublicKey(DEPOSIT_MINT), FEE_WALLET, true, TOKEN_PROGRAM_ID);
+  const userDepositAta = getAssociatedTokenAddressSync(new PublicKey(DEPOSIT_MINT), ownerPubkey);
   const cuIxs = (build.computeBudgetInstructions?.length > 0)
     ? build.computeBudgetInstructions.map(deserIx)
     : [ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT_FALLBACK }), ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS })];
   const ixs = [
     ...cuIxs,
-    createAssociatedTokenAccountIdempotentInstruction(ownerPubkey, FEE_JUPUSD_ATA, FEE_WALLET, new PublicKey(JUPUSD_MINT)),
-    createTransferCheckedInstruction(userJupUsdAta, new PublicKey(JUPUSD_MINT), FEE_JUPUSD_ATA, ownerPubkey, feeAtomic, JUPUSD_DECIMALS),
+    createAssociatedTokenAccountIdempotentInstruction(ownerPubkey, FEE_DEPOSIT_ATA, FEE_WALLET, new PublicKey(DEPOSIT_MINT)),
+    createTransferCheckedInstruction(userDepositAta, new PublicKey(DEPOSIT_MINT), FEE_DEPOSIT_ATA, ownerPubkey, feeAtomic, DEPOSIT_DECIMALS),
     ...(build.setupInstructions || []).map(deserIx),
     deserIx(build.swapInstruction),
     ...(build.cleanupInstruction ? [deserIx(build.cleanupInstruction)] : []),
@@ -565,7 +568,7 @@ function BuyDrawer({event,isYes,onClose,onDone,connection}){
       const ownerB58=publicKey.toBase58();
       const depositAtomic=BigInt(Math.round(depositUsd*1e6));
       setStep(1);setStMsg('Building order…');
-      const orderRequest=await loggedFetch('/api/predict/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ownerPubkey:ownerB58,marketId:m.marketId,isYes,isBuy:true,depositAmount:depositAtomic.toString(),depositMint:JUPUSD_MINT}),signal},dbg,'predict-orders');
+      const orderRequest=await loggedFetch('/api/predict/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ownerPubkey:ownerB58,marketId:m.marketId,isYes,isBuy:true,depositAmount:depositAtomic.toString(),depositMint:DEPOSIT_MINT}),signal},dbg,'predict-orders');
       const j=orderRequest.json;
       if(!j?.transaction)throw new Error('Jupiter Predict returned no transaction.');
       const orderPubkey=j.order?.orderPubkey||j.orderPubkey||(typeof j.order==='string'?j.order:null)||null;
@@ -613,7 +616,7 @@ function BuyDrawer({event,isYes,onClose,onDone,connection}){
         {showRules&&<div style={{marginTop:6,fontSize:10,color:C.ink,lineHeight:1.5,whiteSpace:'pre-wrap',maxHeight:200,overflowY:'auto',...T.body}}>{rulesText}</div>}
       </div>)}
       <div style={{marginBottom:10}}>
-        <div style={{fontSize:9,color:C.muted,marginBottom:5,textTransform:'uppercase',letterSpacing:1,...T.mono}}>Deposit amount (JupUSD)</div>
+        <div style={{fontSize:9,color:C.muted,marginBottom:5,textTransform:'uppercase',letterSpacing:1,...T.mono}}>Deposit amount (USDC)</div>
         <div style={{display:'flex',alignItems:'center',gap:8,padding:'9px 11px',borderRadius:10,background:'rgba(255,255,255,.03)',border:`1px solid ${C.border}`}}>
           <span style={{fontSize:16,color:C.muted,fontWeight:700,...T.display}}>$</span>
           <input value={amount} onChange={e=>{setAmount(cleanAmount(e.target.value));setError('');}} disabled={busy} inputMode="decimal" style={{flex:1,background:'none',border:'none',outline:'none',color:C.ink,fontSize:18,fontWeight:700,...T.display}}/>
