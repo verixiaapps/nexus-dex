@@ -36,7 +36,7 @@ import { Buffer } from 'buffer';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
   Connection, PublicKey, VersionedTransaction, TransactionMessage,
-  SystemProgram, AddressLookupTableAccount,
+  SystemProgram, AddressLookupTableAccount, ComputeBudgetProgram,
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddressSync,
@@ -53,12 +53,28 @@ const FEE_WALLET    = new PublicKey(FEE_WALLET_B58);
 const FEE_BPS       = 500;
 const SLIPPAGE_BPS  = 1000;
 const SOL_RPC       = '/api/solana-rpc';
-const MIN_TRADE_USD = 5;
+const MIN_TRADE_USD = 1;
 const NAV_CLEARANCE = 120;
 const JUPUSD_DECIMALS = 6;
 const SOL_DECIMALS    = 9;
 
+// Priority fee paid per compute unit. The Jupiter /build response already
+// includes a computeUnitPrice instruction in computeBudgetInstructions, but
+// we override it with our own value to make sure short-lived market orders
+// land before they close. 2.8M microlamports = roughly 0.0028 lamports per CU,
+// which is a healthy bid in normal network conditions.
 const PRIORITY_FEE_MICROLAMPORTS = 2_800_000;
+
+// Compute unit limit. Per dev.jup.ag/docs/swap/build, /build returns a
+// CU price instruction but NOT a CU limit. The Solana runtime defaults to
+// ~200k when no limit is set, which is too low for complex Jupiter routes.
+//
+// We follow Jupiter's recommended pattern: build the tx with CU_LIMIT_MAX,
+// simulate, then rebuild with 1.2x the simulated value (capped at the max).
+// This keeps the priority fee accurate to what we actually consume.
+const CU_LIMIT_MAX      = 1_400_000;   // Solana hard cap
+const CU_LIMIT_FALLBACK = 600_000;     // used when simulation fails
+const CU_BUFFER_PERCENT = 120;         // 1.2x simulated value
 
 const REFRESH_NORMAL_MS = 300_000;
 const REFRESH_URGENT_MS = 30_000;
@@ -75,7 +91,10 @@ const POLY_GAMMA_BASE = 'https://gamma-api.polymarket.com';
 const POLY_RTDS_WSS   = 'wss://ws-live-data.polymarket.com';
 const POLY_RTDS_TOPIC = 'crypto_prices_chainlink';
 const POLY_RTDS_PING_MS = 5000;     // docs: send PING every 5 seconds
-const POLY_PRICE_TO_BEAT_BASE = 'https://polymarket.com/api/equity/price-to-beat';
+// Price-to-beat is fetched through this app's proxy at
+// /api/polymarket/price-to-beat/{slug} which forwards to
+// https://polymarket.com/api/equity/price-to-beat/{slug} (CORS-blocked
+// from the browser, so it must go through the backend).
 
 // Extract the reference price from a Polymarket market description.
 //
@@ -190,31 +209,31 @@ function resolvePriceToBeat(event) {
 // misleading, since $150k is a future target, not an opening reference.
 
 // Map a subcategory tag like "BTC" or "Bitcoin" to a Chainlink RTDS symbol
-// like "btc/usd". Returns null for unknown assets so we just skip the price
-// chip rather than guessing.
+// like "btc/usd". Returns null for unmapped assets so we show '—' rather
+// than risk a wrong NOW price.
+//
+// Polymarket's docs (docs.polymarket.com/market-data/websocket/rtds) only
+// formally list btc/usd, eth/usd, sol/usd, xrp/usd as supported Chainlink
+// symbols, but live observation has confirmed doge/usd, bnb/usd, hype/usd
+// stream as well. We include the latter three with a note that if Polymarket
+// removes them silently, the NOW column will go blank for those markets —
+// which is the safe failure mode.
 function symbolFromSubcategory(sub) {
   if (!sub) return null;
   const s = String(sub).toLowerCase().trim();
-  // Common aliases — Polymarket uses tickers in their tags.
   const map = {
+    // Documented in RTDS spec
     bitcoin: 'btc/usd', btc: 'btc/usd',
     ethereum: 'eth/usd', eth: 'eth/usd',
     solana: 'sol/usd', sol: 'sol/usd',
-    jupiter: 'jup/usd', jup: 'jup/usd',
-    dogecoin: 'doge/usd', doge: 'doge/usd',
     ripple: 'xrp/usd', xrp: 'xrp/usd',
-    cardano: 'ada/usd', ada: 'ada/usd',
+    // Observed live on Polymarket Chainlink stream (not in their public docs).
+    // If these stop emitting, the NOW column will gracefully show '—'.
+    dogecoin: 'doge/usd', doge: 'doge/usd',
     binancecoin: 'bnb/usd', bnb: 'bnb/usd',
-    avalanche: 'avax/usd', avax: 'avax/usd',
-    polkadot: 'dot/usd', dot: 'dot/usd',
-    chainlink: 'link/usd', link: 'link/usd',
-    matic: 'matic/usd', polygon: 'matic/usd',
-    litecoin: 'ltc/usd', ltc: 'ltc/usd',
+    hyperliquid: 'hype/usd', hype: 'hype/usd',
   };
-  if (map[s]) return map[s];
-  // Fallback: if it looks like a 3-5 char ticker, try `<ticker>/usd`.
-  if (/^[a-z]{2,6}$/.test(s)) return `${s}/usd`;
-  return null;
+  return map[s] || null;
 }
 
 const C = {
@@ -575,6 +594,11 @@ function pickPolymarketFields(pmEvent) {
     outcomes,                                  // ["Yes","No"] or ["Up","Down"] or team names
     outcomePrices: Array.isArray(outcomePrices) ? outcomePrices.map(Number) : null,
     groupItemTitle:  pmMkt?.groupItemTitle  || null,  // "$150k" / "March 31" / team name
+    // The Polymarket MARKET slug. This is critical — Jupiter's event slug and
+    // Polymarket's market slug are DIFFERENT. The price-to-beat endpoint is
+    // keyed on the Polymarket market slug (e.g. "btc-updown-5m-1779544500"),
+    // not the longer human-readable event slug Jupiter uses.
+    polymarketMarketSlug: pmMkt?.slug || null,
     lastTradePrice:  pmMkt?.lastTradePrice  != null ? Number(pmMkt.lastTradePrice)  : null,
     bestBid:         pmMkt?.bestBid         != null ? Number(pmMkt.bestBid)         : null,
     bestAsk:         pmMkt?.bestAsk         != null ? Number(pmMkt.bestAsk)         : null,
@@ -593,14 +617,25 @@ function pickPolymarketFields(pmEvent) {
 // Per Polymarket docs (https://docs.polymarket.com/market-data/websocket/rtds):
 //   GET https://polymarket.com/api/equity/price-to-beat/{slug}
 // Returns the opening "price to beat" for an up/down market. This is THE
-// reference price the user is betting against. Works for any market with a
-// slug — crypto, equity, commodity, forex. The exact response shape isn't
-// in the public docs, so we look for the price under several plausible
-// keys (value, price, priceToBeat) and ignore anything else.
+// reference price the user is betting against.
+//
+// IMPORTANT: polymarket.com (the marketing host) blocks browser CORS. We
+// CANNOT fetch this URL directly from the browser. We route through the
+// app's proxy:
+//
+//   GET /api/polymarket/price-to-beat/{slug}
+//        → proxies to https://polymarket.com/api/equity/price-to-beat/{slug}
+//
+// BACKEND TODO: add a route `/api/polymarket/price-to-beat/:slug` that
+// forwards GET to the Polymarket URL above and returns the JSON unchanged.
+// One line in your existing proxy (same pattern as /api/predict/*).
+//
+// Response shape isn't publicly documented, so we look for the price under
+// several plausible keys (value, price, priceToBeat, startingPrice, etc).
 async function fetchPriceToBeat(slug) {
   if (!slug) return null;
   try {
-    const r = await fetch(`${POLY_PRICE_TO_BEAT_BASE}/${encodeURIComponent(slug)}`);
+    const r = await fetch(`/api/polymarket/price-to-beat/${encodeURIComponent(slug)}`);
     if (!r.ok) return null;
     const j = await r.json().catch(() => null);
     if (j == null) return null;
@@ -812,13 +847,16 @@ async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }
   if (feeLamports <= 0n) throw new Error('Fee rounds to zero — amount too small.');
   if (netLamports <= 0n) throw new Error('Net amount after fee is zero.');
 
+  // Build a Jupiter swap quote. We pass only documented /build parameters
+  // (per dev.jup.ag/docs/swap/build). The compute unit price comes back
+  // inside build.computeBudgetInstructions; we add our own setComputeUnitLimit
+  // and setComputeUnitPrice below to ensure short-window orders land.
   const params = new URLSearchParams({
     inputMint:   SOL_MINT,
     outputMint:  JUPUSD_MINT,
     amount:      netLamports.toString(),
     slippageBps: String(SLIPPAGE_BPS),
     taker:       ownerPubkey.toBase58(),
-    computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
   });
   const r = await jfetch(`/api/jupiter/build?${params}`);
   const build = await r.json();
@@ -833,16 +871,26 @@ async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }
     lamports:   Number(feeLamports),
   });
 
-  const ixs = [];
-  if (Array.isArray(build.computeBudgetInstructions))
-    for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
-  ixs.push(feeIx);
-  if (Array.isArray(build.setupInstructions))
-    for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
-  if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
-  if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
-  if (Array.isArray(build.otherInstructions))
-    for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+  // Assemble instructions in the order documented by dev.jup.ag/docs/swap/build:
+  //   computeBudgetInstructions (CU limit + price) -> setupInstructions ->
+  //   swapInstruction -> cleanupInstruction -> otherInstructions
+  // We override the CU budget with our own values: /build returns only the
+  // CU price (no limit), and we want a deterministic priority fee for time-
+  // sensitive orders. The CU limit is determined by simulating once with the
+  // network max, reading actual usage, then rebuilding at 1.2x usage.
+  const buildIxs = (cuLimit) => {
+    const ixs = [];
+    ixs.push(ComputeBudgetProgram.setComputeUnitLimit({ units: cuLimit }));
+    ixs.push(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }));
+    ixs.push(feeIx);
+    if (Array.isArray(build.setupInstructions))
+      for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+    if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+    if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+    if (Array.isArray(build.otherInstructions))
+      for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+    return ixs;
+  };
 
   const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
   let alts = [];
@@ -855,13 +903,17 @@ async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }
   }
 
   const latestBlockhash = await connection.getLatestBlockhash('confirmed');
-  const message = new TransactionMessage({
+  const compile = (ixs) => new TransactionMessage({
     payerKey:        ownerPubkey,
     recentBlockhash: latestBlockhash.blockhash,
     instructions:    ixs,
   }).compileToV0Message(alts);
 
-  const tx = new VersionedTransaction(message);
+  // Simulate with the max CU limit, then rebuild with the actual usage + buffer.
+  const probeTx = new VersionedTransaction(compile(buildIxs(CU_LIMIT_MAX)));
+  const cuLimit = await simulateForCuLimit(connection, probeTx, 'sol-jupusd');
+  const tx = new VersionedTransaction(compile(buildIxs(cuLimit)));
+
   return { tx, expectedJupUsdAtomic, latestBlockhash };
 }
 
@@ -877,7 +929,6 @@ async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtom
     amount:      netAtomic.toString(),
     slippageBps: String(SLIPPAGE_BPS),
     taker:       ownerPubkey.toBase58(),
-    computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
   });
   const r = await jfetch(`/api/jupiter/build?${params}`);
   const build = await r.json();
@@ -897,17 +948,23 @@ async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtom
     feeAtomic, JUPUSD_DECIMALS, [], TOKEN_PROGRAM_ID,
   );
 
-  const ixs = [];
-  if (Array.isArray(build.computeBudgetInstructions))
-    for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
-  ixs.push(ataIx);
-  ixs.push(transferIx);
-  if (Array.isArray(build.setupInstructions))
-    for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
-  if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
-  if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
-  if (Array.isArray(build.otherInstructions))
-    for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+  // Same instruction ordering as the buy path: explicit CU budget first,
+  // then our fee transfer, then Jupiter's setup/swap/cleanup/other. CU limit
+  // is determined by simulation per dev.jup.ag/docs/swap/advanced/compute-units.
+  const buildIxs = (cuLimit) => {
+    const ixs = [];
+    ixs.push(ComputeBudgetProgram.setComputeUnitLimit({ units: cuLimit }));
+    ixs.push(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }));
+    ixs.push(ataIx);
+    ixs.push(transferIx);
+    if (Array.isArray(build.setupInstructions))
+      for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+    if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+    if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+    if (Array.isArray(build.otherInstructions))
+      for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+    return ixs;
+  };
 
   const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
   let alts = [];
@@ -920,13 +977,16 @@ async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtom
   }
 
   const latestBlockhash = await connection.getLatestBlockhash('confirmed');
-  const message = new TransactionMessage({
+  const compile = (ixs) => new TransactionMessage({
     payerKey:        ownerPubkey,
     recentBlockhash: latestBlockhash.blockhash,
     instructions:    ixs,
   }).compileToV0Message(alts);
 
-  const tx = new VersionedTransaction(message);
+  const probeTx = new VersionedTransaction(compile(buildIxs(CU_LIMIT_MAX)));
+  const cuLimit = await simulateForCuLimit(connection, probeTx, 'jupusd-sol');
+  const tx = new VersionedTransaction(compile(buildIxs(cuLimit)));
+
   return { tx, expectedSolLamports, latestBlockhash };
 }
 
@@ -947,6 +1007,52 @@ async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountJupUsdAto
   const j = await r.json();
   if (!j?.transaction) throw new Error('Jupiter Predict returned no transaction');
   return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)), orderInfo: j.order || null };
+}
+
+// Defensive precheck — Jupiter docs recommend calling GET /trading-status
+// before placing orders to confirm the exchange is up. Returns true if the
+// API explicitly reports trading_active, also true on any error so we don't
+// block users when the status check itself is unavailable. Only returns
+// false when Jupiter explicitly says trading is off.
+async function fetchTradingStatus() {
+  try {
+    const r = await jfetch('/api/predict/trading-status');
+    if (!r.ok) return true;
+    const j = await r.json();
+    if (j && typeof j.trading_active === 'boolean') return j.trading_active;
+    return true;
+  } catch {
+    return true;
+  }
+}
+
+// Poll GET /orders/status/{orderPubkey} after submitting a buy. Per docs:
+// orders go through a keeper network for matching — the on-chain tx only
+// opens an order account, it does NOT guarantee a fill. Polling tells us
+// if the order filled, is still pending, or failed.
+//
+// We start polling after a 2s delay (docs warn the first few polls may
+// return 'no order history found') and give up after maxAttempts. Returns
+// the terminal status: 'filled', 'failed', or 'pending' (if we timed out).
+async function pollOrderStatus(orderPubkey, { maxAttempts = 10, intervalMs = 2000 } = {}) {
+  if (!orderPubkey) return 'pending';
+  // First poll after initial delay so the keeper has a chance to pick it up.
+  await new Promise(r => setTimeout(r, intervalMs));
+  for (let i = 0; i < maxAttempts; i++) {
+    try {
+      const r = await jfetch(`/api/predict/orders/status/${encodeURIComponent(orderPubkey)}`);
+      if (r.ok) {
+        const j = await r.json();
+        const status = j?.status || j?.data?.status;
+        if (status === 'filled') return 'filled';
+        if (status === 'failed') return 'failed';
+      }
+    } catch {
+      // Network blips are fine, keep polling.
+    }
+    await new Promise(r => setTimeout(r, intervalMs));
+  }
+  return 'pending';
 }
 
 async function buildSellTx({ ownerPubkey, positionPubkey }) {
@@ -1000,6 +1106,28 @@ async function simulateOrThrow(connection, tx, label) {
     }
     console.warn(`[predict] ${label} sim non-fatal:`, e?.message);
   }
+}
+
+// Simulate a built transaction to estimate compute unit usage, then return
+// 1.2x that value (capped at the network max). Implements the pattern Jupiter
+// recommends in dev.jup.ag/docs/swap/advanced/compute-units. Falls back to
+// CU_LIMIT_FALLBACK if simulation can't estimate.
+async function simulateForCuLimit(connection, tx, label) {
+  try {
+    const sim = await connection.simulateTransaction(tx, {
+      sigVerify: false,
+      commitment: 'confirmed',
+      replaceRecentBlockhash: true,
+    });
+    const used = Number(sim?.value?.unitsConsumed || 0);
+    if (used > 0) {
+      const buffered = Math.ceil((used * CU_BUFFER_PERCENT) / 100);
+      return Math.min(buffered, CU_LIMIT_MAX);
+    }
+  } catch (e) {
+    console.warn(`[predict] ${label} CU sim failed:`, e?.message);
+  }
+  return CU_LIMIT_FALLBACK;
 }
 
 async function sendAndConfirm(connection, signedTx, blockhashInfo, setStMsg) {
@@ -1405,7 +1533,16 @@ function BuyDrawer({ event, isYes, livePrices, onClose, onDone, solBal, connecti
     setError('');
 
     try {
+      // Defensive precheck — confirm Jupiter is actually accepting orders
+      // before we ask the user to sign anything. Avoids the bad UX of two
+      // wallet prompts followed by a failed order.
       setStep(1);
+      setStMsg('Checking trading status…');
+      const tradingActive = await fetchTradingStatus();
+      if (!tradingActive) {
+        throw new Error('Prediction market trading is paused. Please try again shortly.');
+      }
+
       setStMsg('Building swap…');
 
       const { tx: swapTx, expectedJupUsdAtomic, latestBlockhash: swapBh } =
@@ -1445,7 +1582,7 @@ function BuyDrawer({ event, isYes, livePrices, onClose, onDone, solBal, connecti
       }
 
       setStMsg('Building order…');
-      const { tx: buyTx } = await buildBuyTx({
+      const { tx: buyTx, orderInfo } = await buildBuyTx({
         ownerPubkey: ownerB58,
         marketId: m.marketId,
         isYes,
@@ -1462,6 +1599,21 @@ function BuyDrawer({ event, isYes, livePrices, onClose, onDone, solBal, connecti
       const orderResult = await sendAndConfirm(connection, signedBuy, null, setStMsg);
       if (orderResult.pending) {
         throw new Error(`Order submitted but still confirming. Solscan: https://solscan.io/tx/${orderResult.sig}`);
+      }
+
+      // Tx landed on-chain. Poll the keeper for actual fill — per Jupiter's
+      // open-positions docs, the on-chain tx only opens an order account; a
+      // keeper has to match it for the position to actually fill. We poll
+      // for up to ~20 seconds and report the outcome.
+      if (orderInfo?.orderPubkey) {
+        setStMsg('Waiting for fill…');
+        const fillStatus = await pollOrderStatus(orderInfo.orderPubkey);
+        if (fillStatus === 'failed') {
+          throw new Error('Order could not be filled. Your JupUSD is back in your wallet.');
+        }
+        // 'filled' or 'pending' (timeout) — both proceed to the done state.
+        // For 'pending', the keeper may still fill it after we close; the
+        // user's positions page will reflect the outcome.
       }
 
       setStep(3); setStMsg('');
@@ -1917,19 +2069,32 @@ export default function Predict() {
         .filter(Boolean)
         .filter(isMarketOpen);
 
-      // Pass 2: enrich with Polymarket Gamma data AND fetch each market's
-      // price-to-beat (the reference price the user is betting against).
-      // Both calls run in parallel per event. Failures are silent — Jupiter's
-      // data alone is enough to render. We also use Polymarket's flags to
-      // drop any market THEIR side considers settled (catches the known
-      // Gamma-bug cases Jupiter still relays).
+      // Pass 2: enrich with Polymarket Gamma data, then fetch each market's
+      // price-to-beat using the Polymarket market slug we get back from Gamma.
+      //
+      // CRITICAL: Jupiter's event slug and Polymarket's market slug are
+      // DIFFERENT formats. Jupiter slugs look like
+      // "bitcoin-up-or-down-may-25-1100am-1105am-et" (human-readable), but
+      // Polymarket's price-to-beat endpoint expects the market slug
+      // "btc-updown-5m-1779544500" (asset + window + Unix timestamp).
+      // The Gamma response includes the correct market slug in markets[0].slug,
+      // exposed by pickPolymarketFields as polymarketMarketSlug. We have to
+      // resolve Gamma first, then use that slug for price-to-beat.
+      //
+      // Failures are silent — Jupiter's data alone is enough to render. We
+      // also use Polymarket's flags to drop any market THEIR side considers
+      // settled (catches the known Gamma-bug cases Jupiter still relays).
       const slugs = normalized.map(e => e.slug).filter(Boolean);
       const pmResults = await Promise.all(
         slugs.map(async (s) => {
-          const [gamma, ptb] = await Promise.all([
-            fetchPolymarketEvent(s).then(pickPolymarketFields).catch(() => null),
-            fetchPriceToBeat(s).catch(() => null),
-          ]);
+          const gamma = await fetchPolymarketEvent(s)
+            .then(pickPolymarketFields)
+            .catch(() => null);
+          // Use Polymarket's market slug for price-to-beat. Fall back to the
+          // Jupiter event slug only if Gamma didn't return one — that path
+          // will usually 404, but it's harmless and avoids a missing column.
+          const ptbSlug = gamma?.polymarketMarketSlug || s;
+          const ptb = await fetchPriceToBeat(ptbSlug).catch(() => null);
           if (!gamma && ptb == null) return null;
           return { ...(gamma || {}), priceToBeat: ptb };
         })
