@@ -144,6 +144,89 @@ function extractStartingPrice(text) {
   return null;
 }
 
+// ─── Opening-price snapshots ─────────────────────────────────────────────────
+// Polymarket's /api/equity/price-to-beat endpoint is for stocks/forex/oil
+// (the "equity_prices" feed). It returns 404 for crypto markets, which use
+// the separate "crypto_prices_chainlink" feed and do NOT publish a public
+// price-to-beat URL.
+//
+// Workaround: snapshot the live Chainlink price for the relevant symbol the
+// first time we see an open market, key it by marketId, and persist in
+// localStorage. From then on we use that snapshot as the "price to beat"
+// for the SPREAD column. This isn't pixel-perfect — the snapshot is taken
+// whenever the user happens to load the page, not at the exact market
+// openTime — but it's the best signal available client-side and matches
+// the asset feed Polymarket actually settles on.
+//
+// Snapshots are pruned after 24h so storage doesn't grow forever.
+const SNAPSHOT_KEY = 'verixia.predict.priceSnapshots.v1';
+const SNAPSHOT_TTL_MS = 24 * 60 * 60_000;
+
+function loadSnapshots() {
+  try {
+    const raw = typeof window !== 'undefined' ? window.localStorage.getItem(SNAPSHOT_KEY) : null;
+    if (!raw) return {};
+    const obj = JSON.parse(raw);
+    if (!obj || typeof obj !== 'object') return {};
+    const now = Date.now();
+    let mutated = false;
+    for (const k of Object.keys(obj)) {
+      const v = obj[k];
+      if (!v || typeof v.takenAt !== 'number' || now - v.takenAt > SNAPSHOT_TTL_MS) {
+        delete obj[k];
+        mutated = true;
+      }
+    }
+    if (mutated) {
+      try { window.localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(obj)); } catch {}
+    }
+    return obj;
+  } catch {
+    return {};
+  }
+}
+
+function saveSnapshots(obj) {
+  try {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(obj));
+  } catch {}
+}
+
+// Walk every visible up/down market, find its Chainlink symbol, and store
+// the current live price keyed by marketId if we don't already have one.
+// Called as a side-effect after events + live prices are both available.
+function usePriceSnapshots(events, livePrices) {
+  const [snapshots, setSnapshots] = useState(() => loadSnapshots());
+
+  useEffect(() => {
+    if (!Array.isArray(events) || events.length === 0) return;
+    if (!livePrices || livePrices.size === 0) return;
+
+    let next = snapshots;
+    let mutated = false;
+    for (const ev of events) {
+      const m = ev?.market;
+      const id = m?.marketId;
+      if (!id) continue;
+      if (next[id]) continue;                          // already snapshotted
+      if (!isUpDownMarket(ev)) continue;               // not an up/down market
+      const sym = symbolFromSubcategory(ev.subcategory);
+      if (!sym) continue;
+      const live = livePrices.get(sym);
+      if (!live || !Number.isFinite(live.value) || live.value <= 0) continue;
+      if (!mutated) { next = { ...snapshots }; mutated = true; }
+      next[id] = { price: live.value, symbol: sym, takenAt: Date.now() };
+    }
+    if (mutated) {
+      setSnapshots(next);
+      saveSnapshots(next);
+    }
+  }, [events, livePrices, snapshots]);
+
+  return snapshots;
+}
+
 // True iff this looks like an up/down market — i.e., one where the user is
 // betting whether the asset's price will be higher or lower than an opening
 // reference at the close of a fixed window. For these markets, comparing
@@ -177,22 +260,26 @@ function isUpDownMarket(event) {
 // misleading.
 //
 // For an up/down market, sources in order:
-//   1. The Polymarket /api/equity/price-to-beat endpoint
+//   1. Opening-price snapshot (live Chainlink price captured when we first
+//      observed this market — see usePriceSnapshots).
 //   2. Parsing "Price to Beat" / "opening price" phrases out of the
 //      Polymarket description (explicit phrase required — we do NOT fall
 //      back to "the largest number in the text" because that picks up
 //      unrelated figures and produces wildly wrong references).
-function resolvePriceToBeat(event) {
+function resolvePriceToBeat(event, snapshots) {
   if (!event) return null;
   if (!isUpDownMarket(event)) return null;
-  const poly = event.poly || null;
-  if (poly?.priceToBeat != null && Number.isFinite(poly.priceToBeat) && poly.priceToBeat > 0) {
-    return poly.priceToBeat;
+  // 1. Local snapshot — most reliable for crypto markets.
+  const marketId = event.market?.marketId;
+  if (marketId && snapshots && snapshots[marketId]) {
+    const snap = snapshots[marketId];
+    if (snap && Number.isFinite(snap.price) && snap.price > 0) return snap.price;
   }
+  // 2. Description-extracted starting price (rare but happens).
+  const poly = event.poly || null;
   if (poly?.startingPrice != null && Number.isFinite(poly.startingPrice) && poly.startingPrice > 0) {
     return poly.startingPrice;
   }
-  // Only the explicit "Price to Beat" phrase in the description is reliable.
   if (poly?.description) {
     const m = poly.description.match(/price\s+to\s+beat[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i);
     if (m) {
@@ -594,11 +681,6 @@ function pickPolymarketFields(pmEvent) {
     outcomes,                                  // ["Yes","No"] or ["Up","Down"] or team names
     outcomePrices: Array.isArray(outcomePrices) ? outcomePrices.map(Number) : null,
     groupItemTitle:  pmMkt?.groupItemTitle  || null,  // "$150k" / "March 31" / team name
-    // The Polymarket MARKET slug. This is critical — Jupiter's event slug and
-    // Polymarket's market slug are DIFFERENT. The price-to-beat endpoint is
-    // keyed on the Polymarket market slug (e.g. "btc-updown-5m-1779544500"),
-    // not the longer human-readable event slug Jupiter uses.
-    polymarketMarketSlug: pmMkt?.slug || null,
     lastTradePrice:  pmMkt?.lastTradePrice  != null ? Number(pmMkt.lastTradePrice)  : null,
     bestBid:         pmMkt?.bestBid         != null ? Number(pmMkt.bestBid)         : null,
     bestAsk:         pmMkt?.bestAsk         != null ? Number(pmMkt.bestAsk)         : null,
@@ -611,43 +693,6 @@ function pickPolymarketFields(pmEvent) {
     competitive:     pmEvent.competitive    != null ? Number(pmEvent.competitive)   : null,
     commentCount:    pmEvent.commentCount   != null ? Number(pmEvent.commentCount)  : null,
   };
-}
-
-// ─── Price-to-beat (reference price) ─────────────────────────────────────────
-// Per Polymarket docs (https://docs.polymarket.com/market-data/websocket/rtds):
-//   GET https://polymarket.com/api/equity/price-to-beat/{slug}
-// Returns the opening "price to beat" for an up/down market. This is THE
-// reference price the user is betting against.
-//
-// IMPORTANT: polymarket.com (the marketing host) blocks browser CORS. We
-// CANNOT fetch this URL directly from the browser. We route through the
-// app's proxy:
-//
-//   GET /api/polymarket/price-to-beat/{slug}
-//        → proxies to https://polymarket.com/api/equity/price-to-beat/{slug}
-//
-// BACKEND TODO: add a route `/api/polymarket/price-to-beat/:slug` that
-// forwards GET to the Polymarket URL above and returns the JSON unchanged.
-// One line in your existing proxy (same pattern as /api/predict/*).
-//
-// Response shape isn't publicly documented, so we look for the price under
-// several plausible keys (value, price, priceToBeat, startingPrice, etc).
-async function fetchPriceToBeat(slug) {
-  if (!slug) return null;
-  try {
-    const r = await fetch(`/api/polymarket/price-to-beat/${encodeURIComponent(slug)}`);
-    if (!r.ok) return null;
-    const j = await r.json().catch(() => null);
-    if (j == null) return null;
-    if (typeof j === 'number' && Number.isFinite(j)) return j;
-    // Try common field names defensively.
-    const candidates = [j.value, j.price, j.priceToBeat, j.price_to_beat, j.startingPrice, j.starting_price, j.openPrice, j.open_price];
-    for (const c of candidates) {
-      const n = typeof c === 'string' ? Number(c) : c;
-      if (Number.isFinite(n) && n > 0) return n;
-    }
-    return null;
-  } catch { return null; }
 }
 
 // ─── Live crypto prices via Polymarket RTDS WebSocket ────────────────────────
@@ -1318,7 +1363,7 @@ function PageHeader({ connected, solBal, tab, setTab, pubkey, onCopy }) {
 // SECTION 9: Market card + Buy drawer
 // ═══════════════════════════════════════════════════════════════════════════════
 
-function MarketCard({ event, livePrices, onTrade }) {
+function MarketCard({ event, livePrices, priceSnapshots, onTrade }) {
   const m = event.market;
   const poly = event.poly || null;
   const yp = m.yesPrice;
@@ -1338,10 +1383,9 @@ function MarketCard({ event, livePrices, onTrade }) {
   const noLabel  = poly?.outcomes?.[1] || 'No';
 
   // Price-to-beat (the reference) and the current live Chainlink price for
-  // the asset. Reference cascades: explicit endpoint → description parsing →
-  // market title → groupItemTitle → event title. Current is from the RTDS
-  // WebSocket keyed by symbol.
-  const priceToBeat = resolvePriceToBeat(event);
+  // the asset. Reference comes from our localStorage snapshot captured the
+  // first time we saw this market open. Current is from the RTDS WebSocket.
+  const priceToBeat = resolvePriceToBeat(event, priceSnapshots);
   const symbol      = symbolFromSubcategory(event.subcategory);
   const live        = symbol ? livePrices?.get(symbol) : null;
   const currentPrice = live?.value ?? null;
@@ -1487,7 +1531,7 @@ function MarketCard({ event, livePrices, onTrade }) {
   );
 }
 
-function BuyDrawer({ event, isYes, livePrices, onClose, onDone, solBal, connection }) {
+function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, solBal, connection }) {
   const { publicKey, signTransaction } = useWallet();
 
   const [amount, setAmount]   = useState('0.1');
@@ -1637,9 +1681,9 @@ function BuyDrawer({ event, isYes, livePrices, onClose, onDone, solBal, connecti
   const threshold = poly?.groupItemTitle;       // e.g. "$150k", "March 31"
 
   // Live price comparison — what the user is actually betting on.
-  // Reference cascades through every available source so we surface a number
-  // for every market, not just ones where the explicit endpoint responded.
-  const priceToBeat = resolvePriceToBeat(event);
+  // Reference comes from the localStorage snapshot of the asset's live
+  // Chainlink price when this market first opened on the user's device.
+  const priceToBeat = resolvePriceToBeat(event, priceSnapshots);
   const symbol      = symbolFromSubcategory(event.subcategory);
   const live        = symbol ? livePrices?.get(symbol) : null;
   const currentPrice = live?.value ?? null;
@@ -2031,6 +2075,12 @@ export default function Predict() {
   // WS connection slot.
   const livePrices = useLiveCryptoPrices(tab === 'markets');
 
+  // Opening-price snapshots — captures each up/down market's reference price
+  // the first time we see it, persists to localStorage. Powers the PRICE TO
+  // BEAT and SPREAD columns since Polymarket doesn't expose a public crypto
+  // price-to-beat endpoint.
+  const priceSnapshots = usePriceSnapshots(events, livePrices);
+
   const connection = useMemo(() => {
     const origin = (typeof window !== 'undefined' && window.location?.origin) || '';
     return new Connection(origin + SOL_RPC, 'confirmed');
@@ -2069,17 +2119,12 @@ export default function Predict() {
         .filter(Boolean)
         .filter(isMarketOpen);
 
-      // Pass 2: enrich with Polymarket Gamma data, then fetch each market's
-      // price-to-beat using the Polymarket market slug we get back from Gamma.
-      //
-      // CRITICAL: Jupiter's event slug and Polymarket's market slug are
-      // DIFFERENT formats. Jupiter slugs look like
-      // "bitcoin-up-or-down-may-25-1100am-1105am-et" (human-readable), but
-      // Polymarket's price-to-beat endpoint expects the market slug
-      // "btc-updown-5m-1779544500" (asset + window + Unix timestamp).
-      // The Gamma response includes the correct market slug in markets[0].slug,
-      // exposed by pickPolymarketFields as polymarketMarketSlug. We have to
-      // resolve Gamma first, then use that slug for price-to-beat.
+      // Pass 2: enrich with Polymarket Gamma data for descriptions, outcome
+      // labels, group thresholds. We do NOT call /api/equity/price-to-beat
+      // here — that endpoint is for stocks/forex/oil markets only and 404s
+      // on crypto markets. For crypto up/down markets, the "price to beat"
+      // is the live Chainlink price at market openTime, which we snapshot
+      // client-side via usePriceSnapshots (see SECTION 1).
       //
       // Failures are silent — Jupiter's data alone is enough to render. We
       // also use Polymarket's flags to drop any market THEIR side considers
@@ -2090,13 +2135,7 @@ export default function Predict() {
           const gamma = await fetchPolymarketEvent(s)
             .then(pickPolymarketFields)
             .catch(() => null);
-          // Use Polymarket's market slug for price-to-beat. Fall back to the
-          // Jupiter event slug only if Gamma didn't return one — that path
-          // will usually 404, but it's harmless and avoids a missing column.
-          const ptbSlug = gamma?.polymarketMarketSlug || s;
-          const ptb = await fetchPriceToBeat(ptbSlug).catch(() => null);
-          if (!gamma && ptb == null) return null;
-          return { ...(gamma || {}), priceToBeat: ptb };
+          return gamma || null;
         })
       );
       const pmBySlug = new Map();
@@ -2233,6 +2272,7 @@ export default function Predict() {
                 key={ev.eventId}
                 event={ev}
                 livePrices={livePrices}
+                priceSnapshots={priceSnapshots}
                 onTrade={(event, isYes) => {
                   if (!connected) { setToast('Connect wallet first'); setTimeout(() => setToast(''), 1500); return; }
                   setBuyState({ event, isYes });
@@ -2260,6 +2300,7 @@ export default function Predict() {
           event={buyState.event}
           isYes={buyState.isYes}
           livePrices={livePrices}
+          priceSnapshots={priceSnapshots}
           onClose={() => setBuyState(null)}
           onDone={() => { reloadEvents(); reloadPositions(); refreshBalances(); }}
           solBal={solBal}
