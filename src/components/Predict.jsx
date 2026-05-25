@@ -77,20 +77,105 @@ const POLY_RTDS_TOPIC = 'crypto_prices_chainlink';
 const POLY_RTDS_PING_MS = 5000;     // docs: send PING every 5 seconds
 const POLY_PRICE_TO_BEAT_BASE = 'https://polymarket.com/api/equity/price-to-beat';
 
-// Regex to extract a USD price from descriptive text. Handles "$108,432.50",
-// "108,432", "starting price of 108432.5", etc. Picks the LARGEST plausible
-// number — token thresholds are usually the biggest figure in the rules.
+// Extract the reference price from a Polymarket market description.
+//
+// Polymarket's up/down crypto markets explicitly state the reference value
+// using consistent phrasing — every market page reads "above or below the
+// opening 'Price to Beat' of $X". Threshold markets ("Will BTC hit $150k by
+// Dec 31") put the target in plain prose like "above $150,000" or in
+// groupItemTitle. We try the most specific patterns first and only fall
+// back to "largest plausible number" if nothing matches the explicit phrases.
 function extractStartingPrice(text) {
   if (!text || typeof text !== 'string') return null;
-  // Match $-prefixed or plain decimal numbers with optional commas/decimals.
-  const matches = text.match(/\$?\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]+)?)/g);
-  if (!matches) return null;
+  const numRe = /\$?\s*([0-9]{1,3}(?:,[0-9]{3})+(?:\.[0-9]+)?|[0-9]+(?:\.[0-9]{1,8})?)/;
+  const parseNum = (raw) => {
+    if (!raw) return null;
+    const n = Number(String(raw).replace(/[$,\s]/g, ''));
+    return Number.isFinite(n) && n > 0 && n < 100_000_000 ? n : null;
+  };
+
+  // Patterns Polymarket actually uses, in order of specificity.
+  const patterns = [
+    /price\s+to\s+beat[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
+    /opening\s+price[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
+    /starting\s+price[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
+    /reference\s+price[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
+    /strike\s+price[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
+    /open(?:s|ed)?\s+at[^0-9$]{0,30}\$?\s*([0-9][0-9.,]*)/i,
+    /above\s+\$?\s*([0-9][0-9.,]*)/i,
+    /below\s+\$?\s*([0-9][0-9.,]*)/i,
+    /hit(?:s|ting)?\s+\$?\s*([0-9][0-9.,]*)/i,
+    /reach(?:es|ed|ing)?\s+\$?\s*([0-9][0-9.,]*)/i,
+    /cross(?:es|ed|ing)?\s+\$?\s*([0-9][0-9.,]*)/i,
+  ];
+
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (m) {
+      const n = parseNum(m[1]);
+      if (n != null) return n;
+    }
+  }
+
+  // Last resort: pick the largest plausible USD-looking number.
+  const all = text.match(new RegExp(numRe.source, 'g'));
+  if (!all) return null;
   let best = 0;
-  for (const raw of matches) {
-    const n = Number(raw.replace(/[$,\s]/g, ''));
-    if (Number.isFinite(n) && n > best && n < 10_000_000) best = n;
+  for (const raw of all) {
+    const n = parseNum(raw);
+    if (n != null && n > best) best = n;
   }
   return best > 0 ? best : null;
+}
+
+// Parse a price from a Polymarket groupItemTitle. These are short strings
+// like "$150k", "$108,432", "March 31", "Trump", "50+ bps decrease".
+// Returns null for non-price titles.
+function priceFromGroupItemTitle(title) {
+  if (!title || typeof title !== 'string') return null;
+  const m = title.match(/\$?\s*([0-9][0-9.,]*)\s*([kKmMbB])?/);
+  if (!m) return null;
+  const base = Number(String(m[1]).replace(/,/g, ''));
+  if (!Number.isFinite(base) || base <= 0) return null;
+  const suffix = (m[2] || '').toLowerCase();
+  const mult = suffix === 'k' ? 1_000 : suffix === 'm' ? 1_000_000 : suffix === 'b' ? 1_000_000_000 : 1;
+  return base * mult;
+}
+
+// Resolve the reference price ("Price to Beat") for an event from any
+// available source. Tries each in order and returns the first that yields a
+// usable number:
+//   1. The Polymarket /api/equity/price-to-beat endpoint (explicit)
+//   2. Parsing the Polymarket description for "Price to Beat: $X" phrases
+//   3. Parsing the market title (e.g. "BTC above $150,000?")
+//   4. groupItemTitle as a numeric threshold (e.g. "$150k")
+//   5. The Jupiter event title (last resort for non-Polymarket markets)
+// Returns null if nothing yields a number.
+function resolvePriceToBeat(event) {
+  if (!event) return null;
+  const poly = event.poly || null;
+  if (poly?.priceToBeat != null) return poly.priceToBeat;
+  if (poly?.startingPrice != null) return poly.startingPrice;
+  if (poly?.description) {
+    const n = extractStartingPrice(poly.description);
+    if (n != null) return n;
+  }
+  const marketTitle = event.market?.title;
+  if (marketTitle) {
+    const n = extractStartingPrice(marketTitle);
+    if (n != null) return n;
+  }
+  const gi = priceFromGroupItemTitle(poly?.groupItemTitle);
+  if (gi != null) return gi;
+  if (event.title) {
+    const n = extractStartingPrice(event.title);
+    if (n != null) return n;
+  }
+  if (event.closeCondition) {
+    const n = extractStartingPrice(event.closeCondition);
+    if (n != null) return n;
+  }
+  return null;
 }
 
 // Map a subcategory tag like "BTC" or "Bitcoin" to a Chainlink RTDS symbol
@@ -1114,10 +1199,10 @@ function MarketCard({ event, livePrices, onTrade }) {
   const noLabel  = poly?.outcomes?.[1] || 'No';
 
   // Price-to-beat (the reference) and the current live Chainlink price for
-  // the asset. Both can be null — if they are, the price strip just doesn't
-  // render. Reference is per-market (Polymarket endpoint); current is from
-  // the RTDS WebSocket, keyed by symbol.
-  const priceToBeat = poly?.priceToBeat ?? poly?.startingPrice ?? null;
+  // the asset. Reference cascades: explicit endpoint → description parsing →
+  // market title → groupItemTitle → event title. Current is from the RTDS
+  // WebSocket keyed by symbol.
+  const priceToBeat = resolvePriceToBeat(event);
   const symbol      = symbolFromSubcategory(event.subcategory);
   const live        = symbol ? livePrices?.get(symbol) : null;
   const currentPrice = live?.value ?? null;
@@ -1201,7 +1286,7 @@ function MarketCard({ event, livePrices, onTrade }) {
           stream — the same feed the market resolves against. */}
       {(priceToBeat != null || currentPrice != null) && (
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8,
+          display: 'flex', alignItems: 'stretch', gap: 8, marginBottom: 8,
           padding: '7px 10px', borderRadius: 10,
           background: hasPrices
             ? (isUp ? 'rgba(0,212,163,.06)' : 'rgba(255,95,122,.06)')
@@ -1215,18 +1300,19 @@ function MarketCard({ event, livePrices, onTrade }) {
               {priceToBeat != null ? fmtPrice(priceToBeat) : '—'}
             </div>
           </div>
-          <div style={{ textAlign: 'center', minWidth: 60 }}>
+          <div style={{ textAlign: 'center', minWidth: 68, paddingLeft: 6, paddingRight: 6, borderLeft: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}` }}>
+            <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1 }}>SPREAD</div>
             {priceDelta != null ? (
               <>
-                <div style={{ fontSize: 13, fontWeight: 800, color: isUp ? C.yes : C.no, lineHeight: 1, ...T.display }}>
-                  {isUp ? '▲' : '▼'} {Math.abs(priceDeltaPct).toFixed(2)}%
-                </div>
-                <div style={{ fontSize: 8, color: isUp ? C.yes : C.no, marginTop: 2, opacity: .8 }}>
+                <div style={{ fontSize: 12, fontWeight: 800, color: isUp ? C.yes : C.no, lineHeight: 1.1, ...T.display }}>
                   {isUp ? '+' : '−'}{fmtPrice(Math.abs(priceDelta))}
+                </div>
+                <div style={{ fontSize: 9, fontWeight: 700, color: isUp ? C.yes : C.no, marginTop: 1, opacity: .85 }}>
+                  {isUp ? '▲' : '▼'} {Math.abs(priceDeltaPct).toFixed(2)}%
                 </div>
               </>
             ) : (
-              <div style={{ fontSize: 9, color: C.muted2 }}>—</div>
+              <div style={{ fontSize: 12, color: C.muted2, fontWeight: 700, ...T.display }}>—</div>
             )}
           </div>
           <div style={{ flex: 1, minWidth: 0, textAlign: 'right' }}>
@@ -1388,7 +1474,9 @@ function BuyDrawer({ event, isYes, livePrices, onClose, onDone, solBal, connecti
   const threshold = poly?.groupItemTitle;       // e.g. "$150k", "March 31"
 
   // Live price comparison — what the user is actually betting on.
-  const priceToBeat = poly?.priceToBeat ?? poly?.startingPrice ?? null;
+  // Reference cascades through every available source so we surface a number
+  // for every market, not just ones where the explicit endpoint responded.
+  const priceToBeat = resolvePriceToBeat(event);
   const symbol      = symbolFromSubcategory(event.subcategory);
   const live        = symbol ? livePrices?.get(symbol) : null;
   const currentPrice = live?.value ?? null;
@@ -1430,7 +1518,7 @@ function BuyDrawer({ event, isYes, livePrices, onClose, onDone, solBal, connecti
             time from the same Chainlink feed the market resolves against. */}
         {(priceToBeat != null || currentPrice != null) && (
           <div style={{
-            display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10,
+            display: 'flex', alignItems: 'stretch', gap: 10, marginBottom: 10,
             padding: '10px 12px', borderRadius: 12,
             background: hasPrices
               ? (isUp ? 'rgba(0,212,163,.08)' : 'rgba(255,95,122,.08)')
@@ -1444,18 +1532,19 @@ function BuyDrawer({ event, isYes, livePrices, onClose, onDone, solBal, connecti
                 {priceToBeat != null ? fmtPrice(priceToBeat) : '—'}
               </div>
             </div>
-            <div style={{ textAlign: 'center', minWidth: 70 }}>
+            <div style={{ textAlign: 'center', minWidth: 84, paddingLeft: 8, paddingRight: 8, borderLeft: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}` }}>
+              <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1.2, marginBottom: 2 }}>SPREAD</div>
               {priceDelta != null ? (
                 <>
-                  <div style={{ fontSize: 16, fontWeight: 800, color: isUp ? C.yes : C.no, lineHeight: 1, ...T.display }}>
-                    {isUp ? '▲' : '▼'} {Math.abs(priceDeltaPct).toFixed(2)}%
-                  </div>
-                  <div style={{ fontSize: 9, color: isUp ? C.yes : C.no, marginTop: 3, opacity: .85 }}>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: isUp ? C.yes : C.no, lineHeight: 1.1, ...T.display }}>
                     {isUp ? '+' : '−'}{fmtPrice(Math.abs(priceDelta))}
+                  </div>
+                  <div style={{ fontSize: 10, fontWeight: 700, color: isUp ? C.yes : C.no, marginTop: 2, opacity: .9 }}>
+                    {isUp ? '▲' : '▼'} {Math.abs(priceDeltaPct).toFixed(2)}%
                   </div>
                 </>
               ) : (
-                <div style={{ fontSize: 11, color: C.muted2 }}>—</div>
+                <div style={{ fontSize: 16, color: C.muted2, fontWeight: 800, ...T.display }}>—</div>
               )}
             </div>
             <div style={{ flex: 1, minWidth: 0, textAlign: 'right' }}>
