@@ -1,35 +1,10 @@
 // Predict.jsx — Jupiter Prediction Markets on Solana.
 //
-// Spec: https://dev.jup.ag/docs/prediction
-// Get Events: https://dev.jup.ag/docs/api-reference/prediction/get-events
-//
-// ─── FLOW ────────────────────────────────────────────────────────────────────
-// BUY (SOL only, two signatures):
-//   Sig 1 — ATOMIC: SOL fee → FEE_WALLET + SOL → JupUSD swap (one tx)
-//   Sig 2 — Jupiter Predict order with JupUSD deposit (sealed tx from /orders)
-//
-// SELL / CLAIM (two signatures):
-//   Sig 1 — Sell or claim tx from Jupiter Predict (sealed)
-//   Sig 2 — ATOMIC: JupUSD fee → FEE_WALLET + JupUSD → SOL swap (one tx)
-//
-// ─── FEE MODEL ──────────────────────────────────────────────────────────────
-// 5% fee on every swap leg, taken in input mint, manual transfer composed
-// into the swap tx. Same pattern as Swap.jsx widget.
-//
-// ─── MARKETS ────────────────────────────────────────────────────────────────
-// Live crypto only. Sorted client-side by closeTime ascending. Auto-refresh
-// every 5 min, 30s when anything closes within 15 min.
-//
-// ─── DATA SHAPE (from API spec) ─────────────────────────────────────────────
-// Event:   eventId, isActive, isLive, category, subcategory, volumeUsd,
-//          closeCondition, beginAt, rulesPdf, tags[]
-// Event metadata: title, subtitle, slug, series, closeTime, imageUrl, isLive
-// Market:  marketId, openTime, closeTime, resolveAt, marketResultPubkey,
-//          imageUrl
-// Market metadata: title (the prediction question), status, result,
-//          rulesPrimary, rulesSecondary, isTeamMarket
-// Market pricing: buyYesPriceUsd, buyNoPriceUsd, sellYesPriceUsd,
-//          sellNoPriceUsd, volume (all in micro-USD, ÷1e6 = $)
+// PATCHED: Buy flow now waits for keeper fill before showing success.
+// The on-chain tx only opens an order account; the keeper network has to
+// pick it up and fill it on the underlying market. Showing "✓ Order placed"
+// the instant the tx confirms was misleading — orders could (and did) fail
+// to fill while the UI claimed success.
 
 import React, { useEffect, useState, useCallback, useMemo } from 'react';
 import { Buffer } from 'buffer';
@@ -53,61 +28,26 @@ const FEE_WALLET    = new PublicKey(FEE_WALLET_B58);
 const FEE_BPS       = 500;
 const SLIPPAGE_BPS  = 1000;
 const SOL_RPC       = '/api/solana-rpc';
-// Jupiter's prediction API enforces a $5 floor server-side. Matching it
-// here so users see the precheck error in the input panel instead of
-// burning two wallet signatures only to get rejected by the backend.
 const MIN_TRADE_USD = 5;
 const NAV_CLEARANCE = 120;
 const JUPUSD_DECIMALS = 6;
 const SOL_DECIMALS    = 9;
 
-// Priority fee paid per compute unit. The Jupiter /build response already
-// includes a computeUnitPrice instruction in computeBudgetInstructions, but
-// we override it with our own value to make sure short-lived market orders
-// land before they close. 2.8M microlamports = roughly 0.0028 lamports per CU,
-// which is a healthy bid in normal network conditions.
 const PRIORITY_FEE_MICROLAMPORTS = 2_800_000;
-
-// Compute unit limit. Per dev.jup.ag/docs/swap/build, /build returns a
-// CU price instruction but NOT a CU limit. The Solana runtime defaults to
-// ~200k when no limit is set, which is too low for complex Jupiter routes.
-//
-// We follow Jupiter's recommended pattern: build the tx with CU_LIMIT_MAX,
-// simulate, then rebuild with 1.2x the simulated value (capped at the max).
-// This keeps the priority fee accurate to what we actually consume.
-const CU_LIMIT_MAX      = 1_400_000;   // Solana hard cap
-const CU_LIMIT_FALLBACK = 600_000;     // used when simulation fails
-const CU_BUFFER_PERCENT = 120;         // 1.2x simulated value
+const CU_LIMIT_MAX      = 1_400_000;
+const CU_LIMIT_FALLBACK = 600_000;
+const CU_BUFFER_PERCENT = 120;
 
 const REFRESH_NORMAL_MS = 300_000;
 const REFRESH_URGENT_MS = 30_000;
 const URGENT_WINDOW_MS  = 15 * 60_000;
 
-// ─── Polymarket integration ─────────────────────────────────────────────────
-// Polymarket is Jupiter's upstream provider. Their public Gamma API gives us
-// the full description text (which states the starting price for short
-// up/down markets), the outcome labels, and group thresholds. Their RTDS
-// WebSocket streams live Chainlink oracle prices — the same feed used for
-// settlement, so the "current price" we show matches what the market resolves
-// against.
 const POLY_GAMMA_BASE = 'https://gamma-api.polymarket.com';
 const POLY_RTDS_WSS   = 'wss://ws-live-data.polymarket.com';
 const POLY_RTDS_TOPIC = 'crypto_prices_chainlink';
-const POLY_RTDS_PING_MS = 5000;     // docs: send PING every 5 seconds
-// Price-to-beat is fetched through this app's proxy at
-// /api/polymarket/price-to-beat/{slug} which forwards to
-// https://polymarket.com/api/equity/price-to-beat/{slug} (CORS-blocked
-// from the browser, so it must go through the backend).
+const POLY_RTDS_PING_MS = 5000;
 
-// Extract the reference price from a Polymarket market description.
-//
-// Polymarket's up/down crypto markets explicitly state the reference value
-// using consistent phrasing — every market page reads "above or below the
-// opening 'Price to Beat' of $X". We match every form of that phrasing
-// (and similar: "starting price", "opening price", "above $X", "hit $X",
-// "reaches $X", "crosses $X"). If none match, we return null rather than
-// guessing — descriptions often contain unrelated numbers like "resolve
-// 50-50" that fallback heuristics would wrongly pick up.
+// ─── Extract reference price from Polymarket description ─────────────────────
 function extractStartingPrice(text) {
   if (!text || typeof text !== 'string') return null;
   const parseNum = (raw) => {
@@ -115,8 +55,6 @@ function extractStartingPrice(text) {
     const n = Number(String(raw).replace(/[$,\s]/g, ''));
     return Number.isFinite(n) && n > 0 && n < 100_000_000 ? n : null;
   };
-
-  // Patterns Polymarket actually uses, in order of specificity.
   const patterns = [
     /price\s+to\s+beat[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
     /opening\s+price[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
@@ -130,7 +68,6 @@ function extractStartingPrice(text) {
     /reach(?:es|ed|ing)?\s+\$?\s*([0-9][0-9.,]*)/i,
     /cross(?:es|ed|ing)?\s+\$?\s*([0-9][0-9.,]*)/i,
   ];
-
   for (const re of patterns) {
     const m = text.match(re);
     if (m) {
@@ -138,30 +75,10 @@ function extractStartingPrice(text) {
       if (n != null) return n;
     }
   }
-
-  // No fallback. Polymarket descriptions routinely contain phrases like
-  // "the market will resolve 50-50" or "55-45 in favor of No" — picking the
-  // largest number in the text catches those and produces "50" for every
-  // market that doesn't have an explicit Price-to-Beat phrase. Better to
-  // return null and let the caller skip the price strip entirely.
   return null;
 }
 
 // ─── Opening-price snapshots ─────────────────────────────────────────────────
-// Polymarket's /api/equity/price-to-beat endpoint is for stocks/forex/oil
-// (the "equity_prices" feed). It returns 404 for crypto markets, which use
-// the separate "crypto_prices_chainlink" feed and do NOT publish a public
-// price-to-beat URL.
-//
-// Workaround: snapshot the live Chainlink price for the relevant symbol the
-// first time we see an open market, key it by marketId, and persist in
-// localStorage. From then on we use that snapshot as the "price to beat"
-// for the SPREAD column. This isn't pixel-perfect — the snapshot is taken
-// whenever the user happens to load the page, not at the exact market
-// openTime — but it's the best signal available client-side and matches
-// the asset feed Polymarket actually settles on.
-//
-// Snapshots are pruned after 24h so storage doesn't grow forever.
 const SNAPSHOT_KEY = 'verixia.predict.priceSnapshots.v1';
 const SNAPSHOT_TTL_MS = 24 * 60 * 60_000;
 
@@ -196,24 +113,19 @@ function saveSnapshots(obj) {
   } catch {}
 }
 
-// Walk every visible up/down market, find its Chainlink symbol, and store
-// the current live price keyed by marketId if we don't already have one.
-// Called as a side-effect after events + live prices are both available.
 function usePriceSnapshots(events, livePrices) {
   const [snapshots, setSnapshots] = useState(() => loadSnapshots());
-
   useEffect(() => {
     if (!Array.isArray(events) || events.length === 0) return;
     if (!livePrices || livePrices.size === 0) return;
-
     let next = snapshots;
     let mutated = false;
     for (const ev of events) {
       const m = ev?.market;
       const id = m?.marketId;
       if (!id) continue;
-      if (next[id]) continue;                          // already snapshotted
-      if (!isUpDownMarket(ev)) continue;               // not an up/down market
+      if (next[id]) continue;
+      if (!isUpDownMarket(ev)) continue;
       const sym = symbolFromSubcategory(ev.subcategory);
       if (!sym) continue;
       const live = livePrices.get(sym);
@@ -226,28 +138,16 @@ function usePriceSnapshots(events, livePrices) {
       saveSnapshots(next);
     }
   }, [events, livePrices, snapshots]);
-
   return snapshots;
 }
 
-// True iff this looks like an up/down market — i.e., one where the user is
-// betting whether the asset's price will be higher or lower than an opening
-// reference at the close of a fixed window. For these markets, comparing
-// reference vs live spot is meaningful. For threshold markets ("Will BTC
-// hit $150k by Dec 31"), it isn't: the threshold is a future target, not
-// an opening reference, so subtracting live spot from it is misleading.
 function isUpDownMarket(event) {
   if (!event) return false;
-  const haystack = [
-    event.title,
-    event.market?.title,
-    event.poly?.description,
-  ].filter(Boolean).join(' ').toLowerCase();
+  const haystack = [event.title, event.market?.title, event.poly?.description]
+    .filter(Boolean).join(' ').toLowerCase();
   if (!haystack) return false;
-  // Polymarket up/down markets always have these exact phrases.
   if (haystack.includes('up or down')) return true;
   if (haystack.includes('price to beat')) return true;
-  // Outcome labels are another tell — Up/Down rather than Yes/No.
   const outcomes = event.poly?.outcomes;
   if (Array.isArray(outcomes)) {
     const set = outcomes.map(o => String(o).toLowerCase());
@@ -256,29 +156,14 @@ function isUpDownMarket(event) {
   return false;
 }
 
-// Resolve the reference price ("Price to Beat") for an up/down market.
-// Strictly only returns a number for up/down markets — threshold markets
-// like "Will BTC hit $150k by Dec 31" return null because $150k is a future
-// target, not an opening reference, and comparing it to live spot would be
-// misleading.
-//
-// For an up/down market, sources in order:
-//   1. Opening-price snapshot (live Chainlink price captured when we first
-//      observed this market — see usePriceSnapshots).
-//   2. Parsing "Price to Beat" / "opening price" phrases out of the
-//      Polymarket description (explicit phrase required — we do NOT fall
-//      back to "the largest number in the text" because that picks up
-//      unrelated figures and produces wildly wrong references).
 function resolvePriceToBeat(event, snapshots) {
   if (!event) return null;
   if (!isUpDownMarket(event)) return null;
-  // 1. Local snapshot — most reliable for crypto markets.
   const marketId = event.market?.marketId;
   if (marketId && snapshots && snapshots[marketId]) {
     const snap = snapshots[marketId];
     if (snap && Number.isFinite(snap.price) && snap.price > 0) return snap.price;
   }
-  // 2. Description-extracted starting price (rare but happens).
   const poly = event.poly || null;
   if (poly?.startingPrice != null && Number.isFinite(poly.startingPrice) && poly.startingPrice > 0) {
     return poly.startingPrice;
@@ -293,32 +178,14 @@ function resolvePriceToBeat(event, snapshots) {
   return null;
 }
 
-// For threshold markets ("Will BTC hit $150k by Dec 31"), the threshold is
-// already surfaced via the `groupItemTitle` chip in the card and drawer.
-// We deliberately do NOT compare it against live spot — that would be
-// misleading, since $150k is a future target, not an opening reference.
-
-// Map a subcategory tag like "BTC" or "Bitcoin" to a Chainlink RTDS symbol
-// like "btc/usd". Returns null for unmapped assets so we show '—' rather
-// than risk a wrong NOW price.
-//
-// Polymarket's docs (docs.polymarket.com/market-data/websocket/rtds) only
-// formally list btc/usd, eth/usd, sol/usd, xrp/usd as supported Chainlink
-// symbols, but live observation has confirmed doge/usd, bnb/usd, hype/usd
-// stream as well. We include the latter three with a note that if Polymarket
-// removes them silently, the NOW column will go blank for those markets —
-// which is the safe failure mode.
 function symbolFromSubcategory(sub) {
   if (!sub) return null;
   const s = String(sub).toLowerCase().trim();
   const map = {
-    // Documented in RTDS spec
     bitcoin: 'btc/usd', btc: 'btc/usd',
     ethereum: 'eth/usd', eth: 'eth/usd',
     solana: 'sol/usd', sol: 'sol/usd',
     ripple: 'xrp/usd', xrp: 'xrp/usd',
-    // Observed live on Polymarket Chainlink stream (not in their public docs).
-    // If these stop emitting, the NOW column will gracefully show '—'.
     dogecoin: 'doge/usd', doge: 'doge/usd',
     binancecoin: 'bnb/usd', bnb: 'bnb/usd',
     hyperliquid: 'hype/usd', hype: 'hype/usd',
@@ -452,9 +319,6 @@ async function copyToClipboard(text) {
 function friendlyError(err) {
   const m = String(err?.message || err || '').toLowerCase();
   const status = err?.status;
-  // Per Jupiter Predict docs (developers.jup.ag/docs/prediction), US and South
-  // Korean IPs are blocked from the Prediction Market API. Detect and surface
-  // a clearer message.
   if (status === 451 || status === 403 || m.includes('geographic') || m.includes('region') || m.includes('forbidden region') || m.includes('not available in your'))
     return 'Predict is not available in your region (US / South Korea blocked by Jupiter).';
   if (status === 429 || m.includes('too many requests') || m.includes('slow down'))
@@ -527,9 +391,6 @@ async function fetchPositions(ownerB58) {
   } catch { return []; }
 }
 
-// Normalize an event from the Jupiter /events response. Captures every
-// field documented in the API spec so the UI can surface what the user
-// needs to understand the prediction.
 function pickEventFields(ev) {
   if (!ev) return null;
   const market = (ev.markets && ev.markets[0]) || ev.market || null;
@@ -543,40 +404,27 @@ function pickEventFields(ev) {
   const evMeta  = ev.metadata || {};
   const mktMeta = market.metadata || {};
 
-  // Event title = broad topic. Market title = the actual YES/NO question.
   const eventTitle  = ev.title || evMeta.title || 'Untitled';
   const marketTitle = mktMeta.title || market.title || null;
-
   const image = evMeta.imageUrl || ev.imageUrl || market.imageUrl || ev.image || null;
 
   return {
-    // — Event identification —
     eventId:     ev.eventId || ev.id,
     title:       eventTitle,
     subtitle:    evMeta.subtitle || null,
     slug:        evMeta.slug || null,
     image,
-
-    // — Classification —
     category:    String(ev.category || '').toLowerCase(),
     subcategory: ev.subcategory || null,
     series:      evMeta.series || ev.series || null,
     tags:        Array.isArray(ev.tags) ? ev.tags.filter(Boolean) : [],
-
-    // — Resolution —
     closeCondition: ev.closeCondition || null,
     rulesPdf:       ev.rulesPdf || null,
-
-    // — Timing —
     closeTime: evMeta.closeTime ?? mktMeta.closeTime ?? market.closeTime ?? ev.closeTime ?? null,
     beginAt:   ev.beginAt || null,
-
-    // — Stats —
     volume24h: toUsd(ev.volumeUsd ?? pricing.volume ?? 0),
     isLive:    ev.isLive !== false,
     isActive:  ev.isActive !== false,
-
-    // — Market —
     market: {
       marketId:    market.marketId || market.id,
       title:       marketTitle,
@@ -591,30 +439,17 @@ function pickEventFields(ev) {
       closeTime:   market.closeTime || mktMeta.closeTime || null,
       resolveAt:   market.resolveAt || null,
       resultPubkey:market.marketResultPubkey || null,
-
       yesPrice, noPrice,
       sellYesPrice: toUsd(pricing.sellYesPriceUsd),
       sellNoPrice:  toUsd(pricing.sellNoPriceUsd),
       volume:       toUsd(pricing.volume || 0),
-
       yesPct: Math.max(0, Math.min(99, Math.round(yesPrice * 100))),
       noPct:  Math.max(0, Math.min(99, Math.round(noPrice  * 100))),
     },
   };
 }
 
-// ─── Open-market filter ──────────────────────────────────────────────────────
-// Per Jupiter Predict docs, market.status can be: open | closed | settled |
-// cancelled. We only want 'open' for trading. Jupiter's filter=live param
-// only means the event has begun — it does NOT mean the market is still
-// tradeable. So we check every signal locally and drop anything that's
-// settled, cancelled, past close, or already has a YES/NO result.
-//
-// We also drop markets that close within CLOSE_BUFFER_MS. A buy submitted
-// with less than this window has no realistic chance of completing both
-// signatures + on-chain settlement + keeper fill before close, so allowing
-// it just leads to failed orders and wasted gas.
-const CLOSE_BUFFER_MS = 60_000;   // 1 minute
+const CLOSE_BUFFER_MS = 60_000;
 
 function isMarketOpen(event) {
   if (!event) return false;
@@ -622,22 +457,13 @@ function isMarketOpen(event) {
   if (event.isLive === false)   return false;
   const m = event.market;
   if (!m) return false;
-  if (m.status && m.status !== 'open') return false;     // closed | settled | cancelled
-  if (m.result && m.result !== 'pending' && m.result !== '') return false;  // 'yes' or 'no' → settled
+  if (m.status && m.status !== 'open') return false;
+  if (m.result && m.result !== 'pending' && m.result !== '') return false;
   const ms = toMs(event.closeTime);
   if (ms != null && (ms - Date.now()) <= CLOSE_BUFFER_MS) return false;
   return true;
 }
 
-// ─── Polymarket Gamma supplement ─────────────────────────────────────────────
-// Jupiter passes Polymarket data through but strips the long-form description,
-// outcome labels, group thresholds, and short-window price changes. We hit
-// gamma-api.polymarket.com directly by slug to fill those gaps so users can
-// actually see what they're betting on.
-//
-// One batched fetch per page load. Result cached by slug for the refresh
-// cycle. Failures are silent — Jupiter's data is enough on its own, this is
-// purely additive context.
 async function fetchPolymarketEvent(slug) {
   if (!slug) return null;
   try {
@@ -649,9 +475,6 @@ async function fetchPolymarketEvent(slug) {
   } catch { return null; }
 }
 
-// Polymarket-side "still tradeable" check. The Gamma API has a known bug
-// where eliminated/settled markets can still report active=true; acceptingOrders
-// is the most reliable flag. We also reject anything UMA has resolved.
 function isPolymarketOpen(pmEvent, pmMarket) {
   if (pmEvent) {
     if (pmEvent.closed === true)   return false;
@@ -669,15 +492,11 @@ function isPolymarketOpen(pmEvent, pmMarket) {
   return true;
 }
 
-// Extract the field set we actually use from a Polymarket event response.
-// First market in the array is the one Jupiter's first market mirrors —
-// they're indexed in the same order.
 function pickPolymarketFields(pmEvent) {
   if (!pmEvent) return null;
   const pmMkt = (pmEvent.markets && pmEvent.markets[0]) || null;
   if (!isPolymarketOpen(pmEvent, pmMkt)) return { settled: true };
 
-  // outcomes / outcomePrices are JSON-encoded strings in the response.
   let outcomes = null, outcomePrices = null;
   try { outcomes      = pmMkt?.outcomes      ? JSON.parse(pmMkt.outcomes)      : null; } catch {}
   try { outcomePrices = pmMkt?.outcomePrices ? JSON.parse(pmMkt.outcomePrices) : null; } catch {}
@@ -688,9 +507,9 @@ function pickPolymarketFields(pmEvent) {
     settled: false,
     description,
     startingPrice: extractStartingPrice(description),
-    outcomes,                                  // ["Yes","No"] or ["Up","Down"] or team names
+    outcomes,
     outcomePrices: Array.isArray(outcomePrices) ? outcomePrices.map(Number) : null,
-    groupItemTitle:  pmMkt?.groupItemTitle  || null,  // "$150k" / "March 31" / team name
+    groupItemTitle:  pmMkt?.groupItemTitle  || null,
     lastTradePrice:  pmMkt?.lastTradePrice  != null ? Number(pmMkt.lastTradePrice)  : null,
     bestBid:         pmMkt?.bestBid         != null ? Number(pmMkt.bestBid)         : null,
     bestAsk:         pmMkt?.bestAsk         != null ? Number(pmMkt.bestAsk)         : null,
@@ -705,21 +524,10 @@ function pickPolymarketFields(pmEvent) {
   };
 }
 
-// ─── Live crypto prices via Polymarket RTDS WebSocket ────────────────────────
-// Endpoint:  wss://ws-live-data.polymarket.com  (no auth)
-// Topic:     crypto_prices_chainlink            (same feed Polymarket settles on)
-// Symbols:   slash-separated, e.g. btc/usd, eth/usd, sol/usd, xrp/usd, doge/usd
-// Subscribe with empty filters to receive every symbol the topic carries.
-// Send PING every 5s per docs to keep the connection alive.
-// Reconnect with exponential backoff on close/error.
-//
-// Returns a Map<symbol, { value, timestamp }> updated in place via React state.
 function useLiveCryptoPrices(enabled) {
   const [prices, setPrices] = useState(() => new Map());
-
   useEffect(() => {
     if (!enabled || typeof window === 'undefined' || typeof WebSocket === 'undefined') return;
-
     let ws = null;
     let pingId = null;
     let reconnectId = null;
@@ -739,7 +547,6 @@ function useLiveCryptoPrices(enabled) {
             subscriptions: [{ topic: POLY_RTDS_TOPIC, type: '*', filters: '' }],
           }));
         } catch {}
-        // PING loop per docs (every 5s).
         pingId = setInterval(() => {
           if (ws && ws.readyState === WebSocket.OPEN) {
             try { ws.send('PING'); } catch {}
@@ -748,7 +555,6 @@ function useLiveCryptoPrices(enabled) {
       };
 
       ws.onmessage = (ev) => {
-        // PONG / non-JSON frames — skip.
         if (typeof ev.data !== 'string') return;
         if (ev.data === 'PONG' || ev.data === 'PING') return;
         let msg;
@@ -770,7 +576,7 @@ function useLiveCryptoPrices(enabled) {
         if (pingId) { clearInterval(pingId); pingId = null; }
         scheduleReconnect();
       };
-      ws.onerror = () => { /* onclose handles reconnect */ };
+      ws.onerror = () => { };
     };
 
     const scheduleReconnect = () => {
@@ -786,9 +592,7 @@ function useLiveCryptoPrices(enabled) {
       closed = true;
       if (pingId)      clearInterval(pingId);
       if (reconnectId) clearTimeout(reconnectId);
-      if (ws) {
-        try { ws.close(); } catch {}
-      }
+      if (ws) { try { ws.close(); } catch {} }
     };
   }, [enabled]);
 
@@ -797,38 +601,26 @@ function useLiveCryptoPrices(enabled) {
 
 function pickPositionFields(p) {
   if (!p) return null;
-
-  // Numerics — contracts is u64 as string per spec
   const contracts     = Number(p.contracts || 0);
   const openOrders    = Number(p.openOrders || 0);
-
-  // All micro-USD strings → USD numbers
   const avgPriceUsd   = toUsd(p.avgPriceUsd);
   const markPriceUsd  = p.markPriceUsd != null ? toUsd(p.markPriceUsd) : null;
   const sellPriceUsd  = p.sellPriceUsd != null ? toUsd(p.sellPriceUsd) : null;
-
   const costUsd       = toUsd(p.totalCostUsd ?? p.sizeUsd) || contracts * avgPriceUsd;
   const valueUsd      = p.valueUsd != null
     ? toUsd(p.valueUsd)
     : (markPriceUsd != null ? contracts * markPriceUsd : null);
-
-  // Prefer server-computed P&L; fall back to client calc only if missing.
   const pnlUsd        = p.pnlUsd != null
     ? toUsd(p.pnlUsd)
     : (valueUsd != null ? (valueUsd - costUsd) : null);
   const pnlUsdPercent = p.pnlUsdPercent != null
     ? Number(p.pnlUsdPercent)
     : (costUsd > 0 && pnlUsd != null ? (pnlUsd / costUsd) * 100 : null);
-
-  // Fee-adjusted P&L — what they'd actually realize on exit
   const pnlAfterFeesUsd     = p.pnlUsdAfterFees != null ? toUsd(p.pnlUsdAfterFees) : null;
   const pnlAfterFeesPercent = p.pnlUsdAfterFeesPercent != null
     ? Number(p.pnlUsdAfterFeesPercent) : null;
-
-  // Already-realized P&L from closed portions + fees paid
   const realizedPnlUsd = p.realizedPnlUsd != null ? toUsd(p.realizedPnlUsd) : 0;
   const feesPaidUsd    = toUsd(p.feesPaidUsd || 0);
-
   const payoutUsd      = toUsd(p.payoutUsd);
   const claimedUsd     = toUsd(p.claimedUsd || 0);
 
@@ -841,13 +633,10 @@ function pickPositionFields(p) {
   const marketResult  = mktMeta.result || null;
 
   return {
-    // — Identity —
     positionPubkey: p.pubkey || p.positionPubkey,
     ownerPubkey:    p.ownerPubkey || null,
     marketId:       p.marketId,
     isYes:          !!p.isYes,
-
-    // — Display —
     title,
     eventSubtitle,
     eventImage,
@@ -860,21 +649,15 @@ function pickPositionFields(p) {
     marketStatus,
     marketResult,
     marketCloseTime:  mktMeta.closeTime || null,
-
-    // — State —
     contracts,
     openOrders,
     claimable: !!p.claimable,
     claimed:   !!p.claimed,
     status:    p.claimed ? 'claimed' : (p.claimable ? 'claimable' : 'active'),
-
-    // — Timestamps —
     openedAt:       p.openedAt || null,
     updatedAt:      p.updatedAt || null,
     claimableAt:    p.claimableAt || null,
     settlementDate: p.settlementDate || null,
-
-    // — Pricing / P&L —
     avgPriceUsd,
     markPriceUsd,
     sellPriceUsd,
@@ -882,7 +665,6 @@ function pickPositionFields(p) {
     valueUsd,
     payoutUsd,
     claimedUsd,
-
     pnlUsd,
     pnlUsdPercent,
     pnlAfterFeesUsd,
@@ -902,10 +684,6 @@ async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }
   if (feeLamports <= 0n) throw new Error('Fee rounds to zero — amount too small.');
   if (netLamports <= 0n) throw new Error('Net amount after fee is zero.');
 
-  // Build a Jupiter swap quote. We pass only documented /build parameters
-  // (per dev.jup.ag/docs/swap/build). The compute unit price comes back
-  // inside build.computeBudgetInstructions; we add our own setComputeUnitLimit
-  // and setComputeUnitPrice below to ensure short-window orders land.
   const params = new URLSearchParams({
     inputMint:   SOL_MINT,
     outputMint:  JUPUSD_MINT,
@@ -926,13 +704,6 @@ async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }
     lamports:   Number(feeLamports),
   });
 
-  // Assemble instructions in the order documented by dev.jup.ag/docs/swap/build:
-  //   computeBudgetInstructions (CU limit + price) -> setupInstructions ->
-  //   swapInstruction -> cleanupInstruction -> otherInstructions
-  // We override the CU budget with our own values: /build returns only the
-  // CU price (no limit), and we want a deterministic priority fee for time-
-  // sensitive orders. The CU limit is determined by simulating once with the
-  // network max, reading actual usage, then rebuilding at 1.2x usage.
   const buildIxs = (cuLimit) => {
     const ixs = [];
     ixs.push(ComputeBudgetProgram.setComputeUnitLimit({ units: cuLimit }));
@@ -964,10 +735,7 @@ async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }
     instructions:    ixs,
   }).compileToV0Message(alts);
 
-  // Use a fixed 600k CU limit. Plenty for Jupiter swap + ATA + fee transfer,
-  // skips the extra simulateTransaction round-trip that costs 1-2 seconds.
   const tx = new VersionedTransaction(compile(buildIxs(CU_LIMIT_FALLBACK)));
-
   return { tx, expectedJupUsdAtomic, latestBlockhash };
 }
 
@@ -1002,9 +770,6 @@ async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtom
     feeAtomic, JUPUSD_DECIMALS, [], TOKEN_PROGRAM_ID,
   );
 
-  // Same instruction ordering as the buy path: explicit CU budget first,
-  // then our fee transfer, then Jupiter's setup/swap/cleanup/other. CU limit
-  // is determined by simulation per dev.jup.ag/docs/swap/advanced/compute-units.
   const buildIxs = (cuLimit) => {
     const ixs = [];
     ixs.push(ComputeBudgetProgram.setComputeUnitLimit({ units: cuLimit }));
@@ -1038,7 +803,6 @@ async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtom
   }).compileToV0Message(alts);
 
   const tx = new VersionedTransaction(compile(buildIxs(CU_LIMIT_FALLBACK)));
-
   return { tx, expectedSolLamports, latestBlockhash };
 }
 
@@ -1046,6 +810,9 @@ async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtom
 // SECTION 5: Predict order builders
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// Build a buy order tx. Returns the tx AND the order pubkey we need to poll
+// for fill status. The order pubkey can come back under a few different
+// field names depending on the Jupiter API version, so we check several.
 async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountJupUsdAtomic }) {
   const r = await jfetch('/api/predict/orders', {
     method: 'POST',
@@ -1058,14 +825,23 @@ async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountJupUsdAto
   });
   const j = await r.json();
   if (!j?.transaction) throw new Error('Jupiter Predict returned no transaction');
-  return { tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)), orderInfo: j.order || null };
+
+  // Order pubkey may be at root or nested under `order`. Try every shape.
+  const orderPubkey =
+    j.orderPubkey ||
+    j.order?.orderPubkey ||
+    j.order?.pubkey ||
+    (typeof j.order === 'string' ? j.order : null) ||
+    j.pubkey ||
+    null;
+
+  return {
+    tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)),
+    orderPubkey,
+    orderInfo: j.order || null,
+  };
 }
 
-// Defensive precheck — Jupiter docs recommend calling GET /trading-status
-// before placing orders to confirm the exchange is up. Returns true if the
-// API explicitly reports trading_active, also true on any error so we don't
-// block users when the status check itself is unavailable. Only returns
-// false when Jupiter explicitly says trading is off.
 async function fetchTradingStatus() {
   try {
     const r = await jfetch('/api/predict/trading-status');
@@ -1078,29 +854,28 @@ async function fetchTradingStatus() {
   }
 }
 
-// Poll GET /orders/status/{orderPubkey} after submitting a buy. Per docs:
-// orders go through a keeper network for matching — the on-chain tx only
-// opens an order account, it does NOT guarantee a fill. Polling tells us
-// if the order filled, is still pending, or failed.
+// Poll the order status endpoint until the keeper either fills, rejects,
+// or we time out. Returns 'filled' | 'failed' | 'pending'.
 //
-// We start polling after a 2s delay (docs warn the first few polls may
-// return 'no order history found') and give up after maxAttempts. Returns
-// the terminal status: 'filled', 'failed', or 'pending' (if we timed out).
-async function pollOrderStatus(orderPubkey, { maxAttempts = 10, intervalMs = 2000 } = {}) {
+// IMPORTANT: 'pending' here means we timed out waiting. The order may still
+// fill later — the caller should not treat 'pending' as success.
+async function pollOrderStatus(orderPubkey, { maxAttempts = 15, intervalMs = 2000, onTick } = {}) {
   if (!orderPubkey) return 'pending';
-  // First poll after initial delay so the keeper has a chance to pick it up.
+  // Initial delay: docs warn the first few polls may 404 while the keeper
+  // hasn't ingested the order yet.
   await new Promise(r => setTimeout(r, intervalMs));
   for (let i = 0; i < maxAttempts; i++) {
     try {
+      onTick?.(i + 1, maxAttempts);
       const r = await jfetch(`/api/predict/orders/status/${encodeURIComponent(orderPubkey)}`);
       if (r.ok) {
         const j = await r.json();
-        const status = j?.status || j?.data?.status;
-        if (status === 'filled') return 'filled';
-        if (status === 'failed') return 'failed';
+        const status = (j?.status || j?.data?.status || '').toLowerCase();
+        if (status === 'filled' || status === 'complete' || status === 'completed') return 'filled';
+        if (status === 'failed' || status === 'rejected' || status === 'cancelled' || status === 'canceled') return 'failed';
       }
     } catch {
-      // Network blips are fine, keep polling.
+      // Transient network errors are fine; keep polling.
     }
     await new Promise(r => setTimeout(r, intervalMs));
   }
@@ -1160,28 +935,6 @@ async function simulateOrThrow(connection, tx, label) {
   }
 }
 
-// Simulate a built transaction to estimate compute unit usage, then return
-// 1.2x that value (capped at the network max). Implements the pattern Jupiter
-// recommends in dev.jup.ag/docs/swap/advanced/compute-units. Falls back to
-// CU_LIMIT_FALLBACK if simulation can't estimate.
-async function simulateForCuLimit(connection, tx, label) {
-  try {
-    const sim = await connection.simulateTransaction(tx, {
-      sigVerify: false,
-      commitment: 'confirmed',
-      replaceRecentBlockhash: true,
-    });
-    const used = Number(sim?.value?.unitsConsumed || 0);
-    if (used > 0) {
-      const buffered = Math.ceil((used * CU_BUFFER_PERCENT) / 100);
-      return Math.min(buffered, CU_LIMIT_MAX);
-    }
-  } catch (e) {
-    console.warn(`[predict] ${label} CU sim failed:`, e?.message);
-  }
-  return CU_LIMIT_FALLBACK;
-}
-
 async function sendAndConfirm(connection, signedTx, blockhashInfo, setStMsg) {
   setStMsg('Submitting…');
   const sig = await connection.sendRawTransaction(signedTx.serialize(), {
@@ -1232,6 +985,87 @@ function Spinner({ size = 12, color = C.hl }) {
       animation: 'nexus-spin .8s linear infinite', flexShrink: 0,
     }} />
   );
+}
+
+// ─── Debug log ─────────────────────────────────────────────────────────────
+// On-screen log that lets us see what's happening on iPhone without
+// DevTools. Every step of the buy/sell/claim flow pushes a line here, and
+// the DebugPanel renders them with a copy button so you can paste the log
+// back to me to diagnose failures.
+function useDebugLog() {
+  const [log, setLog] = useState([]);
+  const push = useCallback((tag, msg, data) => {
+    const time = new Date().toISOString().slice(11, 23);
+    let payload = '';
+    if (data !== undefined) {
+      try { payload = typeof data === 'string' ? data : JSON.stringify(data, (k, v) => typeof v === 'bigint' ? v.toString() + 'n' : v, 2); }
+      catch { payload = String(data); }
+    }
+    setLog(prev => [...prev, { time, tag, msg, payload }].slice(-100));
+    // Also log to console for desktop debugging.
+    console.log(`[predict:${tag}] ${msg}`, data !== undefined ? data : '');
+  }, []);
+  const clear = useCallback(() => setLog([]), []);
+  return { log, push, clear };
+}
+
+function DebugPanel({ log, onClear }) {
+  const [expanded, setExpanded] = useState(true);
+  if (log.length === 0) return null;
+  const text = log.map(l => `[${l.time}] ${l.tag}: ${l.msg}${l.payload ? '\n  ' + l.payload.replace(/\n/g, '\n  ') : ''}`).join('\n');
+  return (
+    <div style={{ marginTop: 10, padding: 8, borderRadius: 10, background: 'rgba(0,0,0,.45)', border: `1px solid ${C.border}`, ...T.mono, fontSize: 10 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+        <button onClick={() => setExpanded(!expanded)} style={{ background: 'none', border: 'none', color: C.hl, fontSize: 10, fontWeight: 700, letterSpacing: 1, cursor: 'pointer', padding: 0, ...T.mono }}>
+          DEBUG LOG ({log.length}) {expanded ? '▼' : '▶'}
+        </button>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button onClick={() => copyToClipboard(text)} style={{ padding: '3px 8px', borderRadius: 6, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 9, fontWeight: 700, cursor: 'pointer', ...T.mono }}>COPY</button>
+          <button onClick={onClear} style={{ padding: '3px 8px', borderRadius: 6, background: 'rgba(255,95,122,.1)', border: '1px solid rgba(255,95,122,.3)', color: C.no, fontSize: 9, fontWeight: 700, cursor: 'pointer', ...T.mono }}>CLEAR</button>
+        </div>
+      </div>
+      {expanded && (
+        <div style={{ maxHeight: 220, overflowY: 'auto', color: C.ink, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
+          {log.map((l, i) => {
+            const isErr = l.tag.includes('error') || l.tag.includes('fail');
+            return (
+              <div key={i} style={{ marginBottom: 4, color: isErr ? C.no : C.ink }}>
+                <span style={{ color: C.muted2 }}>[{l.time}]</span>{' '}
+                <span style={{ color: isErr ? C.no : C.hl, fontWeight: 700 }}>{l.tag}:</span>{' '}
+                <span>{l.msg}</span>
+                {l.payload && <div style={{ paddingLeft: 8, color: C.muted, fontSize: 9, marginTop: 2 }}>{l.payload}</div>}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Wrap a fetch-style call and log its full request/response cycle. Used
+// inside placeOrder/sell/claim so any non-2xx from /api/predict surfaces.
+async function loggedFetch(url, opts, dbg, label) {
+  dbg(`http:${label}:req`, `${opts?.method || 'GET'} ${url}`, opts?.body ? { body: opts.body } : undefined);
+  try {
+    const r = await fetch(url, opts);
+    const text = await r.text();
+    let parsed = null;
+    try { parsed = JSON.parse(text); } catch {}
+    if (!r.ok) {
+      dbg(`http:${label}:fail`, `${r.status} ${r.statusText}`, parsed || text.slice(0, 400));
+      const err = new Error(`HTTP ${r.status}: ${(text || r.statusText).slice(0, 300)}`);
+      err.status = r.status; err.body = text;
+      throw err;
+    }
+    dbg(`http:${label}:ok`, `${r.status}`, parsed ? Object.keys(parsed) : text.slice(0, 200));
+    return { response: r, json: parsed, text };
+  } catch (e) {
+    if (e.status === undefined) {
+      dbg(`http:${label}:error`, e?.message || String(e));
+    }
+    throw e;
+  }
 }
 
 function StatusLine({ msg, step }) {
@@ -1384,14 +1218,9 @@ function MarketCard({ event, livePrices, priceSnapshots, onTrade }) {
   const closeMs = toMs(event.closeTime);
   const isUrgent = closeMs && (closeMs - Date.now()) > 0 && (closeMs - Date.now()) < URGENT_WINDOW_MS;
 
-  // Outcome labels — Polymarket gives the real labels (e.g., "Up"/"Down",
-  // team names, "Trump"/"Harris"). Fall back to YES/NO if missing.
   const yesLabel = poly?.outcomes?.[0] || 'Yes';
   const noLabel  = poly?.outcomes?.[1] || 'No';
 
-  // Price-to-beat (the reference) and the current live Chainlink price for
-  // the asset. Reference comes from our localStorage snapshot captured the
-  // first time we saw this market open. Current is from the RTDS WebSocket.
   const priceToBeat = resolvePriceToBeat(event, priceSnapshots);
   const symbol      = symbolFromSubcategory(event.subcategory);
   const live        = symbol ? livePrices?.get(symbol) : null;
@@ -1408,8 +1237,6 @@ function MarketCard({ event, livePrices, priceSnapshots, onTrade }) {
     return '$' + n.toFixed(6);
   };
 
-  // First sentence of the description — so the user sees the resolution
-  // criteria right on the card, not just an abstract question.
   const ruleSnippet = (() => {
     const txt = poly?.description || m.rulesPrimary || event.closeCondition;
     if (!txt) return null;
@@ -1438,8 +1265,6 @@ function MarketCard({ event, livePrices, priceSnapshots, onTrade }) {
             </div>
           )}
 
-          {/* Threshold / differentiator chip — most meaningful for grouped
-              markets ("$150k" / "March 31" / a player name). */}
           {poly?.groupItemTitle && (
             <div style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 99, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 10, fontWeight: 700, letterSpacing: 0.4, marginBottom: 4, ...T.mono }}>
               {poly.groupItemTitle}
@@ -1470,10 +1295,6 @@ function MarketCard({ event, livePrices, priceSnapshots, onTrade }) {
         </div>
       </div>
 
-      {/* Price strip — the ACTUAL bet. Reference (price-to-beat) on the
-          left, live current price on the right, delta in the middle.
-          Live current price comes from the Polymarket RTDS Chainlink
-          stream — the same feed the market resolves against. */}
       {(priceToBeat != null || currentPrice != null) && (
         <div style={{
           display: 'flex', alignItems: 'stretch', gap: 8, marginBottom: 8,
@@ -1514,8 +1335,6 @@ function MarketCard({ event, livePrices, priceSnapshots, onTrade }) {
         </div>
       )}
 
-      {/* First sentence of resolution rules — so the user sees what they're
-          betting on without having to open the drawer. */}
       {ruleSnippet && (
         <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.4, marginBottom: 8, padding: '5px 7px', borderLeft: `2px solid ${C.hlDim}`, ...T.body, ...clamp2 }}>
           {ruleSnippet}
@@ -1542,10 +1361,13 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
   const { publicKey, signTransaction } = useWallet();
 
   const [amount, setAmount]   = useState('0.1');
+  // Steps: 0 idle, 1 swap, 2 order tx, 3 waiting for fill, 4 done
   const [step, setStep]       = useState(0);
   const [statusMsg, setStMsg] = useState('');
   const [error, setError]     = useState('');
+  const [warning, setWarning] = useState('');
   const [showRules, setShowRules] = useState(false);
+  const { log: debugLog, push: dbg, clear: clearDbg } = useDebugLog();
 
   useBodyLock(true);
 
@@ -1561,105 +1383,164 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
   const price         = isYes ? m.yesPrice : m.noPrice;
   const contractsEst  = price > 0 ? estDepositUsd / price : 0;
 
-  // Use Polymarket's actual outcome labels (e.g., "Up"/"Down", team names)
-  // instead of generic YES/NO whenever they're available.
   const sideLabel = (poly?.outcomes && poly.outcomes[isYes ? 0 : 1]) || (isYes ? 'YES' : 'NO');
   const sideColor = isYes ? C.yes : C.no;
   const sideDim   = isYes ? C.yesDim : C.noDim;
 
   const hasSol = solBal >= grossLamports && grossLamports > 0n;
-  const busy   = step > 0 && step < 3;
+  const busy   = step > 0 && step < 4;
   const canBuy = !busy && solAmount > 0 && publicKey && m.marketId && hasSol;
 
   const placeOrder = useCallback(async () => {
+    dbg('buy:start', `marketId=${m.marketId} side=${isYes ? 'YES' : 'NO'} sol=${solAmount}`);
     if (!publicKey || !signTransaction) {
+      dbg('buy:abort', 'no wallet');
       setError('Connect a wallet that supports signTransaction.');
       return;
     }
     if (estGrossUsd < MIN_TRADE_USD) {
+      dbg('buy:abort', `below min: $${estGrossUsd.toFixed(2)} < $${MIN_TRADE_USD}`);
       setError(`Minimum trade is $${MIN_TRADE_USD}. Try a larger SOL amount.`);
       return;
     }
 
-    setError('');
+    setError(''); setWarning('');
 
     try {
-      setStep(1);
-      setStMsg('Building swap…');
+      // STEP 1: Swap SOL → JupUSD
+      setStep(1); setStMsg('Building swap…');
+      dbg('buy:1', 'building SOL→JupUSD swap', { grossLamports: grossLamports.toString() });
 
       const { tx: swapTx, expectedJupUsdAtomic, latestBlockhash: swapBh } =
-        await buildSolToJupUsdSwapTx({
-          connection,
-          ownerPubkey: publicKey,
-          grossLamports,
-        });
+        await buildSolToJupUsdSwapTx({ connection, ownerPubkey: publicKey, grossLamports });
+      dbg('buy:1', 'swap tx built', { expectedJupUsd: (Number(expectedJupUsdAtomic) / 1e6).toFixed(4) });
 
       const minJupUsdAtomic = BigInt(Math.round(MIN_TRADE_USD * 1e6));
-      if (expectedJupUsdAtomic < minJupUsdAtomic) {
-        throw new Error(`Minimum trade is $${MIN_TRADE_USD}. Try a larger SOL amount.`);
-      }
+      if (expectedJupUsdAtomic < minJupUsdAtomic) throw new Error(`Minimum trade is $${MIN_TRADE_USD}.`);
 
-      setStMsg('Confirm Step 1 of 2 in your wallet — Swap SOL → JupUSD');
+      setStMsg('Confirm Step 1 of 2 in wallet — Swap SOL → JupUSD');
       const signedSwap = await signTransaction(swapTx);
+      dbg('buy:1', 'swap signed');
 
       setStMsg('Swapping SOL → JupUSD…');
       const swapResult = await sendAndConfirm(connection, signedSwap, swapBh, setStMsg);
-      if (swapResult.pending) {
-        throw new Error(`Swap submitted but still confirming. Solscan: https://solscan.io/tx/${swapResult.sig}`);
-      }
+      dbg('buy:1', `swap confirmed: ${swapResult.sig}`, { pending: swapResult.pending });
+      if (swapResult.pending) throw new Error(`Swap submitted but confirming: ${swapResult.sig}`);
 
-      setStep(2);
-      setStMsg('Reading JupUSD balance…');
-
+      // STEP 2: Place order
+      setStep(2); setStMsg('Reading JupUSD balance…');
       const ownerB58 = publicKey.toBase58();
-      let actualJupUsd = await fetchJupUsdBalance(connection, ownerB58);
+      const actualJupUsd = await fetchJupUsdBalance(connection, ownerB58);
+      dbg('buy:2', `JupUSD balance: ${(Number(actualJupUsd) / 1e6).toFixed(4)}`);
 
       const depositAtomic = actualJupUsd < expectedJupUsdAtomic ? actualJupUsd : expectedJupUsdAtomic;
-
-      if (depositAtomic <= 0n) {
-        throw new Error('Swap landed but no JupUSD found. Please refresh.');
-      }
+      if (depositAtomic <= 0n) throw new Error('Swap landed but no JupUSD found. Refresh.');
 
       setStMsg('Building order…');
-      const { tx: buyTx } = await buildBuyTx({
-        ownerPubkey: ownerB58,
-        marketId: m.marketId,
-        isYes,
-        depositAmountJupUsdAtomic: depositAtomic,
-      });
+      dbg('buy:2', 'POST /api/predict/orders', { marketId: m.marketId, isYes, deposit: depositAtomic.toString() });
+      const orderRequest = await loggedFetch(
+        '/api/predict/orders',
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ownerPubkey: ownerB58,
+            marketId: m.marketId,
+            isYes,
+            isBuy: true,
+            depositAmount: depositAtomic.toString(),
+            depositMint: JUPUSD_MINT,
+          }),
+        },
+        dbg,
+        'predict-orders',
+      );
 
-      setStMsg(`Confirm Step 2 of 2 in your wallet — Buy ${sideLabel}`);
+      const j = orderRequest.json;
+      if (!j?.transaction) {
+        dbg('buy:2:fail', 'no transaction in response', j);
+        throw new Error('Jupiter Predict returned no transaction. See debug log.');
+      }
+      const orderPubkey =
+        j.orderPubkey || j.order?.orderPubkey || j.order?.pubkey ||
+        (typeof j.order === 'string' ? j.order : null) || j.pubkey || null;
+      dbg('buy:2', `orderPubkey: ${orderPubkey || '(none)'}`);
+
+      const buyTx = VersionedTransaction.deserialize(b64ToBytes(j.transaction));
+
+      setStMsg(`Confirm Step 2 of 2 in wallet — Buy ${sideLabel}`);
       const signedBuy = await signTransaction(buyTx);
+      dbg('buy:2', 'order tx signed');
 
-      setStMsg('Placing order…');
+      setStMsg('Submitting order…');
       const orderResult = await sendAndConfirm(connection, signedBuy, null, setStMsg);
-      if (orderResult.pending) {
-        throw new Error(`Order submitted but still confirming. Solscan: https://solscan.io/tx/${orderResult.sig}`);
+      dbg('buy:2', `order tx landed: ${orderResult.sig}`, { pending: orderResult.pending });
+      if (orderResult.pending) throw new Error(`Order tx confirming: ${orderResult.sig}`);
+
+      // STEP 3: Wait for keeper fill — tx landing on-chain ≠ filled
+      setStep(3);
+
+      if (!orderPubkey) {
+        dbg('buy:3', 'no orderPubkey to poll, surfacing warning');
+        setWarning('Order submitted but no order pubkey returned — can\'t track fill. Check Positions.');
+        setStep(4); setStMsg('');
+        onDone?.(); setTimeout(() => onClose(), 3200);
+        return;
       }
 
-      setStep(3); setStMsg('');
+      setStMsg('Waiting for keeper to fill order…');
+      dbg('buy:3', `polling /orders/status/${orderPubkey}`);
+      let lastStatus = null;
+      const fillStatus = await pollOrderStatus(orderPubkey, {
+        maxAttempts: 15,
+        intervalMs: 2000,
+        onTick: async (i, total) => {
+          setStMsg(`Waiting for keeper… (${i}/${total})`);
+          // Log every poll so we see exactly what status comes back.
+          try {
+            const r = await fetch(`/api/predict/orders/status/${encodeURIComponent(orderPubkey)}`);
+            const t = await r.text();
+            let p = null; try { p = JSON.parse(t); } catch {}
+            const st = p?.status || p?.data?.status || `(http ${r.status})`;
+            if (st !== lastStatus) {
+              dbg('buy:3:poll', `[${i}/${total}] status=${st}`, p);
+              lastStatus = st;
+            }
+          } catch (e) { dbg('buy:3:poll', `[${i}/${total}] error: ${e.message}`); }
+        },
+      });
+      dbg('buy:3', `final fill status: ${fillStatus}`);
+
+      if (fillStatus === 'failed') {
+        throw new Error('Order rejected by keeper. Your JupUSD is still in your wallet.');
+      }
+      if (fillStatus === 'pending') {
+        setWarning('Order hasn\'t filled within 30s. May still go through — check Positions in a minute.');
+        setStep(4); setStMsg('');
+        onDone?.(); setTimeout(() => onClose(), 4200);
+        return;
+      }
+
+      // Filled.
+      dbg('buy:done', 'order filled successfully');
+      setStep(4); setStMsg('');
       onDone?.();
       setTimeout(() => onClose(), 2200);
     } catch (e) {
+      dbg('buy:error', e?.message || String(e), { status: e?.status, body: e?.body?.slice?.(0, 400) });
       setError(friendlyError(e));
       setStep(0); setStMsg('');
     }
   }, [
-    publicKey, signTransaction, m, isYes, grossLamports, estGrossUsd,
-    connection, onClose, onDone, sideLabel,
+    publicKey, signTransaction, m, isYes, grossLamports, estGrossUsd, solAmount,
+    connection, onClose, onDone, sideLabel, dbg,
   ]);
 
   const solPresets = ['0.05', '0.1', '0.25', '0.5'];
 
-  // Prefer Polymarket's full description — it contains the threshold price,
-  // resolution source, and exact criteria. Fall back to Jupiter's truncated
-  // rulesPrimary / closeCondition only if Polymarket is unavailable.
   const rulesText = poly?.description || m.rulesPrimary || event.closeCondition;
-  const threshold = poly?.groupItemTitle;       // e.g. "$150k", "March 31"
+  const threshold = poly?.groupItemTitle;
 
-  // Live price comparison — what the user is actually betting on.
-  // Reference comes from the localStorage snapshot of the asset's live
-  // Chainlink price when this market first opened on the user's device.
   const priceToBeat = resolvePriceToBeat(event, priceSnapshots);
   const symbol      = symbolFromSubcategory(event.subcategory);
   const live        = symbol ? livePrices?.get(symbol) : null;
@@ -1676,12 +1557,21 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
     return '$' + n.toFixed(6);
   };
 
+  // Button label reflects the new step model. Step 3 = waiting for fill,
+  // Step 4 = actually filled (or warning surfaced).
+  const buttonLabel = (() => {
+    if (busy) return statusMsg || 'Working…';
+    if (step === 4) return warning ? '⚠ Submitted — check Positions' : '✓ Order filled';
+    return `Buy ${sideLabel} · ${solAmount.toFixed(4)} SOL`;
+  })();
+
   return (
     <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
       <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: '12px 12px 14px', boxShadow: C.shadowLg, maxHeight: `calc(100dvh - ${NAV_CLEARANCE}px - 24px)`, overflowY: 'auto' }}>
         <div style={{ width: 32, height: 3, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 8px' }} />
 
-        {busy && <StepBadge current={step} total={2} />}
+        {/* Progress bar: 3 phases. Sign+swap, sign+order, wait for fill. */}
+        {busy && <StepBadge current={step} total={3} />}
 
         <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 4, lineHeight: 1.35, ...T.body }}>
           {event.title}
@@ -1697,9 +1587,6 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
           </div>
         )}
 
-        {/* Live price strip — bigger here than on the card since this is the
-            confirm step. Reference → live current → delta. Updates in real
-            time from the same Chainlink feed the market resolves against. */}
         {(priceToBeat != null || currentPrice != null) && (
           <div style={{
             display: 'flex', alignItems: 'stretch', gap: 10, marginBottom: 10,
@@ -1809,12 +1696,17 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
             <Row label="Closes" value={formatEndDate(event.closeTime)} />
           )}
           <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}`, color: C.muted, fontSize: 9 }}>
-            Two signatures: Swap SOL → JupUSD, then place order.
+            Two signatures: Swap SOL → JupUSD, then place order. Order is filled by Jupiter's keeper.
           </div>
         </div>
 
-        {statusMsg && <StatusLine msg={statusMsg} step={busy ? `STEP ${step} OF 2` : null} />}
+        {statusMsg && <StatusLine msg={statusMsg} step={busy ? `STEP ${Math.min(step, 3)} OF 3` : null} />}
         {error && <ErrorLine msg={error} />}
+        {warning && !error && (
+          <div style={{ marginBottom: 8, padding: 8, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', borderRadius: 10, fontSize: 11, color: C.amber, fontWeight: 600, lineHeight: 1.4 }}>
+            {warning}
+          </div>
+        )}
 
         {!hasSol && solAmount > 0 && !busy && (
           <div style={{ marginBottom: 8, padding: 8, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', borderRadius: 10, fontSize: 11, color: C.amber, fontWeight: 600 }}>
@@ -1824,14 +1716,12 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
 
         <PrimaryButton
           onClick={canBuy ? placeOrder : undefined}
-          disabled={!canBuy}
+          disabled={!canBuy || step === 4}
           color={isYes ? 'yes' : 'no'}
-          label={
-            busy ? (statusMsg || 'Working…')
-            : step === 3 ? '✓ Order placed'
-            : `Buy ${sideLabel} · ${solAmount.toFixed(4)} SOL`
-          }
+          label={buttonLabel}
         />
+
+        <DebugPanel log={debugLog} onClear={clearDbg} />
       </div>
     </div>
   );
@@ -1909,6 +1799,7 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
   const [step, setStep]       = useState(0);
   const [statusMsg, setStMsg] = useState('');
   const [error, setError]     = useState('');
+  const { log: debugLog, push: dbg, clear: clearDbg } = useDebugLog();
 
   useBodyLock(true);
 
@@ -1917,7 +1808,9 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
   const grossUsd = isClaim ? position.payoutUsd : position.valueUsd;
 
   const handleAction = useCallback(async () => {
+    dbg(`${kind}:start`, `position=${position.positionPubkey} contracts=${position.contracts} side=${position.isYes ? 'YES' : 'NO'}`);
     if (!publicKey || !signTransaction) {
+      dbg(`${kind}:abort`, 'no wallet');
       setError('Connect a wallet that supports signTransaction.');
       return;
     }
@@ -1926,31 +1819,52 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
     try {
       setStep(1);
       setStMsg(`Building ${isClaim ? 'claim' : 'sell'}…`);
-
       const ownerB58 = publicKey.toBase58();
-      const { tx: predictTx } = isClaim
-        ? await buildClaimTx({ ownerPubkey: ownerB58, positionPubkey: position.positionPubkey })
-        : await buildSellTx({ ownerPubkey: ownerB58, positionPubkey: position.positionPubkey });
+
+      // Hit the predict API directly so we can log the request/response.
+      const url = isClaim
+        ? `/api/predict/positions/${encodeURIComponent(position.positionPubkey)}/claim`
+        : `/api/predict/positions/${encodeURIComponent(position.positionPubkey)}`;
+      const method = isClaim ? 'POST' : 'DELETE';
+      dbg(`${kind}:1`, `${method} ${url}`);
+
+      const request = await loggedFetch(
+        url,
+        {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ownerPubkey: ownerB58 }),
+        },
+        dbg,
+        `predict-${kind}`,
+      );
+
+      const j = request.json;
+      if (!j?.transaction) {
+        dbg(`${kind}:1:fail`, 'no transaction in response', j);
+        throw new Error(`No ${kind} tx returned. See debug log.`);
+      }
+      const predictTx = VersionedTransaction.deserialize(b64ToBytes(j.transaction));
+      dbg(`${kind}:1`, 'tx deserialized');
 
       setStMsg('Checking…');
       await simulateOrThrow(connection, predictTx, kind);
+      dbg(`${kind}:1`, 'simulation passed');
 
-      setStMsg(`Confirm Step 1 of 2 in your wallet — ${isClaim ? 'Claim winnings' : 'Sell contracts'}`);
+      setStMsg(`Confirm Step 1 of 2 in wallet — ${isClaim ? 'Claim winnings' : 'Sell contracts'}`);
       const signedPredict = await signTransaction(predictTx);
+      dbg(`${kind}:1`, 'signed');
 
       setStMsg(isClaim ? 'Claiming…' : 'Selling…');
       const predictResult = await sendAndConfirm(connection, signedPredict, null, setStMsg);
-      if (predictResult.pending) {
-        throw new Error(`${isClaim ? 'Claim' : 'Sell'} submitted but still confirming. Solscan: https://solscan.io/tx/${predictResult.sig}`);
-      }
+      dbg(`${kind}:1`, `landed: ${predictResult.sig}`, { pending: predictResult.pending });
+      if (predictResult.pending) throw new Error(`${kind} tx confirming: ${predictResult.sig}`);
 
       setStep(2);
       setStMsg('Reading JupUSD balance…');
-
       const actualJupUsd = await fetchJupUsdBalance(connection, ownerB58);
-      if (actualJupUsd <= 0n) {
-        throw new Error('No JupUSD found to swap. Refresh and try again.');
-      }
+      dbg(`${kind}:2`, `JupUSD balance: ${(Number(actualJupUsd) / 1e6).toFixed(4)}`);
+      if (actualJupUsd <= 0n) throw new Error('No JupUSD to swap. Refresh and try again.');
 
       setStMsg('Building swap…');
       const { tx: swapTx, latestBlockhash: swapBh } = await buildJupUsdToSolSwapTx({
@@ -1958,27 +1872,30 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
         ownerPubkey: publicKey,
         grossJupUsdAtomic: actualJupUsd,
       });
+      dbg(`${kind}:2`, 'swap tx built');
 
       setStMsg('Checking…');
       await simulateOrThrow(connection, swapTx, 'jupusd-sol');
 
-      setStMsg('Confirm Step 2 of 2 in your wallet — Swap JupUSD → SOL');
+      setStMsg('Confirm Step 2 of 2 in wallet — Swap JupUSD → SOL');
       const signedSwap = await signTransaction(swapTx);
+      dbg(`${kind}:2`, 'swap signed');
 
       setStMsg('Swapping JupUSD → SOL…');
       const swapResult = await sendAndConfirm(connection, signedSwap, swapBh, setStMsg);
-      if (swapResult.pending) {
-        throw new Error(`Swap submitted but still confirming. Solscan: https://solscan.io/tx/${swapResult.sig}`);
-      }
+      dbg(`${kind}:2`, `swap landed: ${swapResult.sig}`, { pending: swapResult.pending });
+      if (swapResult.pending) throw new Error(`Swap confirming: ${swapResult.sig}`);
 
+      dbg(`${kind}:done`, 'complete');
       setStep(3); setStMsg('');
       onDone?.();
       setTimeout(() => onClose(), 2200);
     } catch (e) {
+      dbg(`${kind}:error`, e?.message || String(e), { status: e?.status, body: e?.body?.slice?.(0, 400) });
       setError(friendlyError(e));
       setStep(0); setStMsg('');
     }
-  }, [publicKey, signTransaction, position, isClaim, kind, connection, onDone, onClose]);
+  }, [publicKey, signTransaction, position, isClaim, kind, connection, onDone, onClose, dbg]);
 
   const feeUsd  = grossUsd * (FEE_BPS / 10000);
   const netUsd  = grossUsd - feeUsd;
@@ -2020,6 +1937,8 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
             : isClaim ? `Claim · ${fmtUsd(grossUsd)}` : `Sell all · ${fmtUsd(grossUsd)}`
           }
         />
+
+        <DebugPanel log={debugLog} onClear={clearDbg} />
       </div>
     </div>
   );
@@ -2046,16 +1965,9 @@ export default function Predict() {
   const [buyState, setBuyState]   = useState(null);
   const [actionPos, setActionPos] = useState(null);
   const [toast, setToast]         = useState('');
+  const { log: pageLog, push: pageDbg, clear: clearPageDbg } = useDebugLog();
 
-  // Live crypto prices streamed from Polymarket's RTDS Chainlink topic.
-  // Only connect when the user is viewing markets to save bandwidth and a
-  // WS connection slot.
   const livePrices = useLiveCryptoPrices(tab === 'markets');
-
-  // Opening-price snapshots — captures each up/down market's reference price
-  // the first time we see it, persists to localStorage. Powers the PRICE TO
-  // BEAT and SPREAD columns since Polymarket doesn't expose a public crypto
-  // price-to-beat endpoint.
   const priceSnapshots = usePriceSnapshots(events, livePrices);
 
   const connection = useMemo(() => {
@@ -2085,9 +1997,6 @@ export default function Predict() {
     try {
       setEvError(null);
       const raw = await fetchEvents();
-
-      // Pass 1: normalize Jupiter fields, drop anything closed/cancelled/settled
-      // before we even consider rendering it.
       const normalized = raw
         .map((ev, i) => {
           try { return pickEventFields(ev); }
@@ -2096,16 +2005,6 @@ export default function Predict() {
         .filter(Boolean)
         .filter(isMarketOpen);
 
-      // Pass 2: enrich with Polymarket Gamma data for descriptions, outcome
-      // labels, group thresholds. We do NOT call /api/equity/price-to-beat
-      // here — that endpoint is for stocks/forex/oil markets only and 404s
-      // on crypto markets. For crypto up/down markets, the "price to beat"
-      // is the live Chainlink price at market openTime, which we snapshot
-      // client-side via usePriceSnapshots (see SECTION 1).
-      //
-      // Failures are silent — Jupiter's data alone is enough to render. We
-      // also use Polymarket's flags to drop any market THEIR side considers
-      // settled (catches the known Gamma-bug cases Jupiter still relays).
       const slugs = normalized.map(e => e.slug).filter(Boolean);
       const pmResults = await Promise.all(
         slugs.map(async (s) => {
@@ -2121,7 +2020,7 @@ export default function Predict() {
       const enriched = normalized
         .map(e => {
           const pm = e.slug ? pmBySlug.get(e.slug) : null;
-          if (pm?.settled) return null;       // Polymarket says it's done
+          if (pm?.settled) return null;
           return pm ? { ...e, poly: pm } : e;
         })
         .filter(Boolean);
@@ -2157,14 +2056,25 @@ export default function Predict() {
     if (!publicKey) { setPositions([]); return; }
     setPosLoading(true);
     try {
-      const raw = await fetchPositions(publicKey.toBase58());
+      pageDbg('positions:fetch', `GET /api/predict/positions?ownerPubkey=${publicKey.toBase58().slice(0, 8)}…`);
+      const r = await fetch(`/api/predict/positions?ownerPubkey=${encodeURIComponent(publicKey.toBase58())}`);
+      const text = await r.text();
+      let j = null; try { j = JSON.parse(text); } catch {}
+      if (!r.ok) {
+        pageDbg('positions:fail', `HTTP ${r.status}`, j || text.slice(0, 300));
+        setPositions([]);
+        return;
+      }
+      const raw = Array.isArray(j) ? j : (j?.data || j?.positions || []);
+      pageDbg('positions:ok', `received ${raw.length} positions`);
       setPositions(raw.map(pickPositionFields).filter(Boolean));
-    } catch {
+    } catch (e) {
+      pageDbg('positions:error', e?.message || String(e));
       setPositions([]);
     } finally {
       setPosLoading(false);
     }
-  }, [publicKey]);
+  }, [publicKey, pageDbg]);
 
   useEffect(() => {
     if (tab !== 'positions' || !publicKey) return;
@@ -2173,10 +2083,6 @@ export default function Predict() {
     return () => clearInterval(id);
   }, [tab, publicKey, reloadPositions]);
 
-  // Sort: ascending close time. Search filters by event title, market title
-  // (the prediction), subcategory (the token), and tags. Safety net: re-apply
-  // isMarketOpen at render so anything that ticks past its close while the
-  // user is viewing the list disappears without waiting for the next refresh.
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     let r = events.filter(isMarketOpen);
@@ -2266,6 +2172,8 @@ export default function Predict() {
             onAction={(kind, p) => setActionPos({ kind, position: p })}
           />
         )}
+
+        <DebugPanel log={pageLog} onClear={clearPageDbg} />
 
         <div style={{ marginTop: 14, padding: '10px 12px', borderRadius: 11, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`, fontSize: 9, color: C.muted, textAlign: 'center', ...T.mono }}>
           Powered by Jupiter Predict · Solana-native · Beta
