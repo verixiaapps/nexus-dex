@@ -394,6 +394,19 @@ async function fetchJupUsdBalance(connection, ownerB58) {
   } catch { return 0n; }
 }
 
+// Live SOL price from server (OKX ticker, cached 30s server-side).
+// Fallback to a conservative 100 if the server is unreachable — this
+// inflates SOL spend a bit, ensuring we always have enough JupUSD output.
+async function fetchSolPrice() {
+  try {
+    const r = await fetch('/api/sol-price');
+    if (!r.ok) return 100;
+    const j = await r.json();
+    const p = Number(j?.price || 0);
+    return Number.isFinite(p) && p > 0 ? p : 100;
+  } catch { return 100; }
+}
+
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 3: Jupiter Predict API + normalizers
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -718,6 +731,15 @@ const FEE_JUPUSD_ATA = getAssociatedTokenAddressSync(
 // SOL → JupUSD swap, with 5% fee taken in JupUSD via Jupiter's native
 // platformFeeBps parameter. Jupiter bakes the fee transfer into its own
 // swap instruction — no manual splicing, no Blowfish flags.
+// SOL → JupUSD swap in ExactIn mode. Caller specifies the SOL amount to
+// spend (calculated client-side to include 5% headroom). Jupiter takes the
+// 5% fee out of the JupUSD output → user nets ~target_deposit_usd.
+//
+// Why ExactIn: Jupiter's /build endpoint silently ignores swapMode=ExactOut.
+// To still charge "fee on top", we inflate the SOL input by ~5% upstream.
+//
+// Fee mint for ExactIn can be input OR output. We use OUTPUT (JupUSD) so
+// the fee lands as stable dollars in our wallet — easier to account for.
 async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }) {
   if (grossLamports <= 0n) throw new Error('Amount too small.');
 
@@ -734,17 +756,21 @@ async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }
   const build = await r.json();
   if (!build?.swapInstruction) throw new Error('Jupiter /build returned no swapInstruction');
 
-  // outAmount is the net JupUSD the user receives AFTER Jupiter takes our fee.
+  // outAmount is the NET JupUSD the user receives after Jupiter takes our fee.
   const expectedJupUsdAtomic = BigInt(build.outAmount || 0);
   if (expectedJupUsdAtomic <= 0n) throw new Error('Jupiter quote returned zero output');
 
+  // Per Jupiter docs: include their `computeBudgetInstructions` (CU price,
+  // routing-aware priority fee) and add our own CU limit. Don't override
+  // Jupiter's price — it's tuned to the route.
   const ixs = [
     ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT_FALLBACK }),
-    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
+    ...(build.computeBudgetInstructions || []).map(deserIx),
     ...(build.setupInstructions || []).map(deserIx),
     deserIx(build.swapInstruction),
     ...(build.cleanupInstruction ? [deserIx(build.cleanupInstruction)] : []),
     ...(build.otherInstructions || []).map(deserIx),
+    ...(build.tipInstruction ? [deserIx(build.tipInstruction)] : []),
   ];
 
   const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
@@ -767,9 +793,8 @@ async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }
   return { tx: new VersionedTransaction(msg), expectedJupUsdAtomic, latestBlockhash };
 }
 
-// JupUSD → SOL swap, with 5% fee taken in JupUSD (input mint, the only
-// option for ExactIn when we want to keep the fee in stable terms). Same
-// pattern: Jupiter's native platformFeeBps handles the fee transfer.
+// JupUSD → SOL swap (ExactIn). 5% fee taken in JupUSD (input mint).
+// User receives ~95% of their JupUSD as SOL.
 async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtomic }) {
   if (grossJupUsdAtomic <= 0n) throw new Error('Amount too small.');
 
@@ -790,11 +815,12 @@ async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtom
 
   const ixs = [
     ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT_FALLBACK }),
-    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
+    ...(build.computeBudgetInstructions || []).map(deserIx),
     ...(build.setupInstructions || []).map(deserIx),
     deserIx(build.swapInstruction),
     ...(build.cleanupInstruction ? [deserIx(build.cleanupInstruction)] : []),
     ...(build.otherInstructions || []).map(deserIx),
+    ...(build.tipInstruction ? [deserIx(build.tipInstruction)] : []),
   ];
 
   const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
@@ -838,9 +864,12 @@ async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountJupUsdAto
   const j = await r.json();
   if (!j?.transaction) throw new Error('Jupiter Predict returned no transaction');
 
+  // Per Jupiter docs (open-positions guide), canonical path is
+  // `j.order.orderPubkey`. Check that first; fall back to other possible
+  // shapes for safety against minor API variations.
   const orderPubkey =
-    j.orderPubkey ||
     j.order?.orderPubkey ||
+    j.orderPubkey ||
     j.order?.pubkey ||
     (typeof j.order === 'string' ? j.order : null) ||
     j.pubkey ||
@@ -1357,33 +1386,40 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
   const m          = event.market;
   const poly       = event.poly || null;
 
-  // SOL price estimate is rough — used only for the "do they have enough SOL"
-  // pre-check. Actual rate comes from Jupiter at swap time.
-  const SOL_PRICE_GUESS = 150;
-  const estGrossUsd     = Number(amount) || 0;
-  const grossLamports   = BigInt(Math.round((estGrossUsd / SOL_PRICE_GUESS) * 1e9));
-  const hasBalance      = solBal >= grossLamports && grossLamports > 0n;
+  // User types the DEPOSIT amount (what they want going into the prediction).
+  // User types the DEPOSIT amount. Fee is 5% ON TOP. We swap enough SOL to
+  // receive deposit+fee in JupUSD; Jupiter takes the 5% fee from the JupUSD
+  // output, user nets the full deposit into Predict.
+  //
+  // SOL_PRICE_GUESS is used ONLY for the disabled/enabled state of the Buy
+  // button. The actual swap uses a live SOL price fetched server-side at
+  // placeOrder() time.
+  const SOL_PRICE_GUESS = 100;
+  const depositUsd      = Number(amount) || 0;
+  const feeUsd          = depositUsd * (FEE_BPS / 10000);
+  const totalUsd        = depositUsd + feeUsd;
+  const depositAtomic   = BigInt(Math.round(depositUsd * 1e6));   // JupUSD to deposit
+  const estTotalLamports = BigInt(Math.round((totalUsd / SOL_PRICE_GUESS) * 1e9));
+  const hasBalance      = solBal >= estTotalLamports && estTotalLamports > 0n;
 
-  const estFeeUsd     = estGrossUsd * (FEE_BPS / 10000);
-  const estDepositUsd = estGrossUsd - estFeeUsd;
   const price         = isYes ? m.yesPrice : m.noPrice;
-  const contractsEst  = price > 0 ? estDepositUsd / price : 0;
+  const contractsEst  = price > 0 ? depositUsd / price : 0;
 
   const sideLabel = (poly?.outcomes && poly.outcomes[isYes ? 0 : 1]) || (isYes ? 'YES' : 'NO');
   const sideColor = isYes ? C.yes : C.no;
   const sideDim   = isYes ? C.yesDim : C.noDim;
 
   const busy   = step > 0 && step < 4;
-  const canBuy = !busy && estGrossUsd >= MIN_TRADE_USD && publicKey && m.marketId && hasBalance;
+  const canBuy = !busy && depositUsd >= MIN_TRADE_USD && publicKey && m.marketId && hasBalance;
 
   const placeOrder = useCallback(async () => {
-    dbg('buy:start', `marketId=${m.marketId} side=${isYes ? 'YES' : 'NO'} usd=${estGrossUsd}`);
+    dbg('buy:start', `marketId=${m.marketId} side=${isYes ? 'YES' : 'NO'} deposit=$${depositUsd}`);
     if (!publicKey || !signTransaction) {
       setError('Connect a wallet that supports signTransaction.');
       return;
     }
-    if (estGrossUsd < MIN_TRADE_USD) {
-      setError(`Minimum trade is $${MIN_TRADE_USD}.`);
+    if (depositUsd < MIN_TRADE_USD) {
+      setError(`Minimum deposit is $${MIN_TRADE_USD}.`);
       return;
     }
 
@@ -1395,18 +1431,29 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
     try {
       const ownerB58 = publicKey.toBase58();
 
-      // STEP 1: Swap SOL → JupUSD with Jupiter native 5% fee in JupUSD
-      setStep(1); setStMsg('Building swap…');
-      dbg('buy:1', 'building SOL→JupUSD swap with platformFeeBps=' + FEE_BPS);
+      // STEP 1: Swap SOL → JupUSD (ExactIn).
+      // Compute SOL input so JupUSD output ≈ deposit + 5% fee.
+      // Jupiter takes 5% from the output → user nets the deposit.
+      setStep(1); setStMsg('Pricing swap…');
+      const solPrice = await fetchSolPrice();
+      dbg('buy:1', `live SOL price: $${solPrice.toFixed(2)}`);
+      // Add a small safety margin (1%) for SOL price drift between fetch and swap.
+      const grossUsdToSwap = totalUsd * 1.01;
+      const grossLamports  = BigInt(Math.round((grossUsdToSwap / solPrice) * 1e9));
+      dbg('buy:1', `ExactIn: spend ${(Number(grossLamports) / 1e9).toFixed(6)} SOL → ~$${grossUsdToSwap.toFixed(2)} JupUSD (5% goes to fee, user nets $${depositUsd})`);
       checkAbort();
 
       const { tx: swapTx, expectedJupUsdAtomic, latestBlockhash: swapBh } =
         await buildSolToJupUsdSwapTx({ connection, ownerPubkey: publicKey, grossLamports });
-      dbg('buy:1', `expected JupUSD out (net of fee): ${(Number(expectedJupUsdAtomic) / 1e6).toFixed(4)}`);
+      const netJupUsd = Number(expectedJupUsdAtomic) / 1e6;
+      dbg('buy:1', `expected JupUSD out (net of 5% fee): ${netJupUsd.toFixed(4)}`);
       checkAbort();
 
-      const minJupUsdAtomic = BigInt(Math.round(MIN_TRADE_USD * 1e6));
-      if (expectedJupUsdAtomic < minJupUsdAtomic) throw new Error(`Minimum deposit is $${MIN_TRADE_USD}.`);
+      if (expectedJupUsdAtomic < depositAtomic) {
+        // SOL price drifted upward — output less than target deposit.
+        // Proceed but warn; the order will use whatever we received.
+        dbg('buy:1', `WARNING: net ${netJupUsd.toFixed(4)} < target ${depositUsd}, proceeding with reduced deposit`);
+      }
 
       setStMsg('Confirm Step 1 of 2 — Swap SOL → JupUSD');
       const signedSwap = await signTransaction(swapTx);
@@ -1417,13 +1464,17 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
       dbg('buy:1', `swap confirmed: ${swapResult.sig}`);
       if (swapResult.pending) throw new Error(`Swap confirming: ${swapResult.sig}`);
 
-      // STEP 2: Place Predict order with the JupUSD we received
+      // STEP 2: Place Predict order with whatever JupUSD we actually received.
+      // Should be ≈ depositAtomic after Jupiter took its 5%, but use actual
+      // balance to handle slippage and rounding.
       setStep(2); setStMsg('Reading JupUSD balance…');
       const actualJupUsd = await fetchJupUsdBalance(connection, ownerB58);
       dbg('buy:2', `JupUSD balance: ${(Number(actualJupUsd) / 1e6).toFixed(4)}`);
 
-      const depositAtomic = actualJupUsd < expectedJupUsdAtomic ? actualJupUsd : expectedJupUsdAtomic;
-      if (depositAtomic <= 0n) throw new Error('Swap landed but no JupUSD found. Refresh.');
+      // Use what user actually has (handles slippage). Cap at expected to
+      // avoid using their other JupUSD if any.
+      const orderDeposit = actualJupUsd < expectedJupUsdAtomic ? actualJupUsd : expectedJupUsdAtomic;
+      if (orderDeposit <= 0n) throw new Error('Swap landed but no JupUSD found. Refresh.');
 
       setStMsg('Building order…');
       const orderRequest = await loggedFetch(
@@ -1436,7 +1487,7 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
             marketId: m.marketId,
             isYes,
             isBuy: true,
-            depositAmount: depositAtomic.toString(),
+            depositAmount: orderDeposit.toString(),
             depositMint: JUPUSD_MINT,
           }),
           signal,
@@ -1515,7 +1566,7 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
       setStep(0); setStMsg('');
     }
   }, [
-    publicKey, signTransaction, m, isYes, grossLamports, estGrossUsd,
+    publicKey, signTransaction, m, isYes, depositUsd, depositAtomic,
     connection, onClose, onDone, sideLabel, dbg,
   ]);
 
@@ -1544,7 +1595,7 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
   const buttonLabel = (() => {
     if (busy) return statusMsg || 'Working…';
     if (step === 4) return warning ? '⚠ Submitted — check Positions' : '✓ Order filled';
-    return `Buy ${sideLabel} · $${estGrossUsd.toFixed(2)}`;
+    return `Buy ${sideLabel} · $${totalUsd.toFixed(2)}`;
   })();
 
   return (
@@ -1654,7 +1705,7 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
         )}
 
         <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 9, color: C.muted, marginBottom: 5, textTransform: 'uppercase', letterSpacing: 1, ...T.mono }}>Amount</div>
+          <div style={{ fontSize: 9, color: C.muted, marginBottom: 5, textTransform: 'uppercase', letterSpacing: 1, ...T.mono }}>Deposit amount (fee added on top)</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 11px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}` }}>
             <span style={{ fontSize: 16, color: C.muted, fontWeight: 700, ...T.display }}>$</span>
             <input value={amount} onChange={e => { setAmount(cleanAmount(e.target.value)); setError(''); }} disabled={busy} inputMode="decimal"
@@ -1669,8 +1720,9 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
         </div>
 
         <div style={{ padding: 9, borderRadius: 10, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10, ...T.mono, fontSize: 10 }}>
-          <Row label="Paying with" value="SOL" valueColor={C.hl} />
-          <Row label="Platform fee (5%)" value={`~${fmtUsd(estFeeUsd)}`} />
+          <Row label="Deposit (to Predict)" value={fmtUsd(depositUsd)} />
+          <Row label="Platform fee (5%)" value={`~${fmtUsd(feeUsd)}`} />
+          <Row label="Total cost" value={`~${fmtUsd(totalUsd)} in SOL`} valueColor={C.hl} bold />
           <Row label="Est. contracts" value={`~${contractsEst.toFixed(2)}`} />
           <Row label={`If ${sideLabel} wins`} value={`~${fmtUsd(contractsEst)}`} valueColor={sideColor} bold />
           {formatEndDate(event.closeTime) && (
@@ -1686,9 +1738,9 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
           </div>
         )}
 
-        {!hasBalance && estGrossUsd > 0 && !busy && (
+        {!hasBalance && depositUsd > 0 && !busy && (
           <div style={{ marginBottom: 8, padding: 8, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', borderRadius: 10, fontSize: 11, color: C.amber, fontWeight: 600 }}>
-            Insufficient balance — need ${estGrossUsd.toFixed(2)} in SOL or JupUSD.
+            Insufficient SOL — need ~${totalUsd.toFixed(2)} worth (deposit + 5% fee).
           </div>
         )}
 
