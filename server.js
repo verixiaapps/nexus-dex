@@ -34,7 +34,7 @@ const CSP_DIRECTIVES = [
   ['frame-ancestors', ["'none'"]],
   ['frame-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org', 'https://challenges.cloudflare.com', 'https://buy.moonpay.com', ...EXTRA_FRAME_SRC]],
   ['child-src',       ["'self'", 'https://auth.privy.io', 'https://verify.walletconnect.com', 'https://verify.walletconnect.org']],
-  ['connect-src',     ["'self'", 'https://li.quest', 'https://arb1.arbitrum.io', 'https://web3.okx.com', 'https://quote-api.jup.ag', 'https://lite-api.jup.ag', 'https://api.jup.ag', 'https://token.jup.ag', 'https://api.hyperliquid.xyz', 'https://api.hyperliquid-testnet.xyz', 'https://pumpportal.fun', 'wss://pumpportal.fun', 'https://api.dexscreener.com', 'https://*.dexscreener.com', 'https://auth.privy.io', 'https://*.privy.io', 'https://*.privy.systems', 'https://*.rpc.privy.systems', 'https://explorer-api.walletconnect.com', 'https://*.walletconnect.com', 'https://*.walletconnect.org', 'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org', 'wss://*.walletconnect.com', 'wss://*.walletconnect.org', 'wss://www.walletlink.org', 'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com', 'https://api.pinata.cloud', 'https://*.publicnode.com', 'https://*.drpc.org', 'https://public.chainalysis.com', ...EXTRA_CONNECT_SRC]],
+  ['connect-src',     ["'self'", 'https://li.quest', 'https://arb1.arbitrum.io', 'https://web3.okx.com', 'https://quote-api.jup.ag', 'https://lite-api.jup.ag', 'https://api.jup.ag', 'https://token.jup.ag', 'https://api.hyperliquid.xyz', 'https://api.hyperliquid-testnet.xyz', 'https://pumpportal.fun', 'wss://pumpportal.fun', 'https://api.dexscreener.com', 'https://*.dexscreener.com', 'https://auth.privy.io', 'https://*.privy.io', 'https://*.privy.systems', 'https://*.rpc.privy.systems', 'https://explorer-api.walletconnect.com', 'https://*.walletconnect.com', 'https://*.walletconnect.org', 'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org', 'wss://*.walletconnect.com', 'wss://*.walletconnect.org', 'wss://www.walletlink.org', 'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com', 'https://api.pinata.cloud', 'https://*.publicnode.com', 'https://*.drpc.org', 'https://public.chainalysis.com', 'https://gamma-api.polymarket.com', 'wss://ws-live-data.polymarket.com', ...EXTRA_CONNECT_SRC]],
   ['worker-src',      ["'self'", 'blob:']],
   ['manifest-src',    ["'self'"]],
 ];
@@ -916,6 +916,29 @@ app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, r
 /* -- Predict (Jupiter Prediction Markets) ------------------------------- */
 app.use('/api/predict', require('./server-predict'));
 
+/* -- Polymarket price-to-beat (CORS-proxied) ---------------------------- */
+// Fetches https://polymarket.com/api/equity/price-to-beat/{slug}
+// which is CORS-blocked from browsers. Used by Predict.jsx to populate the
+// PRICE TO BEAT / SPREAD columns on up/down market cards.
+app.get('/api/polymarket/price-to-beat/:slug', async (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').replace(/[^a-z0-9-]/gi, '').slice(0, 200);
+    if (!slug) return res.status(400).json({ error: 'invalid slug' });
+    const url      = `https://polymarket.com/api/equity/price-to-beat/${slug}`;
+    const cacheKey = `ptb:${slug}`;
+    const c = getCachedJson(cacheKey);
+    if (c) return res.status(c.status).json(c.payload);
+    const r      = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 8_000);
+    const result = await safeJson(r);
+    if (r.ok && result.parsed !== null) setCachedJson(cacheKey, r.status, result.parsed, 10_000);
+    return respondJsonOrError(res, r, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Polymarket timed out' });
+    logError('polymarket-ptb', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
 /* -- Health ------------------------------------------------------------- */
 app.get('/api/health', (req, res) => {
   res.json({
@@ -931,6 +954,7 @@ app.get('/api/health', (req, res) => {
       unit:           true,
       adminKey:       Boolean(process.env.ADMIN_KEY),
       predict:        Boolean(JUPITER_API_KEY),
+      polymarket:     true,
     },
     bridge: OPERATOR_PRIVATE_KEY ? {
       arbRpc: ARB_RPC_URL, active: bridgeTracking.size,
@@ -950,6 +974,11 @@ app.get('/api/health', (req, res) => {
       base: 'https://api.jup.ag/prediction/v1',
       note: 'US and South Korea IPs are geo-blocked upstream',
     } : { enabled: false },
+    polymarket: {
+      gamma:     'https://gamma-api.polymarket.com',
+      rtds:      'wss://ws-live-data.polymarket.com',
+      priceToBeat: '/api/polymarket/price-to-beat/:slug',
+    },
     time: new Date().toISOString(),
   });
 });
@@ -986,6 +1015,7 @@ app.listen(PORT, () => {
   console.log('  Jupiter Swap V2: ' + JUPITER_SWAP_V2_BASE + (JUPITER_API_KEY ? ' (key set)' : ' (no key)'));
   console.log('  LI.FI: ' + LIFI_API + (LIFI_API_KEY ? ' (key set)' : ' (no key)'));
   console.log('  Unit:  ' + UNIT_API_BASE);
+  console.log('  Polymarket: price-to-beat proxy enabled');
   if (JUPITER_API_KEY) console.log('  Predict: Jupiter Prediction API enabled');
   else                 console.warn('  WARNING: JUPITER_API_KEY not set -- Predict page will not work');
   if (OPERATOR_PRIVATE_KEY) {
@@ -996,4 +1026,3 @@ app.listen(PORT, () => {
 
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
 process.on('unhandledRejection', err => logError('unhandledRejection', err));
- 
