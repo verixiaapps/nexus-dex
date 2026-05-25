@@ -1,26 +1,17 @@
-// Predict.jsx — Jupiter Prediction Markets on Solana.
+// Predict.jsx — Jupiter Prediction Markets
 //
-// PATCHED:
-//   • Blowfish-clean swaps: no Jupiter platformFee/feeAccount, no tipInstruction,
-//     no foreign /submit endpoint. Fee taken via a plain SPL token transfer of
-//     JupUSD from user → FEE_WALLET, appended to the swap tx. Slippage 3%.
-//   • Buy: pending confirmations are tracked, not thrown. Position verified
-//     by contracts DELTA, not by existence (existing positions on the same
-//     market+side won't cause false-success).
-//   • Sell/Claim: snapshot JupUSD balance BEFORE the predict tx, swap only
-//     the delta to SOL. User's pre-existing JupUSD is never touched.
-//   • Drawers: explicit Cancel button. Backdrop disabled mid-flow. Aborts
-//     are refused once funds have moved on-chain (post-swap) — instead we
-//     show a recovery path.
-//   • Post-swap JupUSD < MIN_TRADE_USD → explicit error with recovery
-//     instructions, not silent sub-minimum deposit.
+// ARCHITECTURE:
+//   Access fee: $1.99/day in SOL on wallet connect → fee wallet
+//   Buy: 1 sig — Predict order tx only (no swap needed, user pays in JupUSD)
+//   Sell: 1 sig — Predict sell ix + Jupiter swap ix merged into one tx (5% fee)
+//   Claim: 1 sig — Predict claim ix + Jupiter swap ix merged into one tx (5% fee)
 
 import React, { useEffect, useState, useCallback, useMemo, useRef } from 'react';
 import { Buffer } from 'buffer';
 import { useWallet } from '@solana/wallet-adapter-react';
 import {
   Connection, PublicKey, VersionedTransaction, TransactionMessage,
-  AddressLookupTableAccount, ComputeBudgetProgram,
+  AddressLookupTableAccount, ComputeBudgetProgram, SystemProgram, LAMPORTS_PER_SOL,
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddressSync,
@@ -29,2551 +20,886 @@ import {
   TOKEN_PROGRAM_ID,
 } from '@solana/spl-token';
 
-// ─── Constants ────────────────────────────────────────────────────────────────
-const SOL_MINT      = 'So11111111111111111111111111111111111111112';
-const JUPUSD_MINT   = 'JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD';
-const FEE_WALLET_B58 = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
-const FEE_WALLET    = new PublicKey(FEE_WALLET_B58);
-const FEE_BPS       = 500;                     // 5% platform fee, taken as token transfer
-// Slippage:
-//   Buy swap (SOL→JupUSD): 8% — the combo (swap + Predict order in one
-//   signature) must land first-try. 8% absorbs almost any drift. Blowfish
-//   shows a "High slippage" caveat; we accept that tradeoff for reliability.
-//   Sell swap (JupUSD→SOL): 3% — user already has JupUSD in hand, a failed
-//   swap is recoverable so we keep slippage tight here.
-const BUY_SWAP_SLIPPAGE_BPS  = 800;
+const SOL_MINT        = 'So11111111111111111111111111111111111111112';
+const JUPUSD_MINT     = 'JuprjznTrTSp2UFa3ZBUFgwdAmtZCq4MQCwysN55USD';
+const FEE_WALLET_B58  = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
+const FEE_WALLET      = new PublicKey(FEE_WALLET_B58);
+const FEE_BPS         = 500; // 5% on sell/claim swap
 const SELL_SWAP_SLIPPAGE_BPS = 300;
-// SOL input headroom on the buy combo: extra SOL spent over deposit+fee
-// target so we always meet the order's deposit even at worst-case slippage.
-const SOL_INPUT_HEADROOM_PCT = 0.04;           // 4% extra SOL on top of fee
-// Pessimistic order-sizing safety buffer over the swap's worst-case min.
-const ORDER_SAFETY_BUFFER_BPS = 50;            // 0.5%
-const SOL_RPC       = '/api/solana-rpc';
-const MIN_TRADE_USD = 5;
-const NAV_CLEARANCE = 120;
+const ACCESS_FEE_USD  = 1.99;
+const ACCESS_FEE_TTL  = 24 * 60 * 60_000; // 24 hours
+const ACCESS_FEE_KEY  = 'verixia.predict.accessFee.v1';
+const SOL_RPC         = '/api/solana-rpc';
+const MIN_TRADE_USD   = 5;
+const NAV_CLEARANCE   = 120;
 const JUPUSD_DECIMALS = 6;
-const SOL_DECIMALS    = 9;
-
-// Modest priority fee. 5M microlamports was Blowfish-flagged as "unusually high"
-// and amounted to ~0.007 SOL on a 1.4M CU tx. 50k still lands in 1-2 slots in
-// normal conditions and is well under any flagging threshold.
 const PRIORITY_FEE_MICROLAMPORTS = 50_000;
-const CU_LIMIT_FALLBACK = 600_000;
-
-// Timeouts — fail fast UX
-const CONFIRM_TIMEOUT_MS    = 15_000;
-const CONFIRM_FALLBACK_MS   = 12_000;
-const KEEPER_POLL_INTERVAL  = 1500;
-const KEEPER_POLL_ATTEMPTS  = 14;     // 14 × 1.5s = 21s of keeper waiting
-const FETCH_TIMEOUT_MS      = 8_000;
-const FETCH_MAX_RETRIES     = 1;
-
+const CU_LIMIT_FALLBACK          = 600_000;
+const CONFIRM_TIMEOUT_MS   = 15_000;
+const CONFIRM_FALLBACK_MS  = 12_000;
+const KEEPER_POLL_INTERVAL = 1500;
+const KEEPER_POLL_ATTEMPTS = 20;
+const FETCH_TIMEOUT_MS  = 8_000;
+const FETCH_MAX_RETRIES = 1;
 const REFRESH_NORMAL_MS = 300_000;
 const REFRESH_URGENT_MS = 30_000;
 const URGENT_WINDOW_MS  = 15 * 60_000;
-
-const POLY_GAMMA_BASE = 'https://gamma-api.polymarket.com';
-const POLY_RTDS_WSS   = 'wss://ws-live-data.polymarket.com';
-const POLY_RTDS_TOPIC = 'crypto_prices_chainlink';
+const POLY_GAMMA_BASE   = 'https://gamma-api.polymarket.com';
+const POLY_RTDS_WSS     = 'wss://ws-live-data.polymarket.com';
+const POLY_RTDS_TOPIC   = 'crypto_prices_chainlink';
 const POLY_RTDS_PING_MS = 5000;
 
-// ─── Extract reference price from Polymarket description ─────────────────────
-function extractStartingPrice(text) {
-  if (!text || typeof text !== 'string') return null;
-  const parseNum = (raw) => {
+function getFeeJupUsdAta() {
+  return getAssociatedTokenAddressSync(new PublicKey(JUPUSD_MINT), FEE_WALLET, true, TOKEN_PROGRAM_ID);
+}
+
+// ── Access fee helpers ────────────────────────────────────────────────────────
+function getAccessFeeRecord(pubkey) {
+  try {
+    const raw = localStorage.getItem(ACCESS_FEE_KEY);
     if (!raw) return null;
-    const n = Number(String(raw).replace(/[$,\s]/g, ''));
-    return Number.isFinite(n) && n > 0 && n < 100_000_000 ? n : null;
-  };
-  const patterns = [
-    /price\s+to\s+beat[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
-    /opening\s+price[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
-    /starting\s+price[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
-    /reference\s+price[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
-    /strike\s+price[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
-    /open(?:s|ed)?\s+at[^0-9$]{0,30}\$?\s*([0-9][0-9.,]*)/i,
-    /above\s+\$?\s*([0-9][0-9.,]*)/i,
-    /below\s+\$?\s*([0-9][0-9.,]*)/i,
-    /hit(?:s|ting)?\s+\$?\s*([0-9][0-9.,]*)/i,
-    /reach(?:es|ed|ing)?\s+\$?\s*([0-9][0-9.,]*)/i,
-    /cross(?:es|ed|ing)?\s+\$?\s*([0-9][0-9.,]*)/i,
-  ];
-  for (const re of patterns) {
-    const m = text.match(re);
-    if (m) {
-      const n = parseNum(m[1]);
-      if (n != null) return n;
-    }
-  }
-  return null;
-}
-
-// ─── Opening-price snapshots ─────────────────────────────────────────────────
-const SNAPSHOT_KEY = 'verixia.predict.priceSnapshots.v1';
-const SNAPSHOT_TTL_MS = 24 * 60 * 60_000;
-
-function loadSnapshots() {
-  try {
-    const raw = typeof window !== 'undefined' ? window.localStorage.getItem(SNAPSHOT_KEY) : null;
-    if (!raw) return {};
     const obj = JSON.parse(raw);
-    if (!obj || typeof obj !== 'object') return {};
-    const now = Date.now();
-    let mutated = false;
-    for (const k of Object.keys(obj)) {
-      const v = obj[k];
-      if (!v || typeof v.takenAt !== 'number' || now - v.takenAt > SNAPSHOT_TTL_MS) {
-        delete obj[k];
-        mutated = true;
-      }
-    }
-    if (mutated) {
-      try { window.localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(obj)); } catch {}
-    }
-    return obj;
-  } catch {
-    return {};
-  }
-}
-
-function saveSnapshots(obj) {
-  try {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(obj));
-  } catch {}
-}
-
-function usePriceSnapshots(events, livePrices) {
-  const [snapshots, setSnapshots] = useState(() => loadSnapshots());
-  useEffect(() => {
-    if (!Array.isArray(events) || events.length === 0) return;
-    if (!livePrices || livePrices.size === 0) return;
-    let next = snapshots;
-    let mutated = false;
-    for (const ev of events) {
-      const m = ev?.market;
-      const id = m?.marketId;
-      if (!id) continue;
-      if (next[id]) continue;
-      if (!isUpDownMarket(ev)) continue;
-      const sym = symbolFromSubcategory(ev.subcategory);
-      if (!sym) continue;
-      const live = livePrices.get(sym);
-      if (!live || !Number.isFinite(live.value) || live.value <= 0) continue;
-      if (!mutated) { next = { ...snapshots }; mutated = true; }
-      next[id] = { price: live.value, symbol: sym, takenAt: Date.now() };
-    }
-    if (mutated) {
-      setSnapshots(next);
-      saveSnapshots(next);
-    }
-  }, [events, livePrices, snapshots]);
-  return snapshots;
-}
-
-function isUpDownMarket(event) {
-  if (!event) return false;
-  const haystack = [event.title, event.market?.title, event.poly?.description]
-    .filter(Boolean).join(' ').toLowerCase();
-  if (!haystack) return false;
-  if (haystack.includes('up or down')) return true;
-  if (haystack.includes('price to beat')) return true;
-  const outcomes = event.poly?.outcomes;
-  if (Array.isArray(outcomes)) {
-    const set = outcomes.map(o => String(o).toLowerCase());
-    if (set.includes('up') && set.includes('down')) return true;
-  }
-  return false;
-}
-
-function resolvePriceToBeat(event, snapshots) {
-  if (!event) return null;
-  if (!isUpDownMarket(event)) return null;
-  const marketId = event.market?.marketId;
-  if (marketId && snapshots && snapshots[marketId]) {
-    const snap = snapshots[marketId];
-    if (snap && Number.isFinite(snap.price) && snap.price > 0) return snap.price;
-  }
-  const poly = event.poly || null;
-  if (poly?.startingPrice != null && Number.isFinite(poly.startingPrice) && poly.startingPrice > 0) {
-    return poly.startingPrice;
-  }
-  if (poly?.description) {
-    const m = poly.description.match(/price\s+to\s+beat[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i);
-    if (m) {
-      const n = Number(String(m[1]).replace(/[$,\s]/g, ''));
-      if (Number.isFinite(n) && n > 0) return n;
-    }
-  }
-  return null;
-}
-
-function symbolFromSubcategory(sub) {
-  if (!sub) return null;
-  const s = String(sub).toLowerCase().trim();
-  const map = {
-    bitcoin: 'btc/usd', btc: 'btc/usd',
-    ethereum: 'eth/usd', eth: 'eth/usd',
-    solana: 'sol/usd', sol: 'sol/usd',
-    ripple: 'xrp/usd', xrp: 'xrp/usd',
-    dogecoin: 'doge/usd', doge: 'doge/usd',
-    binancecoin: 'bnb/usd', bnb: 'bnb/usd',
-    hyperliquid: 'hype/usd', hype: 'hype/usd',
-  };
-  return map[s] || null;
-}
-
-const C = {
-  bg: '#03060f', card: '#080d1a', cardHi: '#0c1428',
-  ink: '#e8ecf5', muted: '#8a96b8', muted2: '#475670',
-  border: 'rgba(151,252,228,.10)', borderHi: 'rgba(151,252,228,.30)',
-  hl: '#97fce4', hl2: '#5ce9c8', hlDim: 'rgba(151,252,228,.10)',
-  violet: '#a87fff',
-  yes: '#00d4a3', yesDim: 'rgba(0,212,163,.12)',
-  no:  '#ff5f7a', noDim:  'rgba(255,95,122,.12)',
-  amber: '#f5b53d',
-  shadow:   '0 8px 28px rgba(0,0,0,.45)',
-  shadowLg: '0 18px 56px rgba(0,0,0,.55)',
-};
-const T = {
-  body:    { fontFamily: 'DM Sans, system-ui, sans-serif' },
-  display: { fontFamily: 'Syne, Inter, sans-serif' },
-  mono:    { fontFamily: 'IBM Plex Mono, monospace' },
-};
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 1: Utilities
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function toUsd(v) {
-  if (v == null) return 0;
-  const n = Number(v);
-  if (!Number.isFinite(n)) return 0;
-  return n / 1e6;
-}
-
-function fmtUsd(n, d = 2) {
-  if (n == null || !Number.isFinite(Number(n))) return '$0.00';
-  n = Number(n);
-  if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: d });
-  if (n >= 1)   return '$' + n.toFixed(d);
-  return '$' + n.toFixed(4);
-}
-function formatVol(n) {
-  if (!n || n <= 0) return '$0';
-  if (n >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
-  if (n >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
-  if (n >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
-  return `$${n.toFixed(0)}`;
-}
-
-function toMs(v) {
-  if (v == null) return null;
-  if (typeof v === 'string') {
-    const t = new Date(v).getTime();
-    return Number.isFinite(t) ? t : null;
-  }
-  const n = Number(v);
-  if (!Number.isFinite(n)) return null;
-  return n < 1e12 ? n * 1000 : n;
-}
-function formatEndDate(closeTime) {
-  const ms = toMs(closeTime);
-  if (ms == null) return null;
-  const diff = ms - Date.now();
-  if (diff <= 0) return 'Closed';
-  if (diff < 60 * 60_000) return `${Math.floor(diff / 60_000)}m left`;
-  if (diff < 24 * 60 * 60_000) {
-    const h  = Math.floor(diff / 3_600_000);
-    const mm = Math.floor((diff % 3_600_000) / 60_000);
-    return `${h}h ${mm}m left`;
-  }
-  const d   = new Date(ms);
-  const mo  = d.toLocaleString('en-US', { month: 'short' });
-  const day = d.getDate();
-  return `Ends ${mo} ${day}`;
-}
-
-function cleanAmount(v) {
-  const s = String(v || '').replace(/[^0-9.]/g, '');
-  const p = s.split('.');
-  return p.length <= 2 ? s : p[0] + '.' + p.slice(1).join('');
-}
-function b64ToBytes(b64) {
-  return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
-}
-
-async function jfetch(url, opts = {}, ms = FETCH_TIMEOUT_MS) {
-  const maxAttempts = FETCH_MAX_RETRIES + 1;
-  let attempt = 0;
-  while (true) {
-    attempt++;
-    const c = new AbortController();
-    const id = setTimeout(() => c.abort(), ms);
-    try {
-      const r = await fetch(url, { ...opts, signal: c.signal });
-      if (r.status === 429 && attempt < maxAttempts) {
-        clearTimeout(id);
-        await new Promise(res => setTimeout(res, 400));
-        continue;
-      }
-      if (!r.ok) {
-        let body = '';
-        try { body = await r.text(); } catch {}
-        const err = new Error(`HTTP ${r.status}: ${body.slice(0, 300) || r.statusText}`);
-        err.status = r.status; err.body = body;
-        throw err;
-      }
-      return r;
-    } finally { clearTimeout(id); }
-  }
-}
-
-function useBodyLock(open) {
-  useEffect(() => {
-    if (!open || typeof document === 'undefined') return;
-    document.body.style.overflow = 'hidden';
-    return () => { document.body.style.overflow = ''; };
-  }, [open]);
-}
-async function copyToClipboard(text) {
-  try { if (navigator.clipboard?.writeText) { await navigator.clipboard.writeText(text); return true; } } catch {}
-  return false;
-}
-
-function friendlyError(err) {
-  const m = String(err?.message || err || '').toLowerCase();
-  const body = String(err?.body || '').toLowerCase();
-  const hay = m + ' ' + body;
-  const status = err?.status;
-
-  if (hay.includes('no_shares_available') || hay.includes('no shares available'))
-    return 'No shares available at this price. The market is illiquid right now — try the opposite side or a different market.';
-  if (hay.includes('not_enough_liquidity') || hay.includes('insufficient liquidity'))
-    return 'Not enough liquidity on this side. Try a smaller amount or the opposite side.';
-  if (hay.includes('market_closed') || hay.includes('market closed') || hay.includes('market_not_open'))
-    return 'Market is closed. Try a different one.';
-  if (hay.includes('market_settled') || hay.includes('already settled'))
-    return 'This market has already settled. Refresh the list.';
-  if (hay.includes('order_too_small') || hay.includes('below minimum'))
-    return 'Trade is below the $5 minimum.';
-  if (hay.includes('order_too_large') || hay.includes('exceeds maximum'))
-    return 'Trade exceeds the market\'s maximum. Try a smaller amount.';
-  if (hay.includes('price_moved') || hay.includes('price has moved'))
-    return 'Price moved while we were building your order. Try again.';
-
-  if (status === 451 || status === 403 || hay.includes('geographic') || hay.includes('region') || hay.includes('forbidden region'))
-    return 'Predict is not available in your region (US / South Korea blocked by Jupiter).';
-  if (status === 429 || hay.includes('too many requests'))
-    return 'Rate limited. Wait a few seconds and try again.';
-  if (hay.includes('insufficient'))      return 'Insufficient balance.';
-  if (hay.includes('slippage'))          return 'Price moved too much. Try again.';
-  if (hay.includes('blockhash') || hay.includes('expired'))
-    return 'Transaction expired. Please try again.';
-  if (hay.includes('user reject') || hay.includes('user denied') || hay.includes('user cancelled') || hay.includes('cancel'))
-    return 'Cancelled.';
-  if (hay.includes('simulation failed')) return 'Simulation failed — the price may have moved.';
-  if (hay.includes('no route'))          return 'No swap route available right now.';
-  if (hay.includes('too large'))         return 'Transaction too complex. Try a smaller amount.';
-  if (hay.includes('aborted') || hay.includes('abort'))
-    return 'Cancelled.';
-  return err?.message || 'Something went wrong. Please try again.';
-}
-
-const deserIx = (ix) => ({
-  programId: new PublicKey(ix.programId),
-  keys: ix.accounts.map(a => ({
-    pubkey:     new PublicKey(a.pubkey),
-    isSigner:   a.isSigner,
-    isWritable: a.isWritable,
-  })),
-  data: Buffer.from(ix.data, 'base64'),
-});
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 2: Solana balances
-// ═══════════════════════════════════════════════════════════════════════════════
-
-async function fetchSolBalance(connection, ownerB58) {
-  try {
-    const lamports = await connection.getBalance(new PublicKey(ownerB58), 'confirmed');
-    return BigInt(lamports);
-  } catch { return 0n; }
-}
-
-async function fetchJupUsdBalance(connection, ownerB58) {
-  try {
-    const owner = new PublicKey(ownerB58);
-    const ata   = getAssociatedTokenAddressSync(new PublicKey(JUPUSD_MINT), owner);
-    const bal   = await connection.getTokenAccountBalance(ata, 'confirmed');
-    return BigInt(bal.value.amount || 0);
-  } catch { return 0n; }
-}
-
-async function fetchSolPrice() {
-  try {
-    const r = await fetch('/api/sol-price');
-    if (!r.ok) return 100;
-    const j = await r.json();
-    const p = Number(j?.price || 0);
-    return Number.isFinite(p) && p > 0 ? p : 100;
-  } catch { return 100; }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 3: Jupiter Predict API + normalizers
-// ═══════════════════════════════════════════════════════════════════════════════
-
-async function fetchEvents() {
-  const qs = new URLSearchParams({
-    category: 'crypto',
-    filter: 'live',
-    includeMarkets: 'true',
-    start: '0',
-    end: '50',
-  });
-  const r = await jfetch('/api/predict/events?' + qs.toString());
-  const j = await r.json();
-  return Array.isArray(j) ? j : (j?.data || j?.events || []);
-}
-
-async function fetchPositions(ownerB58) {
-  if (!ownerB58) return [];
-  try {
-    const r = await jfetch(`/api/predict/positions?ownerPubkey=${encodeURIComponent(ownerB58)}`);
-    const j = await r.json();
-    return Array.isArray(j) ? j : (j?.data || j?.positions || []);
-  } catch { return []; }
-}
-
-function pickEventFields(ev) {
-  if (!ev) return null;
-  const market = (ev.markets && ev.markets[0]) || ev.market || null;
-  if (!market) return null;
-
-  const pricing = market.pricing || {};
-  const yesPrice = toUsd(pricing.buyYesPriceUsd);
-  let   noPrice  = toUsd(pricing.buyNoPriceUsd);
-  if (!noPrice && yesPrice) noPrice = +(1 - yesPrice).toFixed(4);
-
-  const evMeta  = ev.metadata || {};
-  const mktMeta = market.metadata || {};
-
-  const eventTitle  = ev.title || evMeta.title || 'Untitled';
-  const marketTitle = mktMeta.title || market.title || null;
-  const image = evMeta.imageUrl || ev.imageUrl || market.imageUrl || ev.image || null;
-
-  return {
-    eventId:     ev.eventId || ev.id,
-    title:       eventTitle,
-    subtitle:    evMeta.subtitle || null,
-    slug:        evMeta.slug || null,
-    image,
-    category:    String(ev.category || '').toLowerCase(),
-    subcategory: ev.subcategory || null,
-    series:      evMeta.series || ev.series || null,
-    tags:        Array.isArray(ev.tags) ? ev.tags.filter(Boolean) : [],
-    closeCondition: ev.closeCondition || null,
-    rulesPdf:       ev.rulesPdf || null,
-    closeTime: evMeta.closeTime ?? mktMeta.closeTime ?? market.closeTime ?? ev.closeTime ?? null,
-    beginAt:   ev.beginAt || null,
-    volume24h: toUsd(ev.volumeUsd ?? pricing.volume ?? 0),
-    isLive:    ev.isLive !== false,
-    isActive:  ev.isActive !== false,
-    market: {
-      marketId:    market.marketId || market.id,
-      title:       marketTitle,
-      subtitle:    mktMeta.subtitle || null,
-      description: mktMeta.description || null,
-      rulesPrimary:   mktMeta.rulesPrimary || null,
-      rulesSecondary: mktMeta.rulesSecondary || null,
-      status:      mktMeta.status || market.status || 'open',
-      result:      mktMeta.result || market.result || null,
-      isTeamMarket:!!mktMeta.isTeamMarket,
-      openTime:    market.openTime || mktMeta.openTime || null,
-      closeTime:   market.closeTime || mktMeta.closeTime || null,
-      resolveAt:   market.resolveAt || null,
-      resultPubkey:market.marketResultPubkey || null,
-      yesPrice, noPrice,
-      sellYesPrice: toUsd(pricing.sellYesPriceUsd),
-      sellNoPrice:  toUsd(pricing.sellNoPriceUsd),
-      volume:       toUsd(pricing.volume || 0),
-      yesPct: Math.max(0, Math.min(99, Math.round(yesPrice * 100))),
-      noPct:  Math.max(0, Math.min(99, Math.round(noPrice  * 100))),
-    },
-  };
-}
-
-const CLOSE_BUFFER_MS = 60_000;
-
-function isMarketOpen(event) {
-  if (!event) return false;
-  if (event.isActive === false) return false;
-  if (event.isLive === false)   return false;
-  const m = event.market;
-  if (!m) return false;
-  if (m.status && m.status !== 'open') return false;
-  if (m.result && m.result !== 'pending' && m.result !== '') return false;
-  const ms = toMs(event.closeTime);
-  if (ms != null && (ms - Date.now()) <= CLOSE_BUFFER_MS) return false;
-  return true;
-}
-
-async function fetchPolymarketEvent(slug) {
-  if (!slug) return null;
-  try {
-    const url = `${POLY_GAMMA_BASE}/events/slug/${encodeURIComponent(slug)}`;
-    const r = await fetch(url, { method: 'GET' });
-    if (!r.ok) return null;
-    const j = await r.json();
-    return Array.isArray(j) ? j[0] : j;
+    return obj?.[pubkey] || null;
   } catch { return null; }
 }
+function setAccessFeeRecord(pubkey) {
+  try {
+    const raw = localStorage.getItem(ACCESS_FEE_KEY);
+    const obj = raw ? JSON.parse(raw) : {};
+    obj[pubkey] = { paidAt: Date.now() };
+    localStorage.setItem(ACCESS_FEE_KEY, JSON.stringify(obj));
+  } catch {}
+}
+function hasValidAccessFee(pubkey) {
+  const rec = getAccessFeeRecord(pubkey);
+  if (!rec) return false;
+  return Date.now() - rec.paidAt < ACCESS_FEE_TTL;
+}
 
-function isPolymarketOpen(pmEvent, pmMarket) {
-  if (pmEvent) {
-    if (pmEvent.closed === true)   return false;
-    if (pmEvent.archived === true) return false;
-    if (pmEvent.active === false)  return false;
+// ── Merge versioned transactions ─────────────────────────────────────────────
+// Extracts instructions + ALTs from a pre-built VersionedTransaction
+// and returns them for merging into a new transaction.
+function extractFromVersionedTx(vtx) {
+  const msg = vtx.message;
+  const staticKeys = msg.staticAccountKeys;
+  const ixs = msg.compiledInstructions.map(ci => ({
+    programId: staticKeys[ci.programIdIndex],
+    keys: ci.accountKeyIndexes.map(i => ({
+      pubkey: staticKeys[i],
+      isSigner: msg.isAccountSigner(i),
+      isWritable: msg.isAccountWritable(i),
+    })),
+    data: Buffer.from(ci.data),
+  }));
+  return { ixs, altAddresses: msg.addressTableLookups?.map(a => a.accountKey) || [] };
+}
+
+async function loadAlts(connection, addresses) {
+  if (!addresses.length) return [];
+  const infos = await connection.getMultipleAccountsInfo(addresses);
+  return addresses.map((k, i) => {
+    if (!infos[i]) return null;
+    return new AddressLookupTableAccount({ key: k, state: AddressLookupTableAccount.deserialize(infos[i].data) });
+  }).filter(Boolean);
+}
+
+// ── Utilities ────────────────────────────────────────────────────────────────
+function toUsd(v) { if (v==null) return 0; const n=Number(v); return Number.isFinite(n)?n/1e6:0; }
+function fmtUsd(n,d=2) { if(n==null||!Number.isFinite(Number(n)))return'$0.00'; n=Number(n); if(n>=1e6)return'$'+(n/1e6).toFixed(2)+'M'; if(n>=1e3)return'$'+n.toLocaleString('en-US',{maximumFractionDigits:d}); if(n>=1)return'$'+n.toFixed(d); return'$'+n.toFixed(4); }
+function formatVol(n) { if(!n||n<=0)return'$0'; if(n>=1e9)return`$${(n/1e9).toFixed(2)}B`; if(n>=1e6)return`$${(n/1e6).toFixed(2)}M`; if(n>=1e3)return`$${(n/1e3).toFixed(1)}K`; return`$${n.toFixed(0)}`; }
+function toMs(v) { if(v==null)return null; if(typeof v==='string'){const t=new Date(v).getTime();return Number.isFinite(t)?t:null;} const n=Number(v); if(!Number.isFinite(n))return null; return n<1e12?n*1000:n; }
+function formatEndDate(closeTime) {
+  const ms=toMs(closeTime); if(ms==null)return null; const diff=ms-Date.now();
+  if(diff<=0)return'Closed'; if(diff<60*60_000)return`${Math.floor(diff/60_000)}m left`;
+  if(diff<24*60*60_000){const h=Math.floor(diff/3_600_000);const mm=Math.floor((diff%3_600_000)/60_000);return`${h}h ${mm}m left`;}
+  const d=new Date(ms); return`Ends ${d.toLocaleString('en-US',{month:'short'})} ${d.getDate()}`;
+}
+function cleanAmount(v){const s=String(v||'').replace(/[^0-9.]/g,'');const p=s.split('.');return p.length<=2?s:p[0]+'.'+p.slice(1).join('');}
+function b64ToBytes(b64){return Uint8Array.from(atob(b64),c=>c.charCodeAt(0));}
+async function jfetch(url,opts={},ms=FETCH_TIMEOUT_MS){
+  const maxAttempts=FETCH_MAX_RETRIES+1;let attempt=0;
+  while(true){attempt++;const c=new AbortController();const id=setTimeout(()=>c.abort(),ms);
+    try{const r=await fetch(url,{...opts,signal:c.signal});
+      if(r.status===429&&attempt<maxAttempts){clearTimeout(id);await new Promise(res=>setTimeout(res,400));continue;}
+      if(!r.ok){let body='';try{body=await r.text();}catch{}const err=new Error(`HTTP ${r.status}: ${body.slice(0,300)||r.statusText}`);err.status=r.status;err.body=body;throw err;}
+      return r;
+    }finally{clearTimeout(id);}
   }
-  if (pmMarket) {
-    if (pmMarket.closed === true)        return false;
-    if (pmMarket.archived === true)      return false;
-    if (pmMarket.active === false)       return false;
-    if (pmMarket.acceptingOrders === false) return false;
-    const ums = String(pmMarket.umaResolutionStatus || '').toLowerCase();
-    if (ums === 'resolved' || ums === 'proposed') return false;
-  }
-  return true;
+}
+function useBodyLock(open){useEffect(()=>{if(!open||typeof document==='undefined')return;document.body.style.overflow='hidden';return()=>{document.body.style.overflow='';};},[open]);}
+async function copyToClipboard(text){try{if(navigator.clipboard?.writeText){await navigator.clipboard.writeText(text);return true;}}catch{}return false;}
+
+function friendlyError(err) {
+  const m=String(err?.message||err||'').toLowerCase();const body=String(err?.body||'').toLowerCase();const hay=m+' '+body;const status=err?.status;
+  if(hay.includes('no_shares_available')||hay.includes('no shares available'))return'No shares available at this price.';
+  if(hay.includes('not_enough_liquidity')||hay.includes('insufficient liquidity'))return'Not enough liquidity.';
+  if(hay.includes('market_closed')||hay.includes('market closed'))return'Market is closed.';
+  if(hay.includes('market_settled')||hay.includes('already settled'))return'Market already settled.';
+  if(hay.includes('order_too_small')||hay.includes('below minimum'))return`Below $${MIN_TRADE_USD} minimum.`;
+  if(status===451||status===403||hay.includes('geographic')||hay.includes('region'))return'Not available in your region.';
+  if(status===429||hay.includes('too many requests'))return'Rate limited. Wait a moment.';
+  if(hay.includes('insufficient'))return'Insufficient balance.';
+  if(hay.includes('slippage'))return'Price moved too much. Try again.';
+  if(hay.includes('blockhash')||hay.includes('expired'))return'Transaction expired. Try again.';
+  if(hay.includes('user reject')||hay.includes('user denied')||hay.includes('cancel'))return'Cancelled.';
+  if(hay.includes('aborted')||hay.includes('abort'))return'Cancelled.';
+  return err?.message||'Something went wrong.';
 }
 
-function pickPolymarketFields(pmEvent) {
-  if (!pmEvent) return null;
-  const pmMkt = (pmEvent.markets && pmEvent.markets[0]) || null;
-  if (!isPolymarketOpen(pmEvent, pmMkt)) return { settled: true };
+const deserIx=(ix)=>({programId:new PublicKey(ix.programId),keys:ix.accounts.map(a=>({pubkey:new PublicKey(a.pubkey),isSigner:a.isSigner,isWritable:a.isWritable})),data:Buffer.from(ix.data,'base64')});
 
-  let outcomes = null, outcomePrices = null;
-  try { outcomes      = pmMkt?.outcomes      ? JSON.parse(pmMkt.outcomes)      : null; } catch {}
-  try { outcomePrices = pmMkt?.outcomePrices ? JSON.parse(pmMkt.outcomePrices) : null; } catch {}
-
-  const description = pmEvent.description || pmMkt?.description || null;
-
-  return {
-    settled: false,
-    description,
-    startingPrice: extractStartingPrice(description),
-    outcomes,
-    outcomePrices: Array.isArray(outcomePrices) ? outcomePrices.map(Number) : null,
-    groupItemTitle:  pmMkt?.groupItemTitle  || null,
-    lastTradePrice:  pmMkt?.lastTradePrice  != null ? Number(pmMkt.lastTradePrice)  : null,
-    bestBid:         pmMkt?.bestBid         != null ? Number(pmMkt.bestBid)         : null,
-    bestAsk:         pmMkt?.bestAsk         != null ? Number(pmMkt.bestAsk)         : null,
-    spread:          pmMkt?.spread          != null ? Number(pmMkt.spread)          : null,
-    oneHourPriceChange:  pmMkt?.oneHourPriceChange  != null ? Number(pmMkt.oneHourPriceChange)  : null,
-    oneDayPriceChange:   pmMkt?.oneDayPriceChange   != null ? Number(pmMkt.oneDayPriceChange)   : null,
-    oneWeekPriceChange:  pmMkt?.oneWeekPriceChange  != null ? Number(pmMkt.oneWeekPriceChange)  : null,
-    volume24hr:      pmMkt?.volume24hr      != null ? Number(pmMkt.volume24hr)      : (pmEvent.volume24hr != null ? Number(pmEvent.volume24hr) : null),
-    liquidity:       pmMkt?.liquidityNum    != null ? Number(pmMkt.liquidityNum)    : (pmEvent.liquidity  != null ? Number(pmEvent.liquidity)  : null),
-    competitive:     pmEvent.competitive    != null ? Number(pmEvent.competitive)   : null,
-    commentCount:    pmEvent.commentCount   != null ? Number(pmEvent.commentCount)  : null,
-  };
+// ── Solana helpers ───────────────────────────────────────────────────────────
+async function fetchSolBalance(connection,ownerB58){try{return BigInt(await connection.getBalance(new PublicKey(ownerB58),'confirmed'));}catch{return 0n;}}
+async function fetchJupUsdBalance(connection,ownerB58){
+  try{const ata=getAssociatedTokenAddressSync(new PublicKey(JUPUSD_MINT),new PublicKey(ownerB58));const bal=await connection.getTokenAccountBalance(ata,'confirmed');return BigInt(bal.value.amount||0);}
+  catch{return 0n;}
+}
+async function fetchSolPrice(){
+  try{const r=await fetch('/api/sol-price');if(!r.ok)return 150;const j=await r.json();const p=Number(j?.price||0);return Number.isFinite(p)&&p>0?p:150;}
+  catch{return 150;}
 }
 
-function useLiveCryptoPrices(enabled) {
-  const [prices, setPrices] = useState(() => new Map());
-  useEffect(() => {
-    if (!enabled || typeof window === 'undefined' || typeof WebSocket === 'undefined') return;
-    let ws = null;
-    let pingId = null;
-    let reconnectId = null;
-    let attempt = 0;
-    let closed = false;
-
-    const connect = () => {
-      if (closed) return;
-      try { ws = new WebSocket(POLY_RTDS_WSS); }
-      catch (e) { scheduleReconnect(); return; }
-
-      ws.onopen = () => {
-        attempt = 0;
-        try {
-          ws.send(JSON.stringify({
-            action: 'subscribe',
-            subscriptions: [{ topic: POLY_RTDS_TOPIC, type: '*', filters: '' }],
-          }));
-        } catch {}
-        pingId = setInterval(() => {
-          if (ws && ws.readyState === WebSocket.OPEN) {
-            try { ws.send('PING'); } catch {}
-          }
-        }, POLY_RTDS_PING_MS);
-      };
-
-      ws.onmessage = (ev) => {
-        if (typeof ev.data !== 'string') return;
-        if (ev.data === 'PONG' || ev.data === 'PING') return;
-        let msg;
-        try { msg = JSON.parse(ev.data); } catch { return; }
-        if (!msg || msg.topic !== POLY_RTDS_TOPIC) return;
-        const p = msg.payload;
-        if (!p || typeof p.symbol !== 'string' || typeof p.value !== 'number') return;
-        const sym = p.symbol.toLowerCase();
-        const value = p.value;
-        const ts    = Number(p.timestamp) || Date.now();
-        setPrices(prev => {
-          const next = new Map(prev);
-          next.set(sym, { value, timestamp: ts });
-          return next;
-        });
-      };
-
-      ws.onclose = () => {
-        if (pingId) { clearInterval(pingId); pingId = null; }
-        scheduleReconnect();
-      };
-      ws.onerror = () => { };
-    };
-
-    const scheduleReconnect = () => {
-      if (closed) return;
-      attempt += 1;
-      const wait = Math.min(30_000, 1000 * 2 ** Math.min(attempt - 1, 5)) + Math.random() * 500;
-      reconnectId = setTimeout(connect, wait);
-    };
-
-    connect();
-
-    return () => {
-      closed = true;
-      if (pingId)      clearInterval(pingId);
-      if (reconnectId) clearTimeout(reconnectId);
-      if (ws) { try { ws.close(); } catch {} }
-    };
-  }, [enabled]);
-
-  return prices;
+// ── Build access fee transaction ($1.99 in SOL to fee wallet) ────────────────
+async function buildAccessFeeTx({connection, ownerPubkey}) {
+  const solPrice = await fetchSolPrice();
+  const lamports = BigInt(Math.round((ACCESS_FEE_USD / solPrice) * LAMPORTS_PER_SOL));
+  const latestBlockhash = await connection.getLatestBlockhash('confirmed');
+  const ixs = [
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
+    SystemProgram.transfer({ fromPubkey: ownerPubkey, toPubkey: FEE_WALLET, lamports }),
+  ];
+  const msg = new TransactionMessage({ payerKey: ownerPubkey, recentBlockhash: latestBlockhash.blockhash, instructions: ixs }).compileToV0Message();
+  return { tx: new VersionedTransaction(msg), lamports, latestBlockhash };
 }
 
-function pickPositionFields(p) {
-  if (!p) return null;
-  const contracts     = Number(p.contracts || 0);
-  const openOrders    = Number(p.openOrders || 0);
-  const avgPriceUsd   = toUsd(p.avgPriceUsd);
-  const markPriceUsd  = p.markPriceUsd != null ? toUsd(p.markPriceUsd) : null;
-  const sellPriceUsd  = p.sellPriceUsd != null ? toUsd(p.sellPriceUsd) : null;
-  const costUsd       = toUsd(p.totalCostUsd ?? p.sizeUsd) || contracts * avgPriceUsd;
-  const valueUsd      = p.valueUsd != null
-    ? toUsd(p.valueUsd)
-    : (markPriceUsd != null ? contracts * markPriceUsd : null);
-  const pnlUsd        = p.pnlUsd != null
-    ? toUsd(p.pnlUsd)
-    : (valueUsd != null ? (valueUsd - costUsd) : null);
-  const pnlUsdPercent = p.pnlUsdPercent != null
-    ? Number(p.pnlUsdPercent)
-    : (costUsd > 0 && pnlUsd != null ? (pnlUsd / costUsd) * 100 : null);
-  const pnlAfterFeesUsd     = p.pnlUsdAfterFees != null ? toUsd(p.pnlUsdAfterFees) : null;
-  const pnlAfterFeesPercent = p.pnlUsdAfterFeesPercent != null
-    ? Number(p.pnlUsdAfterFeesPercent) : null;
-  const realizedPnlUsd = p.realizedPnlUsd != null ? toUsd(p.realizedPnlUsd) : 0;
-  const feesPaidUsd    = toUsd(p.feesPaidUsd || 0);
-  const payoutUsd      = toUsd(p.payoutUsd);
-  const claimedUsd     = toUsd(p.claimedUsd || 0);
-
-  const evMeta  = p.eventMetadata  || {};
-  const mktMeta = p.marketMetadata || {};
-  const title         = evMeta.title || mktMeta.title || p.title || 'Position';
-  const eventSubtitle = evMeta.subtitle || null;
-  const eventImage    = evMeta.imageUrl || null;
-  const marketStatus  = mktMeta.status || null;
-  const marketResult  = mktMeta.result || null;
-
-  return {
-    positionPubkey: p.pubkey || p.positionPubkey,
-    ownerPubkey:    p.ownerPubkey || null,
-    marketId:       p.marketId,
-    isYes:          !!p.isYes,
-    title,
-    eventSubtitle,
-    eventImage,
-    eventId:      evMeta.eventId || null,
-    eventCategory:    evMeta.category || null,
-    eventSubcategory: evMeta.subcategory || null,
-    closeCondition:   evMeta.closeCondition || null,
-    outcomeLabel: mktMeta.title || null,
-    marketDescription: mktMeta.description || null,
-    marketStatus,
-    marketResult,
-    marketCloseTime:  mktMeta.closeTime || null,
-    contracts,
-    openOrders,
-    claimable: !!p.claimable,
-    claimed:   !!p.claimed,
-    status:    p.claimed ? 'claimed' : (p.claimable ? 'claimable' : 'active'),
-    openedAt:       p.openedAt || null,
-    updatedAt:      p.updatedAt || null,
-    claimableAt:    p.claimableAt || null,
-    settlementDate: p.settlementDate || null,
-    avgPriceUsd,
-    markPriceUsd,
-    sellPriceUsd,
-    costUsd,
-    valueUsd,
-    payoutUsd,
-    claimedUsd,
-    pnlUsd,
-    pnlUsdPercent,
-    pnlAfterFeesUsd,
-    pnlAfterFeesPercent,
-    realizedPnlUsd,
-    feesPaidUsd,
-  };
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 4: SWAP BUILDERS (Blowfish-clean)
-// ═══════════════════════════════════════════════════════════════════════════════
-//
-// Fee model: plain SPL token transfer of JupUSD to FEE_WALLET, appended to
-// the swap tx as a regular createTransferChecked instruction. Blowfish reads
-// this as "user transferred X JupUSD to known-token-address" — same shape
-// as any normal token transfer. No Jupiter platformFeeBps, no foreign
-// fee-account hooks, no tipInstruction.
-//
-// The fee transfer is the LAST instruction in the swap tx. If it fails the
-// whole tx reverts → fee is atomically tied to the swap, no orphan states.
-
-// JupUSD ATA owned by FEE_WALLET. Must exist on-chain (created once via
-// Phantom/CLI). Token receiver addresses don't appear in Blowfish warnings
-// for outgoing transfers as long as the mint is well-known (JupUSD is).
-const FEE_JUPUSD_ATA = getAssociatedTokenAddressSync(
-  new PublicKey(JUPUSD_MINT), FEE_WALLET, true, TOKEN_PROGRAM_ID,
-);
-
-// Build SOL → JupUSD swap with a 5% fee transfer appended.
-//
-// Strategy:
-//   1. Quote Jupiter for the full `grossLamports` of SOL.
-//   2. Compute fee in JupUSD: feeAtomic = outAmount * 5%
-//   3. After Jupiter's swap+cleanup ixs, add createTransferChecked of
-//      feeAtomic JupUSD from user → FEE_JUPUSD_ATA.
-//   4. User nets ~95% of outAmount as JupUSD.
-async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }) {
-  if (grossLamports <= 0n) throw new Error('Amount too small.');
-
+// ── Build JupUSD→SOL swap instructions (returns raw ixs + alts) ─────────────
+async function buildSellSwapIxs({ connection, ownerPubkey, grossJupUsdAtomic }) {
+  if (grossJupUsdAtomic <= 0n) throw new Error('Amount too small.');
+  const feeAtomic = (grossJupUsdAtomic * BigInt(FEE_BPS)) / 10000n;
+  const swapAmountAtomic = grossJupUsdAtomic - feeAtomic;
+  if (swapAmountAtomic <= 0n) throw new Error('Amount too small after fee.');
   const params = new URLSearchParams({
-    inputMint:   SOL_MINT,
-    outputMint:  JUPUSD_MINT,
-    amount:      grossLamports.toString(),
-    slippageBps: String(BUY_SWAP_SLIPPAGE_BPS),
-    taker:       ownerPubkey.toBase58(),
+    inputMint: JUPUSD_MINT, outputMint: SOL_MINT,
+    amount: swapAmountAtomic.toString(), slippageBps: String(SELL_SWAP_SLIPPAGE_BPS),
+    taker: ownerPubkey.toBase58(),
   });
   const r = await jfetch(`/api/jupiter/build?${params}`);
   const build = await r.json();
   if (!build?.swapInstruction) throw new Error('Jupiter /build returned no swapInstruction');
-
-  // outAmount = expected JupUSD if no slippage.
-  const grossJupUsdAtomic = BigInt(build.outAmount || 0);
-  if (grossJupUsdAtomic <= 0n) throw new Error('Jupiter quote returned zero output');
-
-  // otherAmountThreshold = the worst-case minimum JupUSD we'd receive.
-  // Jupiter guarantees outAmount ≥ this or the swap reverts on-chain. We
-  // size both fee and order off this pessimistic value so we never end up
-  // owing more than we have.
-  const minOutJupUsdAtomic = BigInt(
-    build.otherAmountThreshold || build.outAmountThreshold || build.outAmount || 0
-  );
-
-  // Fee is computed off the pessimistic minimum: this way, even if slippage
-  // hits the wall, the fee transfer still has funds and the order's deposit
-  // is still ≥ what the order needs.
-  const feeAtomic = (minOutJupUsdAtomic * BigInt(FEE_BPS)) / 10000n;
-  const minNetJupUsdAtomic = minOutJupUsdAtomic - feeAtomic;
-  const netJupUsdAtomic    = grossJupUsdAtomic - feeAtomic;
-
-  // Ensure both ATAs exist (idempotent — no-op if they already do).
+  const FEE_JUPUSD_ATA = getFeeJupUsdAta();
   const userJupUsdAta = getAssociatedTokenAddressSync(new PublicKey(JUPUSD_MINT), ownerPubkey);
-  const ensureUserAta = createAssociatedTokenAccountIdempotentInstruction(
-    ownerPubkey, userJupUsdAta, ownerPubkey, new PublicKey(JUPUSD_MINT),
-  );
-  const ensureFeeAta = createAssociatedTokenAccountIdempotentInstruction(
-    ownerPubkey, FEE_JUPUSD_ATA, FEE_WALLET, new PublicKey(JUPUSD_MINT),
-  );
-
-  // Fee transfer: user JupUSD ATA → fee wallet JupUSD ATA.
-  const feeTransferIx = createTransferCheckedInstruction(
-    userJupUsdAta,
-    new PublicKey(JUPUSD_MINT),
-    FEE_JUPUSD_ATA,
-    ownerPubkey,
-    feeAtomic,
-    JUPUSD_DECIMALS,
-  );
-
-  // Single set of compute budget ixs. Use Jupiter's if provided, else our
-  // own. Don't stack both — duplicate budget ixs simulate cleanly but trip
-  // Blowfish's "unusual instruction pattern" heuristic.
-  const cuIxs = (build.computeBudgetInstructions && build.computeBudgetInstructions.length > 0)
+  const cuIxs = (build.computeBudgetInstructions?.length > 0)
     ? build.computeBudgetInstructions.map(deserIx)
-    : [
-        ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT_FALLBACK }),
-        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
-      ];
-
+    : [ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT_FALLBACK }), ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS })];
   const ixs = [
     ...cuIxs,
-    ensureUserAta,
-    ensureFeeAta,
+    createAssociatedTokenAccountIdempotentInstruction(ownerPubkey, FEE_JUPUSD_ATA, FEE_WALLET, new PublicKey(JUPUSD_MINT)),
+    createTransferCheckedInstruction(userJupUsdAta, new PublicKey(JUPUSD_MINT), FEE_JUPUSD_ATA, ownerPubkey, feeAtomic, JUPUSD_DECIMALS),
     ...(build.setupInstructions || []).map(deserIx),
     deserIx(build.swapInstruction),
     ...(build.cleanupInstruction ? [deserIx(build.cleanupInstruction)] : []),
     ...(build.otherInstructions || []).map(deserIx),
-    feeTransferIx,
   ];
+  const altKeys = Object.keys(build.addressesByLookupTableAddress || {}).map(k => new PublicKey(k));
+  const alts = await loadAlts(connection, altKeys);
+  return { ixs, alts, feeAtomic, swapAmountAtomic };
+}
 
-  const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
-  let alts = [];
-  if (altKeys.length > 0) {
-    const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
-    alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
-      key:   new PublicKey(k),
-      state: AddressLookupTableAccount.deserialize(infos[i].data),
-    }) : null).filter(Boolean);
-  }
+// ── Build combined sell/claim + swap tx (1 signature) ────────────────────────
+async function buildCombinedTx({ connection, ownerPubkey, predictTxB64, estimatedJupUsdAtomic }) {
+  // Step 1: deserialize Predict tx and extract its instructions + ALTs
+  const predictVtx = VersionedTransaction.deserialize(b64ToBytes(predictTxB64));
+  const { ixs: predictIxs, altAddresses: predictAltAddresses } = extractFromVersionedTx(predictVtx);
+  const predictAlts = await loadAlts(connection, predictAltAddresses);
+
+  // Step 2: build swap instructions
+  const { ixs: swapIxs, alts: swapAlts } = await buildSellSwapIxs({
+    connection, ownerPubkey, grossJupUsdAtomic: estimatedJupUsdAtomic,
+  });
+
+  // Step 3: merge all instructions and ALTs
+  const allIxs = [...predictIxs, ...swapIxs];
+  const allAlts = [...predictAlts, ...swapAlts];
 
   const latestBlockhash = await connection.getLatestBlockhash('confirmed');
   const msg = new TransactionMessage({
-    payerKey:        ownerPubkey,
+    payerKey: ownerPubkey,
     recentBlockhash: latestBlockhash.blockhash,
-    instructions:    ixs,
-  }).compileToV0Message(alts);
+    instructions: allIxs,
+  }).compileToV0Message(allAlts);
 
-  return {
-    tx: new VersionedTransaction(msg),
-    grossJupUsdAtomic,
-    minOutJupUsdAtomic,
-    feeAtomic,
-    netJupUsdAtomic,
-    minNetJupUsdAtomic,
-    latestBlockhash,
+  return { tx: new VersionedTransaction(msg), latestBlockhash };
+}
+
+// ── Jupiter Predict API ──────────────────────────────────────────────────────
+async function fetchEvents(){
+  const qs=new URLSearchParams({category:'crypto',filter:'live',includeMarkets:'true',start:'0',end:'50'});
+  const r=await jfetch('/api/predict/events?'+qs.toString()); const j=await r.json();
+  return Array.isArray(j)?j:(j?.data||j?.events||[]);
+}
+
+function pickEventFields(ev){
+  if(!ev)return null;
+  const market=(ev.markets&&ev.markets[0])||ev.market||null; if(!market)return null;
+  const pricing=market.pricing||{}; const yesPrice=toUsd(pricing.buyYesPriceUsd);
+  let noPrice=toUsd(pricing.buyNoPriceUsd); if(!noPrice&&yesPrice)noPrice=+(1-yesPrice).toFixed(4);
+  const evMeta=ev.metadata||{}; const mktMeta=market.metadata||{};
+  return{
+    eventId:ev.eventId||ev.id,title:ev.title||evMeta.title||'Untitled',slug:evMeta.slug||null,
+    image:evMeta.imageUrl||ev.imageUrl||market.imageUrl||ev.image||null,
+    category:String(ev.category||'').toLowerCase(),subcategory:ev.subcategory||null,
+    tags:Array.isArray(ev.tags)?ev.tags.filter(Boolean):[],
+    closeCondition:ev.closeCondition||null,
+    closeTime:evMeta.closeTime??mktMeta.closeTime??market.closeTime??ev.closeTime??null,
+    volume24h:toUsd(ev.volumeUsd??pricing.volume??0),isLive:ev.isLive!==false,isActive:ev.isActive!==false,
+    market:{
+      marketId:market.marketId||market.id,title:mktMeta.title||market.title||null,
+      description:mktMeta.description||null,rulesPrimary:mktMeta.rulesPrimary||null,
+      status:mktMeta.status||market.status||'open',result:mktMeta.result||market.result||null,
+      closeTime:market.closeTime||mktMeta.closeTime||null,
+      yesPrice,noPrice,sellYesPrice:toUsd(pricing.sellYesPriceUsd),sellNoPrice:toUsd(pricing.sellNoPriceUsd),
+      volume:toUsd(pricing.volume||0),
+      yesPct:Math.max(0,Math.min(99,Math.round(yesPrice*100))),noPct:Math.max(0,Math.min(99,Math.round(noPrice*100))),
+    },
   };
 }
 
-// JupUSD → SOL swap. 5% fee taken in JupUSD BEFORE the swap (transfer
-// fee, then swap remainder for SOL).
-//
-// Order matters: fee FIRST, swap SECOND. If we did swap first then fee,
-// the fee would have to be in SOL (different mint, awkward). Taking fee
-// in JupUSD keeps accounting consistent with the buy side.
-async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtomic }) {
-  if (grossJupUsdAtomic <= 0n) throw new Error('Amount too small.');
+const CLOSE_BUFFER_MS=60_000;
+function isMarketOpen(event){
+  if(!event||event.isActive===false||event.isLive===false)return false;
+  const m=event.market; if(!m)return false;
+  if(m.status&&m.status!=='open')return false;
+  if(m.result&&m.result!=='pending'&&m.result!=='')return false;
+  const ms=toMs(event.closeTime); if(ms!=null&&(ms-Date.now())<=CLOSE_BUFFER_MS)return false;
+  return true;
+}
 
-  // Compute fee, swap the remainder.
-  const feeAtomic = (grossJupUsdAtomic * BigInt(FEE_BPS)) / 10000n;
-  const swapAmountAtomic = grossJupUsdAtomic - feeAtomic;
-  if (swapAmountAtomic <= 0n) throw new Error('Amount too small after fee.');
+async function fetchPolymarketEvent(slug){
+  if(!slug)return null;
+  try{const r=await fetch(`${POLY_GAMMA_BASE}/events/slug/${encodeURIComponent(slug)}`);if(!r.ok)return null;const j=await r.json();return Array.isArray(j)?j[0]:j;}
+  catch{return null;}
+}
 
-  const params = new URLSearchParams({
-    inputMint:   JUPUSD_MINT,
-    outputMint:  SOL_MINT,
-    amount:      swapAmountAtomic.toString(),
-    slippageBps: String(SELL_SWAP_SLIPPAGE_BPS),
-    taker:       ownerPubkey.toBase58(),
-  });
-  const r = await jfetch(`/api/jupiter/build?${params}`);
-  const build = await r.json();
-  if (!build?.swapInstruction) throw new Error('Jupiter /build returned no swapInstruction');
+function pickPolymarketFields(pmEvent){
+  if(!pmEvent)return null;
+  const pmMkt=(pmEvent.markets&&pmEvent.markets[0])||null;
+  const open=(e,m)=>{if(e?.closed===true||e?.archived===true||e?.active===false)return false;if(m?.closed===true||m?.archived===true||m?.active===false||m?.acceptingOrders===false)return false;const u=String(m?.umaResolutionStatus||'').toLowerCase();if(u==='resolved'||u==='proposed')return false;return true;};
+  if(!open(pmEvent,pmMkt))return{settled:true};
+  let outcomes=null,outcomePrices=null;
+  try{outcomes=pmMkt?.outcomes?JSON.parse(pmMkt.outcomes):null;}catch{}
+  try{outcomePrices=pmMkt?.outcomePrices?JSON.parse(pmMkt.outcomePrices):null;}catch{}
+  const description=pmEvent.description||pmMkt?.description||null;
+  return{settled:false,description,outcomes,
+    outcomePrices:Array.isArray(outcomePrices)?outcomePrices.map(Number):null,
+    groupItemTitle:pmMkt?.groupItemTitle||null,
+  };
+}
 
-  const expectedSolLamports = BigInt(build.outAmount || 0);
+function useLiveCryptoPrices(enabled){
+  const[prices,setPrices]=useState(()=>new Map());
+  useEffect(()=>{
+    if(!enabled||typeof window==='undefined'||typeof WebSocket==='undefined')return;
+    let ws=null,pingId=null,reconnectId=null,attempt=0,closed=false;
+    const connect=()=>{if(closed)return;try{ws=new WebSocket(POLY_RTDS_WSS);}catch{scheduleReconnect();return;}
+      ws.onopen=()=>{attempt=0;try{ws.send(JSON.stringify({action:'subscribe',subscriptions:[{topic:POLY_RTDS_TOPIC,type:'*',filters:''}]}));}catch{}pingId=setInterval(()=>{if(ws?.readyState===WebSocket.OPEN){try{ws.send('PING');}catch{}}},POLY_RTDS_PING_MS);};
+      ws.onmessage=(ev)=>{if(typeof ev.data!=='string'||ev.data==='PONG'||ev.data==='PING')return;let msg;try{msg=JSON.parse(ev.data);}catch{return;}if(!msg||msg.topic!==POLY_RTDS_TOPIC)return;const p=msg.payload;if(!p||typeof p.symbol!=='string'||typeof p.value!=='number')return;setPrices(prev=>{const next=new Map(prev);next.set(p.symbol.toLowerCase(),{value:p.value,timestamp:Number(p.timestamp)||Date.now()});return next;});};
+      ws.onclose=()=>{if(pingId){clearInterval(pingId);pingId=null;}scheduleReconnect();};ws.onerror=()=>{};};
+    const scheduleReconnect=()=>{if(closed)return;attempt+=1;reconnectId=setTimeout(connect,Math.min(30_000,1000*2**Math.min(attempt-1,5))+Math.random()*500);};
+    connect();
+    return()=>{closed=true;if(pingId)clearInterval(pingId);if(reconnectId)clearTimeout(reconnectId);if(ws){try{ws.close();}catch{}}};
+  },[enabled]);
+  return prices;
+}
 
-  const userJupUsdAta = getAssociatedTokenAddressSync(new PublicKey(JUPUSD_MINT), ownerPubkey);
-  const ensureFeeAta = createAssociatedTokenAccountIdempotentInstruction(
-    ownerPubkey, FEE_JUPUSD_ATA, FEE_WALLET, new PublicKey(JUPUSD_MINT),
-  );
-  const feeTransferIx = createTransferCheckedInstruction(
-    userJupUsdAta,
-    new PublicKey(JUPUSD_MINT),
-    FEE_JUPUSD_ATA,
-    ownerPubkey,
-    feeAtomic,
-    JUPUSD_DECIMALS,
-  );
+function symbolFromSubcategory(sub){if(!sub)return null;const s=String(sub).toLowerCase().trim();const map={bitcoin:'btc/usd',btc:'btc/usd',ethereum:'eth/usd',eth:'eth/usd',solana:'sol/usd',sol:'sol/usd',ripple:'xrp/usd',xrp:'xrp/usd',dogecoin:'doge/usd',doge:'doge/usd',binancecoin:'bnb/usd',bnb:'bnb/usd',hyperliquid:'hype/usd',hype:'hype/usd'};return map[s]||null;}
 
-  const cuIxs = (build.computeBudgetInstructions && build.computeBudgetInstructions.length > 0)
-    ? build.computeBudgetInstructions.map(deserIx)
-    : [
-        ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT_FALLBACK }),
-        ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
-      ];
+function pickPositionFields(p){
+  if(!p)return null;
+  const contracts=Number(p.contracts||0);const avgPriceUsd=toUsd(p.avgPriceUsd);const markPriceUsd=p.markPriceUsd!=null?toUsd(p.markPriceUsd):null;
+  const costUsd=toUsd(p.totalCostUsd??p.sizeUsd)||contracts*avgPriceUsd;const valueUsd=p.valueUsd!=null?toUsd(p.valueUsd):(markPriceUsd!=null?contracts*markPriceUsd:null);
+  const pnlUsd=p.pnlUsd!=null?toUsd(p.pnlUsd):(valueUsd!=null?valueUsd-costUsd:null);
+  const evMeta=p.eventMetadata||{};const mktMeta=p.marketMetadata||{};
+  return{positionPubkey:p.pubkey||p.positionPubkey,marketId:p.marketId,isYes:!!p.isYes,
+    title:evMeta.title||mktMeta.title||p.title||'Position',outcomeLabel:mktMeta.title||null,
+    marketStatus:mktMeta.status||null,marketResult:mktMeta.result||null,
+    contracts,claimable:!!p.claimable,claimed:!!p.claimed,
+    avgPriceUsd,markPriceUsd:markPriceUsd??0,costUsd,valueUsd:valueUsd??0,
+    payoutUsd:toUsd(p.payoutUsd),pnlUsd:pnlUsd??0,
+    pnlUsdPercent:costUsd>0&&pnlUsd!=null?(pnlUsd/costUsd)*100:0,
+  };
+}
 
-  const ixs = [
-    ...cuIxs,
-    ensureFeeAta,
-    feeTransferIx,                                              // 1. Pay fee in JupUSD
-    ...(build.setupInstructions || []).map(deserIx),
-    deserIx(build.swapInstruction),                             // 2. Swap remainder → SOL
-    ...(build.cleanupInstruction ? [deserIx(build.cleanupInstruction)] : []),
-    ...(build.otherInstructions || []).map(deserIx),
-  ];
-
-  const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
-  let alts = [];
-  if (altKeys.length > 0) {
-    const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
-    alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
-      key:   new PublicKey(k),
-      state: AddressLookupTableAccount.deserialize(infos[i].data),
-    }) : null).filter(Boolean);
+// ── Transaction helpers ──────────────────────────────────────────────────────
+async function pollOrderStatus(orderPubkey,{maxAttempts=KEEPER_POLL_ATTEMPTS,intervalMs=KEEPER_POLL_INTERVAL,onTick,signal}={}){
+  if(!orderPubkey)return'pending';
+  await new Promise(r=>setTimeout(r,600));
+  for(let i=0;i<maxAttempts;i++){
+    if(signal?.aborted)return'aborted';
+    try{onTick?.(i+1,maxAttempts);const c=new AbortController();const tid=setTimeout(()=>c.abort(),4000);
+      try{const r=await fetch(`/api/predict/orders/status/${encodeURIComponent(orderPubkey)}`,{signal:c.signal});clearTimeout(tid);
+        if(r.ok){const j=await r.json();const status=(j?.status||j?.data?.status||'').toLowerCase();
+          if(status==='filled'||status==='complete'||status==='completed')return'filled';
+          if(status==='failed'||status==='rejected'||status==='cancelled'||status==='canceled')return'failed';}
+      }finally{clearTimeout(tid);}
+    }catch{}
+    if(signal?.aborted)return'aborted';
+    await new Promise(r=>setTimeout(r,intervalMs));
   }
-
-  const latestBlockhash = await connection.getLatestBlockhash('confirmed');
-  const msg = new TransactionMessage({
-    payerKey:        ownerPubkey,
-    recentBlockhash: latestBlockhash.blockhash,
-    instructions:    ixs,
-  }).compileToV0Message(alts);
-
-  return {
-    tx: new VersionedTransaction(msg),
-    feeAtomic,
-    swapAmountAtomic,
-    expectedSolLamports,
-    latestBlockhash,
-  };
+  return'pending';
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 5: Predict order builders
-// ═══════════════════════════════════════════════════════════════════════════════
-
-async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountJupUsdAtomic }) {
-  const r = await jfetch('/api/predict/orders', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      ownerPubkey, marketId, isYes, isBuy: true,
-      depositAmount: depositAmountJupUsdAtomic.toString(),
-      depositMint:   JUPUSD_MINT,
-    }),
-  });
-  const j = await r.json();
-  if (!j?.transaction) throw new Error('Jupiter Predict returned no transaction');
-
-  const orderPubkey =
-    j.order?.orderPubkey ||
-    j.orderPubkey ||
-    j.order?.pubkey ||
-    (typeof j.order === 'string' ? j.order : null) ||
-    j.pubkey ||
-    null;
-
-  return {
-    tx: VersionedTransaction.deserialize(b64ToBytes(j.transaction)),
-    orderPubkey,
-    orderInfo: j.order || null,
-  };
-}
-
-// Poll the order status endpoint until the keeper fills/rejects, or timeout.
-async function pollOrderStatus(orderPubkey, {
-  maxAttempts = KEEPER_POLL_ATTEMPTS,
-  intervalMs = KEEPER_POLL_INTERVAL,
-  onTick,
-  signal,
-} = {}) {
-  if (!orderPubkey) return 'pending';
-  await new Promise(r => setTimeout(r, 600));
-  for (let i = 0; i < maxAttempts; i++) {
-    if (signal?.aborted) return 'aborted';
-    try {
-      onTick?.(i + 1, maxAttempts);
-      const r = await jfetch(`/api/predict/orders/status/${encodeURIComponent(orderPubkey)}`, {}, 4000);
-      if (r.ok) {
-        const j = await r.json();
-        const status = (j?.status || j?.data?.status || '').toLowerCase();
-        if (status === 'filled' || status === 'complete' || status === 'completed') return 'filled';
-        if (status === 'failed' || status === 'rejected' || status === 'cancelled' || status === 'canceled') return 'failed';
-      }
-    } catch {}
-    await new Promise(r => setTimeout(r, intervalMs));
-  }
-  return 'pending';
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 6: Submit + confirm
-// ═══════════════════════════════════════════════════════════════════════════════
-
-// Pre-flight simulation. Catches Custom Program Error: 1 (InsufficientFunds),
-// slippage, expired blockhash, etc. — so user never signs a doomed tx.
-async function simulateOrThrow(connection, tx, label) {
-  const mapSimErr = (logs, errObj) => {
-    const errStr = JSON.stringify(errObj || '').toLowerCase();
-    const logsStr = (logs || []).join('\n').toLowerCase();
-    const all = errStr + ' ' + logsStr;
-    if (all.includes('"custom":1') || all.includes('custom program error: 1') || all.includes('insufficient'))
-      return 'Not enough JupUSD to place the order. Refresh balances and try again.';
-    if (all.includes('slippage') || all.includes('0x1771'))
-      return 'Price moved too far — try again.';
-    if (all.includes('account not') || all.includes('uninitialized') || all.includes('accountnotinitialized'))
-      return 'Token account not ready. Try again in a moment.';
-    if (all.includes('blockhash') || all.includes('expired'))
-      return 'Quote expired. Please retry.';
-    if (all.includes('no_shares') || all.includes('no shares'))
-      return 'No shares available at this price right now.';
-    if (all.includes('not_enough_liquidity') || all.includes('not enough liquidity'))
-      return 'Not enough liquidity for this trade size.';
-    if (all.includes('market_closed') || all.includes('market closed'))
-      return 'Market is closed.';
-    return null;
-  };
-  try {
-    const sim = await connection.simulateTransaction(tx, {
-      sigVerify: false,
-      replaceRecentBlockhash: false,
-      commitment: 'confirmed',
-    });
-    if (sim.value.err) {
-      const mapped = mapSimErr(sim.value.logs, sim.value.err);
-      console.warn(`[predict] ${label} simulation failed:`, sim.value.err, sim.value.logs?.slice(-8));
-      throw new Error(mapped || `Pre-flight check failed for ${label}: ${JSON.stringify(sim.value.err)}`);
+async function simulateOrThrow(connection,tx,label){
+  try{
+    const sim=await connection.simulateTransaction(tx,{sigVerify:false,replaceRecentBlockhash:false,commitment:'confirmed'});
+    if(sim.value.err){
+      const all=JSON.stringify(sim.value.err||'').toLowerCase()+' '+(sim.value.logs||[]).join('\n').toLowerCase();
+      let msg=`Pre-flight failed (${label})`;
+      if(all.includes('insufficient'))msg='Insufficient balance.';
+      else if(all.includes('slippage'))msg='Price moved. Try again.';
+      else if(all.includes('market_closed')||all.includes('market closed'))msg='Market is closed.';
+      else if(all.includes('no_shares')||all.includes('no shares'))msg='No shares available.';
+      throw new Error(msg);
     }
-  } catch (e) {
-    const msg = String(e?.message || '');
-    if (/not enough|moved|expired|not ready|no shares|liquidity|market closed|pre-flight/i.test(msg)) {
-      throw e;
-    }
-    console.warn(`[predict] ${label} sim non-fatal (network):`, msg);
+  }catch(e){
+    const msg=String(e?.message||'');
+    if(/insufficient|moved|market closed|no shares|pre-flight/i.test(msg))throw e;
+    console.warn(`[predict] ${label} sim network err (non-fatal):`,msg);
   }
 }
 
-// Send and confirm. Returns { sig, status }:
-//   status='confirmed' — tx finalized, you can act on it
-//   status='pending'   — tx submitted, may or may not have landed
-//   throws             — definite on-chain failure or user cancel
-//
-// CRITICAL: caller MUST NOT treat 'pending' as failure. The tx may land
-// seconds later. Treat it as "verify before retrying" — for buys, poll the
-// position; for sells/claims, poll balances.
-async function sendAndConfirm(connection, signedTx, blockhashInfo, setStMsg, signal) {
-  if (signal?.aborted) throw new Error('Cancelled.');
+async function sendAndConfirm(connection,signedTx,blockhashInfo,setStMsg,signal){
+  if(signal?.aborted)throw new Error('Cancelled.');
   setStMsg('Submitting…');
-  const sig = await connection.sendRawTransaction(signedTx.serialize(), {
-    maxRetries: 3, skipPreflight: true, preflightCommitment: 'confirmed',
-  });
-
+  const sig=await connection.sendRawTransaction(signedTx.serialize(),{maxRetries:3,skipPreflight:true,preflightCommitment:'confirmed'});
   setStMsg('Confirming…');
-  const bh = blockhashInfo || await connection.getLatestBlockhash('confirmed');
-  try {
-    const conf = await Promise.race([
-      connection.confirmTransaction({
-        signature: sig,
-        blockhash: bh.blockhash,
-        lastValidBlockHeight: bh.lastValidBlockHeight,
-      }, 'confirmed'),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), CONFIRM_TIMEOUT_MS)),
-    ]);
-    if (conf?.value?.err) throw new Error('On-chain error: ' + JSON.stringify(conf.value.err));
-    return { sig, status: 'confirmed' };
-  } catch (e) {
-    if (/on-chain/i.test(String(e?.message))) throw e;
-    // Fallback polling.
-    const deadline = Date.now() + CONFIRM_FALLBACK_MS;
-    while (Date.now() < deadline) {
-      if (signal?.aborted) throw new Error('Cancelled.');
-      await new Promise(r => setTimeout(r, 1500));
-      try {
-        const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-        if (st?.value?.err) throw new Error('On-chain error: ' + JSON.stringify(st.value.err));
-        const cs = st?.value?.confirmationStatus;
-        if (cs === 'confirmed' || cs === 'finalized') return { sig, status: 'confirmed' };
-      } catch (inner) {
-        if (/on-chain/i.test(String(inner?.message))) throw inner;
-      }
+  const bh=blockhashInfo||await connection.getLatestBlockhash('confirmed');
+  try{
+    const conf=await Promise.race([connection.confirmTransaction({signature:sig,blockhash:bh.blockhash,lastValidBlockHeight:bh.lastValidBlockHeight},'confirmed'),new Promise((_,rej)=>setTimeout(()=>rej(new Error('confirm-timeout')),CONFIRM_TIMEOUT_MS))]);
+    if(conf?.value?.err)throw new Error('On-chain error: '+JSON.stringify(conf.value.err));
+    return{sig,status:'confirmed'};
+  }catch(e){
+    if(/on-chain/i.test(String(e?.message)))throw e;
+    const deadline=Date.now()+CONFIRM_FALLBACK_MS;
+    while(Date.now()<deadline){if(signal?.aborted)throw new Error('Cancelled.');await new Promise(r=>setTimeout(r,1500));
+      try{const st=await connection.getSignatureStatus(sig,{searchTransactionHistory:true});
+        if(st?.value?.err)throw new Error('On-chain error: '+JSON.stringify(st.value.err));
+        const cs=st?.value?.confirmationStatus;if(cs==='confirmed'||cs==='finalized')return{sig,status:'confirmed'};
+      }catch(inner){if(/on-chain/i.test(String(inner?.message)))throw inner;}
     }
-    return { sig, status: 'pending' };
+    return{sig,status:'pending'};
   }
 }
 
-// Poll a signature's status in the background, after the visible flow has
-// finished. If it later lands or fails, we surface a toast.
-async function backgroundConfirm(connection, sig, onResult, timeoutMs = 60_000) {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    await new Promise(r => setTimeout(r, 3000));
+async function loggedFetch(url,opts,dbg,label){
+  dbg(`http:${label}:req`,`${opts?.method||'GET'} ${url}`);
+  try{const r=await fetch(url,opts);const text=await r.text();let parsed=null;try{parsed=JSON.parse(text);}catch{}
+    if(!r.ok){dbg(`http:${label}:fail`,`${r.status}`,parsed||text.slice(0,400));const err=new Error(`HTTP ${r.status}: ${(text||r.statusText).slice(0,300)}`);err.status=r.status;err.body=text;throw err;}
+    dbg(`http:${label}:ok`,`${r.status}`);return{response:r,json:parsed,text};
+  }catch(e){if(e.status===undefined)dbg(`http:${label}:error`,e?.message||String(e));throw e;}
+}
+
+// ── Design tokens ────────────────────────────────────────────────────────────
+const C={bg:'#03060f',card:'#080d1a',cardHi:'#0c1428',ink:'#e8ecf5',muted:'#8a96b8',muted2:'#475670',border:'rgba(151,252,228,.10)',borderHi:'rgba(151,252,228,.30)',hl:'#97fce4',hl2:'#5ce9c8',hlDim:'rgba(151,252,228,.10)',violet:'#a87fff',yes:'#00d4a3',yesDim:'rgba(0,212,163,.12)',no:'#ff5f7a',noDim:'rgba(255,95,122,.12)',amber:'#f5b53d',shadow:'0 8px 28px rgba(0,0,0,.45)',shadowLg:'0 18px 56px rgba(0,0,0,.55)'};
+const T={body:{fontFamily:'DM Sans, system-ui, sans-serif'},display:{fontFamily:'Syne, Inter, sans-serif'},mono:{fontFamily:'IBM Plex Mono, monospace'}};
+
+// ── UI atoms ─────────────────────────────────────────────────────────────────
+function Spinner({size=12,color=C.hl}){return<div style={{width:size,height:size,borderRadius:'50%',border:`2px solid ${C.hlDim}`,borderTopColor:color,animation:'nexus-spin .8s linear infinite',flexShrink:0}}/>;}
+function useDebugLog(){const[log,setLog]=useState([]);const push=useCallback((tag,msg,data)=>{const time=new Date().toISOString().slice(11,23);let payload='';if(data!==undefined){try{payload=typeof data==='string'?data:JSON.stringify(data,(k,v)=>typeof v==='bigint'?v.toString()+'n':v,2);}catch{payload=String(data);}}setLog(prev=>[...prev,{time,tag,msg,payload}].slice(-100));console.log(`[predict:${tag}] ${msg}`,data!==undefined?data:'');},[]);const clear=useCallback(()=>setLog([]),[]);return{log,push,clear};}
+function DebugPanel({log,onClear}){const[expanded,setExpanded]=useState(true);if(log.length===0)return null;const text=log.map(l=>`[${l.time}] ${l.tag}: ${l.msg}${l.payload?'\n  '+l.payload.replace(/\n/g,'\n  '):''}`).join('\n');return(<div style={{marginTop:10,padding:8,borderRadius:10,background:'rgba(0,0,0,.45)',border:`1px solid ${C.border}`,...T.mono,fontSize:10}}><div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:6}}><button onClick={()=>setExpanded(!expanded)} style={{background:'none',border:'none',color:C.hl,fontSize:10,fontWeight:700,cursor:'pointer',padding:0,...T.mono}}>DEBUG ({log.length}) {expanded?'▼':'▶'}</button><div style={{display:'flex',gap:6}}><button onClick={()=>copyToClipboard(text)} style={{padding:'3px 8px',borderRadius:6,background:C.hlDim,border:`1px solid ${C.borderHi}`,color:C.hl,fontSize:9,fontWeight:700,cursor:'pointer'}}>COPY</button><button onClick={onClear} style={{padding:'3px 8px',borderRadius:6,background:'rgba(255,95,122,.1)',border:'1px solid rgba(255,95,122,.3)',color:C.no,fontSize:9,fontWeight:700,cursor:'pointer'}}>CLEAR</button></div></div>{expanded&&<div style={{maxHeight:200,overflowY:'auto',color:C.ink,lineHeight:1.4,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{log.map((l,i)=>{const isErr=l.tag.includes('error')||l.tag.includes('fail');return(<div key={i} style={{marginBottom:4,color:isErr?C.no:C.ink}}><span style={{color:C.muted2}}>[{l.time}]</span>{' '}<span style={{color:isErr?C.no:C.hl,fontWeight:700}}>{l.tag}:</span>{' '}<span>{l.msg}</span>{l.payload&&<div style={{paddingLeft:8,color:C.muted,fontSize:9}}>{l.payload}</div>}</div>);})}</div>}</div>);}
+function StatusLine({msg,step}){return(<div style={{marginBottom:8,padding:8,background:'rgba(151,252,228,.05)',border:'1px solid rgba(151,252,228,.20)',borderRadius:10,display:'flex',alignItems:'center',gap:8}}><Spinner/><div style={{flex:1}}>{step&&<div style={{fontSize:9,color:C.hl,fontWeight:800,letterSpacing:1.2,...T.mono,marginBottom:1}}>{step}</div>}<span style={{fontSize:11,color:C.ink,fontWeight:600}}>{msg}</span></div></div>);}
+function ErrorLine({msg}){return<div style={{marginBottom:8,padding:8,background:'rgba(255,95,122,.08)',border:'1px solid rgba(255,95,122,.25)',borderRadius:10,fontSize:11,color:C.no,wordBreak:'break-word'}}>{msg}</div>;}
+function WarnLine({msg}){return<div style={{marginBottom:8,padding:8,background:'rgba(245,181,61,.08)',border:'1px solid rgba(245,181,61,.30)',borderRadius:10,fontSize:11,color:C.amber,fontWeight:600,lineHeight:1.4}}>{msg}</div>;}
+function PrimaryButton({onClick,disabled,label,color='hl'}){const bg=color==='no'?`linear-gradient(135deg,${C.no}33,${C.no}22)`:color==='yes'?`linear-gradient(135deg,${C.yes}33,${C.yes}22)`:`linear-gradient(135deg,${C.hl},${C.hl2})`;const textColor=color==='no'?C.no:color==='yes'?C.yes:C.bg;return<button onClick={disabled?undefined:onClick} disabled={disabled} style={{width:'100%',padding:12,borderRadius:11,background:bg,color:textColor,fontWeight:800,fontSize:13,border:'none',cursor:disabled?'not-allowed':'pointer',opacity:disabled?.55:1,...T.body}}>{label}</button>;}
+function CancelButton({onClick,disabled,label='Cancel'}){return<button onClick={disabled?undefined:onClick} disabled={disabled} style={{width:'100%',marginTop:6,padding:9,borderRadius:10,background:'rgba(255,255,255,.03)',border:`1px solid ${C.border}`,color:C.muted,fontWeight:700,fontSize:11,cursor:disabled?'not-allowed':'pointer',opacity:disabled?.4:1,...T.mono}}>{label}</button>;}
+function Skeleton(){return(<div style={{padding:10,borderRadius:14,background:C.card,border:`1px solid ${C.border}`,marginBottom:7}}><div style={{display:'flex',gap:8,marginBottom:8}}><div style={{width:32,height:32,borderRadius:8,background:'rgba(255,255,255,.04)'}}/><div style={{flex:1}}><div style={{height:12,width:'85%',background:'rgba(255,255,255,.06)',borderRadius:4,marginBottom:6}}/><div style={{height:10,width:'50%',background:'rgba(255,255,255,.03)',borderRadius:4}}/></div></div><div style={{display:'flex',gap:8}}><div style={{flex:1,height:34,background:'rgba(255,255,255,.03)',borderRadius:10}}/><div style={{flex:1,height:34,background:'rgba(255,255,255,.03)',borderRadius:10}}/></div></div>);}
+function Row({label,value,valueColor,bold}){return(<div style={{display:'flex',justifyContent:'space-between',marginBottom:4}}><span style={{color:C.muted}}>{label}</span><span style={{color:valueColor||C.ink,fontWeight:bold?700:600}}>{value}</span></div>);}
+
+// ── Access fee modal ──────────────────────────────────────────────────────────
+function AccessFeeModal({ onPaid, onDismiss, connection, publicKey, signTransaction }) {
+  const [step, setStep] = useState(0); // 0=prompt, 1=busy, 2=done
+  const [error, setError] = useState('');
+  const { log, push: dbg, clear } = useDebugLog();
+
+  const pay = useCallback(async () => {
+    if (!publicKey || !signTransaction) return;
+    setError(''); setStep(1);
     try {
-      const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-      if (st?.value?.err) { onResult?.('failed', sig, st.value.err); return; }
-      const cs = st?.value?.confirmationStatus;
-      if (cs === 'confirmed' || cs === 'finalized') { onResult?.('confirmed', sig); return; }
-    } catch {}
-  }
-  onResult?.('timeout', sig);
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 7: UI atoms
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function Spinner({ size = 12, color = C.hl }) {
-  return (
-    <div style={{
-      width: size, height: size, borderRadius: '50%',
-      border: `2px solid ${C.hlDim}`, borderTopColor: color,
-      animation: 'nexus-spin .8s linear infinite', flexShrink: 0,
-    }} />
-  );
-}
-
-function useDebugLog() {
-  const [log, setLog] = useState([]);
-  const push = useCallback((tag, msg, data) => {
-    const time = new Date().toISOString().slice(11, 23);
-    let payload = '';
-    if (data !== undefined) {
-      try { payload = typeof data === 'string' ? data : JSON.stringify(data, (k, v) => typeof v === 'bigint' ? v.toString() + 'n' : v, 2); }
-      catch { payload = String(data); }
-    }
-    setLog(prev => [...prev, { time, tag, msg, payload }].slice(-100));
-    console.log(`[predict:${tag}] ${msg}`, data !== undefined ? data : '');
-  }, []);
-  const clear = useCallback(() => setLog([]), []);
-  return { log, push, clear };
-}
-
-function DebugPanel({ log, onClear }) {
-  const [expanded, setExpanded] = useState(true);
-  if (log.length === 0) return null;
-  const text = log.map(l => `[${l.time}] ${l.tag}: ${l.msg}${l.payload ? '\n  ' + l.payload.replace(/\n/g, '\n  ') : ''}`).join('\n');
-  return (
-    <div style={{ marginTop: 10, padding: 8, borderRadius: 10, background: 'rgba(0,0,0,.45)', border: `1px solid ${C.border}`, ...T.mono, fontSize: 10 }}>
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
-        <button onClick={() => setExpanded(!expanded)} style={{ background: 'none', border: 'none', color: C.hl, fontSize: 10, fontWeight: 700, letterSpacing: 1, cursor: 'pointer', padding: 0, ...T.mono }}>
-          DEBUG LOG ({log.length}) {expanded ? '▼' : '▶'}
-        </button>
-        <div style={{ display: 'flex', gap: 6 }}>
-          <button onClick={() => copyToClipboard(text)} style={{ padding: '3px 8px', borderRadius: 6, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 9, fontWeight: 700, cursor: 'pointer', ...T.mono }}>COPY</button>
-          <button onClick={onClear} style={{ padding: '3px 8px', borderRadius: 6, background: 'rgba(255,95,122,.1)', border: '1px solid rgba(255,95,122,.3)', color: C.no, fontSize: 9, fontWeight: 700, cursor: 'pointer', ...T.mono }}>CLEAR</button>
-        </div>
-      </div>
-      {expanded && (
-        <div style={{ maxHeight: 220, overflowY: 'auto', color: C.ink, lineHeight: 1.4, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-          {log.map((l, i) => {
-            const isErr = l.tag.includes('error') || l.tag.includes('fail');
-            return (
-              <div key={i} style={{ marginBottom: 4, color: isErr ? C.no : C.ink }}>
-                <span style={{ color: C.muted2 }}>[{l.time}]</span>{' '}
-                <span style={{ color: isErr ? C.no : C.hl, fontWeight: 700 }}>{l.tag}:</span>{' '}
-                <span>{l.msg}</span>
-                {l.payload && <div style={{ paddingLeft: 8, color: C.muted, fontSize: 9, marginTop: 2 }}>{l.payload}</div>}
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-async function loggedFetch(url, opts, dbg, label) {
-  dbg(`http:${label}:req`, `${opts?.method || 'GET'} ${url}`, opts?.body ? { body: opts.body } : undefined);
-  try {
-    const r = await fetch(url, opts);
-    const text = await r.text();
-    let parsed = null;
-    try { parsed = JSON.parse(text); } catch {}
-    if (!r.ok) {
-      dbg(`http:${label}:fail`, `${r.status} ${r.statusText}`, parsed || text.slice(0, 400));
-      const err = new Error(`HTTP ${r.status}: ${(text || r.statusText).slice(0, 300)}`);
-      err.status = r.status; err.body = text;
-      throw err;
-    }
-    dbg(`http:${label}:ok`, `${r.status}`, parsed ? Object.keys(parsed) : text.slice(0, 200));
-    return { response: r, json: parsed, text };
-  } catch (e) {
-    if (e.status === undefined) {
-      dbg(`http:${label}:error`, e?.message || String(e));
-    }
-    throw e;
-  }
-}
-
-function StatusLine({ msg, step }) {
-  return (
-    <div style={{ marginBottom: 8, padding: 8, background: 'rgba(151,252,228,.05)', border: '1px solid rgba(151,252,228,.20)', borderRadius: 10, display: 'flex', alignItems: 'center', gap: 8 }}>
-      <Spinner />
-      <div style={{ flex: 1 }}>
-        {step && <div style={{ fontSize: 9, color: C.hl, fontWeight: 800, letterSpacing: 1.2, ...T.mono, marginBottom: 1 }}>{step}</div>}
-        <span style={{ fontSize: 11, color: C.ink, fontWeight: 600 }}>{msg}</span>
-      </div>
-    </div>
-  );
-}
-
-function ErrorLine({ msg }) {
-  return (
-    <div style={{ marginBottom: 8, padding: 8, background: 'rgba(255,95,122,.08)', border: '1px solid rgba(255,95,122,.25)', borderRadius: 10, fontSize: 11, color: C.no, wordBreak: 'break-word' }}>
-      {msg}
-    </div>
-  );
-}
-
-function WarnLine({ msg }) {
-  return (
-    <div style={{ marginBottom: 8, padding: 8, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', borderRadius: 10, fontSize: 11, color: C.amber, fontWeight: 600, lineHeight: 1.4 }}>
-      {msg}
-    </div>
-  );
-}
-
-function StepBadge({ current, total }) {
-  return (
-    <div style={{ display: 'flex', gap: 4, marginBottom: 8 }}>
-      {Array.from({ length: total }).map((_, i) => {
-        const done   = i < current - 1;
-        const active = i === current - 1;
-        return (
-          <div key={i} style={{
-            flex: 1, height: 3, borderRadius: 2,
-            background: done ? C.hl : active ? C.hl2 : 'rgba(255,255,255,.08)',
-            transition: 'background .2s',
-          }} />
-        );
-      })}
-    </div>
-  );
-}
-
-function PrimaryButton({ onClick, disabled, label, color = 'hl' }) {
-  const bg = color === 'no'  ? `linear-gradient(135deg, ${C.no}33, ${C.no}22)`
-           : color === 'yes' ? `linear-gradient(135deg, ${C.yes}33, ${C.yes}22)`
-           : color === 'amber' ? `linear-gradient(135deg, ${C.amber}, ${C.amber}aa)`
-           : `linear-gradient(135deg, ${C.hl}, ${C.hl2})`;
-  const textColor = color === 'no' ? C.no : color === 'yes' ? C.yes : C.bg;
-  return (
-    <button onClick={disabled ? undefined : onClick} disabled={disabled}
-      style={{ width: '100%', padding: 12, borderRadius: 11, background: bg, color: textColor, fontWeight: 800, fontSize: 13, border: 'none', cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? .55 : 1, ...T.body }}>
-      {label}
-    </button>
-  );
-}
-
-function CancelButton({ onClick, disabled, label = 'Cancel' }) {
-  return (
-    <button onClick={disabled ? undefined : onClick} disabled={disabled}
-      style={{ width: '100%', marginTop: 6, padding: 9, borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, color: C.muted, fontWeight: 700, fontSize: 11, cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? .4 : 1, ...T.mono, letterSpacing: 0.5 }}>
-      {label}
-    </button>
-  );
-}
-
-function Skeleton() {
-  return (
-    <div style={{ padding: 10, borderRadius: 14, background: C.card, border: `1px solid ${C.border}`, marginBottom: 7 }}>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-        <div style={{ width: 32, height: 32, borderRadius: 8, background: 'rgba(255,255,255,.04)' }} />
-        <div style={{ flex: 1 }}>
-          <div style={{ height: 12, width: '85%', background: 'rgba(255,255,255,.06)', borderRadius: 4, marginBottom: 6 }} />
-          <div style={{ height: 10, width: '50%', background: 'rgba(255,255,255,.03)', borderRadius: 4 }} />
-        </div>
-      </div>
-      <div style={{ display: 'flex', gap: 8 }}>
-        <div style={{ flex: 1, height: 34, background: 'rgba(255,255,255,.03)', borderRadius: 10 }} />
-        <div style={{ flex: 1, height: 34, background: 'rgba(255,255,255,.03)', borderRadius: 10 }} />
-      </div>
-    </div>
-  );
-}
-
-function Row({ label, value, valueColor, bold }) {
-  return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-      <span style={{ color: C.muted }}>{label}</span>
-      <span style={{ color: valueColor || C.ink, fontWeight: bold ? 700 : 600 }}>{value}</span>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 8: Page header
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function PageHeader({ connected, solBal, tab, setTab, pubkey, onCopy }) {
-  const sol = Number(solBal) / 1e9;
-  return (
-    <div style={{ marginTop: 4, marginBottom: 10, padding: '14px 14px 12px', borderRadius: 18, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: `1px solid ${C.border}`, boxShadow: C.shadowLg, position: 'relative', overflow: 'hidden' }}>
-      <div style={{ position: 'absolute', right: -40, top: -50, width: 160, height: 160, borderRadius: '50%', background: 'radial-gradient(circle,rgba(151,252,228,.14),transparent 65%)', pointerEvents: 'none' }} />
-      <div style={{ position: 'relative' }}>
-        <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 10 }}>
-          <div>
-            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 900, color: C.ink, letterSpacing: -0.5, ...T.display }}>Predict</h1>
-            <div style={{ fontSize: 11, color: C.muted, ...T.mono, marginTop: 4 }}>Crypto markets · live · ending soonest</div>
-          </div>
-          <div style={{ fontSize: 10, color: C.hl, background: C.hlDim, border: `1px solid ${C.borderHi}`, padding: '2px 7px', borderRadius: 99, fontWeight: 700, letterSpacing: 1, ...T.mono }}>JUPITER</div>
-        </div>
-
-        {connected ? (
-          <div style={{ padding: '10px 12px', borderRadius: 12, background: 'rgba(151,252,228,.05)', border: `1px solid ${C.border}`, marginBottom: 10 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <div>
-                <div style={{ fontSize: 9, color: C.muted, fontWeight: 700, letterSpacing: 1.2, ...T.mono, marginBottom: 2 }}>BALANCE</div>
-                <div style={{ fontSize: 16, fontWeight: 800, color: C.ink, ...T.display, lineHeight: 1 }}>
-                  {sol.toFixed(4)} <span style={{ fontSize: 10, color: C.muted, ...T.mono, marginLeft: 4 }}>SOL</span>
-                </div>
-              </div>
-              {pubkey && (
-                <button onClick={onCopy} style={{ padding: '5px 9px', borderRadius: 8, background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 9, fontWeight: 700, cursor: 'pointer', ...T.mono }}>
-                  {pubkey.slice(0, 4)}…{pubkey.slice(-4)}
-                </button>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div style={{ padding: 10, borderRadius: 12, background: 'rgba(168,127,255,.05)', border: '1px solid rgba(168,127,255,.30)', marginBottom: 10, fontSize: 12, color: C.ink }}>
-            Connect a Solana wallet to start trading.
-          </div>
-        )}
-
-        <div style={{ display: 'flex', gap: 4, padding: 2, background: 'rgba(255,255,255,.03)', borderRadius: 9 }}>
-          {['markets', 'positions'].map(id => (
-            <button key={id} onClick={() => setTab(id)}
-              style={{ flex: 1, padding: '7px 4px', borderRadius: 7, background: tab === id ? C.hlDim : 'transparent', border: `1px solid ${tab === id ? C.borderHi : 'transparent'}`, color: tab === id ? C.hl : C.muted, fontSize: 10, fontWeight: 700, cursor: 'pointer', textTransform: 'uppercase', letterSpacing: 1, ...T.mono }}>
-              {id}
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 9: Market card + Buy drawer
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function MarketCard({ event, livePrices, priceSnapshots, onTrade }) {
-  const m = event.market;
-  const poly = event.poly || null;
-  const yp = m.yesPrice;
-  const np = m.noPrice;
-  const yPct = m.yesPct;
-  const upside = p => (p < 0.02 || p > 0.98) ? 0 : Math.min(9999, Math.round((1 / p - 1) * 100));
-  const clamp2 = { display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' };
-  const clamp1 = { display: '-webkit-box', WebkitLineClamp: 1, WebkitBoxOrient: 'vertical', overflow: 'hidden' };
-  const closed = m.status !== 'open';
-
-  const closeMs = toMs(event.closeTime);
-  const isUrgent = closeMs && (closeMs - Date.now()) > 0 && (closeMs - Date.now()) < URGENT_WINDOW_MS;
-
-  const yesLabel = poly?.outcomes?.[0] || 'Yes';
-  const noLabel  = poly?.outcomes?.[1] || 'No';
-
-  const priceToBeat = resolvePriceToBeat(event, priceSnapshots);
-  const symbol      = symbolFromSubcategory(event.subcategory);
-  const live        = symbol ? livePrices?.get(symbol) : null;
-  const currentPrice = live?.value ?? null;
-  const hasPrices    = priceToBeat != null && currentPrice != null;
-  const priceDelta   = hasPrices ? currentPrice - priceToBeat : null;
-  const priceDeltaPct = hasPrices && priceToBeat > 0 ? (priceDelta / priceToBeat) * 100 : null;
-  const isUp = priceDelta != null && priceDelta >= 0;
-  const fmtPrice = (n) => {
-    if (n == null) return '—';
-    if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
-    if (n >= 1)    return '$' + n.toFixed(2);
-    if (n >= 0.01) return '$' + n.toFixed(4);
-    return '$' + n.toFixed(6);
-  };
-
-  const ruleSnippet = (() => {
-    const txt = poly?.description || m.rulesPrimary || event.closeCondition;
-    if (!txt) return null;
-    const firstSentence = String(txt).trim().split(/(?<=[.!?])\s/)[0];
-    return firstSentence.length > 160 ? firstSentence.slice(0, 157) + '…' : firstSentence;
-  })();
-
-  return (
-    <div style={{
-      padding: 10, borderRadius: 14,
-      background: `linear-gradient(145deg, ${C.card}, ${C.cardHi})`,
-      border: `1px solid ${isUrgent ? 'rgba(245,181,61,.40)' : C.border}`,
-      marginBottom: 7,
-      boxShadow: C.shadow,
-      opacity: closed ? 0.55 : 1,
-    }}>
-      <div style={{ display: 'flex', gap: 8, marginBottom: 8 }}>
-        {event.image && <img src={event.image} alt="" onError={e => e.currentTarget.style.display = 'none'} style={{ width: 32, height: 32, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }} />}
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, lineHeight: 1.3, marginBottom: 3, ...T.body, ...clamp2 }}>
-            {event.title}
-          </div>
-          {m.title && m.title !== event.title && (
-            <div style={{ fontSize: 11, fontWeight: 600, color: C.hl, lineHeight: 1.3, marginBottom: 4, ...T.body, ...clamp1 }}>
-              {m.title}
-            </div>
-          )}
-
-          {poly?.groupItemTitle && (
-            <div style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 99, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 10, fontWeight: 700, letterSpacing: 0.4, marginBottom: 4, ...T.mono }}>
-              {poly.groupItemTitle}
-            </div>
-          )}
-
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, fontSize: 9, color: C.muted, ...T.mono, alignItems: 'center' }}>
-            {event.subcategory && (
-              <span style={{ color: C.hl, textTransform: 'uppercase', fontWeight: 700, letterSpacing: 0.5 }}>
-                {event.subcategory}
-              </span>
-            )}
-            {event.subcategory && <span style={{ opacity: .4 }}>·</span>}
-            <span>Vol {formatVol(event.volume24h)}</span>
-            {formatEndDate(event.closeTime) && (
-              <>
-                <span style={{ opacity: .4 }}>·</span>
-                <span style={{ color: isUrgent ? C.amber : C.muted, fontWeight: isUrgent ? 700 : 400 }}>
-                  {formatEndDate(event.closeTime)}
-                </span>
-              </>
-            )}
-          </div>
-        </div>
-        <div style={{ textAlign: 'right', flexShrink: 0, minWidth: 38 }}>
-          <div style={{ fontSize: 15, fontWeight: 800, color: yPct >= 50 ? C.yes : C.no, lineHeight: 1, ...T.display }}>{yPct}%</div>
-          <div style={{ fontSize: 9, color: C.muted, marginTop: 2, ...T.mono, textTransform: 'uppercase' }}>{yesLabel}</div>
-        </div>
-      </div>
-
-      {(priceToBeat != null || currentPrice != null) && (
-        <div style={{
-          display: 'flex', alignItems: 'stretch', gap: 8, marginBottom: 8,
-          padding: '7px 10px', borderRadius: 10,
-          background: hasPrices
-            ? (isUp ? 'rgba(0,212,163,.06)' : 'rgba(255,95,122,.06)')
-            : 'rgba(255,255,255,.02)',
-          border: `1px solid ${hasPrices ? (isUp ? 'rgba(0,212,163,.25)' : 'rgba(255,95,122,.25)') : C.border}`,
-          ...T.mono,
-        }}>
-          <div style={{ flex: 1, minWidth: 0 }}>
-            <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1 }}>PRICE TO BEAT</div>
-            <div style={{ fontSize: 12, color: C.ink, fontWeight: 700, ...T.display }}>
-              {priceToBeat != null ? fmtPrice(priceToBeat) : '—'}
-            </div>
-          </div>
-          <div style={{ textAlign: 'center', minWidth: 68, paddingLeft: 6, paddingRight: 6, borderLeft: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}` }}>
-            <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1 }}>SPREAD</div>
-            {priceDelta != null ? (
-              <>
-                <div style={{ fontSize: 12, fontWeight: 800, color: isUp ? C.yes : C.no, lineHeight: 1.1, ...T.display }}>
-                  {isUp ? '+' : '−'}{fmtPrice(Math.abs(priceDelta))}
-                </div>
-                <div style={{ fontSize: 9, fontWeight: 700, color: isUp ? C.yes : C.no, marginTop: 1, opacity: .85 }}>
-                  {isUp ? '▲' : '▼'} {Math.abs(priceDeltaPct).toFixed(2)}%
-                </div>
-              </>
-            ) : (
-              <div style={{ fontSize: 12, color: C.muted2, fontWeight: 700, ...T.display }}>—</div>
-            )}
-          </div>
-          <div style={{ flex: 1, minWidth: 0, textAlign: 'right' }}>
-            <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1 }}>NOW</div>
-            <div style={{ fontSize: 12, fontWeight: 700, color: hasPrices ? (isUp ? C.yes : C.no) : C.ink, ...T.display }}>
-              {currentPrice != null ? fmtPrice(currentPrice) : '—'}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {ruleSnippet && (
-        <div style={{ fontSize: 10, color: C.muted, lineHeight: 1.4, marginBottom: 8, padding: '5px 7px', borderLeft: `2px solid ${C.hlDim}`, ...T.body, ...clamp2 }}>
-          {ruleSnippet}
-        </div>
-      )}
-
-      <div style={{ display: 'flex', gap: 8 }}>
-        <button onClick={() => !closed && onTrade(event, true)} disabled={closed}
-          style={{ flex: 1, padding: 8, borderRadius: 10, background: C.yesDim, border: '1px solid rgba(0,212,163,.30)', color: C.yes, cursor: closed ? 'not-allowed' : 'pointer', display: 'flex', flexDirection: 'column', gap: 1, ...T.body }}>
-          <span style={{ fontWeight: 700, fontSize: 12 }}>{yesLabel} · ${yp.toFixed(2)}</span>
-          {upside(yp) > 0 && <span style={{ fontSize: 10, fontWeight: 600, opacity: .8, ...T.mono }}>+{upside(yp)}% upside</span>}
-        </button>
-        <button onClick={() => !closed && onTrade(event, false)} disabled={closed}
-          style={{ flex: 1, padding: 8, borderRadius: 10, background: C.noDim, border: '1px solid rgba(255,95,122,.30)', color: C.no, cursor: closed ? 'not-allowed' : 'pointer', display: 'flex', flexDirection: 'column', gap: 1, ...T.body }}>
-          <span style={{ fontWeight: 700, fontSize: 12 }}>{noLabel} · ${np.toFixed(2)}</span>
-          {upside(np) > 0 && <span style={{ fontSize: 10, fontWeight: 600, opacity: .8, ...T.mono }}>+{upside(np)}% upside</span>}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-// Buy flow phases:
-//   0   idle
-//   1   swap SOL → JupUSD (sign #1, in-flight)
-//   1.5 swap landed, building order
-//   2   order tx (sign #2, in-flight)
-//   2.5 order landed, polling keeper for fill
-//   3   verified — position confirmed on-chain
-function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, solBal, connection }) {
-  const { publicKey, signTransaction } = useWallet();
-
-  const [amount, setAmount]   = useState('10');
-  const [step, setStep]       = useState(0);
-  const [statusMsg, setStMsg] = useState('');
-  const [error, setError]     = useState('');
-  const [warning, setWarning] = useState('');
-  const [showRules, setShowRules] = useState(false);
-  const { log: debugLog, push: dbg, clear: clearDbg } = useDebugLog();
-  const abortRef = useRef(null);
-  // Once funds have moved on-chain (post-swap), cancellation must be disabled
-  // — there's nothing left to cancel and aborting only leaves the user
-  // confused. This flag tracks that.
-  const onChainRef = useRef(false);
-
-  useBodyLock(true);
-
-  const m    = event.market;
-  const poly = event.poly || null;
-
-  const SOL_PRICE_GUESS = 100;
-  const depositUsd      = Number(amount) || 0;
-  const feeUsd          = depositUsd * (FEE_BPS / 10000);
-  const totalUsd        = depositUsd + feeUsd;
-  const estTotalLamports = BigInt(Math.round((totalUsd / SOL_PRICE_GUESS) * 1e9));
-  const hasBalance      = solBal >= estTotalLamports && estTotalLamports > 0n;
-
-  const price         = isYes ? m.yesPrice : m.noPrice;
-  const contractsEst  = price > 0 ? depositUsd / price : 0;
-
-  const sideLabel = (poly?.outcomes && poly.outcomes[isYes ? 0 : 1]) || (isYes ? 'YES' : 'NO');
-  const sideColor = isYes ? C.yes : C.no;
-  const sideDim   = isYes ? C.yesDim : C.noDim;
-
-  const busy   = step > 0 && step < 3;
-  const canBuy = !busy && depositUsd >= MIN_TRADE_USD && publicKey && m.marketId && hasBalance;
-  const canCancel = busy && !onChainRef.current;
-
-  const cancel = useCallback(() => {
-    if (!canCancel) return;
-    if (abortRef.current) { try { abortRef.current.abort(); } catch {} }
-    dbg('buy:cancel', 'user cancelled pre-signature');
-    setStep(0); setStMsg(''); setError('Cancelled.');
-  }, [canCancel, dbg]);
-
-  const placeOrder = useCallback(async () => {
-    dbg('buy:start', `marketId=${m.marketId} side=${isYes ? 'YES' : 'NO'} deposit=$${depositUsd}`);
-    if (!publicKey || !signTransaction) {
-      setError('Connect a wallet that supports signTransaction.');
-      return;
-    }
-    if (depositUsd < MIN_TRADE_USD) {
-      setError(`Minimum deposit is $${MIN_TRADE_USD}.`);
-      return;
-    }
-
-    setError(''); setWarning('');
-    onChainRef.current = false;
-    abortRef.current = new AbortController();
-    const signal = abortRef.current.signal;
-    const checkAbort = () => {
-      if (signal.aborted) throw new Error('Cancelled.');
-    };
-
-    try {
-      const ownerB58 = publicKey.toBase58();
-
-      // STEP 1: Pre-swap balance snapshot — gives us baseline to verify
-      // the swap landed even if the confirm fallback times out.
-      const jupUsdBefore = await fetchJupUsdBalance(connection, ownerB58);
-      dbg('buy:1', `JupUSD before: ${(Number(jupUsdBefore) / 1e6).toFixed(4)}`);
-
-      setStep(1); setStMsg('Pricing swap…');
-      const solPrice = await fetchSolPrice();
-      dbg('buy:1', `SOL price: $${solPrice.toFixed(2)}`);
-      // 2% margin: 1% for SOL price drift between fetch and tx land, 1%
-      // headroom over slippage so net JupUSD ≥ deposit.
-      const grossUsdToSwap = totalUsd * 1.02;
-      const grossLamports  = BigInt(Math.round((grossUsdToSwap / solPrice) * 1e9));
-      dbg('buy:1', `spend ~${(Number(grossLamports) / 1e9).toFixed(6)} SOL`);
-      checkAbort();
-
-      const { tx: swapTx, netJupUsdAtomic, feeAtomic, latestBlockhash: swapBh } =
-        await buildSolToJupUsdSwapTx({ connection, ownerPubkey: publicKey, grossLamports });
-      dbg('buy:1', `expected net JupUSD: ${(Number(netJupUsdAtomic) / 1e6).toFixed(4)} (fee ${(Number(feeAtomic) / 1e6).toFixed(4)})`);
-      checkAbort();
-
-      setStMsg('Pre-checking swap…');
-      await simulateOrThrow(connection, swapTx, 'SOL→JupUSD swap');
-      checkAbort();
-
-      setStMsg('Confirm Step 1 of 2 — Swap SOL → JupUSD');
-      const signedSwap = await signTransaction(swapTx);
-      checkAbort();
-
-      // Funds about to move on-chain. After this, cancellation is meaningless.
-      onChainRef.current = true;
-      setStMsg('Swapping…');
-      const swapResult = await sendAndConfirm(connection, signedSwap, swapBh, setStMsg, signal);
-      dbg('buy:1', `swap result: ${swapResult.status} ${swapResult.sig}`);
-
-      // If pending, verify via balance delta. This is robust to RPC flake.
-      let jupUsdAfter = 0n;
-      if (swapResult.status === 'pending') {
-        setStMsg('Verifying swap…');
-        // Poll for balance increase up to ~12s.
-        for (let i = 0; i < 8; i++) {
-          await new Promise(r => setTimeout(r, 1500));
-          jupUsdAfter = await fetchJupUsdBalance(connection, ownerB58);
-          if (jupUsdAfter > jupUsdBefore) break;
-        }
-        if (jupUsdAfter <= jupUsdBefore) {
-          throw new Error(`Swap submitted but not visible yet. Sig: ${swapResult.sig}. Check your wallet — if JupUSD landed, retry the buy with that amount.`);
-        }
-      } else {
-        jupUsdAfter = await fetchJupUsdBalance(connection, ownerB58);
-      }
-      const swapDelta = jupUsdAfter - jupUsdBefore;
-      dbg('buy:1', `swap delta: +${(Number(swapDelta) / 1e6).toFixed(4)} JupUSD`);
-
-      // STEP 2: Place order.
-      // CRITICAL: use ONLY the delta from this swap, not total balance.
-      // Otherwise pre-existing JupUSD would be lumped in. Apply a tiny
-      // safety margin (1000 atomic = $0.001) for any program rounding.
-      setStep(2); setStMsg('Building order…');
-      const SAFETY_MARGIN = 1000n;
-      let orderDeposit = swapDelta > SAFETY_MARGIN ? swapDelta - SAFETY_MARGIN : 0n;
-
-      // Absolute floor: predict requires ≥ MIN_TRADE_USD. If slippage
-      // dropped us below that, abort with recovery instructions.
-      const MIN_ATOMIC = BigInt(MIN_TRADE_USD * 1e6);
-      if (orderDeposit < MIN_ATOMIC) {
-        const got = (Number(swapDelta) / 1e6).toFixed(2);
-        throw new Error(`Swap returned only $${got} JupUSD — below the $${MIN_TRADE_USD} minimum. Your JupUSD is in your wallet. Either swap it back to SOL or retry with a larger amount.`);
-      }
-      dbg('buy:2', `order deposit: ${(Number(orderDeposit) / 1e6).toFixed(4)} JupUSD`);
-
-      const orderRequest = await loggedFetch(
-        '/api/predict/orders',
-        {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            ownerPubkey: ownerB58,
-            marketId: m.marketId,
-            isYes,
-            isBuy: true,
-            depositAmount: orderDeposit.toString(),
-            depositMint: JUPUSD_MINT,
-          }),
-          signal,
-        },
-        dbg,
-        'predict-orders',
-      );
-
-      const j = orderRequest.json;
-      if (!j?.transaction) {
-        dbg('buy:2:fail', 'no transaction in response', j);
-        throw new Error('Jupiter Predict returned no transaction.');
-      }
-      const orderPubkey =
-        j.order?.orderPubkey || j.orderPubkey ||
-        (typeof j.order === 'string' ? j.order : null) || j.pubkey || null;
-      dbg('buy:2', `orderPubkey: ${orderPubkey || '(none)'}`);
-
-      const buyTx = VersionedTransaction.deserialize(b64ToBytes(j.transaction));
-
-      setStMsg('Pre-checking order…');
-      await simulateOrThrow(connection, buyTx, 'buy order');
-      dbg('buy:2', 'simulation passed');
-
-      setStMsg(`Confirm Step 2 of 2 — Buy ${sideLabel}`);
-      const signedBuy = await signTransaction(buyTx);
-
-      setStMsg('Submitting order…');
-      const orderResult = await sendAndConfirm(connection, signedBuy, null, setStMsg, signal);
-      dbg('buy:2', `order tx: ${orderResult.status} ${orderResult.sig}`);
-
-      // Whether order tx confirmed or is pending, move to keeper-watch phase.
-      // A pending order tx that lands seconds later still works — the keeper
-      // will pick it up.
-
-      if (!orderPubkey) {
-        setWarning('Order submitted but no order pubkey returned. Check Positions tab in a moment.');
-        setStep(3); setStMsg('');
-        onDone?.(); setTimeout(() => onClose(), 4000);
-        return;
-      }
-
-      // STEP 3: Wait for keeper fill, then verify position delta.
-      setStMsg('Waiting for keeper to fill…');
-      let lastStatus = null;
-      const fillStatus = await pollOrderStatus(orderPubkey, {
-        signal,
-        onTick: async (i, total) => {
-          setStMsg(`Waiting for keeper… (${i}/${total})`);
-          try {
-            const r = await fetch(`/api/predict/orders/status/${encodeURIComponent(orderPubkey)}`, { signal });
-            const t = await r.text();
-            let p = null; try { p = JSON.parse(t); } catch {}
-            const st = p?.status || p?.data?.status || `(http ${r.status})`;
-            if (st !== lastStatus) { dbg('buy:3:poll', `[${i}/${total}] status=${st}`); lastStatus = st; }
-          } catch (e) { dbg('buy:3:poll', `[${i}/${total}] error: ${e.message}`); }
-        },
-      });
-      dbg('buy:3', `keeper final: ${fillStatus}`);
-
-      // 'aborted' here means our signal fired — only possible pre-on-chain.
-      // Post-swap we don't accept abort, so this is a defensive branch.
-      if (fillStatus === 'aborted') {
-        setWarning(`Order in flight: ${orderResult.sig}. Check Positions.`);
-        setStep(3); setStMsg('');
-        onDone?.(); setTimeout(() => onClose(), 4000);
-        return;
-      }
-
-      if (fillStatus === 'failed') {
-        throw new Error('Order rejected by keeper. JupUSD should be refunded to your wallet shortly.');
-      }
-
-      // ── GROUND-TRUTH VERIFICATION via JupUSD balance ──
-      // The positions API has been unreliable (returning [] on failure,
-      // letting unrelated old positions count as "verified"). The real
-      // ground truth: if the order placed, the deposited JupUSD stays
-      // escrowed. If the order was refunded, the JupUSD comes back.
-      //
-      // Compute the JupUSD balance we EXPECT if the buy succeeded:
-      //   pre-buy balance - order deposit (what we sent to Predict)
-      // Then check after a settle period: if balance ≈ expected, position
-      // exists. If balance ≈ pre-buy (i.e. JupUSD came back), it failed.
-      setStMsg('Verifying order placed…');
-      const expectedAfter = jupUsdAfter - orderDeposit;          // jupUsdAfter set earlier (post-swap, pre-order)
-      const refundThreshold = expectedAfter + (orderDeposit / 2n); // halfway = clear "came back"
-
-      let finalBal = jupUsdAfter;
-      let placed = false;
-      let refunded = false;
-      for (let i = 0; i < 8; i++) {
-        if (signal?.aborted) break;
-        await new Promise(r => setTimeout(r, 1500));
-        finalBal = await fetchJupUsdBalance(connection, ownerB58);
-        const dropped = jupUsdAfter - finalBal;
-        dbg('buy:verify', `poll ${i+1}: bal=${(Number(finalBal)/1e6).toFixed(4)}, expected=${(Number(expectedAfter)/1e6).toFixed(4)}`);
-        // If balance is at-or-below expected (within 1% tolerance of deposit), placed.
-        const tolerance = orderDeposit / 100n;
-        if (finalBal <= expectedAfter + tolerance) { placed = true; break; }
-        // If balance is at-or-above the refund threshold, came back.
-        if (finalBal >= refundThreshold) { refunded = true; break; }
-      }
-
-      if (refunded) {
-        throw new Error('Order rejected by keeper. JupUSD has been refunded to your wallet.');
-      }
-      if (!placed) {
-        setWarning(`Order submitted (sig: ${orderResult.sig.slice(0, 12)}…) but balance hasn't settled. Check Positions tab in a moment.`);
-        setStep(3); setStMsg('');
-        onDone?.(); setTimeout(() => onClose(), 4500);
-        return;
-      }
-
-      dbg('buy:done', `position placed; JupUSD escrowed: ${(Number(jupUsdAfter - finalBal) / 1e6).toFixed(4)}`);
-      setStep(3); setStMsg('');
-      onDone?.();
-      setTimeout(() => onClose(), 1800);
-    } catch (e) {
-      dbg('buy:error', e?.message || String(e), { status: e?.status, body: e?.body?.slice?.(0, 400) });
-      // If we threw AFTER on-chain movement, the error message already
-      // contains recovery context (signatures, balances). Show it as
-      // a warning rather than failure if the user's funds are safe.
-      const msg = String(e?.message || '');
-      const isRecoverable = /your jupusd|check.*wallet|in your wallet|sig:|signature/i.test(msg)
-                          && !/cancelled/i.test(msg);
-      if (isRecoverable) {
-        setWarning(friendlyError(e));
-      } else {
-        setError(friendlyError(e));
-      }
-      setStep(0); setStMsg('');
-    } finally {
-      onChainRef.current = false;
-    }
-  }, [
-    publicKey, signTransaction, m, isYes, depositUsd, totalUsd,
-    connection, onClose, onDone, sideLabel, dbg,
-  ]);
-
-  const presets = ['5', '10', '25', '50'];
-
-  const rulesText = poly?.description || m.rulesPrimary || event.closeCondition;
-  const threshold = poly?.groupItemTitle;
-
-  const priceToBeat = resolvePriceToBeat(event, priceSnapshots);
-  const symbol      = symbolFromSubcategory(event.subcategory);
-  const live        = symbol ? livePrices?.get(symbol) : null;
-  const currentPrice = live?.value ?? null;
-  const hasPrices    = priceToBeat != null && currentPrice != null;
-  const priceDelta   = hasPrices ? currentPrice - priceToBeat : null;
-  const priceDeltaPct = hasPrices && priceToBeat > 0 ? (priceDelta / priceToBeat) * 100 : null;
-  const isUp = priceDelta != null && priceDelta >= 0;
-  const fmtPrice = (n) => {
-    if (n == null) return '—';
-    if (n >= 1000) return '$' + n.toLocaleString('en-US', { maximumFractionDigits: 2 });
-    if (n >= 1)    return '$' + n.toFixed(2);
-    if (n >= 0.01) return '$' + n.toFixed(4);
-    return '$' + n.toFixed(6);
-  };
-
-  const buttonLabel = (() => {
-    if (busy) return statusMsg || 'Working…';
-    if (step === 3) return warning ? '⚠ Submitted — check Positions' : '✓ Order filled';
-    return `Buy ${sideLabel} · $${totalUsd.toFixed(2)}`;
-  })();
-
-  // Step indicator: 3 phases (swap, order, fill). Show current.
-  const stepIndex = step === 0 ? 0 : step < 2 ? 1 : step < 3 ? 2 : 3;
-
-  return (
-    <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: '12px 12px 14px', boxShadow: C.shadowLg, maxHeight: `calc(100dvh - ${NAV_CLEARANCE}px - 24px)`, overflowY: 'auto' }}>
-        <div style={{ width: 32, height: 3, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 8px' }} />
-
-        {busy && <StepBadge current={stepIndex} total={3} />}
-
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 4, lineHeight: 1.35, ...T.body }}>
-          {event.title}
-        </div>
-
-        {event.subtitle && (
-          <div style={{ fontSize: 10, color: C.muted, marginBottom: 6, ...T.body }}>{event.subtitle}</div>
-        )}
-
-        {m.title && m.title !== event.title && (
-          <div style={{ fontSize: 13, fontWeight: 700, color: C.hl, marginBottom: 8, lineHeight: 1.3, ...T.body }}>
-            {m.title}
-          </div>
-        )}
-
-        {(priceToBeat != null || currentPrice != null) && (
-          <div style={{
-            display: 'flex', alignItems: 'stretch', gap: 10, marginBottom: 10,
-            padding: '10px 12px', borderRadius: 12,
-            background: hasPrices
-              ? (isUp ? 'rgba(0,212,163,.08)' : 'rgba(255,95,122,.08)')
-              : 'rgba(255,255,255,.03)',
-            border: `1px solid ${hasPrices ? (isUp ? 'rgba(0,212,163,.30)' : 'rgba(255,95,122,.30)') : C.border}`,
-            ...T.mono,
-          }}>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1.2, marginBottom: 2 }}>PRICE TO BEAT</div>
-              <div style={{ fontSize: 16, color: C.ink, fontWeight: 800, ...T.display, lineHeight: 1 }}>
-                {priceToBeat != null ? fmtPrice(priceToBeat) : '—'}
-              </div>
-            </div>
-            <div style={{ textAlign: 'center', minWidth: 84, paddingLeft: 8, paddingRight: 8, borderLeft: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}` }}>
-              <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1.2, marginBottom: 2 }}>SPREAD</div>
-              {priceDelta != null ? (
-                <>
-                  <div style={{ fontSize: 16, fontWeight: 800, color: isUp ? C.yes : C.no, lineHeight: 1.1, ...T.display }}>
-                    {isUp ? '+' : '−'}{fmtPrice(Math.abs(priceDelta))}
-                  </div>
-                  <div style={{ fontSize: 10, fontWeight: 700, color: isUp ? C.yes : C.no, marginTop: 2, opacity: .9 }}>
-                    {isUp ? '▲' : '▼'} {Math.abs(priceDeltaPct).toFixed(2)}%
-                  </div>
-                </>
-              ) : (
-                <div style={{ fontSize: 16, color: C.muted2, fontWeight: 800, ...T.display }}>—</div>
-              )}
-            </div>
-            <div style={{ flex: 1, minWidth: 0, textAlign: 'right' }}>
-              <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1.2, marginBottom: 2 }}>NOW</div>
-              <div style={{ fontSize: 16, fontWeight: 800, color: hasPrices ? (isUp ? C.yes : C.no) : C.ink, ...T.display, lineHeight: 1 }}>
-                {currentPrice != null ? fmtPrice(currentPrice) : '—'}
-              </div>
-              {currentPrice != null && (
-                <div style={{ fontSize: 8, color: C.muted2, marginTop: 3 }}>chainlink · live</div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {threshold && (
-          <div style={{ display: 'inline-block', padding: '4px 10px', borderRadius: 8, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 11, fontWeight: 800, letterSpacing: 0.4, marginBottom: 8, ...T.mono }}>
-            {threshold}
-          </div>
-        )}
-
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-          <div style={{ padding: '3px 8px', borderRadius: 99, background: sideDim, border: `1px solid ${sideColor}55`, color: sideColor, fontSize: 9, fontWeight: 800, letterSpacing: 1, textTransform: 'uppercase', ...T.mono }}>{sideLabel}</div>
-          <div style={{ fontSize: 11, color: C.muted, ...T.mono }}>${price.toFixed(3)} · {Math.round(price * 100)}%</div>
-          {event.subcategory && (
-            <div style={{ fontSize: 9, color: C.hl, ...T.mono, fontWeight: 700, padding: '2px 6px', background: C.hlDim, borderRadius: 99 }}>{event.subcategory}</div>
-          )}
-          <div style={{ marginLeft: 'auto', fontSize: 10, color: C.muted, ...T.mono }}>
-            {(Number(solBal) / 1e9).toFixed(4)} SOL
-          </div>
-        </div>
-
-        {rulesText && (
-          <div style={{ marginBottom: 10, padding: 8, borderRadius: 8, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}` }}>
-            <button onClick={() => setShowRules(!showRules)} style={{ width: '100%', background: 'none', border: 'none', color: C.muted, fontSize: 9, fontWeight: 700, letterSpacing: 1, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 0, ...T.mono }}>
-              <span>{poly ? 'FULL RULES (from Polymarket)' : 'RESOLUTION'}</span>
-              <span style={{ fontSize: 11 }}>{showRules ? '−' : '+'}</span>
-            </button>
-            {showRules && (
-              <>
-                <div style={{ marginTop: 6, fontSize: 10, color: C.ink, lineHeight: 1.5, whiteSpace: 'pre-wrap', maxHeight: 260, overflowY: 'auto', ...T.body }}>
-                  {rulesText}
-                </div>
-                {m.rulesSecondary && m.rulesSecondary !== rulesText && !poly && (
-                  <div style={{ marginTop: 6, fontSize: 10, color: C.muted, lineHeight: 1.5, ...T.body }}>{m.rulesSecondary}</div>
-                )}
-                {event.rulesPdf && (
-                  <a href={event.rulesPdf} target="_blank" rel="noreferrer" style={{ display: 'inline-block', marginTop: 6, fontSize: 10, color: C.hl, textDecoration: 'underline', ...T.mono }}>
-                    Full rules ↗
-                  </a>
-                )}
-              </>
-            )}
-          </div>
-        )}
-
-        <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 9, color: C.muted, marginBottom: 5, textTransform: 'uppercase', letterSpacing: 1, ...T.mono }}>Deposit amount (fee added on top)</div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 11px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}` }}>
-            <span style={{ fontSize: 16, color: C.muted, fontWeight: 700, ...T.display }}>$</span>
-            <input value={amount} onChange={e => { setAmount(cleanAmount(e.target.value)); setError(''); }} disabled={busy} inputMode="decimal"
-              style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 18, fontWeight: 700, ...T.display }} />
-            <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>USD</span>
-          </div>
-          <div style={{ display: 'flex', gap: 5, marginTop: 6 }}>
-            {presets.map(v => (
-              <button key={v} onClick={() => setAmount(v)} disabled={busy} style={{ flex: 1, padding: 6, borderRadius: 7, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 10, fontWeight: 600, cursor: 'pointer', ...T.mono }}>${v}</button>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ padding: 9, borderRadius: 10, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10, ...T.mono, fontSize: 10 }}>
-          <Row label="Deposit (to Predict)" value={fmtUsd(depositUsd)} />
-          <Row label="Platform fee (5%)" value={`~${fmtUsd(feeUsd)}`} />
-          <Row label="Total cost" value={`~${fmtUsd(totalUsd)} in SOL`} valueColor={C.hl} bold />
-          <Row label="Est. contracts" value={`~${contractsEst.toFixed(2)}`} />
-          <Row label={`If ${sideLabel} wins`} value={`~${fmtUsd(contractsEst)}`} valueColor={sideColor} bold />
-          {formatEndDate(event.closeTime) && (
-            <Row label="Closes" value={formatEndDate(event.closeTime)} />
-          )}
-        </div>
-
-        {statusMsg && <StatusLine msg={statusMsg} step={busy ? `STEP ${stepIndex} OF 3` : null} />}
-        {error && <ErrorLine msg={error} />}
-        {warning && !error && <WarnLine msg={warning} />}
-
-        {!hasBalance && depositUsd > 0 && !busy && (
-          <WarnLine msg={`Insufficient SOL — need ~$${totalUsd.toFixed(2)} worth (deposit + 5% fee).`} />
-        )}
-
-        <PrimaryButton
-          onClick={canBuy ? placeOrder : undefined}
-          disabled={!canBuy || step === 3}
-          color={isYes ? 'yes' : 'no'}
-          label={buttonLabel}
-        />
-
-        {busy && (
-          <CancelButton
-            onClick={cancel}
-            disabled={!canCancel}
-            label={canCancel ? 'Cancel' : 'Cancel (unavailable — funds on-chain)'}
-          />
-        )}
-
-        <DebugPanel log={debugLog} onClear={clearDbg} />
-      </div>
-    </div>
-  );
-}
-
-// ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 10: Positions
-// ═══════════════════════════════════════════════════════════════════════════════
-
-function PositionsList({ positions, loading, onAction }) {
-  if (loading) return <>{[1,2,3].map(i => <Skeleton key={i} />)}</>;
-  if (positions.length === 0) {
-    return (
-      <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13, ...T.body }}>
-        No open positions yet.
-        <div style={{ fontSize: 11, marginTop: 6, color: C.muted2 }}>Switch to Markets to place your first trade.</div>
-      </div>
-    );
-  }
-  return positions.map(p => <PositionCard key={p.positionPubkey} p={p} onAction={onAction} />);
-}
-
-function PositionCard({ p, onAction }) {
-  const sideColor = p.isYes ? C.yes : C.no;
-  const sideDim   = p.isYes ? C.yesDim : C.noDim;
-  const pnl       = p.pnlUsd;
-  const pnlColor  = pnl >= 0 ? C.yes : C.no;
-  const pnlPct    = p.costUsd > 0 ? (pnl / p.costUsd) * 100 : 0;
-
-  const isClaimable = p.claimable && !p.claimed;
-  const isClaimed   = p.claimed;
-  const isResolved  = p.marketStatus === 'settled' || p.marketStatus === 'resolved'
-                    || (p.marketResult && p.marketResult !== 'pending' && p.marketResult !== '');
-  const wonResolved = isResolved && !!p.marketResult && (
-    (p.marketResult.toLowerCase() === 'yes' && p.isYes) ||
-    (p.marketResult.toLowerCase() === 'no'  && !p.isYes)
-  );
-  const lostResolved = isResolved && !isClaimable && !isClaimed && !wonResolved;
-  const isSettling   = isResolved && !isClaimable && !isClaimed && !lostResolved;
-  const inferredLost = !isClaimable && !isClaimed && !isResolved
-                    && p.markPriceUsd === 0 && p.contracts > 0;
-
-  return (
-    <div style={{
-      padding: 10, borderRadius: 14,
-      background: `linear-gradient(145deg, ${C.card}, ${C.cardHi})`,
-      border: `1px solid ${lostResolved || inferredLost ? 'rgba(255,95,122,.20)' : isClaimable ? 'rgba(0,212,163,.30)' : C.border}`,
-      marginBottom: 7,
-      boxShadow: C.shadow,
-      opacity: lostResolved || inferredLost || isClaimed ? 0.7 : 1,
-    }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, lineHeight: 1.3, marginBottom: 4, ...T.body }}>{p.title}</div>
-          {p.outcomeLabel && p.outcomeLabel !== p.title && (
-            <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, ...T.mono }}>{p.outcomeLabel}</div>
-          )}
-          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-            <div style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 99, background: sideDim, border: `1px solid ${sideColor}55`, color: sideColor, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>{p.isYes ? 'YES' : 'NO'}</div>
-            {isClaimable && (
-              <div style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 99, background: C.yesDim, border: `1px solid ${C.yes}55`, color: C.yes, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>WON</div>
-            )}
-            {(lostResolved || inferredLost) && (
-              <div style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 99, background: C.noDim, border: `1px solid ${C.no}55`, color: C.no, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>LOST</div>
-            )}
-            {isSettling && (
-              <div style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 99, background: 'rgba(245,181,61,.15)', border: '1px solid rgba(245,181,61,.40)', color: C.amber, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>SETTLING</div>
-            )}
-            {isClaimed && (
-              <div style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 99, background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>CLAIMED</div>
-            )}
-          </div>
-        </div>
-        <div style={{ textAlign: 'right' }}>
-          <div style={{ fontSize: 14, fontWeight: 800, color: C.ink, ...T.display, lineHeight: 1 }}>{fmtUsd(p.valueUsd)}</div>
-          <div style={{ fontSize: 10, color: pnlColor, fontWeight: 700, ...T.mono, marginTop: 2 }}>
-            {pnl >= 0 ? '+' : ''}{pnl.toFixed(2)} ({pnl >= 0 ? '+' : ''}{pnlPct.toFixed(1)}%)
-          </div>
-        </div>
-      </div>
-
-      <div style={{ padding: 7, borderRadius: 8, background: 'rgba(255,255,255,.02)', marginBottom: 8, ...T.mono, fontSize: 10 }}>
-        <Row label="Contracts" value={`${p.contracts.toFixed(2)} @ $${p.avgPriceUsd.toFixed(3)}`} />
-        <Row label="Mark price" value={`$${p.markPriceUsd.toFixed(3)}`} />
-        {isClaimable && <Row label="Payout" value={fmtUsd(p.payoutUsd)} valueColor={C.yes} bold />}
-      </div>
-
-      {isClaimable ? (
-        <PrimaryButton onClick={() => onAction('claim', p)} color="yes" label={`Claim ${fmtUsd(p.payoutUsd)}`} />
-      ) : isClaimed ? (
-        <div style={{ textAlign: 'center', fontSize: 11, color: C.muted, fontWeight: 600, padding: 8, ...T.mono }}>
-          ✓ Claimed {fmtUsd(p.payoutUsd)}
-        </div>
-      ) : (lostResolved || inferredLost) ? (
-        <div style={{ textAlign: 'center', fontSize: 11, color: C.no, fontWeight: 700, padding: 8, ...T.mono }}>
-          Lost · −{fmtUsd(p.costUsd)}
-        </div>
-      ) : isSettling ? (
-        <div style={{ textAlign: 'center', fontSize: 11, color: C.amber, fontWeight: 700, padding: 8, ...T.mono }}>
-          Awaiting settlement…
-        </div>
-      ) : (
-        <button onClick={() => onAction('sell', p)}
-          style={{ width: '100%', padding: 9, borderRadius: 10, background: pnl >= 0 ? `linear-gradient(135deg, ${C.yes}22, ${C.yes}11)` : `linear-gradient(135deg, ${C.no}22, ${C.no}11)`, border: `1px solid ${pnl >= 0 ? C.yes : C.no}55`, color: pnl >= 0 ? C.yes : C.no, fontSize: 12, fontWeight: 700, cursor: 'pointer', ...T.body }}>
-          Sell {p.contracts.toFixed(2)} contracts · {fmtUsd(p.valueUsd)}
-        </button>
-      )}
-    </div>
-  );
-}
-
-// Sell/Claim flow phases:
-//   0   idle
-//   1   predict tx (sign #1, in-flight)
-//   1.5 predict tx landed, building swap
-//   2   swap tx (sign #2, in-flight)
-//   3   done, swap verified
-function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
-  const { publicKey, signTransaction } = useWallet();
-  const [step, setStep]       = useState(0);
-  const [statusMsg, setStMsg] = useState('');
-  const [error, setError]     = useState('');
-  const [warning, setWarning] = useState('');
-  const { log: debugLog, push: dbg, clear: clearDbg } = useDebugLog();
-  const abortRef = useRef(null);
-  const onChainRef = useRef(false);
-
-  useBodyLock(true);
-
-  const isClaim = kind === 'claim';
-  const busy = step > 0 && step < 3;
-  const canCancel = busy && !onChainRef.current;
-
-  const cancel = useCallback(() => {
-    if (!canCancel) return;
-    if (abortRef.current) { try { abortRef.current.abort(); } catch {} }
-    dbg(`${kind}:cancel`, 'user cancelled pre-signature');
-    setStep(0); setStMsg(''); setError('Cancelled.');
-  }, [canCancel, dbg, kind]);
-
-  const grossUsd = isClaim ? position.payoutUsd : position.valueUsd;
-  const feeUsd   = grossUsd * (FEE_BPS / 10000);
-  const netUsd   = grossUsd - feeUsd;
-
-  const handleAction = useCallback(async () => {
-    dbg(`${kind}:start`, `position=${position.positionPubkey} contracts=${position.contracts} side=${position.isYes ? 'YES' : 'NO'}`);
-    if (!publicKey || !signTransaction) {
-      setError('Connect a wallet that supports signTransaction.');
-      return;
-    }
-    setError(''); setWarning('');
-    onChainRef.current = false;
-    abortRef.current = new AbortController();
-    const signal = abortRef.current.signal;
-    const checkAbort = () => { if (signal.aborted) throw new Error('Cancelled.'); };
-
-    try {
-      const ownerB58 = publicKey.toBase58();
-
-      // CRITICAL: snapshot JupUSD balance BEFORE the sell/claim. We'll use
-      // the delta — not the total balance — to know what to swap to SOL.
-      // This protects any pre-existing JupUSD the user already holds.
-      setStep(1);
-      setStMsg('Reading balances…');
-      const jupUsdBefore = await fetchJupUsdBalance(connection, ownerB58);
-      dbg(`${kind}:1`, `JupUSD before ${isClaim ? 'claim' : 'sell'}: ${(Number(jupUsdBefore) / 1e6).toFixed(4)}`);
-
-      setStMsg(`Building ${isClaim ? 'claim' : 'sell'}…`);
-      const url = isClaim
-        ? `/api/predict/positions/${encodeURIComponent(position.positionPubkey)}/claim`
-        : `/api/predict/positions/${encodeURIComponent(position.positionPubkey)}`;
-      const method = isClaim ? 'POST' : 'DELETE';
-
-      const request = await loggedFetch(
-        url,
-        {
-          method,
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ownerPubkey: ownerB58 }),
-          signal,
-        },
-        dbg,
-        `predict-${kind}`,
-      );
-      checkAbort();
-
-      const j = request.json;
-      if (!j?.transaction) {
-        dbg(`${kind}:1:fail`, 'no transaction in response', j);
-        throw new Error(`No ${kind} tx returned. See debug log.`);
-      }
-      const predictTx = VersionedTransaction.deserialize(b64ToBytes(j.transaction));
-      dbg(`${kind}:1`, 'tx deserialized');
-
-      setStMsg('Pre-checking…');
-      await simulateOrThrow(connection, predictTx, kind);
-      checkAbort();
-
-      setStMsg(`Confirm Step 1 of 2 — ${isClaim ? 'Claim winnings' : 'Sell contracts'}`);
-      const signedPredict = await signTransaction(predictTx);
-      checkAbort();
-
-      onChainRef.current = true;
-      setStMsg(isClaim ? 'Claiming…' : 'Selling…');
-      const predictResult = await sendAndConfirm(connection, signedPredict, null, setStMsg, signal);
-      dbg(`${kind}:1`, `result: ${predictResult.status} ${predictResult.sig}`);
-
-      // Verify the predict tx by checking the JupUSD delta. If status is
-      // pending or even if confirmed, we always poll the balance to know
-      // the exact amount that arrived (claim payout / sell proceeds vary
-      // due to fees/slippage on the predict side).
-      setStMsg(`Verifying ${isClaim ? 'payout' : 'proceeds'}…`);
-      let jupUsdAfter = jupUsdBefore;
-      let pollAttempts = predictResult.status === 'pending' ? 12 : 6;
-      for (let i = 0; i < pollAttempts; i++) {
-        await new Promise(r => setTimeout(r, 1500));
-        jupUsdAfter = await fetchJupUsdBalance(connection, ownerB58);
-        if (jupUsdAfter > jupUsdBefore) break;
-      }
-      const delta = jupUsdAfter - jupUsdBefore;
-      dbg(`${kind}:1`, `JupUSD delta: +${(Number(delta) / 1e6).toFixed(4)}`);
-
-      if (delta <= 0n) {
-        if (predictResult.status === 'pending') {
-          throw new Error(`${isClaim ? 'Claim' : 'Sell'} submitted but not yet visible. Sig: ${predictResult.sig.slice(0, 12)}…. Refresh in a moment and you can swap the JupUSD to SOL.`);
-        }
-        throw new Error(`${isClaim ? 'Claim' : 'Sell'} confirmed but no JupUSD arrived. Check Solscan: ${predictResult.sig.slice(0, 12)}…`);
-      }
-
-      // STEP 2: Swap the DELTA — not the full balance — to SOL.
+      dbg('access-fee:build', `$${ACCESS_FEE_USD} → ${FEE_WALLET_B58.slice(0,8)}…`);
+      const { tx, latestBlockhash } = await buildAccessFeeTx({ connection, ownerPubkey: publicKey });
+      const signed = await signTransaction(tx);
+      const result = await sendAndConfirm(connection, signed, latestBlockhash, () => {}, null);
+      dbg('access-fee:done', result.sig);
+      setAccessFeeRecord(publicKey.toBase58());
       setStep(2);
-      setStMsg('Building swap…');
-      const { tx: swapTx, latestBlockhash: swapBh } = await buildJupUsdToSolSwapTx({
-        connection,
-        ownerPubkey: publicKey,
-        grossJupUsdAtomic: delta,
-      });
-      dbg(`${kind}:2`, `swapping ${(Number(delta) / 1e6).toFixed(4)} JupUSD → SOL`);
-      checkAbort();
-
-      setStMsg('Pre-checking swap…');
-      await simulateOrThrow(connection, swapTx, 'JupUSD→SOL swap');
-      checkAbort();
-
-      setStMsg('Confirm Step 2 of 2 — Swap JupUSD → SOL');
-      const signedSwap = await signTransaction(swapTx);
-
-      setStMsg('Swapping…');
-      const swapResult = await sendAndConfirm(connection, signedSwap, swapBh, setStMsg, signal);
-      dbg(`${kind}:2`, `swap result: ${swapResult.status} ${swapResult.sig}`);
-
-      if (swapResult.status === 'pending') {
-        setWarning(`Swap submitted but not yet visible. Sig: ${swapResult.sig.slice(0, 12)}…. Your SOL will appear once it lands.`);
-      } else {
-        dbg(`${kind}:done`, 'complete');
-      }
-
-      setStep(3); setStMsg('');
-      onDone?.();
-      setTimeout(() => onClose(), warning ? 4500 : 1800);
+      setTimeout(() => onPaid(), 800);
     } catch (e) {
-      dbg(`${kind}:error`, e?.message || String(e), { status: e?.status, body: e?.body?.slice?.(0, 400) });
-      const msg = String(e?.message || '');
-      const isRecoverable = /your jupusd|in your wallet|sig:|signature|refresh|swap.*to sol/i.test(msg)
-                          && !/cancelled/i.test(msg);
-      if (isRecoverable) {
-        setWarning(friendlyError(e));
-      } else {
-        setError(friendlyError(e));
-      }
-      setStep(0); setStMsg('');
-    } finally {
-      onChainRef.current = false;
+      dbg('access-fee:error', e?.message);
+      setError(friendlyError(e));
+      setStep(0);
     }
-  }, [publicKey, signTransaction, position, isClaim, kind, connection, onDone, onClose, dbg, warning]);
-
-  const headerBadge = isClaim
-    ? <div style={{ display: 'inline-block', padding: '2px 8px', borderRadius: 99, background: C.yesDim, border: `1px solid ${C.yes}55`, color: C.yes, fontSize: 9, fontWeight: 800, letterSpacing: 1, marginBottom: 6, ...T.mono }}>🏆 RESOLVED — YOU WON</div>
-    : null;
-
-  const stepIndex = step === 0 ? 0 : step < 2 ? 1 : 2;
+  }, [publicKey, signTransaction, connection, onPaid, dbg]);
 
   return (
-    <div onClick={busy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 200, background: 'rgba(3,6,15,.74)', backdropFilter: 'blur(14px)', display: 'flex', alignItems: 'flex-end', justifyContent: 'center', paddingBottom: NAV_CLEARANCE, cursor: busy ? 'wait' : 'pointer' }}>
-      <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 520, background: `linear-gradient(180deg, ${C.cardHi}, ${C.card})`, borderTop: `1px solid ${C.borderHi}`, borderTopLeftRadius: 16, borderTopRightRadius: 16, padding: '12px 12px 14px', boxShadow: C.shadowLg }}>
-        <div style={{ width: 32, height: 3, borderRadius: 99, background: 'rgba(255,255,255,.14)', margin: '0 auto 8px' }} />
-
-        {busy && <StepBadge current={stepIndex} total={2} />}
-
-        {headerBadge}
-        <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, marginBottom: 8, ...T.body }}>{position.title}</div>
-
-        <div style={{ padding: 10, borderRadius: 10, background: isClaim ? 'rgba(0,212,163,.05)' : 'rgba(255,255,255,.02)', border: isClaim ? '1px solid rgba(0,212,163,.20)' : `1px solid ${C.border}`, marginBottom: 10, ...T.mono, fontSize: 11 }}>
-          <Row label="Contracts" value={position.contracts.toFixed(2)} />
-          {!isClaim && <Row label="Mark price" value={`$${position.markPriceUsd.toFixed(3)}`} />}
-          <Row label={isClaim ? 'Payout' : 'Sell value'} value={fmtUsd(grossUsd)} />
-          <Row label="Fee (5%)" value={fmtUsd(feeUsd)} />
-          <Row label="You collect" value={`~${fmtUsd(netUsd)} in SOL`} valueColor={C.hl} bold />
-          <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}`, color: C.muted, fontSize: 9 }}>
-            Two signatures: {isClaim ? 'Claim' : 'Sell'}, then swap JupUSD → SOL.
+    <div style={{position:'fixed',inset:0,zIndex:300,background:'rgba(3,6,15,.85)',backdropFilter:'blur(16px)',display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+      <div style={{width:'100%',maxWidth:380,background:`linear-gradient(180deg,${C.cardHi},${C.card})`,border:`1px solid ${C.borderHi}`,borderRadius:20,padding:20,boxShadow:C.shadowLg}}>
+        <div style={{textAlign:'center',marginBottom:16}}>
+          <div style={{fontSize:28,marginBottom:8}}>🔮</div>
+          <div style={{fontSize:18,fontWeight:800,color:C.ink,...T.display,marginBottom:6}}>Predict Access</div>
+          <div style={{fontSize:12,color:C.muted,lineHeight:1.5,...T.body}}>
+            Daily access fee of <span style={{color:C.hl,fontWeight:700}}>${ACCESS_FEE_USD}</span> in SOL.<br/>
+            Valid for 24 hours.
           </div>
         </div>
-
-        {statusMsg && <StatusLine msg={statusMsg} step={busy ? `STEP ${stepIndex} OF 2` : null} />}
-        {error && <ErrorLine msg={error} />}
-        {warning && !error && <WarnLine msg={warning} />}
-
-        <PrimaryButton
-          onClick={busy ? undefined : handleAction}
-          disabled={busy || step === 3}
-          color={isClaim || position.pnlUsd >= 0 ? 'yes' : 'no'}
-          label={
-            busy ? (statusMsg || 'Working…')
-            : step === 3 ? `✓ ${isClaim ? 'Claimed' : 'Sold'}`
-            : isClaim ? `Claim · ${fmtUsd(grossUsd)}` : `Sell all · ${fmtUsd(grossUsd)}`
-          }
-        />
-
-        {busy && (
-          <CancelButton
-            onClick={cancel}
-            disabled={!canCancel}
-            label={canCancel ? 'Cancel' : 'Cancel (unavailable — funds on-chain)'}
-          />
-        )}
-
-        <DebugPanel log={debugLog} onClear={clearDbg} />
+        <div style={{padding:'10px 12px',borderRadius:12,background:'rgba(151,252,228,.04)',border:`1px solid ${C.border}`,marginBottom:14,...T.mono,fontSize:10}}>
+          <Row label="Access fee" value={`$${ACCESS_FEE_USD} in SOL`}/>
+          <Row label="Valid for" value="24 hours"/>
+          <Row label="No fee on buys" value="✓" valueColor={C.yes}/>
+          <Row label="5% fee on sell/claim" value="✓" valueColor={C.hl}/>
+        </div>
+        {step === 0 && <PrimaryButton onClick={pay} label={`Pay $${ACCESS_FEE_USD} & Enter`} color="hl"/>}
+        {step === 1 && <StatusLine msg="Confirm payment in wallet…"/>}
+        {step === 2 && <div style={{textAlign:'center',padding:12,color:C.yes,fontWeight:800,fontSize:14,...T.display}}>✓ Access granted</div>}
+        {error && <ErrorLine msg={error}/>}
+        {step === 0 && <CancelButton onClick={onDismiss} label="Cancel"/>}
+        <DebugPanel log={log} onClear={clear}/>
       </div>
     </div>
   );
 }
 
-// ═══════════════════════════════════════════════════════════════════════════════
-// SECTION 11: Top-level page
-// ═══════════════════════════════════════════════════════════════════════════════
+// ── Page header ──────────────────────────────────────────────────────────────
+function PageHeader({connected,solBal,tab,setTab,pubkey,onCopy}){
+  const sol=Number(solBal)/1e9;
+  return(<div style={{marginTop:4,marginBottom:10,padding:'14px 14px 12px',borderRadius:18,background:'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))',border:`1px solid ${C.border}`,boxShadow:C.shadowLg,position:'relative',overflow:'hidden'}}>
+    <div style={{position:'absolute',right:-40,top:-50,width:160,height:160,borderRadius:'50%',background:'radial-gradient(circle,rgba(151,252,228,.14),transparent 65%)',pointerEvents:'none'}}/>
+    <div style={{position:'relative'}}>
+      <div style={{display:'flex',alignItems:'flex-start',justifyContent:'space-between',marginBottom:10}}>
+        <div><h1 style={{margin:0,fontSize:22,fontWeight:900,color:C.ink,letterSpacing:-0.5,...T.display}}>Predict</h1><div style={{fontSize:11,color:C.muted,...T.mono,marginTop:4}}>Crypto markets · live</div></div>
+        <div style={{fontSize:10,color:C.hl,background:C.hlDim,border:`1px solid ${C.borderHi}`,padding:'2px 7px',borderRadius:99,fontWeight:700,letterSpacing:1,...T.mono}}>JUPITER</div>
+      </div>
+      {connected?(<div style={{padding:'10px 12px',borderRadius:12,background:'rgba(151,252,228,.05)',border:`1px solid ${C.border}`,marginBottom:10}}>
+        <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+          <div><div style={{fontSize:9,color:C.muted,fontWeight:700,letterSpacing:1.2,...T.mono,marginBottom:2}}>BALANCE</div><div style={{fontSize:16,fontWeight:800,color:C.ink,...T.display,lineHeight:1}}>{sol.toFixed(4)}<span style={{fontSize:10,color:C.muted,...T.mono,marginLeft:4}}>SOL</span></div></div>
+          {pubkey&&<button onClick={onCopy} style={{padding:'5px 9px',borderRadius:8,background:'rgba(255,255,255,.04)',border:`1px solid ${C.border}`,color:C.muted,fontSize:9,fontWeight:700,cursor:'pointer',...T.mono}}>{pubkey.slice(0,4)}…{pubkey.slice(-4)}</button>}
+        </div>
+      </div>):(<div style={{padding:10,borderRadius:12,background:'rgba(168,127,255,.05)',border:'1px solid rgba(168,127,255,.30)',marginBottom:10,fontSize:12,color:C.ink}}>Connect a Solana wallet to start trading.</div>)}
+      <div style={{display:'flex',gap:4,padding:2,background:'rgba(255,255,255,.03)',borderRadius:9}}>
+        {['markets','positions'].map(id=><button key={id} onClick={()=>setTab(id)} style={{flex:1,padding:'7px 4px',borderRadius:7,background:tab===id?C.hlDim:'transparent',border:`1px solid ${tab===id?C.borderHi:'transparent'}`,color:tab===id?C.hl:C.muted,fontSize:10,fontWeight:700,cursor:'pointer',textTransform:'uppercase',letterSpacing:1,...T.mono}}>{id}</button>)}
+      </div>
+    </div>
+  </div>);
+}
 
-export default function Predict() {
-  const { publicKey, connected } = useWallet();
-  const [tab, setTab]     = useState('markets');
-  const [search, setSearch] = useState('');
-
-  const [events, setEvents]         = useState([]);
-  const [evLoading, setEvLoading]   = useState(true);
-  const [evError, setEvError]       = useState(null);
-
-  const [positions, setPositions]   = useState([]);
-  const [posLoading, setPosLoading] = useState(false);
-
-  const [solBal, setSolBal] = useState(0n);
-
-  const [buyState, setBuyState]   = useState(null);
-  const [actionPos, setActionPos] = useState(null);
-  const [toast, setToast]         = useState('');
-  const { log: pageLog, push: pageDbg, clear: clearPageDbg } = useDebugLog();
-
-  const livePrices = useLiveCryptoPrices(tab === 'markets');
-  const priceSnapshots = usePriceSnapshots(events, livePrices);
-
-  const connection = useMemo(() => {
-    const origin = (typeof window !== 'undefined' && window.location?.origin) || '';
-    return new Connection(origin + SOL_RPC, 'confirmed');
-  }, []);
-
-  const refreshBalances = useCallback(async () => {
-    if (!publicKey) { setSolBal(0n); return; }
-    const s = await fetchSolBalance(connection, publicKey.toBase58());
-    setSolBal(s);
-  }, [publicKey, connection]);
-
-  useEffect(() => {
-    if (!publicKey) { setSolBal(0n); return; }
-    let alive = true;
-    const tick = async () => {
-      const s = await fetchSolBalance(connection, publicKey.toBase58());
-      if (alive) setSolBal(s);
-    };
-    tick();
-    const id = setInterval(tick, 300_000);
-    return () => { alive = false; clearInterval(id); };
-  }, [publicKey, connection]);
-
-  const reloadEvents = useCallback(async () => {
-    try {
-      setEvError(null);
-      const raw = await fetchEvents();
-      const normalized = raw
-        .map((ev, i) => {
-          try { return pickEventFields(ev); }
-          catch (e) { console.warn('pickEventFields failed', i, e?.message); return null; }
-        })
-        .filter(Boolean)
-        .filter(isMarketOpen);
-
-      const slugs = normalized.map(e => e.slug).filter(Boolean);
-      const pmResults = await Promise.all(
-        slugs.map(async (s) => {
-          const gamma = await fetchPolymarketEvent(s)
-            .then(pickPolymarketFields)
-            .catch(() => null);
-          return gamma || null;
-        })
-      );
-      const pmBySlug = new Map();
-      slugs.forEach((s, i) => { if (pmResults[i]) pmBySlug.set(s, pmResults[i]); });
-
-      const enriched = normalized
-        .map(e => {
-          const pm = e.slug ? pmBySlug.get(e.slug) : null;
-          if (pm?.settled) return null;
-          return pm ? { ...e, poly: pm } : e;
-        })
-        .filter(Boolean);
-
-      setEvents(enriched);
-    } catch (e) {
-      setEvError(friendlyError(e));
-    } finally {
-      setEvLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    setEvLoading(true);
-    reloadEvents();
-  }, [reloadEvents]);
-
-  useEffect(() => {
-    const hasUrgent = events.some(e => {
-      const ms = toMs(e.closeTime);
-      return ms && ms - Date.now() < URGENT_WINDOW_MS && ms > Date.now();
-    });
-    const tick = () => {
-      if (typeof document !== 'undefined' && document.visibilityState !== 'visible') return;
-      if (buyState || actionPos) return;
-      reloadEvents();
-    };
-    const id = setInterval(tick, hasUrgent ? REFRESH_URGENT_MS : REFRESH_NORMAL_MS);
-    return () => clearInterval(id);
-  }, [reloadEvents, buyState, actionPos, events]);
-
-  const reloadPositions = useCallback(async () => {
-    if (!publicKey) { setPositions([]); return; }
-    setPosLoading(true);
-    try {
-      pageDbg('positions:fetch', `GET /api/predict/positions?ownerPubkey=${publicKey.toBase58().slice(0, 8)}…`);
-      const r = await fetch(`/api/predict/positions?ownerPubkey=${encodeURIComponent(publicKey.toBase58())}`);
-      const text = await r.text();
-      let j = null; try { j = JSON.parse(text); } catch {}
-      if (!r.ok) {
-        pageDbg('positions:fail', `HTTP ${r.status}`, j || text.slice(0, 300));
-        setPositions([]);
-        return;
-      }
-      const raw = Array.isArray(j) ? j : (j?.data || j?.positions || []);
-      pageDbg('positions:ok', `received ${raw.length} positions`);
-      setPositions(raw.map(pickPositionFields).filter(Boolean));
-    } catch (e) {
-      pageDbg('positions:error', e?.message || String(e));
-      setPositions([]);
-    } finally {
-      setPosLoading(false);
-    }
-  }, [publicKey, pageDbg]);
-
-  useEffect(() => {
-    if (tab !== 'positions' || !publicKey) return;
-    reloadPositions();
-    const id = setInterval(reloadPositions, 300_000);
-    return () => clearInterval(id);
-  }, [tab, publicKey, reloadPositions]);
-
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    let r = events.filter(isMarketOpen);
-    if (q) {
-      r = r.filter(e => {
-        const fields = [
-          e.title,
-          e.market?.title,
-          e.subcategory,
-          ...(e.tags || []),
-        ].filter(Boolean).join(' ').toLowerCase();
-        return fields.includes(q);
-      });
-    }
-    const now = Date.now();
-    r.sort((a, b) => {
-      const ta = toMs(a.closeTime);
-      const tb = toMs(b.closeTime);
-      const da = ta ? ta - now : Infinity;
-      const db = tb ? tb - now : Infinity;
-      return da - db;
-    });
-    return r;
-  }, [events, search]);
-
-  const handleCopyAddr = useCallback(async () => {
-    if (!publicKey) return;
-    const ok = await copyToClipboard(publicKey.toBase58());
-    if (ok) { setToast('Address copied'); setTimeout(() => setToast(''), 1500); }
-  }, [publicKey]);
-
-  return (
-    <>
-      <style>{`@keyframes nexus-spin { to { transform: rotate(360deg); } }`}</style>
-      <div style={{ maxWidth: 680, margin: '0 auto', padding: '0 12px calc(env(safe-area-inset-bottom) + 100px)', color: C.ink }}>
-
-        <PageHeader
-          connected={connected}
-          solBal={solBal}
-          tab={tab} setTab={setTab}
-          pubkey={publicKey?.toBase58()}
-          onCopy={handleCopyAddr}
-        />
-
-        {toast && (
-          <div style={{ marginBottom: 8, padding: '6px 10px', background: 'rgba(0,212,163,.10)', border: `1px solid ${C.yes}55`, borderRadius: 8, fontSize: 11, color: C.yes, textAlign: 'center', fontWeight: 700, ...T.mono }}>
-            {toast}
-          </div>
-        )}
-
-        {tab === 'markets' && (
-          <>
-            <div style={{ marginBottom: 10, position: 'relative' }}>
-              <input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search BTC, ETH, SOL, JUP…" inputMode="search"
-                style={{ width: '100%', padding: '8px 12px 8px 32px', background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, borderRadius: 10, color: C.ink, fontSize: 12, outline: 'none', ...T.body }} />
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2" style={{ position: 'absolute', left: 11, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none' }}>
-                <circle cx="11" cy="11" r="8" /><path d="M21 21l-4.35-4.35" />
-              </svg>
-            </div>
-
-            {evLoading && [1, 2, 3, 4].map(i => <Skeleton key={i} />)}
-            {evError && <ErrorLine msg={evError} />}
-            {!evLoading && !evError && filtered.length === 0 && (
-              <div style={{ padding: '40px 20px', textAlign: 'center', color: C.muted, fontSize: 13, ...T.body }}>
-                {search ? `No markets match "${search}"` : 'No live crypto markets right now — new ones drop constantly. Auto-refreshing…'}
-              </div>
-            )}
-            {!evLoading && filtered.map(ev => (
-              <MarketCard
-                key={ev.eventId}
-                event={ev}
-                livePrices={livePrices}
-                priceSnapshots={priceSnapshots}
-                onTrade={(event, isYes) => {
-                  if (!connected) { setToast('Connect wallet first'); setTimeout(() => setToast(''), 1500); return; }
-                  setBuyState({ event, isYes });
-                }}
-              />
-            ))}
-          </>
-        )}
-
-        {tab === 'positions' && (
-          <PositionsList
-            positions={positions}
-            loading={posLoading}
-            onAction={(kind, p) => setActionPos({ kind, position: p })}
-          />
-        )}
-
-        <DebugPanel log={pageLog} onClear={clearPageDbg} />
-
-        <div style={{ marginTop: 14, padding: '10px 12px', borderRadius: 11, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`, fontSize: 9, color: C.muted, textAlign: 'center', ...T.mono }}>
-          Powered by Jupiter Predict · Solana-native · Beta
+// ── Market card ──────────────────────────────────────────────────────────────
+function MarketCard({event,livePrices,onTrade}){
+  const m=event.market; const poly=event.poly||null; const yp=m.yesPrice; const np=m.noPrice;
+  const upside=p=>(p<0.02||p>0.98)?0:Math.min(9999,Math.round((1/p-1)*100));
+  const clamp2={display:'-webkit-box',WebkitLineClamp:2,WebkitBoxOrient:'vertical',overflow:'hidden'};
+  const closed=m.status!=='open';
+  const isUrgent=toMs(event.closeTime)&&(toMs(event.closeTime)-Date.now())>0&&(toMs(event.closeTime)-Date.now())<URGENT_WINDOW_MS;
+  const yesLabel=poly?.outcomes?.[0]||'Yes'; const noLabel=poly?.outcomes?.[1]||'No';
+  const symbol=symbolFromSubcategory(event.subcategory); const live=symbol?livePrices?.get(symbol):null; const currentPrice=live?.value??null;
+  const ruleSnippet=(()=>{const txt=poly?.description||m.rulesPrimary||event.closeCondition;if(!txt)return null;const f=String(txt).trim().split(/(?<=[.!?])\s/)[0];return f.length>160?f.slice(0,157)+'…':f;})();
+  return(<div style={{padding:10,borderRadius:14,background:`linear-gradient(145deg,${C.card},${C.cardHi})`,border:`1px solid ${isUrgent?'rgba(245,181,61,.40)':C.border}`,marginBottom:7,boxShadow:C.shadow,opacity:closed?0.55:1}}>
+    <div style={{display:'flex',gap:8,marginBottom:8}}>
+      {event.image&&<img src={event.image} alt="" onError={e=>e.currentTarget.style.display='none'} style={{width:32,height:32,borderRadius:8,objectFit:'cover',flexShrink:0}}/>}
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.ink,lineHeight:1.3,marginBottom:3,...T.body,...clamp2}}>{event.title}</div>
+        {m.title&&m.title!==event.title&&<div style={{fontSize:11,fontWeight:600,color:C.hl,lineHeight:1.3,marginBottom:4,...T.body,...clamp2}}>{m.title}</div>}
+        {poly?.groupItemTitle&&<div style={{display:'inline-block',padding:'2px 7px',borderRadius:99,background:C.hlDim,border:`1px solid ${C.borderHi}`,color:C.hl,fontSize:10,fontWeight:700,marginBottom:4,...T.mono}}>{poly.groupItemTitle}</div>}
+        <div style={{display:'flex',flexWrap:'wrap',gap:6,fontSize:9,color:C.muted,...T.mono,alignItems:'center'}}>
+          {event.subcategory&&<span style={{color:C.hl,textTransform:'uppercase',fontWeight:700}}>{event.subcategory}</span>}
+          {event.subcategory&&<span style={{opacity:.4}}>·</span>}
+          <span>Vol {formatVol(event.volume24h)}</span>
+          {formatEndDate(event.closeTime)&&<><span style={{opacity:.4}}>·</span><span style={{color:isUrgent?C.amber:C.muted,fontWeight:isUrgent?700:400}}>{formatEndDate(event.closeTime)}</span></>}
+          {currentPrice!=null&&<><span style={{opacity:.4}}>·</span><span style={{color:C.violet}}>{'$'+currentPrice.toLocaleString('en-US',{maximumFractionDigits:2})}</span></>}
         </div>
       </div>
+      <div style={{textAlign:'right',flexShrink:0,minWidth:38}}>
+        <div style={{fontSize:15,fontWeight:800,color:m.yesPct>=50?C.yes:C.no,lineHeight:1,...T.display}}>{m.yesPct}%</div>
+        <div style={{fontSize:9,color:C.muted,marginTop:2,...T.mono,textTransform:'uppercase'}}>{yesLabel}</div>
+      </div>
+    </div>
+    {ruleSnippet&&<div style={{fontSize:10,color:C.muted,lineHeight:1.4,marginBottom:8,padding:'5px 7px',borderLeft:`2px solid ${C.hlDim}`,...T.body,...clamp2}}>{ruleSnippet}</div>}
+    <div style={{display:'flex',gap:8}}>
+      <button onClick={()=>!closed&&onTrade(event,true)} disabled={closed} style={{flex:1,padding:8,borderRadius:10,background:C.yesDim,border:'1px solid rgba(0,212,163,.30)',color:C.yes,cursor:closed?'not-allowed':'pointer',display:'flex',flexDirection:'column',gap:1,...T.body}}>
+        <span style={{fontWeight:700,fontSize:12}}>{yesLabel} · ${yp.toFixed(2)}</span>
+        {upside(yp)>0&&<span style={{fontSize:10,fontWeight:600,opacity:.8,...T.mono}}>+{upside(yp)}% upside</span>}
+      </button>
+      <button onClick={()=>!closed&&onTrade(event,false)} disabled={closed} style={{flex:1,padding:8,borderRadius:10,background:C.noDim,border:'1px solid rgba(255,95,122,.30)',color:C.no,cursor:closed?'not-allowed':'pointer',display:'flex',flexDirection:'column',gap:1,...T.body}}>
+        <span style={{fontWeight:700,fontSize:12}}>{noLabel} · ${np.toFixed(2)}</span>
+        {upside(np)>0&&<span style={{fontSize:10,fontWeight:600,opacity:.8,...T.mono}}>+{upside(np)}% upside</span>}
+      </button>
+    </div>
+  </div>);
+}
 
-      {buyState && (
-        <BuyDrawer
-          event={buyState.event}
-          isYes={buyState.isYes}
-          livePrices={livePrices}
-          priceSnapshots={priceSnapshots}
-          onClose={() => setBuyState(null)}
-          onDone={() => { reloadEvents(); reloadPositions(); refreshBalances(); }}
-          solBal={solBal}
-          connection={connection}
-        />
-      )}
+// ── BuyDrawer (1 sig — Predict order only) ───────────────────────────────────
+function BuyDrawer({event,isYes,onClose,onDone,connection}){
+  const{publicKey,signTransaction}=useWallet();
+  const[amount,setAmount]=useState('10');
+  const[step,setStep]=useState(0);
+  const[statusMsg,setStMsg]=useState('');
+  const[error,setError]=useState('');
+  const[warning,setWarning]=useState('');
+  const{log:debugLog,push:dbg,clear:clearDbg}=useDebugLog();
+  const abortRef=useRef(null); const onChainRef=useRef(false);
+  useBodyLock(true);
+  const m=event.market; const poly=event.poly||null;
+  const depositUsd=Number(amount)||0;
+  const price=isYes?m.yesPrice:m.noPrice; const contractsEst=price>0?depositUsd/price:0;
+  const sideLabel=(poly?.outcomes&&poly.outcomes[isYes?0:1])||(isYes?'YES':'NO');
+  const sideColor=isYes?C.yes:C.no; const sideDim=isYes?C.yesDim:C.noDim;
+  const busy=step>0&&step<3; const canBuy=!busy&&depositUsd>=MIN_TRADE_USD&&publicKey&&m.marketId;
+  const canCancel=busy&&!onChainRef.current;
+  const cancel=useCallback(()=>{if(!canCancel)return;if(abortRef.current){try{abortRef.current.abort();}catch{}}setStep(0);setStMsg('');setError('Cancelled.');},[canCancel]);
 
-      {actionPos && (
-        <SellOrClaimDrawer
-          position={actionPos.position}
-          kind={actionPos.kind}
-          onClose={() => setActionPos(null)}
-          onDone={() => { reloadPositions(); refreshBalances(); }}
-          connection={connection}
-        />
-      )}
-    </>
-  );
+  const placeOrder=useCallback(async()=>{
+    if(!publicKey||!signTransaction){setError('Connect a wallet.');return;}
+    if(depositUsd<MIN_TRADE_USD){setError(`Minimum $${MIN_TRADE_USD}.`);return;}
+    dbg('buy:start',`side=${isYes?'YES':'NO'} deposit=$${depositUsd}`);
+    setError('');setWarning('');onChainRef.current=false;
+    abortRef.current=new AbortController(); const signal=abortRef.current.signal;
+    const checkAbort=()=>{if(signal.aborted)throw new Error('Cancelled.');};
+    try{
+      const ownerB58=publicKey.toBase58();
+      const depositAtomic=BigInt(Math.round(depositUsd*1e6));
+      setStep(1);setStMsg('Building order…');
+      const orderRequest=await loggedFetch('/api/predict/orders',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ownerPubkey:ownerB58,marketId:m.marketId,isYes,isBuy:true,depositAmount:depositAtomic.toString(),depositMint:JUPUSD_MINT}),signal},dbg,'predict-orders');
+      const j=orderRequest.json;
+      if(!j?.transaction)throw new Error('Jupiter Predict returned no transaction.');
+      const orderPubkey=j.order?.orderPubkey||j.orderPubkey||(typeof j.order==='string'?j.order:null)||null;
+      const orderBh=j.txMeta?.blockhash?{blockhash:j.txMeta.blockhash,lastValidBlockHeight:j.txMeta.lastValidBlockHeight}:null;
+      dbg('buy:1',`orderPubkey: ${orderPubkey||'(none)'}`);
+      const buyTx=VersionedTransaction.deserialize(b64ToBytes(j.transaction));
+      checkAbort();
+      setStMsg(`Confirm — Buy ${sideLabel}`);
+      const signedBuy=await signTransaction(buyTx);
+      onChainRef.current=true;
+      const orderResult=await sendAndConfirm(connection,signedBuy,orderBh,setStMsg,signal);
+      dbg('buy:1',`order: ${orderResult.status} sig=${orderResult.sig}`);
+      if(!orderPubkey){setWarning('Order submitted. Check Positions tab.');setStep(3);setStMsg('');onDone?.();setTimeout(()=>onClose(),3000);return;}
+      setStMsg('Waiting for keeper…');
+      const fillStatus=await pollOrderStatus(orderPubkey,{signal,onTick:(i,total)=>setStMsg(`Keeper filling… (${i}/${total})`)});
+      dbg('buy:2',`keeper: ${fillStatus}`);
+      if(fillStatus==='aborted'){setWarning(`Order in flight. Check Positions tab.`);setStep(3);setStMsg('');onDone?.();setTimeout(()=>onClose(),3000);return;}
+      if(fillStatus==='failed')throw new Error('Order rejected by keeper.');
+      setStep(3);setStMsg('');onDone?.();setTimeout(()=>onClose(),1500);
+    }catch(e){
+      dbg('buy:error',e?.message||String(e));
+      setError(friendlyError(e));setStep(0);setStMsg('');
+    }finally{onChainRef.current=false;}
+  },[publicKey,signTransaction,m,isYes,depositUsd,connection,onClose,onDone,sideLabel,dbg]);
+
+  const presets=['5','10','25','50'];
+  const rulesText=poly?.description||m.rulesPrimary||event.closeCondition;
+  const[showRules,setShowRules]=useState(false);
+  const buttonLabel=busy?(statusMsg||'Working…'):step===3?(warning?'⚠ Check Positions':'✓ Placed'):`Buy ${sideLabel} · $${depositUsd.toFixed(2)}`;
+
+  return(<div onClick={busy?undefined:onClose} style={{position:'fixed',inset:0,zIndex:200,background:'rgba(3,6,15,.74)',backdropFilter:'blur(14px)',display:'flex',alignItems:'flex-end',justifyContent:'center',paddingBottom:NAV_CLEARANCE,cursor:busy?'wait':'pointer'}}>
+    <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:520,background:`linear-gradient(180deg,${C.cardHi},${C.card})`,borderTop:`1px solid ${C.borderHi}`,borderTopLeftRadius:16,borderTopRightRadius:16,padding:'12px 12px 14px',boxShadow:C.shadowLg,maxHeight:`calc(100dvh - ${NAV_CLEARANCE}px - 24px)`,overflowY:'auto'}}>
+      <div style={{width:32,height:3,borderRadius:99,background:'rgba(255,255,255,.14)',margin:'0 auto 8px'}}/>
+      <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:4,lineHeight:1.35,...T.body}}>{event.title}</div>
+      {m.title&&m.title!==event.title&&<div style={{fontSize:13,fontWeight:700,color:C.hl,marginBottom:8,...T.body}}>{m.title}</div>}
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10,flexWrap:'wrap'}}>
+        <div style={{padding:'3px 8px',borderRadius:99,background:sideDim,border:`1px solid ${sideColor}55`,color:sideColor,fontSize:9,fontWeight:800,letterSpacing:1,...T.mono}}>{sideLabel}</div>
+        <div style={{fontSize:11,color:C.muted,...T.mono}}>${price.toFixed(3)} · {Math.round(price*100)}%</div>
+        {event.subcategory&&<div style={{fontSize:9,color:C.hl,...T.mono,fontWeight:700,padding:'2px 6px',background:C.hlDim,borderRadius:99}}>{event.subcategory}</div>}
+      </div>
+      {rulesText&&(<div style={{marginBottom:10,padding:8,borderRadius:8,background:'rgba(255,255,255,.02)',border:`1px solid ${C.border}`}}>
+        <button onClick={()=>setShowRules(!showRules)} style={{width:'100%',background:'none',border:'none',color:C.muted,fontSize:9,fontWeight:700,letterSpacing:1,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'space-between',padding:0,...T.mono}}>
+          <span>RULES</span><span>{showRules?'−':'+'}</span>
+        </button>
+        {showRules&&<div style={{marginTop:6,fontSize:10,color:C.ink,lineHeight:1.5,whiteSpace:'pre-wrap',maxHeight:200,overflowY:'auto',...T.body}}>{rulesText}</div>}
+      </div>)}
+      <div style={{marginBottom:10}}>
+        <div style={{fontSize:9,color:C.muted,marginBottom:5,textTransform:'uppercase',letterSpacing:1,...T.mono}}>Deposit amount (JupUSD)</div>
+        <div style={{display:'flex',alignItems:'center',gap:8,padding:'9px 11px',borderRadius:10,background:'rgba(255,255,255,.03)',border:`1px solid ${C.border}`}}>
+          <span style={{fontSize:16,color:C.muted,fontWeight:700,...T.display}}>$</span>
+          <input value={amount} onChange={e=>{setAmount(cleanAmount(e.target.value));setError('');}} disabled={busy} inputMode="decimal" style={{flex:1,background:'none',border:'none',outline:'none',color:C.ink,fontSize:18,fontWeight:700,...T.display}}/>
+          <span style={{fontSize:10,color:C.muted,...T.mono}}>USD</span>
+        </div>
+        <div style={{display:'flex',gap:5,marginTop:6}}>{presets.map(v=><button key={v} onClick={()=>setAmount(v)} disabled={busy} style={{flex:1,padding:6,borderRadius:7,background:'rgba(255,255,255,.03)',border:`1px solid ${C.border}`,color:C.muted,fontSize:10,fontWeight:600,cursor:'pointer',...T.mono}}>${v}</button>)}</div>
+      </div>
+      <div style={{padding:9,borderRadius:10,background:'rgba(151,252,228,.04)',border:`1px solid ${C.border}`,marginBottom:10,...T.mono,fontSize:10}}>
+        <Row label="Deposit" value={fmtUsd(depositUsd)}/>
+        <Row label="Platform fee" value="None (paid on access)"/>
+        <Row label="Est. contracts" value={`~${contractsEst.toFixed(2)}`}/>
+        <Row label={`If ${sideLabel} wins`} value={`~${fmtUsd(contractsEst)}`} valueColor={sideColor} bold/>
+        {formatEndDate(event.closeTime)&&<Row label="Closes" value={formatEndDate(event.closeTime)}/>}
+      </div>
+      {statusMsg&&<StatusLine msg={statusMsg}/>}
+      {error&&<ErrorLine msg={error}/>}
+      {warning&&!error&&<WarnLine msg={warning}/>}
+      <PrimaryButton onClick={canBuy?placeOrder:undefined} disabled={!canBuy||step===3} color={isYes?'yes':'no'} label={buttonLabel}/>
+      {busy&&<CancelButton onClick={cancel} disabled={!canCancel} label={canCancel?'Cancel':'Cancel unavailable'}/>}
+      <DebugPanel log={debugLog} onClear={clearDbg}/>
+    </div>
+  </div>);
+}
+
+// ── PositionsList + PositionCard ─────────────────────────────────────────────
+function PositionsList({positions,loading,onAction}){
+  if(loading)return<>{[1,2,3].map(i=><Skeleton key={i}/>)}</>;
+  if(positions.length===0)return(<div style={{padding:'40px 20px',textAlign:'center',color:C.muted,fontSize:13,...T.body}}>No open positions yet.<div style={{fontSize:11,marginTop:6,color:C.muted2}}>Switch to Markets to place your first trade.</div></div>);
+  return positions.map(p=><PositionCard key={p.positionPubkey} p={p} onAction={onAction}/>);
+}
+function PositionCard({p,onAction}){
+  const sideColor=p.isYes?C.yes:C.no; const sideDim=p.isYes?C.yesDim:C.noDim;
+  const pnl=p.pnlUsd; const pnlColor=pnl>=0?C.yes:C.no; const pnlPct=p.costUsd>0?(pnl/p.costUsd)*100:0;
+  const isClaimable=p.claimable&&!p.claimed; const isClaimed=p.claimed;
+  const isResolved=p.marketStatus==='settled'||p.marketStatus==='resolved'||(p.marketResult&&p.marketResult!=='pending'&&p.marketResult!=='');
+  const lostResolved=isResolved&&!isClaimable&&!isClaimed;
+  return(<div style={{padding:10,borderRadius:14,background:`linear-gradient(145deg,${C.card},${C.cardHi})`,border:`1px solid ${lostResolved?'rgba(255,95,122,.20)':isClaimable?'rgba(0,212,163,.30)':C.border}`,marginBottom:7,boxShadow:C.shadow,opacity:lostResolved||isClaimed?0.7:1}}>
+    <div style={{display:'flex',justifyContent:'space-between',marginBottom:8}}>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.ink,lineHeight:1.3,marginBottom:4,...T.body}}>{p.title}</div>
+        {p.outcomeLabel&&p.outcomeLabel!==p.title&&<div style={{fontSize:10,color:C.muted,marginBottom:4,...T.mono}}>{p.outcomeLabel}</div>}
+        <div style={{display:'flex',gap:4,flexWrap:'wrap'}}>
+          <div style={{display:'inline-block',padding:'2px 7px',borderRadius:99,background:sideDim,border:`1px solid ${sideColor}55`,color:sideColor,fontSize:9,fontWeight:800,...T.mono}}>{p.isYes?'YES':'NO'}</div>
+          {isClaimable&&<div style={{display:'inline-block',padding:'2px 7px',borderRadius:99,background:C.yesDim,border:`1px solid ${C.yes}55`,color:C.yes,fontSize:9,fontWeight:800,...T.mono}}>WON</div>}
+          {lostResolved&&<div style={{display:'inline-block',padding:'2px 7px',borderRadius:99,background:C.noDim,border:`1px solid ${C.no}55`,color:C.no,fontSize:9,fontWeight:800,...T.mono}}>LOST</div>}
+          {isClaimed&&<div style={{display:'inline-block',padding:'2px 7px',borderRadius:99,background:'rgba(255,255,255,.05)',border:`1px solid ${C.border}`,color:C.muted,fontSize:9,fontWeight:800,...T.mono}}>CLAIMED</div>}
+        </div>
+      </div>
+      <div style={{textAlign:'right'}}>
+        <div style={{fontSize:14,fontWeight:800,color:C.ink,...T.display,lineHeight:1}}>{fmtUsd(p.valueUsd)}</div>
+        <div style={{fontSize:10,color:pnlColor,fontWeight:700,...T.mono,marginTop:2}}>{pnl>=0?'+':''}{pnl.toFixed(2)} ({pnl>=0?'+':''}{pnlPct.toFixed(1)}%)</div>
+      </div>
+    </div>
+    <div style={{padding:7,borderRadius:8,background:'rgba(255,255,255,.02)',marginBottom:8,...T.mono,fontSize:10}}>
+      <Row label="Contracts" value={`${p.contracts.toFixed(2)} @ $${p.avgPriceUsd.toFixed(3)}`}/>
+      <Row label="Mark price" value={`$${p.markPriceUsd.toFixed(3)}`}/>
+      {isClaimable&&<Row label="Payout" value={fmtUsd(p.payoutUsd)} valueColor={C.yes} bold/>}
+    </div>
+    {isClaimable?<PrimaryButton onClick={()=>onAction('claim',p)} color="yes" label={`Claim ${fmtUsd(p.payoutUsd)} → SOL`}/>
+    :isClaimed?<div style={{textAlign:'center',fontSize:11,color:C.muted,fontWeight:600,padding:8,...T.mono}}>✓ Claimed {fmtUsd(p.payoutUsd)}</div>
+    :lostResolved?<div style={{textAlign:'center',fontSize:11,color:C.no,fontWeight:700,padding:8,...T.mono}}>Lost · −{fmtUsd(p.costUsd)}</div>
+    :<button onClick={()=>onAction('sell',p)} style={{width:'100%',padding:9,borderRadius:10,background:pnl>=0?`linear-gradient(135deg,${C.yes}22,${C.yes}11)`:`linear-gradient(135deg,${C.no}22,${C.no}11)`,border:`1px solid ${pnl>=0?C.yes:C.no}55`,color:pnl>=0?C.yes:C.no,fontSize:12,fontWeight:700,cursor:'pointer',...T.body}}>Sell → SOL · {fmtUsd(p.valueUsd)}</button>}
+  </div>);
+}
+
+// ── SellOrClaimDrawer (1 sig — combined tx) ───────────────────────────────────
+function SellOrClaimDrawer({position,kind,onClose,onDone,connection}){
+  const{publicKey,signTransaction}=useWallet();
+  const[step,setStep]=useState(0);
+  const[statusMsg,setStMsg]=useState('');
+  const[error,setError]=useState('');
+  const[warning,setWarning]=useState('');
+  const{log:debugLog,push:dbg,clear:clearDbg}=useDebugLog();
+  const abortRef=useRef(null); const onChainRef=useRef(false);
+  useBodyLock(true);
+  const isClaim=kind==='claim'; const busy=step>0&&step<3; const canCancel=busy&&!onChainRef.current;
+  const cancel=useCallback(()=>{if(!canCancel)return;if(abortRef.current){try{abortRef.current.abort();}catch{}}setStep(0);setStMsg('');setError('Cancelled.');},[canCancel]);
+  const grossUsd=isClaim?position.payoutUsd:position.valueUsd;
+  const feeUsd=grossUsd*(FEE_BPS/10000); const netUsd=grossUsd-feeUsd;
+
+  const handleAction=useCallback(async()=>{
+    if(!publicKey||!signTransaction){setError('Connect a wallet.');return;}
+    dbg(`${kind}:start`,`position=${position.positionPubkey}`);
+    setError('');setWarning('');onChainRef.current=false;
+    abortRef.current=new AbortController(); const signal=abortRef.current.signal;
+    const checkAbort=()=>{if(signal.aborted)throw new Error('Cancelled.');};
+    let warned=false;
+    try{
+      const ownerB58=publicKey.toBase58();
+      setStep(1);setStMsg(`Building ${isClaim?'claim':'sell'}…`);
+
+      // Step 1: get the Predict tx
+      const url=isClaim
+        ?`/api/predict/positions/${encodeURIComponent(position.positionPubkey)}/claim`
+        :`/api/predict/positions/${encodeURIComponent(position.positionPubkey)}/sell`;
+      const request=await loggedFetch(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ownerPubkey:ownerB58}),signal},dbg,`predict-${kind}`);
+      checkAbort();
+      const j=request.json;
+      if(!j?.transaction)throw new Error(`No ${kind} transaction returned.`);
+
+      // Estimate JupUSD from position value
+      const estimatedJupUsdAtomic=BigInt(Math.round((grossUsd*0.99)*1e6)); // 1% buffer under value
+
+      setStMsg('Building swap…');
+      let combinedTx, latestBlockhash;
+      try {
+        const combined=await buildCombinedTx({connection,ownerPubkey:publicKey,predictTxB64:j.transaction,estimatedJupUsdAtomic});
+        combinedTx=combined.tx; latestBlockhash=combined.latestBlockhash;
+        dbg(`${kind}:combined`,'Merged Predict + swap into 1 tx');
+      } catch(mergeErr) {
+        dbg(`${kind}:merge-fail`,mergeErr?.message);
+        throw new Error('Could not combine transactions: '+friendlyError(mergeErr));
+      }
+      checkAbort();
+
+      setStMsg(`Confirm — ${isClaim?'Claim & swap to SOL':'Sell & swap to SOL'}`);
+      const signed=await signTransaction(combinedTx);
+      onChainRef.current=true;
+      const result=await sendAndConfirm(connection,signed,latestBlockhash,setStMsg,signal);
+      dbg(`${kind}:done`,`${result.status} sig=${result.sig}`);
+
+      if(result.status==='pending'){warned=true;setWarning(`Submitted (${result.sig.slice(0,12)}…) — SOL will appear shortly.`);}
+      setStep(3);setStMsg('');onDone?.();
+      setTimeout(()=>onClose(),warned?4000:1500);
+    }catch(e){
+      dbg(`${kind}:error`,e?.message||String(e));
+      setError(friendlyError(e));setStep(0);setStMsg('');
+    }finally{onChainRef.current=false;}
+  },[publicKey,signTransaction,position,isClaim,kind,grossUsd,connection,onDone,onClose,dbg]);
+
+  return(<div onClick={busy?undefined:onClose} style={{position:'fixed',inset:0,zIndex:200,background:'rgba(3,6,15,.74)',backdropFilter:'blur(14px)',display:'flex',alignItems:'flex-end',justifyContent:'center',paddingBottom:NAV_CLEARANCE,cursor:busy?'wait':'pointer'}}>
+    <div onClick={e=>e.stopPropagation()} style={{width:'100%',maxWidth:520,background:`linear-gradient(180deg,${C.cardHi},${C.card})`,borderTop:`1px solid ${C.borderHi}`,borderTopLeftRadius:16,borderTopRightRadius:16,padding:'12px 12px 14px',boxShadow:C.shadowLg}}>
+      <div style={{width:32,height:3,borderRadius:99,background:'rgba(255,255,255,.14)',margin:'0 auto 8px'}}/>
+      {isClaim&&<div style={{display:'inline-block',padding:'2px 8px',borderRadius:99,background:C.yesDim,border:`1px solid ${C.yes}55`,color:C.yes,fontSize:9,fontWeight:800,marginBottom:6,...T.mono}}>🏆 YOU WON</div>}
+      <div style={{fontSize:12,fontWeight:700,color:C.ink,marginBottom:8,...T.body}}>{position.title}</div>
+      <div style={{padding:10,borderRadius:10,background:isClaim?'rgba(0,212,163,.05)':'rgba(255,255,255,.02)',border:isClaim?'1px solid rgba(0,212,163,.20)':`1px solid ${C.border}`,marginBottom:10,...T.mono,fontSize:11}}>
+        <Row label="Contracts" value={position.contracts.toFixed(2)}/>
+        {!isClaim&&<Row label="Mark price" value={`$${position.markPriceUsd.toFixed(3)}`}/>}
+        <Row label={isClaim?'Payout':'Sell value'} value={fmtUsd(grossUsd)}/>
+        <Row label="Fee (5%)" value={fmtUsd(feeUsd)}/>
+        <Row label="You receive" value={`~${fmtUsd(netUsd)} in SOL`} valueColor={C.hl} bold/>
+        <div style={{marginTop:6,paddingTop:6,borderTop:`1px solid ${C.border}`,color:C.muted,fontSize:9}}>
+          One signature — {isClaim?'claim':'sell'} + swap combined.
+        </div>
+      </div>
+      {statusMsg&&<StatusLine msg={statusMsg}/>}
+      {error&&<ErrorLine msg={error}/>}
+      {warning&&!error&&<WarnLine msg={warning}/>}
+      <PrimaryButton onClick={busy?undefined:handleAction} disabled={busy||step===3} color={isClaim||position.pnlUsd>=0?'yes':'no'}
+        label={busy?(statusMsg||'Working…'):step===3?`✓ ${isClaim?'Claimed':'Sold'}`:isClaim?`Claim → SOL · ${fmtUsd(grossUsd)}`:`Sell → SOL · ${fmtUsd(grossUsd)}`}/>
+      {busy&&<CancelButton onClick={cancel} disabled={!canCancel} label={canCancel?'Cancel':'Cannot cancel'}/>}
+      <DebugPanel log={debugLog} onClear={clearDbg}/>
+    </div>
+  </div>);
+}
+
+// ── Top-level Predict page ───────────────────────────────────────────────────
+export default function Predict(){
+  const{publicKey,connected,signTransaction}=useWallet();
+  const[tab,setTab]=useState('markets');
+  const[search,setSearch]=useState('');
+  const[events,setEvents]=useState([]);
+  const[evLoading,setEvLoading]=useState(true);
+  const[evError,setEvError]=useState(null);
+  const[positions,setPositions]=useState([]);
+  const[posLoading,setPosLoading]=useState(false);
+  const[solBal,setSolBal]=useState(0n);
+  const[buyState,setBuyState]=useState(null);
+  const[actionPos,setActionPos]=useState(null);
+  const[toast,setToast]=useState('');
+  const[showAccessFee,setShowAccessFee]=useState(false);
+  const[accessGranted,setAccessGranted]=useState(false);
+  const[pendingTrade,setPendingTrade]=useState(null);
+
+  const livePrices=useLiveCryptoPrices(tab==='markets');
+
+  const connection=useMemo(()=>{const o=(typeof window!=='undefined'&&window.location?.origin)||'';return new Connection(o+SOL_RPC,'confirmed');},[]);
+
+  // Check access fee on wallet connect
+  useEffect(()=>{
+    if(!publicKey){setAccessGranted(false);setShowAccessFee(false);return;}
+    if(hasValidAccessFee(publicKey.toBase58())){setAccessGranted(true);}
+    else{setAccessGranted(false);}
+  },[publicKey]);
+
+  const handleTrade=(event,isYes)=>{
+    if(!connected){setToast('Connect wallet first');setTimeout(()=>setToast(''),1500);return;}
+    if(!accessGranted){
+      setPendingTrade({event,isYes});
+      setShowAccessFee(true);
+      return;
+    }
+    setBuyState({event,isYes});
+  };
+
+  const onAccessPaid=useCallback(()=>{
+    setAccessGranted(true);
+    setShowAccessFee(false);
+    if(pendingTrade){setBuyState(pendingTrade);setPendingTrade(null);}
+  },[pendingTrade]);
+
+  const onAccessDismiss=useCallback(()=>{setShowAccessFee(false);setPendingTrade(null);},[]);
+
+  const refreshBalances=useCallback(async()=>{if(!publicKey){setSolBal(0n);return;}setSolBal(await fetchSolBalance(connection,publicKey.toBase58()));},[publicKey,connection]);
+
+  useEffect(()=>{
+    if(!publicKey){setSolBal(0n);return;}
+    let alive=true;
+    const tick=async()=>{const s=await fetchSolBalance(connection,publicKey.toBase58());if(alive)setSolBal(s);};
+    tick();const id=setInterval(tick,300_000);return()=>{alive=false;clearInterval(id);};
+  },[publicKey,connection]);
+
+  const reloadEvents=useCallback(async()=>{
+    try{
+      setEvError(null);
+      const raw=await fetchEvents();
+      const normalized=raw.map((ev,i)=>{try{return pickEventFields(ev);}catch{return null;}}).filter(Boolean).filter(isMarketOpen);
+      const slugs=normalized.map(e=>e.slug).filter(Boolean);
+      const pmResults=await Promise.all(slugs.map(s=>fetchPolymarketEvent(s).then(pickPolymarketFields).catch(()=>null)));
+      const pmBySlug=new Map();slugs.forEach((s,i)=>{if(pmResults[i])pmBySlug.set(s,pmResults[i]);});
+      const enriched=normalized.map(e=>{const pm=e.slug?pmBySlug.get(e.slug):null;if(pm?.settled)return null;return pm?{...e,poly:pm}:e;}).filter(Boolean);
+      setEvents(enriched);
+    }catch(e){setEvError(friendlyError(e));}
+    finally{setEvLoading(false);}
+  },[]);
+
+  useEffect(()=>{setEvLoading(true);reloadEvents();},[reloadEvents]);
+
+  useEffect(()=>{
+    const hasUrgent=events.some(e=>{const ms=toMs(e.closeTime);return ms&&ms-Date.now()<URGENT_WINDOW_MS&&ms>Date.now();});
+    const tick=()=>{if(typeof document!=='undefined'&&document.visibilityState!=='visible')return;if(buyState||actionPos)return;reloadEvents();};
+    const id=setInterval(tick,hasUrgent?REFRESH_URGENT_MS:REFRESH_NORMAL_MS);
+    return()=>clearInterval(id);
+  },[reloadEvents,buyState,actionPos,events]);
+
+  const reloadPositions=useCallback(async()=>{
+    if(!publicKey){setPositions([]);return;}
+    setPosLoading(true);
+    try{
+      const r=await fetch(`/api/predict/positions?ownerPubkey=${encodeURIComponent(publicKey.toBase58())}`);
+      const text=await r.text();let j=null;try{j=JSON.parse(text);}catch{}
+      if(!r.ok){setPositions([]);return;}
+      const raw=Array.isArray(j)?j:(j?.data||j?.positions||[]);
+      setPositions(raw.map(pickPositionFields).filter(Boolean));
+    }catch{setPositions([]);}
+    finally{setPosLoading(false);}
+  },[publicKey]);
+
+  useEffect(()=>{
+    if(tab!=='positions'||!publicKey)return;
+    reloadPositions();const id=setInterval(reloadPositions,300_000);return()=>clearInterval(id);
+  },[tab,publicKey,reloadPositions]);
+
+  const filtered=useMemo(()=>{
+    const q=search.trim().toLowerCase();let r=events.filter(isMarketOpen);
+    if(q)r=r.filter(e=>[e.title,e.market?.title,e.subcategory,...(e.tags||[])].filter(Boolean).join(' ').toLowerCase().includes(q));
+    const now=Date.now();
+    r.sort((a,b)=>{const ta=toMs(a.closeTime);const tb=toMs(b.closeTime);return((ta?ta-now:Infinity)-(tb?tb-now:Infinity));});
+    return r;
+  },[events,search]);
+
+  const handleCopyAddr=useCallback(async()=>{if(!publicKey)return;if(await copyToClipboard(publicKey.toBase58())){setToast('Copied');setTimeout(()=>setToast(''),1500);}},[publicKey]);
+
+  return(<>
+    <style>{`@keyframes nexus-spin{to{transform:rotate(360deg);}}`}</style>
+    <div style={{maxWidth:680,margin:'0 auto',padding:'0 12px calc(env(safe-area-inset-bottom) + 100px)',color:C.ink}}>
+      <PageHeader connected={connected} solBal={solBal} tab={tab} setTab={setTab} pubkey={publicKey?.toBase58()} onCopy={handleCopyAddr}/>
+      {toast&&<div style={{marginBottom:8,padding:'6px 10px',background:'rgba(0,212,163,.10)',border:`1px solid ${C.yes}55`,borderRadius:8,fontSize:11,color:C.yes,textAlign:'center',fontWeight:700,...T.mono}}>{toast}</div>}
+      {tab==='markets'&&(<>
+        <div style={{marginBottom:10,position:'relative'}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search BTC, ETH, SOL…" inputMode="search"
+            style={{width:'100%',padding:'8px 12px 8px 32px',background:'rgba(255,255,255,.04)',border:`1px solid ${C.border}`,borderRadius:10,color:C.ink,fontSize:12,outline:'none',...T.body}}/>
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke={C.muted} strokeWidth="2" style={{position:'absolute',left:11,top:'50%',transform:'translateY(-50%)',pointerEvents:'none'}}><circle cx="11" cy="11" r="8"/><path d="M21 21l-4.35-4.35"/></svg>
+        </div>
+        {evLoading&&[1,2,3,4].map(i=><Skeleton key={i}/>)}
+        {evError&&<ErrorLine msg={evError}/>}
+        {!evLoading&&!evError&&filtered.length===0&&<div style={{padding:'40px 20px',textAlign:'center',color:C.muted,fontSize:13,...T.body}}>{search?`No markets match "${search}"`:'No live crypto markets right now.'}</div>}
+        {!evLoading&&filtered.map(ev=><MarketCard key={ev.eventId} event={ev} livePrices={livePrices} onTrade={handleTrade}/>)}
+      </>)}
+      {tab==='positions'&&<PositionsList positions={positions} loading={posLoading} onAction={(kind,p)=>{if(!accessGranted){setShowAccessFee(true);return;}setActionPos({kind,position:p});}}/>}
+      <div style={{marginTop:14,padding:'10px 12px',borderRadius:11,background:'rgba(255,255,255,.02)',border:`1px solid ${C.border}`,fontSize:9,color:C.muted,textAlign:'center',...T.mono}}>
+        Powered by Jupiter Predict · $1.99/day access · 5% fee on sell/claim
+      </div>
+    </div>
+    {showAccessFee&&publicKey&&<AccessFeeModal onPaid={onAccessPaid} onDismiss={onAccessDismiss} connection={connection} publicKey={publicKey} signTransaction={signTransaction}/>}
+    {buyState&&accessGranted&&<BuyDrawer event={buyState.event} isYes={buyState.isYes} onClose={()=>setBuyState(null)} onDone={()=>{reloadEvents();reloadPositions();refreshBalances();}} connection={connection}/>}
+    {actionPos&&accessGranted&&<SellOrClaimDrawer position={actionPos.position} kind={actionPos.kind} onClose={()=>setActionPos(null)} onDone={()=>{reloadPositions();refreshBalances();}} connection={connection}/>}
+  </>);
 }
