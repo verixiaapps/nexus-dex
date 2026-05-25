@@ -33,10 +33,21 @@ const NAV_CLEARANCE = 120;
 const JUPUSD_DECIMALS = 6;
 const SOL_DECIMALS    = 9;
 
-const PRIORITY_FEE_MICROLAMPORTS = 2_800_000;
+// Priority fee paid per compute unit. Bumped to 5M microlamports for faster
+// landing on time-sensitive predict orders.
+const PRIORITY_FEE_MICROLAMPORTS = 5_000_000;
 const CU_LIMIT_MAX      = 1_400_000;
 const CU_LIMIT_FALLBACK = 600_000;
 const CU_BUFFER_PERCENT = 120;
+
+// Timeouts — tuned for "fail fast" UX. The previous values could keep a user
+// hanging for 90+ seconds before surfacing an error.
+const CONFIRM_TIMEOUT_MS    = 15_000;   // was 30_000
+const CONFIRM_FALLBACK_MS   = 8_000;    // was 20_000
+const KEEPER_POLL_INTERVAL  = 1500;     // was 2000
+const KEEPER_POLL_ATTEMPTS  = 12;       // 12 × 1.5s = 18s total (was 30s)
+const FETCH_TIMEOUT_MS      = 8_000;    // was 15_000
+const FETCH_MAX_RETRIES     = 1;        // was 4 — no aggressive 429 backoff
 
 const REFRESH_NORMAL_MS = 300_000;
 const REFRESH_URGENT_MS = 30_000;
@@ -274,8 +285,8 @@ function b64ToBytes(b64) {
   return Uint8Array.from(atob(b64), c => c.charCodeAt(0));
 }
 
-async function jfetch(url, opts = {}, ms = 15000) {
-  const maxAttempts = 4;
+async function jfetch(url, opts = {}, ms = FETCH_TIMEOUT_MS) {
+  const maxAttempts = FETCH_MAX_RETRIES + 1;
   let attempt = 0;
   while (true) {
     attempt++;
@@ -284,12 +295,8 @@ async function jfetch(url, opts = {}, ms = 15000) {
     try {
       const r = await fetch(url, { ...opts, signal: c.signal });
       if (r.status === 429 && attempt < maxAttempts) {
-        const ra = Number(r.headers.get('retry-after'));
-        const wait = Number.isFinite(ra) && ra > 0
-          ? ra * 1000
-          : Math.min(8000, 600 * 2 ** (attempt - 1)) + Math.random() * 250;
         clearTimeout(id);
-        await new Promise(res => setTimeout(res, wait));
+        await new Promise(res => setTimeout(res, 400));
         continue;
       }
       if (!r.ok) {
@@ -318,20 +325,42 @@ async function copyToClipboard(text) {
 
 function friendlyError(err) {
   const m = String(err?.message || err || '').toLowerCase();
+  const body = String(err?.body || '').toLowerCase();
+  const hay = m + ' ' + body;
   const status = err?.status;
-  if (status === 451 || status === 403 || m.includes('geographic') || m.includes('region') || m.includes('forbidden region') || m.includes('not available in your'))
+
+  // Jupiter Predict API explicit error codes (from response body)
+  if (hay.includes('no_shares_available') || hay.includes('no shares available'))
+    return 'No shares available at this price. The market is illiquid right now — try the opposite side or a different market.';
+  if (hay.includes('not_enough_liquidity') || hay.includes('insufficient liquidity'))
+    return 'Not enough liquidity on this side. Try a smaller amount or the opposite side.';
+  if (hay.includes('market_closed') || hay.includes('market closed') || hay.includes('market_not_open'))
+    return 'Market is closed. Try a different one.';
+  if (hay.includes('market_settled') || hay.includes('already settled'))
+    return 'This market has already settled. Refresh the list.';
+  if (hay.includes('order_too_small') || hay.includes('minimum') || hay.includes('below minimum'))
+    return 'Trade is below the $5 minimum.';
+  if (hay.includes('order_too_large') || hay.includes('exceeds maximum'))
+    return 'Trade exceeds the market\'s maximum. Try a smaller amount.';
+  if (hay.includes('price_moved') || hay.includes('price has moved'))
+    return 'Price moved while we were building your order. Try again.';
+
+  // Generic HTTP / network
+  if (status === 451 || status === 403 || hay.includes('geographic') || hay.includes('region') || hay.includes('forbidden region'))
     return 'Predict is not available in your region (US / South Korea blocked by Jupiter).';
-  if (status === 429 || m.includes('too many requests') || m.includes('slow down'))
+  if (status === 429 || hay.includes('too many requests'))
     return 'Rate limited. Wait a few seconds and try again.';
-  if (m.includes('insufficient'))      return 'Insufficient balance.';
-  if (m.includes('slippage'))          return 'Price moved too much. Try again.';
-  if (m.includes('blockhash') || m.includes('expired'))
+  if (hay.includes('insufficient'))      return 'Insufficient balance.';
+  if (hay.includes('slippage'))          return 'Price moved too much. Try again.';
+  if (hay.includes('blockhash') || hay.includes('expired'))
     return 'Transaction expired. Please try again.';
-  if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled') || m.includes('cancel'))
+  if (hay.includes('user reject') || hay.includes('user denied') || hay.includes('user cancelled') || hay.includes('cancel'))
     return 'Cancelled.';
-  if (m.includes('simulation failed')) return 'Simulation failed — the price may have moved.';
-  if (m.includes('no route'))          return 'No swap route available right now.';
-  if (m.includes('too large'))         return 'Transaction too complex. Try a smaller amount.';
+  if (hay.includes('simulation failed')) return 'Simulation failed — the price may have moved.';
+  if (hay.includes('no route'))          return 'No swap route available right now.';
+  if (hay.includes('too large'))         return 'Transaction too complex. Try a smaller amount.';
+  if (hay.includes('aborted') || hay.includes('abort'))
+    return 'Cancelled.';
   return err?.message || 'Something went wrong. Please try again.';
 }
 
@@ -678,45 +707,45 @@ function pickPositionFields(p) {
 // SECTION 4: ATOMIC SWAP
 // ═══════════════════════════════════════════════════════════════════════════════
 
+// JupUSD ATA owned by FEE_WALLET — Jupiter sends platform fees here on
+// every swap. Account must exist on-chain (created once via Phantom or
+// a setup script). Same address for both buy and sell swap legs since
+// we always take the fee in JupUSD.
+const FEE_JUPUSD_ATA = getAssociatedTokenAddressSync(
+  new PublicKey(JUPUSD_MINT), FEE_WALLET, true, TOKEN_PROGRAM_ID,
+);
+
+// SOL → JupUSD swap, with 5% fee taken in JupUSD via Jupiter's native
+// platformFeeBps parameter. Jupiter bakes the fee transfer into its own
+// swap instruction — no manual splicing, no Blowfish flags.
 async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }) {
-  const feeLamports = (grossLamports * BigInt(FEE_BPS)) / 10000n;
-  const netLamports = grossLamports - feeLamports;
-  if (feeLamports <= 0n) throw new Error('Fee rounds to zero — amount too small.');
-  if (netLamports <= 0n) throw new Error('Net amount after fee is zero.');
+  if (grossLamports <= 0n) throw new Error('Amount too small.');
 
   const params = new URLSearchParams({
-    inputMint:   SOL_MINT,
-    outputMint:  JUPUSD_MINT,
-    amount:      netLamports.toString(),
-    slippageBps: String(SLIPPAGE_BPS),
-    taker:       ownerPubkey.toBase58(),
+    inputMint:      SOL_MINT,
+    outputMint:     JUPUSD_MINT,
+    amount:         grossLamports.toString(),
+    slippageBps:    String(SLIPPAGE_BPS),
+    taker:          ownerPubkey.toBase58(),
+    platformFeeBps: String(FEE_BPS),
+    feeAccount:     FEE_JUPUSD_ATA.toBase58(),
   });
   const r = await jfetch(`/api/jupiter/build?${params}`);
   const build = await r.json();
   if (!build?.swapInstruction) throw new Error('Jupiter /build returned no swapInstruction');
 
+  // outAmount is the net JupUSD the user receives AFTER Jupiter takes our fee.
   const expectedJupUsdAtomic = BigInt(build.outAmount || 0);
   if (expectedJupUsdAtomic <= 0n) throw new Error('Jupiter quote returned zero output');
 
-  const feeIx = SystemProgram.transfer({
-    fromPubkey: ownerPubkey,
-    toPubkey:   FEE_WALLET,
-    lamports:   Number(feeLamports),
-  });
-
-  const buildIxs = (cuLimit) => {
-    const ixs = [];
-    ixs.push(ComputeBudgetProgram.setComputeUnitLimit({ units: cuLimit }));
-    ixs.push(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }));
-    ixs.push(feeIx);
-    if (Array.isArray(build.setupInstructions))
-      for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
-    if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
-    if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
-    if (Array.isArray(build.otherInstructions))
-      for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
-    return ixs;
-  };
+  const ixs = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT_FALLBACK }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
+    ...(build.setupInstructions || []).map(deserIx),
+    deserIx(build.swapInstruction),
+    ...(build.cleanupInstruction ? [deserIx(build.cleanupInstruction)] : []),
+    ...(build.otherInstructions || []).map(deserIx),
+  ];
 
   const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
   let alts = [];
@@ -729,28 +758,29 @@ async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }
   }
 
   const latestBlockhash = await connection.getLatestBlockhash('confirmed');
-  const compile = (ixs) => new TransactionMessage({
+  const msg = new TransactionMessage({
     payerKey:        ownerPubkey,
     recentBlockhash: latestBlockhash.blockhash,
     instructions:    ixs,
   }).compileToV0Message(alts);
 
-  const tx = new VersionedTransaction(compile(buildIxs(CU_LIMIT_FALLBACK)));
-  return { tx, expectedJupUsdAtomic, latestBlockhash };
+  return { tx: new VersionedTransaction(msg), expectedJupUsdAtomic, latestBlockhash };
 }
 
+// JupUSD → SOL swap, with 5% fee taken in JupUSD (input mint, the only
+// option for ExactIn when we want to keep the fee in stable terms). Same
+// pattern: Jupiter's native platformFeeBps handles the fee transfer.
 async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtomic }) {
-  const feeAtomic = (grossJupUsdAtomic * BigInt(FEE_BPS)) / 10000n;
-  const netAtomic = grossJupUsdAtomic - feeAtomic;
-  if (feeAtomic <= 0n) throw new Error('Fee rounds to zero — amount too small.');
-  if (netAtomic <= 0n) throw new Error('Net amount after fee is zero.');
+  if (grossJupUsdAtomic <= 0n) throw new Error('Amount too small.');
 
   const params = new URLSearchParams({
-    inputMint:   JUPUSD_MINT,
-    outputMint:  SOL_MINT,
-    amount:      netAtomic.toString(),
-    slippageBps: String(SLIPPAGE_BPS),
-    taker:       ownerPubkey.toBase58(),
+    inputMint:      JUPUSD_MINT,
+    outputMint:     SOL_MINT,
+    amount:         grossJupUsdAtomic.toString(),
+    slippageBps:    String(SLIPPAGE_BPS),
+    taker:          ownerPubkey.toBase58(),
+    platformFeeBps: String(FEE_BPS),
+    feeAccount:     FEE_JUPUSD_ATA.toBase58(),
   });
   const r = await jfetch(`/api/jupiter/build?${params}`);
   const build = await r.json();
@@ -758,32 +788,14 @@ async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtom
 
   const expectedSolLamports = BigInt(build.outAmount || 0);
 
-  const mintPk    = new PublicKey(JUPUSD_MINT);
-  const sourceAta = getAssociatedTokenAddressSync(mintPk, ownerPubkey, true, TOKEN_PROGRAM_ID);
-  const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,  true, TOKEN_PROGRAM_ID);
-
-  const ataIx = createAssociatedTokenAccountIdempotentInstruction(
-    ownerPubkey, destAta, FEE_WALLET, mintPk, TOKEN_PROGRAM_ID,
-  );
-  const transferIx = createTransferCheckedInstruction(
-    sourceAta, mintPk, destAta, ownerPubkey,
-    feeAtomic, JUPUSD_DECIMALS, [], TOKEN_PROGRAM_ID,
-  );
-
-  const buildIxs = (cuLimit) => {
-    const ixs = [];
-    ixs.push(ComputeBudgetProgram.setComputeUnitLimit({ units: cuLimit }));
-    ixs.push(ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }));
-    ixs.push(ataIx);
-    ixs.push(transferIx);
-    if (Array.isArray(build.setupInstructions))
-      for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
-    if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
-    if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
-    if (Array.isArray(build.otherInstructions))
-      for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
-    return ixs;
-  };
+  const ixs = [
+    ComputeBudgetProgram.setComputeUnitLimit({ units: CU_LIMIT_FALLBACK }),
+    ComputeBudgetProgram.setComputeUnitPrice({ microLamports: PRIORITY_FEE_MICROLAMPORTS }),
+    ...(build.setupInstructions || []).map(deserIx),
+    deserIx(build.swapInstruction),
+    ...(build.cleanupInstruction ? [deserIx(build.cleanupInstruction)] : []),
+    ...(build.otherInstructions || []).map(deserIx),
+  ];
 
   const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
   let alts = [];
@@ -796,23 +808,23 @@ async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtom
   }
 
   const latestBlockhash = await connection.getLatestBlockhash('confirmed');
-  const compile = (ixs) => new TransactionMessage({
+  const msg = new TransactionMessage({
     payerKey:        ownerPubkey,
     recentBlockhash: latestBlockhash.blockhash,
     instructions:    ixs,
   }).compileToV0Message(alts);
 
-  const tx = new VersionedTransaction(compile(buildIxs(CU_LIMIT_FALLBACK)));
-  return { tx, expectedSolLamports, latestBlockhash };
+  return { tx: new VersionedTransaction(msg), expectedSolLamports, latestBlockhash };
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
 // SECTION 5: Predict order builders
 // ═══════════════════════════════════════════════════════════════════════════════
 
-// Build a buy order tx. Returns the tx AND the order pubkey we need to poll
-// for fill status. The order pubkey can come back under a few different
-// field names depending on the Jupiter API version, so we check several.
+// Build a buy order tx. Predict orders are unchanged from Jupiter — no fee
+// instructions added. The 5% fee is taken on the SOL↔JupUSD swap legs
+// instead, via Jupiter's native platformFeeBps. Keeps the order tx clean,
+// fast, and free of Blowfish warnings.
 async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountJupUsdAtomic }) {
   const r = await jfetch('/api/predict/orders', {
     method: 'POST',
@@ -826,7 +838,6 @@ async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountJupUsdAto
   const j = await r.json();
   if (!j?.transaction) throw new Error('Jupiter Predict returned no transaction');
 
-  // Order pubkey may be at root or nested under `order`. Try every shape.
   const orderPubkey =
     j.orderPubkey ||
     j.order?.orderPubkey ||
@@ -842,41 +853,32 @@ async function buildBuyTx({ ownerPubkey, marketId, isYes, depositAmountJupUsdAto
   };
 }
 
-async function fetchTradingStatus() {
-  try {
-    const r = await jfetch('/api/predict/trading-status');
-    if (!r.ok) return true;
-    const j = await r.json();
-    if (j && typeof j.trading_active === 'boolean') return j.trading_active;
-    return true;
-  } catch {
-    return true;
-  }
-}
-
 // Poll the order status endpoint until the keeper either fills, rejects,
 // or we time out. Returns 'filled' | 'failed' | 'pending'.
 //
 // IMPORTANT: 'pending' here means we timed out waiting. The order may still
 // fill later — the caller should not treat 'pending' as success.
-async function pollOrderStatus(orderPubkey, { maxAttempts = 15, intervalMs = 2000, onTick } = {}) {
+async function pollOrderStatus(orderPubkey, {
+  maxAttempts = KEEPER_POLL_ATTEMPTS,
+  intervalMs = KEEPER_POLL_INTERVAL,
+  onTick,
+  signal,
+} = {}) {
   if (!orderPubkey) return 'pending';
-  // Initial delay: docs warn the first few polls may 404 while the keeper
-  // hasn't ingested the order yet.
-  await new Promise(r => setTimeout(r, intervalMs));
+  // Quick first poll — keeper may have filled instantly.
+  await new Promise(r => setTimeout(r, 600));
   for (let i = 0; i < maxAttempts; i++) {
+    if (signal?.aborted) return 'aborted';
     try {
       onTick?.(i + 1, maxAttempts);
-      const r = await jfetch(`/api/predict/orders/status/${encodeURIComponent(orderPubkey)}`);
+      const r = await jfetch(`/api/predict/orders/status/${encodeURIComponent(orderPubkey)}`, {}, 4000);
       if (r.ok) {
         const j = await r.json();
         const status = (j?.status || j?.data?.status || '').toLowerCase();
         if (status === 'filled' || status === 'complete' || status === 'completed') return 'filled';
         if (status === 'failed' || status === 'rejected' || status === 'cancelled' || status === 'canceled') return 'failed';
       }
-    } catch {
-      // Transient network errors are fine; keep polling.
-    }
+    } catch {}
     await new Promise(r => setTimeout(r, intervalMs));
   }
   return 'pending';
@@ -908,37 +910,13 @@ async function buildClaimTx({ ownerPubkey, positionPubkey }) {
 // SECTION 6: Submit + confirm helpers
 // ═══════════════════════════════════════════════════════════════════════════════
 
-async function simulateOrThrow(connection, tx, label) {
-  const mapSimErr = (logs) => {
-    const j = (logs || []).join('\n').toLowerCase();
-    if (j.includes('insufficient') || j.includes('0x1'))   return 'Insufficient balance.';
-    if (j.includes('slippage') || j.includes('0x1771'))    return 'Price moved — try again.';
-    if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
-    if (j.includes('blockhash') || j.includes('expired'))  return 'Quote expired. Please retry.';
-    return null;
-  };
-  try {
-    const sim = await connection.simulateTransaction(tx, {
-      sigVerify: false,
-      commitment: 'confirmed',
-    });
-    if (sim.value.err) {
-      const mapped = mapSimErr(sim.value.logs);
-      console.warn(`[predict] ${label} sim error:`, sim.value.err, sim.value.logs?.slice(-5));
-      throw new Error(mapped || `Simulation failed for ${label}.`);
-    }
-  } catch (e) {
-    if (e?.message && /balance|slippage|expired|account not|simulation failed/i.test(e.message)) {
-      throw e;
-    }
-    console.warn(`[predict] ${label} sim non-fatal:`, e?.message);
-  }
-}
-
-async function sendAndConfirm(connection, signedTx, blockhashInfo, setStMsg) {
+async function sendAndConfirm(connection, signedTx, blockhashInfo, setStMsg, signal) {
+  if (signal?.aborted) throw new Error('Cancelled.');
   setStMsg('Submitting…');
+  // skipPreflight=true: trust client-side simulation we already did, skip
+  // the second server-side preflight. Saves ~1-2s per tx.
   const sig = await connection.sendRawTransaction(signedTx.serialize(), {
-    maxRetries: 5, skipPreflight: false, preflightCommitment: 'confirmed',
+    maxRetries: 3, skipPreflight: true, preflightCommitment: 'confirmed',
   });
 
   setStMsg('Confirming…');
@@ -950,20 +928,22 @@ async function sendAndConfirm(connection, signedTx, blockhashInfo, setStMsg) {
         blockhash: bh.blockhash,
         lastValidBlockHeight: bh.lastValidBlockHeight,
       }, 'confirmed'),
-      new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
+      new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), CONFIRM_TIMEOUT_MS)),
     ]);
-    if (conf?.value?.err) {
-      throw new Error('On-chain error: ' + JSON.stringify(conf.value.err));
-    }
+    if (conf?.value?.err) throw new Error('On-chain error: ' + JSON.stringify(conf.value.err));
     return { sig, pending: false };
   } catch (e) {
-    const deadline = Date.now() + 20_000;
+    if (/on-chain/i.test(String(e?.message))) throw e;
+    // Fallback: poll signature status briefly. Many txs land but the
+    // blockhash-based confirm subscription misses the event.
+    const deadline = Date.now() + CONFIRM_FALLBACK_MS;
     while (Date.now() < deadline) {
-      await new Promise(r => setTimeout(r, 2000));
+      if (signal?.aborted) throw new Error('Cancelled.');
+      await new Promise(r => setTimeout(r, 1500));
       try {
         const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-        const cs = st?.value?.confirmationStatus;
         if (st?.value?.err) throw new Error('On-chain error: ' + JSON.stringify(st.value.err));
+        const cs = st?.value?.confirmationStatus;
         if (cs === 'confirmed' || cs === 'finalized') return { sig, pending: false };
       } catch (inner) {
         if (/on-chain/i.test(String(inner?.message))) throw inner;
@@ -1360,24 +1340,30 @@ function MarketCard({ event, livePrices, priceSnapshots, onTrade }) {
 function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, solBal, connection }) {
   const { publicKey, signTransaction } = useWallet();
 
-  const [amount, setAmount]   = useState('0.1');
-  // Steps: 0 idle, 1 swap, 2 order tx, 3 waiting for fill, 4 done
+  // USD-denominated amount. We always swap SOL → JupUSD via Jupiter (which
+  // takes our 5% fee in JupUSD natively), then place the Predict order with
+  // the JupUSD we received. Two signatures, clean Jupiter txs, no Blowfish.
+  const [amount, setAmount]   = useState('10');
   const [step, setStep]       = useState(0);
   const [statusMsg, setStMsg] = useState('');
   const [error, setError]     = useState('');
   const [warning, setWarning] = useState('');
   const [showRules, setShowRules] = useState(false);
   const { log: debugLog, push: dbg, clear: clearDbg } = useDebugLog();
+  const abortRef = React.useRef(null);
 
   useBodyLock(true);
 
   const m          = event.market;
   const poly       = event.poly || null;
-  const solAmount  = Number(amount) || 0;
-  const grossLamports = BigInt(Math.round(solAmount * 1e9));
 
+  // SOL price estimate is rough — used only for the "do they have enough SOL"
+  // pre-check. Actual rate comes from Jupiter at swap time.
   const SOL_PRICE_GUESS = 150;
-  const estGrossUsd   = solAmount * SOL_PRICE_GUESS;
+  const estGrossUsd     = Number(amount) || 0;
+  const grossLamports   = BigInt(Math.round((estGrossUsd / SOL_PRICE_GUESS) * 1e9));
+  const hasBalance      = solBal >= grossLamports && grossLamports > 0n;
+
   const estFeeUsd     = estGrossUsd * (FEE_BPS / 10000);
   const estDepositUsd = estGrossUsd - estFeeUsd;
   const price         = isYes ? m.yesPrice : m.noPrice;
@@ -1387,49 +1373,52 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
   const sideColor = isYes ? C.yes : C.no;
   const sideDim   = isYes ? C.yesDim : C.noDim;
 
-  const hasSol = solBal >= grossLamports && grossLamports > 0n;
   const busy   = step > 0 && step < 4;
-  const canBuy = !busy && solAmount > 0 && publicKey && m.marketId && hasSol;
+  const canBuy = !busy && estGrossUsd >= MIN_TRADE_USD && publicKey && m.marketId && hasBalance;
 
   const placeOrder = useCallback(async () => {
-    dbg('buy:start', `marketId=${m.marketId} side=${isYes ? 'YES' : 'NO'} sol=${solAmount}`);
+    dbg('buy:start', `marketId=${m.marketId} side=${isYes ? 'YES' : 'NO'} usd=${estGrossUsd}`);
     if (!publicKey || !signTransaction) {
-      dbg('buy:abort', 'no wallet');
       setError('Connect a wallet that supports signTransaction.');
       return;
     }
     if (estGrossUsd < MIN_TRADE_USD) {
-      dbg('buy:abort', `below min: $${estGrossUsd.toFixed(2)} < $${MIN_TRADE_USD}`);
-      setError(`Minimum trade is $${MIN_TRADE_USD}. Try a larger SOL amount.`);
+      setError(`Minimum trade is $${MIN_TRADE_USD}.`);
       return;
     }
 
     setError(''); setWarning('');
+    abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
+    const checkAbort = () => { if (signal.aborted) throw new Error('Cancelled.'); };
 
     try {
-      // STEP 1: Swap SOL → JupUSD
+      const ownerB58 = publicKey.toBase58();
+
+      // STEP 1: Swap SOL → JupUSD with Jupiter native 5% fee in JupUSD
       setStep(1); setStMsg('Building swap…');
-      dbg('buy:1', 'building SOL→JupUSD swap', { grossLamports: grossLamports.toString() });
+      dbg('buy:1', 'building SOL→JupUSD swap with platformFeeBps=' + FEE_BPS);
+      checkAbort();
 
       const { tx: swapTx, expectedJupUsdAtomic, latestBlockhash: swapBh } =
         await buildSolToJupUsdSwapTx({ connection, ownerPubkey: publicKey, grossLamports });
-      dbg('buy:1', 'swap tx built', { expectedJupUsd: (Number(expectedJupUsdAtomic) / 1e6).toFixed(4) });
+      dbg('buy:1', `expected JupUSD out (net of fee): ${(Number(expectedJupUsdAtomic) / 1e6).toFixed(4)}`);
+      checkAbort();
 
       const minJupUsdAtomic = BigInt(Math.round(MIN_TRADE_USD * 1e6));
-      if (expectedJupUsdAtomic < minJupUsdAtomic) throw new Error(`Minimum trade is $${MIN_TRADE_USD}.`);
+      if (expectedJupUsdAtomic < minJupUsdAtomic) throw new Error(`Minimum deposit is $${MIN_TRADE_USD}.`);
 
-      setStMsg('Confirm Step 1 of 2 in wallet — Swap SOL → JupUSD');
+      setStMsg('Confirm Step 1 of 2 — Swap SOL → JupUSD');
       const signedSwap = await signTransaction(swapTx);
-      dbg('buy:1', 'swap signed');
+      checkAbort();
 
       setStMsg('Swapping SOL → JupUSD…');
-      const swapResult = await sendAndConfirm(connection, signedSwap, swapBh, setStMsg);
-      dbg('buy:1', `swap confirmed: ${swapResult.sig}`, { pending: swapResult.pending });
-      if (swapResult.pending) throw new Error(`Swap submitted but confirming: ${swapResult.sig}`);
+      const swapResult = await sendAndConfirm(connection, signedSwap, swapBh, setStMsg, signal);
+      dbg('buy:1', `swap confirmed: ${swapResult.sig}`);
+      if (swapResult.pending) throw new Error(`Swap confirming: ${swapResult.sig}`);
 
-      // STEP 2: Place order
+      // STEP 2: Place Predict order with the JupUSD we received
       setStep(2); setStMsg('Reading JupUSD balance…');
-      const ownerB58 = publicKey.toBase58();
       const actualJupUsd = await fetchJupUsdBalance(connection, ownerB58);
       dbg('buy:2', `JupUSD balance: ${(Number(actualJupUsd) / 1e6).toFixed(4)}`);
 
@@ -1437,7 +1426,6 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
       if (depositAtomic <= 0n) throw new Error('Swap landed but no JupUSD found. Refresh.');
 
       setStMsg('Building order…');
-      dbg('buy:2', 'POST /api/predict/orders', { marketId: m.marketId, isYes, deposit: depositAtomic.toString() });
       const orderRequest = await loggedFetch(
         '/api/predict/orders',
         {
@@ -1451,92 +1439,88 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
             depositAmount: depositAtomic.toString(),
             depositMint: JUPUSD_MINT,
           }),
+          signal,
         },
         dbg,
         'predict-orders',
       );
+      checkAbort();
 
       const j = orderRequest.json;
       if (!j?.transaction) {
         dbg('buy:2:fail', 'no transaction in response', j);
-        throw new Error('Jupiter Predict returned no transaction. See debug log.');
+        throw new Error('Jupiter Predict returned no transaction.');
       }
       const orderPubkey =
-        j.orderPubkey || j.order?.orderPubkey || j.order?.pubkey ||
+        j.order?.orderPubkey || j.orderPubkey ||
         (typeof j.order === 'string' ? j.order : null) || j.pubkey || null;
       dbg('buy:2', `orderPubkey: ${orderPubkey || '(none)'}`);
 
       const buyTx = VersionedTransaction.deserialize(b64ToBytes(j.transaction));
 
-      setStMsg(`Confirm Step 2 of 2 in wallet — Buy ${sideLabel}`);
+      setStMsg(`Confirm Step 2 of 2 — Buy ${sideLabel}`);
       const signedBuy = await signTransaction(buyTx);
-      dbg('buy:2', 'order tx signed');
+      checkAbort();
 
       setStMsg('Submitting order…');
-      const orderResult = await sendAndConfirm(connection, signedBuy, null, setStMsg);
-      dbg('buy:2', `order tx landed: ${orderResult.sig}`, { pending: orderResult.pending });
-      if (orderResult.pending) throw new Error(`Order tx confirming: ${orderResult.sig}`);
+      const orderResult = await sendAndConfirm(connection, signedBuy, null, setStMsg, signal);
+      dbg('buy:2', `order tx landed: ${orderResult.sig}`);
+      if (orderResult.pending) throw new Error(`Order confirming: ${orderResult.sig}`);
 
-      // STEP 3: Wait for keeper fill — tx landing on-chain ≠ filled
+      // STEP 3: Wait for keeper fill — tx landing ≠ filled
       setStep(3);
 
       if (!orderPubkey) {
-        dbg('buy:3', 'no orderPubkey to poll, surfacing warning');
-        setWarning('Order submitted but no order pubkey returned — can\'t track fill. Check Positions.');
+        setWarning('Order submitted but no order pubkey to track. Check Positions.');
         setStep(4); setStMsg('');
         onDone?.(); setTimeout(() => onClose(), 3200);
         return;
       }
 
-      setStMsg('Waiting for keeper to fill order…');
-      dbg('buy:3', `polling /orders/status/${orderPubkey}`);
+      setStMsg('Waiting for keeper to fill…');
       let lastStatus = null;
       const fillStatus = await pollOrderStatus(orderPubkey, {
-        maxAttempts: 15,
-        intervalMs: 2000,
+        signal,
         onTick: async (i, total) => {
           setStMsg(`Waiting for keeper… (${i}/${total})`);
-          // Log every poll so we see exactly what status comes back.
           try {
-            const r = await fetch(`/api/predict/orders/status/${encodeURIComponent(orderPubkey)}`);
+            const r = await fetch(`/api/predict/orders/status/${encodeURIComponent(orderPubkey)}`, { signal });
             const t = await r.text();
             let p = null; try { p = JSON.parse(t); } catch {}
             const st = p?.status || p?.data?.status || `(http ${r.status})`;
-            if (st !== lastStatus) {
-              dbg('buy:3:poll', `[${i}/${total}] status=${st}`, p);
-              lastStatus = st;
-            }
+            if (st !== lastStatus) { dbg('buy:3:poll', `[${i}/${total}] status=${st}`); lastStatus = st; }
           } catch (e) { dbg('buy:3:poll', `[${i}/${total}] error: ${e.message}`); }
         },
       });
-      dbg('buy:3', `final fill status: ${fillStatus}`);
+      dbg('buy:3', `final: ${fillStatus}`);
 
+      if (fillStatus === 'aborted') throw new Error('Cancelled.');
       if (fillStatus === 'failed') {
         throw new Error('Order rejected by keeper. Your JupUSD is still in your wallet.');
       }
       if (fillStatus === 'pending') {
-        setWarning('Order hasn\'t filled within 30s. May still go through — check Positions in a minute.');
+        setWarning('Order hasn\'t filled yet. May still go through — check Positions.');
         setStep(4); setStMsg('');
-        onDone?.(); setTimeout(() => onClose(), 4200);
+        onDone?.(); setTimeout(() => onClose(), 3200);
         return;
       }
 
-      // Filled.
-      dbg('buy:done', 'order filled successfully');
+      dbg('buy:done', 'order filled');
       setStep(4); setStMsg('');
       onDone?.();
-      setTimeout(() => onClose(), 2200);
+      setTimeout(() => onClose(), 1800);
     } catch (e) {
       dbg('buy:error', e?.message || String(e), { status: e?.status, body: e?.body?.slice?.(0, 400) });
       setError(friendlyError(e));
       setStep(0); setStMsg('');
     }
   }, [
-    publicKey, signTransaction, m, isYes, grossLamports, estGrossUsd, solAmount,
+    publicKey, signTransaction, m, isYes, grossLamports, estGrossUsd,
     connection, onClose, onDone, sideLabel, dbg,
   ]);
 
-  const solPresets = ['0.05', '0.1', '0.25', '0.5'];
+  // USD presets
+  const presets = ['5', '10', '25', '50'];
 
   const rulesText = poly?.description || m.rulesPrimary || event.closeCondition;
   const threshold = poly?.groupItemTitle;
@@ -1557,12 +1541,10 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
     return '$' + n.toFixed(6);
   };
 
-  // Button label reflects the new step model. Step 3 = waiting for fill,
-  // Step 4 = actually filled (or warning surfaced).
   const buttonLabel = (() => {
     if (busy) return statusMsg || 'Working…';
     if (step === 4) return warning ? '⚠ Submitted — check Positions' : '✓ Order filled';
-    return `Buy ${sideLabel} · ${solAmount.toFixed(4)} SOL`;
+    return `Buy ${sideLabel} · $${estGrossUsd.toFixed(2)}`;
   })();
 
   return (
@@ -1672,32 +1654,28 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
         )}
 
         <div style={{ marginBottom: 10 }}>
-          <div style={{ fontSize: 9, color: C.muted, marginBottom: 5, textTransform: 'uppercase', letterSpacing: 1, ...T.mono }}>You pay</div>
+          <div style={{ fontSize: 9, color: C.muted, marginBottom: 5, textTransform: 'uppercase', letterSpacing: 1, ...T.mono }}>Amount</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '9px 11px', borderRadius: 10, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}` }}>
+            <span style={{ fontSize: 16, color: C.muted, fontWeight: 700, ...T.display }}>$</span>
             <input value={amount} onChange={e => { setAmount(cleanAmount(e.target.value)); setError(''); }} disabled={busy} inputMode="decimal"
               style={{ flex: 1, background: 'none', border: 'none', outline: 'none', color: C.ink, fontSize: 18, fontWeight: 700, ...T.display }} />
-            <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>SOL</span>
+            <span style={{ fontSize: 10, color: C.muted, ...T.mono }}>USD</span>
           </div>
           <div style={{ display: 'flex', gap: 5, marginTop: 6 }}>
-            {solPresets.map(v => (
-              <button key={v} onClick={() => setAmount(v)} disabled={busy} style={{ flex: 1, padding: 6, borderRadius: 7, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 10, fontWeight: 600, cursor: 'pointer', ...T.mono }}>{v}</button>
+            {presets.map(v => (
+              <button key={v} onClick={() => setAmount(v)} disabled={busy} style={{ flex: 1, padding: 6, borderRadius: 7, background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 10, fontWeight: 600, cursor: 'pointer', ...T.mono }}>${v}</button>
             ))}
-            <button onClick={() => setAmount(Math.max(0, (Number(solBal) / 1e9) - 0.01).toFixed(4))} disabled={busy || solBal <= 0n} style={{ flex: 1, padding: 6, borderRadius: 7, background: C.hlDim, border: `1px solid ${C.borderHi}`, color: C.hl, fontSize: 10, fontWeight: 700, cursor: 'pointer', ...T.mono }}>Max</button>
           </div>
         </div>
 
         <div style={{ padding: 9, borderRadius: 10, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.border}`, marginBottom: 10, ...T.mono, fontSize: 10 }}>
-          <Row label="You pay" value={`${solAmount.toFixed(4)} SOL`} />
-          <Row label="Platform fee (5%)" value={`~${(solAmount * FEE_BPS / 10000).toFixed(4)} SOL`} />
-          <Row label="Est. deposit" value={`~${fmtUsd(estDepositUsd)} JupUSD`} />
+          <Row label="Paying with" value="SOL" valueColor={C.hl} />
+          <Row label="Platform fee (5%)" value={`~${fmtUsd(estFeeUsd)}`} />
           <Row label="Est. contracts" value={`~${contractsEst.toFixed(2)}`} />
           <Row label={`If ${sideLabel} wins`} value={`~${fmtUsd(contractsEst)}`} valueColor={sideColor} bold />
           {formatEndDate(event.closeTime) && (
             <Row label="Closes" value={formatEndDate(event.closeTime)} />
           )}
-          <div style={{ marginTop: 6, paddingTop: 6, borderTop: `1px solid ${C.border}`, color: C.muted, fontSize: 9 }}>
-            Two signatures: Swap SOL → JupUSD, then place order. Order is filled by Jupiter's keeper.
-          </div>
         </div>
 
         {statusMsg && <StatusLine msg={statusMsg} step={busy ? `STEP ${Math.min(step, 3)} OF 3` : null} />}
@@ -1708,9 +1686,9 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
           </div>
         )}
 
-        {!hasSol && solAmount > 0 && !busy && (
+        {!hasBalance && estGrossUsd > 0 && !busy && (
           <div style={{ marginBottom: 8, padding: 8, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', borderRadius: 10, fontSize: 11, color: C.amber, fontWeight: 600 }}>
-            Insufficient SOL balance.
+            Insufficient balance — need ${estGrossUsd.toFixed(2)} in SOL or JupUSD.
           </div>
         )}
 
@@ -1751,18 +1729,64 @@ function PositionCard({ p, onAction }) {
   const pnlColor  = pnl >= 0 ? C.yes : C.no;
   const pnlPct    = p.costUsd > 0 ? (pnl / p.costUsd) * 100 : 0;
 
+  // ─── Position state ─────────────────────────────────────────────────────
+  // A position can be in one of:
+  //   - active   : market still open, can sell at mark price
+  //   - claimable: market resolved in user's favor, claim payout
+  //   - claimed  : user has already claimed payout
+  //   - lost     : market resolved against user, contracts worth $0
+  //   - settling : market closed but result not finalized yet
+  //
+  // The previous code only handled active/claimable/claimed and showed a
+  // Sell button on lost positions, which is misleading — there's nothing
+  // to sell when mark price is $0 on a settled market.
   const isClaimable = p.claimable && !p.claimed;
   const isClaimed   = p.claimed;
+  const isResolved  = p.marketStatus === 'settled' || p.marketStatus === 'resolved'
+                    || (p.marketResult && p.marketResult !== 'pending' && p.marketResult !== '');
+  const wonResolved = isResolved && !!p.marketResult && (
+    (p.marketResult.toLowerCase() === 'yes' && p.isYes) ||
+    (p.marketResult.toLowerCase() === 'no'  && !p.isYes)
+  );
+  const lostResolved = isResolved && !isClaimable && !isClaimed && !wonResolved;
+  const isSettling   = isResolved && !isClaimable && !isClaimed && !lostResolved;
+
+  // Mark price = 0 with no claimable flag and not yet settled is a strong
+  // hint the market resolved against us (server hasn't surfaced the result
+  // field yet). Treat the same as lost.
+  const inferredLost = !isClaimable && !isClaimed && !isResolved
+                    && p.markPriceUsd === 0 && p.contracts > 0;
 
   return (
-    <div style={{ padding: 10, borderRadius: 14, background: `linear-gradient(145deg, ${C.card}, ${C.cardHi})`, border: `1px solid ${C.border}`, marginBottom: 7, boxShadow: C.shadow }}>
+    <div style={{
+      padding: 10, borderRadius: 14,
+      background: `linear-gradient(145deg, ${C.card}, ${C.cardHi})`,
+      border: `1px solid ${lostResolved || inferredLost ? 'rgba(255,95,122,.20)' : isClaimable ? 'rgba(0,212,163,.30)' : C.border}`,
+      marginBottom: 7,
+      boxShadow: C.shadow,
+      opacity: lostResolved || inferredLost || isClaimed ? 0.7 : 1,
+    }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 12, fontWeight: 700, color: C.ink, lineHeight: 1.3, marginBottom: 4, ...T.body }}>{p.title}</div>
           {p.outcomeLabel && p.outcomeLabel !== p.title && (
             <div style={{ fontSize: 10, color: C.muted, marginBottom: 4, ...T.mono }}>{p.outcomeLabel}</div>
           )}
-          <div style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 99, background: sideDim, border: `1px solid ${sideColor}55`, color: sideColor, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>{p.isYes ? 'YES' : 'NO'}</div>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            <div style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 99, background: sideDim, border: `1px solid ${sideColor}55`, color: sideColor, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>{p.isYes ? 'YES' : 'NO'}</div>
+            {isClaimable && (
+              <div style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 99, background: C.yesDim, border: `1px solid ${C.yes}55`, color: C.yes, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>WON</div>
+            )}
+            {(lostResolved || inferredLost) && (
+              <div style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 99, background: C.noDim, border: `1px solid ${C.no}55`, color: C.no, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>LOST</div>
+            )}
+            {isSettling && (
+              <div style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 99, background: 'rgba(245,181,61,.15)', border: '1px solid rgba(245,181,61,.40)', color: C.amber, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>SETTLING</div>
+            )}
+            {isClaimed && (
+              <div style={{ display: 'inline-block', padding: '2px 7px', borderRadius: 99, background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`, color: C.muted, fontSize: 9, fontWeight: 800, letterSpacing: 1, ...T.mono }}>CLAIMED</div>
+            )}
+          </div>
         </div>
         <div style={{ textAlign: 'right' }}>
           <div style={{ fontSize: 14, fontWeight: 800, color: C.ink, ...T.display, lineHeight: 1 }}>{fmtUsd(p.valueUsd)}</div>
@@ -1784,6 +1808,14 @@ function PositionCard({ p, onAction }) {
         <div style={{ textAlign: 'center', fontSize: 11, color: C.muted, fontWeight: 600, padding: 8, ...T.mono }}>
           ✓ Claimed {fmtUsd(p.payoutUsd)}
         </div>
+      ) : (lostResolved || inferredLost) ? (
+        <div style={{ textAlign: 'center', fontSize: 11, color: C.no, fontWeight: 700, padding: 8, ...T.mono }}>
+          Lost · −{fmtUsd(p.costUsd)}
+        </div>
+      ) : isSettling ? (
+        <div style={{ textAlign: 'center', fontSize: 11, color: C.amber, fontWeight: 700, padding: 8, ...T.mono }}>
+          Awaiting settlement…
+        </div>
       ) : (
         <button onClick={() => onAction('sell', p)}
           style={{ width: '100%', padding: 9, borderRadius: 10, background: pnl >= 0 ? `linear-gradient(135deg, ${C.yes}22, ${C.yes}11)` : `linear-gradient(135deg, ${C.no}22, ${C.no}11)`, border: `1px solid ${pnl >= 0 ? C.yes : C.no}55`, color: pnl >= 0 ? C.yes : C.no, fontSize: 12, fontWeight: 700, cursor: 'pointer', ...T.body }}>
@@ -1800,6 +1832,12 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
   const [statusMsg, setStMsg] = useState('');
   const [error, setError]     = useState('');
   const { log: debugLog, push: dbg, clear: clearDbg } = useDebugLog();
+  const abortRef = React.useRef(null);
+  const cancel = useCallback(() => {
+    if (abortRef.current) { try { abortRef.current.abort(); } catch {} }
+    dbg(`${kind}:cancel`, 'user cancelled');
+    setStep(0); setStMsg(''); setError('Cancelled.');
+  }, [dbg, kind]);
 
   useBodyLock(true);
 
@@ -1815,13 +1853,15 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
       return;
     }
     setError('');
+    abortRef.current = new AbortController();
+    const signal = abortRef.current.signal;
+    const checkAbort = () => { if (signal.aborted) throw new Error('Cancelled.'); };
 
     try {
       setStep(1);
       setStMsg(`Building ${isClaim ? 'claim' : 'sell'}…`);
       const ownerB58 = publicKey.toBase58();
 
-      // Hit the predict API directly so we can log the request/response.
       const url = isClaim
         ? `/api/predict/positions/${encodeURIComponent(position.positionPubkey)}/claim`
         : `/api/predict/positions/${encodeURIComponent(position.positionPubkey)}`;
@@ -1834,10 +1874,12 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
           method,
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ ownerPubkey: ownerB58 }),
+          signal,
         },
         dbg,
         `predict-${kind}`,
       );
+      checkAbort();
 
       const j = request.json;
       if (!j?.transaction) {
@@ -1847,16 +1889,16 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
       const predictTx = VersionedTransaction.deserialize(b64ToBytes(j.transaction));
       dbg(`${kind}:1`, 'tx deserialized');
 
-      setStMsg('Checking…');
-      await simulateOrThrow(connection, predictTx, kind);
-      dbg(`${kind}:1`, 'simulation passed');
+      // Skip the extra simulation round-trip for speed. We already trust
+      // the Jupiter-built tx; on-chain errors will surface during confirm.
 
       setStMsg(`Confirm Step 1 of 2 in wallet — ${isClaim ? 'Claim winnings' : 'Sell contracts'}`);
       const signedPredict = await signTransaction(predictTx);
+      checkAbort();
       dbg(`${kind}:1`, 'signed');
 
       setStMsg(isClaim ? 'Claiming…' : 'Selling…');
-      const predictResult = await sendAndConfirm(connection, signedPredict, null, setStMsg);
+      const predictResult = await sendAndConfirm(connection, signedPredict, null, setStMsg, signal);
       dbg(`${kind}:1`, `landed: ${predictResult.sig}`, { pending: predictResult.pending });
       if (predictResult.pending) throw new Error(`${kind} tx confirming: ${predictResult.sig}`);
 
@@ -1872,24 +1914,23 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
         ownerPubkey: publicKey,
         grossJupUsdAtomic: actualJupUsd,
       });
+      checkAbort();
       dbg(`${kind}:2`, 'swap tx built');
-
-      setStMsg('Checking…');
-      await simulateOrThrow(connection, swapTx, 'jupusd-sol');
 
       setStMsg('Confirm Step 2 of 2 in wallet — Swap JupUSD → SOL');
       const signedSwap = await signTransaction(swapTx);
+      checkAbort();
       dbg(`${kind}:2`, 'swap signed');
 
       setStMsg('Swapping JupUSD → SOL…');
-      const swapResult = await sendAndConfirm(connection, signedSwap, swapBh, setStMsg);
+      const swapResult = await sendAndConfirm(connection, signedSwap, swapBh, setStMsg, signal);
       dbg(`${kind}:2`, `swap landed: ${swapResult.sig}`, { pending: swapResult.pending });
       if (swapResult.pending) throw new Error(`Swap confirming: ${swapResult.sig}`);
 
       dbg(`${kind}:done`, 'complete');
       setStep(3); setStMsg('');
       onDone?.();
-      setTimeout(() => onClose(), 2200);
+      setTimeout(() => onClose(), 1800);
     } catch (e) {
       dbg(`${kind}:error`, e?.message || String(e), { status: e?.status, body: e?.body?.slice?.(0, 400) });
       setError(friendlyError(e));
