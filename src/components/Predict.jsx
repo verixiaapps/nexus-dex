@@ -53,7 +53,10 @@ const FEE_WALLET    = new PublicKey(FEE_WALLET_B58);
 const FEE_BPS       = 500;
 const SLIPPAGE_BPS  = 1000;
 const SOL_RPC       = '/api/solana-rpc';
-const MIN_TRADE_USD = 1;
+// Jupiter's prediction API enforces a $5 floor server-side. Matching it
+// here so users see the precheck error in the input panel instead of
+// burning two wallet signatures only to get rejected by the backend.
+const MIN_TRADE_USD = 5;
 const NAV_CLEARANCE = 120;
 const JUPUSD_DECIMALS = 6;
 const SOL_DECIMALS    = 9;
@@ -606,6 +609,13 @@ function pickEventFields(ev) {
 // only means the event has begun — it does NOT mean the market is still
 // tradeable. So we check every signal locally and drop anything that's
 // settled, cancelled, past close, or already has a YES/NO result.
+//
+// We also drop markets that close within CLOSE_BUFFER_MS. A buy submitted
+// with less than this window has no realistic chance of completing both
+// signatures + on-chain settlement + keeper fill before close, so allowing
+// it just leads to failed orders and wasted gas.
+const CLOSE_BUFFER_MS = 60_000;   // 1 minute
+
 function isMarketOpen(event) {
   if (!event) return false;
   if (event.isActive === false) return false;
@@ -615,7 +625,7 @@ function isMarketOpen(event) {
   if (m.status && m.status !== 'open') return false;     // closed | settled | cancelled
   if (m.result && m.result !== 'pending' && m.result !== '') return false;  // 'yes' or 'no' → settled
   const ms = toMs(event.closeTime);
-  if (ms != null && ms <= Date.now()) return false;
+  if (ms != null && (ms - Date.now()) <= CLOSE_BUFFER_MS) return false;
   return true;
 }
 
@@ -954,10 +964,9 @@ async function buildSolToJupUsdSwapTx({ connection, ownerPubkey, grossLamports }
     instructions:    ixs,
   }).compileToV0Message(alts);
 
-  // Simulate with the max CU limit, then rebuild with the actual usage + buffer.
-  const probeTx = new VersionedTransaction(compile(buildIxs(CU_LIMIT_MAX)));
-  const cuLimit = await simulateForCuLimit(connection, probeTx, 'sol-jupusd');
-  const tx = new VersionedTransaction(compile(buildIxs(cuLimit)));
+  // Use a fixed 600k CU limit. Plenty for Jupiter swap + ATA + fee transfer,
+  // skips the extra simulateTransaction round-trip that costs 1-2 seconds.
+  const tx = new VersionedTransaction(compile(buildIxs(CU_LIMIT_FALLBACK)));
 
   return { tx, expectedJupUsdAtomic, latestBlockhash };
 }
@@ -1028,9 +1037,7 @@ async function buildJupUsdToSolSwapTx({ connection, ownerPubkey, grossJupUsdAtom
     instructions:    ixs,
   }).compileToV0Message(alts);
 
-  const probeTx = new VersionedTransaction(compile(buildIxs(CU_LIMIT_MAX)));
-  const cuLimit = await simulateForCuLimit(connection, probeTx, 'jupusd-sol');
-  const tx = new VersionedTransaction(compile(buildIxs(cuLimit)));
+  const tx = new VersionedTransaction(compile(buildIxs(CU_LIMIT_FALLBACK)));
 
   return { tx, expectedSolLamports, latestBlockhash };
 }
@@ -1577,16 +1584,7 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
     setError('');
 
     try {
-      // Defensive precheck — confirm Jupiter is actually accepting orders
-      // before we ask the user to sign anything. Avoids the bad UX of two
-      // wallet prompts followed by a failed order.
       setStep(1);
-      setStMsg('Checking trading status…');
-      const tradingActive = await fetchTradingStatus();
-      if (!tradingActive) {
-        throw new Error('Prediction market trading is paused. Please try again shortly.');
-      }
-
       setStMsg('Building swap…');
 
       const { tx: swapTx, expectedJupUsdAtomic, latestBlockhash: swapBh } =
@@ -1600,9 +1598,6 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
       if (expectedJupUsdAtomic < minJupUsdAtomic) {
         throw new Error(`Minimum trade is $${MIN_TRADE_USD}. Try a larger SOL amount.`);
       }
-
-      setStMsg('Checking…');
-      await simulateOrThrow(connection, swapTx, 'swap');
 
       setStMsg('Confirm Step 1 of 2 in your wallet — Swap SOL → JupUSD');
       const signedSwap = await signTransaction(swapTx);
@@ -1626,15 +1621,12 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
       }
 
       setStMsg('Building order…');
-      const { tx: buyTx, orderInfo } = await buildBuyTx({
+      const { tx: buyTx } = await buildBuyTx({
         ownerPubkey: ownerB58,
         marketId: m.marketId,
         isYes,
         depositAmountJupUsdAtomic: depositAtomic,
       });
-
-      setStMsg('Checking…');
-      await simulateOrThrow(connection, buyTx, 'predict-buy');
 
       setStMsg(`Confirm Step 2 of 2 in your wallet — Buy ${sideLabel}`);
       const signedBuy = await signTransaction(buyTx);
@@ -1643,21 +1635,6 @@ function BuyDrawer({ event, isYes, livePrices, priceSnapshots, onClose, onDone, 
       const orderResult = await sendAndConfirm(connection, signedBuy, null, setStMsg);
       if (orderResult.pending) {
         throw new Error(`Order submitted but still confirming. Solscan: https://solscan.io/tx/${orderResult.sig}`);
-      }
-
-      // Tx landed on-chain. Poll the keeper for actual fill — per Jupiter's
-      // open-positions docs, the on-chain tx only opens an order account; a
-      // keeper has to match it for the position to actually fill. We poll
-      // for up to ~20 seconds and report the outcome.
-      if (orderInfo?.orderPubkey) {
-        setStMsg('Waiting for fill…');
-        const fillStatus = await pollOrderStatus(orderInfo.orderPubkey);
-        if (fillStatus === 'failed') {
-          throw new Error('Order could not be filled. Your JupUSD is back in your wallet.');
-        }
-        // 'filled' or 'pending' (timeout) — both proceed to the done state.
-        // For 'pending', the keeper may still fill it after we close; the
-        // user's positions page will reflect the outcome.
       }
 
       setStep(3); setStMsg('');
