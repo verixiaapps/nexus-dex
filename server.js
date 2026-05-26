@@ -319,6 +319,26 @@ app.get('/api/jupiter/tokens/v2/toporganicscore/:timeframe', async (req, res) =>
   }
 });
 
+// New launches — Jupiter Tokens V2 /recent. Sorted by first-pool creation
+// time. Used by the Pulse "NEW" column.
+app.get('/api/jupiter/tokens/v2/recent', async (req, res) => {
+  try {
+    const url = `https://lite-api.jup.ag/tokens/v2/recent${buildForwardedQuery(req)}`;
+    const c   = getCachedJson(url);
+    if (c) return res.status(c.status).json(c.payload);
+    const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 12_000);
+    const result   = await safeJson(response);
+    // Short cache: NEW launches are hot, but we still want to deduplicate
+    // burst-fire polls from multiple users.
+    if (response.ok && result.parsed) setCachedJson(url, response.status, result.parsed, 5_000);
+    return respondJsonOrError(res, response, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Jupiter recent timed out' });
+    logError('jupiter-tokens-recent', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
 // Token registry passthrough
 app.get('/api/jupiter/tokens/v2/tag', async (req, res) => {
   try {
