@@ -39,6 +39,32 @@ const FEE_WALLET_PUBKEY = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
 const FEE_BPS           = 500;       // 5%
 const SLIPPAGE_BPS_MAX  = 1500;      // memes are volatile — Jupiter dynamicSlippage will tighten
 
+// Mints we never want to show in the meme feed (SOL, wrapped SOL, LSTs, stables).
+// Jupiter's toporganicscore is supposed to filter these but doesn't always, and
+// the /recent endpoint surfaces fresh stable launches too. Belt-and-suspenders.
+const MEME_BLOCKLIST = new Set([
+  'So11111111111111111111111111111111111111112',  // wSOL
+  '11111111111111111111111111111111',              // native SOL placeholder
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
+  'USDH1SM1ojwWUga67PGrgFWUHibbjqMvuMaDkRJTgkX',  // USDH
+  'jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v',  // jupSOL
+  'J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn', // JitoSOL
+  'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So',  // mSOL
+  'bSo13r4TkiE4KumL71LsHTPpL2euBYLFx6h9HP3piy1',  // bSOL
+  'jupUSDvMWdGmKHzbDeq2Zy7zCfx5KqsAj9JqPjmqYns',  // jupUSD
+]);
+
+const STABLE_SYMBOL_REGEX = /^(W?SOL|USDC|USDT|USDH|USDS|USDE|PYUSD|UXD|sUSD|FDUSD|DAI|FRAX|BUSD|JUPSOL|JITOSOL|MSOL|BSOL|JUPUSD)$/i;
+
+function isMemeWorthy(t) {
+  if (!t || !t.mint) return false;
+  if (MEME_BLOCKLIST.has(t.mint)) return false;
+  if (t.symbol && STABLE_SYMBOL_REGEX.test(t.symbol)) return false;
+  if (t.isStable) return false;
+  return true;
+}
+
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOL_DECIMALS  = 9;
@@ -178,9 +204,33 @@ async function fetchTrendingMemes({ interval = '24h', limit = 50 } = {}) {
     if (!r.ok) return [];
     const data = await r.json();
     const list = Array.isArray(data) ? data : (data?.tokens || []);
-    return list.map(normalizeJupToken).filter(Boolean);
+    return list.map(normalizeJupToken).filter(Boolean).filter(isMemeWorthy);
   } catch (e) {
     console.warn('[meme] trending fetch failed:', e?.message || e);
+    return [];
+  }
+}
+
+// NEW LAUNCHES — Jupiter's /tokens/v2/recent returns tokens sorted by
+// first-pool-creation time. Includes pre-graduation pump.fun tokens
+// (Jupiter routes them via Meteora DBC) and post-graduation tokens on
+// PumpSwap/Raydium. Default ~30 results from Jupiter; we cap and filter.
+async function fetchRecentMemes({ limit = 50, minLiquidityUsd = 0 } = {}) {
+  try {
+    const r = await fetchWithTimeout(
+      `/api/jupiter/tokens/v2/recent?limit=${limit}`,
+      { headers: { Accept: 'application/json' } }, 10_000,
+    );
+    if (!r.ok) return [];
+    const data = await r.json();
+    const list = Array.isArray(data) ? data : (data?.tokens || []);
+    return list
+      .map(normalizeJupToken)
+      .filter(Boolean)
+      .filter(isMemeWorthy)
+      .filter(t => t.liquidity >= minLiquidityUsd);
+  } catch (e) {
+    console.warn('[meme] recent fetch failed:', e?.message || e);
     return [];
   }
 }
@@ -372,6 +422,24 @@ async function fetchTokenBalance({ ownerPubkey, mint, decimals }) {
   } catch { return { atomic: 0n, ui: 0 }; }
 }
 
+// Determine which token program a mint belongs to (Token vs Token-2022).
+// Meme tokens generally use legacy Token, but some new launches use 2022.
+async function fetchMintTokenProgram(mintAddress) {
+  try {
+    const r = await fetchWithTimeout('/api/solana-rpc', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0', id: 1, method: 'getAccountInfo',
+        params: [mintAddress, { encoding: 'base64', commitment: 'confirmed' }],
+      }),
+    }, 6_000);
+    const j = await r.json();
+    const owner = j?.result?.value?.owner;
+    if (owner === TOKEN_2022_PROGRAM_ID.toBase58()) return TOKEN_2022_PROGRAM_ID;
+    return TOKEN_PROGRAM_ID;
+  } catch { return TOKEN_PROGRAM_ID; }
+}
+
 async function fetchLatestBlockhash() {
   const r = await fetchWithTimeout('/api/solana-rpc', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -398,45 +466,28 @@ async function fetchLatestBlockhash() {
 
 async function assembleSwapTxWithFee({
   swapInstructions,
-  feeInstructions,  // array — placed before (buy) or after (sell) Jupiter swap
+  feeInstructions,  // array — placed before (buy) or after (sell) Jupiter ixs
   prependFee,
   userPublicKey,
 }) {
   const altAddrs    = swapInstructions.addressLookupTableAddresses || [];
   const altAccounts = await fetchLookupTableAccounts(altAddrs);
 
-  // Compute budget MUST come first in any Solana tx, regardless of side.
-  const computeBudgetIxs = [];
-  if (Array.isArray(swapInstructions.computeBudgetInstructions))
-    swapInstructions.computeBudgetInstructions.forEach(ix => computeBudgetIxs.push(deserializeJupInstruction(ix)));
-
-  const tokenLedgerIxs = [];
+  const jupIxs = [];
   if (swapInstructions.tokenLedgerInstruction)
-    tokenLedgerIxs.push(deserializeJupInstruction(swapInstructions.tokenLedgerInstruction));
-
-  const setupIxs = [];
+    jupIxs.push(deserializeJupInstruction(swapInstructions.tokenLedgerInstruction));
+  if (Array.isArray(swapInstructions.computeBudgetInstructions))
+    swapInstructions.computeBudgetInstructions.forEach(ix => jupIxs.push(deserializeJupInstruction(ix)));
   if (Array.isArray(swapInstructions.setupInstructions))
-    swapInstructions.setupInstructions.forEach(ix => setupIxs.push(deserializeJupInstruction(ix)));
-
-  const swapIxList = [];
+    swapInstructions.setupInstructions.forEach(ix => jupIxs.push(deserializeJupInstruction(ix)));
   if (swapInstructions.swapInstruction)
-    swapIxList.push(deserializeJupInstruction(swapInstructions.swapInstruction));
-
-  const cleanupIxs = [];
+    jupIxs.push(deserializeJupInstruction(swapInstructions.swapInstruction));
   if (swapInstructions.cleanupInstruction)
-    cleanupIxs.push(deserializeJupInstruction(swapInstructions.cleanupInstruction));
+    jupIxs.push(deserializeJupInstruction(swapInstructions.cleanupInstruction));
 
-  // Order:
-  //   [compute budget]              (always first)
-  //   [token ledger if any]
-  //   [fee ix(s)]   if BUY          ← takes fee from input mint before swap
-  //   [setup]                       (wrap SOL, create ATAs, etc)
-  //   [swap]
-  //   [cleanup]                     (unwrap wSOL, close ATAs)
-  //   [fee ix(s)]   if SELL         ← takes fee from output mint after swap
   const allIxs = prependFee
-    ? [...computeBudgetIxs, ...tokenLedgerIxs, ...feeInstructions, ...setupIxs, ...swapIxList, ...cleanupIxs]
-    : [...computeBudgetIxs, ...tokenLedgerIxs, ...setupIxs, ...swapIxList, ...cleanupIxs, ...feeInstructions];
+    ? [...feeInstructions, ...jupIxs]
+    : [...jupIxs, ...feeInstructions];
 
   const blockhash = await fetchLatestBlockhash();
   const message = new TransactionMessage({
@@ -569,8 +620,19 @@ function ChangeBadge({ pct, size = 'sm' }) {
   );
 }
 
-function MemeRow({ token, onTradeBuy, onTradeSell, holding, presetSol }) {
+// Liquidity tier — green/yellow/red dot signals rug-risk at a glance.
+function liquidityTier(liq) {
+  if (!Number.isFinite(liq) || liq <= 0) return { color: '#475670', label: 'NO LIQ' };
+  if (liq >= 50_000)  return { color: '#3dd598', label: 'OK' };
+  if (liq >= 10_000)  return { color: '#f5b53d', label: 'LOW' };
+  return { color: '#ff8a9e', label: 'DANGER' };
+}
+
+function MemeRow({ token, onTradeBuy, onTradeSell, holding, presetSol, showAge }) {
   const owns = holding && holding.ui > 0;
+  const liqTier = liquidityTier(token.liquidity);
+  const ageMs = token.firstPool ? Date.now() - new Date(token.firstPool).getTime() : null;
+  const bonding = token.bondingProgress;
   return (
     <div style={{
       padding: '12px 14px',
@@ -590,14 +652,36 @@ function MemeRow({ token, onTradeBuy, onTradeSell, holding, presetSol }) {
           color: C.ink, ...T.body,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, flexWrap: 'wrap' }}>
           <span style={{
             color: C.inkStr, fontWeight: 800, fontSize: 14, letterSpacing: '-.01em',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 110,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 100,
             ...T.display,
           }}>{token.symbol}</span>
           {token.isVerified && (
             <span style={{ color: C.hl, fontSize: 10, lineHeight: 1 }} title="Verified">✓</span>
+          )}
+          {/* Liquidity tier dot — instant rug-risk indicator */}
+          <span title={`${liqTier.label} liquidity: ${fmtUsd(token.liquidity || 0, 0)}`} style={{
+            width: 6, height: 6, borderRadius: '50%',
+            background: liqTier.color, flexShrink: 0,
+          }}/>
+          {/* Age — only show on NEW tab or when very fresh */}
+          {ageMs != null && (showAge || ageMs < 86_400_000) && (
+            <span style={{
+              fontSize: 8.5, fontWeight: 700, padding: '2px 5px', borderRadius: 4,
+              background: 'rgba(255,255,255,.04)', color: C.muted,
+              letterSpacing: '.06em', ...T.mono,
+            }}>{fmtAge(ageMs)}</span>
+          )}
+          {/* Bonding curve % for pump.fun pre-graduation tokens */}
+          {bonding != null && (
+            <span style={{
+              fontSize: 8.5, fontWeight: 700, padding: '2px 5px', borderRadius: 4,
+              background: bonding > 80 ? 'rgba(255,205,60,.14)' : 'rgba(168,127,255,.14)',
+              color: bonding > 80 ? C.gold : C.violet,
+              letterSpacing: '.06em', ...T.mono,
+            }}>{bonding > 80 ? '🚀 ' : ''}{Math.round(bonding)}%</span>
           )}
           {owns && (
             <span style={{
@@ -609,12 +693,15 @@ function MemeRow({ token, onTradeBuy, onTradeSell, holding, presetSol }) {
         </div>
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8,
-          fontSize: 11, color: C.muted, ...T.mono,
+          fontSize: 11, color: C.muted, ...T.mono, flexWrap: 'wrap',
         }}>
           <span>{token.usdPrice > 0 ? fmtUsd(token.usdPrice, 6) : '—'}</span>
           <ChangeBadge pct={token.change24h}/>
           {token.mcap > 0 && (
             <span style={{ color: C.muted2 }}>· {fmtUsd(token.mcap, 0)} MC</span>
+          )}
+          {token.holders > 0 && (
+            <span style={{ color: C.muted2 }}>· {fmtAmt(token.holders, 0)} hldrs</span>
           )}
         </div>
       </button>
@@ -862,11 +949,10 @@ function HeroFeaturedCard({ token, onBuy }) {
 
 function MemeTradeModal({
   open, token, initialSol, initialSide, solUsdPrice,
-  onClose, walletPubkey, onConnectWallet, onAfterTrade,
+  onClose, walletPubkey, onConnectWallet, onAfterTrade, presets,
 }) {
   const { signTransaction, connected } = useWallet();
-  const { activeWalletKind } = useNexusWallet();
-  const wcon = connected || activeWalletKind === 'privy';
+  const wcon = connected;
 
   // BUY uses SOL as the base by default (SOL is what meme traders deploy).
   // USDC available via toggle. SELL always returns SOL by default.
@@ -1127,11 +1213,8 @@ function MemeTradeModal({
     }
   };
 
-  // Quick-amount chips. Meme-page buy presets are SOL-denominated
-  // (or USDC-denominated when USDC is the active base mint).
-  const buyChips = (baseMint === SOL_MINT
-    ? DEFAULT_BUY_PRESETS_SOL
-    : [10, 50, 100, 500])
+  // Quick-amount chips
+  const buyChips = (presets?.buy?.length ? presets.buy : DEFAULT_BUY_PRESETS_SOL)
     .slice(0, 4)
     .map(v => ({ label: v + ' ' + baseSymbol, val: String(v) }));
 
@@ -1511,17 +1594,19 @@ function MemeTradeModal({
 // =====================================================================
 
 const TABS = [
-  { id: 'trending',  label: 'Trending', interval: '24h' },
+  { id: 'new',       label: '🆕 New',    interval: null,   isRecent: true },
   { id: 'hot',       label: '🔥 1H',     interval: '1h'  },
+  { id: 'trending',  label: 'Trending', interval: '24h' },
   { id: '6h',        label: '6H',       interval: '6h'  },
   { id: 'watch',     label: '★ Watch',  interval: null  },
 ];
 
 export default function MemeWonderland({ onConnectWallet }) {
   const { publicKey: solPk } = useWallet();
+  const { presets } = useNexusWallet();
   const walletPubkey = useMemo(() => (solPk ? solPk.toString() : null), [solPk]);
 
-  const [tab, setTab]               = useState('trending');
+  const [tab, setTab]               = useState('new');
   const [tokens, setTokens]         = useState([]);
   const [loading, setLoading]       = useState(true);
   const [hot1h, setHot1h]           = useState([]);  // For ticker strip
@@ -1546,6 +1631,10 @@ export default function MemeWonderland({ onConnectWallet }) {
         setTokens([]); setLoading(false); return;
       }
       list = await searchJupTokens(watchlist.join(','));
+    } else if (t?.isRecent) {
+      // NEW tab — minimal liquidity floor so we don't surface dead launches.
+      // $2k is intentionally low: degens want to see fresh stuff and decide.
+      list = await fetchRecentMemes({ limit: 50, minLiquidityUsd: 2000 });
     } else {
       list = await fetchTrendingMemes({ interval: t.interval, limit: 50 });
     }
@@ -1555,11 +1644,14 @@ export default function MemeWonderland({ onConnectWallet }) {
 
   useEffect(() => { reloadMainList(); }, [reloadMainList]);
 
-  // -- Auto-refresh main list every 30s --
+  // -- Auto-refresh main list. NEW tab polls 10s (memes move fast),
+  //    everything else 30s.
   useEffect(() => {
-    const id = setInterval(reloadMainList, 30_000);
+    const t = TABS.find(x => x.id === tab);
+    const pollMs = t?.isRecent ? 10_000 : 30_000;
+    const id = setInterval(reloadMainList, pollMs);
     return () => clearInterval(id);
-  }, [reloadMainList]);
+  }, [reloadMainList, tab]);
 
   // -- Load hot 1h strip independently --
   useEffect(() => {
@@ -1618,10 +1710,18 @@ export default function MemeWonderland({ onConnectWallet }) {
     return () => clearTimeout(handle);
   }, [query]);
 
-  // Hero token = top of trending (or first watched / searched)
+  // Hero token: prefer the highest-liquidity meme-worthy token in the current
+  // list. Tokens already filter via isMemeWorthy upstream, but we still pick
+  // by liquidity here so the hero card never features a low-liquidity rug.
   const heroToken = useMemo(() => {
     const source = searchResults && searchResults.length ? searchResults : tokens;
-    return source[0] || null;
+    if (!source.length) return null;
+    // Pick the meme-worthy token with the best liquidity. Fall back to
+    // organic-score if liquidity is missing across the board.
+    const sorted = [...source]
+      .filter(isMemeWorthy)
+      .sort((a, b) => (b.liquidity || 0) - (a.liquidity || 0) || (b.organicScore || 0) - (a.organicScore || 0));
+    return sorted[0] || source[0] || null;
   }, [tokens, searchResults]);
 
   const listToken = useMemo(() => {
@@ -1650,10 +1750,8 @@ export default function MemeWonderland({ onConnectWallet }) {
     setInitialSide('SELL');
   };
 
-  // Default preset for the "1-click buy" tile button (smallest preset).
-  // Meme-page presets are in SOL — separate from the USDC presets the
-  // rest of the app uses for stocks/swap.
-  const defaultPreset = DEFAULT_BUY_PRESETS_SOL[0];
+  // Default preset for the "1-click buy" tile button (smallest preset)
+  const defaultPreset = (presets?.buy?.[0]) || DEFAULT_BUY_PRESETS_SOL[0];
 
   return (
     <>
@@ -1717,9 +1815,10 @@ export default function MemeWonderland({ onConnectWallet }) {
             </div>
 
             <h1 style={{
-              fontSize: 32, lineHeight: 1.0, fontWeight: 600,
+              fontSize: 28, lineHeight: 1.05, fontWeight: 600,
               color: C.inkStr, margin: '0 0 8px',
-              letterSpacing: '-.045em', ...T.hero,
+              letterSpacing: '-.035em', ...T.hero,
+              wordBreak: 'break-word',
             }}>
               Meme{' '}
               <span style={{
@@ -1824,6 +1923,7 @@ export default function MemeWonderland({ onConnectWallet }) {
               holding={holdings[t.mint]}
               onTradeBuy={openBuy}
               onTradeSell={openSell}
+              showAge={tab === 'new'}
             />
           ))}
         </div>
@@ -1864,6 +1964,7 @@ export default function MemeWonderland({ onConnectWallet }) {
         onConnectWallet={onConnectWallet}
         onClose={() => setActiveToken(null)}
         onAfterTrade={() => { reloadMainList(); }}
+        presets={presets}
       />
     </>
   );
