@@ -3,7 +3,7 @@ Save as src/components/Stocks.css:
 /* Stocks (Brands) styles, scoped with st- prefix. Pancake DeFi vibe. */
 .st-page,
 .st-region-block,
-.st-sheet,
+.st-sheet, 
 .st-modal-backdrop {
   --st-bg: #04070f;
   --st-bg-2: #070b16;
