@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import './MemeWonderland.css';
-
+ 
 // ===== TOKEN DATA (replace with API/on-chain data later) =====
 const TOKENS = {
   hoppy:  { emoji: '🐸', sym: 'HOPPY',    full: 'Hoppy The Frog · Solana', price: '$0.0000418', change: '+247%', age: '3D OLD', tokensPer: 2356588, hot: true },
