@@ -7,7 +7,7 @@
 //   4. Wallet simulates the SAME bytes the user signs — Blowfish sees full
 //      net effect (X in, Y out, Z to fee wallet) instead of two opaque txs.
 //   5. Atomic on-chain: swap and fee succeed together or revert together.
-//
+// 
 // Fee ordering:
 //   - SOL input: fee transfer goes FIRST, from native SOL, before Jupiter
 //     wraps the remaining lamports.
