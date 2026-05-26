@@ -244,6 +244,8 @@ async function fetchEvents(){
 function pickEventFields(ev){
   if(!ev)return null;
   const market=(ev.markets&&ev.markets[0])||ev.market||null; if(!market)return null;
+  // DEBUG: log raw event to see slug format and available fields
+  if(typeof console!=='undefined')console.log('[predict:event]',{eventId:ev.eventId||ev.id,title:ev.title,slug:ev.metadata?.slug,allMetaKeys:Object.keys(ev.metadata||{}),allTopKeys:Object.keys(ev)});
   const pricing=market.pricing||{}; const yesPrice=toUsd(pricing.buyYesPriceUsd);
   let noPrice=toUsd(pricing.buyNoPriceUsd); if(!noPrice&&yesPrice)noPrice=+(1-yesPrice).toFixed(4);
   const evMeta=ev.metadata||{}; const mktMeta=market.metadata||{};
@@ -292,7 +294,8 @@ function pickPolymarketFields(pmEvent){
   try{outcomes=pmMkt?.outcomes?JSON.parse(pmMkt.outcomes):null;}catch{}
   try{outcomePrices=pmMkt?.outcomePrices?JSON.parse(pmMkt.outcomePrices):null;}catch{}
   const description=pmEvent.description||pmMkt?.description||null;
-  return{settled:false,description,outcomes,
+  const startingPrice=extractStartingPrice(description);
+  return{settled:false,description,startingPrice,outcomes,
     outcomePrices:Array.isArray(outcomePrices)?outcomePrices.map(Number):null,
     groupItemTitle:pmMkt?.groupItemTitle||null,
   };
@@ -315,6 +318,17 @@ function useLiveCryptoPrices(enabled){
 }
 
 function symbolFromSubcategory(sub){if(!sub)return null;const s=String(sub).toLowerCase().trim();const map={bitcoin:'btc/usd',btc:'btc/usd',ethereum:'eth/usd',eth:'eth/usd',solana:'sol/usd',sol:'sol/usd',ripple:'xrp/usd',xrp:'xrp/usd',dogecoin:'doge/usd',doge:'doge/usd',binancecoin:'bnb/usd',bnb:'bnb/usd',hyperliquid:'hype/usd',hype:'hype/usd'};return map[s]||null;}
+function symbolFromTitle(title){
+  if(!title)return null;
+  const t=String(title).toLowerCase();
+  if(t.includes('bitcoin')||t.includes(' btc '))return'btc/usd';
+  if(t.includes('ethereum')||t.includes(' eth '))return'eth/usd';
+  if(t.includes('solana')||t.includes(' sol '))return'sol/usd';
+  if(t.includes('ripple')||t.includes(' xrp '))return'xrp/usd';
+  if(t.includes('dogecoin')||t.includes(' doge '))return'doge/usd';
+  if(t.includes('hyperliquid')||t.includes(' hype '))return'hype/usd';
+  return null;
+}
 
 function pickPositionFields(p){
   if(!p)return null;
@@ -497,29 +511,26 @@ function PageHeader({connected,solBal,tab,setTab,pubkey,onCopy}){
 // ── Price panel helpers ───────────────────────────────────────────────────────
 function extractStartingPrice(text) {
   if (!text) return null;
-  const patterns = [
-    /price\s+to\s+beat[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
-    /opening\s+price[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
-    /above\s+\$?\s*([0-9][0-9.,]*)/i,
-    /below\s+\$?\s*([0-9][0-9.,]*)/i,
-    /hit(?:s|ting)?\s+\$?\s*([0-9][0-9.,]*)/i,
-    /reach(?:es|ed|ing)?\s+\$?\s*([0-9][0-9.,]*)/i,
-    /cross(?:es|ed|ing)?\s+\$?\s*([0-9][0-9.,]*)/i,
-  ];
-  for (const re of patterns) {
-    const m = text.match(re);
-    if (m) { const n = Number(String(m[1]).replace(/[$,\s]/g,'')); if (Number.isFinite(n) && n > 0 && n < 1e8) return n; }
-  }
+  const clean = s => Number(String(s).replace(/[$,\s]/g,'')); 
+  const ok = n => Number.isFinite(n) && n > 0 && n < 1e9;
+  // Polymarket exact format: "Price to Beat" of $77,581.49
+  const m1 = text.match(/"[Pp]rice\s+to\s+[Bb]eat"\s+of\s+\$([0-9][0-9.,]*)/);
+  if (m1) { const n=clean(m1[1]); if(ok(n)) return n; }
+  // Fallback: price to beat $X or Price to Beat: $X
+  const m2 = text.match(/[Pp]rice\s+to\s+[Bb]eat[^0-9$]{0,20}\$([0-9][0-9.,]*)/);
+  if (m2) { const n=clean(m2[1]); if(ok(n)) return n; }
+  // opening price / reference price
+  const m3 = text.match(/(?:opening|reference|starting)\s+(?:reference\s+)?price[^0-9$]{0,30}\$([0-9][0-9.,]*)/i);
+  if (m3) { const n=clean(m3[1]); if(ok(n)) return n; }
   return null;
 }
 function fmtPrice(n){if(n==null)return'—';if(n>=1000)return'$'+n.toLocaleString('en-US',{maximumFractionDigits:2});if(n>=1)return'$'+n.toFixed(2);if(n>=0.01)return'$'+n.toFixed(4);return'$'+n.toFixed(6);}
 function isUpDownMarket(event){if(!event)return false;const h=[event.title,event.market?.title,event.poly?.description].filter(Boolean).join(' ').toLowerCase();if(h.includes('up or down')||h.includes('price to beat'))return true;const o=event.poly?.outcomes;if(Array.isArray(o)){const s=o.map(x=>String(x).toLowerCase());if(s.includes('up')&&s.includes('down'))return true;}return false;}
 function PricePanel({event, livePrices, compact=false}){
-  if(!isUpDownMarket(event))return null;
-  const symbol=symbolFromSubcategory(event.subcategory);
+  const symbol=symbolFromSubcategory(event.subcategory)||symbolFromTitle(event.title);
   const live=symbol?livePrices?.get(symbol):null;
   const currentPrice=live?.value??null;
-  const priceToBeat=event.poly?.startingPrice||extractStartingPrice(event.poly?.description)||null;
+  const priceToBeat=event.poly?.startingPrice??event.priceToBeat??null;
   if(priceToBeat==null&&currentPrice==null)return null;
   const hasBoth=priceToBeat!=null&&currentPrice!=null;
   const delta=hasBoth?currentPrice-priceToBeat:null;
@@ -892,9 +903,24 @@ export default function Predict(){
       const raw=await fetchEvents();
       const normalized=raw.map((ev,i)=>{try{return pickEventFields(ev);}catch{return null;}}).filter(Boolean).filter(isMarketOpen);
       const slugs=normalized.map(e=>e.slug).filter(Boolean);
-      const pmResults=await Promise.all(slugs.map(s=>fetchPolymarketEvent(s).then(pickPolymarketFields).catch(()=>null)));
+      // Fetch Polymarket event data and price-to-beat in parallel per slug
+      const [pmResults, ptbResults] = await Promise.all([
+        Promise.all(slugs.map(s=>fetchPolymarketEvent(s).then(pickPolymarketFields).catch(()=>null))),
+        Promise.all(slugs.map(s=>fetch(`/api/polymarket/price-to-beat/${encodeURIComponent(s)}`).then(r=>r.ok?r.json():null).catch(()=>null))),
+      ]);
       const pmBySlug=new Map();slugs.forEach((s,i)=>{if(pmResults[i])pmBySlug.set(s,pmResults[i]);});
-      const enriched=normalized.map(e=>{const pm=e.slug?pmBySlug.get(e.slug):null;if(pm?.settled)return null;return pm?{...e,poly:pm}:e;}).filter(Boolean);
+      const ptbBySlug=new Map();slugs.forEach((s,i)=>{
+        const v=ptbResults[i];
+        // price-to-beat endpoint returns {price: number} or {value: number} or just a number
+        const price=v?.price??v?.value??(typeof v==='number'?v:null);
+        if(price!=null&&Number.isFinite(Number(price))&&Number(price)>0)ptbBySlug.set(s,Number(price));
+      });
+      const enriched=normalized.map(e=>{
+        const pm=e.slug?pmBySlug.get(e.slug):null;
+        if(pm?.settled)return null;
+        const priceToBeat=e.slug?ptbBySlug.get(e.slug)??null:null;
+        return{...e,...(pm?{poly:pm}:{}),priceToBeat};
+      }).filter(Boolean);
       setEvents(enriched);
     }catch(e){setEvError(friendlyError(e));}
     finally{setEvLoading(false);}
