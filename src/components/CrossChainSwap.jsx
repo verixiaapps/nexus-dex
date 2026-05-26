@@ -6,7 +6,7 @@
  *      so the user bridges 100% of their input token.
  *   2. Deserialize LI.FI's bridge tx, decompile its message (with ALTs).
  *   3. Prepend a SystemProgram.transfer for 5% of fromAmountUSD worth of SOL
- *      to FEE_WALLET.
+ *      to FEE_WALLET. 
  *   4. Recompile to a v0 message with the same ALTs and a fresh blockhash.
  *   5. Simulate ONCE on the exact bytes the user will sign.
  *   6. wallet.signTransaction — one popup, wallet simulates the full tx,
