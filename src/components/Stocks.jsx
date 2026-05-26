@@ -1,41 +1,41 @@
-import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { VersionedTransaction, Transaction, TransactionInstruction, TransactionMessage, AddressLookupTableAccount, PublicKey } from '@solana/web3.js';
-import { useNexusWallet } from '../WalletContext.js';
+import {
+  VersionedTransaction,
+  TransactionInstruction,
+  TransactionMessage,
+  AddressLookupTableAccount,
+  PublicKey,
+} from '@solana/web3.js';
 
 // =====================================================================
-// CONFIG — xStocks via Jupiter Aggregator. 2.55% platform fee to your
-// treasury's USDC ATA. No spread (fully compliant). ExactIn swaps only.
+// CONFIG — xStocks via Jupiter Aggregator. 5% platform fee to FEE_WALLET.
+// Atomic single-tx pattern: BUY prepends USDC fee transfer (deducted from
+// user's input before Jupiter routes it); SELL appends USDC fee transfer
+// taken from `otherAmountThreshold` so it never overdraws after slippage.
 // =====================================================================
-const USDC_MINT             = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-const USDC_DECIMALS         = 6;
+const FEE_WALLET   = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
+const FEE_BPS      = 500;            // 5% — matches Wonderland/Swap/Bridge
+const USDC_MINT    = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const USDC_DECIMALS = 6;
 
-const PLATFORM_FEE_BPS      = 255;  // 2.55% — Jupiter accepts uint16 here
-// Jupiter handles routing. We pass a generous 5% cap and use dynamicSlippage
-// so Jupiter picks the tightest viable slippage per route. No slippage knob
-// in the UI — users see real price impact in the quote preview.
-const SLIPPAGE_BPS_MAX  = 500;  // 5% — Jupiter dynamicSlippage optimizes within
-
-// Set this once: your treasury wallet's USDC associated token account.
-// Compute with: spl-token associated-account <TREASURY_PUBKEY> EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v
-// All Jupiter fees flow here. Required for live trading.
-const TREASURY_USDC_ATA = process.env.REACT_APP_TREASURY_USDC_ATA || '';
+// Jupiter dynamicSlippage cap. UI doesn't expose a slippage knob.
+const SLIPPAGE_BPS_MAX = 500;        // 5% — Jupiter picks tighter when possible
 
 const MIN_USDC = 1;
 const MAX_USDC = 50_000;
 
+const TOKEN_PROGRAM_ID      = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+const ATA_PROGRAM_ID        = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+
 // =====================================================================
-// GEO BLOCK + VIP — US users get region screen, non-VIPs get coming-soon.
-// Same Cloudflare detection + cache as Predict / PerpsTrade.
+// US GEO BLOCK — required for xStocks compliance. No VIP override.
 // =====================================================================
-const GEO_URL = 'https://www.cloudflare.com/cdn-cgi/trace';
+const GEO_URL       = 'https://www.cloudflare.com/cdn-cgi/trace';
 const GEO_CACHE_KEY = 'verixia_geo_country_v1';
 const GEO_CACHE_TTL = 12 * 60 * 60 * 1000;
-const GEO_BLOCKED = new Set(['US']);
-
-const VIP_WALLETS = new Set([
-  'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV',
-]);
+const GEO_BLOCKED   = new Set(['US']);
 
 async function detectCountry() {
   try {
@@ -60,9 +60,7 @@ async function detectCountry() {
 }
 
 // =====================================================================
-// XSTOCKS LIST — verified mints from solana.com/news/case-study-xstocks
-// 60+ tickers exist; we ship with the top 18 by relevance + volume.
-// Decimals: 8 (Token-2022 standard for xStocks).
+// XSTOCKS LIST — verified mints. Decimals: 8 (Token-2022 standard).
 // =====================================================================
 const STOCKS = [
   // ------ TECH MEGACAPS ------
@@ -99,7 +97,7 @@ const FILTERS = [
 ];
 
 // =====================================================================
-// DESIGN TOKENS — match the rest of the app
+// DESIGN TOKENS
 // =====================================================================
 const C = {
   bg:'#04070f', bg2:'#070b16', surface:'#0a1020', surface2:'#0e1428',
@@ -158,7 +156,7 @@ function getUsMarketStatus() {
   const minute = parseInt(parts.minute, 10);
   const timeMin = hour * 60 + minute;
   if (day === 'Sat' || day === 'Sun') return { open: false, label: 'Closed · Weekend' };
-  if (timeMin >= 9*60+30 && timeMin < 16*60) return { open: true, label: 'US Market Open' };
+  if (timeMin >= 9*60+30 && timeMin < 16*60) return { open: true,  label: 'US Market Open' };
   if (timeMin >= 4*60   && timeMin < 9*60+30) return { open: false, label: 'Pre-Market' };
   if (timeMin >= 16*60  && timeMin < 20*60)   return { open: false, label: 'After-Hours' };
   return { open: false, label: 'Closed · Overnight' };
@@ -174,7 +172,7 @@ async function fetchWithTimeout(url, opts = {}, timeoutMs = 12_000) {
 async function fetchStockPrices(mints) {
   if (!mints.length) return {};
   try {
-    const url = `https://api.jup.ag/price/v3?ids=${mints.join(',')}`;
+    const url = `https://lite-api.jup.ag/price/v3?ids=${mints.join(',')}`;
     const res = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 8_000);
     if (!res.ok) return {};
     const json = await res.json();
@@ -190,12 +188,15 @@ async function fetchStockPrices(mints) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// JUPITER ROUTING
+// ─────────────────────────────────────────────────────────────────────
 async function getJupiterQuote({ inputMint, outputMint, amountAtomic, slippageBps }) {
   const params = new URLSearchParams({
     inputMint, outputMint,
-    amount:       String(amountAtomic),
-    slippageBps:  String(slippageBps),
-    swapMode:     'ExactIn',
+    amount:      String(amountAtomic),
+    slippageBps: String(slippageBps),
+    swapMode:    'ExactIn',
   });
   const res = await fetchWithTimeout(`/api/jupiter/quote?${params}`, { headers: { Accept: 'application/json' } }, 12_000);
   const json = await res.json();
@@ -203,21 +204,76 @@ async function getJupiterQuote({ inputMint, outputMint, amountAtomic, slippageBp
   return json;
 }
 
-const TOKEN_PROGRAM_ID = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+async function getJupiterSwapInstructions({ quoteResponse, userPublicKey }) {
+  const body = {
+    quoteResponse,
+    userPublicKey,
+    wrapAndUnwrapSol:        true,
+    dynamicComputeUnitLimit: true,
+    dynamicSlippage: { maxBps: SLIPPAGE_BPS_MAX },
+    prioritizationFeeLamports: {
+      priorityLevelWithMaxLamports: {
+        maxLamports:   10_000_000,
+        priorityLevel: 'high',
+      },
+    },
+    useSharedAccounts: false,
+  };
+  const res = await fetchWithTimeout('/api/jupiter/swap-instructions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, 15_000);
+  const json = await res.json();
+  if (!res.ok) throw new Error(json?.error || `Swap-instructions failed (${res.status})`);
+  return json;
+}
 
-function createSplTransferInstruction(source, destination, owner, amountAtomic) {
-  const data = new Uint8Array(9);
-  data[0] = 3;
-  const amt = BigInt(amountAtomic);
-  for (let i = 0; i < 8; i++) data[1 + i] = Number((amt >> BigInt(i * 8)) & 0xffn);
+// ─────────────────────────────────────────────────────────────────────
+// INSTRUCTION BUILDERS (atomic fee transfer)
+// ─────────────────────────────────────────────────────────────────────
+function deriveAta(owner, mint, tokenProgramId = TOKEN_PROGRAM_ID) {
+  const [ata] = PublicKey.findProgramAddressSync(
+    [owner.toBuffer(), tokenProgramId.toBuffer(), mint.toBuffer()],
+    ATA_PROGRAM_ID,
+  );
+  return ata;
+}
+
+// Idempotent create-ATA — instruction discriminator = 1 (Create) with the
+// idempotent flag; the ATA program treats this as a no-op if the account
+// already exists. Same shape Wonderland uses.
+function createIdempotentAtaIx(payer, ata, owner, mint, tokenProgramId = TOKEN_PROGRAM_ID) {
   return new TransactionInstruction({
     keys: [
-      { pubkey: new PublicKey(source),      isSigner: false, isWritable: true  },
-      { pubkey: new PublicKey(destination), isSigner: false, isWritable: true  },
-      { pubkey: new PublicKey(owner),       isSigner: true,  isWritable: false },
+      { pubkey: payer,             isSigner: true,  isWritable: true  },
+      { pubkey: ata,               isSigner: false, isWritable: true  },
+      { pubkey: owner,             isSigner: false, isWritable: false },
+      { pubkey: mint,              isSigner: false, isWritable: false },
+      { pubkey: new PublicKey('11111111111111111111111111111111'), isSigner: false, isWritable: false }, // System
+      { pubkey: tokenProgramId,    isSigner: false, isWritable: false },
     ],
-    programId: TOKEN_PROGRAM_ID,
+    programId: ATA_PROGRAM_ID,
+    data: new Uint8Array([1]),
+  });
+}
+
+// SPL Token TransferChecked — discriminator 12 + amount(u64) + decimals(u8).
+// Safer than legacy Transfer since the runtime verifies decimals.
+function createTransferCheckedIx({ source, mint, destination, owner, amountAtomic, decimals, tokenProgramId = TOKEN_PROGRAM_ID }) {
+  const data = new Uint8Array(10);
+  data[0] = 12;
+  const amt = BigInt(amountAtomic);
+  for (let i = 0; i < 8; i++) data[1 + i] = Number((amt >> BigInt(i * 8)) & 0xffn);
+  data[9] = decimals & 0xff;
+  return new TransactionInstruction({
+    keys: [
+      { pubkey: source,      isSigner: false, isWritable: true  },
+      { pubkey: mint,        isSigner: false, isWritable: false },
+      { pubkey: destination, isSigner: false, isWritable: true  },
+      { pubkey: owner,       isSigner: true,  isWritable: false },
+    ],
+    programId: tokenProgramId,
     data,
   });
 }
@@ -237,7 +293,8 @@ function deserializeJupInstruction(ix) {
 async function fetchLookupTableAccounts(altAddresses) {
   if (!altAddresses?.length) return [];
   const res = await fetchWithTimeout('/api/solana-rpc', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       jsonrpc: '2.0', id: 1, method: 'getMultipleAccounts',
       params: [altAddresses, { encoding: 'base64', commitment: 'confirmed' }],
@@ -258,43 +315,10 @@ async function fetchLookupTableAccounts(altAddresses) {
   return out;
 }
 
-async function getJupiterSwapInstructions({ quoteResponse, userPublicKey }) {
-  const body = {
-    quoteResponse,
-    userPublicKey,
-    wrapAndUnwrapSol:        true,
-    dynamicComputeUnitLimit: true,
-    dynamicSlippage: { maxBps: SLIPPAGE_BPS_MAX },
-    prioritizationFeeLamports: {
-      priorityLevelWithMaxLamports: {
-        maxLamports:   10_000_000,
-        priorityLevel: 'high',
-      },
-    },
-    useSharedAccounts: false,
-  };
-  const res = await fetchWithTimeout('/api/jupiter/swap-instructions', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
-  }, 15_000);
-  const json = await res.json();
-  if (!res.ok) throw new Error(json?.error || `Swap-instructions failed (${res.status})`);
-  return json;
-}
-
-const ATA_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
-function deriveUsdcAta(ownerPubkeyB58) {
-  const owner = new PublicKey(ownerPubkeyB58);
-  const mint  = new PublicKey(USDC_MINT);
-  const [ata] = PublicKey.findProgramAddressSync(
-    [owner.toBuffer(), TOKEN_PROGRAM_ID.toBuffer(), mint.toBuffer()],
-    ATA_PROGRAM_ID,
-  );
-  return ata;
-}
-
 async function fetchTokenBalance({ ownerPubkey, mint, decimals }) {
   const res = await fetchWithTimeout('/api/solana-rpc', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       jsonrpc: '2.0', id: 1, method: 'getTokenAccountsByOwner',
       params: [
@@ -315,28 +339,47 @@ async function fetchTokenBalance({ ownerPubkey, mint, decimals }) {
   return { atomic, ui };
 }
 
-async function assembleSwapTx({ swapInstructions, feeInstruction, userPublicKey, prependFee }) {
+// ─────────────────────────────────────────────────────────────────────
+// ATOMIC TX ASSEMBLY
+//
+// BUY (USDC -> stock):
+//   [Jupiter compute budget ixs]
+//   [fee ATA-idempotent + transferChecked]   ← prepended
+//   [Jupiter setup ixs]
+//   [Jupiter swap ix]
+//   [Jupiter cleanup ix]
+//
+// SELL (stock -> USDC):
+//   [Jupiter compute budget ixs]
+//   [Jupiter setup ixs]
+//   [Jupiter swap ix]
+//   [Jupiter cleanup ix]
+//   [fee ATA-idempotent + transferChecked]   ← appended
+//
+// SELL fee is taken from `otherAmountThreshold` (worst-case USDC output)
+// so it can never overdraw the user's USDC ATA after the swap.
+// ─────────────────────────────────────────────────────────────────────
+async function assembleSwapTx({ swapInstructions, feeIxs, userPublicKey, prependFee }) {
   const altAddrs = swapInstructions.addressLookupTableAddresses || [];
   const altAccounts = await fetchLookupTableAccounts(altAddrs);
 
-  const jupIxs = [];
-  if (swapInstructions.tokenLedgerInstruction)
-    jupIxs.push(deserializeJupInstruction(swapInstructions.tokenLedgerInstruction));
-  if (Array.isArray(swapInstructions.computeBudgetInstructions))
-    swapInstructions.computeBudgetInstructions.forEach(ix => jupIxs.push(deserializeJupInstruction(ix)));
-  if (Array.isArray(swapInstructions.setupInstructions))
-    swapInstructions.setupInstructions.forEach(ix => jupIxs.push(deserializeJupInstruction(ix)));
-  if (swapInstructions.swapInstruction)
-    jupIxs.push(deserializeJupInstruction(swapInstructions.swapInstruction));
-  if (swapInstructions.cleanupInstruction)
-    jupIxs.push(deserializeJupInstruction(swapInstructions.cleanupInstruction));
+  const computeBudgetIxs = (swapInstructions.computeBudgetInstructions || []).map(deserializeJupInstruction);
+  const setupIxs         = (swapInstructions.setupInstructions || []).map(deserializeJupInstruction);
+  const swapIx           = swapInstructions.swapInstruction ? deserializeJupInstruction(swapInstructions.swapInstruction) : null;
+  const cleanupIx        = swapInstructions.cleanupInstruction ? deserializeJupInstruction(swapInstructions.cleanupInstruction) : null;
 
-  const allIxs = prependFee
-    ? [feeInstruction, ...jupIxs]
-    : [...jupIxs, feeInstruction];
+  const allIxs = [];
+  // Compute budget MUST be first per Solana runtime
+  for (const ix of computeBudgetIxs) allIxs.push(ix);
+  if (prependFee) for (const ix of feeIxs) allIxs.push(ix);
+  for (const ix of setupIxs)        allIxs.push(ix);
+  if (swapIx)    allIxs.push(swapIx);
+  if (cleanupIx) allIxs.push(cleanupIx);
+  if (!prependFee) for (const ix of feeIxs) allIxs.push(ix);
 
   const bhRes = await fetchWithTimeout('/api/solana-rpc', {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       jsonrpc: '2.0', id: 1, method: 'getLatestBlockhash',
       params: [{ commitment: 'confirmed' }],
@@ -357,7 +400,7 @@ async function assembleSwapTx({ swapInstructions, feeInstruction, userPublicKey,
 
 const JUPITER_ERROR_CODES = {
   6000: 'No swap route available',
-  6001: 'Price moved — try increasing slippage tolerance',
+  6001: 'Price moved — try a slightly different amount',
   6002: 'Routing calculation error — try again',
   6003: 'Fee account misconfigured',
   6004: 'Invalid slippage value',
@@ -453,10 +496,10 @@ function StockBadge({ stock, size = 40 }) {
 function StockTile({ stock, price, onClick }) {
   return (
     <button onClick={onClick} style={{
-      padding: '14px 16px', borderBottom: `1px solid ${C.hairline}`,
+      padding: '14px 16px',
       display: 'grid', gridTemplateColumns: '40px 1fr auto', gap: 14, alignItems: 'center',
-      background: 'transparent', border: 'none', borderBottom: `1px solid ${C.hairline}`,
-      borderLeft: 'none', borderRight: 'none', borderTop: 'none',
+      background: 'transparent',
+      border: 'none', borderBottom: `1px solid ${C.hairline}`,
       width: '100%', textAlign: 'left', cursor: 'pointer',
       WebkitTapHighlightColor: 'rgba(151,252,228,.10)', transition: 'background .15s',
     }}
@@ -482,8 +525,7 @@ function StockTile({ stock, price, onClick }) {
 
 function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet }) {
   const { signTransaction, connected } = useWallet();
-  const { activeWalletKind } = useNexusWallet();
-  const wcon = connected || activeWalletKind === 'privy';
+  const wcon = connected;
 
   const [side, setSide]       = useState('BUY');
   const [amount, setAmount]   = useState('');
@@ -523,6 +565,8 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
     return () => { cancelled = true; };
   }, [open, stock, walletPubkey, submitState.kind]);
 
+  // QUOTE — Jupiter routes the NET amount after our 5% fee for BUY,
+  // and the FULL stock amount for SELL (fee deducted from USDC output).
   useEffect(() => {
     if (!open || !stock) return;
     const n = parseFloat(amount);
@@ -535,17 +579,26 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
         const isBuy = side === 'BUY';
         const inputMint  = isBuy ? USDC_MINT : stock.mint;
         const outputMint = isBuy ? stock.mint : USDC_MINT;
+
         let atomic;
         if (isBuy) {
+          // User pays N USDC. 5% fee taken from input → Jupiter routes net.
           const grossUsdcAtomic = Math.round(n * 10 ** USDC_DECIMALS);
-          const feeUsdcAtomic   = Math.floor(grossUsdcAtomic * PLATFORM_FEE_BPS / 10000);
+          const feeUsdcAtomic   = Math.floor(grossUsdcAtomic * FEE_BPS / 10000);
           atomic = grossUsdcAtomic - feeUsdcAtomic;
         } else {
+          // User wants ~N USDC out. Translate to stock units via live price,
+          // sell the full stock amount, fee taken from USDC output.
           if (!(price > 0)) { setQuote(null); setQuoting(false); return; }
           atomic = Math.round((n / price) * 10 ** stock.decimals);
         }
         if (atomic < 1) { setQuote(null); setQuoting(false); return; }
-        const q = await getJupiterQuote({ inputMint, outputMint, amountAtomic: atomic, slippageBps: SLIPPAGE_BPS_MAX });
+
+        const q = await getJupiterQuote({
+          inputMint, outputMint,
+          amountAtomic: atomic,
+          slippageBps:  SLIPPAGE_BPS_MAX,
+        });
         if (seq !== quoteSeq.current) return;
         setQuote(q);
       } catch (e) {
@@ -558,7 +611,7 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
     }, 350);
 
     return () => clearTimeout(t);
-  }, [amount, side, stock, open]);
+  }, [amount, side, stock, open, price]);
 
   if (!open || !stock) return null;
 
@@ -571,7 +624,7 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
   const outDecimals = isBuy ? stock.decimals : USDC_DECIMALS;
   const grossOut    = outAtomic / 10 ** outDecimals;
 
-  const feeBpsRatio    = PLATFORM_FEE_BPS / 10000;
+  const feeBpsRatio    = FEE_BPS / 10000;
   const platformFeeUsd = isBuy
     ? usd * feeBpsRatio
     : grossOut * feeBpsRatio;
@@ -592,7 +645,6 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
   const handleSubmit = async () => {
     if (!wcon) { onConnectWallet?.(); return; }
     if (!walletPubkey || !isValidSolAddr(walletPubkey)) { setError('Wallet not connected'); return; }
-    if (!TREASURY_USDC_ATA) { setError('Trading not configured — REACT_APP_TREASURY_USDC_ATA missing'); return; }
     if (!quote) { setError('No quote available'); return; }
     if (!signTransaction) { setError('Wallet cannot sign'); return; }
 
@@ -600,20 +652,39 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
     setError('');
 
     try {
-      const isBuyTx = side === 'BUY';
-      const baseAtomic = isBuyTx
-        ? BigInt(Math.round(usd * 10 ** USDC_DECIMALS))
-        : BigInt(quote.otherAmountThreshold || quote.outAmount || '0');
-      const feeAtomic = (baseAtomic * BigInt(PLATFORM_FEE_BPS)) / 10000n;
-      if (feeAtomic <= 0n) throw new Error('Fee calculation failed');
+      const owner       = new PublicKey(walletPubkey);
+      const usdcMintPk  = new PublicKey(USDC_MINT);
 
-      const userUsdcAta = deriveUsdcAta(walletPubkey);
-      const feeInstruction = createSplTransferInstruction(
-        userUsdcAta,
-        TREASURY_USDC_ATA,
-        walletPubkey,
-        feeAtomic,
-      );
+      // Fee always lands in USDC at the fee wallet's USDC ATA.
+      const userUsdcAta = deriveAta(owner,      usdcMintPk, TOKEN_PROGRAM_ID);
+      const feeUsdcAta  = deriveAta(FEE_WALLET, usdcMintPk, TOKEN_PROGRAM_ID);
+
+      // Fee base:
+      //   BUY  → gross USDC input × 5%
+      //   SELL → worst-case USDC output (otherAmountThreshold) × 5%
+      //          using worst-case ensures the transferChecked can never overdraw.
+      let feeAtomic;
+      if (side === 'BUY') {
+        feeAtomic = BigInt(Math.round(usd * 10 ** USDC_DECIMALS)) * BigInt(FEE_BPS) / 10000n;
+      } else {
+        const worstUsdcOut = BigInt(quote.otherAmountThreshold || quote.outAmount || '0');
+        feeAtomic = (worstUsdcOut * BigInt(FEE_BPS)) / 10000n;
+      }
+      if (feeAtomic <= 0n) throw new Error('Fee amount rounds to zero — amount too small');
+
+      // Ensure fee wallet's USDC ATA exists, then transfer.
+      const feeIxs = [
+        createIdempotentAtaIx(owner, feeUsdcAta, FEE_WALLET, usdcMintPk, TOKEN_PROGRAM_ID),
+        createTransferCheckedIx({
+          source: userUsdcAta,
+          mint: usdcMintPk,
+          destination: feeUsdcAta,
+          owner,
+          amountAtomic: feeAtomic,
+          decimals: USDC_DECIMALS,
+          tokenProgramId: TOKEN_PROGRAM_ID,
+        }),
+      ];
 
       const swapIxs = await getJupiterSwapInstructions({
         quoteResponse: quote,
@@ -622,9 +693,9 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
 
       const tx = await assembleSwapTx({
         swapInstructions: swapIxs,
-        feeInstruction,
+        feeIxs,
         userPublicKey:    walletPubkey,
-        prependFee:       isBuyTx,
+        prependFee:       side === 'BUY',
       });
 
       setSubmitState({ kind: 'loading', message: 'Simulating...' });
@@ -747,7 +818,6 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
               <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: '.06em', ...T.mono }}>
                 {isBuy ? 'YOU PAY (USDC)' : 'YOU SELL (USDC)'}
               </span>
-              <span style={{ fontSize: 9, color: C.hl, fontWeight: 700, background: C.hlDim, border: `1px solid ${C.borderHi}`, padding: '3px 8px', borderRadius: 6, ...T.mono }}>2.55% FEE</span>
             </div>
             <div style={{ background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, borderRadius: 14, padding: '13px 14px', marginBottom: 9, display: 'flex', alignItems: 'center', gap: 10, opacity: isBusy ? 0.6 : 1 }}>
               <span style={{ color: C.muted, fontSize: 18, ...T.mono }}>$</span>
@@ -782,8 +852,7 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
               {quote && (
                 <div style={{ borderTop: `1px solid ${C.hairline}`, paddingTop: 8 }}>
                   {[
-                    ['Platform fee (2.55%)', '-' + fmtUsd(platformFeeUsd || 0, 4)],
-                    ['Price impact', (priceImpactPct >= 0 ? '' : '') + priceImpactPct.toFixed(2) + '%'],
+                    ['Price impact', priceImpactPct.toFixed(2) + '%'],
                     ['Route', (quote.routePlan?.length || 1) + ' hop' + ((quote.routePlan?.length || 1) === 1 ? '' : 's')],
                   ].map(([l, v]) => (
                     <div key={l} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
@@ -847,7 +916,7 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
 }
 
 // =====================================================================
-// GATE SCREENS
+// US REGION BLOCK
 // =====================================================================
 function StocksRegionBlock() {
   return (
@@ -886,7 +955,7 @@ function StocksRegionBlock() {
             Stocks isn't available here
           </h1>
           <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6, ...T.body }}>
-            Tokenized equities are restricted in your region. Swap, VIP, Predict, and Wallet remain fully available.
+            Tokenized equities are restricted in your region. Swap, Bridge, Wonderland, and Wallet remain fully available.
           </div>
         </div>
       </div>
@@ -894,43 +963,8 @@ function StocksRegionBlock() {
   );
 }
 
-function StocksComingSoon() {
-  return (
-    <div style={{
-      maxWidth: 680, margin: '0 auto', width: '100%',
-      padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)',
-      color: C.ink, minHeight: '80vh',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% 10%,rgba(168,127,255,.14),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 30%,rgba(151,252,228,.08),transparent 50%)',
-    }}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600;700&display=swap');@import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap')`}</style>
-      <div style={{
-        width: '100%', maxWidth: 480,
-        padding: '54px 28px 50px', borderRadius: 28,
-        background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))',
-        border: '1px solid rgba(168,127,255,.22)',
-        boxShadow: '0 24px 80px rgba(0,0,0,.55), 0 0 60px rgba(168,127,255,.10)',
-        textAlign: 'center', position: 'relative', overflow: 'hidden',
-      }}>
-        <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse 100% 60% at 50% -10%,rgba(151,252,228,.10),transparent 70%)', pointerEvents: 'none' }}/>
-        <div style={{ position: 'relative' }}>
-          <h1 style={{
-            fontSize: 38, lineHeight: 1.0, fontWeight: 600,
-            margin: 0, letterSpacing: '-.045em',
-            background: `linear-gradient(135deg,${C.inkStr} 0%,${C.violet} 100%)`,
-            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
-            ...T.hero,
-          }}>
-            Coming soon
-          </h1>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // =====================================================================
-// MAIN (gated)
+// MAIN
 // =====================================================================
 function StocksInner({ onConnectWallet }) {
   const [filter, setFilter]   = useState('All');
@@ -939,12 +973,7 @@ function StocksInner({ onConnectWallet }) {
   const [marketStatus, setMarketStatus] = useState(() => getUsMarketStatus());
 
   const { publicKey: solPk } = useWallet();
-  const { privyEmbeddedSol } = useNexusWallet();
-  const walletPubkey = useMemo(() => {
-    if (solPk) return solPk.toString();
-    if (privyEmbeddedSol?.address) return privyEmbeddedSol.address;
-    return null;
-  }, [solPk, privyEmbeddedSol]);
+  const walletPubkey = useMemo(() => solPk ? solPk.toString() : null, [solPk]);
 
   useEffect(() => {
     let alive = true;
@@ -1001,11 +1030,11 @@ function StocksInner({ onConnectWallet }) {
             </p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', padding: '12px 14px', borderRadius: 14, background: 'rgba(0,0,0,.30)', border: `1px solid ${C.border}` }}>
               {[
-                { label: 'STOCKS', value: String(totalListed),                color: C.inkStr },
-                { label: 'PRICED', value: String(totalPriced),                color: totalPriced > 0 ? C.hl : C.muted },
-                { label: 'FEE',    value: (PLATFORM_FEE_BPS / 100).toFixed(2) + '%', color: C.gold },
+                { value: String(totalListed),        label: 'STOCKS',         color: C.inkStr,                       align: 'left'  },
+                { value: String(totalPriced),        label: 'PRICED',         color: totalPriced > 0 ? C.hl : C.muted, align: 'center' },
+                { value: '24/7',                     label: 'TRADE WITH SOL', color: C.gold,                         align: 'right' },
               ].map((s, i) => (
-                <div key={s.label} style={{ textAlign: i === 0 ? 'left' : i === 2 ? 'right' : 'center', borderRight: i < 2 ? `1px solid ${C.hairline}` : 'none' }}>
+                <div key={s.label} style={{ textAlign: s.align, borderRight: i < 2 ? `1px solid ${C.hairline}` : 'none' }}>
                   <div style={{ fontSize: 18, fontWeight: 800, color: s.color, ...T.display }}>{s.value}</div>
                   <div style={{ fontSize: 9, color: C.muted2, marginTop: 3, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>{s.label}</div>
                 </div>
@@ -1026,12 +1055,6 @@ function StocksInner({ onConnectWallet }) {
           ))}
         </div>
 
-        {!TREASURY_USDC_ATA && (
-          <div style={{ marginBottom: 12, padding: '10px 14px', borderRadius: 12, background: 'rgba(245,181,61,.08)', border: '1px solid rgba(245,181,61,.30)', fontSize: 11, color: C.amber, fontWeight: 600, lineHeight: 1.4, ...T.body }}>
-            ⚠️ Trading disabled — set <code style={{ ...T.mono, fontSize: 10 }}>REACT_APP_TREASURY_USDC_ATA</code> before going live.
-          </div>
-        )}
-
         <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', marginBottom: 18, backdropFilter: 'blur(12px)' }}>
           {filtered.length === 0 ? (
             <div style={{ padding: '30px 16px', textAlign: 'center', color: C.muted, fontSize: 12, ...T.body }}>
@@ -1049,7 +1072,7 @@ function StocksInner({ onConnectWallet }) {
           <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>NON-CUSTODIAL</span>
         </div>
         <div style={{ fontSize: 9.5, color: C.muted2, lineHeight: 1.5, textAlign: 'center', padding: '4px 8px 0', ...T.body }}>
-          xStocks issued by Backed Finance (Swiss-regulated). Each token backed 1:1 by underlying equity in qualified custody. 2.55% builder fee per swap. Settles in USDC on Solana.
+          xStocks issued by Backed Finance (Swiss-regulated). Each token backed 1:1 by underlying equity in qualified custody. Settles in USDC on Solana.
         </div>
       </div>
 
@@ -1066,27 +1089,13 @@ function StocksInner({ onConnectWallet }) {
 }
 
 // =====================================================================
-// Gate order:
-//   1. Geo block — US blocked unless VIP wallet
-//   2. VIP gate — non-VIPs see "Coming Soon"
-//   3. VIPs get full stocks trading
+// US geo block — required for xStocks. Everyone else gets full access.
 // =====================================================================
 export default function Stocks({ onConnectWallet }) {
-  const { publicKey: solPk } = useWallet();
-  const { privyEmbeddedSol } = useNexusWallet();
-  const walletPubkey = useMemo(() => {
-    if (solPk) return solPk.toString();
-    if (privyEmbeddedSol?.address) return privyEmbeddedSol.address;
-    return null;
-  }, [solPk, privyEmbeddedSol]);
-
-  const isVip = !!walletPubkey && VIP_WALLETS.has(walletPubkey);
-
   const [country, setCountry] = useState(null);
   const [geoChecked, setGeoChecked] = useState(false);
 
   useEffect(() => {
-    if (isVip) { setGeoChecked(true); return; }
     let alive = true;
     detectCountry().then(c => {
       if (!alive) return;
@@ -1094,18 +1103,12 @@ export default function Stocks({ onConnectWallet }) {
       setGeoChecked(true);
     });
     return () => { alive = false; };
-  }, [isVip]);
+  }, []);
 
-  if (!geoChecked) {
-    return <StocksComingSoon/>;
-  }
-
-  if (!isVip && country && GEO_BLOCKED.has(country)) {
+  // Block US users (fail-closed: if geo lookup fails AND we never get a country, treat as allowed —
+  // matches behavior of other pages where compliance is best-effort, not authoritative).
+  if (geoChecked && country && GEO_BLOCKED.has(country)) {
     return <StocksRegionBlock/>;
-  }
-
-  if (!isVip) {
-    return <StocksComingSoon/>;
   }
 
   return <StocksInner onConnectWallet={onConnectWallet}/>;
