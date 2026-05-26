@@ -2,17 +2,16 @@ import React, { useState, useEffect, useCallback, useRef, useReducer } from 'rea
 import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from './WalletContext.js';
-import SwapWidget from './components/SwapWidget.jsx';
-import Portfolio from './components/Portfolio.js';
-import PerpsLanding from './components/PerpsLanding.jsx';
-import Predict from './components/Predict.jsx';
-import Stocks from './components/Stocks.jsx';
-import CrossChainSwap from './components/CrossChainSwap.jsx';
+import SwapWidget       from './components/SwapWidget.jsx';
+import Portfolio        from './components/Portfolio.js';
+import Stocks           from './components/Stocks.jsx';
+import CrossChainSwap   from './components/CrossChainSwap.jsx';
+import MemeWonderland   from './components/MemeWonderland.jsx';
 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
-  accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b', text: '#cdd6f4', muted: '#586994',
-  privy: '#a855f7',
+  accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
+  text: '#cdd6f4', muted: '#586994',
 };
 
 const GLOBAL_STYLES = `html,body{ margin:0;padding:0;width:100%; min-height:100vh; min-height:100dvh; overflow-x:hidden; overscroll-behavior:none; -webkit-text-size-adjust:100%; text-size-adjust:100%; } body{ -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; } body.nexus-scroll-locked{ overflow:hidden !important; } #root{ min-height:100vh; min-height:100dvh; display:flex; flex-direction:column; } *,*::before,*::after{box-sizing:border-box;} *{ -webkit-tap-highlight-color:transparent; } button,a,[role="button"]{ touch-action:manipulation; } input,button,select,textarea{ font-family:'Syne',sans-serif; font-size:16px; } input[type="text"],input[type="number"],input[type="email"],input[type="password"],input[type="search"],input:not([type]),textarea{ font-size:16px !important; } ::-webkit-scrollbar{width:3px;height:3px;} ::-webkit-scrollbar-track{background:#03060f;} ::-webkit-scrollbar-thumb{background:#1e2d4a;border-radius:2px;} .hide-scrollbar{scrollbar-width:none;} .hide-scrollbar::-webkit-scrollbar{display:none;} .scroll-contain{ overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; } @media(max-width:768px){.desktop-nav{display:none!important;}} @media(min-width:769px){.mobile-nav{display:none!important;}} @keyframes wc-spin { to { transform: rotate(360deg); } }`;
@@ -21,10 +20,10 @@ const GLOBAL_STYLES = `html,body{ margin:0;padding:0;width:100%; min-height:100v
 // Inline sanctions screening — Chainalysis free public API. Fail-open
 // if API is unreachable. Results cached 24h in localStorage.
 // =====================================================================
-const SANCTIONS_URL = 'https://public.chainalysis.com/api/v1/address/';
+const SANCTIONS_URL          = 'https://public.chainalysis.com/api/v1/address/';
 const SANCTIONS_CACHE_PREFIX = 'nx_sanctions_';
-const SANCTIONS_CACHE_TTL = 24 * 60 * 60 * 1000;
-const SANCTIONS_TIMEOUT = 5000;
+const SANCTIONS_CACHE_TTL    = 24 * 60 * 60 * 1000;
+const SANCTIONS_TIMEOUT      = 5000;
 
 async function screenAddress(address) {
   if (!address || typeof address !== 'string') return { clean: true };
@@ -37,7 +36,7 @@ async function screenAddress(address) {
   } catch {}
   try {
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), SANCTIONS_TIMEOUT);
+    const timeoutId  = setTimeout(() => controller.abort(), SANCTIONS_TIMEOUT);
     const res = await fetch(SANCTIONS_URL + encodeURIComponent(address), {
       signal: controller.signal,
       headers: { Accept: 'application/json' },
@@ -58,39 +57,43 @@ async function screenAddress(address) {
 }
 
 // =====================================================================
-// Routing — paths in repo:
-//   /            → swap
-//   /swap        → swap
-//   /bridge      → cross-chain swap
-//   /stack       → Hyperliquid perps
-//   /call        → Polymarket UI
-//   /markets     → Stocks.jsx (Tokenized Markets — xStocks, etc.)
-//   /portfolio   → Portfolio (wallet)
+// Routing
+//   /              → swap
+//   /swap          → swap
+//   /bridge        → cross-chain swap (LI.FI)
+//   /wonderland    → MemeWonderland (Solana memes via Jupiter)
+//   /markets       → Stocks (xStocks)
+//   /portfolio     → Portfolio (wallet)
 //
-// Legacy paths (/vip, /perps, /predict, /tokenized, /token) still map
-// so old links don't 404.
+// Legacy paths kept so old links don't 404:
+//   /vip, /perps, /stack, /call, /predict → /swap
+//   /tokenized → /markets
+//   /token     → /portfolio
+//   /memes     → /wonderland
 // =====================================================================
 const PATH_TO_TAB = {
-  '/':           'swap',
-  '/swap':       'swap',
-  '/bridge':     'bridge',
-  '/stack':      'stack',
-  '/vip':        'stack',     // legacy
-  '/perps':      'stack',     // legacy
-  '/call':       'call',
-  '/predict':    'call',      // legacy
-  '/markets':    'markets',
-  '/tokenized':  'markets',   // legacy
-  '/portfolio':  'portfolio',
-  '/token':      'portfolio', // legacy — TokenDetail removed, route to portfolio
+  '/':            'swap',
+  '/swap':        'swap',
+  '/bridge':      'bridge',
+  '/wonderland':  'wonderland',
+  '/memes':       'wonderland',  // alias
+  '/markets':     'markets',
+  '/tokenized':   'markets',     // legacy
+  '/portfolio':   'portfolio',
+  '/token':       'portfolio',   // legacy
+  // Dead routes — redirect to swap
+  '/stack':       'swap',
+  '/vip':         'swap',
+  '/perps':       'swap',
+  '/call':        'swap',
+  '/predict':     'swap',
 };
 const TAB_TO_PATH = {
-  swap:      '/swap',
-  bridge:    '/bridge',
-  stack:     '/stack',
-  call:      '/call',
-  markets:   '/markets',
-  portfolio: '/portfolio',
+  swap:       '/swap',
+  bridge:     '/bridge',
+  wonderland: '/wonderland',
+  markets:    '/markets',
+  portfolio:  '/portfolio',
 };
 
 function tabFromPathname(pathname) { return PATH_TO_TAB[pathname] || 'swap'; }
@@ -98,33 +101,45 @@ export function useAppWallet() { return useNexusWallet(); }
 
 function WalletIcon({ src, fallbackLetter, color, size }) {
   const [errored, setErrored] = useState(false);
-  if (!src || errored) return (<div style={{ width: size, height: size, borderRadius: Math.round(size / 4), background: (color || '#586994') + '33', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: Math.round(size * 0.42), fontWeight: 800, color: color || '#fff', flexShrink: 0 }}>{(fallbackLetter || '?').charAt(0).toUpperCase()}</div>);
-  return (<img src={src} alt={fallbackLetter || ''} style={{ width: size, height: size, borderRadius: Math.round(size / 4), flexShrink: 0, background: '#fff' }} onError={() => setErrored(true)} />);
+  if (!src || errored) return (
+    <div style={{
+      width: size, height: size, borderRadius: Math.round(size / 4),
+      background: (color || '#586994') + '33',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      fontSize: Math.round(size * 0.42), fontWeight: 800,
+      color: color || '#fff', flexShrink: 0,
+    }}>{(fallbackLetter || '?').charAt(0).toUpperCase()}</div>
+  );
+  return (
+    <img
+      src={src}
+      alt={fallbackLetter || ''}
+      style={{ width: size, height: size, borderRadius: Math.round(size / 4), flexShrink: 0, background: '#fff' }}
+      onError={() => setErrored(true)}
+    />
+  );
 }
-
-const PRIVY_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="#a855f7"/><path d="M8 14l12 8 12-8v14H8V14z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/><path d="M8 14h24v0L20 22 8 14z" fill="none" stroke="#fff" stroke-width="2" stroke-linejoin="round"/></svg>');
 
 const WALLETCONNECT_LOGO = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40"><rect width="40" height="40" rx="10" fill="#3b99fc"/><path d="M13 16a14 14 0 0 1 14 0l.5.4a.4.4 0 0 1 0 .6l-1.6 1.5a.24.24 0 0 1-.3 0 10 10 0 0 0-11.2 0 .24.24 0 0 1-.3 0l-1.6-1.5a.4.4 0 0 1 0-.6l.5-.4zm17.3 3.3l1.4 1.3a.4.4 0 0 1 0 .6l-6.2 5.8a.5.5 0 0 1-.7 0L21 23.2a.12.12 0 0 0-.2 0l-3.8 3.6a.5.5 0 0 1-.7 0l-6.2-5.8a.4.4 0 0 1 0-.6l1.4-1.3a.5.5 0 0 1 .7 0l6.2 5.8a.12.12 0 0 0 .2 0l3.8-3.6a.5.5 0 0 1 .7 0l3.8 3.6a.12.12 0 0 0 .2 0l6.2-5.8a.5.5 0 0 1 .7 0z" fill="#fff"/></svg>');
 
 const CONNECTION_TIMEOUT_MS = 15000;
-const WM_INITIAL = { kind: 'idle', message: '', wallet: '', target: '' };
+const WM_INITIAL = { kind: 'idle', message: '', wallet: '' };
 
 function walletModalReducer(state, action) {
   switch (action.type) {
-    case 'START':     return { kind: 'connecting', message: '', wallet: action.wallet, target: action.target || '' };
-    case 'SCREENING': return { kind: 'screening', message: '', wallet: state.wallet, target: state.target };
-    case 'TIMEOUT':   return { kind: 'timeout', message: 'Taking too long? Check your wallet and try again.', wallet: state.wallet, target: state.target };
+    case 'START':     return { kind: 'connecting', message: '', wallet: action.wallet };
+    case 'SCREENING': return { kind: 'screening',  message: '', wallet: state.wallet };
+    case 'TIMEOUT':   return { kind: 'timeout',    message: 'Taking too long? Check your wallet and try again.', wallet: state.wallet };
     case 'SUCCESS':   return WM_INITIAL;
-    case 'ERROR':     return { kind: 'error', message: action.message || 'Connection failed', wallet: state.wallet, target: state.target };
-    case 'BLOCKED':   return { kind: 'blocked', message: action.message || 'Access restricted from this wallet.', wallet: state.wallet, target: state.target };
+    case 'ERROR':     return { kind: 'error',      message: action.message || 'Connection failed', wallet: state.wallet };
+    case 'BLOCKED':   return { kind: 'blocked',    message: action.message || 'Access restricted from this wallet.', wallet: state.wallet };
     case 'RESET':     return WM_INITIAL;
     default:          return state;
   }
 }
 
 // =====================================================================
-// TermsGate — PancakeSwap-style centered card. Scroll-to-bottom required
-// before Accept enables.
+// TermsGate — scroll-to-bottom required before Accept enables
 // =====================================================================
 function TermsGate({ onAccept }) {
   const scrollRef = useRef(null);
@@ -181,11 +196,11 @@ function TermsGate({ onAccept }) {
 
             • <strong style={{ color: '#fff' }}>You are 18 or older</strong> and have full legal capacity to enter this agreement.<br/><br/>
 
-            • All swaps, perpetual trades, routing, execution, liquidity, pricing, and blockchain interactions are handled by third-party protocols, aggregators, exchanges, smart contracts, and infrastructure providers. All transactions are initiated, reviewed, authorized, and signed directly by you through your own wallet.<br/><br/>
+            • All swaps, routing, execution, liquidity, pricing, and blockchain interactions are handled by third-party protocols, aggregators, exchanges, smart contracts, and infrastructure providers. All transactions are initiated, reviewed, authorized, and signed directly by you through your own wallet.<br/><br/>
 
-            • Digital assets, perpetuals, leverage, DeFi protocols, and smart contracts carry substantial risk including total loss of funds from liquidation, exploits, smart-contract vulnerabilities, slippage, protocol failures, hacks, MEV, frontrunning, network outages, oracle errors, and human error. <strong style={{ color: '#fff' }}>You assume all risk.</strong><br/><br/>
+            • Digital assets, DeFi protocols, and smart contracts carry substantial risk including total loss of funds from exploits, smart-contract vulnerabilities, slippage, protocol failures, hacks, MEV, frontrunning, network outages, oracle errors, and human error. <strong style={{ color: '#fff' }}>You assume all risk.</strong><br/><br/>
 
-            • <strong style={{ color: '#fff' }}>No reimbursement for losses.</strong> Verixia Apps will not refund, reimburse, or compensate you for any loss of funds or value, regardless of cause — including failed transactions, slippage, smart-contract exploits, third-party protocol failures, network outages, market volatility, liquidation, frontrunning, MEV, or human error.<br/><br/>
+            • <strong style={{ color: '#fff' }}>No reimbursement for losses.</strong> Verixia Apps will not refund, reimburse, or compensate you for any loss of funds or value, regardless of cause — including failed transactions, slippage, smart-contract exploits, third-party protocol failures, network outages, market volatility, frontrunning, MEV, or human error.<br/><br/>
 
             • <strong style={{ color: '#fff' }}>AS-IS / AS-AVAILABLE.</strong> Nexus DEX is provided without warranties of any kind, express or implied, including merchantability, fitness for a particular purpose, non-infringement, accuracy, and uninterrupted operation.<br/><br/>
 
@@ -233,31 +248,57 @@ function TermsGate({ onAccept }) {
   );
 }
 
+// =====================================================================
+// WalletModal — Phantom + WalletConnect only. (Privy removed.)
+// =====================================================================
 function WalletModal({ open, onClose }) {
   const [mState, dispatch] = useReducer(walletModalReducer, WM_INITIAL);
   const nexus = useNexusWallet();
-  const { privyReady, privyAuthenticated, privyUser, loginPrivy, disconnectAll, isConnected: nexusConnected, extSolConnected, walletAddress, connectedWalletName } = nexus;
+  const {
+    disconnectAll, isConnected: nexusConnected,
+    extSolConnected, walletAddress, connectedWalletName,
+  } = nexus;
   const { wallet: selectedWallet, select, wallets, connect: solConnect } = useWallet();
   const connectionTimerRef = useRef(null);
 
-  const phantomWallet = wallets.find(w => w.adapter.name === 'Phantom');
-  const walletConnectWallet = wallets.find(w => w.adapter.name === 'WalletConnect');
-
-  useEffect(() => { if (!open) { dispatch({ type: 'RESET' }); if (connectionTimerRef.current) { clearTimeout(connectionTimerRef.current); connectionTimerRef.current = null; } } }, [open]);
-  useEffect(() => { if (!open) return; document.body.classList.add('nexus-scroll-locked'); const onKey = e => { if (e.key === 'Escape') onClose(); }; window.addEventListener('keydown', onKey); return () => { document.body.classList.remove('nexus-scroll-locked'); window.removeEventListener('keydown', onKey); }; }, [open, onClose]);
-  useEffect(() => () => { if (connectionTimerRef.current) clearTimeout(connectionTimerRef.current); }, []);
+  const phantomWallet        = wallets.find(w => w.adapter.name === 'Phantom');
+  const walletConnectWallet  = wallets.find(w => w.adapter.name === 'WalletConnect');
 
   useEffect(() => {
+    if (!open) {
+      dispatch({ type: 'RESET' });
+      if (connectionTimerRef.current) { clearTimeout(connectionTimerRef.current); connectionTimerRef.current = null; }
+    }
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    document.body.classList.add('nexus-scroll-locked');
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => {
+      document.body.classList.remove('nexus-scroll-locked');
+      window.removeEventListener('keydown', onKey);
+    };
+  }, [open, onClose]);
+
+  useEffect(() => () => {
+    if (connectionTimerRef.current) clearTimeout(connectionTimerRef.current);
+  }, []);
+
+  // Detect successful Solana connection → move to screening state
+  useEffect(() => {
     if (mState.kind !== 'connecting') return;
-    let matched = false;
-    if (mState.target === 'privy') matched = privyAuthenticated;
-    else if (mState.target === 'solana') matched = extSolConnected && selectedWallet && selectedWallet.adapter && selectedWallet.adapter.name === mState.wallet;
+    const matched = extSolConnected && selectedWallet
+      && selectedWallet.adapter
+      && selectedWallet.adapter.name === mState.wallet;
     if (matched) {
       if (connectionTimerRef.current) { clearTimeout(connectionTimerRef.current); connectionTimerRef.current = null; }
       dispatch({ type: 'SCREENING' });
     }
-  }, [extSolConnected, privyAuthenticated, selectedWallet, mState.kind, mState.wallet, mState.target]);
+  }, [extSolConnected, selectedWallet, mState.kind, mState.wallet]);
 
+  // Sanctions screening
   useEffect(() => {
     if (mState.kind !== 'screening') return;
     if (!walletAddress) return;
@@ -279,67 +320,109 @@ function WalletModal({ open, onClose }) {
     return () => { cancelled = true; };
   }, [mState.kind, walletAddress, disconnectAll, onClose]);
 
+  // Auto-trigger connect once the wallet adapter has been selected
   const targetWalletRef = useRef(null);
   useEffect(() => {
     const target = targetWalletRef.current;
-    if (!target || !selectedWallet || selectedWallet.adapter.name !== target || mState.kind !== 'connecting' || mState.wallet !== target) return;
-    let cancelled = false; targetWalletRef.current = null;
-    solConnect().catch(e => { if (cancelled) return; const raw = e?.message || 'Failed'; dispatch({ type: 'ERROR', message: /reject|cancel|denied|user/i.test(raw) ? 'Connection cancelled' : raw }); });
+    if (!target || !selectedWallet
+        || selectedWallet.adapter.name !== target
+        || mState.kind !== 'connecting'
+        || mState.wallet !== target) return;
+    let cancelled = false;
+    targetWalletRef.current = null;
+    solConnect().catch(e => {
+      if (cancelled) return;
+      const raw = e?.message || 'Failed';
+      dispatch({ type: 'ERROR', message: /reject|cancel|denied|user/i.test(raw) ? 'Connection cancelled' : raw });
+    });
     return () => { cancelled = true; };
   }, [selectedWallet, solConnect, mState.kind, mState.wallet]);
 
-  const startTimer = name => { if (connectionTimerRef.current) clearTimeout(connectionTimerRef.current); connectionTimerRef.current = setTimeout(() => dispatch({ type: 'TIMEOUT' }), CONNECTION_TIMEOUT_MS); };
+  const startTimer = () => {
+    if (connectionTimerRef.current) clearTimeout(connectionTimerRef.current);
+    connectionTimerRef.current = setTimeout(() => dispatch({ type: 'TIMEOUT' }), CONNECTION_TIMEOUT_MS);
+  };
 
   const handleSolanaConnect = useCallback(wallet => {
-    if (!wallet?.adapter) { dispatch({ type: 'ERROR', message: 'Wallet not detected. Install the extension.' }); return; }
-    dispatch({ type: 'START', wallet: wallet.adapter.name, target: 'solana' });
-    startTimer(wallet.adapter.name);
+    if (!wallet?.adapter) {
+      dispatch({ type: 'ERROR', message: 'Wallet not detected. Install the extension.' });
+      return;
+    }
+    dispatch({ type: 'START', wallet: wallet.adapter.name });
+    startTimer();
     targetWalletRef.current = wallet.adapter.name;
-    try { select(wallet.adapter.name); } catch (e) { dispatch({ type: 'ERROR', message: 'Failed to open wallet.' }); targetWalletRef.current = null; }
+    try { select(wallet.adapter.name); }
+    catch (e) {
+      dispatch({ type: 'ERROR', message: 'Failed to open wallet.' });
+      targetWalletRef.current = null;
+    }
   }, [select]);
 
-  const handlePrivyLogin = useCallback(() => {
-    if (!privyReady) { dispatch({ type: 'ERROR', message: 'Email login not configured.' }); return; }
-    dispatch({ type: 'START', wallet: 'Email / Social', target: 'privy' });
-    startTimer('Email / Social');
-    try { loginPrivy(); } catch (e) { dispatch({ type: 'ERROR', message: e?.message || 'Failed to open login' }); }
-  }, [privyReady, loginPrivy]);
+  const handleDisconnect = useCallback(async () => {
+    try { await disconnectAll(); } catch {}
+    dispatch({ type: 'RESET' });
+    onClose();
+  }, [disconnectAll, onClose]);
 
-  const handleDisconnect = useCallback(async () => { try { await disconnectAll(); } catch {} dispatch({ type: 'RESET' }); onClose(); }, [disconnectAll, onClose]);
   const handleRetry = () => dispatch({ type: 'RESET' });
 
   const allOptions = [
-    { key: 'phantom', name: 'Phantom', subtitle: 'Solana wallet', color: '#ab9ff2', icon: phantomWallet?.adapter?.icon, ready: !!phantomWallet, pendingMatch: 'Phantom', onClick: () => handleSolanaConnect(phantomWallet) },
-    { key: 'walletconnect', name: 'WalletConnect', subtitle: 'Scan QR or link any wallet', color: '#3b99fc', icon: WALLETCONNECT_LOGO, ready: !!walletConnectWallet, pendingMatch: 'WalletConnect', onClick: () => handleSolanaConnect(walletConnectWallet) },
-    { key: 'privy', name: 'Continue with email', subtitle: 'Email, Google, passkey', color: C.privy, icon: PRIVY_LOGO, ready: privyReady, pendingMatch: 'Email / Social', onClick: handlePrivyLogin },
+    {
+      key: 'phantom', name: 'Phantom', subtitle: 'Solana wallet',
+      color: '#ab9ff2', icon: phantomWallet?.adapter?.icon,
+      ready: !!phantomWallet, pendingMatch: 'Phantom',
+      onClick: () => handleSolanaConnect(phantomWallet),
+    },
+    {
+      key: 'walletconnect', name: 'WalletConnect', subtitle: 'Scan QR or link any wallet',
+      color: '#3b99fc', icon: WALLETCONNECT_LOGO,
+      ready: !!walletConnectWallet, pendingMatch: 'WalletConnect',
+      onClick: () => handleSolanaConnect(walletConnectWallet),
+    },
   ];
 
   const availableOpts = allOptions.filter(o => o.ready);
-  const isConnecting = mState.kind === 'connecting' || mState.kind === 'screening';
-  const isTimedOut   = mState.kind === 'timeout';
-  const isBlocked    = mState.kind === 'blocked';
-  const isScreening  = mState.kind === 'screening';
+  const isConnecting  = mState.kind === 'connecting' || mState.kind === 'screening';
+  const isTimedOut    = mState.kind === 'timeout';
+  const isBlocked     = mState.kind === 'blocked';
+  const isScreening   = mState.kind === 'screening';
   const pendingWallet = (isConnecting || isTimedOut) ? mState.wallet : null;
-  const anyConnected = nexusConnected || privyAuthenticated;
-  const displayAddr = walletAddress ? walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4) : null;
-  const privyHandle = privyUser && (privyUser.email?.address || privyUser.google?.email || null);
+  const anyConnected  = nexusConnected;
+  const displayAddr   = walletAddress ? walletAddress.slice(0, 6) + '...' + walletAddress.slice(-4) : null;
 
   if (!open) return null;
 
   return (
     <>
       <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 500, background: 'rgba(0,0,0,.85)' }} />
-      <div style={{ position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)', width: '100%', maxWidth: 520, zIndex: 501, background: '#080d1a', borderTop: '2px solid rgba(0,229,255,.2)', borderRadius: '20px 20px 0 0', boxShadow: '0 -20px 60px rgba(0,0,0,.9)', maxHeight: 'min(85vh, 100dvh)', display: 'flex', flexDirection: 'column', overflow: 'hidden' }}>
+      <div style={{
+        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
+        width: '100%', maxWidth: 520, zIndex: 501,
+        background: '#080d1a', borderTop: '2px solid rgba(0,229,255,.2)',
+        borderRadius: '20px 20px 0 0',
+        boxShadow: '0 -20px 60px rgba(0,0,0,.9)',
+        maxHeight: 'min(85vh, 100dvh)', display: 'flex', flexDirection: 'column', overflow: 'hidden',
+      }}>
         <div style={{ flexShrink: 0, padding: '20px 24px 16px' }}>
-          <div onClick={onClose} style={{ width: 40, height: 4, background: '#2e3f5e', borderRadius: 2, margin: '0 auto 20px', cursor: 'pointer', padding: '8px 0', boxSizing: 'content-box' }} />
+          <div
+            onClick={onClose}
+            style={{ width: 40, height: 4, background: '#2e3f5e', borderRadius: 2, margin: '0 auto 20px', cursor: 'pointer', padding: '8px 0', boxSizing: 'content-box' }}
+          />
           <div style={{ textAlign: 'center' }}>
             <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', marginBottom: 6 }}>
               {isBlocked ? 'Access Restricted' : anyConnected ? 'Wallet Connected' : 'Connect Wallet'}
             </div>
-            {displayAddr && !isBlocked && <div style={{ fontSize: 13, color: '#586994' }}>{(connectedWalletName || 'Wallet')}: {displayAddr}</div>}
-            {privyHandle && !anyConnected && !isBlocked && <div style={{ fontSize: 12, color: C.privy, marginTop: 2 }}>{privyHandle}</div>}
-            {isScreening && <div style={{ fontSize: 12, color: C.accent, marginTop: 4 }}>Verifying wallet address...</div>}
-            {!anyConnected && !isBlocked && !isScreening && <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>Pick one. We never see your keys.</div>}
+            {displayAddr && !isBlocked && (
+              <div style={{ fontSize: 13, color: '#586994' }}>
+                {(connectedWalletName || 'Wallet')}: {displayAddr}
+              </div>
+            )}
+            {isScreening && (
+              <div style={{ fontSize: 12, color: C.accent, marginTop: 4 }}>Verifying wallet address...</div>
+            )}
+            {!anyConnected && !isBlocked && !isScreening && (
+              <div style={{ fontSize: 12, color: C.muted, marginTop: 4 }}>Pick one. We never see your keys.</div>
+            )}
           </div>
         </div>
         <div className="scroll-contain" style={{ flex: 1, padding: '0 24px', paddingBottom: 'calc(env(safe-area-inset-bottom) + 32px)' }}>
@@ -347,52 +430,69 @@ function WalletModal({ open, onClose }) {
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 400, margin: '0 auto', paddingTop: 8 }}>
               <div style={{ background: 'rgba(255,59,107,.10)', border: '1px solid rgba(255,59,107,.35)', borderRadius: 16, padding: '16px 18px' }}>
                 <div style={{ color: '#ff3b6b', fontWeight: 800, fontSize: 14, marginBottom: 6 }}>Wallet not eligible</div>
-                <div style={{ color: '#cdd6f4', fontSize: 12, lineHeight: 1.55 }}>{mState.message} This is automated screening against major sanctions lists. If you believe this is an error, please try a different wallet.</div>
+                <div style={{ color: '#cdd6f4', fontSize: 12, lineHeight: 1.55 }}>
+                  {mState.message} This is automated screening against major sanctions lists. If you believe this is an error, please try a different wallet.
+                </div>
               </div>
-              <button onClick={handleRetry} style={{ background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.30)', borderRadius: 16, padding: 14, cursor: 'pointer', width: '100%', color: C.accent, fontWeight: 700, fontSize: 14, fontFamily: 'Syne, sans-serif' }}>Try a different wallet</button>
-              <button onClick={onClose} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,.1)', borderRadius: 16, padding: 12, cursor: 'pointer', color: '#586994', fontSize: 13, fontFamily: 'Syne, sans-serif' }}>Close</button>
+              <button onClick={handleRetry} style={{ background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.30)', borderRadius: 16, padding: 14, cursor: 'pointer', width: '100%', color: C.accent, fontWeight: 700, fontSize: 14, fontFamily: 'Syne, sans-serif' }}>
+                Try a different wallet
+              </button>
+              <button onClick={onClose} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,.1)', borderRadius: 16, padding: 12, cursor: 'pointer', color: '#586994', fontSize: 13, fontFamily: 'Syne, sans-serif' }}>
+                Close
+              </button>
             </div>
           ) : anyConnected ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12, maxWidth: 400, margin: '0 auto', paddingTop: 8 }}>
               <div style={{ background: 'rgba(0,255,163,.08)', border: '1px solid rgba(0,255,163,.2)', borderRadius: 16, padding: '16px 20px' }}>
                 <div style={{ color: '#00ffa3', fontWeight: 700, fontSize: 15, marginBottom: 4 }}>Connected</div>
-                <div style={{ color: '#586994', fontSize: 12, fontFamily: 'monospace', wordBreak: 'break-all' }}>{displayAddr || '(provisioning...)'}</div>
+                <div style={{ color: '#586994', fontSize: 12, fontFamily: 'monospace', wordBreak: 'break-all' }}>
+                  {displayAddr || '(provisioning...)'}
+                </div>
               </div>
-              <button onClick={handleDisconnect} style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 16, padding: 16, cursor: 'pointer', width: '100%', color: '#ff3b6b', fontWeight: 700, fontSize: 15, fontFamily: 'Syne, sans-serif' }}>Disconnect</button>
-              <button onClick={onClose} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,.1)', borderRadius: 16, padding: 14, cursor: 'pointer', color: '#586994', fontSize: 14, fontFamily: 'Syne, sans-serif' }}>Close</button>
+              <button onClick={handleDisconnect} style={{ background: 'rgba(255,59,107,.1)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 16, padding: 16, cursor: 'pointer', width: '100%', color: '#ff3b6b', fontWeight: 700, fontSize: 15, fontFamily: 'Syne, sans-serif' }}>
+                Disconnect
+              </button>
+              <button onClick={onClose} style={{ background: 'transparent', border: '1px solid rgba(255,255,255,.1)', borderRadius: 16, padding: 14, cursor: 'pointer', color: '#586994', fontSize: 14, fontFamily: 'Syne, sans-serif' }}>
+                Close
+              </button>
             </div>
           ) : (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 400, margin: '0 auto', paddingTop: 8 }}>
               {(mState.kind === 'error' || isTimedOut) && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', gap: 10, background: 'rgba(255,149,0,.10)', border: '1px solid rgba(255,149,0,.3)', borderRadius: 12, padding: '10px 14px' }}>
                   <span style={{ color: '#ff9500', fontSize: 12, fontWeight: 600 }}>{mState.message}</span>
-                  <button onClick={handleRetry} style={{ background: 'transparent', border: '1px solid #ff9500', color: '#ff9500', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontFamily: 'Syne, sans-serif', fontWeight: 700, cursor: 'pointer' }}>Retry</button>
+                  <button onClick={handleRetry} style={{ background: 'transparent', border: '1px solid #ff9500', color: '#ff9500', padding: '4px 10px', borderRadius: 6, fontSize: 11, fontFamily: 'Syne, sans-serif', fontWeight: 700, cursor: 'pointer' }}>
+                    Retry
+                  </button>
                 </div>
               )}
               {availableOpts.length > 0 ? availableOpts.map(opt => {
                 const isPending = isConnecting && pendingWallet === opt.pendingMatch;
-                const disabled = isConnecting || isTimedOut;
-                const isPrimary = opt.key === 'privy';
+                const disabled  = isConnecting || isTimedOut;
                 return (
                   <button key={opt.key} onClick={opt.onClick} disabled={disabled} style={{
-                    display: 'flex', alignItems: 'center', gap: isPrimary ? 14 : 12,
-                    background: isPending ? 'rgba(0,229,255,.12)' : (isPrimary ? 'linear-gradient(135deg, rgba(150,93,232,.20), rgba(0,229,255,.12))' : 'rgba(255,255,255,.025)'),
-                    border: (isPrimary && !isPending) ? '1.5px solid rgba(150,93,232,.5)' : '1px solid ' + (isPending ? 'rgba(0,229,255,.35)' : 'rgba(255,255,255,.06)'),
-                    borderRadius: isPrimary ? 16 : 12, padding: isPrimary ? '18px 20px' : '11px 14px',
+                    display: 'flex', alignItems: 'center', gap: 12,
+                    background: isPending ? 'rgba(0,229,255,.12)' : 'rgba(255,255,255,.025)',
+                    border: '1px solid ' + (isPending ? 'rgba(0,229,255,.35)' : 'rgba(255,255,255,.06)'),
+                    borderRadius: 12, padding: '11px 14px',
                     cursor: disabled ? 'wait' : 'pointer', width: '100%',
-                    opacity: isTimedOut && !isPending ? 0.55 : 1, transition: 'background .15s, border-color .15s',
-                    boxShadow: isPrimary ? '0 4px 24px rgba(150,93,232,.15)' : 'none',
+                    opacity: isTimedOut && !isPending ? 0.55 : 1,
+                    transition: 'background .15s, border-color .15s',
                   }}>
-                    <WalletIcon src={opt.icon} fallbackLetter={opt.name} color={opt.color} size={isPrimary ? 44 : 32} />
+                    <WalletIcon src={opt.icon} fallbackLetter={opt.name} color={opt.color} size={32} />
                     <div style={{ textAlign: 'left', flex: 1, minWidth: 0 }}>
-                      <div style={{ color: '#fff', fontWeight: isPrimary ? 800 : 700, fontSize: isPrimary ? 16 : 14 }}>{opt.name}</div>
-                      <div style={{ color: opt.key === 'privy' ? opt.color : C.muted, fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{isPending ? (isScreening ? 'Verifying address...' : 'Check your wallet...') : opt.subtitle}</div>
+                      <div style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{opt.name}</div>
+                      <div style={{ color: C.muted, fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        {isPending ? (isScreening ? 'Verifying address...' : 'Check your wallet...') : opt.subtitle}
+                      </div>
                     </div>
                     {isPending && <div style={{ width: 16, height: 16, borderRadius: '50%', border: '2px solid #00e5ff', borderTopColor: 'transparent', animation: 'wc-spin 0.8s linear infinite', flexShrink: 0 }} />}
                   </button>
                 );
               }) : (
-                <div style={{ background: 'rgba(255,59,107,.10)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 12, padding: '14px 16px', color: C.red, fontSize: 13, lineHeight: 1.5, textAlign: 'center' }}>No wallets detected. Install Phantom or open from your wallet browser.</div>
+                <div style={{ background: 'rgba(255,59,107,.10)', border: '1px solid rgba(255,59,107,.3)', borderRadius: 12, padding: '14px 16px', color: C.red, fontSize: 13, lineHeight: 1.5, textAlign: 'center' }}>
+                  No wallets detected. Install Phantom or open from your wallet browser.
+                </div>
               )}
               <div style={{ fontSize: 10, color: C.muted, textAlign: 'center', marginTop: 6 }}>Non-custodial. We never see or store your keys.</div>
             </div>
@@ -406,33 +506,39 @@ function WalletModal({ open, onClose }) {
 // =====================================================================
 // Nav icons
 // =====================================================================
-function IconSwap()    { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M7 16V4m0 0L3 8m4-4l4 4"/><path d="M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>; }
-function IconStack()   { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>; }
-function IconWallet()  { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
-function IconCall()    { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/><path d="M7 14l3-3 4 4 6-7"/><circle cx="20" cy="8" r="1.5" fill="currentColor"/></svg>; }
-function IconMarkets() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>; }
-function IconBridge()  { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12 Q12 4 20 12"/><path d="M4 12v4"/><path d="M20 12v4"/><path d="M4 16h16"/><path d="M9 12v4"/><path d="M15 12v4"/></svg>; }
+function IconSwap()       { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M7 16V4m0 0L3 8m4-4l4 4"/><path d="M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>; }
+function IconWallet()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
+function IconMarkets()    { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>; }
+function IconBridge()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12 Q12 4 20 12"/><path d="M4 12v4"/><path d="M20 12v4"/><path d="M4 16h16"/><path d="M9 12v4"/><path d="M15 12v4"/></svg>; }
+function IconWonderland() {
+  // Star + sparkle motif — meme energy
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 2l2.4 6.4L21 10l-5.4 4 1.8 7L12 17.5 6.6 21l1.8-7L3 10l6.6-1.6L12 2z"/>
+    </svg>
+  );
+}
 
 const NAV_ICONS = {
-  swap:      IconSwap,
-  bridge:    IconBridge,
-  stack:     IconStack,
-  call:      IconCall,
-  markets:   IconMarkets,
-  portfolio: IconWallet,
+  swap:       IconSwap,
+  bridge:     IconBridge,
+  wonderland: IconWonderland,
+  markets:    IconMarkets,
+  portfolio:  IconWallet,
 };
 
 const NAV_TABS = [
-  { id: 'swap',      label: 'Swap' },
-  { id: 'bridge',    label: 'Bridge' },
-  { id: 'stack',     label: 'Stack' },
-  { id: 'call',      label: 'Call' },
-  { id: 'markets',   label: 'Markets' },
-  { id: 'portfolio', label: 'Wallet' },
+  { id: 'swap',       label: 'Swap' },
+  { id: 'bridge',     label: 'Bridge' },
+  { id: 'wonderland', label: 'Wonderland' },
+  { id: 'markets',    label: 'Markets' },
+  { id: 'portfolio',  label: 'Wallet' },
 ];
 
 function AppInner() {
-  const navigate = useNavigate(); const location = useLocation(); const wallet = useAppWallet();
+  const navigate = useNavigate();
+  const location = useLocation();
+  const wallet   = useAppWallet();
   const [tab, setTab] = useState(() => tabFromPathname(location.pathname));
   const [walletModalOpen, setWalletModalOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() => typeof window !== 'undefined' && window.innerWidth < 769);
@@ -441,18 +547,44 @@ function AppInner() {
     try { return localStorage.getItem('nexus_terms_accepted_v3') === '1'; } catch { return false; }
   });
 
-  useEffect(() => { let to; const h = () => { clearTimeout(to); to = setTimeout(() => setIsMobile(window.innerWidth < 769), 150); }; window.addEventListener('resize', h); return () => { window.removeEventListener('resize', h); clearTimeout(to); }; }, []);
-  useEffect(() => { const el = document.createElement('style'); el.textContent = GLOBAL_STYLES; document.head.appendChild(el); return () => document.head.removeChild(el); }, []);
-  useEffect(() => { const newTab = tabFromPathname(location.pathname); if (newTab !== tab) setTab(newTab); }, [location.pathname, tab]);
+  useEffect(() => {
+    let to;
+    const h = () => { clearTimeout(to); to = setTimeout(() => setIsMobile(window.innerWidth < 769), 150); };
+    window.addEventListener('resize', h);
+    return () => { window.removeEventListener('resize', h); clearTimeout(to); };
+  }, []);
+
+  useEffect(() => {
+    const el = document.createElement('style');
+    el.textContent = GLOBAL_STYLES;
+    document.head.appendChild(el);
+    return () => document.head.removeChild(el);
+  }, []);
+
+  useEffect(() => {
+    const newTab = tabFromPathname(location.pathname);
+    if (newTab !== tab) setTab(newTab);
+  }, [location.pathname, tab]);
 
   const switchTab = useCallback(newTab => {
     if (newTab === tab) return;
-    navigate(TAB_TO_PATH[newTab] || '/swap'); setTab(newTab); window.scrollTo(0, 0);
+    navigate(TAB_TO_PATH[newTab] || '/swap');
+    setTab(newTab);
+    window.scrollTo(0, 0);
   }, [tab, navigate]);
   const openWallet = useCallback(() => setWalletModalOpen(true), []);
 
-  const sharedProps = { isConnected: wallet.isConnected, solConnected: wallet.solConnected, walletAddress: wallet.walletAddress, publicKey: wallet.publicKey, activeWalletKind: wallet.activeWalletKind, privyAuthenticated: wallet.privyAuthenticated, privyEmbeddedSol: wallet.privyEmbeddedSol, onConnectWallet: openWallet };
-  const displayAddress = wallet.walletAddress ? wallet.walletAddress.slice(0, 4) + '...' + wallet.walletAddress.slice(-4) : null;
+  const sharedProps = {
+    isConnected:      wallet.isConnected,
+    solConnected:     wallet.solConnected,
+    walletAddress:    wallet.walletAddress,
+    publicKey:        wallet.publicKey,
+    activeWalletKind: wallet.activeWalletKind,
+    onConnectWallet:  openWallet,
+  };
+  const displayAddress = wallet.walletAddress
+    ? wallet.walletAddress.slice(0, 4) + '...' + wallet.walletAddress.slice(-4)
+    : null;
 
   if (!termsAccepted) {
     return <TermsGate onAccept={() => { try { localStorage.setItem('nexus_terms_accepted_v3', '1'); } catch {} setTermsAccepted(true); }} />;
@@ -469,24 +601,63 @@ function AppInner() {
             <span style={{ fontSize: 9, color: C.accent, background: 'rgba(0,229,255,.1)', border: '1px solid rgba(0,229,255,.3)', borderRadius: 4, padding: '1px 5px', fontWeight: 600 }}>DEX</span>
           </div>
           <nav className="desktop-nav hide-scrollbar" style={{ display: 'flex', gap: 2, flex: 1, justifyContent: 'center', overflowX: 'auto' }}>
-            {NAV_TABS.map(t => (<button key={t.id} onClick={() => switchTab(t.id)} style={{ background: tab === t.id ? 'rgba(0,229,255,.09)' : 'transparent', border: tab === t.id ? '1px solid rgba(0,229,255,.2)' : '1px solid transparent', borderRadius: 8, padding: '5px 12px', color: tab === t.id ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: 12, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0 }}>{t.label}</button>))}
+            {NAV_TABS.map(t => (
+              <button key={t.id} onClick={() => switchTab(t.id)} style={{
+                background: tab === t.id ? 'rgba(0,229,255,.09)' : 'transparent',
+                border: tab === t.id ? '1px solid rgba(0,229,255,.2)' : '1px solid transparent',
+                borderRadius: 8, padding: '5px 12px',
+                color: tab === t.id ? C.accent : C.muted,
+                fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: 12,
+                cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
+              }}>{t.label}</button>
+            ))}
           </nav>
           <div className="mobile-nav" style={{ flex: 1 }} />
-          <button onClick={openWallet} style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0, background: wallet.isConnected ? 'rgba(0,229,255,.08)' : 'linear-gradient(135deg,#00e5ff,#0055ff)', border: wallet.isConnected ? '1px solid rgba(0,229,255,.3)' : 'none', borderRadius: 10, padding: '7px 14px', cursor: 'pointer', fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12, color: wallet.isConnected ? C.accent : C.bg, whiteSpace: 'nowrap' }}>
+          <button onClick={openWallet} style={{
+            display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0,
+            background: wallet.isConnected ? 'rgba(0,229,255,.08)' : 'linear-gradient(135deg,#00e5ff,#0055ff)',
+            border: wallet.isConnected ? '1px solid rgba(0,229,255,.3)' : 'none',
+            borderRadius: 10, padding: '7px 14px', cursor: 'pointer',
+            fontFamily: 'Syne, sans-serif', fontWeight: 700, fontSize: 12,
+            color: wallet.isConnected ? C.accent : C.bg, whiteSpace: 'nowrap',
+          }}>
             {wallet.isConnected ? (<><div style={{ width: 7, height: 7, borderRadius: '50%', background: C.green }} />{displayAddress}</>) : 'Connect Wallet'}
           </button>
         </div>
       </header>
       <main style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '24px 16px 100px', width: '100%' }}>
-        {tab === 'swap'      && <SwapWidget {...sharedProps} />}
-        {tab === 'bridge'    && <CrossChainSwap onConnectWallet={openWallet} />}
-        {tab === 'stack'     && <PerpsLanding onConnectWallet={openWallet} />}
-        {tab === 'call'      && <Predict {...sharedProps} />}
-        {tab === 'markets'   && <Stocks {...sharedProps} />}
-        {tab === 'portfolio' && <Portfolio onConnectWallet={openWallet} />}
+        {tab === 'swap'       && <SwapWidget       {...sharedProps} />}
+        {tab === 'bridge'     && <CrossChainSwap   onConnectWallet={openWallet} />}
+        {tab === 'wonderland' && <MemeWonderland   onConnectWallet={openWallet} />}
+        {tab === 'markets'    && <Stocks           {...sharedProps} />}
+        {tab === 'portfolio'  && <Portfolio        onConnectWallet={openWallet} />}
       </main>
-      <nav className="mobile-nav" style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100, background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)', borderTop: '1px solid rgba(0,229,255,.1)', display: 'flex', alignItems: 'stretch', paddingBottom: 'env(safe-area-inset-bottom)' }}>
-        {NAV_TABS.map(t => { const Icon = NAV_ICONS[t.id]; return (<button key={t.id} onClick={() => switchTab(t.id)} style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 3, background: 'transparent', border: 'none', cursor: 'pointer', color: tab === t.id ? C.accent : C.muted, fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600, padding: '6px 2px', minHeight: 54, position: 'relative' }}>{tab === t.id && <div style={{ position: 'absolute', top: 0, left: '25%', right: '25%', height: 2, borderRadius: '0 0 2px 2px', background: C.accent }} />}<Icon /><span>{t.label}</span></button>); })}
+      <nav className="mobile-nav" style={{
+        position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100,
+        background: 'rgba(3,6,15,.97)', backdropFilter: 'blur(24px)',
+        borderTop: '1px solid rgba(0,229,255,.1)',
+        display: 'flex', alignItems: 'stretch',
+        paddingBottom: 'env(safe-area-inset-bottom)',
+      }}>
+        {NAV_TABS.map(t => {
+          const Icon = NAV_ICONS[t.id];
+          return (
+            <button key={t.id} onClick={() => switchTab(t.id)} style={{
+              flex: 1, display: 'flex', flexDirection: 'column',
+              alignItems: 'center', justifyContent: 'center', gap: 3,
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              color: tab === t.id ? C.accent : C.muted,
+              fontFamily: 'Syne, sans-serif', fontSize: 9, fontWeight: 600,
+              padding: '6px 2px', minHeight: 54, position: 'relative',
+            }}>
+              {tab === t.id && (
+                <div style={{ position: 'absolute', top: 0, left: '25%', right: '25%', height: 2, borderRadius: '0 0 2px 2px', background: C.accent }} />
+              )}
+              <Icon />
+              <span>{t.label}</span>
+            </button>
+          );
+        })}
       </nav>
       <WalletModal open={walletModalOpen} onClose={() => setWalletModalOpen(false)} />
     </div>
