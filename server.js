@@ -66,9 +66,7 @@ const OKX_SOL_FEE_PCT    = process.env.OKX_SOL_FEE_PCT    || '5';
 const OKX_EVM_FEE_PCT    = process.env.OKX_EVM_FEE_PCT    || '3';
 const OKX_SOLANA_CHAIN   = '501';
 
-// Jupiter Swap V2 (the new unified API). Old default was quote-api.jup.ag/v6
-// which is the legacy Metis Swap API and is no longer actively maintained.
-const JUPITER_ENABLED        = process.env.JUPITER_ENABLED !== '0';   // default on
+const JUPITER_ENABLED        = process.env.JUPITER_ENABLED !== '0';
 const JUPITER_ACCOUNT        = process.env.JUPITER_ACCOUNT || 'NEXUS_DEX';
 const JUPITER_API_KEY        = process.env.JUPITER_API_KEY || '';
 const JUPITER_SWAP_V2_BASE   = 'https://api.jup.ag/swap/v2';
@@ -246,18 +244,13 @@ async function proxyOkx(req, res) {
 app.get('/api/okx/*',  proxyOkx);
 app.post('/api/okx/*', proxyOkx);
 
-/* -- Jupiter Swap (V2 Router + legacy V1 fallback) ---------------------- */
+/* -- Jupiter ------------------------------------------------------------ */
 function buildJupiterHeaders() {
   const h = { Accept: 'application/json', 'Content-Type': 'application/json', 'X-Nexus-Account': JUPITER_ACCOUNT };
   if (JUPITER_API_KEY) h['x-api-key'] = JUPITER_API_KEY;
   return h;
 }
 
-// Jupiter Swap V2 — Router /build endpoint.
-// GET /api/jupiter/build?inputMint=&outputMint=&amount=&taker=&slippageBps=&platformFeeBps=&feeAccount=...
-// Returns raw instructions (computeBudgetInstructions, setupInstructions,
-// swapInstruction, cleanupInstruction, otherInstructions, blockhashWithMetadata,
-// addressesByLookupTableAddress) plus quote details.
 app.get('/api/jupiter/build', async (req, res) => {
   try {
     const url = JUPITER_SWAP_V2_BASE + '/build' + buildForwardedQuery(req);
@@ -274,8 +267,6 @@ app.get('/api/jupiter/build', async (req, res) => {
   }
 });
 
-// Verified token list (used to populate the Swap UI token picker).
-// Proxies https://lite-api.jup.ag/tokens/v2/tag?query=verified
 app.get('/api/jupiter/tokens', async (req, res) => {
   try {
     const params = new URLSearchParams(req.query);
@@ -285,7 +276,7 @@ app.get('/api/jupiter/tokens', async (req, res) => {
     if (c) return res.status(c.status).json(c.payload);
     const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 15_000);
     const result   = await safeJson(response);
-    if (response.ok && result.parsed) setCachedJson(url, response.status, result.parsed, 300_000); // 5 min
+    if (response.ok && result.parsed) setCachedJson(url, response.status, result.parsed, 300_000);
     return respondJsonOrError(res, response, result);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'Jupiter tokens timed out' });
@@ -294,7 +285,6 @@ app.get('/api/jupiter/tokens', async (req, res) => {
   }
 });
 
-// Search tokens by name/symbol/mint. Proxies https://lite-api.jup.ag/tokens/v2/search?query=...
 app.get('/api/jupiter/tokens/search', async (req, res) => {
   try {
     const params = new URLSearchParams(req.query);
@@ -312,7 +302,6 @@ app.get('/api/jupiter/tokens/search', async (req, res) => {
   }
 });
 
-/* -- Legacy Jupiter routes (kept for Stocks.jsx etc.) ------------------- */
 app.get('/api/jupiter/quote', async (req, res) => {
   try {
     if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter disabled' });
@@ -512,7 +501,7 @@ app.get('/api/sol-price', async (req, res) => {
   catch (e) { logError('sol-price', e); res.status(500).json({ error: e.message || 'Unknown error' }); }
 });
 
-/* -- LI.FI proxy -------------------------------------------------------- */
+/* -- LI.FI -------------------------------------------------------------- */
 function buildLifiHeaders() {
   const h = { Accept: 'application/json' };
   if (LIFI_API_KEY) h['x-lifi-api-key'] = LIFI_API_KEY;
@@ -521,7 +510,6 @@ function buildLifiHeaders() {
 
 app.get('/api/lifi/tokens', async (req, res) => {
   try {
-    // Allow client to filter by chain(s) and chainTypes (EVM, SVM, UTXO, MVM)
     const qs = queryStringOf(req);
     const cacheKey = 'lifi:tokens' + qs;
     const c = getCachedJson(cacheKey);
@@ -537,7 +525,6 @@ app.get('/api/lifi/tokens', async (req, res) => {
   }
 });
 
-// All supported LI.FI chains. Supports chainTypes filter (EVM, SVM, UTXO, MVM).
 app.get('/api/lifi/chains', async (req, res) => {
   try {
     const qs = queryStringOf(req);
@@ -546,7 +533,7 @@ app.get('/api/lifi/chains', async (req, res) => {
     if (c) return res.status(c.status).json(c.payload);
     const r = await fetchWithTimeout(`${LIFI_API}/chains${qs}`, { headers: buildLifiHeaders() }, 12_000);
     const result = await safeJson(r);
-    if (r.ok && result.parsed !== null) setCachedJson(cacheKey, r.status, result.parsed, 600_000); // 10 min
+    if (r.ok && result.parsed !== null) setCachedJson(cacheKey, r.status, result.parsed, 600_000);
     return respondJsonOrError(res, r, result);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'LI.FI chains timed out' });
@@ -580,7 +567,7 @@ app.get('/api/lifi/status', async (req, res) => {
   }
 });
 
-/* -- Hyperunit proxy ---------------------------------------------------- */
+/* -- Hyperunit ---------------------------------------------------------- */
 function safeUnitAddress(addr) {
   if (typeof addr !== 'string') return null;
   if (addr.length < 16 || addr.length > 64) return null;
@@ -660,7 +647,6 @@ app.post('/api/unit/operations', async (req, res) => {
 /* -- Bridge / Operator -------------------------------------------------- */
 const bridgeTracking      = new Map();
 const gasSponsorCooldown  = new Map();
-const sleep = ms => new Promise(r => setTimeout(r, ms));
 
 setInterval(() => {
   const cutoff = Date.now() - 24 * 60 * 60_000;
@@ -701,16 +687,11 @@ app.post('/api/bridge/withdraw/init', async (req, res) => {
       return res.status(400).json({ error: 'invalid Solana address' });
     const amountErr = validateUsdAmount(usd_amount, 5);
     if (amountErr) return res.status(400).json({ error: amountErr });
-
     const usdNum = Number(usd_amount);
     const time   = Date.now();
     const action = {
-      type:             'withdraw3',
-      signatureChainId: '0xa4b1',
-      hyperliquidChain: 'Mainnet',
-      amount:           String(usdNum),
-      time,
-      destination:      hl_wallet_address,
+      type: 'withdraw3', signatureChainId: '0xa4b1', hyperliquidChain: 'Mainnet',
+      amount: String(usdNum), time, destination: hl_wallet_address,
     };
     const id = crypto.randomBytes(8).toString('hex');
     bridgeTracking.set(id, {
@@ -762,7 +743,6 @@ async function runWithdrawPipeline(tid) {
     const body = { action: t.action, nonce: t.action.time, signature: t.signature };
     const ve   = validateHyperliquidExchangePayload(body);
     if (ve) throw new Error('Invalid HL payload: ' + ve);
-
     const hlResp = await fetchWithTimeout(
       `${HL_API}/exchange`,
       { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) },
@@ -771,7 +751,6 @@ async function runWithdrawPipeline(tid) {
     const hlData = await hlResp.json();
     if (hlData.status !== 'ok')
       throw new Error('HL withdraw3 failed: ' + JSON.stringify(hlData).slice(0, 300));
-
     t.status       = 'complete';
     t.completed_at = Date.now();
   } catch (err) {
@@ -916,10 +895,30 @@ app.post('/api/pinata/file', uploadLimiter, upload.single('file'), async (req, r
 /* -- Predict (Jupiter Prediction Markets) ------------------------------- */
 app.use('/api/predict', require('./server-predict'));
 
-/* -- Polymarket price-to-beat (CORS-proxied) ---------------------------- */
-// Fetches https://polymarket.com/api/equity/price-to-beat/{slug}
-// which is CORS-blocked from browsers. Used by Predict.jsx to populate the
-// PRICE TO BEAT / SPREAD columns on up/down market cards.
+/* -- Polymarket proxies ------------------------------------------------- */
+
+// Gamma API — CORS-proxied so browser can fetch event descriptions
+// Used by Predict.jsx to get price-to-beat from market description text
+app.get('/api/polymarket/events/slug/:slug', async (req, res) => {
+  try {
+    const slug = String(req.params.slug || '').replace(/[^a-z0-9-]/gi, '').slice(0, 200);
+    if (!slug) return res.status(400).json({ error: 'invalid slug' });
+    const url      = `https://gamma-api.polymarket.com/events/slug/${slug}`;
+    const cacheKey = `gamma:event:${slug}`;
+    const c = getCachedJson(cacheKey);
+    if (c) return res.status(c.status).json(c.payload);
+    const r      = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 8_000);
+    const result = await safeJson(r);
+    if (r.ok && result.parsed !== null) setCachedJson(cacheKey, r.status, result.parsed, 60_000);
+    return respondJsonOrError(res, r, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Polymarket gamma timed out' });
+    logError('polymarket-gamma', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+// Price-to-beat endpoint — for equity/WTI/gold markets
 app.get('/api/polymarket/price-to-beat/:slug', async (req, res) => {
   try {
     const slug = String(req.params.slug || '').replace(/[^a-z0-9-]/gi, '').slice(0, 200);
@@ -975,8 +974,9 @@ app.get('/api/health', (req, res) => {
       note: 'US and South Korea IPs are geo-blocked upstream',
     } : { enabled: false },
     polymarket: {
-      gamma:     'https://gamma-api.polymarket.com',
-      rtds:      'wss://ws-live-data.polymarket.com',
+      gamma:       'https://gamma-api.polymarket.com',
+      gammaProxy:  '/api/polymarket/events/slug/:slug',
+      rtds:        'wss://ws-live-data.polymarket.com',
       priceToBeat: '/api/polymarket/price-to-beat/:slug',
     },
     time: new Date().toISOString(),
@@ -1015,7 +1015,7 @@ app.listen(PORT, () => {
   console.log('  Jupiter Swap V2: ' + JUPITER_SWAP_V2_BASE + (JUPITER_API_KEY ? ' (key set)' : ' (no key)'));
   console.log('  LI.FI: ' + LIFI_API + (LIFI_API_KEY ? ' (key set)' : ' (no key)'));
   console.log('  Unit:  ' + UNIT_API_BASE);
-  console.log('  Polymarket: price-to-beat proxy enabled');
+  console.log('  Polymarket: gamma proxy + price-to-beat proxy enabled');
   if (JUPITER_API_KEY) console.log('  Predict: Jupiter Prediction API enabled');
   else                 console.warn('  WARNING: JUPITER_API_KEY not set -- Predict page will not work');
   if (OPERATOR_PRIVATE_KEY) {
