@@ -32,6 +32,7 @@ import {
   TOKEN_2022_PROGRAM_ID,
 } from '@solana/spl-token';
 import { useWallet } from '@solana/wallet-adapter-react';
+import './SwapWidget.css';
 
 /* ─── CONFIG ──────────────────────────────────────────────────────── */
 
@@ -54,24 +55,6 @@ const RPC_URL =
   (process.env.REACT_APP_HELIUS_API_KEY
     ? `https://mainnet.helius-rpc.com/?api-key=${process.env.REACT_APP_HELIUS_API_KEY}`
     : 'https://api.mainnet-beta.solana.com');
-
-const C = {
-  bg:        '#0a0a0c',
-  panel:     '#101015',
-  panel2:    '#15151c',
-  border:    '#26262f',
-  text:      '#f5f5f7',
-  textDim:   '#8a8a92',
-  textFaint: '#5a5a62',
-  accent:    '#7c5cff',
-  green:     '#22c55e',
-  red:       '#ef4444',
-  amber:     '#f59e0b',
-};
-const T = {
-  display: { fontFamily: 'system-ui, -apple-system, sans-serif', fontWeight: 700, letterSpacing: '-0.02em' },
-  body:    { fontFamily: 'system-ui, -apple-system, sans-serif' },
-};
 
 /* ─── HELPERS ──────────────────────────────────────────────────────── */
 
@@ -495,17 +478,26 @@ export default function SwapWidget() {
   const canSwap  = !!wallet.publicKey && !!quote && !quoting && !swapping &&
                    Number(amount) > 0 && inputMint !== outputMint && hasFunds;
 
+  const priceImpactClass = priceImpact == null ? 'sw-impact-neutral'
+    : priceImpact > 5 ? 'sw-impact-bad'
+    : priceImpact > 1 ? 'sw-impact-warn'
+    : 'sw-impact-good';
+
   /* ─── RENDER ─── */
 
   return (
-    <div style={{ minHeight: '100vh', background: C.bg, color: C.text, ...T.body, paddingBottom: 80 }}>
-      <div style={{ maxWidth: 480, margin: '0 auto', padding: '24px 16px' }}>
+    <div className="sw-root">
+      <div className="sw-container">
 
-        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24 }}>
-          <h1 style={{ ...T.display, fontSize: 28, margin: 0 }}>Swap</h1>
+        <div className="sw-header">
+          <h1 className="sw-title">Swap</h1>
+          <div className="sw-live-pill">
+            <span className="sw-live-dot"></span>
+            LIVE
+          </div>
         </div>
 
-        <div style={{ background: C.panel, border: `1px solid ${C.border}`, borderRadius: 20, padding: 16 }}>
+        <div className="sw-panel">
           <SwapRow
             label="You pay"
             token={inputToken}
@@ -517,8 +509,8 @@ export default function SwapWidget() {
             editable
           />
 
-          <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0' }}>
-            <button onClick={flip} style={flipBtn} aria-label="Flip tokens"><FlipIcon/></button>
+          <div className="sw-flip-wrap">
+            <button onClick={flip} className="sw-flip-btn" aria-label="Flip tokens"><FlipIcon/></button>
           </div>
 
           <SwapRow
@@ -532,15 +524,7 @@ export default function SwapWidget() {
         </div>
 
         {quote && outputToken && inputToken && Number(amount) > 0 && (
-          <div style={{
-            marginTop: 12,
-            padding: 14,
-            background: C.panel,
-            border: `1px solid ${C.border}`,
-            borderRadius: 16,
-            fontSize: 13,
-            color: C.textDim,
-          }}>
+          <div className="sw-details">
             <Row label="Rate">
               1 {inputToken.symbol} ≈ {fmtAmount((outAmountUi / Number(amount)) || 0, outputToken.decimals)} {outputToken.symbol}
             </Row>
@@ -548,12 +532,7 @@ export default function SwapWidget() {
               {fmtAmount(minReceived, outputToken.decimals)} {outputToken.symbol}
             </Row>
             <Row label="Price impact">
-              <span style={{
-                color: priceImpact == null ? C.textDim
-                     : priceImpact > 5 ? C.red
-                     : priceImpact > 1 ? C.amber
-                     : C.green,
-              }}>
+              <span className={priceImpactClass}>
                 {priceImpact != null ? `${priceImpact.toFixed(2)}%` : '—'}
               </span>
             </Row>
@@ -570,7 +549,7 @@ export default function SwapWidget() {
               href={`https://solscan.io/tx/${swapResult.signature}`}
               target="_blank"
               rel="noreferrer"
-              style={{ color: '#fff', textDecoration: 'underline' }}
+              className="sw-banner-link"
             >
               View on Solscan
             </a>
@@ -580,12 +559,7 @@ export default function SwapWidget() {
         <button
           onClick={handleSwap}
           disabled={!canSwap}
-          style={{
-            ...primaryBtn,
-            opacity: canSwap ? 1 : 0.5,
-            cursor:  canSwap ? 'pointer' : 'not-allowed',
-            marginTop: 16,
-          }}
+          className={'sw-primary-btn' + (canSwap ? '' : ' sw-disabled')}
         >
           {swapping
             ? 'Swapping…'
@@ -601,11 +575,11 @@ export default function SwapWidget() {
                       ? 'No route available'
                       : !hasFunds
                         ? `Insufficient ${inputToken?.symbol || ''}`
-                        : 'Swap'}
+                        : '🚀 Swap'}
         </button>
 
-        <p style={{ marginTop: 16, fontSize: 12, color: C.textFaint, textAlign: 'center' }}>
-          Powered by Jupiter — Solana's leading DEX aggregator
+        <p className="sw-footer">
+          Powered by <b>Jupiter</b> · Solana's leading DEX aggregator
         </p>
       </div>
 
@@ -631,33 +605,25 @@ export default function SwapWidget() {
 
 function SwapRow({ label, token, amount, onAmountChange, onPickerOpen, balance, onMax, editable }) {
   return (
-    <div style={{ background: C.panel2, border: `1px solid ${C.border}`, borderRadius: 14, padding: 14 }}>
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-        <span style={{ fontSize: 13, color: C.textDim }}>{label}</span>
+    <div className="sw-row">
+      <div className="sw-row-top">
+        <span className="sw-row-label">{label}</span>
         {balance && (
-          <span style={{ fontSize: 12, color: C.textDim }}>
+          <span className="sw-balance">
             Balance: {fmtAmount(balance.uiAmount, balance.decimals)}
             {editable && onMax && balance.uiAmount > 0 && (
-              <button
-                onClick={onMax}
-                style={{
-                  marginLeft: 6, background: 'transparent',
-                  border: `1px solid ${C.border}`, borderRadius: 6,
-                  padding: '2px 6px', color: C.accent, fontSize: 11,
-                  cursor: 'pointer', ...T.body,
-                }}
-              >MAX</button>
+              <button onClick={onMax} className="sw-max-btn">MAX</button>
             )}
           </span>
         )}
       </div>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-        <button onClick={onPickerOpen} style={tokenPickerBtn}>
+      <div className="sw-row-mid">
+        <button onClick={onPickerOpen} className="sw-token-btn">
           {token?.logoURI && (
             <img
               src={token.logoURI}
               alt=""
-              style={{ width: 22, height: 22, borderRadius: '50%' }}
+              className="sw-token-logo"
               onError={(e) => { e.target.style.display = 'none'; }}
             />
           )}
@@ -676,10 +642,10 @@ function SwapRow({ label, token, amount, onAmountChange, onPickerOpen, balance, 
               if (parts.length > 2) return;
               onAmountChange(v);
             }}
-            style={amountInputStyle}
+            className="sw-amount-input"
           />
         ) : (
-          <input type="text" readOnly value={amount} placeholder="0.00" style={amountInputStyle}/>
+          <input type="text" readOnly value={amount} placeholder="0.00" className="sw-amount-input"/>
         )}
       </div>
     </div>
@@ -739,35 +705,25 @@ function TokenPicker({ tokens, loading, balances, excludeMint, onSelect, onClose
   }, [tokens, searchResults, query, excludeMint, balances]);
 
   return (
-    <div style={modalOverlay} onClick={onClose}>
-      <div
-        style={{ ...modalCard, padding: 0, maxWidth: 480, maxHeight: '85vh', display: 'flex', flexDirection: 'column' }}
-        onClick={(e) => e.stopPropagation()}
-      >
-        <div style={{ padding: 16, borderBottom: `1px solid ${C.border}` }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-            <h3 style={{ ...T.display, fontSize: 18, margin: 0 }}>Select token</h3>
-            <button onClick={onClose} style={iconBtn}><CloseIcon/></button>
+    <div className="sw-modal-overlay" onClick={onClose}>
+      <div className="sw-modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="sw-modal-head">
+          <div className="sw-modal-head-row">
+            <h3 className="sw-modal-title">Select token</h3>
+            <button onClick={onClose} className="sw-icon-btn"><CloseIcon/></button>
           </div>
           <input
             autoFocus
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Search name, symbol, or paste address"
-            style={{
-              width: '100%', padding: '10px 12px',
-              background: C.panel2, border: `1px solid ${C.border}`,
-              borderRadius: 10, color: C.text, fontSize: 14,
-              outline: 'none', ...T.body, boxSizing: 'border-box',
-            }}
+            className="sw-modal-search"
           />
         </div>
-        <div style={{ flex: 1, overflowY: 'auto', padding: 8 }}>
-          {loading && <div style={{ padding: 16, color: C.textDim }}>Loading tokens…</div>}
+        <div className="sw-modal-list">
+          {loading && <div className="sw-modal-msg">Loading tokens…</div>}
           {!loading && list.length === 0 && (
-            <div style={{ padding: 16, color: C.textDim }}>
-              {searching ? 'Searching…' : 'No tokens found.'}
-            </div>
+            <div className="sw-modal-msg">{searching ? 'Searching…' : 'No tokens found.'}</div>
           )}
           {list.map(t => {
             const bal = balances[t.address];
@@ -775,24 +731,19 @@ function TokenPicker({ tokens, loading, balances, excludeMint, onSelect, onClose
               <button
                 key={t.address}
                 onClick={() => onSelect(t.address)}
-                style={tokenRowBtn}
-                onMouseEnter={(e) => { e.currentTarget.style.background = C.panel2; }}
-                onMouseLeave={(e) => { e.currentTarget.style.background = 'transparent'; }}
+                className="sw-token-row"
               >
                 {t.logoURI
-                  ? <img src={t.logoURI} alt="" style={{ width: 32, height: 32, borderRadius: '50%' }}
+                  ? <img src={t.logoURI} alt="" className="sw-token-row-logo"
                          onError={(e) => { e.target.style.visibility = 'hidden'; }} />
-                  : <div style={{ width: 32, height: 32, borderRadius: '50%', background: C.panel2 }} />
+                  : <div className="sw-token-row-placeholder" />
                 }
-                <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontWeight: 600, fontSize: 15 }}>{t.symbol}</div>
-                  <div style={{
-                    fontSize: 12, color: C.textDim,
-                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                  }}>{t.name}</div>
+                <div className="sw-token-row-info">
+                  <div className="sw-token-row-sym">{t.symbol}</div>
+                  <div className="sw-token-row-name">{t.name}</div>
                 </div>
                 {bal && bal.uiAmount > 0 && (
-                  <div style={{ textAlign: 'right', fontWeight: 600, fontSize: 14 }}>
+                  <div className="sw-token-row-bal">
                     {fmtAmount(bal.uiAmount, bal.decimals)}
                   </div>
                 )}
@@ -807,86 +758,18 @@ function TokenPicker({ tokens, loading, balances, excludeMint, onSelect, onClose
 
 function Row({ label, children }) {
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
+    <div className="sw-detail-row">
       <span>{label}</span>
-      <span style={{ color: C.text, fontWeight: 500 }}>{children}</span>
+      <span className="sw-detail-val">{children}</span>
     </div>
   );
 }
 
 function Banner({ kind, children }) {
-  const colors = {
-    error:   { bg: '#2a1416', border: '#5a2630', fg: '#fca5a5' },
-    success: { bg: '#0f2418', border: '#1f5238', fg: '#86efac' },
-    pending: { bg: '#241f0d', border: '#52431f', fg: '#fcd34d' },
-  };
-  const c = colors[kind] || colors.error;
   return (
-    <div style={{
-      marginTop: 12, padding: 12,
-      background: c.bg, border: `1px solid ${c.border}`,
-      borderRadius: 12, color: c.fg, fontSize: 14,
-    }}>{children}</div>
+    <div className={`sw-banner sw-banner-${kind}`}>{children}</div>
   );
 }
-
-/* ─── STYLES ───────────────────────────────────────────────── */
-
-const primaryBtn = {
-  width: '100%', padding: '16px',
-  background: C.accent, border: 'none',
-  borderRadius: 14, color: '#fff',
-  fontSize: 16, fontWeight: 600, ...T.body,
-};
-
-const iconBtn = {
-  background: C.panel, border: `1px solid ${C.border}`,
-  borderRadius: 10, width: 36, height: 36,
-  display: 'flex', alignItems: 'center', justifyContent: 'center',
-  cursor: 'pointer', color: C.text,
-};
-
-const flipBtn = {
-  background: C.panel2, border: `1px solid ${C.border}`,
-  borderRadius: 10, width: 36, height: 36,
-  display: 'flex', alignItems: 'center', justifyContent: 'center',
-  cursor: 'pointer', color: C.text,
-};
-
-const tokenPickerBtn = {
-  display: 'flex', alignItems: 'center', gap: 6,
-  padding: '8px 12px', background: C.panel,
-  border: `1px solid ${C.border}`, borderRadius: 10,
-  color: C.text, fontSize: 15, fontWeight: 600,
-  cursor: 'pointer', ...T.body,
-};
-
-const amountInputStyle = {
-  flex: 1, background: 'transparent', border: 'none',
-  outline: 'none', color: C.text, fontSize: 24,
-  textAlign: 'right', fontWeight: 600, ...T.body,
-  minWidth: 0,
-};
-
-const tokenRowBtn = {
-  width: '100%', display: 'flex', alignItems: 'center', gap: 12,
-  padding: '10px 12px', background: 'transparent', border: 'none',
-  borderRadius: 10, cursor: 'pointer', color: C.text,
-  textAlign: 'left', ...T.body,
-};
-
-const modalOverlay = {
-  position: 'fixed', inset: 0,
-  background: 'rgba(0,0,0,0.6)',
-  display: 'flex', alignItems: 'center', justifyContent: 'center',
-  padding: 16, zIndex: 1000,
-};
-
-const modalCard = {
-  width: '100%', maxWidth: 400,
-  background: C.panel, border: `1px solid ${C.border}`,
-  borderRadius: 18, padding: 20, color: C.text,
-};
 
 /* ─── ICONS ────────────────────────────────────────────────── */
 
