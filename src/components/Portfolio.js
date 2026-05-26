@@ -1,6 +1,5 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { useNexusWallet } from '../WalletContext.js';
 import { PublicKey } from '@solana/web3.js';
 
 // =====================================================================
@@ -36,46 +35,39 @@ const SPL_LEGACY_PROGRAM    = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss
 const SPL_TOKEN2022_PROGRAM = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
 
 const DUST_THRESHOLD_USD = 0.10;
-
-// Polymarket positions are pulled from their Data API by Safe address.
-// Same source polymarket.com uses for its portfolio screen.
-const POLY_DATA_API = 'https://data-api.polymarket.com';
+const PRICE_CACHE_TTL_MS = 60_000;
+const META_CACHE_TTL_MS  = 24 * 60 * 60_000; // 24h — token metadata rarely changes
+const POLL_INTERVAL_MS   = 30_000;
 
 // xStocks (Token-2022) — same 18 mints as Stocks.jsx.
+// Kept hardcoded because they're Token-2022 with curated branding.
 const XSTOCKS = {
-  'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB': { symbol:'TSLAx',  name:'Tesla',                color:'#e31837', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
-  'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp': { symbol:'AAPLx',  name:'Apple',                color:'#a2aaad', textColor:'#000', isStock:true, isT22:true, decimals:8 },
-  'Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh': { symbol:'NVDAx',  name:'NVIDIA',               color:'#76b900', textColor:'#000', isStock:true, isT22:true, decimals:8 },
-  'Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu': { symbol:'METAx',  name:'Meta Platforms',       color:'#0866ff', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
-  'XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN': { symbol:'GOOGLx', name:'Alphabet',             color:'#4285f4', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
-  'Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg': { symbol:'AMZNx',  name:'Amazon',               color:'#ff9900', textColor:'#000', isStock:true, isT22:true, decimals:8 },
-  'XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX': { symbol:'MSFTx',  name:'Microsoft',            color:'#00a4ef', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
-  'XsEH7wWfJJu2ZT3UCFeVfALnVA6CP5ur7Ee11KmzVpL': { symbol:'NFLXx',  name:'Netflix',              color:'#e50914', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
-  'XsoBhf2ufR8fTyNSjqfU71DYGaE6Z3SUGAidpzriAA4': { symbol:'PLTRx',  name:'Palantir',             color:'#404040', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
-  'XsgSaSvNSqLTtFuyWPBhK9196Xb9Bbdyjj4fH3cPJGo': { symbol:'AVGOx',  name:'Broadcom',             color:'#cc092f', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
-  'Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu': { symbol:'COINx',  name:'Coinbase',             color:'#0052ff', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
-  'XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ': { symbol:'MSTRx',  name:'MicroStrategy',        color:'#fcb017', textColor:'#000', isStock:true, isT22:true, decimals:8 },
-  'XsueG8BtpquVJX9LVLLEGuViXUungE6WmK5YZ3p3bd1': { symbol:'CRCLx',  name:'Circle',               color:'#3399ff', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
-  'XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg': { symbol:'HOODx',  name:'Robinhood',            color:'#cdff00', textColor:'#000', isStock:true, isT22:true, decimals:8 },
-  'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W': { symbol:'SPYx',   name:'S&P 500 ETF',          color:'#1c4f9c', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
-  'Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ': { symbol:'QQQx',   name:'Nasdaq 100 ETF',       color:'#003b71', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
-  'Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re': { symbol:'GLDx',   name:'Gold Trust',           color:'#d4af37', textColor:'#000', isStock:true, isT22:true, decimals:8 },
-  'XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp': { symbol:'TBLLx',  name:'1-3 Month T-Bill ETF', color:'#2a4d6e', textColor:'#fff', isStock:true, isT22:true, decimals:8 },
+  'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB': { symbol:'TSLAx',  name:'Tesla',                color:'#e31837', textColor:'#fff', isStock:true, decimals:8 },
+  'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp': { symbol:'AAPLx',  name:'Apple',                color:'#a2aaad', textColor:'#000', isStock:true, decimals:8 },
+  'Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh': { symbol:'NVDAx',  name:'NVIDIA',               color:'#76b900', textColor:'#000', isStock:true, decimals:8 },
+  'Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu': { symbol:'METAx',  name:'Meta Platforms',       color:'#0866ff', textColor:'#fff', isStock:true, decimals:8 },
+  'XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN': { symbol:'GOOGLx', name:'Alphabet',             color:'#4285f4', textColor:'#fff', isStock:true, decimals:8 },
+  'Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg': { symbol:'AMZNx',  name:'Amazon',               color:'#ff9900', textColor:'#000', isStock:true, decimals:8 },
+  'XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX': { symbol:'MSFTx',  name:'Microsoft',            color:'#00a4ef', textColor:'#fff', isStock:true, decimals:8 },
+  'XsEH7wWfJJu2ZT3UCFeVfALnVA6CP5ur7Ee11KmzVpL': { symbol:'NFLXx',  name:'Netflix',              color:'#e50914', textColor:'#fff', isStock:true, decimals:8 },
+  'XsoBhf2ufR8fTyNSjqfU71DYGaE6Z3SUGAidpzriAA4': { symbol:'PLTRx',  name:'Palantir',             color:'#404040', textColor:'#fff', isStock:true, decimals:8 },
+  'XsgSaSvNSqLTtFuyWPBhK9196Xb9Bbdyjj4fH3cPJGo': { symbol:'AVGOx',  name:'Broadcom',             color:'#cc092f', textColor:'#fff', isStock:true, decimals:8 },
+  'Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu': { symbol:'COINx',  name:'Coinbase',             color:'#0052ff', textColor:'#fff', isStock:true, decimals:8 },
+  'XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ': { symbol:'MSTRx',  name:'MicroStrategy',        color:'#fcb017', textColor:'#000', isStock:true, decimals:8 },
+  'XsueG8BtpquVJX9LVLLEGuViXUungE6WmK5YZ3p3bd1': { symbol:'CRCLx',  name:'Circle',               color:'#3399ff', textColor:'#fff', isStock:true, decimals:8 },
+  'XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg': { symbol:'HOODx',  name:'Robinhood',            color:'#cdff00', textColor:'#000', isStock:true, decimals:8 },
+  'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W': { symbol:'SPYx',   name:'S&P 500 ETF',          color:'#1c4f9c', textColor:'#fff', isStock:true, decimals:8 },
+  'Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ': { symbol:'QQQx',   name:'Nasdaq 100 ETF',       color:'#003b71', textColor:'#fff', isStock:true, decimals:8 },
+  'Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re': { symbol:'GLDx',   name:'Gold Trust',           color:'#d4af37', textColor:'#000', isStock:true, decimals:8 },
+  'XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp': { symbol:'TBLLx',  name:'1-3 Month T-Bill ETF', color:'#2a4d6e', textColor:'#fff', isStock:true, decimals:8 },
 };
 
-const KNOWN_TOKENS = {
-  [SOL_MINT]:                                       { symbol:'SOL',    name:'Solana',           color:'#9945ff', textColor:'#fff' },
-  [USDC_SOLANA]:                                    { symbol:'USDC',   name:'USD Coin',         color:'#2775ca', textColor:'#fff', isStable:true },
-  [USDT_SOLANA]:                                    { symbol:'USDT',   name:'Tether USD',       color:'#26a17b', textColor:'#fff', isStable:true },
-  'DezXAZ8z7PnrnRJjz3wXBoRgixCa6xjnB7YaB1pPB263':   { symbol:'BONK',   name:'Bonk',             color:'#fcb017', textColor:'#000' },
-  'jtojtomepa8beP8AuQc6eXt5FriJwfFMwQx2v2f9mCL':    { symbol:'JTO',    name:'Jito',             color:'#7dffb5', textColor:'#000' },
-  'JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN':    { symbol:'JUP',    name:'Jupiter',          color:'#c7f284', textColor:'#000' },
-  'EKpQGSJtjMFqKZ9KQanSqYXRcF8fBopzLHYxdM65zcjm':   { symbol:'WIF',    name:'dogwifhat',        color:'#ffba00', textColor:'#000' },
-  '7GCihgDB8fe6KNjn2MYtkzZcRjQy3t9GHdC8uHYmW2hr':   { symbol:'POPCAT', name:'Popcat',           color:'#ffd700', textColor:'#000' },
-  'HZ1JovNiVvGrGNiiYvEozEVgZ58xaU3RKwX8eACQBCt3':   { symbol:'PYTH',   name:'Pyth Network',     color:'#e6c5ff', textColor:'#000' },
-  'MEW1gQWJ3nEXg2qgERiKu7FAFj79PHvQVREQUzScPP5':    { symbol:'MEW',    name:'cat in dogs world',color:'#9b4dca', textColor:'#fff' },
-  '85VBFQZC9TZkfaptBWjvUw7YbZjy52A6mjtPGjstQAmQ':   { symbol:'W',      name:'Wormhole',         color:'#3b5dab', textColor:'#fff' },
-  ...XSTOCKS,
+// Hardcoded mints we always know about (stables + native SOL).
+// Everything else comes from Jupiter token registry at runtime.
+const CORE_TOKENS = {
+  [SOL_MINT]:    { symbol:'SOL',  name:'Solana',     color:'#9945ff', textColor:'#fff' },
+  [USDC_SOLANA]: { symbol:'USDC', name:'USD Coin',   color:'#2775ca', textColor:'#fff', isStable:true },
+  [USDT_SOLANA]: { symbol:'USDT', name:'Tether USD', color:'#26a17b', textColor:'#fff', isStable:true },
 };
 
 // =====================================================================
@@ -106,15 +98,6 @@ function shortAddr(s) {
   if (s.length <= 14) return s;
   return s.slice(0, 6) + '...' + s.slice(-4);
 }
-function tokenAmountForOne(decimals) {
-  const d = Number.isFinite(Number(decimals)) ? Number(decimals) : 6;
-  return String(Math.round(10 ** Math.min(Math.max(d, 0), 12)));
-}
-function tokenMeta(mint, fallbackSym) {
-  const k = KNOWN_TOKENS[mint];
-  if (k) return k;
-  return { symbol: fallbackSym || (mint || '').slice(0, 4) + '...', name: 'SPL Token', color: '#97fce4', textColor: '#04070f' };
-}
 async function copyText(text) {
   try {
     if (navigator.clipboard?.writeText) {
@@ -129,156 +112,162 @@ async function copyText(text) {
   } catch { return false; }
 }
 
-// =====================================================================
-// PRICE FETCHING
-// =====================================================================
-const _priceCache = {};
-function clearPriceCache() { Object.keys(_priceCache).forEach(k => delete _priceCache[k]); }
-function readOkxToTokenAmount(data) {
-  const d = Array.isArray(data) ? data[0] : data;
-  return Number(d?.toTokenAmount || d?.routerResult?.toTokenAmount || d?.quoteCompareList?.[0]?.toTokenAmount || 0);
+// Derive a consistent fallback color from a mint string (HSL gradient).
+function colorFromMint(mint) {
+  const seed = mint || '?';
+  const hue = Array.from(seed).reduce((a, c) => a + c.charCodeAt(0), 0) % 360;
+  return `hsl(${hue}, 70%, 55%)`;
 }
-async function fetchJupiterPriceV3(mint) {
-  try {
-    const r = await fetch(`https://api.jup.ag/price/v3?ids=${mint}`);
-    const j = await r.json();
-    const price = j?.[mint]?.usdPrice;
-    if (price && Number.isFinite(Number(price)) && Number(price) > 0) return Number(price);
-  } catch {}
-  return 0;
+
+// =====================================================================
+// TOKEN METADATA (Jupiter token registry)
+// =====================================================================
+const _metaCache = new Map(); // mint -> { meta, ts }
+
+function getCoreMeta(mint) {
+  if (XSTOCKS[mint])     return XSTOCKS[mint];
+  if (CORE_TOKENS[mint]) return CORE_TOKENS[mint];
+  return null;
 }
-async function fetchTokenPriceUsd(mint, decimals = 6, force = false) {
-  if (!mint) return 0;
-  const meta = KNOWN_TOKENS[mint];
-  if (meta?.isStable) return 1;
 
-  const key = `${String(mint).toLowerCase()}:${decimals}`;
-  if (!force && _priceCache[key] && Date.now() - _priceCache[key].ts < 60000) return _priceCache[key].price;
+function buildFallbackMeta(mint) {
+  return {
+    symbol:    (mint || '').slice(0, 4) + '...',
+    name:      'SPL Token',
+    color:     colorFromMint(mint),
+    textColor: '#fff',
+    icon:      null,
+  };
+}
 
-  if (meta?.isT22 || meta?.isStock) {
-    const p = await fetchJupiterPriceV3(mint);
-    if (p > 0) { _priceCache[key] = { price: p, ts: Date.now() }; return p; }
-    return 0;
+// Fetch metadata for one or more mints from Jupiter's search endpoint.
+// Accepts a comma-separated list of mints (max 100). Returns map of mint -> meta.
+async function fetchJupiterMeta(mints) {
+  if (!mints || mints.length === 0) return {};
+  const out = {};
+  // Filter mints we already have cached or hardcoded.
+  const need = [];
+  for (const m of mints) {
+    if (getCoreMeta(m)) { out[m] = getCoreMeta(m); continue; }
+    const cached = _metaCache.get(m);
+    if (cached && Date.now() - cached.ts < META_CACHE_TTL_MS) {
+      out[m] = cached.meta;
+      continue;
+    }
+    need.push(m);
   }
+  if (need.length === 0) return out;
 
   try {
-    const amount = mint === SOL_MINT ? '1000000000' : tokenAmountForOne(decimals);
-    const r = await fetch(`/api/okx/dex/aggregator/quote?chainIndex=501&fromTokenAddress=${mint}&toTokenAddress=${USDC_SOLANA}&amount=${amount}`);
-    const j = await r.json();
-    if (j.code === '0' && j.data) {
-      const toTokenAmount = readOkxToTokenAmount(j.data);
-      const price = toTokenAmount / 1e6;
-      if (price > 0 && Number.isFinite(price)) {
-        _priceCache[key] = { price, ts: Date.now() };
-        return price;
+    // Jupiter search accepts comma-separated mints, up to 100.
+    const chunks = [];
+    for (let i = 0; i < need.length; i += 100) chunks.push(need.slice(i, i + 100));
+    for (const chunk of chunks) {
+      const r = await fetch(`/api/jupiter/tokens/search?query=${encodeURIComponent(chunk.join(','))}`);
+      if (!r.ok) continue;
+      const data = await r.json();
+      const list = Array.isArray(data) ? data : (data?.tokens || []);
+      list.forEach(t => {
+        const mint = t.id || t.address || t.mint;
+        if (!mint) return;
+        const meta = {
+          symbol:    t.symbol || (mint.slice(0, 4) + '...'),
+          name:      t.name   || 'SPL Token',
+          icon:      t.icon || t.logoURI || null,
+          decimals:  Number.isFinite(t.decimals) ? t.decimals : 6,
+          color:     colorFromMint(mint),
+          textColor: '#fff',
+        };
+        _metaCache.set(mint, { meta, ts: Date.now() });
+        out[mint] = meta;
+      });
+    }
+  } catch (e) {
+    console.warn('[portfolio] meta fetch failed', e?.message || e);
+  }
+  // Anything still missing — fall back
+  for (const m of need) if (!out[m]) out[m] = buildFallbackMeta(m);
+  return out;
+}
+
+// =====================================================================
+// PRICE FETCHING (Jupiter price v3 only)
+// =====================================================================
+const _priceCache = new Map(); // mint -> { price, ts }
+
+function clearPriceCache() { _priceCache.clear(); }
+
+async function fetchJupiterPrices(mints, force = false) {
+  if (!mints || mints.length === 0) return {};
+  const out = {};
+  const need = [];
+  for (const m of mints) {
+    const core = getCoreMeta(m);
+    if (core?.isStable) { out[m] = 1; continue; }
+    if (!force) {
+      const cached = _priceCache.get(m);
+      if (cached && Date.now() - cached.ts < PRICE_CACHE_TTL_MS) {
+        out[m] = cached.price;
+        continue;
       }
     }
-  } catch {}
-  const jupPrice = await fetchJupiterPriceV3(mint);
-  if (jupPrice > 0) { _priceCache[key] = { price: jupPrice, ts: Date.now() }; return jupPrice; }
-  return 0;
-}
+    need.push(m);
+  }
+  if (need.length === 0) return out;
 
-// =====================================================================
-// HYPERLIQUID PERPS
-// =====================================================================
-function getHlAddress(solPubkey) {
-  if (!solPubkey) return null;
-  try { return localStorage.getItem('nexus_hl_addr_' + solPubkey) || null; }
-  catch { return null; }
-}
-async function fetchHlState(hlAddress) {
-  if (!hlAddress) return null;
   try {
-    const res = await fetch('/api/hyperliquid', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ type: 'clearinghouseState', user: hlAddress }),
-    });
-    if (!res.ok) return null;
-    return await res.json();
-  } catch { return null; }
-}
-function parseHlState(state) {
-  if (!state) return null;
-  const balance      = parseFloat(state?.marginSummary?.accountValue || 0);
-  const withdrawable = parseFloat(state?.withdrawable || 0);
-  const marginUsed   = parseFloat(state?.crossMarginSummary?.totalMarginUsed || 0);
-  const positions = (state.assetPositions || [])
-    .filter(p => parseFloat(p.position?.szi || 0) !== 0)
-    .map(p => {
-      const pos = p.position;
-      const szi = parseFloat(pos.szi || 0);
-      return {
-        coin:       pos.coin,
-        isLong:     szi > 0,
-        size:       Math.abs(szi),
-        entryPx:    parseFloat(pos.entryPx       || 0),
-        leverage:   pos.leverage?.value || 1,
-        posValue:   parseFloat(pos.positionValue || 0),
-      };
-    });
-  return { balance, withdrawable, marginUsed, positions };
-}
-function coinAccent(symbol) {
-  const map = {
-    BTC:['#f7931a','#ffbf5c'], ETH:['#627eea','#8fa8ff'], SOL:['#14f195','#9945ff'],
-    HYPE:['#97fce4','#5ce9c8'], DOGE:['#c2a633','#e8c84a'], PEPE:['#3dd598','#5de882'],
-    XRP:['#7989ad','#bcc6e0'], BNB:['#f0b90b','#f5d060'], SUI:['#4da2ff','#80c4ff'],
-    LINK:['#2a5ada','#6a95ff'], AVAX:['#e84142','#ff7a7b'], ARB:['#12aaff','#60d0ff'],
-  };
-  return map[symbol] || ['#a87fff','#97fce4'];
-}
-
-// =====================================================================
-// POLYMARKET POSITIONS (CALL section)
-// Same as Predict.jsx: derive Safe from EOA → query Data API for positions.
-// We look up the safe address from localStorage where Predict.jsx caches it
-// after derivation. If user hasn't opened Call yet, no positions are shown.
-// =====================================================================
-function getPolymarketSafe(solPubkey) {
-  if (!solPubkey) return null;
-  try { return localStorage.getItem('verixia_safe_' + solPubkey) || null; }
-  catch { return null; }
-}
-async function fetchPolymarketPositions(safeAddress) {
-  if (!safeAddress) return [];
-  try {
-    const url = `${POLY_DATA_API}/positions?user=${safeAddress}&sizeThreshold=0.01`;
-    const r = await fetch(url, { headers: { Accept: 'application/json' } });
-    if (!r.ok) return [];
-    const data = await r.json();
-    if (!Array.isArray(data)) return [];
-    return data
-      .filter(p => Number(p?.size || 0) > 0)
-      .map(p => ({
-        conditionId:  p.conditionId || p.condition_id,
-        tokenId:      p.asset || p.tokenId,
-        outcome:      p.outcome || (p.side === 'YES' ? 'Yes' : 'No'),
-        title:        p.title || p.market || p.eventTitle || 'Polymarket position',
-        shares:       Number(p.size || 0),
-        avgPrice:     Number(p.avgPrice || p.avg_price || 0),
-        currentPrice: Number(p.curPrice || p.current_price || 0),
-        currentValue: Number(p.currentValue || p.current_value || (Number(p.size||0) * Number(p.curPrice||p.current_price||0))),
-      }))
-      .filter(p => p.shares > 0);
-  } catch { return []; }
+    // Jupiter price v3 supports up to 100 ids per call.
+    const chunks = [];
+    for (let i = 0; i < need.length; i += 100) chunks.push(need.slice(i, i + 100));
+    for (const chunk of chunks) {
+      const r = await fetch(`https://lite-api.jup.ag/price/v3?ids=${chunk.join(',')}`);
+      if (!r.ok) continue;
+      const j = await r.json();
+      Object.entries(j || {}).forEach(([mint, info]) => {
+        const p = Number(info?.usdPrice);
+        if (Number.isFinite(p) && p > 0) {
+          _priceCache.set(mint, { price: p, ts: Date.now() });
+          out[mint] = p;
+        }
+      });
+    }
+  } catch (e) {
+    console.warn('[portfolio] price fetch failed', e?.message || e);
+  }
+  // Anything we couldn't price gets 0
+  for (const m of need) if (out[m] == null) out[m] = 0;
+  return out;
 }
 
 // =====================================================================
 // SUB-COMPONENTS
 // =====================================================================
-function TokenBadge({ mint, fallbackSym, size = 36 }) {
-  const meta = tokenMeta(mint, fallbackSym);
-  const letter = (meta.symbol || '?').replace(/x$/, '').charAt(0).toUpperCase() || '?';
+function TokenBadge({ meta, mint, size = 36 }) {
+  const [errored, setErrored] = useState(false);
+  if (meta?.icon && !errored) {
+    return (
+      <img
+        src={meta.icon}
+        alt={meta.symbol || ''}
+        onError={() => setErrored(true)}
+        style={{
+          width: size, height: size, borderRadius: '50%',
+          flexShrink: 0, objectFit: 'cover',
+          background: 'rgba(255,255,255,.04)',
+        }}
+      />
+    );
+  }
+  const letter = ((meta?.symbol || '?').replace(/x$/, '').charAt(0) || '?').toUpperCase();
+  const color  = meta?.color || colorFromMint(mint);
   return (
     <div style={{
       width: size, height: size, borderRadius: '50%',
-      background: `linear-gradient(135deg, ${meta.color}, ${meta.color}dd)`,
+      background: `linear-gradient(135deg, ${color}, ${color}dd)`,
       display: 'flex', alignItems: 'center', justifyContent: 'center',
-      color: meta.textColor, fontWeight: 900, fontSize: Math.round(size * 0.38),
+      color: meta?.textColor || '#fff', fontWeight: 900, fontSize: Math.round(size * 0.38),
       flexShrink: 0, letterSpacing: '-.02em',
-      boxShadow: `0 4px 12px ${meta.color}40`,
+      boxShadow: `0 4px 12px ${color}40`,
       ...T.display,
     }}>{letter}</div>
   );
@@ -297,23 +286,16 @@ function SkeletonRow() {
   );
 }
 
-function TokenRow({ token, onClick }) {
-  const meta = tokenMeta(token.mint, token.symbol);
-  const val  = token.value || 0;
-  const isStock = meta.isStock;
+function TokenRow({ token }) {
+  const meta    = token.meta || buildFallbackMeta(token.mint);
+  const val     = token.value || 0;
+  const isStock = !!meta.isStock;
   return (
-    <button onClick={onClick} style={{
+    <div style={{
       padding: '14px 18px', display: 'grid', gridTemplateColumns: '36px 1fr auto', gap: 12, alignItems: 'center',
-      background: 'transparent',
-      border: 'none', borderBottom: `1px solid ${C.hairline}`,
-      width: '100%', textAlign: 'left',
-      cursor: onClick ? 'pointer' : 'default',
-      WebkitTapHighlightColor: 'rgba(151,252,228,.10)',
-      transition: 'background .15s',
-    }}
-    onMouseEnter={e => e.currentTarget.style.background = 'rgba(151,252,228,.03)'}
-    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-      <TokenBadge mint={token.mint} fallbackSym={token.symbol} size={36}/>
+      borderBottom: `1px solid ${C.hairline}`,
+    }}>
+      <TokenBadge meta={meta} mint={token.mint} size={36}/>
       <div style={{ minWidth: 0 }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
           <span style={{ color: C.inkStr, fontWeight: 800, fontSize: 14, letterSpacing: '-.01em', ...T.display }}>{meta.symbol}</span>
@@ -324,89 +306,13 @@ function TokenRow({ token, onClick }) {
             {token.price > 0 ? fmt(token.price) : '—'}
           </span>
         </div>
-        <div style={{ color: C.muted, fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200, ...T.body }}>
+        <div style={{ color: C.muted, fontSize: 11, marginTop: 1, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 220, ...T.body }}>
           {fmtTokenAmt(token.uiAmount)} {meta.symbol} · {meta.name}
         </div>
       </div>
       <div style={{ textAlign: 'right' }}>
         <div style={{ color: val > 0 ? C.inkStr : C.muted, fontWeight: 800, fontSize: 14, fontVariantNumeric: 'tabular-nums', ...T.mono }}>
           {val > 0 ? fmt(val) : '—'}
-        </div>
-      </div>
-    </button>
-  );
-}
-
-// PERPS row — read-only.
-function PerpRow({ pos }) {
-  const [a, b] = coinAccent(pos.coin);
-  return (
-    <div style={{
-      padding: '12px 16px', display: 'grid', gridTemplateColumns: '36px 1fr auto',
-      gap: 12, alignItems: 'center', borderBottom: `1px solid ${C.hairline}`,
-    }}>
-      <div style={{
-        width: 36, height: 36, borderRadius: '50%',
-        background: `linear-gradient(135deg,${a},${b})`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: 'rgba(0,0,0,.78)', fontWeight: 900, fontSize: 11,
-        flexShrink: 0, letterSpacing: '-.02em',
-        boxShadow: `0 4px 12px ${a}30`, ...T.display,
-      }}>{(pos.coin || '?').slice(0, 3)}</div>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          <span style={{ color: C.inkStr, fontWeight: 800, fontSize: 14, letterSpacing: '-.01em', ...T.display }}>{pos.coin}</span>
-          <span style={{
-            color: pos.isLong ? C.up : C.down,
-            fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4,
-            background: pos.isLong ? 'rgba(61,213,152,.12)' : 'rgba(255,138,158,.12)',
-            border: `1px solid ${pos.isLong ? 'rgba(61,213,152,.30)' : 'rgba(255,138,158,.30)'}`,
-            letterSpacing: '.04em', ...T.mono,
-          }}>{pos.isLong ? 'LONG' : 'SHORT'} {pos.leverage}x</span>
-        </div>
-        <div style={{ color: C.muted, fontSize: 11, marginTop: 2, ...T.body }}>
-          {pos.size.toFixed(4)} {pos.coin} · entry {fmt(pos.entryPx, 2)}
-        </div>
-      </div>
-      <div style={{ textAlign: 'right' }}>
-        <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 14, fontVariantNumeric: 'tabular-nums', ...T.mono }}>
-          {fmt(pos.posValue, 2)}
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// CALL row — Polymarket prediction-market position. Shares + outcome (Yes/No)
-// + current market price. No PnL — user can act on it via the Call tab.
-function CallRow({ pos }) {
-  const isYes = (pos.outcome || '').toLowerCase() === 'yes';
-  return (
-    <div style={{
-      padding: '12px 16px', display: 'grid', gridTemplateColumns: '36px 1fr auto',
-      gap: 12, alignItems: 'center', borderBottom: `1px solid ${C.hairline}`,
-    }}>
-      <div style={{
-        width: 36, height: 36, borderRadius: '50%',
-        background: `linear-gradient(135deg, ${isYes ? '#3dd598' : '#ff8a9e'}, ${isYes ? '#5de882' : '#ff6b88'})`,
-        display: 'flex', alignItems: 'center', justifyContent: 'center',
-        color: '#04070f', fontWeight: 900, fontSize: 11,
-        flexShrink: 0, letterSpacing: '-.02em',
-        boxShadow: `0 4px 12px ${isYes ? '#3dd59830' : '#ff8a9e30'}`, ...T.display,
-      }}>{isYes ? 'YES' : 'NO'}</div>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 7 }}>
-          <span style={{ color: C.inkStr, fontWeight: 700, fontSize: 13, letterSpacing: '-.01em', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 200, ...T.display }}>
-            {pos.title}
-          </span>
-        </div>
-        <div style={{ color: C.muted, fontSize: 11, marginTop: 2, ...T.body }}>
-          {fmtTokenAmt(pos.shares)} shares · {pos.currentPrice > 0 ? (pos.currentPrice * 100).toFixed(0) + '¢' : '—'}
-        </div>
-      </div>
-      <div style={{ textAlign: 'right' }}>
-        <div style={{ color: C.inkStr, fontWeight: 800, fontSize: 14, fontVariantNumeric: 'tabular-nums', ...T.mono }}>
-          {fmt(pos.currentValue)}
         </div>
       </div>
     </div>
@@ -419,53 +325,43 @@ function CallRow({ pos }) {
 export default function Portfolio({ onConnectWallet }) {
   const { publicKey: extPk, connected: solCon } = useWallet();
   const { connection } = useConnection();
-  const { privyEmbeddedSol } = useNexusWallet();
 
-  const pubkey = useMemo(() => {
-    if (extPk) return extPk;
-    if (privyEmbeddedSol?.address) {
-      try { return new PublicKey(privyEmbeddedSol.address); }
-      catch { return null; }
-    }
-    return null;
-  }, [extPk, privyEmbeddedSol?.address]);
-
-  const hasSol = !!(solCon || (privyEmbeddedSol && pubkey));
+  const pubkey = useMemo(() => extPk || null, [extPk]);
+  const hasSol = !!solCon;
 
   const [solBalance, setSolBalance]     = useState(0);
   const [solPriceUsd, setSolPriceUsd]   = useState(0);
-  const [solBalances, setSolBalances]   = useState([]);
+  const [tokens, setTokens]             = useState([]);
   const [loading, setLoading]           = useState(true);
   const [refreshing, setRefreshing]     = useState(false);
   const [error, setError]               = useState('');
   const [copied, setCopied]             = useState(false);
 
-  const [hlAccountValue, setHlAccountValue] = useState(0);
-  const [hlPositions, setHlPositions]       = useState([]);
-
-  // Polymarket "Call" positions — read from Data API by Safe address.
-  const [callPositions, setCallPositions] = useState([]);
+  const inFlightRef = useRef(false);
 
   const fetchPortfolio = useCallback(async (force = false) => {
     if (!pubkey || !connection) { setLoading(false); return; }
+    if (inFlightRef.current) return;
+    inFlightRef.current = true;
     if (force) clearPriceCache();
-    setLoading(true); setRefreshing(true); setError('');
+    setRefreshing(true);
+    setError('');
 
     try {
+      // 1) Native SOL balance
       const lamports = await connection.getBalance(pubkey);
-      setSolBalance(lamports / 1e9);
+      const sol = lamports / 1e9;
+      setSolBalance(sol);
 
-      const solPrice = await fetchTokenPriceUsd(SOL_MINT, 9, force);
-      setSolPriceUsd(solPrice > 0 ? solPrice : 0);
-
+      // 2) All SPL token accounts (legacy + Token-2022)
       const results = await Promise.allSettled([
         connection.getParsedTokenAccountsByOwner(pubkey, { programId: SPL_LEGACY_PROGRAM }),
         connection.getParsedTokenAccountsByOwner(pubkey, { programId: SPL_TOKEN2022_PROGRAM }),
       ]);
-
       let allAccounts = [];
       results.forEach(r => { if (r.status === 'fulfilled' && r.value?.value) allAccounts = allAccounts.concat(r.value.value); });
 
+      // Sum by mint (account for multiple ATAs for the same mint)
       const byMint = {};
       allAccounts.forEach(acc => {
         try {
@@ -479,90 +375,71 @@ export default function Portfolio({ onConnectWallet }) {
         } catch {}
       });
 
-      const holdings = Object.values(byMint).filter(h => h.mint !== SOL_MINT && KNOWN_TOKENS[h.mint]);
-      const priced = [];
-      for (const h of holdings) {
-        const price = await fetchTokenPriceUsd(h.mint, h.decimals, force);
-        const meta = tokenMeta(h.mint);
-        const value = h.uiAmount * (price > 0 ? price : 0);
-        priced.push({
-          ...h,
-          price: price > 0 && Number.isFinite(price) ? price : 0,
-          value,
-          symbol: meta.symbol,
-          name: meta.name,
+      // 3) Fetch metadata + prices in parallel for everything (incl. SOL)
+      const allMints = [SOL_MINT, ...Object.keys(byMint).filter(m => m !== SOL_MINT)];
+      const [metaMap, priceMap] = await Promise.all([
+        fetchJupiterMeta(allMints),
+        fetchJupiterPrices(allMints, force),
+      ]);
+
+      const solPrice = priceMap[SOL_MINT] || 0;
+      setSolPriceUsd(solPrice);
+
+      // 4) Build holdings (excluding SOL — SOL rendered separately at top)
+      const enriched = Object.values(byMint)
+        .filter(h => h.mint !== SOL_MINT)
+        .map(h => {
+          const meta  = metaMap[h.mint] || buildFallbackMeta(h.mint);
+          const price = priceMap[h.mint] || 0;
+          const value = h.uiAmount * price;
+          return { ...h, meta, price, value };
         });
-      }
-      // Filter dust before sorting. Stablecoins always show.
-      const filtered = priced.filter(h => {
-        const meta = tokenMeta(h.mint);
-        return meta.isStable || h.value >= DUST_THRESHOLD_USD;
+
+      // Filter dust; always show stables and xStocks even at low value
+      const filtered = enriched.filter(h => {
+        if (h.meta.isStable || h.meta.isStock) return true;
+        return h.value >= DUST_THRESHOLD_USD;
       });
 
+      // Sort: stables → stocks → by value desc
       filtered.sort((a, b) => {
-        const ma = tokenMeta(a.mint), mb = tokenMeta(b.mint);
         const rank = m => m.isStable ? 0 : m.isStock ? 1 : 2;
-        const ra = rank(ma), rb = rank(mb);
+        const ra = rank(a.meta), rb = rank(b.meta);
         if (ra !== rb) return ra - rb;
         return b.value - a.value;
       });
-      setSolBalances(filtered);
 
-      // ----- Hyperliquid Perps (Stack) -----
-      const hlAddr = getHlAddress(pubkey.toString());
-      if (hlAddr) {
-        const state = await fetchHlState(hlAddr);
-        const parsed = parseHlState(state);
-        if (parsed) {
-          setHlAccountValue(parsed.balance);
-          setHlPositions(parsed.positions);
-        } else {
-          setHlAccountValue(0);
-          setHlPositions([]);
-        }
-      } else {
-        setHlAccountValue(0);
-        setHlPositions([]);
-      }
-
-      // ----- Polymarket positions (Call) -----
-      const polySafe = getPolymarketSafe(pubkey.toString());
-      if (polySafe) {
-        const positions = await fetchPolymarketPositions(polySafe);
-        setCallPositions(positions);
-      } else {
-        setCallPositions([]);
-      }
+      setTokens(filtered);
     } catch (e) {
+      console.warn('[portfolio]', e);
       setError('Failed to load portfolio');
     } finally {
-      setLoading(false); setRefreshing(false);
+      inFlightRef.current = false;
+      setLoading(false);
+      setRefreshing(false);
     }
   }, [pubkey, connection]);
 
   useEffect(() => {
     if (!pubkey || !connection) { setLoading(false); return undefined; }
     fetchPortfolio(false);
-    const i = setInterval(() => fetchPortfolio(false), 30000);
+    const i = setInterval(() => fetchPortfolio(false), POLL_INTERVAL_MS);
     return () => clearInterval(i);
   }, [pubkey, connection, fetchPortfolio]);
 
-  const handleRefresh    = useCallback(() => fetchPortfolio(true), [fetchPortfolio]);
-  const displayAddr      = pubkey ? pubkey.toString() : null;
-  const handleCopyAddr   = useCallback(async () => {
+  const handleRefresh = useCallback(() => fetchPortfolio(true), [fetchPortfolio]);
+  const displayAddr   = pubkey ? pubkey.toString() : null;
+  const handleCopyAddr = useCallback(async () => {
     if (!displayAddr) return;
     const ok = await copyText(displayAddr);
     if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1600); }
   }, [displayAddr]);
 
-  const solValue    = solBalance * solPriceUsd;
-  const tokensTotal = solBalances.reduce((s, h) => s + (h.value || 0), 0);
-  const callTotal   = callPositions.reduce((s, p) => s + (p.currentValue || 0), 0);
-  // Total: wallet SOL + SPL tokens + Polymarket positions + Hyperliquid margin.
-  const totalValue  = solValue + tokensTotal + callTotal + hlAccountValue;
-  const tokenCount  = solBalances.length + (solBalance > 0 ? 1 : 0);
-  const callCount   = callPositions.length;
-  const perpsCount  = hlPositions.length;
+  const solValue     = solBalance * solPriceUsd;
+  const tokensTotal  = tokens.reduce((s, h) => s + (h.value || 0), 0);
+  const totalValue   = solValue + tokensTotal;
+  const tokenCount   = tokens.length + (solBalance > 0 ? 1 : 0);
+  const stocksCount  = tokens.filter(t => t.meta.isStock).length;
 
   // ===================================================================
   // DISCONNECTED STATE
@@ -584,7 +461,7 @@ export default function Portfolio({ onConnectWallet }) {
               <span style={{ fontStyle: 'italic', background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>wallet</span>
             </h1>
             <p style={{ color: C.muted, fontSize: 13, margin: '0 0 28px', lineHeight: 1.5, ...T.body }}>
-              See your SOL, tokens, stocks, Call positions, and Stack positions in one place.
+              See your SOL, tokens, and stocks in one place.
             </p>
             <button onClick={() => onConnectWallet?.()} style={{
               background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, border: 'none', borderRadius: 14,
@@ -600,6 +477,8 @@ export default function Portfolio({ onConnectWallet }) {
   // ===================================================================
   // CONNECTED STATE
   // ===================================================================
+  const solMeta = CORE_TOKENS[SOL_MINT];
+
   return (
     <>
       <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nx-spin { to{transform:rotate(360deg)} }`}</style>
@@ -661,25 +540,26 @@ export default function Portfolio({ onConnectWallet }) {
         {/* QUICK STATS STRIP */}
         <div style={{
           display: 'grid',
-          gridTemplateColumns: (callCount > 0 && perpsCount > 0) ? 'repeat(2,1fr)' : 'repeat(3,1fr)',
+          gridTemplateColumns: stocksCount > 0 ? 'repeat(3,1fr)' : 'repeat(2,1fr)',
           gap: 8, marginTop: 12, marginBottom: 18,
         }}>
-          {[
-            { label: 'SOL',      value: solBalance.toFixed(3), sub: solValue > 0 ? fmt(solValue) : '—',                                                       color: C.sol },
-            { label: 'HOLDINGS', value: String(tokenCount),    sub: tokenCount === 1 ? 'asset' : 'assets',                                                    color: C.hl },
-            ...(callCount > 0 ? [{
-              label: 'CALL',     value: String(callCount),     sub: callTotal > 0 ? fmt(callTotal) : '—',                                                     color: C.amber,
-            }] : []),
-            ...(perpsCount > 0 || hlAccountValue > 0 ? [{
-              label: 'STACK',    value: String(perpsCount),    sub: hlAccountValue > 0 ? fmt(hlAccountValue) : (perpsCount === 1 ? 'position' : 'positions'), color: C.violet,
-            }] : []),
-          ].map(s => (
-            <div key={s.label} style={{ padding: '10px 12px', borderRadius: 14, background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, backdropFilter: 'blur(12px)' }}>
-              <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>{s.label}</div>
-              <div style={{ fontSize: 17, fontWeight: 800, color: s.color, lineHeight: 1.1, marginTop: 4, fontVariantNumeric: 'tabular-nums', ...T.display }}>{s.value}</div>
-              <div style={{ fontSize: 9, color: C.muted, marginTop: 2, fontWeight: 600, ...T.mono }}>{s.sub}</div>
+          <div style={{ padding: '10px 12px', borderRadius: 14, background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, backdropFilter: 'blur(12px)' }}>
+            <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>SOL</div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: C.sol, lineHeight: 1.1, marginTop: 4, fontVariantNumeric: 'tabular-nums', ...T.display }}>{solBalance.toFixed(3)}</div>
+            <div style={{ fontSize: 9, color: C.muted, marginTop: 2, fontWeight: 600, ...T.mono }}>{solValue > 0 ? fmt(solValue) : '—'}</div>
+          </div>
+          <div style={{ padding: '10px 12px', borderRadius: 14, background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, backdropFilter: 'blur(12px)' }}>
+            <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>HOLDINGS</div>
+            <div style={{ fontSize: 17, fontWeight: 800, color: C.hl, lineHeight: 1.1, marginTop: 4, fontVariantNumeric: 'tabular-nums', ...T.display }}>{tokenCount}</div>
+            <div style={{ fontSize: 9, color: C.muted, marginTop: 2, fontWeight: 600, ...T.mono }}>{tokenCount === 1 ? 'asset' : 'assets'}</div>
+          </div>
+          {stocksCount > 0 && (
+            <div style={{ padding: '10px 12px', borderRadius: 14, background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, backdropFilter: 'blur(12px)' }}>
+              <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>STOCKS</div>
+              <div style={{ fontSize: 17, fontWeight: 800, color: C.amber, lineHeight: 1.1, marginTop: 4, fontVariantNumeric: 'tabular-nums', ...T.display }}>{stocksCount}</div>
+              <div style={{ fontSize: 9, color: C.muted, marginTop: 2, fontWeight: 600, ...T.mono }}>{stocksCount === 1 ? 'xStock' : 'xStocks'}</div>
             </div>
-          ))}
+          )}
         </div>
 
         {/* ERROR */}
@@ -689,99 +569,43 @@ export default function Portfolio({ onConnectWallet }) {
           </div>
         )}
 
-        {/* CALL SECTION — Polymarket positions */}
-        {callPositions.length > 0 && (
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px', marginBottom: 8 }}>
-              <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.12em', ...T.mono }}>CALL</div>
-              <div style={{ fontSize: 9, color: C.muted2, fontWeight: 600, ...T.mono }}>POLYMARKET · AUTO 30s</div>
-            </div>
-            <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', marginBottom: 18, backdropFilter: 'blur(12px)' }}>
-              <div style={{
-                padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                borderBottom: `1px solid ${C.hairline}`,
-                background: 'rgba(245,181,61,.04)',
-              }}>
-                <div>
-                  <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>POSITION VALUE</div>
-                  <div style={{ fontSize: 17, fontWeight: 800, color: C.inkStr, fontVariantNumeric: 'tabular-nums', marginTop: 2, ...T.display }}>{fmt(callTotal)}</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>OPEN</div>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: C.amber, fontVariantNumeric: 'tabular-nums', marginTop: 2, ...T.mono }}>
-                    {callPositions.length} {callPositions.length === 1 ? 'position' : 'positions'}
-                  </div>
-                </div>
-              </div>
-              {callPositions.map((p, idx) => <CallRow key={p.tokenId || idx} pos={p}/>)}
-            </div>
-          </>
-        )}
-
-        {/* STACK SECTION — Hyperliquid perps */}
-        {(hlAccountValue > 0 || hlPositions.length > 0) && (
-          <>
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px', marginBottom: 8 }}>
-              <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.12em', ...T.mono }}>STACK</div>
-              <div style={{ fontSize: 9, color: C.muted2, fontWeight: 600, ...T.mono }}>HYPERLIQUID · AUTO 30s</div>
-            </div>
-            <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', marginBottom: 18, backdropFilter: 'blur(12px)' }}>
-              <div style={{
-                padding: '12px 16px', display: 'flex', alignItems: 'center', justifyContent: 'space-between',
-                borderBottom: hlPositions.length > 0 ? `1px solid ${C.hairline}` : 'none',
-                background: 'rgba(168,127,255,.03)',
-              }}>
-                <div>
-                  <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>ACCOUNT VALUE</div>
-                  <div style={{ fontSize: 17, fontWeight: 800, color: C.inkStr, fontVariantNumeric: 'tabular-nums', marginTop: 2, ...T.display }}>{fmt(hlAccountValue)}</div>
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                  <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>OPEN</div>
-                  <div style={{ fontSize: 14, fontWeight: 800, color: C.violet, fontVariantNumeric: 'tabular-nums', marginTop: 2, ...T.mono }}>
-                    {hlPositions.length} {hlPositions.length === 1 ? 'position' : 'positions'}
-                  </div>
-                </div>
-              </div>
-              {hlPositions.map(p => <PerpRow key={p.coin} pos={p}/>)}
-            </div>
-          </>
-        )}
-
         {/* HOLDINGS HEADER */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0 4px', marginBottom: 8 }}>
           <div style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.12em', ...T.mono }}>HOLDINGS</div>
-          <div style={{ fontSize: 9, color: C.muted2, fontWeight: 600, ...T.mono }}>OKX + JUPITER · AUTO 30s</div>
+          <div style={{ fontSize: 9, color: C.muted2, fontWeight: 600, ...T.mono }}>JUPITER · AUTO 30s</div>
         </div>
 
         {/* HOLDINGS LIST — SOL + SPL tokens + xStocks (all in one) */}
         <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', backdropFilter: 'blur(12px)' }}>
-          <TokenRow
-            token={{ mint: SOL_MINT, symbol: 'SOL', name: 'Solana', decimals: 9, price: solPriceUsd, value: solValue, uiAmount: solBalance }}
-          />
+          {/* Native SOL row — always shown */}
+          <TokenRow token={{
+            mint: SOL_MINT,
+            meta: solMeta,
+            price: solPriceUsd,
+            value: solValue,
+            uiAmount: solBalance,
+          }}/>
 
-          {loading && !solBalances.length ? (
+          {loading && !tokens.length ? (
             <>
               <SkeletonRow/>
               <SkeletonRow/>
               <SkeletonRow/>
             </>
-          ) : !solBalances.length ? (
+          ) : !tokens.length ? (
             <div style={{ padding: '28px 18px', textAlign: 'center' }}>
               <div style={{ color: C.muted, fontSize: 12.5, marginBottom: 6, fontWeight: 600, ...T.body }}>No tokens yet.</div>
-              <div style={{ color: C.muted2, fontSize: 11, ...T.body }}>Buy something on Swap or Markets to get started.</div>
+              <div style={{ color: C.muted2, fontSize: 11, ...T.body }}>Buy something on Wonderland or Markets to get started.</div>
             </div>
-          ) : solBalances.map(token => (
-            <TokenRow
-              key={token.mint}
-              token={token}
-            />
+          ) : tokens.map(token => (
+            <TokenRow key={token.mint} token={token}/>
           ))}
         </div>
 
         {/* FOOTER */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: '14px 16px', marginTop: 18, borderRadius: 14, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}` }}>
           <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>POWERED BY</span>
-          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text', ...T.mono }}>OKX + JUPITER</span>
+          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text', ...T.mono }}>JUPITER · SOLANA</span>
           <span style={{ color: C.muted2, fontSize: 9 }}>|</span>
           <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>NON-CUSTODIAL</span>
         </div>
