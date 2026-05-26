@@ -39,15 +39,18 @@ const FEE_WALLET_PUBKEY = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
 const FEE_BPS           = 500;       // 5%
 const SLIPPAGE_BPS_MAX  = 1500;      // memes are volatile — Jupiter dynamicSlippage will tighten
 
-// Mints we never want to show in the meme feed (SOL, wrapped SOL, LSTs, stables).
-// Jupiter's toporganicscore is supposed to filter these but doesn't always, and
-// the /recent endpoint surfaces fresh stable launches too. Belt-and-suspenders.
+// Mints we never want to show in the meme feed (SOL, wrapped SOL, LSTs, stables,
+// wrapped BTC variants). Jupiter's toporganicscore is supposed to filter these
+// but doesn't always, and /recent surfaces fresh stable launches too.
 const MEME_BLOCKLIST = new Set([
   'So11111111111111111111111111111111111111112',  // wSOL
   '11111111111111111111111111111111',              // native SOL placeholder
+  // Stables
   'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
   'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
   'USDH1SM1ojwWUga67PGrgFWUHibbjqMvuMaDkRJTgkX',  // USDH
+  '2b1kV6DkPAnxd5ixfnxCpjxmKwqjjaYmCZfHsFu24GXo', // PYUSD
+  // LSTs
   'jupSoLaHXQiZZTSfEWMTRRgpnyFm8f6sZdosWBjx93v',  // jupSOL
   'J1toso1uCk3RLmjorhTtrVwY9HJ7X8V9yYac6Y7kGCPn', // JitoSOL
   'mSoLzYCxHdYgdzU16g5QSh3i5K3z3KZK7ytfqcJm7So',  // mSOL
@@ -55,7 +58,9 @@ const MEME_BLOCKLIST = new Set([
   'jupUSDvMWdGmKHzbDeq2Zy7zCfx5KqsAj9JqPjmqYns',  // jupUSD
 ]);
 
-const STABLE_SYMBOL_REGEX = /^(W?SOL|USDC|USDT|USDH|USDS|USDE|PYUSD|UXD|sUSD|FDUSD|DAI|FRAX|BUSD|JUPSOL|JITOSOL|MSOL|BSOL|JUPUSD)$/i;
+// Symbol regex catches stables + wrapped tokens + LSTs that may not be in the
+// hardcoded mint list (new wrappers, regional stables, etc.).
+const STABLE_SYMBOL_REGEX = /^(W?SOL|USDC|USDT|USDH|USDS|USDE|PYUSD|UXD|sUSD|FDUSD|DAI|FRAX|BUSD|TUSD|GUSD|USDG|USX|CASH|USDP|USDD|EUROC|EURC|JUPSOL|JITOSOL|MSOL|BSOL|JUPUSD|HSOL|CGNTSOL|INF|CB?BTC|W?BTC|TBTC|XBTC|RENBTC|WETH|STETH|WSTETH|WBNB|WMATIC|WAVAX)$/i;
 
 function isMemeWorthy(t) {
   if (!t || !t.mint) return false;
@@ -547,6 +552,18 @@ function useBodyLock(open) {
   }, [open]);
 }
 
+// useTickingNow re-renders every `intervalMs` so age badges, "X ago" labels,
+// and other time-relative UI stay accurate without re-fetching data. Cheap
+// because re-renders are isolated to components that consume the value.
+function useTickingNow(intervalMs = 30_000) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
 // =====================================================================
 // WATCHLIST (localStorage)
 // =====================================================================
@@ -629,20 +646,21 @@ function liquidityTier(liq) {
 }
 
 function MemeRow({ token, onTradeBuy, onTradeSell, holding, presetSol, showAge }) {
+  const now = useTickingNow(30_000);
   const owns = holding && holding.ui > 0;
   const liqTier = liquidityTier(token.liquidity);
-  const ageMs = token.firstPool ? Date.now() - new Date(token.firstPool).getTime() : null;
+  const ageMs = token.firstPool ? now - new Date(token.firstPool).getTime() : null;
   const bonding = token.bondingProgress;
   return (
     <div style={{
-      padding: '12px 14px',
+      padding: '9px 12px',
       borderBottom: `1px solid ${C.hairline}`,
       display: 'grid',
-      gridTemplateColumns: '38px 1fr auto',
-      gap: 12, alignItems: 'center',
+      gridTemplateColumns: '32px 1fr auto',
+      gap: 10, alignItems: 'center',
       background: owns ? 'rgba(151,252,228,.025)' : 'transparent',
     }}>
-      <TokenIcon token={token} size={38}/>
+      <TokenIcon token={token} size={32}/>
 
       <button
         onClick={() => onTradeBuy(token, null)}
@@ -652,61 +670,59 @@ function MemeRow({ token, onTradeBuy, onTradeSell, holding, presetSol, showAge }
           color: C.ink, ...T.body,
         }}
       >
-        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3, flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, marginBottom: 2 }}>
           <span style={{
-            color: C.inkStr, fontWeight: 800, fontSize: 14, letterSpacing: '-.01em',
-            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 100,
+            color: C.inkStr, fontWeight: 800, fontSize: 13, letterSpacing: '-.01em',
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 90,
             ...T.display,
           }}>{token.symbol}</span>
           {token.isVerified && (
-            <span style={{ color: C.hl, fontSize: 10, lineHeight: 1 }} title="Verified">✓</span>
+            <span style={{ color: C.hl, fontSize: 9, lineHeight: 1 }} title="Verified">✓</span>
           )}
           {/* Liquidity tier dot — instant rug-risk indicator */}
           <span title={`${liqTier.label} liquidity: ${fmtUsd(token.liquidity || 0, 0)}`} style={{
-            width: 6, height: 6, borderRadius: '50%',
+            width: 5, height: 5, borderRadius: '50%',
             background: liqTier.color, flexShrink: 0,
           }}/>
-          {/* Age — only show on NEW tab or when very fresh */}
           {ageMs != null && (showAge || ageMs < 86_400_000) && (
             <span style={{
-              fontSize: 8.5, fontWeight: 700, padding: '2px 5px', borderRadius: 4,
+              fontSize: 8, fontWeight: 700, padding: '1px 4px', borderRadius: 3,
               background: 'rgba(255,255,255,.04)', color: C.muted,
-              letterSpacing: '.06em', ...T.mono,
+              letterSpacing: '.05em', ...T.mono,
             }}>{fmtAge(ageMs)}</span>
           )}
-          {/* Bonding curve % for pump.fun pre-graduation tokens */}
           {bonding != null && (
             <span style={{
-              fontSize: 8.5, fontWeight: 700, padding: '2px 5px', borderRadius: 4,
+              fontSize: 8, fontWeight: 700, padding: '1px 4px', borderRadius: 3,
               background: bonding > 80 ? 'rgba(255,205,60,.14)' : 'rgba(168,127,255,.14)',
               color: bonding > 80 ? C.gold : C.violet,
-              letterSpacing: '.06em', ...T.mono,
-            }}>{bonding > 80 ? '🚀 ' : ''}{Math.round(bonding)}%</span>
+              letterSpacing: '.05em', ...T.mono,
+            }}>{bonding > 80 ? '🚀' : ''}{Math.round(bonding)}%</span>
           )}
           {owns && (
             <span style={{
-              fontSize: 8, fontWeight: 800, letterSpacing: '.08em',
-              padding: '2px 5px', borderRadius: 4,
+              fontSize: 7.5, fontWeight: 800, letterSpacing: '.06em',
+              padding: '1px 4px', borderRadius: 3,
               background: C.hlDim, color: C.hl, ...T.mono,
-            }}>HOLDING</span>
+            }}>HOLD</span>
           )}
         </div>
         <div style={{
-          display: 'flex', alignItems: 'center', gap: 8,
-          fontSize: 11, color: C.muted, ...T.mono, flexWrap: 'wrap',
+          display: 'flex', alignItems: 'center', gap: 6,
+          fontSize: 10, color: C.muted, ...T.mono,
         }}>
           <span>{token.usdPrice > 0 ? fmtUsd(token.usdPrice, 6) : '—'}</span>
           <ChangeBadge pct={token.change24h}/>
           {token.mcap > 0 && (
-            <span style={{ color: C.muted2 }}>· {fmtUsd(token.mcap, 0)} MC</span>
+            <span style={{ color: C.muted2 }}>· {fmtUsd(token.mcap, 0)}</span>
           )}
           {token.holders > 0 && (
-            <span style={{ color: C.muted2 }}>· {fmtAmt(token.holders, 0)} hldrs</span>
+            <span style={{ color: C.muted2 }}>· {fmtAmt(token.holders, 0)}h</span>
           )}
         </div>
       </button>
 
-      <div style={{ display: 'flex', gap: 6 }}>
+      <div style={{ display: 'flex', gap: 5 }}>
         {owns ? (
           <button
             onClick={(e) => { e.stopPropagation(); onTradeSell(token); }}
@@ -716,7 +732,7 @@ function MemeRow({ token, onTradeBuy, onTradeSell, holding, presetSol, showAge }
           <button
             onClick={(e) => { e.stopPropagation(); onTradeBuy(token, presetSol); }}
             style={pillBtn('#04070f', `linear-gradient(135deg,${C.hl} 0%,${C.hl2} 100%)`)}
-          >{presetSol} SOL</button>
+          >{presetSol}</button>
         )}
         <button
           onClick={(e) => { e.stopPropagation(); onTradeBuy(token, null); }}
@@ -729,17 +745,17 @@ function MemeRow({ token, onTradeBuy, onTradeSell, holding, presetSol, showAge }
 
 function pillBtn(color, bg) {
   return {
-    padding: '7px 11px',
-    borderRadius: 9,
+    padding: '6px 10px',
+    borderRadius: 8,
     border: `1px solid ${C.border}`,
     background: bg,
     color,
-    fontSize: 11,
+    fontSize: 10.5,
     fontWeight: 800,
     cursor: 'pointer',
     letterSpacing: '-.01em',
     whiteSpace: 'nowrap',
-    minWidth: 44,
+    minWidth: 38,
     ...T.mono,
   };
 }
@@ -790,8 +806,8 @@ function TrendingTicker({ tokens, onTap }) {
       borderRadius: 12,
       background: 'rgba(0,0,0,.30)',
       border: `1px solid ${C.border}`,
-      padding: '8px 0',
-      marginBottom: 12,
+      padding: '6px 0',
+      marginBottom: 10,
     }}>
       <div style={{
         position: 'absolute', left: 0, top: 0, bottom: 0, width: 30, zIndex: 2,
@@ -803,7 +819,7 @@ function TrendingTicker({ tokens, onTap }) {
       }}/>
       <div style={{
         display: 'inline-flex', gap: 18,
-        animation: 'nx-marquee 38s linear infinite',
+        animation: 'nx-marquee 28s linear infinite',
         whiteSpace: 'nowrap', willChange: 'transform',
       }}>
         {items.map((t, i) => (
@@ -828,6 +844,80 @@ function TrendingTicker({ tokens, onTap }) {
 
 // =====================================================================
 // GRADUATING-SOON HERO CARD
+// =====================================================================
+// SLIM FEATURED STRIP — replaces the giant hero card. One row, dense.
+// =====================================================================
+
+function FeaturedStrip({ token, onBuy }) {
+  const now = useTickingNow(30_000);
+  if (!token) return null;
+  const ageMs = token.firstPool ? now - new Date(token.firstPool).getTime() : null;
+  const bonding = token.bondingProgress;
+  const change = Number.isFinite(token.change1h) && token.change1h !== 0
+    ? token.change1h
+    : token.change24h;
+  return (
+    <div style={{
+      marginBottom: 10,
+      padding: '10px 12px',
+      borderRadius: 14,
+      background: `
+        radial-gradient(ellipse 60% 80% at 0% 50%,${C.violetDim},transparent 70%),
+        linear-gradient(145deg,${C.surface2},${C.bg2})`,
+      border: `1px solid ${C.borderHot}`,
+      boxShadow: `0 8px 24px rgba(255,93,155,.08)`,
+      display: 'flex', alignItems: 'center', gap: 10,
+    }}>
+      <TokenIcon token={token} size={36}/>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2 }}>
+          <span style={{
+            fontSize: 8, fontWeight: 800, color: C.hotPink,
+            letterSpacing: '.10em', ...T.mono,
+          }}>{bonding != null && bonding > 80 ? '🚀 GRADUATING' : '🔥 HOT'}</span>
+          {ageMs != null && (
+            <span style={{
+              fontSize: 8, fontWeight: 700, color: C.muted2,
+              letterSpacing: '.06em', ...T.mono,
+            }}>· {fmtAge(ageMs)} old</span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8 }}>
+          <span style={{
+            fontSize: 15, fontWeight: 800, color: C.inkStr,
+            letterSpacing: '-.02em', ...T.display,
+            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            maxWidth: 100,
+          }}>{token.symbol}</span>
+          <ChangeBadge pct={change}/>
+          {token.mcap > 0 && (
+            <span style={{
+              fontSize: 10, color: C.muted, ...T.mono,
+            }}>· {fmtUsd(token.mcap, 0)}</span>
+          )}
+        </div>
+      </div>
+      <div style={{ display: 'flex', gap: 5, flexShrink: 0 }}>
+        {[0.1, 0.5, 1].map(amt => (
+          <button
+            key={amt}
+            onClick={() => onBuy(token, amt)}
+            style={{
+              padding: '8px 10px', borderRadius: 9, border: 'none',
+              background: `linear-gradient(135deg,${C.hl} 0%,${C.hl2} 100%)`,
+              color: '#04070f', fontWeight: 800, fontSize: 11,
+              cursor: 'pointer', letterSpacing: '-.01em', ...T.mono,
+              boxShadow: '0 4px 12px rgba(151,252,228,.18)',
+            }}
+          >{amt}</button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
+// GRADUATING-SOON HERO CARD (kept for fallback / not currently used)
 // (Shows the highest-organic-score, just-discovered token; if bonding
 // curve progress is exposed by Jupiter we visualize it. Otherwise it acts
 // as a "Hottest right now" feature card.)
@@ -1213,8 +1303,9 @@ function MemeTradeModal({
     }
   };
 
-  // Quick-amount chips
-  const buyChips = (presets?.buy?.length ? presets.buy : DEFAULT_BUY_PRESETS_SOL)
+  // Quick-amount chips. We ignore presets.buy (which is USDC-sized for the
+  // stocks page) and use SOL-sized meme presets instead. Memes price in SOL.
+  const buyChips = DEFAULT_BUY_PRESETS_SOL
     .slice(0, 4)
     .map(v => ({ label: v + ' ' + baseSymbol, val: String(v) }));
 
@@ -1632,11 +1723,12 @@ export default function MemeWonderland({ onConnectWallet }) {
       }
       list = await searchJupTokens(watchlist.join(','));
     } else if (t?.isRecent) {
-      // NEW tab — minimal liquidity floor so we don't surface dead launches.
-      // $2k is intentionally low: degens want to see fresh stuff and decide.
-      list = await fetchRecentMemes({ limit: 50, minLiquidityUsd: 2000 });
+      // NEW tab — no liquidity floor at all so users see EVERYTHING fresh.
+      // The risk indicator dots on each row handle warning users about
+      // low-liquidity rugs without hiding the tokens entirely.
+      list = await fetchRecentMemes({ limit: 100, minLiquidityUsd: 0 });
     } else {
-      list = await fetchTrendingMemes({ interval: t.interval, limit: 50 });
+      list = await fetchTrendingMemes({ interval: t.interval, limit: 100 });
     }
     setTokens(list);
     setLoading(false);
@@ -1750,8 +1842,8 @@ export default function MemeWonderland({ onConnectWallet }) {
     setInitialSide('SELL');
   };
 
-  // Default preset for the "1-click buy" tile button (smallest preset)
-  const defaultPreset = (presets?.buy?.[0]) || DEFAULT_BUY_PRESETS_SOL[0];
+  // Default preset for the "1-click buy" tile button (smallest meme preset)
+  const defaultPreset = DEFAULT_BUY_PRESETS_SOL[0];
 
   return (
     <>
@@ -1773,86 +1865,80 @@ export default function MemeWonderland({ onConnectWallet }) {
           'radial-gradient(ellipse 60% 30% at 80% 20%,rgba(255,93,155,.06),transparent 50%)',
       }}>
 
-        {/* Page header */}
+        {/* Compact page header — tight, no wasted vertical space */}
         <div style={{
-          marginTop: 10, marginBottom: 14, padding: '20px 20px 18px',
-          borderRadius: 24,
+          marginTop: 8, marginBottom: 10, padding: '14px 16px 12px',
+          borderRadius: 18,
           background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))',
           border: '1px solid rgba(255,255,255,.07)',
           boxShadow: C.shadowLg, position: 'relative', overflow: 'hidden',
         }}>
           <div style={{
-            position: 'absolute', right: -40, top: -50, width: 200, height: 200,
+            position: 'absolute', right: -40, top: -50, width: 160, height: 160,
             borderRadius: '50%',
-            background: 'radial-gradient(circle,rgba(255,93,155,.16),transparent 65%)',
+            background: 'radial-gradient(circle,rgba(255,93,155,.14),transparent 65%)',
             pointerEvents: 'none',
           }}/>
           <div style={{
-            position: 'absolute', left: -60, bottom: -80, width: 200, height: 200,
+            position: 'absolute', left: -60, bottom: -80, width: 160, height: 160,
             borderRadius: '50%',
-            background: 'radial-gradient(circle,rgba(168,127,255,.14),transparent 65%)',
+            background: 'radial-gradient(circle,rgba(168,127,255,.12),transparent 65%)',
             pointerEvents: 'none',
           }}/>
 
           <div style={{ position: 'relative' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 12 }}>
+            {/* Title row + LIVE pill in one line */}
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 10 }}>
+              <h1 style={{
+                fontSize: 24, lineHeight: 1, fontWeight: 600,
+                color: C.inkStr, margin: 0,
+                letterSpacing: '-.035em', ...T.hero,
+              }}>
+                Meme{' '}
+                <span style={{
+                  fontStyle: 'italic', fontWeight: 500,
+                  background: `linear-gradient(135deg,${C.hotPink} 0%,${C.violet} 60%,${C.hl} 100%)`,
+                  WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+                  backgroundClip: 'text',
+                }}>wonderland</span>
+              </h1>
               <div style={{
-                display: 'inline-flex', alignItems: 'center', gap: 7,
-                padding: '4px 11px', borderRadius: 999,
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '3px 9px', borderRadius: 999,
                 background: 'rgba(255,93,155,.08)',
                 border: '1px solid rgba(255,93,155,.24)',
+                flexShrink: 0,
               }}>
                 <span style={{
-                  width: 6, height: 6, borderRadius: '50%',
+                  width: 5, height: 5, borderRadius: '50%',
                   background: C.hotPink, boxShadow: `0 0 8px ${C.hotPink}`,
                   animation: 'nx-pulse 1.6s ease-in-out infinite',
                 }}/>
                 <span style={{
-                  color: C.hotPink, fontSize: 9, fontWeight: 800,
-                  letterSpacing: '.12em', ...T.mono,
-                }}>LIVE MEME MARKET</span>
+                  color: C.hotPink, fontSize: 8.5, fontWeight: 800,
+                  letterSpacing: '.10em', ...T.mono,
+                }}>LIVE</span>
               </div>
             </div>
 
-            <h1 style={{
-              fontSize: 28, lineHeight: 1.05, fontWeight: 600,
-              color: C.inkStr, margin: '0 0 8px',
-              letterSpacing: '-.035em', ...T.hero,
-              wordBreak: 'break-word',
-            }}>
-              Meme{' '}
-              <span style={{
-                fontStyle: 'italic', fontWeight: 500,
-                background: `linear-gradient(135deg,${C.hotPink} 0%,${C.violet} 60%,${C.hl} 100%)`,
-                WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-                backgroundClip: 'text',
-              }}>wonderland</span>
-            </h1>
-            <p style={{
-              color: C.muted, fontSize: 13, margin: '0 0 14px',
-              fontWeight: 500, lineHeight: 1.45, ...T.body,
-            }}>
-              Solana memes, routed through Jupiter. One tap to buy. No bots, no presales, no BS.
-            </p>
-
-            {/* Trending ticker */}
+            {/* Trending ticker — always there, always moving */}
             <TrendingTicker tokens={hot1h} onTap={(t) => openBuy(t, defaultPreset)}/>
 
-            {/* Search */}
+            {/* Compact search */}
             <div style={{
               position: 'relative',
               background: 'rgba(0,0,0,.30)', border: `1px solid ${C.border}`,
-              borderRadius: 12, padding: '4px 4px 4px 12px',
-              display: 'flex', alignItems: 'center', gap: 8,
+              borderRadius: 10, padding: '2px 4px 2px 10px',
+              display: 'flex', alignItems: 'center', gap: 6,
             }}>
-              <span style={{ fontSize: 14, color: C.muted2 }}>🔍</span>
+              <span style={{ fontSize: 12, color: C.muted2 }}>🔍</span>
               <input
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="Search ticker, name, or paste contract address"
+                placeholder="Search or paste contract..."
                 style={{
                   flex: 1, background: 'transparent', border: 'none',
-                  color: C.ink, fontSize: 13, outline: 'none', padding: '8px 4px',
+                  color: C.ink, fontSize: 12.5, outline: 'none', padding: '7px 4px',
                   ...T.body, minWidth: 0,
                 }}
               />
@@ -1861,7 +1947,7 @@ export default function MemeWonderland({ onConnectWallet }) {
                   onClick={() => { setQuery(''); setSearchResults(null); }}
                   style={{
                     background: 'transparent', border: 'none', color: C.muted2,
-                    cursor: 'pointer', fontSize: 16, padding: '0 10px',
+                    cursor: 'pointer', fontSize: 15, padding: '0 8px',
                   }}
                 >×</button>
               )}
@@ -1869,27 +1955,27 @@ export default function MemeWonderland({ onConnectWallet }) {
           </div>
         </div>
 
-        {/* Featured hero card */}
+        {/* Slim featured strip — 1-row hero replacement */}
         {heroToken && !query && (
-          <HeroFeaturedCard token={heroToken} onBuy={openBuy}/>
+          <FeaturedStrip token={heroToken} onBuy={openBuy}/>
         )}
 
         {/* Tabs */}
         {!query && (
           <div style={{
-            display: 'flex', gap: 5, marginBottom: 12,
-            overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 4,
+            display: 'flex', gap: 4, marginBottom: 8,
+            overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 2,
           }}>
             {TABS.map(t => (
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
                 style={{
-                  padding: '7px 13px', borderRadius: 999,
+                  padding: '6px 11px', borderRadius: 999,
                   border: `1px solid ${tab === t.id ? C.borderHi : C.border}`,
                   background: tab === t.id ? C.hlDim : 'rgba(255,255,255,.03)',
                   color: tab === t.id ? C.hl : C.muted,
-                  fontSize: 11, fontWeight: 700, cursor: 'pointer',
+                  fontSize: 10.5, fontWeight: 700, cursor: 'pointer',
                   whiteSpace: 'nowrap', flexShrink: 0, ...T.body,
                 }}
               >{t.label}{t.id === 'watch' && watchlist.length > 0 ? ` (${watchlist.length})` : ''}</button>
@@ -1928,29 +2014,22 @@ export default function MemeWonderland({ onConnectWallet }) {
           ))}
         </div>
 
-        {/* Footer */}
+        {/* Compact footer */}
         <div style={{
-          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9,
-          padding: '12px 16px', borderRadius: 14,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+          padding: '8px 12px', borderRadius: 10,
           background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`,
-          marginBottom: 8,
+          marginBottom: 6, flexWrap: 'wrap',
         }}>
-          <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>POWERED BY</span>
+          <span style={{ fontSize: 8.5, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>VIA</span>
           <span style={{
-            fontSize: 11, fontWeight: 800, letterSpacing: '.04em',
+            fontSize: 10, fontWeight: 800, letterSpacing: '.04em',
             background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`,
             WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
             backgroundClip: 'text', ...T.mono,
           }}>JUPITER · SOLANA</span>
-          <span style={{ color: C.muted2, fontSize: 9 }}>|</span>
-          <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>NON-CUSTODIAL</span>
-        </div>
-        <div style={{
-          fontSize: 9.5, color: C.muted2, lineHeight: 1.5,
-          textAlign: 'center', padding: '4px 8px 0', ...T.body,
-        }}>
-          Atomic trades via Jupiter aggregator. 5% builder fee in SOL or USDC per swap. Prices update every 30s.
-          Meme coins carry extreme risk — only trade what you can afford to lose.
+          <span style={{ color: C.muted2, fontSize: 8 }}>·</span>
+          <span style={{ fontSize: 8.5, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>5% FEE · NON-CUSTODIAL</span>
         </div>
       </div>
 
