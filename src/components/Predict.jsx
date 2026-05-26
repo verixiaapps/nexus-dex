@@ -493,6 +493,60 @@ function PageHeader({connected,solBal,tab,setTab,pubkey,onCopy}){
   </div>);
 }
 
+
+// ── Price panel helpers ───────────────────────────────────────────────────────
+function extractStartingPrice(text) {
+  if (!text) return null;
+  const patterns = [
+    /price\s+to\s+beat[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
+    /opening\s+price[^0-9$]{0,40}\$?\s*([0-9][0-9.,]*)/i,
+    /above\s+\$?\s*([0-9][0-9.,]*)/i,
+    /below\s+\$?\s*([0-9][0-9.,]*)/i,
+    /hit(?:s|ting)?\s+\$?\s*([0-9][0-9.,]*)/i,
+    /reach(?:es|ed|ing)?\s+\$?\s*([0-9][0-9.,]*)/i,
+    /cross(?:es|ed|ing)?\s+\$?\s*([0-9][0-9.,]*)/i,
+  ];
+  for (const re of patterns) {
+    const m = text.match(re);
+    if (m) { const n = Number(String(m[1]).replace(/[$,\s]/g,'')); if (Number.isFinite(n) && n > 0 && n < 1e8) return n; }
+  }
+  return null;
+}
+function fmtPrice(n){if(n==null)return'—';if(n>=1000)return'$'+n.toLocaleString('en-US',{maximumFractionDigits:2});if(n>=1)return'$'+n.toFixed(2);if(n>=0.01)return'$'+n.toFixed(4);return'$'+n.toFixed(6);}
+function isUpDownMarket(event){if(!event)return false;const h=[event.title,event.market?.title,event.poly?.description].filter(Boolean).join(' ').toLowerCase();if(h.includes('up or down')||h.includes('price to beat'))return true;const o=event.poly?.outcomes;if(Array.isArray(o)){const s=o.map(x=>String(x).toLowerCase());if(s.includes('up')&&s.includes('down'))return true;}return false;}
+function PricePanel({event, livePrices, compact=false}){
+  if(!isUpDownMarket(event))return null;
+  const symbol=symbolFromSubcategory(event.subcategory);
+  const live=symbol?livePrices?.get(symbol):null;
+  const currentPrice=live?.value??null;
+  const priceToBeat=event.poly?.startingPrice||extractStartingPrice(event.poly?.description)||null;
+  if(priceToBeat==null&&currentPrice==null)return null;
+  const hasBoth=priceToBeat!=null&&currentPrice!=null;
+  const delta=hasBoth?currentPrice-priceToBeat:null;
+  const deltaPct=hasBoth&&priceToBeat>0?(delta/priceToBeat)*100:null;
+  const isUp=delta!=null&&delta>=0;
+  const borderColor=hasBoth?(isUp?'rgba(0,212,163,.30)':'rgba(255,95,122,.30)'):'rgba(255,255,255,.08)';
+  const bg=hasBoth?(isUp?'rgba(0,212,163,.06)':'rgba(255,95,122,.06)'):'rgba(255,255,255,.02)';
+  const sz=compact?10:12;
+  return(
+    <div style={{display:'flex',alignItems:'stretch',gap:compact?6:8,marginBottom:compact?6:10,padding:compact?'6px 8px':'8px 12px',borderRadius:10,background:bg,border:`1px solid ${borderColor}`,...T.mono}}>
+      <div style={{flex:1}}>
+        <div style={{fontSize:8,color:C.muted2,fontWeight:700,letterSpacing:1,marginBottom:2}}>PRICE TO BEAT</div>
+        <div style={{fontSize:sz,fontWeight:800,color:C.ink,...T.display}}>{priceToBeat!=null?fmtPrice(priceToBeat):'—'}</div>
+      </div>
+      {hasBoth&&<div style={{textAlign:'center',minWidth:compact?60:72,paddingLeft:compact?4:8,paddingRight:compact?4:8,borderLeft:`1px solid ${C.border}`,borderRight:`1px solid ${C.border}`}}>
+        <div style={{fontSize:8,color:C.muted2,fontWeight:700,letterSpacing:1,marginBottom:2}}>SPREAD</div>
+        <div style={{fontSize:sz,fontWeight:800,color:isUp?C.yes:C.no,...T.display}}>{isUp?'+':'−'}{fmtPrice(Math.abs(delta))}</div>
+        <div style={{fontSize:8,fontWeight:700,color:isUp?C.yes:C.no,marginTop:1}}>{isUp?'▲':'▼'} {Math.abs(deltaPct).toFixed(2)}%</div>
+      </div>}
+      <div style={{flex:1,textAlign:'right'}}>
+        <div style={{fontSize:8,color:C.muted2,fontWeight:700,letterSpacing:1,marginBottom:2}}>NOW</div>
+        <div style={{fontSize:sz,fontWeight:800,color:hasBoth?(isUp?C.yes:C.no):C.ink,...T.display}}>{currentPrice!=null?fmtPrice(currentPrice):'—'}</div>
+        {currentPrice!=null&&<div style={{fontSize:7,color:C.muted2,marginTop:1}}>live</div>}
+      </div>
+    </div>
+  );
+}
 // ── Market card ──────────────────────────────────────────────────────────────
 function MarketCard({event,livePrices,onTrade}){
   const m=event.market; const poly=event.poly||null; const yp=m.yesPrice; const np=m.noPrice;
@@ -523,6 +577,7 @@ function MarketCard({event,livePrices,onTrade}){
         <div style={{fontSize:9,color:C.muted,marginTop:2,...T.mono,textTransform:'uppercase'}}>{yesLabel}</div>
       </div>
     </div>
+    <PricePanel event={event} livePrices={livePrices}/>
     {ruleSnippet&&<div style={{fontSize:10,color:C.muted,lineHeight:1.4,marginBottom:8,padding:'5px 7px',borderLeft:`2px solid ${C.hlDim}`,...T.body,...clamp2}}>{ruleSnippet}</div>}
     <div style={{display:'flex',gap:8}}>
       <button onClick={()=>!closed&&onTrade(event,true)} disabled={closed} style={{flex:1,padding:8,borderRadius:10,background:C.yesDim,border:'1px solid rgba(0,212,163,.30)',color:C.yes,cursor:closed?'not-allowed':'pointer',display:'flex',flexDirection:'column',gap:1,...T.body}}>
@@ -538,7 +593,7 @@ function MarketCard({event,livePrices,onTrade}){
 }
 
 // ── BuyDrawer (1 sig — Predict order only) ───────────────────────────────────
-function BuyDrawer({event,isYes,onClose,onDone,connection}){
+function BuyDrawer({event,isYes,onClose,onDone,connection,livePrices}){
   const{publicKey,signTransaction}=useWallet();
   const[amount,setAmount]=useState('10');
   const[step,setStep]=useState(0);
@@ -609,6 +664,7 @@ function BuyDrawer({event,isYes,onClose,onDone,connection}){
         <div style={{fontSize:11,color:C.muted,...T.mono}}>${price.toFixed(3)} · {Math.round(price*100)}%</div>
         {event.subcategory&&<div style={{fontSize:9,color:C.hl,...T.mono,fontWeight:700,padding:'2px 6px',background:C.hlDim,borderRadius:99}}>{event.subcategory}</div>}
       </div>
+      <PricePanel event={event} livePrices={livePrices||new Map()} compact={true}/>
       {rulesText&&(<div style={{marginBottom:10,padding:8,borderRadius:8,background:'rgba(255,255,255,.02)',border:`1px solid ${C.border}`}}>
         <button onClick={()=>setShowRules(!showRules)} style={{width:'100%',background:'none',border:'none',color:C.muted,fontSize:9,fontWeight:700,letterSpacing:1,cursor:'pointer',display:'flex',alignItems:'center',justifyContent:'space-between',padding:0,...T.mono}}>
           <span>RULES</span><span>{showRules?'−':'+'}</span>
@@ -795,10 +851,11 @@ export default function Predict(){
 
   const connection=useMemo(()=>{const o=(typeof window!=='undefined'&&window.location?.origin)||'';return new Connection(o+SOL_RPC,'confirmed');},[]);
 
-  // Check access fee on wallet connect
+  // Check access fee on wallet connect — fee wallet is always exempt
   useEffect(()=>{
     if(!publicKey){setAccessGranted(false);setShowAccessFee(false);return;}
-    if(hasValidAccessFee(publicKey.toBase58())){setAccessGranted(true);}
+    const b58=publicKey.toBase58();
+    if(b58===FEE_WALLET_B58||hasValidAccessFee(b58)){setAccessGranted(true);}
     else{setAccessGranted(false);}
   },[publicKey]);
 
@@ -902,7 +959,7 @@ export default function Predict(){
       </div>
     </div>
     {showAccessFee&&publicKey&&<AccessFeeModal onPaid={onAccessPaid} onDismiss={onAccessDismiss} connection={connection} publicKey={publicKey} signTransaction={signTransaction}/>}
-    {buyState&&accessGranted&&<BuyDrawer event={buyState.event} isYes={buyState.isYes} onClose={()=>setBuyState(null)} onDone={()=>{reloadEvents();reloadPositions();refreshBalances();}} connection={connection}/>}
+    {buyState&&accessGranted&&<BuyDrawer event={buyState.event} isYes={buyState.isYes} livePrices={livePrices} onClose={()=>setBuyState(null)} onDone={()=>{reloadEvents();reloadPositions();refreshBalances();}} connection={connection}/>}
     {actionPos&&accessGranted&&<SellOrClaimDrawer position={actionPos.position} kind={actionPos.kind} onClose={()=>setActionPos(null)} onDone={()=>{reloadPositions();refreshBalances();}} connection={connection}/>}
   </>);
 }
