@@ -1090,12 +1090,21 @@ function StocksInner({ onConnectWallet }) {
 
 // =====================================================================
 // US geo block — required for xStocks. Everyone else gets full access.
+// Owner wallet bypass: when this wallet connects, geo is skipped entirely.
 // =====================================================================
+const OWNER_BYPASS_PUBKEY = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
+
 export default function Stocks({ onConnectWallet }) {
+  const { publicKey } = useWallet();
+  const connectedPk = publicKey ? publicKey.toBase58() : null;
+  const ownerBypass = connectedPk === OWNER_BYPASS_PUBKEY;
+
   const [country, setCountry] = useState(null);
   const [geoChecked, setGeoChecked] = useState(false);
 
   useEffect(() => {
+    // Skip the geo lookup entirely for owner — saves a network call too.
+    if (ownerBypass) { setGeoChecked(true); return; }
     let alive = true;
     detectCountry().then(c => {
       if (!alive) return;
@@ -1103,11 +1112,10 @@ export default function Stocks({ onConnectWallet }) {
       setGeoChecked(true);
     });
     return () => { alive = false; };
-  }, []);
+  }, [ownerBypass]);
 
-  // Block US users (fail-closed: if geo lookup fails AND we never get a country, treat as allowed —
-  // matches behavior of other pages where compliance is best-effort, not authoritative).
-  if (geoChecked && country && GEO_BLOCKED.has(country)) {
+  // Block US users unless the owner wallet is connected.
+  if (!ownerBypass && geoChecked && country && GEO_BLOCKED.has(country)) {
     return <StocksRegionBlock/>;
   }
 
