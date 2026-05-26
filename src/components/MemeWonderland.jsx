@@ -70,6 +70,34 @@ function isMemeWorthy(t) {
   return true;
 }
 
+// Classify a token into one of the three Axiom-style lifecycle columns
+// based on Jupiter data (bondingProgress, firstPool age, mcap):
+//   - 'new'      → newly launched, low mcap, on bonding curve early
+//   - 'stretch'  → close to graduation (bonding > 50% OR $20K-$70K mcap)
+//   - 'migrated' → already graduated to PumpSwap/Raydium ($70K+ mcap)
+// Risk and opportunity both drop left → right.
+function classifyStage(t) {
+  if (!t) return 'migrated';
+  const mcap = t.mcap || 0;
+  const bonding = t.bondingProgress;
+  const ageMs = t.firstPool ? Date.now() - new Date(t.firstPool).getTime() : null;
+
+  // Bonding curve data is most reliable when Jupiter exposes it (pump.fun pre-grads)
+  if (bonding != null) {
+    if (bonding >= 100) return 'migrated';
+    if (bonding >= 50)  return 'stretch';
+    return 'new';
+  }
+
+  // No bonding data → fall back to market cap thresholds (Axiom's ~$20K / $70K)
+  if (mcap >= 70_000) return 'migrated';
+  if (mcap >= 20_000) return 'stretch';
+
+  // Tiny mcap + very young = NEW, otherwise treat as migrated (probably a stale low-cap)
+  if (ageMs != null && ageMs < 24 * 60 * 60 * 1000) return 'new';
+  return 'migrated';
+}
+
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const SOL_DECIMALS  = 9;
@@ -758,6 +786,228 @@ function pillBtn(color, bg) {
     minWidth: 38,
     ...T.mono,
   };
+}
+
+// =====================================================================
+// PULSE CARD — compact card for the 3-column lifecycle layout.
+// Narrow enough for 3 columns on desktop / scrollable on mobile.
+// Shows just the essentials: icon, symbol, %, mcap, age, liq dot, quick-buy.
+// =====================================================================
+
+function PulseCard({ token, onTradeBuy, onTradeSell, holding, presetSol, stage }) {
+  const now = useTickingNow(30_000);
+  const owns = holding && holding.ui > 0;
+  const liqTier = liquidityTier(token.liquidity);
+  const ageMs = token.firstPool ? now - new Date(token.firstPool).getTime() : null;
+  const bonding = token.bondingProgress;
+  // 1h change feels more "alive" on NEW; 24h is more stable for MIGRATED
+  const changePct = stage === 'migrated'
+    ? (Number.isFinite(token.change24h) ? token.change24h : token.change1h)
+    : (Number.isFinite(token.change1h) && token.change1h !== 0 ? token.change1h : token.change24h);
+
+  return (
+    <button
+      onClick={() => onTradeBuy(token, null)}
+      style={{
+        width: '100%', textAlign: 'left',
+        padding: '8px 10px',
+        borderRadius: 10,
+        border: `1px solid ${owns ? C.borderHi : C.border}`,
+        background: owns ? 'rgba(151,252,228,.04)' : 'rgba(255,255,255,.02)',
+        cursor: 'pointer', marginBottom: 6,
+        display: 'flex', flexDirection: 'column', gap: 6,
+        color: C.ink, ...T.body,
+      }}
+    >
+      {/* Row 1: icon + symbol + badges */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 7, minWidth: 0 }}>
+        <TokenIcon token={token} size={28}/>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+            <span style={{
+              color: C.inkStr, fontWeight: 800, fontSize: 12.5, letterSpacing: '-.01em',
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: 70,
+              ...T.display,
+            }}>{token.symbol}</span>
+            <span title={`${liqTier.label} liquidity`} style={{
+              width: 5, height: 5, borderRadius: '50%',
+              background: liqTier.color, flexShrink: 0,
+            }}/>
+            {owns && (
+              <span style={{
+                fontSize: 7, fontWeight: 800, letterSpacing: '.06em',
+                padding: '1px 3px', borderRadius: 3,
+                background: C.hlDim, color: C.hl, ...T.mono,
+              }}>HOLD</span>
+            )}
+          </div>
+          {ageMs != null && (
+            <div style={{
+              fontSize: 9, color: C.muted2, fontWeight: 700,
+              letterSpacing: '.05em', marginTop: 1, ...T.mono,
+            }}>{fmtAge(ageMs)} old</div>
+          )}
+        </div>
+      </div>
+
+      {/* Row 2: price/change/mcap */}
+      <div style={{
+        display: 'flex', alignItems: 'baseline', gap: 6,
+        fontSize: 10, color: C.muted, ...T.mono,
+      }}>
+        <ChangeBadge pct={changePct}/>
+        {token.mcap > 0 && (
+          <span style={{ color: C.muted2, fontSize: 9 }}>
+            {fmtUsd(token.mcap, 0)}
+          </span>
+        )}
+      </div>
+
+      {/* Bonding curve progress (for STRETCH column) */}
+      {stage === 'stretch' && bonding != null && (
+        <div style={{
+          height: 4, borderRadius: 99,
+          background: 'rgba(255,255,255,.06)',
+          overflow: 'hidden', position: 'relative',
+        }}>
+          <div style={{
+            position: 'absolute', inset: 0, width: Math.max(0, Math.min(100, bonding)) + '%',
+            background: bonding > 80
+              ? `linear-gradient(90deg,${C.gold},${C.hotPink})`
+              : `linear-gradient(90deg,${C.violet},${C.hl})`,
+            boxShadow: bonding > 80 ? `0 0 6px ${C.gold}` : 'none',
+          }}/>
+        </div>
+      )}
+
+      {/* Row 3: action buttons */}
+      <div style={{ display: 'flex', gap: 4 }}>
+        {owns ? (
+          <button
+            onClick={(e) => { e.stopPropagation(); onTradeSell(token); }}
+            style={{
+              flex: 1, padding: '6px 4px', borderRadius: 7, border: 'none',
+              background: 'rgba(255,138,158,.10)', color: C.down,
+              fontSize: 10, fontWeight: 800, cursor: 'pointer', ...T.mono,
+            }}
+          >SELL</button>
+        ) : (
+          <button
+            onClick={(e) => { e.stopPropagation(); onTradeBuy(token, presetSol); }}
+            style={{
+              flex: 1, padding: '6px 4px', borderRadius: 7, border: 'none',
+              background: `linear-gradient(135deg,${C.hl} 0%,${C.hl2} 100%)`,
+              color: '#04070f', fontSize: 10, fontWeight: 800,
+              cursor: 'pointer', letterSpacing: '-.01em', ...T.mono,
+            }}
+          >{presetSol} SOL</button>
+        )}
+      </div>
+    </button>
+  );
+}
+
+// =====================================================================
+// PULSE COLUMN — wrapper for one of the three lifecycle stages.
+// Each column gets its own header, color theme, and live token count.
+// =====================================================================
+
+const STAGE_THEMES = {
+  new: {
+    label: 'NEW',
+    sublabel: 'fresh launches',
+    color: '#ff5d9b',
+    accent: 'rgba(255,93,155,.30)',
+    bgAccent: 'rgba(255,93,155,.06)',
+    icon: '✨',
+  },
+  stretch: {
+    label: 'FINAL STRETCH',
+    sublabel: 'about to graduate',
+    color: '#ffcd3c',
+    accent: 'rgba(255,205,60,.30)',
+    bgAccent: 'rgba(255,205,60,.06)',
+    icon: '🚀',
+  },
+  migrated: {
+    label: 'MIGRATED',
+    sublabel: 'live on DEX',
+    color: '#97fce4',
+    accent: 'rgba(151,252,228,.24)',
+    bgAccent: 'rgba(151,252,228,.04)',
+    icon: '💎',
+  },
+};
+
+function PulseColumn({ stage, tokens, holdings, defaultPreset, onTradeBuy, onTradeSell, loading }) {
+  const theme = STAGE_THEMES[stage];
+  return (
+    <div style={{
+      flex: 1, minWidth: 0,
+      background: 'rgba(10,16,32,.50)',
+      border: `1px solid ${C.border}`,
+      borderRadius: 14, overflow: 'hidden',
+      display: 'flex', flexDirection: 'column',
+      backdropFilter: 'blur(12px)',
+    }}>
+      {/* Sticky-feeling column header */}
+      <div style={{
+        padding: '10px 12px 8px',
+        borderBottom: `1px solid ${C.hairline}`,
+        background: theme.bgAccent,
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 6,
+      }}>
+        <div style={{ minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+            <span style={{ fontSize: 11 }}>{theme.icon}</span>
+            <span style={{
+              fontSize: 10, fontWeight: 800, color: theme.color,
+              letterSpacing: '.10em', ...T.mono,
+            }}>{theme.label}</span>
+          </div>
+          <div style={{
+            fontSize: 8.5, color: C.muted2, fontWeight: 600,
+            letterSpacing: '.04em', marginTop: 1, ...T.mono,
+          }}>{theme.sublabel}</div>
+        </div>
+        <span style={{
+          fontSize: 9, color: C.muted, fontWeight: 700,
+          padding: '2px 6px', borderRadius: 99,
+          background: 'rgba(255,255,255,.04)', ...T.mono,
+        }}>{tokens.length}</span>
+      </div>
+
+      {/* Column body */}
+      <div style={{
+        flex: 1, overflowY: 'auto', padding: '8px',
+        maxHeight: 'min(70vh, 700px)', minHeight: 200,
+      }}>
+        {loading && tokens.length === 0 ? (
+          <div style={{
+            padding: '20px 8px', textAlign: 'center',
+            color: C.muted2, fontSize: 10.5, ...T.body,
+          }}>Loading...</div>
+        ) : tokens.length === 0 ? (
+          <div style={{
+            padding: '20px 8px', textAlign: 'center',
+            color: C.muted2, fontSize: 10.5, ...T.body,
+          }}>Nothing yet</div>
+        ) : (
+          tokens.map(t => (
+            <PulseCard
+              key={t.mint}
+              token={t}
+              holding={holdings[t.mint]}
+              presetSol={defaultPreset}
+              stage={stage}
+              onTradeBuy={onTradeBuy}
+              onTradeSell={onTradeSell}
+            />
+          ))
+        )}
+      </div>
+    </div>
+  );
 }
 
 function GraduationBar({ progress }) {
@@ -1684,20 +1934,12 @@ function MemeTradeModal({
 // MAIN PAGE
 // =====================================================================
 
-const TABS = [
-  { id: 'new',       label: '🆕 New',    interval: null,   isRecent: true },
-  { id: 'hot',       label: '🔥 1H',     interval: '1h'  },
-  { id: 'trending',  label: 'Trending', interval: '24h' },
-  { id: '6h',        label: '6H',       interval: '6h'  },
-  { id: 'watch',     label: '★ Watch',  interval: null  },
-];
-
 export default function MemeWonderland({ onConnectWallet }) {
   const { publicKey: solPk } = useWallet();
   const { presets } = useNexusWallet();
   const walletPubkey = useMemo(() => (solPk ? solPk.toString() : null), [solPk]);
 
-  const [tab, setTab]               = useState('new');
+  const [tab, setTab]               = useState('pulse');
   const [tokens, setTokens]         = useState([]);
   const [loading, setLoading]       = useState(true);
   const [hot1h, setHot1h]           = useState([]);  // For ticker strip
@@ -1712,38 +1954,57 @@ export default function MemeWonderland({ onConnectWallet }) {
   const [initialSol,  setInitialSol]  = useState(null);
   const [initialSide, setInitialSide] = useState('BUY');
 
-  // -- Load main list --
+  // -- Load watchlist tokens (the main "tokens" state is now only used by
+  //    the Watch view; search has its own searchResults state, and the
+  //    main Pulse columns load via reloadPulse).
   const reloadMainList = useCallback(async () => {
-    setLoading(true);
-    const t = TABS.find(x => x.id === tab);
-    let list = [];
-    if (tab === 'watch') {
-      if (watchlist.length === 0) {
-        setTokens([]); setLoading(false); return;
-      }
-      list = await searchJupTokens(watchlist.join(','));
-    } else if (t?.isRecent) {
-      // NEW tab — no liquidity floor at all so users see EVERYTHING fresh.
-      // The risk indicator dots on each row handle warning users about
-      // low-liquidity rugs without hiding the tokens entirely.
-      list = await fetchRecentMemes({ limit: 100, minLiquidityUsd: 0 });
-    } else {
-      list = await fetchTrendingMemes({ interval: t.interval, limit: 100 });
+    if (tab !== 'watch') {
+      // Pulse mode manages its own data; nothing to load here.
+      setLoading(false);
+      return;
     }
+    setLoading(true);
+    if (watchlist.length === 0) {
+      setTokens([]); setLoading(false); return;
+    }
+    const list = await searchJupTokens(watchlist.join(','));
     setTokens(list);
     setLoading(false);
   }, [tab, watchlist]);
 
   useEffect(() => { reloadMainList(); }, [reloadMainList]);
 
-  // -- Auto-refresh main list. NEW tab polls 10s (memes move fast),
-  //    everything else 30s.
+  // -- Auto-refresh the Watch list every 30s when on that tab.
   useEffect(() => {
-    const t = TABS.find(x => x.id === tab);
-    const pollMs = t?.isRecent ? 10_000 : 30_000;
-    const id = setInterval(reloadMainList, pollMs);
+    if (tab !== 'watch') return;
+    const id = setInterval(reloadMainList, 30_000);
     return () => clearInterval(id);
   }, [reloadMainList, tab]);
+
+  // -- Load Pulse data: fresh launches + trending tokens, then classify
+  //    into NEW / STRETCH / MIGRATED columns by lifecycle stage.
+  //    Uses Jupiter's bondingProgress when available, mcap thresholds as
+  //    fallback. Polls every 10s for a live feel.
+  const [pulseRecent, setPulseRecent]     = useState([]);
+  const [pulseTrending, setPulseTrending] = useState([]);
+  const [pulseLoading, setPulseLoading]   = useState(true);
+
+  const reloadPulse = useCallback(async () => {
+    const [recent, trending] = await Promise.all([
+      fetchRecentMemes({ limit: 80, minLiquidityUsd: 0 }),
+      fetchTrendingMemes({ interval: '1h', limit: 80 }),
+    ]);
+    setPulseRecent(recent);
+    setPulseTrending(trending);
+    setPulseLoading(false);
+  }, []);
+
+  useEffect(() => { reloadPulse(); }, [reloadPulse]);
+
+  useEffect(() => {
+    const id = setInterval(reloadPulse, 10_000);
+    return () => clearInterval(id);
+  }, [reloadPulse]);
 
   // -- Load hot 1h strip independently --
   useEffect(() => {
@@ -1772,25 +2033,43 @@ export default function MemeWonderland({ onConnectWallet }) {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  // -- Load holdings (which displayed memes the user already owns) --
+  // -- Load holdings (which displayed memes the user already owns).
+  //    Pull from both the Pulse columns AND the main tokens list so holdings
+  //    show up no matter which view the user is on.
   useEffect(() => {
-    if (!walletPubkey || tokens.length === 0) { setHoldings({}); return; }
+    if (!walletPubkey) { setHoldings({}); return; }
+    const seen = new Set();
+    const all = [];
+    [
+      ...pulseColumns.new,
+      ...pulseColumns.stretch,
+      ...pulseColumns.migrated,
+      ...tokens,
+    ].forEach(t => {
+      if (t?.mint && !seen.has(t.mint)) {
+        seen.add(t.mint);
+        all.push(t);
+      }
+    });
+    if (all.length === 0) { setHoldings({}); return; }
     let cancelled = false;
     (async () => {
-      const results = await Promise.allSettled(tokens.slice(0, 30).map(t =>
+      // Cap at 50 tokens to keep RPC load reasonable
+      const slice = all.slice(0, 50);
+      const results = await Promise.allSettled(slice.map(t =>
         fetchTokenBalance({ ownerPubkey: walletPubkey, mint: t.mint, decimals: t.decimals }),
       ));
       if (cancelled) return;
       const map = {};
       results.forEach((r, i) => {
         if (r.status === 'fulfilled' && r.value.ui > 0) {
-          map[tokens[i].mint] = r.value;
+          map[slice[i].mint] = r.value;
         }
       });
       setHoldings(map);
     })();
     return () => { cancelled = true; };
-  }, [walletPubkey, tokens]);
+  }, [walletPubkey, pulseColumns, tokens]);
 
   // -- Search debounce --
   useEffect(() => {
@@ -1802,24 +2081,76 @@ export default function MemeWonderland({ onConnectWallet }) {
     return () => clearTimeout(handle);
   }, [query]);
 
-  // Hero token: prefer the highest-liquidity meme-worthy token in the current
-  // list. Tokens already filter via isMemeWorthy upstream, but we still pick
-  // by liquidity here so the hero card never features a low-liquidity rug.
+  // Hero token: prefer the highest-liquidity meme-worthy token in the
+  // MIGRATED column (most established + liquid). Falls back to whichever
+  // column has data if migrated is empty.
   const heroToken = useMemo(() => {
-    const source = searchResults && searchResults.length ? searchResults : tokens;
-    if (!source.length) return null;
-    // Pick the meme-worthy token with the best liquidity. Fall back to
-    // organic-score if liquidity is missing across the board.
-    const sorted = [...source]
-      .filter(isMemeWorthy)
-      .sort((a, b) => (b.liquidity || 0) - (a.liquidity || 0) || (b.organicScore || 0) - (a.organicScore || 0));
-    return sorted[0] || source[0] || null;
-  }, [tokens, searchResults]);
+    if (searchResults && searchResults.length) {
+      const sr = searchResults.filter(isMemeWorthy);
+      return sr[0] || null;
+    }
+    const candidates = [
+      ...pulseColumns.migrated,
+      ...pulseColumns.stretch,
+      ...pulseColumns.new,
+    ];
+    if (!candidates.length) return null;
+    const sorted = [...candidates].sort((a, b) =>
+      (b.liquidity || 0) - (a.liquidity || 0) ||
+      (b.organicScore || 0) - (a.organicScore || 0)
+    );
+    return sorted[0] || null;
+  }, [pulseColumns, searchResults]);
 
   const listToken = useMemo(() => {
     if (searchResults && query.trim()) return searchResults;
     return tokens;
   }, [tokens, searchResults, query]);
+
+  // -- Derive the 3 Pulse columns from the loaded recent + trending lists.
+  //    NEW comes mostly from /recent (sorted newest first).
+  //    STRETCH and MIGRATED come from both lists, deduped + classified.
+  const pulseColumns = useMemo(() => {
+    const seen = new Set();
+    const newCol = [];
+    const stretchCol = [];
+    const migratedCol = [];
+
+    const consider = (t) => {
+      if (!t || !t.mint || seen.has(t.mint)) return;
+      if (!isMemeWorthy(t)) return;
+      seen.add(t.mint);
+      const stage = classifyStage(t);
+      if (stage === 'new') newCol.push(t);
+      else if (stage === 'stretch') stretchCol.push(t);
+      else migratedCol.push(t);
+    };
+
+    // /recent gives us fresh launches, mostly NEW + some early STRETCH
+    pulseRecent.forEach(consider);
+    // trending fills out STRETCH and MIGRATED with established movers
+    pulseTrending.forEach(consider);
+
+    // Sort each column for the most useful order:
+    //  - NEW: newest first (by firstPool desc)
+    //  - STRETCH: highest bonding % first, then by mcap
+    //  - MIGRATED: best 1h % first (active gainers float to top)
+    const t = (x) => x.firstPool ? new Date(x.firstPool).getTime() : 0;
+    newCol.sort((a, b) => t(b) - t(a));
+    stretchCol.sort((a, b) =>
+      (b.bondingProgress || 0) - (a.bondingProgress || 0) ||
+      (b.mcap || 0) - (a.mcap || 0)
+    );
+    migratedCol.sort((a, b) =>
+      (b.change1h || b.change24h || 0) - (a.change1h || a.change24h || 0)
+    );
+
+    return {
+      new:      newCol.slice(0, 40),
+      stretch:  stretchCol.slice(0, 40),
+      migrated: migratedCol.slice(0, 40),
+    };
+  }, [pulseRecent, pulseTrending]);
 
   // -- Watchlist toggling --
   const toggleWatch = useCallback((mint) => {
@@ -1960,59 +2291,95 @@ export default function MemeWonderland({ onConnectWallet }) {
           <FeaturedStrip token={heroToken} onBuy={openBuy}/>
         )}
 
-        {/* Tabs */}
+        {/* Mode toggle — Pulse (default) vs Watch (saved tokens) */}
         {!query && (
           <div style={{
             display: 'flex', gap: 4, marginBottom: 8,
             overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 2,
           }}>
-            {TABS.map(t => (
+            {[
+              { id: 'pulse', label: '⚡ Pulse' },
+              { id: 'watch', label: `★ Watch${watchlist.length > 0 ? ` (${watchlist.length})` : ''}` },
+            ].map(t => (
               <button
                 key={t.id}
                 onClick={() => setTab(t.id)}
                 style={{
-                  padding: '6px 11px', borderRadius: 999,
+                  padding: '6px 12px', borderRadius: 999,
                   border: `1px solid ${tab === t.id ? C.borderHi : C.border}`,
                   background: tab === t.id ? C.hlDim : 'rgba(255,255,255,.03)',
                   color: tab === t.id ? C.hl : C.muted,
                   fontSize: 10.5, fontWeight: 700, cursor: 'pointer',
                   whiteSpace: 'nowrap', flexShrink: 0, ...T.body,
                 }}
-              >{t.label}{t.id === 'watch' && watchlist.length > 0 ? ` (${watchlist.length})` : ''}</button>
+              >{t.label}</button>
             ))}
           </div>
         )}
 
-        {/* Main list */}
-        <div style={{
-          background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`,
-          borderRadius: 18, overflow: 'hidden', marginBottom: 14,
-          backdropFilter: 'blur(12px)',
-        }}>
-          {loading && listToken.length === 0 ? (
-            <div style={{ padding: '30px 16px', textAlign: 'center', color: C.muted, fontSize: 12, ...T.body }}>
-              Loading memes...
-            </div>
-          ) : listToken.length === 0 ? (
-            <div style={{ padding: '30px 16px', textAlign: 'center', color: C.muted, fontSize: 12, ...T.body }}>
-              {query
-                ? 'No tokens found.'
-                : tab === 'watch'
-                  ? 'Your watchlist is empty. Star tokens to add them.'
-                  : 'No tokens right now.'}
-            </div>
-          ) : listToken.map(t => (
-            <MemeRow
-              key={t.mint}
-              token={t}
-              presetSol={defaultPreset}
-              holding={holdings[t.mint]}
-              onTradeBuy={openBuy}
-              onTradeSell={openSell}
-              showAge={tab === 'new'}
-            />
-          ))}
-        </div>
+        {/* PULSE — 3-column lifecycle layout (Axiom-style).
+            Mobile: horizontal scroll-snap columns.
+            Desktop: 3 columns side-by-side. */}
+        {!query && tab !== 'watch' && (
+          <div style={{
+            display: 'flex',
+            gap: 8,
+            marginBottom: 12,
+            overflowX: 'auto',
+            WebkitOverflowScrolling: 'touch',
+            scrollSnapType: 'x mandatory',
+            paddingBottom: 4,
+          }}>
+            {['new', 'stretch', 'migrated'].map(stage => (
+              <div key={stage} style={{
+                flex: '0 0 min(86vw, 320px)',
+                scrollSnapAlign: 'start',
+                display: 'flex',
+              }}>
+                <PulseColumn
+                  stage={stage}
+                  tokens={pulseColumns[stage]}
+                  holdings={holdings}
+                  defaultPreset={defaultPreset}
+                  onTradeBuy={openBuy}
+                  onTradeSell={openSell}
+                  loading={pulseLoading}
+                />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* SEARCH / WATCH — fall back to the row list for these views */}
+        {(query || tab === 'watch') && (
+          <div style={{
+            background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`,
+            borderRadius: 18, overflow: 'hidden', marginBottom: 14,
+            backdropFilter: 'blur(12px)',
+          }}>
+            {loading && listToken.length === 0 ? (
+              <div style={{ padding: '30px 16px', textAlign: 'center', color: C.muted, fontSize: 12, ...T.body }}>
+                Loading memes...
+              </div>
+            ) : listToken.length === 0 ? (
+              <div style={{ padding: '30px 16px', textAlign: 'center', color: C.muted, fontSize: 12, ...T.body }}>
+                {query
+                  ? 'No tokens found.'
+                  : 'Your watchlist is empty. Star tokens to add them.'}
+              </div>
+            ) : listToken.map(t => (
+              <MemeRow
+                key={t.mint}
+                token={t}
+                presetSol={defaultPreset}
+                holding={holdings[t.mint]}
+                onTradeBuy={openBuy}
+                onTradeSell={openSell}
+                showAge={true}
+              />
+            ))}
+          </div>
+        )}
 
         {/* Compact footer */}
         <div style={{
@@ -2042,7 +2409,7 @@ export default function MemeWonderland({ onConnectWallet }) {
         walletPubkey={walletPubkey}
         onConnectWallet={onConnectWallet}
         onClose={() => setActiveToken(null)}
-        onAfterTrade={() => { reloadMainList(); }}
+        onAfterTrade={() => { reloadPulse(); reloadMainList(); }}
         presets={presets}
       />
     </>
