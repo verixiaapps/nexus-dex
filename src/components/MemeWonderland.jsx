@@ -739,96 +739,6 @@ function Sparkline({ mint, width = 56, height = 18, color }) {
 }
 
 // =====================================================================
-// FLASH-ON-UPDATE — when a token's price changes, briefly highlight the
-// card green (up) or pink (down). Pure dopamine. Cheap: one ref per card,
-// no extra state.
-// =====================================================================
-
-function usePriceFlash(mint, currentPrice) {
-  const lastRef = useRef({ price: currentPrice, dir: null, at: 0 });
-  // Update ref synchronously during render, but only flag a NEW direction
-  // when the price actually moves. The component reads `dir` via getter.
-  if (currentPrice && lastRef.current.price && currentPrice !== lastRef.current.price) {
-    const up = currentPrice > lastRef.current.price;
-    lastRef.current = { price: currentPrice, dir: up ? 'up' : 'down', at: Date.now() };
-  } else if (currentPrice && !lastRef.current.price) {
-    lastRef.current = { price: currentPrice, dir: null, at: 0 };
-  }
-  // Re-render after the flash animation duration so the animation key
-  // resets cleanly on next price update.
-  useEffect(() => {
-    if (!lastRef.current.dir) return;
-    const id = setTimeout(() => {
-      lastRef.current = { ...lastRef.current, dir: null };
-    }, 700);
-    return () => clearTimeout(id);
-  }, [currentPrice]);
-  return lastRef.current;
-}
-
-// =====================================================================
-// SOUND FEEDBACK — toggleable, off by default. A short tick on price
-// moves. Uses Web Audio so no asset loading. Honors the user preference
-// stored in localStorage.
-// =====================================================================
-
-const SOUND_PREF_KEY = 'nexus_meme_sound_v1';
-
-function getSoundEnabled() {
-  try { return localStorage.getItem(SOUND_PREF_KEY) === '1'; } catch { return false; }
-}
-function setSoundEnabled(on) {
-  try { localStorage.setItem(SOUND_PREF_KEY, on ? '1' : '0'); } catch {}
-}
-
-let _audioCtx = null;
-function getAudioCtx() {
-  if (_audioCtx) return _audioCtx;
-  try {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (Ctx) _audioCtx = new Ctx();
-  } catch {}
-  return _audioCtx;
-}
-
-// Tick the audio queue. Single short blip; up = higher tone, down = lower.
-function playPriceTick(direction) {
-  if (!getSoundEnabled()) return;
-  const ctx = getAudioCtx();
-  if (!ctx) return;
-  try {
-    if (ctx.state === 'suspended') ctx.resume();
-    const osc  = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.frequency.value = direction === 'up' ? 880 : 440;
-    gain.gain.value = 0.0001;
-    osc.connect(gain).connect(ctx.destination);
-    const now = ctx.currentTime;
-    gain.gain.exponentialRampToValueAtTime(0.05, now + 0.01);
-    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
-    osc.start(now);
-    osc.stop(now + 0.13);
-  } catch {}
-}
-
-// React-friendly toggle that re-renders consumers on change.
-const _soundListeners = new Set();
-function useSoundPref() {
-  const [on, setOn] = useState(() => getSoundEnabled());
-  useEffect(() => {
-    const update = () => setOn(getSoundEnabled());
-    _soundListeners.add(update);
-    return () => { _soundListeners.delete(update); };
-  }, []);
-  const toggle = useCallback(() => {
-    const next = !getSoundEnabled();
-    setSoundEnabled(next);
-    _soundListeners.forEach(fn => fn());
-  }, []);
-  return [on, toggle];
-}
-
-// =====================================================================
 // EVENT TICKER — live strip of recent price-move events.
 // Honestly labeled as price moves (not "buys") since we synthesize from
 // polling diffs, not real on-chain trade events.
@@ -1137,22 +1047,9 @@ function PulseCard({ token, onTradeBuy, onTradeSell, holding, presetSol, stage }
     ? (Number.isFinite(token.change24h) ? token.change24h : token.change1h)
     : (Number.isFinite(token.change1h) && token.change1h !== 0 ? token.change1h : token.change24h);
 
-  // Flash animation on price update; also fires the sound tick once.
-  const flash = usePriceFlash(token.mint, token.usdPrice);
-  useEffect(() => {
-    if (flash.dir && Date.now() - flash.at < 300) {
-      playPriceTick(flash.dir);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flash.at]);
-
   return (
     <button
       onClick={() => onTradeBuy(token, null)}
-      // Unique key on direction+timestamp so the CSS animation restarts
-      // each time the price moves. Otherwise React reuses the same DOM
-      // node and the animation only plays once.
-      key={flash.dir ? `${flash.dir}-${flash.at}` : 'idle'}
       style={{
         width: '100%', textAlign: 'left',
         padding: '8px 10px',
@@ -1162,9 +1059,6 @@ function PulseCard({ token, onTradeBuy, onTradeSell, holding, presetSol, stage }
         cursor: 'pointer', marginBottom: 6,
         display: 'flex', flexDirection: 'column', gap: 6,
         color: C.ink, ...T.body,
-        animation: flash.dir
-          ? `${flash.dir === 'up' ? 'nx-flash-up' : 'nx-flash-down'} 0.7s ease-out`
-          : 'none',
       }}
     >
       {/* Row 1: icon + symbol + badges */}
@@ -2442,7 +2336,6 @@ export default function MemeWonderland({ onConnectWallet }) {
   const [watchlist, setWatchlist]   = useState(() => loadWatchlist());
   const [query, setQuery]           = useState('');
   const [searchResults, setSearchResults] = useState(null);
-  const [soundOn, toggleSound] = useSoundPref();
 
   // Modal state
   const [activeToken, setActiveToken] = useState(null);
@@ -2570,12 +2463,10 @@ export default function MemeWonderland({ onConnectWallet }) {
   }, []);
 
   // -- Load holdings (which displayed memes the user already owns).
-  //    Refetches every 30s rather than every Pulse poll (4s) so we don't
-  //    hammer the RPC. Also reloads on wallet change or after a trade.
-  //    Uses a ref to read the freshest token list without re-running the
-  //    effect when pulseColumns/tokens change.
-  const tokenListRef = useRef([]);
+  //    Pull from both the Pulse columns AND the main tokens list so holdings
+  //    show up no matter which view the user is on.
   useEffect(() => {
+    if (!walletPubkey) { setHoldings({}); return; }
     const seen = new Set();
     const all = [];
     [
@@ -2589,36 +2480,25 @@ export default function MemeWonderland({ onConnectWallet }) {
         all.push(t);
       }
     });
-    tokenListRef.current = all;
-  }, [pulseColumns, tokens]);
-
-  const refreshHoldings = useCallback(async () => {
-    if (!walletPubkey) { setHoldings({}); return; }
-    const all = tokenListRef.current;
-    if (all.length === 0) return; // keep existing map until tokens load
-    // Cap at 50 tokens to keep RPC load reasonable
-    const slice = all.slice(0, 50);
-    const results = await Promise.allSettled(slice.map(t =>
-      fetchTokenBalance({ ownerPubkey: walletPubkey, mint: t.mint, decimals: t.decimals }),
-    ));
-    const map = {};
-    results.forEach((r, i) => {
-      if (r.status === 'fulfilled' && r.value.ui > 0) {
-        map[slice[i].mint] = r.value;
-      }
-    });
-    setHoldings(map);
-  }, [walletPubkey]);
-
-  // Initial load + wallet-change trigger
-  useEffect(() => { refreshHoldings(); }, [refreshHoldings]);
-
-  // Periodic refresh every 30s
-  useEffect(() => {
-    if (!walletPubkey) return;
-    const id = setInterval(refreshHoldings, 30_000);
-    return () => clearInterval(id);
-  }, [walletPubkey, refreshHoldings]);
+    if (all.length === 0) { setHoldings({}); return; }
+    let cancelled = false;
+    (async () => {
+      // Cap at 50 tokens to keep RPC load reasonable
+      const slice = all.slice(0, 50);
+      const results = await Promise.allSettled(slice.map(t =>
+        fetchTokenBalance({ ownerPubkey: walletPubkey, mint: t.mint, decimals: t.decimals }),
+      ));
+      if (cancelled) return;
+      const map = {};
+      results.forEach((r, i) => {
+        if (r.status === 'fulfilled' && r.value.ui > 0) {
+          map[slice[i].mint] = r.value;
+        }
+      });
+      setHoldings(map);
+    })();
+    return () => { cancelled = true; };
+  }, [walletPubkey, pulseColumns, tokens]);
 
   // -- Search debounce --
   useEffect(() => {
@@ -2768,8 +2648,6 @@ export default function MemeWonderland({ onConnectWallet }) {
         @keyframes nx-pulse { 0%,100%{opacity:1}50%{opacity:.4} }
         @keyframes nx-spin { to{transform:rotate(360deg)} }
         @keyframes nx-marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-        @keyframes nx-flash-up   { 0% { background: rgba(61,213,152,.22); } 100% { background: transparent; } }
-        @keyframes nx-flash-down { 0% { background: rgba(255,138,158,.22); } 100% { background: transparent; } }
         body.nexus-scroll-locked { overflow:hidden; }
       `}</style>
 
@@ -2819,35 +2697,22 @@ export default function MemeWonderland({ onConnectWallet }) {
                   backgroundClip: 'text',
                 }}>wonderland</span>
               </h1>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
-                <button
-                  onClick={toggleSound}
-                  title={soundOn ? 'Mute price ticks' : 'Enable price ticks'}
-                  style={{
-                    width: 26, height: 22, padding: 0,
-                    borderRadius: 6,
-                    border: `1px solid ${soundOn ? C.borderHi : C.border}`,
-                    background: soundOn ? C.hlDim : 'rgba(255,255,255,.03)',
-                    color: soundOn ? C.hl : C.muted,
-                    cursor: 'pointer', fontSize: 11, lineHeight: 1,
-                  }}
-                >{soundOn ? '🔊' : '🔇'}</button>
-                <div style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 6,
-                  padding: '3px 9px', borderRadius: 999,
-                  background: 'rgba(255,93,155,.08)',
-                  border: '1px solid rgba(255,93,155,.24)',
-                }}>
-                  <span style={{
-                    width: 5, height: 5, borderRadius: '50%',
-                    background: C.hotPink, boxShadow: `0 0 8px ${C.hotPink}`,
-                    animation: 'nx-pulse 1.6s ease-in-out infinite',
-                  }}/>
-                  <span style={{
-                    color: C.hotPink, fontSize: 8.5, fontWeight: 800,
-                    letterSpacing: '.10em', ...T.mono,
-                  }}>LIVE</span>
-                </div>
+              <div style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                padding: '3px 9px', borderRadius: 999,
+                background: 'rgba(255,93,155,.08)',
+                border: '1px solid rgba(255,93,155,.24)',
+                flexShrink: 0,
+              }}>
+                <span style={{
+                  width: 5, height: 5, borderRadius: '50%',
+                  background: C.hotPink, boxShadow: `0 0 8px ${C.hotPink}`,
+                  animation: 'nx-pulse 1.6s ease-in-out infinite',
+                }}/>
+                <span style={{
+                  color: C.hotPink, fontSize: 8.5, fontWeight: 800,
+                  letterSpacing: '.10em', ...T.mono,
+                }}>LIVE</span>
               </div>
             </div>
 
@@ -3020,7 +2885,7 @@ export default function MemeWonderland({ onConnectWallet }) {
         walletPubkey={walletPubkey}
         onConnectWallet={onConnectWallet}
         onClose={() => setActiveToken(null)}
-        onAfterTrade={() => { reloadPulse(); reloadMainList(); refreshHoldings(); }}
+        onAfterTrade={() => { reloadPulse(); reloadMainList(); }}
         presets={presets}
       />
     </>
