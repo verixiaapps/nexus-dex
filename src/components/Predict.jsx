@@ -281,7 +281,7 @@ function isMarketOpen(event){
 
 async function fetchPolymarketEvent(slug){
   if(!slug)return null;
-  try{const r=await fetch(`${POLY_GAMMA_BASE}/events/slug/${encodeURIComponent(slug)}`);if(!r.ok)return null;const j=await r.json();return Array.isArray(j)?j[0]:j;}
+  try{const r=await fetch(`/api/polymarket/events/slug/${encodeURIComponent(slug)}`);if(!r.ok)return null;const j=await r.json();return Array.isArray(j)?j[0]:j;}
   catch{return null;}
 }
 
