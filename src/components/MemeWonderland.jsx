@@ -593,6 +593,338 @@ function useTickingNow(intervalMs = 30_000) {
 }
 
 // =====================================================================
+// PRICE HISTORY TRACKER
+// Jupiter's /tokens/v2 endpoints don't return price history, only the
+// current price. To draw sparklines we record price points client-side
+// across polls. This survives across token-list refreshes but resets
+// on full page reload (acceptable: meme trading is short-horizon anyway).
+// =====================================================================
+
+const MAX_HISTORY_POINTS = 30;   // ~2 minutes at 4s polling
+const _priceHistory = new Map(); // mint -> [{ t, p }]
+
+// Subscribers re-render when their mint's history updates.
+const _historyListeners = new Map(); // mint -> Set<() => void>
+
+function recordPricePoint(mint, price) {
+  if (!mint || !Number.isFinite(price) || price <= 0) return;
+  const arr = _priceHistory.get(mint) || [];
+  const last = arr[arr.length - 1];
+  // Skip duplicate ticks to keep the trail meaningful
+  if (last && Math.abs(last.p - price) / price < 1e-6) return;
+  arr.push({ t: Date.now(), p: price });
+  while (arr.length > MAX_HISTORY_POINTS) arr.shift();
+  _priceHistory.set(mint, arr);
+  const listeners = _historyListeners.get(mint);
+  if (listeners) listeners.forEach(fn => fn());
+}
+
+function usePriceHistory(mint) {
+  const [, force] = useState(0);
+  useEffect(() => {
+    if (!mint) return;
+    const listener = () => force(n => n + 1);
+    let set = _historyListeners.get(mint);
+    if (!set) { set = new Set(); _historyListeners.set(mint, set); }
+    set.add(listener);
+    return () => {
+      set.delete(listener);
+      if (set.size === 0) _historyListeners.delete(mint);
+    };
+  }, [mint]);
+  return _priceHistory.get(mint) || [];
+}
+
+// =====================================================================
+// TRADE EVENT BUS — synthesizes "trade activity" from price changes.
+// Not real on-chain trades, but feels live and is honest about it
+// (labeled "PRICE MOVE" not "BUY/SELL"). Reset on page reload.
+// =====================================================================
+
+const MAX_EVENTS = 12;
+let _events = [];
+const _eventListeners = new Set();
+
+function pushEvent(evt) {
+  _events = [{ ...evt, id: Date.now() + Math.random(), at: Date.now() }, ..._events].slice(0, MAX_EVENTS);
+  _eventListeners.forEach(fn => fn(_events));
+}
+
+function useEventFeed() {
+  const [list, setList] = useState(_events);
+  useEffect(() => {
+    _eventListeners.add(setList);
+    return () => { _eventListeners.delete(setList); };
+  }, []);
+  return list;
+}
+
+// Track previous prices to detect price moves between polls. Threshold of
+// 0.5% filters out tick noise; bigger moves create "events" for the feed.
+const _prevPrices = new Map();
+
+function detectPriceMoveEvents(tokens) {
+  for (const t of tokens) {
+    if (!t?.mint || !t.usdPrice) continue;
+    const prev = _prevPrices.get(t.mint);
+    if (prev != null) {
+      const pct = ((t.usdPrice - prev) / prev) * 100;
+      if (Math.abs(pct) >= 0.5) {
+        pushEvent({
+          mint: t.mint,
+          symbol: t.symbol,
+          icon: t.icon,
+          pct,
+          price: t.usdPrice,
+        });
+      }
+    }
+    _prevPrices.set(t.mint, t.usdPrice);
+  }
+}
+
+// =====================================================================
+// SPARKLINE — tiny inline SVG line chart of recent price points.
+// =====================================================================
+
+function Sparkline({ mint, width = 56, height = 18, color }) {
+  const history = usePriceHistory(mint);
+  // Pre-seed: before we have at least 2 price points, draw a faint dotted
+  // baseline so the card doesn't look broken. Replaced by real data within
+  // a few polls (~8s).
+  if (!history || history.length < 2) {
+    return (
+      <svg width={width} height={height} style={{ display: 'block', flexShrink: 0, opacity: 0.4 }}>
+        <line
+          x1="0" y1={height / 2}
+          x2={width} y2={height / 2}
+          stroke={C.muted2}
+          strokeWidth="1"
+          strokeDasharray="2,2"
+        />
+      </svg>
+    );
+  }
+
+  const vals = history.map(h => h.p);
+  const min = Math.min(...vals);
+  const max = Math.max(...vals);
+  const range = max - min || max * 0.001 || 1;
+  const step = width / Math.max(1, history.length - 1);
+
+  // Default color: green if up over the window, pink if down
+  const startP = vals[0];
+  const endP = vals[vals.length - 1];
+  const trendUp = endP >= startP;
+  const stroke = color || (trendUp ? C.up : C.down);
+
+  const points = history.map((h, i) => {
+    const x = i * step;
+    const y = height - ((h.p - min) / range) * (height - 2) - 1;
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  }).join(' ');
+
+  return (
+    <svg width={width} height={height} style={{ display: 'block', flexShrink: 0 }}>
+      <polyline
+        points={points}
+        fill="none"
+        stroke={stroke}
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+// =====================================================================
+// FLASH-ON-UPDATE — when a token's price changes, briefly highlight the
+// card green (up) or pink (down). Pure dopamine. Cheap: one ref per card,
+// no extra state.
+// =====================================================================
+
+function usePriceFlash(mint, currentPrice) {
+  const lastRef = useRef({ price: currentPrice, dir: null, at: 0 });
+  // Update ref synchronously during render, but only flag a NEW direction
+  // when the price actually moves. The component reads `dir` via getter.
+  if (currentPrice && lastRef.current.price && currentPrice !== lastRef.current.price) {
+    const up = currentPrice > lastRef.current.price;
+    lastRef.current = { price: currentPrice, dir: up ? 'up' : 'down', at: Date.now() };
+  } else if (currentPrice && !lastRef.current.price) {
+    lastRef.current = { price: currentPrice, dir: null, at: 0 };
+  }
+  // Re-render after the flash animation duration so the animation key
+  // resets cleanly on next price update.
+  useEffect(() => {
+    if (!lastRef.current.dir) return;
+    const id = setTimeout(() => {
+      lastRef.current = { ...lastRef.current, dir: null };
+    }, 700);
+    return () => clearTimeout(id);
+  }, [currentPrice]);
+  return lastRef.current;
+}
+
+// =====================================================================
+// SOUND FEEDBACK — toggleable, off by default. A short tick on price
+// moves. Uses Web Audio so no asset loading. Honors the user preference
+// stored in localStorage.
+// =====================================================================
+
+const SOUND_PREF_KEY = 'nexus_meme_sound_v1';
+
+function getSoundEnabled() {
+  try { return localStorage.getItem(SOUND_PREF_KEY) === '1'; } catch { return false; }
+}
+function setSoundEnabled(on) {
+  try { localStorage.setItem(SOUND_PREF_KEY, on ? '1' : '0'); } catch {}
+}
+
+let _audioCtx = null;
+function getAudioCtx() {
+  if (_audioCtx) return _audioCtx;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (Ctx) _audioCtx = new Ctx();
+  } catch {}
+  return _audioCtx;
+}
+
+// Tick the audio queue. Single short blip; up = higher tone, down = lower.
+function playPriceTick(direction) {
+  if (!getSoundEnabled()) return;
+  const ctx = getAudioCtx();
+  if (!ctx) return;
+  try {
+    if (ctx.state === 'suspended') ctx.resume();
+    const osc  = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.frequency.value = direction === 'up' ? 880 : 440;
+    gain.gain.value = 0.0001;
+    osc.connect(gain).connect(ctx.destination);
+    const now = ctx.currentTime;
+    gain.gain.exponentialRampToValueAtTime(0.05, now + 0.01);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.12);
+    osc.start(now);
+    osc.stop(now + 0.13);
+  } catch {}
+}
+
+// React-friendly toggle that re-renders consumers on change.
+const _soundListeners = new Set();
+function useSoundPref() {
+  const [on, setOn] = useState(() => getSoundEnabled());
+  useEffect(() => {
+    const update = () => setOn(getSoundEnabled());
+    _soundListeners.add(update);
+    return () => { _soundListeners.delete(update); };
+  }, []);
+  const toggle = useCallback(() => {
+    const next = !getSoundEnabled();
+    setSoundEnabled(next);
+    _soundListeners.forEach(fn => fn());
+  }, []);
+  return [on, toggle];
+}
+
+// =====================================================================
+// EVENT TICKER — live strip of recent price-move events.
+// Honestly labeled as price moves (not "buys") since we synthesize from
+// polling diffs, not real on-chain trade events.
+// =====================================================================
+
+function EventTicker({ onTap, seedTokens }) {
+  const events = useEventFeed();
+  const now = useTickingNow(1_000); // tick every 1s for the "Xs ago" timestamp
+
+  // Fallback to top gainers when we don't have any real events yet.
+  // Keeps the ticker alive on first page load.
+  const items = events.length > 0
+    ? events
+    : (seedTokens || [])
+        .filter(t => Number.isFinite(t.change1h) && Math.abs(t.change1h) > 0.1)
+        .sort((a, b) => Math.abs(b.change1h) - Math.abs(a.change1h))
+        .slice(0, 8)
+        .map(t => ({
+          id: 'seed-' + t.mint,
+          mint: t.mint,
+          symbol: t.symbol,
+          pct: t.change1h,
+          at: Date.now(),
+          seed: true,
+        }));
+
+  if (!items.length) {
+    return (
+      <div style={{
+        padding: '8px 12px',
+        borderRadius: 10,
+        background: 'rgba(0,0,0,.30)',
+        border: `1px solid ${C.border}`,
+        marginBottom: 10,
+        fontSize: 10, color: C.muted2, textAlign: 'center', ...T.mono,
+        letterSpacing: '.08em',
+      }}>WAITING FOR PRICE MOVES...</div>
+    );
+  }
+  return (
+    <div style={{
+      position: 'relative',
+      overflow: 'hidden',
+      borderRadius: 10,
+      background: 'rgba(0,0,0,.30)',
+      border: `1px solid ${C.border}`,
+      padding: '6px 0',
+      marginBottom: 10,
+    }}>
+      <div style={{
+        position: 'absolute', left: 0, top: 0, bottom: 0, width: 24, zIndex: 2,
+        background: `linear-gradient(90deg,${C.bg},transparent)`, pointerEvents: 'none',
+      }}/>
+      <div style={{
+        position: 'absolute', right: 0, top: 0, bottom: 0, width: 24, zIndex: 2,
+        background: `linear-gradient(270deg,${C.bg},transparent)`, pointerEvents: 'none',
+      }}/>
+      <div style={{
+        display: 'flex', gap: 14,
+        overflowX: 'auto', WebkitOverflowScrolling: 'touch',
+        padding: '0 14px', scrollbarWidth: 'none',
+      }}>
+        {items.map(evt => {
+          const secsAgo = Math.max(0, Math.floor((now - evt.at) / 1000));
+          const up = evt.pct >= 0;
+          return (
+            <button
+              key={evt.id}
+              onClick={() => onTap?.(evt.mint)}
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 6,
+                background: 'transparent', border: 'none', cursor: 'pointer',
+                color: C.ink, padding: 0, flexShrink: 0, ...T.mono,
+              }}
+            >
+              <span style={{
+                fontSize: 11, fontWeight: 800, color: C.inkStr,
+                ...T.display, letterSpacing: '-.01em',
+              }}>{evt.symbol}</span>
+              <span style={{
+                fontSize: 10, fontWeight: 800,
+                color: up ? C.up : C.down,
+                fontVariantNumeric: 'tabular-nums',
+              }}>{up ? '+' : ''}{evt.pct.toFixed(2)}%</span>
+              <span style={{
+                fontSize: 9, color: C.muted2,
+              }}>{evt.seed ? '1h' : secsAgo + 's'}</span>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// =====================================================================
 // WATCHLIST (localStorage)
 // =====================================================================
 
@@ -805,9 +1137,22 @@ function PulseCard({ token, onTradeBuy, onTradeSell, holding, presetSol, stage }
     ? (Number.isFinite(token.change24h) ? token.change24h : token.change1h)
     : (Number.isFinite(token.change1h) && token.change1h !== 0 ? token.change1h : token.change24h);
 
+  // Flash animation on price update; also fires the sound tick once.
+  const flash = usePriceFlash(token.mint, token.usdPrice);
+  useEffect(() => {
+    if (flash.dir && Date.now() - flash.at < 300) {
+      playPriceTick(flash.dir);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flash.at]);
+
   return (
     <button
       onClick={() => onTradeBuy(token, null)}
+      // Unique key on direction+timestamp so the CSS animation restarts
+      // each time the price moves. Otherwise React reuses the same DOM
+      // node and the animation only plays once.
+      key={flash.dir ? `${flash.dir}-${flash.at}` : 'idle'}
       style={{
         width: '100%', textAlign: 'left',
         padding: '8px 10px',
@@ -817,6 +1162,9 @@ function PulseCard({ token, onTradeBuy, onTradeSell, holding, presetSol, stage }
         cursor: 'pointer', marginBottom: 6,
         display: 'flex', flexDirection: 'column', gap: 6,
         color: C.ink, ...T.body,
+        animation: flash.dir
+          ? `${flash.dir === 'up' ? 'nx-flash-up' : 'nx-flash-down'} 0.7s ease-out`
+          : 'none',
       }}
     >
       {/* Row 1: icon + symbol + badges */}
@@ -850,17 +1198,24 @@ function PulseCard({ token, onTradeBuy, onTradeSell, holding, presetSol, stage }
         </div>
       </div>
 
-      {/* Row 2: price/change/mcap */}
+      {/* Row 2: price/change/mcap + sparkline */}
       <div style={{
-        display: 'flex', alignItems: 'baseline', gap: 6,
+        display: 'flex', alignItems: 'center', gap: 6,
         fontSize: 10, color: C.muted, ...T.mono,
       }}>
-        <ChangeBadge pct={changePct}/>
-        {token.mcap > 0 && (
-          <span style={{ color: C.muted2, fontSize: 9 }}>
-            {fmtUsd(token.mcap, 0)}
-          </span>
-        )}
+        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6, flex: 1, minWidth: 0 }}>
+          <ChangeBadge pct={changePct}/>
+          {token.mcap > 0 && (
+            <span style={{
+              color: C.muted2, fontSize: 9,
+              overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+            }}>
+              {fmtUsd(token.mcap, 0)}
+            </span>
+          )}
+        </div>
+        {/* Inline sparkline — momentum at a glance */}
+        <Sparkline mint={token.mint} width={48} height={16}/>
       </div>
 
       {/* Bonding curve progress (for STRETCH column) */}
@@ -939,8 +1294,16 @@ const STAGE_THEMES = {
   },
 };
 
-function PulseColumn({ stage, tokens, holdings, defaultPreset, onTradeBuy, onTradeSell, loading }) {
+function PulseColumn({ stage, tokens, rawCount, holdings, defaultPreset, onTradeBuy, onTradeSell, loading, filter, onFilterChange }) {
   const theme = STAGE_THEMES[stage];
+  const [showFilter, setShowFilter] = useState(false);
+  const hasActiveFilter = filter && (filter.minLiq > 0 || filter.minHolders > 0 || filter.maxAgeHours != null);
+  // Count of active filter dimensions — helps user see how aggressive their filter is
+  const activeFilterCount = filter
+    ? (filter.minLiq > 0 ? 1 : 0) + (filter.minHolders > 0 ? 1 : 0) + (filter.maxAgeHours != null ? 1 : 0)
+    : 0;
+  const isFiltered = hasActiveFilter && typeof rawCount === 'number' && rawCount > tokens.length;
+
   return (
     <div style={{
       flex: 1, minWidth: 0,
@@ -970,12 +1333,51 @@ function PulseColumn({ stage, tokens, holdings, defaultPreset, onTradeBuy, onTra
             letterSpacing: '.04em', marginTop: 1, ...T.mono,
           }}>{theme.sublabel}</div>
         </div>
-        <span style={{
-          fontSize: 9, color: C.muted, fontWeight: 700,
-          padding: '2px 6px', borderRadius: 99,
-          background: 'rgba(255,255,255,.04)', ...T.mono,
-        }}>{tokens.length}</span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+          <span style={{
+            fontSize: 9, color: isFiltered ? theme.color : C.muted, fontWeight: 700,
+            padding: '2px 6px', borderRadius: 99,
+            background: 'rgba(255,255,255,.04)', ...T.mono,
+            fontVariantNumeric: 'tabular-nums',
+          }}>{isFiltered ? `${tokens.length}/${rawCount}` : tokens.length}</span>
+          <button
+            onClick={() => setShowFilter(v => !v)}
+            title="Filters"
+            style={{
+              position: 'relative',
+              width: 22, height: 22, padding: 0,
+              borderRadius: 6,
+              border: `1px solid ${hasActiveFilter ? theme.accent : C.border}`,
+              background: hasActiveFilter ? theme.bgAccent : 'rgba(255,255,255,.03)',
+              color: hasActiveFilter ? theme.color : C.muted,
+              cursor: 'pointer', fontSize: 11, lineHeight: 1,
+            }}
+          >
+            ⚙
+            {activeFilterCount > 0 && (
+              <span style={{
+                position: 'absolute', top: -3, right: -3,
+                width: 11, height: 11, borderRadius: '50%',
+                background: theme.color,
+                color: '#04070f',
+                fontSize: 7.5, fontWeight: 900,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                ...T.mono,
+              }}>{activeFilterCount}</span>
+            )}
+          </button>
+        </div>
       </div>
+
+      {/* Filter pane (collapsible) */}
+      {showFilter && (
+        <FilterPane
+          theme={theme}
+          filter={filter || { minLiq: 0, minHolders: 0, maxAgeHours: null }}
+          onChange={onFilterChange}
+          onClose={() => setShowFilter(false)}
+        />
+      )}
 
       {/* Column body */}
       <div style={{
@@ -991,7 +1393,7 @@ function PulseColumn({ stage, tokens, holdings, defaultPreset, onTradeBuy, onTra
           <div style={{
             padding: '20px 8px', textAlign: 'center',
             color: C.muted2, fontSize: 10.5, ...T.body,
-          }}>Nothing yet</div>
+          }}>{hasActiveFilter ? 'No tokens match filters' : 'Nothing yet'}</div>
         ) : (
           tokens.map(t => (
             <PulseCard
@@ -1005,6 +1407,98 @@ function PulseColumn({ stage, tokens, holdings, defaultPreset, onTradeBuy, onTra
             />
           ))
         )}
+      </div>
+    </div>
+  );
+}
+
+// FilterPane — per-column filter controls. Slim, mobile-friendly.
+function FilterPane({ theme, filter, onChange, onClose }) {
+  const liqOptions     = [0, 5_000, 25_000, 50_000];
+  const holdersOptions = [0, 100, 500, 1000];
+  const ageOptions     = [null, 1, 6, 24];   // hours; null = no cap
+  return (
+    <div style={{
+      padding: '10px 12px',
+      borderBottom: `1px solid ${C.hairline}`,
+      background: 'rgba(0,0,0,.30)',
+      display: 'flex', flexDirection: 'column', gap: 8,
+    }}>
+      <FilterChipRow
+        label="MIN LIQ"
+        options={liqOptions}
+        value={filter.minLiq}
+        format={(v) => v === 0 ? 'Any' : '$' + (v >= 1000 ? (v / 1000) + 'K' : v)}
+        onSelect={(v) => onChange({ ...filter, minLiq: v })}
+        themeColor={theme.color}
+      />
+      <FilterChipRow
+        label="MIN HLDRS"
+        options={holdersOptions}
+        value={filter.minHolders}
+        format={(v) => v === 0 ? 'Any' : v + '+'}
+        onSelect={(v) => onChange({ ...filter, minHolders: v })}
+        themeColor={theme.color}
+      />
+      <FilterChipRow
+        label="MAX AGE"
+        options={ageOptions}
+        value={filter.maxAgeHours}
+        format={(v) => v == null ? 'Any' : v + 'h'}
+        onSelect={(v) => onChange({ ...filter, maxAgeHours: v })}
+        themeColor={theme.color}
+      />
+      <div style={{ display: 'flex', gap: 6, marginTop: 2 }}>
+        <button
+          onClick={() => onChange({ minLiq: 0, minHolders: 0, maxAgeHours: null })}
+          style={{
+            flex: 1, padding: '6px 8px', borderRadius: 7,
+            border: `1px solid ${C.border}`,
+            background: 'rgba(255,255,255,.03)',
+            color: C.muted, fontSize: 9.5, fontWeight: 700,
+            cursor: 'pointer', letterSpacing: '.06em', ...T.mono,
+          }}
+        >RESET</button>
+        <button
+          onClick={onClose}
+          style={{
+            flex: 1, padding: '6px 8px', borderRadius: 7, border: 'none',
+            background: `${theme.color}22`,
+            color: theme.color, fontSize: 9.5, fontWeight: 700,
+            cursor: 'pointer', letterSpacing: '.06em', ...T.mono,
+          }}
+        >DONE</button>
+      </div>
+    </div>
+  );
+}
+
+function FilterChipRow({ label, options, value, format, onSelect, themeColor }) {
+  return (
+    <div>
+      <div style={{
+        fontSize: 8.5, fontWeight: 700, color: C.muted2,
+        letterSpacing: '.08em', marginBottom: 4, ...T.mono,
+      }}>{label}</div>
+      <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+        {options.map(opt => {
+          const active = opt === value;
+          return (
+            <button
+              key={String(opt)}
+              onClick={() => onSelect(opt)}
+              style={{
+                flex: 1, minWidth: 0,
+                padding: '4px 6px', borderRadius: 6,
+                border: `1px solid ${active ? themeColor + '55' : C.border}`,
+                background: active ? `${themeColor}1A` : 'rgba(255,255,255,.02)',
+                color: active ? themeColor : C.muted,
+                fontSize: 9, fontWeight: 700, cursor: 'pointer',
+                whiteSpace: 'nowrap', ...T.mono,
+              }}
+            >{format(opt)}</button>
+          );
+        })}
       </div>
     </div>
   );
@@ -1948,6 +2442,7 @@ export default function MemeWonderland({ onConnectWallet }) {
   const [watchlist, setWatchlist]   = useState(() => loadWatchlist());
   const [query, setQuery]           = useState('');
   const [searchResults, setSearchResults] = useState(null);
+  const [soundOn, toggleSound] = useSoundPref();
 
   // Modal state
   const [activeToken, setActiveToken] = useState(null);
@@ -1989,20 +2484,61 @@ export default function MemeWonderland({ onConnectWallet }) {
   const [pulseTrending, setPulseTrending] = useState([]);
   const [pulseLoading, setPulseLoading]   = useState(true);
 
+  // Per-column filters. Default to wide-open; user can tighten via the
+  // gear icon on each column header. Loaded from localStorage for stickiness.
+  const [filters, setFilters] = useState(() => {
+    try {
+      const raw = localStorage.getItem('nexus_pulse_filters_v1');
+      if (raw) return JSON.parse(raw);
+    } catch {}
+    return {
+      new:      { minLiq: 0,      minHolders: 0, maxAgeHours: null },
+      stretch:  { minLiq: 0,      minHolders: 0, maxAgeHours: null },
+      migrated: { minLiq: 25_000, minHolders: 0, maxAgeHours: null }, // just liq floor to keep rugs out
+    };
+  });
+  const updateFilter = useCallback((stage, next) => {
+    setFilters(prev => {
+      const updated = { ...prev, [stage]: next };
+      try { localStorage.setItem('nexus_pulse_filters_v1', JSON.stringify(updated)); } catch {}
+      return updated;
+    });
+  }, []);
+
+  // In-flight guard — prevents pile-up if a poll takes longer than the
+  // poll interval (slow networks). Skips ticks when one is already running.
+  const pulseInFlight = useRef(false);
+
   const reloadPulse = useCallback(async () => {
-    const [recent, trending] = await Promise.all([
-      fetchRecentMemes({ limit: 80, minLiquidityUsd: 0 }),
-      fetchTrendingMemes({ interval: '1h', limit: 80 }),
-    ]);
-    setPulseRecent(recent);
-    setPulseTrending(trending);
-    setPulseLoading(false);
+    if (pulseInFlight.current) return;
+    pulseInFlight.current = true;
+    try {
+      const [recent, trending] = await Promise.all([
+        fetchRecentMemes({ limit: 60, minLiquidityUsd: 0 }),
+        fetchTrendingMemes({ interval: '1h', limit: 50 }),
+      ]);
+      setPulseRecent(recent);
+      setPulseTrending(trending);
+      setPulseLoading(false);
+      // Record price points for sparklines + detect significant moves for
+      // the event ticker. Done after state update so UI feels snappy.
+      const all = [...recent, ...trending];
+      for (const t of all) {
+        if (t?.mint && t.usdPrice > 0) recordPricePoint(t.mint, t.usdPrice);
+      }
+      detectPriceMoveEvents(all);
+    } finally {
+      pulseInFlight.current = false;
+    }
   }, []);
 
   useEffect(() => { reloadPulse(); }, [reloadPulse]);
 
   useEffect(() => {
-    const id = setInterval(reloadPulse, 10_000);
+    // 4s polling — feels live without hammering the API. Each poll runs
+    // 2 fetches in parallel (recent + trending). At 4s that's about 30
+    // requests/min, well within Jupiter's free-tier rate limits.
+    const id = setInterval(reloadPulse, 4_000);
     return () => clearInterval(id);
   }, [reloadPulse]);
 
@@ -2034,10 +2570,12 @@ export default function MemeWonderland({ onConnectWallet }) {
   }, []);
 
   // -- Load holdings (which displayed memes the user already owns).
-  //    Pull from both the Pulse columns AND the main tokens list so holdings
-  //    show up no matter which view the user is on.
+  //    Refetches every 30s rather than every Pulse poll (4s) so we don't
+  //    hammer the RPC. Also reloads on wallet change or after a trade.
+  //    Uses a ref to read the freshest token list without re-running the
+  //    effect when pulseColumns/tokens change.
+  const tokenListRef = useRef([]);
   useEffect(() => {
-    if (!walletPubkey) { setHoldings({}); return; }
     const seen = new Set();
     const all = [];
     [
@@ -2051,25 +2589,36 @@ export default function MemeWonderland({ onConnectWallet }) {
         all.push(t);
       }
     });
-    if (all.length === 0) { setHoldings({}); return; }
-    let cancelled = false;
-    (async () => {
-      // Cap at 50 tokens to keep RPC load reasonable
-      const slice = all.slice(0, 50);
-      const results = await Promise.allSettled(slice.map(t =>
-        fetchTokenBalance({ ownerPubkey: walletPubkey, mint: t.mint, decimals: t.decimals }),
-      ));
-      if (cancelled) return;
-      const map = {};
-      results.forEach((r, i) => {
-        if (r.status === 'fulfilled' && r.value.ui > 0) {
-          map[slice[i].mint] = r.value;
-        }
-      });
-      setHoldings(map);
-    })();
-    return () => { cancelled = true; };
-  }, [walletPubkey, pulseColumns, tokens]);
+    tokenListRef.current = all;
+  }, [pulseColumns, tokens]);
+
+  const refreshHoldings = useCallback(async () => {
+    if (!walletPubkey) { setHoldings({}); return; }
+    const all = tokenListRef.current;
+    if (all.length === 0) return; // keep existing map until tokens load
+    // Cap at 50 tokens to keep RPC load reasonable
+    const slice = all.slice(0, 50);
+    const results = await Promise.allSettled(slice.map(t =>
+      fetchTokenBalance({ ownerPubkey: walletPubkey, mint: t.mint, decimals: t.decimals }),
+    ));
+    const map = {};
+    results.forEach((r, i) => {
+      if (r.status === 'fulfilled' && r.value.ui > 0) {
+        map[slice[i].mint] = r.value;
+      }
+    });
+    setHoldings(map);
+  }, [walletPubkey]);
+
+  // Initial load + wallet-change trigger
+  useEffect(() => { refreshHoldings(); }, [refreshHoldings]);
+
+  // Periodic refresh every 30s
+  useEffect(() => {
+    if (!walletPubkey) return;
+    const id = setInterval(refreshHoldings, 30_000);
+    return () => clearInterval(id);
+  }, [walletPubkey, refreshHoldings]);
 
   // -- Search debounce --
   useEffect(() => {
@@ -2135,8 +2684,8 @@ export default function MemeWonderland({ onConnectWallet }) {
     //  - NEW: newest first (by firstPool desc)
     //  - STRETCH: highest bonding % first, then by mcap
     //  - MIGRATED: best 1h % first (active gainers float to top)
-    const t = (x) => x.firstPool ? new Date(x.firstPool).getTime() : 0;
-    newCol.sort((a, b) => t(b) - t(a));
+    const tFn = (x) => x.firstPool ? new Date(x.firstPool).getTime() : 0;
+    newCol.sort((a, b) => tFn(b) - tFn(a));
     stretchCol.sort((a, b) =>
       (b.bondingProgress || 0) - (a.bondingProgress || 0) ||
       (b.mcap || 0) - (a.mcap || 0)
@@ -2145,12 +2694,32 @@ export default function MemeWonderland({ onConnectWallet }) {
       (b.change1h || b.change24h || 0) - (a.change1h || a.change24h || 0)
     );
 
-    return {
-      new:      newCol.slice(0, 40),
-      stretch:  stretchCol.slice(0, 40),
-      migrated: migratedCol.slice(0, 40),
+    // Apply per-column filters (min liq, min holders, max age)
+    const applyFilter = (list, f) => {
+      if (!f) return list;
+      return list.filter(t => {
+        if (f.minLiq > 0 && (t.liquidity || 0) < f.minLiq) return false;
+        if (f.minHolders > 0 && (t.holders || 0) < f.minHolders) return false;
+        if (f.maxAgeHours != null && t.firstPool) {
+          const ageH = (Date.now() - new Date(t.firstPool).getTime()) / 3_600_000;
+          if (ageH > f.maxAgeHours) return false;
+        }
+        return true;
+      });
     };
-  }, [pulseRecent, pulseTrending]);
+
+    return {
+      new:      applyFilter(newCol,      filters.new).slice(0, 40),
+      stretch:  applyFilter(stretchCol,  filters.stretch).slice(0, 40),
+      migrated: applyFilter(migratedCol, filters.migrated).slice(0, 40),
+      // Pre-filter counts let the column header show "5/40" when filtered
+      rawCounts: {
+        new:      newCol.length,
+        stretch:  stretchCol.length,
+        migrated: migratedCol.length,
+      },
+    };
+  }, [pulseRecent, pulseTrending, filters]);
 
   // -- Watchlist toggling --
   const toggleWatch = useCallback((mint) => {
@@ -2172,6 +2741,21 @@ export default function MemeWonderland({ onConnectWallet }) {
     setInitialSol(null);
     setInitialSide('SELL');
   };
+  // Lookup a token by mint across all loaded sources, then open the buy
+  // modal. Used by the event ticker — user taps a price move and trades.
+  const openBuyByMint = useCallback((mint) => {
+    if (!mint) return;
+    const sources = [
+      ...pulseColumns.new,
+      ...pulseColumns.stretch,
+      ...pulseColumns.migrated,
+      ...pulseRecent,
+      ...pulseTrending,
+      ...tokens,
+    ];
+    const found = sources.find(t => t?.mint === mint);
+    if (found) openBuy(found, null);
+  }, [pulseColumns, pulseRecent, pulseTrending, tokens]);
 
   // Default preset for the "1-click buy" tile button (smallest meme preset)
   const defaultPreset = DEFAULT_BUY_PRESETS_SOL[0];
@@ -2184,6 +2768,8 @@ export default function MemeWonderland({ onConnectWallet }) {
         @keyframes nx-pulse { 0%,100%{opacity:1}50%{opacity:.4} }
         @keyframes nx-spin { to{transform:rotate(360deg)} }
         @keyframes nx-marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+        @keyframes nx-flash-up   { 0% { background: rgba(61,213,152,.22); } 100% { background: transparent; } }
+        @keyframes nx-flash-down { 0% { background: rgba(255,138,158,.22); } 100% { background: transparent; } }
         body.nexus-scroll-locked { overflow:hidden; }
       `}</style>
 
@@ -2233,22 +2819,35 @@ export default function MemeWonderland({ onConnectWallet }) {
                   backgroundClip: 'text',
                 }}>wonderland</span>
               </h1>
-              <div style={{
-                display: 'inline-flex', alignItems: 'center', gap: 6,
-                padding: '3px 9px', borderRadius: 999,
-                background: 'rgba(255,93,155,.08)',
-                border: '1px solid rgba(255,93,155,.24)',
-                flexShrink: 0,
-              }}>
-                <span style={{
-                  width: 5, height: 5, borderRadius: '50%',
-                  background: C.hotPink, boxShadow: `0 0 8px ${C.hotPink}`,
-                  animation: 'nx-pulse 1.6s ease-in-out infinite',
-                }}/>
-                <span style={{
-                  color: C.hotPink, fontSize: 8.5, fontWeight: 800,
-                  letterSpacing: '.10em', ...T.mono,
-                }}>LIVE</span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                <button
+                  onClick={toggleSound}
+                  title={soundOn ? 'Mute price ticks' : 'Enable price ticks'}
+                  style={{
+                    width: 26, height: 22, padding: 0,
+                    borderRadius: 6,
+                    border: `1px solid ${soundOn ? C.borderHi : C.border}`,
+                    background: soundOn ? C.hlDim : 'rgba(255,255,255,.03)',
+                    color: soundOn ? C.hl : C.muted,
+                    cursor: 'pointer', fontSize: 11, lineHeight: 1,
+                  }}
+                >{soundOn ? '🔊' : '🔇'}</button>
+                <div style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 6,
+                  padding: '3px 9px', borderRadius: 999,
+                  background: 'rgba(255,93,155,.08)',
+                  border: '1px solid rgba(255,93,155,.24)',
+                }}>
+                  <span style={{
+                    width: 5, height: 5, borderRadius: '50%',
+                    background: C.hotPink, boxShadow: `0 0 8px ${C.hotPink}`,
+                    animation: 'nx-pulse 1.6s ease-in-out infinite',
+                  }}/>
+                  <span style={{
+                    color: C.hotPink, fontSize: 8.5, fontWeight: 800,
+                    letterSpacing: '.10em', ...T.mono,
+                  }}>LIVE</span>
+                </div>
               </div>
             </div>
 
@@ -2289,6 +2888,15 @@ export default function MemeWonderland({ onConnectWallet }) {
         {/* Slim featured strip — 1-row hero replacement */}
         {heroToken && !query && (
           <FeaturedStrip token={heroToken} onBuy={openBuy}/>
+        )}
+
+        {/* Live event ticker — shows recent price moves, tap to trade.
+            Seeded with top movers from MIGRATED so it never feels empty. */}
+        {!query && tab !== 'watch' && (
+          <EventTicker
+            onTap={openBuyByMint}
+            seedTokens={[...pulseColumns.migrated, ...pulseColumns.stretch]}
+          />
         )}
 
         {/* Mode toggle — Pulse (default) vs Watch (saved tokens) */}
@@ -2339,11 +2947,14 @@ export default function MemeWonderland({ onConnectWallet }) {
                 <PulseColumn
                   stage={stage}
                   tokens={pulseColumns[stage]}
+                  rawCount={pulseColumns.rawCounts?.[stage]}
                   holdings={holdings}
                   defaultPreset={defaultPreset}
                   onTradeBuy={openBuy}
                   onTradeSell={openSell}
                   loading={pulseLoading}
+                  filter={filters[stage]}
+                  onFilterChange={(next) => updateFilter(stage, next)}
                 />
               </div>
             ))}
@@ -2409,7 +3020,7 @@ export default function MemeWonderland({ onConnectWallet }) {
         walletPubkey={walletPubkey}
         onConnectWallet={onConnectWallet}
         onClose={() => setActiveToken(null)}
-        onAfterTrade={() => { reloadPulse(); reloadMainList(); }}
+        onAfterTrade={() => { reloadPulse(); reloadMainList(); refreshHoldings(); }}
         presets={presets}
       />
     </>
