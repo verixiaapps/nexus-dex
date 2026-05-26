@@ -1,5 +1,5 @@
-// Swap.jsx — ATOMIC single-transaction version.
-// 
+// SwapWidget.jsx — atomic single-transaction Jupiter swap.
+//
 // Flow:
 //   1. Get Jupiter swap instructions via /api/jupiter/build (no platformFeeBps)
 //   2. Build fee instructions (5% of input mint -> FEE_WALLET)
@@ -12,7 +12,7 @@
 //   - SOL input: fee transfer goes FIRST, from native SOL, before Jupiter
 //     wraps the remaining lamports.
 //   - SPL input: fee ATA-create + transferChecked go FIRST, before Jupiter's
-//     setup ixs touch the source ATA. Jupiter routes `netRaw` after fee.
+//     setup ixs touch the source ATA. Jupiter routes the net amount after fee.
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -22,7 +22,6 @@ import {
   VersionedTransaction,
   TransactionMessage,
   SystemProgram,
-  ComputeBudgetProgram,
   AddressLookupTableAccount,
 } from '@solana/web3.js';
 import {
@@ -118,7 +117,7 @@ const deserIx = (ix) => ({
 
 /* ─── COMPONENT ───────────────────────────────────────────────────── */
 
-export default function Swap() {
+export default function SwapWidget() {
   const wallet = useWallet();
   const connection = useMemo(() => new Connection(RPC_URL, 'confirmed'), []);
 
@@ -129,7 +128,7 @@ export default function Swap() {
   const [outputMint, setOutputMint]  = useState(USDC_MINT);
   const [amount,     setAmount]      = useState('');
 
-  const [showPicker,   setShowPicker]   = useState(null);
+  const [showPicker, setShowPicker] = useState(null);
 
   const [quote, setQuote]           = useState(null);
   const [quoting, setQuoting]       = useState(false);
@@ -260,7 +259,7 @@ export default function Swap() {
         }
         const data = await r.json();
         if (!ac.signal.aborted) {
-          setQuote({ ...data, netRaw: net.toString() });
+          setQuote(data);
           setQuoteError(null);
         }
       } catch (e) {
@@ -327,14 +326,12 @@ export default function Swap() {
 
     try {
       const dec = inputToken.decimals;
-      const netRaw = quote.netRaw ||
-        ((BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n).toString();
 
       // Use the SAME quote the user is looking at. No re-fetch — the build
       // response stored in `quote` is what the user sees and what we sign.
       const build = quote;
 
-      // 2) Build the fee instructions FIRST (they go at the front of the tx).
+      // 1) Build the fee instructions FIRST (they go at the front of the tx).
       const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
       if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
 
@@ -369,7 +366,7 @@ export default function Swap() {
         ));
       }
 
-      // 3) Assemble the full instruction list.
+      // 2) Assemble the full instruction list.
       // Order:
       //   [Jupiter compute-budget ixs]   (must come first for the runtime)
       //   [our fee ixs]                  (taken from user's balance up-front)
@@ -391,7 +388,7 @@ export default function Swap() {
       if (Array.isArray(build.otherInstructions))
         for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
 
-      // 4) Resolve Jupiter's address lookup tables.
+      // 3) Resolve Jupiter's address lookup tables.
       const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
       let alts = [];
       if (altKeys.length > 0) {
@@ -402,7 +399,7 @@ export default function Swap() {
         }) : null).filter(Boolean);
       }
 
-      // 5) Compile ONE v0 transaction.
+      // 4) Compile ONE v0 transaction.
       const latest = await connection.getLatestBlockhash('confirmed');
       const message = new TransactionMessage({
         payerKey:        wallet.publicKey,
@@ -411,7 +408,7 @@ export default function Swap() {
       }).compileToV0Message(alts);
       const tx = new VersionedTransaction(message);
 
-      // 6) Pre-flight simulation — catches insufficient balance / slippage
+      // 5) Pre-flight simulation — catches insufficient balance / slippage
       //    BEFORE we bother the wallet. This is the same tx the wallet will
       //    simulate (and the user will sign).
       const mapSimErr = (logs) => {
@@ -437,17 +434,17 @@ export default function Swap() {
         console.warn('[swap] sim non-fatal', simErr);
       }
 
-      // 7) Sign — wallet now simulates the FULL tx (swap + fee) and Blowfish
+      // 6) Sign — wallet now simulates the FULL tx (swap + fee) and Blowfish
       //    sees the complete net effect. One popup, one signature.
       const signed = await wallet.signTransaction(tx);
 
-      // 8) Broadcast.
+      // 7) Broadcast.
       const sig = await connection.sendRawTransaction(signed.serialize(), {
         skipPreflight: false,
         maxRetries: 3,
       });
 
-      // 9) Confirm with polling fallback.
+      // 8) Confirm with polling fallback.
       let confirmed = false;
       try {
         const conf = await Promise.race([
@@ -808,9 +805,6 @@ function TokenPicker({ tokens, loading, balances, excludeMint, onSelect, onClose
   );
 }
 
-function SettingsModal() { return null; } // removed — slippage hardcoded
-
-
 function Row({ label, children }) {
   return (
     <div style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
@@ -904,12 +898,6 @@ const ChevronIcon = () => (
 const FlipIcon = () => (
   <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
     <path d="M7 4v16M7 4l-3 3M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3" transform="rotate(90 12 12)"/>
-  </svg>
-);
-const SettingsIcon = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <circle cx="12" cy="12" r="3"/>
-    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09a1.65 1.65 0 0 0 1.51-1 1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
   </svg>
 );
 const CloseIcon = () => (
