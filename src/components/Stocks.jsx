@@ -7,9 +7,10 @@ import {
   AddressLookupTableAccount,
   PublicKey,
 } from '@solana/web3.js';
+import './Stocks.css';
 
 // =====================================================================
-// CONFIG — xStocks via Jupiter Aggregator. 5% platform fee to FEE_WALLET.
+// CONFIG — brand tokens via Jupiter Aggregator. 5% platform fee to FEE_WALLET.
 // Atomic single-tx pattern: BUY prepends USDC fee transfer (deducted from
 // user's input before Jupiter routes it); SELL appends USDC fee transfer
 // taken from `otherAmountThreshold` so it never overdraws after slippage.
@@ -30,7 +31,7 @@ const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqC
 const ATA_PROGRAM_ID        = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 
 // =====================================================================
-// US GEO BLOCK — required for xStocks compliance. No VIP override.
+// US GEO BLOCK — required for compliance. No VIP override.
 // =====================================================================
 const GEO_URL       = 'https://www.cloudflare.com/cdn-cgi/trace';
 const GEO_CACHE_KEY = 'verixia_geo_country_v1';
@@ -60,10 +61,10 @@ async function detectCountry() {
 }
 
 // =====================================================================
-// XSTOCKS LIST — verified mints. Decimals: 8 (Token-2022 standard).
+// BRAND TOKEN LIST — verified mints. Decimals: 8 (Token-2022 standard).
 // =====================================================================
-const STOCKS = [
-  // ------ TECH MEGACAPS ------
+const BRANDS = [
+  // ------ TECH MEGABRANDS ------
   { mint: 'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB', symbol: 'TSLAx',  name: 'Tesla',                 ticker: 'TSLA',  decimals: 8, sector: 'Tech',   color: '#e31837' },
   { mint: 'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp', symbol: 'AAPLx',  name: 'Apple',                 ticker: 'AAPL',  decimals: 8, sector: 'Tech',   color: '#a2aaad' },
   { mint: 'Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh', symbol: 'NVDAx',  name: 'NVIDIA',                ticker: 'NVDA',  decimals: 8, sector: 'Tech',   color: '#76b900' },
@@ -81,11 +82,11 @@ const STOCKS = [
   { mint: 'XsueG8BtpquVJX9LVLLEGuViXUungE6WmK5YZ3p3bd1', symbol: 'CRCLx',  name: 'Circle',                ticker: 'CRCL',  decimals: 8, sector: 'Crypto', color: '#3399ff' },
   { mint: 'XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg', symbol: 'HOODx',  name: 'Robinhood',             ticker: 'HOOD',  decimals: 8, sector: 'Crypto', color: '#cdff00' },
 
-  // ------ ETFs ------
-  { mint: 'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W', symbol: 'SPYx',   name: 'S&P 500 ETF',           ticker: 'SPY',   decimals: 8, sector: 'ETF',    color: '#1c4f9c' },
-  { mint: 'Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ', symbol: 'QQQx',   name: 'Nasdaq 100 ETF',        ticker: 'QQQ',   decimals: 8, sector: 'ETF',    color: '#003b71' },
-  { mint: 'Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re', symbol: 'GLDx',   name: 'Gold Trust',            ticker: 'GLD',   decimals: 8, sector: 'ETF',    color: '#d4af37' },
-  { mint: 'XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp', symbol: 'TBLLx',  name: '1-3 Month T-Bill ETF',  ticker: 'TBLL',  decimals: 8, sector: 'ETF',    color: '#2a4d6e' },
+  // ------ INDEX TOKENS ------
+  { mint: 'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W', symbol: 'SPYx',   name: 'S&P 500 Index',         ticker: 'SPY',   decimals: 8, sector: 'Index',  color: '#1c4f9c' },
+  { mint: 'Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ', symbol: 'QQQx',   name: 'Nasdaq 100 Index',      ticker: 'QQQ',   decimals: 8, sector: 'Index',  color: '#003b71' },
+  { mint: 'Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re', symbol: 'GLDx',   name: 'Gold',                  ticker: 'GLD',   decimals: 8, sector: 'Index',  color: '#d4af37' },
+  { mint: 'XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp', symbol: 'TBLLx',  name: 'Short-Term Treasury',   ticker: 'TBLL',  decimals: 8, sector: 'Index',  color: '#2a4d6e' },
 ];
 
 const FILTERS = [
@@ -93,31 +94,8 @@ const FILTERS = [
   { id: 'Trending', label: 'Trending' },
   { id: 'Tech',     label: 'Tech' },
   { id: 'Crypto',   label: 'Crypto-Adj' },
-  { id: 'ETF',      label: 'ETFs' },
+  { id: 'Index',    label: 'Indexes' },
 ];
-
-// =====================================================================
-// DESIGN TOKENS
-// =====================================================================
-const C = {
-  bg:'#04070f', bg2:'#070b16', surface:'#0a1020', surface2:'#0e1428',
-  ink:'#e6efff', inkStr:'#f5fafe',
-  muted:'#7a92b3', muted2:'#475670',
-  hl:'#97fce4', hl2:'#5ce9c8', hlDim:'rgba(151,252,228,.14)',
-  violet:'#a87fff',
-  up:'#3dd598', down:'#ff8a9e',
-  amber:'#f5b53d', live:'#ff3d5d', gold:'#ffcd3c',
-  border:'rgba(255,255,255,.06)', borderHi:'rgba(151,252,228,.24)',
-  hairline:'rgba(255,255,255,.05)',
-  glow:'0 0 24px rgba(151,252,228,.18),0 0 48px rgba(151,252,228,.06)',
-  shadowLg:'0 20px 60px rgba(0,0,0,.55)',
-};
-const T = {
-  display:{ fontFamily:"'Syne', system-ui, sans-serif" },
-  body:   { fontFamily:"'DM Sans', system-ui, sans-serif" },
-  mono:   { fontFamily:"'IBM Plex Mono', monospace" },
-  hero:   { fontFamily:"'Clash Display', 'Syne', system-ui, sans-serif" },
-};
 
 // =====================================================================
 // UTILS
@@ -146,22 +124,6 @@ function cleanAmount(v) {
 }
 function isValidSolAddr(v) { return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(String(v || '')); }
 
-// US market hours (informational only — xStocks trade 24/7 regardless)
-function getUsMarketStatus() {
-  const now = new Date();
-  const fmt = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: 'numeric', minute: 'numeric', hour12: false });
-  const parts = fmt.formatToParts(now).reduce((acc, p) => { acc[p.type] = p.value; return acc; }, {});
-  const day = parts.weekday;
-  const hour = parseInt(parts.hour, 10);
-  const minute = parseInt(parts.minute, 10);
-  const timeMin = hour * 60 + minute;
-  if (day === 'Sat' || day === 'Sun') return { open: false, label: 'Closed · Weekend' };
-  if (timeMin >= 9*60+30 && timeMin < 16*60) return { open: true,  label: 'US Market Open' };
-  if (timeMin >= 4*60   && timeMin < 9*60+30) return { open: false, label: 'Pre-Market' };
-  if (timeMin >= 16*60  && timeMin < 20*60)   return { open: false, label: 'After-Hours' };
-  return { open: false, label: 'Closed · Overnight' };
-}
-
 async function fetchWithTimeout(url, opts = {}, timeoutMs = 12_000) {
   const controller = new AbortController();
   const id = setTimeout(() => controller.abort(), timeoutMs);
@@ -169,7 +131,7 @@ async function fetchWithTimeout(url, opts = {}, timeoutMs = 12_000) {
   finally { clearTimeout(id); }
 }
 
-async function fetchStockPrices(mints) {
+async function fetchBrandPrices(mints) {
   if (!mints.length) return {};
   try {
     const url = `https://lite-api.jup.ag/price/v3?ids=${mints.join(',')}`;
@@ -342,14 +304,14 @@ async function fetchTokenBalance({ ownerPubkey, mint, decimals }) {
 // ─────────────────────────────────────────────────────────────────────
 // ATOMIC TX ASSEMBLY
 //
-// BUY (USDC -> stock):
+// BUY (USDC -> brand):
 //   [Jupiter compute budget ixs]
 //   [fee ATA-idempotent + transferChecked]   ← prepended
 //   [Jupiter setup ixs]
 //   [Jupiter swap ix]
 //   [Jupiter cleanup ix]
 //
-// SELL (stock -> USDC):
+// SELL (brand -> USDC):
 //   [Jupiter compute budget ixs]
 //   [Jupiter setup ixs]
 //   [Jupiter swap ix]
@@ -413,7 +375,7 @@ const JUPITER_ERROR_CODES = {
   6011: 'Invalid referral authority',
   6012: 'Token ledger mismatch',
   6013: 'Invalid token ledger',
-  6014: 'Token program incompatibility — this stock may need different routing',
+  6014: 'Token program incompatibility — this brand may need different routing',
 };
 
 function parseSimError(err, logs) {
@@ -432,7 +394,7 @@ function parseSimError(err, logs) {
   const arr = Array.isArray(logs) ? logs : [];
   const errLog = arr.find(l => /error|failed|insufficient|slippage/i.test(String(l)));
   if (errLog) return String(errLog).slice(0, 140);
-  return 'Trade unavailable — try a different amount or stock';
+  return 'Trade unavailable — try a different amount or brand';
 }
 
 async function simulateBeforeSign(serializedTxBase64) {
@@ -478,52 +440,43 @@ function useBodyLock(open) {
 // =====================================================================
 // SUB-COMPONENTS
 // =====================================================================
-function StockBadge({ stock, size = 40 }) {
-  const letter = (stock.ticker || stock.symbol || '?').charAt(0).toUpperCase();
+function BrandBadge({ brand, size = 40 }) {
+  const letter = (brand.ticker || brand.symbol || '?').charAt(0).toUpperCase();
   return (
-    <div style={{
-      width: size, height: size, borderRadius: '50%',
-      background: `linear-gradient(135deg,${stock.color},${stock.color}dd)`,
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      color: '#fff', fontWeight: 900, fontSize: Math.round(size * 0.38),
-      flexShrink: 0, letterSpacing: '-.02em', textShadow: '0 1px 3px rgba(0,0,0,.5)',
-      boxShadow: `0 4px 14px ${stock.color}50`,
-      ...T.display,
-    }}>{letter}</div>
+    <div
+      className="st-badge"
+      style={{
+        width: size, height: size,
+        background: `linear-gradient(135deg,${brand.color},${brand.color}dd)`,
+        fontSize: Math.round(size * 0.38),
+        boxShadow: `0 4px 14px ${brand.color}50`,
+      }}
+    >{letter}</div>
   );
 }
 
-function StockTile({ stock, price, onClick }) {
+function BrandTile({ brand, price, onClick }) {
   return (
-    <button onClick={onClick} style={{
-      padding: '14px 16px',
-      display: 'grid', gridTemplateColumns: '40px 1fr auto', gap: 14, alignItems: 'center',
-      background: 'transparent',
-      border: 'none', borderBottom: `1px solid ${C.hairline}`,
-      width: '100%', textAlign: 'left', cursor: 'pointer',
-      WebkitTapHighlightColor: 'rgba(151,252,228,.10)', transition: 'background .15s',
-    }}
-    onMouseEnter={e => e.currentTarget.style.background = 'rgba(151,252,228,.03)'}
-    onMouseLeave={e => e.currentTarget.style.background = 'transparent'}>
-      <StockBadge stock={stock} size={40}/>
-      <div style={{ minWidth: 0 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <span style={{ color: C.inkStr, fontWeight: 800, fontSize: 14, letterSpacing: '-.01em', ...T.display }}>{stock.symbol}</span>
-          <span style={{ color: C.muted2, fontSize: 9, fontWeight: 700, padding: '2px 6px', borderRadius: 4, background: 'rgba(255,255,255,.04)', letterSpacing: '.04em', ...T.mono }}>{stock.ticker}</span>
+    <button onClick={onClick} className="st-tile">
+      <BrandBadge brand={brand} size={40}/>
+      <div className="st-tile-mid">
+        <div className="st-tile-row">
+          <span className="st-tile-sym">{brand.symbol}</span>
+          <span className="st-tile-ticker">{brand.ticker}</span>
         </div>
-        <div style={{ color: C.muted, fontSize: 11.5, marginTop: 2, ...T.body }}>{stock.name}</div>
+        <div className="st-tile-name">{brand.name}</div>
       </div>
-      <div style={{ textAlign: 'right' }}>
-        <div style={{ color: price > 0 ? C.inkStr : C.muted, fontSize: 15, fontWeight: 800, fontVariantNumeric: 'tabular-nums', ...T.mono }}>
+      <div className="st-tile-right">
+        <div className={'st-tile-price' + (price > 0 ? '' : ' st-muted')}>
           {price > 0 ? fmtUsd(price) : '—'}
         </div>
-        <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.06em', marginTop: 2, ...T.mono }}>TAP TO TRADE</div>
+        <div className="st-tile-cta">TAP TO TRADE</div>
       </div>
     </button>
   );
 }
 
-function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet }) {
+function TradeModal({ open, brand, price, onClose, walletPubkey, onConnectWallet }) {
   const { signTransaction, connected } = useWallet();
   const wcon = connected;
 
@@ -533,7 +486,7 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
   const [quoting, setQuoting] = useState(false);
   const [submitState, setSubmitState] = useState({ kind: 'idle', message: '' });
   const [error, setError]     = useState('');
-  const [stockBal, setStockBal] = useState({ atomic: 0n, ui: 0, loaded: false });
+  const [brandBal, setBrandBal] = useState({ atomic: 0n, ui: 0, loaded: false });
   const [usdcBal,  setUsdcBal]  = useState({ atomic: 0n, ui: 0, loaded: false });
   const quoteSeq = useRef(0);
 
@@ -543,32 +496,32 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
     if (!open) {
       setAmount(''); setQuote(null); setError(''); setSubmitState({ kind: 'idle', message: '' });
       setSide('BUY');
-      setStockBal({ atomic: 0n, ui: 0, loaded: false });
+      setBrandBal({ atomic: 0n, ui: 0, loaded: false });
       setUsdcBal({ atomic: 0n, ui: 0, loaded: false });
     }
   }, [open]);
 
   useEffect(() => {
-    if (!open || !stock || !walletPubkey) return;
+    if (!open || !brand || !walletPubkey) return;
     let cancelled = false;
     (async () => {
       const [s, u] = await Promise.allSettled([
-        fetchTokenBalance({ ownerPubkey: walletPubkey, mint: stock.mint, decimals: stock.decimals }),
+        fetchTokenBalance({ ownerPubkey: walletPubkey, mint: brand.mint, decimals: brand.decimals }),
         fetchTokenBalance({ ownerPubkey: walletPubkey, mint: USDC_MINT,  decimals: USDC_DECIMALS }),
       ]);
       if (cancelled) return;
-      if (s.status === 'fulfilled') setStockBal({ ...s.value, loaded: true });
-      else                          setStockBal({ atomic: 0n, ui: 0, loaded: true });
+      if (s.status === 'fulfilled') setBrandBal({ ...s.value, loaded: true });
+      else                          setBrandBal({ atomic: 0n, ui: 0, loaded: true });
       if (u.status === 'fulfilled') setUsdcBal({ ...u.value, loaded: true });
       else                          setUsdcBal({ atomic: 0n, ui: 0, loaded: true });
     })();
     return () => { cancelled = true; };
-  }, [open, stock, walletPubkey, submitState.kind]);
+  }, [open, brand, walletPubkey, submitState.kind]);
 
   // QUOTE — Jupiter routes the NET amount after our 5% fee for BUY,
-  // and the FULL stock amount for SELL (fee deducted from USDC output).
+  // and the FULL brand amount for SELL (fee deducted from USDC output).
   useEffect(() => {
-    if (!open || !stock) return;
+    if (!open || !brand) return;
     const n = parseFloat(amount);
     if (!Number.isFinite(n) || n <= 0) { setQuote(null); return; }
 
@@ -577,8 +530,8 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
     const t = setTimeout(async () => {
       try {
         const isBuy = side === 'BUY';
-        const inputMint  = isBuy ? USDC_MINT : stock.mint;
-        const outputMint = isBuy ? stock.mint : USDC_MINT;
+        const inputMint  = isBuy ? USDC_MINT : brand.mint;
+        const outputMint = isBuy ? brand.mint : USDC_MINT;
 
         let atomic;
         if (isBuy) {
@@ -587,10 +540,10 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
           const feeUsdcAtomic   = Math.floor(grossUsdcAtomic * FEE_BPS / 10000);
           atomic = grossUsdcAtomic - feeUsdcAtomic;
         } else {
-          // User wants ~N USDC out. Translate to stock units via live price,
-          // sell the full stock amount, fee taken from USDC output.
+          // User wants ~N USDC out. Translate to brand units via live price,
+          // sell the full brand amount, fee taken from USDC output.
           if (!(price > 0)) { setQuote(null); setQuoting(false); return; }
-          atomic = Math.round((n / price) * 10 ** stock.decimals);
+          atomic = Math.round((n / price) * 10 ** brand.decimals);
         }
         if (atomic < 1) { setQuote(null); setQuoting(false); return; }
 
@@ -611,9 +564,9 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
     }, 350);
 
     return () => clearTimeout(t);
-  }, [amount, side, stock, open, price]);
+  }, [amount, side, brand, open, price]);
 
-  if (!open || !stock) return null;
+  if (!open || !brand) return null;
 
   const usd       = parseFloat(amount) || 0;
   const isBusy    = submitState.kind === 'loading';
@@ -621,7 +574,7 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
 
   const outAtomic   = quote ? Number(quote.outAmount) : 0;
   const isBuy       = side === 'BUY';
-  const outDecimals = isBuy ? stock.decimals : USDC_DECIMALS;
+  const outDecimals = isBuy ? brand.decimals : USDC_DECIMALS;
   const grossOut    = outAtomic / 10 ** outDecimals;
 
   const feeBpsRatio    = FEE_BPS / 10000;
@@ -632,15 +585,15 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
   const outAmount   = isBuy ? grossOut : netOutUsdc;
   const priceImpactPct = quote?.priceImpactPct ? Number(quote.priceImpactPct) * 100 : 0;
 
-  const stockAtomicNeeded = (() => {
-    if (isBuy || !(usd > 0) || !(price > 0) || !stock) return 0n;
-    try { return BigInt(Math.round((usd / price) * 10 ** stock.decimals)); } catch { return 0n; }
+  const brandAtomicNeeded = (() => {
+    if (isBuy || !(usd > 0) || !(price > 0) || !brand) return 0n;
+    try { return BigInt(Math.round((usd / price) * 10 ** brand.decimals)); } catch { return 0n; }
   })();
   const validStake = isBuy
     ? (usd >= MIN_USDC && usd <= MAX_USDC)
-    : (stockAtomicNeeded > 0n && stockAtomicNeeded <= stockBal.atomic);
-  const insufficientStock = !isBuy && stockBal.loaded && stockAtomicNeeded > stockBal.atomic;
-  const sellStockEquiv = !isBuy && usd > 0 && price > 0 ? usd / price : 0;
+    : (brandAtomicNeeded > 0n && brandAtomicNeeded <= brandBal.atomic);
+  const insufficientBrand = !isBuy && brandBal.loaded && brandAtomicNeeded > brandBal.atomic;
+  const sellBrandEquiv = !isBuy && usd > 0 && price > 0 ? usd / price : 0;
 
   const handleSubmit = async () => {
     if (!wcon) { onConnectWallet?.(); return; }
@@ -722,7 +675,7 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
       setSubmitState({ kind: 'success', message: 'Swap submitted' });
       setTimeout(() => { onClose(); setSubmitState({ kind: 'idle', message: '' }); }, 2200);
     } catch (e) {
-      console.error('[stocks swap]', e);
+      console.error('[brands swap]', e);
       const msg = e.message || 'Swap failed';
       setSubmitState({ kind: 'error', message: /reject|cancel|user/i.test(msg) ? 'Cancelled' : msg });
       setTimeout(() => setSubmitState({ kind: 'idle', message: '' }), 4500);
@@ -730,12 +683,12 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
   };
 
   const sellPctUsd = (pct) => {
-    if (!stockBal.loaded || stockBal.atomic <= 0n || !(price > 0)) return '';
+    if (!brandBal.loaded || brandBal.atomic <= 0n || !(price > 0)) return '';
     if (pct === 100) {
-      const exactUsd = (Number(stockBal.atomic) / 10 ** stock.decimals) * price;
+      const exactUsd = (Number(brandBal.atomic) / 10 ** brand.decimals) * price;
       return (Math.floor(exactUsd * 100) / 100).toFixed(2);
     }
-    const partUsd = (Number(stockBal.atomic) * (pct / 100) / 10 ** stock.decimals) * price;
+    const partUsd = (Number(brandBal.atomic) * (pct / 100) / 10 ** brand.decimals) * price;
     return (Math.floor(partUsd * 100) / 100).toFixed(2);
   };
   const buyChips  = [{ label: '$50', val: '50' }, { label: '$100', val: '100' }, { label: '$500', val: '500' }, { label: '$1000', val: '1000' }];
@@ -749,47 +702,38 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
 
   return (
     <>
-      <div onClick={isBusy ? undefined : onClose} style={{ position: 'fixed', inset: 0, zIndex: 400, background: 'rgba(0,0,0,.82)', backdropFilter: 'blur(14px)', cursor: isBusy ? 'wait' : 'pointer' }}/>
-      <div style={{
-        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
-        width: '100%', maxWidth: 540, zIndex: 401,
-        background: `linear-gradient(180deg,${C.surface2} 0%,${C.bg} 100%)`,
-        borderTop: `1px solid ${C.borderHi}`, borderRadius: '26px 26px 0 0',
-        maxHeight: '92dvh', display: 'flex', flexDirection: 'column', overflow: 'hidden',
-        boxShadow: `0 -28px 80px rgba(0,0,0,.7), ${C.glow}`,
-      }}>
-        <div style={{ flexShrink: 0, padding: '14px 22px 12px' }}>
-          <div style={{ width: 36, height: 4, background: 'rgba(255,255,255,.12)', borderRadius: 99, margin: '0 auto 16px' }}/>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <StockBadge stock={stock} size={44}/>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontSize: 18, fontWeight: 800, color: C.inkStr, letterSpacing: '-.02em', ...T.display }}>{stock.symbol}</span>
-                <span style={{ color: C.muted2, fontSize: 10, fontWeight: 700, padding: '2px 7px', borderRadius: 5, background: 'rgba(255,255,255,.04)', letterSpacing: '.04em', ...T.mono }}>{stock.ticker}</span>
+      <div onClick={isBusy ? undefined : onClose} className={'st-modal-backdrop' + (isBusy ? ' st-busy' : '')}/>
+      <div className="st-sheet">
+        <div className="st-sheet-head">
+          <div className="st-grabber"/>
+          <div className="st-sheet-head-row">
+            <BrandBadge brand={brand} size={44}/>
+            <div className="st-sheet-title-wrap">
+              <div className="st-sheet-title-row">
+                <span className="st-sheet-title">{brand.symbol}</span>
+                <span className="st-tile-ticker">{brand.ticker}</span>
               </div>
-              <div style={{ fontSize: 11.5, color: C.muted, marginTop: 1, ...T.body }}>{stock.name}</div>
+              <div className="st-sheet-subtitle">{brand.name}</div>
             </div>
-            <button onClick={isBusy ? undefined : onClose} disabled={isBusy} style={{ background: 'rgba(255,255,255,.05)', border: `1px solid ${C.border}`, color: C.muted, width: 32, height: 32, borderRadius: 10, fontSize: 18, cursor: isBusy ? 'not-allowed' : 'pointer', flexShrink: 0 }}>×</button>
+            <button onClick={isBusy ? undefined : onClose} disabled={isBusy} className="st-close-btn">×</button>
           </div>
           {price > 0 && (
-            <div style={{ marginTop: 12, padding: '10px 12px', borderRadius: 12, background: 'rgba(0,0,0,.30)', border: `1px solid ${C.border}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontSize: 10, color: C.muted2, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>LIVE PRICE</span>
-              <span style={{ fontSize: 16, color: C.inkStr, fontWeight: 800, fontVariantNumeric: 'tabular-nums', ...T.mono }}>{fmtUsd(price)}</span>
+            <div className="st-live-price">
+              <span className="st-live-price-label">LIVE PRICE</span>
+              <span className="st-live-price-val">{fmtUsd(price)}</span>
             </div>
           )}
           {wcon && (
-            <div style={{ marginTop: 8, padding: '9px 12px', borderRadius: 12, background: 'rgba(151,252,228,.04)', border: `1px solid ${C.borderHi}`, display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
-              <span style={{ fontSize: 10, color: C.hl, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>
-                YOU OWN
-              </span>
-              <span style={{ fontSize: 12.5, color: C.inkStr, fontWeight: 700, fontVariantNumeric: 'tabular-nums', textAlign: 'right', ...T.mono }}>
-                {!stockBal.loaded
+            <div className="st-you-own">
+              <span className="st-you-own-label">YOU OWN</span>
+              <span className="st-you-own-val">
+                {!brandBal.loaded
                   ? '...'
-                  : stockBal.ui > 0
-                    ? <>{fmtAmt(stockBal.ui, 6)} {stock.symbol} <span style={{ color: C.muted, fontWeight: 600 }}>· {fmtUsd(stockBal.ui * price, 2)}</span></>
-                    : <span style={{ color: C.muted }}>0 {stock.symbol}</span>}
+                  : brandBal.ui > 0
+                    ? <>{fmtAmt(brandBal.ui, 6)} {brand.symbol} <span className="st-muted-soft">· {fmtUsd(brandBal.ui * price, 2)}</span></>
+                    : <span className="st-muted">0 {brand.symbol}</span>}
                 {' '}
-                <span style={{ color: C.muted2, fontWeight: 600 }}>
+                <span className="st-muted-deep">
                   · {usdcBal.loaded ? fmtUsd(usdcBal.ui, 2) : '...'} USDC
                 </span>
               </span>
@@ -797,67 +741,76 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
           )}
         </div>
 
-        <div style={{ flex: 1, overflowY: 'auto', padding: '4px 22px 14px', minHeight: 0 }}>
-          <div style={{ display: 'inline-flex', padding: 3, marginBottom: 14, background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, borderRadius: 999, gap: 3, width: '100%' }}>
+        <div className="st-sheet-body">
+          <div className="st-side-switch">
             {['BUY', 'SELL'].map(s => {
               const active = side === s;
-              const c = s === 'BUY' ? C.up : C.down;
               return (
-                <button key={s} onClick={() => { if (!isBusy) { setSide(s); setAmount(''); setQuote(null); } }} disabled={isBusy} style={{
-                  flex: 1, padding: '9px 16px', borderRadius: 999, border: 'none',
-                  background: active ? (s === 'BUY' ? 'rgba(61,213,152,.18)' : 'rgba(255,138,158,.18)') : 'transparent',
-                  color: active ? c : C.muted, fontWeight: 800, fontSize: 13,
-                  cursor: isBusy ? 'not-allowed' : 'pointer', letterSpacing: '-.01em', ...T.display,
-                }}>{s === 'BUY' ? 'Buy with USDC' : 'Sell to USDC'}</button>
+                <button
+                  key={s}
+                  onClick={() => { if (!isBusy) { setSide(s); setAmount(''); setQuote(null); } }}
+                  disabled={isBusy}
+                  className={'st-side-btn' + (active ? ` st-active st-${s.toLowerCase()}` : '')}
+                >{s === 'BUY' ? 'Buy with USDC' : 'Sell to USDC'}</button>
               );
             })}
           </div>
 
-          <div style={{ marginBottom: 12 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <span style={{ fontSize: 10, color: C.muted, fontWeight: 700, letterSpacing: '.06em', ...T.mono }}>
-                {isBuy ? 'YOU PAY (USDC)' : 'YOU SELL (USDC)'}
-              </span>
+          <div className="st-amount-wrap">
+            <div className="st-amount-label">
+              <span>{isBuy ? 'YOU PAY (USDC)' : 'YOU SELL (USDC)'}</span>
             </div>
-            <div style={{ background: 'rgba(255,255,255,.04)', border: `1px solid ${C.border}`, borderRadius: 14, padding: '13px 14px', marginBottom: 9, display: 'flex', alignItems: 'center', gap: 10, opacity: isBusy ? 0.6 : 1 }}>
-              <span style={{ color: C.muted, fontSize: 18, ...T.mono }}>$</span>
-              <input value={amount} onChange={e => { setAmount(cleanAmount(e.target.value)); setError(''); }} placeholder="0.00" disabled={isBusy} inputMode="decimal" enterKeyHint="done"
-                style={{ flex: 1, background: 'transparent', border: 'none', fontSize: 24, fontWeight: 800, color: C.inkStr, outline: 'none', fontVariantNumeric: 'tabular-nums', ...T.display }}/>
-              <span style={{ color: C.ink, fontSize: 12, fontWeight: 700, ...T.mono }}>USDC</span>
+            <div className={'st-amount-input-wrap' + (isBusy ? ' st-busy' : '')}>
+              <span className="st-amount-dollar">$</span>
+              <input
+                value={amount}
+                onChange={e => { setAmount(cleanAmount(e.target.value)); setError(''); }}
+                placeholder="0.00"
+                disabled={isBusy}
+                inputMode="decimal"
+                enterKeyHint="done"
+                className="st-amount-input"
+              />
+              <span className="st-amount-suffix">USDC</span>
             </div>
-            {!isBuy && sellStockEquiv > 0 && (
-              <div style={{ fontSize: 10, color: C.muted, fontWeight: 600, marginBottom: 9, marginTop: -3, paddingLeft: 4, ...T.mono }}>
-                ≈ {fmtAmt(sellStockEquiv, 6)} {stock.symbol}
+            {!isBuy && sellBrandEquiv > 0 && (
+              <div className="st-amount-equiv">
+                ≈ {fmtAmt(sellBrandEquiv, 6)} {brand.symbol}
               </div>
             )}
-            <div style={{ display: 'flex', gap: 6 }}>
+            <div className="st-chips">
               {chips.map(c => {
                 const disabled = isBusy || !c.val;
                 return (
-                  <button key={c.label} onClick={() => { if (c.val) { setAmount(c.val); setError(''); } }} disabled={disabled} style={{ flex: 1, padding: 8, borderRadius: 10, border: `1px solid ${C.border}`, background: 'rgba(255,255,255,.03)', color: c.val ? C.muted : C.muted2, fontWeight: 700, fontSize: 11, cursor: disabled ? 'not-allowed' : 'pointer', opacity: disabled ? 0.4 : 1, ...T.mono }}>{c.label}</button>
+                  <button
+                    key={c.label}
+                    onClick={() => { if (c.val) { setAmount(c.val); setError(''); } }}
+                    disabled={disabled}
+                    className={'st-chip' + (disabled ? ' st-chip-off' : '')}
+                  >{c.label}</button>
                 );
               })}
             </div>
           </div>
 
           {usd > 0 && (
-            <div style={{ background: 'rgba(255,255,255,.03)', border: `1px solid ${C.border}`, borderRadius: 14, padding: '12px 14px', marginBottom: 12 }}>
-              <div style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', marginBottom: 10, display: 'flex', alignItems: 'center', justifyContent: 'space-between', ...T.mono }}>
+            <div className="st-receive">
+              <div className="st-receive-head">
                 <span>YOU RECEIVE</span>
-                {quoting && <span style={{ color: C.hl }}>updating...</span>}
+                {quoting && <span className="st-receive-loading">updating...</span>}
               </div>
-              <div style={{ fontSize: 22, fontWeight: 800, color: outAtomic > 0 ? C.inkStr : C.muted, fontVariantNumeric: 'tabular-nums', marginBottom: 10, ...T.display }}>
-                {outAtomic > 0 ? (isBuy ? fmtAmt(outAmount, 6) + ' ' + stock.symbol : fmtUsd(outAmount, 2)) : '—'}
+              <div className={'st-receive-val' + (outAtomic > 0 ? '' : ' st-muted')}>
+                {outAtomic > 0 ? (isBuy ? fmtAmt(outAmount, 6) + ' ' + brand.symbol : fmtUsd(outAmount, 2)) : '—'}
               </div>
               {quote && (
-                <div style={{ borderTop: `1px solid ${C.hairline}`, paddingTop: 8 }}>
+                <div className="st-receive-meta">
                   {[
                     ['Price impact', priceImpactPct.toFixed(2) + '%'],
                     ['Route', (quote.routePlan?.length || 1) + ' hop' + ((quote.routePlan?.length || 1) === 1 ? '' : 's')],
                   ].map(([l, v]) => (
-                    <div key={l} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0' }}>
-                      <span style={{ color: C.muted, fontSize: 11, ...T.body }}>{l}</span>
-                      <span style={{ color: C.ink, fontSize: 11, fontWeight: 700, ...T.mono }}>{v}</span>
+                    <div key={l} className="st-receive-meta-row">
+                      <span>{l}</span>
+                      <span>{v}</span>
                     </div>
                   ))}
                 </div>
@@ -866,48 +819,46 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
           )}
         </div>
 
-        <div style={{ flexShrink: 0, padding: '12px 22px calc(env(safe-area-inset-bottom) + 90px)', borderTop: `1px solid ${C.hairline}`, background: `linear-gradient(180deg,transparent 0%,${C.bg} 20%)` }}>
+        <div className="st-cta-wrap">
           {submitState.kind === 'loading' && submitState.message && (
-            <div style={{ marginBottom: 10, padding: 10, background: 'rgba(151,252,228,.05)', border: '1px solid rgba(151,252,228,.20)', borderRadius: 12, display: 'flex', alignItems: 'center', gap: 10 }}>
-              <div style={{ width: 14, height: 14, borderRadius: '50%', border: `2px solid ${C.hlDim}`, borderTopColor: C.hl, animation: 'nx-spin 0.8s linear infinite' }}/>
-              <span style={{ fontSize: 12, color: C.ink, fontWeight: 600, ...T.body }}>{submitState.message}</span>
+            <div className="st-status-banner">
+              <div className="st-spinner"/>
+              <span>{submitState.message}</span>
             </div>
           )}
           {(error || submitState.kind === 'error') && (
-            <div style={{ marginBottom: 10, padding: 10, background: 'rgba(255,138,158,.08)', border: '1px solid rgba(255,138,158,.24)', borderRadius: 12, fontSize: 12, color: C.down, ...T.body }}>
+            <div className="st-error-banner">
               {error || submitState.message}
             </div>
           )}
 
           {!wcon ? (
-            <button onClick={() => onConnectWallet?.()} style={{ width: '100%', padding: 17, borderRadius: 16, border: 'none', background: `linear-gradient(135deg,${C.violet} 0%,${C.hl2} 100%)`, color: '#04070f', fontWeight: 800, fontSize: 16, cursor: 'pointer', minHeight: 56, letterSpacing: '-.01em', ...T.display }}>
+            <button onClick={() => onConnectWallet?.()} className="st-cta st-cta-connect">
               Connect Wallet
             </button>
           ) : (
-            <button onClick={handleSubmit} disabled={isBusy || !quote || !validStake} style={{
-              width: '100%', padding: 17, borderRadius: 16, border: 'none',
-              background: isSuccess
-                ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`
-                : side === 'BUY'
-                ? `linear-gradient(135deg,${C.up} 0%,${C.hl2} 100%)`
-                : `linear-gradient(135deg,${C.down} 0%,${C.violet} 100%)`,
-              color: '#04070f', fontWeight: 800, fontSize: 16,
-              cursor: isBusy || !quote || !validStake ? 'not-allowed' : 'pointer',
-              minHeight: 56, opacity: !quote || !validStake ? 0.55 : 1,
-              boxShadow: '0 12px 30px rgba(151,252,228,.18)',
-              letterSpacing: '-.01em', ...T.display,
-            }}>
+            <button
+              onClick={handleSubmit}
+              disabled={isBusy || !quote || !validStake}
+              className={
+                'st-cta '
+                + (isSuccess
+                  ? 'st-cta-success'
+                  : side === 'BUY' ? 'st-cta-buy' : 'st-cta-sell')
+                + (isBusy || !quote || !validStake ? ' st-cta-disabled' : '')
+              }
+            >
               {isBusy ? 'Processing...' :
                isSuccess ? 'Swap placed' :
-               insufficientStock ? `Insufficient ${stock.symbol}` :
+               insufficientBrand ? `Insufficient ${brand.symbol}` :
                !validStake ? 'Enter USDC amount' :
                !quote ? (quoting ? 'Getting quote...' : 'No quote') :
-               `${side === 'BUY' ? 'Buy' : 'Sell'} ${stock.symbol} · ${fmtUsd(usd, 2)}`}
+               `${side === 'BUY' ? 'Buy' : 'Sell'} ${brand.symbol} · ${fmtUsd(usd, 2)}`}
             </button>
           )}
 
-          <div style={{ fontSize: 9.5, color: C.muted2, textAlign: 'center', marginTop: 10, lineHeight: 1.5, ...T.body }}>
-            Trade tokenized equity via Jupiter · USDC settles to your Solana wallet · No KYC
+          <div className="st-cta-footer">
+            Trade brand tokens via Jupiter · USDC settles to your Solana wallet · No KYC
           </div>
         </div>
       </div>
@@ -916,46 +867,26 @@ function TradeModal({ open, stock, price, onClose, walletPubkey, onConnectWallet
 }
 
 // =====================================================================
-// US REGION BLOCK
+// REGION BLOCK
 // =====================================================================
-function StocksRegionBlock() {
+function BrandsRegionBlock() {
   return (
-    <div style={{
-      maxWidth: 680, margin: '0 auto', width: '100%',
-      padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)',
-      color: C.ink, minHeight: '80vh',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% 10%,rgba(168,127,255,.14),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 30%,rgba(151,252,228,.08),transparent 50%)',
-    }}>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:wght@500;600;700&family=IBM+Plex+Mono:wght@500;600;700&display=swap');@import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap')`}</style>
-      <div style={{
-        width: '100%', maxWidth: 480,
-        padding: '44px 28px 40px', borderRadius: 28,
-        background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))',
-        border: '1px solid rgba(168,127,255,.22)',
-        boxShadow: '0 24px 80px rgba(0,0,0,.55), 0 0 60px rgba(168,127,255,.10)',
-        textAlign: 'center', position: 'relative', overflow: 'hidden',
-      }}>
-        <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse 100% 60% at 50% -10%,rgba(151,252,228,.10),transparent 70%)', pointerEvents: 'none' }}/>
-        <div style={{ position: 'relative' }}>
-          <div style={{ width: 56, height: 56, margin: '0 auto 20px', borderRadius: 14, background: C.hlDim, border: `1px solid ${C.borderHi}`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke={C.hl} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <div className="st-region-block">
+      <div className="st-region-card">
+        <div className="st-region-glow"/>
+        <div className="st-region-inner">
+          <div className="st-region-icon">
+            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <circle cx="12" cy="12" r="10"/>
               <line x1="2" y1="12" x2="22" y2="12"/>
               <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
             </svg>
           </div>
-          <h1 style={{
-            fontSize: 28, lineHeight: 1.05, fontWeight: 600,
-            margin: '0 0 12px', letterSpacing: '-.045em',
-            background: `linear-gradient(135deg,${C.inkStr} 0%,${C.violet} 100%)`,
-            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
-            ...T.hero,
-          }}>
-            Stocks isn't available here
+          <h1 className="st-region-title">
+            Not available in your region
           </h1>
-          <div style={{ fontSize: 13, color: C.muted, lineHeight: 1.6, ...T.body }}>
-            Tokenized equities are restricted in your region. Swap, Bridge, Wonderland, and Wallet remain fully available.
+          <div className="st-region-sub">
+            Brand tokens are restricted in your region. Swap, Bridge, Wonderland, and Wallet remain fully available.
           </div>
         </div>
       </div>
@@ -966,20 +897,19 @@ function StocksRegionBlock() {
 // =====================================================================
 // MAIN
 // =====================================================================
-function StocksInner({ onConnectWallet }) {
+function BrandsInner({ onConnectWallet }) {
   const [filter, setFilter]   = useState('All');
   const [prices, setPrices]   = useState({});
   const [active, setActive]   = useState(null);
-  const [marketStatus, setMarketStatus] = useState(() => getUsMarketStatus());
 
   const { publicKey: solPk } = useWallet();
   const walletPubkey = useMemo(() => solPk ? solPk.toString() : null, [solPk]);
 
   useEffect(() => {
     let alive = true;
-    const mints = STOCKS.map(s => s.mint);
+    const mints = BRANDS.map(s => s.mint);
     const tick = async () => {
-      const result = await fetchStockPrices(mints);
+      const result = await fetchBrandPrices(mints);
       if (!alive) return;
       setPrices(result);
     };
@@ -988,97 +918,84 @@ function StocksInner({ onConnectWallet }) {
     return () => { alive = false; clearInterval(id); };
   }, []);
 
-  useEffect(() => {
-    const id = setInterval(() => setMarketStatus(getUsMarketStatus()), 60_000);
-    return () => clearInterval(id);
-  }, []);
-
   const filtered = useMemo(() => {
-    if (filter === 'All')      return STOCKS;
-    if (filter === 'Trending') return STOCKS.filter(s => ['TSLA','NVDA','SPY','MSTR','AAPL','COIN','CRCL'].includes(s.ticker));
-    return STOCKS.filter(s => s.sector === filter);
+    if (filter === 'All')      return BRANDS;
+    if (filter === 'Trending') return BRANDS.filter(s => ['TSLA','NVDA','SPY','MSTR','AAPL','COIN','CRCL'].includes(s.ticker));
+    return BRANDS.filter(s => s.sector === filter);
   }, [filter]);
 
-  const totalListed = STOCKS.length;
+  const totalListed = BRANDS.length;
   const totalPriced = Object.keys(prices).length;
 
   return (
     <>
-      <style>{`@import url('https://fonts.googleapis.com/css2?family=Syne:wght@700;800;900&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700;9..40,800&family=IBM+Plex+Mono:wght@500;600;700&display=swap'); @import url('https://api.fontshare.com/v2/css?f[]=clash-display@500,600,700&display=swap'); @keyframes nx-pulse { 0%,100%{opacity:1}50%{opacity:.4} } @keyframes nx-spin { to{transform:rotate(360deg)} } body.nexus-scroll-locked { overflow:hidden; }`}</style>
-
-      <div style={{ maxWidth: 680, margin: '0 auto', width: '100%', padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)', color: C.ink, backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% -10%,rgba(151,252,228,.10),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 20%,rgba(168,127,255,.06),transparent 50%)' }}>
-
-        <div style={{ marginTop: 10, marginBottom: 18, padding: '22px 20px 20px', borderRadius: 26, background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))', border: '1px solid rgba(255,255,255,.07)', boxShadow: C.shadowLg, position: 'relative', overflow: 'hidden' }}>
-          <div style={{ position: 'absolute', right: -40, top: -50, width: 200, height: 200, borderRadius: '50%', background: 'radial-gradient(circle,rgba(168,127,255,.16),transparent 65%)', pointerEvents: 'none' }}/>
-          <div style={{ position: 'absolute', left: -60, bottom: -80, width: 200, height: 200, borderRadius: '50%', background: 'radial-gradient(circle,rgba(151,252,228,.10),transparent 65%)', pointerEvents: 'none' }}/>
-          <div style={{ position: 'relative' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 14 }}>
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '4px 11px', borderRadius: 999, background: 'rgba(255,255,255,.05)', border: '1px solid rgba(255,255,255,.08)' }}>
-                <span style={{ width: 6, height: 6, borderRadius: '50%', background: marketStatus.open ? C.up : C.muted2, boxShadow: marketStatus.open ? `0 0 8px ${C.up}` : 'none', animation: marketStatus.open ? 'nx-pulse 1.6s ease-in-out infinite' : 'none' }}/>
-                <span style={{ color: marketStatus.open ? C.up : C.muted, fontSize: 9, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>{marketStatus.label.toUpperCase()}</span>
+      <div className="st-page">
+        <div className="st-hero">
+          <div className="st-hero-glow-1"/>
+          <div className="st-hero-glow-2"/>
+          <div className="st-hero-inner">
+            <div className="st-hero-pills">
+              <div className="st-hero-pill st-live-pill">
+                <span className="st-live-dot"/>
+                <span className="st-pill-text">24/7 LIVE</span>
               </div>
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '4px 11px', borderRadius: 999, background: 'rgba(255,205,60,.08)', border: '1px solid rgba(255,205,60,.20)' }}>
-                <span style={{ color: C.gold, fontSize: 9, fontWeight: 700, letterSpacing: '.10em', ...T.mono }}>24/7 TRADING</span>
+              <div className="st-hero-pill st-trade-pill">
+                <span className="st-pill-text st-gold">TRADE WITH SOL</span>
               </div>
             </div>
-            <h1 style={{ fontSize: 30, lineHeight: 1.05, fontWeight: 600, color: C.inkStr, margin: '0 0 8px', letterSpacing: '-.04em', ...T.hero }}>
+            <h1 className="st-hero-title">
               Trade global{' '}
-              <span style={{ fontStyle: 'italic', fontWeight: 500, background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>stocks</span>
+              <span className="st-hero-italic">brands</span>
             </h1>
-            <p style={{ color: C.muted, fontSize: 13, margin: '0 0 16px', fontWeight: 500, lineHeight: 1.5, ...T.body }}>
-              Tokenized equities settle in USDC on Solana. No broker, no KYC, no market hours.
+            <p className="st-hero-sub">
+              Price-tracked brand tokens, settled in USDC on Solana. No broker. No KYC. No market hours.
             </p>
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3,1fr)', padding: '12px 14px', borderRadius: 14, background: 'rgba(0,0,0,.30)', border: `1px solid ${C.border}` }}>
-              {[
-                { value: String(totalListed),        label: 'STOCKS',         color: C.inkStr,                       align: 'left'  },
-                { value: String(totalPriced),        label: 'PRICED',         color: totalPriced > 0 ? C.hl : C.muted, align: 'center' },
-                { value: '24/7',                     label: 'TRADE WITH SOL', color: C.gold,                         align: 'right' },
-              ].map((s, i) => (
-                <div key={s.label} style={{ textAlign: s.align, borderRight: i < 2 ? `1px solid ${C.hairline}` : 'none' }}>
-                  <div style={{ fontSize: 18, fontWeight: 800, color: s.color, ...T.display }}>{s.value}</div>
-                  <div style={{ fontSize: 9, color: C.muted2, marginTop: 3, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>{s.label}</div>
-                </div>
-              ))}
+            <div className="st-stats">
+              <div className="st-stat">
+                <div className="st-stat-val">{totalListed}</div>
+                <div className="st-stat-label">BRANDS</div>
+              </div>
+              <div className="st-stat">
+                <div className={'st-stat-val' + (totalPriced > 0 ? ' st-stat-live' : '')}>{totalPriced}</div>
+                <div className="st-stat-label">LIVE</div>
+              </div>
+              <div className="st-stat">
+                <div className="st-stat-val st-stat-gold">24/7</div>
+                <div className="st-stat-label">TRADE WITH SOL</div>
+              </div>
             </div>
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 5, marginBottom: 12, overflowX: 'auto', WebkitOverflowScrolling: 'touch', paddingBottom: 4 }}>
+        <div className="st-filters">
           {FILTERS.map(f => (
-            <button key={f.id} onClick={() => setFilter(f.id)} style={{
-              padding: '7px 13px', borderRadius: 999,
-              border: `1px solid ${filter === f.id ? C.borderHi : C.border}`,
-              background: filter === f.id ? C.hlDim : 'rgba(255,255,255,.03)',
-              color: filter === f.id ? C.hl : C.muted,
-              fontSize: 11, fontWeight: 700, cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0, ...T.body,
-            }}>{f.label}</button>
+            <button
+              key={f.id}
+              onClick={() => setFilter(f.id)}
+              className={'st-filter' + (filter === f.id ? ' st-active' : '')}
+            >{f.label}</button>
           ))}
         </div>
 
-        <div style={{ background: 'rgba(10,16,32,.50)', border: `1px solid ${C.border}`, borderRadius: 18, overflow: 'hidden', marginBottom: 18, backdropFilter: 'blur(12px)' }}>
+        <div className="st-list">
           {filtered.length === 0 ? (
-            <div style={{ padding: '30px 16px', textAlign: 'center', color: C.muted, fontSize: 12, ...T.body }}>
-              No stocks in this category.
-            </div>
+            <div className="st-empty">No brands in this category.</div>
           ) : filtered.map(s => (
-            <StockTile key={s.mint} stock={s} price={prices[s.mint] || 0} onClick={() => setActive(s)}/>
+            <BrandTile key={s.mint} brand={s} price={prices[s.mint] || 0} onClick={() => setActive(s)}/>
           ))}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 9, padding: '12px 16px', borderRadius: 14, background: 'rgba(255,255,255,.02)', border: `1px solid ${C.border}`, marginBottom: 8 }}>
-          <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>POWERED BY</span>
-          <span style={{ fontSize: 11, fontWeight: 800, letterSpacing: '.04em', background: `linear-gradient(135deg,${C.hl} 0%,${C.violet} 100%)`, WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text', ...T.mono }}>JUPITER · xSTOCKS</span>
-          <span style={{ color: C.muted2, fontSize: 9 }}>|</span>
-          <span style={{ fontSize: 9, color: C.muted2, fontWeight: 700, letterSpacing: '.08em', ...T.mono }}>NON-CUSTODIAL</span>
-        </div>
-        <div style={{ fontSize: 9.5, color: C.muted2, lineHeight: 1.5, textAlign: 'center', padding: '4px 8px 0', ...T.body }}>
-          xStocks issued by Backed Finance (Swiss-regulated). Each token backed 1:1 by underlying equity in qualified custody. Settles in USDC on Solana.
+        <div className="st-powered">
+          <span className="st-powered-label">POWERED BY</span>
+          <span className="st-powered-name">JUPITER</span>
+          <span className="st-powered-sep">|</span>
+          <span className="st-powered-label">NON-CUSTODIAL</span>
         </div>
       </div>
 
       <TradeModal
         open={!!active}
-        stock={active}
+        brand={active}
         price={active ? prices[active.mint] || 0 : 0}
         onClose={() => setActive(null)}
         walletPubkey={walletPubkey}
@@ -1089,8 +1006,8 @@ function StocksInner({ onConnectWallet }) {
 }
 
 // =====================================================================
-// US geo block — required for xStocks. Everyone else gets full access.
-// Owner wallet bypass: when this wallet connects, geo is skipped entirely.
+// US geo block. Owner wallet bypass: when this wallet connects, geo is
+// skipped entirely.
 // =====================================================================
 const OWNER_BYPASS_PUBKEY = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
 
@@ -1103,7 +1020,6 @@ export default function Stocks({ onConnectWallet }) {
   const [geoChecked, setGeoChecked] = useState(false);
 
   useEffect(() => {
-    // Skip the geo lookup entirely for owner — saves a network call too.
     if (ownerBypass) { setGeoChecked(true); return; }
     let alive = true;
     detectCountry().then(c => {
@@ -1114,10 +1030,9 @@ export default function Stocks({ onConnectWallet }) {
     return () => { alive = false; };
   }, [ownerBypass]);
 
-  // Block US users unless the owner wallet is connected.
   if (!ownerBypass && geoChecked && country && GEO_BLOCKED.has(country)) {
-    return <StocksRegionBlock/>;
+    return <BrandsRegionBlock/>;
   }
 
-  return <StocksInner onConnectWallet={onConnectWallet}/>;
+  return <BrandsInner onConnectWallet={onConnectWallet}/>;
 }
