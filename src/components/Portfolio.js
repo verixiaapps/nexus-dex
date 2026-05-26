@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
-import './Portfolio.css';
+import './Portfolio.css'; 
 
 // =====================================================================
 // CONSTANTS
