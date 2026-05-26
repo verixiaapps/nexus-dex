@@ -30,6 +30,7 @@ import {
   SystemProgram,
   AddressLookupTableAccount,
 } from '@solana/web3.js';
+import './CrossChain.css';
 
 /* ─── CONSTANTS ─── */
 
@@ -44,17 +45,6 @@ const LIFI_SOLANA_ID  = 1151111081099710;
 const SOL_RESERVE     = 1_500_000;            // 0.0015 SOL kept for network fees
 const MIN_FEE_LAMPORTS = 1_000_000;            // 0.001 SOL fee floor (~$0.15)
 const QUOTE_DEBOUNCE  = 400;
-
-/* ─── STYLE ─── */
-
-const C = {
-  bg: '#03060f', card: '#080d1a', card2: '#0c1220', card3: '#111d30',
-  border: 'rgba(0,229,255,0.10)', borderHi: 'rgba(0,229,255,0.25)',
-  accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
-  text: '#cdd6f4', muted: '#586994', muted2: '#2e3f5e',
-  buyGrad: 'linear-gradient(135deg,#00e5ff,#0055ff)',
-  successGrad: 'linear-gradient(135deg,#00ffa3,#00b36b)',
-};
 
 /* ─── FORMATTERS ─── */
 
@@ -223,7 +213,7 @@ const FALLBACK_CHAIN_COLORS = {
   [String(LIFI_SOLANA_ID)]: '#14f195',
 };
 const chainColorOf = (chain) =>
-  (chain && FALLBACK_CHAIN_COLORS[chain.id]) || C.accent;
+  (chain && FALLBACK_CHAIN_COLORS[chain.id]) || '#4dffd2';
 
 /* ─── TOKENS (live from LI.FI) ─── */
 
@@ -406,20 +396,21 @@ const TokenIcon = ({ token, size = 32 }) => {
       <img
         src={token.logoURI}
         alt=""
-        style={{ width: size, height: size, borderRadius: '50%', flexShrink: 0 }}
+        className="cc-token-img"
+        style={{ width: size, height: size }}
         onError={() => setErr(true)}
       />
     );
   }
   const ch = token?.symbol ? token.symbol.charAt(0).toUpperCase() : '?';
   return (
-    <div style={{
-      width: size, height: size, borderRadius: '50%', flexShrink: 0,
-      background: 'rgba(0,229,255,.1)',
-      border: '1px solid rgba(0,229,255,.2)',
-      display: 'flex', alignItems: 'center', justifyContent: 'center',
-      fontSize: Math.round(size * 0.4), fontWeight: 700, color: C.accent,
-    }}>{ch}</div>
+    <div
+      className="cc-token-fallback"
+      style={{
+        width: size, height: size,
+        fontSize: Math.round(size * 0.4),
+      }}
+    >{ch}</div>
   );
 };
 
@@ -427,20 +418,18 @@ const ChainBadge = ({ chain, small = false }) => {
   if (!chain) return null;
   const color = chainColorOf(chain);
   return (
-    <div style={{
-      display: 'inline-flex', alignItems: 'center', gap: 4,
-      background: color + '22',
-      border: '1px solid ' + color + '55',
-      borderRadius: 6,
-      padding: small ? '2px 6px' : '3px 8px',
-      fontSize: small ? 9 : 10,
-      color, fontWeight: 700,
-      fontFamily: 'Syne, sans-serif',
-    }}>
-      <div style={{
-        width: small ? 5 : 6, height: small ? 5 : 6,
-        borderRadius: '50%', background: color,
-      }}/>
+    <div
+      className={'cc-chain-badge' + (small ? ' cc-chain-badge-sm' : '')}
+      style={{
+        background: color + '22',
+        borderColor: color + '55',
+        color,
+      }}
+    >
+      <div
+        className="cc-chain-dot"
+        style={{ background: color }}
+      />
       {chain.name}
     </div>
   );
@@ -455,33 +444,22 @@ const StepProgress = ({ step }) => {
     { label: 'Done',   id: 4 },
   ];
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 0, margin: '14px 0 10px' }}>
+    <div className="cc-steps">
       {steps.map((s, i) => {
         const done   = step > s.id;
         const active = step === s.id;
         return (
           <React.Fragment key={s.id}>
-            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flex: 1 }}>
-              <div style={{
-                width: 28, height: 28, borderRadius: '50%',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 11, fontWeight: 800,
-                background: done ? C.green : active ? C.accent : C.card3,
-                color: (done || active) ? '#000' : C.muted,
-                border: active ? '2px solid ' + C.accent
-                      : done   ? '2px solid ' + C.green
-                      :          '2px solid ' + C.muted2,
-              }}>{done ? '✓' : s.id}</div>
-              <div style={{
-                fontSize: 9, marginTop: 3, fontWeight: 700,
-                color: done ? C.green : active ? C.accent : C.muted,
-              }}>{s.label}</div>
+            <div className="cc-step">
+              <div className={'cc-step-circle' + (done ? ' cc-step-done' : active ? ' cc-step-active' : '')}>
+                {done ? '✓' : s.id}
+              </div>
+              <div className={'cc-step-label' + (done ? ' cc-step-label-done' : active ? ' cc-step-label-active' : '')}>
+                {s.label}
+              </div>
             </div>
             {i < steps.length - 1 && (
-              <div style={{
-                height: 2, flex: 1, marginBottom: 14,
-                background: done ? C.green : C.muted2,
-              }}/>
+              <div className={'cc-step-line' + (done ? ' cc-step-line-done' : '')}/>
             )}
           </React.Fragment>
         );
@@ -543,55 +521,41 @@ const FromTokenModal = ({ open, onClose, onSelect }) => {
   if (!open) return null;
   return (
     <>
-      <div onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 499, background: 'rgba(0,0,0,.78)' }}/>
-      <div style={{
-        position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
-        zIndex: 500, background: C.card, border: '1px solid ' + C.borderHi,
-        borderRadius: 18, width: '94vw', maxWidth: 440,
-        maxHeight: 'min(85vh,100dvh)', display: 'flex', flexDirection: 'column',
-        boxShadow: '0 24px 80px rgba(0,0,0,.95)',
-      }}>
-        <div style={{ padding: '16px 16px 10px', borderBottom: '1px solid ' + C.border }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
-            <div style={{ color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'Syne, sans-serif' }}>
-              From <span style={{ fontSize: 11, color: C.muted, fontWeight: 400 }}>· Solana</span>
+      <div onClick={close} className="cc-modal-backdrop"/>
+      <div className="cc-modal cc-modal-from">
+        <div className="cc-modal-head">
+          <div className="cc-modal-head-row">
+            <div className="cc-modal-title">
+              From <span className="cc-modal-sub">· Solana</span>
             </div>
-            <button onClick={close} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 20, padding: 4 }}>✕</button>
+            <button onClick={close} className="cc-modal-close">✕</button>
           </div>
           <input
             autoFocus
             value={q}
             onChange={e => setQ(e.target.value)}
             placeholder="Search…"
-            style={{
-              width: '100%', background: C.card2, border: '1px solid ' + C.border,
-              borderRadius: 8, padding: '10px 12px', color: '#fff', fontSize: 13,
-              outline: 'none', boxSizing: 'border-box',
-            }}
+            className="cc-modal-search"
           />
         </div>
-        <div style={{ overflowY: 'auto', flex: 1 }}>
-          {loading && <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 12 }}>Loading tokens…</div>}
+        <div className="cc-modal-body">
+          {loading && <div className="cc-modal-loading">Loading tokens…</div>}
           {!q.trim() && !loading && (
-            <div style={{ padding: '8px 16px 4px', fontSize: 10, color: C.muted, fontWeight: 700 }}>POPULAR</div>
+            <div className="cc-modal-section">POPULAR</div>
           )}
           {display.length === 0 && !loading && (
-            <div style={{ padding: 24, textAlign: 'center', color: C.muted }}>No matches</div>
+            <div className="cc-modal-empty">No matches</div>
           )}
           {display.map((t, i) => (
             <div
               key={(t.mint || t.address || '') + i}
               onClick={() => { onSelect({ ...t, mint: t.address || t.mint }); close(); }}
-              style={{
-                padding: '12px 16px', cursor: 'pointer',
-                display: 'flex', alignItems: 'center', gap: 10,
-                borderBottom: '1px solid rgba(255,255,255,.03)',
-              }}
+              className="cc-modal-row"
             >
               <TokenIcon token={t} size={32}/>
-              <div style={{ flex: 1 }}>
-                <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{t.symbol}</div>
-                <div style={{ color: C.muted, fontSize: 11 }}>{t.name}</div>
+              <div className="cc-modal-row-info">
+                <div className="cc-modal-row-sym">{t.symbol}</div>
+                <div className="cc-modal-row-name">{t.name}</div>
               </div>
             </div>
           ))}
@@ -666,48 +630,37 @@ const ToTokenModal = ({ open, onClose, onSelect, chains }) => {
   if (!open) return null;
   return (
     <>
-      <div onClick={close} style={{ position: 'fixed', inset: 0, zIndex: 499, background: 'rgba(0,0,0,.78)' }}/>
-      <div style={{
-        position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%,-50%)',
-        zIndex: 500, background: C.card, border: '1px solid ' + C.borderHi,
-        borderRadius: 18, width: '94vw', maxWidth: 460,
-        maxHeight: 'min(88vh,100dvh)', display: 'flex', flexDirection: 'column',
-        boxShadow: '0 24px 80px rgba(0,0,0,.95)',
-      }}>
-        <div style={{ padding: '16px 16px 10px', borderBottom: '1px solid ' + C.border }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
-            <div style={{ color: '#fff', fontWeight: 700, fontSize: 16, fontFamily: 'Syne, sans-serif' }}>
-              To <span style={{ fontSize: 11, color: C.muted, fontWeight: 400 }}>· All Chains</span>
+      <div onClick={close} className="cc-modal-backdrop"/>
+      <div className="cc-modal cc-modal-to">
+        <div className="cc-modal-head">
+          <div className="cc-modal-head-row">
+            <div className="cc-modal-title">
+              To <span className="cc-modal-sub">· All Chains</span>
             </div>
-            <button onClick={close} style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 20, padding: 4 }}>✕</button>
+            <button onClick={close} className="cc-modal-close">✕</button>
           </div>
           <input
             autoFocus
             value={q}
             onChange={e => setQ(e.target.value)}
             placeholder="Search…"
-            style={{
-              width: '100%', background: C.card2, border: '1px solid ' + C.border,
-              borderRadius: 8, padding: '10px 12px', color: '#fff', fontSize: 13,
-              outline: 'none', marginBottom: 10, boxSizing: 'border-box',
-            }}
+            className="cc-modal-search"
           />
-          <div style={{ display: 'flex', gap: 6, overflowX: 'auto', paddingBottom: 2 }}>
+          <div className="cc-chain-chips">
             {chainChips.map(id => {
               const active = sel === id;
               const chain  = chains?.[id];
-              const color  = id === 'all' ? C.accent : (chain ? chainColorOf(chain) : C.muted);
+              const color  = id === 'all' ? '#4dffd2' : (chain ? chainColorOf(chain) : '#7a92b3');
               return (
                 <button
                   key={id}
                   onClick={() => setSel(id)}
-                  style={{
-                    flexShrink: 0, padding: '4px 10px', borderRadius: 20,
-                    border: active ? '1px solid ' + color : '1px solid ' + C.muted2,
-                    background: active ? color + '22' : 'transparent',
-                    color: active ? color : C.muted,
-                    fontSize: 11, fontWeight: 700, cursor: 'pointer',
-                  }}
+                  className={'cc-chain-chip' + (active ? ' cc-chain-chip-active' : '')}
+                  style={active ? {
+                    borderColor: color,
+                    background: color + '22',
+                    color,
+                  } : undefined}
                 >
                   {id === 'all' ? 'All' : (chain?.name || ('Chain ' + id))}
                 </button>
@@ -715,28 +668,21 @@ const ToTokenModal = ({ open, onClose, onSelect, chains }) => {
             })}
           </div>
         </div>
-        <div style={{ overflowY: 'auto', flex: 1 }}>
-          {loading && <div style={{ padding: 24, textAlign: 'center', color: C.muted, fontSize: 12 }}>Loading tokens…</div>}
+        <div className="cc-modal-body">
+          {loading && <div className="cc-modal-loading">Loading tokens…</div>}
           {!loading && r.length === 0 && (
-            <div style={{ padding: 24, textAlign: 'center', color: C.muted }}>No matches</div>
+            <div className="cc-modal-empty">No matches</div>
           )}
           {r.map((t, i) => (
             <div
               key={t.chainId + ':' + t.address + i}
               onClick={() => { onSelect(t); close(); }}
-              style={{
-                padding: '11px 16px', cursor: 'pointer',
-                display: 'flex', alignItems: 'center', gap: 10,
-                borderBottom: '1px solid rgba(255,255,255,.03)',
-              }}
+              className="cc-modal-row"
             >
               <TokenIcon token={t} size={30}/>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ color: '#fff', fontWeight: 700, fontSize: 13 }}>{t.symbol}</div>
-                <div style={{
-                  color: C.muted, fontSize: 11,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
-                }}>{t.name}</div>
+              <div className="cc-modal-row-info">
+                <div className="cc-modal-row-sym">{t.symbol}</div>
+                <div className="cc-modal-row-name cc-truncate">{t.name}</div>
               </div>
               <ChainBadge chain={chains?.[t.chainId] || { id: t.chainId, name: 'Chain ' + t.chainId }} small/>
             </div>
@@ -1086,66 +1032,59 @@ export default function CrossChain({ onConnectWallet }) {
   const btnDisabled = busy ||
     (wcon && (!fromAmt || (needsDest && !destAddr.trim()) || !!addrErr ||
               (!quote && !isError && !isSuccess) || !!solShortfall));
-  const btnBg = () => {
-    if (isSuccess)            return C.successGrad;
-    if (isError)              return 'rgba(255,59,107,.2)';
-    if (btnDisabled && wcon)  return C.card2;
-    return C.buyGrad;
+
+  const btnClass = () => {
+    if (isSuccess)  return 'cc-cta cc-cta-success';
+    if (isError)    return 'cc-cta cc-cta-error';
+    if (btnDisabled && wcon) return 'cc-cta cc-cta-disabled';
+    return 'cc-cta cc-cta-primary';
   };
 
   const fromChain = chains?.[String(LIFI_SOLANA_ID)] || { id: String(LIFI_SOLANA_ID), name: 'Solana', chainType: 'SVM' };
   const toChainDisplay = chains?.[String(toToken?.chainId)] || { id: toToken?.chainId, name: 'Chain ' + toToken?.chainId };
 
   return (
-    <div style={{ width: '100%', maxWidth: 540, margin: '0 auto' }}>
-      <div style={{ marginBottom: 20 }}>
-        <h1 style={{ fontSize: 22, fontWeight: 800, color: '#fff', margin: 0, fontFamily: 'Syne, sans-serif' }}>
-          Cross-Chain
+    <div className="cc-page">
+      <div className="cc-header">
+        <div className="cc-header-pills">
+          <div className="cc-pill cc-pill-live">
+            <span className="cc-pill-dot"/>
+            <span className="cc-pill-text">{chainsLoading || !chains ? 'CONNECTING…' : `${Object.keys(chains).length} CHAINS · LIVE`}</span>
+          </div>
+        </div>
+        <h1 className="cc-title">
+          Cross-<span className="cc-title-italic">Chain</span>
         </h1>
-        <p style={{ color: C.muted, fontSize: 12, marginTop: 4, fontFamily: 'Syne, sans-serif' }}>
+        <p className="cc-subtitle">
           Solana → Any Chain · powered by LI.FI
-          {!chainsLoading && chains && (
-            <span style={{ marginLeft: 6 }}>· {Object.keys(chains).length} chains supported</span>
-          )}
         </p>
       </div>
 
-      <div style={{
-        background: C.card, border: '1px solid ' + C.border,
-        borderRadius: 20, padding: 20,
-      }}>
+      <div className="cc-card">
         <StepProgress step={step}/>
 
         {/* FROM */}
-        <div style={{
-          background: C.card2, borderRadius: 14, padding: 16,
-          border: '1px solid ' + C.border, marginBottom: 4,
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
-            <span style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>YOU SEND</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <div className="cc-io-box">
+          <div className="cc-io-head">
+            <span className="cc-io-label">YOU SEND</span>
+            <div className="cc-io-meta">
               <ChainBadge chain={fromChain} small/>
               {fbd != null && (
-                <span style={{ fontSize: 11, color: C.muted }}>
-                  Bal: <span style={{ color: C.text }}>{fmtTok(fbd)}</span>
+                <span className="cc-io-bal">
+                  Bal: <span className="cc-io-bal-val">{fmtTok(fbd)}</span>
                 </span>
               )}
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div className="cc-io-row">
             <button
               onClick={() => !busy && setFromOpen(true)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                background: C.card3, border: '1px solid ' + C.border,
-                borderRadius: 12, padding: '9px 12px',
-                cursor: busy ? 'default' : 'pointer',
-                flexShrink: 0, minWidth: 110,
-              }}
+              className="cc-token-btn"
+              disabled={busy}
             >
               <TokenIcon token={fromToken} size={22}/>
-              <span style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{fromToken?.symbol}</span>
-              {!busy && <span style={{ color: C.muted, fontSize: 12 }}>▾</span>}
+              <span className="cc-token-sym">{fromToken?.symbol}</span>
+              {!busy && <span className="cc-token-caret">▾</span>}
             </button>
             <input
               value={fromAmt}
@@ -1153,84 +1092,48 @@ export default function CrossChain({ onConnectWallet }) {
               placeholder="0.00"
               inputMode="decimal"
               disabled={busy}
-              style={{
-                flex: 1, background: 'transparent', border: 'none',
-                fontSize: 24, color: '#fff', textAlign: 'right', outline: 'none',
-                fontFamily: 'JetBrains Mono, monospace', opacity: busy ? 0.5 : 1,
-              }}
+              className="cc-io-input"
             />
             {fbd > 0 && !busy && (
-              <button
-                onClick={onMax}
-                style={{
-                  background: 'rgba(0,229,255,.12)',
-                  border: '1px solid rgba(0,229,255,.25)',
-                  borderRadius: 6, padding: '6px 10px',
-                  color: C.accent, fontSize: 11, fontWeight: 700, cursor: 'pointer',
-                }}
-              >MAX</button>
+              <button onClick={onMax} className="cc-max-btn">MAX</button>
             )}
           </div>
           {fromUsd > 0 && (
-            <div style={{ textAlign: 'right', marginTop: 6, fontSize: 11, color: C.muted }}>
-              {fmtUsd(fromUsd)}
-            </div>
+            <div className="cc-io-usd">{fmtUsd(fromUsd)}</div>
           )}
         </div>
 
-        <div style={{ display: 'flex', justifyContent: 'center', margin: '8px 0' }}>
-          <div style={{
-            width: 42, height: 42, borderRadius: 12,
-            background: C.card3, border: '1px solid ' + C.border,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-            color: C.accent, fontSize: 16,
-          }}>↓</div>
+        <div className="cc-flip-wrap">
+          <div className="cc-flip-arrow">↓</div>
         </div>
 
         {/* TO */}
-        <div style={{
-          background: C.card2, borderRadius: 14, padding: 16,
-          border: '1px solid ' + C.border,
-        }}>
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 10 }}>
-            <span style={{ fontSize: 11, color: C.muted, fontWeight: 700 }}>YOU RECEIVE (EST.)</span>
+        <div className="cc-io-box">
+          <div className="cc-io-head">
+            <span className="cc-io-label">YOU RECEIVE (EST.)</span>
             {toToken && <ChainBadge chain={toChainDisplay} small/>}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div className="cc-io-row">
             <button
               onClick={() => !busy && setToOpen(true)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 8,
-                background: C.card3, border: '1px solid ' + C.border,
-                borderRadius: 12, padding: '9px 12px',
-                cursor: busy ? 'default' : 'pointer',
-                flexShrink: 0, minWidth: 110,
-              }}
+              className="cc-token-btn"
+              disabled={busy}
             >
               <TokenIcon token={toToken} size={22}/>
-              <span style={{ color: '#fff', fontWeight: 700, fontSize: 14 }}>{toToken?.symbol}</span>
-              {!busy && <span style={{ color: C.muted, fontSize: 12 }}>▾</span>}
+              <span className="cc-token-sym">{toToken?.symbol}</span>
+              {!busy && <span className="cc-token-caret">▾</span>}
             </button>
-            <div style={{
-              flex: 1, textAlign: 'right', fontSize: 24,
-              color: quote ? C.green : C.muted2,
-              fontFamily: 'JetBrains Mono, monospace',
-            }}>
+            <div className={'cc-io-output' + (quote ? ' cc-io-output-active' : '')}>
               {quoting
-                ? <span style={{ fontSize: 14, color: C.muted }}>…</span>
+                ? <span className="cc-io-output-loading">…</span>
                 : (quote?.outDisplay || '0')}
             </div>
           </div>
           {tuv > 0 && (
-            <div style={{ textAlign: 'right', marginTop: 6, fontSize: 11, color: C.muted }}>
-              {fmtUsd(tuv)}
-            </div>
+            <div className="cc-io-usd">{fmtUsd(tuv)}</div>
           )}
           {quote && (
-            <div style={{
-              marginTop: 8, fontSize: 10, color: C.muted,
-              display: 'flex', justifyContent: 'space-between',
-            }}>
+            <div className="cc-route-meta">
               <span>via {quote.bridge}</span>
               {quote.estTime && <span>~{Math.max(1, Math.ceil(quote.estTime / 60))} min</span>}
             </div>
@@ -1238,14 +1141,14 @@ export default function CrossChain({ onConnectWallet }) {
         </div>
 
         {needsDest && (
-          <div style={{ marginTop: 12 }}>
-            <div style={{ fontSize: 11, color: C.muted, fontWeight: 700, marginBottom: 6 }}>
+          <div className="cc-dest">
+            <div className="cc-dest-label">
               DESTINATION{' '}
-              <span style={{ color: chainColorOf(toChainDisplay), fontWeight: 400 }}>
+              <span className="cc-dest-chain" style={{ color: chainColorOf(toChainDisplay) }}>
                 · {toChainDisplay?.name}
               </span>
             </div>
-            <div style={{ position: 'relative' }}>
+            <div className="cc-dest-input-wrap">
               <input
                 value={destAddr}
                 onChange={e => { if (!busy) setDestAddr(e.target.value.trim()); }}
@@ -1257,56 +1160,35 @@ export default function CrossChain({ onConnectWallet }) {
                   : 'Destination address'
                 }
                 disabled={busy}
-                style={{
-                  width: '100%', boxSizing: 'border-box',
-                  background: C.card2,
-                  border: '1px solid ' + (addrErr ? C.red : destAddr && !addrErr ? C.green : C.border),
-                  borderRadius: 10, padding: '12px 14px',
-                  color: '#fff', fontSize: 13, outline: 'none',
-                  fontFamily: 'JetBrains Mono, monospace', opacity: busy ? 0.5 : 1,
-                }}
+                className={'cc-dest-input' + (addrErr ? ' cc-dest-err' : destAddr && !addrErr ? ' cc-dest-ok' : '')}
               />
               {destAddr && !addrErr && (
-                <div style={{
-                  position: 'absolute', right: 12, top: '50%',
-                  transform: 'translateY(-50%)', color: C.green, fontSize: 14,
-                }}>✓</div>
+                <div className="cc-dest-check">✓</div>
               )}
             </div>
-            {addrErr && <div style={{ marginTop: 5, fontSize: 11, color: C.red }}>{addrErr}</div>}
+            {addrErr && <div className="cc-dest-err-msg">{addrErr}</div>}
           </div>
         )}
 
         {quoteErr && !quote && (
-          <div style={{
-            marginTop: 10, padding: '10px 12px',
-            background: 'rgba(255,149,0,.08)',
-            border: '1px solid rgba(255,149,0,.2)',
-            borderRadius: 8, fontSize: 12, color: '#ff9500',
-          }}>{quoteErr}</div>
+          <div className="cc-warn">{quoteErr}</div>
         )}
 
         {quote && fromAmt && (
-          <div style={{
-            marginTop: 14, background: '#050912', borderRadius: 12,
-            padding: 14, border: '1px solid ' + C.border,
-          }}>
+          <div className="cc-route-details">
             {[
               ['Route',        quote.bridge],
               ['Platform fee', `${quote.feeSOL.toFixed(4)} SOL` + (quote.feeUSD ? ` (${fmtUsd(quote.feeUSD)})` : '')],
               ['Slippage',     (SLIPPAGE * 100).toFixed(1) + '%'],
               ['Est. time',    quote.estTime ? '~' + Math.max(1, Math.ceil(quote.estTime / 60)) + ' min' : '—'],
             ].map(([k, v]) => (
-              <div key={k} style={{ display: 'flex', justifyContent: 'space-between', padding: '4px 0', fontSize: 11 }}>
-                <span style={{ color: C.muted }}>{k}</span>
-                <span style={{ color: C.text }}>{v}</span>
+              <div key={k} className="cc-detail-row">
+                <span className="cc-detail-key">{k}</span>
+                <span className="cc-detail-val">{v}</span>
               </div>
             ))}
             {fromToken?.mint !== WSOL_MINT && (
-              <div style={{
-                marginTop: 8, paddingTop: 8, borderTop: '1px solid ' + C.border,
-                fontSize: 10, color: C.muted, lineHeight: 1.4,
-              }}>
+              <div className="cc-detail-note">
                 Fee paid in SOL from your wallet — you bridge 100% of your {fromToken?.symbol}.
               </div>
             )}
@@ -1314,56 +1196,29 @@ export default function CrossChain({ onConnectWallet }) {
         )}
 
         {solShortfall > 0 && quote && (
-          <div style={{
-            marginTop: 10, padding: '10px 12px',
-            background: 'rgba(255,149,0,.08)',
-            border: '1px solid rgba(255,149,0,.2)',
-            borderRadius: 8, fontSize: 12, color: '#ff9500',
-          }}>
+          <div className="cc-warn">
             You need ~{(solShortfall / LAMPORTS_PER_SOL).toFixed(4)} more SOL in your wallet to cover the platform fee.
           </div>
         )}
 
         {statusMsg && busy && (
-          <div style={{
-            marginTop: 10, padding: '10px 12px',
-            background: 'rgba(0,229,255,.06)',
-            border: '1px solid rgba(0,229,255,.15)',
-            borderRadius: 8, fontSize: 12, color: C.accent,
-            display: 'flex', alignItems: 'center', gap: 8,
-          }}>
-            <div style={{
-              width: 12, height: 12, borderRadius: '50%',
-              border: '2px solid rgba(0,229,255,.3)',
-              borderTopColor: C.accent,
-              animation: 'wc-spin 0.8s linear infinite',
-              flexShrink: 0,
-            }}/>
+          <div className="cc-status">
+            <div className="cc-spinner"/>
             {statusMsg}
           </div>
         )}
 
         {swapErr && (
-          <div style={{
-            marginTop: 10, padding: '10px 12px',
-            background: 'rgba(255,59,107,.1)',
-            border: '1px solid rgba(255,59,107,.3)',
-            borderRadius: 8, fontSize: 12, color: C.red,
-          }}>{swapErr}</div>
+          <div className="cc-error">{swapErr}</div>
         )}
 
         {isSuccess && (
-          <div style={{
-            marginTop: 10, padding: 14,
-            background: pendingMsg ? 'rgba(255,193,7,.06)' : 'rgba(0,255,163,.06)',
-            border: pendingMsg ? '1px solid rgba(255,193,7,.2)' : '1px solid rgba(0,255,163,.2)',
-            borderRadius: 10, textAlign: 'center',
-          }}>
-            <div style={{ fontSize: 22, marginBottom: 4 }}>{pendingMsg ? '⏳' : '🎉'}</div>
-            <div style={{ color: pendingMsg ? '#ffc107' : C.green, fontWeight: 700, fontSize: 14 }}>
+          <div className={'cc-success' + (pendingMsg ? ' cc-success-pending' : '')}>
+            <div className="cc-success-icon">{pendingMsg ? '⏳' : '🎉'}</div>
+            <div className="cc-success-title">
               {pendingMsg ? 'Bridge Submitted' : 'Bridge Submitted!'}
             </div>
-            <div style={{ color: C.muted, fontSize: 11, marginTop: 4 }}>
+            <div className="cc-success-sub">
               {pendingMsg || (quote?.estTime
                 ? 'Funds arrive in ~' + Math.max(1, Math.ceil(quote.estTime / 60)) + ' min'
                 : 'Funds arrive in a few minutes')}
@@ -1375,50 +1230,23 @@ export default function CrossChain({ onConnectWallet }) {
           <button
             onClick={isError ? reset : (!wcon ? () => onConnectWallet?.() : execute)}
             disabled={btnDisabled && !isError}
-            style={{
-              width: '100%', marginTop: 16, padding: 16,
-              borderRadius: 14, border: 'none',
-              background: btnBg(),
-              color: (btnDisabled && wcon) ? C.muted2 : '#fff',
-              fontFamily: 'Syne, sans-serif',
-              fontWeight: 800, fontSize: 15,
-              cursor: btnDisabled ? 'not-allowed' : 'pointer',
-              minHeight: 54, opacity: busy ? 0.8 : 1,
-            }}
+            className={btnClass()}
           >
-            {busy && (
-              <span style={{
-                marginRight: 8, display: 'inline-block',
-                animation: 'wc-spin 0.8s linear infinite',
-              }}>⟳</span>
-            )}
+            {busy && <span className="cc-cta-spinner">⟳</span>}
             {btnLabel()}
           </button>
         ) : (
-          <button
-            onClick={reset}
-            style={{
-              width: '100%', marginTop: 16, padding: 16,
-              borderRadius: 14, border: 'none',
-              background: C.card3, color: C.accent,
-              fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15,
-              cursor: 'pointer', minHeight: 54,
-            }}
-          >New Swap</button>
+          <button onClick={reset} className="cc-cta cc-cta-reset">
+            New Bridge
+          </button>
         )}
 
         {txSig && solscan && (
-          <a
-            href={solscan}
-            target="_blank"
-            rel="noreferrer"
-            style={{
-              display: 'block', textAlign: 'center', marginTop: 10,
-              fontSize: 12, color: C.accent,
-            }}
-          >View on Solscan ↗</a>
+          <a href={solscan} target="_blank" rel="noreferrer" className="cc-solscan-link">
+            View on Solscan ↗
+          </a>
         )}
-        <p style={{ textAlign: 'center', fontSize: 10, color: C.muted2, marginTop: 14 }}>
+        <p className="cc-footer-note">
           Non-custodial · LI.FI aggregator · Solana origin
         </p>
       </div>
