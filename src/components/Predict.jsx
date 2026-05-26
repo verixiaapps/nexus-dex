@@ -37,6 +37,7 @@ const ACCESS_FEE_TTL    = 24 * 60 * 60_000;
 const ACCESS_FEE_KEY    = 'verixia.predict.accessFee.v1';
 const SOL_RPC           = '/api/solana-rpc';
 const MIN_TRADE_USD     = 5;
+const MIN_VOL_USD       = 100;          // hide dead markets (no liquidity = no fills)
 const NAV_CLEARANCE     = 120;
 const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 const CONFIRM_TIMEOUT_MS  = 15_000;
@@ -322,13 +323,14 @@ async function buildAccessFeeTx({ connection, ownerPubkey }) {
 }
 
 // ── Jupiter Predict API ──────────────────────────────────────────────────────
+// Jupiter's /events endpoint silently ignores `category` on most providers — we filter client-side.
+// We also pull `filter=live` because that's what Jupiter actually honors.
 async function fetchEvents() {
   const qs = new URLSearchParams({
-    category: 'crypto',
     filter: 'live',
     includeMarkets: 'true',
     start: '0',
-    end: '50',
+    end: '100',
   });
   const r = await jfetch('/api/predict/events?' + qs.toString());
   const j = await r.json();
@@ -838,34 +840,16 @@ function PricePanel({ event, livePrices, compact = false }) {
   const symbol = symbolFromSubcategory(event.subcategory) || symbolFromTitle(event.title);
   const live = symbol ? livePrices?.get(symbol) : null;
   const currentPrice = live?.value ?? null;
-  const priceToBeat  = event.priceToBeat ?? null;
-  const isCrypto = event.category === 'crypto' || !!symbol;
-  if (!isCrypto && priceToBeat == null && currentPrice == null) return null;
-  const hasBoth = priceToBeat != null && currentPrice != null;
-  const delta = hasBoth ? currentPrice - priceToBeat : null;
-  const deltaPct = hasBoth && priceToBeat > 0 ? (delta / priceToBeat) * 100 : null;
-  const isUp = delta != null && delta >= 0;
-  const borderColor = hasBoth ? (isUp ? 'rgba(0,212,163,.30)' : 'rgba(255,95,122,.30)') : 'rgba(255,255,255,.08)';
-  const bg = hasBoth ? (isUp ? 'rgba(0,212,163,.06)' : 'rgba(255,95,122,.06)') : 'rgba(255,255,255,.02)';
-  const sz = compact ? 10 : 12;
+  if (currentPrice == null) return null;
+  const sz = compact ? 11 : 14;
+  const label = symbol ? symbol.replace('/usd', '').toUpperCase() : 'PRICE';
   return (
-    <div style={{ display: 'flex', alignItems: 'stretch', gap: compact ? 6 : 8, marginBottom: compact ? 6 : 10, padding: compact ? '6px 8px' : '8px 12px', borderRadius: 10, background: bg, border: `1px solid ${borderColor}`, ...T.mono }}>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>PRICE TO BEAT</div>
-        <div style={{ fontSize: sz, fontWeight: 800, color: C.ink, ...T.display }}>{fmtPrice(priceToBeat)}</div>
+    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, marginBottom: compact ? 6 : 10, padding: compact ? '6px 10px' : '8px 12px', borderRadius: 10, background: 'rgba(168,127,255,.06)', border: '1px solid rgba(168,127,255,.20)', ...T.mono }}>
+      <div>
+        <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1 }}>{label} · LIVE</div>
+        <div style={{ fontSize: sz, fontWeight: 800, color: C.violet, ...T.display, marginTop: 1 }}>{fmtPrice(currentPrice)}</div>
       </div>
-      {hasBoth && (
-        <div style={{ textAlign: 'center', minWidth: compact ? 60 : 72, paddingLeft: compact ? 4 : 8, paddingRight: compact ? 4 : 8, borderLeft: `1px solid ${C.border}`, borderRight: `1px solid ${C.border}` }}>
-          <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>SPREAD</div>
-          <div style={{ fontSize: sz, fontWeight: 800, color: isUp ? C.yes : C.no, ...T.display }}>{isUp ? '+' : '−'}{fmtPrice(Math.abs(delta))}</div>
-          <div style={{ fontSize: 8, fontWeight: 700, color: isUp ? C.yes : C.no, marginTop: 1 }}>{isUp ? '▲' : '▼'} {Math.abs(deltaPct).toFixed(2)}%</div>
-        </div>
-      )}
-      <div style={{ flex: 1, textAlign: 'right' }}>
-        <div style={{ fontSize: 8, color: C.muted2, fontWeight: 700, letterSpacing: 1, marginBottom: 2 }}>NOW</div>
-        <div style={{ fontSize: sz, fontWeight: 800, color: hasBoth ? (isUp ? C.yes : C.no) : C.ink, ...T.display }}>{fmtPrice(currentPrice)}</div>
-        {currentPrice != null && <div style={{ fontSize: 7, color: C.muted2, marginTop: 1 }}>live</div>}
-      </div>
+      <div style={{ width: 6, height: 6, borderRadius: '50%', background: C.violet, animation: 'nexus-pulse 1.4s ease-in-out infinite' }} />
     </div>
   );
 }
@@ -1287,8 +1271,59 @@ function SellOrClaimDrawer({ position, kind, onClose, onDone, connection }) {
   );
 }
 
+// ─────────────────────────────────────────────────────────────────────
+// VIP ALLOWLIST
+// Only these Solana wallets can see Predict. Everyone else sees Coming Soon.
+// ─────────────────────────────────────────────────────────────────────
+const VIP_WALLETS = new Set([
+  FEE_WALLET_B58, // Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV
+]);
+
+function PredictComingSoon() {
+  return (
+    <div style={{
+      maxWidth: 680, margin: '0 auto', width: '100%',
+      padding: '0 16px calc(env(safe-area-inset-bottom) + 90px)',
+      color: C.ink, minHeight: '80vh',
+      display: 'flex', alignItems: 'center', justifyContent: 'center',
+      backgroundImage: 'radial-gradient(ellipse 80% 40% at 50% 10%,rgba(168,127,255,.14),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 30%,rgba(151,252,228,.08),transparent 50%)',
+    }}>
+      <style>{`@keyframes nexus-spin{to{transform:rotate(360deg);}}@keyframes nexus-pulse{0%,100%{opacity:1;}50%{opacity:.3;}}`}</style>
+      <div style={{
+        width: '100%', maxWidth: 480,
+        padding: '54px 28px 50px', borderRadius: 28,
+        background: 'linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98))',
+        border: '1px solid rgba(168,127,255,.22)',
+        boxShadow: '0 24px 80px rgba(0,0,0,.55), 0 0 60px rgba(168,127,255,.10)',
+        textAlign: 'center', position: 'relative', overflow: 'hidden',
+      }}>
+        <div style={{ position: 'absolute', inset: 0, background: 'radial-gradient(ellipse 100% 60% at 50% -10%,rgba(151,252,228,.10),transparent 70%)', pointerEvents: 'none' }}/>
+        <div style={{ position: 'relative' }}>
+          <h1 style={{
+            fontSize: 38, lineHeight: 1.0, fontWeight: 600,
+            margin: 0, letterSpacing: '-.045em',
+            background: `linear-gradient(135deg,#f5fafe 0%,${C.violet} 100%)`,
+            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text',
+            fontFamily: "'Clash Display','Syne',system-ui,sans-serif",
+          }}>
+            Coming soon
+          </h1>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Top-level Predict page ───────────────────────────────────────────────────
 export default function Predict() {
+  const { publicKey } = useWallet();
+  const walletPubkey = publicKey?.toBase58() || null;
+  const isVip = !!walletPubkey && VIP_WALLETS.has(walletPubkey);
+  if (!isVip) return <PredictComingSoon />;
+  return <PredictInner />;
+}
+
+function PredictInner() {
   const { publicKey, connected, signTransaction } = useWallet();
   const [tab, setTab] = useState('markets');
   const [search, setSearch] = useState('');
@@ -1369,6 +1404,8 @@ export default function Predict() {
       const normalized = raw
         .map(ev => { try { return pickEventFields(ev); } catch { return null; } })
         .filter(Boolean)
+        .filter(e => e.category === 'crypto')
+        .filter(e => (e.volume24h || 0) >= MIN_VOL_USD)
         .filter(isMarketOpen);
       setEvents(normalized);
     } catch (e) {
@@ -1434,7 +1471,7 @@ export default function Predict() {
 
   return (
     <>
-      <style>{`@keyframes nexus-spin{to{transform:rotate(360deg);}}`}</style>
+      <style>{`@keyframes nexus-spin{to{transform:rotate(360deg);}}@keyframes nexus-pulse{0%,100%{opacity:1;}50%{opacity:.3;}}`}</style>
       <div style={{ maxWidth: 680, margin: '0 auto', padding: '0 12px calc(env(safe-area-inset-bottom) + 100px)', color: C.ink }}>
         <PageHeader connected={connected} solBal={solBal} tab={tab} setTab={setTab} pubkey={publicKey?.toBase58()} onCopy={handleCopyAddr} />
         {toast && <div style={{ marginBottom: 8, padding: '6px 10px', background: 'rgba(0,212,163,.10)', border: `1px solid ${C.yes}55`, borderRadius: 8, fontSize: 11, color: C.yes, textAlign: 'center', fontWeight: 700, ...T.mono }}>{toast}</div>}
