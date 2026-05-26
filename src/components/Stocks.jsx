@@ -8,7 +8,7 @@ import {
   PublicKey,
 } from '@solana/web3.js';
 import './Stocks.css';
-
+ 
 // =====================================================================
 // CONFIG — brand tokens via Jupiter Aggregator. 5% platform fee to FEE_WALLET.
 // Atomic single-tx pattern: BUY prepends USDC fee transfer (deducted from
