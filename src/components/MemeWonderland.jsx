@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import './MemeWonderland.css';
-
+ 
 const SOL_MINT     = 'So11111111111111111111111111111111111111112';
 const POLL_TOKENS  = 10_000;
 const POLL_TICK    = 5_000;
