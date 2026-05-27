@@ -2,7 +2,7 @@
   --mw-bg: #0a0815;
   --mw-bg-deep: #050410;
   --mw-card: #1a1530;
-  --mw-card-hi: #241d42; 
+  --mw-card-hi: #241d42;
   --mw-card-deep: #2a2350;
   --mw-border: rgba(255,255,255,0.08);
   --mw-border-hi: rgba(255,255,255,0.18);
@@ -62,7 +62,7 @@
 
 .mw-phone { max-width: 430px; margin: 0 auto; position: relative; padding-bottom: 32px; }
 
-/* HEADER */
+/* HEADER (legacy — duplicate is removed from JSX, kept for any other use) */
 .mw-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 16px 18px 12px;
@@ -100,7 +100,7 @@
 @keyframes mwPulse { 50% { opacity: 0.4; } }
 
 /* HERO */
-.mw-hero { padding: 8px 18px 12px; position: relative; z-index: 2; }
+.mw-hero { padding: 16px 18px 12px; position: relative; z-index: 2; }
 .mw-live-tag {
   display: inline-flex; align-items: center; gap: 6px;
   font-size: 10px; letter-spacing: 0.15em; color: var(--mw-pink);
@@ -188,7 +188,7 @@
   box-shadow: 0 2px 12px rgba(77,255,210,0.3);
 }
 
-/* WHALES chip — gold gradient when active, pulsing dot when live */
+/* WHALES chip */
 .mw-whale-chip {
   border-color: rgba(255,217,102,0.35);
   color: var(--mw-gold);
@@ -349,36 +349,36 @@
   box-shadow: 0 0 12px rgba(255,217,102,0.25);
 }
 
-/* DETAIL OVERLAY — iOS scroll fix:
- * - no transform centering (margin: 0 auto + left/right instead)
- * - 100dvh handles the iOS URL bar
- * - overscroll-behavior contains the scroll
- * - -webkit-overflow-scrolling for momentum
- * - safe-area padding so content reaches the bottom under home indicator
- */
+/* ============================================================
+ * DETAIL OVERLAY — strong full-viewport fix for iOS Safari
+ * Uses z-index: 9999 to sit ABOVE any parent app header/nav.
+ * Uses 100dvh for the iOS URL bar collapse.
+ * ============================================================ */
 .mw-detail {
   position: fixed;
-  top: 0; bottom: 0; left: 0; right: 0;
+  top: 0; left: 0; right: 0; bottom: 0;
   margin: 0 auto;
   width: 100%;
   max-width: 430px;
+  height: 100vh;
   height: 100dvh;
+  z-index: 9999;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 60px);
   background:
     radial-gradient(circle at 10% 0%, rgba(255,225,77,0.12), transparent 45%),
     radial-gradient(circle at 90% 20%, rgba(77,255,136,0.15), transparent 50%),
     radial-gradient(circle at 50% 70%, rgba(255,94,196,0.1), transparent 55%),
     var(--mw-bg);
-  z-index: 40;
-  overflow-y: auto;
-  -webkit-overflow-scrolling: touch;
-  overscroll-behavior: contain;
-  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 48px);
   animation: mwFadeIn 0.25s ease-out;
 }
 .mw-detail-top {
   display: flex; align-items: center; justify-content: space-between;
   padding: calc(env(safe-area-inset-top, 0px) + 12px) 18px 12px;
-  position: sticky; top: 0; z-index: 5;
+  position: sticky; top: 0; z-index: 10;
   background: linear-gradient(180deg, var(--mw-bg) 80%, transparent);
   backdrop-filter: blur(8px);
   -webkit-backdrop-filter: blur(8px);
@@ -468,7 +468,7 @@
 }
 .mw-big-btn:active { transform: translateY(4px); }
 
-/* PRESSURE BAR — replaces the old chart */
+/* PRESSURE BAR */
 .mw-pressure-wrap {
   margin: 0 22px;
   background: linear-gradient(180deg, rgba(77,255,210,0.06), rgba(94,232,255,0.02));
@@ -521,7 +521,7 @@
 }
 .mw-pressure-totals b { font-family: 'Unbounded', system-ui, sans-serif; font-weight: 800; }
 
-/* WHALE BANNER on detail page (when arrived from whale entry) */
+/* WHALE BANNER on detail page */
 .mw-whale-banner {
   margin: 14px 22px 0;
   background:
@@ -623,7 +623,7 @@
 .mw-sheet-backdrop {
   position: fixed; inset: 0;
   background: rgba(7,7,11,0.6); backdrop-filter: blur(8px);
-  z-index: 60; animation: mwFadeIn 0.2s;
+  z-index: 9998; animation: mwFadeIn 0.2s;
 }
 @keyframes mwFadeIn { from { opacity: 0; } to { opacity: 1; } }
 .mw-sheet {
@@ -635,7 +635,7 @@
   border-top: 2px solid rgba(255,255,255,0.08);
   padding: 8px 0 calc(env(safe-area-inset-bottom, 0px) + 24px);
   max-height: 92dvh;
-  z-index: 65; animation: mwSlideUp 0.4s cubic-bezier(0.2, 1.2, 0.4, 1);
+  z-index: 9999; animation: mwSlideUp 0.4s cubic-bezier(0.2, 1.2, 0.4, 1);
   box-shadow: 0 -20px 60px rgba(255,94,196,0.15);
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
@@ -829,16 +829,18 @@
 }
 .mw-jup-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--mw-green); box-shadow: 0 0 6px var(--mw-green); }
 
-/* SUCCESS — same scroll fix as detail */
+/* SUCCESS — same strong full-viewport fix */
 .mw-success-overlay {
   position: fixed;
-  top: 0; bottom: 0; left: 0; right: 0;
+  top: 0; left: 0; right: 0; bottom: 0;
   margin: 0 auto;
   width: 100%;
   max-width: 430px;
+  height: 100vh;
   height: 100dvh;
-  z-index: 70;
+  z-index: 9999;
   overflow-y: auto;
+  overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
   padding: calc(env(safe-area-inset-top, 0px) + 16px) 0 calc(env(safe-area-inset-bottom, 0px) + 40px);
@@ -1008,7 +1010,7 @@
 }
 .mw-done-btn:active { transform: translateY(4px); }
 
-/* Skeleton + empty state */
+/* Skeleton + empty */
 .mw-skeleton { opacity: 0.5; pointer-events: none; }
 .mw-skel-circle {
   background: linear-gradient(90deg, #2a1a3a 0%, #3a2a4a 50%, #2a1a3a 100%);
@@ -1058,17 +1060,11 @@
 }
 
 /* ============================================================
- * iPhone tight sizing
+ * Phone tight sizing
  * ============================================================ */
 @media (max-width: 430px) {
   .mw-phone        { padding-bottom: 24px; }
-  .mw-header       { padding: 12px 14px 10px; }
-  .mw-logo         { font-size: 15px; gap: 8px; }
-  .mw-logo-mark    { width: 24px; height: 24px; border-radius: 6px; font-size: 13px; }
-  .mw-dex-pill     { font-size: 8px; padding: 2px 5px; }
-  .mw-wallet-pill  { font-size: 10px; padding: 5px 10px; }
-
-  .mw-hero         { padding: 6px 14px 10px; }
+  .mw-hero         { padding: 14px 14px 10px; }
   .mw-hero h1      { font-size: 28px; margin: 8px 0 6px; }
   .mw-hero p       { font-size: 11px; max-width: 280px; }
   .mw-live-tag     { font-size: 9px; padding: 3px 8px; }
@@ -1097,7 +1093,6 @@
   .mw-mini-btn     { font-size: 10px; padding: 8px 0; }
   .mw-hot-badge, .mw-fresh-badge, .mw-whale-badge { font-size: 7px; padding: 2px 5px; top: 8px; right: 8px; }
 
-  /* Detail */
   .mw-detail-top   { padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px 10px; }
   .mw-icon-btn     { width: 36px; height: 36px; font-size: 16px; }
   .mw-detail-title { font-size: 13px; }
@@ -1128,7 +1123,6 @@
   .mw-contract-addr { font-size: 10px; }
   .mw-copy-btn     { font-size: 9px; padding: 6px 10px; }
 
-  /* Sheet */
   .mw-sheet            { padding: 8px 0 calc(env(safe-area-inset-bottom, 0px) + 20px); }
   .mw-sheet-token-head { padding: 2px 16px 14px; gap: 10px; }
   .mw-sheet-emoji      { width: 44px; height: 44px; font-size: 22px; }
@@ -1145,7 +1139,6 @@
   .mw-cta-wrap         { padding: 14px 16px 0; }
   .mw-cta              { font-size: 13px; padding: 15px 0; }
 
-  /* Success */
   .mw-success           { padding: 14px 16px 4px; }
   .mw-success-emoji     { font-size: 64px; }
   .mw-success-title     { font-size: 28px; }
