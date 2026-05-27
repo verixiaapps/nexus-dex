@@ -8,6 +8,14 @@ const POLL_SOL     = 30_000;
 const POLL_WHALES  = 20_000;
 const QUOTE_LAMPS  = 1_000_000_000;
 
+// Known stablecoin mints — pressure bar is meaningless here (pegged price, bot/arb only)
+const STABLE_MINTS = new Set([
+  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
+  'USDH1SM1ojwWUga67PGrgFWUHibbjqMvuMaDkRJTgkX',  // USDH
+  'CASHVDm2wsJXfhj6VWxb7GiMdoLc17Du7paH4bNr5woT', // CASH (Solana)
+]);
+
 const FILTERS = [
   { key: 'trending', label: 'Trending', tf: '24h' },
   { key: '1h',       label: '🔥 1H',    tf: '1h'  },
@@ -107,9 +115,8 @@ export default function MemeWonderland() {
   const [success, setSuccess] = useState(null);
   const [feedTab, setFeedTab] = useState('LIVE TRADES');
 
-  // Standard token list (Trending / 1H / 6H / 24H / New / Watch)
   useEffect(() => {
-    if (activeFilter === 'whales') return; // handled separately
+    if (activeFilter === 'whales') return;
     let cancelled = false;
     const f = FILTERS.find(x => x.key === activeFilter);
     async function load() {
@@ -135,7 +142,6 @@ export default function MemeWonderland() {
     return () => { cancelled = true; clearInterval(id); };
   }, [activeFilter]);
 
-  // Whales feed
   useEffect(() => {
     if (activeFilter !== 'whales') return;
     let cancelled = false;
@@ -147,7 +153,6 @@ export default function MemeWonderland() {
         if (cancelled) return;
         setWhaleEvents(events);
 
-        // Hydrate full token data for each whale event so cards render properly
         if (events.length === 0) {
           setTokens([]);
           setLoading(false);
@@ -158,30 +163,29 @@ export default function MemeWonderland() {
         const td = await tr.json();
         const list = Array.isArray(td) ? td : (td?.data || []);
         const byMint = new Map(list.map(t => [t.id || t.address, t]));
-        const merged = events
-          .map(ev => {
-            const t = byMint.get(ev.mint);
-            if (!t) {
-              return {
-                mint:     ev.mint,
-                sym:      ev.symbol || 'TOKEN',
-                name:     ev.name   || '',
-                emoji:    emojiFor(ev.symbol || ''),
-                icon:     null,
-                price:    0,
-                change:   0,
-                mcap:     0,
-                volume24h:0, buyVol24h:0, sellVol24h:0,
-                holders:  0, liquidity: 0,
-                whaleSol: ev.solAmount,
-                whaleAt:  ev.detectedAt,
-              };
-            }
-            const n = normalize(t);
-            n.whaleSol = ev.solAmount;
-            n.whaleAt  = ev.detectedAt;
-            return n;
-          });
+        const merged = events.map(ev => {
+          const t = byMint.get(ev.mint);
+          if (!t) {
+            return {
+              mint:     ev.mint,
+              sym:      ev.symbol || 'TOKEN',
+              name:     ev.name   || '',
+              emoji:    emojiFor(ev.symbol || ''),
+              icon:     null,
+              price:    0,
+              change:   0,
+              mcap:     0,
+              volume24h:0, buyVol24h:0, sellVol24h:0,
+              holders:  0, liquidity: 0,
+              whaleSol: ev.solAmount,
+              whaleAt:  ev.detectedAt,
+            };
+          }
+          const n = normalize(t);
+          n.whaleSol = ev.solAmount;
+          n.whaleAt  = ev.detectedAt;
+          return n;
+        });
         setTokens(merged);
         setLoading(false);
       } catch {
@@ -194,7 +198,6 @@ export default function MemeWonderland() {
     return () => { cancelled = true; clearInterval(id); };
   }, [activeFilter]);
 
-  // SOL price
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -209,7 +212,6 @@ export default function MemeWonderland() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  // Whale count badge (shown next to the chip)
   useEffect(() => {
     let cancelled = false;
     async function loadCount() {
@@ -254,16 +256,7 @@ export default function MemeWonderland() {
       </div>
 
       <div className="mw-phone">
-        <div className="mw-header">
-          <div className="mw-logo">
-            <div className="mw-logo-mark">N</div>
-            NEXUS <span className="mw-dex-pill">DEX</span>
-          </div>
-          <div className="mw-wallet-pill">
-            <span className="mw-wallet-dot"></span>
-            {shortAddr(publicKey)}
-          </div>
-        </div>
+        {/* NOTE: duplicate NEXUS DEX header removed — parent app provides it. */}
 
         <div className="mw-hero">
           <span className="mw-live-tag">LIVE MEME MARKET</span>
@@ -439,15 +432,14 @@ export default function MemeWonderland() {
 
 function DetailView({ token, feedTab, setFeedTab, onClose, onTrade }) {
   const isDown = token.change < 0;
+  const isStable = STABLE_MINTS.has(token.mint);
 
-  // Lock body scroll while detail is open (fixes iOS scroll-fight)
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = prev; };
   }, []);
 
-  // Buy/sell pressure split
   const totalVol = token.buyVol24h + token.sellVol24h;
   const buyPct   = totalVol > 0 ? (token.buyVol24h / totalVol) * 100 : 50;
   const sellPct  = 100 - buyPct;
@@ -482,27 +474,29 @@ function DetailView({ token, feedTab, setFeedTab, onClose, onTrade }) {
         <button className="mw-big-btn mw-sell" onClick={() => onTrade('sell')}>💸 SELL</button>
       </div>
 
-      {/* Pressure bar — replaces the chart */}
-      <div className="mw-pressure-wrap">
-        <div className="mw-pressure-head">
-          <span className="mw-pressure-label">⚡ BUY / SELL PRESSURE · 24H</span>
-          <span className={'mw-pressure-verdict ' + (buyHeavy ? 'mw-up' : 'mw-down')}>
-            {buyHeavy ? 'BULLS WINNING' : 'BEARS WINNING'}
-          </span>
-        </div>
-        <div className="mw-pressure-bar">
-          <div className="mw-pressure-buy"  style={{ width: buyPct  + '%' }}>
-            {buyPct >= 18 && <span>{buyPct.toFixed(0)}% BUYS</span>}
+      {/* Pressure bar — hidden for stablecoins (bot/arb noise, not real signal) */}
+      {!isStable && (
+        <div className="mw-pressure-wrap">
+          <div className="mw-pressure-head">
+            <span className="mw-pressure-label">⚡ BUY / SELL PRESSURE · 24H</span>
+            <span className={'mw-pressure-verdict ' + (buyHeavy ? 'mw-up' : 'mw-down')}>
+              {buyHeavy ? 'BULLS WINNING' : 'BEARS WINNING'}
+            </span>
           </div>
-          <div className="mw-pressure-sell" style={{ width: sellPct + '%' }}>
-            {sellPct >= 18 && <span>{sellPct.toFixed(0)}% SELLS</span>}
+          <div className="mw-pressure-bar">
+            <div className="mw-pressure-buy"  style={{ width: buyPct  + '%' }}>
+              {buyPct >= 18 && <span>{buyPct.toFixed(0)}% BUYS</span>}
+            </div>
+            <div className="mw-pressure-sell" style={{ width: sellPct + '%' }}>
+              {sellPct >= 18 && <span>{sellPct.toFixed(0)}% SELLS</span>}
+            </div>
+          </div>
+          <div className="mw-pressure-totals">
+            <span><b className="mw-up">${format(token.buyVol24h)}</b> bought</span>
+            <span><b className="mw-down">${format(token.sellVol24h)}</b> sold</span>
           </div>
         </div>
-        <div className="mw-pressure-totals">
-          <span><b className="mw-up">${format(token.buyVol24h)}</b> bought</span>
-          <span><b className="mw-down">${format(token.sellVol24h)}</b> sold</span>
-        </div>
-      </div>
+      )}
 
       {token.whaleSol && (
         <div className="mw-whale-banner">
