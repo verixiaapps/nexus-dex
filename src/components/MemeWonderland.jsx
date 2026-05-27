@@ -8,14 +8,6 @@ const POLL_SOL     = 30_000;
 const POLL_WHALES  = 20_000;
 const QUOTE_LAMPS  = 1_000_000_000;
 
-// Known stablecoin mints — pressure bar is meaningless here (pegged price, bot/arb only)
-const STABLE_MINTS = new Set([
-  'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
-  'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB', // USDT
-  'USDH1SM1ojwWUga67PGrgFWUHibbjqMvuMaDkRJTgkX',  // USDH
-  'CASHVDm2wsJXfhj6VWxb7GiMdoLc17Du7paH4bNr5woT', // CASH (Solana)
-]);
-
 const FILTERS = [
   { key: 'trending', label: 'Trending', tf: '24h' },
   { key: '1h',       label: '🔥 1H',    tf: '1h'  },
@@ -88,8 +80,6 @@ function normalize(t, i = 0) {
     age:       ageOf(t.firstPool?.createdAt || t.createdAt),
     mcap:      Number(t.mcap ?? t.fdv ?? 0),
     volume24h: Number(t?.stats24h?.buyVolume ?? 0) + Number(t?.stats24h?.sellVolume ?? 0),
-    buyVol24h: Number(t?.stats24h?.buyVolume  ?? 0),
-    sellVol24h:Number(t?.stats24h?.sellVolume ?? 0),
     holders:   Number(t.holderCount || 0),
     liquidity: Number(t.liquidity || 0),
     hot:       i < 2 && change > 50,
@@ -113,7 +103,6 @@ export default function MemeWonderland() {
   const [amount, setAmount] = useState('0.50');
   const [selectedPreset, setSelectedPreset] = useState('0.5');
   const [success, setSuccess] = useState(null);
-  const [feedTab, setFeedTab] = useState('LIVE TRADES');
 
   useEffect(() => {
     if (activeFilter === 'whales') return;
@@ -175,7 +164,7 @@ export default function MemeWonderland() {
               price:    0,
               change:   0,
               mcap:     0,
-              volume24h:0, buyVol24h:0, sellVol24h:0,
+              volume24h:0,
               holders:  0, liquidity: 0,
               whaleSol: ev.solAmount,
               whaleAt:  ev.detectedAt,
@@ -256,8 +245,6 @@ export default function MemeWonderland() {
       </div>
 
       <div className="mw-phone">
-        {/* NOTE: duplicate NEXUS DEX header removed — parent app provides it. */}
-
         <div className="mw-hero">
           <span className="mw-live-tag">LIVE MEME MARKET</span>
           <h1>Meme <span className="mw-wonder">wonderland</span></h1>
@@ -392,8 +379,6 @@ export default function MemeWonderland() {
       {detailMint && tokenByMint(detailMint) && (
         <DetailView
           token={tokenByMint(detailMint)}
-          feedTab={feedTab}
-          setFeedTab={setFeedTab}
           onClose={closeDetail}
           onTrade={(m) => openSheet(detailMint, m)}
         />
@@ -430,20 +415,14 @@ export default function MemeWonderland() {
   );
 }
 
-function DetailView({ token, feedTab, setFeedTab, onClose, onTrade }) {
+function DetailView({ token, onClose, onTrade }) {
   const isDown = token.change < 0;
-  const isStable = STABLE_MINTS.has(token.mint);
 
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = prev; };
   }, []);
-
-  const totalVol = token.buyVol24h + token.sellVol24h;
-  const buyPct   = totalVol > 0 ? (token.buyVol24h / totalVol) * 100 : 50;
-  const sellPct  = 100 - buyPct;
-  const buyHeavy = buyPct >= 50;
 
   return (
     <div className="mw-detail mw-show">
@@ -462,9 +441,6 @@ function DetailView({ token, feedTab, setFeedTab, onClose, onTrade }) {
           <div className="mw-detail-fullname">{token.name} · Solana</div>
           <div className="mw-detail-price-row">
             <div className="mw-detail-price">{formatPrice(token.price)}</div>
-            <span className={'mw-change-pill' + (isDown ? ' mw-down-pill' : '')}>
-              {isDown ? '📉 ' : '📈 '}{formatPct(token.change)}
-            </span>
           </div>
         </div>
       </div>
@@ -473,30 +449,6 @@ function DetailView({ token, feedTab, setFeedTab, onClose, onTrade }) {
         <button className="mw-big-btn mw-buy"  onClick={() => onTrade('buy')}>🚀 BUY</button>
         <button className="mw-big-btn mw-sell" onClick={() => onTrade('sell')}>💸 SELL</button>
       </div>
-
-      {/* Pressure bar — hidden for stablecoins (bot/arb noise, not real signal) */}
-      {!isStable && (
-        <div className="mw-pressure-wrap">
-          <div className="mw-pressure-head">
-            <span className="mw-pressure-label">⚡ BUY / SELL PRESSURE · 24H</span>
-            <span className={'mw-pressure-verdict ' + (buyHeavy ? 'mw-up' : 'mw-down')}>
-              {buyHeavy ? 'BULLS WINNING' : 'BEARS WINNING'}
-            </span>
-          </div>
-          <div className="mw-pressure-bar">
-            <div className="mw-pressure-buy"  style={{ width: buyPct  + '%' }}>
-              {buyPct >= 18 && <span>{buyPct.toFixed(0)}% BUYS</span>}
-            </div>
-            <div className="mw-pressure-sell" style={{ width: sellPct + '%' }}>
-              {sellPct >= 18 && <span>{sellPct.toFixed(0)}% SELLS</span>}
-            </div>
-          </div>
-          <div className="mw-pressure-totals">
-            <span><b className="mw-up">${format(token.buyVol24h)}</b> bought</span>
-            <span><b className="mw-down">${format(token.sellVol24h)}</b> sold</span>
-          </div>
-        </div>
-      )}
 
       {token.whaleSol && (
         <div className="mw-whale-banner">
@@ -513,7 +465,7 @@ function DetailView({ token, feedTab, setFeedTab, onClose, onTrade }) {
           <span className="mw-stat-icon">💰</span>
           <div className="mw-stat-label">Market Cap</div>
           <div className="mw-stat-value">${format(token.mcap)}</div>
-          <div className={'mw-stat-sub ' + (isDown ? 'mw-down' : 'mw-up')}>{formatPct(token.change)} 24h</div>
+          <div className="mw-stat-sub">USD</div>
         </div>
         <div className="mw-stat mw-holders">
           <span className="mw-stat-icon">{token.emoji}</span>
@@ -532,19 +484,6 @@ function DetailView({ token, feedTab, setFeedTab, onClose, onTrade }) {
           <div className="mw-stat-label">Liquidity</div>
           <div className="mw-stat-value">${format(token.liquidity)}</div>
           <div className="mw-stat-sub">🔒 pooled</div>
-        </div>
-      </div>
-
-      <div className="mw-feed">
-        <div className="mw-feed-tabs">
-          {['LIVE TRADES', 'TOP HOLDERS'].map(ft => (
-            <div key={ft} className={'mw-feed-tab' + (feedTab === ft ? ' mw-active' : '')} onClick={() => setFeedTab(ft)}>
-              {ft}
-            </div>
-          ))}
-        </div>
-        <div className="mw-feed-list">
-          <div className="mw-feed-empty">Live trade feed coming soon</div>
         </div>
       </div>
 
@@ -607,9 +546,6 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
           <div className="mw-sheet-token-info">
             <div className="mw-sheet-token-name">{token.sym}</div>
             <div className="mw-sheet-sub">
-              <span className={'mw-change-pill' + (isDown ? ' mw-down-pill' : '')}>
-                {isDown ? '📉 ' : '📈 '}{formatPct(token.change)}
-              </span>
               {token.age && <span className="mw-age-pill">{token.age}</span>}
             </div>
           </div>
@@ -738,7 +674,7 @@ function SuccessView({ data, token, refCode, onClose }) {
           <div className="mw-flex-emoji">{token.icon ? <img src={token.icon} alt={token.sym} /> : token.emoji}</div>
           <div className="mw-flex-token">
             <div className="mw-flex-sym">${token.sym}</div>
-            <div className="mw-flex-tag">{token.name} · <b>{formatPct(token.change)} 24h</b></div>
+            <div className="mw-flex-tag">{token.name}</div>
           </div>
         </div>
         <div className="mw-flex-row"><span className="mw-flex-label">You paid</span><span className="mw-flex-value">{data.paid} SOL</span></div>
