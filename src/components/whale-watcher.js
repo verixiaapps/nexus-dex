@@ -1,6 +1,6 @@
 /* ============================================================
  * whale-watcher.js
- *
+ * 
  * Polls Helius for new Raydium/Meteora pools, watches their TVL,
  * fires an email when a single LP add of >= 5,000 SOL lands on a
  * token that passes a basic honeypot check.
