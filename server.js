@@ -5,6 +5,8 @@ const cors      = require('cors');
 const path      = require('path');
 const rateLimit = require('express-rate-limit');
 
+const { startWhaleWatcher, getRecentWhaleEvents } = require('./whale-watcher');
+
 const app      = express();
 const PORT     = process.env.PORT || 3001;
 const NODE_ENV = process.env.NODE_ENV || 'development';
@@ -377,6 +379,21 @@ app.get('/api/sol-price', async (req, res) => {
 });
 
 /* ========================================================================
+ * Whale Watcher — recent whale LP events (read endpoint, populated by
+ * whale-watcher.js background loop)
+ * ===================================================================== */
+app.get('/api/whale-events', (req, res) => {
+  try {
+    const since = Number(req.query.since || 48 * 3600 * 1000);
+    const events = getRecentWhaleEvents(since);
+    res.json({ events, count: events.length, ts: Date.now() });
+  } catch (e) {
+    logError('whale-events', e);
+    res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+/* ========================================================================
  * LI.FI cross-chain
  * ===================================================================== */
 function buildLifiHeaders() {
@@ -494,6 +511,7 @@ app.get('/api/health', (req, res) => {
       jupiterApiKey: Boolean(JUPITER_API_KEY),
       helius:        Boolean(HELIUS_API_KEY || HELIUS_RPC_URL),
       lifiApiKey:    Boolean(LIFI_API_KEY),
+      resend:        Boolean(process.env.RESEND_API_KEY),
     },
     jupiter: {
       swapV2: JUPITER_SWAP_V2_BASE,
@@ -507,6 +525,10 @@ app.get('/api/health', (req, res) => {
       provider: HELIUS_RPC_URL ? 'helius (custom url)'
               : HELIUS_API_KEY ? 'helius'
               : 'public mainnet-beta',
+    },
+    whaleWatcher: {
+      recentEvents: getRecentWhaleEvents(48 * 3600 * 1000).length,
+      email:        process.env.WHALE_ALERT_EMAIL || 'Verixiaapps@gmail.com',
     },
     time: new Date().toISOString(),
   });
@@ -550,6 +572,8 @@ app.listen(PORT, () => {
   console.log('  Jupiter Price:   ' + JUPITER_PRICE_BASE);
   console.log('  LI.FI:           ' + LIFI_API + (LIFI_API_KEY ? ' (key set)' : ' (no key)'));
   console.log('  Solana RPC:      ' + (HELIUS_RPC_URL ? 'helius (custom)' : HELIUS_API_KEY ? 'helius' : 'public mainnet-beta'));
+  console.log('  Whale Watcher:   starting…');
+  startWhaleWatcher();
 });
 
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
