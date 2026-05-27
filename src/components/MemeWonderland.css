@@ -1,6 +1,3 @@
-Here’s the full CSS — your existing file plus the additions, ready to drop in as one file:
-
-/* All styles scoped with mw- prefix to avoid clashing with rest of app */
 .mw-root {
   --mw-bg: #0a0815;
   --mw-bg-deep: #050410;
