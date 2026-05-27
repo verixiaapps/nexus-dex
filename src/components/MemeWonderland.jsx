@@ -1,12 +1,11 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import './MemeWonderland.css';
- 
+
 const SOL_MINT     = 'So11111111111111111111111111111111111111112';
 const POLL_TOKENS  = 10_000;
-const POLL_TICK    = 5_000;
 const POLL_SOL     = 30_000;
-const MAX_TICKS    = 144;
+const POLL_WHALES  = 20_000;
 const QUOTE_LAMPS  = 1_000_000_000;
 
 const FILTERS = [
@@ -14,6 +13,7 @@ const FILTERS = [
   { key: '1h',       label: '🔥 1H',    tf: '1h'  },
   { key: '6h',       label: '6H',       tf: '6h'  },
   { key: '24h',      label: '24H',      tf: '24h' },
+  { key: 'whales',   label: '🐋 WHALES', tf: null },
   { key: 'new',      label: '🆕 New',   tf: null  },
   { key: 'watch',    label: '⭐ Watch', tf: null  },
 ];
@@ -55,6 +55,13 @@ function ageOf(iso) {
   if (d < 365) return Math.round(d) + 'D OLD';
   return Math.round(d / 365) + 'Y OLD';
 }
+function timeAgo(ms) {
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60)    return s + 's ago';
+  if (s < 3600)  return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
+}
 function shortAddr(a) {
   if (!a) return 'Connect';
   const s = a.toString();
@@ -73,6 +80,8 @@ function normalize(t, i = 0) {
     age:       ageOf(t.firstPool?.createdAt || t.createdAt),
     mcap:      Number(t.mcap ?? t.fdv ?? 0),
     volume24h: Number(t?.stats24h?.buyVolume ?? 0) + Number(t?.stats24h?.sellVolume ?? 0),
+    buyVol24h: Number(t?.stats24h?.buyVolume  ?? 0),
+    sellVol24h:Number(t?.stats24h?.sellVolume ?? 0),
     holders:   Number(t.holderCount || 0),
     liquidity: Number(t.liquidity || 0),
     hot:       i < 2 && change > 50,
@@ -88,6 +97,7 @@ export default function MemeWonderland() {
   const [tokens, setTokens] = useState([]);
   const [loading, setLoading] = useState(true);
   const [solPrice, setSolPrice] = useState(0);
+  const [whaleEvents, setWhaleEvents] = useState([]);
 
   const [detailMint, setDetailMint] = useState(null);
   const [sheetMint,  setSheetMint]  = useState(null);
@@ -95,10 +105,11 @@ export default function MemeWonderland() {
   const [amount, setAmount] = useState('0.50');
   const [selectedPreset, setSelectedPreset] = useState('0.5');
   const [success, setSuccess] = useState(null);
-  const [chartTf, setChartTf] = useState('24H');
   const [feedTab, setFeedTab] = useState('LIVE TRADES');
 
+  // Standard token list (Trending / 1H / 6H / 24H / New / Watch)
   useEffect(() => {
+    if (activeFilter === 'whales') return; // handled separately
     let cancelled = false;
     const f = FILTERS.find(x => x.key === activeFilter);
     async function load() {
@@ -124,6 +135,66 @@ export default function MemeWonderland() {
     return () => { cancelled = true; clearInterval(id); };
   }, [activeFilter]);
 
+  // Whales feed
+  useEffect(() => {
+    if (activeFilter !== 'whales') return;
+    let cancelled = false;
+    async function loadWhales() {
+      try {
+        const r = await fetch('/api/whale-events?since=' + (48 * 3600 * 1000));
+        const d = await r.json();
+        const events = Array.isArray(d?.events) ? d.events : [];
+        if (cancelled) return;
+        setWhaleEvents(events);
+
+        // Hydrate full token data for each whale event so cards render properly
+        if (events.length === 0) {
+          setTokens([]);
+          setLoading(false);
+          return;
+        }
+        const mints = events.map(e => e.mint).join(',');
+        const tr = await fetch(`/api/jupiter/tokens/search?query=${mints}`);
+        const td = await tr.json();
+        const list = Array.isArray(td) ? td : (td?.data || []);
+        const byMint = new Map(list.map(t => [t.id || t.address, t]));
+        const merged = events
+          .map(ev => {
+            const t = byMint.get(ev.mint);
+            if (!t) {
+              return {
+                mint:     ev.mint,
+                sym:      ev.symbol || 'TOKEN',
+                name:     ev.name   || '',
+                emoji:    emojiFor(ev.symbol || ''),
+                icon:     null,
+                price:    0,
+                change:   0,
+                mcap:     0,
+                volume24h:0, buyVol24h:0, sellVol24h:0,
+                holders:  0, liquidity: 0,
+                whaleSol: ev.solAmount,
+                whaleAt:  ev.detectedAt,
+              };
+            }
+            const n = normalize(t);
+            n.whaleSol = ev.solAmount;
+            n.whaleAt  = ev.detectedAt;
+            return n;
+          });
+        setTokens(merged);
+        setLoading(false);
+      } catch {
+        if (!cancelled) setLoading(false);
+      }
+    }
+    setLoading(true);
+    loadWhales();
+    const id = setInterval(loadWhales, POLL_WHALES);
+    return () => { cancelled = true; clearInterval(id); };
+  }, [activeFilter]);
+
+  // SOL price
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -138,13 +209,28 @@ export default function MemeWonderland() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
+  // Whale count badge (shown next to the chip)
+  useEffect(() => {
+    let cancelled = false;
+    async function loadCount() {
+      try {
+        const r = await fetch('/api/whale-events?since=' + (48 * 3600 * 1000));
+        const d = await r.json();
+        if (!cancelled) setWhaleEvents(Array.isArray(d?.events) ? d.events : []);
+      } catch {}
+    }
+    loadCount();
+    const id = setInterval(loadCount, POLL_WHALES);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
   const ticker = useMemo(() => {
     return tokens.slice(0, 8).map(t => [t.sym, formatPct(t.change), t.change >= 0]);
   }, [tokens]);
 
   const tokenByMint = useCallback(m => tokens.find(t => t.mint === m), [tokens]);
 
-  const openDetail = (mint) => { setDetailMint(mint); window.scrollTo(0, 0); };
+  const openDetail = (mint) => { setDetailMint(mint); };
   const closeDetail = () => setDetailMint(null);
   const openSheet = (mint, m, e) => {
     if (e) e.stopPropagation();
@@ -154,6 +240,12 @@ export default function MemeWonderland() {
   const closeSheet = () => setSheetMint(null);
   const handlePreset = (amt) => { setSelectedPreset(amt); setAmount(amt === 'MAX' ? '1.0' : amt); };
   const handleAmount = (v) => { setAmount(v); setSelectedPreset(null); };
+
+  const isWhalesView = activeFilter === 'whales';
+  const sectionTitle = isWhalesView ? 'WHALE ENTRIES · 48H'
+    : activeFilter === 'new'   ? 'FRESH LAUNCHES'
+    : activeFilter === 'watch' ? 'WATCHLIST'
+    : 'HOT RIGHT NOW';
 
   return (
     <div className="mw-root">
@@ -200,24 +292,34 @@ export default function MemeWonderland() {
         </div>
 
         <div className="mw-filters">
-          {FILTERS.map(f => (
-            <div
-              key={f.key}
-              className={'mw-chip' + (activeFilter === f.key ? ' mw-active' : '')}
-              onClick={() => setActiveFilter(f.key)}
-            >
-              {f.label}
-            </div>
-          ))}
+          {FILTERS.map(f => {
+            const isWhale = f.key === 'whales';
+            const count = isWhale ? whaleEvents.length : 0;
+            return (
+              <div
+                key={f.key}
+                className={
+                  'mw-chip'
+                  + (activeFilter === f.key ? ' mw-active' : '')
+                  + (isWhale ? ' mw-whale-chip' : '')
+                  + (isWhale && count > 0 ? ' mw-whale-live' : '')
+                }
+                onClick={() => setActiveFilter(f.key)}
+              >
+                {f.label}
+                {isWhale && count > 0 && <span className="mw-whale-count">{count}</span>}
+              </div>
+            );
+          })}
         </div>
 
         <div className="mw-section-head">
-          <div className="mw-section-title">
-            {activeFilter === 'new' ? 'FRESH LAUNCHES'
-              : activeFilter === 'watch' ? 'WATCHLIST'
-              : 'HOT RIGHT NOW'}
+          <div className={'mw-section-title' + (isWhalesView ? ' mw-section-whale' : '')}>
+            {sectionTitle}
           </div>
-          <div className="mw-section-meta">{loading ? 'LOADING…' : `LIVE · ${tokens.length}`}</div>
+          <div className="mw-section-meta">
+            {loading ? 'LOADING…' : isWhalesView ? `${tokens.length} ENTRIES` : `LIVE · ${tokens.length}`}
+          </div>
         </div>
 
         <div className="mw-grid">
@@ -235,17 +337,38 @@ export default function MemeWonderland() {
               </div>
             ))
           ) : tokens.length === 0 ? (
-            <div className="mw-empty">No tokens right now. Try another filter.</div>
+            isWhalesView ? (
+              <div className="mw-empty mw-empty-whale">
+                <div className="mw-empty-whale-emoji">🐋</div>
+                <div className="mw-empty-whale-title">No whales today.</div>
+                <div className="mw-empty-whale-sub">
+                  We watch every Solana pool 24/7.<br />
+                  Whales averaging 4-8 entries per month.
+                </div>
+              </div>
+            ) : (
+              <div className="mw-empty">No tokens right now. Try another filter.</div>
+            )
           ) : (
             tokens.slice(0, 12).map((t, i) => (
               <div
                 key={t.mint}
-                className={'mw-card' + (t.hot ? ' mw-hot' : '') + (t.fresh ? ' mw-fresh' : '')}
+                className={
+                  'mw-card'
+                  + (t.hot ? ' mw-hot' : '')
+                  + (t.fresh ? ' mw-fresh' : '')
+                  + (t.whaleSol ? ' mw-whale' : '')
+                }
                 style={{ animationDelay: `${0.03 + i * 0.04}s` }}
                 onClick={() => openDetail(t.mint)}
               >
-                {t.hot && <div className="mw-hot-badge">🔥 HOT</div>}
-                {t.fresh && !t.hot && <div className="mw-fresh-badge">🆕 NEW</div>}
+                {t.whaleSol ? (
+                  <div className="mw-whale-badge">🐋 +{t.whaleSol.toLocaleString()} SOL</div>
+                ) : t.hot ? (
+                  <div className="mw-hot-badge">🔥 HOT</div>
+                ) : t.fresh ? (
+                  <div className="mw-fresh-badge">🆕 NEW</div>
+                ) : null}
                 <div className="mw-card-top">
                   <div className="mw-token-icon">
                     {t.icon
@@ -254,7 +377,9 @@ export default function MemeWonderland() {
                   </div>
                   <div className="mw-token-meta">
                     <div className="mw-token-sym">{t.sym}</div>
-                    <div className="mw-token-age">{t.age || formatPrice(t.price)}</div>
+                    <div className="mw-token-age">
+                      {t.whaleAt ? timeAgo(t.whaleAt).toUpperCase() : (t.age || formatPrice(t.price))}
+                    </div>
                   </div>
                 </div>
                 <div className={'mw-change ' + (t.change < 0 ? 'mw-down' : 'mw-up')}>
@@ -274,9 +399,6 @@ export default function MemeWonderland() {
       {detailMint && tokenByMint(detailMint) && (
         <DetailView
           token={tokenByMint(detailMint)}
-          solPrice={solPrice}
-          chartTf={chartTf}
-          setChartTf={setChartTf}
           feedTab={feedTab}
           setFeedTab={setFeedTab}
           onClose={closeDetail}
@@ -315,66 +437,21 @@ export default function MemeWonderland() {
   );
 }
 
-function DetailView({ token, solPrice, chartTf, setChartTf, feedTab, setFeedTab, onClose, onTrade }) {
+function DetailView({ token, feedTab, setFeedTab, onClose, onTrade }) {
   const isDown = token.change < 0;
-  const [ticks, setTicks] = useState(() => token.price > 0 ? [{ t: Date.now(), p: token.price }] : []);
 
+  // Lock body scroll while detail is open (fixes iOS scroll-fight)
   useEffect(() => {
-    setTicks(token.price > 0 ? [{ t: Date.now(), p: token.price }] : []);
-  }, [token.mint]);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function tick() {
-      try {
-        if (!solPrice) return;
-        const r = await fetch(`/api/jupiter/quote?inputMint=${SOL_MINT}&outputMint=${token.mint}&amount=${QUOTE_LAMPS}&slippageBps=50`);
-        if (!r.ok) return;
-        const q = await r.json();
-        const outAmount = Number(q?.outAmount || 0);
-        const decimals  = Number(q?.outputDecimals ?? 6);
-        if (!outAmount) return;
-        const tps = outAmount / Math.pow(10, decimals);
-        const usd = solPrice / tps;
-        if (cancelled || !Number.isFinite(usd) || usd <= 0) return;
-        setTicks(prev => {
-          const next = [...prev, { t: Date.now(), p: usd }];
-          return next.length > MAX_TICKS ? next.slice(-MAX_TICKS) : next;
-        });
-      } catch {}
-    }
-    tick();
-    const id = setInterval(tick, POLL_TICK);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [token.mint, solPrice]);
-
-  const visible = useMemo(() => {
-    const lim = { '1H': 12, '6H': 36, '24H': MAX_TICKS, '7D': MAX_TICKS }[chartTf] || MAX_TICKS;
-    return ticks.slice(-lim);
-  }, [ticks, chartTf]);
-
-  const { linePath, fillPath, lastX, lastY, color } = useMemo(() => {
-    if (visible.length < 2) return { linePath: '', fillPath: '', lastX: 400, lastY: 50, color: '#4dffd2' };
-    const W = 400, H = 100;
-    const prices = visible.map(t => t.p);
-    const min = Math.min(...prices), max = Math.max(...prices);
-    const range = max - min || max * 0.001 || 1;
-    const pts = visible.map((t, i) => [
-      (i / (visible.length - 1)) * W,
-      H - ((t.p - min) / range) * (H - 10) - 5
-    ]);
-    const linePath = pts.map((p, i) => (i ? 'L' : 'M') + ' ' + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ');
-    const fillPath = linePath + ` L ${W} ${H} L 0 ${H} Z`;
-    const up = prices[prices.length - 1] >= prices[0];
-    return { linePath, fillPath, lastX: pts[pts.length - 1][0], lastY: pts[pts.length - 1][1], color: up ? '#4dffd2' : '#ff5577' };
-  }, [visible]);
-
-  const currentPrice = visible.length ? visible[visible.length - 1].p : token.price;
-
-  useEffect(() => {
-    const el = document.querySelector('.mw-detail');
-    if (el) el.scrollTop = 0;
-  }, [token.mint]);
+  // Buy/sell pressure split
+  const totalVol = token.buyVol24h + token.sellVol24h;
+  const buyPct   = totalVol > 0 ? (token.buyVol24h / totalVol) * 100 : 50;
+  const sellPct  = 100 - buyPct;
+  const buyHeavy = buyPct >= 50;
 
   return (
     <div className="mw-detail mw-show">
@@ -392,7 +469,7 @@ function DetailView({ token, solPrice, chartTf, setChartTf, feedTab, setFeedTab,
           <div className="mw-detail-name">{token.sym}</div>
           <div className="mw-detail-fullname">{token.name} · Solana</div>
           <div className="mw-detail-price-row">
-            <div className="mw-detail-price">{formatPrice(currentPrice)}</div>
+            <div className="mw-detail-price">{formatPrice(token.price)}</div>
             <span className={'mw-change-pill' + (isDown ? ' mw-down-pill' : '')}>
               {isDown ? '📉 ' : '📈 '}{formatPct(token.change)}
             </span>
@@ -405,39 +482,37 @@ function DetailView({ token, solPrice, chartTf, setChartTf, feedTab, setFeedTab,
         <button className="mw-big-btn mw-sell" onClick={() => onTrade('sell')}>💸 SELL</button>
       </div>
 
-      <div className="mw-chart-wrap">
-        <div className="mw-chart-header">
-          <span className="mw-chart-label">📊 LIVE PRICE <span className="mw-live-dot-sm"></span></span>
-          <div className="mw-timeframes">
-            {['1H', '6H', '24H', '7D'].map(tf => (
-              <div key={tf} className={'mw-tf' + (chartTf === tf ? ' mw-active' : '')} onClick={() => setChartTf(tf)}>
-                {tf}
-              </div>
-            ))}
+      {/* Pressure bar — replaces the chart */}
+      <div className="mw-pressure-wrap">
+        <div className="mw-pressure-head">
+          <span className="mw-pressure-label">⚡ BUY / SELL PRESSURE · 24H</span>
+          <span className={'mw-pressure-verdict ' + (buyHeavy ? 'mw-up' : 'mw-down')}>
+            {buyHeavy ? 'BULLS WINNING' : 'BEARS WINNING'}
+          </span>
+        </div>
+        <div className="mw-pressure-bar">
+          <div className="mw-pressure-buy"  style={{ width: buyPct  + '%' }}>
+            {buyPct >= 18 && <span>{buyPct.toFixed(0)}% BUYS</span>}
+          </div>
+          <div className="mw-pressure-sell" style={{ width: sellPct + '%' }}>
+            {sellPct >= 18 && <span>{sellPct.toFixed(0)}% SELLS</span>}
           </div>
         </div>
-        {visible.length < 2 ? (
-          <div className="mw-chart-loading">
-            <span className="mw-pulse-dot"></span> Building live chart… first tick in ~5s
-          </div>
-        ) : (
-          <svg className="mw-sparkline" viewBox="0 0 400 100" preserveAspectRatio="none">
-            <defs>
-              <linearGradient id={`mwFill-${token.mint}`} x1="0" y1="0" x2="0" y2="1">
-                <stop offset="0%" stopColor={color} stopOpacity="0.35" />
-                <stop offset="100%" stopColor={color} stopOpacity="0" />
-              </linearGradient>
-            </defs>
-            <path d={fillPath} fill={`url(#mwFill-${token.mint})`} />
-            <path d={linePath} fill="none" stroke={color} strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" style={{ filter: `drop-shadow(0 2px 6px ${color}80)` }} />
-            <circle cx={lastX} cy={lastY} r="4" fill={color} />
-            <circle cx={lastX} cy={lastY} r="8" fill={color} opacity="0.3">
-              <animate attributeName="r" values="4;12;4" dur="2s" repeatCount="indefinite" />
-              <animate attributeName="opacity" values="0.4;0;0.4" dur="2s" repeatCount="indefinite" />
-            </circle>
-          </svg>
-        )}
+        <div className="mw-pressure-totals">
+          <span><b className="mw-up">${format(token.buyVol24h)}</b> bought</span>
+          <span><b className="mw-down">${format(token.sellVol24h)}</b> sold</span>
+        </div>
       </div>
+
+      {token.whaleSol && (
+        <div className="mw-whale-banner">
+          <span className="mw-whale-banner-emoji">🐋</span>
+          <div>
+            <div className="mw-whale-banner-title">WHALE ENTRY · {timeAgo(token.whaleAt)}</div>
+            <div className="mw-whale-banner-sub">+{token.whaleSol.toLocaleString()} SOL added to liquidity</div>
+          </div>
+        </div>
+      )}
 
       <div className="mw-stats-grid">
         <div className="mw-stat mw-mcap">
@@ -495,6 +570,12 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
   const amtNum = parseFloat(amount) || 0;
   const usdValue = (amtNum * (solPrice || 0)).toFixed(2);
   const [tps, setTps] = useState(0);
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -612,6 +693,13 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
 
 function SuccessView({ data, token, refCode, onClose }) {
   const [confetti, setConfetti] = useState([]);
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
   useEffect(() => {
     const emojis = ['🎉','🚀','💎','🐸','✨','🍭','💸','⭐','🌈'];
     setConfetti(Array.from({ length: 36 }, (_, i) => ({
