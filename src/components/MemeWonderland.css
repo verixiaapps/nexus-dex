@@ -131,6 +131,26 @@
 }
 .mw-search input::placeholder { color: var(--mw-text-dimmer); }
 
+/* Search clear button (×) — sits inside .mw-search, after the input */
+.mw-search-clear {
+  flex-shrink: 0;
+  width: 22px; height: 22px;
+  border-radius: 50%;
+  border: none;
+  background: rgba(255,255,255,0.08);
+  color: var(--mw-text-dim);
+  font-family: inherit;
+  font-size: 15px; line-height: 1;
+  font-weight: 700;
+  cursor: pointer;
+  display: grid; place-items: center;
+  transition: background 0.15s, color 0.15s;
+}
+.mw-search-clear:active {
+  background: rgba(255,255,255,0.14);
+  color: var(--mw-text);
+}
+
 /* FILTERS */
 .mw-filters {
   display: flex; gap: 8px; padding: 4px 18px 14px;
