@@ -83,10 +83,10 @@ const BRANDS = [
   { mint: 'XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg', symbol: 'HOODx',  name: 'Robinhood',             ticker: 'HOOD',  decimals: 8, sector: 'Crypto', color: '#cdff00' },
 
   // ------ INDEX TOKENS ------
-  { mint: 'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W', symbol: 'SPYx',   name: 'S&P 500 Index',         ticker: 'SPY',   decimals: 8, sector: 'Index',  color: '#1c4f9c' },
-  { mint: 'Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ', symbol: 'QQQx',   name: 'Nasdaq 100 Index',      ticker: 'QQQ',   decimals: 8, sector: 'Index',  color: '#003b71' },
+  { mint: 'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W', symbol: 'SPYx',   name: 'Solana 500',            ticker: 'SPY',   decimals: 8, sector: 'Index',  color: '#1c4f9c' },
+  { mint: 'Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ', symbol: 'QQQx',   name: 'Solana 100',            ticker: 'QQQ',   decimals: 8, sector: 'Index',  color: '#003b71' },
   { mint: 'Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re', symbol: 'GLDx',   name: 'Gold',                  ticker: 'GLD',   decimals: 8, sector: 'Index',  color: '#d4af37' },
-  { mint: 'XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp', symbol: 'TBLLx',  name: 'Short-Term Treasury',   ticker: 'TBLL',  decimals: 8, sector: 'Index',  color: '#2a4d6e' },
+  { mint: 'XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp', symbol: 'TBLLx',  name: 'Short-Term Solana',     ticker: 'TBLL',  decimals: 8, sector: 'Index',  color: '#2a4d6e' },
 ];
 
 const FILTERS = [
@@ -94,7 +94,6 @@ const FILTERS = [
   { id: 'Trending', label: 'Trending' },
   { id: 'Tech',     label: 'Tech' },
   { id: 'Crypto',   label: 'Crypto-Adj' },
-  { id: 'Index',    label: 'Indexes' },
 ];
 
 // =====================================================================
