@@ -1,4 +1,20 @@
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import { Buffer } from 'buffer';
+import {
+  Connection,
+  PublicKey,
+  VersionedTransaction,
+  TransactionMessage,
+  SystemProgram,
+  AddressLookupTableAccount,
+} from '@solana/web3.js';
+import {
+  getAssociatedTokenAddressSync,
+  createAssociatedTokenAccountIdempotentInstruction,
+  createTransferCheckedInstruction,
+  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
 import { useWallet } from '@solana/wallet-adapter-react';
 import './MemeWonderland.css';
 
@@ -7,6 +23,43 @@ const POLL_TOKENS  = 10_000;
 const POLL_SOL     = 30_000;
 const POLL_WHALES  = 20_000;
 const QUOTE_LAMPS  = 1_000_000_000;
+
+/* ─── SWAP CONFIG (mirrors SwapWidget) ─────────────────────────────── */
+const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
+const FEE_BPS    = 500; // 5%
+const SLIPPAGE_BPS = 500;
+const PRIORITY_FEE_MICROLAMPORTS = 50_000;
+
+const RPC_URL =
+  process.env.REACT_APP_SOLANA_RPC ||
+  (process.env.REACT_APP_HELIUS_API_KEY
+    ? `https://mainnet.helius-rpc.com/?api-key=${process.env.REACT_APP_HELIUS_API_KEY}`
+    : 'https://api.mainnet-beta.solana.com');
+
+const deserIx = (ix) => ({
+  programId: new PublicKey(ix.programId),
+  keys: ix.accounts.map(a => ({
+    pubkey:     new PublicKey(a.pubkey),
+    isSigner:   a.isSigner,
+    isWritable: a.isWritable,
+  })),
+  data: Buffer.from(ix.data, 'base64'),
+});
+
+const friendlySwapError = (err) => {
+  const m = String(err?.message || err || '').toLowerCase();
+  if (m.includes('insufficient'))      return 'Insufficient balance for this swap.';
+  if (m.includes('slippage'))          return 'Price moved too much. Try again.';
+  if (m.includes('blockhash') || m.includes('expired')) return 'Transaction expired. Please try again.';
+  if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled'))
+    return 'Transaction cancelled.';
+  if (m.includes('simulation failed')) return 'Swap simulation failed — price may have moved.';
+  if (m.includes('account not'))       return 'Token account not ready. Try again in a moment.';
+  if (m.includes('could not find any route') || m.includes('no route'))
+    return 'No route available for this pair.';
+  if (m.includes('too large')) return 'Route is too complex. Try a different amount.';
+  return err?.message || 'Swap failed. Please try again.';
+};
 
 const FILTERS = [
   { key: 'trending', label: 'Trending', tf: '24h' },
@@ -82,14 +135,18 @@ function normalize(t, i = 0) {
     volume24h: Number(t?.stats24h?.buyVolume ?? 0) + Number(t?.stats24h?.sellVolume ?? 0),
     holders:   Number(t.holderCount || 0),
     liquidity: Number(t.liquidity || 0),
+    decimals:  Number(t.decimals ?? 6),
     hot:       i < 2 && change > 50,
     fresh:     !!(t.firstPool?.createdAt && (Date.now() - new Date(t.firstPool.createdAt).getTime()) < 24*3600*1000),
   };
 }
 
 export default function MemeWonderland() {
-  const { publicKey } = useWallet();
+  const wallet = useWallet();
+  const { publicKey } = wallet;
   const refCode = publicKey ? publicKey.toString().slice(0, 6) : 'guest';
+
+  const connection = useMemo(() => new Connection(RPC_URL, 'confirmed'), []);
 
   const [activeFilter, setActiveFilter] = useState('trending');
   const [tokens, setTokens] = useState([]);
@@ -98,7 +155,7 @@ export default function MemeWonderland() {
   const [whaleEvents, setWhaleEvents] = useState([]);
 
   const [searchQuery, setSearchQuery] = useState('');
-  const [searchResults, setSearchResults] = useState(null); // null = not searching
+  const [searchResults, setSearchResults] = useState(null);
   const [searching, setSearching] = useState(false);
 
   const [detailMint, setDetailMint] = useState(null);
@@ -170,6 +227,7 @@ export default function MemeWonderland() {
               mcap:     0,
               volume24h:0,
               holders:  0, liquidity: 0,
+              decimals: 6,
               whaleSol: ev.solAmount,
               whaleAt:  ev.detectedAt,
             };
@@ -219,7 +277,6 @@ export default function MemeWonderland() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  // Search the full Jupiter token universe (ticker / name / mint), new launches included.
   useEffect(() => {
     const q = searchQuery.trim();
     if (!q) { setSearchResults(null); setSearching(false); return; }
@@ -250,7 +307,6 @@ export default function MemeWonderland() {
     [tokens, searchResults]
   );
 
-  // Which list the grid shows: search results when a query is active, else the live list.
   const isSearching = searchResults !== null;
   const gridTokens = isSearching ? searchResults : tokens;
 
@@ -264,6 +320,179 @@ export default function MemeWonderland() {
   const closeSheet = () => setSheetMint(null);
   const handlePreset = (amt) => { setSelectedPreset(amt); setAmount(amt === 'MAX' ? '1.0' : amt); };
   const handleAmount = (v) => { setAmount(v); setSelectedPreset(null); };
+
+  /* ─── REAL SWAP — atomic Jupiter tx + 5% fee, single signature ─── */
+  const executeSwap = useCallback(async ({ token, mode, uiAmount }) => {
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
+    }
+    const amtNum = parseFloat(uiAmount);
+    if (!Number.isFinite(amtNum) || amtNum <= 0) {
+      throw new Error('Enter a valid amount.');
+    }
+
+    // Determine input/output mints + decimals based on mode.
+    // BUY:  pay SOL -> receive token
+    // SELL: pay token -> receive SOL (UI keeps SOL-denominated input;
+    //       we convert to token units using token.price + solPrice)
+    let inputMint, outputMint, inputDecimals, rawAmount;
+    if (mode === 'buy') {
+      inputMint = SOL_MINT;
+      outputMint = token.mint;
+      inputDecimals = 9;
+      rawAmount = BigInt(Math.floor(amtNum * 1e9)).toString();
+    } else {
+      // Sell: user typed amount of TOKEN being sold.
+      inputMint = token.mint;
+      outputMint = SOL_MINT;
+      inputDecimals = token.decimals ?? 6;
+      rawAmount = BigInt(Math.floor(amtNum * Math.pow(10, inputDecimals))).toString();
+    }
+
+    // 1) Get Jupiter build with NET amount (after our 5% fee).
+    const net = (BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n;
+    if (net <= 0n) throw new Error('Amount too small.');
+
+    const params = new URLSearchParams({
+      inputMint,
+      outputMint,
+      amount:      net.toString(),
+      slippageBps: String(SLIPPAGE_BPS),
+      taker:       wallet.publicKey.toBase58(),
+      computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
+    });
+    const r = await fetch(`/api/jupiter/build?${params}`);
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.error || `Quote failed (${r.status})`);
+    }
+    const build = await r.json();
+
+    // 2) Build fee ixs from FULL rawAmount (5% of what user input).
+    const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
+    if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
+
+    const feeIxs = [];
+    if (inputMint === SOL_MINT) {
+      feeIxs.push(SystemProgram.transfer({
+        fromPubkey: wallet.publicKey,
+        toPubkey:   FEE_WALLET,
+        lamports:   Number(feeAmount),
+      }));
+    } else {
+      const mintPk = new PublicKey(inputMint);
+      const mintInfo = await connection.getAccountInfo(mintPk);
+      if (!mintInfo) throw new Error('Input mint not found on-chain.');
+      const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+        ? TOKEN_2022_PROGRAM_ID
+        : TOKEN_PROGRAM_ID;
+
+      const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
+      const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
+
+      feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+        wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
+      ));
+      feeIxs.push(createTransferCheckedInstruction(
+        sourceAta, mintPk, destAta, wallet.publicKey,
+        feeAmount, inputDecimals, [], tokenProgram,
+      ));
+    }
+
+    // 3) Assemble ix list: compute-budget, fee, then Jupiter ixs.
+    const ixs = [];
+    if (Array.isArray(build.computeBudgetInstructions))
+      for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
+    for (const ix of feeIxs) ixs.push(ix);
+    if (Array.isArray(build.setupInstructions))
+      for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+    if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+    if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+    if (Array.isArray(build.otherInstructions))
+      for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+
+    // 4) Resolve ALTs.
+    const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+    let alts = [];
+    if (altKeys.length > 0) {
+      const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
+      alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+        key:   new PublicKey(k),
+        state: AddressLookupTableAccount.deserialize(infos[i].data),
+      }) : null).filter(Boolean);
+    }
+
+    // 5) Compile v0 tx.
+    const latest = await connection.getLatestBlockhash('confirmed');
+    const message = new TransactionMessage({
+      payerKey:        wallet.publicKey,
+      recentBlockhash: latest.blockhash,
+      instructions:    ixs,
+    }).compileToV0Message(alts);
+    const tx = new VersionedTransaction(message);
+
+    // 6) Simulate.
+    try {
+      const sim = await connection.simulateTransaction(tx, {
+        replaceRecentBlockhash: true,
+        sigVerify: false,
+      });
+      if (sim.value.err) {
+        const logs = (sim.value.logs || []).join('\n').toLowerCase();
+        if (logs.includes('insufficient') || logs.includes('0x1')) throw new Error('Insufficient balance for this swap.');
+        if (logs.includes('slippage') || logs.includes('0x1771'))  throw new Error('Price moved — try again.');
+        throw new Error('Swap simulation failed — price may have moved.');
+      }
+    } catch (simErr) {
+      if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
+        throw simErr;
+      }
+      console.warn('[swap] sim non-fatal', simErr);
+    }
+
+    // 7) User signs.
+    const signed = await wallet.signTransaction(tx);
+
+    // 8) Broadcast.
+    const sig = await connection.sendRawTransaction(signed.serialize(), {
+      skipPreflight: false,
+      maxRetries: 3,
+    });
+
+    // 9) Confirm with polling fallback.
+    let confirmed = false;
+    try {
+      const conf = await Promise.race([
+        connection.confirmTransaction({
+          signature: sig,
+          blockhash: latest.blockhash,
+          lastValidBlockHeight: latest.lastValidBlockHeight,
+        }, 'confirmed'),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
+      ]);
+      if (conf?.value?.err) throw new Error('Swap tx failed on-chain.');
+      confirmed = true;
+    } catch {
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+          const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+          const cs = st?.value?.confirmationStatus;
+          if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+          if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
+        } catch (e) {
+          if (/failed on-chain/i.test(String(e.message))) throw e;
+        }
+      }
+    }
+
+    // Compute "got" for the success card.
+    const outDecimals = mode === 'buy' ? (token.decimals ?? 6) : 9;
+    const outUi = Number(build.outAmount || 0) / Math.pow(10, outDecimals);
+
+    return { signature: sig, confirmed, outUi };
+  }, [wallet, connection, solPrice]);
 
   const isWhalesView = activeFilter === 'whales';
   const sectionTitle = isWhalesView ? 'WHALE ENTRIES · 48H'
@@ -439,8 +668,18 @@ export default function MemeWonderland() {
           selectedPreset={selectedPreset}
           handlePreset={handlePreset}
           onClose={closeSheet}
-          onConfirm={(paid, got) => {
-            setSuccess({ mint: sheetMint, paid, got, price: tokenByMint(sheetMint).price });
+          walletConnected={!!wallet.publicKey}
+          executeSwap={executeSwap}
+          onSuccess={({ signature, confirmed, outUi, paidUi }) => {
+            const isSellMode = mode === 'sell';
+            setSuccess({
+              mint: sheetMint,
+              paid: paidUi + ' ' + (isSellMode ? tokenByMint(sheetMint).sym : 'SOL'),
+              got: format(outUi) + (isSellMode ? ' SOL' : ' ' + tokenByMint(sheetMint).sym),
+              price: tokenByMint(sheetMint).price,
+              signature,
+              pending: !confirmed,
+            });
             setSheetMint(null);
             setDetailMint(null);
           }}
@@ -460,8 +699,6 @@ export default function MemeWonderland() {
 }
 
 function DetailView({ token, onClose, onTrade }) {
-  const isDown = token.change < 0;
-
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -542,11 +779,20 @@ function DetailView({ token, onClose, onTrade }) {
   );
 }
 
-function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selectedPreset, handlePreset, onClose, onConfirm }) {
-  const isDown = token.change < 0;
+function TradeSheet({
+  token, solPrice, mode, setMode, amount, setAmount,
+  selectedPreset, handlePreset, onClose,
+  walletConnected, executeSwap, onSuccess,
+}) {
   const amtNum = parseFloat(amount) || 0;
-  const usdValue = (amtNum * (solPrice || 0)).toFixed(2);
+  const isSell = mode === 'sell';
+  const payCurrency = isSell ? token.sym : 'SOL';
+  const usdValue = isSell
+    ? (amtNum * (token.price || 0)).toFixed(2)
+    : (amtNum * (solPrice || 0)).toFixed(2);
   const [tps, setTps] = useState(0);
+  const [swapping, setSwapping] = useState(false);
+  const [swapError, setSwapError] = useState(null);
 
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -574,12 +820,46 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
   const receiveAmount = useMemo(() => {
     if (!tps) return 'Quoting…';
     if (mode === 'buy') return format(amtNum * tps) + ' ' + token.sym;
+    // Sell: amtNum is in token units. tps = tokens per 1 SOL, so SOL out = amtNum / tps.
     return (amtNum / tps).toFixed(4) + ' SOL';
   }, [amtNum, tps, mode, token.sym]);
 
+  const handleConfirm = async () => {
+    setSwapError(null);
+    if (!walletConnected) {
+      setSwapError('Please connect a wallet first.');
+      return;
+    }
+    if (!amtNum || amtNum <= 0) {
+      setSwapError('Enter an amount.');
+      return;
+    }
+    setSwapping(true);
+    try {
+      const result = await executeSwap({ token, mode, uiAmount: amount });
+      onSuccess({
+        ...result,
+        paidUi: amtNum.toFixed(3),
+      });
+    } catch (e) {
+      console.error('[trade]', e);
+      setSwapError(friendlySwapError(e));
+    } finally {
+      setSwapping(false);
+    }
+  };
+
+  const ctaLabel = swapping
+    ? (mode === 'sell' ? 'Dumping…' : 'Aping…')
+    : !walletConnected
+      ? 'Connect Wallet'
+      : !tps
+        ? 'Quoting…'
+        : (mode === 'sell' ? '💸 DUMP ' + token.sym : '🚀 APE INTO ' + token.sym);
+
   return (
     <>
-      <div className="mw-sheet-backdrop mw-show" onClick={onClose}></div>
+      <div className="mw-sheet-backdrop mw-show" onClick={swapping ? undefined : onClose}></div>
       <div className="mw-sheet mw-show">
         <div className="mw-grabber"></div>
 
@@ -593,13 +873,13 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
               {token.age && <span className="mw-age-pill">{token.age}</span>}
             </div>
           </div>
-          <button className="mw-icon-btn" onClick={onClose}>×</button>
+          <button className="mw-icon-btn" onClick={onClose} disabled={swapping}>×</button>
         </div>
 
         <div className={'mw-tab-switch' + (mode === 'sell' ? ' mw-sell-mode' : '')}>
           <div className="mw-tab-indicator"></div>
           {['buy', 'sell'].map(m => (
-            <div key={m} className={'mw-tab' + (mode === m ? ' mw-active' : '')} onClick={() => setMode(m)}>
+            <div key={m} className={'mw-tab' + (mode === m ? ' mw-active' : '')} onClick={() => !swapping && setMode(m)}>
               {m.toUpperCase()}
             </div>
           ))}
@@ -617,10 +897,11 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
               inputMode="decimal"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
+              disabled={swapping}
             />
             <div className="mw-currency">
               <div className="mw-currency-icon"></div>
-              SOL
+              {payCurrency}
             </div>
           </div>
 
@@ -630,6 +911,7 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
                 key={p}
                 className={'mw-preset' + (selectedPreset === p ? ' mw-selected' : '')}
                 onClick={() => handlePreset(p)}
+                disabled={swapping}
               >
                 {p}
               </button>
@@ -648,13 +930,27 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
           </div>
         </div>
 
+        {swapError && (
+          <div style={{
+            margin: '0 16px 8px',
+            padding: '10px 12px',
+            borderRadius: 10,
+            background: 'rgba(255, 80, 80, 0.12)',
+            color: '#ff8080',
+            fontSize: 13,
+            textAlign: 'center',
+          }}>
+            {swapError}
+          </div>
+        )}
+
         <div className="mw-cta-wrap">
           <button
             className={'mw-cta' + (mode === 'sell' ? ' mw-sell-cta' : '')}
-            onClick={() => onConfirm(amtNum.toFixed(3), format(amtNum * tps))}
-            disabled={!tps}
+            onClick={handleConfirm}
+            disabled={!tps || swapping || !walletConnected}
           >
-            {mode === 'sell' ? '💸 DUMP ' + token.sym : '🚀 APE INTO ' + token.sym}
+            {ctaLabel}
           </button>
           <div className="mw-trust">
             Powered by <span className="mw-jup-badge"><span className="mw-jup-dot"></span><b>JUPITER</b></span> · Non-custodial 🔐
@@ -688,6 +984,7 @@ function SuccessView({ data, token, refCode, onClose }) {
 
   const shareUrl  = `https://nexus.app/t/${data.mint}?ref=${refCode}`;
   const shareText = `Just aped into $${token.sym} on @nexus 🚀\n\nBag: ${data.got}\nEntry: ${formatPrice(data.price)}`;
+  const solscanUrl = data.signature ? `https://solscan.io/tx/${data.signature}` : null;
 
   return (
     <div className="mw-success-overlay mw-show">
@@ -704,13 +1001,21 @@ function SuccessView({ data, token, refCode, onClose }) {
 
       <div className="mw-success-top">
         <button className="mw-icon-btn" onClick={onClose}>×</button>
-        <button className="mw-view-on">VIEW ON SOLSCAN ↗</button>
+        {solscanUrl && (
+          <a className="mw-view-on" href={solscanUrl} target="_blank" rel="noreferrer">
+            VIEW ON SOLSCAN ↗
+          </a>
+        )}
       </div>
 
       <div className="mw-success">
-        <div className="mw-success-emoji">🎉</div>
-        <div className="mw-success-title">YOU APED!</div>
-        <div className="mw-success-sub">Welcome to the {token.sym} chat, anon {token.emoji}</div>
+        <div className="mw-success-emoji">{data.pending ? '⏳' : '🎉'}</div>
+        <div className="mw-success-title">{data.pending ? 'CONFIRMING…' : 'YOU APED!'}</div>
+        <div className="mw-success-sub">
+          {data.pending
+            ? 'Submitted — confirming on-chain'
+            : `Welcome to the ${token.sym} chat, anon ${token.emoji}`}
+        </div>
       </div>
 
       <div className="mw-flex-card">
@@ -721,7 +1026,7 @@ function SuccessView({ data, token, refCode, onClose }) {
             <div className="mw-flex-tag">{token.name}</div>
           </div>
         </div>
-        <div className="mw-flex-row"><span className="mw-flex-label">You paid</span><span className="mw-flex-value">{data.paid} SOL</span></div>
+        <div className="mw-flex-row"><span className="mw-flex-label">You paid</span><span className="mw-flex-value">{data.paid}</span></div>
         <div className="mw-flex-row"><span className="mw-flex-label">Bag size</span><span className="mw-flex-value mw-big">{data.got}</span></div>
         <div className="mw-flex-divider"></div>
         <div className="mw-flex-row"><span className="mw-flex-label">Entry</span><span className="mw-flex-value" style={{ fontSize: '13px' }}>{formatPrice(data.price)}</span></div>
