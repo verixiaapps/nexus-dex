@@ -97,6 +97,10 @@ export default function MemeWonderland() {
   const [solPrice, setSolPrice] = useState(0);
   const [whaleEvents, setWhaleEvents] = useState([]);
 
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState(null); // null = not searching
+  const [searching, setSearching] = useState(false);
+
   const [detailMint, setDetailMint] = useState(null);
   const [sheetMint,  setSheetMint]  = useState(null);
   const [mode, setMode] = useState('buy');
@@ -215,11 +219,40 @@ export default function MemeWonderland() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
+  // Search the full Jupiter token universe (ticker / name / mint), new launches included.
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) { setSearchResults(null); setSearching(false); return; }
+    let cancelled = false;
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/jupiter/tokens/search?query=${encodeURIComponent(q)}`);
+        const d = await r.json();
+        const list = Array.isArray(d) ? d : (d?.data || d?.tokens || []);
+        if (!cancelled) {
+          setSearchResults(list.map(normalize).filter(x => x.mint));
+          setSearching(false);
+        }
+      } catch {
+        if (!cancelled) { setSearchResults([]); setSearching(false); }
+      }
+    }, 300);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [searchQuery]);
+
   const ticker = useMemo(() => {
     return tokens.slice(0, 8).map(t => [t.sym, formatPct(t.change), t.change >= 0]);
   }, [tokens]);
 
-  const tokenByMint = useCallback(m => tokens.find(t => t.mint === m), [tokens]);
+  const tokenByMint = useCallback(
+    m => tokens.find(t => t.mint === m) || (searchResults || []).find(t => t.mint === m),
+    [tokens, searchResults]
+  );
+
+  // Which list the grid shows: search results when a query is active, else the live list.
+  const isSearching = searchResults !== null;
+  const gridTokens = isSearching ? searchResults : tokens;
 
   const openDetail = (mint) => { setDetailMint(mint); };
   const closeDetail = () => setDetailMint(null);
@@ -267,7 +300,14 @@ export default function MemeWonderland() {
         <div className="mw-search-wrap">
           <div className="mw-search">
             <span>🔍</span>
-            <input placeholder="Search ticker, name, or paste contract" />
+            <input
+              placeholder="Search ticker, name, or paste contract"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+            />
+            {searchQuery && (
+              <button className="mw-search-clear" onClick={() => setSearchQuery('')}>×</button>
+            )}
           </div>
         </div>
 
@@ -294,16 +334,18 @@ export default function MemeWonderland() {
         </div>
 
         <div className="mw-section-head">
-          <div className={'mw-section-title' + (isWhalesView ? ' mw-section-whale' : '')}>
-            {sectionTitle}
+          <div className={'mw-section-title' + (isWhalesView && !isSearching ? ' mw-section-whale' : '')}>
+            {isSearching ? 'SEARCH RESULTS' : sectionTitle}
           </div>
           <div className="mw-section-meta">
-            {loading ? 'LOADING…' : isWhalesView ? `${tokens.length} ENTRIES` : `LIVE · ${tokens.length}`}
+            {isSearching
+              ? (searching ? 'SEARCHING…' : `${gridTokens.length} FOUND`)
+              : (loading ? 'LOADING…' : isWhalesView ? `${tokens.length} ENTRIES` : `LIVE · ${tokens.length}`)}
           </div>
         </div>
 
         <div className="mw-grid">
-          {loading && tokens.length === 0 ? (
+          {(isSearching ? searching && gridTokens.length === 0 : loading && tokens.length === 0) ? (
             Array.from({ length: 4 }).map((_, i) => (
               <div key={i} className="mw-card mw-skeleton" style={{ animationDelay: `${i * 0.05}s` }}>
                 <div className="mw-card-top">
@@ -316,8 +358,10 @@ export default function MemeWonderland() {
                 <div className="mw-skel-line mw-skel-w-80 mw-skel-tall" />
               </div>
             ))
-          ) : tokens.length === 0 ? (
-            isWhalesView ? (
+          ) : gridTokens.length === 0 ? (
+            isSearching ? (
+              <div className="mw-empty">No tokens match “{searchQuery.trim()}”. Try a ticker, name, or paste a contract address.</div>
+            ) : isWhalesView ? (
               <div className="mw-empty mw-empty-whale">
                 <div className="mw-empty-whale-emoji">🐋</div>
                 <div className="mw-empty-whale-title">No whales today.</div>
@@ -330,7 +374,7 @@ export default function MemeWonderland() {
               <div className="mw-empty">No tokens right now. Try another filter.</div>
             )
           ) : (
-            tokens.slice(0, 12).map((t, i) => (
+            gridTokens.slice(0, 12).map((t, i) => (
               <div
                 key={t.mint}
                 className={
