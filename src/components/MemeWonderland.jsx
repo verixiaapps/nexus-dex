@@ -1,4 +1,14 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+// MemeWonderland.jsx — buy/sell mirrors SwapWidget.jsx exactly.
+//
+// Flow (identical to SwapWidget):
+//   1. Debounced quote via /api/jupiter/build on every amount/mode/mint change.
+//      The build response is stored in state and IS what the user sees.
+//   2. On confirm, executeSwap consumes the SAME build (no re-fetch).
+//   3. Build fee ixs (5%), prepend to Jupiter ixs, compile ONE v0 tx.
+//   4. Pre-flight simulate the same bytes — wallet sees full net effect.
+//   5. Sign once, broadcast, confirm with polling fallback.
+
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
 import {
   Connection,
@@ -18,15 +28,10 @@ import {
 import { useWallet } from '@solana/wallet-adapter-react';
 import './MemeWonderland.css';
 
-const SOL_MINT     = 'So11111111111111111111111111111111111111112';
-const POLL_TOKENS  = 10_000;
-const POLL_SOL     = 30_000;
-const POLL_WHALES  = 20_000;
-const QUOTE_LAMPS  = 1_000_000_000;
-
-/* ─── SWAP CONFIG (mirrors SwapWidget) ─────────────────────────────── */
+/* ─── CONFIG (mirrors SwapWidget) ──────────────────────────────────── */
+const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS    = 500; // 5%
+const FEE_BPS    = 500;  // 5%
 const SLIPPAGE_BPS = 500;
 const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 
@@ -36,30 +41,10 @@ const RPC_URL =
     ? `https://mainnet.helius-rpc.com/?api-key=${process.env.REACT_APP_HELIUS_API_KEY}`
     : 'https://api.mainnet-beta.solana.com');
 
-const deserIx = (ix) => ({
-  programId: new PublicKey(ix.programId),
-  keys: ix.accounts.map(a => ({
-    pubkey:     new PublicKey(a.pubkey),
-    isSigner:   a.isSigner,
-    isWritable: a.isWritable,
-  })),
-  data: Buffer.from(ix.data, 'base64'),
-});
-
-const friendlySwapError = (err) => {
-  const m = String(err?.message || err || '').toLowerCase();
-  if (m.includes('insufficient'))      return 'Insufficient balance for this swap.';
-  if (m.includes('slippage'))          return 'Price moved too much. Try again.';
-  if (m.includes('blockhash') || m.includes('expired')) return 'Transaction expired. Please try again.';
-  if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled'))
-    return 'Transaction cancelled.';
-  if (m.includes('simulation failed')) return 'Swap simulation failed — price may have moved.';
-  if (m.includes('account not'))       return 'Token account not ready. Try again in a moment.';
-  if (m.includes('could not find any route') || m.includes('no route'))
-    return 'No route available for this pair.';
-  if (m.includes('too large')) return 'Route is too complex. Try a different amount.';
-  return err?.message || 'Swap failed. Please try again.';
-};
+const POLL_TOKENS  = 10_000;
+const POLL_SOL     = 30_000;
+const POLL_WHALES  = 20_000;
+const QUOTE_LAMPS  = 1_000_000_000;
 
 const FILTERS = [
   { key: 'trending', label: 'Trending', tf: '24h' },
@@ -78,6 +63,7 @@ function emojiFor(sym = '') {
   return EMOJI_POOL[Math.abs(h) % EMOJI_POOL.length];
 }
 
+/* ─── HELPERS ──────────────────────────────────────────────────────── */
 function format(n) {
   if (!Number.isFinite(n)) return '0';
   if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
@@ -115,11 +101,7 @@ function timeAgo(ms) {
   if (s < 86400) return Math.floor(s / 3600) + 'h ago';
   return Math.floor(s / 86400) + 'd ago';
 }
-function shortAddr(a) {
-  if (!a) return 'Connect';
-  const s = a.toString();
-  return s.slice(0, 4) + '...' + s.slice(-4);
-}
+
 function normalize(t, i = 0) {
   const change = Number(t?.stats24h?.priceChange ?? t?.priceChange24h ?? 0);
   return {
@@ -141,6 +123,35 @@ function normalize(t, i = 0) {
   };
 }
 
+const deserIx = (ix) => ({
+  programId: new PublicKey(ix.programId),
+  keys: ix.accounts.map(a => ({
+    pubkey:     new PublicKey(a.pubkey),
+    isSigner:   a.isSigner,
+    isWritable: a.isWritable,
+  })),
+  data: Buffer.from(ix.data, 'base64'),
+});
+
+const friendlyError = (err) => {
+  const m = String(err?.message || err || '').toLowerCase();
+  if (m.includes('insufficient'))      return 'Insufficient balance for this swap.';
+  if (m.includes('slippage'))          return 'Price moved too much. Try again or increase slippage.';
+  if (m.includes('blockhash') || m.includes('expired'))
+    return 'Transaction expired. Please try again.';
+  if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled'))
+    return 'Transaction cancelled.';
+  if (m.includes('simulation failed')) return 'Swap simulation failed — the price may have moved.';
+  if (m.includes('account not'))       return 'Token account not ready. Please try again in a moment.';
+  if (m.includes('rate'))              return 'Too many requests — please wait a moment.';
+  if (m.includes('could not find any route') || m.includes('no route'))
+    return 'No route available for this pair.';
+  if (m.includes('too large') || m.includes('transaction too large'))
+    return 'Route is too complex to fit in one transaction. Try a different amount or token.';
+  return err?.message || 'Swap failed. Please try again.';
+};
+
+/* ─── COMPONENT ────────────────────────────────────────────────────── */
 export default function MemeWonderland() {
   const wallet = useWallet();
   const { publicKey } = wallet;
@@ -165,6 +176,44 @@ export default function MemeWonderland() {
   const [selectedPreset, setSelectedPreset] = useState('0.5');
   const [success, setSuccess] = useState(null);
 
+  /* Wallet balances (mirrors SwapWidget). */
+  const [balances, setBalances] = useState({});
+  const refreshBalances = useCallback(async () => {
+    if (!wallet.publicKey) { setBalances({}); return; }
+    try {
+      const owner = wallet.publicKey;
+      const [solBal, tokenAccs] = await Promise.all([
+        connection.getBalance(owner),
+        connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }),
+      ]);
+      let token22Accs = { value: [] };
+      try {
+        token22Accs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID });
+      } catch {}
+      const out = {};
+      out[SOL_MINT] = { amount: solBal, decimals: 9, uiAmount: solBal / 1e9 };
+      const merge = (accs) => {
+        for (const acc of accs.value) {
+          const info = acc.account.data.parsed?.info;
+          if (!info) continue;
+          const mint     = info.mint;
+          const amount   = info.tokenAmount?.amount;
+          const decimals = info.tokenAmount?.decimals;
+          const uiAmount = info.tokenAmount?.uiAmount;
+          if (!mint || amount == null) continue;
+          out[mint] = { amount: Number(amount), decimals, uiAmount };
+        }
+      };
+      merge(tokenAccs);
+      merge(token22Accs);
+      setBalances(out);
+    } catch (e) {
+      console.warn('[mw] balances failed', e);
+    }
+  }, [wallet.publicKey, connection]);
+  useEffect(() => { refreshBalances(); }, [refreshBalances]);
+
+  /* ── Token feeds (unchanged) ────────────────────────────────────── */
   useEffect(() => {
     if (activeFilter === 'whales') return;
     let cancelled = false;
@@ -182,9 +231,7 @@ export default function MemeWonderland() {
           setTokens(list.map(normalize).filter(t => t.mint));
           setLoading(false);
         }
-      } catch {
-        if (!cancelled) setLoading(false);
-      }
+      } catch { if (!cancelled) setLoading(false); }
     }
     setLoading(true);
     load();
@@ -202,12 +249,7 @@ export default function MemeWonderland() {
         const events = Array.isArray(d?.events) ? d.events : [];
         if (cancelled) return;
         setWhaleEvents(events);
-
-        if (events.length === 0) {
-          setTokens([]);
-          setLoading(false);
-          return;
-        }
+        if (events.length === 0) { setTokens([]); setLoading(false); return; }
         const mints = events.map(e => e.mint).join(',');
         const tr = await fetch(`/api/jupiter/tokens/search?query=${mints}`);
         const td = await tr.json();
@@ -217,19 +259,10 @@ export default function MemeWonderland() {
           const t = byMint.get(ev.mint);
           if (!t) {
             return {
-              mint:     ev.mint,
-              sym:      ev.symbol || 'TOKEN',
-              name:     ev.name   || '',
-              emoji:    emojiFor(ev.symbol || ''),
-              icon:     null,
-              price:    0,
-              change:   0,
-              mcap:     0,
-              volume24h:0,
-              holders:  0, liquidity: 0,
-              decimals: 6,
-              whaleSol: ev.solAmount,
-              whaleAt:  ev.detectedAt,
+              mint: ev.mint, sym: ev.symbol || 'TOKEN', name: ev.name || '',
+              emoji: emojiFor(ev.symbol || ''), icon: null,
+              price: 0, change: 0, mcap: 0, volume24h: 0, holders: 0, liquidity: 0,
+              decimals: 6, whaleSol: ev.solAmount, whaleAt: ev.detectedAt,
             };
           }
           const n = normalize(t);
@@ -239,9 +272,7 @@ export default function MemeWonderland() {
         });
         setTokens(merged);
         setLoading(false);
-      } catch {
-        if (!cancelled) setLoading(false);
-      }
+      } catch { if (!cancelled) setLoading(false); }
     }
     setLoading(true);
     loadWhales();
@@ -291,16 +322,15 @@ export default function MemeWonderland() {
           setSearchResults(list.map(normalize).filter(x => x.mint));
           setSearching(false);
         }
-      } catch {
-        if (!cancelled) { setSearchResults([]); setSearching(false); }
-      }
+      } catch { if (!cancelled) { setSearchResults([]); setSearching(false); } }
     }, 300);
     return () => { cancelled = true; clearTimeout(t); };
   }, [searchQuery]);
 
-  const ticker = useMemo(() => {
-    return tokens.slice(0, 8).map(t => [t.sym, formatPct(t.change), t.change >= 0]);
-  }, [tokens]);
+  const ticker = useMemo(
+    () => tokens.slice(0, 8).map(t => [t.sym, formatPct(t.change), t.change >= 0]),
+    [tokens]
+  );
 
   const tokenByMint = useCallback(
     m => tokens.find(t => t.mint === m) || (searchResults || []).find(t => t.mint === m),
@@ -310,7 +340,7 @@ export default function MemeWonderland() {
   const isSearching = searchResults !== null;
   const gridTokens = isSearching ? searchResults : tokens;
 
-  const openDetail = (mint) => { setDetailMint(mint); };
+  const openDetail = (mint) => setDetailMint(mint);
   const closeDetail = () => setDetailMint(null);
   const openSheet = (mint, m, e) => {
     if (e) e.stopPropagation();
@@ -320,179 +350,6 @@ export default function MemeWonderland() {
   const closeSheet = () => setSheetMint(null);
   const handlePreset = (amt) => { setSelectedPreset(amt); setAmount(amt === 'MAX' ? '1.0' : amt); };
   const handleAmount = (v) => { setAmount(v); setSelectedPreset(null); };
-
-  /* ─── REAL SWAP — atomic Jupiter tx + 5% fee, single signature ─── */
-  const executeSwap = useCallback(async ({ token, mode, uiAmount }) => {
-    if (!wallet.publicKey || !wallet.signTransaction) {
-      throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
-    }
-    const amtNum = parseFloat(uiAmount);
-    if (!Number.isFinite(amtNum) || amtNum <= 0) {
-      throw new Error('Enter a valid amount.');
-    }
-
-    // Determine input/output mints + decimals based on mode.
-    // BUY:  pay SOL -> receive token
-    // SELL: pay token -> receive SOL (UI keeps SOL-denominated input;
-    //       we convert to token units using token.price + solPrice)
-    let inputMint, outputMint, inputDecimals, rawAmount;
-    if (mode === 'buy') {
-      inputMint = SOL_MINT;
-      outputMint = token.mint;
-      inputDecimals = 9;
-      rawAmount = BigInt(Math.floor(amtNum * 1e9)).toString();
-    } else {
-      // Sell: user typed amount of TOKEN being sold.
-      inputMint = token.mint;
-      outputMint = SOL_MINT;
-      inputDecimals = token.decimals ?? 6;
-      rawAmount = BigInt(Math.floor(amtNum * Math.pow(10, inputDecimals))).toString();
-    }
-
-    // 1) Get Jupiter build with NET amount (after our 5% fee).
-    const net = (BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n;
-    if (net <= 0n) throw new Error('Amount too small.');
-
-    const params = new URLSearchParams({
-      inputMint,
-      outputMint,
-      amount:      net.toString(),
-      slippageBps: String(SLIPPAGE_BPS),
-      taker:       wallet.publicKey.toBase58(),
-      computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
-    });
-    const r = await fetch(`/api/jupiter/build?${params}`);
-    if (!r.ok) {
-      const body = await r.json().catch(() => ({}));
-      throw new Error(body.error || `Quote failed (${r.status})`);
-    }
-    const build = await r.json();
-
-    // 2) Build fee ixs from FULL rawAmount (5% of what user input).
-    const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
-    if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
-
-    const feeIxs = [];
-    if (inputMint === SOL_MINT) {
-      feeIxs.push(SystemProgram.transfer({
-        fromPubkey: wallet.publicKey,
-        toPubkey:   FEE_WALLET,
-        lamports:   Number(feeAmount),
-      }));
-    } else {
-      const mintPk = new PublicKey(inputMint);
-      const mintInfo = await connection.getAccountInfo(mintPk);
-      if (!mintInfo) throw new Error('Input mint not found on-chain.');
-      const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
-        ? TOKEN_2022_PROGRAM_ID
-        : TOKEN_PROGRAM_ID;
-
-      const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
-      const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
-
-      feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
-        wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
-      ));
-      feeIxs.push(createTransferCheckedInstruction(
-        sourceAta, mintPk, destAta, wallet.publicKey,
-        feeAmount, inputDecimals, [], tokenProgram,
-      ));
-    }
-
-    // 3) Assemble ix list: compute-budget, fee, then Jupiter ixs.
-    const ixs = [];
-    if (Array.isArray(build.computeBudgetInstructions))
-      for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
-    for (const ix of feeIxs) ixs.push(ix);
-    if (Array.isArray(build.setupInstructions))
-      for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
-    if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
-    if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
-    if (Array.isArray(build.otherInstructions))
-      for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
-
-    // 4) Resolve ALTs.
-    const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
-    let alts = [];
-    if (altKeys.length > 0) {
-      const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
-      alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
-        key:   new PublicKey(k),
-        state: AddressLookupTableAccount.deserialize(infos[i].data),
-      }) : null).filter(Boolean);
-    }
-
-    // 5) Compile v0 tx.
-    const latest = await connection.getLatestBlockhash('confirmed');
-    const message = new TransactionMessage({
-      payerKey:        wallet.publicKey,
-      recentBlockhash: latest.blockhash,
-      instructions:    ixs,
-    }).compileToV0Message(alts);
-    const tx = new VersionedTransaction(message);
-
-    // 6) Simulate.
-    try {
-      const sim = await connection.simulateTransaction(tx, {
-        replaceRecentBlockhash: true,
-        sigVerify: false,
-      });
-      if (sim.value.err) {
-        const logs = (sim.value.logs || []).join('\n').toLowerCase();
-        if (logs.includes('insufficient') || logs.includes('0x1')) throw new Error('Insufficient balance for this swap.');
-        if (logs.includes('slippage') || logs.includes('0x1771'))  throw new Error('Price moved — try again.');
-        throw new Error('Swap simulation failed — price may have moved.');
-      }
-    } catch (simErr) {
-      if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
-        throw simErr;
-      }
-      console.warn('[swap] sim non-fatal', simErr);
-    }
-
-    // 7) User signs.
-    const signed = await wallet.signTransaction(tx);
-
-    // 8) Broadcast.
-    const sig = await connection.sendRawTransaction(signed.serialize(), {
-      skipPreflight: false,
-      maxRetries: 3,
-    });
-
-    // 9) Confirm with polling fallback.
-    let confirmed = false;
-    try {
-      const conf = await Promise.race([
-        connection.confirmTransaction({
-          signature: sig,
-          blockhash: latest.blockhash,
-          lastValidBlockHeight: latest.lastValidBlockHeight,
-        }, 'confirmed'),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
-      ]);
-      if (conf?.value?.err) throw new Error('Swap tx failed on-chain.');
-      confirmed = true;
-    } catch {
-      const deadline = Date.now() + 20_000;
-      while (Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, 2000));
-        try {
-          const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-          const cs = st?.value?.confirmationStatus;
-          if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-          if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
-        } catch (e) {
-          if (/failed on-chain/i.test(String(e.message))) throw e;
-        }
-      }
-    }
-
-    // Compute "got" for the success card.
-    const outDecimals = mode === 'buy' ? (token.decimals ?? 6) : 9;
-    const outUi = Number(build.outAmount || 0) / Math.pow(10, outDecimals);
-
-    return { signature: sig, confirmed, outUi };
-  }, [wallet, connection, solPrice]);
 
   const isWhalesView = activeFilter === 'whales';
   const sectionTitle = isWhalesView ? 'WHALE ENTRIES · 48H'
@@ -668,18 +525,12 @@ export default function MemeWonderland() {
           selectedPreset={selectedPreset}
           handlePreset={handlePreset}
           onClose={closeSheet}
-          walletConnected={!!wallet.publicKey}
-          executeSwap={executeSwap}
-          onSuccess={({ signature, confirmed, outUi, paidUi }) => {
-            const isSellMode = mode === 'sell';
-            setSuccess({
-              mint: sheetMint,
-              paid: paidUi + ' ' + (isSellMode ? tokenByMint(sheetMint).sym : 'SOL'),
-              got: format(outUi) + (isSellMode ? ' SOL' : ' ' + tokenByMint(sheetMint).sym),
-              price: tokenByMint(sheetMint).price,
-              signature,
-              pending: !confirmed,
-            });
+          wallet={wallet}
+          connection={connection}
+          balances={balances}
+          refreshBalances={refreshBalances}
+          onSuccess={(payload) => {
+            setSuccess({ mint: sheetMint, ...payload });
             setSheetMint(null);
             setDetailMint(null);
           }}
@@ -698,6 +549,7 @@ export default function MemeWonderland() {
   );
 }
 
+/* ─── DETAIL VIEW (unchanged) ──────────────────────────────────────── */
 function DetailView({ token, onClose, onTrade }) {
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -779,83 +631,309 @@ function DetailView({ token, onClose, onTrade }) {
   );
 }
 
+/* ─── TRADE SHEET — mirrors SwapWidget exactly ────────────────────── */
 function TradeSheet({
   token, solPrice, mode, setMode, amount, setAmount,
   selectedPreset, handlePreset, onClose,
-  walletConnected, executeSwap, onSuccess,
+  wallet, connection, balances, refreshBalances, onSuccess,
 }) {
-  const amtNum = parseFloat(amount) || 0;
   const isSell = mode === 'sell';
-  const payCurrency = isSell ? token.sym : 'SOL';
-  const usdValue = isSell
-    ? (amtNum * (token.price || 0)).toFixed(2)
-    : (amtNum * (solPrice || 0)).toFixed(2);
-  const [tps, setTps] = useState(0);
-  const [swapping, setSwapping] = useState(false);
-  const [swapError, setSwapError] = useState(null);
+  const inputMint  = isSell ? token.mint : SOL_MINT;
+  const outputMint = isSell ? SOL_MINT  : token.mint;
+  const inputDecimals  = isSell ? (token.decimals ?? 6) : 9;
+  const outputDecimals = isSell ? 9 : (token.decimals ?? 6);
+  const inputSymbol  = isSell ? token.sym : 'SOL';
+  const outputSymbol = isSell ? 'SOL' : token.sym;
 
+  const inputBalance = balances[inputMint];
+  const amtNum = parseFloat(amount) || 0;
+  const usdValue = (amtNum * (isSell ? (token.price || 0) : (solPrice || 0))).toFixed(2);
+
+  /* rawAmount in smallest units (string), exactly like SwapWidget. */
+  const rawAmount = useMemo(() => {
+    if (!amount) return '';
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    return Math.floor(n * Math.pow(10, inputDecimals)).toString();
+  }, [amount, inputDecimals]);
+
+  /* QUOTE state — the build response IS the quote. Same shape as SwapWidget. */
+  const [build, setBuild] = useState(null);
+  const [quoting, setQuoting] = useState(false);
+  const [quoteError, setQuoteError] = useState(null);
+  const quoteAbortRef = useRef(null);
+
+  /* Debounced quote — mirrors SwapWidget's effect exactly. */
+  useEffect(() => {
+    if (!rawAmount || inputMint === outputMint) {
+      setBuild(null);
+      setQuoteError(null);
+      return;
+    }
+    if (quoteAbortRef.current) quoteAbortRef.current.abort();
+    const ac = new AbortController();
+    quoteAbortRef.current = ac;
+
+    setQuoting(true);
+    setQuoteError(null);
+
+    const t = setTimeout(async () => {
+      try {
+        const net = (BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n;
+        if (net <= 0n) {
+          setBuild(null);
+          setQuoting(false);
+          return;
+        }
+        const params = new URLSearchParams({
+          inputMint,
+          outputMint,
+          amount:      net.toString(),
+          slippageBps: String(SLIPPAGE_BPS),
+          taker:       wallet.publicKey
+            ? wallet.publicKey.toBase58()
+            : '11111111111111111111111111111111',
+          computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
+        });
+        const r = await fetch(`/api/jupiter/build?${params}`, { signal: ac.signal });
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.error || `Quote failed (${r.status})`);
+        }
+        const data = await r.json();
+        if (!ac.signal.aborted) {
+          setBuild(data);
+          setQuoteError(null);
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        if (!ac.signal.aborted) {
+          setBuild(null);
+          setQuoteError(friendlyError(e));
+        }
+      } finally {
+        if (!ac.signal.aborted) setQuoting(false);
+      }
+    }, 350);
+
+    return () => { clearTimeout(t); ac.abort(); };
+  }, [rawAmount, inputMint, outputMint, wallet.publicKey]);
+
+  const outAmountUi = useMemo(() => {
+    if (!build) return null;
+    return Number(build.outAmount) / Math.pow(10, outputDecimals);
+  }, [build, outputDecimals]);
+
+  const receiveAmount = useMemo(() => {
+    if (quoting) return 'Quoting…';
+    if (outAmountUi == null) return '—';
+    return format(outAmountUi) + ' ' + outputSymbol;
+  }, [quoting, outAmountUi, outputSymbol]);
+
+  const rate = useMemo(() => {
+    if (!outAmountUi || !amtNum) return null;
+    return outAmountUi / amtNum;
+  }, [outAmountUi, amtNum]);
+
+  /* Body-scroll lock. */
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => { document.body.style.overflow = prev; };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    async function quote() {
-      try {
-        const r = await fetch(`/api/jupiter/quote?inputMint=${SOL_MINT}&outputMint=${token.mint}&amount=${QUOTE_LAMPS}&slippageBps=100`);
-        if (!r.ok) return;
-        const q = await r.json();
-        const out = Number(q?.outAmount || 0);
-        const dec = Number(q?.outputDecimals ?? 6);
-        if (!cancelled && out) setTps(out / Math.pow(10, dec));
-      } catch {}
-    }
-    quote();
-    const id = setInterval(quote, 8_000);
-    return () => { cancelled = true; clearInterval(id); };
-  }, [token.mint]);
+  /* Swap state. */
+  const [swapping, setSwapping] = useState(false);
+  const [swapError, setSwapError] = useState(null);
 
-  const receiveAmount = useMemo(() => {
-    if (!tps) return 'Quoting…';
-    if (mode === 'buy') return format(amtNum * tps) + ' ' + token.sym;
-    // Sell: amtNum is in token units. tps = tokens per 1 SOL, so SOL out = amtNum / tps.
-    return (amtNum / tps).toFixed(4) + ' SOL';
-  }, [amtNum, tps, mode, token.sym]);
-
-  const handleConfirm = async () => {
-    setSwapError(null);
-    if (!walletConnected) {
-      setSwapError('Please connect a wallet first.');
+  /* SWAP — IDENTICAL to SwapWidget.handleSwap. No re-fetch; uses `build`. */
+  const handleSwap = useCallback(async () => {
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      setSwapError('Please connect a wallet (Phantom, Solflare, Backpack).');
       return;
     }
-    if (!amtNum || amtNum <= 0) {
-      setSwapError('Enter an amount.');
+    if (!build) {
+      setSwapError('No quote available — try again.');
       return;
     }
+
     setSwapping(true);
+    setSwapError(null);
+
     try {
-      const result = await executeSwap({ token, mode, uiAmount: amount });
-      onSuccess({
-        ...result,
-        paidUi: amtNum.toFixed(3),
+      const dec = inputDecimals;
+
+      // 1) Fee instructions FIRST (5% of input mint).
+      const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
+      if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
+
+      const feeIxs = [];
+      if (inputMint === SOL_MINT) {
+        feeIxs.push(SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey:   FEE_WALLET,
+          lamports:   Number(feeAmount),
+        }));
+      } else {
+        const mintPk = new PublicKey(inputMint);
+        const mintInfo = await connection.getAccountInfo(mintPk);
+        if (!mintInfo) throw new Error('Input mint not found on-chain.');
+        const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+          ? TOKEN_2022_PROGRAM_ID
+          : TOKEN_PROGRAM_ID;
+
+        const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
+        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
+
+        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+          wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
+        ));
+        feeIxs.push(createTransferCheckedInstruction(
+          sourceAta, mintPk, destAta, wallet.publicKey,
+          feeAmount, dec, [], tokenProgram,
+        ));
+      }
+
+      // 2) Assemble ix list: compute-budget, fee, then Jupiter ixs.
+      const ixs = [];
+      if (Array.isArray(build.computeBudgetInstructions))
+        for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
+      for (const ix of feeIxs) ixs.push(ix);
+      if (Array.isArray(build.setupInstructions))
+        for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+      if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+      if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+      if (Array.isArray(build.otherInstructions))
+        for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+
+      // 3) Resolve ALTs.
+      const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+      let alts = [];
+      if (altKeys.length > 0) {
+        const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
+        alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+          key:   new PublicKey(k),
+          state: AddressLookupTableAccount.deserialize(infos[i].data),
+        }) : null).filter(Boolean);
+      }
+
+      // 4) Compile v0 tx.
+      const latest = await connection.getLatestBlockhash('confirmed');
+      const message = new TransactionMessage({
+        payerKey:        wallet.publicKey,
+        recentBlockhash: latest.blockhash,
+        instructions:    ixs,
+      }).compileToV0Message(alts);
+      const tx = new VersionedTransaction(message);
+
+      // 5) Pre-flight sim — same bytes the wallet will simulate.
+      const mapSimErr = (logs) => {
+        const j = (logs || []).join('\n').toLowerCase();
+        if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+        if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
+        if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+        if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
+        return null;
+      };
+      try {
+        const sim = await connection.simulateTransaction(tx, {
+          replaceRecentBlockhash: true,
+          sigVerify: false,
+        });
+        if (sim.value.err) {
+          throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
+        }
+      } catch (simErr) {
+        if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
+          throw simErr;
+        }
+        console.warn('[swap] sim non-fatal', simErr);
+      }
+
+      // 6) Sign.
+      const signed = await wallet.signTransaction(tx);
+
+      // 7) Broadcast.
+      const sig = await connection.sendRawTransaction(signed.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3,
       });
+
+      // 8) Confirm with polling fallback.
+      let confirmed = false;
+      try {
+        const conf = await Promise.race([
+          connection.confirmTransaction({
+            signature: sig,
+            blockhash: latest.blockhash,
+            lastValidBlockHeight: latest.lastValidBlockHeight,
+          }, 'confirmed'),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
+        ]);
+        if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
+        confirmed = true;
+      } catch (cfErr) {
+        const deadline = Date.now() + 20_000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+            const cs = st?.value?.confirmationStatus;
+            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+            if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
+          } catch (e) {
+            if (/failed on-chain/i.test(String(e.message))) throw e;
+          }
+        }
+      }
+
+      const outUi = Number(build.outAmount) / Math.pow(10, outputDecimals);
+      onSuccess({
+        signature: sig,
+        pending: !confirmed,
+        paid: amtNum.toFixed(4) + ' ' + inputSymbol,
+        got:  format(outUi) + ' ' + outputSymbol,
+        price: token.price,
+      });
+
+      if (confirmed) setTimeout(() => refreshBalances(), 2000);
     } catch (e) {
-      console.error('[trade]', e);
-      setSwapError(friendlySwapError(e));
+      console.error('[mw swap]', e);
+      setSwapError(friendlyError(e));
     } finally {
       setSwapping(false);
     }
+  }, [
+    wallet, build, inputMint, inputDecimals, outputDecimals,
+    inputSymbol, outputSymbol, rawAmount, amtNum, token.price,
+    connection, onSuccess, refreshBalances,
+  ]);
+
+  /* Funds check — same as SwapWidget. */
+  const hasFunds = inputBalance && amtNum > 0 && inputBalance.uiAmount >= amtNum;
+  const canSwap  = !!wallet.publicKey && !!build && !quoting && !swapping &&
+                   amtNum > 0 && inputMint !== outputMint && hasFunds;
+
+  const setMax = () => {
+    if (!inputBalance) return;
+    let maxAmt = inputBalance.uiAmount;
+    if (inputMint === SOL_MINT) maxAmt = Math.max(0, maxAmt - 0.01);
+    setAmount(String(maxAmt));
   };
 
   const ctaLabel = swapping
-    ? (mode === 'sell' ? 'Dumping…' : 'Aping…')
-    : !walletConnected
+    ? (isSell ? 'Dumping…' : 'Aping…')
+    : !wallet.publicKey
       ? 'Connect Wallet'
-      : !tps
-        ? 'Quoting…'
-        : (mode === 'sell' ? '💸 DUMP ' + token.sym : '🚀 APE INTO ' + token.sym);
+      : amtNum <= 0
+        ? 'Enter amount'
+        : quoting && !build
+          ? 'Getting quote…'
+          : !build
+            ? 'No route available'
+            : !hasFunds
+              ? `Insufficient ${inputSymbol}`
+              : (isSell ? '💸 DUMP ' + token.sym : '🚀 APE INTO ' + token.sym);
 
   return (
     <>
@@ -876,10 +954,14 @@ function TradeSheet({
           <button className="mw-icon-btn" onClick={onClose} disabled={swapping}>×</button>
         </div>
 
-        <div className={'mw-tab-switch' + (mode === 'sell' ? ' mw-sell-mode' : '')}>
+        <div className={'mw-tab-switch' + (isSell ? ' mw-sell-mode' : '')}>
           <div className="mw-tab-indicator"></div>
           {['buy', 'sell'].map(m => (
-            <div key={m} className={'mw-tab' + (mode === m ? ' mw-active' : '')} onClick={() => !swapping && setMode(m)}>
+            <div
+              key={m}
+              className={'mw-tab' + (mode === m ? ' mw-active' : '')}
+              onClick={() => !swapping && setMode(m)}
+            >
               {m.toUpperCase()}
             </div>
           ))}
@@ -888,7 +970,11 @@ function TradeSheet({
         <div className="mw-amount-section">
           <div className="mw-amount-label">
             <span>You Pay</span>
-            <span className="mw-balance">~${usdValue}</span>
+            <span className="mw-balance">
+              {inputBalance
+                ? `Bal: ${format(inputBalance.uiAmount)} · ~$${usdValue}`
+                : `~$${usdValue}`}
+            </span>
           </div>
           <div className="mw-amount-input-wrap">
             <input
@@ -896,12 +982,17 @@ function TradeSheet({
               type="text"
               inputMode="decimal"
               value={amount}
-              onChange={(e) => setAmount(e.target.value)}
+              onChange={(e) => {
+                const v = e.target.value.replace(/[^\d.]/g, '');
+                const parts = v.split('.');
+                if (parts.length > 2) return;
+                setAmount(v);
+              }}
               disabled={swapping}
             />
             <div className="mw-currency">
               <div className="mw-currency-icon"></div>
-              {payCurrency}
+              {inputSymbol}
             </div>
           </div>
 
@@ -910,7 +1001,7 @@ function TradeSheet({
               <button
                 key={p}
                 className={'mw-preset' + (selectedPreset === p ? ' mw-selected' : '')}
-                onClick={() => handlePreset(p)}
+                onClick={() => p === 'MAX' ? setMax() : handlePreset(p)}
                 disabled={swapping}
               >
                 {p}
@@ -926,11 +1017,11 @@ function TradeSheet({
           </div>
           <div className="mw-receive-rate">
             Rate<br />
-            <b>{tps ? `1 SOL = ${format(tps)}` : '—'}</b>
+            <b>{rate ? `1 ${inputSymbol} = ${format(rate)} ${outputSymbol}` : '—'}</b>
           </div>
         </div>
 
-        {swapError && (
+        {(swapError || quoteError) && (
           <div style={{
             margin: '0 16px 8px',
             padding: '10px 12px',
@@ -940,15 +1031,15 @@ function TradeSheet({
             fontSize: 13,
             textAlign: 'center',
           }}>
-            {swapError}
+            {swapError || quoteError}
           </div>
         )}
 
         <div className="mw-cta-wrap">
           <button
-            className={'mw-cta' + (mode === 'sell' ? ' mw-sell-cta' : '')}
-            onClick={handleConfirm}
-            disabled={!tps || swapping || !walletConnected}
+            className={'mw-cta' + (isSell ? ' mw-sell-cta' : '')}
+            onClick={handleSwap}
+            disabled={!canSwap}
           >
             {ctaLabel}
           </button>
@@ -961,6 +1052,7 @@ function TradeSheet({
   );
 }
 
+/* ─── SUCCESS VIEW ─────────────────────────────────────────────────── */
 function SuccessView({ data, token, refCode, onClose }) {
   const [confetti, setConfetti] = useState([]);
 
