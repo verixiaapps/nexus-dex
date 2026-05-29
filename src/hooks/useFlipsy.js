@@ -13,7 +13,7 @@ const RPC_URL = process.env.REACT_APP_FLIPSY_RPC ||
 const PROGRAM_ID = new PublicKey(
   process.env.REACT_APP_FLIPSY_PROGRAM_ID || 'Fpsy1111111111111111111111111111111111111111'
 );
-const USDC_MINT = new PublicKey(
+const USDC_MINT = new PublicKey( 
   process.env.REACT_APP_FLIPSY_USDC ||
     (NETWORK === 'mainnet'
       ? 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'
