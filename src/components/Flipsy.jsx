@@ -3,7 +3,14 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useFlipsy } from '../hooks/useFlipsy';
 import './Flipsy.css';
- 
+
+// ============================================================
+// TESTING GUARDS — remove before public launch
+// ============================================================
+const ADMIN_WALLET = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
+const BLOCKED_COUNTRIES = ['US'];
+// ============================================================
+
 // === Solana brand mark ===
 function SolMark({ size = 32 }) {
   return (
@@ -49,6 +56,30 @@ function Sparkline({ points, lockPrice }) {
       <circle cx={w} cy={h - ((points[points.length - 1] - min) / range) * h} r="5" fill={color} stroke="#FFF" strokeWidth="1.5" />
     </svg>
   );
+}
+
+// === Geo-block check ===
+// Tries two free APIs. Fails open if both fail, but logs a warning.
+async function checkGeo() {
+  const sources = [
+    { url: 'https://ipapi.co/json/', field: 'country_code' },
+    { url: 'https://api.country.is/', field: 'country' },
+  ];
+  for (const src of sources) {
+    try {
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 4000);
+      const res = await fetch(src.url, { signal: ctrl.signal });
+      clearTimeout(timeout);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const cc = (data[src.field] || '').toUpperCase();
+      if (cc) return { country: cc, blocked: BLOCKED_COUNTRIES.includes(cc) };
+    } catch {
+      // try next source
+    }
+  }
+  return { country: 'UNKNOWN', blocked: false };
 }
 
 // === Upcoming round card ===
@@ -114,6 +145,41 @@ function UpcomingCard({ data, userBet, connected, placeBet, betAmount, index }) 
   );
 }
 
+// === Full-page block screen ===
+function BlockScreen({ title, message, sub }) {
+  return (
+    <div className="flipsy-page">
+      <div className="flipsy-blob flipsy-blob-1" />
+      <div className="flipsy-blob flipsy-blob-2" />
+      <div className="flipsy-blob flipsy-blob-3" />
+      <div style={{
+        minHeight: '70vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+        padding: '40px 24px', position: 'relative', zIndex: 2,
+      }}>
+        <div style={{
+          maxWidth: 480, width: '100%',
+          background: 'rgba(45, 27, 92, 0.55)',
+          backdropFilter: 'blur(24px)',
+          border: '1.5px solid rgba(255, 95, 162, 0.4)',
+          borderRadius: 28, padding: 32, textAlign: 'center',
+          boxShadow: '0 24px 64px rgba(0, 0, 0, 0.4)',
+        }}>
+          <div style={{ fontSize: 48, marginBottom: 12 }}>🔒</div>
+          <h2 style={{
+            margin: 0, fontSize: 24, fontWeight: 900, color: '#FFFFFF', marginBottom: 12,
+          }}>{title}</h2>
+          <p style={{
+            margin: 0, fontSize: 14, lineHeight: 1.6, color: '#C4B5E8', marginBottom: sub ? 14 : 0,
+          }}>{message}</p>
+          {sub && (
+            <p style={{ margin: 0, fontSize: 12, color: '#8B7BB8', fontStyle: 'italic' }}>{sub}</p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function Flipsy() {
   const wallet = useWallet();
   const { liveRound, upcomingRounds, recentRounds, userBets, balance, placeBet, claim, loading } = useFlipsy(wallet);
@@ -122,6 +188,17 @@ export default function Flipsy() {
   const [pricePoints, setPricePoints] = useState([]);
   const [flash, setFlash] = useState(null);
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
+
+  // Geo check on mount
+  const [geo, setGeo] = useState({ status: 'checking', country: null, blocked: false });
+  useEffect(() => {
+    let cancelled = false;
+    checkGeo().then((res) => {
+      if (cancelled) return;
+      setGeo({ status: 'ready', country: res.country, blocked: res.blocked });
+    });
+    return () => { cancelled = true; };
+  }, []);
 
   // Tick now every second for countdown
   useEffect(() => {
@@ -140,6 +217,46 @@ export default function Flipsy() {
     if (flash) { const t = setTimeout(() => setFlash(null), 3500); return () => clearTimeout(t); }
   }, [flash]);
 
+  // ============================================================
+  // GUARD 1: Geo-block USA
+  // ============================================================
+  if (geo.status === 'checking') {
+    return (
+      <div className="flipsy-page">
+        <div style={{
+          minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
+          color: '#C4B5E8', fontSize: 14, fontWeight: 600,
+        }}>
+          Loading FLIPSY…
+        </div>
+      </div>
+    );
+  }
+
+  if (geo.blocked) {
+    return (
+      <BlockScreen
+        title="Not available in your region"
+        message="FLIPSY is currently unavailable to users in the United States due to regulatory restrictions."
+        sub="This restriction may change in the future. Thanks for your patience."
+      />
+    );
+  }
+
+  // ============================================================
+  // GUARD 2: Whitelist only the admin wallet during testing
+  // ============================================================
+  const isWhitelisted = wallet.publicKey && wallet.publicKey.toBase58() === ADMIN_WALLET;
+  if (wallet.connected && !isWhitelisted) {
+    return (
+      <BlockScreen
+        title="Restricted Access"
+        message="FLIPSY is in private beta. Your wallet is not on the access list."
+        sub="Public launch coming soon."
+      />
+    );
+  }
+
   const handlePlaceBet = async (epoch, side, amount) => {
     if (!wallet.connected) { setFlash({ type: 'error', msg: 'Connect wallet first' }); return; }
     if (amount < 0.1 || amount > 5) { setFlash({ type: 'error', msg: '$0.10–$5.00' }); return; }
@@ -154,7 +271,7 @@ export default function Flipsy() {
   };
 
   // Compute display values
-  const livePrice = liveRound?.lockPrice || 0; // TODO: hook up live Pyth price feed for sparkline
+  const livePrice = liveRound?.lockPrice || 0;
   const lockPrice = liveRound?.lockPrice || 0;
   const priceDiff = livePrice - lockPrice;
   const isUp = priceDiff >= 0;
@@ -181,7 +298,6 @@ export default function Flipsy() {
         <div className="flipsy-brand">
           <div className="flipsy-mascot-wrap">
             <div className="flipsy-mascot">
-              {/* Mascot will be added later — placeholder uses gradient */}
               <div style={{
                 width: '100%', height: '100%',
                 background: 'linear-gradient(135deg, #C49FFF 0%, #FF7FB8 100%)',
@@ -343,7 +459,6 @@ export default function Flipsy() {
               ))}
             </div>
 
-            {/* Claim buttons for resolved rounds where user has unclaimed bets */}
             {Object.entries(userBets).map(([epoch, bet]) => {
               const round = recentRounds.find(r => r.epoch === parseInt(epoch));
               if (!round || bet.claimed) return null;
