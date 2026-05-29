@@ -1,14 +1,9 @@
 {
-  "name": "Flipsy Solana Dev",
+  "name": "Flipsy Solana",
   "image": "mcr.microsoft.com/devcontainers/rust:1-bookworm",
   "features": {
-    "ghcr.io/devcontainers/features/node:1": {
-      "version": "20"
-    }
+    "ghcr.io/devcontainers/features/node:1": { "version": "20" }
   },
   "postCreateCommand": "bash .devcontainer/setup.sh",
-  "remoteUser": "vscode",
-  "hostRequirements": {
-    "memory": "8gb"
-  }
+  "hostRequirements": { "cpus": 4, "memory": "8gb" }
 }
