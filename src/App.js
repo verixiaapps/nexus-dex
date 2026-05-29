@@ -56,32 +56,16 @@ async function screenAddress(address) {
   }
 }
 
-// =====================================================================
-// Routing
-//   /              → swap
-//   /swap          → swap
-//   /bridge        → cross-chain swap (LI.FI)
-//   /wonderland    → MemeWonderland (Solana memes via Jupiter)
-//   /markets       → Stocks (xStocks)
-//   /portfolio     → Portfolio (wallet)
-//
-// Legacy paths kept so old links don't 404:
-//   /vip, /perps, /stack, /call, /predict → /swap
-//   /tokenized → /markets
-//   /token     → /portfolio
-//   /memes     → /wonderland
-// =====================================================================
 const PATH_TO_TAB = {
   '/':            'swap',
   '/swap':        'swap',
   '/bridge':      'bridge',
   '/wonderland':  'wonderland',
-  '/memes':       'wonderland',  // alias
+  '/memes':       'wonderland',
   '/markets':     'markets',
-  '/tokenized':   'markets',     // legacy
+  '/tokenized':   'markets',
   '/portfolio':   'portfolio',
-  '/token':       'portfolio',   // legacy
-  // Dead routes — redirect to swap
+  '/token':       'portfolio',
   '/stack':       'swap',
   '/vip':         'swap',
   '/perps':       'swap',
@@ -139,16 +123,11 @@ function walletModalReducer(state, action) {
 }
 
 // =====================================================================
-// TermsGate — scroll-to-bottom required before Accept enables
+// TermsGate — compact bottom sheet, site visible behind
 // =====================================================================
 function TermsGate({ onAccept }) {
   const scrollRef = useRef(null);
   const [canAccept, setCanAccept] = useState(false);
-
-  useEffect(() => {
-    document.body.classList.add('nexus-scroll-locked');
-    return () => document.body.classList.remove('nexus-scroll-locked');
-  }, []);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -165,81 +144,115 @@ function TermsGate({ onAccept }) {
 
   return (
     <>
-      <div style={{ position: 'fixed', inset: 0, zIndex: 999, background: 'rgba(3,6,15,.78)', backdropFilter: 'blur(14px)', WebkitBackdropFilter: 'blur(14px)' }}/>
+      {/* Lighter overlay so the site is visible behind */}
       <div style={{
-        position: 'fixed', top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
-        width: 'calc(100% - 24px)', maxWidth: 440, maxHeight: '82dvh',
-        zIndex: 1000, display: 'flex', flexDirection: 'column', overflow: 'hidden',
-        background: '#080d1a', border: '1px solid rgba(0,229,255,.22)',
-        borderRadius: 20,
-        boxShadow: '0 30px 80px rgba(0,0,0,.7), 0 0 32px rgba(0,229,255,.12)',
+        position: 'fixed', inset: 0, zIndex: 999,
+        background: 'rgba(3,6,15,.50)',
+        backdropFilter: 'blur(4px)',
+        WebkitBackdropFilter: 'blur(4px)',
+      }}/>
+
+      {/* Compact bottom sheet */}
+      <div style={{
+        position: 'fixed', bottom: 0, left: '50%',
+        transform: 'translateX(-50%)',
+        width: '100%', maxWidth: 480,
+        maxHeight: '50dvh',
+        zIndex: 1000, display: 'flex', flexDirection: 'column',
+        overflow: 'hidden',
+        background: '#080d1a',
+        border: '1px solid rgba(0,229,255,.22)',
+        borderTop: '1px solid rgba(0,229,255,.30)',
+        borderRadius: '16px 16px 0 0',
+        boxShadow: '0 -10px 40px rgba(0,0,0,.8), 0 0 20px rgba(0,229,255,.08)',
         fontFamily: 'Syne, sans-serif',
       }}>
-        <div style={{ flexShrink: 0, padding: '20px 22px 10px' }}>
-          <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, padding: '3px 10px', borderRadius: 999, background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.22)', marginBottom: 10 }}>
+        {/* Drag handle */}
+        <div style={{ flexShrink: 0, paddingTop: 10, display: 'flex', justifyContent: 'center' }}>
+          <div style={{ width: 36, height: 3, borderRadius: 2, background: 'rgba(255,255,255,.15)' }} />
+        </div>
+
+        {/* Compact header */}
+        <div style={{ flexShrink: 0, padding: '8px 18px 6px', display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{
+            display: 'inline-flex', alignItems: 'center', gap: 5,
+            padding: '2px 8px', borderRadius: 999,
+            background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.22)',
+          }}>
             <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#00e5ff' }}/>
             <span style={{ color: '#00e5ff', fontSize: 9, fontWeight: 700, letterSpacing: '.10em' }}>TERMS OF USE</span>
           </div>
-          <div style={{ fontSize: 20, fontWeight: 800, color: '#fff', letterSpacing: '-.02em', lineHeight: 1.15, marginBottom: 4 }}>Welcome to Nexus DEX</div>
-          <div style={{ fontSize: 11.5, color: '#586994', lineHeight: 1.45 }}>Non-custodial · Third-party protocols · You assume all risk</div>
+          <div style={{ flex: 1 }} />
+          <div style={{ fontSize: 11, color: '#586994' }}>Non-custodial · You assume all risk</div>
         </div>
 
-        <div ref={scrollRef} onScroll={handleScroll} style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '6px 22px 14px', WebkitOverflowScrolling: 'touch' }}>
-          <div style={{ fontSize: 11.5, color: '#cdd6f4', lineHeight: 1.6 }}>
-            By clicking <strong style={{ color: '#fff' }}>"Accept &amp; Continue"</strong> or by accessing or using Nexus DEX, you acknowledge and agree that:<br/><br/>
+        {/* Scrollable terms — compact */}
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          className="scroll-contain"
+          style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '4px 18px 10px' }}
+        >
+          <div style={{ fontSize: 11, color: '#cdd6f4', lineHeight: 1.55 }}>
+            By clicking <strong style={{ color: '#fff' }}>"Accept &amp; Continue"</strong> you agree that:<br/><br/>
 
-            • Nexus DEX is a non-custodial software interface operated by Verixia Apps. We do not custody funds, control wallets, execute trades, or provide financial, investment, legal, or tax advice.<br/><br/>
+            • Nexus DEX is a non-custodial interface by Verixia Apps. We do not custody funds, control wallets, execute trades, or provide financial, investment, legal, or tax advice.<br/><br/>
 
-            • <strong style={{ color: '#fff' }}>Compliance &amp; wallet screening.</strong> All wallet addresses are automatically screened against U.S. OFAC, U.N., E.U., and U.K. sanctions lists at connection time using Chainalysis. Flagged wallets are denied access before any transaction is possible.<br/><br/>
+            • <strong style={{ color: '#fff' }}>Compliance &amp; wallet screening.</strong> All wallet addresses are screened against U.S. OFAC, U.N., E.U., and U.K. sanctions lists via Chainalysis. Flagged wallets are denied access.<br/><br/>
 
-            • <strong style={{ color: '#fff' }}>Restricted jurisdictions.</strong> You represent and warrant you are not located in, a resident of, citizen of, or accessing Nexus DEX from: Iran, North Korea, Cuba, Syria, the Crimea, Donetsk, Luhansk, and Sevastopol regions of Ukraine, or any other jurisdiction subject to comprehensive U.S., U.N., E.U., or U.K. sanctions.<br/><br/>
+            • <strong style={{ color: '#fff' }}>Restricted jurisdictions.</strong> You are not located in, a resident of, or citizen of: Iran, North Korea, Cuba, Syria, Crimea, Donetsk, Luhansk, Sevastopol, or any other jurisdiction subject to comprehensive U.S., U.N., E.U., or U.K. sanctions.<br/><br/>
 
             • <strong style={{ color: '#fff' }}>You are 18 or older</strong> and have full legal capacity to enter this agreement.<br/><br/>
 
-            • All swaps, routing, execution, liquidity, pricing, and blockchain interactions are handled by third-party protocols, aggregators, exchanges, smart contracts, and infrastructure providers. All transactions are initiated, reviewed, authorized, and signed directly by you through your own wallet.<br/><br/>
+            • All swaps, routing, liquidity, and blockchain interactions are handled by third-party protocols. All transactions are signed directly by you through your own wallet.<br/><br/>
 
-            • Digital assets, DeFi protocols, and smart contracts carry substantial risk including total loss of funds from exploits, smart-contract vulnerabilities, slippage, protocol failures, hacks, MEV, frontrunning, network outages, oracle errors, and human error. <strong style={{ color: '#fff' }}>You assume all risk.</strong><br/><br/>
+            • DeFi and smart contracts carry substantial risk including total loss of funds. <strong style={{ color: '#fff' }}>You assume all risk.</strong><br/><br/>
 
-            • <strong style={{ color: '#fff' }}>No reimbursement for losses.</strong> Verixia Apps will not refund, reimburse, or compensate you for any loss of funds or value, regardless of cause — including failed transactions, slippage, smart-contract exploits, third-party protocol failures, network outages, market volatility, frontrunning, MEV, or human error.<br/><br/>
+            • <strong style={{ color: '#fff' }}>No reimbursement.</strong> Verixia Apps will not refund or compensate any loss, regardless of cause.<br/><br/>
 
-            • <strong style={{ color: '#fff' }}>AS-IS / AS-AVAILABLE.</strong> Nexus DEX is provided without warranties of any kind, express or implied, including merchantability, fitness for a particular purpose, non-infringement, accuracy, and uninterrupted operation.<br/><br/>
+            • <strong style={{ color: '#fff' }}>AS-IS / AS-AVAILABLE.</strong> No warranties of any kind.<br/><br/>
 
-            • <strong style={{ color: '#fff' }}>No fiduciary duty.</strong> Verixia Apps owes you no fiduciary duty. To the extent any such duty may exist at law or in equity, it is irrevocably waived and disclaimed.<br/><br/>
+            • <strong style={{ color: '#fff' }}>No liability.</strong> Verixia Apps is not liable for any damages arising from your use of Nexus DEX.<br/><br/>
 
-            • <strong style={{ color: '#fff' }}>No liability.</strong> To the fullest extent permitted by law, Verixia Apps, Nexus DEX, their operators, affiliates, contributors, and service providers are not liable for any damages, losses, claims, costs, or expenses of any kind — direct, indirect, incidental, consequential, special, exemplary, or punitive — arising from or related to your use of Nexus DEX, regardless of the cause of action.<br/><br/>
+            • <strong style={{ color: '#fff' }}>No class actions.</strong> You waive any right to class action or jury trial against Verixia Apps.<br/><br/>
 
-            • <strong style={{ color: '#fff' }}>Misrepresentation.</strong> If any representation you make in these terms is false (including jurisdiction, age, or sanctions status), Verixia Apps may immediately terminate your access, cooperate with law enforcement, and seek full indemnification from you. All losses, fines, penalties, or damages arising from your misrepresentation are your sole responsibility.<br/><br/>
+            • <strong style={{ color: '#fff' }}>Binding arbitration.</strong> Disputes resolved through individual arbitration only.<br/><br/>
 
-            • <strong style={{ color: '#fff' }}>Indemnification.</strong> You will indemnify and hold harmless Verixia Apps, Nexus DEX, their operators, affiliates, contributors, and service providers from any and all claims, damages, costs, fines, penalties, or liabilities arising from your use of Nexus DEX, your violation of these terms, or your violation of any law or third-party right.<br/><br/>
-
-            • You are solely responsible for compliance with all laws and regulations applicable to your jurisdiction.<br/><br/>
-
-            • Verixia Apps reserves the right to restrict, block, suspend, terminate, or deny access at any time for any reason.<br/><br/>
-
-            • <strong style={{ color: '#fff' }}>No class actions.</strong> You irrevocably waive any right to participate in any class action, class arbitration, representative action, consolidated proceeding, or jury trial against Verixia Apps or Nexus DEX.<br/><br/>
-
-            • <strong style={{ color: '#fff' }}>Binding individual arbitration.</strong> Any dispute shall be resolved exclusively through final and binding individual arbitration.<br/><br/>
-
-            If you do not agree to these terms, you must discontinue use of Nexus DEX immediately.
+            If you do not agree, discontinue use immediately.
           </div>
         </div>
 
-        <div style={{ flexShrink: 0, padding: '12px 22px 18px', borderTop: '1px solid rgba(255,255,255,.04)', background: '#080d1a' }}>
+        {/* Footer */}
+        <div style={{
+          flexShrink: 0, padding: '8px 18px 14px',
+          borderTop: '1px solid rgba(255,255,255,.04)',
+          background: '#080d1a',
+        }}>
           {!canAccept && (
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, fontSize: 10.5, color: '#586994', marginBottom: 10, fontWeight: 600, letterSpacing: '.04em' }}>
-              <span>↓</span>Scroll to the bottom to continue
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              gap: 5, fontSize: 10, color: '#586994', marginBottom: 8,
+              fontWeight: 600, letterSpacing: '.04em',
+            }}>
+              <span>↓</span> Scroll to continue
             </div>
           )}
-          <button onClick={canAccept ? onAccept : undefined} disabled={!canAccept} style={{
-            width: '100%', padding: 14, borderRadius: 12, border: 'none',
-            background: canAccept ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'rgba(255,255,255,.05)',
-            color: canAccept ? '#03060f' : '#586994',
-            fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 15, letterSpacing: '-.01em',
-            cursor: canAccept ? 'pointer' : 'not-allowed',
-            boxShadow: canAccept ? '0 8px 24px rgba(0,229,255,.25)' : 'none',
-            transition: 'all .2s',
-          }}>Accept &amp; Continue</button>
-          <div style={{ fontSize: 9, color: '#586994', textAlign: 'center', marginTop: 10, fontWeight: 600, letterSpacing: '.06em' }}>
+          <button
+            onClick={canAccept ? onAccept : undefined}
+            disabled={!canAccept}
+            style={{
+              width: '100%', padding: 12, borderRadius: 10, border: 'none',
+              background: canAccept ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'rgba(255,255,255,.05)',
+              color: canAccept ? '#03060f' : '#586994',
+              fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 14,
+              cursor: canAccept ? 'pointer' : 'not-allowed',
+              boxShadow: canAccept ? '0 6px 20px rgba(0,229,255,.25)' : 'none',
+              transition: 'all .2s',
+            }}
+          >
+            Accept &amp; Continue
+          </button>
+          <div style={{ fontSize: 9, color: '#586994', textAlign: 'center', marginTop: 8, fontWeight: 600, letterSpacing: '.06em' }}>
             NON-CUSTODIAL · NO ACCOUNT · YOUR KEYS
           </div>
         </div>
@@ -249,7 +262,7 @@ function TermsGate({ onAccept }) {
 }
 
 // =====================================================================
-// WalletModal — Phantom + WalletConnect only. (Privy removed.)
+// WalletModal
 // =====================================================================
 function WalletModal({ open, onClose }) {
   const [mState, dispatch] = useReducer(walletModalReducer, WM_INITIAL);
@@ -286,7 +299,6 @@ function WalletModal({ open, onClose }) {
     if (connectionTimerRef.current) clearTimeout(connectionTimerRef.current);
   }, []);
 
-  // Detect successful Solana connection → move to screening state
   useEffect(() => {
     if (mState.kind !== 'connecting') return;
     const matched = extSolConnected && selectedWallet
@@ -298,7 +310,6 @@ function WalletModal({ open, onClose }) {
     }
   }, [extSolConnected, selectedWallet, mState.kind, mState.wallet]);
 
-  // Sanctions screening
   useEffect(() => {
     if (mState.kind !== 'screening') return;
     if (!walletAddress) return;
@@ -320,7 +331,6 @@ function WalletModal({ open, onClose }) {
     return () => { cancelled = true; };
   }, [mState.kind, walletAddress, disconnectAll, onClose]);
 
-  // Auto-trigger connect once the wallet adapter has been selected
   const targetWalletRef = useRef(null);
   useEffect(() => {
     const target = targetWalletRef.current;
@@ -511,7 +521,6 @@ function IconWallet()     { return <svg width="18" height="18" viewBox="0 0 24 2
 function IconMarkets()    { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>; }
 function IconBridge()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12 Q12 4 20 12"/><path d="M4 12v4"/><path d="M20 12v4"/><path d="M4 16h16"/><path d="M9 12v4"/><path d="M15 12v4"/></svg>; }
 function IconWonderland() {
-  // Star + sparkle motif — meme energy
   return (
     <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
       <path d="M12 2l2.4 6.4L21 10l-5.4 4 1.8 7L12 17.5 6.6 21l1.8-7L3 10l6.6-1.6L12 2z"/>
@@ -586,10 +595,6 @@ function AppInner() {
     ? wallet.walletAddress.slice(0, 4) + '...' + wallet.walletAddress.slice(-4)
     : null;
 
-  if (!termsAccepted) {
-    return <TermsGate onAccept={() => { try { localStorage.setItem('nexus_terms_accepted_v3', '1'); } catch {} setTermsAccepted(true); }} />;
-  }
-
   return (
     <div style={{ minHeight: '100dvh', background: C.bg, color: C.text, fontFamily: 'Syne, sans-serif', overscrollBehavior: 'none', overflowX: 'hidden', width: '100%' }}>
       <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 0, backgroundImage: 'linear-gradient(rgba(0,229,255,.02) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,.02) 1px,transparent 1px)', backgroundSize: '48px 48px' }} />
@@ -659,6 +664,15 @@ function AppInner() {
           );
         })}
       </nav>
+
+      {/* Terms gate renders on top of the site */}
+      {!termsAccepted && (
+        <TermsGate onAccept={() => {
+          try { localStorage.setItem('nexus_terms_accepted_v3', '1'); } catch {}
+          setTermsAccepted(true);
+        }} />
+      )}
+
       <WalletModal open={walletModalOpen} onClose={() => setWalletModalOpen(false)} />
     </div>
   );
