@@ -1,6 +1,6 @@
 #!/bin/bash
 set -e
-
+ 
 NETWORK="${1:-devnet}"
 echo "=== FLIPSY Deploy ($NETWORK) ==="
 
