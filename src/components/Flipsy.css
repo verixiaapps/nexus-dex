@@ -6,7 +6,7 @@
   background: radial-gradient(ellipse at top left, #3D1F6B 0%, #2D1B5C 40%, #1A0B3D 100%);
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
   color: #FFFFFF;
-  padding-bottom: 40px;
+  padding-bottom: 40px; 
   position: relative;
   overflow: hidden;
 }
