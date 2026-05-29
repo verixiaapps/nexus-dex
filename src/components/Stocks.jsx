@@ -1005,21 +1005,13 @@ function BrandsInner({ onConnectWallet }) {
 }
 
 // =====================================================================
-// US geo block. Owner wallet bypass: when this wallet connects, geo is
-// skipped entirely.
+// US geo block. No bypass.
 // =====================================================================
-const OWNER_BYPASS_PUBKEY = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
-
 export default function Stocks({ onConnectWallet }) {
-  const { publicKey } = useWallet();
-  const connectedPk = publicKey ? publicKey.toBase58() : null;
-  const ownerBypass = connectedPk === OWNER_BYPASS_PUBKEY;
-
   const [country, setCountry] = useState(null);
   const [geoChecked, setGeoChecked] = useState(false);
 
   useEffect(() => {
-    if (ownerBypass) { setGeoChecked(true); return; }
     let alive = true;
     detectCountry().then(c => {
       if (!alive) return;
@@ -1027,9 +1019,9 @@ export default function Stocks({ onConnectWallet }) {
       setGeoChecked(true);
     });
     return () => { alive = false; };
-  }, [ownerBypass]);
+  }, []);
 
-  if (!ownerBypass && geoChecked && country && GEO_BLOCKED.has(country)) {
+  if (geoChecked && country && GEO_BLOCKED.has(country)) {
     return <BrandsRegionBlock/>;
   }
 
