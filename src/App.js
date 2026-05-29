@@ -7,6 +7,7 @@ import Portfolio        from './components/Portfolio.js';
 import Stocks           from './components/Stocks.jsx';
 import CrossChainSwap   from './components/CrossChainSwap.jsx';
 import MemeWonderland   from './components/MemeWonderland.jsx';
+import Flipsy           from './components/Flipsy.jsx';
 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
@@ -66,11 +67,12 @@ const PATH_TO_TAB = {
   '/tokenized':   'markets',
   '/portfolio':   'portfolio',
   '/token':       'portfolio',
+  '/flipsy':      'flipsy',
+  '/predict':     'flipsy',
   '/stack':       'swap',
   '/vip':         'swap',
   '/perps':       'swap',
   '/call':        'swap',
-  '/predict':     'swap',
 };
 const TAB_TO_PATH = {
   swap:       '/swap',
@@ -78,6 +80,7 @@ const TAB_TO_PATH = {
   wonderland: '/wonderland',
   markets:    '/markets',
   portfolio:  '/portfolio',
+  flipsy:     '/flipsy',
 };
 
 function tabFromPathname(pathname) { return PATH_TO_TAB[pathname] || 'swap'; }
@@ -527,6 +530,15 @@ function IconWonderland() {
     </svg>
   );
 }
+function IconFlipsy() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9"/>
+      <path d="M8 10l4-4 4 4"/>
+      <path d="M8 14l4 4 4-4"/>
+    </svg>
+  );
+}
 
 const NAV_ICONS = {
   swap:       IconSwap,
@@ -534,6 +546,7 @@ const NAV_ICONS = {
   wonderland: IconWonderland,
   markets:    IconMarkets,
   portfolio:  IconWallet,
+  flipsy:     IconFlipsy,
 };
 
 const NAV_TABS = [
@@ -541,6 +554,7 @@ const NAV_TABS = [
   { id: 'bridge',     label: 'Bridge' },
   { id: 'wonderland', label: 'Wonderland' },
   { id: 'markets',    label: 'Markets' },
+  { id: 'flipsy',     label: 'Flipsy' },
   { id: 'portfolio',  label: 'Wallet' },
 ];
 
@@ -635,6 +649,7 @@ function AppInner() {
         {tab === 'bridge'     && <CrossChainSwap   onConnectWallet={openWallet} />}
         {tab === 'wonderland' && <MemeWonderland   onConnectWallet={openWallet} />}
         {tab === 'markets'    && <Stocks           {...sharedProps} />}
+        {tab === 'flipsy'     && <Flipsy />}
         {tab === 'portfolio'  && <Portfolio        onConnectWallet={openWallet} />}
       </main>
       <nav className="mobile-nav" style={{
