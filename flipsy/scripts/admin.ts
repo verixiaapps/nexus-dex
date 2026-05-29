@@ -4,7 +4,7 @@ import { Connection, PublicKey } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { RPC_URL, PROGRAM_ID } from "./config";
 import { loadKeypair, loadIdl } from "./utils";
-
+ 
 const COMMANDS = ["status", "pause", "unpause", "force-refund", "sweep", "emergency-sweep"];
 
 async function main() {
