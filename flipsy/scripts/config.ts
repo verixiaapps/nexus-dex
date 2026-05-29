@@ -1,5 +1,5 @@
 import { PublicKey } from "@solana/web3.js";
-
+ 
 export const NETWORK = (process.env.NETWORK || "devnet") as "devnet" | "mainnet";
 
 export const RPC_URL =
