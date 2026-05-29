@@ -1,106 +1,107 @@
 #!/bin/bash
-# FLIPSY deploy — uses official Solana installer + Anchor 1.0.2
+# FLIPSY status check + recovery deploy
 
-echo "==============================================="
-echo "  FLIPSY DEPLOY — official path"
-echo "==============================================="
-
-# === 1. UPGRADE Cargo.toml TO ANCHOR 1.0.2 ===
-echo ""; echo "=== 1. Upgrading anchor-lang to 1.0.2 in Cargo.toml ==="
-sed -i 's/anchor-lang = "[^"]*"/anchor-lang = "1.0.2"/g' flipsy/programs/flipsy/Cargo.toml
-sed -i 's/anchor-spl = "[^"]*"/anchor-spl = "1.0.2"/g' flipsy/programs/flipsy/Cargo.toml
-echo "✓ Cargo.toml updated"
-
-# === 2. RUN OFFICIAL SOLANA + ANCHOR INSTALLER ===
-echo ""; echo "=== 2. Official Solana + Anchor installer (~5-10 min) ==="
-curl --proto '=https' --tlsv1.2 -sSfL https://solana-install.solana.workers.dev | bash
-
-# === 3. LOAD ALL THE NEW PATHS ===
-echo ""; echo "=== 3. Loading PATH ==="
 export PATH="$HOME/.avm/bin:$HOME/.cargo/bin:$HOME/.local/share/solana/install/active_release/bin:$PATH"
-hash -r
 
-# === 4. VERIFY ===
-echo ""; echo "=== 4. Versions ==="
-rustc --version || true
-solana --version || true
-anchor --version || true
-node --version || true
+echo "==============================================="
+echo "  STATUS CHECK"
+echo "==============================================="
 
-# === 5. WALLET ===
-echo ""; echo "=== 5. Wallet ==="
-mkdir -p ~/.config/solana
-[ -f ~/.config/solana/id.json ] || solana-keygen new --no-bip39-passphrase --silent --outfile ~/.config/solana/id.json
-solana config set --url devnet > /dev/null
-WALLET=$(solana address)
+echo ""; echo "=== Tool versions ==="
+rustc --version 2>&1 | head -1 || echo "❌ rustc missing"
+solana --version 2>&1 | head -1 || echo "❌ solana missing"
+anchor --version 2>&1 | head -1 || echo "❌ anchor missing"
+node --version 2>&1 | head -1 || echo "❌ node missing"
+
+echo ""; echo "=== Wallet + balance ==="
+solana config get | grep -E "Keypair|RPC"
+WALLET=$(solana address 2>/dev/null || echo "NONE")
 echo "Wallet: $WALLET"
+echo "Balance: $(solana balance 2>&1)"
 
-# === 6. BALANCE ===
-echo ""; echo "=== 6. Balance ==="
-BALANCE=$(solana balance)
-echo "Balance: $BALANCE"
-if [[ "$BALANCE" == "0 SOL" ]]; then
-  echo "⚠️  Fund DEVNET wallet: $WALLET"
-  echo "   https://faucet.solana.com (request 2-5 SOL)"
-  read -p "Press ENTER when funded..."
+echo ""; echo "=== Build artifacts ==="
+cd flipsy
+if [ -f target/deploy/flipsy.so ]; then
+  echo "✓ flipsy.so exists ($(du -h target/deploy/flipsy.so | cut -f1))"
+else
+  echo "❌ flipsy.so NOT FOUND"
+fi
+if [ -f target/deploy/flipsy-keypair.json ]; then
+  PROGRAM_ID=$(solana address -k target/deploy/flipsy-keypair.json)
+  echo "✓ Program keypair exists"
+  echo "  Program ID: $PROGRAM_ID"
+else
+  echo "❌ flipsy-keypair.json NOT FOUND"
+  PROGRAM_ID=""
 fi
 
-# === 7. BUILD ===
-echo ""; echo "=== 7. anchor build ==="
-cd flipsy
-anchor build
+echo ""; echo "=== On-chain deploy status ==="
+if [ -n "$PROGRAM_ID" ]; then
+  if solana program show "$PROGRAM_ID" --url devnet 2>&1 | grep -q "Program Id"; then
+    echo "✅ PROGRAM IS DEPLOYED ON DEVNET!"
+    solana program show "$PROGRAM_ID" --url devnet
+  else
+    echo "❌ Program NOT deployed on devnet yet"
+  fi
+fi
 
-# === 8. PROGRAM ID ===
-echo ""; echo "=== 8. Program ID ==="
-NEW_ID=$(solana address -k target/deploy/flipsy-keypair.json)
-echo "Program ID: $NEW_ID"
+echo ""; echo "=== IDL ==="
+if [ -f target/idl/flipsy.json ]; then
+  echo "✓ IDL exists"
+  IDL_SIZE=$(wc -c < target/idl/flipsy.json)
+  echo "  Size: $IDL_SIZE bytes"
+else
+  echo "❌ IDL NOT FOUND"
+fi
 
-# === 9. UPDATE 3 FILES ===
-echo ""; echo "=== 9. Updating program ID in 3 files ==="
-OLD_ID="Fpsy1111111111111111111111111111111111111111"
-sed -i "s|$OLD_ID|$NEW_ID|g" programs/flipsy/src/lib.rs
-sed -i "s|$OLD_ID|$NEW_ID|g" Anchor.toml
-sed -i "s|$OLD_ID|$NEW_ID|g" ../src/hooks/useFlipsy.js
-echo "✓ Updated"
+echo ""; echo "=== Frontend IDL ==="
+if [ -f ../src/idl/flipsy.json ]; then
+  echo "✓ Frontend IDL exists"
+  echo "  Size: $(wc -c < ../src/idl/flipsy.json) bytes"
+else
+  echo "❌ Frontend IDL not copied"
+fi
 
-# === 10. REBUILD WITH CORRECT ID ===
-echo ""; echo "=== 10. Rebuild ==="
-anchor build
-
-# === 11. DEPLOY ===
-echo ""; echo "=== 11. Deploying to devnet ==="
-anchor deploy --provider.cluster devnet
-
-# === 12. IDL ===
-echo ""; echo "=== 12. IDL ==="
-mkdir -p ../src/idl
-cp target/idl/flipsy.json ../src/idl/flipsy.json
-echo "✓ IDL copied"
-
-# === 13. SCRIPT DEPS ===
-echo ""; echo "=== 13. npm install ==="
-npm install --silent 2>/dev/null || true
-
-# === 14. INITIALIZE ===
-echo ""; echo "=== 14. Initialize ==="
-npx ts-node scripts/initialize.ts || echo "⚠️  Init failed — run manually later"
-
-# === 15. FIRST ROUND ===
-echo ""; echo "=== 15. Start first round ==="
-npx ts-node scripts/crank-once.ts || echo "⚠️  Crank failed — run manually later"
-
-# === 16. COMMIT + PUSH ===
-echo ""; echo "=== 16. Commit + push ==="
-cd ..
-git config --global user.email "deploy@flipsy.local" 2>/dev/null || true
-git config --global user.name "Flipsy Deploy" 2>/dev/null || true
-git add flipsy/programs/flipsy/Cargo.toml flipsy/programs/flipsy/src/lib.rs flipsy/Anchor.toml src/hooks/useFlipsy.js src/idl/flipsy.json 2>/dev/null || true
-git commit -m "Deploy Flipsy $NEW_ID with Anchor 1.0.2" 2>/dev/null || echo "Nothing to commit"
-git push origin main 2>/dev/null || echo "⚠️  Push failed — commit from GitHub mobile"
+echo ""; echo "=== Program ID in source files ==="
+echo "lib.rs:        $(grep -o 'declare_id![^)]*' programs/flipsy/src/lib.rs | head -1)"
+echo "Anchor.toml:   $(grep -E 'flipsy = ' Anchor.toml | head -1)"
+echo "useFlipsy.js:  $(grep -oE 'PROGRAM_ID[^,;]*' ../src/hooks/useFlipsy.js | head -1)"
 
 echo ""
 echo "==============================================="
-echo "  ✅ DEPLOY COMPLETE"
+echo "  RECOVERY ACTIONS"
 echo "==============================================="
-echo "Program ID: $NEW_ID"
+
+# If program isn't deployed but .so exists, deploy it
+if [ -f target/deploy/flipsy.so ] && [ -n "$PROGRAM_ID" ]; then
+  if ! solana program show "$PROGRAM_ID" --url devnet 2>&1 | grep -q "Program Id"; then
+    echo ""
+    echo "→ Deploying existing .so to devnet..."
+    solana program deploy target/deploy/flipsy.so \
+      --program-id target/deploy/flipsy-keypair.json \
+      --url devnet
+  fi
+fi
+
+# If IDL exists in target but not frontend, copy it
+if [ -f target/idl/flipsy.json ] && [ ! -f ../src/idl/flipsy.json ]; then
+  echo ""
+  echo "→ Copying IDL to frontend..."
+  mkdir -p ../src/idl
+  cp target/idl/flipsy.json ../src/idl/flipsy.json
+  echo "✓ Done"
+fi
+
+echo ""
+echo "==============================================="
+echo "  Final state"
+echo "==============================================="
+echo "Program ID: $PROGRAM_ID"
 echo "Wallet:     $WALLET"
+echo "Balance:    $(solana balance 2>&1)"
+echo ""
+echo "If program shows as deployed above, commit + push from GitHub mobile:"
+echo "  - flipsy/programs/flipsy/src/lib.rs"
+echo "  - flipsy/Anchor.toml"
+echo "  - src/hooks/useFlipsy.js"
+echo "  - src/idl/flipsy.json"
