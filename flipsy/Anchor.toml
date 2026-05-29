@@ -3,7 +3,7 @@ anchor_version = "0.30.1"
 
 [features]
 resolution = true
-skip-lint = false
+skip-lint = false 
 
 [programs.devnet]
 flipsy = "Fpsy1111111111111111111111111111111111111111"
