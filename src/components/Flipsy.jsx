@@ -59,7 +59,6 @@ function Sparkline({ points, lockPrice }) {
 }
 
 // === Geo-block check ===
-// Tries two free APIs. Fails open if both fail, but logs a warning.
 async function checkGeo() {
   const sources = [
     { url: 'https://ipapi.co/json/', field: 'country_code' },
@@ -218,9 +217,14 @@ export default function Flipsy() {
   }, [flash]);
 
   // ============================================================
-  // GUARD 1: Geo-block USA
+  // Admin wallet bypasses all guards
   // ============================================================
-  if (geo.status === 'checking') {
+  const isAdminWallet = wallet.publicKey && wallet.publicKey.toBase58() === ADMIN_WALLET;
+
+  // ============================================================
+  // GUARD 1: Geo-block USA (skipped for admin wallet)
+  // ============================================================
+  if (geo.status === 'checking' && !isAdminWallet) {
     return (
       <div className="flipsy-page">
         <div style={{
@@ -233,7 +237,7 @@ export default function Flipsy() {
     );
   }
 
-  if (geo.blocked) {
+  if (geo.blocked && !isAdminWallet) {
     return (
       <BlockScreen
         title="Not available in your region"
@@ -246,7 +250,7 @@ export default function Flipsy() {
   // ============================================================
   // GUARD 2: Whitelist only the admin wallet during testing
   // ============================================================
-  const isWhitelisted = wallet.publicKey && wallet.publicKey.toBase58() === ADMIN_WALLET;
+  const isWhitelisted = isAdminWallet;
   if (wallet.connected && !isWhitelisted) {
     return (
       <BlockScreen
