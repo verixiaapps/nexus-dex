@@ -1,25 +1,19 @@
-#!/bin/bash
-set -e
+#!/usr/bin/env bash
+set -euxo pipefail
 
-echo "=== Installing Solana CLI ==="
+# Solana CLI 1.18.26
 sh -c "$(curl -sSfL https://release.anza.xyz/v1.18.26/install)"
-echo 'export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"' >> ~/.bashrc
 export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
-
-echo "=== Installing Anchor 0.29.0 ==="
-cargo install --git https://github.com/coral-xyz/anchor --tag v0.29.0 anchor-cli --locked
-
-echo "=== Generating devnet keypair ==="
-mkdir -p ~/.config/solana
-if [ ! -f ~/.config/solana/id.json ]; then
-  solana-keygen new --no-bip39-passphrase --silent --outfile ~/.config/solana/id.json
-fi
-solana config set --url devnet
-
-echo ""
-echo "=== ✅ SETUP COMPLETE ==="
-rustc --version
+echo 'export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"' >> ~/.bashrc
 solana --version
+
+# AVM + Anchor 0.30.1
+cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+avm install 0.30.1
+avm use 0.30.1
 anchor --version
-node --version
+
+# Devnet wallet + config
+solana config set --url https://api.devnet.solana.com
+[ -f ~/.config/solana/id.json ] || solana-keygen new --no-bip39-passphrase --silent -o ~/.config/solana/id.json
 solana address
