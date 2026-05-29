@@ -5,13 +5,23 @@ echo "==============================================="
 echo "  FLIPSY DEPLOY — devnet"
 echo "==============================================="
 
-# Make sure Solana is on PATH (in case the shell didn't pick it up)
-export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
-export PATH="$HOME/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$HOME/.local/share/solana/install/active_release/bin:$PATH"
+
+# === 0. CHECK / INSTALL ANCHOR ===
+echo ""
+echo "=== 0. Checking Anchor ==="
+if ! command -v anchor &> /dev/null; then
+  echo "Anchor not found — installing via avm (faster, prebuilt) ..."
+  cargo install --git https://github.com/coral-xyz/anchor avm --force
+  avm install 0.30.1
+  avm use 0.30.1
+fi
+echo "Anchor version:"
+anchor --version
 
 # === 1. WALLET ===
 echo ""
-echo "=== 1. Setting up devnet wallet ==="
+echo "=== 1. Checking devnet wallet ==="
 mkdir -p ~/.config/solana
 if [ ! -f ~/.config/solana/id.json ]; then
   solana-keygen new --no-bip39-passphrase --silent --outfile ~/.config/solana/id.json
@@ -20,64 +30,50 @@ solana config set --url devnet
 WALLET=$(solana address)
 echo "Wallet: $WALLET"
 
-# === 2. AIRDROP ===
+# === 2. BALANCE CHECK ===
 echo ""
-echo "=== 2. Requesting devnet SOL airdrop ==="
-solana airdrop 2 || echo "Airdrop failed (rate limit?). Will retry."
-sleep 3
-solana airdrop 2 || true
-sleep 3
+echo "=== 2. Checking SOL balance ==="
 BALANCE=$(solana balance)
 echo "Balance: $BALANCE"
 
-# === 3. CHECK ANCHOR ===
+# === 3. BUILD PROGRAM ===
 echo ""
-echo "=== 3. Checking Anchor ==="
-if ! command -v anchor &> /dev/null; then
-  echo "❌ Anchor not installed yet — it's probably still compiling."
-  echo "   Run this script again in 5 minutes."
-  exit 1
-fi
-anchor --version
-
-# === 4. BUILD PROGRAM ===
-echo ""
-echo "=== 4. Building Solana program (this takes 2-3 min) ==="
+echo "=== 3. Building Solana program (this takes 2-3 min) ==="
 cd flipsy
 anchor build
 
-# === 5. EXTRACT NEW PROGRAM ID ===
+# === 4. EXTRACT NEW PROGRAM ID ===
 echo ""
-echo "=== 5. Reading new program ID ==="
+echo "=== 4. Reading new program ID ==="
 NEW_ID=$(solana address -k target/deploy/flipsy-keypair.json)
 echo "New program ID: $NEW_ID"
 
-# === 6. UPDATE PROGRAM ID IN SOURCE FILES ===
+# === 5. UPDATE PROGRAM ID IN SOURCE FILES ===
 echo ""
-echo "=== 6. Updating program ID in 3 places ==="
+echo "=== 5. Updating program ID in 3 places ==="
 OLD_ID="Fpsy1111111111111111111111111111111111111111"
 sed -i "s|$OLD_ID|$NEW_ID|g" programs/flipsy/src/lib.rs
 sed -i "s|$OLD_ID|$NEW_ID|g" Anchor.toml
 sed -i "s|$OLD_ID|$NEW_ID|g" ../src/hooks/useFlipsy.js
 echo "✓ Updated lib.rs, Anchor.toml, useFlipsy.js"
 
-# === 7. REBUILD WITH NEW ID ===
+# === 6. REBUILD WITH NEW ID ===
 echo ""
-echo "=== 7. Rebuilding program with correct ID ==="
+echo "=== 6. Rebuilding with correct ID ==="
 anchor build
 
-# === 8. DEPLOY ===
+# === 7. DEPLOY ===
 echo ""
-echo "=== 8. Deploying to devnet ==="
+echo "=== 7. Deploying to devnet ==="
 anchor deploy --provider.cluster devnet
 
-# === 9. COPY IDL TO FRONTEND ===
+# === 8. COPY IDL TO FRONTEND ===
 echo ""
-echo "=== 9. Copying IDL to frontend ==="
+echo "=== 8. Copying IDL to frontend ==="
 cp target/idl/flipsy.json ../src/idl/flipsy.json
 echo "✓ IDL copied"
 
-# === 10. SHOW SUMMARY ===
+# === 9. SUMMARY ===
 echo ""
 echo "==============================================="
 echo "  ✅ DEPLOY COMPLETE"
@@ -87,7 +83,10 @@ echo "Program ID:  $NEW_ID"
 echo "Wallet:      $WALLET"
 echo ""
 echo "NEXT STEPS:"
-echo "  1. Commit these changes to GitHub (lib.rs, Anchor.toml, useFlipsy.js, flipsy.json)"
-echo "  2. Initialize the config: cd flipsy && npx ts-node scripts/initialize.ts"
-echo "  3. Start first round:     npx ts-node scripts/crank-once.ts"
-echo ""
+echo "  1. Commit and push these changes from GitHub:"
+echo "     - flipsy/programs/flipsy/src/lib.rs"
+echo "     - flipsy/Anchor.toml"
+echo "     - src/hooks/useFlipsy.js"
+echo "     - src/idl/flipsy.json"
+echo "  2. Initialize config: cd flipsy && npx ts-node scripts/initialize.ts"
+echo "  3. Start first round: npx ts-node scripts/crank-once.ts"
