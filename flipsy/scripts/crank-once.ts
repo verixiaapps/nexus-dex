@@ -4,7 +4,7 @@ import { Connection, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from "@solan
 import { TOKEN_PROGRAM_ID } from "@solana/spl-token";
 import { RPC_URL, PROGRAM_ID, USDC_MINT, PYTH_SOL_USD } from "./config";
 import { loadKeypair, loadIdl } from "./utils";
- 
+  
 async function main() {
   const connection = new Connection(RPC_URL, "confirmed");
   const cranker = loadKeypair();
