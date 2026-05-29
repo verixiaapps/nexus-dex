@@ -148,8 +148,8 @@ function TermsGate({ onAccept }) {
       <div style={{
         position: 'fixed', inset: 0, zIndex: 999,
         background: 'rgba(3,6,15,.50)',
-        backdropFilter: 'blur(4px)',
-        WebkitBackdropFilter: 'blur(4px)',
+        backdropFilter: "none",
+        WebkitBackdropFilter: "none",
       }}/>
 
       {/* Compact bottom sheet */}
