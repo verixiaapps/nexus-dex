@@ -3,7 +3,7 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useFlipsy } from '../hooks/useFlipsy';
 import './Flipsy.css';
-
+ 
 // === Solana brand mark ===
 function SolMark({ size = 32 }) {
   return (
