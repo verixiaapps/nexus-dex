@@ -1,1 +1,11 @@
- 
+{
+  "version": "0.1.0",
+  "name": "flipsy",
+  "instructions": [],
+  "accounts": [],
+  "events": [],
+  "errors": [],
+  "metadata": {
+    "address": "Fpsy1111111111111111111111111111111111111111"
+  }
+}
