@@ -3,7 +3,7 @@ import { Program } from "@coral-xyz/anchor";
 import { PublicKey, SystemProgram } from "@solana/web3.js";
 import { getOrCreateAssociatedTokenAccount, createMint } from "@solana/spl-token";
 import { assert } from "chai";
-
+ 
 describe("flipsy", () => {
   const provider = anchor.AnchorProvider.env();
   anchor.setProvider(provider);
