@@ -1,21 +1,117 @@
-[toolchain]
+#!/bin/bash
+# FLIPSY full deploy — handles everything, bypasses toolchain manager
 
-[features]
-resolution = true
-skip-lint = false 
+echo "==============================================="
+echo "  FLIPSY DEPLOY — devnet"
+echo "==============================================="
 
-[programs.devnet]
-flipsy = "Fpsy1111111111111111111111111111111111111111"
+export PATH="$HOME/.cargo/bin:/usr/local/cargo/bin:$HOME/.local/share/solana/install/active_release/bin:$PATH"
 
-[programs.localnet]
-flipsy = "Fpsy1111111111111111111111111111111111111111"
+# === 1. WALLET ===
+echo ""; echo "=== 1. Wallet ==="
+mkdir -p ~/.config/solana
+[ -f ~/.config/solana/id.json ] || solana-keygen new --no-bip39-passphrase --silent --outfile ~/.config/solana/id.json
+solana config set --url devnet > /dev/null
+WALLET=$(solana address)
+echo "Wallet: $WALLET"
 
-[registry]
-url = "https://api.apr.dev"
+# === 2. BALANCE ===
+echo ""; echo "=== 2. Balance ==="
+BALANCE=$(solana balance)
+echo "Balance: $BALANCE"
+if [[ "$BALANCE" == "0 SOL" ]]; then
+  echo "⚠️  Fund this wallet on DEVNET: $WALLET"
+  echo "   https://faucet.solana.com  (request 2-5 SOL)"
+  read -p "Press ENTER when funded (or CTRL+C to stop)..."
+  echo "Balance now: $(solana balance)"
+fi
 
-[provider]
-cluster = "devnet"
-wallet = "~/.config/solana/id.json"
+# === 3. INSTALL SOLANA PLATFORM TOOLS IF NEEDED ===
+echo ""; echo "=== 3. Checking build tool ==="
+if ! cargo build-sbf --help &> /dev/null; then
+  echo "Installing Solana platform tools..."
+  solana-install init 2>/dev/null || true
+fi
 
-[scripts]
-test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.test.ts"
+# === 4. BUILD ===
+echo ""; echo "=== 4. Building program (5-8 min, be patient) ==="
+cd flipsy
+cargo build-sbf --manifest-path programs/flipsy/Cargo.toml
+if [ $? -ne 0 ]; then
+  echo "❌ Build failed. Screenshot the error above."
+  exit 1
+fi
+
+# === 5. ARTIFACTS ===
+echo ""; echo "=== 5. Build artifacts ==="
+SO_PATH=$(find . -name "flipsy.so" -path "*deploy*" 2>/dev/null | head -1)
+KEYPAIR=$(find . -name "flipsy-keypair.json" -path "*deploy*" 2>/dev/null | head -1)
+if [ -z "$KEYPAIR" ]; then
+  mkdir -p target/deploy
+  solana-keygen new --no-bip39-passphrase --silent --outfile target/deploy/flipsy-keypair.json
+  KEYPAIR="target/deploy/flipsy-keypair.json"
+fi
+NEW_ID=$(solana address -k "$KEYPAIR")
+echo "Program .so: $SO_PATH"
+echo "Program ID:  $NEW_ID"
+
+# === 6. UPDATE PROGRAM ID ===
+echo ""; echo "=== 6. Updating program ID in source ==="
+OLD_ID="Fpsy1111111111111111111111111111111111111111"
+sed -i "s|$OLD_ID|$NEW_ID|g" programs/flipsy/src/lib.rs
+sed -i "s|$OLD_ID|$NEW_ID|g" Anchor.toml
+sed -i "s|$OLD_ID|$NEW_ID|g" ../src/hooks/useFlipsy.js
+echo "✓ Updated 3 files"
+
+# === 7. REBUILD WITH CORRECT ID ===
+echo ""; echo "=== 7. Rebuild with correct ID ==="
+cargo build-sbf --manifest-path programs/flipsy/Cargo.toml
+SO_PATH=$(find . -name "flipsy.so" -path "*deploy*" 2>/dev/null | head -1)
+
+# === 8. DEPLOY ===
+echo ""; echo "=== 8. Deploying to devnet ==="
+solana program deploy "$SO_PATH" --program-id "$KEYPAIR" --url devnet
+if [ $? -ne 0 ]; then
+  echo "❌ Deploy failed (maybe low SOL?). Screenshot above."
+  exit 1
+fi
+
+# === 9. IDL ===
+echo ""; echo "=== 9. IDL ==="
+anchor idl build -o target/idl/flipsy.json 2>/dev/null || true
+if [ -f target/idl/flipsy.json ]; then
+  mkdir -p ../src/idl
+  cp target/idl/flipsy.json ../src/idl/flipsy.json
+  echo "✓ IDL copied"
+else
+  echo "⚠️  IDL not generated — keeping placeholder (frontend still builds)"
+fi
+
+# === 10. INSTALL SCRIPT DEPS ===
+echo ""; echo "=== 10. Installing script deps ==="
+npm install --silent 2>/dev/null || echo "(npm install had warnings, continuing)"
+
+# === 11. INITIALIZE CONFIG ON-CHAIN ===
+echo ""; echo "=== 11. Initializing config ==="
+npx ts-node scripts/initialize.ts || echo "⚠️  Initialize failed — run manually later"
+
+# === 12. START FIRST ROUND ===
+echo ""; echo "=== 12. Starting first round ==="
+npx ts-node scripts/crank-once.ts || echo "⚠️  Crank failed — run manually later"
+
+# === 13. COMMIT + PUSH ===
+echo ""; echo "=== 13. Committing ==="
+cd ..
+git config --global user.email "deploy@flipsy.local" 2>/dev/null || true
+git config --global user.name "Flipsy Deploy" 2>/dev/null || true
+git add flipsy/programs/flipsy/src/lib.rs flipsy/Anchor.toml src/hooks/useFlipsy.js src/idl/flipsy.json 2>/dev/null || true
+git commit -m "Deploy Flipsy $NEW_ID" 2>/dev/null || echo "Nothing to commit"
+git push origin main 2>/dev/null || echo "⚠️  Push failed — commit from GitHub mobile"
+
+echo ""
+echo "==============================================="
+echo "  ✅ ALL DONE"
+echo "==============================================="
+echo "Program ID: $NEW_ID"
+echo "Wallet:     $WALLET"
+echo "Site will redeploy on Railway. Check /flipsy"
