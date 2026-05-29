@@ -3,7 +3,7 @@ use anchor_spl::token::{self, Token, TokenAccount, Mint, Transfer};
 use pyth_sdk_solana::state::SolanaPriceAccount;
 
 declare_id!("Fpsy1111111111111111111111111111111111111111");
-
+ 
 // ============ CONSTANTS ============
 const ROUND_DURATION: i64 = 300; // 5 minutes
 const MIN_BET: u64 = 100_000;    // $0.10 USDC (6 decimals)
