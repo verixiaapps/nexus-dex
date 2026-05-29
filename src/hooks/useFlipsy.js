@@ -3,7 +3,7 @@ import { Connection, PublicKey, SystemProgram, SYSVAR_RENT_PUBKEY } from '@solan
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, getAccount } from '@solana/spl-token';
 import { AnchorProvider, Program, BN } from '@coral-xyz/anchor';
 import flipsyIdl from '../idl/flipsy.json';
-
+ 
 // Env config — override via REACT_APP_* env vars
 const NETWORK = process.env.REACT_APP_FLIPSY_NETWORK || 'devnet';
 const RPC_URL = process.env.REACT_APP_FLIPSY_RPC ||
