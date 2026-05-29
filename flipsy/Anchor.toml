@@ -57,7 +57,7 @@ echo "Program ID:  $NEW_ID"
 
 # === 6. UPDATE PROGRAM ID ===
 echo ""; echo "=== 6. Updating program ID in source ==="
-OLD_ID="Fpsy1111111111111111111111111111111111111111"
+OLD_ID=""
 sed -i "s|$OLD_ID|$NEW_ID|g" programs/flipsy/src/lib.rs
 sed -i "s|$OLD_ID|$NEW_ID|g" Anchor.toml
 sed -i "s|$OLD_ID|$NEW_ID|g" ../src/hooks/useFlipsy.js

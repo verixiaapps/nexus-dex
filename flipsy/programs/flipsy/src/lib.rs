@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Mint, Transfer};
 use pyth_sdk_solana::state::SolanaPriceAccount;
 
-declare_id!("Fpsy1111111111111111111111111111111111111111");
+declare_id!("");
  
 // ============ CONSTANTS ============
 const ROUND_DURATION: i64 = 300; // 5 minutes
