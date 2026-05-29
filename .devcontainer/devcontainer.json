@@ -7,5 +7,8 @@
     }
   },
   "postCreateCommand": "bash .devcontainer/setup.sh",
-  "remoteUser": "vscode"
+  "remoteUser": "vscode",
+  "hostRequirements": {
+    "memory": "8gb"
+  }
 }
