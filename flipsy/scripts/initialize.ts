@@ -4,7 +4,7 @@ import { Connection, PublicKey, SystemProgram } from "@solana/web3.js";
 import { TOKEN_PROGRAM_ID, getOrCreateAssociatedTokenAccount } from "@solana/spl-token";
 import { RPC_URL, PROGRAM_ID, USDC_MINT, PYTH_SOL_USD, TREASURY_OWNER } from "./config";
 import { loadKeypair, loadIdl } from "./utils";
-
+ 
 async function main() {
   const connection = new Connection(RPC_URL, "confirmed");
   const admin = loadKeypair();
