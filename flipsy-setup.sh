@@ -34,3 +34,4 @@ which anchor
 anchor --version
 echo
 echo ">>> If a version printed cleanly, you are DONE. Then run: source ~/.bashrc"
+ 
