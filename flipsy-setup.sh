@@ -1,74 +1,36 @@
 #!/usr/bin/env bash
-# All-in-one Solana + Anchor setup for GitHub Codespaces.
-# Safe to run more than once. Fixes the `GLIBC_2.39 not found` anchor error
-# by compiling Anchor from source, and stays within low-memory limits so it
-# works even on a small Codespace.
-
+# Forces a real from-source Anchor build and removes the broken prebuilt binary.
 set -uo pipefail
 log(){ printf '\n\033[1;36m==> %s\033[0m\n' "$*"; }
 
-# ---------- 0. Machine check + low-memory protection ----------
-log "Machine check"
-echo "CPU cores: $(nproc)"
-free -h || true
-MEM_GB=$(free -g | awk '/^Mem:/{print $2}')
-echo "Detected ~${MEM_GB} GB RAM"
+source "$HOME/.cargo/env" 2>/dev/null || true
+export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
 
-# Compiling Anchor can run out of memory on small machines and print "Killed".
-# Capping cargo to a single job keeps peak memory low so the build survives.
+ANCHOR_VERSION="0.31.1"
+
+log "Deleting the broken prebuilt Anchor binaries (the ones needing GLIBC 2.39)"
+rm -f "$HOME/.avm/bin/anchor" 2>/dev/null || true
+rm -f "$HOME"/.avm/bin/anchor-* 2>/dev/null || true
+rm -f "$HOME/.cargo/bin/anchor" 2>/dev/null || true
+
+log "Low-memory check"
+MEM_GB=$(free -g | awk '/^Mem:/{print $2}')
+echo "~${MEM_GB} GB RAM"
 if [ "${MEM_GB:-0}" -lt 6 ]; then
-  log "Low RAM detected — compiling single-threaded to avoid out-of-memory"
+  echo "Low RAM -> compiling single-threaded so it won't run out of memory"
   export CARGO_BUILD_JOBS=1
 fi
 
-# ---------- 1. System libraries (missing these = silent failures) ----------
-log "Installing system libraries"
-sudo apt-get update
-sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-  build-essential libssl-dev pkg-config libudev-dev curl ca-certificates git
+log "Compiling anchor-cli v${ANCHOR_VERSION} from source — several minutes, be patient"
+cargo install --git https://github.com/coral-xyz/anchor --tag "v${ANCHOR_VERSION}" anchor-cli --force
 
-# ---------- 2. Rust ----------
-log "Ensuring Rust"
-if ! command -v cargo >/dev/null 2>&1; then
-  curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-fi
-[ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
-rustc --version
+log "Putting the freshly compiled anchor first on PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
+LINE='export PATH="$HOME/.cargo/bin:$PATH"'
+grep -qxF "$LINE" "$HOME/.bashrc" 2>/dev/null || echo "$LINE" >> "$HOME/.bashrc"
 
-# ---------- 3. Solana CLI (Agave) ----------
-log "Ensuring Solana CLI"
-SOL_BIN="$HOME/.local/share/solana/install/active_release/bin"
-if [ ! -x "$SOL_BIN/solana" ]; then
-  sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
-fi
-export PATH="$SOL_BIN:$PATH"
-solana --version
-
-# ---------- 4. avm (Anchor Version Manager) ----------
-log "Ensuring avm"
-if ! command -v avm >/dev/null 2>&1; then
-  cargo install --git https://github.com/coral-xyz/anchor avm --force
-fi
-export PATH="$HOME/.avm/bin:$PATH"
-
-# ---------- 5. Anchor FROM SOURCE (the real GLIBC fix) ----------
-log "Installing Anchor from source — this compiles, give it several minutes"
-avm install latest --from-source
-avm use latest
-
-# ---------- 6. Make PATH permanent across new terminals ----------
-log "Persisting PATH"
-RC="$HOME/.bashrc"
-for LINE in \
-  "export PATH=\"$SOL_BIN:\$PATH\"" \
-  'export PATH="$HOME/.avm/bin:$PATH"'; do
-  grep -qxF "$LINE" "$RC" 2>/dev/null || echo "$LINE" >> "$RC"
-done
-
-# ---------- 7. Verify ----------
-log "RESULT — all three should print a version:"
-rustc  --version
-solana --version
+log "RESULT — this should print a version with NO GLIBC error:"
+which anchor
 anchor --version
 echo
-echo ">>> If 'anchor' printed a version above, it WORKED. Open a new terminal (or run: source ~/.bashrc)."
+echo ">>> If a version printed cleanly, you are DONE. Then run: source ~/.bashrc"
