@@ -11,7 +11,7 @@ const RPC_URL = process.env.REACT_APP_FLIPSY_RPC ||
     ? 'https://api.mainnet-beta.solana.com'
     : 'https://api.devnet.solana.com');
 const PROGRAM_ID = new PublicKey(
-  process.env.REACT_APP_FLIPSY_PROGRAM_ID || ''
+    process.env.REACT_APP_FLIPSY_PROGRAM_ID || '11111111111111111111111111111111'
 );
 const USDC_MINT = new PublicKey( 
   process.env.REACT_APP_FLIPSY_USDC ||
