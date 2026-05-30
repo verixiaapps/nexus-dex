@@ -8,7 +8,7 @@ import Stocks           from './components/Stocks.jsx';
 import CrossChainSwap   from './components/CrossChainSwap.jsx';
 import MemeWonderland   from './components/MemeWonderland.jsx';
 import Flipsy           from './components/Flipsy.jsx';
- 
+
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
