@@ -1,36 +1,27 @@
 #!/bin/bash
 set -e
 
-export PATH="$HOME/.cargo/bin:$PATH"
+echo "=== Installing Rust 1.85 (needed for edition2024) ==="
+rustup install 1.85.0
+rustup default 1.85.0
+rustc --version
+cargo --version
 
-echo "=== Checking for running cargo/anchor processes ==="
-RUNNING=$(ps aux | grep -E "cargo install|avm install" | grep -v grep || true)
-if [ -n "$RUNNING" ]; then
-  echo "⚠️  Install already running:"
-  echo "$RUNNING"
-  echo "Wait for it to finish before running this again."
-  exit 0
-fi
-echo "✓ Nothing running"
-
-echo ""
-echo "=== Checking what's installed ==="
-solana --version || echo "❌ Solana missing"
-which avm && avm --version || echo "❌ AVM missing"
-which anchor && anchor --version || echo "❌ Anchor missing"
-
-echo ""
-echo "=== Installing AVM (3-5 min) ==="
+echo "=== Installing AVM ==="
 cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
 
-echo ""
 echo "=== Installing Anchor 0.30.1 ==="
+export PATH="$HOME/.cargo/bin:$PATH"
 avm install 0.30.1
 avm use 0.30.1
+anchor --version
+
+echo "=== Verifying Solana ==="
+export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+solana --version
+solana config set --url devnet
+solana address
+solana balance
 
 echo ""
-echo "=== Final check ==="
-anchor --version
-solana --version
-echo ""
-echo "✅ Toolchain ready"
+echo "✅ Toolchain ready. Next: bash deploy.sh"
