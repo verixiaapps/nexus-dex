@@ -1,113 +1,106 @@
 #!/bin/bash
-# FLIPSY full deploy — anchor 0.29.0, no toolchain manager
-
-export PATH="$HOME/.cargo/bin:$HOME/.local/share/solana/install/active_release/bin:$PATH"
+# FLIPSY full deploy — fixed version
+set -e
 
 echo "==============================================="
-echo "  FLIPSY DEPLOY — anchor 0.29.0"
+echo "  FLIPSY DEPLOY — devnet"
 echo "==============================================="
 
-# === 1. PATCH Cargo.toml TO ANCHOR 0.29.0 ===
-echo ""; echo "=== 1. Pinning anchor 0.29.0 in Cargo.toml ==="
-sed -i 's/anchor-lang = "[^"]*"/anchor-lang = "0.29.0"/g' flipsy/programs/flipsy/Cargo.toml
-sed -i 's/anchor-spl = "[^"]*"/anchor-spl = "0.29.0"/g' flipsy/programs/flipsy/Cargo.toml
-echo "✓ Cargo.toml updated"
+export PATH="$HOME/.cargo/bin:/usr/local/cargo/bin:$HOME/.local/share/solana/install/active_release/bin:$PATH"
 
-# === 2. CLEAR Anchor.toml TOOLCHAIN SECTION ===
-echo ""; echo "=== 2. Clearing Anchor.toml toolchain pin ==="
-sed -i '/^anchor_version *=/d' flipsy/Anchor.toml
-echo "✓ Done"
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
+cd "$REPO_ROOT/flipsy"
 
-# === 3. INSTALL ANCHOR 0.29.0 (no avm, no toolchain manager) ===
-echo ""; echo "=== 3. Installing anchor 0.29.0 (~5 min, be patient) ==="
-cargo install --git https://github.com/coral-xyz/anchor --tag v0.29.0 anchor-cli --locked --force
-hash -r
-which anchor
-anchor --version
-
-# === 4. WALLET ===
-echo ""; echo "=== 4. Wallet ==="
+# === 1. WALLET ===
+echo ""; echo "=== 1. Wallet ==="
 mkdir -p ~/.config/solana
 [ -f ~/.config/solana/id.json ] || solana-keygen new --no-bip39-passphrase --silent --outfile ~/.config/solana/id.json
 solana config set --url devnet > /dev/null
 WALLET=$(solana address)
 echo "Wallet: $WALLET"
 
-# === 5. BALANCE ===
-echo ""; echo "=== 5. Balance ==="
+# === 2. BALANCE ===
+echo ""; echo "=== 2. Balance ==="
 BALANCE=$(solana balance)
 echo "Balance: $BALANCE"
 if [[ "$BALANCE" == "0 SOL" ]]; then
-  echo "⚠️  Fund DEVNET wallet: $WALLET"
-  echo "   https://faucet.solana.com (request 2-5 SOL)"
-  read -p "Press ENTER when funded..."
-fi
-
-# === 6. BUILD ===
-echo ""; echo "=== 6. anchor build (3-5 min) ==="
-cd flipsy
-anchor build --skip-lint
-if [ $? -ne 0 ]; then
-  echo "❌ Build failed. Screenshot the error."
+  echo "⚠️  Fund this wallet on DEVNET: $WALLET"
+  echo "   https://faucet.solana.com  (request 2-5 SOL)"
   exit 1
 fi
 
-# === 7. PROGRAM ID ===
-echo ""; echo "=== 7. Program ID ==="
+# === 3. PROGRAM KEYPAIR ===
+echo ""; echo "=== 3. Program keypair ==="
+mkdir -p target/deploy
+if [ ! -f target/deploy/flipsy-keypair.json ]; then
+  solana-keygen new --no-bip39-passphrase --silent --outfile target/deploy/flipsy-keypair.json
+  echo "✓ Generated new program keypair"
+else
+  echo "✓ Using existing program keypair"
+fi
 NEW_ID=$(solana address -k target/deploy/flipsy-keypair.json)
 echo "Program ID: $NEW_ID"
 
-# === 8. UPDATE 3 FILES ===
-echo ""; echo "=== 8. Updating program ID in 3 files ==="
-OLD_ID="Fpsy1111111111111111111111111111111111111111"
-sed -i "s|$OLD_ID|$NEW_ID|g" programs/flipsy/src/lib.rs
-sed -i "s|$OLD_ID|$NEW_ID|g" Anchor.toml
-sed -i "s|$OLD_ID|$NEW_ID|g" ../src/hooks/useFlipsy.js
-echo "✓ Updated"
+# === 4. UPDATE PROGRAM ID IN SOURCE ===
+echo ""; echo "=== 4. Updating program ID in source ==="
+# Replace declare_id!("...") with the new ID (handles empty or any value)
+sed -i "s|declare_id!(\"[^\"]*\");|declare_id!(\"$NEW_ID\");|" programs/flipsy/src/lib.rs
+# Replace flipsy = "..." in Anchor.toml
+sed -i "s|^flipsy = \"[^\"]*\"|flipsy = \"$NEW_ID\"|" Anchor.toml
+# Update frontend hook if it exists
+if [ -f ../src/hooks/useFlipsy.js ]; then
+  sed -i "s|Flipsy[0-9]\{40,44\}|$NEW_ID|g" ../src/hooks/useFlipsy.js 2>/dev/null || true
+fi
+echo "✓ Updated lib.rs and Anchor.toml"
 
-# === 9. REBUILD ===
-echo ""; echo "=== 9. Rebuild with correct ID ==="
-anchor build --skip-lint
-
-# === 10. DEPLOY ===
-echo ""; echo "=== 10. Deploying to devnet ==="
-anchor deploy --provider.cluster devnet
+# === 5. BUILD ===
+echo ""; echo "=== 5. Building program (3-8 min) ==="
+anchor build
 if [ $? -ne 0 ]; then
-  echo "❌ Deploy failed. Screenshot the error."
+  echo "❌ Build failed."
   exit 1
 fi
 
-# === 11. IDL ===
-echo ""; echo "=== 11. Copying IDL to frontend ==="
-mkdir -p ../src/idl
-cp target/idl/flipsy.json ../src/idl/flipsy.json
-echo "✓ IDL copied"
+# === 6. ARTIFACTS ===
+echo ""; echo "=== 6. Build artifacts ==="
+SO_PATH=$(find . -name "flipsy.so" -path "*deploy*" 2>/dev/null | head -1)
+echo "Program .so: $SO_PATH"
 
-# === 12. SCRIPT DEPS ===
-echo ""; echo "=== 12. npm install ==="
-npm install --silent 2>/dev/null || true
+# === 7. DEPLOY ===
+echo ""; echo "=== 7. Deploying to devnet ==="
+solana program deploy "$SO_PATH" --program-id target/deploy/flipsy-keypair.json --url devnet
+if [ $? -ne 0 ]; then
+  echo "❌ Deploy failed (maybe low SOL?)."
+  exit 1
+fi
 
-# === 13. INITIALIZE ===
-echo ""; echo "=== 13. Initialize on-chain config ==="
-npx ts-node scripts/initialize.ts || echo "⚠️  Init failed — run manually later"
+# === 8. COPY IDL TO FRONTEND ===
+echo ""; echo "=== 8. IDL ==="
+if [ -f target/idl/flipsy.json ]; then
+  mkdir -p ../src/idl
+  cp target/idl/flipsy.json ../src/idl/flipsy.json
+  echo "✓ IDL copied to frontend"
+else
+  echo "⚠️  IDL not found"
+fi
 
-# === 14. FIRST ROUND ===
-echo ""; echo "=== 14. Start first round ==="
-npx ts-node scripts/crank-once.ts || echo "⚠️  Crank failed — run manually later"
+# === 9. NPM DEPS ===
+echo ""; echo "=== 9. Installing script deps ==="
+npm install --silent 2>/dev/null || echo "(npm install had warnings, continuing)"
 
-# === 15. COMMIT + PUSH ===
-echo ""; echo "=== 15. Commit + push ==="
-cd ..
-git config --global user.email "deploy@flipsy.local" 2>/dev/null || true
-git config --global user.name "Flipsy Deploy" 2>/dev/null || true
-git add flipsy/programs/flipsy/Cargo.toml flipsy/programs/flipsy/src/lib.rs flipsy/Anchor.toml src/hooks/useFlipsy.js src/idl/flipsy.json 2>/dev/null || true
-git commit -m "Deploy Flipsy $NEW_ID with anchor 0.29.0" 2>/dev/null || echo "Nothing to commit"
-git push origin main 2>/dev/null || echo "⚠️  Push failed — commit from GitHub mobile"
+# === 10. INITIALIZE ===
+echo ""; echo "=== 10. Initializing config ==="
+npx ts-node scripts/initialize.ts || echo "⚠️  Initialize failed — check output"
+
+# === 11. START FIRST ROUND ===
+echo ""; echo "=== 11. Starting first round ==="
+npx ts-node scripts/crank-once.ts || echo "⚠️  Crank failed — check output"
 
 echo ""
 echo "==============================================="
-echo "  ✅ DEPLOY COMPLETE"
+echo "  ✅ ALL DONE"
 echo "==============================================="
 echo "Program ID: $NEW_ID"
 echo "Wallet:     $WALLET"
-echo "Site will redeploy on Railway. Visit /flipsy"
+echo ""
+echo "Next: commit lib.rs, Anchor.toml, and src/idl/flipsy.json to GitHub"
