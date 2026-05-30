@@ -1,101 +1,30 @@
 #!/bin/bash
-set -e
-
-echo "==============================================="
-echo "  FLIPSY DEPLOY — devnet"
-echo "==============================================="
+# DIAGNOSTIC — find the edition2024 culprit
 
 export PATH="$HOME/.cargo/bin:/usr/local/cargo/bin:$HOME/.local/share/solana/install/active_release/bin:$PATH"
 
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_ROOT/flipsy"
 
-# === 1. WALLET ===
-echo ""; echo "=== 1. Wallet ==="
-mkdir -p ~/.config/solana
-[ -f ~/.config/solana/id.json ] || solana-keygen new --no-bip39-passphrase --silent --outfile ~/.config/solana/id.json
-solana config set --url devnet > /dev/null
-WALLET=$(solana address)
-echo "Wallet: $WALLET"
+echo "==============================================="
+echo "  DIAGNOSTIC: finding edition2024 culprit"
+echo "==============================================="
 
-# === 2. BALANCE ===
-BALANCE=$(solana balance)
-echo "Balance: $BALANCE"
-if [[ "$BALANCE" == "0 SOL" ]]; then
-  echo "⚠️  Fund this wallet first"
-  exit 1
-fi
-
-# === 3. PROGRAM KEYPAIR ===
-echo ""; echo "=== 3. Program keypair ==="
-mkdir -p target/deploy
-if [ ! -f target/deploy/flipsy-keypair.json ]; then
-  solana-keygen new --no-bip39-passphrase --silent --outfile target/deploy/flipsy-keypair.json
-fi
-NEW_ID=$(solana address -k target/deploy/flipsy-keypair.json)
-echo "Program ID: $NEW_ID"
-
-# === 4. UPDATE PROGRAM ID ===
-echo ""; echo "=== 4. Updating program ID ==="
-sed -i "s|declare_id!(\"[^\"]*\");|declare_id!(\"$NEW_ID\");|" programs/flipsy/src/lib.rs
-sed -i "s|^flipsy = \"[^\"]*\"|flipsy = \"$NEW_ID\"|" Anchor.toml
-
-# === 5. GENERATE LOCKFILE ===
-echo ""; echo "=== 5. Preparing Cargo.lock ==="
 rm -f Cargo.lock
-cargo generate-lockfile 2>/dev/null || true
 
-# === 6. PIN PROBLEMATIC DEPS ===
-echo ""; echo "=== 6. Pinning deps for Rust 1.75 compat ==="
-cargo update -p blake3 --precise 1.5.5 2>/dev/null || echo "blake3 pin skipped"
-cargo update -p solana-program --precise 1.18.26 2>/dev/null || true
-cargo update -p bytemuck_derive --precise 1.7.1 2>/dev/null || true
-cargo update -p bytemuck --precise 1.16.3 2>/dev/null || true
-cargo update -p toml_edit --precise 0.21.1 2>/dev/null || true
-cargo update -p toml_datetime --precise 0.6.5 2>/dev/null || true
-cargo update -p winnow --precise 0.5.40 2>/dev/null || true
-cargo update -p proc-macro2 --precise 1.0.86 2>/dev/null || true
+echo ""
+echo "=== Running cargo generate-lockfile ==="
+cargo generate-lockfile 2>&1 | tee /tmp/cargo-diag.log
 
-# Downgrade lockfile to v3
-if [ -f Cargo.lock ]; then
-  sed -i 's/^version = 4$/version = 3/' Cargo.lock
-  echo "✓ Cargo.lock pinned to v3"
-fi
+echo ""
+echo "=== Culprit (look for manifest path) ==="
+grep -B 1 -A 3 "edition2024\|failed to parse manifest" /tmp/cargo-diag.log || echo "No matches"
 
-# === 7. BUILD ===
-echo ""; echo "=== 7. Building program (3-8 min) ==="
-anchor build
-
-# === 8. ARTIFACTS ===
-SO_PATH=$(find . -name "flipsy.so" -path "*deploy*" 2>/dev/null | head -1)
-echo "Program .so: $SO_PATH"
-
-# === 9. DEPLOY ===
-echo ""; echo "=== 9. Deploying to devnet ==="
-solana program deploy "$SO_PATH" --program-id target/deploy/flipsy-keypair.json --url devnet
-
-# === 10. IDL ===
-if [ -f target/idl/flipsy.json ]; then
-  mkdir -p ../src/idl
-  cp target/idl/flipsy.json ../src/idl/flipsy.json
-  echo "✓ IDL copied"
-fi
-
-# === 11. NPM DEPS ===
-echo ""; echo "=== 11. Installing script deps ==="
-npm install --silent 2>/dev/null || true
-
-# === 12. INITIALIZE ===
-echo ""; echo "=== 12. Initializing config ==="
-npx ts-node scripts/initialize.ts || echo "⚠️  Initialize failed"
-
-# === 13. START FIRST ROUND ===
-echo ""; echo "=== 13. Starting first round ==="
-npx ts-node scripts/crank-once.ts || echo "⚠️  Crank failed"
+echo ""
+echo "=== Last 20 lines of output ==="
+tail -20 /tmp/cargo-diag.log
 
 echo ""
 echo "==============================================="
-echo "  ✅ ALL DONE"
+echo "  COPY THE ABOVE AND PASTE TO CLAUDE"
 echo "==============================================="
-echo "Program ID: $NEW_ID"
-echo "Wallet:     $WALLET"
