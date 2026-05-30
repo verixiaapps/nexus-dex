@@ -1,5 +1,5 @@
 #!/bin/bash
-# FLIPSY full deploy — fixed version
+# FLIPSY full deploy — devnet
 set -e
 
 echo "==============================================="
@@ -43,39 +43,33 @@ echo "Program ID: $NEW_ID"
 
 # === 4. UPDATE PROGRAM ID IN SOURCE ===
 echo ""; echo "=== 4. Updating program ID in source ==="
-# Replace declare_id!("...") with the new ID (handles empty or any value)
 sed -i "s|declare_id!(\"[^\"]*\");|declare_id!(\"$NEW_ID\");|" programs/flipsy/src/lib.rs
-# Replace flipsy = "..." in Anchor.toml
 sed -i "s|^flipsy = \"[^\"]*\"|flipsy = \"$NEW_ID\"|" Anchor.toml
-# Update frontend hook if it exists
 if [ -f ../src/hooks/useFlipsy.js ]; then
-  sed -i "s|Flipsy[0-9]\{40,44\}|$NEW_ID|g" ../src/hooks/useFlipsy.js 2>/dev/null || true
+  sed -i "s|Flipsy[0-9A-Za-z]\{38,44\}|$NEW_ID|g" ../src/hooks/useFlipsy.js 2>/dev/null || true
 fi
 echo "✓ Updated lib.rs and Anchor.toml"
 
-# === 5. BUILD ===
-echo ""; echo "=== 5. Building program (3-8 min) ==="
-anchor build
-if [ $? -ne 0 ]; then
-  echo "❌ Build failed."
-  exit 1
-fi
+# === 5. CLEAN OLD LOCKFILE (incompatible with BPF cargo) ===
+echo ""; echo "=== 5. Cleaning incompatible Cargo.lock ==="
+rm -f Cargo.lock
+echo "✓ Cleaned"
 
-# === 6. ARTIFACTS ===
-echo ""; echo "=== 6. Build artifacts ==="
+# === 6. BUILD ===
+echo ""; echo "=== 6. Building program (3-8 min) ==="
+anchor build
+
+# === 7. ARTIFACTS ===
+echo ""; echo "=== 7. Build artifacts ==="
 SO_PATH=$(find . -name "flipsy.so" -path "*deploy*" 2>/dev/null | head -1)
 echo "Program .so: $SO_PATH"
 
-# === 7. DEPLOY ===
-echo ""; echo "=== 7. Deploying to devnet ==="
+# === 8. DEPLOY ===
+echo ""; echo "=== 8. Deploying to devnet ==="
 solana program deploy "$SO_PATH" --program-id target/deploy/flipsy-keypair.json --url devnet
-if [ $? -ne 0 ]; then
-  echo "❌ Deploy failed (maybe low SOL?)."
-  exit 1
-fi
 
-# === 8. COPY IDL TO FRONTEND ===
-echo ""; echo "=== 8. IDL ==="
+# === 9. COPY IDL ===
+echo ""; echo "=== 9. IDL ==="
 if [ -f target/idl/flipsy.json ]; then
   mkdir -p ../src/idl
   cp target/idl/flipsy.json ../src/idl/flipsy.json
@@ -84,17 +78,17 @@ else
   echo "⚠️  IDL not found"
 fi
 
-# === 9. NPM DEPS ===
-echo ""; echo "=== 9. Installing script deps ==="
+# === 10. NPM DEPS ===
+echo ""; echo "=== 10. Installing script deps ==="
 npm install --silent 2>/dev/null || echo "(npm install had warnings, continuing)"
 
-# === 10. INITIALIZE ===
-echo ""; echo "=== 10. Initializing config ==="
-npx ts-node scripts/initialize.ts || echo "⚠️  Initialize failed — check output"
+# === 11. INITIALIZE ===
+echo ""; echo "=== 11. Initializing config ==="
+npx ts-node scripts/initialize.ts || echo "⚠️  Initialize failed — check output above"
 
-# === 11. START FIRST ROUND ===
-echo ""; echo "=== 11. Starting first round ==="
-npx ts-node scripts/crank-once.ts || echo "⚠️  Crank failed — check output"
+# === 12. START FIRST ROUND ===
+echo ""; echo "=== 12. Starting first round ==="
+npx ts-node scripts/crank-once.ts || echo "⚠️  Crank failed — check output above"
 
 echo ""
 echo "==============================================="
@@ -103,4 +97,4 @@ echo "==============================================="
 echo "Program ID: $NEW_ID"
 echo "Wallet:     $WALLET"
 echo ""
-echo "Next: commit lib.rs, Anchor.toml, and src/idl/flipsy.json to GitHub"
+echo "Next: commit lib.rs, Anchor.toml, src/idl/flipsy.json to GitHub"
