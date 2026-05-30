@@ -1,10 +1,11 @@
 {
-  "name": "Flipsy Solana",
-  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
-  "features": {
-    "ghcr.io/devcontainers/features/rust:1": { "version": "1.79" },
-    "ghcr.io/devcontainers/features/node:1": { "version": "20" }
+  "name": "Solana + Anchor",
+  "build": { "dockerfile": "Dockerfile" },
+  "remoteUser": "vscode",
+  "customizations": {
+    "vscode": {
+      "extensions": ["rust-lang.rust-analyzer", "serayuzgur.crates"]
+    }
   },
-  "postCreateCommand": "bash .devcontainer/setup.sh",
-  "hostRequirements": { "cpus": 4, "memory": "8gb" }
+  "postCreateCommand": "solana --version && anchor --version"
 }
