@@ -1,7 +1,8 @@
 {
   "name": "Flipsy Solana",
-  "image": "mcr.microsoft.com/devcontainers/rust:1-bookworm",
+  "image": "mcr.microsoft.com/devcontainers/base:ubuntu-24.04",
   "features": {
+    "ghcr.io/devcontainers/features/rust:1": { "version": "1.79" },
     "ghcr.io/devcontainers/features/node:1": { "version": "20" }
   },
   "postCreateCommand": "bash .devcontainer/setup.sh",
