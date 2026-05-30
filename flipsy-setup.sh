@@ -25,7 +25,6 @@ BALANCE=$(solana balance)
 echo "Balance: $BALANCE"
 if [[ "$BALANCE" == "0 SOL" ]]; then
   echo "⚠️  Fund this wallet on DEVNET: $WALLET"
-  echo "   https://faucet.solana.com  (request 2-5 SOL)"
   exit 1
 fi
 
@@ -34,9 +33,6 @@ echo ""; echo "=== 3. Program keypair ==="
 mkdir -p target/deploy
 if [ ! -f target/deploy/flipsy-keypair.json ]; then
   solana-keygen new --no-bip39-passphrase --silent --outfile target/deploy/flipsy-keypair.json
-  echo "✓ Generated new program keypair"
-else
-  echo "✓ Using existing program keypair"
 fi
 NEW_ID=$(solana address -k target/deploy/flipsy-keypair.json)
 echo "Program ID: $NEW_ID"
@@ -45,15 +41,16 @@ echo "Program ID: $NEW_ID"
 echo ""; echo "=== 4. Updating program ID in source ==="
 sed -i "s|declare_id!(\"[^\"]*\");|declare_id!(\"$NEW_ID\");|" programs/flipsy/src/lib.rs
 sed -i "s|^flipsy = \"[^\"]*\"|flipsy = \"$NEW_ID\"|" Anchor.toml
-if [ -f ../src/hooks/useFlipsy.js ]; then
-  sed -i "s|Flipsy[0-9A-Za-z]\{38,44\}|$NEW_ID|g" ../src/hooks/useFlipsy.js 2>/dev/null || true
-fi
-echo "✓ Updated lib.rs and Anchor.toml"
+echo "✓ Updated"
 
-# === 5. CLEAN OLD LOCKFILE (incompatible with BPF cargo) ===
-echo ""; echo "=== 5. Cleaning incompatible Cargo.lock ==="
+# === 5. GENERATE LOCKFILE AND DOWNGRADE TO V3 ===
+echo ""; echo "=== 5. Preparing Cargo.lock (force v3 for BPF compat) ==="
 rm -f Cargo.lock
-echo "✓ Cleaned"
+cargo generate-lockfile 2>/dev/null || true
+if [ -f Cargo.lock ]; then
+  sed -i 's/^version = 4$/version = 3/' Cargo.lock
+  echo "✓ Cargo.lock pinned to v3"
+fi
 
 # === 6. BUILD ===
 echo ""; echo "=== 6. Building program (3-8 min) ==="
@@ -73,22 +70,20 @@ echo ""; echo "=== 9. IDL ==="
 if [ -f target/idl/flipsy.json ]; then
   mkdir -p ../src/idl
   cp target/idl/flipsy.json ../src/idl/flipsy.json
-  echo "✓ IDL copied to frontend"
-else
-  echo "⚠️  IDL not found"
+  echo "✓ IDL copied"
 fi
 
 # === 10. NPM DEPS ===
 echo ""; echo "=== 10. Installing script deps ==="
-npm install --silent 2>/dev/null || echo "(npm install had warnings, continuing)"
+npm install --silent 2>/dev/null || true
 
 # === 11. INITIALIZE ===
 echo ""; echo "=== 11. Initializing config ==="
-npx ts-node scripts/initialize.ts || echo "⚠️  Initialize failed — check output above"
+npx ts-node scripts/initialize.ts || echo "⚠️  Initialize failed"
 
 # === 12. START FIRST ROUND ===
 echo ""; echo "=== 12. Starting first round ==="
-npx ts-node scripts/crank-once.ts || echo "⚠️  Crank failed — check output above"
+npx ts-node scripts/crank-once.ts || echo "⚠️  Crank failed"
 
 echo ""
 echo "==============================================="
@@ -96,5 +91,3 @@ echo "  ✅ ALL DONE"
 echo "==============================================="
 echo "Program ID: $NEW_ID"
 echo "Wallet:     $WALLET"
-echo ""
-echo "Next: commit lib.rs, Anchor.toml, src/idl/flipsy.json to GitHub"
