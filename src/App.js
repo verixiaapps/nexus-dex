@@ -8,7 +8,7 @@ import Stocks           from './components/Stocks.jsx';
 import CrossChainSwap   from './components/CrossChainSwap.jsx';
 import MemeWonderland   from './components/MemeWonderland.jsx';
 import Flipsy           from './components/Flipsy.jsx';
- 
+
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
@@ -126,7 +126,7 @@ function walletModalReducer(state, action) {
 }
 
 // =====================================================================
-// TermsGate — compact bottom sheet, site visible behind
+// TermsGate — small floating window, site fully visible behind
 // =====================================================================
 function TermsGate({ onAccept }) {
   const scrollRef = useRef(null);
@@ -146,121 +146,103 @@ function TermsGate({ onAccept }) {
   };
 
   return (
-    <>
-      {/* Lighter overlay so the site is visible behind */}
-      <div style={{
-        position: 'fixed', inset: 0, zIndex: 999,
-        background: 'rgba(3,6,15,.50)',
-        backdropFilter: "none",
-        WebkitBackdropFilter: "none",
-      }}/>
-
-      {/* Compact bottom sheet */}
-      <div style={{
-        position: 'fixed', bottom: 0, left: '50%',
-        transform: 'translateX(-50%)',
-        width: '100%', maxWidth: 480,
-        maxHeight: '50dvh',
-        zIndex: 1000, display: 'flex', flexDirection: 'column',
-        overflow: 'hidden',
-        background: '#080d1a',
-        border: '1px solid rgba(0,229,255,.22)',
-        borderTop: '1px solid rgba(0,229,255,.30)',
-        borderRadius: '16px 16px 0 0',
-        boxShadow: '0 -10px 40px rgba(0,0,0,.8), 0 0 20px rgba(0,229,255,.08)',
-        fontFamily: 'Syne, sans-serif',
-      }}>
-        {/* Drag handle */}
-        <div style={{ flexShrink: 0, paddingTop: 10, display: 'flex', justifyContent: 'center' }}>
-          <div style={{ width: 36, height: 3, borderRadius: 2, background: 'rgba(255,255,255,.15)' }} />
-        </div>
-
-        {/* Compact header */}
-        <div style={{ flexShrink: 0, padding: '8px 18px 6px', display: 'flex', alignItems: 'center', gap: 10 }}>
-          <div style={{
-            display: 'inline-flex', alignItems: 'center', gap: 5,
-            padding: '2px 8px', borderRadius: 999,
-            background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.22)',
-          }}>
-            <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#00e5ff' }}/>
-            <span style={{ color: '#00e5ff', fontSize: 9, fontWeight: 700, letterSpacing: '.10em' }}>TERMS OF USE</span>
-          </div>
-          <div style={{ flex: 1 }} />
-          <div style={{ fontSize: 11, color: '#586994' }}>Non-custodial · You assume all risk</div>
-        </div>
-
-        {/* Scrollable terms — compact */}
-        <div
-          ref={scrollRef}
-          onScroll={handleScroll}
-          className="scroll-contain"
-          style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '4px 18px 10px' }}
-        >
-          <div style={{ fontSize: 11, color: '#cdd6f4', lineHeight: 1.55 }}>
-            By clicking <strong style={{ color: '#fff' }}>"Accept &amp; Continue"</strong> you agree that:<br/><br/>
-
-            • Nexus DEX is a non-custodial interface by Verixia Apps. We do not custody funds, control wallets, execute trades, or provide financial, investment, legal, or tax advice.<br/><br/>
-
-            • <strong style={{ color: '#fff' }}>Compliance &amp; wallet screening.</strong> All wallet addresses are screened against U.S. OFAC, U.N., E.U., and U.K. sanctions lists via Chainalysis. Flagged wallets are denied access.<br/><br/>
-
-            • <strong style={{ color: '#fff' }}>Restricted jurisdictions.</strong> You are not located in, a resident of, or citizen of: Iran, North Korea, Cuba, Syria, Crimea, Donetsk, Luhansk, Sevastopol, or any other jurisdiction subject to comprehensive U.S., U.N., E.U., or U.K. sanctions.<br/><br/>
-
-            • <strong style={{ color: '#fff' }}>You are 18 or older</strong> and have full legal capacity to enter this agreement.<br/><br/>
-
-            • All swaps, routing, liquidity, and blockchain interactions are handled by third-party protocols. All transactions are signed directly by you through your own wallet.<br/><br/>
-
-            • DeFi and smart contracts carry substantial risk including total loss of funds. <strong style={{ color: '#fff' }}>You assume all risk.</strong><br/><br/>
-
-            • <strong style={{ color: '#fff' }}>No reimbursement.</strong> Verixia Apps will not refund or compensate any loss, regardless of cause.<br/><br/>
-
-            • <strong style={{ color: '#fff' }}>AS-IS / AS-AVAILABLE.</strong> No warranties of any kind.<br/><br/>
-
-            • <strong style={{ color: '#fff' }}>No liability.</strong> Verixia Apps is not liable for any damages arising from your use of Nexus DEX.<br/><br/>
-
-            • <strong style={{ color: '#fff' }}>No class actions.</strong> You waive any right to class action or jury trial against Verixia Apps.<br/><br/>
-
-            • <strong style={{ color: '#fff' }}>Binding arbitration.</strong> Disputes resolved through individual arbitration only.<br/><br/>
-
-            If you do not agree, discontinue use immediately.
-          </div>
-        </div>
-
-        {/* Footer */}
+    <div style={{
+      position: 'fixed',
+      bottom: 'max(16px, env(safe-area-inset-bottom))',
+      left: '50%',
+      transform: 'translateX(-50%)',
+      width: 'calc(100% - 24px)', maxWidth: 420,
+      maxHeight: '60dvh',
+      zIndex: 1000, display: 'flex', flexDirection: 'column',
+      overflow: 'hidden',
+      background: '#080d1a',
+      border: '1px solid rgba(0,229,255,.30)',
+      borderRadius: 16,
+      boxShadow: '0 20px 60px rgba(0,0,0,.7), 0 0 24px rgba(0,229,255,.10)',
+      fontFamily: 'Syne, sans-serif',
+    }}>
+      <div style={{ flexShrink: 0, padding: '12px 18px 6px', display: 'flex', alignItems: 'center', gap: 10 }}>
         <div style={{
-          flexShrink: 0, padding: '8px 18px 14px',
-          borderTop: '1px solid rgba(255,255,255,.04)',
-          background: '#080d1a',
+          display: 'inline-flex', alignItems: 'center', gap: 5,
+          padding: '2px 8px', borderRadius: 999,
+          background: 'rgba(0,229,255,.08)', border: '1px solid rgba(0,229,255,.22)',
         }}>
-          {!canAccept && (
-            <div style={{
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              gap: 5, fontSize: 10, color: '#586994', marginBottom: 8,
-              fontWeight: 600, letterSpacing: '.04em',
-            }}>
-              <span>↓</span> Scroll to continue
-            </div>
-          )}
-          <button
-            onClick={canAccept ? onAccept : undefined}
-            disabled={!canAccept}
-            style={{
-              width: '100%', padding: 12, borderRadius: 10, border: 'none',
-              background: canAccept ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'rgba(255,255,255,.05)',
-              color: canAccept ? '#03060f' : '#586994',
-              fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 14,
-              cursor: canAccept ? 'pointer' : 'not-allowed',
-              boxShadow: canAccept ? '0 6px 20px rgba(0,229,255,.25)' : 'none',
-              transition: 'all .2s',
-            }}
-          >
-            Accept &amp; Continue
-          </button>
-          <div style={{ fontSize: 9, color: '#586994', textAlign: 'center', marginTop: 8, fontWeight: 600, letterSpacing: '.06em' }}>
-            NON-CUSTODIAL · NO ACCOUNT · YOUR KEYS
-          </div>
+          <span style={{ width: 5, height: 5, borderRadius: '50%', background: '#00e5ff' }}/>
+          <span style={{ color: '#00e5ff', fontSize: 9, fontWeight: 700, letterSpacing: '.10em' }}>TERMS OF USE</span>
+        </div>
+        <div style={{ flex: 1 }} />
+        <div style={{ fontSize: 11, color: '#586994' }}>Non-custodial · You assume all risk</div>
+      </div>
+
+      <div
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="scroll-contain"
+        style={{ flex: 1, overflowY: 'auto', minHeight: 0, padding: '4px 18px 10px' }}
+      >
+        <div style={{ fontSize: 11, color: '#cdd6f4', lineHeight: 1.55 }}>
+          By clicking <strong style={{ color: '#fff' }}>"Accept &amp; Continue"</strong> you agree that:<br/><br/>
+
+          • Nexus DEX is a non-custodial interface by Verixia Apps. We do not custody funds, control wallets, execute trades, or provide financial, investment, legal, or tax advice.<br/><br/>
+
+          • <strong style={{ color: '#fff' }}>Compliance &amp; wallet screening.</strong> All wallet addresses are screened against U.S. OFAC, U.N., E.U., and U.K. sanctions lists via Chainalysis. Flagged wallets are denied access.<br/><br/>
+
+          • <strong style={{ color: '#fff' }}>Restricted jurisdictions.</strong> You are not located in, a resident of, or citizen of: Iran, North Korea, Cuba, Syria, Crimea, Donetsk, Luhansk, Sevastopol, or any other jurisdiction subject to comprehensive U.S., U.N., E.U., or U.K. sanctions.<br/><br/>
+
+          • <strong style={{ color: '#fff' }}>You are 18 or older</strong> and have full legal capacity to enter this agreement.<br/><br/>
+
+          • All swaps, routing, liquidity, and blockchain interactions are handled by third-party protocols. All transactions are signed directly by you through your own wallet.<br/><br/>
+
+          • DeFi and smart contracts carry substantial risk including total loss of funds. <strong style={{ color: '#fff' }}>You assume all risk.</strong><br/><br/>
+
+          • <strong style={{ color: '#fff' }}>No reimbursement.</strong> Verixia Apps will not refund or compensate any loss, regardless of cause.<br/><br/>
+
+          • <strong style={{ color: '#fff' }}>AS-IS / AS-AVAILABLE.</strong> No warranties of any kind.<br/><br/>
+
+          • <strong style={{ color: '#fff' }}>No liability.</strong> Verixia Apps is not liable for any damages arising from your use of Nexus DEX.<br/><br/>
+
+          • <strong style={{ color: '#fff' }}>No class actions.</strong> You waive any right to class action or jury trial against Verixia Apps.<br/><br/>
+
+          • <strong style={{ color: '#fff' }}>Binding arbitration.</strong> Disputes resolved through individual arbitration only.<br/><br/>
+
+          If you do not agree, discontinue use immediately.
         </div>
       </div>
-    </>
+
+      <div style={{
+        flexShrink: 0, padding: '8px 18px 14px',
+        borderTop: '1px solid rgba(255,255,255,.04)',
+        background: '#080d1a',
+      }}>
+        {!canAccept && (
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            gap: 5, fontSize: 10, color: '#586994', marginBottom: 8,
+            fontWeight: 600, letterSpacing: '.04em',
+          }}>
+            <span>↓</span> Scroll to continue
+          </div>
+        )}
+        <button
+          onClick={canAccept ? onAccept : undefined}
+          disabled={!canAccept}
+          style={{
+            width: '100%', padding: 12, borderRadius: 10, border: 'none',
+            background: canAccept ? 'linear-gradient(135deg,#00e5ff,#0055ff)' : 'rgba(255,255,255,.05)',
+            color: canAccept ? '#03060f' : '#586994',
+            fontFamily: 'Syne, sans-serif', fontWeight: 800, fontSize: 14,
+            cursor: canAccept ? 'pointer' : 'not-allowed',
+            boxShadow: canAccept ? '0 6px 20px rgba(0,229,255,.25)' : 'none',
+            transition: 'all .2s',
+          }}
+        >
+          Accept &amp; Continue
+        </button>
+        <div style={{ fontSize: 9, color: '#586994', textAlign: 'center', marginTop: 8, fontWeight: 600, letterSpacing: '.06em' }}>
+          NON-CUSTODIAL · NO ACCOUNT · YOUR KEYS
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -680,7 +662,7 @@ function AppInner() {
         })}
       </nav>
 
-      {/* Terms gate renders on top of the site */}
+      {/* Small floating terms window — site visible behind */}
       {!termsAccepted && (
         <TermsGate onAccept={() => {
           try { localStorage.setItem('nexus_terms_accepted_v3', '1'); } catch {}
