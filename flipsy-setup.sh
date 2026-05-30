@@ -6,15 +6,29 @@ export PATH="$HOME/.cargo/bin:/usr/local/cargo/bin:$HOME/.local/share/solana/ins
 REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_ROOT/flipsy"
 
-echo "=== Upgrading to Anchor 0.31.1 ==="
+echo "=== Removing broken Anchor 0.31.1 binary ==="
+rm -rf ~/.avm/bin/anchor-0.31.1
 
-# 1. Install Anchor 0.31.1
-avm install 0.31.1
-avm use 0.31.1
+echo "=== Building Anchor 0.31.1 from source (5-8 min) ==="
+cargo install --git https://github.com/coral-xyz/anchor --tag v0.31.1 anchor-cli --locked --force
 anchor --version
 
-# 2. Rewrite program Cargo.toml to use 0.31.1
-cat > programs/flipsy/Cargo.toml << 'EOF'
+echo "=== Wallet ==="
+WALLET=$(solana address)
+echo "Wallet: $WALLET, Balance: $(solana balance)"
+
+echo "=== Program keypair ==="
+mkdir -p target/deploy
+[ -f target/deploy/flipsy-keypair.json ] || solana-keygen new --no-bip39-passphrase --silent --outfile target/deploy/flipsy-keypair.json
+NEW_ID=$(solana address -k target/deploy/flipsy-keypair.json)
+echo "Program ID: $NEW_ID"
+
+echo "=== Updating source files ==="
+sed -i "s|declare_id!(\"[^\"]*\");|declare_id!(\"$NEW_ID\");|" programs/flipsy/src/lib.rs
+sed -i "s|^flipsy = \"[^\"]*\"|flipsy = \"$NEW_ID\"|" Anchor.toml
+
+echo "=== Ensuring Cargo.toml uses 0.31.1 ==="
+cat > programs/flipsy/Cargo.toml << EOF
 [package]
 name = "flipsy"
 version = "0.1.0"
@@ -38,43 +52,25 @@ anchor-lang = "0.31.1"
 anchor-spl = "0.31.1"
 pyth-sdk-solana = "0.10.4"
 EOF
-echo "✓ Cargo.toml updated"
 
-# 3. Update Anchor.toml toolchain
-sed -i 's|anchor_version = "[^"]*"|anchor_version = "0.31.1"|' Anchor.toml
-sed -i 's|solana_version = "[^"]*"|solana_version = "1.18.26"|' Anchor.toml
-
-# 4. Wallet check
-WALLET=$(solana address)
-echo "Wallet: $WALLET, Balance: $(solana balance)"
-
-# 5. Program keypair
-mkdir -p target/deploy
-[ -f target/deploy/flipsy-keypair.json ] || solana-keygen new --no-bip39-passphrase --silent --outfile target/deploy/flipsy-keypair.json
-NEW_ID=$(solana address -k target/deploy/flipsy-keypair.json)
-echo "Program ID: $NEW_ID"
-
-# 6. Update declare_id
-sed -i "s|declare_id!(\"[^\"]*\");|declare_id!(\"$NEW_ID\");|" programs/flipsy/src/lib.rs
-sed -i "s|^flipsy = \"[^\"]*\"|flipsy = \"$NEW_ID\"|" Anchor.toml
-
-# 7. Clean slate
+echo "=== Clean slate ==="
 rm -f Cargo.lock
-rm -rf target/
+rm -rf target/deploy/flipsy.so target/idl
 
-# 8. Build
-echo "=== Building (5-10 min) ==="
+echo "=== Building program (5-10 min) ==="
 anchor build
 
-# 9. Deploy
+echo "=== Deploying ==="
 SO_PATH=$(find . -name "flipsy.so" -path "*deploy*" | head -1)
 solana program deploy "$SO_PATH" --program-id target/deploy/flipsy-keypair.json --url devnet
 
-# 10. IDL + init
+echo "=== IDL ==="
 mkdir -p ../src/idl
 [ -f target/idl/flipsy.json ] && cp target/idl/flipsy.json ../src/idl/flipsy.json
-npm install --silent 2>/dev/null || true
-npx ts-node scripts/initialize.ts || true
-npx ts-node scripts/crank-once.ts || true
 
-echo "✅ DONE — Program ID: $NEW_ID"
+echo "=== NPM + scripts ==="
+npm install --silent 2>/dev/null || true
+npx ts-node scripts/initialize.ts || echo "Initialize failed"
+npx ts-node scripts/crank-once.ts || echo "Crank failed"
+
+echo "✅ Program ID: $NEW_ID"
