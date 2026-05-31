@@ -1,4 +1,4 @@
-name: Deploy Flipsy — DEVNET (full setup)
+name: Deploy Flipsy — DEVNET (fully automatic, no secrets needed)
 
 on:
   workflow_dispatch:
@@ -12,7 +12,7 @@ env:
 jobs:
   deploy:
     runs-on: macos-14
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
@@ -22,46 +22,76 @@ jobs:
           sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
 
-      - name: Install Anchor ${{ env.ANCHOR_VERSION }} via avm
+      - name: Install Anchor ${{ env.ANCHOR_VERSION }}
         run: |
           cargo install --git https://github.com/coral-xyz/anchor avm --force --locked
           avm install $ANCHOR_VERSION
           avm use $ANCHOR_VERSION
           anchor --version
 
-      - name: Setup deployer wallet
+      - name: Restore deployer keypair (cache)
+        id: kp-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.config/solana/id.json
+          key: flipsy-deployer-keypair-v1
+
+      - name: Generate deployer keypair if missing
+        if: steps.kp-cache.outputs.cache-hit != 'true'
         run: |
           mkdir -p ~/.config/solana
-          if [ -z "${{ secrets.SOLANA_KEYPAIR }}" ]; then
-            echo "::error::SOLANA_KEYPAIR secret not set."
-            echo "Add it under Settings → Secrets and variables → Actions → New repository secret."
-            echo "Value = contents of ~/.config/solana/id.json from your Codespace."
-            exit 1
-          fi
-          echo '${{ secrets.SOLANA_KEYPAIR }}' > ~/.config/solana/id.json
-          chmod 600 ~/.config/solana/id.json
+          solana-keygen new --no-bip39-passphrase --silent --outfile ~/.config/solana/id.json
+          echo "::notice::Generated new deployer keypair"
+
+      - name: Save deployer keypair to cache
+        if: steps.kp-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.config/solana/id.json
+          key: flipsy-deployer-keypair-v1
+
+      - name: Configure & fund deployer wallet
+        run: |
           solana config set --url devnet
           DEPLOYER=$(solana address)
-          BALANCE=$(solana balance)
           echo "Deployer: $DEPLOYER"
-          echo "Balance:  $BALANCE"
-          # Need at least 1.5 SOL for program deploy
-          BAL_NUM=$(echo "$BALANCE" | awk '{print $1}')
-          if awk "BEGIN{exit !($BAL_NUM < 1.5)}"; then
-            echo "::warning::Balance below 1.5 SOL. Attempting airdrop..."
-            solana airdrop 2 || true
-            sleep 5
-            echo "New balance: $(solana balance)"
+          BALANCE=$(solana balance | awk '{print $1}')
+          echo "Current balance: $BALANCE SOL"
+
+          # Airdrop up to 4 SOL via multiple attempts (devnet faucet is flaky)
+          if awk "BEGIN{exit !($BALANCE < 3.0)}"; then
+            echo "Need more SOL — airdropping..."
+            for i in 1 2 3 4 5 6 7 8; do
+              echo "Airdrop attempt $i..."
+              if solana airdrop 2 2>&1 | tee /tmp/airdrop.log | grep -qi "signature\|confirmed"; then
+                echo "  airdrop succeeded"
+                sleep 4
+                NEW_BAL=$(solana balance | awk '{print $1}')
+                echo "  balance: $NEW_BAL"
+                if awk "BEGIN{exit !($NEW_BAL >= 3.0)}"; then break; fi
+              fi
+              echo "  waiting 15s before retry..."
+              sleep 15
+            done
           fi
 
-      - name: Patch lib.rs to drop pyth-sdk-solana
+          FINAL_BAL=$(solana balance | awk '{print $1}')
+          echo "Final balance: $FINAL_BAL SOL"
+          if awk "BEGIN{exit !($FINAL_BAL < 1.6)}"; then
+            echo "::error::Insufficient SOL for deployment (need ≥1.6, have $FINAL_BAL)."
+            echo "Devnet faucet is rate-limited. Options:"
+            echo "  1) Wait 1 hour and re-run this workflow (keypair is cached)"
+            echo "  2) Fund $DEPLOYER manually from https://faucet.solana.com"
+            exit 1
+          fi
+
+      - name: Patch lib.rs — drop pyth-sdk-solana
         working-directory: flipsy
         run: |
           python3 << 'PYEOF'
           import re
           path = "programs/flipsy/src/lib.rs"
           with open(path) as f: src = f.read()
-          # remove pyth_sdk_solana import
           src = re.sub(r'^use pyth_sdk_solana[^\n]*\n', '', src, flags=re.MULTILINE)
           new_fn = '''fn read_pyth_price(feed_info: &AccountInfo, current_ts: i64) -> Result<i64> {
               let data = feed_info.try_borrow_data().map_err(|_| FlipsyError::PythError)?;
@@ -88,18 +118,17 @@ jobs:
               src = pat.sub(new_fn, src, count=1)
               print("patched read_pyth_price")
           else:
-              print("WARN: read_pyth_price not found")
+              print("WARN: read_pyth_price not found (may already be patched)")
           with open(path, 'w') as f: f.write(src)
           PYEOF
 
-      - name: Patch Cargo.toml — drop pyth-sdk-solana, bump anchor to 0.31.1
+      - name: Patch Cargo.toml
         working-directory: flipsy
         run: |
           sed -i.bak '/^pyth-sdk-solana/d' programs/flipsy/Cargo.toml
           sed -i.bak 's/anchor-lang = "=*0\.30\.[0-9]*"/anchor-lang = "0.31.1"/g' programs/flipsy/Cargo.toml
           sed -i.bak 's/anchor-spl = "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g' programs/flipsy/Cargo.toml
           rm -f programs/flipsy/Cargo.toml.bak
-          echo "----- Cargo.toml deps -----"
           grep -E "anchor-|pyth" programs/flipsy/Cargo.toml || true
 
       - name: Build
@@ -116,15 +145,16 @@ jobs:
           echo "id=$PROGRAM_ID" >> $GITHUB_OUTPUT
           echo "Program ID: $PROGRAM_ID"
 
-      - name: Write program ID into lib.rs + Anchor.toml
+      - name: Write program ID into source
         working-directory: flipsy
+        env:
+          PROGRAM_ID: ${{ steps.pid.outputs.id }}
         run: |
-          PROGRAM_ID="${{ steps.pid.outputs.id }}"
           sed -i.bak "s|declare_id!(\"[^\"]*\");|declare_id!(\"$PROGRAM_ID\");|" programs/flipsy/src/lib.rs
           sed -i.bak "s|^flipsy = \"[^\"]*\"$|flipsy = \"$PROGRAM_ID\"|g" Anchor.toml
           rm -f programs/flipsy/src/lib.rs.bak Anchor.toml.bak
 
-      - name: Rebuild with real program ID
+      - name: Rebuild
         working-directory: flipsy
         run: anchor build
 
@@ -132,9 +162,8 @@ jobs:
         working-directory: flipsy
         run: anchor deploy --provider.cluster devnet
 
-      - name: Install npm deps
-        run: |
-          npm install --silent @coral-xyz/anchor @solana/web3.js @solana/spl-token
+      - name: Install JS deps
+        run: npm install --silent @coral-xyz/anchor @solana/web3.js @solana/spl-token
 
       - name: Create treasury ATA, initialize program, transfer admin
         env:
