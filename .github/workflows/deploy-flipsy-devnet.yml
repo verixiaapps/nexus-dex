@@ -1,12 +1,12 @@
-name: Flipsy DEVNET v10
+name: Flipsy DEVNET v12
 
 on:
   workflow_dispatch:
     inputs:
-      keypair_json:
-        description: 'Optional: paste your funded keypair JSON. Leave blank to reuse cached deployer.'
-        required: false
-        type: string
+      seed:
+        description: 'Short passphrase (any text — same passphrase = same wallets every run)'
+        required: true
+        default: 'flipsy-deploy'
 
 env:
   TREASURY_OWNER: "Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV"
@@ -19,61 +19,122 @@ jobs:
     container:
       image: solanafoundation/anchor:v0.31.1
       options: --user root
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Rust default + show toolchain
+      - name: Setup toolchain
         run: |
           rustup default stable 2>/dev/null || rustup default 1.79.0 2>/dev/null || true
           rustc --version || true
-          cargo --version || true
           solana --version || true
           anchor --version || true
-          node --version || true
-          npm --version || true
 
-      - name: Restore cached deployer keypair
-        id: kp-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: /root/.config/solana/id.json
-          key: flipsy-deployer-keypair-v1
-
-      - name: Setup deployer wallet
+      - name: Derive deployer + helper keypairs from seed
+        env:
+          SEED: ${{ inputs.seed }}
         run: |
-          mkdir -p /root/.config/solana
-          if [ -n "${{ inputs.keypair_json }}" ]; then
-            echo '${{ inputs.keypair_json }}' > /root/.config/solana/id.json
-          elif [ ! -f /root/.config/solana/id.json ]; then
-            solana-keygen new --no-bip39-passphrase --silent --outfile /root/.config/solana/id.json
-          fi
-          chmod 600 /root/.config/solana/id.json
+          mkdir -p /root/.config/solana /tmp/derive
+          cd /tmp/derive
+          npm init -y >/dev/null 2>&1
+          npm install --no-progress --silent @solana/web3.js 2>&1 | tail -3 || true
+          node -e "
+            const crypto = require('crypto');
+            const fs = require('fs');
+            const { Keypair } = require('@solana/web3.js');
+            const base = process.env.SEED;
+            const names = ['', '-h1', '-h2', '-h3'];
+            const labels = ['main', 'h1', 'h2', 'h3'];
+            for (let i = 0; i < 4; i++) {
+              const seedBuf = crypto.createHash('sha256').update(base + names[i]).digest();
+              const kp = Keypair.fromSeed(seedBuf);
+              fs.writeFileSync('/root/.config/solana/' + labels[i] + '.json', JSON.stringify(Array.from(kp.secretKey)));
+              console.log(labels[i] + ': ' + kp.publicKey.toBase58());
+            }
+          "
+          cp /root/.config/solana/main.json /root/.config/solana/id.json
+          chmod 600 /root/.config/solana/*.json
           solana config set --url devnet --keypair /root/.config/solana/id.json
-          DEPLOYER=$(solana address)
-          BALANCE=$(solana balance | awk '{print $1}')
-          echo "Deployer: $DEPLOYER"
-          echo "Balance : $BALANCE SOL"
-          if awk "BEGIN{exit !($BALANCE < 1.6)}"; then
-            for i in 1 2 3 4 5; do
-              solana airdrop 2 && break
-              sleep 12
+
+      - name: Print all wallet addresses + balances
+        run: |
+          echo "==================================================="
+          for w in main h1 h2 h3; do
+            ADDR=$(solana address --keypair /root/.config/solana/$w.json)
+            BAL=$(solana balance --keypair /root/.config/solana/$w.json 2>/dev/null | awk '{print $1}')
+            echo "  $w: $ADDR  ($BAL SOL)"
+          done
+          echo "==================================================="
+
+      - name: Pool airdrops from helpers into main deployer
+        run: |
+          MAIN=$(solana address --keypair /root/.config/solana/main.json)
+          NEED=1.7
+
+          balance_of() { solana balance --keypair /root/.config/solana/$1.json 2>/dev/null | awk '{print $1}'; }
+          main_bal()   { solana balance 2>/dev/null | awk '{print $1}'; }
+          enough()     { awk "BEGIN{exit !($(main_bal) >= $NEED)}"; }
+
+          # Phase 1: hit main directly
+          echo "--- Phase 1: airdrop directly to main ---"
+          for i in 1 2 3 4 5 6 7 8; do
+            enough && break
+            echo "  attempt $i on main..."
+            solana airdrop 2 --keypair /root/.config/solana/main.json 2>&1 | tail -2
+            sleep 15
+          done
+          echo "  main after phase 1: $(main_bal) SOL"
+
+          # Phase 2: airdrop to helpers, then transfer to main
+          for round in 1 2 3; do
+            enough && break
+            echo "--- Phase 2 round $round: airdrop helpers, sweep to main ---"
+            for h in h1 h2 h3; do
+              enough && break
+              HADDR=$(solana address --keypair /root/.config/solana/$h.json)
+              echo "  airdropping $h ($HADDR)..."
+              for k in 1 2 3; do
+                solana airdrop 2 --keypair /root/.config/solana/$h.json 2>&1 | tail -2
+                HBAL=$(balance_of $h)
+                awk "BEGIN{exit !($HBAL >= 0.5)}" && break
+                sleep 10
+              done
+              HBAL=$(balance_of $h)
+              echo "  $h balance: $HBAL SOL"
+              # Sweep almost-all to main (leave 0.001 for tx fee)
+              if awk "BEGIN{exit !($HBAL > 0.01)}"; then
+                AMT=$(awk "BEGIN{printf \"%.6f\", $HBAL - 0.001}")
+                echo "  transferring $AMT SOL from $h to main..."
+                solana transfer "$MAIN" "$AMT" \
+                  --keypair /root/.config/solana/$h.json \
+                  --allow-unfunded-recipient \
+                  --fee-payer /root/.config/solana/$h.json 2>&1 | tail -2 || true
+              fi
             done
-            sleep 4
-            BALANCE=$(solana balance | awk '{print $1}')
-          fi
-          if awk "BEGIN{exit !($BALANCE < 1.6)}"; then
-            echo "::error::Need 1.6+ SOL. Fund $DEPLOYER from https://jumpbit.io/en/solana/devnet-faucet and re-run."
+            echo "  main after round $round: $(main_bal) SOL"
+            sleep 20
+          done
+
+          BAL=$(main_bal)
+          echo "==================================================="
+          echo "  FINAL main balance: $BAL SOL  (need $NEED)"
+          echo "==================================================="
+          if ! enough; then
+            cat <<EOF
+          ::error::Could not fund deployer to $NEED SOL via airdrops.
+          Fund any of these addresses (devnet) and re-run with the same passphrase:
+            MAIN: $MAIN
+            H1:   $(solana address --keypair /root/.config/solana/h1.json)
+            H2:   $(solana address --keypair /root/.config/solana/h2.json)
+            H3:   $(solana address --keypair /root/.config/solana/h3.json)
+          Faucets to try: https://jumpbit.io/en/solana/devnet-faucet
+                          https://www.devnetfaucet.org
+                          https://faucet.quicknode.com/solana/devnet
+                          https://faucet.solana.com
+          EOF
             exit 1
           fi
-
-      - name: Save deployer keypair to cache
-        if: steps.kp-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: /root/.config/solana/id.json
-          key: flipsy-deployer-keypair-v1
 
       - name: Patch lib.rs (remove pyth-sdk-solana)
         working-directory: flipsy
@@ -104,10 +165,8 @@ jobs:
               Ok(normalized)
           }'''
           pat = re.compile(r'fn read_pyth_price\([^)]*\) -> Result<i64> \{.*?\n\}', re.DOTALL)
-          if pat.search(src):
-              src = pat.sub(new_fn, src, count=1)
+          if pat.search(src): src = pat.sub(new_fn, src, count=1)
           with open(path, 'w') as f: f.write(src)
-          print("patched lib.rs")
           PYEOF
 
       - name: Patch Cargo.toml + Anchor.toml
@@ -117,7 +176,6 @@ jobs:
           sed -i 's/anchor-lang = "=*0\.30\.[0-9]*"/anchor-lang = "0.31.1"/g' programs/flipsy/Cargo.toml
           sed -i 's/anchor-spl = "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g' programs/flipsy/Cargo.toml
           sed -i 's/anchor_version = "0\.30\.[0-9]*"/anchor_version = "0.31.1"/g' Anchor.toml
-          grep -E "anchor-|pyth|anchor_version" programs/flipsy/Cargo.toml Anchor.toml || true
 
       - name: Build
         working-directory: flipsy
@@ -133,7 +191,7 @@ jobs:
           echo "id=$PROGRAM_ID" >> $GITHUB_OUTPUT
           echo "Program ID: $PROGRAM_ID"
 
-      - name: Write ID into source + Anchor.toml
+      - name: Write program ID into source
         working-directory: flipsy
         env:
           PROGRAM_ID: ${{ steps.pid.outputs.id }}
@@ -141,15 +199,13 @@ jobs:
           sed -i "s|declare_id!(\"[^\"]*\");|declare_id!(\"$PROGRAM_ID\");|" programs/flipsy/src/lib.rs
           sed -i "s|^flipsy = \"[^\"]*\"$|flipsy = \"$PROGRAM_ID\"|g" Anchor.toml
 
-      - name: Rebuild with real program ID
+      - name: Rebuild + deploy
         working-directory: flipsy
-        run: anchor build
+        run: |
+          anchor build
+          anchor deploy --provider.cluster devnet
 
-      - name: Deploy to devnet
-        working-directory: flipsy
-        run: anchor deploy --provider.cluster devnet
-
-      - name: Install JS deps
+      - name: Install JS deps for init
         run: npm install --no-progress --silent @coral-xyz/anchor @solana/web3.js @solana/spl-token
 
       - name: Treasury ATA + initialize + transfer admin
@@ -175,12 +231,11 @@ jobs:
             try { program = new anchor.Program(IDL, provider); }
             catch { program = new anchor.Program(IDL, PROGRAM_ID, provider); }
             const ata = await spl.getAssociatedTokenAddress(USDC_MINT, TREASURY_OWNER);
-            console.log("Treasury USDC ATA:", ata.toBase58());
             if (!(await conn.getAccountInfo(ata))) {
               const sig = await web3.sendAndConfirmTransaction(conn,
                 new web3.Transaction().add(spl.createAssociatedTokenAccountInstruction(kp.publicKey, ata, TREASURY_OWNER, USDC_MINT)),
                 [kp]);
-              console.log("ATA created:", sig);
+              console.log("ATA:", sig);
             }
             const [cfg] = web3.PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
             let c; try { c = await program.account.config.fetch(cfg); } catch {}
@@ -201,7 +256,7 @@ jobs:
           JSEOF
           node init.js
 
-      - name: Transfer upgrade authority to your wallet
+      - name: Transfer upgrade authority
         env:
           PROGRAM_ID: ${{ steps.pid.outputs.id }}
         run: |
