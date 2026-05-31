@@ -2,24 +2,32 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Mint, Transfer};
 use pyth_sdk_solana::state::SolanaPriceAccount;
 
-declare_id!("");
- 
-// ============ CONSTANTS ============
-const ROUND_DURATION: i64 = 300; // 5 minutes
-const MIN_BET: u64 = 100_000;    // $0.10 USDC (6 decimals)
-const MAX_BET: u64 = 5_000_000;  // $5.00 USDC
-const DEPOSIT_FEE_BPS: u64 = 500;   // 5%
-const WIN_FEE_BPS: u64 = 1500;      // 15%
-const FORCE_REFUND_DELAY: i64 = 86400;       // 24h
-const EMERGENCY_SWEEP_DELAY: i64 = 259200;   // 3 days
+declare_id!("11111111111111111111111111111111"); // replace after `anchor keys list`
+
+// ============ HARD CONSTANTS ============
 const BPS_DIVISOR: u64 = 10_000;
+const FORCE_REFUND_DELAY: i64 = 86_400;       // 24h
+const EMERGENCY_SWEEP_DELAY: i64 = 259_200;   // 3 days
+const MAX_FEE_BPS: u16 = 3000;                // admin can't set fee above 30%
 
 // ============ PROGRAM ============
 #[program]
 pub mod flipsy {
     use super::*;
 
-    pub fn initialize(ctx: Context<Initialize>) -> Result<()> {
+    pub fn initialize(
+        ctx: Context<Initialize>,
+        round_duration: i64,
+        min_bet: u64,
+        max_bet: u64,
+        fee_bps: u16,
+        solo_fee_bps: u16,
+    ) -> Result<()> {
+        require!(round_duration >= 60, FlipsyError::BadParams);
+        require!(min_bet > 0 && max_bet >= min_bet, FlipsyError::BadParams);
+        require!(fee_bps <= MAX_FEE_BPS, FlipsyError::BadParams);
+        require!(solo_fee_bps <= MAX_FEE_BPS, FlipsyError::BadParams);
+
         let config = &mut ctx.accounts.config;
         config.admin = ctx.accounts.admin.key();
         config.usdc_mint = ctx.accounts.usdc_mint.key();
@@ -27,8 +35,56 @@ pub mod flipsy {
         config.treasury = ctx.accounts.treasury.key();
         config.current_epoch = 0;
         config.paused = false;
+        config.round_duration = round_duration;
+        config.min_bet = min_bet;
+        config.max_bet = max_bet;
+        config.fee_bps = fee_bps;
+        config.solo_fee_bps = solo_fee_bps;
         config.bump = ctx.bumps.config;
+
         emit!(ConfigInitialized { admin: config.admin });
+        Ok(())
+    }
+
+    pub fn set_admin(ctx: Context<AdminOnly>, new_admin: Pubkey) -> Result<()> {
+        ctx.accounts.config.admin = new_admin;
+        Ok(())
+    }
+
+    pub fn set_treasury(ctx: Context<AdminOnly>, new_treasury: Pubkey) -> Result<()> {
+        ctx.accounts.config.treasury = new_treasury;
+        Ok(())
+    }
+
+    pub fn set_pyth_feed(ctx: Context<AdminOnly>, new_feed: Pubkey) -> Result<()> {
+        ctx.accounts.config.pyth_feed = new_feed;
+        Ok(())
+    }
+
+    pub fn set_params(
+        ctx: Context<AdminOnly>,
+        round_duration: i64,
+        min_bet: u64,
+        max_bet: u64,
+        fee_bps: u16,
+        solo_fee_bps: u16,
+    ) -> Result<()> {
+        require!(round_duration >= 60, FlipsyError::BadParams);
+        require!(min_bet > 0 && max_bet >= min_bet, FlipsyError::BadParams);
+        require!(fee_bps <= MAX_FEE_BPS, FlipsyError::BadParams);
+        require!(solo_fee_bps <= MAX_FEE_BPS, FlipsyError::BadParams);
+        let c = &mut ctx.accounts.config;
+        c.round_duration = round_duration;
+        c.min_bet = min_bet;
+        c.max_bet = max_bet;
+        c.fee_bps = fee_bps;
+        c.solo_fee_bps = solo_fee_bps;
+        Ok(())
+    }
+
+    pub fn set_paused(ctx: Context<AdminOnly>, paused: bool) -> Result<()> {
+        ctx.accounts.config.paused = paused;
+        emit!(PauseToggled { paused });
         Ok(())
     }
 
@@ -38,13 +94,13 @@ pub mod flipsy {
         let lock_price = read_pyth_price(&ctx.accounts.pyth_feed, clock.unix_timestamp)?;
 
         let config = &mut ctx.accounts.config;
-        config.current_epoch = config.current_epoch.checked_add(1).unwrap();
+        config.current_epoch = config.current_epoch.checked_add(1).ok_or(FlipsyError::MathOverflow)?;
 
         let round = &mut ctx.accounts.round;
         round.epoch = config.current_epoch;
         round.start_time = clock.unix_timestamp;
-        round.lock_time = clock.unix_timestamp + ROUND_DURATION;
-        round.close_time = clock.unix_timestamp + (ROUND_DURATION * 2);
+        round.lock_time = clock.unix_timestamp + config.round_duration;
+        round.close_time = clock.unix_timestamp + (config.round_duration * 2);
         round.lock_price = lock_price;
         round.close_price = 0;
         round.heads_pool = 0;
@@ -59,31 +115,15 @@ pub mod flipsy {
     }
 
     pub fn place_bet(ctx: Context<PlaceBet>, amount: u64, side: Side) -> Result<()> {
-        require!(!ctx.accounts.config.paused, FlipsyError::Paused);
-        require!(amount >= MIN_BET, FlipsyError::BelowMin);
-        require!(amount <= MAX_BET, FlipsyError::AboveMax);
+        let config = &ctx.accounts.config;
+        require!(!config.paused, FlipsyError::Paused);
+        require!(amount >= config.min_bet, FlipsyError::BelowMin);
+        require!(amount <= config.max_bet, FlipsyError::AboveMax);
 
         let clock = Clock::get()?;
         let round = &mut ctx.accounts.round;
         require!(clock.unix_timestamp < round.lock_time, FlipsyError::RoundLocked);
 
-        let fee = amount.checked_mul(DEPOSIT_FEE_BPS).unwrap().checked_div(BPS_DIVISOR).unwrap();
-        let net = amount.checked_sub(fee).unwrap();
-
-        // Transfer fee to treasury
-        token::transfer(
-            CpiContext::new(
-                ctx.accounts.token_program.to_account_info(),
-                Transfer {
-                    from: ctx.accounts.user_usdc.to_account_info(),
-                    to: ctx.accounts.treasury_usdc.to_account_info(),
-                    authority: ctx.accounts.user.to_account_info(),
-                },
-            ),
-            fee,
-        )?;
-
-        // Transfer net to vault
         token::transfer(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
@@ -93,23 +133,23 @@ pub mod flipsy {
                     authority: ctx.accounts.user.to_account_info(),
                 },
             ),
-            net,
+            amount,
         )?;
 
         let bet = &mut ctx.accounts.bet;
         bet.user = ctx.accounts.user.key();
         bet.epoch = round.epoch;
-        bet.amount = net;
+        bet.amount = amount;
         bet.side = side;
         bet.claimed = false;
         bet.bump = ctx.bumps.bet;
 
         match side {
-            Side::Heads => round.heads_pool = round.heads_pool.checked_add(net).unwrap(),
-            Side::Tails => round.tails_pool = round.tails_pool.checked_add(net).unwrap(),
+            Side::Heads => round.heads_pool = round.heads_pool.checked_add(amount).ok_or(FlipsyError::MathOverflow)?,
+            Side::Tails => round.tails_pool = round.tails_pool.checked_add(amount).ok_or(FlipsyError::MathOverflow)?,
         }
 
-        emit!(BetPlaced { epoch: round.epoch, user: bet.user, amount: net, side });
+        emit!(BetPlaced { epoch: round.epoch, user: bet.user, amount, side });
         Ok(())
     }
 
@@ -123,86 +163,49 @@ pub mod flipsy {
         round.close_price = close_price;
         round.resolved_at = clock.unix_timestamp;
 
-        round.outcome = if round.heads_pool == 0 || round.tails_pool == 0 {
-            Outcome::NoWinners
-        } else if close_price > round.lock_price {
-            Outcome::Heads
-        } else if close_price < round.lock_price {
-            Outcome::Tails
-        } else {
+        round.outcome = if close_price == round.lock_price {
             Outcome::Tie
+        } else if close_price > round.lock_price {
+            if round.heads_pool > 0 { Outcome::Heads } else { Outcome::AllLost }
+        } else {
+            if round.tails_pool > 0 { Outcome::Tails } else { Outcome::AllLost }
         };
 
-        emit!(RoundEnded {
-            epoch: round.epoch,
-            close_price,
-            outcome: round.outcome,
-        });
+        emit!(RoundEnded { epoch: round.epoch, close_price, outcome: round.outcome });
         Ok(())
     }
 
     pub fn claim(ctx: Context<Claim>) -> Result<()> {
+        let config = &ctx.accounts.config;
         let round = &ctx.accounts.round;
         let bet = &mut ctx.accounts.bet;
         require!(!bet.claimed, FlipsyError::AlreadyClaimed);
         require!(round.outcome != Outcome::Unresolved, FlipsyError::NotResolved);
 
-        let payout = match round.outcome {
-            Outcome::Tie => bet.amount, // full refund
-            Outcome::NoWinners => 0, // pool swept by admin
-            Outcome::Heads => {
-                if bet.side == Side::Heads {
-                    let total = round.heads_pool.checked_add(round.tails_pool).unwrap();
-                    let gross = (bet.amount as u128)
-                        .checked_mul(total as u128).unwrap()
-                        .checked_div(round.heads_pool as u128).unwrap() as u64;
-                    let win_fee = gross.checked_mul(WIN_FEE_BPS).unwrap().checked_div(BPS_DIVISOR).unwrap();
-                    gross.checked_sub(win_fee).unwrap()
-                } else { 0 }
-            }
-            Outcome::Tails => {
-                if bet.side == Side::Tails {
-                    let total = round.heads_pool.checked_add(round.tails_pool).unwrap();
-                    let gross = (bet.amount as u128)
-                        .checked_mul(total as u128).unwrap()
-                        .checked_div(round.tails_pool as u128).unwrap() as u64;
-                    let win_fee = gross.checked_mul(WIN_FEE_BPS).unwrap().checked_div(BPS_DIVISOR).unwrap();
-                    gross.checked_sub(win_fee).unwrap()
-                } else { 0 }
-            }
-            Outcome::Unresolved => return Err(FlipsyError::NotResolved.into()),
-        };
-
+        let (payout, fee) = compute_payout(round, bet, config.fee_bps, config.solo_fee_bps)?;
         bet.claimed = true;
 
-        if payout > 0 {
+        if payout > 0 || fee > 0 {
             let epoch_bytes = round.epoch.to_le_bytes();
             let seeds: &[&[u8]] = &[b"vault", epoch_bytes.as_ref(), &[ctx.bumps.vault]];
             let signer = &[seeds];
 
-            // Pay winner from vault
-            token::transfer(
-                CpiContext::new_with_signer(
-                    ctx.accounts.token_program.to_account_info(),
-                    Transfer {
-                        from: ctx.accounts.vault.to_account_info(),
-                        to: ctx.accounts.user_usdc.to_account_info(),
-                        authority: ctx.accounts.vault.to_account_info(),
-                    },
-                    signer,
-                ),
-                payout,
-            )?;
+            if payout > 0 {
+                token::transfer(
+                    CpiContext::new_with_signer(
+                        ctx.accounts.token_program.to_account_info(),
+                        Transfer {
+                            from: ctx.accounts.vault.to_account_info(),
+                            to: ctx.accounts.user_usdc.to_account_info(),
+                            authority: ctx.accounts.vault.to_account_info(),
+                        },
+                        signer,
+                    ),
+                    payout,
+                )?;
+            }
 
-            // Pay winning fee to treasury (only on wins, not refunds)
-            if round.outcome == Outcome::Heads || round.outcome == Outcome::Tails {
-                let total = round.heads_pool.checked_add(round.tails_pool).unwrap();
-                let winning_pool = if round.outcome == Outcome::Heads { round.heads_pool } else { round.tails_pool };
-                let gross = (bet.amount as u128)
-                    .checked_mul(total as u128).unwrap()
-                    .checked_div(winning_pool as u128).unwrap() as u64;
-                let win_fee = gross.checked_mul(WIN_FEE_BPS).unwrap().checked_div(BPS_DIVISOR).unwrap();
-
+            if fee > 0 {
                 token::transfer(
                     CpiContext::new_with_signer(
                         ctx.accounts.token_program.to_account_info(),
@@ -213,12 +216,12 @@ pub mod flipsy {
                         },
                         signer,
                     ),
-                    win_fee,
+                    fee,
                 )?;
             }
         }
 
-        emit!(Claimed { epoch: round.epoch, user: bet.user, payout });
+        emit!(Claimed { epoch: round.epoch, user: bet.user, payout, fee });
         Ok(())
     }
 
@@ -236,18 +239,12 @@ pub mod flipsy {
         Ok(())
     }
 
-    pub fn set_paused(ctx: Context<AdminOnly>, paused: bool) -> Result<()> {
-        ctx.accounts.config.paused = paused;
-        emit!(PauseToggled { paused });
-        Ok(())
-    }
-
-    pub fn sweep_no_winners(ctx: Context<SweepNoWinners>) -> Result<()> {
+    pub fn sweep_all_lost(ctx: Context<SweepAllLost>) -> Result<()> {
         let round = &mut ctx.accounts.round;
-        require!(round.outcome == Outcome::NoWinners, FlipsyError::NotNoWinners);
+        require!(round.outcome == Outcome::AllLost, FlipsyError::NotAllLost);
         require!(!round.swept, FlipsyError::AlreadySwept);
 
-        let total = round.heads_pool.checked_add(round.tails_pool).unwrap();
+        let total = round.heads_pool.checked_add(round.tails_pool).ok_or(FlipsyError::MathOverflow)?;
         if total > 0 {
             let epoch_bytes = round.epoch.to_le_bytes();
             let seeds: &[&[u8]] = &[b"vault", epoch_bytes.as_ref(), &[ctx.bumps.vault]];
@@ -265,7 +262,7 @@ pub mod flipsy {
             )?;
         }
         round.swept = true;
-        emit!(NoWinnersSwept { epoch: round.epoch, amount: total });
+        emit!(AllLostSwept { epoch: round.epoch, amount: total });
         Ok(())
     }
 
@@ -302,13 +299,60 @@ pub mod flipsy {
     }
 }
 
+// ============ PAYOUT MATH ============
+fn compute_payout(
+    round: &Round,
+    bet: &Bet,
+    fee_bps: u16,
+    solo_fee_bps: u16,
+) -> Result<(u64, u64)> {
+    let fee_bps  = fee_bps as u128;
+    let solo_bps = solo_fee_bps as u128;
+    let bps_div  = BPS_DIVISOR as u128;
+    let bet_amt  = bet.amount as u128;
+
+    match round.outcome {
+        Outcome::Unresolved => Err(FlipsyError::NotResolved.into()),
+        Outcome::AllLost    => Ok((0, 0)),
+        Outcome::Tie        => Ok((bet.amount, 0)),
+        Outcome::Heads | Outcome::Tails => {
+            let winning_side = if round.outcome == Outcome::Heads { Side::Heads } else { Side::Tails };
+            if bet.side != winning_side {
+                return Ok((0, 0));
+            }
+            let winning_pool = if winning_side == Side::Heads { round.heads_pool } else { round.tails_pool } as u128;
+            let losing_pool  = if winning_side == Side::Heads { round.tails_pool } else { round.heads_pool } as u128;
+
+            if losing_pool == 0 {
+                // SOLO WIN — refund minus solo fee (default 5%)
+                let fee = bet_amt
+                    .checked_mul(solo_bps).ok_or(FlipsyError::MathOverflow)?
+                    .checked_div(bps_div).ok_or(FlipsyError::MathOverflow)?;
+                let payout = bet_amt.checked_sub(fee).ok_or(FlipsyError::MathOverflow)?;
+                Ok((payout as u64, fee as u64))
+            } else {
+                // NORMAL WIN — 20% on profit only
+                let total = winning_pool.checked_add(losing_pool).ok_or(FlipsyError::MathOverflow)?;
+                let gross = bet_amt
+                    .checked_mul(total).ok_or(FlipsyError::MathOverflow)?
+                    .checked_div(winning_pool).ok_or(FlipsyError::MathOverflow)?;
+                let profit = gross.checked_sub(bet_amt).ok_or(FlipsyError::MathOverflow)?;
+                let fee = profit
+                    .checked_mul(fee_bps).ok_or(FlipsyError::MathOverflow)?
+                    .checked_div(bps_div).ok_or(FlipsyError::MathOverflow)?;
+                let payout = gross.checked_sub(fee).ok_or(FlipsyError::MathOverflow)?;
+                Ok((payout as u64, fee as u64))
+            }
+        }
+    }
+}
+
 // ============ PYTH HELPER ============
 fn read_pyth_price(feed_info: &AccountInfo, current_ts: i64) -> Result<i64> {
     let price_feed = SolanaPriceAccount::account_info_to_feed(feed_info)
         .map_err(|_| FlipsyError::PythError)?;
     let price = price_feed.get_price_no_older_than(current_ts, 60)
         .ok_or(FlipsyError::PythStale)?;
-    // Normalize to 8 decimals
     let raw = price.price;
     let expo = price.expo;
     let normalized = if expo >= -8 {
@@ -322,10 +366,7 @@ fn read_pyth_price(feed_info: &AccountInfo, current_ts: i64) -> Result<i64> {
 // ============ ACCOUNTS ============
 #[derive(Accounts)]
 pub struct Initialize<'info> {
-    #[account(
-        init, payer = admin, space = 8 + Config::LEN,
-        seeds = [b"config"], bump
-    )]
+    #[account(init, payer = admin, space = 8 + Config::LEN, seeds = [b"config"], bump)]
     pub config: Account<'info, Config>,
     pub usdc_mint: Account<'info, Mint>,
     /// CHECK: Pyth feed validated at read time
@@ -335,6 +376,13 @@ pub struct Initialize<'info> {
     #[account(mut)]
     pub admin: Signer<'info>,
     pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct AdminOnly<'info> {
+    #[account(mut, seeds = [b"config"], bump = config.bump, has_one = admin)]
+    pub config: Account<'info, Config>,
+    pub admin: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -356,7 +404,7 @@ pub struct StartRound<'info> {
     )]
     pub vault: Account<'info, TokenAccount>,
     pub usdc_mint: Account<'info, Mint>,
-    /// CHECK: Pyth feed validated at read time
+    /// CHECK: Pyth feed
     #[account(address = config.pyth_feed)]
     pub pyth_feed: AccountInfo<'info>,
     #[account(mut)]
@@ -383,13 +431,6 @@ pub struct PlaceBet<'info> {
     pub vault: Account<'info, TokenAccount>,
     #[account(mut, token::mint = config.usdc_mint, token::authority = user)]
     pub user_usdc: Account<'info, TokenAccount>,
-    #[account(
-        mut,
-        token::mint = config.usdc_mint,
-        token::authority = config.treasury,
-        address = config.treasury,
-    )]
-    pub treasury_usdc: Account<'info, TokenAccount>,
     #[account(mut)]
     pub user: Signer<'info>,
     pub token_program: Program<'info, Token>,
@@ -402,7 +443,7 @@ pub struct EndRound<'info> {
     pub config: Account<'info, Config>,
     #[account(mut, seeds = [b"round", round.epoch.to_le_bytes().as_ref()], bump = round.bump)]
     pub round: Account<'info, Round>,
-    /// CHECK: Pyth feed validated at read time
+    /// CHECK: Pyth feed
     #[account(address = config.pyth_feed)]
     pub pyth_feed: AccountInfo<'info>,
     pub cranker: Signer<'info>,
@@ -425,12 +466,7 @@ pub struct Claim<'info> {
     pub vault: Account<'info, TokenAccount>,
     #[account(mut, token::mint = config.usdc_mint, token::authority = user)]
     pub user_usdc: Account<'info, TokenAccount>,
-    #[account(
-        mut,
-        token::mint = config.usdc_mint,
-        token::authority = config.treasury,
-        address = config.treasury,
-    )]
+    #[account(mut, address = config.treasury)]
     pub treasury_usdc: Account<'info, TokenAccount>,
     #[account(mut)]
     pub user: Signer<'info>,
@@ -447,26 +483,14 @@ pub struct ForceRefund<'info> {
 }
 
 #[derive(Accounts)]
-pub struct AdminOnly<'info> {
-    #[account(mut, seeds = [b"config"], bump = config.bump, has_one = admin)]
-    pub config: Account<'info, Config>,
-    pub admin: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct SweepNoWinners<'info> {
+pub struct SweepAllLost<'info> {
     #[account(seeds = [b"config"], bump = config.bump, has_one = admin)]
     pub config: Account<'info, Config>,
     #[account(mut, seeds = [b"round", round.epoch.to_le_bytes().as_ref()], bump = round.bump)]
     pub round: Account<'info, Round>,
     #[account(mut, seeds = [b"vault", round.epoch.to_le_bytes().as_ref()], bump)]
     pub vault: Account<'info, TokenAccount>,
-    #[account(
-        mut,
-        token::mint = config.usdc_mint,
-        token::authority = config.treasury,
-        address = config.treasury,
-    )]
+    #[account(mut, address = config.treasury)]
     pub treasury_usdc: Account<'info, TokenAccount>,
     pub admin: Signer<'info>,
     pub token_program: Program<'info, Token>,
@@ -480,12 +504,7 @@ pub struct EmergencySweep<'info> {
     pub round: Account<'info, Round>,
     #[account(mut, seeds = [b"vault", round.epoch.to_le_bytes().as_ref()], bump)]
     pub vault: Account<'info, TokenAccount>,
-    #[account(
-        mut,
-        token::mint = config.usdc_mint,
-        token::authority = config.treasury,
-        address = config.treasury,
-    )]
+    #[account(mut, address = config.treasury)]
     pub treasury_usdc: Account<'info, TokenAccount>,
     pub admin: Signer<'info>,
     pub token_program: Program<'info, Token>,
@@ -500,9 +519,14 @@ pub struct Config {
     pub treasury: Pubkey,
     pub current_epoch: u64,
     pub paused: bool,
+    pub round_duration: i64,
+    pub min_bet: u64,
+    pub max_bet: u64,
+    pub fee_bps: u16,
+    pub solo_fee_bps: u16,
     pub bump: u8,
 }
-impl Config { const LEN: usize = 32 * 4 + 8 + 1 + 1; }
+impl Config { const LEN: usize = 32*4 + 8 + 1 + 8 + 8 + 8 + 2 + 2 + 1; }
 
 #[account]
 pub struct Round {
@@ -519,7 +543,7 @@ pub struct Round {
     pub swept: bool,
     pub bump: u8,
 }
-impl Round { const LEN: usize = 8 + 8 + 8 + 8 + 8 + 8 + 8 + 8 + 1 + 8 + 1 + 1; }
+impl Round { const LEN: usize = 8*8 + 1 + 8 + 1 + 1; }
 
 #[account]
 pub struct Bet {
@@ -536,17 +560,17 @@ impl Bet { const LEN: usize = 32 + 8 + 8 + 1 + 1 + 1; }
 pub enum Side { Heads, Tails }
 
 #[derive(AnchorSerialize, AnchorDeserialize, Clone, Copy, PartialEq, Eq)]
-pub enum Outcome { Unresolved, Heads, Tails, Tie, NoWinners }
+pub enum Outcome { Unresolved, Heads, Tails, Tie, AllLost }
 
 // ============ EVENTS ============
 #[event] pub struct ConfigInitialized { pub admin: Pubkey }
 #[event] pub struct RoundStarted { pub epoch: u64, pub lock_price: i64 }
 #[event] pub struct BetPlaced { pub epoch: u64, pub user: Pubkey, pub amount: u64, pub side: Side }
 #[event] pub struct RoundEnded { pub epoch: u64, pub close_price: i64, pub outcome: Outcome }
-#[event] pub struct Claimed { pub epoch: u64, pub user: Pubkey, pub payout: u64 }
+#[event] pub struct Claimed { pub epoch: u64, pub user: Pubkey, pub payout: u64, pub fee: u64 }
 #[event] pub struct RoundForceRefunded { pub epoch: u64 }
 #[event] pub struct PauseToggled { pub paused: bool }
-#[event] pub struct NoWinnersSwept { pub epoch: u64, pub amount: u64 }
+#[event] pub struct AllLostSwept { pub epoch: u64, pub amount: u64 }
 #[event] pub struct EmergencySwept { pub epoch: u64, pub amount: u64 }
 
 // ============ ERRORS ============
@@ -562,9 +586,12 @@ pub enum FlipsyError {
     #[msg("Not resolved")] NotResolved,
     #[msg("Too early for refund")] TooEarlyForRefund,
     #[msg("Too early for emergency sweep")] TooEarlyForEmergency,
-    #[msg("Not a no-winners round")] NotNoWinners,
+    #[msg("Not an all-lost round")] NotAllLost,
     #[msg("Already swept")] AlreadySwept,
     #[msg("Pyth read error")] PythError,
     #[msg("Pyth price stale")] PythStale,
     #[msg("Pyth math overflow")] PythOverflow,
+    #[msg("Math overflow")] MathOverflow,
+    #[msg("Bad parameters")] BadParams,
 }
+
