@@ -1,4 +1,4 @@
-name: Flipsy DEVNET v13
+name: Flipsy DEVNET v14
 
 on:
   workflow_dispatch:
@@ -6,7 +6,7 @@ on:
       seed:
         description: 'Short passphrase (any text — same passphrase = same wallets every run)'
         required: true
-        default: 'flipsy-deploy'
+        default: 'flipsy-fresh-1'
 
 env:
   TREASURY_OWNER: "Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV"
