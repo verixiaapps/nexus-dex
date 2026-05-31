@@ -226,3 +226,4 @@ jobs:
           echo " Admin & upgrade auth: $TREASURY_OWNER"
           echo " https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet"
           echo "==============================================="
+ 
