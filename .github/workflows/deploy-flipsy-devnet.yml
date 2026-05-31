@@ -1,4 +1,4 @@
-name: Flipsy DEVNET v4
+name: Flipsy DEVNET v7 (Solana Foundation image)
 
 on:
   workflow_dispatch:
@@ -12,67 +12,58 @@ env:
   TREASURY_OWNER: "Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV"
   USDC_MINT:      "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
   PYTH_FEED:      "J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix"
-  ANCHOR_VERSION: "0.31.1"
 
 jobs:
   deploy:
-    runs-on: macos-14
+    runs-on: ubuntu-latest
+    container:
+      image: solanafoundation/anchor:v0.31.1
+      options: --user root
     timeout-minutes: 60
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install Solana CLI
+      - name: Show pre-installed toolchain
         run: |
-          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
-          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
-
-      - name: Install Anchor 0.31.1
-        run: |
-          cargo install --git https://github.com/coral-xyz/anchor avm --force --locked
-          avm install $ANCHOR_VERSION
-          avm use $ANCHOR_VERSION
+          rustc --version
+          cargo --version
+          solana --version
+          anchor --version
+          node --version || true
+          npm --version || true
 
       - name: Restore cached deployer keypair
         id: kp-cache
         uses: actions/cache/restore@v4
         with:
-          path: ~/.config/solana/id.json
+          path: /root/.config/solana/id.json
           key: flipsy-deployer-keypair-v1
 
       - name: Setup deployer wallet
         run: |
-          mkdir -p ~/.config/solana
+          mkdir -p /root/.config/solana
           if [ -n "${{ inputs.keypair_json }}" ]; then
-            echo "Using pasted keypair."
-            echo '${{ inputs.keypair_json }}' > ~/.config/solana/id.json
-          elif [ ! -f ~/.config/solana/id.json ]; then
-            echo "No cached or pasted keypair — generating a new one."
-            solana-keygen new --no-bip39-passphrase --silent --outfile ~/.config/solana/id.json
-          else
-            echo "Using cached keypair."
+            echo '${{ inputs.keypair_json }}' > /root/.config/solana/id.json
+          elif [ ! -f /root/.config/solana/id.json ]; then
+            solana-keygen new --no-bip39-passphrase --silent --outfile /root/.config/solana/id.json
           fi
-          chmod 600 ~/.config/solana/id.json
+          chmod 600 /root/.config/solana/id.json
           solana config set --url devnet
           DEPLOYER=$(solana address)
           BALANCE=$(solana balance | awk '{print $1}')
           echo "Deployer: $DEPLOYER"
           echo "Balance : $BALANCE SOL"
-
           if awk "BEGIN{exit !($BALANCE < 1.6)}"; then
-            echo "Trying airdrops..."
             for i in 1 2 3 4 5; do
               solana airdrop 2 && break
               sleep 12
             done
             sleep 4
             BALANCE=$(solana balance | awk '{print $1}')
-            echo "Balance after airdrop: $BALANCE SOL"
           fi
-
           if awk "BEGIN{exit !($BALANCE < 1.6)}"; then
-            echo "::error::Insufficient SOL (need ≥1.6, have $BALANCE)."
-            echo "Fund $DEPLOYER from https://jumpbit.io/en/solana/devnet-faucet then re-run."
+            echo "::error::Need 1.6+ SOL. Fund $DEPLOYER from https://jumpbit.io/en/solana/devnet-faucet and re-run."
             exit 1
           fi
 
@@ -80,10 +71,10 @@ jobs:
         if: steps.kp-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: ~/.config/solana/id.json
+          path: /root/.config/solana/id.json
           key: flipsy-deployer-keypair-v1
 
-      - name: Patch lib.rs — drop pyth-sdk-solana
+      - name: Patch lib.rs (remove pyth-sdk-solana)
         working-directory: flipsy
         run: |
           python3 << 'PYEOF'
@@ -114,41 +105,23 @@ jobs:
           pat = re.compile(r'fn read_pyth_price\([^)]*\) -> Result<i64> \{.*?\n\}', re.DOTALL)
           if pat.search(src):
               src = pat.sub(new_fn, src, count=1)
-              print("patched read_pyth_price")
-          else:
-              print("WARN: read_pyth_price not found")
           with open(path, 'w') as f: f.write(src)
+          print("patched lib.rs")
           PYEOF
 
-      - name: Patch Cargo.toml
+      - name: Patch Cargo.toml + Anchor.toml
         working-directory: flipsy
         run: |
-          sed -i.bak '/^pyth-sdk-solana/d' programs/flipsy/Cargo.toml
-          sed -i.bak 's/anchor-lang = "=*0\.30\.[0-9]*"/anchor-lang = "0.31.1"/g' programs/flipsy/Cargo.toml
-          sed -i.bak 's/anchor-spl = "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g' programs/flipsy/Cargo.toml
-          rm -f programs/flipsy/Cargo.toml.bak
-
-      - name: Patch Anchor.toml toolchain
-        working-directory: flipsy
-        run: |
-          sed -i.bak 's/anchor_version = "0\.30\.[0-9]*"/anchor_version = "0.31.1"/g' Anchor.toml
-          rm -f Anchor.toml.bak
-          grep -i anchor_version Anchor.toml || true
+          sed -i '/^pyth-sdk-solana/d' programs/flipsy/Cargo.toml
+          sed -i 's/anchor-lang = "=*0\.30\.[0-9]*"/anchor-lang = "0.31.1"/g' programs/flipsy/Cargo.toml
+          sed -i 's/anchor-spl = "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g' programs/flipsy/Cargo.toml
+          sed -i 's/anchor_version = "0\.30\.[0-9]*"/anchor_version = "0.31.1"/g' Anchor.toml
+          grep -E "anchor-|pyth|anchor_version" programs/flipsy/Cargo.toml Anchor.toml || true
 
       - name: Build
         working-directory: flipsy
         run: |
           rm -rf target Cargo.lock
-          cargo generate-lockfile
-          # Pin edition-2024 crates to versions that work on Rust 1.79
-          for pin in "blake3@1.5.4" "litemap@0.7.4" "zerofrom@0.1.5" "zerovec@0.10.4" \
-                     "tinystr@0.7.6" "writeable@0.5.5" "yoke@0.7.4" \
-                     "icu_collections@1.5.0" "icu_normalizer@1.5.0" "icu_normalizer_data@1.5.0" \
-                     "icu_properties@1.5.0" "icu_properties_data@1.5.0" \
-                     "idna_adapter@1.1.0" "url@2.5.2"; do
-            name="${pin%@*}"; ver="${pin#*@}"
-            cargo update -p "$name" --precise "$ver" 2>/dev/null || true
-          done
           anchor build
 
       - name: Read program ID
@@ -157,28 +130,28 @@ jobs:
         run: |
           PROGRAM_ID=$(anchor keys list | awk '{print $2}' | head -1)
           echo "id=$PROGRAM_ID" >> $GITHUB_OUTPUT
+          echo "Program ID: $PROGRAM_ID"
 
-      - name: Write program ID into source
+      - name: Write ID into source + Anchor.toml
         working-directory: flipsy
         env:
           PROGRAM_ID: ${{ steps.pid.outputs.id }}
         run: |
-          sed -i.bak "s|declare_id!(\"[^\"]*\");|declare_id!(\"$PROGRAM_ID\");|" programs/flipsy/src/lib.rs
-          sed -i.bak "s|^flipsy = \"[^\"]*\"$|flipsy = \"$PROGRAM_ID\"|g" Anchor.toml
-          rm -f programs/flipsy/src/lib.rs.bak Anchor.toml.bak
+          sed -i "s|declare_id!(\"[^\"]*\");|declare_id!(\"$PROGRAM_ID\");|" programs/flipsy/src/lib.rs
+          sed -i "s|^flipsy = \"[^\"]*\"$|flipsy = \"$PROGRAM_ID\"|g" Anchor.toml
 
-      - name: Rebuild
+      - name: Rebuild with real program ID
         working-directory: flipsy
         run: anchor build
 
-      - name: Deploy
+      - name: Deploy to devnet
         working-directory: flipsy
         run: anchor deploy --provider.cluster devnet
 
       - name: Install JS deps
-        run: npm install --silent @coral-xyz/anchor @solana/web3.js @solana/spl-token
+        run: npm install --no-progress --silent @coral-xyz/anchor @solana/web3.js @solana/spl-token
 
-      - name: Initialize + transfer admin
+      - name: Treasury ATA + initialize + transfer admin
         env:
           PROGRAM_ID: ${{ steps.pid.outputs.id }}
         run: |
@@ -194,18 +167,19 @@ jobs:
           const IDL = JSON.parse(fs.readFileSync("flipsy/target/idl/flipsy.json"));
           (async () => {
             const conn = new web3.Connection("https://api.devnet.solana.com", "confirmed");
-            const kp = web3.Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(process.env.HOME + "/.config/solana/id.json"))));
+            const kp = web3.Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync("/root/.config/solana/id.json"))));
             const provider = new anchor.AnchorProvider(conn, new anchor.Wallet(kp), { commitment: "confirmed" });
             anchor.setProvider(provider);
             let program;
             try { program = new anchor.Program(IDL, provider); }
             catch { program = new anchor.Program(IDL, PROGRAM_ID, provider); }
             const ata = await spl.getAssociatedTokenAddress(USDC_MINT, TREASURY_OWNER);
+            console.log("Treasury USDC ATA:", ata.toBase58());
             if (!(await conn.getAccountInfo(ata))) {
               const sig = await web3.sendAndConfirmTransaction(conn,
                 new web3.Transaction().add(spl.createAssociatedTokenAccountInstruction(kp.publicKey, ata, TREASURY_OWNER, USDC_MINT)),
                 [kp]);
-              console.log("ATA:", sig);
+              console.log("ATA created:", sig);
             }
             const [cfg] = web3.PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
             let c; try { c = await program.account.config.fetch(cfg); } catch {}
@@ -226,7 +200,7 @@ jobs:
           JSEOF
           node init.js
 
-      - name: Transfer upgrade authority
+      - name: Transfer upgrade authority to your wallet
         env:
           PROGRAM_ID: ${{ steps.pid.outputs.id }}
         run: |
@@ -240,6 +214,6 @@ jobs:
         run: |
           echo "==============================================="
           echo " DEPLOYED. Program ID: $PROGRAM_ID"
-          echo " Admin & upgrade auth: $TREASURY_OWNER"
+          echo " Admin & upgrade auth: $TREASURY_OWNER (you)"
           echo " https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet"
           echo "==============================================="
