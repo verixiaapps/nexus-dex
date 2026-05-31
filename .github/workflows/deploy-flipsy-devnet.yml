@@ -1,7 +1,12 @@
-name: Deploy Flipsy — DEVNET (fully automatic, no secrets needed)
+name: Deploy Flipsy — DEVNET
 
 on:
   workflow_dispatch:
+    inputs:
+      keypair_json:
+        description: 'Optional: paste your funded keypair JSON. Leave blank to reuse cached deployer.'
+        required: false
+        type: string
 
 env:
   TREASURY_OWNER: "Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV"
@@ -22,26 +27,54 @@ jobs:
           sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
           echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
 
-      - name: Install Anchor ${{ env.ANCHOR_VERSION }}
+      - name: Install Anchor 0.31.1
         run: |
           cargo install --git https://github.com/coral-xyz/anchor avm --force --locked
           avm install $ANCHOR_VERSION
           avm use $ANCHOR_VERSION
-          anchor --version
 
-      - name: Restore deployer keypair (cache)
+      - name: Restore cached deployer keypair
         id: kp-cache
         uses: actions/cache/restore@v4
         with:
           path: ~/.config/solana/id.json
           key: flipsy-deployer-keypair-v1
 
-      - name: Generate deployer keypair if missing
-        if: steps.kp-cache.outputs.cache-hit != 'true'
+      - name: Setup deployer wallet
         run: |
           mkdir -p ~/.config/solana
-          solana-keygen new --no-bip39-passphrase --silent --outfile ~/.config/solana/id.json
-          echo "::notice::Generated new deployer keypair"
+          if [ -n "${{ inputs.keypair_json }}" ]; then
+            echo "Using pasted keypair."
+            echo '${{ inputs.keypair_json }}' > ~/.config/solana/id.json
+          elif [ ! -f ~/.config/solana/id.json ]; then
+            echo "No cached or pasted keypair — generating a new one."
+            solana-keygen new --no-bip39-passphrase --silent --outfile ~/.config/solana/id.json
+          else
+            echo "Using cached keypair."
+          fi
+          chmod 600 ~/.config/solana/id.json
+          solana config set --url devnet
+          DEPLOYER=$(solana address)
+          BALANCE=$(solana balance | awk '{print $1}')
+          echo "Deployer: $DEPLOYER"
+          echo "Balance : $BALANCE SOL"
+
+          if awk "BEGIN{exit !($BALANCE < 1.6)}"; then
+            echo "Trying airdrops..."
+            for i in 1 2 3 4 5; do
+              solana airdrop 2 && break
+              sleep 12
+            done
+            sleep 4
+            BALANCE=$(solana balance | awk '{print $1}')
+            echo "Balance after airdrop: $BALANCE SOL"
+          fi
+
+          if awk "BEGIN{exit !($BALANCE < 1.6)}"; then
+            echo "::error::Insufficient SOL (need ≥1.6, have $BALANCE)."
+            echo "Fund $DEPLOYER from https://jumpbit.io/en/solana/devnet-faucet then re-run."
+            exit 1
+          fi
 
       - name: Save deployer keypair to cache
         if: steps.kp-cache.outputs.cache-hit != 'true'
@@ -49,41 +82,6 @@ jobs:
         with:
           path: ~/.config/solana/id.json
           key: flipsy-deployer-keypair-v1
-
-      - name: Configure & fund deployer wallet
-        run: |
-          solana config set --url devnet
-          DEPLOYER=$(solana address)
-          echo "Deployer: $DEPLOYER"
-          BALANCE=$(solana balance | awk '{print $1}')
-          echo "Current balance: $BALANCE SOL"
-
-          # Airdrop up to 4 SOL via multiple attempts (devnet faucet is flaky)
-          if awk "BEGIN{exit !($BALANCE < 3.0)}"; then
-            echo "Need more SOL — airdropping..."
-            for i in 1 2 3 4 5 6 7 8; do
-              echo "Airdrop attempt $i..."
-              if solana airdrop 2 2>&1 | tee /tmp/airdrop.log | grep -qi "signature\|confirmed"; then
-                echo "  airdrop succeeded"
-                sleep 4
-                NEW_BAL=$(solana balance | awk '{print $1}')
-                echo "  balance: $NEW_BAL"
-                if awk "BEGIN{exit !($NEW_BAL >= 3.0)}"; then break; fi
-              fi
-              echo "  waiting 15s before retry..."
-              sleep 15
-            done
-          fi
-
-          FINAL_BAL=$(solana balance | awk '{print $1}')
-          echo "Final balance: $FINAL_BAL SOL"
-          if awk "BEGIN{exit !($FINAL_BAL < 1.6)}"; then
-            echo "::error::Insufficient SOL for deployment (need ≥1.6, have $FINAL_BAL)."
-            echo "Devnet faucet is rate-limited. Options:"
-            echo "  1) Wait 1 hour and re-run this workflow (keypair is cached)"
-            echo "  2) Fund $DEPLOYER manually from https://faucet.solana.com"
-            exit 1
-          fi
 
       - name: Patch lib.rs — drop pyth-sdk-solana
         working-directory: flipsy
@@ -118,7 +116,7 @@ jobs:
               src = pat.sub(new_fn, src, count=1)
               print("patched read_pyth_price")
           else:
-              print("WARN: read_pyth_price not found (may already be patched)")
+              print("WARN: read_pyth_price not found")
           with open(path, 'w') as f: f.write(src)
           PYEOF
 
@@ -129,7 +127,6 @@ jobs:
           sed -i.bak 's/anchor-lang = "=*0\.30\.[0-9]*"/anchor-lang = "0.31.1"/g' programs/flipsy/Cargo.toml
           sed -i.bak 's/anchor-spl = "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g' programs/flipsy/Cargo.toml
           rm -f programs/flipsy/Cargo.toml.bak
-          grep -E "anchor-|pyth" programs/flipsy/Cargo.toml || true
 
       - name: Build
         working-directory: flipsy
@@ -143,7 +140,6 @@ jobs:
         run: |
           PROGRAM_ID=$(anchor keys list | awk '{print $2}' | head -1)
           echo "id=$PROGRAM_ID" >> $GITHUB_OUTPUT
-          echo "Program ID: $PROGRAM_ID"
 
       - name: Write program ID into source
         working-directory: flipsy
@@ -158,14 +154,14 @@ jobs:
         working-directory: flipsy
         run: anchor build
 
-      - name: Deploy to devnet
+      - name: Deploy
         working-directory: flipsy
         run: anchor deploy --provider.cluster devnet
 
       - name: Install JS deps
         run: npm install --silent @coral-xyz/anchor @solana/web3.js @solana/spl-token
 
-      - name: Create treasury ATA, initialize program, transfer admin
+      - name: Initialize + transfer admin
         env:
           PROGRAM_ID: ${{ steps.pid.outputs.id }}
         run: |
@@ -187,14 +183,12 @@ jobs:
             let program;
             try { program = new anchor.Program(IDL, provider); }
             catch { program = new anchor.Program(IDL, PROGRAM_ID, provider); }
-
             const ata = await spl.getAssociatedTokenAddress(USDC_MINT, TREASURY_OWNER);
-            console.log("Treasury USDC ATA:", ata.toBase58());
             if (!(await conn.getAccountInfo(ata))) {
               const sig = await web3.sendAndConfirmTransaction(conn,
                 new web3.Transaction().add(spl.createAssociatedTokenAccountInstruction(kp.publicKey, ata, TREASURY_OWNER, USDC_MINT)),
                 [kp]);
-              console.log("ATA created:", sig);
+              console.log("ATA:", sig);
             }
             const [cfg] = web3.PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
             let c; try { c = await program.account.config.fetch(cfg); } catch {}
@@ -203,19 +197,19 @@ jobs:
                 .initialize(new anchor.BN(300), new anchor.BN(100000), new anchor.BN(5000000), 2000, 500)
                 .accounts({ config: cfg, usdcMint: USDC_MINT, pythFeed: PYTH_FEED, treasury: ata,
                             admin: kp.publicKey, systemProgram: web3.SystemProgram.programId }).rpc();
-              console.log("Initialized:", sig);
+              console.log("init:", sig);
               c = await program.account.config.fetch(cfg);
-            } else console.log("Already initialized.");
+            }
             if (!c.admin.equals(TREASURY_OWNER) && c.admin.equals(kp.publicKey)) {
               const sig = await program.methods.setAdmin(TREASURY_OWNER)
                 .accounts({ config: cfg, admin: kp.publicKey }).rpc();
-              console.log("Admin transferred:", sig);
+              console.log("setAdmin:", sig);
             }
           })().catch(e => { console.error("INIT FAILED:", e); process.exit(1); });
           JSEOF
           node init.js
 
-      - name: Transfer upgrade authority to your wallet
+      - name: Transfer upgrade authority
         env:
           PROGRAM_ID: ${{ steps.pid.outputs.id }}
         run: |
@@ -223,22 +217,12 @@ jobs:
             --new-upgrade-authority "$TREASURY_OWNER" \
             --skip-new-upgrade-authority-signer-check
 
-      - name: Upload IDL artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: flipsy-idl
-          path: flipsy/target/idl/flipsy.json
-
       - name: Final summary
         env:
           PROGRAM_ID: ${{ steps.pid.outputs.id }}
         run: |
           echo "==============================================="
-          echo " DEPLOYED + INITIALIZED + AUTHORITY TRANSFERRED"
-          echo "==============================================="
-          echo " Program ID         : $PROGRAM_ID"
-          echo " Network            : devnet"
-          echo " Admin              : $TREASURY_OWNER  (your wallet)"
-          echo " Upgrade authority  : $TREASURY_OWNER  (your wallet)"
-          echo " Explorer           : https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet"
+          echo " DEPLOYED. Program ID: $PROGRAM_ID"
+          echo " Admin & upgrade auth: $TREASURY_OWNER"
+          echo " https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet"
           echo "==============================================="
