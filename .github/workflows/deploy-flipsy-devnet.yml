@@ -1,4 +1,4 @@
-name: Flipsy DEVNET v7 (Solana Foundation image)
+name: Flipsy DEVNET v8
 
 on:
   workflow_dispatch:
@@ -24,12 +24,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show pre-installed toolchain
+      - name: Setup Rust default + show toolchain
         run: |
-          rustc --version
-          cargo --version
-          solana --version
-          anchor --version
+          rustup default stable 2>/dev/null || rustup default 1.79.0 2>/dev/null || true
+          rustc --version || true
+          cargo --version || true
+          solana --version || true
+          anchor --version || true
           node --version || true
           npm --version || true
 
