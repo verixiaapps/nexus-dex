@@ -1,0 +1,215 @@
+name: Deploy Flipsy — DEVNET (full setup)
+
+on:
+  workflow_dispatch:
+
+env:
+  TREASURY_OWNER: "Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV"
+  USDC_MINT:      "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+  PYTH_FEED:      "J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix"
+  ANCHOR_VERSION: "0.31.1"
+
+jobs:
+  deploy:
+    runs-on: macos-14
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Install Anchor ${{ env.ANCHOR_VERSION }} via avm
+        run: |
+          cargo install --git https://github.com/coral-xyz/anchor avm --force --locked
+          avm install $ANCHOR_VERSION
+          avm use $ANCHOR_VERSION
+          anchor --version
+
+      - name: Setup deployer wallet
+        run: |
+          mkdir -p ~/.config/solana
+          if [ -z "${{ secrets.SOLANA_KEYPAIR }}" ]; then
+            echo "::error::SOLANA_KEYPAIR secret not set."
+            echo "Add it under Settings → Secrets and variables → Actions → New repository secret."
+            echo "Value = contents of ~/.config/solana/id.json from your Codespace."
+            exit 1
+          fi
+          echo '${{ secrets.SOLANA_KEYPAIR }}' > ~/.config/solana/id.json
+          chmod 600 ~/.config/solana/id.json
+          solana config set --url devnet
+          DEPLOYER=$(solana address)
+          BALANCE=$(solana balance)
+          echo "Deployer: $DEPLOYER"
+          echo "Balance:  $BALANCE"
+          # Need at least 1.5 SOL for program deploy
+          BAL_NUM=$(echo "$BALANCE" | awk '{print $1}')
+          if awk "BEGIN{exit !($BAL_NUM < 1.5)}"; then
+            echo "::warning::Balance below 1.5 SOL. Attempting airdrop..."
+            solana airdrop 2 || true
+            sleep 5
+            echo "New balance: $(solana balance)"
+          fi
+
+      - name: Patch lib.rs to drop pyth-sdk-solana
+        working-directory: flipsy
+        run: |
+          python3 << 'PYEOF'
+          import re
+          path = "programs/flipsy/src/lib.rs"
+          with open(path) as f: src = f.read()
+          # remove pyth_sdk_solana import
+          src = re.sub(r'^use pyth_sdk_solana[^\n]*\n', '', src, flags=re.MULTILINE)
+          new_fn = '''fn read_pyth_price(feed_info: &AccountInfo, current_ts: i64) -> Result<i64> {
+              let data = feed_info.try_borrow_data().map_err(|_| FlipsyError::PythError)?;
+              if data.len() < 240 { return err!(FlipsyError::PythError); }
+              let magic = u32::from_le_bytes(data[0..4].try_into().unwrap());
+              if magic != 0xa1b2c3d4 { return err!(FlipsyError::PythError); }
+              let atype = u32::from_le_bytes(data[8..12].try_into().unwrap());
+              if atype != 3 { return err!(FlipsyError::PythError); }
+              let expo = i32::from_le_bytes(data[20..24].try_into().unwrap());
+              let timestamp = i64::from_le_bytes(data[96..104].try_into().unwrap());
+              if current_ts.saturating_sub(timestamp) > 60 { return err!(FlipsyError::PythStale); }
+              let status = u32::from_le_bytes(data[224..228].try_into().unwrap());
+              if status != 1 { return err!(FlipsyError::PythStale); }
+              let raw = i64::from_le_bytes(data[208..216].try_into().unwrap());
+              let normalized = if expo >= -8 {
+                  raw.checked_mul(10_i64.pow((expo + 8) as u32)).ok_or(FlipsyError::PythOverflow)?
+              } else {
+                  raw.checked_div(10_i64.pow((-expo - 8) as u32)).ok_or(FlipsyError::PythOverflow)?
+              };
+              Ok(normalized)
+          }'''
+          pat = re.compile(r'fn read_pyth_price\([^)]*\) -> Result<i64> \{.*?\n\}', re.DOTALL)
+          if pat.search(src):
+              src = pat.sub(new_fn, src, count=1)
+              print("patched read_pyth_price")
+          else:
+              print("WARN: read_pyth_price not found")
+          with open(path, 'w') as f: f.write(src)
+          PYEOF
+
+      - name: Patch Cargo.toml — drop pyth-sdk-solana, bump anchor to 0.31.1
+        working-directory: flipsy
+        run: |
+          sed -i.bak '/^pyth-sdk-solana/d' programs/flipsy/Cargo.toml
+          sed -i.bak 's/anchor-lang = "=*0\.30\.[0-9]*"/anchor-lang = "0.31.1"/g' programs/flipsy/Cargo.toml
+          sed -i.bak 's/anchor-spl = "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g' programs/flipsy/Cargo.toml
+          rm -f programs/flipsy/Cargo.toml.bak
+          echo "----- Cargo.toml deps -----"
+          grep -E "anchor-|pyth" programs/flipsy/Cargo.toml || true
+
+      - name: Build
+        working-directory: flipsy
+        run: |
+          rm -rf target Cargo.lock
+          anchor build
+
+      - name: Read program ID
+        id: pid
+        working-directory: flipsy
+        run: |
+          PROGRAM_ID=$(anchor keys list | awk '{print $2}' | head -1)
+          echo "id=$PROGRAM_ID" >> $GITHUB_OUTPUT
+          echo "Program ID: $PROGRAM_ID"
+
+      - name: Write program ID into lib.rs + Anchor.toml
+        working-directory: flipsy
+        run: |
+          PROGRAM_ID="${{ steps.pid.outputs.id }}"
+          sed -i.bak "s|declare_id!(\"[^\"]*\");|declare_id!(\"$PROGRAM_ID\");|" programs/flipsy/src/lib.rs
+          sed -i.bak "s|^flipsy = \"[^\"]*\"$|flipsy = \"$PROGRAM_ID\"|g" Anchor.toml
+          rm -f programs/flipsy/src/lib.rs.bak Anchor.toml.bak
+
+      - name: Rebuild with real program ID
+        working-directory: flipsy
+        run: anchor build
+
+      - name: Deploy to devnet
+        working-directory: flipsy
+        run: anchor deploy --provider.cluster devnet
+
+      - name: Install npm deps
+        run: |
+          npm install --silent @coral-xyz/anchor @solana/web3.js @solana/spl-token
+
+      - name: Create treasury ATA, initialize program, transfer admin
+        env:
+          PROGRAM_ID: ${{ steps.pid.outputs.id }}
+        run: |
+          cat > init.js << 'JSEOF'
+          const anchor = require("@coral-xyz/anchor");
+          const web3 = require("@solana/web3.js");
+          const spl  = require("@solana/spl-token");
+          const fs   = require("fs");
+          const PROGRAM_ID     = new web3.PublicKey(process.env.PROGRAM_ID);
+          const USDC_MINT      = new web3.PublicKey(process.env.USDC_MINT);
+          const PYTH_FEED      = new web3.PublicKey(process.env.PYTH_FEED);
+          const TREASURY_OWNER = new web3.PublicKey(process.env.TREASURY_OWNER);
+          const IDL = JSON.parse(fs.readFileSync("flipsy/target/idl/flipsy.json"));
+          (async () => {
+            const conn = new web3.Connection("https://api.devnet.solana.com", "confirmed");
+            const kp = web3.Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(process.env.HOME + "/.config/solana/id.json"))));
+            const provider = new anchor.AnchorProvider(conn, new anchor.Wallet(kp), { commitment: "confirmed" });
+            anchor.setProvider(provider);
+            let program;
+            try { program = new anchor.Program(IDL, provider); }
+            catch { program = new anchor.Program(IDL, PROGRAM_ID, provider); }
+
+            const ata = await spl.getAssociatedTokenAddress(USDC_MINT, TREASURY_OWNER);
+            console.log("Treasury USDC ATA:", ata.toBase58());
+            if (!(await conn.getAccountInfo(ata))) {
+              const sig = await web3.sendAndConfirmTransaction(conn,
+                new web3.Transaction().add(spl.createAssociatedTokenAccountInstruction(kp.publicKey, ata, TREASURY_OWNER, USDC_MINT)),
+                [kp]);
+              console.log("ATA created:", sig);
+            }
+            const [cfg] = web3.PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
+            let c; try { c = await program.account.config.fetch(cfg); } catch {}
+            if (!c) {
+              const sig = await program.methods
+                .initialize(new anchor.BN(300), new anchor.BN(100000), new anchor.BN(5000000), 2000, 500)
+                .accounts({ config: cfg, usdcMint: USDC_MINT, pythFeed: PYTH_FEED, treasury: ata,
+                            admin: kp.publicKey, systemProgram: web3.SystemProgram.programId }).rpc();
+              console.log("Initialized:", sig);
+              c = await program.account.config.fetch(cfg);
+            } else console.log("Already initialized.");
+            if (!c.admin.equals(TREASURY_OWNER) && c.admin.equals(kp.publicKey)) {
+              const sig = await program.methods.setAdmin(TREASURY_OWNER)
+                .accounts({ config: cfg, admin: kp.publicKey }).rpc();
+              console.log("Admin transferred:", sig);
+            }
+          })().catch(e => { console.error("INIT FAILED:", e); process.exit(1); });
+          JSEOF
+          node init.js
+
+      - name: Transfer upgrade authority to your wallet
+        env:
+          PROGRAM_ID: ${{ steps.pid.outputs.id }}
+        run: |
+          solana program set-upgrade-authority "$PROGRAM_ID" \
+            --new-upgrade-authority "$TREASURY_OWNER" \
+            --skip-new-upgrade-authority-signer-check
+
+      - name: Upload IDL artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: flipsy-idl
+          path: flipsy/target/idl/flipsy.json
+
+      - name: Final summary
+        env:
+          PROGRAM_ID: ${{ steps.pid.outputs.id }}
+        run: |
+          echo "==============================================="
+          echo " DEPLOYED + INITIALIZED + AUTHORITY TRANSFERRED"
+          echo "==============================================="
+          echo " Program ID         : $PROGRAM_ID"
+          echo " Network            : devnet"
+          echo " Admin              : $TREASURY_OWNER  (your wallet)"
+          echo " Upgrade authority  : $TREASURY_OWNER  (your wallet)"
+          echo " Explorer           : https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet"
+          echo "==============================================="
