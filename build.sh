@@ -154,3 +154,4 @@ echo " Program ID : $PROGRAM_ID"
 echo " Explorer   : https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet"
 echo " IDL        : $FLIPSY/target/idl/flipsy.json"
 echo "==============================================="
+ 
