@@ -1,4 +1,4 @@
-name: Flipsy DEVNET v9
+name: Flipsy DEVNET v10
 
 on:
   workflow_dispatch:
@@ -38,19 +38,19 @@ jobs:
         id: kp-cache
         uses: actions/cache/restore@v4
         with:
-          path: $HOME/.config/solana/id.json
+          path: /root/.config/solana/id.json
           key: flipsy-deployer-keypair-v1
 
       - name: Setup deployer wallet
         run: |
-          mkdir -p $HOME/.config/solana
+          mkdir -p /root/.config/solana
           if [ -n "${{ inputs.keypair_json }}" ]; then
-            echo '${{ inputs.keypair_json }}' > $HOME/.config/solana/id.json
-          elif [ ! -f $HOME/.config/solana/id.json ]; then
-            solana-keygen new --no-bip39-passphrase --silent --outfile $HOME/.config/solana/id.json
+            echo '${{ inputs.keypair_json }}' > /root/.config/solana/id.json
+          elif [ ! -f /root/.config/solana/id.json ]; then
+            solana-keygen new --no-bip39-passphrase --silent --outfile /root/.config/solana/id.json
           fi
-          chmod 600 $HOME/.config/solana/id.json
-          solana config set --url devnet
+          chmod 600 /root/.config/solana/id.json
+          solana config set --url devnet --keypair /root/.config/solana/id.json
           DEPLOYER=$(solana address)
           BALANCE=$(solana balance | awk '{print $1}')
           echo "Deployer: $DEPLOYER"
@@ -72,7 +72,7 @@ jobs:
         if: steps.kp-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: $HOME/.config/solana/id.json
+          path: /root/.config/solana/id.json
           key: flipsy-deployer-keypair-v1
 
       - name: Patch lib.rs (remove pyth-sdk-solana)
@@ -168,7 +168,7 @@ jobs:
           const IDL = JSON.parse(fs.readFileSync("flipsy/target/idl/flipsy.json"));
           (async () => {
             const conn = new web3.Connection("https://api.devnet.solana.com", "confirmed");
-            const kp = web3.Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync(process.env.HOME + "/.config/solana/id.json"))));
+            const kp = web3.Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync("/root/.config/solana/id.json"))));
             const provider = new anchor.AnchorProvider(conn, new anchor.Wallet(kp), { commitment: "confirmed" });
             anchor.setProvider(provider);
             let program;
