@@ -24,7 +24,13 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Rust: force current stable (≥1.85) so edition2024 crates work ──────
+      # ── Delete any committed Cargo.lock (may be v4, unreadable by container) ──
+      - name: Remove committed Cargo.lock
+        run: |
+          find . -name "Cargo.lock" -delete
+          echo "Cargo.lock removed (will be regenerated fresh)"
+
+      # ── Force current stable Rust (>=1.85 for edition2024 support) ───────────
       - name: Install stable Rust
         run: |
           rustup toolchain install stable --no-self-update
@@ -34,7 +40,7 @@ jobs:
           solana --version || true
           anchor --version || true
 
-      # ── Python cryptography for key derivation ───────────────────────────
+      # ── Python cryptography for key derivation ───────────────────────────────
       - name: Install Python cryptography
         run: |
           python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey" 2>/dev/null \
@@ -44,7 +50,7 @@ jobs:
             || (apt-get update -qq && apt-get install -y -qq python3-cryptography)
           python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; print('cryptography OK')"
 
-      # ── Derive wallets from seed (deterministic) ─────────────────────────
+      # ── Derive wallets deterministically from seed ───────────────────────────
       - name: Derive deployer + helper keypairs
         env:
           SEED: ${{ inputs.seed }}
@@ -90,8 +96,8 @@ jobs:
           done
           echo "==================================================="
 
-      # ── Fund main deployer via airdrops ───────────────────────────────────
-      - name: Fund deployer (airdrop + sweep helpers)
+      # ── Fund deployer via airdrops + helper sweep ────────────────────────────
+      - name: Fund deployer
         run: |
           MAIN=$(solana address --keypair /root/.config/solana/main.json)
           NEED=1.7
@@ -110,10 +116,9 @@ jobs:
 
           for round in 1 2 3; do
             enough && break
-            echo "--- Phase 2 round $round: airdrop helpers → sweep ---"
+            echo "--- Phase 2 round $round: airdrop helpers, sweep to main ---"
             for h in h1 h2 h3; do
               enough && break
-              HADDR=$(solana address --keypair /root/.config/solana/$h.json)
               for k in 1 2 3; do
                 solana airdrop 2 --keypair /root/.config/solana/$h.json 2>&1 | tail -2
                 HBAL=$(balance_of $h)
@@ -123,7 +128,7 @@ jobs:
               HBAL=$(balance_of $h)
               if awk "BEGIN{exit !($HBAL > 0.01)}"; then
                 AMT=$(awk "BEGIN{printf \"%.6f\", $HBAL - 0.001}")
-                echo "  sweeping $AMT SOL from $h → main..."
+                echo "  sweeping $AMT SOL from $h to main..."
                 solana transfer "$MAIN" "$AMT" \
                   --keypair /root/.config/solana/$h.json \
                   --allow-unfunded-recipient \
@@ -147,8 +152,8 @@ jobs:
             exit 1
           fi
 
-      # ── Patch: remove pyth-sdk-solana dep, inline raw price reader ───────
-      - name: Patch lib.rs (remove pyth-sdk-solana)
+      # ── Patch lib.rs: remove pyth-sdk-solana, inline raw price reader ────────
+      - name: Patch lib.rs
         working-directory: flipsy
         run: |
           python3 << 'PYEOF'
@@ -182,7 +187,7 @@ jobs:
           print("lib.rs patched OK")
           PYEOF
 
-      # ── Patch Cargo.toml + Anchor.toml versions ───────────────────────────
+      # ── Patch Cargo.toml + Anchor.toml versions ───────────────────────────────
       - name: Patch Cargo.toml + Anchor.toml
         working-directory: flipsy
         run: |
@@ -191,14 +196,14 @@ jobs:
           sed -i 's/anchor-spl = "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g'  programs/flipsy/Cargo.toml
           sed -i 's/anchor_version = "0\.30\.[0-9]*"/anchor_version = "0.31.1"/g' Anchor.toml
 
-      # ── Build ─────────────────────────────────────────────────────────────
+      # ── Build (fresh Cargo.lock generated here) ───────────────────────────────
       - name: Build
         working-directory: flipsy
         run: |
-          rm -rf target Cargo.lock
+          rm -rf target
           anchor build
 
-      # ── Inject real program ID, rebuild, deploy ───────────────────────────
+      # ── Read generated program ID ─────────────────────────────────────────────
       - name: Read program ID
         id: pid
         working-directory: flipsy
@@ -207,6 +212,7 @@ jobs:
           echo "id=$PROGRAM_ID" >> $GITHUB_OUTPUT
           echo "Program ID: $PROGRAM_ID"
 
+      # ── Inject real program ID, rebuild, deploy ───────────────────────────────
       - name: Inject program ID into source
         working-directory: flipsy
         env:
@@ -221,7 +227,7 @@ jobs:
           anchor build
           anchor deploy --provider.cluster devnet
 
-      # ── JS init: treasury ATA + initialize + set admin ────────────────────
+      # ── JS init deps ──────────────────────────────────────────────────────────
       - name: Install JS deps
         run: |
           mkdir -p /tmp/init && cd /tmp/init
@@ -233,7 +239,8 @@ jobs:
             2>&1 | tail -3
           cp -r node_modules $GITHUB_WORKSPACE/node_modules
 
-      - name: Treasury ATA + initialize + transfer admin
+      # ── Treasury ATA + initialize config + hand off admin ─────────────────────
+      - name: Initialize program
         env:
           PROGRAM_ID: ${{ steps.pid.outputs.id }}
         run: |
@@ -303,19 +310,19 @@ jobs:
               console.log("Config already initialized");
             }
 
-            // Hand off admin to treasury owner
+            // Transfer admin to treasury owner
             if (!c.admin.equals(TREASURY_OWNER) && c.admin.equals(kp.publicKey)) {
               const sig = await program.methods.setAdmin(TREASURY_OWNER)
                 .accounts({ config: cfg, admin: kp.publicKey })
                 .rpc();
               console.log("Admin transferred:", sig);
             } else {
-              console.log("Admin already set to treasury owner");
+              console.log("Admin already set correctly");
             }
           })().catch(e => { console.error("INIT FAILED:", e); process.exit(1); });
           JSEOF
 
-      # ── Hand upgrade authority to treasury owner ──────────────────────────
+      # ── Hand upgrade authority to treasury owner ──────────────────────────────
       - name: Transfer upgrade authority
         env:
           PROGRAM_ID: ${{ steps.pid.outputs.id }}
@@ -324,7 +331,7 @@ jobs:
             --new-upgrade-authority "$TREASURY_OWNER" \
             --skip-new-upgrade-authority-signer-check
 
-      # ── Done ──────────────────────────────────────────────────────────────
+      # ── Done ──────────────────────────────────────────────────────────────────
       - name: Summary
         env:
           PROGRAM_ID: ${{ steps.pid.outputs.id }}
