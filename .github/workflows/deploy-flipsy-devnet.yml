@@ -1,4 +1,4 @@
-name: Flipsy DEVNET v12
+name: Flipsy DEVNET v13
 
 on:
   workflow_dispatch:
@@ -31,33 +31,51 @@ jobs:
           solana --version || true
           anchor --version || true
 
-      - name: Derive deployer + helper keypairs from seed
+      - name: Install Python cryptography
+        run: |
+          python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey" 2>/dev/null && echo "already installed" && exit 0
+          pip install --quiet --break-system-packages cryptography 2>/dev/null \
+            || pip3 install --quiet --break-system-packages cryptography 2>/dev/null \
+            || (apt-get update -qq && apt-get install -y -qq python3-cryptography)
+          python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; print('cryptography OK')"
+
+      - name: Derive deployer + helper keypairs from seed (pure Python)
         env:
           SEED: ${{ inputs.seed }}
         run: |
-          mkdir -p /root/.config/solana /tmp/derive
-          cd /tmp/derive
-          npm init -y >/dev/null 2>&1
-          npm install --no-progress --silent @solana/web3.js 2>&1 | tail -3 || true
-          node -e "
-            const crypto = require('crypto');
-            const fs = require('fs');
-            const { Keypair } = require('@solana/web3.js');
-            const base = process.env.SEED;
-            const names = ['', '-h1', '-h2', '-h3'];
-            const labels = ['main', 'h1', 'h2', 'h3'];
-            for (let i = 0; i < 4; i++) {
-              const seedBuf = crypto.createHash('sha256').update(base + names[i]).digest();
-              const kp = Keypair.fromSeed(seedBuf);
-              fs.writeFileSync('/root/.config/solana/' + labels[i] + '.json', JSON.stringify(Array.from(kp.secretKey)));
-              console.log(labels[i] + ': ' + kp.publicKey.toBase58());
-            }
-          "
+          mkdir -p /root/.config/solana
+          python3 << 'PYEOF'
+          import hashlib, json, os
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+          from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding
+
+          ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+          def b58encode(b):
+              n = int.from_bytes(b, 'big'); s = ''
+              while n > 0:
+                  n, r = divmod(n, 58); s = ALPHABET[r] + s
+              for byte in b:
+                  if byte == 0: s = '1' + s
+                  else: break
+              return s
+
+          base = os.environ["SEED"]
+          for suffix, label in [("", "main"), ("-h1", "h1"), ("-h2", "h2"), ("-h3", "h3")]:
+              seed_bytes = hashlib.sha256((base + suffix).encode()).digest()
+              priv = Ed25519PrivateKey.from_private_bytes(seed_bytes)
+              pub = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+              # Solana id.json format: 64-byte array = 32-byte seed + 32-byte pubkey
+              secret_key = list(seed_bytes) + list(pub)
+              path = f"/root/.config/solana/{label}.json"
+              with open(path, "w") as f:
+                  json.dump(secret_key, f)
+              print(f"{label:6s}: {b58encode(pub)}")
+          PYEOF
           cp /root/.config/solana/main.json /root/.config/solana/id.json
           chmod 600 /root/.config/solana/*.json
           solana config set --url devnet --keypair /root/.config/solana/id.json
 
-      - name: Print all wallet addresses + balances
+      - name: Print wallet addresses + balances
         run: |
           echo "==================================================="
           for w in main h1 h2 h3; do
@@ -76,7 +94,6 @@ jobs:
           main_bal()   { solana balance 2>/dev/null | awk '{print $1}'; }
           enough()     { awk "BEGIN{exit !($(main_bal) >= $NEED)}"; }
 
-          # Phase 1: hit main directly
           echo "--- Phase 1: airdrop directly to main ---"
           for i in 1 2 3 4 5 6 7 8; do
             enough && break
@@ -86,7 +103,6 @@ jobs:
           done
           echo "  main after phase 1: $(main_bal) SOL"
 
-          # Phase 2: airdrop to helpers, then transfer to main
           for round in 1 2 3; do
             enough && break
             echo "--- Phase 2 round $round: airdrop helpers, sweep to main ---"
@@ -102,7 +118,6 @@ jobs:
               done
               HBAL=$(balance_of $h)
               echo "  $h balance: $HBAL SOL"
-              # Sweep almost-all to main (leave 0.001 for tx fee)
               if awk "BEGIN{exit !($HBAL > 0.01)}"; then
                 AMT=$(awk "BEGIN{printf \"%.6f\", $HBAL - 0.001}")
                 echo "  transferring $AMT SOL from $h to main..."
@@ -205,8 +220,17 @@ jobs:
           anchor build
           anchor deploy --provider.cluster devnet
 
-      - name: Install JS deps for init
-        run: npm install --no-progress --silent @coral-xyz/anchor @solana/web3.js @solana/spl-token
+      - name: Install JS deps for init (pinned to CJS-compatible versions)
+        run: |
+          mkdir -p /tmp/init && cd /tmp/init
+          npm init -y >/dev/null 2>&1
+          npm install --no-progress --silent \
+            @coral-xyz/anchor@0.31.1 \
+            @solana/web3.js@1.91.0 \
+            @solana/spl-token@0.4.6 \
+            2>&1 | tail -3
+          # Copy modules where init.js expects them
+          cp -r node_modules $GITHUB_WORKSPACE/node_modules
 
       - name: Treasury ATA + initialize + transfer admin
         env:
