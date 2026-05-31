@@ -1,6 +1,6 @@
 name: Deploy Flipsy — MAINNET (live, real money)
 
-on:
+on: 
   workflow_dispatch:
     inputs:
       confirm:
