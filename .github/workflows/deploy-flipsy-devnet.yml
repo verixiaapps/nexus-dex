@@ -192,10 +192,16 @@ jobs:
           sed -i 's/anchor-spl = "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g' programs/flipsy/Cargo.toml
           sed -i 's/anchor_version = "0\.30\.[0-9]*"/anchor_version = "0.31.1"/g' Anchor.toml
 
-      - name: Build
+      - name: Build (with edition2024 dep pins)
         working-directory: flipsy
         run: |
           rm -rf target Cargo.lock
+          cargo generate-lockfile
+          # Pin crates that ship edition2024 (per Solana Foundation common-errors.md, Jan 2026)
+          cargo update -p blake3            --precise 1.8.2  || true
+          cargo update -p constant_time_eq  --precise 0.3.1  || true
+          cargo update -p base64ct          --precise 1.7.3  || true
+          cargo update -p indexmap          --precise 2.11.4 || true
           anchor build
 
       - name: Read program ID
