@@ -1,10 +1,10 @@
-name: Flipsy DEVNET v14
+name: Flipsy DEVNET
 
 on:
   workflow_dispatch:
     inputs:
       seed:
-        description: 'Short passphrase (any text — same passphrase = same wallets every run)'
+        description: 'Short passphrase (same passphrase = same wallets every run)'
         required: true
         default: 'flipsy-fresh-1'
 
@@ -24,22 +24,28 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup toolchain
+      # ── Rust: force current stable (≥1.85) so edition2024 crates work ──────
+      - name: Install stable Rust
         run: |
-          rustup default stable 2>/dev/null || rustup default 1.79.0 2>/dev/null || true
-          rustc --version || true
+          rustup toolchain install stable --no-self-update
+          rustup default stable
+          rustc --version
+          cargo --version
           solana --version || true
           anchor --version || true
 
+      # ── Python cryptography for key derivation ───────────────────────────
       - name: Install Python cryptography
         run: |
-          python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey" 2>/dev/null && echo "already installed" && exit 0
-          pip install --quiet --break-system-packages cryptography 2>/dev/null \
+          python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey" 2>/dev/null \
+            && echo "already installed" \
+            || pip install --quiet --break-system-packages cryptography 2>/dev/null \
             || pip3 install --quiet --break-system-packages cryptography 2>/dev/null \
             || (apt-get update -qq && apt-get install -y -qq python3-cryptography)
           python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; print('cryptography OK')"
 
-      - name: Derive deployer + helper keypairs from seed (pure Python)
+      # ── Derive wallets from seed (deterministic) ─────────────────────────
+      - name: Derive deployer + helper keypairs
         env:
           SEED: ${{ inputs.seed }}
         run: |
@@ -64,7 +70,6 @@ jobs:
               seed_bytes = hashlib.sha256((base + suffix).encode()).digest()
               priv = Ed25519PrivateKey.from_private_bytes(seed_bytes)
               pub = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-              # Solana id.json format: 64-byte array = 32-byte seed + 32-byte pubkey
               secret_key = list(seed_bytes) + list(pub)
               path = f"/root/.config/solana/{label}.json"
               with open(path, "w") as f:
@@ -85,7 +90,8 @@ jobs:
           done
           echo "==================================================="
 
-      - name: Pool airdrops from helpers into main deployer
+      # ── Fund main deployer via airdrops ───────────────────────────────────
+      - name: Fund deployer (airdrop + sweep helpers)
         run: |
           MAIN=$(solana address --keypair /root/.config/solana/main.json)
           NEED=1.7
@@ -94,22 +100,20 @@ jobs:
           main_bal()   { solana balance 2>/dev/null | awk '{print $1}'; }
           enough()     { awk "BEGIN{exit !($(main_bal) >= $NEED)}"; }
 
-          echo "--- Phase 1: airdrop directly to main ---"
-          for i in 1 2 3 4 5 6 7 8; do
+          echo "--- Phase 1: direct airdrops to main ---"
+          for i in $(seq 1 8); do
             enough && break
-            echo "  attempt $i on main..."
+            echo "  attempt $i..."
             solana airdrop 2 --keypair /root/.config/solana/main.json 2>&1 | tail -2
             sleep 15
           done
-          echo "  main after phase 1: $(main_bal) SOL"
 
           for round in 1 2 3; do
             enough && break
-            echo "--- Phase 2 round $round: airdrop helpers, sweep to main ---"
+            echo "--- Phase 2 round $round: airdrop helpers → sweep ---"
             for h in h1 h2 h3; do
               enough && break
               HADDR=$(solana address --keypair /root/.config/solana/$h.json)
-              echo "  airdropping $h ($HADDR)..."
               for k in 1 2 3; do
                 solana airdrop 2 --keypair /root/.config/solana/$h.json 2>&1 | tail -2
                 HBAL=$(balance_of $h)
@@ -117,17 +121,15 @@ jobs:
                 sleep 10
               done
               HBAL=$(balance_of $h)
-              echo "  $h balance: $HBAL SOL"
               if awk "BEGIN{exit !($HBAL > 0.01)}"; then
                 AMT=$(awk "BEGIN{printf \"%.6f\", $HBAL - 0.001}")
-                echo "  transferring $AMT SOL from $h to main..."
+                echo "  sweeping $AMT SOL from $h → main..."
                 solana transfer "$MAIN" "$AMT" \
                   --keypair /root/.config/solana/$h.json \
                   --allow-unfunded-recipient \
                   --fee-payer /root/.config/solana/$h.json 2>&1 | tail -2 || true
               fi
             done
-            echo "  main after round $round: $(main_bal) SOL"
             sleep 20
           done
 
@@ -136,21 +138,16 @@ jobs:
           echo "  FINAL main balance: $BAL SOL  (need $NEED)"
           echo "==================================================="
           if ! enough; then
-            cat <<EOF
-          ::error::Could not fund deployer to $NEED SOL via airdrops.
-          Fund any of these addresses (devnet) and re-run with the same passphrase:
-            MAIN: $MAIN
-            H1:   $(solana address --keypair /root/.config/solana/h1.json)
-            H2:   $(solana address --keypair /root/.config/solana/h2.json)
-            H3:   $(solana address --keypair /root/.config/solana/h3.json)
-          Faucets to try: https://jumpbit.io/en/solana/devnet-faucet
-                          https://www.devnetfaucet.org
-                          https://faucet.quicknode.com/solana/devnet
-                          https://faucet.solana.com
-          EOF
+            echo "::error::Could not reach $NEED SOL. Fund one of these devnet addresses and re-run:"
+            echo "  MAIN: $MAIN"
+            for h in h1 h2 h3; do
+              echo "  $h:   $(solana address --keypair /root/.config/solana/$h.json)"
+            done
+            echo "Faucets: https://faucet.solana.com  https://faucet.quicknode.com/solana/devnet"
             exit 1
           fi
 
+      # ── Patch: remove pyth-sdk-solana dep, inline raw price reader ───────
       - name: Patch lib.rs (remove pyth-sdk-solana)
         working-directory: flipsy
         run: |
@@ -182,28 +179,26 @@ jobs:
           pat = re.compile(r'fn read_pyth_price\([^)]*\) -> Result<i64> \{.*?\n\}', re.DOTALL)
           if pat.search(src): src = pat.sub(new_fn, src, count=1)
           with open(path, 'w') as f: f.write(src)
+          print("lib.rs patched OK")
           PYEOF
 
+      # ── Patch Cargo.toml + Anchor.toml versions ───────────────────────────
       - name: Patch Cargo.toml + Anchor.toml
         working-directory: flipsy
         run: |
           sed -i '/^pyth-sdk-solana/d' programs/flipsy/Cargo.toml
           sed -i 's/anchor-lang = "=*0\.30\.[0-9]*"/anchor-lang = "0.31.1"/g' programs/flipsy/Cargo.toml
-          sed -i 's/anchor-spl = "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g' programs/flipsy/Cargo.toml
+          sed -i 's/anchor-spl = "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g'  programs/flipsy/Cargo.toml
           sed -i 's/anchor_version = "0\.30\.[0-9]*"/anchor_version = "0.31.1"/g' Anchor.toml
 
-      - name: Build (with edition2024 dep pins)
+      # ── Build ─────────────────────────────────────────────────────────────
+      - name: Build
         working-directory: flipsy
         run: |
           rm -rf target Cargo.lock
-          cargo generate-lockfile
-          # Pin crates that ship edition2024 (per Solana Foundation common-errors.md, Jan 2026)
-          cargo update -p blake3            --precise 1.8.2  || true
-          cargo update -p constant_time_eq  --precise 0.3.1  || true
-          cargo update -p base64ct          --precise 1.7.3  || true
-          cargo update -p indexmap          --precise 2.11.4 || true
           anchor build
 
+      # ── Inject real program ID, rebuild, deploy ───────────────────────────
       - name: Read program ID
         id: pid
         working-directory: flipsy
@@ -212,7 +207,7 @@ jobs:
           echo "id=$PROGRAM_ID" >> $GITHUB_OUTPUT
           echo "Program ID: $PROGRAM_ID"
 
-      - name: Write program ID into source
+      - name: Inject program ID into source
         working-directory: flipsy
         env:
           PROGRAM_ID: ${{ steps.pid.outputs.id }}
@@ -220,13 +215,14 @@ jobs:
           sed -i "s|declare_id!(\"[^\"]*\");|declare_id!(\"$PROGRAM_ID\");|" programs/flipsy/src/lib.rs
           sed -i "s|^flipsy = \"[^\"]*\"$|flipsy = \"$PROGRAM_ID\"|g" Anchor.toml
 
-      - name: Rebuild + deploy
+      - name: Rebuild + deploy to devnet
         working-directory: flipsy
         run: |
           anchor build
           anchor deploy --provider.cluster devnet
 
-      - name: Install JS deps for init (pinned to CJS-compatible versions)
+      # ── JS init: treasury ATA + initialize + set admin ────────────────────
+      - name: Install JS deps
         run: |
           mkdir -p /tmp/init && cd /tmp/init
           npm init -y >/dev/null 2>&1
@@ -235,57 +231,91 @@ jobs:
             @solana/web3.js@1.91.0 \
             @solana/spl-token@0.4.6 \
             2>&1 | tail -3
-          # Copy modules where init.js expects them
           cp -r node_modules $GITHUB_WORKSPACE/node_modules
 
       - name: Treasury ATA + initialize + transfer admin
         env:
           PROGRAM_ID: ${{ steps.pid.outputs.id }}
         run: |
-          cat > init.js << 'JSEOF'
+          node - << 'JSEOF'
           const anchor = require("@coral-xyz/anchor");
-          const web3 = require("@solana/web3.js");
-          const spl  = require("@solana/spl-token");
-          const fs   = require("fs");
+          const web3   = require("@solana/web3.js");
+          const spl    = require("@solana/spl-token");
+          const fs     = require("fs");
+
           const PROGRAM_ID     = new web3.PublicKey(process.env.PROGRAM_ID);
           const USDC_MINT      = new web3.PublicKey(process.env.USDC_MINT);
           const PYTH_FEED      = new web3.PublicKey(process.env.PYTH_FEED);
           const TREASURY_OWNER = new web3.PublicKey(process.env.TREASURY_OWNER);
           const IDL = JSON.parse(fs.readFileSync("flipsy/target/idl/flipsy.json"));
+
           (async () => {
             const conn = new web3.Connection("https://api.devnet.solana.com", "confirmed");
-            const kp = web3.Keypair.fromSecretKey(Uint8Array.from(JSON.parse(fs.readFileSync("/root/.config/solana/id.json"))));
+            const kp   = web3.Keypair.fromSecretKey(
+              Uint8Array.from(JSON.parse(fs.readFileSync("/root/.config/solana/id.json")))
+            );
             const provider = new anchor.AnchorProvider(conn, new anchor.Wallet(kp), { commitment: "confirmed" });
             anchor.setProvider(provider);
+
             let program;
             try { program = new anchor.Program(IDL, provider); }
             catch { program = new anchor.Program(IDL, PROGRAM_ID, provider); }
+
+            // Create treasury ATA if needed
             const ata = await spl.getAssociatedTokenAddress(USDC_MINT, TREASURY_OWNER);
             if (!(await conn.getAccountInfo(ata))) {
               const sig = await web3.sendAndConfirmTransaction(conn,
-                new web3.Transaction().add(spl.createAssociatedTokenAccountInstruction(kp.publicKey, ata, TREASURY_OWNER, USDC_MINT)),
-                [kp]);
-              console.log("ATA:", sig);
+                new web3.Transaction().add(
+                  spl.createAssociatedTokenAccountInstruction(kp.publicKey, ata, TREASURY_OWNER, USDC_MINT)
+                ),
+                [kp]
+              );
+              console.log("Treasury ATA created:", sig);
+            } else {
+              console.log("Treasury ATA already exists");
             }
+
+            // Initialize config PDA if needed
             const [cfg] = web3.PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
-            let c; try { c = await program.account.config.fetch(cfg); } catch {}
+            let c;
+            try { c = await program.account.config.fetch(cfg); } catch {}
             if (!c) {
               const sig = await program.methods
-                .initialize(new anchor.BN(300), new anchor.BN(100000), new anchor.BN(5000000), 2000, 500)
-                .accounts({ config: cfg, usdcMint: USDC_MINT, pythFeed: PYTH_FEED, treasury: ata,
-                            admin: kp.publicKey, systemProgram: web3.SystemProgram.programId }).rpc();
-              console.log("init:", sig);
+                .initialize(
+                  new anchor.BN(300),
+                  new anchor.BN(100000),
+                  new anchor.BN(5000000),
+                  2000,
+                  500
+                )
+                .accounts({
+                  config:        cfg,
+                  usdcMint:      USDC_MINT,
+                  pythFeed:      PYTH_FEED,
+                  treasury:      ata,
+                  admin:         kp.publicKey,
+                  systemProgram: web3.SystemProgram.programId,
+                })
+                .rpc();
+              console.log("Initialized:", sig);
               c = await program.account.config.fetch(cfg);
+            } else {
+              console.log("Config already initialized");
             }
+
+            // Hand off admin to treasury owner
             if (!c.admin.equals(TREASURY_OWNER) && c.admin.equals(kp.publicKey)) {
               const sig = await program.methods.setAdmin(TREASURY_OWNER)
-                .accounts({ config: cfg, admin: kp.publicKey }).rpc();
-              console.log("setAdmin:", sig);
+                .accounts({ config: cfg, admin: kp.publicKey })
+                .rpc();
+              console.log("Admin transferred:", sig);
+            } else {
+              console.log("Admin already set to treasury owner");
             }
           })().catch(e => { console.error("INIT FAILED:", e); process.exit(1); });
           JSEOF
-          node init.js
 
+      # ── Hand upgrade authority to treasury owner ──────────────────────────
       - name: Transfer upgrade authority
         env:
           PROGRAM_ID: ${{ steps.pid.outputs.id }}
@@ -294,13 +324,14 @@ jobs:
             --new-upgrade-authority "$TREASURY_OWNER" \
             --skip-new-upgrade-authority-signer-check
 
-      - name: Final summary
+      # ── Done ──────────────────────────────────────────────────────────────
+      - name: Summary
         env:
           PROGRAM_ID: ${{ steps.pid.outputs.id }}
         run: |
-          echo "==============================================="
-          echo " DEPLOYED. Program ID: $PROGRAM_ID"
-          echo " Admin & upgrade auth: $TREASURY_OWNER (you)"
-          echo " https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet"
-          echo "==============================================="
- 
+          echo "======================================================="
+          echo "  DEPLOYED SUCCESSFULLY"
+          echo "  Program ID : $PROGRAM_ID"
+          echo "  Admin      : $TREASURY_OWNER"
+          echo "  Explorer   : https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet"
+          echo "======================================================="
