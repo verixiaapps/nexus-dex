@@ -1,4 +1,4 @@
-name: Deploy Flipsy — DEVNET New
+name: Flipsy DEVNET v2
 
 on:
   workflow_dispatch:
