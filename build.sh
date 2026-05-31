@@ -1,121 +1,118 @@
 #!/usr/bin/env bash
-# Flipsy: build + deploy + initialize + transfer authority.
-# Designed for solanafoundation/anchor:v0.31.1 codespace.
+# Flipsy: patches lib.rs to drop pyth-sdk-solana, then builds, deploys, initializes, transfers authority.
 set +e
 trap 'echo ""; echo "Script interrupted."; exit 130' INT
 
-# ===== YOUR WALLET (gets all fees + all admin power) =====
 TREASURY_OWNER="Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV"
-
-# ===== PATHS =====
 ROOT="/workspaces/nexus-dex"
 FLIPSY="$ROOT/flipsy"
 LIB_RS="$FLIPSY/programs/flipsy/src/lib.rs"
 PROG_TOML="$FLIPSY/programs/flipsy/Cargo.toml"
 ANCHOR_TOML="$FLIPSY/Anchor.toml"
-
-# ===== DEVNET CONSTANTS =====
 USDC_MINT="4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
 PYTH_FEED="J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix"
 
-# ----------------------------------------------------------
-echo "==> [1/14] Granting you full authority over the repo..."
+echo "==> [1/13] Authority + git setup..."
 sudo chown -R "$(whoami):$(whoami)" "$ROOT" ~ 2>/dev/null
 git config --global --add safe.directory '*' 2>/dev/null
-git config --global --add safe.directory "$ROOT" 2>/dev/null
-git config --global --add safe.directory "$FLIPSY" 2>/dev/null
-[ -z "$(git config --global user.name)"  ] && git config --global user.name  "$(whoami)" 2>/dev/null
+[ -z "$(git config --global user.name)"  ] && git config --global user.name "$(whoami)" 2>/dev/null
 [ -z "$(git config --global user.email)" ] && git config --global user.email "$(whoami)@users.noreply.github.com" 2>/dev/null
-git config --global pull.rebase true 2>/dev/null
-echo "    git: ok · user: $(git config --global user.name) <$(git config --global user.email)>"
 
-cd "$FLIPSY" || { echo "ERROR: $FLIPSY not found"; exit 1; }
+cd "$FLIPSY" || { echo "no flipsy"; exit 1; }
 
-# ----------------------------------------------------------
-echo "==> [2/14] Toolchain in this image:"
-echo "    rustc  : $(rustc --version 2>/dev/null)"
-echo "    solana : $(solana --version 2>/dev/null)"
-echo "    anchor : $(anchor --version 2>/dev/null)"
+echo "==> [2/13] Patching lib.rs to drop pyth-sdk-solana..."
+python3 << 'PYEOF'
+import re, sys
+path = "programs/flipsy/src/lib.rs"
+with open(path) as f:
+    src = f.read()
 
-# ----------------------------------------------------------
-echo "==> [3/14] Setting Anchor 0.31.1 (image-native)..."
+# 1) drop the pyth_sdk_solana import (any form)
+src2 = re.sub(r'^use pyth_sdk_solana[^\n]*\n', '', src, flags=re.MULTILINE)
+
+# 2) replace the read_pyth_price function body with manual byte parsing
+new_fn = '''fn read_pyth_price(feed_info: &AccountInfo, current_ts: i64) -> Result<i64> {
+    let data = feed_info.try_borrow_data().map_err(|_| FlipsyError::PythError)?;
+    if data.len() < 240 { return err!(FlipsyError::PythError); }
+    let magic = u32::from_le_bytes(data[0..4].try_into().unwrap());
+    if magic != 0xa1b2c3d4 { return err!(FlipsyError::PythError); }
+    let atype = u32::from_le_bytes(data[8..12].try_into().unwrap());
+    if atype != 3 { return err!(FlipsyError::PythError); }
+    let expo = i32::from_le_bytes(data[20..24].try_into().unwrap());
+    let timestamp = i64::from_le_bytes(data[96..104].try_into().unwrap());
+    if current_ts.saturating_sub(timestamp) > 60 { return err!(FlipsyError::PythStale); }
+    let status = u32::from_le_bytes(data[224..228].try_into().unwrap());
+    if status != 1 { return err!(FlipsyError::PythStale); }
+    let raw = i64::from_le_bytes(data[208..216].try_into().unwrap());
+    let normalized = if expo >= -8 {
+        raw.checked_mul(10_i64.pow((expo + 8) as u32)).ok_or(FlipsyError::PythOverflow)?
+    } else {
+        raw.checked_div(10_i64.pow((-expo - 8) as u32)).ok_or(FlipsyError::PythOverflow)?
+    };
+    Ok(normalized)
+}'''
+
+# Find fn read_pyth_price { ... } block
+pat = re.compile(
+    r'fn read_pyth_price\([^)]*\) -> Result<i64> \{.*?\n\}',
+    re.DOTALL
+)
+if pat.search(src2):
+    src2 = pat.sub(new_fn, src2, count=1)
+    print("  patched read_pyth_price OK")
+else:
+    print("  WARN: read_pyth_price not found — lib.rs may already be patched.")
+
+with open(path, 'w') as f:
+    f.write(src2)
+PYEOF
+
+echo "==> [3/13] Removing pyth-sdk-solana from Cargo.toml..."
+sed -i '/^pyth-sdk-solana/d' "$PROG_TOML"
+sed -i 's/anchor-lang = "=*0\.30\.[0-9]*"/anchor-lang = "0.31.1"/g' "$PROG_TOML"
+sed -i 's/anchor-spl = "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g' "$PROG_TOML"
+grep -E "anchor-|pyth" "$PROG_TOML" | sed 's/^/    /'
+
+echo "==> [4/13] Anchor 0.31.1..."
 avm install 0.31.1 2>/dev/null
 avm use 0.31.1 2>/dev/null
-echo "    anchor : $(anchor --version)"
+echo "    anchor: $(anchor --version)"
 
-# ----------------------------------------------------------
-echo "==> [4/14] Patching Cargo.toml deps..."
-sed -i 's/anchor-lang = "=*0\.30\.[0-9]*"/anchor-lang = "0.31.1"/g' "$PROG_TOML"
-sed -i 's/anchor-spl  *= "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g' "$PROG_TOML"
-sed -i 's/anchor-spl = "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g' "$PROG_TOML"
-echo "    Cargo.toml after patch:"
-grep -E "anchor-(lang|spl)|pyth-sdk-solana" "$PROG_TOML" | sed 's/^/      /'
-
-# ----------------------------------------------------------
-echo "==> [5/14] Solana → devnet..."
+echo "==> [5/13] Solana → devnet..."
 solana config set --url devnet >/dev/null
 DEPLOYER=$(solana address)
-echo "    deployer: $DEPLOYER"
-echo "    balance : $(solana balance)"
+echo "    deployer: $DEPLOYER · balance: $(solana balance)"
 
-# ----------------------------------------------------------
-echo "==> [6/14] Building (tries 4 pyth-sdk-solana versions if needed)..."
-BUILD_OK=0
-for PYTH_VER in "0.10.4" "0.10.3" "0.10.1" "0.10.0"; do
-  echo "----- pyth-sdk-solana = $PYTH_VER -----"
-  sed -i "s/pyth-sdk-solana *= *\"[^\"]*\"/pyth-sdk-solana = \"$PYTH_VER\"/g" "$PROG_TOML"
-  rm -rf target Cargo.lock
-  if anchor build 2>&1 | tee /tmp/build.log; then
-    BUILD_OK=1; echo "    Built with pyth-sdk-solana $PYTH_VER"
-    break
-  fi
-  echo "    failed with $PYTH_VER, trying next..."
-done
-
-if [ "$BUILD_OK" -ne 1 ]; then
+echo "==> [6/13] Wiping Cargo.lock + target, building..."
+rm -rf target Cargo.lock
+if ! anchor build 2>&1 | tee /tmp/build.log; then
   echo ""
-  echo "================================================="
-  echo " BUILD FAILED after trying all pyth-sdk-solana versions."
-  echo " Tail of last error:"
-  tail -50 /tmp/build.log
-  echo "================================================="
-  echo ""
-  echo "Next step: replace pyth-sdk-solana usage in lib.rs with"
-  echo "manual byte parsing. Send me the contents of lib.rs and"
-  echo "I'll patch it surgically."
+  echo "BUILD FAILED. Tail:"
+  tail -40 /tmp/build.log
   exit 1
 fi
 
-# ----------------------------------------------------------
-echo "==> [7/14] Reading program ID..."
+echo "==> [7/13] Reading program ID..."
 PROGRAM_ID=$(anchor keys list | awk '{print $2}' | head -1)
 echo "    $PROGRAM_ID"
 
-# ----------------------------------------------------------
-echo "==> [8/14] Writing program ID into lib.rs & Anchor.toml..."
+echo "==> [8/13] Writing program ID into lib.rs & Anchor.toml..."
 sed -i "s|declare_id!(\"[^\"]*\");|declare_id!(\"$PROGRAM_ID\");|" "$LIB_RS"
 sed -i "s|^flipsy = \"[^\"]*\"$|flipsy = \"$PROGRAM_ID\"|g" "$ANCHOR_TOML"
 
-# ----------------------------------------------------------
-echo "==> [9/14] Rebuilding with real program ID..."
+echo "==> [9/13] Rebuilding with real ID..."
 anchor build || exit 1
 
-# ----------------------------------------------------------
-echo "==> [10/14] Deploying to devnet..."
+echo "==> [10/13] Deploying to devnet..."
 anchor deploy --provider.cluster devnet || exit 1
 
-IDL_DST="$ROOT/src/idl"
-mkdir -p "$IDL_DST" 2>/dev/null
-cp target/idl/flipsy.json "$IDL_DST/flipsy.json" 2>/dev/null && \
-  echo "    IDL → $IDL_DST/flipsy.json"
+mkdir -p "$ROOT/src/idl" 2>/dev/null
+cp target/idl/flipsy.json "$ROOT/src/idl/flipsy.json" 2>/dev/null && echo "    IDL → $ROOT/src/idl/flipsy.json"
 
-# ----------------------------------------------------------
-echo "==> [11/14] Installing JS deps if needed..."
+echo "==> [11/13] Treasury ATA + initialize + transfer admin..."
 cd "$ROOT"
 [ ! -d node_modules ] && { echo "    npm install..."; npm install --silent 2>&1 | tail -5; }
 
-# ----------------------------------------------------------
-echo "==> [12/14] Creating your treasury USDC ATA, initializing program, transferring admin..."
 cat > "$ROOT/init-flipsy.js" << JSEOF
 const anchor = require("@coral-xyz/anchor");
 const web3 = require("@solana/web3.js");
@@ -150,7 +147,7 @@ const IDL = JSON.parse(fs.readFileSync("$FLIPSY/target/idl/flipsy.json"));
   const [cfg] = web3.PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
   let c; try { c = await program.account.config.fetch(cfg); } catch {}
   if (!c) {
-    console.log("Initializing program...");
+    console.log("Initializing...");
     const sig = await program.methods
       .initialize(new anchor.BN(300), new anchor.BN(100000), new anchor.BN(5000000), 2000, 500)
       .accounts({ config: cfg, usdcMint: USDC_MINT, pythFeed: PYTH_FEED, treasury: ata,
@@ -166,34 +163,25 @@ const IDL = JSON.parse(fs.readFileSync("$FLIPSY/target/idl/flipsy.json"));
     const sig = await program.methods.setAdmin(TREASURY_OWNER)
       .accounts({ config: cfg, admin: kp.publicKey }).rpc();
     console.log("  setAdmin:", sig);
-  } else console.log("WARN: current admin is", c.admin.toBase58());
+  } else console.log("WARN: admin is", c.admin.toBase58());
 })().catch(e => { console.error("INIT FAILED:", e); process.exit(1); });
 JSEOF
 
 node "$ROOT/init-flipsy.js" || { echo "init failed"; exit 1; }
 rm -f "$ROOT/init-flipsy.js"
 
-# ----------------------------------------------------------
-echo "==> [13/14] Transferring program upgrade authority to your wallet..."
+echo "==> [12/13] Transferring upgrade authority..."
 solana program set-upgrade-authority "$PROGRAM_ID" \
   --new-upgrade-authority "$TREASURY_OWNER" \
   --skip-new-upgrade-authority-signer-check 2>&1 | tail -5
 
-# ----------------------------------------------------------
-echo "==> [14/14] Done."
+echo "==> [13/13] Done."
 echo ""
 echo "==============================================="
 echo " DEPLOYED + INITIALIZED + AUTHORITY TRANSFERRED"
 echo "==============================================="
 echo " Program ID         : $PROGRAM_ID"
-echo " Network            : devnet"
-echo " Admin              : $TREASURY_OWNER  (your wallet)"
-echo " Upgrade authority  : $TREASURY_OWNER  (your wallet)"
-echo " Treasury USDC ATA  : (ATA of $TREASURY_OWNER)"
-echo " Round              : 5 min · min \$0.10 · max \$5"
-echo " Fees               : 20% on profit · 5% solo refund"
+echo " Admin              : $TREASURY_OWNER"
+echo " Upgrade authority  : $TREASURY_OWNER"
 echo " Explorer           : https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet"
 echo "==============================================="
-echo ""
-echo "Your wallet $TREASURY_OWNER has full control."
-echo "The Codespace deployer has no authority anymore."
