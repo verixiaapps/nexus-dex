@@ -36,6 +36,10 @@ pub mod flipsy {
       Ok(())
   }
 
+  pub fn close_config(ctx: Context<CloseConfig>) -> Result<()> {
+      Ok(())
+  }
+
   pub fn set_admin(ctx: Context<AdminOnly>, new_admin: Pubkey) -> Result<()> {
       ctx.accounts.config.admin = new_admin;
       Ok(())
@@ -233,7 +237,6 @@ fn read_pyth_price(feed_info: &AccountInfo, clock: &Clock) -> Result<i64> {
     let current_price = price_feed
         .get_price_no_older_than(clock.unix_timestamp, PYTH_MAX_AGE)
         .ok_or(FlipsyError::PythStale)?;
-    // Normalize to 8 decimal places (1e8)
     let expo = current_price.expo;
     let raw = current_price.price;
     let normalized = if expo >= -8 {
@@ -288,6 +291,14 @@ pub struct Initialize<'info> {
   #[account(mut)]
   pub admin: Signer<'info>,
   pub system_program: Program<'info, System>,
+}
+
+#[derive(Accounts)]
+pub struct CloseConfig<'info> {
+  #[account(mut, seeds = [b"config"], bump = config.bump, has_one = admin, close = admin)]
+  pub config: Account<'info, Config>,
+  #[account(mut)]
+  pub admin: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -484,4 +495,3 @@ pub enum FlipsyError {
   #[msg("Math overflow")] MathOverflow,
   #[msg("Bad parameters")] BadParams,
 }
- 
