@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Mint, Transfer};
+use pyth_sdk_solana::load_price_feed_from_account_info;
 
 declare_id!("H4LAd2s7yVboni7oDqf1JtQ3UcqWJBZo5NpAhYisJaVj");
 
@@ -7,6 +8,7 @@ const BPS_DIVISOR: u64 = 10_000;
 const FORCE_REFUND_DELAY: i64 = 86_400;
 const EMERGENCY_SWEEP_DELAY: i64 = 259_200;
 const MAX_FEE_BPS: u16 = 3000;
+const PYTH_MAX_AGE: u64 = 60;
 
 #[program]
 pub mod flipsy {
@@ -72,7 +74,7 @@ pub mod flipsy {
   pub fn start_round(ctx: Context<StartRound>) -> Result<()> {
       require!(!ctx.accounts.config.paused, FlipsyError::Paused);
       let clock = Clock::get()?;
-      let lock_price = read_pyth_price(&ctx.accounts.pyth_feed, clock.unix_timestamp)?;
+      let lock_price = read_pyth_price(&ctx.accounts.pyth_feed, &clock)?;
       let config = &mut ctx.accounts.config;
       config.current_epoch = config.current_epoch.checked_add(1).ok_or(FlipsyError::MathOverflow)?;
       let round = &mut ctx.accounts.round;
@@ -128,7 +130,7 @@ pub mod flipsy {
       let round = &mut ctx.accounts.round;
       require!(round.outcome == Outcome::Unresolved, FlipsyError::AlreadyResolved);
       require!(clock.unix_timestamp >= round.close_time, FlipsyError::RoundNotClosed);
-      let close_price = read_pyth_price(&ctx.accounts.pyth_feed, clock.unix_timestamp)?;
+      let close_price = read_pyth_price(&ctx.accounts.pyth_feed, &clock)?;
       round.close_price = close_price;
       round.resolved_at = clock.unix_timestamp;
       round.outcome = if close_price == round.lock_price {
@@ -225,6 +227,25 @@ pub mod flipsy {
   }
 }
 
+fn read_pyth_price(feed_info: &AccountInfo, clock: &Clock) -> Result<i64> {
+    let price_feed = load_price_feed_from_account_info(feed_info)
+        .map_err(|_| FlipsyError::PythError)?;
+    let current_price = price_feed
+        .get_price_no_older_than(clock.unix_timestamp, PYTH_MAX_AGE)
+        .ok_or(FlipsyError::PythStale)?;
+    // Normalize to 8 decimal places (1e8)
+    let expo = current_price.expo;
+    let raw = current_price.price;
+    let normalized = if expo >= -8 {
+        raw.checked_mul(10_i64.pow((expo + 8) as u32))
+            .ok_or(FlipsyError::PythOverflow)?
+    } else {
+        raw.checked_div(10_i64.pow((-expo - 8) as u32))
+            .ok_or(FlipsyError::PythOverflow)?
+    };
+    Ok(normalized)
+}
+
 fn compute_payout(round: &Round, bet: &Bet, fee_bps: u16, solo_fee_bps: u16) -> Result<(u64, u64)> {
   let fee_bps  = fee_bps as u128;
   let solo_bps = solo_fee_bps as u128;
@@ -253,27 +274,6 @@ fn compute_payout(round: &Round, bet: &Bet, fee_bps: u16, solo_fee_bps: u16) -> 
           }
       }
   }
-}
-
-fn read_pyth_price(feed_info: &AccountInfo, current_ts: i64) -> Result<i64> {
-  let data = feed_info.try_borrow_data().map_err(|_| FlipsyError::PythError)?;
-  if data.len() < 240 { return err!(FlipsyError::PythError); }
-  let magic = u32::from_le_bytes(data[0..4].try_into().unwrap());
-  if magic != 0xa1b2c3d4 { return err!(FlipsyError::PythError); }
-  let atype = u32::from_le_bytes(data[8..12].try_into().unwrap());
-  if atype != 3 { return err!(FlipsyError::PythError); }
-  let expo = i32::from_le_bytes(data[20..24].try_into().unwrap());
-  let timestamp = i64::from_le_bytes(data[96..104].try_into().unwrap());
-  if current_ts.saturating_sub(timestamp) > 60 { return err!(FlipsyError::PythStale); }
-  let status = u32::from_le_bytes(data[224..228].try_into().unwrap());
-  if status != 1 { return err!(FlipsyError::PythStale); }
-  let raw = i64::from_le_bytes(data[208..216].try_into().unwrap());
-  let normalized = if expo >= -8 {
-      raw.checked_mul(10_i64.pow((expo + 8) as u32)).ok_or(FlipsyError::PythOverflow)?
-  } else {
-      raw.checked_div(10_i64.pow((-expo - 8) as u32)).ok_or(FlipsyError::PythOverflow)?
-  };
-  Ok(normalized)
 }
 
 #[derive(Accounts)]
