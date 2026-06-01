@@ -1,4 +1,4 @@
-name: Flipsy Init
+name: Flipsy Init v2
 
 on:
   workflow_dispatch:
@@ -32,6 +32,7 @@ jobs:
         run: |
           rustup toolchain install stable --no-self-update
           rustup default stable
+          rustup override set stable
           rustc --version
           cargo --version
           solana --version || true
@@ -42,7 +43,7 @@ jobs:
           apt-get update -qq && apt-get install -y -qq python3-cryptography || \
           pip3 install --break-system-packages cryptography || \
           pip install --break-system-packages cryptography
-          python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; print('OK')"
+          python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; print('cryptography OK')"
 
       - name: Derive deployer keypair from seed
         env:
@@ -84,9 +85,11 @@ jobs:
 
       - name: Build (generates IDL)
         working-directory: flipsy
+        env:
+          RUSTUP_TOOLCHAIN: stable
         run: |
           rm -rf target
-          cargo generate-lockfile
+          cargo +stable generate-lockfile
           sed -i 's/^version = 4$/version = 3/' Cargo.lock || true
           anchor build
 
