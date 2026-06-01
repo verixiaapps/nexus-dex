@@ -484,3 +484,4 @@ pub enum FlipsyError {
    #[msg("Math overflow")] MathOverflow,
    #[msg("Bad parameters")] BadParams,
 }
+ 
