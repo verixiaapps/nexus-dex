@@ -5,6 +5,12 @@ on:
     - cron: '*/5 * * * *'
   workflow_dispatch:
 
+env:
+  SEED: "flipsy-fresh-1"
+  PROGRAM_ID: "H4LAd2s7yVboni7oDqf1JtQ3UcqWJBZo5NpAhYisJaVj"
+  USDC_MINT: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+  PYTH_FEED: "J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix"
+
 jobs:
   crank:
     runs-on: ubuntu-latest
@@ -15,10 +21,23 @@ jobs:
           node-version: 20
 
       - name: Install deps
-        run: cd flipsy/scripts && npm install
+        run: |
+          pip3 install cryptography
+          cd flipsy/scripts && npm install
+
+      - name: Derive keypair
+        run: |
+          mkdir -p ~/.config/solana
+          python3 << 'PYEOF'
+          import hashlib, json, os
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+          from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding
+          seed_bytes = hashlib.sha256(os.environ["SEED"].encode()).digest()
+          priv = Ed25519PrivateKey.from_private_bytes(seed_bytes)
+          pub = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+          with open(os.path.expanduser("~/.config/solana/id.json"), "w") as f:
+              json.dump(list(seed_bytes) + list(pub), f)
+          PYEOF
 
       - name: Run cranker
-        env:
-          DEPLOYER_SEED: ${{ secrets.DEPLOYER_SEED }}
-          REACT_APP_FLIPSY_PROGRAM_ID: ${{ secrets.REACT_APP_FLIPSY_PROGRAM_ID }}
         run: cd flipsy/scripts && npx ts-node crank-once.ts
