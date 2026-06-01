@@ -1,4 +1,4 @@
-name: Flipsy DEVNET
+name: Flipsy DEVNEt. 
 
 on:
   workflow_dispatch:
@@ -12,9 +12,10 @@ env:
   TREASURY_OWNER: "Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV"
   USDC_MINT:      "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
   PYTH_FEED:      "J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix"
+  PROGRAM_ID:     "H4LAd2s7yVboni7oDqf1JtQ3UcqWJBZo5NpAhYisJaVj"
 
 jobs:
-  deploy:
+  init:
     runs-on: ubuntu-latest
     container:
       image: solanafoundation/anchor:v0.31.1
@@ -24,7 +25,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Force current stable Rust (>=1.85 for edition2024 support) ───────────
+      - name: Remove Cargo.lock
+        run: find . -name "Cargo.lock" -delete
+
       - name: Install stable Rust
         run: |
           rustup toolchain install stable --no-self-update
@@ -34,18 +37,11 @@ jobs:
           solana --version || true
           anchor --version || true
 
-      # ── Python cryptography for key derivation ───────────────────────────────
       - name: Install Python cryptography
         run: |
-          python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey" 2>/dev/null \
-            && echo "already installed" \
-            || pip install --quiet --break-system-packages cryptography 2>/dev/null \
-            || pip3 install --quiet --break-system-packages cryptography 2>/dev/null \
-            || (apt-get update -qq && apt-get install -y -qq python3-cryptography)
-          python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; print('cryptography OK')"
+          pip install --quiet --break-system-packages cryptography 2>/dev/null || true
 
-      # ── Derive wallets deterministically from seed ───────────────────────────
-      - name: Derive deployer + helper keypairs
+      - name: Derive deployer keypair from seed
         env:
           SEED: ${{ inputs.seed }}
         run: |
@@ -54,7 +50,6 @@ jobs:
           import hashlib, json, os
           from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
           from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding
-
           ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
           def b58encode(b):
               n = int.from_bytes(b, 'big'); s = ''
@@ -64,82 +59,18 @@ jobs:
                   if byte == 0: s = '1' + s
                   else: break
               return s
-
-          base = os.environ["SEED"]
-          for suffix, label in [("", "main"), ("-h1", "h1"), ("-h2", "h2"), ("-h3", "h3")]:
-              seed_bytes = hashlib.sha256((base + suffix).encode()).digest()
-              priv = Ed25519PrivateKey.from_private_bytes(seed_bytes)
-              pub = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
-              secret_key = list(seed_bytes) + list(pub)
-              path = f"/root/.config/solana/{label}.json"
-              with open(path, "w") as f:
-                  json.dump(secret_key, f)
-              print(f"{label:6s}: {b58encode(pub)}")
+          seed_bytes = hashlib.sha256(os.environ["SEED"].encode()).digest()
+          priv = Ed25519PrivateKey.from_private_bytes(seed_bytes)
+          pub = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+          secret_key = list(seed_bytes) + list(pub)
+          with open("/root/.config/solana/id.json", "w") as f:
+              json.dump(secret_key, f)
+          print(f"Deployer: {b58encode(pub)}")
           PYEOF
-          cp /root/.config/solana/main.json /root/.config/solana/id.json
-          chmod 600 /root/.config/solana/*.json
+          chmod 600 /root/.config/solana/id.json
           solana config set --url devnet --keypair /root/.config/solana/id.json
+          echo "Balance: $(solana balance)"
 
-      - name: Print wallet addresses + balances
-        run: |
-          echo "==================================================="
-          for w in main h1 h2 h3; do
-            ADDR=$(solana address --keypair /root/.config/solana/$w.json)
-            BAL=$(solana balance --keypair /root/.config/solana/$w.json 2>/dev/null | awk '{print $1}')
-            echo "  $w: $ADDR  ($BAL SOL)"
-          done
-          echo "==================================================="
-
-      # ── Verify main wallet has enough SOL (already funded externally) ────────
-      - name: Check deployer balance
-        run: |
-          NEED=1.7
-          BAL=$(solana balance 2>/dev/null | awk '{print $1}')
-          echo "Main balance: $BAL SOL (need $NEED)"
-          if ! awk "BEGIN{exit !($BAL >= $NEED)}"; then
-            MAIN=$(solana address)
-            echo "::error::Insufficient balance: $BAL SOL. Top up $MAIN on devnet and re-run."
-            echo "Faucets: https://faucet.solana.com  https://faucet.quicknode.com/solana/devnet"
-            exit 1
-          fi
-          echo "Balance OK — skipping airdrop"
-
-      # ── Patch lib.rs: remove pyth-sdk-solana, inline raw price reader ────────
-      - name: Patch lib.rs
-        working-directory: flipsy
-        run: |
-          python3 << 'PYEOF'
-          import re
-          path = "programs/flipsy/src/lib.rs"
-          with open(path) as f: src = f.read()
-          src = re.sub(r'^use pyth_sdk_solana[^\n]*\n', '', src, flags=re.MULTILINE)
-          new_fn = '''fn read_pyth_price(feed_info: &AccountInfo, current_ts: i64) -> Result<i64> {
-              let data = feed_info.try_borrow_data().map_err(|_| FlipsyError::PythError)?;
-              if data.len() < 240 { return err!(FlipsyError::PythError); }
-              let magic = u32::from_le_bytes(data[0..4].try_into().unwrap());
-              if magic != 0xa1b2c3d4 { return err!(FlipsyError::PythError); }
-              let atype = u32::from_le_bytes(data[8..12].try_into().unwrap());
-              if atype != 3 { return err!(FlipsyError::PythError); }
-              let expo = i32::from_le_bytes(data[20..24].try_into().unwrap());
-              let timestamp = i64::from_le_bytes(data[96..104].try_into().unwrap());
-              if current_ts.saturating_sub(timestamp) > 60 { return err!(FlipsyError::PythStale); }
-              let status = u32::from_le_bytes(data[224..228].try_into().unwrap());
-              if status != 1 { return err!(FlipsyError::PythStale); }
-              let raw = i64::from_le_bytes(data[208..216].try_into().unwrap());
-              let normalized = if expo >= -8 {
-                  raw.checked_mul(10_i64.pow((expo + 8) as u32)).ok_or(FlipsyError::PythOverflow)?
-              } else {
-                  raw.checked_div(10_i64.pow((-expo - 8) as u32)).ok_or(FlipsyError::PythOverflow)?
-              };
-              Ok(normalized)
-          }'''
-          pat = re.compile(r'fn read_pyth_price\([^)]*\) -> Result<i64> \{.*?\n\}', re.DOTALL)
-          if pat.search(src): src = pat.sub(new_fn, src, count=1)
-          with open(path, 'w') as f: f.write(src)
-          print("lib.rs patched OK")
-          PYEOF
-
-      # ── Patch Cargo.toml + Anchor.toml versions ───────────────────────────────
       - name: Patch Cargo.toml + Anchor.toml
         working-directory: flipsy
         run: |
@@ -148,41 +79,14 @@ jobs:
           sed -i 's/anchor-spl = "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g'  programs/flipsy/Cargo.toml
           sed -i 's/anchor_version = "0\.30\.[0-9]*"/anchor_version = "0.31.1"/g' Anchor.toml
 
-      # ── Build: wipe lockfile, generate fresh, downgrade v4→v3, build ─────────
-      - name: Build
+      - name: Build (generates IDL)
         working-directory: flipsy
         run: |
-          rm -rf target Cargo.lock
+          rm -rf target
           cargo generate-lockfile
           sed -i 's/^version = 4$/version = 3/' Cargo.lock || true
           anchor build
 
-      # ── Read generated program ID ─────────────────────────────────────────────
-      - name: Read program ID
-        id: pid
-        working-directory: flipsy
-        run: |
-          PROGRAM_ID=$(anchor keys list | awk '{print $2}' | head -1)
-          echo "id=$PROGRAM_ID" >> $GITHUB_OUTPUT
-          echo "Program ID: $PROGRAM_ID"
-
-      # ── Inject real program ID, rebuild, deploy ───────────────────────────────
-      - name: Inject program ID into source
-        working-directory: flipsy
-        env:
-          PROGRAM_ID: ${{ steps.pid.outputs.id }}
-        run: |
-          sed -i "s|declare_id!(\"[^\"]*\");|declare_id!(\"$PROGRAM_ID\");|" programs/flipsy/src/lib.rs
-          sed -i "s|^flipsy = \"[^\"]*\"$|flipsy = \"$PROGRAM_ID\"|g" Anchor.toml
-
-      - name: Rebuild + deploy to devnet
-        working-directory: flipsy
-        run: |
-          sed -i 's/^version = 4$/version = 3/' Cargo.lock || true
-          anchor build
-          anchor deploy --provider.cluster devnet
-
-      # ── JS init deps ──────────────────────────────────────────────────────────
       - name: Install JS deps
         run: |
           mkdir -p /tmp/init && cd /tmp/init
@@ -194,10 +98,7 @@ jobs:
             2>&1 | tail -3
           cp -r node_modules $GITHUB_WORKSPACE/node_modules
 
-      # ── Treasury ATA + initialize config + hand off admin ─────────────────────
-      - name: Initialize program
-        env:
-          PROGRAM_ID: ${{ steps.pid.outputs.id }}
+      - name: Run init
         run: |
           node - << 'JSEOF'
           const anchor = require("@coral-xyz/anchor");
@@ -223,21 +124,18 @@ jobs:
             try { program = new anchor.Program(IDL, provider); }
             catch { program = new anchor.Program(IDL, PROGRAM_ID, provider); }
 
-            // Create treasury ATA if needed
             const ata = await spl.getAssociatedTokenAddress(USDC_MINT, TREASURY_OWNER);
             if (!(await conn.getAccountInfo(ata))) {
               const sig = await web3.sendAndConfirmTransaction(conn,
                 new web3.Transaction().add(
                   spl.createAssociatedTokenAccountInstruction(kp.publicKey, ata, TREASURY_OWNER, USDC_MINT)
-                ),
-                [kp]
+                ), [kp]
               );
               console.log("Treasury ATA created:", sig);
             } else {
               console.log("Treasury ATA already exists");
             }
 
-            // Initialize config PDA if needed
             const [cfg] = web3.PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
             let c;
             try { c = await program.account.config.fetch(cfg); } catch {}
@@ -262,37 +160,26 @@ jobs:
               console.log("Initialized:", sig);
               c = await program.account.config.fetch(cfg);
             } else {
-              console.log("Config already initialized");
+              console.log("Already initialized");
             }
 
-            // Transfer admin to treasury owner
             if (!c.admin.equals(TREASURY_OWNER) && c.admin.equals(kp.publicKey)) {
               const sig = await program.methods.setAdmin(TREASURY_OWNER)
                 .accounts({ config: cfg, admin: kp.publicKey })
                 .rpc();
               console.log("Admin transferred:", sig);
             } else {
-              console.log("Admin already set correctly");
+              console.log("Admin already correct");
             }
+
+            console.log("Done. Config PDA:", cfg.toString());
+            console.log("Treasury ATA:", ata.toString());
           })().catch(e => { console.error("INIT FAILED:", e); process.exit(1); });
           JSEOF
 
-      # ── Hand upgrade authority to treasury owner ──────────────────────────────
-      - name: Transfer upgrade authority
-        env:
-          PROGRAM_ID: ${{ steps.pid.outputs.id }}
-        run: |
-          solana program set-upgrade-authority "$PROGRAM_ID" \
-            --new-upgrade-authority "$TREASURY_OWNER" \
-            --skip-new-upgrade-authority-signer-check
-
-      # ── Done ──────────────────────────────────────────────────────────────────
       - name: Summary
-        env:
-          PROGRAM_ID: ${{ steps.pid.outputs.id }}
         run: |
           echo "======================================================="
-          echo "  DEPLOYED SUCCESSFULLY"
           echo "  Program ID : $PROGRAM_ID"
           echo "  Admin      : $TREASURY_OWNER"
           echo "  Explorer   : https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet"
