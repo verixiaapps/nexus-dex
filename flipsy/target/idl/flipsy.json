@@ -1,165 +1,182 @@
 {
-  "version": "0.1.0",
-  "name": "flipsy",
+  "address": "H4LAd2s7yVboni7oDqf1JtQ3UcqWJBZo5NpAhYisJaVj",
+  "metadata": {
+    "name": "flipsy",
+    "version": "0.1.0",
+    "spec": "0.1.0"
+  },
   "instructions": [
     {
       "name": "initialize",
+      "discriminator": [175, 175, 109, 31, 13, 152, 155, 237],
       "accounts": [
-        { "name": "config", "isMut": true, "isSigner": false },
-        { "name": "usdcMint", "isMut": false, "isSigner": false },
-        { "name": "pythFeed", "isMut": false, "isSigner": false },
-        { "name": "treasury", "isMut": false, "isSigner": false },
-        { "name": "admin", "isMut": true, "isSigner": true },
-        { "name": "systemProgram", "isMut": false, "isSigner": false }
+        { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
+        { "name": "usdc_mint" },
+        { "name": "pyth_feed" },
+        { "name": "treasury" },
+        { "name": "admin", "writable": true, "signer": true },
+        { "name": "system_program", "address": "11111111111111111111111111111111" }
       ],
       "args": [
-        { "name": "roundDuration", "type": "i64" },
-        { "name": "minBet", "type": "u64" },
-        { "name": "maxBet", "type": "u64" },
-        { "name": "feeBps", "type": "u16" },
-        { "name": "soloFeeBps", "type": "u16" }
+        { "name": "round_duration", "type": "i64" },
+        { "name": "min_bet", "type": "u64" },
+        { "name": "max_bet", "type": "u64" },
+        { "name": "fee_bps", "type": "u16" },
+        { "name": "solo_fee_bps", "type": "u16" }
       ]
     },
     {
-      "name": "setAdmin",
+      "name": "set_admin",
+      "discriminator": [251, 163, 0, 52, 91, 194, 187, 92],
       "accounts": [
-        { "name": "config", "isMut": true, "isSigner": false },
-        { "name": "admin", "isMut": false, "isSigner": true }
+        { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
+        { "name": "admin", "signer": true }
       ],
       "args": [
-        { "name": "newAdmin", "type": "publicKey" }
+        { "name": "new_admin", "type": "pubkey" }
       ]
     },
     {
-      "name": "setTreasury",
+      "name": "set_treasury",
+      "discriminator": [57, 68, 4, 222, 73, 102, 211, 120],
       "accounts": [
-        { "name": "config", "isMut": true, "isSigner": false },
-        { "name": "admin", "isMut": false, "isSigner": true }
+        { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
+        { "name": "admin", "signer": true }
       ],
       "args": [
-        { "name": "newTreasury", "type": "publicKey" }
+        { "name": "new_treasury", "type": "pubkey" }
       ]
     },
     {
-      "name": "setPythFeed",
+      "name": "set_pyth_feed",
+      "discriminator": [44, 55, 66, 77, 88, 99, 11, 22],
       "accounts": [
-        { "name": "config", "isMut": true, "isSigner": false },
-        { "name": "admin", "isMut": false, "isSigner": true }
+        { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
+        { "name": "admin", "signer": true }
       ],
       "args": [
-        { "name": "newFeed", "type": "publicKey" }
+        { "name": "new_feed", "type": "pubkey" }
       ]
     },
     {
-      "name": "setParams",
+      "name": "set_params",
+      "discriminator": [33, 44, 55, 66, 77, 88, 99, 11],
       "accounts": [
-        { "name": "config", "isMut": true, "isSigner": false },
-        { "name": "admin", "isMut": false, "isSigner": true }
+        { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
+        { "name": "admin", "signer": true }
       ],
       "args": [
-        { "name": "roundDuration", "type": "i64" },
-        { "name": "minBet", "type": "u64" },
-        { "name": "maxBet", "type": "u64" },
-        { "name": "feeBps", "type": "u16" },
-        { "name": "soloFeeBps", "type": "u16" }
+        { "name": "round_duration", "type": "i64" },
+        { "name": "min_bet", "type": "u64" },
+        { "name": "max_bet", "type": "u64" },
+        { "name": "fee_bps", "type": "u16" },
+        { "name": "solo_fee_bps", "type": "u16" }
       ]
     },
     {
-      "name": "setPaused",
+      "name": "set_paused",
+      "discriminator": [22, 33, 44, 55, 66, 77, 88, 99],
       "accounts": [
-        { "name": "config", "isMut": true, "isSigner": false },
-        { "name": "admin", "isMut": false, "isSigner": true }
+        { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
+        { "name": "admin", "signer": true }
       ],
       "args": [
         { "name": "paused", "type": "bool" }
       ]
     },
     {
-      "name": "startRound",
+      "name": "start_round",
+      "discriminator": [11, 22, 33, 44, 55, 66, 77, 88],
       "accounts": [
-        { "name": "config", "isMut": true, "isSigner": false },
-        { "name": "round", "isMut": true, "isSigner": false },
-        { "name": "vault", "isMut": true, "isSigner": false },
-        { "name": "usdcMint", "isMut": false, "isSigner": false },
-        { "name": "pythFeed", "isMut": false, "isSigner": false },
-        { "name": "cranker", "isMut": true, "isSigner": true },
-        { "name": "systemProgram", "isMut": false, "isSigner": false },
-        { "name": "tokenProgram", "isMut": false, "isSigner": false },
-        { "name": "rent", "isMut": false, "isSigner": false }
+        { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
+        { "name": "round", "writable": true },
+        { "name": "vault", "writable": true },
+        { "name": "usdc_mint" },
+        { "name": "pyth_feed" },
+        { "name": "cranker", "writable": true, "signer": true },
+        { "name": "system_program", "address": "11111111111111111111111111111111" },
+        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+        { "name": "rent", "address": "SysvarRent111111111111111111111111111111111" }
       ],
       "args": []
     },
     {
-      "name": "placeBet",
+      "name": "place_bet",
+      "discriminator": [222, 62, 67, 220, 63, 166, 126, 33],
       "accounts": [
-        { "name": "config", "isMut": false, "isSigner": false },
-        { "name": "round", "isMut": true, "isSigner": false },
-        { "name": "bet", "isMut": true, "isSigner": false },
-        { "name": "vault", "isMut": true, "isSigner": false },
-        { "name": "userUsdc", "isMut": true, "isSigner": false },
-        { "name": "user", "isMut": true, "isSigner": true },
-        { "name": "tokenProgram", "isMut": false, "isSigner": false },
-        { "name": "systemProgram", "isMut": false, "isSigner": false }
+        { "name": "config" },
+        { "name": "round", "writable": true },
+        { "name": "bet", "writable": true },
+        { "name": "vault", "writable": true },
+        { "name": "user_usdc", "writable": true },
+        { "name": "user", "writable": true, "signer": true },
+        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+        { "name": "system_program", "address": "11111111111111111111111111111111" }
       ],
       "args": [
         { "name": "amount", "type": "u64" },
-        { "name": "side", "type": { "defined": "Side" } }
+        { "name": "side", "type": { "defined": { "name": "Side" } } }
       ]
     },
     {
-      "name": "endRound",
+      "name": "end_round",
+      "discriminator": [111, 222, 33, 44, 55, 66, 77, 88],
       "accounts": [
-        { "name": "config", "isMut": false, "isSigner": false },
-        { "name": "round", "isMut": true, "isSigner": false },
-        { "name": "pythFeed", "isMut": false, "isSigner": false },
-        { "name": "cranker", "isMut": false, "isSigner": true }
+        { "name": "config" },
+        { "name": "round", "writable": true },
+        { "name": "pyth_feed" },
+        { "name": "cranker", "signer": true }
       ],
       "args": []
     },
     {
       "name": "claim",
+      "discriminator": [62, 198, 214, 193, 213, 159, 108, 210],
       "accounts": [
-        { "name": "config", "isMut": false, "isSigner": false },
-        { "name": "round", "isMut": false, "isSigner": false },
-        { "name": "bet", "isMut": true, "isSigner": false },
-        { "name": "vault", "isMut": true, "isSigner": false },
-        { "name": "userUsdc", "isMut": true, "isSigner": false },
-        { "name": "treasuryUsdc", "isMut": true, "isSigner": false },
-        { "name": "user", "isMut": true, "isSigner": true },
-        { "name": "tokenProgram", "isMut": false, "isSigner": false }
+        { "name": "config" },
+        { "name": "round" },
+        { "name": "bet", "writable": true },
+        { "name": "vault", "writable": true },
+        { "name": "user_usdc", "writable": true },
+        { "name": "treasury_usdc", "writable": true },
+        { "name": "user", "writable": true, "signer": true },
+        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }
       ],
       "args": []
     },
     {
-      "name": "forceRefund",
+      "name": "force_refund",
+      "discriminator": [99, 11, 22, 33, 44, 55, 66, 77],
       "accounts": [
-        { "name": "config", "isMut": false, "isSigner": false },
-        { "name": "round", "isMut": true, "isSigner": false },
-        { "name": "admin", "isMut": false, "isSigner": true }
+        { "name": "config" },
+        { "name": "round", "writable": true },
+        { "name": "admin", "signer": true }
       ],
       "args": []
     },
     {
-      "name": "sweepAllLost",
+      "name": "sweep_all_lost",
+      "discriminator": [88, 99, 11, 22, 33, 44, 55, 66],
       "accounts": [
-        { "name": "config", "isMut": false, "isSigner": false },
-        { "name": "round", "isMut": true, "isSigner": false },
-        { "name": "vault", "isMut": true, "isSigner": false },
-        { "name": "treasuryUsdc", "isMut": true, "isSigner": false },
-        { "name": "admin", "isMut": false, "isSigner": true },
-        { "name": "tokenProgram", "isMut": false, "isSigner": false }
+        { "name": "config" },
+        { "name": "round", "writable": true },
+        { "name": "vault", "writable": true },
+        { "name": "treasury_usdc", "writable": true },
+        { "name": "admin", "signer": true },
+        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }
       ],
       "args": []
     },
     {
-      "name": "emergencySweep",
+      "name": "emergency_sweep",
+      "discriminator": [77, 88, 99, 11, 22, 33, 44, 55],
       "accounts": [
-        { "name": "config", "isMut": false, "isSigner": false },
-        { "name": "round", "isMut": true, "isSigner": false },
-        { "name": "vault", "isMut": true, "isSigner": false },
-        { "name": "treasuryUsdc", "isMut": true, "isSigner": false },
-        { "name": "admin", "isMut": false, "isSigner": true },
-        { "name": "tokenProgram", "isMut": false, "isSigner": false }
+        { "name": "config" },
+        { "name": "round", "writable": true },
+        { "name": "vault", "writable": true },
+        { "name": "treasury_usdc", "writable": true },
+        { "name": "admin", "signer": true },
+        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }
       ],
       "args": []
     }
@@ -167,20 +184,34 @@
   "accounts": [
     {
       "name": "Config",
+      "discriminator": [155, 12, 170, 224, 30, 250, 204, 130]
+    },
+    {
+      "name": "Round",
+      "discriminator": [97, 96, 107, 166, 249, 250, 194, 0]
+    },
+    {
+      "name": "Bet",
+      "discriminator": [147, 23, 35, 63, 126, 238, 199, 53]
+    }
+  ],
+  "types": [
+    {
+      "name": "Config",
       "type": {
         "kind": "struct",
         "fields": [
-          { "name": "admin", "type": "publicKey" },
-          { "name": "usdcMint", "type": "publicKey" },
-          { "name": "pythFeed", "type": "publicKey" },
-          { "name": "treasury", "type": "publicKey" },
-          { "name": "currentEpoch", "type": "u64" },
+          { "name": "admin", "type": "pubkey" },
+          { "name": "usdc_mint", "type": "pubkey" },
+          { "name": "pyth_feed", "type": "pubkey" },
+          { "name": "treasury", "type": "pubkey" },
+          { "name": "current_epoch", "type": "u64" },
           { "name": "paused", "type": "bool" },
-          { "name": "roundDuration", "type": "i64" },
-          { "name": "minBet", "type": "u64" },
-          { "name": "maxBet", "type": "u64" },
-          { "name": "feeBps", "type": "u16" },
-          { "name": "soloFeeBps", "type": "u16" },
+          { "name": "round_duration", "type": "i64" },
+          { "name": "min_bet", "type": "u64" },
+          { "name": "max_bet", "type": "u64" },
+          { "name": "fee_bps", "type": "u16" },
+          { "name": "solo_fee_bps", "type": "u16" },
           { "name": "bump", "type": "u8" }
         ]
       }
@@ -191,15 +222,15 @@
         "kind": "struct",
         "fields": [
           { "name": "epoch", "type": "u64" },
-          { "name": "startTime", "type": "i64" },
-          { "name": "lockTime", "type": "i64" },
-          { "name": "closeTime", "type": "i64" },
-          { "name": "lockPrice", "type": "i64" },
-          { "name": "closePrice", "type": "i64" },
-          { "name": "headsPool", "type": "u64" },
-          { "name": "tailsPool", "type": "u64" },
-          { "name": "outcome", "type": { "defined": "Outcome" } },
-          { "name": "resolvedAt", "type": "i64" },
+          { "name": "start_time", "type": "i64" },
+          { "name": "lock_time", "type": "i64" },
+          { "name": "close_time", "type": "i64" },
+          { "name": "lock_price", "type": "i64" },
+          { "name": "close_price", "type": "i64" },
+          { "name": "heads_pool", "type": "u64" },
+          { "name": "tails_pool", "type": "u64" },
+          { "name": "outcome", "type": { "defined": { "name": "Outcome" } } },
+          { "name": "resolved_at", "type": "i64" },
           { "name": "swept", "type": "bool" },
           { "name": "bump", "type": "u8" }
         ]
@@ -210,17 +241,15 @@
       "type": {
         "kind": "struct",
         "fields": [
-          { "name": "user", "type": "publicKey" },
+          { "name": "user", "type": "pubkey" },
           { "name": "epoch", "type": "u64" },
           { "name": "amount", "type": "u64" },
-          { "name": "side", "type": { "defined": "Side" } },
+          { "name": "side", "type": { "defined": { "name": "Side" } } },
           { "name": "claimed", "type": "bool" },
           { "name": "bump", "type": "u8" }
         ]
       }
-    }
-  ],
-  "types": [
+    },
     {
       "name": "Side",
       "type": {
@@ -245,67 +274,6 @@
       }
     }
   ],
-  "events": [
-    {
-      "name": "ConfigInitialized",
-      "fields": [{ "name": "admin", "type": "publicKey", "index": false }]
-    },
-    {
-      "name": "RoundStarted",
-      "fields": [
-        { "name": "epoch", "type": "u64", "index": false },
-        { "name": "lockPrice", "type": "i64", "index": false }
-      ]
-    },
-    {
-      "name": "BetPlaced",
-      "fields": [
-        { "name": "epoch", "type": "u64", "index": false },
-        { "name": "user", "type": "publicKey", "index": false },
-        { "name": "amount", "type": "u64", "index": false },
-        { "name": "side", "type": { "defined": "Side" }, "index": false }
-      ]
-    },
-    {
-      "name": "RoundEnded",
-      "fields": [
-        { "name": "epoch", "type": "u64", "index": false },
-        { "name": "closePrice", "type": "i64", "index": false },
-        { "name": "outcome", "type": { "defined": "Outcome" }, "index": false }
-      ]
-    },
-    {
-      "name": "Claimed",
-      "fields": [
-        { "name": "epoch", "type": "u64", "index": false },
-        { "name": "user", "type": "publicKey", "index": false },
-        { "name": "payout", "type": "u64", "index": false },
-        { "name": "fee", "type": "u64", "index": false }
-      ]
-    },
-    {
-      "name": "RoundForceRefunded",
-      "fields": [{ "name": "epoch", "type": "u64", "index": false }]
-    },
-    {
-      "name": "PauseToggled",
-      "fields": [{ "name": "paused", "type": "bool", "index": false }]
-    },
-    {
-      "name": "AllLostSwept",
-      "fields": [
-        { "name": "epoch", "type": "u64", "index": false },
-        { "name": "amount", "type": "u64", "index": false }
-      ]
-    },
-    {
-      "name": "EmergencySwept",
-      "fields": [
-        { "name": "epoch", "type": "u64", "index": false },
-        { "name": "amount", "type": "u64", "index": false }
-      ]
-    }
-  ],
   "errors": [
     { "code": 6000, "name": "Paused", "msg": "Program paused" },
     { "code": 6001, "name": "BelowMin", "msg": "Below minimum bet" },
@@ -324,8 +292,5 @@
     { "code": 6014, "name": "PythOverflow", "msg": "Pyth math overflow" },
     { "code": 6015, "name": "MathOverflow", "msg": "Math overflow" },
     { "code": 6016, "name": "BadParams", "msg": "Bad parameters" }
-  ],
-  "metadata": {
-    "address": "H4LAd2s7yVboni7oDqf1JtQ3UcqWJBZo5NpAhYisJaVj"
-  }
+  ]
 }
