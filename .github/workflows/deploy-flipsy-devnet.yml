@@ -1,4 +1,4 @@
-name: Flipsy Init v2
+name: Flipsy Init v3
 
 on:
   workflow_dispatch:
@@ -17,39 +17,32 @@ env:
 jobs:
   init:
     runs-on: ubuntu-latest
-    container:
-      image: solanafoundation/anchor:v0.31.1
-      options: --user root
-    timeout-minutes: 90
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@v4
 
-      - name: Remove Cargo.lock
-        run: find . -name "Cargo.lock" -delete
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
 
-      - name: Install stable Rust
+      - name: Install JS deps
         run: |
-          rustup toolchain install stable --no-self-update
-          rustup default stable
-          rustup override set stable
-          rustc --version
-          cargo --version
-          solana --version || true
-          anchor --version || true
+          npm init -y >/dev/null 2>&1
+          npm install --no-progress --silent \
+            @coral-xyz/anchor@0.31.1 \
+            @solana/web3.js@1.91.0 \
+            @solana/spl-token@0.4.6
 
       - name: Install Python cryptography
-        run: |
-          apt-get update -qq && apt-get install -y -qq python3-cryptography || \
-          pip3 install --break-system-packages cryptography || \
-          pip install --break-system-packages cryptography
-          python3 -c "from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey; print('cryptography OK')"
+        run: pip3 install cryptography
 
       - name: Derive deployer keypair from seed
         env:
           SEED: ${{ inputs.seed }}
         run: |
-          mkdir -p /root/.config/solana
+          mkdir -p ~/.config/solana
           python3 << 'PYEOF'
           import hashlib, json, os
           from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
@@ -67,42 +60,11 @@ jobs:
           priv = Ed25519PrivateKey.from_private_bytes(seed_bytes)
           pub = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
           secret_key = list(seed_bytes) + list(pub)
-          with open("/root/.config/solana/id.json", "w") as f:
+          path = os.path.expanduser("~/.config/solana/id.json")
+          with open(path, "w") as f:
               json.dump(secret_key, f)
           print(f"Deployer: {b58encode(pub)}")
           PYEOF
-          chmod 600 /root/.config/solana/id.json
-          solana config set --url devnet --keypair /root/.config/solana/id.json
-          echo "Balance: $(solana balance)"
-
-      - name: Patch Cargo.toml + Anchor.toml
-        working-directory: flipsy
-        run: |
-          sed -i '/^pyth-sdk-solana/d' programs/flipsy/Cargo.toml
-          sed -i 's/anchor-lang = "=*0\.30\.[0-9]*"/anchor-lang = "0.31.1"/g' programs/flipsy/Cargo.toml
-          sed -i 's/anchor-spl = "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g'  programs/flipsy/Cargo.toml
-          sed -i 's/anchor_version = "0\.30\.[0-9]*"/anchor_version = "0.31.1"/g' Anchor.toml
-
-      - name: Build (generates IDL)
-        working-directory: flipsy
-        env:
-          RUSTUP_TOOLCHAIN: stable
-        run: |
-          rm -rf target
-          cargo +stable generate-lockfile
-          sed -i 's/^version = 4$/version = 3/' Cargo.lock || true
-          anchor build
-
-      - name: Install JS deps
-        run: |
-          mkdir -p /tmp/init && cd /tmp/init
-          npm init -y >/dev/null 2>&1
-          npm install --no-progress --silent \
-            @coral-xyz/anchor@0.31.1 \
-            @solana/web3.js@1.91.0 \
-            @solana/spl-token@0.4.6 \
-            2>&1 | tail -3
-          cp -r node_modules $GITHUB_WORKSPACE/node_modules
 
       - name: Run init
         run: |
@@ -111,6 +73,8 @@ jobs:
           const web3   = require("@solana/web3.js");
           const spl    = require("@solana/spl-token");
           const fs     = require("fs");
+          const os     = require("os");
+          const path   = require("path");
 
           const PROGRAM_ID     = new web3.PublicKey(process.env.PROGRAM_ID);
           const USDC_MINT      = new web3.PublicKey(process.env.USDC_MINT);
@@ -120,8 +84,9 @@ jobs:
 
           (async () => {
             const conn = new web3.Connection("https://api.devnet.solana.com", "confirmed");
-            const kp   = web3.Keypair.fromSecretKey(
-              Uint8Array.from(JSON.parse(fs.readFileSync("/root/.config/solana/id.json")))
+            const keypairPath = path.join(os.homedir(), ".config/solana/id.json");
+            const kp = web3.Keypair.fromSecretKey(
+              Uint8Array.from(JSON.parse(fs.readFileSync(keypairPath)))
             );
             const provider = new anchor.AnchorProvider(conn, new anchor.Wallet(kp), { commitment: "confirmed" });
             anchor.setProvider(provider);
