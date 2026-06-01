@@ -32,35 +32,29 @@
         { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
         { "name": "admin", "signer": true }
       ],
-      "args": [
-        { "name": "new_admin", "type": "pubkey" }
-      ]
+      "args": [{ "name": "new_admin", "type": "pubkey" }]
     },
     {
       "name": "set_treasury",
-      "discriminator": [57, 68, 4, 222, 73, 102, 211, 120],
+      "discriminator": [57, 97, 196, 95, 195, 206, 106, 136],
       "accounts": [
         { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
         { "name": "admin", "signer": true }
       ],
-      "args": [
-        { "name": "new_treasury", "type": "pubkey" }
-      ]
+      "args": [{ "name": "new_treasury", "type": "pubkey" }]
     },
     {
       "name": "set_pyth_feed",
-      "discriminator": [44, 55, 66, 77, 88, 99, 11, 22],
+      "discriminator": [165, 60, 111, 173, 13, 211, 29, 42],
       "accounts": [
         { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
         { "name": "admin", "signer": true }
       ],
-      "args": [
-        { "name": "new_feed", "type": "pubkey" }
-      ]
+      "args": [{ "name": "new_feed", "type": "pubkey" }]
     },
     {
       "name": "set_params",
-      "discriminator": [33, 44, 55, 66, 77, 88, 99, 11],
+      "discriminator": [27, 234, 178, 52, 147, 2, 187, 141],
       "accounts": [
         { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
         { "name": "admin", "signer": true }
@@ -75,18 +69,16 @@
     },
     {
       "name": "set_paused",
-      "discriminator": [22, 33, 44, 55, 66, 77, 88, 99],
+      "discriminator": [91, 60, 125, 192, 176, 225, 166, 218],
       "accounts": [
         { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
         { "name": "admin", "signer": true }
       ],
-      "args": [
-        { "name": "paused", "type": "bool" }
-      ]
+      "args": [{ "name": "paused", "type": "bool" }]
     },
     {
       "name": "start_round",
-      "discriminator": [11, 22, 33, 44, 55, 66, 77, 88],
+      "discriminator": [144, 144, 43, 7, 193, 42, 217, 215],
       "accounts": [
         { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
         { "name": "round", "writable": true },
@@ -120,7 +112,7 @@
     },
     {
       "name": "end_round",
-      "discriminator": [111, 222, 33, 44, 55, 66, 77, 88],
+      "discriminator": [54, 47, 1, 200, 250, 6, 144, 63],
       "accounts": [
         { "name": "config" },
         { "name": "round", "writable": true },
@@ -146,7 +138,7 @@
     },
     {
       "name": "force_refund",
-      "discriminator": [99, 11, 22, 33, 44, 55, 66, 77],
+      "discriminator": [127, 173, 30, 92, 164, 123, 109, 177],
       "accounts": [
         { "name": "config" },
         { "name": "round", "writable": true },
@@ -156,7 +148,7 @@
     },
     {
       "name": "sweep_all_lost",
-      "discriminator": [88, 99, 11, 22, 33, 44, 55, 66],
+      "discriminator": [144, 116, 170, 69, 252, 52, 36, 103],
       "accounts": [
         { "name": "config" },
         { "name": "round", "writable": true },
@@ -169,7 +161,7 @@
     },
     {
       "name": "emergency_sweep",
-      "discriminator": [77, 88, 99, 11, 22, 33, 44, 55],
+      "discriminator": [172, 124, 148, 179, 216, 193, 206, 41],
       "accounts": [
         { "name": "config" },
         { "name": "round", "writable": true },
@@ -182,18 +174,9 @@
     }
   ],
   "accounts": [
-    {
-      "name": "Config",
-      "discriminator": [155, 12, 170, 224, 30, 250, 204, 130]
-    },
-    {
-      "name": "Round",
-      "discriminator": [97, 96, 107, 166, 249, 250, 194, 0]
-    },
-    {
-      "name": "Bet",
-      "discriminator": [147, 23, 35, 63, 126, 238, 199, 53]
-    }
+    { "name": "Config", "discriminator": [155, 12, 170, 224, 30, 250, 204, 130] },
+    { "name": "Round", "discriminator": [87, 127, 165, 51, 73, 78, 116, 174] },
+    { "name": "Bet", "discriminator": [147, 23, 35, 59, 15, 75, 155, 32] }
   ],
   "types": [
     {
@@ -252,26 +235,11 @@
     },
     {
       "name": "Side",
-      "type": {
-        "kind": "enum",
-        "variants": [
-          { "name": "Heads" },
-          { "name": "Tails" }
-        ]
-      }
+      "type": { "kind": "enum", "variants": [{ "name": "Heads" }, { "name": "Tails" }] }
     },
     {
       "name": "Outcome",
-      "type": {
-        "kind": "enum",
-        "variants": [
-          { "name": "Unresolved" },
-          { "name": "Heads" },
-          { "name": "Tails" },
-          { "name": "Tie" },
-          { "name": "AllLost" }
-        ]
-      }
+      "type": { "kind": "enum", "variants": [{ "name": "Unresolved" }, { "name": "Heads" }, { "name": "Tails" }, { "name": "Tie" }, { "name": "AllLost" }] }
     }
   ],
   "errors": [
