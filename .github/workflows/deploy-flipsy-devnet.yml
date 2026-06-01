@@ -1,296 +1,139 @@
-{
-  "address": "H4LAd2s7yVboni7oDqf1JtQ3UcqWJBZo5NpAhYisJaVj",
-  "metadata": {
-    "name": "flipsy",
-    "version": "0.1.0",
-    "spec": "0.1.0"
-  },
-  "instructions": [
-    {
-      "name": "initialize",
-      "discriminator": [175, 175, 109, 31, 13, 152, 155, 237],
-      "accounts": [
-        { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
-        { "name": "usdc_mint" },
-        { "name": "pyth_feed" },
-        { "name": "treasury" },
-        { "name": "admin", "writable": true, "signer": true },
-        { "name": "system_program", "address": "11111111111111111111111111111111" }
-      ],
-      "args": [
-        { "name": "round_duration", "type": "i64" },
-        { "name": "min_bet", "type": "u64" },
-        { "name": "max_bet", "type": "u64" },
-        { "name": "fee_bps", "type": "u16" },
-        { "name": "solo_fee_bps", "type": "u16" }
-      ]
-    },
-    {
-      "name": "set_admin",
-      "discriminator": [251, 163, 0, 52, 91, 194, 187, 92],
-      "accounts": [
-        { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
-        { "name": "admin", "signer": true }
-      ],
-      "args": [
-        { "name": "new_admin", "type": "pubkey" }
-      ]
-    },
-    {
-      "name": "set_treasury",
-      "discriminator": [57, 68, 4, 222, 73, 102, 211, 120],
-      "accounts": [
-        { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
-        { "name": "admin", "signer": true }
-      ],
-      "args": [
-        { "name": "new_treasury", "type": "pubkey" }
-      ]
-    },
-    {
-      "name": "set_pyth_feed",
-      "discriminator": [44, 55, 66, 77, 88, 99, 11, 22],
-      "accounts": [
-        { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
-        { "name": "admin", "signer": true }
-      ],
-      "args": [
-        { "name": "new_feed", "type": "pubkey" }
-      ]
-    },
-    {
-      "name": "set_params",
-      "discriminator": [33, 44, 55, 66, 77, 88, 99, 11],
-      "accounts": [
-        { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
-        { "name": "admin", "signer": true }
-      ],
-      "args": [
-        { "name": "round_duration", "type": "i64" },
-        { "name": "min_bet", "type": "u64" },
-        { "name": "max_bet", "type": "u64" },
-        { "name": "fee_bps", "type": "u16" },
-        { "name": "solo_fee_bps", "type": "u16" }
-      ]
-    },
-    {
-      "name": "set_paused",
-      "discriminator": [22, 33, 44, 55, 66, 77, 88, 99],
-      "accounts": [
-        { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
-        { "name": "admin", "signer": true }
-      ],
-      "args": [
-        { "name": "paused", "type": "bool" }
-      ]
-    },
-    {
-      "name": "start_round",
-      "discriminator": [11, 22, 33, 44, 55, 66, 77, 88],
-      "accounts": [
-        { "name": "config", "writable": true, "pda": { "seeds": [{ "kind": "const", "value": [99, 111, 110, 102, 105, 103] }] } },
-        { "name": "round", "writable": true },
-        { "name": "vault", "writable": true },
-        { "name": "usdc_mint" },
-        { "name": "pyth_feed" },
-        { "name": "cranker", "writable": true, "signer": true },
-        { "name": "system_program", "address": "11111111111111111111111111111111" },
-        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
-        { "name": "rent", "address": "SysvarRent111111111111111111111111111111111" }
-      ],
-      "args": []
-    },
-    {
-      "name": "place_bet",
-      "discriminator": [222, 62, 67, 220, 63, 166, 126, 33],
-      "accounts": [
-        { "name": "config" },
-        { "name": "round", "writable": true },
-        { "name": "bet", "writable": true },
-        { "name": "vault", "writable": true },
-        { "name": "user_usdc", "writable": true },
-        { "name": "user", "writable": true, "signer": true },
-        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
-        { "name": "system_program", "address": "11111111111111111111111111111111" }
-      ],
-      "args": [
-        { "name": "amount", "type": "u64" },
-        { "name": "side", "type": { "defined": { "name": "Side" } } }
-      ]
-    },
-    {
-      "name": "end_round",
-      "discriminator": [111, 222, 33, 44, 55, 66, 77, 88],
-      "accounts": [
-        { "name": "config" },
-        { "name": "round", "writable": true },
-        { "name": "pyth_feed" },
-        { "name": "cranker", "signer": true }
-      ],
-      "args": []
-    },
-    {
-      "name": "claim",
-      "discriminator": [62, 198, 214, 193, 213, 159, 108, 210],
-      "accounts": [
-        { "name": "config" },
-        { "name": "round" },
-        { "name": "bet", "writable": true },
-        { "name": "vault", "writable": true },
-        { "name": "user_usdc", "writable": true },
-        { "name": "treasury_usdc", "writable": true },
-        { "name": "user", "writable": true, "signer": true },
-        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }
-      ],
-      "args": []
-    },
-    {
-      "name": "force_refund",
-      "discriminator": [99, 11, 22, 33, 44, 55, 66, 77],
-      "accounts": [
-        { "name": "config" },
-        { "name": "round", "writable": true },
-        { "name": "admin", "signer": true }
-      ],
-      "args": []
-    },
-    {
-      "name": "sweep_all_lost",
-      "discriminator": [88, 99, 11, 22, 33, 44, 55, 66],
-      "accounts": [
-        { "name": "config" },
-        { "name": "round", "writable": true },
-        { "name": "vault", "writable": true },
-        { "name": "treasury_usdc", "writable": true },
-        { "name": "admin", "signer": true },
-        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }
-      ],
-      "args": []
-    },
-    {
-      "name": "emergency_sweep",
-      "discriminator": [77, 88, 99, 11, 22, 33, 44, 55],
-      "accounts": [
-        { "name": "config" },
-        { "name": "round", "writable": true },
-        { "name": "vault", "writable": true },
-        { "name": "treasury_usdc", "writable": true },
-        { "name": "admin", "signer": true },
-        { "name": "token_program", "address": "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" }
-      ],
-      "args": []
-    }
-  ],
-  "accounts": [
-    {
-      "name": "Config",
-      "discriminator": [155, 12, 170, 224, 30, 250, 204, 130]
-    },
-    {
-      "name": "Round",
-      "discriminator": [97, 96, 107, 166, 249, 250, 194, 0]
-    },
-    {
-      "name": "Bet",
-      "discriminator": [147, 23, 35, 63, 126, 238, 199, 53]
-    }
-  ],
-  "types": [
-    {
-      "name": "Config",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          { "name": "admin", "type": "pubkey" },
-          { "name": "usdc_mint", "type": "pubkey" },
-          { "name": "pyth_feed", "type": "pubkey" },
-          { "name": "treasury", "type": "pubkey" },
-          { "name": "current_epoch", "type": "u64" },
-          { "name": "paused", "type": "bool" },
-          { "name": "round_duration", "type": "i64" },
-          { "name": "min_bet", "type": "u64" },
-          { "name": "max_bet", "type": "u64" },
-          { "name": "fee_bps", "type": "u16" },
-          { "name": "solo_fee_bps", "type": "u16" },
-          { "name": "bump", "type": "u8" }
-        ]
-      }
-    },
-    {
-      "name": "Round",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          { "name": "epoch", "type": "u64" },
-          { "name": "start_time", "type": "i64" },
-          { "name": "lock_time", "type": "i64" },
-          { "name": "close_time", "type": "i64" },
-          { "name": "lock_price", "type": "i64" },
-          { "name": "close_price", "type": "i64" },
-          { "name": "heads_pool", "type": "u64" },
-          { "name": "tails_pool", "type": "u64" },
-          { "name": "outcome", "type": { "defined": { "name": "Outcome" } } },
-          { "name": "resolved_at", "type": "i64" },
-          { "name": "swept", "type": "bool" },
-          { "name": "bump", "type": "u8" }
-        ]
-      }
-    },
-    {
-      "name": "Bet",
-      "type": {
-        "kind": "struct",
-        "fields": [
-          { "name": "user", "type": "pubkey" },
-          { "name": "epoch", "type": "u64" },
-          { "name": "amount", "type": "u64" },
-          { "name": "side", "type": { "defined": { "name": "Side" } } },
-          { "name": "claimed", "type": "bool" },
-          { "name": "bump", "type": "u8" }
-        ]
-      }
-    },
-    {
-      "name": "Side",
-      "type": {
-        "kind": "enum",
-        "variants": [
-          { "name": "Heads" },
-          { "name": "Tails" }
-        ]
-      }
-    },
-    {
-      "name": "Outcome",
-      "type": {
-        "kind": "enum",
-        "variants": [
-          { "name": "Unresolved" },
-          { "name": "Heads" },
-          { "name": "Tails" },
-          { "name": "Tie" },
-          { "name": "AllLost" }
-        ]
-      }
-    }
-  ],
-  "errors": [
-    { "code": 6000, "name": "Paused", "msg": "Program paused" },
-    { "code": 6001, "name": "BelowMin", "msg": "Below minimum bet" },
-    { "code": 6002, "name": "AboveMax", "msg": "Above maximum bet" },
-    { "code": 6003, "name": "RoundLocked", "msg": "Round locked" },
-    { "code": 6004, "name": "RoundNotClosed", "msg": "Round not closed yet" },
-    { "code": 6005, "name": "AlreadyResolved", "msg": "Already resolved" },
-    { "code": 6006, "name": "AlreadyClaimed", "msg": "Already claimed" },
-    { "code": 6007, "name": "NotResolved", "msg": "Not resolved" },
-    { "code": 6008, "name": "TooEarlyForRefund", "msg": "Too early for refund" },
-    { "code": 6009, "name": "TooEarlyForEmergency", "msg": "Too early for emergency sweep" },
-    { "code": 6010, "name": "NotAllLost", "msg": "Not an all-lost round" },
-    { "code": 6011, "name": "AlreadySwept", "msg": "Already swept" },
-    { "code": 6012, "name": "PythError", "msg": "Pyth read error" },
-    { "code": 6013, "name": "PythStale", "msg": "Pyth price stale" },
-    { "code": 6014, "name": "PythOverflow", "msg": "Pyth math overflow" },
-    { "code": 6015, "name": "MathOverflow", "msg": "Math overflow" },
-    { "code": 6016, "name": "BadParams", "msg": "Bad parameters" }
-  ]
-}
+name: Flipsy Init v5
+
+on:
+  workflow_dispatch:
+    inputs:
+      seed:
+        description: 'Short passphrase (same passphrase = same wallets every run)'
+        required: true
+        default: 'flipsy-fresh-1'
+
+env:
+  TREASURY_OWNER: "Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV"
+  USDC_MINT:      "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
+  PYTH_FEED:      "J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix"
+  PROGRAM_ID:     "H4LAd2s7yVboni7oDqf1JtQ3UcqWJBZo5NpAhYisJaVj"
+
+jobs:
+  init:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        run: |
+          npm init -y >/dev/null 2>&1
+          npm install --silent \
+            @coral-xyz/anchor@0.31.1 \
+            @solana/web3.js@1.91.0 \
+            @solana/spl-token@0.4.6 \
+            rpc-websockets@7.6.1
+          pip3 install cryptography
+
+      - name: Derive keypair
+        env:
+          SEED: ${{ inputs.seed }}
+        run: |
+          mkdir -p ~/.config/solana
+          python3 << 'PYEOF'
+          import hashlib, json, os
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+          from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding
+          ALPHABET = '123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz'
+          def b58encode(b):
+              n = int.from_bytes(b, 'big'); s = ''
+              while n > 0:
+                  n, r = divmod(n, 58); s = ALPHABET[r] + s
+              for byte in b:
+                  if byte == 0: s = '1' + s
+                  else: break
+              return s
+          seed_bytes = hashlib.sha256(os.environ["SEED"].encode()).digest()
+          priv = Ed25519PrivateKey.from_private_bytes(seed_bytes)
+          pub = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+          with open(os.path.expanduser("~/.config/solana/id.json"), "w") as f:
+              json.dump(list(seed_bytes) + list(pub), f)
+          print(f"Deployer: {b58encode(pub)}")
+          PYEOF
+
+      - name: Run init
+        run: |
+          node - << 'JSEOF'
+          const anchor = require("@coral-xyz/anchor");
+          const web3   = require("@solana/web3.js");
+          const spl    = require("@solana/spl-token");
+          const fs     = require("fs");
+          const os     = require("os");
+          const path   = require("path");
+
+          const PROGRAM_ID     = new web3.PublicKey(process.env.PROGRAM_ID);
+          const USDC_MINT      = new web3.PublicKey(process.env.USDC_MINT);
+          const PYTH_FEED      = new web3.PublicKey(process.env.PYTH_FEED);
+          const TREASURY_OWNER = new web3.PublicKey(process.env.TREASURY_OWNER);
+          const IDL = JSON.parse(fs.readFileSync("flipsy/target/idl/flipsy.json"));
+
+          (async () => {
+            const conn = new web3.Connection("https://api.devnet.solana.com", "confirmed");
+            const kp = web3.Keypair.fromSecretKey(
+              Uint8Array.from(JSON.parse(fs.readFileSync(path.join(os.homedir(), ".config/solana/id.json"))))
+            );
+            const provider = new anchor.AnchorProvider(conn, new anchor.Wallet(kp), { commitment: "confirmed" });
+            anchor.setProvider(provider);
+            const program = new anchor.Program(IDL, provider);
+
+            const ata = await spl.getAssociatedTokenAddress(USDC_MINT, TREASURY_OWNER);
+            if (!(await conn.getAccountInfo(ata))) {
+              const sig = await web3.sendAndConfirmTransaction(conn,
+                new web3.Transaction().add(
+                  spl.createAssociatedTokenAccountInstruction(kp.publicKey, ata, TREASURY_OWNER, USDC_MINT)
+                ), [kp]
+              );
+              console.log("Treasury ATA created:", sig);
+            } else {
+              console.log("Treasury ATA already exists");
+            }
+
+            const [cfg] = web3.PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
+            let c;
+            try { c = await program.account.config.fetch(cfg); } catch {}
+            if (!c) {
+              const sig = await program.methods
+                .initialize(new anchor.BN(300), new anchor.BN(100000), new anchor.BN(5000000), 2000, 500)
+                .accounts({
+                  config: cfg, usdcMint: USDC_MINT, pythFeed: PYTH_FEED,
+                  treasury: ata, admin: kp.publicKey,
+                  systemProgram: web3.SystemProgram.programId,
+                })
+                .rpc();
+              console.log("Initialized:", sig);
+              c = await program.account.config.fetch(cfg);
+            } else {
+              console.log("Already initialized");
+            }
+
+            if (!c.admin.equals(TREASURY_OWNER) && c.admin.equals(kp.publicKey)) {
+              const sig = await program.methods.setAdmin(TREASURY_OWNER)
+                .accounts({ config: cfg, admin: kp.publicKey }).rpc();
+              console.log("Admin transferred:", sig);
+            } else {
+              console.log("Admin already correct");
+            }
+
+            console.log("Done. Config PDA:", cfg.toString());
+            console.log("Treasury ATA:", ata.toString());
+          })().catch(e => { console.error("INIT FAILED:", e); process.exit(1); });
+          JSEOF
+
+      - name: Summary
+        run: |
+          echo "======================================================="
+          echo "  Program ID : $PROGRAM_ID"
+          echo "  Admin      : $TREASURY_OWNER"
+          echo "  Explorer   : https://explorer.solana.com/address/$PROGRAM_ID?cluster=devnet"
+          echo "======================================================="
