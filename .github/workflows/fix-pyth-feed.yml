@@ -1,5 +1,3 @@
-The bs58 decode is failing. Here’s the fixed workflow:
-
 name: Fix Pyth Feed
 
 on:
