@@ -8,12 +8,18 @@ import Stocks           from './components/Stocks.jsx';
 import CrossChainSwap   from './components/CrossChainSwap.jsx';
 import MemeWonderland   from './components/MemeWonderland.jsx';
 import Flipsy           from './components/Flipsy.jsx';
+import SolToBtc         from './components/SolToBtc.jsx';
 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
   accent: '#00e5ff', green: '#00ffa3', red: '#ff3b6b',
   text: '#cdd6f4', muted: '#586994',
 };
+
+// Wallets allowed to use the SOL→BTC page while in dev
+const SOLTOBTC_ALLOWLIST = new Set([
+  'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV',
+]);
 
 const GLOBAL_STYLES = `html,body{ margin:0;padding:0;width:100%; min-height:100vh; min-height:100dvh; overflow-x:hidden; overscroll-behavior:none; -webkit-text-size-adjust:100%; text-size-adjust:100%; } body{ -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; } body.nexus-scroll-locked{ overflow:hidden !important; } #root{ min-height:100vh; min-height:100dvh; display:flex; flex-direction:column; } *,*::before,*::after{box-sizing:border-box;} *{ -webkit-tap-highlight-color:transparent; } button,a,[role="button"]{ touch-action:manipulation; } input,button,select,textarea{ font-family:'Syne',sans-serif; font-size:16px; } input[type="text"],input[type="number"],input[type="email"],input[type="password"],input[type="search"],input:not([type]),textarea{ font-size:16px !important; } ::-webkit-scrollbar{width:3px;height:3px;} ::-webkit-scrollbar-track{background:#03060f;} ::-webkit-scrollbar-thumb{background:#1e2d4a;border-radius:2px;} .hide-scrollbar{scrollbar-width:none;} .hide-scrollbar::-webkit-scrollbar{display:none;} .scroll-contain{ overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; } @media(max-width:768px){.desktop-nav{display:none!important;}} @media(min-width:769px){.mobile-nav{display:none!important;}} @keyframes wc-spin { to { transform: rotate(360deg); } }`;
 
@@ -61,6 +67,8 @@ const PATH_TO_TAB = {
   '/':            'swap',
   '/swap':        'swap',
   '/bridge':      'bridge',
+  '/sol-to-btc':  'soltobtc',
+  '/btc':         'soltobtc',
   '/wonderland':  'wonderland',
   '/memes':       'wonderland',
   '/markets':     'markets',
@@ -77,6 +85,7 @@ const PATH_TO_TAB = {
 const TAB_TO_PATH = {
   swap:       '/swap',
   bridge:     '/bridge',
+  soltobtc:   '/sol-to-btc',
   wonderland: '/wonderland',
   markets:    '/markets',
   portfolio:  '/portfolio',
@@ -147,7 +156,6 @@ function TermsGate({ onAccept }) {
 
   return (
     <>
-      {/* Lighter overlay so the site is visible behind */}
       <div style={{
         position: 'fixed', inset: 0, zIndex: 999,
         background: 'rgba(3,6,15,.50)',
@@ -155,7 +163,6 @@ function TermsGate({ onAccept }) {
         WebkitBackdropFilter: "none",
       }}/>
 
-      {/* Compact bottom sheet */}
       <div style={{
         position: 'fixed', bottom: 0, left: '50%',
         transform: 'translateX(-50%)',
@@ -170,12 +177,10 @@ function TermsGate({ onAccept }) {
         boxShadow: '0 -10px 40px rgba(0,0,0,.8), 0 0 20px rgba(0,229,255,.08)',
         fontFamily: 'Syne, sans-serif',
       }}>
-        {/* Drag handle */}
         <div style={{ flexShrink: 0, paddingTop: 10, display: 'flex', justifyContent: 'center' }}>
           <div style={{ width: 36, height: 3, borderRadius: 2, background: 'rgba(255,255,255,.15)' }} />
         </div>
 
-        {/* Compact header */}
         <div style={{ flexShrink: 0, padding: '8px 18px 6px', display: 'flex', alignItems: 'center', gap: 10 }}>
           <div style={{
             display: 'inline-flex', alignItems: 'center', gap: 5,
@@ -189,7 +194,6 @@ function TermsGate({ onAccept }) {
           <div style={{ fontSize: 11, color: '#586994' }}>Non-custodial · You assume all risk</div>
         </div>
 
-        {/* Scrollable terms — compact */}
         <div
           ref={scrollRef}
           onScroll={handleScroll}
@@ -225,7 +229,6 @@ function TermsGate({ onAccept }) {
           </div>
         </div>
 
-        {/* Footer */}
         <div style={{
           flexShrink: 0, padding: '8px 18px 14px',
           borderTop: '1px solid rgba(255,255,255,.04)',
@@ -539,10 +542,25 @@ function IconFlipsy() {
     </svg>
   );
 }
+function IconBtc() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="12" cy="12" r="9"/>
+      <path d="M9.5 7v10"/>
+      <path d="M9.5 7h4a2.5 2.5 0 0 1 0 5h-4"/>
+      <path d="M9.5 12h4.5a2.5 2.5 0 0 1 0 5h-4.5"/>
+      <path d="M11 5v2"/>
+      <path d="M11 17v2"/>
+      <path d="M14 5v2"/>
+      <path d="M14 17v2"/>
+    </svg>
+  );
+}
 
 const NAV_ICONS = {
   swap:       IconSwap,
   bridge:     IconBridge,
+  soltobtc:   IconBtc,
   wonderland: IconWonderland,
   markets:    IconMarkets,
   portfolio:  IconWallet,
@@ -552,6 +570,7 @@ const NAV_ICONS = {
 const NAV_TABS = [
   { id: 'swap',       label: 'Swap' },
   { id: 'bridge',     label: 'Bridge' },
+  { id: 'soltobtc',   label: 'SOL→BTC' },
   { id: 'wonderland', label: 'Wonderland' },
   { id: 'markets',    label: 'Markets' },
   { id: 'flipsy',     label: 'Flipsy' },
@@ -647,6 +666,29 @@ function AppInner() {
       <main style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '24px 16px 100px', width: '100%' }}>
         {tab === 'swap'       && <SwapWidget       {...sharedProps} />}
         {tab === 'bridge'     && <CrossChainSwap   onConnectWallet={openWallet} />}
+        {tab === 'soltobtc' && (
+          SOLTOBTC_ALLOWLIST.has(wallet.walletAddress)
+            ? <SolToBtc onConnectWallet={openWallet} />
+            : (
+              <div style={{
+                maxWidth: 420, margin: '60px auto', padding: 32,
+                background: 'rgba(247,147,26,.06)',
+                border: '1px solid rgba(247,147,26,.28)',
+                borderRadius: 18, textAlign: 'center',
+              }}>
+                <div style={{ fontSize: 36, marginBottom: 12 }}>🔒</div>
+                <div style={{ color: '#f7931a', fontWeight: 800, fontSize: 18, marginBottom: 8 }}>
+                  SOL → BTC
+                </div>
+                <div style={{ color: C.text, fontSize: 13, lineHeight: 1.5, marginBottom: 6 }}>
+                  Coming soon.
+                </div>
+                <div style={{ color: C.muted, fontSize: 11 }}>
+                  Native Bitcoin bridging powered by LI.FI. Currently in testing.
+                </div>
+              </div>
+            )
+        )}
         {tab === 'wonderland' && <MemeWonderland   onConnectWallet={openWallet} />}
         {tab === 'markets'    && <Stocks           {...sharedProps} />}
         {tab === 'flipsy'     && <Flipsy />}
@@ -680,7 +722,6 @@ function AppInner() {
         })}
       </nav>
 
-      {/* Terms gate renders on top of the site */}
       {!termsAccepted && (
         <TermsGate onAccept={() => {
           try { localStorage.setItem('nexus_terms_accepted_v3', '1'); } catch {}
