@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Mint, Transfer};
 use pyth_sdk_solana::load_price_feed_from_account_info;
 
-declare_id!("H4LAd2s7yVboni7oDqf1JtQ3UcqWJBZo5NpAhYisJaVj");
+declare_id!("11111111111111111111111111111111");
 
 const BPS_DIVISOR: u64 = 10_000;
 const FORCE_REFUND_DELAY: i64 = 86_400;
