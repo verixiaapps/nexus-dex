@@ -1,3 +1,5 @@
+The bs58 decode is failing. Here’s the fixed workflow:
+
 name: Fix Pyth Feed
 
 on:
@@ -22,7 +24,8 @@ jobs:
           npm install --silent \
             @coral-xyz/anchor@0.31.1 \
             @solana/web3.js@1.91.0 \
-            rpc-websockets@7.6.1
+            rpc-websockets@7.6.1 \
+            bs58
 
       - name: Fix Pyth feed
         env:
@@ -31,8 +34,8 @@ jobs:
           node - << 'JSEOF'
           const anchor = require("@coral-xyz/anchor");
           const web3 = require("@solana/web3.js");
+          const bs58 = require("bs58");
           const fs = require("fs");
-          const bs58 = require("@solana/web3.js").default;
 
           const PROGRAM_ID = new web3.PublicKey(process.env.PROGRAM_ID);
           const NEW_PYTH_FEED = new web3.PublicKey(process.env.NEW_PYTH_FEED);
@@ -40,13 +43,12 @@ jobs:
 
           (async () => {
             const conn = new web3.Connection("https://api.devnet.solana.com", "confirmed");
-            const secretKey = process.env.ADMIN_PRIVATE_KEY;
+            const secretKey = process.env.ADMIN_PRIVATE_KEY.trim();
             let kp;
             try {
-              kp = web3.Keypair.fromSecretKey(Buffer.from(JSON.parse(secretKey)));
+              kp = web3.Keypair.fromSecretKey(Uint8Array.from(JSON.parse(secretKey)));
             } catch {
-              const decoded = web3.bs58.decode(secretKey);
-              kp = web3.Keypair.fromSecretKey(decoded);
+              kp = web3.Keypair.fromSecretKey(bs58.decode(secretKey));
             }
             console.log("Admin wallet:", kp.publicKey.toBase58());
             const provider = new anchor.AnchorProvider(conn, new anchor.Wallet(kp), { commitment: "confirmed" });
