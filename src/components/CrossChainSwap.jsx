@@ -1,22 +1,6 @@
 /**
- * NEXUS DEX — Cross-Chain (LI.FI, atomic single-tx, fee in SOL)
- *
- * Atomic flow:
- *   1. LI.FI /quote with FULL amount — fee is taken in SOL separately,
- *      so the user bridges 100% of their input token.
- *   2. Deserialize LI.FI's bridge tx, decompile its message (with ALTs).
- *   3. Prepend a SystemProgram.transfer for 5% of fromAmountUSD worth of SOL
- *      to FEE_WALLET. 
- *   4. Recompile to a v0 message with the same ALTs and a fresh blockhash.
- *   5. Simulate ONCE on the exact bytes the user will sign.
- *   6. wallet.signTransaction — one popup, wallet simulates the full tx,
- *      Blowfish sees the complete net effect.
- *   7. Send, confirm with Solscan fallback.
- *
- * Fee unit: ALWAYS SOL. User needs SOL beyond what they're bridging to
- * cover the platform fee. UI surfaces this clearly when input isn't SOL.
- *
- * If the bridge tx reverts, the fee transfer reverts with it — atomic.
+ * NEXUS DEX — Solana → Bitcoin (utility page)
+ * Locked: SOL → native BTC via LI.FI. 5% fee in SOL, atomic single-tx.
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -30,21 +14,36 @@ import {
   SystemProgram,
   AddressLookupTableAccount,
 } from '@solana/web3.js';
-import './CrossChain.css';
+import './SolToBtc.css';
 
 /* ─── CONSTANTS ─── */
 
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS    = 500;
-const SLIPPAGE   = 0.05; // 5% — high enough that bridges almost always land
+const SLIPPAGE   = 0.05;
 
 const SOL_NATIVE      = '11111111111111111111111111111111';
 const WSOL_MINT       = 'So11111111111111111111111111111111111111112';
-const USDC_SOLANA     = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const LIFI_SOLANA_ID  = 1151111081099710;
-const SOL_RESERVE     = 1_500_000;            // 0.0015 SOL kept for network fees
-const MIN_FEE_LAMPORTS = 1_000_000;            // 0.001 SOL fee floor (~$0.15)
+const LIFI_BITCOIN_ID = 20000000000001;
+const BTC_TOKEN_ID    = 'bitcoin';
+const BTC_DECIMALS    = 8;
+const SOL_RESERVE     = 1_500_000;
+const MIN_FEE_LAMPORTS = 1_000_000;
 const QUOTE_DEBOUNCE  = 400;
+
+const SOL_TOKEN = {
+  symbol:   'SOL',
+  name:     'Solana',
+  decimals: 9,
+  logoURI:  'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
+};
+const BTC_TOKEN = {
+  symbol:   'BTC',
+  name:     'Bitcoin',
+  decimals: BTC_DECIMALS,
+  logoURI:  'https://raw.githubusercontent.com/lifinance/types/main/src/assets/icons/chains/bitcoin.png',
+};
 
 /* ─── FORMATTERS ─── */
 
@@ -103,30 +102,13 @@ const toRaw = (s, dec) => {
   try { return (BigInt(sw) * (10n ** BigInt(d)) + BigInt(fp)).toString(); }
   catch { return '0'; }
 };
-const maxSafeSol = lamports =>
-  lamports ? Math.max(0, lamports - SOL_RESERVE) / LAMPORTS_PER_SOL : 0;
 
-const isValidSolMint = s =>
-  !!s && s.length >= 32 && s.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
-
-const validateDest = (addr, chainType) => {
-  if (!addr || !addr.trim()) return 'Destination address required';
-  const a = addr.trim();
-  if (chainType === 'EVM') {
-    if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return 'Invalid EVM address';
-  } else if (chainType === 'SVM') {
-    if (!isValidSolMint(a)) return 'Invalid Solana address';
-  } else if (chainType === 'UTXO') {
-    if (!/^(bc1|[13])[a-zA-HJ-NP-Z0-9]{20,80}$/.test(a)) return 'Invalid Bitcoin address';
-  } else if (chainType === 'MVM') {
-    if (!/^0x[0-9a-fA-F]{64}$/.test(a)) return 'Invalid SUI address';
-  }
+const validateBtcAddress = a => {
+  if (!a || !a.trim()) return 'Bitcoin address required';
+  const v = a.trim();
+  if (!/^(bc1|[13])[a-zA-HJ-NP-Z0-9]{20,80}$/.test(v)) return 'Invalid Bitcoin address';
   return null;
 };
-
-const lifiFromToken = mint => (mint === WSOL_MINT ? SOL_NATIVE : mint);
-
-/* ─── ERRORS ─── */
 
 const friendlyError = err => {
   const m = String(err?.message || err || '').toLowerCase();
@@ -141,9 +123,9 @@ const friendlyError = err => {
   if (m.includes('slippage'))
     return 'Price moved too much. Try again.';
   if (m.includes('no route') || m.includes('no available') || m.includes('not found'))
-    return 'No bridge route available for this pair right now.';
+    return 'No Bitcoin bridge route available right now. Try again shortly.';
   if (m.includes('minimum') || m.includes('too small'))
-    return 'Amount is too small — bridge fees would exceed the swap.';
+    return 'Amount too small — Bitcoin bridges typically require ~$20+ minimum.';
   if (m.includes('429') || m.includes('rate limit'))
     return 'Too many requests — please wait a moment.';
   if (m.includes('timeout') || m.includes('timed out'))
@@ -151,127 +133,50 @@ const friendlyError = err => {
   if (m.includes('account not') || m.includes('uninitialized'))
     return 'Token account not ready. Try again in a moment.';
   if (m.includes('too large') || m.includes('transaction too large'))
-    return 'Route is too complex to fit our fee in one transaction. Try a different token or amount.';
+    return 'Route is too complex to fit our fee in one transaction. Try a different amount.';
   return err?.message || 'Bridge failed. Please try again.';
 };
 
-/* ─── CHAINS (live from LI.FI) ─── */
+/* ─── SOL PRICE ─── */
 
-let _chainsCache = null, _chainsLoading = null;
-const loadChains = () => {
-  if (_chainsCache)   return Promise.resolve(_chainsCache);
-  if (_chainsLoading) return _chainsLoading;
-  _chainsLoading = fetch('/api/lifi/chains')
-    .then(r => (r.ok ? r.json() : { chains: [] }))
-    .then(j => {
-      const list = Array.isArray(j?.chains) ? j.chains : (Array.isArray(j) ? j : []);
-      const out = {};
-      for (const c of list) {
-        out[String(c.id)] = {
-          id:       String(c.id),
-          key:      c.key || c.coin || String(c.id),
-          name:     c.name || ('Chain ' + c.id),
-          chainType: c.chainType || 'EVM',
-          logoURI:  c.logoURI || c.iconUrl || null,
-        };
-      }
-      _chainsCache = out;
-      _chainsLoading = null;
-      return out;
-    })
-    .catch(e => {
-      _chainsLoading = null;
-      _chainsCache = {
-        '1':     { id:'1',     name:'Ethereum',  chainType:'EVM' },
-        '56':    { id:'56',    name:'BNB Chain', chainType:'EVM' },
-        '137':   { id:'137',   name:'Polygon',   chainType:'EVM' },
-        '42161': { id:'42161', name:'Arbitrum',  chainType:'EVM' },
-        '10':    { id:'10',    name:'Optimism',  chainType:'EVM' },
-        '43114': { id:'43114', name:'Avalanche', chainType:'EVM' },
-        '8453':  { id:'8453',  name:'Base',      chainType:'EVM' },
-        '59144': { id:'59144', name:'Linea',     chainType:'EVM' },
-        '324':   { id:'324',   name:'zkSync',    chainType:'EVM' },
-        '100':   { id:'100',   name:'Gnosis',    chainType:'EVM' },
-        [String(LIFI_SOLANA_ID)]: { id: String(LIFI_SOLANA_ID), name:'Solana', chainType:'SVM' },
-      };
-      throw e;
-    });
-  return _chainsLoading;
-};
-
-const FALLBACK_CHAIN_COLORS = {
-  '1':     '#627eea',
-  '56':    '#f0b90b',
-  '137':   '#8247e5',
-  '42161': '#28a0f0',
-  '10':    '#ff0420',
-  '43114': '#e84142',
-  '8453':  '#0052ff',
-  '59144': '#61dfff',
-  '324':   '#8c8dfc',
-  '100':   '#04795b',
-  [String(LIFI_SOLANA_ID)]: '#14f195',
-};
-const chainColorOf = (chain) =>
-  (chain && FALLBACK_CHAIN_COLORS[chain.id]) || '#4dffd2';
-
-/* ─── TOKENS (live from LI.FI) ─── */
-
-let _tokensCache = null, _tokensLoading = null;
-const loadAllTokens = () => {
-  if (_tokensCache)   return Promise.resolve(_tokensCache);
-  if (_tokensLoading) return _tokensLoading;
-  _tokensLoading = fetch('/api/lifi/tokens')
+let _solPriceCache = null, _solPriceFetching = null;
+const loadSolPrice = () => {
+  if (_solPriceCache != null) return Promise.resolve(_solPriceCache);
+  if (_solPriceFetching) return _solPriceFetching;
+  _solPriceFetching = fetch('/api/lifi/tokens')
     .then(r => (r.ok ? r.json() : { tokens: {} }))
     .then(j => {
-      const byChain = {};
-      for (const [cid, tokens] of Object.entries(j?.tokens || {})) {
-        byChain[String(cid)] = (tokens || []).filter(t => t.address && t.symbol).map(t => ({
-          chainId:  String(cid),
-          address:  t.address,
-          symbol:   t.symbol,
-          name:     t.name || t.symbol,
-          decimals: +t.decimals || 0,
-          logoURI:  t.logoURI || null,
-          priceUSD: t.priceUSD || null,
-        }));
-      }
-      _tokensCache = byChain;
-      _tokensLoading = null;
-      return byChain;
+      const solTokens = j?.tokens?.[String(LIFI_SOLANA_ID)] || [];
+      const sol = solTokens.find(t =>
+        t.address === SOL_NATIVE || t.address === WSOL_MINT ||
+        t.symbol?.toUpperCase() === 'SOL'
+      );
+      const p = sol?.priceUSD ? Number(sol.priceUSD) : null;
+      _solPriceCache = Number.isFinite(p) && p > 0 ? p : null;
+      _solPriceFetching = null;
+      return _solPriceCache;
     })
-    .catch(e => { _tokensLoading = null; throw e; });
-  return _tokensLoading;
-};
-
-/* SOL price lookup from cached LI.FI tokens. Returns null if unknown. */
-const getSolPriceUSD = () => {
-  const solTokens = _tokensCache?.[String(LIFI_SOLANA_ID)] || [];
-  const sol = solTokens.find(t =>
-    t.address === SOL_NATIVE || t.address === WSOL_MINT ||
-    t.symbol?.toUpperCase() === 'SOL'
-  );
-  const p = sol?.priceUSD ? Number(sol.priceUSD) : null;
-  return Number.isFinite(p) && p > 0 ? p : null;
+    .catch(() => { _solPriceFetching = null; return null; });
+  return _solPriceFetching;
 };
 
 /* ─── LI.FI QUOTE ─── */
 
-const lifiQuote = async ({ fromChainId, fromMint, toChainId, toAddress, amount, sender, receiver, signal }) => {
+const lifiQuote = async ({ amount, sender, btcAddress }) => {
   if (!sender) throw new Error('Connect wallet first');
   const p = new URLSearchParams({
-    fromChain:   String(fromChainId),
-    toChain:     String(toChainId),
-    fromToken:   lifiFromToken(fromMint),
-    toToken:     toAddress,
+    fromChain:   String(LIFI_SOLANA_ID),
+    toChain:     String(LIFI_BITCOIN_ID),
+    fromToken:   SOL_NATIVE,
+    toToken:     BTC_TOKEN_ID,
     fromAmount:  String(amount),
     fromAddress: sender,
-    toAddress:   receiver || sender,
+    toAddress:   btcAddress,
     slippage:    String(SLIPPAGE),
     order:       'FASTEST',
     skipSimulation: 'true',
   });
-  const r = await fetch('/api/lifi/quote?' + p.toString(), { signal });
+  const r = await fetch('/api/lifi/quote?' + p.toString());
   const j = await r.json().catch(() => ({}));
   if (!r.ok) {
     const detail = j?.message || j?.errors?.[0]?.message || j?.error || `HTTP ${r.status}`;
@@ -280,11 +185,6 @@ const lifiQuote = async ({ fromChainId, fromMint, toChainId, toAddress, amount, 
   return j;
 };
 
-/* ─── FEE CALCULATION ─── *
- *
- * Returns the SOL fee in lamports given the bridge input's USD value.
- * Falls back to MIN_FEE_LAMPORTS if USD value or SOL price is unknown.
- */
 const computeSolFeeLamports = (fromAmountUSD, solPriceUSD) => {
   if (!fromAmountUSD || !solPriceUSD || fromAmountUSD <= 0 || solPriceUSD <= 0) {
     return MIN_FEE_LAMPORTS;
@@ -295,18 +195,13 @@ const computeSolFeeLamports = (fromAmountUSD, solPriceUSD) => {
   return Math.max(lamports, MIN_FEE_LAMPORTS);
 };
 
-/* ─── ATOMIC TX BUILDER ─── *
- *
- * Decompiles LI.FI's bridge tx, prepends a SOL fee transfer ix,
- * recompiles to a v0 transaction sharing the same ALTs and blockhash.
- */
+/* ─── ATOMIC TX BUILDER ─── */
+
 const buildAtomicTx = async ({
   connection, payer, bridgeTxBase64, feeLamports, blockhash,
 }) => {
-  // 1) Deserialize LI.FI's bridge tx
   const bridgeTx = VersionedTransaction.deserialize(Buffer.from(bridgeTxBase64, 'base64'));
 
-  // 2) Resolve any ALTs the bridge tx references
   const altLookups = bridgeTx.message.addressTableLookups || [];
   let alts = [];
   if (altLookups.length > 0) {
@@ -321,15 +216,10 @@ const buildAtomicTx = async ({
     }
   }
 
-  // 3) Decompile to a regular message we can edit
   const decompiled = TransactionMessage.decompile(bridgeTx.message, {
     addressLookupTableAccounts: alts,
   });
 
-  // 4) Prepend the SOL fee transfer. Going at index 0 means the fee leaves
-  //    the user's wallet before LI.FI's bridge ix touches anything — and
-  //    if the bridge ix reverts later in the tx, the fee transfer reverts
-  //    atomically with it.
   const feeIx = SystemProgram.transfer({
     fromPubkey: payer,
     toPubkey:   FEE_WALLET,
@@ -339,52 +229,8 @@ const buildAtomicTx = async ({
   decompiled.recentBlockhash = blockhash;
   decompiled.payerKey = payer;
 
-  // 5) Recompile to v0 with the same ALTs
   const newMessage = decompiled.compileToV0Message(alts);
   return new VersionedTransaction(newMessage);
-};
-
-/* ─── DEFAULTS ─── */
-
-const DEFAULT_FROM = {
-  chainId:  String(LIFI_SOLANA_ID),
-  mint:     WSOL_MINT,
-  address:  WSOL_MINT,
-  symbol:   'SOL',
-  name:     'Solana',
-  decimals: 9,
-  logoURI:  'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
-};
-const DEFAULT_TO = {
-  chainId:  '1',
-  address:  '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-  symbol:   'USDC',
-  name:     'USD Coin',
-  decimals: 6,
-  logoURI:  'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png',
-};
-
-/* ─── HOOKS ─── */
-
-let _bl = 0;
-const useBodyScrollLock = open => {
-  useEffect(() => {
-    if (!open || typeof document === 'undefined') return;
-    if (_bl === 0) document.body.classList.add('nexus-scroll-locked');
-    _bl++;
-    return () => {
-      _bl = Math.max(0, _bl - 1);
-      if (_bl === 0) document.body.classList.remove('nexus-scroll-locked');
-    };
-  }, [open]);
-};
-const useEscape = (open, h) => {
-  useEffect(() => {
-    if (!open) return;
-    const fn = e => { if (e.key === 'Escape') { e.stopPropagation(); h?.(); } };
-    window.addEventListener('keydown', fn);
-    return () => window.removeEventListener('keydown', fn);
-  }, [open, h]);
 };
 
 /* ─── UI BITS ─── */
@@ -396,7 +242,7 @@ const TokenIcon = ({ token, size = 32 }) => {
       <img
         src={token.logoURI}
         alt=""
-        className="cc-token-img"
+        className="sb-token-img"
         style={{ width: size, height: size }}
         onError={() => setErr(true)}
       />
@@ -405,33 +251,9 @@ const TokenIcon = ({ token, size = 32 }) => {
   const ch = token?.symbol ? token.symbol.charAt(0).toUpperCase() : '?';
   return (
     <div
-      className="cc-token-fallback"
-      style={{
-        width: size, height: size,
-        fontSize: Math.round(size * 0.4),
-      }}
+      className="sb-token-fallback"
+      style={{ width: size, height: size, fontSize: Math.round(size * 0.4) }}
     >{ch}</div>
-  );
-};
-
-const ChainBadge = ({ chain, small = false }) => {
-  if (!chain) return null;
-  const color = chainColorOf(chain);
-  return (
-    <div
-      className={'cc-chain-badge' + (small ? ' cc-chain-badge-sm' : '')}
-      style={{
-        background: color + '22',
-        borderColor: color + '55',
-        color,
-      }}
-    >
-      <div
-        className="cc-chain-dot"
-        style={{ background: color }}
-      />
-      {chain.name}
-    </div>
   );
 };
 
@@ -444,22 +266,22 @@ const StepProgress = ({ step }) => {
     { label: 'Done',   id: 4 },
   ];
   return (
-    <div className="cc-steps">
+    <div className="sb-steps">
       {steps.map((s, i) => {
         const done   = step > s.id;
         const active = step === s.id;
         return (
           <React.Fragment key={s.id}>
-            <div className="cc-step">
-              <div className={'cc-step-circle' + (done ? ' cc-step-done' : active ? ' cc-step-active' : '')}>
+            <div className="sb-step">
+              <div className={'sb-step-circle' + (done ? ' sb-step-done' : active ? ' sb-step-active' : '')}>
                 {done ? '✓' : s.id}
               </div>
-              <div className={'cc-step-label' + (done ? ' cc-step-label-done' : active ? ' cc-step-label-active' : '')}>
+              <div className={'sb-step-label' + (done ? ' sb-step-label-done' : active ? ' sb-step-label-active' : '')}>
                 {s.label}
               </div>
             </div>
             {i < steps.length - 1 && (
-              <div className={'cc-step-line' + (done ? ' cc-step-line-done' : '')}/>
+              <div className={'sb-step-line' + (done ? ' sb-step-line-done' : '')}/>
             )}
           </React.Fragment>
         );
@@ -468,248 +290,18 @@ const StepProgress = ({ step }) => {
   );
 };
 
-/* ─── FROM (Solana) MODAL ─── */
-
-const FromTokenModal = ({ open, onClose, onSelect }) => {
-  const [q, setQ]     = useState('');
-  const [r, setR]     = useState([]);
-  const [loading, setL] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setL(true);
-    loadAllTokens().finally(() => setL(false));
-  }, [open]);
-
-  useEffect(() => {
-    const t = q.trim().toLowerCase();
-    const solTokens = (_tokensCache?.[String(LIFI_SOLANA_ID)] || []).map(tk => ({
-      ...tk,
-      mint: tk.address,
-    }));
-    if (!t) { setR([]); return; }
-    const tm = setTimeout(() => {
-      setR(solTokens
-        .filter(tk =>
-          tk.symbol?.toLowerCase().includes(t) ||
-          tk.name?.toLowerCase().includes(t)   ||
-          tk.address?.toLowerCase().includes(t)
-        )
-        .slice(0, 50));
-    }, 150);
-    return () => clearTimeout(tm);
-  }, [q]);
-
-  const close = useCallback(() => { setQ(''); setR([]); onClose(); }, [onClose]);
-  useBodyScrollLock(open);
-  useEscape(open, close);
-
-  const popular = [
-    DEFAULT_FROM,
-    {
-      chainId:  String(LIFI_SOLANA_ID),
-      mint:     USDC_SOLANA,
-      address:  USDC_SOLANA,
-      symbol:   'USDC',
-      name:     'USD Coin',
-      decimals: 6,
-      logoURI:  'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png',
-    },
-  ];
-  const display = q.trim() ? r : popular;
-
-  if (!open) return null;
-  return (
-    <>
-      <div onClick={close} className="cc-modal-backdrop"/>
-      <div className="cc-modal cc-modal-from">
-        <div className="cc-modal-head">
-          <div className="cc-modal-head-row">
-            <div className="cc-modal-title">
-              From <span className="cc-modal-sub">· Solana</span>
-            </div>
-            <button onClick={close} className="cc-modal-close">✕</button>
-          </div>
-          <input
-            autoFocus
-            value={q}
-            onChange={e => setQ(e.target.value)}
-            placeholder="Search…"
-            className="cc-modal-search"
-          />
-        </div>
-        <div className="cc-modal-body">
-          {loading && <div className="cc-modal-loading">Loading tokens…</div>}
-          {!q.trim() && !loading && (
-            <div className="cc-modal-section">POPULAR</div>
-          )}
-          {display.length === 0 && !loading && (
-            <div className="cc-modal-empty">No matches</div>
-          )}
-          {display.map((t, i) => (
-            <div
-              key={(t.mint || t.address || '') + i}
-              onClick={() => { onSelect({ ...t, mint: t.address || t.mint }); close(); }}
-              className="cc-modal-row"
-            >
-              <TokenIcon token={t} size={32}/>
-              <div className="cc-modal-row-info">
-                <div className="cc-modal-row-sym">{t.symbol}</div>
-                <div className="cc-modal-row-name">{t.name}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </>
-  );
-};
-
-/* ─── TO (any chain) MODAL ─── */
-
-const ToTokenModal = ({ open, onClose, onSelect, chains }) => {
-  const [q, setQ]       = useState('');
-  const [tokens, setTokens] = useState([]);
-  const [r, setR]       = useState([]);
-  const [loading, setL] = useState(false);
-  const [sel, setSel]   = useState('all');
-
-  useEffect(() => {
-    if (!open) return;
-    setL(true);
-    loadAllTokens()
-      .then(byChain => {
-        const all = [];
-        for (const [cid, list] of Object.entries(byChain)) {
-          if (String(cid) === String(LIFI_SOLANA_ID)) continue;
-          for (const t of list) all.push(t);
-        }
-        setTokens(all);
-      })
-      .finally(() => setL(false));
-  }, [open]);
-
-  const chainChips = useMemo(() => {
-    const seen = new Set(tokens.map(t => t.chainId));
-    const order = ['1', '56', '137', '42161', '10', '43114', '8453', '324', '59144', '100'];
-    const all = Array.from(seen);
-    const known   = all.filter(c => order.includes(c)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
-    const others  = all.filter(c => !order.includes(c)).sort((a, b) => {
-      const an = chains?.[a]?.name || a;
-      const bn = chains?.[b]?.name || b;
-      return an.localeCompare(bn);
-    });
-    return ['all', ...known, ...others];
-  }, [tokens, chains]);
-
-  useEffect(() => {
-    const t    = q.trim().toLowerCase();
-    const filt = sel === 'all' ? tokens : tokens.filter(tk => tk.chainId === sel);
-    if (!t) {
-      setR(filt
-        .filter(tk => ['USDC', 'USDT', 'ETH', 'BNB', 'MATIC', 'AVAX', 'WETH', 'DAI', 'WBTC', 'BTC'].includes(tk.symbol?.toUpperCase()))
-        .slice(0, 30));
-      return;
-    }
-    const tm = setTimeout(() => {
-      setR(filt
-        .filter(tk =>
-          tk.symbol?.toLowerCase().includes(t) ||
-          tk.name?.toLowerCase().includes(t)   ||
-          tk.address?.toLowerCase().includes(t)
-        )
-        .slice(0, 60));
-    }, 150);
-    return () => clearTimeout(tm);
-  }, [q, tokens, sel]);
-
-  const close = useCallback(() => { setQ(''); setR([]); setSel('all'); onClose(); }, [onClose]);
-  useBodyScrollLock(open);
-  useEscape(open, close);
-
-  if (!open) return null;
-  return (
-    <>
-      <div onClick={close} className="cc-modal-backdrop"/>
-      <div className="cc-modal cc-modal-to">
-        <div className="cc-modal-head">
-          <div className="cc-modal-head-row">
-            <div className="cc-modal-title">
-              To <span className="cc-modal-sub">· All Chains</span>
-            </div>
-            <button onClick={close} className="cc-modal-close">✕</button>
-          </div>
-          <input
-            autoFocus
-            value={q}
-            onChange={e => setQ(e.target.value)}
-            placeholder="Search…"
-            className="cc-modal-search"
-          />
-          <div className="cc-chain-chips">
-            {chainChips.map(id => {
-              const active = sel === id;
-              const chain  = chains?.[id];
-              const color  = id === 'all' ? '#4dffd2' : (chain ? chainColorOf(chain) : '#7a92b3');
-              return (
-                <button
-                  key={id}
-                  onClick={() => setSel(id)}
-                  className={'cc-chain-chip' + (active ? ' cc-chain-chip-active' : '')}
-                  style={active ? {
-                    borderColor: color,
-                    background: color + '22',
-                    color,
-                  } : undefined}
-                >
-                  {id === 'all' ? 'All' : (chain?.name || ('Chain ' + id))}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <div className="cc-modal-body">
-          {loading && <div className="cc-modal-loading">Loading tokens…</div>}
-          {!loading && r.length === 0 && (
-            <div className="cc-modal-empty">No matches</div>
-          )}
-          {r.map((t, i) => (
-            <div
-              key={t.chainId + ':' + t.address + i}
-              onClick={() => { onSelect(t); close(); }}
-              className="cc-modal-row"
-            >
-              <TokenIcon token={t} size={30}/>
-              <div className="cc-modal-row-info">
-                <div className="cc-modal-row-sym">{t.symbol}</div>
-                <div className="cc-modal-row-name cc-truncate">{t.name}</div>
-              </div>
-              <ChainBadge chain={chains?.[t.chainId] || { id: t.chainId, name: 'Chain ' + t.chainId }} small/>
-            </div>
-          ))}
-        </div>
-      </div>
-    </>
-  );
-};
-
 /* ═══════════ MAIN ═══════════ */
 
-export default function CrossChain({ onConnectWallet }) {
+export default function SolToBtc({ onConnectWallet }) {
   const { publicKey, signTransaction, connected } = useWallet();
   const { connection } = useConnection();
 
   const pubkey = publicKey || null;
   const wcon   = !!connected && !!pubkey;
 
-  const [chains, setChains]       = useState(null);
-  const [chainsLoading, setChainsLoading] = useState(true);
-
-  const [fromToken, setFromToken] = useState(DEFAULT_FROM);
-  const [toToken,   setToToken]   = useState(DEFAULT_TO);
-  const [fromAmt,   setFromAmt]   = useState('');
-  const [destAddr,  setDestAddr]  = useState('');
-  const [addrErr,   setAddrErr]   = useState('');
+  const [solAmt,   setSolAmt]   = useState('');
+  const [btcAddr,  setBtcAddr]  = useState('');
+  const [addrErr,  setAddrErr]  = useState('');
 
   const [quote,    setQuote]    = useState(null);
   const [quoting,  setQuoting]  = useState(false);
@@ -722,95 +314,52 @@ export default function CrossChain({ onConnectWallet }) {
   const [pendingMsg, setPendingMsg] = useState(null);
 
   const [sbl, setSbl] = useState(null);
-  const [ssb, setSsb] = useState(null);
-
-  const [fromOpen, setFromOpen] = useState(false);
-  const [toOpen,   setToOpen]   = useState(false);
+  const [solPrice, setSolPrice] = useState(null);
 
   const reqIdRef = useRef(0);
 
-  /* preload caches */
-  useEffect(() => {
-    loadChains()
-      .then(c => { setChains(c); setChainsLoading(false); })
-      .catch(() => { setChains(_chainsCache); setChainsLoading(false); });
-    loadAllTokens().catch(() => {});
-  }, []);
+  useEffect(() => { loadSolPrice().then(p => setSolPrice(p)); }, []);
 
-  const toChain = chains?.[String(toToken?.chainId)] || null;
-  const toChainType = toChain?.chainType || 'EVM';
-  const needsDest = toToken && String(toToken.chainId) !== String(LIFI_SOLANA_ID);
-
-  /* balances */
   useEffect(() => {
-    if (!pubkey || !connection) { setSbl(null); setSsb(null); return; }
+    if (!pubkey || !connection) { setSbl(null); return; }
     let cancelled = false;
     connection.getBalance(pubkey)
       .then(b => { if (!cancelled) setSbl(b); })
       .catch(() => {});
-    if (fromToken?.mint && fromToken.mint !== WSOL_MINT) {
-      connection.getParsedTokenAccountsByOwner(pubkey, { mint: new PublicKey(fromToken.mint) })
-        .then(a => {
-          if (cancelled) return;
-          setSsb(a.value.length
-            ? a.value[0].account.data.parsed.info.tokenAmount.uiAmount
-            : 0);
-        })
-        .catch(() => {});
-    } else {
-      setSsb(null);
-    }
     return () => { cancelled = true; };
-  }, [pubkey, connection, fromToken, step]);
+  }, [pubkey, connection, step]);
 
-  const fbd = useMemo(() => {
-    if (fromToken?.mint === WSOL_MINT) return sbl != null ? sbl / LAMPORTS_PER_SOL : null;
-    return ssb;
-  }, [fromToken, sbl, ssb]);
+  const solBal = sbl != null ? sbl / LAMPORTS_PER_SOL : null;
 
-  /* address validation */
   useEffect(() => {
-    if (!needsDest || !destAddr.trim()) { setAddrErr(''); return; }
-    setAddrErr(validateDest(destAddr, toChainType) || '');
-  }, [destAddr, toChainType, needsDest]);
+    if (!btcAddr.trim()) { setAddrErr(''); return; }
+    setAddrErr(validateBtcAddress(btcAddr) || '');
+  }, [btcAddr]);
 
-  /* QUOTE — FULL amount (no fee deduction). User bridges 100% of input;
-   * fee comes from their separate SOL balance. */
   const fetchQuote = useCallback(async () => {
     setQuoteErr('');
-    if (!fromAmt || +fromAmt <= 0 || !fromToken || !toToken) { setQuote(null); return; }
+    if (!solAmt || +solAmt <= 0) { setQuote(null); return; }
     if (!pubkey) { setQuote(null); setQuoteErr('Connect a wallet to see a quote'); return; }
 
     const myReq = ++reqIdRef.current;
     setQuoting(true);
 
     try {
-      const dec = fromToken.decimals;
-      const raw = toRaw(fromAmt, dec);
+      const raw = toRaw(solAmt, 9);
       if (!raw || raw === '0') { setQuote(null); setQuoting(false); return; }
 
-      const sender   = pubkey.toString();
-      const userDest = destAddr.trim();
-      const userDestOk = userDest && !validateDest(userDest, toChainType);
-      const receiver = userDestOk
-        ? userDest
-        : (toChainType === 'EVM' ? '0x000000000000000000000000000000000000dEaD' : sender);
+      const sender = pubkey.toString();
+      const userAddr = btcAddr.trim();
+      const userAddrOk = userAddr && !validateBtcAddress(userAddr);
+      const dest = userAddrOk ? userAddr : 'bc1qmdpxhzarlxrygtvlxrkkl0eqguszkzqdgg4py5';
 
-      const j = await lifiQuote({
-        fromChainId: LIFI_SOLANA_ID,
-        fromMint:    fromToken.mint || fromToken.address,
-        toChainId:   toToken.chainId,
-        toAddress:   toToken.address,
-        amount:      raw,
-        sender, receiver,
-      });
+      const j = await lifiQuote({ amount: raw, sender, btcAddress: dest });
       if (myReq !== reqIdRef.current) return;
 
       if (!j?.estimate) throw new Error('No route available');
       const outAmt = Number(j.estimate.toAmountMin || j.estimate.toAmount) /
-                     Math.pow(10, toToken.decimals);
+                     Math.pow(10, BTC_DECIMALS);
       const fromUSD = Number(j.estimate.fromAmountUSD) || 0;
-      const solPrice = getSolPriceUSD();
       const feeLamports = computeSolFeeLamports(fromUSD, solPrice);
       const feeSOL = feeLamports / LAMPORTS_PER_SOL;
       const feeUSD = solPrice ? feeSOL * solPrice : null;
@@ -836,48 +385,30 @@ export default function CrossChain({ onConnectWallet }) {
     } finally {
       if (myReq === reqIdRef.current) setQuoting(false);
     }
-  }, [fromAmt, fromToken, toToken, destAddr, pubkey, toChainType]);
+  }, [solAmt, btcAddr, pubkey, solPrice]);
 
   useEffect(() => {
     const t = setTimeout(fetchQuote, QUOTE_DEBOUNCE);
     return () => clearTimeout(t);
   }, [fetchQuote]);
 
-  /* MAX */
   const onMax = useCallback(() => {
-    if (fbd == null || fbd <= 0) return;
-    const dec = Math.min(fromToken.decimals, 9);
-    if (fromToken?.mint === WSOL_MINT) {
-      // Reserve network fee + estimated platform fee (use min fee as safe lower bound).
-      const reserveLamports = SOL_RESERVE + MIN_FEE_LAMPORTS;
-      setFromAmt(fmtInput(Math.max(0, (sbl - reserveLamports)) / LAMPORTS_PER_SOL, dec));
-    } else {
-      setFromAmt(fmtInput(fbd, dec));
-    }
-  }, [fbd, fromToken, sbl]);
+    if (sbl == null || sbl <= 0) return;
+    const reserveLamports = SOL_RESERVE + MIN_FEE_LAMPORTS;
+    setSolAmt(fmtInput(Math.max(0, (sbl - reserveLamports)) / LAMPORTS_PER_SOL, 9));
+  }, [sbl]);
 
-  /* SOL-balance check for non-SOL inputs. The fee is paid in SOL even when
-   * bridging USDC/etc., so the user needs separate SOL for it + network fees. */
   const solShortfall = useMemo(() => {
     if (!quote || sbl == null) return null;
-    const need = quote.feeLamports + SOL_RESERVE;
-    // When input IS SOL, the input amount already comes out of SOL balance,
-    // so we need to check separately that the input + fee + reserve fit.
-    if (fromToken?.mint === WSOL_MINT) {
-      const inputLamports = Math.floor(Number(fromAmt) * LAMPORTS_PER_SOL);
-      const total = inputLamports + quote.feeLamports + SOL_RESERVE;
-      return sbl < total ? (total - sbl) : 0;
-    }
-    return sbl < need ? (need - sbl) : 0;
-  }, [quote, sbl, fromToken, fromAmt]);
+    const inputLamports = Math.floor(Number(solAmt) * LAMPORTS_PER_SOL);
+    const total = inputLamports + quote.feeLamports + SOL_RESERVE;
+    return sbl < total ? (total - sbl) : 0;
+  }, [quote, sbl, solAmt]);
 
-  /* EXECUTE — atomic single tx */
   const execute = useCallback(async () => {
     if (!wcon) { onConnectWallet?.(); return; }
-    if (needsDest) {
-      const e = validateDest(destAddr, toChainType);
-      if (e) { setAddrErr(e); return; }
-    }
+    const e = validateBtcAddress(btcAddr);
+    if (e) { setAddrErr(e); return; }
     if (!quote) { setSwapErr('No route. Wait for routing.'); return; }
     if (!signTransaction) {
       setSwapErr('Wallet does not support signing. Use Phantom or Solflare.');
@@ -895,20 +426,28 @@ export default function CrossChain({ onConnectWallet }) {
     setPendingMsg(null);
 
     try {
-      const dec = fromToken.decimals;
-      const raw = toRaw(fromAmt, dec);
+      const raw = toRaw(solAmt, 9);
       if (!raw || raw === '0') throw new Error('Invalid amount');
 
-      // Use the SAME quote the user is looking at. No re-fetch — what
-      // they see is what they sign.
-      const j = quote.raw;
+      let j = quote.raw;
+      const userAddr = btcAddr.trim();
+      const quoteToAddr = j?.action?.toAddress || j?.estimate?.toAddress;
+      if (!quoteToAddr || quoteToAddr.toLowerCase() !== userAddr.toLowerCase()) {
+        setStatusMsg('Finalizing route with your Bitcoin address…');
+        j = await lifiQuote({
+          amount:     raw,
+          sender:     pubkey.toString(),
+          btcAddress: userAddr,
+        });
+        if (!j?.estimate) throw new Error('No route available');
+      }
+
       const txData = j?.transactionRequest?.data;
       if (!txData) throw new Error('LI.FI returned no transaction');
 
-      // Use the fee already computed from this quote.
-      const feeLamports = quote.feeLamports;
+      const fromUSD = Number(j.estimate.fromAmountUSD) || quote.fromUSD || 0;
+      const feeLamports = computeSolFeeLamports(fromUSD, solPrice);
 
-      // 3) Fresh blockhash, then build the atomic tx.
       setStatusMsg('Combining bridge + fee into one transaction…');
       const latest = await connection.getLatestBlockhash('confirmed');
       const tx = await buildAtomicTx({
@@ -918,7 +457,6 @@ export default function CrossChain({ onConnectWallet }) {
         blockhash: latest.blockhash,
       });
 
-      // 4) Simulate the EXACT bytes the wallet will sign.
       const mapSimErr = (logs) => {
         const t = (logs || []).join('\n').toLowerCase();
         if (t.includes('insufficient') || t.includes('0x1')) return 'Insufficient balance (need SOL for fee + bridge).';
@@ -939,15 +477,13 @@ export default function CrossChain({ onConnectWallet }) {
         if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
           throw simErr;
         }
-        console.warn('[crosschain] sim non-fatal', simErr);
+        console.warn('[soltobtc] sim non-fatal', simErr);
       }
 
-      // 5) Sign — one popup, wallet sees full tx including fee transfer.
       setStep(2);
       setStatusMsg('Sign in wallet…');
       const signed = await signTransaction(tx);
 
-      // 6) Broadcast.
       setStep(3);
       setStatusMsg('Submitting transaction…');
       const sig = await connection.sendRawTransaction(signed.serialize(), {
@@ -955,7 +491,6 @@ export default function CrossChain({ onConnectWallet }) {
       });
       setTxSig(sig);
 
-      // 7) Confirm with polling fallback.
       let bridgeOk = false;
       try {
         const result = await Promise.race([
@@ -977,8 +512,8 @@ export default function CrossChain({ onConnectWallet }) {
             const cs = st?.value?.confirmationStatus;
             if (cs === 'confirmed' || cs === 'finalized') { bridgeOk = true; break; }
             if (st?.value?.err) throw new Error('Bridge tx failed on-chain.');
-          } catch (e) {
-            if (/failed on-chain/i.test(String(e.message))) throw e;
+          } catch (e2) {
+            if (/failed on-chain/i.test(String(e2.message))) throw e2;
           }
         }
       }
@@ -992,22 +527,21 @@ export default function CrossChain({ onConnectWallet }) {
         setPendingMsg('Submitted but still confirming. Check Solscan for status.');
       }
     } catch (e) {
-      console.error('[CrossChain]', e);
+      console.error('[SolToBtc]', e);
       setSwapErr(friendlyError(e));
       setStep(-1);
       setTimeout(() => { setStep(0); setSwapErr(''); }, 6000);
     }
   }, [
-    wcon, needsDest, destAddr, toToken, fromToken, fromAmt,
-    pubkey, signTransaction, connection, quote, onConnectWallet, toChainType, solShortfall,
+    wcon, btcAddr, solAmt, pubkey, signTransaction,
+    connection, quote, onConnectWallet, solShortfall, solPrice,
   ]);
 
   const reset = useCallback(() => {
     setStep(0); setStatusMsg(''); setSwapErr(''); setTxSig(null); setPendingMsg(null);
-    setFromAmt(''); setQuote(null); setQuoteErr('');
+    setSolAmt(''); setQuote(null); setQuoteErr('');
   }, []);
 
-  /* derived */
   const tuv = quote?.raw?.estimate?.toAmountUSD ? Number(quote.raw.estimate.toAmountUSD) : 0;
   const fromUsd = quote?.fromUSD || 0;
   const busy      = step > 0 && step < 4 && step !== -1;
@@ -1022,206 +556,191 @@ export default function CrossChain({ onConnectWallet }) {
     if (step === 3)   return 'Bridging…';
     if (isSuccess)    return pendingMsg ? 'Submitted ✓' : 'Bridge Submitted ✓';
     if (isError)      return 'Try Again';
-    if (!fromAmt)     return 'Enter Amount';
-    if (needsDest && !destAddr.trim()) return 'Enter Destination';
-    if (addrErr)      return 'Invalid Address';
+    if (!solAmt)      return 'Enter SOL Amount';
+    if (!btcAddr.trim()) return 'Enter Bitcoin Address';
+    if (addrErr)      return 'Invalid BTC Address';
     if (!quote)       return quoting ? 'Finding Route…' : 'No Route';
     if (solShortfall) return 'Need more SOL';
-    return `Bridge ${fromToken?.symbol || ''} → ${toToken?.symbol || ''}`;
+    return 'Bridge SOL → BTC';
   };
   const btnDisabled = busy ||
-    (wcon && (!fromAmt || (needsDest && !destAddr.trim()) || !!addrErr ||
+    (wcon && (!solAmt || !btcAddr.trim() || !!addrErr ||
               (!quote && !isError && !isSuccess) || !!solShortfall));
 
   const btnClass = () => {
-    if (isSuccess)  return 'cc-cta cc-cta-success';
-    if (isError)    return 'cc-cta cc-cta-error';
-    if (btnDisabled && wcon) return 'cc-cta cc-cta-disabled';
-    return 'cc-cta cc-cta-primary';
+    if (isSuccess)  return 'sb-cta sb-cta-success';
+    if (isError)    return 'sb-cta sb-cta-error';
+    if (btnDisabled && wcon) return 'sb-cta sb-cta-disabled';
+    return 'sb-cta sb-cta-primary';
   };
 
-  const fromChain = chains?.[String(LIFI_SOLANA_ID)] || { id: String(LIFI_SOLANA_ID), name: 'Solana', chainType: 'SVM' };
-  const toChainDisplay = chains?.[String(toToken?.chainId)] || { id: toToken?.chainId, name: 'Chain ' + toToken?.chainId };
-
   return (
-    <div className="cc-page">
-      <div className="cc-header">
-        <div className="cc-header-pills">
-          <div className="cc-pill cc-pill-live">
-            <span className="cc-pill-dot"/>
-            <span className="cc-pill-text">{chainsLoading || !chains ? 'CONNECTING…' : `${Object.keys(chains).length} CHAINS · LIVE`}</span>
+    <div className="sb-page">
+      <div className="sb-header">
+        <div className="sb-header-pills">
+          <div className="sb-pill">
+            <span className="sb-pill-dot"/>
+            <span className="sb-pill-text">NATIVE BTC · LIVE</span>
           </div>
         </div>
-        <h1 className="cc-title">
-          Cross-<span className="cc-title-italic">Chain</span>
+
+        <div className="sb-pair">
+          <TokenIcon token={SOL_TOKEN} size={44}/>
+          <div className="sb-pair-arrow">→</div>
+          <TokenIcon token={BTC_TOKEN} size={44}/>
+        </div>
+
+        <h1 className="sb-title">
+          Solana <span className="sb-title-btc">→ Bitcoin</span>
         </h1>
-        <p className="cc-subtitle">
-          Solana → Any Chain · powered by LI.FI
+        <p className="sb-subtitle">
+          Swap SOL for native BTC · powered by LI.FI
         </p>
       </div>
 
-      <div className="cc-card">
+      <div className="sb-card">
         <StepProgress step={step}/>
 
-        {/* FROM */}
-        <div className="cc-io-box">
-          <div className="cc-io-head">
-            <span className="cc-io-label">YOU SEND</span>
-            <div className="cc-io-meta">
-              <ChainBadge chain={fromChain} small/>
-              {fbd != null && (
-                <span className="cc-io-bal">
-                  Bal: <span className="cc-io-bal-val">{fmtTok(fbd)}</span>
+        <div className="sb-io-box">
+          <div className="sb-io-head">
+            <span className="sb-io-label">YOU SEND</span>
+            <div className="sb-io-meta">
+              <div className="sb-chain-badge sb-chain-badge-sol">
+                <div className="sb-chain-dot sb-chain-dot-sol"/>
+                Solana
+              </div>
+              {solBal != null && (
+                <span className="sb-io-bal">
+                  Bal: <span className="sb-io-bal-val">{fmtTok(solBal)}</span>
                 </span>
               )}
             </div>
           </div>
-          <div className="cc-io-row">
-            <button
-              onClick={() => !busy && setFromOpen(true)}
-              className="cc-token-btn"
-              disabled={busy}
-            >
-              <TokenIcon token={fromToken} size={22}/>
-              <span className="cc-token-sym">{fromToken?.symbol}</span>
-              {!busy && <span className="cc-token-caret">▾</span>}
-            </button>
+
+          <div className="sb-io-row">
+            <div className="sb-btc-display" style={{ background: 'rgba(20,241,149,.08)', borderColor: 'rgba(20,241,149,.28)' }}>
+              <TokenIcon token={SOL_TOKEN} size={22}/>
+              <span className="sb-btc-sym" style={{ color: '#14f195' }}>SOL</span>
+            </div>
             <input
-              value={fromAmt}
-              onChange={e => { if (!busy) setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }}
+              value={solAmt}
+              onChange={e => { if (!busy) setSolAmt(e.target.value.replace(/[^0-9.]/g, '')); }}
               placeholder="0.00"
               inputMode="decimal"
               disabled={busy}
-              className="cc-io-input"
+              className="sb-io-input"
             />
-            {fbd > 0 && !busy && (
-              <button onClick={onMax} className="cc-max-btn">MAX</button>
+            {solBal > 0 && !busy && (
+              <button onClick={onMax} className="sb-max-btn">MAX</button>
             )}
           </div>
           {fromUsd > 0 && (
-            <div className="cc-io-usd">{fmtUsd(fromUsd)}</div>
+            <div className="sb-io-usd">{fmtUsd(fromUsd)}</div>
           )}
         </div>
 
-        <div className="cc-flip-wrap">
-          <div className="cc-flip-arrow">↓</div>
+        <div className="sb-flip-wrap">
+          <div className="sb-flip-arrow">↓</div>
         </div>
 
-        {/* TO */}
-        <div className="cc-io-box">
-          <div className="cc-io-head">
-            <span className="cc-io-label">YOU RECEIVE (EST.)</span>
-            {toToken && <ChainBadge chain={toChainDisplay} small/>}
+        <div className="sb-io-box sb-io-box-btc">
+          <div className="sb-io-head">
+            <span className="sb-io-label">YOU RECEIVE (EST.)</span>
+            <div className="sb-chain-badge sb-chain-badge-btc">
+              <div className="sb-chain-dot sb-chain-dot-btc"/>
+              Bitcoin
+            </div>
           </div>
-          <div className="cc-io-row">
-            <button
-              onClick={() => !busy && setToOpen(true)}
-              className="cc-token-btn"
-              disabled={busy}
-            >
-              <TokenIcon token={toToken} size={22}/>
-              <span className="cc-token-sym">{toToken?.symbol}</span>
-              {!busy && <span className="cc-token-caret">▾</span>}
-            </button>
-            <div className={'cc-io-output' + (quote ? ' cc-io-output-active' : '')}>
+          <div className="sb-io-row">
+            <div className="sb-btc-display">
+              <TokenIcon token={BTC_TOKEN} size={22}/>
+              <span className="sb-btc-sym">BTC</span>
+            </div>
+            <div className={'sb-io-output' + (quote ? ' sb-io-output-active' : '')}>
               {quoting
-                ? <span className="cc-io-output-loading">…</span>
+                ? <span className="sb-io-output-loading">…</span>
                 : (quote?.outDisplay || '0')}
             </div>
           </div>
           {tuv > 0 && (
-            <div className="cc-io-usd">{fmtUsd(tuv)}</div>
+            <div className="sb-io-usd">{fmtUsd(tuv)}</div>
           )}
           {quote && (
-            <div className="cc-route-meta">
+            <div className="sb-route-meta">
               <span>via {quote.bridge}</span>
               {quote.estTime && <span>~{Math.max(1, Math.ceil(quote.estTime / 60))} min</span>}
             </div>
           )}
         </div>
 
-        {needsDest && (
-          <div className="cc-dest">
-            <div className="cc-dest-label">
-              DESTINATION{' '}
-              <span className="cc-dest-chain" style={{ color: chainColorOf(toChainDisplay) }}>
-                · {toChainDisplay?.name}
-              </span>
-            </div>
-            <div className="cc-dest-input-wrap">
-              <input
-                value={destAddr}
-                onChange={e => { if (!busy) setDestAddr(e.target.value.trim()); }}
-                placeholder={
-                  toChainType === 'EVM'  ? '0x...'
-                  : toChainType === 'SVM' ? 'Solana address'
-                  : toChainType === 'UTXO' ? 'bc1... / 1... / 3...'
-                  : toChainType === 'MVM' ? '0x... (64 hex)'
-                  : 'Destination address'
-                }
-                disabled={busy}
-                className={'cc-dest-input' + (addrErr ? ' cc-dest-err' : destAddr && !addrErr ? ' cc-dest-ok' : '')}
-              />
-              {destAddr && !addrErr && (
-                <div className="cc-dest-check">✓</div>
-              )}
-            </div>
-            {addrErr && <div className="cc-dest-err-msg">{addrErr}</div>}
+        <div className="sb-dest">
+          <div className="sb-dest-label">
+            BITCOIN ADDRESS{' '}
+            <span className="sb-dest-chain">· Bitcoin</span>
           </div>
-        )}
+          <div className="sb-dest-input-wrap">
+            <input
+              value={btcAddr}
+              onChange={e => { if (!busy) setBtcAddr(e.target.value.trim()); }}
+              placeholder="bc1q... / bc1p... / 1... / 3..."
+              disabled={busy}
+              className={'sb-dest-input' + (addrErr ? ' sb-dest-err' : btcAddr && !addrErr ? ' sb-dest-ok' : '')}
+            />
+            {btcAddr && !addrErr && (
+              <div className="sb-dest-check">✓</div>
+            )}
+          </div>
+          {addrErr && <div className="sb-dest-err-msg">{addrErr}</div>}
+        </div>
 
         {quoteErr && !quote && (
-          <div className="cc-warn">{quoteErr}</div>
+          <div className="sb-warn">{quoteErr}</div>
         )}
 
-        {quote && fromAmt && (
-          <div className="cc-route-details">
+        {quote && solAmt && (
+          <div className="sb-route-details">
             {[
               ['Route',        quote.bridge],
               ['Platform fee', `${quote.feeSOL.toFixed(4)} SOL` + (quote.feeUSD ? ` (${fmtUsd(quote.feeUSD)})` : '')],
               ['Slippage',     (SLIPPAGE * 100).toFixed(1) + '%'],
               ['Est. time',    quote.estTime ? '~' + Math.max(1, Math.ceil(quote.estTime / 60)) + ' min' : '—'],
             ].map(([k, v]) => (
-              <div key={k} className="cc-detail-row">
-                <span className="cc-detail-key">{k}</span>
-                <span className="cc-detail-val">{v}</span>
+              <div key={k} className="sb-detail-row">
+                <span className="sb-detail-key">{k}</span>
+                <span className="sb-detail-val">{v}</span>
               </div>
             ))}
-            {fromToken?.mint !== WSOL_MINT && (
-              <div className="cc-detail-note">
-                Fee paid in SOL from your wallet — you bridge 100% of your {fromToken?.symbol}.
-              </div>
-            )}
+            <div className="sb-detail-note">
+              Bitcoin confirmation typically takes 10–30 min after submission. Fee paid in SOL.
+            </div>
           </div>
         )}
 
         {solShortfall > 0 && quote && (
-          <div className="cc-warn">
+          <div className="sb-warn">
             You need ~{(solShortfall / LAMPORTS_PER_SOL).toFixed(4)} more SOL in your wallet to cover the platform fee.
           </div>
         )}
 
         {statusMsg && busy && (
-          <div className="cc-status">
-            <div className="cc-spinner"/>
+          <div className="sb-status">
+            <div className="sb-spinner"/>
             {statusMsg}
           </div>
         )}
 
         {swapErr && (
-          <div className="cc-error">{swapErr}</div>
+          <div className="sb-error">{swapErr}</div>
         )}
 
         {isSuccess && (
-          <div className={'cc-success' + (pendingMsg ? ' cc-success-pending' : '')}>
-            <div className="cc-success-icon">{pendingMsg ? '⏳' : '🎉'}</div>
-            <div className="cc-success-title">
+          <div className={'sb-success' + (pendingMsg ? ' sb-success-pending' : '')}>
+            <div className="sb-success-icon">{pendingMsg ? '⏳' : '🟠'}</div>
+            <div className="sb-success-title">
               {pendingMsg ? 'Bridge Submitted' : 'Bridge Submitted!'}
             </div>
-            <div className="cc-success-sub">
-              {pendingMsg || (quote?.estTime
-                ? 'Funds arrive in ~' + Math.max(1, Math.ceil(quote.estTime / 60)) + ' min'
-                : 'Funds arrive in a few minutes')}
+            <div className="sb-success-sub">
+              {pendingMsg || 'BTC arrives in ~10–30 min at your Bitcoin address'}
             </div>
           </div>
         )}
@@ -1232,36 +751,24 @@ export default function CrossChain({ onConnectWallet }) {
             disabled={btnDisabled && !isError}
             className={btnClass()}
           >
-            {busy && <span className="cc-cta-spinner">⟳</span>}
+            {busy && <span className="sb-cta-spinner">⟳</span>}
             {btnLabel()}
           </button>
         ) : (
-          <button onClick={reset} className="cc-cta cc-cta-reset">
+          <button onClick={reset} className="sb-cta sb-cta-reset">
             New Bridge
           </button>
         )}
 
         {txSig && solscan && (
-          <a href={solscan} target="_blank" rel="noreferrer" className="cc-solscan-link">
+          <a href={solscan} target="_blank" rel="noreferrer" className="sb-solscan-link">
             View on Solscan ↗
           </a>
         )}
-        <p className="cc-footer-note">
+        <p className="sb-footer-note">
           Non-custodial · LI.FI aggregator · Solana origin
         </p>
       </div>
-
-      <FromTokenModal
-        open={fromOpen}
-        onClose={() => setFromOpen(false)}
-        onSelect={t => { setFromToken(t); setQuote(null); }}
-      />
-      <ToTokenModal
-        open={toOpen}
-        onClose={() => setToOpen(false)}
-        onSelect={t => { setToToken(t); setQuote(null); setDestAddr(''); setAddrErr(''); }}
-        chains={chains}
-      />
     </div>
   );
 }
