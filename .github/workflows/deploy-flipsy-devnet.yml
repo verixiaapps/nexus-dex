@@ -24,12 +24,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # ── Delete any committed Cargo.lock (may be v4, unreadable by container) ──
-      - name: Remove committed Cargo.lock
-        run: |
-          find . -name "Cargo.lock" -delete
-          echo "Cargo.lock removed (will be regenerated fresh)"
-
       # ── Force current stable Rust (>=1.85 for edition2024 support) ───────────
       - name: Install stable Rust
         run: |
@@ -96,61 +90,19 @@ jobs:
           done
           echo "==================================================="
 
-      # ── Fund deployer via airdrops + helper sweep ────────────────────────────
-      - name: Fund deployer
+      # ── Verify main wallet has enough SOL (already funded externally) ────────
+      - name: Check deployer balance
         run: |
-          MAIN=$(solana address --keypair /root/.config/solana/main.json)
           NEED=1.7
-
-          balance_of() { solana balance --keypair /root/.config/solana/$1.json 2>/dev/null | awk '{print $1}'; }
-          main_bal()   { solana balance 2>/dev/null | awk '{print $1}'; }
-          enough()     { awk "BEGIN{exit !($(main_bal) >= $NEED)}"; }
-
-          echo "--- Phase 1: direct airdrops to main ---"
-          for i in $(seq 1 8); do
-            enough && break
-            echo "  attempt $i..."
-            solana airdrop 2 --keypair /root/.config/solana/main.json 2>&1 | tail -2
-            sleep 15
-          done
-
-          for round in 1 2 3; do
-            enough && break
-            echo "--- Phase 2 round $round: airdrop helpers, sweep to main ---"
-            for h in h1 h2 h3; do
-              enough && break
-              for k in 1 2 3; do
-                solana airdrop 2 --keypair /root/.config/solana/$h.json 2>&1 | tail -2
-                HBAL=$(balance_of $h)
-                awk "BEGIN{exit !($HBAL >= 0.5)}" && break
-                sleep 10
-              done
-              HBAL=$(balance_of $h)
-              if awk "BEGIN{exit !($HBAL > 0.01)}"; then
-                AMT=$(awk "BEGIN{printf \"%.6f\", $HBAL - 0.001}")
-                echo "  sweeping $AMT SOL from $h to main..."
-                solana transfer "$MAIN" "$AMT" \
-                  --keypair /root/.config/solana/$h.json \
-                  --allow-unfunded-recipient \
-                  --fee-payer /root/.config/solana/$h.json 2>&1 | tail -2 || true
-              fi
-            done
-            sleep 20
-          done
-
-          BAL=$(main_bal)
-          echo "==================================================="
-          echo "  FINAL main balance: $BAL SOL  (need $NEED)"
-          echo "==================================================="
-          if ! enough; then
-            echo "::error::Could not reach $NEED SOL. Fund one of these devnet addresses and re-run:"
-            echo "  MAIN: $MAIN"
-            for h in h1 h2 h3; do
-              echo "  $h:   $(solana address --keypair /root/.config/solana/$h.json)"
-            done
+          BAL=$(solana balance 2>/dev/null | awk '{print $1}')
+          echo "Main balance: $BAL SOL (need $NEED)"
+          if ! awk "BEGIN{exit !($BAL >= $NEED)}"; then
+            MAIN=$(solana address)
+            echo "::error::Insufficient balance: $BAL SOL. Top up $MAIN on devnet and re-run."
             echo "Faucets: https://faucet.solana.com  https://faucet.quicknode.com/solana/devnet"
             exit 1
           fi
+          echo "Balance OK — skipping airdrop"
 
       # ── Patch lib.rs: remove pyth-sdk-solana, inline raw price reader ────────
       - name: Patch lib.rs
@@ -196,11 +148,13 @@ jobs:
           sed -i 's/anchor-spl = "=*0\.30\.[0-9]*"/anchor-spl = "0.31.1"/g'  programs/flipsy/Cargo.toml
           sed -i 's/anchor_version = "0\.30\.[0-9]*"/anchor_version = "0.31.1"/g' Anchor.toml
 
-      # ── Build (fresh Cargo.lock generated here) ───────────────────────────────
+      # ── Build: wipe lockfile, generate fresh, downgrade v4→v3, build ─────────
       - name: Build
         working-directory: flipsy
         run: |
-          rm -rf target
+          rm -rf target Cargo.lock
+          cargo generate-lockfile
+          sed -i 's/^version = 4$/version = 3/' Cargo.lock || true
           anchor build
 
       # ── Read generated program ID ─────────────────────────────────────────────
@@ -224,6 +178,7 @@ jobs:
       - name: Rebuild + deploy to devnet
         working-directory: flipsy
         run: |
+          sed -i 's/^version = 4$/version = 3/' Cargo.lock || true
           anchor build
           anchor deploy --provider.cluster devnet
 
