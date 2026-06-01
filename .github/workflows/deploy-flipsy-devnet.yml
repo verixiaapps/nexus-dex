@@ -11,7 +11,7 @@ on:
 env:
   TREASURY_OWNER: "Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV"
   USDC_MINT:      "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
-  PYTH_FEED:      "J83w4HKfqxwcq3BEMMkPFSppX3gqekLyLJBexebFVkix"
+  PYTH_FEED:      "GvDMxPzN1sCj7L26YDK2HnMRXEQmQ2aemov8YBtPS7vR"
   PROGRAM_ID:     "H4LAd2s7yVboni7oDqf1JtQ3UcqWJBZo5NpAhYisJaVj"
 
 jobs:
@@ -115,6 +115,19 @@ jobs:
               c = await program.account.config.fetch(cfg);
             } else {
               console.log("Already initialized");
+            }
+
+            // Update Pyth feed if needed
+            if (c.pythFeed.toBase58() !== PYTH_FEED.toBase58()) {
+              if (c.admin.equals(kp.publicKey)) {
+                const sig = await program.methods.setPythFeed(PYTH_FEED)
+                  .accounts({ config: cfg, admin: kp.publicKey }).rpc();
+                console.log("Pyth feed updated:", sig);
+              } else {
+                console.log("WARNING: Admin is", c.admin.toBase58(), "- cannot update Pyth feed from this wallet");
+              }
+            } else {
+              console.log("Pyth feed already correct");
             }
 
             if (!c.admin.equals(TREASURY_OWNER) && c.admin.equals(kp.publicKey)) {
