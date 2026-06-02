@@ -1,4 +1,4 @@
-name: Flipsy Reset 2j9 xxx
+name: Flipsy Reset 2j8
 
 on:
   workflow_dispatch:
