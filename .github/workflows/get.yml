@@ -15,6 +15,9 @@ jobs:
       - name: Set devnet
         run: solana config set --url https://api.devnet.solana.com
 
+      - name: Create throwaway keypair
+        run: solana-keygen new --no-bip39-passphrase --silent
+
       - name: Show program info
         run: solana program show 4npVSUH3hx62E5VJSWdoCyUwfBnZirMxzqfDNWNCcYbT
 
