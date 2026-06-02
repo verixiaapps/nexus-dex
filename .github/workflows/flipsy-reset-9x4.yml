@@ -1,4 +1,4 @@
-name: Flipsy Reset 5p1
+name: Flipsy Reset 5p1 again
 
 on:
  workflow_dispatch:
