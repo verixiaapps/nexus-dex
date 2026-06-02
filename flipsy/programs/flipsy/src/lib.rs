@@ -709,5 +709,3 @@ pub enum FlipsyError {
    #[msg("Bad parameters")]          BadParams,
 }
 
-
-Starts with use anchor_lang::prelude::*; on line 1. Replace your file with this and rebuild.
