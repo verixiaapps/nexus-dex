@@ -1,4 +1,4 @@
-name: Flipsy Reset 2j9
+name: Flipsy Reset 2j9. new
 
 on:
   workflow_dispatch:
