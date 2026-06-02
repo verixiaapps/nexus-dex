@@ -48,7 +48,7 @@
     "concurrently": "^8.2.0"
   },
   "scripts": {
-    "start": "concurrently \"node server.js\" \"ts-node crank/crank.ts\"",
+    "start": "concurrently --names server,crank --prefix-colors blue,magenta \"node server.js\" \"ts-node --transpile-only crank/crank.ts\"",
     "build": "react-app-rewired build",
     "dev": "concurrently \"react-app-rewired start\" \"node server.js\""
   },
