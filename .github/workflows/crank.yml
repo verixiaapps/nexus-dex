@@ -1,7 +1,7 @@
 name: Flipsy Reset try 
 
 on:
-  workflow_dispatch:
+  workflow_dispatch: 
 
 env:
   SEED: "flipsy-fresh-1"
