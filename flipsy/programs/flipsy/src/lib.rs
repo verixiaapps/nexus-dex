@@ -37,7 +37,7 @@ pub mod flipsy {
        c.paused = false;
        c.min_bet = min_bet;
        c.max_bet = max_bet;
-       c.bump = *ctx.bumps.get("config").unwrap();
+       c.bump = ctx.bumps.config;
        emit!(ConfigInitialized { admin, cranker });
        Ok(())
    }
@@ -155,7 +155,7 @@ pub mod flipsy {
        round.resolved_at = 0;
        round.swept = false;
        if round.bump == 0 {
-           round.bump = *ctx.bumps.get("round").unwrap();
+           round.bump = ctx.bumps.round;
        }
        emit!(RoundStarted { epoch: round.epoch, lock_price });
        Ok(())
@@ -242,7 +242,7 @@ pub mod flipsy {
 
        if round.epoch == 0 {
            round.epoch = target_epoch;
-           round.bump = *ctx.bumps.get("round").unwrap();
+           round.bump = ctx.bumps.round;
        }
 
        let ix = system_instruction::transfer(
@@ -266,7 +266,7 @@ pub mod flipsy {
        bet.amount = amount;
        bet.side = side;
        bet.claimed = false;
-       bet.bump = *ctx.bumps.get("bet").unwrap();
+       bet.bump = ctx.bumps.bet;
 
        match side {
            Side::Heads => {
@@ -468,7 +468,7 @@ pub struct StartRound<'info> {
        space = 0,
        seeds = [b"vault", (config.current_epoch + 1).to_le_bytes().as_ref()],
        bump,
-       owner = system_program::ID
+       owner = anchor_lang::solana_program::system_program::ID
    )]
    /// CHECK: PDA SOL vault, system-owned
    pub vault: AccountInfo<'info>,
@@ -526,7 +526,7 @@ pub struct PlaceBet<'info> {
        space = 0,
        seeds = [b"vault", target_epoch.to_le_bytes().as_ref()],
        bump,
-       owner = system_program::ID
+       owner = anchor_lang::solana_program::system_program::ID
    )]
    /// CHECK: PDA SOL vault
    pub vault: AccountInfo<'info>,
@@ -708,4 +708,3 @@ pub enum FlipsyError {
    #[msg("Math overflow")]           MathOverflow,
    #[msg("Bad parameters")]          BadParams,
 }
-
