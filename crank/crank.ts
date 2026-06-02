@@ -1,11 +1,18 @@
-// Flipsy Crank Bot — runs alongside dex on Railway
-// Reads SUPER_ADMIN private key from Railway env var.
+Here’s the full crank.ts — goes at crank/crank.ts in your repo root:
+
+// Flipsy Crank Bot — runs alongside dex on Railway via concurrently.
+// Reads CRANK_KEYPAIR from Railway env var.
+// Accepts EITHER JSON array format ([1,2,3,...]) OR base58 string format (Phantom export).
 
 import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
+import bs58 from "bs58";
 import fs from "fs";
 import path from "path";
 
+// =====================================================================
+// ENV — set on Railway
+// =====================================================================
 const RPC_URL = process.env.RPC_URL || "https://api.devnet.solana.com";
 const PROGRAM_ID = new PublicKey(
   process.env.PROGRAM_ID || "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
@@ -18,15 +25,33 @@ if (!CRANK_KEYPAIR_RAW) {
   process.exit(1);
 }
 
-let secretKeyArr: number[];
+// =====================================================================
+// PARSE KEY — accepts JSON array or base58 string
+// =====================================================================
+let secretKey: Uint8Array;
 try {
-  secretKeyArr = JSON.parse(CRANK_KEYPAIR_RAW);
-} catch (e) {
-  console.error("❌ CRANK_KEYPAIR is not valid JSON array");
+  const raw = CRANK_KEYPAIR_RAW.trim();
+  if (raw.startsWith("[")) {
+    secretKey = Uint8Array.from(JSON.parse(raw));
+  } else {
+    secretKey = bs58.decode(raw);
+  }
+} catch (e: any) {
+  console.error("❌ CRANK_KEYPAIR is not valid (need JSON array or base58 string)");
+  console.error("   ", e.message || e);
   process.exit(1);
 }
-const crankerKeypair = Keypair.fromSecretKey(Uint8Array.from(secretKeyArr));
 
+if (secretKey.length !== 64) {
+  console.error(`❌ CRANK_KEYPAIR has wrong length: ${secretKey.length} bytes (expected 64)`);
+  process.exit(1);
+}
+
+const crankerKeypair = Keypair.fromSecretKey(secretKey);
+
+// =====================================================================
+// SETUP
+// =====================================================================
 const connection = new Connection(RPC_URL, "confirmed");
 const wallet = new anchor.Wallet(crankerKeypair);
 const provider = new anchor.AnchorProvider(connection, wallet, { commitment: "confirmed" });
@@ -34,7 +59,8 @@ anchor.setProvider(provider);
 
 const idlPath = path.join(__dirname, "flipsy.json");
 if (!fs.existsSync(idlPath)) {
-  console.error(`❌ IDL not found at ${idlPath}. Copy flipsy.json from Playground into the crank folder.`);
+  console.error(`❌ IDL not found at ${idlPath}`);
+  console.error(`   Copy flipsy.json from Playground (target/idl/flipsy.json) into the crank folder.`);
   process.exit(1);
 }
 const idl = JSON.parse(fs.readFileSync(idlPath, "utf-8"));
@@ -64,6 +90,9 @@ function vaultPda(epoch: anchor.BN): PublicKey {
   return pda;
 }
 
+// =====================================================================
+// CRANK LOGIC
+// =====================================================================
 async function tick() {
   try {
     const config: any = await (program.account as any).config.fetch(configPda);
@@ -143,6 +172,7 @@ console.log(`🚀 Flipsy crank bot starting`);
 console.log(`   Cranker: ${crankerKeypair.publicKey.toString()}`);
 console.log(`   Program: ${PROGRAM_ID.toString()}`);
 console.log(`   RPC:     ${RPC_URL}`);
+console.log(`   Poll:    ${POLL_INTERVAL_MS}ms`);
 
 tick();
 setInterval(tick, POLL_INTERVAL_MS);
