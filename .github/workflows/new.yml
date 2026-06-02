@@ -1,0 +1,23 @@
+name: Compute Config PDA
+
+on:
+ workflow_dispatch:
+
+jobs:
+ compute:
+   runs-on: ubuntu-latest
+   steps:
+     - name: Install Solana CLI
+       run: |
+         sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+         echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+     - name: Compute config PDA
+       run: |
+         echo "=============================="
+         echo "Computing config PDA for Flipsy"
+         echo "=============================="
+         solana find-program-derived-address \
+           4npVSUH3hx62E5VJSWdoCyUwfBnZirMxzqfDNWNCcYbT \
+           string:config
+         echo "=============================="
