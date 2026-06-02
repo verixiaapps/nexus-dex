@@ -1,13 +1,95 @@
-name: List Methods
+name: Flipsy Reset try 
 
 on:
   workflow_dispatch:
 
+env:
+  SEED: "flipsy-fresh-1"
+  PROGRAM_ID: "H4LAd2s7yVboni7oDqf1JtQ3UcqWJBZo5NpAhYisJaVj"
+  NEW_PYTH_FEED: "GvDMxPzN1sCj7L26YDK2HnMRXEQmQ2aemov8YBtPS7vR"
+  ADMIN_KEYPAIR: "Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV"
+
 jobs:
-  list:
+  reset:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Show instructions
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install deps
         run: |
-          node -e "const idl = require('./flipsy/target/idl/flipsy.json'); console.log(idl.instructions.map(i => i.name));"
+          pip3 install cryptography
+          npm init -y >/dev/null 2>&1
+          npm install --silent \
+            @coral-xyz/anchor@0.31.1 \
+            @solana/web3.js@1.91.0 \
+            rpc-websockets@7.6.1 \
+            bs58@4.0.1
+
+      - name: Derive crank keypair
+        run: |
+          mkdir -p ~/.config/solana
+          python3 << 'PYEOF'
+          import hashlib, json, os
+          from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+          from cryptography.hazmat.primitives.serialization import PublicFormat, Encoding
+          seed_bytes = hashlib.sha256(os.environ["SEED"].encode()).digest()
+          priv = Ed25519PrivateKey.from_private_bytes(seed_bytes)
+          pub = priv.public_key().public_bytes(Encoding.Raw, PublicFormat.Raw)
+          with open(os.path.expanduser("~/.config/solana/id.json"), "w") as f:
+              json.dump(list(seed_bytes) + list(pub), f)
+          PYEOF
+
+      - name: Transfer admin and update Pyth feed
+        run: |
+          node - << 'JSEOF'
+          const anchor = require("@coral-xyz/anchor");
+          const web3 = require("@solana/web3.js");
+          const bs58 = require("bs58");
+          const fs = require("fs");
+          const os = require("os");
+          const path = require("path");
+
+          const PROGRAM_ID = new web3.PublicKey(process.env.PROGRAM_ID);
+          const NEW_PYTH = new web3.PublicKey(process.env.NEW_PYTH_FEED);
+          const IDL = JSON.parse(fs.readFileSync("flipsy/target/idl/flipsy.json"));
+
+          (async () => {
+            const conn = new web3.Connection("https://api.devnet.solana.com", "confirmed");
+
+            const decoded = bs58.decode(process.env.ADMIN_KEYPAIR.trim());
+            const adminKp = decoded.length === 64
+              ? web3.Keypair.fromSecretKey(decoded)
+              : web3.Keypair.fromSeed(decoded);
+            console.log("Current admin:", adminKp.publicKey.toBase58());
+
+            const crankKp = web3.Keypair.fromSecretKey(
+              Uint8Array.from(JSON.parse(fs.readFileSync(path.join(os.homedir(), ".config/solana/id.json"))))
+            );
+            console.log("New admin (crank):", crankKp.publicKey.toBase58());
+
+            const adminProvider = new anchor.AnchorProvider(conn, new anchor.Wallet(adminKp), { commitment: "confirmed" });
+            anchor.setProvider(adminProvider);
+            const adminProgram = new anchor.Program(IDL, adminProvider);
+            const [cfg] = web3.PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
+
+            console.log("Transferring admin...");
+            const sig1 = await adminProgram.methods.setAdmin(crankKp.publicKey)
+              .accounts({ config: cfg, admin: adminKp.publicKey })
+              .rpc();
+            console.log("setAdmin tx:", sig1);
+
+            const crankProvider = new anchor.AnchorProvider(conn, new anchor.Wallet(crankKp), { commitment: "confirmed" });
+            anchor.setProvider(crankProvider);
+            const crankProgram = new anchor.Program(IDL, crankProvider);
+
+            console.log("Updating Pyth feed...");
+            const sig2 = await crankProgram.methods.setPythFeed(NEW_PYTH)
+              .accounts({ config: cfg, admin: crankKp.publicKey })
+              .rpc();
+            console.log("setPythFeed tx:", sig2);
+            console.log("Done.");
+          })().catch(e => { console.error("Failed:", e.message); process.exit(1); });
+          JSEOF
