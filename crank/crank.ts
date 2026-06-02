@@ -1,187 +1,168 @@
-// Flipsy Crank Bot — runs alongside dex on Railway via concurrently.
-// Reads CRANK_KEYPAIR from Railway env var.
-// Accepts EITHER JSON array format ([1,2,3,...]) OR base58 string format.
+Let’s roll. Crank deployment.
+
+Step 1: Update crank.ts in your repo
+
+The current crank/crank.ts in your repo is the old version. We need to replace it with the new fetchIdl version (no local IDL file needed).
+
+In GitHub on your phone:
+
+	1.	Open nexus-dex repo
+	2.	Navigate to crank/crank.ts
+	3.	Tap the pencil icon (Edit)
+	4.	Tap the three-dot menu → “Select all” → Delete
+	5.	Paste the new code below
+	6.	Commit to main
+
+New crank.ts:
 
 import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
-import fs from "fs";
-import path from "path";
 
-// =====================================================================
-// ENV — set on Railway
-// =====================================================================
-const RPC_URL = process.env.RPC_URL || "https://api.devnet.solana.com";
 const PROGRAM_ID = new PublicKey(
-  process.env.PROGRAM_ID || "Fg6PaFpoGXkYsidMpWTK6W2BeZ7FEfcYkg476zPFsLnS"
+  process.env.PROGRAM_ID || "4npVSUH3hx62E5VJSWdoCyUwfBnZirMxzqfDNWNCcYbT"
 );
-const CRANK_KEYPAIR_RAW = process.env.CRANK_KEYPAIR;
-const POLL_INTERVAL_MS = Number(process.env.POLL_INTERVAL_MS || 10_000);
+const RPC_URL = process.env.RPC_URL || "https://api.devnet.solana.com";
+const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "10000");
+const GAP_SECONDS = 30;
 
-if (!CRANK_KEYPAIR_RAW) {
-  console.error("❌ CRANK_KEYPAIR env var missing");
-  process.exit(1);
-}
-
-// =====================================================================
-// PARSE KEY — accepts JSON array or base58 string
-// =====================================================================
-let secretKey: Uint8Array;
-try {
-  const raw = CRANK_KEYPAIR_RAW.trim();
-  if (raw.startsWith("[")) {
-    secretKey = Uint8Array.from(JSON.parse(raw));
-  } else {
-    secretKey = bs58.decode(raw);
+function loadKeypair(): Keypair {
+  const raw = process.env.CRANK_KEYPAIR;
+  if (!raw) throw new Error("CRANK_KEYPAIR env var required");
+  try {
+    if (raw.trim().startsWith("[")) {
+      const arr = JSON.parse(raw);
+      return Keypair.fromSecretKey(Uint8Array.from(arr));
+    }
+    return Keypair.fromSecretKey(bs58.decode(raw.trim()));
+  } catch (e) {
+    throw new Error("Bad CRANK_KEYPAIR format: " + (e as Error).message);
   }
-} catch (e: any) {
-  console.error("❌ CRANK_KEYPAIR is not valid (need JSON array or base58 string)");
-  console.error("   ", e.message || e);
-  process.exit(1);
-}
-if (secretKey.length !== 64) {
-  console.error(`❌ CRANK_KEYPAIR has wrong length: ${secretKey.length} bytes (expected 64)`);
-  process.exit(1);
-}
-const crankerKeypair = Keypair.fromSecretKey(secretKey);
-
-// =====================================================================
-// SETUP
-// =====================================================================
-const connection = new Connection(RPC_URL, "confirmed");
-const wallet = new anchor.Wallet(crankerKeypair);
-const provider = new anchor.AnchorProvider(connection, wallet, { commitment: "confirmed" });
-anchor.setProvider(provider);
-
-const idlPath = path.join(__dirname, "flipsy.json");
-if (!fs.existsSync(idlPath)) {
-  console.error(`❌ IDL not found at ${idlPath}`);
-  console.error(`   Copy flipsy.json from Playground (target/idl/flipsy.json) into the crank folder.`);
-  process.exit(1);
-}
-const idl = JSON.parse(fs.readFileSync(idlPath, "utf-8"));
-const program = new anchor.Program(idl, PROGRAM_ID, provider);
-
-const SUPER_ADMIN = new PublicKey("GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA");
-
-const [configPda] = PublicKey.findProgramAddressSync(
-  [Buffer.from("config")],
-  PROGRAM_ID
-);
-
-function epochBuf(epoch: anchor.BN): Buffer {
-  const buf = Buffer.alloc(8);
-  buf.writeBigUInt64LE(BigInt(epoch.toString()));
-  return buf;
 }
 
-function roundPda(epoch: anchor.BN): PublicKey {
-  const [pda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("round"), epochBuf(epoch)],
+async function main() {
+  const cranker = loadKeypair();
+  const connection = new Connection(RPC_URL, "confirmed");
+  const wallet = new anchor.Wallet(cranker);
+  const provider = new anchor.AnchorProvider(connection, wallet, {
+    commitment: "confirmed",
+  });
+  anchor.setProvider(provider);
+
+  console.log("Cranker pubkey:", cranker.publicKey.toBase58());
+  console.log("Program ID:", PROGRAM_ID.toBase58());
+  console.log("RPC:", RPC_URL);
+
+  const idl = await anchor.Program.fetchIdl(PROGRAM_ID, provider);
+  if (!idl) throw new Error("Could not fetch IDL from chain");
+  const program = new anchor.Program(idl as anchor.Idl, PROGRAM_ID, provider);
+
+  const [configPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("config")],
     PROGRAM_ID
   );
-  return pda;
+
+  while (true) {
+    try {
+      const config: any = await (program.account as any).config.fetch(configPda);
+      if (config.paused) {
+        console.log("Paused, skipping");
+        await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
+
+      const currentEpoch: number = config.currentEpoch.toNumber();
+      const now = Math.floor(Date.now() / 1000);
+
+      if (currentEpoch === 0) {
+        console.log("No round yet. Starting round 1...");
+        await startRound(program, configPda, cranker, config, 1);
+        await sleep(POLL_INTERVAL_MS);
+        continue;
+      }
+
+      const [currentRoundPda] = PublicKey.findProgramAddressSync(
+        [Buffer.from("round"), new anchor.BN(currentEpoch).toArrayLike(Buffer, "le", 8)],
+        PROGRAM_ID
+      );
+      const round: any = await (program.account as any).round.fetch(currentRoundPda);
+
+      if (!round.resolved && now >= round.closeTime.toNumber()) {
+        console.log(`Ending round ${currentEpoch}...`);
+        await endRound(program, configPda, currentRoundPda, cranker, config, currentEpoch);
+      } else if (round.resolved) {
+        const nextEpoch = currentEpoch + 1;
+        const nextLock = round.closeTime.toNumber() + GAP_SECONDS;
+        if (now >= nextLock) {
+          console.log(`Starting round ${nextEpoch}...`);
+          await startRound(program, configPda, cranker, config, nextEpoch);
+        } else {
+          console.log(`Waiting ${nextLock - now}s for gap before round ${nextEpoch}`);
+        }
+      } else {
+        const wait = round.closeTime.toNumber() - now;
+        console.log(`Round ${currentEpoch} live, ${wait}s to close`);
+      }
+    } catch (e) {
+      console.error("Loop error:", (e as Error).message);
+    }
+    await sleep(POLL_INTERVAL_MS);
+  }
 }
 
-function vaultPda(epoch: anchor.BN): PublicKey {
-  const [pda] = PublicKey.findProgramAddressSync(
-    [Buffer.from("vault"), epochBuf(epoch)],
-    PROGRAM_ID
+async function startRound(program: any, configPda: PublicKey, cranker: Keypair, config: any, epoch: number) {
+  const [roundPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("round"), new anchor.BN(epoch).toArrayLike(Buffer, "le", 8)],
+    program.programId
   );
-  return pda;
-}
-
-async function startRound(nextEpoch: anchor.BN, config: any) {
-  await program.methods
-    .startRound()
+  const [vaultPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("vault"), new anchor.BN(epoch).toArrayLike(Buffer, "le", 8)],
+    program.programId
+  );
+  const tx = await program.methods
+    .startRound(new anchor.BN(epoch))
     .accounts({
       config: configPda,
-      round: roundPda(nextEpoch),
-      vault: vaultPda(nextEpoch),
+      round: roundPda,
+      vault: vaultPda,
+      cranker: cranker.publicKey,
       pythFeed: config.pythFeed,
-      cranker: crankerKeypair.publicKey,
       systemProgram: anchor.web3.SystemProgram.programId,
-      rent: anchor.web3.SYSVAR_RENT_PUBKEY,
     })
-    .signers([crankerKeypair])
+    .signers([cranker])
     .rpc();
+  console.log("startRound tx:", tx);
 }
 
-async function endRound(currentEpoch: anchor.BN, config: any) {
-  await program.methods
+async function endRound(program: any, configPda: PublicKey, roundPda: PublicKey, cranker: Keypair, config: any, epoch: number) {
+  const [vaultPda] = PublicKey.findProgramAddressSync(
+    [Buffer.from("vault"), new anchor.BN(epoch).toArrayLike(Buffer, "le", 8)],
+    program.programId
+  );
+  const tx = await program.methods
     .endRound()
     .accounts({
       config: configPda,
-      round: roundPda(currentEpoch),
-      vault: vaultPda(currentEpoch),
+      round: roundPda,
+      vault: vaultPda,
+      cranker: cranker.publicKey,
       pythFeed: config.pythFeed,
-      superAdmin: SUPER_ADMIN,
-      cranker: crankerKeypair.publicKey,
+      superAdmin: new PublicKey("GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA"),
+      systemProgram: anchor.web3.SystemProgram.programId,
     })
-    .signers([crankerKeypair])
+    .signers([cranker])
     .rpc();
+  console.log("endRound tx:", tx);
 }
 
-// =====================================================================
-// CRANK LOOP
-// =====================================================================
-async function tick() {
-  try {
-    const config: any = await (program.account as any).config.fetch(configPda);
-    if (config.paused) {
-      console.log(`[${new Date().toISOString()}] Program paused — skipping`);
-      return;
-    }
-
-    const now = Math.floor(Date.now() / 1000);
-    const currentEpoch: anchor.BN = config.currentEpoch;
-
-    if (currentEpoch.eqn(0)) {
-      const next = new anchor.BN(1);
-      console.log(`[${new Date().toISOString()}] Starting first round`);
-      await startRound(next, config);
-      console.log(`✅ Round 1 started`);
-      return;
-    }
-
-    const round: any = await (program.account as any).round.fetch(roundPda(currentEpoch));
-    const isUnresolved = round.outcome.unresolved !== undefined;
-
-    if (isUnresolved) {
-      if (now >= round.closeTime.toNumber()) {
-        console.log(`[${new Date().toISOString()}] Ending round ${currentEpoch.toString()}`);
-        await endRound(currentEpoch, config);
-        console.log(`✅ Round ${currentEpoch.toString()} ended`);
-      } else {
-        const secsLeft = round.closeTime.toNumber() - now;
-        console.log(
-          `[${new Date().toISOString()}] Round ${currentEpoch.toString()} open, ${secsLeft}s until close`
-        );
-      }
-    } else {
-      const nextStart = round.nextStartTime.toNumber();
-      if (now < nextStart) {
-        const secsLeft = nextStart - now;
-        console.log(
-          `[${new Date().toISOString()}] Round ${currentEpoch.toString()} resolved, ${secsLeft}s gap remaining`
-        );
-        return;
-      }
-      const next = currentEpoch.addn(1);
-      console.log(`[${new Date().toISOString()}] Starting round ${next.toString()}`);
-      await startRound(next, config);
-      console.log(`✅ Round ${next.toString()} started`);
-    }
-  } catch (e: any) {
-    console.error(`[${new Date().toISOString()}] Crank error:`, e.message || e);
-  }
+function sleep(ms: number) {
+  return new Promise((r) => setTimeout(r, ms));
 }
 
-console.log(`🚀 Flipsy crank bot starting`);
-console.log(`   Cranker: ${crankerKeypair.publicKey.toString()}`);
-console.log(`   Program: ${PROGRAM_ID.toString()}`);
-console.log(`   RPC:     ${RPC_URL}`);
-console.log(`   Poll:    ${POLL_INTERVAL_MS}ms`);
+main().catch((e) => {
+  console.error("Fatal:", e);
+  process.exit(1);
+});
 
-tick();
-setInterval(tick, POLL_INTERVAL_MS);
+
+Tell me when committed.
