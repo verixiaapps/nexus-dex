@@ -1,0 +1,30 @@
+name: Test Crank
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        run: npm install --no-audit --no-fund
+
+      - name: Run crank (no keypair, just check it loads)
+        env:
+          PROGRAM_ID: 4npVSUH3hx62E5VJSWdoCyUwfBnZirMxzqfDNWNCcYbT
+          RPC_URL: https://api.devnet.solana.com
+          CRANK_KEYPAIR: dummy
+          MAX_RUNTIME_SECONDS: '30'
+        run: |
+          echo "=== node version ==="
+          node --version
+          echo "=== ts-node test ==="
+          npx ts-node --transpile-only crank/crank.ts || echo "Exit code: $?"
