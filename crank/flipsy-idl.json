@@ -1,0 +1,857 @@
+{
+  "version": "0.1.0",
+  "name": "flipsy",
+  "instructions": [
+    {
+      "name": "initialize",
+      "accounts": [
+        {
+          "name": "config",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "pythFeed",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "payer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "admin",
+          "type": "publicKey"
+        },
+        {
+          "name": "cranker",
+          "type": "publicKey"
+        },
+        {
+          "name": "minBet",
+          "type": "u64"
+        },
+        {
+          "name": "maxBet",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "setAdmin",
+      "accounts": [
+        {
+          "name": "config",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "signer",
+          "isMut": false,
+          "isSigner": true
+        }
+      ],
+      "args": [
+        {
+          "name": "newAdmin",
+          "type": "publicKey"
+        }
+      ]
+    },
+    {
+      "name": "setCranker",
+      "accounts": [
+        {
+          "name": "config",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "signer",
+          "isMut": false,
+          "isSigner": true
+        }
+      ],
+      "args": [
+        {
+          "name": "newCranker",
+          "type": "publicKey"
+        }
+      ]
+    },
+    {
+      "name": "superSweep",
+      "accounts": [
+        {
+          "name": "config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "round",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "superAdmin",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "signer",
+          "isMut": false,
+          "isSigner": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "setPythFeed",
+      "accounts": [
+        {
+          "name": "config",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "signer",
+          "isMut": false,
+          "isSigner": true
+        }
+      ],
+      "args": [
+        {
+          "name": "newFeed",
+          "type": "publicKey"
+        }
+      ]
+    },
+    {
+      "name": "setParams",
+      "accounts": [
+        {
+          "name": "config",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "signer",
+          "isMut": false,
+          "isSigner": true
+        }
+      ],
+      "args": [
+        {
+          "name": "minBet",
+          "type": "u64"
+        },
+        {
+          "name": "maxBet",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "name": "setPaused",
+      "accounts": [
+        {
+          "name": "config",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "signer",
+          "isMut": false,
+          "isSigner": true
+        }
+      ],
+      "args": [
+        {
+          "name": "paused",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "forceRefund",
+      "accounts": [
+        {
+          "name": "config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "round",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "signer",
+          "isMut": false,
+          "isSigner": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "sweepUnclaimed",
+      "accounts": [
+        {
+          "name": "config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "round",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "superAdmin",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "signer",
+          "isMut": false,
+          "isSigner": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "startRound",
+      "accounts": [
+        {
+          "name": "config",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "round",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "pythFeed",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "cranker",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "rent",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "endRound",
+      "accounts": [
+        {
+          "name": "config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "round",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "pythFeed",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "superAdmin",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "cranker",
+          "isMut": false,
+          "isSigner": true
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "placeBet",
+      "accounts": [
+        {
+          "name": "config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "round",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "bet",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "user",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "targetEpoch",
+          "type": "u64"
+        },
+        {
+          "name": "betIndex",
+          "type": "u64"
+        },
+        {
+          "name": "amount",
+          "type": "u64"
+        },
+        {
+          "name": "side",
+          "type": {
+            "defined": "Side"
+          }
+        }
+      ]
+    },
+    {
+      "name": "claim",
+      "accounts": [
+        {
+          "name": "config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "round",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "bet",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "superAdmin",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "user",
+          "isMut": true,
+          "isSigner": true
+        }
+      ],
+      "args": []
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Config",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "publicKey"
+          },
+          {
+            "name": "cranker",
+            "type": "publicKey"
+          },
+          {
+            "name": "pythFeed",
+            "type": "publicKey"
+          },
+          {
+            "name": "currentEpoch",
+            "type": "u64"
+          },
+          {
+            "name": "paused",
+            "type": "bool"
+          },
+          {
+            "name": "minBet",
+            "type": "u64"
+          },
+          {
+            "name": "maxBet",
+            "type": "u64"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Round",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "name": "startTime",
+            "type": "i64"
+          },
+          {
+            "name": "lockTime",
+            "type": "i64"
+          },
+          {
+            "name": "closeTime",
+            "type": "i64"
+          },
+          {
+            "name": "nextStartTime",
+            "type": "i64"
+          },
+          {
+            "name": "lockPrice",
+            "type": "i64"
+          },
+          {
+            "name": "closePrice",
+            "type": "i64"
+          },
+          {
+            "name": "headsPool",
+            "type": "u64"
+          },
+          {
+            "name": "tailsPool",
+            "type": "u64"
+          },
+          {
+            "name": "betCount",
+            "type": "u64"
+          },
+          {
+            "name": "outcome",
+            "type": {
+              "defined": "Outcome"
+            }
+          },
+          {
+            "name": "resolvedAt",
+            "type": "i64"
+          },
+          {
+            "name": "swept",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Bet",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "user",
+            "type": "publicKey"
+          },
+          {
+            "name": "epoch",
+            "type": "u64"
+          },
+          {
+            "name": "betIndex",
+            "type": "u64"
+          },
+          {
+            "name": "amount",
+            "type": "u64"
+          },
+          {
+            "name": "side",
+            "type": {
+              "defined": "Side"
+            }
+          },
+          {
+            "name": "claimed",
+            "type": "bool"
+          },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    }
+  ],
+  "types": [
+    {
+      "name": "Side",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Heads"
+          },
+          {
+            "name": "Tails"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Outcome",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Unresolved"
+          },
+          {
+            "name": "Heads"
+          },
+          {
+            "name": "Tails"
+          },
+          {
+            "name": "Tie"
+          },
+          {
+            "name": "AllLost"
+          }
+        ]
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "ConfigInitialized",
+      "fields": [
+        {
+          "name": "admin",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "cranker",
+          "type": "publicKey",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "RoundStarted",
+      "fields": [
+        {
+          "name": "epoch",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "lockPrice",
+          "type": "i64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "BetPlaced",
+      "fields": [
+        {
+          "name": "epoch",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "user",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "betIndex",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "amount",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "side",
+          "type": {
+            "defined": "Side"
+          },
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "RoundEnded",
+      "fields": [
+        {
+          "name": "epoch",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "closePrice",
+          "type": "i64",
+          "index": false
+        },
+        {
+          "name": "outcome",
+          "type": {
+            "defined": "Outcome"
+          },
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "Claimed",
+      "fields": [
+        {
+          "name": "epoch",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "user",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "betIndex",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "payout",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "fee",
+          "type": "u64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "RoundForceRefunded",
+      "fields": [
+        {
+          "name": "epoch",
+          "type": "u64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "PauseToggled",
+      "fields": [
+        {
+          "name": "paused",
+          "type": "bool",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "UnclaimedSwept",
+      "fields": [
+        {
+          "name": "epoch",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "amount",
+          "type": "u64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "SuperSwept",
+      "fields": [
+        {
+          "name": "epoch",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "amount",
+          "type": "u64",
+          "index": false
+        }
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "Unauthorized",
+      "msg": "Unauthorized"
+    },
+    {
+      "code": 6001,
+      "name": "Paused",
+      "msg": "Program paused"
+    },
+    {
+      "code": 6002,
+      "name": "BelowMin",
+      "msg": "Below minimum bet"
+    },
+    {
+      "code": 6003,
+      "name": "AboveMax",
+      "msg": "Above maximum bet"
+    },
+    {
+      "code": 6004,
+      "name": "RoundLocked",
+      "msg": "Round locked"
+    },
+    {
+      "code": 6005,
+      "name": "RoundNotStarted",
+      "msg": "Round not started yet"
+    },
+    {
+      "code": 6006,
+      "name": "RoundNotClosed",
+      "msg": "Round not closed yet"
+    },
+    {
+      "code": 6007,
+      "name": "AlreadyResolved",
+      "msg": "Already resolved"
+    },
+    {
+      "code": 6008,
+      "name": "AlreadyClaimed",
+      "msg": "Already claimed"
+    },
+    {
+      "code": 6009,
+      "name": "NotResolved",
+      "msg": "Not resolved"
+    },
+    {
+      "code": 6010,
+      "name": "RoundOutOfRange",
+      "msg": "Round out of range"
+    },
+    {
+      "code": 6011,
+      "name": "TooEarlyForRefund",
+      "msg": "Too early for refund"
+    },
+    {
+      "code": 6012,
+      "name": "TooEarlyForSweep",
+      "msg": "Too early for sweep"
+    },
+    {
+      "code": 6013,
+      "name": "AlreadySwept",
+      "msg": "Already swept"
+    },
+    {
+      "code": 6014,
+      "name": "PythError",
+      "msg": "Pyth read error"
+    },
+    {
+      "code": 6015,
+      "name": "PythStale",
+      "msg": "Pyth price stale"
+    },
+    {
+      "code": 6016,
+      "name": "PythOverflow",
+      "msg": "Pyth math overflow"
+    },
+    {
+      "code": 6017,
+      "name": "MathOverflow",
+      "msg": "Math overflow"
+    },
+    {
+      "code": 6018,
+      "name": "BadParams",
+      "msg": "Bad parameters"
+    }
+  ]
+}
