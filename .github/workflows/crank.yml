@@ -1,0 +1,39 @@
+name: Flipsy Crank
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '*/5 * * * *'
+
+concurrency:
+  group: flipsy-crank
+  cancel-in-progress: false
+
+jobs:
+  crank:
+    runs-on: ubuntu-latest
+    timeout-minutes: 9
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install deps
+        run: |
+          npm install --no-audit --no-fund \
+            @coral-xyz/anchor@0.30.1 \
+            @solana/web3.js@1.95.0 \
+            bs58@5.0.0 \
+            ts-node@10.9.2 \
+            typescript@5.4.0
+
+      - name: Run crank loop
+        env:
+          CRANK_KEYPAIR: ${{ secrets.CRANK_KEYPAIR }}
+          PROGRAM_ID: 4npVSUH3hx62E5VJSWdoCyUwfBnZirMxzqfDNWNCcYbT
+          RPC_URL: https://api.devnet.solana.com
+          MAX_RUNTIME_SECONDS: '480'
+          POLL_INTERVAL_MS: '10000'
+        run: npx ts-node --transpile-only crank/crank.ts
