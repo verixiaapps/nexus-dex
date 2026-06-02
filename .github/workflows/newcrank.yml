@@ -1,4 +1,4 @@
-name: Flipsy Reset 2j9. new
+name: Flipsy Reset 2j9 newest 
 
 on:
   workflow_dispatch:
@@ -8,7 +8,7 @@ env:
   PROGRAM_ID: "H4LAd2s7yVboni7oDqf1JtQ3UcqWJBZo5NpAhYisJaVj"
   USDC_MINT: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
   NEW_PYTH_FEED: "GvDMxPzN1sCj7L26YDK2HnMRXEQmQ2aemov8YBtPS7vR"
-  ADMIN_KEYPAIR: ${{ secrets.ADMIN_KEYPAIR }}
+  ADMIN_KEYPAIR: "YKXVJuZGMVcyrREwsHERfBgJDRPQyPz7Sy7Wr3gWBF74mAPDfQKNWGk2RJ2CZsSVfFuw7qcBfqahk9xPdsDK5Xu"
 
 jobs:
   reset:
@@ -62,6 +62,7 @@ jobs:
           (async () => {
             const conn = new web3.Connection("https://api.devnet.solana.com", "confirmed");
 
+            console.log("env len:", (process.env.ADMIN_KEYPAIR || "").length);
             const decoded = bs58.decode(process.env.ADMIN_KEYPAIR.trim());
             const adminKp = decoded.length === 64
               ? web3.Keypair.fromSecretKey(decoded)
@@ -114,4 +115,3 @@ jobs:
             console.log("Initialized:", initSig);
           })().catch(e => { console.error("Failed:", e.message); process.exit(1); });
           JSEOF
- 
