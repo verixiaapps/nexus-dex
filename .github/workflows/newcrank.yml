@@ -1,4 +1,4 @@
-name: Flipsy new crank
+name: Flipsy Reset 2j9
 
 on:
   workflow_dispatch:
@@ -43,9 +43,6 @@ jobs:
           with open(os.path.expanduser("~/.config/solana/id.json"), "w") as f:
               json.dump(list(seed_bytes) + list(pub), f)
           PYEOF
-
-      - name: Debug
-        run: echo "Secret length: ${#ADMIN_KEYPAIR}"
 
       - name: Close and reinitialize config
         run: |
