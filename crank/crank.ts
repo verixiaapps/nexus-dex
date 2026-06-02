@@ -49,7 +49,8 @@ async function main() {
  if (!idl) throw new Error("IDL not found on chain");
  console.log("[crank] IDL OK");
 
- const program = new anchor.Program(idl as anchor.Idl, PROGRAM_ID, provider);
+ (idl as any).address = PROGRAM_ID.toBase58();
+ const program = new (anchor.Program as any)(idl, provider);
 
  const [configPda] = PublicKey.findProgramAddressSync(
    [Buffer.from("config")],
@@ -157,4 +158,3 @@ main().catch((e) => {
  console.error("[crank] Fatal:", e);
  process.exit(1);
 });
- 
