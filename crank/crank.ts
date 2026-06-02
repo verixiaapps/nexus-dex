@@ -1,20 +1,3 @@
-Let’s roll. Crank deployment.
-
-Step 1: Update crank.ts in your repo
-
-The current crank/crank.ts in your repo is the old version. We need to replace it with the new fetchIdl version (no local IDL file needed).
-
-In GitHub on your phone:
-
-	1.	Open nexus-dex repo
-	2.	Navigate to crank/crank.ts
-	3.	Tap the pencil icon (Edit)
-	4.	Tap the three-dot menu → “Select all” → Delete
-	5.	Paste the new code below
-	6.	Commit to main
-
-New crank.ts:
-
 import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
 import bs58 from "bs58";
@@ -165,4 +148,3 @@ main().catch((e) => {
 });
 
 
-Tell me when committed.
