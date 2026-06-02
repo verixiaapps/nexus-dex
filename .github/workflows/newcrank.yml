@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
 
 env:
-  SEED: "flipsy-fresh-1"
+  SEED: "flipsy-fresh-1" 
   PROGRAM_ID: "H4LAd2s7yVboni7oDqf1JtQ3UcqWJBZo5NpAhYisJaVj"
   USDC_MINT: "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"
   NEW_PYTH_FEED: "GvDMxPzN1sCj7L26YDK2HnMRXEQmQ2aemov8YBtPS7vR"
