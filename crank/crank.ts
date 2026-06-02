@@ -1,8 +1,6 @@
-Here’s the full crank.ts — goes at crank/crank.ts in your repo root:
-
 // Flipsy Crank Bot — runs alongside dex on Railway via concurrently.
 // Reads CRANK_KEYPAIR from Railway env var.
-// Accepts EITHER JSON array format ([1,2,3,...]) OR base58 string format (Phantom export).
+// Accepts EITHER JSON array format ([1,2,3,...]) OR base58 string format.
 
 import * as anchor from "@coral-xyz/anchor";
 import { Connection, Keypair, PublicKey } from "@solana/web3.js";
@@ -41,12 +39,10 @@ try {
   console.error("   ", e.message || e);
   process.exit(1);
 }
-
 if (secretKey.length !== 64) {
   console.error(`❌ CRANK_KEYPAIR has wrong length: ${secretKey.length} bytes (expected 64)`);
   process.exit(1);
 }
-
 const crankerKeypair = Keypair.fromSecretKey(secretKey);
 
 // =====================================================================
@@ -66,7 +62,12 @@ if (!fs.existsSync(idlPath)) {
 const idl = JSON.parse(fs.readFileSync(idlPath, "utf-8"));
 const program = new anchor.Program(idl, PROGRAM_ID, provider);
 
-const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
+const SUPER_ADMIN = new PublicKey("GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA");
+
+const [configPda] = PublicKey.findProgramAddressSync(
+  [Buffer.from("config")],
+  PROGRAM_ID
+);
 
 function epochBuf(epoch: anchor.BN): Buffer {
   const buf = Buffer.alloc(8);
@@ -90,77 +91,85 @@ function vaultPda(epoch: anchor.BN): PublicKey {
   return pda;
 }
 
+async function startRound(nextEpoch: anchor.BN, config: any) {
+  await program.methods
+    .startRound()
+    .accounts({
+      config: configPda,
+      round: roundPda(nextEpoch),
+      vault: vaultPda(nextEpoch),
+      pythFeed: config.pythFeed,
+      cranker: crankerKeypair.publicKey,
+      systemProgram: anchor.web3.SystemProgram.programId,
+      rent: anchor.web3.SYSVAR_RENT_PUBKEY,
+    })
+    .signers([crankerKeypair])
+    .rpc();
+}
+
+async function endRound(currentEpoch: anchor.BN, config: any) {
+  await program.methods
+    .endRound()
+    .accounts({
+      config: configPda,
+      round: roundPda(currentEpoch),
+      vault: vaultPda(currentEpoch),
+      pythFeed: config.pythFeed,
+      superAdmin: SUPER_ADMIN,
+      cranker: crankerKeypair.publicKey,
+    })
+    .signers([crankerKeypair])
+    .rpc();
+}
+
 // =====================================================================
-// CRANK LOGIC
+// CRANK LOOP
 // =====================================================================
 async function tick() {
   try {
     const config: any = await (program.account as any).config.fetch(configPda);
+    if (config.paused) {
+      console.log(`[${new Date().toISOString()}] Program paused — skipping`);
+      return;
+    }
+
     const now = Math.floor(Date.now() / 1000);
     const currentEpoch: anchor.BN = config.currentEpoch;
 
     if (currentEpoch.eqn(0)) {
       const next = new anchor.BN(1);
       console.log(`[${new Date().toISOString()}] Starting first round`);
-      await program.methods
-        .startRound()
-        .accounts({
-          config: configPda,
-          round: roundPda(next),
-          vault: vaultPda(next),
-          usdcMint: config.usdcMint,
-          pythFeed: config.pythFeed,
-          cranker: crankerKeypair.publicKey,
-          systemProgram: anchor.web3.SystemProgram.programId,
-          tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
-          rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-        })
-        .signers([crankerKeypair])
-        .rpc();
+      await startRound(next, config);
       console.log(`✅ Round 1 started`);
       return;
     }
 
-    const curRoundPda = roundPda(currentEpoch);
-    const round: any = await (program.account as any).round.fetch(curRoundPda);
+    const round: any = await (program.account as any).round.fetch(roundPda(currentEpoch));
     const isUnresolved = round.outcome.unresolved !== undefined;
 
     if (isUnresolved) {
       if (now >= round.closeTime.toNumber()) {
         console.log(`[${new Date().toISOString()}] Ending round ${currentEpoch.toString()}`);
-        await program.methods
-          .endRound()
-          .accounts({
-            config: configPda,
-            round: curRoundPda,
-            pythFeed: config.pythFeed,
-            cranker: crankerKeypair.publicKey,
-          })
-          .signers([crankerKeypair])
-          .rpc();
+        await endRound(currentEpoch, config);
         console.log(`✅ Round ${currentEpoch.toString()} ended`);
       } else {
         const secsLeft = round.closeTime.toNumber() - now;
-        console.log(`[${new Date().toISOString()}] Round ${currentEpoch.toString()} open, ${secsLeft}s until close`);
+        console.log(
+          `[${new Date().toISOString()}] Round ${currentEpoch.toString()} open, ${secsLeft}s until close`
+        );
       }
     } else {
+      const nextStart = round.nextStartTime.toNumber();
+      if (now < nextStart) {
+        const secsLeft = nextStart - now;
+        console.log(
+          `[${new Date().toISOString()}] Round ${currentEpoch.toString()} resolved, ${secsLeft}s gap remaining`
+        );
+        return;
+      }
       const next = currentEpoch.addn(1);
       console.log(`[${new Date().toISOString()}] Starting round ${next.toString()}`);
-      await program.methods
-        .startRound()
-        .accounts({
-          config: configPda,
-          round: roundPda(next),
-          vault: vaultPda(next),
-          usdcMint: config.usdcMint,
-          pythFeed: config.pythFeed,
-          cranker: crankerKeypair.publicKey,
-          systemProgram: anchor.web3.SystemProgram.programId,
-          tokenProgram: anchor.utils.token.TOKEN_PROGRAM_ID,
-          rent: anchor.web3.SYSVAR_RENT_PUBKEY,
-        })
-        .signers([crankerKeypair])
-        .rpc();
+      await startRound(next, config);
       console.log(`✅ Round ${next.toString()} started`);
     }
   } catch (e: any) {
