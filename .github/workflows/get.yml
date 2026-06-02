@@ -1,0 +1,22 @@
+name: Check Program Authority
+
+on:
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Install Solana CLI
+        run: |
+          sh -c "$(curl -sSfL https://release.anza.xyz/stable/install)"
+          echo "$HOME/.local/share/solana/install/active_release/bin" >> $GITHUB_PATH
+
+      - name: Set devnet
+        run: solana config set --url https://api.devnet.solana.com
+
+      - name: Show program info
+        run: solana program show 4npVSUH3hx62E5VJSWdoCyUwfBnZirMxzqfDNWNCcYbT
+
+      - name: Expected Super Admin
+        run: echo "Expected authority - GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA"
