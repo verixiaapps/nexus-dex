@@ -1,4 +1,4 @@
-name: Flipsy Reset try 
+name: Flipsy Reset try 11
 
 on:
   workflow_dispatch: 
