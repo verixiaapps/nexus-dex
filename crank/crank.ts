@@ -8,7 +8,7 @@ import idl from "./flipsy-idl.json";
 
 const bs58: any = (bs58module as any).default || bs58module;
 
-const PROGRAM_ID = new PublicKey("4npVSUH3hx62E5VJSWdoCyUwfBnZirMxzqfDNWNCcYbT");
+const PROGRAM_ID = new PublicKey("71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs");
 const SUPER_ADMIN = new PublicKey("GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA");
 const RPC_URL = process.env.RPC_URL || "https://api.devnet.solana.com";
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "10000");
