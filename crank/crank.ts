@@ -25,18 +25,16 @@ function loadKeypair(): Keypair {
 
 async function fetchSolPriceI64(): Promise<anchor.BN> {
   const res = await fetch(PRICE_URL);
-  if (!res.ok) throw new Error(`Coinbase HTTP ${res.status}`);
+  if (!res.ok) throw new Error("Coinbase HTTP " + res.status);
   const json: any = await res.json();
-  const priceStr: string | undefined = json?.data?.amount;
+  const priceStr: string | undefined = json && json.data && json.data.amount;
   if (!priceStr) throw new Error("No price in Coinbase response");
   const price = parseFloat(priceStr);
-  if (!isFinite(price) || price <= 0) throw new Error(`Bad price: ${priceStr}`);
+  if (!isFinite(price) || price <= 0) throw new Error("Bad price: " + priceStr);
   return new anchor.BN(Math.round(price * 1e8));
 }
 
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
+function sleep(ms: number) { return new Promise(r => setTimeout(r, ms)); }
 
 function pdaRound(epoch: number): PublicKey {
   const [pda] = PublicKey.findProgramAddressSync(
@@ -58,18 +56,14 @@ async function startRound(program: any, configPda: PublicKey, cranker: Keypair, 
   const roundPda = pdaRound(nextEpoch);
   const vaultPda = pdaVault(nextEpoch);
   const lockPrice = await fetchSolPriceI64();
-  console.log(`[crank] startRound epoch=${nextEpoch} lockPrice=${lockPrice.toString()}`);
-  const tx = await program.methods
-    .startRound(lockPrice)
-    .accounts({
-      config: configPda,
-      round: roundPda,
-      vault: vaultPda,
-      cranker: cranker.publicKey,
-      systemProgram: SystemProgram.programId,
-    })
-    .signers([cranker])
-    .rpc();
+  console.log("[crank] startRound epoch=" + nextEpoch + " lockPrice=" + lockPrice.toString());
+  const tx = await program.methods.startRound(lockPrice).accounts({
+    config: configPda,
+    round: roundPda,
+    vault: vaultPda,
+    cranker: cranker.publicKey,
+    systemProgram: SystemProgram.programId,
+  }).signers([cranker]).rpc();
   console.log("[crank] startRound tx:", tx);
 }
 
@@ -77,18 +71,14 @@ async function endRound(program: any, configPda: PublicKey, cranker: Keypair, ep
   const roundPda = pdaRound(epoch);
   const vaultPda = pdaVault(epoch);
   const closePrice = await fetchSolPriceI64();
-  console.log(`[crank] endRound epoch=${epoch} closePrice=${closePrice.toString()}`);
-  const tx = await program.methods
-    .endRound(closePrice)
-    .accounts({
-      config: configPda,
-      round: roundPda,
-      vault: vaultPda,
-      superAdmin: SUPER_ADMIN,
-      cranker: cranker.publicKey,
-    })
-    .signers([cranker])
-    .rpc();
+  console.log("[crank] endRound epoch=" + epoch + " closePrice=" + closePrice.toString());
+  const tx = await program.methods.endRound(closePrice).accounts({
+    config: configPda,
+    round: roundPda,
+    vault: vaultPda,
+    superAdmin: SUPER_ADMIN,
+    cranker: cranker.publicKey,
+  }).signers([cranker]).rpc();
   console.log("[crank] endRound tx:", tx);
 }
 
@@ -109,12 +99,7 @@ async function main() {
   while (true) {
     try {
       const config: any = await (program.account as any).config.fetch(configPda);
-
-      if (config.paused) {
-        console.log("[crank] Paused");
-        await sleep(POLL_INTERVAL_MS);
-        continue;
-      }
+      if (config.paused) { console.log("[crank] Paused"); await sleep(POLL_INTERVAL_MS); continue; }
 
       const epoch: number = config.currentEpoch.toNumber();
       const now = Math.floor(Date.now() / 1000);
@@ -127,7 +112,6 @@ async function main() {
 
       const roundPda = pdaRound(epoch);
       const round: any = await (program.account as any).round.fetch(roundPda);
-
       const resolved = round.resolvedAt.toNumber() > 0;
       const closeTime = round.closeTime.toNumber();
 
@@ -138,19 +122,16 @@ async function main() {
         if (now >= nextStart) {
           await startRound(program, configPda, cranker, epoch + 1);
         } else {
-          console.log(`[crank] Gap, ${nextStart - now}s until next round`);
+          console.log("[crank] Gap, " + (nextStart - now) + "s until next round");
         }
       } else {
-        console.log(`[crank] Round ${epoch} live, ${closeTime - now}s to close`);
+        console.log("[crank] Round " + epoch + " live, " + (closeTime - now) + "s to close");
       }
     } catch (e: any) {
-      console.error("[crank] Loop error:", e?.message || e);
+      console.error("[crank] Loop error:", (e && e.message) || e);
     }
     await sleep(POLL_INTERVAL_MS);
   }
 }
 
-main().catch((e) => {
-  console.error("[crank] Fatal:", e);
-  process.exit(1);
-});
+main().catch(e => { console.error("[crank] Fatal:", e); process.exit(1); });

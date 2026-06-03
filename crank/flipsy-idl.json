@@ -11,11 +11,6 @@
           "isSigner": false
         },
         {
-          "name": "pythFeed",
-          "isMut": false,
-          "isSigner": false
-        },
-        {
           "name": "payer",
           "isMut": true,
           "isSigner": true
@@ -88,58 +83,6 @@
       ]
     },
     {
-      "name": "superSweep",
-      "accounts": [
-        {
-          "name": "config",
-          "isMut": false,
-          "isSigner": false
-        },
-        {
-          "name": "round",
-          "isMut": true,
-          "isSigner": false
-        },
-        {
-          "name": "vault",
-          "isMut": true,
-          "isSigner": false
-        },
-        {
-          "name": "superAdmin",
-          "isMut": true,
-          "isSigner": false
-        },
-        {
-          "name": "signer",
-          "isMut": false,
-          "isSigner": true
-        }
-      ],
-      "args": []
-    },
-    {
-      "name": "setPythFeed",
-      "accounts": [
-        {
-          "name": "config",
-          "isMut": true,
-          "isSigner": false
-        },
-        {
-          "name": "signer",
-          "isMut": false,
-          "isSigner": true
-        }
-      ],
-      "args": [
-        {
-          "name": "newFeed",
-          "type": "publicKey"
-        }
-      ]
-    },
-    {
       "name": "setParams",
       "accounts": [
         {
@@ -184,6 +127,37 @@
           "type": "bool"
         }
       ]
+    },
+    {
+      "name": "superSweep",
+      "accounts": [
+        {
+          "name": "config",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "round",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "superAdmin",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "signer",
+          "isMut": false,
+          "isSigner": true
+        }
+      ],
+      "args": []
     },
     {
       "name": "forceRefund",
@@ -256,11 +230,6 @@
           "isSigner": false
         },
         {
-          "name": "pythFeed",
-          "isMut": false,
-          "isSigner": false
-        },
-        {
           "name": "cranker",
           "isMut": true,
           "isSigner": true
@@ -269,14 +238,14 @@
           "name": "systemProgram",
           "isMut": false,
           "isSigner": false
-        },
-        {
-          "name": "rent",
-          "isMut": false,
-          "isSigner": false
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "lockPrice",
+          "type": "i64"
+        }
+      ]
     },
     {
       "name": "endRound",
@@ -297,11 +266,6 @@
           "isSigner": false
         },
         {
-          "name": "pythFeed",
-          "isMut": false,
-          "isSigner": false
-        },
-        {
           "name": "superAdmin",
           "isMut": true,
           "isSigner": false
@@ -312,7 +276,12 @@
           "isSigner": true
         }
       ],
-      "args": []
+      "args": [
+        {
+          "name": "closePrice",
+          "type": "i64"
+        }
+      ]
     },
     {
       "name": "placeBet",
@@ -418,10 +387,6 @@
           },
           {
             "name": "cranker",
-            "type": "publicKey"
-          },
-          {
-            "name": "pythFeed",
             "type": "publicKey"
           },
           {
@@ -544,6 +509,18 @@
             "name": "claimed",
             "type": "bool"
           },
+          {
+            "name": "bump",
+            "type": "u8"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Vault",
+      "type": {
+        "kind": "struct",
+        "fields": [
           {
             "name": "bump",
             "type": "u8"
@@ -830,26 +807,16 @@
     },
     {
       "code": 6014,
-      "name": "PythError",
-      "msg": "Pyth read error"
+      "name": "BadPrice",
+      "msg": "Bad price"
     },
     {
       "code": 6015,
-      "name": "PythStale",
-      "msg": "Pyth price stale"
-    },
-    {
-      "code": 6016,
-      "name": "PythOverflow",
-      "msg": "Pyth math overflow"
-    },
-    {
-      "code": 6017,
       "name": "MathOverflow",
       "msg": "Math overflow"
     },
     {
-      "code": 6018,
+      "code": 6016,
       "name": "BadParams",
       "msg": "Bad parameters"
     }
