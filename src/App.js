@@ -691,7 +691,7 @@ function AppInner() {
        )}
        {tab === 'wonderland' && <MemeWonderland   onConnectWallet={openWallet} />}
        {tab === 'markets'    && <Stocks           {...sharedProps} />}
-       {tab === 'flipsy'     && <Flipsy />}
+       {tab === 'flipsy'     && <Flipsy           onConnectWallet={openWallet} />}
        {tab === 'portfolio'  && <Portfolio        onConnectWallet={openWallet} />}
      </main>
      <nav className="mobile-nav" style={{
