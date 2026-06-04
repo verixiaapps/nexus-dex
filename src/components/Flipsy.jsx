@@ -14,8 +14,6 @@ const MAX_BET = 20;
 const NET_MULT = 0.75; // 25% fee on profit only (matches FEE_BPS=2500 in lib.rs)
 // ============================================================
 
-// Geo check — runs in background. Page renders regardless; block screen
-// only appears if geo resolves to a blocked country AND wallet isn't admin.
 async function checkGeo() {
   const sources = [
     { url: 'https://ipapi.co/json/', field: 'country_code' },
@@ -57,9 +55,9 @@ function BlockScreen({ title, message, sub }) {
 }
 
 // ============================================================
-// ROUND CARD — handles all four states
+// ROUND CARD
 // ============================================================
-function RoundCard({ round, state, userBet, livePrice, betAmount, placeBet, claim, claimable }) {
+function RoundCard({ round, state, userBet, livePrice, placeBet, claim, claimable }) {
   const {
     epoch,
     headsPool = 0, tailsPool = 0,
@@ -76,9 +74,6 @@ function RoundCard({ round, state, userBet, livePrice, betAmount, placeBet, clai
   const isNext = state === 'next';
   const isLater = state === 'later';
 
-  // Local 1-sec ticker — only the LIVE card needs second-by-second precision.
-  // NEXT and LATER cards show minute-scale countdowns ("Starts in 7:54") that
-  // update fine on chain-poll cadence (every 5s). Fewer tickers = less jank.
   const [now, setNow] = useState(Math.floor(Date.now() / 1000));
   useEffect(() => {
     if (!isLive) return;
@@ -100,12 +95,11 @@ function RoundCard({ round, state, userBet, livePrice, betAmount, placeBet, clai
 
   const longWon  = isPrev && outcome === 'heads';
   const shortWon = isPrev && outcome === 'tails';
-  const tied     = isPrev && outcome === 'tie';
 
   const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
   const handleSide = (side) => {
-    if (isNext || isLater) placeBet?.(epoch, side, betAmount);
+    if (isNext || isLater) placeBet?.(epoch, side, MIN_BET);
   };
 
   return (
@@ -159,8 +153,8 @@ function RoundCard({ round, state, userBet, livePrice, betAmount, placeBet, clai
             <div className="fp-mid-pool">${totalPool.toFixed(2)}</div>
             <div className="fp-mid-divider" />
             <div className="fp-mid-payout-preview">
-              <div>If long, win <b>${(betAmount * headsPayout).toFixed(2)}</b></div>
-              <div>If short, win <b>${(betAmount * tailsPayout).toFixed(2)}</b></div>
+              <div>If long, win <b>${(MIN_BET * headsPayout).toFixed(2)}</b></div>
+              <div>If short, win <b>${(MIN_BET * tailsPayout).toFixed(2)}</b></div>
             </div>
             <div className="fp-mid-starts">
               Starts in <b>{fmtTime(startsIn)}</b>
@@ -195,7 +189,7 @@ function RoundCard({ round, state, userBet, livePrice, betAmount, placeBet, clai
             </div>
             {claimable && (
               <button className="fp-mid-claim" onClick={() => claim?.(epoch)}>
-                💰 Claim
+                💰 Claim Winnings
               </button>
             )}
           </>
@@ -230,7 +224,6 @@ export default function Flipsy() {
   const wallet = useWallet();
 
   // Load eruda mobile console for debugging — REMOVE before production launch.
-  // Tap the floating gear icon (bottom-right) to see errors / network / etc.
   useEffect(() => {
     if (typeof window === 'undefined' || window.eruda) return;
     const s = document.createElement('script');
@@ -239,9 +232,6 @@ export default function Flipsy() {
     document.head.appendChild(s);
   }, []);
 
-  // Call useFlipsy defensively. If the hook itself throws (bad IDL, anchor version
-  // mismatch, missing Buffer polyfill, etc), fall back to empty data so the
-  // page shell still renders and we can see WHAT'S broken via eruda.
   let hookData = null;
   let hookError = null;
   try {
@@ -262,12 +252,10 @@ export default function Flipsy() {
     loading = true,
   } = hookData || {};
 
-  const [betAmount, setBetAmount] = useState(MIN_BET);
   const [flash, setFlash] = useState(null);
   const [geo, setGeo] = useState({ blocked: false, ready: false });
   const carouselRef = useRef(null);
 
-  // Geo check — fires once on mount, never blocks render
   useEffect(() => {
     let cancelled = false;
     checkGeo().then((res) => {
@@ -276,14 +264,12 @@ export default function Flipsy() {
     return () => { cancelled = true; };
   }, []);
 
-  // Surface hook error to user via flash so it's visible without console
   useEffect(() => {
     if (hookError) {
       setFlash({ type: 'error', msg: `Hook crashed: ${hookError.message || 'see console'}` });
     }
   }, [hookError]);
 
-  // Auto-scroll to live card when it loads
   useEffect(() => {
     if (!liveRound) return;
     const t = setTimeout(() => {
@@ -297,7 +283,6 @@ export default function Flipsy() {
     return () => clearTimeout(t);
   }, [liveRound?.epoch]);
 
-  // Flash auto-dismiss
   useEffect(() => {
     if (flash) {
       const t = setTimeout(() => setFlash(null), 3500);
@@ -305,10 +290,19 @@ export default function Flipsy() {
     }
   }, [flash]);
 
-  // Admin wallet check (only your wallet can bet/claim — page itself is always visible)
   const isAdminWallet = wallet.publicKey && wallet.publicKey.toBase58() === ADMIN_WALLET;
 
-  // PLACE BET wrapper with feedback
+  const isClaimable = (round) => {
+    const bet = userBets[round.epoch];
+    if (!bet || bet.claimed) return false;
+    if (round.outcome === bet.side) return true;
+    if (round.outcome === 'tie') return true;
+    return false;
+  };
+
+  const claimableRounds = recentRounds.filter(r => isClaimable(r));
+  const hasClaim = claimableRounds.length > 0;
+
   const handlePlaceBet = async (epoch, side, amount) => {
     if (!wallet.connected) {
       setFlash({ type: 'error', msg: 'Connect wallet first' });
@@ -316,10 +310,6 @@ export default function Flipsy() {
     }
     if (!isAdminWallet) {
       setFlash({ type: 'error', msg: 'Private beta — wallet not authorized' });
-      return;
-    }
-    if (amount < MIN_BET || amount > MAX_BET) {
-      setFlash({ type: 'error', msg: `$${MIN_BET}–$${MAX_BET}` });
       return;
     }
     if (balance < amount) {
@@ -335,7 +325,6 @@ export default function Flipsy() {
     }
   };
 
-  // CLAIM wrapper with feedback
   const handleClaim = async (epoch) => {
     if (!isAdminWallet) {
       setFlash({ type: 'error', msg: 'Private beta — wallet not authorized' });
@@ -343,20 +332,22 @@ export default function Flipsy() {
     }
     try {
       await claim(epoch);
-      setFlash({ type: 'success', msg: `Claimed #${epoch}` });
+      setFlash({ type: 'success', msg: `💰 Claimed #${epoch}` });
     } catch (e) {
       setFlash({ type: 'error', msg: e.message || 'Claim failed' });
     }
   };
 
-  // Figure out which previous rounds are claimable by this user
-  const isClaimable = (round) => {
-    const bet = userBets[round.epoch];
-    if (!bet || bet.claimed) return false;
-    if (round.outcome === bet.side) return true;
-    if (round.outcome === 'tie') return true;
-    return false;
-  };
+  // Geo block — non-admin US users
+  if (geo.ready && geo.blocked && !isAdminWallet) {
+    return (
+      <BlockScreen
+        title="Not Available"
+        message="Flipsy is not available in your region."
+        sub="This may change in the future."
+      />
+    );
+  }
 
   return (
     <div className="fp-page">
@@ -367,6 +358,22 @@ export default function Flipsy() {
       <div className="fp-glow fp-glow-1" />
       <div className="fp-glow fp-glow-2" />
       <div className="fp-glow fp-glow-3" />
+
+      {/* CLAIM BANNER */}
+      {hasClaim && (
+        <div className="fp-claim-banner" onClick={() => handleClaim(claimableRounds[0].epoch)}>
+          <span className="fp-claim-banner-icon">💰</span>
+          <span>Round #{claimableRounds[0].epoch} — tap to collect winnings</span>
+          {claimableRounds.length > 1 && (
+            <span className="fp-claim-banner-count">+{claimableRounds.length - 1} more</span>
+          )}
+        </div>
+      )}
+
+      {/* FLASH */}
+      {flash && (
+        <div className={`fp-flash-top fp-flash ${flash.type}`}>{flash.msg}</div>
+      )}
 
       {/* HEADER */}
       <header className="fp-header">
@@ -407,7 +414,6 @@ export default function Flipsy() {
           </div>
         )}
 
-        {/* Previous rounds — oldest first so live is centered when scrolled to */}
         {[...recentRounds].reverse().map(r => (
           <RoundCard
             key={`prev-${r.epoch}`}
@@ -415,26 +421,22 @@ export default function Flipsy() {
             state="previous"
             userBet={userBets[r.epoch]}
             livePrice={livePrice}
-            betAmount={betAmount}
             placeBet={handlePlaceBet}
             claim={handleClaim}
             claimable={isClaimable(r)}
           />
         ))}
 
-        {/* LIVE round */}
         {liveRound && (
           <RoundCard
             round={liveRound}
             state="live"
             userBet={userBets[liveRound.epoch]}
             livePrice={livePrice}
-            betAmount={betAmount}
             placeBet={handlePlaceBet}
           />
         )}
 
-        {/* NEXT round */}
         {upcomingRounds[0] && (
           <RoundCard
             key={`next-${upcomingRounds[0].epoch}`}
@@ -442,12 +444,10 @@ export default function Flipsy() {
             state="next"
             userBet={userBets[upcomingRounds[0].epoch]}
             livePrice={livePrice}
-            betAmount={betAmount}
             placeBet={handlePlaceBet}
           />
         )}
 
-        {/* LATER rounds */}
         {upcomingRounds.slice(1).map(r => (
           <RoundCard
             key={`later-${r.epoch}`}
@@ -455,66 +455,9 @@ export default function Flipsy() {
             state="later"
             userBet={userBets[r.epoch]}
             livePrice={livePrice}
-            betAmount={betAmount}
             placeBet={handlePlaceBet}
           />
         ))}
-      </div>
-
-      {/* BOTTOM */}
-      <div className="fp-bottom">
-        <div className="fp-bottom-card">
-          <div className="fp-bottom-head">
-            <h3 className="fp-bottom-title">Position Size</h3>
-            <span className="fp-bottom-tag">25% fee</span>
-          </div>
-          <div className="fp-amt-box">
-            <div className="fp-amt-row">
-              <button className="fp-amt-step" onClick={() => setBetAmount(a => +Math.max(MIN_BET, a - 1).toFixed(2))}>−</button>
-              <input
-                type="number" min={MIN_BET} max={MAX_BET} step={1}
-                value={betAmount}
-                onChange={(e) => setBetAmount(Math.max(MIN_BET, Math.min(MAX_BET, +(+e.target.value || MIN_BET).toFixed(2))))}
-                className="fp-amt-input"
-              />
-              <button className="fp-amt-step" onClick={() => setBetAmount(a => +Math.min(MAX_BET, a + 1).toFixed(2))}>+</button>
-            </div>
-            <div className="fp-quick-row">
-              {[5, 10, 15, 20].map(v => (
-                <button
-                  key={v}
-                  className={`fp-quick ${betAmount === v ? 'active' : ''}`}
-                  onClick={() => setBetAmount(v)}
-                >${v}</button>
-              ))}
-            </div>
-          </div>
-          {flash && <div className={`fp-flash ${flash.type}`}>{flash.msg}</div>}
-        </div>
-
-        <div className="fp-bottom-card">
-          <div className="fp-bottom-head">
-            <h3 className="fp-bottom-title">History</h3>
-          </div>
-          <div className="fp-hist-list">
-            {recentRounds.length === 0 && (
-              <div style={{ padding: 20, textAlign: 'center', color: '#5D5876', fontSize: 12, fontWeight: 600 }}>
-                No completed rounds yet
-              </div>
-            )}
-            {recentRounds.map(h => (
-              <div key={h.epoch} className="fp-hist-item">
-                <div className="fp-hist-epoch">#{h.epoch}</div>
-                <div className="fp-hist-prices">
-                  {h.lockPrice.toFixed(2)} → {h.closePrice.toFixed(2)}
-                </div>
-                <div className={`fp-hist-result ${h.outcome === 'heads' ? 'up' : h.outcome === 'tails' ? 'down' : 'tie'}`}>
-                  {h.outcome === 'heads' ? 'LONG' : h.outcome === 'tails' ? 'SHORT' : 'TIE'}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
       </div>
 
       <div className="fp-footer">
