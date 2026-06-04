@@ -1,64 +1,23 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useFlipsy } from '../hooks/useFlipsy';
 import './Flipsy.css';
 
 // ============================================================
-// TESTING GUARDS — remove before public launch
+// TESTING GUARDS — remove or open up before public launch
 // ============================================================
-const ADMIN_WALLET = 'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV';
+const ADMIN_WALLET = 'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA';
 const BLOCKED_COUNTRIES = ['US'];
+
+const MIN_BET = 5;
+const MAX_BET = 20;
+const NET_MULT = 0.75; // 25% fee on profit only (matches FEE_BPS=2500 in lib.rs)
 // ============================================================
 
-// === Solana brand mark ===
-function SolMark({ size = 32 }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 397 311" fill="none">
-      <defs>
-        <linearGradient id="solg" x1="360" y1="-15" x2="142" y2="402" gradientUnits="userSpaceOnUse">
-          <stop offset="0" stopColor="#00FFA3" /><stop offset="1" stopColor="#DC1FFF" />
-        </linearGradient>
-      </defs>
-      <path d="M64.6 237.9c2.4-2.4 5.7-3.8 9.2-3.8h317.4c5.8 0 8.7 7 4.6 11.1l-62.7 62.7c-2.4 2.4-5.7 3.8-9.2 3.8H6.5c-5.8 0-8.7-7-4.6-11.1l62.7-62.7z" fill="url(#solg)" />
-      <path d="M64.6 3.8C67.1 1.3 70.4 0 73.8 0h317.4c5.8 0 8.7 7 4.6 11.1l-62.7 62.7c-2.4 2.4-5.7 3.8-9.2 3.8H6.5c-5.8 0-8.7-7-4.6-11.1L64.6 3.8z" fill="url(#solg)" />
-      <path d="M333.1 120.1c-2.4-2.4-5.7-3.8-9.2-3.8H6.5c-5.8 0-8.7 7-4.6 11.1l62.7 62.7c2.4 2.4 5.7 3.8 9.2 3.8h317.4c5.8 0 8.7-7 4.6-11.1l-62.7-62.6z" fill="url(#solg)" />
-    </svg>
-  );
-}
-
-// === Sparkline ===
-function Sparkline({ points, lockPrice }) {
-  if (!points || points.length < 2) return null;
-  const max = Math.max(...points, lockPrice);
-  const min = Math.min(...points, lockPrice);
-  const range = max - min || 0.01;
-  const w = 320, h = 56;
-  const path = points.map((p, i) => {
-    const x = (i / (points.length - 1)) * w;
-    const y = h - ((p - min) / range) * h;
-    return `${i === 0 ? 'M' : 'L'} ${x.toFixed(1)} ${y.toFixed(1)}`;
-  }).join(' ');
-  const lockY = h - ((lockPrice - min) / range) * h;
-  const lastUp = points[points.length - 1] >= lockPrice;
-  const color = lastUp ? '#5EFFCC' : '#FF7FB8';
-  return (
-    <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: 'block' }}>
-      <defs>
-        <linearGradient id="sparkfill" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stopColor={color} stopOpacity="0.4" />
-          <stop offset="100%" stopColor={color} stopOpacity="0" />
-        </linearGradient>
-      </defs>
-      <line x1="0" y1={lockY} x2={w} y2={lockY} stroke="#A875FF" strokeDasharray="3 4" strokeWidth="1" opacity="0.6" />
-      <path d={`${path} L ${w} ${h} L 0 ${h} Z`} fill="url(#sparkfill)" />
-      <path d={path} stroke={color} strokeWidth="2.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
-      <circle cx={w} cy={h - ((points[points.length - 1] - min) / range) * h} r="5" fill={color} stroke="#FFF" strokeWidth="1.5" />
-    </svg>
-  );
-}
-
-// === Geo-block check ===
+// ============================================================
+// GEO CHECK
+// ============================================================
 async function checkGeo() {
   const sources = [
     { url: 'https://ipapi.co/json/', field: 'country_code' },
@@ -81,115 +40,208 @@ async function checkGeo() {
   return { country: 'UNKNOWN', blocked: false };
 }
 
-// === Upcoming round card ===
-function UpcomingCard({ data, userBet, connected, placeBet, betAmount, index }) {
-  const { epoch, headsPool, tailsPool, lockTime } = data;
-  const total = headsPool + tailsPool;
-  const headsPayout = headsPool > 0 ? (total / headsPool) * 0.85 : 2.0;
-  const tailsPayout = tailsPool > 0 ? (total / tailsPool) * 0.85 : 2.0;
-  const now = Math.floor(Date.now() / 1000);
-  const startsIn = Math.max(0, lockTime - now);
-  const mins = Math.floor(startsIn / 60);
-  const secs = startsIn % 60;
+// ============================================================
+// BLOCK SCREEN
+// ============================================================
+function BlockScreen({ title, message, sub }) {
+  return (
+    <div className="fp-page">
+      <div className="fp-glow fp-glow-1" />
+      <div className="fp-glow fp-glow-2" />
+      <div className="fp-glow fp-glow-3" />
+      <div className="fp-block-wrap">
+        <div className="fp-block-card">
+          <div className="fp-block-icon">🔒</div>
+          <h2 className="fp-block-title">{title}</h2>
+          <p className="fp-block-msg">{message}</p>
+          {sub && <p className="fp-block-sub">{sub}</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
 
-  const handle = async (side) => {
-    try { await placeBet(epoch, side, betAmount); } catch (e) { console.error(e); }
+// ============================================================
+// ROUND CARD — handles all four states
+// ============================================================
+function RoundCard({ round, state, userBet, livePrice, betAmount, placeBet, claim, claimable }) {
+  const {
+    epoch,
+    headsPool = 0, tailsPool = 0,
+    lockPrice = 0, closePrice = 0,
+    lockTime = 0, closeTime = 0,
+    outcome = 'unresolved',
+  } = round;
+  const totalPool = headsPool + tailsPool;
+  const headsPayout = headsPool > 0 ? 1 + ((totalPool / headsPool) - 1) * NET_MULT : 2.0;
+  const tailsPayout = tailsPool > 0 ? 1 + ((totalPool / tailsPool) - 1) * NET_MULT : 2.0;
+  const now = Math.floor(Date.now() / 1000);
+
+  const isPrev = state === 'previous';
+  const isLive = state === 'live';
+  const isNext = state === 'next';
+  const isLater = state === 'later';
+
+  let badge, badgeColor;
+  if (isPrev)  { badge = 'CLOSED';  badgeColor = '#5D5876'; }
+  if (isLive)  { badge = '● LIVE';  badgeColor = '#14F195'; }
+  if (isNext)  { badge = 'NEXT';    badgeColor = '#9945FF'; }
+  if (isLater) { badge = 'LATER';   badgeColor = '#5D5876'; }
+
+  const priceDiff = isLive && lockPrice != null ? livePrice - lockPrice : 0;
+  const isPriceUp = priceDiff >= 0;
+  const timeLeft = isLive ? Math.max(0, closeTime - now) : 0;
+  const startsIn = isNext || isLater ? Math.max(0, lockTime - now) : 0;
+  const urgent = isLive && timeLeft <= 10 && timeLeft > 0;
+
+  const longWon  = isPrev && outcome === 'heads';
+  const shortWon = isPrev && outcome === 'tails';
+  const tied     = isPrev && outcome === 'tie';
+
+  const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
+
+  const handleSide = (side) => {
+    if (isLive || isNext) placeBet?.(epoch, side, betAmount);
   };
 
   return (
-    <div className="flipsy-upcoming-card" style={{ animationDelay: `${index * 80}ms` }}>
-      <div className="flipsy-upcoming-head">
-        <div className="flipsy-next-badge">⚡ Next</div>
-        <span className="flipsy-epoch">#{epoch}</span>
+    <div className={`fp-card fp-card-${state}`}>
+      {isLive && <div className="fp-card-livering" />}
+
+      {/* HEADER */}
+      <div className="fp-card-head">
+        <span className="fp-card-badge" style={{ color: badgeColor, borderColor: badgeColor + '88' }}>{badge}</span>
+        <span className="fp-card-epoch">#{epoch}</span>
       </div>
 
+      {/* LONG */}
       <button
-        className={`flipsy-bet-btn flipsy-bet-up ${userBet?.side === 'heads' ? 'active' : ''}`}
-        onClick={() => handle('heads')}
-        disabled={!connected || userBet?.side === 'tails'}
+        className={`fp-card-side fp-card-long ${longWon ? 'won' : isPrev ? 'lost' : ''} ${userBet?.side === 'heads' ? 'active' : ''}`}
+        onClick={() => handleSide('heads')}
+        disabled={isPrev || isLater || userBet?.side === 'tails'}
       >
-        <span className="flipsy-bet-btn-left">↑ UP</span>
-        <span>{headsPayout.toFixed(2)}×</span>
+        <div className="fp-card-side-icon">↑</div>
+        <div className="fp-card-side-label">LONG</div>
+        <div className="fp-card-side-mult">{headsPayout.toFixed(2)}×</div>
       </button>
 
-      <div className="flipsy-card-middle">
-        <div className="flipsy-card-middle-row">
-          <span className="flipsy-card-middle-label">Prize Pool</span>
-          <span className="flipsy-card-middle-value">${total.toFixed(2)}</span>
-        </div>
-        <div className="flipsy-card-middle-row">
-          <span className="flipsy-card-middle-label">⏱ Starts in</span>
-          <span style={{ color: '#C49FFF', fontWeight: 800, fontVariantNumeric: 'tabular-nums' }}>
-            {mins}:{String(secs).padStart(2, '0')}
-          </span>
-        </div>
+      {/* MIDDLE */}
+      <div className="fp-card-mid">
+        {isLive && (
+          <>
+            <div className="fp-mid-label">LAST PRICE</div>
+            <div className={`fp-mid-price ${isPriceUp ? 'up' : 'down'}`}>${livePrice.toFixed(4)}</div>
+            <div className={`fp-mid-delta ${isPriceUp ? 'up' : 'down'}`}>
+              {isPriceUp ? '↑' : '↓'} ${Math.abs(priceDiff).toFixed(4)}
+            </div>
+            <div className="fp-mid-divider" />
+            <div className="fp-mid-row">
+              <span>Locked</span>
+              <span className="fp-mid-row-val">${lockPrice.toFixed(2)}</span>
+            </div>
+            <div className="fp-mid-row">
+              <span>Pool</span>
+              <span className="fp-mid-row-val gold">${totalPool.toFixed(2)}</span>
+            </div>
+            <div className={`fp-mid-timer ${urgent ? 'urgent' : ''}`}>
+              {fmtTime(timeLeft)}
+            </div>
+          </>
+        )}
+
+        {isNext && (
+          <>
+            <div className="fp-mid-label">PRIZE POOL</div>
+            <div className="fp-mid-pool">${totalPool.toFixed(2)}</div>
+            <div className="fp-mid-divider" />
+            <div className="fp-mid-payout-preview">
+              <div>If long, win <b>${(betAmount * headsPayout).toFixed(2)}</b></div>
+              <div>If short, win <b>${(betAmount * tailsPayout).toFixed(2)}</b></div>
+            </div>
+            <div className="fp-mid-starts">
+              Starts in <b>{fmtTime(startsIn)}</b>
+            </div>
+          </>
+        )}
+
+        {isLater && (
+          <>
+            <div className="fp-mid-label">UPCOMING</div>
+            <div className="fp-mid-later-icon">⏳</div>
+            <div className="fp-mid-starts">
+              Starts in <b>{fmtTime(startsIn)}</b>
+            </div>
+          </>
+        )}
+
+        {isPrev && (
+          <>
+            <div className="fp-mid-label">CLOSED</div>
+            <div className="fp-mid-row">
+              <span>Lock</span>
+              <span className="fp-mid-row-val">${lockPrice.toFixed(2)}</span>
+            </div>
+            <div className="fp-mid-row">
+              <span>Close</span>
+              <span className="fp-mid-row-val">${closePrice.toFixed(2)}</span>
+            </div>
+            <div className="fp-mid-divider" />
+            <div className={`fp-mid-outcome ${longWon ? 'long' : shortWon ? 'short' : 'tie'}`}>
+              {longWon ? '↑ LONG WON' : shortWon ? '↓ SHORT WON' : '= TIE'}
+            </div>
+            {claimable && (
+              <button className="fp-mid-claim" onClick={() => claim?.(epoch)}>
+                💰 Claim
+              </button>
+            )}
+          </>
+        )}
       </div>
 
+      {/* SHORT */}
       <button
-        className={`flipsy-bet-btn flipsy-bet-down ${userBet?.side === 'tails' ? 'active' : ''}`}
-        onClick={() => handle('tails')}
-        disabled={!connected || userBet?.side === 'heads'}
+        className={`fp-card-side fp-card-short ${shortWon ? 'won' : isPrev ? 'lost' : ''} ${userBet?.side === 'tails' ? 'active' : ''}`}
+        onClick={() => handleSide('tails')}
+        disabled={isPrev || isLater || userBet?.side === 'heads'}
       >
-        <span className="flipsy-bet-btn-left">↓ DOWN</span>
-        <span>{tailsPayout.toFixed(2)}×</span>
+        <div className="fp-card-side-mult">{tailsPayout.toFixed(2)}×</div>
+        <div className="fp-card-side-label">SHORT</div>
+        <div className="fp-card-side-icon">↓</div>
       </button>
 
-      {userBet && (
-        <div className={`flipsy-entered-chip ${userBet.side}`}>
-          <span>✓ Entered</span>
-          <span style={{ fontVariantNumeric: 'tabular-nums' }}>${userBet.amount.toFixed(2)}</span>
+      {userBet && (isLive || isNext) && (
+        <div className={`fp-card-position fp-card-position-${userBet.side}`}>
+          <span>● {userBet.side === 'heads' ? 'LONG' : 'SHORT'}</span>
+          <span>${userBet.amount.toFixed(2)}</span>
         </div>
       )}
     </div>
   );
 }
 
-// === Full-page block screen ===
-function BlockScreen({ title, message, sub }) {
-  return (
-    <div className="flipsy-page">
-      <div className="flipsy-blob flipsy-blob-1" />
-      <div className="flipsy-blob flipsy-blob-2" />
-      <div className="flipsy-blob flipsy-blob-3" />
-      <div style={{
-        minHeight: '70vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-        padding: '40px 24px', position: 'relative', zIndex: 2,
-      }}>
-        <div style={{
-          maxWidth: 480, width: '100%',
-          background: 'rgba(45, 27, 92, 0.55)',
-          backdropFilter: 'blur(24px)',
-          border: '1.5px solid rgba(255, 95, 162, 0.4)',
-          borderRadius: 28, padding: 32, textAlign: 'center',
-          boxShadow: '0 24px 64px rgba(0, 0, 0, 0.4)',
-        }}>
-          <div style={{ fontSize: 48, marginBottom: 12 }}>🔒</div>
-          <h2 style={{
-            margin: 0, fontSize: 24, fontWeight: 900, color: '#FFFFFF', marginBottom: 12,
-          }}>{title}</h2>
-          <p style={{
-            margin: 0, fontSize: 14, lineHeight: 1.6, color: '#C4B5E8', marginBottom: sub ? 14 : 0,
-          }}>{message}</p>
-          {sub && (
-            <p style={{ margin: 0, fontSize: 12, color: '#8B7BB8', fontStyle: 'italic' }}>{sub}</p>
-          )}
-        </div>
-      </div>
-    </div>
-  );
-}
-
+// ============================================================
+// MAIN
+// ============================================================
 export default function Flipsy() {
   const wallet = useWallet();
-  const { liveRound, upcomingRounds, recentRounds, userBets, balance, placeBet, claim, loading } = useFlipsy(wallet);
+  const {
+    livePrice,
+    liveRound,
+    upcomingRounds,
+    recentRounds,
+    userBets,
+    balance,
+    placeBet,
+    claim,
+    loading,
+  } = useFlipsy(wallet);
 
-  const [betAmount, setBetAmount] = useState(1);
-  const [pricePoints, setPricePoints] = useState([]);
+  const [betAmount, setBetAmount] = useState(MIN_BET);
   const [flash, setFlash] = useState(null);
-  const [now, setNow] = useState(Math.floor(Date.now() / 1000));
+  const [geo, setGeo] = useState({ status: 'checking', country: null, blocked: false });
+  const carouselRef = useRef(null);
 
   // Geo check on mount
-  const [geo, setGeo] = useState({ status: 'checking', country: null, blocked: false });
   useEffect(() => {
     let cancelled = false;
     checkGeo().then((res) => {
@@ -199,57 +251,52 @@ export default function Flipsy() {
     return () => { cancelled = true; };
   }, []);
 
-  // Tick now every second for countdown
+  // Auto-scroll to live card when it loads
   useEffect(() => {
-    const i = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
-    return () => clearInterval(i);
-  }, []);
+    if (!liveRound) return;
+    const t = setTimeout(() => {
+      const live = carouselRef.current?.querySelector('.fp-card-live');
+      if (live && carouselRef.current) {
+        const container = carouselRef.current;
+        const cardCenter = live.offsetLeft + live.offsetWidth / 2;
+        container.scrollLeft = cardCenter - container.offsetWidth / 2;
+      }
+    }, 150);
+    return () => clearTimeout(t);
+  }, [liveRound?.epoch]);
 
-  // Track live price for sparkline
+  // Flash auto-dismiss
   useEffect(() => {
-    if (liveRound?.lockPrice) {
-      setPricePoints((pts) => [...pts.slice(-40), liveRound.lockPrice]);
+    if (flash) {
+      const t = setTimeout(() => setFlash(null), 3500);
+      return () => clearTimeout(t);
     }
-  }, [liveRound?.lockPrice]);
-
-  useEffect(() => {
-    if (flash) { const t = setTimeout(() => setFlash(null), 3500); return () => clearTimeout(t); }
   }, [flash]);
 
-  // ============================================================
-  // Admin wallet bypasses all guards
-  // ============================================================
+  // Admin bypasses guards
   const isAdminWallet = wallet.publicKey && wallet.publicKey.toBase58() === ADMIN_WALLET;
 
-  // ============================================================
-  // GUARD 1: Geo-block USA (skipped for admin wallet)
-  // ============================================================
+  // GUARD 1: Geo block
   if (geo.status === 'checking' && !isAdminWallet) {
     return (
-      <div className="flipsy-page">
-        <div style={{
-          minHeight: '60vh', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          color: '#C4B5E8', fontSize: 14, fontWeight: 600,
-        }}>
-          Loading FLIPSY…
+      <div className="fp-page">
+        <div className="fp-block-wrap">
+          <div style={{ color: '#9892B5', fontSize: 14, fontWeight: 600 }}>Loading…</div>
         </div>
       </div>
     );
   }
-
   if (geo.blocked && !isAdminWallet) {
     return (
       <BlockScreen
         title="Not available in your region"
         message="FLIPSY is currently unavailable to users in the United States due to regulatory restrictions."
-        sub="This restriction may change in the future. Thanks for your patience."
+        sub="This restriction may change in the future."
       />
     );
   }
 
-  // ============================================================
-  // GUARD 2: Whitelist only the admin wallet during testing
-  // ============================================================
+  // GUARD 2: Whitelist
   const isWhitelisted = isAdminWallet;
   if (wallet.connected && !isWhitelisted) {
     return (
@@ -261,235 +308,207 @@ export default function Flipsy() {
     );
   }
 
+  // PLACE BET wrapper with feedback
   const handlePlaceBet = async (epoch, side, amount) => {
-    if (!wallet.connected) { setFlash({ type: 'error', msg: 'Connect wallet first' }); return; }
-    if (amount < 0.1 || amount > 5) { setFlash({ type: 'error', msg: '$0.10–$5.00' }); return; }
-    if (balance < amount) { setFlash({ type: 'error', msg: 'Insufficient USDC' }); return; }
+    if (!wallet.connected) {
+      setFlash({ type: 'error', msg: 'Connect wallet first' });
+      return;
+    }
+    if (amount < MIN_BET || amount > MAX_BET) {
+      setFlash({ type: 'error', msg: `$${MIN_BET}–$${MAX_BET}` });
+      return;
+    }
+    if (balance < amount) {
+      setFlash({ type: 'error', msg: 'Insufficient balance' });
+      return;
+    }
     try {
       await placeBet(epoch, side, amount);
-      setFlash({ type: 'success', msg: `Entered #${epoch} ${side === 'heads' ? '↑ UP' : '↓ DOWN'} $${amount.toFixed(2)}` });
+      setFlash({ type: 'success', msg: `${side === 'heads' ? '↑ LONG' : '↓ SHORT'} #${epoch} · $${amount.toFixed(2)}` });
     } catch (e) {
       console.error(e);
       setFlash({ type: 'error', msg: e.message || 'Transaction failed' });
     }
   };
 
-  // Compute display values
-  const livePrice = liveRound?.lockPrice || 0;
-  const lockPrice = liveRound?.lockPrice || 0;
-  const priceDiff = livePrice - lockPrice;
-  const isUp = priceDiff >= 0;
-  const timeLeft = liveRound ? Math.max(0, liveRound.closeTime - now) : 0;
-  const mins = Math.floor(timeLeft / 60);
-  const secs = timeLeft % 60;
-  const totalPool = (liveRound?.headsPool || 0) + (liveRound?.tailsPool || 0);
-  const headsPayout = liveRound && liveRound.headsPool > 0 ? (totalPool / liveRound.headsPool) * 0.85 : 0;
-  const tailsPayout = liveRound && liveRound.tailsPool > 0 ? (totalPool / liveRound.tailsPool) * 0.85 : 0;
+  // CLAIM wrapper with feedback
+  const handleClaim = async (epoch) => {
+    try {
+      await claim(epoch);
+      setFlash({ type: 'success', msg: `Claimed #${epoch}` });
+    } catch (e) {
+      setFlash({ type: 'error', msg: e.message || 'Claim failed' });
+    }
+  };
+
+  // Figure out which previous rounds are claimable by this user
+  const isClaimable = (round) => {
+    const bet = userBets[round.epoch];
+    if (!bet || bet.claimed) return false;
+    if (round.outcome === bet.side) return true;
+    if (round.outcome === 'tie') return true;
+    return false;
+  };
 
   return (
-    <div className="flipsy-page">
+    <div className="fp-page">
       <link rel="preconnect" href="https://fonts.googleapis.com" />
       <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
       <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
 
-      {/* Ambient blobs */}
-      <div className="flipsy-blob flipsy-blob-1" />
-      <div className="flipsy-blob flipsy-blob-2" />
-      <div className="flipsy-blob flipsy-blob-3" />
+      <div className="fp-glow fp-glow-1" />
+      <div className="fp-glow fp-glow-2" />
+      <div className="fp-glow fp-glow-3" />
 
-      {/* Header */}
-      <header className="flipsy-header">
-        <div className="flipsy-brand">
-          <div className="flipsy-mascot-wrap">
-            <div className="flipsy-mascot">
-              <div style={{
-                width: '100%', height: '100%',
-                background: 'linear-gradient(135deg, #C49FFF 0%, #FF7FB8 100%)',
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontSize: 32, fontWeight: 900, color: '#FFF',
-              }}>F</div>
-            </div>
-            <span className="flipsy-sparkle" style={{ top: -4, right: -4, fontSize: 12, color: '#FFD66B', animationDelay: '0s' }}>✦</span>
-            <span className="flipsy-sparkle" style={{ bottom: 4, left: -8, fontSize: 10, color: '#5EFFCC', animationDelay: '0.7s' }}>✦</span>
-            <span className="flipsy-sparkle" style={{ top: 30, right: -10, fontSize: 8, color: '#FF7FB8', animationDelay: '1.4s' }}>✦</span>
-          </div>
+      {/* HEADER */}
+      <header className="fp-header">
+        <div className="fp-brand">
+          <div className="fp-mascot">F</div>
           <div>
-            <div className="flipsy-title">FLIPSY</div>
-            <div className="flipsy-subtitle">
-              <SolMark size={14} /> Solana Predictions
-            </div>
+            <div className="fp-title">FLIPSY</div>
+            <div className="fp-subtitle">Solana Sentiment</div>
           </div>
         </div>
-        <div className="flipsy-actions">
+        <div className="fp-actions">
           {wallet.connected && (
-            <div className="flipsy-balance">
-              <span className="flipsy-balance-label">Balance</span>
-              <span className="flipsy-balance-value">${balance.toFixed(2)}</span>
+            <div className="fp-balance">
+              <span className="fp-balance-label">Bal</span>
+              <span className="fp-balance-val">${balance.toFixed(2)}</span>
             </div>
           )}
-          <WalletMultiButton className="flipsy-connect-btn" />
+          <WalletMultiButton className="fp-connect" />
         </div>
       </header>
 
-      <main className="flipsy-main">
-        {/* Live round hero */}
-        {liveRound && (
-          <div className="flipsy-hero">
-            <div className="flipsy-hero-top">
-              <div className="flipsy-live-badge">
-                <div className="flipsy-pulse-dot" />
-                🔒 LIVE · Round #{liveRound.epoch}
-              </div>
-              <div className="flipsy-timer-pill">
-                ⏱ {String(mins).padStart(2, '0')}:{String(secs).padStart(2, '0')}
-              </div>
-            </div>
+      {/* ROUNDS HEADER */}
+      <div className="fp-rounds-head">
+        <h3 className="fp-rounds-title">Rounds</h3>
+        <span className="fp-rounds-sub">swipe <span className="arrow">←</span></span>
+      </div>
 
-            <div className="flipsy-price-row">
-              <div>
-                <div className="flipsy-price-label">✨ SOL/USD · Live via Pyth</div>
-                <div style={{ display: 'flex', alignItems: 'baseline', gap: 14 }}>
-                  <span className={`flipsy-price-big ${isUp ? 'up' : 'down'}`}>
-                    ${livePrice.toFixed(4)}
-                  </span>
-                  <span className={`flipsy-delta-pill ${isUp ? 'up' : 'down'}`}>
-                    {isUp ? '↑' : '↓'} ${Math.abs(priceDiff).toFixed(4)}
-                  </span>
-                </div>
-                <div className="flipsy-locked-row">
-                  🔒 Locked at <span className="flipsy-locked-value">${lockPrice.toFixed(4)}</span>
-                </div>
-              </div>
-              <div className="flipsy-chart-card">
-                <div className="flipsy-chart-label">Last 40s</div>
-                <Sparkline points={pricePoints} lockPrice={lockPrice} />
-              </div>
-            </div>
-
-            <div className="flipsy-pool-split">
-              <div className="flipsy-pool-row">
-                <div className="flipsy-pool-side">
-                  <span className="flipsy-pool-chip up">↑ UP {headsPayout.toFixed(2)}×</span>
-                  <span className="flipsy-pool-amount">${liveRound.headsPool.toFixed(2)}</span>
-                </div>
-                <div className="flipsy-pool-side">
-                  <span className="flipsy-pool-amount">${liveRound.tailsPool.toFixed(2)}</span>
-                  <span className="flipsy-pool-chip down">{tailsPayout.toFixed(2)}× DOWN ↓</span>
-                </div>
-              </div>
-              <div className="flipsy-pool-bar">
-                <div className="flipsy-pool-bar-up" style={{ width: totalPool > 0 ? `${(liveRound.headsPool / totalPool) * 100}%` : '50%' }} />
-                <div className="flipsy-pool-bar-down" style={{ width: totalPool > 0 ? `${(liveRound.tailsPool / totalPool) * 100}%` : '50%' }} />
-              </div>
-              <div className="flipsy-pool-total">
-                Total prize pool · <span className="flipsy-pool-total-value">${totalPool.toFixed(2)}</span>
-              </div>
+      {/* CAROUSEL */}
+      <div className="fp-carousel" ref={carouselRef}>
+        {loading && !liveRound && (
+          <div className="fp-card fp-card-loading">
+            <div style={{ textAlign: 'center', padding: 60, color: '#9892B5', fontSize: 13 }}>
+              Loading rounds…
             </div>
           </div>
         )}
 
-        {/* Upcoming */}
-        <div className="flipsy-section-head">
-          <h3 className="flipsy-section-title">Upcoming</h3>
-          <span className="flipsy-section-sub">Enter anytime · max $5/round</span>
-        </div>
-        <div className="flipsy-upcoming-grid">
-          {upcomingRounds.map((r, idx) => (
-            <UpcomingCard
-              key={r.epoch}
-              data={r}
-              userBet={userBets[r.epoch]}
-              connected={wallet.connected}
-              placeBet={handlePlaceBet}
-              betAmount={betAmount}
-              index={idx}
-            />
-          ))}
-        </div>
+        {/* Previous rounds — oldest first so live is centered when scrolled to */}
+        {[...recentRounds].reverse().map(r => (
+          <RoundCard
+            key={`prev-${r.epoch}`}
+            round={r}
+            state="previous"
+            userBet={userBets[r.epoch]}
+            livePrice={livePrice}
+            betAmount={betAmount}
+            placeBet={handlePlaceBet}
+            claim={handleClaim}
+            claimable={isClaimable(r)}
+          />
+        ))}
 
-        {/* Bottom row */}
-        <div className="flipsy-bottom-grid">
-          <div className="flipsy-bottom-card">
-            <div className="flipsy-bet-amount-head">
-              <h3 className="flipsy-bet-amount-title">Bet Amount</h3>
-              <span className="flipsy-fee-tag">5% fee</span>
-            </div>
-            <div className="flipsy-amount-box">
-              <div className="flipsy-amount-row">
-                <button className="flipsy-amount-step" onClick={() => setBetAmount(a => +Math.max(0.1, a - 0.5).toFixed(2))}>−</button>
-                <input
-                  type="number" min={0.1} max={5} step={0.1}
-                  value={betAmount}
-                  onChange={(e) => setBetAmount(Math.max(0.1, Math.min(5, +(+e.target.value || 0.1).toFixed(2))))}
-                  className="flipsy-amount-input"
-                />
-                <button className="flipsy-amount-step" onClick={() => setBetAmount(a => +Math.min(5, a + 0.5).toFixed(2))}>+</button>
-              </div>
-              <div className="flipsy-quick-row">
-                {[0.5, 1, 2.5, 5].map(v => (
-                  <button key={v} className={`flipsy-quick-btn ${betAmount === v ? 'active' : ''}`} onClick={() => setBetAmount(v)}>
-                    ${v}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="flipsy-fee-row">
-              <div><span>Deposit fee (5%)</span><span className="fee-deduct">−${(betAmount * 0.05).toFixed(2)}</span></div>
-              <div><span className="fee-net-label">In pool</span><span className="fee-net">${(betAmount * 0.95).toFixed(2)}</span></div>
-            </div>
-            {flash && <div className={`flipsy-flash ${flash.type}`}>{flash.msg}</div>}
+        {/* LIVE round */}
+        {liveRound && (
+          <RoundCard
+            round={liveRound}
+            state="live"
+            userBet={userBets[liveRound.epoch]}
+            livePrice={livePrice}
+            betAmount={betAmount}
+            placeBet={handlePlaceBet}
+          />
+        )}
+
+        {/* NEXT round */}
+        {upcomingRounds[0] && (
+          <RoundCard
+            key={`next-${upcomingRounds[0].epoch}`}
+            round={upcomingRounds[0]}
+            state="next"
+            userBet={userBets[upcomingRounds[0].epoch]}
+            livePrice={livePrice}
+            betAmount={betAmount}
+            placeBet={handlePlaceBet}
+          />
+        )}
+
+        {/* LATER rounds */}
+        {upcomingRounds.slice(1).map(r => (
+          <RoundCard
+            key={`later-${r.epoch}`}
+            round={r}
+            state="later"
+            userBet={userBets[r.epoch]}
+            livePrice={livePrice}
+            betAmount={betAmount}
+            placeBet={handlePlaceBet}
+          />
+        ))}
+      </div>
+
+      {/* BOTTOM */}
+      <div className="fp-bottom">
+        <div className="fp-bottom-card">
+          <div className="fp-bottom-head">
+            <h3 className="fp-bottom-title">Position Size</h3>
+            <span className="fp-bottom-tag">25% fee</span>
           </div>
-
-          <div className="flipsy-bottom-card">
-            <div className="flipsy-history-head">
-              📜 <h3 className="flipsy-bet-amount-title">Recent</h3>
+          <div className="fp-amt-box">
+            <div className="fp-amt-row">
+              <button className="fp-amt-step" onClick={() => setBetAmount(a => +Math.max(MIN_BET, a - 1).toFixed(2))}>−</button>
+              <input
+                type="number" min={MIN_BET} max={MAX_BET} step={1}
+                value={betAmount}
+                onChange={(e) => setBetAmount(Math.max(MIN_BET, Math.min(MAX_BET, +(+e.target.value || MIN_BET).toFixed(2))))}
+                className="fp-amt-input"
+              />
+              <button className="fp-amt-step" onClick={() => setBetAmount(a => +Math.min(MAX_BET, a + 1).toFixed(2))}>+</button>
             </div>
-            <div className="flipsy-history-list">
-              {recentRounds.length === 0 && (
-                <div style={{ padding: 20, textAlign: 'center', color: '#8B7BB8', fontSize: 13 }}>
-                  No completed rounds yet
-                </div>
-              )}
-              {recentRounds.map(h => (
-                <div key={h.epoch} className="flipsy-history-item">
-                  <div className="flipsy-history-epoch">#{h.epoch}</div>
-                  <div className="flipsy-history-prices">
-                    {h.lockPrice.toFixed(2)} → {h.closePrice.toFixed(2)}
-                  </div>
-                  <div className={`flipsy-history-result ${h.outcome === 'heads' ? 'up' : h.outcome === 'tails' ? 'down' : 'tie'}`}>
-                    {h.outcome === 'heads' ? '↑ UP' : h.outcome === 'tails' ? '↓ DOWN' : '= TIE'}
-                  </div>
-                </div>
+            <div className="fp-quick-row">
+              {[5, 10, 15, 20].map(v => (
+                <button
+                  key={v}
+                  className={`fp-quick ${betAmount === v ? 'active' : ''}`}
+                  onClick={() => setBetAmount(v)}
+                >${v}</button>
               ))}
             </div>
+          </div>
+          {flash && <div className={`fp-flash ${flash.type}`}>{flash.msg}</div>}
+        </div>
 
-            {Object.entries(userBets).map(([epoch, bet]) => {
-              const round = recentRounds.find(r => r.epoch === parseInt(epoch));
-              if (!round || bet.claimed) return null;
-              const won = round.outcome === bet.side;
-              const tie = round.outcome === 'tie';
-              if (!won && !tie) return null;
-              return (
-                <button
-                  key={epoch}
-                  onClick={async () => {
-                    try { await claim(parseInt(epoch)); setFlash({ type: 'success', msg: `Claimed #${epoch}` }); }
-                    catch (e) { setFlash({ type: 'error', msg: e.message || 'Claim failed' }); }
-                  }}
-                  className="flipsy-bet-btn flipsy-bet-up"
-                  style={{ marginTop: 10 }}
-                >
-                  💰 Claim #{epoch}
-                </button>
-              );
-            })}
+        <div className="fp-bottom-card">
+          <div className="fp-bottom-head">
+            <h3 className="fp-bottom-title">History</h3>
+          </div>
+          <div className="fp-hist-list">
+            {recentRounds.length === 0 && (
+              <div style={{ padding: 20, textAlign: 'center', color: '#5D5876', fontSize: 12, fontWeight: 600 }}>
+                No completed rounds yet
+              </div>
+            )}
+            {recentRounds.map(h => (
+              <div key={h.epoch} className="fp-hist-item">
+                <div className="fp-hist-epoch">#{h.epoch}</div>
+                <div className="fp-hist-prices">
+                  {h.lockPrice.toFixed(2)} → {h.closePrice.toFixed(2)}
+                </div>
+                <div className={`fp-hist-result ${h.outcome === 'heads' ? 'up' : h.outcome === 'tails' ? 'down' : 'tie'}`}>
+                  {h.outcome === 'heads' ? 'LONG' : h.outcome === 'tails' ? 'SHORT' : 'TIE'}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
+      </div>
 
-        <div className="flipsy-footer">
-          Non-custodial · Funds in program PDA · Resolved by Pyth · Max $5 · 5% deposit · 15% on winnings
-        </div>
-      </main>
+      <div className="fp-footer">
+        Powered by Solana · Non-custodial · 25% program fee on wins · No other fees
+      </div>
     </div>
   );
 }
