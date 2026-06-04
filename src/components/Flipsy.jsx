@@ -11,7 +11,7 @@ const BLOCKED_COUNTRIES = ['US'];
 
 const MIN_BET = 5;
 const MAX_BET = 20;
-const NET_MULT = 0.75; // 25% fee on profit only (matches FEE_BPS=2500 in lib.rs)
+const NET_MULT = 0.75;
 // ============================================================
 
 async function checkGeo() {
@@ -220,7 +220,7 @@ function RoundCard({ round, state, userBet, livePrice, placeBet, claim, claimabl
 // ============================================================
 // MAIN
 // ============================================================
-export default function Flipsy() {
+export default function Flipsy({ onConnectWallet }) {
   const wallet = useWallet();
 
   // Load eruda mobile console for debugging — REMOVE before production launch.
@@ -305,7 +305,7 @@ export default function Flipsy() {
 
   const handlePlaceBet = async (epoch, side, amount) => {
     if (!wallet.connected) {
-      setFlash({ type: 'error', msg: 'Connect wallet first' });
+      onConnectWallet?.();
       return;
     }
     if (!isAdminWallet) {
@@ -326,6 +326,10 @@ export default function Flipsy() {
   };
 
   const handleClaim = async (epoch) => {
+    if (!wallet.connected) {
+      onConnectWallet?.();
+      return;
+    }
     if (!isAdminWallet) {
       setFlash({ type: 'error', msg: 'Private beta — wallet not authorized' });
       return;
@@ -391,8 +395,12 @@ export default function Flipsy() {
               <span className="fp-balance-val">${balance.toFixed(2)}</span>
             </div>
           ) : (
-            <div className="fp-balance" style={{ color: '#9892B5', fontSize: 11 }}>
-              Connect wallet in header
+            <div
+              className="fp-balance"
+              style={{ cursor: 'pointer', color: '#14F195', fontSize: 11, fontWeight: 800 }}
+              onClick={() => onConnectWallet?.()}
+            >
+              Connect Wallet
             </div>
           )}
         </div>
