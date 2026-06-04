@@ -175,7 +175,10 @@
   padding: 8px 24px 24px;
   overflow-x: auto;
   overflow-y: visible;
-  scroll-snap-type: x mandatory;
+  scroll-snap-type: x proximity;
+  /* Allow vertical page scroll to pass through horizontal carousel on touch */
+  touch-action: pan-x pan-y;
+  overscroll-behavior-x: contain;
   scrollbar-width: none;
   -ms-overflow-style: none;
   -webkit-overflow-scrolling: touch;
@@ -187,7 +190,7 @@
 /* ============ ROUND CARD ============ */
 .fp-card {
   flex-shrink: 0;
-  width: 280px;
+  width: min(280px, 80vw);
   min-height: 440px;
   scroll-snap-align: center;
   background: linear-gradient(180deg, rgba(22, 22, 38, 0.85) 0%, rgba(14, 14, 26, 0.85) 100%);
@@ -210,7 +213,7 @@
 .fp-card-later    { opacity: 0.7; }
 
 .fp-card-live {
-  width: 320px;
+  width: min(320px, 88vw);
   min-height: 480px;
   border-color: rgba(20, 241, 149, 0.55);
   box-shadow:
@@ -744,4 +747,3 @@
   color: #5D5876;
   font-style: italic;
 }
- 
