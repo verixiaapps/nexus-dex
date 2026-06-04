@@ -16,10 +16,12 @@ const POLL_PRICE_MS = 2_500;
 const POLL_CHAIN_MS = 5_000;
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
-const PRICE_SCALE = 100_000_000;
+const PRICE_SCALE = 1e8; // crank stores Math.round(price * 1e8)
 
 const BETTING_DURATION = 360;
 const GAP_DURATION = 30;
+
+const RECENT_ROUNDS_COUNT = 10; // show last 10 rounds instead of 3
 
 // ============================================================
 // PDA HELPERS
@@ -71,10 +73,16 @@ function sideToVariant(side) {
 function mapRound(r, livePrice) {
   const headsSol = lamportsToSol(r.headsPool);
   const tailsSol = lamportsToSol(r.tailsPool);
+  const lockPrice = chainPriceToUsd(r.lockPrice);
+  const closePrice = chainPriceToUsd(r.closePrice);
+
+  // Debug log to verify price decoding
+  console.log(`[flipsy] epoch=${bnToNumber(r.epoch)} lockPrice raw=${bnToNumber(r.lockPrice)} decoded=$${lockPrice.toFixed(2)} closePrice raw=${bnToNumber(r.closePrice)} decoded=$${closePrice.toFixed(2)} outcome=${outcomeStr(r.outcome)}`);
+
   return {
     epoch: bnToNumber(r.epoch),
-    lockPrice: chainPriceToUsd(r.lockPrice),
-    closePrice: chainPriceToUsd(r.closePrice),
+    lockPrice,
+    closePrice,
     startTime: bnToNumber(r.startTime),
     lockTime: bnToNumber(r.lockTime),
     closeTime: bnToNumber(r.closeTime),
@@ -118,7 +126,7 @@ export function useFlipsy(wallet) {
   const [liveRound, setLiveRound] = useState(null);
   const [upcomingRounds, setUpcomingRounds] = useState([]);
   const [recentRounds, setRecentRounds] = useState([]);
-  // FIX: userBets is { [epoch]: BetObject[] } — array per epoch to support multiple bets
+  // userBets: { [epoch]: BetObject[] } — array per epoch, supports multiple bets
   const [userBets, setUserBets] = useState({});
   const [balance, setBalance] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -165,6 +173,8 @@ export function useFlipsy(wallet) {
         const currentEpoch = bnToNumber(config.currentEpoch);
         const price = livePriceRef.current;
 
+        console.log(`[flipsy] currentEpoch=${currentEpoch} solPrice=$${price}`);
+
         // Live round
         let live = null;
         if (currentEpoch > 0) {
@@ -175,7 +185,7 @@ export function useFlipsy(wallet) {
           } catch (_) {}
         }
 
-        // Upcoming rounds
+        // Upcoming rounds (3 ahead)
         const upcomingEpochs = [currentEpoch + 1, currentEpoch + 2, currentEpoch + 3];
         const liveCloseTime = live?.closeTime || Math.floor(Date.now() / 1000) + BETTING_DURATION;
         const baseStart = liveCloseTime + GAP_DURATION;
@@ -193,9 +203,11 @@ export function useFlipsy(wallet) {
           }),
         );
 
-        // Recent rounds
+        // Recent rounds — last 10
         const recentEpochs = [];
-        for (let i = 1; i <= 3; i++) if (currentEpoch - i > 0) recentEpochs.push(currentEpoch - i);
+        for (let i = 1; i <= RECENT_ROUNDS_COUNT; i++) {
+          if (currentEpoch - i > 0) recentEpochs.push(currentEpoch - i);
+        }
         const allRecent = currentEpoch > 0 ? [currentEpoch, ...recentEpochs] : recentEpochs;
         const recents = await Promise.all(
           allRecent.map(async (e) => {
@@ -207,13 +219,14 @@ export function useFlipsy(wallet) {
           }),
         );
 
-        // FIX: user bets — group ALL bets as array per epoch
+        // User bets — all bets grouped as array per epoch
         let userBetsMap = {};
         if (wallet?.publicKey) {
           try {
             const bets = await program.account.bet.all([
               { memcmp: { offset: 8, bytes: wallet.publicKey.toBase58() } },
             ]);
+            console.log(`[flipsy] found ${bets.length} bets for wallet`);
             for (const b of bets) {
               const epoch = bnToNumber(b.account.epoch);
               const sol = lamportsToSol(b.account.amount);
@@ -225,11 +238,12 @@ export function useFlipsy(wallet) {
                 betIndex: bnToNumber(b.account.betIndex),
                 pubkey: b.publicKey,
               };
+              console.log(`[flipsy] bet epoch=${epoch} side=${betObj.side} amount=$${betObj.amount.toFixed(2)} claimed=${betObj.claimed}`);
               if (!userBetsMap[epoch]) userBetsMap[epoch] = [];
               userBetsMap[epoch].push(betObj);
             }
           } catch (e) {
-            console.warn('Flipsy: failed to fetch user bets', e);
+            console.warn('[flipsy] failed to fetch user bets:', e);
           }
         }
 
@@ -250,7 +264,7 @@ export function useFlipsy(wallet) {
         setBalance(walletBalanceUsd);
         setLoading(false);
       } catch (e) {
-        console.error('Flipsy state fetch error:', e);
+        console.error('[flipsy] state fetch error:', e);
       }
     }
 
@@ -268,11 +282,13 @@ export function useFlipsy(wallet) {
     const solAmount = usdAmount / price;
     const lamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
 
-    // FIX: compute next betIndex from full array of existing bets for this epoch
+    // Next betIndex from full array of existing bets for this epoch
     const existingBets = userBets[epoch] || [];
     const betIndex = existingBets.length > 0
       ? Math.max(...existingBets.map(b => b.betIndex)) + 1
       : 0;
+
+    console.log(`[flipsy] placeBet epoch=${epoch} side=${side} usd=$${usdAmount} lamports=${lamports} betIndex=${betIndex}`);
 
     const configPda = findConfigPda();
     const roundPda = findRoundPda(epoch);
@@ -296,15 +312,17 @@ export function useFlipsy(wallet) {
           systemProgram: SystemProgram.programId,
         })
         .rpc();
+      console.log(`[flipsy] placeBet tx=${tx}`);
       return tx;
     } catch (e) {
       const msg = e?.error?.errorMessage || e?.message || 'Bet failed';
+      console.error('[flipsy] placeBet error:', e);
       throw new Error(msg);
     }
   }, [program, wallet?.publicKey, userBets]);
 
   // -------- CLAIM --------
-  // Claims all unclaimed winning bets for an epoch one by one
+  // Claims all unclaimed bets for an epoch
   const claim = useCallback(async (epoch) => {
     if (!program || !wallet?.publicKey) throw new Error('Connect your wallet first');
 
@@ -331,8 +349,10 @@ export function useFlipsy(wallet) {
             user: wallet.publicKey,
           })
           .rpc();
+        console.log(`[flipsy] claimed betIndex=${bet.betIndex} tx=${lastTx}`);
       } catch (e) {
         const msg = e?.error?.errorMessage || e?.message || 'Claim failed';
+        console.error('[flipsy] claim error:', e);
         throw new Error(msg);
       }
     }
