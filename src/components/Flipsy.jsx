@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { useFlipsy } from '../hooks/useFlipsy';
 import './Flipsy.css';
 
@@ -275,6 +274,15 @@ export default function Flipsy() {
     }
   }, [hookError]);
 
+  // 1-sec ticker drives smooth countdown re-renders independent of chain polls.
+  // Without this the timer only updates when chain data refreshes (every 5s),
+  // making the display jump in 3-5 second increments.
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const i = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(i);
+  }, []);
+
   // Auto-scroll to live card when it loads
   useEffect(() => {
     if (!liveRound) return;
@@ -370,13 +378,16 @@ export default function Flipsy() {
           </div>
         </div>
         <div className="fp-actions">
-          {wallet.connected && (
+          {wallet.connected ? (
             <div className="fp-balance">
               <span className="fp-balance-label">Bal</span>
               <span className="fp-balance-val">${balance.toFixed(2)}</span>
             </div>
+          ) : (
+            <div className="fp-balance" style={{ color: '#9892B5', fontSize: 11 }}>
+              Connect wallet in header
+            </div>
           )}
-          <WalletMultiButton className="fp-connect" />
         </div>
       </header>
 
@@ -512,4 +523,3 @@ export default function Flipsy() {
     </div>
   );
 }
- 
