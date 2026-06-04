@@ -10,6 +10,10 @@ const PROGRAM_ID = new PublicKey('71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs')
 const SUPER_ADMIN = new PublicKey('GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA');
 const PRICE_URL = 'https://api.coinbase.com/v2/prices/SOL-USD/spot';
 
+// Flipsy is deployed on devnet — use a dedicated devnet connection regardless
+// of what the rest of the app's wallet adapter is configured for (mainnet).
+const FLIPSY_RPC = 'https://api.devnet.solana.com';
+
 const POLL_PRICE_MS = 2_500;
 const POLL_CHAIN_MS = 5_000;
 
@@ -114,7 +118,11 @@ function stubRound(epoch, expectedStartTime) {
 // HOOK
 // ============================================================
 export function useFlipsy(wallet) {
-  const { connection } = useConnection();
+  // Always use devnet for Flipsy, regardless of the app's main connection
+  const connection = useMemo(
+    () => new Connection(FLIPSY_RPC, 'confirmed'),
+    [],
+  );
   const [livePrice, setLivePrice] = useState(0);
   const [liveRound, setLiveRound] = useState(null);
   const [upcomingRounds, setUpcomingRounds] = useState([]);
