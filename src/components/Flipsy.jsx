@@ -8,58 +8,11 @@ import './Flipsy.css';
 // TESTING GUARDS — remove or open up before public launch
 // ============================================================
 const ADMIN_WALLET = 'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA';
-const BLOCKED_COUNTRIES = ['US'];
 
 const MIN_BET = 5;
 const MAX_BET = 20;
 const NET_MULT = 0.75; // 25% fee on profit only (matches FEE_BPS=2500 in lib.rs)
 // ============================================================
-
-// ============================================================
-// GEO CHECK
-// ============================================================
-async function checkGeo() {
-  const sources = [
-    { url: 'https://ipapi.co/json/', field: 'country_code' },
-    { url: 'https://api.country.is/', field: 'country' },
-  ];
-  for (const src of sources) {
-    try {
-      const ctrl = new AbortController();
-      const timeout = setTimeout(() => ctrl.abort(), 4000);
-      const res = await fetch(src.url, { signal: ctrl.signal });
-      clearTimeout(timeout);
-      if (!res.ok) continue;
-      const data = await res.json();
-      const cc = (data[src.field] || '').toUpperCase();
-      if (cc) return { country: cc, blocked: BLOCKED_COUNTRIES.includes(cc) };
-    } catch {
-      // try next source
-    }
-  }
-  return { country: 'UNKNOWN', blocked: false };
-}
-
-// ============================================================
-// BLOCK SCREEN
-// ============================================================
-function BlockScreen({ title, message, sub }) {
-  return (
-    <div className="fp-page">
-      <div className="fp-glow fp-glow-1" />
-      <div className="fp-glow fp-glow-2" />
-      <div className="fp-glow fp-glow-3" />
-      <div className="fp-block-wrap">
-        <div className="fp-block-card">
-          <div className="fp-block-icon">🔒</div>
-          <h2 className="fp-block-title">{title}</h2>
-          <p className="fp-block-msg">{message}</p>
-          {sub && <p className="fp-block-sub">{sub}</p>}
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ============================================================
 // ROUND CARD — handles all four states
@@ -238,18 +191,7 @@ export default function Flipsy() {
 
   const [betAmount, setBetAmount] = useState(MIN_BET);
   const [flash, setFlash] = useState(null);
-  const [geo, setGeo] = useState({ status: 'checking', country: null, blocked: false });
   const carouselRef = useRef(null);
-
-  // Geo check on mount
-  useEffect(() => {
-    let cancelled = false;
-    checkGeo().then((res) => {
-      if (cancelled) return;
-      setGeo({ status: 'ready', country: res.country, blocked: res.blocked });
-    });
-    return () => { cancelled = true; };
-  }, []);
 
   // Auto-scroll to live card when it loads
   useEffect(() => {
@@ -273,45 +215,17 @@ export default function Flipsy() {
     }
   }, [flash]);
 
-  // Admin bypasses guards
+  // Admin wallet check (only your wallet can bet/claim — page itself is always visible)
   const isAdminWallet = wallet.publicKey && wallet.publicKey.toBase58() === ADMIN_WALLET;
-
-  // GUARD 1: Geo block
-  if (geo.status === 'checking' && !isAdminWallet) {
-    return (
-      <div className="fp-page">
-        <div className="fp-block-wrap">
-          <div style={{ color: '#9892B5', fontSize: 14, fontWeight: 600 }}>Loading…</div>
-        </div>
-      </div>
-    );
-  }
-  if (geo.blocked && !isAdminWallet) {
-    return (
-      <BlockScreen
-        title="Not available in your region"
-        message="FLIPSY is currently unavailable to users in the United States due to regulatory restrictions."
-        sub="This restriction may change in the future."
-      />
-    );
-  }
-
-  // GUARD 2: Whitelist
-  const isWhitelisted = isAdminWallet;
-  if (wallet.connected && !isWhitelisted) {
-    return (
-      <BlockScreen
-        title="Restricted Access"
-        message="FLIPSY is in private beta. Your wallet is not on the access list."
-        sub="Public launch coming soon."
-      />
-    );
-  }
 
   // PLACE BET wrapper with feedback
   const handlePlaceBet = async (epoch, side, amount) => {
     if (!wallet.connected) {
       setFlash({ type: 'error', msg: 'Connect wallet first' });
+      return;
+    }
+    if (!isAdminWallet) {
+      setFlash({ type: 'error', msg: 'Private beta — wallet not authorized' });
       return;
     }
     if (amount < MIN_BET || amount > MAX_BET) {
@@ -333,6 +247,10 @@ export default function Flipsy() {
 
   // CLAIM wrapper with feedback
   const handleClaim = async (epoch) => {
+    if (!isAdminWallet) {
+      setFlash({ type: 'error', msg: 'Private beta — wallet not authorized' });
+      return;
+    }
     try {
       await claim(epoch);
       setFlash({ type: 'success', msg: `Claimed #${epoch}` });
