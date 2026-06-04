@@ -8,11 +8,54 @@ import './Flipsy.css';
 // TESTING GUARDS — remove or open up before public launch
 // ============================================================
 const ADMIN_WALLET = 'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA';
+const BLOCKED_COUNTRIES = ['US'];
 
 const MIN_BET = 5;
 const MAX_BET = 20;
 const NET_MULT = 0.75; // 25% fee on profit only (matches FEE_BPS=2500 in lib.rs)
 // ============================================================
+
+// Geo check — runs in background. Page renders regardless; block screen
+// only appears if geo resolves to a blocked country AND wallet isn't admin.
+async function checkGeo() {
+  const sources = [
+    { url: 'https://ipapi.co/json/', field: 'country_code' },
+    { url: 'https://api.country.is/', field: 'country' },
+  ];
+  for (const src of sources) {
+    try {
+      const ctrl = new AbortController();
+      const timeout = setTimeout(() => ctrl.abort(), 4000);
+      const res = await fetch(src.url, { signal: ctrl.signal });
+      clearTimeout(timeout);
+      if (!res.ok) continue;
+      const data = await res.json();
+      const cc = (data[src.field] || '').toUpperCase();
+      if (cc) return { country: cc, blocked: BLOCKED_COUNTRIES.includes(cc) };
+    } catch {
+      // try next source
+    }
+  }
+  return { country: 'UNKNOWN', blocked: false };
+}
+
+function BlockScreen({ title, message, sub }) {
+  return (
+    <div className="fp-page">
+      <div className="fp-glow fp-glow-1" />
+      <div className="fp-glow fp-glow-2" />
+      <div className="fp-glow fp-glow-3" />
+      <div className="fp-block-wrap">
+        <div className="fp-block-card">
+          <div className="fp-block-icon">🔒</div>
+          <h2 className="fp-block-title">{title}</h2>
+          <p className="fp-block-msg">{message}</p>
+          {sub && <p className="fp-block-sub">{sub}</p>}
+        </div>
+      </div>
+    </div>
+  );
+}
 
 // ============================================================
 // ROUND CARD — handles all four states
@@ -177,21 +220,60 @@ function RoundCard({ round, state, userBet, livePrice, betAmount, placeBet, clai
 // ============================================================
 export default function Flipsy() {
   const wallet = useWallet();
+
+  // Load eruda mobile console for debugging — REMOVE before production launch.
+  // Tap the floating gear icon (bottom-right) to see errors / network / etc.
+  useEffect(() => {
+    if (typeof window === 'undefined' || window.eruda) return;
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/eruda';
+    s.onload = () => { try { window.eruda?.init(); } catch (e) { console.error(e); } };
+    document.head.appendChild(s);
+  }, []);
+
+  // Call useFlipsy defensively. If the hook itself throws (bad IDL, anchor version
+  // mismatch, missing Buffer polyfill, etc), fall back to empty data so the
+  // page shell still renders and we can see WHAT'S broken via eruda.
+  let hookData = null;
+  let hookError = null;
+  try {
+    hookData = useFlipsy(wallet);
+  } catch (e) {
+    hookError = e;
+    console.error('[Flipsy] useFlipsy threw:', e);
+  }
   const {
-    livePrice,
-    liveRound,
-    upcomingRounds,
-    recentRounds,
-    userBets,
-    balance,
-    placeBet,
-    claim,
-    loading,
-  } = useFlipsy(wallet);
+    livePrice = 0,
+    liveRound = null,
+    upcomingRounds = [],
+    recentRounds = [],
+    userBets = {},
+    balance = 0,
+    placeBet = async () => { throw new Error('Hook not ready'); },
+    claim = async () => { throw new Error('Hook not ready'); },
+    loading = true,
+  } = hookData || {};
 
   const [betAmount, setBetAmount] = useState(MIN_BET);
   const [flash, setFlash] = useState(null);
+  const [geo, setGeo] = useState({ blocked: false, ready: false });
   const carouselRef = useRef(null);
+
+  // Geo check — fires once on mount, never blocks render
+  useEffect(() => {
+    let cancelled = false;
+    checkGeo().then((res) => {
+      if (!cancelled) setGeo({ blocked: res.blocked, ready: true });
+    });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Surface hook error to user via flash so it's visible without console
+  useEffect(() => {
+    if (hookError) {
+      setFlash({ type: 'error', msg: `Hook crashed: ${hookError.message || 'see console'}` });
+    }
+  }, [hookError]);
 
   // Auto-scroll to live card when it loads
   useEffect(() => {
