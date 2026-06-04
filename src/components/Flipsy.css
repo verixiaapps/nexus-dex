@@ -19,16 +19,17 @@
 .fp-glow {
   position: absolute;
   border-radius: 50%;
-  filter: blur(100px);
+  filter: blur(60px);
   pointer-events: none;
+  will-change: opacity;
 }
-.fp-glow-1 { top: -10%; left: -8%; width: 540px; height: 540px;
-  background: radial-gradient(circle, #9945FF 0%, transparent 60%); opacity: 0.35; }
-.fp-glow-2 { top: 35%; right: -8%; width: 480px; height: 480px;
-  background: radial-gradient(circle, #00D9FF 0%, transparent 60%); opacity: 0.28;
+.fp-glow-1 { top: -10%; left: -8%; width: 380px; height: 380px;
+  background: radial-gradient(circle, #9945FF 0%, transparent 60%); opacity: 0.28; }
+.fp-glow-2 { top: 35%; right: -8%; width: 340px; height: 340px;
+  background: radial-gradient(circle, #00D9FF 0%, transparent 60%); opacity: 0.22;
   animation: fp-glow-pulse 9s ease-in-out infinite alternate; }
-.fp-glow-3 { bottom: -10%; left: 30%; width: 520px; height: 520px;
-  background: radial-gradient(circle, #14F195 0%, transparent 60%); opacity: 0.25;
+.fp-glow-3 { bottom: -10%; left: 30%; width: 360px; height: 360px;
+  background: radial-gradient(circle, #14F195 0%, transparent 60%); opacity: 0.2;
   animation: fp-glow-pulse 13s ease-in-out infinite alternate-reverse; }
 @keyframes fp-glow-pulse {
   0%   { opacity: 0.2; transform: scale(1); }
@@ -194,7 +195,7 @@
   min-height: 440px;
   scroll-snap-align: center;
   background: linear-gradient(180deg, rgba(22, 22, 38, 0.85) 0%, rgba(14, 14, 26, 0.85) 100%);
-  backdrop-filter: blur(24px);
+  backdrop-filter: blur(12px);
   border: 1px solid rgba(153, 69, 255, 0.22);
   border-radius: 36px;
   padding: 16px;
