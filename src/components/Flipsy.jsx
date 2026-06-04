@@ -98,8 +98,9 @@ function RoundCard({ round, state, userBet, livePrice, placeBet, claim, claimabl
 
   const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
+  // FIX 2: Allow betting on live AND next/later cards
   const handleSide = (side) => {
-    if (isNext || isLater) placeBet?.(epoch, side, MIN_BET);
+    if (isLive || isNext || isLater) placeBet?.(epoch, side, MIN_BET);
   };
 
   return (
@@ -116,7 +117,8 @@ function RoundCard({ round, state, userBet, livePrice, placeBet, claim, claimabl
       <button
         className={`fp-card-side fp-card-long ${longWon ? 'won' : isPrev ? 'lost' : ''} ${userBet?.side === 'heads' ? 'active' : ''}`}
         onClick={() => handleSide('heads')}
-        disabled={isPrev || isLive || userBet?.side === 'tails'}
+        // FIX 2: removed isLive from disabled — only block on previous rounds or already bet other side
+        disabled={isPrev || userBet?.side === 'tails'}
       >
         <div className="fp-card-side-icon">↑</div>
         <div className="fp-card-side-label">LONG</div>
@@ -200,7 +202,8 @@ function RoundCard({ round, state, userBet, livePrice, placeBet, claim, claimabl
       <button
         className={`fp-card-side fp-card-short ${shortWon ? 'won' : isPrev ? 'lost' : ''} ${userBet?.side === 'tails' ? 'active' : ''}`}
         onClick={() => handleSide('tails')}
-        disabled={isPrev || isLive || userBet?.side === 'heads'}
+        // FIX 2: removed isLive from disabled — only block on previous rounds or already bet other side
+        disabled={isPrev || userBet?.side === 'heads'}
       >
         <div className="fp-card-side-mult">{tailsPayout.toFixed(2)}×</div>
         <div className="fp-card-side-label">SHORT</div>
@@ -270,8 +273,9 @@ export default function Flipsy({ onConnectWallet }) {
     }
   }, [hookError]);
 
+  // FIX 1: increased delay to 400ms and added loading as dependency
   useEffect(() => {
-    if (!liveRound) return;
+    if (!liveRound || loading) return;
     const t = setTimeout(() => {
       const live = carouselRef.current?.querySelector('.fp-card-live');
       if (live && carouselRef.current) {
@@ -279,9 +283,9 @@ export default function Flipsy({ onConnectWallet }) {
         const cardCenter = live.offsetLeft + live.offsetWidth / 2;
         container.scrollLeft = cardCenter - container.offsetWidth / 2;
       }
-    }, 150);
+    }, 400);
     return () => clearTimeout(t);
-  }, [liveRound?.epoch]);
+  }, [liveRound?.epoch, loading]);
 
   useEffect(() => {
     if (flash) {
