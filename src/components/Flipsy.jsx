@@ -3,15 +3,11 @@ import { useWallet } from '@solana/wallet-adapter-react';
 import { useFlipsy } from '../hooks/useFlipsy';
 import './Flipsy.css';
 
-// ============================================================
-// TESTING GUARDS
-// ============================================================
 const ADMIN_WALLET = 'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA';
 const BLOCKED_COUNTRIES = ['US'];
 const MIN_BET = 1;
 const MAX_BET = 500;
 const NET_MULT = 0.75;
-// ============================================================
 
 async function checkGeo() {
   const sources = [
@@ -52,6 +48,168 @@ function BlockScreen({ title, message, sub }) {
 }
 
 // ============================================================
+// ROUNDS HISTORY POPUP
+// ============================================================
+function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
+  useEffect(() => {
+    if (!open) return;
+    const fn = (e) => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', fn);
+    return () => window.removeEventListener('keydown', fn);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const getBetsForEpoch = (epoch) => {
+    const b = userBets[epoch];
+    if (!b) return [];
+    return Array.isArray(b) ? b : [b];
+  };
+
+  const isClaimable = (round) => {
+    const bets = getBetsForEpoch(round.epoch);
+    return bets.some(b => {
+      if (b.claimed) return false;
+      if (round.outcome === b.side) return true;
+      if (round.outcome === 'tie') return true;
+      return false;
+    });
+  };
+
+  const rounds = [...recentRounds].reverse();
+
+  return (
+    <>
+      <div onClick={onClose} style={{
+        position: 'fixed', inset: 0, zIndex: 200,
+        background: 'rgba(0,0,0,0.75)',
+        backdropFilter: 'blur(6px)',
+      }} />
+      <div style={{
+        position: 'fixed', bottom: 0, left: '50%',
+        transform: 'translateX(-50%)',
+        width: '100%', maxWidth: 480,
+        zIndex: 201,
+        background: 'linear-gradient(180deg, #12111f 0%, #0a0a14 100%)',
+        borderTop: '2px solid rgba(153,69,255,0.4)',
+        borderRadius: '28px 28px 0 0',
+        maxHeight: '75vh',
+        display: 'flex', flexDirection: 'column',
+        fontFamily: 'Inter, sans-serif',
+        animation: 'fp-modal-up 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
+      }}>
+        {/* Handle */}
+        <div style={{ flexShrink: 0, padding: '16px 20px 0' }}>
+          <div style={{ width: 40, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.12)', margin: '0 auto 16px' }} />
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+            <div style={{ fontSize: 16, fontWeight: 900, color: '#fff', letterSpacing: '0.04em' }}>My Rounds</div>
+            <button onClick={onClose} style={{
+              background: 'rgba(255,255,255,0.06)', border: 'none',
+              borderRadius: '50%', width: 30, height: 30,
+              color: '#9892B5', cursor: 'pointer', fontSize: 13,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+            }}>✕</button>
+          </div>
+        </div>
+
+        {/* List */}
+        <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px 16px' }}>
+          {rounds.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '40px 0', color: '#5D5876', fontSize: 13, fontWeight: 600 }}>
+              No completed rounds yet
+            </div>
+          )}
+          {rounds.map(r => {
+            const bets = getBetsForEpoch(r.epoch);
+            const canClaim = isClaimable(r);
+            const longTotal = bets.filter(b => b.side === 'heads').reduce((s, b) => s + b.amount, 0);
+            const shortTotal = bets.filter(b => b.side === 'tails').reduce((s, b) => s + b.amount, 0);
+            const won = (r.outcome === 'heads' && longTotal > 0) || (r.outcome === 'tails' && shortTotal > 0);
+            const lost = (r.outcome === 'heads' && shortTotal > 0 && !longTotal) ||
+                         (r.outcome === 'tails' && longTotal > 0 && !shortTotal) ||
+                         (r.outcome !== 'tie' && r.outcome !== 'unresolved' && bets.length > 0 && !won && !canClaim);
+            const tie = r.outcome === 'tie' && bets.length > 0;
+            const userPlayed = bets.length > 0;
+
+            let resultColor = '#5D5876';
+            let resultLabel = r.outcome === 'heads' ? '↑ LONG WON' : r.outcome === 'tails' ? '↓ SHORT WON' : '= TIE';
+            if (userPlayed && won) resultColor = '#14F195';
+            if (userPlayed && lost) resultColor = '#DC1FFF';
+            if (userPlayed && tie) resultColor = '#9945FF';
+
+            return (
+              <div key={r.epoch} style={{
+                background: 'rgba(255,255,255,0.03)',
+                border: `1px solid ${userPlayed ? (won || canClaim ? 'rgba(20,241,149,0.2)' : lost ? 'rgba(220,31,255,0.2)' : 'rgba(153,69,255,0.2)') : 'rgba(255,255,255,0.06)'}`,
+                borderRadius: 16, padding: '12px 14px', marginBottom: 8,
+                display: 'flex', alignItems: 'center', gap: 12,
+              }}>
+                {/* Epoch */}
+                <div style={{ minWidth: 36, textAlign: 'center' }}>
+                  <div style={{ fontSize: 10, color: '#5D5876', fontWeight: 700, letterSpacing: '0.1em' }}>RND</div>
+                  <div style={{ fontSize: 14, fontWeight: 900, color: '#9945FF' }}>#{r.epoch}</div>
+                </div>
+
+                {/* Prices */}
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  <div style={{ fontSize: 11, color: '#5D5876', fontVariantNumeric: 'tabular-nums' }}>
+                    ${r.lockPrice.toFixed(2)} → ${r.closePrice.toFixed(2)}
+                  </div>
+                  {userPlayed && (
+                    <div style={{ marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                      {longTotal > 0 && (
+                        <span style={{ fontSize: 10, color: '#14F195', fontWeight: 700 }}>↑ ${longTotal.toFixed(2)}</span>
+                      )}
+                      {shortTotal > 0 && (
+                        <span style={{ fontSize: 10, color: '#DC1FFF', fontWeight: 700 }}>↓ ${shortTotal.toFixed(2)}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                {/* Result / Claim */}
+                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                  {canClaim ? (
+                    <button onClick={() => onClaim(r.epoch)} style={{
+                      background: 'linear-gradient(135deg, #FFD66B, #FFC247)',
+                      border: 'none', borderRadius: 10, padding: '7px 12px',
+                      color: '#1A0F00', fontWeight: 900, fontSize: 11,
+                      cursor: 'pointer', fontFamily: 'Inter, sans-serif',
+                      letterSpacing: '0.06em',
+                      boxShadow: '0 4px 12px rgba(255,214,107,0.4)',
+                    }}>💰 Collect</button>
+                  ) : (
+                    <div style={{
+                      fontSize: 10, fontWeight: 900, color: resultColor,
+                      letterSpacing: '0.08em', padding: '5px 10px',
+                      background: resultColor + '18',
+                      border: `1px solid ${resultColor}44`,
+                      borderRadius: 8,
+                    }}>
+                      {userPlayed && lost ? '💔 LOST' : userPlayed && tie ? '= TIE' : resultLabel}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* 3 day forfeit note */}
+          <div style={{
+            marginTop: 8, padding: '10px 14px', borderRadius: 12,
+            background: 'rgba(255,214,107,0.06)',
+            border: '1px solid rgba(255,214,107,0.15)',
+            fontSize: 10, color: '#9892B5', lineHeight: 1.5, textAlign: 'center',
+          }}>
+            ⚠️ Uncollected winnings are forfeited after <span style={{ color: '#FFD66B', fontWeight: 800 }}>3 days</span>. Collect promptly.
+          </div>
+        </div>
+      </div>
+    </>
+  );
+}
+
+// ============================================================
 // BET MODAL
 // ============================================================
 function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, tailsPayout }) {
@@ -62,9 +220,7 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
 
   useEffect(() => {
     if (open) {
-      setAmount('5');
-      setStatus('idle');
-      setErrMsg('');
+      setAmount('5'); setStatus('idle'); setErrMsg('');
       setTimeout(() => inputRef.current?.focus(), 100);
     }
   }, [open]);
@@ -88,8 +244,7 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
 
   const handleTrade = async () => {
     if (amt <= 0 || insufficient) return;
-    setStatus('signing');
-    setErrMsg('');
+    setStatus('signing'); setErrMsg('');
     try {
       await onTrade(epoch, side, amt);
       setStatus('success');
@@ -102,97 +257,47 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
 
   return (
     <>
-      <div onClick={onClose} style={{
-        position: 'fixed', inset: 0, zIndex: 200,
-        background: 'rgba(0,0,0,0.75)',
-        backdropFilter: 'blur(6px)',
-      }} />
+      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)' }} />
       <div style={{
-        position: 'fixed', bottom: 0, left: '50%',
-        transform: 'translateX(-50%)',
-        width: '100%', maxWidth: 480,
-        zIndex: 201,
+        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
+        width: '100%', maxWidth: 480, zIndex: 301,
         background: 'linear-gradient(180deg, #12111f 0%, #0a0a14 100%)',
-        borderTop: `2px solid ${sideColor}55`,
-        borderRadius: '28px 28px 0 0',
-        padding: '20px 20px 36px',
-        fontFamily: 'Inter, sans-serif',
+        borderTop: `2px solid ${sideColor}55`, borderRadius: '28px 28px 0 0',
+        padding: '20px 20px 36px', fontFamily: 'Inter, sans-serif',
         animation: 'fp-modal-up 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
       }}>
-        {/* Handle */}
         <div style={{ width: 40, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.12)', margin: '0 auto 18px' }} />
-
-        {/* Header */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{
-              padding: '6px 16px', borderRadius: 999,
-              background: sideColor + '18', border: `1px solid ${sideColor}66`,
-              color: sideColor, fontWeight: 900, fontSize: 14, letterSpacing: '0.1em',
-            }}>{sideLabel}</div>
+            <div style={{ padding: '6px 16px', borderRadius: 999, background: sideColor + '18', border: `1px solid ${sideColor}66`, color: sideColor, fontWeight: 900, fontSize: 14, letterSpacing: '0.1em' }}>{sideLabel}</div>
             <span style={{ color: '#5D5876', fontSize: 12 }}>Round #{epoch}</span>
           </div>
-          <button onClick={onClose} style={{
-            background: 'rgba(255,255,255,0.06)', border: 'none',
-            borderRadius: '50%', width: 32, height: 32,
-            color: '#9892B5', cursor: 'pointer', fontSize: 14,
-            display: 'flex', alignItems: 'center', justifyContent: 'center',
-          }}>✕</button>
+          <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.06)', border: 'none', borderRadius: '50%', width: 32, height: 32, color: '#9892B5', cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
         </div>
 
-        {/* Amount input */}
-        <div style={{
-          background: 'rgba(6,6,12,0.8)',
-          border: `1.5px solid ${status === 'error' ? '#DC1FFF66' : sideColor + '44'}`,
-          borderRadius: 18, padding: '14px 18px', marginBottom: 12,
-        }}>
+        <div style={{ background: 'rgba(6,6,12,0.8)', border: `1.5px solid ${status === 'error' ? '#DC1FFF66' : sideColor + '44'}`, borderRadius: 18, padding: '14px 18px', marginBottom: 12 }}>
           <div style={{ fontSize: 10, color: '#5D5876', fontWeight: 700, letterSpacing: '0.2em', marginBottom: 6 }}>AMOUNT (USD)</div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 26, fontWeight: 900, color: '#5D5876' }}>$</span>
-            <input
-              ref={inputRef}
-              type="number" min={MIN_BET} max={MAX_BET}
-              value={amount}
+            <input ref={inputRef} type="number" min={MIN_BET} max={MAX_BET} value={amount}
               onChange={e => { setAmount(e.target.value); setStatus('idle'); setErrMsg(''); }}
               disabled={status === 'signing' || status === 'success'}
-              style={{
-                flex: 1, background: 'transparent', border: 'none', outline: 'none',
-                fontSize: 34, fontWeight: 900, color: '#FFFFFF',
-                fontFamily: 'Inter, sans-serif', fontVariantNumeric: 'tabular-nums',
-              }}
-            />
-            {balance != null && (
-              <span style={{ fontSize: 10, color: '#5D5876', whiteSpace: 'nowrap' }}>
-                Bal: ${balance.toFixed(2)}
-              </span>
-            )}
+              style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 34, fontWeight: 900, color: '#FFFFFF', fontFamily: 'Inter, sans-serif', fontVariantNumeric: 'tabular-nums' }} />
+            {balance != null && <span style={{ fontSize: 10, color: '#5D5876', whiteSpace: 'nowrap' }}>Bal: ${balance.toFixed(2)}</span>}
           </div>
         </div>
 
-        {/* Quick amounts */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
           {[5, 10, 25, 50].map(v => (
             <button key={v} onClick={() => { setAmount(String(v)); setStatus('idle'); setErrMsg(''); }}
               disabled={status === 'signing' || status === 'success'}
-              style={{
-                flex: 1, padding: '8px 0', borderRadius: 999,
-                background: parseFloat(amount) === v ? sideColor + '22' : 'rgba(255,255,255,0.04)',
-                border: `1px solid ${parseFloat(amount) === v ? sideColor + '88' : 'rgba(255,255,255,0.08)'}`,
-                color: parseFloat(amount) === v ? sideColor : '#9892B5',
-                fontWeight: 800, fontSize: 13, cursor: 'pointer',
-                fontFamily: 'Inter, sans-serif', transition: 'all 0.15s',
-              }}
+              style={{ flex: 1, padding: '8px 0', borderRadius: 999, background: parseFloat(amount) === v ? sideColor + '22' : 'rgba(255,255,255,0.04)', border: `1px solid ${parseFloat(amount) === v ? sideColor + '88' : 'rgba(255,255,255,0.08)'}`, color: parseFloat(amount) === v ? sideColor : '#9892B5', fontWeight: 800, fontSize: 13, cursor: 'pointer', fontFamily: 'Inter, sans-serif', transition: 'all 0.15s' }}
             >${v}</button>
           ))}
         </div>
 
-        {/* Est payout */}
         {amt > 0 && (
-          <div style={{
-            background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)',
-            borderRadius: 14, padding: '12px 16px', marginBottom: 14,
-            display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          }}>
+          <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 14, padding: '12px 16px', marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <div style={{ fontSize: 10, color: '#5D5876', fontWeight: 700, letterSpacing: '0.15em', marginBottom: 3 }}>EST. PAYOUT</div>
               <div style={{ fontSize: 22, fontWeight: 900, color: sideColor, fontVariantNumeric: 'tabular-nums' }}>${estWin.toFixed(2)}</div>
@@ -204,7 +309,6 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
           </div>
         )}
 
-        {/* Status messages */}
         {status === 'signing' && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '10px', marginBottom: 10, color: sideColor, fontSize: 13, fontWeight: 700 }}>
             <div style={{ width: 16, height: 16, borderRadius: '50%', border: `2px solid ${sideColor}`, borderTopColor: 'transparent', animation: 'fp-spin 0.7s linear infinite' }} />
@@ -212,37 +316,18 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
           </div>
         )}
         {status === 'success' && (
-          <div style={{ textAlign: 'center', padding: '10px', marginBottom: 10, color: '#14F195', fontSize: 14, fontWeight: 800, animation: 'fp-pop 0.3s cubic-bezier(0.34,1.56,0.64,1)' }}>
-            ✓ Trade placed!
-          </div>
+          <div style={{ textAlign: 'center', padding: '10px', marginBottom: 10, color: '#14F195', fontSize: 14, fontWeight: 800, animation: 'fp-pop 0.3s cubic-bezier(0.34,1.56,0.64,1)' }}>✓ Trade placed!</div>
         )}
         {status === 'error' && errMsg && (
-          <div style={{ padding: '10px 14px', marginBottom: 10, borderRadius: 12, background: 'rgba(220,31,255,0.1)', border: '1px solid #DC1FFF44', color: '#DC1FFF', fontSize: 12, fontWeight: 700 }}>
-            {errMsg}
-          </div>
+          <div style={{ padding: '10px 14px', marginBottom: 10, borderRadius: 12, background: 'rgba(220,31,255,0.1)', border: '1px solid #DC1FFF44', color: '#DC1FFF', fontSize: 12, fontWeight: 700 }}>{errMsg}</div>
         )}
 
-        {/* Trade button */}
         {status !== 'success' && (
-          <button
-            onClick={handleTrade}
-            disabled={amt <= 0 || insufficient || status === 'signing'}
-            style={{
-              width: '100%', padding: '16px', borderRadius: 18, border: 'none',
-              background: insufficient ? 'rgba(255,255,255,0.06)'
-                : status === 'signing' ? 'rgba(255,255,255,0.08)'
-                : `linear-gradient(135deg, ${sideColor}, ${isLong ? '#00D9FF' : '#9945FF'})`,
-              color: insufficient || status === 'signing' ? '#5D5876' : isLong ? '#001A0F' : '#FFFFFF',
-              fontFamily: 'Inter, sans-serif', fontWeight: 900, fontSize: 16,
-              letterSpacing: '0.08em', cursor: insufficient || status === 'signing' ? 'not-allowed' : 'pointer',
-              boxShadow: insufficient || status === 'signing' ? 'none' : `0 8px 30px ${sideColor}44`,
-              transition: 'all 0.2s',
-            }}
-          >
+          <button onClick={handleTrade} disabled={amt <= 0 || insufficient || status === 'signing'}
+            style={{ width: '100%', padding: '16px', borderRadius: 18, border: 'none', background: insufficient ? 'rgba(255,255,255,0.06)' : status === 'signing' ? 'rgba(255,255,255,0.08)' : `linear-gradient(135deg, ${sideColor}, ${isLong ? '#00D9FF' : '#9945FF'})`, color: insufficient || status === 'signing' ? '#5D5876' : isLong ? '#001A0F' : '#FFFFFF', fontFamily: 'Inter, sans-serif', fontWeight: 900, fontSize: 16, letterSpacing: '0.08em', cursor: insufficient || status === 'signing' ? 'not-allowed' : 'pointer', boxShadow: insufficient || status === 'signing' ? 'none' : `0 8px 30px ${sideColor}44`, transition: 'all 0.2s' }}>
             {insufficient ? 'Insufficient Balance' : status === 'signing' ? 'Signing…' : 'Trade'}
           </button>
         )}
-
         <div style={{ textAlign: 'center', marginTop: 10, fontSize: 10, color: '#5D5876', fontWeight: 600, letterSpacing: '0.1em' }}>
           NETWORK FEE ~0.000005 SOL · 25% FEE ON WINNINGS ONLY
         </div>
@@ -255,12 +340,7 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
 // ROUND CARD
 // ============================================================
 function RoundCard({ round, state, userBets, livePrice, onSideTap, claim, claimable }) {
-  const {
-    epoch, headsPool = 0, tailsPool = 0,
-    lockPrice = 0, closePrice = 0,
-    lockTime = 0, closeTime = 0,
-    outcome = 'unresolved',
-  } = round;
+  const { epoch, headsPool = 0, tailsPool = 0, lockPrice = 0, closePrice = 0, lockTime = 0, closeTime = 0, outcome = 'unresolved' } = round;
   const totalPool = headsPool + tailsPool;
   const headsPayout = headsPool > 0 ? 1 + ((totalPool / headsPool) - 1) * NET_MULT : 2.0;
   const tailsPayout = tailsPool > 0 ? 1 + ((totalPool / tailsPool) - 1) * NET_MULT : 2.0;
@@ -278,128 +358,85 @@ function RoundCard({ round, state, userBets, livePrice, onSideTap, claim, claima
   }, [isLive]);
 
   let badge, badgeColor;
-  if (isPrev)  { badge = 'CLOSED';  badgeColor = '#5D5876'; }
-  if (isLive)  { badge = '● LIVE';  badgeColor = '#14F195'; }
-  if (isNext)  { badge = 'NEXT';    badgeColor = '#9945FF'; }
-  if (isLater) { badge = 'LATER';   badgeColor = '#5D5876'; }
+  if (isPrev)  { badge = 'CLOSED'; badgeColor = '#5D5876'; }
+  if (isLive)  { badge = '● LIVE'; badgeColor = '#14F195'; }
+  if (isNext)  { badge = 'NEXT';   badgeColor = '#9945FF'; }
+  if (isLater) { badge = 'LATER';  badgeColor = '#5D5876'; }
 
   const priceDiff = isLive && lockPrice != null ? livePrice - lockPrice : 0;
   const isPriceUp = priceDiff >= 0;
   const timeLeft = isLive ? Math.max(0, closeTime - now) : 0;
   const startsIn = isNext || isLater ? Math.max(0, lockTime - now) : 0;
   const urgent = isLive && timeLeft <= 10 && timeLeft > 0;
-
-  const longWon  = isPrev && outcome === 'heads';
+  const longWon = isPrev && outcome === 'heads';
   const shortWon = isPrev && outcome === 'tails';
-
   const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
-  // Sum up all bets by side for display
   const betsArr = Array.isArray(userBets) ? userBets : (userBets ? [userBets] : []);
   const longTotal = betsArr.filter(b => b.side === 'heads').reduce((s, b) => s + b.amount, 0);
   const shortTotal = betsArr.filter(b => b.side === 'tails').reduce((s, b) => s + b.amount, 0);
-  const hasLong = longTotal > 0;
-  const hasShort = shortTotal > 0;
 
   return (
     <div className={`fp-card fp-card-${state}`}>
       {isLive && <div className="fp-card-livering" />}
-
       <div className="fp-card-head">
         <span className="fp-card-badge" style={{ color: badgeColor, borderColor: badgeColor + '88' }}>{badge}</span>
         <span className="fp-card-epoch">#{epoch}</span>
       </div>
 
-      {/* LONG button — disabled only on previous rounds */}
-      <button
-        className={`fp-card-side fp-card-long ${longWon ? 'won' : isPrev ? 'lost' : ''} ${hasLong ? 'active' : ''}`}
-        onClick={() => !isPrev && onSideTap(epoch, 'heads', headsPayout, tailsPayout)}
-        disabled={isPrev}
-      >
+      <button className={`fp-card-side fp-card-long ${longWon ? 'won' : isPrev ? 'lost' : ''} ${longTotal > 0 ? 'active' : ''}`}
+        onClick={() => !isPrev && onSideTap(epoch, 'heads', headsPayout, tailsPayout)} disabled={isPrev}>
         <div className="fp-card-side-icon">↑</div>
         <div className="fp-card-side-label">LONG</div>
         <div className="fp-card-side-mult">{headsPayout.toFixed(2)}×</div>
       </button>
 
       <div className="fp-card-mid">
-        {isLive && (
-          <>
-            <div className="fp-mid-label">LAST PRICE</div>
-            <div className={`fp-mid-price ${isPriceUp ? 'up' : 'down'}`}>${livePrice.toFixed(4)}</div>
-            <div className={`fp-mid-delta ${isPriceUp ? 'up' : 'down'}`}>
-              {isPriceUp ? '↑' : '↓'} ${Math.abs(priceDiff).toFixed(4)}
-            </div>
-            <div className="fp-mid-divider" />
-            <div className="fp-mid-row">
-              <span>Locked</span>
-              <span className="fp-mid-row-val">${lockPrice.toFixed(2)}</span>
-            </div>
-            <div className="fp-mid-row">
-              <span>Pool</span>
-              <span className="fp-mid-row-val gold">${totalPool.toFixed(2)}</span>
-            </div>
-            <div className={`fp-mid-timer ${urgent ? 'urgent' : ''}`}>{fmtTime(timeLeft)}</div>
-          </>
-        )}
-        {isNext && (
-          <>
-            <div className="fp-mid-label">PRIZE POOL</div>
-            <div className="fp-mid-pool">${totalPool.toFixed(2)}</div>
-            <div className="fp-mid-divider" />
-            <div className="fp-mid-payout-preview">
-              <div>Long wins <b>${(5 * headsPayout).toFixed(2)}</b> per $5</div>
-              <div>Short wins <b>${(5 * tailsPayout).toFixed(2)}</b> per $5</div>
-            </div>
-            <div className="fp-mid-starts">Starts in <b>{fmtTime(startsIn)}</b></div>
-          </>
-        )}
-        {isLater && (
-          <>
-            <div className="fp-mid-label">UPCOMING</div>
-            <div className="fp-mid-later-icon">⏳</div>
-            <div className="fp-mid-starts">Starts in <b>{fmtTime(startsIn)}</b></div>
-          </>
-        )}
-        {isPrev && (
-          <>
-            <div className="fp-mid-label">CLOSED</div>
-            <div className="fp-mid-row"><span>Lock</span><span className="fp-mid-row-val">${lockPrice.toFixed(2)}</span></div>
-            <div className="fp-mid-row"><span>Close</span><span className="fp-mid-row-val">${closePrice.toFixed(2)}</span></div>
-            <div className="fp-mid-divider" />
-            <div className={`fp-mid-outcome ${longWon ? 'long' : shortWon ? 'short' : 'tie'}`}>
-              {longWon ? '↑ LONG WON' : shortWon ? '↓ SHORT WON' : '= TIE'}
-            </div>
-            {claimable && (
-              <button className="fp-mid-claim" onClick={() => claim?.(epoch)}>💰 Claim Winnings</button>
-            )}
-          </>
-        )}
+        {isLive && (<>
+          <div className="fp-mid-label">LAST PRICE</div>
+          <div className={`fp-mid-price ${isPriceUp ? 'up' : 'down'}`}>${livePrice.toFixed(4)}</div>
+          <div className={`fp-mid-delta ${isPriceUp ? 'up' : 'down'}`}>{isPriceUp ? '↑' : '↓'} ${Math.abs(priceDiff).toFixed(4)}</div>
+          <div className="fp-mid-divider" />
+          <div className="fp-mid-row"><span>Locked</span><span className="fp-mid-row-val">${lockPrice.toFixed(2)}</span></div>
+          <div className="fp-mid-row"><span>Pool</span><span className="fp-mid-row-val gold">${totalPool.toFixed(2)}</span></div>
+          <div className={`fp-mid-timer ${urgent ? 'urgent' : ''}`}>{fmtTime(timeLeft)}</div>
+        </>)}
+        {isNext && (<>
+          <div className="fp-mid-label">PRIZE POOL</div>
+          <div className="fp-mid-pool">${totalPool.toFixed(2)}</div>
+          <div className="fp-mid-divider" />
+          <div className="fp-mid-payout-preview">
+            <div>Long wins <b>${(5 * headsPayout).toFixed(2)}</b> per $5</div>
+            <div>Short wins <b>${(5 * tailsPayout).toFixed(2)}</b> per $5</div>
+          </div>
+          <div className="fp-mid-starts">Starts in <b>{fmtTime(startsIn)}</b></div>
+        </>)}
+        {isLater && (<>
+          <div className="fp-mid-label">UPCOMING</div>
+          <div className="fp-mid-later-icon">⏳</div>
+          <div className="fp-mid-starts">Starts in <b>{fmtTime(startsIn)}</b></div>
+        </>)}
+        {isPrev && (<>
+          <div className="fp-mid-label">CLOSED</div>
+          <div className="fp-mid-row"><span>Lock</span><span className="fp-mid-row-val">${lockPrice.toFixed(2)}</span></div>
+          <div className="fp-mid-row"><span>Close</span><span className="fp-mid-row-val">${closePrice.toFixed(2)}</span></div>
+          <div className="fp-mid-divider" />
+          <div className={`fp-mid-outcome ${longWon ? 'long' : shortWon ? 'short' : 'tie'}`}>
+            {longWon ? '↑ LONG WON' : shortWon ? '↓ SHORT WON' : '= TIE'}
+          </div>
+          {claimable && <button className="fp-mid-claim" onClick={() => claim?.(epoch)}>💰 Claim Winnings</button>}
+        </>)}
       </div>
 
-      {/* SHORT button — disabled only on previous rounds */}
-      <button
-        className={`fp-card-side fp-card-short ${shortWon ? 'won' : isPrev ? 'lost' : ''} ${hasShort ? 'active' : ''}`}
-        onClick={() => !isPrev && onSideTap(epoch, 'tails', headsPayout, tailsPayout)}
-        disabled={isPrev}
-      >
+      <button className={`fp-card-side fp-card-short ${shortWon ? 'won' : isPrev ? 'lost' : ''} ${shortTotal > 0 ? 'active' : ''}`}
+        onClick={() => !isPrev && onSideTap(epoch, 'tails', headsPayout, tailsPayout)} disabled={isPrev}>
         <div className="fp-card-side-mult">{tailsPayout.toFixed(2)}×</div>
         <div className="fp-card-side-label">SHORT</div>
         <div className="fp-card-side-icon">↓</div>
       </button>
 
-      {/* Position chips — show totals per side */}
-      {hasLong && !isPrev && (
-        <div className="fp-card-position fp-card-position-heads">
-          <span>● LONG</span>
-          <span>${longTotal.toFixed(2)}</span>
-        </div>
-      )}
-      {hasShort && !isPrev && (
-        <div className="fp-card-position fp-card-position-tails">
-          <span>● SHORT</span>
-          <span>${shortTotal.toFixed(2)}</span>
-        </div>
-      )}
+      {longTotal > 0 && !isPrev && <div className="fp-card-position fp-card-position-heads"><span>● LONG</span><span>${longTotal.toFixed(2)}</span></div>}
+      {shortTotal > 0 && !isPrev && <div className="fp-card-position fp-card-position-tails"><span>● SHORT</span><span>${shortTotal.toFixed(2)}</span></div>}
     </div>
   );
 }
@@ -418,27 +455,20 @@ export default function Flipsy({ onConnectWallet }) {
     document.head.appendChild(s);
   }, []);
 
-  let hookData = null;
-  let hookError = null;
-  try {
-    hookData = useFlipsy(wallet);
-  } catch (e) {
-    hookError = e;
-    console.error('[Flipsy] useFlipsy threw:', e);
-  }
-  const {
-    livePrice = 0, liveRound = null,
-    upcomingRounds = [], recentRounds = [],
-    userBets = {}, balance = 0,
+  let hookData = null, hookError = null;
+  try { hookData = useFlipsy(wallet); }
+  catch (e) { hookError = e; console.error('[Flipsy] useFlipsy threw:', e); }
+
+  const { livePrice = 0, liveRound = null, upcomingRounds = [], recentRounds = [], userBets = {}, balance = 0,
     placeBet = async () => { throw new Error('Hook not ready'); },
     claim = async () => { throw new Error('Hook not ready'); },
-    loading = true,
-  } = hookData || {};
+    loading = true } = hookData || {};
 
   const [flash, setFlash] = useState(null);
   const [geo, setGeo] = useState({ blocked: false, ready: false });
-  const carouselRef = useRef(null);
   const [betModal, setBetModal] = useState(null);
+  const [roundsOpen, setRoundsOpen] = useState(false);
+  const carouselRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -468,23 +498,24 @@ export default function Flipsy({ onConnectWallet }) {
 
   const isAdminWallet = wallet.publicKey && wallet.publicKey.toBase58() === ADMIN_WALLET;
 
-  const isClaimable = (round) => {
-    const bet = userBets[round.epoch];
-    if (!bet || bet.claimed) return false;
-    if (round.outcome === bet.side) return true;
-    if (round.outcome === 'tie') return true;
-    return false;
-  };
-
-  const claimableRounds = recentRounds.filter(r => isClaimable(r));
-  const hasClaim = claimableRounds.length > 0;
-
-  // Get all bets for an epoch as array
   const getBetsForEpoch = (epoch) => {
     const b = userBets[epoch];
     if (!b) return [];
     return Array.isArray(b) ? b : [b];
   };
+
+  const isClaimable = (round) => {
+    const bets = getBetsForEpoch(round.epoch);
+    return bets.some(b => {
+      if (b.claimed) return false;
+      if (round.outcome === b.side) return true;
+      if (round.outcome === 'tie') return true;
+      return false;
+    });
+  };
+
+  const claimableRounds = recentRounds.filter(r => isClaimable(r));
+  const hasClaim = claimableRounds.length > 0;
 
   const handleSideTap = (epoch, side, headsPayout, tailsPayout) => {
     if (!wallet.connected) { onConnectWallet?.(); return; }
@@ -504,6 +535,7 @@ export default function Flipsy({ onConnectWallet }) {
     try {
       await claim(epoch);
       setFlash({ type: 'success', msg: `💰 Claimed #${epoch}` });
+      setRoundsOpen(false);
     } catch (e) {
       setFlash({ type: 'error', msg: e.message || 'Claim failed' });
     }
@@ -524,10 +556,9 @@ export default function Flipsy({ onConnectWallet }) {
       <div className="fp-glow fp-glow-3" />
 
       {hasClaim && (
-        <div className="fp-claim-banner" onClick={() => handleClaim(claimableRounds[0].epoch)}>
+        <div className="fp-claim-banner" onClick={() => setRoundsOpen(true)}>
           <span className="fp-claim-banner-icon">💰</span>
-          <span>Round #{claimableRounds[0].epoch} — tap to collect winnings</span>
-          {claimableRounds.length > 1 && <span className="fp-claim-banner-count">+{claimableRounds.length - 1} more</span>}
+          <span>{claimableRounds.length} round{claimableRounds.length > 1 ? 's' : ''} ready to collect</span>
         </div>
       )}
 
@@ -542,6 +573,24 @@ export default function Flipsy({ onConnectWallet }) {
           </div>
         </div>
         <div className="fp-actions">
+          {/* Rounds button */}
+          <button onClick={() => setRoundsOpen(true)} style={{
+            background: hasClaim ? 'rgba(255,214,107,0.15)' : 'rgba(153,69,255,0.12)',
+            border: `1px solid ${hasClaim ? 'rgba(255,214,107,0.4)' : 'rgba(153,69,255,0.3)'}`,
+            borderRadius: 999, padding: '6px 14px',
+            color: hasClaim ? '#FFD66B' : '#9945FF',
+            fontFamily: 'Inter, sans-serif', fontWeight: 800, fontSize: 11,
+            cursor: 'pointer', letterSpacing: '0.08em',
+            display: 'flex', alignItems: 'center', gap: 6,
+          }}>
+            {hasClaim ? '💰' : '📋'} Rounds
+            {hasClaim && (
+              <span style={{ background: '#FFD66B', color: '#1A0F00', borderRadius: '50%', width: 16, height: 16, fontSize: 9, fontWeight: 900, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                {claimableRounds.length}
+              </span>
+            )}
+          </button>
+
           {wallet.connected ? (
             <div className="fp-balance">
               <span className="fp-balance-label">Bal</span>
@@ -566,25 +615,21 @@ export default function Flipsy({ onConnectWallet }) {
             <div style={{ textAlign: 'center', padding: 60, color: '#9892B5', fontSize: 13 }}>Loading rounds…</div>
           </div>
         )}
-
         {[...recentRounds].reverse().map(r => (
           <RoundCard key={`prev-${r.epoch}`} round={r} state="previous"
             userBets={getBetsForEpoch(r.epoch)} livePrice={livePrice}
             onSideTap={handleSideTap} claim={handleClaim} claimable={isClaimable(r)} />
         ))}
-
         {liveRound && (
           <RoundCard round={liveRound} state="live"
             userBets={getBetsForEpoch(liveRound.epoch)} livePrice={livePrice}
             onSideTap={handleSideTap} />
         )}
-
         {upcomingRounds[0] && (
           <RoundCard key={`next-${upcomingRounds[0].epoch}`} round={upcomingRounds[0]} state="next"
             userBets={getBetsForEpoch(upcomingRounds[0].epoch)} livePrice={livePrice}
             onSideTap={handleSideTap} />
         )}
-
         {upcomingRounds.slice(1).map(r => (
           <RoundCard key={`later-${r.epoch}`} round={r} state="later"
             userBets={getBetsForEpoch(r.epoch)} livePrice={livePrice}
@@ -596,17 +641,20 @@ export default function Flipsy({ onConnectWallet }) {
         Powered by Solana · Non-custodial · 25% fee on wins only · No other fees
       </div>
 
+      <RoundsPopup
+        open={roundsOpen}
+        onClose={() => setRoundsOpen(false)}
+        recentRounds={recentRounds}
+        userBets={userBets}
+        onClaim={handleClaim}
+      />
+
       {betModal && (
         <BetModal
-          open={!!betModal}
-          side={betModal.side}
-          epoch={betModal.epoch}
-          headsPayout={betModal.headsPayout}
-          tailsPayout={betModal.tailsPayout}
-          balance={balance}
-          livePrice={livePrice}
-          onClose={() => setBetModal(null)}
-          onTrade={handleTrade}
+          open={!!betModal} side={betModal.side} epoch={betModal.epoch}
+          headsPayout={betModal.headsPayout} tailsPayout={betModal.tailsPayout}
+          balance={balance} livePrice={livePrice}
+          onClose={() => setBetModal(null)} onTrade={handleTrade}
         />
       )}
     </div>
