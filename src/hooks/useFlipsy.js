@@ -10,17 +10,15 @@ const PROGRAM_ID = new PublicKey('71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs')
 const SUPER_ADMIN = new PublicKey('GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA');
 const PRICE_URL = 'https://api.coinbase.com/v2/prices/SOL-USD/spot';
 
-// Flipsy is deployed on devnet — use a dedicated devnet connection regardless
-// of what the rest of the app's wallet adapter is configured for (mainnet).
 const FLIPSY_RPC = 'https://api.devnet.solana.com';
 
 const POLL_PRICE_MS = 2_500;
 const POLL_CHAIN_MS = 5_000;
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
-const PRICE_SCALE = 100_000_000; // lockPrice is i64 with 8 decimal places (e.g. 7248000000 = $72.48)
+const PRICE_SCALE = 100_000_000;
 
-const BETTING_DURATION = 360; // seconds, matches lib.rs
+const BETTING_DURATION = 360;
 const GAP_DURATION = 30;
 
 // ============================================================
@@ -70,7 +68,6 @@ function sideToVariant(side) {
   return side === 'heads' ? { heads: {} } : { tails: {} };
 }
 
-// Map an on-chain Round to the shape the UI expects, converting lamports → USD via livePrice.
 function mapRound(r, livePrice) {
   const headsSol = lamportsToSol(r.headsPool);
   const tailsSol = lamportsToSol(r.tailsPool);
@@ -93,24 +90,18 @@ function mapRound(r, livePrice) {
   };
 }
 
-// A round whose PDA doesn't exist yet (no bets placed). Built from calculated start time.
 function stubRound(epoch, expectedStartTime) {
   return {
     epoch,
-    lockPrice: 0,
-    closePrice: 0,
+    lockPrice: 0, closePrice: 0,
     startTime: expectedStartTime,
     lockTime: expectedStartTime + BETTING_DURATION,
     closeTime: expectedStartTime + BETTING_DURATION,
     nextStartTime: expectedStartTime + BETTING_DURATION + GAP_DURATION,
-    headsPool: 0,
-    tailsPool: 0,
-    headsPoolSol: 0,
-    tailsPoolSol: 0,
-    betCount: 0,
-    outcome: 'unresolved',
-    resolvedAt: 0,
-    swept: false,
+    headsPool: 0, tailsPool: 0,
+    headsPoolSol: 0, tailsPoolSol: 0,
+    betCount: 0, outcome: 'unresolved',
+    resolvedAt: 0, swept: false,
   };
 }
 
@@ -118,32 +109,31 @@ function stubRound(epoch, expectedStartTime) {
 // HOOK
 // ============================================================
 export function useFlipsy(wallet) {
-  // Always use devnet for Flipsy, regardless of the app's main connection
   const connection = useMemo(
     () => new Connection(FLIPSY_RPC, 'confirmed'),
     [],
   );
+
   const [livePrice, setLivePrice] = useState(0);
   const [liveRound, setLiveRound] = useState(null);
   const [upcomingRounds, setUpcomingRounds] = useState([]);
   const [recentRounds, setRecentRounds] = useState([]);
+  // FIX: userBets is { [epoch]: BetObject[] } — array per epoch to support multiple bets
   const [userBets, setUserBets] = useState({});
   const [balance, setBalance] = useState(0);
   const [loading, setLoading] = useState(true);
   const livePriceRef = useRef(0);
 
-  // Build Anchor program when wallet ready
   const program = useMemo(() => {
     if (!wallet?.publicKey || !wallet?.signTransaction) return null;
     const provider = new anchor.AnchorProvider(
-      connection,
-      wallet,
+      connection, wallet,
       { commitment: 'confirmed', preflightCommitment: 'confirmed' },
     );
     return new anchor.Program(idl, PROGRAM_ID, provider);
   }, [connection, wallet?.publicKey, wallet?.signTransaction]);
 
-  // -------- POLL COINBASE for live SOL/USD price --------
+  // -------- POLL COINBASE --------
   useEffect(() => {
     let cancelled = false;
     async function fetchPrice() {
@@ -156,16 +146,14 @@ export function useFlipsy(wallet) {
           setLivePrice(p);
           livePriceRef.current = p;
         }
-      } catch (_) {
-        // ignore network blips
-      }
+      } catch (_) {}
     }
     fetchPrice();
     const i = setInterval(fetchPrice, POLL_PRICE_MS);
     return () => { cancelled = true; clearInterval(i); };
   }, []);
 
-  // -------- POLL CHAIN STATE (config, rounds, user bets, balance) --------
+  // -------- POLL CHAIN STATE --------
   useEffect(() => {
     if (!program) return;
     let cancelled = false;
@@ -175,27 +163,19 @@ export function useFlipsy(wallet) {
         const configPda = findConfigPda();
         const config = await program.account.config.fetch(configPda);
         const currentEpoch = bnToNumber(config.currentEpoch);
-        const price = livePriceRef.current; // capture once per pass for consistency
+        const price = livePriceRef.current;
 
-        // EPOCH MODEL (matches lib.rs):
-        //   currentEpoch = most recently started round.
-        //   - LIVE (locked, awaiting close): epoch = currentEpoch
-        //   - NEXT (open for bets): epoch = currentEpoch + 1
-        //   - LATER: currentEpoch + 2, +3
-        //   - RECENT (resolved, past): currentEpoch - 1, -2, -3
-
-        // ---- LIVE round ----
+        // Live round
         let live = null;
         if (currentEpoch > 0) {
           try {
             const r = await program.account.round.fetch(findRoundPda(currentEpoch));
             live = mapRound(r, price);
-            // If already resolved on chain, move to recents instead
             if (live.outcome !== 'unresolved') live = null;
-          } catch (_) { /* not initialised yet */ }
+          } catch (_) {}
         }
 
-        // ---- UPCOMING rounds (3 ahead) ----
+        // Upcoming rounds
         const upcomingEpochs = [currentEpoch + 1, currentEpoch + 2, currentEpoch + 3];
         const liveCloseTime = live?.closeTime || Math.floor(Date.now() / 1000) + BETTING_DURATION;
         const baseStart = liveCloseTime + GAP_DURATION;
@@ -204,21 +184,18 @@ export function useFlipsy(wallet) {
             try {
               const r = await program.account.round.fetch(findRoundPda(e));
               const mapped = mapRound(r, price);
-              // Only show as upcoming if not resolved
               if (mapped.outcome !== 'unresolved') return null;
               return mapped;
             } catch (_) {
-              // Round PDA doesn't exist yet — show stub with calculated start time
               const start = baseStart + idx * (BETTING_DURATION + GAP_DURATION);
               return stubRound(e, start);
             }
           }),
         );
 
-        // ---- RECENT rounds (3 back, only resolved) ----
+        // Recent rounds
         const recentEpochs = [];
         for (let i = 1; i <= 3; i++) if (currentEpoch - i > 0) recentEpochs.push(currentEpoch - i);
-        // Also surface the currentEpoch round if it resolved (rare race window)
         const allRecent = currentEpoch > 0 ? [currentEpoch, ...recentEpochs] : recentEpochs;
         const recents = await Promise.all(
           allRecent.map(async (e) => {
@@ -230,7 +207,7 @@ export function useFlipsy(wallet) {
           }),
         );
 
-        // ---- USER BETS (filter by user pubkey at byte offset 8) ----
+        // FIX: user bets — group ALL bets as array per epoch
         let userBetsMap = {};
         if (wallet?.publicKey) {
           try {
@@ -240,7 +217,7 @@ export function useFlipsy(wallet) {
             for (const b of bets) {
               const epoch = bnToNumber(b.account.epoch);
               const sol = lamportsToSol(b.account.amount);
-              userBetsMap[epoch] = {
+              const betObj = {
                 side: 'heads' in b.account.side ? 'heads' : 'tails',
                 amount: solToUsd(sol, price),
                 amountSol: sol,
@@ -248,19 +225,21 @@ export function useFlipsy(wallet) {
                 betIndex: bnToNumber(b.account.betIndex),
                 pubkey: b.publicKey,
               };
+              if (!userBetsMap[epoch]) userBetsMap[epoch] = [];
+              userBetsMap[epoch].push(betObj);
             }
           } catch (e) {
             console.warn('Flipsy: failed to fetch user bets', e);
           }
         }
 
-        // ---- WALLET BALANCE ----
+        // Balance
         let walletBalanceUsd = 0;
         if (wallet?.publicKey) {
           try {
             const lamports = await connection.getBalance(wallet.publicKey);
             walletBalanceUsd = solToUsd(lamportsToSol(lamports), price);
-          } catch (_) { /* ignore */ }
+          } catch (_) {}
         }
 
         if (cancelled) return;
@@ -286,13 +265,14 @@ export function useFlipsy(wallet) {
     const price = livePriceRef.current;
     if (!price) throw new Error('Price not loaded yet, try again in a sec');
 
-    // Convert USD → SOL → lamports
     const solAmount = usdAmount / price;
     const lamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
 
-    // Figure out next bet_index for (user, epoch). Each new bet for the same user+epoch needs a unique index.
-    const existing = userBets[epoch];
-    const betIndex = existing ? existing.betIndex + 1 : 0;
+    // FIX: compute next betIndex from full array of existing bets for this epoch
+    const existingBets = userBets[epoch] || [];
+    const betIndex = existingBets.length > 0
+      ? Math.max(...existingBets.map(b => b.betIndex)) + 1
+      : 0;
 
     const configPda = findConfigPda();
     const roundPda = findRoundPda(epoch);
@@ -318,40 +298,45 @@ export function useFlipsy(wallet) {
         .rpc();
       return tx;
     } catch (e) {
-      // Surface a friendlier error
       const msg = e?.error?.errorMessage || e?.message || 'Bet failed';
       throw new Error(msg);
     }
   }, [program, wallet?.publicKey, userBets]);
 
   // -------- CLAIM --------
+  // Claims all unclaimed winning bets for an epoch one by one
   const claim = useCallback(async (epoch) => {
     if (!program || !wallet?.publicKey) throw new Error('Connect your wallet first');
-    const userBet = userBets[epoch];
-    if (!userBet) throw new Error('No bet found for that round');
+
+    const betsForEpoch = userBets[epoch] || [];
+    const unclaimedBets = betsForEpoch.filter(b => !b.claimed);
+    if (unclaimedBets.length === 0) throw new Error('No claimable bets for that round');
 
     const configPda = findConfigPda();
     const roundPda = findRoundPda(epoch);
     const vaultPda = findVaultPda(epoch);
-    const betPda = findBetPda(epoch, wallet.publicKey, userBet.betIndex);
 
-    try {
-      const tx = await program.methods
-        .claim()
-        .accounts({
-          config: configPda,
-          round: roundPda,
-          bet: betPda,
-          vault: vaultPda,
-          superAdmin: SUPER_ADMIN,
-          user: wallet.publicKey,
-        })
-        .rpc();
-      return tx;
-    } catch (e) {
-      const msg = e?.error?.errorMessage || e?.message || 'Claim failed';
-      throw new Error(msg);
+    let lastTx = null;
+    for (const bet of unclaimedBets) {
+      const betPda = findBetPda(epoch, wallet.publicKey, bet.betIndex);
+      try {
+        lastTx = await program.methods
+          .claim()
+          .accounts({
+            config: configPda,
+            round: roundPda,
+            bet: betPda,
+            vault: vaultPda,
+            superAdmin: SUPER_ADMIN,
+            user: wallet.publicKey,
+          })
+          .rpc();
+      } catch (e) {
+        const msg = e?.error?.errorMessage || e?.message || 'Claim failed';
+        throw new Error(msg);
+      }
     }
+    return lastTx;
   }, [program, wallet?.publicKey, userBets]);
 
   return {
