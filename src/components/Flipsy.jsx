@@ -70,12 +70,21 @@ function RoundCard({ round, state, userBet, livePrice, betAmount, placeBet, clai
   const totalPool = headsPool + tailsPool;
   const headsPayout = headsPool > 0 ? 1 + ((totalPool / headsPool) - 1) * NET_MULT : 2.0;
   const tailsPayout = tailsPool > 0 ? 1 + ((totalPool / tailsPool) - 1) * NET_MULT : 2.0;
-  const now = Math.floor(Date.now() / 1000);
 
   const isPrev = state === 'previous';
   const isLive = state === 'live';
   const isNext = state === 'next';
   const isLater = state === 'later';
+
+  // Local 1-sec ticker — only the LIVE card needs second-by-second precision.
+  // NEXT and LATER cards show minute-scale countdowns ("Starts in 7:54") that
+  // update fine on chain-poll cadence (every 5s). Fewer tickers = less jank.
+  const [now, setNow] = useState(Math.floor(Date.now() / 1000));
+  useEffect(() => {
+    if (!isLive) return;
+    const i = setInterval(() => setNow(Math.floor(Date.now() / 1000)), 1000);
+    return () => clearInterval(i);
+  }, [isLive]);
 
   let badge, badgeColor;
   if (isPrev)  { badge = 'CLOSED';  badgeColor = '#5D5876'; }
@@ -96,7 +105,7 @@ function RoundCard({ round, state, userBet, livePrice, betAmount, placeBet, clai
   const fmtTime = (s) => `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 
   const handleSide = (side) => {
-    if (isLive || isNext) placeBet?.(epoch, side, betAmount);
+    if (isNext || isLater) placeBet?.(epoch, side, betAmount);
   };
 
   return (
@@ -273,15 +282,6 @@ export default function Flipsy() {
       setFlash({ type: 'error', msg: `Hook crashed: ${hookError.message || 'see console'}` });
     }
   }, [hookError]);
-
-  // 1-sec ticker drives smooth countdown re-renders independent of chain polls.
-  // Without this the timer only updates when chain data refreshes (every 5s),
-  // making the display jump in 3-5 second increments.
-  const [, setTick] = useState(0);
-  useEffect(() => {
-    const i = setInterval(() => setTick((t) => t + 1), 1000);
-    return () => clearInterval(i);
-  }, []);
 
   // Auto-scroll to live card when it loads
   useEffect(() => {
