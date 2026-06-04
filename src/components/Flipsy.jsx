@@ -113,7 +113,7 @@ function RoundCard({ round, state, userBet, livePrice, betAmount, placeBet, clai
       <button
         className={`fp-card-side fp-card-long ${longWon ? 'won' : isPrev ? 'lost' : ''} ${userBet?.side === 'heads' ? 'active' : ''}`}
         onClick={() => handleSide('heads')}
-        disabled={isPrev || isLater || userBet?.side === 'tails'}
+        disabled={isPrev || isLive || userBet?.side === 'tails'}
       >
         <div className="fp-card-side-icon">↑</div>
         <div className="fp-card-side-label">LONG</div>
@@ -197,14 +197,14 @@ function RoundCard({ round, state, userBet, livePrice, betAmount, placeBet, clai
       <button
         className={`fp-card-side fp-card-short ${shortWon ? 'won' : isPrev ? 'lost' : ''} ${userBet?.side === 'tails' ? 'active' : ''}`}
         onClick={() => handleSide('tails')}
-        disabled={isPrev || isLater || userBet?.side === 'heads'}
+        disabled={isPrev || isLive || userBet?.side === 'heads'}
       >
         <div className="fp-card-side-mult">{tailsPayout.toFixed(2)}×</div>
         <div className="fp-card-side-label">SHORT</div>
         <div className="fp-card-side-icon">↓</div>
       </button>
 
-      {userBet && (isLive || isNext) && (
+      {userBet && (isLive || isNext || isLater) && (
         <div className={`fp-card-position fp-card-position-${userBet.side}`}>
           <span>● {userBet.side === 'heads' ? 'LONG' : 'SHORT'}</span>
           <span>${userBet.amount.toFixed(2)}</span>
