@@ -20,8 +20,9 @@ const PRICE_SCALE = 1e8; // crank stores Math.round(price * 1e8)
 
 const BETTING_DURATION = 360;
 const GAP_DURATION = 30;
+const CLAIM_FORFEIT_DELAY = 259_200; // 3 days in seconds
 
-const RECENT_ROUNDS_COUNT = 10; // show last 10 rounds instead of 3
+const RECENT_ROUNDS_COUNT = 10;
 
 // ============================================================
 // PDA HELPERS
@@ -76,8 +77,10 @@ function mapRound(r, livePrice) {
   const lockPrice = chainPriceToUsd(r.lockPrice);
   const closePrice = chainPriceToUsd(r.closePrice);
 
-  // Debug log to verify price decoding
-  console.log(`[flipsy] epoch=${bnToNumber(r.epoch)} lockPrice raw=${bnToNumber(r.lockPrice)} decoded=$${lockPrice.toFixed(2)} closePrice raw=${bnToNumber(r.closePrice)} decoded=$${closePrice.toFixed(2)} outcome=${outcomeStr(r.outcome)}`);
+  console.log(
+    `[flipsy] epoch=${bnToNumber(r.epoch)} lockPrice raw=${bnToNumber(r.lockPrice)} decoded=$${lockPrice.toFixed(2)}` +
+    ` closePrice raw=${bnToNumber(r.closePrice)} decoded=$${closePrice.toFixed(2)} outcome=${outcomeStr(r.outcome)}`
+  );
 
   return {
     epoch: bnToNumber(r.epoch),
@@ -126,7 +129,7 @@ export function useFlipsy(wallet) {
   const [liveRound, setLiveRound] = useState(null);
   const [upcomingRounds, setUpcomingRounds] = useState([]);
   const [recentRounds, setRecentRounds] = useState([]);
-  // userBets: { [epoch]: BetObject[] } — array per epoch, supports multiple bets
+  // userBets: { [epoch]: BetObject[] }
   const [userBets, setUserBets] = useState({});
   const [balance, setBalance] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -219,14 +222,15 @@ export function useFlipsy(wallet) {
           }),
         );
 
-        // User bets — all bets grouped as array per epoch
+        // User bets — filtered by wallet via memcmp, grouped as array per epoch
         let userBetsMap = {};
         if (wallet?.publicKey) {
           try {
             const bets = await program.account.bet.all([
               { memcmp: { offset: 8, bytes: wallet.publicKey.toBase58() } },
             ]);
-            console.log(`[flipsy] found ${bets.length} bets for wallet`);
+            console.log(`[flipsy] found ${bets.length} bets for wallet ${wallet.publicKey.toBase58()}`);
+            const nowTs = Math.floor(Date.now() / 1000);
             for (const b of bets) {
               const epoch = bnToNumber(b.account.epoch);
               const sol = lamportsToSol(b.account.amount);
@@ -247,7 +251,7 @@ export function useFlipsy(wallet) {
           }
         }
 
-        // Balance
+        // Balance in USD
         let walletBalanceUsd = 0;
         if (wallet?.publicKey) {
           try {
@@ -282,7 +286,7 @@ export function useFlipsy(wallet) {
     const solAmount = usdAmount / price;
     const lamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
 
-    // Next betIndex from full array of existing bets for this epoch
+    // Derive next betIndex from all existing bets for this epoch
     const existingBets = userBets[epoch] || [];
     const betIndex = existingBets.length > 0
       ? Math.max(...existingBets.map(b => b.betIndex)) + 1
@@ -322,7 +326,8 @@ export function useFlipsy(wallet) {
   }, [program, wallet?.publicKey, userBets]);
 
   // -------- CLAIM --------
-  // Claims all unclaimed bets for an epoch
+  // Claims all unclaimed winning/tie bets for an epoch.
+  // Enforces the 3-day deadline client-side before sending any tx.
   const claim = useCallback(async (epoch) => {
     if (!program || !wallet?.publicKey) throw new Error('Connect your wallet first');
 
@@ -330,8 +335,22 @@ export function useFlipsy(wallet) {
     const unclaimedBets = betsForEpoch.filter(b => !b.claimed);
     if (unclaimedBets.length === 0) throw new Error('No claimable bets for that round');
 
-    const configPda = findConfigPda();
+    // Find the resolved round to check deadline
     const roundPda = findRoundPda(epoch);
+    let resolvedAt = 0;
+    try {
+      const roundData = await program.account.round.fetch(roundPda);
+      resolvedAt = bnToNumber(roundData.resolvedAt);
+    } catch (e) {
+      console.warn('[flipsy] could not fetch round for deadline check:', e);
+    }
+
+    const nowTs = Math.floor(Date.now() / 1000);
+    if (resolvedAt > 0 && nowTs > resolvedAt + CLAIM_FORFEIT_DELAY) {
+      throw new Error('Claim window expired — winnings forfeited after 3 days');
+    }
+
+    const configPda = findConfigPda();
     const vaultPda = findVaultPda(epoch);
 
     let lastTx = null;
