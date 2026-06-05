@@ -5,9 +5,10 @@ import './Flipsy.css';
 
 const ADMIN_WALLET = 'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA';
 const BLOCKED_COUNTRIES = ['US'];
-const MIN_BET = 1;
-const MAX_BET = 500;
+const MIN_BET = 5;
+const MAX_BET = 20;
 const NET_MULT = 0.75;
+const CLAIM_FORFEIT_DELAY = 259200; // 3 days in seconds
 
 async function checkGeo() {
   const sources = [
@@ -66,8 +67,12 @@ function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
     return Array.isArray(b) ? b : [b];
   };
 
+  const nowTs = Math.floor(Date.now() / 1000);
+
   const isClaimable = (round) => {
     const bets = getBetsForEpoch(round.epoch);
+    const expired = round.resolvedAt > 0 && nowTs > round.resolvedAt + CLAIM_FORFEIT_DELAY;
+    if (expired) return false;
     return bets.some(b => {
       if (b.claimed) return false;
       if (round.outcome === b.side) return true;
@@ -76,7 +81,10 @@ function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
     });
   };
 
-  const rounds = [...recentRounds].reverse();
+  // Only show rounds the user actually participated in
+  const rounds = [...recentRounds]
+    .reverse()
+    .filter(r => getBetsForEpoch(r.epoch).length > 0);
 
   return (
     <>
@@ -116,31 +124,33 @@ function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px 16px' }}>
           {rounds.length === 0 && (
             <div style={{ textAlign: 'center', padding: '40px 0', color: '#5D5876', fontSize: 13, fontWeight: 600 }}>
-              No completed rounds yet
+              No rounds yet
             </div>
           )}
           {rounds.map(r => {
             const bets = getBetsForEpoch(r.epoch);
             const canClaim = isClaimable(r);
+            const deadlineTs = r.resolvedAt > 0 ? r.resolvedAt + CLAIM_FORFEIT_DELAY : 0;
+            const hoursLeft = deadlineTs > 0 ? Math.max(0, Math.floor((deadlineTs - nowTs) / 3600)) : 0;
+            const expired = deadlineTs > 0 && nowTs > deadlineTs;
+            const hasUnclaimedWin = bets.some(b => !b.claimed && (r.outcome === b.side || r.outcome === 'tie'));
+
             const longTotal = bets.filter(b => b.side === 'heads').reduce((s, b) => s + b.amount, 0);
             const shortTotal = bets.filter(b => b.side === 'tails').reduce((s, b) => s + b.amount, 0);
             const won = (r.outcome === 'heads' && longTotal > 0) || (r.outcome === 'tails' && shortTotal > 0);
-            const lost = (r.outcome === 'heads' && shortTotal > 0 && !longTotal) ||
-                         (r.outcome === 'tails' && longTotal > 0 && !shortTotal) ||
-                         (r.outcome !== 'tie' && r.outcome !== 'unresolved' && bets.length > 0 && !won && !canClaim);
-            const tie = r.outcome === 'tie' && bets.length > 0;
-            const userPlayed = bets.length > 0;
+            const lost = !won && r.outcome !== 'tie' && r.outcome !== 'unresolved';
+            const tie = r.outcome === 'tie';
 
             let resultColor = '#5D5876';
             let resultLabel = r.outcome === 'heads' ? '↑ LONG WON' : r.outcome === 'tails' ? '↓ SHORT WON' : '= TIE';
-            if (userPlayed && won) resultColor = '#14F195';
-            if (userPlayed && lost) resultColor = '#DC1FFF';
-            if (userPlayed && tie) resultColor = '#9945FF';
+            if (won) resultColor = '#14F195';
+            if (lost) resultColor = '#DC1FFF';
+            if (tie) resultColor = '#9945FF';
 
             return (
               <div key={r.epoch} style={{
                 background: 'rgba(255,255,255,0.03)',
-                border: `1px solid ${userPlayed ? (won || canClaim ? 'rgba(20,241,149,0.2)' : lost ? 'rgba(220,31,255,0.2)' : 'rgba(153,69,255,0.2)') : 'rgba(255,255,255,0.06)'}`,
+                border: `1px solid ${won || canClaim ? 'rgba(20,241,149,0.2)' : lost ? 'rgba(220,31,255,0.2)' : 'rgba(153,69,255,0.2)'}`,
                 borderRadius: 16, padding: '12px 14px', marginBottom: 8,
                 display: 'flex', alignItems: 'center', gap: 12,
               }}>
@@ -150,34 +160,54 @@ function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
                   <div style={{ fontSize: 14, fontWeight: 900, color: '#9945FF' }}>#{r.epoch}</div>
                 </div>
 
-                {/* Prices */}
+                {/* Prices + bets */}
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 11, color: '#5D5876', fontVariantNumeric: 'tabular-nums' }}>
                     ${r.lockPrice.toFixed(2)} → ${r.closePrice.toFixed(2)}
                   </div>
-                  {userPlayed && (
-                    <div style={{ marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                      {longTotal > 0 && (
-                        <span style={{ fontSize: 10, color: '#14F195', fontWeight: 700 }}>↑ ${longTotal.toFixed(2)}</span>
-                      )}
-                      {shortTotal > 0 && (
-                        <span style={{ fontSize: 10, color: '#DC1FFF', fontWeight: 700 }}>↓ ${shortTotal.toFixed(2)}</span>
-                      )}
+                  <div style={{ marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {longTotal > 0 && (
+                      <span style={{ fontSize: 10, color: '#14F195', fontWeight: 700 }}>↑ ${longTotal.toFixed(2)}</span>
+                    )}
+                    {shortTotal > 0 && (
+                      <span style={{ fontSize: 10, color: '#DC1FFF', fontWeight: 700 }}>↓ ${shortTotal.toFixed(2)}</span>
+                    )}
+                  </div>
+                  {/* Deadline warning for claimable wins */}
+                  {canClaim && hoursLeft <= 24 && (
+                    <div style={{ fontSize: 9, color: '#FFD66B', fontWeight: 700, marginTop: 2 }}>
+                      ⚠️ {hoursLeft}h left to collect
                     </div>
                   )}
                 </div>
 
-                {/* Result / Claim */}
+                {/* Result / Claim / Expired */}
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
                   {canClaim ? (
-                    <button onClick={() => onClaim(r.epoch)} style={{
-                      background: 'linear-gradient(135deg, #FFD66B, #FFC247)',
-                      border: 'none', borderRadius: 10, padding: '7px 12px',
-                      color: '#1A0F00', fontWeight: 900, fontSize: 11,
-                      cursor: 'pointer', fontFamily: 'Inter, sans-serif',
-                      letterSpacing: '0.06em',
-                      boxShadow: '0 4px 12px rgba(255,214,107,0.4)',
-                    }}>💰 Collect</button>
+                    <div>
+                      <button onClick={() => onClaim(r.epoch)} style={{
+                        background: 'linear-gradient(135deg, #FFD66B, #FFC247)',
+                        border: 'none', borderRadius: 10, padding: '7px 12px',
+                        color: '#1A0F00', fontWeight: 900, fontSize: 11,
+                        cursor: 'pointer', fontFamily: 'Inter, sans-serif',
+                        letterSpacing: '0.06em',
+                        boxShadow: '0 4px 12px rgba(255,214,107,0.4)',
+                        display: 'block',
+                      }}>💰 Collect</button>
+                      {hoursLeft > 0 && hoursLeft > 24 && (
+                        <div style={{ fontSize: 9, color: '#9892B5', marginTop: 3, textAlign: 'center' }}>
+                          {hoursLeft}h left
+                        </div>
+                      )}
+                    </div>
+                  ) : expired && hasUnclaimedWin ? (
+                    <div style={{
+                      fontSize: 10, fontWeight: 900, color: '#5D5876',
+                      letterSpacing: '0.08em', padding: '5px 10px',
+                      background: 'rgba(93,88,118,0.12)',
+                      border: '1px solid rgba(93,88,118,0.3)',
+                      borderRadius: 8,
+                    }}>⌛ EXPIRED</div>
                   ) : (
                     <div style={{
                       fontSize: 10, fontWeight: 900, color: resultColor,
@@ -186,7 +216,7 @@ function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
                       border: `1px solid ${resultColor}44`,
                       borderRadius: 8,
                     }}>
-                      {userPlayed && lost ? '💔 LOST' : userPlayed && tie ? '= TIE' : resultLabel}
+                      {lost ? '💔 LOST' : tie ? '= TIE' : resultLabel}
                     </div>
                   )}
                 </div>
@@ -241,9 +271,12 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
   const sideColor = isLong ? '#14F195' : '#DC1FFF';
   const sideLabel = isLong ? '↑ LONG' : '↓ SHORT';
   const insufficient = amt > balance;
+  const belowMin = amt > 0 && amt < MIN_BET;
+  const aboveMax = amt > MAX_BET;
+  const invalidAmount = belowMin || aboveMax || insufficient;
 
   const handleTrade = async () => {
-    if (amt <= 0 || insufficient) return;
+    if (amt <= 0 || invalidAmount) return;
     setStatus('signing'); setErrMsg('');
     try {
       await onTrade(epoch, side, amt);
@@ -254,6 +287,12 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
       setStatus('error');
     }
   };
+
+  let buttonLabel = 'Trade';
+  if (insufficient) buttonLabel = 'Insufficient Balance';
+  else if (belowMin) buttonLabel = `Minimum $${MIN_BET}`;
+  else if (aboveMax) buttonLabel = `Maximum $${MAX_BET}`;
+  else if (status === 'signing') buttonLabel = 'Signing…';
 
   return (
     <>
@@ -276,7 +315,9 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
         </div>
 
         <div style={{ background: 'rgba(6,6,12,0.8)', border: `1.5px solid ${status === 'error' ? '#DC1FFF66' : sideColor + '44'}`, borderRadius: 18, padding: '14px 18px', marginBottom: 12 }}>
-          <div style={{ fontSize: 10, color: '#5D5876', fontWeight: 700, letterSpacing: '0.2em', marginBottom: 6 }}>AMOUNT (USD)</div>
+          <div style={{ fontSize: 10, color: '#5D5876', fontWeight: 700, letterSpacing: '0.2em', marginBottom: 6 }}>
+            AMOUNT (USD) · MIN ${MIN_BET} · MAX ${MAX_BET}
+          </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 26, fontWeight: 900, color: '#5D5876' }}>$</span>
             <input ref={inputRef} type="number" min={MIN_BET} max={MAX_BET} value={amount}
@@ -287,8 +328,9 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
           </div>
         </div>
 
+        {/* Quick-select buttons — all within $5–$20 */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          {[5, 10, 25, 50].map(v => (
+          {[5, 10, 15, 20].map(v => (
             <button key={v} onClick={() => { setAmount(String(v)); setStatus('idle'); setErrMsg(''); }}
               disabled={status === 'signing' || status === 'success'}
               style={{ flex: 1, padding: '8px 0', borderRadius: 999, background: parseFloat(amount) === v ? sideColor + '22' : 'rgba(255,255,255,0.04)', border: `1px solid ${parseFloat(amount) === v ? sideColor + '88' : 'rgba(255,255,255,0.08)'}`, color: parseFloat(amount) === v ? sideColor : '#9892B5', fontWeight: 800, fontSize: 13, cursor: 'pointer', fontFamily: 'Inter, sans-serif', transition: 'all 0.15s' }}
@@ -296,7 +338,7 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
           ))}
         </div>
 
-        {amt > 0 && (
+        {amt > 0 && !belowMin && !aboveMax && (
           <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 14, padding: '12px 16px', marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <div>
               <div style={{ fontSize: 10, color: '#5D5876', fontWeight: 700, letterSpacing: '0.15em', marginBottom: 3 }}>EST. PAYOUT</div>
@@ -323,9 +365,9 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
         )}
 
         {status !== 'success' && (
-          <button onClick={handleTrade} disabled={amt <= 0 || insufficient || status === 'signing'}
-            style={{ width: '100%', padding: '16px', borderRadius: 18, border: 'none', background: insufficient ? 'rgba(255,255,255,0.06)' : status === 'signing' ? 'rgba(255,255,255,0.08)' : `linear-gradient(135deg, ${sideColor}, ${isLong ? '#00D9FF' : '#9945FF'})`, color: insufficient || status === 'signing' ? '#5D5876' : isLong ? '#001A0F' : '#FFFFFF', fontFamily: 'Inter, sans-serif', fontWeight: 900, fontSize: 16, letterSpacing: '0.08em', cursor: insufficient || status === 'signing' ? 'not-allowed' : 'pointer', boxShadow: insufficient || status === 'signing' ? 'none' : `0 8px 30px ${sideColor}44`, transition: 'all 0.2s' }}>
-            {insufficient ? 'Insufficient Balance' : status === 'signing' ? 'Signing…' : 'Trade'}
+          <button onClick={handleTrade} disabled={amt <= 0 || invalidAmount || status === 'signing'}
+            style={{ width: '100%', padding: '16px', borderRadius: 18, border: 'none', background: invalidAmount ? 'rgba(255,255,255,0.06)' : status === 'signing' ? 'rgba(255,255,255,0.08)' : `linear-gradient(135deg, ${sideColor}, ${isLong ? '#00D9FF' : '#9945FF'})`, color: invalidAmount || status === 'signing' ? '#5D5876' : isLong ? '#001A0F' : '#FFFFFF', fontFamily: 'Inter, sans-serif', fontWeight: 900, fontSize: 16, letterSpacing: '0.08em', cursor: invalidAmount || status === 'signing' ? 'not-allowed' : 'pointer', boxShadow: invalidAmount || status === 'signing' ? 'none' : `0 8px 30px ${sideColor}44`, transition: 'all 0.2s' }}>
+            {buttonLabel}
           </button>
         )}
         <div style={{ textAlign: 'center', marginTop: 10, fontSize: 10, color: '#5D5876', fontWeight: 600, letterSpacing: '0.1em' }}>
@@ -384,6 +426,7 @@ function RoundCard({ round, state, userBets, livePrice, onSideTap, claim, claima
         <span className="fp-card-epoch">#{epoch}</span>
       </div>
 
+      {/* Long button — enabled on live, next, and later cards */}
       <button className={`fp-card-side fp-card-long ${longWon ? 'won' : isPrev ? 'lost' : ''} ${longTotal > 0 ? 'active' : ''}`}
         onClick={() => !isPrev && onSideTap(epoch, 'heads', headsPayout, tailsPayout)} disabled={isPrev}>
         <div className="fp-card-side-icon">↑</div>
@@ -428,6 +471,7 @@ function RoundCard({ round, state, userBets, livePrice, onSideTap, claim, claima
         </>)}
       </div>
 
+      {/* Short button — enabled on live, next, and later cards */}
       <button className={`fp-card-side fp-card-short ${shortWon ? 'won' : isPrev ? 'lost' : ''} ${shortTotal > 0 ? 'active' : ''}`}
         onClick={() => !isPrev && onSideTap(epoch, 'tails', headsPayout, tailsPayout)} disabled={isPrev}>
         <div className="fp-card-side-mult">{tailsPayout.toFixed(2)}×</div>
@@ -504,7 +548,11 @@ export default function Flipsy({ onConnectWallet }) {
     return Array.isArray(b) ? b : [b];
   };
 
+  const nowTs = Math.floor(Date.now() / 1000);
+
   const isClaimable = (round) => {
+    const expired = round.resolvedAt > 0 && nowTs > round.resolvedAt + CLAIM_FORFEIT_DELAY;
+    if (expired) return false;
     const bets = getBetsForEpoch(round.epoch);
     return bets.some(b => {
       if (b.claimed) return false;
@@ -517,13 +565,15 @@ export default function Flipsy({ onConnectWallet }) {
   const claimableRounds = recentRounds.filter(r => isClaimable(r));
   const hasClaim = claimableRounds.length > 0;
 
+  // Open to all connected wallets — no admin gate
   const handleSideTap = (epoch, side, headsPayout, tailsPayout) => {
     if (!wallet.connected) { onConnectWallet?.(); return; }
-    if (!isAdminWallet) { setFlash({ type: 'error', msg: 'Private beta — wallet not authorized' }); return; }
     setBetModal({ epoch, side, headsPayout, tailsPayout });
   };
 
   const handleTrade = useCallback(async (epoch, side, amount) => {
+    if (amount < MIN_BET) throw new Error(`Minimum bet is $${MIN_BET}`);
+    if (amount > MAX_BET) throw new Error(`Maximum bet is $${MAX_BET}`);
     if (balance < amount) throw new Error('Insufficient balance');
     await placeBet(epoch, side, amount);
     setFlash({ type: 'success', msg: `${side === 'heads' ? '↑ LONG' : '↓ SHORT'} #${epoch} · $${amount.toFixed(2)}` });
@@ -531,7 +581,6 @@ export default function Flipsy({ onConnectWallet }) {
 
   const handleClaim = async (epoch) => {
     if (!wallet.connected) { onConnectWallet?.(); return; }
-    if (!isAdminWallet) { setFlash({ type: 'error', msg: 'Private beta — wallet not authorized' }); return; }
     try {
       await claim(epoch);
       setFlash({ type: 'success', msg: `💰 Claimed #${epoch}` });
@@ -573,7 +622,6 @@ export default function Flipsy({ onConnectWallet }) {
           </div>
         </div>
         <div className="fp-actions">
-          {/* Rounds button */}
           <button onClick={() => setRoundsOpen(true)} style={{
             background: hasClaim ? 'rgba(255,214,107,0.15)' : 'rgba(153,69,255,0.12)',
             border: `1px solid ${hasClaim ? 'rgba(255,214,107,0.4)' : 'rgba(153,69,255,0.3)'}`,
