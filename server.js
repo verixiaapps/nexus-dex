@@ -16,14 +16,6 @@ app.set('trust proxy', 1);
 
 /* ========================================================================
  * Security headers / CSP
- *
- * Connect-src whitelist now covers ONLY the services the app actually uses:
- *   • Jupiter (api.jup.ag, lite-api.jup.ag, token.jup.ag, quote-api.jup.ag)
- *   • LI.FI (li.quest)
- *   • Helius / Solana RPC (helius-rpc.com, api.mainnet-beta.solana.com)
- *   • WalletConnect (for external wallet connections)
- *   • Chainalysis sanctions list (public.chainalysis.com — kept since it's
- *     standard for any wallet connect flow; remove if you don't use it)
  * ===================================================================== */
 const CSP_MODE       = (process.env.CSP_MODE || 'report-only').toLowerCase();
 const CSP_REPORT_URI = (process.env.CSP_REPORT_URI || '').trim();
@@ -321,8 +313,7 @@ app.get('/api/jupiter/tokens/v2/toporganicscore/:timeframe', async (req, res) =>
   }
 });
 
-// New launches — Jupiter Tokens V2 /recent. Sorted by first-pool creation
-// time. Used by the Pulse "NEW" column.
+// New launches — Jupiter Tokens V2 /recent.
 app.get('/api/jupiter/tokens/v2/recent', async (req, res) => {
   try {
     const url = `https://lite-api.jup.ag/tokens/v2/recent${buildForwardedQuery(req)}`;
@@ -330,8 +321,6 @@ app.get('/api/jupiter/tokens/v2/recent', async (req, res) => {
     if (c) return res.status(c.status).json(c.payload);
     const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 12_000);
     const result   = await safeJson(response);
-    // Short cache: NEW launches are hot, but we still want to deduplicate
-    // burst-fire polls from multiple users.
     if (response.ok && result.parsed) setCachedJson(url, response.status, result.parsed, 5_000);
     return respondJsonOrError(res, response, result);
   } catch (e) {
@@ -359,7 +348,7 @@ app.get('/api/jupiter/tokens/v2/tag', async (req, res) => {
 });
 
 /* ========================================================================
- * SOL price — Jupiter price feed (replaced OKX ticker)
+ * SOL price — Jupiter price feed
  * ===================================================================== */
 let _solPriceCache = { p: 0, ts: 0 };
 async function fetchSolPriceUsd() {
@@ -367,7 +356,6 @@ async function fetchSolPriceUsd() {
   if (now - _solPriceCache.ts < 30_000 && _solPriceCache.p > 0) return _solPriceCache.p;
   const r = await fetchWithTimeout(`${JUPITER_PRICE_BASE}?ids=${SOL_MINT}`, { headers: { Accept: 'application/json' } }, 8_000);
   const d = await r.json();
-  // Jupiter price v3 returns: { "<mint>": { "usdPrice": <number>, ... } }
   const p = Number(d?.[SOL_MINT]?.usdPrice || 0);
   if (!Number.isFinite(p) || p <= 0) throw new Error('SOL price unavailable');
   _solPriceCache = { p, ts: now };
@@ -379,8 +367,7 @@ app.get('/api/sol-price', async (req, res) => {
 });
 
 /* ========================================================================
- * Whale Watcher — recent whale LP events (read endpoint, populated by
- * whale-watcher.js background loop)
+ * Whale Watcher
  * ===================================================================== */
 app.get('/api/whale-events', (req, res) => {
   try {
@@ -537,7 +524,35 @@ app.get('/api/health', (req, res) => {
 app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not found: ' + req.path }));
 
 /* ========================================================================
- * Static SPA
+ * Embed runtime config
+ *
+ * Serves window.__VERIXIA_CONFIG__ from Railway env so the self-contained
+ * embed bundle (build/embed/verixia-swap.js) needs no build-time secrets.
+ * Declared BEFORE express.static so it wins the /embed/* route race.
+ *
+ * Note: getSolanaRpcUrl() returns the full Helius URL incl. the key, which is
+ * visible in the browser — same exposure as the main SPA bundle today. Keep
+ * the Helius key domain-locked. Runtime injection keeps it out of the repo
+ * and the CI build, not out of the browser.
+ * ===================================================================== */
+app.get('/embed/config.js', (req, res) => {
+  const cfg = {
+    rpc: getSolanaRpcUrl(),
+    wcProjectId: process.env.WALLETCONNECT_PROJECT_ID
+              || process.env.REACT_APP_WALLETCONNECT_PROJECT_ID
+              || '',
+  };
+  res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  res.send('window.__VERIXIA_CONFIG__=' + JSON.stringify(cfg) + ';');
+});
+
+/* ========================================================================
+ * Static SPA + SEO pages
+ *
+ * Serves build/ (main app), build/embed/ (the embed bundle, reachable at
+ * /embed/verixia-swap.js), and any SEO pages your generator writes into build/.
+ * The catch-all falls back to the SPA index.html for unknown routes.
  * ===================================================================== */
 app.use(express.static(path.join(__dirname, 'build'), {
   maxAge: '7d',
