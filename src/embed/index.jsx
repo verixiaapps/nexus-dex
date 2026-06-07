@@ -1,4 +1,4 @@
-// src/embed/index.jsx
+// src/embed/index.jsx 
 //
 // VERIXIA SWAP EMBED — single self-contained entry point for every SEO page.
 //
