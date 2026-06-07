@@ -4,9 +4,9 @@ build_nexus_dex_seo_incremental.py -- v4.1 (full-payload, score-gated, sitemap-o
 
 WHAT CHANGED vs v4.0
 --------------------
-Sitemap (nexus-dex-sitemap.xml) is now regenerated inside git_checkpoint(),
+Sitemap (nexus-sitemap.xml) is now regenerated inside git_checkpoint(),
 so every 30-page commit ships a fresh sitemap built by scanning disk
-(every directory in nexusdex/ that contains index.html). This guarantees
+(every directory in defi/ that contains index.html). This guarantees
 that whatever is committed on main is reflected in the sitemap, even if
 the workflow is killed (timeout / OOM / cancel) before the workflow's
 end-of-run sitemap step runs. The workflow-level sitemap step remains as
@@ -80,8 +80,8 @@ GENERATED_KEYWORDS_FILE = os.path.join(BASE_DIR, "data", "nexus_dex_generated_ke
 REJECTED_KEYWORDS_FILE  = os.path.join(BASE_DIR, "data", "nexus_dex_rejected_keywords.txt")
 
 TEMPLATE_FILE = os.path.join(BASE_DIR, "nexus-dex-template", "nexus-dex-template.html")
-OUTPUT_DIR    = os.path.join(BASE_DIR, "nexusdex")
-SITEMAP_FILE  = os.path.join(BASE_DIR, "nexus-dex-sitemap.xml")
+OUTPUT_DIR    = os.path.join(BASE_DIR, "defi")
+SITEMAP_FILE  = os.path.join(BASE_DIR, "nexus-sitemap.xml")
 SITE          = "https://verixiaapps.com"
 OG_IMAGE      = f"{SITE}/og/nexus-dex.png"
 
@@ -93,7 +93,7 @@ RESUME              = os.getenv("RESUME", "true").lower() == "true"
 RESET_ENGINE        = os.getenv("RESET_ENGINE", "false").lower() == "true"
 
 PROTECTED_SLUGS = {
-    "nexusdex",
+    "nexus-dex",
     "crypto-markets",
     "bitcoin-markets",
     "ethereum-markets",
@@ -703,7 +703,7 @@ def find_best_hub_slug(keyword):
 def build_hub_link_html(keyword):
     hub_slug = find_best_hub_slug(keyword)
     hub_title = HUB_TITLE_OVERRIDES.get(hub_slug, f"{humanize_slug(hub_slug)} Hub")
-    return f'<a href="/nexusdex/{hub_slug}/">{escape_html(hub_title)}</a>'
+    return f'<a href="/nexus-dex/defi/{hub_slug}/">{escape_html(hub_title)}</a>'
 
 
 def sanitize_ai_html(text):
@@ -946,7 +946,7 @@ def build_related_anchor(keyword):
 
 
 def build_canonical(slug):
-    return f"{SITE}/nexusdex/{slug}/"
+    return f"{SITE}/nexus-dex/defi/{slug}/"
 
 
 DEFAULT_AGGREGATE_RATING_JSON = json.dumps({
@@ -1060,7 +1060,7 @@ def get_more_links(current_page, all_pages, limit, exclude_slugs=None):
 
 def build_links_html(pages_list):
     return "".join(
-        f'<li><a href="/nexusdex/{p["slug"]}/">{escape_html(build_related_anchor(p["keyword"]))}</a></li>\n'
+        f'<li><a href="/nexus-dex/defi/{p["slug"]}/">{escape_html(build_related_anchor(p["keyword"]))}</a></li>\n'
         for p in pages_list
         if page_exists(p["slug"])
     )
@@ -1212,9 +1212,9 @@ def _git_lastmod_for(file_path):
 
 def rebuild_sitemap():
     """
-    Rebuild nexus-dex-sitemap.xml by scanning OUTPUT_DIR on disk.
+    Rebuild nexus-sitemap.xml by scanning OUTPUT_DIR on disk.
 
-    Guarantees every /nexusdex/<slug>/index.html present on disk is in the
+    Guarantees every /nexus-dex/defi/<slug>/index.html present on disk is in the
     sitemap. Called from git_checkpoint() so each 30-page commit ships a
     matching sitemap, even if the workflow is killed before the workflow's
     end-of-run sitemap step runs.
@@ -1228,7 +1228,7 @@ def rebuild_sitemap():
                 continue
             lastmod = _git_lastmod_for(index_path)
             urls.append(
-                f"<url><loc>{SITE}/nexusdex/{entry}/</loc><lastmod>{lastmod}</lastmod></url>"
+                f"<url><loc>{SITE}/nexus-dex/defi/{entry}/</loc><lastmod>{lastmod}</lastmod></url>"
             )
 
     xml = (
@@ -1239,7 +1239,7 @@ def rebuild_sitemap():
     )
     with open(SITEMAP_FILE, "w", encoding="utf-8") as f:
         f.write(xml)
-    print(f"[sitemap] Wrote {len(urls)} URLs to nexus-dex-sitemap.xml")
+    print(f"[sitemap] Wrote {len(urls)} URLs to nexus-sitemap.xml")
 
 
 # -----------------------------
@@ -1255,8 +1255,6 @@ def git_checkpoint(generated_count, new_generated_keywords, new_generated_slugs,
     write_lines(GENERATED_SLUGS_FILE, [slugify(k) for k in sorted_keywords])
     write_lines(KEYWORD_FILE, get_remaining_keywords(raw_keywords, processed_keywords))
 
-    # Regenerate sitemap from disk so every committed page is in it,
-    # even if the workflow gets killed before its own end-of-run sitemap step.
     rebuild_sitemap()
 
     try:
@@ -1290,7 +1288,6 @@ def main():
 
     if not raw_keywords:
         print("No keywords in queue. Nothing to generate.")
-        # Even with no new pages, make sure sitemap matches disk before we exit.
         rebuild_sitemap()
         return 0
 
