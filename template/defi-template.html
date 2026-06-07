@@ -3,32 +3,32 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Solana Swap — Best Price, No KYC | Verixia</title>
-<meta name="description" content="Swap any Solana token from your wallet. Best-price routing via Jupiter. No KYC, no accounts, no limits.">
-<meta name="keywords" content="Solana Swap">
-<link rel="canonical" href="https://verixiaapps.com/nexus-dex/defi/solana-swap/">
+<title>{{TITLE}}</title>
+<meta name="description" content="{{DESCRIPTION}}">
+<meta name="keywords" content="{{KEYWORD}}">
+<link rel="canonical" href="{{CANONICAL_URL}}">
 
 <meta property="og:type" content="website">
-<meta property="og:url" content="https://verixiaapps.com/nexus-dex/defi/solana-swap/">
-<meta property="og:title" content="Solana Swap — Best Price, No KYC | Verixia">
-<meta property="og:description" content="Swap any Solana token from your wallet. Best-price routing via Jupiter. No KYC, no accounts, no limits.">
-<meta property="og:image" content="https://verixiaapps.com/og/nexus-dex.png">
+<meta property="og:url" content="{{CANONICAL_URL}}">
+<meta property="og:title" content="{{TITLE}}">
+<meta property="og:description" content="{{DESCRIPTION}}">
+<meta property="og:image" content="{{OG_IMAGE}}">
 <meta property="og:site_name" content="Verixia">
 
 <meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="Solana Swap — Best Price, No KYC | Verixia">
-<meta name="twitter:description" content="Swap any Solana token from your wallet. Best-price routing via Jupiter. No KYC, no accounts, no limits.">
-<meta name="twitter:image" content="https://verixiaapps.com/og/nexus-dex.png">
+<meta name="twitter:title" content="{{TITLE}}">
+<meta name="twitter:description" content="{{DESCRIPTION}}">
+<meta name="twitter:image" content="{{OG_IMAGE}}">
 
 <script type="application/ld+json">
 {
   "@context": "https://schema.org",
   "@type": "WebPage",
-  "url": "https://verixiaapps.com/nexus-dex/defi/solana-swap/",
-  "name": "Solana Swap — Best Price, No KYC | Verixia",
-  "description": "Swap any Solana token from your wallet. Best-price routing via Jupiter. No KYC, no accounts, no limits.",
-  "dateModified": "2026-06-07T00:00:00Z",
-  "aggregateRating": {"@type":"AggregateRating","ratingValue":"4.8","reviewCount":"2847","bestRating":"5","worstRating":"1"},
+  "url": "{{CANONICAL_URL}}",
+  "name": "{{TITLE}}",
+  "description": "{{DESCRIPTION}}",
+  "dateModified": "{{MODIFIED_DATE}}",
+  "aggregateRating": {{AGGREGATE_RATING_JSON}},
   "isPartOf": { "@type": "WebSite", "url": "https://verixiaapps.com/", "name": "Verixia" },
   "publisher": { "@type": "Organization", "name": "Verixia", "url": "https://verixiaapps.com/" }
 }
@@ -40,13 +40,13 @@
   "@type": "BreadcrumbList",
   "itemListElement": [
     { "@type": "ListItem", "position": 1, "name": "Verixia", "item": "https://verixiaapps.com/" },
-    { "@type": "ListItem", "position": 2, "name": "Solana Swap", "item": "https://verixiaapps.com/nexus-dex/defi/solana-swap/" }
+    { "@type": "ListItem", "position": 2, "name": "{{BREADCRUMB_NAME}}", "item": "{{CANONICAL_URL}}" }
   ]
 }
 </script>
 
 <script type="application/ld+json">
-{}
+{{SCHEMA_FAQ}}
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -1107,9 +1107,9 @@
     <div class="hero-content">
       <div class="pair-meta">
         <span class="dot"></span>
-        <span>Live · Non-custodial · No KYC</span>
+        <span>{{STATIC_INTRO}}</span>
       </div>
-      <h1>Swap Any Solana Token on Verixia</h1>
+      <h1>{{STATIC_H1}}</h1>
       <div class="hero-msg-mobile">
         <div class="l1">Swap <span class="grad">any</span> Solana token</div>
         <div class="l2">No KYC · No limits</div>
@@ -1125,48 +1125,11 @@
        {{ }} placeholder, so we don't put one here.) -->
   <section class="swap-wrap">
     <div id="verixia-swap-root">
-      <div class="sw-root">
-        <div class="sw-container">
-          <div class="sw-header">
-            <h1 class="sw-title">Swap</h1>
-            <div class="sw-live-pill"><span class="sw-live-dot"></span>LIVE</div>
-          </div>
-          <div class="sw-panel">
-            <div class="sw-row">
-              <div class="sw-row-top">
-                <span class="sw-row-label">You pay</span>
-                <span class="sw-balance">Balance: 12.84<button class="sw-max-btn">MAX</button></span>
-              </div>
-              <div class="sw-row-mid">
-                <button class="sw-token-btn">
-                  <img class="sw-token-logo" src="https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png" alt="" onerror="this.style.display='none'"/>
-                  <span>SOL</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-                </button>
-                <input class="sw-amount-input" type="text" value="1.5"/>
-              </div>
-            </div>
-            <div class="sw-flip-wrap">
-              <button class="sw-flip-btn" aria-label="Flip tokens"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M7 4l-3 3M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3" transform="rotate(90 12 12)"/></svg></button>
-            </div>
-            <div class="sw-row">
-              <div class="sw-row-top"><span class="sw-row-label">You receive</span></div>
-              <div class="sw-row-mid">
-                <button class="sw-token-btn">
-                  <img class="sw-token-logo" src="https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png" alt="" onerror="this.style.display='none'"/>
-                  <span>USDC</span><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
-                </button>
-                <input class="sw-amount-input" type="text" readonly value="248.51"/>
-              </div>
-            </div>
-          </div>
-          <div class="sw-details">
-            <div class="sw-detail-row"><span>Rate</span><span class="sw-detail-val">1 SOL &#8776; 165.67 USDC</span></div>
-            <div class="sw-detail-row"><span>Minimum received</span><span class="sw-detail-val">246.02 USDC</span></div>
-            <div class="sw-detail-row"><span>Price impact</span><span class="sw-detail-val"><span class="sw-impact-good">0.04%</span></span></div>
-            <div class="sw-detail-row"><span>Platform fee</span><span class="sw-detail-val">3.0% (in SOL)</span></div>
-          </div>
-          <button class="sw-primary-btn">Connect Wallet</button>
-          <p class="sw-footer">Powered by <b>Jupiter</b> &middot; Solana's leading DEX aggregator</p>
+      <div class="swap-skeleton" aria-hidden="true">
+        <div class="swap-skeleton-msg">
+          <span class="dot"></span>
+          <span class="skel-title">Swap</span>
+          <span>Loading…</span>
         </div>
       </div>
     </div>
@@ -1205,21 +1168,21 @@
   </section>
 
   <section class="section">
-    <div class="section-tag">Why Verixia</div>
-    <h2 class="section-title">Best-price routing, your keys, no accounts.</h2>
-    <p>Verixia is a non-custodial swap on Solana. Connect a wallet and trade any SPL token at the best available price, routed through Jupiter across every major Solana DEX.</p><p>No sign-up, no KYC, no limits. You hold your keys the whole time; swaps settle in a single on-chain transaction you sign yourself.</p>
+    <div class="section-tag">{{SUPP_HEADING}}</div>
+    <h2 class="section-title">{{SUPP_INTRO}}</h2>
+    {{AI_CONTENT}}
   </section>
 
   <section class="section">
     <div class="section-tag">FAQ</div>
     <h2 class="section-title">Common <span class="grad">questions</span></h2>
-    <li><a href="#">Related page 1</a></li><li><a href="#">Related page 2</a></li><li><a href="#">Related page 3</a></li><li><a href="#">Related page 4</a></li><li><a href="#">Related page 5</a></li><li><a href="#">Related page 6</a></li>
+    {{RELATED_LINKS}}
   </section>
 
   <section class="section">
     <div class="section-tag">related</div>
-    <h2 class="section-title"><a href="#">Solana Swap Hub</a></h2>
-    <div class="pair-grid"><li><a href="#">More page 1</a></li><li><a href="#">More page 2</a></li><li><a href="#">More page 3</a></li><li><a href="#">More page 4</a></li><li><a href="#">More page 5</a></li><li><a href="#">More page 6</a></li><li><a href="#">More page 7</a></li><li><a href="#">More page 8</a></li><li><a href="#">More page 9</a></li><li><a href="#">More page 10</a></li></div>
+    <h2 class="section-title">{{HUB_LINK}}</h2>
+    <div class="pair-grid">{{MORE_LINKS}}</div>
   </section>
 
   <footer>
@@ -1232,8 +1195,10 @@
     <div class="legal">VERIXIA · POWERED BY JUPITER · NON-CUSTODIAL</div>
   </footer>
 
+{{PAGE_META_SCRIPT}}
 
-
+<script src="/embed/config.js"></script>
+<script src="/embed/verixia-swap.js" defer></script>
 
 </main>
 </body>
