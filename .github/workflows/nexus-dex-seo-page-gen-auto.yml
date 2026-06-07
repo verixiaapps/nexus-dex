@@ -9,7 +9,7 @@ name: Nexus DEX SEO Page Generator Auto
         default: "1000"
         type: string
       full_rebuild:
-        description: "Optional manual rebuild of generated /nexusdex/ pages only"
+        description: "Optional manual rebuild of generated /defi/ pages only"
         required: false
         default: false
         type: boolean
@@ -41,7 +41,7 @@ jobs:
       KEYWORDS_FILE: "data/nexus_dex_keywords.txt"
       GENERATED_KEYWORDS_FILE: "data/nexus_dex_generated_keywords.txt"
       GENERATED_SLUGS_FILE: "data/nexus_dex_generated_slugs.txt"
-      OUTPUT_DIR: "nexusdex"
+      OUTPUT_DIR: "defi"
       PROTECTED_SLUG: ""
       REBUILD_KEYWORDS_SOURCE_FILE: "data/rebuild_keywords_source_nexusdex.txt"
       REBUILD_SLUGS_SOURCE_FILE: "data/rebuild_slugs_source_nexusdex.txt"
@@ -180,11 +180,11 @@ jobs:
               [ -f "$dir/index.html" ] || continue
               slug=$(basename "$dir")
               page_lastmod=$(get_lastmod "$dir/index.html")
-              echo "<url><loc>https://verixiaapps.com/nexusdex/$slug/</loc><lastmod>${page_lastmod}</lastmod></url>"
+              echo "<url><loc>https://verixiaapps.com/nexus-dex/defi/$slug/</loc><lastmod>${page_lastmod}</lastmod></url>"
             done
             echo '</urlset>'
-          } > nexus-dex-sitemap.xml
-          echo "[sitemap] $(grep -c '<url>' nexus-dex-sitemap.xml) URLs written"
+          } > nexus-sitemap.xml
+          echo "[sitemap] $(grep -c '<url>' nexus-sitemap.xml) URLs written"
 
       - name: Commit and push
         if: success()
