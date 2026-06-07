@@ -47,7 +47,7 @@ GENERATED_KW_FILE    = BASE_DIR / "data" / "nexus_dex_generated_keywords.txt"
 REJECTED_FILE        = BASE_DIR / "data" / "nexus_dex_rejected_keywords.txt"
 
 TEMPLATE_PATH        = BASE_DIR / "nexus-dex-template" / "nexus-dex-template.html"
-OUTPUT_DIR           = BASE_DIR / "nexusdex"
+OUTPUT_DIR           = BASE_DIR / "defi"
 
 SITE_URL             = "https://verixiaapps.com"
 SEO_API_BASE         = "https://awake-integrity-production-faa0.up.railway.app"
@@ -67,7 +67,7 @@ RELATED_LINKS_COUNT  = 6
 MORE_LINKS_COUNT     = 10
 
 PROTECTED_SLUGS = {
-    "nexusdex",
+    "nexus-dex",
     "crypto-markets",
     "bitcoin-markets",
     "ethereum-markets",
@@ -416,7 +416,7 @@ def build_links_html(pages: list[dict]) -> str:
     if not pages:
         return ""
     return "\n".join(
-        f'<li><a href="/nexusdex/{p["slug"]}/">{html_escape(slug_to_title(p["slug"]))}</a></li>'
+        f'<li><a href="/nexus-dex/defi/{p["slug"]}/">{html_escape(slug_to_title(p["slug"]))}</a></li>'
         for p in pages
     )
 
@@ -424,7 +424,7 @@ def build_links_html(pages: list[dict]) -> str:
 def build_hub_link_html(hub_slug: str, hub_title: str) -> str:
     return (
         f'<span class="hub-link-label">Hub:</span> '
-        f'<a class="hub-link-anchor" href="/nexusdex/{html_escape(hub_slug)}/">'
+        f'<a class="hub-link-anchor" href="/nexus-dex/defi/{html_escape(hub_slug)}/">'
         f'{html_escape(hub_title)}</a>'
     )
 
@@ -486,7 +486,7 @@ def render_page(template_html: str,
 
     related, more = get_related_and_more(slug, keyword, hub_slug)
 
-    canonical       = f"{SITE_URL}/nexusdex/{slug}/"
+    canonical       = f"{SITE_URL}/nexus-dex/defi/{slug}/"
     title           = _enforce_title_length(meta.get("title"), f"{keyword} | Verixia")
     desc            = meta.get("description", "") or ""
     h1              = meta.get("h1", "") or ""
