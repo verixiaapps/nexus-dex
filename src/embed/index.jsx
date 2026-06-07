@@ -1,16 +1,42 @@
-// src/embed/index.jsx 
+// src/embed/index.jsx
 //
-// VERIXIA SWAP EMBED — single self-contained entry point for every SEO page.
+// VERIXIA SWAP EMBED — with unmissable diagnostic banner.
 //
-// One React tree. One wallet provider stack. Two portals:
-//   • #verixia-swap-root  → the real SwapWidget (Jupiter + atomic-tx flow)
-//   • .connect (header)   → page-level Connect button, same wallet state
+// The FIRST thing this file does (before any imports finish executing) is
+// write a visible banner into #verixia-swap-root saying "BUNDLE LOADED v3".
+// If you reload the SEO page and don't see that banner, then the new
+// bundle is NOT actually being served — it's a Railway/cache issue, not a
+// code issue.
 //
-// On-page error display: any failure during mount, render, or runtime is
-// written directly into #verixia-swap-root as readable text — so the SEO page
-// itself shows what went wrong instead of silently sitting on the skeleton.
+// Any error during mount or render is also written into the same element
+// as readable text.
 
-import React, { useMemo, useState, useEffect, useCallback } from 'react';
+// ─── Step 1: prove the bundle is running ─────────────────────────────
+(function bootBanner() {
+  if (typeof document === 'undefined') return;
+  function paint() {
+    var el = document.getElementById('verixia-swap-root');
+    if (!el) return;
+    el.innerHTML =
+      '<div id="verixia-boot-banner" style="padding:20px;color:#00e5ff;' +
+      'font-family:monospace;font-size:13px;line-height:1.6;' +
+      'background:rgba(0,229,255,0.08);border:2px solid #00e5ff;' +
+      'border-radius:14px;text-align:center;">' +
+      '<div style="font-weight:700;font-size:15px;margin-bottom:6px;">' +
+      'VERIXIA EMBED — BUNDLE v3 LOADED' +
+      '</div>' +
+      '<div style="color:#9ff0cc;">Initializing React…</div>' +
+      '</div>';
+  }
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', paint);
+  } else {
+    paint();
+  }
+})();
+
+// ─── Step 2: imports ─────────────────────────────────────────────────
+import React, { useMemo, useState, useCallback } from 'react';
 import ReactDOM from 'react-dom/client';
 import { createPortal } from 'react-dom';
 import { Buffer } from 'buffer';
@@ -29,10 +55,7 @@ import { WalletModal, TermsGate } from '../components/WalletConnectKit.jsx';
 
 import '@solana/wallet-adapter-react-ui/styles.css';
 
-/* ──────────────────────────────────────────────────────────────────────
- * On-page error display — writes failures into #verixia-swap-root as
- * readable text so they're visible without devtools.
- * ─────────────────────────────────────────────────────────────────── */
+// ─── Step 3: on-page error helpers ───────────────────────────────────
 function escapeHtml(s) {
   return String(s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
@@ -41,16 +64,17 @@ function escapeHtml(s) {
 
 function showOnPageError(where, err) {
   try {
-    const el = document.getElementById('verixia-swap-root');
+    var el = document.getElementById('verixia-swap-root');
     if (!el) return;
-    const msg = (err && (err.stack || err.message)) || String(err);
+    var msg = (err && (err.stack || err.message)) || String(err);
     el.innerHTML =
       '<div style="padding:20px;color:#ff5d7d;font-family:monospace;' +
       'font-size:12px;line-height:1.5;background:rgba(255,93,125,0.08);' +
-      'border:1px solid rgba(255,93,125,0.4);border-radius:14px;' +
+      'border:2px solid #ff5d7d;border-radius:14px;' +
       'white-space:pre-wrap;word-break:break-word;text-align:left;">' +
-      '<div style="font-weight:700;margin-bottom:8px;color:#ffb3c1;">' +
-      'VERIXIA SWAP ERROR — ' + escapeHtml(where) + '</div>' +
+      '<div style="font-weight:700;margin-bottom:8px;color:#ffb3c1;font-size:14px;">' +
+      'VERIXIA SWAP ERROR — ' + escapeHtml(where) +
+      '</div>' +
       escapeHtml(msg) +
       '</div>';
   } catch (e) {
@@ -61,56 +85,39 @@ function showOnPageError(where, err) {
 class EmbedErrorBoundary extends React.Component {
   constructor(props) { super(props); this.state = { err: null }; }
   static getDerivedStateFromError(err) { return { err }; }
-  componentDidCatch(err, info) {
-    console.error('[verixia-swap] render error:', err, info);
+  componentDidCatch(err) {
+    console.error('[verixia-swap] render error:', err);
     showOnPageError('render', err);
   }
   render() { return this.state.err ? null : this.props.children; }
 }
 
 if (typeof window !== 'undefined') {
-  window.addEventListener('error', (e) => {
+  window.addEventListener('error', function (e) {
     if (e && e.error) showOnPageError('window.error', e.error);
   });
-  window.addEventListener('unhandledrejection', (e) => {
+  window.addEventListener('unhandledrejection', function (e) {
     showOnPageError('unhandled-rejection', e.reason || e);
   });
 }
 
-/* ──────────────────────────────────────────────────────────────────────
- * Buffer shim
- * ─────────────────────────────────────────────────────────────────── */
+// ─── Step 4: Buffer shim ─────────────────────────────────────────────
 if (typeof window !== 'undefined' && !window.Buffer) {
   window.Buffer = Buffer;
 }
 
-/* ──────────────────────────────────────────────────────────────────────
- * Runtime config
- * ─────────────────────────────────────────────────────────────────── */
-const CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
+// ─── Step 5: runtime config ──────────────────────────────────────────
+var CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
+var RPC_URL = CFG.rpc || 'https://api.mainnet-beta.solana.com';
+var WC_PROJECT_ID = CFG.wcProjectId || '';
+var TERMS_KEY = 'nexus_terms_accepted_v3';
 
-const RPC_URL =
-  CFG.rpc ||
-  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC) ||
-  'https://api.mainnet-beta.solana.com';
-
-const WC_PROJECT_ID =
-  CFG.wcProjectId ||
-  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_WALLETCONNECT_PROJECT_ID) ||
-  '';
-
-const TERMS_KEY = 'nexus_terms_accepted_v3';
-
-/* ──────────────────────────────────────────────────────────────────────
- * Header Connect — renders into <button class="connect">.
- * ─────────────────────────────────────────────────────────────────── */
+// ─── Step 6: HeaderConnect ───────────────────────────────────────────
 function HeaderConnect({ onOpen }) {
   const { isConnected, walletAddress } = useNexusWallet();
-
   const label = isConnected && walletAddress
     ? walletAddress.slice(0, 4) + '…' + walletAddress.slice(-4)
     : 'Connect';
-
   return (
     <span
       onClick={onOpen}
@@ -121,9 +128,7 @@ function HeaderConnect({ onOpen }) {
   );
 }
 
-/* ──────────────────────────────────────────────────────────────────────
- * EmbedRoot — providers + portals + modals. One tree, shared state.
- * ─────────────────────────────────────────────────────────────────── */
+// ─── Step 7: EmbedRoot ───────────────────────────────────────────────
 function EmbedRoot({ swapMount, headerMount, inputMint, outputMint }) {
   const wallets = useMemo(() => {
     const list = [new PhantomWalletAdapter()];
@@ -142,11 +147,8 @@ function EmbedRoot({ swapMount, headerMount, inputMint, outputMint }) {
           },
         }));
       } catch (e) {
-        console.error('[verixia-swap] WalletConnect adapter init failed:', e);
         showOnPageError('walletconnect-init', e);
       }
-    } else {
-      console.error('[verixia-swap] WALLETCONNECT_PROJECT_ID missing');
     }
     return list;
   }, []);
@@ -182,12 +184,10 @@ function EmbedRoot({ swapMount, headerMount, inputMint, outputMint }) {
               />,
               swapMount
             )}
-
             {headerMount && createPortal(
               <HeaderConnect onOpen={openWallet} />,
               headerMount
             )}
-
             {termsPending && <TermsGate onAccept={acceptTerms} />}
             <WalletModal
               open={walletModalOpen}
@@ -200,18 +200,13 @@ function EmbedRoot({ swapMount, headerMount, inputMint, outputMint }) {
   );
 }
 
-/* ──────────────────────────────────────────────────────────────────────
- * Mount.
- * ─────────────────────────────────────────────────────────────────── */
+// ─── Step 8: mount ───────────────────────────────────────────────────
 const MOUNTED = new WeakSet();
 
 function mount() {
   try {
     const swapMount = document.getElementById('verixia-swap-root');
-    if (!swapMount) {
-      console.warn('[verixia-swap] no #verixia-swap-root element on page');
-      return;
-    }
+    if (!swapMount) return;
     if (MOUNTED.has(swapMount)) return;
     MOUNTED.add(swapMount);
 
@@ -219,6 +214,8 @@ function mount() {
     const inputMint  = cleanMint(swapMount.dataset.inputMint);
     const outputMint = cleanMint(swapMount.dataset.outputMint);
 
+    // Note: keep the boot banner visible until React renders into the portal.
+    // SwapWidget's render will replace it via createPortal.
     swapMount.innerHTML = '';
 
     const headerMount = document.querySelector('button.connect, .connect');
@@ -239,7 +236,6 @@ function mount() {
       </EmbedErrorBoundary>
     );
   } catch (e) {
-    console.error('[verixia-swap] mount failed:', e);
     showOnPageError('mount', e);
   }
 }
