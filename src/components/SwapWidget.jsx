@@ -2,17 +2,19 @@
 //
 // Flow:
 //   1. Get Jupiter swap instructions via /api/jupiter/build (no platformFeeBps)
-//   2. Build fee instructions (5% of input mint -> FEE_WALLET)
+//   2. Build fee instructions (3% of input mint -> FEE_WALLET)
 //   3. Combine into ONE TransactionMessage with shared ALTs
 //   4. Wallet simulates the SAME bytes the user signs — Blowfish sees full
 //      net effect (X in, Y out, Z to fee wallet) instead of two opaque txs.
 //   5. Atomic on-chain: swap and fee succeed together or revert together.
-// 
-// Fee ordering:
-//   - SOL input: fee transfer goes FIRST, from native SOL, before Jupiter
-//     wraps the remaining lamports.
-//   - SPL input: fee ATA-create + transferChecked go FIRST, before Jupiter's
-//     setup ixs touch the source ATA. Jupiter routes the net amount after fee.
+//
+// Embed support:
+//   - Accepts optional `defaultInputMint` / `defaultOutputMint` (per-page pair).
+//   - Accepts optional `onConnectWallet` — when not connected, the primary
+//     button calls this (opens the host's wallet picker) instead of erroring.
+//     The main app already passes it via sharedProps; the embed passes one too.
+//   - RPC may come from window.__VERIXIA_CONFIG__ (runtime, server-injected),
+//     then build-time env, then public fallback.
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -37,7 +39,7 @@ import './SwapWidget.css';
 /* ─── CONFIG ──────────────────────────────────────────────────────── */
 
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS    = 500; // 5%
+const FEE_BPS    = 300; // 3%
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
@@ -50,7 +52,11 @@ const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 // Fixed slippage — high enough that the tx almost always lands. No user setting.
 const SLIPPAGE_BPS = 500; // 5%
 
+// Runtime config (server-injected) takes precedence, then build-time env,
+// then public fallback. Undefined window.__VERIXIA_CONFIG__ (main app) is fine.
+const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
 const RPC_URL =
+  RUNTIME_CFG.rpc ||
   process.env.REACT_APP_SOLANA_RPC ||
   (process.env.REACT_APP_HELIUS_API_KEY
     ? `https://mainnet.helius-rpc.com/?api-key=${process.env.REACT_APP_HELIUS_API_KEY}`
@@ -100,15 +106,15 @@ const deserIx = (ix) => ({
 
 /* ─── COMPONENT ───────────────────────────────────────────────────── */
 
-export default function SwapWidget() {
+export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConnectWallet } = {}) {
   const wallet = useWallet();
   const connection = useMemo(() => new Connection(RPC_URL, 'confirmed'), []);
 
   const [tokens, setTokens]               = useState([]);
   const [tokensLoading, setTokensLoading] = useState(true);
 
-  const [inputMint,  setInputMint]   = useState(SOL_MINT);
-  const [outputMint, setOutputMint]  = useState(USDC_MINT);
+  const [inputMint,  setInputMint]   = useState(defaultInputMint  || SOL_MINT);
+  const [outputMint, setOutputMint]  = useState(defaultOutputMint || USDC_MINT);
   const [amount,     setAmount]      = useState('');
 
   const [showPicker, setShowPicker] = useState(null);
@@ -202,7 +208,7 @@ export default function SwapWidget() {
     return Math.floor(n * Math.pow(10, inputToken.decimals)).toString();
   }, [amount, inputToken]);
 
-  /* QUOTE — Jupiter routes the NET amount (after our 5% fee). */
+  /* QUOTE — Jupiter routes the NET amount (after our fee). */
   const quoteAbortRef = useRef(null);
   useEffect(() => {
     if (!rawAmount || inputMint === outputMint) {
@@ -350,18 +356,16 @@ export default function SwapWidget() {
       }
 
       // 2) Assemble the full instruction list.
-      // Order:
-      //   [Jupiter compute-budget ixs]   (must come first for the runtime)
-      //   [our fee ixs]                  (taken from user's balance up-front)
-      //   [Jupiter setup ixs]            (wrap SOL / create ATAs / etc)
+      //   [Jupiter compute-budget ixs]
+      //   [our fee ixs]
+      //   [Jupiter setup ixs]
       //   [Jupiter swap ix]
-      //   [Jupiter cleanup ix]           (unwrap leftover wSOL / close ATA)
+      //   [Jupiter cleanup ix]
       //   [Jupiter other ixs]
       const ixs = [];
       if (Array.isArray(build.computeBudgetInstructions))
         for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
 
-      // Fee goes RIGHT AFTER compute budget — before Jupiter touches anything.
       for (const ix of feeIxs) ixs.push(ix);
 
       if (Array.isArray(build.setupInstructions))
@@ -391,9 +395,7 @@ export default function SwapWidget() {
       }).compileToV0Message(alts);
       const tx = new VersionedTransaction(message);
 
-      // 5) Pre-flight simulation — catches insufficient balance / slippage
-      //    BEFORE we bother the wallet. This is the same tx the wallet will
-      //    simulate (and the user will sign).
+      // 5) Pre-flight simulation.
       const mapSimErr = (logs) => {
         const j = (logs || []).join('\n').toLowerCase();
         if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
@@ -417,8 +419,7 @@ export default function SwapWidget() {
         console.warn('[swap] sim non-fatal', simErr);
       }
 
-      // 6) Sign — wallet now simulates the FULL tx (swap + fee) and Blowfish
-      //    sees the complete net effect. One popup, one signature.
+      // 6) Sign — wallet simulates the FULL tx (swap + fee). One popup.
       const signed = await wallet.signTransaction(tx);
 
       // 7) Broadcast.
@@ -557,9 +558,9 @@ export default function SwapWidget() {
         )}
 
         <button
-          onClick={handleSwap}
-          disabled={!canSwap}
-          className={'sw-primary-btn' + (canSwap ? '' : ' sw-disabled')}
+          onClick={(!wallet.publicKey && onConnectWallet) ? onConnectWallet : handleSwap}
+          disabled={!wallet.publicKey ? !onConnectWallet : !canSwap}
+          className={'sw-primary-btn' + ((!wallet.publicKey ? !!onConnectWallet : canSwap) ? '' : ' sw-disabled')}
         >
           {swapping
             ? 'Swapping…'
