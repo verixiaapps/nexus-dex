@@ -11,7 +11,7 @@ from generate_nexus_dex_content import generate_nexus_dex_content
 KEYWORD_FILE = "data/nexus_dex_keywords.txt"
 REJECTED_KEYWORDS_FILE = "data/nexus_dex_rejected_keywords.txt"
 TEMPLATE_FILE = "nexus-dex-template/nexus-dex-template.html"
-OUTPUT_DIR = "nexus-dex"
+OUTPUT_DIR = "defi"
 SITE = "https://verixiaapps.com"
 
 RELATED_LINKS_COUNT = 6
@@ -555,7 +555,7 @@ def build_description(keyword):
 
 
 def build_canonical(slug):
-    return f"{SITE}/nexus-dex/{slug}/"
+    return f"{SITE}/nexus-dex/defi/{slug}/"
 
 
 def validate_template_placeholders(template_html):
@@ -602,7 +602,7 @@ def find_best_hub_slug(keyword):
 def build_hub_link_html(keyword):
     hub_slug = find_best_hub_slug(keyword)
     hub_title = HUB_TITLE_OVERRIDES.get(hub_slug, f"{title_case(hub_slug.replace('-', ' '))} Hub")
-    return f'<a href="/nexus-dex/{hub_slug}/">{escape_html(hub_title)}</a>'
+    return f'<a href="/nexus-dex/defi/{hub_slug}/">{escape_html(hub_title)}</a>'
 
 
 def is_weak_keyword(keyword):
@@ -1028,12 +1028,12 @@ for page in pages:
         print("Validation warning for", slug, ":", "; ".join(validation_errors))
 
     links_html = "".join(
-        f'<li><a href="/nexus-dex/{r["slug"]}/">{escape_html(build_related_anchor(r["keyword"]))}</a></li>\n'
+        f'<li><a href="/nexus-dex/defi/{r["slug"]}/">{escape_html(build_related_anchor(r["keyword"]))}</a></li>\n'
         for r in related_pages
     )
 
     more_links_html = "".join(
-        f'<li><a href="/nexus-dex/{r["slug"]}/">{escape_html(build_related_anchor(r["keyword"]))}</a></li>\n'
+        f'<li><a href="/nexus-dex/defi/{r["slug"]}/">{escape_html(build_related_anchor(r["keyword"]))}</a></li>\n'
         for r in more_links_pages
     )
 
