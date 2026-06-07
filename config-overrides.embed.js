@@ -1,5 +1,5 @@
 // config-overrides.embed.js
-//
+// 
 // react-app-rewired config for the EMBED build ONLY.
 // Run via:  react-app-rewired build --config-overrides config-overrides.embed.js
 // (the `build:embed` npm script does this).
