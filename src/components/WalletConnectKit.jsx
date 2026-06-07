@@ -5,7 +5,7 @@
 //   • WalletModal  — Phantom / WalletConnect picker + Chainalysis screening
 //   • TermsGate    — terms-of-use bottom sheet
 //   • screenAddress — sanctions screening helper
-//
+// 
 // The main app currently defines these inline in App.js. To keep ONE source of
 // truth, App.js should import them from here too (see INTEGRATION.md, optional
 // step). Until then this is a faithful copy; keep the two in sync if you edit.
