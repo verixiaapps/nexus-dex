@@ -1,4 +1,3 @@
-bridge btc to optimism
 bridge xrp to optimism
 bridge ada to optimism
 bridge ton to optimism
