@@ -4,8 +4,8 @@
 // Run via:  react-app-rewired build --config-overrides config-overrides.embed.js
 // (the `build:embed` npm script does this).
 //
-// It produces a single self-contained file at  embed_dist/verixia-swap.js
-// which the `build:all` npm script then copies to  build/embed/verixia-swap.js .
+// It produces a single self-contained file at  build/embed/verixia-swap.js
+// (written there directly — see the paths override at the bottom). No copy step.
 //
 // SEO pages load it with:
 //   <script src="/embed/config.js"></script>            (runtime config)
@@ -58,19 +58,21 @@ function useStyleLoader(rules) {
   }
 }
 
-module.exports = function override(config, env) {
+function override(config, env) {
   // 1) Apply the SAME overrides as the main app build.
   config = baseOverride(config, env);
 
   // 2) Entry: just the embed bootstrap, not the CRA app shell.
   config.entry = path.resolve(__dirname, 'src/embed/index.jsx');
 
-  // 3) Output: one file, emitted OUTSIDE build/ so the main build's clean step
-  //    (react-scripts empties build/ on every run) can't wipe it. The build:all
-  //    npm script copies embed_dist/ -> build/embed/ afterwards (inline, no
-  //    separate script file).
+  // 3) Output: the embed bundle, written straight to build/embed/. The `paths`
+  //    override at the bottom points react-scripts' appBuild here too, so its
+  //    post-build file-size report reads from the same place (no ENOENT) and
+  //    nothing has to be copied afterwards. Because appBuild is build/embed
+  //    (a subfolder), the embed build's clean step only empties build/embed and
+  //    leaves the main app in build/ intact — as long as `build` runs first.
   config.output = Object.assign({}, config.output, {
-    path:          path.resolve(__dirname, 'embed_dist'),
+    path:          path.resolve(__dirname, 'build/embed'),
     filename:      'verixia-swap.js',
     chunkFilename: 'verixia-swap.[contenthash:8].chunk.js',
     publicPath:    '/embed/',
@@ -102,8 +104,20 @@ module.exports = function override(config, env) {
     (p) => p && p.constructor && !DROP_PLUGINS.has(p.constructor.name)
   );
 
-  // 7) Source map for prod debugging (small extra .map file in embed_dist).
+  // 7) Source map for prod debugging (small extra .map file in build/embed).
   config.devtool = env === 'production' ? 'source-map' : 'eval-source-map';
 
   return config;
+}
+
+// react-app-rewired object form: a `webpack` override (above) PLUS a `paths`
+// override (below). The paths override repoints react-scripts' build folder to
+// build/embed for the embed build, which is what makes the file-size report
+// read the right place and lets the bundle land in build/embed with no copy.
+module.exports = {
+  webpack: override,
+  paths: function (paths /*, env */) {
+    paths.appBuild = path.resolve(__dirname, 'build/embed');
+    return paths;
+  },
 };
