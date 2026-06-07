@@ -45,11 +45,14 @@
     "uuid": "^9.0.1"
   },
   "devDependencies": {
-    "concurrently": "^8.2.0"
+    "concurrently": "^8.2.0",
+    "style-loader": "^3.3.4"
   },
   "scripts": {
     "start": "concurrently --names server,crank --prefix-colors blue,magenta \"node server.js\" \"ts-node --transpile-only crank/crank.ts\"",
     "build": "react-app-rewired build",
+    "build:embed": "react-app-rewired --config-overrides-path config-overrides.embed.js build",
+    "build:all": "npm run build && npm run build:embed",
     "dev": "concurrently \"react-app-rewired start\" \"node server.js\""
   },
   "browserslist": {
