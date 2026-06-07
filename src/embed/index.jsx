@@ -1,4 +1,4 @@
-// src/embed/index.jsx
+// src/embed/index.jsx 
 //
 // VERIXIA SWAP EMBED — entry point for the standalone bundle shipped to every
 // SEO page. Mounts the REAL SwapWidget plus the REAL connect flow
