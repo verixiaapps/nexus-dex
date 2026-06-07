@@ -52,7 +52,7 @@
     "start": "concurrently --names server,crank --prefix-colors blue,magenta \"node server.js\" \"ts-node --transpile-only crank/crank.ts\"",
     "build": "react-app-rewired build",
     "build:embed": "react-app-rewired build --config-overrides config-overrides.embed.js",
-    "build:all": "npm run build:embed && npm run build && node -e \"require('fs').cpSync('embed_dist','build/embed',{recursive:true})\"",
+    "build:all": "npm run build && npm run build:embed",
     "dev": "concurrently \"react-app-rewired start\" \"node server.js\""
   },
   "browserslist": {
