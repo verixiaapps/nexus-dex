@@ -79,7 +79,7 @@ GENERATED_SLUGS_FILE    = os.path.join(BASE_DIR, "data", "nexus_dex_generated_sl
 GENERATED_KEYWORDS_FILE = os.path.join(BASE_DIR, "data", "nexus_dex_generated_keywords.txt")
 REJECTED_KEYWORDS_FILE  = os.path.join(BASE_DIR, "data", "nexus_dex_rejected_keywords.txt")
 
-TEMPLATE_FILE = os.path.join(BASE_DIR, "nexus-dex-template", "nexus-dex-template.html")
+TEMPLATE_FILE = os.path.join(BASE_DIR, "template", "defi-template.html")
 OUTPUT_DIR    = os.path.join(BASE_DIR, "defi")
 SITEMAP_FILE  = os.path.join(BASE_DIR, "nexus-sitemap.xml")
 SITE          = "https://verixiaapps.com"
