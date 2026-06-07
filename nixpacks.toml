@@ -5,7 +5,7 @@ nixPkgs = ["nodejs_20", "python3"]
 cmds = ["npm install --legacy-peer-deps"]
 
 [phases.build]
-cmds = ["npm run build:all"]
+cmds = ["npm run build"]
 
 [variables]
 NODE_OPTIONS = "--max-old-space-size=4096"
