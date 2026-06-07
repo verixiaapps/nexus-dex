@@ -6,16 +6,9 @@
 //   • #verixia-swap-root  → the real SwapWidget (Jupiter + atomic-tx flow)
 //   • .connect (header)   → page-level Connect button, same wallet state
 //
-// Both portals share the SAME ConnectionProvider / WalletProvider /
-// WalletContextProvider, so the header pill and the widget always agree on
-// connection status — connect from either, disconnect from either.
-//
-// No autoConnect: SEO pages start clean. A previous main-site connection in
-// localStorage does NOT silently re-fire on page load (which was crashing
-// the WalletConnect adapter during render and leaving the skeleton up).
-//
-// Config (RPC + WalletConnect projectId) comes from window.__VERIXIA_CONFIG__
-// served by server.js at /embed/config.js — no build-time secrets.
+// On-page error display: any failure during mount, render, or runtime is
+// written directly into #verixia-swap-root as readable text — so the SEO page
+// itself shows what went wrong instead of silently sitting on the skeleton.
 
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import ReactDOM from 'react-dom/client';
@@ -25,7 +18,6 @@ import { Buffer } from 'buffer';
 import {
   ConnectionProvider,
   WalletProvider,
-  useWallet,
 } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
@@ -38,14 +30,62 @@ import { WalletModal, TermsGate } from '../components/WalletConnectKit.jsx';
 import '@solana/wallet-adapter-react-ui/styles.css';
 
 /* ──────────────────────────────────────────────────────────────────────
- * Buffer shim — some Solana libs read window.Buffer at runtime.
+ * On-page error display — writes failures into #verixia-swap-root as
+ * readable text so they're visible without devtools.
+ * ─────────────────────────────────────────────────────────────────── */
+function escapeHtml(s) {
+  return String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+function showOnPageError(where, err) {
+  try {
+    const el = document.getElementById('verixia-swap-root');
+    if (!el) return;
+    const msg = (err && (err.stack || err.message)) || String(err);
+    el.innerHTML =
+      '<div style="padding:20px;color:#ff5d7d;font-family:monospace;' +
+      'font-size:12px;line-height:1.5;background:rgba(255,93,125,0.08);' +
+      'border:1px solid rgba(255,93,125,0.4);border-radius:14px;' +
+      'white-space:pre-wrap;word-break:break-word;text-align:left;">' +
+      '<div style="font-weight:700;margin-bottom:8px;color:#ffb3c1;">' +
+      'VERIXIA SWAP ERROR — ' + escapeHtml(where) + '</div>' +
+      escapeHtml(msg) +
+      '</div>';
+  } catch (e) {
+    console.error('[verixia-swap] showOnPageError failed:', e);
+  }
+}
+
+class EmbedErrorBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { err: null }; }
+  static getDerivedStateFromError(err) { return { err }; }
+  componentDidCatch(err, info) {
+    console.error('[verixia-swap] render error:', err, info);
+    showOnPageError('render', err);
+  }
+  render() { return this.state.err ? null : this.props.children; }
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('error', (e) => {
+    if (e && e.error) showOnPageError('window.error', e.error);
+  });
+  window.addEventListener('unhandledrejection', (e) => {
+    showOnPageError('unhandled-rejection', e.reason || e);
+  });
+}
+
+/* ──────────────────────────────────────────────────────────────────────
+ * Buffer shim
  * ─────────────────────────────────────────────────────────────────── */
 if (typeof window !== 'undefined' && !window.Buffer) {
   window.Buffer = Buffer;
 }
 
 /* ──────────────────────────────────────────────────────────────────────
- * Runtime config — injected by /embed/config.js (server.js reads Railway env).
+ * Runtime config
  * ─────────────────────────────────────────────────────────────────── */
 const CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
 
@@ -62,8 +102,7 @@ const WC_PROJECT_ID =
 const TERMS_KEY = 'nexus_terms_accepted_v3';
 
 /* ──────────────────────────────────────────────────────────────────────
- * Header Connect — renders into the SEO page's existing <button class="connect">.
- * Pulls live state from useNexusWallet so it always matches the widget.
+ * Header Connect — renders into <button class="connect">.
  * ─────────────────────────────────────────────────────────────────── */
 function HeaderConnect({ onOpen }) {
   const { isConnected, walletAddress } = useNexusWallet();
@@ -83,31 +122,31 @@ function HeaderConnect({ onOpen }) {
 }
 
 /* ──────────────────────────────────────────────────────────────────────
- * EmbedRoot — providers + both portals + modals. One tree, shared state.
+ * EmbedRoot — providers + portals + modals. One tree, shared state.
  * ─────────────────────────────────────────────────────────────────── */
 function EmbedRoot({ swapMount, headerMount, inputMint, outputMint }) {
-  // WalletConnect MUST have a projectId. If Railway env isn't set, log loudly
-  // and skip the adapter — Phantom still works, no silent crash.
   const wallets = useMemo(() => {
     const list = [new PhantomWalletAdapter()];
     if (WC_PROJECT_ID) {
-      list.push(new WalletConnectWalletAdapter({
-        network: 'mainnet-beta',
-        options: {
-          projectId: WC_PROJECT_ID,
-          metadata: {
-            name: 'Nexus DEX',
-            description: 'Solana DEX powered by Jupiter',
-            url: 'https://swap.verixiaapps.com',
-            icons: ['https://swap.verixiaapps.com/icon-512.png'],
+      try {
+        list.push(new WalletConnectWalletAdapter({
+          network: 'mainnet-beta',
+          options: {
+            projectId: WC_PROJECT_ID,
+            metadata: {
+              name: 'Nexus DEX',
+              description: 'Solana DEX powered by Jupiter',
+              url: 'https://swap.verixiaapps.com',
+              icons: ['https://swap.verixiaapps.com/icon-512.png'],
+            },
           },
-        },
-      }));
+        }));
+      } catch (e) {
+        console.error('[verixia-swap] WalletConnect adapter init failed:', e);
+        showOnPageError('walletconnect-init', e);
+      }
     } else {
-      console.error(
-        '[verixia-swap] WALLETCONNECT_PROJECT_ID is not set on the server — ' +
-        'WalletConnect adapter disabled. Set it in Railway env.'
-      );
+      console.error('[verixia-swap] WALLETCONNECT_PROJECT_ID missing');
     }
     return list;
   }, []);
@@ -135,7 +174,6 @@ function EmbedRoot({ swapMount, headerMount, inputMint, outputMint }) {
       <WalletProvider wallets={wallets} autoConnect={false}>
         <WalletModalProvider>
           <WalletContextProvider>
-            {/* Swap widget portal */}
             {createPortal(
               <SwapWidget
                 defaultInputMint={inputMint}
@@ -145,13 +183,11 @@ function EmbedRoot({ swapMount, headerMount, inputMint, outputMint }) {
               swapMount
             )}
 
-            {/* Header Connect button portal (only if .connect exists on page) */}
             {headerMount && createPortal(
               <HeaderConnect onOpen={openWallet} />,
               headerMount
             )}
 
-            {/* Shared modals */}
             {termsPending && <TermsGate onAccept={acceptTerms} />}
             <WalletModal
               open={walletModalOpen}
@@ -165,48 +201,47 @@ function EmbedRoot({ swapMount, headerMount, inputMint, outputMint }) {
 }
 
 /* ──────────────────────────────────────────────────────────────────────
- * Mount — idempotent. Finds the swap root and the header connect button,
- * mounts a single React root onto a hidden host, and renders both UIs via
- * portals into their target DOM nodes.
+ * Mount.
  * ─────────────────────────────────────────────────────────────────── */
 const MOUNTED = new WeakSet();
 
 function mount() {
-  const swapMount = document.getElementById('verixia-swap-root');
-  if (!swapMount) {
-    console.warn('[verixia-swap] no #verixia-swap-root element on page');
-    return;
+  try {
+    const swapMount = document.getElementById('verixia-swap-root');
+    if (!swapMount) {
+      console.warn('[verixia-swap] no #verixia-swap-root element on page');
+      return;
+    }
+    if (MOUNTED.has(swapMount)) return;
+    MOUNTED.add(swapMount);
+
+    const cleanMint = (v) => (v && v.indexOf('{{') === -1) ? v : undefined;
+    const inputMint  = cleanMint(swapMount.dataset.inputMint);
+    const outputMint = cleanMint(swapMount.dataset.outputMint);
+
+    swapMount.innerHTML = '';
+
+    const headerMount = document.querySelector('button.connect, .connect');
+
+    const host = document.createElement('div');
+    host.style.display = 'none';
+    document.body.appendChild(host);
+
+    const root = ReactDOM.createRoot(host);
+    root.render(
+      <EmbedErrorBoundary>
+        <EmbedRoot
+          swapMount={swapMount}
+          headerMount={headerMount}
+          inputMint={inputMint}
+          outputMint={outputMint}
+        />
+      </EmbedErrorBoundary>
+    );
+  } catch (e) {
+    console.error('[verixia-swap] mount failed:', e);
+    showOnPageError('mount', e);
   }
-  if (MOUNTED.has(swapMount)) return;
-  MOUNTED.add(swapMount);
-
-  // Treat empty OR unfilled "{{...}}" placeholders as absent.
-  const cleanMint = (v) => (v && v.indexOf('{{') === -1) ? v : undefined;
-  const inputMint  = cleanMint(swapMount.dataset.inputMint);
-  const outputMint = cleanMint(swapMount.dataset.outputMint);
-
-  // Clear the skeleton.
-  swapMount.innerHTML = '';
-
-  // Header connect button — optional. If absent, the embed still works,
-  // user just connects via the widget's own button.
-  const headerMount = document.querySelector('button.connect, .connect');
-
-  // Hidden host element to root React into. The visible UI is rendered via
-  // portals into swapMount and headerMount, so this host stays empty.
-  const host = document.createElement('div');
-  host.style.display = 'none';
-  document.body.appendChild(host);
-
-  const root = ReactDOM.createRoot(host);
-  root.render(
-    <EmbedRoot
-      swapMount={swapMount}
-      headerMount={headerMount}
-      inputMint={inputMint}
-      outputMint={outputMint}
-    />
-  );
 }
 
 if (typeof document !== 'undefined') {
@@ -217,7 +252,6 @@ if (typeof document !== 'undefined') {
   }
 }
 
-// Manual mount for SPA hosts that inject the script after load.
 if (typeof window !== 'undefined') {
   window.VerixiaSwap = { mount };
 }
