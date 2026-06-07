@@ -1,4 +1,4 @@
-<!DOCTYPE html> 
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -168,7 +168,7 @@
     }
     .header-msg-l1 {
       font-family: 'Outfit'; font-weight: 800;
-      font-size: 12px;
+      font-size: 15px;
       color: white;
       letter-spacing: -0.01em;
     }
@@ -179,7 +179,7 @@
     }
     .header-msg-l2 {
       font-family: 'JetBrains Mono'; font-weight: 700;
-      font-size: 9px;
+      font-size: 11px;
       color: var(--text-dim);
       letter-spacing: 0.06em;
       text-transform: uppercase;
@@ -187,7 +187,7 @@
     }
     .header-msg-l3 {
       font-family: 'JetBrains Mono'; font-weight: 700;
-      font-size: 9px;
+      font-size: 10px;
       color: var(--text-faint);
       letter-spacing: 0.06em;
       margin-top: 1px;
@@ -361,7 +361,7 @@
   }
   .hero-msg-mobile .l1 {
     font-family: 'Outfit'; font-weight: 800;
-    font-size: 13px;
+    font-size: 20px;
     color: white;
     letter-spacing: -0.01em;
   }
@@ -372,7 +372,7 @@
   }
   .hero-msg-mobile .l2 {
     font-family: 'JetBrains Mono'; font-weight: 700;
-    font-size: 10px;
+    font-size: 13px;
     color: var(--text-dim);
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -380,7 +380,7 @@
   }
   .hero-msg-mobile .l3 {
     font-family: 'JetBrains Mono'; font-weight: 700;
-    font-size: 10px;
+    font-size: 11px;
     color: var(--text-faint);
     letter-spacing: 0.05em;
     margin-top: 2px;
@@ -1119,15 +1119,12 @@
   </section>
 
   <!-- SWAP MOUNT — real SwapWidget mounts here via /embed/verixia-swap.js.
-       The data-input-mint / data-output-mint attributes tell the widget which
-       pair to pre-select. Your generator must fill them with real mint
-       addresses, OR leave them empty (value=""). If a placeholder is left
-       UNFILLED (literally "{{INPUT_MINT}}"), the widget detects that and falls
-       back to SOL -> USDC, so it won't break. -->
+       With no data-input-mint/data-output-mint attributes, the widget defaults
+       to SOL -> USDC. (Per-page token pairs would require the generator to fill
+       those attributes; it currently has no such logic and rejects any leftover
+       {{ }} placeholder, so we don't put one here.) -->
   <section class="swap-wrap">
-    <div id="verixia-swap-root"
-         data-input-mint="{{INPUT_MINT}}"
-         data-output-mint="{{OUTPUT_MINT}}">
+    <div id="verixia-swap-root">
       <div class="swap-skeleton" aria-hidden="true">
         <div class="swap-skeleton-msg">
           <span class="dot"></span>
@@ -1206,4 +1203,3 @@
 </main>
 </body>
 </html>
- 
