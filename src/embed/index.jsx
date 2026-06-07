@@ -249,3 +249,4 @@ if (typeof document !== 'undefined') {
 if (typeof window !== 'undefined') {
   window.VerixiaSwap = { mount };
 }
+ 
