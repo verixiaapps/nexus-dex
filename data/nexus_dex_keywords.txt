@@ -1,4 +1,3 @@
-bridge usdt to optimism
 bridge eth to optimism
 bridge btc to optimism
 bridge xrp to optimism
