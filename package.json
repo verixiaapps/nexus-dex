@@ -51,7 +51,7 @@
   "scripts": {
     "start": "concurrently --names server,crank --prefix-colors blue,magenta \"node server.js\" \"ts-node --transpile-only crank/crank.ts\"",
     "build": "react-app-rewired build",
-    "build:embed": "react-app-rewired --config-overrides-path config-overrides.embed.js build",
+    "build:embed": "CONFIG_OVERRIDES_PATH=config-overrides.embed.js react-app-rewired build",
     "build:all": "npm run build && npm run build:embed",
     "dev": "concurrently \"react-app-rewired start\" \"node server.js\""
   },
