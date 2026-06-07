@@ -1,4 +1,3 @@
-bridge ada to optimism
 bridge ton to optimism
 bridge near to optimism
 bridge kaspa to optimism
