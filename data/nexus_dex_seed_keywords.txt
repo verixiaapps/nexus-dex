@@ -1,1 +1,124 @@
- 
+# =============================================================================
+# WONDERLAND MEME SEEDS (Solana memecoins)
+# =============================================================================
+hoppy
+fartcoin
+pepe
+wif
+bonk
+popcat
+mew
+wen
+bome
+myro
+ponke
+michi
+trump
+moodeng
+goat
+pnut
+pengu
+neiro
+fwog
+useless
+doge
+shib
+floki
+chillguy
+
+# =============================================================================
+# SOLANA ECOSYSTEM TOKEN SEEDS (SPL tokens for swap patterns)
+# =============================================================================
+sol
+solana
+usdc
+usdt
+jup
+jupiter
+ray
+raydium
+pyth
+jto
+orca
+meteora
+render
+
+# =============================================================================
+# BRAND TOKEN TICKER SEEDS (Solana SPL tokens that track popular brands)
+# =============================================================================
+aaplx
+tslax
+nvdax
+msftx
+googlx
+amznx
+metax
+mstrx
+nflxx
+spyx
+qqqx
+crclx
+hoodx
+coinx
+orclx
+crmx
+
+# =============================================================================
+# BRAND NAME SEEDS (the brand each token tracks)
+# =============================================================================
+apple
+tesla
+nvidia
+microsoft
+google
+amazon
+meta
+microstrategy
+netflix
+circle
+robinhood
+coinbase
+oracle
+salesforce
+
+# =============================================================================
+# BRIDGE CHAIN SEEDS (cross-chain inbound to Solana)
+# =============================================================================
+ethereum
+base
+arbitrum
+optimism
+polygon
+avalanche
+bnb
+bsc
+sui
+aptos
+near
+ton
+
+# =============================================================================
+# GENERIC MEME / LAUNCH CATEGORY SEEDS
+# =============================================================================
+new solana memecoin
+trending solana memecoin
+new memecoin
+viral memecoin
+low cap solana memecoin
+micro cap solana memecoin
+graduated memecoin
+animal memecoin
+food memecoin
+political memecoin
+ai memecoin
+gaming memecoin
+celebrity memecoin
+new spl token
+trending spl token
+raydium graduated token
+new raydium pair
+fresh solana launch
+bonding curve token
+community token
+no presale token
+fair launch token
