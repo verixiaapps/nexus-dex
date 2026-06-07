@@ -214,8 +214,6 @@ function mount() {
     const inputMint  = cleanMint(swapMount.dataset.inputMint);
     const outputMint = cleanMint(swapMount.dataset.outputMint);
 
-    // Note: keep the boot banner visible until React renders into the portal.
-    // SwapWidget's render will replace it via createPortal.
     swapMount.innerHTML = '';
 
     const headerMount = document.querySelector('button.connect, .connect');
