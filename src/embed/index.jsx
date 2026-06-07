@@ -1,31 +1,36 @@
 // src/embed/index.jsx
 //
 // VERIXIA SWAP EMBED — entry point for the standalone bundle shipped to every
-// SEO page. Mounts the REAL SwapWidget plus the REAL connect flow.
+// SEO page. Mounts the REAL SwapWidget plus the REAL connect flow
+// (your WalletModal + TermsGate from WalletConnectKit — same as the main site).
 //
-// What this wires up (vs the previous version which only rendered SwapWidget):
-//   • WalletModal  — same Phantom/WalletConnect picker + Chainalysis screening
-//   • TermsGate    — same terms sheet, fired on FIRST connect (not page load)
-//   • onConnectWallet — passed into SwapWidget so its "Connect Wallet" button
-//                       actually opens the picker (it's a no-op otherwise)
-//   • Runtime config — RPC + WalletConnect id read from window.__VERIXIA_CONFIG__
-//                      (served by the server from Railway env), so no secrets
-//                      need to be baked in at build time.
+// Fixes vs the version that failed to build:
+//   • Uses the correct export from WalletContext.js: `WalletContextProvider`.
+//     The old wrong name was the `Attempted import error` that failed the build.
+//   • WalletConnect is MANDATORY — always registered (was conditional before).
+//   • WalletConnect metadata matches the main app (src/index.js) so it lines up
+//     with the project id's allowlisted domain (swap.verixiaapps.com).
+//   • window.Buffer set, matching src/index.js.
 
 import React, { useMemo, useState, useCallback } from 'react';
 import ReactDOM from 'react-dom/client';
+import { Buffer } from 'buffer';
 
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
 import { WalletConnectWalletAdapter } from '@solana/wallet-adapter-walletconnect';
-import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 
-import { NexusWalletProvider } from '../WalletContext.js';
+import { WalletContextProvider } from '../WalletContext.js';
 import SwapWidget from '../components/SwapWidget.jsx';
 import { WalletModal, TermsGate } from '../components/WalletConnectKit.jsx';
 
 import '@solana/wallet-adapter-react-ui/styles.css';
+
+// Match src/index.js: some Solana libs read window.Buffer at runtime.
+if (typeof window !== 'undefined' && !window.Buffer) {
+  window.Buffer = Buffer;
+}
 
 // ---------------------------------------------------------------------------
 // Config — runtime first (window.__VERIXIA_CONFIG__ from the server), then
@@ -52,22 +57,29 @@ const TERMS_KEY = 'nexus_terms_accepted_v3';
 // ---------------------------------------------------------------------------
 function EmbedRoot({ inputMint, outputMint }) {
   const wallets = useMemo(() => {
-    const list = [new PhantomWalletAdapter()];
-    if (WC_PROJECT_ID) {
-      list.push(new WalletConnectWalletAdapter({
-        network: WalletAdapterNetwork.Mainnet,
+    // WalletConnect is MANDATORY — always registered. The project id comes from
+    // the server (window.__VERIXIA_CONFIG__.wcProjectId). If it's missing, that's
+    // a Railway misconfiguration to fix, not something to silently skip.
+    if (!WC_PROJECT_ID) {
+      console.error(
+        '[verixia-swap] WalletConnect projectId is missing — set WALLETCONNECT_PROJECT_ID in Railway.'
+      );
+    }
+    return [
+      new PhantomWalletAdapter(),
+      new WalletConnectWalletAdapter({
+        network: 'mainnet-beta',
         options: {
           projectId: WC_PROJECT_ID,
           metadata: {
-            name: 'Verixia',
-            description: 'Swap any Solana token. No KYC, no accounts, no limits. Powered by Jupiter.',
-            url: 'https://verixiaapps.com',
-            icons: ['https://verixiaapps.com/icon.png'],
+            name: 'Nexus DEX',
+            description: 'Solana DEX powered by Jupiter',
+            url: 'https://swap.verixiaapps.com',
+            icons: ['https://swap.verixiaapps.com/icon-512.png'],
           },
         },
-      }));
-    }
-    return list;
+      }),
+    ];
   }, []);
 
   const [walletModalOpen, setWalletModalOpen] = useState(false);
@@ -91,10 +103,10 @@ function EmbedRoot({ inputMint, outputMint }) {
   }, []);
 
   return (
-    <ConnectionProvider endpoint={RPC_URL}>
+    <ConnectionProvider endpoint={RPC_URL} config={{ commitment: 'confirmed' }}>
       <WalletProvider wallets={wallets} autoConnect>
         <WalletModalProvider>
-          <NexusWalletProvider>
+          <WalletContextProvider>
             <SwapWidget
               defaultInputMint={inputMint}
               defaultOutputMint={outputMint}
@@ -102,7 +114,7 @@ function EmbedRoot({ inputMint, outputMint }) {
             />
             {termsPending && <TermsGate onAccept={acceptTerms} />}
             <WalletModal open={walletModalOpen} onClose={() => setWalletModalOpen(false)} />
-          </NexusWalletProvider>
+          </WalletContextProvider>
         </WalletModalProvider>
       </WalletProvider>
     </ConnectionProvider>
@@ -124,7 +136,7 @@ function mount() {
   MOUNTED.add(el);
 
   // Treat empty OR an unfilled "{{...}}" placeholder as absent → SwapWidget
-  // falls back to its SOL/USDC defaults instead of trying to use junk as a mint.
+  // falls back to its SOL/USDC defaults instead of using junk as a mint.
   const cleanMint = (v) => (v && v.indexOf('{{') === -1) ? v : undefined;
   const inputMint  = cleanMint(el.dataset.inputMint);
   const outputMint = cleanMint(el.dataset.outputMint);
