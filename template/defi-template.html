@@ -28,6 +28,7 @@
   "name": "{{TITLE}}",
   "description": "{{DESCRIPTION}}",
   "dateModified": "{{MODIFIED_DATE}}",
+  "aggregateRating": {{AGGREGATE_RATING_JSON}},
   "isPartOf": { "@type": "WebSite", "url": "https://verixiaapps.com/", "name": "Verixia" },
   "publisher": { "@type": "Organization", "name": "Verixia", "url": "https://verixiaapps.com/" }
 }
@@ -919,6 +920,11 @@
   }
   .pair-tile .change.dn { color: var(--magenta); }
 
+  /* Hub link */
+  .hub-link-label { color: var(--text-faint); font-family: 'JetBrains Mono'; font-size: 11px; }
+  .hub-link-anchor { color: var(--cyan); font-family: 'JetBrains Mono'; font-size: 11px; font-weight: 700; text-decoration: none; }
+  .hub-link-anchor:hover { text-decoration: underline; }
+
   /* Footer */
   footer {
     margin-top: 32px;
@@ -1030,9 +1036,9 @@
     <div class="hero-content">
       <div class="pair-meta">
         <span class="dot"></span>
-        <span>{{PAIR_META}}</span>
+        <span>{{STATIC_INTRO}}</span>
       </div>
-      <h1>{{HERO_H1}}</h1>
+      <h1>{{STATIC_H1}}</h1>
       <div class="hero-msg-mobile">
         <div class="l1">Swap <span class="grad">any</span> Solana token</div>
         <div class="l2">No KYC · No limits</div>
@@ -1043,11 +1049,7 @@
 
   <!-- SWAP MOUNT — real SwapWidget mounts here via /embed/verixia-swap.js -->
   <section class="swap-wrap">
-    <div
-      id="verixia-swap-root"
-      data-input-mint="{{INPUT_MINT}}"
-      data-output-mint="{{OUTPUT_MINT}}"
-    >
+    <div id="verixia-swap-root">
       <div class="swap-skeleton" aria-hidden="true">
         <div class="swap-skeleton-msg">
           <span class="dot"></span>
@@ -1091,21 +1093,21 @@
   </section>
 
   <section class="section">
-    <div class="section-tag">{{ABOUT_TAG}}</div>
-    <h2 class="section-title">{{ABOUT_TITLE}}</h2>
+    <div class="section-tag">{{SUPP_HEADING}}</div>
+    <h2 class="section-title">{{SUPP_INTRO}}</h2>
     {{AI_CONTENT}}
   </section>
 
   <section class="section">
     <div class="section-tag">FAQ</div>
     <h2 class="section-title">Common <span class="grad">questions</span></h2>
-    {{FAQ_ITEMS}}
+    {{RELATED_LINKS}}
   </section>
 
   <section class="section">
     <div class="section-tag">related</div>
-    <h2 class="section-title">{{RELATED_TITLE}}</h2>
-    <div class="pair-grid">{{RELATED_TILES}}</div>
+    <h2 class="section-title">{{HUB_LINK}}</h2>
+    <div class="pair-grid">{{MORE_LINKS}}</div>
   </section>
 
   <footer>
@@ -1120,12 +1122,7 @@
 
 {{PAGE_META_SCRIPT}}
 
-<!-- Runtime config (RPC + WalletConnect id) from Railway env. Loads before the
-     bundle so window.__VERIXIA_CONFIG__ is set first. Only non-placeholder line
-     added to your template — required for the embed to read Railway creds. -->
 <script src="/embed/config.js"></script>
-
-<!-- Loads the real SwapWidget bundle and mounts it into #verixia-swap-root -->
 <script src="/embed/verixia-swap.js" defer></script>
 
 </main>
