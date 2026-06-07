@@ -12,7 +12,7 @@ if BASE_DIR not in sys.path:
 from data.nexus_dex_clusters import CLUSTERS
 
 KEYWORDS_FILE = os.path.join(BASE_DIR, "data", "nexus_dex_keywords.txt")
-OUTPUT_DIR = os.path.join(BASE_DIR, "nexus-dex")
+OUTPUT_DIR = os.path.join(BASE_DIR, "defi")
 SITE = "https://verixiaapps.com"
 
 MAX_LINKS_PER_HUB = 50
@@ -117,7 +117,7 @@ def page_exists(slug):
 
 
 def build_canonical(slug):
-    return f"{SITE}/nexus-dex/{slug}/"
+    return f"{SITE}/nexus-dex/defi/{slug}/"
 
 
 def trim_meta_description(text, minimum=110, maximum=165):
@@ -187,7 +187,7 @@ def build_related_link_items(cluster_keywords, valid_child_slugs):
 
         items.append({
             "slug": slug,
-            "href": f"/nexus-dex/{slug}/",
+            "href": f"/nexus-dex/defi/{slug}/",
             "anchor": label,
         })
 
