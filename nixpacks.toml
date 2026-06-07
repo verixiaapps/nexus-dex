@@ -5,13 +5,13 @@ nixPkgs = ["nodejs_20", "python3"]
 cmds = ["npm install --legacy-peer-deps"]
 
 [phases.build]
-cmds = ["npm run build"]
- 
+cmds = ["npm run build:all"]
+
 [variables]
 NODE_OPTIONS = "--max-old-space-size=4096"
 GENERATE_SOURCEMAP = "false"
 CI = "false"
 NODE_ENV = "production"
- 
+
 [start]
 cmd = "node server.js"
