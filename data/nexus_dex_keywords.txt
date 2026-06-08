@@ -1,4 +1,3 @@
-bridge ton to optimism
 bridge near to optimism
 bridge kaspa to optimism
 bridge link to optimism

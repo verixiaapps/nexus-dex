@@ -1,5 +1,6 @@
 bridge-ada-to-optimism
 bridge-btc-to-optimism
 bridge-eth-to-optimism
+bridge-ton-to-optimism
 bridge-usdt-to-optimism
 bridge-xrp-to-optimism
