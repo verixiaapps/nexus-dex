@@ -1,4 +1,3 @@
-bridge near to optimism
 bridge kaspa to optimism
 bridge link to optimism
 bridge usdc to polygon
