@@ -114,3 +114,4 @@ if(headerBtn)headerBtn.addEventListener('click',function(){if(!activeWallet.conn
 updateHeader();eagerReconnect();
 }
 })();
+ 
