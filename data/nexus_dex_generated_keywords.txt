@@ -5,6 +5,7 @@ bridge btc to polygon
 bridge eth to optimism
 bridge eth to polygon
 bridge kaspa to optimism
+bridge kaspa to polygon
 bridge link to optimism
 bridge near to optimism
 bridge near to polygon
