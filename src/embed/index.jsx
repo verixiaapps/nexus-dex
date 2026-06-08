@@ -1,46 +1,60 @@
-// src/embed/index.jsx — Entry point for the self-contained embed bundle.
-// 
-// Railway runs `npm run build:embed` which uses config-overrides.embed.js
-// to build this file into build/embed/verixia-swap.js.
+// src/embed/index.jsx
 //
-// The SEO pages on GitHub Pages (verixiaapps.com) load this bundle via:
-//   <script src="https://swap.verixiaapps.com/embed/verixia-swap.js"></script>
+// The entry point config-overrides.embed.js builds into build/embed/verixia-swap.js.
+// This was the file missing from the repo — `npm run build:embed` failed with
+//   Module not found: Can't resolve '/app/src/embed/index.jsx'
+// because nothing existed here. This mounts the SAME SwapWidget the main app uses
+// into #verixia-swap-root, with the same wallet-adapter providers, so the embed
+// bundle behaves identically to the app.
 //
-// Runtime config comes from window.__VERIXIA_CONFIG__ (set by /embed/config.js).
+// Reads RPC from window.__VERIXIA_CONFIG__ (server-injected on Railway, or the
+// static /embed/config.js on GitHub Pages), falling back to public mainnet-beta.
+// Per-page default pair via data-input-mint / data-output-mint on the mount node.
 
-import React from 'react';
+import React, { useMemo } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   ConnectionProvider,
   WalletProvider,
 } from '@solana/wallet-adapter-react';
-import { PhantomWalletAdapter } from '@solana/wallet-adapter-wallets';
+import {
+  WalletModalProvider,
+  useWalletModal,
+} from '@solana/wallet-adapter-react-ui';
+import '@solana/wallet-adapter-react-ui/styles.css';
+
+// ── The ONE path to verify: point this at your existing SwapWidget.jsx. ──
+// Default assumes src/components/SwapWidget.jsx. If yours lives elsewhere
+// (e.g. '../SwapWidget'), change just this line.
 import SwapWidget from '../components/SwapWidget';
-import '../components/SwapWidget.css';
 
-const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
+const RUNTIME_CFG =
+  (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
+const ENDPOINT = RUNTIME_CFG.rpc || 'https://api.mainnet-beta.solana.com';
 
-const RPC_URL =
-  RUNTIME_CFG.rpc ||
-  process.env.REACT_APP_SOLANA_RPC ||
-  (process.env.REACT_APP_HELIUS_API_KEY
-    ? `https://mainnet.helius-rpc.com/?api-key=${process.env.REACT_APP_HELIUS_API_KEY}`
-    : 'https://api.mainnet-beta.solana.com');
-
-const wallets = [new PhantomWalletAdapter()];
-
-function EmbedApp() {
-  const root = document.getElementById('verixia-swap-root');
-  const defaultInputMint = root?.getAttribute('data-input-mint') || undefined;
-  const defaultOutputMint = root?.getAttribute('data-output-mint') || undefined;
-
+// Inner component: needs to be inside WalletModalProvider to use the modal hook.
+// onConnectWallet opens the standard wallet picker when no wallet is connected.
+function EmbeddedSwap({ inputMint, outputMint }) {
+  const { setVisible } = useWalletModal();
   return (
-    <ConnectionProvider endpoint={RPC_URL}>
+    <SwapWidget
+      defaultInputMint={inputMint || undefined}
+      defaultOutputMint={outputMint || undefined}
+      onConnectWallet={() => setVisible(true)}
+    />
+  );
+}
+
+function EmbedApp({ inputMint, outputMint }) {
+  // Empty array: Wallet Standard auto-registers Phantom / Solflare / Backpack,
+  // so no per-adapter packages are required here.
+  const wallets = useMemo(() => [], []);
+  return (
+    <ConnectionProvider endpoint={ENDPOINT}>
       <WalletProvider wallets={wallets} autoConnect>
-        <SwapWidget
-          defaultInputMint={defaultInputMint}
-          defaultOutputMint={defaultOutputMint}
-        />
+        <WalletModalProvider>
+          <EmbeddedSwap inputMint={inputMint} outputMint={outputMint} />
+        </WalletModalProvider>
       </WalletProvider>
     </ConnectionProvider>
   );
@@ -48,12 +62,14 @@ function EmbedApp() {
 
 function mount() {
   const el = document.getElementById('verixia-swap-root');
-  if (!el) {
-    console.warn('[verixia-embed] #verixia-swap-root not found');
-    return;
-  }
-  const root = createRoot(el);
-  root.render(<EmbedApp />);
+  if (!el) return;
+  // Clear the loading skeleton the SEO template renders before hydration.
+  el.innerHTML = '';
+  const inputMint = el.getAttribute('data-input-mint') || '';
+  const outputMint = el.getAttribute('data-output-mint') || '';
+  createRoot(el).render(
+    <EmbedApp inputMint={inputMint} outputMint={outputMint} />
+  );
 }
 
 if (document.readyState === 'loading') {
