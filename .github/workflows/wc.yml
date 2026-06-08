@@ -1,0 +1,49 @@
+name: Build WalletConnect Bundle
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/build-wc.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Build verixia-wc.js
+        run: |
+          mkdir -p /tmp/wc-build
+          cd /tmp/wc-build
+          cat > package.json << 'PKG'
+          {
+            "private": true,
+            "dependencies": {
+              "@walletconnect/universal-provider": "^2",
+              "@walletconnect/modal": "^2",
+              "bs58": "^5",
+              "esbuild": "^0.20.0"
+            }
+          }
+          PKG
+          cat > entry.js << 'ENTRY'
+          export { UniversalProvider } from '@walletconnect/universal-provider';
+          export { WalletConnectModal } from '@walletconnect/modal';
+          export { default as bs58 } from 'bs58';
+          ENTRY
+          npm install
+          npx esbuild entry.js --bundle --format=iife --global-name=__VerixiaWC --outfile=verixia-wc.js --minify --target=es2020
+          cp verixia-wc.js $GITHUB_WORKSPACE/verixia-wc.js
+
+      - name: Commit bundle
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add verixia-wc.js
+          git commit -m "Build verixia-wc.js (WalletConnect bundle)" || echo "No changes"
+          git push
