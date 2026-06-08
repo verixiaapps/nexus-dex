@@ -1,4 +1,3 @@
-bridge xrp to polygon
 bridge ada to polygon
 bridge ton to polygon
 bridge near to polygon

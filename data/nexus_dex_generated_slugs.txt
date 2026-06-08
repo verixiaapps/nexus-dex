@@ -11,3 +11,4 @@ bridge-usdc-to-polygon
 bridge-usdt-to-optimism
 bridge-usdt-to-polygon
 bridge-xrp-to-optimism
+bridge-xrp-to-polygon
