@@ -1,5 +1,5 @@
 // src/embed/index.jsx — Entry point for the self-contained embed bundle.
-//
+// 
 // Railway runs `npm run build:embed` which uses config-overrides.embed.js
 // to build this file into build/embed/verixia-swap.js.
 //
