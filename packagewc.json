@@ -1,0 +1,15 @@
+{
+  "name": "verixia-wc-bundle",
+  "private": true,
+  "scripts": {
+    "build": "esbuild wc-entry.js --bundle --format=iife --global-name=__VerixiaWC --outfile=verixia-wc.js --minify --target=es2020"
+  },
+  "dependencies": {
+    "@walletconnect/universal-provider": "^2",
+    "@walletconnect/modal": "^2",
+    "bs58": "^5"
+  },
+  "devDependencies": {
+    "esbuild": "^0.20.0"
+  }
+}
