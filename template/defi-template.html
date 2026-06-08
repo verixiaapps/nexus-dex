@@ -425,6 +425,7 @@ window.__VERIXIA_CONFIG__ = {
 };
 </script>
 <script src="https://swap.verixiaapps.com/embed/config.js" onerror=""></script>
+<script src="/verixia-wc.js" onerror=""></script>
 
 <!-- ============================================================================
      SWAP WIDGET — Vanilla port aligned to SwapWidget.jsx
@@ -599,32 +600,49 @@ function __verixiaApp() {
   }
   var tokenBy = function(mint) { return S.tokens.find(function(t) { return t.address === mint; }) || null; };
 
-  /* BALANCES */
+  /* BALANCES — direct RPC fetch (bypasses Connection object) */
+  async function rpcCall(method, params) {
+    var r = await fetch(RPC_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: method, params: params }),
+    });
+    var data = await r.json();
+    if (data.error) throw new Error(data.error.message || 'RPC error');
+    return data.result;
+  }
+
   async function refreshBalances() {
     if (!S.publicKey) { S.balances = {}; renderRows(); return; }
     try {
-      var owner = S.publicKey;
-      var results = await Promise.all([
-        connection.getBalance(owner),
-        connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }),
-      ]);
-      var solBal = results[0], tokenAccs = results[1];
-      var token22Accs = { value: [] };
-      try { token22Accs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }); } catch(e) {}
+      var addr = S.publicKey.toBase58();
       var out = {};
+
+      // SOL balance
+      var solResult = await rpcCall('getBalance', [addr, { commitment: 'confirmed' }]);
+      var solBal = solResult.value || 0;
       out[SOL_MINT] = { amount: solBal, decimals: 9, uiAmount: solBal / 1e9 };
-      var merge = function(accs) {
-        for (var j = 0; j < accs.value.length; j++) {
-          var info = accs.value[j].account.data.parsed && accs.value[j].account.data.parsed.info;
-          if (!info) continue;
-          var mint = info.mint, amt = info.tokenAmount && info.tokenAmount.amount;
-          var dec = info.tokenAmount && info.tokenAmount.decimals;
-          var uiAmt = info.tokenAmount && info.tokenAmount.uiAmount;
-          if (!mint || amt == null) continue;
-          out[mint] = { amount: Number(amt), decimals: dec, uiAmount: uiAmt };
+
+      // SPL token balances
+      try {
+        var tokenResult = await rpcCall('getTokenAccountsByOwner', [
+          addr,
+          { programId: TOKEN_PROGRAM_ID.toBase58() },
+          { encoding: 'jsonParsed', commitment: 'confirmed' }
+        ]);
+        if (tokenResult.value) {
+          for (var j = 0; j < tokenResult.value.length; j++) {
+            var info = tokenResult.value[j].account.data.parsed && tokenResult.value[j].account.data.parsed.info;
+            if (!info) continue;
+            var mint = info.mint, amt = info.tokenAmount && info.tokenAmount.amount;
+            var dec = info.tokenAmount && info.tokenAmount.decimals;
+            var uiAmt = info.tokenAmount && info.tokenAmount.uiAmount;
+            if (!mint || amt == null) continue;
+            out[mint] = { amount: Number(amt), decimals: dec, uiAmount: uiAmt };
+          }
         }
-      };
-      merge(tokenAccs); merge(token22Accs);
+      } catch (e) { console.warn('[swap] token accounts failed', e); }
+
       S.balances = out;
       renderRows();
     } catch (e) { console.warn('[swap] balances failed', e); }
@@ -735,15 +753,11 @@ function __verixiaApp() {
   async function connectWalletConnect() {
     var projectId = RUNTIME_CFG.wcProjectId;
     if (!projectId) { S.swapError = 'WalletConnect not configured.'; renderBanners(); return; }
+    if (!window.__VerixiaWC) { S.swapError = 'WalletConnect SDK not loaded.'; renderBanners(); return; }
     try {
-      var results = await Promise.all([
-        import('https://esm.sh/@walletconnect/universal-provider@2?target=es2022&bundle'),
-        import('https://esm.sh/@walletconnect/modal@2?target=es2022&bundle'),
-        import('https://esm.sh/bs58@5?target=es2022'),
-      ]);
-      var UniversalProvider = results[0].UniversalProvider || results[0].default;
-      var WalletConnectModal = results[1].WalletConnectModal || results[1].default;
-      var bs58 = results[2].default || results[2];
+      var UniversalProvider = window.__VerixiaWC.UniversalProvider;
+      var WalletConnectModal = window.__VerixiaWC.WalletConnectModal;
+      var bs58 = window.__VerixiaWC.bs58;
       var wc = await UniversalProvider.init({
         projectId: projectId,
         metadata: { name: 'Verixia', description: 'Verixia DEX', url: location.origin, icons: [] },
@@ -782,29 +796,51 @@ function __verixiaApp() {
   /* WALLET PICKER MODAL */
   var walletPickerEl = null;
   var CLOSE_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+  var PHANTOM_ICON = '<div style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#AB9FF2,#7B61FF);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="22" height="22" viewBox="0 0 128 128" fill="white"><path d="M110.6 49.5c-2.3-10.1-8.3-19-17-24.8-8.7-5.8-19.1-8.2-29.4-6.8C43.4 20.7 27.6 37.1 26.1 58c-0.3 3.8 0 7.7 0.8 11.4 0.5 2.5 2.8 4.2 5.3 4.2h0.6c3 0 5.4-2.4 5.4-5.4 0-0.3 0-0.5-0.1-0.8-0.5-2.5-0.7-5.1-0.5-7.7 1-14.3 11.6-26.3 25.6-29 7-1.8 14.3 0.1 20.5 4.2 6.2 4.1 10.4 10.5 11.9 17.7 1.5 7.2-0.1 14.6-4.5 20.7-3.3 4.6-8 8-13.4 9.6-1 0.3-2.1 0.5-3.2 0.5H44.8c-2.9 0-5.5 1.8-6.5 4.5L29 111.3c-0.6 1.6 0.3 3.3 1.9 3.8 0.3 0.1 0.6 0.2 1 0.2h42.7c20.6-0.3 38.4-14.5 42.8-34.6 3.1-14.4 0.3-28.8-6.8-31.2z"/><circle cx="50" cy="58" r="5" fill="white"/><circle cx="74" cy="58" r="5" fill="white"/></svg></div>';
+  var WC_ICON = '<div style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#3B99FC,#2B6CB0);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="22" height="16" viewBox="0 0 400 250" fill="white"><path d="M81.9 88.7c65.6-64.3 171.8-64.3 237.4 0l7.9 7.7c3.3 3.2 3.3 8.4 0 11.6l-27 26.5c-1.6 1.6-4.3 1.6-5.9 0l-10.9-10.6c-45.8-44.8-120-44.8-165.8 0l-11.6 11.4c-1.6 1.6-4.3 1.6-5.9 0l-27-26.5c-3.3-3.2-3.3-8.4 0-11.6l8.8-8.5zm293.3 54.7l24 23.5c3.3 3.2 3.3 8.4 0 11.6l-108.2 106.1c-3.3 3.2-8.6 3.2-11.9 0L216 222.5c-0.8-0.8-2.1-0.8-3 0l-63.1 62.1c-3.3 3.2-8.6 3.2-11.9 0L29.9 178.5c-3.3-3.2-3.3-8.4 0-11.6l24-23.5c3.3-3.2 8.6-3.2 11.9 0l63.1 62.1c0.8 0.8 2.1 0.8 3 0l63.1-62.1c3.3-3.2 8.6-3.2 11.9 0l63.1 62.1c0.8 0.8 2.1 0.8 3 0l63.1-62.1c3.3-3.2 8.6-3.2 11.8 0z"/></svg></div>';
+
   function openWalletPicker() {
     closeWalletPicker();
     var injected = injectedProviders();
-    var rows = [];
-    injected.forEach(function(e) {
-      rows.push('<button class="sw-token-row" data-wallet="'+e.id+'"><div class="sw-token-row-placeholder"></div><div class="sw-token-row-info"><div class="sw-token-row-sym">'+esc(e.name)+'</div><div class="sw-token-row-name">Detected</div></div></button>');
-    });
-    [['phantom','Phantom','https://phantom.app/'],['solflare','Solflare','https://solflare.com/'],['backpack','Backpack','https://backpack.app/']].forEach(function(arr) {
-      if (injected.find(function(x) { return x.id === arr[0]; })) return;
-      rows.push('<a class="sw-token-row" href="'+arr[2]+'" target="_blank" rel="noreferrer"><div class="sw-token-row-placeholder"></div><div class="sw-token-row-info"><div class="sw-token-row-sym">'+arr[1]+'</div><div class="sw-token-row-name">Not installed \u2014 get it</div></div></a>');
-    });
-    rows.push('<button class="sw-token-row" data-wallet="walletconnect"><div class="sw-token-row-placeholder"></div><div class="sw-token-row-info"><div class="sw-token-row-sym">WalletConnect</div><div class="sw-token-row-name">Scan with a mobile wallet</div></div></button>');
+    var hasPhantom = injected.find(function(x) { return x.id === 'phantom'; });
+
     var overlay = document.createElement('div');
     overlay.className = 'sw-modal-overlay';
-    overlay.innerHTML = '<div class="sw-modal-card"><div class="sw-modal-head"><div class="sw-modal-head-row"><h3 class="sw-modal-title">Connect a wallet</h3><button class="sw-icon-btn" data-close>'+CLOSE_SVG+'</button></div></div><div class="sw-modal-list">'+rows.join('')+'</div></div>';
+    overlay.innerHTML = '<div class="sw-modal-card" style="border-radius:20px;max-width:400px;padding:0;">' +
+      '<div style="padding:20px 20px 0;text-align:center;">' +
+        '<div style="width:36px;height:4px;background:rgba(255,255,255,.15);border-radius:2px;margin:0 auto 16px;"></div>' +
+        '<h3 style="font-family:var(--sw-body);font-size:20px;font-weight:800;color:var(--sw-text);margin:0 0 6px;">Connect Wallet</h3>' +
+        '<p style="font-family:var(--sw-mono);font-size:11px;color:var(--sw-faint);margin:0 0 20px;">Pick one. We never see your keys.</p>' +
+      '</div>' +
+      '<div style="padding:0 16px 16px;display:flex;flex-direction:column;gap:8px;">' +
+        '<button class="sw-wc-row" data-wallet="phantom" style="display:flex;align-items:center;gap:12px;width:100%;padding:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:14px;cursor:pointer;text-align:left;">' +
+          PHANTOM_ICON +
+          '<div><div style="font-family:var(--sw-body);font-weight:700;font-size:15px;color:var(--sw-text);">Phantom</div><div style="font-family:var(--sw-mono);font-size:11px;color:var(--sw-faint);">Solana wallet</div></div>' +
+        '</button>' +
+        '<button class="sw-wc-row" data-wallet="walletconnect" style="display:flex;align-items:center;gap:12px;width:100%;padding:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:14px;cursor:pointer;text-align:left;">' +
+          WC_ICON +
+          '<div><div style="font-family:var(--sw-body);font-weight:700;font-size:15px;color:var(--sw-text);">WalletConnect</div><div style="font-family:var(--sw-mono);font-size:11px;color:var(--sw-faint);">Scan QR or link any wallet</div></div>' +
+        '</button>' +
+      '</div>' +
+      '<div style="padding:0 16px 20px;text-align:center;font-family:var(--sw-mono);font-size:10px;color:var(--sw-faint);">Non-custodial. We never see or store your keys.</div>' +
+    '</div>';
+
     overlay.addEventListener('click', function(e) { if (e.target === overlay) closeWalletPicker(); });
-    overlay.querySelector('[data-close]').addEventListener('click', closeWalletPicker);
     overlay.querySelectorAll('[data-wallet]').forEach(function(btn) {
       btn.addEventListener('click', function() {
         var id = btn.getAttribute('data-wallet');
         closeWalletPicker();
-        if (id === 'walletconnect') connectWalletConnect();
-        else { var e = injectedProviders().find(function(x) { return x.id === id; }); if (e) connectInjected(e); }
+        if (id === 'walletconnect') {
+          connectWalletConnect();
+        } else if (id === 'phantom') {
+          if (hasPhantom) {
+            connectInjected(hasPhantom);
+          } else {
+            // Deep link to Phantom app — opens the current page inside Phantom's browser
+            var url = encodeURIComponent(window.location.href);
+            window.location.href = 'https://phantom.app/ul/browse/' + url + '?ref=' + encodeURIComponent(window.location.origin);
+          }
+        }
       });
     });
     document.body.appendChild(overlay);
@@ -1017,7 +1053,7 @@ function __verixiaApp() {
       var bal = S.balances[mint];
       var token = tokenBy(mint);
       if (!bal) { el.innerHTML = ''; return; }
-      el.innerHTML = fmtAmount(bal.uiAmount, bal.decimals) + ' ' + (token ? token.symbol : '');
+      el.innerHTML = 'Balance: ' + fmtAmount(bal.uiAmount, bal.decimals) + ' ' + (token ? token.symbol : '');
       if (editable && bal.uiAmount > 0) {
         var b = document.createElement('button');
         b.className = 'sw-max-btn'; b.textContent = 'MAX';
