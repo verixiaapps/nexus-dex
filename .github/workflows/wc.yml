@@ -1,51 +1,80 @@
-name: Build WalletConnect Bundle
+name: Build verixia-wc.js
 
+# Runs on:
+#  - manual trigger from the Actions tab (workflow_dispatch)
+#  - whenever this workflow file itself changes
+#  - whenever the trigger file 'verixia-wc.trigger' is touched
+# Won't run on every push, so it doesn't slow down normal commits.
 on:
   workflow_dispatch:
   push:
     paths:
       - '.github/workflows/build-wc.yml'
+      - 'verixia-wc.trigger'
+
+permissions:
+  contents: write
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repo
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: '20'
 
-      - name: Build verixia-wc.js
+      - name: Install WalletConnect packages + esbuild
         run: |
           mkdir -p /tmp/wc-build
           cd /tmp/wc-build
-          cat > package.json << 'PKG'
-          {
-            "private": true,
-            "dependencies": {
-              "@walletconnect/universal-provider": "^2",
-              "@walletconnect/modal": "^2",
-              "bs58": "^5",
-              "esbuild": "^0.20.0"
-            }
-          }
-          PKG
-          cat > entry.js << 'ENTRY'
-          export { UniversalProvider } from '@walletconnect/universal-provider';
-          export { WalletConnectModal } from '@walletconnect/modal';
-          export { default as bs58 } from 'bs58';
-          ENTRY
-          npm install
-          npx esbuild entry.js --bundle --format=iife --global-name=__VerixiaWC --outfile=verixia-wc.js --minify --target=es2020
-          cp verixia-wc.js $GITHUB_WORKSPACE/verixia-wc.js
+          npm init -y > /dev/null
+          npm install --no-audit --no-fund --silent \
+            @walletconnect/universal-provider@2.17.0 \
+            @walletconnect/modal@2.7.0 \
+            bs58@5.0.0 \
+            esbuild@0.24.0
 
-      - name: Commit bundle
+      - name: Write entry file
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
+          cat > /tmp/wc-build/entry.mjs << 'ENTRY_EOF'
+          import { UniversalProvider } from "@walletconnect/universal-provider";
+          import { WalletConnectModal } from "@walletconnect/modal";
+          import bs58 from "bs58";
+          window.__VerixiaWC = { UniversalProvider, WalletConnectModal, bs58 };
+          ENTRY_EOF
+
+      - name: Bundle with esbuild
+        run: |
+          cd /tmp/wc-build
+          npx esbuild entry.mjs \
+            --bundle \
+            --format=iife \
+            --platform=browser \
+            --target=es2020 \
+            --minify \
+            --define:process.env.NODE_ENV='"production"' \
+            --define:global=globalThis \
+            --outfile=verixia-wc.js
+          ls -lh verixia-wc.js
+
+      - name: Copy output into repo (overwrite)
+        run: |
+          cp /tmp/wc-build/verixia-wc.js "$GITHUB_WORKSPACE/verixia-wc.js"
+          ls -lh "$GITHUB_WORKSPACE/verixia-wc.js"
+
+      - name: Commit and push
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add verixia-wc.js
-          git commit -m "Build verixia-wc.js (WalletConnect bundle)" || echo "No changes"
-          git push
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "build: refresh verixia-wc.js"
+            git push
+          fi
