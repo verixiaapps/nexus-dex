@@ -1,5 +1,5 @@
 require('dotenv').config();
-  
+ 
 const express   = require('express');
 const cors      = require('cors');
 const path      = require('path');
@@ -95,14 +95,22 @@ const LIFI_API_KEY = process.env.LIFI_API_KEY || '';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
-const allowedOrigins = (process.env.ALLOWED_ORIGINS || 'https://swap.verixiaapps.com,http://localhost:3000')
-  .split(',').map(s => s.trim()).filter(Boolean);
+// Cross-origin allow-list. The SEO pages live on verixiaapps.com (a different
+// origin than this swap server) so they MUST be whitelisted here or their
+// /api/jupiter/* calls are blocked by the browser ("Load failed" on iOS).
+// Defaults now include the verixia origins so this works even if the env var
+// is unset; trailing slashes are stripped on both sides so a value like
+// "https://verixiaapps.com/" can't silently fail the exact-string match.
+const stripSlash = (s) => String(s || '').replace(/\/+$/, '');
+const allowedOrigins = (process.env.ALLOWED_ORIGINS
+    || 'https://swap.verixiaapps.com,https://verixiaapps.com,https://www.verixiaapps.com,http://localhost:3000')
+  .split(',').map(s => stripSlash(s.trim())).filter(Boolean);
 
 app.use(cors({
   origin: (origin, cb) => {
     if (!origin) return cb(null, true);
     if (NODE_ENV !== 'production') return cb(null, true);
-    if (allowedOrigins.includes(origin)) return cb(null, true);
+    if (allowedOrigins.includes(stripSlash(origin))) return cb(null, true);
     return cb(new Error('Not allowed by CORS: ' + origin));
   },
   credentials: false,
@@ -587,6 +595,7 @@ app.listen(PORT, () => {
   console.log('  Jupiter Price:   ' + JUPITER_PRICE_BASE);
   console.log('  LI.FI:           ' + LIFI_API + (LIFI_API_KEY ? ' (key set)' : ' (no key)'));
   console.log('  Solana RPC:      ' + (HELIUS_RPC_URL ? 'helius (custom)' : HELIUS_API_KEY ? 'helius' : 'public mainnet-beta'));
+  console.log('  Allowed origins: ' + allowedOrigins.join(', '));
   console.log('  Whale Watcher:   starting…');
   startWhaleWatcher();
 });
