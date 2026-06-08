@@ -7,6 +7,7 @@ bridge-eth-to-polygon
 bridge-kaspa-to-optimism
 bridge-link-to-optimism
 bridge-near-to-optimism
+bridge-near-to-polygon
 bridge-ton-to-optimism
 bridge-ton-to-polygon
 bridge-usdc-to-polygon
