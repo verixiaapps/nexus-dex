@@ -525,6 +525,15 @@ app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not fou
 
 /* ========================================================================
  * Embed runtime config
+ *
+ * Serves window.__VERIXIA_CONFIG__ from Railway env so the self-contained
+ * embed bundle (build/embed/verixia-swap.js) needs no build-time secrets.
+ * Declared BEFORE express.static so it wins the /embed/* route race.
+ *
+ * Note: getSolanaRpcUrl() returns the full Helius URL incl. the key, which is
+ * visible in the browser — same exposure as the main SPA bundle today. Keep
+ * the Helius key domain-locked. Runtime injection keeps it out of the repo
+ * and the CI build, not out of the browser.
  * ===================================================================== */
 app.get('/embed/config.js', (req, res) => {
   const cfg = {
@@ -539,14 +548,19 @@ app.get('/embed/config.js', (req, res) => {
 });
 
 /* ========================================================================
- * SEO Pages — serves /nexus-dex/defi/:pair from template/defi-template.html
+ * Static SPA + SEO pages
+ *
+ * Serves build/ (main app), build/embed/ (the embed bundle, reachable at
+ * /embed/verixia-swap.js), and any SEO pages your generator writes into build/.
+ * The catch-all falls back to the SPA index.html for unknown routes.
  * ===================================================================== */
-app.use(require('./seo-pages'));
-
-/* ========================================================================
- * Catch-all — no build folder, SEO pages handle /nexus-dex/defi/*
- * ===================================================================== */
-app.get('*', (req, res) => res.status(404).json({ error: 'Not found' }));
+app.use(express.static(path.join(__dirname, 'build'), {
+  maxAge: '7d',
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+  },
+}));
+app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'build', 'index.html')));
 
 /* ========================================================================
  * Error handling
