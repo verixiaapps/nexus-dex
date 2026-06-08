@@ -7,4 +7,5 @@ bridge-near-to-optimism
 bridge-ton-to-optimism
 bridge-usdc-to-polygon
 bridge-usdt-to-optimism
+bridge-usdt-to-polygon
 bridge-xrp-to-optimism

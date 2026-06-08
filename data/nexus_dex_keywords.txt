@@ -1,4 +1,3 @@
-bridge usdt to polygon
 bridge eth to polygon
 bridge btc to polygon
 bridge xrp to polygon
