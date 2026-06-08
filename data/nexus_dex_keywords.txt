@@ -1,4 +1,3 @@
-bridge link to optimism
 bridge usdc to polygon
 bridge usdt to polygon
 bridge eth to polygon
