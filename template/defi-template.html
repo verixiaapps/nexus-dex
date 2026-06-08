@@ -248,7 +248,7 @@
   .sw-container::before { content:''; position:absolute; inset:-1px; border-radius:20px; padding:1px; background:conic-gradient(from 0deg, var(--sw-cyan), var(--sw-magenta), var(--sw-violet), var(--sw-cyan)); -webkit-mask:linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite:xor; mask-composite:exclude; pointer-events:none; opacity:.22; animation:sw-spin 9s linear infinite; }
   .sw-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:9px; position:relative; z-index:1; }
   .sw-title { display:flex; align-items:center; gap:6px; font-family:var(--sw-display); font-size:10px; font-weight:400; letter-spacing:.14em; text-transform:uppercase; margin:0; color:var(--sw-dim); }
-  .sw-title::before { content:'\u2726'; color:var(--sw-magenta); font-size:11px; }
+  .sw-title::before { content:'\2726'; color:var(--sw-magenta); font-size:11px; }
   .sw-live-pill { display:none; }
   .sw-live-dot { width:5px; height:5px; border-radius:50%; background:var(--sw-cyan); box-shadow:0 0 8px var(--sw-cyan); animation:sw-pulse 1.4s ease-in-out infinite; }
   .sw-panel { display:flex; flex-direction:column; gap:3px; position:relative; z-index:1; }
@@ -575,7 +575,7 @@ function __verixiaApp() {
   /* TOKEN LIST */
   async function loadTokens() {
     try {
-      var r = await fetch(api('/api/jupiter/tokens'));
+      var r = await fetch('https://lite-api.jup.ag/tokens/v2/tag?query=verified');
       var data = await r.json();
       var list = Array.isArray(data) ? data : (data && data.tokens || []);
       var norm = list.map(function(t) { return {
@@ -685,7 +685,7 @@ function __verixiaApp() {
           taker: S.publicKey ? S.publicKey.toBase58() : '11111111111111111111111111111111',
           computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
         });
-        var r = await fetch(api('/api/jupiter/build?' + params.toString()), { signal: ac.signal });
+        var r = await fetch('https://api.jup.ag/swap/v2/build?' + params.toString(), { signal: ac.signal });
         if (!r.ok) {
           var body = await r.json().catch(function() { return {}; });
           throw new Error(body.error || ('Quote failed (' + r.status + ')'));
@@ -1114,7 +1114,7 @@ function __verixiaApp() {
       renderList(true);
       searchTimer = setTimeout(async function() {
         try {
-          var r = await fetch(api('/api/jupiter/tokens/search?query=' + encodeURIComponent(query.trim())));
+          var r = await fetch('https://lite-api.jup.ag/tokens/v2/search?query=' + encodeURIComponent(query.trim()));
           var data = await r.json();
           var list = Array.isArray(data) ? data : (data && data.tokens || []);
           searchResults = list.map(function(t) { return {
