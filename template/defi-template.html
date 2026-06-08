@@ -856,40 +856,73 @@
      SELF-CONTAINED SWAP + PHANTOM CONNECT
      Vanilla port of your SwapWidget.jsx. Same fee math, same /api/jupiter/build
      atomic-tx flow, same instruction assembly / ALTs / simulate->sign->send->confirm.
-     The React + wallet-adapter shell is replaced with Phantom's injected provider.
-     No build step. Libraries load no-build via esm.sh.
-     ========================================================================= -->
-<script type="module">
-import { Buffer } from 'https://esm.sh/buffer@6.0.3';
-import {
-  Connection,
-  PublicKey,
-  VersionedTransaction,
-  TransactionMessage,
-  SystemProgram,
-  AddressLookupTableAccount,
-} from 'https://esm.sh/@solana/web3.js@1?target=es2022';
-import {
-  getAssociatedTokenAddressSync,
-  createAssociatedTokenAccountIdempotentInstruction,
-  createTransferCheckedInstruction,
-  TOKEN_PROGRAM_ID,
-  TOKEN_2022_PROGRAM_ID,
-} from 'https://esm.sh/@solana/spl-token@0.4?deps=@solana/web3.js@1&target=es2022';
+     The React + wallet-adapter shell becomes a plain wallet picker.
 
-if (typeof window !== 'undefined' && !window.Buffer) window.Buffer = Buffer;
+     DEPENDENCIES: web3.js loads from YOUR origin (/solana-web3.iife.min.js) —
+     copy node_modules/@solana/web3.js/lib/index.iife.min.js to your site root.
+     spl-token + buffer are hand-rolled out. The ONLY thing still reaching a
+     third party is WalletConnect (its SDK + relay) — and only if a user taps it.
+     ========================================================================= -->
+<script>
+function __verixiaApp() {
+  "use strict";
+  const {
+    Connection, PublicKey, VersionedTransaction, TransactionMessage,
+    SystemProgram, AddressLookupTableAccount, TransactionInstruction,
+  } = window.solanaWeb3;
+
+  /* base64 <-> bytes (replaces the buffer lib) */
+  const b64ToBytes = (b64) => Uint8Array.from(atob(b64), c => c.charCodeAt(0));
+  const bytesToB64 = (u8) => { let s = ''; for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]); return btoa(s); };
+
+  /* ─── SPL TOKEN (hand-rolled — no @solana/spl-token dependency) ───── */
+  const TOKEN_PROGRAM_ID       = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+  const TOKEN_2022_PROGRAM_ID  = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+  const ASSOC_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+  function getAssociatedTokenAddressSync(mint, owner, _allowOffCurve, programId) {
+    return PublicKey.findProgramAddressSync(
+      [owner.toBuffer(), (programId || TOKEN_PROGRAM_ID).toBuffer(), mint.toBuffer()],
+      ASSOC_TOKEN_PROGRAM_ID,
+    )[0];
+  }
+  function createAssociatedTokenAccountIdempotentInstruction(payer, ata, owner, mint, programId) {
+    return new TransactionInstruction({
+      programId: ASSOC_TOKEN_PROGRAM_ID,
+      keys: [
+        { pubkey: payer, isSigner: true,  isWritable: true  },
+        { pubkey: ata,   isSigner: false, isWritable: true  },
+        { pubkey: owner, isSigner: false, isWritable: false },
+        { pubkey: mint,  isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId,       isSigner: false, isWritable: false },
+        { pubkey: programId || TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      ],
+      data: Uint8Array.of(1), // 1 = CreateIdempotent
+    });
+  }
+  function createTransferCheckedInstruction(source, mint, dest, owner, amount, decimals, _multi, programId) {
+    const data = new Uint8Array(10);
+    data[0] = 12; // TransferChecked
+    let v = BigInt(amount);
+    for (let i = 0; i < 8; i++) { data[1 + i] = Number(v & 0xffn); v >>= 8n; }
+    data[9] = decimals & 0xff;
+    return new TransactionInstruction({
+      programId: programId || TOKEN_PROGRAM_ID,
+      keys: [
+        { pubkey: source, isSigner: false, isWritable: true  },
+        { pubkey: mint,   isSigner: false, isWritable: false },
+        { pubkey: dest,   isSigner: false, isWritable: true  },
+        { pubkey: owner,  isSigner: true,  isWritable: false },
+      ],
+      data,
+    });
+  }
 
 /* ─── CONFIG ──────────────────────────────────────────────────────── */
 /* Runtime config (server-injected via window.__VERIXIA_CONFIG__) wins, then
-   the fallback below. Set FALLBACK_RPC to your Helius URL if your server is
-   not injecting __VERIXIA_CONFIG__. Public mainnet RPC works for testing but
-   rate-limits — use Helius for real traffic. */
+   the fallback below. */
 const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
 const FALLBACK_RPC = 'https://api.mainnet-beta.solana.com';
 const RPC_URL  = RUNTIME_CFG.rpc || FALLBACK_RPC;
-/* API base for your backend. '' = relative (same origin — correct when this
-   page is served by your Express server). If the page lives on a different
-   origin than the API, set this to 'https://swap.verixiaapps.com'. */
 const API_BASE = RUNTIME_CFG.apiBase || '';
 
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
@@ -936,7 +969,7 @@ const deserIx = (ix) => ({
     isSigner:   a.isSigner,
     isWritable: a.isWritable,
   })),
-  data: Buffer.from(ix.data, 'base64'),
+  data: b64ToBytes(ix.data),
 });
 
 const api = (path) => API_BASE + path;
@@ -944,13 +977,23 @@ const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => (
   { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]
 ));
 
-/* ─── PHANTOM PROVIDER (replaces wallet-adapter useWallet) ────────── */
-function getPhantom() {
-  if (typeof window === 'undefined') return null;
-  if (window.phantom && window.phantom.solana && window.phantom.solana.isPhantom) return window.phantom.solana;
-  if (window.solana && window.solana.isPhantom) return window.solana;
-  return null;
+/* ─── WALLET LAYER (replaces wallet-adapter useWallet) ────────────── */
+/* Injected providers each expose connect()/publicKey/signTransaction()/on().
+   WalletConnect is loaded on demand (see connectWalletConnect). */
+const SOLANA_WC_CHAIN = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp'; // mainnet-beta
+function injectedProviders() {
+  const w = (typeof window !== 'undefined') ? window : {};
+  const out = [];
+  const phantom = (w.phantom && w.phantom.solana && w.phantom.solana.isPhantom) ? w.phantom.solana
+                : (w.solana && w.solana.isPhantom) ? w.solana : null;
+  if (phantom) out.push({ id: 'phantom', name: 'Phantom', provider: phantom });
+  const solflare = (w.solflare && w.solflare.isSolflare) ? w.solflare : null;
+  if (solflare) out.push({ id: 'solflare', name: 'Solflare', provider: solflare });
+  const backpack = (w.backpack && w.backpack.isBackpack) ? w.backpack : null;
+  if (backpack) out.push({ id: 'backpack', name: 'Backpack', provider: backpack });
+  return out;
 }
+function getPhantom() { return injectedProviders().find(x => x.id === 'phantom')?.provider || null; }
 
 /* ─── COMPONENT STATE ─────────────────────────────────────────────── */
 const connection = new Connection(RPC_URL, 'confirmed');
@@ -1094,19 +1137,32 @@ function scheduleQuote() {
   }, 350);
 }
 
+// Quote display values may sit on the /build response itself or under a nested
+// `quote` / `quoteResponse` object. Resolve from wherever they are.
+function qf(key) {
+  const q = S.quote;
+  if (!q) return undefined;
+  if (q[key] != null) return q[key];
+  if (q.quote && q.quote[key] != null) return q.quote[key];
+  if (q.quoteResponse && q.quoteResponse[key] != null) return q.quoteResponse[key];
+  return undefined;
+}
 function outAmountUi() {
   const outputToken = tokenBy(S.outputMint);
-  if (!S.quote || !outputToken) return null;
-  return Number(S.quote.outAmount) / Math.pow(10, outputToken.decimals);
+  const v = qf('outAmount');
+  if (v == null || !outputToken) return null;
+  return Number(v) / Math.pow(10, outputToken.decimals);
 }
 function minReceived() {
   const outputToken = tokenBy(S.outputMint);
-  if (!S.quote || !outputToken) return null;
-  return Number(S.quote.otherAmountThreshold) / Math.pow(10, outputToken.decimals);
+  const v = qf('otherAmountThreshold');
+  if (v == null || !outputToken) return null;
+  return Number(v) / Math.pow(10, outputToken.decimals);
 }
 function priceImpact() {
-  if (!S.quote || S.quote.priceImpactPct == null) return null;
-  const n = Number(S.quote.priceImpactPct);
+  const v = qf('priceImpactPct');
+  if (v == null) return null;
+  const n = Number(v);
   return Number.isFinite(n) ? n * (Math.abs(n) <= 1 ? 100 : 1) : null;
 }
 
@@ -1130,32 +1186,127 @@ function setMax() {
   scheduleQuote();
 }
 
-async function connectPhantom() {
-  const provider = getPhantom();
-  if (!provider) {
-    window.open('https://phantom.app/', '_blank', 'noopener');
-    return;
-  }
+async function connectInjected(entry) {
+  const provider = entry.provider;
   try {
     const res = await provider.connect();
-    S.provider = provider;
-    S.publicKey = new PublicKey((res.publicKey || provider.publicKey).toString());
+    S.provider = provider; // injected providers already expose signTransaction()
+    S.walletName = entry.name;
+    S.publicKey = new PublicKey((res?.publicKey || provider.publicKey).toString());
     attachProviderEvents(provider);
-    renderAll();
-    refreshBalances();
-    scheduleQuote();
+    renderAll(); refreshBalances(); scheduleQuote();
   } catch (e) {
     S.swapError = /reject|cancel|denied|user/i.test(String(e?.message)) ? 'Connection cancelled.' : (e?.message || 'Failed to connect.');
     renderBanners();
   }
 }
 
+/* WalletConnect — loaded on demand so the injected path stays light.
+   Uses your wcProjectId from /embed/config.js. Solana namespace per WC spec. */
+async function connectWalletConnect() {
+  const projectId = RUNTIME_CFG.wcProjectId;
+  if (!projectId) { S.swapError = 'WalletConnect is not configured (no projectId from /embed/config.js).'; renderBanners(); return; }
+  try {
+    const [upMod, modalMod, bs58mod] = await Promise.all([
+      import('https://esm.sh/@walletconnect/universal-provider@2?target=es2022&bundle'),
+      import('https://esm.sh/@walletconnect/modal@2?target=es2022&bundle'),
+      import('https://esm.sh/bs58@5?target=es2022'),
+    ]);
+    const UniversalProvider = upMod.UniversalProvider || upMod.default;
+    const WalletConnectModal = modalMod.WalletConnectModal || modalMod.default;
+    const bs58 = bs58mod.default || bs58mod;
+
+    const wc = await UniversalProvider.init({
+      projectId,
+      metadata: {
+        name: 'Verixia',
+        description: 'Verixia DEX — swap any Solana token',
+        url: (typeof location !== 'undefined' ? location.origin : 'https://swap.verixiaapps.com'),
+        icons: [],
+      },
+    });
+    const modal = new WalletConnectModal({ projectId, chains: [SOLANA_WC_CHAIN] });
+    wc.on('display_uri', (uri) => { try { modal.openModal({ uri }); } catch {} });
+
+    let session;
+    try {
+      session = await wc.connect({
+        namespaces: { solana: { methods: ['solana_signTransaction', 'solana_signMessage'], chains: [SOLANA_WC_CHAIN], events: [] } },
+      });
+    } finally { try { modal.closeModal(); } catch {} }
+
+    const acct = session?.namespaces?.solana?.accounts?.[0];
+    if (!acct) throw new Error('WalletConnect returned no Solana account.');
+    const pubkey = new PublicKey(acct.split(':').pop());
+
+    S.publicKey  = pubkey;
+    S.walletName = 'WalletConnect';
+    S.provider = {
+      publicKey: pubkey,
+      signTransaction: async (tx) => {
+        const b64 = bytesToB64(tx.serialize());
+        const res = await wc.request({ method: 'solana_signTransaction', params: { transaction: b64 } }, SOLANA_WC_CHAIN);
+        if (res && res.transaction) return VersionedTransaction.deserialize(b64ToBytes(res.transaction));
+        if (res && res.signature)   { tx.addSignature(pubkey, bs58.decode(res.signature)); return tx; }
+        throw new Error('WalletConnect did not return a signed transaction.');
+      },
+      _wc: wc,
+    };
+    wc.on('session_delete', () => { S.provider = null; S.publicKey = null; S.walletName = null; S.balances = {}; renderAll(); });
+    renderAll(); refreshBalances(); scheduleQuote();
+  } catch (e) {
+    S.swapError = /reject|cancel|denied|user|closed/i.test(String(e?.message)) ? 'Connection cancelled.' : ('WalletConnect failed: ' + (e?.message || 'unknown error'));
+    renderBanners();
+  }
+}
+
+/* Wallet picker modal — this is what onConnectWallet opens in your app. */
+let walletPickerEl = null;
+function openWalletPicker() {
+  closeWalletPicker();
+  const injected = injectedProviders();
+  const rows = [];
+  for (const e of injected)
+    rows.push(`<button class="sw-token-row" data-wallet="${e.id}"><div class="sw-token-row-placeholder"></div><div class="sw-token-row-info"><div class="sw-token-row-sym">${esc(e.name)}</div><div class="sw-token-row-name">Detected</div></div></button>`);
+  for (const [id, name, url] of [['phantom','Phantom','https://phantom.app/'],['solflare','Solflare','https://solflare.com/'],['backpack','Backpack','https://backpack.app/']]) {
+    if (injected.find(x => x.id === id)) continue;
+    rows.push(`<a class="sw-token-row" href="${url}" target="_blank" rel="noreferrer"><div class="sw-token-row-placeholder"></div><div class="sw-token-row-info"><div class="sw-token-row-sym">${name}</div><div class="sw-token-row-name">Not installed — get it</div></div></a>`);
+  }
+  rows.push(`<button class="sw-token-row" data-wallet="walletconnect"><div class="sw-token-row-placeholder"></div><div class="sw-token-row-info"><div class="sw-token-row-sym">WalletConnect</div><div class="sw-token-row-name">Scan with a mobile wallet</div></div></button>`);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'sw-modal-overlay';
+  overlay.innerHTML = `
+    <div class="sw-modal-card">
+      <div class="sw-modal-head">
+        <div class="sw-modal-head-row">
+          <h3 class="sw-modal-title">Connect a wallet</h3>
+          <button class="sw-icon-btn" data-close>${CLOSE}</button>
+        </div>
+      </div>
+      <div class="sw-modal-list">${rows.join('')}</div>
+    </div>`;
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeWalletPicker(); });
+  overlay.querySelector('[data-close]').addEventListener('click', closeWalletPicker);
+  overlay.querySelectorAll('[data-wallet]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const id = btn.getAttribute('data-wallet');
+      closeWalletPicker();
+      if (id === 'walletconnect') connectWalletConnect();
+      else { const e = injectedProviders().find(x => x.id === id); if (e) connectInjected(e); }
+    });
+  });
+  document.body.appendChild(overlay);
+  walletPickerEl = overlay;
+}
+function closeWalletPicker() { if (walletPickerEl) { walletPickerEl.remove(); walletPickerEl = null; } }
+
 /* ─── SWAP (ported verbatim) ──────────────────────────────────────── */
 async function handleSwap() {
   const inputToken  = tokenBy(S.inputMint);
   const outputToken = tokenBy(S.outputMint);
   if (!S.publicKey || !S.provider || !S.provider.signTransaction) {
-    S.swapError = 'Please connect Phantom.'; renderBanners(); return;
+    S.swapError = 'Please connect a wallet.'; renderBanners(); return;
   }
   if (!S.quote || !outputToken || !inputToken) {
     S.swapError = 'No quote available — try again.'; renderBanners(); return;
@@ -1197,18 +1348,33 @@ async function handleSwap() {
       ));
     }
 
-    const ixs = [];
-    if (Array.isArray(build.computeBudgetInstructions))
-      for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
-    for (const ix of feeIxs) ixs.push(ix);
-    if (Array.isArray(build.setupInstructions))
-      for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
-    if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
-    if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
-    if (Array.isArray(build.otherInstructions))
-      for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+    // Instructions may live at the top level of the /build response, or nested
+    // under `instructions` / `swapInstructions`. Resolve defensively.
+    const SRC = build.instructions || build.swapInstructions || build;
+    const arr = (k) => Array.isArray(SRC[k]) ? SRC[k] : [];
+    const one = (k) => SRC[k] || null;
 
-    const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+    const ixs = [];
+    for (const ix of arr('computeBudgetInstructions')) ixs.push(deserIx(ix));
+    if (one('tokenLedgerInstruction')) ixs.push(deserIx(one('tokenLedgerInstruction')));
+    for (const ix of feeIxs) ixs.push(ix);
+    for (const ix of arr('setupInstructions')) ixs.push(deserIx(ix));
+    if (one('swapInstruction')) ixs.push(deserIx(one('swapInstruction')));
+    if (one('cleanupInstruction')) ixs.push(deserIx(one('cleanupInstruction')));
+    for (const ix of arr('otherInstructions')) ixs.push(deserIx(ix));
+
+    // Lookup tables: object-map { altAddr: [...] }  OR  string array  OR  array of objects.
+    let altKeys = [];
+    const ablMap = SRC.addressesByLookupTableAddress || build.addressesByLookupTableAddress;
+    if (ablMap && typeof ablMap === 'object' && !Array.isArray(ablMap)) {
+      altKeys = Object.keys(ablMap);
+    } else {
+      const altArr = SRC.addressLookupTableAddresses || build.addressLookupTableAddresses ||
+                     SRC.addressLookupTables || build.addressLookupTables || [];
+      if (Array.isArray(altArr)) {
+        altKeys = altArr.map(x => typeof x === 'string' ? x : (x.accountKey || x.key || x.address || x.pubkey)).filter(Boolean);
+      }
+    }
     let alts = [];
     if (altKeys.length > 0) {
       const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
@@ -1379,7 +1545,7 @@ function buildDom() {
   wrap.querySelector('[data-pick="input"]').addEventListener('click', () => openPicker('input'));
   wrap.querySelector('[data-pick="output"]').addEventListener('click', () => openPicker('output'));
   els.primary.addEventListener('click', () => {
-    if (!S.publicKey) connectPhantom();
+    if (!S.publicKey) openWalletPicker();
     else buttonState().enabled && handleSwap();
   });
 
@@ -1611,7 +1777,7 @@ function init() {
 
   // Header "Connect" button mirrors the widget's connect; renderAll() keeps it in sync.
   headerBtn = document.getElementById('verixia-header-connect');
-  if (headerBtn) headerBtn.addEventListener('click', () => { if (!S.publicKey) connectPhantom(); });
+  if (headerBtn) headerBtn.addEventListener('click', () => { if (!S.publicKey) openWalletPicker(); });
   updateHeader();
 
   // eagerly reconnect if Phantom already trusts this site
@@ -1633,6 +1799,30 @@ if (document.readyState === 'loading') {
 } else {
   init();
 }
+}
+
+/* ─── LOADER ──────────────────────────────────────────────────────────
+   Tries YOUR self-hosted web3.js first (no third party). If that file
+   isn't there yet, falls back to a public copy so the widget works the
+   moment you paste this in — nothing else to place, install, or build.
+   Drop /solana-web3.iife.min.js at your root to go fully self-hosted. */
+(function () {
+  "use strict";
+  function fail() {
+    var el = document.getElementById('verixia-swap-root');
+    if (el) el.innerHTML = '<div style="padding:20px;font-family:monospace;color:#ffb3c1;line-height:1.5">Could not load the Solana library. Check your connection or place <b>/solana-web3.iife.min.js</b> at your site root.</div>';
+  }
+  function go() { if (window.solanaWeb3) { try { __verixiaApp(); } catch (e) { console.error('[verixia]', e); } } else fail(); }
+  function load(src, ok, err) {
+    var s = document.createElement('script');
+    s.src = src; s.async = false; s.onload = ok; s.onerror = err;
+    document.head.appendChild(s);
+  }
+  if (window.solanaWeb3) { go(); return; }
+  load('/solana-web3.iife.min.js', go, function () {
+    load('https://unpkg.com/@solana/web3.js@1/lib/index.iife.min.js', go, fail);
+  });
+})();
 </script>
 
 </main>
