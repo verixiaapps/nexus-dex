@@ -5,5 +5,6 @@ bridge kaspa to optimism
 bridge link to optimism
 bridge near to optimism
 bridge ton to optimism
+bridge usdc to polygon
 bridge usdt to optimism
 bridge xrp to optimism
