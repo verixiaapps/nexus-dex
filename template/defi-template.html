@@ -50,6 +50,7 @@
 </script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Zen+Dots&family=Outfit:wght@400;500;600;700;800;900&family=Caveat:wght@500;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
 <style>
   :root {
@@ -254,9 +255,10 @@
   .sw-panel { display:flex; flex-direction:column; gap:3px; position:relative; z-index:1; }
   .sw-row { background:var(--sw-leg); border:1px solid rgba(255,255,255,.05); border-radius:13px; padding:10px 12px; transition:border-color .2s, box-shadow .2s; }
   .sw-row:focus-within { border-color:var(--sw-cyan); box-shadow:0 0 0 2px rgba(0,229,255,.13); }
-  .sw-row-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:5px; }
+  .sw-row-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:5px; min-height:14px; }
   .sw-row-label { font-family:var(--sw-mono); font-size:9px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--sw-faint); }
-  .sw-balance { display:inline-flex; align-items:center; gap:6px; font-family:var(--sw-mono); font-size:11px; color:var(--sw-dim); font-weight:600; }
+  .sw-balance { display:inline-flex; align-items:center; gap:6px; font-family:var(--sw-mono); font-size:11px; color:var(--sw-dim); font-weight:600; min-height:14px; }
+  .sw-balance.sw-bal-loading { color:var(--sw-faint); font-style:italic; }
   .sw-max-btn { font-family:var(--sw-mono); font-size:9px; font-weight:700; color:var(--sw-magenta); background:rgba(196,53,154,.12); border:1px solid rgba(196,53,154,.3); border-radius:6px; padding:2px 6px; cursor:pointer; }
   .sw-max-btn:hover { background:rgba(196,53,154,.22); }
   .sw-row-mid { display:flex; align-items:center; justify-content:space-between; gap:8px; }
@@ -418,18 +420,19 @@
 
 {{PAGE_META_SCRIPT}}
 
+<!-- ============================================================================
+     CONFIG — hardcoded, self-contained, no dependency on Railway.
+     ========================================================================= -->
 <script>
 window.__VERIXIA_CONFIG__ = {
   rpc: "https://api.mainnet-beta.solana.com",
-  wcProjectId: ""
+  wcProjectId: "1a7c741caab0a2c5ffa2b199a816ea92"
 };
 </script>
-<script src="https://swap.verixiaapps.com/embed/config.js" onerror=""></script>
-<script src="/verixia-wc.js" onerror=""></script>
 
 <!-- ============================================================================
      SWAP WIDGET — Vanilla port aligned to SwapWidget.jsx
-     Same fee math, same /api/jupiter/build atomic-tx flow, same instruction
+     Same fee math, same Jupiter atomic-tx flow, same instruction
      assembly / ALTs / simulate -> sign -> send -> confirm.
      ========================================================================= -->
 <script>
@@ -495,7 +498,6 @@ function __verixiaApp() {
   var RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
   var FALLBACK_RPC = 'https://api.mainnet-beta.solana.com';
   var RPC_URL  = RUNTIME_CFG.rpc || FALLBACK_RPC;
-  var API_BASE = RUNTIME_CFG.apiBase || '';
 
   var FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
   var FEE_BPS    = 300;
@@ -542,7 +544,6 @@ function __verixiaApp() {
     };
   };
 
-  var api = function(path) { return API_BASE + path; };
   var esc = function(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
   }); };
@@ -570,6 +571,7 @@ function __verixiaApp() {
     inputMint: SOL_MINT, outputMint: USDC_MINT, amount: '',
     quote: null, quoting: false, quoteError: null,
     swapping: false, swapError: null, swapResult: null, balances: {},
+    balancesLoading: false,
   };
   var root, els = {};
 
@@ -600,55 +602,56 @@ function __verixiaApp() {
   }
   var tokenBy = function(mint) { return S.tokens.find(function(t) { return t.address === mint; }) || null; };
 
-  /* BALANCES — direct RPC fetch (bypasses Connection object) */
-  async function rpcCall(method, params) {
-    var r = await fetch(RPC_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: method, params: params }),
-    });
-    var data = await r.json();
-    if (data.error) throw new Error(data.error.message || 'RPC error');
-    return data.result;
-  }
-
+  /* BALANCES — mirrors SwapWidget.jsx refreshBalances exactly.
+     Uses web3.js Connection methods (getBalance, getParsedTokenAccountsByOwner)
+     instead of raw JSON-RPC, same as the working React widget. */
   async function refreshBalances() {
-    if (!S.publicKey) { S.balances = {}; renderRows(); return; }
+    if (!S.publicKey) { S.balances = {}; S.balancesLoading = false; renderRows(); return; }
+    S.balancesLoading = true;
+    renderRows();
     try {
-      var addr = S.publicKey.toBase58();
-      var out = {};
+      var owner = S.publicKey;
+      var results = await Promise.all([
+        connection.getBalance(owner),
+        connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }),
+      ]);
+      var solBal = results[0];
+      var tokenAccs = results[1];
 
-      // SOL balance
-      var solResult = await rpcCall('getBalance', [addr, { commitment: 'confirmed' }]);
-      var solBal = solResult.value || 0;
+      var token22Accs = { value: [] };
+      try {
+        token22Accs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID });
+      } catch (e) {}
+
+      var out = {};
       out[SOL_MINT] = { amount: solBal, decimals: 9, uiAmount: solBal / 1e9 };
 
-      // SPL token balances
-      try {
-        var tokenResult = await rpcCall('getTokenAccountsByOwner', [
-          addr,
-          { programId: TOKEN_PROGRAM_ID.toBase58() },
-          { encoding: 'jsonParsed', commitment: 'confirmed' }
-        ]);
-        if (tokenResult.value) {
-          for (var j = 0; j < tokenResult.value.length; j++) {
-            var info = tokenResult.value[j].account.data.parsed && tokenResult.value[j].account.data.parsed.info;
-            if (!info) continue;
-            var mint = info.mint, amt = info.tokenAmount && info.tokenAmount.amount;
-            var dec = info.tokenAmount && info.tokenAmount.decimals;
-            var uiAmt = info.tokenAmount && info.tokenAmount.uiAmount;
-            if (!mint || amt == null) continue;
-            out[mint] = { amount: Number(amt), decimals: dec, uiAmount: uiAmt };
-          }
+      var merge = function(accs) {
+        for (var i = 0; i < accs.value.length; i++) {
+          var acc = accs.value[i];
+          var info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info;
+          if (!info) continue;
+          var mint = info.mint;
+          var amt = info.tokenAmount && info.tokenAmount.amount;
+          var dec = info.tokenAmount && info.tokenAmount.decimals;
+          var uiAmt = info.tokenAmount && info.tokenAmount.uiAmount;
+          if (!mint || amt == null) continue;
+          out[mint] = { amount: Number(amt), decimals: dec, uiAmount: uiAmt };
         }
-      } catch (e) { console.warn('[swap] token accounts failed', e); }
+      };
+      merge(tokenAccs);
+      merge(token22Accs);
 
       S.balances = out;
+    } catch (e) {
+      console.warn('[swap] balances failed', e);
+    } finally {
+      S.balancesLoading = false;
       renderRows();
-    } catch (e) { console.warn('[swap] balances failed', e); }
+    }
   }
 
-  /* DERIVED — matches SwapWidget.jsx exactly (direct quote access, no qf) */
+  /* DERIVED — matches SwapWidget.jsx exactly */
   function rawAmount() {
     var inputToken = tokenBy(S.inputMint);
     if (!S.amount || !inputToken) return '';
@@ -735,7 +738,7 @@ function __verixiaApp() {
     renderRows(); scheduleQuote();
   }
 
-  /* WALLET CONNECT */
+  /* WALLET CONNECT — injected (Phantom/Solflare/Backpack) */
   async function connectInjected(entry) {
     try {
       var res = await entry.provider.connect();
@@ -750,26 +753,90 @@ function __verixiaApp() {
     }
   }
 
+  /* WALLET CONNECT — full WalletConnect Modal via jsdelivr CDN.
+     Loads @walletconnect/universal-provider and @walletconnect/modal
+     on demand. Uses the real branded Modal UI (wallet grid, search,
+     mobile deep links, recent wallets) — not a bare QR popup. */
+  var WC_SDK_LOADING = null;
+  function loadWCSDK() {
+    if (WC_SDK_LOADING) return WC_SDK_LOADING;
+    if (window.__VerixiaWC && window.__VerixiaWC.UniversalProvider && window.__VerixiaWC.WalletConnectModal && window.__VerixiaWC.bs58) {
+      return Promise.resolve(window.__VerixiaWC);
+    }
+    WC_SDK_LOADING = new Promise(function(resolve, reject) {
+      var CDN_PRIMARY  = 'https://cdn.jsdelivr.net/npm';
+      var CDN_FALLBACK = 'https://unpkg.com';
+      var scripts = [
+        { id: 'bs58',  primary: CDN_PRIMARY+'/bs58@5.0.0/index.min.js',                              fallback: CDN_FALLBACK+'/bs58@5.0.0/index.min.js' },
+        { id: 'wcup',  primary: CDN_PRIMARY+'/@walletconnect/universal-provider@2.17.0/dist/index.umd.js', fallback: CDN_FALLBACK+'/@walletconnect/universal-provider@2.17.0/dist/index.umd.js' },
+        { id: 'wcm',   primary: CDN_PRIMARY+'/@walletconnect/modal@2.7.0/dist/index.umd.js',           fallback: CDN_FALLBACK+'/@walletconnect/modal@2.7.0/dist/index.umd.js' },
+      ];
+      var loadOne = function(spec) {
+        return new Promise(function(res, rej) {
+          var tryLoad = function(url, onFail) {
+            var s = document.createElement('script');
+            s.src = url; s.async = false; s.crossOrigin = 'anonymous';
+            s.onload  = function() { res(); };
+            s.onerror = function() { onFail(); };
+            document.head.appendChild(s);
+          };
+          tryLoad(spec.primary, function() { tryLoad(spec.fallback, function() { rej(new Error('Failed to load ' + spec.id)); }); });
+        });
+      };
+      (async function() {
+        try {
+          for (var i = 0; i < scripts.length; i++) await loadOne(scripts[i]);
+          // Resolve globals from common UMD shapes
+          var w = window;
+          var UniversalProvider =
+            (w.UniversalProvider && (w.UniversalProvider.default || w.UniversalProvider)) ||
+            (w['@walletconnect/universal-provider'] && (w['@walletconnect/universal-provider'].UniversalProvider || w['@walletconnect/universal-provider'].default)) ||
+            null;
+          var WalletConnectModal =
+            (w.WalletConnectModal && (w.WalletConnectModal.WalletConnectModal || w.WalletConnectModal.default || w.WalletConnectModal)) ||
+            (w['@walletconnect/modal'] && (w['@walletconnect/modal'].WalletConnectModal || w['@walletconnect/modal'].default)) ||
+            null;
+          var bs58 = w.bs58 && (w.bs58.default || w.bs58);
+
+          if (!UniversalProvider) throw new Error('UniversalProvider global not found');
+          if (!WalletConnectModal) throw new Error('WalletConnectModal global not found');
+          if (!bs58 || !bs58.decode) throw new Error('bs58 global not found');
+
+          window.__VerixiaWC = { UniversalProvider: UniversalProvider, WalletConnectModal: WalletConnectModal, bs58: bs58 };
+          resolve(window.__VerixiaWC);
+        } catch (e) { WC_SDK_LOADING = null; reject(e); }
+      })();
+    });
+    return WC_SDK_LOADING;
+  }
+
   async function connectWalletConnect() {
     var projectId = RUNTIME_CFG.wcProjectId;
     if (!projectId) { S.swapError = 'WalletConnect not configured.'; renderBanners(); return; }
-    if (!window.__VerixiaWC) { S.swapError = 'WalletConnect SDK not loaded.'; renderBanners(); return; }
     try {
-      var UniversalProvider = window.__VerixiaWC.UniversalProvider;
-      var WalletConnectModal = window.__VerixiaWC.WalletConnectModal;
-      var bs58 = window.__VerixiaWC.bs58;
+      var sdk = await loadWCSDK();
+      var UniversalProvider  = sdk.UniversalProvider;
+      var WalletConnectModal = sdk.WalletConnectModal;
+      var bs58               = sdk.bs58;
+
       var wc = await UniversalProvider.init({
         projectId: projectId,
         metadata: { name: 'Verixia', description: 'Verixia DEX', url: location.origin, icons: [] },
       });
-      var modal = new WalletConnectModal({ projectId: projectId, chains: [SOLANA_WC_CHAIN] });
+      var modal = new WalletConnectModal({
+        projectId: projectId,
+        chains:    [SOLANA_WC_CHAIN],
+        themeMode: 'dark',
+      });
       wc.on('display_uri', function(uri) { try { modal.openModal({ uri: uri }); } catch(e) {} });
+
       var session;
       try {
         session = await wc.connect({
           namespaces: { solana: { methods: ['solana_signTransaction','solana_signMessage'], chains: [SOLANA_WC_CHAIN], events: [] } },
         });
       } finally { try { modal.closeModal(); } catch(e) {} }
+
       var acct = session && session.namespaces && session.namespaces.solana && session.namespaces.solana.accounts && session.namespaces.solana.accounts[0];
       if (!acct) throw new Error('WalletConnect returned no Solana account.');
       var pubkey = new PublicKey(acct.split(':').pop());
@@ -788,7 +855,10 @@ function __verixiaApp() {
       wc.on('session_delete', function() { S.provider = null; S.publicKey = null; S.walletName = null; S.balances = {}; renderAll(); });
       renderAll(); refreshBalances(); scheduleQuote();
     } catch (e) {
-      S.swapError = /reject|cancel|denied|user|closed/i.test(String(e && e.message)) ? 'Connection cancelled.' : ('WalletConnect failed: ' + (e && e.message || 'unknown'));
+      console.error('[wc]', e);
+      S.swapError = /reject|cancel|denied|user|closed/i.test(String(e && e.message))
+        ? 'Connection cancelled.'
+        : ('WalletConnect failed: ' + (e && e.message || 'unknown'));
       renderBanners();
     }
   }
@@ -819,7 +889,7 @@ function __verixiaApp() {
         '</button>' +
         '<button class="sw-wc-row" data-wallet="walletconnect" style="display:flex;align-items:center;gap:12px;width:100%;padding:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:14px;cursor:pointer;text-align:left;">' +
           WC_ICON +
-          '<div><div style="font-family:var(--sw-body);font-weight:700;font-size:15px;color:var(--sw-text);">WalletConnect</div><div style="font-family:var(--sw-mono);font-size:11px;color:var(--sw-faint);">Scan QR or link any wallet</div></div>' +
+          '<div><div style="font-family:var(--sw-body);font-weight:700;font-size:15px;color:var(--sw-text);">WalletConnect</div><div style="font-family:var(--sw-mono);font-size:11px;color:var(--sw-faint);">All other Solana wallets</div></div>' +
         '</button>' +
       '</div>' +
       '<div style="padding:0 16px 20px;text-align:center;font-family:var(--sw-mono);font-size:10px;color:var(--sw-faint);">Non-custodial. We never see or store your keys.</div>' +
@@ -836,7 +906,6 @@ function __verixiaApp() {
           if (hasPhantom) {
             connectInjected(hasPhantom);
           } else {
-            // Deep link to Phantom app — opens the current page inside Phantom's browser
             var url = encodeURIComponent(window.location.href);
             window.location.href = 'https://phantom.app/ul/browse/' + url + '?ref=' + encodeURIComponent(window.location.origin);
           }
@@ -867,7 +936,6 @@ function __verixiaApp() {
       var build = S.quote;
       var raw = rawAmount();
 
-      // 1) Fee instructions
       var feeAmount = (BigInt(raw) * BigInt(FEE_BPS)) / 10000n;
       if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero \u2014 amount too small.');
 
@@ -887,7 +955,6 @@ function __verixiaApp() {
         feeIxs.push(createTransferCheckedInstruction(sourceAta, mintPk, destAta, S.publicKey, feeAmount, dec, [], tokenProgram));
       }
 
-      // 2) Instruction assembly — MATCHES SwapWidget.jsx exactly
       var ixs = [];
       if (Array.isArray(build.computeBudgetInstructions))
         for (var ci = 0; ci < build.computeBudgetInstructions.length; ci++) ixs.push(deserIx(build.computeBudgetInstructions[ci]));
@@ -901,7 +968,6 @@ function __verixiaApp() {
       if (Array.isArray(build.otherInstructions))
         for (var oi = 0; oi < build.otherInstructions.length; oi++) ixs.push(deserIx(build.otherInstructions[oi]));
 
-      // 3) ALTs — MATCHES SwapWidget.jsx exactly
       var altKeys = Object.keys(build.addressesByLookupTableAddress || {});
       var alts = [];
       if (altKeys.length > 0) {
@@ -914,14 +980,12 @@ function __verixiaApp() {
         }).filter(Boolean);
       }
 
-      // 4) Build tx
       var latest = await connection.getLatestBlockhash('confirmed');
       var message = new TransactionMessage({
         payerKey: S.publicKey, recentBlockhash: latest.blockhash, instructions: ixs,
       }).compileToV0Message(alts);
       var tx = new VersionedTransaction(message);
 
-      // 5) Simulate
       var mapSimErr = function(logs) {
         var j = (logs || []).join('\n').toLowerCase();
         if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
@@ -938,13 +1002,9 @@ function __verixiaApp() {
         console.warn('[swap] sim non-fatal', simErr);
       }
 
-      // 6) Sign
       var signed = await S.provider.signTransaction(tx);
-
-      // 7) Send
       var sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 3 });
 
-      // 8) Confirm with polling fallback
       var confirmed = false;
       try {
         var conf = await Promise.race([
@@ -1049,10 +1109,21 @@ function __verixiaApp() {
     };
     setTokenBtn('[data-pick="input"]', els.symInput, inputToken);
     setTokenBtn('[data-pick="output"]', els.symOutput, outputToken);
+
     var renderBal = function(el, mint, editable) {
+      el.classList.remove('sw-bal-loading');
+      if (!S.publicKey) { el.innerHTML = ''; return; }
+      if (S.balancesLoading && !S.balances[mint]) {
+        el.classList.add('sw-bal-loading');
+        el.textContent = 'Loading balance\u2026';
+        return;
+      }
       var bal = S.balances[mint];
       var token = tokenBy(mint);
-      if (!bal) { el.innerHTML = ''; return; }
+      if (!bal) {
+        el.textContent = 'Balance: 0 ' + (token ? token.symbol : '');
+        return;
+      }
       el.innerHTML = 'Balance: ' + fmtAmount(bal.uiAmount, bal.decimals) + ' ' + (token ? token.symbol : '');
       if (editable && bal.uiAmount > 0) {
         var b = document.createElement('button');
@@ -1215,7 +1286,7 @@ function __verixiaApp() {
   "use strict";
   function fail() {
     var el = document.getElementById('verixia-swap-root');
-    if (el) el.innerHTML = '<div style="padding:20px;font-family:monospace;color:#ffb3c1;line-height:1.5">Could not load the Solana library. Check your connection or place <b>/solana-web3.iife.min.js</b> at your site root.</div>';
+    if (el) el.innerHTML = '<div style="padding:20px;font-family:monospace;color:#ffb3c1;line-height:1.5">Could not load the Solana library. Check your connection.</div>';
   }
   function go() { if (window.solanaWeb3) { try { __verixiaApp(); } catch (e) { console.error('[verixia]', e); } } else fail(); }
   function load(src, ok, err) {
@@ -1224,7 +1295,7 @@ function __verixiaApp() {
     document.head.appendChild(s);
   }
   if (window.solanaWeb3) { go(); return; }
-  load('/solana-web3.iife.min.js', go, function () {
+  load('https://cdn.jsdelivr.net/npm/@solana/web3.js@1/lib/index.iife.min.js', go, function () {
     load('https://unpkg.com/@solana/web3.js@1/lib/index.iife.min.js', go, fail);
   });
 })();
