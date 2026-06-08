@@ -1,6 +1,6 @@
 /* ========================================================================
  * SEO Pages Router
- *
+ * 
  * Usage in server.js (ONE line, BEFORE express.static):
  *
  *     app.use(require('./seo-pages'));
