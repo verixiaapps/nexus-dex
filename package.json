@@ -24,6 +24,7 @@
     "cors": "^2.8.5",
     "crypto-browserify": "^3.12.0",
     "dotenv": "^16.4.5",
+    "esbuild": "^0.24.0",
     "express": "^4.21.0",
     "express-rate-limit": "^7.4.0",
     "https-browserify": "^1.0.0",
@@ -48,12 +49,11 @@
   },
   "devDependencies": {
     "concurrently": "^8.2.0",
-    "esbuild": "^0.24.0",
     "style-loader": "^3.3.4"
   },
   "scripts": {
     "start": "concurrently --names server,crank --prefix-colors blue,magenta \"node server.js\" \"ts-node --transpile-only crank/crank.ts\"",
-    "prebuild": "node scripts/build-wc.js",
+    "prebuild": "node -e \"const fs=require('fs'),p=require('path'),e=p.join(__dirname,'_wc.mjs');fs.writeFileSync(e,'import{UniversalProvider}from\\\"@walletconnect/universal-provider\\\";import{WalletConnectModal}from\\\"@walletconnect/modal\\\";import bs58 from\\\"bs58\\\";window.__VerixiaWC={UniversalProvider,WalletConnectModal,bs58};');require('esbuild').buildSync({entryPoints:[e],bundle:true,outfile:p.join(__dirname,'public','verixia-wc.js'),format:'iife',platform:'browser',target:['es2020'],minify:true,define:{'process.env.NODE_ENV':'\\\"production\\\"',global:'globalThis'}});fs.unlinkSync(e);console.log('verixia-wc.js built')\"",
     "build": "react-app-rewired build",
     "build:embed": "react-app-rewired build --config-overrides config-overrides.embed.js",
     "build:all": "npm run build",
@@ -73,4 +73,3 @@
     "node": "20.x"
   }
 }
- 
