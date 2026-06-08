@@ -544,15 +544,9 @@ app.get('/embed/config.js', (req, res) => {
 app.use(require('./seo-pages'));
 
 /* ========================================================================
- * Static SPA + SEO pages
+ * Catch-all — no build folder, SEO pages handle /nexus-dex/defi/*
  * ===================================================================== */
-app.use(express.static(path.join(__dirname, 'build'), {
-  maxAge: '7d',
-  setHeaders: (res, filePath) => {
-    if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-  },
-}));
-app.get('*', (req, res) => res.sendFile(path.join(__dirname, 'build', 'index.html')));
+app.get('*', (req, res) => res.status(404).json({ error: 'Not found' }));
 
 /* ========================================================================
  * Error handling
