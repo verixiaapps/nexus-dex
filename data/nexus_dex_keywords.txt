@@ -1,4 +1,3 @@
-bridge ton to polygon
 bridge near to polygon
 bridge kaspa to polygon
 bridge link to polygon
