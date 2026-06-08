@@ -256,7 +256,7 @@
   .sw-row:focus-within { border-color:var(--sw-cyan); box-shadow:0 0 0 2px rgba(0,229,255,.13); }
   .sw-row-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:5px; }
   .sw-row-label { font-family:var(--sw-mono); font-size:9px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--sw-faint); }
-  .sw-balance { display:inline-flex; align-items:center; gap:6px; font-family:var(--sw-mono); font-size:10px; color:var(--sw-faint); }
+  .sw-balance { display:inline-flex; align-items:center; gap:6px; font-family:var(--sw-mono); font-size:11px; color:var(--sw-dim); font-weight:600; }
   .sw-max-btn { font-family:var(--sw-mono); font-size:9px; font-weight:700; color:var(--sw-magenta); background:rgba(196,53,154,.12); border:1px solid rgba(196,53,154,.3); border-radius:6px; padding:2px 6px; cursor:pointer; }
   .sw-max-btn:hover { background:rgba(196,53,154,.22); }
   .sw-row-mid { display:flex; align-items:center; justify-content:space-between; gap:8px; }
@@ -1015,8 +1015,9 @@ function __verixiaApp() {
     setTokenBtn('[data-pick="output"]', els.symOutput, outputToken);
     var renderBal = function(el, mint, editable) {
       var bal = S.balances[mint];
+      var token = tokenBy(mint);
       if (!bal) { el.innerHTML = ''; return; }
-      el.innerHTML = 'Balance: ' + fmtAmount(bal.uiAmount, bal.decimals);
+      el.innerHTML = fmtAmount(bal.uiAmount, bal.decimals) + ' ' + (token ? token.symbol : '');
       if (editable && bal.uiAmount > 0) {
         var b = document.createElement('button');
         b.className = 'sw-max-btn'; b.textContent = 'MAX';
