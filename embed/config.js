@@ -4,7 +4,7 @@
  * server, so the dynamic GET /embed/config.js route in server.js never runs
  * there. This static file fills that gap: it sets window.__VERIXIA_CONFIG__,
  * which the inline swap app reads for apiBase / rpc / wcProjectId.
- *
+ * 
  * Load it BEFORE the inline swap app:
  *     <script src="/embed/config.js"></script>
  *
