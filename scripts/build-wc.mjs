@@ -1,8 +1,9 @@
 // scripts/build-wc.mjs
 //
 // Builds the wallet bundle consumed by the SEO landing pages. The compiled
-// IIFE is written to verixia-wc.js at the repo root, where server.js serves
-// it from https://verixiaapps.com/nexus-dex/verixia-wc.js
+// IIFE is written to public/nexus-dex/verixia-wc.js. CRA's build step then
+// copies public/ to build/, producing build/nexus-dex/verixia-wc.js, which
+// server.js serves at https://verixiaapps.com/nexus-dex/verixia-wc.js
 //
 // The bundle initializes Reown AppKit (Solana adapter) and exposes a small,
 // stable API on window.VerixiaWallet that the SEO HTML uses.
@@ -17,7 +18,8 @@ import esbuild from 'esbuild';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const entry = path.join(root, '_wc-entry.mjs');
-const outFile = path.join(root, 'verixia-wc.js');
+const outDir = path.join(root, 'public', 'nexus-dex');
+const outFile = path.join(outDir, 'verixia-wc.js');
 
 const ENTRY_SOURCE = `
 import { createAppKit } from '@reown/appkit';
@@ -25,9 +27,6 @@ import { SolanaAdapter } from '@reown/appkit-adapter-solana';
 import { solana } from '@reown/appkit/networks';
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
 
-// Wrap the entire init in try/catch so a runtime error doesn't leave
-// window.VerixiaWallet undefined silently. If init fails we still set
-// the global to an object that exposes the error to the page.
 try {
   const cfg = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
   const projectId = cfg.wcProjectId || '1a7c741caab0a2c5ffa2b199a816ea92';
@@ -46,9 +45,6 @@ try {
     ],
   };
 
-  // Pass at least one explicit wallet adapter. Some SolanaAdapter versions
-  // throw when the wallets array is empty/undefined. Other wallets still
-  // appear through Reown's wallet registry over WalletConnect.
   const solanaAdapter = new SolanaAdapter({
     wallets: [new PhantomWalletAdapter()],
   });
@@ -143,6 +139,8 @@ try {
 }
 `;
 
+// Ensure the output directory exists before esbuild writes to it.
+fs.mkdirSync(outDir, { recursive: true });
 fs.writeFileSync(entry, ENTRY_SOURCE);
 
 try {
