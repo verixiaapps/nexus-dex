@@ -37,33 +37,14 @@ const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 const SLIPPAGE_BPS = 500;
 
-/* ─── RPC: sequential try with clear logging. ──────────────────────── */
-const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
-const RPC_POOL = [
-  RUNTIME_CFG.rpc,
-  'https://solana-rpc.publicnode.com',
-  'https://solana.drpc.org',
-  'https://rpc.ankr.com/solana',
-  'https://api.mainnet-beta.solana.com',
-].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
-
-/**
- * Try each RPC in order. Returns the first success.
- * Throws a real Error with all failures listed if every endpoint fails.
+/* ─── RPC: use the server's Helius-backed proxy. ──────────────────── *
+ * Public RPCs throttle/block getParsedTokenAccountsByOwner from browsers.
+ * The server proxy uses your Helius key — one reliable endpoint, no fallback
+ * dance.
  */
-const rpcTry = async (op) => {
-  const failures = [];
-  for (const url of RPC_POOL) {
-    try {
-      return await op(new Connection(url, 'confirmed'));
-    } catch (e) {
-      const msg = e?.message || String(e);
-      console.warn('[rpc fail]', url, msg);
-      failures.push(`${url}: ${msg}`);
-    }
-  }
-  throw new Error(`All RPCs failed:\n${failures.join('\n')}`);
-};
+const RPC_PROXY_URL = (typeof window !== 'undefined'
+  ? `${window.location.origin}/api/solana-rpc`
+  : '/api/solana-rpc');
 
 /* ─── HELPERS ──────────────────────────────────────────────────────── */
 
@@ -110,7 +91,7 @@ const deserIx = (ix) => ({
 
 export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConnectWallet } = {}) {
   const wallet = useWallet();
-  const connection = useMemo(() => new Connection(RPC_POOL[0], 'confirmed'), []);
+  const connection = useMemo(() => new Connection(RPC_PROXY_URL, 'confirmed'), []);
 
   const [tokens, setTokens]               = useState([]);
   const [tokensLoading, setTokensLoading] = useState(true);
@@ -171,15 +152,11 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
     try {
       const owner = wallet.publicKey;
 
-      const solBal = await rpcTry(c => c.getBalance(owner));
-      const tokenAccs = await rpcTry(c =>
-        c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID })
-      );
+      const solBal = await connection.getBalance(owner);
+      const tokenAccs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID });
       let token22Accs = { value: [] };
       try {
-        token22Accs = await rpcTry(c =>
-          c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID })
-        );
+        token22Accs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID });
       } catch (e) {
         console.warn('[swap] token-2022 fetch failed (non-fatal)', e);
       }
@@ -256,7 +233,6 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
           taker:       wallet.publicKey
             ? wallet.publicKey.toBase58()
             : '11111111111111111111111111111111',
-          computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
         });
         const r = await fetch(`/api/jupiter/build?${params}`, { signal: ac.signal });
         if (!r.ok) {
@@ -343,7 +319,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
         }));
       } else {
         const mintPk = new PublicKey(inputMint);
-        const mintInfo = await rpcTry(c => c.getAccountInfo(mintPk));
+        const mintInfo = await connection.getAccountInfo(mintPk);
         if (!mintInfo) throw new Error('Input mint not found on-chain.');
         const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
           ? TOKEN_2022_PROGRAM_ID
@@ -377,16 +353,14 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
       const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
       let alts = [];
       if (altKeys.length > 0) {
-        const infos = await rpcTry(c =>
-          c.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)))
-        );
+        const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
         alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
           key:   new PublicKey(k),
           state: AddressLookupTableAccount.deserialize(infos[i].data),
         }) : null).filter(Boolean);
       }
 
-      const latest = await rpcTry(c => c.getLatestBlockhash('confirmed'));
+      const latest = await connection.getLatestBlockhash('confirmed');
       const message = new TransactionMessage({
         payerKey:        wallet.publicKey,
         recentBlockhash: latest.blockhash,
@@ -403,10 +377,10 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
         return null;
       };
       try {
-        const sim = await rpcTry(c => c.simulateTransaction(tx, {
+        const sim = await connection.simulateTransaction(tx, {
           replaceRecentBlockhash: true,
           sigVerify: false,
-        }));
+        });
         if (sim.value.err) {
           throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
         }
@@ -419,19 +393,19 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
 
       const signed = await wallet.signTransaction(tx);
 
-      const sig = await rpcTry(c => c.sendRawTransaction(signed.serialize(), {
+      const sig = await connection.sendRawTransaction(signed.serialize(), {
         skipPreflight: false,
         maxRetries: 3,
-      }));
+      });
 
       let confirmed = false;
       try {
         const conf = await Promise.race([
-          rpcTry(c => c.confirmTransaction({
+          connection.confirmTransaction({
             signature: sig,
             blockhash: latest.blockhash,
             lastValidBlockHeight: latest.lastValidBlockHeight,
-          }, 'confirmed')),
+          }, 'confirmed'),
           new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
         ]);
         if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
@@ -441,7 +415,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
         while (Date.now() < deadline) {
           await new Promise(r => setTimeout(r, 2000));
           try {
-            const st = await rpcTry(c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
+            const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
             const cs = st?.value?.confirmationStatus;
             if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
             if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
