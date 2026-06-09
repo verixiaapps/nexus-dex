@@ -79,13 +79,14 @@ app.use((req, res, next) => {
 /* ========================================================================
  * Config
  * ===================================================================== */
-const JUPITER_ENABLED      = process.env.JUPITER_ENABLED !== '0';
-const JUPITER_ACCOUNT      = process.env.JUPITER_ACCOUNT || 'NEXUS_DEX';
-const JUPITER_API_KEY      = process.env.JUPITER_API_KEY || '';
-const JUPITER_SWAP_V2_BASE = 'https://api.jup.ag/swap/v2';
-const JUPITER_LEGACY_BASE  = (process.env.JUPITER_QUOTE_BASE || 'https://api.jup.ag/swap/v1').replace(/\/+$/, '');
-const JUPITER_TOKENS_BASE  = 'https://lite-api.jup.ag/tokens/v2';
-const JUPITER_PRICE_BASE   = 'https://lite-api.jup.ag/price/v3';
+const JUPITER_ENABLED       = process.env.JUPITER_ENABLED !== '0';
+const JUPITER_ACCOUNT       = process.env.JUPITER_ACCOUNT || 'NEXUS_DEX';
+const JUPITER_API_KEY       = process.env.JUPITER_API_KEY || '';
+const JUPITER_API_KEY_SEO   = process.env.JUPITER_API_KEY_SEO || '';
+const JUPITER_SWAP_V2_BASE  = 'https://api.jup.ag/swap/v2';
+const JUPITER_LEGACY_BASE   = (process.env.JUPITER_QUOTE_BASE || 'https://api.jup.ag/swap/v1').replace(/\/+$/, '');
+const JUPITER_TOKENS_BASE   = 'https://lite-api.jup.ag/tokens/v2';
+const JUPITER_PRICE_BASE    = 'https://lite-api.jup.ag/price/v3';
 
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY || process.env.REACT_APP_HELIUS_API_KEY || '';
 const HELIUS_RPC_URL = process.env.HELIUS_RPC_URL || process.env.REACT_APP_SOLANA_RPC     || '';
@@ -192,6 +193,14 @@ function buildJupiterHeaders() {
   return h;
 }
 
+// Dedicated headers for SEO pages — uses a SEPARATE Jupiter API key so SEO
+// traffic doesn't share rate-limit quota with the main swap app.
+function buildJupiterSeoHeaders() {
+  const h = { Accept: 'application/json', 'Content-Type': 'application/json', 'X-Nexus-Account': 'NEXUS_DEX_SEO' };
+  if (JUPITER_API_KEY_SEO) h['x-api-key'] = JUPITER_API_KEY_SEO;
+  return h;
+}
+
 // Swap V2 /build — used by the main Swap.jsx (atomic-tx flow)
 app.get('/api/jupiter/build', async (req, res) => {
   try {
@@ -205,6 +214,23 @@ app.get('/api/jupiter/build', async (req, res) => {
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'Jupiter build timed out' });
     logError('jupiter-build', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+// Swap V2 /build for SEO pages — same upstream, separate Jupiter API key.
+app.get('/api/seo/jupiter/build', async (req, res) => {
+  try {
+    const url = JUPITER_SWAP_V2_BASE + '/build' + buildForwardedQuery(req);
+    const c   = getCachedJson('seo:' + url);
+    if (c) return res.status(c.status).json(c.payload);
+    const response = await fetchWithTimeout(url, { method: 'GET', headers: buildJupiterSeoHeaders() }, 12_000);
+    const result   = await safeJson(response);
+    if (response.ok && result.parsed !== null) setCachedJson('seo:' + url, response.status, result.parsed, 4_000);
+    return respondJsonOrError(res, response, result);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Jupiter SEO build timed out' });
+    logError('jupiter-seo-build', e);
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
@@ -502,18 +528,20 @@ app.get('/api/health', (req, res) => {
   res.json({
     ok: true, env: NODE_ENV,
     has: {
-      jupiter:       Boolean(JUPITER_ENABLED),
-      jupiterApiKey: Boolean(JUPITER_API_KEY),
-      helius:        Boolean(HELIUS_API_KEY || HELIUS_RPC_URL),
-      lifiApiKey:    Boolean(LIFI_API_KEY),
-      resend:        Boolean(process.env.RESEND_API_KEY),
+      jupiter:        Boolean(JUPITER_ENABLED),
+      jupiterApiKey:  Boolean(JUPITER_API_KEY),
+      jupiterSeoKey:  Boolean(JUPITER_API_KEY_SEO),
+      helius:         Boolean(HELIUS_API_KEY || HELIUS_RPC_URL),
+      lifiApiKey:     Boolean(LIFI_API_KEY),
+      resend:         Boolean(process.env.RESEND_API_KEY),
     },
     jupiter: {
       swapV2: JUPITER_SWAP_V2_BASE,
       tokens: JUPITER_TOKENS_BASE,
       legacy: JUPITER_LEGACY_BASE,
       price:  JUPITER_PRICE_BASE,
-      keySet: Boolean(JUPITER_API_KEY),
+      keySet:    Boolean(JUPITER_API_KEY),
+      seoKeySet: Boolean(JUPITER_API_KEY_SEO),
     },
     lifi: { baseUrl: LIFI_API, keySet: Boolean(LIFI_API_KEY) },
     solanaRpc: {
@@ -591,7 +619,7 @@ app.use((err, req, res, next) => {
 app.listen(PORT, () => {
   console.log('Nexus DEX server on port ' + PORT);
   console.log('  env: ' + NODE_ENV);
-  console.log('  Jupiter Swap V2: ' + JUPITER_SWAP_V2_BASE + (JUPITER_API_KEY ? ' (key set)' : ' (no key)'));
+  console.log('  Jupiter Swap V2: ' + JUPITER_SWAP_V2_BASE + (JUPITER_API_KEY ? ' (main key set)' : ' (no main key)') + (JUPITER_API_KEY_SEO ? ' (SEO key set)' : ' (no SEO key)'));
   console.log('  Jupiter Price:   ' + JUPITER_PRICE_BASE);
   console.log('  LI.FI:           ' + LIFI_API + (LIFI_API_KEY ? ' (key set)' : ' (no key)'));
   console.log('  Solana RPC:      ' + (HELIUS_RPC_URL ? 'helius (custom)' : HELIUS_API_KEY ? 'helius' : 'public mainnet-beta'));
