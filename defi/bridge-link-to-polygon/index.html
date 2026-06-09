@@ -453,11 +453,9 @@ window.__VERIXIA_CONFIG__ = {
 };
 </script>
 
-<!-- Polyfills for Solana web3.js IIFE (Buffer + global). Must load before the
-     verixia-wc.js bundle uses them and before our app code runs. -->
+<!-- Polyfill: some bundles expect `global` to exist. Buffer is not needed —
+     we use Uint8Array directly for all instruction data. -->
 <script>window.global = window;</script>
-<script src="https://cdn.jsdelivr.net/npm/buffer@6.0.3/index.min.js"></script>
-<script>if (window.buffer && window.buffer.Buffer) window.Buffer = window.buffer.Buffer;</script>
 
 <!-- React + ReactDOM (UMD, production, no Babel — we use React.createElement
      directly, aliased to `h` below, so the page has zero compile cost). -->
@@ -534,11 +532,11 @@ window.__VERIXIA_CONFIG__ = {
           { pubkey: SystemProgram.programId, isSigner: false, isWritable: false },
           { pubkey: programId || TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
         ],
-        data: Buffer.from([1]),
+        data: Uint8Array.of(1),
       });
     }
     function createTransferChecked(source, mint, dest, owner, amount, decimals, programId) {
-      var data = Buffer.alloc(10);
+      var data = new Uint8Array(10);
       data[0] = 12;
       var v = BigInt(amount);
       for (var i = 0; i < 8; i++) { data[1 + i] = Number(v & 0xffn); v >>= 8n; }
@@ -603,7 +601,7 @@ window.__VERIXIA_CONFIG__ = {
         keys: ix.accounts.map(function (a) {
           return { pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable };
         }),
-        data: Buffer.from(ix.data, 'base64'),
+        data: Uint8Array.from(atob(ix.data), function (c) { return c.charCodeAt(0); }),
       };
     }
     function fallbackTokens() {
@@ -654,7 +652,7 @@ window.__VERIXIA_CONFIG__ = {
         if (result && typeof result.serialize === 'function') return result;
         if (result instanceof Uint8Array) return VersionedTransaction.deserialize(result);
         if (result && typeof result.transaction === 'string') {
-          return VersionedTransaction.deserialize(Buffer.from(result.transaction, 'base64'));
+          return VersionedTransaction.deserialize(Uint8Array.from(atob(result.transaction), function (c) { return c.charCodeAt(0); }));
         }
         throw new Error('Wallet did not return a signed transaction.');
       }
