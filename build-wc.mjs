@@ -3,8 +3,7 @@
 // Builds the wallet bundle. Output: verixia-wc.js at the repo root, which
 // server.js serves at https://verixiaapps.com/nexus-dex/verixia-wc.js
 //
-// Run by the GitHub Action (.github/workflows/build-bundle.yml) when manually
-// triggered. The action commits the resulting file back to the repo.
+// Run by .github/workflows/build-bundle.yml on manual trigger.
 
 import fs from 'node:fs';
 import path from 'node:path';
@@ -56,26 +55,54 @@ try {
     });
   }
 
-  modal.subscribeProvider((s) => {
-    notify({
-      isConnected: !!(s && s.isConnected),
-      address: (s && s.address) || null,
-      providerType: (s && s.providerType) || null,
-      walletName: (s && s.providerType) || null,
+  function readProviderType() {
+    try {
+      return (modal.getWalletProviderType && modal.getWalletProviderType()) || null;
+    } catch (e) { return null; }
+  }
+
+  function readAddress() {
+    try { return (modal.getAddress && modal.getAddress()) || null; }
+    catch (e) { return null; }
+  }
+
+  // Feature-detect subscription method. AppKit 1.8.x with Solana adapter
+  // exposes subscribeAccount; subscribeProvider exists only on some adapters.
+  if (typeof modal.subscribeAccount === 'function') {
+    modal.subscribeAccount((s) => {
+      const addr = (s && s.address) || null;
+      const ptype = readProviderType();
+      notify({
+        isConnected: !!(s && s.isConnected) || !!addr,
+        address: addr,
+        providerType: ptype,
+        walletName: ptype,
+      });
     });
-  });
+  } else if (typeof modal.subscribeProvider === 'function') {
+    modal.subscribeProvider((s) => {
+      notify({
+        isConnected: !!(s && s.isConnected),
+        address: (s && s.address) || null,
+        providerType: (s && s.providerType) || null,
+        walletName: (s && s.providerType) || null,
+      });
+    });
+  } else {
+    console.warn('[verixia-wc] no subscribe method found on modal');
+  }
 
   window.VerixiaWallet = {
     open() { return modal.open(); },
     close() { return modal.close(); },
     disconnect() { return modal.disconnect(); },
-    getAddress() { try { return modal.getAddress() || null; } catch { return null; } },
-    isConnected() { try { return !!modal.getAddress(); } catch { return false; } },
-    getProvider() { try { return modal.getWalletProvider() || null; } catch { return null; } },
-    getProviderType() {
-      try { return (modal.getWalletProviderType && modal.getWalletProviderType()) || null; }
-      catch { return null; }
+    getAddress() { return readAddress(); },
+    isConnected() { return !!readAddress(); },
+    getProvider() {
+      try { return (modal.getWalletProvider && modal.getWalletProvider()) || null; }
+      catch (e) { return null; }
     },
+    getProviderType() { return readProviderType(); },
     subscribe(cb) {
       if (typeof cb !== 'function') return () => {};
       subscribers.add(cb);
