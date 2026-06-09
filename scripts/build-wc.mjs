@@ -1,9 +1,8 @@
 // scripts/build-wc.mjs
 //
 // Builds the wallet bundle consumed by the SEO landing pages. The compiled
-// IIFE is written to public/verixia-wc.js and React's build step then copies
-// it into build/verixia-wc.js, where it's served from
-//   https://verixiaapps.com/nexus-dex/verixia-wc.js
+// IIFE is written to verixia-wc.js at the repo root, where server.js serves
+// it from https://verixiaapps.com/nexus-dex/verixia-wc.js
 //
 // The bundle initializes Reown AppKit (Solana adapter) and exposes a small,
 // stable API on window.VerixiaWallet that the SEO HTML uses.
@@ -18,7 +17,7 @@ import esbuild from 'esbuild';
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, '..');
 const entry = path.join(root, '_wc-entry.mjs');
-const outFile = path.join(root, 'public', 'verixia-wc.js');
+const outFile = path.join(root, 'verixia-wc.js');
 
 const ENTRY_SOURCE = `
 import { createAppKit } from '@reown/appkit';
@@ -129,8 +128,6 @@ try {
   try { window.dispatchEvent(new Event('verixia-wallet-ready')); } catch (e) {}
 } catch (err) {
   console.error('[verixia-wc] AppKit init failed:', err);
-  // Set a marker so the page can detect the failure mode and show
-  // something more useful than a timeout error.
   window.VerixiaWallet = {
     _error: (err && (err.message || String(err))) || 'unknown init error',
     open() { alert('Wallet system failed to load: ' + this._error); },
