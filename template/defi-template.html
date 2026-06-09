@@ -1,441 +1,39 @@
-<script src="https://verixiaapps.com/nexus-dex/verixia-wc.js"></script>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>{{TITLE}}</title>
-<meta name="description" content="{{DESCRIPTION}}">
-<meta name="keywords" content="{{KEYWORD}}">
-<link rel="canonical" href="{{CANONICAL_URL}}">
-
-<meta property="og:type" content="website">
-<meta property="og:url" content="{{CANONICAL_URL}}">
-<meta property="og:title" content="{{TITLE}}">
-<meta property="og:description" content="{{DESCRIPTION}}">
-<meta property="og:image" content="{{OG_IMAGE}}">
-<meta property="og:site_name" content="Verixia">
-
-<meta name="twitter:card" content="summary_large_image">
-<meta name="twitter:title" content="{{TITLE}}">
-<meta name="twitter:description" content="{{DESCRIPTION}}">
-<meta name="twitter:image" content="{{OG_IMAGE}}">
-
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "WebPage",
-  "url": "{{CANONICAL_URL}}",
-  "name": "{{TITLE}}",
-  "description": "{{DESCRIPTION}}",
-  "dateModified": "{{MODIFIED_DATE}}",
-  "aggregateRating": {{AGGREGATE_RATING_JSON}},
-  "isPartOf": { "@type": "WebSite", "url": "https://verixiaapps.com/", "name": "Verixia" },
-  "publisher": { "@type": "Organization", "name": "Verixia", "url": "https://verixiaapps.com/" }
-}
-</script>
-
-<script type="application/ld+json">
-{
-  "@context": "https://schema.org",
-  "@type": "BreadcrumbList",
-  "itemListElement": [
-    { "@type": "ListItem", "position": 1, "name": "Verixia", "item": "https://verixiaapps.com/" },
-    { "@type": "ListItem", "position": 2, "name": "{{BREADCRUMB_NAME}}", "item": "{{CANONICAL_URL}}" }
-  ]
-}
-</script>
-
-<script type="application/ld+json">
-{{SCHEMA_FAQ}}
-</script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Zen+Dots&family=Outfit:wght@400;500;600;700;800;900&family=Caveat:wght@500;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
-<style>
-  :root {
-    --bg: #020106;
-    --bg-2: #060210;
-    --card: #0a0420;
-    --card-2: #0e0628;
-    --line: rgba(120, 80, 220, 0.12);
-    --line-2: rgba(0, 180, 210, 0.28);
-    --text: #e8e0f5;
-    --text-dim: #9b8fc0;
-    --text-faint: #564670;
-    --cyan: #00b8d4;
-    --magenta: #c4359a;
-    --violet: #7a3dd4;
-    --gold: #d4a533;
-    --green: #3dd494;
-    --pink: #c66aa8;
-  }
-  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
-  html, body { background: var(--bg); color: var(--text); font-family: 'Outfit', sans-serif; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
-  body {
-    min-height: 100vh;
-    background:
-      radial-gradient(circle 500px at 20% 8%, rgba(0, 184, 212, 0.12), transparent 60%),
-      radial-gradient(circle 700px at 90% 28%, rgba(196, 53, 154, 0.12), transparent 60%),
-      radial-gradient(circle 500px at 30% 60%, rgba(122, 61, 212, 0.10), transparent 60%),
-      radial-gradient(circle 500px at 80% 90%, rgba(0, 184, 212, 0.07), transparent 60%),
-      var(--bg);
-  }
-  body::before {
-    content: '';
-    position: fixed; inset: 0;
-    background-image:
-      radial-gradient(1.5px 1.5px at 20% 30%, white, transparent),
-      radial-gradient(1px 1px at 70% 10%, white, transparent),
-      radial-gradient(1.5px 1.5px at 40% 70%, var(--cyan), transparent),
-      radial-gradient(1px 1px at 90% 60%, white, transparent),
-      radial-gradient(1.5px 1.5px at 10% 90%, var(--pink), transparent),
-      radial-gradient(1px 1px at 60% 40%, white, transparent),
-      radial-gradient(1px 1px at 30% 50%, white, transparent),
-      radial-gradient(1.5px 1.5px at 80% 80%, var(--magenta), transparent),
-      radial-gradient(1px 1px at 50% 20%, white, transparent),
-      radial-gradient(1px 1px at 15% 60%, white, transparent);
-    background-size: 350px 350px;
-    opacity: 0.5;
-    pointer-events: none;
-    z-index: 0;
-    animation: twinkle 7s ease-in-out infinite;
-  }
-  @keyframes twinkle { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.7; } }
-  body::after {
-    content: '';
-    position: fixed; inset: 0;
-    background-image:
-      linear-gradient(rgba(0, 229, 255, 0.05) 1px, transparent 1px),
-      linear-gradient(90deg, rgba(255, 62, 213, 0.05) 1px, transparent 1px);
-    background-size: 60px 60px;
-    transform: perspective(500px) rotateX(60deg) translateY(40%);
-    transform-origin: center bottom;
-    mask-image: linear-gradient(to bottom, transparent 50%, black);
-    pointer-events: none;
-    z-index: 0;
-  }
-  main { position: relative; z-index: 1; padding-bottom: 60px; }
-  .marquee {
-    background: linear-gradient(90deg, var(--cyan), var(--pink), var(--magenta), var(--violet), var(--cyan));
-    background-size: 300% 100%;
-    animation: hueshift 8s linear infinite;
-    color: black;
-    padding: 8px 0;
-    font-family: 'Zen Dots', sans-serif;
-    font-size: 10px;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    overflow: hidden;
-    position: relative;
-  }
-  @keyframes hueshift { from { background-position: 0% 0%; } to { background-position: 300% 0%; } }
-  .marquee-track {
-    display: inline-flex; gap: 28px; white-space: nowrap;
-    animation: scroll 25s linear infinite; padding-left: 28px;
-  }
-  .marquee-track span { display: inline-flex; align-items: center; gap: 8px; }
-  @keyframes scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
-  header {
-    display: flex; align-items: center; justify-content: space-between;
-    padding: 14px 18px;
-    background: rgba(4, 2, 10, 0.85);
-    backdrop-filter: blur(14px);
-    position: sticky; top: 0; z-index: 20;
-    border-bottom: 1px solid var(--line);
-    gap: 8px;
-  }
-  .header-msg { display: none; }
-  @media (min-width: 480px) {
-    .header-msg { display: block; text-align: right; line-height: 1.25; flex: 1; padding: 0 8px; }
-    .header-msg-l1 { font-family: 'Outfit'; font-weight: 800; font-size: 15px; color: white; letter-spacing: -0.01em; }
-    .header-msg-l1 .grad { background: linear-gradient(90deg, var(--cyan), var(--magenta)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-    .header-msg-l2 { font-family: 'JetBrains Mono'; font-weight: 700; font-size: 11px; color: var(--text-dim); letter-spacing: 0.06em; text-transform: uppercase; margin-top: 1px; }
-    .header-msg-l3 { font-family: 'JetBrains Mono'; font-weight: 700; font-size: 10px; color: var(--text-faint); letter-spacing: 0.06em; margin-top: 1px; }
-    .header-msg-l3 .jup-mark { color: var(--cyan); font-size: 11px; margin-right: 2px; }
-  }
-  .logo { display: flex; align-items: center; gap: 10px; }
-  .logo-mark {
-    width: 34px; height: 34px;
-    background: linear-gradient(135deg, var(--cyan), var(--magenta));
-    color: white; display: grid; place-items: center;
-    font-family: 'Zen Dots'; font-size: 15px;
-    border-radius: 50% 30% 50% 30%;
-    box-shadow: 0 0 24px rgba(0, 229, 255, 0.5), 0 0 40px rgba(255, 62, 213, 0.3);
-    animation: morph 6s ease-in-out infinite;
-  }
-  @keyframes morph { 0%, 100% { border-radius: 50% 30% 50% 30%; } 50% { border-radius: 30% 50% 30% 50%; } }
-  .logo-text { font-family: 'Zen Dots'; font-size: 14px; letter-spacing: 0.06em; background: linear-gradient(90deg, var(--cyan), var(--magenta)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .header-right { display: flex; align-items: center; gap: 8px; }
-  .live-pill { display: flex; align-items: center; gap: 6px; padding: 6px 11px; background: rgba(0, 229, 255, 0.08); border: 1px solid var(--line-2); border-radius: 100px; font-family: 'JetBrains Mono'; font-size: 10px; font-weight: 700; color: var(--cyan); letter-spacing: 0.1em; }
-  .live-pill .pulse { width: 6px; height: 6px; background: var(--cyan); border-radius: 50%; box-shadow: 0 0 10px var(--cyan); animation: pulse 1.4s ease-in-out infinite; }
-  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.7); } }
-  .connect { font-family: 'Outfit'; font-weight: 800; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; padding: 10px 18px; background: linear-gradient(90deg, var(--cyan), var(--magenta)); border: 0; color: black; border-radius: 100px; box-shadow: 0 4px 16px rgba(255, 62, 213, 0.4), inset 0 1px 0 rgba(255,255,255,0.4); cursor: pointer; }
-  .hero { padding: 14px 18px 6px; position: relative; min-height: 0; }
-  .hero-content { position: relative; z-index: 2; max-width: 100%; text-align: center; }
-  .pair-meta { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(0,0,0,0.5); backdrop-filter: blur(8px); border: 1px solid var(--line); border-radius: 100px; font-family: 'JetBrains Mono'; font-size: 10px; color: var(--text-dim); letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600; margin-bottom: 16px; }
-  .pair-meta .dot { width: 6px; height: 6px; background: var(--green); border-radius: 50%; box-shadow: 0 0 8px var(--green); }
-  .pair-meta b { color: var(--cyan); }
-  h1 { font-family: 'Zen Dots'; font-weight: 400; font-size: 26px; line-height: 1.05; letter-spacing: -0.02em; margin-bottom: 8px; text-transform: uppercase; }
-  h1 .line2 { background: linear-gradient(90deg, var(--cyan) 0%, var(--magenta) 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  h1 .arr { color: var(--magenta); font-family: 'Outfit'; font-weight: 900; font-style: italic; -webkit-text-fill-color: var(--magenta); margin-right: 4px; }
-  .hero-msg-mobile { margin-top: 12px; text-align: center; }
-  .hero-msg-mobile .l1 { font-family: 'Outfit'; font-weight: 800; font-size: 20px; color: white; letter-spacing: -0.01em; }
-  .hero-msg-mobile .l1 .grad { background: linear-gradient(90deg, var(--cyan), var(--magenta)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .hero-msg-mobile .l2 { font-family: 'JetBrains Mono'; font-weight: 700; font-size: 13px; color: var(--text-dim); letter-spacing: 0.08em; text-transform: uppercase; margin-top: 4px; }
-  .hero-msg-mobile .l3 { font-family: 'JetBrains Mono'; font-weight: 700; font-size: 11px; color: var(--text-faint); letter-spacing: 0.05em; margin-top: 2px; }
-  .hero-msg-mobile .l3 .jup-mark { color: var(--cyan); margin-right: 3px; font-size: 12px; }
-  @media (min-width: 480px) { .hero-msg-mobile { display: none; } }
-  .tag-stack { display: flex; flex-direction: column; gap: 6px; margin: 16px 0; }
-  .tag-line { display: inline-flex; align-items: center; background: rgba(0,0,0,0.6); border: 1px solid var(--line); border-radius: 4px; padding: 6px 12px; width: fit-content; font-family: 'Zen Dots'; font-size: 11px; letter-spacing: 0.08em; gap: 8px; }
-  .tag-line .icon { font-size: 13px; } .tag-line .lbl { color: white; }
-  .tag-line .val { background: linear-gradient(90deg, var(--cyan), var(--magenta)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .lede { color: var(--text-dim); font-size: 13px; line-height: 1.5; max-width: 380px; font-weight: 500; margin-top: 10px; background: rgba(0,0,0,0.4); backdrop-filter: blur(6px); padding: 10px 12px; border-left: 2px solid var(--cyan); border-radius: 0 8px 8px 0; }
-  .lede b { color: var(--text); font-weight: 700; }
-  .signature { margin-top: 16px; position: relative; z-index: 2; background: rgba(0,0,0,0.5); backdrop-filter: blur(6px); padding: 10px 14px; border-radius: 12px; border: 1px dashed var(--line); display: inline-block; }
-  .signature p { font-family: 'Caveat'; font-weight: 700; font-size: 19px; line-height: 1.1; }
-  .signature p:nth-child(1) { color: white; } .signature p:nth-child(2) { color: var(--pink); } .signature p:nth-child(3) { color: var(--cyan); }
-  .signature .crown { color: var(--gold); font-size: 14px; }
-  .brand-strip { padding: 24px 18px 8px; display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; position: relative; }
-  .brand-strip .tag-stack { margin: 0; flex-shrink: 0; } .brand-strip .signature { margin: 0; }
-  .swap-wrap { padding: 12px 18px 10px; position: relative; margin-top: 0; }
-  .swap-wrap::before { content: ''; position: absolute; top: 0; left: -20px; width: 200px; height: 200px; background: var(--cyan); border-radius: 50%; filter: blur(60px); opacity: 0.3; z-index: 0; }
-  .swap-wrap::after { content: ''; position: absolute; bottom: 20px; right: -30px; width: 220px; height: 220px; background: var(--magenta); border-radius: 50%; filter: blur(60px); opacity: 0.3; z-index: 0; }
-  .ticker { display: grid; grid-template-columns: repeat(4, 1fr); margin: 16px 18px 0; background: rgba(0,0,0,0.4); backdrop-filter: blur(8px); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
-  .ticker-cell { padding: 12px 8px; border-right: 1px solid var(--line); text-align: center; }
-  .ticker-cell:last-child { border-right: 0; }
-  .ticker-cell .lbl { font-family: 'JetBrains Mono'; font-size: 9px; color: var(--text-faint); letter-spacing: 0.15em; text-transform: uppercase; font-weight: 700; margin-bottom: 4px; }
-  .ticker-cell .val { font-family: 'Outfit'; font-weight: 800; font-size: 15px; }
-  .ticker-cell .val.up { color: var(--green); } .ticker-cell .val.cy { color: var(--cyan); }
-  .section { padding: 36px 18px 4px; position: relative; }
-  .section-tag { display: inline-flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono'; font-size: 10px; background: linear-gradient(90deg, var(--cyan), var(--magenta)); -webkit-background-clip: text; background-clip: text; color: transparent; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 700; margin-bottom: 10px; }
-  .section-tag::before { content: ''; width: 24px; height: 1px; background: linear-gradient(90deg, var(--cyan), var(--magenta)); }
-  .section-title { font-family: 'Zen Dots'; font-weight: 400; font-size: 26px; line-height: 1.1; letter-spacing: -0.01em; margin-bottom: 20px; text-transform: uppercase; }
-  .section-title .grad { background: linear-gradient(90deg, var(--cyan), var(--magenta)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .faq-item { background: rgba(255,255,255,0.02); backdrop-filter: blur(8px); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; margin-bottom: 8px; }
-  .faq-q { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-family: 'Outfit'; font-weight: 700; font-size: 14px; }
-  .faq-q .plus { width: 24px; height: 24px; background: linear-gradient(135deg, var(--cyan), var(--magenta)); color: black; border-radius: 50%; display: grid; place-items: center; font-size: 14px; font-weight: 900; flex-shrink: 0; }
-  .faq-a { font-size: 13px; line-height: 1.6; color: var(--text-dim); margin-top: 8px; }
-  .pair-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
-  .pair-tile { background: rgba(255,255,255,0.02); backdrop-filter: blur(6px); border: 1px solid var(--line); border-radius: 16px; padding: 14px; position: relative; overflow: hidden; }
-  .pair-tile::before { content: ''; position: absolute; top: -20px; right: -20px; width: 60px; height: 60px; background: var(--cyan); border-radius: 50%; filter: blur(20px); opacity: 0.25; }
-  .pair-tile:nth-child(even)::before { background: var(--magenta); }
-  .pair-tile .from-to { font-family: 'Outfit'; font-weight: 800; font-size: 15px; display: flex; align-items: center; gap: 5px; position: relative; z-index: 1; }
-  .pair-tile .from-to .arr { color: var(--magenta); margin: 0 2px; }
-  .pair-tile .rate { font-family: 'JetBrains Mono'; font-size: 11px; color: var(--text-faint); margin-top: 4px; position: relative; z-index: 1; }
-  .pair-tile .change { font-family: 'JetBrains Mono'; font-size: 10px; color: var(--green); font-weight: 700; margin-top: 2px; position: relative; z-index: 1; }
-  .pair-tile .change.dn { color: var(--magenta); }
-  .hub-link-label { color: var(--text-faint); font-family: 'JetBrains Mono'; font-size: 11px; }
-  .hub-link-anchor { color: var(--cyan); font-family: 'JetBrains Mono'; font-size: 11px; font-weight: 700; text-decoration: none; }
-  .hub-link-anchor:hover { text-decoration: underline; }
-  footer { margin-top: 32px; padding: 28px 18px; border-top: 1px solid var(--line); text-align: center; position: relative; }
-  footer::before { content: ''; position: absolute; top: -1px; left: 50%; transform: translateX(-50%); width: 60%; height: 1px; background: linear-gradient(90deg, transparent, var(--cyan), var(--magenta), transparent); }
-  footer .marks { font-family: 'Caveat'; font-weight: 700; font-size: 22px; color: white; margin-bottom: 6px; }
-  footer .marks .pink { color: var(--pink); } footer .marks .cy { color: var(--cyan); } footer .marks .crown { color: var(--gold); }
-  footer .links { display: flex; justify-content: center; gap: 18px; margin: 14px 0 12px; font-family: 'JetBrains Mono'; font-size: 11px; color: var(--text-dim); letter-spacing: 0.1em; }
-  footer .legal { font-family: 'JetBrains Mono'; font-size: 10px; color: var(--text-faint); letter-spacing: 0.05em; line-height: 1.6; }
-  #verixia-swap-root { display: block; min-height: 460px; }
-  .swap-skeleton { min-height: 460px; border-radius: 22px; background: radial-gradient(circle at 50% 0%, rgba(0, 184, 212, 0.14), transparent 70%), linear-gradient(180deg, var(--card), var(--card-2)); border: 1px solid var(--line-2); position: relative; overflow: hidden; margin: 0 auto; max-width: 380px; }
-  .swap-skeleton::before { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(0, 184, 212, 0.07), transparent); background-size: 200% 100%; animation: skel 1.8s linear infinite; }
-  @keyframes skel { 0% { background-position: -100% 0; } 100% { background-position: 200% 0; } }
-  .swap-skeleton-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); }
-  .swap-skeleton-msg .skel-title { font-family: 'Zen Dots', sans-serif; font-size: 18px; letter-spacing: 0.05em; text-transform: none; background: linear-gradient(90deg, white, var(--cyan)); -webkit-background-clip: text; background-clip: text; color: transparent; }
-  .swap-skeleton-msg .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 10px var(--cyan); animation: pulse 1.6s ease-in-out infinite; }
-
-  /* ===== VERIXIA SWAP WIDGET (.sw-*) ===== */
-  .sw-root { --sw-cyan:#00b8d4; --sw-magenta:#c4359a; --sw-violet:#7a3dd4; --sw-green:#3dd494; --sw-pink:#c66aa8; --sw-gold:#d4a533; --sw-text:#e8e0f5; --sw-dim:#9b8fc0; --sw-faint:#564670; --sw-line:rgba(255,255,255,.08); --sw-line-2:rgba(0,180,210,.28); --sw-leg:rgba(0,0,0,.42); --sw-card:linear-gradient(180deg, rgba(16,8,40,.94), rgba(22,10,53,.94)); --sw-display:'Zen Dots', ui-sans-serif, system-ui, sans-serif; --sw-body:'Outfit', ui-sans-serif, system-ui, sans-serif; --sw-mono:'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace; position:relative; width:100%; max-width:380px; margin:0 auto; color:var(--sw-text); font-family:var(--sw-body); -webkit-font-smoothing:antialiased; text-align:left; }
-  .sw-root *, .sw-root *::before, .sw-root *::after { box-sizing:border-box; }
-  .sw-container { position:relative; background:var(--sw-card); backdrop-filter:blur(14px); border:1px solid var(--sw-line); border-radius:20px; padding:13px; box-shadow:0 0 0 1px rgba(0,229,255,.10), 0 14px 38px -24px rgba(255,62,213,.5), inset 0 1px 0 rgba(255,255,255,.05); }
-  .sw-container::before { content:''; position:absolute; inset:-1px; border-radius:20px; padding:1px; background:conic-gradient(from 0deg, var(--sw-cyan), var(--sw-magenta), var(--sw-violet), var(--sw-cyan)); -webkit-mask:linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite:xor; mask-composite:exclude; pointer-events:none; opacity:.22; animation:sw-spin 9s linear infinite; }
-  .sw-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:9px; position:relative; z-index:1; }
-  .sw-title { display:flex; align-items:center; gap:6px; font-family:var(--sw-display); font-size:10px; font-weight:400; letter-spacing:.14em; text-transform:uppercase; margin:0; color:var(--sw-dim); }
-  .sw-title::before { content:'\2726'; color:var(--sw-magenta); font-size:11px; }
-  .sw-live-pill { display:none; }
-  .sw-live-dot { width:5px; height:5px; border-radius:50%; background:var(--sw-cyan); box-shadow:0 0 8px var(--sw-cyan); animation:sw-pulse 1.4s ease-in-out infinite; }
-  .sw-panel { display:flex; flex-direction:column; gap:3px; position:relative; z-index:1; }
-  .sw-row { background:var(--sw-leg); border:1px solid rgba(255,255,255,.05); border-radius:13px; padding:10px 12px; transition:border-color .2s, box-shadow .2s; }
-  .sw-row:focus-within { border-color:var(--sw-cyan); box-shadow:0 0 0 2px rgba(0,229,255,.13); }
-  .sw-row-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:5px; min-height:14px; }
-  .sw-row-label { font-family:var(--sw-mono); font-size:9px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--sw-faint); }
-  .sw-balance { display:inline-flex; align-items:center; gap:6px; font-family:var(--sw-mono); font-size:11px; color:var(--sw-dim); font-weight:600; min-height:14px; }
-  .sw-balance.sw-bal-loading { color:var(--sw-faint); font-style:italic; }
-  .sw-max-btn { font-family:var(--sw-mono); font-size:9px; font-weight:700; color:var(--sw-magenta); background:rgba(196,53,154,.12); border:1px solid rgba(196,53,154,.3); border-radius:6px; padding:2px 6px; cursor:pointer; }
-  .sw-max-btn:hover { background:rgba(196,53,154,.22); }
-  .sw-row-mid { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-  .sw-amount-input { flex:1 1 auto; min-width:0; width:100%; background:transparent; border:0; outline:0; color:var(--sw-text); font-family:var(--sw-body); font-weight:700; font-size:23px; letter-spacing:-.02em; }
-  .sw-amount-input::placeholder { color:var(--sw-faint); opacity:.6; }
-  .sw-token-btn { display:inline-flex; align-items:center; gap:6px; flex-shrink:0; padding:5px 10px 5px 5px; background:linear-gradient(135deg, rgba(0,229,255,.1), rgba(255,62,213,.1)); border:1px solid rgba(255,255,255,.09); border-radius:100px; color:var(--sw-text); font-family:var(--sw-body); font-weight:700; font-size:13px; white-space:nowrap; cursor:pointer; transition:border-color .15s, transform .1s; }
-  .sw-token-btn:hover { border-color:rgba(0,229,255,.45); }
-  .sw-token-btn svg { color:var(--sw-cyan); width:12px; height:12px; }
-  .sw-token-logo { width:20px; height:20px; border-radius:50%; object-fit:cover; display:grid; place-items:center; font-size:10px; font-weight:800; color:#000; }
-  .sw-flip-wrap { display:flex; justify-content:center; margin:-7px 0; position:relative; z-index:3; }
-  .sw-flip-btn { width:30px; height:30px; display:grid; place-items:center; border:3px solid #0a0420; border-radius:50%; background:linear-gradient(135deg, var(--sw-cyan), var(--sw-magenta)); color:#000; cursor:pointer; box-shadow:0 4px 12px rgba(0,229,255,.4); transition:transform .4s ease; }
-  .sw-flip-btn:hover { transform:rotate(180deg); }
-  .sw-flip-btn svg { width:14px; height:14px; }
-  .sw-details { margin-top:8px; padding:9px 12px; background:rgba(0,0,0,.32); border:1px solid var(--sw-line); border-radius:11px; position:relative; z-index:1; }
-  .sw-detail-row { display:flex; align-items:center; justify-content:space-between; gap:10px; font-family:var(--sw-mono); font-size:10px; color:var(--sw-dim); padding:2px 0; }
-  .sw-detail-val { color:var(--sw-text); font-weight:600; text-align:right; }
-  .sw-impact-good{color:var(--sw-green);} .sw-impact-warn{color:var(--sw-gold);} .sw-impact-bad{color:#ff5d7d;} .sw-impact-neutral{color:var(--sw-dim);}
-  .sw-banner { margin-top:9px; padding:9px 12px; border-radius:10px; font-size:12px; line-height:1.4; border:1px solid transparent; position:relative; z-index:1; }
-  .sw-banner-error { background:rgba(255,93,125,.1); border-color:rgba(255,93,125,.35); color:#ffb3c1; }
-  .sw-banner-success { background:rgba(61,212,148,.1); border-color:rgba(61,212,148,.35); color:#9ff0cc; }
-  .sw-banner-pending { background:rgba(212,165,51,.1); border-color:rgba(212,165,51,.35); color:#f0d79a; }
-  .sw-banner-link { color:var(--sw-cyan); font-weight:700; text-decoration:none; border-bottom:1px solid rgba(0,229,255,.4); }
-  .sw-primary-btn { width:100%; margin-top:10px; padding:13px; border:0; border-radius:13px; color:#000; font-family:var(--sw-display); font-size:11px; font-weight:400; letter-spacing:.12em; text-transform:uppercase; cursor:pointer; position:relative; z-index:1; background:linear-gradient(90deg, var(--sw-cyan) 0%, var(--sw-pink) 35%, var(--sw-magenta) 70%, var(--sw-violet) 100%); background-size:250% 100%; animation:sw-hue 5s linear infinite; box-shadow:0 8px 22px -10px rgba(255,62,213,.5), inset 0 1px 0 rgba(255,255,255,.3); transition:transform .1s; }
-  .sw-primary-btn:not(.sw-disabled):active { transform:translateY(1px); }
-  .sw-primary-btn.sw-disabled { cursor:not-allowed; animation:none; background:rgba(255,255,255,.06); color:var(--sw-faint); box-shadow:none; border:1px solid var(--sw-line); }
-  .sw-footer { margin:8px 0 0; text-align:center; font-family:var(--sw-mono); font-size:10px; color:var(--sw-faint); position:relative; z-index:1; }
-  .sw-footer b { background:linear-gradient(90deg, var(--sw-cyan), var(--sw-magenta)); -webkit-background-clip:text; background-clip:text; color:transparent; font-weight:800; }
-  .sw-modal-overlay { position:fixed; inset:0; z-index:9999; display:flex; align-items:flex-end; justify-content:center; background:rgba(2,1,6,.7); backdrop-filter:blur(6px); }
-  @media (min-width:560px){ .sw-modal-overlay{ align-items:center; padding:20px; } }
-  .sw-modal-card { width:100%; max-width:420px; max-height:80vh; display:flex; flex-direction:column; background:var(--sw-card); border:1px solid var(--sw-line-2); border-radius:20px 20px 0 0; box-shadow:0 -20px 60px -10px rgba(0,0,0,.7); overflow:hidden; }
-  @media (min-width:560px){ .sw-modal-card{ border-radius:20px; } }
-  .sw-modal-head { padding:14px 14px 11px; border-bottom:1px solid var(--sw-line); }
-  .sw-modal-head-row { display:flex; align-items:center; justify-content:space-between; margin-bottom:11px; }
-  .sw-modal-title { font-family:var(--sw-display); font-size:11px; font-weight:400; letter-spacing:.06em; text-transform:uppercase; margin:0; }
-  .sw-icon-btn { width:30px; height:30px; display:grid; place-items:center; background:rgba(255,255,255,.04); border:1px solid var(--sw-line); border-radius:9px; color:var(--sw-dim); cursor:pointer; }
-  .sw-icon-btn:hover { color:var(--sw-text); border-color:var(--sw-cyan); }
-  .sw-modal-search { width:100%; padding:10px 13px; background:rgba(0,0,0,.45); border:1px solid var(--sw-line); border-radius:11px; color:var(--sw-text); font-family:var(--sw-body); font-size:13px; outline:0; }
-  .sw-modal-search:focus { border-color:var(--sw-cyan); box-shadow:0 0 0 2px rgba(0,229,255,.13); }
-  .sw-modal-search::placeholder { color:var(--sw-faint); }
-  .sw-modal-list { flex:1 1 auto; overflow-y:auto; padding:5px; }
-  .sw-modal-msg { padding:22px 14px; text-align:center; font-family:var(--sw-mono); font-size:11px; color:var(--sw-faint); }
-  .sw-token-row { width:100%; display:flex; align-items:center; gap:11px; padding:9px 11px; background:transparent; border:0; border-radius:11px; cursor:pointer; text-align:left; }
-  .sw-token-row:hover { background:rgba(255,255,255,.04); }
-  .sw-token-row-logo, .sw-token-row-placeholder { width:30px; height:30px; border-radius:50%; flex-shrink:0; object-fit:cover; }
-  .sw-token-row-placeholder { background:linear-gradient(135deg, rgba(0,229,255,.25), rgba(255,62,213,.25)); }
-  .sw-token-row-info { flex:1 1 auto; min-width:0; }
-  .sw-token-row-sym { font-family:var(--sw-body); font-weight:700; font-size:13px; color:var(--sw-text); }
-  .sw-token-row-name { font-size:11px; color:var(--sw-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .sw-token-row-bal { font-family:var(--sw-mono); font-size:11px; color:var(--sw-cyan); flex-shrink:0; }
-  @keyframes sw-spin { from{transform:rotate(0);} to{transform:rotate(360deg);} }
-  @keyframes sw-pulse { 0%,100%{opacity:1; transform:scale(1);} 50%{opacity:.5; transform:scale(.7);} }
-  @keyframes sw-hue { from{background-position:0% 0;} to{background-position:250% 0;} }
-  @media (prefers-reduced-motion:reduce){ .sw-container::before, .sw-live-dot, .sw-primary-btn { animation:none; } .sw-flip-btn, .sw-token-btn, .sw-primary-btn { transition:none; } }
-</style>
-</head>
-<body>
-<main>
-  <div class="marquee">
-    <div class="marquee-track">
-      <span>&#9829; NO KYC</span><span>&#10022; NO ACCOUNTS</span><span>&#8734; NO LIMITS</span>
-      <span>SOL $184.35</span><span>&#9829; BUILT FOR THE FUTURE</span><span>&#10022; POWERED BY JUPITER</span>
-      <span>JUP $0.71</span><span>&#9829; YOUR CRYPTO YOUR RULES</span>
-      <span>&#9829; NO KYC</span><span>&#10022; NO ACCOUNTS</span><span>&#8734; NO LIMITS</span>
-      <span>SOL $184.35</span><span>&#9829; BUILT FOR THE FUTURE</span><span>&#10022; POWERED BY JUPITER</span>
-      <span>JUP $0.71</span><span>&#9829; YOUR CRYPTO YOUR RULES</span>
-    </div>
-  </div>
-
-  <header>
-    <div class="logo">
-      <div class="logo-mark">&#10005;</div>
-      <div class="logo-text">VERIXIA</div>
-    </div>
-    <div class="header-msg">
-      <div class="header-msg-l1">Swap <span class="grad">any</span> Solana token</div>
-      <div class="header-msg-l2">No KYC &middot; No limits</div>
-      <div class="header-msg-l3"><span class="jup-mark">&#9795;</span> Powered by Jupiter</div>
-    </div>
-    <div class="header-right">
-      <div class="live-pill"><span class="pulse"></span>LIVE</div>
-      <button class="connect" id="verixia-header-connect" type="button">Connect</button>
-    </div>
-  </header>
-
-  <section class="hero">
-    <div class="hero-content">
-      <div class="pair-meta">
-        <span class="dot"></span>
-        <span>{{STATIC_INTRO}}</span>
-      </div>
-      <h1>{{STATIC_H1}}</h1>
-      <div class="hero-msg-mobile">
-        <div class="l1">Swap <span class="grad">any</span> Solana token</div>
-        <div class="l2">No KYC &middot; No limits</div>
-        <div class="l3"><span class="jup-mark">&#9795;</span> Powered by Jupiter</div>
-      </div>
-    </div>
-  </section>
-
-  <section class="swap-wrap">
-    <div id="verixia-swap-root">
-      <div class="swap-skeleton" aria-hidden="true">
-        <div class="swap-skeleton-msg">
-          <span class="dot"></span>
-          <span class="skel-title">Swap</span>
-          <span>Loading&hellip;</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <div class="ticker">
-    <div class="ticker-cell"><div class="lbl">Rate</div><div class="val cy">184.35</div></div>
-    <div class="ticker-cell"><div class="lbl">24h</div><div class="val up">+2.4%</div></div>
-    <div class="ticker-cell"><div class="lbl">Vol</div><div class="val">$48M</div></div>
-    <div class="ticker-cell"><div class="lbl">Settle</div><div class="val">0.4s</div></div>
-  </div>
-
-  <section class="brand-strip">
-    <div class="tag-stack">
-      <div class="tag-line"><span class="icon">&#128274;</span><span class="lbl">NO</span><span class="val">KYC</span></div>
-      <div class="tag-line"><span class="icon">&#128374;</span><span class="lbl">NO</span><span class="val">ACCOUNTS</span></div>
-      <div class="tag-line"><span class="icon">&#8734;</span><span class="lbl">NO</span><span class="val">LIMITS</span></div>
-    </div>
-    <div class="signature">
-      <p>YOUR CRYPTO. <span class="crown">&#9819;</span></p>
-      <p>YOUR WALLET. &#9829;</p>
-      <p>YOUR RULES. &#10022;</p>
-    </div>
-  </section>
-
-  <section class="section">
-    <div class="section-tag">{{SUPP_HEADING}}</div>
-    <h2 class="section-title">{{SUPP_INTRO}}</h2>
-    {{AI_CONTENT}}
-  </section>
-
-  <section class="section">
-    <div class="section-tag">FAQ</div>
-    <h2 class="section-title">Common <span class="grad">questions</span></h2>
-    {{RELATED_LINKS}}
-  </section>
-
-  <section class="section">
-    <div class="section-tag">related</div>
-    <h2 class="section-title">{{HUB_LINK}}</h2>
-    <div class="pair-grid">{{MORE_LINKS}}</div>
-  </section>
-
-  <footer>
-    <div class="marks">
-      <span>YOUR CRYPTO.</span> <span class="crown">&#9819;</span><br>
-      <span class="pink">YOUR WALLET. &#9829;</span><br>
-      <span class="cy">YOUR RULES. &#10022;</span>
-    </div>
-    <div class="links"><span>DOCS</span><span>X</span><span>DISCORD</span></div>
-    <div class="legal">VERIXIA &middot; POWERED BY JUPITER &middot; NON-CUSTODIAL</div>
-  </footer>
-
-{{PAGE_META_SCRIPT}}
-
 <!-- ============================================================================
-     CONFIG — hardcoded, self-contained, no dependency on Railway.
-     ========================================================================= -->
-<script>
-window.__VERIXIA_CONFIG__ = {
-  rpc: "https://solana-rpc.publicnode.com",
-  wcProjectId: "1a7c741caab0a2c5ffa2b199a816ea92"
-};
-</script>
+     REPLACE the existing <script>function __verixiaApp() { ... }</script>
+     block (the big one starting with "SWAP WIDGET — Vanilla port aligned to
+     SwapWidget.jsx") with EVERYTHING below, up to and including the loader
+     IIFE at the bottom. Leave the CONFIG block above it (window.__VERIXIA_CONFIG__)
+     and everything else in the file alone.
 
-<!-- ============================================================================
-     SWAP WIDGET — Vanilla port aligned to SwapWidget.jsx
-     Same fee math, same Jupiter atomic-tx flow, same instruction
-     assembly / ALTs / simulate -> sign -> send -> confirm.
-     ========================================================================= -->
+     FIXES IN THIS VERSION:
+       1. Balances no longer show 0 when wallet has funds.
+          Each RPC call is wrapped independently (Promise.allSettled style)
+          so a throttled getParsedTokenAccountsByOwner can't kill getBalance.
+       2. Header button toggles: tap when connected -> account menu w/ Disconnect.
+          Disconnect also cancels Phantom auto-reconnect for the session.
+       3. WalletConnect (works for ALL WC-compatible wallets, not just Trust):
+          - metadata.icons populated. Wallets' verify step silently rejects
+            sessions whose metadata has no icons array, which is the #1
+            cause of "deep link opens wallet but no approval sheet" across
+            Trust, OKX, Bitget, Coin98, etc.
+          - optionalNamespaces (instead of required) so wallets can fulfill
+            a subset of methods. Required namespaces is the #2 cause of
+            silent rejection — most Solana WC wallets implement EITHER
+            solana_signTransaction OR solana_signAndSendTransaction, not
+            both. Required mode forces them to reject if any one is missing.
+          - Both CAIP-2 mainnet chain IDs declared (current + legacy
+            mainnet-beta) so older wallets that haven't updated still match.
+          - All four common Solana methods offered (signTransaction,
+            signAndSendTransaction, signAllTransactions, signMessage).
+          - handleSwap now branches: if the wallet only supports
+            sign-and-send, we hand the tx to the wallet to broadcast
+            instead of trying to sign locally and send ourselves.
+          - Trust Wallet's injected provider (window.trustwallet.solana)
+            is also detected directly when the user is inside Trust's
+            in-app browser, bypassing WC entirely for that case.
+          - 90s connection timeout so a stalled WC session can't hang.
+   ========================================================================= -->
+
 <script>
 function __verixiaApp() {
   "use strict";
@@ -448,7 +46,7 @@ function __verixiaApp() {
   var AddressLookupTableAccount = solanaWeb3.AddressLookupTableAccount;
   var TransactionInstruction = solanaWeb3.TransactionInstruction;
 
-  /* base64 helpers (replaces Buffer) */
+  /* base64 helpers */
   var b64ToBytes = function(b64) { return Uint8Array.from(atob(b64), function(c) { return c.charCodeAt(0); }); };
   var bytesToB64 = function(u8) { var s = ''; for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]); return btoa(s); };
 
@@ -495,10 +93,19 @@ function __verixiaApp() {
     });
   }
 
-  /* CONFIG — aligned to SwapWidget.jsx */
+  /* CONFIG */
   var RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
-  var FALLBACK_RPC = 'https://api.mainnet-beta.solana.com';
-  var RPC_URL  = RUNTIME_CFG.rpc || FALLBACK_RPC;
+
+  /* RPC pool. Tries the configured RPC first, then falls back across public
+     endpoints. Different public RPCs throttle/allow different methods, so
+     iterating until one returns wins us reliability without needing a paid key. */
+  var RPC_POOL = [
+    RUNTIME_CFG.rpc,
+    'https://solana-rpc.publicnode.com',
+    'https://rpc.ankr.com/solana',
+    'https://api.mainnet-beta.solana.com',
+  ].filter(Boolean).filter(function(v, i, a) { return a.indexOf(v) === i; });
+  var RPC_URL = RPC_POOL[0];
 
   var FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
   var FEE_BPS    = 300;
@@ -506,8 +113,9 @@ function __verixiaApp() {
   var USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
   var PRIORITY_FEE_MICROLAMPORTS = 50000;
   var SLIPPAGE_BPS = 500;
+  var DISCONNECT_FLAG = 'verixia:disconnected';
 
-  /* HELPERS — identical to SwapWidget.jsx */
+  /* HELPERS */
   var fmtAmount = function(n, decimals) {
     decimals = decimals || 6;
     if (n == null || isNaN(n)) return '0';
@@ -534,7 +142,6 @@ function __verixiaApp() {
     return (err && err.message) || 'Swap failed. Please try again.';
   };
 
-  /* Deserialize Jupiter instruction — matches SwapWidget.jsx deserIx */
   var deserIx = function(ix) {
     return {
       programId: new PublicKey(ix.programId),
@@ -550,7 +157,14 @@ function __verixiaApp() {
   }); };
 
   /* WALLET LAYER */
-  var SOLANA_WC_CHAIN = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
+  // CAIP-2 chain IDs. Newer wallets use the first; some older/edge ones still
+  // register the legacy mainnet-beta ID. Declaring both maximizes compat.
+  var SOLANA_WC_CHAIN        = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
+  var SOLANA_WC_CHAIN_LEGACY = 'solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ';
+
+  /* === FIX #3a: Trust Wallet (and any other Solana-injecting wallet) now
+     detected as an injected provider so we never have to do Solana-over-WC
+     when the user is already inside a wallet's in-app browser. === */
   function injectedProviders() {
     var w = (typeof window !== 'undefined') ? window : {};
     var out = [];
@@ -561,14 +175,22 @@ function __verixiaApp() {
     if (solflare) out.push({ id: 'solflare', name: 'Solflare', provider: solflare });
     var backpack = (w.backpack && w.backpack.isBackpack) ? w.backpack : null;
     if (backpack) out.push({ id: 'backpack', name: 'Backpack', provider: backpack });
+    var trust = (w.trustwallet && w.trustwallet.solana) ? w.trustwallet.solana
+              : (w.solana && w.solana.isTrust) ? w.solana
+              : (w.solana && w.solana.isTrustWallet) ? w.solana : null;
+    if (trust && !out.find(function(x){ return x.provider === trust; })) {
+      out.push({ id: 'trust', name: 'Trust Wallet', provider: trust });
+    }
     return out;
   }
   function getPhantom() { return (injectedProviders().find(function(x) { return x.id === 'phantom'; }) || {}).provider || null; }
+  function getInjectedById(id) { return (injectedProviders().find(function(x) { return x.id === id; }) || null); }
 
   /* STATE */
   var connection = new Connection(RPC_URL, 'confirmed');
   var S = {
-    provider: null, publicKey: null, tokens: [], tokensLoading: true,
+    provider: null, publicKey: null, walletName: null,
+    tokens: [], tokensLoading: true,
     inputMint: SOL_MINT, outputMint: USDC_MINT, amount: '',
     quote: null, quoting: false, quoteError: null,
     swapping: false, swapError: null, swapResult: null, balances: {},
@@ -603,56 +225,82 @@ function __verixiaApp() {
   }
   var tokenBy = function(mint) { return S.tokens.find(function(t) { return t.address === mint; }) || null; };
 
-  /* BALANCES — mirrors SwapWidget.jsx refreshBalances exactly.
-     Uses web3.js Connection methods (getBalance, getParsedTokenAccountsByOwner)
-     instead of raw JSON-RPC, same as the working React widget. */
+  /* === FIX #1: Balances. Each RPC call runs across a pool of public RPCs.
+     If one rejects/throttles, we fall through to the next. SOL is always
+     populated (even as 0) so the UI shows a real number instead of being
+     stuck on "Balance: 0 SOL" caused by an empty balances object. === */
+
+  // Try a given Connection method across the RPC pool. Returns on first success;
+  // throws only if ALL pool entries fail.
+  async function rpcFallback(label, op) {
+    var lastErr = null;
+    for (var i = 0; i < RPC_POOL.length; i++) {
+      var url = RPC_POOL[i];
+      try {
+        var conn = (url === RPC_URL) ? connection : new Connection(url, 'confirmed');
+        return await op(conn);
+      } catch (e) {
+        lastErr = e;
+        console.warn('[rpc] ' + label + ' failed on ' + url + ':', e && e.message);
+      }
+    }
+    throw lastErr || new Error(label + ': all RPCs failed');
+  }
+
+  function mergeTokenAccounts(out, accs) {
+    if (!accs || !accs.value) return;
+    for (var i = 0; i < accs.value.length; i++) {
+      var acc = accs.value[i];
+      var info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info;
+      if (!info) continue;
+      var mint = info.mint;
+      var amt = info.tokenAmount && info.tokenAmount.amount;
+      var dec = info.tokenAmount && info.tokenAmount.decimals;
+      var uiAmt = info.tokenAmount && info.tokenAmount.uiAmount;
+      if (!mint || amt == null) continue;
+      out[mint] = { amount: Number(amt), decimals: dec, uiAmount: uiAmt };
+    }
+  }
+
   async function refreshBalances() {
     if (!S.publicKey) { S.balances = {}; S.balancesLoading = false; renderRows(); return; }
     S.balancesLoading = true;
     renderRows();
+    var owner = S.publicKey;
+    var out = {};
+
+    // 1) SOL — try across the RPC pool. Almost every public RPC supports getBalance,
+    //    so this almost always succeeds.
     try {
-      var owner = S.publicKey;
-      var results = await Promise.all([
-        connection.getBalance(owner),
-        connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }),
-      ]);
-      var solBal = results[0];
-      var tokenAccs = results[1];
-
-      var token22Accs = { value: [] };
-      try {
-        token22Accs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID });
-      } catch (e) {}
-
-      var out = {};
+      var solBal = await rpcFallback('getBalance', function(c) { return c.getBalance(owner, 'confirmed'); });
       out[SOL_MINT] = { amount: solBal, decimals: 9, uiAmount: solBal / 1e9 };
+    } catch (e) { console.warn('[swap] SOL balance failed across all RPCs:', e && e.message); }
 
-      var merge = function(accs) {
-        for (var i = 0; i < accs.value.length; i++) {
-          var acc = accs.value[i];
-          var info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info;
-          if (!info) continue;
-          var mint = info.mint;
-          var amt = info.tokenAmount && info.tokenAmount.amount;
-          var dec = info.tokenAmount && info.tokenAmount.decimals;
-          var uiAmt = info.tokenAmount && info.tokenAmount.uiAmount;
-          if (!mint || amt == null) continue;
-          out[mint] = { amount: Number(amt), decimals: dec, uiAmount: uiAmt };
-        }
-      };
-      merge(tokenAccs);
-      merge(token22Accs);
+    // 2) SPL tokens — getParsedTokenAccountsByOwner is the call most likely to be
+    //    throttled. Falling back across the pool dramatically improves hit rate.
+    try {
+      var tokenAccs = await rpcFallback('getParsedTokenAccountsByOwner(Token)', function(c) {
+        return c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, 'confirmed');
+      });
+      mergeTokenAccounts(out, tokenAccs);
+    } catch (e) { console.warn('[swap] SPL token accounts failed across all RPCs:', e && e.message); }
 
-      S.balances = out;
-    } catch (e) {
-      console.warn('[swap] balances failed', e);
-    } finally {
-      S.balancesLoading = false;
-      renderRows();
-    }
+    // 3) Token-2022 — same treatment.
+    try {
+      var token22Accs = await rpcFallback('getParsedTokenAccountsByOwner(Token2022)', function(c) {
+        return c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, 'confirmed');
+      });
+      mergeTokenAccounts(out, token22Accs);
+    } catch (e) { console.warn('[swap] Token-2022 accounts failed across all RPCs:', e && e.message); }
+
+    if (!out[SOL_MINT]) out[SOL_MINT] = { amount: 0, decimals: 9, uiAmount: 0 };
+
+    S.balances = out;
+    S.balancesLoading = false;
+    renderRows();
   }
 
-  /* DERIVED — matches SwapWidget.jsx exactly */
+  /* DERIVED */
   function rawAmount() {
     var inputToken = tokenBy(S.inputMint);
     if (!S.amount || !inputToken) return '';
@@ -660,19 +308,16 @@ function __verixiaApp() {
     if (!Number.isFinite(n) || n <= 0) return '';
     return Math.floor(n * Math.pow(10, inputToken.decimals)).toString();
   }
-
   function outAmountUi() {
     var outputToken = tokenBy(S.outputMint);
     if (!S.quote || !outputToken) return null;
     return Number(S.quote.outAmount) / Math.pow(10, outputToken.decimals);
   }
-
   function minReceived() {
     var outputToken = tokenBy(S.outputMint);
     if (!S.quote || !outputToken) return null;
     return Number(S.quote.otherAmountThreshold) / Math.pow(10, outputToken.decimals);
   }
-
   function priceImpact() {
     if (!S.quote || S.quote.priceImpactPct == null) return null;
     var n = Number(S.quote.priceImpactPct);
@@ -739,9 +384,33 @@ function __verixiaApp() {
     renderRows(); scheduleQuote();
   }
 
-  /* WALLET CONNECT — injected (Phantom/Solflare/Backpack) */
+  /* === FIX #2: Disconnect. Header button now toggles, account menu has a
+     Disconnect action, and a session flag prevents Phantom from auto-
+     reconnecting after the user has explicitly disconnected. === */
+  async function disconnect() {
+    try {
+      if (S.provider && S.provider._wc && typeof S.provider._wc.disconnect === 'function') {
+        await S.provider._wc.disconnect();
+      } else if (S.provider && typeof S.provider.disconnect === 'function') {
+        await S.provider.disconnect();
+      }
+    } catch (e) { console.warn('[disconnect]', e && e.message); }
+    try { sessionStorage.setItem(DISCONNECT_FLAG, '1'); } catch (e) {}
+    S.provider = null;
+    S.publicKey = null;
+    S.walletName = null;
+    S.balances = {};
+    S.quote = null;
+    S.amount = '';
+    if (els.amount) els.amount.value = '';
+    closeAccountMenu();
+    renderAll();
+  }
+
+  /* WALLET — injected */
   async function connectInjected(entry) {
     try {
+      try { sessionStorage.removeItem(DISCONNECT_FLAG); } catch (e) {}
       var res = await entry.provider.connect();
       S.provider = entry.provider;
       S.walletName = entry.name;
@@ -754,10 +423,7 @@ function __verixiaApp() {
     }
   }
 
-  /* WALLET CONNECT — full WalletConnect Modal via jsdelivr CDN.
-     Loads @walletconnect/universal-provider and @walletconnect/modal
-     on demand. Uses the real branded Modal UI (wallet grid, search,
-     mobile deep links, recent wallets) — not a bare QR popup. */
+  /* WALLET — WalletConnect */
   var WC_SDK_LOADING = null;
   function loadWCSDK() {
     if (WC_SDK_LOADING) return WC_SDK_LOADING;
@@ -787,7 +453,6 @@ function __verixiaApp() {
       (async function() {
         try {
           for (var i = 0; i < scripts.length; i++) await loadOne(scripts[i]);
-          // Resolve globals from common UMD shapes
           var w = window;
           var UniversalProvider =
             (w.UniversalProvider && (w.UniversalProvider.default || w.UniversalProvider)) ||
@@ -798,11 +463,9 @@ function __verixiaApp() {
             (w['@walletconnect/modal'] && (w['@walletconnect/modal'].WalletConnectModal || w['@walletconnect/modal'].default)) ||
             null;
           var bs58 = w.bs58 && (w.bs58.default || w.bs58);
-
           if (!UniversalProvider) throw new Error('UniversalProvider global not found');
           if (!WalletConnectModal) throw new Error('WalletConnectModal global not found');
           if (!bs58 || !bs58.decode) throw new Error('bs58 global not found');
-
           window.__VerixiaWC = { UniversalProvider: UniversalProvider, WalletConnectModal: WalletConnectModal, bs58: bs58 };
           resolve(window.__VerixiaWC);
         } catch (e) { WC_SDK_LOADING = null; reject(e); }
@@ -815,43 +478,99 @@ function __verixiaApp() {
     var projectId = RUNTIME_CFG.wcProjectId;
     if (!projectId) { S.swapError = 'WalletConnect not configured.'; renderBanners(); return; }
     try {
+      try { sessionStorage.removeItem(DISCONNECT_FLAG); } catch (e) {}
       var sdk = await loadWCSDK();
       var UniversalProvider  = sdk.UniversalProvider;
       var WalletConnectModal = sdk.WalletConnectModal;
       var bs58               = sdk.bs58;
+      var origin = window.location.origin;
 
+      /* === FIX #3b: metadata.icons populated. Wallets' verify step (and
+         the Reown verify service) silently reject sessions whose metadata
+         has no icons array — which is why the deep link opens the wallet
+         but no approval sheet ever shows up. === */
       var wc = await UniversalProvider.init({
         projectId: projectId,
-        metadata: { name: 'Verixia', description: 'Verixia DEX', url: location.origin, icons: [] },
+        metadata: {
+          name: 'Verixia',
+          description: 'Bridge & swap on Solana via Jupiter',
+          url: origin,
+          icons: [origin + '/favicon.ico', origin + '/icon-192.png', origin + '/icon-512.png'],
+        },
       });
       var modal = new WalletConnectModal({
         projectId: projectId,
-        chains:    [SOLANA_WC_CHAIN],
+        chains:    [SOLANA_WC_CHAIN, SOLANA_WC_CHAIN_LEGACY],
         themeMode: 'dark',
       });
       wc.on('display_uri', function(uri) { try { modal.openModal({ uri: uri }); } catch(e) {} });
 
+      /* === FIX #3c: optionalNamespaces (not "namespaces") + both chain IDs
+         + all common Solana methods. Using REQUIRED namespaces is what
+         causes most wallets to silently reject the session — a wallet
+         must support every listed method, and many Solana WC wallets only
+         implement signAndSendTransaction OR signTransaction, never both.
+         optionalNamespaces lets each wallet fulfill what it supports. === */
       var session;
       try {
-        session = await wc.connect({
-          namespaces: { solana: { methods: ['solana_signTransaction','solana_signMessage'], chains: [SOLANA_WC_CHAIN], events: [] } },
-        });
+        session = await Promise.race([
+          wc.connect({
+            optionalNamespaces: {
+              solana: {
+                chains: [SOLANA_WC_CHAIN, SOLANA_WC_CHAIN_LEGACY],
+                methods: [
+                  'solana_signTransaction',
+                  'solana_signAndSendTransaction',
+                  'solana_signAllTransactions',
+                  'solana_signMessage',
+                ],
+                events: [],
+              },
+            },
+          }),
+          new Promise(function(_, rej) { setTimeout(function() { rej(new Error('Connection timed out — please try again or use Phantom directly')); }, 90000); }),
+        ]);
       } finally { try { modal.closeModal(); } catch(e) {} }
 
-      var acct = session && session.namespaces && session.namespaces.solana && session.namespaces.solana.accounts && session.namespaces.solana.accounts[0];
+      var sns = session && session.namespaces && session.namespaces.solana;
+      var acct = sns && sns.accounts && sns.accounts[0];
       if (!acct) throw new Error('WalletConnect returned no Solana account.');
-      var pubkey = new PublicKey(acct.split(':').pop());
+
+      // Capture the chain the wallet actually picked and which methods it agreed to.
+      var parts = acct.split(':');                       // ["solana", "<chainHash>", "<pubkey>"]
+      var sessionChain = parts.slice(0, 2).join(':');    // "solana:<chainHash>"
+      var pubkey = new PublicKey(parts[parts.length - 1]);
+      var methods = (sns.methods || []).slice();
+      var hasSignTx      = methods.indexOf('solana_signTransaction') !== -1;
+      var hasSignAndSend = methods.indexOf('solana_signAndSendTransaction') !== -1;
+      if (!hasSignTx && !hasSignAndSend) {
+        throw new Error('Wallet did not authorize any signing method. Try a different wallet.');
+      }
+
       S.publicKey = pubkey; S.walletName = 'WalletConnect';
       S.provider = {
         publicKey: pubkey,
+        _wc: wc,
+        _chain: sessionChain,
+        _methods: methods,
+        _supportsSignTx: hasSignTx,
+        _supportsSignAndSend: hasSignAndSend,
         signTransaction: async function(tx) {
           var b64 = bytesToB64(tx.serialize());
-          var res = await wc.request({ method: 'solana_signTransaction', params: { transaction: b64 } }, SOLANA_WC_CHAIN);
-          if (res && res.transaction) return VersionedTransaction.deserialize(b64ToBytes(res.transaction));
-          if (res && res.signature) { tx.addSignature(pubkey, bs58.decode(res.signature)); return tx; }
-          throw new Error('WalletConnect did not return a signed transaction.');
+          if (hasSignTx) {
+            var res = await wc.request({ method: 'solana_signTransaction', params: { transaction: b64 } }, sessionChain);
+            if (res && res.transaction) return VersionedTransaction.deserialize(b64ToBytes(res.transaction));
+            if (res && res.signature) { tx.addSignature(pubkey, bs58.decode(res.signature)); return tx; }
+            throw new Error('WalletConnect did not return a signed transaction.');
+          }
+          // Caller will fall back to signAndSend via the dedicated method below.
+          throw new Error('SIGN_AND_SEND_REQUIRED');
         },
-        _wc: wc,
+        signAndSendTransaction: async function(tx) {
+          var b64 = bytesToB64(tx.serialize());
+          var res = await wc.request({ method: 'solana_signAndSendTransaction', params: { transaction: b64 } }, sessionChain);
+          return res && (res.signature || res);  // some wallets return a bare string
+        },
       };
       wc.on('session_delete', function() { S.provider = null; S.publicKey = null; S.walletName = null; S.balances = {}; renderAll(); });
       renderAll(); refreshBalances(); scheduleQuote();
@@ -869,11 +588,37 @@ function __verixiaApp() {
   var CLOSE_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
   var PHANTOM_ICON = '<div style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#AB9FF2,#7B61FF);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="22" height="22" viewBox="0 0 128 128" fill="white"><path d="M110.6 49.5c-2.3-10.1-8.3-19-17-24.8-8.7-5.8-19.1-8.2-29.4-6.8C43.4 20.7 27.6 37.1 26.1 58c-0.3 3.8 0 7.7 0.8 11.4 0.5 2.5 2.8 4.2 5.3 4.2h0.6c3 0 5.4-2.4 5.4-5.4 0-0.3 0-0.5-0.1-0.8-0.5-2.5-0.7-5.1-0.5-7.7 1-14.3 11.6-26.3 25.6-29 7-1.8 14.3 0.1 20.5 4.2 6.2 4.1 10.4 10.5 11.9 17.7 1.5 7.2-0.1 14.6-4.5 20.7-3.3 4.6-8 8-13.4 9.6-1 0.3-2.1 0.5-3.2 0.5H44.8c-2.9 0-5.5 1.8-6.5 4.5L29 111.3c-0.6 1.6 0.3 3.3 1.9 3.8 0.3 0.1 0.6 0.2 1 0.2h42.7c20.6-0.3 38.4-14.5 42.8-34.6 3.1-14.4 0.3-28.8-6.8-31.2z"/><circle cx="50" cy="58" r="5" fill="white"/><circle cx="74" cy="58" r="5" fill="white"/></svg></div>';
   var WC_ICON = '<div style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#3B99FC,#2B6CB0);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="22" height="16" viewBox="0 0 400 250" fill="white"><path d="M81.9 88.7c65.6-64.3 171.8-64.3 237.4 0l7.9 7.7c3.3 3.2 3.3 8.4 0 11.6l-27 26.5c-1.6 1.6-4.3 1.6-5.9 0l-10.9-10.6c-45.8-44.8-120-44.8-165.8 0l-11.6 11.4c-1.6 1.6-4.3 1.6-5.9 0l-27-26.5c-3.3-3.2-3.3-8.4 0-11.6l8.8-8.5zm293.3 54.7l24 23.5c3.3 3.2 3.3 8.4 0 11.6l-108.2 106.1c-3.3 3.2-8.6 3.2-11.9 0L216 222.5c-0.8-0.8-2.1-0.8-3 0l-63.1 62.1c-3.3 3.2-8.6 3.2-11.9 0L29.9 178.5c-3.3-3.2-3.3-8.4 0-11.6l24-23.5c3.3-3.2 8.6-3.2 11.9 0l63.1 62.1c0.8 0.8 2.1 0.8 3 0l63.1-62.1c3.3-3.2 8.6-3.2 11.9 0l63.1 62.1c0.8 0.8 2.1 0.8 3 0l63.1-62.1c3.3-3.2 8.6-3.2 11.8 0z"/></svg></div>';
+  var TRUST_ICON = '<div style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#0500FF,#48FF91);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-weight:900;font-size:18px;">T</div>';
+  var GENERIC_ICON = '<div style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#7a3dd4,#c4359a);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-weight:900;font-size:18px;">';
+
+  function walletRowHtml(id, name, sub, iconHtml) {
+    return '<button class="sw-wc-row" data-wallet="'+id+'" style="display:flex;align-items:center;gap:12px;width:100%;padding:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:14px;cursor:pointer;text-align:left;">' +
+      iconHtml +
+      '<div><div style="font-family:var(--sw-body);font-weight:700;font-size:15px;color:var(--sw-text);">'+esc(name)+'</div><div style="font-family:var(--sw-mono);font-size:11px;color:var(--sw-faint);">'+esc(sub)+'</div></div>' +
+    '</button>';
+  }
 
   function openWalletPicker() {
     closeWalletPicker();
     var injected = injectedProviders();
-    var hasPhantom = injected.find(function(x) { return x.id === 'phantom'; });
+    var hasPhantom  = injected.find(function(x) { return x.id === 'phantom'; });
+    var hasTrust    = injected.find(function(x) { return x.id === 'trust'; });
+    var hasSolflare = injected.find(function(x) { return x.id === 'solflare'; });
+    var hasBackpack = injected.find(function(x) { return x.id === 'backpack'; });
+
+    /* Always show Phantom + Trust as primary options. When the wallet isn't
+       injected (user is on plain mobile Safari, not inside a wallet's in-app
+       browser), tapping deep-links to that wallet's in-app dApp browser, which
+       then loads our site WITH the wallet injected. This bypasses WC entirely
+       for Trust on Solana — Trust's Solana-over-WC is unreliable on iOS, but
+       its in-app browser injection works fine. */
+    var rows = '';
+    rows += walletRowHtml('phantom',  'Phantom',      hasPhantom  ? 'Detected' : 'Open in Phantom',      PHANTOM_ICON);
+    rows += walletRowHtml('trust',    'Trust Wallet', hasTrust    ? 'Detected' : 'Open in Trust',        TRUST_ICON);
+    if (hasSolflare) rows += walletRowHtml('solflare', 'Solflare', 'Detected', GENERIC_ICON+'S</div>');
+    else             rows += walletRowHtml('solflare', 'Solflare', 'Open in Solflare', GENERIC_ICON+'S</div>');
+    if (hasBackpack) rows += walletRowHtml('backpack', 'Backpack', 'Detected', GENERIC_ICON+'B</div>');
+    rows += walletRowHtml('walletconnect', 'WalletConnect', 'Scan QR with any wallet', WC_ICON);
 
     var overlay = document.createElement('div');
     overlay.className = 'sw-modal-overlay';
@@ -883,16 +628,7 @@ function __verixiaApp() {
         '<h3 style="font-family:var(--sw-body);font-size:20px;font-weight:800;color:var(--sw-text);margin:0 0 6px;">Connect Wallet</h3>' +
         '<p style="font-family:var(--sw-mono);font-size:11px;color:var(--sw-faint);margin:0 0 20px;">Pick one. We never see your keys.</p>' +
       '</div>' +
-      '<div style="padding:0 16px 16px;display:flex;flex-direction:column;gap:8px;">' +
-        '<button class="sw-wc-row" data-wallet="phantom" style="display:flex;align-items:center;gap:12px;width:100%;padding:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:14px;cursor:pointer;text-align:left;">' +
-          PHANTOM_ICON +
-          '<div><div style="font-family:var(--sw-body);font-weight:700;font-size:15px;color:var(--sw-text);">Phantom</div><div style="font-family:var(--sw-mono);font-size:11px;color:var(--sw-faint);">Solana wallet</div></div>' +
-        '</button>' +
-        '<button class="sw-wc-row" data-wallet="walletconnect" style="display:flex;align-items:center;gap:12px;width:100%;padding:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:14px;cursor:pointer;text-align:left;">' +
-          WC_ICON +
-          '<div><div style="font-family:var(--sw-body);font-weight:700;font-size:15px;color:var(--sw-text);">WalletConnect</div><div style="font-family:var(--sw-mono);font-size:11px;color:var(--sw-faint);">All other Solana wallets</div></div>' +
-        '</button>' +
-      '</div>' +
+      '<div style="padding:0 16px 16px;display:flex;flex-direction:column;gap:8px;">' + rows + '</div>' +
       '<div style="padding:0 16px 20px;text-align:center;font-family:var(--sw-mono);font-size:10px;color:var(--sw-faint);">Non-custodial. We never see or store your keys.</div>' +
     '</div>';
 
@@ -901,15 +637,25 @@ function __verixiaApp() {
       btn.addEventListener('click', function() {
         var id = btn.getAttribute('data-wallet');
         closeWalletPicker();
-        if (id === 'walletconnect') {
-          connectWalletConnect();
-        } else if (id === 'phantom') {
-          if (hasPhantom) {
-            connectInjected(hasPhantom);
-          } else {
-            var url = encodeURIComponent(window.location.href);
-            window.location.href = 'https://phantom.app/ul/browse/' + url + '?ref=' + encodeURIComponent(window.location.origin);
-          }
+
+        if (id === 'walletconnect') { connectWalletConnect(); return; }
+
+        // Wallet is already injected (we're inside its in-app browser) — connect directly.
+        var injectedEntry = getInjectedById(id);
+        if (injectedEntry) { connectInjected(injectedEntry); return; }
+
+        // Not injected — deep-link into that wallet's in-app dApp browser.
+        var href = encodeURIComponent(window.location.href);
+        var origin = encodeURIComponent(window.location.origin);
+        var deepLink = null;
+        if (id === 'phantom')  deepLink = 'https://phantom.app/ul/browse/' + href + '?ref=' + origin;
+        if (id === 'solflare') deepLink = 'https://solflare.com/ul/v1/browse/' + href + '?ref=' + origin;
+        if (id === 'trust')    deepLink = 'https://link.trustwallet.com/open_url?coin_id=501&url=' + href;
+        if (id === 'backpack') deepLink = 'https://backpack.app/ul/v1/browse/' + href + '?ref=' + origin;
+
+        if (deepLink) {
+          // Must happen synchronously off the tap — iOS blocks deferred navigation.
+          window.location.href = deepLink;
         }
       });
     });
@@ -918,7 +664,42 @@ function __verixiaApp() {
   }
   function closeWalletPicker() { if (walletPickerEl) { walletPickerEl.remove(); walletPickerEl = null; } }
 
-  /* SWAP — aligned to SwapWidget.jsx handleSwap exactly */
+  /* === FIX #2 (cont.): Account menu shown when tapping the header pill
+     while connected. Provides Copy + Disconnect. === */
+  var accountMenuEl = null;
+  function openAccountMenu() {
+    closeAccountMenu();
+    if (!S.publicKey) return;
+    var addr = S.publicKey.toBase58();
+    var short = addr.slice(0,4) + '\u2026' + addr.slice(-4);
+    var overlay = document.createElement('div');
+    overlay.className = 'sw-modal-overlay';
+    overlay.innerHTML = '<div class="sw-modal-card" style="max-width:380px;border-radius:20px;padding:0;">' +
+      '<div style="padding:20px;text-align:center;">' +
+        '<div style="width:36px;height:4px;background:rgba(255,255,255,.15);border-radius:2px;margin:0 auto 16px;"></div>' +
+        '<div style="font-family:var(--sw-mono);font-size:10px;color:var(--sw-faint);letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px;">' + esc(S.walletName || 'Connected') + '</div>' +
+        '<div style="font-family:var(--sw-body);font-size:22px;font-weight:800;color:var(--sw-text);margin-bottom:4px;">' + short + '</div>' +
+        '<div style="font-family:var(--sw-mono);font-size:10px;color:var(--sw-faint);word-break:break-all;margin-bottom:18px;">' + esc(addr) + '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:8px;">' +
+          '<button data-copy style="padding:12px;background:rgba(255,255,255,.04);border:1px solid var(--sw-line);border-radius:12px;color:var(--sw-text);font-family:var(--sw-body);font-weight:700;font-size:13px;cursor:pointer;">Copy address</button>' +
+          '<button data-disconnect style="padding:12px;background:rgba(255,93,125,.1);border:1px solid rgba(255,93,125,.35);border-radius:12px;color:#ffb3c1;font-family:var(--sw-body);font-weight:700;font-size:13px;cursor:pointer;">Disconnect</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) closeAccountMenu(); });
+    overlay.querySelector('[data-copy]').addEventListener('click', function() {
+      try { navigator.clipboard.writeText(addr); } catch(e) {}
+      var btn = overlay.querySelector('[data-copy]');
+      btn.textContent = 'Copied!';
+      setTimeout(function() { btn.textContent = 'Copy address'; }, 1500);
+    });
+    overlay.querySelector('[data-disconnect]').addEventListener('click', disconnect);
+    document.body.appendChild(overlay);
+    accountMenuEl = overlay;
+  }
+  function closeAccountMenu() { if (accountMenuEl) { accountMenuEl.remove(); accountMenuEl = null; } }
+
+  /* SWAP */
   async function handleSwap() {
     var inputToken  = tokenBy(S.inputMint);
     var outputToken = tokenBy(S.outputMint);
@@ -959,9 +740,7 @@ function __verixiaApp() {
       var ixs = [];
       if (Array.isArray(build.computeBudgetInstructions))
         for (var ci = 0; ci < build.computeBudgetInstructions.length; ci++) ixs.push(deserIx(build.computeBudgetInstructions[ci]));
-
       for (var fi = 0; fi < feeIxs.length; fi++) ixs.push(feeIxs[fi]);
-
       if (Array.isArray(build.setupInstructions))
         for (var si = 0; si < build.setupInstructions.length; si++) ixs.push(deserIx(build.setupInstructions[si]));
       if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
@@ -1003,8 +782,15 @@ function __verixiaApp() {
         console.warn('[swap] sim non-fatal', simErr);
       }
 
-      var signed = await S.provider.signTransaction(tx);
-      var sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 3 });
+      var signed, sig;
+      if (S.provider._supportsSignAndSend && !S.provider._supportsSignTx) {
+        // Wallet only does sign-and-send (some mobile WC wallets) — it broadcasts internally.
+        sig = await S.provider.signAndSendTransaction(tx);
+        if (!sig || typeof sig !== 'string') throw new Error('Wallet did not return a transaction signature.');
+      } else {
+        signed = await S.provider.signTransaction(tx);
+        sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 3 });
+      }
 
       var confirmed = false;
       try {
@@ -1248,6 +1034,7 @@ function __verixiaApp() {
   }
   function attachProviderEvents(provider) {
     if (provider.removeAllListeners) { provider.removeAllListeners('disconnect'); provider.removeAllListeners('accountChanged'); }
+    if (typeof provider.on !== 'function') return;
     provider.on('disconnect', function() { S.provider = null; S.publicKey = null; S.balances = {}; renderAll(); });
     provider.on('accountChanged', function(pk) {
       if (pk) { S.publicKey = new PublicKey(pk.toString()); refreshBalances(); }
@@ -1266,12 +1053,20 @@ function __verixiaApp() {
     if (dom) S.outputMint = dom;
     buildDom(); loadTokens();
     headerBtn = document.getElementById('verixia-header-connect');
-    if (headerBtn) headerBtn.addEventListener('click', function() { if (!S.publicKey) openWalletPicker(); });
+    if (headerBtn) headerBtn.addEventListener('click', function() {
+      if (!S.publicKey) openWalletPicker();
+      else openAccountMenu();
+    });
     updateHeader();
+
+    // Auto-reconnect Phantom only if user hasn't explicitly disconnected
+    var skipAuto = false;
+    try { skipAuto = sessionStorage.getItem(DISCONNECT_FLAG) === '1'; } catch(e) {}
     var provider = getPhantom();
-    if (provider) {
+    if (provider && !skipAuto) {
       provider.connect({ onlyIfTrusted: true }).then(function(res) {
         S.provider = provider;
+        S.walletName = 'Phantom';
         S.publicKey = new PublicKey((res.publicKey || provider.publicKey).toString());
         attachProviderEvents(provider);
         renderAll(); refreshBalances(); scheduleQuote();
@@ -1301,7 +1096,3 @@ function __verixiaApp() {
   });
 })();
 </script>
-
-</main>
-</body>
-</html>
