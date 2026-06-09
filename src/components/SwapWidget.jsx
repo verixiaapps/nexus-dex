@@ -37,14 +37,30 @@ const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 const SLIPPAGE_BPS = 500;
 
-/* ─── RPC: use the server's Helius-backed proxy. ──────────────────── *
- * Public RPCs throttle/block getParsedTokenAccountsByOwner from browsers.
- * The server proxy uses your Helius key — one reliable endpoint, no fallback
- * dance.
+/* ─── RPC: parallel race over browser-friendly public endpoints. ──── *
+ * Matches the pattern used on verixiaapps.com SEO pages which is known to
+ * work in iOS Safari & Phantom in-app browser. Promise.any returns first
+ * success; Promise.allSettled below makes each balance fetch independent.
  */
-const RPC_PROXY_URL = (typeof window !== 'undefined'
-  ? `${window.location.origin}/api/solana-rpc`
-  : '/api/solana-rpc');
+const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
+const RPC_POOL = [
+  RUNTIME_CFG.rpc,
+  'https://solana-rpc.publicnode.com',
+  'https://solana.drpc.org',
+  'https://rpc.ankr.com/solana',
+  'https://solana.api.onfinality.io/public',
+  'https://api.mainnet-beta.solana.com',
+].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
+
+const rpcRace = (label, op) => {
+  const conns = RPC_POOL.map(u => new Connection(u, 'confirmed'));
+  return Promise.any(conns.map((c, i) =>
+    op(c).catch(e => {
+      console.warn(`[rpc] ${label} failed on ${RPC_POOL[i]}:`, e?.message);
+      throw e;
+    })
+  )).catch(() => { throw new Error(`${label}: all RPCs failed`); });
+};
 
 /* ─── HELPERS ──────────────────────────────────────────────────────── */
 
@@ -91,7 +107,7 @@ const deserIx = (ix) => ({
 
 export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConnectWallet } = {}) {
   const wallet = useWallet();
-  const connection = useMemo(() => new Connection(RPC_PROXY_URL, 'confirmed'), []);
+  const connection = useMemo(() => new Connection(RPC_POOL[0], 'confirmed'), []);
 
   const [tokens, setTokens]               = useState([]);
   const [tokensLoading, setTokensLoading] = useState(true);
@@ -144,47 +160,65 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
     return () => { cancelled = true; };
   }, []);
 
-  /* balances — sequential RPC try, visible errors */
+  /* balances — each fetch independent, partial success still updates UI */
   const refreshBalances = useCallback(async () => {
     if (!wallet.publicKey) { setBalances({}); setBalError(null); return; }
     setBalLoading(true);
     setBalError(null);
-    try {
-      const owner = wallet.publicKey;
+    const owner = wallet.publicKey;
 
-      const solBal = await connection.getBalance(owner);
-      const tokenAccs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID });
-      let token22Accs = { value: [] };
-      try {
-        token22Accs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID });
-      } catch (e) {
-        console.warn('[swap] token-2022 fetch failed (non-fatal)', e);
+    const mergeAccs = (into, accs) => {
+      if (!accs || !accs.value) return;
+      for (const acc of accs.value) {
+        const info = acc.account?.data?.parsed?.info;
+        if (!info) continue;
+        const mint = info.mint;
+        const amt = info.tokenAmount?.amount;
+        const dec = info.tokenAmount?.decimals;
+        const uiAmt = info.tokenAmount?.uiAmount;
+        if (!mint || amt == null) continue;
+        into[mint] = { amount: Number(amt), decimals: dec, uiAmount: uiAmt };
       }
+    };
 
-      const out = {};
-      out[SOL_MINT] = { amount: solBal, decimals: 9, uiAmount: solBal / 1e9 };
-      const merge = (accs) => {
-        for (const acc of accs.value) {
-          const info = acc.account.data.parsed?.info;
-          if (!info) continue;
-          const mint     = info.mint;
-          const amount   = info.tokenAmount?.amount;
-          const decimals = info.tokenAmount?.decimals;
-          const uiAmount = info.tokenAmount?.uiAmount;
-          if (!mint || amount == null) continue;
-          out[mint] = { amount: Number(amount), decimals, uiAmount };
-        }
-      };
-      merge(tokenAccs);
-      merge(token22Accs);
-      setBalances(out);
-      console.log('[swap] balances loaded', Object.keys(out).length, 'tokens');
-    } catch (e) {
-      console.error('[swap] balances failed', e);
-      setBalError('Could not load balance. Tap retry.');
-    } finally {
-      setBalLoading(false);
+    const solP = rpcRace('getBalance', c => c.getBalance(owner, 'confirmed'))
+      .then(lamports => {
+        setBalances(prev => {
+          const next = { ...prev };
+          delete next.__rpc_failed;
+          next[SOL_MINT] = { amount: lamports, decimals: 9, uiAmount: lamports / 1e9 };
+          return next;
+        });
+      })
+      .catch(e => console.warn('[swap] SOL balance failed', e?.message));
+
+    const tokP = rpcRace('tokenAccs', c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, 'confirmed')
+    ).then(accs => {
+      setBalances(prev => {
+        const next = { ...prev };
+        delete next.__rpc_failed;
+        mergeAccs(next, accs);
+        return next;
+      });
+    }).catch(e => console.warn('[swap] SPL accounts failed', e?.message));
+
+    const tok22P = rpcRace('tokenAccs2022', c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, 'confirmed')
+    ).then(accs => {
+      setBalances(prev => {
+        const next = { ...prev };
+        mergeAccs(next, accs);
+        return next;
+      });
+    }).catch(e => console.warn('[swap] Token-2022 accounts failed', e?.message));
+
+    const results = await Promise.allSettled([solP, tokP, tok22P]);
+    if (results.every(r => r.status === 'rejected')) {
+      setBalances({ __rpc_failed: true });
+      setBalError('RPC unreachable — tap retry');
     }
+    setBalLoading(false);
   }, [wallet.publicKey]);
 
   // Refresh on connect AND when the selected input mint changes (so users see
