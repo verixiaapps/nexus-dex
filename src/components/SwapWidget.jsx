@@ -1,12 +1,11 @@
 // SwapWidget.jsx — atomic single-transaction Jupiter swap.
 //
-// Flow:
-//   1. Get Jupiter swap instructions via /api/jupiter/build (no platformFeeBps)
-//   2. Build fee instructions (3% of input mint -> FEE_WALLET)
-//   3. Combine into ONE TransactionMessage with shared ALTs
-//   4. Wallet simulates the SAME bytes the user signs — Blowfish sees full
-//      net effect (X in, Y out, Z to fee wallet) instead of two opaque txs.
-//   5. Atomic on-chain: swap and fee succeed together or revert together.
+// FIXED: balance now displays.
+//   - rpcRace replaced with rpcTry: sequential, logs each RPC failure clearly
+//     (Promise.any was swallowing all-fail into an opaque AggregateError)
+//   - Added browser-friendly RPC endpoints
+//   - Visible balance loading + error states with a Refresh button
+//   - Balances refresh on wallet connect AND on mint change
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -31,25 +30,40 @@ import './SwapWidget.css';
 /* ─── CONFIG ──────────────────────────────────────────────────────── */
 
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS    = 300; // 3%
+const FEE_BPS    = 300;
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
 const PRIORITY_FEE_MICROLAMPORTS = 50_000;
-const SLIPPAGE_BPS = 500; // 5%
+const SLIPPAGE_BPS = 500;
 
-/* ─── RPC: free public pool, no API key, race for fastest. ─────────── */
+/* ─── RPC: sequential try with clear logging. ──────────────────────── */
 const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
 const RPC_POOL = [
   RUNTIME_CFG.rpc,
   'https://solana-rpc.publicnode.com',
+  'https://solana.drpc.org',
   'https://rpc.ankr.com/solana',
   'https://api.mainnet-beta.solana.com',
 ].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
-const RPC_URL = RPC_POOL[0];
-const rpcRace = (op) => Promise.any(
-  RPC_POOL.map(u => op(new Connection(u, 'confirmed')))
-);
+
+/**
+ * Try each RPC in order. Returns the first success.
+ * Throws a real Error with all failures listed if every endpoint fails.
+ */
+const rpcTry = async (op) => {
+  const failures = [];
+  for (const url of RPC_POOL) {
+    try {
+      return await op(new Connection(url, 'confirmed'));
+    } catch (e) {
+      const msg = e?.message || String(e);
+      console.warn('[rpc fail]', url, msg);
+      failures.push(`${url}: ${msg}`);
+    }
+  }
+  throw new Error(`All RPCs failed:\n${failures.join('\n')}`);
+};
 
 /* ─── HELPERS ──────────────────────────────────────────────────────── */
 
@@ -96,7 +110,7 @@ const deserIx = (ix) => ({
 
 export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConnectWallet } = {}) {
   const wallet = useWallet();
-  const connection = useMemo(() => new Connection(RPC_URL, 'confirmed'), []);
+  const connection = useMemo(() => new Connection(RPC_POOL[0], 'confirmed'), []);
 
   const [tokens, setTokens]               = useState([]);
   const [tokensLoading, setTokensLoading] = useState(true);
@@ -116,6 +130,8 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
   const [swapResult, setSwapResult] = useState(null);
 
   const [balances, setBalances] = useState({});
+  const [balLoading, setBalLoading] = useState(false);
+  const [balError, setBalError] = useState(null);
 
   /* tokens */
   useEffect(() => {
@@ -147,19 +163,27 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
     return () => { cancelled = true; };
   }, []);
 
-  /* balances — uses rpcRace so a slow/dead RPC doesn't break the UI */
+  /* balances — sequential RPC try, visible errors */
   const refreshBalances = useCallback(async () => {
-    if (!wallet.publicKey) { setBalances({}); return; }
+    if (!wallet.publicKey) { setBalances({}); setBalError(null); return; }
+    setBalLoading(true);
+    setBalError(null);
     try {
       const owner = wallet.publicKey;
-      const [solBal, tokenAccs] = await Promise.all([
-        rpcRace(c => c.getBalance(owner)),
-        rpcRace(c => c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID })),
-      ]);
+
+      const solBal = await rpcTry(c => c.getBalance(owner));
+      const tokenAccs = await rpcTry(c =>
+        c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID })
+      );
       let token22Accs = { value: [] };
       try {
-        token22Accs = await rpcRace(c => c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }));
-      } catch {}
+        token22Accs = await rpcTry(c =>
+          c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID })
+        );
+      } catch (e) {
+        console.warn('[swap] token-2022 fetch failed (non-fatal)', e);
+      }
+
       const out = {};
       out[SOL_MINT] = { amount: solBal, decimals: 9, uiAmount: solBal / 1e9 };
       const merge = (accs) => {
@@ -177,12 +201,18 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
       merge(tokenAccs);
       merge(token22Accs);
       setBalances(out);
+      console.log('[swap] balances loaded', Object.keys(out).length, 'tokens');
     } catch (e) {
-      console.warn('[swap] balances failed', e);
+      console.error('[swap] balances failed', e);
+      setBalError('Could not load balance. Tap retry.');
+    } finally {
+      setBalLoading(false);
     }
   }, [wallet.publicKey]);
 
-  useEffect(() => { refreshBalances(); }, [refreshBalances]);
+  // Refresh on connect AND when the selected input mint changes (so users see
+  // a fresh balance after picking a token)
+  useEffect(() => { refreshBalances(); }, [refreshBalances, inputMint]);
 
   const inputToken  = useMemo(() => tokens.find(t => t.address === inputMint)  || null, [tokens, inputMint]);
   const outputToken = useMemo(() => tokens.find(t => t.address === outputMint) || null, [tokens, outputMint]);
@@ -313,7 +343,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
         }));
       } else {
         const mintPk = new PublicKey(inputMint);
-        const mintInfo = await connection.getAccountInfo(mintPk);
+        const mintInfo = await rpcTry(c => c.getAccountInfo(mintPk));
         if (!mintInfo) throw new Error('Input mint not found on-chain.');
         const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
           ? TOKEN_2022_PROGRAM_ID
@@ -347,14 +377,16 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
       const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
       let alts = [];
       if (altKeys.length > 0) {
-        const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
+        const infos = await rpcTry(c =>
+          c.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)))
+        );
         alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
           key:   new PublicKey(k),
           state: AddressLookupTableAccount.deserialize(infos[i].data),
         }) : null).filter(Boolean);
       }
 
-      const latest = await connection.getLatestBlockhash('confirmed');
+      const latest = await rpcTry(c => c.getLatestBlockhash('confirmed'));
       const message = new TransactionMessage({
         payerKey:        wallet.publicKey,
         recentBlockhash: latest.blockhash,
@@ -371,10 +403,10 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
         return null;
       };
       try {
-        const sim = await connection.simulateTransaction(tx, {
+        const sim = await rpcTry(c => c.simulateTransaction(tx, {
           replaceRecentBlockhash: true,
           sigVerify: false,
-        });
+        }));
         if (sim.value.err) {
           throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
         }
@@ -387,19 +419,19 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
 
       const signed = await wallet.signTransaction(tx);
 
-      const sig = await connection.sendRawTransaction(signed.serialize(), {
+      const sig = await rpcTry(c => c.sendRawTransaction(signed.serialize(), {
         skipPreflight: false,
         maxRetries: 3,
-      });
+      }));
 
       let confirmed = false;
       try {
         const conf = await Promise.race([
-          connection.confirmTransaction({
+          rpcTry(c => c.confirmTransaction({
             signature: sig,
             blockhash: latest.blockhash,
             lastValidBlockHeight: latest.lastValidBlockHeight,
-          }, 'confirmed'),
+          }, 'confirmed')),
           new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
         ]);
         if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
@@ -409,7 +441,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
         while (Date.now() < deadline) {
           await new Promise(r => setTimeout(r, 2000));
           try {
-            const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+            const st = await rpcTry(c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
             const cs = st?.value?.confirmationStatus;
             if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
             if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
@@ -435,7 +467,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
   }, [
     wallet, quote, outputToken, inputToken,
     inputMint, outputMint, rawAmount,
-    connection, refreshBalances,
+    refreshBalances,
   ]);
 
   const hasFunds = inputBalance && Number(amount) > 0 && inputBalance.uiAmount >= Number(amount);
@@ -467,6 +499,10 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
             onAmountChange={setAmount}
             onPickerOpen={() => setShowPicker('input')}
             balance={inputBalance}
+            balLoading={balLoading}
+            balError={balError}
+            onRefresh={refreshBalances}
+            walletConnected={!!wallet.publicKey}
             onMax={setMax}
             editable
           />
@@ -481,6 +517,8 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
             amount={outAmountUi != null ? fmtAmount(outAmountUi, outputToken?.decimals) : (quoting ? '…' : '')}
             onPickerOpen={() => setShowPicker('output')}
             balance={balances[outputMint]}
+            balLoading={balLoading}
+            walletConnected={!!wallet.publicKey}
             editable={false}
           />
         </div>
@@ -565,15 +603,36 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
 
 /* ─── SUB-COMPONENTS ────────────────────────────────────────── */
 
-function SwapRow({ label, token, amount, onAmountChange, onPickerOpen, balance, onMax, editable }) {
+function SwapRow({
+  label, token, amount, onAmountChange, onPickerOpen,
+  balance, balLoading, balError, onRefresh, walletConnected,
+  onMax, editable,
+}) {
   return (
     <div className="sw-row">
       <div className="sw-row-top">
         <span className="sw-row-label">{label}</span>
-        {balance && (
+        {walletConnected && (
           <span className="sw-balance">
-            Balance: {fmtAmount(balance.uiAmount, balance.decimals)}
-            {editable && onMax && balance.uiAmount > 0 && (
+            {balLoading
+              ? 'Balance: …'
+              : balError
+                ? <span style={{ color: '#fca5a5' }}>{balError}</span>
+                : balance
+                  ? <>Balance: {fmtAmount(balance.uiAmount, balance.decimals)}</>
+                  : <>Balance: 0</>
+            }
+            {onRefresh && (
+              <button
+                onClick={onRefresh}
+                className="sw-max-btn"
+                style={{ marginLeft: 6 }}
+                aria-label="Refresh balance"
+              >
+                ↻
+              </button>
+            )}
+            {editable && onMax && balance && balance.uiAmount > 0 && !balLoading && (
               <button onClick={onMax} className="sw-max-btn">MAX</button>
             )}
           </span>
