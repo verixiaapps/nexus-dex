@@ -699,9 +699,15 @@ window.__VERIXIA_CONFIG__ = {
 
     // ─── CONFIG ──────────────────────────────────────────────────────
     var RUNTIME_CFG = window.__VERIXIA_CONFIG__ || {};
+    // Browser-friendly Solana RPCs (CORS-allowed, no API key required).
+    // Public RPCs are rate-limited — for production set RUNTIME_CFG.rpc to a
+    // paid endpoint (Helius / QuickNode / Triton). We race them all in parallel.
     var RPC_POOL = [
       RUNTIME_CFG.rpc,
       'https://solana-rpc.publicnode.com',
+      'https://solana.drpc.org',
+      'https://rpc.ankr.com/solana',
+      'https://solana.api.onfinality.io/public',
       'https://api.mainnet-beta.solana.com',
     ].filter(Boolean).filter(function (v, i, a) { return a.indexOf(v) === i; });
     var RPC_URL = RPC_POOL[0];
@@ -842,6 +848,8 @@ window.__VERIXIA_CONFIG__ = {
       if (publicKey) {
         if (balancesLoading && !balance) {
           balanceNode = h('span', { className: 'sw-balance sw-bal-loading' }, 'Loading balance…');
+        } else if (props.rpcFailed) {
+          balanceNode = h('span', { className: 'sw-balance', style: { color: '#ff5d7d' } }, 'RPC unreachable — tap retry');
         } else if (balance) {
           var children = ['Balance: ' + fmtAmount(balance.uiAmount, balance.decimals) + ' ' + (token ? token.symbol : '')];
           if (editable && onMax && balance.uiAmount > 0) {
@@ -1136,14 +1144,21 @@ window.__VERIXIA_CONFIG__ = {
           });
         }).catch(function (e) { console.warn('[swap] Token-2022 accounts failed', e && e.message); });
 
-        await Promise.allSettled([solP, tokP, tok22P]);
+        var results = await Promise.allSettled([solP, tokP, tok22P]);
 
-        setBalances(function (prev) {
-          if (prev[SOL_MINT]) return prev;
-          var next = Object.assign({}, prev);
-          next[SOL_MINT] = { amount: 0, decimals: 9, uiAmount: 0 };
-          return next;
-        });
+        // If ALL RPC calls failed, mark balances as unknown rather than lying
+        // with "0" — UI will show "—" so the user knows it's an RPC issue,
+        // not an empty wallet.
+        var allFailed = results.every(function (r) { return r.status === 'rejected'; });
+        if (allFailed) {
+          setBalances({ __rpc_failed: true });
+        } else {
+          setBalances(function (prev) {
+            if (prev[SOL_MINT]) return prev;
+            // Got SPL accounts but not SOL — show SOL as unknown, not 0.
+            return prev;
+          });
+        }
         setBalancesLoading(false);
       }, [publicKey, connection]);
 
@@ -1423,13 +1438,15 @@ window.__VERIXIA_CONFIG__ = {
       }, [publicKey, provider, quote, outputToken, inputToken, inputMint, rawAmount, connection, refreshBalances]);
 
       var inputBalance = balances[inputMint];
+      var rpcFailed = !!balances.__rpc_failed;
       var hasFunds = inputBalance && Number(amount) > 0 && inputBalance.uiAmount >= Number(amount);
       var canSwap = !!publicKey && !!quote && !quoting && !swapping &&
-                    Number(amount) > 0 && inputMint !== outputMint && hasFunds;
+                    Number(amount) > 0 && inputMint !== outputMint && !rpcFailed && hasFunds;
 
       var btnLabel;
       if (swapping) btnLabel = 'Swapping…';
       else if (!publicKey) btnLabel = 'Connect Wallet';
+      else if (rpcFailed) btnLabel = 'Tap to retry balance';
       else if (inputMint === outputMint) btnLabel = 'Select different tokens';
       else if (!amount || Number(amount) <= 0) btnLabel = 'Enter amount';
       else if (!quote && quoting) btnLabel = 'Getting quote…';
@@ -1437,7 +1454,7 @@ window.__VERIXIA_CONFIG__ = {
       else if (!hasFunds) btnLabel = 'Insufficient ' + (inputToken && inputToken.symbol || '');
       else btnLabel = '🚀 Swap';
 
-      var btnEnabled = !publicKey ? true : canSwap;
+      var btnEnabled = !publicKey ? true : (rpcFailed ? true : canSwap);
       var piClass = priceImpact == null ? 'sw-impact-neutral'
         : priceImpact > 5 ? 'sw-impact-bad'
         : priceImpact > 1 ? 'sw-impact-warn'
@@ -1499,6 +1516,7 @@ window.__VERIXIA_CONFIG__ = {
                 onPick: function () { setShowPicker('input'); },
                 balance: inputBalance, onMax: setMax, editable: true,
                 balancesLoading: balancesLoading, publicKey: publicKey,
+                rpcFailed: !!balances.__rpc_failed,
               }),
               h('div', { className: 'sw-flip-wrap' },
                 h('button', { className: 'sw-flip-btn', onClick: flip, type: 'button', 'aria-label': 'Flip tokens' },
@@ -1510,6 +1528,7 @@ window.__VERIXIA_CONFIG__ = {
                 onPick: function () { setShowPicker('output'); },
                 balance: balances[outputMint], editable: false,
                 balancesLoading: balancesLoading, publicKey: publicKey,
+                rpcFailed: !!balances.__rpc_failed,
               })
             ),
             details,
@@ -1519,6 +1538,7 @@ window.__VERIXIA_CONFIG__ = {
               disabled: !btnEnabled, type: 'button',
               onClick: function () {
                 if (!publicKey) openConnect();
+                else if (rpcFailed) refreshBalances();
                 else if (canSwap) handleSwap();
               },
             }, btnLabel),
