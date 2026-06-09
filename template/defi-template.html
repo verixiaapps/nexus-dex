@@ -556,35 +556,25 @@ function __verixiaApp() {
     return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
   }); };
 
-  /* WALLET LAYER */
-  // CAIP-2 chain IDs. Newer wallets use the first; some older/edge ones still
-  // register the legacy mainnet-beta ID. Declaring both maximizes compat.
-  var SOLANA_WC_CHAIN        = 'solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp';
-  var SOLANA_WC_CHAIN_LEGACY = 'solana:4sGjMW1sUnHzSxGspuhpqLDx6wiyjNtZ';
-
-  /* === FIX #3a: Trust Wallet (and any other Solana-injecting wallet) now
-     detected as an injected provider so we never have to do Solana-over-WC
-     when the user is already inside a wallet's in-app browser. === */
-  function injectedProviders() {
-    var w = (typeof window !== 'undefined') ? window : {};
-    var out = [];
-    var phantom = (w.phantom && w.phantom.solana && w.phantom.solana.isPhantom) ? w.phantom.solana
-                : (w.solana && w.solana.isPhantom) ? w.solana : null;
-    if (phantom) out.push({ id: 'phantom', name: 'Phantom', provider: phantom });
-    var solflare = (w.solflare && w.solflare.isSolflare) ? w.solflare : null;
-    if (solflare) out.push({ id: 'solflare', name: 'Solflare', provider: solflare });
-    var backpack = (w.backpack && w.backpack.isBackpack) ? w.backpack : null;
-    if (backpack) out.push({ id: 'backpack', name: 'Backpack', provider: backpack });
-    var trust = (w.trustwallet && w.trustwallet.solana) ? w.trustwallet.solana
-              : (w.solana && w.solana.isTrust) ? w.solana
-              : (w.solana && w.solana.isTrustWallet) ? w.solana : null;
-    if (trust && !out.find(function(x){ return x.provider === trust; })) {
-      out.push({ id: 'trust', name: 'Trust Wallet', provider: trust });
-    }
-    return out;
+  /* WALLET LAYER — delegated to AppKit via window.VerixiaWallet.
+     The bundle that defines that global is loaded at the top of the file. */
+  function appKitReady() {
+    return typeof window !== 'undefined' && window.VerixiaWallet && typeof window.VerixiaWallet.open === 'function';
   }
-  function getPhantom() { return (injectedProviders().find(function(x) { return x.id === 'phantom'; }) || {}).provider || null; }
-  function getInjectedById(id) { return (injectedProviders().find(function(x) { return x.id === id; }) || null); }
+  function waitForAppKit() {
+    return new Promise(function(resolve) {
+      if (appKitReady()) return resolve(true);
+      var done = false;
+      var finish = function(ok) { if (done) return; done = true; resolve(ok); };
+      window.addEventListener('verixia-wallet-ready', function() { finish(appKitReady()); }, { once: true });
+      // Fallback poll in case the event already fired before this listener attached.
+      var tries = 0;
+      var iv = setInterval(function() {
+        if (appKitReady()) { clearInterval(iv); finish(true); }
+        else if (++tries > 40) { clearInterval(iv); finish(false); }  // 4s
+      }, 100);
+    });
+  }
 
   /* STATE */
   var connection = new Connection(RPC_URL, 'confirmed');
@@ -784,18 +774,125 @@ function __verixiaApp() {
     renderRows(); scheduleQuote();
   }
 
-  /* === FIX #2: Disconnect. Header button now toggles, account menu has a
-     Disconnect action, and a session flag prevents Phantom from auto-
-     reconnecting after the user has explicitly disconnected. === */
+  /* CONNECT — opens the AppKit picker. AppKit handles all the actual wallet
+     detection, deep linking, WalletConnect handshake, etc. We just react to
+     account-state changes via subscribe(). */
+  async function openConnect() {
+    var ready = await waitForAppKit();
+    if (!ready) {
+      S.swapError = 'Wallet bundle not loaded. Refresh the page or check that /nexus-dex/verixia-wc.js is deployed.';
+      renderBanners();
+      return;
+    }
+    try { sessionStorage.removeItem(DISCONNECT_FLAG); } catch (e) {}
+    try { window.VerixiaWallet.open(); } catch (e) {
+      console.error('[appkit] open failed', e);
+      S.swapError = 'Could not open wallet picker: ' + (e && e.message || 'unknown');
+      renderBanners();
+    }
+  }
+
+  /* Translate an AppKit account-state event into our local state. */
+  async function onWalletStateChange(state) {
+    if (state && state.isConnected && state.address) {
+      try {
+        S.publicKey = new PublicKey(state.address);
+        S.walletName = state.walletName || state.providerType || 'Wallet';
+
+        // The provider may not be ready on the same tick as the address. Poll
+        // briefly so we don't end up with a connected pubkey but a null
+        // provider, which would make swaps fail with "no signer".
+        var raw = window.VerixiaWallet.getProvider();
+        var tries = 0;
+        while (!raw && tries < 20) {  // up to ~2s
+          await new Promise(function(r) { setTimeout(r, 100); });
+          raw = window.VerixiaWallet.getProvider();
+          tries++;
+        }
+        S.provider = wrapAppKitProvider(raw, S.publicKey);
+        if (!S.provider) {
+          console.warn('[wallet] connected but provider unavailable');
+        }
+        try { sessionStorage.removeItem(DISCONNECT_FLAG); } catch (e) {}
+        renderAll();
+        refreshBalances();
+        scheduleQuote();
+      } catch (e) {
+        console.error('[wallet] address parse failed', e);
+      }
+    } else {
+      S.publicKey = null;
+      S.provider = null;
+      S.walletName = null;
+      S.balances = {};
+      S.quote = null;
+      S.amount = '';
+      if (els.amount) els.amount.value = '';
+      renderAll();
+    }
+  }
+
+  /* Wrap the AppKit-provided wallet provider into the shape our swap code
+     expects. Wallet-standard providers normally return a signed VersionedTransaction
+     from signTransaction(), but some return a serialized Uint8Array or a plain
+     object — we normalize either back into a VersionedTransaction so the swap
+     path's .serialize() call always works. */
+  function wrapAppKitProvider(raw, pubkey) {
+    if (!raw) return null;
+    var hasSignTx      = typeof raw.signTransaction === 'function';
+    var hasSignAndSend = typeof raw.signAndSendTransaction === 'function';
+
+    var normalizeSigned = function(result, originalTx) {
+      // Best case: provider returned a Transaction/VersionedTransaction with .serialize().
+      if (result && typeof result.serialize === 'function') return result;
+      // Some providers return raw signed bytes.
+      if (result instanceof Uint8Array) return VersionedTransaction.deserialize(result);
+      // Some return { signature: <base58> } and expect us to add it to the tx ourselves.
+      if (result && typeof result.signature === 'string') {
+        // No bs58 in this file's scope — best effort: try deserializing as base64.
+        try {
+          var bytes = b64ToBytes(result.signature);
+          originalTx.addSignature(pubkey, bytes);
+          return originalTx;
+        } catch (e) {
+          throw new Error('Wallet returned an unrecognized signature format.');
+        }
+      }
+      // { transaction: <base64> } shape (WC-style).
+      if (result && typeof result.transaction === 'string') {
+        return VersionedTransaction.deserialize(b64ToBytes(result.transaction));
+      }
+      throw new Error('Wallet did not return a signed transaction.');
+    };
+
+    return {
+      publicKey: pubkey,
+      _raw: raw,
+      _supportsSignTx: hasSignTx,
+      _supportsSignAndSend: hasSignAndSend,
+      signTransaction: async function(tx) {
+        if (!hasSignTx) throw new Error('SIGN_AND_SEND_REQUIRED');
+        var res = await raw.signTransaction(tx);
+        return normalizeSigned(res, tx);
+      },
+      signAndSendTransaction: async function(tx) {
+        if (!hasSignAndSend) throw new Error('Wallet does not support signAndSendTransaction.');
+        var res = await raw.signAndSendTransaction(tx);
+        if (typeof res === 'string') return res;
+        return res && (res.signature || res.txid || null);
+      },
+    };
+  }
+
+  /* DISCONNECT — delegated to AppKit. */
   async function disconnect() {
     try {
-      if (S.provider && S.provider._wc && typeof S.provider._wc.disconnect === 'function') {
-        await S.provider._wc.disconnect();
-      } else if (S.provider && typeof S.provider.disconnect === 'function') {
-        await S.provider.disconnect();
+      if (window.VerixiaWallet && typeof window.VerixiaWallet.disconnect === 'function') {
+        await window.VerixiaWallet.disconnect();
       }
     } catch (e) { console.warn('[disconnect]', e && e.message); }
     try { sessionStorage.setItem(DISCONNECT_FLAG, '1'); } catch (e) {}
+    // The subscribe() callback will also clear state, but do it now for snappier UI.
     S.provider = null;
     S.publicKey = null;
     S.walletName = null;
@@ -806,263 +903,6 @@ function __verixiaApp() {
     closeAccountMenu();
     renderAll();
   }
-
-  /* WALLET — injected */
-  async function connectInjected(entry) {
-    try {
-      try { sessionStorage.removeItem(DISCONNECT_FLAG); } catch (e) {}
-      var res = await entry.provider.connect();
-      S.provider = entry.provider;
-      S.walletName = entry.name;
-      S.publicKey = new PublicKey((res && res.publicKey || entry.provider.publicKey).toString());
-      attachProviderEvents(entry.provider);
-      renderAll(); refreshBalances(); scheduleQuote();
-    } catch (e) {
-      S.swapError = /reject|cancel|denied|user/i.test(String(e && e.message)) ? 'Connection cancelled.' : (e && e.message || 'Failed to connect.');
-      renderBanners();
-    }
-  }
-
-  /* WALLET — WalletConnect */
-  var WC_SDK_LOADING = null;
-  function loadWCSDK() {
-    if (WC_SDK_LOADING) return WC_SDK_LOADING;
-    if (window.__VerixiaWC && window.__VerixiaWC.UniversalProvider && window.__VerixiaWC.WalletConnectModal && window.__VerixiaWC.bs58) {
-      return Promise.resolve(window.__VerixiaWC);
-    }
-    WC_SDK_LOADING = new Promise(function(resolve, reject) {
-      var CDN_PRIMARY  = 'https://cdn.jsdelivr.net/npm';
-      var CDN_FALLBACK = 'https://unpkg.com';
-      var scripts = [
-        { id: 'bs58',  primary: CDN_PRIMARY+'/bs58@5.0.0/index.min.js',                              fallback: CDN_FALLBACK+'/bs58@5.0.0/index.min.js' },
-        { id: 'wcup',  primary: CDN_PRIMARY+'/@walletconnect/universal-provider@2.17.0/dist/index.umd.js', fallback: CDN_FALLBACK+'/@walletconnect/universal-provider@2.17.0/dist/index.umd.js' },
-        { id: 'wcm',   primary: CDN_PRIMARY+'/@walletconnect/modal@2.7.0/dist/index.umd.js',           fallback: CDN_FALLBACK+'/@walletconnect/modal@2.7.0/dist/index.umd.js' },
-      ];
-      var loadOne = function(spec) {
-        return new Promise(function(res, rej) {
-          var tryLoad = function(url, onFail) {
-            var s = document.createElement('script');
-            s.src = url; s.async = false; s.crossOrigin = 'anonymous';
-            s.onload  = function() { res(); };
-            s.onerror = function() { onFail(); };
-            document.head.appendChild(s);
-          };
-          tryLoad(spec.primary, function() { tryLoad(spec.fallback, function() { rej(new Error('Failed to load ' + spec.id)); }); });
-        });
-      };
-      (async function() {
-        try {
-          for (var i = 0; i < scripts.length; i++) await loadOne(scripts[i]);
-          var w = window;
-          var UniversalProvider =
-            (w.UniversalProvider && (w.UniversalProvider.default || w.UniversalProvider)) ||
-            (w['@walletconnect/universal-provider'] && (w['@walletconnect/universal-provider'].UniversalProvider || w['@walletconnect/universal-provider'].default)) ||
-            null;
-          var WalletConnectModal =
-            (w.WalletConnectModal && (w.WalletConnectModal.WalletConnectModal || w.WalletConnectModal.default || w.WalletConnectModal)) ||
-            (w['@walletconnect/modal'] && (w['@walletconnect/modal'].WalletConnectModal || w['@walletconnect/modal'].default)) ||
-            null;
-          var bs58 = w.bs58 && (w.bs58.default || w.bs58);
-          if (!UniversalProvider) throw new Error('UniversalProvider global not found');
-          if (!WalletConnectModal) throw new Error('WalletConnectModal global not found');
-          if (!bs58 || !bs58.decode) throw new Error('bs58 global not found');
-          window.__VerixiaWC = { UniversalProvider: UniversalProvider, WalletConnectModal: WalletConnectModal, bs58: bs58 };
-          resolve(window.__VerixiaWC);
-        } catch (e) { WC_SDK_LOADING = null; reject(e); }
-      })();
-    });
-    return WC_SDK_LOADING;
-  }
-
-  async function connectWalletConnect() {
-    var projectId = RUNTIME_CFG.wcProjectId;
-    if (!projectId) { S.swapError = 'WalletConnect not configured.'; renderBanners(); return; }
-    try {
-      try { sessionStorage.removeItem(DISCONNECT_FLAG); } catch (e) {}
-      var sdk = await loadWCSDK();
-      var UniversalProvider  = sdk.UniversalProvider;
-      var WalletConnectModal = sdk.WalletConnectModal;
-      var bs58               = sdk.bs58;
-      var origin = window.location.origin;
-
-      /* === FIX #3b: metadata.icons populated. Wallets' verify step (and
-         the Reown verify service) silently reject sessions whose metadata
-         has no icons array — which is why the deep link opens the wallet
-         but no approval sheet ever shows up. === */
-      var wc = await UniversalProvider.init({
-        projectId: projectId,
-        metadata: {
-          name: 'Verixia',
-          description: 'Bridge & swap on Solana via Jupiter',
-          url: origin,
-          icons: [origin + '/favicon.ico', origin + '/icon-192.png', origin + '/icon-512.png'],
-        },
-      });
-      var modal = new WalletConnectModal({
-        projectId: projectId,
-        chains:    [SOLANA_WC_CHAIN, SOLANA_WC_CHAIN_LEGACY],
-        themeMode: 'dark',
-      });
-      wc.on('display_uri', function(uri) { try { modal.openModal({ uri: uri }); } catch(e) {} });
-
-      /* === FIX #3c: optionalNamespaces (not "namespaces") + both chain IDs
-         + all common Solana methods. Using REQUIRED namespaces is what
-         causes most wallets to silently reject the session — a wallet
-         must support every listed method, and many Solana WC wallets only
-         implement signAndSendTransaction OR signTransaction, never both.
-         optionalNamespaces lets each wallet fulfill what it supports. === */
-      var session;
-      try {
-        session = await Promise.race([
-          wc.connect({
-            optionalNamespaces: {
-              solana: {
-                chains: [SOLANA_WC_CHAIN, SOLANA_WC_CHAIN_LEGACY],
-                methods: [
-                  'solana_signTransaction',
-                  'solana_signAndSendTransaction',
-                  'solana_signAllTransactions',
-                  'solana_signMessage',
-                ],
-                events: [],
-              },
-            },
-          }),
-          new Promise(function(_, rej) { setTimeout(function() { rej(new Error('Connection timed out — please try again or use Phantom directly')); }, 90000); }),
-        ]);
-      } finally { try { modal.closeModal(); } catch(e) {} }
-
-      var sns = session && session.namespaces && session.namespaces.solana;
-      var acct = sns && sns.accounts && sns.accounts[0];
-      if (!acct) throw new Error('WalletConnect returned no Solana account.');
-
-      // Capture the chain the wallet actually picked and which methods it agreed to.
-      var parts = acct.split(':');                       // ["solana", "<chainHash>", "<pubkey>"]
-      var sessionChain = parts.slice(0, 2).join(':');    // "solana:<chainHash>"
-      var pubkey = new PublicKey(parts[parts.length - 1]);
-      var methods = (sns.methods || []).slice();
-      var hasSignTx      = methods.indexOf('solana_signTransaction') !== -1;
-      var hasSignAndSend = methods.indexOf('solana_signAndSendTransaction') !== -1;
-      if (!hasSignTx && !hasSignAndSend) {
-        throw new Error('Wallet did not authorize any signing method. Try a different wallet.');
-      }
-
-      S.publicKey = pubkey; S.walletName = 'WalletConnect';
-      S.provider = {
-        publicKey: pubkey,
-        _wc: wc,
-        _chain: sessionChain,
-        _methods: methods,
-        _supportsSignTx: hasSignTx,
-        _supportsSignAndSend: hasSignAndSend,
-        signTransaction: async function(tx) {
-          var b64 = bytesToB64(tx.serialize());
-          if (hasSignTx) {
-            var res = await wc.request({ method: 'solana_signTransaction', params: { transaction: b64 } }, sessionChain);
-            if (res && res.transaction) return VersionedTransaction.deserialize(b64ToBytes(res.transaction));
-            if (res && res.signature) { tx.addSignature(pubkey, bs58.decode(res.signature)); return tx; }
-            throw new Error('WalletConnect did not return a signed transaction.');
-          }
-          // Caller will fall back to signAndSend via the dedicated method below.
-          throw new Error('SIGN_AND_SEND_REQUIRED');
-        },
-        signAndSendTransaction: async function(tx) {
-          var b64 = bytesToB64(tx.serialize());
-          var res = await wc.request({ method: 'solana_signAndSendTransaction', params: { transaction: b64 } }, sessionChain);
-          return res && (res.signature || res);  // some wallets return a bare string
-        },
-      };
-      wc.on('session_delete', function() { S.provider = null; S.publicKey = null; S.walletName = null; S.balances = {}; renderAll(); });
-      renderAll(); refreshBalances(); scheduleQuote();
-    } catch (e) {
-      console.error('[wc]', e);
-      S.swapError = /reject|cancel|denied|user|closed/i.test(String(e && e.message))
-        ? 'Connection cancelled.'
-        : ('WalletConnect failed: ' + (e && e.message || 'unknown'));
-      renderBanners();
-    }
-  }
-
-  /* WALLET PICKER MODAL */
-  var walletPickerEl = null;
-  var CLOSE_SVG = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
-  var PHANTOM_ICON = '<div style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#AB9FF2,#7B61FF);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="22" height="22" viewBox="0 0 128 128" fill="white"><path d="M110.6 49.5c-2.3-10.1-8.3-19-17-24.8-8.7-5.8-19.1-8.2-29.4-6.8C43.4 20.7 27.6 37.1 26.1 58c-0.3 3.8 0 7.7 0.8 11.4 0.5 2.5 2.8 4.2 5.3 4.2h0.6c3 0 5.4-2.4 5.4-5.4 0-0.3 0-0.5-0.1-0.8-0.5-2.5-0.7-5.1-0.5-7.7 1-14.3 11.6-26.3 25.6-29 7-1.8 14.3 0.1 20.5 4.2 6.2 4.1 10.4 10.5 11.9 17.7 1.5 7.2-0.1 14.6-4.5 20.7-3.3 4.6-8 8-13.4 9.6-1 0.3-2.1 0.5-3.2 0.5H44.8c-2.9 0-5.5 1.8-6.5 4.5L29 111.3c-0.6 1.6 0.3 3.3 1.9 3.8 0.3 0.1 0.6 0.2 1 0.2h42.7c20.6-0.3 38.4-14.5 42.8-34.6 3.1-14.4 0.3-28.8-6.8-31.2z"/><circle cx="50" cy="58" r="5" fill="white"/><circle cx="74" cy="58" r="5" fill="white"/></svg></div>';
-  var WC_ICON = '<div style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#3B99FC,#2B6CB0);display:flex;align-items:center;justify-content:center;flex-shrink:0"><svg width="22" height="16" viewBox="0 0 400 250" fill="white"><path d="M81.9 88.7c65.6-64.3 171.8-64.3 237.4 0l7.9 7.7c3.3 3.2 3.3 8.4 0 11.6l-27 26.5c-1.6 1.6-4.3 1.6-5.9 0l-10.9-10.6c-45.8-44.8-120-44.8-165.8 0l-11.6 11.4c-1.6 1.6-4.3 1.6-5.9 0l-27-26.5c-3.3-3.2-3.3-8.4 0-11.6l8.8-8.5zm293.3 54.7l24 23.5c3.3 3.2 3.3 8.4 0 11.6l-108.2 106.1c-3.3 3.2-8.6 3.2-11.9 0L216 222.5c-0.8-0.8-2.1-0.8-3 0l-63.1 62.1c-3.3 3.2-8.6 3.2-11.9 0L29.9 178.5c-3.3-3.2-3.3-8.4 0-11.6l24-23.5c3.3-3.2 8.6-3.2 11.9 0l63.1 62.1c0.8 0.8 2.1 0.8 3 0l63.1-62.1c3.3-3.2 8.6-3.2 11.9 0l63.1 62.1c0.8 0.8 2.1 0.8 3 0l63.1-62.1c3.3-3.2 8.6-3.2 11.8 0z"/></svg></div>';
-  var TRUST_ICON = '<div style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#0500FF,#48FF91);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-weight:900;font-size:18px;">T</div>';
-  var GENERIC_ICON = '<div style="width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,#7a3dd4,#c4359a);display:flex;align-items:center;justify-content:center;flex-shrink:0;color:white;font-weight:900;font-size:18px;">';
-
-  function walletRowHtml(id, name, sub, iconHtml) {
-    return '<button class="sw-wc-row" data-wallet="'+id+'" style="display:flex;align-items:center;gap:12px;width:100%;padding:12px;background:rgba(255,255,255,.03);border:1px solid rgba(255,255,255,.08);border-radius:14px;cursor:pointer;text-align:left;">' +
-      iconHtml +
-      '<div><div style="font-family:var(--sw-body);font-weight:700;font-size:15px;color:var(--sw-text);">'+esc(name)+'</div><div style="font-family:var(--sw-mono);font-size:11px;color:var(--sw-faint);">'+esc(sub)+'</div></div>' +
-    '</button>';
-  }
-
-  function openWalletPicker() {
-    closeWalletPicker();
-    var injected = injectedProviders();
-    var hasPhantom  = injected.find(function(x) { return x.id === 'phantom'; });
-    var hasTrust    = injected.find(function(x) { return x.id === 'trust'; });
-    var hasSolflare = injected.find(function(x) { return x.id === 'solflare'; });
-    var hasBackpack = injected.find(function(x) { return x.id === 'backpack'; });
-
-    /* Always show Phantom + Trust as primary options. When the wallet isn't
-       injected (user is on plain mobile Safari, not inside a wallet's in-app
-       browser), tapping deep-links to that wallet's in-app dApp browser, which
-       then loads our site WITH the wallet injected. This bypasses WC entirely
-       for Trust on Solana — Trust's Solana-over-WC is unreliable on iOS, but
-       its in-app browser injection works fine. */
-    var rows = '';
-    rows += walletRowHtml('phantom',  'Phantom',      hasPhantom  ? 'Detected' : 'Open in Phantom',      PHANTOM_ICON);
-    rows += walletRowHtml('trust',    'Trust Wallet', hasTrust    ? 'Detected' : 'Open in Trust',        TRUST_ICON);
-    if (hasSolflare) rows += walletRowHtml('solflare', 'Solflare', 'Detected', GENERIC_ICON+'S</div>');
-    else             rows += walletRowHtml('solflare', 'Solflare', 'Open in Solflare', GENERIC_ICON+'S</div>');
-    if (hasBackpack) rows += walletRowHtml('backpack', 'Backpack', 'Detected', GENERIC_ICON+'B</div>');
-    rows += walletRowHtml('walletconnect', 'WalletConnect', 'Scan QR with any wallet', WC_ICON);
-
-    var overlay = document.createElement('div');
-    overlay.className = 'sw-modal-overlay';
-    overlay.innerHTML = '<div class="sw-modal-card" style="border-radius:20px;max-width:400px;padding:0;">' +
-      '<div style="padding:20px 20px 0;text-align:center;">' +
-        '<div style="width:36px;height:4px;background:rgba(255,255,255,.15);border-radius:2px;margin:0 auto 16px;"></div>' +
-        '<h3 style="font-family:var(--sw-body);font-size:20px;font-weight:800;color:var(--sw-text);margin:0 0 6px;">Connect Wallet</h3>' +
-        '<p style="font-family:var(--sw-mono);font-size:11px;color:var(--sw-faint);margin:0 0 20px;">Pick one. We never see your keys.</p>' +
-      '</div>' +
-      '<div style="padding:0 16px 16px;display:flex;flex-direction:column;gap:8px;">' + rows + '</div>' +
-      '<div style="padding:0 16px 20px;text-align:center;font-family:var(--sw-mono);font-size:10px;color:var(--sw-faint);">Non-custodial. We never see or store your keys.</div>' +
-    '</div>';
-
-    overlay.addEventListener('click', function(e) { if (e.target === overlay) closeWalletPicker(); });
-    overlay.querySelectorAll('[data-wallet]').forEach(function(btn) {
-      btn.addEventListener('click', function() {
-        var id = btn.getAttribute('data-wallet');
-        closeWalletPicker();
-
-        if (id === 'walletconnect') { connectWalletConnect(); return; }
-
-        // Wallet is already injected (we're inside its in-app browser) — connect directly.
-        var injectedEntry = getInjectedById(id);
-        if (injectedEntry) { connectInjected(injectedEntry); return; }
-
-        // Not injected — deep-link into that wallet's in-app dApp browser.
-        var href = encodeURIComponent(window.location.href);
-        var origin = encodeURIComponent(window.location.origin);
-        var deepLink = null;
-        if (id === 'phantom')  deepLink = 'https://phantom.app/ul/browse/' + href + '?ref=' + origin;
-        if (id === 'solflare') deepLink = 'https://solflare.com/ul/v1/browse/' + href + '?ref=' + origin;
-        if (id === 'trust')    deepLink = 'https://link.trustwallet.com/open_url?coin_id=501&url=' + href;
-        if (id === 'backpack') deepLink = 'https://backpack.app/ul/v1/browse/' + href + '?ref=' + origin;
-
-        if (deepLink) {
-          // Must happen synchronously off the tap — iOS blocks deferred navigation.
-          window.location.href = deepLink;
-        }
-      });
-    });
-    document.body.appendChild(overlay);
-    walletPickerEl = overlay;
-  }
-  function closeWalletPicker() { if (walletPickerEl) { walletPickerEl.remove(); walletPickerEl = null; } }
 
   /* === FIX #2 (cont.): Account menu shown when tapping the header pill
      while connected. Provides Copy + Disconnect. === */
@@ -1103,7 +943,7 @@ function __verixiaApp() {
   async function handleSwap() {
     var inputToken  = tokenBy(S.inputMint);
     var outputToken = tokenBy(S.outputMint);
-    if (!S.publicKey || !S.provider || !S.provider.signTransaction) {
+    if (!S.publicKey || !S.provider || (!S.provider._supportsSignTx && !S.provider._supportsSignAndSend)) {
       S.swapError = 'Please connect a wallet first.'; renderBanners(); return;
     }
     if (!S.quote || !outputToken || !inputToken) {
@@ -1274,7 +1114,7 @@ function __verixiaApp() {
     wrap.querySelector('[data-pick="input"]').addEventListener('click', function() { openPicker('input'); });
     wrap.querySelector('[data-pick="output"]').addEventListener('click', function() { openPicker('output'); });
     els.primary.addEventListener('click', function() {
-      if (!S.publicKey) openWalletPicker();
+      if (!S.publicKey) openConnect();
       else if (buttonState().enabled) handleSwap();
     });
     renderAll();
@@ -1432,17 +1272,6 @@ function __verixiaApp() {
     if (S.publicKey) { var a = S.publicKey.toBase58(); headerBtn.textContent = a.slice(0,4)+'\u2026'+a.slice(-4); }
     else headerBtn.textContent = 'Connect';
   }
-  function attachProviderEvents(provider) {
-    if (provider.removeAllListeners) { provider.removeAllListeners('disconnect'); provider.removeAllListeners('accountChanged'); }
-    if (typeof provider.on !== 'function') return;
-    provider.on('disconnect', function() { S.provider = null; S.publicKey = null; S.balances = {}; renderAll(); });
-    provider.on('accountChanged', function(pk) {
-      if (pk) { S.publicKey = new PublicKey(pk.toString()); refreshBalances(); }
-      else { S.provider = null; S.publicKey = null; S.balances = {}; }
-      renderAll();
-    });
-  }
-
   /* INIT */
   function init() {
     root = document.getElementById('verixia-swap-root');
@@ -1454,24 +1283,22 @@ function __verixiaApp() {
     buildDom(); loadTokens();
     headerBtn = document.getElementById('verixia-header-connect');
     if (headerBtn) headerBtn.addEventListener('click', function() {
-      if (!S.publicKey) openWalletPicker();
+      if (!S.publicKey) openConnect();
       else openAccountMenu();
     });
     updateHeader();
 
-    // Auto-reconnect Phantom only if user hasn't explicitly disconnected
-    var skipAuto = false;
-    try { skipAuto = sessionStorage.getItem(DISCONNECT_FLAG) === '1'; } catch(e) {}
-    var provider = getPhantom();
-    if (provider && !skipAuto) {
-      provider.connect({ onlyIfTrusted: true }).then(function(res) {
-        S.provider = provider;
-        S.walletName = 'Phantom';
-        S.publicKey = new PublicKey((res.publicKey || provider.publicKey).toString());
-        attachProviderEvents(provider);
-        renderAll(); refreshBalances(); scheduleQuote();
-      }).catch(function() {});
-    }
+    // Subscribe to AppKit account state. The bundle may not be loaded yet when
+    // this runs, so we wait for it before subscribing. AppKit's subscribe()
+    // fires the callback immediately with current state, so this also restores
+    // a session that was already active when the page loaded.
+    waitForAppKit().then(function(ready) {
+      if (!ready) {
+        console.warn('[wallet] AppKit bundle not loaded — Connect button will show an error');
+        return;
+      }
+      window.VerixiaWallet.subscribe(onWalletStateChange);
+    });
   }
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
   else init();
