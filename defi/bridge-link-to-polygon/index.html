@@ -612,7 +612,7 @@ function __verixiaApp() {
   /* TOKEN LIST */
   async function loadTokens() {
     try {
-      var r = await fetch('https://lite-api.jup.ag/tokens/v2/tag?query=verified');
+      var r = await fetch('/api/jupiter/build?' + params.toString(), { signal: ac.signal });
       var data = await r.json();
       var list = Array.isArray(data) ? data : (data && data.tokens || []);
       var norm = list.map(function(t) { return {
