@@ -612,7 +612,7 @@ function __verixiaApp() {
   /* TOKEN LIST */
   async function loadTokens() {
     try {
-      var r = await fetch('/api/jupiter/build?' + params.toString(), { signal: ac.signal });
+      var r = await fetch('https://lite-api.jup.ag/tokens/v2/tag?query=verified');
       var data = await r.json();
       var list = Array.isArray(data) ? data : (data && data.tokens || []);
       var norm = list.map(function(t) { return {
@@ -763,7 +763,7 @@ function __verixiaApp() {
           taker: S.publicKey ? S.publicKey.toBase58() : '11111111111111111111111111111111',
           computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
         });
-        var r = await fetch('https://lite-api.jup.ag/swap/v2/build?' + params.toString(), { signal: ac.signal });
+        var r = await fetch('https://swap.verixiaapps.com/api/seo/jupiter/build?' + params.toString(), { signal: ac.signal });
         if (!r.ok) {
           var body = await r.json().catch(function() { return {}; });
           throw new Error(body.error || ('Quote failed (' + r.status + ')'));
@@ -1349,4 +1349,3 @@ function __verixiaApp() {
 </main>
 </body>
 </html>
- 
