@@ -4,7 +4,7 @@
   "private": true,
   "proxy": "http://localhost:3001",
   "dependencies": {
-    "@coral-xyz/anchor": "0.29.0", 
+    "@coral-xyz/anchor": "0.29.0",
     "@lifi/sdk": "^3.16.3",
     "@reown/appkit": "^1.8.20",
     "@reown/appkit-adapter-solana": "^1.8.20",
@@ -55,7 +55,6 @@
   },
   "scripts": {
     "start": "concurrently --names server,crank --prefix-colors blue,magenta \"node server.js\" \"ts-node --transpile-only crank/crank.ts\"",
-    "prebuild": "node scripts/build-wc.mjs",
     "build": "react-app-rewired build",
     "build:embed": "react-app-rewired build --config-overrides config-overrides.embed.js",
     "build:all": "npm run build",
