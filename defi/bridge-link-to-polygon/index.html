@@ -1,3 +1,53 @@
+<script>
+// Global Buffer polyfill — MUST run before verixia-wc.js and solana-web3.
+// Some bundles (and possibly solana web3 internals) call Buffer.from / Buffer.alloc
+// directly. iOS Safari has no Buffer global. Returning Uint8Array works because
+// every Solana web3.js path that accepts "Buffer" actually only needs an
+// array-like of bytes.
+(function () {
+  if (typeof window.Buffer !== 'undefined' && typeof window.Buffer.from === 'function') return;
+  function fromString(s, enc) {
+    if (enc === 'base64') return Uint8Array.from(atob(s), function (c) { return c.charCodeAt(0); });
+    if (enc === 'hex') {
+      var out = new Uint8Array(s.length / 2);
+      for (var i = 0; i < out.length; i++) out[i] = parseInt(s.substr(i * 2, 2), 16);
+      return out;
+    }
+    return new TextEncoder().encode(s); // utf8 default
+  }
+  var B = function (arg, enc) {
+    if (typeof arg === 'number') return new Uint8Array(arg);
+    if (typeof arg === 'string') return fromString(arg, enc);
+    if (arg instanceof Uint8Array || Array.isArray(arg)) return Uint8Array.from(arg);
+    if (arg && typeof arg.length === 'number') return Uint8Array.from(arg);
+    return new Uint8Array(0);
+  };
+  B.from = function (arg, enc) {
+    if (typeof arg === 'string') return fromString(arg, enc);
+    if (arg instanceof Uint8Array || Array.isArray(arg)) return Uint8Array.from(arg);
+    if (arg && typeof arg.length === 'number') return Uint8Array.from(arg);
+    return new Uint8Array(0);
+  };
+  B.alloc = function (size, fill) {
+    var u = new Uint8Array(size);
+    if (fill != null) u.fill(typeof fill === 'string' ? fill.charCodeAt(0) : fill);
+    return u;
+  };
+  B.allocUnsafe = function (size) { return new Uint8Array(size); };
+  B.concat = function (list, totalLength) {
+    var len = 0;
+    for (var i = 0; i < list.length; i++) len += list[i].length;
+    if (totalLength == null) totalLength = len;
+    var out = new Uint8Array(totalLength);
+    var off = 0;
+    for (var j = 0; j < list.length; j++) { out.set(list[j], off); off += list[j].length; }
+    return out;
+  };
+  B.isBuffer = function (x) { return x instanceof Uint8Array; };
+  window.Buffer = B;
+})();
+window.global = window;
+</script>
 <script src="https://verixiaapps.com/nexus-dex/verixia-wc.js"></script>
 <!DOCTYPE html>
 <html lang="en">
