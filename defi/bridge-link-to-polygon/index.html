@@ -1,11 +1,57 @@
 <script>
 // Global Buffer polyfill — MUST run before verixia-wc.js and solana-web3.
-// Some bundles (and possibly solana web3 internals) call Buffer.from / Buffer.alloc
-// directly. iOS Safari has no Buffer global. Returning Uint8Array works because
-// every Solana web3.js path that accepts "Buffer" actually only needs an
-// array-like of bytes.
+// iOS Safari has no Buffer global. We back Buffer with Uint8Array AND patch
+// Uint8Array.prototype with Buffer's writer/reader methods so that any code
+// path inside solana-web3 (e.g. SystemProgram.transfer) that calls
+// data.writeUInt32LE / writeBigUInt64LE on a "Buffer" still works.
 (function () {
-  if (typeof window.Buffer !== 'undefined' && typeof window.Buffer.from === 'function') return;
+  // ---- Patch Uint8Array prototype with Buffer-style I/O (idempotent) ----
+  var UAP = Uint8Array.prototype;
+  if (!UAP.writeUInt8) {
+    UAP.writeUInt8 = function (v, o) { o = o|0; this[o] = v & 0xff; return o + 1; };
+  }
+  if (!UAP.writeUInt16LE) {
+    UAP.writeUInt16LE = function (v, o) {
+      o = o|0; this[o] = v & 0xff; this[o+1] = (v >>> 8) & 0xff; return o + 2;
+    };
+  }
+  if (!UAP.writeUInt32LE) {
+    UAP.writeUInt32LE = function (v, o) {
+      o = o|0;
+      this[o]   = v & 0xff;
+      this[o+1] = (v >>> 8)  & 0xff;
+      this[o+2] = (v >>> 16) & 0xff;
+      this[o+3] = (v >>> 24) & 0xff;
+      return o + 4;
+    };
+  }
+  if (!UAP.writeBigUInt64LE) {
+    UAP.writeBigUInt64LE = function (v, o) {
+      o = o|0; var x = typeof v === 'bigint' ? v : BigInt(v);
+      for (var i = 0; i < 8; i++) { this[o + i] = Number(x & 0xffn); x >>= 8n; }
+      return o + 8;
+    };
+  }
+  if (!UAP.readUInt8)  UAP.readUInt8  = function (o) { return this[o|0]; };
+  if (!UAP.readUInt16LE) UAP.readUInt16LE = function (o) { o=o|0; return this[o] | (this[o+1]<<8); };
+  if (!UAP.readUInt32LE) {
+    UAP.readUInt32LE = function (o) {
+      o = o|0;
+      return (this[o] | (this[o+1]<<8) | (this[o+2]<<16)) + this[o+3] * 0x1000000;
+    };
+  }
+  if (!UAP.readBigUInt64LE) {
+    UAP.readBigUInt64LE = function (o) {
+      o = o|0; var r = 0n;
+      for (var i = 7; i >= 0; i--) r = (r << 8n) | BigInt(this[o + i]);
+      return r;
+    };
+  }
+
+  if (typeof window.Buffer !== 'undefined' && typeof window.Buffer.from === 'function') {
+    window.global = window;
+    return;
+  }
   function fromString(s, enc) {
     if (enc === 'base64') return Uint8Array.from(atob(s), function (c) { return c.charCodeAt(0); });
     if (enc === 'hex') {
@@ -45,8 +91,8 @@
   };
   B.isBuffer = function (x) { return x instanceof Uint8Array; };
   window.Buffer = B;
+  window.global = window;
 })();
-window.global = window;
 </script>
 <script>
 (function(){
@@ -549,21 +595,18 @@ window.__VERIXIA_CONFIG__ = {
 
 <!-- ============================================================================
      VERIXIA SWAP — React component, no JSX. Mounts into #verixia-swap-root.
-     Same Jupiter flow as the previous imperative version (fee ix + Jupiter
-     build instructions → one v0 tx → simulate → wallet signs → broadcast).
      ========================================================================= -->
 <script>
 (function () {
   "use strict";
 
-  // Wait for both window.solanaWeb3 and window.React/ReactDOM before mounting.
   function whenReady(cb) {
     var tries = 0;
     var iv = setInterval(function () {
       if (window.solanaWeb3 && window.React && window.ReactDOM) {
         clearInterval(iv);
         cb();
-      } else if (++tries > 100) { // 10s
+      } else if (++tries > 100) {
         clearInterval(iv);
         var el = document.getElementById('verixia-swap-root');
         if (el) el.innerHTML = '<div style="padding:20px;font-family:monospace;color:#ffb3c1;line-height:1.5">Could not load swap libraries. Check your connection.</div>';
@@ -635,6 +678,25 @@ window.__VERIXIA_CONFIG__ = {
       });
     }
 
+    // Hand-rolled SystemProgram::Transfer that does NOT rely on web3.js's
+    // Buffer-dependent encoder. Avoids the silent-encode-failure problem when
+    // window.Buffer is a Uint8Array-backed polyfill (iOS Safari).
+    //   layout: u32 instruction discriminator (= 2)  +  u64 lamports (LE)
+    function createSystemTransfer(from, to, lamports) {
+      var data = new Uint8Array(12);
+      data[0] = 2; data[1] = 0; data[2] = 0; data[3] = 0;
+      var v = typeof lamports === 'bigint' ? lamports : BigInt(lamports);
+      for (var i = 0; i < 8; i++) { data[4 + i] = Number(v & 0xffn); v >>= 8n; }
+      return new TransactionInstruction({
+        programId: SystemProgram.programId,
+        keys: [
+          { pubkey: from, isSigner: true,  isWritable: true },
+          { pubkey: to,   isSigner: false, isWritable: true },
+        ],
+        data: data,
+      });
+    }
+
     // ─── CONFIG ──────────────────────────────────────────────────────
     var RUNTIME_CFG = window.__VERIXIA_CONFIG__ || {};
     var RPC_POOL = [
@@ -693,8 +755,6 @@ window.__VERIXIA_CONFIG__ = {
       ];
     }
 
-    // Race all pool RPCs in parallel. First successful response wins,
-    // dramatically faster than sequential fallback when one RPC is slow.
     function rpcRace(label, op) {
       var conns = RPC_POOL.map(function (url) { return new Connection(url, 'confirmed'); });
       return Promise.any(conns.map(function (c, i) {
@@ -705,7 +765,7 @@ window.__VERIXIA_CONFIG__ = {
       })).catch(function (e) { throw new Error(label + ': all RPCs failed'); });
     }
 
-    // ─── WALLET (AppKit / window.VerixiaWallet) ──────────────────────
+    // ─── WALLET ──────────────────────────────────────────────────────
     function appKitReady() {
       return window.VerixiaWallet && typeof window.VerixiaWallet.open === 'function';
     }
@@ -771,7 +831,7 @@ window.__VERIXIA_CONFIG__ = {
       );
     }
 
-    // ─── ROW (You pay / You receive) ─────────────────────────────────
+    // ─── ROW ─────────────────────────────────────────────────────────
     function SwapRow(props) {
       var label = props.label, token = props.token, amount = props.amount;
       var onAmount = props.onAmount, onPick = props.onPick, balance = props.balance;
@@ -956,7 +1016,6 @@ window.__VERIXIA_CONFIG__ = {
       );
     }
 
-    // ─── BANNER ──────────────────────────────────────────────────────
     function Banner(props) {
       return h('div', { className: 'sw-banner sw-banner-' + props.kind }, props.children);
     }
@@ -965,7 +1024,6 @@ window.__VERIXIA_CONFIG__ = {
     function SwapApp() {
       var connection = useMemo(function () { return new Connection(RPC_URL, 'confirmed'); }, []);
 
-      // Read initial mints from data-* attributes on the root (template-friendly).
       var rootEl = document.getElementById('verixia-swap-root');
       var initInput = (rootEl && rootEl.getAttribute('data-input-mint')) || SOL_MINT;
       var initOutput = (rootEl && rootEl.getAttribute('data-output-mint')) || USDC_MINT;
@@ -989,7 +1047,6 @@ window.__VERIXIA_CONFIG__ = {
       var sh_ = useState(null); var showPicker = sh_[0], setShowPicker = sh_[1];
       var si = useState(false); var showAccount = si[0], setShowAccount = si[1];
 
-      // ── Tokens ──────────────────────────────────────────────────────
       useEffect(function () {
         var cancelled = false;
         (async function () {
@@ -1029,7 +1086,6 @@ window.__VERIXIA_CONFIG__ = {
         return Math.floor(n * Math.pow(10, inputToken.decimals)).toString();
       }, [amount, inputToken]);
 
-      // ── Balances ────────────────────────────────────────────────────
       var refreshBalances = useCallback(async function () {
         if (!publicKey) { setBalances({}); setBalancesLoading(false); return; }
         setBalancesLoading(true);
@@ -1050,7 +1106,6 @@ window.__VERIXIA_CONFIG__ = {
           }
         }
 
-        // Fire all three in parallel; render each result as it arrives.
         var solP = rpcRace('getBalance', function (c) { return c.getBalance(owner, 'confirmed'); })
           .then(function (lamports) {
             setBalances(function (prev) {
@@ -1083,7 +1138,6 @@ window.__VERIXIA_CONFIG__ = {
 
         await Promise.allSettled([solP, tokP, tok22P]);
 
-        // Ensure SOL row shows 0 even if all RPCs failed for it.
         setBalances(function (prev) {
           if (prev[SOL_MINT]) return prev;
           var next = Object.assign({}, prev);
@@ -1095,7 +1149,6 @@ window.__VERIXIA_CONFIG__ = {
 
       useEffect(function () { refreshBalances(); }, [refreshBalances]);
 
-      // ── Quote ───────────────────────────────────────────────────────
       var quoteAbortRef = useRef(null);
       useEffect(function () {
         if (!rawAmount || inputMint === outputMint) {
@@ -1153,7 +1206,6 @@ window.__VERIXIA_CONFIG__ = {
         return Number.isFinite(n) ? n * (Math.abs(n) <= 1 ? 100 : 1) : null;
       }, [quote]);
 
-      // ── Wallet subscription ─────────────────────────────────────────
       useEffect(function () {
         var unsub = null;
         waitForAppKit().then(function (ready) {
@@ -1183,7 +1235,6 @@ window.__VERIXIA_CONFIG__ = {
         return function () { try { if (typeof unsub === 'function') unsub(); } catch (e) {} };
       }, []);
 
-      // ── Connect / disconnect ────────────────────────────────────────
       var openConnect = useCallback(async function () {
         var ready = await waitForAppKit();
         if (!ready) { setSwapError('Wallet bundle not loaded.'); return; }
@@ -1201,7 +1252,6 @@ window.__VERIXIA_CONFIG__ = {
         setBalances({}); setQuote(null); setAmount('');
       }, []);
 
-      // ── External header button (#verixia-header-connect) ────────────
       useEffect(function () {
         var btn = document.getElementById('verixia-header-connect');
         if (!btn) return;
@@ -1219,7 +1269,6 @@ window.__VERIXIA_CONFIG__ = {
         return function () { btn.removeEventListener('click', onClick); };
       }, [publicKey, openConnect]);
 
-      // ── Actions ─────────────────────────────────────────────────────
       var flip = useCallback(function () {
         setInputMint(outputMint); setOutputMint(inputMint);
         setAmount(''); setQuote(null);
@@ -1233,7 +1282,6 @@ window.__VERIXIA_CONFIG__ = {
         setAmount(String(maxAmt));
       }, [balances, inputMint]);
 
-      // ── Swap (same flow as the canonical React reference) ───────────
       var handleSwap = useCallback(async function () {
         if (!publicKey || !provider || (!provider._supportsSignTx && !provider._supportsSignAndSend)) {
           setSwapError('Please connect a wallet first.'); return;
@@ -1246,14 +1294,12 @@ window.__VERIXIA_CONFIG__ = {
           var dec = inputToken.decimals;
           var build = quote;
 
-          // 1) Fee instructions
+          // 1) Fee instructions (hand-rolled — does NOT depend on the Buffer polyfill)
           var feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
           if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
           var feeIxs = [];
           if (inputMint === SOL_MINT) {
-            feeIxs.push(SystemProgram.transfer({
-              fromPubkey: publicKey, toPubkey: FEE_WALLET, lamports: Number(feeAmount),
-            }));
+            feeIxs.push(createSystemTransfer(publicKey, FEE_WALLET, feeAmount));
           } else {
             var mintPk = new PublicKey(inputMint);
             var mintInfo = await connection.getAccountInfo(mintPk);
@@ -1376,7 +1422,6 @@ window.__VERIXIA_CONFIG__ = {
         }
       }, [publicKey, provider, quote, outputToken, inputToken, inputMint, rawAmount, connection, refreshBalances]);
 
-      // ── Derived UI state ────────────────────────────────────────────
       var inputBalance = balances[inputMint];
       var hasFunds = inputBalance && Number(amount) > 0 && inputBalance.uiAmount >= Number(amount);
       var canSwap = !!publicKey && !!quote && !quoting && !swapping &&
@@ -1398,7 +1443,6 @@ window.__VERIXIA_CONFIG__ = {
         : priceImpact > 1 ? 'sw-impact-warn'
         : 'sw-impact-good';
 
-      // ── Render ──────────────────────────────────────────────────────
       var details = null;
       if (quote && outputToken && inputToken && Number(amount) > 0) {
         var rate = (outAmountUi / Number(amount)) || 0;
@@ -1500,10 +1544,9 @@ window.__VERIXIA_CONFIG__ = {
       );
     }
 
-    // ─── MOUNT ───────────────────────────────────────────────────────
     var rootNode = document.getElementById('verixia-swap-root');
     if (!rootNode) return;
-    rootNode.innerHTML = ''; // remove skeleton
+    rootNode.innerHTML = '';
     var root = window.ReactDOM.createRoot(rootNode);
     root.render(h(SwapApp));
   }
