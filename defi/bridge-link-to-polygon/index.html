@@ -763,7 +763,7 @@ function __verixiaApp() {
           taker: S.publicKey ? S.publicKey.toBase58() : '11111111111111111111111111111111',
           computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
         });
-        var r = await fetch('https://api.jup.ag/swap/v2/build?' + params.toString(), { signal: ac.signal });
+        var r = await fetch('https://lite-api.jup.ag/swap/v2/build?' + params.toString(), { signal: ac.signal });
         if (!r.ok) {
           var body = await r.json().catch(function() { return {}; });
           throw new Error(body.error || ('Quote failed (' + r.status + ')'));
