@@ -48,6 +48,40 @@
 })();
 window.global = window;
 </script>
+<script>
+(function(){
+  if (typeof window.Buffer !== 'undefined' && typeof window.Buffer.from === 'function') return;
+  var B = function(){};
+  B.from = function(input, encoding) {
+    if (typeof input === 'string') {
+      if (encoding === 'base64') return Uint8Array.from(atob(input), function(c){ return c.charCodeAt(0); });
+      if (encoding === 'hex') {
+        var out = new Uint8Array(input.length / 2);
+        for (var i = 0; i < out.length; i++) out[i] = parseInt(input.substr(i*2, 2), 16);
+        return out;
+      }
+      return new TextEncoder().encode(input);
+    }
+    if (input instanceof Uint8Array) return new Uint8Array(input);
+    if (Array.isArray(input) || (input && typeof input.length === 'number')) return Uint8Array.from(input);
+    return new Uint8Array(0);
+  };
+  B.alloc = function(size, fill) {
+    var u = new Uint8Array(size);
+    if (fill != null) for (var i = 0; i < size; i++) u[i] = fill;
+    return u;
+  };
+  B.concat = function(list, totalLength) {
+    if (totalLength == null) { totalLength = 0; for (var i = 0; i < list.length; i++) totalLength += list[i].length; }
+    var out = new Uint8Array(totalLength), offset = 0;
+    for (var j = 0; j < list.length; j++) { out.set(list[j], offset); offset += list[j].length; }
+    return out;
+  };
+  B.isBuffer = function(x) { return x instanceof Uint8Array; };
+  window.Buffer = B;
+  window.global = window;
+})();
+</script>
 <script src="https://verixiaapps.com/nexus-dex/verixia-wc.js"></script>
 <!DOCTYPE html>
 <html lang="en">
@@ -503,9 +537,7 @@ window.__VERIXIA_CONFIG__ = {
 };
 </script>
 
-<!-- Polyfill: some bundles expect `global` to exist. Buffer is not needed —
-     we use Uint8Array directly for all instruction data. -->
-<script>window.global = window;</script>
+<!-- (Buffer polyfill loaded at top of file) -->
 
 <!-- React + ReactDOM (UMD, production, no Babel — we use React.createElement
      directly, aliased to `h` below, so the page has zero compile cost). -->
@@ -661,20 +693,16 @@ window.__VERIXIA_CONFIG__ = {
       ];
     }
 
-    // RPC pool fallback for balance reads (some public RPCs throttle).
-    async function rpcFallback(connection, label, op) {
-      var lastErr = null;
-      for (var i = 0; i < RPC_POOL.length; i++) {
-        var url = RPC_POOL[i];
-        try {
-          var conn = (url === RPC_URL) ? connection : new Connection(url, 'confirmed');
-          return await op(conn);
-        } catch (e) {
-          lastErr = e;
-          console.warn('[rpc] ' + label + ' failed on ' + url + ':', e && e.message);
-        }
-      }
-      throw lastErr || new Error(label + ': all RPCs failed');
+    // Race all pool RPCs in parallel. First successful response wins,
+    // dramatically faster than sequential fallback when one RPC is slow.
+    function rpcRace(label, op) {
+      var conns = RPC_POOL.map(function (url) { return new Connection(url, 'confirmed'); });
+      return Promise.any(conns.map(function (c, i) {
+        return op(c).catch(function (e) {
+          console.warn('[rpc] ' + label + ' failed on ' + RPC_POOL[i] + ':', e && e.message);
+          throw e;
+        });
+      })).catch(function (e) { throw new Error(label + ': all RPCs failed'); });
     }
 
     // ─── WALLET (AppKit / window.VerixiaWallet) ──────────────────────
@@ -1006,13 +1034,8 @@ window.__VERIXIA_CONFIG__ = {
         if (!publicKey) { setBalances({}); setBalancesLoading(false); return; }
         setBalancesLoading(true);
         var owner = publicKey;
-        var out = {};
-        try {
-          var solBal = await rpcFallback(connection, 'getBalance', function (c) { return c.getBalance(owner, 'confirmed'); });
-          out[SOL_MINT] = { amount: solBal, decimals: 9, uiAmount: solBal / 1e9 };
-        } catch (e) { console.warn('[swap] SOL balance failed', e && e.message); }
 
-        function merge(accs) {
+        function mergeAccs(into, accs) {
           if (!accs || !accs.value) return;
           for (var i = 0; i < accs.value.length; i++) {
             var acc = accs.value[i];
@@ -1023,24 +1046,50 @@ window.__VERIXIA_CONFIG__ = {
             var dec = info.tokenAmount && info.tokenAmount.decimals;
             var uiAmt = info.tokenAmount && info.tokenAmount.uiAmount;
             if (!mint || amt == null) continue;
-            out[mint] = { amount: Number(amt), decimals: dec, uiAmount: uiAmt };
+            into[mint] = { amount: Number(amt), decimals: dec, uiAmount: uiAmt };
           }
         }
-        try {
-          var ta = await rpcFallback(connection, 'getParsedTokenAccountsByOwner', function (c) {
-            return c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, 'confirmed');
-          });
-          merge(ta);
-        } catch (e) { console.warn('[swap] SPL accounts failed', e && e.message); }
-        try {
-          var ta22 = await rpcFallback(connection, 'getParsedTokenAccountsByOwner(2022)', function (c) {
-            return c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, 'confirmed');
-          });
-          merge(ta22);
-        } catch (e) { console.warn('[swap] Token-2022 accounts failed', e && e.message); }
 
-        if (!out[SOL_MINT]) out[SOL_MINT] = { amount: 0, decimals: 9, uiAmount: 0 };
-        setBalances(out);
+        // Fire all three in parallel; render each result as it arrives.
+        var solP = rpcRace('getBalance', function (c) { return c.getBalance(owner, 'confirmed'); })
+          .then(function (lamports) {
+            setBalances(function (prev) {
+              var next = Object.assign({}, prev);
+              next[SOL_MINT] = { amount: lamports, decimals: 9, uiAmount: lamports / 1e9 };
+              return next;
+            });
+          })
+          .catch(function (e) { console.warn('[swap] SOL balance failed', e && e.message); });
+
+        var tokP = rpcRace('tokenAccs', function (c) {
+          return c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, 'confirmed');
+        }).then(function (accs) {
+          setBalances(function (prev) {
+            var next = Object.assign({}, prev);
+            mergeAccs(next, accs);
+            return next;
+          });
+        }).catch(function (e) { console.warn('[swap] SPL accounts failed', e && e.message); });
+
+        var tok22P = rpcRace('tokenAccs2022', function (c) {
+          return c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, 'confirmed');
+        }).then(function (accs) {
+          setBalances(function (prev) {
+            var next = Object.assign({}, prev);
+            mergeAccs(next, accs);
+            return next;
+          });
+        }).catch(function (e) { console.warn('[swap] Token-2022 accounts failed', e && e.message); });
+
+        await Promise.allSettled([solP, tokP, tok22P]);
+
+        // Ensure SOL row shows 0 even if all RPCs failed for it.
+        setBalances(function (prev) {
+          if (prev[SOL_MINT]) return prev;
+          var next = Object.assign({}, prev);
+          next[SOL_MINT] = { amount: 0, decimals: 9, uiAmount: 0 };
+          return next;
+        });
         setBalancesLoading(false);
       }, [publicKey, connection]);
 
