@@ -6,6 +6,13 @@
 //   - Added browser-friendly RPC endpoints
 //   - Visible balance loading + error states with a Refresh button
 //   - Balances refresh on wallet connect AND on mint change
+//
+// FAST BALANCES (this revision):
+//   - Balance reads now use the 'processed' commitment (latest state, ~1-2s
+//     sooner than 'confirmed'). The swap-send path still uses 'confirmed'.
+//   - Connection objects are cached per-URL instead of rebuilt every call.
+//   - RPC pool trimmed to the fastest browser-friendly public endpoints.
+//   - rpcRace still races them with Promise.any (first success wins).
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -41,6 +48,10 @@ const SLIPPAGE_BPS = 500;
  * Matches the pattern used on verixiaapps.com SEO pages which is known to
  * work in iOS Safari & Phantom in-app browser. Promise.any returns first
  * success; Promise.allSettled below makes each balance fetch independent.
+ *
+ * FAST BALANCES: pool trimmed to the quickest browser-friendly endpoints,
+ * and Connection objects are cached per (url, commitment) so we don't pay
+ * construction cost on every balance refresh.
  */
 const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
 const RPC_POOL = [
@@ -48,12 +59,25 @@ const RPC_POOL = [
   'https://solana-rpc.publicnode.com',
   'https://solana.drpc.org',
   'https://rpc.ankr.com/solana',
-  'https://solana.api.onfinality.io/public',
   'https://api.mainnet-beta.solana.com',
 ].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
 
-const rpcRace = (label, op) => {
-  const conns = RPC_POOL.map(u => new Connection(u, 'confirmed'));
+// Commitment used purely for *reading balances*. 'processed' returns the
+// latest known state fastest. The swap-send path uses 'confirmed' (below).
+const BAL_COMMITMENT = 'processed';
+
+// Cache Connection objects so repeated balance refreshes reuse them.
+const _connCache = new Map();
+const getConn = (url, commitment) => {
+  const key = url + '|' + commitment;
+  let c = _connCache.get(key);
+  if (!c) { c = new Connection(url, commitment); _connCache.set(key, c); }
+  return c;
+};
+
+// Race an op across the pool at a given commitment; first success wins.
+const rpcRace = (label, op, commitment = BAL_COMMITMENT) => {
+  const conns = RPC_POOL.map(u => getConn(u, commitment));
   return Promise.any(conns.map((c, i) =>
     op(c).catch(e => {
       console.warn(`[rpc] ${label} failed on ${RPC_POOL[i]}:`, e?.message);
@@ -107,7 +131,8 @@ const deserIx = (ix) => ({
 
 export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConnectWallet } = {}) {
   const wallet = useWallet();
-  const connection = useMemo(() => new Connection(RPC_POOL[0], 'confirmed'), []);
+  // Send/confirm path keeps 'confirmed' for safety.
+  const connection = useMemo(() => getConn(RPC_POOL[0], 'confirmed'), []);
 
   const [tokens, setTokens]               = useState([]);
   const [tokensLoading, setTokensLoading] = useState(true);
@@ -160,7 +185,8 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
     return () => { cancelled = true; };
   }, []);
 
-  /* balances — each fetch independent, partial success still updates UI */
+  /* balances — each fetch independent, partial success still updates UI.
+     Reads use BAL_COMMITMENT ('processed') for the fastest first paint. */
   const refreshBalances = useCallback(async () => {
     if (!wallet.publicKey) { setBalances({}); setBalError(null); return; }
     setBalLoading(true);
@@ -181,7 +207,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
       }
     };
 
-    const solP = rpcRace('getBalance', c => c.getBalance(owner, 'confirmed'))
+    const solP = rpcRace('getBalance', c => c.getBalance(owner, BAL_COMMITMENT))
       .then(lamports => {
         setBalances(prev => {
           const next = { ...prev };
@@ -193,7 +219,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
       .catch(e => console.warn('[swap] SOL balance failed', e?.message));
 
     const tokP = rpcRace('tokenAccs', c =>
-      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, 'confirmed')
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT)
     ).then(accs => {
       setBalances(prev => {
         const next = { ...prev };
@@ -204,7 +230,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
     }).catch(e => console.warn('[swap] SPL accounts failed', e?.message));
 
     const tok22P = rpcRace('tokenAccs2022', c =>
-      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, 'confirmed')
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT)
     ).then(accs => {
       setBalances(prev => {
         const next = { ...prev };
@@ -475,7 +501,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
   }, [
     wallet, quote, outputToken, inputToken,
     inputMint, outputMint, rawAmount,
-    refreshBalances,
+    refreshBalances, connection,
   ]);
 
   const hasFunds = inputBalance && Number(amount) > 0 && inputBalance.uiAmount >= Number(amount);
@@ -818,4 +844,3 @@ const CloseIcon = () => (
     <line x1="6"  y1="6" x2="18" y2="18"/>
   </svg>
 );
- 
