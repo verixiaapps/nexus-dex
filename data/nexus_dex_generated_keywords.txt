@@ -530,6 +530,36 @@ swap popcat to usdt solana
 swap popcat to w
 swap popcat to wen
 swap pyth for act solana
+swap pyth for ai16z solana
+swap pyth for bonk solana
+swap pyth for cloud solana
+swap pyth for drift solana
+swap pyth for fartcoin solana
+swap pyth for goat solana
+swap pyth for grass solana
+swap pyth for hnt solana
+swap pyth for io solana
+swap pyth for jitosol solana
+swap pyth for jto solana
+swap pyth for jup solana
+swap pyth for kmno solana
+swap pyth for mew solana
+swap pyth for mnde solana
+swap pyth for msol solana
+swap pyth for pengu solana
+swap pyth for pnut solana
+swap pyth for popcat solana
+swap pyth for ray solana
+swap pyth for render solana
+swap pyth for sol solana
+swap pyth for tnsr solana
+swap pyth for w solana
+swap pyth for wen solana
+swap pyth for wif solana
+swap pyth on solana
+swap pyth to act
+swap pyth to cloud
+swap pyth to goat
 swap stablecoin bridge
 swap stablecoins cross chain
 swap usdc cross chain
