@@ -123,16 +123,6 @@ cheaper alternative to bullx
 cheaper alternative to dexscreener
 cheaper alternative to gmgn
 cheaper alternative to photon
-swap jup to io
-swap jup to jitosol
-swap jup to jto
-swap jup to kmno
-swap jup to mew
-swap jup to mnde
-swap jup to msol
-swap jup to pengu
-swap jup to pnut
-swap jup to popcat
 swap jup to pyth
 swap jup to ray
 swap jup to render
