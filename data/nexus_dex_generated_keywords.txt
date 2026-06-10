@@ -470,6 +470,36 @@ swap pnut to sol
 swap pnut to sol solana
 swap pnut to tnsr
 swap pnut to usdc solana
+swap pnut to usdt solana
+swap pnut to w
+swap pnut to wen
+swap pnut to wif
+swap polygon to solana
+swap ponke on solana
+swap ponke to sol solana
+swap ponke to usdc solana
+swap ponke to usdt solana
+swap popcat for act solana
+swap popcat for ai16z solana
+swap popcat for bonk solana
+swap popcat for cloud solana
+swap popcat for drift solana
+swap popcat for fartcoin solana
+swap popcat for goat solana
+swap popcat for grass solana
+swap popcat for hnt solana
+swap popcat for io solana
+swap popcat for jitosol solana
+swap popcat for jto solana
+swap popcat for jup solana
+swap popcat for kmno solana
+swap popcat for mew solana
+swap popcat for mnde solana
+swap popcat for msol solana
+swap popcat for pengu solana
+swap popcat for pnut solana
+swap popcat for pyth solana
+swap popcat for ray solana
 swap stablecoin bridge
 swap stablecoins cross chain
 swap usdc cross chain
