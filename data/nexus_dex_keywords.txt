@@ -4,38 +4,8 @@ cross chain crypto platform
 cross chain token exchange
 cross chain token routing
 cross chain liquidity routing
-cross chain bridge aggregator
 cross chain defi platform
-swap crypto without kyc
-swap crypto without account
-swap crypto without registration
-swap crypto without login
-swap crypto without limits
-swap crypto without restrictions
-anonymous crypto swapping
 private crypto exchange
-wallet connect swap
-wallet based crypto exchange
-best route usdc swap
-best route usdt swap
-best route eth swap
-best route btc swap
-best route xrp swap
-best route ada swap
-best route ton swap
-best route near swap
-best route kaspa swap
-best route link swap
-lowest fee usdc swap
-lowest fee usdt swap
-lowest fee eth swap
-lowest fee btc swap
-lowest fee xrp swap
-lowest fee ada swap
-lowest fee ton swap
-lowest fee near swap
-lowest fee kaspa swap
-lowest fee link swap
 fastest usdc swap
 fastest usdt swap
 fastest eth swap
