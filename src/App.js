@@ -21,7 +21,226 @@ const SOLTOBTC_ALLOWLIST = new Set([
  'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV',
 ]);
 
-const GLOBAL_STYLES = `html,body{ margin:0;padding:0;width:100%; min-height:100vh; min-height:100dvh; overflow-x:hidden; overscroll-behavior:none; -webkit-text-size-adjust:100%; text-size-adjust:100%; } body{ -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; } body.nexus-scroll-locked{ overflow:hidden !important; } #root{ min-height:100vh; min-height:100dvh; display:flex; flex-direction:column; } *,*::before,*::after{box-sizing:border-box;} *{ -webkit-tap-highlight-color:transparent; } button,a,[role="button"]{ touch-action:manipulation; } input,button,select,textarea{ font-family:'Syne',sans-serif; font-size:16px; } input[type="text"],input[type="number"],input[type="email"],input[type="password"],input[type="search"],input:not([type]),textarea{ font-size:16px !important; } ::-webkit-scrollbar{width:3px;height:3px;} ::-webkit-scrollbar-track{background:#03060f;} ::-webkit-scrollbar-thumb{background:#1e2d4a;border-radius:2px;} .hide-scrollbar{scrollbar-width:none;} .hide-scrollbar::-webkit-scrollbar{display:none;} .scroll-contain{ overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; } @media(max-width:768px){.desktop-nav{display:none!important;}} @media(min-width:769px){.mobile-nav{display:none!important;}} @keyframes wc-spin { to { transform: rotate(360deg); } }`;
+const GLOBAL_STYLES = `html,body{ margin:0;padding:0;width:100%; min-height:100vh; min-height:100dvh; overflow-x:hidden; overscroll-behavior:none; -webkit-text-size-adjust:100%; text-size-adjust:100%; } body{ -webkit-font-smoothing:antialiased; -moz-osx-font-smoothing:grayscale; } body.nexus-scroll-locked{ overflow:hidden !important; } #root{ min-height:100vh; min-height:100dvh; display:flex; flex-direction:column; } *,*::before,*::after{box-sizing:border-box;} *{ -webkit-tap-highlight-color:transparent; } button,a,[role="button"]{ touch-action:manipulation; } input,button,select,textarea{ font-family:'Syne',sans-serif; font-size:16px; } input[type="text"],input[type="number"],input[type="email"],input[type="password"],input[type="search"],input:not([type]),textarea{ font-size:16px !important; } ::-webkit-scrollbar{width:3px;height:3px;} ::-webkit-scrollbar-track{background:#03060f;} ::-webkit-scrollbar-thumb{background:#1e2d4a;border-radius:2px;} .hide-scrollbar{scrollbar-width:none;} .hide-scrollbar::-webkit-scrollbar{display:none;} .scroll-contain{ overflow-y:auto; -webkit-overflow-scrolling:touch; overscroll-behavior:contain; } @media(max-width:768px){.desktop-nav{display:none!important;}} @media(min-width:769px){.mobile-nav{display:none!important;}} @keyframes wc-spin { to { transform: rotate(360deg); } }
+/* ── Nexus swap hero ── */
+@keyframes nxHeroSpin { to { transform: rotate(360deg); } }
+@keyframes nxHueShift { to { background-position: 200% 0; } }
+@keyframes nxOrbPulse { 0%,100%{ transform:scale(1); opacity:.85; } 50%{ transform:scale(1.08); opacity:1; } }
+@keyframes nxOrbSpin { to { transform: rotate(360deg); } }
+@keyframes nxOcCycle { 0%{opacity:0; transform:translateY(8px) scale(.95);} 4%{opacity:1; transform:translateY(0) scale(1);} 21%{opacity:1; transform:translateY(0) scale(1);} 25%{opacity:0; transform:translateY(-8px) scale(.95);} 100%{opacity:0;} }
+.nx-hero-cta:active { transform: scale(.97); }
+.nx-eco a:hover { border-color: rgba(0,180,210,0.28); transform: translateY(-2px); }
+`;
+
+// =====================================================================
+// SwapHero — compact "ecosystem" hero shown above the swap widget.
+// Self-contained, inline styles + a few keyframes injected via GLOBAL_STYLES
+// (nx* names). Renders only on the swap tab. Does not touch SwapWidget.
+// =====================================================================
+function SwapHero({ onStartTrading }) {
+ // cosmic Verixia palette, scoped locally so it never clashes with the app
+ const P = {
+   cyan: '#00b8d4', magenta: '#c4359a', violet: '#7a3dd4',
+   gold: '#d4a533', green: '#3dd494', pink: '#c66aa8',
+   text: '#e8e0f5', dim: '#9b8fc0', faint: '#564670',
+   line: 'rgba(120,80,220,0.12)', line2: 'rgba(0,180,210,0.28)',
+ };
+
+ const eco = [
+   { ic: '⇅',  lbl: 'Swap',       tab: 'swap',       active: true },
+   { ic: '🌉', lbl: 'Bridge',     tab: 'bridge' },
+   { ic: '₿',  lbl: 'SOL→BTC',    tab: 'soltobtc' },
+   { ic: '✨', lbl: 'Wonderland', tab: 'wonderland' },
+   { ic: '📈', lbl: 'Markets',    tab: 'markets' },
+   { ic: '🎯', lbl: 'Flipsy',     tab: 'flipsy' },
+   { ic: '▦',  lbl: 'Wallet',     tab: 'portfolio' },
+ ];
+
+ const benefits = [
+   { t: 'Get Native Bitcoin',      c: P.gold },
+   { t: 'Bridge Across 71 Chains', c: P.green },
+   { t: 'Swap on Solana',          c: P.cyan },
+   { t: 'Discover Trending Memes', c: P.magenta },
+   { t: 'Self-Custody Always',     c: P.violet },
+ ];
+
+ const stats = [
+   { v: '$48M',   l: 'Volume' },
+   { v: '0.4s',   l: 'Settlement' },
+   { v: '71',     l: 'Chains' },
+   { v: '<$0.01', l: 'Fees' },
+ ];
+
+ const cycleItems = [
+   { ic: '⚡', b: '0.4s',     l: 'Settlement' },
+   { ic: '🌉', b: '71',       l: 'Chains' },
+   { ic: '₿',  b: 'Native',   l: 'Bitcoin' },
+   { ic: '🔥', b: 'Trending', l: 'Memes' },
+ ];
+
+ const go = (tab) => { if (onStartTrading) onStartTrading(tab); };
+
+ return (
+   <div style={{ maxWidth: 480, margin: '0 auto 4px', width: '100%' }}>
+
+     {/* ECOSYSTEM STRIP */}
+     <div className="nx-eco hide-scrollbar" style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '0 0 4px' }}>
+       {eco.map(e => (
+         <button
+           key={e.lbl}
+           onClick={() => go(e.tab)}
+           style={{
+             flex: '0 0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
+             minWidth: 66, padding: '11px 8px', borderRadius: 14, cursor: 'pointer',
+             border: '1px solid ' + (e.active ? P.line2 : P.line),
+             background: e.active
+               ? 'linear-gradient(135deg, rgba(0,184,212,0.10), rgba(196,53,154,0.10))'
+               : 'rgba(255,255,255,0.02)',
+             backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
+             transition: 'border-color .15s, transform .12s', fontFamily: 'Syne, sans-serif',
+           }}
+         >
+           <span style={{ fontSize: 18 }}>{e.ic}</span>
+           <span style={{
+             fontFamily: "'JetBrains Mono', monospace", fontSize: 9, fontWeight: 700,
+             letterSpacing: '0.05em', textTransform: 'uppercase', whiteSpace: 'nowrap',
+             color: e.active ? P.cyan : P.dim,
+           }}>{e.lbl}</span>
+         </button>
+       ))}
+     </div>
+
+     {/* COMPACT HERO CARD */}
+     <div style={{
+       marginTop: 14, position: 'relative', borderRadius: 22, overflow: 'hidden',
+       background: 'linear-gradient(135deg, rgba(10,4,32,0.96), rgba(16,6,44,0.96))',
+       border: '1px solid ' + P.line2,
+       boxShadow: '0 0 0 1px rgba(0,229,255,0.06), 0 16px 48px -16px rgba(196,53,154,0.45)',
+     }}>
+       <div style={{
+         content: '', position: 'absolute', inset: -1, borderRadius: 22, padding: 1,
+         background: `conic-gradient(from 0deg, ${P.cyan}, ${P.magenta}, ${P.violet}, ${P.cyan})`,
+         WebkitMask: 'linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)',
+         WebkitMaskComposite: 'xor', maskComposite: 'exclude',
+         opacity: 0.25, animation: 'nxHeroSpin 10s linear infinite', pointerEvents: 'none',
+       }} />
+       <div style={{ display: 'flex', alignItems: 'stretch', position: 'relative', zIndex: 2 }}>
+         {/* LEFT */}
+         <div style={{ flex: '1 1 auto', padding: '20px 14px 18px 20px' }}>
+           <div style={{
+             display: 'inline-flex', alignItems: 'center', gap: 6,
+             fontFamily: "'JetBrains Mono', monospace", fontSize: 9, fontWeight: 700,
+             letterSpacing: '0.12em', textTransform: 'uppercase', color: P.cyan,
+             border: '1px solid ' + P.line2, borderRadius: 100, padding: '4px 9px',
+             marginBottom: 12, background: 'rgba(0,229,255,0.05)',
+           }}>⚡ Powered by Jupiter</div>
+
+           <div style={{
+             fontFamily: "'Syne', sans-serif", fontWeight: 800,
+             fontSize: 'clamp(20px,6vw,26px)', lineHeight: 1.08, textTransform: 'uppercase',
+             marginBottom: 6, color: P.text, letterSpacing: '-0.01em',
+           }}>
+             TRADE <span style={{
+               background: `linear-gradient(90deg, ${P.cyan}, ${P.magenta})`,
+               WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent',
+             }}>ANYTHING.</span> ANYWHERE.
+           </div>
+
+           <div style={{
+             fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 700,
+             letterSpacing: '0.06em', textTransform: 'uppercase', color: P.dim, marginBottom: 14,
+           }}>No KYC · No Accounts · No Limits</div>
+
+           <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 6, marginBottom: 16 }}>
+             {benefits.map(b => (
+               <li key={b.t} style={{ display: 'flex', alignItems: 'center', gap: 7, fontSize: 12.5, fontWeight: 600, color: P.dim, fontFamily: 'Syne, sans-serif' }}>
+                 <span style={{
+                   width: 15, height: 15, borderRadius: '50%', display: 'grid', placeItems: 'center',
+                   fontSize: 8, fontWeight: 900, flexShrink: 0,
+                   background: b.c + '2e', color: b.c, border: '1px solid ' + b.c + '59',
+                 }}>✓</span>
+                 {b.t}
+               </li>
+             ))}
+           </ul>
+
+           <button
+             className="nx-hero-cta"
+             onClick={() => go('swap')}
+             style={{
+               display: 'inline-flex', alignItems: 'center', gap: 6, padding: '11px 22px',
+               border: 0, borderRadius: 100, color: '#000', fontFamily: "'Syne', sans-serif",
+               fontWeight: 800, fontSize: 13, cursor: 'pointer',
+               background: `linear-gradient(90deg, ${P.cyan}, ${P.pink}, ${P.magenta})`,
+               backgroundSize: '200% 100%', animation: 'nxHueShift 4s linear infinite',
+               boxShadow: '0 6px 20px -6px rgba(196,53,154,0.55)',
+             }}
+           >Start Trading →</button>
+         </div>
+
+         {/* RIGHT — living orb with cycling benefit */}
+         <div style={{ flex: '0 0 116px', width: 116, position: 'relative', overflow: 'hidden', display: 'grid', placeItems: 'center' }}>
+           <div style={{
+             position: 'absolute', width: 96, height: 96, borderRadius: '50%',
+             background: `radial-gradient(circle at 35% 30%, rgba(0,229,255,0.55), rgba(196,53,154,0.35) 55%, transparent 72%)`,
+             filter: 'blur(2px)', animation: 'nxOrbPulse 3.6s ease-in-out infinite',
+           }}>
+             <div style={{
+               position: 'absolute', inset: -8, borderRadius: '50%',
+               border: '1px solid rgba(0,229,255,0.25)', animation: 'nxOrbSpin 9s linear infinite',
+             }} />
+           </div>
+           <div style={{ position: 'relative', zIndex: 2, width: '100%', height: 96 }}>
+             {cycleItems.map((it, i) => (
+               <span key={i} style={{
+                 position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+                 alignItems: 'center', justifyContent: 'center', textAlign: 'center',
+                 opacity: 0, animation: 'nxOcCycle 12s linear infinite', animationDelay: `${i * 3}s`,
+                 fontFamily: "'JetBrains Mono', monospace", fontSize: 9, fontWeight: 700,
+                 letterSpacing: '0.08em', textTransform: 'uppercase', color: P.dim, lineHeight: 1.35,
+               }}>
+                 <span style={{ fontSize: 18 }}>{it.ic}</span>
+                 <b style={{
+                   fontFamily: "'Syne', sans-serif", fontSize: 13,
+                   background: `linear-gradient(90deg, ${P.cyan}, ${P.magenta})`,
+                   WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent',
+                 }}>{it.b}</b>
+                 {it.l}
+               </span>
+             ))}
+           </div>
+         </div>
+       </div>
+     </div>
+
+     {/* MINI STATS */}
+     <div style={{
+       display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 1, marginTop: 16,
+       background: P.line, border: '1px solid ' + P.line, borderRadius: 16, overflow: 'hidden',
+     }}>
+       {stats.map(s => (
+         <div key={s.l} style={{ padding: '13px 6px', textAlign: 'center', background: 'rgba(0,0,0,0.4)' }}>
+           <div style={{ fontWeight: 800, fontSize: 15, color: P.cyan, fontFamily: 'Syne, sans-serif' }}>{s.v}</div>
+           <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 8, color: P.faint, letterSpacing: '0.1em', textTransform: 'uppercase', marginTop: 3 }}>{s.l}</div>
+         </div>
+       ))}
+     </div>
+
+     {/* SWAP TITLE */}
+     <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '18px 4px 4px' }}>
+       <div style={{ fontFamily: "'Syne', sans-serif", fontWeight: 800, fontSize: 18, color: P.text }}>Solana Swap</div>
+       <div style={{
+         display: 'flex', alignItems: 'center', gap: 6, fontFamily: "'JetBrains Mono', monospace",
+         fontSize: 10, fontWeight: 700, color: P.cyan, border: '1px solid ' + P.line2,
+         borderRadius: 100, padding: '5px 11px',
+       }}>
+         <span style={{ width: 5, height: 5, borderRadius: '50%', background: P.cyan, boxShadow: `0 0 8px ${P.cyan}` }} />LIVE
+       </div>
+     </div>
+
+   </div>
+ );
+}
 
 // =====================================================================
 // Inline sanctions screening — Chainalysis free public API. Fail-open
@@ -664,7 +883,7 @@ function AppInner() {
        </div>
      </header>
      <main style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '24px 16px 100px', width: '100%' }}>
-       {tab === 'swap'       && <SwapWidget       {...sharedProps} />}
+       {tab === 'swap'       && <><SwapHero onStartTrading={switchTab} /><SwapWidget {...sharedProps} /></>}
        {tab === 'bridge'     && <CrossChainSwap   onConnectWallet={openWallet} />}
        {tab === 'soltobtc'   && (
          SOLTOBTC_ALLOWLIST.has(wallet.walletAddress)
