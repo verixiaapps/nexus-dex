@@ -260,6 +260,36 @@ swap mnde for pnut solana
 swap mnde for popcat solana
 swap mnde for pyth solana
 swap mnde for ray solana
+swap mnde for render solana
+swap mnde for sol solana
+swap mnde for tnsr solana
+swap mnde for w solana
+swap mnde for wen solana
+swap mnde for wif solana
+swap mnde on solana
+swap mnde to act
+swap mnde to ai16z
+swap mnde to bonk
+swap mnde to cloud
+swap mnde to drift
+swap mnde to fartcoin
+swap mnde to goat
+swap mnde to grass
+swap mnde to hnt
+swap mnde to io
+swap mnde to jitosol
+swap mnde to jto
+swap mnde to jup
+swap mnde to kmno
+swap mnde to mew
+swap mnde to msol
+swap mnde to pengu
+swap mnde to pnut
+swap mnde to popcat
+swap mnde to pyth
+swap mnde to ray
+swap mnde to render
+swap mnde to sol
 swap stablecoin bridge
 swap stablecoins cross chain
 swap usdc cross chain
