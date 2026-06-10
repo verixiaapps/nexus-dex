@@ -200,6 +200,36 @@ swap mew for msol solana
 swap mew for pengu solana
 swap mew for pnut solana
 swap mew for popcat solana
+swap mew for pyth solana
+swap mew for ray solana
+swap mew for render solana
+swap mew for sol solana
+swap mew for tnsr solana
+swap mew for w solana
+swap mew for wen solana
+swap mew for wif solana
+swap mew on solana
+swap mew to act
+swap mew to ai16z
+swap mew to bonk
+swap mew to cloud
+swap mew to drift
+swap mew to fartcoin
+swap mew to goat
+swap mew to grass
+swap mew to hnt
+swap mew to io
+swap mew to jitosol
+swap mew to jto
+swap mew to jup
+swap mew to kmno
+swap mew to mnde
+swap mew to msol
+swap mew to pengu
+swap mew to pnut
+swap mew to popcat
+swap mew to pyth
+swap mew to ray
 swap stablecoin bridge
 swap stablecoins cross chain
 swap usdc cross chain
