@@ -1,4 +1,3 @@
-swap usdc cross chain
 swap usdt cross chain
 swap stablecoin bridge
 cross chain stablecoin exchange

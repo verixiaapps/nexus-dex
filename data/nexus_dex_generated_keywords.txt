@@ -18,3 +18,4 @@ bridge usdt to polygon
 bridge xrp to optimism
 bridge xrp to polygon
 swap stablecoins cross chain
+swap usdc cross chain
