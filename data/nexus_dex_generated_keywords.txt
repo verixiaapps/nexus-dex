@@ -590,6 +590,26 @@ swap ray for grass solana
 swap ray for hnt solana
 swap ray for io solana
 swap ray for jitosol solana
+swap ray for jto solana
+swap ray for jup solana
+swap ray for kmno solana
+swap ray for mew solana
+swap ray for mnde solana
+swap ray for msol solana
+swap ray for pengu solana
+swap ray for pnut solana
+swap ray for popcat solana
+swap ray for pyth solana
+swap ray for render solana
+swap ray for sol solana
+swap ray for tnsr solana
+swap ray for w solana
+swap ray for wen solana
+swap ray for wif solana
+swap ray on solana
+swap ray to act
+swap ray to ai16z
+swap ray to bonk
 swap stablecoin bridge
 swap stablecoins cross chain
 swap usdc cross chain
