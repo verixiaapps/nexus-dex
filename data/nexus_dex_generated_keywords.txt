@@ -611,6 +611,7 @@ swap ray to act
 swap ray to ai16z
 swap ray to bonk
 swap ray to cloud
+swap ray to drift
 swap stablecoin bridge
 swap stablecoins cross chain
 swap usdc cross chain
