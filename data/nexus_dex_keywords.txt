@@ -123,36 +123,6 @@ cheaper alternative to bullx
 cheaper alternative to dexscreener
 cheaper alternative to gmgn
 cheaper alternative to photon
-swap pengu to sol solana
-swap pengu to tnsr
-swap pengu to usdc solana
-swap pengu to usdt solana
-swap pengu to w
-swap pengu to wen
-swap pnut for act solana
-swap pnut for ai16z solana
-swap pnut for bonk solana
-swap pnut for cloud solana
-swap pnut for drift solana
-swap pnut for fartcoin solana
-swap pnut for goat solana
-swap pnut for grass solana
-swap pnut for hnt solana
-swap pnut for io solana
-swap pnut for jitosol solana
-swap pnut for jto solana
-swap pnut for jup solana
-swap pnut for kmno solana
-swap pnut for mew solana
-swap pnut for mnde solana
-swap pnut for msol solana
-swap pnut for pengu solana
-swap pnut for popcat solana
-swap pnut for pyth solana
-swap pnut for ray solana
-swap pnut for render solana
-swap pnut for sol solana
-swap pnut for tnsr solana
 swap pnut for w solana
 swap pnut for wen solana
 swap pnut for wif solana
