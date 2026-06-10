@@ -123,7 +123,6 @@ cheaper alternative to bullx
 cheaper alternative to dexscreener
 cheaper alternative to gmgn
 cheaper alternative to photon
-swap ray to cloud
 swap ray to drift
 swap ray to fartcoin
 swap ray to goat

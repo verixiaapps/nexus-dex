@@ -610,6 +610,7 @@ swap ray on solana
 swap ray to act
 swap ray to ai16z
 swap ray to bonk
+swap ray to cloud
 swap stablecoin bridge
 swap stablecoins cross chain
 swap usdc cross chain
