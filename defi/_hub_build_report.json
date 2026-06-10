@@ -1,7 +1,7 @@
 {
-  "keywords_loaded": 121,
+  "keywords_loaded": 621,
   "hubs_built": 11,
-  "validation_warnings": 7,
+  "validation_warnings": 6,
   "validation_details": [
     {
       "hub_slug": "live-signals",
@@ -13,14 +13,6 @@
     },
     {
       "hub_slug": "brand-tokens",
-      "matched_keywords": 0,
-      "linked_pages": 0,
-      "errors": [
-        "no linked child pages"
-      ]
-    },
-    {
-      "hub_slug": "solana-bridges",
       "matched_keywords": 0,
       "linked_pages": 0,
       "errors": [
