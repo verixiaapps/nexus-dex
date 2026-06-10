@@ -46,6 +46,7 @@ try {
     themeMode: 'dark',
     themeVariables: { '--w3m-accent': '#00b8d4' },
     features: { analytics: true, email: false, socials: false },
+    featuredWalletIds: ['a797aa35c0fadbfc1a53e7f675162ed5226968b44a19ee3d24385c64d1d3c393'],
   });
 
   const subscribers = new Set();
@@ -66,8 +67,6 @@ try {
     catch (e) { return null; }
   }
 
-  // Feature-detect subscription method. AppKit 1.8.x with Solana adapter
-  // exposes subscribeAccount; subscribeProvider exists only on some adapters.
   if (typeof modal.subscribeAccount === 'function') {
     modal.subscribeAccount((s) => {
       const addr = (s && s.address) || null;
