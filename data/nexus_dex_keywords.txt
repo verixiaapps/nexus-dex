@@ -6,25 +6,8 @@ cross chain token routing
 cross chain liquidity routing
 cross chain defi platform
 private crypto exchange
-fastest usdc swap
-fastest usdt swap
-fastest eth swap
-fastest btc swap
-fastest xrp swap
-fastest ada swap
-fastest ton swap
-fastest near swap
-fastest kaspa swap
-fastest link swap
-swap any token to any token
-bridge any token to any chain
 cross chain token converter
 multi chain token exchange
-universal crypto swap
-universal crypto bridge
-global crypto swap
-global token exchange
-global defi exchange
 worldwide crypto exchange
 ai16z exchange
 pyth exchange
@@ -140,19 +123,6 @@ cheaper alternative to bullx
 cheaper alternative to dexscreener
 cheaper alternative to gmgn
 cheaper alternative to photon
-solana trading
-swap jup for wen solana
-swap jup for wif solana
-swap jup on solana
-swap jup to act
-swap jup to ai16z
-swap jup to bonk
-swap jup to cloud
-swap jup to drift
-swap jup to fartcoin
-swap jup to goat
-swap jup to grass
-swap jup to hnt
 swap jup to io
 swap jup to jitosol
 swap jup to jto

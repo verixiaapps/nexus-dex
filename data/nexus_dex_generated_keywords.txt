@@ -16,6 +16,7 @@ best solana meme coin trading
 best stablecoin bridge
 bridge ada to optimism
 bridge ada to polygon
+bridge any token to any chain
 bridge btc to optimism
 bridge btc to polygon
 bridge eth to optimism
@@ -44,6 +45,19 @@ cross chain stablecoin swap
 cross chain swap aggregator
 cross chain token trading
 fast stablecoin bridge
+fastest ada swap
+fastest btc swap
+fastest eth swap
+fastest kaspa swap
+fastest link swap
+fastest near swap
+fastest ton swap
+fastest usdc swap
+fastest usdt swap
+fastest xrp swap
+global crypto swap
+global defi exchange
+global token exchange
 lowest fee ada swap
 lowest fee btc swap
 lowest fee eth swap
@@ -63,13 +77,27 @@ solana meme coin exchange
 solana meme coin platform
 solana meme coin swap
 solana meme coin trading
+solana trading
 stablecoin liquidity bridge
+swap any token to any token
 swap crypto without account
 swap crypto without kyc
 swap crypto without limits
 swap crypto without login
 swap crypto without registration
 swap crypto without restrictions
+swap jup for wen solana
+swap jup for wif solana
+swap jup on solana
+swap jup to act
+swap jup to ai16z
+swap jup to bonk
+swap jup to cloud
+swap jup to drift
+swap jup to fartcoin
+swap jup to goat
+swap jup to grass
+swap jup to hnt
 swap meme coins cross chain
 swap meme coins instantly
 swap stablecoin bridge
@@ -77,5 +105,7 @@ swap stablecoins cross chain
 swap usdc cross chain
 swap usdt cross chain
 trade meme coins instantly
+universal crypto bridge
+universal crypto swap
 wallet based crypto exchange
 wallet connect swap
