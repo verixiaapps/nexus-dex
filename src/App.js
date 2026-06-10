@@ -30,6 +30,9 @@ const GLOBAL_STYLES = `html,body{ margin:0;padding:0;width:100%; min-height:100v
 @keyframes nxOcCycle { 0%{opacity:0; transform:translateY(8px) scale(.95);} 4%{opacity:1; transform:translateY(0) scale(1);} 21%{opacity:1; transform:translateY(0) scale(1);} 25%{opacity:0; transform:translateY(-8px) scale(.95);} 100%{opacity:0;} }
 .nx-hero-cta:active { transform: scale(.97); }
 .nx-eco a:hover { border-color: rgba(0,180,210,0.28); transform: translateY(-2px); }
+/* ── Nexus bridge hero ── */
+@keyframes nxHopMove { 0%{ left:-4px; opacity:0; } 12%{opacity:1;} 88%{opacity:1;} 100%{ left:100%; opacity:0; } }
+@keyframes nxDestCycle { 0%{opacity:0; transform:scale(.8);} 3%{opacity:1; transform:scale(1);} 12%{opacity:1; transform:scale(1);} 15%{opacity:0; transform:scale(.8);} 100%{opacity:0;} }
 `;
 
 // =====================================================================
@@ -236,6 +239,221 @@ function SwapHero({ onStartTrading }) {
        }}>
          <span style={{ width: 5, height: 5, borderRadius: '50%', background: P.cyan, boxShadow: `0 0 8px ${P.cyan}` }} />LIVE
        </div>
+     </div>
+
+   </div>
+ );
+}
+
+// =====================================================================
+// BridgeHero — compact "ecosystem" hero shown above the bridge widget.
+// Same design family as SwapHero but distinct: animated route particles,
+// a rotating destination chain, blue/violet accent, and a cycling orb.
+// Renders only on the bridge tab. Does not touch CrossChainSwap.
+// =====================================================================
+function BridgeHero({ onSwitchTab }) {
+ const P = {
+   cyan: '#00b8d4', magenta: '#c4359a', violet: '#7a3dd4', blue: '#4f7dff',
+   gold: '#d4a533', green: '#3dd494', pink: '#c66aa8',
+   text: '#e8e0f5', dim: '#9b8fc0', faint: '#564670',
+   line: 'rgba(120,80,220,0.12)', line2: 'rgba(80,125,255,0.30)',
+ };
+
+ const eco = [
+   { ic: '⇅',  lbl: 'Swap',       tab: 'swap' },
+   { ic: '🌉', lbl: 'Bridge',     tab: 'bridge', active: true },
+   { ic: '₿',  lbl: 'SOL→BTC',    tab: 'soltobtc' },
+   { ic: '✨', lbl: 'Wonderland', tab: 'wonderland' },
+   { ic: '📈', lbl: 'Markets',    tab: 'markets' },
+   { ic: '🎯', lbl: 'Flipsy',     tab: 'flipsy' },
+   { ic: '▦',  lbl: 'Wallet',     tab: 'portfolio' },
+ ];
+
+ const benefits = [
+   { t: 'Bridge Across 71 Chains', c: P.blue },
+   { t: 'Solana → Ethereum',       c: '#8aa0ff' },
+   { t: 'Solana → Base',           c: '#5b8bff' },
+   { t: 'Solana → Arbitrum',       c: '#56b6f5' },
+   { t: 'Self-Custody Always',     c: P.violet },
+ ];
+
+ const stats = [
+   { v: '71',     l: 'Chains' },
+   { v: '15+',    l: 'Bridges' },
+   { v: '~2 min', l: 'Avg Time' },
+   { v: 'Native', l: 'Assets' },
+ ];
+
+ const orbItems = [
+   { ic: '🌉', t: '71 Chains' },
+   { ic: '⚡', t: 'Fast Routes' },
+   { ic: '🔒', t: 'Self-Custody' },
+ ];
+
+ // rotating destination node options (chip label + colors)
+ const dests = [
+   { s: 'A', bg: 'rgba(40,160,240,0.16)',  bd: 'rgba(40,160,240,0.45)',  c: '#56b6f5' },
+   { s: 'P', bg: 'rgba(130,71,229,0.18)',  bd: 'rgba(130,71,229,0.5)',   c: '#a982ff' },
+   { s: '▲', bg: 'rgba(232,65,66,0.16)',   bd: 'rgba(232,65,66,0.5)',    c: '#f5736e' },
+   { s: '◇', bg: 'rgba(240,185,11,0.16)',  bd: 'rgba(240,185,11,0.5)',   c: '#f5c542' },
+   { s: 'O', bg: 'rgba(255,4,32,0.14)',    bd: 'rgba(255,4,32,0.45)',    c: '#ff6470' },
+   { s: '◆', bg: 'rgba(98,126,234,0.16)',  bd: 'rgba(98,126,234,0.45)',  c: '#8aa0ff' },
+   { s: 'B', bg: 'rgba(0,82,255,0.16)',    bd: 'rgba(0,82,255,0.45)',    c: '#5b8bff' },
+ ];
+
+ const go = (tab) => { if (onSwitchTab) onSwitchTab(tab); };
+
+ const chip = (label, bg, bd, color) => (
+   <div style={{
+     width: 34, height: 34, borderRadius: '50%', display: 'grid', placeItems: 'center',
+     fontSize: 15, fontWeight: 800, border: '1px solid ' + bd, background: bg, color,
+   }}>{label}</div>
+ );
+
+ const nlbl = (t) => (
+   <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 7.5, fontWeight: 700, letterSpacing: '0.04em', textTransform: 'uppercase', color: P.faint, whiteSpace: 'nowrap' }}>{t}</div>
+ );
+
+ const Track = ({ delay2, dur }) => (
+   <div style={{ flex: '1 1 auto', height: 2, position: 'relative', background: 'linear-gradient(90deg, rgba(120,120,180,0.28), rgba(120,120,180,0.12))', margin: '16px -2px 0' }}>
+     {[0, 1].map(i => (
+       <span key={i} style={{
+         position: 'absolute', top: -2.5, width: 7, height: 7, borderRadius: '50%',
+         background: P.cyan, boxShadow: `0 0 10px ${P.cyan}`,
+         animation: `nxHopMove ${dur}s linear infinite`, animationDelay: i ? `${delay2}s` : '0s',
+       }} />
+     ))}
+   </div>
+ );
+
+ return (
+   <div style={{ maxWidth: 480, margin: '0 auto 4px', width: '100%' }}>
+
+     {/* ECOSYSTEM STRIP */}
+     <div className="nx-eco hide-scrollbar" style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '0 0 4px' }}>
+       {eco.map(e => (
+         <button key={e.lbl} onClick={() => go(e.tab)} style={{
+           flex: '0 0 auto', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 5,
+           minWidth: 66, padding: '11px 8px', borderRadius: 14, cursor: 'pointer',
+           border: '1px solid ' + (e.active ? P.line2 : P.line),
+           background: e.active ? 'linear-gradient(135deg, rgba(79,125,255,0.12), rgba(122,61,212,0.10))' : 'rgba(255,255,255,0.02)',
+           backdropFilter: 'blur(8px)', WebkitBackdropFilter: 'blur(8px)',
+           transition: 'border-color .15s, transform .12s', fontFamily: 'Syne, sans-serif',
+         }}>
+           <span style={{ fontSize: 18 }}>{e.ic}</span>
+           <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', whiteSpace: 'nowrap', color: e.active ? P.blue : P.dim }}>{e.lbl}</span>
+         </button>
+       ))}
+     </div>
+
+     {/* 71 CHAINS · LIVE pill */}
+     <div style={{ display: 'inline-flex', alignItems: 'center', gap: 7, margin: '14px 0 10px', padding: '5px 12px', borderRadius: 100, background: 'rgba(61,212,148,0.08)', border: '1px solid rgba(61,212,148,0.30)' }}>
+       <span style={{ width: 6, height: 6, borderRadius: '50%', background: P.green, boxShadow: `0 0 8px ${P.green}`, animation: 'nxOrbPulse 1.6s ease-in-out infinite' }} />
+       <span style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: '0.12em', color: P.green }}>71 CHAINS · LIVE</span>
+     </div>
+
+     {/* HERO CARD */}
+     <div style={{
+       position: 'relative', borderRadius: 22, overflow: 'hidden', padding: '22px 20px 20px',
+       background: 'linear-gradient(135deg, rgba(8,10,34,0.96), rgba(14,8,40,0.96))',
+       border: '1px solid ' + P.line2,
+       boxShadow: '0 0 0 1px rgba(79,125,255,0.06), 0 16px 48px -16px rgba(122,61,212,0.45)',
+     }}>
+       <div style={{
+         position: 'absolute', inset: -1, borderRadius: 22, padding: 1,
+         background: `conic-gradient(from 90deg, ${P.blue}, ${P.violet}, ${P.cyan}, ${P.blue})`,
+         WebkitMask: 'linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0)',
+         WebkitMaskComposite: 'xor', maskComposite: 'exclude',
+         opacity: 0.22, animation: 'nxHeroSpin 11s linear infinite', pointerEvents: 'none',
+       }} />
+       <div style={{ position: 'relative', zIndex: 2 }}>
+
+         {/* top: eyebrow + headline + cycling orb */}
+         <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 12 }}>
+           <div>
+             <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontFamily: "'JetBrains Mono', monospace", fontSize: 9, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: P.blue, border: '1px solid ' + P.line2, borderRadius: 100, padding: '4px 9px', marginBottom: 14, background: 'rgba(79,125,255,0.06)' }}>🌉 Powered by LI.FI</div>
+             <h1 style={{ fontFamily: "'Syne', sans-serif", fontWeight: 900, fontSize: 'clamp(26px,8vw,34px)', lineHeight: 1.0, letterSpacing: '-0.03em', margin: 0, marginBottom: 10, color: P.text }}>
+               Cross Chains.<br /><span style={{ fontStyle: 'italic', fontWeight: 500, background: `linear-gradient(120deg, ${P.cyan}, ${P.violet})`, WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>Instantly.</span>
+             </h1>
+           </div>
+
+           {/* cycling orb */}
+           <div style={{ flex: '0 0 84px', width: 84, height: 84, position: 'relative', display: 'grid', placeItems: 'center', marginTop: -4 }}>
+             <div style={{ position: 'absolute', width: 74, height: 74, borderRadius: '50%', background: `radial-gradient(circle at 35% 30%, rgba(79,125,255,0.55), rgba(122,61,212,0.35) 55%, transparent 72%)`, filter: 'blur(2px)', animation: 'nxOrbPulse 3.6s ease-in-out infinite' }}>
+               <div style={{ position: 'absolute', inset: -7, borderRadius: '50%', border: '1px solid rgba(79,125,255,0.3)', animation: 'nxOrbSpin 9s linear infinite' }} />
+             </div>
+             <div style={{ position: 'relative', zIndex: 2, width: '100%', height: 74 }}>
+               {orbItems.map((it, i) => (
+                 <span key={i} style={{
+                   position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+                   alignItems: 'center', justifyContent: 'center', textAlign: 'center', gap: 2,
+                   opacity: 0, animation: 'nxOcCycle 9s linear infinite', animationDelay: `${i * 3}s`,
+                   fontFamily: "'JetBrains Mono', monospace", fontSize: 8, fontWeight: 700,
+                   letterSpacing: '0.06em', textTransform: 'uppercase', color: P.dim,
+                 }}>
+                   <span style={{ fontSize: 16 }}>{it.ic}</span>{it.t}
+                 </span>
+               ))}
+             </div>
+           </div>
+         </div>
+
+         <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: P.dim, marginBottom: 16 }}>No KYC · No Accounts · No Limits</div>
+
+         {/* chain-hop strip */}
+         <div style={{ display: 'flex', alignItems: 'flex-start', marginBottom: 18, padding: '12px 14px', borderRadius: 14, background: 'rgba(0,0,0,0.35)', border: '1px solid ' + P.line, overflow: 'hidden' }}>
+           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, flex: '0 0 auto', width: 52, zIndex: 2 }}>
+             {chip('◎', 'rgba(61,212,148,0.16)', 'rgba(61,212,148,0.45)', P.green)}{nlbl('Solana')}
+           </div>
+           <Track delay2={1.1} dur={2.2} />
+           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, flex: '0 0 auto', width: 52, zIndex: 2 }}>
+             {chip('◆', 'rgba(98,126,234,0.16)', 'rgba(98,126,234,0.45)', '#8aa0ff')}{nlbl('Ethereum')}
+           </div>
+           <Track delay2={1.2} dur={2.4} />
+           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, flex: '0 0 auto', width: 52, zIndex: 2 }}>
+             {chip('B', 'rgba(0,82,255,0.16)', 'rgba(0,82,255,0.45)', '#5b8bff')}{nlbl('Base')}
+           </div>
+           <Track delay2={1.0} dur={2.0} />
+           {/* rotating destination */}
+           <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4, flex: '0 0 auto', width: 52, zIndex: 2 }}>
+             <div style={{ position: 'relative', width: 34, height: 34 }}>
+               {dests.map((d, i) => (
+                 <div key={i} style={{ position: 'absolute', inset: 0, opacity: 0, animation: 'nxDestCycle 14s linear infinite', animationDelay: `${i * 2}s` }}>
+                   {chip(d.s, d.bg, d.bd, d.c)}
+                 </div>
+               ))}
+             </div>
+             {nlbl('+71 More')}
+           </div>
+         </div>
+
+         {/* benefits */}
+         <ul style={{ listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 7, marginBottom: 18 }}>
+           {benefits.map(b => (
+             <li key={b.t} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, fontWeight: 600, color: P.dim, fontFamily: 'Syne, sans-serif' }}>
+               <span style={{ width: 16, height: 16, borderRadius: 5, display: 'grid', placeItems: 'center', fontSize: 9, fontWeight: 900, flexShrink: 0, background: b.c + '2e', color: b.c, border: '1px solid ' + b.c + '66' }}>✓</span>
+               {b.t}
+             </li>
+           ))}
+         </ul>
+
+         <button className="nx-hero-cta" onClick={() => go('bridge')} style={{
+           display: 'inline-flex', alignItems: 'center', gap: 7, padding: '13px 26px', border: 0,
+           borderRadius: 14, color: '#fff', fontFamily: "'Syne', sans-serif", fontWeight: 800, fontSize: 14, cursor: 'pointer',
+           background: `linear-gradient(120deg, ${P.blue}, ${P.violet})`, backgroundSize: '200% 100%',
+           animation: 'nxHueShift 4s linear infinite', boxShadow: '0 8px 24px -8px rgba(122,61,212,0.6)',
+         }}>Start Bridging →</button>
+       </div>
+     </div>
+
+     {/* STATS */}
+     <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4,1fr)', gap: 1, marginTop: 14, background: P.line, border: '1px solid ' + P.line, borderRadius: 16, overflow: 'hidden' }}>
+       {stats.map(s => (
+         <div key={s.l} style={{ padding: '13px 6px', textAlign: 'center', background: 'rgba(0,0,0,0.4)' }}>
+           <div style={{ fontWeight: 800, fontSize: 15, color: P.blue, fontFamily: 'Syne, sans-serif' }}>{s.v}</div>
+           <div style={{ fontFamily: "'JetBrains Mono', monospace", fontSize: 8, color: P.faint, letterSpacing: '0.1em', textTransform: 'uppercase', marginTop: 3 }}>{s.l}</div>
+         </div>
+       ))}
      </div>
 
    </div>
@@ -884,7 +1102,7 @@ function AppInner() {
      </header>
      <main style={{ position: 'relative', zIndex: 1, maxWidth: 1100, margin: '0 auto', padding: '24px 16px 100px', width: '100%' }}>
        {tab === 'swap'       && <><SwapHero onStartTrading={switchTab} /><SwapWidget {...sharedProps} /></>}
-       {tab === 'bridge'     && <CrossChainSwap   onConnectWallet={openWallet} />}
+       {tab === 'bridge'     && <><BridgeHero onSwitchTab={switchTab} /><CrossChainSwap onConnectWallet={openWallet} /></>}
        {tab === 'soltobtc'   && (
          SOLTOBTC_ALLOWLIST.has(wallet.walletAddress)
            ? <SolToBtc onConnectWallet={openWallet} />
