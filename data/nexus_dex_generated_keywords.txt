@@ -500,6 +500,36 @@ swap popcat for pengu solana
 swap popcat for pnut solana
 swap popcat for pyth solana
 swap popcat for ray solana
+swap popcat for render solana
+swap popcat for sol solana
+swap popcat for tnsr solana
+swap popcat for w solana
+swap popcat for wen solana
+swap popcat for wif solana
+swap popcat on solana
+swap popcat to act
+swap popcat to cloud
+swap popcat to goat
+swap popcat to grass
+swap popcat to hnt
+swap popcat to io
+swap popcat to jitosol
+swap popcat to jto
+swap popcat to jup
+swap popcat to kmno
+swap popcat to mew
+swap popcat to mnde
+swap popcat to msol
+swap popcat to pnut
+swap popcat to ray
+swap popcat to sol
+swap popcat to sol solana
+swap popcat to tnsr
+swap popcat to usdc solana
+swap popcat to usdt solana
+swap popcat to w
+swap popcat to wen
+swap pyth for act solana
 swap stablecoin bridge
 swap stablecoins cross chain
 swap usdc cross chain
