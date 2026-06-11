@@ -1,930 +1,541 @@
-/**
- * NEXUS DEX — Cross-Chain (LI.FI, atomic single-tx, fee in SOL)
- *
- * Atomic flow:
- *   1. LI.FI /quote with FULL amount — fee is taken in SOL separately,
- *      so the user bridges 100% of their input token.
- *   2. Deserialize LI.FI's bridge tx, decompile its message (with ALTs).
- *   3. Prepend a SystemProgram.transfer for 5% of fromAmountUSD worth of SOL
- *      to FEE_WALLET. 
- *   4. Recompile to a v0 message with the same ALTs and a fresh blockhash.
- *   5. Simulate ONCE on the exact bytes the user will sign.
- *   6. wallet.signTransaction — one popup, wallet simulates the full tx,
- *      Blowfish sees the complete net effect.
- *   7. Send, confirm with Solscan fallback.
- *
- * Fee unit: ALWAYS SOL. User needs SOL beyond what they're bridging to
- * cover the platform fee. UI surfaces this clearly when input isn't SOL.
- *
- * If the bridge tx reverts, the fee transfer reverts with it — atomic.
- */
+// SwapWidget.jsx — atomic single-transaction Jupiter swap.
+//
+// CHANGES (visual only — all trading/RPC logic preserved exactly):
+//   • CSS combined inline as SW_CSS + useSwCSS injector (no SwapWidget.css)
+//   • Theme switched from mint/cyan to cyan #00e5ff + pink #ff4d9d
+//     so the widget feels native under the homepage SwapHero.
+//   • Fonts normalized to Syne + JetBrains Mono (matches App.jsx).
+//   • All Jupiter routing, fee logic, RPC pool, simulate/sign/send flow
+//     UNCHANGED. Same sw- class prefix so any external references hold.
 
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
-import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import {
+  Connection,
   PublicKey,
-  LAMPORTS_PER_SOL,
   VersionedTransaction,
   TransactionMessage,
   SystemProgram,
   AddressLookupTableAccount,
 } from '@solana/web3.js';
-import './CrossChain.css';
+import {
+  getAssociatedTokenAddressSync,
+  createAssociatedTokenAccountIdempotentInstruction,
+  createTransferCheckedInstruction,
+  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
+import { useWallet } from '@solana/wallet-adapter-react';
 
-/* ─── CONSTANTS ─── */
+// =====================================================================
+// INLINE CSS — Syne + JetBrains Mono · cyan + pink to match SwapHero
+// =====================================================================
+const SW_CSS = `
+.sw-root{
+  --sw-bg:#03060f; --sw-bg-2:#080d1a;
+  --sw-panel:#101015; --sw-panel-hi:#15151c; --sw-panel-deep:#1a1a22;
+  --sw-border:rgba(255,255,255,.07); --sw-border-hi:rgba(255,255,255,.14);
+  --sw-text:#f5fafe; --sw-text-dim:#9b8fc0; --sw-text-faint:#564670;
+  --sw-cyan:#00e5ff; --sw-cyan-hi:#7df6ff;
+  --sw-pink:#ff4d9d; --sw-pink-hi:#ffa3ce;
+  --sw-green:#00ffa3; --sw-red:#ff3b6b; --sw-amber:#f59e0b;
+  --sw-cyan-line:rgba(0,229,255,.32); --sw-pink-line:rgba(255,77,157,.32);
+  --sw-cyan-bg:rgba(0,229,255,.06); --sw-cyan-bg2:rgba(0,229,255,.18);
+  --sw-pink-bg:rgba(255,77,157,.06); --sw-pink-bg2:rgba(255,77,157,.18);
+  background:transparent;
+  color:var(--sw-text);
+  font-family:'Syne',system-ui,-apple-system,sans-serif;
+}
+.sw-root,.sw-root *{box-sizing:border-box}
 
+.sw-container{max-width:480px;margin:0 auto;padding:0}
+
+/* HEADER */
+.sw-header{display:flex;justify-content:space-between;align-items:center;padding:0 4px 12px;margin-top:-4px}
+.sw-title{font-family:'Syne',sans-serif;font-weight:800;font-size:20px;margin:0;letter-spacing:-.01em;color:var(--sw-text)}
+.sw-live-pill{display:flex;align-items:center;gap:6px;border:1px solid var(--sw-cyan-line);background:var(--sw-cyan-bg);color:var(--sw-cyan);font-family:'JetBrains Mono',monospace;font-size:10px;padding:5px 11px;border-radius:100px;font-weight:800;letter-spacing:.08em}
+.sw-live-dot{width:5px;height:5px;border-radius:50%;background:var(--sw-cyan);box-shadow:0 0 8px var(--sw-cyan);animation:swPulse 1.6s ease-in-out infinite}
+@keyframes swPulse{50%{opacity:.4}}
+@keyframes swSpin{to{transform:rotate(360deg)}}
+@keyframes swShimmer{0%{left:-110px}50%,100%{left:130%}}
+@keyframes swHueShift{to{background-position:200% 0}}
+@keyframes swFadeIn{from{opacity:0}to{opacity:1}}
+@keyframes swModalIn{from{opacity:0;transform:translateY(20px) scale(.95)}to{opacity:1;transform:translateY(0) scale(1)}}
+
+/* PANEL */
+.sw-panel{background:linear-gradient(180deg,var(--sw-panel-hi),var(--sw-panel));border:1.5px solid var(--sw-border);border-radius:22px;padding:14px;box-shadow:0 8px 32px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.03)}
+
+/* SWAP ROW */
+.sw-row{background:var(--sw-panel-hi);border:1.5px solid var(--sw-border);border-radius:14px;padding:14px;transition:border-color .15s,box-shadow .15s}
+.sw-row:focus-within{border-color:var(--sw-cyan-line);box-shadow:0 0 0 3px rgba(0,229,255,.08)}
+.sw-row+.sw-row{margin-top:0}
+.sw-row-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px}
+.sw-row-label{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--sw-text-dim);font-weight:800;letter-spacing:.12em;text-transform:uppercase}
+.sw-balance{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--sw-text-dim);font-weight:600;display:flex;align-items:center;gap:6px}
+.sw-balance b{color:var(--sw-text);font-weight:800}
+.sw-max-btn{background:var(--sw-cyan-bg);border:1px solid var(--sw-cyan-line);color:var(--sw-cyan);padding:3px 8px;border-radius:6px;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:800;cursor:pointer;letter-spacing:.1em;transition:all .15s}
+.sw-max-btn:hover{background:var(--sw-cyan-bg2);box-shadow:0 0 10px rgba(0,229,255,.2)}
+.sw-row-mid{display:flex;align-items:center;gap:10px}
+
+/* TOKEN BUTTON */
+.sw-token-btn{display:flex;align-items:center;gap:7px;padding:9px 12px;background:linear-gradient(135deg,var(--sw-panel-deep),var(--sw-panel));border:1.5px solid var(--sw-border-hi);border-radius:999px;color:var(--sw-text);font-family:'Syne',sans-serif;font-size:13px;font-weight:800;cursor:pointer;transition:all .15s;flex-shrink:0;box-shadow:0 2px 8px rgba(0,0,0,.25),inset 0 -1px 0 rgba(0,0,0,.15)}
+.sw-token-btn:hover{border-color:var(--sw-cyan);box-shadow:0 2px 12px rgba(0,229,255,.15),inset 0 -1px 0 rgba(0,0,0,.15)}
+.sw-token-btn:active{transform:translateY(1px)}
+.sw-token-logo{width:20px;height:20px;border-radius:50%;box-shadow:0 0 0 2px rgba(255,255,255,.05);object-fit:cover;background:#1a1a22}
+
+/* AMOUNT INPUT */
+.sw-amount-input{flex:1;background:transparent;border:none;outline:none;color:var(--sw-text);font-family:'Syne',sans-serif;font-size:26px;text-align:right;font-weight:900;letter-spacing:-.02em;min-width:0;width:100%;font-variant-numeric:tabular-nums}
+.sw-amount-input::placeholder{color:var(--sw-text-faint);font-weight:700}
+
+/* FLIP */
+.sw-flip-wrap{display:flex;justify-content:center;margin:-6px 0;position:relative;z-index:2}
+.sw-flip-btn{background:linear-gradient(135deg,var(--sw-cyan),var(--sw-pink));border:3px solid var(--sw-panel);border-radius:12px;width:40px;height:40px;display:grid;place-items:center;cursor:pointer;color:#0a0a0c;transition:transform .25s cubic-bezier(0.2,1.3,0.4,1);box-shadow:0 4px 18px rgba(255,77,157,.35),inset 0 -2px 0 rgba(0,0,0,.15)}
+.sw-flip-btn:hover{transform:rotate(180deg)}
+.sw-flip-btn:active{transform:rotate(180deg) scale(.92)}
+
+/* DETAILS */
+.sw-details{margin-top:12px;padding:12px 14px;background:rgba(0,0,0,.30);border:1px solid var(--sw-border);border-radius:14px;font-family:'JetBrains Mono',monospace;font-size:11px}
+.sw-detail-row{display:flex;justify-content:space-between;padding:4px 0;font-weight:700;gap:8px}
+.sw-detail-row>span:first-child{color:var(--sw-text-dim);font-weight:600}
+.sw-detail-val{color:var(--sw-text);font-weight:800;font-variant-numeric:tabular-nums;text-align:right}
+.sw-impact-neutral{color:var(--sw-text-dim)}
+.sw-impact-good{color:var(--sw-green)}
+.sw-impact-warn{color:var(--sw-amber)}
+.sw-impact-bad{color:var(--sw-red)}
+
+/* BANNERS */
+.sw-banner{margin-top:12px;padding:12px 14px;border-radius:14px;font-size:13px;font-weight:600;border:1.5px solid;font-family:'Syne',sans-serif}
+.sw-banner-error{background:rgba(255,59,107,.08);border-color:rgba(255,59,107,.3);color:#ffa9bd}
+.sw-banner-success{background:rgba(0,255,163,.08);border-color:rgba(0,255,163,.3);color:#86efac}
+.sw-banner-pending{background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.3);color:#fcd34d}
+.sw-banner-link{color:#fff;text-decoration:underline;font-weight:800;font-family:'JetBrains Mono',monospace}
+
+/* PRIMARY CTA */
+.sw-primary-btn{width:100%;margin-top:14px;padding:18px 0;background:linear-gradient(90deg,var(--sw-cyan) 0%,#fff 50%,var(--sw-pink) 100%);background-size:300% 100%;animation:swHueShift 5s linear infinite;border:none;border-radius:14px;color:#03060f;font-family:'Syne',sans-serif;font-size:15px;font-weight:900;letter-spacing:.04em;cursor:pointer;position:relative;overflow:hidden;transition:all .15s cubic-bezier(0.2,1.2,0.4,1);box-shadow:0 10px 30px -8px rgba(255,77,157,.5),0 4px 14px rgba(0,229,255,.3),inset 0 2px 0 rgba(255,255,255,.4),inset 0 -2px 0 rgba(0,0,0,.15)}
+.sw-primary-btn::after{content:'';position:absolute;top:0;bottom:0;width:70px;left:-110px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent);animation:swShimmer 2.8s ease-in-out infinite;pointer-events:none}
+.sw-primary-btn:active:not(.sw-disabled){transform:translateY(3px)}
+.sw-primary-btn.sw-disabled{background:linear-gradient(135deg,#2a2a35,#1f1f28);color:var(--sw-text-faint);cursor:not-allowed;animation:none;box-shadow:0 4px 12px rgba(0,0,0,.3),inset 0 -2px 0 rgba(0,0,0,.2)}
+.sw-primary-btn.sw-disabled::after{display:none}
+
+/* FOOTER */
+.sw-footer{margin-top:14px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--sw-text-faint);text-align:center;font-weight:600;letter-spacing:.02em}
+.sw-footer b{color:var(--sw-cyan);font-weight:800}
+
+/* MODAL */
+.sw-modal-overlay{position:fixed;inset:0;background:rgba(3,6,15,.85);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);display:flex;align-items:flex-end;justify-content:center;padding:0;z-index:1000;animation:swFadeIn .2s}
+@media(min-width:640px){.sw-modal-overlay{align-items:center;padding:16px}}
+.sw-modal-card{width:100%;max-width:480px;max-height:85dvh;background:linear-gradient(180deg,var(--sw-panel-hi),var(--sw-panel));border:1.5px solid var(--sw-border-hi);border-top:1.5px solid var(--sw-cyan-line);border-radius:22px 22px 0 0;color:var(--sw-text);display:flex;flex-direction:column;box-shadow:0 -20px 60px rgba(0,0,0,.7);animation:swModalIn .3s cubic-bezier(0.2,1.2,0.4,1)}
+@media(min-width:640px){.sw-modal-card{border-radius:22px}}
+.sw-modal-head{padding:18px;border-bottom:1px solid var(--sw-border)}
+.sw-modal-head-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.sw-modal-title{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;margin:0;letter-spacing:-.01em;color:var(--sw-text)}
+.sw-icon-btn{background:rgba(255,255,255,.05);border:1px solid var(--sw-border);border-radius:10px;width:36px;height:36px;display:grid;place-items:center;cursor:pointer;color:var(--sw-text);transition:all .15s}
+.sw-icon-btn:hover{background:rgba(255,255,255,.1);transform:rotate(90deg)}
+.sw-modal-search{width:100%;padding:12px 14px;background:var(--sw-panel-deep);border:1.5px solid var(--sw-border);border-radius:12px;color:var(--sw-text);font-size:14px;outline:none;font-family:'Syne',sans-serif;font-weight:500;transition:border-color .15s}
+.sw-modal-search:focus{border-color:var(--sw-cyan);box-shadow:0 0 0 3px rgba(0,229,255,.1)}
+.sw-modal-search::placeholder{color:var(--sw-text-faint)}
+.sw-modal-list{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:8px;padding-bottom:calc(env(safe-area-inset-bottom) + 14px)}
+.sw-modal-msg{padding:18px;color:var(--sw-text-dim);text-align:center;font-weight:600;font-size:13px;font-family:'Syne',sans-serif}
+.sw-token-row{width:100%;display:flex;align-items:center;gap:12px;padding:10px 12px;background:transparent;border:1.5px solid transparent;border-radius:12px;cursor:pointer;color:var(--sw-text);text-align:left;font-family:'Syne',sans-serif;transition:all .15s}
+.sw-token-row:hover{background:var(--sw-panel-deep);border-color:var(--sw-border-hi)}
+.sw-token-row:active{transform:scale(.99)}
+.sw-token-row-logo{width:34px;height:34px;border-radius:50%;flex-shrink:0;box-shadow:0 0 0 2px rgba(255,255,255,.04);object-fit:cover;background:#1a1a22}
+.sw-token-row-placeholder{width:34px;height:34px;border-radius:50%;background:var(--sw-panel-deep);flex-shrink:0}
+.sw-token-row-info{flex:1;min-width:0}
+.sw-token-row-sym{font-family:'Syne',sans-serif;font-weight:800;font-size:15px;letter-spacing:-.01em;color:var(--sw-text)}
+.sw-token-row-name{font-size:12px;color:var(--sw-text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;margin-top:2px}
+.sw-token-row-bal{text-align:right;font-family:'JetBrains Mono',monospace;font-weight:800;font-size:13px;color:var(--sw-cyan);flex-shrink:0}
+`;
+
+function useSwCSS() {
+  useEffect(() => {
+    const id = 'nexus-sw-css';
+    if (document.getElementById(id)) return;
+    const el = document.createElement('style');
+    el.id = id;
+    el.textContent = SW_CSS;
+    document.head.appendChild(el);
+  }, []);
+}
+
+/* ─── CONFIG ──────────────────────────────────────────────────────── */
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS    = 500;
-const SLIPPAGE   = 0.05; // 5% — high enough that bridges almost always land
+const FEE_BPS    = 300;
+const SOL_MINT   = 'So11111111111111111111111111111111111111112';
+const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 
-const SOL_NATIVE      = '11111111111111111111111111111111';
-const WSOL_MINT       = 'So11111111111111111111111111111111111111112';
-const USDC_SOLANA     = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-const LIFI_SOLANA_ID  = 1151111081099710;
-const SOL_RESERVE     = 1_500_000;            // 0.0015 SOL kept for network fees
-const MIN_FEE_LAMPORTS = 1_000_000;            // 0.001 SOL fee floor (~$0.15)
-const QUOTE_DEBOUNCE  = 400;
+const PRIORITY_FEE_MICROLAMPORTS = 50_000;
+const SLIPPAGE_BPS = 500;
 
-/* ─── FORMATTERS ─── */
+const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
+const RPC_POOL = [
+  RUNTIME_CFG.rpc,
+  'https://solana-rpc.publicnode.com',
+  'https://solana.drpc.org',
+  'https://rpc.ankr.com/solana',
+  'https://api.mainnet-beta.solana.com',
+].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
 
-const trimZeros = v => String(v).replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '').replace(/\.$/, '');
-const decsForDisplay = n => {
-  const v = +n;
-  if (!Number.isFinite(v)) return 4;
-  if (v === 0)   return 2;
-  if (v < 1e-8)  return 12;
-  if (v < 1e-6)  return 10;
-  if (v < 0.01)  return 8;
-  if (v < 1)     return 6;
-  return 4;
-};
-const fmtTok = n => {
-  if (n == null || isNaN(n)) return '0';
-  const v = +n;
-  if (!Number.isFinite(v)) return '0';
-  if (v >= 1e9)   return trimZeros((v / 1e9).toFixed(2)) + 'B';
-  if (v >= 1e6)   return trimZeros((v / 1e6).toFixed(2)) + 'M';
-  if (v >= 1000)  return v.toLocaleString('en-US', { maximumFractionDigits: 2 });
-  return trimZeros(v.toFixed(decsForDisplay(v)));
-};
-const fmtInput = (n, dec = 9) => {
-  const v = +n;
-  if (!Number.isFinite(v) || v <= 0) return '';
-  const m = Math.min(Math.max(+dec || 6, 0), 12);
-  return trimZeros(v.toFixed(m));
-};
-const fmtUsd = (n, d = 2) => {
-  if (n == null || isNaN(n)) return '-';
-  const v = +n;
-  if (!Number.isFinite(v)) return '-';
-  if (v >= 1e9)  return '$' + trimZeros((v / 1e9).toFixed(2)) + 'B';
-  if (v >= 1e6)  return '$' + trimZeros((v / 1e6).toFixed(2)) + 'M';
-  if (v >= 1000) return '$' + v.toLocaleString('en-US', { maximumFractionDigits: d });
-  if (v >= 1)    return '$' + v.toFixed(d);
-  if (v > 0)     return '$' + trimZeros(v.toFixed(v < 1e-6 ? 10 : 8));
-  return '$0.00';
-};
-const toRaw = (s, dec) => {
-  if (!s || dec == null) return '0';
-  let v = String(s).trim().replace(/,/g, '.').replace(/^\+/, '');
-  if (!v || v.startsWith('-')) return '0';
-  if (/e/i.test(v)) {
-    const n = Number(v);
-    if (!Number.isFinite(n) || n < 0) return '0';
-    v = n.toFixed(Math.max(+dec || 0, 20));
-  }
-  const d = Math.floor(+dec);
-  if (!Number.isFinite(d) || d < 0 || d > 18) return '0';
-  const [w, f = ''] = v.split('.');
-  const sw = (w || '0').replace(/[^\d]/g, '').replace(/^0+(?=\d)/, '') || '0';
-  const ft = (f || '').replace(/[^\d]/g, '').slice(0, d);
-  const fp = (ft + '0'.repeat(d)).slice(0, d);
-  try { return (BigInt(sw) * (10n ** BigInt(d)) + BigInt(fp)).toString(); }
-  catch { return '0'; }
-};
-const maxSafeSol = lamports =>
-  lamports ? Math.max(0, lamports - SOL_RESERVE) / LAMPORTS_PER_SOL : 0;
+const BAL_COMMITMENT = 'processed';
 
-const isValidSolMint = s =>
-  !!s && s.length >= 32 && s.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
-
-const validateDest = (addr, chainType) => {
-  if (!addr || !addr.trim()) return 'Destination address required';
-  const a = addr.trim();
-  if (chainType === 'EVM') {
-    if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return 'Invalid EVM address';
-  } else if (chainType === 'SVM') {
-    if (!isValidSolMint(a)) return 'Invalid Solana address';
-  } else if (chainType === 'UTXO') {
-    if (!/^(bc1|[13])[a-zA-HJ-NP-Z0-9]{20,80}$/.test(a)) return 'Invalid Bitcoin address';
-  } else if (chainType === 'MVM') {
-    if (!/^0x[0-9a-fA-F]{64}$/.test(a)) return 'Invalid SUI address';
-  }
-  return null;
+const _connCache = new Map();
+const getConn = (url, commitment) => {
+  const key = url + '|' + commitment;
+  let c = _connCache.get(key);
+  if (!c) { c = new Connection(url, commitment); _connCache.set(key, c); }
+  return c;
 };
 
-const lifiFromToken = mint => (mint === WSOL_MINT ? SOL_NATIVE : mint);
-
-/* ─── ERRORS ─── */
-
-const friendlyError = err => {
-  const m = String(err?.message || err || '').toLowerCase();
-  if (m.includes('insufficient sol') || m.includes('not enough sol'))
-    return 'Not enough SOL to cover the platform fee and network fee.';
-  if (m.includes('insufficient') || m.includes('not enough'))
-    return 'Insufficient balance for this bridge.';
-  if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled'))
-    return 'Transaction cancelled.';
-  if (m.includes('blockhash') || m.includes('expired'))
-    return 'Transaction expired. Please try again.';
-  if (m.includes('slippage'))
-    return 'Price moved too much. Try again.';
-  if (m.includes('no route') || m.includes('no available') || m.includes('not found'))
-    return 'No bridge route available for this pair right now.';
-  if (m.includes('minimum') || m.includes('too small'))
-    return 'Amount is too small — bridge fees would exceed the swap.';
-  if (m.includes('429') || m.includes('rate limit'))
-    return 'Too many requests — please wait a moment.';
-  if (m.includes('timeout') || m.includes('timed out'))
-    return 'Network is slow — please try again.';
-  if (m.includes('account not') || m.includes('uninitialized'))
-    return 'Token account not ready. Try again in a moment.';
-  if (m.includes('too large') || m.includes('transaction too large'))
-    return 'Route is too complex to fit our fee in one transaction. Try a different token or amount.';
-  return err?.message || 'Bridge failed. Please try again.';
-};
-
-/* ─── CHAINS (live from LI.FI) ─── */
-
-let _chainsCache = null, _chainsLoading = null;
-const loadChains = () => {
-  if (_chainsCache)   return Promise.resolve(_chainsCache);
-  if (_chainsLoading) return _chainsLoading;
-  _chainsLoading = fetch('/api/lifi/chains')
-    .then(r => (r.ok ? r.json() : { chains: [] }))
-    .then(j => {
-      const list = Array.isArray(j?.chains) ? j.chains : (Array.isArray(j) ? j : []);
-      const out = {};
-      for (const c of list) {
-        out[String(c.id)] = {
-          id:       String(c.id),
-          key:      c.key || c.coin || String(c.id),
-          name:     c.name || ('Chain ' + c.id),
-          chainType: c.chainType || 'EVM',
-          logoURI:  c.logoURI || c.iconUrl || null,
-        };
-      }
-      _chainsCache = out;
-      _chainsLoading = null;
-      return out;
-    })
-    .catch(e => {
-      _chainsLoading = null;
-      _chainsCache = {
-        '1':     { id:'1',     name:'Ethereum',  chainType:'EVM' },
-        '56':    { id:'56',    name:'BNB Chain', chainType:'EVM' },
-        '137':   { id:'137',   name:'Polygon',   chainType:'EVM' },
-        '42161': { id:'42161', name:'Arbitrum',  chainType:'EVM' },
-        '10':    { id:'10',    name:'Optimism',  chainType:'EVM' },
-        '43114': { id:'43114', name:'Avalanche', chainType:'EVM' },
-        '8453':  { id:'8453',  name:'Base',      chainType:'EVM' },
-        '59144': { id:'59144', name:'Linea',     chainType:'EVM' },
-        '324':   { id:'324',   name:'zkSync',    chainType:'EVM' },
-        '100':   { id:'100',   name:'Gnosis',    chainType:'EVM' },
-        [String(LIFI_SOLANA_ID)]: { id: String(LIFI_SOLANA_ID), name:'Solana', chainType:'SVM' },
-      };
+const rpcRace = (label, op, commitment = BAL_COMMITMENT) => {
+  const conns = RPC_POOL.map(u => getConn(u, commitment));
+  return Promise.any(conns.map((c, i) =>
+    op(c).catch(e => {
+      console.warn(`[rpc] ${label} failed on ${RPC_POOL[i]}:`, e?.message);
       throw e;
-    });
-  return _chainsLoading;
-};
-
-const FALLBACK_CHAIN_COLORS = {
-  '1':     '#627eea',
-  '56':    '#f0b90b',
-  '137':   '#8247e5',
-  '42161': '#28a0f0',
-  '10':    '#ff0420',
-  '43114': '#e84142',
-  '8453':  '#0052ff',
-  '59144': '#61dfff',
-  '324':   '#8c8dfc',
-  '100':   '#04795b',
-  [String(LIFI_SOLANA_ID)]: '#14f195',
-};
-const chainColorOf = (chain) =>
-  (chain && FALLBACK_CHAIN_COLORS[chain.id]) || '#4dffd2';
-
-/* ─── TOKENS (live from LI.FI) ─── */
-
-let _tokensCache = null, _tokensLoading = null;
-const loadAllTokens = () => {
-  if (_tokensCache)   return Promise.resolve(_tokensCache);
-  if (_tokensLoading) return _tokensLoading;
-  _tokensLoading = fetch('/api/lifi/tokens')
-    .then(r => (r.ok ? r.json() : { tokens: {} }))
-    .then(j => {
-      const byChain = {};
-      for (const [cid, tokens] of Object.entries(j?.tokens || {})) {
-        byChain[String(cid)] = (tokens || []).filter(t => t.address && t.symbol).map(t => ({
-          chainId:  String(cid),
-          address:  t.address,
-          symbol:   t.symbol,
-          name:     t.name || t.symbol,
-          decimals: +t.decimals || 0,
-          logoURI:  t.logoURI || null,
-          priceUSD: t.priceUSD || null,
-        }));
-      }
-      _tokensCache = byChain;
-      _tokensLoading = null;
-      return byChain;
     })
-    .catch(e => { _tokensLoading = null; throw e; });
-  return _tokensLoading;
+  )).catch(() => { throw new Error(`${label}: all RPCs failed`); });
 };
 
-/* SOL price lookup from cached LI.FI tokens. Returns null if unknown. */
-const getSolPriceUSD = () => {
-  const solTokens = _tokensCache?.[String(LIFI_SOLANA_ID)] || [];
-  const sol = solTokens.find(t =>
-    t.address === SOL_NATIVE || t.address === WSOL_MINT ||
-    t.symbol?.toUpperCase() === 'SOL'
-  );
-  const p = sol?.priceUSD ? Number(sol.priceUSD) : null;
-  return Number.isFinite(p) && p > 0 ? p : null;
+/* ─── HELPERS ─────────────────────────────────────────────────────── */
+const fmtAmount = (n, decimals = 6) => {
+  if (n == null || isNaN(n)) return '0';
+  const num = Number(n);
+  if (num === 0) return '0';
+  if (num < 0.000001) return num.toExponential(2);
+  if (num < 1)        return num.toFixed(Math.min(6, decimals));
+  if (num < 1000)     return num.toFixed(Math.min(4, decimals));
+  if (num < 1_000_000) return num.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  return (num / 1_000_000).toFixed(2) + 'M';
 };
 
-/* ─── LI.FI QUOTE ─── */
-
-const lifiQuote = async ({ fromChainId, fromMint, toChainId, toAddress, amount, sender, receiver, signal }) => {
-  if (!sender) throw new Error('Connect wallet first');
-  const p = new URLSearchParams({
-    fromChain:   String(fromChainId),
-    toChain:     String(toChainId),
-    fromToken:   lifiFromToken(fromMint),
-    toToken:     toAddress,
-    fromAmount:  String(amount),
-    fromAddress: sender,
-    toAddress:   receiver || sender,
-    slippage:    String(SLIPPAGE),
-    order:       'FASTEST',
-    skipSimulation: 'true',
-  });
-  const r = await fetch('/api/lifi/quote?' + p.toString(), { signal });
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    const detail = j?.message || j?.errors?.[0]?.message || j?.error || `HTTP ${r.status}`;
-    throw new Error(detail);
-  }
-  return j;
+const friendlyError = (err) => {
+  const m = String(err?.message || err || '').toLowerCase();
+  if (m.includes('insufficient'))      return 'Insufficient balance for this swap.';
+  if (m.includes('slippage'))          return 'Price moved too much. Try again or increase slippage.';
+  if (m.includes('blockhash') || m.includes('expired')) return 'Transaction expired. Please try again.';
+  if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled')) return 'Transaction cancelled.';
+  if (m.includes('simulation failed')) return 'Swap simulation failed — the price may have moved.';
+  if (m.includes('account not'))       return 'Token account not ready. Please try again in a moment.';
+  if (m.includes('rate'))              return 'Too many requests — please wait a moment.';
+  if (m.includes('could not find any route') || m.includes('no route')) return 'No route available for this pair.';
+  if (m.includes('too large') || m.includes('transaction too large')) return 'Route is too complex to fit in one transaction. Try a different amount or token.';
+  return err?.message || 'Swap failed. Please try again.';
 };
 
-/* ─── FEE CALCULATION ─── *
- *
- * Returns the SOL fee in lamports given the bridge input's USD value.
- * Falls back to MIN_FEE_LAMPORTS if USD value or SOL price is unknown.
- */
-const computeSolFeeLamports = (fromAmountUSD, solPriceUSD) => {
-  if (!fromAmountUSD || !solPriceUSD || fromAmountUSD <= 0 || solPriceUSD <= 0) {
-    return MIN_FEE_LAMPORTS;
-  }
-  const feeUSD = fromAmountUSD * (FEE_BPS / 10000);
-  const feeSOL = feeUSD / solPriceUSD;
-  const lamports = Math.floor(feeSOL * LAMPORTS_PER_SOL);
-  return Math.max(lamports, MIN_FEE_LAMPORTS);
-};
+const deserIx = (ix) => ({
+  programId: new PublicKey(ix.programId),
+  keys: ix.accounts.map(a => ({
+    pubkey:     new PublicKey(a.pubkey),
+    isSigner:   a.isSigner,
+    isWritable: a.isWritable,
+  })),
+  data: Buffer.from(ix.data, 'base64'),
+});
 
-/* ─── ATOMIC TX BUILDER ─── *
- *
- * Decompiles LI.FI's bridge tx, prepends a SOL fee transfer ix,
- * recompiles to a v0 transaction sharing the same ALTs and blockhash.
- */
-const buildAtomicTx = async ({
-  connection, payer, bridgeTxBase64, feeLamports, blockhash,
-}) => {
-  // 1) Deserialize LI.FI's bridge tx
-  const bridgeTx = VersionedTransaction.deserialize(Buffer.from(bridgeTxBase64, 'base64'));
+/* ─── COMPONENT ───────────────────────────────────────────────────── */
+export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConnectWallet } = {}) {
+  useSwCSS();
 
-  // 2) Resolve any ALTs the bridge tx references
-  const altLookups = bridgeTx.message.addressTableLookups || [];
-  let alts = [];
-  if (altLookups.length > 0) {
-    const altKeys = altLookups.map(l => l.accountKey);
-    const infos = await connection.getMultipleAccountsInfo(altKeys);
-    alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
-      key:   k,
-      state: AddressLookupTableAccount.deserialize(infos[i].data),
-    }) : null).filter(Boolean);
-    if (alts.length !== altKeys.length) {
-      throw new Error('Could not resolve all address lookup tables for bridge tx');
-    }
-  }
+  const wallet = useWallet();
+  const connection = useMemo(() => getConn(RPC_POOL[0], 'confirmed'), []);
 
-  // 3) Decompile to a regular message we can edit
-  const decompiled = TransactionMessage.decompile(bridgeTx.message, {
-    addressLookupTableAccounts: alts,
-  });
+  const [tokens, setTokens]               = useState([]);
+  const [tokensLoading, setTokensLoading] = useState(true);
 
-  // 4) Prepend the SOL fee transfer. Going at index 0 means the fee leaves
-  //    the user's wallet before LI.FI's bridge ix touches anything — and
-  //    if the bridge ix reverts later in the tx, the fee transfer reverts
-  //    atomically with it.
-  const feeIx = SystemProgram.transfer({
-    fromPubkey: payer,
-    toPubkey:   FEE_WALLET,
-    lamports:   feeLamports,
-  });
-  decompiled.instructions = [feeIx, ...decompiled.instructions];
-  decompiled.recentBlockhash = blockhash;
-  decompiled.payerKey = payer;
+  const [inputMint,  setInputMint]   = useState(defaultInputMint  || SOL_MINT);
+  const [outputMint, setOutputMint]  = useState(defaultOutputMint || USDC_MINT);
+  const [amount,     setAmount]      = useState('');
 
-  // 5) Recompile to v0 with the same ALTs
-  const newMessage = decompiled.compileToV0Message(alts);
-  return new VersionedTransaction(newMessage);
-};
+  const [showPicker, setShowPicker] = useState(null);
 
-/* ─── DEFAULTS ─── */
+  const [quote, setQuote]           = useState(null);
+  const [quoting, setQuoting]       = useState(false);
+  const [quoteError, setQuoteError] = useState(null);
 
-const DEFAULT_FROM = {
-  chainId:  String(LIFI_SOLANA_ID),
-  mint:     WSOL_MINT,
-  address:  WSOL_MINT,
-  symbol:   'SOL',
-  name:     'Solana',
-  decimals: 9,
-  logoURI:  'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
-};
-const DEFAULT_TO = {
-  chainId:  '1',
-  address:  '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-  symbol:   'USDC',
-  name:     'USD Coin',
-  decimals: 6,
-  logoURI:  'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png',
-};
+  const [swapping, setSwapping]     = useState(false);
+  const [swapError, setSwapError]   = useState(null);
+  const [swapResult, setSwapResult] = useState(null);
 
-/* ─── HOOKS ─── */
+  const [balances, setBalances] = useState({});
+  const [balLoading, setBalLoading] = useState(false);
+  const [balError, setBalError] = useState(null);
 
-let _bl = 0;
-const useBodyScrollLock = open => {
+  /* tokens */
   useEffect(() => {
-    if (!open || typeof document === 'undefined') return;
-    if (_bl === 0) document.body.classList.add('nexus-scroll-locked');
-    _bl++;
-    return () => {
-      _bl = Math.max(0, _bl - 1);
-      if (_bl === 0) document.body.classList.remove('nexus-scroll-locked');
-    };
-  }, [open]);
-};
-const useEscape = (open, h) => {
-  useEffect(() => {
-    if (!open) return;
-    const fn = e => { if (e.key === 'Escape') { e.stopPropagation(); h?.(); } };
-    window.addEventListener('keydown', fn);
-    return () => window.removeEventListener('keydown', fn);
-  }, [open, h]);
-};
-
-/* ─── UI BITS ─── */
-
-const TokenIcon = ({ token, size = 32 }) => {
-  const [err, setErr] = useState(false);
-  if (token?.logoURI && !err) {
-    return (
-      <img
-        src={token.logoURI}
-        alt=""
-        className="cc-token-img"
-        style={{ width: size, height: size }}
-        onError={() => setErr(true)}
-      />
-    );
-  }
-  const ch = token?.symbol ? token.symbol.charAt(0).toUpperCase() : '?';
-  return (
-    <div
-      className="cc-token-fallback"
-      style={{
-        width: size, height: size,
-        fontSize: Math.round(size * 0.4),
-      }}
-    >{ch}</div>
-  );
-};
-
-const ChainBadge = ({ chain, small = false }) => {
-  if (!chain) return null;
-  const color = chainColorOf(chain);
-  return (
-    <div
-      className={'cc-chain-badge' + (small ? ' cc-chain-badge-sm' : '')}
-      style={{
-        background: color + '22',
-        borderColor: color + '55',
-        color,
-      }}
-    >
-      <div
-        className="cc-chain-dot"
-        style={{ background: color }}
-      />
-      {chain.name}
-    </div>
-  );
-};
-
-const StepProgress = ({ step }) => {
-  if (step <= 0) return null;
-  const steps = [
-    { label: 'Quote',  id: 1 },
-    { label: 'Sign',   id: 2 },
-    { label: 'Bridge', id: 3 },
-    { label: 'Done',   id: 4 },
-  ];
-  return (
-    <div className="cc-steps">
-      {steps.map((s, i) => {
-        const done   = step > s.id;
-        const active = step === s.id;
-        return (
-          <React.Fragment key={s.id}>
-            <div className="cc-step">
-              <div className={'cc-step-circle' + (done ? ' cc-step-done' : active ? ' cc-step-active' : '')}>
-                {done ? '✓' : s.id}
-              </div>
-              <div className={'cc-step-label' + (done ? ' cc-step-label-done' : active ? ' cc-step-label-active' : '')}>
-                {s.label}
-              </div>
-            </div>
-            {i < steps.length - 1 && (
-              <div className={'cc-step-line' + (done ? ' cc-step-line-done' : '')}/>
-            )}
-          </React.Fragment>
-        );
-      })}
-    </div>
-  );
-};
-
-/* ─── FROM (Solana) MODAL ─── */
-
-const FromTokenModal = ({ open, onClose, onSelect }) => {
-  const [q, setQ]     = useState('');
-  const [r, setR]     = useState([]);
-  const [loading, setL] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setL(true);
-    loadAllTokens().finally(() => setL(false));
-  }, [open]);
-
-  useEffect(() => {
-    const t = q.trim().toLowerCase();
-    const solTokens = (_tokensCache?.[String(LIFI_SOLANA_ID)] || []).map(tk => ({
-      ...tk,
-      mint: tk.address,
-    }));
-    if (!t) { setR([]); return; }
-    const tm = setTimeout(() => {
-      setR(solTokens
-        .filter(tk =>
-          tk.symbol?.toLowerCase().includes(t) ||
-          tk.name?.toLowerCase().includes(t)   ||
-          tk.address?.toLowerCase().includes(t)
-        )
-        .slice(0, 50));
-    }, 150);
-    return () => clearTimeout(tm);
-  }, [q]);
-
-  const close = useCallback(() => { setQ(''); setR([]); onClose(); }, [onClose]);
-  useBodyScrollLock(open);
-  useEscape(open, close);
-
-  const popular = [
-    DEFAULT_FROM,
-    {
-      chainId:  String(LIFI_SOLANA_ID),
-      mint:     USDC_SOLANA,
-      address:  USDC_SOLANA,
-      symbol:   'USDC',
-      name:     'USD Coin',
-      decimals: 6,
-      logoURI:  'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png',
-    },
-  ];
-  const display = q.trim() ? r : popular;
-
-  if (!open) return null;
-  return (
-    <>
-      <div onClick={close} className="cc-modal-backdrop"/>
-      <div className="cc-modal cc-modal-from">
-        <div className="cc-modal-head">
-          <div className="cc-modal-head-row">
-            <div className="cc-modal-title">
-              From <span className="cc-modal-sub">· Solana</span>
-            </div>
-            <button onClick={close} className="cc-modal-close">✕</button>
-          </div>
-          <input
-            autoFocus
-            value={q}
-            onChange={e => setQ(e.target.value)}
-            placeholder="Search…"
-            className="cc-modal-search"
-          />
-        </div>
-        <div className="cc-modal-body">
-          {loading && <div className="cc-modal-loading">Loading tokens…</div>}
-          {!q.trim() && !loading && (
-            <div className="cc-modal-section">POPULAR</div>
-          )}
-          {display.length === 0 && !loading && (
-            <div className="cc-modal-empty">No matches</div>
-          )}
-          {display.map((t, i) => (
-            <div
-              key={(t.mint || t.address || '') + i}
-              onClick={() => { onSelect({ ...t, mint: t.address || t.mint }); close(); }}
-              className="cc-modal-row"
-            >
-              <TokenIcon token={t} size={32}/>
-              <div className="cc-modal-row-info">
-                <div className="cc-modal-row-sym">{t.symbol}</div>
-                <div className="cc-modal-row-name">{t.name}</div>
-              </div>
-            </div>
-          ))}
-        </div>
-      </div>
-    </>
-  );
-};
-
-/* ─── TO (any chain) MODAL ─── */
-
-const ToTokenModal = ({ open, onClose, onSelect, chains }) => {
-  const [q, setQ]       = useState('');
-  const [tokens, setTokens] = useState([]);
-  const [r, setR]       = useState([]);
-  const [loading, setL] = useState(false);
-  const [sel, setSel]   = useState('all');
-
-  useEffect(() => {
-    if (!open) return;
-    setL(true);
-    loadAllTokens()
-      .then(byChain => {
-        const all = [];
-        for (const [cid, list] of Object.entries(byChain)) {
-          if (String(cid) === String(LIFI_SOLANA_ID)) continue;
-          for (const t of list) all.push(t);
-        }
-        setTokens(all);
-      })
-      .finally(() => setL(false));
-  }, [open]);
-
-  const chainChips = useMemo(() => {
-    const seen = new Set(tokens.map(t => t.chainId));
-    const order = ['1', '56', '137', '42161', '10', '43114', '8453', '324', '59144', '100'];
-    const all = Array.from(seen);
-    const known   = all.filter(c => order.includes(c)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
-    const others  = all.filter(c => !order.includes(c)).sort((a, b) => {
-      const an = chains?.[a]?.name || a;
-      const bn = chains?.[b]?.name || b;
-      return an.localeCompare(bn);
-    });
-    return ['all', ...known, ...others];
-  }, [tokens, chains]);
-
-  useEffect(() => {
-    const t    = q.trim().toLowerCase();
-    const filt = sel === 'all' ? tokens : tokens.filter(tk => tk.chainId === sel);
-    if (!t) {
-      setR(filt
-        .filter(tk => ['USDC', 'USDT', 'ETH', 'BNB', 'MATIC', 'AVAX', 'WETH', 'DAI', 'WBTC', 'BTC'].includes(tk.symbol?.toUpperCase()))
-        .slice(0, 30));
-      return;
-    }
-    const tm = setTimeout(() => {
-      setR(filt
-        .filter(tk =>
-          tk.symbol?.toLowerCase().includes(t) ||
-          tk.name?.toLowerCase().includes(t)   ||
-          tk.address?.toLowerCase().includes(t)
-        )
-        .slice(0, 60));
-    }, 150);
-    return () => clearTimeout(tm);
-  }, [q, tokens, sel]);
-
-  const close = useCallback(() => { setQ(''); setR([]); setSel('all'); onClose(); }, [onClose]);
-  useBodyScrollLock(open);
-  useEscape(open, close);
-
-  if (!open) return null;
-  return (
-    <>
-      <div onClick={close} className="cc-modal-backdrop"/>
-      <div className="cc-modal cc-modal-to">
-        <div className="cc-modal-head">
-          <div className="cc-modal-head-row">
-            <div className="cc-modal-title">
-              To <span className="cc-modal-sub">· All Chains</span>
-            </div>
-            <button onClick={close} className="cc-modal-close">✕</button>
-          </div>
-          <input
-            autoFocus
-            value={q}
-            onChange={e => setQ(e.target.value)}
-            placeholder="Search…"
-            className="cc-modal-search"
-          />
-          <div className="cc-chain-chips">
-            {chainChips.map(id => {
-              const active = sel === id;
-              const chain  = chains?.[id];
-              const color  = id === 'all' ? '#4dffd2' : (chain ? chainColorOf(chain) : '#7a92b3');
-              return (
-                <button
-                  key={id}
-                  onClick={() => setSel(id)}
-                  className={'cc-chain-chip' + (active ? ' cc-chain-chip-active' : '')}
-                  style={active ? {
-                    borderColor: color,
-                    background: color + '22',
-                    color,
-                  } : undefined}
-                >
-                  {id === 'all' ? 'All' : (chain?.name || ('Chain ' + id))}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-        <div className="cc-modal-body">
-          {loading && <div className="cc-modal-loading">Loading tokens…</div>}
-          {!loading && r.length === 0 && (
-            <div className="cc-modal-empty">No matches</div>
-          )}
-          {r.map((t, i) => (
-            <div
-              key={t.chainId + ':' + t.address + i}
-              onClick={() => { onSelect(t); close(); }}
-              className="cc-modal-row"
-            >
-              <TokenIcon token={t} size={30}/>
-              <div className="cc-modal-row-info">
-                <div className="cc-modal-row-sym">{t.symbol}</div>
-                <div className="cc-modal-row-name cc-truncate">{t.name}</div>
-              </div>
-              <ChainBadge chain={chains?.[t.chainId] || { id: t.chainId, name: 'Chain ' + t.chainId }} small/>
-            </div>
-          ))}
-        </div>
-      </div>
-    </>
-  );
-};
-
-/* ═══════════ MAIN ═══════════ */
-
-export default function CrossChain({ onConnectWallet }) {
-  const { publicKey, signTransaction, connected } = useWallet();
-  const { connection } = useConnection();
-
-  const pubkey = publicKey || null;
-  const wcon   = !!connected && !!pubkey;
-
-  const [chains, setChains]       = useState(null);
-  const [chainsLoading, setChainsLoading] = useState(true);
-
-  const [fromToken, setFromToken] = useState(DEFAULT_FROM);
-  const [toToken,   setToToken]   = useState(DEFAULT_TO);
-  const [fromAmt,   setFromAmt]   = useState('');
-  const [destAddr,  setDestAddr]  = useState('');
-  const [addrErr,   setAddrErr]   = useState('');
-
-  const [quote,    setQuote]    = useState(null);
-  const [quoting,  setQuoting]  = useState(false);
-  const [quoteErr, setQuoteErr] = useState('');
-
-  const [step,      setStep]      = useState(0);
-  const [statusMsg, setStatusMsg] = useState('');
-  const [swapErr,   setSwapErr]   = useState('');
-  const [txSig,     setTxSig]     = useState(null);
-  const [pendingMsg, setPendingMsg] = useState(null);
-
-  const [sbl, setSbl] = useState(null);
-  const [ssb, setSsb] = useState(null);
-
-  const [fromOpen, setFromOpen] = useState(false);
-  const [toOpen,   setToOpen]   = useState(false);
-
-  const reqIdRef = useRef(0);
-
-  /* preload caches */
-  useEffect(() => {
-    loadChains()
-      .then(c => { setChains(c); setChainsLoading(false); })
-      .catch(() => { setChains(_chainsCache); setChainsLoading(false); });
-    loadAllTokens().catch(() => {});
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await fetch('/api/jupiter/tokens');
+        const data = await r.json();
+        if (cancelled) return;
+        const list = Array.isArray(data) ? data : (data?.tokens || []);
+        const norm = list.map(t => ({
+          address:  t.id || t.address || t.mint,
+          symbol:   t.symbol,
+          name:     t.name,
+          decimals: t.decimals,
+          logoURI:  t.icon || t.logoURI || null,
+        })).filter(t => t.address && t.symbol && t.decimals != null);
+        setTokens(norm);
+      } catch (e) {
+        console.warn('[swap] token list failed', e);
+        setTokens([
+          { address: SOL_MINT,  symbol: 'SOL',  name: 'Solana',   decimals: 9, logoURI: null },
+          { address: USDC_MINT, symbol: 'USDC', name: 'USD Coin', decimals: 6, logoURI: null },
+        ]);
+      } finally {
+        if (!cancelled) setTokensLoading(false);
+      }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
-  const toChain = chains?.[String(toToken?.chainId)] || null;
-  const toChainType = toChain?.chainType || 'EVM';
-  const needsDest = toToken && String(toToken.chainId) !== String(LIFI_SOLANA_ID);
-
   /* balances */
-  useEffect(() => {
-    if (!pubkey || !connection) { setSbl(null); setSsb(null); return; }
-    let cancelled = false;
-    connection.getBalance(pubkey)
-      .then(b => { if (!cancelled) setSbl(b); })
-      .catch(() => {});
-    if (fromToken?.mint && fromToken.mint !== WSOL_MINT) {
-      connection.getParsedTokenAccountsByOwner(pubkey, { mint: new PublicKey(fromToken.mint) })
-        .then(a => {
-          if (cancelled) return;
-          setSsb(a.value.length
-            ? a.value[0].account.data.parsed.info.tokenAmount.uiAmount
-            : 0);
-        })
-        .catch(() => {});
-    } else {
-      setSsb(null);
-    }
-    return () => { cancelled = true; };
-  }, [pubkey, connection, fromToken, step]);
+  const refreshBalances = useCallback(async () => {
+    if (!wallet.publicKey) { setBalances({}); setBalError(null); return; }
+    setBalLoading(true);
+    setBalError(null);
+    const owner = wallet.publicKey;
 
-  const fbd = useMemo(() => {
-    if (fromToken?.mint === WSOL_MINT) return sbl != null ? sbl / LAMPORTS_PER_SOL : null;
-    return ssb;
-  }, [fromToken, sbl, ssb]);
-
-  /* address validation */
-  useEffect(() => {
-    if (!needsDest || !destAddr.trim()) { setAddrErr(''); return; }
-    setAddrErr(validateDest(destAddr, toChainType) || '');
-  }, [destAddr, toChainType, needsDest]);
-
-  /* QUOTE — FULL amount (no fee deduction). User bridges 100% of input;
-   * fee comes from their separate SOL balance. */
-  const fetchQuote = useCallback(async () => {
-    setQuoteErr('');
-    if (!fromAmt || +fromAmt <= 0 || !fromToken || !toToken) { setQuote(null); return; }
-    if (!pubkey) { setQuote(null); setQuoteErr('Connect a wallet to see a quote'); return; }
-
-    const myReq = ++reqIdRef.current;
-    setQuoting(true);
-
-    try {
-      const dec = fromToken.decimals;
-      const raw = toRaw(fromAmt, dec);
-      if (!raw || raw === '0') { setQuote(null); setQuoting(false); return; }
-
-      const sender   = pubkey.toString();
-      const userDest = destAddr.trim();
-      const userDestOk = userDest && !validateDest(userDest, toChainType);
-      const receiver = userDestOk
-        ? userDest
-        : (toChainType === 'EVM' ? '0x000000000000000000000000000000000000dEaD' : sender);
-
-      const j = await lifiQuote({
-        fromChainId: LIFI_SOLANA_ID,
-        fromMint:    fromToken.mint || fromToken.address,
-        toChainId:   toToken.chainId,
-        toAddress:   toToken.address,
-        amount:      raw,
-        sender, receiver,
-      });
-      if (myReq !== reqIdRef.current) return;
-
-      if (!j?.estimate) throw new Error('No route available');
-      const outAmt = Number(j.estimate.toAmountMin || j.estimate.toAmount) /
-                     Math.pow(10, toToken.decimals);
-      const fromUSD = Number(j.estimate.fromAmountUSD) || 0;
-      const solPrice = getSolPriceUSD();
-      const feeLamports = computeSolFeeLamports(fromUSD, solPrice);
-      const feeSOL = feeLamports / LAMPORTS_PER_SOL;
-      const feeUSD = solPrice ? feeSOL * solPrice : null;
-
-      setQuote({
-        outAmt,
-        outDisplay: fmtTok(outAmt),
-        estTime:    j.estimate.executionDuration || null,
-        bridge:     j.toolDetails?.name || j.tool || 'LI.FI',
-        raw:        j,
-        rawAmount:  raw,
-        feeLamports,
-        feeSOL,
-        feeUSD,
-        fromUSD,
-      });
-    } catch (e) {
-      if (e.name === 'AbortError') return;
-      if (myReq === reqIdRef.current) {
-        setQuote(null);
-        setQuoteErr(friendlyError(e));
+    const mergeAccs = (into, accs) => {
+      if (!accs || !accs.value) return;
+      for (const acc of accs.value) {
+        const info = acc.account?.data?.parsed?.info;
+        if (!info) continue;
+        const mint = info.mint;
+        const amt = info.tokenAmount?.amount;
+        const dec = info.tokenAmount?.decimals;
+        const uiAmt = info.tokenAmount?.uiAmount;
+        if (!mint || amt == null) continue;
+        into[mint] = { amount: Number(amt), decimals: dec, uiAmount: uiAmt };
       }
-    } finally {
-      if (myReq === reqIdRef.current) setQuoting(false);
-    }
-  }, [fromAmt, fromToken, toToken, destAddr, pubkey, toChainType]);
+    };
 
+    const solP = rpcRace('getBalance', c => c.getBalance(owner, BAL_COMMITMENT))
+      .then(lamports => {
+        setBalances(prev => {
+          const next = { ...prev };
+          delete next.__rpc_failed;
+          next[SOL_MINT] = { amount: lamports, decimals: 9, uiAmount: lamports / 1e9 };
+          return next;
+        });
+      })
+      .catch(e => console.warn('[swap] SOL balance failed', e?.message));
+
+    const tokP = rpcRace('tokenAccs', c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT)
+    ).then(accs => {
+      setBalances(prev => {
+        const next = { ...prev };
+        delete next.__rpc_failed;
+        mergeAccs(next, accs);
+        return next;
+      });
+    }).catch(e => console.warn('[swap] SPL accounts failed', e?.message));
+
+    const tok22P = rpcRace('tokenAccs2022', c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT)
+    ).then(accs => {
+      setBalances(prev => {
+        const next = { ...prev };
+        mergeAccs(next, accs);
+        return next;
+      });
+    }).catch(e => console.warn('[swap] Token-2022 accounts failed', e?.message));
+
+    const results = await Promise.allSettled([solP, tokP, tok22P]);
+    if (results.every(r => r.status === 'rejected')) {
+      setBalances({ __rpc_failed: true });
+      setBalError('RPC unreachable — tap retry');
+    }
+    setBalLoading(false);
+  }, [wallet.publicKey]);
+
+  useEffect(() => { refreshBalances(); }, [refreshBalances, inputMint]);
+
+  const inputToken  = useMemo(() => tokens.find(t => t.address === inputMint)  || null, [tokens, inputMint]);
+  const outputToken = useMemo(() => tokens.find(t => t.address === outputMint) || null, [tokens, outputMint]);
+  const inputBalance = balances[inputMint];
+
+  const rawAmount = useMemo(() => {
+    if (!amount || !inputToken) return '';
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    return Math.floor(n * Math.pow(10, inputToken.decimals)).toString();
+  }, [amount, inputToken]);
+
+  /* QUOTE */
+  const quoteAbortRef = useRef(null);
   useEffect(() => {
-    const t = setTimeout(fetchQuote, QUOTE_DEBOUNCE);
-    return () => clearTimeout(t);
-  }, [fetchQuote]);
-
-  /* MAX */
-  const onMax = useCallback(() => {
-    if (fbd == null || fbd <= 0) return;
-    const dec = Math.min(fromToken.decimals, 9);
-    if (fromToken?.mint === WSOL_MINT) {
-      // Reserve network fee + estimated platform fee (use min fee as safe lower bound).
-      const reserveLamports = SOL_RESERVE + MIN_FEE_LAMPORTS;
-      setFromAmt(fmtInput(Math.max(0, (sbl - reserveLamports)) / LAMPORTS_PER_SOL, dec));
-    } else {
-      setFromAmt(fmtInput(fbd, dec));
-    }
-  }, [fbd, fromToken, sbl]);
-
-  /* SOL-balance check for non-SOL inputs. The fee is paid in SOL even when
-   * bridging USDC/etc., so the user needs separate SOL for it + network fees. */
-  const solShortfall = useMemo(() => {
-    if (!quote || sbl == null) return null;
-    const need = quote.feeLamports + SOL_RESERVE;
-    // When input IS SOL, the input amount already comes out of SOL balance,
-    // so we need to check separately that the input + fee + reserve fit.
-    if (fromToken?.mint === WSOL_MINT) {
-      const inputLamports = Math.floor(Number(fromAmt) * LAMPORTS_PER_SOL);
-      const total = inputLamports + quote.feeLamports + SOL_RESERVE;
-      return sbl < total ? (total - sbl) : 0;
-    }
-    return sbl < need ? (need - sbl) : 0;
-  }, [quote, sbl, fromToken, fromAmt]);
-
-  /* EXECUTE — atomic single tx */
-  const execute = useCallback(async () => {
-    if (!wcon) { onConnectWallet?.(); return; }
-    if (needsDest) {
-      const e = validateDest(destAddr, toChainType);
-      if (e) { setAddrErr(e); return; }
-    }
-    if (!quote) { setSwapErr('No route. Wait for routing.'); return; }
-    if (!signTransaction) {
-      setSwapErr('Wallet does not support signing. Use Phantom or Solflare.');
+    if (!rawAmount || inputMint === outputMint) {
+      setQuote(null);
+      setQuoteError(null);
       return;
     }
-    if (solShortfall && solShortfall > 0) {
-      setSwapErr(`Not enough SOL — need ~${(solShortfall / LAMPORTS_PER_SOL).toFixed(4)} more SOL to cover the platform + network fee.`);
+    if (quoteAbortRef.current) quoteAbortRef.current.abort();
+    const ac = new AbortController();
+    quoteAbortRef.current = ac;
+
+    setQuoting(true);
+    setQuoteError(null);
+
+    const t = setTimeout(async () => {
+      try {
+        const net = (BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n;
+        if (net <= 0n) {
+          setQuote(null);
+          setQuoting(false);
+          return;
+        }
+        const params = new URLSearchParams({
+          inputMint,
+          outputMint,
+          amount:      net.toString(),
+          slippageBps: String(SLIPPAGE_BPS),
+          taker:       wallet.publicKey
+            ? wallet.publicKey.toBase58()
+            : '11111111111111111111111111111111',
+        });
+        const r = await fetch(`/api/jupiter/build?${params}`, { signal: ac.signal });
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.error || `Quote failed (${r.status})`);
+        }
+        const data = await r.json();
+        if (!ac.signal.aborted) {
+          setQuote(data);
+          setQuoteError(null);
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        if (!ac.signal.aborted) {
+          setQuote(null);
+          setQuoteError(friendlyError(e));
+        }
+      } finally {
+        if (!ac.signal.aborted) setQuoting(false);
+      }
+    }, 350);
+
+    return () => { clearTimeout(t); ac.abort(); };
+  }, [rawAmount, inputMint, outputMint, wallet.publicKey]);
+
+  const outAmountUi = useMemo(() => {
+    if (!quote || !outputToken) return null;
+    return Number(quote.outAmount) / Math.pow(10, outputToken.decimals);
+  }, [quote, outputToken]);
+
+  const minReceived = useMemo(() => {
+    if (!quote || !outputToken) return null;
+    return Number(quote.otherAmountThreshold) / Math.pow(10, outputToken.decimals);
+  }, [quote, outputToken]);
+
+  const priceImpact = useMemo(() => {
+    if (!quote || quote.priceImpactPct == null) return null;
+    const n = Number(quote.priceImpactPct);
+    return Number.isFinite(n) ? n * (Math.abs(n) <= 1 ? 100 : 1) : null;
+  }, [quote]);
+
+  const flip = () => {
+    setInputMint(outputMint);
+    setOutputMint(inputMint);
+    setAmount('');
+    setQuote(null);
+  };
+
+  const setMax = () => {
+    if (!inputBalance) return;
+    let maxAmt = inputBalance.uiAmount;
+    if (inputMint === SOL_MINT) maxAmt = Math.max(0, maxAmt - 0.01);
+    setAmount(String(maxAmt));
+  };
+
+  /* SWAP — UNCHANGED */
+  const handleSwap = useCallback(async () => {
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      setSwapError('Please connect a wallet (Phantom, Solflare, Backpack).');
+      return;
+    }
+    if (!quote || !outputToken || !inputToken) {
+      setSwapError('No quote available — try again.');
       return;
     }
 
-    setStep(1);
-    setSwapErr('');
-    setStatusMsg('Building route…');
-    setTxSig(null);
-    setPendingMsg(null);
+    setSwapping(true);
+    setSwapError(null);
+    setSwapResult(null);
 
     try {
-      const dec = fromToken.decimals;
-      const raw = toRaw(fromAmt, dec);
-      if (!raw || raw === '0') throw new Error('Invalid amount');
+      const dec = inputToken.decimals;
+      const build = quote;
 
-      // Use the SAME quote the user is looking at. No re-fetch — what
-      // they see is what they sign.
-      const j = quote.raw;
-      const txData = j?.transactionRequest?.data;
-      if (!txData) throw new Error('LI.FI returned no transaction');
+      const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
+      if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
 
-      // Use the fee already computed from this quote.
-      const feeLamports = quote.feeLamports;
+      const feeIxs = [];
+      if (inputMint === SOL_MINT) {
+        feeIxs.push(SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey:   FEE_WALLET,
+          lamports:   Number(feeAmount),
+        }));
+      } else {
+        const mintPk = new PublicKey(inputMint);
+        const mintInfo = await connection.getAccountInfo(mintPk);
+        if (!mintInfo) throw new Error('Input mint not found on-chain.');
+        const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+          ? TOKEN_2022_PROGRAM_ID
+          : TOKEN_PROGRAM_ID;
 
-      // 3) Fresh blockhash, then build the atomic tx.
-      setStatusMsg('Combining bridge + fee into one transaction…');
+        const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
+        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
+
+        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+          wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
+        ));
+        feeIxs.push(createTransferCheckedInstruction(
+          sourceAta, mintPk, destAta, wallet.publicKey,
+          feeAmount, dec, [], tokenProgram,
+        ));
+      }
+
+      const ixs = [];
+      if (Array.isArray(build.computeBudgetInstructions))
+        for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
+
+      for (const ix of feeIxs) ixs.push(ix);
+
+      if (Array.isArray(build.setupInstructions))
+        for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+      if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+      if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+      if (Array.isArray(build.otherInstructions))
+        for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+
+      const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+      let alts = [];
+      if (altKeys.length > 0) {
+        const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
+        alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+          key:   new PublicKey(k),
+          state: AddressLookupTableAccount.deserialize(infos[i].data),
+        }) : null).filter(Boolean);
+      }
+
       const latest = await connection.getLatestBlockhash('confirmed');
-      const tx = await buildAtomicTx({
-        connection, payer: pubkey,
-        bridgeTxBase64: txData,
-        feeLamports,
-        blockhash: latest.blockhash,
-      });
+      const message = new TransactionMessage({
+        payerKey:        wallet.publicKey,
+        recentBlockhash: latest.blockhash,
+        instructions:    ixs,
+      }).compileToV0Message(alts);
+      const tx = new VersionedTransaction(message);
 
-      // 4) Simulate the EXACT bytes the wallet will sign.
       const mapSimErr = (logs) => {
-        const t = (logs || []).join('\n').toLowerCase();
-        if (t.includes('insufficient') || t.includes('0x1')) return 'Insufficient balance (need SOL for fee + bridge).';
-        if (t.includes('slippage') || t.includes('0x1771'))  return 'Price moved — try a smaller amount or wait a moment.';
-        if (t.includes('account not') || t.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
-        if (t.includes('blockhash') || t.includes('expired')) return 'Quote expired. Please refresh and retry.';
+        const j = (logs || []).join('\n').toLowerCase();
+        if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+        if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
+        if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+        if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
         return null;
       };
       try {
@@ -933,41 +544,34 @@ export default function CrossChain({ onConnectWallet }) {
           sigVerify: false,
         });
         if (sim.value.err) {
-          throw new Error(mapSimErr(sim.value.logs) || 'Bridge simulation failed — the price may have moved.');
+          throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
         }
       } catch (simErr) {
         if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
           throw simErr;
         }
-        console.warn('[crosschain] sim non-fatal', simErr);
+        console.warn('[swap] sim non-fatal', simErr);
       }
 
-      // 5) Sign — one popup, wallet sees full tx including fee transfer.
-      setStep(2);
-      setStatusMsg('Sign in wallet…');
-      const signed = await signTransaction(tx);
+      const signed = await wallet.signTransaction(tx);
 
-      // 6) Broadcast.
-      setStep(3);
-      setStatusMsg('Submitting transaction…');
       const sig = await connection.sendRawTransaction(signed.serialize(), {
-        skipPreflight: false, maxRetries: 3,
+        skipPreflight: false,
+        maxRetries: 3,
       });
-      setTxSig(sig);
 
-      // 7) Confirm with polling fallback.
-      let bridgeOk = false;
+      let confirmed = false;
       try {
-        const result = await Promise.race([
+        const conf = await Promise.race([
           connection.confirmTransaction({
             signature: sig,
             blockhash: latest.blockhash,
             lastValidBlockHeight: latest.lastValidBlockHeight,
           }, 'confirmed'),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 35_000)),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
         ]);
-        bridgeOk = !result?.value?.err;
-        if (result?.value?.err) throw new Error('Bridge tx failed on-chain: ' + JSON.stringify(result.value.err));
+        if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
+        confirmed = true;
       } catch (cfErr) {
         const deadline = Date.now() + 20_000;
         while (Date.now() < deadline) {
@@ -975,293 +579,371 @@ export default function CrossChain({ onConnectWallet }) {
           try {
             const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
             const cs = st?.value?.confirmationStatus;
-            if (cs === 'confirmed' || cs === 'finalized') { bridgeOk = true; break; }
-            if (st?.value?.err) throw new Error('Bridge tx failed on-chain.');
+            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+            if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
           } catch (e) {
             if (/failed on-chain/i.test(String(e.message))) throw e;
           }
         }
       }
 
-      if (bridgeOk) {
-        setStep(4);
-        setStatusMsg('');
-      } else {
-        setStep(4);
-        setStatusMsg('');
-        setPendingMsg('Submitted but still confirming. Check Solscan for status.');
+      setSwapResult({ signature: sig, pending: !confirmed });
+
+      if (confirmed) {
+        setAmount('');
+        setQuote(null);
+        setTimeout(() => refreshBalances(), 2000);
       }
     } catch (e) {
-      console.error('[CrossChain]', e);
-      setSwapErr(friendlyError(e));
-      setStep(-1);
-      setTimeout(() => { setStep(0); setSwapErr(''); }, 6000);
+      console.error('[swap]', e);
+      setSwapError(friendlyError(e));
+    } finally {
+      setSwapping(false);
     }
   }, [
-    wcon, needsDest, destAddr, toToken, fromToken, fromAmt,
-    pubkey, signTransaction, connection, quote, onConnectWallet, toChainType, solShortfall,
+    wallet, quote, outputToken, inputToken,
+    inputMint, outputMint, rawAmount,
+    refreshBalances, connection,
   ]);
 
-  const reset = useCallback(() => {
-    setStep(0); setStatusMsg(''); setSwapErr(''); setTxSig(null); setPendingMsg(null);
-    setFromAmt(''); setQuote(null); setQuoteErr('');
-  }, []);
+  const hasFunds = inputBalance && Number(amount) > 0 && inputBalance.uiAmount >= Number(amount);
+  const canSwap  = !!wallet.publicKey && !!quote && !quoting && !swapping &&
+                   Number(amount) > 0 && inputMint !== outputMint && hasFunds;
 
-  /* derived */
-  const tuv = quote?.raw?.estimate?.toAmountUSD ? Number(quote.raw.estimate.toAmountUSD) : 0;
-  const fromUsd = quote?.fromUSD || 0;
-  const busy      = step > 0 && step < 4 && step !== -1;
-  const isSuccess = step === 4;
-  const isError   = step === -1;
-  const solscan   = txSig ? 'https://solscan.io/tx/' + txSig : null;
-
-  const btnLabel = () => {
-    if (!wcon) return 'Connect Wallet';
-    if (step === 1)   return 'Building Route…';
-    if (step === 2)   return 'Sign in Wallet…';
-    if (step === 3)   return 'Bridging…';
-    if (isSuccess)    return pendingMsg ? 'Submitted ✓' : 'Bridge Submitted ✓';
-    if (isError)      return 'Try Again';
-    if (!fromAmt)     return 'Enter Amount';
-    if (needsDest && !destAddr.trim()) return 'Enter Destination';
-    if (addrErr)      return 'Invalid Address';
-    if (!quote)       return quoting ? 'Finding Route…' : 'No Route';
-    if (solShortfall) return 'Need more SOL';
-    return `Bridge ${fromToken?.symbol || ''} → ${toToken?.symbol || ''}`;
-  };
-  const btnDisabled = busy ||
-    (wcon && (!fromAmt || (needsDest && !destAddr.trim()) || !!addrErr ||
-              (!quote && !isError && !isSuccess) || !!solShortfall));
-
-  const btnClass = () => {
-    if (isSuccess)  return 'cc-cta cc-cta-success';
-    if (isError)    return 'cc-cta cc-cta-error';
-    if (btnDisabled && wcon) return 'cc-cta cc-cta-disabled';
-    return 'cc-cta cc-cta-primary';
-  };
-
-  const fromChain = chains?.[String(LIFI_SOLANA_ID)] || { id: String(LIFI_SOLANA_ID), name: 'Solana', chainType: 'SVM' };
-  const toChainDisplay = chains?.[String(toToken?.chainId)] || { id: toToken?.chainId, name: 'Chain ' + toToken?.chainId };
+  const priceImpactClass = priceImpact == null ? 'sw-impact-neutral'
+    : priceImpact > 5 ? 'sw-impact-bad'
+    : priceImpact > 1 ? 'sw-impact-warn'
+    : 'sw-impact-good';
 
   return (
-    <div className="cc-page">
-      <div className="cc-header">
-        <div className="cc-header-pills">
-          <div className="cc-pill cc-pill-live">
-            <span className="cc-pill-dot"/>
-            <span className="cc-pill-text">{chainsLoading || !chains ? 'CONNECTING…' : `${Object.keys(chains).length} CHAINS · LIVE`}</span>
+    <div className="sw-root">
+      <div className="sw-container">
+
+        <div className="sw-header">
+          <h1 className="sw-title">Swap</h1>
+          <div className="sw-live-pill">
+            <span className="sw-live-dot"></span>
+            LIVE
           </div>
         </div>
-        <h1 className="cc-title">
-          Cross-<span className="cc-title-italic">Chain</span>
-        </h1>
-        <p className="cc-subtitle">
-          Solana → Any Chain · powered by LI.FI
-        </p>
-      </div>
 
-      <div className="cc-card">
-        <StepProgress step={step}/>
+        <div className="sw-panel">
+          <SwapRow
+            label="You Pay"
+            token={inputToken}
+            amount={amount}
+            onAmountChange={setAmount}
+            onPickerOpen={() => setShowPicker('input')}
+            balance={inputBalance}
+            balLoading={balLoading}
+            balError={balError}
+            onRefresh={refreshBalances}
+            walletConnected={!!wallet.publicKey}
+            onMax={setMax}
+            editable
+          />
 
-        {/* FROM */}
-        <div className="cc-io-box">
-          <div className="cc-io-head">
-            <span className="cc-io-label">YOU SEND</span>
-            <div className="cc-io-meta">
-              <ChainBadge chain={fromChain} small/>
-              {fbd != null && (
-                <span className="cc-io-bal">
-                  Bal: <span className="cc-io-bal-val">{fmtTok(fbd)}</span>
+          <div className="sw-flip-wrap">
+            <button onClick={flip} className="sw-flip-btn" aria-label="Flip tokens"><FlipIcon/></button>
+          </div>
+
+          <SwapRow
+            label="You Receive"
+            token={outputToken}
+            amount={outAmountUi != null ? fmtAmount(outAmountUi, outputToken?.decimals) : (quoting ? '…' : '')}
+            onPickerOpen={() => setShowPicker('output')}
+            balance={balances[outputMint]}
+            balLoading={balLoading}
+            walletConnected={!!wallet.publicKey}
+            editable={false}
+          />
+
+          {quote && outputToken && inputToken && Number(amount) > 0 && (
+            <div className="sw-details">
+              <Row label="Rate">
+                1 {inputToken.symbol} ≈ {fmtAmount((outAmountUi / Number(amount)) || 0, outputToken.decimals)} {outputToken.symbol}
+              </Row>
+              <Row label="Min received">
+                {fmtAmount(minReceived, outputToken.decimals)} {outputToken.symbol}
+              </Row>
+              <Row label="Price impact">
+                <span className={priceImpactClass}>
+                  {priceImpact != null ? `${priceImpact.toFixed(2)}%` : '—'}
                 </span>
-              )}
-            </div>
-          </div>
-          <div className="cc-io-row">
-            <button
-              onClick={() => !busy && setFromOpen(true)}
-              className="cc-token-btn"
-              disabled={busy}
-            >
-              <TokenIcon token={fromToken} size={22}/>
-              <span className="cc-token-sym">{fromToken?.symbol}</span>
-              {!busy && <span className="cc-token-caret">▾</span>}
-            </button>
-            <input
-              value={fromAmt}
-              onChange={e => { if (!busy) setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }}
-              placeholder="0.00"
-              inputMode="decimal"
-              disabled={busy}
-              className="cc-io-input"
-            />
-            {fbd > 0 && !busy && (
-              <button onClick={onMax} className="cc-max-btn">MAX</button>
-            )}
-          </div>
-          {fromUsd > 0 && (
-            <div className="cc-io-usd">{fmtUsd(fromUsd)}</div>
-          )}
-        </div>
-
-        <div className="cc-flip-wrap">
-          <div className="cc-flip-arrow">↓</div>
-        </div>
-
-        {/* TO */}
-        <div className="cc-io-box">
-          <div className="cc-io-head">
-            <span className="cc-io-label">YOU RECEIVE (EST.)</span>
-            {toToken && <ChainBadge chain={toChainDisplay} small/>}
-          </div>
-          <div className="cc-io-row">
-            <button
-              onClick={() => !busy && setToOpen(true)}
-              className="cc-token-btn"
-              disabled={busy}
-            >
-              <TokenIcon token={toToken} size={22}/>
-              <span className="cc-token-sym">{toToken?.symbol}</span>
-              {!busy && <span className="cc-token-caret">▾</span>}
-            </button>
-            <div className={'cc-io-output' + (quote ? ' cc-io-output-active' : '')}>
-              {quoting
-                ? <span className="cc-io-output-loading">…</span>
-                : (quote?.outDisplay || '0')}
-            </div>
-          </div>
-          {tuv > 0 && (
-            <div className="cc-io-usd">{fmtUsd(tuv)}</div>
-          )}
-          {quote && (
-            <div className="cc-route-meta">
-              <span>via {quote.bridge}</span>
-              {quote.estTime && <span>~{Math.max(1, Math.ceil(quote.estTime / 60))} min</span>}
+              </Row>
+              <Row label="Platform fee">{(FEE_BPS / 100).toFixed(1)}% (in {inputToken.symbol})</Row>
             </div>
           )}
-        </div>
 
-        {needsDest && (
-          <div className="cc-dest">
-            <div className="cc-dest-label">
-              DESTINATION{' '}
-              <span className="cc-dest-chain" style={{ color: chainColorOf(toChainDisplay) }}>
-                · {toChainDisplay?.name}
-              </span>
-            </div>
-            <div className="cc-dest-input-wrap">
-              <input
-                value={destAddr}
-                onChange={e => { if (!busy) setDestAddr(e.target.value.trim()); }}
-                placeholder={
-                  toChainType === 'EVM'  ? '0x...'
-                  : toChainType === 'SVM' ? 'Solana address'
-                  : toChainType === 'UTXO' ? 'bc1... / 1... / 3...'
-                  : toChainType === 'MVM' ? '0x... (64 hex)'
-                  : 'Destination address'
-                }
-                disabled={busy}
-                className={'cc-dest-input' + (addrErr ? ' cc-dest-err' : destAddr && !addrErr ? ' cc-dest-ok' : '')}
-              />
-              {destAddr && !addrErr && (
-                <div className="cc-dest-check">✓</div>
-              )}
-            </div>
-            {addrErr && <div className="cc-dest-err-msg">{addrErr}</div>}
-          </div>
-        )}
+          {quoteError && !swapping && !swapResult && <Banner kind="error">{quoteError}</Banner>}
+          {swapError && <Banner kind="error">{swapError}</Banner>}
+          {swapResult && (
+            <Banner kind={swapResult.pending ? 'pending' : 'success'}>
+              {swapResult.pending ? 'Submitted but still confirming. ' : 'Swap confirmed. '}
+              <a
+                href={`https://solscan.io/tx/${swapResult.signature}`}
+                target="_blank"
+                rel="noreferrer"
+                className="sw-banner-link"
+              >
+                View on Solscan
+              </a>
+            </Banner>
+          )}
 
-        {quoteErr && !quote && (
-          <div className="cc-warn">{quoteErr}</div>
-        )}
-
-        {quote && fromAmt && (
-          <div className="cc-route-details">
-            {[
-              ['Route',        quote.bridge],
-              ['Platform fee', `${quote.feeSOL.toFixed(4)} SOL` + (quote.feeUSD ? ` (${fmtUsd(quote.feeUSD)})` : '')],
-              ['Slippage',     (SLIPPAGE * 100).toFixed(1) + '%'],
-              ['Est. time',    quote.estTime ? '~' + Math.max(1, Math.ceil(quote.estTime / 60)) + ' min' : '—'],
-            ].map(([k, v]) => (
-              <div key={k} className="cc-detail-row">
-                <span className="cc-detail-key">{k}</span>
-                <span className="cc-detail-val">{v}</span>
-              </div>
-            ))}
-            {fromToken?.mint !== WSOL_MINT && (
-              <div className="cc-detail-note">
-                Fee paid in SOL from your wallet — you bridge 100% of your {fromToken?.symbol}.
-              </div>
-            )}
-          </div>
-        )}
-
-        {solShortfall > 0 && quote && (
-          <div className="cc-warn">
-            You need ~{(solShortfall / LAMPORTS_PER_SOL).toFixed(4)} more SOL in your wallet to cover the platform fee.
-          </div>
-        )}
-
-        {statusMsg && busy && (
-          <div className="cc-status">
-            <div className="cc-spinner"/>
-            {statusMsg}
-          </div>
-        )}
-
-        {swapErr && (
-          <div className="cc-error">{swapErr}</div>
-        )}
-
-        {isSuccess && (
-          <div className={'cc-success' + (pendingMsg ? ' cc-success-pending' : '')}>
-            <div className="cc-success-icon">{pendingMsg ? '⏳' : '🎉'}</div>
-            <div className="cc-success-title">
-              {pendingMsg ? 'Bridge Submitted' : 'Bridge Submitted!'}
-            </div>
-            <div className="cc-success-sub">
-              {pendingMsg || (quote?.estTime
-                ? 'Funds arrive in ~' + Math.max(1, Math.ceil(quote.estTime / 60)) + ' min'
-                : 'Funds arrive in a few minutes')}
-            </div>
-          </div>
-        )}
-
-        {!isSuccess ? (
           <button
-            onClick={isError ? reset : (!wcon ? () => onConnectWallet?.() : execute)}
-            disabled={btnDisabled && !isError}
-            className={btnClass()}
+            onClick={(!wallet.publicKey && onConnectWallet) ? onConnectWallet : handleSwap}
+            disabled={!wallet.publicKey ? !onConnectWallet : !canSwap}
+            className={'sw-primary-btn' + ((!wallet.publicKey ? !!onConnectWallet : canSwap) ? '' : ' sw-disabled')}
           >
-            {busy && <span className="cc-cta-spinner">⟳</span>}
-            {btnLabel()}
+            {swapping
+              ? 'Swapping…'
+              : !wallet.publicKey
+                ? 'Connect Wallet'
+                : inputMint === outputMint
+                  ? 'Select different tokens'
+                  : !amount || Number(amount) <= 0
+                    ? 'Enter amount'
+                    : !quote && quoting
+                      ? 'Getting quote…'
+                      : !quote
+                        ? 'No route available'
+                        : !hasFunds
+                          ? `Insufficient ${inputToken?.symbol || ''}`
+                          : '🚀 Swap'}
           </button>
-        ) : (
-          <button onClick={reset} className="cc-cta cc-cta-reset">
-            New Bridge
-          </button>
-        )}
 
-        {txSig && solscan && (
-          <a href={solscan} target="_blank" rel="noreferrer" className="cc-solscan-link">
-            View on Solscan ↗
-          </a>
-        )}
-        <p className="cc-footer-note">
-          Non-custodial · LI.FI aggregator · Solana origin
-        </p>
+          <p className="sw-footer">
+            Powered by <b>Jupiter</b> · Solana's leading DEX aggregator
+          </p>
+        </div>
       </div>
 
-      <FromTokenModal
-        open={fromOpen}
-        onClose={() => setFromOpen(false)}
-        onSelect={t => { setFromToken(t); setQuote(null); }}
-      />
-      <ToTokenModal
-        open={toOpen}
-        onClose={() => setToOpen(false)}
-        onSelect={t => { setToToken(t); setQuote(null); setDestAddr(''); setAddrErr(''); }}
-        chains={chains}
-      />
+      {showPicker && (
+        <TokenPicker
+          tokens={tokens}
+          loading={tokensLoading}
+          balances={balances}
+          excludeMint={showPicker === 'input' ? outputMint : inputMint}
+          onSelect={(mint) => {
+            if (showPicker === 'input') setInputMint(mint);
+            else                         setOutputMint(mint);
+            setShowPicker(null);
+          }}
+          onClose={() => setShowPicker(null)}
+        />
+      )}
     </div>
   );
 }
+
+/* ─── SUB-COMPONENTS ────────────────────────────────────────── */
+
+function SwapRow({
+  label, token, amount, onAmountChange, onPickerOpen,
+  balance, balLoading, balError, onRefresh, walletConnected,
+  onMax, editable,
+}) {
+  return (
+    <div className="sw-row">
+      <div className="sw-row-top">
+        <span className="sw-row-label">{label}</span>
+        {walletConnected && (
+          <span className="sw-balance">
+            {balLoading
+              ? 'Balance: …'
+              : balError
+                ? <span style={{ color: '#ffa9bd' }}>{balError}</span>
+                : balance
+                  ? <>Balance: <b>{fmtAmount(balance.uiAmount, balance.decimals)}</b></>
+                  : <>Balance: <b>0</b></>
+            }
+            {onRefresh && (
+              <button
+                onClick={onRefresh}
+                className="sw-max-btn"
+                style={{ marginLeft: 6 }}
+                aria-label="Refresh balance"
+              >
+                ↻
+              </button>
+            )}
+            {editable && onMax && balance && balance.uiAmount > 0 && !balLoading && (
+              <button onClick={onMax} className="sw-max-btn">MAX</button>
+            )}
+          </span>
+        )}
+      </div>
+      <div className="sw-row-mid">
+        <button onClick={onPickerOpen} className="sw-token-btn">
+          {token?.logoURI && (
+            <img
+              src={token.logoURI}
+              alt=""
+              className="sw-token-logo"
+              onError={(e) => { e.target.style.display = 'none'; }}
+            />
+          )}
+          <span>{token?.symbol || 'Select'}</span>
+          <ChevronIcon/>
+        </button>
+        {editable ? (
+          <input
+            type="text"
+            inputMode="decimal"
+            placeholder="0.00"
+            value={amount}
+            onChange={(e) => {
+              const v = e.target.value.replace(/[^\d.]/g, '');
+              const parts = v.split('.');
+              if (parts.length > 2) return;
+              onAmountChange(v);
+            }}
+            className="sw-amount-input"
+          />
+        ) : (
+          <input type="text" readOnly value={amount} placeholder="0.00" className="sw-amount-input"/>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TokenPicker({ tokens, loading, balances, excludeMint, onSelect, onClose }) {
+  const [query, setQuery] = useState('');
+  const [searchResults, setSearchResults] = useState(null);
+  const [searching, setSearching] = useState(false);
+
+  useEffect(() => {
+    if (!query.trim()) { setSearchResults(null); return; }
+    const t = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const r = await fetch(`/api/jupiter/tokens/search?query=${encodeURIComponent(query.trim())}`);
+        const data = await r.json();
+        const list = Array.isArray(data) ? data : (data?.tokens || []);
+        setSearchResults(list.map(t => ({
+          address:  t.id || t.address || t.mint,
+          symbol:   t.symbol,
+          name:     t.name,
+          decimals: t.decimals,
+          logoURI:  t.icon || t.logoURI || null,
+        })).filter(t => t.address && t.symbol && t.decimals != null));
+      } catch (e) {
+        console.warn('[swap] search failed', e);
+      } finally {
+        setSearching(false);
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [query]);
+
+  const list = useMemo(() => {
+    const base = searchResults != null
+      ? searchResults
+      : tokens.filter(t => {
+          if (!query.trim()) return true;
+          const q = query.toLowerCase();
+          return t.symbol.toLowerCase().includes(q) ||
+                 t.name.toLowerCase().includes(q)   ||
+                 t.address.toLowerCase().startsWith(q);
+        });
+    return base
+      .filter(t => t.address !== excludeMint)
+      .sort((a, b) => {
+        const ab = balances[a.address]?.uiAmount || 0;
+        const bb = balances[b.address]?.uiAmount || 0;
+        if (ab > 0 && bb === 0) return -1;
+        if (bb > 0 && ab === 0) return 1;
+        if (ab !== bb) return bb - ab;
+        return a.symbol.localeCompare(b.symbol);
+      })
+      .slice(0, 150);
+  }, [tokens, searchResults, query, excludeMint, balances]);
+
+  return (
+    <div className="sw-modal-overlay" onClick={onClose}>
+      <div className="sw-modal-card" onClick={(e) => e.stopPropagation()}>
+        <div className="sw-modal-head">
+          <div className="sw-modal-head-row">
+            <h3 className="sw-modal-title">Select Token</h3>
+            <button onClick={onClose} className="sw-icon-btn"><CloseIcon/></button>
+          </div>
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Search name, symbol, or paste address"
+            className="sw-modal-search"
+          />
+        </div>
+        <div className="sw-modal-list">
+          {loading && <div className="sw-modal-msg">Loading tokens…</div>}
+          {!loading && list.length === 0 && (
+            <div className="sw-modal-msg">{searching ? 'Searching…' : 'No tokens found.'}</div>
+          )}
+          {list.map(t => {
+            const bal = balances[t.address];
+            return (
+              <button
+                key={t.address}
+                onClick={() => onSelect(t.address)}
+                className="sw-token-row"
+              >
+                {t.logoURI
+                  ? <img src={t.logoURI} alt="" className="sw-token-row-logo"
+                         onError={(e) => { e.target.style.visibility = 'hidden'; }} />
+                  : <div className="sw-token-row-placeholder" />
+                }
+                <div className="sw-token-row-info">
+                  <div className="sw-token-row-sym">{t.symbol}</div>
+                  <div className="sw-token-row-name">{t.name}</div>
+                </div>
+                {bal && bal.uiAmount > 0 && (
+                  <div className="sw-token-row-bal">
+                    {fmtAmount(bal.uiAmount, bal.decimals)}
+                  </div>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function Row({ label, children }) {
+  return (
+    <div className="sw-detail-row">
+      <span>{label}</span>
+      <span className="sw-detail-val">{children}</span>
+    </div>
+  );
+}
+
+function Banner({ kind, children }) {
+  return (
+    <div className={`sw-banner sw-banner-${kind}`}>{children}</div>
+  );
+}
+
+/* ─── ICONS ────────────────────────────────────────────────── */
+
+const ChevronIcon = () => (
+  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="6 9 12 15 18 9"/>
+  </svg>
+);
+const FlipIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="7 13 12 18 17 13"/>
+    <polyline points="7 6 12 11 17 6"/>
+  </svg>
+);
+const CloseIcon = () => (
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <line x1="18" y1="6" x2="6"  y2="18"/>
+    <line x1="6"  y1="6" x2="18" y2="18"/>
+  </svg>
+);
