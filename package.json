@@ -54,7 +54,9 @@
     "style-loader": "^3.3.4"
   },
   "scripts": {
-    "start": "concurrently --names server,crank --prefix-colors blue,magenta \"node server.js\" \"ts-node --transpile-only crank/crank.ts\"",
+    "start": "node server.js",
+    "start:full": "concurrently --names server,crank --prefix-colors blue,magenta \"node server.js\" \"ts-node --transpile-only crank/crank.ts\"",
+    "start:crank": "ts-node --transpile-only crank/crank.ts",
     "build": "react-app-rewired build",
     "build:embed": "react-app-rewired build --config-overrides config-overrides.embed.js",
     "build:all": "npm run build",
