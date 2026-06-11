@@ -314,7 +314,7 @@ const lifiFromToken = mint => (mint === WSOL_MINT ? SOL_NATIVE : mint);
 const friendlyError = err => {
   const m = String(err?.message || err || '').toLowerCase();
   if (m.includes('insufficient sol') || m.includes('not enough sol'))
-    return 'Not enough SOL to cover the platform fee and network fee.';
+    return 'Not enough SOL in your wallet.';
   if (m.includes('insufficient') || m.includes('not enough'))
     return 'Insufficient balance for this bridge.';
   if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled'))
@@ -326,7 +326,7 @@ const friendlyError = err => {
   if (m.includes('no route') || m.includes('no available') || m.includes('not found'))
     return 'No bridge route available for this pair right now.';
   if (m.includes('minimum') || m.includes('too small'))
-    return 'Amount is too small — bridge fees would exceed the swap.';
+    return 'Amount is too small for this route.';
   if (m.includes('429') || m.includes('rate limit'))
     return 'Too many requests — please wait a moment.';
   if (m.includes('timeout') || m.includes('timed out'))
@@ -334,7 +334,7 @@ const friendlyError = err => {
   if (m.includes('account not') || m.includes('uninitialized'))
     return 'Token account not ready. Try again in a moment.';
   if (m.includes('too large') || m.includes('transaction too large'))
-    return 'Route is too complex to fit our fee in one transaction. Try a different token or amount.';
+    return 'Route is too complex for a single transaction. Try a different token or amount.';
   return err?.message || 'Bridge failed. Please try again.';
 };
 
@@ -995,7 +995,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
     if (!quote) { setSwapErr('No route. Wait for routing.'); return; }
     if (!signTransaction) { setSwapErr('Wallet does not support signing. Use Phantom or Solflare.'); return; }
     if (solShortfall && solShortfall > 0) {
-      setSwapErr(`Not enough SOL — need ~${(solShortfall / LAMPORTS_PER_SOL).toFixed(4)} more SOL to cover the platform + network fee.`);
+      setSwapErr(`Not enough SOL — need ~${(solShortfall / LAMPORTS_PER_SOL).toFixed(4)} more SOL in your wallet.`);
       return;
     }
 
@@ -1016,7 +1016,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
 
       const feeLamports = quote.feeLamports;
 
-      setStatusMsg('Combining bridge + fee into one transaction…');
+      setStatusMsg('Preparing transaction…');
       const latest = await connection.getLatestBlockhash('confirmed');
       const tx = await buildAtomicTx({
         connection, payer: pubkey,
@@ -1027,7 +1027,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
 
       const mapSimErr = (logs) => {
         const t = (logs || []).join('\n').toLowerCase();
-        if (t.includes('insufficient') || t.includes('0x1')) return 'Insufficient balance (need SOL for fee + bridge).';
+        if (t.includes('insufficient') || t.includes('0x1')) return 'Insufficient balance for this bridge.';
         if (t.includes('slippage') || t.includes('0x1771'))  return 'Price moved — try a smaller amount or wait a moment.';
         if (t.includes('account not') || t.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
         if (t.includes('blockhash') || t.includes('expired')) return 'Quote expired. Please refresh and retry.';
@@ -1254,7 +1254,6 @@ export default function CrossChainSwap({ onConnectWallet }) {
           <div className="cc-route-details">
             {[
               ['Route',        quote.bridge],
-              ['Platform fee', `${quote.feeSOL.toFixed(4)} SOL` + (quote.feeUSD ? ` (${fmtUsd(quote.feeUSD)})` : '')],
               ['Slippage',     (SLIPPAGE * 100).toFixed(1) + '%'],
               ['Est. time',    quote.estTime ? '~' + Math.max(1, Math.ceil(quote.estTime / 60)) + ' min' : '—'],
             ].map(([k, v]) => (
@@ -1263,17 +1262,12 @@ export default function CrossChainSwap({ onConnectWallet }) {
                 <span className="cc-detail-val">{v}</span>
               </div>
             ))}
-            {fromToken?.mint !== WSOL_MINT && (
-              <div className="cc-detail-note">
-                Fee paid in SOL from your wallet — you bridge 100% of your {fromToken?.symbol}.
-              </div>
-            )}
           </div>
         )}
 
         {solShortfall > 0 && quote && (
           <div className="cc-warn">
-            You need ~{(solShortfall / LAMPORTS_PER_SOL).toFixed(4)} more SOL in your wallet to cover the platform fee.
+            You need ~{(solShortfall / LAMPORTS_PER_SOL).toFixed(4)} more SOL in your wallet to complete this bridge.
           </div>
         )}
 
