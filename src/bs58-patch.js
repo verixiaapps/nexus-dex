@@ -81,3 +81,4 @@ function showBanner() {
     '⚠️ bs58.decode received invalid base58 input. App is running with zero-address fallback.\n\n' +
     list;
 }
+ 
