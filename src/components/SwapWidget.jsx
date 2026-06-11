@@ -671,7 +671,6 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
                   {priceImpact != null ? `${priceImpact.toFixed(2)}%` : '—'}
                 </span>
               </Row>
-              <Row label="Platform fee">{(FEE_BPS / 100).toFixed(1)}% (in {inputToken.symbol})</Row>
             </div>
           )}
 
