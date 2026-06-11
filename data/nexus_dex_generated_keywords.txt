@@ -732,6 +732,36 @@ swap sol for kmno solana
 swap sol for link
 swap sol for mew solana
 swap sol for mkr
+swap sol for mnde solana
+swap sol for msol solana
+swap sol for near
+swap sol for pengu solana
+swap sol for pepe
+swap sol for pnut solana
+swap sol for popcat
+swap sol for popcat solana
+swap sol for pyth
+swap sol for pyth solana
+swap sol for ray solana
+swap sol for render
+swap sol for render solana
+swap sol for shib
+swap sol for tnsr solana
+swap sol for uni
+swap sol for usdt
+swap sol for w solana
+swap sol for wen solana
+swap sol for wif
+swap sol for wif solana
+swap sol on solana
+swap sol to aave
+swap sol to act
+swap sol to act solana
+swap sol to ai16z
+swap sol to ai16z solana
+swap sol to aptos
+swap sol to arbitrum
+swap sol to atlas solana
 swap stablecoin bridge
 swap stablecoins cross chain
 swap usdc cross chain
