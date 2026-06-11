@@ -491,7 +491,7 @@ const JUPITER_ERROR_CODES = {
   6000: 'No swap route available',
   6001: 'Price moved — try a slightly different amount',
   6002: 'Routing calculation error — try again',
-  6003: 'Fee account misconfigured',
+  6003: 'Configuration error',
   6004: 'Invalid slippage value',
   6005: 'Insufficient liquidity along route',
   6006: 'Invalid input mint',
@@ -748,7 +748,7 @@ function TradeModal({ open, brand, price, onClose, walletPubkey, onConnectWallet
         const worstUsdcOut = BigInt(quote.otherAmountThreshold || quote.outAmount || '0');
         feeAtomic = (worstUsdcOut * BigInt(FEE_BPS)) / 10000n;
       }
-      if (feeAtomic <= 0n) throw new Error('Fee amount rounds to zero — amount too small');
+      if (feeAtomic <= 0n) throw new Error('Amount too small');
 
       const feeIxs = [
         createIdempotentAtaIx(owner, feeUsdcAta, FEE_WALLET, usdcMintPk, TOKEN_PROGRAM_ID),
