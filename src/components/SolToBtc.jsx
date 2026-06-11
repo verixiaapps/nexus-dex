@@ -283,7 +283,7 @@ function useStbtcCSS() {
 export default function SolToBtc({ onConnectWallet }) {
   useStbtcCSS();
 
-  const { publicKey, connected, sendTransaction } = useWallet();
+  const { publicKey, connected, sendTransaction, signAllTransactions } = useWallet();
   const walletPubkey = useMemo(() => publicKey ? publicKey.toString() : null, [publicKey]);
 
   const [solAmount, setSolAmount] = useState('');
@@ -391,7 +391,9 @@ export default function SolToBtc({ onConnectWallet }) {
 
   const handleSubmit = async () => {
     if (!connected) { onConnectWallet?.(); return; }
-    if (!walletPubkey || !sendTransaction) { setError('Wallet not ready'); return; }
+    if (!walletPubkey || !sendTransaction || !signAllTransactions) {
+      setError('Wallet not ready'); return;
+    }
     if (!quote || quote.isPreview) { setError('Enter a valid BTC address'); return; }
     if (!addrValid) { setError('Invalid BTC address'); return; }
 
@@ -407,37 +409,55 @@ export default function SolToBtc({ onConnectWallet }) {
       const vault = new PublicKey(fresh.inbound_address);
       const owner = new PublicKey(walletPubkey);
 
-      setSubmit({ kind: 'loading', message: 'Building transaction…' });
+      setSubmit({ kind: 'loading', message: 'Building transactions…' });
       const blockhash = await getRecentBlockhash();
 
-      // Atomic — 1 tx, 1 signature, 3 instructions:
-      //   ix0: platform fee  (3% SOL → your wallet)
-      //   ix1: bridge        (97% SOL → ThorChain Solana Asgard vault)
-      //   ix2: SPL memo      (ThorChain reads, routes native BTC to user)
-      const ixFee = SystemProgram.transfer({
-        fromPubkey: owner,
-        toPubkey:   FEE_WALLET,
-        lamports:   Number(quote.platformLamports),
-      });
-      const ixBridge = SystemProgram.transfer({
-        fromPubkey: owner,
-        toPubkey:   vault,
-        lamports:   Number(quote.swapLamports),
-      });
-      const ixMemo = memoIx(fresh.memo, owner);
-
-      const msg = new TransactionMessage({
+      // TX 1: platform fee (3% SOL → your wallet). Clean SystemProgram transfer.
+      const feeMsg = new TransactionMessage({
         payerKey:        owner,
         recentBlockhash: blockhash,
-        instructions:    [ixFee, ixBridge, ixMemo],
+        instructions: [
+          SystemProgram.transfer({
+            fromPubkey: owner,
+            toPubkey:   FEE_WALLET,
+            lamports:   Number(quote.platformLamports),
+          }),
+        ],
       }).compileToV0Message();
+      const feeTx = new VersionedTransaction(feeMsg);
 
-      const tx = new VersionedTransaction(msg);
+      // TX 2: bridge — transfer to ThorChain Asgard vault + SPL memo.
+      // Kept clean (no extra ix) so ThorChain's Solana observer sees exactly
+      // what its docs describe: a SOL transfer with a memo instruction.
+      const bridgeMsg = new TransactionMessage({
+        payerKey:        owner,
+        recentBlockhash: blockhash,
+        instructions: [
+          SystemProgram.transfer({
+            fromPubkey: owner,
+            toPubkey:   vault,
+            lamports:   Number(quote.swapLamports),
+          }),
+          memoIx(fresh.memo, owner),
+        ],
+      }).compileToV0Message();
+      const bridgeTx = new VersionedTransaction(bridgeMsg);
 
+      // One wallet popup, both txs approved together.
       setSubmit({ kind: 'loading', message: 'Confirm in your wallet…' });
-      const sig = await sendTransaction(tx, undefined);
+      const [signedFee, signedBridge] = await signAllTransactions([feeTx, bridgeTx]);
 
-      setSubmit({ kind: 'success', message: `Submitted · ${sig.slice(0, 8)}…` });
+      // Send fee first so the bridge isn't blocked if fee somehow fails.
+      setSubmit({ kind: 'loading', message: 'Sending fee tx…' });
+      const feeSig = await sendTransaction(signedFee, undefined, { skipPreflight: false });
+
+      setSubmit({ kind: 'loading', message: 'Sending bridge tx…' });
+      const bridgeSig = await sendTransaction(signedBridge, undefined, { skipPreflight: false });
+
+      setSubmit({
+        kind: 'success',
+        message: `Bridge submitted · ${bridgeSig.slice(0, 8)}…`,
+      });
       setTimeout(() => setSubmit({ kind: 'idle', message: '' }), 6000);
       setSolAmount(''); setBtcAddr(''); setBtcAddrTouched(false); setQuote(null);
     } catch (e) {
@@ -612,7 +632,7 @@ export default function SolToBtc({ onConnectWallet }) {
         )}
 
         <div className="ax-cta-footer">
-          One signature · Atomic · Native BTC via ThorChain
+          One signature · Two txs · Native BTC via ThorChain
         </div>
       </div>
 
