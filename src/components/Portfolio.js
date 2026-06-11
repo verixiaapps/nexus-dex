@@ -699,3 +699,4 @@ export default function Portfolio({ onConnectWallet }) {
     </div>
   );
 }
+ 
