@@ -393,6 +393,7 @@ const FLIPSY_CSS = `
 }
 .fp-mid-price.up   { color: #14F195; text-shadow: 0 0 18px rgba(20, 241, 149, 0.5); }
 .fp-mid-price.down { color: #DC1FFF; text-shadow: 0 0 18px rgba(220, 31, 255, 0.5); }
+
 .fp-mid-delta {
   font-size: 11px;
   font-weight: 800;
@@ -818,6 +819,8 @@ function RoundsPopup({ open, onClose, liveRound, upcomingRounds, recentRounds, u
                   ) : (
                     <div style={{ fontSize: 11, color: '#5D5876' }}>Awaiting start</div>
                   )}
+
+                  )}
                   <div style={{ marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {longTotal > 0 && (
                       <span style={{ fontSize: 10, color: '#14F195', fontWeight: 700 }}>↑ ${longTotal.toFixed(2)}</span>
@@ -1018,6 +1021,8 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
             style={{ width: '100%', padding: '16px', borderRadius: 18, border: 'none', background: invalidAmount ? 'rgba(255,255,255,0.06)' : status === 'signing' ? 'rgba(255,255,255,0.08)' : `linear-gradient(135deg, ${sideColor}, ${isLong ? '#00D9FF' : '#9945FF'})`, color: invalidAmount || status === 'signing' ? '#5D5876' : isLong ? '#001A0F' : '#FFFFFF', fontFamily: 'Inter, sans-serif', fontWeight: 900, fontSize: 16, letterSpacing: '0.08em', cursor: invalidAmount || status === 'signing' ? 'not-allowed' : 'pointer', boxShadow: invalidAmount || status === 'signing' ? 'none' : `0 8px 30px ${sideColor}44`, transition: 'all 0.2s' }}>
             {buttonLabel}
           </button>
+
+          </button>
         )}
         <div style={{ textAlign: 'center', marginTop: 10, fontSize: 10, color: '#5D5876', fontWeight: 600, letterSpacing: '0.1em' }}>
           NETWORK FEE ~0.000005 SOL · 25% FEE ON WINNINGS ONLY
@@ -1198,6 +1203,8 @@ export default function Flipsy({ onConnectWallet }) {
 
   const getBetsForEpoch = (epoch) => {
     const b = userBets[epoch];
+
+    const b = userBets[epoch];
     if (!b) return [];
     return Array.isArray(b) ? b : [b];
   };
@@ -1365,3 +1372,4 @@ export default function Flipsy({ onConnectWallet }) {
     </div>
   );
 }
+
