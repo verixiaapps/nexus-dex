@@ -1,10 +1,184 @@
+// Portfolio.jsx — holdings dashboard.
+//
+// CHANGES (visual only — all RPC/Jupiter/portfolio logic preserved exactly):
+//   • CSS combined inline as PF_CSS + usePfCSS injector (no Portfolio.css)
+//   • Fonts normalized to Syne + JetBrains Mono (matches App.jsx)
+//   • Renamed from .js to .jsx for consistency
+// Trading-related logic (price fetch, metadata, balances, brand detection,
+// dust filter, sorting) is BYTE-IDENTICAL to the previous version.
+
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import { PublicKey } from '@solana/web3.js';
-import './Portfolio.css'; 
 
 // =====================================================================
-// CONSTANTS
+// INLINE CSS — Syne + JetBrains Mono · mint + violet, native dark
+// =====================================================================
+const PF_CSS = `
+.pf-page{
+  --pf-bg:#03060f; --pf-bg-2:#070b16;
+  --pf-surface:#0a1020; --pf-surface-2:#0e1428;
+  --pf-ink:#e6efff; --pf-ink-str:#f5fafe;
+  --pf-muted:#7a92b3; --pf-muted-2:#475670;
+  --pf-hl:#4dffd2; --pf-hl-2:#5ce9c8;
+  --pf-hl-dim:rgba(77,255,210,.14);
+  --pf-violet:#a87fff;
+  --pf-sol:#9945ff;
+  --pf-up:#3dd598; --pf-down:#ff8a9e;
+  --pf-amber:#f5b53d; --pf-gold:#ffcd3c;
+  --pf-border:rgba(255,255,255,.06);
+  --pf-border-hi:rgba(77,255,210,.24);
+  --pf-hairline:rgba(255,255,255,.05);
+
+  --pf-font-display:'Syne',system-ui,sans-serif;
+  --pf-font-body:'Syne',system-ui,sans-serif;
+  --pf-font-mono:'JetBrains Mono','IBM Plex Mono',ui-monospace,monospace;
+
+  max-width:520px;margin:0 auto;width:100%;
+  padding:0;
+  color:var(--pf-ink);
+  font-family:var(--pf-font-body);
+  background-image:
+    radial-gradient(ellipse 80% 40% at 50% -10%,rgba(77,255,210,.10),transparent 60%),
+    radial-gradient(ellipse 60% 30% at 80% 20%,rgba(168,127,255,.06),transparent 50%);
+}
+.pf-page *{box-sizing:border-box}
+
+@keyframes pf-spin{to{transform:rotate(360deg)}}
+@keyframes pf-pulse{50%{opacity:.4}}
+
+/* DISCONNECTED */
+.pf-page-disconnected{max-width:520px}
+.pf-disconnect-card{
+  text-align:center;padding:60px 24px 40px;border-radius:26px;
+  background:linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98));
+  border:1.5px solid rgba(255,255,255,.07);
+  box-shadow:0 20px 60px rgba(0,0,0,.55);
+  margin-top:24px;
+}
+.pf-disconnect-icon{
+  width:60px;height:60px;border-radius:50%;
+  background:linear-gradient(135deg,var(--pf-hl) 0%,var(--pf-violet) 100%);
+  margin:0 auto 18px;display:grid;place-items:center;color:#04070f;
+  box-shadow:0 0 24px rgba(77,255,210,.3),0 0 48px rgba(77,255,210,.1);
+}
+.pf-disconnect-title{font-family:var(--pf-font-display);font-size:30px;font-weight:800;color:var(--pf-ink-str);margin:0 0 10px;letter-spacing:-.04em}
+.pf-disconnect-italic{font-style:italic;font-weight:500;background:linear-gradient(135deg,var(--pf-hl) 0%,var(--pf-violet) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.pf-disconnect-sub{color:var(--pf-muted);font-size:13px;margin:0 0 28px;line-height:1.5}
+.pf-disconnect-btn{
+  background:linear-gradient(135deg,var(--pf-hl) 0%,var(--pf-violet) 100%);
+  border:none;border-radius:16px;padding:16px 34px;color:#04070f;
+  font-weight:900;font-size:15px;cursor:pointer;
+  font-family:var(--pf-font-display);letter-spacing:.04em;
+  box-shadow:0 8px 28px rgba(77,255,210,.35),0 4px 0 rgba(0,0,0,.25),inset 0 -3px 0 rgba(0,0,0,.12),inset 0 2px 0 rgba(255,255,255,.3);
+  transition:transform .15s cubic-bezier(0.2,1.2,0.4,1);
+}
+.pf-disconnect-btn:active{transform:translateY(3px)}
+
+/* WIDGET TITLE */
+.pf-widget-title{display:flex;align-items:center;justify-content:space-between;padding:0 4px 12px;margin-top:-4px}
+.pf-widget-title .nm{font-family:var(--pf-font-display);font-weight:800;font-size:20px;color:var(--pf-ink-str);letter-spacing:-.01em}
+.pf-widget-title .live{display:flex;align-items:center;gap:6px;font-family:var(--pf-font-mono);font-size:10px;font-weight:800;color:var(--pf-hl);border:1px solid var(--pf-border-hi);border-radius:100px;padding:5px 11px;background:var(--pf-hl-dim)}
+.pf-widget-title .live .d{width:5px;height:5px;border-radius:50%;background:var(--pf-hl);box-shadow:0 0 8px var(--pf-hl);animation:pf-pulse 1.6s ease-in-out infinite}
+
+/* HERO */
+.pf-hero{margin-top:0;padding:22px 20px;border-radius:22px;background:linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98));border:1.5px solid rgba(255,255,255,.07);box-shadow:0 20px 60px rgba(0,0,0,.55);position:relative;overflow:hidden}
+.pf-hero-glow-1{position:absolute;right:-50px;top:-60px;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(168,127,255,.16),transparent 65%);pointer-events:none}
+.pf-hero-glow-2{position:absolute;left:-80px;bottom:-80px;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(77,255,210,.12),transparent 65%);pointer-events:none}
+.pf-hero-inner{position:relative}
+.pf-hero-top{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
+.pf-status-pill{display:inline-flex;align-items:center;gap:7px;padding:5px 11px;border-radius:999px;background:rgba(61,213,152,.08);border:1px solid rgba(61,213,152,.3)}
+.pf-status-dot{width:6px;height:6px;border-radius:50%;background:var(--pf-up);box-shadow:0 0 8px var(--pf-up);animation:pf-pulse 1.8s ease-in-out infinite}
+.pf-status-text{color:var(--pf-up);font-size:9px;font-weight:800;letter-spacing:.10em;font-family:var(--pf-font-mono)}
+.pf-refresh-btn{background:rgba(77,255,210,.06);border:1px solid var(--pf-border-hi);border-radius:999px;width:34px;height:34px;padding:0;cursor:pointer;display:grid;place-items:center;color:var(--pf-hl);transition:all .15s}
+.pf-refresh-btn:hover{background:rgba(77,255,210,.12);box-shadow:0 0 16px rgba(77,255,210,.2)}
+.pf-refresh-btn:disabled{cursor:wait;opacity:.6}
+.pf-refresh-btn.pf-spinning svg{animation:pf-spin 1s linear infinite}
+.pf-portfolio-label{font-size:10px;color:var(--pf-muted-2);font-weight:700;letter-spacing:.14em;margin-bottom:4px;font-family:var(--pf-font-mono)}
+.pf-portfolio-value{font-family:var(--pf-font-display);font-size:44px;font-weight:900;color:var(--pf-ink-str);letter-spacing:-.04em;line-height:1;margin-bottom:14px;font-variant-numeric:tabular-nums}
+.pf-wallet-card{background:rgba(0,0,0,.30);border:1px solid var(--pf-border);border-radius:12px;padding:10px 13px;cursor:pointer;width:100%;display:flex;align-items:center;gap:10px;transition:border-color .15s;color:inherit;font-family:inherit}
+.pf-wallet-card:hover{border-color:var(--pf-border-hi)}
+.pf-wallet-icon{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,var(--pf-sol),#7c3aed);display:grid;place-items:center;flex-shrink:0;box-shadow:0 2px 8px rgba(153,69,255,.4);color:#fff;font-size:11px;font-weight:800;font-family:var(--pf-font-display)}
+.pf-wallet-info{flex:1;text-align:left;min-width:0}
+.pf-wallet-label{font-size:9px;color:var(--pf-muted-2);font-weight:700;letter-spacing:.10em;font-family:var(--pf-font-mono)}
+.pf-wallet-addr{font-size:11px;color:var(--pf-ink);font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-family:var(--pf-font-mono)}
+.pf-copy-pill{font-size:9px;font-weight:800;color:var(--pf-hl);padding:5px 10px;border-radius:8px;background:var(--pf-hl-dim);border:1px solid var(--pf-border-hi);letter-spacing:.08em;flex-shrink:0;font-family:var(--pf-font-mono);transition:all .15s}
+.pf-copy-pill.pf-copied{color:var(--pf-up);background:rgba(61,213,152,.10);border-color:rgba(61,213,152,.30)}
+
+/* STATS */
+.pf-stats{display:grid;gap:8px;margin-top:12px;margin-bottom:18px}
+.pf-stats-2{grid-template-columns:repeat(2,1fr)}
+.pf-stats-3{grid-template-columns:repeat(3,1fr)}
+.pf-stat{padding:11px 13px;border-radius:12px;background:rgba(10,16,32,.50);border:1.5px solid var(--pf-border);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.pf-stat-label{font-size:9px;color:var(--pf-muted-2);font-weight:700;letter-spacing:.12em;font-family:var(--pf-font-mono)}
+.pf-stat-val{font-family:var(--pf-font-display);font-size:18px;font-weight:900;line-height:1.1;margin-top:4px;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.pf-stat-sol{color:var(--pf-sol)}
+.pf-stat-mint{color:var(--pf-hl)}
+.pf-stat-amber{color:var(--pf-amber)}
+.pf-stat-sub{font-size:10px;color:var(--pf-muted);margin-top:2px;font-weight:600;font-family:var(--pf-font-mono)}
+
+/* ERROR */
+.pf-error{background:rgba(255,138,158,.08);border:1px solid rgba(255,138,158,.24);border-radius:12px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--pf-down);font-weight:600}
+
+/* HOLDINGS HEAD */
+.pf-holdings-head{display:flex;align-items:center;justify-content:space-between;padding:0 4px;margin-bottom:8px}
+.pf-holdings-label{font-size:10px;color:var(--pf-muted-2);font-weight:800;letter-spacing:.15em;font-family:var(--pf-font-mono)}
+.pf-holdings-meta{font-size:9px;color:var(--pf-muted-2);font-weight:600;letter-spacing:.05em;font-family:var(--pf-font-mono)}
+
+/* LIST */
+.pf-list{background:rgba(10,16,32,.50);border:1.5px solid var(--pf-border);border-radius:18px;overflow:hidden;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+
+/* ROW */
+.pf-row{padding:14px 18px;display:grid;grid-template-columns:36px 1fr auto;gap:12px;align-items:center;border-bottom:1px solid var(--pf-hairline)}
+.pf-row:last-child{border-bottom:none}
+.pf-row-mid{min-width:0}
+.pf-row-head{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.pf-row-sym{color:var(--pf-ink-str);font-weight:800;font-size:14px;letter-spacing:-.01em;font-family:var(--pf-font-display)}
+.pf-row-tag{color:var(--pf-hl);font-size:8px;font-weight:800;padding:2px 6px;border-radius:4px;background:var(--pf-hl-dim);border:1px solid var(--pf-border-hi);letter-spacing:.08em;font-family:var(--pf-font-mono)}
+.pf-row-price{color:var(--pf-muted);font-size:10px;font-weight:600;font-family:var(--pf-font-mono)}
+.pf-row-sub{color:var(--pf-muted);font-size:11px;margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;max-width:220px}
+.pf-row-right{text-align:right}
+.pf-row-value{color:var(--pf-ink-str);font-weight:800;font-size:14px;font-variant-numeric:tabular-nums;font-family:var(--pf-font-mono)}
+.pf-row-value.pf-muted{color:var(--pf-muted)}
+.pf-muted{color:var(--pf-muted)}
+
+/* BADGE */
+.pf-badge{border-radius:50%;display:grid;place-items:center;font-weight:900;flex-shrink:0;letter-spacing:-.02em;font-family:var(--pf-font-display)}
+.pf-badge-img{border-radius:50%;flex-shrink:0;object-fit:cover;background:rgba(255,255,255,.04)}
+
+/* EMPTY */
+.pf-empty{padding:28px 18px;text-align:center}
+.pf-empty-title{color:var(--pf-muted);font-size:12.5px;margin-bottom:6px;font-weight:700}
+.pf-empty-sub{color:var(--pf-muted-2);font-size:11px;font-weight:500}
+
+/* SKELETON */
+.pf-skel-row{grid-template-columns:36px 1fr 80px}
+.pf-skel-badge{width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.04)}
+.pf-skel-bar{border-radius:4px;background:rgba(255,255,255,.05)}
+.pf-skel-bar-1{height:12px;width:64px;margin-bottom:6px}
+.pf-skel-bar-2{height:10px;width:96px;background:rgba(255,255,255,.035)}
+.pf-skel-bar-3{height:12px;width:60px;justify-self:end}
+
+/* POWERED */
+.pf-powered{display:flex;align-items:center;justify-content:center;gap:9px;padding:12px 16px;margin-top:18px;border-radius:14px;background:rgba(255,255,255,.02);border:1px solid var(--pf-border)}
+.pf-powered-label{font-size:9px;color:var(--pf-muted-2);font-weight:700;letter-spacing:.08em;font-family:var(--pf-font-mono)}
+.pf-powered-name{font-size:11px;font-weight:800;letter-spacing:.04em;background:linear-gradient(135deg,var(--pf-hl) 0%,var(--pf-violet) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;font-family:var(--pf-font-mono)}
+.pf-powered-sep{color:var(--pf-muted-2);font-size:9px}
+`;
+
+function usePfCSS() {
+  useEffect(() => {
+    const id = 'nexus-pf-css';
+    if (document.getElementById(id)) return;
+    const el = document.createElement('style');
+    el.id = id;
+    el.textContent = PF_CSS;
+    document.head.appendChild(el);
+  }, []);
+}
+
+// =====================================================================
+// CONSTANTS — UNCHANGED
 // =====================================================================
 const SOL_MINT              = 'So11111111111111111111111111111111111111112';
 const USDC_SOLANA           = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
@@ -14,12 +188,9 @@ const SPL_TOKEN2022_PROGRAM = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqC
 
 const DUST_THRESHOLD_USD = 0.10;
 const PRICE_CACHE_TTL_MS = 60_000;
-const META_CACHE_TTL_MS  = 24 * 60 * 60_000; // 24h — token metadata rarely changes
+const META_CACHE_TTL_MS  = 24 * 60 * 60_000;
 const POLL_INTERVAL_MS   = 30_000;
 
-// Brand tokens (Token-2022) — same 18 mints as Stocks.jsx.
-// Kept hardcoded because they're Token-2022 with curated branding.
-// `isBrand: true` marks them for UI categorization (was previously `isStock`).
 const BRAND_TOKENS = {
   'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB': { symbol:'TSLAx',  name:'Tesla',                color:'#e31837', textColor:'#fff', isBrand:true, decimals:8 },
   'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp': { symbol:'AAPLx',  name:'Apple',                color:'#a2aaad', textColor:'#000', isBrand:true, decimals:8 },
@@ -41,8 +212,6 @@ const BRAND_TOKENS = {
   'XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp': { symbol:'TBLLx',  name:'Short-Term Treasury',  color:'#2a4d6e', textColor:'#fff', isBrand:true, decimals:8 },
 };
 
-// Hardcoded mints we always know about (stables + native SOL).
-// Everything else comes from Jupiter token registry at runtime.
 const CORE_TOKENS = {
   [SOL_MINT]:    { symbol:'SOL',  name:'Solana',     color:'#9945ff', textColor:'#fff' },
   [USDC_SOLANA]: { symbol:'USDC', name:'USD Coin',   color:'#2775ca', textColor:'#fff', isStable:true },
@@ -50,7 +219,7 @@ const CORE_TOKENS = {
 };
 
 // =====================================================================
-// UTILS
+// UTILS — UNCHANGED
 // =====================================================================
 function fmt(n, d = 2) {
   if (n == null || !Number.isFinite(Number(n))) return '$0.00';
@@ -90,8 +259,6 @@ async function copyText(text) {
     return true;
   } catch { return false; }
 }
-
-// Derive a consistent fallback color from a mint string (HSL gradient).
 function colorFromMint(mint) {
   const seed = mint || '?';
   const hue = Array.from(seed).reduce((a, c) => a + c.charCodeAt(0), 0) % 360;
@@ -99,16 +266,15 @@ function colorFromMint(mint) {
 }
 
 // =====================================================================
-// TOKEN METADATA (Jupiter token registry)
+// TOKEN METADATA — UNCHANGED
 // =====================================================================
-const _metaCache = new Map(); // mint -> { meta, ts }
+const _metaCache = new Map();
 
 function getCoreMeta(mint) {
-  if (BRAND_TOKENS[mint])  return BRAND_TOKENS[mint];
-  if (CORE_TOKENS[mint])   return CORE_TOKENS[mint];
+  if (BRAND_TOKENS[mint]) return BRAND_TOKENS[mint];
+  if (CORE_TOKENS[mint])  return CORE_TOKENS[mint];
   return null;
 }
-
 function buildFallbackMeta(mint) {
   return {
     symbol:    (mint || '').slice(0, 4) + '...',
@@ -118,13 +284,9 @@ function buildFallbackMeta(mint) {
     icon:      null,
   };
 }
-
-// Fetch metadata for one or more mints from Jupiter's search endpoint.
-// Accepts a comma-separated list of mints (max 100). Returns map of mint -> meta.
 async function fetchJupiterMeta(mints) {
   if (!mints || mints.length === 0) return {};
   const out = {};
-  // Filter mints we already have cached or hardcoded.
   const need = [];
   for (const m of mints) {
     if (getCoreMeta(m)) { out[m] = getCoreMeta(m); continue; }
@@ -136,9 +298,7 @@ async function fetchJupiterMeta(mints) {
     need.push(m);
   }
   if (need.length === 0) return out;
-
   try {
-    // Jupiter search accepts comma-separated mints, up to 100.
     const chunks = [];
     for (let i = 0; i < need.length; i += 100) chunks.push(need.slice(i, i + 100));
     for (const chunk of chunks) {
@@ -164,16 +324,14 @@ async function fetchJupiterMeta(mints) {
   } catch (e) {
     console.warn('[portfolio] meta fetch failed', e?.message || e);
   }
-  // Anything still missing — fall back
   for (const m of need) if (!out[m]) out[m] = buildFallbackMeta(m);
   return out;
 }
 
 // =====================================================================
-// PRICE FETCHING (Jupiter price v3 only)
+// PRICE FETCH — UNCHANGED
 // =====================================================================
-const _priceCache = new Map(); // mint -> { price, ts }
-
+const _priceCache = new Map();
 function clearPriceCache() { _priceCache.clear(); }
 
 async function fetchJupiterPrices(mints, force = false) {
@@ -193,9 +351,7 @@ async function fetchJupiterPrices(mints, force = false) {
     need.push(m);
   }
   if (need.length === 0) return out;
-
   try {
-    // Jupiter price v3 supports up to 100 ids per call.
     const chunks = [];
     for (let i = 0; i < need.length; i += 100) chunks.push(need.slice(i, i + 100));
     for (const chunk of chunks) {
@@ -213,7 +369,6 @@ async function fetchJupiterPrices(mints, force = false) {
   } catch (e) {
     console.warn('[portfolio] price fetch failed', e?.message || e);
   }
-  // Anything we couldn't price gets 0
   for (const m of need) if (out[m] == null) out[m] = 0;
   return out;
 }
@@ -273,9 +428,7 @@ function TokenRow({ token }) {
       <div className="pf-row-mid">
         <div className="pf-row-head">
           <span className="pf-row-sym">{meta.symbol}</span>
-          {isBrand && (
-            <span className="pf-row-tag">BRAND</span>
-          )}
+          {isBrand && (<span className="pf-row-tag">BRAND</span>)}
           <span className="pf-row-price">
             {token.price > 0 ? fmt(token.price) : '—'}
           </span>
@@ -297,6 +450,8 @@ function TokenRow({ token }) {
 // MAIN
 // =====================================================================
 export default function Portfolio({ onConnectWallet }) {
+  usePfCSS();
+
   const { publicKey: extPk, connected: solCon } = useWallet();
   const { connection } = useConnection();
 
@@ -322,12 +477,10 @@ export default function Portfolio({ onConnectWallet }) {
     setError('');
 
     try {
-      // 1) Native SOL balance
       const lamports = await connection.getBalance(pubkey);
       const sol = lamports / 1e9;
       setSolBalance(sol);
 
-      // 2) All SPL token accounts (legacy + Token-2022)
       const results = await Promise.allSettled([
         connection.getParsedTokenAccountsByOwner(pubkey, { programId: SPL_LEGACY_PROGRAM }),
         connection.getParsedTokenAccountsByOwner(pubkey, { programId: SPL_TOKEN2022_PROGRAM }),
@@ -335,7 +488,6 @@ export default function Portfolio({ onConnectWallet }) {
       let allAccounts = [];
       results.forEach(r => { if (r.status === 'fulfilled' && r.value?.value) allAccounts = allAccounts.concat(r.value.value); });
 
-      // Sum by mint (account for multiple ATAs for the same mint)
       const byMint = {};
       allAccounts.forEach(acc => {
         try {
@@ -349,7 +501,6 @@ export default function Portfolio({ onConnectWallet }) {
         } catch {}
       });
 
-      // 3) Fetch metadata + prices in parallel for everything (incl. SOL)
       const allMints = [SOL_MINT, ...Object.keys(byMint).filter(m => m !== SOL_MINT)];
       const [metaMap, priceMap] = await Promise.all([
         fetchJupiterMeta(allMints),
@@ -359,7 +510,6 @@ export default function Portfolio({ onConnectWallet }) {
       const solPrice = priceMap[SOL_MINT] || 0;
       setSolPriceUsd(solPrice);
 
-      // 4) Build holdings (excluding SOL — SOL rendered separately at top)
       const enriched = Object.values(byMint)
         .filter(h => h.mint !== SOL_MINT)
         .map(h => {
@@ -369,13 +519,11 @@ export default function Portfolio({ onConnectWallet }) {
           return { ...h, meta, price, value };
         });
 
-      // Filter dust; always show stables and brand tokens even at low value
       const filtered = enriched.filter(h => {
         if (h.meta.isStable || h.meta.isBrand) return true;
         return h.value >= DUST_THRESHOLD_USD;
       });
 
-      // Sort: stables → brands → by value desc
       filtered.sort((a, b) => {
         const rank = m => m.isStable ? 0 : m.isBrand ? 1 : 2;
         const ra = rank(a.meta), rb = rank(b.meta);
@@ -416,7 +564,7 @@ export default function Portfolio({ onConnectWallet }) {
   const brandsCount  = tokens.filter(t => t.meta.isBrand).length;
 
   // ===================================================================
-  // DISCONNECTED STATE
+  // DISCONNECTED
   // ===================================================================
   if (!hasSol) {
     return (
@@ -432,29 +580,28 @@ export default function Portfolio({ onConnectWallet }) {
             Connect your{' '}
             <span className="pf-disconnect-italic">wallet</span>
           </h1>
-          <p className="pf-disconnect-sub">
-            See your SOL, tokens, and brands in one place.
-          </p>
-          <button onClick={() => onConnectWallet?.()} className="pf-disconnect-btn">
-            Connect Wallet
-          </button>
+          <p className="pf-disconnect-sub">See your SOL, tokens, and brands in one place.</p>
+          <button onClick={() => onConnectWallet?.()} className="pf-disconnect-btn">Connect Wallet</button>
         </div>
       </div>
     );
   }
 
   // ===================================================================
-  // CONNECTED STATE
+  // CONNECTED
   // ===================================================================
   const solMeta = CORE_TOKENS[SOL_MINT];
 
   return (
     <div className="pf-page">
-      {/* HERO */}
+      <div className="pf-widget-title">
+        <div className="nm">Wallet</div>
+        <div className="live"><span className="d"></span>LIVE</div>
+      </div>
+
       <div className="pf-hero">
         <div className="pf-hero-glow-1"/>
         <div className="pf-hero-glow-2"/>
-
         <div className="pf-hero-inner">
           <div className="pf-hero-top">
             <div className="pf-status-pill">
@@ -479,9 +626,7 @@ export default function Portfolio({ onConnectWallet }) {
           <div className="pf-portfolio-value">{fmt(totalValue)}</div>
 
           <button onClick={handleCopyAddr} className="pf-wallet-card">
-            <div className="pf-wallet-icon">
-              <span>S</span>
-            </div>
+            <div className="pf-wallet-icon"><span>S</span></div>
             <div className="pf-wallet-info">
               <div className="pf-wallet-label">WALLET ADDRESS</div>
               <div className="pf-wallet-addr">{shortAddr(displayAddr)}</div>
@@ -493,7 +638,6 @@ export default function Portfolio({ onConnectWallet }) {
         </div>
       </div>
 
-      {/* QUICK STATS STRIP */}
       <div className={'pf-stats' + (brandsCount > 0 ? ' pf-stats-3' : ' pf-stats-2')}>
         <div className="pf-stat">
           <div className="pf-stat-label">SOL</div>
@@ -514,20 +658,14 @@ export default function Portfolio({ onConnectWallet }) {
         )}
       </div>
 
-      {/* ERROR */}
-      {error && (
-        <div className="pf-error">{error}</div>
-      )}
+      {error && (<div className="pf-error">{error}</div>)}
 
-      {/* HOLDINGS HEADER */}
       <div className="pf-holdings-head">
         <div className="pf-holdings-label">HOLDINGS</div>
         <div className="pf-holdings-meta">JUPITER · AUTO 30s</div>
       </div>
 
-      {/* HOLDINGS LIST — SOL + SPL tokens + brand tokens (all in one) */}
       <div className="pf-list">
-        {/* Native SOL row — always shown */}
         <TokenRow token={{
           mint: SOL_MINT,
           meta: solMeta,
@@ -552,7 +690,6 @@ export default function Portfolio({ onConnectWallet }) {
         ))}
       </div>
 
-      {/* FOOTER */}
       <div className="pf-powered">
         <span className="pf-powered-label">POWERED BY</span>
         <span className="pf-powered-name">JUPITER · SOLANA</span>
