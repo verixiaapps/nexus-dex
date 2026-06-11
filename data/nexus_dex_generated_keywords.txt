@@ -762,6 +762,36 @@ swap sol to ai16z solana
 swap sol to aptos
 swap sol to arbitrum
 swap sol to atlas solana
+swap sol to avalanche
+swap sol to ban solana
+swap sol to base
+swap sol to bnb
+swap sol to bome solana
+swap sol to bonk
+swap sol to bonk solana
+swap sol to btc
+swap sol to chillguy solana
+swap sol to cloud
+swap sol to cloud solana
+swap sol to daddy solana
+swap sol to doge
+swap sol to drift
+swap sol to drift solana
+swap sol to eth
+swap sol to fartcoin
+swap sol to fartcoin solana
+swap sol to fwog solana
+swap sol to giga solana
+swap sol to gigachad solana
+swap sol to goat
+swap sol to goat solana
+swap sol to grass
+swap sol to grass solana
+swap sol to guac solana
+swap sol to hnt
+swap sol to hnt solana
+swap sol to inj
+swap sol to io
 swap stablecoin bridge
 swap stablecoins cross chain
 swap usdc cross chain
