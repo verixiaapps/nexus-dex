@@ -1,5 +1,3 @@
-useFlipsy.js — Part 1 of 2 (lines 1–220):
-
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as anchor from '@coral-xyz/anchor';
 import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
