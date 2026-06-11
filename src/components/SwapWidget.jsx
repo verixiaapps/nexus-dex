@@ -1,18 +1,12 @@
 // SwapWidget.jsx — atomic single-transaction Jupiter swap.
 //
-// FIXED: balance now displays.
-//   - rpcRace replaced with rpcTry: sequential, logs each RPC failure clearly
-//     (Promise.any was swallowing all-fail into an opaque AggregateError)
-//   - Added browser-friendly RPC endpoints
-//   - Visible balance loading + error states with a Refresh button
-//   - Balances refresh on wallet connect AND on mint change
-//
-// FAST BALANCES (this revision):
-//   - Balance reads now use the 'processed' commitment (latest state, ~1-2s
-//     sooner than 'confirmed'). The swap-send path still uses 'confirmed'.
-//   - Connection objects are cached per-URL instead of rebuilt every call.
-//   - RPC pool trimmed to the fastest browser-friendly public endpoints.
-//   - rpcRace still races them with Promise.any (first success wins).
+// CHANGES (visual only — all trading/RPC logic preserved exactly):
+//   • CSS combined inline as SW_CSS + useSwCSS injector (no SwapWidget.css)
+//   • Theme switched from mint/cyan to cyan #00e5ff + pink #ff4d9d
+//     so the widget feels native under the homepage SwapHero.
+//   • Fonts normalized to Syne + JetBrains Mono (matches App.jsx).
+//   • All Jupiter routing, fee logic, RPC pool, simulate/sign/send flow
+//     UNCHANGED. Same sw- class prefix so any external references hold.
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -32,10 +26,139 @@ import {
   TOKEN_2022_PROGRAM_ID,
 } from '@solana/spl-token';
 import { useWallet } from '@solana/wallet-adapter-react';
-import './SwapWidget.css';
+
+// =====================================================================
+// INLINE CSS — Syne + JetBrains Mono · cyan + pink to match SwapHero
+// =====================================================================
+const SW_CSS = `
+.sw-root{
+  --sw-bg:#03060f; --sw-bg-2:#080d1a;
+  --sw-panel:#101015; --sw-panel-hi:#15151c; --sw-panel-deep:#1a1a22;
+  --sw-border:rgba(255,255,255,.07); --sw-border-hi:rgba(255,255,255,.14);
+  --sw-text:#f5fafe; --sw-text-dim:#9b8fc0; --sw-text-faint:#564670;
+  --sw-cyan:#00e5ff; --sw-cyan-hi:#7df6ff;
+  --sw-pink:#ff4d9d; --sw-pink-hi:#ffa3ce;
+  --sw-green:#00ffa3; --sw-red:#ff3b6b; --sw-amber:#f59e0b;
+  --sw-cyan-line:rgba(0,229,255,.32); --sw-pink-line:rgba(255,77,157,.32);
+  --sw-cyan-bg:rgba(0,229,255,.06); --sw-cyan-bg2:rgba(0,229,255,.18);
+  --sw-pink-bg:rgba(255,77,157,.06); --sw-pink-bg2:rgba(255,77,157,.18);
+  background:transparent;
+  color:var(--sw-text);
+  font-family:'Syne',system-ui,-apple-system,sans-serif;
+}
+.sw-root,.sw-root *{box-sizing:border-box}
+
+.sw-container{max-width:480px;margin:0 auto;padding:0}
+
+/* HEADER */
+.sw-header{display:flex;justify-content:space-between;align-items:center;padding:0 4px 12px;margin-top:-4px}
+.sw-title{font-family:'Syne',sans-serif;font-weight:800;font-size:20px;margin:0;letter-spacing:-.01em;color:var(--sw-text)}
+.sw-live-pill{display:flex;align-items:center;gap:6px;border:1px solid var(--sw-cyan-line);background:var(--sw-cyan-bg);color:var(--sw-cyan);font-family:'JetBrains Mono',monospace;font-size:10px;padding:5px 11px;border-radius:100px;font-weight:800;letter-spacing:.08em}
+.sw-live-dot{width:5px;height:5px;border-radius:50%;background:var(--sw-cyan);box-shadow:0 0 8px var(--sw-cyan);animation:swPulse 1.6s ease-in-out infinite}
+@keyframes swPulse{50%{opacity:.4}}
+@keyframes swSpin{to{transform:rotate(360deg)}}
+@keyframes swShimmer{0%{left:-110px}50%,100%{left:130%}}
+@keyframes swHueShift{to{background-position:200% 0}}
+@keyframes swFadeIn{from{opacity:0}to{opacity:1}}
+@keyframes swModalIn{from{opacity:0;transform:translateY(20px) scale(.95)}to{opacity:1;transform:translateY(0) scale(1)}}
+
+/* PANEL */
+.sw-panel{background:linear-gradient(180deg,var(--sw-panel-hi),var(--sw-panel));border:1.5px solid var(--sw-border);border-radius:22px;padding:14px;box-shadow:0 8px 32px rgba(0,0,0,.4),inset 0 1px 0 rgba(255,255,255,.03)}
+
+/* SWAP ROW */
+.sw-row{background:var(--sw-panel-hi);border:1.5px solid var(--sw-border);border-radius:14px;padding:14px;transition:border-color .15s,box-shadow .15s}
+.sw-row:focus-within{border-color:var(--sw-cyan-line);box-shadow:0 0 0 3px rgba(0,229,255,.08)}
+.sw-row+.sw-row{margin-top:0}
+.sw-row-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px}
+.sw-row-label{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--sw-text-dim);font-weight:800;letter-spacing:.12em;text-transform:uppercase}
+.sw-balance{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--sw-text-dim);font-weight:600;display:flex;align-items:center;gap:6px}
+.sw-balance b{color:var(--sw-text);font-weight:800}
+.sw-max-btn{background:var(--sw-cyan-bg);border:1px solid var(--sw-cyan-line);color:var(--sw-cyan);padding:3px 8px;border-radius:6px;font-family:'JetBrains Mono',monospace;font-size:9px;font-weight:800;cursor:pointer;letter-spacing:.1em;transition:all .15s}
+.sw-max-btn:hover{background:var(--sw-cyan-bg2);box-shadow:0 0 10px rgba(0,229,255,.2)}
+.sw-row-mid{display:flex;align-items:center;gap:10px}
+
+/* TOKEN BUTTON */
+.sw-token-btn{display:flex;align-items:center;gap:7px;padding:9px 12px;background:linear-gradient(135deg,var(--sw-panel-deep),var(--sw-panel));border:1.5px solid var(--sw-border-hi);border-radius:999px;color:var(--sw-text);font-family:'Syne',sans-serif;font-size:13px;font-weight:800;cursor:pointer;transition:all .15s;flex-shrink:0;box-shadow:0 2px 8px rgba(0,0,0,.25),inset 0 -1px 0 rgba(0,0,0,.15)}
+.sw-token-btn:hover{border-color:var(--sw-cyan);box-shadow:0 2px 12px rgba(0,229,255,.15),inset 0 -1px 0 rgba(0,0,0,.15)}
+.sw-token-btn:active{transform:translateY(1px)}
+.sw-token-logo{width:20px;height:20px;border-radius:50%;box-shadow:0 0 0 2px rgba(255,255,255,.05);object-fit:cover;background:#1a1a22}
+
+/* AMOUNT INPUT */
+.sw-amount-input{flex:1;background:transparent;border:none;outline:none;color:var(--sw-text);font-family:'Syne',sans-serif;font-size:26px;text-align:right;font-weight:900;letter-spacing:-.02em;min-width:0;width:100%;font-variant-numeric:tabular-nums}
+.sw-amount-input::placeholder{color:var(--sw-text-faint);font-weight:700}
+
+/* FLIP */
+.sw-flip-wrap{display:flex;justify-content:center;margin:-6px 0;position:relative;z-index:2}
+.sw-flip-btn{background:linear-gradient(135deg,var(--sw-cyan),var(--sw-pink));border:3px solid var(--sw-panel);border-radius:12px;width:40px;height:40px;display:grid;place-items:center;cursor:pointer;color:#0a0a0c;transition:transform .25s cubic-bezier(0.2,1.3,0.4,1);box-shadow:0 4px 18px rgba(255,77,157,.35),inset 0 -2px 0 rgba(0,0,0,.15)}
+.sw-flip-btn:hover{transform:rotate(180deg)}
+.sw-flip-btn:active{transform:rotate(180deg) scale(.92)}
+
+/* DETAILS */
+.sw-details{margin-top:12px;padding:12px 14px;background:rgba(0,0,0,.30);border:1px solid var(--sw-border);border-radius:14px;font-family:'JetBrains Mono',monospace;font-size:11px}
+.sw-detail-row{display:flex;justify-content:space-between;padding:4px 0;font-weight:700;gap:8px}
+.sw-detail-row>span:first-child{color:var(--sw-text-dim);font-weight:600}
+.sw-detail-val{color:var(--sw-text);font-weight:800;font-variant-numeric:tabular-nums;text-align:right}
+.sw-impact-neutral{color:var(--sw-text-dim)}
+.sw-impact-good{color:var(--sw-green)}
+.sw-impact-warn{color:var(--sw-amber)}
+.sw-impact-bad{color:var(--sw-red)}
+
+/* BANNERS */
+.sw-banner{margin-top:12px;padding:12px 14px;border-radius:14px;font-size:13px;font-weight:600;border:1.5px solid;font-family:'Syne',sans-serif}
+.sw-banner-error{background:rgba(255,59,107,.08);border-color:rgba(255,59,107,.3);color:#ffa9bd}
+.sw-banner-success{background:rgba(0,255,163,.08);border-color:rgba(0,255,163,.3);color:#86efac}
+.sw-banner-pending{background:rgba(245,158,11,.08);border-color:rgba(245,158,11,.3);color:#fcd34d}
+.sw-banner-link{color:#fff;text-decoration:underline;font-weight:800;font-family:'JetBrains Mono',monospace}
+
+/* PRIMARY CTA */
+.sw-primary-btn{width:100%;margin-top:14px;padding:18px 0;background:linear-gradient(90deg,var(--sw-cyan) 0%,#fff 50%,var(--sw-pink) 100%);background-size:300% 100%;animation:swHueShift 5s linear infinite;border:none;border-radius:14px;color:#03060f;font-family:'Syne',sans-serif;font-size:15px;font-weight:900;letter-spacing:.04em;cursor:pointer;position:relative;overflow:hidden;transition:all .15s cubic-bezier(0.2,1.2,0.4,1);box-shadow:0 10px 30px -8px rgba(255,77,157,.5),0 4px 14px rgba(0,229,255,.3),inset 0 2px 0 rgba(255,255,255,.4),inset 0 -2px 0 rgba(0,0,0,.15)}
+.sw-primary-btn::after{content:'';position:absolute;top:0;bottom:0;width:70px;left:-110px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent);animation:swShimmer 2.8s ease-in-out infinite;pointer-events:none}
+.sw-primary-btn:active:not(.sw-disabled){transform:translateY(3px)}
+.sw-primary-btn.sw-disabled{background:linear-gradient(135deg,#2a2a35,#1f1f28);color:var(--sw-text-faint);cursor:not-allowed;animation:none;box-shadow:0 4px 12px rgba(0,0,0,.3),inset 0 -2px 0 rgba(0,0,0,.2)}
+.sw-primary-btn.sw-disabled::after{display:none}
+
+/* FOOTER */
+.sw-footer{margin-top:14px;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--sw-text-faint);text-align:center;font-weight:600;letter-spacing:.02em}
+.sw-footer b{color:var(--sw-cyan);font-weight:800}
+
+/* MODAL */
+.sw-modal-overlay{position:fixed;inset:0;background:rgba(3,6,15,.85);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);display:flex;align-items:flex-end;justify-content:center;padding:0;z-index:1000;animation:swFadeIn .2s}
+@media(min-width:640px){.sw-modal-overlay{align-items:center;padding:16px}}
+.sw-modal-card{width:100%;max-width:480px;max-height:85dvh;background:linear-gradient(180deg,var(--sw-panel-hi),var(--sw-panel));border:1.5px solid var(--sw-border-hi);border-top:1.5px solid var(--sw-cyan-line);border-radius:22px 22px 0 0;color:var(--sw-text);display:flex;flex-direction:column;box-shadow:0 -20px 60px rgba(0,0,0,.7);animation:swModalIn .3s cubic-bezier(0.2,1.2,0.4,1)}
+@media(min-width:640px){.sw-modal-card{border-radius:22px}}
+.sw-modal-head{padding:18px;border-bottom:1px solid var(--sw-border)}
+.sw-modal-head-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:14px}
+.sw-modal-title{font-family:'Syne',sans-serif;font-size:18px;font-weight:800;margin:0;letter-spacing:-.01em;color:var(--sw-text)}
+.sw-icon-btn{background:rgba(255,255,255,.05);border:1px solid var(--sw-border);border-radius:10px;width:36px;height:36px;display:grid;place-items:center;cursor:pointer;color:var(--sw-text);transition:all .15s}
+.sw-icon-btn:hover{background:rgba(255,255,255,.1);transform:rotate(90deg)}
+.sw-modal-search{width:100%;padding:12px 14px;background:var(--sw-panel-deep);border:1.5px solid var(--sw-border);border-radius:12px;color:var(--sw-text);font-size:14px;outline:none;font-family:'Syne',sans-serif;font-weight:500;transition:border-color .15s}
+.sw-modal-search:focus{border-color:var(--sw-cyan);box-shadow:0 0 0 3px rgba(0,229,255,.1)}
+.sw-modal-search::placeholder{color:var(--sw-text-faint)}
+.sw-modal-list{flex:1;overflow-y:auto;-webkit-overflow-scrolling:touch;padding:8px;padding-bottom:calc(env(safe-area-inset-bottom) + 14px)}
+.sw-modal-msg{padding:18px;color:var(--sw-text-dim);text-align:center;font-weight:600;font-size:13px;font-family:'Syne',sans-serif}
+.sw-token-row{width:100%;display:flex;align-items:center;gap:12px;padding:10px 12px;background:transparent;border:1.5px solid transparent;border-radius:12px;cursor:pointer;color:var(--sw-text);text-align:left;font-family:'Syne',sans-serif;transition:all .15s}
+.sw-token-row:hover{background:var(--sw-panel-deep);border-color:var(--sw-border-hi)}
+.sw-token-row:active{transform:scale(.99)}
+.sw-token-row-logo{width:34px;height:34px;border-radius:50%;flex-shrink:0;box-shadow:0 0 0 2px rgba(255,255,255,.04);object-fit:cover;background:#1a1a22}
+.sw-token-row-placeholder{width:34px;height:34px;border-radius:50%;background:var(--sw-panel-deep);flex-shrink:0}
+.sw-token-row-info{flex:1;min-width:0}
+.sw-token-row-sym{font-family:'Syne',sans-serif;font-weight:800;font-size:15px;letter-spacing:-.01em;color:var(--sw-text)}
+.sw-token-row-name{font-size:12px;color:var(--sw-text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:500;margin-top:2px}
+.sw-token-row-bal{text-align:right;font-family:'JetBrains Mono',monospace;font-weight:800;font-size:13px;color:var(--sw-cyan);flex-shrink:0}
+`;
+
+function useSwCSS() {
+  useEffect(() => {
+    const id = 'nexus-sw-css';
+    if (document.getElementById(id)) return;
+    const el = document.createElement('style');
+    el.id = id;
+    el.textContent = SW_CSS;
+    document.head.appendChild(el);
+  }, []);
+}
 
 /* ─── CONFIG ──────────────────────────────────────────────────────── */
-
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS    = 300;
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
@@ -44,15 +167,6 @@ const USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 const SLIPPAGE_BPS = 500;
 
-/* ─── RPC: parallel race over browser-friendly public endpoints. ──── *
- * Matches the pattern used on verixiaapps.com SEO pages which is known to
- * work in iOS Safari & Phantom in-app browser. Promise.any returns first
- * success; Promise.allSettled below makes each balance fetch independent.
- *
- * FAST BALANCES: pool trimmed to the quickest browser-friendly endpoints,
- * and Connection objects are cached per (url, commitment) so we don't pay
- * construction cost on every balance refresh.
- */
 const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
 const RPC_POOL = [
   RUNTIME_CFG.rpc,
@@ -62,11 +176,8 @@ const RPC_POOL = [
   'https://api.mainnet-beta.solana.com',
 ].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
 
-// Commitment used purely for *reading balances*. 'processed' returns the
-// latest known state fastest. The swap-send path uses 'confirmed' (below).
 const BAL_COMMITMENT = 'processed';
 
-// Cache Connection objects so repeated balance refreshes reuse them.
 const _connCache = new Map();
 const getConn = (url, commitment) => {
   const key = url + '|' + commitment;
@@ -75,7 +186,6 @@ const getConn = (url, commitment) => {
   return c;
 };
 
-// Race an op across the pool at a given commitment; first success wins.
 const rpcRace = (label, op, commitment = BAL_COMMITMENT) => {
   const conns = RPC_POOL.map(u => getConn(u, commitment));
   return Promise.any(conns.map((c, i) =>
@@ -86,8 +196,7 @@ const rpcRace = (label, op, commitment = BAL_COMMITMENT) => {
   )).catch(() => { throw new Error(`${label}: all RPCs failed`); });
 };
 
-/* ─── HELPERS ──────────────────────────────────────────────────────── */
-
+/* ─── HELPERS ─────────────────────────────────────────────────────── */
 const fmtAmount = (n, decimals = 6) => {
   if (n == null || isNaN(n)) return '0';
   const num = Number(n);
@@ -103,17 +212,13 @@ const friendlyError = (err) => {
   const m = String(err?.message || err || '').toLowerCase();
   if (m.includes('insufficient'))      return 'Insufficient balance for this swap.';
   if (m.includes('slippage'))          return 'Price moved too much. Try again or increase slippage.';
-  if (m.includes('blockhash') || m.includes('expired'))
-    return 'Transaction expired. Please try again.';
-  if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled'))
-    return 'Transaction cancelled.';
+  if (m.includes('blockhash') || m.includes('expired')) return 'Transaction expired. Please try again.';
+  if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled')) return 'Transaction cancelled.';
   if (m.includes('simulation failed')) return 'Swap simulation failed — the price may have moved.';
   if (m.includes('account not'))       return 'Token account not ready. Please try again in a moment.';
   if (m.includes('rate'))              return 'Too many requests — please wait a moment.';
-  if (m.includes('could not find any route') || m.includes('no route'))
-    return 'No route available for this pair.';
-  if (m.includes('too large') || m.includes('transaction too large'))
-    return 'Route is too complex to fit in one transaction. Try a different amount or token.';
+  if (m.includes('could not find any route') || m.includes('no route')) return 'No route available for this pair.';
+  if (m.includes('too large') || m.includes('transaction too large')) return 'Route is too complex to fit in one transaction. Try a different amount or token.';
   return err?.message || 'Swap failed. Please try again.';
 };
 
@@ -128,10 +233,10 @@ const deserIx = (ix) => ({
 });
 
 /* ─── COMPONENT ───────────────────────────────────────────────────── */
-
 export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConnectWallet } = {}) {
+  useSwCSS();
+
   const wallet = useWallet();
-  // Send/confirm path keeps 'confirmed' for safety.
   const connection = useMemo(() => getConn(RPC_POOL[0], 'confirmed'), []);
 
   const [tokens, setTokens]               = useState([]);
@@ -185,8 +290,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
     return () => { cancelled = true; };
   }, []);
 
-  /* balances — each fetch independent, partial success still updates UI.
-     Reads use BAL_COMMITMENT ('processed') for the fastest first paint. */
+  /* balances */
   const refreshBalances = useCallback(async () => {
     if (!wallet.publicKey) { setBalances({}); setBalError(null); return; }
     setBalLoading(true);
@@ -247,8 +351,6 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
     setBalLoading(false);
   }, [wallet.publicKey]);
 
-  // Refresh on connect AND when the selected input mint changes (so users see
-  // a fresh balance after picking a token)
   useEffect(() => { refreshBalances(); }, [refreshBalances, inputMint]);
 
   const inputToken  = useMemo(() => tokens.find(t => t.address === inputMint)  || null, [tokens, inputMint]);
@@ -348,7 +450,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
     setAmount(String(maxAmt));
   };
 
-  /* SWAP */
+  /* SWAP — UNCHANGED */
   const handleSwap = useCallback(async () => {
     if (!wallet.publicKey || !wallet.signTransaction) {
       setSwapError('Please connect a wallet (Phantom, Solflare, Backpack).');
@@ -527,7 +629,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
 
         <div className="sw-panel">
           <SwapRow
-            label="You pay"
+            label="You Pay"
             token={inputToken}
             amount={amount}
             onAmountChange={setAmount}
@@ -546,7 +648,7 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
           </div>
 
           <SwapRow
-            label="You receive"
+            label="You Receive"
             token={outputToken}
             amount={outAmountUi != null ? fmtAmount(outAmountUi, outputToken?.decimals) : (quoting ? '…' : '')}
             onPickerOpen={() => setShowPicker('output')}
@@ -555,66 +657,66 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
             walletConnected={!!wallet.publicKey}
             editable={false}
           />
+
+          {quote && outputToken && inputToken && Number(amount) > 0 && (
+            <div className="sw-details">
+              <Row label="Rate">
+                1 {inputToken.symbol} ≈ {fmtAmount((outAmountUi / Number(amount)) || 0, outputToken.decimals)} {outputToken.symbol}
+              </Row>
+              <Row label="Min received">
+                {fmtAmount(minReceived, outputToken.decimals)} {outputToken.symbol}
+              </Row>
+              <Row label="Price impact">
+                <span className={priceImpactClass}>
+                  {priceImpact != null ? `${priceImpact.toFixed(2)}%` : '—'}
+                </span>
+              </Row>
+              <Row label="Platform fee">{(FEE_BPS / 100).toFixed(1)}% (in {inputToken.symbol})</Row>
+            </div>
+          )}
+
+          {quoteError && !swapping && !swapResult && <Banner kind="error">{quoteError}</Banner>}
+          {swapError && <Banner kind="error">{swapError}</Banner>}
+          {swapResult && (
+            <Banner kind={swapResult.pending ? 'pending' : 'success'}>
+              {swapResult.pending ? 'Submitted but still confirming. ' : 'Swap confirmed. '}
+              <a
+                href={`https://solscan.io/tx/${swapResult.signature}`}
+                target="_blank"
+                rel="noreferrer"
+                className="sw-banner-link"
+              >
+                View on Solscan
+              </a>
+            </Banner>
+          )}
+
+          <button
+            onClick={(!wallet.publicKey && onConnectWallet) ? onConnectWallet : handleSwap}
+            disabled={!wallet.publicKey ? !onConnectWallet : !canSwap}
+            className={'sw-primary-btn' + ((!wallet.publicKey ? !!onConnectWallet : canSwap) ? '' : ' sw-disabled')}
+          >
+            {swapping
+              ? 'Swapping…'
+              : !wallet.publicKey
+                ? 'Connect Wallet'
+                : inputMint === outputMint
+                  ? 'Select different tokens'
+                  : !amount || Number(amount) <= 0
+                    ? 'Enter amount'
+                    : !quote && quoting
+                      ? 'Getting quote…'
+                      : !quote
+                        ? 'No route available'
+                        : !hasFunds
+                          ? `Insufficient ${inputToken?.symbol || ''}`
+                          : '🚀 Swap'}
+          </button>
+
+          <p className="sw-footer">
+            Powered by <b>Jupiter</b> · Solana's leading DEX aggregator
+          </p>
         </div>
-
-        {quote && outputToken && inputToken && Number(amount) > 0 && (
-          <div className="sw-details">
-            <Row label="Rate">
-              1 {inputToken.symbol} ≈ {fmtAmount((outAmountUi / Number(amount)) || 0, outputToken.decimals)} {outputToken.symbol}
-            </Row>
-            <Row label="Minimum received">
-              {fmtAmount(minReceived, outputToken.decimals)} {outputToken.symbol}
-            </Row>
-            <Row label="Price impact">
-              <span className={priceImpactClass}>
-                {priceImpact != null ? `${priceImpact.toFixed(2)}%` : '—'}
-              </span>
-            </Row>
-            <Row label="Platform fee">{(FEE_BPS / 100).toFixed(1)}% (in {inputToken.symbol})</Row>
-          </div>
-        )}
-
-        {quoteError && !swapping && !swapResult && <Banner kind="error">{quoteError}</Banner>}
-        {swapError && <Banner kind="error">{swapError}</Banner>}
-        {swapResult && (
-          <Banner kind={swapResult.pending ? 'pending' : 'success'}>
-            {swapResult.pending ? 'Submitted but still confirming. ' : 'Swap confirmed. '}
-            <a
-              href={`https://solscan.io/tx/${swapResult.signature}`}
-              target="_blank"
-              rel="noreferrer"
-              className="sw-banner-link"
-            >
-              View on Solscan
-            </a>
-          </Banner>
-        )}
-
-        <button
-          onClick={(!wallet.publicKey && onConnectWallet) ? onConnectWallet : handleSwap}
-          disabled={!wallet.publicKey ? !onConnectWallet : !canSwap}
-          className={'sw-primary-btn' + ((!wallet.publicKey ? !!onConnectWallet : canSwap) ? '' : ' sw-disabled')}
-        >
-          {swapping
-            ? 'Swapping…'
-            : !wallet.publicKey
-              ? 'Connect Wallet'
-              : inputMint === outputMint
-                ? 'Select different tokens'
-                : !amount || Number(amount) <= 0
-                  ? 'Enter amount'
-                  : !quote && quoting
-                    ? 'Getting quote…'
-                    : !quote
-                      ? 'No route available'
-                      : !hasFunds
-                        ? `Insufficient ${inputToken?.symbol || ''}`
-                        : '🚀 Swap'}
-        </button>
-
-        <p className="sw-footer">
-          Powered by <b>Jupiter</b> · Solana's leading DEX aggregator
-        </p>
       </div>
 
       {showPicker && (
@@ -651,10 +753,10 @@ function SwapRow({
             {balLoading
               ? 'Balance: …'
               : balError
-                ? <span style={{ color: '#fca5a5' }}>{balError}</span>
+                ? <span style={{ color: '#ffa9bd' }}>{balError}</span>
                 : balance
-                  ? <>Balance: {fmtAmount(balance.uiAmount, balance.decimals)}</>
-                  : <>Balance: 0</>
+                  ? <>Balance: <b>{fmtAmount(balance.uiAmount, balance.decimals)}</b></>
+                  : <>Balance: <b>0</b></>
             }
             {onRefresh && (
               <button
@@ -764,7 +866,7 @@ function TokenPicker({ tokens, loading, balances, excludeMint, onSelect, onClose
       <div className="sw-modal-card" onClick={(e) => e.stopPropagation()}>
         <div className="sw-modal-head">
           <div className="sw-modal-head-row">
-            <h3 className="sw-modal-title">Select token</h3>
+            <h3 className="sw-modal-title">Select Token</h3>
             <button onClick={onClose} className="sw-icon-btn"><CloseIcon/></button>
           </div>
           <input
@@ -834,8 +936,9 @@ const ChevronIcon = () => (
   </svg>
 );
 const FlipIcon = () => (
-  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-    <path d="M7 4v16M7 4l-3 3M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3" transform="rotate(90 12 12)"/>
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+    <polyline points="7 13 12 18 17 13"/>
+    <polyline points="7 6 12 11 17 6"/>
   </svg>
 );
 const CloseIcon = () => (
