@@ -1,14 +1,623 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useFlipsy } from '../hooks/useFlipsy';
-import './Flipsy.css';
 
-const ADMIN_WALLET = 'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA';
+// ============================================================
+// INLINE CSS — injected once on mount, no separate .css file
+// ============================================================
+const FLIPSY_CSS = `
+.fp-page {
+  min-height: 100vh;
+  width: 100%;
+  background: #06060C;
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  color: #FFFFFF;
+  padding-bottom: 60px;
+  position: relative;
+  overflow-x: hidden;
+}
+.fp-page * { box-sizing: border-box; }
+
+.fp-glow {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(60px);
+  pointer-events: none;
+  will-change: opacity;
+}
+.fp-glow-1 { top: -10%; left: -8%; width: 380px; height: 380px;
+  background: radial-gradient(circle, #9945FF 0%, transparent 60%); opacity: 0.28; }
+.fp-glow-2 { top: 35%; right: -8%; width: 340px; height: 340px;
+  background: radial-gradient(circle, #00D9FF 0%, transparent 60%); opacity: 0.22;
+  animation: fp-glow-pulse 9s ease-in-out infinite alternate; }
+.fp-glow-3 { bottom: -10%; left: 30%; width: 360px; height: 360px;
+  background: radial-gradient(circle, #14F195 0%, transparent 60%); opacity: 0.2;
+  animation: fp-glow-pulse 13s ease-in-out infinite alternate-reverse; }
+@keyframes fp-glow-pulse {
+  0%   { opacity: 0.2; transform: scale(1); }
+  100% { opacity: 0.42; transform: scale(1.15); }
+}
+
+.fp-claim-banner {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  background: linear-gradient(90deg, #14F195 0%, #00D9FF 50%, #9945FF 100%);
+  color: #000000;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-align: center;
+  padding: 11px 16px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  animation: fp-banner-slide 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+}
+.fp-claim-banner:active { opacity: 0.85; }
+.fp-claim-banner-icon { font-size: 15px; }
+.fp-claim-banner-count {
+  background: rgba(0,0,0,0.2);
+  border-radius: 999px;
+  padding: 2px 8px;
+  font-size: 10px;
+}
+@keyframes fp-banner-slide {
+  from { transform: translateY(-100%); opacity: 0; }
+  to   { transform: translateY(0);    opacity: 1; }
+}
+
+.fp-flash-top {
+  margin: 8px 24px 0;
+  border-radius: 14px;
+  position: relative;
+  z-index: 10;
+}
+
+.fp-header {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 22px 24px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  position: relative;
+  z-index: 2;
+}
+.fp-brand { display: flex; align-items: center; gap: 12px; }
+.fp-mascot {
+  width: 50px; height: 50px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #14F195 0%, #00D9FF 35%, #9945FF 70%, #DC1FFF 100%);
+  display: flex; align-items: center; justify-content: center;
+  font-size: 24px; font-weight: 900; color: #000;
+  box-shadow:
+    0 0 36px rgba(153, 69, 255, 0.5),
+    inset 0 -3px 6px rgba(0, 0, 0, 0.2),
+    inset 0 3px 6px rgba(255, 255, 255, 0.35);
+  animation: fp-mascot-float 4s ease-in-out infinite;
+}
+@keyframes fp-mascot-float {
+  0%, 100% { transform: translateY(0) rotate(-2deg); }
+  50%      { transform: translateY(-4px) rotate(3deg); }
+}
+.fp-title {
+  font-size: 28px;
+  font-weight: 900;
+  letter-spacing: -0.02em;
+  line-height: 1;
+  background: linear-gradient(90deg, #14F195, #00D9FF 33%, #9945FF 66%, #DC1FFF);
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  animation: fp-shimmer 6s linear infinite;
+}
+@keyframes fp-shimmer {
+  0%   { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+.fp-subtitle {
+  margin-top: 2px;
+  font-size: 9px;
+  font-weight: 800;
+  color: #9892B5;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+}
+.fp-actions { display: flex; align-items: center; gap: 8px; }
+.fp-balance {
+  background: rgba(20, 20, 35, 0.7);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(153, 69, 255, 0.22);
+  border-radius: 999px;
+  padding: 7px 14px;
+  font-size: 12px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.fp-balance-label {
+  color: #5D5876;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.fp-balance-val {
+  color: #14F195;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+  text-shadow: 0 0 12px rgba(20, 241, 149, 0.5);
+  font-size: 13px;
+}
+
+.fp-rounds-head {
+  max-width: 1200px;
+  margin: 6px auto 14px;
+  padding: 0 24px;
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  position: relative;
+  z-index: 2;
+}
+.fp-rounds-title {
+  font-size: 14px;
+  font-weight: 900;
+  margin: 0;
+  color: #FFFFFF;
+  letter-spacing: 0.06em;
+}
+.fp-rounds-sub {
+  font-size: 9px;
+  color: #5D5876;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.fp-rounds-sub .arrow { color: #00D9FF; }
+
+.fp-carousel {
+  display: flex;
+  gap: 14px;
+  padding: 8px 24px 24px;
+  overflow-x: auto;
+  overflow-y: visible;
+  scroll-snap-type: x proximity;
+  touch-action: pan-x pan-y;
+  overscroll-behavior-x: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-overflow-scrolling: touch;
+  position: relative;
+  z-index: 2;
+}
+.fp-carousel::-webkit-scrollbar { display: none; }
+
+.fp-card {
+  flex-shrink: 0;
+  width: min(280px, 80vw);
+  min-height: 440px;
+  scroll-snap-align: center;
+  background: linear-gradient(180deg, rgba(22, 22, 38, 0.85) 0%, rgba(14, 14, 26, 0.85) 100%);
+  backdrop-filter: blur(12px);
+  border: 1px solid rgba(153, 69, 255, 0.22);
+  border-radius: 36px;
+  padding: 16px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+  animation: fp-card-enter 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+}
+.fp-card:hover { transform: translateY(-4px); }
+@keyframes fp-card-enter {
+  from { opacity: 0; transform: translateY(20px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.fp-card-previous { opacity: 0.55; }
+.fp-card-later    { opacity: 0.7; }
+
+.fp-card-live {
+  width: min(320px, 88vw);
+  min-height: 480px;
+  border-color: rgba(20, 241, 149, 0.55);
+  box-shadow:
+    0 24px 60px rgba(0, 0, 0, 0.6),
+    0 0 80px rgba(20, 241, 149, 0.18),
+    0 0 40px rgba(0, 217, 255, 0.12);
+}
+.fp-card-livering {
+  position: absolute;
+  inset: -1px;
+  border-radius: 36px;
+  pointer-events: none;
+  background: linear-gradient(135deg, #14F195, #00D9FF, #9945FF, #DC1FFF);
+  opacity: 0.3;
+  z-index: -1;
+  filter: blur(8px);
+  animation: fp-livering-pulse 3s ease-in-out infinite;
+}
+@keyframes fp-livering-pulse {
+  0%, 100% { opacity: 0.25; }
+  50%      { opacity: 0.5; }
+}
+
+.fp-card-loading {
+  width: 100%;
+  max-width: 320px;
+  margin: 0 auto;
+  min-height: 200px;
+}
+
+.fp-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  padding: 0 4px;
+}
+.fp-card-badge {
+  font-size: 10px;
+  font-weight: 900;
+  letter-spacing: 0.12em;
+  padding: 4px 12px;
+  border-radius: 999px;
+  border: 1px solid;
+  background: rgba(255, 255, 255, 0.04);
+}
+.fp-card-epoch {
+  font-size: 11px;
+  font-weight: 800;
+  color: #5D5876;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.04em;
+}
+
+.fp-card-side {
+  width: 100%;
+  border-radius: 24px;
+  padding: 18px 16px;
+  cursor: pointer;
+  font-family: inherit;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-weight: 800;
+  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+  position: relative;
+  overflow: hidden;
+}
+.fp-card-side:hover:not(:disabled)  { transform: translateY(-2px); }
+.fp-card-side:active:not(:disabled) { transform: scale(0.97); }
+.fp-card-side:disabled { cursor: not-allowed; }
+
+.fp-card-long {
+  background: linear-gradient(135deg, rgba(20, 241, 149, 0.18), rgba(0, 217, 255, 0.08));
+  border: 1.5px solid rgba(20, 241, 149, 0.5);
+  color: #14F195;
+  box-shadow: 0 8px 24px rgba(20, 241, 149, 0.15);
+}
+.fp-card-long.active {
+  background: linear-gradient(135deg, #14F195, #00D9FF);
+  color: #001A0F;
+  border-color: #14F195;
+  box-shadow: 0 12px 32px rgba(20, 241, 149, 0.5);
+}
+.fp-card-long.won {
+  background: linear-gradient(135deg, #14F195, #00D9FF);
+  color: #001A0F;
+  border-color: #14F195;
+  box-shadow: 0 8px 24px rgba(20, 241, 149, 0.4);
+}
+.fp-card-long.lost {
+  background: rgba(20, 241, 149, 0.04);
+  border-color: rgba(20, 241, 149, 0.2);
+  color: #5D5876;
+  box-shadow: none;
+}
+
+.fp-card-short {
+  background: linear-gradient(135deg, rgba(220, 31, 255, 0.18), rgba(153, 69, 255, 0.08));
+  border: 1.5px solid rgba(220, 31, 255, 0.5);
+  color: #DC1FFF;
+  box-shadow: 0 8px 24px rgba(220, 31, 255, 0.15);
+}
+.fp-card-short.active {
+  background: linear-gradient(135deg, #DC1FFF, #9945FF);
+  color: #FFFFFF;
+  border-color: #DC1FFF;
+  box-shadow: 0 12px 32px rgba(220, 31, 255, 0.5);
+}
+.fp-card-short.won {
+  background: linear-gradient(135deg, #DC1FFF, #9945FF);
+  color: #FFFFFF;
+  border-color: #DC1FFF;
+  box-shadow: 0 8px 24px rgba(220, 31, 255, 0.4);
+}
+.fp-card-short.lost {
+  background: rgba(220, 31, 255, 0.04);
+  border-color: rgba(220, 31, 255, 0.2);
+  color: #5D5876;
+  box-shadow: none;
+}
+
+.fp-card-side-icon {
+  font-size: 22px;
+  line-height: 1;
+  font-weight: 900;
+  text-shadow: 0 0 12px currentColor;
+}
+.fp-card-side-label {
+  font-size: 17px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  flex: 1;
+  text-align: center;
+}
+.fp-card-side-mult {
+  font-size: 14px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+}
+
+.fp-card-mid {
+  padding: 16px 14px;
+  margin: 10px 0;
+  text-align: center;
+  background: rgba(6, 6, 12, 0.6);
+  border: 1px solid rgba(153, 69, 255, 0.22);
+  border-radius: 22px;
+  position: relative;
+}
+.fp-mid-label {
+  font-size: 9px;
+  font-weight: 800;
+  color: #00D9FF;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  margin-bottom: 8px;
+  text-shadow: 0 0 10px rgba(0, 217, 255, 0.4);
+}
+.fp-mid-price {
+  font-size: 30px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  letter-spacing: -0.02em;
+}
+.fp-mid-price.up   { color: #14F195; text-shadow: 0 0 18px rgba(20, 241, 149, 0.5); }
+.fp-mid-price.down { color: #DC1FFF; text-shadow: 0 0 18px rgba(220, 31, 255, 0.5); }
+.fp-mid-delta {
+  font-size: 11px;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  margin-top: 6px;
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+}
+.fp-mid-delta.up   { background: rgba(20, 241, 149, 0.18); color: #14F195; border: 1px solid #14F195; }
+.fp-mid-delta.down { background: rgba(220, 31, 255, 0.18); color: #DC1FFF; border: 1px solid #DC1FFF; }
+
+.fp-mid-divider {
+  height: 1px;
+  margin: 12px 0;
+  background: linear-gradient(90deg, transparent, rgba(153, 69, 255, 0.22), transparent);
+}
+.fp-mid-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: #5D5876;
+  margin-top: 4px;
+  letter-spacing: 0.04em;
+}
+.fp-mid-row-val      { color: #FFFFFF; font-weight: 800; font-variant-numeric: tabular-nums; }
+.fp-mid-row-val.gold { color: #FFD66B; text-shadow: 0 0 10px rgba(255, 214, 107, 0.4); }
+
+.fp-mid-timer {
+  margin-top: 12px;
+  font-size: 22px;
+  font-weight: 900;
+  color: #FFD66B;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 14px rgba(255, 214, 107, 0.5);
+}
+.fp-mid-timer.urgent {
+  color: #DC1FFF;
+  text-shadow: 0 0 18px rgba(220, 31, 255, 0.5);
+  animation: fp-timer-urgent 0.5s ease-in-out infinite;
+}
+@keyframes fp-timer-urgent {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.1); }
+}
+
+.fp-mid-pool {
+  font-size: 32px;
+  font-weight: 900;
+  font-variant-numeric: tabular-nums;
+  background: linear-gradient(135deg, #14F195, #FFD66B);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  letter-spacing: -0.02em;
+}
+.fp-mid-payout-preview {
+  font-size: 10px;
+  color: #9892B5;
+  line-height: 1.7;
+}
+.fp-mid-payout-preview b { color: #14F195; font-weight: 800; }
+.fp-mid-payout-preview div + div b { color: #DC1FFF; }
+
+.fp-mid-starts {
+  margin-top: 10px;
+  font-size: 11px;
+  color: #5D5876;
+  letter-spacing: 0.04em;
+}
+.fp-mid-starts b {
+  color: #00D9FF;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+  text-shadow: 0 0 10px rgba(0, 217, 255, 0.4);
+  font-size: 13px;
+}
+
+.fp-mid-later-icon {
+  font-size: 36px;
+  margin: 16px 0 12px;
+  opacity: 0.7;
+}
+
+.fp-mid-outcome {
+  margin-top: 10px;
+  font-size: 13px;
+  font-weight: 900;
+  letter-spacing: 0.14em;
+  padding: 7px 14px;
+  border-radius: 999px;
+  display: inline-block;
+}
+.fp-mid-outcome.long  { background: rgba(20, 241, 149, 0.18); color: #14F195; border: 1px solid #14F195; }
+.fp-mid-outcome.short { background: rgba(220, 31, 255, 0.18); color: #DC1FFF; border: 1px solid #DC1FFF; }
+.fp-mid-outcome.tie   { background: rgba(153, 69, 255, 0.18); color: #9945FF; border: 1px solid #9945FF; }
+
+.fp-mid-claim {
+  margin-top: 10px;
+  width: 100%;
+  padding: 10px;
+  border-radius: 14px;
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  background: linear-gradient(135deg, #FFD66B, #FFC247);
+  color: #1A0F00;
+  border: none;
+  cursor: pointer;
+  font-family: inherit;
+  box-shadow: 0 6px 18px rgba(255, 214, 107, 0.4);
+  transition: transform 0.2s;
+}
+.fp-mid-claim:hover { transform: translateY(-2px); }
+
+.fp-card-position {
+  margin-top: 10px;
+  padding: 8px 14px;
+  border-radius: 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.1em;
+  animation: fp-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.fp-card-position-heads { background: rgba(20, 241, 149, 0.2); border: 1px solid #14F195; color: #14F195; }
+.fp-card-position-tails { background: rgba(220, 31, 255, 0.2); border: 1px solid #DC1FFF; color: #DC1FFF; }
+
+@keyframes fp-pop {
+  0%   { transform: scale(0.85); opacity: 0; }
+  60%  { transform: scale(1.05); }
+  100% { transform: scale(1); opacity: 1; }
+}
+
+.fp-flash {
+  padding: 10px;
+  border-radius: 11px;
+  font-size: 11px;
+  font-weight: 800;
+  text-align: center;
+  letter-spacing: 0.04em;
+  animation: fp-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.fp-flash.error {
+  background: rgba(220, 31, 255, 0.15);
+  color: #DC1FFF;
+  border: 1px solid #DC1FFF;
+}
+.fp-flash.success {
+  background: rgba(20, 241, 149, 0.15);
+  color: #14F195;
+  border: 1px solid #14F195;
+  box-shadow: 0 0 24px rgba(20, 241, 149, 0.3);
+}
+
+.fp-footer {
+  max-width: 1200px;
+  margin: 18px auto 0;
+  padding: 8px 24px;
+  text-align: center;
+  font-size: 9px;
+  color: #5D5876;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  position: relative;
+  z-index: 2;
+}
+
+.fp-block-wrap {
+  min-height: 70vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 40px 24px;
+  position: relative;
+  z-index: 2;
+}
+.fp-block-card {
+  max-width: 480px;
+  width: 100%;
+  background: rgba(20, 20, 35, 0.7);
+  backdrop-filter: blur(24px);
+  border: 1.5px solid rgba(220, 31, 255, 0.4);
+  border-radius: 28px;
+  padding: 32px;
+  text-align: center;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4);
+}
+.fp-block-icon { font-size: 48px; margin-bottom: 12px; }
+.fp-block-title { margin: 0; font-size: 24px; font-weight: 900; color: #FFFFFF; margin-bottom: 12px; }
+.fp-block-msg { margin: 0 0 14px; font-size: 14px; line-height: 1.6; color: #9892B5; }
+.fp-block-sub { margin: 0; font-size: 12px; color: #5D5876; font-style: italic; }
+
+@keyframes fp-modal-up {
+  from { transform: translateX(-50%) translateY(100%); opacity: 0; }
+  to   { transform: translateX(-50%) translateY(0);   opacity: 1; }
+}
+@keyframes fp-spin {
+  to { transform: rotate(360deg); }
+}
+`;
+
+function injectFlipsyStyles() {
+  if (typeof document === 'undefined') return;
+  if (document.getElementById('flipsy-inline-styles')) return;
+  const tag = document.createElement('style');
+  tag.id = 'flipsy-inline-styles';
+  tag.textContent = FLIPSY_CSS;
+  document.head.appendChild(tag);
+}
+
 const BLOCKED_COUNTRIES = ['US'];
-const MIN_BET = 5;
-const MAX_BET = 20;
+// Wallets that bypass geo blocking
+const GEO_BYPASS_WALLETS = new Set([
+  'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV',
+  'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA',
+]);
+// Frontend defaults — auto-overridden by on-chain config once loaded.
+const DEFAULT_MIN_BET = 1;
+const DEFAULT_MAX_BET = 25;
+const DEFAULT_CLAIM_FORFEIT_DELAY = 21_600; // 6 hours
 const NET_MULT = 0.75;
-const CLAIM_FORFEIT_DELAY = 259200; // 3 days in seconds
 
 async function checkGeo() {
   const sources = [
@@ -49,9 +658,9 @@ function BlockScreen({ title, message, sub }) {
 }
 
 // ============================================================
-// ROUNDS HISTORY POPUP
+// ROUNDS HISTORY POPUP — all rounds user has bets on
 // ============================================================
-function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
+function RoundsPopup({ open, onClose, liveRound, upcomingRounds, recentRounds, userBets, onClaim, claimForfeitDelay }) {
   useEffect(() => {
     if (!open) return;
     const fn = (e) => { if (e.key === 'Escape') onClose(); };
@@ -70,8 +679,9 @@ function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
   const nowTs = Math.floor(Date.now() / 1000);
 
   const isClaimable = (round) => {
+    if (round.outcome === 'unresolved') return false;
     const bets = getBetsForEpoch(round.epoch);
-    const expired = round.resolvedAt > 0 && nowTs > round.resolvedAt + CLAIM_FORFEIT_DELAY;
+    const expired = round.resolvedAt > 0 && nowTs > round.resolvedAt + claimForfeitDelay;
     if (expired) return false;
     return bets.some(b => {
       if (b.claimed) return false;
@@ -81,10 +691,20 @@ function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
     });
   };
 
-  // Only show rounds the user actually participated in
-  const rounds = [...recentRounds]
-    .reverse()
-    .filter(r => getBetsForEpoch(r.epoch).length > 0);
+  const allRounds = [
+    ...(liveRound ? [liveRound] : []),
+    ...(upcomingRounds || []),
+    ...(recentRounds || []),
+  ];
+  const seen = new Set();
+  const rounds = allRounds
+    .filter(r => {
+      if (!r || seen.has(r.epoch)) return false;
+      if (getBetsForEpoch(r.epoch).length === 0) return false;
+      seen.add(r.epoch);
+      return true;
+    })
+    .sort((a, b) => b.epoch - a.epoch);
 
   return (
     <>
@@ -106,7 +726,6 @@ function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
         fontFamily: 'Inter, sans-serif',
         animation: 'fp-modal-up 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
       }}>
-        {/* Handle */}
         <div style={{ flexShrink: 0, padding: '16px 20px 0' }}>
           <div style={{ width: 40, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.12)', margin: '0 auto 16px' }} />
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
@@ -120,7 +739,6 @@ function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
           </div>
         </div>
 
-        {/* List */}
         <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px 16px' }}>
           {rounds.length === 0 && (
             <div style={{ textAlign: 'center', padding: '40px 0', color: '#5D5876', fontSize: 13, fontWeight: 600 }}>
@@ -130,41 +748,76 @@ function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
           {rounds.map(r => {
             const bets = getBetsForEpoch(r.epoch);
             const canClaim = isClaimable(r);
-            const deadlineTs = r.resolvedAt > 0 ? r.resolvedAt + CLAIM_FORFEIT_DELAY : 0;
-            const hoursLeft = deadlineTs > 0 ? Math.max(0, Math.floor((deadlineTs - nowTs) / 3600)) : 0;
+            const deadlineTs = r.resolvedAt > 0 ? r.resolvedAt + claimForfeitDelay : 0;
+            const minutesLeft = deadlineTs > 0 ? Math.max(0, Math.floor((deadlineTs - nowTs) / 60)) : 0;
+            const hoursLeft = Math.floor(minutesLeft / 60);
             const expired = deadlineTs > 0 && nowTs > deadlineTs;
             const hasUnclaimedWin = bets.some(b => !b.claimed && (r.outcome === b.side || r.outcome === 'tie'));
+            const isLiveOrPending = r.outcome === 'unresolved';
 
             const longTotal = bets.filter(b => b.side === 'heads').reduce((s, b) => s + b.amount, 0);
             const shortTotal = bets.filter(b => b.side === 'tails').reduce((s, b) => s + b.amount, 0);
-            const won = (r.outcome === 'heads' && longTotal > 0) || (r.outcome === 'tails' && shortTotal > 0);
-            const lost = !won && r.outcome !== 'tie' && r.outcome !== 'unresolved';
+            const won = !isLiveOrPending && (
+              (r.outcome === 'heads' && longTotal > 0) ||
+              (r.outcome === 'tails' && shortTotal > 0)
+            );
+            const lost = !isLiveOrPending && !won && r.outcome !== 'tie';
             const tie = r.outcome === 'tie';
 
-            let resultColor = '#5D5876';
-            let resultLabel = r.outcome === 'heads' ? '↑ LONG WON' : r.outcome === 'tails' ? '↓ SHORT WON' : '= TIE';
-            if (won) resultColor = '#14F195';
-            if (lost) resultColor = '#DC1FFF';
-            if (tie) resultColor = '#9945FF';
+            let statusLabel, statusColor;
+            if (isLiveOrPending) {
+              const isLive = liveRound && liveRound.epoch === r.epoch;
+              statusLabel = isLive ? '● LIVE' : '⏱ PENDING';
+              statusColor = isLive ? '#14F195' : '#00D9FF';
+            } else if (won) {
+              statusLabel = '✓ WON';
+              statusColor = '#14F195';
+            } else if (lost) {
+              statusLabel = '💔 LOST';
+              statusColor = '#DC1FFF';
+            } else if (tie) {
+              statusLabel = '= TIE';
+              statusColor = '#9945FF';
+            } else {
+              statusLabel = '= TIE';
+              statusColor = '#5D5876';
+            }
+
+            const borderColor = canClaim ? 'rgba(255,214,107,0.4)'
+              : isLiveOrPending ? 'rgba(20,241,149,0.25)'
+              : won ? 'rgba(20,241,149,0.2)'
+              : lost ? 'rgba(220,31,255,0.2)'
+              : 'rgba(153,69,255,0.2)';
+
+            const formatTimeLeft = () => {
+              if (hoursLeft > 0) return `${hoursLeft}h left`;
+              return `${minutesLeft}m left`;
+            };
 
             return (
               <div key={r.epoch} style={{
                 background: 'rgba(255,255,255,0.03)',
-                border: `1px solid ${won || canClaim ? 'rgba(20,241,149,0.2)' : lost ? 'rgba(220,31,255,0.2)' : 'rgba(153,69,255,0.2)'}`,
+                border: `1px solid ${borderColor}`,
                 borderRadius: 16, padding: '12px 14px', marginBottom: 8,
                 display: 'flex', alignItems: 'center', gap: 12,
               }}>
-                {/* Epoch */}
                 <div style={{ minWidth: 36, textAlign: 'center' }}>
                   <div style={{ fontSize: 10, color: '#5D5876', fontWeight: 700, letterSpacing: '0.1em' }}>RND</div>
                   <div style={{ fontSize: 14, fontWeight: 900, color: '#9945FF' }}>#{r.epoch}</div>
                 </div>
 
-                {/* Prices + bets */}
                 <div style={{ flex: 1, minWidth: 0 }}>
-                  <div style={{ fontSize: 11, color: '#5D5876', fontVariantNumeric: 'tabular-nums' }}>
-                    ${r.lockPrice.toFixed(2)} → ${r.closePrice.toFixed(2)}
-                  </div>
+                  {!isLiveOrPending ? (
+                    <div style={{ fontSize: 11, color: '#5D5876', fontVariantNumeric: 'tabular-nums' }}>
+                      ${r.lockPrice.toFixed(2)} → ${r.closePrice.toFixed(2)}
+                    </div>
+                  ) : r.lockPrice > 0 ? (
+                    <div style={{ fontSize: 11, color: '#5D5876', fontVariantNumeric: 'tabular-nums' }}>
+                      Locked at ${r.lockPrice.toFixed(2)}
+                    </div>
+                  ) : (
+                    <div style={{ fontSize: 11, color: '#5D5876' }}>Awaiting start</div>
+                  )}
                   <div style={{ marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
                     {longTotal > 0 && (
                       <span style={{ fontSize: 10, color: '#14F195', fontWeight: 700 }}>↑ ${longTotal.toFixed(2)}</span>
@@ -173,15 +826,13 @@ function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
                       <span style={{ fontSize: 10, color: '#DC1FFF', fontWeight: 700 }}>↓ ${shortTotal.toFixed(2)}</span>
                     )}
                   </div>
-                  {/* Deadline warning for claimable wins */}
-                  {canClaim && hoursLeft <= 24 && (
+                  {canClaim && hoursLeft < 2 && (
                     <div style={{ fontSize: 9, color: '#FFD66B', fontWeight: 700, marginTop: 2 }}>
-                      ⚠️ {hoursLeft}h left to collect
+                      ⚠️ {formatTimeLeft()} to collect
                     </div>
                   )}
                 </div>
 
-                {/* Result / Claim / Expired */}
                 <div style={{ textAlign: 'right', flexShrink: 0 }}>
                   {canClaim ? (
                     <div>
@@ -194,9 +845,9 @@ function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
                         boxShadow: '0 4px 12px rgba(255,214,107,0.4)',
                         display: 'block',
                       }}>💰 Collect</button>
-                      {hoursLeft > 0 && hoursLeft > 24 && (
+                      {hoursLeft >= 2 && (
                         <div style={{ fontSize: 9, color: '#9892B5', marginTop: 3, textAlign: 'center' }}>
-                          {hoursLeft}h left
+                          {formatTimeLeft()}
                         </div>
                       )}
                     </div>
@@ -210,13 +861,13 @@ function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
                     }}>⌛ EXPIRED</div>
                   ) : (
                     <div style={{
-                      fontSize: 10, fontWeight: 900, color: resultColor,
+                      fontSize: 10, fontWeight: 900, color: statusColor,
                       letterSpacing: '0.08em', padding: '5px 10px',
-                      background: resultColor + '18',
-                      border: `1px solid ${resultColor}44`,
+                      background: statusColor + '18',
+                      border: `1px solid ${statusColor}44`,
                       borderRadius: 8,
                     }}>
-                      {lost ? '💔 LOST' : tie ? '= TIE' : resultLabel}
+                      {statusLabel}
                     </div>
                   )}
                 </div>
@@ -224,14 +875,13 @@ function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
             );
           })}
 
-          {/* 3 day forfeit note */}
           <div style={{
             marginTop: 8, padding: '10px 14px', borderRadius: 12,
             background: 'rgba(255,214,107,0.06)',
             border: '1px solid rgba(255,214,107,0.15)',
             fontSize: 10, color: '#9892B5', lineHeight: 1.5, textAlign: 'center',
           }}>
-            ⚠️ Uncollected winnings are forfeited after <span style={{ color: '#FFD66B', fontWeight: 800 }}>3 days</span>. Collect promptly.
+            ⚠️ Uncollected winnings are forfeited after <span style={{ color: '#FFD66B', fontWeight: 800 }}>{claimForfeitDelay >= 3600 ? Math.round(claimForfeitDelay / 3600) + ' hours' : Math.round(claimForfeitDelay / 60) + ' minutes'}</span>. Collect promptly.
           </div>
         </div>
       </div>
@@ -242,7 +892,7 @@ function RoundsPopup({ open, onClose, recentRounds, userBets, onClaim }) {
 // ============================================================
 // BET MODAL
 // ============================================================
-function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, tailsPayout }) {
+function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, tailsPayout, minBet, maxBet }) {
   const [amount, setAmount] = useState('5');
   const [status, setStatus] = useState('idle');
   const [errMsg, setErrMsg] = useState('');
@@ -271,8 +921,8 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
   const sideColor = isLong ? '#14F195' : '#DC1FFF';
   const sideLabel = isLong ? '↑ LONG' : '↓ SHORT';
   const insufficient = amt > balance;
-  const belowMin = amt > 0 && amt < MIN_BET;
-  const aboveMax = amt > MAX_BET;
+  const belowMin = amt > 0 && amt < minBet;
+  const aboveMax = amt > maxBet;
   const invalidAmount = belowMin || aboveMax || insufficient;
 
   const handleTrade = async () => {
@@ -290,8 +940,8 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
 
   let buttonLabel = 'Trade';
   if (insufficient) buttonLabel = 'Insufficient Balance';
-  else if (belowMin) buttonLabel = `Minimum $${MIN_BET}`;
-  else if (aboveMax) buttonLabel = `Maximum $${MAX_BET}`;
+  else if (belowMin) buttonLabel = `Minimum $${minBet}`;
+  else if (aboveMax) buttonLabel = `Maximum $${maxBet}`;
   else if (status === 'signing') buttonLabel = 'Signing…';
 
   return (
@@ -316,11 +966,11 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
 
         <div style={{ background: 'rgba(6,6,12,0.8)', border: `1.5px solid ${status === 'error' ? '#DC1FFF66' : sideColor + '44'}`, borderRadius: 18, padding: '14px 18px', marginBottom: 12 }}>
           <div style={{ fontSize: 10, color: '#5D5876', fontWeight: 700, letterSpacing: '0.2em', marginBottom: 6 }}>
-            AMOUNT (USD) · MIN ${MIN_BET} · MAX ${MAX_BET}
+            AMOUNT (USD) · MIN ${minBet} · MAX ${maxBet}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <span style={{ fontSize: 26, fontWeight: 900, color: '#5D5876' }}>$</span>
-            <input ref={inputRef} type="number" min={MIN_BET} max={MAX_BET} value={amount}
+            <input ref={inputRef} type="number" min={minBet} max={maxBet} value={amount}
               onChange={e => { setAmount(e.target.value); setStatus('idle'); setErrMsg(''); }}
               disabled={status === 'signing' || status === 'success'}
               style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 34, fontWeight: 900, color: '#FFFFFF', fontFamily: 'Inter, sans-serif', fontVariantNumeric: 'tabular-nums' }} />
@@ -328,9 +978,8 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
           </div>
         </div>
 
-        {/* Quick-select buttons — all within $5–$20 */}
         <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          {[5, 10, 15, 20].map(v => (
+          {[1, 5, 10, 25].map(v => (
             <button key={v} onClick={() => { setAmount(String(v)); setStatus('idle'); setErrMsg(''); }}
               disabled={status === 'signing' || status === 'success'}
               style={{ flex: 1, padding: '8px 0', borderRadius: 999, background: parseFloat(amount) === v ? sideColor + '22' : 'rgba(255,255,255,0.04)', border: `1px solid ${parseFloat(amount) === v ? sideColor + '88' : 'rgba(255,255,255,0.08)'}`, color: parseFloat(amount) === v ? sideColor : '#9892B5', fontWeight: 800, fontSize: 13, cursor: 'pointer', fontFamily: 'Inter, sans-serif', transition: 'all 0.15s' }}
@@ -426,7 +1075,6 @@ function RoundCard({ round, state, userBets, livePrice, onSideTap, claim, claima
         <span className="fp-card-epoch">#{epoch}</span>
       </div>
 
-      {/* Long button — enabled on live, next, and later cards */}
       <button className={`fp-card-side fp-card-long ${longWon ? 'won' : isPrev ? 'lost' : ''} ${longTotal > 0 ? 'active' : ''}`}
         onClick={() => !isPrev && onSideTap(epoch, 'heads', headsPayout, tailsPayout)} disabled={isPrev}>
         <div className="fp-card-side-icon">↑</div>
@@ -471,7 +1119,6 @@ function RoundCard({ round, state, userBets, livePrice, onSideTap, claim, claima
         </>)}
       </div>
 
-      {/* Short button — enabled on live, next, and later cards */}
       <button className={`fp-card-side fp-card-short ${shortWon ? 'won' : isPrev ? 'lost' : ''} ${shortTotal > 0 ? 'active' : ''}`}
         onClick={() => !isPrev && onSideTap(epoch, 'tails', headsPayout, tailsPayout)} disabled={isPrev}>
         <div className="fp-card-side-mult">{tailsPayout.toFixed(2)}×</div>
@@ -479,8 +1126,8 @@ function RoundCard({ round, state, userBets, livePrice, onSideTap, claim, claima
         <div className="fp-card-side-icon">↓</div>
       </button>
 
-      {longTotal > 0 && !isPrev && <div className="fp-card-position fp-card-position-heads"><span>● LONG</span><span>${longTotal.toFixed(2)}</span></div>}
-      {shortTotal > 0 && !isPrev && <div className="fp-card-position fp-card-position-tails"><span>● SHORT</span><span>${shortTotal.toFixed(2)}</span></div>}
+      {longTotal > 0 && <div className="fp-card-position fp-card-position-heads"><span>● LONG</span><span>${longTotal.toFixed(2)}</span></div>}
+      {shortTotal > 0 && <div className="fp-card-position fp-card-position-tails"><span>● SHORT</span><span>${shortTotal.toFixed(2)}</span></div>}
     </div>
   );
 }
@@ -491,13 +1138,8 @@ function RoundCard({ round, state, userBets, livePrice, onSideTap, claim, claima
 export default function Flipsy({ onConnectWallet }) {
   const wallet = useWallet();
 
-  useEffect(() => {
-    if (typeof window === 'undefined' || window.eruda) return;
-    const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/eruda';
-    s.onload = () => { try { window.eruda?.init(); } catch (e) { console.error(e); } };
-    document.head.appendChild(s);
-  }, []);
+  // Inject inline CSS once on first render
+  useEffect(() => { injectFlipsyStyles(); }, []);
 
   let hookData = null, hookError = null;
   try { hookData = useFlipsy(wallet); }
@@ -506,7 +1148,17 @@ export default function Flipsy({ onConnectWallet }) {
   const { livePrice = 0, liveRound = null, upcomingRounds = [], recentRounds = [], userBets = {}, balance = 0,
     placeBet = async () => { throw new Error('Hook not ready'); },
     claim = async () => { throw new Error('Hook not ready'); },
-    loading = true } = hookData || {};
+    loading = true,
+    programConfig = null } = hookData || {};
+
+  // Effective values: on-chain config takes priority, falls back to defaults.
+  const minBetUsd = programConfig && livePrice > 0
+    ? +((programConfig.minBet / 1e9) * livePrice).toFixed(2)
+    : DEFAULT_MIN_BET;
+  const maxBetUsd = programConfig && livePrice > 0
+    ? +((programConfig.maxBet / 1e9) * livePrice).toFixed(2)
+    : DEFAULT_MAX_BET;
+  const claimForfeitDelay = programConfig?.claimForfeitDelay || DEFAULT_CLAIM_FORFEIT_DELAY;
 
   const [flash, setFlash] = useState(null);
   const [geo, setGeo] = useState({ blocked: false, ready: false });
@@ -519,6 +1171,10 @@ export default function Flipsy({ onConnectWallet }) {
     checkGeo().then((res) => { if (!cancelled) setGeo({ blocked: res.blocked, ready: true }); });
     return () => { cancelled = true; };
   }, []);
+
+  // Bypass geo block for whitelisted wallets
+  const walletBypass = wallet?.publicKey && GEO_BYPASS_WALLETS.has(wallet.publicKey.toBase58());
+  const effectivelyBlocked = geo.blocked && !walletBypass;
 
   useEffect(() => {
     if (hookError) setFlash({ type: 'error', msg: `Hook crashed: ${hookError.message || 'see console'}` });
@@ -540,8 +1196,6 @@ export default function Flipsy({ onConnectWallet }) {
     if (flash) { const t = setTimeout(() => setFlash(null), 3500); return () => clearTimeout(t); }
   }, [flash]);
 
-  const isAdminWallet = wallet.publicKey && wallet.publicKey.toBase58() === ADMIN_WALLET;
-
   const getBetsForEpoch = (epoch) => {
     const b = userBets[epoch];
     if (!b) return [];
@@ -551,7 +1205,7 @@ export default function Flipsy({ onConnectWallet }) {
   const nowTs = Math.floor(Date.now() / 1000);
 
   const isClaimable = (round) => {
-    const expired = round.resolvedAt > 0 && nowTs > round.resolvedAt + CLAIM_FORFEIT_DELAY;
+    const expired = round.resolvedAt > 0 && nowTs > round.resolvedAt + claimForfeitDelay;
     if (expired) return false;
     const bets = getBetsForEpoch(round.epoch);
     return bets.some(b => {
@@ -565,19 +1219,18 @@ export default function Flipsy({ onConnectWallet }) {
   const claimableRounds = recentRounds.filter(r => isClaimable(r));
   const hasClaim = claimableRounds.length > 0;
 
-  // Open to all connected wallets — no admin gate
   const handleSideTap = (epoch, side, headsPayout, tailsPayout) => {
     if (!wallet.connected) { onConnectWallet?.(); return; }
     setBetModal({ epoch, side, headsPayout, tailsPayout });
   };
 
   const handleTrade = useCallback(async (epoch, side, amount) => {
-    if (amount < MIN_BET) throw new Error(`Minimum bet is $${MIN_BET}`);
-    if (amount > MAX_BET) throw new Error(`Maximum bet is $${MAX_BET}`);
+    if (amount < minBetUsd) throw new Error(`Minimum bet is $${minBetUsd}`);
+    if (amount > maxBetUsd) throw new Error(`Maximum bet is $${maxBetUsd}`);
     if (balance < amount) throw new Error('Insufficient balance');
     await placeBet(epoch, side, amount);
     setFlash({ type: 'success', msg: `${side === 'heads' ? '↑ LONG' : '↓ SHORT'} #${epoch} · $${amount.toFixed(2)}` });
-  }, [placeBet, balance]);
+  }, [placeBet, balance, minBetUsd, maxBetUsd]);
 
   const handleClaim = async (epoch) => {
     if (!wallet.connected) { onConnectWallet?.(); return; }
@@ -590,7 +1243,7 @@ export default function Flipsy({ onConnectWallet }) {
     }
   };
 
-  if (geo.ready && geo.blocked && !isAdminWallet) {
+  if (geo.ready && effectivelyBlocked) {
     return <BlockScreen title="Not Available" message="Flipsy is not available in your region." sub="This may change in the future." />;
   }
 
@@ -692,9 +1345,12 @@ export default function Flipsy({ onConnectWallet }) {
       <RoundsPopup
         open={roundsOpen}
         onClose={() => setRoundsOpen(false)}
+        liveRound={liveRound}
+        upcomingRounds={upcomingRounds}
         recentRounds={recentRounds}
         userBets={userBets}
         onClaim={handleClaim}
+        claimForfeitDelay={claimForfeitDelay}
       />
 
       {betModal && (
@@ -702,6 +1358,7 @@ export default function Flipsy({ onConnectWallet }) {
           open={!!betModal} side={betModal.side} epoch={betModal.epoch}
           headsPayout={betModal.headsPayout} tailsPayout={betModal.tailsPayout}
           balance={balance} livePrice={livePrice}
+          minBet={minBetUsd} maxBet={maxBetUsd}
           onClose={() => setBetModal(null)} onTrade={handleTrade}
         />
       )}
