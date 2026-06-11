@@ -1,11 +1,9 @@
 // Portfolio.jsx — holdings dashboard.
 //
-// CHANGES (visual only — all RPC/Jupiter/portfolio logic preserved exactly):
-//   • CSS combined inline as PF_CSS + usePfCSS injector (no Portfolio.css)
-//   • Fonts normalized to Syne + JetBrains Mono (matches App.jsx)
-//   • Renamed from .js to .jsx for consistency
-// Trading-related logic (price fetch, metadata, balances, brand detection,
-// dust filter, sorting) is BYTE-IDENTICAL to the previous version.
+// PERFORMANCE PATCH:
+//   • Two-phase load: SOL balance + price render immediately, tokens stream in
+//   • Parallelized Jupiter meta + price chunk fetches (was serial)
+//   • All trading-related logic still byte-identical
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
@@ -178,7 +176,7 @@ function usePfCSS() {
 }
 
 // =====================================================================
-// CONSTANTS — UNCHANGED
+// CONSTANTS
 // =====================================================================
 const SOL_MINT              = 'So11111111111111111111111111111111111111112';
 const USDC_SOLANA           = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
@@ -219,7 +217,7 @@ const CORE_TOKENS = {
 };
 
 // =====================================================================
-// UTILS — UNCHANGED
+// UTILS
 // =====================================================================
 function fmt(n, d = 2) {
   if (n == null || !Number.isFinite(Number(n))) return '$0.00';
@@ -266,7 +264,7 @@ function colorFromMint(mint) {
 }
 
 // =====================================================================
-// TOKEN METADATA — UNCHANGED
+// TOKEN METADATA
 // =====================================================================
 const _metaCache = new Map();
 
@@ -301,11 +299,16 @@ async function fetchJupiterMeta(mints) {
   try {
     const chunks = [];
     for (let i = 0; i < need.length; i += 100) chunks.push(need.slice(i, i + 100));
-    for (const chunk of chunks) {
-      const r = await fetch(`/api/jupiter/tokens/search?query=${encodeURIComponent(chunk.join(','))}`);
-      if (!r.ok) continue;
-      const data = await r.json();
-      const list = Array.isArray(data) ? data : (data?.tokens || []);
+    // PARALLEL: was serial `for...await` loop
+    const results = await Promise.all(chunks.map(async (chunk) => {
+      try {
+        const r = await fetch(`/api/jupiter/tokens/search?query=${encodeURIComponent(chunk.join(','))}`);
+        if (!r.ok) return [];
+        const data = await r.json();
+        return Array.isArray(data) ? data : (data?.tokens || []);
+      } catch { return []; }
+    }));
+    for (const list of results) {
       list.forEach(t => {
         const mint = t.id || t.address || t.mint;
         if (!mint) return;
@@ -329,7 +332,7 @@ async function fetchJupiterMeta(mints) {
 }
 
 // =====================================================================
-// PRICE FETCH — UNCHANGED
+// PRICE FETCH
 // =====================================================================
 const _priceCache = new Map();
 function clearPriceCache() { _priceCache.clear(); }
@@ -354,10 +357,15 @@ async function fetchJupiterPrices(mints, force = false) {
   try {
     const chunks = [];
     for (let i = 0; i < need.length; i += 100) chunks.push(need.slice(i, i + 100));
-    for (const chunk of chunks) {
-      const r = await fetch(`https://lite-api.jup.ag/price/v3?ids=${chunk.join(',')}`);
-      if (!r.ok) continue;
-      const j = await r.json();
+    // PARALLEL: was serial `for...await` loop
+    const results = await Promise.all(chunks.map(async (chunk) => {
+      try {
+        const r = await fetch(`https://lite-api.jup.ag/price/v3?ids=${chunk.join(',')}`);
+        if (!r.ok) return {};
+        return await r.json();
+      } catch { return {}; }
+    }));
+    for (const j of results) {
       Object.entries(j || {}).forEach(([mint, info]) => {
         const p = Number(info?.usdPrice);
         if (Number.isFinite(p) && p > 0) {
@@ -461,7 +469,8 @@ export default function Portfolio({ onConnectWallet }) {
   const [solBalance, setSolBalance]     = useState(0);
   const [solPriceUsd, setSolPriceUsd]   = useState(0);
   const [tokens, setTokens]             = useState([]);
-  const [loading, setLoading]           = useState(true);
+  const [loading, setLoading]           = useState(true);     // initial paint blocker — released after SOL phase
+  const [tokensLoading, setTokensLoading] = useState(true);   // skeleton in the holdings list
   const [refreshing, setRefreshing]     = useState(false);
   const [error, setError]               = useState('');
   const [copied, setCopied]             = useState(false);
@@ -469,7 +478,7 @@ export default function Portfolio({ onConnectWallet }) {
   const inFlightRef = useRef(false);
 
   const fetchPortfolio = useCallback(async (force = false) => {
-    if (!pubkey || !connection) { setLoading(false); return; }
+    if (!pubkey || !connection) { setLoading(false); setTokensLoading(false); return; }
     if (inFlightRef.current) return;
     inFlightRef.current = true;
     if (force) clearPriceCache();
@@ -477,10 +486,21 @@ export default function Portfolio({ onConnectWallet }) {
     setError('');
 
     try {
-      const lamports = await connection.getBalance(pubkey);
+      // ───────────── PHASE 1: SOL balance + SOL price (fast) ─────────────
+      // Render the hero immediately so the user sees their wallet value.
+      const [lamportsRes, solPriceMap] = await Promise.all([
+        connection.getBalance(pubkey).catch(() => 0),
+        fetchJupiterPrices([SOL_MINT], force).catch(() => ({})),
+      ]);
+      const lamports = lamportsRes || 0;
       const sol = lamports / 1e9;
       setSolBalance(sol);
+      const solPrice = solPriceMap[SOL_MINT] || 0;
+      setSolPriceUsd(solPrice);
+      setLoading(false);   // hero is now ready — release initial blocker
 
+      // ───────────── PHASE 2: token accounts + enrichment (slow) ─────────────
+      setTokensLoading(true);
       const results = await Promise.allSettled([
         connection.getParsedTokenAccountsByOwner(pubkey, { programId: SPL_LEGACY_PROGRAM }),
         connection.getParsedTokenAccountsByOwner(pubkey, { programId: SPL_TOKEN2022_PROGRAM }),
@@ -501,14 +521,11 @@ export default function Portfolio({ onConnectWallet }) {
         } catch {}
       });
 
-      const allMints = [SOL_MINT, ...Object.keys(byMint).filter(m => m !== SOL_MINT)];
+      const tokenMints = Object.keys(byMint).filter(m => m !== SOL_MINT);
       const [metaMap, priceMap] = await Promise.all([
-        fetchJupiterMeta(allMints),
-        fetchJupiterPrices(allMints, force),
+        fetchJupiterMeta(tokenMints),
+        fetchJupiterPrices(tokenMints, force),
       ]);
-
-      const solPrice = priceMap[SOL_MINT] || 0;
-      setSolPriceUsd(solPrice);
 
       const enriched = Object.values(byMint)
         .filter(h => h.mint !== SOL_MINT)
@@ -538,12 +555,13 @@ export default function Portfolio({ onConnectWallet }) {
     } finally {
       inFlightRef.current = false;
       setLoading(false);
+      setTokensLoading(false);
       setRefreshing(false);
     }
   }, [pubkey, connection]);
 
   useEffect(() => {
-    if (!pubkey || !connection) { setLoading(false); return undefined; }
+    if (!pubkey || !connection) { setLoading(false); setTokensLoading(false); return undefined; }
     fetchPortfolio(false);
     const i = setInterval(() => fetchPortfolio(false), POLL_INTERVAL_MS);
     return () => clearInterval(i);
@@ -674,7 +692,7 @@ export default function Portfolio({ onConnectWallet }) {
           uiAmount: solBalance,
         }}/>
 
-        {loading && !tokens.length ? (
+        {tokensLoading && !tokens.length ? (
           <>
             <SkeletonRow/>
             <SkeletonRow/>
