@@ -1,5 +1,5 @@
 require('dotenv').config();
- 
+
 const express   = require('express');
 const cors      = require('cors');
 const path      = require('path');
@@ -524,6 +524,10 @@ app.post('/api/solana-rpc', async (req, res) => {
 /* ========================================================================
  * Health
  * ===================================================================== */
+// Lightweight liveness probe for Railway's healthcheck — must respond
+// quickly with 200 regardless of downstream state.
+app.get('/health', (req, res) => res.status(200).send('ok'));
+
 app.get('/api/health', (req, res) => {
   res.json({
     ok: true, env: NODE_ENV,
@@ -616,7 +620,9 @@ app.use((err, req, res, next) => {
 /* ========================================================================
  * Boot
  * ===================================================================== */
-app.listen(PORT, () => {
+// Bind explicitly to 0.0.0.0 so Railway's router can reach us. Express
+// defaults to this, but being explicit avoids any environment ambiguity.
+app.listen(PORT, '0.0.0.0', () => {
   console.log('Nexus DEX server on port ' + PORT);
   console.log('  env: ' + NODE_ENV);
   console.log('  Jupiter Swap V2: ' + JUPITER_SWAP_V2_BASE + (JUPITER_API_KEY ? ' (main key set)' : ' (no main key)') + (JUPITER_API_KEY_SEO ? ' (SEO key set)' : ' (no SEO key)'));
@@ -625,7 +631,12 @@ app.listen(PORT, () => {
   console.log('  Solana RPC:      ' + (HELIUS_RPC_URL ? 'helius (custom)' : HELIUS_API_KEY ? 'helius' : 'public mainnet-beta'));
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
   console.log('  Whale Watcher:   starting…');
-  startWhaleWatcher();
+  try {
+    startWhaleWatcher();
+  } catch (e) {
+    // Don't let a whale-watcher init error take down the server.
+    logError('whale-watcher-init', e);
+  }
 });
 
 process.on('uncaughtException',  err => logError('uncaughtException',  err));
