@@ -19,7 +19,7 @@ const POLL_CHAIN_MS = 5_000;
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const PRICE_SCALE = 1e8;
-
+ 
 // Frontend defaults — auto-overridden by on-chain config once loaded.
 const DEFAULT_BETTING_DURATION = 900;
 const DEFAULT_GAP_DURATION = 30;
