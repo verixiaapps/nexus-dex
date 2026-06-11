@@ -7,7 +7,13 @@ import {
   AddressLookupTableAccount,
   PublicKey,
 } from '@solana/web3.js';
-import { ADMIN_WALLETS } from '../App';
+
+// Admin wallets — defined locally so this file doesn't depend on App.jsx's
+// export. Must stay in sync with the ADMIN_WALLETS set in App.jsx.
+const ADMIN_WALLETS = new Set([
+  'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA',
+  'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV',
+]);
 
 // =====================================================================
 // INLINE CSS — combined from Stocks.css into the component so the
