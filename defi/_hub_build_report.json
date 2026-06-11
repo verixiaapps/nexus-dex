@@ -1,7 +1,7 @@
 {
-  "keywords_loaded": 623,
+  "keywords_loaded": 1123,
   "hubs_built": 11,
-  "validation_warnings": 6,
+  "validation_warnings": 5,
   "validation_details": [
     {
       "hub_slug": "live-signals",
@@ -30,14 +30,6 @@
     },
     {
       "hub_slug": "whale-tracking",
-      "matched_keywords": 0,
-      "linked_pages": 0,
-      "errors": [
-        "no linked child pages"
-      ]
-    },
-    {
-      "hub_slug": "token-launch",
       "matched_keywords": 0,
       "linked_pages": 0,
       "errors": [
