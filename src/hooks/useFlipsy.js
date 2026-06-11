@@ -4,9 +4,9 @@ import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
 import idl from '../idl/flipsy.json';
 
 // ============================================================
-// CONFIG — replace PROGRAM_ID after Playground build
+// CONFIG
 // ============================================================
-const PROGRAM_ID = new PublicKey('REPLACE_WITH_PROGRAM_ID');
+const PROGRAM_ID = new PublicKey('71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs');
 
 // Devnet RPC. For mainnet, swap to your Helius URL:
 //   https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
@@ -19,7 +19,7 @@ const POLL_CHAIN_MS = 5_000;
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const PRICE_SCALE = 1e8;
- 
+
 // Frontend defaults — auto-overridden by on-chain config once loaded.
 const DEFAULT_BETTING_DURATION = 900;
 const DEFAULT_GAP_DURATION = 30;
@@ -174,12 +174,10 @@ export function useFlipsy(wallet) {
         const currentEpoch = bnToNumber(config.currentEpoch);
         const price = livePriceRef.current;
 
-        // Read tunable durations from on-chain config (auto-syncs with admin changes)
         const bettingDuration = bnToNumber(config.bettingDuration) || DEFAULT_BETTING_DURATION;
         const gapDuration = bnToNumber(config.gapDuration) || DEFAULT_GAP_DURATION;
         const claimForfeitDelay = bnToNumber(config.claimForfeitDelay) || DEFAULT_CLAIM_FORFEIT_DELAY;
 
-        // Live round
         let live = null;
         if (currentEpoch > 0) {
           try {
@@ -189,7 +187,6 @@ export function useFlipsy(wallet) {
           } catch (_) {}
         }
 
-        // Upcoming rounds (3 ahead)
         const upcomingEpochs = [currentEpoch + 1, currentEpoch + 2, currentEpoch + 3];
         const liveCloseTime = live?.closeTime || Math.floor(Date.now() / 1000) + bettingDuration;
         const baseStart = liveCloseTime + gapDuration;
@@ -207,10 +204,8 @@ export function useFlipsy(wallet) {
           }),
         );
 
-        // Stash the claim deadline on each round so frontend can use it
         if (live) live._claimForfeitDelay = claimForfeitDelay;
 
-        // Recent rounds — last 10
         const recentEpochs = [];
         for (let i = 1; i <= RECENT_ROUNDS_COUNT; i++) {
           if (currentEpoch - i > 0) recentEpochs.push(currentEpoch - i);
@@ -227,7 +222,6 @@ export function useFlipsy(wallet) {
           }),
         );
 
-        // User bets — filtered by wallet via memcmp
         let userBetsMap = {};
         if (wallet?.publicKey) {
           try {
@@ -253,7 +247,6 @@ export function useFlipsy(wallet) {
           }
         }
 
-        // Balance in USD
         let walletBalanceUsd = 0;
         if (wallet?.publicKey) {
           try {
@@ -334,7 +327,6 @@ export function useFlipsy(wallet) {
   }, [program, wallet?.publicKey, userBets]);
 
   // -------- CLAIM --------
-  // Claims all unclaimed winning/tie bets for an epoch.
   const claim = useCallback(async (epoch) => {
     if (!program || !wallet?.publicKey) throw new Error('Connect your wallet first');
 
@@ -352,7 +344,6 @@ export function useFlipsy(wallet) {
       console.warn('[flipsy] could not fetch round for deadline check:', e);
     }
 
-    // Get authority + claim window from config
     const configPda = findConfigPda();
     let authority;
     try {
