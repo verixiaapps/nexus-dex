@@ -2,13 +2,13 @@ import React, { useState, useEffect, useCallback, useRef, useReducer } from 'rea
 import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from './WalletContext.js';
-import SwapWidget       from './components/SwapWidget';
-import Portfolio        from './components/Portfolio';
-import Stocks           from './components/Stocks';
-import CrossChainSwap   from './components/CrossChainSwap';
-import MemeWonderland   from './components/MemeWonderland';
-import Flipsy           from './components/Flipsy';
-import SolToBtc         from './components/SolToBtc';
+import SwapWidget       from './components/SwapWidget.jsx';
+import Portfolio        from './components/Portfolio.jsx';
+import Stocks           from './components/Stocks.jsx';
+import CrossChainSwap   from './components/CrossChainSwap.jsx';
+import MemeWonderland   from './components/MemeWonderland.jsx';
+import Flipsy           from './components/Flipsy.jsx';
+import SolToBtc         from './components/SolToBtc.jsx';
 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
