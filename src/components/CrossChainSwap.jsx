@@ -1147,11 +1147,6 @@ export default function CrossChainSwap({ onConnectWallet }) {
 
   return (
     <div className="cc-page">
-      <div className="cc-widget-title">
-        <div className="nm">Bridge</div>
-        <div className="live"><span className="d"></span>LIVE</div>
-      </div>
-
       <div className="cc-card">
         <StepProgress step={step}/>
 
