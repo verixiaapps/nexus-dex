@@ -1,26 +1,32 @@
+useFlipsy.js — Part 1 of 2 (lines 1–220):
+
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as anchor from '@coral-xyz/anchor';
 import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
 import idl from '../idl/flipsy.json';
 
 // ============================================================
-// PROGRAM CONFIG
+// CONFIG — replace PROGRAM_ID after Playground build
 // ============================================================
-const PROGRAM_ID = new PublicKey('71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs');
-const SUPER_ADMIN = new PublicKey('GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA');
-const PRICE_URL = 'https://api.coinbase.com/v2/prices/SOL-USD/spot';
+const PROGRAM_ID = new PublicKey('REPLACE_WITH_PROGRAM_ID');
 
+// Devnet RPC. For mainnet, swap to your Helius URL:
+//   https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
 const FLIPSY_RPC = 'https://api.devnet.solana.com';
+
+const PRICE_URL = 'https://api.coinbase.com/v2/prices/SOL-USD/spot';
 
 const POLL_PRICE_MS = 2_500;
 const POLL_CHAIN_MS = 5_000;
 
 const LAMPORTS_PER_SOL = 1_000_000_000;
-const PRICE_SCALE = 1e8; // crank stores Math.round(price * 1e8)
+const PRICE_SCALE = 1e8;
 
-const BETTING_DURATION = 360;
-const GAP_DURATION = 30;
-const CLAIM_FORFEIT_DELAY = 259_200; // 3 days in seconds
+// Frontend defaults — auto-overridden by on-chain config once loaded.
+// These are only used briefly before the first config fetch completes.
+const DEFAULT_BETTING_DURATION = 900;
+const DEFAULT_GAP_DURATION = 30;
+const DEFAULT_CLAIM_FORFEIT_DELAY = 21_600;
 
 const RECENT_ROUNDS_COUNT = 10;
 
@@ -77,11 +83,6 @@ function mapRound(r, livePrice) {
   const lockPrice = chainPriceToUsd(r.lockPrice);
   const closePrice = chainPriceToUsd(r.closePrice);
 
-  console.log(
-    `[flipsy] epoch=${bnToNumber(r.epoch)} lockPrice raw=${bnToNumber(r.lockPrice)} decoded=$${lockPrice.toFixed(2)}` +
-    ` closePrice raw=${bnToNumber(r.closePrice)} decoded=$${closePrice.toFixed(2)} outcome=${outcomeStr(r.outcome)}`
-  );
-
   return {
     epoch: bnToNumber(r.epoch),
     lockPrice,
@@ -101,14 +102,14 @@ function mapRound(r, livePrice) {
   };
 }
 
-function stubRound(epoch, expectedStartTime) {
+function stubRound(epoch, expectedStartTime, bettingDuration, gapDuration) {
   return {
     epoch,
     lockPrice: 0, closePrice: 0,
     startTime: expectedStartTime,
-    lockTime: expectedStartTime + BETTING_DURATION,
-    closeTime: expectedStartTime + BETTING_DURATION,
-    nextStartTime: expectedStartTime + BETTING_DURATION + GAP_DURATION,
+    lockTime: expectedStartTime + bettingDuration,
+    closeTime: expectedStartTime + bettingDuration,
+    nextStartTime: expectedStartTime + bettingDuration + gapDuration,
     headsPool: 0, tailsPool: 0,
     headsPoolSol: 0, tailsPoolSol: 0,
     betCount: 0, outcome: 'unresolved',
@@ -129,10 +130,10 @@ export function useFlipsy(wallet) {
   const [liveRound, setLiveRound] = useState(null);
   const [upcomingRounds, setUpcomingRounds] = useState([]);
   const [recentRounds, setRecentRounds] = useState([]);
-  // userBets: { [epoch]: BetObject[] }
   const [userBets, setUserBets] = useState({});
   const [balance, setBalance] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [programConfig, setProgramConfig] = useState(null);
   const livePriceRef = useRef(0);
 
   const program = useMemo(() => {
@@ -176,7 +177,10 @@ export function useFlipsy(wallet) {
         const currentEpoch = bnToNumber(config.currentEpoch);
         const price = livePriceRef.current;
 
-        console.log(`[flipsy] currentEpoch=${currentEpoch} solPrice=$${price}`);
+        // Read tunable durations from on-chain config (auto-syncs with admin changes)
+        const bettingDuration = bnToNumber(config.bettingDuration) || DEFAULT_BETTING_DURATION;
+        const gapDuration = bnToNumber(config.gapDuration) || DEFAULT_GAP_DURATION;
+        const claimForfeitDelay = bnToNumber(config.claimForfeitDelay) || DEFAULT_CLAIM_FORFEIT_DELAY;
 
         // Live round
         let live = null;
@@ -190,8 +194,8 @@ export function useFlipsy(wallet) {
 
         // Upcoming rounds (3 ahead)
         const upcomingEpochs = [currentEpoch + 1, currentEpoch + 2, currentEpoch + 3];
-        const liveCloseTime = live?.closeTime || Math.floor(Date.now() / 1000) + BETTING_DURATION;
-        const baseStart = liveCloseTime + GAP_DURATION;
+        const liveCloseTime = live?.closeTime || Math.floor(Date.now() / 1000) + bettingDuration;
+        const baseStart = liveCloseTime + gapDuration;
         const upcoming = await Promise.all(
           upcomingEpochs.map(async (e, idx) => {
             try {
@@ -200,11 +204,14 @@ export function useFlipsy(wallet) {
               if (mapped.outcome !== 'unresolved') return null;
               return mapped;
             } catch (_) {
-              const start = baseStart + idx * (BETTING_DURATION + GAP_DURATION);
-              return stubRound(e, start);
+              const start = baseStart + idx * (bettingDuration + gapDuration);
+              return stubRound(e, start, bettingDuration, gapDuration);
             }
           }),
         );
+
+        // Stash the claim deadline on each round so frontend can use it
+        if (live) live._claimForfeitDelay = claimForfeitDelay;
 
         // Recent rounds — last 10
         const recentEpochs = [];
@@ -212,6 +219,8 @@ export function useFlipsy(wallet) {
           if (currentEpoch - i > 0) recentEpochs.push(currentEpoch - i);
         }
         const allRecent = currentEpoch > 0 ? [currentEpoch, ...recentEpochs] : recentEpochs;
+        const recents = await Promise.all(
+
         const recents = await Promise.all(
           allRecent.map(async (e) => {
             try {
@@ -222,15 +231,13 @@ export function useFlipsy(wallet) {
           }),
         );
 
-        // User bets — filtered by wallet via memcmp, grouped as array per epoch
+        // User bets — filtered by wallet via memcmp
         let userBetsMap = {};
         if (wallet?.publicKey) {
           try {
             const bets = await program.account.bet.all([
               { memcmp: { offset: 8, bytes: wallet.publicKey.toBase58() } },
             ]);
-            console.log(`[flipsy] found ${bets.length} bets for wallet ${wallet.publicKey.toBase58()}`);
-            const nowTs = Math.floor(Date.now() / 1000);
             for (const b of bets) {
               const epoch = bnToNumber(b.account.epoch);
               const sol = lamportsToSol(b.account.amount);
@@ -242,7 +249,6 @@ export function useFlipsy(wallet) {
                 betIndex: bnToNumber(b.account.betIndex),
                 pubkey: b.publicKey,
               };
-              console.log(`[flipsy] bet epoch=${epoch} side=${betObj.side} amount=$${betObj.amount.toFixed(2)} claimed=${betObj.claimed}`);
               if (!userBetsMap[epoch]) userBetsMap[epoch] = [];
               userBetsMap[epoch].push(betObj);
             }
@@ -266,6 +272,16 @@ export function useFlipsy(wallet) {
         setRecentRounds(recents.filter(Boolean));
         setUserBets(userBetsMap);
         setBalance(walletBalanceUsd);
+        setProgramConfig({
+          minBet: bnToNumber(config.minBet),
+          maxBet: bnToNumber(config.maxBet),
+          feeBps: bnToNumber(config.feeBps),
+          bettingDuration,
+          gapDuration,
+          maxFutureRounds: bnToNumber(config.maxFutureRounds),
+          claimForfeitDelay,
+          paused: config.paused,
+        });
         setLoading(false);
       } catch (e) {
         console.error('[flipsy] state fetch error:', e);
@@ -286,13 +302,10 @@ export function useFlipsy(wallet) {
     const solAmount = usdAmount / price;
     const lamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
 
-    // Derive next betIndex from all existing bets for this epoch
     const existingBets = userBets[epoch] || [];
     const betIndex = existingBets.length > 0
       ? Math.max(...existingBets.map(b => b.betIndex)) + 1
       : 0;
-
-    console.log(`[flipsy] placeBet epoch=${epoch} side=${side} usd=$${usdAmount} lamports=${lamports} betIndex=${betIndex}`);
 
     const configPda = findConfigPda();
     const roundPda = findRoundPda(epoch);
@@ -316,7 +329,6 @@ export function useFlipsy(wallet) {
           systemProgram: SystemProgram.programId,
         })
         .rpc();
-      console.log(`[flipsy] placeBet tx=${tx}`);
       return tx;
     } catch (e) {
       const msg = e?.error?.errorMessage || e?.message || 'Bet failed';
@@ -327,7 +339,7 @@ export function useFlipsy(wallet) {
 
   // -------- CLAIM --------
   // Claims all unclaimed winning/tie bets for an epoch.
-  // Enforces the 3-day deadline client-side before sending any tx.
+  // Enforces the 6-hour claim window client-side before sending any tx.
   const claim = useCallback(async (epoch) => {
     if (!program || !wallet?.publicKey) throw new Error('Connect your wallet first');
 
@@ -335,9 +347,9 @@ export function useFlipsy(wallet) {
     const unclaimedBets = betsForEpoch.filter(b => !b.claimed);
     if (unclaimedBets.length === 0) throw new Error('No claimable bets for that round');
 
-    // Find the resolved round to check deadline
     const roundPda = findRoundPda(epoch);
     let resolvedAt = 0;
+    let claimForfeitDelay = DEFAULT_CLAIM_FORFEIT_DELAY;
     try {
       const roundData = await program.account.round.fetch(roundPda);
       resolvedAt = bnToNumber(roundData.resolvedAt);
@@ -345,12 +357,22 @@ export function useFlipsy(wallet) {
       console.warn('[flipsy] could not fetch round for deadline check:', e);
     }
 
-    const nowTs = Math.floor(Date.now() / 1000);
-    if (resolvedAt > 0 && nowTs > resolvedAt + CLAIM_FORFEIT_DELAY) {
-      throw new Error('Claim window expired — winnings forfeited after 3 days');
+    // Get authority + claim window from config
+    const configPda = findConfigPda();
+    let authority;
+    try {
+      const config = await program.account.config.fetch(configPda);
+      authority = config.authority;
+      claimForfeitDelay = bnToNumber(config.claimForfeitDelay) || DEFAULT_CLAIM_FORFEIT_DELAY;
+    } catch (e) {
+      throw new Error('Failed to load program config');
     }
 
-    const configPda = findConfigPda();
+    const nowTs = Math.floor(Date.now() / 1000);
+    if (resolvedAt > 0 && nowTs > resolvedAt + claimForfeitDelay) {
+      throw new Error('Claim window expired — winnings forfeited');
+    }
+
     const vaultPda = findVaultPda(epoch);
 
     let lastTx = null;
@@ -364,11 +386,10 @@ export function useFlipsy(wallet) {
             round: roundPda,
             bet: betPda,
             vault: vaultPda,
-            superAdmin: SUPER_ADMIN,
+            authority,
             user: wallet.publicKey,
           })
           .rpc();
-        console.log(`[flipsy] claimed betIndex=${bet.betIndex} tx=${lastTx}`);
       } catch (e) {
         const msg = e?.error?.errorMessage || e?.message || 'Claim failed';
         console.error('[flipsy] claim error:', e);
@@ -388,5 +409,6 @@ export function useFlipsy(wallet) {
     placeBet,
     claim,
     loading,
+    programConfig,
   };
 }
