@@ -5,8 +5,6 @@ const cors      = require('cors');
 const path      = require('path');
 const rateLimit = require('express-rate-limit');
 
-const { startWhaleWatcher, getRecentWhaleEvents } = require('./whale-watcher');
-
 const app      = express();
 const PORT     = process.env.PORT || 3001;
 const NODE_ENV = process.env.NODE_ENV || 'development';
@@ -38,20 +36,15 @@ const CSP_DIRECTIVES = [
   ['child-src',       ["'self'", 'https://verify.walletconnect.com', 'https://verify.walletconnect.org']],
   ['connect-src',     [
     "'self'",
-    // Jupiter
     'https://api.jup.ag', 'https://lite-api.jup.ag', 'https://quote-api.jup.ag', 'https://token.jup.ag',
-    // LI.FI
     'https://li.quest',
-    // Solana RPC
     'https://api.mainnet-beta.solana.com', 'https://mainnet.helius-rpc.com', 'https://*.helius-rpc.com',
     'https://*.publicnode.com', 'https://*.drpc.org',
-    // WalletConnect (external wallet flow)
     'https://explorer-api.walletconnect.com',
     'https://*.walletconnect.com', 'https://*.walletconnect.org',
     'wss://relay.walletconnect.com', 'wss://relay.walletconnect.org',
     'wss://*.walletconnect.com', 'wss://*.walletconnect.org',
     'wss://www.walletlink.org',
-    // Sanctions screening (optional but standard)
     'https://public.chainalysis.com',
     ...EXTRA_CONNECT_SRC,
   ]],
@@ -96,12 +89,6 @@ const LIFI_API_KEY = process.env.LIFI_API_KEY || '';
 
 const SOL_MINT = 'So11111111111111111111111111111111111111112';
 
-// Cross-origin allow-list. The SEO pages live on verixiaapps.com (a different
-// origin than this swap server) so they MUST be whitelisted here or their
-// /api/jupiter/* calls are blocked by the browser ("Load failed" on iOS).
-// Defaults now include the verixia origins so this works even if the env var
-// is unset; trailing slashes are stripped on both sides so a value like
-// "https://verixiaapps.com/" can't silently fail the exact-string match.
 const stripSlash = (s) => String(s || '').replace(/\/+$/, '');
 const allowedOrigins = (process.env.ALLOWED_ORIGINS
     || 'https://swap.verixiaapps.com,https://verixiaapps.com,https://www.verixiaapps.com,http://localhost:3000')
@@ -193,15 +180,12 @@ function buildJupiterHeaders() {
   return h;
 }
 
-// Dedicated headers for SEO pages — uses a SEPARATE Jupiter API key so SEO
-// traffic doesn't share rate-limit quota with the main swap app.
 function buildJupiterSeoHeaders() {
   const h = { Accept: 'application/json', 'Content-Type': 'application/json', 'X-Nexus-Account': 'NEXUS_DEX_SEO' };
   if (JUPITER_API_KEY_SEO) h['x-api-key'] = JUPITER_API_KEY_SEO;
   return h;
 }
 
-// Swap V2 /build — used by the main Swap.jsx (atomic-tx flow)
 app.get('/api/jupiter/build', async (req, res) => {
   try {
     const url = JUPITER_SWAP_V2_BASE + '/build' + buildForwardedQuery(req);
@@ -218,7 +202,6 @@ app.get('/api/jupiter/build', async (req, res) => {
   }
 });
 
-// Swap V2 /build for SEO pages — same upstream, separate Jupiter API key.
 app.get('/api/seo/jupiter/build', async (req, res) => {
   try {
     const url = JUPITER_SWAP_V2_BASE + '/build' + buildForwardedQuery(req);
@@ -235,7 +218,6 @@ app.get('/api/seo/jupiter/build', async (req, res) => {
   }
 });
 
-// Tokens by tag (default: verified)
 app.get('/api/jupiter/tokens', async (req, res) => {
   try {
     const params = new URLSearchParams(req.query);
@@ -254,7 +236,6 @@ app.get('/api/jupiter/tokens', async (req, res) => {
   }
 });
 
-// Token search by symbol / name / mint
 app.get('/api/jupiter/tokens/search', async (req, res) => {
   try {
     const params = new URLSearchParams(req.query);
@@ -272,7 +253,6 @@ app.get('/api/jupiter/tokens/search', async (req, res) => {
   }
 });
 
-// Legacy swap quote — used by MemeWonderland and Stocks
 app.get('/api/jupiter/quote', async (req, res) => {
   try {
     if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter disabled' });
@@ -290,7 +270,6 @@ app.get('/api/jupiter/quote', async (req, res) => {
   }
 });
 
-// Legacy swap — returns a full serialized transaction
 app.post('/api/jupiter/swap', async (req, res) => {
   try {
     if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter disabled' });
@@ -310,7 +289,6 @@ app.post('/api/jupiter/swap', async (req, res) => {
   }
 });
 
-// Swap instructions — used for atomic-tx flow (fee + swap in one tx)
 app.post('/api/jupiter/swap-instructions', async (req, res) => {
   try {
     if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter disabled' });
@@ -330,7 +308,6 @@ app.post('/api/jupiter/swap-instructions', async (req, res) => {
   }
 });
 
-// Trending memes (top organic score by timeframe) — used by MemeWonderland
 app.get('/api/jupiter/tokens/v2/toporganicscore/:timeframe', async (req, res) => {
   try {
     const url = `https://lite-api.jup.ag/tokens/v2/toporganicscore/${req.params.timeframe || '24h'}${buildForwardedQuery(req)}`;
@@ -347,7 +324,6 @@ app.get('/api/jupiter/tokens/v2/toporganicscore/:timeframe', async (req, res) =>
   }
 });
 
-// New launches — Jupiter Tokens V2 /recent.
 app.get('/api/jupiter/tokens/v2/recent', async (req, res) => {
   try {
     const url = `https://lite-api.jup.ag/tokens/v2/recent${buildForwardedQuery(req)}`;
@@ -364,7 +340,6 @@ app.get('/api/jupiter/tokens/v2/recent', async (req, res) => {
   }
 });
 
-// Token registry passthrough
 app.get('/api/jupiter/tokens/v2/tag', async (req, res) => {
   try {
     const url = `https://token.jup.ag/tokens/v2/tag${buildForwardedQuery(req)}`;
@@ -382,7 +357,7 @@ app.get('/api/jupiter/tokens/v2/tag', async (req, res) => {
 });
 
 /* ========================================================================
- * SOL price — Jupiter price feed
+ * SOL price
  * ===================================================================== */
 let _solPriceCache = { p: 0, ts: 0 };
 async function fetchSolPriceUsd() {
@@ -395,27 +370,14 @@ async function fetchSolPriceUsd() {
   _solPriceCache = { p, ts: now };
   return p;
 }
+
 app.get('/api/sol-price', async (req, res) => {
   try { res.json({ price: await fetchSolPriceUsd(), ts: Date.now() }); }
   catch (e) { logError('sol-price', e); res.status(500).json({ error: e.message || 'Unknown error' }); }
 });
 
 /* ========================================================================
- * Whale Watcher
- * ===================================================================== */
-app.get('/api/whale-events', (req, res) => {
-  try {
-    const since = Number(req.query.since || 48 * 3600 * 1000);
-    const events = getRecentWhaleEvents(since);
-    res.json({ events, count: events.length, ts: Date.now() });
-  } catch (e) {
-    logError('whale-events', e);
-    res.status(500).json({ error: e.message || 'Unknown error' });
-  }
-});
-
-/* ========================================================================
- * LI.FI cross-chain
+ * LI.FI
  * ===================================================================== */
 function buildLifiHeaders() {
   const h = { Accept: 'application/json' };
@@ -524,8 +486,6 @@ app.post('/api/solana-rpc', async (req, res) => {
 /* ========================================================================
  * Health
  * ===================================================================== */
-// Lightweight liveness probe for Railway's healthcheck — must respond
-// quickly with 200 regardless of downstream state.
 app.get('/health', (req, res) => res.status(200).send('ok'));
 
 app.get('/api/health', (req, res) => {
@@ -537,7 +497,6 @@ app.get('/api/health', (req, res) => {
       jupiterSeoKey:  Boolean(JUPITER_API_KEY_SEO),
       helius:         Boolean(HELIUS_API_KEY || HELIUS_RPC_URL),
       lifiApiKey:     Boolean(LIFI_API_KEY),
-      resend:         Boolean(process.env.RESEND_API_KEY),
     },
     jupiter: {
       swapV2: JUPITER_SWAP_V2_BASE,
@@ -553,10 +512,6 @@ app.get('/api/health', (req, res) => {
               : HELIUS_API_KEY ? 'helius'
               : 'public mainnet-beta',
     },
-    whaleWatcher: {
-      recentEvents: getRecentWhaleEvents(48 * 3600 * 1000).length,
-      email:        process.env.WHALE_ALERT_EMAIL || 'Verixiaapps@gmail.com',
-    },
     time: new Date().toISOString(),
   });
 });
@@ -565,15 +520,6 @@ app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not fou
 
 /* ========================================================================
  * Embed runtime config
- *
- * Serves window.__VERIXIA_CONFIG__ from Railway env so the self-contained
- * embed bundle (build/embed/verixia-swap.js) needs no build-time secrets.
- * Declared BEFORE express.static so it wins the /embed/* route race.
- *
- * Note: getSolanaRpcUrl() returns the full Helius URL incl. the key, which is
- * visible in the browser — same exposure as the main SPA bundle today. Keep
- * the Helius key domain-locked. Runtime injection keeps it out of the repo
- * and the CI build, not out of the browser.
  * ===================================================================== */
 app.get('/embed/config.js', (req, res) => {
   const cfg = {
@@ -588,11 +534,7 @@ app.get('/embed/config.js', (req, res) => {
 });
 
 /* ========================================================================
- * Static SPA + SEO pages
- *
- * Serves build/ (main app), build/embed/ (the embed bundle, reachable at
- * /embed/verixia-swap.js), and any SEO pages your generator writes into build/.
- * The catch-all falls back to the SPA index.html for unknown routes.
+ * Static SPA
  * ===================================================================== */
 app.use(express.static(path.join(__dirname, 'build'), {
   maxAge: '7d',
@@ -620,8 +562,9 @@ app.use((err, req, res, next) => {
 /* ========================================================================
  * Boot
  * ===================================================================== */
-// Bind explicitly to 0.0.0.0 so Railway's router can reach us. Express
-// defaults to this, but being explicit avoids any environment ambiguity.
+process.on('uncaughtException',  err => logError('uncaughtException',  err));
+process.on('unhandledRejection', err => logError('unhandledRejection', err));
+
 app.listen(PORT, '0.0.0.0', () => {
   console.log('Nexus DEX server on port ' + PORT);
   console.log('  env: ' + NODE_ENV);
@@ -630,14 +573,4 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  LI.FI:           ' + LIFI_API + (LIFI_API_KEY ? ' (key set)' : ' (no key)'));
   console.log('  Solana RPC:      ' + (HELIUS_RPC_URL ? 'helius (custom)' : HELIUS_API_KEY ? 'helius' : 'public mainnet-beta'));
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
-  console.log('  Whale Watcher:   starting…');
-  try {
-    startWhaleWatcher();
-  } catch (e) {
-    // Don't let a whale-watcher init error take down the server.
-    logError('whale-watcher-init', e);
-  }
 });
-
-process.on('uncaughtException',  err => logError('uncaughtException',  err));
-process.on('unhandledRejection', err => logError('unhandledRejection', err));
