@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "private": true,
   "proxy": "http://localhost:3001",
-  "dependencies": {
+  "dependencies": { 
     "@coral-xyz/anchor": "0.29.0",
     "@lifi/sdk": "^3.16.3",
     "@reown/appkit": "^1.8.20",
