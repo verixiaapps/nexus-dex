@@ -619,14 +619,6 @@ export default function SwapWidget({ defaultInputMint, defaultOutputMint, onConn
     <div className="sw-root">
       <div className="sw-container">
 
-        <div className="sw-header">
-          <h1 className="sw-title">Swap</h1>
-          <div className="sw-live-pill">
-            <span className="sw-live-dot"></span>
-            LIVE
-          </div>
-        </div>
-
         <div className="sw-panel">
           <SwapRow
             label="You Pay"
