@@ -123,36 +123,6 @@ cheaper alternative to bullx
 cheaper alternative to dexscreener
 cheaper alternative to gmgn
 cheaper alternative to photon
-swap sol to io solana
-swap sol to jitosol
-swap sol to jitosol solana
-swap sol to jto
-swap sol to jto solana
-swap sol to jup
-swap sol to jup solana
-swap sol to jupiter
-swap sol to kas
-swap sol to kmno
-swap sol to kmno solana
-swap sol to link
-swap sol to mew
-swap sol to mew solana
-swap sol to mkr
-swap sol to mnde
-swap sol to mnde solana
-swap sol to moodeng solana
-swap sol to mother solana
-swap sol to msol
-swap sol to msol solana
-swap sol to mumu solana
-swap sol to myro solana
-swap sol to near
-swap sol to optimism
-swap sol to pengu
-swap sol to pengu solana
-swap sol to pepe
-swap sol to pnut
-swap sol to pnut solana
 swap sol to polygon
 swap sol to ponke solana
 swap sol to popcat
