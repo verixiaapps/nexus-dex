@@ -120,7 +120,7 @@ function SwapHero({ onStartTrading, onScrollToWidget }) {
     { v: '$48M',   l: 'Volume' },
     { v: '0.4s',   l: 'Settlement' },
     { v: '12K+',   l: 'Tokens' },
-    { v: '<$0.01', l: 'Fees' },
+    { v: '71',     l: 'Chains' },
   ];
 
   // Live ticker rows (mock activity, real-looking)
@@ -502,7 +502,7 @@ function BridgeHero({ onSwitchTab }) {
           fontFamily: "'JetBrains Mono', monospace", fontSize: 10, fontWeight: 700, color: P.dim, letterSpacing: '0.06em',
         }}>
           <span><span style={{ display: 'inline-block', width: 5, height: 5, borderRadius: '50%', background: P.green, boxShadow: `0 0 8px ${P.green}`, marginRight: 6, animation: 'nxPulse 1.4s infinite', verticalAlign: 'middle' }} />Routes Active</span>
-          <span>Avg <b style={{ color: P.blue, fontWeight: 800 }}>~2 min</b> · Fee <b style={{ color: P.blue, fontWeight: 800 }}>$1.87</b></span>
+          <span>Avg <b style={{ color: P.blue, fontWeight: 800 }}>~2 min</b> · <b style={{ color: P.blue, fontWeight: 800 }}>71 chains</b></span>
         </div>
       </div>
 
