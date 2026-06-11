@@ -1066,6 +1066,36 @@ swap w to drift
 swap w to fartcoin
 swap w to goat
 swap w to grass
+swap w to hnt
+swap w to io
+swap w to jitosol
+swap w to jto
+swap w to jup
+swap w to kmno
+swap w to mew
+swap w to mnde
+swap w to msol
+swap w to pengu
+swap w to pnut
+swap w to popcat
+swap w to pyth
+swap w to ray
+swap w to render
+swap w to sol
+swap w to sol solana
+swap w to tnsr
+swap w to usdc solana
+swap w to usdt solana
+swap w to wen
+swap w to wif
+swap wen for act solana
+swap wen for ai16z solana
+swap wen for bonk solana
+swap wen for cloud solana
+swap wen for drift solana
+swap wen for fartcoin solana
+swap wen for goat solana
+swap wen for grass solana
 trade meme coins instantly
 universal crypto bridge
 universal crypto swap
