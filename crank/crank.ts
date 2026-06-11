@@ -1,4 +1,4 @@
-console.log("=== CRANK BOOT ===");
+console.log("=== FLIPSY CRANK BOOT (DEVNET) ===");
 console.log("Node:", process.version);
 
 import * as anchor from "@coral-xyz/anchor";
@@ -8,23 +8,30 @@ import idl from "./flipsy-idl.json";
 
 const bs58: any = (bs58module as any).default || bs58module;
 
-const PROGRAM_ID = new PublicKey("71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs");
-const SUPER_ADMIN = new PublicKey("GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA");
+// ============================================================
+// CONFIG — replace with your devnet program ID after Playground build
+// ============================================================
+const PROGRAM_ID = new PublicKey("REPLACE_WITH_PROGRAM_ID");
+
+// Required env vars on Railway:
+//   RPC_URL         — for devnet, use: https://api.devnet.solana.com
+//                     for mainnet later, use your Helius URL
+//   CRANK_KEYPAIR   — base58 or JSON array of cranker wallet secret key
 const RPC_URL = process.env.RPC_URL || "https://api.devnet.solana.com";
+
 const POLL_INTERVAL_MS = parseInt(process.env.POLL_INTERVAL_MS || "10000");
 const GAP_SECONDS = 30;
 const PRICE_URL = "https://api.coinbase.com/v2/prices/SOL-USD/spot";
 
 function loadKeypair(): Keypair {
   const raw = process.env.CRANK_KEYPAIR;
-  if (!raw) throw new Error("CRANK_KEYPAIR required");
+  if (!raw) throw new Error("CRANK_KEYPAIR env var required");
   const t = raw.trim();
   if (t.startsWith("[")) return Keypair.fromSecretKey(Uint8Array.from(JSON.parse(t)));
   return Keypair.fromSecretKey(bs58.decode(t));
 }
 
-// Coinbase returns price like "142.37". We need i64 with 8 decimal places.
-// $142.37 -> 14_237_000_000
+// Coinbase returns "142.37". Contract stores i64 with 8 decimal places.
 async function fetchSolPriceI64(): Promise<anchor.BN> {
   const res = await fetch(PRICE_URL);
   if (!res.ok) throw new Error(`Coinbase HTTP ${res.status}`);
@@ -75,7 +82,13 @@ async function startRound(program: any, configPda: PublicKey, cranker: Keypair, 
   console.log("[crank] startRound tx:", tx);
 }
 
-async function endRound(program: any, configPda: PublicKey, cranker: Keypair, epoch: number) {
+async function endRound(
+  program: any,
+  configPda: PublicKey,
+  cranker: Keypair,
+  epoch: number,
+  authority: PublicKey,
+) {
   const roundPda = pdaRound(epoch);
   const vaultPda = pdaVault(epoch);
   const closePrice = await fetchSolPriceI64();
@@ -86,7 +99,7 @@ async function endRound(program: any, configPda: PublicKey, cranker: Keypair, ep
       config: configPda,
       round: roundPda,
       vault: vaultPda,
-      superAdmin: SUPER_ADMIN,
+      authority,
       cranker: cranker.publicKey,
     })
     .signers([cranker])
@@ -97,7 +110,8 @@ async function endRound(program: any, configPda: PublicKey, cranker: Keypair, ep
 async function main() {
   const cranker = loadKeypair();
   console.log("[crank] Cranker:", cranker.publicKey.toBase58());
-  console.log("[crank] RPC:", RPC_URL);
+  console.log("[crank] RPC:", RPC_URL.replace(/api-key=[^&]+/, "api-key=***"));
+  console.log("[crank] Program:", PROGRAM_ID.toBase58());
 
   const connection = new Connection(RPC_URL, "confirmed");
   const wallet = new anchor.Wallet(cranker);
@@ -108,10 +122,11 @@ async function main() {
   const [configPda] = PublicKey.findProgramAddressSync([Buffer.from("config")], PROGRAM_ID);
   console.log("[crank] Config PDA:", configPda.toBase58());
 
-  // Perpetual loop. Single-iteration errors are caught and logged so we never crash.
+  // Perpetual loop — single-iteration errors are caught so the crank never crashes.
   while (true) {
     try {
       const config: any = await (program.account as any).config.fetch(configPda);
+      const authority: PublicKey = config.authority;
 
       if (config.paused) {
         console.log("[crank] Paused");
@@ -136,7 +151,7 @@ async function main() {
       const closeTime = round.closeTime.toNumber();
 
       if (!resolved && now >= closeTime) {
-        await endRound(program, configPda, cranker, epoch);
+        await endRound(program, configPda, cranker, epoch, authority);
       } else if (resolved) {
         const nextStart = closeTime + GAP_SECONDS;
         if (now >= nextStart) {
@@ -158,4 +173,3 @@ main().catch((e) => {
   console.error("[crank] Fatal:", e);
   process.exit(1);
 });
- 
