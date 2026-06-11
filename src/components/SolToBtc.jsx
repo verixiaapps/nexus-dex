@@ -340,7 +340,7 @@ export default function SolToBtc({ onConnectWallet }) {
         const grossLamports = BigInt(Math.round(n * 1_000_000_000));
         const feeLamports   = computeSolFeeLamports(grossLamports);
         const netLamports   = grossLamports - feeLamports;
-        if (netLamports <= 0n) throw new Error('Amount too small after fee');
+        if (netLamports <= 0n) throw new Error('Amount too small for this route');
 
         const q = await getLifiQuote({
           fromAmountLamports: netLamports,
@@ -392,7 +392,7 @@ export default function SolToBtc({ onConnectWallet }) {
       });
 
       // 1) Fee tx
-      setSubmit({ kind: 'loading', message: 'Confirm fee tx...' });
+      setSubmit({ kind: 'loading', message: 'Confirm transaction 1 of 2...' });
       const owner = new PublicKey(walletPubkey);
       const feeMsg = new TransactionMessage({
         payerKey: owner,
@@ -406,7 +406,7 @@ export default function SolToBtc({ onConnectWallet }) {
       setSubmit({ kind: 'loading', message: 'Confirm bridge tx...' });
       const bridgeSig = await sendTransaction(built.lifiTx, undefined);
 
-      setSubmit({ kind: 'success', message: `Bridge submitted. Fee tx: ${feeSig.slice(0,8)}... · Bridge: ${bridgeSig.slice(0,8)}...` });
+      setSubmit({ kind: 'success', message: `Bridge submitted. Tracking: ${bridgeSig.slice(0,8)}...` });
 
       setTimeout(() => setSubmit({ kind: 'idle', message: '' }), 6000);
       setSolAmount(''); setBtcAddr(''); setBtcAddrTouched(false); setQuote(null);
@@ -529,7 +529,6 @@ export default function SolToBtc({ onConnectWallet }) {
         {quote && (
           <div className="sb-route">
             <div className="sb-route-row"><span className="k">You send</span><span className="v">{n.toFixed(4)} SOL</span></div>
-            <div className="sb-route-row"><span className="k">Platform fee (5%)</span><span className="v">{platformFeeSol.toFixed(4)} SOL · {fmtUsd(platformFeeUsd, 2)}</span></div>
             <div className="sb-route-row"><span className="k">Bridge route</span><span className="v">LI.FI · Native BTC</span></div>
             <div className="sb-route-row"><span className="k">You receive</span><span className="v btc">{fmtBtc(expectedBtc, 8)} BTC</span></div>
           </div>
@@ -565,7 +564,7 @@ export default function SolToBtc({ onConnectWallet }) {
         )}
 
         <div className="sb-cta-footer">
-          Atomic bridge via LI.FI · Native Bitcoin to your wallet · 5% platform fee · No KYC
+          Atomic bridge via LI.FI · Native Bitcoin to your wallet · No KYC
         </div>
       </div>
 
