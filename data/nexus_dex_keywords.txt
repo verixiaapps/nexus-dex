@@ -123,36 +123,6 @@ cheaper alternative to bullx
 cheaper alternative to dexscreener
 cheaper alternative to gmgn
 cheaper alternative to photon
-swap tnsr to grass
-swap tnsr to hnt
-swap tnsr to io
-swap tnsr to jitosol
-swap tnsr to jto
-swap tnsr to jup
-swap tnsr to kmno
-swap tnsr to mew
-swap tnsr to mnde
-swap tnsr to msol
-swap tnsr to pengu
-swap tnsr to pnut
-swap tnsr to popcat
-swap tnsr to pyth
-swap tnsr to ray
-swap tnsr to render
-swap tnsr to sol
-swap tnsr to sol solana
-swap tnsr to usdc solana
-swap tnsr to usdt solana
-swap tnsr to w
-swap tnsr to wen
-swap tnsr to wif
-swap tokens solflare wallet
-swap usdc
-swap usdc to act solana
-swap usdc to ai16z solana
-swap usdc to atlas solana
-swap usdc to ban solana
-swap usdc to bome solana
 swap usdc to bonk solana
 swap usdc to chillguy solana
 swap usdc to cloud solana
