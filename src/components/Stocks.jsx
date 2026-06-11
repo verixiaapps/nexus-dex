@@ -7,7 +7,7 @@ import {
   AddressLookupTableAccount,
   PublicKey,
 } from '@solana/web3.js';
-import { ADMIN_WALLETS } from '../App.jsx';
+import { ADMIN_WALLETS } from '../App';
 
 // =====================================================================
 // INLINE CSS — combined from Stocks.css into the component so the
