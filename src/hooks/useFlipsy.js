@@ -21,7 +21,6 @@ const LAMPORTS_PER_SOL = 1_000_000_000;
 const PRICE_SCALE = 1e8;
 
 // Frontend defaults — auto-overridden by on-chain config once loaded.
-// These are only used briefly before the first config fetch completes.
 const DEFAULT_BETTING_DURATION = 900;
 const DEFAULT_GAP_DURATION = 30;
 const DEFAULT_CLAIM_FORFEIT_DELAY = 21_600;
@@ -336,7 +335,6 @@ export function useFlipsy(wallet) {
 
   // -------- CLAIM --------
   // Claims all unclaimed winning/tie bets for an epoch.
-  // Enforces the 6-hour claim window client-side before sending any tx.
   const claim = useCallback(async (epoch) => {
     if (!program || !wallet?.publicKey) throw new Error('Connect your wallet first');
 
