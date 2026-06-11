@@ -7,22 +7,185 @@ import {
   AddressLookupTableAccount,
   PublicKey,
 } from '@solana/web3.js';
-import './Stocks.css';
- 
+import { ADMIN_WALLETS } from '../App.jsx';
+
 // =====================================================================
-// CONFIG — brand tokens via Jupiter Aggregator. 5% platform fee to FEE_WALLET.
-// Atomic single-tx pattern: BUY prepends USDC fee transfer (deducted from
-// user's input before Jupiter routes it); SELL appends USDC fee transfer
-// taken from `otherAmountThreshold` so it never overdraws after slippage.
+// INLINE CSS — combined from Stocks.css into the component so the
+// previous "lost CSS file" class of bugs cannot happen again.
+// =====================================================================
+const STOCKS_CSS = `
+.st-page,.st-region-block,.st-sheet,.st-modal-backdrop {
+  --st-bg:#04070f; --st-bg-2:#070b16;
+  --st-surface:#0a1020; --st-surface-2:#0e1428;
+  --st-ink:#e6efff; --st-ink-str:#f5fafe;
+  --st-muted:#7a92b3; --st-muted-2:#475670;
+  --st-hl:#4dffd2; --st-hl-2:#5ee8ff;
+  --st-hl-dim:rgba(77,255,210,.14); --st-violet:#a87fff;
+  --st-up:#3dd598; --st-down:#ff8a9e; --st-amber:#f5b53d; --st-gold:#ffcd3c;
+  --st-border:rgba(255,255,255,.06);
+  --st-border-hi:rgba(77,255,210,.24);
+  --st-hairline:rgba(255,255,255,.05);
+  --st-font-display:'Unbounded','Syne',system-ui,sans-serif;
+  --st-font-body:'Fredoka','DM Sans',system-ui,sans-serif;
+  --st-font-mono:'IBM Plex Mono',ui-monospace,monospace;
+  font-family:var(--st-font-body); color:var(--st-ink);
+}
+.st-page,.st-page *,.st-sheet,.st-sheet *,.st-region-block,.st-region-block *{box-sizing:border-box}
+body.nexus-scroll-locked{overflow:hidden}
+@keyframes st-pulse{50%{opacity:0.4}}
+@keyframes st-spin{to{transform:rotate(360deg)}}
+@keyframes st-rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes st-slide-up{from{transform:translate(-50%,100%)}to{transform:translate(-50%,0)}}
+@keyframes st-shimmer{0%{left:-110px}50%,100%{left:130%}}
+
+.st-page{max-width:680px;margin:0 auto;width:100%;padding:0 16px calc(env(safe-area-inset-bottom) + 90px)}
+
+/* COMPACT HERO */
+.st-mini-hero{margin-top:14px;padding:18px 18px 16px;border-radius:18px;
+  background:linear-gradient(135deg,rgba(10,16,32,.96),rgba(7,11,22,.98));
+  border:1px solid var(--st-border-hi);position:relative;overflow:hidden}
+.st-mini-hero::before{content:'';position:absolute;inset:-1px;border-radius:18px;padding:1px;
+  background:linear-gradient(135deg,var(--st-hl),transparent 50%,var(--st-hl-2));
+  -webkit-mask:linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
+  -webkit-mask-composite:xor;mask-composite:exclude;opacity:.4;pointer-events:none}
+.st-mh-row{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;position:relative;z-index:2}
+.st-mh-left{flex:1;min-width:0}
+.st-mh-eyebrow{display:inline-block;font-family:var(--st-font-mono);font-size:9px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--st-hl);margin-bottom:8px}
+.st-mh-title{font-family:var(--st-font-display);font-weight:900;font-size:clamp(22px,6.5vw,28px);line-height:1;letter-spacing:-.03em;margin:0 0 6px;color:var(--st-ink-str)}
+.st-mh-title .grad{background:linear-gradient(120deg,var(--st-hl),var(--st-hl-2));-webkit-background-clip:text;background-clip:text;color:transparent;font-style:italic;font-weight:500}
+.st-mh-sub{font-family:var(--st-font-body);font-size:12px;font-weight:600;color:var(--st-muted);line-height:1.4;margin:0}
+.st-mh-live{flex-shrink:0;text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
+.st-mh-live .v{font-family:var(--st-font-display);font-weight:900;font-size:18px;color:var(--st-hl);letter-spacing:-.02em;line-height:1;font-variant-numeric:tabular-nums}
+.st-mh-live .l{font-family:var(--st-font-mono);font-size:8px;color:var(--st-muted-2);letter-spacing:.12em;text-transform:uppercase;font-weight:700}
+.st-mh-live .pulse{display:inline-block;width:5px;height:5px;border-radius:50%;background:#00ffa3;box-shadow:0 0 8px #00ffa3;animation:st-pulse 1.4s infinite;margin-right:5px;vertical-align:middle}
+
+/* KYC pill */
+.st-kyc{margin:12px 0 6px;display:flex;align-items:center;justify-content:center;gap:14px;
+  padding:9px 14px;border-radius:100px;
+  background:linear-gradient(90deg,rgba(0,0,0,.4),rgba(77,255,210,.06),rgba(0,0,0,.4));
+  border:1px solid var(--st-border-hi)}
+.st-kyc span{font-family:var(--st-font-mono);font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--st-hl);white-space:nowrap}
+.st-kyc span:nth-child(3){color:var(--st-hl-2)}
+.st-kyc span:nth-child(5){color:#00ffa3}
+.st-kyc .dot{display:inline-block;width:3px;height:3px;border-radius:50%;background:var(--st-muted);opacity:.5}
+
+/* FILTERS */
+.st-filters{display:flex;gap:6px;margin:14px 0 12px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px;scrollbar-width:none}
+.st-filters::-webkit-scrollbar{display:none}
+.st-filter{padding:8px 14px;border-radius:999px;border:1.5px solid var(--st-border);background:rgba(255,255,255,.03);color:var(--st-muted);font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap;flex-shrink:0;font-family:var(--st-font-display);letter-spacing:0.02em;transition:all 0.15s}
+.st-filter.st-active{background:linear-gradient(135deg,var(--st-hl),var(--st-hl-2));border-color:var(--st-hl);color:#04070f;box-shadow:0 2px 12px rgba(77,255,210,.3)}
+
+/* LIST */
+.st-list{background:rgba(10,16,32,.50);border:1.5px solid var(--st-border);border-radius:18px;overflow:hidden;margin-bottom:18px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
+.st-empty{padding:30px 16px;text-align:center;color:var(--st-muted);font-size:12px}
+
+.st-tile{padding:14px 16px;display:grid;grid-template-columns:40px 1fr auto;gap:14px;align-items:center;background:transparent;border:none;border-bottom:1px solid var(--st-hairline);width:100%;text-align:left;cursor:pointer;-webkit-tap-highlight-color:rgba(77,255,210,.10);transition:background 0.15s;color:inherit;font-family:inherit}
+.st-tile:last-child{border-bottom:none}
+.st-tile:hover{background:rgba(77,255,210,.04)}
+.st-tile:active{background:rgba(77,255,210,.08)}
+.st-tile-mid{min-width:0}
+.st-tile-row{display:flex;align-items:center;gap:8px}
+.st-tile-sym{color:var(--st-ink-str);font-weight:800;font-size:15px;letter-spacing:-.01em;font-family:var(--st-font-display)}
+.st-tile-ticker{color:var(--st-muted-2);font-size:9px;font-weight:700;padding:2px 7px;border-radius:5px;background:rgba(255,255,255,.04);letter-spacing:.04em;font-family:var(--st-font-mono)}
+.st-tile-name{color:var(--st-muted);font-size:11.5px;margin-top:2px}
+.st-tile-right{text-align:right}
+.st-tile-price{color:var(--st-ink-str);font-size:15px;font-weight:800;font-variant-numeric:tabular-nums;font-family:var(--st-font-mono)}
+.st-tile-price.st-muted{color:var(--st-muted)}
+.st-tile-cta{font-size:9px;color:var(--st-hl);font-weight:800;letter-spacing:.12em;margin-top:3px;font-family:var(--st-font-display)}
+
+.st-badge{border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;flex-shrink:0;letter-spacing:-.02em;text-shadow:0 1px 3px rgba(0,0,0,.5);font-family:var(--st-font-display)}
+
+.st-powered{display:flex;align-items:center;justify-content:center;gap:9px;padding:12px 16px;border-radius:14px;background:rgba(255,255,255,.02);border:1px solid var(--st-border);margin-bottom:8px}
+.st-powered-label{font-size:9px;color:var(--st-muted-2);font-weight:700;letter-spacing:.08em;font-family:var(--st-font-mono)}
+.st-powered-name{font-size:11px;font-weight:800;letter-spacing:.04em;background:linear-gradient(135deg,var(--st-hl) 0%,var(--st-violet) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;font-family:var(--st-font-mono)}
+.st-powered-sep{color:var(--st-muted-2);font-size:9px}
+
+/* MODAL / SHEET */
+.st-modal-backdrop{position:fixed;inset:0;z-index:400;background:rgba(0,0,0,.82);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);cursor:pointer;animation:st-rise 0.2s}
+.st-modal-backdrop.st-busy{cursor:wait}
+.st-sheet{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:540px;z-index:401;background:linear-gradient(180deg,var(--st-surface-2) 0%,var(--st-bg) 100%);border-top:1.5px solid var(--st-border-hi);border-radius:28px 28px 0 0;max-height:92dvh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 -28px 80px rgba(0,0,0,.7),0 0 60px rgba(77,255,210,.08);animation:st-slide-up 0.4s cubic-bezier(0.2,1.2,0.4,1)}
+.st-grabber{width:40px;height:4px;background:rgba(255,255,255,.18);border-radius:99px;margin:0 auto 16px}
+.st-sheet-head{flex-shrink:0;padding:14px 22px 12px}
+.st-sheet-head-row{display:flex;align-items:center;gap:12px}
+.st-sheet-title-wrap{flex:1;min-width:0}
+.st-sheet-title-row{display:flex;align-items:center;gap:8px}
+.st-sheet-title{font-size:20px;font-weight:900;color:var(--st-ink-str);letter-spacing:-.02em;font-family:var(--st-font-display)}
+.st-sheet-subtitle{font-size:11.5px;color:var(--st-muted);margin-top:2px}
+.st-close-btn{background:rgba(255,255,255,.05);border:1px solid var(--st-border);color:var(--st-muted);width:34px;height:34px;border-radius:10px;font-size:18px;cursor:pointer;flex-shrink:0;font-family:inherit;transition:all 0.15s}
+.st-close-btn:hover{background:rgba(255,255,255,.1);color:var(--st-ink)}
+.st-close-btn:disabled{cursor:not-allowed;opacity:0.5}
+.st-live-price{margin-top:12px;padding:10px 14px;border-radius:12px;background:rgba(0,0,0,.30);border:1px solid var(--st-border);display:flex;justify-content:space-between;align-items:center}
+.st-live-price-label{font-size:10px;color:var(--st-muted-2);font-weight:700;letter-spacing:.10em;font-family:var(--st-font-mono)}
+.st-live-price-val{font-size:17px;color:var(--st-ink-str);font-weight:800;font-variant-numeric:tabular-nums;font-family:var(--st-font-mono)}
+.st-you-own{margin-top:8px;padding:10px 14px;border-radius:12px;background:rgba(77,255,210,.05);border:1px solid var(--st-border-hi);display:flex;justify-content:space-between;align-items:center;gap:8px}
+.st-you-own-label{font-size:10px;color:var(--st-hl);font-weight:800;letter-spacing:.10em;font-family:var(--st-font-mono)}
+.st-you-own-val{font-size:12.5px;color:var(--st-ink-str);font-weight:700;font-variant-numeric:tabular-nums;text-align:right;font-family:var(--st-font-mono)}
+.st-muted-soft{color:var(--st-muted);font-weight:600}
+.st-muted-deep{color:var(--st-muted-2);font-weight:600}
+.st-muted{color:var(--st-muted)}
+.st-sheet-body{flex:1;overflow-y:auto;padding:4px 22px 14px;min-height:0}
+.st-side-switch{display:inline-flex;padding:4px;margin-bottom:14px;background:rgba(255,255,255,.04);border:1px solid var(--st-border);border-radius:999px;gap:3px;width:100%}
+.st-side-btn{flex:1;padding:10px 16px;border-radius:999px;border:none;background:transparent;color:var(--st-muted);font-weight:800;font-size:13px;cursor:pointer;letter-spacing:-.01em;font-family:var(--st-font-display);transition:all 0.2s}
+.st-side-btn:disabled{cursor:not-allowed;opacity:0.5}
+.st-side-btn.st-active.st-buy{background:rgba(61,213,152,.2);color:var(--st-up);box-shadow:0 2px 12px rgba(61,213,152,.2)}
+.st-side-btn.st-active.st-sell{background:rgba(255,138,158,.2);color:var(--st-down);box-shadow:0 2px 12px rgba(255,138,158,.2)}
+.st-amount-wrap{margin-bottom:12px}
+.st-amount-label{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:10px;color:var(--st-muted);font-weight:700;letter-spacing:.08em;font-family:var(--st-font-mono)}
+.st-amount-input-wrap{background:rgba(255,255,255,.04);border:1.5px solid var(--st-border);border-radius:14px;padding:14px;margin-bottom:9px;display:flex;align-items:center;gap:10px;transition:all 0.2s}
+.st-amount-input-wrap:focus-within{border-color:var(--st-hl);box-shadow:0 0 0 4px rgba(77,255,210,.1)}
+.st-amount-input-wrap.st-busy{opacity:0.6}
+.st-amount-dollar{color:var(--st-muted);font-size:20px;font-family:var(--st-font-mono)}
+.st-amount-input{flex:1;background:transparent;border:none;font-size:26px;font-weight:900;color:var(--st-ink-str);outline:none;font-variant-numeric:tabular-nums;font-family:var(--st-font-display);letter-spacing:-0.02em;min-width:0;width:100%}
+.st-amount-input::placeholder{color:var(--st-muted-2);font-weight:700}
+.st-amount-suffix{color:var(--st-ink);font-size:12px;font-weight:800;font-family:var(--st-font-mono);flex-shrink:0}
+.st-amount-equiv{font-size:10px;color:var(--st-muted);font-weight:600;margin-bottom:9px;margin-top:-3px;padding-left:4px;font-family:var(--st-font-mono)}
+.st-chips{display:flex;gap:6px}
+.st-chip{flex:1;padding:9px 0;border-radius:10px;border:1.5px solid var(--st-border);background:rgba(255,255,255,.03);color:var(--st-muted);font-weight:800;font-size:11px;cursor:pointer;font-family:var(--st-font-display);letter-spacing:0.04em;box-shadow:0 2px 0 rgba(0,0,0,.2);transition:all 0.15s cubic-bezier(0.2,1.2,0.4,1)}
+.st-chip:not(.st-chip-off):hover{border-color:var(--st-hl);color:var(--st-hl)}
+.st-chip:not(.st-chip-off):active{transform:translateY(2px);box-shadow:0 0 0 rgba(0,0,0,.2)}
+.st-chip-off{cursor:not-allowed;opacity:0.4;color:var(--st-muted-2)}
+.st-receive{background:rgba(77,255,210,.04);border:1.5px solid rgba(77,255,210,.18);border-radius:14px;padding:14px;margin-bottom:12px}
+.st-receive-head{font-size:9px;color:var(--st-muted-2);font-weight:800;letter-spacing:.12em;margin-bottom:10px;display:flex;justify-content:space-between;font-family:var(--st-font-mono)}
+.st-receive-loading{color:var(--st-hl)}
+.st-receive-val{font-size:22px;font-weight:900;color:var(--st-ink-str);font-variant-numeric:tabular-nums;margin-bottom:10px;font-family:var(--st-font-display);letter-spacing:-0.02em}
+.st-receive-val.st-muted{color:var(--st-muted)}
+.st-receive-meta{border-top:1px solid var(--st-hairline);padding-top:8px}
+.st-receive-meta-row{display:flex;justify-content:space-between;padding:4px 0;font-size:11px}
+.st-receive-meta-row span:first-child{color:var(--st-muted)}
+.st-receive-meta-row span:last-child{color:var(--st-ink);font-weight:700;font-family:var(--st-font-mono)}
+.st-cta-wrap{flex-shrink:0;padding:14px 22px calc(env(safe-area-inset-bottom) + 90px);border-top:1px solid var(--st-hairline);background:linear-gradient(180deg,transparent 0%,var(--st-bg) 20%)}
+.st-status-banner{margin-bottom:10px;padding:11px 12px;background:rgba(77,255,210,.06);border:1px solid rgba(77,255,210,.22);border-radius:12px;display:flex;align-items:center;gap:10px;font-size:12px;color:var(--st-ink);font-weight:600}
+.st-spinner{width:14px;height:14px;border-radius:50%;border:2px solid var(--st-hl-dim);border-top-color:var(--st-hl);animation:st-spin 0.8s linear infinite}
+.st-error-banner{margin-bottom:10px;padding:11px 12px;background:rgba(255,138,158,.08);border:1px solid rgba(255,138,158,.24);border-radius:12px;font-size:12px;color:var(--st-down);font-weight:600}
+.st-cta{width:100%;padding:18px;border-radius:18px;border:none;color:#04070f;font-weight:900;font-size:15px;cursor:pointer;min-height:56px;letter-spacing:0.04em;font-family:var(--st-font-display);position:relative;overflow:hidden;transition:all 0.15s cubic-bezier(0.2,1.2,0.4,1)}
+.st-cta::after{content:'';position:absolute;top:0;bottom:0;width:70px;left:-110px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent);animation:st-shimmer 2.8s ease-in-out infinite}
+.st-cta:active:not(.st-cta-disabled){transform:translateY(3px)}
+.st-cta-connect{background:linear-gradient(135deg,var(--st-violet) 0%,var(--st-hl-2) 100%);box-shadow:0 8px 28px rgba(168,127,255,.35),0 4px 0 rgba(0,0,0,.25),inset 0 -3px 0 rgba(0,0,0,.12),inset 0 2px 0 rgba(255,255,255,.3)}
+.st-cta-buy{background:linear-gradient(135deg,var(--st-up) 0%,var(--st-hl-2) 100%);box-shadow:0 8px 28px rgba(61,213,152,.35),0 4px 0 rgba(0,0,0,.25),inset 0 -3px 0 rgba(0,0,0,.12),inset 0 2px 0 rgba(255,255,255,.3)}
+.st-cta-sell{color:#fff;background:linear-gradient(135deg,var(--st-down) 0%,var(--st-violet) 100%);box-shadow:0 8px 28px rgba(255,138,158,.35),0 4px 0 rgba(0,0,0,.25),inset 0 -3px 0 rgba(0,0,0,.18),inset 0 2px 0 rgba(255,255,255,.2)}
+.st-cta-success{background:linear-gradient(135deg,var(--st-up) 0%,var(--st-hl-2) 100%)}
+.st-cta-disabled{cursor:not-allowed;opacity:0.55}
+.st-cta-disabled::after{display:none}
+.st-cta-footer{font-size:10px;color:var(--st-muted-2);text-align:center;margin-top:10px;line-height:1.5;font-weight:500}
+
+/* REGION BLOCK */
+.st-region-block{max-width:680px;margin:0 auto;width:100%;padding:0 16px calc(env(safe-area-inset-bottom) + 90px);min-height:80vh;display:flex;align-items:center;justify-content:center;background-image:radial-gradient(ellipse 80% 40% at 50% 10%,rgba(168,127,255,.14),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 30%,rgba(77,255,210,.08),transparent 50%)}
+.st-region-card{width:100%;max-width:480px;padding:44px 28px 40px;border-radius:28px;background:linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98));border:1.5px solid rgba(168,127,255,.22);box-shadow:0 24px 80px rgba(0,0,0,.55),0 0 60px rgba(168,127,255,.10);text-align:center;position:relative;overflow:hidden}
+.st-region-glow{position:absolute;inset:0;background:radial-gradient(ellipse 100% 60% at 50% -10%,rgba(77,255,210,.10),transparent 70%);pointer-events:none}
+.st-region-inner{position:relative}
+.st-region-icon{width:56px;height:56px;margin:0 auto 20px;border-radius:14px;background:var(--st-hl-dim);border:1px solid var(--st-border-hi);display:flex;align-items:center;justify-content:center;color:var(--st-hl)}
+.st-region-title{font-family:var(--st-font-display);font-size:28px;line-height:1.05;font-weight:800;margin:0 0 12px;letter-spacing:-.04em;background:linear-gradient(135deg,var(--st-ink-str) 0%,var(--st-violet) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
+.st-region-sub{font-size:13px;color:var(--st-muted);line-height:1.6;font-weight:500}
+`;
+
+// =====================================================================
+// CONFIG — atomic Jupiter swap with 5% USDC fee
 // =====================================================================
 const FEE_WALLET   = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS      = 500;            // 5% — matches Wonderland/Swap/Bridge
+const FEE_BPS      = 500;
 const USDC_MINT    = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
 const USDC_DECIMALS = 6;
-
-// Jupiter dynamicSlippage cap. UI doesn't expose a slippage knob.
-const SLIPPAGE_BPS_MAX = 500;        // 5% — Jupiter picks tighter when possible
-
+const SLIPPAGE_BPS_MAX = 500;
 const MIN_USDC = 1;
 const MAX_USDC = 50_000;
 
@@ -31,7 +194,7 @@ const TOKEN_2022_PROGRAM_ID = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqC
 const ATA_PROGRAM_ID        = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
 
 // =====================================================================
-// US GEO BLOCK — required for compliance. No VIP override.
+// US GEO BLOCK — ADMIN_WALLETS bypass everywhere
 // =====================================================================
 const GEO_URL       = 'https://www.cloudflare.com/cdn-cgi/trace';
 const GEO_CACHE_KEY = 'verixia_geo_country_v1';
@@ -61,7 +224,7 @@ async function detectCountry() {
 }
 
 // =====================================================================
-// BRAND TOKEN LIST — verified mints. Decimals: 8 (Token-2022 standard).
+// ALL 18 BRAND TOKENS — verified mints, Token-2022 standard (8 decimals)
 // =====================================================================
 const BRANDS = [
   // ------ TECH MEGABRANDS ------
@@ -75,13 +238,11 @@ const BRANDS = [
   { mint: 'XsEH7wWfJJu2ZT3UCFeVfALnVA6CP5ur7Ee11KmzVpL', symbol: 'NFLXx',  name: 'Netflix',               ticker: 'NFLX',  decimals: 8, sector: 'Tech',   color: '#e50914' },
   { mint: 'XsoBhf2ufR8fTyNSjqfU71DYGaE6Z3SUGAidpzriAA4', symbol: 'PLTRx',  name: 'Palantir',              ticker: 'PLTR',  decimals: 8, sector: 'Tech',   color: '#0a0a0a' },
   { mint: 'XsgSaSvNSqLTtFuyWPBhK9196Xb9Bbdyjj4fH3cPJGo', symbol: 'AVGOx',  name: 'Broadcom',              ticker: 'AVGO',  decimals: 8, sector: 'Tech',   color: '#cc092f' },
-
   // ------ CRYPTO-ADJACENT ------
   { mint: 'Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu', symbol: 'COINx',  name: 'Coinbase',              ticker: 'COIN',  decimals: 8, sector: 'Crypto', color: '#0052ff' },
   { mint: 'XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ', symbol: 'MSTRx',  name: 'MicroStrategy',         ticker: 'MSTR',  decimals: 8, sector: 'Crypto', color: '#fcb017' },
   { mint: 'XsueG8BtpquVJX9LVLLEGuViXUungE6WmK5YZ3p3bd1', symbol: 'CRCLx',  name: 'Circle',                ticker: 'CRCL',  decimals: 8, sector: 'Crypto', color: '#3399ff' },
   { mint: 'XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg', symbol: 'HOODx',  name: 'Robinhood',             ticker: 'HOOD',  decimals: 8, sector: 'Crypto', color: '#cdff00' },
-
   // ------ INDEX TOKENS ------
   { mint: 'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W', symbol: 'SPYx',   name: 'Solana 500',            ticker: 'SPY',   decimals: 8, sector: 'Index',  color: '#1c4f9c' },
   { mint: 'Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ', symbol: 'QQQx',   name: 'Solana 100',            ticker: 'QQQ',   decimals: 8, sector: 'Index',  color: '#003b71' },
@@ -94,10 +255,11 @@ const FILTERS = [
   { id: 'Trending', label: 'Trending' },
   { id: 'Tech',     label: 'Tech' },
   { id: 'Crypto',   label: 'Crypto-Adj' },
+  { id: 'Index',    label: 'Index' },
 ];
 
 // =====================================================================
-// UTILS
+// UTILS — UNCHANGED
 // =====================================================================
 function fmtUsd(n, d = 2) {
   if (n == null || !Number.isFinite(Number(n))) return '$0.00';
@@ -149,9 +311,7 @@ async function fetchBrandPrices(mints) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// JUPITER ROUTING
-// ─────────────────────────────────────────────────────────────────────
+// ───────────────── JUPITER ROUTING — UNCHANGED ─────────────────
 async function getJupiterQuote({ inputMint, outputMint, amountAtomic, slippageBps }) {
   const params = new URLSearchParams({
     inputMint, outputMint,
@@ -190,9 +350,7 @@ async function getJupiterSwapInstructions({ quoteResponse, userPublicKey }) {
   return json;
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// INSTRUCTION BUILDERS (atomic fee transfer)
-// ─────────────────────────────────────────────────────────────────────
+// ───────────────── INSTRUCTION BUILDERS — UNCHANGED ─────────────────
 function deriveAta(owner, mint, tokenProgramId = TOKEN_PROGRAM_ID) {
   const [ata] = PublicKey.findProgramAddressSync(
     [owner.toBuffer(), tokenProgramId.toBuffer(), mint.toBuffer()],
@@ -201,9 +359,6 @@ function deriveAta(owner, mint, tokenProgramId = TOKEN_PROGRAM_ID) {
   return ata;
 }
 
-// Idempotent create-ATA — instruction discriminator = 1 (Create) with the
-// idempotent flag; the ATA program treats this as a no-op if the account
-// already exists. Same shape Wonderland uses.
 function createIdempotentAtaIx(payer, ata, owner, mint, tokenProgramId = TOKEN_PROGRAM_ID) {
   return new TransactionInstruction({
     keys: [
@@ -211,7 +366,7 @@ function createIdempotentAtaIx(payer, ata, owner, mint, tokenProgramId = TOKEN_P
       { pubkey: ata,               isSigner: false, isWritable: true  },
       { pubkey: owner,             isSigner: false, isWritable: false },
       { pubkey: mint,              isSigner: false, isWritable: false },
-      { pubkey: new PublicKey('11111111111111111111111111111111'), isSigner: false, isWritable: false }, // System
+      { pubkey: new PublicKey('11111111111111111111111111111111'), isSigner: false, isWritable: false },
       { pubkey: tokenProgramId,    isSigner: false, isWritable: false },
     ],
     programId: ATA_PROGRAM_ID,
@@ -219,8 +374,6 @@ function createIdempotentAtaIx(payer, ata, owner, mint, tokenProgramId = TOKEN_P
   });
 }
 
-// SPL Token TransferChecked — discriminator 12 + amount(u64) + decimals(u8).
-// Safer than legacy Transfer since the runtime verifies decimals.
 function createTransferCheckedIx({ source, mint, destination, owner, amountAtomic, decimals, tokenProgramId = TOKEN_PROGRAM_ID }) {
   const data = new Uint8Array(10);
   data[0] = 12;
@@ -282,11 +435,7 @@ async function fetchTokenBalance({ ownerPubkey, mint, decimals }) {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       jsonrpc: '2.0', id: 1, method: 'getTokenAccountsByOwner',
-      params: [
-        ownerPubkey,
-        { mint },
-        { encoding: 'jsonParsed', commitment: 'confirmed' },
-      ],
+      params: [ ownerPubkey, { mint }, { encoding: 'jsonParsed', commitment: 'confirmed' } ],
     }),
   }, 8_000);
   const json = await res.json();
@@ -300,26 +449,6 @@ async function fetchTokenBalance({ ownerPubkey, mint, decimals }) {
   return { atomic, ui };
 }
 
-// ─────────────────────────────────────────────────────────────────────
-// ATOMIC TX ASSEMBLY
-//
-// BUY (USDC -> brand):
-//   [Jupiter compute budget ixs]
-//   [fee ATA-idempotent + transferChecked]   ← prepended
-//   [Jupiter setup ixs]
-//   [Jupiter swap ix]
-//   [Jupiter cleanup ix]
-//
-// SELL (brand -> USDC):
-//   [Jupiter compute budget ixs]
-//   [Jupiter setup ixs]
-//   [Jupiter swap ix]
-//   [Jupiter cleanup ix]
-//   [fee ATA-idempotent + transferChecked]   ← appended
-//
-// SELL fee is taken from `otherAmountThreshold` (worst-case USDC output)
-// so it can never overdraw the user's USDC ATA after the swap.
-// ─────────────────────────────────────────────────────────────────────
 async function assembleSwapTx({ swapInstructions, feeIxs, userPublicKey, prependFee }) {
   const altAddrs = swapInstructions.addressLookupTableAddresses || [];
   const altAccounts = await fetchLookupTableAccounts(altAddrs);
@@ -330,7 +459,6 @@ async function assembleSwapTx({ swapInstructions, feeIxs, userPublicKey, prepend
   const cleanupIx        = swapInstructions.cleanupInstruction ? deserializeJupInstruction(swapInstructions.cleanupInstruction) : null;
 
   const allIxs = [];
-  // Compute budget MUST be first per Solana runtime
   for (const ix of computeBudgetIxs) allIxs.push(ix);
   if (prependFee) for (const ix of feeIxs) allIxs.push(ix);
   for (const ix of setupIxs)        allIxs.push(ix);
@@ -436,21 +564,31 @@ function useBodyLock(open) {
   }, [open]);
 }
 
+// CSS injector — runs once
+function useStocksCSS() {
+  useEffect(() => {
+    const id = 'nexus-stocks-css';
+    if (document.getElementById(id)) return;
+    const el = document.createElement('style');
+    el.id = id;
+    el.textContent = STOCKS_CSS;
+    document.head.appendChild(el);
+    return () => { /* leave injected — other Stocks mounts may need it */ };
+  }, []);
+}
+
 // =====================================================================
 // SUB-COMPONENTS
 // =====================================================================
 function BrandBadge({ brand, size = 40 }) {
   const letter = (brand.ticker || brand.symbol || '?').charAt(0).toUpperCase();
   return (
-    <div
-      className="st-badge"
-      style={{
-        width: size, height: size,
-        background: `linear-gradient(135deg,${brand.color},${brand.color}dd)`,
-        fontSize: Math.round(size * 0.38),
-        boxShadow: `0 4px 14px ${brand.color}50`,
-      }}
-    >{letter}</div>
+    <div className="st-badge" style={{
+      width: size, height: size,
+      background: `linear-gradient(135deg,${brand.color},${brand.color}dd)`,
+      fontSize: Math.round(size * 0.38),
+      boxShadow: `0 4px 14px ${brand.color}50`,
+    }}>{letter}</div>
   );
 }
 
@@ -517,8 +655,6 @@ function TradeModal({ open, brand, price, onClose, walletPubkey, onConnectWallet
     return () => { cancelled = true; };
   }, [open, brand, walletPubkey, submitState.kind]);
 
-  // QUOTE — Jupiter routes the NET amount after our 5% fee for BUY,
-  // and the FULL brand amount for SELL (fee deducted from USDC output).
   useEffect(() => {
     if (!open || !brand) return;
     const n = parseFloat(amount);
@@ -534,13 +670,10 @@ function TradeModal({ open, brand, price, onClose, walletPubkey, onConnectWallet
 
         let atomic;
         if (isBuy) {
-          // User pays N USDC. 5% fee taken from input → Jupiter routes net.
           const grossUsdcAtomic = Math.round(n * 10 ** USDC_DECIMALS);
           const feeUsdcAtomic   = Math.floor(grossUsdcAtomic * FEE_BPS / 10000);
           atomic = grossUsdcAtomic - feeUsdcAtomic;
         } else {
-          // User wants ~N USDC out. Translate to brand units via live price,
-          // sell the full brand amount, fee taken from USDC output.
           if (!(price > 0)) { setQuote(null); setQuoting(false); return; }
           atomic = Math.round((n / price) * 10 ** brand.decimals);
         }
@@ -577,9 +710,7 @@ function TradeModal({ open, brand, price, onClose, walletPubkey, onConnectWallet
   const grossOut    = outAtomic / 10 ** outDecimals;
 
   const feeBpsRatio    = FEE_BPS / 10000;
-  const platformFeeUsd = isBuy
-    ? usd * feeBpsRatio
-    : grossOut * feeBpsRatio;
+  const platformFeeUsd = isBuy ? usd * feeBpsRatio : grossOut * feeBpsRatio;
   const netOutUsdc  = !isBuy ? Math.max(0, grossOut - platformFeeUsd) : 0;
   const outAmount   = isBuy ? grossOut : netOutUsdc;
   const priceImpactPct = quote?.priceImpactPct ? Number(quote.priceImpactPct) * 100 : 0;
@@ -607,14 +738,9 @@ function TradeModal({ open, brand, price, onClose, walletPubkey, onConnectWallet
       const owner       = new PublicKey(walletPubkey);
       const usdcMintPk  = new PublicKey(USDC_MINT);
 
-      // Fee always lands in USDC at the fee wallet's USDC ATA.
       const userUsdcAta = deriveAta(owner,      usdcMintPk, TOKEN_PROGRAM_ID);
       const feeUsdcAta  = deriveAta(FEE_WALLET, usdcMintPk, TOKEN_PROGRAM_ID);
 
-      // Fee base:
-      //   BUY  → gross USDC input × 5%
-      //   SELL → worst-case USDC output (otherAmountThreshold) × 5%
-      //          using worst-case ensures the transferChecked can never overdraw.
       let feeAtomic;
       if (side === 'BUY') {
         feeAtomic = BigInt(Math.round(usd * 10 ** USDC_DECIMALS)) * BigInt(FEE_BPS) / 10000n;
@@ -624,7 +750,6 @@ function TradeModal({ open, brand, price, onClose, walletPubkey, onConnectWallet
       }
       if (feeAtomic <= 0n) throw new Error('Fee amount rounds to zero — amount too small');
 
-      // Ensure fee wallet's USDC ATA exists, then transfer.
       const feeIxs = [
         createIdempotentAtaIx(owner, feeUsdcAta, FEE_WALLET, usdcMintPk, TOKEN_PROGRAM_ID),
         createTransferCheckedIx({
@@ -732,9 +857,7 @@ function TradeModal({ open, brand, price, onClose, walletPubkey, onConnectWallet
                     ? <>{fmtAmt(brandBal.ui, 6)} {brand.symbol} <span className="st-muted-soft">· {fmtUsd(brandBal.ui * price, 2)}</span></>
                     : <span className="st-muted">0 {brand.symbol}</span>}
                 {' '}
-                <span className="st-muted-deep">
-                  · {usdcBal.loaded ? fmtUsd(usdcBal.ui, 2) : '...'} USDC
-                </span>
+                <span className="st-muted-deep">· {usdcBal.loaded ? fmtUsd(usdcBal.ui, 2) : '...'} USDC</span>
               </span>
             </div>
           )}
@@ -773,9 +896,7 @@ function TradeModal({ open, brand, price, onClose, walletPubkey, onConnectWallet
               <span className="st-amount-suffix">USDC</span>
             </div>
             {!isBuy && sellBrandEquiv > 0 && (
-              <div className="st-amount-equiv">
-                ≈ {fmtAmt(sellBrandEquiv, 6)} {brand.symbol}
-              </div>
+              <div className="st-amount-equiv">≈ {fmtAmt(sellBrandEquiv, 6)} {brand.symbol}</div>
             )}
             <div className="st-chips">
               {chips.map(c => {
@@ -826,26 +947,16 @@ function TradeModal({ open, brand, price, onClose, walletPubkey, onConnectWallet
             </div>
           )}
           {(error || submitState.kind === 'error') && (
-            <div className="st-error-banner">
-              {error || submitState.message}
-            </div>
+            <div className="st-error-banner">{error || submitState.message}</div>
           )}
 
           {!wcon ? (
-            <button onClick={() => onConnectWallet?.()} className="st-cta st-cta-connect">
-              Connect Wallet
-            </button>
+            <button onClick={() => onConnectWallet?.()} className="st-cta st-cta-connect">Connect Wallet</button>
           ) : (
             <button
               onClick={handleSubmit}
               disabled={isBusy || !quote || !validStake}
-              className={
-                'st-cta '
-                + (isSuccess
-                  ? 'st-cta-success'
-                  : side === 'BUY' ? 'st-cta-buy' : 'st-cta-sell')
-                + (isBusy || !quote || !validStake ? ' st-cta-disabled' : '')
-              }
+              className={'st-cta ' + (isSuccess ? 'st-cta-success' : side === 'BUY' ? 'st-cta-buy' : 'st-cta-sell') + (isBusy || !quote || !validStake ? ' st-cta-disabled' : '')}
             >
               {isBusy ? 'Processing...' :
                isSuccess ? 'Swap placed' :
@@ -881,9 +992,7 @@ function BrandsRegionBlock() {
               <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
             </svg>
           </div>
-          <h1 className="st-region-title">
-            Not available in your region
-          </h1>
+          <h1 className="st-region-title">Not available in your region</h1>
           <div className="st-region-sub">
             Brand tokens are restricted in your region. Swap, Bridge, Wonderland, and Wallet remain fully available.
           </div>
@@ -894,12 +1003,14 @@ function BrandsRegionBlock() {
 }
 
 // =====================================================================
-// MAIN
+// MAIN — compact hero + list
 // =====================================================================
 function BrandsInner({ onConnectWallet }) {
-  const [filter, setFilter]   = useState('All');
-  const [prices, setPrices]   = useState({});
-  const [active, setActive]   = useState(null);
+  useStocksCSS();
+
+  const [filter, setFilter] = useState('All');
+  const [prices, setPrices] = useState({});
+  const [active, setActive] = useState(null);
 
   const { publicKey: solPk } = useWallet();
   const walletPubkey = useMemo(() => solPk ? solPk.toString() : null, [solPk]);
@@ -923,47 +1034,32 @@ function BrandsInner({ onConnectWallet }) {
     return BRANDS.filter(s => s.sector === filter);
   }, [filter]);
 
-  const totalListed = BRANDS.length;
   const totalPriced = Object.keys(prices).length;
 
   return (
     <>
       <div className="st-page">
-        <div className="st-hero">
-          <div className="st-hero-glow-1"/>
-          <div className="st-hero-glow-2"/>
-          <div className="st-hero-inner">
-            <div className="st-hero-pills">
-              <div className="st-hero-pill st-live-pill">
-                <span className="st-live-dot"/>
-                <span className="st-pill-text">24/7 LIVE</span>
-              </div>
-              <div className="st-hero-pill st-trade-pill">
-                <span className="st-pill-text st-gold">TRADE WITH SOL</span>
-              </div>
+        {/* Compact hero */}
+        <div className="st-mini-hero">
+          <div className="st-mh-row">
+            <div className="st-mh-left">
+              <div className="st-mh-eyebrow">📈 Tokenized Brands</div>
+              <h1 className="st-mh-title">
+                WATCH THE<br /><span className="grad">Market.</span>
+              </h1>
+              <p className="st-mh-sub">Trade global brands. 24/7. Settle in USDC.</p>
             </div>
-            <h1 className="st-hero-title">
-              Trade global{' '}
-              <span className="st-hero-italic">brands</span>
-            </h1>
-            <p className="st-hero-sub">
-              Price-tracked brand tokens, settled in USDC on Solana. No broker. No KYC. No market hours.
-            </p>
-            <div className="st-stats">
-              <div className="st-stat">
-                <div className="st-stat-val">{totalListed}</div>
-                <div className="st-stat-label">BRANDS</div>
-              </div>
-              <div className="st-stat">
-                <div className={'st-stat-val' + (totalPriced > 0 ? ' st-stat-live' : '')}>{totalPriced}</div>
-                <div className="st-stat-label">LIVE</div>
-              </div>
-              <div className="st-stat">
-                <div className="st-stat-val st-stat-gold">24/7</div>
-                <div className="st-stat-label">TRADE WITH SOL</div>
-              </div>
+            <div className="st-mh-live">
+              <div className="v">{totalPriced || BRANDS.length}</div>
+              <div className="l"><span className="pulse"></span>Live Prices</div>
             </div>
           </div>
+        </div>
+
+        <div className="st-kyc">
+          <span>No KYC</span><span className="dot"></span>
+          <span>No Account</span><span className="dot"></span>
+          <span>No Limits</span>
         </div>
 
         <div className="st-filters">
@@ -1005,9 +1101,10 @@ function BrandsInner({ onConnectWallet }) {
 }
 
 // =====================================================================
-// US geo block. No bypass.
+// Geo gate — ADMIN_WALLETS bypass
 // =====================================================================
-export default function Stocks({ onConnectWallet }) {
+export default function Stocks({ onConnectWallet, walletAddress }) {
+  useStocksCSS();
   const [country, setCountry] = useState(null);
   const [geoChecked, setGeoChecked] = useState(false);
 
@@ -1021,7 +1118,9 @@ export default function Stocks({ onConnectWallet }) {
     return () => { alive = false; };
   }, []);
 
-  if (geoChecked && country && GEO_BLOCKED.has(country)) {
+  const isAdmin = walletAddress && ADMIN_WALLETS.has(walletAddress);
+
+  if (!isAdmin && geoChecked && country && GEO_BLOCKED.has(country)) {
     return <BrandsRegionBlock/>;
   }
 
