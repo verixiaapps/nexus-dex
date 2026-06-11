@@ -217,7 +217,6 @@ export function useFlipsy(wallet) {
           if (currentEpoch - i > 0) recentEpochs.push(currentEpoch - i);
         }
         const allRecent = currentEpoch > 0 ? [currentEpoch, ...recentEpochs] : recentEpochs;
-        const recents = await Promise.all(
 
         const recents = await Promise.all(
           allRecent.map(async (e) => {
