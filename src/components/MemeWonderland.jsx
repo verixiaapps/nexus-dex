@@ -1,5 +1,5 @@
 // MemeWonderland.jsx — buy/sell mirrors SwapWidget.jsx exactly.
-//
+// 
 // Flow (identical to SwapWidget):
 //   1. Debounced quote via /api/jupiter/build on every amount/mode/mint change.
 //      The build response is stored in state and IS what the user sees.
