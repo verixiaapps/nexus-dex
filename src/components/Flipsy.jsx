@@ -1020,7 +1020,6 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
           <button onClick={handleTrade} disabled={amt <= 0 || invalidAmount || status === 'signing'}
             style={{ width: '100%', padding: '16px', borderRadius: 18, border: 'none', background: invalidAmount ? 'rgba(255,255,255,0.06)' : status === 'signing' ? 'rgba(255,255,255,0.08)' : `linear-gradient(135deg, ${sideColor}, ${isLong ? '#00D9FF' : '#9945FF'})`, color: invalidAmount || status === 'signing' ? '#5D5876' : isLong ? '#001A0F' : '#FFFFFF', fontFamily: 'Inter, sans-serif', fontWeight: 900, fontSize: 16, letterSpacing: '0.08em', cursor: invalidAmount || status === 'signing' ? 'not-allowed' : 'pointer', boxShadow: invalidAmount || status === 'signing' ? 'none' : `0 8px 30px ${sideColor}44`, transition: 'all 0.2s' }}>
             {buttonLabel}
-          </button>
 
           </button>
         )}
