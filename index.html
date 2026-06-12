@@ -411,13 +411,15 @@
 
   async function load() {
     try {
-      const [sigR, stR] = await Promise.all([
-        fetch(API_BASE + '/api/alpha/signals').then(r => r.json()).catch(() => ({})),
-        fetch(API_BASE + '/api/alpha/status').then(r => r.json()).catch(() => ({})),
-      ]);
-      const signals = Array.isArray(sigR?.signals) ? sigR.signals : [];
-      const status  = (stR && !stR.error) ? stR : {};
-      render(signals, status);
+      // Polls the static JSON the worker writes to /alpha-state.json
+      // (cachebusted). Avoids any /api/* routing issues end-to-end.
+      const r = await fetch(API_BASE + '/alpha-state.json?t=' + Date.now(), {
+        cache: 'no-store',
+      });
+      if (!r.ok) throw new Error('state not ready');
+      const data = await r.json();
+      const signals = Array.isArray(data?.signals) ? data.signals : [];
+      render(signals, data);
     } catch (e) {
       render([], {});
     }
@@ -482,4 +484,3 @@
 
 </body>
 </html>
- 
