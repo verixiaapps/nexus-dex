@@ -379,6 +379,95 @@ app.get('/api/sol-price', async (req, res) => {
 });
 
 /* ========================================================================
+ * Whale events — real recent large trades via GeckoTerminal (no key)
+ * ===================================================================== */
+const GECKOTERMINAL_BASE = 'https://api.geckoterminal.com/api/v2';
+const GT_HEADERS = { Accept: 'application/json;version=20230203' };
+const WHALE_USD_MIN  = 1000;
+const WHALE_POOLS    = 5;
+const WHALE_CACHE_MS = 60_000;
+const SOL_TOKEN_ID   = 'solana_So11111111111111111111111111111111111111112';
+
+app.get('/api/whale-events', async (req, res) => {
+  try {
+    const since  = Number(req.query.since)  || 48 * 3600 * 1000;
+    const minUsd = Number(req.query.minUsd) || WHALE_USD_MIN;
+    const cacheKey = `whale:${since}:${minUsd}`;
+    const cached = getCachedJson(cacheKey);
+    if (cached) return res.status(cached.status).json(cached.payload);
+
+    const solPrice = await fetchSolPriceUsd().catch(() => 0);
+    if (solPrice <= 0) return res.json({ events: [] });
+
+    const trR = await fetchWithTimeout(
+      `${GECKOTERMINAL_BASE}/networks/solana/trending_pools?include=base_token,quote_token`,
+      { headers: GT_HEADERS },
+      10_000,
+    );
+    if (!trR.ok) return res.json({ events: [] });
+    const trJson = await trR.json();
+    const pools  = (trJson.data || []).slice(0, WHALE_POOLS);
+    const tokenById = new Map();
+    for (const t of (trJson.included || [])) {
+      if (t.type === 'token' && t.attributes?.address) tokenById.set(t.id, t.attributes);
+    }
+
+    const cutoff = Date.now() - since;
+    const events = [];
+
+    await Promise.all(pools.map(async (pool) => {
+      const poolAddr = pool.attributes?.address;
+      if (!poolAddr) return;
+      const baseId  = pool.relationships?.base_token?.data?.id;
+      const quoteId = pool.relationships?.quote_token?.data?.id;
+
+      let tokenAttrs = null, tokenIsBase = false;
+      if (baseId && baseId !== SOL_TOKEN_ID && tokenById.has(baseId)) {
+        tokenAttrs = tokenById.get(baseId); tokenIsBase = true;
+      } else if (quoteId && quoteId !== SOL_TOKEN_ID && tokenById.has(quoteId)) {
+        tokenAttrs = tokenById.get(quoteId); tokenIsBase = false;
+      }
+      if (!tokenAttrs?.address || !tokenAttrs?.symbol) return;
+
+      try {
+        const tradesR = await fetchWithTimeout(
+          `${GECKOTERMINAL_BASE}/networks/solana/pools/${poolAddr}/trades?trade_volume_in_usd_greater_than=${minUsd}`,
+          { headers: GT_HEADERS },
+          8_000,
+        );
+        if (!tradesR.ok) return;
+        const tradesJson = await tradesR.json();
+        for (const tr of (tradesJson.data || [])) {
+          const a = tr.attributes;
+          if (!a) continue;
+          const tokenWasBought = tokenIsBase ? a.kind === 'buy' : a.kind === 'sell';
+          if (!tokenWasBought) continue;
+          const ts = a.block_timestamp ? new Date(a.block_timestamp).getTime() : 0;
+          if (!ts || ts < cutoff) continue;
+          const usd = Number(a.volume_in_usd || 0);
+          if (!Number.isFinite(usd) || usd < minUsd) continue;
+          events.push({
+            mint:       tokenAttrs.address,
+            symbol:     tokenAttrs.symbol,
+            solAmount:  Math.round((usd / solPrice) * 100) / 100,
+            detectedAt: ts,
+          });
+        }
+      } catch {}
+    }));
+
+    events.sort((a, b) => b.detectedAt - a.detectedAt);
+    const payload = { events: events.slice(0, 100) };
+    setCachedJson(cacheKey, 200, payload, WHALE_CACHE_MS);
+    res.json(payload);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Whale events timed out' });
+    logError('whale-events', e);
+    return res.json({ events: [] });
+  }
+});
+
+/* ========================================================================
  * LI.FI
  * ===================================================================== */
 function buildLifiHeaders() {
