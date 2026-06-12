@@ -1,4 +1,4 @@
-// MemeWonderland.jsx — pastel wonderland. Swap logic preserved verbatim.
+// MemeWonderland.jsx — pastel wonderland. Jupiter swap, full 3% fee → FEE_WALLET.
 // Sections: Hero · Top Signal · Narratives · Whale Radar · Breaking Out · New Launches · Trending · Live Feed.
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -50,7 +50,6 @@ const MW_CSS = `
 @keyframes mwFade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 @keyframes mwRise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 @keyframes mwSpin{to{transform:rotate(360deg)}}
-@keyframes mwBounce{0%,100%{transform:translateY(0) rotate(-4deg)}50%{transform:translateY(-6px) rotate(4deg)}}
 @keyframes mwSlideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
 @keyframes mwShimmerSlide{0%{left:-110px}50%,100%{left:130%}}
 @keyframes mwPop{0%{transform:scale(0) rotate(-90deg);opacity:0}60%{transform:scale(1.2) rotate(10deg)}100%{transform:scale(1) rotate(0);opacity:1}}
@@ -68,7 +67,6 @@ const MW_CSS = `
 
 .mw-phone{max-width:480px;margin:0 auto;position:relative;padding-bottom:32px;z-index:5}
 
-/* ───── HERO ───── */
 .mw-hero{padding:28px 18px 12px;text-align:center;position:relative;z-index:2}
 .mw-hero h1{font-family:"Instrument Serif",serif;font-weight:400;font-size:42px;line-height:0.98;letter-spacing:-0.01em;margin:0 0 8px}
 .mw-hero h1 .mw-rocket{display:inline-block;margin-right:6px;font-family:initial}
@@ -76,7 +74,6 @@ const MW_CSS = `
 .mw-hero-meta{font-size:11px;color:var(--ink-3);font-weight:600;letter-spacing:0.5px;margin-bottom:18px}
 .mw-hero-meta .dot{margin:0 6px;opacity:0.4}
 
-/* ───── SEARCH ───── */
 .mw-search-wrap{padding:0 18px 8px;position:relative;z-index:3}
 .mw-search{display:flex;align-items:center;gap:10px;background:var(--glass-strong);backdrop-filter:blur(14px);border:1.5px solid var(--border);border-radius:999px;padding:14px 18px;transition:all .2s;box-shadow:0 8px 24px rgba(183,148,246,.15)}
 .mw-search:focus-within{border-color:var(--lav);box-shadow:0 8px 28px rgba(183,148,246,.25)}
@@ -85,15 +82,12 @@ const MW_CSS = `
 .mw-search input::placeholder{color:var(--ink-3)}
 .mw-search-clear{flex-shrink:0;width:22px;height:22px;border-radius:50%;border:none;background:var(--glass);color:var(--ink-2);font-family:inherit;font-size:14px;cursor:pointer;display:grid;place-items:center}
 
-/* ───── STAT ORBS ───── */
 .mw-stats-orbs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:14px 18px 4px;position:relative;z-index:2}
 .mw-orb{position:relative;padding:12px 10px 10px;border-radius:20px;background:var(--glass);backdrop-filter:blur(10px);border:1px solid var(--border);overflow:hidden;text-align:center;animation:mwRise .5s cubic-bezier(.2,.8,.2,1) backwards}
 .mw-orb-ico{font-size:13px;display:block;margin-bottom:3px}
 .mw-orb-label{font-size:8px;color:var(--ink-2);letter-spacing:1.4px;text-transform:uppercase;font-weight:700}
 .mw-orb-val{font-family:"Instrument Serif",serif;font-size:20px;line-height:1;margin-top:4px}
-.mw-orb-spark{margin-top:6px;height:14px;width:100%}
 
-/* ───── TICKER ───── */
 .mw-ticker-strip{margin:14px 0 0;padding:10px 0;background:linear-gradient(90deg,rgba(255,143,190,.08),rgba(127,255,212,.08));border-top:1px solid var(--border);border-bottom:1px solid var(--border);overflow:hidden;position:relative;z-index:2}
 .mw-ticker-track{display:flex;gap:28px;white-space:nowrap;animation:mwTicker 35s linear infinite;width:max-content}
 .mw-ticker-item{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600}
@@ -101,7 +95,6 @@ const MW_CSS = `
 .mw-up{color:var(--green)}
 .mw-down{color:var(--red)}
 
-/* ───── SECTION HEAD ───── */
 .mw-section-head{display:flex;justify-content:space-between;align-items:center;padding:24px 18px 12px;position:relative;z-index:2}
 .mw-section-title{font-size:10px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;background:linear-gradient(90deg,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;display:flex;align-items:center;gap:8px}
 .mw-section-title .mw-ico{font-size:13px;-webkit-text-fill-color:initial}
@@ -112,7 +105,6 @@ const MW_CSS = `
 .mw-sub-tab{padding:7px 14px;border-radius:999px;font-size:11px;font-weight:600;color:var(--ink-2);cursor:pointer;border:none;background:none;font-family:inherit;letter-spacing:0.3px;transition:all .15s}
 .mw-sub-tab.mw-active{background:linear-gradient(135deg,#B794F6,#FF8FBE);color:#fff;box-shadow:0 4px 12px rgba(183,148,246,.3)}
 
-/* ───── FEATURED TOP SIGNAL ───── */
 .mw-featured{margin:6px 18px 0;padding:20px;border-radius:36px 60px 36px 60px;background:linear-gradient(135deg,rgba(255,143,190,.25),rgba(183,148,246,.20) 50%,rgba(127,255,212,.20));border:1px solid rgba(255,255,255,.8);backdrop-filter:blur(14px);position:relative;overflow:hidden;cursor:pointer;animation:mwRise .5s cubic-bezier(.2,.8,.2,1) backwards;box-shadow:0 8px 28px rgba(255,143,190,.15)}
 .mw-featured::before{content:'';position:absolute;inset:0;background:radial-gradient(circle at 20% 20%,rgba(255,143,190,.4),transparent 50%);pointer-events:none}
 .mw-feat-badge{display:inline-flex;align-items:center;gap:5px;background:linear-gradient(90deg,#FF8FBE,#FFB088);color:#fff;font-weight:700;font-size:10px;letter-spacing:1.5px;padding:5px 12px;border-radius:999px;position:relative;z-index:2}
@@ -139,7 +131,6 @@ const MW_CSS = `
 .mw-btn-grad{flex:1;border:none;cursor:pointer;padding:14px 16px;border-radius:999px;background:linear-gradient(90deg,#FF8FBE,#FFB088,#FFD46B);color:#fff;font-family:inherit;font-size:13px;font-weight:700;letter-spacing:0.5px;box-shadow:0 8px 24px rgba(255,143,190,.4)}
 .mw-btn-ghost{flex:1;border:1px solid var(--border);cursor:pointer;padding:13px 16px;border-radius:999px;background:var(--glass);color:var(--ink);font-family:inherit;font-size:13px;font-weight:500}
 
-/* ───── NARRATIVES ───── */
 .mw-narratives{display:flex;gap:8px;padding:4px 18px 4px;margin:0 -2px;overflow-x:auto;position:relative;z-index:2;scrollbar-width:none;scroll-snap-type:x mandatory}
 .mw-narratives::-webkit-scrollbar{display:none}
 .mw-narr{flex:0 0 auto;padding:11px 15px;border-radius:22px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);min-width:130px;cursor:pointer;transition:all .15s;scroll-snap-align:start}
@@ -149,11 +140,9 @@ const MW_CSS = `
 .mw-narr-pct.mw-down{color:var(--red)}
 .mw-narr-count{font-size:10px;color:var(--ink-2);margin-top:2px}
 
-/* ───── HSCROLL CARDS (shared) ───── */
 .mw-hscroll{display:flex;gap:10px;padding:4px 18px;margin:0 -2px;overflow-x:auto;scroll-snap-type:x mandatory;position:relative;z-index:2;scrollbar-width:none}
 .mw-hscroll::-webkit-scrollbar{display:none}
 
-/* ───── WHALE RADAR ───── */
 .mw-whale-card{flex:0 0 180px;scroll-snap-align:start;padding:14px;border-radius:24px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);cursor:pointer;transition:transform .15s}
 .mw-whale-card:active{transform:scale(.98)}
 .mw-whale-row{display:flex;align-items:center;gap:10px}
@@ -168,7 +157,6 @@ const MW_CSS = `
 .mw-whale-stats .mw-r{color:var(--green)}
 .mw-trade-pill{margin-top:10px;padding:9px;border-radius:14px;background:linear-gradient(90deg,#FF8FBE,#FFB088);color:#fff;text-align:center;font-size:11px;font-weight:700;letter-spacing:0.5px;border:none;cursor:pointer;width:100%;font-family:inherit}
 
-/* ───── BREAKING OUT (most important) ───── */
 .mw-bo-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 18px;position:relative;z-index:2}
 .mw-bo-card{padding:16px;border-radius:24px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);position:relative;overflow:hidden;min-height:160px;cursor:pointer;animation:mwRise .4s cubic-bezier(.2,.8,.2,1) backwards}
 .mw-bo-card.mw-momentum{background:linear-gradient(135deg,rgba(255,143,190,.18),var(--glass) 60%)}
@@ -185,7 +173,6 @@ const MW_CSS = `
 .mw-bo-meta{font-size:10px;color:var(--ink-2);margin-top:2px;font-weight:500}
 .mw-bo-empty{font-size:12px;color:var(--ink-2);margin-top:14px}
 
-/* ───── NEW LAUNCHES ───── */
 .mw-launch-card{flex:0 0 200px;scroll-snap-align:start;padding:14px;border-radius:22px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);cursor:pointer}
 .mw-launch-head{display:flex;align-items:center;gap:10px}
 .mw-launch-info{min-width:0}
@@ -195,7 +182,6 @@ const MW_CSS = `
 .mw-launch-l{color:var(--ink-2);font-weight:500}
 .mw-launch-v{font-weight:700}
 
-/* ───── TRENDING NOW ───── */
 .mw-trend-list{display:flex;flex-direction:column;gap:8px;padding:0 18px;position:relative;z-index:2}
 .mw-trend-row{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:18px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);cursor:pointer;animation:mwRise .3s ease backwards}
 .mw-trend-rank{font-family:"Instrument Serif",serif;font-size:22px;color:var(--ink-3);width:24px;text-align:center;flex-shrink:0}
@@ -207,7 +193,6 @@ const MW_CSS = `
 .mw-trend-pct.mw-down{color:var(--red)}
 .mw-trend-meta{font-size:10px;color:var(--ink-2);margin-top:2px;font-weight:500}
 
-/* ───── LIVE FEED ───── */
 .mw-activity{padding:0 18px;position:relative;z-index:2}
 .mw-activity-list{display:flex;flex-direction:column;gap:8px}
 .mw-act{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:18px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);cursor:pointer;animation:mwRise .3s ease backwards}
@@ -215,14 +200,12 @@ const MW_CSS = `
 .mw-act-body{flex:1;min-width:0;font-size:12px}
 .mw-act-l1{color:var(--ink-2);font-weight:500}
 .mw-act-l1 b{color:var(--ink);font-weight:700}
-.mw-act-l2{font-size:13px;font-weight:700;margin-top:2px}
 .mw-act-right{text-align:right;flex-shrink:0}
 .mw-act-amt{font-size:12px;font-weight:700;color:var(--green)}
 .mw-act-time{font-size:10px;color:var(--ink-3);font-weight:600;margin-top:2px}
 
 .mw-empty{text-align:center;padding:24px 20px;color:var(--ink-2);font-size:13px;font-weight:500}
 
-/* ════════ DETAIL VIEW (pastel) ════════ */
 .mw-detail{position:fixed;top:0;left:0;right:0;bottom:0;margin:0 auto;width:100%;max-width:480px;height:100vh;height:100dvh;z-index:9999;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding-bottom:calc(env(safe-area-inset-bottom,0px) + 60px);background:radial-gradient(ellipse at 20% 5%,#FFE8F4 0%,transparent 45%),radial-gradient(ellipse at 85% 15%,#E4F2FF 0%,transparent 45%),radial-gradient(ellipse at 50% 60%,#F0E7FF 0%,transparent 55%),linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);color:var(--ink);font-family:"Space Grotesk",sans-serif;animation:mwFade .25s ease-out}
 .mw-detail-top{display:flex;align-items:center;justify-content:space-between;padding:calc(env(safe-area-inset-top,0px) + 12px) 18px 12px;position:sticky;top:0;z-index:10;background:rgba(251,245,255,0.7);backdrop-filter:blur(20px)}
 .mw-icon-btn{width:40px;height:40px;border-radius:50%;background:var(--glass);border:1px solid var(--border);color:var(--ink);font-size:18px;cursor:pointer;display:grid;place-items:center;font-family:inherit}
@@ -256,7 +239,6 @@ const MW_CSS = `
 .mw-contract-addr{font-family:ui-monospace,monospace;font-size:11px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .mw-copy-btn{background:var(--glass-strong);border:1px solid var(--border);color:var(--lav);padding:7px 12px;border-radius:9px;font-family:inherit;font-weight:700;font-size:10px;letter-spacing:1px;cursor:pointer;flex-shrink:0}
 
-/* ════════ TRADE SHEET (pastel) ════════ */
 .mw-sheet-backdrop{position:fixed;inset:0;background:rgba(26,27,78,0.4);backdrop-filter:blur(8px);z-index:9998;animation:mwFade .2s}
 .mw-sheet{position:fixed;bottom:0;left:0;right:0;margin:0 auto;width:100%;max-width:480px;background:linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);border-top-left-radius:32px;border-top-right-radius:32px;border-top:1px solid var(--border);padding:8px 0 calc(env(safe-area-inset-bottom,0px) + 24px);max-height:92dvh;z-index:9999;animation:mwSlideUp .4s cubic-bezier(.2,1.2,.4,1);box-shadow:0 -20px 60px rgba(183,148,246,.25);overflow-y:auto;color:var(--ink);font-family:"Space Grotesk",sans-serif}
 .mw-grabber{width:44px;height:4px;background:rgba(26,27,78,0.18);border-radius:999px;margin:0 auto 14px}
@@ -299,7 +281,6 @@ const MW_CSS = `
 .mw-jup-badge{display:inline-flex;align-items:center;gap:5px;background:var(--glass);padding:3px 9px;border-radius:999px;margin:0 3px}
 .mw-jup-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
 
-/* ════════ SUCCESS VIEW (pastel) ════════ */
 .mw-success-overlay{position:fixed;top:0;left:0;right:0;bottom:0;margin:0 auto;width:100%;max-width:480px;height:100vh;height:100dvh;z-index:9999;overflow-y:auto;overflow-x:hidden;padding:calc(env(safe-area-inset-top,0px) + 16px) 0 calc(env(safe-area-inset-bottom,0px) + 40px);background:radial-gradient(ellipse at 20% 5%,#FFE8F4 0%,transparent 45%),radial-gradient(ellipse at 85% 15%,#E4F2FF 0%,transparent 45%),radial-gradient(ellipse at 50% 60%,#F0E7FF 0%,transparent 55%),linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);color:var(--ink);font-family:"Space Grotesk",sans-serif}
 .mw-confetti-rain{position:fixed;inset:0;max-width:480px;left:50%;transform:translateX(-50%);pointer-events:none;overflow:hidden;z-index:1}
 .mw-confetti-piece{position:absolute;top:-30px;animation:mwFall linear forwards}
@@ -324,66 +305,27 @@ const MW_CSS = `
 .mw-flex-value{font-family:"Instrument Serif",serif;font-size:15px}
 .mw-flex-value.mw-big{font-size:26px;background:linear-gradient(135deg,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
 .mw-share-section{margin:18px 22px 0;position:relative;z-index:5;animation:mwRise .6s .5s backwards}
-.mw-share-title{text-align:center;font-family:inherit;font-weight:700;font-size:11px;letter-spacing:1.5px;color:var(--ink);margin-bottom:6px}
-.mw-share-sub{text-align:center;font-size:12px;color:var(--ink-2);font-weight:500;margin-bottom:12px}
-.mw-share-sub b{color:var(--peach);font-weight:700}
+.mw-share-title{text-align:center;font-family:inherit;font-weight:700;font-size:11px;letter-spacing:1.5px;color:var(--ink);margin-bottom:12px}
 .mw-share-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
 .mw-share-btn{background:var(--glass);border:1px solid var(--border);border-radius:16px;padding:12px 4px 9px;text-align:center;cursor:pointer;transition:all .15s;color:var(--ink);font-family:inherit;backdrop-filter:blur(10px)}
 .mw-share-icon{width:32px;height:32px;border-radius:50%;background:var(--mw-share-bg,var(--glass-strong));margin:0 auto 6px;display:grid;place-items:center;font-size:16px;color:var(--mw-share-color,var(--ink));font-weight:700}
 .mw-share-label{font-size:10px;font-weight:600;color:var(--ink);letter-spacing:0.2px}
-.mw-refer{margin:14px 22px 0;background:linear-gradient(135deg,rgba(255,212,107,.2),rgba(255,176,136,.12));border:1.5px dashed rgba(255,212,107,.4);border-radius:18px;padding:14px;position:relative;z-index:5;animation:mwRise .6s .6s backwards}
-.mw-refer-row{display:flex;align-items:center;gap:10px}
-.mw-refer-emoji{font-size:24px}
-.mw-refer-text{flex:1;min-width:0}
-.mw-refer-title{font-size:10px;color:var(--peach);font-weight:700;letter-spacing:1px}
-.mw-refer-sub{font-size:11px;color:var(--ink-2);font-weight:500;margin-top:2px}
-.mw-refer-link{margin-top:10px;display:flex;align-items:center;background:var(--glass-strong);border-radius:10px;padding:8px 10px;gap:8px}
-.mw-refer-url{flex:1;font-family:ui-monospace,monospace;font-size:10px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.mw-refer-url b{color:var(--lav)}
-.mw-refer-copy{background:linear-gradient(135deg,#FFD46B,#FFB088);color:#fff;border:none;padding:6px 11px;border-radius:9px;font-family:inherit;font-weight:700;font-size:10px;letter-spacing:0.8px;cursor:pointer}
 .mw-done-wrap{padding:18px 22px 0;position:relative;z-index:5;animation:mwRise .6s .7s backwards}
 .mw-done-btn{width:100%;background:linear-gradient(90deg,#7FFFD4,#A0E7FF,#B794F6);color:var(--ink);border:none;padding:16px 0;border-radius:18px;font-family:inherit;font-weight:700;font-size:13px;letter-spacing:1.4px;cursor:pointer;box-shadow:0 8px 24px rgba(127,255,212,.35)}
 
-/* ════════ STICKY HEADER (mobile + desktop) ════════ */
 .mw-topbar{position:sticky;top:0;z-index:50;display:flex;justify-content:space-between;align-items:center;padding:12px 18px;background:rgba(251,245,255,0.72);backdrop-filter:blur(20px);border-bottom:1px solid var(--border)}
 .mw-brand{display:flex;align-items:center;gap:10px;cursor:pointer}
 .mw-brand-dot{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#FF8FBE,#B794F6 60%,#7FFFD4);box-shadow:0 0 14px rgba(183,148,246,0.5)}
 .mw-brand-text{font-family:"Instrument Serif",serif;font-style:italic;font-size:18px;line-height:1}
 .mw-brand-text .mw-slash{opacity:0.4;margin:0 3px;font-style:normal}
 .mw-topbar-right{display:flex;align-items:center;gap:8px}
-.mw-refer-cta{display:none;align-items:center;gap:6px;padding:8px 14px;border-radius:999px;background:linear-gradient(90deg,rgba(255,212,107,0.25),rgba(255,176,136,0.18));border:1px solid rgba(255,212,107,0.4);color:var(--ink);font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:0.2px}
-.mw-refer-cta .mw-refer-icon{font-size:14px}
-.mw-refer-cta .mw-refer-amount{color:var(--green);font-weight:800;font-size:12px}
 .mw-wallet-btn{display:flex;align-items:center;gap:7px;padding:8px 14px;border-radius:999px;background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink);border:none;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(127,255,212,0.35);letter-spacing:0.2px}
 .mw-wallet-btn.mw-connected{background:var(--glass-strong);border:1px solid var(--border);color:var(--ink);box-shadow:none}
 .mw-wallet-btn .mw-wallet-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
 
-/* ════════ REFER MODAL ════════ */
-.mw-modal-backdrop{position:fixed;inset:0;background:rgba(26,27,78,0.4);backdrop-filter:blur(8px);z-index:9990;display:grid;place-items:center;padding:18px;animation:mwFade .2s}
-.mw-modal{background:linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);border:1px solid var(--border);border-radius:28px;padding:28px 26px;max-width:480px;width:100%;position:relative;box-shadow:0 20px 60px rgba(183,148,246,0.4);animation:mwRise .3s cubic-bezier(.2,1.2,.4,1)}
-.mw-modal-close{position:absolute;top:14px;right:14px;width:32px;height:32px;border-radius:50%;background:var(--glass);border:1px solid var(--border);font-size:16px;cursor:pointer;display:grid;place-items:center;font-family:inherit;color:var(--ink)}
-.mw-modal-title{font-family:"Instrument Serif",serif;font-size:32px;line-height:1;margin-bottom:6px;background:linear-gradient(135deg,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
-.mw-modal-sub{color:var(--ink-2);font-size:13px;font-weight:500;margin-bottom:18px;line-height:1.5}
-.mw-refer-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:18px}
-.mw-refer-stat{padding:12px;border-radius:16px;background:var(--glass-strong);border:1px solid var(--border);text-align:center}
-.mw-refer-stat .mw-rs-label{font-size:9px;color:var(--ink-2);letter-spacing:1.2px;text-transform:uppercase;font-weight:700}
-.mw-refer-stat .mw-rs-val{font-family:"Instrument Serif",serif;font-size:22px;line-height:1;margin-top:4px}
-.mw-refer-stat .mw-rs-val.mw-green{color:var(--green)}
-.mw-refer-link-box{display:flex;align-items:center;background:var(--glass-strong);border:1.5px solid var(--border);border-radius:14px;padding:12px 14px;gap:8px;margin-bottom:14px}
-.mw-refer-link-url{flex:1;font-family:ui-monospace,monospace;font-size:12px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.mw-refer-link-url b{color:var(--lav);font-weight:700}
-.mw-refer-link-copy{background:linear-gradient(135deg,#FFD46B,#FFB088);color:#fff;border:none;padding:8px 14px;border-radius:10px;font-family:inherit;font-weight:700;font-size:11px;letter-spacing:0.8px;cursor:pointer;flex-shrink:0}
-.mw-refer-share{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.mw-refer-share-btn{padding:12px;border-radius:14px;border:1px solid var(--border);background:var(--glass);color:var(--ink);font-family:inherit;font-weight:600;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
-.mw-refer-explainer{margin-top:14px;padding:12px;background:linear-gradient(135deg,rgba(255,212,107,0.2),rgba(255,176,136,0.1));border:1px dashed rgba(255,212,107,0.4);border-radius:14px;font-size:12px;color:var(--ink-2);font-weight:500;line-height:1.5}
-.mw-refer-explainer b{color:var(--peach)}
-
-/* ════════ DESKTOP LAYOUT (≥1024px) ════════ */
 @media (min-width:1024px){
   .mw-phone{max-width:1280px;padding-bottom:80px}
   .mw-topbar{padding:14px 32px}
-  .mw-refer-cta{display:inline-flex}
-  /* Hero — bigger, more breathing room */
   .mw-hero{padding:56px 32px 18px;max-width:760px;margin:0 auto}
   .mw-hero h1{font-size:72px}
   .mw-hero-sub{font-size:18px}
@@ -391,17 +333,14 @@ const MW_CSS = `
   .mw-search-wrap{max-width:680px;margin:0 auto;padding:0 32px 12px}
   .mw-search{padding:16px 22px}
   .mw-search input{font-size:15px}
-  /* Stats — bigger orbs */
   .mw-stats-orbs{padding:24px 32px 8px;gap:14px;max-width:1080px;margin:0 auto}
   .mw-orb{padding:16px 14px}
   .mw-orb-val{font-size:28px}
   .mw-orb-label{font-size:10px}
   .mw-orb-ico{font-size:16px}
-  /* Section heads */
   .mw-section-head{padding:36px 32px 16px;max-width:1216px;margin:0 auto}
   .mw-sub-tabs{margin:0 32px 16px;max-width:1216px}
   .mw-section-title{font-size:11px;letter-spacing:3px}
-  /* Top signal — larger card with more breathing room */
   .mw-featured{margin:6px 32px 0;padding:32px;max-width:1216px;margin-left:auto;margin-right:auto;border-radius:48px 80px 48px 80px}
   .mw-feat-body{gap:24px}
   .mw-token-avatar{width:110px;height:110px}
@@ -416,81 +355,49 @@ const MW_CSS = `
   .mw-fm-lbl{font-size:10px;margin-top:5px}
   .mw-feat-cta{margin-top:24px;gap:12px}
   .mw-btn-grad,.mw-btn-ghost{font-size:15px;padding:16px 20px}
-  /* Narratives + horizontal scrolls — full width container */
   .mw-narratives,.mw-hscroll{padding:6px 32px 8px;max-width:1280px;margin-left:auto;margin-right:auto}
   .mw-narr{padding:14px 18px;min-width:160px}
   .mw-narr-emoji{font-size:22px}
   .mw-narr-name{font-size:13px}
   .mw-narr-pct{font-size:17px}
-  /* Whale cards — bigger */
   .mw-whale-card{flex:0 0 220px;padding:16px}
   .mw-mini-avatar{width:44px;height:44px}
   .mw-whale-sym{font-size:15px}
   .mw-whale-pct{font-size:15px}
-  /* Breaking out — 4 across, bigger cards */
   .mw-bo-grid{grid-template-columns:repeat(4,1fr);gap:14px;padding:0 32px;max-width:1216px;margin:0 auto}
   .mw-bo-card{padding:20px;min-height:200px}
   .mw-bo-title{font-size:11px;letter-spacing:1.6px}
   .mw-bo-sym{font-size:28px}
   .mw-bo-pct{font-size:16px;margin-top:8px}
   .mw-bo-meta{font-size:11px}
-  /* New launches — bigger cards */
   .mw-launch-card{flex:0 0 240px;padding:18px}
   .mw-launch-sym{font-size:16px}
-  /* Trending now — 2 column grid on desktop */
   .mw-trend-list{padding:0 32px;max-width:1216px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:10px}
   .mw-trend-row{padding:14px 16px}
   .mw-trend-sym{font-size:15px}
   .mw-trend-pct{font-size:16px}
-  /* Live feed — 2 column grid on desktop */
   .mw-activity{padding:0 32px;max-width:1216px;margin:0 auto}
   .mw-activity-list{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-  /* Detail view — modal centered */
-  .mw-detail{
-    top:50%;left:50%;right:auto;bottom:auto;
-    transform:translate(-50%,-50%);
-    width:760px;max-width:90vw;
-    height:auto;max-height:90vh;
-    border-radius:32px;
-    padding-bottom:32px;
-    border:1px solid var(--border);
-    box-shadow:0 30px 80px rgba(26,27,78,0.25);
-  }
+  .mw-detail{top:50%;left:50%;right:auto;bottom:auto;transform:translate(-50%,-50%);width:760px;max-width:90vw;height:auto;max-height:90vh;border-radius:32px;padding-bottom:32px;border:1px solid var(--border);box-shadow:0 30px 80px rgba(26,27,78,0.25)}
   .mw-detail-top{position:sticky;top:0;background:rgba(251,245,255,0.85);backdrop-filter:blur(20px);border-radius:32px 32px 0 0;padding:18px 28px 14px}
   .mw-detail-hero{padding:8px 28px 20px}
   .mw-inline-actions{padding:0 28px 18px}
   .mw-whale-banner{margin:0 28px 16px}
   .mw-stats-grid{padding:0 28px}
   .mw-contract{margin:16px 28px 0}
-  /* Trade sheet — right-side drawer */
-  .mw-sheet{
-    top:0;bottom:0;right:0;left:auto;
-    width:500px;max-width:500px;
-    height:100vh;max-height:100vh;
-    margin:0;
-    border-top-left-radius:32px;
-    border-bottom-left-radius:32px;
-    border-top-right-radius:0;
-    border-left:1px solid var(--border);
-    border-top:1px solid var(--border);
-    padding-bottom:32px;
-    animation:mwSlideLeftIn .35s cubic-bezier(.2,1.2,.4,1);
-  }
+  .mw-sheet{top:0;bottom:0;right:0;left:auto;width:500px;max-width:500px;height:100vh;max-height:100vh;margin:0;border-top-left-radius:32px;border-bottom-left-radius:32px;border-top-right-radius:0;border-left:1px solid var(--border);border-top:1px solid var(--border);padding-bottom:32px;animation:mwSlideLeftIn .35s cubic-bezier(.2,1.2,.4,1)}
   @keyframes mwSlideLeftIn{from{transform:translateX(100%)}to{transform:translateX(0)}}
   .mw-grabber{display:none}
-  /* Success view — wider */
   .mw-success-overlay{max-width:680px;left:50%;transform:translateX(-50%)}
   .mw-success-title{font-size:64px}
   .mw-success-emoji{font-size:96px}
   .mw-flex-card{margin-left:auto;margin-right:auto;max-width:520px}
-  .mw-share-section,.mw-refer,.mw-done-wrap{max-width:520px;margin-left:auto;margin-right:auto}
+  .mw-share-section,.mw-done-wrap{max-width:520px;margin-left:auto;margin-right:auto}
 }
 @media (min-width:1440px){
   .mw-phone{max-width:1360px}
   .mw-hero h1{font-size:88px}
 }
-
-/* responsive */
 @media (max-width:430px){
   .mw-hero{padding:24px 14px 10px}
   .mw-hero h1{font-size:36px}
@@ -523,9 +430,7 @@ function useMwCSS() {
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS    = 300; // 3% total fee taken from input
-const REF_BPS    = 100; // 1% (of input) routed to referrer when present — 33% commission of fee
 const SLIPPAGE_BPS = 500;
-const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 
 const RPC_URL =
   process.env.REACT_APP_SOLANA_RPC ||
@@ -640,14 +545,12 @@ const friendlyError = (err) => {
   return err?.message || 'Swap failed. Please try again.';
 };
 
-/* ─── TOKEN ICON (with emoji fallback on img error) ───────────────── */
-function TokenIcon({ token, size }) {
+function TokenIcon({ token }) {
   const [errored, setErrored] = useState(false);
   if (!token?.icon || errored) return <span>{token?.emoji || '🪙'}</span>;
   return <img src={token.icon} alt={token.sym || ''} onError={() => setErrored(true)} />;
 }
 
-/* ─── STAT ORBS ───────────────────────────────────────────────────── */
 function StatsOrbs({ tokens, whaleCount, freshCount }) {
   const scanning = tokens.length;
   const totalVol = tokens.reduce((s, t) => s + (t.volume24h || 0), 0);
@@ -677,7 +580,6 @@ function StatsOrbs({ tokens, whaleCount, freshCount }) {
   );
 }
 
-/* ─── FEATURED TOP SIGNAL ─────────────────────────────────────────── */
 function FeaturedSignal({ token, whaleCount, onOpen, onTrade }) {
   if (!token) return null;
   const score = signalScore(token);
@@ -713,7 +615,6 @@ function FeaturedSignal({ token, whaleCount, onOpen, onTrade }) {
   );
 }
 
-/* ─── NARRATIVES ──────────────────────────────────────────────────── */
 function NarrativesStrip({ tokens, whaleMints }) {
   const buckets = [
     { emoji: '🐸', name: 'Frog Meta',   re: /pepe|frog|wojak/i },
@@ -746,7 +647,6 @@ function NarrativesStrip({ tokens, whaleMints }) {
   );
 }
 
-/* ─── WHALE RADAR ─────────────────────────────────────────────────── */
 function WhaleRadar({ whaleTokens, onOpen, onTrade }) {
   if (whaleTokens.length === 0) {
     return <div className="mw-empty">No whale activity in the last 48h.</div>;
@@ -773,7 +673,6 @@ function WhaleRadar({ whaleTokens, onOpen, onTrade }) {
   );
 }
 
-/* ─── BREAKING OUT (most important: 4 cards) ──────────────────────── */
 function BreakingOut({ tokens, whaleByMint, excludeMint, onOpen, onTrade }) {
   const pool = excludeMint ? tokens.filter(t => t.mint !== excludeMint) : tokens;
   const byChange  = [...pool].sort((a, b) => (b.change || 0) - (a.change || 0));
@@ -817,7 +716,6 @@ function BreakingOut({ tokens, whaleByMint, excludeMint, onOpen, onTrade }) {
   );
 }
 
-/* ─── NEW LAUNCHES (1h / 6h / 24h) ────────────────────────────────── */
 function NewLaunches({ tokens, onOpen, onTrade }) {
   const [age, setAge] = useState('24h');
   const cutoffMs = age === '1h' ? 3600_000 : age === '6h' ? 6*3600_000 : 24*3600_000;
@@ -854,8 +752,7 @@ function NewLaunches({ tokens, onOpen, onTrade }) {
   );
 }
 
-/* ─── TRENDING NOW (Movers / Viewed / Traded) ─────────────────────── */
-function TrendingNow({ tokens, onOpen, onTrade }) {
+function TrendingNow({ tokens, onOpen }) {
   const [tab, setTab] = useState('movers');
   const list = useMemo(() => {
     if (tab === 'movers') return [...tokens].sort((a, b) => Math.abs(b.change || 0) - Math.abs(a.change || 0)).slice(0, 8);
@@ -891,12 +788,10 @@ function TrendingNow({ tokens, onOpen, onTrade }) {
   );
 }
 
-/* ─── LIVE FEED — real events only (whale entries + fresh launches) ── */
 function ActivityFeed({ tokens, whaleEvents, onOpen }) {
   const items = [];
-  // Real whale events with real detectedAt timestamps
   for (const ev of (whaleEvents || [])) {
-    if (!ev.detectedAt) continue; // skip events with no real timestamp
+    if (!ev.detectedAt) continue;
     const t = tokens.find(x => x.mint === ev.mint);
     items.push({
       type: 'whale',
@@ -907,7 +802,6 @@ function ActivityFeed({ tokens, whaleEvents, onOpen }) {
       at: ev.detectedAt,
     });
   }
-  // Real launches with real createdAt (== now - ageMs)
   for (const t of tokens) {
     if (!t.fresh || !Number.isFinite(t.ageMs)) continue;
     items.push({
@@ -950,53 +844,16 @@ function ActivityFeed({ tokens, whaleEvents, onOpen }) {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   MAIN COMPONENT
+   MAIN
    ════════════════════════════════════════════════════════════════════ */
 export default function MemeWonderland({ onConnectWallet } = {}) {
   useMwCSS();
 
   const wallet = useWallet();
-  const { publicKey } = wallet;
-  const refCode = publicKey ? publicKey.toBase58() : '';
-  // user's full shareable link uses their full pubkey so the referrer can be paid on-chain
-  const refLink = publicKey ? `${typeof window !== 'undefined' ? window.location.origin : 'https://nexus.app'}/?ref=${publicKey.toBase58()}` : '';
-
   const connection = useMemo(() => new Connection(RPC_URL, 'confirmed'), []);
 
-  // INCOMING REFERRER — parse ?ref=<pubkey> from URL, validate, persist
-  const [referrer, setReferrer] = useState(() => {
-    if (typeof window === 'undefined') return null;
-    const tryParse = (val) => { try { return new PublicKey(val); } catch { return null; } };
-    // 1. URL first (overrides stored)
-    try {
-      const params = new URLSearchParams(window.location.search);
-      const fromUrl = params.get('ref');
-      if (fromUrl) {
-        const pk = tryParse(fromUrl);
-        if (pk) {
-          try { localStorage.setItem('mw_referrer', fromUrl); } catch {}
-          return pk;
-        }
-      }
-    } catch {}
-    // 2. Stored fallback
-    try {
-      const stored = localStorage.getItem('mw_referrer');
-      if (stored) return tryParse(stored);
-    } catch {}
-    return null;
-  });
-
-  // Effective referrer — null if self-referral or fee-wallet-as-referrer
-  const effectiveReferrer = useMemo(() => {
-    if (!referrer) return null;
-    if (publicKey && referrer.equals(publicKey)) return null;
-    if (referrer.equals(FEE_WALLET)) return null;
-    return referrer;
-  }, [referrer, publicKey]);
-
   const [tokens, setTokens] = useState([]);
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [solPrice, setSolPrice] = useState(0);
   const [whaleEvents, setWhaleEvents] = useState([]);
   const [whaleTokens, setWhaleTokens] = useState([]);
@@ -1010,11 +867,10 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
   const [discovered, setDiscovered] = useState({});
 
   const [detailMint, setDetailMint] = useState(null);
-  const [sheet, setSheet] = useState(null); // { mint, mode }
+  const [sheet, setSheet] = useState(null);
   const [amount, setAmount] = useState('0.50');
   const [selectedPreset, setSelectedPreset] = useState('0.5');
   const [success, setSuccess] = useState(null);
-  const [referOpen, setReferOpen] = useState(false);
 
   const [balances, setBalances] = useState({});
   const refreshBalances = useCallback(async () => {
@@ -1050,7 +906,6 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
   }, [wallet.publicKey, connection]);
   useEffect(() => { refreshBalances(); }, [refreshBalances]);
 
-  // Top organic tokens — always loaded
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -1069,7 +924,6 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  // SOL price
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -1084,7 +938,6 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  // Whale events — always loaded
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -1099,13 +952,11 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  // Whale tokens — merge whale event data with token data (fetch any not in main list)
   useEffect(() => {
     if (whaleEvents.length === 0) { setWhaleTokens([]); return; }
     let cancelled = false;
     (async () => {
       try {
-        // aggregate by mint
         const byMint = new Map();
         for (const ev of whaleEvents) {
           const cur = byMint.get(ev.mint) || { mint: ev.mint, symbol: ev.symbol, sol: 0, count: 0, lastAt: 0 };
@@ -1115,7 +966,6 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
           byMint.set(ev.mint, cur);
         }
         const mints = [...byMint.keys()];
-        // Try to fetch token data for these mints (Jupiter search accepts comma-separated)
         let dataByMint = new Map();
         try {
           const r = await fetch(`/api/jupiter/tokens/search?query=${mints.join(',')}`);
@@ -1137,7 +987,6 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [whaleEvents]);
 
-  // Search
   useEffect(() => {
     const q = searchQuery.trim();
     if (!q) { setSearchResults(null); setSearching(false); return; }
@@ -1157,7 +1006,6 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
     return () => { cancelled = true; clearTimeout(t); };
   }, [searchQuery]);
 
-  // close search dropdown on outside click
   useEffect(() => {
     const onDoc = (e) => { if (searchWrapRef.current && !searchWrapRef.current.contains(e.target)) setSearchOpen(false); };
     document.addEventListener('mousedown', onDoc);
@@ -1189,7 +1037,6 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
     return m;
   }, [whaleEvents]);
 
-  // tokens with full whale data attached
   const tokensWithWhale = useMemo(() => {
     if (whaleMints.size === 0) return tokens;
     return tokens.map(t => {
@@ -1247,24 +1094,12 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
       </div>
 
       <div className="mw-phone">
-        {/* TOPBAR — sticky on mobile + desktop */}
         <div className="mw-topbar">
           <div className="mw-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
             <div className="mw-brand-dot" />
             <span className="mw-brand-text">wonderland<span className="mw-slash">//</span><span style={{ background: 'linear-gradient(90deg,#FF8FBE,#B794F6,#7FFFD4)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>explore</span></span>
           </div>
           <div className="mw-topbar-right">
-            {effectiveReferrer && (
-              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 999, background: 'linear-gradient(90deg,rgba(127,255,212,0.25),rgba(160,231,255,0.18))', border: '1px solid rgba(127,255,212,0.4)', fontSize: 11, fontWeight: 700, color: 'var(--ink)', letterSpacing: 0.2 }} title={'Referred by ' + effectiveReferrer.toBase58()}>
-                <span style={{ fontSize: 12 }}>🎁</span>
-                <span style={{ color: 'var(--ink-2)' }}>via</span>
-                <span>{effectiveReferrer.toBase58().slice(0,4)}…{effectiveReferrer.toBase58().slice(-4)}</span>
-              </div>
-            )}
-            <button type="button" className="mw-refer-cta" onClick={() => setReferOpen(true)}>
-              <span className="mw-refer-icon">💰</span>
-              <span>Refer & earn 33%</span>
-            </button>
             <button
               type="button"
               className={'mw-wallet-btn' + (wallet.publicKey ? ' mw-connected' : '')}
@@ -1281,7 +1116,6 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
           </div>
         </div>
 
-        {/* HERO */}
         <div className="mw-hero">
           <h1>
             <span className="mw-rocket">🚀</span>
@@ -1291,7 +1125,6 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
           <div className="mw-hero-meta">No KYC<span className="dot">•</span>No Accounts<span className="dot">•</span>No Limits</div>
         </div>
 
-        {/* SEARCH */}
         <div className="mw-search-wrap" ref={searchWrapRef}>
           <div className="mw-search">
             <span className="mw-search-ico">🔍</span>
@@ -1333,10 +1166,8 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
           )}
         </div>
 
-        {/* STATS */}
         <StatsOrbs tokens={tokensWithWhale} whaleCount={whaleEvents.length} freshCount={freshCount} />
 
-        {/* TICKER */}
         {ticker.length > 0 && (
           <div className="mw-ticker-strip">
             <div className="mw-ticker-track">
@@ -1350,7 +1181,6 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
           </div>
         )}
 
-        {/* TOP SIGNAL */}
         {topToken && (
           <>
             <div className="mw-section-head">
@@ -1361,38 +1191,32 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
           </>
         )}
 
-        {/* NARRATIVES */}
         <div className="mw-section-head">
           <div className="mw-section-title"><span className="mw-ico">🔥</span>narratives</div>
         </div>
         <NarrativesStrip tokens={tokensWithWhale} whaleMints={whaleMints} />
 
-        {/* WHALE RADAR */}
         <div className="mw-section-head">
           <div className="mw-section-title"><span className="mw-ico">🐋</span>whale radar</div>
           <div className="mw-section-meta"><span className="mw-live-dot" /> {whaleTokens.length} ACTIVE</div>
         </div>
         <WhaleRadar whaleTokens={whaleTokens} onOpen={openDetail} onTrade={openSheet} />
 
-        {/* BREAKING OUT */}
         <div className="mw-section-head">
           <div className="mw-section-title"><span className="mw-ico">🚀</span>breaking out</div>
         </div>
         <BreakingOut tokens={tokensWithWhale} whaleByMint={whaleByMint} excludeMint={topToken?.mint} onOpen={openDetail} onTrade={openSheet} />
 
-        {/* NEW LAUNCHES */}
         <div className="mw-section-head">
           <div className="mw-section-title"><span className="mw-ico">✨</span>new launches</div>
         </div>
         <NewLaunches tokens={tokensWithWhale} onOpen={openDetail} onTrade={openSheet} />
 
-        {/* TRENDING NOW */}
         <div className="mw-section-head">
           <div className="mw-section-title"><span className="mw-ico">📈</span>trending now</div>
         </div>
-        <TrendingNow tokens={tokensWithWhale} onOpen={openDetail} onTrade={openSheet} />
+        <TrendingNow tokens={tokensWithWhale} onOpen={openDetail} />
 
-        {/* LIVE FEED */}
         <div className="mw-section-head">
           <div className="mw-section-title"><span className="mw-ico">⚡</span>live feed</div>
           <div className="mw-section-meta"><span className="mw-live-dot" /> LIVE</div>
@@ -1423,7 +1247,6 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
           connection={connection}
           balances={balances}
           refreshBalances={refreshBalances}
-          referrer={effectiveReferrer}
           onSuccess={(payload) => {
             setSuccess({ mint: sheet.mint, ...payload });
             setSheet(null);
@@ -1436,95 +1259,9 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
         <SuccessView
           data={success}
           token={tokenByMint(success.mint)}
-          refCode={refCode}
           onClose={() => setSuccess(null)}
         />
       )}
-
-      {referOpen && (
-        <ReferModal
-          refCode={refCode}
-          isConnected={!!wallet.publicKey}
-          onClose={() => setReferOpen(false)}
-          onConnect={() => { setReferOpen(false); if (onConnectWallet) onConnectWallet(); else if (wallet.connect) wallet.connect().catch(() => {}); }}
-        />
-      )}
-    </div>
-  );
-}
-
-/* ════════════════════════════════════════════════════════════════════
-   REFER MODAL — persistent MRR lever
-   ════════════════════════════════════════════════════════════════════ */
-function ReferModal({ refCode, isConnected, onClose, onConnect }) {
-  const [copied, setCopied] = useState(false);
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://nexus.app';
-  const link = `${origin}/?ref=${refCode}`;
-  const displayCode = refCode ? refCode.slice(0,4) + '…' + refCode.slice(-4) : '';
-  useEffect(() => {
-    const prev = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
-    document.addEventListener('keydown', onKey);
-    return () => { document.body.style.overflow = prev; document.removeEventListener('keydown', onKey); };
-  }, [onClose]);
-  const copyLink = () => {
-    if (navigator.clipboard) {
-      navigator.clipboard.writeText(link);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 1800);
-    }
-  };
-  const shareText = `Trade Solana memecoins on Wonderland — non-custodial, powered by Jupiter. Use my link:`;
-  return (
-    <div className="mw-modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div className="mw-modal">
-        <button type="button" className="mw-modal-close" onClick={onClose}>×</button>
-        <div className="mw-modal-title">Refer & Earn 💰</div>
-        <div className="mw-modal-sub">Earn <b style={{ color: 'var(--peach)' }}>33% of every fee</b> your referrals generate — forever. Paid out in SOL, weekly.</div>
-
-        <div className="mw-refer-stats">
-          <div className="mw-refer-stat">
-            <div className="mw-rs-label">Referrals</div>
-            <div className="mw-rs-val">{isConnected ? '0' : '—'}</div>
-          </div>
-          <div className="mw-refer-stat">
-            <div className="mw-rs-label">Volume</div>
-            <div className="mw-rs-val">{isConnected ? '$0' : '—'}</div>
-          </div>
-          <div className="mw-refer-stat">
-            <div className="mw-rs-label">Earned</div>
-            <div className="mw-rs-val mw-green">{isConnected ? '0 SOL' : '—'}</div>
-          </div>
-        </div>
-
-        {isConnected ? (
-          <>
-            <div className="mw-refer-link-box">
-              <span className="mw-refer-link-url">{(origin.split('://')[1] || origin)}/?ref=<b>{displayCode}</b></span>
-              <button type="button" className="mw-refer-link-copy" onClick={copyLink}>{copied ? 'COPIED' : 'COPY'}</button>
-            </div>
-            <div className="mw-refer-share">
-              <button type="button" className="mw-refer-share-btn"
-                onClick={() => window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(link)}`, '_blank')}>
-                <span>𝕏</span> Share on X
-              </button>
-              <button type="button" className="mw-refer-share-btn"
-                onClick={() => window.open(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(shareText)}`, '_blank')}>
-                <span>✈</span> Telegram
-              </button>
-            </div>
-          </>
-        ) : (
-          <button type="button" className="mw-refer-link-copy" style={{ width: '100%', padding: '14px 18px', fontSize: 13, letterSpacing: 1.2 }} onClick={onConnect}>
-            CONNECT WALLET TO START EARNING
-          </button>
-        )}
-
-        <div className="mw-refer-explainer">
-          <b>How it works:</b> Share your link. Anyone who trades through it pays our 3% fee — you keep 1% of it as commission. Withdraw to SOL anytime.
-        </div>
-      </div>
     </div>
   );
 }
@@ -1612,13 +1349,12 @@ function DetailView({ token, onClose, onTrade }) {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   TRADE SHEET — swap logic preserved verbatim from your file
+   TRADE SHEET — Jupiter swap, full 3% fee → FEE_WALLET
    ════════════════════════════════════════════════════════════════════ */
 function TradeSheet({
   token, solPrice, mode, setMode, amount, setAmount,
   selectedPreset, handlePreset, onClose,
   wallet, connection, balances, refreshBalances, onSuccess,
-  referrer,
 }) {
   const isSell = mode === 'sell';
   const inputMint  = isSell ? token.mint : SOL_MINT;
@@ -1673,7 +1409,6 @@ function TradeSheet({
           taker:       wallet.publicKey
             ? wallet.publicKey.toBase58()
             : '11111111111111111111111111111111',
-          computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
         });
         const r = await fetch(`/api/jupiter/build?${params}`, { signal: ac.signal });
         if (!r.ok) {
@@ -1740,29 +1475,17 @@ function TradeSheet({
     try {
       const dec = inputDecimals;
 
-      // Split fee: total = 3% (FEE_BPS). If referrer present: 1% (REF_BPS) → referrer, 2% → platform.
-      // If no referrer: full 3% → platform.
-      const totalFeeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
-      if (totalFeeAmount <= 0n) throw new Error('Amount too small.');
-      const refFeeAmount      = referrer ? (BigInt(rawAmount) * BigInt(REF_BPS)) / 10000n : 0n;
-      const platformFeeAmount = totalFeeAmount - refFeeAmount;
+      // Full 3% fee → FEE_WALLET
+      const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
+      if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
 
       const feeIxs = [];
       if (inputMint === SOL_MINT) {
-        if (platformFeeAmount > 0n) {
-          feeIxs.push(SystemProgram.transfer({
-            fromPubkey: wallet.publicKey,
-            toPubkey:   FEE_WALLET,
-            lamports:   Number(platformFeeAmount),
-          }));
-        }
-        if (refFeeAmount > 0n && referrer) {
-          feeIxs.push(SystemProgram.transfer({
-            fromPubkey: wallet.publicKey,
-            toPubkey:   referrer,
-            lamports:   Number(refFeeAmount),
-          }));
-        }
+        feeIxs.push(SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey:   FEE_WALLET,
+          lamports:   Number(feeAmount),
+        }));
       } else {
         const mintPk = new PublicKey(inputMint);
         const mintInfo = await connection.getAccountInfo(mintPk);
@@ -1772,29 +1495,15 @@ function TradeSheet({
           : TOKEN_PROGRAM_ID;
 
         const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
+        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
 
-        // Platform leg
-        if (platformFeeAmount > 0n) {
-          const platformAta = getAssociatedTokenAddressSync(mintPk, FEE_WALLET, true, tokenProgram);
-          feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
-            wallet.publicKey, platformAta, FEE_WALLET, mintPk, tokenProgram,
-          ));
-          feeIxs.push(createTransferCheckedInstruction(
-            sourceAta, mintPk, platformAta, wallet.publicKey,
-            platformFeeAmount, dec, [], tokenProgram,
-          ));
-        }
-        // Referrer leg
-        if (refFeeAmount > 0n && referrer) {
-          const refAta = getAssociatedTokenAddressSync(mintPk, referrer, true, tokenProgram);
-          feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
-            wallet.publicKey, refAta, referrer, mintPk, tokenProgram,
-          ));
-          feeIxs.push(createTransferCheckedInstruction(
-            sourceAta, mintPk, refAta, wallet.publicKey,
-            refFeeAmount, dec, [], tokenProgram,
-          ));
-        }
+        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+          wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
+        ));
+        feeIxs.push(createTransferCheckedInstruction(
+          sourceAta, mintPk, destAta, wallet.publicKey,
+          feeAmount, dec, [], tokenProgram,
+        ));
       }
 
       const ixs = [];
@@ -1902,7 +1611,7 @@ function TradeSheet({
   }, [
     wallet, build, inputMint, inputDecimals, outputDecimals,
     inputSymbol, outputSymbol, rawAmount, amtNum, token.price,
-    connection, onSuccess, refreshBalances, referrer,
+    connection, onSuccess, refreshBalances,
   ]);
 
   const hasFunds = inputBalance && amtNum > 0 && inputBalance.uiAmount >= amtNum;
@@ -2041,13 +1750,7 @@ function TradeSheet({
             {ctaLabel}
           </button>
           <div className="mw-trust">
-            {referrer ? (
-              <>
-                3% fee · <b>1% → your referrer</b> {referrer.toBase58().slice(0,4)}…{referrer.toBase58().slice(-4)} · 2% → platform
-              </>
-            ) : (
-              <>3% fee · Powered by <span className="mw-jup-badge"><span className="mw-jup-dot"></span><b>JUPITER</b></span> · Non-custodial 🔐</>
-            )}
+            Powered by <span className="mw-jup-badge"><span className="mw-jup-dot"></span><b>JUPITER</b></span> · Non-custodial 🔐
           </div>
         </div>
       </div>
@@ -2058,10 +1761,8 @@ function TradeSheet({
 /* ════════════════════════════════════════════════════════════════════
    SUCCESS VIEW
    ════════════════════════════════════════════════════════════════════ */
-function SuccessView({ data, token, refCode, onClose }) {
+function SuccessView({ data, token, onClose }) {
   const [confetti, setConfetti] = useState([]);
-  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://nexus.app';
-  const displayCode = refCode ? refCode.slice(0,4) + '…' + refCode.slice(-4) : '';
 
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -2081,7 +1782,8 @@ function SuccessView({ data, token, refCode, onClose }) {
     })));
   }, []);
 
-  const shareUrl  = `${origin}/?ref=${refCode}&t=${data.mint}`;
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://nexus.app';
+  const shareUrl  = `${origin}/?t=${data.mint}`;
   const shareText = `Just aped into $${token.sym} on @nexus 🚀\n\nBag: ${data.got}\nEntry: ${formatPrice(data.price)}`;
   const solscanUrl = data.signature ? `https://solscan.io/tx/${data.signature}` : null;
 
@@ -2134,7 +1836,6 @@ function SuccessView({ data, token, refCode, onClose }) {
 
       <div className="mw-share-section">
         <div className="mw-share-title">FLEX YOUR BAG 💪</div>
-        <div className="mw-share-sub">Earn <b>33%</b> of every fee — paid in SOL, weekly</div>
         <div className="mw-share-grid">
           <button type="button" className="mw-share-btn" style={{ '--mw-share-bg': '#000', '--mw-share-color': '#fff' }}
             onClick={() => window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(shareUrl)}`, '_blank')}>
@@ -2151,20 +1852,6 @@ function SuccessView({ data, token, refCode, onClose }) {
           <button type="button" className="mw-share-btn" style={{ '--mw-share-bg': 'rgba(255,212,107,0.3)', '--mw-share-color': '#B36B00' }}>
             <div className="mw-share-icon">⬇</div><div className="mw-share-label">Save Card</div>
           </button>
-        </div>
-      </div>
-
-      <div className="mw-refer">
-        <div className="mw-refer-row">
-          <div className="mw-refer-emoji">💰</div>
-          <div className="mw-refer-text">
-            <div className="mw-refer-title">YOUR REFERRAL LINK</div>
-            <div className="mw-refer-sub">Earn 33% of every fee — forever</div>
-          </div>
-        </div>
-        <div className="mw-refer-link">
-          <span className="mw-refer-url">{(origin.split('://')[1] || origin)}/?ref=<b>{displayCode}</b></span>
-          <button type="button" className="mw-refer-copy" onClick={() => navigator.clipboard?.writeText(shareUrl)}>COPY</button>
         </div>
       </div>
 
