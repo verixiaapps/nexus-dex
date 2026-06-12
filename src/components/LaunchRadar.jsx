@@ -488,9 +488,17 @@ function usePumpFunStream(enabled) {
       const r = await fetch(DEXSCREENER_TOKEN_URL(mint));
       if (!r.ok) return;
       const d = await r.json();
-      const pair = (d?.pairs || []).filter(p => p.chainId === 'solana')
+      // CRITICAL: DexScreener's /tokens/{addr} returns pairs where the addr can be
+      // either base or quote. priceUsd / priceChange always refer to baseToken.
+      // We must ONLY use pairs where baseToken.address === mint — otherwise we'd
+      // attribute another token's price (e.g. SOL's) to our token.
+      const pair = (d?.pairs || [])
+        .filter(p => p.chainId === 'solana' && p.baseToken?.address === mint)
         .sort((a, b) => Number(b.liquidity?.usd || 0) - Number(a.liquidity?.usd || 0))[0];
       if (!pair) return;
+      // Belt-and-suspenders: make sure decimals from chain match what we cached,
+      // and that the address is really ours after JSON round-trip.
+      if (pair.baseToken.address !== mint) return;
       const enriched = {
         price:     Number(pair.priceUsd || 0),
         change:    Number(pair.priceChange?.h24 || 0),
@@ -560,7 +568,7 @@ function usePumpFunStream(enabled) {
           return [tok, ...prev].slice(0, 60);
         });
         // queue enrichment after a tiny delay so we don't hammer DexScreener
-        setTimeout(() => enrich(msg.mint), 800);
+        setTimeout(() => { if (alive) enrich(msg.mint); }, 800);
       };
 
       ws.onerror = () => { /* swallow — onclose handles reconnect */ };
@@ -586,7 +594,10 @@ function usePumpFunStream(enabled) {
     };
   }, [enabled, enrich]);
 
-  // Re-enrich after age for tokens that haven't gotten DexScreener data yet, and tick age strings
+  // Re-enrich tokens still missing DexScreener data, and tick age strings.
+  // Retry window: 90s after creation up to 5 min. Past 5 min without enrichment,
+  // assume the token won't appear on DexScreener (most pump.fun launches never
+  // graduate to Raydium) and stop trying — avoids saturating the 300/min limit.
   useEffect(() => {
     const id = setInterval(() => {
       let snapshot = [];
@@ -595,7 +606,9 @@ function usePumpFunStream(enabled) {
         return prev.map(t => ({ ...t, ageMs: Date.now() - t.createdAt, age: ageStr(Date.now() - t.createdAt) }));
       });
       for (const t of snapshot) {
-        if (!t.enriched && Date.now() - t.createdAt > 90_000) enrich(t.mint);
+        if (t.enriched) continue;
+        const age = Date.now() - t.createdAt;
+        if (age > 90_000 && age < 5 * 60_000) enrich(t.mint);
       }
     }, 15_000);
     return () => clearInterval(id);
