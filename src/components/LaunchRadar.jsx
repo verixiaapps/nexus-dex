@@ -1,27 +1,26 @@
 // LaunchRadar.jsx — Solana new launches + per-card BUY/SELL modal trade flow.
 //
-// FIX BUNDLE (this revision):
-//   1. Slippage split: 10% on Jupiter (graduated tokens, no Blowfish warning),
-//      30% on pump.fun (pre-grad — Blowfish will warn on the token itself
-//      anyway, so we keep slippage generous so trades actually land).
-//   2. Tx-expired fix: finalized blockhash, simulate the EXACT tx with that
-//      blockhash (no replaceRecentBlockhash), user signs the simulated bytes,
-//      send with skipPreflight: true, then aggressive multi-RPC resend loop
-//      until confirmation. We never recreate the tx after the signature —
-//      the bytes Phantom shows the user are the bytes we broadcast.
-//   3. SOL_RESERVE bumped 0.005 → 0.012 to cover ATA rent + wSOL wrap + fees
-//      on MAX buys.
-//   4. setMaxBuy floors instead of toFixed (which could round UP past
-//      availSol and trigger insufficient-balance).
-//   5. Referrer logic stripped — no ?ref=, no REF_BPS, no chip. Full 3%
-//      always goes to FEE_WALLET.
-//   6. Pump.fun route for preGrad tokens: PumpPortal trade-local returns
-//      a serialized tx, we deserialize, inject our 3% SOL fee ix (one tx,
-//      one signature, atomic), rebuild with our finalized blockhash, sim,
-//      sign, send. Both buy and sell go through pump.fun's bonding curve.
-//   7. Jupiter sell fee in SOL post-swap: swap the full token amount, then
-//      SystemProgram.transfer 3% of the output SOL to FEE_WALLET in the
-//      same tx. (Previously took fee in the meme coin.)
+// ARCHITECTURE
+//   • Data:  Jupiter /tokens/v2/recent  (single feed, poll-based ~8s).
+//            The "Just Hatched" tab is just this feed filtered to age
+//            < 30 min — same data source, same mint identifier.
+//   • Trade: Jupiter /build  (Metis routes both pre-grad pump.fun
+//            bonding curves and post-grad AMMs).
+//   • Fee:   3% of input SOL on buy / 3% of output SOL on sell, paid
+//            to FEE_WALLET via a SystemProgram.transfer ix composed
+//            into the same tx as the swap — one signature, atomic.
+//   • Tx:    confirmed blockhash, sim the exact bytes across racing
+//            RPCs, user signs the simulated bytes, broadcast to every
+//            RPC in parallel, poll status across the pool, resend
+//            every ~1.5s until confirmed or the validity window closes.
+//   • Slippage: hard-coded 5% (stays under wallet warning threshold).
+//
+// INVARIANT
+//   The `mint` field on every token is the canonical contract address.
+//   normalize() validates it as base58 before creating the token row.
+//   Everything downstream — display, balance lookup, trade build —
+//   keys off that same string. There is no second identifier.
+
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -385,15 +384,11 @@ const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS    = 300;                  // 3% to FEE_WALLET, paid in SOL on every trade.
 
-// Slippage is path-dependent. Jupiter routes graduated tokens through real
-// AMMs where 10% is plenty and stays under Blowfish's warning threshold.
-// PumpPortal trades pre-grad tokens against a thin bonding curve where
-// 10% gets eaten on the first transaction in the same block; 30% lets
-// trades actually land. Blowfish will warn on the unverified token itself
-// regardless of slippage on pre-grad, so there's nothing to gain by being
-// tight there.
-const SLIPPAGE_BPS_JUP  = 1000;   // 10% — Jupiter / graduated
-const SLIPPAGE_BPS_PUMP = 3000;   // 30% — pump.fun / pre-grad bonding curve
+// Hard-coded 5% slippage. Stays under Phantom/Blowfish's warning
+// threshold so users don't see a scary warning before confirming.
+// Jupiter still finds best price inside the window — slippage is just
+// max tolerance, not a target.
+const SLIPPAGE_BPS = 500;
 
 // Reserve enough SOL to cover ATA rent (~0.00204), wSOL wrap (~0.002),
 // tx fee, and a small priority-fee buffer when the user picks MAX.
@@ -451,11 +446,6 @@ async function broadcastRaw(rawTx) {
 const POLL_RECENT  = 8_000;
 const POLL_SOL     = 30_000;
 const POLL_BALANCE = 12_000;
-const PUMP_WSS_URL = 'wss://pumpportal.fun/api/data';
-const PUMP_TRADE_URL = 'https://pumpportal.fun/api/trade-local';
-const DEXSCREENER_TOKEN_URL = (mint) => 'https://api.dexscreener.com/latest/dex/tokens/' + mint;
-
-const COMPUTE_BUDGET_PROGRAM_ID = 'ComputeBudget111111111111111111111111111111';
 
 /* ════════════════════════════════════════════════════════════════════
    FORMATTERS
@@ -481,12 +471,6 @@ function formatPrice(p) {
   if (p >= 0.0001) return '$' + p.toFixed(6);
   if (p >= 0.00000001) return '$' + p.toFixed(9);
   return '$' + p.toExponential(2);
-}
-function formatPriceSol(p) {
-  if (!Number.isFinite(p) || p <= 0) return null;
-  if (p >= 0.01) return p.toFixed(4) + ' SOL';
-  if (p >= 0.000001) return p.toFixed(8) + ' SOL';
-  return p.toExponential(2) + ' SOL';
 }
 function formatPct(p) {
   if (!Number.isFinite(p)) return '0%';
@@ -533,8 +517,17 @@ function normalize(t) {
   const change = Number(t?.stats24h?.priceChange ?? t?.priceChange24h ?? t?.priceChange ?? 0);
   const created = t.firstPool?.createdAt || t.createdAt || t.pairCreatedAt;
   const am = ageMs(created);
+  // INVARIANT: the mint string here is the single source of truth used
+  // everywhere downstream — balance lookup, icon resolution, Jupiter
+  // /build, and the tx itself. Validate it as base58 before normalizing
+  // so a bad row from any source can never end up routed to a different
+  // contract than the one displayed.
+  const rawMint = t.id || t.address || t.mint;
+  if (!rawMint || typeof rawMint !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(rawMint)) {
+    return null;
+  }
   return {
-    mint:      t.id || t.address || t.mint,
+    mint:      rawMint,
     sym:       t.symbol || '???',
     name:      t.name || t.symbol || 'Unknown',
     emoji:     emojiFor(t.symbol || ''),
@@ -548,8 +541,7 @@ function normalize(t) {
     holders:   Number(t.holderCount ?? t.holders ?? 0),
     liquidity: Number(t.liquidity || 0),
     decimals:  Number(t.decimals ?? 6),
-    source:    t.source || 'jupiter',
-    preGrad:   false,
+    source:    'jupiter',
   };
 }
 
@@ -575,34 +567,8 @@ const friendlyError = (err) => {
   if (m.includes('no route') || m.includes('could not find any route')) return 'No route yet — too fresh.';
   if (m.includes('too large'))         return 'Route too complex. Try smaller.';
   if (m.includes('graduated'))         return 'Token just graduated — try again.';
-  if (m.includes('pump.fun unavailable')) return 'Pump.fun is busy — try again.';
   return err?.message?.slice(0, 80) || 'Swap failed.';
 };
-
-/* ════════════════════════════════════════════════════════════════════
-   PUMP.FUN BONDING-CURVE ESTIMATES
-   Constant-product math the pump.fun program uses on-chain. Used in the
-   modal for the quote preview — actual fill is what the simulated tx
-   produces, and 30% slippage absorbs estimate vs. fill drift.
-   ════════════════════════════════════════════════════════════════════ */
-const PUMP_CURVE_FEE = 0.01;
-
-function estimatePumpBuyTokens({ vSol, vTokens, solIn }) {
-  if (!(vSol > 0) || !(vTokens > 0) || !(solIn > 0)) return 0;
-  const k = vSol * vTokens;
-  const netSol = solIn * (1 - PUMP_CURVE_FEE);
-  const newVSol = vSol + netSol;
-  const newVTokens = k / newVSol;
-  return Math.max(0, vTokens - newVTokens);
-}
-function estimatePumpSellSol({ vSol, vTokens, tokensIn }) {
-  if (!(vSol > 0) || !(vTokens > 0) || !(tokensIn > 0)) return 0;
-  const k = vSol * vTokens;
-  const newVTokens = vTokens + tokensIn;
-  const newVSol = k / newVTokens;
-  const grossSol = vSol - newVSol;
-  return Math.max(0, grossSol * (1 - PUMP_CURVE_FEE));
-}
 
 /* ════════════════════════════════════════════════════════════════════
    TWITTER SHARE (no referrer)
@@ -718,155 +684,6 @@ function TokenIcon({ token }) {
   );
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   PUMP.FUN WSS STREAM — sets preGrad=true on creation, flips to false
-   once DexScreener sees a real pool (graduation).
-   ════════════════════════════════════════════════════════════════════ */
-function usePumpFunStream(enabled) {
-  const [tokens, setTokens] = useState([]);
-  const [connected, setConnected] = useState(false);
-  const wsRef = useRef(null);
-  const pendingEnrich = useRef(new Set());
-
-  const enrich = useCallback(async (mint) => {
-    if (pendingEnrich.current.has(mint)) return;
-    pendingEnrich.current.add(mint);
-    try {
-      const r = await fetch(DEXSCREENER_TOKEN_URL(mint));
-      if (!r.ok) return;
-      const d = await r.json();
-      const pairs = (d?.pairs || []).filter(p => p.chainId === 'solana' && p.baseToken?.address === mint);
-      if (pairs.length === 0) return;
-      const graduated = pairs.some(p => p.dexId && p.dexId !== 'pumpfun' && p.dexId !== 'pump');
-      const pair = pairs.sort((a, b) => Number(b.liquidity?.usd || 0) - Number(a.liquidity?.usd || 0))[0];
-      if (pair.baseToken.address !== mint) return;
-      const enriched = {
-        price:     Number(pair.priceUsd || 0),
-        change:    Number(pair.priceChange?.h24 || 0),
-        change1h:  Number(pair.priceChange?.h1 || 0),
-        volume24h: Number(pair.volume?.h24 || 0),
-        liquidity: Number(pair.liquidity?.usd || 0),
-        mcap:      Number(pair.marketCap || pair.fdv || 0),
-        enriched:  true,
-        preGrad:   !graduated,
-      };
-      const dsImage = pair.info?.imageUrl || pair.baseToken?.image || null;
-      if (dsImage) {
-        enriched.icon = dsImage;
-        try { _iconCache.set(mint, dsImage); } catch {}
-      }
-      setTokens(prev => prev.map(t => t.mint === mint ? { ...t, ...enriched } : t));
-    } catch {} finally {
-      pendingEnrich.current.delete(mint);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (!enabled) return;
-    let alive = true;
-    let reconnectTimer = null;
-    let reconnectAttempts = 0;
-
-    function connect() {
-      if (!alive) return;
-      let ws;
-      try { ws = new WebSocket(PUMP_WSS_URL); }
-      catch { return scheduleReconnect(); }
-      wsRef.current = ws;
-
-      ws.onopen = () => {
-        if (!alive) { try { ws.close(); } catch {} return; }
-        reconnectAttempts = 0;
-        setConnected(true);
-        try { ws.send(JSON.stringify({ method: 'subscribeNewToken' })); } catch {}
-      };
-
-      ws.onmessage = (evt) => {
-        if (!alive) return;
-        let msg = null;
-        try { msg = JSON.parse(evt.data); } catch { return; }
-        if (!msg || msg.txType !== 'create' || !msg.mint) return;
-        if (typeof msg.mint !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(msg.mint)) return;
-
-        const vSol    = Number(msg.vSolInBondingCurve   || 0);
-        const vTokens = Number(msg.vTokensInBondingCurve || 0);
-        const priceSol = (vSol > 0 && vTokens > 0) ? vSol / vTokens : 0;
-        const mcapSol  = Number(msg.marketCapSol || 0);
-
-        const tok = {
-          mint:         msg.mint,
-          sym:          msg.symbol || '???',
-          name:         msg.name || msg.symbol || 'Unknown',
-          emoji:        emojiFor(msg.symbol || ''),
-          icon:         null,
-          decimals:     6,
-          price:        0,
-          priceSol,
-          change:       0,
-          mcap:         0,
-          mcapSol,
-          volume24h:    0,
-          holders:      0,
-          liquidity:    0,
-          liquiditySol: vSol,
-          vSol,
-          vTokens,
-          createdAt:    Date.now(),
-          ageMs:        0,
-          age:          '0s',
-          source:       'pumpfun',
-          enriched:     false,
-          preGrad:      true,
-        };
-
-        setTokens(prev => {
-          if (prev.some(t => t.mint === tok.mint)) return prev;
-          return [tok, ...prev].slice(0, 60);
-        });
-        setTimeout(() => { if (alive) enrich(msg.mint); }, 800);
-      };
-
-      ws.onerror = () => {};
-      ws.onclose = () => {
-        setConnected(false);
-        wsRef.current = null;
-        if (alive) scheduleReconnect();
-      };
-    }
-
-    function scheduleReconnect() {
-      if (!alive) return;
-      reconnectAttempts = Math.min(reconnectAttempts + 1, 6);
-      const wait = Math.min(30_000, 1000 * Math.pow(2, reconnectAttempts));
-      reconnectTimer = setTimeout(connect, wait);
-    }
-
-    connect();
-    return () => {
-      alive = false;
-      if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (wsRef.current) { try { wsRef.current.close(); } catch {} }
-    };
-  }, [enabled, enrich]);
-
-  useEffect(() => {
-    const id = setInterval(() => {
-      let snapshot = [];
-      setTokens(prev => {
-        snapshot = prev;
-        return prev.map(t => ({ ...t, ageMs: Date.now() - t.createdAt, age: ageStr(Date.now() - t.createdAt) }));
-      });
-      for (const t of snapshot) {
-        if (t.enriched) continue;
-        const age = Date.now() - t.createdAt;
-        if (age > 90_000 && age < 5 * 60_000) enrich(t.mint);
-      }
-    }, 15_000);
-    return () => clearInterval(id);
-  }, [enrich]);
-
-  return { tokens, connected };
-}
 
 /* ════════════════════════════════════════════════════════════════════
    PRESETS
@@ -977,10 +794,10 @@ function SettingsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets,
 
 /* ════════════════════════════════════════════════════════════════════
    TRADE MODAL
-   • Pump.fun preGrad → local bonding-curve quote (no Jupiter call).
-   • Jupiter graduated → /api/jupiter/build quote with placeholder taker.
-   Slippage is path-dependent: 10% on Jupiter (Blowfish-safe), 30% on
-   pump.fun (where Blowfish warns on the token regardless).
+   Quotes and swaps both go through /api/jupiter/build. Jupiter's Metis
+   routing covers pre-grad pump.fun bonding curves as well as post-grad
+   AMMs (Raydium, Meteora, pump-amm). Slippage is a single hard-coded
+   5% so we stay under Phantom/Blowfish's warning threshold.
    ════════════════════════════════════════════════════════════════════ */
 function TradeModal({
   token, initialMode, onClose, onConfirm,
@@ -1004,9 +821,7 @@ function TradeModal({
   }, [mode]);
 
   const isBuy = mode === 'buy';
-  const isPump = !!token.preGrad;
   const presets = isBuy ? buyPresets : sellPresets;
-  const slipBps = isPump ? SLIPPAGE_BPS_PUMP : SLIPPAGE_BPS_JUP;
 
   const swapParams = useMemo(() => {
     if (!amount) return null;
@@ -1043,39 +858,8 @@ function TradeModal({
     if (!swapParams) { setQuote(null); setQuoteError(null); return; }
     if (quoteAbortRef.current) quoteAbortRef.current.abort();
 
-    if (isPump) {
-      // Local bonding-curve estimate — no fetch.
-      try {
-        let outAmount;
-        if (isBuy) {
-          // 3% comes off the user's SOL up-front; the curve only sees 97%.
-          const netSol = swapParams.solAmount * (1 - FEE_BPS / 10000);
-          outAmount = estimatePumpBuyTokens({
-            vSol: token.vSol || token.liquiditySol || 0,
-            vTokens: token.vTokens || 0,
-            solIn: netSol,
-          });
-        } else {
-          const gross = estimatePumpSellSol({
-            vSol: token.vSol || token.liquiditySol || 0,
-            vTokens: token.vTokens || 0,
-            tokensIn: swapParams.tokenAmount,
-          });
-          outAmount = gross * (1 - FEE_BPS / 10000);
-        }
-        const outRaw = BigInt(Math.floor(outAmount * Math.pow(10, swapParams.outputDecimals)));
-        setQuote({ outAmount: outRaw.toString(), priceImpactPct: null, _local: true });
-        setQuoteError(null);
-        setQuoting(false);
-      } catch {
-        setQuote(null);
-        setQuoteError('Could not estimate trade.');
-        setQuoting(false);
-      }
-      return;
-    }
-
-    // Jupiter quote path.
+    // Jupiter quotes every route — including pre-grad pump.fun bonding
+    // curves via Metis. 5% slippage stays under wallet warning threshold.
     const ac = new AbortController();
     quoteAbortRef.current = ac;
     setQuoting(true);
@@ -1092,7 +876,7 @@ function TradeModal({
           inputMint:   swapParams.inputMint,
           outputMint:  swapParams.outputMint,
           amount:      jupInput.toString(),
-          slippageBps: String(slipBps),
+          slippageBps: String(SLIPPAGE_BPS),
           taker:       '11111111111111111111111111111111',
         });
         const r = await fetch('/api/jupiter/build?' + params, { signal: ac.signal });
@@ -1124,7 +908,7 @@ function TradeModal({
     }, 300);
 
     return () => { clearTimeout(t); ac.abort(); };
-  }, [swapParams, isPump, isBuy, slipBps, token.vSol, token.vTokens, token.liquiditySol]);
+  }, [swapParams, isBuy]);
 
   const outAmountUi = useMemo(() => {
     if (!quote || !swapParams) return null;
@@ -1189,7 +973,6 @@ function TradeModal({
                   {formatPct(token.change)}
                 </span></>
               )}
-              {isPump && <> · <span style={{ color: 'var(--peach)' }}>pump.fun</span></>}
             </div>
           </div>
         </div>
@@ -1284,11 +1067,11 @@ function TradeModal({
             <div className="lr-trade-details">
               <div className="lr-trade-detail-row">
                 <span>Route</span>
-                <span className="lr-trade-detail-val">{isPump ? 'pump.fun bonding curve' : 'Jupiter'}</span>
+                <span className="lr-trade-detail-val">Jupiter</span>
               </div>
               <div className="lr-trade-detail-row">
                 <span>Slippage</span>
-                <span className="lr-trade-detail-val">{(slipBps / 100).toFixed(0)}%</span>
+                <span className="lr-trade-detail-val">{(SLIPPAGE_BPS / 100).toFixed(0)}%</span>
               </div>
               {priceImpact != null && (
                 <div className="lr-trade-detail-row">
@@ -1329,7 +1112,7 @@ function TradeModal({
           </button>
 
           <p className="lr-trade-footer">
-            Routed via <b style={{ color: 'var(--ink)' }}>{isPump ? 'pump.fun' : 'Jupiter'}</b> · Your keys, your coins
+            Routed via <b style={{ color: 'var(--ink)' }}>Jupiter</b> · Your keys, your coins
           </p>
         </div>
       </div>
@@ -1366,7 +1149,6 @@ function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
         <div className="lr-card-right">
           <div className="lr-card-price">
             {token.price > 0 ? formatPrice(token.price)
-              : token.priceSol > 0 ? formatPriceSol(token.priceSol)
               : '—'}
           </div>
           {Number.isFinite(token.change) && token.change !== 0 ? (
@@ -1432,7 +1214,12 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   const [timeFilter, setTimeFilter] = useState('all');
   const [sortBy, setSortBy] = useState('newest');
 
-  const { tokens: pumpTokens, connected: pumpConnected } = usePumpFunStream(true);
+  /* ──── fresh lane ──── */
+  // Both lanes pull from the same Jupiter recent feed. "Just Hatched"
+  // is just the slice younger than 30 minutes — keeps the dual-tab UI
+  // without a second data source. Single mint identifier flows through
+  // everywhere: rendering, balance lookup, Jupiter /build, signed tx.
+  const freshThresholdMs = 30 * 60_000;
 
   /* ──── recent lane (Jupiter) ──── */
   const [recentTokens, setRecentTokens] = useState([]);
@@ -1453,7 +1240,9 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         const d = await r.json();
         const list = Array.isArray(d) ? d : (d?.data || d?.tokens || []);
         if (!cancelled) {
-          setRecentTokens(list.map(normalize).filter(t => t.mint && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t.mint)));
+          // normalize() returns null for any row whose mint isn't a valid
+          // base58 Solana address — those get filtered out here.
+          setRecentTokens(list.map(normalize).filter(Boolean));
           setRecentLoading(false);
           setRecentError(null);
         }
@@ -1588,8 +1377,16 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   const sendAndConfirm = useCallback(async (rawTx, blockhashInfo) => {
     const sig = await broadcastRaw(rawTx);
 
+    // Race a call across every RPC in the pool. As long as ONE sees the tx
+    // landed, we confirm. A single flaky RPC won't make us miss it.
+    const racePool = async (op) => {
+      const conns = RPC_POOL.map(u => getConn(u, 'confirmed'));
+      try { return await Promise.any(conns.map(c => op(c))); }
+      catch { return null; }
+    };
+
     const start = Date.now();
-    const deadlineMs = 75_000; // Solana blockhash validity ceiling.
+    const deadlineMs = 90_000;
     let lastResend = Date.now();
 
     while (Date.now() - start < deadlineMs) {
@@ -1597,37 +1394,33 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         broadcastRaw(rawTx).catch(() => {});
         lastResend = Date.now();
       }
-      try {
-        const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: false });
-        const cs = st?.value?.confirmationStatus;
-        if (cs === 'confirmed' || cs === 'finalized') return sig;
-        if (st?.value?.err) throw new Error('Transaction failed on-chain.');
-      } catch (e) {
-        if (/failed on-chain/i.test(String(e?.message))) throw e;
-      }
+
+      const st = await racePool(c => c.getSignatureStatus(sig, { searchTransactionHistory: false }));
+      const cs = st?.value?.confirmationStatus;
+      if (cs === 'confirmed' || cs === 'finalized') return sig;
+      if (st?.value?.err) throw new Error('Transaction failed on-chain.');
+
       if (blockhashInfo?.lastValidBlockHeight) {
-        try {
-          const currentHeight = await connection.getBlockHeight('confirmed');
-          if (currentHeight > blockhashInfo.lastValidBlockHeight) {
-            const final = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-            const fcs = final?.value?.confirmationStatus;
-            if (fcs === 'confirmed' || fcs === 'finalized') return sig;
-            throw new Error('Blockhash expired before tx landed. Retry.');
-          }
-        } catch (e) {
-          if (/expired/i.test(String(e?.message))) throw e;
+        const currentHeight = await racePool(c => c.getBlockHeight('confirmed'));
+        if (Number.isFinite(currentHeight) && currentHeight > blockhashInfo.lastValidBlockHeight + 10) {
+          // Blockhash window definitely closed. One last broad search.
+          const finalSt = await racePool(c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
+          const fcs = finalSt?.value?.confirmationStatus;
+          if (fcs === 'confirmed' || fcs === 'finalized') return sig;
+          // Pass the sig out via the message — friendlyError preserves
+          // anything not matching its known patterns.
+          throw new Error('Tx may have landed. Check sig ' + sig.slice(0, 12) + '… on Solscan.');
         }
       }
       await new Promise(r => setTimeout(r, 1000));
     }
 
-    try {
-      const final = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-      const fcs = final?.value?.confirmationStatus;
-      if (fcs === 'confirmed' || fcs === 'finalized') return sig;
-    } catch {}
-    throw new Error('Tx expired before confirmation. Retry.');
-  }, [connection]);
+    // Final racewide search before giving up.
+    const finalSt = await racePool(c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
+    const fcs = finalSt?.value?.confirmationStatus;
+    if (fcs === 'confirmed' || fcs === 'finalized') return sig;
+    throw new Error('Tx not confirmed yet. Check sig ' + sig.slice(0, 12) + '… on Solscan.');
+  }, []);
 
   /* ════════════════════════════════════════════════════════════════
      JUPITER SWAP — graduated tokens.
@@ -1650,7 +1443,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     const params = new URLSearchParams({
       inputMint, outputMint,
       amount:      jupInput.toString(),
-      slippageBps: String(SLIPPAGE_BPS_JUP),
+      slippageBps: String(SLIPPAGE_BPS),
       taker:       wallet.publicKey.toBase58(),
     });
     const buildRes = await fetch('/api/jupiter/build?' + params);
@@ -1710,9 +1503,12 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       }) : null).filter(Boolean);
     }
 
-    // FINALIZED blockhash → longest validity window. Critical for mobile
-    // wallets that take 15–30s to deep-link and come back.
-    const latest = await connection.getLatestBlockhash('finalized');
+    // CONFIRMED (not finalized) — confirmed gives a blockhash from a slot
+    // ~2s old vs finalized at ~13s old. With mobile signing taking 15–30s,
+    // that extra ~10s of validity window is the difference between the tx
+    // landing and the "tx expired" error. Confirmed slots almost never get
+    // rolled back on mainnet, so the safety trade-off is negligible.
+    const latest = await rpcRace('blockhash', c => c.getLatestBlockhash('confirmed'), 'confirmed');
     const message = new TransactionMessage({
       payerKey: wallet.publicKey,
       recentBlockhash: latest.blockhash,
@@ -1720,9 +1516,10 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     }).compileToV0Message(alts);
     const tx = new VersionedTransaction(message);
 
-    // Simulate the EXACT tx (no replaceRecentBlockhash). Phantom will sim
-    // the same bytes when popping up; what we see is what the user sees.
-    const sim = await connection.simulateTransaction(tx, { sigVerify: false });
+    // Simulate across the pool. If RPC #1 hasn't synced our blockhash yet
+    // it would throw "Blockhash not found" and kill the whole flow; racing
+    // means any single synced RPC keeps us going.
+    const sim = await rpcRace('simulate', c => c.simulateTransaction(tx, { sigVerify: false }), 'confirmed');
     if (sim.value.err) {
       const logs = (sim.value.logs || []).join('\n').toLowerCase();
       if (logs.includes('insufficient')) throw new Error('Insufficient balance for this swap.');
@@ -1742,167 +1539,11 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   }, [wallet, connection, sendAndConfirm]);
 
   /* ════════════════════════════════════════════════════════════════
-     PUMP.FUN SWAP — pre-grad tokens via PumpPortal trade-local.
-       1. POST to /api/trade-local → serialized VersionedTransaction.
-       2. Deserialize, decompile (with ALTs if any).
-       3. Inject our 3% SOL fee ix:
-            BUY  → before pump trade ix (97% goes into curve)
-            SELL → after pump trade ix (3% of SOL output to FEE_WALLET)
-       4. Recompile with OUR finalized blockhash.
-       5. Sim, sign, broadcast, resend, confirm.
-     One tx, one signature, atomic.
+     SWAP DISPATCH — Jupiter routes everything (pre-grad bonding curves
+     and post-grad AMMs alike). Single code path, single 5% slippage.
      ════════════════════════════════════════════════════════════════ */
-  const executePumpFunSwap = useCallback(async ({ mode, swapParams, token }) => {
-    if (!wallet.publicKey || !wallet.signTransaction) throw new Error('Wallet not connected');
+  const executeSwap = useCallback(async (args) => executeJupiterSwap(args), [executeJupiterSwap]);
 
-    const isBuy = mode === 'buy';
-    const userSolIn  = isBuy ? swapParams.solAmount : 0;
-    const tokenInUi  = isBuy ? 0 : (Number(swapParams.rawAmount) / Math.pow(10, swapParams.inputDecimals));
-
-    // 97% goes to pump.fun on buy; full token amount on sell.
-    const pumpAmount = isBuy ? userSolIn * (1 - FEE_BPS / 10000) : tokenInUi;
-    if (!(pumpAmount > 0)) throw new Error('Amount too small');
-
-    let portalRes;
-    try {
-      portalRes = await fetch(PUMP_TRADE_URL, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          publicKey:        wallet.publicKey.toBase58(),
-          action:           mode,
-          mint:             token.mint,
-          denominatedInSol: isBuy ? 'true' : 'false',
-          amount:           pumpAmount,
-          slippage:         SLIPPAGE_BPS_PUMP / 100,
-          priorityFee:      0.0008,
-          // 'auto' lets PumpPortal pick pump curve vs. pump-amm vs. raydium-cpmm
-          // for migrating tokens — DexScreener can be a few seconds behind
-          // graduation, and 'pump' would error if the curve is already complete.
-          pool:             'auto',
-        }),
-      });
-    } catch {
-      throw new Error('Pump.fun unavailable (network).');
-    }
-    if (!portalRes.ok) {
-      const errText = await portalRes.text().catch(() => '');
-      const lower = errText.toLowerCase();
-      if (lower.includes('graduated') || lower.includes('migrated')) {
-        throw new Error('Token just graduated — refresh and try again.');
-      }
-      throw new Error('Pump.fun unavailable. ' + errText.slice(0, 80));
-    }
-    const buf = await portalRes.arrayBuffer();
-    const portalBytes = new Uint8Array(buf);
-    if (portalBytes.length === 0) throw new Error('Pump.fun returned empty tx.');
-
-    let portalTx;
-    try { portalTx = VersionedTransaction.deserialize(portalBytes); }
-    catch { throw new Error('Could not parse pump.fun response.'); }
-
-    const altLookups = portalTx.message.addressTableLookups || [];
-    let alts = [];
-    if (altLookups.length > 0) {
-      const altKeys = altLookups.map(l => l.accountKey);
-      const infos = await connection.getMultipleAccountsInfo(altKeys);
-      alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
-        key:   k,
-        state: AddressLookupTableAccount.deserialize(infos[i].data),
-      }) : null).filter(Boolean);
-    }
-
-    const decompiled = TransactionMessage.decompile(portalTx.message, { addressLookupTableAccounts: alts });
-    const ixs = [...decompiled.instructions];
-
-    let feeIx = null;
-    if (isBuy) {
-      const feeLamports = Math.floor(userSolIn * 1e9 * FEE_BPS / 10000);
-      if (feeLamports > 0) {
-        feeIx = SystemProgram.transfer({
-          fromPubkey: wallet.publicKey, toPubkey: FEE_WALLET,
-          lamports: feeLamports,
-        });
-      }
-    } else {
-      // 3% of estimated SOL out, with a 5% safety margin in case the
-      // estimate slightly over-shoots actual fill.
-      const grossSol = estimatePumpSellSol({
-        vSol: token.vSol || token.liquiditySol || 0,
-        vTokens: token.vTokens || 0,
-        tokensIn: tokenInUi,
-      });
-      const safeGross = grossSol * 0.95;
-      const feeLamports = Math.floor(safeGross * 1e9 * FEE_BPS / 10000);
-      if (feeLamports > 0) {
-        feeIx = SystemProgram.transfer({
-          fromPubkey: wallet.publicKey, toPubkey: FEE_WALLET,
-          lamports: feeLamports,
-        });
-      }
-    }
-
-    if (feeIx) {
-      if (isBuy) {
-        // Insert after the compute-budget block, before pump trade.
-        let insertIdx = 0;
-        for (let i = 0; i < ixs.length; i++) {
-          if (ixs[i].programId.toBase58() !== COMPUTE_BUDGET_PROGRAM_ID) { insertIdx = i; break; }
-          insertIdx = i + 1;
-        }
-        ixs.splice(insertIdx, 0, feeIx);
-      } else {
-        ixs.push(feeIx);
-      }
-    }
-
-    const latest = await connection.getLatestBlockhash('finalized');
-    const message = new TransactionMessage({
-      payerKey: wallet.publicKey,
-      recentBlockhash: latest.blockhash,
-      instructions: ixs,
-    }).compileToV0Message(alts);
-    const tx = new VersionedTransaction(message);
-
-    const sim = await connection.simulateTransaction(tx, { sigVerify: false });
-    if (sim.value.err) {
-      const logs = (sim.value.logs || []).join('\n').toLowerCase();
-      if (logs.includes('insufficient')) throw new Error('Insufficient balance.');
-      if (logs.includes('slippage') || logs.includes('exceeds')) throw new Error('Price moved on curve — try again.');
-      if (logs.includes('graduated') || logs.includes('migrated') || logs.includes('curve complete')) {
-        throw new Error('Token just graduated — try again.');
-      }
-      throw new Error('Pump.fun simulation failed.');
-    }
-
-    const signed = await wallet.signTransaction(tx);
-    const rawTx = signed.serialize();
-    const sig = await sendAndConfirm(rawTx, latest);
-
-    // Estimate output for the toast — real balance comes from the next refresh.
-    let outAmount = 0;
-    if (isBuy) {
-      const netSol = userSolIn * (1 - FEE_BPS / 10000);
-      outAmount = estimatePumpBuyTokens({
-        vSol: token.vSol || token.liquiditySol || 0,
-        vTokens: token.vTokens || 0, solIn: netSol,
-      });
-    } else {
-      const gross = estimatePumpSellSol({
-        vSol: token.vSol || token.liquiditySol || 0,
-        vTokens: token.vTokens || 0, tokensIn: tokenInUi,
-      });
-      outAmount = gross * (1 - FEE_BPS / 10000);
-    }
-
-    return { sig, confirmed: true, outAmount, mode, token };
-  }, [wallet, connection, sendAndConfirm]);
-
-  /* ──── dispatch by curve state ──── */
-  const executeSwap = useCallback(async (args) => {
-    if (args.token.preGrad) return executePumpFunSwap(args);
-    return executeJupiterSwap(args);
-  }, [executePumpFunSwap, executeJupiterSwap]);
 
   /* ──── card actions ──── */
   const onCardBuy = useCallback((token) => {
@@ -1942,24 +1583,23 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   }, [executeSwap, fireConfetti, pushToast, aggressiveRefresh]);
 
   /* ──── derived display ──── */
-  const deriveDisplayValues = useCallback((t) => {
-    if (!t) return t;
-    let price = t.price;
-    let mcap  = t.mcap;
-    let liquidity = t.liquidity;
-    if ((price == null || price <= 0) && t.priceSol > 0 && solPrice > 0) price = t.priceSol * solPrice;
-    if ((mcap == null || mcap <= 0) && t.mcapSol > 0 && solPrice > 0) mcap = t.mcapSol * solPrice;
-    if ((liquidity == null || liquidity <= 0) && t.liquiditySol > 0 && solPrice > 0) liquidity = t.liquiditySol * solPrice;
-    if (price === t.price && mcap === t.mcap && liquidity === t.liquidity) return t;
-    return { ...t, price, mcap, liquidity };
-  }, [solPrice]);
+  // Jupiter returns USD-denominated values directly; no SOL-priced
+  // fallback needed anymore.
+  const deriveDisplayValues = useCallback((t) => t, []);
 
-  const activeList = lane === 'fresh' ? pumpTokens : recentTokens;
+  // "Just Hatched" = subset of recent feed younger than freshThresholdMs.
+  // "On Radar" = the full recent feed. Same data source, same mint
+  // identifier — there's no second feed to drift out of sync.
+  const freshTokens = useMemo(
+    () => recentTokens.filter(t => Number.isFinite(t.ageMs) && t.ageMs < freshThresholdMs),
+    [recentTokens, freshThresholdMs],
+  );
+  const activeList = lane === 'fresh' ? freshTokens : recentTokens;
 
   const featured = useMemo(() => {
-    const pool = pumpTokens.filter(t => Number.isFinite(t.ageMs) && t.ageMs < 30 * 60_000).map(deriveDisplayValues);
+    const pool = freshTokens.map(deriveDisplayValues);
     return pool.length ? pool[0] : null;
-  }, [pumpTokens, deriveDisplayValues]);
+  }, [freshTokens, deriveDisplayValues]);
 
   const filtered = useMemo(() => {
     let l = activeList.map(deriveDisplayValues);
@@ -1981,13 +1621,14 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   }, [activeList, timeFilter, sortBy, deriveDisplayValues, featured]);
 
   const topGainer = useMemo(() => {
-    const pool = [...pumpTokens, ...recentTokens].filter(t => Number.isFinite(t.change) && t.change > 0);
+    const pool = recentTokens.filter(t => Number.isFinite(t.change) && t.change > 0);
     if (!pool.length) return null;
     return pool.reduce((a, b) => (b.change > a.change ? b : a));
-  }, [pumpTokens, recentTokens]);
-  const totalVol24h = useMemo(() => {
-    return [...pumpTokens, ...recentTokens].reduce((s, t) => s + (t.volume24h || 0), 0);
-  }, [pumpTokens, recentTokens]);
+  }, [recentTokens]);
+  const totalVol24h = useMemo(
+    () => recentTokens.reduce((s, t) => s + (t.volume24h || 0), 0),
+    [recentTokens],
+  );
 
   const onConnectClick = useCallback(async () => {
     if (wallet.publicKey && wallet.disconnect) {
@@ -2049,9 +1690,9 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
 
         <div className="lr-status">
           <div className="lr-status-item">
-            <span className={'lr-live-dot' + (lane === 'fresh' && !pumpConnected ? ' lr-warn' : '')} />
+            <span className={'lr-live-dot' + (recentError ? ' lr-warn' : '')} />
             {lane === 'fresh'
-              ? (pumpConnected ? <>LIVE · <b>{pumpTokens.length}</b> tracked</> : <>RECONNECTING…</>)
+              ? (recentLoading ? <>SYNCING…</> : <>LIVE · <b>{freshTokens.length}</b> fresh</>)
               : (recentLoading ? <>SYNCING…</> : recentError ? <>FEED DOWN</> : <><b>{recentTokens.length}</b> tokens</>)}
           </div>
           <div className="lr-status-divider" />
@@ -2067,7 +1708,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         <div className="lr-orbs">
           <div className="lr-orb lr-orb-1" style={{ animationDelay: '0s' }}>
             <span className="lr-orb-emoji">🥚</span>
-            <div className="lr-orb-val">{pumpTokens.length}</div>
+            <div className="lr-orb-val">{freshTokens.length}</div>
             <div className="lr-orb-lbl">Just Hatched</div>
           </div>
           <div className="lr-orb lr-orb-2" style={{ animationDelay: '.05s' }}>
@@ -2117,7 +1758,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
             onClick={() => setLane('fresh')}>
             <span className="lr-tab-emoji">🐣</span>
             JUST HATCHED
-            <span className="lr-tab-count">{pumpTokens.length}</span>
+            <span className="lr-tab-count">{freshTokens.length}</span>
           </button>
           <button type="button"
             className={'lr-tab' + (lane === 'recent' ? ' lr-active' : '')}
@@ -2154,10 +1795,10 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         {filtered.length === 0 ? (
           <div className="lr-empty">
             <span className="lr-empty-emoji">{lane === 'fresh' ? '🥚' : '🍿'}</span>
-            {lane === 'fresh' && !pumpConnected ? (
+            {lane === 'fresh' && recentLoading ? (
               <>
                 <b>Warming up the launch stream…</b>
-                <div className="lr-empty-sub">Hatching new tokens from pump.fun any second now.</div>
+                <div className="lr-empty-sub">Pulling fresh launches from Jupiter any second now.</div>
               </>
             ) : lane === 'recent' && recentError ? (
               <>
@@ -2181,7 +1822,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
                 owned={balances[t.mint]}
                 onBuy={onCardBuy}
                 onSell={onCardSell}
-                isFresh={t.source === 'pumpfun'}
+                isFresh={Number.isFinite(t.ageMs) && t.ageMs < freshThresholdMs}
                 tintIndex={i % 5}
               />
             ))}
@@ -2253,4 +1894,3 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     </div>
   );
 }
- 
