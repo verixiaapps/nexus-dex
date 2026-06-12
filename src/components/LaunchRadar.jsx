@@ -1,19 +1,18 @@
-// LaunchRadar.jsx — Solana new launches + quick buy/sell.
-// Pastel UI consistent with Wonderland. Two isolated lanes:
-//   FRESH  → pump.fun WSS + DexScreener (browser-direct, no backend)
-//   RECENT → /api/jupiter/tokens/v2/recent (existing backend)
-// One-click buy/sell with smart routing:
-//   - Pre-grad pump.fun tokens → PumpPortal trade-local (with atomic 3% fee)
-//   - Graduated / everything else → Jupiter (with atomic 3% fee)
-// Swap logic reuses Wonderland's exact pattern.
+// LaunchRadar.jsx — Solana new launches + per-card BUY/SELL modal trade flow.
 //
-// ⚠️  BEFORE THIS WORKS IN PRODUCTION:
-// The CSP in server.js must allow the fresh-lane endpoints. Add to connect-src:
-//   wss://pumpportal.fun
-//   https://pumpportal.fun
-//   https://api.dexscreener.com
-// Easiest way: set the env var EXTRA_CSP_CONNECT_SRC="wss://pumpportal.fun,https://pumpportal.fun,https://api.dexscreener.com"
-// Note: CSP_MODE defaults to "report-only" so calls work even without this — but you'll see console warnings.
+// CHANGES (per latest direction):
+//   • Each card now has just two actions: BUY and SELL.
+//   • Tapping either opens a wonderland-themed trade modal (SwapWidget-style:
+//     two rows, amount input, live quote, big confirm) — quote fetches as the
+//     amount changes, confirm triggers the wallet popup.
+//   • Inside the modal: quick preset chips for fast amount entry (SOL for
+//     buy, % of holding for sell), still editable via the settings gear.
+//   • After a confirmed trade, the toast adds a "Share on Twitter" button
+//     alongside View on Solscan. The pre-filled tweet includes the trade
+//     details and the user's ?ref= link so shares are also referrals.
+//   • Removed the top buy-preset bar; gear icon moved to the topbar.
+//   • All Jupiter routing / fee logic / RPC pool / simulate-sign-send flow
+//     preserved verbatim from the SwapWidget pattern.
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -35,7 +34,7 @@ import {
 import { useWallet } from '@solana/wallet-adapter-react';
 
 /* ════════════════════════════════════════════════════════════════════
-   CSS — pastel, matched to Wonderland's language
+   CSS — pastel wonderland palette
    ════════════════════════════════════════════════════════════════════ */
 const LR_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&display=swap');
@@ -43,6 +42,7 @@ const LR_CSS = `
   --ink:#1A1B4E; --ink-2:rgba(26,27,78,0.7); --ink-3:rgba(26,27,78,0.45);
   --pink:#FF8FBE; --mint:#7FFFD4; --lav:#B794F6; --peach:#FFB088;
   --sky:#A0E7FF; --gold:#FFD46B; --green:#1B7A4F; --red:#D14B6A;
+  --twitter:#1DA1F2;
   --glass:rgba(255,255,255,0.6); --glass-strong:rgba(255,255,255,0.78);
   --border:rgba(183,148,246,0.22);
   min-height:100vh;color:var(--ink);
@@ -60,21 +60,20 @@ const LR_CSS = `
 @keyframes lrDrift{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(20px,-30px) scale(1.05)}}
 @keyframes lrPulse{0%,100%{opacity:1}50%{opacity:.3}}
 @keyframes lrPulseScale{0%,100%{transform:scale(1);opacity:1}50%{transform:scale(1.4);opacity:.5}}
-@keyframes lrFade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes lrFade{from{opacity:0}to{opacity:1}}
 @keyframes lrRise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 @keyframes lrPopIn{0%{opacity:0;transform:scale(.92) translateY(8px)}60%{transform:scale(1.02) translateY(-2px)}100%{opacity:1;transform:scale(1) translateY(0)}}
 @keyframes lrSpin{to{transform:rotate(360deg)}}
-@keyframes lrSweep{0%{transform:rotate(0deg);opacity:.5}100%{transform:rotate(360deg);opacity:.5}}
-@keyframes lrTickerNum{0%{transform:translateY(0)}100%{transform:translateY(-100%)}}
 @keyframes lrShimmerSlide{0%{left:-110px}50%,100%{left:130%}}
 @keyframes lrSlideUp{from{transform:translateY(120%);opacity:0}to{transform:translateY(0);opacity:1}}
 @keyframes lrSlideDown{to{transform:translateY(120%);opacity:0}}
+@keyframes lrModalIn{from{opacity:0;transform:translateY(20px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
 
 .lr-blob{position:absolute;border-radius:50%;filter:blur(70px);opacity:0.45;animation:lrDrift 14s ease-in-out infinite;pointer-events:none;z-index:0}
 
 .lr-phone{max-width:480px;margin:0 auto;position:relative;padding-bottom:32px;z-index:5}
 
-/* ───── TOPBAR (matches Wonderland) ───── */
+/* ───── TOPBAR ───── */
 .lr-topbar{position:sticky;top:0;z-index:50;display:flex;justify-content:space-between;align-items:center;padding:12px 18px;background:rgba(251,245,255,0.72);backdrop-filter:blur(20px);border-bottom:1px solid var(--border)}
 .lr-brand{display:flex;align-items:center;gap:10px;cursor:pointer}
 .lr-brand-dot{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#FF8FBE,#B794F6 60%,#7FFFD4);box-shadow:0 0 14px rgba(183,148,246,.5);position:relative}
@@ -82,6 +81,8 @@ const LR_CSS = `
 .lr-brand-text{font-family:"Instrument Serif",serif;font-style:italic;font-size:18px;line-height:1}
 .lr-brand-text .lr-slash{opacity:.4;margin:0 3px;font-style:normal}
 .lr-topbar-right{display:flex;align-items:center;gap:8px}
+.lr-gear-btn{flex-shrink:0;width:34px;height:34px;border-radius:50%;background:var(--glass);border:1px solid var(--border);display:grid;place-items:center;cursor:pointer;font-size:14px;transition:transform .25s,background .15s;font-family:initial;color:var(--ink)}
+.lr-gear-btn:hover{transform:rotate(60deg);background:var(--glass-strong)}
 .lr-wallet-btn{display:flex;align-items:center;gap:7px;padding:8px 14px;border-radius:999px;background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink);border:none;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(127,255,212,.35);letter-spacing:.2px}
 .lr-wallet-btn.lr-connected{background:var(--glass-strong);border:1px solid var(--border);color:var(--ink);box-shadow:none}
 .lr-wallet-btn .lr-wallet-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
@@ -92,8 +93,9 @@ const LR_CSS = `
 .lr-radar-pulse{position:relative;width:8px;height:8px;border-radius:50%;background:var(--peach);box-shadow:0 0 8px var(--peach)}
 .lr-radar-pulse::before{content:'';position:absolute;inset:-3px;border-radius:50%;background:var(--peach);opacity:.4;animation:lrPulseScale 1.6s ease-in-out infinite}
 .lr-hero h1{font-family:"Instrument Serif",serif;font-weight:400;font-size:42px;line-height:.98;letter-spacing:-.01em;margin:0 0 8px}
-.lr-hero h1 .lr-rocket{display:inline-block;margin-right:6px;font-family:initial}
 .lr-hero h1 .lr-grad{background:linear-gradient(90deg,#FF8FBE,#FFB088 50%,#FFD46B);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.lr-hero h1 .lr-italic{font-style:italic;font-weight:400}
+.lr-hero h1 .lr-sparkle{display:inline-block;font-family:initial;animation:lrPulse 1.8s ease-in-out infinite}
 .lr-hero-sub{color:var(--ink-2);font-size:15px;font-weight:500;margin:0 0 6px}
 .lr-hero-meta{font-size:11px;color:var(--ink-3);font-weight:600;letter-spacing:.5px;margin-bottom:14px}
 .lr-hero-meta .lr-dot{margin:0 6px;opacity:.4}
@@ -106,7 +108,7 @@ const LR_CSS = `
 .lr-status .lr-live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:lrPulse 1.5s ease-in-out infinite}
 .lr-status .lr-live-dot.lr-warn{background:var(--peach);box-shadow:0 0 8px var(--peach)}
 
-/* ───── TAB SWITCHER (Fresh / Recent) ───── */
+/* ───── TABS ───── */
 .lr-tabs{display:grid;grid-template-columns:1fr 1fr;margin:0 18px 14px;background:var(--glass);border:1px solid var(--border);border-radius:18px;padding:5px;position:relative;backdrop-filter:blur(10px)}
 .lr-tab{padding:12px 0;text-align:center;font-family:inherit;font-weight:700;font-size:12px;letter-spacing:1px;color:var(--ink-2);border-radius:14px;cursor:pointer;transition:color .2s;position:relative;z-index:2;display:flex;align-items:center;justify-content:center;gap:6px;background:none;border:none}
 .lr-tab .lr-tab-emoji{font-size:14px}
@@ -122,13 +124,11 @@ const LR_CSS = `
 .lr-filter.lr-active{background:linear-gradient(135deg,#B794F6,#FF8FBE);color:#fff;border-color:transparent;box-shadow:0 4px 12px rgba(183,148,246,.3)}
 .lr-filter-divider{flex-shrink:0;width:1px;height:24px;background:var(--border);align-self:center;margin:0 4px}
 
-/* ───── CARDS GRID ───── */
+/* ───── CARDS ───── */
 .lr-feed{display:flex;flex-direction:column;gap:10px;padding:0 18px;position:relative;z-index:2}
 .lr-card{padding:14px;border-radius:24px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);position:relative;overflow:hidden;animation:lrPopIn .45s cubic-bezier(.2,.9,.2,1) backwards;transition:border-color .2s,box-shadow .2s}
 .lr-card:hover{border-color:rgba(183,148,246,.4);box-shadow:0 8px 24px rgba(183,148,246,.12)}
 .lr-card.lr-fresh{background:linear-gradient(135deg,rgba(255,176,136,.18),var(--glass) 60%)}
-.lr-card.lr-busy{pointer-events:none}
-.lr-card.lr-busy::after{content:'';position:absolute;inset:0;background:rgba(255,255,255,.4);border-radius:24px;backdrop-filter:blur(2px);z-index:5}
 
 .lr-card-head{display:flex;align-items:center;gap:12px}
 .lr-mini-avatar{width:44px;height:44px;border-radius:50%;padding:2px;flex-shrink:0;background:conic-gradient(from 0deg,#FF8FBE,#B794F6,#7FFFD4,#FFB088,#FF8FBE)}
@@ -166,50 +166,184 @@ const LR_CSS = `
 .lr-badge.lr-risk-warn{background:rgba(255,212,107,.3);color:#8B6B00;border:1px solid rgba(255,212,107,.5)}
 .lr-badge.lr-risk-danger{background:rgba(209,75,106,.2);color:var(--red);border:1px solid rgba(209,75,106,.45)}
 
-.lr-actions{margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);display:flex;gap:6px}
-.lr-action-label{font-size:9px;letter-spacing:1.4px;text-transform:uppercase;font-weight:700;color:var(--ink-2);margin-bottom:8px}
-.lr-action-mode{margin-top:12px}
-.lr-action-row{display:flex;gap:6px}
-.lr-action-btn{flex:1;border:none;cursor:pointer;padding:11px 0;border-radius:14px;font-family:inherit;font-weight:800;font-size:12px;letter-spacing:.6px;transition:transform .12s cubic-bezier(.2,1.3,.4,1),box-shadow .2s}
-.lr-action-btn:active{transform:scale(.96)}
-.lr-action-btn:disabled{opacity:.55;cursor:not-allowed}
-.lr-buy-btn{background:linear-gradient(135deg,#FFB088,#FFD46B);color:#fff;box-shadow:0 4px 12px rgba(255,176,136,.35)}
-.lr-buy-btn:hover{box-shadow:0 6px 18px rgba(255,176,136,.45)}
-.lr-sell-btn{background:linear-gradient(135deg,#FF8FBE,#B794F6);color:#fff;box-shadow:0 4px 12px rgba(255,143,190,.35)}
-.lr-sell-btn:hover{box-shadow:0 6px 18px rgba(255,143,190,.45)}
-.lr-owned-bar{display:flex;align-items:center;gap:8px;font-family:ui-monospace,monospace;font-size:10px;color:var(--ink-2);margin-bottom:6px;font-weight:700}
-.lr-owned-bar b{color:var(--green);font-weight:800}
+/* ───── CARD ACTIONS (single BUY + SELL buttons) ───── */
+.lr-card-actions{margin-top:12px;padding-top:12px;border-top:1px dashed var(--border);display:flex;gap:8px}
+.lr-card-btn{flex:1;border:none;cursor:pointer;padding:12px 0;border-radius:14px;font-family:inherit;font-weight:800;font-size:13px;letter-spacing:.6px;transition:transform .12s cubic-bezier(.2,1.3,.4,1),box-shadow .2s}
+.lr-card-btn:active{transform:scale(.96)}
+.lr-card-btn:disabled{opacity:.55;cursor:not-allowed}
+.lr-card-buy{background:linear-gradient(135deg,#FFB088,#FFD46B);color:#fff;box-shadow:0 4px 12px rgba(255,176,136,.35)}
+.lr-card-buy:hover:not(:disabled){box-shadow:0 6px 18px rgba(255,176,136,.45)}
+.lr-card-sell{background:linear-gradient(135deg,#FF8FBE,#B794F6);color:#fff;box-shadow:0 4px 12px rgba(255,143,190,.35)}
+.lr-card-sell:hover:not(:disabled){box-shadow:0 6px 18px rgba(255,143,190,.45)}
+.lr-owned-strip{display:flex;align-items:center;gap:6px;font-family:ui-monospace,monospace;font-size:10px;color:var(--ink-2);margin-top:10px;font-weight:700;padding:6px 10px;background:rgba(127,255,212,.15);border:1px solid rgba(127,255,212,.35);border-radius:10px}
+.lr-owned-strip b{color:var(--green);font-weight:800}
 
-.lr-card-spinner{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;background:rgba(255,255,255,.55);backdrop-filter:blur(4px);border-radius:24px;z-index:10}
-.lr-spinner-ring{width:32px;height:32px;border-radius:50%;border:3px solid rgba(183,148,246,.2);border-top-color:var(--lav);animation:lrSpin .9s linear infinite}
-.lr-spinner-label{font-family:ui-monospace,monospace;font-size:10px;font-weight:800;letter-spacing:1.5px;color:var(--ink);text-transform:uppercase}
-
-/* ───── EMPTY + LOADING ───── */
+/* ───── EMPTY ───── */
 .lr-empty{text-align:center;padding:48px 24px;color:var(--ink-2);font-size:14px;font-weight:500}
 .lr-empty .lr-empty-emoji{font-size:48px;margin-bottom:14px;display:block;opacity:.6}
 .lr-empty b{color:var(--ink);font-weight:700}
 .lr-empty-sub{font-size:12px;margin-top:6px;color:var(--ink-3);font-weight:500}
+.lr-empty-err{margin-top:10px;font-family:ui-monospace,monospace;font-size:10px;color:var(--red);background:rgba(209,75,106,.08);border:1px solid rgba(209,75,106,.25);padding:7px 12px;border-radius:10px;display:inline-block;max-width:100%;overflow-wrap:break-word}
 
 /* ───── TOAST ───── */
 .lr-toasts{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:100;display:flex;flex-direction:column;gap:8px;max-width:440px;width:calc(100% - 24px);pointer-events:none}
-.lr-toast{pointer-events:auto;display:flex;align-items:center;gap:12px;padding:14px 16px;border-radius:18px;backdrop-filter:blur(20px);box-shadow:0 12px 32px rgba(26,27,78,.15);animation:lrSlideUp .35s cubic-bezier(.2,1.3,.4,1);font-size:13px;font-weight:600}
-.lr-toast.lr-toast-leaving{animation:lrSlideDown .25s ease-in forwards}
-.lr-toast-success{background:linear-gradient(135deg,rgba(255,255,255,.95),rgba(127,255,212,.4));border:1px solid rgba(127,255,212,.5);color:var(--ink)}
-.lr-toast-error{background:linear-gradient(135deg,rgba(255,255,255,.95),rgba(255,143,190,.35));border:1px solid rgba(209,75,106,.4);color:var(--ink)}
-.lr-toast-info{background:rgba(255,255,255,.92);border:1px solid var(--border);color:var(--ink)}
+.lr-toast{pointer-events:auto;display:flex;align-items:center;gap:10px;padding:13px 14px;border-radius:18px;backdrop-filter:blur(20px);box-shadow:0 12px 32px rgba(26,27,78,.15);animation:lrSlideUp .35s cubic-bezier(.2,1.3,.4,1);font-size:13px;font-weight:600}
+.lr-toast.lr-toast-success{background:linear-gradient(135deg,rgba(255,255,255,.95),rgba(127,255,212,.4));border:1px solid rgba(127,255,212,.5);color:var(--ink)}
+.lr-toast.lr-toast-error{background:linear-gradient(135deg,rgba(255,255,255,.95),rgba(255,143,190,.35));border:1px solid rgba(209,75,106,.4);color:var(--ink)}
+.lr-toast.lr-toast-info{background:rgba(255,255,255,.92);border:1px solid var(--border);color:var(--ink)}
 .lr-toast-emoji{font-size:22px;line-height:1;flex-shrink:0}
 .lr-toast-body{flex:1;min-width:0;line-height:1.35}
 .lr-toast-body b{font-weight:800}
-.lr-toast-action{flex-shrink:0;background:var(--glass-strong);border:1px solid var(--border);color:var(--ink);padding:6px 11px;border-radius:9px;font-family:inherit;font-size:11px;font-weight:800;letter-spacing:.5px;cursor:pointer;text-decoration:none}
+.lr-toast-actions{display:flex;gap:5px;flex-shrink:0;flex-wrap:wrap}
+.lr-toast-action{background:var(--glass-strong);border:1px solid var(--border);color:var(--ink);padding:6px 10px;border-radius:9px;font-family:inherit;font-size:10px;font-weight:800;letter-spacing:.5px;cursor:pointer;text-decoration:none;display:inline-flex;align-items:center;gap:4px}
+.lr-toast-action.lr-toast-twitter{background:linear-gradient(135deg,rgba(160,231,255,.5),rgba(127,255,212,.5));border-color:rgba(127,255,212,.5)}
+.lr-toast-action.lr-toast-twitter:hover{box-shadow:0 4px 12px rgba(127,255,212,.35)}
+.lr-toast-action svg{width:11px;height:11px}
 
-/* ───── REFERRER CHIP (shown when ?ref=… is active) ───── */
+/* ───── REFERRER CHIP ───── */
 .lr-refchip{display:inline-flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;background:linear-gradient(90deg,rgba(127,255,212,.25),rgba(160,231,255,.18));border:1px solid rgba(127,255,212,.4);font-size:10px;font-weight:700;color:var(--ink);letter-spacing:.2px;font-family:ui-monospace,monospace}
+
+/* ───── STAT ORBS ───── */
+.lr-orbs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:0 18px;margin-bottom:16px;position:relative;z-index:2}
+.lr-orb{position:relative;padding:12px 6px 11px;border-radius:20px;text-align:center;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);overflow:hidden;animation:lrRise .5s cubic-bezier(.2,.9,.2,1) backwards}
+.lr-orb::before{content:'';position:absolute;inset:0;border-radius:20px;opacity:.35;pointer-events:none}
+.lr-orb.lr-orb-1::before{background:radial-gradient(ellipse at top,#FFB088,transparent 70%)}
+.lr-orb.lr-orb-2::before{background:radial-gradient(ellipse at top,#FF8FBE,transparent 70%)}
+.lr-orb.lr-orb-3::before{background:radial-gradient(ellipse at top,#7FFFD4,transparent 70%)}
+.lr-orb.lr-orb-4::before{background:radial-gradient(ellipse at top,#FFD46B,transparent 70%)}
+.lr-orb-emoji{font-size:18px;margin-bottom:2px;display:block;position:relative;z-index:1;line-height:1}
+.lr-orb-val{font-family:"Instrument Serif",serif;font-size:18px;line-height:1;position:relative;z-index:1;color:var(--ink)}
+.lr-orb-val.lr-orb-mono{font-family:ui-monospace,monospace;font-weight:800;font-size:14px}
+.lr-orb-lbl{font-size:8px;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink-2);font-weight:700;margin-top:3px;position:relative;z-index:1}
+
+/* ───── FEATURED CARD ───── */
+.lr-feature{position:relative;margin:0 18px 16px;padding:18px 16px 16px;border-radius:28px;background:linear-gradient(135deg,rgba(255,255,255,.85),rgba(255,176,136,.35) 60%,rgba(255,212,107,.3));border:1px solid rgba(255,176,136,.5);backdrop-filter:blur(14px);overflow:hidden;box-shadow:0 10px 36px rgba(255,176,136,.25);animation:lrPopIn .55s cubic-bezier(.2,1.3,.4,1) backwards;z-index:2}
+.lr-feature::after{content:'';position:absolute;top:-60%;left:-40%;width:60%;height:300%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent);transform:rotate(20deg);animation:lrShimmerSlide 9s ease-in-out infinite}
+.lr-feature-badge{position:absolute;top:14px;right:14px;display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:linear-gradient(90deg,#FFB088,#FFD46B);color:#fff;font-size:10px;font-weight:800;letter-spacing:1px;box-shadow:0 4px 10px rgba(255,176,136,.45);z-index:3}
+.lr-feature-badge .lr-egg{display:inline-block;animation:lrPulseScale 1.6s ease-in-out infinite;font-size:14px}
+.lr-feature-head{display:flex;align-items:center;gap:14px;margin-bottom:14px;position:relative;z-index:2}
+.lr-feature-avatar{width:60px;height:60px;border-radius:50%;padding:3px;flex-shrink:0;background:conic-gradient(from 0deg,#FFB088,#FFD46B,#FF8FBE,#FFB088);box-shadow:0 8px 20px rgba(255,176,136,.4)}
+.lr-feature-avatar .lr-inner{width:100%;height:100%;border-radius:50%;display:grid;place-items:center;font-size:26px;background:linear-gradient(135deg,#FFEFE0,#FFD9C9);overflow:hidden}
+.lr-feature-avatar .lr-inner img{width:100%;height:100%;object-fit:cover;border-radius:50%}
+.lr-feature-name{flex:1;min-width:0}
+.lr-feature-sym{font-family:"Instrument Serif",serif;font-size:30px;line-height:1;font-style:italic}
+.lr-feature-sub{font-size:11px;color:var(--ink-2);font-weight:600;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.lr-feature-age{font-family:ui-monospace,monospace;font-size:11px;font-weight:800;color:var(--ink);background:rgba(255,255,255,.7);padding:4px 10px;border-radius:999px;margin-top:5px;display:inline-block;letter-spacing:.5px}
+.lr-feature-actions{display:flex;gap:7px;position:relative;z-index:2}
+.lr-feature-btn{flex:1;border:none;cursor:pointer;padding:13px 0;border-radius:16px;font-family:inherit;font-weight:800;font-size:13px;letter-spacing:.5px;color:#fff;background:linear-gradient(135deg,#FFB088,#FFD46B);box-shadow:0 6px 16px rgba(255,176,136,.45);transition:transform .12s cubic-bezier(.2,1.3,.4,1)}
+.lr-feature-btn:active{transform:scale(.96)}
+
+/* ───── CARD TINT VARIANTS ───── */
+.lr-card.lr-tint-0{background:linear-gradient(135deg,rgba(255,143,190,.18),var(--glass) 60%)}
+.lr-card.lr-tint-1{background:linear-gradient(135deg,rgba(127,255,212,.18),var(--glass) 60%)}
+.lr-card.lr-tint-2{background:linear-gradient(135deg,rgba(183,148,246,.18),var(--glass) 60%)}
+.lr-card.lr-tint-3{background:linear-gradient(135deg,rgba(160,231,255,.18),var(--glass) 60%)}
+.lr-card.lr-tint-4{background:linear-gradient(135deg,rgba(255,212,107,.18),var(--glass) 60%)}
+.lr-card.lr-fresh{background:linear-gradient(135deg,rgba(255,176,136,.22),var(--glass) 60%) !important}
+
+/* ───── CONFETTI ───── */
+.lr-confetti{position:fixed;inset:0;pointer-events:none;z-index:200;overflow:hidden}
+.lr-confetti-piece{position:absolute;top:50%;left:50%;width:8px;height:14px;border-radius:2px;animation:lrConfetti 1.6s cubic-bezier(.15,.9,.3,1) forwards}
+@keyframes lrConfetti{
+  0%{transform:translate(-50%,-50%) rotate(0);opacity:1}
+  100%{transform:translate(calc(-50% + var(--dx,0px)),calc(-50% + var(--dy,400px))) rotate(var(--dr,720deg));opacity:0}
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   TRADE MODAL — appears when user taps BUY or SELL on a card
+   ═══════════════════════════════════════════════════════════════ */
+.lr-trade-overlay{position:fixed;inset:0;background:rgba(26,27,78,.42);backdrop-filter:blur(14px);z-index:1000;display:flex;align-items:flex-end;justify-content:center;padding:0;animation:lrFade .2s}
+@media(min-width:640px){.lr-trade-overlay{align-items:center;padding:16px}}
+.lr-trade-card{width:100%;max-width:460px;max-height:90dvh;overflow-y:auto;background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(251,245,255,.96));border:1px solid var(--border);border-top:1.5px solid rgba(183,148,246,.4);border-radius:28px 28px 0 0;backdrop-filter:blur(20px);box-shadow:0 -20px 60px rgba(26,27,78,.2);animation:lrModalIn .3s cubic-bezier(.2,1.2,.4,1)}
+@media(min-width:640px){.lr-trade-card{border-radius:28px}}
+.lr-trade-head{display:flex;align-items:center;gap:12px;padding:20px 20px 14px;position:relative}
+.lr-trade-close{position:absolute;top:14px;right:14px;background:var(--glass);border:1px solid var(--border);border-radius:50%;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;font-family:initial;font-size:16px;color:var(--ink);line-height:1;z-index:2}
+.lr-trade-avatar{width:48px;height:48px;border-radius:50%;padding:2px;flex-shrink:0;background:conic-gradient(from 0deg,#FF8FBE,#B794F6,#7FFFD4,#FFB088,#FF8FBE)}
+.lr-trade-avatar .lr-inner{width:100%;height:100%;border-radius:50%;display:grid;place-items:center;font-size:22px;overflow:hidden;background:linear-gradient(135deg,#FFD9C9,#E8B8A0)}
+.lr-trade-avatar .lr-inner img{width:100%;height:100%;object-fit:cover;border-radius:50%}
+.lr-trade-token-info{flex:1;min-width:0;padding-right:36px}
+.lr-trade-token-sym{font-family:"Instrument Serif",serif;font-size:24px;line-height:1;margin:0}
+.lr-trade-token-sub{font-size:11px;color:var(--ink-2);font-weight:600;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.lr-trade-mode-tabs{display:grid;grid-template-columns:1fr 1fr;margin:0 20px 14px;background:var(--glass);border:1px solid var(--border);border-radius:14px;padding:4px;position:relative}
+.lr-trade-mode-tab{padding:10px 0;text-align:center;font-family:inherit;font-weight:800;font-size:12px;letter-spacing:.8px;color:var(--ink-2);border-radius:11px;cursor:pointer;background:none;border:none;position:relative;z-index:2;transition:color .2s}
+.lr-trade-mode-indicator{position:absolute;top:4px;bottom:4px;width:calc(50% - 4px);border-radius:11px;transition:transform .3s cubic-bezier(.2,1.3,.4,1),background .25s;z-index:1;background:linear-gradient(135deg,#FFB088,#FFD46B);box-shadow:0 3px 10px rgba(255,176,136,.4)}
+.lr-trade-mode-tabs.lr-mode-sell .lr-trade-mode-indicator{transform:translateX(100%);background:linear-gradient(135deg,#FF8FBE,#B794F6);box-shadow:0 3px 10px rgba(255,143,190,.4)}
+.lr-trade-mode-tab.lr-active{color:#fff}
+
+.lr-trade-body{padding:0 20px 20px}
+
+.lr-trade-row{background:var(--glass-strong);border:1.5px solid var(--border);border-radius:16px;padding:14px;transition:border-color .15s}
+.lr-trade-row:focus-within{border-color:rgba(183,148,246,.5);box-shadow:0 0 0 3px rgba(183,148,246,.1)}
+.lr-trade-row+.lr-trade-row{margin-top:8px}
+.lr-trade-row-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;gap:8px}
+.lr-trade-row-label{font-family:ui-monospace,monospace;font-size:9px;color:var(--ink-2);font-weight:800;letter-spacing:1.2px;text-transform:uppercase}
+.lr-trade-row-bal{font-family:ui-monospace,monospace;font-size:10px;color:var(--ink-2);font-weight:700;display:flex;align-items:center;gap:6px}
+.lr-trade-row-bal b{color:var(--ink);font-weight:800}
+.lr-trade-max-btn{background:rgba(183,148,246,.2);border:1px solid rgba(183,148,246,.4);color:#5A3C9E;padding:3px 8px;border-radius:7px;font-family:ui-monospace,monospace;font-size:9px;font-weight:800;cursor:pointer;letter-spacing:.5px}
+.lr-trade-row-mid{display:flex;align-items:center;gap:10px}
+.lr-trade-token-chip{display:flex;align-items:center;gap:6px;padding:8px 11px;background:rgba(255,255,255,.7);border:1px solid var(--border);border-radius:999px;flex-shrink:0;font-weight:800;font-size:13px;font-family:"Instrument Serif",serif}
+.lr-trade-token-chip-logo{width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,#FFD9C9,#E8B8A0);display:grid;place-items:center;font-size:13px;overflow:hidden;flex-shrink:0}
+.lr-trade-token-chip-logo img{width:100%;height:100%;object-fit:cover;border-radius:50%}
+.lr-trade-amount-input{flex:1;background:transparent;border:none;outline:none;color:var(--ink);font-family:"Instrument Serif",serif;font-size:28px;text-align:right;font-weight:400;min-width:0;width:100%;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
+.lr-trade-amount-input::placeholder{color:var(--ink-3);font-weight:400}
+.lr-trade-amount-input:read-only{cursor:default}
+
+.lr-trade-presets{display:flex;gap:6px;margin:10px 0 4px;overflow-x:auto;scrollbar-width:none}
+.lr-trade-presets::-webkit-scrollbar{display:none}
+.lr-trade-preset{flex-shrink:0;padding:7px 12px;border-radius:999px;background:var(--glass);border:1.5px solid var(--border);color:var(--ink);font-family:ui-monospace,monospace;font-weight:800;font-size:11px;cursor:pointer;transition:all .15s;letter-spacing:.3px}
+.lr-trade-preset:hover{border-color:rgba(183,148,246,.5)}
+.lr-trade-preset.lr-active{color:#fff;border-color:transparent}
+.lr-trade-presets.lr-mode-buy .lr-trade-preset.lr-active{background:linear-gradient(135deg,#FFB088,#FFD46B);box-shadow:0 3px 10px rgba(255,176,136,.4)}
+.lr-trade-presets.lr-mode-sell .lr-trade-preset.lr-active{background:linear-gradient(135deg,#FF8FBE,#B794F6);box-shadow:0 3px 10px rgba(255,143,190,.4)}
+
+.lr-trade-details{margin-top:12px;padding:11px 14px;background:rgba(255,255,255,.5);border:1px solid var(--border);border-radius:14px;font-family:ui-monospace,monospace;font-size:11px}
+.lr-trade-detail-row{display:flex;justify-content:space-between;padding:3px 0;font-weight:700;gap:8px}
+.lr-trade-detail-row>span:first-child{color:var(--ink-2);font-weight:600}
+.lr-trade-detail-val{color:var(--ink);font-weight:800;font-variant-numeric:tabular-nums;text-align:right}
+.lr-trade-detail-val.lr-good{color:var(--green)}
+.lr-trade-detail-val.lr-warn{color:#8B6B00}
+.lr-trade-detail-val.lr-bad{color:var(--red)}
+
+.lr-trade-banner{margin-top:12px;padding:11px 13px;border-radius:13px;font-size:12px;font-weight:600;border:1.5px solid}
+.lr-trade-banner-error{background:rgba(209,75,106,.08);border-color:rgba(209,75,106,.35);color:var(--red)}
+
+.lr-trade-confirm{width:100%;margin-top:14px;padding:16px 0;border:none;border-radius:16px;color:#fff;font-family:inherit;font-size:14px;font-weight:800;letter-spacing:.5px;cursor:pointer;transition:transform .12s cubic-bezier(.2,1.3,.4,1),box-shadow .2s;position:relative;overflow:hidden}
+.lr-trade-confirm.lr-mode-buy{background:linear-gradient(135deg,#FFB088,#FFD46B);box-shadow:0 8px 20px rgba(255,176,136,.4)}
+.lr-trade-confirm.lr-mode-sell{background:linear-gradient(135deg,#FF8FBE,#B794F6);box-shadow:0 8px 20px rgba(255,143,190,.4)}
+.lr-trade-confirm:active:not(:disabled){transform:scale(.98)}
+.lr-trade-confirm:disabled{opacity:.45;cursor:not-allowed;box-shadow:none;background:linear-gradient(135deg,#E5E0EE,#D5D0E0);color:var(--ink-2)}
+
+.lr-trade-footer{margin-top:10px;font-family:ui-monospace,monospace;font-size:9px;color:var(--ink-3);text-align:center;font-weight:600;letter-spacing:.3px}
+
+/* ═══════════════════════════════════════════════════════════════
+   SETTINGS MODAL — edit preset values
+   ═══════════════════════════════════════════════════════════════ */
+.lr-settings-overlay{position:fixed;inset:0;background:rgba(26,27,78,.42);backdrop-filter:blur(10px);z-index:1100;display:flex;align-items:center;justify-content:center;padding:16px;animation:lrFade .2s}
+.lr-settings-card{width:100%;max-width:420px;background:linear-gradient(180deg,rgba(255,255,255,.95),rgba(251,245,255,.95));border:1px solid var(--border);border-radius:24px;padding:22px;backdrop-filter:blur(20px);box-shadow:0 20px 60px rgba(26,27,78,.2);animation:lrPopIn .3s cubic-bezier(.2,1.3,.4,1)}
+.lr-settings-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+.lr-settings-title{font-family:"Instrument Serif",serif;font-size:24px;line-height:1;margin:0;color:var(--ink)}
+.lr-settings-close{background:var(--glass);border:1px solid var(--border);border-radius:50%;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;font-family:initial;font-size:16px;color:var(--ink);line-height:1}
+.lr-settings-section{margin-bottom:18px}
+.lr-settings-section-label{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;font-weight:800;color:var(--ink-2);margin-bottom:9px}
+.lr-preset-edit-row{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.lr-preset-tag{display:inline-flex;align-items:center;gap:5px;padding:6px 4px 6px 12px;border-radius:999px;background:var(--glass-strong);border:1px solid var(--border);font-family:ui-monospace,monospace;font-size:12px;font-weight:800;color:var(--ink)}
+.lr-preset-tag-x{width:18px;height:18px;border-radius:50%;background:rgba(209,75,106,.15);color:var(--red);border:none;cursor:pointer;font-size:12px;line-height:1;display:grid;place-items:center;font-family:initial}
+.lr-preset-tag-x:hover{background:rgba(209,75,106,.3)}
+.lr-preset-add{display:flex;gap:5px;align-items:center;margin-left:4px}
+.lr-preset-add input{width:64px;padding:6px 10px;border-radius:999px;background:var(--glass);border:1px solid var(--border);font-family:ui-monospace,monospace;font-size:12px;font-weight:700;color:var(--ink);outline:none}
+.lr-preset-add input:focus{border-color:var(--lav)}
+.lr-preset-add-btn{width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink);border:none;cursor:pointer;font-weight:800;font-size:16px;display:grid;place-items:center;font-family:initial;line-height:1}
+.lr-settings-actions{display:flex;gap:8px;margin-top:8px}
+.lr-settings-btn{flex:1;padding:12px 0;border-radius:14px;border:none;cursor:pointer;font-family:inherit;font-weight:800;font-size:12px;letter-spacing:.6px}
+.lr-settings-btn-primary{background:linear-gradient(135deg,#B794F6,#FF8FBE);color:#fff;box-shadow:0 4px 12px rgba(183,148,246,.3)}
+.lr-settings-btn-reset{background:var(--glass);color:var(--ink-2);border:1px solid var(--border)}
 
 /* ───── DESKTOP ───── */
 @media (min-width:1024px){
   .lr-phone{max-width:1100px;padding-bottom:80px}
   .lr-topbar{padding:14px 32px}
-  .lr-hero{padding:48px 32px 12px;max-width:760px;margin:0 auto}
+  .lr-hero{padding:36px 32px 12px;max-width:760px;margin:0 auto}
   .lr-hero h1{font-size:64px}
   .lr-hero-sub{font-size:17px}
   .lr-tabs{margin:0 32px 16px;max-width:540px;margin-left:auto;margin-right:auto}
@@ -232,59 +366,6 @@ const LR_CSS = `
   .lr-feed{max-width:1256px;grid-template-columns:repeat(3,1fr)}
 }
 
-/* ───── STAT ORBS (Wonderland signature) ───── */
-.lr-orbs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:0 18px;margin-bottom:16px;position:relative;z-index:2}
-.lr-orb{position:relative;padding:12px 6px 11px;border-radius:20px;text-align:center;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);overflow:hidden;animation:lrRise .5s cubic-bezier(.2,.9,.2,1) backwards}
-.lr-orb::before{content:'';position:absolute;inset:0;border-radius:20px;opacity:.35;pointer-events:none}
-.lr-orb.lr-orb-1::before{background:radial-gradient(ellipse at top,#FFB088,transparent 70%)}
-.lr-orb.lr-orb-2::before{background:radial-gradient(ellipse at top,#FF8FBE,transparent 70%)}
-.lr-orb.lr-orb-3::before{background:radial-gradient(ellipse at top,#7FFFD4,transparent 70%)}
-.lr-orb.lr-orb-4::before{background:radial-gradient(ellipse at top,#FFD46B,transparent 70%)}
-.lr-orb-emoji{font-size:18px;margin-bottom:2px;display:block;position:relative;z-index:1;line-height:1}
-.lr-orb-val{font-family:"Instrument Serif",serif;font-size:18px;line-height:1;position:relative;z-index:1;color:var(--ink)}
-.lr-orb-val.lr-orb-mono{font-family:ui-monospace,monospace;font-weight:800;font-size:14px}
-.lr-orb-lbl{font-size:8px;letter-spacing:1.4px;text-transform:uppercase;color:var(--ink-2);font-weight:700;margin-top:3px;position:relative;z-index:1}
-
-/* ───── FEATURED "JUST HATCHED" CARD ───── */
-.lr-feature{position:relative;margin:0 18px 16px;padding:18px 16px 16px;border-radius:28px;background:linear-gradient(135deg,rgba(255,255,255,.85),rgba(255,176,136,.35) 60%,rgba(255,212,107,.3));border:1px solid rgba(255,176,136,.5);backdrop-filter:blur(14px);overflow:hidden;box-shadow:0 10px 36px rgba(255,176,136,.25);animation:lrPopIn .55s cubic-bezier(.2,1.3,.4,1) backwards;z-index:2}
-.lr-feature::after{content:'';position:absolute;top:-60%;left:-40%;width:60%;height:300%;background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent);transform:rotate(20deg);animation:lrShimmerSlide 9s ease-in-out infinite}
-.lr-feature-badge{position:absolute;top:14px;right:14px;display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:linear-gradient(90deg,#FFB088,#FFD46B);color:#fff;font-size:10px;font-weight:800;letter-spacing:1px;box-shadow:0 4px 10px rgba(255,176,136,.45);z-index:3}
-.lr-feature-badge .lr-egg{display:inline-block;animation:lrPulseScale 1.6s ease-in-out infinite;font-size:14px}
-.lr-feature-head{display:flex;align-items:center;gap:14px;margin-bottom:14px;position:relative;z-index:2}
-.lr-feature-avatar{width:60px;height:60px;border-radius:50%;padding:3px;flex-shrink:0;background:conic-gradient(from 0deg,#FFB088,#FFD46B,#FF8FBE,#FFB088);box-shadow:0 8px 20px rgba(255,176,136,.4)}
-.lr-feature-avatar .lr-inner{width:100%;height:100%;border-radius:50%;display:grid;place-items:center;font-size:26px;background:linear-gradient(135deg,#FFEFE0,#FFD9C9);overflow:hidden}
-.lr-feature-avatar .lr-inner img{width:100%;height:100%;object-fit:cover;border-radius:50%}
-.lr-feature-name{flex:1;min-width:0}
-.lr-feature-sym{font-family:"Instrument Serif",serif;font-size:30px;line-height:1;font-style:italic}
-.lr-feature-sub{font-size:11px;color:var(--ink-2);font-weight:600;margin-top:3px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.lr-feature-age{font-family:ui-monospace,monospace;font-size:11px;font-weight:800;color:var(--ink);background:rgba(255,255,255,.7);padding:4px 10px;border-radius:999px;margin-top:5px;display:inline-block;letter-spacing:.5px}
-.lr-feature-actions{display:flex;gap:7px;position:relative;z-index:2}
-.lr-feature-btn{flex:1;border:none;cursor:pointer;padding:13px 0;border-radius:16px;font-family:inherit;font-weight:800;font-size:13px;letter-spacing:.5px;color:#fff;background:linear-gradient(135deg,#FFB088,#FFD46B);box-shadow:0 6px 16px rgba(255,176,136,.45);transition:transform .12s cubic-bezier(.2,1.3,.4,1)}
-.lr-feature-btn:active{transform:scale(.96)}
-.lr-feature-btn:disabled{opacity:.55;cursor:not-allowed}
-.lr-feature-btn.lr-feature-skip{background:rgba(255,255,255,.75);color:var(--ink);box-shadow:none;border:1px solid var(--border);flex:0 0 auto;padding:0 16px;font-size:11px}
-
-/* ───── CARD TINT VARIANTS (rotate through palette) ───── */
-.lr-card.lr-tint-0{background:linear-gradient(135deg,rgba(255,143,190,.18),var(--glass) 60%)}
-.lr-card.lr-tint-1{background:linear-gradient(135deg,rgba(127,255,212,.18),var(--glass) 60%)}
-.lr-card.lr-tint-2{background:linear-gradient(135deg,rgba(183,148,246,.18),var(--glass) 60%)}
-.lr-card.lr-tint-3{background:linear-gradient(135deg,rgba(160,231,255,.18),var(--glass) 60%)}
-.lr-card.lr-tint-4{background:linear-gradient(135deg,rgba(255,212,107,.18),var(--glass) 60%)}
-.lr-card.lr-fresh{background:linear-gradient(135deg,rgba(255,176,136,.22),var(--glass) 60%) !important}
-
-/* ───── CONFETTI BURST (on successful buy) ───── */
-.lr-confetti{position:fixed;inset:0;pointer-events:none;z-index:200;overflow:hidden}
-.lr-confetti-piece{position:absolute;top:50%;left:50%;width:8px;height:14px;border-radius:2px;animation:lrConfetti 1.6s cubic-bezier(.15,.9,.3,1) forwards}
-@keyframes lrConfetti{
-  0%{transform:translate(-50%,-50%) rotate(0);opacity:1}
-  100%{transform:translate(calc(-50% + var(--dx,0px)),calc(-50% + var(--dy,400px))) rotate(var(--dr,720deg));opacity:0}
-}
-
-/* ───── PLAYFUL HERO FLOURISH ───── */
-.lr-hero h1 .lr-italic{font-style:italic;font-weight:400}
-.lr-hero h1 .lr-sparkle{display:inline-block;font-family:initial;animation:lrPulse 1.8s ease-in-out infinite}
-
-/* ───── small phones ───── */
 @media (max-width:430px){
   .lr-hero{padding:24px 14px 8px}
   .lr-hero h1{font-size:36px}
@@ -315,38 +396,60 @@ function useLrCSS() {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   CONFIG — same constants as Wonderland
+   CONFIG
    ════════════════════════════════════════════════════════════════════ */
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS    = 300;  // 3% total fee
-const REF_BPS    = 100;  // 1% to referrer (3% - 1% = 2% to platform when referred)
-const SLIPPAGE_BPS = 1500; // 15% — memecoins move
-const PRIORITY_FEE_MICROLAMPORTS = 100_000;
+const FEE_BPS    = 300;
+const REF_BPS    = 100;
+const SLIPPAGE_BPS = 1500;
+const SOL_RESERVE = 0.005;
 
-const RPC_URL =
-  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC) ||
-  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_HELIUS_API_KEY
+const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
+const DEFAULT_SELL_PRESETS = [25, 50, 100];
+
+/* RPC pool — same pattern as SwapWidget */
+const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
+const RPC_POOL = [
+  RUNTIME_CFG.rpc,
+  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC) || null,
+  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_HELIUS_API_KEY)
     ? `https://mainnet.helius-rpc.com/?api-key=${process.env.REACT_APP_HELIUS_API_KEY}`
-    : 'https://api.mainnet-beta.solana.com');
+    : null,
+  'https://solana-rpc.publicnode.com',
+  'https://solana.drpc.org',
+  'https://rpc.ankr.com/solana',
+  'https://api.mainnet-beta.solana.com',
+].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
 
-const POLL_RECENT  = 8_000;   // poll Jupiter recent every 8s
+const BAL_COMMITMENT = 'processed';
+
+const _connCache = new Map();
+const getConn = (url, commitment) => {
+  const key = url + '|' + commitment;
+  let c = _connCache.get(key);
+  if (!c) { c = new Connection(url, commitment); _connCache.set(key, c); }
+  return c;
+};
+
+const rpcRace = (label, op, commitment = BAL_COMMITMENT) => {
+  const conns = RPC_POOL.map(u => getConn(u, commitment));
+  return Promise.any(conns.map((c, i) =>
+    op(c).catch(e => {
+      if (typeof console !== 'undefined') console.warn(`[lr-rpc] ${label} failed on ${RPC_POOL[i]}:`, e?.message);
+      throw e;
+    })
+  )).catch(() => { throw new Error(`${label}: all RPCs failed`); });
+};
+
+const POLL_RECENT  = 8_000;
 const POLL_SOL     = 30_000;
-const POLL_BALANCE = 12_000;  // user balance refresh
+const POLL_BALANCE = 12_000;
 const PUMP_WSS_URL = 'wss://pumpportal.fun/api/data';
 const DEXSCREENER_TOKEN_URL = (mint) => `https://api.dexscreener.com/latest/dex/tokens/${mint}`;
 
-/* ────── PumpPortal pre-grad trade endpoint ────── */
-const PUMPFUN_TRADE_URL          = 'https://pumpportal.fun/api/trade-local';
-const PUMPFUN_SLIPPAGE_PCT       = 15;        // matches Jupiter's 1500 bps
-const PUMPFUN_PRIORITY_FEE_SOL   = 0.00005;   // SOL — pump.fun expects a float, not microlamports
-const COMPUTE_BUDGET_PROGRAM_ID  = new PublicKey('ComputeBudget111111111111111111111111111111');
-
-const BUY_PRESETS  = [0.25, 0.5, 1, 2];
-const SELL_PRESETS = [25, 50, 100];
-
 /* ════════════════════════════════════════════════════════════════════
-   HELPERS — copied from Wonderland to keep parity
+   HELPERS
    ════════════════════════════════════════════════════════════════════ */
 const EMOJI_POOL = ['🐸','🐶','🐕','🐱','😼','🚀','💎','🍭','💨','🎴','🌈','⚡','🔥','🦊','🐻'];
 function emojiFor(sym = '') {
@@ -368,11 +471,27 @@ function formatPrice(p) {
   if (p >= 1)      return '$' + p.toFixed(4);
   if (p >= 0.01)   return '$' + p.toFixed(5);
   if (p >= 0.0001) return '$' + p.toFixed(6);
+  if (p >= 0.00000001) return '$' + p.toFixed(9);
   return '$' + p.toExponential(2);
 }
 function formatPct(p) {
   if (!Number.isFinite(p)) return '0%';
   return (p >= 0 ? '+' : '') + p.toFixed(p < 10 && p > -10 ? 2 : 1) + '%';
+}
+function formatSol(n) {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 1000) return n.toFixed(0);
+  if (n >= 1)    return n.toFixed(3);
+  if (n >= 0.001) return n.toFixed(4);
+  return n.toFixed(6);
+}
+function formatTokens(n) {
+  if (!Number.isFinite(n) || n <= 0) return '0';
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return Math.round(n).toLocaleString();
+  if (n >= 1)   return n.toFixed(2);
+  return n.toPrecision(3);
 }
 function ageMs(iso) { return iso ? Date.now() - new Date(iso).getTime() : Infinity; }
 function ageStr(ms) {
@@ -383,13 +502,6 @@ function ageStr(ms) {
   const h = m / 60;
   if (h < 24) return Math.round(h) + 'h';
   return Math.round(h / 24) + 'd';
-}
-function timeAgo(ms) {
-  const s = Math.max(0, Math.floor((Date.now() - ms) / 1000));
-  if (s < 60)    return s + 's ago';
-  if (s < 3600)  return Math.floor(s / 60) + 'm ago';
-  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
-  return Math.floor(s / 86400) + 'd ago';
 }
 
 function signalScore(t) {
@@ -423,6 +535,7 @@ function normalize(t) {
     liquidity: Number(t.liquidity || 0),
     decimals:  Number(t.decimals ?? 6),
     source:    t.source || 'jupiter',
+    preGrad:   false,
   };
 }
 
@@ -447,12 +560,37 @@ const friendlyError = (err) => {
   if (m.includes('rate'))              return 'Rate limited.';
   if (m.includes('no route') || m.includes('could not find any route')) return 'No route yet — too fresh.';
   if (m.includes('too large'))         return 'Route too complex. Try smaller.';
-  if (m.includes('pump.fun'))          return err.message.slice(0, 80);
   return err?.message?.slice(0, 80) || 'Swap failed.';
 };
 
 /* ════════════════════════════════════════════════════════════════════
-   SIGNAL / RISK BADGE DERIVATION
+   TWITTER SHARE — pre-fills the tweet + uses ?ref= for referral attribution
+   ════════════════════════════════════════════════════════════════════ */
+function buildShareUrl(referrerAddr) {
+  if (typeof window === 'undefined') return '';
+  try {
+    const u = new URL(window.location.origin + window.location.pathname);
+    if (referrerAddr) u.searchParams.set('ref', referrerAddr);
+    return u.toString();
+  } catch { return ''; }
+}
+function buildTweetText({ mode, token, solAmount, outAmount, percentage }) {
+  if (mode === 'buy') {
+    const recv = outAmount > 0 ? `\n→ ${formatTokens(outAmount)} $${token.sym}` : '';
+    return `Just aped ${solAmount} SOL into $${token.sym} on Wonderland Radar 🍭${recv}\n\nFresh launch sniped:`;
+  }
+  const got = outAmount > 0 ? `\n→ ${formatSol(outAmount)} SOL back` : '';
+  return `Just sold ${percentage}% of my $${token.sym} on Wonderland Radar 💸${got}\n\nFresh launches every minute:`;
+}
+function openTwitterShare(text, url) {
+  if (typeof window === 'undefined') return;
+  const params = new URLSearchParams({ text });
+  if (url) params.set('url', url);
+  window.open(`https://twitter.com/intent/tweet?${params}`, '_blank', 'noopener,noreferrer,width=600,height=500');
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   SIGNAL / RISK BADGES
    ════════════════════════════════════════════════════════════════════ */
 function deriveSignalBadges(t) {
   const out = [];
@@ -471,9 +609,6 @@ function deriveRiskBadge(t) {
   return                    { emoji: '🟢', label: 'Healthy Liquidity', cls: 'lr-risk-good' };
 }
 
-/* ════════════════════════════════════════════════════════════════════
-   TOKEN ICON
-   ════════════════════════════════════════════════════════════════════ */
 function TokenIcon({ token }) {
   const [errored, setErrored] = useState(false);
   if (!token?.icon || errored) return <span>{token?.emoji || '🪙'}</span>;
@@ -481,7 +616,7 @@ function TokenIcon({ token }) {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   PUMP.FUN WSS + DEXSCREENER ENRICHMENT (isolated lane — no backend)
+   PUMP.FUN WSS STREAM (bonding-curve price computed on arrival)
    ════════════════════════════════════════════════════════════════════ */
 function usePumpFunStream(enabled) {
   const [tokens, setTokens] = useState([]);
@@ -489,7 +624,6 @@ function usePumpFunStream(enabled) {
   const wsRef = useRef(null);
   const pendingEnrich = useRef(new Set());
 
-  // DexScreener enrichment, queued + soft-rate-limited
   const enrich = useCallback(async (mint) => {
     if (pendingEnrich.current.has(mint)) return;
     pendingEnrich.current.add(mint);
@@ -497,22 +631,10 @@ function usePumpFunStream(enabled) {
       const r = await fetch(DEXSCREENER_TOKEN_URL(mint));
       if (!r.ok) return;
       const d = await r.json();
-      // CRITICAL: DexScreener's /tokens/{addr} returns pairs where the addr can be
-      // either base or quote. priceUsd / priceChange always refer to baseToken.
-      // We must ONLY use pairs where baseToken.address === mint — otherwise we'd
-      // attribute another token's price (e.g. SOL's) to our token.
-      const pairs = (d?.pairs || [])
-        .filter(p => p.chainId === 'solana' && p.baseToken?.address === mint);
+      const pairs = (d?.pairs || []).filter(p => p.chainId === 'solana' && p.baseToken?.address === mint);
       if (pairs.length === 0) return;
-      // Graduated = there's a real DEX pair (Raydium, Meteora, pump-amm post-grad, etc.).
-      // While pre-grad, DexScreener may show the pump bonding curve itself with dexId 'pumpfun' / 'pump'.
-      const graduated = pairs.some(
-        p => p.dexId && p.dexId !== 'pumpfun' && p.dexId !== 'pump'
-      );
-      const pair = pairs.sort(
-        (a, b) => Number(b.liquidity?.usd || 0) - Number(a.liquidity?.usd || 0)
-      )[0];
-      // Belt-and-suspenders: address really ours after JSON round-trip
+      const graduated = pairs.some(p => p.dexId && p.dexId !== 'pumpfun' && p.dexId !== 'pump');
+      const pair = pairs.sort((a, b) => Number(b.liquidity?.usd || 0) - Number(a.liquidity?.usd || 0))[0];
       if (pair.baseToken.address !== mint) return;
       const enriched = {
         price:     Number(pair.priceUsd || 0),
@@ -522,7 +644,7 @@ function usePumpFunStream(enabled) {
         liquidity: Number(pair.liquidity?.usd || 0),
         mcap:      Number(pair.marketCap || pair.fdv || 0),
         enriched:  true,
-        preGrad:   !graduated,   // flip when token has graduated to Raydium/etc → Jupiter route works
+        preGrad:   !graduated,
       };
       setTokens(prev => prev.map(t => t.mint === mint ? { ...t, ...enriched } : t));
     } catch {} finally {
@@ -556,38 +678,43 @@ function usePumpFunStream(enabled) {
         try { msg = JSON.parse(evt.data); } catch { return; }
         if (!msg || msg.txType !== 'create' || !msg.mint) return;
 
+        const vSol    = Number(msg.vSolInBondingCurve   || 0);
+        const vTokens = Number(msg.vTokensInBondingCurve || 0);
+        const priceSol = (vSol > 0 && vTokens > 0) ? vSol / vTokens : 0;
+        const mcapSol  = Number(msg.marketCapSol || 0);
+
         const tok = {
-          mint:       msg.mint,
-          sym:        msg.symbol || '???',
-          name:       msg.name || msg.symbol || 'Unknown',
-          emoji:      emojiFor(msg.symbol || ''),
-          icon:       null, // metadata URI fetch is too slow inline; emoji fallback is fine
-          decimals:   6, // pump.fun mints are 6 decimals
-          price:      0,
-          change:     0,
-          mcap:       0,                                       // USD — filled by DexScreener enrichment when token graduates
-          mcapSol:    Number(msg.marketCapSol || 0),           // pre-grad cap in SOL
-          volume24h:  0,
-          holders:    0,
-          liquidity:  0,                                       // USD — filled by DexScreener enrichment
-          liquiditySol: Number(msg.vSolInBondingCurve || 0),   // pre-grad bonding-curve liquidity in SOL
-          createdAt:  Date.now(),
-          ageMs:      0,
-          age:        '0s',
-          source:     'pumpfun',
-          enriched:   false,
-          preGrad:    true,
+          mint:         msg.mint,
+          sym:          msg.symbol || '???',
+          name:         msg.name || msg.symbol || 'Unknown',
+          emoji:        emojiFor(msg.symbol || ''),
+          icon:         null,
+          decimals:     6,
+          price:        0,
+          priceSol,
+          change:       0,
+          mcap:         0,
+          mcapSol,
+          volume24h:    0,
+          holders:      0,
+          liquidity:    0,
+          liquiditySol: vSol,
+          createdAt:    Date.now(),
+          ageMs:        0,
+          age:          '0s',
+          source:       'pumpfun',
+          enriched:     false,
+          preGrad:      true,
         };
 
         setTokens(prev => {
           if (prev.some(t => t.mint === tok.mint)) return prev;
           return [tok, ...prev].slice(0, 60);
         });
-        // queue enrichment after a tiny delay so we don't hammer DexScreener
         setTimeout(() => { if (alive) enrich(msg.mint); }, 800);
       };
 
-      ws.onerror = () => { /* swallow — onclose handles reconnect */ };
+      ws.onerror = () => {};
       ws.onclose = () => {
         setConnected(false);
         wsRef.current = null;
@@ -610,10 +737,6 @@ function usePumpFunStream(enabled) {
     };
   }, [enabled, enrich]);
 
-  // Re-enrich tokens still missing DexScreener data, and tick age strings.
-  // Retry window: 90s after creation up to 5 min. Past 5 min without enrichment,
-  // assume the token won't appear on DexScreener (most pump.fun launches never
-  // graduate to Raydium) and stop trying — avoids saturating the 300/min limit.
   useEffect(() => {
     const id = setInterval(() => {
       let snapshot = [];
@@ -634,9 +757,474 @@ function usePumpFunStream(enabled) {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   LAUNCH CARD
+   PRESETS — localStorage-backed buy/sell amounts (used inside trade modal)
    ════════════════════════════════════════════════════════════════════ */
-function LaunchCard({ token, owned, busy, onBuy, onSell, isFresh, tintIndex = 0 }) {
+function usePresets() {
+  const readStored = (key, fallback) => {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) return fallback;
+      const arr = JSON.parse(raw);
+      if (!Array.isArray(arr) || arr.length === 0) return fallback;
+      const cleaned = arr.map(Number).filter(v => Number.isFinite(v) && v > 0);
+      return cleaned.length > 0 ? cleaned : fallback;
+    } catch { return fallback; }
+  };
+  const [buyPresets,  setBuyPresets]  = useState(() => readStored('lr_buy_presets',  DEFAULT_BUY_PRESETS));
+  const [sellPresets, setSellPresets] = useState(() => readStored('lr_sell_presets', DEFAULT_SELL_PRESETS));
+  useEffect(() => { try { localStorage.setItem('lr_buy_presets',  JSON.stringify(buyPresets));  } catch {} }, [buyPresets]);
+  useEffect(() => { try { localStorage.setItem('lr_sell_presets', JSON.stringify(sellPresets)); } catch {} }, [sellPresets]);
+  return { buyPresets, setBuyPresets, sellPresets, setSellPresets };
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   SETTINGS MODAL — edit preset values
+   ════════════════════════════════════════════════════════════════════ */
+function SettingsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets, onClose }) {
+  const [buyDraft,  setBuyDraft]  = useState(buyPresets);
+  const [sellDraft, setSellDraft] = useState(sellPresets);
+  const [newBuy,  setNewBuy]  = useState('');
+  const [newSell, setNewSell] = useState('');
+
+  const addBuy = () => {
+    const v = parseFloat(newBuy);
+    if (!Number.isFinite(v) || v <= 0) return;
+    if (buyDraft.includes(v)) { setNewBuy(''); return; }
+    setBuyDraft([...buyDraft, v].sort((a, b) => a - b));
+    setNewBuy('');
+  };
+  const addSell = () => {
+    const v = parseFloat(newSell);
+    if (!Number.isFinite(v) || v <= 0 || v > 100) return;
+    if (sellDraft.includes(v)) { setNewSell(''); return; }
+    setSellDraft([...sellDraft, v].sort((a, b) => a - b));
+    setNewSell('');
+  };
+  const removeBuy  = (v) => setBuyDraft(buyDraft.filter(x => x !== v));
+  const removeSell = (v) => setSellDraft(sellDraft.filter(x => x !== v));
+
+  const save = () => {
+    setBuyPresets(buyDraft.length > 0 ? buyDraft : DEFAULT_BUY_PRESETS);
+    setSellPresets(sellDraft.length > 0 ? sellDraft : DEFAULT_SELL_PRESETS);
+    onClose();
+  };
+  const reset = () => {
+    setBuyDraft(DEFAULT_BUY_PRESETS);
+    setSellDraft(DEFAULT_SELL_PRESETS);
+  };
+
+  return (
+    <div className="lr-settings-overlay" onClick={onClose}>
+      <div className="lr-settings-card" onClick={(e) => e.stopPropagation()}>
+        <div className="lr-settings-head">
+          <h3 className="lr-settings-title">Presets</h3>
+          <button className="lr-settings-close" onClick={onClose} aria-label="Close">×</button>
+        </div>
+        <div className="lr-settings-section">
+          <div className="lr-settings-section-label">Buy amounts (SOL)</div>
+          <div className="lr-preset-edit-row">
+            {buyDraft.map(v => (
+              <span key={v} className="lr-preset-tag">
+                {v}
+                <button className="lr-preset-tag-x" onClick={() => removeBuy(v)} aria-label={`Remove ${v}`}>×</button>
+              </span>
+            ))}
+            <span className="lr-preset-add">
+              <input type="number" step="0.01" min="0" placeholder="0.5" value={newBuy}
+                onChange={(e) => setNewBuy(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addBuy(); }} />
+              <button className="lr-preset-add-btn" onClick={addBuy} aria-label="Add">+</button>
+            </span>
+          </div>
+        </div>
+        <div className="lr-settings-section">
+          <div className="lr-settings-section-label">Sell percentages (%)</div>
+          <div className="lr-preset-edit-row">
+            {sellDraft.map(v => (
+              <span key={v} className="lr-preset-tag">
+                {v}%
+                <button className="lr-preset-tag-x" onClick={() => removeSell(v)} aria-label={`Remove ${v}`}>×</button>
+              </span>
+            ))}
+            <span className="lr-preset-add">
+              <input type="number" step="1" min="1" max="100" placeholder="50" value={newSell}
+                onChange={(e) => setNewSell(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') addSell(); }} />
+              <button className="lr-preset-add-btn" onClick={addSell} aria-label="Add">+</button>
+            </span>
+          </div>
+        </div>
+        <div className="lr-settings-actions">
+          <button className="lr-settings-btn lr-settings-btn-reset" onClick={reset}>Reset</button>
+          <button className="lr-settings-btn lr-settings-btn-primary" onClick={save}>Save</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   TRADE MODAL — opens when user taps BUY or SELL on a card.
+   Two-row SwapWidget-style layout, live quote, confirm → wallet sig.
+   ════════════════════════════════════════════════════════════════════ */
+function TradeModal({
+  token, initialMode, onClose, onConfirm,
+  buyPresets, sellPresets,
+  solBalance, tokenBalance,
+  solPrice,
+}) {
+  const [mode, setMode] = useState(initialMode || 'buy');
+  // For buy: amount is in SOL. For sell: amount is in percentage (1–100).
+  const [amount, setAmount] = useState('');
+  const [quote, setQuote] = useState(null);
+  const [quoting, setQuoting] = useState(false);
+  const [quoteError, setQuoteError] = useState(null);
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState(null);
+  const quoteAbortRef = useRef(null);
+
+  // Reset state when switching mode
+  useEffect(() => {
+    setAmount('');
+    setQuote(null);
+    setQuoteError(null);
+    setError(null);
+  }, [mode]);
+
+  const isBuy = mode === 'buy';
+  const presets = isBuy ? buyPresets : sellPresets;
+
+  // Compute the raw amount to swap (in lamports for buy, in raw token units for sell)
+  const swapParams = useMemo(() => {
+    if (!amount) return null;
+    const n = Number(amount);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    if (isBuy) {
+      const rawAmount = BigInt(Math.floor(n * 1e9)).toString();
+      return {
+        rawAmount,
+        inputMint:  SOL_MINT,
+        outputMint: token.mint,
+        inputDecimals: 9,
+        outputDecimals: token.decimals || 6,
+        solAmount: n,
+      };
+    }
+    if (!tokenBalance || !tokenBalance.amount || BigInt(tokenBalance.amount) <= 0n) return null;
+    const pct = Math.min(100, Math.max(0.01, n));
+    const rawAmount = ((BigInt(tokenBalance.amount) * BigInt(Math.floor(pct * 100))) / 10000n).toString();
+    if (BigInt(rawAmount) <= 0n) return null;
+    return {
+      rawAmount,
+      inputMint:  token.mint,
+      outputMint: SOL_MINT,
+      inputDecimals: tokenBalance.decimals || token.decimals || 6,
+      outputDecimals: 9,
+      percentage: pct,
+    };
+  }, [amount, isBuy, token, tokenBalance]);
+
+  // Live quote — debounced fetch to /api/jupiter/build
+  useEffect(() => {
+    if (!swapParams) {
+      setQuote(null); setQuoteError(null); return;
+    }
+    if (quoteAbortRef.current) quoteAbortRef.current.abort();
+    const ac = new AbortController();
+    quoteAbortRef.current = ac;
+    setQuoting(true);
+    setQuoteError(null);
+
+    const t = setTimeout(async () => {
+      try {
+        const net = (BigInt(swapParams.rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n;
+        if (net <= 0n) { setQuote(null); setQuoting(false); return; }
+        const params = new URLSearchParams({
+          inputMint:   swapParams.inputMint,
+          outputMint:  swapParams.outputMint,
+          amount:      net.toString(),
+          slippageBps: String(SLIPPAGE_BPS),
+          taker:       '11111111111111111111111111111111',
+        });
+        const r = await fetch(`/api/jupiter/build?${params}`, { signal: ac.signal });
+        if (!r.ok) {
+          const body = await r.json().catch(() => ({}));
+          throw new Error(body.error || `Quote failed (${r.status})`);
+        }
+        const data = await r.json();
+        if (!ac.signal.aborted) {
+          setQuote(data);
+          setQuoteError(null);
+        }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        if (!ac.signal.aborted) {
+          setQuote(null);
+          setQuoteError(friendlyError(e));
+        }
+      } finally {
+        if (!ac.signal.aborted) setQuoting(false);
+      }
+    }, 300);
+
+    return () => { clearTimeout(t); ac.abort(); };
+  }, [swapParams]);
+
+  const outAmountUi = useMemo(() => {
+    if (!quote || !swapParams) return null;
+    return Number(quote.outAmount) / Math.pow(10, swapParams.outputDecimals);
+  }, [quote, swapParams]);
+
+  const priceImpact = useMemo(() => {
+    if (!quote || quote.priceImpactPct == null) return null;
+    const n = Number(quote.priceImpactPct);
+    return Number.isFinite(n) ? n * (Math.abs(n) <= 1 ? 100 : 1) : null;
+  }, [quote]);
+
+  const ownedUiAmount = tokenBalance?.uiAmount || 0;
+  const availSol = Math.max(0, (solBalance?.uiAmount || 0) - SOL_RESERVE);
+
+  const hasFunds = (() => {
+    if (!amount || Number(amount) <= 0) return false;
+    if (isBuy) return availSol >= Number(amount);
+    return ownedUiAmount > 0;
+  })();
+
+  const handleConfirm = async () => {
+    if (!swapParams || confirming) return;
+    setConfirming(true);
+    setError(null);
+    try {
+      const result = await onConfirm({
+        mode,
+        swapParams,
+        token,
+        outAmount: outAmountUi || 0,
+      });
+      // On success, parent shows the toast and closes the modal.
+      // If we got here without a thrown error, parent has handled it.
+      if (result?.closed !== false) {
+        // parent will close us; no further action
+      }
+    } catch (e) {
+      setError(friendlyError(e));
+      setConfirming(false);
+    }
+  };
+
+  const setMaxBuy = () => {
+    if (!isBuy) return;
+    const m = Math.max(0, availSol);
+    if (m > 0) setAmount(String(Number(m.toFixed(4))));
+  };
+
+  const confirmDisabled = confirming || quoting || !quote || !hasFunds || !!error;
+
+  return (
+    <div className="lr-trade-overlay" onClick={onClose}>
+      <div className="lr-trade-card" onClick={(e) => e.stopPropagation()}>
+        <button className="lr-trade-close" onClick={onClose} aria-label="Close">×</button>
+
+        <div className="lr-trade-head">
+          <div className="lr-trade-avatar">
+            <div className="lr-inner"><TokenIcon token={token} /></div>
+          </div>
+          <div className="lr-trade-token-info">
+            <div className="lr-trade-token-sym">${token.sym}</div>
+            <div className="lr-trade-token-sub">
+              {formatPrice(token.price)}
+              {Number.isFinite(token.change) && token.change !== 0 && (
+                <> · <span style={{ color: token.change < 0 ? 'var(--red)' : 'var(--green)' }}>
+                  {formatPct(token.change)}
+                </span></>
+              )}
+            </div>
+          </div>
+        </div>
+
+        <div className={'lr-trade-mode-tabs' + (mode === 'sell' ? ' lr-mode-sell' : '')}>
+          <div className="lr-trade-mode-indicator" />
+          <button
+            type="button"
+            className={'lr-trade-mode-tab' + (mode === 'buy' ? ' lr-active' : '')}
+            onClick={() => setMode('buy')}
+          >🍭 BUY</button>
+          <button
+            type="button"
+            className={'lr-trade-mode-tab' + (mode === 'sell' ? ' lr-active' : '')}
+            onClick={() => setMode('sell')}
+            disabled={!ownedUiAmount}
+            title={!ownedUiAmount ? `You don't own any ${token.sym}` : ''}
+            style={!ownedUiAmount ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
+          >💸 SELL</button>
+        </div>
+
+        <div className="lr-trade-body">
+          <div className="lr-trade-row">
+            <div className="lr-trade-row-top">
+              <span className="lr-trade-row-label">{isBuy ? 'You pay' : 'You sell'}</span>
+              <span className="lr-trade-row-bal">
+                {isBuy
+                  ? <>Wallet: <b>{formatSol(solBalance?.uiAmount || 0)} SOL</b></>
+                  : <>You own: <b>{formatTokens(ownedUiAmount)} ${token.sym}</b></>}
+                {isBuy && availSol > 0 && (
+                  <button className="lr-trade-max-btn" onClick={setMaxBuy}>MAX</button>
+                )}
+              </span>
+            </div>
+            <div className="lr-trade-row-mid">
+              <div className="lr-trade-token-chip">
+                {isBuy ? (
+                  <>
+                    <span className="lr-trade-token-chip-logo">◎</span>
+                    <span>SOL</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="lr-trade-token-chip-logo"><TokenIcon token={token} /></span>
+                    <span>{token.sym}</span>
+                  </>
+                )}
+              </div>
+              <input
+                type="text"
+                inputMode="decimal"
+                placeholder={isBuy ? '0.00' : '0'}
+                value={amount}
+                onChange={(e) => {
+                  const v = e.target.value.replace(/[^\d.]/g, '');
+                  const parts = v.split('.');
+                  if (parts.length > 2) return;
+                  // For sell, clamp to 100
+                  if (!isBuy && Number(v) > 100) { setAmount('100'); return; }
+                  setAmount(v);
+                }}
+                className="lr-trade-amount-input"
+              />
+            </div>
+            {!isBuy && amount && (
+              <div style={{
+                marginTop: 6, textAlign: 'right',
+                fontFamily: 'ui-monospace,monospace', fontSize: 10, fontWeight: 700,
+                color: 'var(--ink-2)', letterSpacing: '.4px',
+              }}>
+                {Math.min(100, Math.max(0, Number(amount) || 0)).toFixed(0)}% of holding
+              </div>
+            )}
+          </div>
+
+          <div className={'lr-trade-presets ' + (isBuy ? 'lr-mode-buy' : 'lr-mode-sell')}>
+            {presets.map(v => {
+              const active = Number(amount) === v;
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  className={'lr-trade-preset' + (active ? ' lr-active' : '')}
+                  onClick={() => setAmount(String(v))}
+                >
+                  {isBuy ? `${v} SOL` : `${v}%`}
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="lr-trade-row">
+            <div className="lr-trade-row-top">
+              <span className="lr-trade-row-label">{isBuy ? 'You receive' : 'You receive'}</span>
+            </div>
+            <div className="lr-trade-row-mid">
+              <div className="lr-trade-token-chip">
+                {isBuy ? (
+                  <>
+                    <span className="lr-trade-token-chip-logo"><TokenIcon token={token} /></span>
+                    <span>{token.sym}</span>
+                  </>
+                ) : (
+                  <>
+                    <span className="lr-trade-token-chip-logo">◎</span>
+                    <span>SOL</span>
+                  </>
+                )}
+              </div>
+              <input
+                type="text"
+                readOnly
+                placeholder={quoting ? '…' : '0.00'}
+                value={outAmountUi != null
+                  ? (isBuy ? formatTokens(outAmountUi) : formatSol(outAmountUi))
+                  : (quoting ? '…' : '')}
+                className="lr-trade-amount-input"
+              />
+            </div>
+          </div>
+
+          {quote && swapParams && Number(amount) > 0 && (
+            <div className="lr-trade-details">
+              <div className="lr-trade-detail-row">
+                <span>Rate</span>
+                <span className="lr-trade-detail-val">
+                  {isBuy
+                    ? `1 SOL ≈ ${formatTokens((outAmountUi || 0) / Number(amount))} ${token.sym}`
+                    : `${formatTokens(Number(quote.inAmount) / Math.pow(10, swapParams.inputDecimals))} ${token.sym} → ${formatSol(outAmountUi || 0)} SOL`}
+                </span>
+              </div>
+              <div className="lr-trade-detail-row">
+                <span>Price impact</span>
+                <span className={'lr-trade-detail-val ' +
+                  (priceImpact == null ? '' : priceImpact > 5 ? 'lr-bad' : priceImpact > 1 ? 'lr-warn' : 'lr-good')}>
+                  {priceImpact != null ? `${priceImpact.toFixed(2)}%` : '—'}
+                </span>
+              </div>
+              <div className="lr-trade-detail-row">
+                <span>Slippage</span>
+                <span className="lr-trade-detail-val">{(SLIPPAGE_BPS / 100).toFixed(0)}%</span>
+              </div>
+              <div className="lr-trade-detail-row">
+                <span>Fee</span>
+                <span className="lr-trade-detail-val">{(FEE_BPS / 100).toFixed(1)}% baked in</span>
+              </div>
+            </div>
+          )}
+
+          {(quoteError || error) && (
+            <div className="lr-trade-banner lr-trade-banner-error">
+              {error || quoteError}
+            </div>
+          )}
+
+          <button
+            type="button"
+            className={'lr-trade-confirm ' + (isBuy ? 'lr-mode-buy' : 'lr-mode-sell')}
+            disabled={confirmDisabled}
+            onClick={handleConfirm}
+          >
+            {confirming
+              ? (isBuy ? 'Buying…' : 'Selling…')
+              : !amount || Number(amount) <= 0
+                ? (isBuy ? 'Enter SOL amount' : 'Enter percentage')
+                : !hasFunds
+                  ? (isBuy ? 'Insufficient SOL' : `No ${token.sym} to sell`)
+                  : quoting
+                    ? 'Getting quote…'
+                    : !quote
+                      ? 'No route'
+                      : (isBuy ? `🍭 Buy ${amount} SOL of $${token.sym}` : `💸 Sell ${Math.min(100, Number(amount))}% of $${token.sym}`)}
+          </button>
+
+          <p className="lr-trade-footer">
+            Powered by <b style={{ color: 'var(--ink)' }}>Jupiter</b> · Your wallet stays yours
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   LAUNCH CARD — just BUY and SELL buttons (no preset chips)
+   ════════════════════════════════════════════════════════════════════ */
+function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
   const signals = useMemo(() => deriveSignalBadges(token), [token]);
   const risk    = useMemo(() => deriveRiskBadge(token), [token]);
   const ownedBalance = owned?.uiAmount || 0;
@@ -645,14 +1233,7 @@ function LaunchCard({ token, owned, busy, onBuy, onSell, isFresh, tintIndex = 0 
   const tintClass = isFresh ? ' lr-fresh' : ' lr-tint-' + tintIndex;
 
   return (
-    <div className={'lr-card' + tintClass + (busy ? ' lr-busy' : '')} style={{ animationDelay: (tintIndex * 0.04) + 's' }}>
-      {busy && (
-        <div className="lr-card-spinner">
-          <div className="lr-spinner-ring" />
-          <div className="lr-spinner-label">{busy}</div>
-        </div>
-      )}
-
+    <div className={'lr-card' + tintClass} style={{ animationDelay: (tintIndex * 0.04) + 's' }}>
       <div className="lr-card-head">
         <div className={'lr-mini-avatar' + (isFresh ? ' lr-fresh-avatar' : '')}>
           <div className="lr-inner"><TokenIcon token={token} /></div>
@@ -661,13 +1242,13 @@ function LaunchCard({ token, owned, busy, onBuy, onSell, isFresh, tintIndex = 0 
           <div className="lr-card-sym-row">
             <span className="lr-card-sym">${token.sym}</span>
             <span className={'lr-age-pill' + (veryFresh ? ' lr-very-fresh' : '')}>
-              {token.age || (token.preGrad ? 'pre-grad' : 'new')}
+              {token.age || 'new'}
             </span>
           </div>
           <div className="lr-card-name">{token.name}</div>
         </div>
         <div className="lr-card-right">
-          <div className="lr-card-price">{token.price > 0 ? formatPrice(token.price) : (token.preGrad ? 'bonding' : '—')}</div>
+          <div className="lr-card-price">{formatPrice(token.price)}</div>
           {Number.isFinite(token.change) && token.change !== 0 ? (
             <div className={'lr-card-change' + (token.change < 0 ? ' lr-down' : '')}>{formatPct(token.change)}</div>
           ) : null}
@@ -677,11 +1258,11 @@ function LaunchCard({ token, owned, busy, onBuy, onSell, isFresh, tintIndex = 0 
       <div className="lr-metrics">
         <div className="lr-metric">
           <div className="lr-metric-l">Liq</div>
-          <div className="lr-metric-v">{token.liquidity > 0 ? '$' + format(token.liquidity) : (token.liquiditySol ? format(token.liquiditySol) + ' SOL' : '—')}</div>
+          <div className="lr-metric-v">{token.liquidity > 0 ? '$' + format(token.liquidity) : '—'}</div>
         </div>
         <div className="lr-metric">
-          <div className="lr-metric-l">Vol 24h</div>
-          <div className="lr-metric-v">{token.volume24h > 0 ? '$' + format(token.volume24h) : '—'}</div>
+          <div className="lr-metric-l">MCap</div>
+          <div className="lr-metric-v">{token.mcap > 0 ? '$' + format(token.mcap) : '—'}</div>
         </div>
         <div className="lr-metric">
           <div className="lr-metric-l">Holders</div>
@@ -706,46 +1287,29 @@ function LaunchCard({ token, owned, busy, onBuy, onSell, isFresh, tintIndex = 0 
         </div>
       )}
 
-      <div className="lr-action-mode">
-        {ownedBalance > 0 ? (
-          <>
-            <div className="lr-owned-bar">
-              <span>YOU OWN</span>
-              <b>{format(ownedBalance)} ${token.sym}</b>
-              <span style={{ marginLeft: 'auto', color: 'var(--ink-2)' }}>≈ ${format(ownedUsd)}</span>
-            </div>
-            <div className="lr-action-row">
-              {SELL_PRESETS.map(pct => (
-                <button
-                  key={pct}
-                  type="button"
-                  className="lr-action-btn lr-sell-btn"
-                  disabled={!!busy}
-                  onClick={() => onSell(token, pct)}
-                >
-                  SELL {pct}%
-                </button>
-              ))}
-            </div>
-          </>
-        ) : (
-          <>
-            <div className="lr-action-label">🍭 APE IN</div>
-            <div className="lr-action-row">
-              {BUY_PRESETS.map(sol => (
-                <button
-                  key={sol}
-                  type="button"
-                  className="lr-action-btn lr-buy-btn"
-                  disabled={!!busy}
-                  onClick={() => onBuy(token, sol)}
-                >
-                  {sol} SOL
-                </button>
-              ))}
-            </div>
-          </>
-        )}
+      {ownedBalance > 0 && (
+        <div className="lr-owned-strip">
+          <span>YOU OWN</span>
+          <b>{formatTokens(ownedBalance)} ${token.sym}</b>
+          {ownedUsd > 0 && (
+            <span style={{ marginLeft: 'auto', color: 'var(--ink-2)' }}>≈ ${format(ownedUsd)}</span>
+          )}
+        </div>
+      )}
+
+      <div className="lr-card-actions">
+        <button
+          type="button"
+          className="lr-card-btn lr-card-buy"
+          onClick={() => onBuy(token)}
+        >🍭 BUY</button>
+        <button
+          type="button"
+          className="lr-card-btn lr-card-sell"
+          disabled={ownedBalance <= 0}
+          onClick={() => onSell(token)}
+          title={ownedBalance <= 0 ? `You don't own any ${token.sym}` : ''}
+        >💸 SELL</button>
       </div>
     </div>
   );
@@ -757,9 +1321,9 @@ function LaunchCard({ token, owned, busy, onBuy, onSell, isFresh, tintIndex = 0 
 export default function LaunchRadar({ onConnectWallet } = {}) {
   useLrCSS();
   const wallet = useWallet();
-  const connection = useMemo(() => new Connection(RPC_URL, 'confirmed'), []);
+  const connection = useMemo(() => getConn(RPC_POOL[0], 'confirmed'), []);
 
-  /* ──── referrer (same shape as Wonderland) ──── */
+  /* ──── referrer (for the share-as-referral link) ──── */
   const [referrer] = useState(() => {
     if (typeof window === 'undefined') return null;
     const tryParse = (v) => { try { return new PublicKey(v); } catch { return null; } };
@@ -781,77 +1345,126 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     return referrer;
   }, [referrer, wallet.publicKey]);
 
-  /* ──── tabs + filters ──── */
-  const [lane, setLane] = useState('fresh'); // 'fresh' | 'recent'
-  const [timeFilter, setTimeFilter] = useState('all'); // 'all' | '1h' | '6h' | '24h'
-  const [sortBy, setSortBy]         = useState('newest'); // 'newest' | 'volume' | 'signal'
+  /* ──── presets + settings ──── */
+  const { buyPresets, setBuyPresets, sellPresets, setSellPresets } = usePresets();
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
-  /* ──── fresh lane (pump.fun + dexscreener) ──── */
+  /* ──── trade modal ──── */
+  // null when closed; { token, mode } when open
+  const [tradeOpen, setTradeOpen] = useState(null);
+
+  /* ──── tabs + filters ──── */
+  const [lane, setLane] = useState('fresh');
+  const [timeFilter, setTimeFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('newest');
+
+  /* ──── fresh lane ──── */
   const { tokens: pumpTokens, connected: pumpConnected } = usePumpFunStream(true);
 
   /* ──── recent lane (Jupiter) ──── */
   const [recentTokens, setRecentTokens] = useState([]);
   const [recentLoading, setRecentLoading] = useState(true);
+  const [recentError, setRecentError] = useState(null);
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
         const r = await fetch('/api/jupiter/tokens/v2/recent?limit=60');
-        if (!r.ok) { setRecentLoading(false); return; }
+        if (!r.ok) {
+          if (!cancelled) {
+            setRecentError(`Recent feed unreachable (HTTP ${r.status})`);
+            setRecentLoading(false);
+          }
+          return;
+        }
         const d = await r.json();
         const list = Array.isArray(d) ? d : (d?.data || d?.tokens || []);
         if (!cancelled) {
           setRecentTokens(list.map(normalize).filter(t => t.mint));
           setRecentLoading(false);
+          setRecentError(null);
         }
-      } catch { if (!cancelled) setRecentLoading(false); }
+      } catch (e) {
+        if (!cancelled) {
+          setRecentError(String(e?.message || 'Recent feed unreachable').slice(0, 120));
+          setRecentLoading(false);
+        }
+      }
     }
     load();
     const id = setInterval(load, POLL_RECENT);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  /* ──── SOL price (not strictly required, but useful for USD displays) ──── */
+  /* ──── SOL price ──── */
   const [solPrice, setSolPrice] = useState(0);
   useEffect(() => {
     let cancelled = false;
     async function load() {
-      try { const r = await fetch('/api/sol-price'); const d = await r.json(); if (!cancelled && d?.price) setSolPrice(d.price); } catch {}
+      try {
+        const r = await fetch('/api/sol-price');
+        if (!r.ok) return;
+        const d = await r.json();
+        if (!cancelled && d?.price) setSolPrice(d.price);
+      } catch {}
     }
     load();
     const id = setInterval(load, POLL_SOL);
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  /* ──── user balances — for owned-token detection ──── */
+  /* ──── balances ──── */
   const [balances, setBalances] = useState({});
   const refreshBalances = useCallback(async () => {
     if (!wallet.publicKey) { setBalances({}); return; }
-    try {
-      const owner = wallet.publicKey;
-      const [solBal, tAccs] = await Promise.all([
-        connection.getBalance(owner),
-        connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }),
-      ]);
-      let t22 = { value: [] };
-      try { t22 = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }); } catch {}
-      const out = {};
-      out[SOL_MINT] = { amount: String(solBal), decimals: 9, uiAmount: solBal / 1e9 };
-      const merge = (a) => {
-        for (const acc of a.value) {
-          const info = acc.account.data.parsed?.info; if (!info) continue;
-          const mint = info.mint; if (!mint) continue;
-          out[mint] = {
-            amount:   String(info.tokenAmount?.amount || '0'),   // keep raw as string — token supplies can exceed Number.MAX_SAFE_INTEGER
-            decimals: Number(info.tokenAmount?.decimals ?? 6),
-            uiAmount: Number(info.tokenAmount?.uiAmount || 0),
-          };
-        }
-      };
-      merge(tAccs); merge(t22);
-      setBalances(out);
-    } catch (e) { /* swallow */ }
-  }, [wallet.publicKey, connection]);
+    const owner = wallet.publicKey;
+    const mergeAccs = (into, accs) => {
+      if (!accs || !accs.value) return;
+      for (const acc of accs.value) {
+        const info = acc.account?.data?.parsed?.info;
+        if (!info) continue;
+        const mint = info.mint;
+        const amt = info.tokenAmount?.amount;
+        if (!mint || amt == null) continue;
+        into[mint] = {
+          amount:   String(amt),
+          decimals: Number(info.tokenAmount?.decimals ?? 6),
+          uiAmount: Number(info.tokenAmount?.uiAmount || 0),
+        };
+      }
+    };
+
+    const solP = rpcRace('getBalance', c => c.getBalance(owner, BAL_COMMITMENT))
+      .then(lamports => {
+        setBalances(prev => ({
+          ...prev,
+          [SOL_MINT]: { amount: String(lamports), decimals: 9, uiAmount: lamports / 1e9 },
+        }));
+      })
+      .catch(e => console.warn('[lr] SOL balance failed', e?.message));
+
+    const tokP = rpcRace('tokenAccs', c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT)
+    ).then(accs => {
+      setBalances(prev => {
+        const next = { ...prev };
+        mergeAccs(next, accs);
+        return next;
+      });
+    }).catch(e => console.warn('[lr] SPL accounts failed', e?.message));
+
+    const tok22P = rpcRace('tokenAccs2022', c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT)
+    ).then(accs => {
+      setBalances(prev => {
+        const next = { ...prev };
+        mergeAccs(next, accs);
+        return next;
+      });
+    }).catch(e => console.warn('[lr] Token-2022 accounts failed', e?.message));
+
+    await Promise.allSettled([solP, tokP, tok22P]);
+  }, [wallet.publicKey]);
   useEffect(() => { refreshBalances(); }, [refreshBalances]);
   useEffect(() => {
     if (!wallet.publicKey) return;
@@ -859,15 +1472,31 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     return () => clearInterval(id);
   }, [wallet.publicKey, refreshBalances]);
 
-  /* ──── toasts ──── */
+  const aggressiveRefresh = useCallback(() => {
+    [1500, 4000, 8000].forEach(ms => setTimeout(refreshBalances, ms));
+  }, [refreshBalances]);
+
+  const solBalance = balances[SOL_MINT];
+
+  /* ──── toasts (with Twitter share) ──── */
   const [toasts, setToasts] = useState([]);
   const pushToast = useCallback((t) => {
     const id = Math.random().toString(36).slice(2);
     setToasts(prev => [...prev, { ...t, id }]);
-    setTimeout(() => setToasts(prev => prev.filter(x => x.id !== id)), t.duration || 6000);
+    setTimeout(() => setToasts(prev => prev.filter(x => x.id !== id)), t.duration || 8000);
   }, []);
 
-  /* ──── confetti burst on successful buy (must be declared before handleBuy) ──── */
+  const requireWallet = useCallback(() => {
+    if (wallet.publicKey && wallet.signTransaction) return true;
+    if (onConnectWallet) { onConnectWallet(); return false; }
+    pushToast({
+      kind: 'error', emoji: '🔌',
+      body: 'Connect a wallet first (Phantom, Solflare, Backpack).',
+    });
+    return false;
+  }, [wallet.publicKey, wallet.signTransaction, onConnectWallet, pushToast]);
+
+  /* ──── confetti ──── */
   const [confettiKey, setConfettiKey] = useState(0);
   const fireConfetti = useCallback(() => setConfettiKey(k => k + 1), []);
   const confettiPieces = useMemo(() => {
@@ -890,282 +1519,121 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     return () => clearTimeout(id);
   }, [confettiKey]);
 
-  /* ──── busy state per-token ──── */
-  const [busy, setBusy] = useState({}); // { [mint]: 'Buying…' | 'Selling…' }
-
   /* ════════════════════════════════════════════════════════════════
-     PUMP.FUN PRE-GRAD SWAP — atomic 3% fee bundled with PumpPortal tx
+     JUPITER SWAP — same flow as SwapWidget.handleSwap, just parametric.
      ════════════════════════════════════════════════════════════════ */
-  const executePumpFunSwap = useCallback(async ({ token, mode, solAmount, tokenRawAmount, balanceDecimals }) => {
-    if (!wallet.publicKey || !wallet.signTransaction) {
-      onConnectWallet?.(); throw new Error('connect_wallet');
-    }
-    const isBuy = mode === 'buy';
-    const decimals = balanceDecimals ?? token.decimals ?? 6;
+  const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
+    if (!wallet.publicKey || !wallet.signTransaction) throw new Error('Wallet not connected');
 
-    // ── Compute net (to pump.fun) and our 3% fee instruction(s) ───────
-    let pumpAmount;        // number sent to pump.fun
-    let denominatedInSol;  // 'true' | 'false' (strings, per PumpPortal API)
-    const feeIxs = [];
-
-    if (isBuy) {
-      // User wants to spend `solAmount` SOL total. 3% to FEE_WALLET, 97% to pump.fun.
-      const totalLamports = BigInt(Math.floor(solAmount * 1e9));
-      const feeLamports   = (totalLamports * BigInt(FEE_BPS)) / 10000n;
-      const netLamports   = totalLamports - feeLamports;
-      if (netLamports <= 0n) throw new Error('Amount too small');
-
-      pumpAmount       = Number(netLamports) / 1e9;
-      denominatedInSol = 'true';
-
-      feeIxs.push(SystemProgram.transfer({
-        fromPubkey: wallet.publicKey,
-        toPubkey:   FEE_WALLET,
-        lamports:   Number(feeLamports),
-      }));
-    } else {
-      // Sell: tokenRawAmount = total raw tokens user wants to sell. Take 3% as fee in tokens.
-      const totalTok = BigInt(tokenRawAmount);
-      const feeTok   = (totalTok * BigInt(FEE_BPS)) / 10000n;
-      const netTok   = totalTok - feeTok;
-      if (netTok <= 0n) throw new Error('Amount too small');
-
-      // PumpPortal accepts the token amount as a number (UI units), not raw.
-      pumpAmount       = Number(netTok) / Math.pow(10, decimals);
-      denominatedInSol = 'false';
-
-      // pump.fun tokens use classic SPL Token program (not Token-2022)
-      const mintPk  = new PublicKey(token.mint);
-      const srcAta  = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, TOKEN_PROGRAM_ID);
-      const destAta = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, TOKEN_PROGRAM_ID);
-      feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
-        wallet.publicKey, destAta, FEE_WALLET, mintPk, TOKEN_PROGRAM_ID,
-      ));
-      feeIxs.push(createTransferCheckedInstruction(
-        srcAta, mintPk, destAta, wallet.publicKey, feeTok, decimals, [], TOKEN_PROGRAM_ID,
-      ));
-    }
-
-    // ── Ask PumpPortal to build the swap tx (unsigned VersionedTransaction bytes) ─
-    // pool: 'auto' lets PumpPortal route to whichever venue the token is on (bonding curve,
-    // pump-amm, or even Raydium if it migrated). Safer than hardcoding 'pump' in case our
-    // graduation detection lags by a few minutes.
-    const res = await fetch(PUMPFUN_TRADE_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        publicKey:        wallet.publicKey.toBase58(),
-        action:           isBuy ? 'buy' : 'sell',
-        mint:             token.mint,
-        amount:           pumpAmount,
-        denominatedInSol: denominatedInSol,
-        slippage:         PUMPFUN_SLIPPAGE_PCT,
-        priorityFee:      PUMPFUN_PRIORITY_FEE_SOL,
-        pool:             'auto',
-      }),
-    });
-
-    if (!res.ok) {
-      // Errors come back as text/JSON; successes are raw tx bytes
-      const errText = await res.text().catch(() => '');
-      throw new Error(`pump.fun: ${errText.slice(0, 120) || res.status}`);
-    }
-
-    const txBytes = new Uint8Array(await res.arrayBuffer());
-    const pumpTx  = VersionedTransaction.deserialize(txBytes);
-
-    // ── Fetch ALT accounts so we can decompile pump.fun's message ─────
-    // Legacy (non-v0) messages don't have addressTableLookups at all — guard against undefined.
-    const altKeys = (pumpTx.message.addressTableLookups || []).map(l => l.accountKey);
-    let alts = [];
-    if (altKeys.length > 0) {
-      const infos = await connection.getMultipleAccountsInfo(altKeys);
-      alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
-        key:   k,
-        state: AddressLookupTableAccount.deserialize(infos[i].data),
-      }) : null).filter(Boolean);
-    }
-
-    // ── Decompile so we can inject our fee ix into the same tx ────────
-    const decompiled = TransactionMessage.decompile(pumpTx.message, {
-      addressLookupTableAccounts: alts,
-    });
-
-    // Insert fee ix(s) right after compute-budget ixs, before the swap.
-    const ix = decompiled.instructions;
-    let insertAt = 0;
-    while (insertAt < ix.length && ix[insertAt].programId.equals(COMPUTE_BUDGET_PROGRAM_ID)) insertAt++;
-    const finalIxs = [...ix.slice(0, insertAt), ...feeIxs, ...ix.slice(insertAt)];
-
-    // ── Recompile with a fresh blockhash, sign once, send ─────────────
-    const latest = await connection.getLatestBlockhash('confirmed');
-    const newMsg = new TransactionMessage({
-      payerKey:        wallet.publicKey,
-      recentBlockhash: latest.blockhash,
-      instructions:    finalIxs,
-    }).compileToV0Message(alts);
-    const finalTx = new VersionedTransaction(newMsg);
-
-    // Soft simulate (non-fatal on RPC errors)
-    try {
-      const sim = await connection.simulateTransaction(finalTx, {
-        replaceRecentBlockhash: true, sigVerify: false,
-      });
-      if (sim.value.err) {
-        const logs = (sim.value.logs || []).join('\n').toLowerCase();
-        if (logs.includes('insufficient') || logs.includes('0x1')) throw new Error('Insufficient balance');
-        if (logs.includes('slippage'))                              throw new Error('Price moved — try again');
-        throw new Error('Simulation failed');
-      }
-    } catch (e) {
-      if (/insufficient|slippage|simulation failed/i.test(String(e.message))) throw e;
-    }
-
-    const signed = await wallet.signTransaction(finalTx);
-    const sig    = await connection.sendRawTransaction(signed.serialize(), {
-      skipPreflight: false, maxRetries: 3,
-    });
-
-    // Confirm with timeout + fallback polling (same pattern as Jupiter path)
-    let confirmed = false;
-    try {
-      const conf = await Promise.race([
-        connection.confirmTransaction({
-          signature: sig,
-          blockhash: latest.blockhash,
-          lastValidBlockHeight: latest.lastValidBlockHeight,
-        }, 'confirmed'),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
-      ]);
-      if (conf?.value?.err) throw new Error('Tx failed on-chain');
-      confirmed = true;
-    } catch {
-      const deadline = Date.now() + 20_000;
-      while (Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, 2000));
-        try {
-          const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-          const cs = st?.value?.confirmationStatus;
-          if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-          if (st?.value?.err) throw new Error('Tx failed on-chain');
-        } catch (e) { if (/failed on-chain/i.test(String(e.message))) throw e; }
-      }
-    }
-
-    // pump.fun doesn't return an outAmount; leave 0 (toast will skip the secondary line)
-    return { sig, confirmed, outAmount: 0 };
-  }, [wallet, connection, onConnectWallet]);
-
-  /* ════════════════════════════════════════════════════════════════
-     JUPITER SWAP — for graduated tokens (everything else)
-     ════════════════════════════════════════════════════════════════ */
-  const executeSwap = useCallback(async ({ token, mode, rawAmount, balanceDecimals }) => {
-    if (!wallet.publicKey || !wallet.signTransaction) {
-      onConnectWallet?.(); throw new Error('connect_wallet');
-    }
-    const isSell = mode === 'sell';
-    const inputMint  = isSell ? token.mint : SOL_MINT;
-    const outputMint = isSell ? SOL_MINT  : token.mint;
-    // For sells: prefer the decimals from the user's on-chain token account (always correct)
-    // over the token-list value which can be missing on very-recent launches.
-    const inputDecimals  = isSell ? (balanceDecimals ?? token.decimals ?? 6) : 9;
-    const outputDecimals = isSell ? 9 : (token.decimals ?? 6);
-
-    // 1. ask Jupiter for the build (net of our 3% fee)
+    const { rawAmount, inputMint, outputMint, inputDecimals, outputDecimals } = swapParams;
     const net = (BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n;
     if (net <= 0n) throw new Error('Amount too small');
+
+    // 1. Build via /api/jupiter/build (same shape as SwapWidget)
     const params = new URLSearchParams({
       inputMint, outputMint,
-      amount: net.toString(),
+      amount:      net.toString(),
       slippageBps: String(SLIPPAGE_BPS),
-      taker: wallet.publicKey.toBase58(),
-      computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
+      taker:       wallet.publicKey.toBase58(),
     });
     const buildRes = await fetch(`/api/jupiter/build?${params}`);
     if (!buildRes.ok) {
-      const j = await buildRes.json().catch(() => ({}));
-      throw new Error(j.error || `Build failed (${buildRes.status})`);
+      const body = await buildRes.json().catch(() => ({}));
+      throw new Error(body.error || `Build failed (${buildRes.status})`);
     }
     const build = await buildRes.json();
     if (!build?.swapInstruction) throw new Error('No route');
 
-    // 2. build atomic fee transfers — split between platform (2-3%) and referrer (1% if present)
-    const totalFee     = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
-    const refFee       = effectiveReferrer ? (BigInt(rawAmount) * BigInt(REF_BPS)) / 10000n : 0n;
-    const platformFee  = totalFee - refFee;
+    // 2. Fee transfer instructions (platform + optional referrer split)
+    const totalFee = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
+    if (totalFee <= 0n) throw new Error('Fee amount rounds to zero.');
+    const refFee = effectiveReferrer ? (BigInt(rawAmount) * BigInt(REF_BPS)) / 10000n : 0n;
+    const platformFee = totalFee - refFee;
 
     const feeIxs = [];
     if (inputMint === SOL_MINT) {
-      if (platformFee > 0n) feeIxs.push(SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: FEE_WALLET, lamports: Number(platformFee) }));
-      if (refFee > 0n && effectiveReferrer) feeIxs.push(SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: effectiveReferrer, lamports: Number(refFee) }));
+      if (platformFee > 0n) feeIxs.push(SystemProgram.transfer({
+        fromPubkey: wallet.publicKey, toPubkey: FEE_WALLET, lamports: Number(platformFee),
+      }));
+      if (refFee > 0n && effectiveReferrer) feeIxs.push(SystemProgram.transfer({
+        fromPubkey: wallet.publicKey, toPubkey: effectiveReferrer, lamports: Number(refFee),
+      }));
     } else {
       const mintPk = new PublicKey(inputMint);
       const mintInfo = await connection.getAccountInfo(mintPk);
-      if (!mintInfo) throw new Error('Mint not found');
+      if (!mintInfo) throw new Error('Input mint not found on-chain.');
       const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
-      const src = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
+      const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
       if (platformFee > 0n) {
-        const ata = getAssociatedTokenAddressSync(mintPk, FEE_WALLET, true, tokenProgram);
-        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(wallet.publicKey, ata, FEE_WALLET, mintPk, tokenProgram));
-        feeIxs.push(createTransferCheckedInstruction(src, mintPk, ata, wallet.publicKey, platformFee, inputDecimals, [], tokenProgram));
+        const destAta = getAssociatedTokenAddressSync(mintPk, FEE_WALLET, true, tokenProgram);
+        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram));
+        feeIxs.push(createTransferCheckedInstruction(sourceAta, mintPk, destAta, wallet.publicKey, platformFee, inputDecimals, [], tokenProgram));
       }
       if (refFee > 0n && effectiveReferrer) {
-        const ata = getAssociatedTokenAddressSync(mintPk, effectiveReferrer, true, tokenProgram);
-        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(wallet.publicKey, ata, effectiveReferrer, mintPk, tokenProgram));
-        feeIxs.push(createTransferCheckedInstruction(src, mintPk, ata, wallet.publicKey, refFee, inputDecimals, [], tokenProgram));
+        const refAta = getAssociatedTokenAddressSync(mintPk, effectiveReferrer, true, tokenProgram);
+        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(wallet.publicKey, refAta, effectiveReferrer, mintPk, tokenProgram));
+        feeIxs.push(createTransferCheckedInstruction(sourceAta, mintPk, refAta, wallet.publicKey, refFee, inputDecimals, [], tokenProgram));
       }
     }
 
-    // 3. compose all ixs: compute budget → fees → setup → swap → cleanup → other
+    // 3. Compose ixs — same order as SwapWidget
     const ixs = [];
-    if (Array.isArray(build.computeBudgetInstructions)) for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
+    if (Array.isArray(build.computeBudgetInstructions))
+      for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
     for (const ix of feeIxs) ixs.push(ix);
-    if (Array.isArray(build.setupInstructions)) for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+    if (Array.isArray(build.setupInstructions))
+      for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
     if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
     if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
-    if (Array.isArray(build.otherInstructions)) for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+    if (Array.isArray(build.otherInstructions))
+      for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
 
-    // 4. address lookup tables
+    // 4. ALTs
     const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
     let alts = [];
     if (altKeys.length > 0) {
       const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
       alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
-        key: new PublicKey(k),
+        key:   new PublicKey(k),
         state: AddressLookupTableAccount.deserialize(infos[i].data),
       }) : null).filter(Boolean);
     }
 
+    // 5. Compile + simulate + sign + send + confirm
     const latest = await connection.getLatestBlockhash('confirmed');
     const message = new TransactionMessage({
       payerKey: wallet.publicKey, recentBlockhash: latest.blockhash, instructions: ixs,
     }).compileToV0Message(alts);
     const tx = new VersionedTransaction(message);
 
-    // soft simulate (non-fatal on RPC errors)
+    const mapSimErr = (logs) => {
+      const j = (logs || []).join('\n').toLowerCase();
+      if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+      if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
+      if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+      if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
+      return null;
+    };
     try {
       const sim = await connection.simulateTransaction(tx, { replaceRecentBlockhash: true, sigVerify: false });
-      if (sim.value.err) {
-        const logs = (sim.value.logs || []).join('\n').toLowerCase();
-        if (logs.includes('insufficient') || logs.includes('0x1')) throw new Error('Insufficient balance');
-        if (logs.includes('slippage') || logs.includes('0x1771')) throw new Error('Price moved — try again');
-        throw new Error('Simulation failed');
-      }
-    } catch (e) {
-      if (/insufficient|slippage|simulation failed/i.test(String(e.message))) throw e;
+      if (sim.value.err) throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
+    } catch (simErr) {
+      if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) throw simErr;
+      console.warn('[lr] sim non-fatal', simErr);
     }
 
     const signed = await wallet.signTransaction(tx);
     const sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 3 });
 
-    // confirm with timeout + fallback polling
     let confirmed = false;
     try {
       const conf = await Promise.race([
-        connection.confirmTransaction({ signature: sig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight }, 'confirmed'),
+        connection.confirmTransaction({
+          signature: sig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight,
+        }, 'confirmed'),
         new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
       ]);
-      if (conf?.value?.err) throw new Error('Tx failed on-chain');
+      if (conf?.value?.err) throw new Error('Swap tx failed on-chain.');
       confirmed = true;
     } catch {
       const deadline = Date.now() + 20_000;
@@ -1175,93 +1643,71 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
           const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
           const cs = st?.value?.confirmationStatus;
           if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-          if (st?.value?.err) throw new Error('Tx failed on-chain');
+          if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
         } catch (e) { if (/failed on-chain/i.test(String(e.message))) throw e; }
       }
     }
 
     const outAmount = Number(build.outAmount) / Math.pow(10, outputDecimals);
-    return { sig, confirmed, outAmount };
-  }, [wallet, connection, effectiveReferrer, onConnectWallet]);
+    return { sig, confirmed, outAmount, mode, token };
+  }, [wallet, connection, effectiveReferrer]);
 
-  /* ────── Router: pump.fun pre-grad tokens go through PumpPortal; everything else through Jupiter ────── */
-  const isPumpFunPreGrad = useCallback((token) => {
-    return token?.source === 'pumpfun' && token?.preGrad === true;
-  }, []);
+  /* ──── card BUY/SELL → opens modal ──── */
+  const onCardBuy = useCallback((token) => {
+    if (!requireWallet()) return;
+    setTradeOpen({ token, mode: 'buy' });
+  }, [requireWallet]);
 
-  /* ──── quick buy ──── */
-  const handleBuy = useCallback(async (token, solAmount) => {
-    if (!wallet.publicKey) { onConnectWallet?.(); return; }
-    if (busy[token.mint]) return;
-    setBusy(b => ({ ...b, [token.mint]: 'Buying…' }));
-    try {
-      let result;
-      if (isPumpFunPreGrad(token)) {
-        result = await executePumpFunSwap({ token, mode: 'buy', solAmount });
-      } else {
-        const rawAmount = BigInt(Math.floor(solAmount * 1e9)).toString();
-        result = await executeSwap({ token, mode: 'buy', rawAmount });
-      }
-      const { sig, confirmed, outAmount } = result;
-      if (confirmed) fireConfetti();
-      pushToast({
-        kind: 'success',
-        emoji: confirmed ? '🎉' : '⏳',
-        body: <><b>Bought ${token.sym}</b><br/>{solAmount} SOL{outAmount > 0 ? <> → {format(outAmount)} {token.sym}</> : null}</>,
-        link: `https://solscan.io/tx/${sig}`,
-      });
-      setTimeout(refreshBalances, 2500);
-    } catch (e) {
-      if (e.message !== 'connect_wallet') {
-        pushToast({ kind: 'error', emoji: '⚠️', body: friendlyError(e) });
-      }
-    } finally {
-      setBusy(b => { const c = { ...b }; delete c[token.mint]; return c; });
-    }
-  }, [wallet.publicKey, busy, executeSwap, executePumpFunSwap, isPumpFunPreGrad, pushToast, refreshBalances, onConnectWallet, fireConfetti]);
+  const onCardSell = useCallback((token) => {
+    if (!requireWallet()) return;
+    setTradeOpen({ token, mode: 'sell' });
+  }, [requireWallet]);
 
-  const handleSell = useCallback(async (token, percentage) => {
-    if (!wallet.publicKey) { onConnectWallet?.(); return; }
-    if (busy[token.mint]) return;
-    const bal = balances[token.mint];
-    if (!bal || !bal.amount || BigInt(bal.amount) <= 0n) {
-      pushToast({ kind: 'error', emoji: '⚠️', body: `No ${token.sym} to sell` });
-      return;
-    }
-    setBusy(b => ({ ...b, [token.mint]: 'Selling…' }));
-    try {
-      const rawAmount = ((BigInt(bal.amount) * BigInt(percentage)) / 100n).toString();
-      let result;
-      if (isPumpFunPreGrad(token)) {
-        result = await executePumpFunSwap({
-          token, mode: 'sell',
-          tokenRawAmount: rawAmount,
-          balanceDecimals: bal.decimals,
-        });
-      } else {
-        result = await executeSwap({ token, mode: 'sell', rawAmount, balanceDecimals: bal.decimals });
-      }
-      const { sig, confirmed, outAmount } = result;
-      pushToast({
-        kind: 'success',
-        emoji: confirmed ? '💸' : '⏳',
-        body: <><b>Sold {percentage}% of ${token.sym}</b>{outAmount > 0 ? <><br/>Got {format(outAmount)} SOL</> : null}</>,
-        link: `https://solscan.io/tx/${sig}`,
-      });
-      setTimeout(refreshBalances, 2500);
-    } catch (e) {
-      if (e.message !== 'connect_wallet') {
-        pushToast({ kind: 'error', emoji: '⚠️', body: friendlyError(e) });
-      }
-    } finally {
-      setBusy(b => { const c = { ...b }; delete c[token.mint]; return c; });
-    }
-  }, [wallet.publicKey, busy, balances, executeSwap, executePumpFunSwap, isPumpFunPreGrad, pushToast, refreshBalances, onConnectWallet]);
+  /* ──── modal CONFIRM → actual swap ──── */
+  const handleTradeConfirm = useCallback(async ({ mode, swapParams, token, outAmount: estOut }) => {
+    const { sig, confirmed, outAmount } = await executeSwap({ mode, swapParams, token });
+    if (confirmed) fireConfetti();
 
-  /* ──── lane-aware list + filters + sort ──── */
+    // Build the Twitter share text + URL
+    const shareUrl = buildShareUrl(wallet.publicKey?.toBase58());
+    const tweetText = buildTweetText({
+      mode, token,
+      solAmount:  swapParams.solAmount,
+      outAmount:  outAmount || estOut || 0,
+      percentage: swapParams.percentage,
+    });
+
+    pushToast({
+      kind: 'success',
+      emoji: confirmed ? '🎉' : '⏳',
+      body: mode === 'buy'
+        ? <><b>Bought ${token.sym}</b><br/>{swapParams.solAmount} SOL{outAmount > 0 ? <> → {formatTokens(outAmount)} {token.sym}</> : null}</>
+        : <><b>Sold {Math.round(swapParams.percentage)}% of ${token.sym}</b>{outAmount > 0 ? <><br/>Got {formatSol(outAmount)} SOL</> : null}</>,
+      solscan: `https://solscan.io/tx/${sig}`,
+      tweetText, shareUrl,
+    });
+
+    aggressiveRefresh();
+    setTradeOpen(null);
+    return { closed: true };
+  }, [executeSwap, fireConfetti, pushToast, aggressiveRefresh, wallet.publicKey]);
+
+  /* ──── lane + filters ──── */
+  const deriveDisplayValues = useCallback((t) => {
+    if (!t) return t;
+    let price = t.price;
+    let mcap  = t.mcap;
+    let liquidity = t.liquidity;
+    if ((price == null || price <= 0) && t.priceSol > 0 && solPrice > 0) price = t.priceSol * solPrice;
+    if ((mcap == null || mcap <= 0) && t.mcapSol > 0 && solPrice > 0) mcap = t.mcapSol * solPrice;
+    if ((liquidity == null || liquidity <= 0) && t.liquiditySol > 0 && solPrice > 0) liquidity = t.liquiditySol * solPrice;
+    if (price === t.price && mcap === t.mcap && liquidity === t.liquidity) return t;
+    return { ...t, price, mcap, liquidity };
+  }, [solPrice]);
+
   const activeList = lane === 'fresh' ? pumpTokens : recentTokens;
   const filtered = useMemo(() => {
-    let l = activeList;
+    let l = activeList.map(deriveDisplayValues);
     if (timeFilter !== 'all') {
       const cap = timeFilter === '1h' ? 3600_000 : timeFilter === '6h' ? 6*3600_000 : 24*3600_000;
       l = l.filter(t => Number.isFinite(t.ageMs) && t.ageMs < cap);
@@ -1270,14 +1716,12 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     else if (sortBy === 'volume') l = [...l].sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
     else if (sortBy === 'signal') l = [...l].sort((a, b) => signalScore(b) - signalScore(a));
     return l.slice(0, 30);
-  }, [activeList, timeFilter, sortBy]);
+  }, [activeList, timeFilter, sortBy, deriveDisplayValues]);
 
-  /* ──── derived stats for orbs + featured ──── */
   const featured = useMemo(() => {
-    // freshest pump.fun launch under 30 min — the "just hatched" hero
-    const pool = pumpTokens.filter(t => Number.isFinite(t.ageMs) && t.ageMs < 30 * 60_000);
+    const pool = pumpTokens.filter(t => Number.isFinite(t.ageMs) && t.ageMs < 30 * 60_000).map(deriveDisplayValues);
     return pool.length ? pool[0] : null;
-  }, [pumpTokens]);
+  }, [pumpTokens, deriveDisplayValues]);
   const topGainer = useMemo(() => {
     const pool = [...pumpTokens, ...recentTokens].filter(t => Number.isFinite(t.change) && t.change > 0);
     if (!pool.length) return null;
@@ -1287,7 +1731,23 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     return [...pumpTokens, ...recentTokens].reduce((s, t) => s + (t.volume24h || 0), 0);
   }, [pumpTokens, recentTokens]);
 
-  /* ──── render ──── */
+  const onConnectClick = useCallback(async () => {
+    if (wallet.publicKey && wallet.disconnect) {
+      try { await wallet.disconnect(); } catch {}
+      return;
+    }
+    if (onConnectWallet) { onConnectWallet(); return; }
+    if (wallet.connect) {
+      try { await wallet.connect(); }
+      catch (e) {
+        pushToast({
+          kind: 'error', emoji: '🔌',
+          body: 'Could not connect — pick a wallet first (Phantom, Solflare, Backpack).',
+        });
+      }
+    }
+  }, [wallet, onConnectWallet, pushToast]);
+
   return (
     <div className="lr-root">
       <div className="lr-blob" style={{ width: 400, height: 400, background: '#FFB088', top: -80, left: -120 }} />
@@ -1312,12 +1772,15 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
             )}
             <button
               type="button"
+              className="lr-gear-btn"
+              onClick={() => setSettingsOpen(true)}
+              aria-label="Settings"
+              title="Edit presets"
+            >⚙</button>
+            <button
+              type="button"
               className={'lr-wallet-btn' + (wallet.publicKey ? ' lr-connected' : '')}
-              onClick={() => {
-                if (wallet.publicKey && wallet.disconnect) wallet.disconnect();
-                else if (onConnectWallet) onConnectWallet();
-                else if (wallet.connect) wallet.connect().catch(() => {});
-              }}
+              onClick={onConnectClick}
             >
               {wallet.publicKey
                 ? <><span className="lr-wallet-dot" />{wallet.publicKey.toBase58().slice(0,4)}…{wallet.publicKey.toBase58().slice(-4)}</>
@@ -1339,7 +1802,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
           </h1>
           <p className="lr-hero-sub">Catch fresh Solana launches while they're still warm.</p>
           <div className="lr-hero-meta">
-            No KYC<span className="lr-dot">•</span>No Accounts<span className="lr-dot">•</span>One-Click Buy
+            No KYC<span className="lr-dot">•</span>No Accounts<span className="lr-dot">•</span>Your Keys Stay Yours
           </div>
         </div>
 
@@ -1349,12 +1812,20 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
             <span className={'lr-live-dot' + (lane === 'fresh' && !pumpConnected ? ' lr-warn' : '')} />
             {lane === 'fresh'
               ? (pumpConnected ? <>LIVE · <b>{pumpTokens.length}</b> tracked</> : <>RECONNECTING…</>)
-              : (recentLoading ? <>SYNCING…</> : <><b>{recentTokens.length}</b> tokens</>)}
+              : (recentLoading ? <>SYNCING…</> : recentError ? <>FEED DOWN</> : <><b>{recentTokens.length}</b> tokens</>)}
           </div>
           <div className="lr-status-divider" />
           <div className="lr-status-item">
             SOL <b>${solPrice > 0 ? solPrice.toFixed(2) : '—'}</b>
           </div>
+          {wallet.publicKey && (
+            <>
+              <div className="lr-status-divider" />
+              <div className="lr-status-item">
+                💰 <b>{formatSol(solBalance?.uiAmount || 0)}</b>
+              </div>
+            </>
+          )}
         </div>
 
         {/* STAT ORBS */}
@@ -1381,7 +1852,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
           </div>
         </div>
 
-        {/* FEATURED "JUST HATCHED" — the freshest pump.fun launch */}
+        {/* FEATURED */}
         {featured && (
           <div className="lr-feature">
             <div className="lr-feature-badge">
@@ -1393,7 +1864,9 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
               </div>
               <div className="lr-feature-name">
                 <div className="lr-feature-sym">${featured.sym}</div>
-                <div className="lr-feature-sub">{featured.name}</div>
+                <div className="lr-feature-sub">
+                  {featured.name} · {formatPrice(featured.price)}
+                </div>
                 <div className="lr-feature-age">⚡ {featured.age} old</div>
               </div>
             </div>
@@ -1401,15 +1874,10 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
               <button
                 type="button"
                 className="lr-feature-btn"
-                disabled={!!busy[featured.mint]}
-                onClick={() => handleBuy(featured, 0.25)}
-              >🍭 APE 0.25 SOL</button>
-              <button
-                type="button"
-                className="lr-feature-btn"
-                disabled={!!busy[featured.mint]}
-                onClick={() => handleBuy(featured, 0.5)}
-              >🚀 APE 0.5 SOL</button>
+                onClick={() => onCardBuy(featured)}
+              >
+                🚀 BUY ${featured.sym}
+              </button>
             </div>
           </div>
         )}
@@ -1474,9 +1942,21 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
           <div className="lr-empty">
             <span className="lr-empty-emoji">{lane === 'fresh' ? '🥚' : '🍿'}</span>
             {lane === 'fresh' && !pumpConnected ? (
-              <><b>Warming up the launch stream…</b><div className="lr-empty-sub">Hatching new tokens from pump.fun any second now.</div></>
+              <>
+                <b>Warming up the launch stream…</b>
+                <div className="lr-empty-sub">Hatching new tokens from pump.fun any second now.</div>
+              </>
+            ) : lane === 'recent' && recentError ? (
+              <>
+                <b>Recent feed offline</b>
+                <div className="lr-empty-sub">Switch to JUST HATCHED while we retry.</div>
+                <div className="lr-empty-err">{recentError}</div>
+              </>
             ) : (
-              <><b>Nothing matches yet</b><div className="lr-empty-sub">Loosen the filter or switch lanes — fresh drops are landing all day.</div></>
+              <>
+                <b>Nothing matches yet</b>
+                <div className="lr-empty-sub">Loosen the filter or switch lanes — fresh drops are landing all day.</div>
+              </>
             )}
           </div>
         ) : (
@@ -1486,9 +1966,8 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
                 key={t.mint}
                 token={t}
                 owned={balances[t.mint]}
-                busy={busy[t.mint]}
-                onBuy={handleBuy}
-                onSell={handleSell}
+                onBuy={onCardBuy}
+                onSell={onCardSell}
                 isFresh={t.source === 'pumpfun'}
                 tintIndex={i % 5}
               />
@@ -1497,20 +1976,63 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         )}
       </div>
 
-      {/* TOASTS */}
+      {/* SETTINGS MODAL */}
+      {settingsOpen && (
+        <SettingsModal
+          buyPresets={buyPresets}
+          setBuyPresets={setBuyPresets}
+          sellPresets={sellPresets}
+          setSellPresets={setSellPresets}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
+
+      {/* TRADE MODAL */}
+      {tradeOpen && (
+        <TradeModal
+          token={tradeOpen.token}
+          initialMode={tradeOpen.mode}
+          onClose={() => setTradeOpen(null)}
+          onConfirm={handleTradeConfirm}
+          buyPresets={buyPresets}
+          sellPresets={sellPresets}
+          solBalance={solBalance}
+          tokenBalance={balances[tradeOpen.token.mint]}
+          solPrice={solPrice}
+        />
+      )}
+
+      {/* TOASTS — with Twitter share */}
       <div className="lr-toasts">
         {toasts.map(t => (
           <div key={t.id} className={'lr-toast lr-toast-' + t.kind}>
             <span className="lr-toast-emoji">{t.emoji}</span>
             <div className="lr-toast-body">{t.body}</div>
-            {t.link && (
-              <a className="lr-toast-action" href={t.link} target="_blank" rel="noreferrer">VIEW</a>
-            )}
+            <div className="lr-toast-actions">
+              {t.solscan && (
+                <a className="lr-toast-action" href={t.solscan} target="_blank" rel="noreferrer">
+                  VIEW
+                </a>
+              )}
+              {t.tweetText && (
+                <button
+                  type="button"
+                  className="lr-toast-action lr-toast-twitter"
+                  onClick={() => openTwitterShare(t.tweetText, t.shareUrl)}
+                  aria-label="Share on Twitter"
+                >
+                  <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                  </svg>
+                  SHARE
+                </button>
+              )}
+            </div>
           </div>
         ))}
       </div>
 
-      {/* CONFETTI BURST */}
+      {/* CONFETTI */}
       {confettiKey > 0 && (
         <div className="lr-confetti" key={confettiKey}>
           {confettiPieces.map(p => (
