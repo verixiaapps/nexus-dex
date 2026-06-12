@@ -17,6 +17,8 @@
 //   alpha.mountRoutes(app);
 
 const WebSocket = require('ws');
+const fs   = require('fs');
+const path = require('path');
 
 // ─── CONFIG ────────────────────────────────────────────────────────────
 const CFG = {
@@ -523,7 +525,60 @@ function start() {
   getSolPrice().catch(() => {});
   setInterval(getSolPrice, 60_000);
   connectWs();
+  startStateFileWriter();
   log('alpha-watcher started (free endpoints only)');
+}
+
+// ─── STATIC STATE FILE ─────────────────────────────────────────────────
+// Routing /api/alpha/* through Express has been unreliable on the deployed
+// host (Cloudflare/Railway/proxy layer interferes). Side-step it: write the
+// same payload to a static JSON file inside `build/` which express.static
+// already serves. The page polls /alpha-state.json instead. Updated every
+// 5s — same cadence as the live signal logic.
+function buildStatePayload() {
+  return {
+    ts: Date.now(),
+    ...status,
+    tokensWatched: watched.size,
+    solPrice: solPriceUsd,
+    uptimeMs: Date.now() - status.startedAt,
+    config: {
+      minBuyUsd:         CFG.MIN_BUY_USD,
+      maxWalletAgeH:     CFG.MAX_WALLET_AGE_MS / 3600_000,
+      minConverge:       CFG.MIN_CONVERGE,
+      maxConverge:       CFG.MAX_CONVERGE,
+      convergeWindowH:   CFG.CONVERGE_WINDOW_MS / 3600_000,
+      maxEntryMcapUsd:   CFG.MAX_ENTRY_MCAP_USD,
+      maxEntryPriceUsd:  CFG.MAX_ENTRY_PRICE_USD,
+    },
+    notify: {
+      emailEnabled:    NOTIFY.email.enabled,
+      telegramEnabled: NOTIFY.telegram.enabled,
+    },
+    signals: signals.slice(0, 50),
+    signalCount: signals.length,
+  };
+}
+
+const STATE_DIRS = [
+  path.join(__dirname, 'build'),
+  __dirname,
+];
+let _stateWriterStarted = false;
+function startStateFileWriter() {
+  if (_stateWriterStarted) return;
+  _stateWriterStarted = true;
+  const write = () => {
+    const json = JSON.stringify(buildStatePayload());
+    for (const dir of STATE_DIRS) {
+      try {
+        if (!fs.existsSync(dir)) continue;
+        fs.writeFileSync(path.join(dir, 'alpha-state.json'), json);
+      } catch (e) { /* ignore — try next dir */ }
+    }
+  };
+  write();
+  setInterval(write, 5000);
 }
 
 function mountRoutes(app) {
@@ -555,4 +610,3 @@ function mountRoutes(app) {
 
 start();
 module.exports = { mountRoutes, start, _state: { watched, signals, status, tokenMeta } };
- 
