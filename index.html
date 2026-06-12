@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>Alpha — Receiving Station</title>
-<meta name="description" content="A passive receiver tuned for one event: brand-new wallets putting real size into a token before the chart shows it." />
+<meta name="description" content="Solana alpha. Fresh wallets converging on post-graduation tokens — caught on-chain before the chart confirms." />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Spectral:ital,wght@0,300;0,400;0,500;1,400&family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -20,7 +20,9 @@
     --ink-3:     #6B6058;
     --ink-4:     #3F3833;
     --ember:     #E8763C;
+    --ember-2:   #FF8B4D;
     --ember-dim: #8B4622;
+    --ember-glow:rgba(232,118,60,0.18);
     --teal:      #6B9A8B;
     --warn:      #C97B47;
     --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
@@ -34,10 +36,11 @@
       radial-gradient(ellipse at 90% 100%, rgba(107,154,139,0.03), transparent 50%);
     min-height: 100vh;
   }
-  a { color: inherit; }
+  a { color: inherit; text-decoration: none; }
 
   .frame { max-width: 760px; margin: 0 auto; padding: 0 20px; }
 
+  /* ─── TOPBAR ─────────────────────────────────────────────────── */
   .topbar {
     position: sticky; top: 0; z-index: 10;
     display: flex; align-items: center; justify-content: space-between;
@@ -45,12 +48,11 @@
     background: rgba(12,9,8,0.92);
     backdrop-filter: blur(8px);
     border-bottom: 1px solid var(--rule);
-    margin: 0 -20px 28px;
+    margin: 0 -20px 24px;
   }
   .topbar-l { display: flex; align-items: center; gap: 12px; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-2); }
   .topbar-mark { font-family: var(--serif); font-style: italic; font-size: 18px; color: var(--ink); letter-spacing: 0; text-transform: none; }
-  .topbar-r { display: flex; align-items: center; gap: 8px; font-size: 11px; letter-spacing: 0.14em; }
-  .status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--rule); border-radius: 2px; color: var(--teal); }
+  .status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border: 1px solid var(--rule); border-radius: 2px; color: var(--teal); font-size: 11px; letter-spacing: 0.14em; }
   .status-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; box-shadow: 0 0 8px currentColor; animation: breathe 2.4s ease-in-out infinite; }
   .status-pill.firing { color: var(--ember); border-color: var(--ember-dim); }
   .status-pill.firing .dot { animation: heart 0.8s ease-in-out infinite; }
@@ -58,104 +60,288 @@
   @keyframes breathe { 0%,100% { opacity: 1 } 50% { opacity: 0.35 } }
   @keyframes heart   { 0%,100% { transform: scale(1) } 50% { transform: scale(1.6); opacity: 0.5 } }
 
-  .hero { padding: 36px 0 18px; }
-  .eyebrow { font-size: 10px; letter-spacing: 0.28em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 14px; display: flex; align-items: center; gap: 10px; }
+  .topbar-r { display: flex; align-items: center; gap: 8px; }
+  .diag-btn {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase;
+    padding: 4px 10px; border: 1px solid var(--rule); background: transparent;
+    color: var(--ink-2); cursor: pointer; border-radius: 2px;
+    transition: color 0.12s, border-color 0.12s;
+  }
+  .diag-btn:hover { color: var(--ink); border-color: var(--ink-3); }
+  .diag-btn[aria-expanded="true"] { color: var(--ember); border-color: var(--ember-dim); }
+
+  .diag-panel {
+    margin: -12px -20px 24px;
+    padding: 16px 20px;
+    background: var(--bg-2);
+    border-bottom: 1px solid var(--rule);
+    animation: diagSlide 0.18s ease-out;
+  }
+  @keyframes diagSlide { from { opacity: 0; transform: translateY(-6px); } to { opacity: 1; transform: translateY(0); } }
+  .diag-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-bottom: 10px; border-bottom: 1px solid var(--rule);
+    margin-bottom: 4px;
+  }
+  .diag-head-l { font-size: 10px; letter-spacing: 0.24em; text-transform: uppercase; color: var(--ink-3); }
+  .diag-head-r { display: flex; gap: 6px; align-items: center; }
+  .diag-mini {
+    font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; text-transform: uppercase;
+    padding: 5px 9px; border: 1px solid var(--rule); background: transparent;
+    color: var(--ink-2); cursor: pointer; border-radius: 2px;
+  }
+  .diag-mini:hover { color: var(--ink); border-color: var(--ink-3); }
+  .diag-close {
+    width: 26px; height: 26px; padding: 0; border: 1px solid var(--rule);
+    background: transparent; color: var(--ink-3); cursor: pointer; border-radius: 2px;
+    font-size: 12px; line-height: 1;
+  }
+  .diag-close:hover { color: var(--ink); border-color: var(--ink-3); }
+
+  .diag-row {
+    display: grid;
+    grid-template-columns: 14px 1fr auto auto;
+    gap: 12px; align-items: baseline;
+    padding: 11px 0;
+    border-bottom: 1px dashed var(--rule-soft);
+    cursor: pointer;
+    font-size: 11px;
+  }
+  .diag-row:last-child { border-bottom: none; }
+  .diag-row:hover { background: var(--bg-3); margin: 0 -20px; padding-left: 20px; padding-right: 20px; }
+  .diag-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--ink-4); margin-top: 5px; }
+  .diag-dot.ok   { background: var(--teal); box-shadow: 0 0 6px var(--teal); }
+  .diag-dot.fail { background: var(--ember); box-shadow: 0 0 6px var(--ember); }
+  .diag-dot.pending { background: var(--ink-3); animation: breathe 1.2s ease-in-out infinite; }
+  .diag-path { color: var(--ink); font-size: 11px; letter-spacing: 0.02em; word-break: break-all; }
+  .diag-path-method { color: var(--ink-3); font-size: 10px; margin-right: 6px; }
+  .diag-stat { font-size: 10px; letter-spacing: 0.06em; color: var(--ink-2); text-align: right; line-height: 1.4; }
+  .diag-stat-code { font-family: var(--serif); font-size: 14px; color: var(--ink); }
+  .diag-stat-code.ok   { color: var(--teal); }
+  .diag-stat-code.fail { color: var(--ember); }
+  .diag-stat-meta { color: var(--ink-3); font-size: 9px; letter-spacing: 0.08em; margin-top: 1px; }
+  .diag-arrow { color: var(--ink-4); font-family: var(--serif); font-size: 14px; line-height: 1; }
+  .diag-row.open .diag-arrow { color: var(--ember); transform: rotate(90deg); transition: transform 0.15s; }
+
+  .diag-body {
+    grid-column: 2 / -1;
+    margin-top: 8px;
+    padding: 10px 12px;
+    border-left: 2px solid var(--ember-dim);
+    background: var(--bg);
+    font-size: 10px;
+    line-height: 1.6;
+    color: var(--ink-2);
+    white-space: pre-wrap;
+    word-break: break-all;
+    max-height: 280px;
+    overflow: auto;
+  }
+  .diag-body.error { color: var(--ember); border-left-color: var(--ember); }
+
+  .diag-foot {
+    margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--rule);
+    font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-4);
+  }
+
+  /* ─── HERO ───────────────────────────────────────────────────── */
+  .hero { padding: 26px 0 10px; }
+  .eyebrow { font-size: 10px; letter-spacing: 0.28em; text-transform: uppercase; color: var(--ink-3); margin-bottom: 12px; display: flex; align-items: center; gap: 10px; }
   .eyebrow::after { content: ""; flex: 1; height: 1px; background: var(--rule); }
-  h1.title { font-family: var(--serif); font-weight: 300; font-size: 56px; line-height: 0.96; letter-spacing: -0.015em; margin: 0 0 8px; color: var(--ink); }
+  h1.title { font-family: var(--serif); font-weight: 300; font-size: 44px; line-height: 1.0; letter-spacing: -0.015em; margin: 0 0 12px; color: var(--ink); }
   h1.title em { font-style: italic; color: var(--ember); }
-  .lede { font-family: var(--mono); font-size: 13px; color: var(--ink-2); max-width: 52ch; line-height: 1.6; margin: 0; }
+  .lede { font-family: var(--mono); font-size: 12px; color: var(--ink-2); max-width: 56ch; line-height: 1.6; margin: 0; }
 
-  .standby-state { border: 1px solid var(--rule); background: var(--bg-2); padding: 32px 24px 28px; position: relative; margin-top: 32px; }
-  .standby-state::before { content: "no active signal"; position: absolute; top: -8px; left: 18px; background: var(--bg); padding: 0 8px; font-size: 10px; letter-spacing: 0.24em; text-transform: uppercase; color: var(--ink-3); }
-  .quiet { font-family: var(--serif); font-style: italic; font-weight: 300; font-size: 26px; line-height: 1.2; color: var(--ink); margin: 4px 0 6px; }
-  .quiet-sub { font-size: 12px; color: var(--ink-2); }
-  .quiet-sub b { color: var(--ink); font-weight: 500; }
-  .quiet-sub .pct { color: var(--ember); }
+  /* ─── SECTION HEADER ─────────────────────────────────────────── */
+  .sec-h {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 18px 0 10px;
+    border-bottom: 1px solid var(--rule);
+    margin-top: 30px;
+  }
+  .sec-h-l { font-size: 10px; letter-spacing: 0.28em; text-transform: uppercase; color: var(--ink-3); display: flex; align-items: center; gap: 10px; }
+  .sec-h-l .count { font-family: var(--serif); font-size: 18px; color: var(--ember); letter-spacing: 0; text-transform: none; line-height: 1; }
+  .sec-h-r { font-size: 10px; letter-spacing: 0.18em; color: var(--ink-4); text-transform: uppercase; }
 
-  .pulse { margin: 22px 0 4px; height: 22px; position: relative; overflow: hidden; }
-  .pulse svg { width: 100%; height: 100%; display: block; }
-  .pulse-line { stroke: var(--ember-dim); stroke-width: 1; fill: none; opacity: 0.6; }
+  /* ─── ACTIVE / FEATURED CALL ─────────────────────────────────── */
+  .featured {
+    margin-top: 18px;
+    border: 1px solid var(--rule);
+    background: var(--bg-2);
+    position: relative;
+  }
+  .featured.live {
+    border-color: var(--ember-dim);
+    background: linear-gradient(180deg, rgba(232,118,60,0.06), transparent 60%), var(--bg-2);
+    box-shadow: 0 0 30px var(--ember-glow), inset 0 0 1px var(--ember-dim);
+  }
+  .featured.live::before {
+    content: "● LIVE CALL — IN PROGRESS";
+    position: absolute; top: -8px; left: 18px;
+    background: var(--bg); padding: 0 8px;
+    font-size: 10px; letter-spacing: 0.24em; color: var(--ember);
+    animation: blink 1.6s steps(2) infinite;
+  }
+  .featured.archived::before {
+    content: "● LATEST CALL";
+    position: absolute; top: -8px; left: 18px;
+    background: var(--bg); padding: 0 8px;
+    font-size: 10px; letter-spacing: 0.24em; color: var(--ink-3);
+  }
+  @keyframes blink { 50% { opacity: 0.5 } }
+
+  .featured-body { padding: 26px 22px 22px; }
+  .ft-meta { font-size: 11px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--ink-3); }
+  .ft-ticker { font-family: var(--serif); font-weight: 400; font-size: 44px; line-height: 1; color: var(--ink); margin: 6px 0 4px; letter-spacing: -0.01em; }
+  .ft-ticker em { font-style: italic; color: var(--ember); }
+  .ft-name { font-size: 11px; color: var(--ink-2); letter-spacing: 0.08em; }
+
+  .ft-grid { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 22px; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
+  .ft-cell { padding: 14px 14px 14px 0; border-right: 1px solid var(--rule-soft); }
+  .ft-cell:last-child { border-right: none; padding-right: 0; }
+  .ft-cell:not(:first-child) { padding-left: 14px; }
+  .ft-cell-l { font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-3); }
+  .ft-cell-v { font-family: var(--serif); font-size: 20px; color: var(--ink); margin-top: 6px; line-height: 1; }
+  .ft-cell-v em { font-style: italic; color: var(--ember); }
+  .ft-cell-s { font-size: 10px; color: var(--ink-3); margin-top: 4px; }
+
+  .ft-wallets-h {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 18px 0 8px;
+    font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-3);
+    border-bottom: 1px solid var(--rule-soft);
+  }
+  .ft-wallets-h em { color: var(--ember); font-style: normal; font-family: var(--serif); font-size: 16px; letter-spacing: 0; text-transform: none; }
+  .wallet-row { display: grid; grid-template-columns: 14px 1fr auto auto; gap: 12px; align-items: baseline; padding: 10px 0; border-bottom: 1px dashed var(--rule-soft); font-size: 12px; }
+  .wallet-row:last-child { border-bottom: none; }
+  .wallet-dot { width: 4px; height: 4px; border-radius: 50%; background: var(--ember); margin-top: 6px; }
+  .wallet-addr { font-size: 11px; color: var(--ink); letter-spacing: 0.02em; }
+  .wallet-age  { font-size: 10px; color: var(--ink-3); }
+  .wallet-amt  { font-family: var(--serif); font-size: 15px; color: var(--ember); letter-spacing: -0.005em; }
+
+  .ft-totals { display: flex; justify-content: space-between; align-items: baseline; padding: 14px 0 6px; border-top: 1px solid var(--rule); margin-top: 4px; }
+  .ft-totals-l { font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-3); }
+  .ft-totals-v { font-family: var(--serif); font-size: 22px; color: var(--ember); }
+
+  /* ─── ACTIONS ────────────────────────────────────────────────── */
+  .actions { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; margin-top: 18px; }
+  .btn { font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; padding: 14px 18px; border: 1px solid var(--rule); background: var(--bg-2); color: var(--ink); cursor: pointer; text-align: center; display: inline-block; transition: background 0.15s, border-color 0.15s, transform 0.05s; }
+  .btn:hover { border-color: var(--ink-3); }
+  .btn:active { transform: translateY(1px); }
+  .btn.primary { background: var(--ember); border-color: var(--ember); color: var(--bg); font-weight: 600; }
+  .btn.primary:hover { background: var(--ember-2); border-color: var(--ember-2); }
+  .btn .arrow { display: inline-block; margin-left: 8px; transform: translateY(-1px); }
+  .share-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 10px; }
+  .share-btn { background: var(--bg-2); border: 1px solid var(--rule-soft); color: var(--ink-2); font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; padding: 10px; text-align: center; transition: color 0.15s, border-color 0.15s; cursor: pointer; }
+  .share-btn:hover { color: var(--ink); border-color: var(--ink-3); }
+
+  /* ─── EMPTY STATE (no calls yet) ─────────────────────────────── */
+  .empty {
+    margin-top: 18px;
+    border: 1px solid var(--rule);
+    background: var(--bg-2);
+    padding: 32px 24px;
+    text-align: left;
+    position: relative;
+  }
+  .empty::before {
+    content: "● LISTENING — NO CALLS YET";
+    position: absolute; top: -8px; left: 18px;
+    background: var(--bg); padding: 0 8px;
+    font-size: 10px; letter-spacing: 0.24em; color: var(--ink-3);
+  }
+  .empty-head { font-family: var(--serif); font-style: italic; font-weight: 300; font-size: 24px; line-height: 1.2; color: var(--ink); margin: 0 0 10px; }
+  .empty-body { font-size: 12px; color: var(--ink-2); line-height: 1.7; max-width: 50ch; }
+  .empty-body b { color: var(--ink); font-weight: 500; }
+  .empty-pulse { margin-top: 18px; height: 18px; }
+  .empty-pulse svg { width: 100%; height: 100%; display: block; }
+  .pulse-line { stroke: var(--ember-dim); stroke-width: 1; fill: none; opacity: 0.5; }
   .pulse-blip { stroke: var(--ember); stroke-width: 1.5; fill: none; stroke-dasharray: 240; stroke-dashoffset: 240; animation: sweep 4.5s linear infinite; }
   @keyframes sweep { to { stroke-dashoffset: -240; } }
-  .pulse-cap { position: absolute; bottom: 0; left: 0; right: 0; display: flex; justify-content: space-between; font-size: 10px; color: var(--ink-4); letter-spacing: 0.18em; text-transform: uppercase; padding-top: 4px; border-top: 1px dashed var(--rule); }
 
-  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: 1px solid var(--rule); margin-top: 24px; background: var(--bg-2); }
-  .stat { padding: 14px 14px; border-right: 1px solid var(--rule-soft); }
+  /* ─── PAST CALLS LIST ────────────────────────────────────────── */
+  .calls-list { margin-top: 6px; }
+  .call-row {
+    display: grid;
+    grid-template-columns: auto 1fr auto auto 14px;
+    gap: 14px;
+    align-items: baseline;
+    padding: 14px 4px;
+    border-bottom: 1px dashed var(--rule-soft);
+    cursor: pointer;
+    transition: background 0.12s;
+  }
+  .call-row:hover { background: var(--bg-2); }
+  .call-row:last-child { border-bottom: none; }
+  .call-ticker { font-family: var(--serif); font-size: 18px; color: var(--ink); letter-spacing: -0.01em; }
+  .call-ticker em { font-style: italic; color: var(--ember); }
+  .call-meta { font-size: 10px; color: var(--ink-3); letter-spacing: 0.06em; }
+  .call-meta b { color: var(--ink-2); font-weight: 500; }
+  .call-stat { font-size: 11px; color: var(--ink-2); text-align: right; line-height: 1.3; }
+  .call-stat-v { font-family: var(--serif); font-size: 15px; color: var(--ember); }
+  .call-stat-l { font-size: 9px; letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-4); margin-top: 2px; }
+  .call-arrow { color: var(--ink-4); font-family: var(--serif); font-size: 18px; line-height: 1; }
+  .call-row:hover .call-arrow { color: var(--ember); }
+
+  /* ─── STATS STRIP ────────────────────────────────────────────── */
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 0; border: 1px solid var(--rule); margin-top: 14px; background: var(--bg-2); }
+  .stat { padding: 14px; border-right: 1px solid var(--rule-soft); }
   .stat:last-child { border-right: none; }
   .stat-n { font-size: 22px; font-family: var(--serif); font-weight: 400; color: var(--ink); line-height: 1; letter-spacing: -0.01em; }
   .stat-l { margin-top: 6px; font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-3); }
 
-  .crit { margin-top: 30px; border-top: 1px solid var(--rule); }
-  .crit-h { display: flex; align-items: baseline; justify-content: space-between; padding: 14px 0 10px; font-size: 10px; letter-spacing: 0.24em; text-transform: uppercase; color: var(--ink-3); border-bottom: 1px solid var(--rule); }
-  .crit-row { display: grid; grid-template-columns: 28px 1fr auto; align-items: baseline; gap: 14px; padding: 11px 0; border-bottom: 1px dashed var(--rule-soft); font-size: 12px; }
+  /* ─── HOW IT WORKS (collapsible) ─────────────────────────────── */
+  .how { margin-top: 14px; border: 1px solid var(--rule); background: var(--bg-2); }
+  .how-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 16px; cursor: pointer; user-select: none;
+    border-bottom: 1px solid transparent;
+    transition: border-color 0.15s;
+  }
+  .how[open] .how-head { border-bottom-color: var(--rule); }
+  .how-head-l { font-size: 10px; letter-spacing: 0.24em; text-transform: uppercase; color: var(--ink-3); }
+  .how-head-r { color: var(--ink-4); font-size: 14px; transition: transform 0.18s; line-height: 1; }
+  .how[open] .how-head-r { transform: rotate(90deg); color: var(--ember); }
+  .how-body { padding: 8px 16px 18px; }
+  .crit-row { display: grid; grid-template-columns: 22px 1fr auto; align-items: baseline; gap: 12px; padding: 9px 0; border-bottom: 1px dashed var(--rule-soft); font-size: 12px; }
   .crit-row:last-child { border-bottom: none; }
   .crit-n { color: var(--ink-4); font-size: 10px; letter-spacing: 0.1em; }
   .crit-d { color: var(--ink); }
   .crit-d b { color: var(--ember); font-weight: 500; }
-  .crit-s { color: var(--teal); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; }
+  .crit-s { color: var(--teal); font-size: 9px; letter-spacing: 0.18em; text-transform: uppercase; }
 
-  .sig-banner { border: 1px solid var(--ember-dim); background: linear-gradient(90deg, rgba(232,118,60,0.06), transparent 70%), var(--bg-2); padding: 26px 22px 22px; position: relative; margin-top: 24px; }
-  .sig-banner::before { content: "● ACTIVE SIGNAL"; position: absolute; top: -8px; left: 18px; background: var(--bg); padding: 0 8px; font-size: 10px; letter-spacing: 0.24em; color: var(--ember); animation: blink 1.6s steps(2) infinite; }
-  .sig-banner.archived { border-color: var(--rule); }
-  .sig-banner.archived::before { content: "● ARCHIVED SIGNAL"; color: var(--ink-3); animation: none; }
-  @keyframes blink { 50% { opacity: 0.5 } }
-
-  .sig-name { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-3); }
-  .sig-ticker { font-family: var(--serif); font-weight: 400; font-size: 38px; line-height: 1; color: var(--ink); margin: 8px 0 4px; }
-  .sig-ticker em { font-style: italic; color: var(--ember); }
-  .sig-meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; margin-top: 22px; border-top: 1px solid var(--rule); border-bottom: 1px solid var(--rule); }
-  .sig-cell { padding: 14px 14px 14px 0; border-right: 1px solid var(--rule-soft); }
-  .sig-cell:last-child { border-right: none; padding-right: 0; }
-  .sig-cell:not(:first-child) { padding-left: 14px; }
-  .sig-cell-l { font-size: 9px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-3); }
-  .sig-cell-v { font-family: var(--serif); font-size: 22px; color: var(--ink); margin-top: 6px; line-height: 1; }
-  .sig-cell-s { font-size: 10px; color: var(--ink-3); margin-top: 4px; letter-spacing: 0.04em; }
-
-  .wallets { margin-top: 22px; }
-  .wallets-h { display: flex; align-items: baseline; justify-content: space-between; padding-bottom: 10px; border-bottom: 1px solid var(--rule); font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-3); }
-  .wallets-h em { color: var(--ember); font-style: normal; font-family: var(--serif); font-size: 16px; letter-spacing: 0; text-transform: none; }
-  .wallet { display: grid; grid-template-columns: 1fr auto auto; gap: 16px; align-items: baseline; padding: 11px 0; border-bottom: 1px dashed var(--rule-soft); }
-  .wallet:last-child { border-bottom: none; }
-  .wallet-addr { font-size: 12px; color: var(--ink); letter-spacing: 0.02em; }
-  .wallet-age  { font-size: 11px; color: var(--ink-3); letter-spacing: 0.06em; }
-  .wallet-amt  { font-family: var(--serif); font-size: 16px; color: var(--ember); letter-spacing: -0.005em; }
-  .totals { display: flex; justify-content: space-between; align-items: baseline; padding: 16px 0 8px; border-top: 1px solid var(--rule); margin-top: 4px; }
-  .totals-l { font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-3); }
-  .totals-v { font-family: var(--serif); font-size: 24px; color: var(--ember); }
-
-  .actions { display: grid; grid-template-columns: 1fr auto auto; gap: 10px; margin-top: 18px; }
-  .btn { font-family: var(--mono); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; padding: 14px 18px; border: 1px solid var(--rule); background: var(--bg-2); color: var(--ink); cursor: pointer; transition: background 0.15s, border-color 0.15s; text-decoration: none; text-align: center; display: inline-block; }
-  .btn:hover { border-color: var(--ink-3); }
-  .btn.primary { background: var(--ember); border-color: var(--ember); color: var(--bg); font-weight: 600; }
-  .btn.primary:hover { background: #FF8B4D; border-color: #FF8B4D; }
-  .btn .arrow { display: inline-block; margin-left: 8px; transform: translateY(-1px); }
-
-  .share-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 8px; margin-top: 10px; }
-  .share-btn { background: var(--bg-2); border: 1px solid var(--rule-soft); color: var(--ink-2); font-family: var(--mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; padding: 10px; cursor: pointer; text-align: center; text-decoration: none; transition: color 0.15s, border-color 0.15s; display: block; }
-  .share-btn:hover { color: var(--ink); border-color: var(--ink-3); }
-
-  .station { margin-top: 48px; padding: 16px 0; border-top: 1px solid var(--rule); display: flex; justify-content: space-between; align-items: center; font-size: 10px; letter-spacing: 0.22em; text-transform: uppercase; color: var(--ink-3); }
-  .station-l, .station-r { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+  /* ─── FOOTER ─────────────────────────────────────────────────── */
+  .station {
+    margin-top: 36px; padding: 14px 0;
+    border-top: 1px solid var(--rule);
+    display: flex; justify-content: space-between; align-items: center; gap: 14px;
+    font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--ink-3);
+    flex-wrap: wrap;
+  }
+  .station-l { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
   .station-sep { color: var(--ink-4); }
+  .footer-note { margin: 12px 0 24px; font-size: 10px; color: var(--ink-4); letter-spacing: 0.06em; line-height: 1.7; max-width: 60ch; }
+  .footer-note b { color: var(--ink-3); }
 
-  .footer-note { margin-top: 14px; font-size: 10px; color: var(--ink-4); letter-spacing: 0.1em; line-height: 1.6; max-width: 60ch; }
-  .footer-note a { color: var(--ember); text-decoration: none; border-bottom: 1px dashed var(--ember-dim); }
-
+  /* ─── RESPONSIVE ─────────────────────────────────────────────── */
   @media (max-width: 640px) {
     .frame { padding: 0 16px; }
-    .topbar { margin: 0 -16px 22px; padding: 12px 16px; }
-    h1.title { font-size: 40px; }
+    .topbar { margin: 0 -16px 20px; padding: 12px 16px; }
+    h1.title { font-size: 34px; }
     .stats { grid-template-columns: repeat(2, 1fr); }
     .stat { border-right: 1px solid var(--rule-soft); border-bottom: 1px solid var(--rule-soft); }
     .stat:nth-child(2n) { border-right: none; }
     .stat:nth-last-child(-n+2) { border-bottom: none; }
-    .sig-meta { grid-template-columns: 1fr 1fr; }
-    .sig-cell:nth-child(3) { grid-column: 1 / -1; border-right: none; padding-left: 0; padding-top: 14px; border-top: 1px solid var(--rule-soft); }
-    .sig-cell:nth-child(2) { border-right: none; }
+    .ft-grid { grid-template-columns: 1fr 1fr; }
+    .ft-cell:nth-child(3) { grid-column: 1 / -1; border-right: none; padding-left: 0; padding-top: 14px; border-top: 1px solid var(--rule-soft); }
+    .ft-cell:nth-child(2) { border-right: none; }
     .actions { grid-template-columns: 1fr; }
     .share-row { grid-template-columns: 1fr 1fr; }
-    .sig-ticker { font-size: 32px; }
-    .station { flex-direction: column; gap: 10px; align-items: flex-start; }
+    .ft-ticker { font-size: 36px; }
+    .featured-body { padding: 24px 18px 20px; }
+    .call-row { grid-template-columns: auto 1fr auto 14px; }
+    .call-row .call-meta-mid { display: none; }
+    .station { flex-direction: column; gap: 8px; align-items: flex-start; }
   }
 </style>
 </head>
@@ -163,85 +349,102 @@
 
 <div class="frame">
 
+  <!-- ─── TOPBAR ────────────────────────────────────────────── -->
   <header class="topbar">
     <div class="topbar-l">
       <span class="topbar-mark">alpha</span>
       <span>receiving station</span>
     </div>
     <div class="topbar-r">
+      <button type="button" class="diag-btn" id="diagBtn" aria-expanded="false" title="Test endpoints">diag</button>
       <span class="status-pill" id="statusPill"><span class="dot"></span><span id="statusLabel">connecting</span></span>
     </div>
   </header>
 
-  <section class="hero">
-    <div class="eyebrow">classified — handle with care</div>
-    <h1 class="title">The <em>2,500%</em> runners.<br/>Caught at the entry.</h1>
-    <p class="lede">A passive receiver tuned for one event: three or more brand-new wallets independently putting real size into a token before the chart shows it. Most days it's silent. That's how you know it's working.</p>
-  </section>
-
-  <!-- Active signals render here -->
-  <div id="signals"></div>
-
-  <!-- Standby state (hidden when a recent signal is firing) -->
-  <section id="standby" class="standby-state">
-    <div class="quiet" id="quietHead">Connecting to receiving station…</div>
-    <div class="quiet-sub" id="quietSub">&nbsp;</div>
-    <div class="pulse" aria-hidden="true">
-      <svg viewBox="0 0 600 22" preserveAspectRatio="none">
-        <path class="pulse-line" d="M 0 11 L 600 11" />
-        <path class="pulse-blip" d="M 0 11 L 140 11 L 150 4 L 160 18 L 168 11 L 600 11" />
-      </svg>
-      <div class="pulse-cap">
-        <span id="pulseLeft">rx — initializing</span>
-        <span id="pulseRight">5 feeds</span>
+  <!-- ─── DIAGNOSTIC PANEL ──────────────────────────────────── -->
+  <section class="diag-panel" id="diagPanel" hidden>
+    <div class="diag-head">
+      <span class="diag-head-l">endpoint diagnostic</span>
+      <div class="diag-head-r">
+        <button type="button" class="diag-mini" id="diagRunBtn">run again ↻</button>
+        <button type="button" class="diag-mini" id="diagCopyBtn">copy report</button>
+        <button type="button" class="diag-close" id="diagCloseBtn" aria-label="Close">✕</button>
       </div>
     </div>
+    <div class="diag-rows" id="diagRows"></div>
+    <div class="diag-foot" id="diagFoot">tap a row to view response · all paths same-origin</div>
   </section>
 
-  <!-- Stats always visible -->
+  <!-- ─── HERO ──────────────────────────────────────────────── -->
+  <section class="hero">
+    <div class="eyebrow">on-chain alpha · handle with care</div>
+    <h1 class="title">The <em>100x</em> runners.<br/>Sniped at the entry.</h1>
+    <p class="lede">Three or more fresh wallets aping the same token within two hours of Raydium graduation, sub-150k mcap, mint renounced. The wire trips before the chart confirms. Below: every fire.</p>
+  </section>
+
+  <!-- ─── CALLS — THE MAIN EVENT ────────────────────────────── -->
+  <div class="sec-h">
+    <div class="sec-h-l">
+      <span>the calls</span>
+      <span class="count" id="callsCount">—</span>
+    </div>
+    <div class="sec-h-r" id="callsSubhead">listening</div>
+  </div>
+
+  <!-- Featured (latest) call OR empty state -->
+  <div id="featuredHost"></div>
+
+  <!-- Past calls list -->
+  <div class="calls-list" id="callsList"></div>
+
+  <!-- ─── LIVE RECEIVER STATS ───────────────────────────────── -->
+  <div class="sec-h">
+    <div class="sec-h-l"><span>live receiver</span></div>
+    <div class="sec-h-r" id="rxUptime">rx —</div>
+  </div>
   <div class="stats">
     <div class="stat"><div class="stat-n" id="statTokens">—</div><div class="stat-l">tokens watched</div></div>
     <div class="stat"><div class="stat-n" id="statBuys">—</div><div class="stat-l">≥$2.5k buys</div></div>
     <div class="stat"><div class="stat-n" id="statFresh">—</div><div class="stat-l">fresh wallets</div></div>
-    <div class="stat"><div class="stat-n" id="statHoney">—</div><div class="stat-l">honeypots blocked</div></div>
+    <div class="stat"><div class="stat-n" id="statSignals">—</div><div class="stat-l">total fires</div></div>
   </div>
 
-  <!-- Signal criteria -->
-  <div class="crit">
-    <div class="crit-h"><span>signal filter</span><span>v1.0</span></div>
-    <div id="critRows"></div>
-  </div>
+  <!-- ─── HOW IT WORKS ──────────────────────────────────────── -->
+  <details class="how">
+    <summary class="how-head">
+      <span class="how-head-l">how the receiver decides to fire</span>
+      <span class="how-head-r">›</span>
+    </summary>
+    <div class="how-body" id="critRows"></div>
+  </details>
 
+  <!-- ─── FOOTER ────────────────────────────────────────────── -->
   <footer class="station">
     <div class="station-l">
-      <span id="rxUptime">rx —</span>
-      <span class="station-sep">/</span>
-      <span>pumpportal · dexscreener · geckoterminal · jupiter · solana-rpc</span>
+      <span>pumpportal</span>
+      <span class="station-sep">·</span>
+      <span>dexscreener</span>
+      <span class="station-sep">·</span>
+      <span>geckoterminal</span>
+      <span class="station-sep">·</span>
+      <span>jupiter</span>
+      <span class="station-sep">·</span>
+      <span>solana rpc</span>
     </div>
-    <div class="station-r">
-      <span>v1.0.0</span>
-    </div>
+    <div>v1.1</div>
   </footer>
 
   <div class="footer-note">
-    Free endpoints only. No fake signals. The signal is rare by design — expect <b>1 to 3 fires per month</b>. Empty days are the system working correctly.
+    Free endpoints only. No fake signals. The receiver is rare by design — expect <b>1 to 3 fires per month</b>. Empty days are the system working correctly. Not financial advice.
   </div>
 
 </div>
 
 <script>
   // ───── CONFIG ─────────────────────────────────────────────────────
-  // If this page is served from a different origin than your backend,
-  // set API_BASE to the absolute URL of your backend (no trailing slash).
-  // Example: const API_BASE = "https://swap.verixiaapps.com";
-  // Same-origin: leave as "".
-  const API_BASE = "";
-
-  // Where the "Trade" button on a fired signal should send the user.
-  // {mint} is replaced with the token's mint address.
+  const API_BASE  = "";
   const TRADE_URL = "https://swap.verixiaapps.com/?t={mint}";
-
-  const POLL_MS = 15000;
+  const POLL_MS   = 15000;
 
   // ───── HELPERS ────────────────────────────────────────────────────
   function el(tag, props, ...children) {
@@ -264,6 +467,12 @@
     if (n >= 1e3) return '$' + Math.round(n).toLocaleString();
     return '$' + n.toFixed(2);
   }
+  function fmtUsdK(n) {
+    if (!Number.isFinite(n) || n <= 0) return '$0';
+    if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+    if (n >= 1e3) return '$' + (n / 1e3).toFixed(1) + 'k';
+    return '$' + Math.round(n);
+  }
   function fmtPrice(n) {
     if (!Number.isFinite(n) || n <= 0) return '$0';
     if (n >= 0.01) return '$' + n.toFixed(4);
@@ -276,7 +485,7 @@
     if (n >= 1e3) return (n / 1e3).toFixed(1) + 'k';
     return String(Math.round(n));
   }
-  function shortAddr(a) { return a ? a.slice(0,5) + '…' + a.slice(-4) : ''; }
+  function shortAddr(a) { return a ? a.slice(0,4) + '…' + a.slice(-4) : ''; }
   function timeAgo(ms) {
     if (!ms) return '';
     const s = Math.floor((Date.now() - ms) / 1000);
@@ -287,41 +496,17 @@
   }
   function durationHMS(ms) {
     if (!ms || ms < 0) return '0s';
-    const totalSec = Math.floor(ms / 1000);
-    const d = Math.floor(totalSec / 86400);
-    const h = Math.floor((totalSec % 86400) / 3600);
-    const m = Math.floor((totalSec % 3600) / 60);
+    const total = Math.floor(ms / 1000);
+    const d = Math.floor(total / 86400);
+    const h = Math.floor((total % 86400) / 3600);
+    const m = Math.floor((total % 3600) / 60);
     if (d > 0) return `${d}d ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
     return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}`;
   }
 
-  // ───── RENDERERS ──────────────────────────────────────────────────
-  function renderCriteria(cfg) {
-    const rows = [
-      { d: 'Token graduates pump.fun → Raydium.' },
-      { d: `Buyer's wallet first transaction within <b>${cfg?.maxWalletAgeH || 24}h</b>.` },
-      { d: `Single buy ≥ <b>${fmtUsd(cfg?.minBuyUsd || 2500)}</b>.` },
-      { d: `Convergence of <b>${cfg?.minConverge || 3} to ${cfg?.maxConverge || 8} wallets</b> within a <b>${cfg?.convergeWindowH || 2}h</b> window.` },
-      { d: `Entry market cap below <b>${fmtUsd(cfg?.maxEntryMcapUsd || 150000)}</b>.` },
-      { d: `Unit price below <b>${fmtPrice(cfg?.maxEntryPriceUsd || 0.0001)}</b>.` },
-      { d: 'Honeypot check: mint authority renounced, sell route returns non-zero.' },
-    ];
-    const host = document.getElementById('critRows');
-    host.innerHTML = '';
-    rows.forEach((r, i) => {
-      const row = el('div', { class: 'crit-row' },
-        el('span', { class: 'crit-n' }, String(i+1).padStart(2,'0')),
-        el('span', { class: 'crit-d', html: r.d }),
-        el('span', { class: 'crit-s' }, 'active'),
-      );
-      host.appendChild(row);
-    });
-  }
-
-  function renderSignal(sig, isLatest) {
-    const age = Date.now() - sig.firedAt;
-    const isArchived = age > 60 * 60 * 1000 || !isLatest;
-    const firstLead = Math.max(0, Math.round((sig.firedAt - sig.firstTs) / 60_000));
+  // ───── RENDER: FEATURED CALL ──────────────────────────────────────
+  function renderFeatured(sig) {
+    const live = (Date.now() - sig.firedAt) < 60 * 60 * 1000;
     const windowMin = Math.max(0, Math.round((sig.lastTs - sig.firstTs) / 60_000));
     const dexscreen = `https://dexscreener.com/solana/${sig.pool || sig.mint}`;
     const solscan   = `https://solscan.io/token/${sig.mint}`;
@@ -329,93 +514,206 @@
     const shareText = `🎯 Alpha signal: $${sig.symbol} — ${sig.walletCount} fresh wallets, ${fmtUsd(sig.totalUsd)} in at ${fmtUsd(sig.entryMcap)} mcap.\n\n${sig.mint}`;
     const tgText    = `🎯 Alpha: $${sig.symbol} — ${sig.walletCount} fresh wallets, ${fmtUsd(sig.totalUsd)} in at ${fmtUsd(sig.entryMcap)} mcap`;
 
-    const banner = el('section', { class: 'sig-banner' + (isArchived ? ' archived' : '') });
+    const wrap = el('section', { class: 'featured ' + (live ? 'live' : 'archived') });
+    const body = el('div', { class: 'featured-body' });
 
-    banner.appendChild(el('div', { class: 'sig-name' },
-      isArchived ? `fired ${timeAgo(sig.firedAt)}` : `incoming — confidence high · ${timeAgo(sig.firedAt)}`
+    body.appendChild(el('div', { class: 'ft-meta' },
+      live ? `fired ${timeAgo(sig.firedAt)} · still in window` : `fired ${timeAgo(sig.firedAt)}`
     ));
-    banner.appendChild(el('div', { class: 'sig-ticker', html: `$<em>${sig.symbol}</em>` }));
-    banner.appendChild(el('div', { class: 'sig-name', style: 'margin-top:6px' }, `${sig.name} · solana`));
+    body.appendChild(el('div', { class: 'ft-ticker', html: `$<em>${sig.symbol}</em>` }));
+    body.appendChild(el('div', { class: 'ft-name' }, `${sig.name || 'Unknown'} · solana`));
 
-    const meta = el('div', { class: 'sig-meta' });
+    // Stats grid: entry mcap / wallets / total in
+    const grid = el('div', { class: 'ft-grid' });
     [
-      ['entry mcap', fmtUsd(sig.entryMcap), 'just-migrated raydium'],
-      ['entry price', fmtPrice(sig.entryPrice), 'via dexscreener'],
-      ['fired', `+${firstLead}m`, `window ${windowMin}m`],
+      ['entry mcap',  fmtUsd(sig.entryMcap),       fmtPrice(sig.entryPrice) + ' / unit'],
+      ['fresh wallets', String(sig.walletCount),   `${windowMin}m window`],
+      ['total in',    fmtUsd(sig.totalUsd),        `avg ${fmtUsd(sig.totalUsd / Math.max(1, sig.walletCount))}`],
     ].forEach(([l, v, s]) => {
-      meta.appendChild(el('div', { class: 'sig-cell' },
-        el('div', { class: 'sig-cell-l' }, l),
-        el('div', { class: 'sig-cell-v' }, v),
-        el('div', { class: 'sig-cell-s' }, s),
+      grid.appendChild(el('div', { class: 'ft-cell' },
+        el('div', { class: 'ft-cell-l' }, l),
+        el('div', { class: 'ft-cell-v' }, v),
+        el('div', { class: 'ft-cell-s' }, s),
       ));
     });
-    banner.appendChild(meta);
+    body.appendChild(grid);
 
-    // Wallets
-    const wrap = el('div', { class: 'wallets' });
-    wrap.appendChild(el('div', { class: 'wallets-h' },
-      el('span', null, 'convergence'),
-      el('em', null, `${sig.walletCount} wallets`),
+    // Wallet detail
+    body.appendChild(el('div', { class: 'ft-wallets-h' },
+      el('span', null, 'the convergence'),
+      el('em', null, `${sig.walletCount} fresh wallets`),
     ));
     const buys = (sig.buys && sig.buys.length > 0)
       ? sig.buys
       : (sig.wallets || []).map(w => ({ wallet: w, usd: 0, ts: sig.firstTs }));
     buys.forEach(b => {
-      wrap.appendChild(el('div', { class: 'wallet' },
+      body.appendChild(el('div', { class: 'wallet-row' },
+        el('span', { class: 'wallet-dot' }),
         el('span', { class: 'wallet-addr' }, shortAddr(b.wallet)),
-        el('span', { class: 'wallet-age' }, b.ts ? timeAgo(b.ts) : 'fresh'),
+        el('span', { class: 'wallet-age' }, b.ts ? timeAgo(b.ts) : ''),
         el('span', { class: 'wallet-amt' }, fmtUsd(b.usd)),
       ));
     });
-    wrap.appendChild(el('div', { class: 'totals' },
-      el('span', { class: 'totals-l' }, 'total in'),
-      el('span', { class: 'totals-v' }, fmtUsd(sig.totalUsd)),
+    body.appendChild(el('div', { class: 'ft-totals' },
+      el('span', { class: 'ft-totals-l' }, 'aggregate position'),
+      el('span', { class: 'ft-totals-v' }, fmtUsd(sig.totalUsd)),
     ));
-    banner.appendChild(wrap);
 
     // Actions
     const actions = el('div', { class: 'actions' });
     actions.appendChild(el('a', { class: 'btn primary', href: tradeUrl, target: '_blank', rel: 'noreferrer', html: `Trade $${sig.symbol} <span class="arrow">→</span>` }));
-    actions.appendChild(el('button', { class: 'btn', type: 'button', onclick: () => { navigator.clipboard?.writeText(sig.mint); } }, 'Copy mint'));
-    actions.appendChild(el('a', { class: 'btn', href: dexscreen, target: '_blank', rel: 'noreferrer' }, 'DexScreener'));
-    banner.appendChild(actions);
+    actions.appendChild(el('button', { class: 'btn', type: 'button', onclick: (e) => {
+      navigator.clipboard?.writeText(sig.mint);
+      e.target.textContent = 'copied ✓';
+      setTimeout(() => { e.target.textContent = 'Copy mint'; }, 1500);
+    } }, 'Copy mint'));
+    actions.appendChild(el('a', { class: 'btn', href: dexscreen, target: '_blank', rel: 'noreferrer' }, 'Chart'));
+    body.appendChild(actions);
 
     // Share row
     const shareRow = el('div', { class: 'share-row' });
     shareRow.appendChild(el('a', {
       class: 'share-btn',
       href: `https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(dexscreen)}`,
-      target: '_blank', rel: 'noreferrer'
+      target: '_blank', rel: 'noreferrer',
     }, 'Share on X'));
     shareRow.appendChild(el('a', {
       class: 'share-btn',
       href: `https://t.me/share/url?url=${encodeURIComponent(dexscreen)}&text=${encodeURIComponent(tgText)}`,
-      target: '_blank', rel: 'noreferrer'
-    }, 'Share on Telegram'));
+      target: '_blank', rel: 'noreferrer',
+    }, 'Telegram'));
     shareRow.appendChild(el('a', { class: 'share-btn', href: solscan, target: '_blank', rel: 'noreferrer' }, 'Solscan'));
-    banner.appendChild(shareRow);
+    body.appendChild(shareRow);
 
-    return banner;
+    wrap.appendChild(body);
+    return wrap;
   }
 
+  // ───── RENDER: COMPACT CALL ROW ───────────────────────────────────
+  function renderCallRow(sig) {
+    const dexscreen = `https://dexscreener.com/solana/${sig.pool || sig.mint}`;
+    const row = el('a', {
+      class: 'call-row', href: dexscreen, target: '_blank', rel: 'noreferrer',
+    });
+    row.appendChild(el('span', { class: 'call-ticker', html: `$<em>${sig.symbol}</em>` }));
+    row.appendChild(el('div', { class: 'call-meta call-meta-mid' },
+      `${timeAgo(sig.firedAt)} · `,
+      el('b', null, `${sig.walletCount}w`),
+      ` · ${fmtUsdK(sig.entryMcap)} mcap`,
+    ));
+    row.appendChild(el('div', { class: 'call-stat' },
+      el('div', { class: 'call-stat-v' }, fmtUsdK(sig.totalUsd)),
+      el('div', { class: 'call-stat-l' }, 'in'),
+    ));
+    row.appendChild(el('span', { class: 'call-arrow' }, '›'));
+    return row;
+  }
+
+  // ───── RENDER: EMPTY STATE ────────────────────────────────────────
+  function renderEmpty(status) {
+    const up = durationHMS(status.uptimeMs || 0);
+    const wrap = el('section', { class: 'empty' });
+    wrap.appendChild(el('div', { class: 'empty-head' }, 'The frequency is quiet.'));
+    const sub = el('div', { class: 'empty-body' });
+    if (status.uptimeMs) {
+      sub.innerHTML = `No fires yet. The receiver has been listening for <b>${up}</b>. ` +
+        `Currently watching <b>${fmtCompact(status.tokensWatched || 0)}</b> tokens and ` +
+        `<b>${fmtCompact(status.qualifyingTrades || 0)}</b> qualifying buys. ` +
+        `Most days it stays this way — that's how you know it's working.`;
+    } else {
+      sub.textContent = 'Connecting to receiving station…';
+    }
+    wrap.appendChild(sub);
+    wrap.appendChild(el('div', { class: 'empty-pulse', html: `
+      <svg viewBox="0 0 600 18" preserveAspectRatio="none">
+        <path class="pulse-line" d="M 0 9 L 600 9" />
+        <path class="pulse-blip" d="M 0 9 L 140 9 L 150 2 L 160 16 L 168 9 L 600 9" />
+      </svg>` }));
+    return wrap;
+  }
+
+  // ───── RENDER: CRITERIA ───────────────────────────────────────────
+  function renderCriteria(cfg) {
+    const rows = [
+      'Token has just graduated pump.fun → Raydium.',
+      `Buyer's wallet is less than <b>${cfg?.maxWalletAgeH || 24}h</b> old.`,
+      `Single buy of at least <b>${fmtUsd(cfg?.minBuyUsd || 2500)}</b>.`,
+      `<b>${cfg?.minConverge || 3} to ${cfg?.maxConverge || 8}</b> fresh wallets converge within <b>${cfg?.convergeWindowH || 2}h</b>.`,
+      `Entry market cap below <b>${fmtUsd(cfg?.maxEntryMcapUsd || 150000)}</b>.`,
+      `Unit price below <b>${fmtPrice(cfg?.maxEntryPriceUsd || 0.0001)}</b>.`,
+      'Honeypot check passes: mint authority renounced, sell route returns non-zero.',
+    ];
+    const host = document.getElementById('critRows');
+    host.innerHTML = '';
+    rows.forEach((d, i) => {
+      host.appendChild(el('div', { class: 'crit-row' },
+        el('span', { class: 'crit-n' }, String(i+1).padStart(2,'0')),
+        el('span', { class: 'crit-d', html: d }),
+        el('span', { class: 'crit-s' }, 'active'),
+      ));
+    });
+  }
+
+  // ───── STATUS PILL ────────────────────────────────────────────────
   function setStatusPill(state, label) {
     const pill = document.getElementById('statusPill');
     pill.classList.remove('firing', 'warn');
-    if (state === 'firing')        pill.classList.add('firing');
-    else if (state === 'warn')     pill.classList.add('warn');
+    if (state === 'firing')    pill.classList.add('firing');
+    else if (state === 'warn') pill.classList.add('warn');
     document.getElementById('statusLabel').textContent = label;
   }
 
-  // ───── DATA FLOW ──────────────────────────────────────────────────
+  // ───── MAIN RENDER ────────────────────────────────────────────────
   let lastConfigKey = null;
 
+  function render(signals, status) {
+    const latest = signals[0];
+    const live = latest && (Date.now() - latest.firedAt < 60 * 60 * 1000);
+    const connected = !!status.wsConnected;
+
+    if (!connected)    setStatusPill('warn', 'reconnecting');
+    else if (live)     setStatusPill('firing', 'live call');
+    else               setStatusPill('', 'listening');
+
+    // Calls section header
+    document.getElementById('callsCount').textContent = signals.length || '0';
+    const subhead = document.getElementById('callsSubhead');
+    if (live)                 subhead.textContent = 'live · in window';
+    else if (latest)          subhead.textContent = `last fire ${timeAgo(latest.firedAt)}`;
+    else if (status.uptimeMs) subhead.textContent = `listening · ${durationHMS(status.uptimeMs)}`;
+    else                      subhead.textContent = 'connecting';
+
+    // Featured (latest) or empty
+    const featHost = document.getElementById('featuredHost');
+    featHost.innerHTML = '';
+    if (latest)  featHost.appendChild(renderFeatured(latest));
+    else         featHost.appendChild(renderEmpty(status));
+
+    // Past calls list (everything except the latest)
+    const listHost = document.getElementById('callsList');
+    listHost.innerHTML = '';
+    const past = signals.slice(1);
+    past.forEach(sig => listHost.appendChild(renderCallRow(sig)));
+
+    // Stats
+    document.getElementById('statTokens').textContent  = fmtCompact(status.tokensWatched || 0);
+    document.getElementById('statBuys').textContent    = fmtCompact(status.qualifyingTrades || 0);
+    document.getElementById('statFresh').textContent   = fmtCompact(status.freshWalletsSeen || 0);
+    document.getElementById('statSignals').textContent = fmtCompact(status.signalsFired || signals.length || 0);
+
+    // Criteria (re-render on config change)
+    const cfg = status.config || {};
+    const cfgKey = JSON.stringify(cfg);
+    if (cfgKey !== lastConfigKey) { renderCriteria(cfg); lastConfigKey = cfgKey; }
+
+    // Uptime in section header
+    document.getElementById('rxUptime').textContent = `rx ${durationHMS(status.uptimeMs || 0)}`;
+  }
+
+  // ───── DATA FLOW ──────────────────────────────────────────────────
   async function load() {
     try {
-      // Polls the static JSON the worker writes to /alpha-state.json
-      // (cachebusted). Avoids any /api/* routing issues end-to-end.
-      const r = await fetch(API_BASE + '/alpha-state.json?t=' + Date.now(), {
-        cache: 'no-store',
-      });
+      const r = await fetch(API_BASE + '/alpha-state.json?t=' + Date.now(), { cache: 'no-store' });
       if (!r.ok) throw new Error('state not ready');
       const data = await r.json();
       const signals = Array.isArray(data?.signals) ? data.signals : [];
@@ -425,61 +723,145 @@
     }
   }
 
-  function render(signals, status) {
-    // Status pill
-    const latest = signals[0];
-    const firing = latest && (Date.now() - latest.firedAt < 60 * 60 * 1000);
-    const connected = !!status.wsConnected;
-    if (!connected) setStatusPill('warn', 'reconnecting');
-    else if (firing) setStatusPill('firing', 'signal');
-    else             setStatusPill('', 'listening');
-
-    // Signals
-    const host = document.getElementById('signals');
-    host.innerHTML = '';
-    signals.forEach((sig, i) => host.appendChild(renderSignal(sig, i === 0)));
-
-    // Standby
-    const standby = document.getElementById('standby');
-    if (firing) {
-      standby.style.display = 'none';
-    } else {
-      standby.style.display = '';
-      if (latest) {
-        document.getElementById('quietHead').textContent = 'The frequency is quiet.';
-        document.getElementById('quietSub').innerHTML =
-          `Last fire: <b>${timeAgo(latest.firedAt)}</b> — <b>$${latest.symbol}</b>, <b>${latest.walletCount}</b> fresh wallets, <b>${fmtUsd(latest.totalUsd)}</b> in.`;
-      } else if (status.uptimeMs) {
-        document.getElementById('quietHead').textContent = 'The frequency is quiet.';
-        document.getElementById('quietSub').innerHTML =
-          `No fires yet. Listening since station start — <b>${durationHMS(status.uptimeMs)}</b> uptime.`;
-      } else {
-        document.getElementById('quietHead').textContent = 'Connecting to receiving station…';
-        document.getElementById('quietSub').innerHTML = '&nbsp;';
-      }
-      document.getElementById('pulseLeft').textContent  = `rx — t+${durationHMS(status.uptimeMs || 0)}`;
-      document.getElementById('pulseRight').textContent = '5 feeds';
-    }
-
-    // Stats
-    document.getElementById('statTokens').textContent = fmtCompact(status.tokensWatched || 0);
-    document.getElementById('statBuys').textContent   = fmtCompact(status.qualifyingTrades || 0);
-    document.getElementById('statFresh').textContent  = fmtCompact(status.freshWalletsSeen || 0);
-    document.getElementById('statHoney').textContent  = fmtCompact(status.honeypotsBlocked || 0);
-
-    // Criteria (only re-render when config changes)
-    const cfg = status.config || {};
-    const cfgKey = JSON.stringify(cfg);
-    if (cfgKey !== lastConfigKey) { renderCriteria(cfg); lastConfigKey = cfgKey; }
-
-    // Station footer
-    document.getElementById('rxUptime').textContent = `rx ${durationHMS(status.uptimeMs || 0)}`;
-  }
-
   // Boot
-  renderCriteria({}); // render with defaults until first status response
+  renderCriteria({});
   load();
   setInterval(load, POLL_MS);
+
+  // ───── DIAGNOSTIC PANEL ───────────────────────────────────────────
+  const DIAG_ENDPOINTS = [
+    { method: 'GET', path: '/alpha-state.json',   note: 'page polls this' },
+    { method: 'GET', path: '/api/alpha/status',   note: 'same payload, /api/ route' },
+    { method: 'GET', path: '/api/alpha/signals',  note: 'fired signals only' },
+    { method: 'GET', path: '/api/alpha/debug',    note: 'wss state, file-writer, rpc queue' },
+    { method: 'GET', path: '/api/health',         note: 'server alive + config' },
+  ];
+
+  const diagState = []; // [{ ep, ok, status, latencyMs, sizeBytes, body, error, open }]
+
+  function fmtBytes(n) {
+    if (!Number.isFinite(n) || n < 0) return '–';
+    if (n < 1024)    return n + ' B';
+    if (n < 1048576) return (n / 1024).toFixed(1) + ' KB';
+    return (n / 1048576).toFixed(2) + ' MB';
+  }
+
+  async function runDiagCheck(idx) {
+    const ep = DIAG_ENDPOINTS[idx];
+    diagState[idx] = { ep, pending: true };
+    renderDiagRows();
+    const url = API_BASE + ep.path + (ep.path.includes('?') ? '&' : '?') + 't=' + Date.now();
+    const t0  = performance.now();
+    try {
+      const r    = await fetch(url, { method: ep.method, cache: 'no-store' });
+      const text = await r.text();
+      const ms   = Math.round(performance.now() - t0);
+      const ct   = r.headers.get('content-type') || '';
+      const looksJson = ct.includes('json') || /^[\s\n]*[\[{]/.test(text);
+      let pretty = text;
+      if (looksJson) {
+        try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+      } else if (/<!doctype|<html/i.test(text)) {
+        pretty = '⚠ Got HTML instead of JSON — request fell through to the SPA catch-all.\n\n' + text.slice(0, 400);
+      }
+      diagState[idx] = {
+        ep, pending: false,
+        ok:        r.ok && (looksJson || ep.path === '/health'),
+        status:    r.status,
+        latencyMs: ms,
+        sizeBytes: text.length,
+        contentType: ct,
+        body:      pretty.slice(0, 6000),
+        open:      diagState[idx]?.open || false,
+      };
+    } catch (e) {
+      const ms = Math.round(performance.now() - t0);
+      diagState[idx] = {
+        ep, pending: false, ok: false, status: 0, latencyMs: ms,
+        sizeBytes: 0, body: '', error: e.message || String(e),
+        open: diagState[idx]?.open || false,
+      };
+    }
+    renderDiagRows();
+  }
+
+  function renderDiagRows() {
+    const host = document.getElementById('diagRows');
+    host.innerHTML = '';
+    diagState.forEach((s, idx) => {
+      if (!s) return;
+      const row = el('div', { class: 'diag-row' + (s.open ? ' open' : ''), onclick: () => {
+        diagState[idx].open = !diagState[idx].open;
+        renderDiagRows();
+      }});
+      const dotCls = s.pending ? 'pending' : (s.ok ? 'ok' : 'fail');
+      row.appendChild(el('span', { class: 'diag-dot ' + dotCls }));
+      row.appendChild(el('div', null,
+        el('span', { class: 'diag-path' },
+          el('span', { class: 'diag-path-method' }, s.ep.method),
+          s.ep.path,
+        ),
+      ));
+      const codeCls = s.pending ? '' : (s.ok ? 'ok' : 'fail');
+      const codeTxt = s.pending ? '…' : (s.status || 'ERR');
+      const metaTxt = s.pending ? 'requesting' : (s.error ? 'network' : `${s.latencyMs}ms · ${fmtBytes(s.sizeBytes)}`);
+      row.appendChild(el('div', { class: 'diag-stat' },
+        el('div', { class: 'diag-stat-code ' + codeCls }, String(codeTxt)),
+        el('div', { class: 'diag-stat-meta' }, metaTxt),
+      ));
+      row.appendChild(el('span', { class: 'diag-arrow' }, '›'));
+
+      if (s.open && !s.pending) {
+        const body = el('div', { class: 'diag-body' + (s.ok ? '' : ' error'), onclick: (e) => e.stopPropagation() });
+        if (s.error) body.textContent = 'fetch failed: ' + s.error;
+        else         body.textContent = (s.body || '(empty response)') + (s.body && s.body.length >= 6000 ? '\n…(truncated)' : '');
+        row.appendChild(body);
+      }
+      host.appendChild(row);
+    });
+    document.getElementById('diagFoot').textContent = diagState.some(s => s?.pending)
+      ? 'running…'
+      : `last check ${new Date().toLocaleTimeString()} · tap a row to view response`;
+  }
+
+  function runAllDiag() {
+    DIAG_ENDPOINTS.forEach((_, i) => runDiagCheck(i));
+  }
+
+  function copyDiagReport() {
+    const lines = ['ALPHA RECEIVER · ENDPOINT DIAGNOSTIC', new Date().toISOString(), location.origin, ''];
+    diagState.forEach(s => {
+      if (!s) return;
+      if (s.error)        lines.push(`✗ ${s.ep.method} ${s.ep.path}  →  FETCH FAILED: ${s.error}`);
+      else if (s.pending) lines.push(`… ${s.ep.method} ${s.ep.path}  →  pending`);
+      else                lines.push(`${s.ok ? '✓' : '✗'} ${s.ep.method} ${s.ep.path}  →  ${s.status} · ${s.latencyMs}ms · ${fmtBytes(s.sizeBytes)} · ${s.contentType || 'no content-type'}`);
+    });
+    const txt = lines.join('\n');
+    navigator.clipboard?.writeText(txt);
+    const btn = document.getElementById('diagCopyBtn');
+    const orig = btn.textContent;
+    btn.textContent = 'copied ✓';
+    setTimeout(() => { btn.textContent = orig; }, 1500);
+  }
+
+  function toggleDiagPanel(forceOpen) {
+    const panel = document.getElementById('diagPanel');
+    const btn   = document.getElementById('diagBtn');
+    const open  = forceOpen != null ? forceOpen : panel.hasAttribute('hidden');
+    if (open) {
+      panel.removeAttribute('hidden');
+      btn.setAttribute('aria-expanded', 'true');
+      runAllDiag();
+    } else {
+      panel.setAttribute('hidden', '');
+      btn.setAttribute('aria-expanded', 'false');
+    }
+  }
+
+  document.getElementById('diagBtn').addEventListener('click',      () => toggleDiagPanel());
+  document.getElementById('diagCloseBtn').addEventListener('click', () => toggleDiagPanel(false));
+  document.getElementById('diagRunBtn').addEventListener('click',   () => runAllDiag());
+  document.getElementById('diagCopyBtn').addEventListener('click',  () => copyDiagReport());
 </script>
 
 </body>
