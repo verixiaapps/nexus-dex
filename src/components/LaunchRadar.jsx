@@ -384,11 +384,9 @@ const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const FEE_BPS    = 300;                  // 3% to FEE_WALLET, paid in SOL on every trade.
 
-// Hard-coded 5% slippage. Stays under Phantom/Blowfish's warning
-// threshold so users don't see a scary warning before confirming.
-// Jupiter still finds best price inside the window — slippage is just
-// max tolerance, not a target.
-const SLIPPAGE_BPS = 500;
+// Hard-coded 30% slippage so trades land. Wallet will show a high-slip
+// warning that users tap through — expected on memecoin trades.
+const SLIPPAGE_BPS = 3000;
 
 // Reserve enough SOL to cover ATA rent (~0.00204), wSOL wrap (~0.002),
 // tx fee, and a small priority-fee buffer when the user picks MAX.
@@ -1375,51 +1373,90 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
      window closes.
      ════════════════════════════════════════════════════════════════ */
   const sendAndConfirm = useCallback(async (rawTx, blockhashInfo) => {
-    const sig = await broadcastRaw(rawTx);
+    // WebSocket signature subscriptions = sub-second push when the tx
+    // lands, no polling lag. Free on every public RPC. We also keep a
+    // light polling fallback in case all subscriptions silently drop.
+    const conns = RPC_POOL.map(u => getConn(u, 'confirmed'));
 
-    // Race a call across every RPC in the pool. As long as ONE sees the tx
-    // landed, we confirm. A single flaky RPC won't make us miss it.
-    const racePool = async (op) => {
-      const conns = RPC_POOL.map(u => getConn(u, 'confirmed'));
-      try { return await Promise.any(conns.map(c => op(c))); }
-      catch { return null; }
+    let resolved = false;
+    let resolveSig, rejectSig;
+    const confirmPromise = new Promise((res, rej) => { resolveSig = res; rejectSig = rej; });
+
+    const resolveErr = (errVal) => {
+      if (resolved) return;
+      resolved = true;
+      const errStr = JSON.stringify(errVal || '').toLowerCase();
+      if (errStr.includes('slippage') || errStr.includes('6001') || errStr.includes('0x1771')) {
+        rejectSig(new Error('Price moved — slippage exceeded. Try again.'));
+      } else {
+        rejectSig(new Error('Trade failed on-chain.'));
+      }
+    };
+    const resolveOk = (sigOk) => {
+      if (resolved) return;
+      resolved = true;
+      resolveSig(sigOk);
     };
 
-    const start = Date.now();
-    const deadlineMs = 90_000;
-    let lastResend = Date.now();
+    // Broadcast first so we have the real signature.
+    const sig = await broadcastRaw(rawTx);
 
-    while (Date.now() - start < deadlineMs) {
-      if (Date.now() - lastResend > 1500) {
-        broadcastRaw(rawTx).catch(() => {});
-        lastResend = Date.now();
+    // Subscribe to confirmation on every RPC in parallel. The first one
+    // to push a notification wins. Sub-second when the tx lands.
+    const subIds = await Promise.all(conns.map(async (c) => {
+      try {
+        return await c.onSignature(sig, (result) => {
+          if (result?.err) resolveErr(result.err);
+          else resolveOk(sig);
+        }, 'confirmed');
+      } catch { return null; }
+    }));
+    const cleanup = () => {
+      subIds.forEach((id, i) => {
+        if (id != null) conns[i].removeSignatureListener(id).catch(() => {});
+      });
+    };
+
+    // Fallback polling + resend in case the WebSockets are flaky.
+    (async () => {
+      const pollDeadline = Date.now() + 60_000;
+      let lastResend = Date.now();
+      const racePool = async (op) => {
+        try { return await Promise.any(conns.map(c => op(c))); }
+        catch { return null; }
+      };
+      while (!resolved && Date.now() < pollDeadline) {
+        if (Date.now() - lastResend > 2000) {
+          broadcastRaw(rawTx).catch(() => {});
+          lastResend = Date.now();
+        }
+        const st = await racePool(c => c.getSignatureStatus(sig, { searchTransactionHistory: false }));
+        const cs = st?.value?.confirmationStatus;
+        if (cs === 'confirmed' || cs === 'finalized') { resolveOk(sig); return; }
+        if (st?.value?.err) { resolveErr(st.value.err); return; }
+        await new Promise(r => setTimeout(r, 2000));
       }
-
-      const st = await racePool(c => c.getSignatureStatus(sig, { searchTransactionHistory: false }));
-      const cs = st?.value?.confirmationStatus;
-      if (cs === 'confirmed' || cs === 'finalized') return sig;
-      if (st?.value?.err) throw new Error('Transaction failed on-chain.');
-
-      if (blockhashInfo?.lastValidBlockHeight) {
-        const currentHeight = await racePool(c => c.getBlockHeight('confirmed'));
-        if (Number.isFinite(currentHeight) && currentHeight > blockhashInfo.lastValidBlockHeight + 10) {
-          // Blockhash window definitely closed. One last broad search.
-          const finalSt = await racePool(c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
-          const fcs = finalSt?.value?.confirmationStatus;
-          if (fcs === 'confirmed' || fcs === 'finalized') return sig;
-          // Pass the sig out via the message — friendlyError preserves
-          // anything not matching its known patterns.
-          throw new Error('Tx may have landed. Check sig ' + sig.slice(0, 12) + '… on Solscan.');
+      // Live window done. Definitive on-chain lookup with history search.
+      if (!resolved) {
+        const results = await Promise.allSettled(conns.map(c =>
+          c.getTransaction(sig, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
+        ));
+        for (const r of results) {
+          if (r.status === 'fulfilled' && r.value) {
+            if (r.value.meta?.err) resolveErr(r.value.meta.err);
+            else resolveOk(sig);
+            return;
+          }
+        }
+        if (!resolved) {
+          resolved = true;
+          rejectSig(new Error('Trade did not land — try again.'));
         }
       }
-      await new Promise(r => setTimeout(r, 1000));
-    }
+    })();
 
-    // Final racewide search before giving up.
-    const finalSt = await racePool(c => c.getSignatureStatus(sig, { searchTransactionHistory: true }));
-    const fcs = finalSt?.value?.confirmationStatus;
-    if (fcs === 'confirmed' || fcs === 'finalized') return sig;
-    throw new Error('Tx not confirmed yet. Check sig ' + sig.slice(0, 12) + '… on Solscan.');
+    try { return await confirmPromise; }
+    finally { cleanup(); }
   }, []);
 
   /* ════════════════════════════════════════════════════════════════
