@@ -674,3 +674,4 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  Solana RPC:      ' + (HELIUS_RPC_URL ? 'helius (custom)' : HELIUS_API_KEY ? 'helius' : 'public mainnet-beta'));
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
 });
+ 
