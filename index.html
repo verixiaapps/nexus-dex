@@ -416,10 +416,10 @@
         fetch(API_BASE + '/api/alpha/status').then(r => r.json()).catch(() => ({})),
       ]);
       const signals = Array.isArray(sigR?.signals) ? sigR.signals : [];
-      const status  = stR || {};
+      const status  = (stR && !stR.error) ? stR : {};
       render(signals, status);
     } catch (e) {
-      setStatusPill('warn', 'reconnecting');
+      render([], {});
     }
   }
 
