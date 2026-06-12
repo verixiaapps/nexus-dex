@@ -1,9 +1,10 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { useWallet } from '@solana/wallet-adapter-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import {
   VersionedTransaction,
   PublicKey,
   SystemProgram,
+  ComputeBudgetProgram,
   TransactionInstruction,
   TransactionMessage,
 } from '@solana/web3.js';
@@ -213,27 +214,93 @@ async function fetchJupPrice(mint) {
 const fetchBtcPrice = () => fetchJupPrice('3NZ9JMVBmGAqocybic2c7LQCJScmgsAZ6vQqTDzcqmJh');
 const fetchSolPrice = () => fetchJupPrice('So11111111111111111111111111111111111111112');
 
+// localStorage with safe fallback (private mode / SSR).
+const LS_KEY_BTC = 'soltobtc:lastBtcAddr';
+const ls = {
+  get: k => { try { return typeof window !== 'undefined' ? window.localStorage.getItem(k) : null; } catch { return null; } },
+  set: (k, v) => { try { if (typeof window !== 'undefined') window.localStorage.setItem(k, v); } catch { /* noop */ } },
+};
+
 // ThorChain quote — SOL→BTC. Lamports → thor 1e8 units via /10.
-// Pass tolerance_bps so ThorChain bakes a min-out `limit` into the memo.
-async function getThorQuote({ swapLamports, btcAddress }) {
+// `liquidity_tolerance_bps` is ThorChain's preferred slippage param —
+// it bakes a min-out `limit` into the returned `memo` based on the expected
+// output AFTER liquidity + outbound + affiliate fees (more accurate than
+// the legacy `tolerance_bps`, which only tolerates flat-rate slip).
+async function getThorQuoteOnce({ swapLamports, btcAddress, refundAddress }) {
   const thorUnits = (BigInt(swapLamports) / 10n).toString();
   const params = new URLSearchParams({
-    from_asset:    'SOL.SOL',
-    to_asset:      'BTC.BTC',
-    amount:        thorUnits,
-    destination:   btcAddress,
-    tolerance_bps: String(SLIPPAGE_BPS),
+    from_asset:              'SOL.SOL',
+    to_asset:                'BTC.BTC',
+    amount:                  thorUnits,
+    destination:             btcAddress,
+    liquidity_tolerance_bps: String(SLIPPAGE_BPS),
   });
+  // Explicit refund target so if ThorChain refunds (slippage exceeded, dust,
+  // pool halted, etc.) SOL goes back to the user, not the wrong place.
+  if (refundAddress) params.set('refund_address', refundAddress);
+
   const res = await fetchWithTimeout(
     `${THORNODE}/thorchain/quote/swap?${params}`,
     { headers: { Accept: 'application/json' } },
     14_000,
   );
   const json = await res.json();
-  if (!res.ok) throw new Error(json?.error || json?.message || `Quote failed (${res.status})`);
+  if (!res.ok) {
+    const err = new Error(json?.error || json?.message || `Quote failed (${res.status})`);
+    err.status = res.status;
+    throw err;
+  }
   if (!json.inbound_address) throw new Error('No active vault — retry');
   if (!json.memo)            throw new Error('Quote missing memo');
   return json;
+}
+
+// Retry wrapper — ThorChain occasionally returns 503 even with proper debounce.
+// Also retries transient network errors. Up to 3 attempts w/ exponential backoff.
+async function getThorQuote(args) {
+  const RETRYABLE = new Set([429, 500, 502, 503, 504]);
+  let lastErr;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      return await getThorQuoteOnce(args);
+    } catch (e) {
+      lastErr = e;
+      const status = e.status;
+      const isNetwork = !status; // fetch threw (timeout, offline, CORS)
+      const retryable = isNetwork || (typeof status === 'number' && RETRYABLE.has(status));
+      if (!retryable || attempt === 2) break;
+      // 700ms, 1500ms backoff
+      await new Promise(r => setTimeout(r, 700 * (attempt + 1) + attempt * 100));
+    }
+  }
+  throw lastErr;
+}
+
+// ThorChain inbound-tx status — used to drive the progress UI after submit.
+// Returns null on any failure so polling is robust to transient errors.
+async function getThorTxStatus(txHash) {
+  try {
+    const res = await fetchWithTimeout(
+      `${THORNODE}/thorchain/tx/status/${txHash}`,
+      { headers: { Accept: 'application/json' } },
+      8_000,
+    );
+    if (!res.ok) return null;
+    return await res.json();
+  } catch { return null; }
+}
+
+// Derive a friendly user-facing label from the tx/status response.
+function deriveStatusLabel(status) {
+  if (!status || typeof status !== 'object') return { label: 'Waiting for ThorChain to observe…', done: false };
+  const s = status.stages || {};
+  if (s.outbound_signed?.completed) return { label: 'Sent BTC ✓ Check your wallet', done: true };
+  if (s.swap_finalised?.completed)  return { label: 'Sending BTC to your address…', done: false };
+  if (s.swap_status?.pending === false || s.swap_status?.completed) return { label: 'Swap complete · preparing outbound…', done: false };
+  if (s.inbound_finalised?.completed)        return { label: 'Confirmed by ThorChain · swapping…', done: false };
+  if (s.inbound_confirmation_counted?.completed) return { label: 'Confirmed on Solana · counting blocks…', done: false };
+  if (s.inbound_observed?.completed)         return { label: 'Observed by ThorChain…', done: false };
+  return { label: 'Waiting for ThorChain to observe…', done: false };
 }
 
 function memoIx(memo, signer) {
@@ -242,28 +309,6 @@ function memoIx(memo, signer) {
     programId: MEMO_PROGRAM,
     data: new TextEncoder().encode(memo),
   });
-}
-
-async function rpcCall(method, params, timeoutMs = 8_000) {
-  const res = await fetchWithTimeout('/api/solana-rpc', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 1, method, params }),
-  }, timeoutMs);
-  const json = await res.json();
-  return json?.result;
-}
-async function getRecentBlockhash() {
-  const r = await rpcCall('getLatestBlockhash', [{ commitment: 'confirmed' }]);
-  const bh = r?.value?.blockhash;
-  if (!bh) throw new Error('Could not fetch blockhash');
-  return bh;
-}
-async function getSolBalance(pubkey) {
-  try {
-    const r = await rpcCall('getBalance', [pubkey, { commitment: 'confirmed' }], 6000);
-    return typeof r?.value === 'number' ? r.value : 0;
-  } catch { return 0; }
 }
 
 function useStbtcCSS() {
@@ -283,11 +328,14 @@ function useStbtcCSS() {
 export default function SolToBtc({ onConnectWallet }) {
   useStbtcCSS();
 
-  const { publicKey, connected, sendTransaction, signAllTransactions } = useWallet();
-  const walletPubkey = useMemo(() => publicKey ? publicKey.toString() : null, [publicKey]);
+  const { publicKey, connected, signAllTransactions } = useWallet();
+  const { connection } = useConnection();
 
   const [solAmount, setSolAmount] = useState('');
-  const [btcAddr,   setBtcAddr]   = useState('');
+  const [btcAddr,   setBtcAddr]   = useState(() => {
+    const saved = ls.get(LS_KEY_BTC);
+    return saved && isValidBtcAddr(saved) ? saved : '';
+  });
   const [btcAddrTouched, setBtcAddrTouched] = useState(false);
   const [quote,     setQuote]     = useState(null);
   const [quoting,   setQuoting]   = useState(false);
@@ -296,6 +344,8 @@ export default function SolToBtc({ onConnectWallet }) {
   const [btcPrice,  setBtcPrice]  = useState(0);
   const [solPrice,  setSolPrice]  = useState(0);
   const [solBalance, setSolBalance] = useState(null);
+  const [bridgeSig, setBridgeSig] = useState(null);
+  const [bridgeStatus, setBridgeStatus] = useState(null); // { label, done }
 
   const quoteSeq = useRef(0);
 
@@ -315,25 +365,35 @@ export default function SolToBtc({ onConnectWallet }) {
 
   // SOL balance (only when connected)
   useEffect(() => {
-    if (!walletPubkey) { setSolBalance(null); return; }
+    if (!publicKey || !connection) { setSolBalance(null); return; }
     let alive = true;
     const tick = async () => {
-      const lamports = await getSolBalance(walletPubkey);
-      if (alive) setSolBalance(lamports);
+      try {
+        const lamports = await connection.getBalance(publicKey, 'confirmed');
+        if (alive) setSolBalance(lamports);
+      } catch { /* ignore — show no balance */ }
     };
     tick();
     const id = setInterval(tick, 30_000);
     return () => { alive = false; clearInterval(id); };
-  }, [walletPubkey]);
+  }, [publicKey, connection]);
+
+  // Persist BTC address to localStorage when it's valid (so it survives reload).
+  useEffect(() => {
+    if (btcAddr && isValidBtcAddr(btcAddr)) ls.set(LS_KEY_BTC, btcAddr);
+  }, [btcAddr]);
 
   // Quote — works without wallet OR without address (preview rate mode).
   // 1100ms debounce — ThorChain /quote rate-limits at 1 req/sec/IP.
   useEffect(() => {
     const n = parseFloat(solAmount);
     if (!Number.isFinite(n) || n <= 0) { setQuote(null); return; }
+    // Don't waste a quote request on amounts outside the allowed range.
+    if (n < MIN_SOL || n > MAX_SOL) { setQuote(null); return; }
 
     const userHasAddr = isValidBtcAddr(btcAddr);
     const addrForQuote = userHasAddr ? btcAddr : PREVIEW_BTC_ADDR;
+    const refundAddress = publicKey ? publicKey.toString() : undefined;
 
     const seq = ++quoteSeq.current;
     setQuoting(true); setError('');
@@ -344,7 +404,7 @@ export default function SolToBtc({ onConnectWallet }) {
         const swapLamports     = grossLamports - platformLamports;
         if (swapLamports <= 0n) throw new Error('Amount too small');
 
-        const q = await getThorQuote({ swapLamports, btcAddress: addrForQuote });
+        const q = await getThorQuote({ swapLamports, btcAddress: addrForQuote, refundAddress });
         if (seq !== quoteSeq.current) return;
         setQuote({
           thor: q,
@@ -363,7 +423,33 @@ export default function SolToBtc({ onConnectWallet }) {
       }
     }, 1100);
     return () => clearTimeout(t);
-  }, [solAmount, btcAddr]);
+  }, [solAmount, btcAddr, publicKey]);
+
+  // ThorChain inbound-tx status polling — drives the post-submit progress UI.
+  useEffect(() => {
+    if (!bridgeSig) return;
+    let alive = true;
+    let done = false;
+
+    const tick = async () => {
+      if (!alive) return;
+      const status = await getThorTxStatus(bridgeSig);
+      if (!alive) return;
+      const derived = deriveStatusLabel(status);
+      setBridgeStatus(derived);
+      if (derived.done) { done = true; }
+    };
+
+    tick();
+    const id = setInterval(() => {
+      if (done) { clearInterval(id); return; }
+      tick();
+    }, 6_000);
+
+    // Stop polling after 15 min regardless (BTC outbound finalises well within this).
+    const stopAt = setTimeout(() => { alive = false; clearInterval(id); }, 15 * 60_000);
+    return () => { alive = false; clearInterval(id); clearTimeout(stopAt); };
+  }, [bridgeSig]);
 
   const isBusy    = submit.kind === 'loading';
   const isSuccess = submit.kind === 'success';
@@ -378,7 +464,6 @@ export default function SolToBtc({ onConnectWallet }) {
     ? Number(quote.thor.expected_amount_out) : 0;
   const expectedBtc    = expectedSats / SATS_PER_BTC;
   const expectedBtcUsd = expectedBtc * btcPrice;
-  const platformSol    = quote ? Number(quote.platformLamports) / LAMPORTS_PER_SOL : 0;
 
   const handleMax = () => {
     if (solBalance == null) return;
@@ -391,32 +476,51 @@ export default function SolToBtc({ onConnectWallet }) {
 
   const handleSubmit = async () => {
     if (!connected) { onConnectWallet?.(); return; }
-    if (!walletPubkey || !sendTransaction || !signAllTransactions) {
+    if (!publicKey || !signAllTransactions || !connection) {
       setError('Wallet not ready'); return;
     }
     if (!quote || quote.isPreview) { setError('Enter a valid BTC address'); return; }
     if (!addrValid) { setError('Invalid BTC address'); return; }
 
+    // Balance precheck — both txs share one payer, fail fast if not enough SOL.
+    // Reserve ~0.0005 SOL (500k lamports) for combined tx fees + priority.
+    const TX_FEE_RESERVE = 500_000n;
+    const totalNeeded = BigInt(quote.platformLamports) + BigInt(quote.swapLamports) + TX_FEE_RESERVE;
+    if (solBalance != null && BigInt(solBalance) < totalNeeded) {
+      setError('Not enough SOL for swap + tx fees');
+      return;
+    }
+
     setError('');
+    setBridgeSig(null);
+    setBridgeStatus(null);
     setSubmit({ kind: 'loading', message: 'Refreshing route…' });
 
     try {
       // Re-quote right before signing — vault rotates, never cache.
       const fresh = await getThorQuote({
-        swapLamports: quote.swapLamports,
-        btcAddress:   btcAddr,
+        swapLamports:  quote.swapLamports,
+        btcAddress:    btcAddr,
+        refundAddress: publicKey.toString(),
       });
       const vault = new PublicKey(fresh.inbound_address);
-      const owner = new PublicKey(walletPubkey);
+      const owner = publicKey;
 
       setSubmit({ kind: 'loading', message: 'Building transactions…' });
-      const blockhash = await getRecentBlockhash();
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
 
-      // TX 1: platform fee (3% SOL → your wallet). Clean SystemProgram transfer.
+      // Small priority fee — keeps txs landing during congestion.
+      // 50k microlamports/CU × ~200 CU ≈ 10k lamports (~$0.002).
+      const priorityIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 });
+      const cuLimitIx  = ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 });
+
+      // TX 1: platform fee (3% SOL → your wallet).
       const feeMsg = new TransactionMessage({
         payerKey:        owner,
         recentBlockhash: blockhash,
         instructions: [
+          cuLimitIx,
+          priorityIx,
           SystemProgram.transfer({
             fromPubkey: owner,
             toPubkey:   FEE_WALLET,
@@ -426,13 +530,15 @@ export default function SolToBtc({ onConnectWallet }) {
       }).compileToV0Message();
       const feeTx = new VersionedTransaction(feeMsg);
 
-      // TX 2: bridge — transfer to ThorChain Asgard vault + SPL memo.
-      // Kept clean (no extra ix) so ThorChain's Solana observer sees exactly
-      // what its docs describe: a SOL transfer with a memo instruction.
+      // TX 2: bridge — SOL → ThorChain Asgard vault + SPL memo.
+      // Compute budget ixs are pre-pended; the SOL transfer + memo are exactly
+      // what ThorChain's Solana observer expects.
       const bridgeMsg = new TransactionMessage({
         payerKey:        owner,
         recentBlockhash: blockhash,
         instructions: [
+          cuLimitIx,
+          priorityIx,
           SystemProgram.transfer({
             fromPubkey: owner,
             toPubkey:   vault,
@@ -447,19 +553,44 @@ export default function SolToBtc({ onConnectWallet }) {
       setSubmit({ kind: 'loading', message: 'Confirm in your wallet…' });
       const [signedFee, signedBridge] = await signAllTransactions([feeTx, bridgeTx]);
 
-      // Send fee first so the bridge isn't blocked if fee somehow fails.
+      // 1. Broadcast fee tx and WAIT for confirmation before sending bridge.
+      //    If fee fails (e.g. RPC drop), we don't send the bridge and user
+      //    isn't left in a state where they paid the fee but no swap happened.
       setSubmit({ kind: 'loading', message: 'Sending fee tx…' });
-      const feeSig = await sendTransaction(signedFee, undefined, { skipPreflight: false });
+      const feeSig = await connection.sendRawTransaction(signedFee.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
 
+      setSubmit({ kind: 'loading', message: 'Confirming fee…' });
+      const feeConfirm = await connection.confirmTransaction(
+        { signature: feeSig, blockhash, lastValidBlockHeight },
+        'confirmed',
+      );
+      if (feeConfirm?.value?.err) {
+        throw new Error('Fee tx failed — bridge not sent');
+      }
+
+      // 2. Broadcast bridge tx.
       setSubmit({ kind: 'loading', message: 'Sending bridge tx…' });
-      const bridgeSig = await sendTransaction(signedBridge, undefined, { skipPreflight: false });
+      const sig = await connection.sendRawTransaction(signedBridge.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
 
+      console.log('[sol→btc] fee', feeSig, 'bridge', sig);
+
+      // 3. Kick off status polling and show the in-progress UI.
+      setBridgeSig(sig);
+      setBridgeStatus({ label: 'Bridge submitted · waiting for ThorChain…', done: false });
       setSubmit({
         kind: 'success',
-        message: `Bridge submitted · ${bridgeSig.slice(0, 8)}…`,
+        message: `Submitted · ${sig.slice(0, 8)}…`,
       });
+
+      // Reset the input fields (BTC address stays persisted via localStorage).
+      setSolAmount(''); setQuote(null);
       setTimeout(() => setSubmit({ kind: 'idle', message: '' }), 6000);
-      setSolAmount(''); setBtcAddr(''); setBtcAddrTouched(false); setQuote(null);
     } catch (e) {
       console.error('[sol→btc]', e);
       const msg = e.message || 'Transaction failed';
@@ -609,8 +740,15 @@ export default function SolToBtc({ onConnectWallet }) {
         {(error || submit.kind === 'error') && (
           <div className="ax-banner err">{error || submit.message}</div>
         )}
-        {isSuccess && (
+        {isSuccess && !bridgeStatus && (
           <div className="ax-banner ok">✓ {submit.message}</div>
+        )}
+        {/* ThorChain progress (polled after submit) */}
+        {bridgeSig && bridgeStatus && (
+          <div className={'ax-banner ' + (bridgeStatus.done ? 'ok' : 'info')}>
+            {!bridgeStatus.done && <div className="ax-spinner"></div>}
+            <span>{bridgeStatus.done ? '✓ ' : ''}{bridgeStatus.label}</span>
+          </div>
         )}
 
         {/* CTA */}
@@ -645,4 +783,3 @@ export default function SolToBtc({ onConnectWallet }) {
     </div>
   );
 }
- 
