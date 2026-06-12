@@ -123,36 +123,6 @@ cheaper alternative to bullx
 cheaper alternative to dexscreener
 cheaper alternative to gmgn
 cheaper alternative to photon
-usdc swap
-usdc trading
-usdt exchange
-usdt swap
-usdt trading
-viral meme tokens
-wallet based exchange
-wallet crypto bridge
-wallet rejected solana swap transaction
-wallet to wallet bridge
-wallet to wallet swap
-web3 bridge
-web3 swap
-web3 trading platform
-whale crypto swap
-what does price impact mean solana swap
-what does route not found mean solana
-what fee to swap act on solana
-what fee to swap ai16z on solana
-what fee to swap bonk on solana
-what fee to swap fartcoin on solana
-what fee to swap goat on solana
-what fee to swap jitosol on solana
-what fee to swap jto on solana
-what fee to swap jup on solana
-what fee to swap mew on solana
-what fee to swap msol on solana
-what fee to swap pnut on solana
-what fee to swap popcat on solana
-what fee to swap pyth on solana
 what fee to swap ray on solana
 what fee to swap render on solana
 what fee to swap sol on solana
