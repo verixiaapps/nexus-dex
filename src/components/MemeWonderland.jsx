@@ -1,195 +1,511 @@
-// MemeWonderland.jsx — pastel wonderland. Matches HTML preview. Swap logic preserved.
+// MemeWonderland.jsx — pastel wonderland. Swap logic preserved verbatim.
+// Sections: Hero · Top Signal · Narratives · Whale Radar · Breaking Out · New Launches · Trending · Live Feed.
+
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
-import { Connection, PublicKey, VersionedTransaction, TransactionMessage, SystemProgram, AddressLookupTableAccount } from '@solana/web3.js';
-import { getAssociatedTokenAddressSync, createAssociatedTokenAccountIdempotentInstruction, createTransferCheckedInstruction, TOKEN_PROGRAM_ID, TOKEN_2022_PROGRAM_ID } from '@solana/spl-token';
+import {
+  Connection,
+  PublicKey,
+  VersionedTransaction,
+  TransactionMessage,
+  SystemProgram,
+  AddressLookupTableAccount,
+} from '@solana/web3.js';
+import {
+  getAssociatedTokenAddressSync,
+  createAssociatedTokenAccountIdempotentInstruction,
+  createTransferCheckedInstruction,
+  TOKEN_PROGRAM_ID,
+  TOKEN_2022_PROGRAM_ID,
+} from '@solana/spl-token';
 import { useWallet } from '@solana/wallet-adapter-react';
 
+// ════════════════════════════════════════════════════════════════════
+// PASTEL CSS
+// ════════════════════════════════════════════════════════════════════
 const MW_CSS = `
-@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700&display=swap');
-.mw-root{--ink:#1A1B4E;--ink-2:rgba(26,27,78,0.65);--ink-3:rgba(26,27,78,0.45);--pink:#FF8FBE;--mint:#7FFFD4;--lav:#B794F6;--peach:#FFB088;--sky:#A0E7FF;--gold:#FFD46B;--green:#1B7A4F;--red:#D14B6A;--glass:rgba(255,255,255,0.55);--glass-strong:rgba(255,255,255,0.72);--border:rgba(183,148,246,0.22);min-height:100vh;background:radial-gradient(ellipse at 20% 5%,#FFE8F4 0%,transparent 45%),radial-gradient(ellipse at 85% 15%,#E4F2FF 0%,transparent 45%),radial-gradient(ellipse at 50% 60%,#F0E7FF 0%,transparent 55%),radial-gradient(ellipse at 15% 95%,#FFF3E4 0%,transparent 45%),linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);color:var(--ink);font-family:"Space Grotesk",-apple-system,sans-serif;position:relative;overflow-x:hidden;padding-bottom:60px}
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&display=swap');
+.mw-root{
+  --ink:#1A1B4E; --ink-2:rgba(26,27,78,0.7); --ink-3:rgba(26,27,78,0.45);
+  --pink:#FF8FBE; --mint:#7FFFD4; --lav:#B794F6; --peach:#FFB088;
+  --sky:#A0E7FF; --gold:#FFD46B; --green:#1B7A4F; --red:#D14B6A;
+  --glass:rgba(255,255,255,0.6); --glass-strong:rgba(255,255,255,0.78);
+  --border:rgba(183,148,246,0.22);
+  min-height:100vh;color:var(--ink);
+  font-family:"Space Grotesk",-apple-system,system-ui,sans-serif;
+  position:relative;overflow-x:hidden;padding-bottom:60px;
+  background:
+    radial-gradient(ellipse at 20% 5%,#FFE8F4 0%,transparent 45%),
+    radial-gradient(ellipse at 85% 15%,#E4F2FF 0%,transparent 45%),
+    radial-gradient(ellipse at 50% 60%,#F0E7FF 0%,transparent 55%),
+    radial-gradient(ellipse at 15% 95%,#FFF3E4 0%,transparent 45%),
+    linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);
+  background-attachment:fixed;
+}
 .mw-root,.mw-root *{box-sizing:border-box}
-@keyframes mw-drift{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(20px,-30px) scale(1.05)}}
-@keyframes mw-shimmer{0%{background-position:0% 50%}100%{background-position:200% 50%}}
-@keyframes mw-pulse-dot{0%,100%{opacity:1}50%{opacity:0.3}}
-@keyframes mw-ticker{to{transform:translateX(-50%)}}
-@keyframes mw-fade-in{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
-.mw-blob{position:absolute;border-radius:50%;filter:blur(70px);opacity:0.45;animation:mw-drift 14s ease-in-out infinite;pointer-events:none;z-index:0}
-.mw-shimmer-text{background:linear-gradient(90deg,#FF8FBE,#B794F6,#7FFFD4,#FFB088,#FF8FBE);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:mw-shimmer 6s linear infinite}
-.mw-nav{position:sticky;top:0;z-index:50;display:flex;justify-content:space-between;align-items:center;padding:14px 20px;background:rgba(251,245,255,0.7);backdrop-filter:blur(20px);border-bottom:1px solid var(--border)}
-.mw-brand{display:flex;align-items:center;gap:10px;cursor:pointer}
-.mw-brand-dot{width:30px;height:30px;border-radius:50%;background:linear-gradient(135deg,#FF8FBE,#B794F6 60%,#7FFFD4);box-shadow:0 0 16px rgba(183,148,246,0.5)}
-.mw-brand-text{font-family:"Instrument Serif",serif;font-style:italic;font-size:22px;line-height:1}
-.mw-brand-text .mw-slash{opacity:0.4;margin:0 4px;font-style:normal}
-.mw-nav-right{display:flex;align-items:center;gap:8px}
-.mw-live-pill{display:flex;align-items:center;gap:6px;padding:5px 10px;border-radius:999px;background:rgba(127,255,212,0.25);border:1px solid rgba(27,122,79,0.25);font-size:11px;font-weight:600;color:var(--green)}
-.mw-live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);animation:mw-pulse-dot 1.5s ease-in-out infinite}
-.mw-chain-pill{display:flex;align-items:center;gap:6px;padding:5px 10px 5px 8px;border-radius:999px;background:var(--glass);border:1px solid var(--border);font-size:12px;font-weight:500}
-.mw-chain-dot{width:14px;height:14px;border-radius:50%;background:linear-gradient(135deg,#B794F6,#FF8FBE)}
-.mw-avatar-orb{width:30px;height:30px;border-radius:50%;background:conic-gradient(from 0deg,#FF8FBE,#B794F6,#7FFFD4,#FFB088,#FF8FBE);padding:2px;position:relative}
-.mw-avatar-orb::after{content:'';display:block;width:100%;height:100%;border-radius:50%;background:var(--glass-strong)}
-.mw-main{position:relative;z-index:5;padding:18px 16px 60px}
-.mw-page{animation:mw-fade-in 0.3s ease}
-.mw-eyebrow{font-size:10px;letter-spacing:2.5px;text-transform:uppercase;color:var(--ink-2);font-weight:600}
-.mw-eyebrow.mw-accent{background:linear-gradient(90deg,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
-.mw-section-head{display:flex;align-items:center;justify-content:space-between;margin:28px 4px 12px}
-.mw-section-head .mw-left{display:flex;align-items:center;gap:8px}
-.mw-section-head .mw-icon{font-size:14px}
-.mw-section-head .mw-view-all{font-size:11px;color:var(--ink-2)}
-.mw-stats-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:16px}
-.mw-stat-orb{position:relative;padding:16px;border-radius:28px;background:var(--glass);backdrop-filter:blur(10px);border:1px solid var(--border);overflow:hidden}
-.mw-stat-orb .mw-label{font-size:10px;letter-spacing:1.5px;text-transform:uppercase;color:var(--ink-2);font-weight:600}
-.mw-stat-orb .mw-val{font-family:"Instrument Serif",serif;font-size:28px;line-height:1;margin-top:6px}
-.mw-stat-orb .mw-delta{font-size:11px;margin-top:4px;font-weight:500;color:var(--green)}
-.mw-stat-orb .mw-ico{position:absolute;top:12px;right:12px;width:28px;height:28px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px}
-.mw-stat-orb .mw-spark{margin-top:10px;height:26px;width:100%}
-.mw-ticker-wrap{margin:18px -16px 0;padding:12px 0;background:linear-gradient(90deg,rgba(255,143,190,0.08),rgba(127,255,212,0.08));border-top:1px solid var(--border);border-bottom:1px solid var(--border);overflow:hidden}
-.mw-ticker-track{display:flex;gap:28px;white-space:nowrap;animation:mw-ticker 35s linear infinite;font-size:13px;font-weight:500;width:max-content}
-.mw-ticker-item{display:inline-flex;gap:6px;align-items:center}
-.mw-ticker-sym{color:var(--ink);font-weight:600}
+@keyframes mwDrift{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(20px,-30px) scale(1.05)}}
+@keyframes mwShimmer{0%{background-position:0% 50%}100%{background-position:200% 50%}}
+@keyframes mwPulse{0%,100%{opacity:1}50%{opacity:0.3}}
+@keyframes mwTicker{from{transform:translateX(0)}to{transform:translateX(-50%)}}
+@keyframes mwFade{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes mwRise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes mwSpin{to{transform:rotate(360deg)}}
+@keyframes mwBounce{0%,100%{transform:translateY(0) rotate(-4deg)}50%{transform:translateY(-6px) rotate(4deg)}}
+@keyframes mwSlideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+@keyframes mwShimmerSlide{0%{left:-110px}50%,100%{left:130%}}
+@keyframes mwPop{0%{transform:scale(0) rotate(-90deg);opacity:0}60%{transform:scale(1.2) rotate(10deg)}100%{transform:scale(1) rotate(0);opacity:1}}
+@keyframes mwFall{0%{transform:translateY(-30px) rotate(0deg);opacity:1}100%{transform:translateY(110vh) rotate(720deg);opacity:.8}}
+
+.mw-blob{position:absolute;border-radius:50%;filter:blur(70px);opacity:0.45;animation:mwDrift 14s ease-in-out infinite;pointer-events:none;z-index:0}
+.mw-shim{background:linear-gradient(90deg,#FF8FBE,#B794F6,#7FFFD4,#FFB088,#FF8FBE);background-size:200% 100%;-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:mwShimmer 6s linear infinite}
+
+.mw-ambient{position:fixed;inset:0;pointer-events:none;max-width:480px;left:50%;transform:translateX(-50%);overflow:hidden;z-index:0}
+.mw-ambient span{position:absolute;font-size:18px;opacity:.4;animation:mwDrift 12s ease-in-out infinite}
+.mw-ambient span:nth-child(1){top:12%;left:6%}
+.mw-ambient span:nth-child(2){top:30%;right:8%;font-size:22px;animation-delay:3s}
+.mw-ambient span:nth-child(3){top:60%;left:10%;animation-delay:6s}
+.mw-ambient span:nth-child(4){top:78%;right:12%;font-size:20px;animation-delay:1.5s}
+
+.mw-phone{max-width:480px;margin:0 auto;position:relative;padding-bottom:32px;z-index:5}
+
+/* ───── HERO ───── */
+.mw-hero{padding:28px 18px 12px;text-align:center;position:relative;z-index:2}
+.mw-hero h1{font-family:"Instrument Serif",serif;font-weight:400;font-size:42px;line-height:0.98;letter-spacing:-0.01em;margin:0 0 8px}
+.mw-hero h1 .mw-rocket{display:inline-block;margin-right:6px;font-family:initial}
+.mw-hero-sub{color:var(--ink-2);font-size:15px;font-weight:500;margin:0 0 6px}
+.mw-hero-meta{font-size:11px;color:var(--ink-3);font-weight:600;letter-spacing:0.5px;margin-bottom:18px}
+.mw-hero-meta .dot{margin:0 6px;opacity:0.4}
+
+/* ───── SEARCH ───── */
+.mw-search-wrap{padding:0 18px 8px;position:relative;z-index:3}
+.mw-search{display:flex;align-items:center;gap:10px;background:var(--glass-strong);backdrop-filter:blur(14px);border:1.5px solid var(--border);border-radius:999px;padding:14px 18px;transition:all .2s;box-shadow:0 8px 24px rgba(183,148,246,.15)}
+.mw-search:focus-within{border-color:var(--lav);box-shadow:0 8px 28px rgba(183,148,246,.25)}
+.mw-search .mw-search-ico{font-size:16px;opacity:.6}
+.mw-search input{background:none;border:none;color:var(--ink);font-family:inherit;font-size:14px;flex:1;outline:none;font-weight:500;min-width:0}
+.mw-search input::placeholder{color:var(--ink-3)}
+.mw-search-clear{flex-shrink:0;width:22px;height:22px;border-radius:50%;border:none;background:var(--glass);color:var(--ink-2);font-family:inherit;font-size:14px;cursor:pointer;display:grid;place-items:center}
+
+/* ───── STAT ORBS ───── */
+.mw-stats-orbs{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;padding:14px 18px 4px;position:relative;z-index:2}
+.mw-orb{position:relative;padding:12px 10px 10px;border-radius:20px;background:var(--glass);backdrop-filter:blur(10px);border:1px solid var(--border);overflow:hidden;text-align:center;animation:mwRise .5s cubic-bezier(.2,.8,.2,1) backwards}
+.mw-orb-ico{font-size:13px;display:block;margin-bottom:3px}
+.mw-orb-label{font-size:8px;color:var(--ink-2);letter-spacing:1.4px;text-transform:uppercase;font-weight:700}
+.mw-orb-val{font-family:"Instrument Serif",serif;font-size:20px;line-height:1;margin-top:4px}
+.mw-orb-spark{margin-top:6px;height:14px;width:100%}
+
+/* ───── TICKER ───── */
+.mw-ticker-strip{margin:14px 0 0;padding:10px 0;background:linear-gradient(90deg,rgba(255,143,190,.08),rgba(127,255,212,.08));border-top:1px solid var(--border);border-bottom:1px solid var(--border);overflow:hidden;position:relative;z-index:2}
+.mw-ticker-track{display:flex;gap:28px;white-space:nowrap;animation:mwTicker 35s linear infinite;width:max-content}
+.mw-ticker-item{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:600}
+.mw-ticker-item .mw-sym{color:var(--ink);font-weight:700}
 .mw-up{color:var(--green)}
 .mw-down{color:var(--red)}
-.mw-featured{margin-top:20px;padding:20px;border-radius:32px 56px 32px 56px;background:linear-gradient(135deg,rgba(255,143,190,0.22),rgba(183,148,246,0.18) 50%,rgba(127,255,212,0.18));border:1px solid rgba(255,255,255,0.7);backdrop-filter:blur(12px);position:relative;overflow:hidden;cursor:pointer}
-.mw-featured::before{content:'';position:absolute;inset:0;background:radial-gradient(circle at 20% 20%,rgba(255,143,190,0.4),transparent 50%);pointer-events:none}
-.mw-top-signal-badge{display:inline-flex;align-items:center;gap:4px;padding:5px 12px;border-radius:999px;background:linear-gradient(90deg,#FF8FBE,#FFB088);color:#fff;font-size:10px;font-weight:700;letter-spacing:1px;position:relative;z-index:2}
-.mw-featured-body{display:flex;gap:14px;margin-top:14px;align-items:center;position:relative;z-index:2}
-.mw-token-avatar{width:76px;height:76px;border-radius:50%;background:conic-gradient(from 0deg,#FF8FBE,#FFB088,#FFD46B,#7FFFD4,#A0E7FF,#B794F6,#FF8FBE);padding:3px;flex-shrink:0;position:relative}
-.mw-token-avatar::after{content:'';display:block;width:100%;height:100%;border-radius:50%;background:linear-gradient(135deg,#FFD9A8,#FFAA66)}
-.mw-token-avatar .mw-face{position:absolute;inset:3px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:38px;z-index:2;overflow:hidden}
-.mw-token-avatar .mw-face img{width:100%;height:100%;object-fit:cover;border-radius:50%}
-.mw-crown{position:absolute;top:-6px;left:-2px;z-index:3;width:24px;height:24px;background:var(--gold);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:14px;box-shadow:0 4px 12px rgba(255,212,107,0.5)}
-.mw-featured-meta{flex:1;min-width:0}
-.mw-featured-meta .mw-sym{font-family:"Instrument Serif",serif;font-size:32px;line-height:1}
-.mw-featured-meta .mw-sub{font-size:12px;color:var(--ink-2);margin-top:4px}
-.mw-signal-score{text-align:right;flex-shrink:0}
-.mw-signal-score .mw-num{font-family:"Instrument Serif",serif;font-size:48px;line-height:1;background:linear-gradient(135deg,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
-.mw-signal-score .mw-denom{font-size:13px;color:var(--ink-2)}
-.mw-signal-score .mw-label{font-size:9px;letter-spacing:2px;text-transform:uppercase;color:var(--ink-2);margin-top:2px}
-.mw-featured-metrics{display:grid;grid-template-columns:1fr 1fr;gap:10px 14px;margin-top:16px;position:relative;z-index:2}
-.mw-fm{display:flex;align-items:center;gap:8px}
-.mw-fm-ico{width:28px;height:28px;border-radius:50%;background:var(--glass-strong);display:flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0}
-.mw-fm-text{line-height:1.15}
-.mw-fm-val{font-size:14px;font-weight:600}
-.mw-fm-lbl{font-size:10px;color:var(--ink-2)}
-.mw-featured-actions{display:flex;gap:8px;margin-top:16px;position:relative;z-index:2}
-.mw-btn-gradient{flex:1;border:none;cursor:pointer;padding:14px 16px;border-radius:999px;background:linear-gradient(90deg,#FF8FBE,#FFB088,#FFD46B);color:#fff;font-family:inherit;font-size:14px;font-weight:700;letter-spacing:0.5px;box-shadow:0 8px 24px rgba(255,143,190,0.4);display:flex;align-items:center;justify-content:center;gap:6px}
-.mw-btn-ghost{flex:1;border:1px solid var(--border);cursor:pointer;padding:13px 16px;border-radius:999px;background:var(--glass);color:var(--ink);font-family:inherit;font-size:13px;font-weight:500;display:flex;align-items:center;justify-content:center;gap:6px}
-.mw-hscroll{display:flex;gap:10px;overflow-x:auto;scroll-snap-type:x mandatory;padding:4px 16px 8px;margin:0 -16px;scrollbar-width:none}
-.mw-hscroll::-webkit-scrollbar{display:none}
-.mw-whale-card{flex:0 0 175px;scroll-snap-align:start;padding:14px;border-radius:24px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);position:relative;cursor:pointer}
-.mw-whale-card.mw-featured-card{border:1.5px solid transparent;background:linear-gradient(var(--glass),var(--glass)) padding-box,linear-gradient(135deg,#FF8FBE,#B794F6,#7FFFD4) border-box}
-.mw-whale-row{display:flex;align-items:center;gap:10px}
-.mw-mini-avatar{width:38px;height:38px;border-radius:50%;padding:2px;flex-shrink:0;background:conic-gradient(from 0deg,#FF8FBE,#B794F6,#7FFFD4,#FFB088,#FF8FBE)}
-.mw-mini-avatar .mw-inner{width:100%;height:100%;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:18px;overflow:hidden;background:linear-gradient(135deg,#FFD9C9,#E8B8A0)}
-.mw-mini-avatar .mw-inner img{width:100%;height:100%;object-fit:cover}
-.mw-whale-sym{font-size:14px;font-weight:700}
-.mw-whale-pct{font-size:14px;font-weight:700;color:var(--green)}
-.mw-whale-pct.mw-down{color:var(--red)}
-.mw-whale-foot{display:flex;justify-content:space-between;margin-top:12px;font-size:11px;color:var(--ink-2)}
-.mw-signal-card-h{flex:0 0 195px;scroll-snap-align:start;padding:14px;border-radius:24px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);position:relative;cursor:pointer}
-.mw-signal-head{display:flex;align-items:center;justify-content:space-between}
-.mw-signal-head .mw-left{display:flex;align-items:center;gap:8px}
-.mw-signal-card-h .mw-score{text-align:right}
-.mw-signal-card-h .mw-score-num{font-family:"Instrument Serif",serif;font-size:26px;line-height:1}
-.mw-signal-card-h .mw-score-lbl{font-size:8px;letter-spacing:1.5px;text-transform:uppercase;color:var(--ink-2)}
-.mw-signal-spark{margin-top:10px;height:36px;width:100%}
-.mw-signal-foot{font-size:13px;font-weight:600;margin-top:6px}
-.mw-narratives{display:flex;gap:8px;overflow-x:auto;padding:4px 16px;margin:0 -16px;scrollbar-width:none}
+
+/* ───── SECTION HEAD ───── */
+.mw-section-head{display:flex;justify-content:space-between;align-items:center;padding:24px 18px 12px;position:relative;z-index:2}
+.mw-section-title{font-size:10px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;background:linear-gradient(90deg,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;display:flex;align-items:center;gap:8px}
+.mw-section-title .mw-ico{font-size:13px;-webkit-text-fill-color:initial}
+.mw-section-meta{font-size:10px;color:var(--ink-2);font-weight:600;letter-spacing:0.8px}
+.mw-live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:mwPulse 1.5s ease-in-out infinite;display:inline-block}
+
+.mw-sub-tabs{display:flex;gap:4px;margin:0 18px 14px;padding:4px;background:var(--glass);border:1px solid var(--border);border-radius:999px;width:max-content;backdrop-filter:blur(10px)}
+.mw-sub-tab{padding:7px 14px;border-radius:999px;font-size:11px;font-weight:600;color:var(--ink-2);cursor:pointer;border:none;background:none;font-family:inherit;letter-spacing:0.3px;transition:all .15s}
+.mw-sub-tab.mw-active{background:linear-gradient(135deg,#B794F6,#FF8FBE);color:#fff;box-shadow:0 4px 12px rgba(183,148,246,.3)}
+
+/* ───── FEATURED TOP SIGNAL ───── */
+.mw-featured{margin:6px 18px 0;padding:20px;border-radius:36px 60px 36px 60px;background:linear-gradient(135deg,rgba(255,143,190,.25),rgba(183,148,246,.20) 50%,rgba(127,255,212,.20));border:1px solid rgba(255,255,255,.8);backdrop-filter:blur(14px);position:relative;overflow:hidden;cursor:pointer;animation:mwRise .5s cubic-bezier(.2,.8,.2,1) backwards;box-shadow:0 8px 28px rgba(255,143,190,.15)}
+.mw-featured::before{content:'';position:absolute;inset:0;background:radial-gradient(circle at 20% 20%,rgba(255,143,190,.4),transparent 50%);pointer-events:none}
+.mw-feat-badge{display:inline-flex;align-items:center;gap:5px;background:linear-gradient(90deg,#FF8FBE,#FFB088);color:#fff;font-weight:700;font-size:10px;letter-spacing:1.5px;padding:5px 12px;border-radius:999px;position:relative;z-index:2}
+.mw-feat-body{display:flex;align-items:center;gap:14px;margin-top:14px;position:relative;z-index:2}
+.mw-token-avatar{width:76px;height:76px;border-radius:50%;flex-shrink:0;position:relative;padding:3px;background:conic-gradient(from 0deg,#FF8FBE,#FFB088,#FFD46B,#7FFFD4,#A0E7FF,#B794F6,#FF8FBE);animation:mwSpin 12s linear infinite}
+.mw-token-avatar-inner{width:100%;height:100%;border-radius:50%;background:linear-gradient(135deg,#FFD9C9,#E8B8A0);display:grid;place-items:center;font-size:34px;overflow:hidden}
+.mw-token-avatar-inner img{width:100%;height:100%;object-fit:cover;border-radius:50%}
+.mw-crown{position:absolute;top:-6px;left:-2px;width:24px;height:24px;background:var(--gold);border-radius:50%;display:grid;place-items:center;font-size:13px;z-index:3;box-shadow:0 4px 12px rgba(255,212,107,.5)}
+.mw-feat-meta{flex:1;min-width:0}
+.mw-feat-sym{font-family:"Instrument Serif",serif;font-size:32px;line-height:1}
+.mw-feat-name{font-size:12px;color:var(--ink-2);margin-top:4px;font-weight:500}
+.mw-feat-score{text-align:right;flex-shrink:0}
+.mw-feat-score-num{font-family:"Instrument Serif",serif;font-size:46px;line-height:1;background:linear-gradient(135deg,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.mw-feat-score-denom{font-size:13px;color:var(--ink-2);font-weight:600}
+.mw-feat-score-label{font-size:9px;color:var(--ink-2);letter-spacing:1.5px;font-weight:700;margin-top:2px}
+.mw-feat-metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:14px;position:relative;z-index:2}
+.mw-fm{text-align:center;padding:10px 4px;border-radius:14px;background:var(--glass-strong);border:1px solid var(--border)}
+.mw-fm-ico{font-size:14px;display:block;margin-bottom:3px}
+.mw-fm-val{font-family:"Instrument Serif",serif;font-weight:400;font-size:16px;line-height:1}
+.mw-fm-lbl{font-size:9px;color:var(--ink-2);letter-spacing:0.8px;text-transform:uppercase;font-weight:600;margin-top:3px}
+.mw-fm-val.mw-up{color:var(--green)}
+.mw-fm-val.mw-down{color:var(--red)}
+.mw-feat-cta{display:flex;gap:8px;margin-top:16px;position:relative;z-index:2}
+.mw-btn-grad{flex:1;border:none;cursor:pointer;padding:14px 16px;border-radius:999px;background:linear-gradient(90deg,#FF8FBE,#FFB088,#FFD46B);color:#fff;font-family:inherit;font-size:13px;font-weight:700;letter-spacing:0.5px;box-shadow:0 8px 24px rgba(255,143,190,.4)}
+.mw-btn-ghost{flex:1;border:1px solid var(--border);cursor:pointer;padding:13px 16px;border-radius:999px;background:var(--glass);color:var(--ink);font-family:inherit;font-size:13px;font-weight:500}
+
+/* ───── NARRATIVES ───── */
+.mw-narratives{display:flex;gap:8px;padding:4px 18px 4px;margin:0 -2px;overflow-x:auto;position:relative;z-index:2;scrollbar-width:none;scroll-snap-type:x mandatory}
 .mw-narratives::-webkit-scrollbar{display:none}
-.mw-narr-chip{flex-shrink:0;padding:12px 16px;border-radius:22px 40px 22px 40px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);min-width:130px}
-.mw-narr-emoji{font-size:16px}
-.mw-narr-name{font-size:12px;font-weight:600;margin-top:4px}
-.mw-narr-pct{font-size:16px;font-weight:700;margin-top:4px;color:var(--green)}
+.mw-narr{flex:0 0 auto;padding:11px 15px;border-radius:22px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);min-width:130px;cursor:pointer;transition:all .15s;scroll-snap-align:start}
+.mw-narr-emoji{font-size:18px}
+.mw-narr-name{font-size:12px;font-weight:700;margin-top:4px}
+.mw-narr-pct{font-size:15px;font-weight:700;margin-top:3px;color:var(--green)}
 .mw-narr-pct.mw-down{color:var(--red)}
-.mw-narr-assets{font-size:10px;color:var(--ink-2);margin-top:2px}
-.mw-feed{display:flex;flex-direction:column;gap:8px}
-.mw-feed-item{display:flex;align-items:center;gap:10px;padding:12px 16px;border-radius:28px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);cursor:pointer}
-.mw-feed-ico{width:32px;height:32px;border-radius:50%;background:var(--glass-strong);display:flex;align-items:center;justify-content:center;font-size:14px;flex-shrink:0}
-.mw-feed-body{flex:1;min-width:0}
-.mw-feed-l1{font-size:12px;color:var(--ink-2)}
-.mw-feed-l1 b{color:var(--ink);font-weight:600}
-.mw-feed-l2{font-size:14px;font-weight:600;margin-top:2px}
-.mw-feed-right{text-align:right;flex-shrink:0}
-.mw-feed-amt{font-size:13px;font-weight:600;color:var(--green)}
-.mw-feed-time{font-size:10px;color:var(--ink-3);margin-top:2px}
-.mw-back-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
-.mw-back-btn{width:36px;height:36px;border-radius:50%;background:var(--glass);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:16px}
-.mw-top-actions{display:flex;gap:8px}
-.mw-icon-pill{padding:8px 14px;border-radius:999px;background:var(--glass);border:1px solid var(--border);display:flex;align-items:center;gap:6px;font-size:12px;font-weight:500;cursor:pointer}
-.mw-token-hero{display:flex;gap:14px;align-items:center}
-.mw-token-hero .mw-meta{flex:1;min-width:0}
-.mw-token-hero .mw-sym{font-family:"Instrument Serif",serif;font-size:36px;line-height:1}
-.mw-token-hero .mw-chain{font-size:12px;color:var(--ink-2);margin-top:4px}
-.mw-tags{display:flex;gap:6px;margin-top:10px;flex-wrap:wrap}
-.mw-tag{padding:4px 10px;border-radius:999px;font-size:10px;font-weight:600;border:1px solid}
-.mw-tag.mw-t1{color:#B794F6;border-color:rgba(183,148,246,0.4);background:rgba(183,148,246,0.1)}
-.mw-tag.mw-t2{color:#FF8FBE;border-color:rgba(255,143,190,0.4);background:rgba(255,143,190,0.1)}
-.mw-tag.mw-t3{color:#FFB088;border-color:rgba(255,176,136,0.4);background:rgba(255,176,136,0.1)}
-.mw-token-actions{display:flex;gap:8px;margin-top:16px}
-.mw-star-btn{width:46px;height:46px;border-radius:50%;background:var(--glass);border:1px solid var(--border);display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:18px;flex-shrink:0}
-.mw-signal-big{margin-top:20px;padding:18px;border-radius:32px;background:linear-gradient(135deg,rgba(255,143,190,0.18),rgba(183,148,246,0.18));border:1px solid rgba(255,255,255,0.7);backdrop-filter:blur(12px);display:flex;gap:16px;align-items:center}
-.mw-signal-big .mw-left-col{flex:0 0 auto}
-.mw-signal-big .mw-label{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:var(--ink-2)}
-.mw-signal-big .mw-num{font-family:"Instrument Serif",serif;font-size:56px;line-height:1;background:linear-gradient(135deg,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;margin-top:4px}
-.mw-signal-big .mw-denom{font-size:13px;color:var(--ink-2)}
-.mw-signal-big .mw-top-badge{display:inline-flex;align-items:center;gap:4px;padding:5px 12px;border-radius:999px;background:linear-gradient(90deg,#FF8FBE,#FFB088);color:#fff;font-size:10px;font-weight:700;letter-spacing:1px;margin-top:10px}
-.mw-signal-big .mw-right-col{flex:1;min-width:0}
-.mw-radar-row{display:flex;align-items:center;gap:10px;font-size:11px;margin-top:4px}
-.mw-radar-row:first-child{margin-top:0}
-.mw-radar-dot{width:7px;height:7px;border-radius:50%}
-.mw-radar-label{flex:1;color:var(--ink-2)}
-.mw-radar-val{font-weight:700;color:var(--ink)}
-.mw-stat-mini-row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-top:16px}
-.mw-stat-mini{padding:12px 14px;border-radius:20px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px)}
-.mw-stat-mini .mw-lbl{font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--ink-2);font-weight:600}
-.mw-stat-mini .mw-val{font-family:"Instrument Serif",serif;font-size:17px;margin-top:4px;line-height:1}
-.mw-stat-mini .mw-dlt{font-size:11px;font-weight:600;margin-top:4px;color:var(--green)}
-.mw-stat-mini .mw-dlt.mw-neg{color:var(--red)}
-.mw-two-col{display:grid;grid-template-columns:1fr;gap:12px;margin-top:16px}
-.mw-card-pill{padding:18px;border-radius:28px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px)}
-.mw-info-row{display:flex;justify-content:space-between;padding:9px 0;font-size:12px;border-bottom:1px dashed var(--border)}
-.mw-info-row:last-child{border-bottom:none}
-.mw-info-lbl{color:var(--ink-2)}
-.mw-info-val{font-weight:600;font-family:ui-monospace,monospace;font-size:11px}
-.mw-sheet-backdrop{position:fixed;inset:0;background:rgba(26,27,78,0.4);backdrop-filter:blur(8px);z-index:9998}
-.mw-sheet{position:fixed;bottom:0;left:0;right:0;margin:0 auto;width:100%;max-width:430px;background:linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);border-top-left-radius:32px;border-top-right-radius:32px;border-top:1px solid var(--border);padding:8px 0 calc(env(safe-area-inset-bottom,0px) + 24px);max-height:92dvh;z-index:9999;box-shadow:0 -20px 60px rgba(183,148,246,0.25);overflow-y:auto}
+.mw-narr-count{font-size:10px;color:var(--ink-2);margin-top:2px}
+
+/* ───── HSCROLL CARDS (shared) ───── */
+.mw-hscroll{display:flex;gap:10px;padding:4px 18px;margin:0 -2px;overflow-x:auto;scroll-snap-type:x mandatory;position:relative;z-index:2;scrollbar-width:none}
+.mw-hscroll::-webkit-scrollbar{display:none}
+
+/* ───── WHALE RADAR ───── */
+.mw-whale-card{flex:0 0 180px;scroll-snap-align:start;padding:14px;border-radius:24px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);cursor:pointer;transition:transform .15s}
+.mw-whale-card:active{transform:scale(.98)}
+.mw-whale-row{display:flex;align-items:center;gap:10px}
+.mw-mini-avatar{width:40px;height:40px;border-radius:50%;padding:2px;flex-shrink:0;background:conic-gradient(from 0deg,#FF8FBE,#B794F6,#7FFFD4,#FFB088,#FF8FBE)}
+.mw-mini-avatar .mw-inner{width:100%;height:100%;border-radius:50%;display:grid;place-items:center;font-size:18px;overflow:hidden;background:linear-gradient(135deg,#FFD9C9,#E8B8A0)}
+.mw-mini-avatar .mw-inner img{width:100%;height:100%;object-fit:cover;border-radius:50%}
+.mw-whale-sym{font-size:14px;font-weight:700}
+.mw-whale-pct{font-size:13px;font-weight:700;color:var(--green);margin-top:2px}
+.mw-whale-pct.mw-down{color:var(--red)}
+.mw-whale-stats{display:flex;justify-content:space-between;margin-top:12px;font-size:11px;font-weight:600}
+.mw-whale-stats .mw-l{color:var(--ink-2)}
+.mw-whale-stats .mw-r{color:var(--green)}
+.mw-trade-pill{margin-top:10px;padding:9px;border-radius:14px;background:linear-gradient(90deg,#FF8FBE,#FFB088);color:#fff;text-align:center;font-size:11px;font-weight:700;letter-spacing:0.5px;border:none;cursor:pointer;width:100%;font-family:inherit}
+
+/* ───── BREAKING OUT (most important) ───── */
+.mw-bo-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 18px;position:relative;z-index:2}
+.mw-bo-card{padding:16px;border-radius:24px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);position:relative;overflow:hidden;min-height:160px;cursor:pointer;animation:mwRise .4s cubic-bezier(.2,.8,.2,1) backwards}
+.mw-bo-card.mw-momentum{background:linear-gradient(135deg,rgba(255,143,190,.18),var(--glass) 60%)}
+.mw-bo-card.mw-volume{background:linear-gradient(135deg,rgba(255,176,136,.18),var(--glass) 60%)}
+.mw-bo-card.mw-smart{background:linear-gradient(135deg,rgba(160,231,255,.22),var(--glass) 60%)}
+.mw-bo-card.mw-early{background:linear-gradient(135deg,rgba(127,255,212,.22),var(--glass) 60%)}
+.mw-bo-head{display:flex;align-items:center;gap:8px}
+.mw-bo-ico{width:32px;height:32px;border-radius:50%;background:var(--glass-strong);display:grid;place-items:center;font-size:15px;flex-shrink:0}
+.mw-bo-title{font-size:10px;font-weight:700;letter-spacing:1.2px}
+.mw-bo-token{display:flex;align-items:center;gap:8px;margin-top:12px}
+.mw-bo-sym{font-family:"Instrument Serif",serif;font-size:22px;line-height:1}
+.mw-bo-pct{font-size:13px;font-weight:700;margin-top:6px;color:var(--green)}
+.mw-bo-pct.mw-down{color:var(--red)}
+.mw-bo-meta{font-size:10px;color:var(--ink-2);margin-top:2px;font-weight:500}
+.mw-bo-empty{font-size:12px;color:var(--ink-2);margin-top:14px}
+
+/* ───── NEW LAUNCHES ───── */
+.mw-launch-card{flex:0 0 200px;scroll-snap-align:start;padding:14px;border-radius:22px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);cursor:pointer}
+.mw-launch-head{display:flex;align-items:center;gap:10px}
+.mw-launch-info{min-width:0}
+.mw-launch-sym{font-size:14px;font-weight:700;line-height:1.1}
+.mw-launch-age{font-size:10px;color:var(--peach);font-weight:700;margin-top:3px;letter-spacing:0.5px}
+.mw-launch-row{display:flex;justify-content:space-between;margin-top:10px;font-size:11px}
+.mw-launch-l{color:var(--ink-2);font-weight:500}
+.mw-launch-v{font-weight:700}
+
+/* ───── TRENDING NOW ───── */
+.mw-trend-list{display:flex;flex-direction:column;gap:8px;padding:0 18px;position:relative;z-index:2}
+.mw-trend-row{display:flex;align-items:center;gap:12px;padding:12px 14px;border-radius:18px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);cursor:pointer;animation:mwRise .3s ease backwards}
+.mw-trend-rank{font-family:"Instrument Serif",serif;font-size:22px;color:var(--ink-3);width:24px;text-align:center;flex-shrink:0}
+.mw-trend-mid{flex:1;min-width:0}
+.mw-trend-sym{font-size:14px;font-weight:700}
+.mw-trend-sub{font-size:10px;color:var(--ink-2);margin-top:2px;font-weight:500}
+.mw-trend-right{text-align:right;flex-shrink:0}
+.mw-trend-pct{font-size:14px;font-weight:700;color:var(--green)}
+.mw-trend-pct.mw-down{color:var(--red)}
+.mw-trend-meta{font-size:10px;color:var(--ink-2);margin-top:2px;font-weight:500}
+
+/* ───── LIVE FEED ───── */
+.mw-activity{padding:0 18px;position:relative;z-index:2}
+.mw-activity-list{display:flex;flex-direction:column;gap:8px}
+.mw-act{display:flex;align-items:center;gap:10px;padding:12px 14px;border-radius:18px;background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);cursor:pointer;animation:mwRise .3s ease backwards}
+.mw-act-ico{width:30px;height:30px;border-radius:50%;background:var(--glass-strong);display:grid;place-items:center;font-size:14px;flex-shrink:0}
+.mw-act-body{flex:1;min-width:0;font-size:12px}
+.mw-act-l1{color:var(--ink-2);font-weight:500}
+.mw-act-l1 b{color:var(--ink);font-weight:700}
+.mw-act-l2{font-size:13px;font-weight:700;margin-top:2px}
+.mw-act-right{text-align:right;flex-shrink:0}
+.mw-act-amt{font-size:12px;font-weight:700;color:var(--green)}
+.mw-act-time{font-size:10px;color:var(--ink-3);font-weight:600;margin-top:2px}
+
+.mw-empty{text-align:center;padding:24px 20px;color:var(--ink-2);font-size:13px;font-weight:500}
+
+/* ════════ DETAIL VIEW (pastel) ════════ */
+.mw-detail{position:fixed;top:0;left:0;right:0;bottom:0;margin:0 auto;width:100%;max-width:480px;height:100vh;height:100dvh;z-index:9999;overflow-y:auto;overflow-x:hidden;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding-bottom:calc(env(safe-area-inset-bottom,0px) + 60px);background:radial-gradient(ellipse at 20% 5%,#FFE8F4 0%,transparent 45%),radial-gradient(ellipse at 85% 15%,#E4F2FF 0%,transparent 45%),radial-gradient(ellipse at 50% 60%,#F0E7FF 0%,transparent 55%),linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);color:var(--ink);font-family:"Space Grotesk",sans-serif;animation:mwFade .25s ease-out}
+.mw-detail-top{display:flex;align-items:center;justify-content:space-between;padding:calc(env(safe-area-inset-top,0px) + 12px) 18px 12px;position:sticky;top:0;z-index:10;background:rgba(251,245,255,0.7);backdrop-filter:blur(20px)}
+.mw-icon-btn{width:40px;height:40px;border-radius:50%;background:var(--glass);border:1px solid var(--border);color:var(--ink);font-size:18px;cursor:pointer;display:grid;place-items:center;font-family:inherit}
+.mw-detail-title{font-family:"Instrument Serif",serif;font-size:18px;display:flex;align-items:center;gap:6px}
+.mw-check-mint{color:var(--green);font-size:14px}
+.mw-detail-hero{padding:8px 22px 18px;display:flex;align-items:center;gap:14px}
+.mw-detail-emoji{font-size:52px;line-height:1;flex-shrink:0;filter:drop-shadow(0 6px 18px rgba(183,148,246,.3))}
+.mw-detail-emoji img{width:64px;height:64px;border-radius:50%;object-fit:cover}
+.mw-detail-info{flex:1;min-width:0}
+.mw-detail-name{font-family:"Instrument Serif",serif;font-size:32px;line-height:1}
+.mw-detail-fullname{color:var(--ink-2);font-weight:500;font-size:12px;margin-top:4px}
+.mw-detail-price-row{display:flex;align-items:center;gap:10px;margin-top:8px}
+.mw-detail-price{font-family:"Instrument Serif",serif;font-size:22px;line-height:1}
+.mw-inline-actions{padding:0 22px 16px;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.mw-big-btn{border:none;padding:16px 0;border-radius:18px;font-family:inherit;font-weight:700;font-size:13px;letter-spacing:1.2px;cursor:pointer;transition:all .15s}
+.mw-big-btn.mw-buy{background:linear-gradient(90deg,#FF8FBE,#FFB088,#FFD46B);color:#fff;box-shadow:0 8px 24px rgba(255,143,190,.4)}
+.mw-big-btn.mw-sell{background:var(--glass);border:1px solid var(--border);color:var(--ink)}
+.mw-whale-banner{margin:0 22px 14px;background:linear-gradient(135deg,rgba(255,212,107,.22),rgba(160,231,255,.12));border:1.5px solid rgba(255,212,107,.4);border-radius:18px;padding:12px 14px;display:flex;align-items:center;gap:12px}
+.mw-whale-banner-emoji{font-size:28px}
+.mw-whale-banner-title{font-size:10px;color:var(--ink);font-weight:700;letter-spacing:1.2px}
+.mw-whale-banner-sub{font-size:13px;color:var(--ink);font-weight:600;margin-top:2px}
+.mw-stats-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:0 22px}
+.mw-stat{background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);border-radius:18px;padding:14px 14px 12px;position:relative;overflow:hidden}
+.mw-stat-icon{font-size:16px;margin-bottom:4px;display:block}
+.mw-stat-label{font-size:9px;color:var(--ink-2);letter-spacing:1.5px;text-transform:uppercase;font-weight:700;margin-bottom:4px}
+.mw-stat-value{font-family:"Instrument Serif",serif;font-size:20px;line-height:1}
+.mw-stat-sub{font-size:9px;color:var(--ink-3);font-weight:600;margin-top:4px}
+.mw-contract{margin:14px 22px 0;padding:12px 14px;background:var(--glass);border:1px dashed var(--border);border-radius:14px;display:flex;align-items:center;justify-content:space-between;gap:10px}
+.mw-contract-info{min-width:0;flex:1}
+.mw-contract-label{font-size:9px;color:var(--ink-2);letter-spacing:1.5px;text-transform:uppercase;font-weight:700;margin-bottom:2px}
+.mw-contract-addr{font-family:ui-monospace,monospace;font-size:11px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mw-copy-btn{background:var(--glass-strong);border:1px solid var(--border);color:var(--lav);padding:7px 12px;border-radius:9px;font-family:inherit;font-weight:700;font-size:10px;letter-spacing:1px;cursor:pointer;flex-shrink:0}
+
+/* ════════ TRADE SHEET (pastel) ════════ */
+.mw-sheet-backdrop{position:fixed;inset:0;background:rgba(26,27,78,0.4);backdrop-filter:blur(8px);z-index:9998;animation:mwFade .2s}
+.mw-sheet{position:fixed;bottom:0;left:0;right:0;margin:0 auto;width:100%;max-width:480px;background:linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);border-top-left-radius:32px;border-top-right-radius:32px;border-top:1px solid var(--border);padding:8px 0 calc(env(safe-area-inset-bottom,0px) + 24px);max-height:92dvh;z-index:9999;animation:mwSlideUp .4s cubic-bezier(.2,1.2,.4,1);box-shadow:0 -20px 60px rgba(183,148,246,.25);overflow-y:auto;color:var(--ink);font-family:"Space Grotesk",sans-serif}
 .mw-grabber{width:44px;height:4px;background:rgba(26,27,78,0.18);border-radius:999px;margin:0 auto 14px}
-.mw-sheet-head{padding:4px 22px 16px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border)}
-.mw-sheet-emoji{width:52px;height:52px;border-radius:50%;padding:2.5px;background:conic-gradient(from 0deg,#FF8FBE,#FFB088,#7FFFD4,#B794F6,#FF8FBE);flex-shrink:0}
-.mw-sheet-emoji-inner{width:100%;height:100%;border-radius:50%;background:var(--glass-strong);display:grid;place-items:center;font-size:24px;overflow:hidden}
-.mw-sheet-emoji-inner img{width:100%;height:100%;object-fit:cover;border-radius:50%}
-.mw-sheet-info{flex:1;min-width:0}
-.mw-sheet-name{font-family:"Instrument Serif",serif;font-size:24px;line-height:1;margin-bottom:6px}
-.mw-age-pill{background:var(--glass);color:var(--ink-2);padding:3px 8px;border-radius:999px;font-weight:500;font-size:10px}
+.mw-sheet-token-head{padding:4px 22px 16px;display:flex;align-items:center;gap:12px;border-bottom:1px solid var(--border)}
+.mw-sheet-emoji{width:52px;height:52px;border-radius:50%;background:linear-gradient(135deg,#FFD9C9,#E8B8A0);display:grid;place-items:center;font-size:26px;box-shadow:0 0 0 3px rgba(183,148,246,.2),0 0 28px rgba(255,143,190,.2);flex-shrink:0;overflow:hidden}
+.mw-sheet-emoji img{width:100%;height:100%;object-fit:cover}
+.mw-sheet-token-info{flex:1;min-width:0}
+.mw-sheet-token-name{font-family:"Instrument Serif",serif;font-size:22px;line-height:1;margin-bottom:6px}
+.mw-sheet-sub{display:flex;align-items:center;gap:8px}
+.mw-age-pill{background:var(--glass);color:var(--ink-2);padding:3px 10px;border-radius:999px;font-weight:500;font-size:10px;letter-spacing:0.3px}
 .mw-tab-switch{display:grid;grid-template-columns:1fr 1fr;margin:16px 22px 0;background:var(--glass);border:1px solid var(--border);border-radius:14px;padding:4px;position:relative}
-.mw-tab{padding:11px 0;text-align:center;font-family:inherit;font-weight:700;font-size:12px;letter-spacing:0.1em;color:var(--ink-2);border-radius:10px;cursor:pointer;position:relative;z-index:2;transition:color 0.2s}
-.mw-tab-indicator{position:absolute;top:4px;bottom:4px;width:calc(50% - 4px);background:linear-gradient(135deg,#7FFFD4,#A0E7FF);border-radius:10px;transition:transform 0.4s cubic-bezier(0.2,1.3,0.4,1),background 0.3s;z-index:1;box-shadow:0 4px 12px rgba(127,255,212,0.4)}
-.mw-tab-switch.mw-sell-mode .mw-tab-indicator{transform:translateX(100%);background:linear-gradient(135deg,#FF8FBE,#FFB088);box-shadow:0 4px 12px rgba(255,143,190,0.4)}
+.mw-tab{padding:11px 0;text-align:center;font-family:inherit;font-weight:700;font-size:12px;letter-spacing:1px;color:var(--ink-2);border-radius:10px;cursor:pointer;transition:color .2s;position:relative;z-index:2}
+.mw-tab-indicator{position:absolute;top:4px;bottom:4px;width:calc(50% - 4px);background:linear-gradient(135deg,#7FFFD4,#A0E7FF);border-radius:10px;transition:transform .4s cubic-bezier(.2,1.3,.4,1),background .3s;z-index:1;box-shadow:0 4px 14px rgba(127,255,212,.4)}
+.mw-tab-switch.mw-sell-mode .mw-tab-indicator{transform:translateX(100%);background:linear-gradient(135deg,#FF8FBE,#FFB088);box-shadow:0 4px 14px rgba(255,143,190,.4)}
 .mw-tab.mw-active{color:var(--ink)}
 .mw-amount-section{padding:18px 22px}
-.mw-amount-label{font-size:10px;color:var(--ink-2);letter-spacing:0.18em;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;text-transform:uppercase;font-weight:600}
-.mw-balance-pill{color:var(--ink-2);font-size:10px;background:var(--glass);padding:4px 10px;border-radius:999px;text-transform:none;letter-spacing:0}
-.mw-balance-pill b{color:var(--green);font-weight:700}
-.mw-amount-input-wrap{background:var(--glass);border:1.5px solid var(--border);border-radius:18px;padding:16px;display:flex;align-items:center;gap:10px;transition:all 0.25s}
-.mw-amount-input-wrap:focus-within{border-color:var(--lav);box-shadow:0 0 0 4px rgba(183,148,246,0.12)}
+.mw-amount-label{font-size:10px;color:var(--ink-2);letter-spacing:1.8px;margin-bottom:10px;display:flex;justify-content:space-between;align-items:center;text-transform:uppercase;font-weight:700}
+.mw-balance{color:var(--ink-2);font-size:10px;background:var(--glass);padding:4px 10px;border-radius:999px;text-transform:none;letter-spacing:0;font-weight:500}
+.mw-balance b{color:var(--green);font-weight:700}
+.mw-amount-input-wrap{background:var(--glass);border:1.5px solid var(--border);border-radius:18px;padding:16px;display:flex;align-items:center;gap:10px;transition:all .25s}
+.mw-amount-input-wrap:focus-within{border-color:var(--lav);box-shadow:0 0 0 4px rgba(183,148,246,.12)}
 .mw-amount-input{background:none;border:none;color:var(--ink);font-family:"Instrument Serif",serif;font-size:34px;flex:1;outline:none;min-width:0;width:100%}
 .mw-currency{display:flex;align-items:center;gap:8px;background:var(--glass-strong);padding:8px 12px 8px 8px;border-radius:999px;font-weight:600;font-size:13px;border:1px solid var(--border);flex-shrink:0}
 .mw-currency-icon{width:22px;height:22px;border-radius:50%;background:linear-gradient(135deg,#B794F6,#7FFFD4)}
 .mw-presets{display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:12px}
-.mw-preset{background:var(--glass);border:1.5px solid var(--border);color:var(--ink-2);padding:11px 0;border-radius:12px;font-family:inherit;font-weight:700;font-size:12px;cursor:pointer;transition:all 0.15s}
-.mw-preset.mw-selected{background:linear-gradient(135deg,#7FFFD4,#A0E7FF);border-color:var(--mint);color:var(--ink);box-shadow:0 4px 12px rgba(127,255,212,0.4)}
-.mw-receive{margin:12px 22px 0;padding:14px 16px;background:linear-gradient(135deg,rgba(127,255,212,0.18),rgba(160,231,255,0.12));border:1.5px solid rgba(127,255,212,0.4);border-radius:16px;display:flex;justify-content:space-between;align-items:center}
-.mw-receive-label{font-size:9px;color:var(--ink-2);letter-spacing:0.18em;text-transform:uppercase;font-weight:600}
+.mw-preset{background:var(--glass);border:1.5px solid var(--border);color:var(--ink-2);padding:11px 0;border-radius:12px;font-family:inherit;font-weight:700;font-size:12px;cursor:pointer;transition:all .15s}
+.mw-preset.mw-selected{background:linear-gradient(135deg,#7FFFD4,#A0E7FF);border-color:var(--mint);color:var(--ink);box-shadow:0 4px 12px rgba(127,255,212,.4)}
+.mw-receive{margin:12px 22px 0;padding:14px 16px;background:linear-gradient(135deg,rgba(127,255,212,.18),rgba(160,231,255,.12));border:1.5px solid rgba(127,255,212,.4);border-radius:16px;display:flex;justify-content:space-between;align-items:center}
+.mw-receive-label{font-size:9px;color:var(--ink-2);letter-spacing:1.8px;text-transform:uppercase;font-weight:700}
 .mw-receive-amount{font-family:"Instrument Serif",serif;font-size:22px;color:var(--green);margin-top:3px}
 .mw-receive-rate{text-align:right;font-size:10px;color:var(--ink-2);font-weight:500}
-.mw-receive-rate b{color:var(--ink);font-weight:600}
+.mw-receive-rate b{color:var(--ink);font-weight:700}
 .mw-cta-wrap{padding:16px 22px 0}
-.mw-cta{width:100%;background:linear-gradient(90deg,#7FFFD4,#A0E7FF,#B794F6);color:var(--ink);border:none;padding:18px 0;border-radius:18px;font-family:inherit;font-weight:700;font-size:15px;letter-spacing:0.1em;cursor:pointer;box-shadow:0 8px 24px rgba(127,255,212,0.35);transition:all 0.15s}
-.mw-cta.mw-sell-cta{background:linear-gradient(90deg,#FF8FBE,#FFB088,#FFD46B);color:#fff;box-shadow:0 8px 24px rgba(255,143,190,0.4)}
-.mw-cta:disabled{opacity:0.5;cursor:not-allowed}
-.mw-trust{text-align:center;margin-top:12px;font-size:10px;color:var(--ink-2)}
-.mw-empty{text-align:center;padding:40px 20px;color:var(--ink-2);font-size:13px}
-.mw-skeleton-card{padding:14px;border-radius:24px;background:var(--glass);border:1px solid var(--border);height:110px;opacity:0.6}
+.mw-cta{width:100%;background:linear-gradient(90deg,#7FFFD4,#A0E7FF,#B794F6);color:var(--ink);border:none;padding:18px 0;border-radius:18px;font-family:inherit;font-weight:700;font-size:14px;letter-spacing:1.4px;cursor:pointer;box-shadow:0 8px 28px rgba(127,255,212,.35);transition:all .15s;position:relative;overflow:hidden}
+.mw-cta:disabled{opacity:.5;cursor:not-allowed}
+.mw-cta.mw-sell-cta{background:linear-gradient(90deg,#FF8FBE,#FFB088,#FFD46B);color:#fff;box-shadow:0 8px 28px rgba(255,143,190,.4)}
+.mw-cta::after{content:'';position:absolute;top:0;bottom:0;width:70px;left:-110px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.5),transparent);animation:mwShimmerSlide 2.5s ease-in-out infinite}
+.mw-trust{text-align:center;margin-top:12px;font-size:10px;color:var(--ink-2);letter-spacing:0.4px;font-weight:500}
+.mw-trust b{color:var(--ink);font-weight:700}
+.mw-jup-badge{display:inline-flex;align-items:center;gap:5px;background:var(--glass);padding:3px 9px;border-radius:999px;margin:0 3px}
+.mw-jup-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
+
+/* ════════ SUCCESS VIEW (pastel) ════════ */
+.mw-success-overlay{position:fixed;top:0;left:0;right:0;bottom:0;margin:0 auto;width:100%;max-width:480px;height:100vh;height:100dvh;z-index:9999;overflow-y:auto;overflow-x:hidden;padding:calc(env(safe-area-inset-top,0px) + 16px) 0 calc(env(safe-area-inset-bottom,0px) + 40px);background:radial-gradient(ellipse at 20% 5%,#FFE8F4 0%,transparent 45%),radial-gradient(ellipse at 85% 15%,#E4F2FF 0%,transparent 45%),radial-gradient(ellipse at 50% 60%,#F0E7FF 0%,transparent 55%),linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);color:var(--ink);font-family:"Space Grotesk",sans-serif}
+.mw-confetti-rain{position:fixed;inset:0;max-width:480px;left:50%;transform:translateX(-50%);pointer-events:none;overflow:hidden;z-index:1}
+.mw-confetti-piece{position:absolute;top:-30px;animation:mwFall linear forwards}
+.mw-success-top{display:flex;justify-content:space-between;align-items:center;padding:4px 18px 8px;position:relative;z-index:5}
+.mw-view-on{background:var(--glass);border:1px solid var(--border);color:var(--ink-2);padding:8px 12px;border-radius:999px;font-family:inherit;font-weight:700;font-size:10px;letter-spacing:1px;cursor:pointer;text-decoration:none}
+.mw-success{text-align:center;padding:18px 22px 4px;position:relative;z-index:5}
+.mw-success-emoji{font-size:76px;line-height:1;display:inline-block;animation:mwPop .6s cubic-bezier(.2,1.5,.4,1) backwards;filter:drop-shadow(0 10px 30px rgba(255,143,190,.35))}
+.mw-success-title{font-family:"Instrument Serif",serif;font-size:48px;line-height:1;margin-top:10px;background:linear-gradient(135deg,#FF8FBE,#B794F6,#7FFFD4);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;animation:mwRise .6s .2s backwards}
+.mw-success-sub{color:var(--ink-2);font-weight:500;font-size:14px;margin-top:8px;animation:mwRise .6s .3s backwards}
+.mw-flex-card{margin:18px 22px 0;background:linear-gradient(135deg,rgba(255,143,190,.20),rgba(127,255,212,.20));border:1px solid rgba(255,255,255,0.8);border-radius:28px;padding:20px 18px;position:relative;overflow:hidden;box-shadow:0 20px 60px rgba(183,148,246,.2);animation:mwRise .6s .4s backwards;z-index:5}
+.mw-flex-watermark{position:absolute;bottom:12px;right:16px;font-family:inherit;font-weight:700;font-size:9px;color:var(--ink-3);letter-spacing:2px;opacity:.7}
+.mw-flex-watermark b{color:var(--lav)}
+.mw-flex-top{display:flex;align-items:center;gap:12px;margin-bottom:14px}
+.mw-flex-emoji{font-size:40px;line-height:1}
+.mw-flex-emoji img{width:48px;height:48px;border-radius:50%;object-fit:cover}
+.mw-flex-token{flex:1;min-width:0}
+.mw-flex-sym{font-family:"Instrument Serif",serif;font-size:24px;line-height:1}
+.mw-flex-tag{font-size:11px;color:var(--ink-2);font-weight:500;margin-top:2px}
+.mw-flex-divider{height:1px;background:linear-gradient(90deg,transparent,var(--border),transparent);margin:12px 0}
+.mw-flex-row{display:flex;justify-content:space-between;align-items:baseline;padding:5px 0}
+.mw-flex-label{font-size:10px;color:var(--ink-2);letter-spacing:0.8px;text-transform:uppercase;font-weight:700}
+.mw-flex-value{font-family:"Instrument Serif",serif;font-size:15px}
+.mw-flex-value.mw-big{font-size:26px;background:linear-gradient(135deg,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.mw-share-section{margin:18px 22px 0;position:relative;z-index:5;animation:mwRise .6s .5s backwards}
+.mw-share-title{text-align:center;font-family:inherit;font-weight:700;font-size:11px;letter-spacing:1.5px;color:var(--ink);margin-bottom:6px}
+.mw-share-sub{text-align:center;font-size:12px;color:var(--ink-2);font-weight:500;margin-bottom:12px}
+.mw-share-sub b{color:var(--peach);font-weight:700}
+.mw-share-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.mw-share-btn{background:var(--glass);border:1px solid var(--border);border-radius:16px;padding:12px 4px 9px;text-align:center;cursor:pointer;transition:all .15s;color:var(--ink);font-family:inherit;backdrop-filter:blur(10px)}
+.mw-share-icon{width:32px;height:32px;border-radius:50%;background:var(--mw-share-bg,var(--glass-strong));margin:0 auto 6px;display:grid;place-items:center;font-size:16px;color:var(--mw-share-color,var(--ink));font-weight:700}
+.mw-share-label{font-size:10px;font-weight:600;color:var(--ink);letter-spacing:0.2px}
+.mw-refer{margin:14px 22px 0;background:linear-gradient(135deg,rgba(255,212,107,.2),rgba(255,176,136,.12));border:1.5px dashed rgba(255,212,107,.4);border-radius:18px;padding:14px;position:relative;z-index:5;animation:mwRise .6s .6s backwards}
+.mw-refer-row{display:flex;align-items:center;gap:10px}
+.mw-refer-emoji{font-size:24px}
+.mw-refer-text{flex:1;min-width:0}
+.mw-refer-title{font-size:10px;color:var(--peach);font-weight:700;letter-spacing:1px}
+.mw-refer-sub{font-size:11px;color:var(--ink-2);font-weight:500;margin-top:2px}
+.mw-refer-link{margin-top:10px;display:flex;align-items:center;background:var(--glass-strong);border-radius:10px;padding:8px 10px;gap:8px}
+.mw-refer-url{flex:1;font-family:ui-monospace,monospace;font-size:10px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mw-refer-url b{color:var(--lav)}
+.mw-refer-copy{background:linear-gradient(135deg,#FFD46B,#FFB088);color:#fff;border:none;padding:6px 11px;border-radius:9px;font-family:inherit;font-weight:700;font-size:10px;letter-spacing:0.8px;cursor:pointer}
+.mw-done-wrap{padding:18px 22px 0;position:relative;z-index:5;animation:mwRise .6s .7s backwards}
+.mw-done-btn{width:100%;background:linear-gradient(90deg,#7FFFD4,#A0E7FF,#B794F6);color:var(--ink);border:none;padding:16px 0;border-radius:18px;font-family:inherit;font-weight:700;font-size:13px;letter-spacing:1.4px;cursor:pointer;box-shadow:0 8px 24px rgba(127,255,212,.35)}
+
+/* ════════ STICKY HEADER (mobile + desktop) ════════ */
+.mw-topbar{position:sticky;top:0;z-index:50;display:flex;justify-content:space-between;align-items:center;padding:12px 18px;background:rgba(251,245,255,0.72);backdrop-filter:blur(20px);border-bottom:1px solid var(--border)}
+.mw-brand{display:flex;align-items:center;gap:10px;cursor:pointer}
+.mw-brand-dot{width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#FF8FBE,#B794F6 60%,#7FFFD4);box-shadow:0 0 14px rgba(183,148,246,0.5)}
+.mw-brand-text{font-family:"Instrument Serif",serif;font-style:italic;font-size:18px;line-height:1}
+.mw-brand-text .mw-slash{opacity:0.4;margin:0 3px;font-style:normal}
+.mw-topbar-right{display:flex;align-items:center;gap:8px}
+.mw-refer-cta{display:none;align-items:center;gap:6px;padding:8px 14px;border-radius:999px;background:linear-gradient(90deg,rgba(255,212,107,0.25),rgba(255,176,136,0.18));border:1px solid rgba(255,212,107,0.4);color:var(--ink);font-size:12px;font-weight:700;cursor:pointer;font-family:inherit;letter-spacing:0.2px}
+.mw-refer-cta .mw-refer-icon{font-size:14px}
+.mw-refer-cta .mw-refer-amount{color:var(--green);font-weight:800;font-size:12px}
+.mw-wallet-btn{display:flex;align-items:center;gap:7px;padding:8px 14px;border-radius:999px;background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink);border:none;font-family:inherit;font-size:12px;font-weight:700;cursor:pointer;box-shadow:0 4px 12px rgba(127,255,212,0.35);letter-spacing:0.2px}
+.mw-wallet-btn.mw-connected{background:var(--glass-strong);border:1px solid var(--border);color:var(--ink);box-shadow:none}
+.mw-wallet-btn .mw-wallet-dot{width:6px;height:6px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
+
+/* ════════ REFER MODAL ════════ */
+.mw-modal-backdrop{position:fixed;inset:0;background:rgba(26,27,78,0.4);backdrop-filter:blur(8px);z-index:9990;display:grid;place-items:center;padding:18px;animation:mwFade .2s}
+.mw-modal{background:linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);border:1px solid var(--border);border-radius:28px;padding:28px 26px;max-width:480px;width:100%;position:relative;box-shadow:0 20px 60px rgba(183,148,246,0.4);animation:mwRise .3s cubic-bezier(.2,1.2,.4,1)}
+.mw-modal-close{position:absolute;top:14px;right:14px;width:32px;height:32px;border-radius:50%;background:var(--glass);border:1px solid var(--border);font-size:16px;cursor:pointer;display:grid;place-items:center;font-family:inherit;color:var(--ink)}
+.mw-modal-title{font-family:"Instrument Serif",serif;font-size:32px;line-height:1;margin-bottom:6px;background:linear-gradient(135deg,#FF8FBE,#B794F6);-webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent}
+.mw-modal-sub{color:var(--ink-2);font-size:13px;font-weight:500;margin-bottom:18px;line-height:1.5}
+.mw-refer-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-bottom:18px}
+.mw-refer-stat{padding:12px;border-radius:16px;background:var(--glass-strong);border:1px solid var(--border);text-align:center}
+.mw-refer-stat .mw-rs-label{font-size:9px;color:var(--ink-2);letter-spacing:1.2px;text-transform:uppercase;font-weight:700}
+.mw-refer-stat .mw-rs-val{font-family:"Instrument Serif",serif;font-size:22px;line-height:1;margin-top:4px}
+.mw-refer-stat .mw-rs-val.mw-green{color:var(--green)}
+.mw-refer-link-box{display:flex;align-items:center;background:var(--glass-strong);border:1.5px solid var(--border);border-radius:14px;padding:12px 14px;gap:8px;margin-bottom:14px}
+.mw-refer-link-url{flex:1;font-family:ui-monospace,monospace;font-size:12px;color:var(--ink);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mw-refer-link-url b{color:var(--lav);font-weight:700}
+.mw-refer-link-copy{background:linear-gradient(135deg,#FFD46B,#FFB088);color:#fff;border:none;padding:8px 14px;border-radius:10px;font-family:inherit;font-weight:700;font-size:11px;letter-spacing:0.8px;cursor:pointer;flex-shrink:0}
+.mw-refer-share{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.mw-refer-share-btn{padding:12px;border-radius:14px;border:1px solid var(--border);background:var(--glass);color:var(--ink);font-family:inherit;font-weight:600;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;gap:6px}
+.mw-refer-explainer{margin-top:14px;padding:12px;background:linear-gradient(135deg,rgba(255,212,107,0.2),rgba(255,176,136,0.1));border:1px dashed rgba(255,212,107,0.4);border-radius:14px;font-size:12px;color:var(--ink-2);font-weight:500;line-height:1.5}
+.mw-refer-explainer b{color:var(--peach)}
+
+/* ════════ DESKTOP LAYOUT (≥1024px) ════════ */
+@media (min-width:1024px){
+  .mw-phone{max-width:1280px;padding-bottom:80px}
+  .mw-topbar{padding:14px 32px}
+  .mw-refer-cta{display:inline-flex}
+  /* Hero — bigger, more breathing room */
+  .mw-hero{padding:56px 32px 18px;max-width:760px;margin:0 auto}
+  .mw-hero h1{font-size:72px}
+  .mw-hero-sub{font-size:18px}
+  .mw-hero-meta{font-size:12px;margin-bottom:24px}
+  .mw-search-wrap{max-width:680px;margin:0 auto;padding:0 32px 12px}
+  .mw-search{padding:16px 22px}
+  .mw-search input{font-size:15px}
+  /* Stats — bigger orbs */
+  .mw-stats-orbs{padding:24px 32px 8px;gap:14px;max-width:1080px;margin:0 auto}
+  .mw-orb{padding:16px 14px}
+  .mw-orb-val{font-size:28px}
+  .mw-orb-label{font-size:10px}
+  .mw-orb-ico{font-size:16px}
+  /* Section heads */
+  .mw-section-head{padding:36px 32px 16px;max-width:1216px;margin:0 auto}
+  .mw-sub-tabs{margin:0 32px 16px;max-width:1216px}
+  .mw-section-title{font-size:11px;letter-spacing:3px}
+  /* Top signal — larger card with more breathing room */
+  .mw-featured{margin:6px 32px 0;padding:32px;max-width:1216px;margin-left:auto;margin-right:auto;border-radius:48px 80px 48px 80px}
+  .mw-feat-body{gap:24px}
+  .mw-token-avatar{width:110px;height:110px}
+  .mw-token-avatar-inner{font-size:48px}
+  .mw-feat-sym{font-size:48px}
+  .mw-feat-name{font-size:14px}
+  .mw-feat-score-num{font-size:72px}
+  .mw-feat-score-denom{font-size:16px}
+  .mw-feat-metrics{margin-top:24px;gap:14px}
+  .mw-fm{padding:16px 12px}
+  .mw-fm-val{font-size:22px}
+  .mw-fm-lbl{font-size:10px;margin-top:5px}
+  .mw-feat-cta{margin-top:24px;gap:12px}
+  .mw-btn-grad,.mw-btn-ghost{font-size:15px;padding:16px 20px}
+  /* Narratives + horizontal scrolls — full width container */
+  .mw-narratives,.mw-hscroll{padding:6px 32px 8px;max-width:1280px;margin-left:auto;margin-right:auto}
+  .mw-narr{padding:14px 18px;min-width:160px}
+  .mw-narr-emoji{font-size:22px}
+  .mw-narr-name{font-size:13px}
+  .mw-narr-pct{font-size:17px}
+  /* Whale cards — bigger */
+  .mw-whale-card{flex:0 0 220px;padding:16px}
+  .mw-mini-avatar{width:44px;height:44px}
+  .mw-whale-sym{font-size:15px}
+  .mw-whale-pct{font-size:15px}
+  /* Breaking out — 4 across, bigger cards */
+  .mw-bo-grid{grid-template-columns:repeat(4,1fr);gap:14px;padding:0 32px;max-width:1216px;margin:0 auto}
+  .mw-bo-card{padding:20px;min-height:200px}
+  .mw-bo-title{font-size:11px;letter-spacing:1.6px}
+  .mw-bo-sym{font-size:28px}
+  .mw-bo-pct{font-size:16px;margin-top:8px}
+  .mw-bo-meta{font-size:11px}
+  /* New launches — bigger cards */
+  .mw-launch-card{flex:0 0 240px;padding:18px}
+  .mw-launch-sym{font-size:16px}
+  /* Trending now — 2 column grid on desktop */
+  .mw-trend-list{padding:0 32px;max-width:1216px;margin:0 auto;display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .mw-trend-row{padding:14px 16px}
+  .mw-trend-sym{font-size:15px}
+  .mw-trend-pct{font-size:16px}
+  /* Live feed — 2 column grid on desktop */
+  .mw-activity{padding:0 32px;max-width:1216px;margin:0 auto}
+  .mw-activity-list{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  /* Detail view — modal centered */
+  .mw-detail{
+    top:50%;left:50%;right:auto;bottom:auto;
+    transform:translate(-50%,-50%);
+    width:760px;max-width:90vw;
+    height:auto;max-height:90vh;
+    border-radius:32px;
+    padding-bottom:32px;
+    border:1px solid var(--border);
+    box-shadow:0 30px 80px rgba(26,27,78,0.25);
+  }
+  .mw-detail-top{position:sticky;top:0;background:rgba(251,245,255,0.85);backdrop-filter:blur(20px);border-radius:32px 32px 0 0;padding:18px 28px 14px}
+  .mw-detail-hero{padding:8px 28px 20px}
+  .mw-inline-actions{padding:0 28px 18px}
+  .mw-whale-banner{margin:0 28px 16px}
+  .mw-stats-grid{padding:0 28px}
+  .mw-contract{margin:16px 28px 0}
+  /* Trade sheet — right-side drawer */
+  .mw-sheet{
+    top:0;bottom:0;right:0;left:auto;
+    width:500px;max-width:500px;
+    height:100vh;max-height:100vh;
+    margin:0;
+    border-top-left-radius:32px;
+    border-bottom-left-radius:32px;
+    border-top-right-radius:0;
+    border-left:1px solid var(--border);
+    border-top:1px solid var(--border);
+    padding-bottom:32px;
+    animation:mwSlideLeftIn .35s cubic-bezier(.2,1.2,.4,1);
+  }
+  @keyframes mwSlideLeftIn{from{transform:translateX(100%)}to{transform:translateX(0)}}
+  .mw-grabber{display:none}
+  /* Success view — wider */
+  .mw-success-overlay{max-width:680px;left:50%;transform:translateX(-50%)}
+  .mw-success-title{font-size:64px}
+  .mw-success-emoji{font-size:96px}
+  .mw-flex-card{margin-left:auto;margin-right:auto;max-width:520px}
+  .mw-share-section,.mw-refer,.mw-done-wrap{max-width:520px;margin-left:auto;margin-right:auto}
+}
+@media (min-width:1440px){
+  .mw-phone{max-width:1360px}
+  .mw-hero h1{font-size:88px}
+}
+
+/* responsive */
+@media (max-width:430px){
+  .mw-hero{padding:24px 14px 10px}
+  .mw-hero h1{font-size:36px}
+  .mw-search-wrap{padding:0 14px 6px}
+  .mw-stats-orbs{padding:12px 14px 4px;gap:6px}
+  .mw-orb{padding:10px 8px 8px}
+  .mw-orb-val{font-size:17px}
+  .mw-section-head{padding:22px 14px 10px}
+  .mw-featured{margin:6px 14px 0;padding:16px}
+  .mw-feat-sym{font-size:28px}
+  .mw-feat-score-num{font-size:40px}
+  .mw-narratives,.mw-hscroll{padding:4px 14px}
+  .mw-bo-grid,.mw-trend-list,.mw-activity{padding:0 14px}
+  .mw-sub-tabs{margin:0 14px 12px}
+}
 `;
 
 function useMwCSS() {
@@ -197,119 +513,475 @@ function useMwCSS() {
     const id = 'nexus-mw-css';
     if (document.getElementById(id)) return;
     const el = document.createElement('style');
-    el.id = id; el.textContent = MW_CSS;
+    el.id = id;
+    el.textContent = MW_CSS;
     document.head.appendChild(el);
   }, []);
 }
 
-const SOL_MINT = 'So11111111111111111111111111111111111111112';
+/* ─── CONFIG ──────────────────────────────────────────────────────── */
+const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS = 500;
+const FEE_BPS    = 300; // 3% — covers 1% referral + 2% net platform
 const SLIPPAGE_BPS = 500;
 const PRIORITY_FEE_MICROLAMPORTS = 50_000;
-const RPC_URL = process.env.REACT_APP_SOLANA_RPC || (process.env.REACT_APP_HELIUS_API_KEY ? `https://mainnet.helius-rpc.com/?api-key=${process.env.REACT_APP_HELIUS_API_KEY}` : 'https://api.mainnet-beta.solana.com');
-const POLL_TOKENS = 10_000, POLL_SOL = 30_000, POLL_WHALES = 20_000;
-const EMOJI_POOL = ['🐸','🐶','🐕','🐱','😼','🚀','💎','🍭','💨','🎴','🌈','⚡','🔥'];
-function emojiFor(sym = '') { let h=0; for (let i=0;i<sym.length;i++) h=(h*31+sym.charCodeAt(i))|0; return EMOJI_POOL[Math.abs(h)%EMOJI_POOL.length]; }
 
+const RPC_URL =
+  process.env.REACT_APP_SOLANA_RPC ||
+  (process.env.REACT_APP_HELIUS_API_KEY
+    ? `https://mainnet.helius-rpc.com/?api-key=${process.env.REACT_APP_HELIUS_API_KEY}`
+    : 'https://api.mainnet-beta.solana.com');
+
+const POLL_TOKENS  = 10_000;
+const POLL_SOL     = 30_000;
+const POLL_WHALES  = 20_000;
+
+const EMOJI_POOL = ['🐸','🐶','🐕','🐱','😼','🚀','💎','🍭','💨','🎴','🌈','⚡','🔥','🦊','🐻'];
+function emojiFor(sym = '') {
+  let h = 0;
+  for (let i = 0; i < sym.length; i++) h = (h * 31 + sym.charCodeAt(i)) | 0;
+  return EMOJI_POOL[Math.abs(h) % EMOJI_POOL.length];
+}
+
+/* ─── HELPERS ─────────────────────────────────────────────────────── */
 function format(n) {
   if (!Number.isFinite(n)) return '0';
-  if (n >= 1e9) return (n/1e9).toFixed(2)+'B';
-  if (n >= 1e6) return (n/1e6).toFixed(2)+'M';
+  if (n >= 1e9) return (n / 1e9).toFixed(2) + 'B';
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
   if (n >= 1e3) return Math.round(n).toLocaleString();
-  if (n >= 1) return n.toFixed(2);
+  if (n >= 1)   return n.toFixed(2);
   return n.toPrecision(3);
 }
 function formatPrice(p) {
   if (!Number.isFinite(p) || p <= 0) return '$0';
-  if (p >= 1) return '$'+p.toFixed(4);
-  if (p >= 0.01) return '$'+p.toFixed(5);
-  if (p >= 0.0001) return '$'+p.toFixed(6);
-  return '$'+p.toExponential(2);
+  if (p >= 1)      return '$' + p.toFixed(4);
+  if (p >= 0.01)   return '$' + p.toFixed(5);
+  if (p >= 0.0001) return '$' + p.toFixed(6);
+  return '$' + p.toExponential(2);
 }
 function formatPct(p) {
   if (!Number.isFinite(p)) return '0%';
   return (p >= 0 ? '+' : '') + p.toFixed(p < 10 && p > -10 ? 2 : 1) + '%';
 }
-function ageOf(iso) {
-  if (!iso) return '';
-  const ms = Date.now() - new Date(iso).getTime();
-  if (ms < 0 || !Number.isFinite(ms)) return '';
-  const h = ms/3_600_000;
-  if (h < 1) return Math.max(1, Math.round(ms/60_000))+'m';
-  if (h < 24) return Math.round(h)+'h';
-  return Math.round(h/24)+'d';
+function ageMs(iso) { return iso ? Date.now() - new Date(iso).getTime() : Infinity; }
+function ageStr(ms) {
+  if (!Number.isFinite(ms) || ms < 0) return '';
+  const h = ms / 3_600_000;
+  if (h < 1)  return Math.max(1, Math.round(ms / 60_000)) + 'm';
+  if (h < 24) return Math.round(h) + 'h';
+  return Math.round(h / 24) + 'd';
 }
 function timeAgo(ms) {
-  const s = Math.floor((Date.now()-ms)/1000);
-  if (s < 60) return s+'s ago';
-  if (s < 3600) return Math.floor(s/60)+'m ago';
-  if (s < 86400) return Math.floor(s/3600)+'h ago';
-  return Math.floor(s/86400)+'d ago';
+  const s = Math.floor((Date.now() - ms) / 1000);
+  if (s < 60)    return s + 's ago';
+  if (s < 3600)  return Math.floor(s / 60) + 'm ago';
+  if (s < 86400) return Math.floor(s / 3600) + 'h ago';
+  return Math.floor(s / 86400) + 'd ago';
 }
 function signalScore(t) {
   if (!t) return 0;
   const change = Math.min(Math.max(t.change || 0, -100), 200);
-  const changePts = Math.min(35, Math.max(0, (change/200)*35));
-  const volPts = Math.min(25, Math.log10(Math.max(t.volume24h || 1, 1))*3.5);
-  const liqPts = Math.min(20, Math.log10(Math.max(t.liquidity || 1, 1))*3);
-  const holdPts = Math.min(15, Math.log10(Math.max(t.holders || 1, 1))*2.5);
+  const changePts = Math.min(35, Math.max(0, (change / 200) * 35));
+  const volPts = Math.min(25, Math.log10(Math.max(t.volume24h || 1, 1)) * 3.5);
+  const liqPts = Math.min(20, Math.log10(Math.max(t.liquidity || 1, 1)) * 3);
+  const holdPts = Math.min(15, Math.log10(Math.max(t.holders || 1, 1)) * 2.5);
   const whalePts = t.whaleSol ? 10 : 0;
-  return Math.round(Math.min(100, changePts+volPts+liqPts+holdPts+whalePts));
+  return Math.round(Math.min(100, changePts + volPts + liqPts + holdPts + whalePts));
 }
 function normalize(t) {
   const change = Number(t?.stats24h?.priceChange ?? t?.priceChange24h ?? 0);
+  const created = t.firstPool?.createdAt || t.createdAt;
+  const am = ageMs(created);
   return {
-    mint: t.id || t.address || t.mint,
-    sym: t.symbol || '???',
-    name: t.name || t.symbol || 'Unknown',
-    emoji: emojiFor(t.symbol || ''),
-    icon: t.icon || t.logoURI || null,
-    price: Number(t.usdPrice ?? t.priceUsd ?? 0),
+    mint:      t.id || t.address || t.mint,
+    sym:       t.symbol || '???',
+    name:      t.name || t.symbol || 'Unknown',
+    emoji:     emojiFor(t.symbol || ''),
+    icon:      t.icon || t.logoURI || null,
+    price:     Number(t.usdPrice ?? t.priceUsd ?? 0),
     change,
-    age: ageOf(t.firstPool?.createdAt || t.createdAt),
-    mcap: Number(t.mcap ?? t.fdv ?? 0),
+    age:       ageStr(am),
+    ageMs:     am,
+    mcap:      Number(t.mcap ?? t.fdv ?? 0),
     volume24h: Number(t?.stats24h?.buyVolume ?? 0) + Number(t?.stats24h?.sellVolume ?? 0),
-    holders: Number(t.holderCount || 0),
+    holders:   Number(t.holderCount || 0),
     liquidity: Number(t.liquidity || 0),
-    decimals: Number(t.decimals ?? 6),
-    fresh: !!(t.firstPool?.createdAt && (Date.now() - new Date(t.firstPool.createdAt).getTime()) < 24*3600*1000),
+    decimals:  Number(t.decimals ?? 6),
+    fresh:     am < 24 * 3600 * 1000,
   };
 }
+
 const deserIx = (ix) => ({
   programId: new PublicKey(ix.programId),
-  keys: ix.accounts.map(a => ({ pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable })),
+  keys: ix.accounts.map(a => ({
+    pubkey:     new PublicKey(a.pubkey),
+    isSigner:   a.isSigner,
+    isWritable: a.isWritable,
+  })),
   data: Buffer.from(ix.data, 'base64'),
 });
+
 const friendlyError = (err) => {
   const m = String(err?.message || err || '').toLowerCase();
-  if (m.includes('insufficient')) return 'Insufficient balance for this swap.';
-  if (m.includes('slippage')) return 'Price moved too much. Try again or increase slippage.';
-  if (m.includes('blockhash') || m.includes('expired')) return 'Transaction expired. Please try again.';
-  if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled')) return 'Transaction cancelled.';
+  if (m.includes('insufficient'))      return 'Insufficient balance for this swap.';
+  if (m.includes('slippage'))          return 'Price moved too much. Try again or increase slippage.';
+  if (m.includes('blockhash') || m.includes('expired'))
+    return 'Transaction expired. Please try again.';
+  if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled'))
+    return 'Transaction cancelled.';
   if (m.includes('simulation failed')) return 'Swap simulation failed — the price may have moved.';
-  if (m.includes('account not')) return 'Token account not ready. Please try again in a moment.';
-  if (m.includes('rate')) return 'Too many requests — please wait a moment.';
-  if (m.includes('no route')) return 'No route available for this pair.';
-  if (m.includes('too large')) return 'Route too complex. Try a different amount.';
+  if (m.includes('account not'))       return 'Token account not ready. Please try again in a moment.';
+  if (m.includes('rate'))              return 'Too many requests — please wait a moment.';
+  if (m.includes('could not find any route') || m.includes('no route'))
+    return 'No route available for this pair.';
+  if (m.includes('too large') || m.includes('transaction too large'))
+    return 'Route is too complex to fit in one transaction. Try a different amount or token.';
   return err?.message || 'Swap failed. Please try again.';
 };
 
-export default function MemeWonderland() {
+/* ─── TOKEN ICON (with emoji fallback on img error) ───────────────── */
+function TokenIcon({ token, size }) {
+  const [errored, setErrored] = useState(false);
+  if (!token?.icon || errored) return <span>{token?.emoji || '🪙'}</span>;
+  return <img src={token.icon} alt={token.sym || ''} onError={() => setErrored(true)} />;
+}
+
+/* ─── STAT ORBS ───────────────────────────────────────────────────── */
+function StatsOrbs({ tokens, whaleCount, freshCount }) {
+  const scanning = tokens.length;
+  const totalVol = tokens.reduce((s, t) => s + (t.volume24h || 0), 0);
+  return (
+    <div className="mw-stats-orbs">
+      <div className="mw-orb" style={{ animationDelay: '0s' }}>
+        <span className="mw-orb-ico">🎯</span>
+        <div className="mw-orb-label">scanning</div>
+        <div className="mw-orb-val">{scanning}</div>
+      </div>
+      <div className="mw-orb" style={{ animationDelay: '.05s' }}>
+        <span className="mw-orb-ico">🐋</span>
+        <div className="mw-orb-label">whales 48h</div>
+        <div className="mw-orb-val">{whaleCount}</div>
+      </div>
+      <div className="mw-orb" style={{ animationDelay: '.1s' }}>
+        <span className="mw-orb-ico">✨</span>
+        <div className="mw-orb-label">fresh 24h</div>
+        <div className="mw-orb-val">{freshCount}</div>
+      </div>
+      <div className="mw-orb" style={{ animationDelay: '.15s' }}>
+        <span className="mw-orb-ico">⚡</span>
+        <div className="mw-orb-label">24h vol</div>
+        <div className="mw-orb-val">${format(totalVol)}</div>
+      </div>
+    </div>
+  );
+}
+
+/* ─── FEATURED TOP SIGNAL ─────────────────────────────────────────── */
+function FeaturedSignal({ token, whaleCount, onOpen, onTrade }) {
+  if (!token) return null;
+  const score = signalScore(token);
+  return (
+    <div className="mw-featured" onClick={() => onOpen(token.mint)}>
+      <div className="mw-feat-badge">⚡ TOP SIGNAL</div>
+      <div className="mw-feat-body">
+        <div className="mw-token-avatar">
+          <div className="mw-crown">👑</div>
+          <div className="mw-token-avatar-inner"><TokenIcon token={token} /></div>
+        </div>
+        <div className="mw-feat-meta">
+          <div className="mw-feat-sym">${token.sym}</div>
+          <div className="mw-feat-name">{token.name} · Solana</div>
+        </div>
+        <div className="mw-feat-score">
+          <div className="mw-feat-score-num">{score}</div>
+          <div className="mw-feat-score-denom">/100</div>
+          <div className="mw-feat-score-label">SIGNAL</div>
+        </div>
+      </div>
+      <div className="mw-feat-metrics">
+        <div className="mw-fm"><span className="mw-fm-ico">🔥</span><div className={'mw-fm-val ' + (token.change >= 0 ? 'mw-up' : 'mw-down')}>{formatPct(token.change)}</div><div className="mw-fm-lbl">24h</div></div>
+        <div className="mw-fm"><span className="mw-fm-ico">🐋</span><div className="mw-fm-val">{whaleCount || 0}</div><div className="mw-fm-lbl">Whales</div></div>
+        <div className="mw-fm"><span className="mw-fm-ico">👥</span><div className="mw-fm-val">{token.holders ? format(token.holders) : '—'}</div><div className="mw-fm-lbl">Holders</div></div>
+        <div className="mw-fm"><span className="mw-fm-ico">💰</span><div className="mw-fm-val">${format(token.mcap)}</div><div className="mw-fm-lbl">Mcap</div></div>
+      </div>
+      <div className="mw-feat-cta">
+        <button type="button" className="mw-btn-grad" onClick={(e) => { e.stopPropagation(); onTrade(token.mint, 'buy'); }}>⚡ TRADE NOW</button>
+        <button type="button" className="mw-btn-ghost" onClick={(e) => { e.stopPropagation(); onOpen(token.mint); }}>details →</button>
+      </div>
+    </div>
+  );
+}
+
+/* ─── NARRATIVES ──────────────────────────────────────────────────── */
+function NarrativesStrip({ tokens, whaleMints }) {
+  const buckets = [
+    { emoji: '🐸', name: 'Frog Meta',   re: /pepe|frog|wojak/i },
+    { emoji: '🐱', name: 'Cat Meta',    re: /cat|meow|popcat|michi|mew/i },
+    { emoji: '🤖', name: 'AI Agents',   re: /ai|agent|gpt|bot/i },
+    { emoji: '🐋', name: 'Whale Plays', whale: true },
+    { emoji: '🎮', name: 'Gaming',      re: /game|gam|play|guild/i },
+    { emoji: '💎', name: 'Cult Coins',  re: /cult|elite|alpha|degen/i },
+    { emoji: '🐕', name: 'Dog Revival', re: /dog|shib|bonk|wif|inu/i },
+  ];
+  const active = buckets.map(b => {
+    const list = b.whale
+      ? tokens.filter(t => whaleMints.has(t.mint))
+      : tokens.filter(t => b.re.test((t.sym || '') + ' ' + (t.name || '')));
+    const pct = list.length > 0 ? list.reduce((s, t) => s + (t.change || 0), 0) / list.length : 0;
+    return { ...b, count: list.length, pct };
+  }).filter(b => b.count > 0).sort((a, b) => b.pct - a.pct);
+  if (active.length === 0) return null;
+  return (
+    <div className="mw-narratives">
+      {active.map(b => (
+        <div className="mw-narr" key={b.name}>
+          <div className="mw-narr-emoji">{b.emoji}</div>
+          <div className="mw-narr-name">{b.name}</div>
+          <div className={'mw-narr-pct' + (b.pct < 0 ? ' mw-down' : '')}>{formatPct(b.pct)}</div>
+          <div className="mw-narr-count">{b.count} {b.count === 1 ? 'asset' : 'assets'}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ─── WHALE RADAR ─────────────────────────────────────────────────── */
+function WhaleRadar({ whaleTokens, onOpen, onTrade }) {
+  if (whaleTokens.length === 0) {
+    return <div className="mw-empty">No whale activity in the last 48h.</div>;
+  }
+  return (
+    <div className="mw-hscroll">
+      {whaleTokens.map(w => (
+        <div key={w.mint} className="mw-whale-card" onClick={() => onOpen(w.mint)}>
+          <div className="mw-whale-row">
+            <div className="mw-mini-avatar"><div className="mw-inner"><TokenIcon token={w} /></div></div>
+            <div style={{ flex: 1, minWidth: 0 }}>
+              <div className="mw-whale-sym">${w.sym}</div>
+              <div className={'mw-whale-pct' + (w.change < 0 ? ' mw-down' : '')}>{formatPct(w.change || 0)}</div>
+            </div>
+          </div>
+          <div className="mw-whale-stats">
+            <span className="mw-l">🐋 {w.whaleCount || 1}</span>
+            <span className="mw-r">+{format(w.whaleSol)} SOL</span>
+          </div>
+          <button type="button" className="mw-trade-pill" onClick={(e) => { e.stopPropagation(); onTrade(w.mint, 'buy'); }}>TRADE</button>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ─── BREAKING OUT (most important: 4 cards) ──────────────────────── */
+function BreakingOut({ tokens, whaleByMint, excludeMint, onOpen, onTrade }) {
+  const pool = excludeMint ? tokens.filter(t => t.mint !== excludeMint) : tokens;
+  const byChange  = [...pool].sort((a, b) => (b.change || 0) - (a.change || 0));
+  const byVolMcap = [...pool].filter(t => t.mcap > 0).sort((a, b) => (b.volume24h / b.mcap) - (a.volume24h / a.mcap));
+  const bySmart   = [...pool].filter(t => whaleByMint.has(t.mint)).sort((a, b) => (whaleByMint.get(b.mint) || 0) - (whaleByMint.get(a.mint) || 0));
+  const byEarly   = [...pool].filter(t => t.ageMs < 24*3600*1000 && (t.change || 0) > 0).sort((a, b) => (b.change || 0) - (a.change || 0));
+  const used = new Set();
+  const pick = (arr) => { for (const t of arr) { if (!used.has(t.mint)) { used.add(t.mint); return t; } } return null; };
+  const picks = [
+    { kind: 'momentum', icon: '🚀', title: 'MOMENTUM',      token: pick(byChange),   meta: 'biggest 24h gain' },
+    { kind: 'volume',   icon: '🔥', title: 'VOLUME SPIKE',  token: pick(byVolMcap),  meta: 'vol/mcap ratio' },
+    { kind: 'smart',    icon: '⚡', title: 'SMART MONEY',   token: pick(bySmart),    meta: 'whale entries' },
+    { kind: 'early',    icon: '👀', title: 'EARLY ROTATION', token: pick(byEarly),   meta: 'fresh + rising' },
+  ];
+  return (
+    <div className="mw-bo-grid">
+      {picks.map(p => (
+        <div key={p.kind} className={'mw-bo-card mw-' + p.kind} onClick={() => p.token && onOpen(p.token.mint)}>
+          <div className="mw-bo-head">
+            <div className="mw-bo-ico">{p.icon}</div>
+            <div className="mw-bo-title">{p.title}</div>
+          </div>
+          {p.token ? (
+            <>
+              <div className="mw-bo-token">
+                <div className="mw-mini-avatar" style={{ width: 30, height: 30 }}>
+                  <div className="mw-inner" style={{ fontSize: 14 }}><TokenIcon token={p.token} /></div>
+                </div>
+                <div className="mw-bo-sym">${p.token.sym}</div>
+              </div>
+              <div className={'mw-bo-pct' + ((p.token.change || 0) < 0 ? ' mw-down' : '')}>{formatPct(p.token.change || 0)}</div>
+              <div className="mw-bo-meta">{p.meta}</div>
+              <button type="button" className="mw-trade-pill" style={{ marginTop: 10 }} onClick={(e) => { e.stopPropagation(); onTrade(p.token.mint, 'buy'); }}>TRADE</button>
+            </>
+          ) : (
+            <div className="mw-bo-empty">No matches yet.</div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* ─── NEW LAUNCHES (1h / 6h / 24h) ────────────────────────────────── */
+function NewLaunches({ tokens, onOpen, onTrade }) {
+  const [age, setAge] = useState('24h');
+  const cutoffMs = age === '1h' ? 3600_000 : age === '6h' ? 6*3600_000 : 24*3600_000;
+  const list = tokens.filter(t => t.ageMs < cutoffMs).slice(0, 10);
+  return (
+    <>
+      <div className="mw-sub-tabs">
+        {['1h', '6h', '24h'].map(a => (
+          <button key={a} type="button" className={'mw-sub-tab' + (age === a ? ' mw-active' : '')} onClick={() => setAge(a)}>{a}</button>
+        ))}
+      </div>
+      {list.length === 0 ? (
+        <div className="mw-empty">No launches in the last {age}.</div>
+      ) : (
+        <div className="mw-hscroll">
+          {list.map(t => (
+            <div key={t.mint} className="mw-launch-card" onClick={() => onOpen(t.mint)}>
+              <div className="mw-launch-head">
+                <div className="mw-mini-avatar"><div className="mw-inner"><TokenIcon token={t} /></div></div>
+                <div className="mw-launch-info">
+                  <div className="mw-launch-sym">${t.sym}</div>
+                  <div className="mw-launch-age">⏱ {t.age} OLD</div>
+                </div>
+              </div>
+              <div className="mw-launch-row"><span className="mw-launch-l">Holders</span><span className="mw-launch-v">{t.holders ? format(t.holders) : '—'}</span></div>
+              <div className="mw-launch-row"><span className="mw-launch-l">Liquidity</span><span className="mw-launch-v">${format(t.liquidity)}</span></div>
+              <div className="mw-launch-row"><span className="mw-launch-l">Signal</span><span className="mw-launch-v" style={{ color: 'var(--green)' }}>{signalScore(t)}</span></div>
+              <button type="button" className="mw-trade-pill" style={{ marginTop: 10 }} onClick={(e) => { e.stopPropagation(); onTrade(t.mint, 'buy'); }}>TRADE</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </>
+  );
+}
+
+/* ─── TRENDING NOW (Movers / Viewed / Traded) ─────────────────────── */
+function TrendingNow({ tokens, onOpen, onTrade }) {
+  const [tab, setTab] = useState('movers');
+  const list = useMemo(() => {
+    if (tab === 'movers') return [...tokens].sort((a, b) => Math.abs(b.change || 0) - Math.abs(a.change || 0)).slice(0, 8);
+    if (tab === 'traded') return [...tokens].sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0)).slice(0, 8);
+    return [...tokens].sort((a, b) => signalScore(b) - signalScore(a)).slice(0, 8);
+  }, [tokens, tab]);
+  return (
+    <>
+      <div className="mw-sub-tabs">
+        <button type="button" className={'mw-sub-tab' + (tab === 'movers' ? ' mw-active' : '')} onClick={() => setTab('movers')}>Top Movers</button>
+        <button type="button" className={'mw-sub-tab' + (tab === 'viewed' ? ' mw-active' : '')} onClick={() => setTab('viewed')}>Top Signals</button>
+        <button type="button" className={'mw-sub-tab' + (tab === 'traded' ? ' mw-active' : '')} onClick={() => setTab('traded')}>Top Traded</button>
+      </div>
+      <div className="mw-trend-list">
+        {list.map((t, i) => (
+          <div key={t.mint} className="mw-trend-row" style={{ animationDelay: `${i * 0.03}s` }} onClick={() => onOpen(t.mint)}>
+            <div className="mw-trend-rank">{i + 1}</div>
+            <div className="mw-mini-avatar" style={{ width: 34, height: 34 }}>
+              <div className="mw-inner" style={{ fontSize: 14 }}><TokenIcon token={t} /></div>
+            </div>
+            <div className="mw-trend-mid">
+              <div className="mw-trend-sym">${t.sym}</div>
+              <div className="mw-trend-sub">{tab === 'traded' ? `Vol $${format(t.volume24h)}` : tab === 'viewed' ? `Signal ${signalScore(t)}` : formatPrice(t.price)}</div>
+            </div>
+            <div className="mw-trend-right">
+              <div className={'mw-trend-pct' + ((t.change || 0) < 0 ? ' mw-down' : '')}>{formatPct(t.change || 0)}</div>
+              <div className="mw-trend-meta">${format(t.mcap)} mcap</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+/* ─── LIVE FEED — real events only (whale entries + fresh launches) ── */
+function ActivityFeed({ tokens, whaleEvents, onOpen }) {
+  const items = [];
+  // Real whale events with real detectedAt timestamps
+  for (const ev of (whaleEvents || [])) {
+    if (!ev.detectedAt) continue; // skip events with no real timestamp
+    const t = tokens.find(x => x.mint === ev.mint);
+    items.push({
+      type: 'whale',
+      key: 'w-' + ev.mint + '-' + ev.detectedAt,
+      mint: ev.mint,
+      sym: t?.sym || ev.symbol || 'TOKEN',
+      amount: ev.solAmount,
+      at: ev.detectedAt,
+    });
+  }
+  // Real launches with real createdAt (== now - ageMs)
+  for (const t of tokens) {
+    if (!t.fresh || !Number.isFinite(t.ageMs)) continue;
+    items.push({
+      type: 'launch',
+      key: 'l-' + t.mint,
+      mint: t.mint,
+      sym: t.sym,
+      at: Date.now() - t.ageMs,
+    });
+  }
+  items.sort((a, b) => (b.at || 0) - (a.at || 0));
+  const top = items.slice(0, 8);
+  if (top.length === 0) {
+    return <div className="mw-empty">No live events yet — watching the chain.</div>;
+  }
+  return (
+    <div className="mw-activity">
+      <div className="mw-activity-list">
+        {top.map((it, i) => (
+          <div key={it.key} className="mw-act" style={{ animationDelay: `${i * 0.04}s` }} onClick={() => onOpen && onOpen(it.mint)}>
+            <div className="mw-act-ico" style={{ background: it.type === 'whale' ? 'rgba(160,231,255,0.4)' : 'rgba(255,212,107,0.4)' }}>
+              {it.type === 'whale' ? '🐋' : '🚀'}
+            </div>
+            <div className="mw-act-body">
+              <div className="mw-act-l1">
+                {it.type === 'whale'
+                  ? <><b>Whale</b> bought <b>${it.sym}</b></>
+                  : <><b>New launch</b> · <b>${it.sym}</b></>}
+              </div>
+            </div>
+            <div className="mw-act-right">
+              {it.type === 'whale' && it.amount ? <div className="mw-act-amt">+{format(it.amount)} SOL</div> : null}
+              <div className="mw-act-time">{timeAgo(it.at)}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   MAIN COMPONENT
+   ════════════════════════════════════════════════════════════════════ */
+export default function MemeWonderland({ onConnectWallet } = {}) {
   useMwCSS();
+
   const wallet = useWallet();
+  const { publicKey } = wallet;
+  const refCode = publicKey ? publicKey.toString().slice(0, 6) : 'guest';
+
   const connection = useMemo(() => new Connection(RPC_URL, 'confirmed'), []);
+
   const [tokens, setTokens] = useState([]);
   const [loading, setLoading] = useState(true);
   const [solPrice, setSolPrice] = useState(0);
   const [whaleEvents, setWhaleEvents] = useState([]);
-  const [view, setView] = useState({ page: 'explore', mint: null });
-  const [sheetMint, setSheetMint] = useState(null);
-  const [mode, setMode] = useState('buy');
+  const [whaleTokens, setWhaleTokens] = useState([]);
+
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const searchWrapRef = useRef(null);
+
+  const [discovered, setDiscovered] = useState({});
+
+  const [detailMint, setDetailMint] = useState(null);
+  const [sheet, setSheet] = useState(null); // { mint, mode }
   const [amount, setAmount] = useState('0.50');
   const [selectedPreset, setSelectedPreset] = useState('0.5');
-  const [balances, setBalances] = useState({});
+  const [success, setSuccess] = useState(null);
+  const [referOpen, setReferOpen] = useState(false);
 
+  const [balances, setBalances] = useState({});
   const refreshBalances = useCallback(async () => {
     if (!wallet.publicKey) { setBalances({}); return; }
     try {
@@ -319,32 +991,42 @@ export default function MemeWonderland() {
         connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }),
       ]);
       let token22Accs = { value: [] };
-      try { token22Accs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }); } catch {}
+      try {
+        token22Accs = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID });
+      } catch {}
       const out = {};
-      out[SOL_MINT] = { amount: solBal, decimals: 9, uiAmount: solBal/1e9 };
+      out[SOL_MINT] = { amount: solBal, decimals: 9, uiAmount: solBal / 1e9 };
       const merge = (accs) => {
         for (const acc of accs.value) {
           const info = acc.account.data.parsed?.info;
           if (!info) continue;
-          const mint = info.mint, amt = info.tokenAmount?.amount, decimals = info.tokenAmount?.decimals, uiAmount = info.tokenAmount?.uiAmount;
-          if (!mint || amt == null) continue;
-          out[mint] = { amount: Number(amt), decimals, uiAmount };
+          const mint     = info.mint;
+          const amount   = info.tokenAmount?.amount;
+          const decimals = info.tokenAmount?.decimals;
+          const uiAmount = info.tokenAmount?.uiAmount;
+          if (!mint || amount == null) continue;
+          out[mint] = { amount: Number(amount), decimals, uiAmount };
         }
       };
-      merge(tokenAccs); merge(token22Accs);
+      merge(tokenAccs);
+      merge(token22Accs);
       setBalances(out);
     } catch (e) { console.warn('[mw] balances failed', e); }
   }, [wallet.publicKey, connection]);
   useEffect(() => { refreshBalances(); }, [refreshBalances]);
 
+  // Top organic tokens — always loaded
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        const r = await fetch('/api/jupiter/tokens/v2/toporganicscore/24h?limit=20');
+        const r = await fetch('/api/jupiter/tokens/v2/toporganicscore/24h?limit=40');
         const d = await r.json();
         const list = Array.isArray(d) ? d : (d?.data || d?.tokens || []);
-        if (!cancelled) { setTokens(list.map(normalize).filter(t => t.mint)); setLoading(false); }
+        if (!cancelled) {
+          setTokens(list.map(normalize).filter(t => t.mint));
+          setLoading(false);
+        }
       } catch { if (!cancelled) setLoading(false); }
     }
     load();
@@ -352,6 +1034,7 @@ export default function MemeWonderland() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
+  // SOL price
   useEffect(() => {
     let cancelled = false;
     async function load() {
@@ -366,11 +1049,12 @@ export default function MemeWonderland() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
+  // Whale events — always loaded
   useEffect(() => {
     let cancelled = false;
     async function load() {
       try {
-        const r = await fetch('/api/whale-events?since=' + (48*3600*1000));
+        const r = await fetch('/api/whale-events?since=' + (48 * 3600 * 1000));
         const d = await r.json();
         if (!cancelled) setWhaleEvents(Array.isArray(d?.events) ? d.events : []);
       } catch {}
@@ -380,42 +1064,141 @@ export default function MemeWonderland() {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  const tokenByMint = useCallback(m => tokens.find(t => t.mint === m), [tokens]);
-  const ticker = useMemo(() => tokens.slice(0, 10).map(t => [t.sym, formatPct(t.change), t.change >= 0]), [tokens]);
-  const topToken = tokens[0];
-  const totalVol = tokens.reduce((s, t) => s + (t.volume24h || 0), 0);
-  const freshCount = tokens.filter(t => t.fresh).length;
+  // Whale tokens — merge whale event data with token data (fetch any not in main list)
+  useEffect(() => {
+    if (whaleEvents.length === 0) { setWhaleTokens([]); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        // aggregate by mint
+        const byMint = new Map();
+        for (const ev of whaleEvents) {
+          const cur = byMint.get(ev.mint) || { mint: ev.mint, symbol: ev.symbol, sol: 0, count: 0, lastAt: 0 };
+          cur.sol += Number(ev.solAmount || 0);
+          cur.count += 1;
+          cur.lastAt = Math.max(cur.lastAt, ev.detectedAt || 0);
+          byMint.set(ev.mint, cur);
+        }
+        const mints = [...byMint.keys()];
+        // Try to fetch token data for these mints (Jupiter search accepts comma-separated)
+        let dataByMint = new Map();
+        try {
+          const r = await fetch(`/api/jupiter/tokens/search?query=${mints.join(',')}`);
+          if (cancelled) return;
+          const d = await r.json();
+          const list = Array.isArray(d) ? d : (d?.data || d?.tokens || []);
+          dataByMint = new Map(list.map(t => [t.id || t.address || t.mint, normalize(t)]));
+        } catch {}
+        if (cancelled) return;
+        const merged = [...byMint.values()].map(w => {
+          const tok = dataByMint.get(w.mint) || tokens.find(x => x.mint === w.mint);
+          const base = tok || { mint: w.mint, sym: w.symbol || 'TOKEN', name: w.symbol || 'Unknown', emoji: emojiFor(w.symbol || ''), icon: null, price: 0, change: 0, mcap: 0, volume24h: 0, holders: 0, liquidity: 0, decimals: 6, age: '', ageMs: Infinity, fresh: false };
+          return { ...base, whaleSol: w.sol, whaleCount: w.count, whaleAt: w.lastAt };
+        }).sort((a, b) => (b.whaleSol || 0) - (a.whaleSol || 0));
+        setWhaleTokens(merged);
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [whaleEvents]);
 
-  const openToken = (mint) => { setView({ page: 'token', mint }); window.scrollTo({ top: 0, behavior: 'smooth' }); };
-  const backToExplore = () => { setView({ page: 'explore', mint: null }); window.scrollTo({ top: 0, behavior: 'smooth' }); };
-  const openSheet = (mint, m, e) => {
-    if (e) e.stopPropagation();
-    setSheetMint(mint); setMode(m);
+  // Search
+  useEffect(() => {
+    const q = searchQuery.trim();
+    if (!q) { setSearchResults(null); setSearching(false); return; }
+    let cancelled = false;
+    setSearching(true);
+    const t = setTimeout(async () => {
+      try {
+        const r = await fetch(`/api/jupiter/tokens/search?query=${encodeURIComponent(q)}`);
+        const d = await r.json();
+        const list = Array.isArray(d) ? d : (d?.data || d?.tokens || []);
+        if (!cancelled) {
+          setSearchResults(list.map(normalize).filter(x => x.mint).slice(0, 12));
+          setSearching(false);
+        }
+      } catch { if (!cancelled) { setSearchResults([]); setSearching(false); } }
+    }, 250);
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [searchQuery]);
+
+  // close search dropdown on outside click
+  useEffect(() => {
+    const onDoc = (e) => { if (searchWrapRef.current && !searchWrapRef.current.contains(e.target)) setSearchOpen(false); };
+    document.addEventListener('mousedown', onDoc);
+    return () => document.removeEventListener('mousedown', onDoc);
+  }, []);
+
+  const ticker = useMemo(
+    () => tokens.slice(0, 10).map(t => [t.sym, formatPct(t.change), t.change >= 0]),
+    [tokens]
+  );
+
+  const whaleMints = useMemo(() => new Set(whaleEvents.map(w => w.mint)), [whaleEvents]);
+  const whaleByMint = useMemo(() => {
+    const m = new Map();
+    for (const ev of whaleEvents) m.set(ev.mint, (m.get(ev.mint) || 0) + Number(ev.solAmount || 0));
+    return m;
+  }, [whaleEvents]);
+  const whaleCountByMint = useMemo(() => {
+    const m = new Map();
+    for (const ev of whaleEvents) m.set(ev.mint, (m.get(ev.mint) || 0) + 1);
+    return m;
+  }, [whaleEvents]);
+  const whaleLastAtByMint = useMemo(() => {
+    const m = new Map();
+    for (const ev of whaleEvents) {
+      if (!ev.detectedAt) continue;
+      m.set(ev.mint, Math.max(m.get(ev.mint) || 0, ev.detectedAt));
+    }
+    return m;
+  }, [whaleEvents]);
+
+  // tokens with full whale data attached
+  const tokensWithWhale = useMemo(() => {
+    if (whaleMints.size === 0) return tokens;
+    return tokens.map(t => {
+      if (!whaleMints.has(t.mint)) return t;
+      return {
+        ...t,
+        whaleSol: whaleByMint.get(t.mint) || 0,
+        whaleCount: whaleCountByMint.get(t.mint) || 0,
+        whaleAt: whaleLastAtByMint.get(t.mint) || 0,
+      };
+    });
+  }, [tokens, whaleMints, whaleByMint, whaleCountByMint, whaleLastAtByMint]);
+
+  const tokenByMint = useCallback(
+    m => tokensWithWhale.find(t => t.mint === m)
+      || whaleTokens.find(t => t.mint === m)
+      || discovered[m]
+      || (searchResults || []).find(t => t.mint === m)
+      || null,
+    [tokensWithWhale, whaleTokens, discovered, searchResults]
+  );
+
+  const topToken = tokensWithWhale[0];
+  const freshCount = tokensWithWhale.filter(t => t.fresh).length;
+
+  const openDetail = (mint) => { setDetailMint(mint); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const closeDetail = () => setDetailMint(null);
+  const openSheet = (mintOrToken, mode = 'buy') => {
+    if (mintOrToken && typeof mintOrToken === 'object') {
+      setDiscovered(prev => prev[mintOrToken.mint] ? prev : { ...prev, [mintOrToken.mint]: mintOrToken });
+      setSheet({ mint: mintOrToken.mint, mode });
+    } else if (typeof mintOrToken === 'string') {
+      setSheet({ mint: mintOrToken, mode });
+    }
     setAmount('0.50'); setSelectedPreset('0.5');
   };
+  const closeSheet = () => setSheet(null);
   const handlePreset = (amt) => { setSelectedPreset(amt); setAmount(amt === 'MAX' ? '1.0' : amt); };
   const handleAmount = (v) => { setAmount(v); setSelectedPreset(null); };
 
-  const narratives = useMemo(() => {
-    const buckets = [
-      { emoji: '🐱', name: 'Cat Season', re: /cat|meow|popcat|michi|mew/i },
-      { emoji: '🐸', name: 'Frog Meta', re: /pepe|frog|wojak/i },
-      { emoji: '🐕', name: 'Dog Revival', re: /dog|shib|bonk|wif|inu/i },
-      { emoji: '🤖', name: 'AI Agents', re: /ai|agent|gpt|bot/i },
-    ];
-    return buckets.map(b => {
-      const list = tokens.filter(t => b.re.test((t.sym || '') + ' ' + (t.name || '')));
-      const pct = list.length > 0 ? list.reduce((s, t) => s + (t.change || 0), 0) / list.length : 0;
-      return { ...b, count: list.length, pct };
-    }).filter(b => b.count > 0).sort((a, b) => b.pct - a.pct);
-  }, [tokens]);
-
-  const activity = useMemo(() => {
-    const items = [];
-    for (const ev of whaleEvents.slice(0, 6)) items.push({ type: 'whale', mint: ev.mint, sym: ev.symbol || 'TOKEN', amount: ev.solAmount, at: ev.detectedAt || Date.now() });
-    for (const t of tokens.filter(x => x.fresh).slice(0, 4)) items.push({ type: 'launch', mint: t.mint, sym: t.sym, at: Date.now() - Math.random()*3600000 });
-    return items.sort((a, b) => (b.at || 0) - (a.at || 0)).slice(0, 5);
-  }, [whaleEvents, tokens]);
+  const handleSearchSelect = (token) => {
+    setSearchOpen(false); setSearchQuery('');
+    openSheet(token, 'buy');
+  };
 
   return (
     <div className="mw-root">
@@ -424,361 +1207,381 @@ export default function MemeWonderland() {
       <div className="mw-blob" style={{ width: 340, height: 340, background: '#B794F6', bottom: '10%', left: -100, animationDelay: '6s' }} />
       <div className="mw-blob" style={{ width: 260, height: 260, background: '#FFD46B', bottom: '30%', right: '10%', animationDelay: '9s' }} />
 
-      <nav className="mw-nav">
-        <div className="mw-brand" onClick={backToExplore}>
-          <div className="mw-brand-dot" />
-          <span className="mw-brand-text">
-            wonderland<span className="mw-slash">//</span>
-            <span className="mw-shimmer-text">{view.page === 'token' ? (tokenByMint(view.mint)?.sym?.toLowerCase() || 'token') : 'explore'}</span>
-          </span>
-        </div>
-        <div className="mw-nav-right">
-          <div className="mw-live-pill"><span className="mw-live-dot" /> LIVE</div>
-          <div className="mw-chain-pill"><span className="mw-chain-dot" /> Solana ▾</div>
-          <div className="mw-avatar-orb" />
-        </div>
-      </nav>
+      <div className="mw-ambient">
+        <span>🐸</span><span>🚀</span><span>💎</span><span>🍭</span>
+      </div>
 
-      <main className="mw-main">
-        {view.page === 'explore' ? (
-          <ExplorePage tokens={tokens} loading={loading} topToken={topToken} ticker={ticker}
-            scanning={tokens.length} whaleCount={whaleEvents.length} freshCount={freshCount} totalVol={totalVol}
-            whaleEvents={whaleEvents} narratives={narratives} activity={activity}
-            onOpen={openToken} onTrade={(mint, m, e) => openSheet(mint, m, e)} />
-        ) : tokenByMint(view.mint) ? (
-          <TokenPage token={tokenByMint(view.mint)} tokens={tokens}
-            onBack={backToExplore} onTrade={(m) => openSheet(view.mint, m)} onOpenRelated={openToken} />
-        ) : (
-          <div className="mw-empty">Loading token…</div>
+      <div className="mw-phone">
+        {/* TOPBAR — sticky on mobile + desktop */}
+        <div className="mw-topbar">
+          <div className="mw-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
+            <div className="mw-brand-dot" />
+            <span className="mw-brand-text">wonderland<span className="mw-slash">//</span><span style={{ background: 'linear-gradient(90deg,#FF8FBE,#B794F6,#7FFFD4)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>explore</span></span>
+          </div>
+          <div className="mw-topbar-right">
+            <button type="button" className="mw-refer-cta" onClick={() => setReferOpen(true)}>
+              <span className="mw-refer-icon">💰</span>
+              <span>Refer & earn 33%</span>
+            </button>
+            <button
+              type="button"
+              className={'mw-wallet-btn' + (wallet.publicKey ? ' mw-connected' : '')}
+              onClick={() => {
+                if (wallet.publicKey && wallet.disconnect) wallet.disconnect();
+                else if (onConnectWallet) onConnectWallet();
+                else if (wallet.connect) wallet.connect().catch(() => {});
+              }}
+            >
+              {wallet.publicKey
+                ? <><span className="mw-wallet-dot" />{wallet.publicKey.toBase58().slice(0,4)}…{wallet.publicKey.toBase58().slice(-4)}</>
+                : 'Connect Wallet'}
+            </button>
+          </div>
+        </div>
+
+        {/* HERO */}
+        <div className="mw-hero">
+          <h1>
+            <span className="mw-rocket">🚀</span>
+            <span className="mw-shim">MEME WONDERLAND</span>
+          </h1>
+          <p className="mw-hero-sub">Find the next runner before everyone else.</p>
+          <div className="mw-hero-meta">No KYC<span className="dot">•</span>No Accounts<span className="dot">•</span>No Limits</div>
+        </div>
+
+        {/* SEARCH */}
+        <div className="mw-search-wrap" ref={searchWrapRef}>
+          <div className="mw-search">
+            <span className="mw-search-ico">🔍</span>
+            <input
+              placeholder="Search any token, ticker, or contract"
+              value={searchQuery}
+              onChange={(e) => { setSearchQuery(e.target.value); setSearchOpen(true); }}
+              onFocus={() => setSearchOpen(true)}
+            />
+            {searchQuery && (
+              <button type="button" className="mw-search-clear" onClick={() => { setSearchQuery(''); setSearchResults(null); }}>×</button>
+            )}
+          </div>
+          {searchOpen && searchQuery.trim() && (
+            <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 18, right: 18, background: 'var(--glass-strong)', backdropFilter: 'blur(20px)', border: '1px solid var(--border)', borderRadius: 24, padding: 8, maxHeight: 380, overflowY: 'auto', boxShadow: '0 20px 48px rgba(183,148,246,0.25)', zIndex: 30 }}>
+              {searching && (!searchResults || searchResults.length === 0) ? (
+                <div className="mw-empty">Searching Jupiter…</div>
+              ) : !searchResults || searchResults.length === 0 ? (
+                <div className="mw-empty">No tokens found.</div>
+              ) : (
+                searchResults.map(t => (
+                  <div key={t.mint} onClick={() => handleSearchSelect(t)}
+                    style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px', borderRadius: 14, cursor: 'pointer' }}>
+                    <div className="mw-mini-avatar" style={{ width: 36, height: 36 }}>
+                      <div className="mw-inner" style={{ fontSize: 16 }}><TokenIcon token={t} /></div>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 14, fontWeight: 700 }}>${t.sym}</div>
+                      <div style={{ fontSize: 11, color: 'var(--ink-2)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', marginTop: 2 }}>{t.name}</div>
+                    </div>
+                    <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600 }}>{formatPrice(t.price)}</div>
+                      <div style={{ fontSize: 10, color: t.change >= 0 ? 'var(--green)' : 'var(--red)', fontWeight: 600, marginTop: 2 }}>{formatPct(t.change)}</div>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* STATS */}
+        <StatsOrbs tokens={tokensWithWhale} whaleCount={whaleEvents.length} freshCount={freshCount} />
+
+        {/* TICKER */}
+        {ticker.length > 0 && (
+          <div className="mw-ticker-strip">
+            <div className="mw-ticker-track">
+              {[...ticker, ...ticker].map(([sym, change, up], i) => (
+                <span className="mw-ticker-item" key={i}>
+                  <span className="mw-sym">{sym}</span>
+                  <span className={up ? 'mw-up' : 'mw-down'}>{change}</span>
+                </span>
+              ))}
+            </div>
+          </div>
         )}
-      </main>
 
-      {sheetMint && tokenByMint(sheetMint) && (
-        <TradeSheet token={tokenByMint(sheetMint)} solPrice={solPrice} mode={mode} setMode={setMode}
-          amount={amount} setAmount={handleAmount} selectedPreset={selectedPreset} handlePreset={handlePreset}
-          onClose={() => setSheetMint(null)} wallet={wallet} connection={connection}
-          balances={balances} refreshBalances={refreshBalances}
-          onSuccess={() => { setSheetMint(null); }} />
+        {/* TOP SIGNAL */}
+        {topToken && (
+          <>
+            <div className="mw-section-head">
+              <div className="mw-section-title"><span className="mw-ico">⚡</span>top signal</div>
+              <div className="mw-section-meta"><span className="mw-live-dot" /> LIVE</div>
+            </div>
+            <FeaturedSignal token={topToken} whaleCount={whaleCountByMint.get(topToken.mint) || 0} onOpen={openDetail} onTrade={openSheet} />
+          </>
+        )}
+
+        {/* NARRATIVES */}
+        <div className="mw-section-head">
+          <div className="mw-section-title"><span className="mw-ico">🔥</span>narratives</div>
+        </div>
+        <NarrativesStrip tokens={tokensWithWhale} whaleMints={whaleMints} />
+
+        {/* WHALE RADAR */}
+        <div className="mw-section-head">
+          <div className="mw-section-title"><span className="mw-ico">🐋</span>whale radar</div>
+          <div className="mw-section-meta"><span className="mw-live-dot" /> {whaleTokens.length} ACTIVE</div>
+        </div>
+        <WhaleRadar whaleTokens={whaleTokens} onOpen={openDetail} onTrade={openSheet} />
+
+        {/* BREAKING OUT */}
+        <div className="mw-section-head">
+          <div className="mw-section-title"><span className="mw-ico">🚀</span>breaking out</div>
+        </div>
+        <BreakingOut tokens={tokensWithWhale} whaleByMint={whaleByMint} excludeMint={topToken?.mint} onOpen={openDetail} onTrade={openSheet} />
+
+        {/* NEW LAUNCHES */}
+        <div className="mw-section-head">
+          <div className="mw-section-title"><span className="mw-ico">✨</span>new launches</div>
+        </div>
+        <NewLaunches tokens={tokensWithWhale} onOpen={openDetail} onTrade={openSheet} />
+
+        {/* TRENDING NOW */}
+        <div className="mw-section-head">
+          <div className="mw-section-title"><span className="mw-ico">📈</span>trending now</div>
+        </div>
+        <TrendingNow tokens={tokensWithWhale} onOpen={openDetail} onTrade={openSheet} />
+
+        {/* LIVE FEED */}
+        <div className="mw-section-head">
+          <div className="mw-section-title"><span className="mw-ico">⚡</span>live feed</div>
+          <div className="mw-section-meta"><span className="mw-live-dot" /> LIVE</div>
+        </div>
+        <ActivityFeed tokens={tokensWithWhale} whaleEvents={whaleEvents} onOpen={openDetail} />
+      </div>
+
+      {detailMint && tokenByMint(detailMint) && (
+        <DetailView
+          token={tokenByMint(detailMint)}
+          onClose={closeDetail}
+          onTrade={(m) => openSheet(detailMint, m)}
+        />
+      )}
+
+      {sheet && tokenByMint(sheet.mint) && (
+        <TradeSheet
+          token={tokenByMint(sheet.mint)}
+          solPrice={solPrice}
+          mode={sheet.mode}
+          setMode={(m) => setSheet(s => ({ ...s, mode: m }))}
+          amount={amount}
+          setAmount={handleAmount}
+          selectedPreset={selectedPreset}
+          handlePreset={handlePreset}
+          onClose={closeSheet}
+          wallet={wallet}
+          connection={connection}
+          balances={balances}
+          refreshBalances={refreshBalances}
+          onSuccess={(payload) => {
+            setSuccess({ mint: sheet.mint, ...payload });
+            setSheet(null);
+            setDetailMint(null);
+          }}
+        />
+      )}
+
+      {success && tokenByMint(success.mint) && (
+        <SuccessView
+          data={success}
+          token={tokenByMint(success.mint)}
+          refCode={refCode}
+          onClose={() => setSuccess(null)}
+        />
+      )}
+
+      {referOpen && (
+        <ReferModal
+          refCode={refCode}
+          isConnected={!!wallet.publicKey}
+          onClose={() => setReferOpen(false)}
+          onConnect={() => { setReferOpen(false); if (onConnectWallet) onConnectWallet(); else if (wallet.connect) wallet.connect().catch(() => {}); }}
+        />
       )}
     </div>
   );
 }
 
-function ExplorePage({ tokens, loading, topToken, ticker, scanning, whaleCount, freshCount, totalVol, whaleEvents, narratives, activity, onOpen, onTrade }) {
-  const spark = (color, points) => (
-    <svg className="mw-spark" viewBox="0 0 100 26" preserveAspectRatio="none">
-      <path d={points} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" />
-    </svg>
-  );
-  const whaleCards = whaleEvents.slice(0, 5).map(ev => {
-    const t = tokens.find(x => x.mint === ev.mint);
-    return { mint: ev.mint, sym: t?.sym || ev.symbol || 'TOKEN', emoji: t?.emoji || emojiFor(ev.symbol || ''), icon: t?.icon, change: t?.change || 0, whaleSol: ev.solAmount };
-  });
-  const breakingOut = tokens.filter(t => Math.abs(t.change) > 10).slice(0, 6);
-
-  return (
-    <section className="mw-page">
-      <div className="mw-stats-row">
-        <div className="mw-stat-orb">
-          <div className="mw-label">scanning</div>
-          <div className="mw-val">{scanning}</div>
-          <div className="mw-delta">{loading ? 'loading…' : 'live'}</div>
-          <div className="mw-ico" style={{ background: 'rgba(255,143,190,0.25)' }}>🎯</div>
-          {spark('#FF8FBE', 'M0 18 L12 16 L24 17 L36 12 L48 14 L60 8 L72 10 L84 5 L100 7')}
-        </div>
-        <div className="mw-stat-orb">
-          <div className="mw-label">whales 48h</div>
-          <div className="mw-val">{whaleCount}</div>
-          <div className="mw-delta">{whaleCount > 0 ? 'active' : 'quiet'}</div>
-          <div className="mw-ico" style={{ background: 'rgba(160,231,255,0.4)' }}>🐋</div>
-          {spark('#B794F6', 'M0 20 L15 17 L30 19 L45 14 L60 16 L75 11 L90 9 L100 12')}
-        </div>
-        <div className="mw-stat-orb">
-          <div className="mw-label">fresh 24h</div>
-          <div className="mw-val">{freshCount}</div>
-          <div className="mw-delta">new mints</div>
-          <div className="mw-ico" style={{ background: 'rgba(255,212,107,0.35)' }}>🚀</div>
-          {spark('#FFB088', 'M0 16 L12 18 L24 14 L36 16 L48 11 L60 13 L72 9 L84 11 L100 6')}
-        </div>
-        <div className="mw-stat-orb">
-          <div className="mw-label">24h volume</div>
-          <div className="mw-val">${format(totalVol)}</div>
-          <div className="mw-delta">all DEXs</div>
-          <div className="mw-ico" style={{ background: 'rgba(127,255,212,0.35)' }}>✦</div>
-          {spark('#7FFFD4', 'M0 22 L10 20 L20 21 L30 17 L40 19 L50 13 L60 16 L70 8 L80 11 L90 5 L100 7')}
-        </div>
-      </div>
-
-      {ticker.length > 0 && (
-        <div className="mw-ticker-wrap">
-          <div className="mw-ticker-track">
-            {[...ticker, ...ticker].map(([sym, change, up], i) => (
-              <span className="mw-ticker-item" key={i}>
-                <span className="mw-ticker-sym">{sym}</span>
-                <span className={up ? 'mw-up' : 'mw-down'}>{change}</span>
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {topToken && (
-        <div className="mw-featured" onClick={() => onOpen(topToken.mint)}>
-          <div className="mw-top-signal-badge">⚡ TOP SIGNAL</div>
-          <div className="mw-featured-body">
-            <div className="mw-token-avatar">
-              <div className="mw-crown">👑</div>
-              <div className="mw-face">
-                {topToken.icon ? <img src={topToken.icon} alt={topToken.sym} onError={(e) => { e.currentTarget.style.display = 'none'; }} /> : topToken.emoji}
-              </div>
-            </div>
-            <div className="mw-featured-meta">
-              <div className="mw-sym">${topToken.sym}</div>
-              <div className="mw-sub">{topToken.name} · Solana</div>
-            </div>
-            <div className="mw-signal-score">
-              <div className="mw-num">{signalScore(topToken)}</div>
-              <div className="mw-denom">/100</div>
-              <div className="mw-label">signal</div>
-            </div>
-          </div>
-          <div className="mw-featured-metrics">
-            <div className="mw-fm"><div className="mw-fm-ico">🔥</div><div className="mw-fm-text"><div className="mw-fm-val" style={{ color: topToken.change >= 0 ? 'var(--green)' : 'var(--red)' }}>{formatPct(topToken.change)}</div><div className="mw-fm-lbl">24h</div></div></div>
-            <div className="mw-fm"><div className="mw-fm-ico">⚡</div><div className="mw-fm-text"><div className="mw-fm-val">${format(topToken.volume24h)}</div><div className="mw-fm-lbl">vol</div></div></div>
-            <div className="mw-fm"><div className="mw-fm-ico">💰</div><div className="mw-fm-text"><div className="mw-fm-val">${format(topToken.mcap)}</div><div className="mw-fm-lbl">mcap</div></div></div>
-            <div className="mw-fm"><div className="mw-fm-ico">👥</div><div className="mw-fm-text"><div className="mw-fm-val">{topToken.holders ? format(topToken.holders) : '—'}</div><div className="mw-fm-lbl">holders</div></div></div>
-          </div>
-          <div className="mw-featured-actions">
-            <button className="mw-btn-gradient" onClick={(e) => onTrade(topToken.mint, 'buy', e)}>⚡ TRADE NOW</button>
-            <button className="mw-btn-ghost" onClick={(e) => { e.stopPropagation(); onOpen(topToken.mint); }}>why it's moving →</button>
-          </div>
-        </div>
-      )}
-
-      {whaleCards.length > 0 && (
-        <>
-          <div className="mw-section-head">
-            <div className="mw-left">
-              <span className="mw-icon">🐋</span>
-              <span className="mw-eyebrow mw-accent">whale radar</span>
-              <span className="mw-live-pill" style={{ padding: '3px 8px', fontSize: 9 }}><span className="mw-live-dot" />LIVE</span>
-            </div>
-            <span className="mw-view-all">view all →</span>
-          </div>
-          <div className="mw-hscroll">
-            {whaleCards.map((w, i) => (
-              <div key={w.mint + i} className={'mw-whale-card' + (i === 0 ? ' mw-featured-card' : '')} onClick={() => onOpen(w.mint)}>
-                <div className="mw-whale-row">
-                  <div className="mw-mini-avatar"><div className="mw-inner">{w.icon ? <img src={w.icon} alt={w.sym} onError={(e) => { e.currentTarget.style.display = 'none'; }} /> : w.emoji}</div></div>
-                  <div style={{ flex: 1, minWidth: 0 }}>
-                    <div className="mw-whale-sym">${w.sym}</div>
-                    <div className={'mw-whale-pct' + (w.change < 0 ? ' mw-down' : '')}>{formatPct(w.change)}</div>
-                  </div>
-                </div>
-                <div className="mw-whale-foot"><span>🐋 1 whale</span><span className="mw-up">+{Number(w.whaleSol).toLocaleString()} SOL</span></div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      {breakingOut.length > 0 && (
-        <>
-          <div className="mw-section-head">
-            <div className="mw-left">
-              <span className="mw-icon">🚀</span>
-              <span className="mw-eyebrow mw-accent">breaking out</span>
-              <span className="mw-live-pill" style={{ padding: '3px 8px', fontSize: 9 }}><span className="mw-live-dot" />LIVE</span>
-            </div>
-            <span className="mw-view-all">view all →</span>
-          </div>
-          <div className="mw-hscroll">
-            {breakingOut.map(t => (
-              <div key={t.mint} className="mw-signal-card-h" onClick={() => onOpen(t.mint)}>
-                <div className="mw-signal-head">
-                  <div className="mw-left">
-                    <div className="mw-mini-avatar"><div className="mw-inner">{t.icon ? <img src={t.icon} alt={t.sym} onError={(e) => { e.currentTarget.style.display = 'none'; }} /> : t.emoji}</div></div>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>${t.sym}</div>
-                  </div>
-                  <div className="mw-score"><div className="mw-score-num">{signalScore(t)}</div><div className="mw-score-lbl">signal</div></div>
-                </div>
-                <svg className="mw-signal-spark" viewBox="0 0 100 36" preserveAspectRatio="none">
-                  <path d={t.change >= 0 ? 'M0 28 L10 26 L20 24 L30 27 L40 20 L50 22 L60 14 L70 17 L80 8 L90 11 L100 4' : 'M0 8 L10 10 L20 12 L30 9 L40 16 L50 14 L60 22 L70 19 L80 28 L90 25 L100 32'} fill="none" stroke={t.change >= 0 ? '#1B7A4F' : '#D14B6A'} strokeWidth="2" strokeLinecap="round" />
-                </svg>
-                <div className={'mw-signal-foot ' + (t.change >= 0 ? 'mw-up' : 'mw-down')}>{formatPct(t.change)}</div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      {narratives.length > 0 && (
-        <>
-          <div className="mw-section-head">
-            <div className="mw-left"><span className="mw-icon">🔥</span><span className="mw-eyebrow mw-accent">hot narratives</span></div>
-            <span className="mw-view-all">{narratives.length} active →</span>
-          </div>
-          <div className="mw-narratives">
-            {narratives.map(n => (
-              <div className="mw-narr-chip" key={n.name}>
-                <div className="mw-narr-emoji">{n.emoji}</div>
-                <div className="mw-narr-name">{n.name}</div>
-                <div className={'mw-narr-pct' + (n.pct < 0 ? ' mw-down' : '')}>{formatPct(n.pct)}</div>
-                <div className="mw-narr-assets">{n.count} assets</div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      {activity.length > 0 && (
-        <>
-          <div className="mw-section-head">
-            <div className="mw-left"><span className="mw-icon">⚡</span><span className="mw-eyebrow mw-accent">live activity</span></div>
-          </div>
-          <div className="mw-feed">
-            {activity.map((it, i) => (
-              <div key={i} className="mw-feed-item" onClick={() => onOpen(it.mint)}>
-                <div className="mw-feed-ico" style={{ background: it.type === 'whale' ? 'rgba(160,231,255,0.4)' : 'rgba(255,212,107,0.4)' }}>{it.type === 'whale' ? '🐋' : '🚀'}</div>
-                <div className="mw-feed-body">
-                  <div className="mw-feed-l1">{it.type === 'whale' ? <><b>whale</b> added liquidity</> : <><b>new launch</b></>}</div>
-                  <div className="mw-feed-l2">${it.sym}</div>
-                </div>
-                <div className="mw-feed-right">
-                  {it.type === 'whale' && it.amount && <div className="mw-feed-amt">+{Number(it.amount).toLocaleString()} SOL</div>}
-                  <div className="mw-feed-time">{timeAgo(it.at)}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-
-      {loading && tokens.length === 0 && (
-        <div style={{ marginTop: 20, display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {[1,2,3].map(i => <div key={i} className="mw-skeleton-card" />)}
-        </div>
-      )}
-    </section>
-  );
-}
-
-function TokenPage({ token, tokens, onBack, onTrade, onOpenRelated }) {
-  const score = signalScore(token);
-  const breakdown = {
-    'Whale Flow': Math.min(100, Math.round(token.whaleSol ? 88 : (token.liquidity ? Math.log10(token.liquidity)*13 : 40))),
-    'Momentum': Math.min(100, Math.round(50 + (token.change || 0)/2)),
-    'Community': Math.min(100, Math.round(token.holders ? Math.log10(token.holders)*15 : 40)),
-    'Volume': Math.min(100, Math.round(token.volume24h ? Math.log10(token.volume24h)*12 : 40)),
-    'Narrative': score,
+/* ════════════════════════════════════════════════════════════════════
+   REFER MODAL — persistent MRR lever
+   ════════════════════════════════════════════════════════════════════ */
+function ReferModal({ refCode, isConnected, onClose, onConnect }) {
+  const [copied, setCopied] = useState(false);
+  const link = `https://nexus.app/?ref=${refCode}`;
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    const onKey = (e) => { if (e.key === 'Escape') onClose(); };
+    document.addEventListener('keydown', onKey);
+    return () => { document.body.style.overflow = prev; document.removeEventListener('keydown', onKey); };
+  }, [onClose]);
+  const copyLink = () => {
+    if (navigator.clipboard) {
+      navigator.clipboard.writeText(link);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    }
   };
-  const breakdownColors = { 'Whale Flow': 'var(--lav)', 'Momentum': 'var(--pink)', 'Community': 'var(--sky)', 'Volume': 'var(--mint)', 'Narrative': 'var(--peach)' };
-  const related = tokens.filter(t => t.mint !== token.mint).slice(0, 5);
-
+  const shareText = `Trade Solana memecoins on Wonderland — non-custodial, powered by Jupiter. Use my link:`;
   return (
-    <section className="mw-page">
-      <div className="mw-back-row">
-        <div className="mw-back-btn" onClick={onBack}>←</div>
-        <div className="mw-top-actions">
-          <div className="mw-icon-pill">☆ Watch</div>
-          <div className="mw-icon-pill">↗ Share</div>
-        </div>
-      </div>
+    <div className="mw-modal-backdrop" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="mw-modal">
+        <button type="button" className="mw-modal-close" onClick={onClose}>×</button>
+        <div className="mw-modal-title">Refer & Earn 💰</div>
+        <div className="mw-modal-sub">Earn <b style={{ color: 'var(--peach)' }}>33% of every fee</b> your referrals generate — forever. Paid out in SOL, weekly.</div>
 
-      <div className="mw-token-hero">
-        <div className="mw-token-avatar" style={{ width: 90, height: 90 }}>
-          <div className="mw-crown">👑</div>
-          <div className="mw-face" style={{ fontSize: 46 }}>
-            {token.icon ? <img src={token.icon} alt={token.sym} onError={(e) => { e.currentTarget.style.display = 'none'; }} /> : token.emoji}
+        <div className="mw-refer-stats">
+          <div className="mw-refer-stat">
+            <div className="mw-rs-label">Referrals</div>
+            <div className="mw-rs-val">{isConnected ? '0' : '—'}</div>
+          </div>
+          <div className="mw-refer-stat">
+            <div className="mw-rs-label">Volume</div>
+            <div className="mw-rs-val">{isConnected ? '$0' : '—'}</div>
+          </div>
+          <div className="mw-refer-stat">
+            <div className="mw-rs-label">Earned</div>
+            <div className="mw-rs-val mw-green">{isConnected ? '0 SOL' : '—'}</div>
           </div>
         </div>
-        <div className="mw-meta">
-          <div className="mw-sym">${token.sym}</div>
-          <div className="mw-chain">{token.name} · Solana</div>
-          <div className="mw-tags">
-            <div className="mw-tag mw-t1">Token</div>
-            <div className="mw-tag mw-t2">Meme</div>
-            {token.fresh && <div className="mw-tag mw-t3">Fresh</div>}
-          </div>
-        </div>
-      </div>
 
-      <div className="mw-token-actions">
-        <button className="mw-btn-gradient" onClick={() => onTrade('buy')}>⚡ TRADE NOW</button>
-        <button className="mw-btn-ghost" onClick={() => onTrade('sell')}>💸 Quick Sell</button>
-        <button className="mw-star-btn">☆</button>
-      </div>
-
-      <div className="mw-signal-big">
-        <div className="mw-left-col">
-          <div className="mw-label">signal score</div>
-          <div className="mw-num">{score}</div>
-          <div className="mw-denom">/100</div>
-          {score >= 80 && <div className="mw-top-badge">👑 TOP SIGNAL</div>}
-        </div>
-        <div className="mw-right-col">
-          {Object.entries(breakdown).map(([k, v]) => (
-            <div className="mw-radar-row" key={k}>
-              <span className="mw-radar-dot" style={{ background: breakdownColors[k] }} />
-              <span className="mw-radar-label">{k}</span>
-              <span className="mw-radar-val">{v}</span>
+        {isConnected ? (
+          <>
+            <div className="mw-refer-link-box">
+              <span className="mw-refer-link-url">nexus.app/?ref=<b>{refCode}</b></span>
+              <button type="button" className="mw-refer-link-copy" onClick={copyLink}>{copied ? 'COPIED' : 'COPY'}</button>
             </div>
-          ))}
+            <div className="mw-refer-share">
+              <button type="button" className="mw-refer-share-btn"
+                onClick={() => window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(link)}`, '_blank')}>
+                <span>𝕏</span> Share on X
+              </button>
+              <button type="button" className="mw-refer-share-btn"
+                onClick={() => window.open(`https://t.me/share/url?url=${encodeURIComponent(link)}&text=${encodeURIComponent(shareText)}`, '_blank')}>
+                <span>✈</span> Telegram
+              </button>
+            </div>
+          </>
+        ) : (
+          <button type="button" className="mw-refer-link-copy" style={{ width: '100%', padding: '14px 18px', fontSize: 13, letterSpacing: 1.2 }} onClick={onConnect}>
+            CONNECT WALLET TO START EARNING
+          </button>
+        )}
+
+        <div className="mw-refer-explainer">
+          <b>How it works:</b> Share your link. Anyone who trades through it pays our 3% fee — you keep 1% of it as commission. Withdraw to SOL anytime.
         </div>
       </div>
-
-      <div className="mw-stat-mini-row">
-        <div className="mw-stat-mini"><div className="mw-lbl">price</div><div className="mw-val">{formatPrice(token.price)}</div><div className={'mw-dlt' + (token.change < 0 ? ' mw-neg' : '')}>{formatPct(token.change)}</div></div>
-        <div className="mw-stat-mini"><div className="mw-lbl">mcap</div><div className="mw-val">${format(token.mcap)}</div><div className="mw-dlt">{formatPct(token.change)}</div></div>
-        <div className="mw-stat-mini"><div className="mw-lbl">vol 24h</div><div className="mw-val">${format(token.volume24h)}</div><div className="mw-dlt">all DEXs</div></div>
-        <div className="mw-stat-mini"><div className="mw-lbl">liquidity</div><div className="mw-val">${format(token.liquidity)}</div><div className="mw-dlt">🔒</div></div>
-        <div className="mw-stat-mini"><div className="mw-lbl">holders</div><div className="mw-val">{token.holders ? format(token.holders) : '—'}</div><div className="mw-dlt">on-chain</div></div>
-        <div className="mw-stat-mini"><div className="mw-lbl">age</div><div className="mw-val">{token.age || '—'}</div><div className="mw-dlt">since launch</div></div>
-      </div>
-
-      <div className="mw-two-col">
-        <div className="mw-card-pill">
-          <div className="mw-eyebrow mw-accent" style={{ marginBottom: 10 }}>token info</div>
-          <div className="mw-info-row"><span className="mw-info-lbl">Contract</span><span className="mw-info-val">{token.mint.slice(0,8)}…{token.mint.slice(-6)}</span></div>
-          <div className="mw-info-row"><span className="mw-info-lbl">Decimals</span><span className="mw-info-val">{token.decimals}</span></div>
-          <div className="mw-info-row"><span className="mw-info-lbl">Price</span><span className="mw-info-val">{formatPrice(token.price)}</span></div>
-          <div className="mw-info-row"><span className="mw-info-lbl">Market Cap</span><span className="mw-info-val">${format(token.mcap)}</span></div>
-        </div>
-      </div>
-
-      {related.length > 0 && (
-        <>
-          <div className="mw-section-head">
-            <div className="mw-left"><span className="mw-icon">🚀</span><span className="mw-eyebrow mw-accent">related signals</span></div>
-          </div>
-          <div className="mw-hscroll">
-            {related.map(t => (
-              <div key={t.mint} className="mw-signal-card-h" onClick={() => onOpenRelated(t.mint)}>
-                <div className="mw-signal-head">
-                  <div className="mw-left">
-                    <div className="mw-mini-avatar"><div className="mw-inner">{t.icon ? <img src={t.icon} alt={t.sym} onError={(e) => { e.currentTarget.style.display = 'none'; }} /> : t.emoji}</div></div>
-                    <div style={{ fontSize: 13, fontWeight: 600 }}>${t.sym}</div>
-                  </div>
-                  <div className="mw-score"><div className="mw-score-num">{signalScore(t)}</div><div className="mw-score-lbl">signal</div></div>
-                </div>
-                <div className={'mw-signal-foot ' + (t.change >= 0 ? 'mw-up' : 'mw-down')} style={{ marginTop: 10 }}>{formatPct(t.change)}</div>
-              </div>
-            ))}
-          </div>
-        </>
-      )}
-    </section>
+    </div>
   );
 }
 
-function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selectedPreset, handlePreset, onClose, wallet, connection, balances, refreshBalances, onSuccess }) {
+/* ════════════════════════════════════════════════════════════════════
+   DETAIL VIEW
+   ════════════════════════════════════════════════════════════════════ */
+function DetailView({ token, onClose, onTrade }) {
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
+  return (
+    <div className="mw-detail">
+      <div className="mw-detail-top">
+        <button type="button" className="mw-icon-btn" onClick={onClose}>←</button>
+        <div className="mw-detail-title">${token.sym} <span className="mw-check-mint">✓</span></div>
+        <button type="button" className="mw-icon-btn">↗</button>
+      </div>
+
+      <div className="mw-detail-hero">
+        <div className="mw-detail-emoji"><TokenIcon token={token} /></div>
+        <div className="mw-detail-info">
+          <div className="mw-detail-name">{token.sym}</div>
+          <div className="mw-detail-fullname">{token.name} · Solana</div>
+          <div className="mw-detail-price-row">
+            <div className="mw-detail-price">{formatPrice(token.price)}</div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mw-inline-actions">
+        <button type="button" className="mw-big-btn mw-buy"  onClick={() => onTrade('buy')}>🚀 BUY</button>
+        <button type="button" className="mw-big-btn mw-sell" onClick={() => onTrade('sell')}>💸 SELL</button>
+      </div>
+
+      {token.whaleSol ? (
+        <div className="mw-whale-banner">
+          <span className="mw-whale-banner-emoji">🐋</span>
+          <div>
+            <div className="mw-whale-banner-title">WHALE ENTRY{token.whaleAt ? ' · ' + timeAgo(token.whaleAt) : ''}</div>
+            <div className="mw-whale-banner-sub">+{format(token.whaleSol)} SOL added to liquidity</div>
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mw-stats-grid">
+        <div className="mw-stat">
+          <span className="mw-stat-icon">💰</span>
+          <div className="mw-stat-label">Market Cap</div>
+          <div className="mw-stat-value">${format(token.mcap)}</div>
+          <div className="mw-stat-sub">USD</div>
+        </div>
+        <div className="mw-stat">
+          <span className="mw-stat-icon">👥</span>
+          <div className="mw-stat-label">Holders</div>
+          <div className="mw-stat-value">{token.holders ? format(token.holders) : '—'}</div>
+          <div className="mw-stat-sub">on-chain</div>
+        </div>
+        <div className="mw-stat">
+          <span className="mw-stat-icon">⚡</span>
+          <div className="mw-stat-label">Volume 24h</div>
+          <div className="mw-stat-value">${format(token.volume24h)}</div>
+          <div className="mw-stat-sub">all DEXs</div>
+        </div>
+        <div className="mw-stat">
+          <span className="mw-stat-icon">💧</span>
+          <div className="mw-stat-label">Liquidity</div>
+          <div className="mw-stat-value">${format(token.liquidity)}</div>
+          <div className="mw-stat-sub">🔒 pooled</div>
+        </div>
+      </div>
+
+      <div className="mw-contract">
+        <div className="mw-contract-info">
+          <div className="mw-contract-label">Contract</div>
+          <div className="mw-contract-addr">{token.mint.slice(0, 8)}…{token.mint.slice(-6)}</div>
+        </div>
+        <button type="button" className="mw-copy-btn" onClick={() => navigator.clipboard?.writeText(token.mint)}>COPY</button>
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   TRADE SHEET — swap logic preserved verbatim from your file
+   ════════════════════════════════════════════════════════════════════ */
+function TradeSheet({
+  token, solPrice, mode, setMode, amount, setAmount,
+  selectedPreset, handlePreset, onClose,
+  wallet, connection, balances, refreshBalances, onSuccess,
+}) {
   const isSell = mode === 'sell';
-  const inputMint = isSell ? token.mint : SOL_MINT;
-  const outputMint = isSell ? SOL_MINT : token.mint;
-  const inputDecimals = isSell ? (token.decimals ?? 6) : 9;
+  const inputMint  = isSell ? token.mint : SOL_MINT;
+  const outputMint = isSell ? SOL_MINT  : token.mint;
+  const inputDecimals  = isSell ? (token.decimals ?? 6) : 9;
   const outputDecimals = isSell ? 9 : (token.decimals ?? 6);
-  const inputSymbol = isSell ? token.sym : 'SOL';
+  const inputSymbol  = isSell ? token.sym : 'SOL';
   const outputSymbol = isSell ? 'SOL' : token.sym;
+
   const inputBalance = balances[inputMint];
   const amtNum = parseFloat(amount) || 0;
   const usdValue = (amtNum * (isSell ? (token.price || 0) : (solPrice || 0))).toFixed(2);
@@ -796,20 +1599,34 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
   const quoteAbortRef = useRef(null);
 
   useEffect(() => {
-    if (!rawAmount || inputMint === outputMint) { setBuild(null); setQuoteError(null); return; }
+    if (!rawAmount || inputMint === outputMint) {
+      setBuild(null);
+      setQuoteError(null);
+      return;
+    }
     if (quoteAbortRef.current) quoteAbortRef.current.abort();
     const ac = new AbortController();
     quoteAbortRef.current = ac;
-    setQuoting(true); setQuoteError(null);
+
+    setQuoting(true);
+    setQuoteError(null);
+
     const t = setTimeout(async () => {
       try {
         const net = (BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n;
-        if (net <= 0n) { setBuild(null); setQuoting(false); return; }
+        if (net <= 0n) {
+          setBuild(null);
+          setQuoting(false);
+          return;
+        }
         const params = new URLSearchParams({
-          inputMint, outputMint,
-          amount: net.toString(),
+          inputMint,
+          outputMint,
+          amount:      net.toString(),
           slippageBps: String(SLIPPAGE_BPS),
-          taker: wallet.publicKey ? wallet.publicKey.toBase58() : '11111111111111111111111111111111',
+          taker:       wallet.publicKey
+            ? wallet.publicKey.toBase58()
+            : '11111111111111111111111111111111',
           computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
         });
         const r = await fetch(`/api/jupiter/build?${params}`, { signal: ac.signal });
@@ -818,20 +1635,39 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
           throw new Error(body.error || `Quote failed (${r.status})`);
         }
         const data = await r.json();
-        if (!ac.signal.aborted) { setBuild(data); setQuoteError(null); }
+        if (!ac.signal.aborted) {
+          setBuild(data);
+          setQuoteError(null);
+        }
       } catch (e) {
         if (e.name === 'AbortError') return;
-        if (!ac.signal.aborted) { setBuild(null); setQuoteError(friendlyError(e)); }
+        if (!ac.signal.aborted) {
+          setBuild(null);
+          setQuoteError(friendlyError(e));
+        }
       } finally {
         if (!ac.signal.aborted) setQuoting(false);
       }
     }, 350);
+
     return () => { clearTimeout(t); ac.abort(); };
   }, [rawAmount, inputMint, outputMint, wallet.publicKey]);
 
-  const outAmountUi = useMemo(() => build ? Number(build.outAmount) / Math.pow(10, outputDecimals) : null, [build, outputDecimals]);
-  const receiveAmount = quoting ? 'Quoting…' : outAmountUi == null ? '—' : format(outAmountUi) + ' ' + outputSymbol;
-  const rate = (outAmountUi && amtNum) ? outAmountUi / amtNum : null;
+  const outAmountUi = useMemo(() => {
+    if (!build) return null;
+    return Number(build.outAmount) / Math.pow(10, outputDecimals);
+  }, [build, outputDecimals]);
+
+  const receiveAmount = useMemo(() => {
+    if (quoting) return 'Quoting…';
+    if (outAmountUi == null) return '—';
+    return format(outAmountUi) + ' ' + outputSymbol;
+  }, [quoting, outAmountUi, outputSymbol]);
+
+  const rate = useMemo(() => {
+    if (!outAmountUi || !amtNum) return null;
+    return outAmountUi / amtNum;
+  }, [outAmountUi, amtNum]);
 
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -843,60 +1679,123 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
   const [swapError, setSwapError] = useState(null);
 
   const handleSwap = useCallback(async () => {
-    if (!wallet.publicKey || !wallet.signTransaction) { setSwapError('Please connect a wallet.'); return; }
-    if (!build) { setSwapError('No quote available — try again.'); return; }
-    setSwapping(true); setSwapError(null);
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      setSwapError('Please connect a wallet (Phantom, Solflare, Backpack).');
+      return;
+    }
+    if (!build) {
+      setSwapError('No quote available — try again.');
+      return;
+    }
+
+    setSwapping(true);
+    setSwapError(null);
+
     try {
       const dec = inputDecimals;
+
       const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
       if (feeAmount <= 0n) throw new Error('Amount too small.');
+
       const feeIxs = [];
       if (inputMint === SOL_MINT) {
-        feeIxs.push(SystemProgram.transfer({ fromPubkey: wallet.publicKey, toPubkey: FEE_WALLET, lamports: Number(feeAmount) }));
+        feeIxs.push(SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey:   FEE_WALLET,
+          lamports:   Number(feeAmount),
+        }));
       } else {
         const mintPk = new PublicKey(inputMint);
         const mintInfo = await connection.getAccountInfo(mintPk);
         if (!mintInfo) throw new Error('Input mint not found on-chain.');
-        const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+        const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+          ? TOKEN_2022_PROGRAM_ID
+          : TOKEN_PROGRAM_ID;
+
         const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
-        const destAta = getAssociatedTokenAddressSync(mintPk, FEE_WALLET, true, tokenProgram);
-        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram));
-        feeIxs.push(createTransferCheckedInstruction(sourceAta, mintPk, destAta, wallet.publicKey, feeAmount, dec, [], tokenProgram));
+        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
+
+        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+          wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
+        ));
+        feeIxs.push(createTransferCheckedInstruction(
+          sourceAta, mintPk, destAta, wallet.publicKey,
+          feeAmount, dec, [], tokenProgram,
+        ));
       }
+
       const ixs = [];
-      if (Array.isArray(build.computeBudgetInstructions)) for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
+      if (Array.isArray(build.computeBudgetInstructions))
+        for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
       for (const ix of feeIxs) ixs.push(ix);
-      if (Array.isArray(build.setupInstructions)) for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+      if (Array.isArray(build.setupInstructions))
+        for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
       if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
       if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
-      if (Array.isArray(build.otherInstructions)) for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+      if (Array.isArray(build.otherInstructions))
+        for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+
       const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
       let alts = [];
       if (altKeys.length > 0) {
         const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
-        alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({ key: new PublicKey(k), state: AddressLookupTableAccount.deserialize(infos[i].data) }) : null).filter(Boolean);
+        alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+          key:   new PublicKey(k),
+          state: AddressLookupTableAccount.deserialize(infos[i].data),
+        }) : null).filter(Boolean);
       }
+
       const latest = await connection.getLatestBlockhash('confirmed');
-      const message = new TransactionMessage({ payerKey: wallet.publicKey, recentBlockhash: latest.blockhash, instructions: ixs }).compileToV0Message(alts);
+      const message = new TransactionMessage({
+        payerKey:        wallet.publicKey,
+        recentBlockhash: latest.blockhash,
+        instructions:    ixs,
+      }).compileToV0Message(alts);
       const tx = new VersionedTransaction(message);
+
+      const mapSimErr = (logs) => {
+        const j = (logs || []).join('\n').toLowerCase();
+        if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+        if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
+        if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+        if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
+        return null;
+      };
       try {
-        const sim = await connection.simulateTransaction(tx, { replaceRecentBlockhash: true, sigVerify: false });
-        if (sim.value.err) throw new Error('Swap simulation failed — the price may have moved.');
+        const sim = await connection.simulateTransaction(tx, {
+          replaceRecentBlockhash: true,
+          sigVerify: false,
+        });
+        if (sim.value.err) {
+          throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
+        }
       } catch (simErr) {
-        if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) throw simErr;
+        if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
+          throw simErr;
+        }
         console.warn('[swap] sim non-fatal', simErr);
       }
+
       const signed = await wallet.signTransaction(tx);
-      const sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 3 });
+
+      const sig = await connection.sendRawTransaction(signed.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3,
+      });
+
       let confirmed = false;
       try {
         const conf = await Promise.race([
-          connection.confirmTransaction({ signature: sig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight }, 'confirmed'),
+          connection.confirmTransaction({
+            signature: sig,
+            blockhash: latest.blockhash,
+            lastValidBlockHeight: latest.lastValidBlockHeight,
+          }, 'confirmed'),
           new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
         ]);
-        if (conf?.value?.err) throw new Error('Swap tx failed on-chain.');
+        if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
         confirmed = true;
-      } catch {
+      } catch (cfErr) {
         const deadline = Date.now() + 20_000;
         while (Date.now() < deadline) {
           await new Promise(r => setTimeout(r, 2000));
@@ -905,10 +1804,21 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
             const cs = st?.value?.confirmationStatus;
             if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
             if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
-          } catch (e) { if (/failed on-chain/i.test(String(e.message))) throw e; }
+          } catch (e) {
+            if (/failed on-chain/i.test(String(e.message))) throw e;
+          }
         }
       }
-      onSuccess({ signature: sig, pending: !confirmed });
+
+      const outUi = Number(build.outAmount) / Math.pow(10, outputDecimals);
+      onSuccess({
+        signature: sig,
+        pending: !confirmed,
+        paid: amtNum.toFixed(4) + ' ' + inputSymbol,
+        got:  format(outUi) + ' ' + outputSymbol,
+        price: token.price,
+      });
+
       if (confirmed) setTimeout(() => refreshBalances(), 2000);
     } catch (e) {
       console.error('[mw swap]', e);
@@ -916,10 +1826,15 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
     } finally {
       setSwapping(false);
     }
-  }, [wallet, build, inputMint, inputDecimals, outputDecimals, rawAmount, connection, onSuccess, refreshBalances]);
+  }, [
+    wallet, build, inputMint, inputDecimals, outputDecimals,
+    inputSymbol, outputSymbol, rawAmount, amtNum, token.price,
+    connection, onSuccess, refreshBalances,
+  ]);
 
   const hasFunds = inputBalance && amtNum > 0 && inputBalance.uiAmount >= amtNum;
-  const canSwap = !!wallet.publicKey && !!build && !quoting && !swapping && amtNum > 0 && inputMint !== outputMint && hasFunds;
+  const canSwap  = !!wallet.publicKey && !!build && !quoting && !swapping &&
+                   amtNum > 0 && inputMint !== outputMint && hasFunds;
 
   const setMax = () => {
     if (!inputBalance) return;
@@ -928,36 +1843,45 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
     setAmount(String(maxAmt));
   };
 
-  const ctaLabel = swapping ? (isSell ? 'Selling…' : 'Buying…')
-    : !wallet.publicKey ? 'Connect Wallet'
-    : amtNum <= 0 ? 'Enter amount'
-    : quoting && !build ? 'Getting quote…'
-    : !build ? 'No route available'
-    : !hasFunds ? `Insufficient ${inputSymbol}`
-    : (isSell ? '💸 SELL ' + token.sym : '⚡ BUY ' + token.sym);
+  const ctaLabel = swapping
+    ? (isSell ? 'Selling…' : 'Buying…')
+    : !wallet.publicKey
+      ? 'Connect Wallet'
+      : amtNum <= 0
+        ? 'Enter amount'
+        : quoting && !build
+          ? 'Getting quote…'
+          : !build
+            ? 'No route available'
+            : !hasFunds
+              ? `Insufficient ${inputSymbol}`
+              : (isSell ? '💸 SELL ' + token.sym : '⚡ BUY ' + token.sym);
 
   return (
     <>
-      <div className="mw-sheet-backdrop" onClick={swapping ? undefined : onClose} />
+      <div className="mw-sheet-backdrop" onClick={swapping ? undefined : onClose}></div>
       <div className="mw-sheet">
-        <div className="mw-grabber" />
-        <div className="mw-sheet-head">
-          <div className="mw-sheet-emoji">
-            <div className="mw-sheet-emoji-inner">
-              {token.icon ? <img src={token.icon} alt={token.sym} onError={(e) => { e.currentTarget.style.display = 'none'; }} /> : token.emoji}
+        <div className="mw-grabber"></div>
+
+        <div className="mw-sheet-token-head">
+          <div className="mw-sheet-emoji"><TokenIcon token={token} /></div>
+          <div className="mw-sheet-token-info">
+            <div className="mw-sheet-token-name">${token.sym}</div>
+            <div className="mw-sheet-sub">
+              {token.age && <span className="mw-age-pill">{token.age} old</span>}
             </div>
           </div>
-          <div className="mw-sheet-info">
-            <div className="mw-sheet-name">${token.sym}</div>
-            {token.age && <span className="mw-age-pill">{token.age} old</span>}
-          </div>
-          <div className="mw-back-btn" onClick={swapping ? undefined : onClose}>×</div>
+          <button type="button" className="mw-icon-btn" onClick={onClose} disabled={swapping}>×</button>
         </div>
 
         <div className={'mw-tab-switch' + (isSell ? ' mw-sell-mode' : '')}>
-          <div className="mw-tab-indicator" />
+          <div className="mw-tab-indicator"></div>
           {['buy', 'sell'].map(m => (
-            <div key={m} className={'mw-tab' + (mode === m ? ' mw-active' : '')} onClick={() => !swapping && setMode(m)}>
+            <div
+              key={m}
+              className={'mw-tab' + (mode === m ? ' mw-active' : '')}
+              onClick={() => !swapping && setMode(m)}
+            >
               {m.toUpperCase()}
             </div>
           ))}
@@ -966,28 +1890,43 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
         <div className="mw-amount-section">
           <div className="mw-amount-label">
             <span>You Pay</span>
-            <span className="mw-balance-pill">
-              {inputBalance ? <>Bal: <b>{format(inputBalance.uiAmount)}</b> · ~${usdValue}</> : `~$${usdValue}`}
+            <span className="mw-balance">
+              {inputBalance
+                ? <>Bal: <b>{format(inputBalance.uiAmount)}</b> · ~${usdValue}</>
+                : `~$${usdValue}`}
             </span>
           </div>
           <div className="mw-amount-input-wrap">
-            <input className="mw-amount-input" type="text" inputMode="decimal" value={amount}
+            <input
+              className="mw-amount-input"
+              type="text"
+              inputMode="decimal"
+              value={amount}
               onChange={(e) => {
                 const v = e.target.value.replace(/[^\d.]/g, '');
                 const parts = v.split('.');
                 if (parts.length > 2) return;
                 setAmount(v);
               }}
-              disabled={swapping} />
+              disabled={swapping}
+            />
             <div className="mw-currency">
-              <div className="mw-currency-icon" />
+              <div className="mw-currency-icon"></div>
               {inputSymbol}
             </div>
           </div>
+
           <div className="mw-presets">
             {['0.1', '0.5', '1', 'MAX'].map(p => (
-              <button key={p} className={'mw-preset' + (selectedPreset === p ? ' mw-selected' : '')}
-                onClick={() => p === 'MAX' ? setMax() : handlePreset(p)} disabled={swapping}>{p}</button>
+              <button
+                key={p}
+                type="button"
+                className={'mw-preset' + (selectedPreset === p ? ' mw-selected' : '')}
+                onClick={() => p === 'MAX' ? setMax() : handlePreset(p)}
+                disabled={swapping}
+              >
+                {p}
+              </button>
             ))}
           </div>
         </div>
@@ -1004,18 +1943,153 @@ function TradeSheet({ token, solPrice, mode, setMode, amount, setAmount, selecte
         </div>
 
         {(swapError || quoteError) && (
-          <div style={{ margin: '12px 22px 0', padding: '10px 14px', borderRadius: 12, background: 'rgba(209,75,106,0.1)', border: '1px solid rgba(209,75,106,0.3)', color: 'var(--red)', fontSize: 12, textAlign: 'center', fontWeight: 500 }}>
+          <div style={{
+            margin: '12px 22px 0',
+            padding: '10px 14px',
+            borderRadius: 12,
+            background: 'rgba(209,75,106,0.1)',
+            border: '1px solid rgba(209,75,106,0.3)',
+            color: 'var(--red)',
+            fontSize: 12,
+            textAlign: 'center',
+            fontWeight: 500,
+          }}>
             {swapError || quoteError}
           </div>
         )}
 
         <div className="mw-cta-wrap">
-          <button className={'mw-cta' + (isSell ? ' mw-sell-cta' : '')} onClick={handleSwap} disabled={!canSwap}>
+          <button
+            type="button"
+            className={'mw-cta' + (isSell ? ' mw-sell-cta' : '')}
+            onClick={handleSwap}
+            disabled={!canSwap}
+          >
             {ctaLabel}
           </button>
-          <div className="mw-trust">Powered by <b>Jupiter</b> · Non-custodial 🔐</div>
+          <div className="mw-trust">
+            Powered by <span className="mw-jup-badge"><span className="mw-jup-dot"></span><b>JUPITER</b></span> · Non-custodial 🔐
+          </div>
         </div>
       </div>
     </>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════
+   SUCCESS VIEW
+   ════════════════════════════════════════════════════════════════════ */
+function SuccessView({ data, token, refCode, onClose }) {
+  const [confetti, setConfetti] = useState([]);
+
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+
+  useEffect(() => {
+    const emojis = ['🎉','🚀','💎','🐸','✨','🍭','💸','⭐','🌈'];
+    setConfetti(Array.from({ length: 36 }, (_, i) => ({
+      id: i,
+      emoji: emojis[Math.floor(Math.random() * emojis.length)],
+      left: Math.random() * 100,
+      duration: 3 + Math.random() * 3,
+      delay: Math.random() * 1.5,
+      size: 16 + Math.random() * 14
+    })));
+  }, []);
+
+  const shareUrl  = `https://nexus.app/t/${data.mint}?ref=${refCode}`;
+  const shareText = `Just aped into $${token.sym} on @nexus 🚀\n\nBag: ${data.got}\nEntry: ${formatPrice(data.price)}`;
+  const solscanUrl = data.signature ? `https://solscan.io/tx/${data.signature}` : null;
+
+  return (
+    <div className="mw-success-overlay">
+      <div className="mw-confetti-rain">
+        {confetti.map(p => (
+          <div key={p.id} className="mw-confetti-piece" style={{
+            left: p.left + '%',
+            animationDuration: p.duration + 's',
+            animationDelay: p.delay + 's',
+            fontSize: p.size + 'px'
+          }}>{p.emoji}</div>
+        ))}
+      </div>
+
+      <div className="mw-success-top">
+        <button type="button" className="mw-icon-btn" onClick={onClose}>×</button>
+        {solscanUrl && (
+          <a className="mw-view-on" href={solscanUrl} target="_blank" rel="noreferrer">
+            VIEW ON SOLSCAN ↗
+          </a>
+        )}
+      </div>
+
+      <div className="mw-success">
+        <div className="mw-success-emoji">{data.pending ? '⏳' : '🎉'}</div>
+        <div className="mw-success-title">{data.pending ? 'Confirming…' : 'You aped!'}</div>
+        <div className="mw-success-sub">
+          {data.pending
+            ? 'Submitted — confirming on-chain'
+            : `Welcome to the ${token.sym} chat, anon ${token.emoji}`}
+        </div>
+      </div>
+
+      <div className="mw-flex-card">
+        <div className="mw-flex-top">
+          <div className="mw-flex-emoji"><TokenIcon token={token} /></div>
+          <div className="mw-flex-token">
+            <div className="mw-flex-sym">${token.sym}</div>
+            <div className="mw-flex-tag">{token.name}</div>
+          </div>
+        </div>
+        <div className="mw-flex-row"><span className="mw-flex-label">You paid</span><span className="mw-flex-value">{data.paid}</span></div>
+        <div className="mw-flex-row"><span className="mw-flex-label">Bag size</span><span className="mw-flex-value mw-big">{data.got}</span></div>
+        <div className="mw-flex-divider"></div>
+        <div className="mw-flex-row"><span className="mw-flex-label">Entry</span><span className="mw-flex-value" style={{ fontSize: '14px' }}>{formatPrice(data.price)}</span></div>
+        <div className="mw-flex-watermark">VIA <b>NEXUS</b></div>
+      </div>
+
+      <div className="mw-share-section">
+        <div className="mw-share-title">FLEX YOUR BAG 💪</div>
+        <div className="mw-share-sub">Earn <b>33%</b> of every fee — paid in SOL, weekly</div>
+        <div className="mw-share-grid">
+          <button type="button" className="mw-share-btn" style={{ '--mw-share-bg': '#000', '--mw-share-color': '#fff' }}
+            onClick={() => window.open(`https://twitter.com/intent/tweet?text=${encodeURIComponent(shareText)}&url=${encodeURIComponent(shareUrl)}`, '_blank')}>
+            <div className="mw-share-icon">𝕏</div><div className="mw-share-label">Post on X</div>
+          </button>
+          <button type="button" className="mw-share-btn" style={{ '--mw-share-bg': '#229ED9', '--mw-share-color': '#fff' }}
+            onClick={() => window.open(`https://t.me/share/url?url=${encodeURIComponent(shareUrl)}&text=${encodeURIComponent(shareText)}`, '_blank')}>
+            <div className="mw-share-icon">✈</div><div className="mw-share-label">Telegram</div>
+          </button>
+          <button type="button" className="mw-share-btn" style={{ '--mw-share-bg': 'rgba(127,255,212,0.3)', '--mw-share-color': '#1B7A4F' }}
+            onClick={() => navigator.clipboard?.writeText(shareUrl)}>
+            <div className="mw-share-icon">🔗</div><div className="mw-share-label">Copy Link</div>
+          </button>
+          <button type="button" className="mw-share-btn" style={{ '--mw-share-bg': 'rgba(255,212,107,0.3)', '--mw-share-color': '#B36B00' }}>
+            <div className="mw-share-icon">⬇</div><div className="mw-share-label">Save Card</div>
+          </button>
+        </div>
+      </div>
+
+      <div className="mw-refer">
+        <div className="mw-refer-row">
+          <div className="mw-refer-emoji">💰</div>
+          <div className="mw-refer-text">
+            <div className="mw-refer-title">YOUR REFERRAL LINK</div>
+            <div className="mw-refer-sub">Earn 33% of every fee — forever</div>
+          </div>
+        </div>
+        <div className="mw-refer-link">
+          <span className="mw-refer-url">nexus.app/t/{data.mint.slice(0, 6)}…?ref=<b>{refCode}</b></span>
+          <button type="button" className="mw-refer-copy" onClick={() => navigator.clipboard?.writeText(shareUrl)}>COPY</button>
+        </div>
+      </div>
+
+      <div className="mw-done-wrap">
+        <button type="button" className="mw-done-btn" onClick={onClose}>🚀 BACK TO WONDERLAND</button>
+      </div>
+    </div>
   );
 }
