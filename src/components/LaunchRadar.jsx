@@ -807,13 +807,13 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       let t22 = { value: [] };
       try { t22 = await connection.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }); } catch {}
       const out = {};
-      out[SOL_MINT] = { amount: solBal, decimals: 9, uiAmount: solBal / 1e9 };
+      out[SOL_MINT] = { amount: String(solBal), decimals: 9, uiAmount: solBal / 1e9 };
       const merge = (a) => {
         for (const acc of a.value) {
           const info = acc.account.data.parsed?.info; if (!info) continue;
           const mint = info.mint; if (!mint) continue;
           out[mint] = {
-            amount:   Number(info.tokenAmount?.amount || 0),
+            amount:   String(info.tokenAmount?.amount || '0'),   // keep raw as string — token supplies can exceed Number.MAX_SAFE_INTEGER
             decimals: Number(info.tokenAmount?.decimals ?? 6),
             uiAmount: Number(info.tokenAmount?.uiAmount || 0),
           };
@@ -837,6 +837,29 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     setToasts(prev => [...prev, { ...t, id }]);
     setTimeout(() => setToasts(prev => prev.filter(x => x.id !== id)), t.duration || 6000);
   }, []);
+
+  /* ──── confetti burst on successful buy (must be declared before handleBuy) ──── */
+  const [confettiKey, setConfettiKey] = useState(0);
+  const fireConfetti = useCallback(() => setConfettiKey(k => k + 1), []);
+  const confettiPieces = useMemo(() => {
+    if (!confettiKey) return [];
+    const colors = ['#FF8FBE', '#7FFFD4', '#B794F6', '#FFB088', '#FFD46B', '#A0E7FF'];
+    return Array.from({ length: 60 }, (_, i) => {
+      const angle = (Math.random() - 0.5) * Math.PI;
+      const dist = 220 + Math.random() * 200;
+      const dx = Math.sin(angle) * dist;
+      const dy = -Math.abs(Math.cos(angle) * dist) + 420 * Math.random();
+      const dr = (Math.random() - 0.5) * 1440;
+      const color = colors[i % colors.length];
+      const delay = Math.random() * 0.15;
+      return { i, dx, dy, dr, color, delay };
+    });
+  }, [confettiKey]);
+  useEffect(() => {
+    if (!confettiKey) return;
+    const id = setTimeout(() => setConfettiKey(0), 1800);
+    return () => clearTimeout(id);
+  }, [confettiKey]);
 
   /* ──── busy state per-token ──── */
   const [busy, setBusy] = useState({}); // { [mint]: 'Buying…' | 'Selling…' }
@@ -995,7 +1018,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     if (!wallet.publicKey) { onConnectWallet?.(); return; }
     if (busy[token.mint]) return;
     const bal = balances[token.mint];
-    if (!bal || bal.amount <= 0) {
+    if (!bal || !bal.amount || BigInt(bal.amount) <= 0n) {
       pushToast({ kind: 'error', emoji: '⚠️', body: `No ${token.sym} to sell` });
       return;
     }
@@ -1047,29 +1070,6 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   const totalVol24h = useMemo(() => {
     return [...pumpTokens, ...recentTokens].reduce((s, t) => s + (t.volume24h || 0), 0);
   }, [pumpTokens, recentTokens]);
-
-  /* ──── confetti burst on successful buy ──── */
-  const [confettiKey, setConfettiKey] = useState(0);
-  const fireConfetti = useCallback(() => setConfettiKey(k => k + 1), []);
-  const confettiPieces = useMemo(() => {
-    if (!confettiKey) return [];
-    const colors = ['#FF8FBE', '#7FFFD4', '#B794F6', '#FFB088', '#FFD46B', '#A0E7FF'];
-    return Array.from({ length: 60 }, (_, i) => {
-      const angle = (Math.random() - 0.5) * Math.PI;
-      const dist = 220 + Math.random() * 200;
-      const dx = Math.sin(angle) * dist;
-      const dy = -Math.abs(Math.cos(angle) * dist) + 420 * Math.random();
-      const dr = (Math.random() - 0.5) * 1440;
-      const color = colors[i % colors.length];
-      const delay = Math.random() * 0.15;
-      return { i, dx, dy, dr, color, delay };
-    });
-  }, [confettiKey]);
-  useEffect(() => {
-    if (!confettiKey) return;
-    const id = setTimeout(() => setConfettiKey(0), 1800);
-    return () => clearTimeout(id);
-  }, [confettiKey]);
 
   /* ──── render ──── */
   return (
