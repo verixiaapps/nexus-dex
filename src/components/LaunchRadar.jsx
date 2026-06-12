@@ -466,12 +466,18 @@ function format(n) {
   return n.toPrecision(3);
 }
 function formatPrice(p) {
-  if (!Number.isFinite(p) || p <= 0) return '$0';
+  if (!Number.isFinite(p) || p <= 0) return '—';
   if (p >= 1)      return '$' + p.toFixed(4);
   if (p >= 0.01)   return '$' + p.toFixed(5);
   if (p >= 0.0001) return '$' + p.toFixed(6);
   if (p >= 0.00000001) return '$' + p.toFixed(9);
   return '$' + p.toExponential(2);
+}
+function formatPriceSol(p) {
+  if (!Number.isFinite(p) || p <= 0) return null;
+  if (p >= 0.01) return p.toFixed(4) + ' SOL';
+  if (p >= 0.000001) return p.toFixed(8) + ' SOL';
+  return p.toExponential(2) + ' SOL';
 }
 function formatPct(p) {
   if (!Number.isFinite(p)) return '0%';
@@ -609,9 +615,76 @@ function deriveRiskBadge(t) {
 }
 
 function TokenIcon({ token }) {
+  const url = useTokenIcon(token);
   const [errored, setErrored] = useState(false);
-  if (!token?.icon || errored) return <span>{token?.emoji || '🪙'}</span>;
-  return <img src={token.icon} alt={token.sym || ''} onError={() => setErrored(true)} />;
+  // Reset error state if the URL changes (e.g. icon resolved after mount)
+  useEffect(() => { setErrored(false); }, [url]);
+  if (!url || errored) {
+    // No emoji fallback. Render a clean monogram from the symbol.
+    const letter = (token?.sym || '?').replace(/^\$/, '').charAt(0).toUpperCase();
+    return (
+      <span style={{
+        display: 'grid', placeItems: 'center', width: '100%', height: '100%',
+        fontFamily: '"Instrument Serif", serif', fontStyle: 'italic',
+        color: 'rgba(26,27,78,0.4)', fontSize: '1em', lineHeight: 1,
+      }}>{letter}</span>
+    );
+  }
+  return (
+    <img
+      src={url}
+      alt={token.sym || ''}
+      style={{ width: '100%', height: '100%', objectFit: 'cover', borderRadius: '50%' }}
+      onError={() => setErrored(true)}
+    />
+  );
+}
+
+/* ── Icon resolver — caches results, calls Jupiter token search for any
+   token whose icon isn't already present. No emoji fallback. ── */
+const _iconCache = new Map(); // mint → string|null  (null = looked up, none found)
+const _iconPending = new Map(); // mint → Promise
+
+async function resolveIconFromJupiter(mint) {
+  if (!mint) return null;
+  if (_iconCache.has(mint)) return _iconCache.get(mint);
+  if (_iconPending.has(mint)) return _iconPending.get(mint);
+  const p = (async () => {
+    try {
+      const r = await fetch('/api/jupiter/tokens/search?query=' + encodeURIComponent(mint));
+      if (!r.ok) { _iconCache.set(mint, null); return null; }
+      const data = await r.json();
+      const arr = Array.isArray(data) ? data : (data?.tokens || data?.data || []);
+      const hit = arr.find(t => (t.address || t.id || t.mint) === mint) || arr[0];
+      const url = hit?.logoURI || hit?.icon || hit?.image || null;
+      _iconCache.set(mint, url || null);
+      return url || null;
+    } catch {
+      _iconCache.set(mint, null);
+      return null;
+    } finally {
+      _iconPending.delete(mint);
+    }
+  })();
+  _iconPending.set(mint, p);
+  return p;
+}
+
+function useTokenIcon(token) {
+  const directUrl = token?.icon || null;
+  const [resolved, setResolved] = useState(() => directUrl || (_iconCache.get(token?.mint) || null));
+  useEffect(() => {
+    if (directUrl) { setResolved(directUrl); return; }
+    if (!token?.mint) return;
+    if (_iconCache.has(token.mint)) {
+      setResolved(_iconCache.get(token.mint));
+      return;
+    }
+    let alive = true;
+    resolveIconFromJupiter(token.mint).then(url => { if (alive) setResolved(url); });
+    return () => { alive = false; };
+  }, [token?.mint, directUrl]);
+  return resolved;
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -645,6 +718,13 @@ function usePumpFunStream(enabled) {
         enriched:  true,
         preGrad:   !graduated,
       };
+      // DexScreener sometimes includes a token logo — capture it as a fallback
+      // image source so we don't depend solely on Jupiter's index for fresh tokens.
+      const dsImage = pair.info?.imageUrl || pair.baseToken?.image || null;
+      if (dsImage) {
+        enriched.icon = dsImage;
+        try { _iconCache.set(mint, dsImage); } catch {}
+      }
       setTokens(prev => prev.map(t => t.mint === mint ? { ...t, ...enriched } : t));
     } catch {} finally {
       pendingEnrich.current.delete(mint);
@@ -676,6 +756,10 @@ function usePumpFunStream(enabled) {
         let msg = null;
         try { msg = JSON.parse(evt.data); } catch { return; }
         if (!msg || msg.txType !== 'create' || !msg.mint) return;
+        // Validate mint is a real Solana base58 address (32–44 chars, no
+        // ambiguous chars). Anything malformed is dropped before it can
+        // pollute the feed or be used as an inputMint/outputMint.
+        if (typeof msg.mint !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(msg.mint)) return;
 
         const vSol    = Number(msg.vSolInBondingCurve   || 0);
         const vTokens = Number(msg.vTokensInBondingCurve || 0);
@@ -1168,7 +1252,7 @@ function TradeModal({
               <div className="lr-trade-detail-row">
                 <span>Price impact</span>
                 <span className={'lr-trade-detail-val ' +
-                  (priceImpact == null ? '' : priceImpact > 5 ? 'lr-bad' : priceImpact > 1 ? 'lr-warn' : 'lr-good')}>
+                  (priceImpact == null ? '' : priceImpact > 50 ? 'lr-bad' : priceImpact > 15 ? 'lr-warn' : 'lr-good')}>
                   {priceImpact != null ? `${priceImpact.toFixed(2)}%` : '—'}
                 </span>
               </div>
@@ -1244,7 +1328,13 @@ function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
           <div className="lr-card-name">{token.name}</div>
         </div>
         <div className="lr-card-right">
-          <div className="lr-card-price">{formatPrice(token.price)}</div>
+          <div className="lr-card-price">
+            {token.price > 0
+              ? formatPrice(token.price)
+              : token.priceSol > 0
+                ? formatPriceSol(token.priceSol)
+                : '—'}
+          </div>
           {Number.isFinite(token.change) && token.change !== 0 ? (
             <div className={'lr-card-change' + (token.change < 0 ? ' lr-down' : '')}>{formatPct(token.change)}</div>
           ) : null}
@@ -1374,7 +1464,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         const d = await r.json();
         const list = Array.isArray(d) ? d : (d?.data || d?.tokens || []);
         if (!cancelled) {
-          setRecentTokens(list.map(normalize).filter(t => t.mint));
+          setRecentTokens(list.map(normalize).filter(t => t.mint && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(t.mint)));
           setRecentLoading(false);
           setRecentError(null);
         }
@@ -1700,8 +1790,25 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   }, [solPrice]);
 
   const activeList = lane === 'fresh' ? pumpTokens : recentTokens;
+
+  const featured = useMemo(() => {
+    const pool = pumpTokens.filter(t => Number.isFinite(t.ageMs) && t.ageMs < 30 * 60_000).map(deriveDisplayValues);
+    return pool.length ? pool[0] : null;
+  }, [pumpTokens, deriveDisplayValues]);
+
   const filtered = useMemo(() => {
     let l = activeList.map(deriveDisplayValues);
+    // Dedupe by mint — the mint address is the only valid identity. The
+    // featured token (rendered separately above the feed) is also added to
+    // the seen-set so the same mint can never appear twice on screen,
+    // regardless of which lane the feed is showing.
+    const seen = new Set();
+    if (featured?.mint) seen.add(featured.mint);
+    l = l.filter(t => {
+      if (!t?.mint || seen.has(t.mint)) return false;
+      seen.add(t.mint);
+      return true;
+    });
     if (timeFilter !== 'all') {
       const cap = timeFilter === '1h' ? 3600_000 : timeFilter === '6h' ? 6*3600_000 : 24*3600_000;
       l = l.filter(t => Number.isFinite(t.ageMs) && t.ageMs < cap);
@@ -1710,12 +1817,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     else if (sortBy === 'volume') l = [...l].sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
     else if (sortBy === 'signal') l = [...l].sort((a, b) => signalScore(b) - signalScore(a));
     return l.slice(0, 30);
-  }, [activeList, timeFilter, sortBy, deriveDisplayValues]);
-
-  const featured = useMemo(() => {
-    const pool = pumpTokens.filter(t => Number.isFinite(t.ageMs) && t.ageMs < 30 * 60_000).map(deriveDisplayValues);
-    return pool.length ? pool[0] : null;
-  }, [pumpTokens, deriveDisplayValues]);
+  }, [activeList, timeFilter, sortBy, deriveDisplayValues, featured]);
   const topGainer = useMemo(() => {
     const pool = [...pumpTokens, ...recentTokens].filter(t => Number.isFinite(t.change) && t.change > 0);
     if (!pool.length) return null;
