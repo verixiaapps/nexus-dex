@@ -522,7 +522,8 @@ function useMwCSS() {
 /* ─── CONFIG ──────────────────────────────────────────────────────── */
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS    = 300; // 3% — covers 1% referral + 2% net platform
+const FEE_BPS    = 300; // 3% total fee taken from input
+const REF_BPS    = 100; // 1% (of input) routed to referrer when present — 33% commission of fee
 const SLIPPAGE_BPS = 500;
 const PRIORITY_FEE_MICROLAMPORTS = 50_000;
 
@@ -956,9 +957,43 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
 
   const wallet = useWallet();
   const { publicKey } = wallet;
-  const refCode = publicKey ? publicKey.toString().slice(0, 6) : 'guest';
+  const refCode = publicKey ? publicKey.toBase58() : '';
+  // user's full shareable link uses their full pubkey so the referrer can be paid on-chain
+  const refLink = publicKey ? `${typeof window !== 'undefined' ? window.location.origin : 'https://nexus.app'}/?ref=${publicKey.toBase58()}` : '';
 
   const connection = useMemo(() => new Connection(RPC_URL, 'confirmed'), []);
+
+  // INCOMING REFERRER — parse ?ref=<pubkey> from URL, validate, persist
+  const [referrer, setReferrer] = useState(() => {
+    if (typeof window === 'undefined') return null;
+    const tryParse = (val) => { try { return new PublicKey(val); } catch { return null; } };
+    // 1. URL first (overrides stored)
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const fromUrl = params.get('ref');
+      if (fromUrl) {
+        const pk = tryParse(fromUrl);
+        if (pk) {
+          try { localStorage.setItem('mw_referrer', fromUrl); } catch {}
+          return pk;
+        }
+      }
+    } catch {}
+    // 2. Stored fallback
+    try {
+      const stored = localStorage.getItem('mw_referrer');
+      if (stored) return tryParse(stored);
+    } catch {}
+    return null;
+  });
+
+  // Effective referrer — null if self-referral or fee-wallet-as-referrer
+  const effectiveReferrer = useMemo(() => {
+    if (!referrer) return null;
+    if (publicKey && referrer.equals(publicKey)) return null;
+    if (referrer.equals(FEE_WALLET)) return null;
+    return referrer;
+  }, [referrer, publicKey]);
 
   const [tokens, setTokens] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -1219,6 +1254,13 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
             <span className="mw-brand-text">wonderland<span className="mw-slash">//</span><span style={{ background: 'linear-gradient(90deg,#FF8FBE,#B794F6,#7FFFD4)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>explore</span></span>
           </div>
           <div className="mw-topbar-right">
+            {effectiveReferrer && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px', borderRadius: 999, background: 'linear-gradient(90deg,rgba(127,255,212,0.25),rgba(160,231,255,0.18))', border: '1px solid rgba(127,255,212,0.4)', fontSize: 11, fontWeight: 700, color: 'var(--ink)', letterSpacing: 0.2 }} title={'Referred by ' + effectiveReferrer.toBase58()}>
+                <span style={{ fontSize: 12 }}>🎁</span>
+                <span style={{ color: 'var(--ink-2)' }}>via</span>
+                <span>{effectiveReferrer.toBase58().slice(0,4)}…{effectiveReferrer.toBase58().slice(-4)}</span>
+              </div>
+            )}
             <button type="button" className="mw-refer-cta" onClick={() => setReferOpen(true)}>
               <span className="mw-refer-icon">💰</span>
               <span>Refer & earn 33%</span>
@@ -1381,6 +1423,7 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
           connection={connection}
           balances={balances}
           refreshBalances={refreshBalances}
+          referrer={effectiveReferrer}
           onSuccess={(payload) => {
             setSuccess({ mint: sheet.mint, ...payload });
             setSheet(null);
@@ -1415,7 +1458,9 @@ export default function MemeWonderland({ onConnectWallet } = {}) {
    ════════════════════════════════════════════════════════════════════ */
 function ReferModal({ refCode, isConnected, onClose, onConnect }) {
   const [copied, setCopied] = useState(false);
-  const link = `https://nexus.app/?ref=${refCode}`;
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://nexus.app';
+  const link = `${origin}/?ref=${refCode}`;
+  const displayCode = refCode ? refCode.slice(0,4) + '…' + refCode.slice(-4) : '';
   useEffect(() => {
     const prev = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
@@ -1456,7 +1501,7 @@ function ReferModal({ refCode, isConnected, onClose, onConnect }) {
         {isConnected ? (
           <>
             <div className="mw-refer-link-box">
-              <span className="mw-refer-link-url">nexus.app/?ref=<b>{refCode}</b></span>
+              <span className="mw-refer-link-url">{(origin.split('://')[1] || origin)}/?ref=<b>{displayCode}</b></span>
               <button type="button" className="mw-refer-link-copy" onClick={copyLink}>{copied ? 'COPIED' : 'COPY'}</button>
             </div>
             <div className="mw-refer-share">
@@ -1573,6 +1618,7 @@ function TradeSheet({
   token, solPrice, mode, setMode, amount, setAmount,
   selectedPreset, handlePreset, onClose,
   wallet, connection, balances, refreshBalances, onSuccess,
+  referrer,
 }) {
   const isSell = mode === 'sell';
   const inputMint  = isSell ? token.mint : SOL_MINT;
@@ -1694,16 +1740,29 @@ function TradeSheet({
     try {
       const dec = inputDecimals;
 
-      const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
-      if (feeAmount <= 0n) throw new Error('Amount too small.');
+      // Split fee: total = 3% (FEE_BPS). If referrer present: 1% (REF_BPS) → referrer, 2% → platform.
+      // If no referrer: full 3% → platform.
+      const totalFeeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
+      if (totalFeeAmount <= 0n) throw new Error('Amount too small.');
+      const refFeeAmount      = referrer ? (BigInt(rawAmount) * BigInt(REF_BPS)) / 10000n : 0n;
+      const platformFeeAmount = totalFeeAmount - refFeeAmount;
 
       const feeIxs = [];
       if (inputMint === SOL_MINT) {
-        feeIxs.push(SystemProgram.transfer({
-          fromPubkey: wallet.publicKey,
-          toPubkey:   FEE_WALLET,
-          lamports:   Number(feeAmount),
-        }));
+        if (platformFeeAmount > 0n) {
+          feeIxs.push(SystemProgram.transfer({
+            fromPubkey: wallet.publicKey,
+            toPubkey:   FEE_WALLET,
+            lamports:   Number(platformFeeAmount),
+          }));
+        }
+        if (refFeeAmount > 0n && referrer) {
+          feeIxs.push(SystemProgram.transfer({
+            fromPubkey: wallet.publicKey,
+            toPubkey:   referrer,
+            lamports:   Number(refFeeAmount),
+          }));
+        }
       } else {
         const mintPk = new PublicKey(inputMint);
         const mintInfo = await connection.getAccountInfo(mintPk);
@@ -1713,15 +1772,29 @@ function TradeSheet({
           : TOKEN_PROGRAM_ID;
 
         const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
-        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
 
-        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
-          wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
-        ));
-        feeIxs.push(createTransferCheckedInstruction(
-          sourceAta, mintPk, destAta, wallet.publicKey,
-          feeAmount, dec, [], tokenProgram,
-        ));
+        // Platform leg
+        if (platformFeeAmount > 0n) {
+          const platformAta = getAssociatedTokenAddressSync(mintPk, FEE_WALLET, true, tokenProgram);
+          feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+            wallet.publicKey, platformAta, FEE_WALLET, mintPk, tokenProgram,
+          ));
+          feeIxs.push(createTransferCheckedInstruction(
+            sourceAta, mintPk, platformAta, wallet.publicKey,
+            platformFeeAmount, dec, [], tokenProgram,
+          ));
+        }
+        // Referrer leg
+        if (refFeeAmount > 0n && referrer) {
+          const refAta = getAssociatedTokenAddressSync(mintPk, referrer, true, tokenProgram);
+          feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+            wallet.publicKey, refAta, referrer, mintPk, tokenProgram,
+          ));
+          feeIxs.push(createTransferCheckedInstruction(
+            sourceAta, mintPk, refAta, wallet.publicKey,
+            refFeeAmount, dec, [], tokenProgram,
+          ));
+        }
       }
 
       const ixs = [];
@@ -1829,7 +1902,7 @@ function TradeSheet({
   }, [
     wallet, build, inputMint, inputDecimals, outputDecimals,
     inputSymbol, outputSymbol, rawAmount, amtNum, token.price,
-    connection, onSuccess, refreshBalances,
+    connection, onSuccess, refreshBalances, referrer,
   ]);
 
   const hasFunds = inputBalance && amtNum > 0 && inputBalance.uiAmount >= amtNum;
@@ -1968,7 +2041,13 @@ function TradeSheet({
             {ctaLabel}
           </button>
           <div className="mw-trust">
-            Powered by <span className="mw-jup-badge"><span className="mw-jup-dot"></span><b>JUPITER</b></span> · Non-custodial 🔐
+            {referrer ? (
+              <>
+                3% fee · <b>1% → your referrer</b> {referrer.toBase58().slice(0,4)}…{referrer.toBase58().slice(-4)} · 2% → platform
+              </>
+            ) : (
+              <>3% fee · Powered by <span className="mw-jup-badge"><span className="mw-jup-dot"></span><b>JUPITER</b></span> · Non-custodial 🔐</>
+            )}
           </div>
         </div>
       </div>
@@ -1981,6 +2060,8 @@ function TradeSheet({
    ════════════════════════════════════════════════════════════════════ */
 function SuccessView({ data, token, refCode, onClose }) {
   const [confetti, setConfetti] = useState([]);
+  const origin = typeof window !== 'undefined' ? window.location.origin : 'https://nexus.app';
+  const displayCode = refCode ? refCode.slice(0,4) + '…' + refCode.slice(-4) : '';
 
   useEffect(() => {
     const prev = document.body.style.overflow;
@@ -2000,7 +2081,7 @@ function SuccessView({ data, token, refCode, onClose }) {
     })));
   }, []);
 
-  const shareUrl  = `https://nexus.app/t/${data.mint}?ref=${refCode}`;
+  const shareUrl  = `${origin}/?ref=${refCode}&t=${data.mint}`;
   const shareText = `Just aped into $${token.sym} on @nexus 🚀\n\nBag: ${data.got}\nEntry: ${formatPrice(data.price)}`;
   const solscanUrl = data.signature ? `https://solscan.io/tx/${data.signature}` : null;
 
@@ -2082,7 +2163,7 @@ function SuccessView({ data, token, refCode, onClose }) {
           </div>
         </div>
         <div className="mw-refer-link">
-          <span className="mw-refer-url">nexus.app/t/{data.mint.slice(0, 6)}…?ref=<b>{refCode}</b></span>
+          <span className="mw-refer-url">{(origin.split('://')[1] || origin)}/?ref=<b>{displayCode}</b></span>
           <button type="button" className="mw-refer-copy" onClick={() => navigator.clipboard?.writeText(shareUrl)}>COPY</button>
         </div>
       </div>
