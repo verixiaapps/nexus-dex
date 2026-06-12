@@ -663,7 +663,7 @@ async function onMigration(mint) {
   if (!info?.pool) return;
   status.poolsResolved++;
   if (info.mcap > 0     && info.mcap     > CFG.MAX_ENTRY_MCAP_USD)  return;
-  if (info.priceUsd > 0 && info.priceUsd > CFG.MAX_ENTRY_PRICE_USD) return;
+  if (info.priceUsd > 0 && info.priceUsd >= CFG.MAX_ENTRY_PRICE_USD) return;
   watched.set(mint, {
     pool: info.pool, sym: info.sym, name: info.name,
     since: Date.now(), lastTradeTs: Date.now() - 5 * 60_000,
