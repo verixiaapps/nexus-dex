@@ -408,17 +408,16 @@ const SOL_RESERVE = 0.005;
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
-/* RPC pool — same pattern as SwapWidget */
+/* RPC pool — only URLs allowed by the server's CSP.
+   First entry comes from /embed/config.js (__VERIXIA_CONFIG__.rpc) which the
+   backend sets to whatever Solana RPC it has configured. The rest are public
+   fallbacks. No Helius API key on the client side — server handles that. */
 const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
 const RPC_POOL = [
   RUNTIME_CFG.rpc,
   (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC) || null,
-  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_HELIUS_API_KEY)
-    ? `https://mainnet.helius-rpc.com/?api-key=${process.env.REACT_APP_HELIUS_API_KEY}`
-    : null,
   'https://solana-rpc.publicnode.com',
   'https://solana.drpc.org',
-  'https://rpc.ankr.com/solana',
   'https://api.mainnet-beta.solana.com',
 ].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
 
@@ -1053,9 +1052,6 @@ function TradeModal({
             type="button"
             className={'lr-trade-mode-tab' + (mode === 'sell' ? ' lr-active' : '')}
             onClick={() => setMode('sell')}
-            disabled={!ownedUiAmount}
-            title={!ownedUiAmount ? `You don't own any ${token.sym}` : ''}
-            style={!ownedUiAmount ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
           >💸 SELL</button>
         </div>
 
@@ -1306,9 +1302,7 @@ function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
         <button
           type="button"
           className="lr-card-btn lr-card-sell"
-          disabled={ownedBalance <= 0}
           onClick={() => onSell(token)}
-          title={ownedBalance <= 0 ? `You don't own any ${token.sym}` : ''}
         >💸 SELL</button>
       </div>
     </div>
