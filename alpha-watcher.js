@@ -14,7 +14,7 @@
 //
 // Wire-up:
 //   const alpha = require('./alpha-watcher');
-//   alpha.mountRoutes(app);
+//   alpha.mountRoutes(app);   // also starts the watcher
 
 const WebSocket = require('ws');
 const fs   = require('fs');
@@ -86,6 +86,15 @@ const status = {
   lastError: null,
 };
 
+// Visibility into the state-file writer — surfaced via /api/alpha/debug
+const _stateWrite = {
+  lastSuccessAt:    0,
+  lastWrittenDirs:  [],
+  lastErrorAt:      0,
+  lastError:        null,
+  writeCount:       0,
+};
+
 const log  = (...a) => console.log('[alpha]', ...a);
 const warn = (...a) => console.warn('[alpha]', ...a);
 
@@ -145,6 +154,8 @@ async function getWalletFirstTxMs(wallet) {
       sigs = await rpc('getSignaturesForAddress',
         [wallet, { limit: 1000, ...(before ? { before } : {}) }]);
     } catch {
+      // Mark as unknown — do NOT cache as "fresh" or the next wallet
+      // would inherit a false-positive. Caller treats 0 as unknown.
       walletAge.set(wallet, { firstTxMs: 0, checkedAt: Date.now() });
       return 0;
     }
@@ -211,7 +222,11 @@ async function pollPoolTrades(mint) {
       // Wallet-age gate
       let firstTxMs = 0;
       try { firstTxMs = await getWalletFirstTxMs(wallet); } catch { continue; }
-      const age = firstTxMs === 0 ? 0 : Date.now() - firstTxMs;
+      // BUGFIX: previously `firstTxMs === 0` was coerced to age=0 and passed
+      // through as "fresh", turning every RPC failure into a false positive.
+      // Unknown age must be treated as ineligible.
+      if (firstTxMs === 0) continue;
+      const age = Date.now() - firstTxMs;
       if (age > CFG.MAX_WALLET_AGE_MS) continue;
       status.freshWalletsSeen++;
 
@@ -529,12 +544,7 @@ function start() {
   log('alpha-watcher started (free endpoints only)');
 }
 
-// ─── STATIC STATE FILE ─────────────────────────────────────────────────
-// Routing /api/alpha/* through Express has been unreliable on the deployed
-// host (Cloudflare/Railway/proxy layer interferes). Side-step it: write the
-// same payload to a static JSON file inside `build/` which express.static
-// already serves. The page polls /alpha-state.json instead. Updated every
-// 5s — same cadence as the live signal logic.
+// ─── STATE PAYLOAD ─────────────────────────────────────────────────────
 function buildStatePayload() {
   return {
     ts: Date.now(),
@@ -560,6 +570,12 @@ function buildStatePayload() {
   };
 }
 
+// ─── STATIC STATE FILE (kept as a fallback only) ───────────────────────
+// The HTML still polls /alpha-state.json. The primary path is now an
+// Express route registered in mountRoutes() — it serves buildStatePayload()
+// in-memory before express.static or the SPA catch-all can intercept.
+// File writing is kept as a belt-and-braces fallback for setups that
+// bypass the Express layer entirely (CDN serving build/ directly, etc.).
 const STATE_DIRS = [
   path.join(__dirname, 'build'),
   __dirname,
@@ -570,35 +586,71 @@ function startStateFileWriter() {
   _stateWriterStarted = true;
   const write = () => {
     const json = JSON.stringify(buildStatePayload());
+    const written = [];
+    let lastErr = null;
     for (const dir of STATE_DIRS) {
       try {
         if (!fs.existsSync(dir)) continue;
         fs.writeFileSync(path.join(dir, 'alpha-state.json'), json);
-      } catch (e) { /* ignore — try next dir */ }
+        written.push(dir);
+      } catch (e) { lastErr = e.message; }
+    }
+    if (written.length > 0) {
+      _stateWrite.lastSuccessAt   = Date.now();
+      _stateWrite.lastWrittenDirs = written;
+      _stateWrite.writeCount++;
+    } else {
+      _stateWrite.lastErrorAt = Date.now();
+      _stateWrite.lastError   = lastErr || 'no writable dir';
     }
   };
   write();
   setInterval(write, 5000);
 }
 
+// ─── ROUTES ────────────────────────────────────────────────────────────
 function mountRoutes(app) {
+  // PRIMARY FIX. Serve the state JSON in-memory, registered BEFORE
+  // express.static('build') and the `app.get('*')` SPA fallback run.
+  // This is the only thing the frontend polls; nothing else needs to
+  // change. No file-system dependency, no proxy quirks, no 404s.
+  app.get('/alpha-state.json', (req, res) => {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.set('Pragma', 'no-cache');
+    res.json(buildStatePayload());
+  });
+
   app.get('/api/alpha/signals', (req, res) => {
     res.json({ signals: signals.slice(0, 50), count: signals.length, ts: Date.now() });
   });
+
   app.get('/api/alpha/status', (req, res) => {
+    res.json(buildStatePayload());
+  });
+
+  // Debug endpoint — hit this when something looks wrong. Tells you:
+  // - whether the WSS is up and what it last errored on
+  // - whether the file-writer is succeeding (and to which dir)
+  // - in-flight RPC queue depth (public RPC bottleneck visibility)
+  app.get('/api/alpha/debug', (req, res) => {
+    res.set('Cache-Control', 'no-store');
     res.json({
-      ...status,
-      tokensWatched: watched.size,
-      solPrice: solPriceUsd,
+      ts: Date.now(),
       uptimeMs: Date.now() - status.startedAt,
-      config: {
-        minBuyUsd:         CFG.MIN_BUY_USD,
-        maxWalletAgeH:     CFG.MAX_WALLET_AGE_MS / 3600_000,
-        minConverge:       CFG.MIN_CONVERGE,
-        maxConverge:       CFG.MAX_CONVERGE,
-        convergeWindowH:   CFG.CONVERGE_WINDOW_MS / 3600_000,
-        maxEntryMcapUsd:   CFG.MAX_ENTRY_MCAP_USD,
-        maxEntryPriceUsd:  CFG.MAX_ENTRY_PRICE_USD,
+      status,
+      stateWrite: _stateWrite,
+      stateFileDirs: STATE_DIRS.map(d => ({ dir: d, exists: fs.existsSync(d) })),
+      sizes: {
+        watched:      watched.size,
+        signals:      signals.length,
+        walletCache:  walletAge.size,
+        tokenMeta:    tokenMeta.size,
+      },
+      solPriceUsd,
+      rpc: {
+        url:      CFG.RPC_URL.replace(/api-key=[^&]+/i, 'api-key=***'),
+        inFlight: rpcInFlight,
+        queued:   rpcQueue.length,
       },
       notify: {
         emailEnabled:    NOTIFY.email.enabled,
@@ -606,7 +658,10 @@ function mountRoutes(app) {
       },
     });
   });
+
+  // Start the watcher AFTER routes are registered, so /alpha-state.json
+  // is already serving by the time the first frontend poll lands.
+  start();
 }
 
-start();
 module.exports = { mountRoutes, start, _state: { watched, signals, status, tokenMeta } };
