@@ -468,6 +468,15 @@ app.get('/api/whale-events', async (req, res) => {
 });
 
 /* ========================================================================
+ * Alpha — fresh-wallet convergence detector
+ * (requires ./alpha-watcher.js at the same folder and `npm install ws`)
+ * ===================================================================== */
+const alpha = require('./alpha-watcher');
+alpha.mountRoutes(app);
+app.get('/nexus-dex/index.html', (req, res) => res.sendFile(path.join(__dirname, 'alpha.html')));
+app.get('/nexus-dex',            (req, res) => res.sendFile(path.join(__dirname, 'alpha.html')));
+
+/* ========================================================================
  * LI.FI
  * ===================================================================== */
 function buildLifiHeaders() {
