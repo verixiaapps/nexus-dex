@@ -123,36 +123,6 @@ cheaper alternative to bullx
 cheaper alternative to dexscreener
 cheaper alternative to gmgn
 cheaper alternative to photon
-swap wif to cloud
-swap wif to goat
-swap wif to grass
-swap wif to hnt
-swap wif to io
-swap wif to jitosol
-swap wif to jto
-swap wif to jup
-swap wif to kmno
-swap wif to mew
-swap wif to mnde
-swap wif to msol
-swap wif to pnut
-swap wif to ray
-swap wif to sol
-swap wif to sol solana
-swap wif to tnsr
-swap wif to usdc solana
-swap wif to usdt solana
-swap wif to w
-swap wif to wen
-top solana swaps
-top solana token swaps
-trade altcoins
-trade crypto anonymously
-trade crypto globally
-trade crypto without registration
-trade meme coins
-trade solana for aave
-trade solana for ai16z
 trade solana for bitcoin
 trade solana for bonk
 trade solana for chainlink
