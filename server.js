@@ -47,6 +47,7 @@ const CSP_DIRECTIVES = [
     'wss://www.walletlink.org',
     'https://public.chainalysis.com',
     'wss://pumpportal.fun',           // Launch Radar — pump.fun new-token stream
+    'https://pumpportal.fun',         // Launch Radar — pump.fun trade-local endpoint
     'https://api.dexscreener.com',    // Launch Radar — DexScreener enrichment
     ...EXTRA_CONNECT_SRC,
   ]],
@@ -674,4 +675,3 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  Solana RPC:      ' + (HELIUS_RPC_URL ? 'helius (custom)' : HELIUS_API_KEY ? 'helius' : 'public mainnet-beta'));
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
 });
- 
