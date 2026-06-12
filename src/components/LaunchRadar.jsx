@@ -2,16 +2,18 @@
 // Pastel UI consistent with Wonderland. Two isolated lanes:
 //   FRESH  → pump.fun WSS + DexScreener (browser-direct, no backend)
 //   RECENT → /api/jupiter/tokens/v2/recent (existing backend)
-// One-click buy/sell via Jupiter — atomic fee split (3% total, 1% to referrer if present).
+// One-click buy/sell with smart routing:
+//   - Pre-grad pump.fun tokens → PumpPortal trade-local (with atomic 3% fee)
+//   - Graduated / everything else → Jupiter (with atomic 3% fee)
 // Swap logic reuses Wonderland's exact pattern.
 //
 // ⚠️  BEFORE THIS WORKS IN PRODUCTION:
 // The CSP in server.js must allow the fresh-lane endpoints. Add to connect-src:
 //   wss://pumpportal.fun
+//   https://pumpportal.fun
 //   https://api.dexscreener.com
-// Easiest way: set the env var EXTRA_CSP_CONNECT_SRC="wss://pumpportal.fun,https://api.dexscreener.com"
-// Without these, the websocket and DexScreener calls will be blocked silently in production
-// (you'll see the FRESH tab forever stuck on "Warming up the launch stream…").
+// Easiest way: set the env var EXTRA_CSP_CONNECT_SRC="wss://pumpportal.fun,https://pumpportal.fun,https://api.dexscreener.com"
+// Note: CSP_MODE defaults to "report-only" so calls work even without this — but you'll see console warnings.
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -334,6 +336,12 @@ const POLL_BALANCE = 12_000;  // user balance refresh
 const PUMP_WSS_URL = 'wss://pumpportal.fun/api/data';
 const DEXSCREENER_TOKEN_URL = (mint) => `https://api.dexscreener.com/latest/dex/tokens/${mint}`;
 
+/* ────── PumpPortal pre-grad trade endpoint ────── */
+const PUMPFUN_TRADE_URL          = 'https://pumpportal.fun/api/trade-local';
+const PUMPFUN_SLIPPAGE_PCT       = 15;        // matches Jupiter's 1500 bps
+const PUMPFUN_PRIORITY_FEE_SOL   = 0.00005;   // SOL — pump.fun expects a float, not microlamports
+const COMPUTE_BUDGET_PROGRAM_ID  = new PublicKey('ComputeBudget111111111111111111111111111111');
+
 const BUY_PRESETS  = [0.25, 0.5, 1, 2];
 const SELL_PRESETS = [25, 50, 100];
 
@@ -439,6 +447,7 @@ const friendlyError = (err) => {
   if (m.includes('rate'))              return 'Rate limited.';
   if (m.includes('no route') || m.includes('could not find any route')) return 'No route yet — too fresh.';
   if (m.includes('too large'))         return 'Route too complex. Try smaller.';
+  if (m.includes('pump.fun'))          return err.message.slice(0, 80);
   return err?.message?.slice(0, 80) || 'Swap failed.';
 };
 
@@ -492,12 +501,18 @@ function usePumpFunStream(enabled) {
       // either base or quote. priceUsd / priceChange always refer to baseToken.
       // We must ONLY use pairs where baseToken.address === mint — otherwise we'd
       // attribute another token's price (e.g. SOL's) to our token.
-      const pair = (d?.pairs || [])
-        .filter(p => p.chainId === 'solana' && p.baseToken?.address === mint)
-        .sort((a, b) => Number(b.liquidity?.usd || 0) - Number(a.liquidity?.usd || 0))[0];
-      if (!pair) return;
-      // Belt-and-suspenders: make sure decimals from chain match what we cached,
-      // and that the address is really ours after JSON round-trip.
+      const pairs = (d?.pairs || [])
+        .filter(p => p.chainId === 'solana' && p.baseToken?.address === mint);
+      if (pairs.length === 0) return;
+      // Graduated = there's a real DEX pair (Raydium, Meteora, pump-amm post-grad, etc.).
+      // While pre-grad, DexScreener may show the pump bonding curve itself with dexId 'pumpfun' / 'pump'.
+      const graduated = pairs.some(
+        p => p.dexId && p.dexId !== 'pumpfun' && p.dexId !== 'pump'
+      );
+      const pair = pairs.sort(
+        (a, b) => Number(b.liquidity?.usd || 0) - Number(a.liquidity?.usd || 0)
+      )[0];
+      // Belt-and-suspenders: address really ours after JSON round-trip
       if (pair.baseToken.address !== mint) return;
       const enriched = {
         price:     Number(pair.priceUsd || 0),
@@ -507,6 +522,7 @@ function usePumpFunStream(enabled) {
         liquidity: Number(pair.liquidity?.usd || 0),
         mcap:      Number(pair.marketCap || pair.fdv || 0),
         enriched:  true,
+        preGrad:   !graduated,   // flip when token has graduated to Raydium/etc → Jupiter route works
       };
       setTokens(prev => prev.map(t => t.mint === mint ? { ...t, ...enriched } : t));
     } catch {} finally {
@@ -877,7 +893,172 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   /* ──── busy state per-token ──── */
   const [busy, setBusy] = useState({}); // { [mint]: 'Buying…' | 'Selling…' }
 
-  /* ──── the swap — same atomic-fee pattern as Wonderland ──── */
+  /* ════════════════════════════════════════════════════════════════
+     PUMP.FUN PRE-GRAD SWAP — atomic 3% fee bundled with PumpPortal tx
+     ════════════════════════════════════════════════════════════════ */
+  const executePumpFunSwap = useCallback(async ({ token, mode, solAmount, tokenRawAmount, balanceDecimals }) => {
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      onConnectWallet?.(); throw new Error('connect_wallet');
+    }
+    const isBuy = mode === 'buy';
+    const decimals = balanceDecimals ?? token.decimals ?? 6;
+
+    // ── Compute net (to pump.fun) and our 3% fee instruction(s) ───────
+    let pumpAmount;        // number sent to pump.fun
+    let denominatedInSol;  // 'true' | 'false' (strings, per PumpPortal API)
+    const feeIxs = [];
+
+    if (isBuy) {
+      // User wants to spend `solAmount` SOL total. 3% to FEE_WALLET, 97% to pump.fun.
+      const totalLamports = BigInt(Math.floor(solAmount * 1e9));
+      const feeLamports   = (totalLamports * BigInt(FEE_BPS)) / 10000n;
+      const netLamports   = totalLamports - feeLamports;
+      if (netLamports <= 0n) throw new Error('Amount too small');
+
+      pumpAmount       = Number(netLamports) / 1e9;
+      denominatedInSol = 'true';
+
+      feeIxs.push(SystemProgram.transfer({
+        fromPubkey: wallet.publicKey,
+        toPubkey:   FEE_WALLET,
+        lamports:   Number(feeLamports),
+      }));
+    } else {
+      // Sell: tokenRawAmount = total raw tokens user wants to sell. Take 3% as fee in tokens.
+      const totalTok = BigInt(tokenRawAmount);
+      const feeTok   = (totalTok * BigInt(FEE_BPS)) / 10000n;
+      const netTok   = totalTok - feeTok;
+      if (netTok <= 0n) throw new Error('Amount too small');
+
+      // PumpPortal accepts the token amount as a number (UI units), not raw.
+      pumpAmount       = Number(netTok) / Math.pow(10, decimals);
+      denominatedInSol = 'false';
+
+      // pump.fun tokens use classic SPL Token program (not Token-2022)
+      const mintPk  = new PublicKey(token.mint);
+      const srcAta  = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, TOKEN_PROGRAM_ID);
+      const destAta = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, TOKEN_PROGRAM_ID);
+      feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+        wallet.publicKey, destAta, FEE_WALLET, mintPk, TOKEN_PROGRAM_ID,
+      ));
+      feeIxs.push(createTransferCheckedInstruction(
+        srcAta, mintPk, destAta, wallet.publicKey, feeTok, decimals, [], TOKEN_PROGRAM_ID,
+      ));
+    }
+
+    // ── Ask PumpPortal to build the swap tx (unsigned VersionedTransaction bytes) ─
+    // pool: 'auto' lets PumpPortal route to whichever venue the token is on (bonding curve,
+    // pump-amm, or even Raydium if it migrated). Safer than hardcoding 'pump' in case our
+    // graduation detection lags by a few minutes.
+    const res = await fetch(PUMPFUN_TRADE_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        publicKey:        wallet.publicKey.toBase58(),
+        action:           isBuy ? 'buy' : 'sell',
+        mint:             token.mint,
+        amount:           pumpAmount,
+        denominatedInSol: denominatedInSol,
+        slippage:         PUMPFUN_SLIPPAGE_PCT,
+        priorityFee:      PUMPFUN_PRIORITY_FEE_SOL,
+        pool:             'auto',
+      }),
+    });
+
+    if (!res.ok) {
+      // Errors come back as text/JSON; successes are raw tx bytes
+      const errText = await res.text().catch(() => '');
+      throw new Error(`pump.fun: ${errText.slice(0, 120) || res.status}`);
+    }
+
+    const txBytes = new Uint8Array(await res.arrayBuffer());
+    const pumpTx  = VersionedTransaction.deserialize(txBytes);
+
+    // ── Fetch ALT accounts so we can decompile pump.fun's message ─────
+    // Legacy (non-v0) messages don't have addressTableLookups at all — guard against undefined.
+    const altKeys = (pumpTx.message.addressTableLookups || []).map(l => l.accountKey);
+    let alts = [];
+    if (altKeys.length > 0) {
+      const infos = await connection.getMultipleAccountsInfo(altKeys);
+      alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+        key:   k,
+        state: AddressLookupTableAccount.deserialize(infos[i].data),
+      }) : null).filter(Boolean);
+    }
+
+    // ── Decompile so we can inject our fee ix into the same tx ────────
+    const decompiled = TransactionMessage.decompile(pumpTx.message, {
+      addressLookupTableAccounts: alts,
+    });
+
+    // Insert fee ix(s) right after compute-budget ixs, before the swap.
+    const ix = decompiled.instructions;
+    let insertAt = 0;
+    while (insertAt < ix.length && ix[insertAt].programId.equals(COMPUTE_BUDGET_PROGRAM_ID)) insertAt++;
+    const finalIxs = [...ix.slice(0, insertAt), ...feeIxs, ...ix.slice(insertAt)];
+
+    // ── Recompile with a fresh blockhash, sign once, send ─────────────
+    const latest = await connection.getLatestBlockhash('confirmed');
+    const newMsg = new TransactionMessage({
+      payerKey:        wallet.publicKey,
+      recentBlockhash: latest.blockhash,
+      instructions:    finalIxs,
+    }).compileToV0Message(alts);
+    const finalTx = new VersionedTransaction(newMsg);
+
+    // Soft simulate (non-fatal on RPC errors)
+    try {
+      const sim = await connection.simulateTransaction(finalTx, {
+        replaceRecentBlockhash: true, sigVerify: false,
+      });
+      if (sim.value.err) {
+        const logs = (sim.value.logs || []).join('\n').toLowerCase();
+        if (logs.includes('insufficient') || logs.includes('0x1')) throw new Error('Insufficient balance');
+        if (logs.includes('slippage'))                              throw new Error('Price moved — try again');
+        throw new Error('Simulation failed');
+      }
+    } catch (e) {
+      if (/insufficient|slippage|simulation failed/i.test(String(e.message))) throw e;
+    }
+
+    const signed = await wallet.signTransaction(finalTx);
+    const sig    = await connection.sendRawTransaction(signed.serialize(), {
+      skipPreflight: false, maxRetries: 3,
+    });
+
+    // Confirm with timeout + fallback polling (same pattern as Jupiter path)
+    let confirmed = false;
+    try {
+      const conf = await Promise.race([
+        connection.confirmTransaction({
+          signature: sig,
+          blockhash: latest.blockhash,
+          lastValidBlockHeight: latest.lastValidBlockHeight,
+        }, 'confirmed'),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
+      ]);
+      if (conf?.value?.err) throw new Error('Tx failed on-chain');
+      confirmed = true;
+    } catch {
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+          const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+          const cs = st?.value?.confirmationStatus;
+          if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+          if (st?.value?.err) throw new Error('Tx failed on-chain');
+        } catch (e) { if (/failed on-chain/i.test(String(e.message))) throw e; }
+      }
+    }
+
+    // pump.fun doesn't return an outAmount; leave 0 (toast will skip the secondary line)
+    return { sig, confirmed, outAmount: 0 };
+  }, [wallet, connection, onConnectWallet]);
+
+  /* ════════════════════════════════════════════════════════════════
+     JUPITER SWAP — for graduated tokens (everything else)
+     ════════════════════════════════════════════════════════════════ */
   const executeSwap = useCallback(async ({ token, mode, rawAmount, balanceDecimals }) => {
     if (!wallet.publicKey || !wallet.signTransaction) {
       onConnectWallet?.(); throw new Error('connect_wallet');
@@ -1003,19 +1184,30 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     return { sig, confirmed, outAmount };
   }, [wallet, connection, effectiveReferrer, onConnectWallet]);
 
+  /* ────── Router: pump.fun pre-grad tokens go through PumpPortal; everything else through Jupiter ────── */
+  const isPumpFunPreGrad = useCallback((token) => {
+    return token?.source === 'pumpfun' && token?.preGrad === true;
+  }, []);
+
   /* ──── quick buy ──── */
   const handleBuy = useCallback(async (token, solAmount) => {
     if (!wallet.publicKey) { onConnectWallet?.(); return; }
     if (busy[token.mint]) return;
     setBusy(b => ({ ...b, [token.mint]: 'Buying…' }));
     try {
-      const rawAmount = BigInt(Math.floor(solAmount * 1e9)).toString();
-      const { sig, confirmed, outAmount } = await executeSwap({ token, mode: 'buy', rawAmount });
+      let result;
+      if (isPumpFunPreGrad(token)) {
+        result = await executePumpFunSwap({ token, mode: 'buy', solAmount });
+      } else {
+        const rawAmount = BigInt(Math.floor(solAmount * 1e9)).toString();
+        result = await executeSwap({ token, mode: 'buy', rawAmount });
+      }
+      const { sig, confirmed, outAmount } = result;
       if (confirmed) fireConfetti();
       pushToast({
         kind: 'success',
         emoji: confirmed ? '🎉' : '⏳',
-        body: <><b>Bought ${token.sym}</b><br/>{solAmount} SOL → {format(outAmount)} {token.sym}</>,
+        body: <><b>Bought ${token.sym}</b><br/>{solAmount} SOL{outAmount > 0 ? <> → {format(outAmount)} {token.sym}</> : null}</>,
         link: `https://solscan.io/tx/${sig}`,
       });
       setTimeout(refreshBalances, 2500);
@@ -1026,7 +1218,8 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     } finally {
       setBusy(b => { const c = { ...b }; delete c[token.mint]; return c; });
     }
-  }, [wallet.publicKey, busy, executeSwap, pushToast, refreshBalances, onConnectWallet, fireConfetti]);
+  }, [wallet.publicKey, busy, executeSwap, executePumpFunSwap, isPumpFunPreGrad, pushToast, refreshBalances, onConnectWallet, fireConfetti]);
+
   const handleSell = useCallback(async (token, percentage) => {
     if (!wallet.publicKey) { onConnectWallet?.(); return; }
     if (busy[token.mint]) return;
@@ -1038,11 +1231,21 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     setBusy(b => ({ ...b, [token.mint]: 'Selling…' }));
     try {
       const rawAmount = ((BigInt(bal.amount) * BigInt(percentage)) / 100n).toString();
-      const { sig, confirmed, outAmount } = await executeSwap({ token, mode: 'sell', rawAmount, balanceDecimals: bal.decimals });
+      let result;
+      if (isPumpFunPreGrad(token)) {
+        result = await executePumpFunSwap({
+          token, mode: 'sell',
+          tokenRawAmount: rawAmount,
+          balanceDecimals: bal.decimals,
+        });
+      } else {
+        result = await executeSwap({ token, mode: 'sell', rawAmount, balanceDecimals: bal.decimals });
+      }
+      const { sig, confirmed, outAmount } = result;
       pushToast({
         kind: 'success',
         emoji: confirmed ? '💸' : '⏳',
-        body: <><b>Sold {percentage}% of ${token.sym}</b><br/>Got {format(outAmount)} SOL</>,
+        body: <><b>Sold {percentage}% of ${token.sym}</b>{outAmount > 0 ? <><br/>Got {format(outAmount)} SOL</> : null}</>,
         link: `https://solscan.io/tx/${sig}`,
       });
       setTimeout(refreshBalances, 2500);
@@ -1053,7 +1256,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     } finally {
       setBusy(b => { const c = { ...b }; delete c[token.mint]; return c; });
     }
-  }, [wallet.publicKey, busy, balances, executeSwap, pushToast, refreshBalances, onConnectWallet]);
+  }, [wallet.publicKey, busy, balances, executeSwap, executePumpFunSwap, isPumpFunPreGrad, pushToast, refreshBalances, onConnectWallet]);
 
   /* ──── lane-aware list + filters + sort ──── */
   const activeList = lane === 'fresh' ? pumpTokens : recentTokens;
