@@ -1421,3 +1421,9 @@ why-is-render-swap-slow
 why-is-sol-price-impact-so-high
 why-is-sol-swap-slow
 why-is-solana-swap-pending-so-long
+why-is-wen-price-impact-so-high
+why-is-wen-swap-slow
+why-is-wif-price-impact-so-high
+why-is-wif-swap-slow
+wif-exchange
+wif-token-swap

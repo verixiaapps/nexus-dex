@@ -123,9 +123,3 @@ cheaper alternative to bullx
 cheaper alternative to dexscreener
 cheaper alternative to gmgn
 cheaper alternative to photon
-why is wen price impact so high
-why is wen swap slow
-why is wif price impact so high
-why is wif swap slow
-wif exchange
-wif token swap
