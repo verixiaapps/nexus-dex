@@ -46,6 +46,8 @@ const CSP_DIRECTIVES = [
     'wss://*.walletconnect.com', 'wss://*.walletconnect.org',
     'wss://www.walletlink.org',
     'https://public.chainalysis.com',
+    'wss://pumpportal.fun',           // Launch Radar — pump.fun new-token stream
+    'https://api.dexscreener.com',    // Launch Radar — DexScreener enrichment
     ...EXTRA_CONNECT_SRC,
   ]],
   ['worker-src',      ["'self'", 'blob:']],
