@@ -3,12 +3,11 @@ import { BrowserRouter, useNavigate, useLocation } from 'react-router-dom';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useNexusWallet } from './WalletContext.js';
 import SwapWidget       from './components/SwapWidget.jsx';
-import Portfolio        from './components/Portfolio.jsx';
 import Stocks           from './components/Stocks.jsx';
 import CrossChainSwap   from './components/CrossChainSwap.jsx';
 import MemeWonderland   from './components/MemeWonderland.jsx';
+import LaunchRadar      from './components/LaunchRadar.jsx';
 import Flipsy           from './components/Flipsy.jsx';
-import SolToBtc         from './components/SolToBtc.jsx';
 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
@@ -18,7 +17,6 @@ const C = {
 
 // ═════════════════════════════════════════════════════════════════════
 // ADMIN_WALLETS — these wallets bypass every page-level gate:
-//   • SOL→BTC allowlist
 //   • Markets US geo block
 //   • Any future gates
 // Exported so Stocks.jsx and any other page can import.
@@ -52,12 +50,11 @@ const GLOBAL_STYLES = `html,body{ margin:0;padding:0;width:100%; min-height:100v
 function EcoStrip({ active, onGo, accentColor, accentBg, accentLine }) {
   const items = [
     { ic: '⇅',  lbl: 'Swap',       tab: 'swap' },
+    { ic: '🚀', lbl: 'Radar',      tab: 'launchradar' },
     { ic: '🌉', lbl: 'Bridge',     tab: 'bridge' },
-    { ic: '₿',  lbl: 'SOL→BTC',    tab: 'soltobtc' },
     { ic: '✨', lbl: 'Wonderland', tab: 'wonderland' },
     { ic: '📈', lbl: 'Markets',    tab: 'markets' },
     { ic: '🎯', lbl: 'Flipsy',     tab: 'flipsy' },
-    { ic: '▦',  lbl: 'Wallet',     tab: 'portfolio' },
   ];
   return (
     <div className="hide-scrollbar" style={{ display: 'flex', gap: 8, overflowX: 'auto', padding: '0 0 4px' }}>
@@ -111,7 +108,6 @@ function SwapHero({ onStartTrading, onScrollToWidget }) {
   const benefits = [
     'Swap on Solana',
     'Bridge Across 71 Chains',
-    'Get Native Bitcoin',
     'Discover Trending Memes',
     'Self-Custody Always',
   ];
@@ -562,16 +558,15 @@ async function screenAddress(address) {
 
 const PATH_TO_TAB = {
   '/': 'swap', '/swap': 'swap', '/bridge': 'bridge',
-  '/sol-to-btc': 'soltobtc', '/btc': 'soltobtc',
   '/wonderland': 'wonderland', '/memes': 'wonderland',
+  '/radar': 'launchradar', '/launch-radar': 'launchradar', '/launches': 'launchradar',
   '/markets': 'markets', '/tokenized': 'markets',
-  '/portfolio': 'portfolio', '/token': 'portfolio',
   '/flipsy': 'flipsy', '/predict': 'flipsy',
   '/stack': 'swap', '/vip': 'swap', '/perps': 'swap', '/call': 'swap',
 };
 const TAB_TO_PATH = {
-  swap: '/swap', bridge: '/bridge', soltobtc: '/sol-to-btc',
-  wonderland: '/wonderland', markets: '/markets', portfolio: '/portfolio', flipsy: '/flipsy',
+  swap: '/swap', bridge: '/bridge',
+  wonderland: '/wonderland', launchradar: '/radar', markets: '/markets', flipsy: '/flipsy',
 };
 function tabFromPathname(pathname) { return PATH_TO_TAB[pathname] || 'swap'; }
 export function useAppWallet() { return useNexusWallet(); }
@@ -903,18 +898,16 @@ function WalletModal({ open, onClose }) {
 
 // Nav icons
 function IconSwap()       { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M7 16V4m0 0L3 8m4-4l4 4"/><path d="M17 8v12m0 0l4-4m-4 4l-4-4"/></svg>; }
-function IconWallet()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="1" y="4" width="22" height="16" rx="2"/><path d="M1 10h22"/></svg>; }
 function IconMarkets()    { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 17l6-6 4 4 8-8"/><path d="M14 7h7v7"/></svg>; }
 function IconBridge()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12 Q12 4 20 12"/><path d="M4 12v4"/><path d="M20 12v4"/><path d="M4 16h16"/><path d="M9 12v4"/><path d="M15 12v4"/></svg>; }
 function IconWonderland() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l2.4 6.4L21 10l-5.4 4 1.8 7L12 17.5 6.6 21l1.8-7L3 10l6.6-1.6L12 2z"/></svg>; }
 function IconFlipsy()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 10l4-4 4 4"/><path d="M8 14l4 4 4-4"/></svg>; }
-function IconBtc()        { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M9.5 7v10"/><path d="M9.5 7h4a2.5 2.5 0 0 1 0 5h-4"/><path d="M9.5 12h4.5a2.5 2.5 0 0 1 0 5h-4.5"/><path d="M11 5v2"/><path d="M11 17v2"/><path d="M14 5v2"/><path d="M14 17v2"/></svg>; }
+function IconLaunchRadar() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><path d="M12 3v3"/><path d="M12 18v3"/><path d="M3 12h3"/><path d="M18 12h3"/></svg>; }
 
-const NAV_ICONS = { swap: IconSwap, bridge: IconBridge, soltobtc: IconBtc, wonderland: IconWonderland, markets: IconMarkets, portfolio: IconWallet, flipsy: IconFlipsy };
+const NAV_ICONS = { swap: IconSwap, launchradar: IconLaunchRadar, bridge: IconBridge, wonderland: IconWonderland, markets: IconMarkets, flipsy: IconFlipsy };
 const NAV_TABS = [
-  { id: 'swap', label: 'Swap' }, { id: 'bridge', label: 'Bridge' }, { id: 'soltobtc', label: 'SOL→BTC' },
+  { id: 'swap', label: 'Swap' }, { id: 'launchradar', label: 'Radar' }, { id: 'bridge', label: 'Bridge' },
   { id: 'wonderland', label: 'Wonderland' }, { id: 'markets', label: 'Markets' }, { id: 'flipsy', label: 'Flipsy' },
-  { id: 'portfolio', label: 'Wallet' },
 ];
 
 function AppInner() {
@@ -970,9 +963,6 @@ function AppInner() {
     ? wallet.walletAddress.slice(0, 4) + '...' + wallet.walletAddress.slice(-4)
     : null;
 
-  // SOL→BTC: admin wallets always allowed
-  const canUseSolToBtc = wallet.walletAddress && ADMIN_WALLETS.has(wallet.walletAddress);
-
   return (
     <div style={{ minHeight: '100dvh', background: C.bg, color: C.text, fontFamily: 'Syne, sans-serif', overscrollBehavior: 'none', overflowX: 'hidden', width: '100%' }}>
       <div style={{ position: 'fixed', inset: 0, pointerEvents: 'none', zIndex: 0, backgroundImage: 'linear-gradient(rgba(0,229,255,.02) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,.02) 1px,transparent 1px)', backgroundSize: '48px 48px' }} />
@@ -1016,28 +1006,11 @@ function AppInner() {
             </div>
           </>
         )}
+        {tab === 'launchradar' && <LaunchRadar onConnectWallet={openWallet} />}
         {tab === 'bridge' && <><BridgeHero onSwitchTab={switchTab} /><CrossChainSwap onConnectWallet={openWallet} /></>}
-        {tab === 'soltobtc' && (
-          canUseSolToBtc
-            ? <SolToBtc onConnectWallet={openWallet} />
-            : (
-              <div style={{
-                maxWidth: 420, margin: '60px auto', padding: 32,
-                background: 'rgba(247,147,26,.06)',
-                border: '1px solid rgba(247,147,26,.28)',
-                borderRadius: 18, textAlign: 'center',
-              }}>
-                <div style={{ fontSize: 36, marginBottom: 12 }}>🔒</div>
-                <div style={{ color: '#f7931a', fontWeight: 800, fontSize: 18, marginBottom: 8 }}>SOL → BTC</div>
-                <div style={{ color: C.text, fontSize: 13, lineHeight: 1.5, marginBottom: 6 }}>Coming soon.</div>
-                <div style={{ color: C.muted, fontSize: 11 }}>Native Bitcoin bridging powered by LI.FI. Currently in testing.</div>
-              </div>
-            )
-        )}
         {tab === 'wonderland' && <MemeWonderland onConnectWallet={openWallet} />}
         {tab === 'markets'    && <Stocks {...sharedProps} />}
         {tab === 'flipsy'     && <Flipsy onConnectWallet={openWallet} />}
-        {tab === 'portfolio'  && <Portfolio onConnectWallet={openWallet} />}
       </main>
       <nav className="mobile-nav" style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100,
