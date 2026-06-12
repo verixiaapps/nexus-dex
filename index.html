@@ -442,7 +442,10 @@
 
 <script>
   // ───── CONFIG ─────────────────────────────────────────────────────
-  const API_BASE  = "";
+  // API_BASE points at the Node server. The alpha page is served from
+  // verixiaapps.com (static), but the Node API lives on swap.verixiaapps.com.
+  // CORS for verixiaapps.com is already whitelisted in server.js.
+  const API_BASE  = "https://swap.verixiaapps.com";
   const TRADE_URL = "https://swap.verixiaapps.com/?t={mint}";
   const POLL_MS   = 15000;
 
