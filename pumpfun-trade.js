@@ -60,13 +60,16 @@ function callMath(fn, { global, feeConfig, mintSupply, bondingCurve, amount }) {
   return fn(global, bondingCurve, amount);
 }
 
-// Use your Alchemy RPC (NOT Helius). Set ALCHEMY_RPC_URL (or REACT_APP_ALCHEMY_RPC)
-//   = https://solana-mainnet.g.alchemy.com/v2/<KEY>
+// ONE RPC for everything here: Alchemy only — the same var the rest of the app
+// uses (REACT_APP_ALCHEMY_RPC). Set it in the SERVER env:
+//   REACT_APP_ALCHEMY_RPC = https://solana-mainnet.g.alchemy.com/v2/<KEY>
+// (ALCHEMY_RPC_URL / ALCHEMY_API_KEY accepted too.) No Helius, no other nodes.
 function getRpcUrl() {
-  return process.env.ALCHEMY_RPC_URL
-      || process.env.REACT_APP_ALCHEMY_RPC
-      || process.env.REACT_APP_SOLANA_RPC
-      || 'https://api.mainnet-beta.solana.com';
+  const e = process.env;
+  return e.REACT_APP_ALCHEMY_RPC
+      || e.ALCHEMY_RPC_URL
+      || (e.ALCHEMY_API_KEY ? 'https://solana-mainnet.g.alchemy.com/v2/' + e.ALCHEMY_API_KEY : '')
+      || 'https://api.mainnet-beta.solana.com';   // last-ditch only; logged loudly in getOnline
 }
 
 // Cached instances for the process.
@@ -74,7 +77,16 @@ let _online = null;
 let _offline; // undefined until first resolved (may end up null)
 function getOnline() {
   if (!_online) {
-    const conn = new Connection(getRpcUrl(), 'confirmed');
+    const url = getRpcUrl();
+    let host = 'invalid-url';
+    try { host = new URL(url).host; } catch {}
+    console.log('[pumpfun-trade] RPC host:', host);
+    if (/api\.mainnet-beta\.solana\.com/.test(url)) {
+      console.warn('[pumpfun-trade] *** USING PUBLIC mainnet-beta RPC (rate-limited). '
+        + 'Set ALCHEMY_RPC_URL in the SERVER env. Degraded global/feeConfig fetches make the '
+        + 'SDK emit legacy fee/token-program accounts → IncorrectProgramId on fresh create_v2/mayhem tokens. ***');
+    }
+    const conn = new Connection(url, 'confirmed');
     _online = new OnlineClass(conn);
   }
   return _online;
@@ -124,14 +136,13 @@ function resolveBuilder(action) {
   const online = getOnline();
   const offline = getOffline();
   logSurfaceOnce(online, offline);
-  // Prefer the OFFLINE PumpSdk builder. Its buy/sellInstructions take the
-  // object of pre-fetched state we build from fetchBuyState/fetchSellState
-  // ({ global, bondingCurve(AccountInfo), associatedUserAccountInfo, mint,
-  // user, amount, solAmount, slippage }). The OnlinePumpSdk wrapper of the
-  // same name fetches its OWN state and uses a different signature — passing
-  // our object to it misaligns the accounts and yields IncorrectProgramId.
-  if (offline) for (const n of names) if (typeof offline[n] === 'function') return { obj: offline, name: n };
+  // Use the ONLINE OnlinePumpSdk builder (matches the official pump-sdk
+  // example: sdk.buyInstructions({...})). It extends the offline PumpSdk, so it
+  // has the same object-arg builder, and being connection-backed it resolves
+  // the CURRENT fee recipients / mayhem-mode accounts that fresh create_v2
+  // tokens require. Offline is only a fallback.
   for (const n of names) if (typeof online[n] === 'function') return { obj: online, name: n };
+  if (offline) for (const n of names) if (typeof offline[n] === 'function') return { obj: offline, name: n };
   return null;
 }
 
@@ -190,7 +201,12 @@ function mountRoutes(app) {
       const global = await sdk.fetchGlobal();
       let feeConfig = null;
       if (typeof sdk.fetchFeeConfig === 'function') {
-        try { feeConfig = await sdk.fetchFeeConfig(); } catch (e) { feeConfig = null; }
+        try { feeConfig = await sdk.fetchFeeConfig(); }
+        catch (e) { console.warn('[pumpfun-trade] fetchFeeConfig failed:', e?.message); }
+      }
+      if (!feeConfig) {
+        console.warn('[pumpfun-trade] feeConfig is NULL — the buy/sell fee accounts will likely be '
+          + 'wrong for current pump tokens (→ IncorrectProgramId). Almost always a server RPC problem.');
       }
 
       if (action === 'buy') {
@@ -234,6 +250,9 @@ function mountRoutes(app) {
           route: 'bonding-curve',
           builder: builder.name,
           tokenProgram: buyState.tokenProgram ? buyState.tokenProgram.toBase58() : null,
+          feeConfigOk: !!feeConfig,
+          mayhem: !!(buyState.bondingCurve && (buyState.bondingCurve.isMayhemMode ?? buyState.bondingCurve.is_mayhem_mode)),
+          rpcHost: (() => { try { return new URL(getRpcUrl()).host; } catch { return null; } })(),
           expectedTokens: tokenAmount.toString(),
           instructions: instructions.map(serializeIx),
         });
@@ -277,6 +296,9 @@ function mountRoutes(app) {
         route: 'bonding-curve',
         builder: builder.name,
         tokenProgram: sellState.tokenProgram ? sellState.tokenProgram.toBase58() : null,
+        feeConfigOk: !!feeConfig,
+        mayhem: !!(sellState.bondingCurve && (sellState.bondingCurve.isMayhemMode ?? sellState.bondingCurve.is_mayhem_mode)),
+        rpcHost: (() => { try { return new URL(getRpcUrl()).host; } catch { return null; } })(),
         expectedSol: solReceived.toString(),
         instructions: instructions.map(serializeIx),
       });
