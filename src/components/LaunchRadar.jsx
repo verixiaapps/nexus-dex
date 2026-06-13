@@ -1,35 +1,17 @@
 // LaunchRadar.jsx — Solana new launches + per-card BUY/SELL modal trade flow.
 //
-// ARCHITECTURE
-//   • DATA: Jupiter recent feed (token list, prices, mcap, volume). Unchanged.
-//   • TRADES: race THREE Jupiter endpoints in parallel; whichever finds a
-//     route first wins. None of them depend on pump.fun's SDK — Jupiter
-//     handles bonding-curve and AMM routing on its side.
-//        1. Ultra V3   → POST /api/jupiter/ultra-order
-//                        (Iris router; best for pre-grad bonding curves)
-//        2. V2 build   → GET  /api/jupiter/build       (Metis, instruction groups)
-//        3. V1 q+swap  → GET  /api/jupiter/quote + POST /api/jupiter/swap
-//                        (Metis, ready-built tx)
-//     Three different paths into Jupiter routing — if any of them catches
-//     the token, we trade. Console logs which source won each trade.
-//   • FEE: your 3% paid in SOL to your wallet, atomic in the SAME signed tx:
-//       - BUY:  user enters X SOL. The Jupiter swap spends the full X SOL;
-//               on top, 3% of X → your wallet (SystemProgram.transfer,
-//               prepended). Wallet debit = 1.03 × X.
-//       - SELL: full token amount goes to the Jupiter swap (which unwraps
-//               SOL into the user's wallet). Then 3% of the WORST-CASE
-//               quoted output (otherAmountThreshold) → your wallet
-//               (SystemProgram.transfer, appended). Using worst-case so
-//               the transfer can never overdraw on slippage; real fee can
-//               dip toward ~2.5% if 15% slippage hits, usually it's 3%.
-//   • SIM: Phantom simulates against fresh chain state at sign-time — that
-//     IS our sim. We don't run a redundant local simulateTransaction (would
-//     drift from Phantom's by a few seconds, kill clean trades on flaky
-//     RPC). The user sees Phantom's preview and approves.
-//   • One signature per trade.
+// TRADE PATH: /api/pumpfun/trade (your existing pumpfun-trade.js).
+// Pump.fun bonding curve only. One signature per trade. Atomic 3% SOL fee.
 //
-// BALANCES: Alchemy is the primary RPC, with public nodes as last-resort
-// fallbacks, raced all-at-once (same proven pattern as SwapWidget).
+//   BUY  : user enters X SOL. 0.97 * X → pump curve (server builds the ix
+//          set with this as the trade amount); SystemProgram.transfer of
+//          0.03 * X → FEE_WALLET, PREPENDED to the curve buy. Wallet
+//          debit = exactly X.
+//   SELL : full token amount → pump curve. Server returns expectedSol.
+//          SystemProgram.transfer of 3% of expectedSol → FEE_WALLET,
+//          APPENDED so it runs after the curve has paid native SOL into
+//          the user's wallet. Pump curve pays NATIVE SOL — no WSOL ATA,
+//          no unwrap step.
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -39,7 +21,7 @@ import {
   VersionedTransaction,
   TransactionMessage,
   SystemProgram,
-  AddressLookupTableAccount,
+  ComputeBudgetProgram,
 } from '@solana/web3.js';
 import {
   TOKEN_PROGRAM_ID,
@@ -47,7 +29,6 @@ import {
 } from '@solana/spl-token';
 import { useWallet } from '@solana/wallet-adapter-react';
 
-/* CSS injected via useLrCSS — unchanged from previous revision */
 const LR_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&display=swap');
 .lr-root{
@@ -387,46 +368,24 @@ function useLrCSS() {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   CONFIG — Jupiter Swap API (existing /api/jupiter/quote + /api/jupiter/swap
-   proxies on this server). 3% fee paid in SOL → FEE_WALLET, atomic in
-   the same signed tx.
-     • BUY  → SystemProgram.transfer (feeLamports SOL → FEE_WALLET),
-              PREPENDED to Jupiter's swap. Swap spends the full entered SOL.
-     • SELL → SystemProgram.transfer (3% of otherAmountThreshold SOL →
-              FEE_WALLET), APPENDED so it runs after Jupiter's WSOL unwrap.
+   CONFIG — pump.fun bonding curve only. 3% SOL fee → FEE_WALLET, atomic
+   in the same signed tx. No ATAs touched on the fee side — pure
+   SystemProgram.transfer of lamports. The pump SDK on the server
+   handles the token ATA for the trade itself.
    ════════════════════════════════════════════════════════════════════ */
-const SOL_MINT     = 'So11111111111111111111111111111111111111112';
-const FEE_WALLET   = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS      = 300;   // 3%
+const SOL_MINT   = 'So11111111111111111111111111111111111111112';
+const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
+const FEE_BPS    = 300;   // 3%
 
-// Jupiter slippage tolerance on the /quote call. 1500 bps (15%) — Jupiter's
-// routing is sharp enough that this is usually plenty even on fresh pump.fun
-// launches, and a tighter cap means the user doesn't overpay on calmer ones.
-// Slippage protects only the OUTPUT — for buys (ExactIn) the input SOL is
-// fixed at what we send, so the wallet debit is deterministic.
-const JUP_SLIPPAGE_BPS = 1500;
-
-// Rent the user must always keep back / have on hand. Covers: the token ATA
-// Jupiter creates on first buys of a new mint, plus tx + priority fees.
-const ATA_RENT_SOL = 0.00204;   // rent-exempt minimum per SPL token account
-const SOL_RESERVE  = 0.02;      // ~2 ATAs (0.0041) + fee/slippage cushion
-
-// Buy-side wallet debit multiplier. User enters X SOL → wallet pays X * 1.03
-// (X to the swap, 3% of X to FEE_WALLET). Used by MAX and the affordability
-// check so a buy can never overdraw.
-const BUY_DEBIT_MULT = 1.03;
+// Cushion for tx + priority fees + the pump SDK's own associated-token-account
+// creation rent on a first buy of a new mint. ATA rent (~0.00204 SOL) is paid
+// by the user but goes to their OWN token account — not a real loss.
+const SOL_RESERVE = 0.01;
 
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
 // ── BALANCE RPC ──────────────────────────────────────────────────────
-// Alchemy is the primary balance RPC. Set it at build time (NO server.js
-// change needed):
-//     REACT_APP_ALCHEMY_RPC = https://solana-mainnet.g.alchemy.com/v2/<KEY>
-// Lock the key to your domain in the Alchemy dashboard since it ships to the
-// browser. Public nodes are last-resort fallbacks only.
-// NOTE: window.__VERIXIA_CONFIG__.rpc is intentionally NOT used here — on this
-// server it resolves to Helius, and we don't want Helius for balances.
 const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
 const ALCHEMY_RPC =
   (typeof process !== 'undefined' && process.env && process.env.REACT_APP_ALCHEMY_RPC) || '';
@@ -439,7 +398,6 @@ const BAL_RPC_POOL = [
 ].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
 
 const RPC_URL = BAL_RPC_POOL[0];
-
 const BAL_COMMITMENT = 'processed';
 
 const _connCache = new Map();
@@ -450,9 +408,6 @@ const getConn = (commitment, url = RPC_URL) => {
   return c;
 };
 
-// Race every RPC at once and take the first to answer (same proven pattern as
-// SwapWidget). A healthy Alchemy returns in well under a second — no more
-// waiting on a slow primary before falling back to the public nodes.
 const balRpcRace = (op) => {
   const conns = BAL_RPC_POOL.map(u => getConn(BAL_COMMITMENT, u));
   return Promise.any(conns.map((c, i) =>
@@ -562,57 +517,40 @@ function normalize(t) {
 
 const friendlyError = (err) => {
   const m = String(err?.message || err || '').toLowerCase();
-  // Cancel first — a user rejecting in the wallet must never be mislabeled.
   if (m.includes('user reject') || m.includes('user denied') || m.includes('cancelled') || m.includes('request rejected')) return 'Cancelled.';
-  if (m.includes('slippage') || m.includes('exceeded') && m.includes('slippage'))
-    return 'Price moved past slippage — try again.';
+  if (m.includes('graduat')) return 'Token graduated off the bonding curve — not tradable here.';
+  if (m.includes('not a pump') || m.includes('not indexed')) return 'Not a pump.fun bonding-curve token.';
+  if (m.includes('slippage')) return 'Price moved past slippage — try again.';
   if (m.includes('insufficient') || m.includes('debit an account')) return 'Not enough SOL for this trade + fees.';
   if (m.includes('blockhash') || m.includes('expired')) return 'Tx expired — retry.';
-  if (m.includes('account not') || m.includes('uninitialized')) return 'Token account not ready — try again in a moment.';
   if (m.includes("didn't confirm") || m.includes('not confirm')) return "Sent but didn't confirm — check Solscan before retrying.";
   if (m.includes('simulation failed')) return 'Trade would fail right now — price likely moved.';
-  if (m.includes('rate'))              return 'Rate limited — try again.';
-  if (m.includes('no route') || m.includes('could not find any route') || m.includes('routeplan')) return 'No route yet — token may be too fresh.';
+  if (m.includes('incorrectprogramid')) return "Pump SDK fee-config stale — try again. If it keeps happening, the server RPC is rate-limited.";
+  if (m.includes('rate')) return 'Rate limited — try again.';
   return err?.message?.slice(0, 200) || 'Trade failed.';
 };
 
-// Turn raw preflight/simulation logs into a specific, honest cause. When there
-// is no friendly mapping, surface the failing PROGRAM + error line (not just a
-// stripped fragment) so the real culprit is visible and can be diagnosed.
-function failureContext(arr) {
-  const failed  = arr.filter(l => /failed:|failed to complete/i.test(l)).pop();
-  const errLine = arr.filter(l => /program log:.*(error|insufficient|0x|incorrect|slippage)/i.test(l)).pop();
-  const parts = [errLine, failed].filter(Boolean).map(s => s.replace(/^Program log:\s*/i, '').trim().slice(0, 120));
-  return parts.length ? parts.join('  •  ') : null;
-}
 function describeSimLogs(logs, fallbackMsg) {
   const arr = Array.isArray(logs) ? logs : [];
   const j = arr.join('\n').toLowerCase();
-  if (j.includes('slippage') || j.includes('exceededslippage') || j.includes('toomuchsol') || j.includes('toolittlesol'))
+  if (j.includes('slippage') || j.includes('toomuchsol') || j.includes('toolittlesol'))
     return 'Price moved past slippage — try again.';
   if (j.includes('insufficient') || j.includes('debit an account')) return 'Not enough SOL for the trade + fees.';
-  if (j.includes('exceeded') && j.includes('compute'))    return 'Hit the compute limit — retry.';
-  if (j.includes('accountnotfound') || (j.includes('account') && (j.includes('not found') || j.includes('uninitialized'))))
-    return 'A required account is not ready yet — try again in a moment.';
-  const ctx = failureContext(arr) || (arr.filter(l => /program log:|error|0x/i.test(l)).pop() || '').replace(/^Program log:\s*/i, '').slice(0, 150);
+  if (j.includes('exceeded') && j.includes('compute')) return 'Hit the compute limit — retry.';
+  const ctx = (arr.filter(l => /program log:|error|0x/i.test(l)).pop() || '').replace(/^Program log:\s*/i, '').slice(0, 150);
   if (ctx) return 'Sim failed → ' + ctx;
   return fallbackMsg ? ('Sim failed → ' + String(fallbackMsg).slice(0, 160)) : 'Sim failed (no logs returned).';
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   JUPITER ROUTE — race three endpoints in parallel, first valid route
-   wins (Promise.any). Each adapter returns a normalized shape:
-     { source, instructions[], alts[], outAmount, otherAmountThreshold,
-       routeLabel }
-   Endpoints tried, in parallel:
-     1. Ultra V3  (Iris router; best for pre-grad bonding curves)
-     2. V2 build  (Metis, returns raw instruction groups)
-     3. V1 q+swap (Metis, returns ready-built tx)
-   None depend on pump.fun's SDK — Jupiter handles bonding-curve and AMM
-   routing on its side. Console logs which source won each trade.
-   ════════════════════════════════════════════════════════════════════ */
+   PUMP.FUN TRADE — call our server, which uses the pump SDK to build
+   the instruction set. Server returns JSON: { instructions: [...],
+   expectedTokens (buy) or expectedSol (sell), ... }.
 
-// Convert a Jupiter-style instruction JSON to a real TransactionInstruction.
+   Instruction shape from the server:
+     { programId: base58, accounts: [{pubkey,isSigner,isWritable}],
+       data: base64 }
+   ════════════════════════════════════════════════════════════════════ */
 function deserIx(ix) {
   return {
     programId: new PublicKey(ix.programId),
@@ -625,170 +563,35 @@ function deserIx(ix) {
   };
 }
 
-// Deserialize a base64 v0 transaction, fetch its lookup tables via the
-// connection (batched), and decompile into a flat instruction list +
-// hydrated ALT objects ready to be recompiled.
-async function decodeBuiltTx(b64, connection) {
-  const txBytes = Buffer.from(b64, 'base64');
-  const tx      = VersionedTransaction.deserialize(txBytes);
-  const message = tx.message;
-  const lookupKeys = (message.addressTableLookups || []).map(l => l.accountKey);
-  const alts = [];
-  if (lookupKeys.length > 0) {
-    const infos = await connection.getMultipleAccountsInfo(lookupKeys);
-    for (let i = 0; i < lookupKeys.length; i++) {
-      if (!infos[i]) continue;
-      alts.push(new AddressLookupTableAccount({
-        key:   lookupKeys[i],
-        state: AddressLookupTableAccount.deserialize(infos[i].data),
-      }));
-    }
-  }
-  const decompiled = TransactionMessage.decompile(message, {
-    addressLookupTableAccounts: alts,
-  });
-  return { instructions: decompiled.instructions, alts };
-}
-
-// ULTRA V3 — Iris router, optimized for pre-graduation bonding curves.
-// Ultra routes can include RFQ (JupiterZ) hops that require a market-maker
-// signature, which is only added when you use Jupiter's /execute endpoint.
-// We sign + send ourselves (because we splice in our fee), so we reject
-// any Ultra route whose instructions reference a signer other than the
-// user — V2 or V1 will land that trade instead.
-async function getUltraRoute({ inputMint, outputMint, amount, slippageBps, userPk, connection }) {
-  const params = new URLSearchParams({
-    inputMint, outputMint, amount,
-    taker: userPk.toBase58(),
-    slippageBps: String(slippageBps),
-  });
-  const r = await fetch('/api/jupiter/ultra-order?' + params.toString());
-  if (!r.ok) {
-    const eb = await r.json().catch(() => ({}));
-    throw new Error(eb.error || ('ultra HTTP ' + r.status));
-  }
-  const order = await r.json();
-  if (!order || !order.transaction || !order.outAmount) throw new Error('ultra: no route');
-  const { instructions, alts } = await decodeBuiltTx(order.transaction, connection);
-  const userBase = userPk.toBase58();
-  const extraSigner = instructions.some(ix =>
-    (ix.keys || []).some(k => k.isSigner && k.pubkey.toBase58() !== userBase)
-  );
-  if (extraSigner) throw new Error('ultra: route needs /execute (extra signer)');
-  return {
-    source: 'ultra',
-    instructions, alts,
-    outAmount:            String(order.outAmount),
-    otherAmountThreshold: String(order.otherAmountThreshold || order.outAmount),
-    routeLabel: 'ultra-v3',
-  };
-}
-
-// V2 BUILD — Metis, returns raw instruction groups + ALT addresses.
-async function getV2BuildRoute({ inputMint, outputMint, amount, slippageBps, userPk, connection }) {
-  const params = new URLSearchParams({
-    inputMint, outputMint, amount,
-    slippageBps: String(slippageBps),
-    taker: userPk.toBase58(),
-  });
-  const r = await fetch('/api/jupiter/build?' + params.toString());
-  if (!r.ok) {
-    const eb = await r.json().catch(() => ({}));
-    throw new Error(eb.error || ('build HTTP ' + r.status));
-  }
-  const b = await r.json();
-  if (!b || !b.swapInstruction || !b.outAmount) throw new Error('v2: no route');
-
-  // Canonical Jupiter order: computeBudget → setup → swap → cleanup → other.
-  const instructions = [];
-  if (Array.isArray(b.computeBudgetInstructions)) for (const ix of b.computeBudgetInstructions) instructions.push(deserIx(ix));
-  if (Array.isArray(b.setupInstructions))         for (const ix of b.setupInstructions)         instructions.push(deserIx(ix));
-  if (b.swapInstruction)                          instructions.push(deserIx(b.swapInstruction));
-  if (b.cleanupInstruction)                       instructions.push(deserIx(b.cleanupInstruction));
-  if (Array.isArray(b.otherInstructions))         for (const ix of b.otherInstructions)         instructions.push(deserIx(ix));
-
-  const altKeys = Object.keys(b.addressesByLookupTableAddress || {});
-  let alts = [];
-  if (altKeys.length > 0) {
-    const pks   = altKeys.map(k => new PublicKey(k));
-    const infos = await connection.getMultipleAccountsInfo(pks);
-    alts = pks.map((pk, i) => infos[i] ? new AddressLookupTableAccount({
-      key:   pk,
-      state: AddressLookupTableAccount.deserialize(infos[i].data),
-    }) : null).filter(Boolean);
-  }
-
-  return {
-    source: 'v2',
-    instructions, alts,
-    outAmount:            String(b.outAmount),
-    otherAmountThreshold: String(b.otherAmountThreshold || b.outAmount),
-    routeLabel: 'v2-build',
-  };
-}
-
-// V1 QUOTE + SWAP — Metis, classic two-step. Returns a ready-built tx.
-async function getV1QuoteSwapRoute({ inputMint, outputMint, amount, slippageBps, userPk, connection }) {
-  const qp = new URLSearchParams({
-    inputMint, outputMint, amount,
-    slippageBps: String(slippageBps),
-    swapMode: 'ExactIn',
-  });
-  const qR = await fetch('/api/jupiter/quote?' + qp.toString());
-  if (!qR.ok) {
-    const eb = await qR.json().catch(() => ({}));
-    throw new Error(eb.error || ('quote HTTP ' + qR.status));
-  }
-  const quote = await qR.json();
-  if (!quote || !quote.outAmount) throw new Error('v1: no route');
-
-  const sR = await fetch('/api/jupiter/swap', {
+async function getPumpRoute({ action, mint, user, amount }) {
+  const r = await fetch('/api/pumpfun/trade', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      quoteResponse:           quote,
-      userPublicKey:           userPk.toBase58(),
-      wrapAndUnwrapSol:        true,
-      dynamicComputeUnitLimit: true,
-      prioritizationFeeLamports: {
-        priorityLevelWithMaxLamports: { priorityLevel: 'high', maxLamports: 1_000_000 },
-      },
+      action,
+      mint,
+      user:   user.toBase58(),
+      amount: String(amount),
     }),
   });
-  if (!sR.ok) {
-    const eb = await sR.json().catch(() => ({}));
-    throw new Error(eb.error || ('swap HTTP ' + sR.status));
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    throw new Error(data?.error || ('pump HTTP ' + r.status));
   }
-  const swap = await sR.json();
-  if (!swap || !swap.swapTransaction) throw new Error('v1: no tx returned');
-
-  const { instructions, alts } = await decodeBuiltTx(swap.swapTransaction, connection);
-  const routeLabel = (quote.routePlan || []).map(r => r.swapInfo?.label).filter(Boolean).join(' → ') || 'v1-direct';
-  return {
-    source: 'v1',
-    instructions, alts,
-    outAmount:            String(quote.outAmount),
-    otherAmountThreshold: String(quote.otherAmountThreshold || quote.outAmount),
-    routeLabel,
-  };
-}
-
-// Race the three. First successful response wins. AggregateError collects
-// the failure reason from each branch when ALL three miss the token.
-async function findRoute(opts) {
-  const wrap = (label, p) => p.catch(e => { throw new Error(label + ': ' + (e?.message || 'failed')); });
+  if (!Array.isArray(data.instructions) || data.instructions.length === 0) {
+    throw new Error('Pump server returned no instructions.');
+  }
   try {
-    const winner = await Promise.any([
-      wrap('ultra', getUltraRoute(opts)),
-      wrap('v2',    getV2BuildRoute(opts)),
-      wrap('v1',    getV1QuoteSwapRoute(opts)),
-    ]);
-    try { console.log('[lr-route] won by', winner.source, '|', winner.routeLabel, '| out:', winner.outAmount, '| min:', winner.otherAmountThreshold, '| ixs:', winner.instructions.length, '| alts:', winner.alts.length); } catch {}
-    return winner;
-  } catch (agg) {
-    const errs = (agg?.errors || []).map(e => e?.message || String(e)).join('  |  ');
-    throw new Error('No route via Jupiter — ' + (errs || 'all endpoints failed'));
-  }
+    console.log('[lr-pump]', action, '| builder:', data.builder,
+      '| expected:', data.expectedTokens || data.expectedSol,
+      '| ixs:', data.instructions.length,
+      '| feeConfigOk:', data.feeConfigOk, '| rpc:', data.rpcHost);
+  } catch {}
+  return {
+    instructions: data.instructions.map(deserIx),
+    expectedTokens: data.expectedTokens || null,
+    expectedSol:    data.expectedSol    || null,
+  };
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -927,7 +730,7 @@ function usePresets() {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   SETTINGS MODAL (unchanged)
+   SETTINGS MODAL
    ════════════════════════════════════════════════════════════════════ */
 function SettingsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets, onClose }) {
   const [buyDraft,  setBuyDraft]  = useState(buyPresets);
@@ -1013,12 +816,14 @@ function SettingsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets,
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   TRADE MODAL — Jupiter. Collects amount, shows the 3% fee split, and
-   on confirm calls onConfirm({ mode, swapParams, token }).
-     • BUY: user enters X SOL → wallet pays X * 1.03 (X to swap, 0.03 X
-       to FEE_WALLET).
-     • SELL: user enters % of holding → full token amount to swap,
-       3% of SOL output to FEE_WALLET (skimmed off worst-case).
+   TRADE MODAL
+     BUY  : user enters X SOL. Trade portion sent to server = 0.97 X.
+            Client prepends SystemProgram.transfer of 0.03 X SOL to
+            FEE_WALLET. Total wallet debit = X.
+     SELL : user enters % of holding. Full token amount goes to the
+            pump curve. Client appends SystemProgram.transfer of 3%
+            of expectedSol to FEE_WALLET, after the curve has paid
+            native SOL into the user's wallet.
    ════════════════════════════════════════════════════════════════════ */
 function TradeModal({
   token, initialMode, onClose, onConfirm,
@@ -1030,42 +835,36 @@ function TradeModal({
   const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState(null);
 
-  useEffect(() => {
-    setAmount('');
-    setError(null);
-  }, [mode]);
-
-  // Clear stale errors when the user changes the amount — without this,
-  // a failed attempt would leave the Confirm button permanently disabled
-  // until the user switched BUY/SELL tabs.
+  useEffect(() => { setAmount(''); setError(null); }, [mode]);
   useEffect(() => { setError(null); }, [amount]);
 
   const isBuy = mode === 'buy';
   const presets = isBuy ? buyPresets : sellPresets;
 
-  // BUY  → user enters X SOL. tradeLamports = X*1e9 (full input to swap).
-  //        feeLamports = 3% of X. totalLamports = tradeLamports+feeLamports
-  //        (what the wallet is debited).
-  // SELL → user enters percent of holding. tradeTokens = pct% of balance
-  //        (full input to swap). Fee in SOL is computed AFTER we get the
-  //        Jupiter quote (3% of otherAmountThreshold).
+  // BUY  → user enters X SOL.
+  //   totalLamports = X * 1e9               (wallet debit = X)
+  //   tradeLamports = floor(X * 1e9 * 0.97) (to pump curve via server)
+  //   feeLamports   = totalLamports - tradeLamports  (to FEE_WALLET)
+  // SELL → user enters percent.
+  //   tradeTokens   = pct% of holding (raw units) → full sell
+  //   fee in SOL is computed AFTER server returns expectedSol
   const swapParams = useMemo(() => {
     if (!amount) return null;
     const n = Number(amount);
     if (!Number.isFinite(n) || n <= 0) return null;
 
     if (isBuy) {
-      const tradeLamports = BigInt(Math.floor(n * 1e9));
-      if (tradeLamports <= 0n) return null;
-      const feeLamports   = (tradeLamports * BigInt(FEE_BPS)) / 10000n;
-      const totalLamports = tradeLamports + feeLamports;
+      const totalLamports = BigInt(Math.floor(n * 1e9));
+      if (totalLamports <= 0n) return null;
+      const tradeLamports = (totalLamports * BigInt(10000 - FEE_BPS)) / 10000n;
+      const feeLamports   = totalLamports - tradeLamports;
+      if (tradeLamports <= 0n || feeLamports <= 0n) return null;
       return {
         mode: 'buy',
-        inputMint: SOL_MINT,
-        solAmount: n,                              // what user typed
-        tradeLamports: tradeLamports.toString(),   // 100% → Jupiter swap input
-        feeLamports:   feeLamports.toString(),     // 3% of X → FEE_WALLET (on top)
-        totalLamports: totalLamports.toString(),   // 103% → wallet debit
+        solAmount: n,
+        totalLamports: totalLamports.toString(),
+        tradeLamports: tradeLamports.toString(),
+        feeLamports:   feeLamports.toString(),
       };
     }
 
@@ -1076,26 +875,22 @@ function TradeModal({
     const decimals = tokenBalance.decimals || token.decimals || 6;
     return {
       mode: 'sell',
-      inputMint: token.mint,
       decimals,
       percentage: pct,
-      tradeTokens:   tradeTokens.toString(),                                   // 100% → Jupiter swap input
+      tradeTokens:   tradeTokens.toString(),
       tradeTokensUi: Number(tradeTokens) / Math.pow(10, decimals),
     };
   }, [amount, isBuy, token, tokenBalance]);
 
-  // Rough estimate of what the user receives, from the current price feed
-  // (token USD price + SOL USD price). Real amount comes from the chain at
-  // execution; labelled "(est.)" and bounded by the 30% slippage shown below.
+  // Display estimate from the current price feed; the on-chain amount comes
+  // from the pump curve at sign-time. Marked "(est.)".
   const estReceive = useMemo(() => {
     if (!swapParams || !(token?.price > 0) || !(solPrice > 0)) return null;
     if (swapParams.mode === 'buy') {
-      // Full entered amount goes to the swap (fee is on top, not from this).
       const tradeSol = Number(swapParams.tradeLamports) / 1e9;
       const tokens = (tradeSol * solPrice) / token.price;
       return tokens > 0 ? { tokens } : null;
     }
-    // SELL: gross SOL out, then user keeps 97%.
     const grossSol = (swapParams.tradeTokensUi * token.price) / solPrice;
     const netSol   = grossSol * (1 - FEE_BPS / 10000);
     return netSol > 0 ? { sol: netSol } : null;
@@ -1104,17 +899,10 @@ function TradeModal({
   const ownedUiAmount = tokenBalance?.uiAmount || 0;
   const availSol = Math.max(0, (solBalance?.uiAmount || 0) - SOL_RESERVE);
 
-  // Sells now skim fee from output SOL — no ATA to create, no rent. Just
-  // a small cushion for tx + priority fees.
-  const solForSellFees = (solBalance?.uiAmount || 0) >= 0.001;
-
   const hasFunds = (() => {
     if (!amount || Number(amount) <= 0) return false;
-    if (isBuy) {
-      // Wallet debit = entered * 1.03. Must fit inside the reserve-protected balance.
-      return (Number(amount) * BUY_DEBIT_MULT) <= availSol;
-    }
-    return ownedUiAmount > 0 && solForSellFees;
+    if (isBuy) return Number(amount) <= availSol;
+    return ownedUiAmount > 0 && (solBalance?.uiAmount || 0) >= 0.003; // tx + priority
   })();
 
   const handleConfirm = async () => {
@@ -1122,8 +910,7 @@ function TradeModal({
     setConfirming(true);
     setError(null);
     try {
-      const result = await onConfirm({ mode, swapParams, token });
-      if (result?.closed !== false) { /* parent closes us */ }
+      await onConfirm({ mode, swapParams, token });
     } catch (e) {
       setError(friendlyError(e));
       setConfirming(false);
@@ -1131,10 +918,8 @@ function TradeModal({
   };
 
   const setMaxBuy = () => {
-    if (!isBuy) return;
-    // Leave headroom for the 3% bump so wallet can never overdraw.
-    const m = Math.max(0, availSol / BUY_DEBIT_MULT);
-    if (m > 0) setAmount(String(Math.floor(m * 10000) / 10000));
+    if (!isBuy || availSol <= 0) return;
+    setAmount(String(Math.floor(availSol * 10000) / 10000));
   };
 
   const confirmDisabled = confirming || !swapParams || !hasFunds || !!error;
@@ -1231,16 +1016,12 @@ function TradeModal({
             <div className="lr-trade-details">
               <div className="lr-trade-detail-row">
                 <span>Route</span>
-                <span className="lr-trade-detail-val">Jupiter</span>
-              </div>
-              <div className="lr-trade-detail-row">
-                <span>Max slippage</span>
-                <span className="lr-trade-detail-val">{(JUP_SLIPPAGE_BPS / 100).toFixed(1)}%</span>
+                <span className="lr-trade-detail-val">pump.fun bonding curve</span>
               </div>
               {isBuy ? (
                 <>
                   <div className="lr-trade-detail-row">
-                    <span>Swapping</span>
+                    <span>To curve</span>
                     <span className="lr-trade-detail-val">
                       {formatSol(Number(swapParams.tradeLamports) / 1e9)} SOL
                     </span>
@@ -1293,9 +1074,7 @@ function TradeModal({
           )}
 
           {error && (
-            <div className="lr-trade-banner lr-trade-banner-error">
-              {error}
-            </div>
+            <div className="lr-trade-banner lr-trade-banner-error">{error}</div>
           )}
 
           <button type="button"
@@ -1309,13 +1088,13 @@ function TradeModal({
                 : !hasFunds
                   ? (isBuy
                       ? 'Insufficient SOL'
-                      : (ownedUiAmount <= 0 ? ('No ' + token.sym + ' to sell') : 'Need ~0.001 SOL for fees'))
+                      : (ownedUiAmount <= 0 ? ('No ' + token.sym + ' to sell') : 'Need ~0.003 SOL for fees'))
                   : (isBuy ? ('🍭 Buy ' + amount + ' SOL of $' + token.sym)
                            : ('💸 Sell ' + Math.min(100, Number(amount)) + '% of $' + token.sym))}
           </button>
 
           <p className="lr-trade-footer">
-            Routed via <b style={{ color: 'var(--ink)' }}>Jupiter</b> · Your keys, your coins
+            Routed via <b style={{ color: 'var(--ink)' }}>pump.fun</b> · Your keys, your coins
           </p>
         </div>
       </div>
@@ -1324,7 +1103,7 @@ function TradeModal({
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   LAUNCH CARD (unchanged)
+   LAUNCH CARD
    ════════════════════════════════════════════════════════════════════ */
 function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
   const signals = useMemo(() => deriveSignalBadges(token), [token]);
@@ -1402,8 +1181,7 @@ function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   MAIN COMPONENT — Jupiter Swap API path. All UI, balance fetching,
-   polling, presets, toasts, confetti unchanged.
+   MAIN COMPONENT
    ════════════════════════════════════════════════════════════════════ */
 export default function LaunchRadar({ onConnectWallet } = {}) {
   useLrCSS();
@@ -1543,11 +1321,8 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
           };
         }
       }
-      if (best) {
-        setBalances(prev => ({ ...prev, [mintStr]: best }));
-      } else {
-        setBalances(prev => ({ ...prev, [mintStr]: { amount: '0', decimals: 6, uiAmount: 0 } }));
-      }
+      if (best) setBalances(prev => ({ ...prev, [mintStr]: best }));
+      else      setBalances(prev => ({ ...prev, [mintStr]: { amount: '0', decimals: 6, uiAmount: 0 } }));
     } catch (e) {
       console.warn('[lr] single-token balance failed', e?.message);
     }
@@ -1601,161 +1376,134 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   }, [confettiKey]);
 
   /* ════════════════════════════════════════════════════════════════
-     JUPITER SWAP — atomic 3% fee paid in SOL → FEE_WALLET.
-       1. findRoute() races Ultra V3, V2 build, and V1 quote+swap in
-          parallel. First valid route wins, normalized to
-          { source, instructions, alts, outAmount, otherAmountThreshold }.
-          Whichever endpoint catches the token first gets us a trade.
-       2. Insert OUR SOL fee instruction at the canonical position:
-            BUY  → after compute-budget ixs (before swap setup), so the
-                   fee transfer is the first thing that runs other than
-                   the compute budget.
-            SELL → appended at the very end, so the fee transfer runs
-                   AFTER Jupiter's WSOL unwrap (the SOL must be in the
-                   user's wallet before we move 3% out).
-          BUY fee  = 3% of entered SOL (deterministic; user's wallet
-                     is debited 1.03 × X).
-          SELL fee = 3% of otherAmountThreshold (worst-case output) —
-                     guarantees the fee transfer never overdraws even
-                     if slippage hits the 15% cap.
-       3. Fresh blockhash, recompile with the SAME LUTs.
-       4. User signs ONCE. Phantom sims against fresh chain state at
-          sign-time and shows the user — that IS our sim. We don't run
-          a redundant local simulateTransaction; would drift from
-          Phantom's by a few seconds and kill clean trades on flaky RPC.
-       5. Send. Rebroadcast the exact signed bytes until the tx
-          confirms, errors on-chain, or the blockhash expires.
+     executeSwap — pump.fun bonding curve. One signed tx, atomic 3%
+     SOL fee. Flow:
+       1. POST /api/pumpfun/trade → instructions + expected{Tokens|Sol}
+       2. Build the fee transfer (SystemProgram.transfer)
+            BUY  → fee = 3% of entered SOL
+            SELL → fee = 3% of expectedSol
+       3. Splice the fee transfer:
+            BUY  → PREPEND (right after compute-budget ixs)
+            SELL → APPEND (after the curve has paid SOL into wallet)
+       4. Add compute-budget ixs at the front (200k units, 1M micro-
+          lamports priority) so we don't fight other tx for the slot.
+       5. Compile v0 message (NO ALTs — pump ixs don't use lookup
+          tables), sign once, send with skipPreflight (Phantom already
+          sim'd at the popup), rebroadcast same bytes until confirmed
+          or blockhash expires.
      ════════════════════════════════════════════════════════════════ */
   const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
-      if (!wallet.publicKey || !wallet.signTransaction) {
-        throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
-      }
-      if (!swapParams) throw new Error('Nothing to trade.');
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
+    }
+    if (!swapParams) throw new Error('Nothing to trade.');
 
-      const isBuy  = mode === 'buy';
-      const userPk = wallet.publicKey;
+    const isBuy  = mode === 'buy';
+    const userPk = wallet.publicKey;
 
-      // 1. Race three Jupiter endpoints. First valid route wins.
-      const route = await findRoute({
-        inputMint:   isBuy ? SOL_MINT   : token.mint,
-        outputMint:  isBuy ? token.mint : SOL_MINT,
-        amount:      isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
-        slippageBps: JUP_SLIPPAGE_BPS,
-        userPk,
-        connection,
+    // 1. Ask the server for instructions.
+    const route = await getPumpRoute({
+      action: isBuy ? 'buy' : 'sell',
+      mint:   token.mint,
+      user:   userPk,
+      amount: isBuy ? swapParams.tradeLamports : swapParams.tradeTokens,
+    });
+
+    // 2. Build the SOL fee transfer.
+    let feeIx;
+    if (isBuy) {
+      const feeLamports = BigInt(swapParams.feeLamports);
+      if (feeLamports <= 0n) throw new Error('Fee rounds to zero — amount too small.');
+      feeIx = SystemProgram.transfer({
+        fromPubkey: userPk,
+        toPubkey:   FEE_WALLET,
+        lamports:   Number(feeLamports),
       });
+    } else {
+      const expectedSol = BigInt(route.expectedSol || '0');
+      const feeLamports = (expectedSol * BigInt(FEE_BPS)) / 10000n;
+      if (feeLamports <= 0n) throw new Error('Fee rounds to zero — amount too small.');
+      feeIx = SystemProgram.transfer({
+        fromPubkey: userPk,
+        toPubkey:   FEE_WALLET,
+        lamports:   Number(feeLamports),
+      });
+    }
 
-      // 2. Build OUR SOL fee instruction.
-      let feeIx;
-      if (isBuy) {
-        const feeLamports = BigInt(swapParams.feeLamports);
-        if (feeLamports <= 0n) throw new Error('Fee rounds to zero — amount too small.');
-        feeIx = SystemProgram.transfer({
-          fromPubkey: userPk,
-          toPubkey:   FEE_WALLET,
-          lamports:   Number(feeLamports),
-        });
-      } else {
-        // 3% of WORST-CASE SOL output. otherAmountThreshold is the on-chain
-        // slippage floor — fee can never overdraw even at 15% slippage.
-        const minOut      = BigInt(route.otherAmountThreshold || route.outAmount || '0');
-        const feeLamports = (minOut * BigInt(FEE_BPS)) / 10000n;
-        if (feeLamports <= 0n) throw new Error('Fee rounds to zero — amount too small.');
-        feeIx = SystemProgram.transfer({
-          fromPubkey: userPk,
-          toPubkey:   FEE_WALLET,
-          lamports:   Number(feeLamports),
-        });
+    // 3. Compute-budget at the front + splice fee.
+    const ixs = [
+      ComputeBudgetProgram.setComputeUnitLimit({ units: 250_000 }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 1_000_000 }),
+    ];
+    if (isBuy) {
+      ixs.push(feeIx);
+      for (const ix of route.instructions) ixs.push(ix);
+    } else {
+      for (const ix of route.instructions) ixs.push(ix);
+      ixs.push(feeIx);
+    }
+
+    // 4. Fresh blockhash, compile v0 (no ALTs needed for pump).
+    const latest = await connection.getLatestBlockhash('confirmed');
+    const message = new TransactionMessage({
+      payerKey:        userPk,
+      recentBlockhash: latest.blockhash,
+      instructions:    ixs,
+    }).compileToV0Message([]);
+    const tx = new VersionedTransaction(message);
+
+    // 5. Sign once. Phantom sims against fresh chain state itself.
+    const signed = await wallet.signTransaction(tx);
+    const raw = signed.serialize();
+
+    // 6. Send.
+    let sig;
+    try {
+      sig = await connection.sendRawTransaction(raw, {
+        skipPreflight: true,
+        maxRetries:    5,
+      });
+    } catch (sendErr) {
+      let logs = sendErr?.logs || null;
+      if (!logs && typeof sendErr?.getLogs === 'function') {
+        try { logs = await sendErr.getLogs(connection); } catch {}
       }
+      console.error('[lr-send] rejected:', sendErr?.message, logs ? '\n' + logs.join('\n') : '');
+      throw new Error(describeSimLogs(logs, sendErr?.message));
+    }
 
-      // 3. Splice fee into the route's instruction list at the right spot.
-      //    BUY  → after the leading compute-budget ixs, before the rest.
-      //    SELL → appended at the end (after Jupiter's WSOL unwrap).
-      const CB_PROGRAM = 'ComputeBudget111111111111111111111111111111';
-      const ixs = route.instructions.slice();
-      if (isBuy) {
-        let insertAt = 0;
-        while (insertAt < ixs.length && ixs[insertAt].programId.toBase58() === CB_PROGRAM) insertAt++;
-        ixs.splice(insertAt, 0, feeIx);
-      } else {
-        ixs.push(feeIx);
-      }
-
-      // 4. Fresh blockhash so we don't race Jupiter's, then compile with
-      //    the SAME LUTs the route returned.
-      const latest = await connection.getLatestBlockhash('confirmed');
-      const newMessage = new TransactionMessage({
-        payerKey:        userPk,
-        recentBlockhash: latest.blockhash,
-        instructions:    ixs,
-      }).compileToV0Message(route.alts);
-      const newTx = new VersionedTransaction(newMessage);
-
-      // 5. User signs. Phantom runs its own sim against fresh chain state
-      //    when popping up the approval — that IS the sim. We do not run
-      //    a redundant local simulateTransaction (would only drift from
-      //    Phantom's and risk killing clean trades on flaky RPC).
-      const signed = await wallet.signTransaction(newTx);
-
-      // 6. Send. Phantom already sim'd at sign-time against fresh chain
-      //    state — that IS our sim. We skip the RPC's preflight (it's a
-      //    SECOND sim, runs seconds later, drifts on volatile pump.fun
-      //    launches, and rejects clean trades that Phantom already
-      //    approved). If price actually moved past the on-chain slippage
-      //    guard, the chain rejects it and the rebroadcast loop below
-      //    catches the on-chain err — never a phantom "sim failed".
-      const raw = signed.serialize();
-      let sig;
+    // 7. Rebroadcast same bytes until confirmed or blockhash expires.
+    let confirmed = false, onchainErr = null;
+    const startedAt = Date.now();
+    const HARD_CAP_MS = 60_000;
+    while (Date.now() - startedAt < HARD_CAP_MS) {
       try {
-        sig = await connection.sendRawTransaction(raw, {
-          skipPreflight: true,
-          maxRetries:    5,
-        });
-      } catch (sendErr) {
-        let logs = sendErr?.logs || null;
-        if (!logs && typeof sendErr?.getLogs === 'function') {
-          try { logs = await sendErr.getLogs(connection); } catch {}
-        }
-        console.error('[lr-send] rejected:', sendErr?.message, logs ? '\n' + logs.join('\n') : '');
-        throw new Error(describeSimLogs(logs, sendErr?.message));
-      }
+        const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+        if (st?.value?.err) { onchainErr = st.value.err; break; }
+        const cs = st?.value?.confirmationStatus;
+        if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+      } catch {}
+      try {
+        const h = await connection.getBlockHeight('confirmed');
+        if (h > latest.lastValidBlockHeight) break;
+      } catch {}
+      try { await connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch {}
+      await new Promise(r => setTimeout(r, 2000));
+    }
+    if (onchainErr) {
+      console.warn('[lr-confirm] on-chain err:', JSON.stringify(onchainErr));
+      throw new Error('Trade failed on-chain — price likely moved past slippage.');
+    }
 
-      // 7. Persistently rebroadcast the SAME signed bytes until the tx
-      //    confirms, errors on-chain, or its blockhash expires. We never
-      //    rebuild or re-sign — same bytes the user signed in Phantom.
-      let confirmed = false, onchainErr = null;
-      const startedAt = Date.now();
-      const HARD_CAP_MS = 60_000;
-      while (Date.now() - startedAt < HARD_CAP_MS) {
-        try {
-          const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-          if (st?.value?.err) { onchainErr = st.value.err; break; }
-          const cs = st?.value?.confirmationStatus;
-          if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-        } catch { /* RPC hiccup — keep trying */ }
-        try {
-          const h = await connection.getBlockHeight('confirmed');
-          if (h > latest.lastValidBlockHeight) break;
-        } catch {}
-        try { await connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch {}
-        await new Promise(r => setTimeout(r, 2000));
-      }
-      if (onchainErr) {
-        console.warn('[lr-confirm] on-chain err:', JSON.stringify(onchainErr));
-        throw new Error('Trade failed on-chain — price likely moved past slippage.');
-      }
-
-      // 8. Estimated output for the toast (net of fee for sells).
-      let outAmount = 0;
-      if (isBuy && route.outAmount) {
-        outAmount = Number(route.outAmount) / Math.pow(10, token.decimals || 6);
-      } else if (!isBuy && route.outAmount) {
-        const gross  = Number(route.outAmount) / 1e9;
-        const minOut = Number(route.otherAmountThreshold || route.outAmount) / 1e9;
-        const fee    = minOut * (FEE_BPS / 10000);
-        outAmount = Math.max(0, gross - fee);
-      }
-      return { sig, confirmed, outAmount, mode, token, source: route.source };
+    // 8. Estimated output for the toast.
+    let outAmount = 0;
+    if (isBuy && route.expectedTokens) {
+      outAmount = Number(route.expectedTokens) / Math.pow(10, token.decimals || 6);
+    } else if (!isBuy && route.expectedSol) {
+      const gross = Number(route.expectedSol) / 1e9;
+      outAmount = Math.max(0, gross * (1 - FEE_BPS / 10000));
+    }
+    return { sig, confirmed, outAmount, mode, token };
   }, [wallet, connection]);
 
   /* ──── card actions ──── */
