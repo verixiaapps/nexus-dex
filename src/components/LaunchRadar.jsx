@@ -901,7 +901,7 @@ function TradeModal({
     setError(null);
     try {
       const result = await onConfirm({
-        mode, swapParams, token,
+        mode, swapParams, token, quote,
         outAmount: outAmountUi || 0,
       });
       if (result?.closed !== false) { /* parent closes us */ }
@@ -1328,162 +1328,141 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   }, [confettiKey]);
 
   /* ════════════════════════════════════════════════════════════════
-     SWAP — MATCHES SWAPWIDGET EXACTLY.
-     1. Fresh quote+build via /api/jupiter/build (net amount after fee)
-     2. Manual fee transfer ix (SOL transfer for BUY, SPL for SELL)
-     3. Assemble: computeBudget → fee → setup → swap → cleanup → other
-     4. Simulate → sign → send → confirm with polling fallback
+     SWAP — copied from SwapWidget handleSwap verbatim.
+     Only difference: receives args instead of reading component state.
      ════════════════════════════════════════════════════════════════ */
-  const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
-    if (!wallet.publicKey || !wallet.signTransaction) throw new Error('Wallet not connected');
+  const executeSwap = useCallback(async ({ mode, swapParams, token, build }) => {
+      if (!wallet.publicKey || !wallet.signTransaction) {
+        throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
+      }
+      if (!build || !swapParams) {
+        throw new Error('No quote available — try again.');
+      }
 
-    const { rawAmount, inputMint, outputMint, inputDecimals, outputDecimals } = swapParams;
+      const dec = swapParams.inputDecimals;
+      const inputMint = swapParams.inputMint;
+      const rawAmount = swapParams.rawAmount;
 
-    // 1) Fresh quote+build — same endpoint as SwapWidget
-    const netAmount = ((BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n).toString();
-    const params = new URLSearchParams({
-      inputMint,
-      outputMint,
-      amount:      netAmount,
-      slippageBps: String(SLIPPAGE_BPS),
-      taker:       wallet.publicKey.toBase58(),
-    });
-    const r = await fetch('/api/jupiter/build?' + params);
-    if (!r.ok) {
-      const body = await r.json().catch(() => ({}));
-      throw new Error(body.error || 'Quote failed (' + r.status + ')');
-    }
-    const build = await r.json();
-    if (!build?.swapInstruction) throw new Error('No route available');
+      const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
+      if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
 
-    // 2) Fee instructions — same as SwapWidget
-    const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
-    if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
+      const feeIxs = [];
+      if (inputMint === SOL_MINT) {
+        feeIxs.push(SystemProgram.transfer({
+          fromPubkey: wallet.publicKey,
+          toPubkey:   FEE_WALLET,
+          lamports:   Number(feeAmount),
+        }));
+      } else {
+        const mintPk = new PublicKey(inputMint);
+        const mintInfo = await connection.getAccountInfo(mintPk);
+        if (!mintInfo) throw new Error('Input mint not found on-chain.');
+        const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+          ? TOKEN_2022_PROGRAM_ID
+          : TOKEN_PROGRAM_ID;
 
-    const feeIxs = [];
-    if (inputMint === SOL_MINT) {
-      // BUY: input is SOL → simple lamport transfer
-      feeIxs.push(SystemProgram.transfer({
-        fromPubkey: wallet.publicKey,
-        toPubkey:   FEE_WALLET,
-        lamports:   Number(feeAmount),
-      }));
-    } else {
-      // SELL: input is SPL token → transferChecked to fee wallet
-      const mintPk = new PublicKey(inputMint);
-      const mintInfo = await connection.getAccountInfo(mintPk);
-      if (!mintInfo) throw new Error('Input mint not found on-chain.');
-      const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
-        ? TOKEN_2022_PROGRAM_ID
-        : TOKEN_PROGRAM_ID;
+        const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
+        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
 
-      const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
-      const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
+        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+          wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
+        ));
+        feeIxs.push(createTransferCheckedInstruction(
+          sourceAta, mintPk, destAta, wallet.publicKey,
+          feeAmount, dec, [], tokenProgram,
+        ));
+      }
 
-      feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
-        wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
-      ));
-      feeIxs.push(createTransferCheckedInstruction(
-        sourceAta, mintPk, destAta, wallet.publicKey,
-        feeAmount, inputDecimals, [], tokenProgram,
-      ));
-    }
+      const ixs = [];
+      if (Array.isArray(build.computeBudgetInstructions))
+        for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
 
-    // 3) Assemble — same order as SwapWidget
-    const ixs = [];
-    if (Array.isArray(build.computeBudgetInstructions))
-      for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
+      for (const ix of feeIxs) ixs.push(ix);
 
-    for (const ix of feeIxs) ixs.push(ix);
+      if (Array.isArray(build.setupInstructions))
+        for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+      if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+      if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+      if (Array.isArray(build.otherInstructions))
+        for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
 
-    if (Array.isArray(build.setupInstructions))
-      for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
-    if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
-    if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
-    if (Array.isArray(build.otherInstructions))
-      for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
+      const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+      let alts = [];
+      if (altKeys.length > 0) {
+        const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
+        alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
+          key:   new PublicKey(k),
+          state: AddressLookupTableAccount.deserialize(infos[i].data),
+        }) : null).filter(Boolean);
+      }
 
-    // 4) ALTs
-    const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
-    let alts = [];
-    if (altKeys.length > 0) {
-      const infos = await connection.getMultipleAccountsInfo(altKeys.map(k => new PublicKey(k)));
-      alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
-        key:   new PublicKey(k),
-        state: AddressLookupTableAccount.deserialize(infos[i].data),
-      }) : null).filter(Boolean);
-    }
+      const latest = await connection.getLatestBlockhash('confirmed');
+      const message = new TransactionMessage({
+        payerKey:        wallet.publicKey,
+        recentBlockhash: latest.blockhash,
+        instructions:    ixs,
+      }).compileToV0Message(alts);
+      const tx = new VersionedTransaction(message);
 
-    // 5) Compile, simulate, sign, send — same as SwapWidget
-    const latest = await connection.getLatestBlockhash('confirmed');
-    const message = new TransactionMessage({
-      payerKey:        wallet.publicKey,
-      recentBlockhash: latest.blockhash,
-      instructions:    ixs,
-    }).compileToV0Message(alts);
-    const tx = new VersionedTransaction(message);
+      const mapSimErr = (logs) => {
+        const j = (logs || []).join('\n').toLowerCase();
+        if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+        if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
+        if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+        if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
+        return null;
+      };
+      try {
+        const sim = await connection.simulateTransaction(tx, {
+          replaceRecentBlockhash: true,
+          sigVerify: false,
+        });
+        if (sim.value.err) {
+          throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
+        }
+      } catch (simErr) {
+        if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
+          throw simErr;
+        }
+        console.warn('[swap] sim non-fatal', simErr);
+      }
 
-    // Simulate
-    const mapSimErr = (logs) => {
-      const j = (logs || []).join('\n').toLowerCase();
-      if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
-      if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
-      if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
-      if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
-      return null;
-    };
-    try {
-      const sim = await connection.simulateTransaction(tx, {
-        replaceRecentBlockhash: true,
-        sigVerify: false,
+      const signed = await wallet.signTransaction(tx);
+
+      const sig = await connection.sendRawTransaction(signed.serialize(), {
+        skipPreflight: false,
+        maxRetries: 3,
       });
-      if (sim.value.err) {
-        throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
-      }
-    } catch (simErr) {
-      if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
-        throw simErr;
-      }
-      console.warn('[swap] sim non-fatal', simErr);
-    }
 
-    const signed = await wallet.signTransaction(tx);
-
-    const sig = await connection.sendRawTransaction(signed.serialize(), {
-      skipPreflight: false,
-      maxRetries: 3,
-    });
-
-    // Confirm — same as SwapWidget
-    let confirmed = false;
-    try {
-      const conf = await Promise.race([
-        connection.confirmTransaction({
-          signature: sig,
-          blockhash: latest.blockhash,
-          lastValidBlockHeight: latest.lastValidBlockHeight,
-        }, 'confirmed'),
-        new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
-      ]);
-      if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
-      confirmed = true;
-    } catch (cfErr) {
-      const deadline = Date.now() + 20_000;
-      while (Date.now() < deadline) {
-        await new Promise(r => setTimeout(r, 2000));
-        try {
-          const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-          const cs = st?.value?.confirmationStatus;
-          if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-          if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
-        } catch (e) {
-          if (/failed on-chain/i.test(String(e.message))) throw e;
+      let confirmed = false;
+      try {
+        const conf = await Promise.race([
+          connection.confirmTransaction({
+            signature: sig,
+            blockhash: latest.blockhash,
+            lastValidBlockHeight: latest.lastValidBlockHeight,
+          }, 'confirmed'),
+          new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
+        ]);
+        if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
+        confirmed = true;
+      } catch (cfErr) {
+        const deadline = Date.now() + 20_000;
+        while (Date.now() < deadline) {
+          await new Promise(r => setTimeout(r, 2000));
+          try {
+            const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+            const cs = st?.value?.confirmationStatus;
+            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+            if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
+          } catch (e) {
+            if (/failed on-chain/i.test(String(e.message))) throw e;
+          }
         }
       }
-    }
 
-    const outAmount = Number(build.outAmount || 0) / Math.pow(10, outputDecimals);
-    return { sig, confirmed, outAmount, mode, token };
+      const outAmount = Number(build.outAmount || 0) / Math.pow(10, swapParams.outputDecimals);
+      return { sig, confirmed, outAmount, mode, token };
   }, [wallet, connection]);
 
   /* ──── card actions ──── */
@@ -1496,8 +1475,8 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     setTradeOpen({ token, mode: 'sell' });
   }, [requireWallet]);
 
-  const handleTradeConfirm = useCallback(async ({ mode, swapParams, token, outAmount: estOut }) => {
-    const { sig, confirmed, outAmount } = await executeSwap({ mode, swapParams, token });
+  const handleTradeConfirm = useCallback(async ({ mode, swapParams, token, quote, outAmount: estOut }) => {
+    const { sig, confirmed, outAmount } = await executeSwap({ mode, swapParams, token, build: quote });
     if (confirmed) fireConfetti();
 
     const shareUrl = buildShareUrl();
