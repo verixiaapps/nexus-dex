@@ -1,22 +1,26 @@
 """
-build_nexus_dex_hubs.py -- v2.0 (Verixia / v18.4)
+build_nexus_dex_hubs.py -- v2.1 (Verixia / swap.v migration)
 
-Builds hub landing pages from the keyword cluster mapping.
+What changed from v2.0 -> v2.1:
+  - OUTPUT_DIR moved from "defi" to "public" so hub pages ship at
+    https://swap.verixiaapps.com/<hub-slug>/ (same origin as the approved
+    swap dApp). This fixes the Phantom "new website" warning when users
+    sign trades from a hub page.
+  - Canonical URLs / og:url / JSON-LD CollectionPage url all point to the
+    new SWAP_SITE constant.
+  - Internal hrefs in related-link items emit "/<slug>/" instead of
+    "/nexus-dex/defi/<slug>/".
+  - BreadcrumbList position 2 changed from "Verixia" @ SITE/nexus-dex/defi/
+    to "Verixia Swap" @ SWAP_SITE/. Position 1 ("Home" @ SITE) preserved as
+    the parent-brand reference.
+  - Top-bar logo, top-bar "Open Verixia" pill, mid-page tool CTA, and the
+    breadcrumb Verixia link now all point at SWAP_SITE/. The breadcrumb
+    "Home" link still points at SITE (parent brand) — intentional.
+  - ItemList schema URLs use SWAP_SITE + the new short href.
+  - SITE (https://verixiaapps.com) stays in scope for the parent-brand
+    "Home" link and any other intentional parent references.
 
-What changed from v1.x -> v2.0:
-  - 11 hubs total (down from 20): 5 product surfaces + 5 commercial hubs +
-    1 catch-all fallback.
-  - Dropped all perps content (no Hyperliquid, no BTC/ETH/SOL perp hubs, no
-    altcoin perps, no prediction markets, no leverage/margin language).
-  - Consolidated 6 legacy xStocks hubs into a single brand-tokens hub.
-  - Brand tokens are treated as Solana SPL tokens that track popular brands.
-    No backing claims, no custody claims, no "1:1 backed" language, no
-    "regulated Swiss custody" language, no Backed Finance attribution.
-  - Memes hub uses Wonderland voice (degen-friendly but tasteful).
-  - Bridges hub covers cross-chain inbound to Solana from 9+ chains.
-  - BRAND_CASE, CHANNEL_HINTS, INTENT_HINTS scrubbed of Hyperliquid, MetaMask,
-    perp, prediction terms.
-  - HTML/CSS template preserved (Wonderland palette: mint/pink/violet).
+Content / HTML / CSS / cluster definitions are unchanged from v2.0.
 """
 
 import os
@@ -31,8 +35,13 @@ sys.path.append(BASE_DIR)
 from data.nexus_dex_clusters import CLUSTERS
 
 KEYWORDS_FILE = os.path.join(BASE_DIR, "data", "nexus_dex_generated_keywords.txt")
-OUTPUT_DIR    = os.path.join(BASE_DIR, "defi")
-SITE          = "https://verixiaapps.com"
+OUTPUT_DIR    = os.path.join(BASE_DIR, "public")
+
+# SITE is the parent brand origin. Only used for the top-level breadcrumb
+# "Home" link / BreadcrumbList position 1. Everything else now lives on
+# SWAP_SITE so the hub pages share an origin with the approved swap dApp.
+SITE      = "https://verixiaapps.com"
+SWAP_SITE = "https://swap.verixiaapps.com"
 
 MAX_LINKS_PER_HUB     = 50
 TOP_TOPICS_COUNT      = 8
@@ -793,7 +802,9 @@ def trim_meta_description(text, minimum=110, maximum=165):
 
 
 def build_canonical(slug):
-    return f"{SITE}/nexus-dex/defi/{slug}/"
+    # Hubs are served from swap.verixiaapps.com/<slug>/ (same origin as the
+    # approved swap dApp).
+    return f"{SWAP_SITE}/{slug}/"
 
 
 def page_path(slug):
@@ -909,7 +920,7 @@ def build_related_link_items(cluster_keywords):
         items.append({
             "slug":   slug,
             "title":  label,
-            "href":   f"/nexus-dex/defi/{slug}/",
+            "href":   f"/{slug}/",
             "anchor": label,
         })
     return items
@@ -1363,8 +1374,11 @@ def build_schema(hub_slug, hub_title, description, intro, link_items, matched_ke
             "@context": "https://schema.org",
             "@type": "BreadcrumbList",
             "itemListElement": [
+                # Position 1: parent brand home (intentional cross-origin
+                # reference back to verixiaapps.com).
                 {"@type": "ListItem", "position": 1, "name": "Home", "item": SITE},
-                {"@type": "ListItem", "position": 2, "name": "Verixia", "item": f"{SITE}/nexus-dex/defi/"},
+                # Position 2: the swap dApp root, same origin as this page.
+                {"@type": "ListItem", "position": 2, "name": "Verixia Swap", "item": f"{SWAP_SITE}/"},
                 {"@type": "ListItem", "position": 3, "name": hub_title, "item": canonical},
             ],
         },
@@ -1378,7 +1392,9 @@ def build_schema(hub_slug, hub_title, description, intro, link_items, matched_ke
                 {
                     "@type": "ListItem",
                     "position": index + 1,
-                    "url": f"{SITE}{item['href']}",
+                    # item['href'] is now "/<slug>/", so the absolute URL
+                    # lands on swap.verixiaapps.com.
+                    "url": f"{SWAP_SITE}{item['href']}",
                     "name": item["anchor"],
                 }
                 for index, item in enumerate(link_items)
@@ -1648,13 +1664,13 @@ p,li{{font-size:16px;}}
 <body>
 
 <div class="top-bar">
-  <a class="logo" href="{SITE}/nexus-dex/defi/">
+  <a class="logo" href="{SWAP_SITE}/">
     <span class="logo-dot"></span>
     <span>Verixia</span>
   </a>
   <div class="top-actions">
     <a class="app-top" href="https://apps.apple.com/app/id6759490910" target="_blank" rel="noopener noreferrer">Get App</a>
-    <a class="checker-top" href="{SITE}/nexus-dex/defi/">Open Verixia</a>
+    <a class="checker-top" href="{SWAP_SITE}/">Open Verixia</a>
   </div>
 </div>
 
@@ -1679,7 +1695,7 @@ p,li{{font-size:16px;}}
 
   <main class="content-section">
     <div class="breadcrumbs">
-      <a href="{SITE}/">Home</a> / <a href="{SITE}/nexus-dex/defi/">Verixia</a> / <span>{escape_html(hub_title)}</span>
+      <a href="{SITE}/">Home</a> / <a href="{SWAP_SITE}/">Verixia</a> / <span>{escape_html(hub_title)}</span>
     </div>
 
     <div class="hero-panel">
@@ -1702,7 +1718,7 @@ p,li{{font-size:16px;}}
     <div class="tool-cta-card">
       <h3>Ready to try it?</h3>
       <p>Connect a Solana wallet and start trading from your phone. No signup, no KYC, no centralized account, and one transaction signature per trade.</p>
-      <a class="tool-cta-button" href="{SITE}/nexus-dex/defi/">Open Verixia</a>
+      <a class="tool-cta-button" href="{SWAP_SITE}/">Open Verixia</a>
       <div class="tool-cta-note">Self-custodial | No signup | Works on mobile</div>
     </div>
 
@@ -1739,6 +1755,9 @@ def main():
     validation_warning_count = 0
     built_count = 0
     validation_details = []
+
+    print(f"Output dir: {OUTPUT_DIR}")
+    print(f"Canonical base: {SWAP_SITE}")
 
     for hub_slug, raw_match_terms in CLUSTERS.items():
         match_terms = iter_match_terms(raw_match_terms)
