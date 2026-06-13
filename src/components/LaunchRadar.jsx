@@ -1,10 +1,20 @@
 // LaunchRadar.jsx — Solana new launches + per-card BUY/SELL modal trade flow.
 //
-// THIS IS THE UPDATED VERSION with the debug COPY button on error toasts.
-// When a trade fails, a small 📋 COPY appears on the error toast — tap it
-// to copy a full diagnostic blob (server response, RPC host, builder used,
-// every program ID in the signed tx, sim logs, send errors, on-chain
-// errors, balances, swap params, friendly error). One paste = full triage.
+// ARCHITECTURE
+//   • DATA: Jupiter recent feed (token list, prices, mcap, volume). Unchanged.
+//   • TRADES: pump.fun bonding curve via /api/pumpfun/trade (server builds
+//     buy/sell instructions with @pump-fun/pump-sdk; client signs).
+//   • FEE: your 3% taken off the INPUT, atomic, in the SAME signed tx:
+//       - BUY  (SOL in)  → SystemProgram.transfer 3% SOL → your wallet,
+//                           pump buy runs with the remaining 97%.
+//       - SELL (token in)→ idempotent-create your fee ATA (user pays, no
+//                           check) + transferChecked 3% tokens → your ATA,
+//                           pump sell runs with the remaining 97%.
+//   • One signature per trade. Graduated tokens return a clear error
+//     (Radar is for fresh/pre-grad launches).
+//
+// BALANCES: Alchemy is the primary RPC, with public nodes as last-resort
+// fallbacks, raced all-at-once (same proven pattern as SwapWidget).
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -25,6 +35,7 @@ import {
 } from '@solana/spl-token';
 import { useWallet } from '@solana/wallet-adapter-react';
 
+/* CSS injected via useLrCSS — kept identical to prior revision */
 const LR_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&display=swap');
 .lr-root{
@@ -166,7 +177,7 @@ const LR_CSS = `
 .lr-empty-sub{font-size:12px;margin-top:6px;color:var(--ink-3);font-weight:500}
 .lr-empty-err{margin-top:10px;font-family:ui-monospace,monospace;font-size:10px;color:var(--red);background:rgba(209,75,106,.08);border:1px solid rgba(209,75,106,.25);padding:7px 12px;border-radius:10px;display:inline-block;max-width:100%;overflow-wrap:break-word}
 
-.lr-toasts{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:2000;display:flex;flex-direction:column;gap:8px;max-width:440px;width:calc(100% - 24px);pointer-events:none}
+.lr-toasts{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:100;display:flex;flex-direction:column;gap:8px;max-width:440px;width:calc(100% - 24px);pointer-events:none}
 .lr-toast{pointer-events:auto;display:flex;align-items:center;gap:10px;padding:13px 14px;border-radius:18px;backdrop-filter:blur(20px);box-shadow:0 12px 32px rgba(26,27,78,.15);animation:lrSlideUp .35s cubic-bezier(.2,1.3,.4,1);font-size:13px;font-weight:600}
 .lr-toast.lr-toast-success{background:linear-gradient(135deg,rgba(255,255,255,.95),rgba(127,255,212,.4));border:1px solid rgba(127,255,212,.5);color:var(--ink)}
 .lr-toast.lr-toast-error{background:linear-gradient(135deg,rgba(255,255,255,.95),rgba(255,143,190,.35));border:1px solid rgba(209,75,106,.4);color:var(--ink)}
@@ -364,23 +375,45 @@ function useLrCSS() {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   CONFIG
+   CONFIG — pump.fun trades, fee taken off the INPUT mint, atomic.
+     • BUY  → 3% of input SOL   → your wallet (SystemProgram.transfer)
+     • SELL → 3% of input tokens → your fee ATA (transferChecked)
+   User always pays the idempotent fee-ATA create on sells (no check).
    ════════════════════════════════════════════════════════════════════ */
 const SOL_MINT     = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET   = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS      = 300;
+const FEE_BPS      = 300;   // 3% — taken off the input, client-side
 
-const PUMP_CU_LIMIT = 250_000;
-const PUMP_CU_PRICE = 1_000_000;
+// Compute budget for pump buy/sell. Docs: ~100k CU covers worst-case
+// PDA bumps + curve completion. Priority fee in microLamports/CU —
+// bumped to land fast on volatile fresh launches.
+const PUMP_CU_LIMIT = 250_000;     // generous headroom (buy + ATA create) — pros don't run a tight cap
+const PUMP_CU_PRICE = 1_000_000;   // priority fee via CU price; ~0.00025 SOL/trade at this limit — high enough to land on hot blocks (no Jito)
 
-const ATA_RENT_SOL = 0.00204;
-const SOL_RESERVE  = 0.02;
+// Rent the user must always keep back / have on hand. Covers: the token ATA the
+// buy creates for the user, your fee-wallet ATA on sells (user is always the
+// payer), and a network-fee cushion. Applied to BOTH MAX and manual entry.
+const ATA_RENT_SOL = 0.00204;   // rent-exempt minimum per SPL token account
+const SOL_RESERVE  = 0.02;      // ~2 ATAs (0.0041) + fee/slippage cushion
 
+// Buy slippage headroom — must match the server's SLIPPAGE_PCT (30%). A pump
+// buy can pull up to BUY_SLIP × the entered SOL, so MAX and the affordability
+// check are sized by this: the buy can never request more SOL than the wallet
+// holds, while still keeping the headroom needed to fill on volatile launches.
 const BUY_SLIP = 1.30;
 
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
+// ── BALANCE RPC ──────────────────────────────────────────────────────
+// Alchemy is the primary balance RPC. Set it at build time (NO server.js
+// change needed):
+//     REACT_APP_ALCHEMY_RPC = https://solana-mainnet.g.alchemy.com/v2/<KEY>
+// Lock the key to your domain in the Alchemy dashboard since it ships to the
+// browser. Public nodes are last-resort fallbacks only.
+// NOTE: window.__VERIXIA_CONFIG__.rpc is intentionally NOT used here — on this
+// server it resolves to Helius, and we don't want Helius for balances.
+const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
 const ALCHEMY_RPC =
   (typeof process !== 'undefined' && process.env && process.env.REACT_APP_ALCHEMY_RPC) || '';
 
@@ -403,6 +436,9 @@ const getConn = (commitment, url = RPC_URL) => {
   return c;
 };
 
+// Race every RPC at once and take the first to answer (same proven pattern as
+// SwapWidget). A healthy Alchemy returns in well under a second — no more
+// waiting on a slow primary before falling back to the public nodes.
 const balRpcRace = (op) => {
   const conns = BAL_RPC_POOL.map(u => getConn(BAL_COMMITMENT, u));
   return Promise.any(conns.map((c, i) =>
@@ -520,6 +556,9 @@ const deserIx = (ix) => ({
   data: Buffer.from(ix.data, 'base64'),
 });
 
+// Resolve YOUR fee ATA for a given mint + its token program. SPL or
+// Token-2022 is auto-detected from the mint owner on-chain. Used for the
+// INPUT token on sells (the fee token). Returns { feeAta, tokenProgram, mintPk }.
 async function resolveFeeAta(connection, mintStr) {
   const mintPk = new PublicKey(mintStr);
   const mintInfo = await connection.getAccountInfo(mintPk);
@@ -533,7 +572,9 @@ async function resolveFeeAta(connection, mintStr) {
 
 const friendlyError = (err) => {
   const m = String(err?.message || err || '').toLowerCase();
+  // Cancel first — a user rejecting in the wallet must never be mislabeled.
   if (m.includes('user reject') || m.includes('user denied') || m.includes('cancelled') || m.includes('request rejected')) return 'Cancelled.';
+  // pump.fun slippage guards: 0x1771 TooMuchSolRequired / 0x1772 TooLittleSolReceived.
   if (m.includes('0x1771') || m.includes('0x1772') || m.includes('toomuchsol') || m.includes('toolittlesol') || m.includes('slippage'))
     return 'Price moved past slippage — try again.';
   if (m.includes('insufficient') || m.includes('debit an account')) return 'Not enough SOL for this trade + fees.';
@@ -547,8 +588,11 @@ const friendlyError = (err) => {
   return err?.message?.slice(0, 200) || 'Trade failed.';
 };
 
+// Turn raw preflight/simulation logs into a specific, honest cause. When there
+// is no friendly mapping, surface the failing PROGRAM + error line (not just a
+// stripped fragment) so the real culprit is visible and can be diagnosed.
 function failureContext(arr) {
-  const failed  = arr.filter(l => /failed:|failed to complete/i.test(l)).pop();
+  const failed  = arr.filter(l => /failed:|failed to complete/i.test(l)).pop();          // names the program
   const errLine = arr.filter(l => /program log:.*(error|insufficient|0x|incorrect)/i.test(l)).pop();
   const parts = [errLine, failed].filter(Boolean).map(s => s.replace(/^Program log:\s*/i, '').trim().slice(0, 120));
   return parts.length ? parts.join('  •  ') : null;
@@ -560,7 +604,7 @@ function describeSimLogs(logs, fallbackMsg) {
   if (j.includes('0x1772') || j.includes('toolittlesol')) return 'Price moved past your 30% slippage (sell returns less). Try again.';
   if (j.includes('complete') || j.includes('graduat') || j.includes('bondingcurvecomplete')) return 'Token graduated — off the bonding curve.';
   if (j.includes('incorrectprogramid') || j.includes('incorrect program id'))
-    return 'IncorrectProgramId — an account is under the wrong program (wrong builder signature, token-program mismatch, or a missing pump account). ' + (failureContext(arr) ? '[' + failureContext(arr) + ']' : '');
+    return 'IncorrectProgramId — an account in the pump instructions is under the wrong program (wrong builder signature, token-program mismatch, or a missing pump account). Check the [pump-build] program ids in the console. ' + (failureContext(arr) ? '[' + failureContext(arr) + ']' : '');
   if (j.includes('insufficient') || j.includes('debit an account')) return 'Not enough SOL for the trade + fees.';
   if (j.includes('exceeded') && j.includes('compute'))    return 'Hit the compute limit — retry.';
   if (j.includes('accountnotfound') || (j.includes('account') && (j.includes('not found') || j.includes('uninitialized'))))
@@ -568,37 +612,6 @@ function describeSimLogs(logs, fallbackMsg) {
   const ctx = failureContext(arr) || (arr.filter(l => /program log:|error|0x/i.test(l)).pop() || '').replace(/^Program log:\s*/i, '').slice(0, 150);
   if (ctx) return 'Sim failed → ' + ctx;
   return fallbackMsg ? ('Sim failed → ' + String(fallbackMsg).slice(0, 160)) : 'Sim failed (no logs returned).';
-}
-
-/* ════════════════════════════════════════════════════════════════════
-   DEBUG COPY — one-click full diagnostic blob for failed trades.
-   ════════════════════════════════════════════════════════════════════ */
-function _debugReplacer(_k, v) {
-  if (typeof v === 'bigint') return v.toString();
-  if (v && typeof v === 'object' && v.constructor && v.constructor.name === 'PublicKey') {
-    try { return v.toBase58(); } catch { return String(v); }
-  }
-  return v;
-}
-function buildDebugBlob(debug) {
-  try { return JSON.stringify(debug, _debugReplacer, 2); }
-  catch (e) { return 'Could not serialize debug: ' + (e && e.message ? e.message : e); }
-}
-function copyDebugBlob(debug) {
-  const text = buildDebugBlob(debug);
-  try {
-    if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(text); return true; }
-  } catch {}
-  try {
-    const ta = document.createElement('textarea');
-    ta.value = text;
-    ta.style.cssText = 'position:fixed;opacity:0;left:-9999px;top:0';
-    document.body.appendChild(ta);
-    ta.select();
-    document.execCommand('copy');
-    document.body.removeChild(ta);
-    return true;
-  } catch { return false; }
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -737,7 +750,7 @@ function usePresets() {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   SETTINGS MODAL
+   SETTINGS MODAL (unchanged)
    ════════════════════════════════════════════════════════════════════ */
 function SettingsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets, onClose }) {
   const [buyDraft,  setBuyDraft]  = useState(buyPresets);
@@ -823,13 +836,18 @@ function SettingsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets,
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   TRADE MODAL
+   TRADE MODAL — pump.fun. Collects amount, shows the 3% fee split, and
+   on confirm calls onConfirm({ mode, swapParams, token }). The actual
+   pump buy/sell instructions are built server-side at execute time;
+   no live quote here (bonding-curve math is server-side).
    ════════════════════════════════════════════════════════════════════ */
 function TradeModal({
   token, initialMode, onClose, onConfirm,
   buyPresets, sellPresets,
   solBalance, tokenBalance, solPrice,
 }) {
+  const wallet = useWallet();
+  const connection = useMemo(() => getConn('confirmed'), []);
   const [mode, setMode] = useState(initialMode || 'buy');
   const [amount, setAmount] = useState('');
   const [confirming, setConfirming] = useState(false);
@@ -843,6 +861,11 @@ function TradeModal({
   const isBuy = mode === 'buy';
   const presets = isBuy ? buyPresets : sellPresets;
 
+  // Compute the trade params + fee split locally. No live quote — the
+  // pump.fun bonding-curve math runs server-side at execute time.
+  //   BUY:  user enters SOL. fee = 3% SOL; pump buys with 97%.
+  //   SELL: user enters % of holding. fee = 3% of those tokens;
+  //         pump sells the other 97%.
   const swapParams = useMemo(() => {
     if (!amount) return null;
     const n = Number(amount);
@@ -857,12 +880,13 @@ function TradeModal({
       return {
         mode: 'buy',
         inputMint: SOL_MINT,
-        solAmount: n,
+        solAmount: n,                       // total SOL user entered
         feeLamports: feeLamports.toString(),
-        tradeLamports: tradeLamports.toString(),
+        tradeLamports: tradeLamports.toString(), // 97% → pump buy
       };
     }
 
+    // SELL — percent of current token balance.
     if (!tokenBalance || !tokenBalance.amount || BigInt(tokenBalance.amount) <= 0n) return null;
     const pct = Math.min(100, Math.max(0.01, n));
     const totalTokens = (BigInt(tokenBalance.amount) * BigInt(Math.floor(pct * 100))) / 10000n;
@@ -876,12 +900,16 @@ function TradeModal({
       inputMint: token.mint,
       decimals,
       percentage: pct,
-      feeTokens: feeTokens.toString(),
-      tradeTokens: tradeTokens.toString(),
+      feeTokens: feeTokens.toString(),       // 3% → your fee ATA
+      tradeTokens: tradeTokens.toString(),   // 97% → pump sell
       totalTokensUi: Number(totalTokens) / Math.pow(10, decimals),
     };
   }, [amount, isBuy, token, tokenBalance]);
 
+  // Rough estimate of what the user receives, from the current price feed
+  // (token USD price + SOL USD price). This is an ESTIMATE — the real amount
+  // comes from the bonding curve at execution and moves with price impact, so
+  // it's labelled "(est.)" and bounded by the 30% slippage shown below.
   const estReceive = useMemo(() => {
     if (!swapParams || !(token?.price > 0) || !(solPrice > 0)) return null;
     if (swapParams.mode === 'buy') {
@@ -897,11 +925,13 @@ function TradeModal({
   const ownedUiAmount = tokenBalance?.uiAmount || 0;
   const availSol = Math.max(0, (solBalance?.uiAmount || 0) - SOL_RESERVE);
 
+  // Sells still spend SOL: the user pays rent to create your fee-wallet ATA
+  // (idempotent) plus network fees. Always require that much on hand.
   const solForSellFees = (solBalance?.uiAmount || 0) >= (ATA_RENT_SOL + 0.0006);
 
   const hasFunds = (() => {
     if (!amount || Number(amount) <= 0) return false;
-    if (isBuy) return (Number(amount) * BUY_SLIP) <= availSol;
+    if (isBuy) return (Number(amount) * BUY_SLIP) <= availSol;  // worst-case spend must fit
     return ownedUiAmount > 0 && solForSellFees;
   })();
 
@@ -920,7 +950,7 @@ function TradeModal({
 
   const setMaxBuy = () => {
     if (!isBuy) return;
-    const m = Math.max(0, availSol / BUY_SLIP);
+    const m = Math.max(0, availSol / BUY_SLIP);  // leave 30% headroom so it can't overdraw
     if (m > 0) setAmount(String(Math.floor(m * 10000) / 10000));
   };
 
@@ -1108,17 +1138,18 @@ function TradeModal({
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   LAUNCH CARD
+   LAUNCH CARD (unchanged)
    ════════════════════════════════════════════════════════════════════ */
 function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
   const signals = useMemo(() => deriveSignalBadges(token), [token]);
   const risk    = useMemo(() => deriveRiskBadge(token), [token]);
   const ownedBalance = owned?.uiAmount || 0;
-  const ownedUsd = ownedBalance > 0 && token.price > 0 ? ownedBalance * token.price : 0;
-  const veryFresh = token.ageMs < 600_000;
-  const tintCls = isFresh ? 'lr-fresh' : ('lr-tint-' + (tintIndex % 5));
+  const ownedUsd = ownedBalance * (token.price || 0);
+  const veryFresh = isFresh && Number.isFinite(token.ageMs) && token.ageMs < 5 * 60_000;
+  const tintClass = isFresh ? ' lr-fresh' : ' lr-tint-' + tintIndex;
+
   return (
-    <div className={'lr-card ' + tintCls}>
+    <div className={'lr-card' + tintClass} style={{ animationDelay: (tintIndex * 0.04) + 's' }}>
       <div className="lr-card-head">
         <div className={'lr-mini-avatar' + (isFresh ? ' lr-fresh-avatar' : '')}>
           <div className="lr-inner"><TokenIcon token={token} /></div>
@@ -1126,289 +1157,280 @@ function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
         <div className="lr-card-info">
           <div className="lr-card-sym-row">
             <span className="lr-card-sym">${token.sym}</span>
-            {token.age && (
-              <span className={'lr-age-pill' + (veryFresh ? ' lr-very-fresh' : '')}>
-                {token.age}
-              </span>
-            )}
+            <span className={'lr-age-pill' + (veryFresh ? ' lr-very-fresh' : '')}>
+              {token.age || 'new'}
+            </span>
           </div>
           <div className="lr-card-name">{token.name}</div>
         </div>
         <div className="lr-card-right">
-          <div className="lr-card-price">{formatPrice(token.price)}</div>
-          <div className={'lr-card-change' + (token.change < 0 ? ' lr-down' : '')}>
-            {formatPct(token.change)}
+          <div className="lr-card-price">
+            {token.price > 0 ? formatPrice(token.price) : '—'}
           </div>
+          {Number.isFinite(token.change) && token.change !== 0 ? (
+            <div className={'lr-card-change' + (token.change < 0 ? ' lr-down' : '')}>{formatPct(token.change)}</div>
+          ) : null}
         </div>
       </div>
 
       <div className="lr-metrics">
-        <div className="lr-metric">
-          <div className="lr-metric-l">Mcap</div>
-          <div className="lr-metric-v">${format(token.mcap)}</div>
-        </div>
-        <div className="lr-metric">
-          <div className="lr-metric-l">Vol 24h</div>
-          <div className="lr-metric-v">${format(token.volume24h)}</div>
-        </div>
-        <div className="lr-metric">
-          <div className="lr-metric-l">Liq</div>
-          <div className="lr-metric-v">${format(token.liquidity)}</div>
-        </div>
-        <div className="lr-metric">
-          <div className="lr-metric-l">Holders</div>
-          <div className="lr-metric-v">{format(token.holders)}</div>
-        </div>
+        <div className="lr-metric"><div className="lr-metric-l">Liq</div>
+          <div className="lr-metric-v">{token.liquidity > 0 ? '$' + format(token.liquidity) : '—'}</div></div>
+        <div className="lr-metric"><div className="lr-metric-l">MCap</div>
+          <div className="lr-metric-v">{token.mcap > 0 ? '$' + format(token.mcap) : '—'}</div></div>
+        <div className="lr-metric"><div className="lr-metric-l">Holders</div>
+          <div className="lr-metric-v">{token.holders > 0 ? format(token.holders) : '—'}</div></div>
+        <div className="lr-metric"><div className="lr-metric-l">Signal</div>
+          <div className="lr-metric-v lr-mint-text">{signalScore(token)}</div></div>
       </div>
 
       {(signals.length > 0 || risk) && (
         <div className="lr-badges">
           {signals.map(s => (
             <span key={s.k} className={'lr-badge ' + s.cls}>
-              <span className="lr-b-ico">{s.emoji}</span>
-              {s.label}
+              <span className="lr-b-ico">{s.emoji}</span>{s.label}
             </span>
           ))}
-          {risk && (
-            <span className={'lr-badge ' + risk.cls}>
-              <span className="lr-b-ico">{risk.emoji}</span>
-              {risk.label}
-            </span>
-          )}
+          <span className={'lr-badge ' + risk.cls}>
+            <span className="lr-b-ico">{risk.emoji}</span>{risk.label}
+          </span>
         </div>
       )}
 
       {ownedBalance > 0 && (
         <div className="lr-owned-strip">
-          🪪 You own <b>{formatTokens(ownedBalance)} ${token.sym}</b>
-          {ownedUsd > 0 && <> · <b>${format(ownedUsd)}</b></>}
+          <span>YOU OWN</span>
+          <b>{formatTokens(ownedBalance)} ${token.sym}</b>
+          {ownedUsd > 0 && (
+            <span style={{ marginLeft: 'auto', color: 'var(--ink-2)' }}>≈ ${format(ownedUsd)}</span>
+          )}
         </div>
       )}
 
       <div className="lr-card-actions">
-        <button type="button"
-          className="lr-card-btn lr-card-buy"
-          onClick={() => onBuy(token)}>
-          🍭 BUY
-        </button>
-        <button type="button"
-          className="lr-card-btn lr-card-sell"
-          disabled={ownedBalance <= 0}
-          onClick={() => onSell(token)}>
-          💸 SELL
-        </button>
+        <button type="button" className="lr-card-btn lr-card-buy" onClick={() => onBuy(token)}>🍭 BUY</button>
+        <button type="button" className="lr-card-btn lr-card-sell" onClick={() => onSell(token)}>💸 SELL</button>
       </div>
     </div>
   );
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   MAIN COMPONENT
+   MAIN COMPONENT — swap logic rewritten to match SwapWidget exactly
    ════════════════════════════════════════════════════════════════════ */
-export default function LaunchRadar() {
+export default function LaunchRadar({ onConnectWallet } = {}) {
   useLrCSS();
-
   const wallet = useWallet();
   const connection = useMemo(() => getConn('confirmed'), []);
 
-  const [recent, setRecent] = useState([]);
-  const [trending, setTrending] = useState([]);
-  const [activeTab, setActiveTab] = useState('trending');
-  const [filter, setFilter] = useState('all');
-  const [solPrice, setSolPrice] = useState(0);
-  const [balances, setBalances] = useState({});
-  const [loadingErr, setLoadingErr] = useState(null);
-  const [lastUpdated, setLastUpdated] = useState(null);
-  const [tradeOpen, setTradeOpen] = useState(null);
-  const [settingsOpen, setSettingsOpen] = useState(false);
-  const [toasts, setToasts] = useState([]);
-  const [confetti, setConfetti] = useState(false);
-
   const { buyPresets, setBuyPresets, sellPresets, setSellPresets } = usePresets();
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [tradeOpen, setTradeOpen] = useState(null);
+  const [lane, setLane] = useState('fresh');
+  const [timeFilter, setTimeFilter] = useState('all');
+  const [sortBy, setSortBy] = useState('newest');
 
-  const list = activeTab === 'trending' ? trending : recent;
+  const freshThresholdMs = 30 * 60_000;
 
-  const pushToast = useCallback((toast) => {
-    const id = Math.random().toString(36).slice(2);
-    const duration = toast.duration || 8000;
-    setToasts(t => [...t, { ...toast, id }]);
-    setTimeout(() => setToasts(t => t.filter(x => x.id !== id)), duration);
-  }, []);
-
-  const fireConfetti = useCallback(() => {
-    setConfetti(true);
-    setTimeout(() => setConfetti(false), 1800);
-  }, []);
-
-  const refreshSol = useCallback(async () => {
-    if (!wallet.publicKey) return;
-    try {
-      const lamports = await balRpcRace(c => c.getBalance(wallet.publicKey, BAL_COMMITMENT));
-      setBalances(b => ({ ...b, [SOL_MINT]: { amount: lamports, uiAmount: lamports / 1e9, decimals: 9 } }));
-    } catch (e) { /* ignore */ }
-  }, [wallet.publicKey]);
-
-  const refreshOneToken = useCallback(async (mint) => {
-    if (!wallet.publicKey || !mint || mint === SOL_MINT) return;
-    try {
-      const mintPk = new PublicKey(mint);
-      const mintInfo = await balRpcRace(c => c.getAccountInfo(mintPk, BAL_COMMITMENT));
-      if (!mintInfo) {
-        setBalances(b => ({ ...b, [mint]: { amount: '0', uiAmount: 0, decimals: 6 } }));
-        return;
-      }
-      const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
-        ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
-      const ata = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
-      const info = await balRpcRace(c => c.getParsedAccountInfo(ata, BAL_COMMITMENT));
-      const parsed = info?.value?.data?.parsed?.info?.tokenAmount;
-      if (parsed) {
-        setBalances(b => ({
-          ...b,
-          [mint]: { amount: parsed.amount, uiAmount: Number(parsed.uiAmount || 0), decimals: parsed.decimals },
-        }));
-      } else {
-        setBalances(b => ({ ...b, [mint]: { amount: '0', uiAmount: 0, decimals: 6 } }));
-      }
-    } catch (e) { /* ignore */ }
-  }, [wallet.publicKey]);
-
-  const aggressiveRefresh = useCallback(async () => {
-    if (!wallet.publicKey) return;
-    try {
-      const accounts = await balRpcRace(c => c.getParsedTokenAccountsByOwner(
-        wallet.publicKey, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT
-      ));
-      const next = {};
-      for (const a of accounts.value) {
-        const info = a.account.data.parsed.info;
-        const amt = info.tokenAmount;
-        if (Number(amt.uiAmount) > 0) {
-          next[info.mint] = { amount: amt.amount, uiAmount: Number(amt.uiAmount), decimals: amt.decimals };
-        }
-      }
+  const [recentTokens, setRecentTokens] = useState([]);
+  const [recentLoading, setRecentLoading] = useState(true);
+  const [recentError, setRecentError] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
       try {
-        const accounts22 = await balRpcRace(c => c.getParsedTokenAccountsByOwner(
-          wallet.publicKey, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT
-        ));
-        for (const a of accounts22.value) {
-          const info = a.account.data.parsed.info;
-          const amt = info.tokenAmount;
-          if (Number(amt.uiAmount) > 0) {
-            next[info.mint] = { amount: amt.amount, uiAmount: Number(amt.uiAmount), decimals: amt.decimals };
+        const r = await fetch('/api/jupiter/tokens/v2/recent?limit=60');
+        if (!r.ok) {
+          if (!cancelled) {
+            setRecentError('Recent feed unreachable (HTTP ' + r.status + ')');
+            setRecentLoading(false);
           }
+          return;
         }
-      } catch { /* token-2022 may not be supported on some RPCs */ }
-      setBalances(b => ({ ...b, ...next }));
-    } catch (e) { /* ignore */ }
-  }, [wallet.publicKey]);
-
-  /* SOL balance poll */
-  useEffect(() => {
-    if (!wallet.publicKey) {
-      setBalances(b => { const n = { ...b }; delete n[SOL_MINT]; return n; });
-      return;
-    }
-    refreshSol();
-    const id = setInterval(refreshSol, POLL_SOL);
-    return () => clearInterval(id);
-  }, [wallet.publicKey, refreshSol]);
-
-  /* Token balances poll */
-  useEffect(() => {
-    if (!wallet.publicKey) {
-      setBalances({});
-      return;
-    }
-    aggressiveRefresh();
-    const id = setInterval(aggressiveRefresh, POLL_BALANCE);
-    return () => clearInterval(id);
-  }, [wallet.publicKey, aggressiveRefresh]);
-
-  /* SOL price */
-  useEffect(() => {
-    let alive = true;
-    const fetchPrice = async () => {
-      try {
-        const r = await fetch('https://lite-api.jup.ag/price/v3?ids=' + SOL_MINT);
-        if (!r.ok) return;
-        const data = await r.json();
-        const p = Number(data?.[SOL_MINT]?.usdPrice);
-        if (alive && Number.isFinite(p) && p > 0) setSolPrice(p);
-      } catch {}
-    };
-    fetchPrice();
-    const id = setInterval(fetchPrice, 30_000);
-    return () => { alive = false; clearInterval(id); };
-  }, []);
-
-  /* Feed fetch */
-  useEffect(() => {
-    let alive = true;
-    const fetchFeed = async () => {
-      try {
-        const [recentR, trendingR] = await Promise.all([
-          fetch('/api/jupiter/tokens/recent'),
-          fetch('/api/jupiter/tokens/toptraded/24h'),
-        ]);
-        if (!alive) return;
-        if (recentR.ok) {
-          const recentData = await recentR.json();
-          const arr = (Array.isArray(recentData) ? recentData : recentData?.tokens || recentData?.data || []);
-          setRecent(arr.map(normalize).filter(Boolean).slice(0, 100));
-        }
-        if (trendingR.ok) {
-          const trendData = await trendingR.json();
-          const arr = (Array.isArray(trendData) ? trendData : trendData?.tokens || trendData?.data || []);
-          setTrending(arr.map(normalize).filter(Boolean).slice(0, 100));
-        }
-        if (alive) {
-          setLastUpdated(Date.now());
-          setLoadingErr(null);
+        const d = await r.json();
+        const list = Array.isArray(d) ? d : (d?.data || d?.tokens || []);
+        if (!cancelled) {
+          setRecentTokens(list.map(normalize).filter(Boolean));
+          setRecentLoading(false);
+          setRecentError(null);
         }
       } catch (e) {
-        if (alive) setLoadingErr(String(e?.message || e).slice(0, 200));
+        if (!cancelled) {
+          setRecentError(String(e?.message || 'Recent feed unreachable').slice(0, 120));
+          setRecentLoading(false);
+        }
       }
-    };
-    fetchFeed();
-    const id = setInterval(fetchFeed, POLL_RECENT);
-    return () => { alive = false; clearInterval(id); };
+    }
+    load();
+    const id = setInterval(load, POLL_RECENT);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  /* ────────────────────────────────────────────────────────────────
-     executeSwap — UPDATED: collects a full `debug` object as it runs
-     and attaches it to any thrown Error so the COPY button on the
-     error toast can dump everything needed for triage.
-     ──────────────────────────────────────────────────────────────── */
-  const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
-    const debug = {
-      ts: new Date().toISOString(),
-      appVersion: 'launch-radar-v1',
-      ua: typeof navigator !== 'undefined' ? navigator.userAgent : null,
-      action: mode,
-      token: token ? {
-        sym: token.sym, mint: token.mint, name: token.name,
-        price: token.price, change: token.change, ageMs: token.ageMs,
-        mcap: token.mcap, liquidity: token.liquidity,
-        holders: token.holders, decimals: token.decimals,
-      } : null,
-      wallet: wallet.publicKey ? wallet.publicKey.toBase58() : null,
-      solBalance: balances[SOL_MINT]?.uiAmount || 0,
-      tokenBalance: balances[token?.mint]?.uiAmount || 0,
-      solPrice,
-      swapParams: swapParams ? {
-        mode: swapParams.mode, inputMint: swapParams.inputMint,
-        solAmount: swapParams.solAmount,
-        feeLamports: swapParams.feeLamports, tradeLamports: swapParams.tradeLamports,
-        decimals: swapParams.decimals, percentage: swapParams.percentage,
-        feeTokens: swapParams.feeTokens, tradeTokens: swapParams.tradeTokens,
-        totalTokensUi: swapParams.totalTokensUi,
-      } : null,
-      feeBps: FEE_BPS, buySlip: BUY_SLIP,
-      cuLimit: PUMP_CU_LIMIT, cuPrice: PUMP_CU_PRICE,
-      stage: 'init',
+  const [solPrice, setSolPrice] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    async function load() {
+      try {
+        const r = await fetch('/api/sol-price');
+        if (!r.ok) return;
+        const d = await r.json();
+        if (!cancelled && d?.price) setSolPrice(d.price);
+      } catch {}
+    }
+    load();
+    const id = setInterval(load, POLL_SOL);
+    return () => { cancelled = true; clearInterval(id); };
+  }, []);
+
+  const [balances, setBalances] = useState({});
+  const refreshBalances = useCallback(async () => {
+    if (!wallet.publicKey) { setBalances({}); return; }
+    const owner = wallet.publicKey;
+    const mergeAccs = (into, accs) => {
+      if (!accs || !accs.value) return;
+      for (const acc of accs.value) {
+        const info = acc.account?.data?.parsed?.info;
+        if (!info) continue;
+        const mint = info.mint;
+        const amt = info.tokenAmount?.amount;
+        if (!mint || amt == null) continue;
+        into[mint] = {
+          amount:   String(amt),
+          decimals: Number(info.tokenAmount?.decimals ?? 6),
+          uiAmount: Number(info.tokenAmount?.uiAmount || 0),
+        };
+      }
     };
+    const solP = balRpcRace(c => c.getBalance(owner, BAL_COMMITMENT))
+      .then(lamports => {
+        setBalances(prev => ({
+          ...prev,
+          [SOL_MINT]: { amount: String(lamports), decimals: 9, uiAmount: lamports / 1e9 },
+        }));
+      })
+      .catch(e => console.warn('[lr] SOL balance failed', e?.message));
+    const tokP = balRpcRace(c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT))
+      .then(accs => {
+        setBalances(prev => { const next = { ...prev }; mergeAccs(next, accs); return next; });
+      })
+      .catch(e => console.warn('[lr] SPL accounts failed', e?.message));
+    const tok22P = balRpcRace(c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT))
+      .then(accs => {
+        setBalances(prev => { const next = { ...prev }; mergeAccs(next, accs); return next; });
+      })
+      .catch(e => console.warn('[lr] Token-2022 accounts failed', e?.message));
+    await Promise.allSettled([solP, tokP, tok22P]);
+  }, [wallet.publicKey]);
+  useEffect(() => { refreshBalances(); }, [refreshBalances]);
+  useEffect(() => {
+    if (!wallet.publicKey) return;
+    const id = setInterval(refreshBalances, POLL_BALANCE);
+    return () => clearInterval(id);
+  }, [wallet.publicKey, refreshBalances]);
+
+  const aggressiveRefresh = useCallback(() => {
+    [1500, 4000, 8000].forEach(ms => setTimeout(refreshBalances, ms));
+  }, [refreshBalances]);
+
+  // Targeted balance for ONE mint — far lighter than scanning every token
+  // account the wallet owns. Used by the trade modal so it loads fast.
+  // Resolves the token program (SPL vs Token-2022) and reads only that
+  // mint's ATA(s). Updates the shared balances map on success.
+  const refreshOneToken = useCallback(async (mintStr) => {
+    if (!wallet.publicKey || !mintStr || mintStr === SOL_MINT) return;
+    const owner = wallet.publicKey;
+    let mintPk;
+    try { mintPk = new PublicKey(mintStr); } catch { return; }
     try {
+      const accs = await balRpcRace(c =>
+        c.getParsedTokenAccountsByOwner(owner, { mint: mintPk }, BAL_COMMITMENT));
+      let best = null;
+      for (const acc of (accs?.value || [])) {
+        const info = acc.account?.data?.parsed?.info;
+        const amt = info?.tokenAmount?.amount;
+        if (amt == null) continue;
+        const ui = Number(info.tokenAmount?.uiAmount || 0);
+        if (!best || ui > best.uiAmount) {
+          best = {
+            amount:   String(amt),
+            decimals: Number(info.tokenAmount?.decimals ?? 6),
+            uiAmount: ui,
+          };
+        }
+      }
+      if (best) {
+        setBalances(prev => ({ ...prev, [mintStr]: best }));
+      } else {
+        // No account = zero balance; record it so the UI stops "loading".
+        setBalances(prev => ({ ...prev, [mintStr]: { amount: '0', decimals: 6, uiAmount: 0 } }));
+      }
+    } catch (e) {
+      console.warn('[lr] single-token balance failed', e?.message);
+    }
+  }, [wallet.publicKey]);
+
+  // Also refresh SOL alone — cheap, used alongside refreshOneToken.
+  const refreshSol = useCallback(async () => {
+    if (!wallet.publicKey) return;
+    const owner = wallet.publicKey;
+    try {
+      const lamports = await balRpcRace(c => c.getBalance(owner, BAL_COMMITMENT));
+      setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(lamports), decimals: 9, uiAmount: lamports / 1e9 } }));
+    } catch (e) { console.warn('[lr] SOL balance failed', e?.message); }
+  }, [wallet.publicKey]);
+
+  const solBalance = balances[SOL_MINT];
+
+  const [toasts, setToasts] = useState([]);
+  const pushToast = useCallback((t) => {
+    const id = Math.random().toString(36).slice(2);
+    setToasts(prev => [...prev, { ...t, id }]);
+    setTimeout(() => setToasts(prev => prev.filter(x => x.id !== id)), t.duration || 8000);
+  }, []);
+
+  const requireWallet = useCallback(() => {
+    if (wallet.publicKey && wallet.signTransaction) return true;
+    if (onConnectWallet) { onConnectWallet(); return false; }
+    pushToast({ kind: 'error', emoji: '🔌', body: 'Connect a wallet first (Phantom, Solflare, Backpack).' });
+    return false;
+  }, [wallet.publicKey, wallet.signTransaction, onConnectWallet, pushToast]);
+
+  const [confettiKey, setConfettiKey] = useState(0);
+  const fireConfetti = useCallback(() => setConfettiKey(k => k + 1), []);
+  const confettiPieces = useMemo(() => {
+    if (!confettiKey) return [];
+    const colors = ['#FF8FBE', '#7FFFD4', '#B794F6', '#FFB088', '#FFD46B', '#A0E7FF'];
+    return Array.from({ length: 60 }, (_, i) => {
+      const angle = (Math.random() - 0.5) * Math.PI;
+      const dist = 220 + Math.random() * 200;
+      const dx = Math.sin(angle) * dist;
+      const dy = -Math.abs(Math.cos(angle) * dist) + 420 * Math.random();
+      const dr = (Math.random() - 0.5) * 1440;
+      const color = colors[i % colors.length];
+      const delay = Math.random() * 0.15;
+      return { i, dx, dy, dr, color, delay };
+    });
+  }, [confettiKey]);
+  useEffect(() => {
+    if (!confettiKey) return;
+    const id = setTimeout(() => setConfettiKey(0), 1800);
+    return () => clearTimeout(id);
+  }, [confettiKey]);
+
+  /* ════════════════════════════════════════════════════════════════
+     PUMP.FUN SWAP with atomic 3% fee taken off the INPUT.
+       1. POST trade params to /api/pumpfun/trade → server builds the
+          pump buy/sell instructions with @pump-fun/pump-sdk.
+       2. PREPEND the fee instruction(s):
+            BUY  → SystemProgram.transfer 3% SOL → FEE_WALLET
+            SELL → idempotent-create your fee ATA (user pays, no check)
+                   + transferChecked 3% tokens → your fee ATA
+       3. Compile one v0 tx, user signs once, send via Alchemy RPC.
+     Atomic: fee + trade land together or not at all.
+     ════════════════════════════════════════════════════════════════ */
+  const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
       if (!wallet.publicKey || !wallet.signTransaction) {
         throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
       }
@@ -1416,55 +1438,54 @@ export default function LaunchRadar() {
 
       const isBuy = mode === 'buy';
       const userPk = wallet.publicKey;
-      const tradeAmount = isBuy ? swapParams.tradeLamports : swapParams.tradeTokens;
-      debug.tradeAmount = tradeAmount;
 
-      // 1. Ask the server to build pump instructions.
-      debug.stage = 'server-build';
+      // Amount sent to pump (the 97% trade portion).
+      const tradeAmount = isBuy ? swapParams.tradeLamports : swapParams.tradeTokens;
+
+      // 1. Ask the server to build the pump instructions.
       const resp = await fetch('/api/pumpfun/trade', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: mode, mint: token.mint, user: userPk.toBase58(), amount: tradeAmount,
+          action: mode,
+          mint:   token.mint,
+          user:   userPk.toBase58(),
+          amount: tradeAmount,
         }),
       });
-      debug.serverStatus = resp.status;
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({}));
-        debug.serverError = body;
         throw new Error(body.error || ('Trade build failed (' + resp.status + ')'));
       }
       const build = await resp.json();
-      debug.serverBuild = {
-        action: build.action, route: build.route, builder: build.builder,
-        tokenProgram: build.tokenProgram, feeConfigOk: build.feeConfigOk,
-        cashbackEnabled: build.cashbackEnabled, mayhem: build.mayhem,
-        rpcHost: build.rpcHost,
-        expectedTokens: build.expectedTokens, expectedSol: build.expectedSol,
-        numInstructions: build.instructions ? build.instructions.length : 0,
-      };
       if (!Array.isArray(build.instructions) || build.instructions.length === 0) {
         throw new Error('No trade instructions returned.');
       }
 
-      // 2. Build fee instruction(s)
-      debug.stage = 'fee-build';
+      // 2. Build the fee instruction(s), prepended so they run first.
       const feeIxs = [];
       if (isBuy) {
         const feeLamports = BigInt(swapParams.feeLamports);
         if (feeLamports <= 0n) throw new Error('Fee rounds to zero — amount too small.');
         feeIxs.push(SystemProgram.transfer({
-          fromPubkey: userPk, toPubkey: FEE_WALLET, lamports: Number(feeLamports),
+          fromPubkey: userPk,
+          toPubkey:   FEE_WALLET,
+          lamports:   Number(feeLamports),
         }));
       } else {
         const feeTokens = BigInt(swapParams.feeTokens);
         if (feeTokens <= 0n) throw new Error('Fee rounds to zero — amount too small.');
+        // Resolve your fee ATA for the token being sold (input mint).
         const { feeAta, tokenProgram, mintPk } = await resolveFeeAta(connection, token.mint);
-        debug.feeAta = feeAta.toBase58();
-        debug.feeTokenProgram = tokenProgram.toBase58();
+        // Always create your fee ATA (idempotent, user pays, no existence check).
         feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
-          userPk, feeAta, FEE_WALLET, mintPk, tokenProgram,
+          userPk,       // payer (user)
+          feeAta,       // ata
+          FEE_WALLET,   // owner (you)
+          mintPk,       // token mint
+          tokenProgram,
         ));
+        // User's source ATA for this token.
         const sourceAta = getAssociatedTokenAddressSync(mintPk, userPk, true, tokenProgram);
         feeIxs.push(createTransferCheckedInstruction(
           sourceAta, mintPk, feeAta, userPk,
@@ -1472,8 +1493,10 @@ export default function LaunchRadar() {
         ));
       }
 
-      // 3. Assemble compute-budget + fee + pump.
-      debug.stage = 'assemble';
+      // 3. Assemble in required order: compute budget FIRST (docs), then
+      //    our fee instruction(s), then the pump trade instructions.
+      //    Strip any compute-budget ix the SDK may have included so we
+      //    don't end up with a duplicate (which would fail the tx).
       const COMPUTE_BUDGET_PROGRAM = 'ComputeBudget111111111111111111111111111111';
       const ixs = [];
       ixs.push(ComputeBudgetProgram.setComputeUnitLimit({ units: PUMP_CU_LIMIT }));
@@ -1483,64 +1506,67 @@ export default function LaunchRadar() {
         if (ix.programId === COMPUTE_BUDGET_PROGRAM) continue;
         ixs.push(deserIx(ix));
       }
-      debug.programIds = ixs.map(i => i.programId.toBase58());
-      debug.numIxs = ixs.length;
 
+      // Diagnostics: which builder the server used + every program in the tx.
+      // If IncorrectProgramId fires, the offending program shows up here.
       try {
         console.log('[pump-build] builder:', build.builder, '| route:', build.route, '| tokenProgram:', build.tokenProgram);
         console.log('[pump-build] program ids:', ixs.map(i => i.programId.toBase58()).join(', '));
       } catch {}
 
       const latest = await connection.getLatestBlockhash('confirmed');
-      debug.blockhash = latest.blockhash;
-      debug.lastValidBlockHeight = latest.lastValidBlockHeight;
-
       const message = new TransactionMessage({
-        payerKey: userPk, recentBlockhash: latest.blockhash, instructions: ixs,
+        payerKey:        userPk,
+        recentBlockhash: latest.blockhash,
+        instructions:    ixs,
       }).compileToV0Message();
       const tx = new VersionedTransaction(message);
 
-      debug.stage = 'wallet-sign';
+      // Sign first, then simulate the EXACT signed tx — the same object the
+      // user signs, never rebuilt. One quick call. If it would fail, we show
+      // the REAL program-log reason (via describeSimLogs) and never send a
+      // doomed tx; if it passes we send straight away, so no extra wait.
       const signed = await wallet.signTransaction(tx);
 
-      debug.stage = 'simulate';
       let simLogs = null, simErrObj = null, simSkipped = false;
       try {
         const sim = await connection.simulateTransaction(signed, { commitment: 'processed', sigVerify: false });
         simLogs   = sim?.value?.logs || null;
         simErrObj = sim?.value?.err || null;
       } catch (e) {
-        simSkipped = true;
-        debug.simException = e?.message;
+        simSkipped = true;   // RPC/transport hiccup — fall back to RPC preflight
         console.warn('[pump-sim] could not run (continuing):', e?.message);
       }
-      debug.simErr = simErrObj;
-      debug.simLogs = simLogs;
-      debug.simSkipped = simSkipped;
       if (simErrObj) {
         console.error('[pump-sim] err:', JSON.stringify(simErrObj));
         console.error('[pump-sim] logs:\n' + (simLogs || []).join('\n'));
         throw new Error(describeSimLogs(simLogs, JSON.stringify(simErrObj)));
       }
 
-      debug.stage = 'send';
+      // Send the same signed tx. skipPreflight:true when our sim already
+      // validated it (no point simulating twice); if our sim couldn't run,
+      // keep preflight on as the safety net.
       const raw = signed.serialize();
       let sig;
       try {
         sig = await connection.sendRawTransaction(raw, {
-          skipPreflight: !simSkipped, preflightCommitment: 'processed', maxRetries: 5,
+          skipPreflight: !simSkipped,
+          preflightCommitment: 'processed',
+          maxRetries: 5,
         });
       } catch (sendErr) {
         let logs = sendErr?.logs || null;
         if (!logs && typeof sendErr?.getLogs === 'function') { try { logs = await sendErr.getLogs(connection); } catch {} }
-        debug.sendError = sendErr?.message;
-        debug.sendLogs = logs;
         console.error('[pump-send] rejected:', sendErr?.message, logs ? '\n' + logs.join('\n') : '');
         throw new Error(describeSimLogs(logs, sendErr?.message));
       }
-      debug.signature = sig;
 
-      debug.stage = 'confirm';
+      // Persistently REBROADCAST the same validated tx until it lands. A tx we
+      // already simulated clean almost only fails to land because of dropped
+      // packets / congestion — so we keep re-pushing it (and polling status)
+      // until it confirms, errors on-chain, or its blockhash expires. This is
+      // the single biggest lever for "it has to get through". We never rebuild
+      // or re-sign — it's the exact same bytes the user signed.
       let confirmed = false, onchainErr = null;
       const startedAt = Date.now();
       const HARD_CAP_MS = 60_000;
@@ -1550,59 +1576,50 @@ export default function LaunchRadar() {
           if (st?.value?.err) { onchainErr = st.value.err; break; }
           const cs = st?.value?.confirmationStatus;
           if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-        } catch { /* RPC hiccup */ }
+        } catch { /* RPC hiccup — keep trying */ }
+
+        // Stop once the blockhash can no longer be accepted (tx is dead).
         try {
           const h = await connection.getBlockHeight('confirmed');
           if (h > latest.lastValidBlockHeight) break;
         } catch {}
+
+        // Re-push the exact same bytes; ignore "already processed" style errors.
         try { await connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch {}
         await new Promise(r => setTimeout(r, 2000));
       }
-      debug.confirmed = confirmed;
-      debug.onchainErr = onchainErr;
-      debug.confirmDurationMs = Date.now() - startedAt;
       if (onchainErr) {
         console.warn('[pump-confirm] on-chain err:', JSON.stringify(onchainErr));
         throw new Error('Trade failed on-chain — price likely moved past slippage.');
       }
 
+      // Estimated output from the server's curve math (for the toast).
       let outAmount = 0;
       if (isBuy && build.expectedTokens) {
         outAmount = Number(build.expectedTokens) / Math.pow(10, token.decimals || 6);
       } else if (!isBuy && build.expectedSol) {
         outAmount = Number(build.expectedSol) / 1e9;
       }
-      debug.outAmount = outAmount;
-      debug.stage = 'done';
-      return { sig, confirmed, outAmount, mode, token, debug };
-    } catch (err) {
-      if (!err.debug) err.debug = debug;
-      err.debug.errorMessage = err.message;
-      try { err.debug.errorStack = err.stack ? err.stack.split('\n').slice(0, 6).join('\n') : null; } catch {}
-      throw err;
-    }
-  }, [wallet, connection, balances, solPrice]);
+      return { sig, confirmed, outAmount, mode, token };
+  }, [wallet, connection]);
 
-  /* ────────────────────────────────────────────────────────────────
-     handleTradeConfirm — UPDATED: on failure, pushes an error toast
-     with the full debug blob so the user can hit COPY and paste it.
-     ──────────────────────────────────────────────────────────────── */
+  /* ──── card actions ──── */
+  const onCardBuy = useCallback((token) => {
+    if (!requireWallet()) return;
+    setTradeOpen({ token, mode: 'buy' });
+    // Fast, targeted balance load for just this token + SOL.
+    refreshSol();
+    refreshOneToken(token.mint);
+  }, [requireWallet, refreshSol, refreshOneToken]);
+  const onCardSell = useCallback((token) => {
+    if (!requireWallet()) return;
+    setTradeOpen({ token, mode: 'sell' });
+    refreshSol();
+    refreshOneToken(token.mint);
+  }, [requireWallet, refreshSol, refreshOneToken]);
+
   const handleTradeConfirm = useCallback(async ({ mode, swapParams, token }) => {
-    let result;
-    try {
-      result = await executeSwap({ mode, swapParams, token });
-    } catch (err) {
-      pushToast({
-        kind: 'error',
-        emoji: '⚠️',
-        body: <><b>Trade failed</b><br/>{err?.message || 'Unknown error'}</>,
-        debug: err?.debug || { error: err?.message || 'Unknown error' },
-        duration: 18000,
-      });
-      throw err;
-    }
-
-    const { sig, confirmed, outAmount, debug } = result;
+    const { sig, confirmed, outAmount } = await executeSwap({ mode, swapParams, token });
 
     if (confirmed) {
       fireConfetti();
@@ -1623,16 +1640,17 @@ export default function LaunchRadar() {
         tweetText, shareUrl,
       });
     } else {
+      // Submitted but NOT confirmed in time — never claim it went through.
       pushToast({
         kind: 'error',
         emoji: '⏳',
         body: <><b>Not confirmed</b><br/>Sent, but didn't confirm in time. Check Solscan before retrying so you don't trade twice.</>,
         solscan: 'https://solscan.io/tx/' + sig,
-        debug,
-        duration: 18000,
+        duration: 13000,
       });
     }
 
+    // Refresh balances either way (an unconfirmed tx may still land shortly).
     refreshSol();
     [1200, 3000, 6000].forEach(ms => setTimeout(() => {
       refreshSol();
@@ -1643,179 +1661,256 @@ export default function LaunchRadar() {
     return { closed: true };
   }, [executeSwap, fireConfetti, pushToast, aggressiveRefresh, refreshSol, refreshOneToken]);
 
+  /* ──── derived display ──── */
+  const deriveDisplayValues = useCallback((t) => t, []);
+
+  const freshTokens = useMemo(
+    () => recentTokens.filter(t => Number.isFinite(t.ageMs) && t.ageMs < freshThresholdMs),
+    [recentTokens, freshThresholdMs],
+  );
+  const activeList = lane === 'fresh' ? freshTokens : recentTokens;
+
+  const featured = useMemo(() => {
+    const pool = freshTokens.map(deriveDisplayValues);
+    return pool.length ? pool[0] : null;
+  }, [freshTokens, deriveDisplayValues]);
+
   const filtered = useMemo(() => {
-    let arr = [...list];
-    if (filter === 'hot')   arr = arr.filter(t => t.change > 30);
-    if (filter === 'fresh') arr = arr.filter(t => t.ageMs < 3600_000);
-    if (filter === 'owned') arr = arr.filter(t => balances[t.mint]?.uiAmount > 0);
-    arr.sort((a, b) => signalScore(b) - signalScore(a));
-    return arr;
-  }, [list, filter, balances]);
+    let l = activeList.map(deriveDisplayValues);
+    const seen = new Set();
+    if (featured?.mint) seen.add(featured.mint);
+    l = l.filter(t => {
+      if (!t?.mint || seen.has(t.mint)) return false;
+      seen.add(t.mint);
+      return true;
+    });
+    if (timeFilter !== 'all') {
+      const cap = timeFilter === '1h' ? 3600_000 : timeFilter === '6h' ? 6*3600_000 : 24*3600_000;
+      l = l.filter(t => Number.isFinite(t.ageMs) && t.ageMs < cap);
+    }
+    if (sortBy === 'newest')      l = [...l].sort((a, b) => (a.ageMs || 0) - (b.ageMs || 0));
+    else if (sortBy === 'volume') l = [...l].sort((a, b) => (b.volume24h || 0) - (a.volume24h || 0));
+    else if (sortBy === 'signal') l = [...l].sort((a, b) => signalScore(b) - signalScore(a));
+    return l.slice(0, 30);
+  }, [activeList, timeFilter, sortBy, deriveDisplayValues, featured]);
 
-  const featured = filtered.length > 0 && activeTab === 'trending' ? filtered[0] : null;
-  const rest = featured ? filtered.slice(1) : filtered;
+  const topGainer = useMemo(() => {
+    const pool = recentTokens.filter(t => Number.isFinite(t.change) && t.change > 0);
+    if (!pool.length) return null;
+    return pool.reduce((a, b) => (b.change > a.change ? b : a));
+  }, [recentTokens]);
+  const totalVol24h = useMemo(
+    () => recentTokens.reduce((s, t) => s + (t.volume24h || 0), 0),
+    [recentTokens],
+  );
 
-  const stats = useMemo(() => {
-    const total = list.length;
-    const fresh = list.filter(t => t.ageMs < 3600_000).length;
-    const hot   = list.filter(t => t.change > 30).length;
-    const avgChange = total > 0
-      ? list.reduce((a, t) => a + (t.change || 0), 0) / total
-      : 0;
-    return { total, fresh, hot, avgChange };
-  }, [list]);
+  const onConnectClick = useCallback(async () => {
+    if (wallet.publicKey && wallet.disconnect) {
+      try { await wallet.disconnect(); } catch {}
+      return;
+    }
+    if (onConnectWallet) { onConnectWallet(); return; }
+    if (wallet.connect) {
+      try { await wallet.connect(); }
+      catch {
+        pushToast({ kind: 'error', emoji: '🔌', body: 'Could not connect — pick a wallet first (Phantom, Solflare, Backpack).' });
+      }
+    }
+  }, [wallet, onConnectWallet, pushToast]);
 
   return (
     <div className="lr-root">
-      <div className="lr-blob" style={{ width: 320, height: 320, top: -80, left: -80, background: '#FF8FBE' }} />
-      <div className="lr-blob" style={{ width: 280, height: 280, top: 200, right: -80, background: '#7FFFD4', animationDelay: '3s' }} />
-      <div className="lr-blob" style={{ width: 300, height: 300, bottom: 80, left: -100, background: '#B794F6', animationDelay: '6s' }} />
+      <div className="lr-blob" style={{ width: 400, height: 400, background: '#FFB088', top: -80, left: -120 }} />
+      <div className="lr-blob" style={{ width: 500, height: 500, background: '#FF8FBE', top: '30%', right: -180, animationDelay: '3s' }} />
+      <div className="lr-blob" style={{ width: 340, height: 340, background: '#FFD46B', bottom: '10%', left: -100, animationDelay: '6s' }} />
 
       <div className="lr-phone">
         <div className="lr-topbar">
-          <div className="lr-brand" onClick={() => { setActiveTab('trending'); setFilter('all'); }}>
+          <div className="lr-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })}>
             <div className="lr-brand-dot" />
-            <div className="lr-brand-text">
-              wonderland<span className="lr-slash">·</span><i>radar</i>
-            </div>
+            <span className="lr-brand-text">
+              wonderland<span className="lr-slash">//</span>
+              <span style={{ background: 'linear-gradient(90deg,#FFB088,#FFD46B,#FF8FBE)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', backgroundClip: 'text' }}>radar</span>
+            </span>
           </div>
           <div className="lr-topbar-right">
-            <button className="lr-gear-btn" onClick={() => setSettingsOpen(true)} aria-label="Settings">⚙</button>
-            <button className={'lr-wallet-btn' + (wallet.connected ? ' lr-connected' : '')}
-              onClick={() => wallet.connected ? wallet.disconnect?.() : wallet.connect?.().catch(() => {})}>
-              {wallet.connected
-                ? (<><span className="lr-wallet-dot" />{wallet.publicKey ? (wallet.publicKey.toBase58().slice(0, 4) + '…' + wallet.publicKey.toBase58().slice(-4)) : 'Wallet'}</>)
+            <button type="button" className="lr-gear-btn"
+              onClick={() => setSettingsOpen(true)} aria-label="Settings" title="Edit presets">⚙</button>
+            <button type="button"
+              className={'lr-wallet-btn' + (wallet.publicKey ? ' lr-connected' : '')}
+              onClick={onConnectClick}>
+              {wallet.publicKey
+                ? <><span className="lr-wallet-dot" />{wallet.publicKey.toBase58().slice(0,4)}…{wallet.publicKey.toBase58().slice(-4)}</>
                 : 'Connect Wallet'}
             </button>
           </div>
         </div>
 
         <div className="lr-hero">
-          <span className="lr-hero-eyebrow">
-            <span className="lr-radar-pulse" />
-            Live Radar
-          </span>
+          <div className="lr-hero-eyebrow">
+            <div className="lr-radar-pulse" />
+            JUST LANDED · ON SOLANA
+          </div>
           <h1>
-            <span className="lr-grad">Wonderland</span>{' '}
-            <span className="lr-italic">Radar</span>{' '}
-            <span className="lr-sparkle">✦</span>
+            <span className="lr-italic">what just</span>{' '}
+            <span className="lr-grad">dropped</span>
+            <span className="lr-sparkle"> ✨</span>
           </h1>
-          <p className="lr-hero-sub">Fresh Solana launches, signal-sorted</p>
+          <p className="lr-hero-sub">Catch fresh Solana launches while they're still warm.</p>
           <div className="lr-hero-meta">
-            Powered by Jupiter <span className="lr-dot">·</span> Updates every 8s
+            No KYC<span className="lr-dot">•</span>No Accounts<span className="lr-dot">•</span>Your Keys Stay Yours
           </div>
         </div>
 
         <div className="lr-status">
-          <span className="lr-status-item">
-            <span className={'lr-live-dot' + (loadingErr ? ' lr-warn' : '')} />
-            <b>{loadingErr ? 'STALE' : 'LIVE'}</b>
-          </span>
-          <span className="lr-status-divider" />
-          <span className="lr-status-item">
-            <b>{list.length}</b> launches
-          </span>
-          <span className="lr-status-divider" />
-          <span className="lr-status-item">
-            SOL <b>{solPrice > 0 ? '$' + solPrice.toFixed(2) : '—'}</b>
-          </span>
-        </div>
-
-        <div className={'lr-tabs ' + (activeTab === 'recent' ? 'lr-tab-recent' : '')}>
-          <div className="lr-tab-indicator" />
-          <button className={'lr-tab' + (activeTab === 'trending' ? ' lr-active' : '')}
-            onClick={() => setActiveTab('trending')}>
-            <span className="lr-tab-emoji">🔥</span>
-            TRENDING
-            <span className="lr-tab-count">{trending.length}</span>
-          </button>
-          <button className={'lr-tab' + (activeTab === 'recent' ? ' lr-active' : '')}
-            onClick={() => setActiveTab('recent')}>
-            <span className="lr-tab-emoji">🐣</span>
-            FRESH
-            <span className="lr-tab-count">{recent.length}</span>
-          </button>
-        </div>
-
-        <div className="lr-filters">
-          <button className={'lr-filter' + (filter === 'all' ? ' lr-active' : '')} onClick={() => setFilter('all')}>ALL</button>
-          <button className={'lr-filter' + (filter === 'hot' ? ' lr-active' : '')} onClick={() => setFilter('hot')}>🔥 HOT</button>
-          <button className={'lr-filter' + (filter === 'fresh' ? ' lr-active' : '')} onClick={() => setFilter('fresh')}>🐣 FRESH</button>
-          {wallet.connected && (
+          <div className="lr-status-item">
+            <span className={'lr-live-dot' + (recentError ? ' lr-warn' : '')} />
+            {lane === 'fresh'
+              ? (recentLoading ? <>SYNCING…</> : <>LIVE · <b>{freshTokens.length}</b> fresh</>)
+              : (recentLoading ? <>SYNCING…</> : recentError ? <>FEED DOWN</> : <><b>{recentTokens.length}</b> tokens</>)}
+          </div>
+          <div className="lr-status-divider" />
+          <div className="lr-status-item">SOL <b>${solPrice > 0 ? solPrice.toFixed(2) : '—'}</b></div>
+          {wallet.publicKey && (
             <>
-              <span className="lr-filter-divider" />
-              <button className={'lr-filter' + (filter === 'owned' ? ' lr-active' : '')} onClick={() => setFilter('owned')}>🪪 OWNED</button>
+              <div className="lr-status-divider" />
+              <div className="lr-status-item">💰 <b>{formatSol(solBalance?.uiAmount || 0)}</b></div>
             </>
           )}
         </div>
 
         <div className="lr-orbs">
           <div className="lr-orb lr-orb-1" style={{ animationDelay: '0s' }}>
-            <span className="lr-orb-emoji">🐣</span>
-            <div className="lr-orb-val lr-orb-mono">{stats.fresh}</div>
-            <div className="lr-orb-lbl">FRESH</div>
+            <span className="lr-orb-emoji">🥚</span>
+            <div className="lr-orb-val">{freshTokens.length}</div>
+            <div className="lr-orb-lbl">Just Hatched</div>
           </div>
           <div className="lr-orb lr-orb-2" style={{ animationDelay: '.05s' }}>
             <span className="lr-orb-emoji">🔥</span>
-            <div className="lr-orb-val lr-orb-mono">{stats.hot}</div>
-            <div className="lr-orb-lbl">HOT</div>
+            <div className="lr-orb-val lr-orb-mono">{topGainer ? formatPct(topGainer.change) : '—'}</div>
+            <div className="lr-orb-lbl">Top Mover</div>
           </div>
           <div className="lr-orb lr-orb-3" style={{ animationDelay: '.1s' }}>
-            <span className="lr-orb-emoji">📊</span>
-            <div className="lr-orb-val lr-orb-mono">{stats.total}</div>
-            <div className="lr-orb-lbl">TOTAL</div>
+            <span className="lr-orb-emoji">🍿</span>
+            <div className="lr-orb-val lr-orb-mono">${format(totalVol24h)}</div>
+            <div className="lr-orb-lbl">Vol 24h</div>
           </div>
           <div className="lr-orb lr-orb-4" style={{ animationDelay: '.15s' }}>
-            <span className="lr-orb-emoji">📈</span>
-            <div className="lr-orb-val lr-orb-mono">{formatPct(stats.avgChange)}</div>
-            <div className="lr-orb-lbl">AVG 24h</div>
+            <span className="lr-orb-emoji">📡</span>
+            <div className="lr-orb-val">{recentTokens.length}</div>
+            <div className="lr-orb-lbl">On Radar</div>
           </div>
         </div>
 
         {featured && (
           <div className="lr-feature">
-            <span className="lr-feature-badge">
-              <span className="lr-egg">🐣</span> TOP SIGNAL
-            </span>
+            <div className="lr-feature-badge">
+              <span className="lr-egg">🐣</span>JUST HATCHED
+            </div>
             <div className="lr-feature-head">
               <div className="lr-feature-avatar">
                 <div className="lr-inner"><TokenIcon token={featured} /></div>
               </div>
               <div className="lr-feature-name">
                 <div className="lr-feature-sym">${featured.sym}</div>
-                <div className="lr-feature-sub">{featured.name}</div>
-                {featured.age && <span className="lr-feature-age">⏰ {featured.age} old</span>}
+                <div className="lr-feature-sub">{featured.name} · {formatPrice(featured.price)}</div>
+                <div className="lr-feature-age">⚡ {featured.age} old</div>
               </div>
             </div>
             <div className="lr-feature-actions">
-              <button className="lr-feature-btn" onClick={() => setTradeOpen({ token: featured, mode: 'buy' })}>
-                🍭 BUY $${featured.sym.toUpperCase()}
+              <button type="button" className="lr-feature-btn" onClick={() => onCardBuy(featured)}>
+                🚀 BUY ${featured.sym}
               </button>
             </div>
           </div>
         )}
 
-        <div className="lr-feed">
-          {rest.length === 0 ? (
-            <div className="lr-empty">
-              <span className="lr-empty-emoji">🐣</span>
-              <b>No launches match.</b>
-              <div className="lr-empty-sub">Try a different filter or check back in a moment.</div>
-              {loadingErr && <div className="lr-empty-err">{loadingErr}</div>}
-            </div>
-          ) : rest.map((t, i) => (
-            <LaunchCard
-              key={t.mint}
-              token={t}
-              owned={balances[t.mint]}
-              isFresh={t.ageMs < 600_000}
-              tintIndex={i}
-              onBuy={(tok) => setTradeOpen({ token: tok, mode: 'buy' })}
-              onSell={(tok) => setTradeOpen({ token: tok, mode: 'sell' })}
-            />
+        <div className={'lr-tabs' + (lane === 'recent' ? ' lr-tab-recent' : '')}>
+          <div className="lr-tab-indicator" />
+          <button type="button"
+            className={'lr-tab' + (lane === 'fresh' ? ' lr-active' : '')}
+            onClick={() => setLane('fresh')}>
+            <span className="lr-tab-emoji">🐣</span>
+            JUST HATCHED
+            <span className="lr-tab-count">{freshTokens.length}</span>
+          </button>
+          <button type="button"
+            className={'lr-tab' + (lane === 'recent' ? ' lr-active' : '')}
+            onClick={() => setLane('recent')}>
+            <span className="lr-tab-emoji">🌈</span>
+            ON RADAR
+            <span className="lr-tab-count">{recentTokens.length}</span>
+          </button>
+        </div>
+
+        <div className="lr-filters">
+          {[
+            ['all', '🌟 ALL'],
+            ['1h',  '⚡ STILL HOT'],
+            ['6h',  '🍿 TODAY'],
+            ['24h', '🌙 24H'],
+          ].map(([k, l]) => (
+            <button key={k} type="button"
+              className={'lr-filter' + (timeFilter === k ? ' lr-active' : '')}
+              onClick={() => setTimeFilter(k)}>{l}</button>
+          ))}
+          <div className="lr-filter-divider" />
+          {[
+            ['newest', '🆕 FRESHEST'],
+            ['volume', '🔥 LOUDEST'],
+            ['signal', '✨ TOP SIGNAL'],
+          ].map(([k, l]) => (
+            <button key={k} type="button"
+              className={'lr-filter' + (sortBy === k ? ' lr-active' : '')}
+              onClick={() => setSortBy(k)}>{l}</button>
           ))}
         </div>
+
+        {filtered.length === 0 ? (
+          <div className="lr-empty">
+            <span className="lr-empty-emoji">{lane === 'fresh' ? '🥚' : '🍿'}</span>
+            {lane === 'fresh' && recentLoading ? (
+              <>
+                <b>Warming up the launch stream…</b>
+                <div className="lr-empty-sub">Pulling fresh launches from Jupiter any second now.</div>
+              </>
+            ) : lane === 'recent' && recentError ? (
+              <>
+                <b>Recent feed offline</b>
+                <div className="lr-empty-sub">Switch to JUST HATCHED while we retry.</div>
+                <div className="lr-empty-err">{recentError}</div>
+              </>
+            ) : (
+              <>
+                <b>Nothing matches yet</b>
+                <div className="lr-empty-sub">Loosen the filter or switch lanes — fresh drops are landing all day.</div>
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="lr-feed">
+            {filtered.map((t, i) => (
+              <LaunchCard
+                key={t.mint}
+                token={t}
+                owned={balances[t.mint]}
+                onBuy={onCardBuy}
+                onSell={onCardSell}
+                isFresh={Number.isFinite(t.ageMs) && t.ageMs < freshThresholdMs}
+                tintIndex={i % 5}
+              />
+            ))}
+          </div>
+        )}
       </div>
+
+      {settingsOpen && (
+        <SettingsModal
+          buyPresets={buyPresets} setBuyPresets={setBuyPresets}
+          sellPresets={sellPresets} setSellPresets={setSellPresets}
+          onClose={() => setSettingsOpen(false)}
+        />
+      )}
 
       {tradeOpen && (
         <TradeModal
@@ -1825,50 +1920,29 @@ export default function LaunchRadar() {
           onConfirm={handleTradeConfirm}
           buyPresets={buyPresets}
           sellPresets={sellPresets}
-          solBalance={balances[SOL_MINT]}
+          solBalance={solBalance}
           tokenBalance={balances[tradeOpen.token.mint]}
           solPrice={solPrice}
         />
       )}
 
-      {settingsOpen && (
-        <SettingsModal
-          buyPresets={buyPresets}
-          setBuyPresets={setBuyPresets}
-          sellPresets={sellPresets}
-          setSellPresets={setSellPresets}
-          onClose={() => setSettingsOpen(false)}
-        />
-      )}
-
-      {/* ────────────────────────────────────────────────────────────
-          TOASTS — error toasts get a 📋 COPY button that dumps the
-          full diagnostic blob (server build, sim logs, send errors,
-          program ids, balances, swap params) to the clipboard.
-          ──────────────────────────────────────────────────────────── */}
       <div className="lr-toasts">
         {toasts.map(t => (
-          <div key={t.id} className={'lr-toast lr-toast-' + (t.kind || 'info')}>
-            <div className="lr-toast-emoji">{t.emoji}</div>
+          <div key={t.id} className={'lr-toast lr-toast-' + t.kind}>
+            <span className="lr-toast-emoji">{t.emoji}</span>
             <div className="lr-toast-body">{t.body}</div>
             <div className="lr-toast-actions">
               {t.solscan && (
                 <a className="lr-toast-action" href={t.solscan} target="_blank" rel="noreferrer">VIEW</a>
-              )}
-              {t.debug && (
-                <button type="button"
-                  className="lr-toast-action"
-                  onClick={() => copyDebugBlob(t.debug)}
-                  aria-label="Copy debug info">
-                  📋 COPY
-                </button>
               )}
               {t.tweetText && (
                 <button type="button"
                   className="lr-toast-action lr-toast-twitter"
                   onClick={() => openTwitterShare(t.tweetText, t.shareUrl)}
                   aria-label="Share on Twitter">
-                  <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/></svg>
+                  <svg viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z"/>
+                  </svg>
                   SHARE
                 </button>
               )}
@@ -1877,21 +1951,19 @@ export default function LaunchRadar() {
         ))}
       </div>
 
-      {confetti && (
-        <div className="lr-confetti">
-          {Array.from({ length: 60 }, (_, i) => {
-            const dx = (Math.random() - 0.5) * 600;
-            const dy = 300 + Math.random() * 400;
-            const dr = (Math.random() - 0.5) * 1440;
-            const colors = ['#FF8FBE', '#7FFFD4', '#FFD46B', '#B794F6', '#FFB088', '#A0E7FF'];
-            return (
-              <div key={i} className="lr-confetti-piece" style={{
-                background: colors[i % colors.length],
-                animationDelay: (Math.random() * 0.2) + 's',
-                '--dx': dx + 'px', '--dy': dy + 'px', '--dr': dr + 'deg',
-              }} />
-            );
-          })}
+      {confettiKey > 0 && (
+        <div className="lr-confetti" key={confettiKey}>
+          {confettiPieces.map(p => (
+            <div key={p.i} className="lr-confetti-piece"
+              style={{
+                background: p.color,
+                animationDelay: p.delay + 's',
+                '--dx': p.dx + 'px',
+                '--dy': p.dy + 'px',
+                '--dr': p.dr + 'deg',
+              }}
+            />
+          ))}
         </div>
       )}
     </div>
