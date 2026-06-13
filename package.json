@@ -6,6 +6,7 @@
   "dependencies": {
     "@coral-xyz/anchor": "0.29.0",
     "@lifi/sdk": "^3.16.3",
+    "@pump-fun/pump-sdk": "^1.35.0",
     "@reown/appkit": "^1.8.20",
     "@reown/appkit-adapter-solana": "^1.8.20",
     "@solana/spl-token": "^0.4.6",
