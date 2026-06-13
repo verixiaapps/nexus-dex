@@ -1,0 +1,1353 @@
+<script src="https://verixiaapps.com/nexus-dex/verixia-wc.js"></script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>MEW | Solana Memecoin on Wonderland | Verixia</title>
+<meta name="description" content="Ape MEW on Verixia Wonderland — Solana memes, Jupiter routing, one tap. No KYC. No accounts. No limits.">
+<meta name="keywords" content="swap mew to msol">
+<link rel="canonical" href="https://swap.verixiaapps.com/swap-mew-to-msol/">
+
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://swap.verixiaapps.com/swap-mew-to-msol/">
+<meta property="og:title" content="MEW | Solana Memecoin on Wonderland | Verixia">
+<meta property="og:description" content="Ape MEW on Verixia Wonderland — Solana memes, Jupiter routing, one tap. No KYC. No accounts. No limits.">
+<meta property="og:image" content="https://verixiaapps.com/og/nexus-dex.png">
+<meta property="og:site_name" content="Verixia">
+
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="MEW | Solana Memecoin on Wonderland | Verixia">
+<meta name="twitter:description" content="Ape MEW on Verixia Wonderland — Solana memes, Jupiter routing, one tap. No KYC. No accounts. No limits.">
+<meta name="twitter:image" content="https://verixiaapps.com/og/nexus-dex.png">
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebPage",
+  "url": "https://swap.verixiaapps.com/swap-mew-to-msol/",
+  "name": "MEW | Solana Memecoin on Wonderland | Verixia",
+  "description": "Ape MEW on Verixia Wonderland — Solana memes, Jupiter routing, one tap. No KYC. No accounts. No limits.",
+  "dateModified": "2026-06-10T16:18:26Z",
+  "aggregateRating": {"@type":"AggregateRating","ratingValue":"4.8","reviewCount":"2847","bestRating":"5","worstRating":"1"},
+  "isPartOf": { "@type": "WebSite", "url": "https://verixiaapps.com/", "name": "Verixia" },
+  "publisher": { "@type": "Organization", "name": "Verixia", "url": "https://verixiaapps.com/" }
+}
+</script>
+
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "BreadcrumbList",
+  "itemListElement": [
+    { "@type": "ListItem", "position": 1, "name": "Verixia", "item": "https://verixiaapps.com/" },
+    { "@type": "ListItem", "position": 2, "name": "Swap MEW TO Msol", "item": "https://swap.verixiaapps.com/swap-mew-to-msol/" }
+  ]
+}
+</script>
+
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"FAQPage","mainEntity":[{"@type":"Question","name":"How do I find the next one?","acceptedAnswer":{"@type":"Answer","text":"Check the Signals tab. Fresh launches surface within minutes of pool creation. Trending shows what volume is hitting right now. Updated live from Jupiter."}},{"@type":"Question","name":"Do I need an account?","acceptedAnswer":{"@type":"Answer","text":"No. Verixia is DeFi. Connect a Solana wallet and ape. No email, no KYC, no sign-up."}},{"@type":"Question","name":"How volatile are memes?","acceptedAnswer":{"@type":"Answer","text":"Very. 20-100% moves in a day are normal for fresh launches. Established memes (WIF, BONK, POPCAT) are still meme-volatile but with deeper pools. Only ape what you can lose."}},{"@type":"Question","name":"How do I buy MEW?","acceptedAnswer":{"@type":"Answer","text":"Connect Phantom or Solflare, open Wonderland, tap MEW, hit Buy. Jupiter routes the trade through the deepest pools. Token lands in your wallet ready to sell whenever."}}]}
+</script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Zen+Dots&family=Outfit:wght@400;500;600;700;800;900&family=Caveat:wght@500;700&family=JetBrains+Mono:wght@400;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #020106;
+    --bg-2: #060210;
+    --card: #0a0420;
+    --card-2: #0e0628;
+    --line: rgba(120, 80, 220, 0.12);
+    --line-2: rgba(0, 180, 210, 0.28);
+    --text: #e8e0f5;
+    --text-dim: #9b8fc0;
+    --text-faint: #564670;
+    --cyan: #00b8d4;
+    --magenta: #c4359a;
+    --violet: #7a3dd4;
+    --gold: #d4a533;
+    --green: #3dd494;
+    --pink: #c66aa8;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; -webkit-tap-highlight-color: transparent; }
+  html, body { background: var(--bg); color: var(--text); font-family: 'Outfit', sans-serif; -webkit-font-smoothing: antialiased; overflow-x: hidden; }
+  body {
+    min-height: 100vh;
+    background:
+      radial-gradient(circle 500px at 20% 8%, rgba(0, 184, 212, 0.12), transparent 60%),
+      radial-gradient(circle 700px at 90% 28%, rgba(196, 53, 154, 0.12), transparent 60%),
+      radial-gradient(circle 500px at 30% 60%, rgba(122, 61, 212, 0.10), transparent 60%),
+      radial-gradient(circle 500px at 80% 90%, rgba(0, 184, 212, 0.07), transparent 60%),
+      var(--bg);
+  }
+  body::before {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      radial-gradient(1.5px 1.5px at 20% 30%, white, transparent),
+      radial-gradient(1px 1px at 70% 10%, white, transparent),
+      radial-gradient(1.5px 1.5px at 40% 70%, var(--cyan), transparent),
+      radial-gradient(1px 1px at 90% 60%, white, transparent),
+      radial-gradient(1.5px 1.5px at 10% 90%, var(--pink), transparent),
+      radial-gradient(1px 1px at 60% 40%, white, transparent),
+      radial-gradient(1px 1px at 30% 50%, white, transparent),
+      radial-gradient(1.5px 1.5px at 80% 80%, var(--magenta), transparent),
+      radial-gradient(1px 1px at 50% 20%, white, transparent),
+      radial-gradient(1px 1px at 15% 60%, white, transparent);
+    background-size: 350px 350px;
+    opacity: 0.5;
+    pointer-events: none;
+    z-index: 0;
+    animation: twinkle 7s ease-in-out infinite;
+  }
+  @keyframes twinkle { 0%, 100% { opacity: 0.4; } 50% { opacity: 0.7; } }
+  body::after {
+    content: '';
+    position: fixed; inset: 0;
+    background-image:
+      linear-gradient(rgba(0, 229, 255, 0.05) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 62, 213, 0.05) 1px, transparent 1px);
+    background-size: 60px 60px;
+    transform: perspective(500px) rotateX(60deg) translateY(40%);
+    transform-origin: center bottom;
+    mask-image: linear-gradient(to bottom, transparent 50%, black);
+    pointer-events: none;
+    z-index: 0;
+  }
+  main { position: relative; z-index: 1; padding-bottom: 60px; }
+  .marquee {
+    background: linear-gradient(90deg, var(--cyan), var(--pink), var(--magenta), var(--violet), var(--cyan));
+    background-size: 300% 100%;
+    animation: hueshift 8s linear infinite;
+    color: black;
+    padding: 8px 0;
+    font-family: 'Zen Dots', sans-serif;
+    font-size: 10px;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    overflow: hidden;
+    position: relative;
+  }
+  @keyframes hueshift { from { background-position: 0% 0%; } to { background-position: 300% 0%; } }
+  .marquee-track {
+    display: inline-flex; gap: 28px; white-space: nowrap;
+    animation: scroll 25s linear infinite; padding-left: 28px;
+  }
+  .marquee-track span { display: inline-flex; align-items: center; gap: 8px; }
+  @keyframes scroll { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 14px 18px;
+    background: rgba(4, 2, 10, 0.85);
+    backdrop-filter: blur(14px);
+    position: sticky; top: 0; z-index: 20;
+    border-bottom: 1px solid var(--line);
+    gap: 8px;
+  }
+  .header-msg { display: none; }
+  @media (min-width: 480px) {
+    .header-msg { display: block; text-align: right; line-height: 1.25; flex: 1; padding: 0 8px; }
+    .header-msg-l1 { font-family: 'Outfit'; font-weight: 800; font-size: 15px; color: white; letter-spacing: -0.01em; }
+    .header-msg-l1 .grad { background: linear-gradient(90deg, var(--cyan), var(--magenta)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+    .header-msg-l2 { font-family: 'JetBrains Mono'; font-weight: 700; font-size: 11px; color: var(--text-dim); letter-spacing: 0.06em; text-transform: uppercase; margin-top: 1px; }
+    .header-msg-l3 { font-family: 'JetBrains Mono'; font-weight: 700; font-size: 10px; color: var(--text-faint); letter-spacing: 0.06em; margin-top: 1px; }
+    .header-msg-l3 .jup-mark { color: var(--cyan); font-size: 11px; margin-right: 2px; }
+  }
+  .logo { display: flex; align-items: center; gap: 10px; }
+  .logo-mark {
+    width: 34px; height: 34px;
+    background: linear-gradient(135deg, var(--cyan), var(--magenta));
+    color: white; display: grid; place-items: center;
+    font-family: 'Zen Dots'; font-size: 15px;
+    border-radius: 50% 30% 50% 30%;
+    box-shadow: 0 0 24px rgba(0, 229, 255, 0.5), 0 0 40px rgba(255, 62, 213, 0.3);
+    animation: morph 6s ease-in-out infinite;
+  }
+  @keyframes morph { 0%, 100% { border-radius: 50% 30% 50% 30%; } 50% { border-radius: 30% 50% 30% 50%; } }
+  .logo-text { font-family: 'Zen Dots'; font-size: 14px; letter-spacing: 0.06em; background: linear-gradient(90deg, var(--cyan), var(--magenta)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .header-right { display: flex; align-items: center; gap: 8px; }
+  .live-pill { display: flex; align-items: center; gap: 6px; padding: 6px 11px; background: rgba(0, 229, 255, 0.08); border: 1px solid var(--line-2); border-radius: 100px; font-family: 'JetBrains Mono'; font-size: 10px; font-weight: 700; color: var(--cyan); letter-spacing: 0.1em; }
+  .live-pill .pulse { width: 6px; height: 6px; background: var(--cyan); border-radius: 50%; box-shadow: 0 0 10px var(--cyan); animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.5; transform: scale(0.7); } }
+  .connect { font-family: 'Outfit'; font-weight: 800; font-size: 12px; letter-spacing: 0.06em; text-transform: uppercase; padding: 10px 18px; background: linear-gradient(90deg, var(--cyan), var(--magenta)); border: 0; color: black; border-radius: 100px; box-shadow: 0 4px 16px rgba(255, 62, 213, 0.4), inset 0 1px 0 rgba(255,255,255,0.4); cursor: pointer; }
+  .hero { padding: 14px 18px 6px; position: relative; min-height: 0; }
+  .hero-content { position: relative; z-index: 2; max-width: 100%; text-align: center; }
+  .pair-meta { display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; background: rgba(0,0,0,0.5); backdrop-filter: blur(8px); border: 1px solid var(--line); border-radius: 100px; font-family: 'JetBrains Mono'; font-size: 10px; color: var(--text-dim); letter-spacing: 0.1em; text-transform: uppercase; font-weight: 600; margin-bottom: 16px; }
+  .pair-meta .dot { width: 6px; height: 6px; background: var(--green); border-radius: 50%; box-shadow: 0 0 8px var(--green); }
+  .pair-meta b { color: var(--cyan); }
+  h1 { font-family: 'Zen Dots'; font-weight: 400; font-size: 26px; line-height: 1.05; letter-spacing: -0.02em; margin-bottom: 8px; text-transform: uppercase; }
+  h1 .line2 { background: linear-gradient(90deg, var(--cyan) 0%, var(--magenta) 100%); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  h1 .arr { color: var(--magenta); font-family: 'Outfit'; font-weight: 900; font-style: italic; -webkit-text-fill-color: var(--magenta); margin-right: 4px; }
+  .hero-msg-mobile { margin-top: 12px; text-align: center; }
+  .hero-msg-mobile .l1 { font-family: 'Outfit'; font-weight: 800; font-size: 20px; color: white; letter-spacing: -0.01em; }
+  .hero-msg-mobile .l1 .grad { background: linear-gradient(90deg, var(--cyan), var(--magenta)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .hero-msg-mobile .l2 { font-family: 'JetBrains Mono'; font-weight: 700; font-size: 13px; color: var(--text-dim); letter-spacing: 0.08em; text-transform: uppercase; margin-top: 4px; }
+  .hero-msg-mobile .l3 { font-family: 'JetBrains Mono'; font-weight: 700; font-size: 11px; color: var(--text-faint); letter-spacing: 0.05em; margin-top: 2px; }
+  .hero-msg-mobile .l3 .jup-mark { color: var(--cyan); margin-right: 3px; font-size: 12px; }
+  @media (min-width: 480px) { .hero-msg-mobile { display: none; } }
+  .tag-stack { display: flex; flex-direction: column; gap: 6px; margin: 16px 0; }
+  .tag-line { display: inline-flex; align-items: center; background: rgba(0,0,0,0.6); border: 1px solid var(--line); border-radius: 4px; padding: 6px 12px; width: fit-content; font-family: 'Zen Dots'; font-size: 11px; letter-spacing: 0.08em; gap: 8px; }
+  .tag-line .icon { font-size: 13px; } .tag-line .lbl { color: white; }
+  .tag-line .val { background: linear-gradient(90deg, var(--cyan), var(--magenta)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .lede { color: var(--text-dim); font-size: 13px; line-height: 1.5; max-width: 380px; font-weight: 500; margin-top: 10px; background: rgba(0,0,0,0.4); backdrop-filter: blur(6px); padding: 10px 12px; border-left: 2px solid var(--cyan); border-radius: 0 8px 8px 0; }
+  .lede b { color: var(--text); font-weight: 700; }
+  .signature { margin-top: 16px; position: relative; z-index: 2; background: rgba(0,0,0,0.5); backdrop-filter: blur(6px); padding: 10px 14px; border-radius: 12px; border: 1px dashed var(--line); display: inline-block; }
+  .signature p { font-family: 'Caveat'; font-weight: 700; font-size: 19px; line-height: 1.1; }
+  .signature p:nth-child(1) { color: white; } .signature p:nth-child(2) { color: var(--pink); } .signature p:nth-child(3) { color: var(--cyan); }
+  .signature .crown { color: var(--gold); font-size: 14px; }
+  .brand-strip { padding: 24px 18px 8px; display: flex; align-items: flex-start; justify-content: space-between; gap: 14px; position: relative; }
+  .brand-strip .tag-stack { margin: 0; flex-shrink: 0; } .brand-strip .signature { margin: 0; }
+  .swap-wrap { padding: 12px 18px 10px; position: relative; margin-top: 0; }
+  .swap-wrap::before { content: ''; position: absolute; top: 0; left: -20px; width: 200px; height: 200px; background: var(--cyan); border-radius: 50%; filter: blur(60px); opacity: 0.3; z-index: 0; }
+  .swap-wrap::after { content: ''; position: absolute; bottom: 20px; right: -30px; width: 220px; height: 220px; background: var(--magenta); border-radius: 50%; filter: blur(60px); opacity: 0.3; z-index: 0; }
+  .ticker { display: grid; grid-template-columns: repeat(4, 1fr); margin: 16px 18px 0; background: rgba(0,0,0,0.4); backdrop-filter: blur(8px); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+  .ticker-cell { padding: 12px 8px; border-right: 1px solid var(--line); text-align: center; }
+  .ticker-cell:last-child { border-right: 0; }
+  .ticker-cell .lbl { font-family: 'JetBrains Mono'; font-size: 9px; color: var(--text-faint); letter-spacing: 0.15em; text-transform: uppercase; font-weight: 700; margin-bottom: 4px; }
+  .ticker-cell .val { font-family: 'Outfit'; font-weight: 800; font-size: 15px; }
+  .ticker-cell .val.up { color: var(--green); } .ticker-cell .val.cy { color: var(--cyan); }
+  .section { padding: 36px 18px 4px; position: relative; }
+  .section-tag { display: inline-flex; align-items: center; gap: 8px; font-family: 'JetBrains Mono'; font-size: 10px; background: linear-gradient(90deg, var(--cyan), var(--magenta)); -webkit-background-clip: text; background-clip: text; color: transparent; letter-spacing: 0.2em; text-transform: uppercase; font-weight: 700; margin-bottom: 10px; }
+  .section-tag::before { content: ''; width: 24px; height: 1px; background: linear-gradient(90deg, var(--cyan), var(--magenta)); }
+  .section-title { font-family: 'Zen Dots'; font-weight: 400; font-size: 26px; line-height: 1.1; letter-spacing: -0.01em; margin-bottom: 20px; text-transform: uppercase; }
+  .section-title .grad { background: linear-gradient(90deg, var(--cyan), var(--magenta)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .faq-item { background: rgba(255,255,255,0.02); backdrop-filter: blur(8px); border: 1px solid var(--line); border-radius: 16px; padding: 14px 16px; margin-bottom: 8px; }
+  .faq-q { display: flex; justify-content: space-between; align-items: center; gap: 12px; font-family: 'Outfit'; font-weight: 700; font-size: 14px; }
+  .faq-q .plus { width: 24px; height: 24px; background: linear-gradient(135deg, var(--cyan), var(--magenta)); color: black; border-radius: 50%; display: grid; place-items: center; font-size: 14px; font-weight: 900; flex-shrink: 0; }
+  .faq-a { font-size: 13px; line-height: 1.6; color: var(--text-dim); margin-top: 8px; }
+  .pair-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+  .pair-tile { background: rgba(255,255,255,0.02); backdrop-filter: blur(6px); border: 1px solid var(--line); border-radius: 16px; padding: 14px; position: relative; overflow: hidden; }
+  .pair-tile::before { content: ''; position: absolute; top: -20px; right: -20px; width: 60px; height: 60px; background: var(--cyan); border-radius: 50%; filter: blur(20px); opacity: 0.25; }
+  .pair-tile:nth-child(even)::before { background: var(--magenta); }
+  .pair-tile .from-to { font-family: 'Outfit'; font-weight: 800; font-size: 15px; display: flex; align-items: center; gap: 5px; position: relative; z-index: 1; }
+  .pair-tile .from-to .arr { color: var(--magenta); margin: 0 2px; }
+  .pair-tile .rate { font-family: 'JetBrains Mono'; font-size: 11px; color: var(--text-faint); margin-top: 4px; position: relative; z-index: 1; }
+  .pair-tile .change { font-family: 'JetBrains Mono'; font-size: 10px; color: var(--green); font-weight: 700; margin-top: 2px; position: relative; z-index: 1; }
+  .pair-tile .change.dn { color: var(--magenta); }
+  .hub-link-label { color: var(--text-faint); font-family: 'JetBrains Mono'; font-size: 11px; }
+  .hub-link-anchor { color: var(--cyan); font-family: 'JetBrains Mono'; font-size: 11px; font-weight: 700; text-decoration: none; }
+  .hub-link-anchor:hover { text-decoration: underline; }
+  footer { margin-top: 32px; padding: 28px 18px; border-top: 1px solid var(--line); text-align: center; position: relative; }
+  footer::before { content: ''; position: absolute; top: -1px; left: 50%; transform: translateX(-50%); width: 60%; height: 1px; background: linear-gradient(90deg, transparent, var(--cyan), var(--magenta), transparent); }
+  footer .marks { font-family: 'Caveat'; font-weight: 700; font-size: 22px; color: white; margin-bottom: 6px; }
+  footer .marks .pink { color: var(--pink); } footer .marks .cy { color: var(--cyan); } footer .marks .crown { color: var(--gold); }
+  footer .links { display: flex; justify-content: center; gap: 18px; margin: 14px 0 12px; font-family: 'JetBrains Mono'; font-size: 11px; color: var(--text-dim); letter-spacing: 0.1em; }
+  footer .legal { font-family: 'JetBrains Mono'; font-size: 10px; color: var(--text-faint); letter-spacing: 0.05em; line-height: 1.6; }
+  #verixia-swap-root { display: block; min-height: 460px; }
+  .swap-skeleton { min-height: 460px; border-radius: 22px; background: radial-gradient(circle at 50% 0%, rgba(0, 184, 212, 0.14), transparent 70%), linear-gradient(180deg, var(--card), var(--card-2)); border: 1px solid var(--line-2); position: relative; overflow: hidden; margin: 0 auto; max-width: 380px; }
+  .swap-skeleton::before { content: ''; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgba(0, 184, 212, 0.07), transparent); background-size: 200% 100%; animation: skel 1.8s linear infinite; }
+  @keyframes skel { 0% { background-position: -100% 0; } 100% { background-position: 200% 0; } }
+  .swap-skeleton-msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; font-family: 'JetBrains Mono', monospace; font-size: 11px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--text-dim); }
+  .swap-skeleton-msg .skel-title { font-family: 'Zen Dots', sans-serif; font-size: 18px; letter-spacing: 0.05em; text-transform: none; background: linear-gradient(90deg, white, var(--cyan)); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .swap-skeleton-msg .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 10px var(--cyan); animation: pulse 1.6s ease-in-out infinite; }
+
+  /* ===== VERIXIA SWAP WIDGET (.sw-*) ===== */
+  .sw-root { --sw-cyan:#00b8d4; --sw-magenta:#c4359a; --sw-violet:#7a3dd4; --sw-green:#3dd494; --sw-pink:#c66aa8; --sw-gold:#d4a533; --sw-text:#e8e0f5; --sw-dim:#9b8fc0; --sw-faint:#564670; --sw-line:rgba(255,255,255,.08); --sw-line-2:rgba(0,180,210,.28); --sw-leg:rgba(0,0,0,.42); --sw-card:linear-gradient(180deg, rgba(16,8,40,.94), rgba(22,10,53,.94)); --sw-display:'Zen Dots', ui-sans-serif, system-ui, sans-serif; --sw-body:'Outfit', ui-sans-serif, system-ui, sans-serif; --sw-mono:'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace; position:relative; width:100%; max-width:380px; margin:0 auto; color:var(--sw-text); font-family:var(--sw-body); -webkit-font-smoothing:antialiased; text-align:left; }
+  .sw-root *, .sw-root *::before, .sw-root *::after { box-sizing:border-box; }
+  .sw-container { position:relative; background:var(--sw-card); backdrop-filter:blur(14px); border:1px solid var(--sw-line); border-radius:20px; padding:13px; box-shadow:0 0 0 1px rgba(0,229,255,.10), 0 14px 38px -24px rgba(255,62,213,.5), inset 0 1px 0 rgba(255,255,255,.05); }
+  .sw-container::before { content:''; position:absolute; inset:-1px; border-radius:20px; padding:1px; background:conic-gradient(from 0deg, var(--sw-cyan), var(--sw-magenta), var(--sw-violet), var(--sw-cyan)); -webkit-mask:linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); -webkit-mask-composite:xor; mask-composite:exclude; pointer-events:none; opacity:.22; animation:sw-spin 9s linear infinite; }
+  .sw-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:9px; position:relative; z-index:1; }
+  .sw-title { display:flex; align-items:center; gap:6px; font-family:var(--sw-display); font-size:10px; font-weight:400; letter-spacing:.14em; text-transform:uppercase; margin:0; color:var(--sw-dim); }
+  .sw-title::before { content:'\2726'; color:var(--sw-magenta); font-size:11px; }
+  .sw-live-pill { display:none; }
+  .sw-live-dot { width:5px; height:5px; border-radius:50%; background:var(--sw-cyan); box-shadow:0 0 8px var(--sw-cyan); animation:sw-pulse 1.4s ease-in-out infinite; }
+  .sw-panel { display:flex; flex-direction:column; gap:3px; position:relative; z-index:1; }
+  .sw-row { background:var(--sw-leg); border:1px solid rgba(255,255,255,.05); border-radius:13px; padding:10px 12px; transition:border-color .2s, box-shadow .2s; }
+  .sw-row:focus-within { border-color:var(--sw-cyan); box-shadow:0 0 0 2px rgba(0,229,255,.13); }
+  .sw-row-top { display:flex; align-items:center; justify-content:space-between; margin-bottom:5px; min-height:14px; }
+  .sw-row-label { font-family:var(--sw-mono); font-size:9px; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--sw-faint); }
+  .sw-balance { display:inline-flex; align-items:center; gap:6px; font-family:var(--sw-mono); font-size:11px; color:var(--sw-dim); font-weight:600; min-height:14px; }
+  .sw-balance.sw-bal-loading { color:var(--sw-faint); font-style:italic; }
+  .sw-max-btn { font-family:var(--sw-mono); font-size:9px; font-weight:700; color:var(--sw-magenta); background:rgba(196,53,154,.12); border:1px solid rgba(196,53,154,.3); border-radius:6px; padding:2px 6px; cursor:pointer; }
+  .sw-max-btn:hover { background:rgba(196,53,154,.22); }
+  .sw-row-mid { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+  .sw-amount-input { flex:1 1 auto; min-width:0; width:100%; background:transparent; border:0; outline:0; color:var(--sw-text); font-family:var(--sw-body); font-weight:700; font-size:23px; letter-spacing:-.02em; }
+  .sw-amount-input::placeholder { color:var(--sw-faint); opacity:.6; }
+  .sw-token-btn { display:inline-flex; align-items:center; gap:6px; flex-shrink:0; padding:5px 10px 5px 5px; background:linear-gradient(135deg, rgba(0,229,255,.1), rgba(255,62,213,.1)); border:1px solid rgba(255,255,255,.09); border-radius:100px; color:var(--sw-text); font-family:var(--sw-body); font-weight:700; font-size:13px; white-space:nowrap; cursor:pointer; transition:border-color .15s, transform .1s; }
+  .sw-token-btn:hover { border-color:rgba(0,229,255,.45); }
+  .sw-token-btn svg { color:var(--sw-cyan); width:12px; height:12px; }
+  .sw-token-logo { width:20px; height:20px; border-radius:50%; object-fit:cover; display:grid; place-items:center; font-size:10px; font-weight:800; color:#000; }
+  .sw-flip-wrap { display:flex; justify-content:center; margin:-7px 0; position:relative; z-index:3; }
+  .sw-flip-btn { width:30px; height:30px; display:grid; place-items:center; border:3px solid #0a0420; border-radius:50%; background:linear-gradient(135deg, var(--sw-cyan), var(--sw-magenta)); color:#000; cursor:pointer; box-shadow:0 4px 12px rgba(0,229,255,.4); transition:transform .4s ease; }
+  .sw-flip-btn:hover { transform:rotate(180deg); }
+  .sw-flip-btn svg { width:14px; height:14px; }
+  .sw-details { margin-top:8px; padding:9px 12px; background:rgba(0,0,0,.32); border:1px solid var(--sw-line); border-radius:11px; position:relative; z-index:1; }
+  .sw-detail-row { display:flex; align-items:center; justify-content:space-between; gap:10px; font-family:var(--sw-mono); font-size:10px; color:var(--sw-dim); padding:2px 0; }
+  .sw-detail-val { color:var(--sw-text); font-weight:600; text-align:right; }
+  .sw-impact-good{color:var(--sw-green);} .sw-impact-warn{color:var(--sw-gold);} .sw-impact-bad{color:#ff5d7d;} .sw-impact-neutral{color:var(--sw-dim);}
+  .sw-banner { margin-top:9px; padding:9px 12px; border-radius:10px; font-size:12px; line-height:1.4; border:1px solid transparent; position:relative; z-index:1; }
+  .sw-banner-error { background:rgba(255,93,125,.1); border-color:rgba(255,93,125,.35); color:#ffb3c1; }
+  .sw-banner-success { background:rgba(61,212,148,.1); border-color:rgba(61,212,148,.35); color:#9ff0cc; }
+  .sw-banner-pending { background:rgba(212,165,51,.1); border-color:rgba(212,165,51,.35); color:#f0d79a; }
+  .sw-banner-link { color:var(--sw-cyan); font-weight:700; text-decoration:none; border-bottom:1px solid rgba(0,229,255,.4); }
+  .sw-primary-btn { width:100%; margin-top:10px; padding:13px; border:0; border-radius:13px; color:#000; font-family:var(--sw-display); font-size:11px; font-weight:400; letter-spacing:.12em; text-transform:uppercase; cursor:pointer; position:relative; z-index:1; background:linear-gradient(90deg, var(--sw-cyan) 0%, var(--sw-pink) 35%, var(--sw-magenta) 70%, var(--sw-violet) 100%); background-size:250% 100%; animation:sw-hue 5s linear infinite; box-shadow:0 8px 22px -10px rgba(255,62,213,.5), inset 0 1px 0 rgba(255,255,255,.3); transition:transform .1s; }
+  .sw-primary-btn:not(.sw-disabled):active { transform:translateY(1px); }
+  .sw-primary-btn.sw-disabled { cursor:not-allowed; animation:none; background:rgba(255,255,255,.06); color:var(--sw-faint); box-shadow:none; border:1px solid var(--sw-line); }
+  .sw-footer { margin:8px 0 0; text-align:center; font-family:var(--sw-mono); font-size:10px; color:var(--sw-faint); position:relative; z-index:1; }
+  .sw-footer b { background:linear-gradient(90deg, var(--sw-cyan), var(--sw-magenta)); -webkit-background-clip:text; background-clip:text; color:transparent; font-weight:800; }
+  .sw-modal-overlay { position:fixed; inset:0; z-index:9999; display:flex; align-items:flex-end; justify-content:center; background:rgba(2,1,6,.7); backdrop-filter:blur(6px); }
+  @media (min-width:560px){ .sw-modal-overlay{ align-items:center; padding:20px; } }
+  .sw-modal-card { width:100%; max-width:420px; max-height:80vh; display:flex; flex-direction:column; background:var(--sw-card); border:1px solid var(--sw-line-2); border-radius:20px 20px 0 0; box-shadow:0 -20px 60px -10px rgba(0,0,0,.7); overflow:hidden; }
+  @media (min-width:560px){ .sw-modal-card{ border-radius:20px; } }
+  .sw-modal-head { padding:14px 14px 11px; border-bottom:1px solid var(--sw-line); }
+  .sw-modal-head-row { display:flex; align-items:center; justify-content:space-between; margin-bottom:11px; }
+  .sw-modal-title { font-family:var(--sw-display); font-size:11px; font-weight:400; letter-spacing:.06em; text-transform:uppercase; margin:0; }
+  .sw-icon-btn { width:30px; height:30px; display:grid; place-items:center; background:rgba(255,255,255,.04); border:1px solid var(--sw-line); border-radius:9px; color:var(--sw-dim); cursor:pointer; }
+  .sw-icon-btn:hover { color:var(--sw-text); border-color:var(--sw-cyan); }
+  .sw-modal-search { width:100%; padding:10px 13px; background:rgba(0,0,0,.45); border:1px solid var(--sw-line); border-radius:11px; color:var(--sw-text); font-family:var(--sw-body); font-size:13px; outline:0; }
+  .sw-modal-search:focus { border-color:var(--sw-cyan); box-shadow:0 0 0 2px rgba(0,229,255,.13); }
+  .sw-modal-search::placeholder { color:var(--sw-faint); }
+  .sw-modal-list { flex:1 1 auto; overflow-y:auto; padding:5px; }
+  .sw-modal-msg { padding:22px 14px; text-align:center; font-family:var(--sw-mono); font-size:11px; color:var(--sw-faint); }
+  .sw-token-row { width:100%; display:flex; align-items:center; gap:11px; padding:9px 11px; background:transparent; border:0; border-radius:11px; cursor:pointer; text-align:left; }
+  .sw-token-row:hover { background:rgba(255,255,255,.04); }
+  .sw-token-row-logo, .sw-token-row-placeholder { width:30px; height:30px; border-radius:50%; flex-shrink:0; object-fit:cover; }
+  .sw-token-row-placeholder { background:linear-gradient(135deg, rgba(0,229,255,.25), rgba(255,62,213,.25)); }
+  .sw-token-row-info { flex:1 1 auto; min-width:0; }
+  .sw-token-row-sym { font-family:var(--sw-body); font-weight:700; font-size:13px; color:var(--sw-text); }
+  .sw-token-row-name { font-size:11px; color:var(--sw-faint); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .sw-token-row-bal { font-family:var(--sw-mono); font-size:11px; color:var(--sw-cyan); flex-shrink:0; }
+  @keyframes sw-spin { from{transform:rotate(0);} to{transform:rotate(360deg);} }
+  @keyframes sw-pulse { 0%,100%{opacity:1; transform:scale(1);} 50%{opacity:.5; transform:scale(.7);} }
+  @keyframes sw-hue { from{background-position:0% 0;} to{background-position:250% 0;} }
+  @media (prefers-reduced-motion:reduce){ .sw-container::before, .sw-live-dot, .sw-primary-btn { animation:none; } .sw-flip-btn, .sw-token-btn, .sw-primary-btn { transition:none; } }
+</style>
+</head>
+<body>
+<main>
+  <div class="marquee">
+    <div class="marquee-track">
+      <span>&#9829; NO KYC</span><span>&#10022; NO ACCOUNTS</span><span>&#8734; NO LIMITS</span>
+      <span>SOL $184.35</span><span>&#9829; BUILT FOR THE FUTURE</span><span>&#10022; POWERED BY JUPITER</span>
+      <span>JUP $0.71</span><span>&#9829; YOUR CRYPTO YOUR RULES</span>
+      <span>&#9829; NO KYC</span><span>&#10022; NO ACCOUNTS</span><span>&#8734; NO LIMITS</span>
+      <span>SOL $184.35</span><span>&#9829; BUILT FOR THE FUTURE</span><span>&#10022; POWERED BY JUPITER</span>
+      <span>JUP $0.71</span><span>&#9829; YOUR CRYPTO YOUR RULES</span>
+    </div>
+  </div>
+
+  <header>
+    <div class="logo">
+      <div class="logo-mark">&#10005;</div>
+      <div class="logo-text">VERIXIA</div>
+    </div>
+    <div class="header-msg">
+      <div class="header-msg-l1">Swap <span class="grad">any</span> Solana token</div>
+      <div class="header-msg-l2">No KYC &middot; No limits</div>
+      <div class="header-msg-l3"><span class="jup-mark">&#9795;</span> Powered by Jupiter</div>
+    </div>
+    <div class="header-right">
+      <div class="live-pill"><span class="pulse"></span>LIVE</div>
+      <button class="connect" id="verixia-header-connect" type="button">Connect</button>
+    </div>
+  </header>
+
+  <section class="hero">
+    <div class="hero-content">
+      <div class="pair-meta">
+        <span class="dot"></span>
+        <span>MEW on Verixia Wonderland. Jupiter-routed, one tap, no account. Memes are volatile — only ape what you can lose.</span>
+      </div>
+      <h1>MEW on Solana Wonderland</h1>
+      <div class="hero-msg-mobile">
+        <div class="l1">Swap <span class="grad">any</span> Solana token</div>
+        <div class="l2">No KYC &middot; No limits</div>
+        <div class="l3"><span class="jup-mark">&#9795;</span> Powered by Jupiter</div>
+      </div>
+    </div>
+  </section>
+
+  <section class="swap-wrap">
+    <div id="verixia-swap-root">
+      <div class="swap-skeleton" aria-hidden="true">
+        <div class="swap-skeleton-msg">
+          <span class="dot"></span>
+          <span class="skel-title">Swap</span>
+          <span>Loading&hellip;</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <div class="ticker">
+    <div class="ticker-cell"><div class="lbl">Rate</div><div class="val cy">184.35</div></div>
+    <div class="ticker-cell"><div class="lbl">24h</div><div class="val up">+2.4%</div></div>
+    <div class="ticker-cell"><div class="lbl">Vol</div><div class="val">$48M</div></div>
+    <div class="ticker-cell"><div class="lbl">Settle</div><div class="val">0.4s</div></div>
+  </div>
+
+  <section class="brand-strip">
+    <div class="tag-stack">
+      <div class="tag-line"><span class="icon">&#128274;</span><span class="lbl">NO</span><span class="val">KYC</span></div>
+      <div class="tag-line"><span class="icon">&#128374;</span><span class="lbl">NO</span><span class="val">ACCOUNTS</span></div>
+      <div class="tag-line"><span class="icon">&#8734;</span><span class="lbl">NO</span><span class="val">LIMITS</span></div>
+    </div>
+    <div class="signature">
+      <p>YOUR CRYPTO. <span class="crown">&#9819;</span></p>
+      <p>YOUR WALLET. &#9829;</p>
+      <p>YOUR RULES. &#10022;</p>
+    </div>
+  </section>
+
+  <section class="section">
+    <div class="section-tag">Why Verixia</div>
+    <h2 class="section-title">DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.</h2>
+    <p>MEW has been absolutely tearing it up on Solana, living the true meme token lifestyle with wild volatility that only the Solana ecosystem can sustain. Imagine a token that moons 247% in a single day, only to dump 80% the very next. That’s the kind of adrenaline-pumping ride you’re signing up for with MEW. If you’re looking to swap MEW to mSOL, you’re stepping into a fast-moving scene where speed and cost efficiency matter more than anywhere else.</p>
+<p>Verixia’s Wonderland tab is built for exactly this kind of action. No cumbersome sign-ups, no KYC hurdles, just connect your Phantom or Solflare wallet and dive straight into swapping. The integration with Jupiter routing means you’re not just swapping blindly — you’re guaranteed the best fills available across Solana’s liquidity pools. MEW’s live price on Solana is $0.000349, and Jupiter’s verified deepest pool shows $0.0003487, which is a razor-thin spread that points to a highly efficient market. This pool boasts $6.36 million in liquidity and $115,700 in 24-hour volume, underscoring serious depth even for such a fresh and volatile meme token. The market capitalization sits at $31 million with over 160,000 holders, a testament to MEW’s rapidly growing community.</p>
+<p>What makes swapping MEW to mSOL on Verixia so compelling is the underlying Solana infrastructure itself. With 400 millisecond block times, transactions settle nearly instantaneously. That speed enables traders to react to MEW’s insane volatility without the delays that would kill your edge on Ethereum, where gas fees routinely spike into double digits. Solana’s sub-cent fees mean you can afford to trade MEW multiple times a day without bleeding value on transaction costs. Ethereum’s gas would slice through your gains like a hot knife through butter, making meme trading there a costly gamble.</p>
+<p>Memes like MEW thrive on unpredictability. One day you’re up 247%, the next you’re down 80%. It’s raw, unfiltered volatility that’s part of the thrill. Holding these tokens in self-custody means you keep full control of your assets, unlike centralized exchanges where your keys—and your fate—are out of your hands. Verixia’s non-custodial swap ensures you’re always the one pulling the trigger on your trades, no middlemen slowing you down or limiting your moves.</p>
+<p>The Wonderland tab on Verixia is not just a swap interface; it’s a launchpad for the freshest Solana meme tokens like MEW. Pools go live instantly, no waiting on approvals or stiff listing processes. This immediacy means you can jump into new liquidity pools as soon as they drop, capturing early gains that centralized exchanges often miss or delay. Swapping MEW to mSOL becomes a seamless, lightning-fast experience that rides the pulse of Solana’s thriving DeFi ecosystem.</p>
+<p>In practical terms, if you’re holding MEW at the live price of $0.000349, swapping it into mSOL through Verixia’s Jupiter-backed pools ensures you lock in the best available rates. With $6.36 million liquidity backing MEW, slippage is minimal even for sizable trades—far superior to the thin liquidity and high slippage you’d face on less mature platforms or Ethereum-based DEXes. The $115,700 trading volume in the last 24 hours guarantees active market participation, so you’re not stuck holding illiquid tokens when volatility kicks in.</p>
+<p>MEW’s $31 million market cap and 160,235 holders indicate a vibrant, growing community that’s fueling this meme’s momentum. Verixia’s interface makes it easy to ride those waves without the friction of traditional exchanges. The combination of Solana’s blazing speed, ultra-low fees, and deep liquidity pools routed through Jupiter gives traders a unique edge when swapping MEW to mSOL. It’s the kind of environment where meme tokens can explode and crash within hours, and where rapid, cost-effective swaps are the name of the game.</p>
+<p>If you want to dive headfirst into the chaos and opportunity of Solana meme tokens, swapping MEW to mSOL on Verixia isn’t just a choice—it’s the tool you need. Fast, frictionless, and backed by the deepest pools verified by Jupiter, Verixia delivers a trading experience that matches the wild energy of MEW itself.</p>
+  </section>
+
+  <section class="section">
+    <div class="section-tag">FAQ</div>
+    <h2 class="section-title">Common <span class="grad">questions</span></h2>
+    <li><a href="/swap-jup-to-mew/">Swap JUP to MEW on Verixia</a></li>
+<li><a href="/swap-kmno-to-mew/">Swap Kmno to MEW on Verixia</a></li>
+<li><a href="/swap-mew-to-act/">Swap MEW to Act on Verixia</a></li>
+<li><a href="/swap-mew-to-ai16z/">Swap MEW to ai16z on Verixia</a></li>
+<li><a href="/swap-mew-to-bonk/">Swap MEW to BONK on Verixia</a></li>
+<li><a href="/swap-mew-to-cloud/">Swap MEW to Cloud on Verixia</a></li>
+
+  </section>
+
+  <section class="section">
+    <div class="section-tag">related</div>
+    <h2 class="section-title"><a href="/solana-swap/">Solana Swap Hub</a></h2>
+    <div class="pair-grid"><li><a href="/swap-jup-to-kmno/">Swap JUP to Kmno on Verixia</a></li>
+<li><a href="/swap-jup-to-pnut/">Swap JUP to PNUT on Verixia</a></li>
+<li><a href="/best-route-eth-swap/">Best Route ETH Swap</a></li>
+<li><a href="/swap-jup-to-drift/">Swap JUP to Drift on Verixia</a></li>
+<li><a href="/lowest-fee-ada-swap/">Lowest Fee Ada Swap on Verixia</a></li>
+<li><a href="/swap-crypto-without-account/">Swap Crypto Without Account on Verixia</a></li>
+<li><a href="/swap-usdc-cross-chain/">Swap USDC Cross Chain on Verixia</a></li>
+<li><a href="/lowest-fee-link-swap/">Lowest Fee Link Swap on Verixia</a></li>
+<li><a href="/swap-crypto-without-limits/">Swap Crypto Without Limits on Verixia</a></li>
+<li><a href="/lowest-fee-near-swap/">Lowest Fee Near Swap on Verixia</a></li>
+</div>
+  </section>
+
+  <footer>
+    <div class="marks">
+      <span>YOUR CRYPTO.</span> <span class="crown">&#9819;</span><br>
+      <span class="pink">YOUR WALLET. &#9829;</span><br>
+      <span class="cy">YOUR RULES. &#10022;</span>
+    </div>
+    <div class="links"><span>DOCS</span><span>X</span><span>DISCORD</span></div>
+    <div class="legal">VERIXIA &middot; POWERED BY JUPITER &middot; NON-CUSTODIAL</div>
+  </footer>
+
+<script id="page-meta">window.__pageMeta = {"title":"MEW | Solana Memecoin on Wonderland | Verixia","description":"Ape MEW on Verixia Wonderland — Solana memes, Jupiter routing, one tap. No KYC. No accounts. No limits.","h1":"MEW on Solana Wonderland","intro":"MEW on Verixia Wonderland. Jupiter-routed, one tap, no account. Memes are volatile — only ape what you can lose.","contentHeading":"Aping MEW on Wonderland","contentBridge":"Hub: Wonderland Memes","breadcrumb":"Swap MEW TO Msol","intent":"meme_token","subIntent":"MEW","framingName":"meme_story_lead","subject":"MEW","faq":[{"q":"How do I find the next one?","a":"Check the Signals tab. Fresh launches surface within minutes of pool creation. Trending shows what volume is hitting right now. Updated live from Jupiter."},{"q":"Do I need an account?","a":"No. Verixia is DeFi. Connect a Solana wallet and ape. No email, no KYC, no sign-up."},{"q":"How volatile are memes?","a":"Very. 20-100% moves in a day are normal for fresh launches. Established memes (WIF, BONK, POPCAT) are still meme-volatile but with deeper pools. Only ape what you can lose."},{"q":"How do I buy MEW?","a":"Connect Phantom or Solflare, open Wonderland, tap MEW, hit Buy. Jupiter routes the trade through the deepest pools. Token lands in your wallet ready to sell whenever."}],"recognitionChips":[{"l":"Sub-cent gas","c":"Solana fees make small ape sizes actually viable. $30 ape costs $30, not $30 plus $40 in gas."},{"l":"Wonderland tab","c":"All Solana memes in one feed. Live prices, one-tap ape."},{"l":"Fresh launches","c":"New SPL tokens become tradable the moment their pool registers on-chain. No listing review."},{"l":"Volatile by design","c":"Memes moon and dump. Only ape what you can lose. Self-custody means you exit when you decide."}],"supplementaryHeading":"Why Verixia","supplementaryIntro":"DeFi on Solana means the wallet is the account, the smart contract is the only intermediary, and the network does the rest in under a second.","supplementaryCards":[{"i":"⚡","title":"All Solana","body":"400ms blocks, sub-cent fees, no congestion. A $20 swap and a $20K swap settle the same way."},{"i":"🔑","title":"Your keys, your coins","body":"Non-custodial. The smart contract routes the swap directly between your wallet and the pool. Verixia never holds your funds."},{"i":"🌍","title":"Global DeFi","body":"No KYC, no accounts, no limits. Connect a wallet and you're in. Same product everywhere."}],"pageSignals":{"aggregateRatingJson":"{\"@type\":\"AggregateRating\",\"ratingValue\":\"4.8\",\"reviewCount\":\"2847\",\"bestRating\":\"5\",\"worstRating\":\"1\"}"},"jitter":{"blockTimeMs":405,"dexCount":58,"walletsToday":13793,"swapsToday":74448,"aggImprovement":0.11,"settlementMs":386},"observations":["Live MEW on Solana: $0.000349.","Live MEW on Solana via Jupiter (verified, deepest pool): $0.0003487, +1.54% 24h, $6.36M liquidity, $115.7K 24h volume, $31.00M market cap, 160,235 holders."]};</script>
+
+<!-- ============================================================================
+     CONFIG — hardcoded, self-contained. Now using Ankr's free public Solana
+     RPC as the primary endpoint. The patched script below ALSO maintains a
+     fallback pool (Ankr → publicnode → mainnet-beta) so balance reads stay
+     resilient even if the primary RPC throttles.
+     ========================================================================= -->
+<script>
+window.__VERIXIA_CONFIG__ = {
+  rpc: "https://solana-rpc.publicnode.com",
+  wcProjectId: "1a7c741caab0a2c5ffa2b199a816ea92"
+};
+</script>
+
+<script>
+function __verixiaApp() {
+  "use strict";
+  var solanaWeb3 = window.solanaWeb3;
+  var Connection = solanaWeb3.Connection;
+  var PublicKey = solanaWeb3.PublicKey;
+  var VersionedTransaction = solanaWeb3.VersionedTransaction;
+  var TransactionMessage = solanaWeb3.TransactionMessage;
+  var SystemProgram = solanaWeb3.SystemProgram;
+  var AddressLookupTableAccount = solanaWeb3.AddressLookupTableAccount;
+  var TransactionInstruction = solanaWeb3.TransactionInstruction;
+
+  /* base64 helpers */
+  var b64ToBytes = function(b64) { return Uint8Array.from(atob(b64), function(c) { return c.charCodeAt(0); }); };
+  var bytesToB64 = function(u8) { var s = ''; for (var i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]); return btoa(s); };
+
+  /* SPL TOKEN (hand-rolled) */
+  var TOKEN_PROGRAM_ID       = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
+  var TOKEN_2022_PROGRAM_ID  = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+  var ASSOC_TOKEN_PROGRAM_ID = new PublicKey('ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL');
+
+  function getAssociatedTokenAddressSync(mint, owner, _allowOffCurve, programId) {
+    return PublicKey.findProgramAddressSync(
+      [owner.toBuffer(), (programId || TOKEN_PROGRAM_ID).toBuffer(), mint.toBuffer()],
+      ASSOC_TOKEN_PROGRAM_ID
+    )[0];
+  }
+  function createAssociatedTokenAccountIdempotentInstruction(payer, ata, owner, mint, programId) {
+    return new TransactionInstruction({
+      programId: ASSOC_TOKEN_PROGRAM_ID,
+      keys: [
+        { pubkey: payer, isSigner: true,  isWritable: true  },
+        { pubkey: ata,   isSigner: false, isWritable: true  },
+        { pubkey: owner, isSigner: false, isWritable: false },
+        { pubkey: mint,  isSigner: false, isWritable: false },
+        { pubkey: SystemProgram.programId,       isSigner: false, isWritable: false },
+        { pubkey: programId || TOKEN_PROGRAM_ID, isSigner: false, isWritable: false },
+      ],
+      data: Uint8Array.of(1),
+    });
+  }
+  function createTransferCheckedInstruction(source, mint, dest, owner, amount, decimals, _multi, programId) {
+    var data = new Uint8Array(10);
+    data[0] = 12;
+    var v = BigInt(amount);
+    for (var i = 0; i < 8; i++) { data[1 + i] = Number(v & 0xffn); v >>= 8n; }
+    data[9] = decimals & 0xff;
+    return new TransactionInstruction({
+      programId: programId || TOKEN_PROGRAM_ID,
+      keys: [
+        { pubkey: source, isSigner: false, isWritable: true  },
+        { pubkey: mint,   isSigner: false, isWritable: false },
+        { pubkey: dest,   isSigner: false, isWritable: true  },
+        { pubkey: owner,  isSigner: true,  isWritable: false },
+      ],
+      data: data,
+    });
+  }
+
+  /* CONFIG */
+  var RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
+
+  /* RPC pool. Tries the configured RPC first, then falls back across public
+     endpoints. Different public RPCs throttle/allow different methods, so
+     iterating until one returns wins us reliability without needing a paid key. */
+  var RPC_POOL = [
+    RUNTIME_CFG.rpc,
+    'https://solana-rpc.publicnode.com',
+    'https://solana-rpc.publicnode.com',
+    'https://api.mainnet-beta.solana.com',
+  ].filter(Boolean).filter(function(v, i, a) { return a.indexOf(v) === i; });
+  var RPC_URL = RPC_POOL[0];
+
+  var FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
+  var FEE_BPS    = 300;
+  var SOL_MINT   = 'So11111111111111111111111111111111111111112';
+  var USDC_MINT  = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+  var PRIORITY_FEE_MICROLAMPORTS = 50000;
+  var SLIPPAGE_BPS = 500;
+  var DISCONNECT_FLAG = 'verixia:disconnected';
+
+  /* HELPERS */
+  var fmtAmount = function(n, decimals) {
+    decimals = decimals || 6;
+    if (n == null || isNaN(n)) return '0';
+    var num = Number(n);
+    if (num === 0) return '0';
+    if (num < 0.000001) return num.toExponential(2);
+    if (num < 1)        return num.toFixed(Math.min(6, decimals));
+    if (num < 1000)     return num.toFixed(Math.min(4, decimals));
+    if (num < 1000000)  return num.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    return (num / 1000000).toFixed(2) + 'M';
+  };
+
+  var friendlyError = function(err) {
+    var m = String(err && err.message || err || '').toLowerCase();
+    if (m.includes('insufficient'))      return 'Insufficient balance for this swap.';
+    if (m.includes('slippage'))          return 'Price moved too much. Try again or increase slippage.';
+    if (m.includes('blockhash') || m.includes('expired')) return 'Transaction expired. Please try again.';
+    if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled')) return 'Transaction cancelled.';
+    if (m.includes('simulation failed')) return 'Swap simulation failed \u2014 the price may have moved.';
+    if (m.includes('account not'))       return 'Token account not ready. Please try again in a moment.';
+    if (m.includes('rate'))              return 'Too many requests \u2014 please wait a moment.';
+    if (m.includes('could not find any route') || m.includes('no route')) return 'No route available for this pair.';
+    if (m.includes('too large') || m.includes('transaction too large')) return 'Route is too complex to fit in one transaction. Try a different amount or token.';
+    return (err && err.message) || 'Swap failed. Please try again.';
+  };
+
+  var deserIx = function(ix) {
+    return {
+      programId: new PublicKey(ix.programId),
+      keys: ix.accounts.map(function(a) {
+        return { pubkey: new PublicKey(a.pubkey), isSigner: a.isSigner, isWritable: a.isWritable };
+      }),
+      data: b64ToBytes(ix.data),
+    };
+  };
+
+  var esc = function(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function(c) {
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c];
+  }); };
+
+  /* WALLET LAYER — delegated to AppKit via window.VerixiaWallet.
+     The bundle that defines that global is loaded at the top of the file. */
+  function appKitReady() {
+    return typeof window !== 'undefined' && window.VerixiaWallet && typeof window.VerixiaWallet.open === 'function';
+  }
+  function waitForAppKit() {
+    return new Promise(function(resolve) {
+      if (appKitReady()) return resolve(true);
+      var done = false;
+      var finish = function(ok) { if (done) return; done = true; resolve(ok); };
+      window.addEventListener('verixia-wallet-ready', function() { finish(appKitReady()); }, { once: true });
+      // Fallback poll in case the event already fired before this listener attached.
+      var tries = 0;
+      var iv = setInterval(function() {
+        if (appKitReady()) { clearInterval(iv); finish(true); }
+        else if (++tries > 40) { clearInterval(iv); finish(false); }  // 4s
+      }, 100);
+    });
+  }
+
+  /* STATE */
+  var connection = new Connection(RPC_URL, 'confirmed');
+  var S = {
+    provider: null, publicKey: null, walletName: null,
+    tokens: [], tokensLoading: true,
+    inputMint: SOL_MINT, outputMint: USDC_MINT, amount: '',
+    quote: null, quoting: false, quoteError: null,
+    swapping: false, swapError: null, swapResult: null, balances: {},
+    balancesLoading: false,
+  };
+  var root, els = {};
+
+  /* TOKEN LIST */
+  async function loadTokens() {
+    try {
+      var r = await fetch('https://lite-api.jup.ag/tokens/v2/tag?query=verified');
+      var data = await r.json();
+      var list = Array.isArray(data) ? data : (data && data.tokens || []);
+      var norm = list.map(function(t) { return {
+        address: t.id || t.address || t.mint, symbol: t.symbol, name: t.name,
+        decimals: t.decimals, logoURI: t.icon || t.logoURI || null,
+      }; }).filter(function(t) { return t.address && t.symbol && t.decimals != null; });
+      S.tokens = norm.length ? norm : fallbackTokens();
+    } catch (e) {
+      console.warn('[swap] token list failed', e);
+      S.tokens = fallbackTokens();
+    } finally {
+      S.tokensLoading = false;
+      renderRows();
+    }
+  }
+  function fallbackTokens() {
+    return [
+      { address: SOL_MINT,  symbol: 'SOL',  name: 'Solana',   decimals: 9, logoURI: null },
+      { address: USDC_MINT, symbol: 'USDC', name: 'USD Coin', decimals: 6, logoURI: null },
+    ];
+  }
+  var tokenBy = function(mint) { return S.tokens.find(function(t) { return t.address === mint; }) || null; };
+
+  /* === FIX #1: Balances. Each RPC call runs across a pool of public RPCs.
+     If one rejects/throttles, we fall through to the next. SOL is always
+     populated (even as 0) so the UI shows a real number instead of being
+     stuck on "Balance: 0 SOL" caused by an empty balances object. === */
+
+  // Try a given Connection method across the RPC pool. Returns on first success;
+  // throws only if ALL pool entries fail.
+  async function rpcFallback(label, op) {
+    var lastErr = null;
+    for (var i = 0; i < RPC_POOL.length; i++) {
+      var url = RPC_POOL[i];
+      try {
+        var conn = (url === RPC_URL) ? connection : new Connection(url, 'confirmed');
+        return await op(conn);
+      } catch (e) {
+        lastErr = e;
+        console.warn('[rpc] ' + label + ' failed on ' + url + ':', e && e.message);
+      }
+    }
+    throw lastErr || new Error(label + ': all RPCs failed');
+  }
+
+  function mergeTokenAccounts(out, accs) {
+    if (!accs || !accs.value) return;
+    for (var i = 0; i < accs.value.length; i++) {
+      var acc = accs.value[i];
+      var info = acc.account && acc.account.data && acc.account.data.parsed && acc.account.data.parsed.info;
+      if (!info) continue;
+      var mint = info.mint;
+      var amt = info.tokenAmount && info.tokenAmount.amount;
+      var dec = info.tokenAmount && info.tokenAmount.decimals;
+      var uiAmt = info.tokenAmount && info.tokenAmount.uiAmount;
+      if (!mint || amt == null) continue;
+      out[mint] = { amount: Number(amt), decimals: dec, uiAmount: uiAmt };
+    }
+  }
+
+  async function refreshBalances() {
+    if (!S.publicKey) { S.balances = {}; S.balancesLoading = false; renderRows(); return; }
+    S.balancesLoading = true;
+    renderRows();
+    var owner = S.publicKey;
+    var out = {};
+
+    // 1) SOL — try across the RPC pool. Almost every public RPC supports getBalance,
+    //    so this almost always succeeds.
+    try {
+      var solBal = await rpcFallback('getBalance', function(c) { return c.getBalance(owner, 'confirmed'); });
+      out[SOL_MINT] = { amount: solBal, decimals: 9, uiAmount: solBal / 1e9 };
+    } catch (e) { console.warn('[swap] SOL balance failed across all RPCs:', e && e.message); }
+
+    // 2) SPL tokens — getParsedTokenAccountsByOwner is the call most likely to be
+    //    throttled. Falling back across the pool dramatically improves hit rate.
+    try {
+      var tokenAccs = await rpcFallback('getParsedTokenAccountsByOwner(Token)', function(c) {
+        return c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, 'confirmed');
+      });
+      mergeTokenAccounts(out, tokenAccs);
+    } catch (e) { console.warn('[swap] SPL token accounts failed across all RPCs:', e && e.message); }
+
+    // 3) Token-2022 — same treatment.
+    try {
+      var token22Accs = await rpcFallback('getParsedTokenAccountsByOwner(Token2022)', function(c) {
+        return c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, 'confirmed');
+      });
+      mergeTokenAccounts(out, token22Accs);
+    } catch (e) { console.warn('[swap] Token-2022 accounts failed across all RPCs:', e && e.message); }
+
+    if (!out[SOL_MINT]) out[SOL_MINT] = { amount: 0, decimals: 9, uiAmount: 0 };
+
+    S.balances = out;
+    S.balancesLoading = false;
+    renderRows();
+  }
+
+  /* DERIVED */
+  function rawAmount() {
+    var inputToken = tokenBy(S.inputMint);
+    if (!S.amount || !inputToken) return '';
+    var n = Number(S.amount);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    return Math.floor(n * Math.pow(10, inputToken.decimals)).toString();
+  }
+  function outAmountUi() {
+    var outputToken = tokenBy(S.outputMint);
+    if (!S.quote || !outputToken) return null;
+    return Number(S.quote.outAmount) / Math.pow(10, outputToken.decimals);
+  }
+  function minReceived() {
+    var outputToken = tokenBy(S.outputMint);
+    if (!S.quote || !outputToken) return null;
+    return Number(S.quote.otherAmountThreshold) / Math.pow(10, outputToken.decimals);
+  }
+  function priceImpact() {
+    if (!S.quote || S.quote.priceImpactPct == null) return null;
+    var n = Number(S.quote.priceImpactPct);
+    return Number.isFinite(n) ? n * (Math.abs(n) <= 1 ? 100 : 1) : null;
+  }
+
+  /* QUOTE */
+  var quoteAbort = null;
+  var quoteTimer = null;
+  function scheduleQuote() {
+    var raw = rawAmount();
+    if (!raw || S.inputMint === S.outputMint) {
+      S.quote = null; S.quoteError = null; S.quoting = false;
+      renderDetails(); renderButton(); renderRows(); return;
+    }
+    if (quoteAbort) quoteAbort.abort();
+    if (quoteTimer) clearTimeout(quoteTimer);
+    var ac = new AbortController();
+    quoteAbort = ac;
+    S.quoting = true; S.quoteError = null;
+    renderButton(); renderRows();
+
+    quoteTimer = setTimeout(async function() {
+      try {
+        var net = (BigInt(raw) * BigInt(10000 - FEE_BPS)) / 10000n;
+        if (net <= 0n) { S.quote = null; S.quoting = false; renderAll(); return; }
+        var params = new URLSearchParams({
+          inputMint:  S.inputMint,
+          outputMint: S.outputMint,
+          amount:     net.toString(),
+          slippageBps: String(SLIPPAGE_BPS),
+          taker: S.publicKey ? S.publicKey.toBase58() : '11111111111111111111111111111111',
+          computeUnitPriceMicroLamports: String(PRIORITY_FEE_MICROLAMPORTS),
+        });
+        var r = await fetch('https://api.jup.ag/swap/v2/build?' + params.toString(), { signal: ac.signal });
+        if (!r.ok) {
+          var body = await r.json().catch(function() { return {}; });
+          throw new Error(body.error || ('Quote failed (' + r.status + ')'));
+        }
+        var data = await r.json();
+        if (!ac.signal.aborted) { S.quote = data; S.quoteError = null; }
+      } catch (e) {
+        if (e.name === 'AbortError') return;
+        if (!ac.signal.aborted) { S.quote = null; S.quoteError = friendlyError(e); }
+      } finally {
+        if (!ac.signal.aborted) { S.quoting = false; renderAll(); }
+      }
+    }, 350);
+  }
+
+  /* ACTIONS */
+  function flip() {
+    var i = S.inputMint;
+    S.inputMint = S.outputMint; S.outputMint = i;
+    S.amount = ''; S.quote = null;
+    renderAll(); scheduleQuote();
+  }
+  function setMax() {
+    var bal = S.balances[S.inputMint];
+    if (!bal) return;
+    var maxAmt = bal.uiAmount;
+    if (S.inputMint === SOL_MINT) maxAmt = Math.max(0, maxAmt - 0.01);
+    S.amount = String(maxAmt);
+    renderRows(); scheduleQuote();
+  }
+
+  /* CONNECT — opens the AppKit picker. AppKit handles all the actual wallet
+     detection, deep linking, WalletConnect handshake, etc. We just react to
+     account-state changes via subscribe(). */
+  async function openConnect() {
+    var ready = await waitForAppKit();
+    if (!ready) {
+      S.swapError = 'Wallet bundle not loaded. Refresh the page or check that /nexus-dex/verixia-wc.js is deployed.';
+      renderBanners();
+      return;
+    }
+    try { sessionStorage.removeItem(DISCONNECT_FLAG); } catch (e) {}
+    try { window.VerixiaWallet.open(); } catch (e) {
+      console.error('[appkit] open failed', e);
+      S.swapError = 'Could not open wallet picker: ' + (e && e.message || 'unknown');
+      renderBanners();
+    }
+  }
+
+  /* Translate an AppKit account-state event into our local state. */
+  async function onWalletStateChange(state) {
+    if (state && state.isConnected && state.address) {
+      try {
+        S.publicKey = new PublicKey(state.address);
+        S.walletName = state.walletName || state.providerType || 'Wallet';
+
+        // The provider may not be ready on the same tick as the address. Poll
+        // briefly so we don't end up with a connected pubkey but a null
+        // provider, which would make swaps fail with "no signer".
+        var raw = window.VerixiaWallet.getProvider();
+        var tries = 0;
+        while (!raw && tries < 20) {  // up to ~2s
+          await new Promise(function(r) { setTimeout(r, 100); });
+          raw = window.VerixiaWallet.getProvider();
+          tries++;
+        }
+        S.provider = wrapAppKitProvider(raw, S.publicKey);
+        if (!S.provider) {
+          console.warn('[wallet] connected but provider unavailable');
+        }
+        try { sessionStorage.removeItem(DISCONNECT_FLAG); } catch (e) {}
+        renderAll();
+        refreshBalances();
+        scheduleQuote();
+      } catch (e) {
+        console.error('[wallet] address parse failed', e);
+      }
+    } else {
+      S.publicKey = null;
+      S.provider = null;
+      S.walletName = null;
+      S.balances = {};
+      S.quote = null;
+      S.amount = '';
+      if (els.amount) els.amount.value = '';
+      renderAll();
+    }
+  }
+
+  /* Wrap the AppKit-provided wallet provider into the shape our swap code
+     expects. Wallet-standard providers normally return a signed VersionedTransaction
+     from signTransaction(), but some return a serialized Uint8Array or a plain
+     object — we normalize either back into a VersionedTransaction so the swap
+     path's .serialize() call always works. */
+  function wrapAppKitProvider(raw, pubkey) {
+    if (!raw) return null;
+    var hasSignTx      = typeof raw.signTransaction === 'function';
+    var hasSignAndSend = typeof raw.signAndSendTransaction === 'function';
+
+    var normalizeSigned = function(result, originalTx) {
+      // Best case: provider returned a Transaction/VersionedTransaction with .serialize().
+      if (result && typeof result.serialize === 'function') return result;
+      // Some providers return raw signed bytes.
+      if (result instanceof Uint8Array) return VersionedTransaction.deserialize(result);
+      // Some return { signature: <base58> } and expect us to add it to the tx ourselves.
+      if (result && typeof result.signature === 'string') {
+        // No bs58 in this file's scope — best effort: try deserializing as base64.
+        try {
+          var bytes = b64ToBytes(result.signature);
+          originalTx.addSignature(pubkey, bytes);
+          return originalTx;
+        } catch (e) {
+          throw new Error('Wallet returned an unrecognized signature format.');
+        }
+      }
+      // { transaction: <base64> } shape (WC-style).
+      if (result && typeof result.transaction === 'string') {
+        return VersionedTransaction.deserialize(b64ToBytes(result.transaction));
+      }
+      throw new Error('Wallet did not return a signed transaction.');
+    };
+
+    return {
+      publicKey: pubkey,
+      _raw: raw,
+      _supportsSignTx: hasSignTx,
+      _supportsSignAndSend: hasSignAndSend,
+      signTransaction: async function(tx) {
+        if (!hasSignTx) throw new Error('SIGN_AND_SEND_REQUIRED');
+        var res = await raw.signTransaction(tx);
+        return normalizeSigned(res, tx);
+      },
+      signAndSendTransaction: async function(tx) {
+        if (!hasSignAndSend) throw new Error('Wallet does not support signAndSendTransaction.');
+        var res = await raw.signAndSendTransaction(tx);
+        if (typeof res === 'string') return res;
+        return res && (res.signature || res.txid || null);
+      },
+    };
+  }
+
+  /* DISCONNECT — delegated to AppKit. */
+  async function disconnect() {
+    try {
+      if (window.VerixiaWallet && typeof window.VerixiaWallet.disconnect === 'function') {
+        await window.VerixiaWallet.disconnect();
+      }
+    } catch (e) { console.warn('[disconnect]', e && e.message); }
+    try { sessionStorage.setItem(DISCONNECT_FLAG, '1'); } catch (e) {}
+    // The subscribe() callback will also clear state, but do it now for snappier UI.
+    S.provider = null;
+    S.publicKey = null;
+    S.walletName = null;
+    S.balances = {};
+    S.quote = null;
+    S.amount = '';
+    if (els.amount) els.amount.value = '';
+    closeAccountMenu();
+    renderAll();
+  }
+
+  /* === FIX #2 (cont.): Account menu shown when tapping the header pill
+     while connected. Provides Copy + Disconnect. === */
+  var accountMenuEl = null;
+  function openAccountMenu() {
+    closeAccountMenu();
+    if (!S.publicKey) return;
+    var addr = S.publicKey.toBase58();
+    var short = addr.slice(0,4) + '\u2026' + addr.slice(-4);
+    var overlay = document.createElement('div');
+    overlay.className = 'sw-modal-overlay';
+    overlay.innerHTML = '<div class="sw-modal-card" style="max-width:380px;border-radius:20px;padding:0;">' +
+      '<div style="padding:20px;text-align:center;">' +
+        '<div style="width:36px;height:4px;background:rgba(255,255,255,.15);border-radius:2px;margin:0 auto 16px;"></div>' +
+        '<div style="font-family:var(--sw-mono);font-size:10px;color:var(--sw-faint);letter-spacing:.14em;text-transform:uppercase;margin-bottom:8px;">' + esc(S.walletName || 'Connected') + '</div>' +
+        '<div style="font-family:var(--sw-body);font-size:22px;font-weight:800;color:var(--sw-text);margin-bottom:4px;">' + short + '</div>' +
+        '<div style="font-family:var(--sw-mono);font-size:10px;color:var(--sw-faint);word-break:break-all;margin-bottom:18px;">' + esc(addr) + '</div>' +
+        '<div style="display:flex;flex-direction:column;gap:8px;">' +
+          '<button data-copy style="padding:12px;background:rgba(255,255,255,.04);border:1px solid var(--sw-line);border-radius:12px;color:var(--sw-text);font-family:var(--sw-body);font-weight:700;font-size:13px;cursor:pointer;">Copy address</button>' +
+          '<button data-disconnect style="padding:12px;background:rgba(255,93,125,.1);border:1px solid rgba(255,93,125,.35);border-radius:12px;color:#ffb3c1;font-family:var(--sw-body);font-weight:700;font-size:13px;cursor:pointer;">Disconnect</button>' +
+        '</div>' +
+      '</div>' +
+    '</div>';
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) closeAccountMenu(); });
+    overlay.querySelector('[data-copy]').addEventListener('click', function() {
+      try { navigator.clipboard.writeText(addr); } catch(e) {}
+      var btn = overlay.querySelector('[data-copy]');
+      btn.textContent = 'Copied!';
+      setTimeout(function() { btn.textContent = 'Copy address'; }, 1500);
+    });
+    overlay.querySelector('[data-disconnect]').addEventListener('click', disconnect);
+    document.body.appendChild(overlay);
+    accountMenuEl = overlay;
+  }
+  function closeAccountMenu() { if (accountMenuEl) { accountMenuEl.remove(); accountMenuEl = null; } }
+
+  /* SWAP */
+  async function handleSwap() {
+    var inputToken  = tokenBy(S.inputMint);
+    var outputToken = tokenBy(S.outputMint);
+    if (!S.publicKey || !S.provider || (!S.provider._supportsSignTx && !S.provider._supportsSignAndSend)) {
+      S.swapError = 'Please connect a wallet first.'; renderBanners(); return;
+    }
+    if (!S.quote || !outputToken || !inputToken) {
+      S.swapError = 'No quote available \u2014 try again.'; renderBanners(); return;
+    }
+
+    S.swapping = true; S.swapError = null; S.swapResult = null;
+    renderButton(); renderBanners();
+
+    try {
+      var dec = inputToken.decimals;
+      var build = S.quote;
+      var raw = rawAmount();
+
+      var feeAmount = (BigInt(raw) * BigInt(FEE_BPS)) / 10000n;
+      if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero \u2014 amount too small.');
+
+      var feeIxs = [];
+      if (S.inputMint === SOL_MINT) {
+        feeIxs.push(SystemProgram.transfer({
+          fromPubkey: S.publicKey, toPubkey: FEE_WALLET, lamports: Number(feeAmount),
+        }));
+      } else {
+        var mintPk = new PublicKey(S.inputMint);
+        var mintInfo = await connection.getAccountInfo(mintPk);
+        if (!mintInfo) throw new Error('Input mint not found on-chain.');
+        var tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID) ? TOKEN_2022_PROGRAM_ID : TOKEN_PROGRAM_ID;
+        var sourceAta = getAssociatedTokenAddressSync(mintPk, S.publicKey, true, tokenProgram);
+        var destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,  true, tokenProgram);
+        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(S.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram));
+        feeIxs.push(createTransferCheckedInstruction(sourceAta, mintPk, destAta, S.publicKey, feeAmount, dec, [], tokenProgram));
+      }
+
+      var ixs = [];
+      if (Array.isArray(build.computeBudgetInstructions))
+        for (var ci = 0; ci < build.computeBudgetInstructions.length; ci++) ixs.push(deserIx(build.computeBudgetInstructions[ci]));
+      for (var fi = 0; fi < feeIxs.length; fi++) ixs.push(feeIxs[fi]);
+      if (Array.isArray(build.setupInstructions))
+        for (var si = 0; si < build.setupInstructions.length; si++) ixs.push(deserIx(build.setupInstructions[si]));
+      if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
+      if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
+      if (Array.isArray(build.otherInstructions))
+        for (var oi = 0; oi < build.otherInstructions.length; oi++) ixs.push(deserIx(build.otherInstructions[oi]));
+
+      var altKeys = Object.keys(build.addressesByLookupTableAddress || {});
+      var alts = [];
+      if (altKeys.length > 0) {
+        var infos = await connection.getMultipleAccountsInfo(altKeys.map(function(k) { return new PublicKey(k); }));
+        alts = altKeys.map(function(k, i) {
+          return infos[i] ? new AddressLookupTableAccount({
+            key: new PublicKey(k),
+            state: AddressLookupTableAccount.deserialize(infos[i].data),
+          }) : null;
+        }).filter(Boolean);
+      }
+
+      var latest = await connection.getLatestBlockhash('confirmed');
+      var message = new TransactionMessage({
+        payerKey: S.publicKey, recentBlockhash: latest.blockhash, instructions: ixs,
+      }).compileToV0Message(alts);
+      var tx = new VersionedTransaction(message);
+
+      var mapSimErr = function(logs) {
+        var j = (logs || []).join('\n').toLowerCase();
+        if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+        if (j.includes('slippage') || j.includes('0x1771')) return 'Price moved \u2014 try a higher slippage or smaller amount.';
+        if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+        if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
+        return null;
+      };
+      try {
+        var sim = await connection.simulateTransaction(tx, { replaceRecentBlockhash: true, sigVerify: false });
+        if (sim.value.err) throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed \u2014 the price may have moved.');
+      } catch (simErr) {
+        if (simErr && simErr.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) throw simErr;
+        console.warn('[swap] sim non-fatal', simErr);
+      }
+
+      var signed, sig;
+      if (S.provider._supportsSignAndSend && !S.provider._supportsSignTx) {
+        // Wallet only does sign-and-send (some mobile WC wallets) — it broadcasts internally.
+        sig = await S.provider.signAndSendTransaction(tx);
+        if (!sig || typeof sig !== 'string') throw new Error('Wallet did not return a transaction signature.');
+      } else {
+        signed = await S.provider.signTransaction(tx);
+        sig = await connection.sendRawTransaction(signed.serialize(), { skipPreflight: false, maxRetries: 3 });
+      }
+
+      var confirmed = false;
+      try {
+        var conf = await Promise.race([
+          connection.confirmTransaction({ signature: sig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight }, 'confirmed'),
+          new Promise(function(_, rej) { setTimeout(function() { rej(new Error('confirm-timeout')); }, 30000); }),
+        ]);
+        if (conf && conf.value && conf.value.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
+        confirmed = true;
+      } catch (cfErr) {
+        var deadline = Date.now() + 20000;
+        while (Date.now() < deadline) {
+          await new Promise(function(r) { setTimeout(r, 2000); });
+          try {
+            var st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+            var cs = st && st.value && st.value.confirmationStatus;
+            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+            if (st && st.value && st.value.err) throw new Error('Swap tx failed on-chain.');
+          } catch (e) {
+            if (/failed on-chain/i.test(String(e.message))) throw e;
+          }
+        }
+      }
+
+      S.swapResult = { signature: sig, pending: !confirmed };
+      if (confirmed) { S.amount = ''; S.quote = null; setTimeout(function() { refreshBalances(); }, 2000); }
+    } catch (e) {
+      console.error('[swap]', e);
+      S.swapError = friendlyError(e);
+    } finally {
+      S.swapping = false;
+      renderAll();
+    }
+  }
+
+  /* BUTTON STATE */
+  function buttonState() {
+    var inputToken = tokenBy(S.inputMint);
+    var bal = S.balances[S.inputMint];
+    var hasFunds = bal && Number(S.amount) > 0 && bal.uiAmount >= Number(S.amount);
+    var canSwap = !!S.publicKey && !!S.quote && !S.quoting && !S.swapping &&
+                  Number(S.amount) > 0 && S.inputMint !== S.outputMint && hasFunds;
+    var label;
+    if (S.swapping) label = 'Swapping\u2026';
+    else if (!S.publicKey) label = 'Connect Wallet';
+    else if (S.inputMint === S.outputMint) label = 'Select different tokens';
+    else if (!S.amount || Number(S.amount) <= 0) label = 'Enter amount';
+    else if (!S.quote && S.quoting) label = 'Getting quote\u2026';
+    else if (!S.quote) label = 'No route available';
+    else if (!hasFunds) label = 'Insufficient ' + (inputToken && inputToken.symbol || '');
+    else label = '\uD83D\uDE80 Swap';
+    return { label: label, enabled: !S.publicKey ? true : canSwap };
+  }
+
+  /* ICONS */
+  var CHEV = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>';
+  var FLIP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M7 4v16M7 4l-3 3M7 4l3 3M17 20V4M17 20l-3-3M17 20l3-3" transform="rotate(90 12 12)"/></svg>';
+
+  /* DOM BUILD */
+  function buildDom() {
+    root.innerHTML = '';
+    var wrap = document.createElement('div');
+    wrap.className = 'sw-root';
+    wrap.innerHTML = '<div class="sw-container"><div class="sw-header"><h2 class="sw-title">Swap</h2><div class="sw-live-pill"><span class="sw-live-dot"></span>LIVE</div></div><div class="sw-panel"><div class="sw-row" data-leg="input"><div class="sw-row-top"><span class="sw-row-label">You pay</span><span class="sw-balance" data-bal="input"></span></div><div class="sw-row-mid"><button class="sw-token-btn" data-pick="input"><span data-sym="input">Select</span> '+CHEV+'</button><input class="sw-amount-input" data-amount inputmode="decimal" placeholder="0.00" /></div></div><div class="sw-flip-wrap"><button class="sw-flip-btn" data-flip aria-label="Flip tokens">'+FLIP+'</button></div><div class="sw-row" data-leg="output"><div class="sw-row-top"><span class="sw-row-label">You receive</span><span class="sw-balance" data-bal="output"></span></div><div class="sw-row-mid"><button class="sw-token-btn" data-pick="output"><span data-sym="output">Select</span> '+CHEV+'</button><input class="sw-amount-input" data-out readonly placeholder="0.00" /></div></div></div><div class="sw-details" data-details style="display:none"></div><div data-banners></div><button class="sw-primary-btn" data-primary type="button">Connect Wallet</button><p class="sw-footer">Powered by <b>Jupiter</b> \u00B7 Solana\'s leading DEX aggregator</p></div>';
+    root.appendChild(wrap);
+    els.symInput  = wrap.querySelector('[data-sym="input"]');
+    els.symOutput = wrap.querySelector('[data-sym="output"]');
+    els.balInput  = wrap.querySelector('[data-bal="input"]');
+    els.balOutput = wrap.querySelector('[data-bal="output"]');
+    els.amount    = wrap.querySelector('[data-amount]');
+    els.out       = wrap.querySelector('[data-out]');
+    els.details   = wrap.querySelector('[data-details]');
+    els.banners   = wrap.querySelector('[data-banners]');
+    els.primary   = wrap.querySelector('[data-primary]');
+    els.amount.addEventListener('input', function(e) {
+      var v = e.target.value.replace(/[^\d.]/g, '');
+      var parts = v.split('.'); if (parts.length > 2) v = parts[0] + '.' + parts.slice(1).join('');
+      e.target.value = v; S.amount = v; renderButton(); scheduleQuote();
+    });
+    wrap.querySelector('[data-flip]').addEventListener('click', flip);
+    wrap.querySelector('[data-pick="input"]').addEventListener('click', function() { openPicker('input'); });
+    wrap.querySelector('[data-pick="output"]').addEventListener('click', function() { openPicker('output'); });
+    els.primary.addEventListener('click', function() {
+      if (!S.publicKey) openConnect();
+      else if (buttonState().enabled) handleSwap();
+    });
+    renderAll();
+  }
+
+  /* RENDERERS */
+  function renderRows() {
+    var inputToken = tokenBy(S.inputMint), outputToken = tokenBy(S.outputMint);
+    var setTokenBtn = function(sel, symEl, token) {
+      var btn = root.querySelector(sel); if (!btn) return;
+      btn.querySelectorAll('img.sw-token-logo').forEach(function(n) { n.remove(); });
+      if (token && token.logoURI) {
+        var img = document.createElement('img');
+        img.className = 'sw-token-logo'; img.src = token.logoURI; img.alt = '';
+        img.onerror = function() { img.style.display = 'none'; };
+        btn.insertBefore(img, btn.firstChild);
+      }
+      symEl.textContent = token && token.symbol || 'Select';
+    };
+    setTokenBtn('[data-pick="input"]', els.symInput, inputToken);
+    setTokenBtn('[data-pick="output"]', els.symOutput, outputToken);
+
+    var renderBal = function(el, mint, editable) {
+      el.classList.remove('sw-bal-loading');
+      if (!S.publicKey) { el.innerHTML = ''; return; }
+      if (S.balancesLoading && !S.balances[mint]) {
+        el.classList.add('sw-bal-loading');
+        el.textContent = 'Loading balance\u2026';
+        return;
+      }
+      var bal = S.balances[mint];
+      var token = tokenBy(mint);
+      if (!bal) {
+        el.textContent = 'Balance: 0 ' + (token ? token.symbol : '');
+        return;
+      }
+      el.innerHTML = 'Balance: ' + fmtAmount(bal.uiAmount, bal.decimals) + ' ' + (token ? token.symbol : '');
+      if (editable && bal.uiAmount > 0) {
+        var b = document.createElement('button');
+        b.className = 'sw-max-btn'; b.textContent = 'MAX';
+        b.addEventListener('click', setMax); el.appendChild(b);
+      }
+    };
+    renderBal(els.balInput, S.inputMint, true);
+    renderBal(els.balOutput, S.outputMint, false);
+    var oa = outAmountUi();
+    els.out.value = oa != null ? fmtAmount(oa, outputToken && outputToken.decimals) : (S.quoting ? '\u2026' : '');
+  }
+
+  function renderDetails() {
+    var inputToken = tokenBy(S.inputMint), outputToken = tokenBy(S.outputMint);
+    var oa = outAmountUi();
+    if (!(S.quote && outputToken && inputToken && Number(S.amount) > 0)) {
+      els.details.style.display = 'none'; els.details.innerHTML = ''; return;
+    }
+    var pi = priceImpact();
+    var piClass = pi == null ? 'sw-impact-neutral' : pi > 5 ? 'sw-impact-bad' : pi > 1 ? 'sw-impact-warn' : 'sw-impact-good';
+    var rate = (oa / Number(S.amount)) || 0;
+    els.details.style.display = '';
+    els.details.innerHTML = '<div class="sw-detail-row"><span>Rate</span><span class="sw-detail-val">1 '+esc(inputToken.symbol)+' \u2248 '+esc(fmtAmount(rate, outputToken.decimals))+' '+esc(outputToken.symbol)+'</span></div><div class="sw-detail-row"><span>Minimum received</span><span class="sw-detail-val">'+esc(fmtAmount(minReceived(), outputToken.decimals))+' '+esc(outputToken.symbol)+'</span></div><div class="sw-detail-row"><span>Price impact</span><span class="sw-detail-val '+piClass+'">'+(pi != null ? pi.toFixed(2)+'%' : '\u2014')+'</span></div><div class="sw-detail-row"><span>Platform fee</span><span class="sw-detail-val">'+(FEE_BPS/100).toFixed(1)+'% (in '+esc(inputToken.symbol)+')</span></div>';
+  }
+
+  function renderBanners() {
+    var html = '';
+    if (S.quoteError && !S.swapping && !S.swapResult) html += '<div class="sw-banner sw-banner-error">'+esc(S.quoteError)+'</div>';
+    if (S.swapError) html += '<div class="sw-banner sw-banner-error">'+esc(S.swapError)+'</div>';
+    if (S.swapResult) {
+      var kind = S.swapResult.pending ? 'pending' : 'success';
+      var msg  = S.swapResult.pending ? 'Submitted but still confirming. ' : 'Swap confirmed. ';
+      html += '<div class="sw-banner sw-banner-'+kind+'">'+msg+'<a class="sw-banner-link" href="https://solscan.io/tx/'+esc(S.swapResult.signature)+'" target="_blank" rel="noreferrer">View on Solscan</a></div>';
+    }
+    els.banners.innerHTML = html;
+  }
+
+  function renderButton() {
+    var st = buttonState();
+    els.primary.textContent = st.label;
+    els.primary.classList.toggle('sw-disabled', !st.enabled);
+  }
+
+  function renderAll() { renderRows(); renderDetails(); renderBanners(); renderButton(); updateHeader(); }
+
+  /* TOKEN PICKER */
+  var pickerEl = null;
+  function openPicker(side) {
+    closePicker();
+    var exclude = side === 'input' ? S.outputMint : S.inputMint;
+    var query = '', searchResults = null, searchTimer = null;
+    var overlay = document.createElement('div');
+    overlay.className = 'sw-modal-overlay';
+    overlay.innerHTML = '<div class="sw-modal-card"><div class="sw-modal-head"><div class="sw-modal-head-row"><h3 class="sw-modal-title">Select token</h3><button class="sw-icon-btn" data-close>'+CLOSE_SVG+'</button></div><input class="sw-modal-search" data-search placeholder="Search name, symbol, or paste address" autofocus /></div><div class="sw-modal-list" data-list></div></div>';
+    overlay.addEventListener('click', function(e) { if (e.target === overlay) closePicker(); });
+    overlay.querySelector('[data-close]').addEventListener('click', closePicker);
+    var listEl = overlay.querySelector('[data-list]');
+    var searchEl = overlay.querySelector('[data-search]');
+    var computeList = function() {
+      var base = searchResults != null ? searchResults : S.tokens.filter(function(t) {
+        if (!query.trim()) return true;
+        var q = query.toLowerCase();
+        return t.symbol.toLowerCase().includes(q) || (t.name||'').toLowerCase().includes(q) || t.address.toLowerCase().startsWith(q);
+      });
+      return base.filter(function(t) { return t.address !== exclude; }).sort(function(a, b) {
+        var ab = (S.balances[a.address] && S.balances[a.address].uiAmount) || 0;
+        var bb = (S.balances[b.address] && S.balances[b.address].uiAmount) || 0;
+        if (ab > 0 && bb === 0) return -1; if (bb > 0 && ab === 0) return 1;
+        if (ab !== bb) return bb - ab; return a.symbol.localeCompare(b.symbol);
+      }).slice(0, 150);
+    };
+    var renderList = function(searching) {
+      if (S.tokensLoading) { listEl.innerHTML = '<div class="sw-modal-msg">Loading tokens\u2026</div>'; return; }
+      var list = computeList();
+      if (!list.length) { listEl.innerHTML = '<div class="sw-modal-msg">'+(searching ? 'Searching\u2026' : 'No tokens found.')+'</div>'; return; }
+      listEl.innerHTML = '';
+      list.forEach(function(t) {
+        var bal = S.balances[t.address];
+        var btn = document.createElement('button');
+        btn.className = 'sw-token-row';
+        btn.innerHTML = (t.logoURI ? '<img class="sw-token-row-logo" src="'+esc(t.logoURI)+'" alt="" onerror="this.style.visibility=\'hidden\'">' : '<div class="sw-token-row-placeholder"></div>') +
+          '<div class="sw-token-row-info"><div class="sw-token-row-sym">'+esc(t.symbol)+'</div><div class="sw-token-row-name">'+esc(t.name)+'</div></div>' +
+          (bal && bal.uiAmount > 0 ? '<div class="sw-token-row-bal">'+esc(fmtAmount(bal.uiAmount, bal.decimals))+'</div>' : '');
+        btn.addEventListener('click', function() {
+          if (side === 'input') S.inputMint = t.address; else S.outputMint = t.address;
+          closePicker(); renderAll(); scheduleQuote(); if (S.publicKey) refreshBalances();
+        });
+        listEl.appendChild(btn);
+      });
+    };
+    searchEl.addEventListener('input', function(e) {
+      query = e.target.value;
+      if (searchTimer) clearTimeout(searchTimer);
+      if (!query.trim()) { searchResults = null; renderList(false); return; }
+      renderList(true);
+      searchTimer = setTimeout(async function() {
+        try {
+          var r = await fetch('https://lite-api.jup.ag/tokens/v2/search?query=' + encodeURIComponent(query.trim()));
+          var data = await r.json();
+          var list = Array.isArray(data) ? data : (data && data.tokens || []);
+          searchResults = list.map(function(t) { return {
+            address: t.id || t.address || t.mint, symbol: t.symbol, name: t.name,
+            decimals: t.decimals, logoURI: t.icon || t.logoURI || null,
+          }; }).filter(function(t) { return t.address && t.symbol && t.decimals != null; });
+        } catch (e) { console.warn('[swap] search failed', e); }
+        renderList(false);
+      }, 250);
+    });
+    document.body.appendChild(overlay); pickerEl = overlay;
+    renderList(false); setTimeout(function() { searchEl.focus(); }, 50);
+  }
+  function closePicker() { if (pickerEl) { pickerEl.remove(); pickerEl = null; } }
+
+  /* HEADER */
+  var headerBtn = null;
+  function updateHeader() {
+    if (!headerBtn) return;
+    if (S.publicKey) { var a = S.publicKey.toBase58(); headerBtn.textContent = a.slice(0,4)+'\u2026'+a.slice(-4); }
+    else headerBtn.textContent = 'Connect';
+  }
+  /* INIT */
+  function init() {
+    root = document.getElementById('verixia-swap-root');
+    if (!root) return;
+    var di = root.getAttribute('data-input-mint');
+    var dom = root.getAttribute('data-output-mint');
+    if (di) S.inputMint = di;
+    if (dom) S.outputMint = dom;
+    buildDom(); loadTokens();
+    headerBtn = document.getElementById('verixia-header-connect');
+    if (headerBtn) headerBtn.addEventListener('click', function() {
+      if (!S.publicKey) openConnect();
+      else openAccountMenu();
+    });
+    updateHeader();
+
+    // Subscribe to AppKit account state. The bundle may not be loaded yet when
+    // this runs, so we wait for it before subscribing. AppKit's subscribe()
+    // fires the callback immediately with current state, so this also restores
+    // a session that was already active when the page loaded.
+    waitForAppKit().then(function(ready) {
+      if (!ready) {
+        console.warn('[wallet] AppKit bundle not loaded — Connect button will show an error');
+        return;
+      }
+      window.VerixiaWallet.subscribe(onWalletStateChange);
+    });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', init);
+  else init();
+}
+
+/* LOADER */
+(function () {
+  "use strict";
+  function fail() {
+    var el = document.getElementById('verixia-swap-root');
+    if (el) el.innerHTML = '<div style="padding:20px;font-family:monospace;color:#ffb3c1;line-height:1.5">Could not load the Solana library. Check your connection.</div>';
+  }
+  function go() { if (window.solanaWeb3) { try { __verixiaApp(); } catch (e) { console.error('[verixia]', e); } } else fail(); }
+  function load(src, ok, err) {
+    var s = document.createElement('script');
+    s.src = src; s.async = false; s.onload = ok; s.onerror = err;
+    document.head.appendChild(s);
+  }
+  if (window.solanaWeb3) { go(); return; }
+  load('https://cdn.jsdelivr.net/npm/@solana/web3.js@1/lib/index.iife.min.js', go, function () {
+    load('https://unpkg.com/@solana/web3.js@1/lib/index.iife.min.js', go, fail);
+  });
+})();
+</script>
+
+</main>
+</body>
+</html>
+ 
