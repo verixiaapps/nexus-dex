@@ -378,8 +378,12 @@ const SOL_RESERVE = 0.015;
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
+// Use the injected RPC (same as SwapWidget) — a fast/paid endpoint. The
+// public RPCs are too slow for the sign window and cause "Tx expired".
+const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
 const RPC_URL =
-  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC)
+  RUNTIME_CFG.rpc
+  || (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC)
   || 'https://solana-rpc.publicnode.com';
 
 const BAL_RPC_POOL = [
