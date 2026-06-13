@@ -545,7 +545,7 @@
      ========================================================================= -->
 <script>
 window.__VERIXIA_CONFIG__ = {
-  rpc: "https://rpc.ankr.com/solana",
+  rpc: "https://solana-rpc.publicnode.com",
   wcProjectId: "1a7c741caab0a2c5ffa2b199a816ea92"
 };
 </script>
@@ -617,7 +617,7 @@ function __verixiaApp() {
      iterating until one returns wins us reliability without needing a paid key. */
   var RPC_POOL = [
     RUNTIME_CFG.rpc,
-    'https://rpc.ankr.com/solana',
+    'https://solana-rpc.publicnode.com',
     'https://solana-rpc.publicnode.com',
     'https://api.mainnet-beta.solana.com',
   ].filter(Boolean).filter(function(v, i, a) { return a.indexOf(v) === i; });
