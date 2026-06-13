@@ -417,23 +417,33 @@ const getConn = (commitment, url = RPC_URL) => {
   return c;
 };
 
+const _withTimeout = (p, ms) => Promise.race([
+  p,
+  new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
+]);
+
+// Balance reads: try the fast primary RPC (Alchemy from runtime config)
+// FIRST and give it room (4s). Only if it fails/times out do we race the
+// slower public fallbacks. This stops the public RPCs from dragging down
+// the common case where Alchemy is healthy.
 const balRpcRace = (op) => {
-  const conns = BAL_RPC_POOL.map(u => getConn(BAL_COMMITMENT, u));
-  const withTimeout = (p, ms) => Promise.race([
-    p,
-    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
-  ]);
-  return Promise.any(conns.map((c, i) =>
-    withTimeout(op(c), 2500).catch(e => {
-      if (typeof console !== 'undefined') console.warn('[lr-bal] ' + BAL_RPC_POOL[i] + ':', e?.message);
-      throw e;
-    })
-  )).catch(() => { throw new Error('All balance RPCs failed'); });
+  const primary = getConn(BAL_COMMITMENT, RPC_URL);
+  return _withTimeout(op(primary), 4000).catch((e) => {
+    if (typeof console !== 'undefined') console.warn('[lr-bal] primary slow/failed:', e?.message);
+    const fallbacks = BAL_RPC_POOL.filter(u => u !== RPC_URL).map(u => getConn(BAL_COMMITMENT, u));
+    if (fallbacks.length === 0) throw new Error('Balance RPC failed');
+    return Promise.any(fallbacks.map((c, i) =>
+      _withTimeout(op(c), 3000).catch(err => {
+        if (typeof console !== 'undefined') console.warn('[lr-bal] fallback ' + i + ':', err?.message);
+        throw err;
+      })
+    )).catch(() => { throw new Error('All balance RPCs failed'); });
+  });
 };
 
 const POLL_RECENT  = 8_000;
 const POLL_SOL     = 30_000;
-const POLL_BALANCE = 12_000;
+const POLL_BALANCE = 30_000;
 
 /* ════════════════════════════════════════════════════════════════════
    FORMATTERS
@@ -1252,6 +1262,53 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     [1500, 4000, 8000].forEach(ms => setTimeout(refreshBalances, ms));
   }, [refreshBalances]);
 
+  // Targeted balance for ONE mint — far lighter than scanning every token
+  // account the wallet owns. Used by the trade modal so it loads fast.
+  // Resolves the token program (SPL vs Token-2022) and reads only that
+  // mint's ATA(s). Updates the shared balances map on success.
+  const refreshOneToken = useCallback(async (mintStr) => {
+    if (!wallet.publicKey || !mintStr || mintStr === SOL_MINT) return;
+    const owner = wallet.publicKey;
+    let mintPk;
+    try { mintPk = new PublicKey(mintStr); } catch { return; }
+    try {
+      const accs = await balRpcRace(c =>
+        c.getParsedTokenAccountsByOwner(owner, { mint: mintPk }, BAL_COMMITMENT));
+      let best = null;
+      for (const acc of (accs?.value || [])) {
+        const info = acc.account?.data?.parsed?.info;
+        const amt = info?.tokenAmount?.amount;
+        if (amt == null) continue;
+        const ui = Number(info.tokenAmount?.uiAmount || 0);
+        if (!best || ui > best.uiAmount) {
+          best = {
+            amount:   String(amt),
+            decimals: Number(info.tokenAmount?.decimals ?? 6),
+            uiAmount: ui,
+          };
+        }
+      }
+      if (best) {
+        setBalances(prev => ({ ...prev, [mintStr]: best }));
+      } else {
+        // No account = zero balance; record it so the UI stops "loading".
+        setBalances(prev => ({ ...prev, [mintStr]: { amount: '0', decimals: 6, uiAmount: 0 } }));
+      }
+    } catch (e) {
+      console.warn('[lr] single-token balance failed', e?.message);
+    }
+  }, [wallet.publicKey]);
+
+  // Also refresh SOL alone — cheap, used alongside refreshOneToken.
+  const refreshSol = useCallback(async () => {
+    if (!wallet.publicKey) return;
+    const owner = wallet.publicKey;
+    try {
+      const lamports = await balRpcRace(c => c.getBalance(owner, BAL_COMMITMENT));
+      setBalances(prev => ({ ...prev, [SOL_MINT]: { amount: String(lamports), decimals: 9, uiAmount: lamports / 1e9 } }));
+    } catch (e) { console.warn('[lr] SOL balance failed', e?.message); }
+  }, [wallet.publicKey]);
+
   const solBalance = balances[SOL_MINT];
 
   const [toasts, setToasts] = useState([]);
@@ -1458,11 +1515,16 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   const onCardBuy = useCallback((token) => {
     if (!requireWallet()) return;
     setTradeOpen({ token, mode: 'buy' });
-  }, [requireWallet]);
+    // Fast, targeted balance load for just this token + SOL.
+    refreshSol();
+    refreshOneToken(token.mint);
+  }, [requireWallet, refreshSol, refreshOneToken]);
   const onCardSell = useCallback((token) => {
     if (!requireWallet()) return;
     setTradeOpen({ token, mode: 'sell' });
-  }, [requireWallet]);
+    refreshSol();
+    refreshOneToken(token.mint);
+  }, [requireWallet, refreshSol, refreshOneToken]);
 
   const handleTradeConfirm = useCallback(async ({ mode, swapParams, token }) => {
     const { sig, confirmed, outAmount } = await executeSwap({ mode, swapParams, token });
@@ -1486,10 +1548,17 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       tweetText, shareUrl,
     });
 
+    // Fast targeted refresh for the traded token + SOL, then the full
+    // scan in the background (updates "you own" strips on other cards).
+    refreshSol();
+    [1200, 3000, 6000].forEach(ms => setTimeout(() => {
+      refreshSol();
+      refreshOneToken(token.mint);
+    }, ms));
     aggressiveRefresh();
     setTradeOpen(null);
     return { closed: true };
-  }, [executeSwap, fireConfetti, pushToast, aggressiveRefresh]);
+  }, [executeSwap, fireConfetti, pushToast, aggressiveRefresh, refreshSol, refreshOneToken]);
 
   /* ──── derived display ──── */
   const deriveDisplayValues = useCallback((t) => t, []);
@@ -1798,4 +1867,3 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     </div>
   );
 }
- 
