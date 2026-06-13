@@ -10,18 +10,12 @@
 //   them to the client as JSON. The client appends the 3% platform-fee
 //   instruction and signs ONE atomic transaction.
 //
-// FIX vs prior revision
-//   The instruction builder is now resolved by FEATURE DETECTION instead of a
-//   hard-coded `sdk.buyInstructions(...)` call. Depending on the installed
-//   @pump-fun/pump-sdk version, the buy/sell builders live either on the
-//   OnlinePumpSdk instance (convenience wrappers, newer) or on the offline
-//   PumpSdk / PUMP_SDK singleton, and may be named buyInstructions /
-//   getBuyInstructions. We probe both objects for both names. If none is
-//   found, we throw an error listing every method the SDK actually exposes,
-//   so the exact name is obvious in the server log.
-//
-//   Simplest alternative fix: `npm install @pump-fun/pump-sdk@latest` so the
-//   OnlinePumpSdk.buyInstructions/sellInstructions wrappers are present.
+// SLIPPAGE
+//   10% on both buys and sells. The client's BUY math sizes the trade portion
+//   so that even at full 10% upper-bound the wallet cannot overdraw:
+//       feeLamports + tradeLamports * 1.10 ≤ totalLamports
+//   Changing this number requires updating the matching divisor (110n) in
+//   LaunchRadar.jsx's swapParams BUY branch.
 //
 // DEPENDENCIES
 //     npm install @pump-fun/pump-sdk @coral-xyz/anchor bn.js @solana/web3.js
@@ -162,8 +156,10 @@ function noBuilderError(action) {
 
 const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
-// Slippage in this SDK is a PERCENT number (30 = 30%).
-const SLIPPAGE_PCT = 30; // volatile fresh launches — high enough to land
+// Slippage in this SDK is a PERCENT number (10 = 10%).
+// CLIENT MATH ASSUMES THIS VALUE. If you change it, update the divisor (110n)
+// in LaunchRadar.jsx's swapParams BUY branch to match (1 + SLIPPAGE_PCT/100).
+const SLIPPAGE_PCT = 10;
 
 function serializeIx(ix) {
   return {
@@ -210,7 +206,8 @@ function mountRoutes(app) {
       }
 
       if (action === 'buy') {
-        // amount = SOL lamports (string). 97% trade portion; fee added client-side.
+        // amount = SOL lamports (string). Client sends the curve-budget portion
+        // already sized for the slippage upper-bound — see SLIPPAGE_PCT note above.
         const lamports = b.amount;
         if (lamports == null) return res.status(400).json({ error: 'Missing amount' });
         const solAmount = new BN(String(lamports));
@@ -253,12 +250,15 @@ function mountRoutes(app) {
           feeConfigOk: !!feeConfig,
           mayhem: !!(buyState.bondingCurve && (buyState.bondingCurve.isMayhemMode ?? buyState.bondingCurve.is_mayhem_mode)),
           rpcHost: (() => { try { return new URL(getRpcUrl()).host; } catch { return null; } })(),
+          slippagePct: SLIPPAGE_PCT,
           expectedTokens: tokenAmount.toString(),
           instructions: instructions.map(serializeIx),
         });
       }
 
-      // ── SELL ── amount = raw token units (string, the 97% trade portion).
+      // ── SELL ── amount = raw token units (string). Full sell amount; the
+      // 3% platform fee is taken from the SOL output client-side after the
+      // curve pays native SOL into the user's wallet.
       const rawTokens = b.amount;
       if (rawTokens == null) return res.status(400).json({ error: 'Missing amount' });
       const amount = new BN(String(rawTokens));
@@ -299,6 +299,7 @@ function mountRoutes(app) {
         feeConfigOk: !!feeConfig,
         mayhem: !!(sellState.bondingCurve && (sellState.bondingCurve.isMayhemMode ?? sellState.bondingCurve.is_mayhem_mode)),
         rpcHost: (() => { try { return new URL(getRpcUrl()).host; } catch { return null; } })(),
+        slippagePct: SLIPPAGE_PCT,
         expectedSol: solReceived.toString(),
         instructions: instructions.map(serializeIx),
       });
@@ -315,4 +316,3 @@ function mountRoutes(app) {
 }
 
 module.exports = { mountRoutes };
- 
