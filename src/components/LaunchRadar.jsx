@@ -1,11 +1,13 @@
 // LaunchRadar.jsx — Solana new launches + per-card BUY/SELL modal trade flow.
 //
 // FIXED: Trade flow now matches SwapWidget exactly.
-//   • Fee: 3% manually subtracted from input BEFORE quoting Jupiter.
-//   • Quote+Build: Single call to /api/jupiter/build (not /quote + /swap-instructions).
-//   • Fee instructions: Manual SOL transfer (BUY) or SPL transferChecked (SELL).
-//   • No platformFeeBps, no feeAccount, no dynamicSlippage — same proven
-//     pattern as SwapWidget.
+//   • Fee: Jupiter NATIVE 3% (platformFeeBps + feeAccount). Taken in the
+//     OUTPUT mint, routed straight to YOUR wallet's ATA, atomic.
+//   • Quote+Build: Single call to /api/jupiter/build with the fee params.
+//   • User pays the idempotent create for your fee ATA (no-op after first).
+//   • Jupiter NATIVE fee: platformFeeBps=300 + feeAccount = your ATA
+//     for the OUTPUT mint. Fee routed into your wallet atomically.
+//     User pays the idempotent fee-ATA create. Works for any token.
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -15,12 +17,10 @@ import {
   VersionedTransaction,
   TransactionMessage,
   AddressLookupTableAccount,
-  SystemProgram,
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountIdempotentInstruction,
-  createTransferCheckedInstruction,
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
 } from '@solana/spl-token';
@@ -366,12 +366,18 @@ function useLrCSS() {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   CONFIG — MATCHES SWAPWIDGET: manual fee, /api/jupiter/build
+   CONFIG — JUPITER NATIVE FEE (platformFeeBps + feeAccount).
+   Fee is taken in the OUTPUT mint of each trade and sent to YOUR
+   wallet's ATA for that mint. The user pays to create that ATA
+   (idempotent — created once per token, then it's a no-op). One
+   signature, atomic. Works for ANY token because feeAccount always
+   matches the output mint of the specific swap.
    ════════════════════════════════════════════════════════════════════ */
 const SOL_MINT     = 'So11111111111111111111111111111111111111112';
+const WSOL_MINT_PK = new PublicKey(SOL_MINT);
 const FEE_WALLET   = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS      = 300;   // 3% — manually subtracted before quoting
-const SLIPPAGE_BPS = 500;   // matches SwapWidget
+const FEE_BPS      = 300;   // 3% — Jupiter sizes & routes this natively
+const SLIPPAGE_BPS = 1500;  // 15% — volatile fresh launches
 
 const SOL_RESERVE = 0.015;
 
@@ -523,6 +529,24 @@ const deserIx = (ix) => ({
   })),
   data: Buffer.from(ix.data, 'base64'),
 });
+
+// Resolve YOUR fee ATA for a given output mint + its token program.
+// SOL/wSOL is classic SPL. Other tokens may be Token-2022, so we read
+// the mint owner on-chain. Returns { feeAta, tokenProgram, mintPk }.
+async function resolveFeeAta(connection, outputMint) {
+  if (outputMint === SOL_MINT) {
+    const feeAta = getAssociatedTokenAddressSync(WSOL_MINT_PK, FEE_WALLET, true, TOKEN_PROGRAM_ID);
+    return { feeAta, tokenProgram: TOKEN_PROGRAM_ID, mintPk: WSOL_MINT_PK };
+  }
+  const mintPk = new PublicKey(outputMint);
+  const mintInfo = await connection.getAccountInfo(mintPk);
+  if (!mintInfo) throw new Error('Output mint not found on-chain.');
+  const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+    ? TOKEN_2022_PROGRAM_ID
+    : TOKEN_PROGRAM_ID;
+  const feeAta = getAssociatedTokenAddressSync(mintPk, FEE_WALLET, true, tokenProgram);
+  return { feeAta, tokenProgram, mintPk };
+}
 
 const friendlyError = (err) => {
   const m = String(err?.message || err || '').toLowerCase();
@@ -761,8 +785,8 @@ function SettingsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets,
 
 /* ════════════════════════════════════════════════════════════════════
    TRADE MODAL — FIXED: matches SwapWidget flow exactly.
-   Quote via /api/jupiter/build with fee subtracted from input.
-   No platformFeeBps, no feeAccount, no dynamicSlippage.
+   Quote via /api/jupiter/build with Jupiter native fee:
+   platformFeeBps=300 + feeAccount = your ATA for the output mint.
    ════════════════════════════════════════════════════════════════════ */
 function TradeModal({
   token, initialMode, onClose, onConfirm,
@@ -770,6 +794,7 @@ function TradeModal({
   solBalance, tokenBalance,
 }) {
   const wallet = useWallet();
+  const connection = useMemo(() => getConn('confirmed'), []);
   const [mode, setMode] = useState(initialMode || 'buy');
   const [amount, setAmount] = useState('');
   const [quote, setQuote] = useState(null);
@@ -789,18 +814,17 @@ function TradeModal({
   const isBuy = mode === 'buy';
   const presets = isBuy ? buyPresets : sellPresets;
 
-  // Compute rawAmount (full user input) and netAmount (after 3% fee)
+  // Full input amount. Jupiter sizes the 3% fee natively via
+  // platformFeeBps, so we quote the FULL amount (no manual subtraction).
   const swapParams = useMemo(() => {
     if (!amount) return null;
     const n = Number(amount);
     if (!Number.isFinite(n) || n <= 0) return null;
     if (isBuy) {
       const rawAmount = BigInt(Math.floor(n * 1e9)).toString();
-      const netAmount = ((BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n).toString();
-      if (BigInt(netAmount) <= 0n) return null;
+      if (BigInt(rawAmount) <= 0n) return null;
       return {
         rawAmount,
-        netAmount,
         inputMint:  SOL_MINT,
         outputMint: token.mint,
         inputDecimals: 9,
@@ -812,12 +836,9 @@ function TradeModal({
     const pct = Math.min(100, Math.max(0.01, n));
     const rawAmount = ((BigInt(tokenBalance.amount) * BigInt(Math.floor(pct * 100))) / 10000n).toString();
     if (BigInt(rawAmount) <= 0n) return null;
-    const netAmount = ((BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n).toString();
-    if (BigInt(netAmount) <= 0n) return null;
     const decimals = tokenBalance.decimals || token.decimals || 6;
     return {
       rawAmount,
-      netAmount,
       inputMint:  token.mint,
       outputMint: SOL_MINT,
       inputDecimals: decimals,
@@ -827,8 +848,9 @@ function TradeModal({
     };
   }, [amount, isBuy, token, tokenBalance]);
 
-  // Quote via /api/jupiter/build — same endpoint SwapWidget uses.
-  // Net amount (after fee) is what Jupiter routes.
+  // Quote+build via /api/jupiter/build with NATIVE fee:
+  //   platformFeeBps = 300, feeAccount = YOUR ATA for the output mint.
+  // Jupiter sizes the fee and routes it into your ATA, atomically.
   useEffect(() => {
     if (!swapParams) { setQuote(null); setQuoteError(null); return; }
     if (quoteAbortRef.current) quoteAbortRef.current.abort();
@@ -840,12 +862,21 @@ function TradeModal({
 
     const t = setTimeout(async () => {
       try {
+        // Resolve YOUR fee ATA for the OUTPUT mint with the CORRECT token
+        // program (SOL→classic SPL; other tokens may be Token-2022). This
+        // MUST match the ATA we create at execute time, or Jupiter would
+        // deposit the fee to an address that never gets created.
+        const { feeAta } = await resolveFeeAta(connection, swapParams.outputMint);
+        if (ac.signal.aborted) return;
+
         const params = new URLSearchParams({
-          inputMint:   swapParams.inputMint,
-          outputMint:  swapParams.outputMint,
-          amount:      swapParams.netAmount,
-          slippageBps: String(SLIPPAGE_BPS),
-          taker:       wallet.publicKey
+          inputMint:      swapParams.inputMint,
+          outputMint:     swapParams.outputMint,
+          amount:         swapParams.rawAmount,
+          slippageBps:    String(SLIPPAGE_BPS),
+          platformFeeBps: String(FEE_BPS),
+          feeAccount:     feeAta.toBase58(),
+          taker:          wallet.publicKey
             ? wallet.publicKey.toBase58()
             : '11111111111111111111111111111111',
         });
@@ -871,12 +902,25 @@ function TradeModal({
     }, 350);
 
     return () => { clearTimeout(t); ac.abort(); };
-  }, [swapParams, wallet.publicKey]);
+  }, [swapParams, wallet.publicKey, connection]);
 
-  // Simple outAmount — no platformFee subtraction needed.
+  // "You receive" = route output MINUS Jupiter's platform fee, since the
+  // 3% fee is taken from the output mint and goes to your wallet.
   const outAmountUi = useMemo(() => {
     if (!quote || !swapParams) return null;
-    return Number(quote.outAmount || 0) / Math.pow(10, swapParams.outputDecimals);
+    const gross = Number(quote.outAmount || 0);
+    const fee   = Number(quote.platformFee?.amount || 0);
+    const net   = Math.max(0, gross - fee);
+    return net / Math.pow(10, swapParams.outputDecimals);
+  }, [quote, swapParams]);
+
+  // Min received also nets out the platform fee, then slippage threshold.
+  const minReceived = useMemo(() => {
+    if (!quote || !swapParams) return null;
+    const threshold = Number(quote.otherAmountThreshold || 0);
+    const fee       = Number(quote.platformFee?.amount || 0);
+    const net       = Math.max(0, threshold - fee);
+    return net / Math.pow(10, swapParams.outputDecimals);
   }, [quote, swapParams]);
 
   const priceImpact = useMemo(() => {
@@ -884,11 +928,6 @@ function TradeModal({
     const n = Number(quote.priceImpactPct);
     return Number.isFinite(n) ? n * (Math.abs(n) <= 1 ? 100 : 1) : null;
   }, [quote]);
-
-  const minReceived = useMemo(() => {
-    if (!quote || !swapParams) return null;
-    return Number(quote.otherAmountThreshold || 0) / Math.pow(10, swapParams.outputDecimals);
-  }, [quote, swapParams]);
 
   const ownedUiAmount = tokenBalance?.uiAmount || 0;
   const availSol = Math.max(0, (solBalance?.uiAmount || 0) - SOL_RESERVE);
@@ -1332,8 +1371,11 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   }, [confettiKey]);
 
   /* ════════════════════════════════════════════════════════════════
-     SWAP — copied from SwapWidget handleSwap verbatim.
-     Only difference: receives args instead of reading component state.
+     SWAP — Jupiter NATIVE fee. The build already routes the 3% fee
+     into your fee ATA (platformFeeBps + feeAccount were passed at
+     quote time). Here we only PREPEND an idempotent create for that
+     fee ATA so it exists when Jupiter deposits into it. The USER pays
+     to create it (and pays all tx fees). One signature, atomic.
      ════════════════════════════════════════════════════════════════ */
   const executeSwap = useCallback(async ({ mode, swapParams, token, build }) => {
       if (!wallet.publicKey || !wallet.signTransaction) {
@@ -1343,45 +1385,26 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         throw new Error('No quote available — try again.');
       }
 
-      const dec = swapParams.inputDecimals;
-      const inputMint = swapParams.inputMint;
-      const rawAmount = swapParams.rawAmount;
+      // Resolve YOUR fee ATA for the OUTPUT mint + the correct token
+      // program. MUST match the feeAccount we passed at quote time.
+      const { feeAta, tokenProgram, mintPk } = await resolveFeeAta(connection, swapParams.outputMint);
 
-      const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
-      if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
-
-      const feeIxs = [];
-      if (inputMint === SOL_MINT) {
-        feeIxs.push(SystemProgram.transfer({
-          fromPubkey: wallet.publicKey,
-          toPubkey:   FEE_WALLET,
-          lamports:   Number(feeAmount),
-        }));
-      } else {
-        const mintPk = new PublicKey(inputMint);
-        const mintInfo = await connection.getAccountInfo(mintPk);
-        if (!mintInfo) throw new Error('Input mint not found on-chain.');
-        const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
-          ? TOKEN_2022_PROGRAM_ID
-          : TOKEN_PROGRAM_ID;
-
-        const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
-        const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
-
-        feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
-          wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
-        ));
-        feeIxs.push(createTransferCheckedInstruction(
-          sourceAta, mintPk, destAta, wallet.publicKey,
-          feeAmount, dec, [], tokenProgram,
-        ));
-      }
+      // Idempotent create — user is payer. No-op once the ATA exists.
+      const feeAtaCreateIx = createAssociatedTokenAccountIdempotentInstruction(
+        wallet.publicKey,  // payer (user)
+        feeAta,            // ata
+        FEE_WALLET,        // owner (you)
+        mintPk,            // output mint
+        tokenProgram,
+      );
 
       const ixs = [];
+      // Jupiter's compute budget (price + limit) — keep as-is.
       if (Array.isArray(build.computeBudgetInstructions))
         for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
 
-      for (const ix of feeIxs) ixs.push(ix);
+      // Create the fee ATA before the swap so Jupiter can deposit into it.
+      ixs.push(feeAtaCreateIx);
 
       if (Array.isArray(build.setupInstructions))
         for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
@@ -1465,7 +1488,9 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         }
       }
 
-      const outAmount = Number(build.outAmount || 0) / Math.pow(10, swapParams.outputDecimals);
+      const gross = Number(build.outAmount || 0);
+      const feeAmt = Number(build.platformFee?.amount || 0);
+      const outAmount = Math.max(0, gross - feeAmt) / Math.pow(10, swapParams.outputDecimals);
       return { sig, confirmed, outAmount, mode, token };
   }, [wallet, connection]);
 
