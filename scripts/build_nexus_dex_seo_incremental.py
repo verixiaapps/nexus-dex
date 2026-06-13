@@ -1,50 +1,28 @@
 #!/usr/bin/env python3
 """
-build_nexus_dex_seo_incremental.py -- v4.1 (full-payload, score-gated, sitemap-on-checkpoint)
+build_nexus_dex_seo_incremental.py -- v4.2 (swap.v migration)
 
-WHAT CHANGED vs v4.0
+WHAT CHANGED vs v4.1
 --------------------
-Sitemap (nexus-sitemap.xml) is now regenerated inside git_checkpoint(),
-so every 30-page commit ships a fresh sitemap built by scanning disk
-(every directory in defi/ that contains index.html). This guarantees
-that whatever is committed on main is reflected in the sitemap, even if
-the workflow is killed (timeout / OOM / cancel) before the workflow's
-end-of-run sitemap step runs. The workflow-level sitemap step remains as
-a belt-and-suspenders final pass.
+Pages now ship to public/<slug>/index.html (CRA copies public/ into build/ at
+build time), so they're served at https://swap.verixiaapps.com/<slug>/. This
+puts the SEO pages on the same origin as the approved swap dApp so Phantom
+doesn't show a "new website" warning when users sign from the embedded swap.
 
-v4.0 notes (still apply):
-The old runner imported the legacy body-only shim
-`generate_nexus_dex_content(keyword)`, which returns ONLY the content string and
-throws away the engine's `meta` and `observations`. It then built its own
-title/description locally and blanket-stripped every unfilled template
-placeholder. That silently:
-  - dropped {{PAGE_META_SCRIPT}}  -> recognition chips / FAQ / supplementary
-    cards / observations never reached the page (template fell back to its
-    hardcoded defaults on every page);
-  - blanked {{AGGREGATE_RATING_JSON}} -> produced INVALID JSON-LD
-    ("aggregateRating": ,) in two schema blocks;
-  - blanked {{STATIC_H1}} / {{STATIC_INTRO}};
-  - ignored the engine quality floor (MIN_PUBLISH_SCORE = 80) entirely.
+Concrete diffs vs v4.1:
+  - OUTPUT_DIR moved from "defi" to "public".
+  - Canonical / og:url / twitter:url / JSON-LD URL all use swap.verixiaapps.com
+    via the new SWAP_SITE constant.
+  - Internal hub + related + more links now emit href="/<slug>/" instead of
+    href="/nexus-dex/defi/<slug>/".
+  - rebuild_sitemap() emits <loc>https://swap.verixiaapps.com/<slug>/</loc>
+    and scans public/ on disk.
+  - SITE (https://verixiaapps.com) is kept and still used for OG_IMAGE and any
+    other parent-brand asset references.
 
-This runner uses the FULL engine payload via the existing client in
-generate_nexus_dex_content.py:
-  - fetch_seo_page()        -> {content, meta, score, ...}
-  - is_publishable()        -> enforces MIN_PUBLISH_SCORE (80), dup + structure
-  - build_page_meta_script()-> the window.__pageMeta hydration blob
-It uses the engine's meta for title/description/h1/intro (Verixia-branded,
-intent-matched, which also matches the Verixia template), fills EVERY template
-placeholder correctly, and rejects anything that doesn't clear the floor.
-No fallback content is ever invented: a keyword that can't clear the floor is
-rejected and logged.
-
-NOT TOUCHED: the SEO engine (Railway), generate_nexus_dex_content.py, and the
-HTML template.
-
-Remaining out-of-scope item (Layer 1): weaving live figures into the BODY PROSE
-happens inside the engine on Railway. This runner surfaces every live figure the
-engine returns (observations land in window.__pageMeta; meme cards / signals /
-route pills / jitter hydrate live from Jupiter client-side), but the prose text
-itself is whatever the engine writes.
+v4.1 sitemap-on-checkpoint behaviour is preserved: every COMMIT_EVERY-page
+checkpoint also rebuilds + commits the sitemap, so timeouts don't desync
+public/ vs the sitemap.
 """
 
 import os
@@ -80,10 +58,16 @@ GENERATED_KEYWORDS_FILE = os.path.join(BASE_DIR, "data", "nexus_dex_generated_ke
 REJECTED_KEYWORDS_FILE  = os.path.join(BASE_DIR, "data", "nexus_dex_rejected_keywords.txt")
 
 TEMPLATE_FILE = os.path.join(BASE_DIR, "template", "defi-template.html")
-OUTPUT_DIR    = os.path.join(BASE_DIR, "defi")
+OUTPUT_DIR    = os.path.join(BASE_DIR, "public")
 SITEMAP_FILE  = os.path.join(BASE_DIR, "nexus-sitemap.xml")
-SITE          = "https://verixiaapps.com"
-OG_IMAGE      = f"{SITE}/og/nexus-dex.png"
+
+# SITE is the parent brand origin. Used for og:image and any
+# parent-brand asset references that intentionally stay cross-origin.
+# SWAP_SITE is the origin the SEO pages are now SERVED FROM (same origin as
+# the approved swap dApp), so canonical/og/JSON-LD URLs point here.
+SITE      = "https://verixiaapps.com"
+SWAP_SITE = "https://swap.verixiaapps.com"
+OG_IMAGE  = f"{SITE}/og/nexus-dex.png"
 
 RELATED_LINKS_COUNT = 6
 MORE_LINKS_COUNT    = 10
@@ -92,8 +76,18 @@ COMMIT_EVERY        = int(os.getenv("COMMIT_EVERY", "30"))
 RESUME              = os.getenv("RESUME", "true").lower() == "true"
 RESET_ENGINE        = os.getenv("RESET_ENGINE", "false").lower() == "true"
 
+# Slugs we never overwrite. These are either CRA-managed (the SPA shell lives
+# in public/index.html, favicon, etc.) or reserved server routes (server.js
+# binds /nexus-dex, /health, /api/*, /embed/*) or React Router routes inside
+# the swap app. If a generated keyword happens to slugify into one of these,
+# we skip it to avoid shadowing real routes.
 PROTECTED_SLUGS = {
-    "nexus-dex",
+    # CRA public/ entries — never overwrite these
+    "index.html", "favicon.ico", "manifest.json", "robots.txt",
+    "asset-manifest.json", "logo192.png", "logo512.png",
+    # Reserved server.js routes
+    "nexus-dex", "health", "api", "embed",
+    # SEO hub slugs (built by build_nexus_dex_hubs.py)
     "crypto-markets",
     "bitcoin-markets",
     "ethereum-markets",
@@ -703,7 +697,7 @@ def find_best_hub_slug(keyword):
 def build_hub_link_html(keyword):
     hub_slug = find_best_hub_slug(keyword)
     hub_title = HUB_TITLE_OVERRIDES.get(hub_slug, f"{humanize_slug(hub_slug)} Hub")
-    return f'<a href="/nexus-dex/defi/{hub_slug}/">{escape_html(hub_title)}</a>'
+    return f'<a href="/{hub_slug}/">{escape_html(hub_title)}</a>'
 
 
 def sanitize_ai_html(text):
@@ -946,7 +940,10 @@ def build_related_anchor(keyword):
 
 
 def build_canonical(slug):
-    return f"{SITE}/nexus-dex/defi/{slug}/"
+    # Pages are served from swap.verixiaapps.com/<slug>/ (same origin as the
+    # approved swap dApp), so the canonical lives there. Phantom origin
+    # trust is keyed off this origin.
+    return f"{SWAP_SITE}/{slug}/"
 
 
 DEFAULT_AGGREGATE_RATING_JSON = json.dumps({
@@ -1060,7 +1057,7 @@ def get_more_links(current_page, all_pages, limit, exclude_slugs=None):
 
 def build_links_html(pages_list):
     return "".join(
-        f'<li><a href="/nexus-dex/defi/{p["slug"]}/">{escape_html(build_related_anchor(p["keyword"]))}</a></li>\n'
+        f'<li><a href="/{p["slug"]}/">{escape_html(build_related_anchor(p["keyword"]))}</a></li>\n'
         for p in pages_list
         if page_exists(p["slug"])
     )
@@ -1212,23 +1209,28 @@ def _git_lastmod_for(file_path):
 
 def rebuild_sitemap():
     """
-    Rebuild nexus-sitemap.xml by scanning OUTPUT_DIR on disk.
+    Rebuild nexus-sitemap.xml by scanning OUTPUT_DIR (public/) on disk.
 
-    Guarantees every /nexus-dex/defi/<slug>/index.html present on disk is in the
-    sitemap. Called from git_checkpoint() so each 30-page commit ships a
-    matching sitemap, even if the workflow is killed before the workflow's
+    Every public/<slug>/index.html present on disk ends up in the sitemap
+    pointing at https://swap.verixiaapps.com/<slug>/. Called from
+    git_checkpoint() so each COMMIT_EVERY-page commit ships a matching
+    sitemap, even if the workflow is killed before the workflow's
     end-of-run sitemap step runs.
     """
     urls = []
     if os.path.isdir(OUTPUT_DIR):
         for entry in sorted(os.listdir(OUTPUT_DIR)):
+            # Skip CRA / SPA / reserved entries so we don't ever map
+            # public/index.html itself into the sitemap.
+            if entry in PROTECTED_SLUGS:
+                continue
             dir_path = os.path.join(OUTPUT_DIR, entry)
             index_path = os.path.join(dir_path, "index.html")
             if not os.path.isdir(dir_path) or not os.path.isfile(index_path):
                 continue
             lastmod = _git_lastmod_for(index_path)
             urls.append(
-                f"<url><loc>{SITE}/nexus-dex/defi/{entry}/</loc><lastmod>{lastmod}</lastmod></url>"
+                f"<url><loc>{SWAP_SITE}/{entry}/</loc><lastmod>{lastmod}</lastmod></url>"
             )
 
     xml = (
@@ -1341,6 +1343,8 @@ def main():
     print(f"Commit every: {COMMIT_EVERY}")
     print(f"Resume mode: {RESUME}")
     print(f"Reset engine registries: {RESET_ENGINE}")
+    print(f"Output dir: {OUTPUT_DIR}")
+    print(f"Canonical base: {SWAP_SITE}")
 
     generated_count = 0
     skipped_existing_count = 0
