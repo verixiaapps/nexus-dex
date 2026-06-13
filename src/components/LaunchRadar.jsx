@@ -585,8 +585,27 @@ const friendlyError = (err) => {
   if (m.includes('simulation failed')) return 'Trade would fail right now — price likely moved.';
   if (m.includes('rate'))              return 'Rate limited — try again.';
   if (m.includes('no route') || m.includes('could not find any route')) return 'No route yet — too fresh.';
-  return err?.message?.slice(0, 90) || 'Trade failed.';
+  return err?.message?.slice(0, 200) || 'Trade failed.';
 };
+
+// Turn raw preflight/simulation logs into a specific, honest cause. When there
+// is no friendly mapping, surface the actual program log line instead of a
+// vague "price moved" — so the real failure is visible and can be diagnosed.
+function describeSimLogs(logs, fallbackMsg) {
+  const arr = Array.isArray(logs) ? logs : [];
+  const j = arr.join('\n').toLowerCase();
+  if (j.includes('0x1771') || j.includes('toomuchsol'))   return 'Price moved past your 15% slippage (buy needs more SOL). Try again.';
+  if (j.includes('0x1772') || j.includes('toolittlesol')) return 'Price moved past your 15% slippage (sell returns less). Try again.';
+  if (j.includes('complete') || j.includes('graduat') || j.includes('bondingcurvecomplete')) return 'Token graduated — off the bonding curve.';
+  if (j.includes('insufficient') || j.includes('debit an account')) return 'Not enough SOL for the trade + fees.';
+  if (j.includes('exceeded') && j.includes('compute'))    return 'Hit the compute limit — retry.';
+  if (j.includes('accountnotfound') || (j.includes('account') && (j.includes('not found') || j.includes('uninitialized'))))
+    return 'A required account is not ready yet — try again in a moment.';
+  // Unknown — show the most informative log line so the real error is visible.
+  const line = arr.filter(l => /program log:|program failed|error|insufficient|0x/i.test(l)).pop();
+  if (line) return 'Sim failed → ' + line.replace(/^Program log:\s*/i, '').slice(0, 150);
+  return fallbackMsg ? ('Sim failed → ' + String(fallbackMsg).slice(0, 150)) : 'Sim failed (no logs returned).';
+}
 
 /* ════════════════════════════════════════════════════════════════════
    TWITTER SHARE
@@ -818,7 +837,7 @@ function SettingsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets,
 function TradeModal({
   token, initialMode, onClose, onConfirm,
   buyPresets, sellPresets,
-  solBalance, tokenBalance,
+  solBalance, tokenBalance, solPrice,
 }) {
   const wallet = useWallet();
   const connection = useMemo(() => getConn('confirmed'), []);
@@ -879,6 +898,22 @@ function TradeModal({
       totalTokensUi: Number(totalTokens) / Math.pow(10, decimals),
     };
   }, [amount, isBuy, token, tokenBalance]);
+
+  // Rough estimate of what the user receives, from the current price feed
+  // (token USD price + SOL USD price). This is an ESTIMATE — the real amount
+  // comes from the bonding curve at execution and moves with price impact, so
+  // it's labelled "(est.)" and bounded by the 15% slippage shown below.
+  const estReceive = useMemo(() => {
+    if (!swapParams || !(token?.price > 0) || !(solPrice > 0)) return null;
+    if (swapParams.mode === 'buy') {
+      const tradeSol = Number(swapParams.tradeLamports) / 1e9;
+      const tokens = (tradeSol * solPrice) / token.price;
+      return tokens > 0 ? { tokens } : null;
+    }
+    const tradeTokensUi = Number(swapParams.tradeTokens) / Math.pow(10, swapParams.decimals);
+    const sol = (tradeTokensUi * token.price) / solPrice;
+    return sol > 0 ? { sol } : null;
+  }, [swapParams, token?.price, solPrice]);
 
   const ownedUiAmount = tokenBalance?.uiAmount || 0;
   const availSol = Math.max(0, (solBalance?.uiAmount || 0) - SOL_RESERVE);
@@ -1026,6 +1061,12 @@ function TradeModal({
                       {formatSol(Number(swapParams.tradeLamports) / 1e9)} SOL
                     </span>
                   </div>
+                  <div className="lr-trade-detail-row">
+                    <span>You receive (est.)</span>
+                    <span className="lr-trade-detail-val lr-good">
+                      {estReceive?.tokens > 0 ? '≈ ' + formatTokens(estReceive.tokens) + ' ' + token.sym : '—'}
+                    </span>
+                  </div>
                 </>
               ) : (
                 <>
@@ -1045,6 +1086,12 @@ function TradeModal({
                     <span>Selling on pump</span>
                     <span className="lr-trade-detail-val lr-good">
                       {formatTokens(Number(swapParams.tradeTokens) / Math.pow(10, swapParams.decimals))} {token.sym}
+                    </span>
+                  </div>
+                  <div className="lr-trade-detail-row">
+                    <span>You receive (est.)</span>
+                    <span className="lr-trade-detail-val lr-good">
+                      {estReceive?.sol > 0 ? '≈ ' + formatSol(estReceive.sol) + ' SOL' : '—'}
                     </span>
                   </div>
                 </>
@@ -1461,29 +1508,42 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       }).compileToV0Message();
       const tx = new VersionedTransaction(message);
 
-      // No separate pre-sign simulation. The simulation that protects the
-      // user is the one the wallet (Phantom/Blowfish) runs on THIS exact tx at
-      // sign time, and the RPC preflight below simulates the exact signed tx
-      // too (skipPreflight:false). Our old simulateTransaction call added a
-      // round-trip of latency AND simulated a *different* tx (replaceRecent-
-      // Blockhash). We sign and send the same tx object — never rebuilt.
+      // Sign first, then simulate the EXACT signed tx — the same object the
+      // user signs, never rebuilt. One quick call. If it would fail, we show
+      // the REAL program-log reason (via describeSimLogs) and never send a
+      // doomed tx; if it passes we send straight away, so no extra wait.
       const signed = await wallet.signTransaction(tx);
 
-      // skipPreflight:false → a doomed tx (slippage, insufficient funds,
-      // graduated curve) is rejected HERE, immediately, with the real reason,
-      // instead of being fired blind and silently dropped. This is what makes
-      // failures fast and honest rather than a ~50s wait ending in a fake "ok".
+      let simLogs = null, simErrObj = null, simSkipped = false;
+      try {
+        const sim = await connection.simulateTransaction(signed, { commitment: 'processed', sigVerify: false });
+        simLogs   = sim?.value?.logs || null;
+        simErrObj = sim?.value?.err || null;
+      } catch (e) {
+        simSkipped = true;   // RPC/transport hiccup — fall back to RPC preflight
+        console.warn('[pump-sim] could not run (continuing):', e?.message);
+      }
+      if (simErrObj) {
+        console.error('[pump-sim] err:', JSON.stringify(simErrObj));
+        console.error('[pump-sim] logs:\n' + (simLogs || []).join('\n'));
+        throw new Error(describeSimLogs(simLogs, JSON.stringify(simErrObj)));
+      }
+
+      // Send the same signed tx. skipPreflight:true when our sim already
+      // validated it (no point simulating twice); if our sim couldn't run,
+      // keep preflight on as the safety net.
       let sig;
       try {
         sig = await connection.sendRawTransaction(signed.serialize(), {
-          skipPreflight: false,
+          skipPreflight: !simSkipped,
           preflightCommitment: 'processed',
           maxRetries: 3,
         });
       } catch (sendErr) {
-        const logs = sendErr?.logs ? '\n' + sendErr.logs.join('\n') : '';
-        console.warn('[pump-send] rejected:', sendErr?.message, logs);
-        throw sendErr;   // → friendlyError in the modal, fast
+        let logs = sendErr?.logs || null;
+        if (!logs && typeof sendErr?.getLogs === 'function') { try { logs = await sendErr.getLogs(connection); } catch {} }
+        console.error('[pump-send] rejected:', sendErr?.message, logs ? '\n' + logs.join('\n') : '');
+        throw new Error(describeSimLogs(logs, sendErr?.message));
       }
 
       // Confirm against the blockhash we built with (auto-expires, so this can
@@ -1841,6 +1901,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
           sellPresets={sellPresets}
           solBalance={solBalance}
           tokenBalance={balances[tradeOpen.token.mint]}
+          solPrice={solPrice}
         />
       )}
 
