@@ -624,6 +624,30 @@ app.get('/api/health', (req, res) => {
  * ===================================================================== */
 require('./pumpfun-trade').mountRoutes(app);
 
+/* ========================================================================
+ * Launch Radar — Jupiter Ultra V3 proxy (Iris router; pre-grad bonding curves)
+ * Added for LaunchRadar's multi-endpoint race. Re-uses the existing
+ * JUPITER_API_KEY / JUPITER_ACCOUNT headers and existing helpers.
+ * ===================================================================== */
+const JUPITER_ULTRA_BASE = 'https://api.jup.ag/ultra/v1';
+
+app.get('/api/jupiter/ultra-order', async (req, res) => {
+  try {
+    if (!JUPITER_ENABLED) return res.status(503).json({ error: 'Jupiter disabled' });
+    const url = JUPITER_ULTRA_BASE + '/order' + buildForwardedQuery(req);
+    const response = await fetchWithTimeout(
+      url,
+      { method: 'GET', headers: buildJupiterHeaders() },
+      12_000,
+    );
+    return respondJsonOrError(res, response, await safeJson(response));
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'Jupiter Ultra order timed out' });
+    logError('jupiter-ultra-order', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
 app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not found: ' + req.path }));
 
 /* ========================================================================
