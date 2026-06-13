@@ -9,7 +9,7 @@ name: Nexus DEX SEO Page Generator Auto
         default: "1000"
         type: string
       full_rebuild:
-        description: "Optional manual rebuild of generated /defi/ pages only"
+        description: "Optional manual rebuild of generated /public/ pages only"
         required: false
         default: false
         type: boolean
@@ -41,7 +41,10 @@ jobs:
       KEYWORDS_FILE: "data/nexus_dex_keywords.txt"
       GENERATED_KEYWORDS_FILE: "data/nexus_dex_generated_keywords.txt"
       GENERATED_SLUGS_FILE: "data/nexus_dex_generated_slugs.txt"
-      OUTPUT_DIR: "defi"
+      # SEO pages now ship to public/<slug>/ so CRA bundles them into build/
+      # and Express serves them at https://swap.verixiaapps.com/<slug>/
+      # (same origin as the approved swap dApp -> Phantom origin trust).
+      OUTPUT_DIR: "public"
       PROTECTED_SLUG: ""
       REBUILD_KEYWORDS_SOURCE_FILE: "data/rebuild_keywords_source_nexusdex.txt"
       REBUILD_SLUGS_SOURCE_FILE: "data/rebuild_slugs_source_nexusdex.txt"
@@ -173,14 +176,29 @@ jobs:
             commit_date=$(git log -1 --format=%cs -- "$file_path" 2>/dev/null || true)
             if [ -n "$commit_date" ]; then echo "$commit_date"; else date -u +%F; fi
           }
+          # public/ contains CRA assets AND SEO slug directories. Skip the
+          # CRA-managed entries plus server.js reserved routes so they never
+          # end up in the sitemap. Any directory without an index.html is
+          # already skipped further down.
+          is_reserved_slug() {
+            case "$1" in
+              # server.js reserved routes
+              nexus-dex|health|api|embed) return 0 ;;
+              # common CRA / asset subdirs (defensive — keep updated if you
+              # add new top-level directories under public/)
+              static|images|assets|og|fonts|icons) return 0 ;;
+              *) return 1 ;;
+            esac
+          }
           {
             echo '<?xml version="1.0" encoding="UTF-8"?>'
             echo '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">'
             find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -type d | sort | while read -r dir; do
               [ -f "$dir/index.html" ] || continue
               slug=$(basename "$dir")
+              if is_reserved_slug "$slug"; then continue; fi
               page_lastmod=$(get_lastmod "$dir/index.html")
-              echo "<url><loc>https://verixiaapps.com/nexus-dex/defi/$slug/</loc><lastmod>${page_lastmod}</lastmod></url>"
+              echo "<url><loc>https://swap.verixiaapps.com/$slug/</loc><lastmod>${page_lastmod}</lastmod></url>"
             done
             echo '</urlset>'
           } > nexus-sitemap.xml
