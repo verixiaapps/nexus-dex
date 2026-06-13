@@ -1,25 +1,37 @@
 // LaunchRadar.jsx — Solana new launches + per-card BUY/SELL modal trade flow.
 //
-// ARCHITECTURE
+// ARCHITECTURE — JUPITER FOR EVERYTHING, FEE TO YOUR WALLET
 //   • Data:  Jupiter /tokens/v2/recent  (single feed, poll-based ~8s).
-//            The "Just Hatched" tab is just this feed filtered to age
-//            < 30 min — same data source, same mint identifier.
-//   • Trade: Jupiter /build  (Metis routes both pre-grad pump.fun
-//            bonding curves and post-grad AMMs).
-//   • Fee:   3% of input SOL on buy / 3% of output SOL on sell, paid
-//            to FEE_WALLET via a SystemProgram.transfer ix composed
-//            into the same tx as the swap — one signature, atomic.
-//   • Tx:    confirmed blockhash, sim the exact bytes across racing
-//            RPCs, user signs the simulated bytes, broadcast to every
-//            RPC in parallel, poll status across the pool, resend
-//            every ~1.5s until confirmed or the validity window closes.
-//   • Slippage: hard-coded 5% (stays under wallet warning threshold).
+//            "Just Hatched" tab is this feed filtered to age < 30 min.
+//            Pre-grad pump.fun launches appear here as soon as Jupiter
+//            indexes them.
+//   • Quote: Jupiter /quote with platformFeeBps=300 → Jupiter sizes the
+//            3% fee, picks the route. Metis covers pre-grad pump.fun
+//            bonding curves AND post-grad AMMs (Raydium, Meteora,
+//            pump-amm) in one shot. (platformFeeBps disables JupiterZ
+//            RFQ, but Metis stays live — which is what we need for
+//            fresh pump tokens anyway.)
+//   • Swap:  Jupiter /swap-instructions POST with feeAccount =
+//            FEE_WALLET's wSOL ATA, dynamicSlippage (capped 10%),
+//            prioritizationFeeLamports at veryHigh (capped 0.002 SOL),
+//            dynamicComputeUnitLimit. Jupiter picks slippage/priority/
+//            CU per-route. We prepend a createAssociatedTokenAccount
+//            Idempotent for the fee ATA so the FIRST trade ever creates
+//            it; every trade after is a no-op (~1500 CU). One tx, one
+//            signature, atomic.
+//   • Fee:   3% of input → fee mint is wSOL both directions (input wSOL
+//            on BUY, output wSOL on SELL). Single ATA, single mint.
+//            Fees pool in FEE_WALLET's wSOL ATA — unwrap whenever.
+//   • Tx:    ONE RPC connection. Confirmed blockhash, simulate, sign,
+//            sendRawTransaction, confirmTransaction with polling
+//            fallback. No pool, no parallel broadcast — Jupiter's
+//            priority fee is what actually lands the trade.
 //
 // INVARIANT
 //   The `mint` field on every token is the canonical contract address.
 //   normalize() validates it as base58 before creating the token row.
-//   Everything downstream — display, balance lookup, trade build —
-//   keys off that same string. There is no second identifier.
+//   Everything downstream — display, balance lookup, Jupiter /quote,
+//   /swap-instructions, the signed tx — keys off that same string.
 
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
@@ -29,10 +41,11 @@ import {
   PublicKey,
   VersionedTransaction,
   TransactionMessage,
-  SystemProgram,
   AddressLookupTableAccount,
 } from '@solana/web3.js';
 import {
+  getAssociatedTokenAddressSync,
+  createAssociatedTokenAccountIdempotentInstruction,
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
 } from '@solana/spl-token';
@@ -378,68 +391,58 @@ function useLrCSS() {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   CONFIG
+   CONFIG — JUPITER FOR EVERYTHING, FEE TO FEE_WALLET'S wSOL ATA
    ════════════════════════════════════════════════════════════════════ */
-const SOL_MINT   = 'So11111111111111111111111111111111111111112';
-const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS    = 300;                  // 3% to FEE_WALLET, paid in SOL on every trade.
+const SOL_MINT     = 'So11111111111111111111111111111111111111112';     // Mint addr (string)
+const WSOL_MINT_PK = new PublicKey(SOL_MINT);                            // Same mint, PublicKey form
+const FEE_WALLET   = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
+const FEE_BPS      = 300;                                                // 3% — Jupiter sizes this
 
-// Hard-coded 30% slippage so trades land. Wallet will show a high-slip
-// warning that users tap through — expected on memecoin trades.
-const SLIPPAGE_BPS = 3000;
+// The single token account where all platform fees land — FEE_WALLET's
+// wSOL ATA. On BUY (SOL → memecoin) the input is wSOL → fee in wSOL.
+// On SELL (memecoin → SOL) the output is wSOL → fee in wSOL. Same
+// account both ways. Fees pool here as wSOL; unwrap to native SOL
+// whenever you want to claim.
+const FEE_WALLET_WSOL_ATA = getAssociatedTokenAddressSync(
+  WSOL_MINT_PK, FEE_WALLET, true,  // allowOwnerOffCurve = true (safe default)
+);
 
-// Reserve enough SOL to cover ATA rent (~0.00204), wSOL wrap (~0.002),
-// tx fee, and a small priority-fee buffer when the user picks MAX.
-const SOL_RESERVE = 0.012;
+// Dynamic slippage cap. Jupiter picks the actual number per-route from
+// its own estimator (typically 50–300 bps); this is just the ceiling
+// it won't exceed.
+const DYNAMIC_SLIPPAGE_MAX_BPS = 1000;
+
+// Priority fee config. "veryHigh" tells Jupiter to bid the top tier
+// for current congestion; maxLamports caps the spend. 2M lamports =
+// 0.002 SOL — generous for memecoin sniping, won't blow the account up.
+const PRIORITY_FEE_TIER     = 'veryHigh';
+const PRIORITY_FEE_MAX_LAMP = 2_000_000;
+
+// Reserve enough SOL to cover ATA rents, wSOL wrap, tx fee, and the
+// priority fee budget above when the user picks MAX.
+const SOL_RESERVE = 0.015;
 
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
-// RPC pool — server-supplied first, then public fallbacks. No Helius key.
+// ONE RPC connection. The previous multi-RPC pool was over-engineered
+// for the actual problem: trades land because of Jupiter's priority
+// fee, not because we broadcast to five endpoints. Server-supplied RPC
+// (Helius, if configured) first; otherwise a public fallback.
 const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
-const RPC_POOL = [
-  RUNTIME_CFG.rpc,
-  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC) || null,
-  'https://solana-rpc.publicnode.com',
-  'https://solana.drpc.org',
-  'https://api.mainnet-beta.solana.com',
-].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
+const RPC_URL =
+  RUNTIME_CFG.rpc
+  || (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC)
+  || 'https://solana-rpc.publicnode.com';
 
 const BAL_COMMITMENT = 'processed';
 
 const _connCache = new Map();
-const getConn = (url, commitment) => {
-  const key = url + '|' + commitment;
-  let c = _connCache.get(key);
-  if (!c) { c = new Connection(url, commitment); _connCache.set(key, c); }
+const getConn = (commitment) => {
+  let c = _connCache.get(commitment);
+  if (!c) { c = new Connection(RPC_URL, commitment); _connCache.set(commitment, c); }
   return c;
 };
-
-const rpcRace = (label, op, commitment = BAL_COMMITMENT) => {
-  const conns = RPC_POOL.map(u => getConn(u, commitment));
-  return Promise.any(conns.map((c, i) =>
-    op(c).catch(e => {
-      if (typeof console !== 'undefined') console.warn('[lr-rpc] ' + label + ' failed on ' + RPC_POOL[i] + ':', e?.message);
-      throw e;
-    })
-  )).catch(() => { throw new Error(label + ': all RPCs failed'); });
-};
-
-// Broadcast a signed transaction to every RPC in parallel. Returns the
-// signature from whichever one accepted first. This is the main "land it
-// fast" lever now that we've dropped Helius.
-async function broadcastRaw(rawTx) {
-  const conns = RPC_POOL.map(u => getConn(u, 'confirmed'));
-  const sendOpts = { skipPreflight: true, maxRetries: 0 };
-  const attempts = conns.map((c, i) =>
-    c.sendRawTransaction(rawTx, sendOpts).catch(e => {
-      if (typeof console !== 'undefined') console.warn('[lr-send] ' + RPC_POOL[i] + ' rejected:', e?.message);
-      throw e;
-    }),
-  );
-  try { return await Promise.any(attempts); }
-  catch { throw new Error('All RPCs refused the transaction.'); }
-}
 
 const POLL_RECENT  = 8_000;
 const POLL_SOL     = 30_000;
@@ -564,7 +567,6 @@ const friendlyError = (err) => {
   if (m.includes('rate'))              return 'Rate limited.';
   if (m.includes('no route') || m.includes('could not find any route')) return 'No route yet — too fresh.';
   if (m.includes('too large'))         return 'Route too complex. Try smaller.';
-  if (m.includes('graduated'))         return 'Token just graduated — try again.';
   return err?.message?.slice(0, 80) || 'Swap failed.';
 };
 
@@ -792,10 +794,10 @@ function SettingsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets,
 
 /* ════════════════════════════════════════════════════════════════════
    TRADE MODAL
-   Quotes and swaps both go through /api/jupiter/build. Jupiter's Metis
-   routing covers pre-grad pump.fun bonding curves as well as post-grad
-   AMMs (Raydium, Meteora, pump-amm). Slippage is a single hard-coded
-   5% so we stay under Phantom/Blowfish's warning threshold.
+   Quote: GET /api/jupiter/quote with platformFeeBps=300 — Jupiter sizes
+   the fee, picks the route (Metis covers pre-grad pump.fun, post-grad
+   AMMs alike). Swap is built later in executeJupiterSwap via POST
+   /api/jupiter/swap-instructions. One tx, one signature, atomic.
    ════════════════════════════════════════════════════════════════════ */
 function TradeModal({
   token, initialMode, onClose, onConfirm,
@@ -856,8 +858,6 @@ function TradeModal({
     if (!swapParams) { setQuote(null); setQuoteError(null); return; }
     if (quoteAbortRef.current) quoteAbortRef.current.abort();
 
-    // Jupiter quotes every route — including pre-grad pump.fun bonding
-    // curves via Metis. 5% slippage stays under wallet warning threshold.
     const ac = new AbortController();
     quoteAbortRef.current = ac;
     setQuoting(true);
@@ -865,33 +865,26 @@ function TradeModal({
 
     const t = setTimeout(async () => {
       try {
-        // BUY: Jupiter sees 97%. SELL: Jupiter sees 100%; fee taken from output.
-        const jupInput = isBuy
-          ? (BigInt(swapParams.rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n
-          : BigInt(swapParams.rawAmount);
-        if (jupInput <= 0n) { setQuote(null); setQuoting(false); return; }
+        // GET /quote with platformFeeBps. Jupiter sizes the 3% fee on
+        // the quote and returns the route. slippageBps here is the
+        // ceiling; the actual slippage gets picked dynamically at
+        // /swap-instructions time. swapMode=ExactIn (default).
         const params = new URLSearchParams({
-          inputMint:   swapParams.inputMint,
-          outputMint:  swapParams.outputMint,
-          amount:      jupInput.toString(),
-          slippageBps: String(SLIPPAGE_BPS),
-          taker:       '11111111111111111111111111111111',
+          inputMint:      swapParams.inputMint,
+          outputMint:     swapParams.outputMint,
+          amount:         swapParams.rawAmount,
+          slippageBps:    String(DYNAMIC_SLIPPAGE_MAX_BPS),
+          platformFeeBps: String(FEE_BPS),
+          swapMode:       'ExactIn',
         });
-        const r = await fetch('/api/jupiter/build?' + params, { signal: ac.signal });
+        const r = await fetch('/api/jupiter/quote?' + params, { signal: ac.signal });
         if (!r.ok) {
           const body = await r.json().catch(() => ({}));
           throw new Error(body.error || 'Quote failed (' + r.status + ')');
         }
         const data = await r.json();
         if (!ac.signal.aborted) {
-          // For SELL, subtract our 3% fee so the user sees what actually hits their wallet.
-          if (!isBuy && data.outAmount) {
-            const gross = BigInt(data.outAmount);
-            const net = (gross * BigInt(10000 - FEE_BPS)) / 10000n;
-            setQuote({ ...data, outAmount: net.toString(), _grossOut: data.outAmount });
-          } else {
-            setQuote(data);
-          }
+          setQuote(data);
           setQuoteError(null);
         }
       } catch (e) {
@@ -906,12 +899,20 @@ function TradeModal({
     }, 300);
 
     return () => { clearTimeout(t); ac.abort(); };
-  }, [swapParams, isBuy]);
+  }, [swapParams]);
 
+  // Net the user actually receives = outAmount minus Jupiter's platform fee.
+  // For BUY the fee is in input (wSOL) so outAmount already reflects user's
+  // received tokens. For SELL the fee is in output (wSOL) so we subtract.
   const outAmountUi = useMemo(() => {
     if (!quote || !swapParams) return null;
-    return Number(quote.outAmount) / Math.pow(10, swapParams.outputDecimals);
-  }, [quote, swapParams]);
+    const gross = Number(quote.outAmount || 0);
+    const feeInOutput = (!isBuy && quote.platformFee?.amount)
+      ? Number(quote.platformFee.amount)
+      : 0;
+    const net = Math.max(0, gross - feeInOutput);
+    return net / Math.pow(10, swapParams.outputDecimals);
+  }, [quote, swapParams, isBuy]);
 
   const priceImpact = useMemo(() => {
     if (!quote || quote.priceImpactPct == null) return null;
@@ -919,6 +920,9 @@ function TradeModal({
     return Number.isFinite(n) ? n * (Math.abs(n) <= 1 ? 100 : 1) : null;
   }, [quote]);
 
+  // Jupiter picks the actual slippage at /swap-instructions time. At
+  // quote stage we just display "Auto" — the cap is our ceiling, not
+  // the value Jupiter will use.
   const ownedUiAmount = tokenBalance?.uiAmount || 0;
   const availSol = Math.max(0, (solBalance?.uiAmount || 0) - SOL_RESERVE);
 
@@ -1069,7 +1073,7 @@ function TradeModal({
               </div>
               <div className="lr-trade-detail-row">
                 <span>Slippage</span>
-                <span className="lr-trade-detail-val">{(SLIPPAGE_BPS / 100).toFixed(0)}%</span>
+                <span className="lr-trade-detail-val">Auto (Jupiter)</span>
               </div>
               {priceImpact != null && (
                 <div className="lr-trade-detail-row">
@@ -1082,7 +1086,7 @@ function TradeModal({
               )}
               <div className="lr-trade-detail-row">
                 <span>Fee</span>
-                <span className="lr-trade-detail-val">{(FEE_BPS / 100).toFixed(1)}% in SOL</span>
+                <span className="lr-trade-detail-val">{(FEE_BPS / 100).toFixed(1)}%</span>
               </div>
             </div>
           )}
@@ -1203,7 +1207,7 @@ function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
 export default function LaunchRadar({ onConnectWallet } = {}) {
   useLrCSS();
   const wallet = useWallet();
-  const connection = useMemo(() => getConn(RPC_POOL[0], 'confirmed'), []);
+  const connection = useMemo(() => getConn('confirmed'), []);
 
   const { buyPresets, setBuyPresets, sellPresets, setSellPresets } = usePresets();
   const [settingsOpen, setSettingsOpen] = useState(false);
@@ -1278,6 +1282,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   const refreshBalances = useCallback(async () => {
     if (!wallet.publicKey) { setBalances({}); return; }
     const owner = wallet.publicKey;
+    const balConn = getConn(BAL_COMMITMENT);
     const mergeAccs = (into, accs) => {
       if (!accs || !accs.value) return;
       for (const acc of accs.value) {
@@ -1293,7 +1298,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         };
       }
     };
-    const solP = rpcRace('getBalance', c => c.getBalance(owner, BAL_COMMITMENT))
+    const solP = balConn.getBalance(owner, BAL_COMMITMENT)
       .then(lamports => {
         setBalances(prev => ({
           ...prev,
@@ -1301,16 +1306,16 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         }));
       })
       .catch(e => console.warn('[lr] SOL balance failed', e?.message));
-    const tokP = rpcRace('tokenAccs', c =>
-      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT)
-    ).then(accs => {
-      setBalances(prev => { const next = { ...prev }; mergeAccs(next, accs); return next; });
-    }).catch(e => console.warn('[lr] SPL accounts failed', e?.message));
-    const tok22P = rpcRace('tokenAccs2022', c =>
-      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT)
-    ).then(accs => {
-      setBalances(prev => { const next = { ...prev }; mergeAccs(next, accs); return next; });
-    }).catch(e => console.warn('[lr] Token-2022 accounts failed', e?.message));
+    const tokP = balConn.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT)
+      .then(accs => {
+        setBalances(prev => { const next = { ...prev }; mergeAccs(next, accs); return next; });
+      })
+      .catch(e => console.warn('[lr] SPL accounts failed', e?.message));
+    const tok22P = balConn.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT)
+      .then(accs => {
+        setBalances(prev => { const next = { ...prev }; mergeAccs(next, accs); return next; });
+      })
+      .catch(e => console.warn('[lr] Token-2022 accounts failed', e?.message));
     await Promise.allSettled([solP, tokP, tok22P]);
   }, [wallet.publicKey]);
   useEffect(() => { refreshBalances(); }, [refreshBalances]);
@@ -1365,171 +1370,164 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   }, [confettiKey]);
 
   /* ════════════════════════════════════════════════════════════════
-     sendAndConfirm — broadcast the signed bytes to every RPC in
-     parallel, resend the SAME bytes every ~1.5s, poll status until
-     confirmed or blockhash height exceeded. We never re-sign — the
-     user authorised these exact bytes; Phantom simulated them; we
-     keep retrying the same package until the network commits or the
-     window closes.
+     sendAndConfirm — single RPC. Broadcast the signed bytes, race
+     confirmTransaction against a poll/resend loop. Jupiter's priority
+     fee is what actually lands the trade; we just need to not give up
+     too early. No parallel broadcast, no WebSocket subscription pool.
      ════════════════════════════════════════════════════════════════ */
-  const sendAndConfirm = useCallback(async (rawTx, blockhashInfo) => {
-    // WebSocket signature subscriptions = sub-second push when the tx
-    // lands, no polling lag. Free on every public RPC. We also keep a
-    // light polling fallback in case all subscriptions silently drop.
-    const conns = RPC_POOL.map(u => getConn(u, 'confirmed'));
+  const sendAndConfirm = useCallback(async (rawTx, latest) => {
+    const conn = getConn('confirmed');
+
+    // Skip preflight — we already simulated above. maxRetries:0 because
+    // we run our own resend loop so we control the cadence.
+    const sig = await conn.sendRawTransaction(rawTx, { skipPreflight: true, maxRetries: 0 });
 
     let resolved = false;
     let resolveSig, rejectSig;
-    const confirmPromise = new Promise((res, rej) => { resolveSig = res; rejectSig = rej; });
+    const result = new Promise((res, rej) => { resolveSig = res; rejectSig = rej; });
 
-    const resolveErr = (errVal) => {
+    const fail = (errVal) => {
       if (resolved) return;
       resolved = true;
-      const errStr = JSON.stringify(errVal || '').toLowerCase();
-      if (errStr.includes('slippage') || errStr.includes('6001') || errStr.includes('0x1771')) {
+      const s = JSON.stringify(errVal || '').toLowerCase();
+      if (s.includes('slippage') || s.includes('6001') || s.includes('0x1771'))
         rejectSig(new Error('Price moved — slippage exceeded. Try again.'));
-      } else {
+      else
         rejectSig(new Error('Trade failed on-chain.'));
-      }
     };
-    const resolveOk = (sigOk) => {
-      if (resolved) return;
-      resolved = true;
-      resolveSig(sigOk);
-    };
+    const ok = () => { if (!resolved) { resolved = true; resolveSig(sig); } };
 
-    // Broadcast first so we have the real signature.
-    const sig = await broadcastRaw(rawTx);
+    // Fast path: WebSocket confirmation via confirmTransaction.
+    conn.confirmTransaction(
+      { signature: sig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight },
+      'confirmed',
+    ).then(c => { if (c?.value?.err) fail(c.value.err); else ok(); })
+     .catch(() => { /* fall through to polling */ });
 
-    // Subscribe to confirmation on every RPC in parallel. The first one
-    // to push a notification wins. Sub-second when the tx lands.
-    const subIds = await Promise.all(conns.map(async (c) => {
-      try {
-        return await c.onSignature(sig, (result) => {
-          if (result?.err) resolveErr(result.err);
-          else resolveOk(sig);
-        }, 'confirmed');
-      } catch { return null; }
-    }));
-    const cleanup = () => {
-      subIds.forEach((id, i) => {
-        if (id != null) conns[i].removeSignatureListener(id).catch(() => {});
-      });
-    };
-
-    // Fallback polling + resend in case the WebSockets are flaky.
+    // Resend + poll until the validity window closes.
     (async () => {
-      const pollDeadline = Date.now() + 60_000;
+      const deadline = Date.now() + 60_000;
       let lastResend = Date.now();
-      const racePool = async (op) => {
-        try { return await Promise.any(conns.map(c => op(c))); }
-        catch { return null; }
-      };
-      while (!resolved && Date.now() < pollDeadline) {
+      while (!resolved && Date.now() < deadline) {
         if (Date.now() - lastResend > 2000) {
-          broadcastRaw(rawTx).catch(() => {});
+          conn.sendRawTransaction(rawTx, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
           lastResend = Date.now();
         }
-        const st = await racePool(c => c.getSignatureStatus(sig, { searchTransactionHistory: false }));
-        const cs = st?.value?.confirmationStatus;
-        if (cs === 'confirmed' || cs === 'finalized') { resolveOk(sig); return; }
-        if (st?.value?.err) { resolveErr(st.value.err); return; }
         await new Promise(r => setTimeout(r, 2000));
+        if (resolved) return;
+        try {
+          const st = await conn.getSignatureStatus(sig, { searchTransactionHistory: false });
+          const cs = st?.value?.confirmationStatus;
+          if (cs === 'confirmed' || cs === 'finalized') { ok(); return; }
+          if (st?.value?.err) { fail(st.value.err); return; }
+        } catch {}
       }
-      // Live window done. Definitive on-chain lookup with history search.
       if (!resolved) {
-        const results = await Promise.allSettled(conns.map(c =>
-          c.getTransaction(sig, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 })
-        ));
-        for (const r of results) {
-          if (r.status === 'fulfilled' && r.value) {
-            if (r.value.meta?.err) resolveErr(r.value.meta.err);
-            else resolveOk(sig);
-            return;
-          }
-        }
-        if (!resolved) {
-          resolved = true;
-          rejectSig(new Error('Trade did not land — try again.'));
-        }
+        // Validity window closed — one last history lookup.
+        try {
+          const tx = await conn.getTransaction(sig, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
+          if (tx) { if (tx.meta?.err) fail(tx.meta.err); else ok(); return; }
+        } catch {}
+        if (!resolved) { resolved = true; rejectSig(new Error('Trade did not land — try again.')); }
       }
     })();
 
-    try { return await confirmPromise; }
-    finally { cleanup(); }
+    return result;
   }, []);
 
   /* ════════════════════════════════════════════════════════════════
-     JUPITER SWAP — graduated tokens.
-       BUY:  3% of input SOL → FEE_WALLET BEFORE swap, then 97% via Jup.
-       SELL: full token amount via Jup, then 3% of output SOL → FEE_WALLET.
-     One tx, one signature, atomic.
+     JUPITER SWAP — quote → swap-instructions → compose → sign → send.
+       • Fee:   platformFeeBps=300 on /quote, feeAccount=FEE_WALLET's
+                wSOL ATA on /swap-instructions. Jupiter sizes and
+                routes the fee into our ATA, baked into the swap tx.
+                One sig, atomic. Fee mint is wSOL both directions.
+       • Auto:  dynamicSlippage (capped 10%), prioritizationFeeLamports
+                at veryHigh (capped 0.002 SOL), dynamicComputeUnitLimit.
+                Jupiter picks the actual values per-route.
+       • ATA:   prepend createAssociatedTokenAccountIdempotent for the
+                fee ATA so the first trade ever bootstraps it; every
+                trade after is a no-op (~1500 CU).
+       • Pump:  platformFeeBps disables JupiterZ RFQ but Metis stays
+                live — that's the router that covers pre-grad pump.fun
+                bonding curves, which is what we need for fresh tokens.
      ════════════════════════════════════════════════════════════════ */
   const executeJupiterSwap = useCallback(async ({ mode, swapParams, token }) => {
     if (!wallet.publicKey || !wallet.signTransaction) throw new Error('Wallet not connected');
 
     const { rawAmount, inputMint, outputMint, outputDecimals } = swapParams;
-    const isBuy = mode === 'buy';
-    const totalSolFee = isBuy ? (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n : 0n;
 
-    const jupInput = isBuy
-      ? (BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n
-      : BigInt(rawAmount);
-    if (jupInput <= 0n) throw new Error('Amount too small');
-
-    const params = new URLSearchParams({
+    // 1) Fresh quote at execute time — prices move, especially on
+    //    memecoins. `_t` busts the proxy's 8s quote cache so we never
+    //    sign against a stale price.
+    const quoteQs = new URLSearchParams({
       inputMint, outputMint,
-      amount:      jupInput.toString(),
-      slippageBps: String(SLIPPAGE_BPS),
-      taker:       wallet.publicKey.toBase58(),
+      amount:         rawAmount,
+      slippageBps:    String(DYNAMIC_SLIPPAGE_MAX_BPS),
+      platformFeeBps: String(FEE_BPS),
+      swapMode:       'ExactIn',
+      _t:             String(Date.now()),
     });
-    const buildRes = await fetch('/api/jupiter/build?' + params);
-    if (!buildRes.ok) {
-      const body = await buildRes.json().catch(() => ({}));
-      throw new Error(body.error || 'Build failed (' + buildRes.status + ')');
+    const qRes = await fetch('/api/jupiter/quote?' + quoteQs);
+    if (!qRes.ok) {
+      const body = await qRes.json().catch(() => ({}));
+      throw new Error(body.error || 'Quote failed (' + qRes.status + ')');
     }
-    const build = await buildRes.json();
+    const quoteResponse = await qRes.json();
+    if (!quoteResponse?.routePlan?.length && !quoteResponse?.outAmount) {
+      throw new Error('No route');
+    }
+
+    // 2) Build swap instructions with all the auto knobs + fee account.
+    const swapBody = {
+      quoteResponse,
+      userPublicKey:           wallet.publicKey.toBase58(),
+      wrapAndUnwrapSol:        true,
+      feeAccount:              FEE_WALLET_WSOL_ATA.toBase58(),
+      dynamicSlippage:         { maxBps: DYNAMIC_SLIPPAGE_MAX_BPS },
+      dynamicComputeUnitLimit: true,
+      prioritizationFeeLamports: {
+        priorityLevelWithMaxLamports: {
+          priorityLevel: PRIORITY_FEE_TIER,
+          maxLamports:   PRIORITY_FEE_MAX_LAMP,
+        },
+      },
+    };
+    const siRes = await fetch('/api/jupiter/swap-instructions', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(swapBody),
+    });
+    if (!siRes.ok) {
+      const body = await siRes.json().catch(() => ({}));
+      throw new Error(body.error || 'Build failed (' + siRes.status + ')');
+    }
+    const build = await siRes.json();
     if (!build?.swapInstruction) throw new Error('No route');
 
-    const feeIxs = [];
-    if (isBuy) {
-      if (totalSolFee > 0n) {
-        feeIxs.push(SystemProgram.transfer({
-          fromPubkey: wallet.publicKey, toPubkey: FEE_WALLET,
-          lamports: Number(totalSolFee),
-        }));
-      }
-    } else {
-      // 3% of Jupiter's expected SOL output. At 10% slippage the user
-      // always nets >= 87% of outAmount, so the transfer never starves.
-      const expectedOut = BigInt(build.outAmount || '0');
-      const sellFee = (expectedOut * BigInt(FEE_BPS)) / 10000n;
-      if (sellFee > 0n) {
-        feeIxs.push(SystemProgram.transfer({
-          fromPubkey: wallet.publicKey, toPubkey: FEE_WALLET,
-          lamports: Number(sellFee),
-        }));
-      }
-    }
-
+    // 3) Assemble ixs. Idempotent ATA-create for fee account goes first
+    //    (after compute budget) so wSOL ATA exists by the time Jupiter
+    //    tries to deposit fees into it. The user pays the ~0.002 SOL
+    //    rent the first time across all users; idempotent = no-op after.
     const ixs = [];
     if (Array.isArray(build.computeBudgetInstructions))
       for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
 
-    if (isBuy) {
-      for (const ix of feeIxs) ixs.push(ix);
-      if (Array.isArray(build.setupInstructions)) for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
-      if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
-      if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
-    } else {
-      if (Array.isArray(build.setupInstructions)) for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
-      if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
-      if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
-      for (const ix of feeIxs) ixs.push(ix);
-    }
+    ixs.push(createAssociatedTokenAccountIdempotentInstruction(
+      wallet.publicKey,      // payer (any signer; user is fine)
+      FEE_WALLET_WSOL_ATA,   // ata
+      FEE_WALLET,            // owner
+      WSOL_MINT_PK,          // mint (wSOL)
+      TOKEN_PROGRAM_ID,      // wSOL is classic SPL
+    ));
+
+    if (Array.isArray(build.setupInstructions))
+      for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
+    if (build.swapInstruction)    ixs.push(deserIx(build.swapInstruction));
+    if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
     if (Array.isArray(build.otherInstructions))
       for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
 
+    // 4) Resolve ALTs.
     const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
     let alts = [];
     if (altKeys.length > 0) {
@@ -1540,44 +1538,41 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       }) : null).filter(Boolean);
     }
 
-    // CONFIRMED (not finalized) — confirmed gives a blockhash from a slot
-    // ~2s old vs finalized at ~13s old. With mobile signing taking 15–30s,
-    // that extra ~10s of validity window is the difference between the tx
-    // landing and the "tx expired" error. Confirmed slots almost never get
-    // rolled back on mainnet, so the safety trade-off is negligible.
-    const latest = await rpcRace('blockhash', c => c.getLatestBlockhash('confirmed'), 'confirmed');
+    // 5) Compile, simulate, sign, send. Confirmed blockhash gives ~10s
+    //    more validity window than finalized — matters for mobile signers.
+    const latest = await connection.getLatestBlockhash('confirmed');
     const message = new TransactionMessage({
-      payerKey: wallet.publicKey,
+      payerKey:        wallet.publicKey,
       recentBlockhash: latest.blockhash,
-      instructions: ixs,
+      instructions:    ixs,
     }).compileToV0Message(alts);
     const tx = new VersionedTransaction(message);
 
-    // Simulate across the pool. If RPC #1 hasn't synced our blockhash yet
-    // it would throw "Blockhash not found" and kill the whole flow; racing
-    // means any single synced RPC keeps us going.
-    const sim = await rpcRace('simulate', c => c.simulateTransaction(tx, { sigVerify: false }), 'confirmed');
+    const sim = await connection.simulateTransaction(tx, { sigVerify: false });
     if (sim.value.err) {
       const logs = (sim.value.logs || []).join('\n').toLowerCase();
-      if (logs.includes('insufficient')) throw new Error('Insufficient balance for this swap.');
-      if (logs.includes('slippage') || logs.includes('0x1771')) throw new Error('Price moved — try again.');
-      if (logs.includes('account not')) throw new Error('Token account not ready.');
+      if (logs.includes('insufficient'))                          throw new Error('Insufficient balance for this swap.');
+      if (logs.includes('slippage') || logs.includes('0x1771'))   throw new Error('Price moved — try again.');
+      if (logs.includes('account not'))                           throw new Error('Token account not ready.');
       throw new Error('Simulation failed.');
     }
 
     const signed = await wallet.signTransaction(tx);
-    const rawTx = signed.serialize();
-    const sig = await sendAndConfirm(rawTx, latest);
+    const rawTx  = signed.serialize();
+    const sig    = await sendAndConfirm(rawTx, latest);
 
-    let outAmount = Number(build.outAmount || '0') / Math.pow(10, outputDecimals);
-    if (!isBuy) outAmount = outAmount * (1 - FEE_BPS / 10000);
+    // Display output: gross out minus fee (if fee was taken in output mint).
+    const gross = Number(quoteResponse.outAmount || 0);
+    const feeInOutput = (mode === 'sell' && quoteResponse.platformFee?.amount)
+      ? Number(quoteResponse.platformFee.amount) : 0;
+    const outAmount = Math.max(0, gross - feeInOutput) / Math.pow(10, outputDecimals);
 
     return { sig, confirmed: true, outAmount, mode, token };
   }, [wallet, connection, sendAndConfirm]);
 
   /* ════════════════════════════════════════════════════════════════
      SWAP DISPATCH — Jupiter routes everything (pre-grad bonding curves
-     and post-grad AMMs alike). Single code path, single 5% slippage.
+     and post-grad AMMs alike). Single code path.
      ════════════════════════════════════════════════════════════════ */
   const executeSwap = useCallback(async (args) => executeJupiterSwap(args), [executeJupiterSwap]);
 
