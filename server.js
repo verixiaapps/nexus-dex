@@ -618,6 +618,273 @@ app.get('/api/health', (req, res) => {
 });
 
 /* ========================================================================
+ * Launch Radar — DexScreener data + PumpPortal trades (NEW SECTION)
+ * ─────────────────────────────────────────────────────────────────────────
+ * Self-contained Launch Radar backend. Replaces ./pumpfun-trade.js — the
+ * routes here register BEFORE the `require('./pumpfun-trade')...` line
+ * further down, so this version wins (Express first-match-wins). After
+ * adopting this, delete pumpfun-trade.js and the require line below.
+ *
+ *   GET  /api/dex/launches      — latest pump.fun / PumpSwap launches
+ *   GET  /api/dex/token/:mint   — one token, shaped + hasPumpPair flag
+ *   GET  /api/dex/sol-price     — SOL/USD from DexScreener
+ *   POST /api/pumpfun/trade     — thin PumpPortal proxy. Returns base64
+ *                                 tx; client decompiles, splices a 3%
+ *                                 SOL fee, signs and sends.
+ *
+ * Contract gate: launches + token endpoints only return mints with at
+ * least one pair on dexId "pumpfun" or "pumpswap". Anything in the UI
+ * is guaranteed tradable via PumpPortal's pool="auto" routing.
+ *
+ * Re-uses existing helpers: fetchWithTimeout, safeJson, respondJsonOrError,
+ * getCachedJson, setCachedJson, logError. AbortError → 504 like the rest.
+ * ===================================================================== */
+const DEX_BASE          = 'https://api.dexscreener.com';
+const PUMPPORTAL_URL    = 'https://pumpportal.fun/api/trade-local';
+const PUMP_DEX_IDS      = new Set(['pumpfun', 'pumpswap']);
+const PUMP_BASE58_RE    = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+// 10% slippage on pump.fun trades. CLIENT MATH ASSUMES THIS — if you
+// change it, update the divisor (110n) in LaunchRadar.jsx's swapParams
+// BUY branch to match (100 + PUMP_SLIPPAGE_PCT).
+const PUMP_SLIPPAGE_PCT = 10;
+const PUMP_PRIORITY_FEE = 0.0001;  // SOL — PumpPortal sets compute-unit price
+
+// Shape one mint's DexScreener pairs → internal token row. Returns null
+// unless at least one pair is pump.fun or PumpSwap (the contract gate).
+function _shapePumpToken(mint, pairs) {
+  if (!Array.isArray(pairs) || pairs.length === 0) return null;
+  const pumpPair = pairs.find(p => PUMP_DEX_IDS.has(String(p.dexId || '').toLowerCase()));
+  if (!pumpPair) return null;
+  const best = pairs.reduce(
+    (a, b) => (Number(b.liquidity?.usd || 0) > Number(a.liquidity?.usd || 0) ? b : a),
+    pairs[0],
+  );
+  const base  = best.baseToken  || {};
+  const quote = best.quoteToken || {};
+  const me    = base.address === mint ? base : quote;
+  return {
+    mint,
+    sym:            me.symbol || '???',
+    name:           me.name   || me.symbol || 'Unknown',
+    icon:           best.info?.imageUrl || null,
+    price:          Number(best.priceUsd || 0),
+    priceChange24h: Number(best.priceChange?.h24 || 0),
+    mcap:           Number(best.marketCap || best.fdv || 0),
+    fdv:            Number(best.fdv || 0),
+    volume24h:      Number(best.volume?.h24 || 0),
+    liquidity:      Number(best.liquidity?.usd || 0),
+    pairCreatedAt:  best.pairCreatedAt || null,
+    dexId:          pumpPair.dexId,
+    pumpPool:       pumpPair.dexId === 'pumpswap' ? 'pump-amm' : 'pump',
+    decimals:       6,
+  };
+}
+
+app.get('/api/dex/launches', async (req, res) => {
+  try {
+    const cacheKey = 'dex:launches';
+    const cached = getCachedJson(cacheKey);
+    if (cached) return res.status(cached.status).json(cached.payload);
+
+    const profR = await fetchWithTimeout(
+      DEX_BASE + '/token-profiles/latest/v1',
+      { headers: { Accept: 'application/json' } },
+      10_000,
+    );
+    if (!profR.ok) return respondJsonOrError(res, profR, await safeJson(profR));
+    const profiles = await profR.json();
+
+    const mints = [];
+    const seen  = new Set();
+    for (const p of (Array.isArray(profiles) ? profiles : [])) {
+      if (p.chainId !== 'solana') continue;
+      const a = p.tokenAddress;
+      if (!a || !PUMP_BASE58_RE.test(a) || seen.has(a)) continue;
+      seen.add(a);
+      mints.push(a);
+      if (mints.length >= 30) break;
+    }
+    if (mints.length === 0) {
+      const payload = { tokens: [] };
+      setCachedJson(cacheKey, 200, payload, 8_000);
+      return res.json(payload);
+    }
+
+    const enrichR = await fetchWithTimeout(
+      DEX_BASE + '/latest/dex/tokens/' + mints.join(','),
+      { headers: { Accept: 'application/json' } },
+      12_000,
+    );
+    if (!enrichR.ok) return respondJsonOrError(res, enrichR, await safeJson(enrichR));
+    const data = await enrichR.json();
+    const pairs = Array.isArray(data?.pairs) ? data.pairs : [];
+
+    const byMint = new Map();
+    for (const m of mints) byMint.set(m, []);
+    for (const p of pairs) {
+      const ba = p.baseToken?.address;
+      const qa = p.quoteToken?.address;
+      if (ba && byMint.has(ba)) byMint.get(ba).push(p);
+      if (qa && byMint.has(qa)) byMint.get(qa).push(p);
+    }
+
+    const tokens = [];
+    for (const m of mints) {
+      const shaped = _shapePumpToken(m, byMint.get(m) || []);
+      if (shaped) tokens.push(shaped);
+    }
+    tokens.sort((a, b) => Number(b.pairCreatedAt || 0) - Number(a.pairCreatedAt || 0));
+
+    const payload = { tokens };
+    setCachedJson(cacheKey, 200, payload, 8_000);
+    return res.json(payload);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'DexScreener launches timed out' });
+    logError('dex-launches', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+app.get('/api/dex/token/:mint', async (req, res) => {
+  try {
+    const mint = String(req.params.mint || '');
+    if (!PUMP_BASE58_RE.test(mint)) return res.status(400).json({ error: 'Invalid mint' });
+
+    const cacheKey = 'dex:tok:' + mint;
+    const cached = getCachedJson(cacheKey);
+    if (cached) return res.status(cached.status).json(cached.payload);
+
+    const r = await fetchWithTimeout(
+      DEX_BASE + '/latest/dex/tokens/' + mint,
+      { headers: { Accept: 'application/json' } },
+      10_000,
+    );
+    if (!r.ok) return respondJsonOrError(res, r, await safeJson(r));
+    const data = await r.json();
+    const pairs = Array.isArray(data?.pairs) ? data.pairs : [];
+    const shaped = _shapePumpToken(mint, pairs);
+    const payload = { token: shaped, hasPumpPair: !!shaped };
+    setCachedJson(cacheKey, 200, payload, 5_000);
+    return res.json(payload);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'DexScreener token timed out' });
+    logError('dex-token', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+app.get('/api/dex/sol-price', async (req, res) => {
+  try {
+    const cacheKey = 'dex:solprice';
+    const cached = getCachedJson(cacheKey);
+    if (cached) return res.status(cached.status).json(cached.payload);
+
+    const r = await fetchWithTimeout(
+      DEX_BASE + '/latest/dex/tokens/' + SOL_MINT,
+      { headers: { Accept: 'application/json' } },
+      8_000,
+    );
+    if (!r.ok) return respondJsonOrError(res, r, await safeJson(r));
+    const data = await r.json();
+    const pairs = Array.isArray(data?.pairs) ? data.pairs : [];
+    const stables = pairs
+      .filter(p => p.chainId === 'solana')
+      .filter(p => ['USDC', 'USDT'].includes(String(p.quoteToken?.symbol || '').toUpperCase()));
+    const best = stables.length
+      ? stables.reduce((a, b) => (Number(b.liquidity?.usd || 0) > Number(a.liquidity?.usd || 0) ? b : a))
+      : pairs[0];
+    const price = Number(best?.priceUsd || 0);
+    if (!Number.isFinite(price) || price <= 0)
+      return res.status(502).json({ error: 'SOL price unavailable from DexScreener' });
+    const payload = { price, ts: Date.now() };
+    setCachedJson(cacheKey, 200, payload, 30_000);
+    return res.json(payload);
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'DexScreener sol-price timed out' });
+    logError('dex-sol-price', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+// PumpPortal proxy. Returns binary tx → we base64-encode and wrap in JSON.
+// Cannot use safeJson here because PumpPortal returns octet-stream on success.
+app.post('/api/pumpfun/trade', async (req, res) => {
+  try {
+    const b = req.body || {};
+    const action = b.action;
+    if (action !== 'buy' && action !== 'sell')
+      return res.status(400).json({ error: 'action must be buy or sell' });
+    if (!b.mint || !PUMP_BASE58_RE.test(String(b.mint)))
+      return res.status(400).json({ error: 'Invalid mint' });
+    if (!b.user || !PUMP_BASE58_RE.test(String(b.user)))
+      return res.status(400).json({ error: 'Invalid user' });
+    if (b.amount == null) return res.status(400).json({ error: 'Missing amount' });
+
+    let amountStr, denominatedInSol;
+    if (action === 'buy') {
+      // Client sends LAMPORTS (the curve-budget portion sized for slippage).
+      const lamports = BigInt(String(b.amount));
+      if (lamports <= 0n) return res.status(400).json({ error: 'Amount must be > 0' });
+      amountStr = (Number(lamports) / 1e9).toFixed(9);
+      denominatedInSol = 'true';
+    } else {
+      // Client sends RAW token units + decimals.
+      const raw = BigInt(String(b.amount));
+      if (raw <= 0n) return res.status(400).json({ error: 'Amount must be > 0' });
+      const decimals = Number(b.decimals ?? 6);
+      amountStr = (Number(raw) / Math.pow(10, decimals)).toString();
+      denominatedInSol = 'false';
+    }
+
+    const r = await fetchWithTimeout(
+      PUMPPORTAL_URL,
+      {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/octet-stream, application/json' },
+        body:    JSON.stringify({
+          publicKey:        b.user,
+          action,
+          mint:             b.mint,
+          amount:           amountStr,
+          denominatedInSol,
+          slippage:         PUMP_SLIPPAGE_PCT,
+          priorityFee:      PUMP_PRIORITY_FEE,
+          pool:             b.pool || 'auto',
+        }),
+      },
+      15_000,
+    );
+
+    if (!r.ok) {
+      const text = await r.text().catch(() => '');
+      logError('pumpfun-trade', new Error('PumpPortal HTTP ' + r.status + ': ' + text.slice(0, 200)));
+      const lower = text.toLowerCase();
+      if (lower.includes('not a pump') || lower.includes('invalid mint') || lower.includes('not found'))
+        return res.status(404).json({ error: 'Not a pump.fun token (PumpPortal does not support this mint).' });
+      if (lower.includes('insufficient'))
+        return res.status(400).json({ error: 'Not enough SOL for this trade + fees.' });
+      return res.status(r.status).json({ error: 'PumpPortal: ' + (text.slice(0, 200) || r.statusText) });
+    }
+
+    const buf = Buffer.from(await r.arrayBuffer());
+    if (buf.length === 0) return res.status(502).json({ error: 'PumpPortal returned empty body.' });
+
+    return res.json({
+      action,
+      route:       'pumpportal',
+      pool:        b.pool || 'auto',
+      slippagePct: PUMP_SLIPPAGE_PCT,
+      priorityFee: PUMP_PRIORITY_FEE,
+      tx:          buf.toString('base64'),
+    });
+  } catch (e) {
+    if (e.name === 'AbortError') return res.status(504).json({ error: 'PumpPortal timed out' });
+    logError('pumpfun-trade', e);
+    return res.status(500).json({ error: e.message || 'Unknown error' });
+  }
+});
+
+/* ========================================================================
  * Launch Radar — pump.fun bonding-curve trades
  * Builds buy/sell instructions server-side via @pump-fun/pump-sdk.
  * Mounted BEFORE the /api/* catch-all so the route resolves.
