@@ -41,6 +41,7 @@ cross-chain-bridge-aggregator
 cross-chain-crypto-trading
 cross-chain-meme-coin-exchange
 cross-chain-meme-coin-swap
+cross-chain-stablecoin-exchange
 cross-chain-stablecoin-swap
 cross-chain-swap-aggregator
 cross-chain-token-trading
