@@ -1,0 +1,73 @@
+name: Migrate SEO Pages to swap.v
+
+# One-time migration: copies every page from defi/<slug>/index.html to
+# public/<slug>/index.html, rewriting URLs from verixiaapps.com/nexus-dex/defi/
+# to swap.verixiaapps.com/. Leaves the original defi/ tree untouched so the
+# move can be reviewed / rolled back. Also rebuilds nexus-sitemap.xml with the
+# new swap.v URLs.
+#
+# Trigger this manually from the Actions tab once.
+
+"on":
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: nexus-dex-writer
+  cancel-in-progress: false
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: main
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Configure git
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "nexus-dex-bot"
+          git config user.email "bot@users.noreply.github.com"
+
+      - name: Sync latest main before migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          git checkout main
+          git reset --hard origin/main
+          git clean -fd
+
+      - name: Run migration
+        shell: bash
+        run: python scripts/migrate_seo_to_public.py
+
+      - name: Commit and push
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Nothing to commit — migration produced no changes."
+            exit 0
+          fi
+          git commit -m "Migrate SEO pages from defi/ to public/ with swap.v URLs + sitemap"
+          git fetch origin main
+          if git diff --quiet origin/main..HEAD; then
+            echo "Nothing to push."
+            exit 0
+          fi
+          git push --force-with-lease origin HEAD:main
