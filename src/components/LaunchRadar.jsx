@@ -1,38 +1,11 @@
 // LaunchRadar.jsx — Solana new launches + per-card BUY/SELL modal trade flow.
 //
-// ARCHITECTURE — JUPITER FOR EVERYTHING, FEE TO YOUR WALLET
-//   • Data:  Jupiter /tokens/v2/recent  (single feed, poll-based ~8s).
-//            "Just Hatched" tab is this feed filtered to age < 30 min.
-//            Pre-grad pump.fun launches appear here as soon as Jupiter
-//            indexes them.
-//   • Quote: Jupiter /quote with platformFeeBps=300 → Jupiter sizes the
-//            3% fee, picks the route. Metis covers pre-grad pump.fun
-//            bonding curves AND post-grad AMMs (Raydium, Meteora,
-//            pump-amm) in one shot. (platformFeeBps disables JupiterZ
-//            RFQ, but Metis stays live — which is what we need for
-//            fresh pump tokens anyway.)
-//   • Swap:  Jupiter /swap-instructions POST with feeAccount =
-//            FEE_WALLET's wSOL ATA, dynamicSlippage (capped 10%),
-//            prioritizationFeeLamports at veryHigh (capped 0.002 SOL),
-//            dynamicComputeUnitLimit. Jupiter picks slippage/priority/
-//            CU per-route. We prepend a createAssociatedTokenAccount
-//            Idempotent for the fee ATA so the FIRST trade ever creates
-//            it; every trade after is a no-op (~1500 CU). One tx, one
-//            signature, atomic.
-//   • Fee:   3% of input → fee mint is wSOL both directions (input wSOL
-//            on BUY, output wSOL on SELL). Single ATA, single mint.
-//            Fees pool in FEE_WALLET's wSOL ATA — unwrap whenever.
-//   • Tx:    ONE RPC connection. Confirmed blockhash, simulate, sign,
-//            sendRawTransaction, confirmTransaction with polling
-//            fallback. No pool, no parallel broadcast — Jupiter's
-//            priority fee is what actually lands the trade.
-//
-// INVARIANT
-//   The `mint` field on every token is the canonical contract address.
-//   normalize() validates it as base58 before creating the token row.
-//   Everything downstream — display, balance lookup, Jupiter /quote,
-//   /swap-instructions, the signed tx — keys off that same string.
-
+// FIXED: Trade flow now matches SwapWidget exactly.
+//   • Fee: 3% manually subtracted from input BEFORE quoting Jupiter.
+//   • Quote+Build: Single call to /api/jupiter/build (not /quote + /swap-instructions).
+//   • Fee instructions: Manual SOL transfer (BUY) or SPL transferChecked (SELL).
+//   • No platformFeeBps, no feeAccount, no dynamicSlippage — same proven
+//     pattern as SwapWidget.
 
 import React, { useState, useEffect, useMemo, useRef, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -42,10 +15,12 @@ import {
   VersionedTransaction,
   TransactionMessage,
   AddressLookupTableAccount,
+  SystemProgram,
 } from '@solana/web3.js';
 import {
   getAssociatedTokenAddressSync,
   createAssociatedTokenAccountIdempotentInstruction,
+  createTransferCheckedInstruction,
   TOKEN_PROGRAM_ID,
   TOKEN_2022_PROGRAM_ID,
 } from '@solana/spl-token';
@@ -391,45 +366,18 @@ function useLrCSS() {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   CONFIG — JUPITER FOR EVERYTHING, FEE TO FEE_WALLET'S wSOL ATA
+   CONFIG — MATCHES SWAPWIDGET: manual fee, /api/jupiter/build
    ════════════════════════════════════════════════════════════════════ */
-const SOL_MINT     = 'So11111111111111111111111111111111111111112';     // Mint addr (string)
-const WSOL_MINT_PK = new PublicKey(SOL_MINT);                            // Same mint, PublicKey form
+const SOL_MINT     = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET   = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS      = 300;                                                // 3% — Jupiter sizes this
+const FEE_BPS      = 300;   // 3% — manually subtracted before quoting
+const SLIPPAGE_BPS = 500;   // matches SwapWidget
 
-// The single token account where all platform fees land — FEE_WALLET's
-// wSOL ATA. On BUY (SOL → memecoin) the input is wSOL → fee in wSOL.
-// On SELL (memecoin → SOL) the output is wSOL → fee in wSOL. Same
-// account both ways. Fees pool here as wSOL; unwrap to native SOL
-// whenever you want to claim.
-const FEE_WALLET_WSOL_ATA = getAssociatedTokenAddressSync(
-  WSOL_MINT_PK, FEE_WALLET, true,  // allowOwnerOffCurve = true (safe default)
-);
-
-// Dynamic slippage cap. Jupiter picks the actual number per-route from
-// its own estimator (typically 50–300 bps); this is just the ceiling
-// it won't exceed.
-const DYNAMIC_SLIPPAGE_MAX_BPS = 1000;
-
-// Priority fee config. "veryHigh" tells Jupiter to bid the top tier
-// for current congestion; maxLamports caps the spend. 2M lamports =
-// 0.002 SOL — generous for memecoin sniping, won't blow the account up.
-const PRIORITY_FEE_TIER     = 'veryHigh';
-const PRIORITY_FEE_MAX_LAMP = 2_000_000;
-
-// Reserve enough SOL to cover ATA rents, wSOL wrap, tx fee, and the
-// priority fee budget above when the user picks MAX.
 const SOL_RESERVE = 0.015;
 
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
-// Public RPCs only. NOT reading window.__VERIXIA_CONFIG__.rpc because
-// the server may inject a Helius URL with a broken key — we ignore it
-// and stick to public endpoints that just work. One connection for the
-// tx flow; a tiny pool raced for balance reads because public RPCs
-// each rate-limit getParsedTokenAccountsByOwner differently.
 const RPC_URL =
   (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC)
   || 'https://solana-rpc.publicnode.com';
@@ -451,10 +399,6 @@ const getConn = (commitment, url = RPC_URL) => {
   return c;
 };
 
-// Race a small pool for balance reads — public RPCs each have different
-// rate-limit behaviour on getParsedTokenAccountsByOwner, so racing them
-// gives the user a balance even when one or two are throttling us.
-// Per-RPC timeout (2.5s) so a single hung endpoint can't stall the race.
 const balRpcRace = (op) => {
   const conns = BAL_RPC_POOL.map(u => getConn(BAL_COMMITMENT, u));
   const withTimeout = (p, ms) => Promise.race([
@@ -543,11 +487,6 @@ function normalize(t) {
   const change = Number(t?.stats24h?.priceChange ?? t?.priceChange24h ?? t?.priceChange ?? 0);
   const created = t.firstPool?.createdAt || t.createdAt || t.pairCreatedAt;
   const am = ageMs(created);
-  // INVARIANT: the mint string here is the single source of truth used
-  // everywhere downstream — balance lookup, icon resolution, Jupiter
-  // /build, and the tx itself. Validate it as base58 before normalizing
-  // so a bad row from any source can never end up routed to a different
-  // contract than the one displayed.
   const rawMint = t.id || t.address || t.mint;
   if (!rawMint || typeof rawMint !== 'string' || !/^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(rawMint)) {
     return null;
@@ -596,7 +535,7 @@ const friendlyError = (err) => {
 };
 
 /* ════════════════════════════════════════════════════════════════════
-   TWITTER SHARE (no referrer)
+   TWITTER SHARE
    ════════════════════════════════════════════════════════════════════ */
 function buildShareUrl() {
   if (typeof window === 'undefined') return '';
@@ -709,7 +648,6 @@ function TokenIcon({ token }) {
   );
 }
 
-
 /* ════════════════════════════════════════════════════════════════════
    PRESETS
    ════════════════════════════════════════════════════════════════════ */
@@ -732,7 +670,7 @@ function usePresets() {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   SETTINGS MODAL
+   SETTINGS MODAL (unchanged)
    ════════════════════════════════════════════════════════════════════ */
 function SettingsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets, onClose }) {
   const [buyDraft,  setBuyDraft]  = useState(buyPresets);
@@ -818,17 +756,16 @@ function SettingsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets,
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   TRADE MODAL
-   Quote: GET /api/jupiter/quote with platformFeeBps=300 — Jupiter sizes
-   the fee, picks the route (Metis covers pre-grad pump.fun, post-grad
-   AMMs alike). Swap is built later in executeJupiterSwap via POST
-   /api/jupiter/swap-instructions. One tx, one signature, atomic.
+   TRADE MODAL — FIXED: matches SwapWidget flow exactly.
+   Quote via /api/jupiter/build with fee subtracted from input.
+   No platformFeeBps, no feeAccount, no dynamicSlippage.
    ════════════════════════════════════════════════════════════════════ */
 function TradeModal({
   token, initialMode, onClose, onConfirm,
   buyPresets, sellPresets,
   solBalance, tokenBalance,
 }) {
+  const wallet = useWallet();
   const [mode, setMode] = useState(initialMode || 'buy');
   const [amount, setAmount] = useState('');
   const [quote, setQuote] = useState(null);
@@ -848,14 +785,18 @@ function TradeModal({
   const isBuy = mode === 'buy';
   const presets = isBuy ? buyPresets : sellPresets;
 
+  // Compute rawAmount (full user input) and netAmount (after 3% fee)
   const swapParams = useMemo(() => {
     if (!amount) return null;
     const n = Number(amount);
     if (!Number.isFinite(n) || n <= 0) return null;
     if (isBuy) {
       const rawAmount = BigInt(Math.floor(n * 1e9)).toString();
+      const netAmount = ((BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n).toString();
+      if (BigInt(netAmount) <= 0n) return null;
       return {
         rawAmount,
+        netAmount,
         inputMint:  SOL_MINT,
         outputMint: token.mint,
         inputDecimals: 9,
@@ -867,9 +808,12 @@ function TradeModal({
     const pct = Math.min(100, Math.max(0.01, n));
     const rawAmount = ((BigInt(tokenBalance.amount) * BigInt(Math.floor(pct * 100))) / 10000n).toString();
     if (BigInt(rawAmount) <= 0n) return null;
+    const netAmount = ((BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n).toString();
+    if (BigInt(netAmount) <= 0n) return null;
     const decimals = tokenBalance.decimals || token.decimals || 6;
     return {
       rawAmount,
+      netAmount,
       inputMint:  token.mint,
       outputMint: SOL_MINT,
       inputDecimals: decimals,
@@ -879,6 +823,8 @@ function TradeModal({
     };
   }, [amount, isBuy, token, tokenBalance]);
 
+  // Quote via /api/jupiter/build — same endpoint SwapWidget uses.
+  // Net amount (after fee) is what Jupiter routes.
   useEffect(() => {
     if (!swapParams) { setQuote(null); setQuoteError(null); return; }
     if (quoteAbortRef.current) quoteAbortRef.current.abort();
@@ -890,19 +836,16 @@ function TradeModal({
 
     const t = setTimeout(async () => {
       try {
-        // GET /quote with platformFeeBps. Jupiter sizes the 3% fee on
-        // the quote and returns the route. slippageBps here is the
-        // ceiling; the actual slippage gets picked dynamically at
-        // /swap-instructions time. swapMode=ExactIn (default).
         const params = new URLSearchParams({
-          inputMint:      swapParams.inputMint,
-          outputMint:     swapParams.outputMint,
-          amount:         swapParams.rawAmount,
-          slippageBps:    String(DYNAMIC_SLIPPAGE_MAX_BPS),
-          platformFeeBps: String(FEE_BPS),
-          swapMode:       'ExactIn',
+          inputMint:   swapParams.inputMint,
+          outputMint:  swapParams.outputMint,
+          amount:      swapParams.netAmount,
+          slippageBps: String(SLIPPAGE_BPS),
+          taker:       wallet.publicKey
+            ? wallet.publicKey.toBase58()
+            : '11111111111111111111111111111111',
         });
-        const r = await fetch('/api/jupiter/quote?' + params, { signal: ac.signal });
+        const r = await fetch('/api/jupiter/build?' + params, { signal: ac.signal });
         if (!r.ok) {
           const body = await r.json().catch(() => ({}));
           throw new Error(body.error || 'Quote failed (' + r.status + ')');
@@ -921,23 +864,16 @@ function TradeModal({
       } finally {
         if (!ac.signal.aborted) setQuoting(false);
       }
-    }, 300);
+    }, 350);
 
     return () => { clearTimeout(t); ac.abort(); };
-  }, [swapParams]);
+  }, [swapParams, wallet.publicKey]);
 
-  // Net the user actually receives = outAmount minus Jupiter's platform fee.
-  // For BUY the fee is in input (wSOL) so outAmount already reflects user's
-  // received tokens. For SELL the fee is in output (wSOL) so we subtract.
+  // Simple outAmount — no platformFee subtraction needed.
   const outAmountUi = useMemo(() => {
     if (!quote || !swapParams) return null;
-    const gross = Number(quote.outAmount || 0);
-    const feeInOutput = (!isBuy && quote.platformFee?.amount)
-      ? Number(quote.platformFee.amount)
-      : 0;
-    const net = Math.max(0, gross - feeInOutput);
-    return net / Math.pow(10, swapParams.outputDecimals);
-  }, [quote, swapParams, isBuy]);
+    return Number(quote.outAmount || 0) / Math.pow(10, swapParams.outputDecimals);
+  }, [quote, swapParams]);
 
   const priceImpact = useMemo(() => {
     if (!quote || quote.priceImpactPct == null) return null;
@@ -945,9 +881,11 @@ function TradeModal({
     return Number.isFinite(n) ? n * (Math.abs(n) <= 1 ? 100 : 1) : null;
   }, [quote]);
 
-  // Jupiter picks the actual slippage at /swap-instructions time. At
-  // quote stage we just display "Auto" — the cap is our ceiling, not
-  // the value Jupiter will use.
+  const minReceived = useMemo(() => {
+    if (!quote || !swapParams) return null;
+    return Number(quote.otherAmountThreshold || 0) / Math.pow(10, swapParams.outputDecimals);
+  }, [quote, swapParams]);
+
   const ownedUiAmount = tokenBalance?.uiAmount || 0;
   const availSol = Math.max(0, (solBalance?.uiAmount || 0) - SOL_RESERVE);
 
@@ -976,7 +914,6 @@ function TradeModal({
   const setMaxBuy = () => {
     if (!isBuy) return;
     const m = Math.max(0, availSol);
-    // FLOOR to 4 decimals — toFixed could round UP and exceed availSol.
     if (m > 0) setAmount(String(Math.floor(m * 10000) / 10000));
   };
 
@@ -1098,8 +1035,16 @@ function TradeModal({
               </div>
               <div className="lr-trade-detail-row">
                 <span>Slippage</span>
-                <span className="lr-trade-detail-val">Auto (Jupiter)</span>
+                <span className="lr-trade-detail-val">{(SLIPPAGE_BPS / 100).toFixed(1)}%</span>
               </div>
+              {minReceived != null && minReceived > 0 && (
+                <div className="lr-trade-detail-row">
+                  <span>Min received</span>
+                  <span className="lr-trade-detail-val">
+                    {isBuy ? formatTokens(minReceived) : formatSol(minReceived)}
+                  </span>
+                </div>
+              )}
               {priceImpact != null && (
                 <div className="lr-trade-detail-row">
                   <span>Price impact</span>
@@ -1148,7 +1093,7 @@ function TradeModal({
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   LAUNCH CARD
+   LAUNCH CARD (unchanged)
    ════════════════════════════════════════════════════════════════════ */
 function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
   const signals = useMemo(() => deriveSignalBadges(token), [token]);
@@ -1175,8 +1120,7 @@ function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
         </div>
         <div className="lr-card-right">
           <div className="lr-card-price">
-            {token.price > 0 ? formatPrice(token.price)
-              : '—'}
+            {token.price > 0 ? formatPrice(token.price) : '—'}
           </div>
           {Number.isFinite(token.change) && token.change !== 0 ? (
             <div className={'lr-card-change' + (token.change < 0 ? ' lr-down' : '')}>{formatPct(token.change)}</div>
@@ -1227,7 +1171,7 @@ function LaunchCard({ token, owned, onBuy, onSell, isFresh, tintIndex = 0 }) {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   MAIN COMPONENT
+   MAIN COMPONENT — swap logic rewritten to match SwapWidget exactly
    ════════════════════════════════════════════════════════════════════ */
 export default function LaunchRadar({ onConnectWallet } = {}) {
   useLrCSS();
@@ -1241,14 +1185,8 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   const [timeFilter, setTimeFilter] = useState('all');
   const [sortBy, setSortBy] = useState('newest');
 
-  /* ──── fresh lane ──── */
-  // Both lanes pull from the same Jupiter recent feed. "Just Hatched"
-  // is just the slice younger than 30 minutes — keeps the dual-tab UI
-  // without a second data source. Single mint identifier flows through
-  // everywhere: rendering, balance lookup, Jupiter /build, signed tx.
   const freshThresholdMs = 30 * 60_000;
 
-  /* ──── recent lane (Jupiter) ──── */
   const [recentTokens, setRecentTokens] = useState([]);
   const [recentLoading, setRecentLoading] = useState(true);
   const [recentError, setRecentError] = useState(null);
@@ -1267,8 +1205,6 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         const d = await r.json();
         const list = Array.isArray(d) ? d : (d?.data || d?.tokens || []);
         if (!cancelled) {
-          // normalize() returns null for any row whose mint isn't a valid
-          // base58 Solana address — those get filtered out here.
           setRecentTokens(list.map(normalize).filter(Boolean));
           setRecentLoading(false);
           setRecentError(null);
@@ -1285,7 +1221,6 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  /* ──── SOL price ──── */
   const [solPrice, setSolPrice] = useState(0);
   useEffect(() => {
     let cancelled = false;
@@ -1302,7 +1237,6 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     return () => { cancelled = true; clearInterval(id); };
   }, []);
 
-  /* ──── balances ──── */
   const [balances, setBalances] = useState({});
   const refreshBalances = useCallback(async () => {
     if (!wallet.publicKey) { setBalances({}); return; }
@@ -1357,7 +1291,6 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
 
   const solBalance = balances[SOL_MINT];
 
-  /* ──── toasts ──── */
   const [toasts, setToasts] = useState([]);
   const pushToast = useCallback((t) => {
     const id = Math.random().toString(36).slice(2);
@@ -1372,7 +1305,6 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     return false;
   }, [wallet.publicKey, wallet.signTransaction, onConnectWallet, pushToast]);
 
-  /* ──── confetti ──── */
   const [confettiKey, setConfettiKey] = useState(0);
   const fireConfetti = useCallback(() => setConfettiKey(k => k + 1), []);
   const confettiPieces = useMemo(() => {
@@ -1396,164 +1328,82 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   }, [confettiKey]);
 
   /* ════════════════════════════════════════════════════════════════
-     sendAndConfirm — single RPC. Broadcast the signed bytes, race
-     confirmTransaction against a poll/resend loop. Jupiter's priority
-     fee is what actually lands the trade; we just need to not give up
-     too early. No parallel broadcast, no WebSocket subscription pool.
+     SWAP — MATCHES SWAPWIDGET EXACTLY.
+     1. Fresh quote+build via /api/jupiter/build (net amount after fee)
+     2. Manual fee transfer ix (SOL transfer for BUY, SPL for SELL)
+     3. Assemble: computeBudget → fee → setup → swap → cleanup → other
+     4. Simulate → sign → send → confirm with polling fallback
      ════════════════════════════════════════════════════════════════ */
-  const sendAndConfirm = useCallback(async (rawTx, latest) => {
-    const conn = getConn('confirmed');
-
-    // Skip preflight — we already simulated above. maxRetries:0 because
-    // we run our own resend loop so we control the cadence.
-    const sig = await conn.sendRawTransaction(rawTx, { skipPreflight: true, maxRetries: 0 });
-
-    let resolved = false;
-    let resolveSig, rejectSig;
-    const result = new Promise((res, rej) => { resolveSig = res; rejectSig = rej; });
-
-    const fail = (errVal) => {
-      if (resolved) return;
-      resolved = true;
-      const s = JSON.stringify(errVal || '').toLowerCase();
-      if (s.includes('slippage') || s.includes('6001') || s.includes('0x1771'))
-        rejectSig(new Error('Price moved — slippage exceeded. Try again.'));
-      else
-        rejectSig(new Error('Trade failed on-chain.'));
-    };
-    const ok = () => { if (!resolved) { resolved = true; resolveSig(sig); } };
-
-    // Fast path: WebSocket confirmation via confirmTransaction.
-    conn.confirmTransaction(
-      { signature: sig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight },
-      'confirmed',
-    ).then(c => { if (c?.value?.err) fail(c.value.err); else ok(); })
-     .catch(() => { /* fall through to polling */ });
-
-    // Resend + poll until the validity window closes.
-    (async () => {
-      const deadline = Date.now() + 60_000;
-      let lastResend = Date.now();
-      while (!resolved && Date.now() < deadline) {
-        if (Date.now() - lastResend > 2000) {
-          conn.sendRawTransaction(rawTx, { skipPreflight: true, maxRetries: 0 }).catch(() => {});
-          lastResend = Date.now();
-        }
-        await new Promise(r => setTimeout(r, 2000));
-        if (resolved) return;
-        try {
-          const st = await conn.getSignatureStatus(sig, { searchTransactionHistory: false });
-          const cs = st?.value?.confirmationStatus;
-          if (cs === 'confirmed' || cs === 'finalized') { ok(); return; }
-          if (st?.value?.err) { fail(st.value.err); return; }
-        } catch {}
-      }
-      if (!resolved) {
-        // Validity window closed — one last history lookup.
-        try {
-          const tx = await conn.getTransaction(sig, { commitment: 'confirmed', maxSupportedTransactionVersion: 0 });
-          if (tx) { if (tx.meta?.err) fail(tx.meta.err); else ok(); return; }
-        } catch {}
-        if (!resolved) { resolved = true; rejectSig(new Error('Trade did not land — try again.')); }
-      }
-    })();
-
-    return result;
-  }, []);
-
-  /* ════════════════════════════════════════════════════════════════
-     JUPITER SWAP — quote → swap-instructions → compose → sign → send.
-       • Fee:   platformFeeBps=300 on /quote, feeAccount=FEE_WALLET's
-                wSOL ATA on /swap-instructions. Jupiter sizes and
-                routes the fee into our ATA, baked into the swap tx.
-                One sig, atomic. Fee mint is wSOL both directions.
-       • Auto:  dynamicSlippage (capped 10%), prioritizationFeeLamports
-                at veryHigh (capped 0.002 SOL), dynamicComputeUnitLimit.
-                Jupiter picks the actual values per-route.
-       • ATA:   prepend createAssociatedTokenAccountIdempotent for the
-                fee ATA so the first trade ever bootstraps it; every
-                trade after is a no-op (~1500 CU).
-       • Pump:  platformFeeBps disables JupiterZ RFQ but Metis stays
-                live — that's the router that covers pre-grad pump.fun
-                bonding curves, which is what we need for fresh tokens.
-     ════════════════════════════════════════════════════════════════ */
-  const executeJupiterSwap = useCallback(async ({ mode, swapParams, token }) => {
+  const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
     if (!wallet.publicKey || !wallet.signTransaction) throw new Error('Wallet not connected');
 
-    const { rawAmount, inputMint, outputMint, outputDecimals } = swapParams;
+    const { rawAmount, inputMint, outputMint, inputDecimals, outputDecimals } = swapParams;
 
-    // 1) Fresh quote at execute time — prices move, especially on
-    //    memecoins. `_t` busts the proxy's 8s quote cache so we never
-    //    sign against a stale price.
-    const quoteQs = new URLSearchParams({
-      inputMint, outputMint,
-      amount:         rawAmount,
-      slippageBps:    String(DYNAMIC_SLIPPAGE_MAX_BPS),
-      platformFeeBps: String(FEE_BPS),
-      swapMode:       'ExactIn',
-      _t:             String(Date.now()),
+    // 1) Fresh quote+build — same endpoint as SwapWidget
+    const netAmount = ((BigInt(rawAmount) * BigInt(10000 - FEE_BPS)) / 10000n).toString();
+    const params = new URLSearchParams({
+      inputMint,
+      outputMint,
+      amount:      netAmount,
+      slippageBps: String(SLIPPAGE_BPS),
+      taker:       wallet.publicKey.toBase58(),
     });
-    const qRes = await fetch('/api/jupiter/quote?' + quoteQs);
-    if (!qRes.ok) {
-      const body = await qRes.json().catch(() => ({}));
-      throw new Error(body.error || 'Quote failed (' + qRes.status + ')');
+    const r = await fetch('/api/jupiter/build?' + params);
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.error || 'Quote failed (' + r.status + ')');
     }
-    const quoteResponse = await qRes.json();
-    if (!quoteResponse?.routePlan?.length && !quoteResponse?.outAmount) {
-      throw new Error('No route');
+    const build = await r.json();
+    if (!build?.swapInstruction) throw new Error('No route available');
+
+    // 2) Fee instructions — same as SwapWidget
+    const feeAmount = (BigInt(rawAmount) * BigInt(FEE_BPS)) / 10000n;
+    if (feeAmount <= 0n) throw new Error('Fee amount rounds to zero — amount too small.');
+
+    const feeIxs = [];
+    if (inputMint === SOL_MINT) {
+      // BUY: input is SOL → simple lamport transfer
+      feeIxs.push(SystemProgram.transfer({
+        fromPubkey: wallet.publicKey,
+        toPubkey:   FEE_WALLET,
+        lamports:   Number(feeAmount),
+      }));
+    } else {
+      // SELL: input is SPL token → transferChecked to fee wallet
+      const mintPk = new PublicKey(inputMint);
+      const mintInfo = await connection.getAccountInfo(mintPk);
+      if (!mintInfo) throw new Error('Input mint not found on-chain.');
+      const tokenProgram = mintInfo.owner.equals(TOKEN_2022_PROGRAM_ID)
+        ? TOKEN_2022_PROGRAM_ID
+        : TOKEN_PROGRAM_ID;
+
+      const sourceAta = getAssociatedTokenAddressSync(mintPk, wallet.publicKey, true, tokenProgram);
+      const destAta   = getAssociatedTokenAddressSync(mintPk, FEE_WALLET,       true, tokenProgram);
+
+      feeIxs.push(createAssociatedTokenAccountIdempotentInstruction(
+        wallet.publicKey, destAta, FEE_WALLET, mintPk, tokenProgram,
+      ));
+      feeIxs.push(createTransferCheckedInstruction(
+        sourceAta, mintPk, destAta, wallet.publicKey,
+        feeAmount, inputDecimals, [], tokenProgram,
+      ));
     }
 
-    // 2) Build swap instructions with all the auto knobs + fee account.
-    const swapBody = {
-      quoteResponse,
-      userPublicKey:           wallet.publicKey.toBase58(),
-      wrapAndUnwrapSol:        true,
-      feeAccount:              FEE_WALLET_WSOL_ATA.toBase58(),
-      dynamicSlippage:         { maxBps: DYNAMIC_SLIPPAGE_MAX_BPS },
-      dynamicComputeUnitLimit: true,
-      prioritizationFeeLamports: {
-        priorityLevelWithMaxLamports: {
-          priorityLevel: PRIORITY_FEE_TIER,
-          maxLamports:   PRIORITY_FEE_MAX_LAMP,
-        },
-      },
-    };
-    const siRes = await fetch('/api/jupiter/swap-instructions', {
-      method:  'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body:    JSON.stringify(swapBody),
-    });
-    if (!siRes.ok) {
-      const body = await siRes.json().catch(() => ({}));
-      throw new Error(body.error || 'Build failed (' + siRes.status + ')');
-    }
-    const build = await siRes.json();
-    if (!build?.swapInstruction) throw new Error('No route');
-
-    // 3) Assemble ixs. Idempotent ATA-create for fee account goes first
-    //    (after compute budget) so wSOL ATA exists by the time Jupiter
-    //    tries to deposit fees into it. The user pays the ~0.002 SOL
-    //    rent the first time across all users; idempotent = no-op after.
+    // 3) Assemble — same order as SwapWidget
     const ixs = [];
     if (Array.isArray(build.computeBudgetInstructions))
       for (const ix of build.computeBudgetInstructions) ixs.push(deserIx(ix));
 
-    ixs.push(createAssociatedTokenAccountIdempotentInstruction(
-      wallet.publicKey,      // payer (any signer; user is fine)
-      FEE_WALLET_WSOL_ATA,   // ata
-      FEE_WALLET,            // owner
-      WSOL_MINT_PK,          // mint (wSOL)
-      TOKEN_PROGRAM_ID,      // wSOL is classic SPL
-    ));
+    for (const ix of feeIxs) ixs.push(ix);
 
     if (Array.isArray(build.setupInstructions))
       for (const ix of build.setupInstructions) ixs.push(deserIx(ix));
-    if (build.swapInstruction)    ixs.push(deserIx(build.swapInstruction));
+    if (build.swapInstruction) ixs.push(deserIx(build.swapInstruction));
     if (build.cleanupInstruction) ixs.push(deserIx(build.cleanupInstruction));
     if (Array.isArray(build.otherInstructions))
       for (const ix of build.otherInstructions) ixs.push(deserIx(ix));
 
-    // 4) Resolve ALTs.
+    // 4) ALTs
     const altKeys = Object.keys(build.addressesByLookupTableAddress || {});
     let alts = [];
     if (altKeys.length > 0) {
@@ -1564,8 +1414,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       }) : null).filter(Boolean);
     }
 
-    // 5) Compile, simulate, sign, send. Confirmed blockhash gives ~10s
-    //    more validity window than finalized — matters for mobile signers.
+    // 5) Compile, simulate, sign, send — same as SwapWidget
     const latest = await connection.getLatestBlockhash('confirmed');
     const message = new TransactionMessage({
       payerKey:        wallet.publicKey,
@@ -1574,34 +1423,68 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     }).compileToV0Message(alts);
     const tx = new VersionedTransaction(message);
 
-    const sim = await connection.simulateTransaction(tx, { sigVerify: false });
-    if (sim.value.err) {
-      const logs = (sim.value.logs || []).join('\n').toLowerCase();
-      if (logs.includes('insufficient'))                          throw new Error('Insufficient balance for this swap.');
-      if (logs.includes('slippage') || logs.includes('0x1771'))   throw new Error('Price moved — try again.');
-      if (logs.includes('account not'))                           throw new Error('Token account not ready.');
-      throw new Error('Simulation failed.');
+    // Simulate
+    const mapSimErr = (logs) => {
+      const j = (logs || []).join('\n').toLowerCase();
+      if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this swap.';
+      if (j.includes('slippage') || j.includes('0x1771'))  return 'Price moved — try a higher slippage or smaller amount.';
+      if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+      if (j.includes('blockhash') || j.includes('expired')) return 'Quote expired. Please refresh and retry.';
+      return null;
+    };
+    try {
+      const sim = await connection.simulateTransaction(tx, {
+        replaceRecentBlockhash: true,
+        sigVerify: false,
+      });
+      if (sim.value.err) {
+        throw new Error(mapSimErr(sim.value.logs) || 'Swap simulation failed — the price may have moved.');
+      }
+    } catch (simErr) {
+      if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
+        throw simErr;
+      }
+      console.warn('[swap] sim non-fatal', simErr);
     }
 
     const signed = await wallet.signTransaction(tx);
-    const rawTx  = signed.serialize();
-    const sig    = await sendAndConfirm(rawTx, latest);
 
-    // Display output: gross out minus fee (if fee was taken in output mint).
-    const gross = Number(quoteResponse.outAmount || 0);
-    const feeInOutput = (mode === 'sell' && quoteResponse.platformFee?.amount)
-      ? Number(quoteResponse.platformFee.amount) : 0;
-    const outAmount = Math.max(0, gross - feeInOutput) / Math.pow(10, outputDecimals);
+    const sig = await connection.sendRawTransaction(signed.serialize(), {
+      skipPreflight: false,
+      maxRetries: 3,
+    });
 
-    return { sig, confirmed: true, outAmount, mode, token };
-  }, [wallet, connection, sendAndConfirm]);
+    // Confirm — same as SwapWidget
+    let confirmed = false;
+    try {
+      const conf = await Promise.race([
+        connection.confirmTransaction({
+          signature: sig,
+          blockhash: latest.blockhash,
+          lastValidBlockHeight: latest.lastValidBlockHeight,
+        }, 'confirmed'),
+        new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
+      ]);
+      if (conf?.value?.err) throw new Error('Swap tx failed on-chain: ' + JSON.stringify(conf.value.err));
+      confirmed = true;
+    } catch (cfErr) {
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        await new Promise(r => setTimeout(r, 2000));
+        try {
+          const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+          const cs = st?.value?.confirmationStatus;
+          if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+          if (st?.value?.err) throw new Error('Swap tx failed on-chain.');
+        } catch (e) {
+          if (/failed on-chain/i.test(String(e.message))) throw e;
+        }
+      }
+    }
 
-  /* ════════════════════════════════════════════════════════════════
-     SWAP DISPATCH — Jupiter routes everything (pre-grad bonding curves
-     and post-grad AMMs alike). Single code path.
-     ════════════════════════════════════════════════════════════════ */
-  const executeSwap = useCallback(async (args) => executeJupiterSwap(args), [executeJupiterSwap]);
-
+    const outAmount = Number(build.outAmount || 0) / Math.pow(10, outputDecimals);
+    return { sig, confirmed, outAmount, mode, token };
+  }, [wallet, connection]);
 
   /* ──── card actions ──── */
   const onCardBuy = useCallback((token) => {
@@ -1641,13 +1524,8 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   }, [executeSwap, fireConfetti, pushToast, aggressiveRefresh]);
 
   /* ──── derived display ──── */
-  // Jupiter returns USD-denominated values directly; no SOL-priced
-  // fallback needed anymore.
   const deriveDisplayValues = useCallback((t) => t, []);
 
-  // "Just Hatched" = subset of recent feed younger than freshThresholdMs.
-  // "On Radar" = the full recent feed. Same data source, same mint
-  // identifier — there's no second feed to drift out of sync.
   const freshTokens = useMemo(
     () => recentTokens.filter(t => Number.isFinite(t.ageMs) && t.ageMs < freshThresholdMs),
     [recentTokens, freshThresholdMs],
