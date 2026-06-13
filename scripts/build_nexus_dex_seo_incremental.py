@@ -787,7 +787,20 @@ def choose_canonical_keyword(keywords_for_same_intent):
     )[0]
 
 
-def dedupe_keywords(raw_keywords):
+def dedupe_keywords(raw_keywords, already_generated_slugs=None):
+    """
+    Keyword gate (v4.3): accept every keyword unless its slug is
+      - empty,
+      - reserved (CRA / server route / hub slug -> PROTECTED_SLUGS),
+      - already generated in a prior run (already_generated_slugs), or
+      - a duplicate of another keyword in this same batch.
+
+    The aggressive "weak keyword" content filter that v4.1/v4.2 ran here has
+    been removed -- the SEO engine's own quality floor (is_publishable in
+    generate_nexus_dex_content) is the only quality gate now.
+    """
+    already_generated_slugs = set(already_generated_slugs or set())
+
     groups = {}
     for keyword in raw_keywords:
         key = canonical_keyword(keyword)
@@ -795,7 +808,7 @@ def dedupe_keywords(raw_keywords):
 
     canonical_keywords = []
     seen_slugs = set()
-    skipped_weak = 0
+    skipped_already_generated = 0
     skipped_dup = 0
     deduped = 0
 
@@ -803,10 +816,10 @@ def dedupe_keywords(raw_keywords):
         chosen = choose_canonical_keyword(group)
         chosen_slug = canonical_slug(chosen)
 
-        if chosen_slug in PROTECTED_SLUGS or not chosen_slug:
+        if not chosen_slug or chosen_slug in PROTECTED_SLUGS:
             continue
-        if is_weak_keyword(chosen):
-            skipped_weak += len(group)
+        if chosen_slug in already_generated_slugs:
+            skipped_already_generated += len(group)
             continue
         if chosen_slug in seen_slugs:
             skipped_dup += len(group)
@@ -817,7 +830,9 @@ def dedupe_keywords(raw_keywords):
         if len(group) > 1:
             deduped += len(group) - 1
 
-    return canonical_keywords, deduped, skipped_dup, skipped_weak
+    # Return shape kept compatible with main(): the 4th value used to be
+    # "skipped_weak". It now reports already-generated-slug skips instead.
+    return canonical_keywords, deduped, skipped_dup, skipped_already_generated
 
 
 def validate_page_output(slug, title, description, canonical, related_pages):
@@ -1296,10 +1311,12 @@ def main():
     if RESET_ENGINE:
         reset_build_registry()
 
-    keywords, deduped_count, skipped_dup_count, skipped_weak_count = dedupe_keywords(raw_keywords)
-
     generated_slugs = load_generated_slugs()
     generated_keywords = load_generated_keywords()
+
+    keywords, deduped_count, skipped_dup_count, skipped_already_count = dedupe_keywords(
+        raw_keywords, already_generated_slugs=generated_slugs,
+    )
 
     queue_pages = []
     seen_queue_slugs = set()
@@ -1332,10 +1349,10 @@ def main():
     queue_pages = dedupe_pages_by_slug(queue_pages)
 
     print(f"Loaded {len(raw_keywords)} raw keywords from queue.")
-    print(f"Canonical keywords after dedupe/quality filter: {len(keywords)}")
+    print(f"Canonical keywords after dedupe: {len(keywords)}")
     print(f"Duplicate / fragmented keywords removed: {deduped_count}")
     print(f"Duplicate slug groups skipped: {skipped_dup_count}")
-    print(f"Weak / low-value keywords skipped: {skipped_weak_count}")
+    print(f"Already-generated slug groups skipped: {skipped_already_count}")
     print(f"Known generated slugs: {len(generated_slugs)}")
     print(f"Known generated keywords: {len(generated_keywords)}")
     print(f"Existing pages available for internal links: {len(existing_pages)}")
@@ -1436,7 +1453,7 @@ def main():
     print(f"Canonical keywords used: {len(keywords)}")
     print(f"Duplicate / fragmented keywords removed: {deduped_count}")
     print(f"Duplicate slug groups skipped: {skipped_dup_count}")
-    print(f"Weak / low-value keywords skipped: {skipped_weak_count}")
+    print(f"Already-generated slug groups skipped: {skipped_already_count}")
     print(f"Pages generated: {generated_count}")
     print(f"Pages skipped (already on disk): {skipped_existing_count}")
     print(f"Rejected (below floor / engine fail / render): {ai_failure_count}")
