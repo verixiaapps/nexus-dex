@@ -1697,16 +1697,19 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       //    Phantom's and risk killing clean trades on flaky RPC).
       const signed = await wallet.signTransaction(newTx);
 
-      // 6. Send. preflight stays ON as the chain's safety net (Phantom
-      //    sims against current state; preflight catches the few extra
-      //    edge cases between user-tap and inclusion).
+      // 6. Send. Phantom already sim'd at sign-time against fresh chain
+      //    state — that IS our sim. We skip the RPC's preflight (it's a
+      //    SECOND sim, runs seconds later, drifts on volatile pump.fun
+      //    launches, and rejects clean trades that Phantom already
+      //    approved). If price actually moved past the on-chain slippage
+      //    guard, the chain rejects it and the rebroadcast loop below
+      //    catches the on-chain err — never a phantom "sim failed".
       const raw = signed.serialize();
       let sig;
       try {
         sig = await connection.sendRawTransaction(raw, {
-          skipPreflight:        false,
-          preflightCommitment:  'processed',
-          maxRetries:           5,
+          skipPreflight: true,
+          maxRetries:    5,
         });
       } catch (sendErr) {
         let logs = sendErr?.logs || null;
