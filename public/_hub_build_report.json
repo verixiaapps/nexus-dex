@@ -1,0 +1,41 @@
+{
+  "keywords_loaded": 1429,
+  "hubs_built": 11,
+  "validation_warnings": 4,
+  "validation_details": [
+    {
+      "hub_slug": "brand-tokens",
+      "matched_keywords": 1,
+      "linked_pages": 0,
+      "errors": [
+        "no linked child pages",
+        "matched keywords exist but no child pages were found on disk"
+      ]
+    },
+    {
+      "hub_slug": "no-kyc-trading",
+      "matched_keywords": 2,
+      "linked_pages": 0,
+      "errors": [
+        "no linked child pages",
+        "matched keywords exist but no child pages were found on disk"
+      ]
+    },
+    {
+      "hub_slug": "whale-tracking",
+      "matched_keywords": 0,
+      "linked_pages": 0,
+      "errors": [
+        "no linked child pages"
+      ]
+    },
+    {
+      "hub_slug": "how-to-guides",
+      "matched_keywords": 0,
+      "linked_pages": 0,
+      "errors": [
+        "no linked child pages"
+      ]
+    }
+  ]
+}
