@@ -170,7 +170,7 @@ const LR_CSS = `
 .lr-empty-sub{font-size:12px;margin-top:6px;color:var(--ink-3);font-weight:500}
 .lr-empty-err{margin-top:10px;font-family:ui-monospace,monospace;font-size:10px;color:var(--red);background:rgba(209,75,106,.08);border:1px solid rgba(209,75,106,.25);padding:7px 12px;border-radius:10px;display:inline-block;max-width:100%;overflow-wrap:break-word}
 
-.lr-toasts{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);z-index:100;display:flex;flex-direction:column;gap:8px;max-width:440px;width:calc(100% - 24px);pointer-events:none}
+.lr-toasts{position:fixed;bottom:calc(140px + env(safe-area-inset-bottom));left:50%;transform:translateX(-50%);z-index:100;display:flex;flex-direction:column;gap:8px;max-width:440px;width:calc(100% - 24px);pointer-events:none}
 .lr-toast{pointer-events:auto;display:flex;align-items:center;gap:10px;padding:13px 14px;border-radius:18px;backdrop-filter:blur(20px);box-shadow:0 12px 32px rgba(26,27,78,.15);animation:lrSlideUp .35s cubic-bezier(.2,1.3,.4,1);font-size:13px;font-weight:600}
 .lr-toast.lr-toast-success{background:linear-gradient(135deg,rgba(255,255,255,.95),rgba(127,255,212,.4));border:1px solid rgba(127,255,212,.5);color:var(--ink)}
 .lr-toast.lr-toast-error{background:linear-gradient(135deg,rgba(255,255,255,.95),rgba(255,143,190,.35));border:1px solid rgba(209,75,106,.4);color:var(--ink)}
@@ -226,9 +226,9 @@ const LR_CSS = `
   100%{transform:translate(calc(-50% + var(--dx,0px)),calc(-50% + var(--dy,400px))) rotate(var(--dr,720deg));opacity:0}
 }
 
-.lr-trade-overlay{position:fixed;inset:0;background:rgba(26,27,78,.42);backdrop-filter:blur(14px);z-index:1000;display:flex;align-items:flex-end;justify-content:center;padding:0;animation:lrFade .2s}
+.lr-trade-overlay{position:fixed;inset:0;background:rgba(26,27,78,.42);backdrop-filter:blur(14px);z-index:1000;display:flex;align-items:flex-end;justify-content:center;padding:0 0 calc(120px + env(safe-area-inset-bottom)) 0;animation:lrFade .2s}
 @media(min-width:640px){.lr-trade-overlay{align-items:center;padding:16px}}
-.lr-trade-card{width:100%;max-width:460px;max-height:90dvh;overflow-y:auto;background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(251,245,255,.96));border:1px solid var(--border);border-top:1.5px solid rgba(183,148,246,.4);border-radius:28px 28px 0 0;backdrop-filter:blur(20px);box-shadow:0 -20px 60px rgba(26,27,78,.2);animation:lrModalIn .3s cubic-bezier(.2,1.2,.4,1)}
+.lr-trade-card{width:100%;max-width:460px;max-height:80dvh;overflow-y:auto;background:linear-gradient(180deg,rgba(255,255,255,.96),rgba(251,245,255,.96));border:1px solid var(--border);border-top:1.5px solid rgba(183,148,246,.4);border-radius:28px 28px 28px 28px;backdrop-filter:blur(20px);box-shadow:0 -20px 60px rgba(26,27,78,.2);animation:lrModalIn .3s cubic-bezier(.2,1.2,.4,1)}
 @media(min-width:640px){.lr-trade-card{border-radius:28px}}
 .lr-trade-head{display:flex;align-items:center;gap:12px;padding:20px 20px 14px;position:relative}
 .lr-trade-close{position:absolute;top:14px;right:14px;background:var(--glass);border:1px solid var(--border);border-radius:50%;width:32px;height:32px;display:grid;place-items:center;cursor:pointer;font-family:initial;font-size:16px;color:var(--ink);line-height:1;z-index:2}
@@ -1912,4 +1912,3 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     </div>
   );
 }
- 
