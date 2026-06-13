@@ -856,8 +856,12 @@ function TradeModal({
     if (isBuy) {
       const totalLamports = BigInt(Math.floor(n * 1e9));
       if (totalLamports <= 0n) return null;
-      const tradeLamports = (totalLamports * BigInt(10000 - FEE_BPS)) / 10000n;
-      const feeLamports   = totalLamports - tradeLamports;
+      // Pump curve is exact-out-tokens, max-in-SOL. Server slippage = 10% means
+      // the curve may pull up to 1.10× what we send. We need:
+      //   feeLamports + tradeLamports * 1.10 ≤ totalLamports
+      // So size the curve send accordingly.
+      const feeLamports   = (totalLamports * BigInt(FEE_BPS)) / 10000n;
+      const tradeLamports = ((totalLamports - feeLamports) * 100n) / 110n;
       if (tradeLamports <= 0n || feeLamports <= 0n) return null;
       return {
         mode: 'buy',
@@ -1452,11 +1456,41 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     }).compileToV0Message([]);
     const tx = new VersionedTransaction(message);
 
-    // 5. Sign once. Phantom sims against fresh chain state itself.
+    // 5. SIMULATE before asking the user to sign. Catches stale curve state,
+    //    fee-config mismatch, ATA-rent shortfalls, etc. — without spending a
+    //    Phantom popup. `sigVerify: false` because the tx isn't signed yet;
+    //    `replaceRecentBlockhash: true` so the sim uses the freshest hash on
+    //    the validator (avoids the BlockhashNotFound noise).
+    let simLogs = null;
+    try {
+      const sim = await connection.simulateTransaction(tx, {
+        sigVerify: false,
+        replaceRecentBlockhash: true,
+        commitment: 'processed',
+      });
+      simLogs = sim?.value?.logs || null;
+      if (sim?.value?.err) {
+        console.error('[lr-sim] failed:', JSON.stringify(sim.value.err),
+          simLogs ? '\n' + simLogs.join('\n') : '');
+        throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err)));
+      }
+      try {
+        console.log('[lr-sim] ok | CU:', sim?.value?.unitsConsumed,
+          '| logs:', (simLogs || []).length);
+      } catch {}
+    } catch (simErr) {
+      // If the sim call itself fails (RPC hiccup) we don't block the user.
+      // A real on-chain failure was already handled by the throw above.
+      if (simErr instanceof Error && /sim failed/i.test(simErr.message)) throw simErr;
+      console.warn('[lr-sim] could not run sim, proceeding:', simErr?.message);
+    }
+
+    // 6. User signs. Phantom shows its own sim too — this is fine, ours just
+    //    catches problems before we even ask.
     const signed = await wallet.signTransaction(tx);
     const raw = signed.serialize();
 
-    // 6. Send.
+    // 7. Send.
     let sig;
     try {
       sig = await connection.sendRawTransaction(raw, {
@@ -1472,7 +1506,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       throw new Error(describeSimLogs(logs, sendErr?.message));
     }
 
-    // 7. Rebroadcast same bytes until confirmed or blockhash expires.
+    // 8. Rebroadcast same bytes until confirmed or blockhash expires.
     let confirmed = false, onchainErr = null;
     const startedAt = Date.now();
     const HARD_CAP_MS = 60_000;
@@ -1495,7 +1529,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       throw new Error('Trade failed on-chain — price likely moved past slippage.');
     }
 
-    // 8. Estimated output for the toast.
+    // 9. Estimated output for the toast.
     let outAmount = 0;
     if (isBuy && route.expectedTokens) {
       outAmount = Number(route.expectedTokens) / Math.pow(10, token.decimals || 6);
