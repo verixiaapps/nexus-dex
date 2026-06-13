@@ -82,11 +82,12 @@ function getOnline() {
 function getOffline() {
   if (_offline !== undefined) return _offline;
   _offline = null;
+  const conn = new Connection(getRpcUrl(), 'confirmed');
   try {
-    if (_pkg.PUMP_SDK) _offline = _pkg.PUMP_SDK;          // exported singleton
-    else if (OfflineClass) _offline = new OfflineClass(); // offline ctor (no conn)
+    if (_pkg.PUMP_SDK) _offline = _pkg.PUMP_SDK;              // exported singleton
+    else if (OfflineClass) _offline = new OfflineClass(conn); // PumpSdk(connection)
   } catch (e) {
-    try { _offline = new OfflineClass(new Connection(getRpcUrl(), 'confirmed')); }
+    try { _offline = new OfflineClass(); }                    // ctor may take no args
     catch (e2) { _offline = null; }
   }
   return _offline;
@@ -123,8 +124,14 @@ function resolveBuilder(action) {
   const online = getOnline();
   const offline = getOffline();
   logSurfaceOnce(online, offline);
-  for (const n of names) if (typeof online[n] === 'function') return { obj: online, name: n };
+  // Prefer the OFFLINE PumpSdk builder. Its buy/sellInstructions take the
+  // object of pre-fetched state we build from fetchBuyState/fetchSellState
+  // ({ global, bondingCurve(AccountInfo), associatedUserAccountInfo, mint,
+  // user, amount, solAmount, slippage }). The OnlinePumpSdk wrapper of the
+  // same name fetches its OWN state and uses a different signature — passing
+  // our object to it misaligns the accounts and yields IncorrectProgramId.
   if (offline) for (const n of names) if (typeof offline[n] === 'function') return { obj: offline, name: n };
+  for (const n of names) if (typeof online[n] === 'function') return { obj: online, name: n };
   return null;
 }
 
@@ -286,4 +293,3 @@ function mountRoutes(app) {
 }
 
 module.exports = { mountRoutes };
- 
