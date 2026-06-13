@@ -572,16 +572,20 @@ async function resolveFeeAta(connection, mintStr) {
 
 const friendlyError = (err) => {
   const m = String(err?.message || err || '').toLowerCase();
-  if (m.includes('insufficient'))      return 'Insufficient balance.';
-  if (m.includes('slippage'))          return 'Price moved — try again.';
-  if (m.includes('blockhash') || m.includes('expired')) return 'Tx expired. Retry.';
-  if (m.includes('user reject') || m.includes('user denied') || m.includes('cancelled')) return 'Cancelled.';
-  if (m.includes('simulation failed')) return 'Simulation failed — price moved.';
-  if (m.includes('account not'))       return 'Token account not ready.';
-  if (m.includes('rate'))              return 'Rate limited.';
+  // Cancel first — a user rejecting in the wallet must never be mislabeled.
+  if (m.includes('user reject') || m.includes('user denied') || m.includes('cancelled') || m.includes('request rejected')) return 'Cancelled.';
+  // pump.fun slippage guards: 0x1771 TooMuchSolRequired / 0x1772 TooLittleSolReceived.
+  if (m.includes('0x1771') || m.includes('0x1772') || m.includes('toomuchsol') || m.includes('toolittlesol') || m.includes('slippage'))
+    return 'Price moved past slippage — try again.';
+  if (m.includes('insufficient') || m.includes('debit an account')) return 'Not enough SOL for this trade + fees.';
+  if (m.includes('blockhash') || m.includes('expired')) return 'Tx expired — retry.';
+  if (m.includes('complete') || m.includes('graduat')) return 'Token graduated — off the bonding curve.';
+  if (m.includes('account not') || m.includes('uninitialized')) return 'Token account not ready — try again in a moment.';
+  if (m.includes("didn't confirm") || m.includes('not confirm')) return "Sent but didn't confirm — check Solscan before retrying.";
+  if (m.includes('simulation failed')) return 'Trade would fail right now — price likely moved.';
+  if (m.includes('rate'))              return 'Rate limited — try again.';
   if (m.includes('no route') || m.includes('could not find any route')) return 'No route yet — too fresh.';
-  if (m.includes('too large'))         return 'Route too complex. Try smaller.';
-  return err?.message?.slice(0, 80) || 'Swap failed.';
+  return err?.message?.slice(0, 90) || 'Trade failed.';
 };
 
 /* ════════════════════════════════════════════════════════════════════
@@ -1457,64 +1461,55 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       }).compileToV0Message();
       const tx = new VersionedTransaction(message);
 
-      const mapSimErr = (logs) => {
-        const j = (logs || []).join('\n').toLowerCase();
-        if (j.includes('insufficient') || j.includes('0x1')) return 'Insufficient balance for this trade.';
-        if (j.includes('slippage') || j.includes('toolittle') || j.includes('0x1771')) return 'Price moved — try again.';
-        if (j.includes('account not') || j.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
-        if (j.includes('blockhash') || j.includes('expired')) return 'Tx expired. Please retry.';
-        if (j.includes('complete') || j.includes('graduat')) return 'Token graduated — no longer on the bonding curve.';
-        return null;
-      };
-      // Advisory pre-sim only (logs, never blocks). Phantom/Blowfish runs the
-      // real user-facing simulation at sign time — this is just for our logs.
-      // The on-chain slippage guard (maxSolCost / minSolOutput) is the real
-      // protection, so we don't reject on stale-state sim failures here.
-      try {
-        const sim = await connection.simulateTransaction(tx, {
-          replaceRecentBlockhash: true,
-          sigVerify: false,
-        });
-        if (sim.value.err) {
-          console.warn('[pump-sim] non-fatal err:', JSON.stringify(sim.value.err));
-          console.warn('[pump-sim] logs:\n' + (sim.value.logs || []).join('\n'));
-        }
-      } catch (simErr) {
-        console.warn('[pump-swap] sim skipped:', simErr?.message);
-      }
-
+      // No separate pre-sign simulation. The simulation that protects the
+      // user is the one the wallet (Phantom/Blowfish) runs on THIS exact tx at
+      // sign time, and the RPC preflight below simulates the exact signed tx
+      // too (skipPreflight:false). Our old simulateTransaction call added a
+      // round-trip of latency AND simulated a *different* tx (replaceRecent-
+      // Blockhash). We sign and send the same tx object — never rebuilt.
       const signed = await wallet.signTransaction(tx);
 
-      const sig = await connection.sendRawTransaction(signed.serialize(), {
-        skipPreflight: true,
-        maxRetries: 3,
-      });
-
-      let confirmed = false;
+      // skipPreflight:false → a doomed tx (slippage, insufficient funds,
+      // graduated curve) is rejected HERE, immediately, with the real reason,
+      // instead of being fired blind and silently dropped. This is what makes
+      // failures fast and honest rather than a ~50s wait ending in a fake "ok".
+      let sig;
       try {
-        const conf = await Promise.race([
-          connection.confirmTransaction({
-            signature: sig,
-            blockhash: latest.blockhash,
-            lastValidBlockHeight: latest.lastValidBlockHeight,
-          }, 'confirmed'),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 30_000)),
-        ]);
-        if (conf?.value?.err) throw new Error('Trade tx failed on-chain: ' + JSON.stringify(conf.value.err));
-        confirmed = true;
-      } catch (cfErr) {
-        const deadline = Date.now() + 20_000;
-        while (Date.now() < deadline) {
-          await new Promise(r => setTimeout(r, 2000));
-          try {
-            const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-            const cs = st?.value?.confirmationStatus;
-            if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
-            if (st?.value?.err) throw new Error('Trade tx failed on-chain.');
-          } catch (e) {
-            if (/failed on-chain/i.test(String(e.message))) throw e;
-          }
-        }
+        sig = await connection.sendRawTransaction(signed.serialize(), {
+          skipPreflight: false,
+          preflightCommitment: 'processed',
+          maxRetries: 3,
+        });
+      } catch (sendErr) {
+        const logs = sendErr?.logs ? '\n' + sendErr.logs.join('\n') : '';
+        console.warn('[pump-send] rejected:', sendErr?.message, logs);
+        throw sendErr;   // → friendlyError in the modal, fast
+      }
+
+      // Confirm against the blockhash we built with (auto-expires, so this can
+      // never hang forever). Cap at 45s, then one final status check.
+      let confirmed = false, onchainErr = null;
+      const res = await Promise.race([
+        connection.confirmTransaction(
+          { signature: sig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight },
+          'confirmed',
+        ).then(c => ({ t: 'done', c })).catch(e => ({ t: 'err', e })),
+        new Promise(r => setTimeout(() => r({ t: 'timeout' }), 45_000)),
+      ]);
+      if (res.t === 'done') {
+        if (res.c?.value?.err) onchainErr = res.c.value.err;
+        else confirmed = true;
+      }
+      if (!confirmed && !onchainErr) {
+        try {
+          const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
+          if (st?.value?.err) onchainErr = st.value.err;
+          else if (st?.value?.confirmationStatus === 'confirmed' || st?.value?.confirmationStatus === 'finalized') confirmed = true;
+        } catch { /* leave confirmed=false → caller reports "not confirmed" */ }
+      }
+      if (onchainErr) {
+        console.warn('[pump-confirm] on-chain err:', JSON.stringify(onchainErr));
+        throw new Error('Trade failed on-chain — price likely moved past slippage.');
       }
 
       // Estimated output from the server's curve math (for the toast).
@@ -1544,28 +1539,37 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
 
   const handleTradeConfirm = useCallback(async ({ mode, swapParams, token }) => {
     const { sig, confirmed, outAmount } = await executeSwap({ mode, swapParams, token });
-    if (confirmed) fireConfetti();
 
-    const shareUrl = buildShareUrl();
-    const tweetText = buildTweetText({
-      mode, token,
-      solAmount:  swapParams.solAmount,
-      outAmount:  outAmount || 0,
-      percentage: swapParams.percentage,
-    });
+    if (confirmed) {
+      fireConfetti();
+      const shareUrl = buildShareUrl();
+      const tweetText = buildTweetText({
+        mode, token,
+        solAmount:  swapParams.solAmount,
+        outAmount:  outAmount || 0,
+        percentage: swapParams.percentage,
+      });
+      pushToast({
+        kind: 'success',
+        emoji: '🎉',
+        body: mode === 'buy'
+          ? <><b>Bought ${token.sym}</b><br/>{swapParams.solAmount} SOL{outAmount > 0 ? <> → ~{formatTokens(outAmount)} {token.sym}</> : null}</>
+          : <><b>Sold {Math.round(swapParams.percentage)}% of ${token.sym}</b>{outAmount > 0 ? <><br/>~{formatSol(outAmount)} SOL</> : null}</>,
+        solscan: 'https://solscan.io/tx/' + sig,
+        tweetText, shareUrl,
+      });
+    } else {
+      // Submitted but NOT confirmed in time — never claim it went through.
+      pushToast({
+        kind: 'error',
+        emoji: '⏳',
+        body: <><b>Not confirmed</b><br/>Sent, but didn't confirm in time. Check Solscan before retrying so you don't trade twice.</>,
+        solscan: 'https://solscan.io/tx/' + sig,
+        duration: 13000,
+      });
+    }
 
-    pushToast({
-      kind: 'success',
-      emoji: confirmed ? '🎉' : '⏳',
-      body: mode === 'buy'
-        ? <><b>Bought ${token.sym}</b><br/>{swapParams.solAmount} SOL{outAmount > 0 ? <> → ~{formatTokens(outAmount)} {token.sym}</> : null}</>
-        : <><b>Sold {Math.round(swapParams.percentage)}% of ${token.sym}</b>{outAmount > 0 ? <><br/>~{formatSol(outAmount)} SOL</> : null}</>,
-      solscan: 'https://solscan.io/tx/' + sig,
-      tweetText, shareUrl,
-    });
-
-    // Fast targeted refresh for the traded token + SOL, then the full
-    // scan in the background (updates "you own" strips on other cards).
+    // Refresh balances either way (an unconfirmed tx may still land shortly).
     refreshSol();
     [1200, 3000, 6000].forEach(ms => setTimeout(() => {
       refreshSol();
