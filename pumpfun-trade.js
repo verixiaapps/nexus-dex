@@ -1,5 +1,5 @@
 // pumpfun-trade.js — Pump.fun bonding-curve trade builder for Launch Radar.
-// 
+//
 // SCOPE
 //   Pump.fun BONDING CURVE only. Pre-graduation buys/sells via the pump SDK.
 //   Graduated tokens (curve.complete) and non-pump mints are NOT traded here —
@@ -144,8 +144,8 @@ function noBuilderError(action) {
 
 const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
-// Slippage in this SDK is a PERCENT number (15 = 15%).
-const SLIPPAGE_PCT = 15; // volatile fresh launches
+// Slippage in this SDK is a PERCENT number (30 = 30%).
+const SLIPPAGE_PCT = 30; // volatile fresh launches — high enough to land
 
 function serializeIx(ix) {
   return {
