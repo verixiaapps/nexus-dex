@@ -515,9 +515,9 @@
 {{PAGE_META_SCRIPT}}
 
 <!-- ============================================================================
-     CONFIG — hardcoded, self-contained. Now using Ankr's free public Solana
+     CONFIG — hardcoded, self-contained. Uses PublicNode's free Solana
      RPC as the primary endpoint. The patched script below ALSO maintains a
-     fallback pool (Ankr → publicnode → mainnet-beta) so balance reads stay
+     mainnet-beta as fallback. so balance reads stay
      resilient even if the primary RPC throttles.
      ========================================================================= -->
 <script>
@@ -594,7 +594,6 @@ function __verixiaApp() {
      iterating until one returns wins us reliability without needing a paid key. */
   var RPC_POOL = [
     RUNTIME_CFG.rpc,
-    'https://solana-rpc.publicnode.com',
     'https://solana-rpc.publicnode.com',
     'https://api.mainnet-beta.solana.com',
   ].filter(Boolean).filter(function(v, i, a) { return a.indexOf(v) === i; });
