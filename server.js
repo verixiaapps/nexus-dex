@@ -617,6 +617,13 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+/* ========================================================================
+ * Launch Radar — pump.fun bonding-curve trades
+ * Builds buy/sell instructions server-side via @pump-fun/pump-sdk.
+ * Mounted BEFORE the /api/* catch-all so the route resolves.
+ * ===================================================================== */
+require('./pumpfun-trade').mountRoutes(app);
+
 app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not found: ' + req.path }));
 
 /* ========================================================================
