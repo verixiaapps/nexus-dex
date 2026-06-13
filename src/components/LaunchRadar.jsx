@@ -387,10 +387,20 @@ const FEE_BPS      = 300;   // 3% — taken off the input, client-side
 // Compute budget for pump buy/sell. Docs: ~100k CU covers worst-case
 // PDA bumps + curve completion. Priority fee in microLamports/CU —
 // bumped to land fast on volatile fresh launches.
-const PUMP_CU_LIMIT = 120_000;
-const PUMP_CU_PRICE = 200_000;
+const PUMP_CU_LIMIT = 250_000;   // generous headroom (buy + ATA create) — pros don't run a tight cap
+const PUMP_CU_PRICE = 200_000;   // priority fee via compute-unit price (standard, no Jito)
 
-const SOL_RESERVE = 0.015;
+// Rent the user must always keep back / have on hand. Covers: the token ATA the
+// buy creates for the user, your fee-wallet ATA on sells (user is always the
+// payer), and a network-fee cushion. Applied to BOTH MAX and manual entry.
+const ATA_RENT_SOL = 0.00204;   // rent-exempt minimum per SPL token account
+const SOL_RESERVE  = 0.02;      // ~2 ATAs (0.0041) + fee/slippage cushion
+
+// Buy slippage headroom — must match the server's SLIPPAGE_PCT (15%). A pump
+// buy can pull up to BUY_SLIP × the entered SOL, so MAX and the affordability
+// check are sized by this: the buy can never request more SOL than the wallet
+// holds, while still keeping the headroom needed to fill on volatile launches.
+const BUY_SLIP = 1.15;
 
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
@@ -869,10 +879,14 @@ function TradeModal({
   const ownedUiAmount = tokenBalance?.uiAmount || 0;
   const availSol = Math.max(0, (solBalance?.uiAmount || 0) - SOL_RESERVE);
 
+  // Sells still spend SOL: the user pays rent to create your fee-wallet ATA
+  // (idempotent) plus network fees. Always require that much on hand.
+  const solForSellFees = (solBalance?.uiAmount || 0) >= (ATA_RENT_SOL + 0.0006);
+
   const hasFunds = (() => {
     if (!amount || Number(amount) <= 0) return false;
-    if (isBuy) return availSol >= Number(amount);
-    return ownedUiAmount > 0;
+    if (isBuy) return (Number(amount) * BUY_SLIP) <= availSol;  // worst-case spend must fit
+    return ownedUiAmount > 0 && solForSellFees;
   })();
 
   const handleConfirm = async () => {
@@ -890,7 +904,7 @@ function TradeModal({
 
   const setMaxBuy = () => {
     if (!isBuy) return;
-    const m = Math.max(0, availSol);
+    const m = Math.max(0, availSol / BUY_SLIP);  // leave 15% headroom so it can't overdraw
     if (m > 0) setAmount(String(Math.floor(m * 10000) / 10000));
   };
 
@@ -1049,7 +1063,9 @@ function TradeModal({
               : !amount || Number(amount) <= 0
                 ? (isBuy ? 'Enter SOL amount' : 'Enter percentage')
                 : !hasFunds
-                  ? (isBuy ? 'Insufficient SOL' : ('No ' + token.sym + ' to sell'))
+                  ? (isBuy
+                      ? 'Insufficient SOL'
+                      : (ownedUiAmount <= 0 ? ('No ' + token.sym + ' to sell') : 'Need ~0.003 SOL for fees'))
                   : (isBuy ? ('🍭 Buy ' + amount + ' SOL of $' + token.sym)
                            : ('💸 Sell ' + Math.min(100, Number(amount)) + '% of $' + token.sym))}
           </button>
@@ -1450,25 +1466,27 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         if (j.includes('complete') || j.includes('graduat')) return 'Token graduated — no longer on the bonding curve.';
         return null;
       };
+      // Advisory pre-sim only (logs, never blocks). Phantom/Blowfish runs the
+      // real user-facing simulation at sign time — this is just for our logs.
+      // The on-chain slippage guard (maxSolCost / minSolOutput) is the real
+      // protection, so we don't reject on stale-state sim failures here.
       try {
         const sim = await connection.simulateTransaction(tx, {
           replaceRecentBlockhash: true,
           sigVerify: false,
         });
         if (sim.value.err) {
-          throw new Error(mapSimErr(sim.value.logs) || 'Trade simulation failed — the price may have moved.');
+          console.warn('[pump-sim] non-fatal err:', JSON.stringify(sim.value.err));
+          console.warn('[pump-sim] logs:\n' + (sim.value.logs || []).join('\n'));
         }
       } catch (simErr) {
-        if (simErr?.message && /balance|slippage|simulation failed|account not|expired|graduat/i.test(simErr.message)) {
-          throw simErr;
-        }
-        console.warn('[pump-swap] sim non-fatal', simErr);
+        console.warn('[pump-swap] sim skipped:', simErr?.message);
       }
 
       const signed = await wallet.signTransaction(tx);
 
       const sig = await connection.sendRawTransaction(signed.serialize(), {
-        skipPreflight: false,
+        skipPreflight: true,
         maxRetries: 3,
       });
 
@@ -1865,4 +1883,3 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     </div>
   );
 }
- 
