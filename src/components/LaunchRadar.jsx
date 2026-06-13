@@ -12,6 +12,9 @@
 //                           pump sell runs with the remaining 97%.
 //   • One signature per trade. Graduated tokens return a clear error
 //     (Radar is for fresh/pre-grad launches).
+//
+// BALANCES: Alchemy is the primary RPC, with public nodes as last-resort
+// fallbacks, raced all-at-once (same proven pattern as SwapWidget).
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -392,20 +395,26 @@ const SOL_RESERVE = 0.015;
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
-// Use the injected RPC (same as SwapWidget) — a fast/paid endpoint. The
-// public RPCs are too slow for the sign window and cause "Tx expired".
+// ── BALANCE RPC ──────────────────────────────────────────────────────
+// Alchemy is the primary balance RPC. Set it at build time (NO server.js
+// change needed):
+//     REACT_APP_ALCHEMY_RPC = https://solana-mainnet.g.alchemy.com/v2/<KEY>
+// Lock the key to your domain in the Alchemy dashboard since it ships to the
+// browser. Public nodes are last-resort fallbacks only.
+// NOTE: window.__VERIXIA_CONFIG__.rpc is intentionally NOT used here — on this
+// server it resolves to Helius, and we don't want Helius for balances.
 const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
-const RPC_URL =
-  RUNTIME_CFG.rpc
-  || (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC)
-  || 'https://solana-rpc.publicnode.com';
+const ALCHEMY_RPC =
+  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_ALCHEMY_RPC) || '';
 
 const BAL_RPC_POOL = [
-  RPC_URL,
+  ALCHEMY_RPC,
   'https://solana-rpc.publicnode.com',
   'https://solana.drpc.org',
   'https://api.mainnet-beta.solana.com',
-].filter((v, i, a) => v && a.indexOf(v) === i);
+].filter(Boolean).filter((v, i, a) => a.indexOf(v) === i);
+
+const RPC_URL = BAL_RPC_POOL[0];
 
 const BAL_COMMITMENT = 'processed';
 
@@ -417,28 +426,17 @@ const getConn = (commitment, url = RPC_URL) => {
   return c;
 };
 
-const _withTimeout = (p, ms) => Promise.race([
-  p,
-  new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
-]);
-
-// Balance reads: try the fast primary RPC (Alchemy from runtime config)
-// FIRST and give it room (4s). Only if it fails/times out do we race the
-// slower public fallbacks. This stops the public RPCs from dragging down
-// the common case where Alchemy is healthy.
+// Race every RPC at once and take the first to answer (same proven pattern as
+// SwapWidget). A healthy Alchemy returns in well under a second — no more
+// waiting on a slow primary before falling back to the public nodes.
 const balRpcRace = (op) => {
-  const primary = getConn(BAL_COMMITMENT, RPC_URL);
-  return _withTimeout(op(primary), 4000).catch((e) => {
-    if (typeof console !== 'undefined') console.warn('[lr-bal] primary slow/failed:', e?.message);
-    const fallbacks = BAL_RPC_POOL.filter(u => u !== RPC_URL).map(u => getConn(BAL_COMMITMENT, u));
-    if (fallbacks.length === 0) throw new Error('Balance RPC failed');
-    return Promise.any(fallbacks.map((c, i) =>
-      _withTimeout(op(c), 3000).catch(err => {
-        if (typeof console !== 'undefined') console.warn('[lr-bal] fallback ' + i + ':', err?.message);
-        throw err;
-      })
-    )).catch(() => { throw new Error('All balance RPCs failed'); });
-  });
+  const conns = BAL_RPC_POOL.map(u => getConn(BAL_COMMITMENT, u));
+  return Promise.any(conns.map((c, i) =>
+    op(c).catch(e => {
+      if (typeof console !== 'undefined') console.warn('[lr-bal] ' + BAL_RPC_POOL[i] + ':', e?.message);
+      throw e;
+    })
+  )).catch(() => { throw new Error('All balance RPCs failed'); });
 };
 
 const POLL_RECENT  = 8_000;
