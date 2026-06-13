@@ -1,97 +1,152 @@
 // pumpfun-trade.js — Pump.fun bonding-curve trade builder for Launch Radar.
 //
+// SCOPE
+//   Pump.fun BONDING CURVE only. Pre-graduation buys/sells via the pump SDK.
+//   Graduated tokens (curve.complete) and non-pump mints are NOT traded here —
+//   they return a clean, explicit rejection (no AMM/Jupiter routing).
+//
 // WHAT THIS DOES
-//   Builds buy/sell INSTRUCTIONS for pre-graduation pump.fun tokens using
-//   the official @pump-fun/pump-sdk, then returns them to the client as
-//   JSON. The client appends your 3% platform-fee instruction and signs
-//   ONE atomic transaction. Jupiter is NOT used here — it's data-only on
-//   the Radar page. This is the trade engine.
+//   Builds buy/sell INSTRUCTIONS server-side using @pump-fun/pump-sdk, returns
+//   them to the client as JSON. The client appends the 3% platform-fee
+//   instruction and signs ONE atomic transaction.
 //
-// WHY SERVER-SIDE
-//   The SDK needs Node + an RPC connection to fetch on-chain bonding-curve
-//   state and auto-detect SPL vs Token-2022. Building instructions in the
-//   browser would bloat the bundle and break on the Token-2022 edge cases.
-//   So: server fetches state + builds instructions, client signs.
+// FIX vs prior revision
+//   The instruction builder is now resolved by FEATURE DETECTION instead of a
+//   hard-coded `sdk.buyInstructions(...)` call. Depending on the installed
+//   @pump-fun/pump-sdk version, the buy/sell builders live either on the
+//   OnlinePumpSdk instance (convenience wrappers, newer) or on the offline
+//   PumpSdk / PUMP_SDK singleton, and may be named buyInstructions /
+//   getBuyInstructions. We probe both objects for both names. If none is
+//   found, we throw an error listing every method the SDK actually exposes,
+//   so the exact name is obvious in the server log.
 //
-// HOW TO MOUNT (one line in server.js, after express.json()):
+//   Simplest alternative fix: `npm install @pump-fun/pump-sdk@latest` so the
+//   OnlinePumpSdk.buyInstructions/sellInstructions wrappers are present.
 //
-//     require('./pumpfun-trade').mountRoutes(app);
-//
-// No other server.js changes. CSP already allows what's needed (this
-// talks to your own RPC, server-to-server).
-//
-// DEPENDENCIES (install on the backend):
+// DEPENDENCIES
 //     npm install @pump-fun/pump-sdk @coral-xyz/anchor bn.js @solana/web3.js
 //
-// If @pump-fun/pump-sdk is unavailable, the API-compatible fork
-// @nirholas/pump-sdk exposes the identical OnlinePumpSdk surface — swap
-// the require string below.
+// MOUNT (one line in server.js, after express.json()):
+//     require('./pumpfun-trade').mountRoutes(app);
 
 const { Connection, PublicKey } = require('@solana/web3.js');
 const BN = require('bn.js');
 
 // ── SDK import. Works with the official @pump-fun/pump-sdk OR the
-//    API-compatible fork @nirholas/pump-sdk. They differ in two ways we
-//    handle defensively below:
-//      1. State fetcher class: OnlinePumpSdk (fork) vs PumpSdk (official);
-//         both expose fetchGlobal/fetchBuyState/fetchSellState/buyInstructions.
-//      2. Curve-math helper args: object form { global, feeConfig, ... }
-//         (fork) vs positional form (global, bondingCurve, amount) (official).
+//    API-compatible fork @nirholas/pump-sdk.
 let _pkg = null;
-let SdkClass = null;
-let _getBuyTokens = null;
-let _getSellSol = null;
 try {
   _pkg = require('@pump-fun/pump-sdk');
 } catch (e) {
   _pkg = require('@nirholas/pump-sdk');
 }
-SdkClass = _pkg.OnlinePumpSdk || _pkg.PumpSdk;
-_getBuyTokens = _pkg.getBuyTokenAmountFromSolAmount;
-_getSellSol = _pkg.getSellSolAmountFromTokenAmount;
-if (!SdkClass || !_getBuyTokens || !_getSellSol) {
+
+const OnlineClass = _pkg.OnlinePumpSdk || _pkg.PumpSdk; // fetch* lives here
+const OfflineClass = _pkg.PumpSdk || null;              // offline builders
+const _getBuyTokens = _pkg.getBuyTokenAmountFromSolAmount;
+const _getSellSol   = _pkg.getSellSolAmountFromTokenAmount;
+
+if (!OnlineClass || !_getBuyTokens || !_getSellSol) {
   throw new Error('pump-sdk: expected exports not found. Install @pump-fun/pump-sdk.');
 }
 
-// Call a curve-math helper supporting BOTH the object-arg form (fork) and
-// the positional form (official). Tries object first; on TypeError or a
-// non-BN result, retries positional.
+// Curve-math helper supporting BOTH the object-arg form (fork / newer official)
+// and the positional form (older official examples).
 function callMath(fn, { global, feeConfig, mintSupply, bondingCurve, amount }) {
-  // Object form (fork / newer official).
   try {
     const r = fn({ global, feeConfig, mintSupply, bondingCurve, amount });
     if (r != null) return r;
   } catch (e) { /* fall through to positional */ }
-  // Positional form (official examples): fn(global, bondingCurve, amount).
   return fn(global, bondingCurve, amount);
 }
 
-// Reuse the same RPC the rest of the server uses (Alchemy/Helius via env).
+// Use your Alchemy RPC (NOT Helius). Set ALCHEMY_RPC_URL (or REACT_APP_ALCHEMY_RPC)
+//   = https://solana-mainnet.g.alchemy.com/v2/<KEY>
 function getRpcUrl() {
-  return process.env.HELIUS_RPC_URL
+  return process.env.ALCHEMY_RPC_URL
+      || process.env.REACT_APP_ALCHEMY_RPC
       || process.env.REACT_APP_SOLANA_RPC
       || 'https://api.mainnet-beta.solana.com';
 }
 
-// One cached SDK instance (and connection) for the process.
-let _sdk = null;
-function getSdk() {
-  if (!_sdk) {
+// Cached instances for the process.
+let _online = null;
+let _offline; // undefined until first resolved (may end up null)
+function getOnline() {
+  if (!_online) {
     const conn = new Connection(getRpcUrl(), 'confirmed');
-    _sdk = new SdkClass(conn);
+    _online = new OnlineClass(conn);
   }
-  return _sdk;
+  return _online;
+}
+function getOffline() {
+  if (_offline !== undefined) return _offline;
+  _offline = null;
+  try {
+    if (_pkg.PUMP_SDK) _offline = _pkg.PUMP_SDK;          // exported singleton
+    else if (OfflineClass) _offline = new OfflineClass(); // offline ctor (no conn)
+  } catch (e) {
+    try { _offline = new OfflineClass(new Connection(getRpcUrl(), 'confirmed')); }
+    catch (e2) { _offline = null; }
+  }
+  return _offline;
+}
+
+const methodsOf = (obj) => {
+  if (!obj) return [];
+  const out = new Set();
+  let p = obj;
+  while (p && p !== Object.prototype) {
+    for (const n of Object.getOwnPropertyNames(p)) {
+      if (n !== 'constructor' && typeof obj[n] === 'function') out.add(n);
+    }
+    p = Object.getPrototypeOf(p);
+  }
+  return [...out];
+};
+
+let _loggedSurface = false;
+function logSurfaceOnce(online, offline) {
+  if (_loggedSurface) return;
+  _loggedSurface = true;
+  console.log('[pump-sdk] online class:', OnlineClass?.name, '→', methodsOf(online).join(', '));
+  console.log('[pump-sdk] offline:', offline ? (OfflineClass?.name || 'PUMP_SDK') : '(none)',
+    offline ? ('→ ' + methodsOf(offline).join(', ')) : '');
+}
+
+// Find the instruction builder for an action across the online instance first,
+// then the offline builder. Returns { obj, name } or null.
+function resolveBuilder(action) {
+  const names = action === 'buy'
+    ? ['buyInstructions', 'getBuyInstructions']
+    : ['sellInstructions', 'getSellInstructions'];
+  const online = getOnline();
+  const offline = getOffline();
+  logSurfaceOnce(online, offline);
+  for (const n of names) if (typeof online[n] === 'function') return { obj: online, name: n };
+  if (offline) for (const n of names) if (typeof offline[n] === 'function') return { obj: offline, name: n };
+  return null;
+}
+
+function noBuilderError(action) {
+  const online = getOnline();
+  const offline = getOffline();
+  const avail = [
+    'online(' + (OnlineClass?.name || '?') + '): ' + methodsOf(online).join(', '),
+    'offline(' + (offline ? (OfflineClass?.name || 'PUMP_SDK') : 'none') + '): ' + methodsOf(offline).join(', '),
+  ].join(' | ');
+  return new Error(
+    'pump-sdk: no ' + action + '-instruction builder found '
+    + '(looked for ' + action + 'Instructions / get' + action[0].toUpperCase() + action.slice(1) + 'Instructions). '
+    + 'Available: ' + avail + '. Run `npm install @pump-fun/pump-sdk@latest`.'
+  );
 }
 
 const BASE58_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 
-// Slippage in this SDK is a PERCENT number (2 = 2%), not bps and not a
-// decimal — confirmed from the official examples (slippage: 2 // 2%).
-const SLIPPAGE_PCT = 15; // 15% — volatile fresh launches
+// Slippage in this SDK is a PERCENT number (15 = 15%).
+const SLIPPAGE_PCT = 15; // volatile fresh launches
 
-// Serialize a web3.js TransactionInstruction to plain JSON the browser
-// can rebuild. Mirrors the shape LaunchRadar's deserIx() already expects
-// from Jupiter: { programId, accounts:[{pubkey,isSigner,isWritable}], data(base64) }.
 function serializeIx(ix) {
   return {
     programId: ix.programId.toBase58(),
@@ -122,11 +177,9 @@ function mountRoutes(app) {
 
       const mint = new PublicKey(mintStr);
       const user = new PublicKey(userStr);
-      const sdk  = getSdk();
+      const sdk  = getOnline();
 
-      // Shared global + fee config (needed by the curve math + builders).
-      // fetchFeeConfig may be absent on some SDK builds — tolerate null,
-      // the math helpers accept a null feeConfig (pre-fee-tier behavior).
+      // Shared global + (optional) fee config.
       const global = await sdk.fetchGlobal();
       let feeConfig = null;
       if (typeof sdk.fetchFeeConfig === 'function') {
@@ -134,21 +187,18 @@ function mountRoutes(app) {
       }
 
       if (action === 'buy') {
-        // amount = SOL in lamports (string from client). This is the FULL
-        // amount the trade spends (the 3% fee is added client-side as a
-        // separate SOL transfer, so it does NOT come out of this).
+        // amount = SOL lamports (string). 97% trade portion; fee added client-side.
         const lamports = b.amount;
         if (lamports == null) return res.status(400).json({ error: 'Missing amount' });
         const solAmount = new BN(String(lamports));
         if (solAmount.lten(0)) return res.status(400).json({ error: 'Amount must be > 0' });
 
-        // fetchBuyState auto-detects SPL vs Token-2022 and returns tokenProgram.
         const buyState = await sdk.fetchBuyState(mint, user);
+        // ── Detect: still on the bonding curve? ──
         if (buyState.bondingCurve && buyState.bondingCurve.complete) {
-          return res.status(409).json({ error: 'Token has graduated to AMM — not tradable on the bonding curve.' });
+          return res.status(409).json({ error: 'Token graduated — not on the bonding curve. Not traded here.' });
         }
 
-        // Expected tokens out for this SOL (curve math, arg-form adaptive).
         const tokenAmount = callMath(_getBuyTokens, {
           global,
           feeConfig,
@@ -157,11 +207,14 @@ function mountRoutes(app) {
           amount: solAmount,
         });
 
-        const instructions = await sdk.buyInstructions({
-          ...buyState,        // spreads bondingCurveAccountInfo, bondingCurve,
+        const builder = resolveBuilder('buy');
+        if (!builder) throw noBuilderError('buy');
+
+        const instructions = await builder.obj[builder.name]({
+          ...buyState,        // bondingCurveAccountInfo, bondingCurve,
                               // associatedUserAccountInfo, tokenProgram
           global,
-          feeConfig,          // ignored by builders that don't use it
+          feeConfig,
           mint,
           user,
           solAmount,
@@ -171,17 +224,15 @@ function mountRoutes(app) {
 
         return res.json({
           action: 'buy',
+          route: 'bonding-curve',
+          builder: builder.name,
           tokenProgram: buyState.tokenProgram ? buyState.tokenProgram.toBase58() : null,
           expectedTokens: tokenAmount.toString(),
           instructions: instructions.map(serializeIx),
         });
       }
 
-      // ── SELL ──
-      // amount = raw token units (string). This is the FULL token amount
-      // being sold; the 3% token fee is taken client-side as a separate
-      // SPL transfer BEFORE these instructions, so the sell amount the
-      // client passes here is already the post-fee 97% (client computes it).
+      // ── SELL ── amount = raw token units (string, the 97% trade portion).
       const rawTokens = b.amount;
       if (rawTokens == null) return res.status(400).json({ error: 'Missing amount' });
       const amount = new BN(String(rawTokens));
@@ -189,7 +240,7 @@ function mountRoutes(app) {
 
       const sellState = await sdk.fetchSellState(mint, user);
       if (sellState.bondingCurve && sellState.bondingCurve.complete) {
-        return res.status(409).json({ error: 'Token has graduated to AMM — not tradable on the bonding curve.' });
+        return res.status(409).json({ error: 'Token graduated — not on the bonding curve. Not traded here.' });
       }
 
       const solReceived = callMath(_getSellSol, {
@@ -200,10 +251,13 @@ function mountRoutes(app) {
         amount,
       });
 
-      const instructions = await sdk.sellInstructions({
+      const builder = resolveBuilder('sell');
+      if (!builder) throw noBuilderError('sell');
+
+      const instructions = await builder.obj[builder.name]({
         ...sellState,       // bondingCurveAccountInfo, bondingCurve, tokenProgram
         global,
-        feeConfig,          // ignored by builders that don't use it
+        feeConfig,
         mint,
         user,
         amount,
@@ -213,17 +267,18 @@ function mountRoutes(app) {
 
       return res.json({
         action: 'sell',
+        route: 'bonding-curve',
+        builder: builder.name,
         tokenProgram: sellState.tokenProgram ? sellState.tokenProgram.toBase58() : null,
         expectedSol: solReceived.toString(),
         instructions: instructions.map(serializeIx),
       });
     } catch (e) {
       const msg = String(e?.message || e || 'Unknown error');
-      // Common, mappable cases for clearer client messaging.
       if (/graduat|complete/i.test(msg))
-        return res.status(409).json({ error: 'Token has graduated — trade on AMM instead.' });
-      if (/not found|account does not exist/i.test(msg))
-        return res.status(404).json({ error: 'Token not found on the bonding curve yet.' });
+        return res.status(409).json({ error: 'Token graduated — not on the bonding curve. Not traded here.' });
+      if (/not found|account does not exist|could not find/i.test(msg))
+        return res.status(404).json({ error: 'Not a pump.fun bonding-curve token (or not indexed yet).' });
       console.warn('[pumpfun-trade]', msg);
       return res.status(500).json({ error: msg.slice(0, 200) });
     }
@@ -231,4 +286,3 @@ function mountRoutes(app) {
 }
 
 module.exports = { mountRoutes };
- 
