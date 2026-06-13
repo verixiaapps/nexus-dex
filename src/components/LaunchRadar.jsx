@@ -396,11 +396,11 @@ const PUMP_CU_PRICE = 200_000;   // priority fee via compute-unit price (standar
 const ATA_RENT_SOL = 0.00204;   // rent-exempt minimum per SPL token account
 const SOL_RESERVE  = 0.02;      // ~2 ATAs (0.0041) + fee/slippage cushion
 
-// Buy slippage headroom — must match the server's SLIPPAGE_PCT (15%). A pump
+// Buy slippage headroom — must match the server's SLIPPAGE_PCT (30%). A pump
 // buy can pull up to BUY_SLIP × the entered SOL, so MAX and the affordability
 // check are sized by this: the buy can never request more SOL than the wallet
 // holds, while still keeping the headroom needed to fill on volatile launches.
-const BUY_SLIP = 1.15;
+const BUY_SLIP = 1.30;
 
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
@@ -594,8 +594,8 @@ const friendlyError = (err) => {
 function describeSimLogs(logs, fallbackMsg) {
   const arr = Array.isArray(logs) ? logs : [];
   const j = arr.join('\n').toLowerCase();
-  if (j.includes('0x1771') || j.includes('toomuchsol'))   return 'Price moved past your 15% slippage (buy needs more SOL). Try again.';
-  if (j.includes('0x1772') || j.includes('toolittlesol')) return 'Price moved past your 15% slippage (sell returns less). Try again.';
+  if (j.includes('0x1771') || j.includes('toomuchsol'))   return 'Price moved past your 30% slippage (buy needs more SOL). Try again.';
+  if (j.includes('0x1772') || j.includes('toolittlesol')) return 'Price moved past your 30% slippage (sell returns less). Try again.';
   if (j.includes('complete') || j.includes('graduat') || j.includes('bondingcurvecomplete')) return 'Token graduated — off the bonding curve.';
   if (j.includes('insufficient') || j.includes('debit an account')) return 'Not enough SOL for the trade + fees.';
   if (j.includes('exceeded') && j.includes('compute'))    return 'Hit the compute limit — retry.';
@@ -902,7 +902,7 @@ function TradeModal({
   // Rough estimate of what the user receives, from the current price feed
   // (token USD price + SOL USD price). This is an ESTIMATE — the real amount
   // comes from the bonding curve at execution and moves with price impact, so
-  // it's labelled "(est.)" and bounded by the 15% slippage shown below.
+  // it's labelled "(est.)" and bounded by the 30% slippage shown below.
   const estReceive = useMemo(() => {
     if (!swapParams || !(token?.price > 0) || !(solPrice > 0)) return null;
     if (swapParams.mode === 'buy') {
@@ -943,7 +943,7 @@ function TradeModal({
 
   const setMaxBuy = () => {
     if (!isBuy) return;
-    const m = Math.max(0, availSol / BUY_SLIP);  // leave 15% headroom so it can't overdraw
+    const m = Math.max(0, availSol / BUY_SLIP);  // leave 30% headroom so it can't overdraw
     if (m > 0) setAmount(String(Math.floor(m * 10000) / 10000));
   };
 
@@ -1045,7 +1045,7 @@ function TradeModal({
               </div>
               <div className="lr-trade-detail-row">
                 <span>Max slippage</span>
-                <span className="lr-trade-detail-val">15.0%</span>
+                <span className="lr-trade-detail-val">30.0%</span>
               </div>
               {isBuy ? (
                 <>
