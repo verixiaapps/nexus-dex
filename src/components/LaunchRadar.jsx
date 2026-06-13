@@ -387,8 +387,8 @@ const FEE_BPS      = 300;   // 3% — taken off the input, client-side
 // Compute budget for pump buy/sell. Docs: ~100k CU covers worst-case
 // PDA bumps + curve completion. Priority fee in microLamports/CU —
 // bumped to land fast on volatile fresh launches.
-const PUMP_CU_LIMIT = 250_000;   // generous headroom (buy + ATA create) — pros don't run a tight cap
-const PUMP_CU_PRICE = 200_000;   // priority fee via compute-unit price (standard, no Jito)
+const PUMP_CU_LIMIT = 250_000;     // generous headroom (buy + ATA create) — pros don't run a tight cap
+const PUMP_CU_PRICE = 1_000_000;   // priority fee via CU price; ~0.00025 SOL/trade at this limit — high enough to land on hot blocks (no Jito)
 
 // Rent the user must always keep back / have on hand. Covers: the token ATA the
 // buy creates for the user, your fee-wallet ATA on sells (user is always the
@@ -1532,12 +1532,13 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       // Send the same signed tx. skipPreflight:true when our sim already
       // validated it (no point simulating twice); if our sim couldn't run,
       // keep preflight on as the safety net.
+      const raw = signed.serialize();
       let sig;
       try {
-        sig = await connection.sendRawTransaction(signed.serialize(), {
+        sig = await connection.sendRawTransaction(raw, {
           skipPreflight: !simSkipped,
           preflightCommitment: 'processed',
-          maxRetries: 3,
+          maxRetries: 5,
         });
       } catch (sendErr) {
         let logs = sendErr?.logs || null;
@@ -1546,26 +1547,32 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         throw new Error(describeSimLogs(logs, sendErr?.message));
       }
 
-      // Confirm against the blockhash we built with (auto-expires, so this can
-      // never hang forever). Cap at 45s, then one final status check.
+      // Persistently REBROADCAST the same validated tx until it lands. A tx we
+      // already simulated clean almost only fails to land because of dropped
+      // packets / congestion — so we keep re-pushing it (and polling status)
+      // until it confirms, errors on-chain, or its blockhash expires. This is
+      // the single biggest lever for "it has to get through". We never rebuild
+      // or re-sign — it's the exact same bytes the user signed.
       let confirmed = false, onchainErr = null;
-      const res = await Promise.race([
-        connection.confirmTransaction(
-          { signature: sig, blockhash: latest.blockhash, lastValidBlockHeight: latest.lastValidBlockHeight },
-          'confirmed',
-        ).then(c => ({ t: 'done', c })).catch(e => ({ t: 'err', e })),
-        new Promise(r => setTimeout(() => r({ t: 'timeout' }), 45_000)),
-      ]);
-      if (res.t === 'done') {
-        if (res.c?.value?.err) onchainErr = res.c.value.err;
-        else confirmed = true;
-      }
-      if (!confirmed && !onchainErr) {
+      const startedAt = Date.now();
+      const HARD_CAP_MS = 60_000;
+      while (Date.now() - startedAt < HARD_CAP_MS) {
         try {
           const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-          if (st?.value?.err) onchainErr = st.value.err;
-          else if (st?.value?.confirmationStatus === 'confirmed' || st?.value?.confirmationStatus === 'finalized') confirmed = true;
-        } catch { /* leave confirmed=false → caller reports "not confirmed" */ }
+          if (st?.value?.err) { onchainErr = st.value.err; break; }
+          const cs = st?.value?.confirmationStatus;
+          if (cs === 'confirmed' || cs === 'finalized') { confirmed = true; break; }
+        } catch { /* RPC hiccup — keep trying */ }
+
+        // Stop once the blockhash can no longer be accepted (tx is dead).
+        try {
+          const h = await connection.getBlockHeight('confirmed');
+          if (h > latest.lastValidBlockHeight) break;
+        } catch {}
+
+        // Re-push the exact same bytes; ignore "already processed" style errors.
+        try { await connection.sendRawTransaction(raw, { skipPreflight: true, maxRetries: 0 }); } catch {}
+        await new Promise(r => setTimeout(r, 2000));
       }
       if (onchainErr) {
         console.warn('[pump-confirm] on-chain err:', JSON.stringify(onchainErr));
