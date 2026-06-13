@@ -425,23 +425,48 @@ const SOL_RESERVE = 0.015;
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
-// ONE RPC connection. The previous multi-RPC pool was over-engineered
-// for the actual problem: trades land because of Jupiter's priority
-// fee, not because we broadcast to five endpoints. Server-supplied RPC
-// (Helius, if configured) first; otherwise a public fallback.
-const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
+// Public RPCs only. NOT reading window.__VERIXIA_CONFIG__.rpc because
+// the server may inject a Helius URL with a broken key — we ignore it
+// and stick to public endpoints that just work. One connection for the
+// tx flow; a tiny pool raced for balance reads because public RPCs
+// each rate-limit getParsedTokenAccountsByOwner differently.
 const RPC_URL =
-  RUNTIME_CFG.rpc
-  || (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC)
+  (typeof process !== 'undefined' && process.env && process.env.REACT_APP_SOLANA_RPC)
   || 'https://solana-rpc.publicnode.com';
+
+const BAL_RPC_POOL = [
+  RPC_URL,
+  'https://solana-rpc.publicnode.com',
+  'https://solana.drpc.org',
+  'https://api.mainnet-beta.solana.com',
+].filter((v, i, a) => v && a.indexOf(v) === i);
 
 const BAL_COMMITMENT = 'processed';
 
 const _connCache = new Map();
-const getConn = (commitment) => {
-  let c = _connCache.get(commitment);
-  if (!c) { c = new Connection(RPC_URL, commitment); _connCache.set(commitment, c); }
+const getConn = (commitment, url = RPC_URL) => {
+  const key = url + '|' + commitment;
+  let c = _connCache.get(key);
+  if (!c) { c = new Connection(url, commitment); _connCache.set(key, c); }
   return c;
+};
+
+// Race a small pool for balance reads — public RPCs each have different
+// rate-limit behaviour on getParsedTokenAccountsByOwner, so racing them
+// gives the user a balance even when one or two are throttling us.
+// Per-RPC timeout (2.5s) so a single hung endpoint can't stall the race.
+const balRpcRace = (op) => {
+  const conns = BAL_RPC_POOL.map(u => getConn(BAL_COMMITMENT, u));
+  const withTimeout = (p, ms) => Promise.race([
+    p,
+    new Promise((_, rej) => setTimeout(() => rej(new Error('timeout')), ms)),
+  ]);
+  return Promise.any(conns.map((c, i) =>
+    withTimeout(op(c), 2500).catch(e => {
+      if (typeof console !== 'undefined') console.warn('[lr-bal] ' + BAL_RPC_POOL[i] + ':', e?.message);
+      throw e;
+    })
+  )).catch(() => { throw new Error('All balance RPCs failed'); });
 };
 
 const POLL_RECENT  = 8_000;
@@ -1282,7 +1307,6 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   const refreshBalances = useCallback(async () => {
     if (!wallet.publicKey) { setBalances({}); return; }
     const owner = wallet.publicKey;
-    const balConn = getConn(BAL_COMMITMENT);
     const mergeAccs = (into, accs) => {
       if (!accs || !accs.value) return;
       for (const acc of accs.value) {
@@ -1298,7 +1322,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         };
       }
     };
-    const solP = balConn.getBalance(owner, BAL_COMMITMENT)
+    const solP = balRpcRace(c => c.getBalance(owner, BAL_COMMITMENT))
       .then(lamports => {
         setBalances(prev => ({
           ...prev,
@@ -1306,12 +1330,14 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         }));
       })
       .catch(e => console.warn('[lr] SOL balance failed', e?.message));
-    const tokP = balConn.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT)
+    const tokP = balRpcRace(c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_PROGRAM_ID }, BAL_COMMITMENT))
       .then(accs => {
         setBalances(prev => { const next = { ...prev }; mergeAccs(next, accs); return next; });
       })
       .catch(e => console.warn('[lr] SPL accounts failed', e?.message));
-    const tok22P = balConn.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT)
+    const tok22P = balRpcRace(c =>
+      c.getParsedTokenAccountsByOwner(owner, { programId: TOKEN_2022_PROGRAM_ID }, BAL_COMMITMENT))
       .then(accs => {
         setBalances(prev => { const next = { ...prev }; mergeAccs(next, accs); return next; });
       })
