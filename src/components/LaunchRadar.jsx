@@ -589,22 +589,29 @@ const friendlyError = (err) => {
 };
 
 // Turn raw preflight/simulation logs into a specific, honest cause. When there
-// is no friendly mapping, surface the actual program log line instead of a
-// vague "price moved" — so the real failure is visible and can be diagnosed.
+// is no friendly mapping, surface the failing PROGRAM + error line (not just a
+// stripped fragment) so the real culprit is visible and can be diagnosed.
+function failureContext(arr) {
+  const failed  = arr.filter(l => /failed:|failed to complete/i.test(l)).pop();          // names the program
+  const errLine = arr.filter(l => /program log:.*(error|insufficient|0x|incorrect)/i.test(l)).pop();
+  const parts = [errLine, failed].filter(Boolean).map(s => s.replace(/^Program log:\s*/i, '').trim().slice(0, 120));
+  return parts.length ? parts.join('  •  ') : null;
+}
 function describeSimLogs(logs, fallbackMsg) {
   const arr = Array.isArray(logs) ? logs : [];
   const j = arr.join('\n').toLowerCase();
   if (j.includes('0x1771') || j.includes('toomuchsol'))   return 'Price moved past your 30% slippage (buy needs more SOL). Try again.';
   if (j.includes('0x1772') || j.includes('toolittlesol')) return 'Price moved past your 30% slippage (sell returns less). Try again.';
   if (j.includes('complete') || j.includes('graduat') || j.includes('bondingcurvecomplete')) return 'Token graduated — off the bonding curve.';
+  if (j.includes('incorrectprogramid') || j.includes('incorrect program id'))
+    return 'IncorrectProgramId — an account in the pump instructions is under the wrong program (wrong builder signature, token-program mismatch, or a missing pump account). Check the [pump-build] program ids in the console. ' + (failureContext(arr) ? '[' + failureContext(arr) + ']' : '');
   if (j.includes('insufficient') || j.includes('debit an account')) return 'Not enough SOL for the trade + fees.';
   if (j.includes('exceeded') && j.includes('compute'))    return 'Hit the compute limit — retry.';
   if (j.includes('accountnotfound') || (j.includes('account') && (j.includes('not found') || j.includes('uninitialized'))))
     return 'A required account is not ready yet — try again in a moment.';
-  // Unknown — show the most informative log line so the real error is visible.
-  const line = arr.filter(l => /program log:|program failed|error|insufficient|0x/i.test(l)).pop();
-  if (line) return 'Sim failed → ' + line.replace(/^Program log:\s*/i, '').slice(0, 150);
-  return fallbackMsg ? ('Sim failed → ' + String(fallbackMsg).slice(0, 150)) : 'Sim failed (no logs returned).';
+  const ctx = failureContext(arr) || (arr.filter(l => /program log:|error|0x/i.test(l)).pop() || '').replace(/^Program log:\s*/i, '').slice(0, 150);
+  if (ctx) return 'Sim failed → ' + ctx;
+  return fallbackMsg ? ('Sim failed → ' + String(fallbackMsg).slice(0, 160)) : 'Sim failed (no logs returned).';
 }
 
 /* ════════════════════════════════════════════════════════════════════
@@ -1499,6 +1506,13 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
         if (ix.programId === COMPUTE_BUDGET_PROGRAM) continue;
         ixs.push(deserIx(ix));
       }
+
+      // Diagnostics: which builder the server used + every program in the tx.
+      // If IncorrectProgramId fires, the offending program shows up here.
+      try {
+        console.log('[pump-build] builder:', build.builder, '| route:', build.route, '| tokenProgram:', build.tokenProgram);
+        console.log('[pump-build] program ids:', ixs.map(i => i.programId.toBase58()).join(', '));
+      } catch {}
 
       const latest = await connection.getLatestBlockhash('confirmed');
       const message = new TransactionMessage({
