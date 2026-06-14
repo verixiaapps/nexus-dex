@@ -4,6 +4,7 @@
   "private": true,
   "proxy": "http://localhost:3001",
   "dependencies": {
+    "@chainflip/sdk": "^2.1.1",
     "@coral-xyz/anchor": "^0.31.1",
     "@lifi/sdk": "^3.16.3",
     "@pump-fun/pump-sdk": "^1.35.0",
