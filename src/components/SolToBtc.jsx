@@ -1,3 +1,20 @@
+/**
+ * NEXUS · SolToBtc.jsx
+ * SOL → Native BTC via ThorChain (single-signature, two-tx atomic flow).
+ *
+ * VISUAL REDESIGN — same DNA as Bridge / Stocks / GetStarted (Wonderland).
+ * Light cream surface with cool-tuned blobs, blue → violet accent, faint
+ * floating ₿ emblems for page identity. Signature element is the LIVE RATE
+ * card (1 SOL → BTC, ticking with price feed).
+ *
+ * Instrument Serif italic for headline + numbers + token symbols.
+ * JetBrains Mono for tabular data, labels, captions.
+ * Space Grotesk for body.
+ *
+ * ALL ThorChain / RPC / quote / submit / polling logic preserved verbatim.
+ * Class prefix stays ax-.
+ */
+
 import React, { useState, useEffect, useRef } from 'react';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import {
@@ -10,145 +27,354 @@ import {
 } from '@solana/web3.js';
 
 // =====================================================================
-// ANIME-FUTURIST PALETTE — deep violet · electric cyan · neon magenta
+// INLINE CSS — Wonderland-lite · Instrument Serif + Space Grotesk + JetBrains Mono
 // =====================================================================
 const STBTC_CSS = `
-.ax-page,.ax-modal-backdrop,.ax-sheet {
-  --ax-bg:#07041a; --ax-bg-2:#0d0729;
-  --ax-surface:#140a35; --ax-surface-2:#1c1247;
-  --ax-ink:#f0e7ff; --ax-ink-str:#ffffff;
-  --ax-muted:#a78bfa; --ax-muted-2:#6d5d9c;
-  --ax-cyan:#22d3ee; --ax-cyan-2:#67e8f9;
-  --ax-pink:#f472b6; --ax-pink-2:#ec4899;
-  --ax-violet:#a78bfa; --ax-violet-2:#c4b5fd;
-  --ax-btc:#f7931a;
-  --ax-border:rgba(167,139,250,.18);
-  --ax-border-hi:rgba(34,211,238,.42);
-  --ax-up:#4ade80; --ax-down:#fb7185;
-  --ax-font-display:'Syne','Unbounded',system-ui,sans-serif;
-  --ax-font-body:'Syne','DM Sans',system-ui,sans-serif;
-  --ax-font-mono:'JetBrains Mono','IBM Plex Mono',ui-monospace,monospace;
-  font-family:var(--ax-font-body);color:var(--ax-ink);
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
+.ax-page{
+  --ink:#1A1B4E; --ink-2:rgba(26,27,78,0.7); --ink-3:rgba(26,27,78,0.45);
+  --blue:#4f7dff; --violet:#a87fff;
+  --mint:#7FFFD4; --sky:#A0E7FF; --lav:#B794F6;
+  --pink:#FF8FBE; --peach:#FFB088; --gold:#FFD46B;
+  --green:#1B7A4F; --red:#D14B6A;
+  --glass:rgba(255,255,255,0.6); --glass-strong:rgba(255,255,255,0.78);
+  --border:rgba(79,125,255,0.18);
+  --border-hi:rgba(79,125,255,0.32);
+  --hairline:rgba(26,27,78,0.08);
+  font-family:"Space Grotesk",-apple-system,system-ui,sans-serif;
+  color:var(--ink);
 }
-.ax-page,.ax-page *,.ax-sheet,.ax-sheet *{box-sizing:border-box}
-@keyframes ax-pulse{50%{opacity:.4}}
+.ax-page,.ax-page *{box-sizing:border-box}
+
+@keyframes ax-drift{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(20px,-30px) scale(1.05)}}
+@keyframes ax-pulse{0%,100%{opacity:1}50%{opacity:0.4}}
 @keyframes ax-spin{to{transform:rotate(360deg)}}
-@keyframes ax-shimmer{0%{left:-110px}50%,100%{left:130%}}
-@keyframes ax-orb-pulse{0%,100%{transform:scale(1);filter:hue-rotate(0deg)}50%{transform:scale(1.05);filter:hue-rotate(20deg)}}
-@keyframes ax-scan{0%{transform:translateY(-100%)}100%{transform:translateY(100%)}}
-@keyframes ax-glow{0%,100%{box-shadow:0 0 24px rgba(34,211,238,.35),0 0 48px rgba(244,114,182,.18)}50%{box-shadow:0 0 32px rgba(34,211,238,.55),0 0 64px rgba(244,114,182,.28)}}
+@keyframes ax-rate-glow{0%,100%{box-shadow:0 12px 40px rgba(79,125,255,.12)}50%{box-shadow:0 12px 40px rgba(79,125,255,.22)}}
+@keyframes ax-tick{0%{opacity:0;transform:translateY(2px)}100%{opacity:1;transform:translateY(0)}}
+@keyframes ax-rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 
-.ax-page{max-width:520px;margin:0 auto;width:100%;padding:0 16px calc(env(safe-area-inset-bottom) + 90px);position:relative}
+/* PAGE */
+.ax-page{
+  position:relative;min-height:100vh;min-height:100dvh;
+  max-width:520px;margin:0 auto;width:100%;
+  padding:0 0 calc(env(safe-area-inset-bottom) + 80px);
+  border-radius:24px;overflow-x:hidden;
+  background:
+    radial-gradient(ellipse at 80% 0%,#D9ECFF 0%,transparent 50%),
+    radial-gradient(ellipse at 15% 10%,#F0E7FF 0%,transparent 45%),
+    radial-gradient(ellipse at 50% 70%,#E4F2FF 0%,transparent 55%),
+    radial-gradient(ellipse at 90% 95%,#FFE8F4 0%,transparent 35%),
+    linear-gradient(180deg,#F5F8FF 0%,#EEF3FF 100%);
+  background-attachment:fixed;
+}
+.ax-blob{
+  position:absolute;border-radius:50%;filter:blur(70px);opacity:0.42;
+  animation:ax-drift 14s ease-in-out infinite;pointer-events:none;z-index:0;
+}
+.ax-emblem{
+  position:absolute;font-family:"Instrument Serif",serif;font-style:italic;font-weight:400;
+  pointer-events:none;user-select:none;z-index:1;line-height:1;
+  background:linear-gradient(135deg,#4f7dff,#a87fff);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+  opacity:0.08;animation:ax-drift 18s ease-in-out infinite;
+}
+.ax-inner{position:relative;z-index:5}
 
-.ax-mini-hero{margin-top:14px;padding:18px 18px 16px;border-radius:18px;
-  background:radial-gradient(ellipse at 0% 0%,rgba(34,211,238,.10),transparent 55%),radial-gradient(ellipse at 100% 100%,rgba(244,114,182,.10),transparent 55%),linear-gradient(135deg,#07041a,#140a35);
-  border:1px solid var(--ax-border-hi);position:relative;overflow:hidden;animation:ax-glow 4s ease-in-out infinite}
-.ax-mini-hero::before{content:'';position:absolute;inset:-1px;border-radius:18px;padding:1px;
-  background:linear-gradient(135deg,var(--ax-cyan),var(--ax-pink) 50%,var(--ax-violet));
+/* HEADER */
+.ax-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:18px 22px 4px;
+}
+.ax-brand{display:flex;align-items:center;gap:10px}
+.ax-brand-dot{
+  width:28px;height:28px;border-radius:50%;
+  background:linear-gradient(135deg,#4f7dff,#a87fff 60%,#7FFFD4);
+  box-shadow:0 0 14px rgba(79,125,255,0.5);
+}
+.ax-wordmark{font-family:"Instrument Serif",serif;font-style:italic;font-size:20px;line-height:1}
+.ax-wordmark .slash{opacity:0.4;margin:0 3px;font-style:normal}
+.ax-wordmark .grad{
+  background:linear-gradient(90deg,#4f7dff,#a87fff,#7FFFD4);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+}
+.ax-head-live{
+  display:flex;align-items:center;gap:6px;
+  padding:5px 11px;border-radius:999px;
+  background:var(--glass);backdrop-filter:blur(10px);
+  border:1px solid var(--border);
+  font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;color:var(--blue);
+  letter-spacing:1.2px;
+}
+.ax-head-live .d{width:5px;height:5px;border-radius:50%;background:var(--blue);box-shadow:0 0 8px var(--blue);animation:ax-pulse 1.6s ease-in-out infinite}
+
+/* MINI HERO */
+.ax-mini-hero{padding:18px 22px 8px}
+.ax-mh-eyebrow{
+  display:inline-flex;align-items:center;gap:7px;
+  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;
+  color:var(--blue);letter-spacing:1.6px;margin-bottom:8px;
+}
+.ax-mh-title{
+  font-family:"Instrument Serif",serif;font-weight:400;
+  font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 6px;
+  color:var(--ink);
+}
+.ax-mh-title em{
+  font-style:italic;
+  background:linear-gradient(120deg,#4f7dff,#a87fff);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+}
+.ax-mh-sub{font-size:13px;color:var(--ink-2);font-weight:500;line-height:1.45}
+
+/* SIGNATURE: LIVE RATE CARD */
+.ax-rate-card{
+  margin:14px 22px 0;padding:18px 20px 16px;border-radius:24px;
+  background:var(--glass-strong);backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,.85);
+  position:relative;overflow:hidden;
+  animation:ax-rate-glow 4s ease-in-out infinite;
+}
+.ax-rate-card::before{
+  content:'';position:absolute;inset:0;border-radius:24px;padding:1.5px;
+  background:linear-gradient(135deg,rgba(79,125,255,.45),transparent 40%,transparent 60%,rgba(168,127,255,.45));
   -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
-  -webkit-mask-composite:xor;mask-composite:exclude;opacity:.6;pointer-events:none}
-.ax-mini-hero::after{content:'';position:absolute;top:0;left:0;right:0;height:2px;
-  background:linear-gradient(90deg,transparent,var(--ax-cyan),transparent);animation:ax-scan 5s linear infinite;pointer-events:none;opacity:.4}
-.ax-mh-row{display:flex;justify-content:space-between;align-items:center;gap:14px;position:relative;z-index:2}
-.ax-mh-left{flex:1;min-width:0}
-.ax-mh-eyebrow{display:inline-block;font-family:var(--ax-font-mono);font-size:9px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;
-  background:linear-gradient(90deg,var(--ax-cyan),var(--ax-pink));-webkit-background-clip:text;background-clip:text;color:transparent;margin-bottom:8px}
-.ax-mh-title{font-family:var(--ax-font-display);font-weight:900;font-size:clamp(22px,6.5vw,28px);line-height:1;letter-spacing:-.03em;margin:0 0 6px;color:var(--ax-ink-str)}
-.ax-mh-title .grad{background:linear-gradient(90deg,var(--ax-cyan),var(--ax-pink) 60%,var(--ax-violet));-webkit-background-clip:text;background-clip:text;color:transparent;font-style:italic;font-weight:500}
-.ax-mh-sub{font-family:var(--ax-font-body);font-size:12px;font-weight:600;color:var(--ax-violet-2);line-height:1.4;margin:0}
-.ax-orb{flex-shrink:0;width:64px;height:64px;border-radius:50%;position:relative;
-  background:radial-gradient(circle at 35% 30%,#ffb84d,#f7931a 45%,#7a3a00 90%);
-  box-shadow:0 0 24px rgba(247,147,26,.45),0 0 48px rgba(244,114,182,.25),inset 0 -4px 12px rgba(0,0,0,.4),inset 0 2px 6px rgba(255,200,120,.5);
-  display:grid;place-items:center;font-family:var(--ax-font-display);font-weight:900;font-size:32px;color:#fff;text-shadow:0 1px 2px rgba(0,0,0,.5);animation:ax-orb-pulse 3.2s ease-in-out infinite}
+  -webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none;opacity:.8;
+}
+.ax-rate-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.ax-rate-label{
+  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;
+  color:var(--ink-2);letter-spacing:1.4px;text-transform:uppercase;
+}
+.ax-rate-live{
+  display:flex;align-items:center;gap:5px;
+  font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;
+  color:var(--green);letter-spacing:1px;
+}
+.ax-rate-live .d{width:5px;height:5px;border-radius:50%;background:var(--green);box-shadow:0 0 8px var(--green);animation:ax-pulse 1.4s ease-in-out infinite}
+.ax-rate-main{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap;margin-bottom:6px}
+.ax-rate-from{
+  font-family:"JetBrains Mono",monospace;font-size:13px;font-weight:700;
+  color:var(--ink-2);letter-spacing:0.4px;
+}
+.ax-rate-arrow{font-family:"Instrument Serif",serif;font-style:italic;font-size:22px;color:var(--violet);line-height:1}
+.ax-rate-val{
+  font-family:"Instrument Serif",serif;font-style:italic;
+  font-size:44px;line-height:1;letter-spacing:-.025em;
+  background:linear-gradient(120deg,#4f7dff,#a87fff 70%);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+  font-variant-numeric:tabular-nums;animation:ax-tick .3s ease-out;
+}
+.ax-rate-to{font-family:"Instrument Serif",serif;font-style:italic;font-size:22px;color:var(--ink);line-height:1}
+.ax-rate-usd{font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ink-2);font-weight:500;letter-spacing:0.3px}
+.ax-rate-usd b{color:var(--ink);font-weight:700}
 
-.ax-kyc{margin:12px 0 6px;display:flex;align-items:center;justify-content:center;gap:14px;padding:9px 14px;border-radius:100px;
-  background:linear-gradient(90deg,rgba(0,0,0,.5),rgba(34,211,238,.08),rgba(244,114,182,.08),rgba(0,0,0,.5));border:1px solid var(--ax-border)}
-.ax-kyc span{font-family:var(--ax-font-mono);font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--ax-cyan-2);white-space:nowrap}
-.ax-kyc .dot{display:inline-block;width:3px;height:3px;border-radius:50%;background:var(--ax-pink);opacity:.7}
+/* KYC PILLS */
+.ax-kyc{
+  margin:14px 22px 0;display:flex;align-items:center;justify-content:center;gap:14px;
+  padding:9px 14px;border-radius:100px;
+  background:var(--glass);backdrop-filter:blur(10px);
+  border:1px solid var(--border);
+}
+.ax-kyc span{
+  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;
+  letter-spacing:1.4px;text-transform:uppercase;color:var(--ink-2);white-space:nowrap;
+}
+.ax-kyc .dot{display:inline-block;width:3px;height:3px;border-radius:50%;background:var(--blue);opacity:.7}
 
-.ax-price-strip{margin-top:12px;display:flex;align-items:center;justify-content:space-between;gap:10px;padding:14px 16px;border-radius:14px;
-  background:linear-gradient(135deg,rgba(20,10,53,.9),rgba(28,18,71,.9));border:1px solid var(--ax-border-hi);box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
-.ax-ps-left{display:flex;align-items:center;gap:10px}
-.ax-ps-label{font-family:var(--ax-font-mono);font-size:9px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--ax-violet)}
-.ax-ps-pulse{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--ax-up);box-shadow:0 0 8px var(--ax-up);animation:ax-pulse 1.4s infinite}
-.ax-ps-val{font-family:var(--ax-font-mono);font-weight:800;color:var(--ax-ink-str);font-size:15px;font-variant-numeric:tabular-nums;letter-spacing:-.01em}
-.ax-ps-net{font-family:var(--ax-font-mono);font-size:9px;color:var(--ax-cyan);font-weight:800;letter-spacing:.08em;text-shadow:0 0 8px rgba(34,211,238,.5)}
+/* CARD */
+.ax-card{
+  margin:14px 22px 0;padding:18px;border-radius:24px;
+  background:var(--glass);backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,.85);
+  box-shadow:0 12px 40px rgba(79,125,255,.10);
+}
 
-.ax-widget-title{display:flex;align-items:center;justify-content:space-between;padding:20px 4px 10px}
-.ax-widget-title .nm{font-family:var(--ax-font-display);font-weight:800;font-size:20px;color:var(--ax-ink-str);letter-spacing:-.01em}
-.ax-widget-title .nm .arrow{background:linear-gradient(90deg,var(--ax-cyan),var(--ax-pink));-webkit-background-clip:text;background-clip:text;color:transparent}
-.ax-widget-title .live{display:flex;align-items:center;gap:6px;font-family:var(--ax-font-mono);font-size:10px;font-weight:800;color:var(--ax-cyan);border:1px solid var(--ax-border-hi);border-radius:100px;padding:5px 11px;background:rgba(34,211,238,.10);text-shadow:0 0 6px rgba(34,211,238,.4)}
-.ax-widget-title .live .d{width:5px;height:5px;border-radius:50%;background:var(--ax-cyan);box-shadow:0 0 8px var(--ax-cyan);animation:ax-pulse 1.6s ease-in-out infinite}
+/* I/O BOX */
+.ax-io{
+  background:var(--glass-strong);border:1.5px solid rgba(255,255,255,.85);
+  border-radius:18px;padding:14px 16px;
+  transition:border-color .15s,box-shadow .15s;
+}
+.ax-io:focus-within{border-color:var(--border-hi);box-shadow:0 0 0 4px rgba(79,125,255,.08)}
+.ax-io-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.ax-io-label{
+  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;
+  color:var(--ink-2);letter-spacing:1.4px;text-transform:uppercase;
+}
+.ax-io-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.ax-io-bal{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-2);font-weight:500}
+.ax-io-bal-val{color:var(--ink);font-weight:700}
+.ax-io-row{display:flex;align-items:center;gap:10px}
 
-.ax-card{position:relative;background:linear-gradient(180deg,var(--ax-surface) 0%,var(--ax-bg-2) 100%);border:1.5px solid var(--ax-border);border-radius:22px;padding:18px;backdrop-filter:blur(10px)}
-.ax-card::before{content:'';position:absolute;inset:-1px;border-radius:22px;padding:1.5px;
-  background:linear-gradient(135deg,rgba(34,211,238,.4),transparent 40%,transparent 60%,rgba(244,114,182,.4));
-  -webkit-mask:linear-gradient(#fff 0 0) content-box,linear-gradient(#fff 0 0);
-  -webkit-mask-composite:xor;mask-composite:exclude;pointer-events:none;opacity:.6}
+.ax-tok-btn{
+  display:flex;align-items:center;gap:8px;padding:8px 12px;
+  background:#fff;border:1px solid var(--border);border-radius:999px;
+  color:var(--ink);font-family:inherit;font-size:13px;font-weight:700;
+  flex-shrink:0;
+  box-shadow:0 2px 8px rgba(26,27,78,.06);
+}
+.ax-tok-sym{font-family:"Instrument Serif",serif;font-size:17px;font-style:italic;letter-spacing:-.01em;color:var(--ink)}
+.ax-tok-dot-sol{
+  width:20px;height:20px;border-radius:50%;flex-shrink:0;
+  background:linear-gradient(135deg,#9945ff,#14f195);
+  box-shadow:inset 0 -2px 4px rgba(0,0,0,.15),0 0 6px rgba(153,69,255,.3);
+}
+.ax-tok-dot-btc{
+  width:20px;height:20px;border-radius:50%;flex-shrink:0;
+  background:radial-gradient(circle at 35% 30%,#ffb84d,#f7931a 50%,#cc6e00);
+  box-shadow:inset 0 -2px 4px rgba(0,0,0,.15),0 0 6px rgba(247,147,26,.3);
+}
 
-.ax-row{position:relative;background:rgba(167,139,250,.04);border:1.5px solid var(--ax-border);border-radius:14px;padding:14px;margin-bottom:8px;transition:border-color .15s,box-shadow .15s}
-.ax-row:focus-within{border-color:var(--ax-cyan);box-shadow:0 0 0 3px rgba(34,211,238,.12)}
-.ax-row-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-.ax-row-label{font-family:var(--ax-font-mono);font-size:9px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--ax-violet)}
-.ax-row-bal{font-family:var(--ax-font-mono);font-size:10px;color:var(--ax-muted);font-weight:700;display:flex;align-items:center;gap:8px}
-.ax-row-bal b{color:var(--ax-cyan-2);font-weight:800}
-.ax-max{font-family:var(--ax-font-mono);font-size:9px;font-weight:800;letter-spacing:.08em;padding:3px 8px;border-radius:6px;background:rgba(34,211,238,.12);border:1px solid rgba(34,211,238,.4);color:var(--ax-cyan-2);cursor:pointer;transition:all .12s;text-transform:uppercase}
-.ax-max:hover{background:rgba(34,211,238,.22);border-color:var(--ax-cyan)}
-.ax-max:active{transform:translateY(1px)}
+.ax-amt{
+  flex:1;background:transparent;border:none;outline:none;
+  font-family:"Instrument Serif",serif;font-size:34px;line-height:1;
+  color:var(--ink);text-align:right;font-variant-numeric:tabular-nums;
+  min-width:0;width:100%;
+}
+.ax-amt:disabled{opacity:.5}
+.ax-amt::placeholder{color:var(--ink-3)}
+.ax-amt.out{text-align:right;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+.ax-max{
+  background:rgba(79,125,255,.10);border:1px solid var(--border);color:var(--blue);
+  padding:6px 10px;border-radius:10px;
+  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;cursor:pointer;
+  letter-spacing:0.8px;flex-shrink:0;transition:all .15s;
+}
+.ax-max:hover:not(:disabled){background:rgba(79,125,255,.18)}
 .ax-max:disabled{opacity:.4;cursor:not-allowed}
-.ax-preview-tag{font-family:var(--ax-font-mono);font-size:9px;font-weight:800;letter-spacing:.10em;color:var(--ax-pink);background:rgba(244,114,182,.10);border:1px solid rgba(244,114,182,.35);padding:2px 7px;border-radius:6px}
-.ax-row-mid{display:flex;align-items:center;gap:10px}
-.ax-tok-btn{flex-shrink:0;display:flex;align-items:center;gap:7px;padding:7px 11px;border-radius:10px;background:rgba(167,139,250,.10);border:1px solid rgba(167,139,250,.40);color:var(--ax-ink-str);font-family:var(--ax-font-display);font-weight:800;font-size:13px;cursor:default}
-.ax-tok-btn.btc{background:rgba(247,147,26,.10);border-color:rgba(247,147,26,.45)}
-.ax-tok-dot-sol{width:18px;height:18px;border-radius:50%;background:linear-gradient(135deg,#9945ff,#14f195);box-shadow:inset 0 -2px 6px rgba(0,0,0,.3),0 0 8px rgba(153,69,255,.4)}
-.ax-tok-dot-btc{width:18px;height:18px;border-radius:50%;background:radial-gradient(circle at 35% 30%,#ffb84d,#f7931a 50%,#cc6e00);box-shadow:inset 0 -2px 6px rgba(0,0,0,.3),0 0 8px rgba(247,147,26,.4)}
-.ax-amt{flex:1;background:transparent;border:none;outline:none;color:var(--ax-ink-str);font-family:var(--ax-font-display);font-weight:900;font-size:24px;text-align:right;letter-spacing:-.02em;font-variant-numeric:tabular-nums;min-width:0;width:100%}
-.ax-amt::placeholder{color:var(--ax-muted-2);font-weight:700}
-.ax-amt.out{cursor:default}
-.ax-usd-line{font-family:var(--ax-font-mono);font-size:10px;color:var(--ax-muted);text-align:right;margin-top:6px;font-weight:600}
+.ax-io-usd{
+  text-align:right;margin-top:6px;
+  font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ink-2);font-weight:500;
+}
 
-.ax-addr-wrap{margin-bottom:10px}
-.ax-addr-label{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-family:var(--ax-font-mono);font-size:9px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--ax-violet)}
-.ax-addr-input{width:100%;padding:13px 14px;border-radius:12px;background:rgba(167,139,250,.04);border:1.5px solid var(--ax-border);color:var(--ax-ink-str);font-family:var(--ax-font-mono);font-size:12px;font-weight:600;outline:none;transition:border-color .15s,box-shadow .15s}
-.ax-addr-input::placeholder{color:var(--ax-muted-2)}
-.ax-addr-input:focus{border-color:var(--ax-cyan);box-shadow:0 0 0 3px rgba(34,211,238,.12)}
-.ax-addr-input.invalid{border-color:var(--ax-down)}
-.ax-addr-hint{font-family:var(--ax-font-mono);font-size:9px;color:var(--ax-muted-2);font-weight:700;margin-top:4px;letter-spacing:.06em}
-.ax-addr-hint.err{color:var(--ax-down)}
+/* FLIP */
+.ax-flip-wrap{display:flex;justify-content:center;margin:-12px 0;position:relative;z-index:3}
+.ax-flip-arrow{
+  width:42px;height:42px;border-radius:14px;
+  background:linear-gradient(135deg,#fff,#F5F8FF);
+  border:3px solid #EEF3FF;
+  display:grid;place-items:center;
+  font-family:"Instrument Serif",serif;font-style:italic;font-size:22px;color:var(--violet);line-height:1;
+  box-shadow:0 6px 18px rgba(168,127,255,.18);
+}
 
-.ax-route{background:linear-gradient(135deg,rgba(34,211,238,.05),rgba(244,114,182,.05));border:1px solid rgba(34,211,238,.22);border-radius:12px;padding:12px;margin-bottom:14px}
-.ax-route-row{display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-family:var(--ax-font-mono);font-size:11px}
-.ax-route-row .k{color:var(--ax-muted);font-weight:700}
-.ax-route-row .v{color:var(--ax-ink-str);font-weight:800;font-variant-numeric:tabular-nums}
-.ax-route-row .v.cyan{color:var(--ax-cyan)}
-.ax-route-row .v.btc{color:var(--ax-btc);text-shadow:0 0 6px rgba(247,147,26,.35)}
+/* TAGS */
+.ax-tag{
+  font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;
+  letter-spacing:1px;padding:3px 8px;border-radius:6px;text-transform:uppercase;
+  color:var(--blue);background:rgba(79,125,255,.10);border:1px solid var(--border);
+}
+.ax-tag.cyan{color:var(--blue)}
 
-.ax-cta{width:100%;padding:18px;border-radius:14px;border:none;color:#07041a;font-family:var(--ax-font-display);font-weight:900;font-size:14px;cursor:pointer;letter-spacing:.04em;
-  background:linear-gradient(135deg,var(--ax-cyan),var(--ax-pink) 80%,var(--ax-violet));
-  box-shadow:0 8px 28px rgba(34,211,238,.30),0 4px 24px rgba(244,114,182,.25),0 4px 0 rgba(0,0,0,.2),inset 0 -3px 0 rgba(0,0,0,.12),inset 0 2px 0 rgba(255,255,255,.35);
-  position:relative;overflow:hidden;transition:all .15s cubic-bezier(0.2,1.2,0.4,1)}
-.ax-cta::after{content:'';position:absolute;top:0;bottom:0;width:70px;left:-110px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.5),transparent);animation:ax-shimmer 2.8s ease-in-out infinite}
-.ax-cta:active:not(:disabled){transform:translateY(3px)}
-.ax-cta:disabled{cursor:not-allowed;opacity:0.5}
-.ax-cta:disabled::after{display:none}
-.ax-cta.connect{background:linear-gradient(135deg,#a78bfa,#22d3ee);color:#07041a}
-.ax-cta-footer{font-family:var(--ax-font-mono);font-size:10px;color:var(--ax-muted-2);text-align:center;margin-top:10px;font-weight:600;line-height:1.5}
+/* ADDRESS */
+.ax-addr-wrap{margin-top:12px}
+.ax-addr-label{
+  display:flex;align-items:center;justify-content:space-between;gap:6px;
+  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;
+  color:var(--ink-2);letter-spacing:1.4px;text-transform:uppercase;margin-bottom:8px;
+}
+.ax-addr-status{font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;letter-spacing:1px}
+.ax-addr-input-wrap{position:relative}
+.ax-addr-input{
+  width:100%;padding:13px 42px 13px 14px;
+  background:var(--glass-strong);border:1.5px solid rgba(255,255,255,.85);
+  border-radius:12px;color:var(--ink);
+  font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:600;
+  outline:none;transition:border-color .15s,box-shadow .15s;
+}
+.ax-addr-input:focus{border-color:var(--blue);box-shadow:0 0 0 4px rgba(79,125,255,.10)}
+.ax-addr-input:disabled{opacity:.55}
+.ax-addr-input::placeholder{color:var(--ink-3);font-weight:500}
+.ax-addr-input.invalid{border-color:rgba(209,75,106,.5)}
+.ax-addr-check{
+  position:absolute;right:12px;top:50%;transform:translateY(-50%);
+  width:22px;height:22px;border-radius:50%;
+  background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink);
+  display:grid;place-items:center;font-size:13px;font-weight:800;
+}
+.ax-addr-hint{
+  margin-top:6px;font-family:"JetBrains Mono",monospace;font-size:10px;
+  color:var(--ink-3);font-weight:600;letter-spacing:0.6px;
+}
+.ax-addr-hint.err{color:var(--red)}
 
-.ax-banner{margin-bottom:10px;padding:11px 12px;border-radius:12px;display:flex;align-items:center;gap:10px;font-size:12px;font-weight:600}
-.ax-banner.info{background:rgba(34,211,238,.08);border:1px solid rgba(34,211,238,.28);color:var(--ax-cyan-2)}
-.ax-banner.err{background:rgba(251,113,133,.08);border:1px solid rgba(251,113,133,.28);color:var(--ax-down)}
-.ax-banner.ok{background:rgba(74,222,128,.08);border:1px solid rgba(74,222,128,.28);color:var(--ax-up)}
-.ax-spinner{width:14px;height:14px;border-radius:50%;border:2px solid rgba(34,211,238,.16);border-top-color:var(--ax-cyan);animation:ax-spin 0.8s linear infinite;flex-shrink:0}
+/* ROUTE SUMMARY */
+.ax-route{
+  margin-top:12px;padding:12px 14px;border-radius:14px;
+  background:rgba(79,125,255,.05);border:1px dashed var(--border-hi);
+}
+.ax-route-row{display:flex;justify-content:space-between;align-items:center;padding:3px 0;font-family:"JetBrains Mono",monospace;font-size:11px}
+.ax-route-row .k{color:var(--ink-2);font-weight:600;letter-spacing:0.4px}
+.ax-route-row .v{color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums}
+.ax-route-row .v.blue{color:var(--blue)}
+.ax-route-row .v.btc{color:#cc6e00}
 
-.ax-powered{display:flex;align-items:center;justify-content:center;gap:9px;padding:12px 16px;border-radius:14px;background:rgba(167,139,250,.04);border:1px solid var(--ax-border);margin-top:14px}
-.ax-powered-label{font-family:var(--ax-font-mono);font-size:9px;color:var(--ax-muted-2);font-weight:700;letter-spacing:.08em}
-.ax-powered-name{font-family:var(--ax-font-mono);font-size:11px;font-weight:800;letter-spacing:.04em;
-  background:linear-gradient(90deg,var(--ax-cyan),var(--ax-pink));-webkit-background-clip:text;background-clip:text;color:transparent}
-.ax-powered-sep{color:var(--ax-muted-2);font-size:9px}
+/* BANNERS */
+.ax-banner{
+  margin-top:14px;padding:12px 14px;border-radius:14px;
+  display:flex;align-items:center;gap:10px;
+  font-size:12px;font-weight:600;font-family:"Space Grotesk",sans-serif;
+}
+.ax-banner.info{background:rgba(79,125,255,.08);border:1px solid var(--border);color:var(--blue)}
+.ax-banner.err{background:rgba(209,75,106,.10);border:1px solid rgba(209,75,106,.35);color:var(--red)}
+.ax-banner.ok{
+  background:linear-gradient(135deg,rgba(127,255,212,.18),rgba(160,231,255,.18));
+  border:1px solid rgba(127,255,212,.45);color:var(--green);
+  animation:ax-rise .4s;
+}
+.ax-spinner{
+  width:14px;height:14px;border-radius:50%;flex-shrink:0;
+  border:2px solid rgba(79,125,255,.20);border-top-color:var(--blue);
+  animation:ax-spin .8s linear infinite;
+}
+
+/* CTA */
+.ax-cta{
+  width:100%;margin-top:14px;padding:18px;border-radius:18px;border:none;
+  font-family:"Instrument Serif",serif;font-size:19px;letter-spacing:-.01em;
+  color:#fff;cursor:pointer;
+  background:linear-gradient(135deg,#4f7dff,#a87fff);
+  box-shadow:0 10px 28px rgba(79,125,255,.32),inset 0 1px 0 rgba(255,255,255,.25);
+  transition:transform .15s,box-shadow .15s,opacity .15s;
+  position:relative;overflow:hidden;min-height:56px;
+}
+.ax-cta em{font-style:italic;opacity:.9;margin:0 4px}
+.ax-cta:hover:not(:disabled){transform:translateY(-1px)}
+.ax-cta:active:not(:disabled){transform:translateY(1px)}
+.ax-cta:disabled{
+  background:rgba(26,27,78,.06);color:var(--ink-3);
+  border:1.5px solid var(--hairline);box-shadow:none;cursor:not-allowed;
+}
+
+.ax-cta-footer{
+  margin-top:14px;text-align:center;
+  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:500;
+  color:var(--ink-3);letter-spacing:0.6px;
+}
+
+/* POWERED FOOTER */
+.ax-powered{
+  margin:14px 22px 0;display:flex;align-items:center;justify-content:center;gap:9px;
+  padding:12px 16px;border-radius:14px;
+  background:var(--glass);backdrop-filter:blur(10px);
+  border:1px solid var(--border);
+}
+.ax-powered-label{
+  font-family:"JetBrains Mono",monospace;font-size:9px;color:var(--ink-3);font-weight:700;
+  letter-spacing:1.4px;text-transform:uppercase;
+}
+.ax-powered-name{
+  font-family:"Instrument Serif",serif;font-style:italic;font-size:15px;letter-spacing:-.01em;
+  background:linear-gradient(90deg,#4f7dff,#a87fff);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+}
+.ax-powered-sep{color:var(--ink-3);font-size:9px;opacity:.5}
 `;
 
 // =====================================================================
-// CONFIG
+// CONFIG — UNCHANGED
 // =====================================================================
 const FEE_WALLET    = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
 const PLATFORM_BPS  = 300;  // 3% — your spread, collected on-chain in SOL
@@ -164,7 +390,7 @@ const PREVIEW_BTC_ADDR = 'bc1qar0srrr7xfkvy5l643lydnw9re59gtzzwf5mdq'; // for ra
 const MAX_RESERVE_LAMPORTS = 10_000_000; // 0.01 SOL kept back when user taps MAX
 
 // =====================================================================
-// UTILS
+// UTILS — UNCHANGED
 // =====================================================================
 const fmtUsd = (n, d = 2) => {
   if (n == null || !Number.isFinite(Number(n))) return '$0.00';
@@ -235,8 +461,6 @@ async function getThorQuoteOnce({ swapLamports, btcAddress, refundAddress }) {
     destination:             btcAddress,
     liquidity_tolerance_bps: String(SLIPPAGE_BPS),
   });
-  // Explicit refund target so if ThorChain refunds (slippage exceeded, dust,
-  // pool halted, etc.) SOL goes back to the user, not the wrong place.
   if (refundAddress) params.set('refund_address', refundAddress);
 
   const res = await fetchWithTimeout(
@@ -255,8 +479,6 @@ async function getThorQuoteOnce({ swapLamports, btcAddress, refundAddress }) {
   return json;
 }
 
-// Retry wrapper — ThorChain occasionally returns 503 even with proper debounce.
-// Also retries transient network errors. Up to 3 attempts w/ exponential backoff.
 async function getThorQuote(args) {
   const RETRYABLE = new Set([429, 500, 502, 503, 504]);
   let lastErr;
@@ -266,18 +488,15 @@ async function getThorQuote(args) {
     } catch (e) {
       lastErr = e;
       const status = e.status;
-      const isNetwork = !status; // fetch threw (timeout, offline, CORS)
+      const isNetwork = !status;
       const retryable = isNetwork || (typeof status === 'number' && RETRYABLE.has(status));
       if (!retryable || attempt === 2) break;
-      // 700ms, 1500ms backoff
       await new Promise(r => setTimeout(r, 700 * (attempt + 1) + attempt * 100));
     }
   }
   throw lastErr;
 }
 
-// ThorChain inbound-tx status — used to drive the progress UI after submit.
-// Returns null on any failure so polling is robust to transient errors.
 async function getThorTxStatus(txHash) {
   try {
     const res = await fetchWithTimeout(
@@ -290,7 +509,6 @@ async function getThorTxStatus(txHash) {
   } catch { return null; }
 }
 
-// Derive a friendly user-facing label from the tx/status response.
 function deriveStatusLabel(status) {
   if (!status || typeof status !== 'object') return { label: 'Waiting for ThorChain to observe…', done: false };
   const s = status.stages || {};
@@ -378,17 +596,15 @@ export default function SolToBtc({ onConnectWallet }) {
     return () => { alive = false; clearInterval(id); };
   }, [publicKey, connection]);
 
-  // Persist BTC address to localStorage when it's valid (so it survives reload).
+  // Persist BTC address to localStorage when it's valid.
   useEffect(() => {
     if (btcAddr && isValidBtcAddr(btcAddr)) ls.set(LS_KEY_BTC, btcAddr);
   }, [btcAddr]);
 
   // Quote — works without wallet OR without address (preview rate mode).
-  // 1100ms debounce — ThorChain /quote rate-limits at 1 req/sec/IP.
   useEffect(() => {
     const n = parseFloat(solAmount);
     if (!Number.isFinite(n) || n <= 0) { setQuote(null); return; }
-    // Don't waste a quote request on amounts outside the allowed range.
     if (n < MIN_SOL || n > MAX_SOL) { setQuote(null); return; }
 
     const userHasAddr = isValidBtcAddr(btcAddr);
@@ -425,7 +641,7 @@ export default function SolToBtc({ onConnectWallet }) {
     return () => clearTimeout(t);
   }, [solAmount, btcAddr, publicKey]);
 
-  // ThorChain inbound-tx status polling — drives the post-submit progress UI.
+  // ThorChain inbound-tx status polling.
   useEffect(() => {
     if (!bridgeSig) return;
     let alive = true;
@@ -446,7 +662,6 @@ export default function SolToBtc({ onConnectWallet }) {
       tick();
     }, 6_000);
 
-    // Stop polling after 15 min regardless (BTC outbound finalises well within this).
     const stopAt = setTimeout(() => { alive = false; clearInterval(id); }, 15 * 60_000);
     return () => { alive = false; clearInterval(id); clearTimeout(stopAt); };
   }, [bridgeSig]);
@@ -465,6 +680,9 @@ export default function SolToBtc({ onConnectWallet }) {
   const expectedBtc    = expectedSats / SATS_PER_BTC;
   const expectedBtcUsd = expectedBtc * btcPrice;
 
+  // Live 1-SOL → BTC rate for the signature card.
+  const liveSolToBtc = (solPrice > 0 && btcPrice > 0) ? solPrice / btcPrice : 0;
+
   const handleMax = () => {
     if (solBalance == null) return;
     const usable = Math.max(0, solBalance - MAX_RESERVE_LAMPORTS);
@@ -482,8 +700,6 @@ export default function SolToBtc({ onConnectWallet }) {
     if (!quote || quote.isPreview) { setError('Enter a valid BTC address'); return; }
     if (!addrValid) { setError('Invalid BTC address'); return; }
 
-    // Balance precheck — both txs share one payer, fail fast if not enough SOL.
-    // Reserve ~0.0005 SOL (500k lamports) for combined tx fees + priority.
     const TX_FEE_RESERVE = 500_000n;
     const totalNeeded = BigInt(quote.platformLamports) + BigInt(quote.swapLamports) + TX_FEE_RESERVE;
     if (solBalance != null && BigInt(solBalance) < totalNeeded) {
@@ -497,7 +713,6 @@ export default function SolToBtc({ onConnectWallet }) {
     setSubmit({ kind: 'loading', message: 'Refreshing route…' });
 
     try {
-      // Re-quote right before signing — vault rotates, never cache.
       const fresh = await getThorQuote({
         swapLamports:  quote.swapLamports,
         btcAddress:    btcAddr,
@@ -509,12 +724,9 @@ export default function SolToBtc({ onConnectWallet }) {
       setSubmit({ kind: 'loading', message: 'Building transactions…' });
       const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
 
-      // Small priority fee — keeps txs landing during congestion.
-      // 50k microlamports/CU × ~200 CU ≈ 10k lamports (~$0.002).
       const priorityIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 });
       const cuLimitIx  = ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 });
 
-      // TX 1: platform fee (3% SOL → your wallet).
       const feeMsg = new TransactionMessage({
         payerKey:        owner,
         recentBlockhash: blockhash,
@@ -530,9 +742,6 @@ export default function SolToBtc({ onConnectWallet }) {
       }).compileToV0Message();
       const feeTx = new VersionedTransaction(feeMsg);
 
-      // TX 2: bridge — SOL → ThorChain Asgard vault + SPL memo.
-      // Compute budget ixs are pre-pended; the SOL transfer + memo are exactly
-      // what ThorChain's Solana observer expects.
       const bridgeMsg = new TransactionMessage({
         payerKey:        owner,
         recentBlockhash: blockhash,
@@ -549,13 +758,9 @@ export default function SolToBtc({ onConnectWallet }) {
       }).compileToV0Message();
       const bridgeTx = new VersionedTransaction(bridgeMsg);
 
-      // One wallet popup, both txs approved together.
       setSubmit({ kind: 'loading', message: 'Confirm in your wallet…' });
       const [signedFee, signedBridge] = await signAllTransactions([feeTx, bridgeTx]);
 
-      // 1. Broadcast fee tx and WAIT for confirmation before sending bridge.
-      //    If fee fails (e.g. RPC drop), we don't send the bridge and user
-      //    isn't left in a state where they paid the fee but no swap happened.
       setSubmit({ kind: 'loading', message: 'Sending fee tx…' });
       const feeSig = await connection.sendRawTransaction(signedFee.serialize(), {
         skipPreflight: false,
@@ -571,7 +776,6 @@ export default function SolToBtc({ onConnectWallet }) {
         throw new Error('Fee tx failed — bridge not sent');
       }
 
-      // 2. Broadcast bridge tx.
       setSubmit({ kind: 'loading', message: 'Sending bridge tx…' });
       const sig = await connection.sendRawTransaction(signedBridge.serialize(), {
         skipPreflight: false,
@@ -580,7 +784,6 @@ export default function SolToBtc({ onConnectWallet }) {
 
       console.log('[sol→btc] fee', feeSig, 'bridge', sig);
 
-      // 3. Kick off status polling and show the in-progress UI.
       setBridgeSig(sig);
       setBridgeStatus({ label: 'Bridge submitted · waiting for ThorChain…', done: false });
       setSubmit({
@@ -588,7 +791,6 @@ export default function SolToBtc({ onConnectWallet }) {
         message: `Submitted · ${sig.slice(0, 8)}…`,
       });
 
-      // Reset the input fields (BTC address stays persisted via localStorage).
       setSolAmount(''); setQuote(null);
       setTimeout(() => setSubmit({ kind: 'idle', message: '' }), 6000);
     } catch (e) {
@@ -604,181 +806,206 @@ export default function SolToBtc({ onConnectWallet }) {
 
   return (
     <div className="ax-page">
-      <div className="ax-mini-hero">
-        <div className="ax-mh-row">
-          <div className="ax-mh-left">
-            <div className="ax-mh-eyebrow">⟁ POWERED BY THORCHAIN</div>
-            <h1 className="ax-mh-title">
-              GET NATIVE<br />
-              <span className="grad">Bitcoin.</span>
-            </h1>
-            <p className="ax-mh-sub">Real BTC. Not wrapped. Not synthetic.</p>
+      {/* Blobs */}
+      <div className="ax-blob" style={{ width: 380, height: 380, background: '#A0E7FF', top: -100, right: -120 }}/>
+      <div className="ax-blob" style={{ width: 420, height: 420, background: '#B794F6', top: '35%', left: -160, animationDelay: '3s' }}/>
+      <div className="ax-blob" style={{ width: 300, height: 300, background: '#FFE8F4', bottom: '10%', right: -80, animationDelay: '6s' }}/>
+
+      {/* Faint ₿ emblems for page identity */}
+      <div className="ax-emblem" style={{ fontSize: 280, top: -40, left: -60, transform: 'rotate(-12deg)' }}>₿</div>
+      <div className="ax-emblem" style={{ fontSize: 180, top: '42%', right: -30, transform: 'rotate(15deg)', animationDelay: '4s' }}>₿</div>
+      <div className="ax-emblem" style={{ fontSize: 220, bottom: '8%', left: -40, transform: 'rotate(-8deg)', animationDelay: '8s' }}>₿</div>
+
+      <div className="ax-inner">
+        {/* HEADER */}
+        <div className="ax-head">
+          <div className="ax-brand">
+            <div className="ax-brand-dot"/>
+            <span className="ax-wordmark">native<span className="slash">//</span><span className="grad">bitcoin</span></span>
           </div>
-          <div className="ax-orb">₿</div>
+          <div className="ax-head-live"><span className="d"/>THORCHAIN</div>
         </div>
-      </div>
 
-      <div className="ax-kyc">
-        <span>No KYC</span><span className="dot"></span>
-        <span>No Account</span><span className="dot"></span>
-        <span>No Limits</span>
-      </div>
-
-      <div className="ax-price-strip">
-        <div className="ax-ps-left">
-          <span className="ax-ps-pulse"></span>
-          <span className="ax-ps-label">BTC / USD</span>
+        {/* MINI HERO */}
+        <div className="ax-mini-hero">
+          <div className="ax-mh-eyebrow">⟁ NO KYC · NO WRAPS</div>
+          <h1 className="ax-mh-title">Get native <em>Bitcoin.</em></h1>
+          <div className="ax-mh-sub">Real BTC straight to your wallet. Not synthetic.</div>
         </div>
-        <div className="ax-ps-val">{btcPrice > 0 ? fmtUsd(btcPrice, 0) : '—'}</div>
-        <div className="ax-ps-net">NATIVE BTC</div>
-      </div>
 
-      <div className="ax-widget-title">
-        <div className="nm">SOL <span className="arrow">→</span> BTC</div>
-        <div className="live"><span className="d"></span>LIVE</div>
-      </div>
+        {/* SIGNATURE — LIVE RATE CARD */}
+        <div className="ax-rate-card">
+          <div className="ax-rate-top">
+            <span className="ax-rate-label">Live Rate</span>
+            <div className="ax-rate-live">
+              <span className="d"/>BTC {btcPrice > 0 ? fmtUsd(btcPrice, 0) : '—'}
+            </div>
+          </div>
+          <div className="ax-rate-main">
+            <span className="ax-rate-from">1 SOL</span>
+            <span className="ax-rate-arrow">→</span>
+            <span className="ax-rate-val">{liveSolToBtc > 0 ? liveSolToBtc.toFixed(5) : '—'}</span>
+            <span className="ax-rate-to">BTC</span>
+          </div>
+          <div className="ax-rate-usd">
+            <b>{solPrice > 0 ? fmtUsd(solPrice, 2) : '—'}</b> per SOL · ~5 min delivery
+          </div>
+        </div>
 
-      <div className="ax-card">
-        {/* SOL input */}
-        <div className="ax-row">
-          <div className="ax-row-top">
-            <span className="ax-row-label">YOU SEND</span>
-            {connected && balanceSol != null ? (
-              <span className="ax-row-bal">
-                Balance: <b>{balanceSol.toFixed(4)}</b> SOL
-                <button
-                  type="button" className="ax-max"
-                  onClick={handleMax}
-                  disabled={isBusy || balanceSol < MIN_SOL}
-                >MAX</button>
+        {/* KYC PILLS */}
+        <div className="ax-kyc">
+          <span>No KYC</span><span className="dot"/>
+          <span>No Account</span><span className="dot"/>
+          <span>No Limits</span>
+        </div>
+
+        {/* FORM CARD */}
+        <div className="ax-card">
+          {/* SOL input */}
+          <div className="ax-io">
+            <div className="ax-io-head">
+              <span className="ax-io-label">You Send</span>
+              <div className="ax-io-meta">
+                {connected && balanceSol != null ? (
+                  <span className="ax-io-bal">Balance: <span className="ax-io-bal-val">{balanceSol.toFixed(4)}</span> SOL</span>
+                ) : (
+                  <span className="ax-io-bal">Min <span className="ax-io-bal-val">{MIN_SOL}</span> · Max <span className="ax-io-bal-val">{MAX_SOL}</span></span>
+                )}
+              </div>
+            </div>
+            <div className="ax-io-row">
+              <div className="ax-tok-btn">
+                <div className="ax-tok-dot-sol"/>
+                <span className="ax-tok-sym">SOL</span>
+              </div>
+              <input
+                className="ax-amt"
+                value={solAmount}
+                onChange={e => { setSolAmount(cleanAmount(e.target.value)); setError(''); }}
+                placeholder="0.00"
+                disabled={isBusy}
+                inputMode="decimal"
+              />
+              {connected && balanceSol != null && balanceSol >= MIN_SOL && !isBusy && (
+                <button type="button" className="ax-max" onClick={handleMax}>MAX</button>
+              )}
+            </div>
+            {usdEquiv > 0 && (<div className="ax-io-usd">≈ {fmtUsd(usdEquiv, 2)}</div>)}
+          </div>
+
+          <div className="ax-flip-wrap"><div className="ax-flip-arrow">↓</div></div>
+
+          {/* BTC output */}
+          <div className="ax-io">
+            <div className="ax-io-head">
+              <span className="ax-io-label">You Receive (Native BTC)</span>
+              {quoting
+                ? <span className="ax-tag">QUOTING…</span>
+                : quote?.isPreview
+                  ? <span className="ax-tag">PREVIEW RATE</span>
+                  : <span className="ax-tag">NATIVE L1</span>}
+            </div>
+            <div className="ax-io-row">
+              <div className="ax-tok-btn">
+                <div className="ax-tok-dot-btc"/>
+                <span className="ax-tok-sym">BTC</span>
+              </div>
+              <div className="ax-amt out">{expectedBtc > 0 ? fmtBtc(expectedBtc, 8) : '0.00'}</div>
+            </div>
+            {expectedBtcUsd > 0 && (<div className="ax-io-usd">≈ {fmtUsd(expectedBtcUsd, 2)}</div>)}
+          </div>
+
+          {/* BTC address */}
+          <div className="ax-addr-wrap">
+            <div className="ax-addr-label">
+              <span>Your BTC Address</span>
+              <span
+                className="ax-addr-status"
+                style={{ color: addrValid ? 'var(--green)' : (btcAddrTouched && btcAddr ? 'var(--red)' : 'var(--ink-3)') }}
+              >
+                {addrValid ? '✓ VALID' : (btcAddrTouched && btcAddr ? '✗ INVALID' : 'BC1… / 1… / 3…')}
               </span>
-            ) : (
-              <span className="ax-row-bal">Min <b>{MIN_SOL}</b> SOL · Max <b>{MAX_SOL}</b> SOL</span>
-            )}
-          </div>
-          <div className="ax-row-mid">
-            <div className="ax-tok-btn">
-              <div className="ax-tok-dot-sol"></div>SOL
             </div>
-            <input
-              className="ax-amt"
-              value={solAmount}
-              onChange={e => { setSolAmount(cleanAmount(e.target.value)); setError(''); }}
-              placeholder="0.00"
-              disabled={isBusy}
-              inputMode="decimal"
-            />
-          </div>
-          {usdEquiv > 0 && (<div className="ax-usd-line">≈ {fmtUsd(usdEquiv, 2)}</div>)}
-        </div>
-
-        {/* BTC output */}
-        <div className="ax-row">
-          <div className="ax-row-top">
-            <span className="ax-row-label">YOU RECEIVE (NATIVE BTC)</span>
-            {quoting
-              ? <span className="ax-row-bal" style={{ color: 'var(--ax-cyan)' }}>quoting…</span>
-              : quote?.isPreview
-                ? <span className="ax-preview-tag">PREVIEW RATE</span>
-                : null}
-          </div>
-          <div className="ax-row-mid">
-            <div className="ax-tok-btn btc">
-              <div className="ax-tok-dot-btc"></div>BTC
+            <div className="ax-addr-input-wrap">
+              <input
+                className={'ax-addr-input' + (btcAddrTouched && btcAddr && !addrValid ? ' invalid' : '')}
+                value={btcAddr}
+                onChange={e => setBtcAddr(e.target.value.trim())}
+                onBlur={() => setBtcAddrTouched(true)}
+                placeholder="bc1q…"
+                disabled={isBusy}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+              />
+              {addrValid && <div className="ax-addr-check">✓</div>}
             </div>
-            <div className="ax-amt out">
-              {expectedBtc > 0 ? fmtBtc(expectedBtc, 8) : '0.00'}
+            <div className={'ax-addr-hint' + (btcAddrTouched && btcAddr && !addrValid ? ' err' : '')}>
+              {btcAddrTouched && btcAddr && !addrValid
+                ? 'Address format not recognized'
+                : 'Native Bitcoin only · No Lightning · No Wrapped'}
             </div>
           </div>
-          {expectedBtcUsd > 0 && (<div className="ax-usd-line">≈ {fmtUsd(expectedBtcUsd, 2)}</div>)}
+
+          {/* Route summary */}
+          {quote && (
+            <div className="ax-route">
+              <div className="ax-route-row"><span className="k">You send</span><span className="v">{n.toFixed(4)} SOL</span></div>
+              <div className="ax-route-row"><span className="k">Bridged</span><span className="v">{(Number(quote.swapLamports)/LAMPORTS_PER_SOL).toFixed(4)} SOL</span></div>
+              <div className="ax-route-row"><span className="k">Route</span><span className="v blue">ThorChain · Native L1</span></div>
+              <div className="ax-route-row"><span className="k">Max slippage</span><span className="v">{(SLIPPAGE_BPS/100).toFixed(1)}%</span></div>
+              {quote.thor.outbound_delay_seconds != null && (
+                <div className="ax-route-row"><span className="k">Est. delivery</span><span className="v">~{Math.max(1, Math.round(Number(quote.thor.outbound_delay_seconds) / 60))} min</span></div>
+              )}
+              <div className="ax-route-row"><span className="k">You receive</span><span className="v btc">{fmtBtc(expectedBtc, 8)} BTC</span></div>
+            </div>
+          )}
+
+          {/* Status banners */}
+          {isBusy && submit.message && (
+            <div className="ax-banner info"><div className="ax-spinner"/><span>{submit.message}</span></div>
+          )}
+          {(error || submit.kind === 'error') && (
+            <div className="ax-banner err">{error || submit.message}</div>
+          )}
+          {isSuccess && !bridgeStatus && (
+            <div className="ax-banner ok">✓ {submit.message}</div>
+          )}
+          {bridgeSig && bridgeStatus && (
+            <div className={'ax-banner ' + (bridgeStatus.done ? 'ok' : 'info')}>
+              {!bridgeStatus.done && <div className="ax-spinner"/>}
+              <span>{bridgeStatus.done ? '✓ ' : ''}{bridgeStatus.label}</span>
+            </div>
+          )}
+
+          {/* CTA */}
+          {!connected ? (
+            <button onClick={() => onConnectWallet?.()} className="ax-cta">Connect Wallet</button>
+          ) : (
+            <button
+              onClick={handleSubmit}
+              disabled={isBusy || !quote || quote.isPreview || !stakeValid || !addrValid}
+              className="ax-cta"
+            >
+              {isBusy ? 'Processing…' :
+               isSuccess ? 'Submitted ✓' :
+               !stakeValid ? `Enter ${MIN_SOL}–${MAX_SOL} SOL` :
+               !addrValid ? 'Enter BTC address' :
+               !quote || quote.isPreview ? (quoting ? 'Getting quote…' : 'No quote') :
+               <>Bridge {n.toFixed(4)} SOL <em>→</em> BTC</>}
+            </button>
+          )}
+
+          <div className="ax-cta-footer">One signature · Two txs · Native BTC via ThorChain</div>
         </div>
 
-        {/* BTC address */}
-        <div className="ax-addr-wrap">
-          <div className="ax-addr-label">
-            <span>YOUR BTC ADDRESS</span>
-            <span style={{ color: addrValid ? 'var(--ax-up)' : btcAddrTouched && btcAddr ? 'var(--ax-down)' : 'var(--ax-muted-2)' }}>
-              {addrValid ? '✓ VALID' : btcAddrTouched && btcAddr ? '✗ INVALID' : 'BC1… / 1… / 3…'}
-            </span>
-          </div>
-          <input
-            className={'ax-addr-input' + (btcAddrTouched && btcAddr && !addrValid ? ' invalid' : '')}
-            value={btcAddr}
-            onChange={e => setBtcAddr(e.target.value.trim())}
-            onBlur={() => setBtcAddrTouched(true)}
-            placeholder="bc1q…"
-            disabled={isBusy}
-            spellCheck={false}
-            autoCapitalize="off"
-            autoCorrect="off"
-          />
-          <div className={'ax-addr-hint' + (btcAddrTouched && btcAddr && !addrValid ? ' err' : '')}>
-            {btcAddrTouched && btcAddr && !addrValid
-              ? 'Address format not recognized'
-              : 'Native Bitcoin only · No Lightning · No Wrapped'}
-          </div>
+        {/* POWERED FOOTER */}
+        <div className="ax-powered">
+          <span className="ax-powered-label">Powered by</span>
+          <span className="ax-powered-name">ThorChain</span>
+          <span className="ax-powered-sep">·</span>
+          <span className="ax-powered-label">Native Bitcoin</span>
         </div>
-
-        {/* Route summary */}
-        {quote && (
-          <div className="ax-route">
-            <div className="ax-route-row"><span className="k">You send</span><span className="v">{n.toFixed(4)} SOL</span></div>
-            <div className="ax-route-row"><span className="k">Bridged</span><span className="v">{(Number(quote.swapLamports)/LAMPORTS_PER_SOL).toFixed(4)} SOL</span></div>
-            <div className="ax-route-row"><span className="k">Route</span><span className="v cyan">ThorChain · Native L1</span></div>
-            <div className="ax-route-row"><span className="k">Max slippage</span><span className="v">{(SLIPPAGE_BPS/100).toFixed(1)}%</span></div>
-            {quote.thor.outbound_delay_seconds != null && (
-              <div className="ax-route-row"><span className="k">Est. delivery</span><span className="v">~{Math.max(1, Math.round(Number(quote.thor.outbound_delay_seconds) / 60))} min</span></div>
-            )}
-            <div className="ax-route-row"><span className="k">You receive</span><span className="v btc">{fmtBtc(expectedBtc, 8)} BTC</span></div>
-          </div>
-        )}
-
-        {/* Status / error */}
-        {isBusy && submit.message && (
-          <div className="ax-banner info"><div className="ax-spinner"></div><span>{submit.message}</span></div>
-        )}
-        {(error || submit.kind === 'error') && (
-          <div className="ax-banner err">{error || submit.message}</div>
-        )}
-        {isSuccess && !bridgeStatus && (
-          <div className="ax-banner ok">✓ {submit.message}</div>
-        )}
-        {/* ThorChain progress (polled after submit) */}
-        {bridgeSig && bridgeStatus && (
-          <div className={'ax-banner ' + (bridgeStatus.done ? 'ok' : 'info')}>
-            {!bridgeStatus.done && <div className="ax-spinner"></div>}
-            <span>{bridgeStatus.done ? '✓ ' : ''}{bridgeStatus.label}</span>
-          </div>
-        )}
-
-        {/* CTA */}
-        {!connected ? (
-          <button onClick={() => onConnectWallet?.()} className="ax-cta connect">Connect Wallet</button>
-        ) : (
-          <button
-            onClick={handleSubmit}
-            disabled={isBusy || !quote || quote.isPreview || !stakeValid || !addrValid}
-            className="ax-cta"
-          >
-            {isBusy ? 'Processing…' :
-             isSuccess ? 'Submitted ✓' :
-             !stakeValid ? `Enter ${MIN_SOL}–${MAX_SOL} SOL` :
-             !addrValid ? 'Enter BTC address' :
-             !quote || quote.isPreview ? (quoting ? 'Getting quote…' : 'No quote') :
-             `Bridge ${n.toFixed(4)} SOL → BTC`}
-          </button>
-        )}
-
-        <div className="ax-cta-footer">
-          One signature · Two txs · Native BTC via ThorChain
-        </div>
-      </div>
-
-      <div className="ax-powered">
-        <span className="ax-powered-label">POWERED BY</span>
-        <span className="ax-powered-name">THORCHAIN</span>
-        <span className="ax-powered-sep">|</span>
-        <span className="ax-powered-label">NATIVE BITCOIN</span>
       </div>
     </div>
   );
