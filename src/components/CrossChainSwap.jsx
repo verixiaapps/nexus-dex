@@ -1,14 +1,19 @@
 /**
  * NEXUS DEX — CrossChainSwap.jsx
- * (Originally CrossChain.jsx — LI.FI atomic single-tx, fee in SOL)
- * 
- * CHANGES (visual only — all trading/RPC/LI.FI logic preserved exactly):
- *   • CSS combined inline as CC_CSS + useCcCSS injector (no CrossChain.css)
- *   • Theme switched from mint/violet to blue #4f7dff + violet #a87fff
- *     so the widget feels native under the new BridgeHero.
- *   • Fonts normalized to Syne + JetBrains Mono (matches App.jsx).
- *   • All LI.FI quote/build/sign/send/confirm flow UNCHANGED. Same cc-
- *     class prefix.
+ * (LI.FI atomic single-tx, fee in SOL)
+ *
+ * VISUAL REDESIGN — same DNA as Stocks/GetStarted (Wonderland), regional
+ * blue/violet accent for the bridge flow. All trading/RPC/LI.FI logic
+ * preserved verbatim. Class prefix stays cc-.
+ *
+ *   • Light cream surface with cool-tuned blobs (more sky/lav, less pink).
+ *   • Step bar (01 → 04) is the signature element — Instrument Serif
+ *     italic numerals on glass tiles, blue→violet glow on active,
+ *     mint→sky on done. Always visible.
+ *   • Instrument Serif for headline + numbers + token symbols.
+ *     JetBrains Mono for tabular data, labels, captions.
+ *   • CTA: blue→violet gradient (primary), mint→sky (success), pink (error).
+ *   • Route info merged into the RECEIVE box as a single tight line.
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
@@ -24,187 +29,461 @@ import {
 } from '@solana/web3.js';
 
 // =====================================================================
-// INLINE CSS — Syne + JetBrains Mono · blue + violet matching BridgeHero
+// INLINE CSS — Wonderland-lite · Instrument Serif + Space Grotesk + JetBrains Mono
 // =====================================================================
 const CC_CSS = `
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
+
 .cc-page,.cc-modal-backdrop,.cc-modal{
-  --cc-bg:#03060f;
-  --cc-card:#080d1a; --cc-card-2:#0c1220; --cc-card-3:#111d30;
-  --cc-ink:#e6efff; --cc-ink-str:#f5fafe;
-  --cc-muted:#9b8fc0; --cc-muted-2:#564670;
-  --cc-hl:#4f7dff; --cc-hl-2:#7a9eff;
-  --cc-hl-dim:rgba(79,125,255,.14);
-  --cc-violet:#a87fff;
-  --cc-up:#00ffa3; --cc-down:#ff5566; --cc-warn:#f5b53d;
-  --cc-border:rgba(255,255,255,.06);
-  --cc-border-hi:rgba(79,125,255,.32);
-  --cc-hairline:rgba(255,255,255,.05);
-  --cc-font-display:'Syne',system-ui,sans-serif;
-  --cc-font-body:'Syne',system-ui,sans-serif;
-  --cc-font-mono:'JetBrains Mono','IBM Plex Mono',ui-monospace,monospace;
-  font-family:var(--cc-font-body);
-  color:var(--cc-ink);
-  box-sizing:border-box;
+  --ink:#1A1B4E; --ink-2:rgba(26,27,78,0.7); --ink-3:rgba(26,27,78,0.45);
+  --blue:#4f7dff; --violet:#a87fff;
+  --mint:#7FFFD4; --sky:#A0E7FF; --lav:#B794F6;
+  --pink:#FF8FBE; --peach:#FFB088; --gold:#FFD46B;
+  --green:#1B7A4F; --red:#D14B6A;
+  --glass:rgba(255,255,255,0.6); --glass-strong:rgba(255,255,255,0.78);
+  --border:rgba(79,125,255,0.18);
+  --border-hi:rgba(79,125,255,0.32);
+  --hairline:rgba(26,27,78,0.08);
+  font-family:"Space Grotesk",-apple-system,system-ui,sans-serif;
+  color:var(--ink);
 }
-.cc-page *,.cc-modal *{box-sizing:border-box}
+.cc-page,.cc-page *,.cc-modal,.cc-modal *{box-sizing:border-box}
 body.nexus-scroll-locked{overflow:hidden}
 
+@keyframes cc-drift{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(20px,-30px) scale(1.05)}}
+@keyframes cc-pulse{0%,100%{opacity:1}50%{opacity:0.4}}
 @keyframes cc-spin{to{transform:rotate(360deg)}}
-@keyframes cc-pulse{50%{opacity:.4}}
-@keyframes cc-rise{from{opacity:0;transform:scale(.96)}to{opacity:1;transform:scale(1)}}
+@keyframes cc-rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes cc-glow{0%,100%{box-shadow:0 4px 18px rgba(79,125,255,.35),0 0 0 0 rgba(79,125,255,.25)}50%{box-shadow:0 4px 18px rgba(79,125,255,.45),0 0 0 8px rgba(79,125,255,0)}}
 @keyframes cc-modal-in{from{opacity:0;transform:translate(-50%,-48%)}to{opacity:1;transform:translate(-50%,-50%)}}
-@keyframes cc-shimmer{0%{left:-110px}50%,100%{left:130%}}
 
 /* PAGE */
-.cc-page{width:100%;max-width:480px;margin:0 auto;padding:0}
+.cc-page{
+  position:relative;min-height:100vh;min-height:100dvh;
+  max-width:520px;margin:0 auto;width:100%;
+  padding:0 0 calc(env(safe-area-inset-bottom) + 80px);
+  border-radius:24px;overflow-x:hidden;
+  background:
+    radial-gradient(ellipse at 80% 0%,#D9ECFF 0%,transparent 50%),
+    radial-gradient(ellipse at 15% 10%,#F0E7FF 0%,transparent 45%),
+    radial-gradient(ellipse at 50% 70%,#E4F2FF 0%,transparent 55%),
+    radial-gradient(ellipse at 90% 95%,#FFE8F4 0%,transparent 35%),
+    linear-gradient(180deg,#F5F8FF 0%,#EEF3FF 100%);
+  background-attachment:fixed;
+}
+.cc-blob{
+  position:absolute;border-radius:50%;filter:blur(70px);opacity:0.42;
+  animation:cc-drift 14s ease-in-out infinite;pointer-events:none;z-index:0;
+}
+.cc-inner{position:relative;z-index:5}
 
-/* WIDGET TITLE (matches App.jsx pattern) */
-.cc-widget-title{display:flex;align-items:center;justify-content:space-between;padding:0 4px 12px;margin-top:-4px}
-.cc-widget-title .nm{font-family:var(--cc-font-display);font-weight:800;font-size:20px;letter-spacing:-.01em;color:var(--cc-ink-str)}
-.cc-widget-title .live{display:flex;align-items:center;gap:6px;font-family:var(--cc-font-mono);font-size:10px;font-weight:800;color:var(--cc-hl);border:1px solid var(--cc-border-hi);border-radius:100px;padding:5px 11px;background:var(--cc-hl-dim)}
-.cc-widget-title .live .d{width:5px;height:5px;border-radius:50%;background:var(--cc-hl);box-shadow:0 0 8px var(--cc-hl);animation:cc-pulse 1.6s ease-in-out infinite}
+/* HEADER */
+.cc-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:18px 22px 4px;
+}
+.cc-brand{display:flex;align-items:center;gap:10px}
+.cc-brand-dot{
+  width:28px;height:28px;border-radius:50%;
+  background:linear-gradient(135deg,#4f7dff,#a87fff 60%,#7FFFD4);
+  box-shadow:0 0 14px rgba(79,125,255,0.5);
+}
+.cc-wordmark{font-family:"Instrument Serif",serif;font-style:italic;font-size:20px;line-height:1}
+.cc-wordmark .slash{opacity:0.4;margin:0 3px;font-style:normal}
+.cc-wordmark .grad{
+  background:linear-gradient(90deg,#4f7dff,#a87fff,#7FFFD4);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+}
+.cc-head-live{
+  display:flex;align-items:center;gap:6px;
+  padding:5px 11px;border-radius:999px;
+  background:var(--glass);backdrop-filter:blur(10px);
+  border:1px solid var(--border);
+  font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;color:var(--blue);
+  letter-spacing:1.2px;
+}
+.cc-head-live .d{width:5px;height:5px;border-radius:50%;background:var(--blue);box-shadow:0 0 8px var(--blue);animation:cc-pulse 1.6s ease-in-out infinite}
+
+/* MINI HERO */
+.cc-mini-hero{padding:18px 22px 8px}
+.cc-mh-eyebrow{
+  display:inline-flex;align-items:center;gap:7px;
+  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;
+  color:var(--blue);letter-spacing:1.6px;margin-bottom:8px;
+}
+.cc-mh-title{
+  font-family:"Instrument Serif",serif;font-weight:400;
+  font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 6px;
+  color:var(--ink);
+}
+.cc-mh-title em{
+  font-style:italic;
+  background:linear-gradient(120deg,#4f7dff,#a87fff);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+}
+.cc-mh-sub{font-size:13px;color:var(--ink-2);font-weight:500;line-height:1.45}
 
 /* CARD */
-.cc-card{background:linear-gradient(180deg,rgba(14,20,40,.96),rgba(7,11,22,.98));border:1.5px solid rgba(79,125,255,.18);border-radius:22px;padding:18px;box-shadow:0 20px 60px rgba(0,0,0,.55)}
+.cc-card{
+  margin:14px 22px 0;padding:18px;border-radius:24px;
+  background:var(--glass);backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,.85);
+  box-shadow:0 12px 40px rgba(79,125,255,.10);
+}
 
-/* STEPS */
-.cc-steps{display:flex;align-items:flex-start;gap:0;margin:0 0 14px}
-.cc-step{display:flex;flex-direction:column;align-items:center;flex:0 0 auto}
-.cc-step-circle{width:30px;height:30px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:900;background:var(--cc-card-3);color:var(--cc-muted);border:2px solid var(--cc-muted-2);font-family:var(--cc-font-display);transition:all .2s}
-.cc-step-active{background:linear-gradient(135deg,var(--cc-hl),var(--cc-violet));color:#fff;border-color:var(--cc-hl);box-shadow:0 0 16px rgba(79,125,255,.4)}
-.cc-step-done{background:var(--cc-up);color:#03060f;border-color:var(--cc-up)}
-.cc-step-label{font-size:9px;margin-top:5px;font-weight:800;color:var(--cc-muted);font-family:var(--cc-font-mono);letter-spacing:.04em}
-.cc-step-label-active{color:var(--cc-hl)}
-.cc-step-label-done{color:var(--cc-up)}
-.cc-step-line{height:2px;flex:1;margin-top:14px;background:var(--cc-muted-2);border-radius:2px;transition:background .2s}
-.cc-step-line-done{background:var(--cc-up)}
+/* STEP BAR — SIGNATURE */
+.cc-steps{
+  display:flex;align-items:flex-start;gap:0;
+  margin:0 -2px 16px;
+}
+.cc-step{display:flex;flex-direction:column;align-items:center;flex:0 0 auto;width:48px}
+.cc-step-num{
+  width:44px;height:44px;border-radius:16px;
+  background:var(--glass-strong);border:1.5px solid var(--hairline);
+  display:grid;place-items:center;
+  font-family:"Instrument Serif",serif;font-style:italic;font-size:20px;line-height:1;
+  color:var(--ink-3);transition:all .3s;
+}
+.cc-step.cc-step-active .cc-step-num{
+  background:linear-gradient(135deg,#4f7dff,#a87fff);
+  border-color:#4f7dff;color:#fff;
+  animation:cc-glow 2s ease-in-out infinite;
+}
+.cc-step.cc-step-done .cc-step-num{
+  background:linear-gradient(135deg,#7FFFD4,#A0E7FF);
+  border-color:#7FFFD4;color:var(--ink);
+}
+.cc-step-label{
+  margin-top:7px;
+  font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;
+  color:var(--ink-3);letter-spacing:0.8px;text-transform:uppercase;
+  transition:color .3s;
+}
+.cc-step.cc-step-active .cc-step-label{color:var(--blue)}
+.cc-step.cc-step-done .cc-step-label{color:var(--green)}
+.cc-step-line{
+  flex:1;height:2px;margin-top:21px;
+  background:var(--hairline);border-radius:2px;transition:background .3s;
+}
+.cc-step-line.cc-step-line-done{background:linear-gradient(90deg,#7FFFD4,#A0E7FF)}
 
-/* IO BOXES */
-.cc-io-box{background:rgba(255,255,255,.025);border-radius:14px;padding:14px;border:1.5px solid var(--cc-border);transition:border-color .15s}
-.cc-io-box:focus-within{border-color:var(--cc-border-hi);box-shadow:0 0 0 3px rgba(79,125,255,.08)}
-.cc-io-box+.cc-io-box{margin-top:0}
-.cc-io-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:8px;flex-wrap:wrap}
-.cc-io-label{font-family:var(--cc-font-mono);font-size:10px;color:var(--cc-muted);font-weight:800;letter-spacing:.12em;text-transform:uppercase}
+/* I/O BOX */
+.cc-io-box{
+  background:var(--glass-strong);border:1.5px solid rgba(255,255,255,.85);
+  border-radius:18px;padding:14px 16px;
+  transition:border-color .15s,box-shadow .15s;
+}
+.cc-io-box:focus-within{border-color:var(--border-hi);box-shadow:0 0 0 4px rgba(79,125,255,.08)}
+.cc-io-head{
+  display:flex;justify-content:space-between;align-items:center;gap:8px;
+  margin-bottom:10px;flex-wrap:wrap;
+}
+.cc-io-label{
+  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;
+  color:var(--ink-2);letter-spacing:1.4px;text-transform:uppercase;
+}
 .cc-io-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.cc-io-bal{font-family:var(--cc-font-mono);font-size:10px;color:var(--cc-muted);font-weight:600}
-.cc-io-bal-val{color:var(--cc-ink-str);font-weight:800}
+.cc-io-bal{
+  font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-2);font-weight:500;
+}
+.cc-io-bal-val{color:var(--ink);font-weight:700}
 
 .cc-io-row{display:flex;align-items:center;gap:10px}
-.cc-token-btn{display:flex;align-items:center;gap:7px;padding:9px 12px;background:linear-gradient(135deg,#1a1f2e,#101015);border:1.5px solid rgba(255,255,255,.14);border-radius:999px;color:var(--cc-ink-str);font-family:var(--cc-font-display);font-size:13px;font-weight:800;cursor:pointer;transition:all .15s;flex-shrink:0;box-shadow:0 2px 8px rgba(0,0,0,.25),inset 0 -1px 0 rgba(0,0,0,.15);min-width:110px}
-.cc-token-btn:hover:not(:disabled){border-color:var(--cc-hl);box-shadow:0 2px 12px rgba(79,125,255,.18),inset 0 -1px 0 rgba(0,0,0,.15)}
-.cc-token-btn:active{transform:translateY(1px)}
+.cc-token-btn{
+  display:flex;align-items:center;gap:8px;padding:8px 12px;
+  background:#fff;border:1px solid var(--border);border-radius:999px;
+  color:var(--ink);font-family:inherit;font-size:13px;font-weight:700;
+  cursor:pointer;flex-shrink:0;transition:all .15s;
+  box-shadow:0 2px 8px rgba(26,27,78,.06);
+}
+.cc-token-btn:hover:not(:disabled){border-color:var(--blue);box-shadow:0 2px 12px rgba(79,125,255,.18)}
+.cc-token-btn:active:not(:disabled){transform:translateY(1px)}
 .cc-token-btn:disabled{cursor:not-allowed;opacity:.6}
-.cc-token-sym{color:var(--cc-ink-str);font-weight:800;font-size:13px;font-family:var(--cc-font-display);letter-spacing:-.01em}
-.cc-token-caret{color:var(--cc-muted);font-size:11px}
+.cc-token-sym{font-family:"Instrument Serif",serif;font-size:17px;font-style:italic;letter-spacing:-.01em;color:var(--ink)}
+.cc-token-caret{font-size:10px;color:var(--ink-3);margin-left:-2px}
 
-.cc-io-input{flex:1;background:transparent;border:none;font-family:var(--cc-font-display);font-size:24px;font-weight:900;color:var(--cc-ink-str);text-align:right;outline:none;font-variant-numeric:tabular-nums;letter-spacing:-.02em;min-width:0;width:100%}
+.cc-io-input{
+  flex:1;background:transparent;border:none;outline:none;
+  font-family:"Instrument Serif",serif;font-size:34px;line-height:1;
+  color:var(--ink);text-align:right;font-variant-numeric:tabular-nums;
+  min-width:0;width:100%;
+}
 .cc-io-input:disabled{opacity:.5}
-.cc-io-input::placeholder{color:var(--cc-muted-2);font-weight:700}
+.cc-io-input::placeholder{color:var(--ink-3)}
 
-.cc-io-output{flex:1;text-align:right;font-family:var(--cc-font-display);font-size:24px;font-weight:900;color:var(--cc-muted-2);font-variant-numeric:tabular-nums;letter-spacing:-.02em;min-width:0;overflow:hidden;text-overflow:ellipsis}
-.cc-io-output-active{color:var(--cc-hl)}
-.cc-io-output-loading{font-size:16px;color:var(--cc-muted)}
+.cc-io-output{
+  flex:1;text-align:right;
+  font-family:"Instrument Serif",serif;font-size:34px;line-height:1;
+  color:var(--ink);font-variant-numeric:tabular-nums;
+  min-width:0;overflow:hidden;text-overflow:ellipsis;
+}
+.cc-io-output-loading{color:var(--ink-3);font-size:24px}
+.cc-io-output-empty{color:var(--ink-3)}
 
-.cc-max-btn{background:var(--cc-hl-dim);border:1px solid var(--cc-border-hi);color:var(--cc-hl);padding:6px 10px;border-radius:8px;font-family:var(--cc-font-mono);font-size:10px;font-weight:800;cursor:pointer;letter-spacing:.08em;transition:all .15s;flex-shrink:0}
-.cc-max-btn:hover{background:rgba(79,125,255,.22);box-shadow:0 0 10px rgba(79,125,255,.2)}
+.cc-max-btn{
+  background:rgba(79,125,255,.10);border:1px solid var(--border);color:var(--blue);
+  padding:6px 10px;border-radius:10px;
+  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;cursor:pointer;
+  letter-spacing:0.8px;flex-shrink:0;transition:all .15s;
+}
+.cc-max-btn:hover{background:rgba(79,125,255,.18)}
 
-.cc-io-usd{text-align:right;margin-top:6px;font-family:var(--cc-font-mono);font-size:10px;color:var(--cc-muted);font-weight:600}
-.cc-route-meta{margin-top:10px;font-family:var(--cc-font-mono);font-size:10px;color:var(--cc-muted);display:flex;justify-content:space-between;letter-spacing:.04em;font-weight:600}
+.cc-io-usd{
+  text-align:right;margin-top:6px;
+  font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ink-2);font-weight:500;
+}
 
-/* FLIP ARROW */
-.cc-flip-wrap{display:flex;justify-content:center;margin:-6px 0;position:relative;z-index:2}
-.cc-flip-arrow{width:40px;height:40px;border-radius:12px;background:linear-gradient(135deg,var(--cc-hl),var(--cc-violet));border:3px solid var(--cc-card);display:grid;place-items:center;color:#fff;font-size:18px;font-weight:900;box-shadow:0 4px 18px rgba(168,127,255,.35),inset 0 -2px 0 rgba(0,0,0,.15)}
+/* ROUTE META (inside RECEIVE box) */
+.cc-route-meta{
+  margin-top:10px;padding-top:10px;border-top:1px dashed var(--hairline);
+  display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;
+  font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-2);font-weight:600;
+  letter-spacing:0.6px;
+}
+.cc-route-meta b{color:var(--ink);font-weight:700}
+.cc-route-via{display:flex;align-items:center;gap:6px}
+.cc-route-tag{
+  padding:2px 7px;border-radius:5px;
+  background:rgba(79,125,255,.10);border:1px solid var(--border);
+  color:var(--blue);font-weight:700;letter-spacing:0.4px;text-transform:uppercase;
+}
+
+/* FLIP — soft glass tile with italic violet arrow */
+.cc-flip-wrap{display:flex;justify-content:center;margin:-12px 0;position:relative;z-index:3}
+.cc-flip-arrow{
+  width:42px;height:42px;border-radius:14px;
+  background:linear-gradient(135deg,#fff,#F5F8FF);
+  border:3px solid #EEF3FF;
+  display:grid;place-items:center;
+  font-family:"Instrument Serif",serif;font-style:italic;font-size:22px;color:var(--violet);line-height:1;
+  box-shadow:0 6px 18px rgba(168,127,255,.18);
+  transition:transform .3s;
+}
 
 /* CHAIN BADGE */
-.cc-chain-badge{display:inline-flex;align-items:center;gap:5px;border:1px solid;border-radius:6px;padding:3px 8px;font-family:var(--cc-font-display);font-size:10px;font-weight:800;letter-spacing:.02em}
-.cc-chain-badge-sm{padding:2px 6px;font-size:9px}
-.cc-chain-dot{width:6px;height:6px;border-radius:50%}
+.cc-chain-badge{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:3px 9px;border-radius:7px;
+  font-family:"Space Grotesk",sans-serif;font-size:10px;font-weight:700;
+  letter-spacing:0.4px;text-transform:uppercase;
+}
+.cc-chain-badge-sm{padding:2px 7px;font-size:9px}
+.cc-chain-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
 .cc-chain-badge-sm .cc-chain-dot{width:5px;height:5px}
 
 /* DESTINATION */
-.cc-dest{margin-top:14px}
-.cc-dest-label{font-family:var(--cc-font-mono);font-size:10px;color:var(--cc-muted);font-weight:800;letter-spacing:.12em;margin-bottom:8px;text-transform:uppercase}
-.cc-dest-chain{font-weight:600}
+.cc-dest{margin-top:12px}
+.cc-dest-label{
+  display:flex;align-items:center;gap:6px;
+  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;
+  color:var(--ink-2);letter-spacing:1.4px;text-transform:uppercase;margin-bottom:8px;
+}
+.cc-dest-chain{font-weight:700}
 .cc-dest-input-wrap{position:relative}
-.cc-dest-input{width:100%;background:rgba(255,255,255,.025);border:1.5px solid var(--cc-border);border-radius:12px;padding:13px 14px;color:var(--cc-ink-str);font-family:var(--cc-font-mono);font-size:13px;outline:none;transition:border-color .15s}
-.cc-dest-input:focus{border-color:var(--cc-hl);box-shadow:0 0 0 3px rgba(79,125,255,.08)}
-.cc-dest-input:disabled{opacity:.5}
-.cc-dest-err{border-color:var(--cc-down)}
-.cc-dest-ok{border-color:var(--cc-up)}
-.cc-dest-check{position:absolute;right:14px;top:50%;transform:translateY(-50%);color:var(--cc-up);font-size:16px;font-weight:900}
-.cc-dest-err-msg{margin-top:6px;font-family:var(--cc-font-mono);font-size:11px;color:var(--cc-down);font-weight:600}
+.cc-dest-input{
+  width:100%;padding:13px 42px 13px 14px;
+  background:var(--glass-strong);border:1.5px solid rgba(255,255,255,.85);
+  border-radius:12px;color:var(--ink);
+  font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:600;
+  outline:none;transition:border-color .15s,box-shadow .15s;
+}
+.cc-dest-input:focus{border-color:var(--blue);box-shadow:0 0 0 4px rgba(79,125,255,.10)}
+.cc-dest-input:disabled{opacity:.55}
+.cc-dest-input::placeholder{color:var(--ink-3);font-weight:500}
+.cc-dest-err{border-color:rgba(209,75,106,.5)}
+.cc-dest-ok{border-color:rgba(127,255,212,.6)}
+.cc-dest-check{
+  position:absolute;right:12px;top:50%;transform:translateY(-50%);
+  width:22px;height:22px;border-radius:50%;
+  background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink);
+  display:grid;place-items:center;font-size:13px;font-weight:800;
+}
+.cc-dest-err-msg{
+  margin-top:6px;font-family:"JetBrains Mono",monospace;font-size:11px;
+  color:var(--red);font-weight:600;
+}
 
 /* MESSAGES */
-.cc-warn{margin-top:10px;padding:11px 13px;background:rgba(245,181,61,.08);border:1px solid rgba(245,181,61,.22);border-radius:10px;font-size:12px;color:var(--cc-warn);font-weight:600;font-family:var(--cc-font-body)}
-.cc-error{margin-top:10px;padding:11px 13px;background:rgba(255,85,102,.08);border:1px solid rgba(255,85,102,.24);border-radius:10px;font-size:12px;color:var(--cc-down);font-weight:600;font-family:var(--cc-font-body)}
-.cc-status{margin-top:10px;padding:11px 13px;background:rgba(79,125,255,.06);border:1px solid rgba(79,125,255,.22);border-radius:10px;font-size:12px;color:var(--cc-hl);display:flex;align-items:center;gap:10px;font-weight:600;font-family:var(--cc-font-body)}
-.cc-spinner{width:12px;height:12px;border-radius:50%;border:2px solid var(--cc-hl-dim);border-top-color:var(--cc-hl);animation:cc-spin .8s linear infinite;flex-shrink:0}
-
-/* ROUTE DETAILS */
-.cc-route-details{margin-top:12px;background:rgba(79,125,255,.04);border-radius:12px;padding:12px 14px;border:1px solid rgba(79,125,255,.18);font-family:var(--cc-font-mono);font-size:11px}
-.cc-detail-row{display:flex;justify-content:space-between;padding:4px 0;gap:8px}
-.cc-detail-key{color:var(--cc-muted);font-weight:600}
-.cc-detail-val{color:var(--cc-ink-str);font-weight:800;text-align:right;font-variant-numeric:tabular-nums}
-.cc-detail-note{margin-top:10px;padding-top:10px;border-top:1px solid rgba(79,125,255,.16);font-size:10.5px;color:var(--cc-muted);line-height:1.5;font-weight:500;font-family:var(--cc-font-body)}
+.cc-status{
+  margin-top:14px;padding:12px 14px;border-radius:14px;
+  background:rgba(79,125,255,.08);border:1px solid var(--border);
+  display:flex;align-items:center;gap:10px;
+  font-size:12px;font-weight:600;color:var(--blue);font-family:"Space Grotesk",sans-serif;
+}
+.cc-spinner{
+  width:14px;height:14px;border-radius:50%;flex-shrink:0;
+  border:2px solid rgba(79,125,255,.20);border-top-color:var(--blue);
+  animation:cc-spin .8s linear infinite;
+}
+.cc-warn{
+  margin-top:14px;padding:12px 14px;border-radius:14px;
+  background:rgba(255,176,136,.14);border:1px solid rgba(255,176,136,.45);
+  font-size:12px;font-weight:600;color:#8a4a1d;font-family:"Space Grotesk",sans-serif;
+}
+.cc-error{
+  margin-top:14px;padding:12px 14px;border-radius:14px;
+  background:rgba(209,75,106,.10);border:1px solid rgba(209,75,106,.35);
+  font-size:12px;font-weight:600;color:var(--red);font-family:"Space Grotesk",sans-serif;
+}
 
 /* SUCCESS */
-.cc-success{margin-top:12px;padding:16px;background:rgba(79,125,255,.06);border:1.5px solid rgba(79,125,255,.24);border-radius:14px;text-align:center;animation:cc-rise .4s}
-.cc-success-pending{background:rgba(245,181,61,.06);border-color:rgba(245,181,61,.24)}
-.cc-success-icon{font-size:26px;margin-bottom:6px}
-.cc-success-title{color:var(--cc-hl);font-family:var(--cc-font-display);font-weight:900;font-size:15px;letter-spacing:-.01em}
-.cc-success-pending .cc-success-title{color:var(--cc-warn)}
-.cc-success-sub{color:var(--cc-muted);font-size:11.5px;margin-top:4px;font-family:var(--cc-font-body)}
+.cc-success{
+  margin-top:14px;padding:16px;border-radius:18px;text-align:center;
+  background:linear-gradient(135deg,rgba(127,255,212,.18),rgba(160,231,255,.18));
+  border:1px solid rgba(127,255,212,.45);
+  animation:cc-rise .4s;
+}
+.cc-success-pending{
+  background:linear-gradient(135deg,rgba(255,205,107,.18),rgba(255,176,136,.18));
+  border-color:rgba(255,205,107,.45);
+}
+.cc-success-icon{font-size:24px;margin-bottom:4px;line-height:1}
+.cc-success-title{
+  font-family:"Instrument Serif",serif;font-size:18px;color:var(--ink);letter-spacing:-.01em;line-height:1.1;
+}
+.cc-success-pending .cc-success-title{color:#7a5400}
+.cc-success-sub{
+  margin-top:4px;font-size:12px;color:var(--ink-2);font-weight:500;
+}
 
 /* CTA */
-.cc-cta{width:100%;margin-top:14px;padding:18px;border-radius:14px;border:none;font-family:var(--cc-font-display);font-weight:900;font-size:15px;min-height:56px;letter-spacing:.04em;cursor:pointer;transition:all .15s;color:inherit;position:relative;overflow:hidden}
-.cc-cta-primary{background:linear-gradient(135deg,var(--cc-hl),var(--cc-violet));color:#fff;box-shadow:0 10px 30px -8px rgba(168,127,255,.5),0 4px 14px rgba(79,125,255,.3),inset 0 2px 0 rgba(255,255,255,.25),inset 0 -2px 0 rgba(0,0,0,.15)}
-.cc-cta-primary::after{content:'';position:absolute;top:0;bottom:0;width:70px;left:-110px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent);animation:cc-shimmer 2.8s ease-in-out infinite;pointer-events:none}
-.cc-cta-primary:active:not(:disabled){transform:translateY(3px)}
-.cc-cta-success{background:linear-gradient(135deg,var(--cc-up),var(--cc-hl-2));color:#03060f;box-shadow:0 8px 28px rgba(0,255,163,.35),0 4px 0 rgba(0,0,0,.25)}
-.cc-cta-error{background:rgba(255,85,102,.15);color:var(--cc-down);border:1.5px solid rgba(255,85,102,.35)}
-.cc-cta-disabled{background:linear-gradient(135deg,#2a2a35,#1f1f28);color:var(--cc-muted-2);cursor:not-allowed;border:1.5px solid var(--cc-border)}
-.cc-cta-disabled::after{display:none}
-.cc-cta-reset{background:rgba(79,125,255,.06);color:var(--cc-hl);border:1.5px solid var(--cc-border-hi)}
-.cc-cta-reset:hover{background:rgba(79,125,255,.12)}
-.cc-cta-spinner{margin-right:8px;display:inline-block;animation:cc-spin .8s linear infinite}
+.cc-cta{
+  width:100%;margin-top:14px;padding:18px;border-radius:18px;border:none;
+  font-family:"Instrument Serif",serif;font-size:19px;letter-spacing:-.01em;
+  color:#fff;cursor:pointer;
+  background:linear-gradient(135deg,#4f7dff,#a87fff);
+  box-shadow:0 10px 28px rgba(79,125,255,.32),inset 0 1px 0 rgba(255,255,255,.25);
+  transition:transform .15s,box-shadow .15s,opacity .15s;
+  position:relative;overflow:hidden;min-height:56px;
+}
+.cc-cta em{font-style:italic;opacity:.9;margin:0 4px}
+.cc-cta:hover:not(.cc-cta-disabled){transform:translateY(-1px)}
+.cc-cta:active:not(.cc-cta-disabled){transform:translateY(1px)}
+.cc-cta-spinner{display:inline-block;margin-right:8px;animation:cc-spin .8s linear infinite}
+.cc-cta-success{
+  background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink);
+  box-shadow:0 10px 28px rgba(127,255,212,.32),inset 0 1px 0 rgba(255,255,255,.25);
+}
+.cc-cta-error{
+  background:rgba(209,75,106,.14);color:var(--red);
+  border:1.5px solid rgba(209,75,106,.40);box-shadow:none;
+}
+.cc-cta-disabled{
+  background:rgba(26,27,78,.06);color:var(--ink-3);
+  border:1.5px solid var(--hairline);box-shadow:none;
+  cursor:not-allowed;
+}
+.cc-cta-reset{
+  background:rgba(79,125,255,.10);color:var(--blue);
+  border:1.5px solid var(--border);box-shadow:none;
+}
+.cc-cta-reset:hover{background:rgba(79,125,255,.18)}
 
-.cc-solscan-link{display:block;text-align:center;margin-top:10px;font-family:var(--cc-font-mono);font-size:11px;color:var(--cc-hl);font-weight:800;text-decoration:none;letter-spacing:.04em}
+.cc-solscan-link{
+  display:block;text-align:center;margin-top:10px;
+  font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--blue);
+  font-weight:700;text-decoration:none;letter-spacing:0.6px;
+}
 .cc-solscan-link:hover{text-decoration:underline}
-.cc-footer-note{text-align:center;font-family:var(--cc-font-mono);font-size:10px;color:var(--cc-muted-2);margin-top:14px;font-weight:600;letter-spacing:.04em}
+.cc-footer-note{
+  margin-top:14px;text-align:center;
+  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:500;color:var(--ink-3);
+  letter-spacing:0.6px;
+}
 
-/* MODALS */
-.cc-modal-backdrop{position:fixed;inset:0;z-index:499;background:rgba(3,6,15,.85);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px)}
-.cc-modal{position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:500;background:linear-gradient(180deg,#101015,var(--cc-card));border:1.5px solid var(--cc-border-hi);border-radius:22px;width:94vw;max-width:440px;max-height:85dvh;display:flex;flex-direction:column;box-shadow:0 24px 80px rgba(0,0,0,.95);animation:cc-modal-in .25s cubic-bezier(.2,1.2,.4,1)}
+/* TOKEN ICON */
+.cc-token-img{border-radius:50%;flex-shrink:0;object-fit:cover;background:rgba(79,125,255,.06)}
+.cc-token-fallback{
+  border-radius:50%;flex-shrink:0;
+  background:linear-gradient(135deg,rgba(79,125,255,.18),rgba(168,127,255,.18));
+  border:1px solid var(--border);
+  display:grid;place-items:center;
+  font-family:"Instrument Serif",serif;font-style:italic;color:var(--blue);
+}
+
+/* MODALS — light Wonderland */
+.cc-modal-backdrop{
+  position:fixed;inset:0;z-index:499;
+  background:rgba(26,27,78,0.35);
+  backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);
+}
+.cc-modal{
+  position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);z-index:500;
+  width:94vw;max-width:440px;max-height:85dvh;
+  display:flex;flex-direction:column;
+  background:
+    radial-gradient(ellipse at 20% 0%,#E4F2FF 0%,transparent 50%),
+    radial-gradient(ellipse at 80% 0%,#F0E7FF 0%,transparent 50%),
+    linear-gradient(180deg,#F5F8FF 0%,#EEF3FF 100%);
+  border:1px solid rgba(255,255,255,.85);border-radius:24px;
+  box-shadow:0 24px 80px rgba(26,27,78,.25);
+  animation:cc-modal-in .25s cubic-bezier(.2,1.2,.4,1);
+  overflow:hidden;
+}
 .cc-modal-to{max-width:460px;max-height:88dvh}
-
-.cc-modal-head{padding:18px 18px 12px;border-bottom:1px solid var(--cc-border)}
+.cc-modal-head{padding:18px 18px 12px;border-bottom:1px solid var(--hairline)}
 .cc-modal-head-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-.cc-modal-title{color:var(--cc-ink-str);font-family:var(--cc-font-display);font-weight:800;font-size:17px;letter-spacing:-.02em}
-.cc-modal-sub{font-size:11px;color:var(--cc-muted);font-weight:500}
-.cc-modal-close{background:rgba(255,255,255,.05);border:1px solid var(--cc-border);border-radius:10px;width:32px;height:32px;color:var(--cc-ink);cursor:pointer;font-size:16px;display:grid;place-items:center;transition:all .15s}
-.cc-modal-close:hover{background:rgba(255,255,255,.1);transform:rotate(90deg)}
+.cc-modal-title{
+  font-family:"Instrument Serif",serif;font-size:22px;letter-spacing:-.015em;color:var(--ink);line-height:1;
+}
+.cc-modal-title em{
+  font-style:italic;
+  background:linear-gradient(120deg,#4f7dff,#a87fff);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+}
+.cc-modal-sub{font-size:11px;color:var(--ink-2);font-weight:500;margin-left:6px}
+.cc-modal-close{
+  width:34px;height:34px;border-radius:50%;
+  background:var(--glass-strong);border:1px solid var(--border);
+  color:var(--ink);font-size:18px;cursor:pointer;font-family:inherit;
+  display:grid;place-items:center;transition:all .15s;
+}
+.cc-modal-close:hover{background:#fff;border-color:var(--blue)}
 
-.cc-modal-search{width:100%;background:#1a1a22;border:1.5px solid var(--cc-border);border-radius:10px;padding:11px 13px;color:var(--cc-ink-str);font-family:var(--cc-font-body);font-size:13px;outline:none;font-weight:500;transition:border-color .15s}
-.cc-modal-search:focus{border-color:var(--cc-hl);box-shadow:0 0 0 3px rgba(79,125,255,.1)}
-.cc-modal-search::placeholder{color:var(--cc-muted-2)}
+.cc-modal-search{
+  width:100%;padding:11px 13px;
+  background:var(--glass-strong);border:1.5px solid var(--border);
+  border-radius:12px;color:var(--ink);
+  font-family:inherit;font-size:13px;font-weight:500;
+  outline:none;transition:border-color .15s,box-shadow .15s;
+}
+.cc-modal-search:focus{border-color:var(--blue);box-shadow:0 0 0 4px rgba(79,125,255,.10)}
+.cc-modal-search::placeholder{color:var(--ink-3)}
 
 .cc-chain-chips{display:flex;gap:6px;overflow-x:auto;padding:10px 0 2px;scrollbar-width:none}
 .cc-chain-chips::-webkit-scrollbar{display:none}
-.cc-chain-chip{flex-shrink:0;padding:5px 11px;border-radius:20px;border:1.5px solid var(--cc-muted-2);background:transparent;color:var(--cc-muted);font-family:var(--cc-font-display);font-size:11px;font-weight:800;cursor:pointer;letter-spacing:.02em;transition:all .15s}
+.cc-chain-chip{
+  flex-shrink:0;padding:6px 12px;border-radius:999px;
+  background:var(--glass);border:1px solid var(--border);
+  color:var(--ink-2);font-family:inherit;font-size:11px;font-weight:700;letter-spacing:0.4px;
+  cursor:pointer;white-space:nowrap;transition:all .15s;
+}
+.cc-chain-chip:hover{border-color:var(--blue);color:var(--ink)}
 
 .cc-modal-body{overflow-y:auto;-webkit-overflow-scrolling:touch;flex:1;padding-bottom:env(safe-area-inset-bottom)}
-.cc-modal-loading,.cc-modal-empty{padding:28px;text-align:center;color:var(--cc-muted);font-size:12.5px;font-weight:500;font-family:var(--cc-font-body)}
-.cc-modal-section{padding:10px 18px 6px;font-family:var(--cc-font-mono);font-size:10px;color:var(--cc-muted);font-weight:800;letter-spacing:.12em}
-.cc-modal-row{padding:12px 18px;cursor:pointer;display:flex;align-items:center;gap:12px;border-bottom:1px solid rgba(255,255,255,.03);transition:background .15s}
-.cc-modal-row:hover{background:rgba(79,125,255,.06)}
+.cc-modal-loading,.cc-modal-empty{padding:28px;text-align:center;color:var(--ink-2);font-size:12.5px;font-weight:500}
+.cc-modal-section{
+  padding:12px 18px 6px;
+  font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-2);font-weight:700;
+  letter-spacing:1.4px;text-transform:uppercase;
+}
+.cc-modal-row{
+  padding:12px 18px;cursor:pointer;
+  display:flex;align-items:center;gap:12px;
+  border-bottom:1px solid var(--hairline);
+  transition:background .15s;
+}
+.cc-modal-row:last-child{border-bottom:none}
+.cc-modal-row:hover{background:rgba(255,255,255,.5)}
 .cc-modal-row-info{flex:1;min-width:0}
-.cc-modal-row-sym{color:var(--cc-ink-str);font-family:var(--cc-font-display);font-weight:800;font-size:13.5px;letter-spacing:-.01em}
-.cc-modal-row-name{color:var(--cc-muted);font-size:11.5px;font-weight:500}
+.cc-modal-row-sym{
+  font-family:"Instrument Serif",serif;font-size:17px;font-style:italic;
+  color:var(--ink);letter-spacing:-.01em;line-height:1;
+}
+.cc-modal-row-name{
+  font-size:11.5px;color:var(--ink-2);font-weight:500;margin-top:3px;
+}
 .cc-truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-
-/* TOKEN ICON */
-.cc-token-img{border-radius:50%;flex-shrink:0;object-fit:cover;background:rgba(255,255,255,.04)}
-.cc-token-fallback{border-radius:50%;flex-shrink:0;background:rgba(79,125,255,.1);border:1px solid rgba(79,125,255,.2);display:grid;place-items:center;font-family:var(--cc-font-display);font-weight:800;color:var(--cc-hl)}
 `;
 
 function useCcCSS() {
@@ -560,7 +839,10 @@ const TokenIcon = ({ token, size = 32 }) => {
   }
   const ch = token?.symbol ? token.symbol.charAt(0).toUpperCase() : '?';
   return (
-    <div className="cc-token-fallback" style={{ width: size, height: size, fontSize: Math.round(size * 0.4) }}>{ch}</div>
+    <div
+      className="cc-token-fallback"
+      style={{ width: size, height: size, fontSize: Math.round(size * 0.5) }}
+    >{ch}</div>
   );
 };
 
@@ -570,7 +852,7 @@ const ChainBadge = ({ chain, small = false }) => {
   return (
     <div
       className={'cc-chain-badge' + (small ? ' cc-chain-badge-sm' : '')}
-      style={{ background: color + '22', borderColor: color + '55', color }}
+      style={{ background: color + '1f', color }}
     >
       <div className="cc-chain-dot" style={{ background: color }}/>
       {chain.name}
@@ -578,8 +860,8 @@ const ChainBadge = ({ chain, small = false }) => {
   );
 };
 
+// Step bar — signature element. Always rendered; idle = all subdued.
 const StepProgress = ({ step }) => {
-  if (step <= 0) return null;
   const steps = [
     { label: 'Quote',  id: 1 },
     { label: 'Sign',   id: 2 },
@@ -591,15 +873,13 @@ const StepProgress = ({ step }) => {
       {steps.map((s, i) => {
         const done   = step > s.id;
         const active = step === s.id;
+        const cls = 'cc-step' + (done ? ' cc-step-done' : active ? ' cc-step-active' : '');
+        const numLabel = s.id < 10 ? '0' + s.id : String(s.id);
         return (
           <React.Fragment key={s.id}>
-            <div className="cc-step">
-              <div className={'cc-step-circle' + (done ? ' cc-step-done' : active ? ' cc-step-active' : '')}>
-                {done ? '✓' : s.id}
-              </div>
-              <div className={'cc-step-label' + (done ? ' cc-step-label-done' : active ? ' cc-step-label-active' : '')}>
-                {s.label}
-              </div>
+            <div className={cls}>
+              <div className="cc-step-num">{done ? '✓' : numLabel}</div>
+              <div className="cc-step-label">{s.label}</div>
             </div>
             {i < steps.length - 1 && (
               <div className={'cc-step-line' + (done ? ' cc-step-line-done' : '')}/>
@@ -665,7 +945,7 @@ const FromTokenModal = ({ open, onClose, onSelect }) => {
         <div className="cc-modal-head">
           <div className="cc-modal-head-row">
             <div className="cc-modal-title">
-              From <span className="cc-modal-sub">· Solana</span>
+              From <em>solana</em>
             </div>
             <button onClick={close} className="cc-modal-close">✕</button>
           </div>
@@ -679,7 +959,7 @@ const FromTokenModal = ({ open, onClose, onSelect }) => {
         </div>
         <div className="cc-modal-body">
           {loading && <div className="cc-modal-loading">Loading tokens…</div>}
-          {!q.trim() && !loading && (<div className="cc-modal-section">POPULAR</div>)}
+          {!q.trim() && !loading && (<div className="cc-modal-section">Popular</div>)}
           {display.length === 0 && !loading && (<div className="cc-modal-empty">No matches</div>)}
           {display.map((t, i) => (
             <div
@@ -769,7 +1049,7 @@ const ToTokenModal = ({ open, onClose, onSelect, chains }) => {
         <div className="cc-modal-head">
           <div className="cc-modal-head-row">
             <div className="cc-modal-title">
-              To <span className="cc-modal-sub">· All Chains</span>
+              To <em>any chain</em>
             </div>
             <button onClick={close} className="cc-modal-close">✕</button>
           </div>
@@ -789,7 +1069,7 @@ const ToTokenModal = ({ open, onClose, onSelect, chains }) => {
                 <button
                   key={id}
                   onClick={() => setSel(id)}
-                  className={'cc-chain-chip' + (active ? ' cc-chain-chip-active' : '')}
+                  className="cc-chain-chip"
                   style={active ? { borderColor: color, background: color + '22', color } : undefined}
                 >
                   {id === 'all' ? 'All' : (chain?.name || ('Chain ' + id))}
@@ -1129,8 +1409,9 @@ export default function CrossChainSwap({ onConnectWallet }) {
     if (addrErr)      return 'Invalid Address';
     if (!quote)       return quoting ? 'Finding Route…' : 'No Route';
     if (solShortfall) return 'Need more SOL';
-    return `Bridge ${fromToken?.symbol || ''} → ${toToken?.symbol || ''}`;
+    return null; // render with italic arrow below
   };
+
   const btnDisabled = busy ||
     (wcon && (!fromAmt || (needsDest && !destAddr.trim()) || !!addrErr ||
               (!quote && !isError && !isSuccess) || !!solShortfall));
@@ -1139,166 +1420,180 @@ export default function CrossChainSwap({ onConnectWallet }) {
     if (isSuccess)  return 'cc-cta cc-cta-success';
     if (isError)    return 'cc-cta cc-cta-error';
     if (btnDisabled && wcon) return 'cc-cta cc-cta-disabled';
-    return 'cc-cta cc-cta-primary';
+    return 'cc-cta';
   };
 
   const fromChain = chains?.[String(LIFI_SOLANA_ID)] || { id: String(LIFI_SOLANA_ID), name: 'Solana', chainType: 'SVM' };
   const toChainDisplay = chains?.[String(toToken?.chainId)] || { id: toToken?.chainId, name: 'Chain ' + toToken?.chainId };
+  const toChainColor = chainColorOf(toChainDisplay);
+
+  const labelOverride = btnLabel();
 
   return (
     <div className="cc-page">
-      <div className="cc-card">
-        <StepProgress step={step}/>
+      <div className="cc-blob" style={{ width: 380, height: 380, background: '#A0E7FF', top: -100, right: -120 }}/>
+      <div className="cc-blob" style={{ width: 420, height: 420, background: '#B794F6', top: '35%', left: -160, animationDelay: '3s' }}/>
+      <div className="cc-blob" style={{ width: 300, height: 300, background: '#FFE8F4', bottom: '10%', right: -80, animationDelay: '6s' }}/>
 
-        {/* FROM */}
-        <div className="cc-io-box">
-          <div className="cc-io-head">
-            <span className="cc-io-label">You Send</span>
-            <div className="cc-io-meta">
-              <ChainBadge chain={fromChain} small/>
-              {fbd != null && (
-                <span className="cc-io-bal">Bal: <span className="cc-io-bal-val">{fmtTok(fbd)}</span></span>
-              )}
-            </div>
+      <div className="cc-inner">
+        <div className="cc-head">
+          <div className="cc-brand">
+            <div className="cc-brand-dot"/>
+            <span className="cc-wordmark">bridge<span className="slash">//</span><span className="grad">cross-chain</span></span>
           </div>
-          <div className="cc-io-row">
-            <button
-              onClick={() => !busy && setFromOpen(true)}
-              className="cc-token-btn"
-              disabled={busy}
-            >
-              <TokenIcon token={fromToken} size={20}/>
-              <span className="cc-token-sym">{fromToken?.symbol}</span>
-              {!busy && <span className="cc-token-caret">▾</span>}
-            </button>
-            <input
-              value={fromAmt}
-              onChange={e => { if (!busy) setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }}
-              placeholder="0.00"
-              inputMode="decimal"
-              disabled={busy}
-              className="cc-io-input"
-            />
-            {fbd > 0 && !busy && (<button onClick={onMax} className="cc-max-btn">MAX</button>)}
-          </div>
-          {fromUsd > 0 && (<div className="cc-io-usd">{fmtUsd(fromUsd)}</div>)}
+          <div className="cc-head-live"><span className="d"/>LI.FI</div>
         </div>
 
-        <div className="cc-flip-wrap"><div className="cc-flip-arrow">↓</div></div>
+        <div className="cc-mini-hero">
+          <div className="cc-mh-eyebrow">∞ ANY CHAIN</div>
+          <h1 className="cc-mh-title">Move it <em>anywhere.</em></h1>
+          <div className="cc-mh-sub">One transaction. Solana out, any chain in.</div>
+        </div>
 
-        {/* TO */}
-        <div className="cc-io-box">
-          <div className="cc-io-head">
-            <span className="cc-io-label">You Receive (Est.)</span>
-            {toToken && <ChainBadge chain={toChainDisplay} small/>}
-          </div>
-          <div className="cc-io-row">
-            <button
-              onClick={() => !busy && setToOpen(true)}
-              className="cc-token-btn"
-              disabled={busy}
-            >
-              <TokenIcon token={toToken} size={20}/>
-              <span className="cc-token-sym">{toToken?.symbol}</span>
-              {!busy && <span className="cc-token-caret">▾</span>}
-            </button>
-            <div className={'cc-io-output' + (quote ? ' cc-io-output-active' : '')}>
-              {quoting ? <span className="cc-io-output-loading">…</span> : (quote?.outDisplay || '0')}
+        <div className="cc-card">
+          <StepProgress step={step}/>
+
+          {/* FROM */}
+          <div className="cc-io-box">
+            <div className="cc-io-head">
+              <span className="cc-io-label">You Send</span>
+              <div className="cc-io-meta">
+                <ChainBadge chain={fromChain} small/>
+                {fbd != null && (
+                  <span className="cc-io-bal">Bal: <span className="cc-io-bal-val">{fmtTok(fbd)}</span></span>
+                )}
+              </div>
             </div>
+            <div className="cc-io-row">
+              <button
+                onClick={() => !busy && setFromOpen(true)}
+                className="cc-token-btn"
+                disabled={busy}
+              >
+                <TokenIcon token={fromToken} size={22}/>
+                <span className="cc-token-sym">{fromToken?.symbol}</span>
+                {!busy && <span className="cc-token-caret">▾</span>}
+              </button>
+              <input
+                value={fromAmt}
+                onChange={e => { if (!busy) setFromAmt(e.target.value.replace(/[^0-9.]/g, '')); }}
+                placeholder="0.00"
+                inputMode="decimal"
+                disabled={busy}
+                className="cc-io-input"
+              />
+              {fbd > 0 && !busy && (<button onClick={onMax} className="cc-max-btn">MAX</button>)}
+            </div>
+            {fromUsd > 0 && (<div className="cc-io-usd">≈ {fmtUsd(fromUsd)}</div>)}
           </div>
-          {tuv > 0 && (<div className="cc-io-usd">{fmtUsd(tuv)}</div>)}
-          {quote && (
-            <div className="cc-route-meta">
-              <span>via {quote.bridge}</span>
-              {quote.estTime && <span>~{Math.max(1, Math.ceil(quote.estTime / 60))} min</span>}
+
+          <div className="cc-flip-wrap"><div className="cc-flip-arrow">↓</div></div>
+
+          {/* TO */}
+          <div className="cc-io-box">
+            <div className="cc-io-head">
+              <span className="cc-io-label">You Receive (est.)</span>
+              {toToken && <ChainBadge chain={toChainDisplay} small/>}
+            </div>
+            <div className="cc-io-row">
+              <button
+                onClick={() => !busy && setToOpen(true)}
+                className="cc-token-btn"
+                disabled={busy}
+              >
+                <TokenIcon token={toToken} size={22}/>
+                <span className="cc-token-sym">{toToken?.symbol}</span>
+                {!busy && <span className="cc-token-caret">▾</span>}
+              </button>
+              <div className={'cc-io-output' + ((!quote && !quoting) ? ' cc-io-output-empty' : '')}>
+                {quoting ? <span className="cc-io-output-loading">…</span> : (quote?.outDisplay || '0')}
+              </div>
+            </div>
+            {tuv > 0 && (<div className="cc-io-usd">≈ {fmtUsd(tuv)}</div>)}
+            {quote && (
+              <div className="cc-route-meta">
+                <span className="cc-route-via">via <span className="cc-route-tag">{quote.bridge}</span></span>
+                <span>
+                  <b>{(SLIPPAGE * 100).toFixed(1)}%</b> slip
+                  {quote.estTime ? <> · <b>~{Math.max(1, Math.ceil(quote.estTime / 60))} min</b></> : null}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {needsDest && (
+            <div className="cc-dest">
+              <div className="cc-dest-label">
+                DESTINATION · <span className="cc-dest-chain" style={{ color: toChainColor }}>
+                  {(toChainDisplay?.name || '').toUpperCase()}
+                </span>
+              </div>
+              <div className="cc-dest-input-wrap">
+                <input
+                  value={destAddr}
+                  onChange={e => { if (!busy) setDestAddr(e.target.value.trim()); }}
+                  placeholder={
+                    toChainType === 'EVM'  ? '0x...'
+                    : toChainType === 'SVM' ? 'Solana address'
+                    : toChainType === 'UTXO' ? 'bc1... / 1... / 3...'
+                    : toChainType === 'MVM' ? '0x... (64 hex)'
+                    : 'Destination address'
+                  }
+                  disabled={busy}
+                  className={'cc-dest-input' + (addrErr ? ' cc-dest-err' : destAddr && !addrErr ? ' cc-dest-ok' : '')}
+                />
+                {destAddr && !addrErr && (<div className="cc-dest-check">✓</div>)}
+              </div>
+              {addrErr && <div className="cc-dest-err-msg">{addrErr}</div>}
             </div>
           )}
-        </div>
 
-        {needsDest && (
-          <div className="cc-dest">
-            <div className="cc-dest-label">
-              DESTINATION{' '}
-              <span className="cc-dest-chain" style={{ color: chainColorOf(toChainDisplay) }}>
-                · {toChainDisplay?.name}
-              </span>
+          {quoteErr && !quote && (<div className="cc-warn">{quoteErr}</div>)}
+
+          {solShortfall > 0 && quote && (
+            <div className="cc-warn">
+              You need ~{(solShortfall / LAMPORTS_PER_SOL).toFixed(4)} more SOL in your wallet to complete this bridge.
             </div>
-            <div className="cc-dest-input-wrap">
-              <input
-                value={destAddr}
-                onChange={e => { if (!busy) setDestAddr(e.target.value.trim()); }}
-                placeholder={
-                  toChainType === 'EVM'  ? '0x...'
-                  : toChainType === 'SVM' ? 'Solana address'
-                  : toChainType === 'UTXO' ? 'bc1... / 1... / 3...'
-                  : toChainType === 'MVM' ? '0x... (64 hex)'
-                  : 'Destination address'
-                }
-                disabled={busy}
-                className={'cc-dest-input' + (addrErr ? ' cc-dest-err' : destAddr && !addrErr ? ' cc-dest-ok' : '')}
-              />
-              {destAddr && !addrErr && (<div className="cc-dest-check">✓</div>)}
-            </div>
-            {addrErr && <div className="cc-dest-err-msg">{addrErr}</div>}
-          </div>
-        )}
+          )}
 
-        {quoteErr && !quote && (<div className="cc-warn">{quoteErr}</div>)}
+          {statusMsg && busy && (
+            <div className="cc-status"><div className="cc-spinner"/>{statusMsg}</div>
+          )}
 
-        {quote && fromAmt && (
-          <div className="cc-route-details">
-            {[
-              ['Route',        quote.bridge],
-              ['Slippage',     (SLIPPAGE * 100).toFixed(1) + '%'],
-              ['Est. time',    quote.estTime ? '~' + Math.max(1, Math.ceil(quote.estTime / 60)) + ' min' : '—'],
-            ].map(([k, v]) => (
-              <div key={k} className="cc-detail-row">
-                <span className="cc-detail-key">{k}</span>
-                <span className="cc-detail-val">{v}</span>
+          {swapErr && (<div className="cc-error">{swapErr}</div>)}
+
+          {isSuccess && (
+            <div className={'cc-success' + (pendingMsg ? ' cc-success-pending' : '')}>
+              <div className="cc-success-icon">{pendingMsg ? '⏳' : '🎉'}</div>
+              <div className="cc-success-title">{pendingMsg ? 'Bridge Submitted' : 'Bridge Submitted!'}</div>
+              <div className="cc-success-sub">
+                {pendingMsg || (quote?.estTime
+                  ? 'Funds arrive in ~' + Math.max(1, Math.ceil(quote.estTime / 60)) + ' min'
+                  : 'Funds arrive in a few minutes')}
               </div>
-            ))}
-          </div>
-        )}
-
-        {solShortfall > 0 && quote && (
-          <div className="cc-warn">
-            You need ~{(solShortfall / LAMPORTS_PER_SOL).toFixed(4)} more SOL in your wallet to complete this bridge.
-          </div>
-        )}
-
-        {statusMsg && busy && (<div className="cc-status"><div className="cc-spinner"/>{statusMsg}</div>)}
-
-        {swapErr && (<div className="cc-error">{swapErr}</div>)}
-
-        {isSuccess && (
-          <div className={'cc-success' + (pendingMsg ? ' cc-success-pending' : '')}>
-            <div className="cc-success-icon">{pendingMsg ? '⏳' : '🎉'}</div>
-            <div className="cc-success-title">{pendingMsg ? 'Bridge Submitted' : 'Bridge Submitted!'}</div>
-            <div className="cc-success-sub">
-              {pendingMsg || (quote?.estTime
-                ? 'Funds arrive in ~' + Math.max(1, Math.ceil(quote.estTime / 60)) + ' min'
-                : 'Funds arrive in a few minutes')}
             </div>
-          </div>
-        )}
+          )}
 
-        {!isSuccess ? (
-          <button
-            onClick={isError ? reset : (!wcon ? () => onConnectWallet?.() : execute)}
-            disabled={btnDisabled && !isError}
-            className={btnClass()}
-          >
-            {busy && <span className="cc-cta-spinner">⟳</span>}
-            {btnLabel()}
-          </button>
-        ) : (
-          <button onClick={reset} className="cc-cta cc-cta-reset">New Bridge</button>
-        )}
+          {!isSuccess ? (
+            <button
+              onClick={isError ? reset : (!wcon ? () => onConnectWallet?.() : execute)}
+              disabled={btnDisabled && !isError}
+              className={btnClass()}
+            >
+              {busy && <span className="cc-cta-spinner">⟳</span>}
+              {labelOverride != null ? labelOverride : (
+                <>Bridge {fromToken?.symbol || ''} <em>→</em> {toToken?.symbol || ''}</>
+              )}
+            </button>
+          ) : (
+            <button onClick={reset} className="cc-cta cc-cta-reset">New Bridge</button>
+          )}
 
-        {txSig && solscan && (
-          <a href={solscan} target="_blank" rel="noreferrer" className="cc-solscan-link">View on Solscan ↗</a>
-        )}
-        <p className="cc-footer-note">Non-custodial · LI.FI aggregator · Solana origin</p>
+          {txSig && solscan && (
+            <a href={solscan} target="_blank" rel="noreferrer" className="cc-solscan-link">View on Solscan ↗</a>
+          )}
+          <p className="cc-footer-note">Non-custodial · LI.FI aggregator · Solana origin</p>
+        </div>
       </div>
 
       <FromTokenModal
@@ -1315,4 +1610,3 @@ export default function CrossChainSwap({ onConnectWallet }) {
     </div>
   );
 }
- 
