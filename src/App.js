@@ -8,6 +8,7 @@ import CrossChainSwap   from './components/CrossChainSwap.jsx';
 import MemeWonderland   from './components/MemeWonderland.jsx';
 import LaunchRadar      from './components/LaunchRadar.jsx';
 import Flipsy           from './components/Flipsy.jsx';
+import GetStarted       from './components/GetStarted.jsx';
 
 const C = {
   bg: '#03060f', card: '#080d1a', border: 'rgba(0,229,255,0.10)',
@@ -562,11 +563,13 @@ const PATH_TO_TAB = {
   '/radar': 'launchradar', '/launch-radar': 'launchradar', '/launches': 'launchradar',
   '/markets': 'markets', '/tokenized': 'markets',
   '/flipsy': 'flipsy', '/predict': 'flipsy',
+  '/get-started': 'getstarted', '/wallet': 'getstarted',
   '/stack': 'swap', '/vip': 'swap', '/perps': 'swap', '/call': 'swap',
 };
 const TAB_TO_PATH = {
   swap: '/swap', bridge: '/bridge',
   wonderland: '/wonderland', launchradar: '/radar', markets: '/markets', flipsy: '/flipsy',
+  getstarted: '/get-started',
 };
 function tabFromPathname(pathname) { return PATH_TO_TAB[pathname] || 'swap'; }
 export function useAppWallet() { return useNexusWallet(); }
@@ -903,11 +906,13 @@ function IconBridge()     { return <svg width="18" height="18" viewBox="0 0 24 2
 function IconWonderland() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 2l2.4 6.4L21 10l-5.4 4 1.8 7L12 17.5 6.6 21l1.8-7L3 10l6.6-1.6L12 2z"/></svg>; }
 function IconFlipsy()     { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><path d="M8 10l4-4 4 4"/><path d="M8 14l4 4 4-4"/></svg>; }
 function IconLaunchRadar() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/><path d="M12 3v3"/><path d="M12 18v3"/><path d="M3 12h3"/><path d="M18 12h3"/></svg>; }
+function IconGetStarted() { return <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="7" width="18" height="13" rx="2.5"/><path d="M3 10h18"/><path d="M7 7V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v2"/><circle cx="17" cy="15" r="1.5" fill="currentColor" stroke="none"/></svg>; }
 
-const NAV_ICONS = { swap: IconSwap, launchradar: IconLaunchRadar, bridge: IconBridge, wonderland: IconWonderland, markets: IconMarkets, flipsy: IconFlipsy };
+const NAV_ICONS = { swap: IconSwap, launchradar: IconLaunchRadar, bridge: IconBridge, wonderland: IconWonderland, markets: IconMarkets, flipsy: IconFlipsy, getstarted: IconGetStarted };
 const NAV_TABS = [
   { id: 'swap', label: 'Swap' }, { id: 'launchradar', label: 'Radar' }, { id: 'bridge', label: 'Bridge' },
   { id: 'wonderland', label: 'Wonderland' }, { id: 'markets', label: 'Markets' }, { id: 'flipsy', label: 'Flipsy' },
+  { id: 'getstarted', label: 'Get\nStarted' },
 ];
 
 function AppInner() {
@@ -981,7 +986,7 @@ function AppInner() {
                 borderRadius: 8, padding: '5px 12px', color: tab === t.id ? C.accent : C.muted,
                 fontFamily: 'Syne, sans-serif', fontWeight: 600, fontSize: 12,
                 cursor: 'pointer', whiteSpace: 'nowrap', flexShrink: 0,
-              }}>{t.label}</button>
+              }}>{t.label.replace('\n', ' ')}</button>
             ))}
           </nav>
           <div className="mobile-nav" style={{ flex: 1 }} />
@@ -1011,6 +1016,7 @@ function AppInner() {
         {tab === 'wonderland' && <MemeWonderland onConnectWallet={openWallet} />}
         {tab === 'markets'    && <Stocks {...sharedProps} />}
         {tab === 'flipsy'     && <Flipsy onConnectWallet={openWallet} />}
+        {tab === 'getstarted' && <GetStarted onConnectWallet={openWallet} onSwitchTab={switchTab} />}
       </main>
       <nav className="mobile-nav" style={{
         position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 100,
@@ -1030,7 +1036,7 @@ function AppInner() {
             }}>
               {tab === t.id && (<div style={{ position: 'absolute', top: 0, left: '25%', right: '25%', height: 2, borderRadius: '0 0 2px 2px', background: C.accent }} />)}
               <Icon />
-              <span>{t.label}</span>
+              <span style={{ whiteSpace: 'pre-line', lineHeight: 1.1, textAlign: 'center' }}>{t.label}</span>
             </button>
           );
         })}
