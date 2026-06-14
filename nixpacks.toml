@@ -1,15 +1,15 @@
 [phases.setup]
-nixPkgs = ["nodejs_20", "python3"]
+nixPkgs = ["nodejs_22", "python3"]
 
 [phases.install]
 cmds = ["npm install --legacy-peer-deps"]
 
 [phases.build]
 cmds = [
-  "npm run build:all",
-  "mkdir -p build/verixia-embed",
-  "cp build/embed/verixia-swap.js build/verixia-embed/swap.js",
-  "echo '=== VERIXIA EMBED BUILT ===' && ls -lh build/verixia-embed/ && echo 'URL: https://swap.verixiaapps.com/verixia-embed/swap.js'"
+ "npm run build:all",
+ "mkdir -p build/verixia-embed",
+ "cp build/embed/verixia-swap.js build/verixia-embed/swap.js",
+ "echo '=== VERIXIA EMBED BUILT ===' && ls -lh build/verixia-embed/ && echo 'URL: https://swap.verixiaapps.com/verixia-embed/swap.js'"
 ]
 
 [variables]
