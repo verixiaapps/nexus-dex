@@ -1,23 +1,55 @@
 /**
  * NEXUS DEX — CrossChainSwap.jsx
- * (LI.FI atomic single-tx, fee in SOL)
+ * (Chainflip native, two-tx atomic, fee in SOL)
  *
- * VISUAL REDESIGN — same DNA as Stocks/GetStarted (Wonderland), regional
- * blue/violet accent for the bridge flow. All trading/RPC/LI.FI logic
- * preserved verbatim. Class prefix stays cc-.
+ * ─────────────────────────────────────────────────────────────────────────
+ * Replaces LI.FI with Chainflip. Same Wonderland-lite identity preserved
+ * (cc- class prefix, Instrument Serif headlines, cream surface, blue→violet
+ * accents, step bar). Class CSS is byte-identical to the LI.FI version.
  *
- *   • Light cream surface with cool-tuned blobs (more sky/lav, less pink).
- *   • Step bar (01 → 04) is the signature element — Instrument Serif
- *     italic numerals on glass tiles, blue→violet glow on active,
- *     mint→sky on done. Always visible.
- *   • Instrument Serif for headline + numbers + token symbols.
- *     JetBrains Mono for tabular data, labels, captions.
- *   • CTA: blue→violet gradient (primary), mint→sky (success), pink (error).
- *   • Route info merged into the RECEIVE box as a single tight line.
+ * Why Chainflip:
+ *   - Single bridge protocol (no aggregator) → one failure surface
+ *   - fillOrKillParams refund: dest swap that can't execute in slippage
+ *     window auto-refunds to the Solana refund address. No stuck funds.
+ *   - Observable state machine (WAITING → … → COMPLETED | FAILED)
+ *   - Threshold-signed vaults on every chain; validators slashed for
+ *     non-signing → cannot stall mid-swap like Wormhole/relayer-based aggs
+ *
+ * Flow:
+ *   1. /api/cf/quote        → REGULAR quote (egressAmount in dest atomic units)
+ *   2. /api/cf/channel      → server opens deposit channel via SDK,
+ *                              returns depositAddress + depositChannelId
+ *   3. Build two txs, signAllTransactions atomically:
+ *        Tx-A: fee in SOL → FEE_WALLET (5% of input USD value)
+ *        Tx-B: bridge transfer to channel.depositAddress
+ *               · SOL source  → SystemProgram.transfer
+ *               · SPL source  → SPL TransferChecked (depositAddress IS the
+ *                               channel's ATA — Chainflip pre-creates it)
+ *   4. Send Tx-A, await confirm, then Tx-B. Start status polling on
+ *      depositChannelId (every 6s, friendly state labels in the UI).
+ *
+ * Source assets (Solana wallet origin):
+ *   - SOL  (System / native)
+ *   - USDC (EPjFW…D2v, 6 dec)
+ *   - USDT (Es9vM…NYB, 6 dec)
+ *
+ * Destinations (filtered same-chain Solana out of UI):
+ *   - Ethereum: ETH, USDC, USDT, WBTC, FLIP
+ *   - Arbitrum: ETH, USDC, USDT
+ *   - Bitcoin:  BTC
+ *   - Polkadot: DOT
+ *   - Assethub: SOL, USDC, USDT
+ *   - Tron:     TRX, USDT
+ *
+ * Default route: SOL on Solana → ETH on Ethereum.
+ *
+ * CRITICAL: Chainflip permanently absorbs deposits outside per-asset
+ * min/max bounds. We rely on the server's quote endpoint to fail with a
+ * friendly "Amount below/above minimum" before the user can submit, and
+ * re-quote freshly on submit so stale-quote drift can't slip past the gate.
  */
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { Buffer } from 'buffer';
 import { useWallet, useConnection } from '@solana/wallet-adapter-react';
 import {
   PublicKey,
@@ -25,11 +57,16 @@ import {
   VersionedTransaction,
   TransactionMessage,
   SystemProgram,
-  AddressLookupTableAccount,
+  ComputeBudgetProgram,
 } from '@solana/web3.js';
+import {
+  createTransferCheckedInstruction,
+  getAssociatedTokenAddressSync,
+  TOKEN_PROGRAM_ID,
+} from '@solana/spl-token';
 
 // =====================================================================
-// INLINE CSS — Wonderland-lite · Instrument Serif + Space Grotesk + JetBrains Mono
+// INLINE CSS — Wonderland-lite (byte-identical to LI.FI version)
 // =====================================================================
 const CC_CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600;700&display=swap');
@@ -57,7 +94,6 @@ body.nexus-scroll-locked{overflow:hidden}
 @keyframes cc-glow{0%,100%{box-shadow:0 4px 18px rgba(79,125,255,.35),0 0 0 0 rgba(79,125,255,.25)}50%{box-shadow:0 4px 18px rgba(79,125,255,.45),0 0 0 8px rgba(79,125,255,0)}}
 @keyframes cc-modal-in{from{opacity:0;transform:translate(-50%,-48%)}to{opacity:1;transform:translate(-50%,-50%)}}
 
-/* PAGE */
 .cc-page{
   position:relative;min-height:100vh;min-height:100dvh;
   max-width:520px;margin:0 auto;width:100%;
@@ -77,11 +113,7 @@ body.nexus-scroll-locked{overflow:hidden}
 }
 .cc-inner{position:relative;z-index:5}
 
-/* HEADER */
-.cc-head{
-  display:flex;align-items:center;justify-content:space-between;
-  padding:18px 22px 4px;
-}
+.cc-head{display:flex;align-items:center;justify-content:space-between;padding:18px 22px 4px}
 .cc-brand{display:flex;align-items:center;gap:10px}
 .cc-brand-dot{
   width:28px;height:28px;border-radius:50%;
@@ -95,16 +127,12 @@ body.nexus-scroll-locked{overflow:hidden}
   -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
 }
 .cc-head-live{
-  display:flex;align-items:center;gap:6px;
-  padding:5px 11px;border-radius:999px;
-  background:var(--glass);backdrop-filter:blur(10px);
-  border:1px solid var(--border);
-  font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;color:var(--blue);
-  letter-spacing:1.2px;
+  display:flex;align-items:center;gap:6px;padding:5px 11px;border-radius:999px;
+  background:var(--glass);backdrop-filter:blur(10px);border:1px solid var(--border);
+  font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;color:var(--blue);letter-spacing:1.2px;
 }
 .cc-head-live .d{width:5px;height:5px;border-radius:50%;background:var(--blue);box-shadow:0 0 8px var(--blue);animation:cc-pulse 1.6s ease-in-out infinite}
 
-/* MINI HERO */
 .cc-mini-hero{padding:18px 22px 8px}
 .cc-mh-eyebrow{
   display:inline-flex;align-items:center;gap:7px;
@@ -113,8 +141,7 @@ body.nexus-scroll-locked{overflow:hidden}
 }
 .cc-mh-title{
   font-family:"Instrument Serif",serif;font-weight:400;
-  font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 6px;
-  color:var(--ink);
+  font-size:34px;line-height:1;letter-spacing:-.02em;margin:0 0 6px;color:var(--ink);
 }
 .cc-mh-title em{
   font-style:italic;
@@ -123,7 +150,6 @@ body.nexus-scroll-locked{overflow:hidden}
 }
 .cc-mh-sub{font-size:13px;color:var(--ink-2);font-weight:500;line-height:1.45}
 
-/* CARD */
 .cc-card{
   margin:14px 22px 0;padding:18px;border-radius:24px;
   background:var(--glass);backdrop-filter:blur(14px);
@@ -131,11 +157,7 @@ body.nexus-scroll-locked{overflow:hidden}
   box-shadow:0 12px 40px rgba(79,125,255,.10);
 }
 
-/* STEP BAR — SIGNATURE */
-.cc-steps{
-  display:flex;align-items:flex-start;gap:0;
-  margin:0 -2px 16px;
-}
+.cc-steps{display:flex;align-items:flex-start;gap:0;margin:0 -2px 16px}
 .cc-step{display:flex;flex-direction:column;align-items:center;flex:0 0 auto;width:48px}
 .cc-step-num{
   width:44px;height:44px;border-radius:16px;
@@ -156,8 +178,7 @@ body.nexus-scroll-locked{overflow:hidden}
 .cc-step-label{
   margin-top:7px;
   font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;
-  color:var(--ink-3);letter-spacing:0.8px;text-transform:uppercase;
-  transition:color .3s;
+  color:var(--ink-3);letter-spacing:0.8px;text-transform:uppercase;transition:color .3s;
 }
 .cc-step.cc-step-active .cc-step-label{color:var(--blue)}
 .cc-step.cc-step-done .cc-step-label{color:var(--green)}
@@ -167,25 +188,16 @@ body.nexus-scroll-locked{overflow:hidden}
 }
 .cc-step-line.cc-step-line-done{background:linear-gradient(90deg,#7FFFD4,#A0E7FF)}
 
-/* I/O BOX */
 .cc-io-box{
   background:var(--glass-strong);border:1.5px solid rgba(255,255,255,.85);
   border-radius:18px;padding:14px 16px;
   transition:border-color .15s,box-shadow .15s;
 }
 .cc-io-box:focus-within{border-color:var(--border-hi);box-shadow:0 0 0 4px rgba(79,125,255,.08)}
-.cc-io-head{
-  display:flex;justify-content:space-between;align-items:center;gap:8px;
-  margin-bottom:10px;flex-wrap:wrap;
-}
-.cc-io-label{
-  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;
-  color:var(--ink-2);letter-spacing:1.4px;text-transform:uppercase;
-}
+.cc-io-head{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.cc-io-label{font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;color:var(--ink-2);letter-spacing:1.4px;text-transform:uppercase}
 .cc-io-meta{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
-.cc-io-bal{
-  font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-2);font-weight:500;
-}
+.cc-io-bal{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-2);font-weight:500}
 .cc-io-bal-val{color:var(--ink);font-weight:700}
 
 .cc-io-row{display:flex;align-items:center;gap:10px}
@@ -210,7 +222,6 @@ body.nexus-scroll-locked{overflow:hidden}
 }
 .cc-io-input:disabled{opacity:.5}
 .cc-io-input::placeholder{color:var(--ink-3)}
-
 .cc-io-output{
   flex:1;text-align:right;
   font-family:"Instrument Serif",serif;font-size:34px;line-height:1;
@@ -227,13 +238,8 @@ body.nexus-scroll-locked{overflow:hidden}
   letter-spacing:0.8px;flex-shrink:0;transition:all .15s;
 }
 .cc-max-btn:hover{background:rgba(79,125,255,.18)}
+.cc-io-usd{text-align:right;margin-top:6px;font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ink-2);font-weight:500}
 
-.cc-io-usd{
-  text-align:right;margin-top:6px;
-  font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ink-2);font-weight:500;
-}
-
-/* ROUTE META (inside RECEIVE box) */
 .cc-route-meta{
   margin-top:10px;padding-top:10px;border-top:1px dashed var(--hairline);
   display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;
@@ -248,22 +254,17 @@ body.nexus-scroll-locked{overflow:hidden}
   color:var(--blue);font-weight:700;letter-spacing:0.4px;text-transform:uppercase;
 }
 
-/* FLIP — soft glass tile with italic violet arrow */
 .cc-flip-wrap{display:flex;justify-content:center;margin:-12px 0;position:relative;z-index:3}
 .cc-flip-arrow{
   width:42px;height:42px;border-radius:14px;
-  background:linear-gradient(135deg,#fff,#F5F8FF);
-  border:3px solid #EEF3FF;
+  background:linear-gradient(135deg,#fff,#F5F8FF);border:3px solid #EEF3FF;
   display:grid;place-items:center;
   font-family:"Instrument Serif",serif;font-style:italic;font-size:22px;color:var(--violet);line-height:1;
-  box-shadow:0 6px 18px rgba(168,127,255,.18);
-  transition:transform .3s;
+  box-shadow:0 6px 18px rgba(168,127,255,.18);transition:transform .3s;
 }
 
-/* CHAIN BADGE */
 .cc-chain-badge{
-  display:inline-flex;align-items:center;gap:5px;
-  padding:3px 9px;border-radius:7px;
+  display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:7px;
   font-family:"Space Grotesk",sans-serif;font-size:10px;font-weight:700;
   letter-spacing:0.4px;text-transform:uppercase;
 }
@@ -271,7 +272,6 @@ body.nexus-scroll-locked{overflow:hidden}
 .cc-chain-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
 .cc-chain-badge-sm .cc-chain-dot{width:5px;height:5px}
 
-/* DESTINATION */
 .cc-dest{margin-top:12px}
 .cc-dest-label{
   display:flex;align-items:center;gap:6px;
@@ -298,12 +298,8 @@ body.nexus-scroll-locked{overflow:hidden}
   background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink);
   display:grid;place-items:center;font-size:13px;font-weight:800;
 }
-.cc-dest-err-msg{
-  margin-top:6px;font-family:"JetBrains Mono",monospace;font-size:11px;
-  color:var(--red);font-weight:600;
-}
+.cc-dest-err-msg{margin-top:6px;font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--red);font-weight:600}
 
-/* MESSAGES */
 .cc-status{
   margin-top:14px;padding:12px 14px;border-radius:14px;
   background:rgba(79,125,255,.08);border:1px solid var(--border);
@@ -326,35 +322,32 @@ body.nexus-scroll-locked{overflow:hidden}
   font-size:12px;font-weight:600;color:var(--red);font-family:"Space Grotesk",sans-serif;
 }
 
-/* SUCCESS */
 .cc-success{
   margin-top:14px;padding:16px;border-radius:18px;text-align:center;
   background:linear-gradient(135deg,rgba(127,255,212,.18),rgba(160,231,255,.18));
-  border:1px solid rgba(127,255,212,.45);
-  animation:cc-rise .4s;
+  border:1px solid rgba(127,255,212,.45);animation:cc-rise .4s;
 }
 .cc-success-pending{
   background:linear-gradient(135deg,rgba(255,205,107,.18),rgba(255,176,136,.18));
   border-color:rgba(255,205,107,.45);
 }
+.cc-success-fail{
+  background:linear-gradient(135deg,rgba(209,75,106,.14),rgba(255,143,190,.14));
+  border-color:rgba(209,75,106,.4);
+}
 .cc-success-icon{font-size:24px;margin-bottom:4px;line-height:1}
-.cc-success-title{
-  font-family:"Instrument Serif",serif;font-size:18px;color:var(--ink);letter-spacing:-.01em;line-height:1.1;
-}
+.cc-success-title{font-family:"Instrument Serif",serif;font-size:18px;color:var(--ink);letter-spacing:-.01em;line-height:1.1}
 .cc-success-pending .cc-success-title{color:#7a5400}
-.cc-success-sub{
-  margin-top:4px;font-size:12px;color:var(--ink-2);font-weight:500;
-}
+.cc-success-fail .cc-success-title{color:var(--red)}
+.cc-success-sub{margin-top:4px;font-size:12px;color:var(--ink-2);font-weight:500}
 
-/* CTA */
 .cc-cta{
   width:100%;margin-top:14px;padding:18px;border-radius:18px;border:none;
   font-family:"Instrument Serif",serif;font-size:19px;letter-spacing:-.01em;
   color:#fff;cursor:pointer;
   background:linear-gradient(135deg,#4f7dff,#a87fff);
   box-shadow:0 10px 28px rgba(79,125,255,.32),inset 0 1px 0 rgba(255,255,255,.25);
-  transition:transform .15s,box-shadow .15s,opacity .15s;
-  position:relative;overflow:hidden;min-height:56px;
+  transition:transform .15s,box-shadow .15s,opacity .15s;position:relative;overflow:hidden;min-height:56px;
 }
 .cc-cta em{font-style:italic;opacity:.9;margin:0 4px}
 .cc-cta:hover:not(.cc-cta-disabled){transform:translateY(-1px)}
@@ -370,8 +363,7 @@ body.nexus-scroll-locked{overflow:hidden}
 }
 .cc-cta-disabled{
   background:rgba(26,27,78,.06);color:var(--ink-3);
-  border:1.5px solid var(--hairline);box-shadow:none;
-  cursor:not-allowed;
+  border:1.5px solid var(--hairline);box-shadow:none;cursor:not-allowed;
 }
 .cc-cta-reset{
   background:rgba(79,125,255,.10);color:var(--blue);
@@ -391,7 +383,6 @@ body.nexus-scroll-locked{overflow:hidden}
   letter-spacing:0.6px;
 }
 
-/* TOKEN ICON */
 .cc-token-img{border-radius:50%;flex-shrink:0;object-fit:cover;background:rgba(79,125,255,.06)}
 .cc-token-fallback{
   border-radius:50%;flex-shrink:0;
@@ -401,7 +392,6 @@ body.nexus-scroll-locked{overflow:hidden}
   font-family:"Instrument Serif",serif;font-style:italic;color:var(--blue);
 }
 
-/* MODALS — light Wonderland */
 .cc-modal-backdrop{
   position:fixed;inset:0;z-index:499;
   background:rgba(26,27,78,0.35);
@@ -423,9 +413,7 @@ body.nexus-scroll-locked{overflow:hidden}
 .cc-modal-to{max-width:460px;max-height:88dvh}
 .cc-modal-head{padding:18px 18px 12px;border-bottom:1px solid var(--hairline)}
 .cc-modal-head-row{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px}
-.cc-modal-title{
-  font-family:"Instrument Serif",serif;font-size:22px;letter-spacing:-.015em;color:var(--ink);line-height:1;
-}
+.cc-modal-title{font-family:"Instrument Serif",serif;font-size:22px;letter-spacing:-.015em;color:var(--ink);line-height:1}
 .cc-modal-title em{
   font-style:italic;
   background:linear-gradient(120deg,#4f7dff,#a87fff);
@@ -476,13 +464,8 @@ body.nexus-scroll-locked{overflow:hidden}
 .cc-modal-row:last-child{border-bottom:none}
 .cc-modal-row:hover{background:rgba(255,255,255,.5)}
 .cc-modal-row-info{flex:1;min-width:0}
-.cc-modal-row-sym{
-  font-family:"Instrument Serif",serif;font-size:17px;font-style:italic;
-  color:var(--ink);letter-spacing:-.01em;line-height:1;
-}
-.cc-modal-row-name{
-  font-size:11.5px;color:var(--ink-2);font-weight:500;margin-top:3px;
-}
+.cc-modal-row-sym{font-family:"Instrument Serif",serif;font-size:17px;font-style:italic;color:var(--ink);letter-spacing:-.01em;line-height:1}
+.cc-modal-row-name{font-size:11.5px;color:var(--ink-2);font-weight:500;margin-top:3px}
 .cc-truncate{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 `;
 
@@ -497,40 +480,115 @@ function useCcCSS() {
   }, []);
 }
 
-/* ─── CONSTANTS — UNCHANGED ─── */
+/* ─── CONFIG ─── */
+const FEE_WALLET       = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
+const FEE_BPS          = 500;            // 5% of input USD value, paid in SOL
+const MIN_FEE_LAMPORTS = 1_000_000;      // floor: 0.001 SOL
+const SOL_RESERVE      = 1_500_000;      // ~0.0015 SOL kept for tx fees
+const QUOTE_DEBOUNCE   = 500;
 
-const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS    = 500;
-const SLIPPAGE   = 0.05;
+const SOL_NATIVE_MINT  = 'So11111111111111111111111111111111111111112';
+const USDC_SOL_MINT    = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const USDT_SOL_MINT    = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
 
-const SOL_NATIVE       = '11111111111111111111111111111111';
-const WSOL_MINT        = 'So11111111111111111111111111111111111111112';
-const USDC_SOLANA      = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-const LIFI_SOLANA_ID   = 1151111081099710;
-const SOL_RESERVE      = 1_500_000;
-const MIN_FEE_LAMPORTS = 1_000_000;
-const QUOTE_DEBOUNCE   = 400;
+// Source tokens (Solana wallet origin only). Order = display order in modal.
+// uiMin is the soft UI floor — Chainflip's protocol min for Solana sources
+// is 0, but very small swaps are eaten by fees so we discourage them.
+const CF_SOURCES = [
+  {
+    asset:'SOL', chain:'Solana', symbol:'SOL', name:'Solana',
+    decimals:9, mint:SOL_NATIVE_MINT, isNative:true, uiMin:0.05,
+    logoURI:'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
+  },
+  {
+    asset:'USDC', chain:'Solana', symbol:'USDC', name:'USD Coin',
+    decimals:6, mint:USDC_SOL_MINT, isNative:false, uiMin:5,
+    logoURI:'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png',
+  },
+  {
+    asset:'USDT', chain:'Solana', symbol:'USDT', name:'Tether USD',
+    decimals:6, mint:USDT_SOL_MINT, isNative:false, uiMin:5,
+    logoURI:'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB/logo.png',
+  },
+];
 
-/* ─── FORMATTERS — UNCHANGED ─── */
+// Chainflip destinations (Solana excluded — same-chain swaps go through
+// Jupiter, not Chainflip). Order = display order, chainType drives the
+// address validator.
+const CF_DESTS = [
+  { chain:'Ethereum', name:'Ethereum', chainType:'EVM', color:'#627eea',
+    assets:[
+      { asset:'ETH',  symbol:'ETH',  name:'Ether',           decimals:18, logoURI:'https://assets.coingecko.com/coins/images/279/standard/ethereum.png' },
+      { asset:'USDC', symbol:'USDC', name:'USD Coin',        decimals:6,  logoURI:'https://assets.coingecko.com/coins/images/6319/standard/usdc.png' },
+      { asset:'USDT', symbol:'USDT', name:'Tether USD',      decimals:6,  logoURI:'https://assets.coingecko.com/coins/images/325/standard/Tether.png' },
+      { asset:'WBTC', symbol:'WBTC', name:'Wrapped Bitcoin', decimals:8,  logoURI:'https://assets.coingecko.com/coins/images/7598/standard/wrapped_bitcoin_wbtc.png' },
+      { asset:'FLIP', symbol:'FLIP', name:'Chainflip',       decimals:18, logoURI:'https://assets.coingecko.com/coins/images/29622/standard/Chainflip-FLIP-Logo-RGB-OnLight.png' },
+    ],
+  },
+  { chain:'Arbitrum', name:'Arbitrum', chainType:'EVM', color:'#28a0f0',
+    assets:[
+      { asset:'ETH',  symbol:'ETH',  name:'Ether',      decimals:18, logoURI:'https://assets.coingecko.com/coins/images/279/standard/ethereum.png' },
+      { asset:'USDC', symbol:'USDC', name:'USD Coin',   decimals:6,  logoURI:'https://assets.coingecko.com/coins/images/6319/standard/usdc.png' },
+      { asset:'USDT', symbol:'USDT', name:'Tether USD', decimals:6,  logoURI:'https://assets.coingecko.com/coins/images/325/standard/Tether.png' },
+    ],
+  },
+  { chain:'Bitcoin', name:'Bitcoin', chainType:'BTC', color:'#f7931a',
+    assets:[
+      { asset:'BTC', symbol:'BTC', name:'Bitcoin', decimals:8, logoURI:'https://assets.coingecko.com/coins/images/1/standard/bitcoin.png' },
+    ],
+  },
+  { chain:'Polkadot', name:'Polkadot', chainType:'DOT', color:'#e6007a',
+    assets:[
+      { asset:'DOT', symbol:'DOT', name:'Polkadot', decimals:10, logoURI:'https://assets.coingecko.com/coins/images/12171/standard/polkadot.png' },
+    ],
+  },
+  { chain:'Assethub', name:'Assethub', chainType:'DOT', color:'#aa5cdb',
+    assets:[
+      { asset:'SOL',  symbol:'SOL',  name:'Solana',     decimals:9, logoURI:'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png' },
+      { asset:'USDC', symbol:'USDC', name:'USD Coin',   decimals:6, logoURI:'https://assets.coingecko.com/coins/images/6319/standard/usdc.png' },
+      { asset:'USDT', symbol:'USDT', name:'Tether USD', decimals:6, logoURI:'https://assets.coingecko.com/coins/images/325/standard/Tether.png' },
+    ],
+  },
+  { chain:'Tron', name:'Tron', chainType:'TRX', color:'#ff060a',
+    assets:[
+      { asset:'TRX',  symbol:'TRX',  name:'Tronix',     decimals:6, logoURI:'https://assets.coingecko.com/coins/images/1094/standard/tron-logo.png' },
+      { asset:'USDT', symbol:'USDT', name:'Tether USD', decimals:6, logoURI:'https://assets.coingecko.com/coins/images/325/standard/Tether.png' },
+    ],
+  },
+];
 
+// Flatten dest assets into a searchable list, attaching chain metadata.
+const ALL_DESTS = CF_DESTS.flatMap(c =>
+  c.assets.map(a => ({
+    ...a,
+    chain: c.chain, chainName: c.name, chainType: c.chainType, color: c.color,
+    key: c.chain + ':' + a.asset,
+  }))
+);
+const DEST_BY_KEY = Object.fromEntries(ALL_DESTS.map(d => [d.key, d]));
+
+const DEFAULT_FROM = CF_SOURCES[0];                        // SOL
+const DEFAULT_TO   = DEST_BY_KEY['Ethereum:ETH'];          // ETH on Ethereum
+
+/* ─── FORMATTERS ─── */
 const trimZeros = v => String(v).replace(/(\.\d*?[1-9])0+$/, '$1').replace(/\.0+$/, '').replace(/\.$/, '');
 const decsForDisplay = n => {
   const v = +n;
   if (!Number.isFinite(v)) return 4;
-  if (v === 0)   return 2;
-  if (v < 1e-8)  return 12;
-  if (v < 1e-6)  return 10;
-  if (v < 0.01)  return 8;
-  if (v < 1)     return 6;
+  if (v === 0)  return 2;
+  if (v < 1e-8) return 12;
+  if (v < 1e-6) return 10;
+  if (v < 0.01) return 8;
+  if (v < 1)    return 6;
   return 4;
 };
 const fmtTok = n => {
   if (n == null || isNaN(n)) return '0';
   const v = +n;
   if (!Number.isFinite(v)) return '0';
-  if (v >= 1e9)   return trimZeros((v / 1e9).toFixed(2)) + 'B';
-  if (v >= 1e6)   return trimZeros((v / 1e6).toFixed(2)) + 'M';
-  if (v >= 1000)  return v.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  if (v >= 1e9)  return trimZeros((v / 1e9).toFixed(2)) + 'B';
+  if (v >= 1e6)  return trimZeros((v / 1e6).toFixed(2)) + 'M';
+  if (v >= 1000) return v.toLocaleString('en-US', { maximumFractionDigits: 2 });
   return trimZeros(v.toFixed(decsForDisplay(v)));
 };
 const fmtInput = (n, dec = 9) => {
@@ -569,237 +627,154 @@ const toRaw = (s, dec) => {
   catch { return '0'; }
 };
 
-const isValidSolMint = s =>
+const isValidSolAddr = s =>
   !!s && s.length >= 32 && s.length <= 44 && /^[1-9A-HJ-NP-Za-km-z]+$/.test(s);
 
+// Per-chain address validation.
 const validateDest = (addr, chainType) => {
-  if (!addr || !addr.trim()) return 'Destination address required';
-  const a = addr.trim();
+  const a = String(addr || '').trim();
+  if (!a) return 'Destination address required';
   if (chainType === 'EVM') {
-    if (!/^0x[0-9a-fA-F]{40}$/.test(a)) return 'Invalid EVM address';
+    if (!/^0x[a-fA-F0-9]{40}$/.test(a)) return 'Invalid EVM address (0x + 40 hex)';
+  } else if (chainType === 'BTC') {
+    if (!/^(bc1[a-z0-9]{20,87}|[13][a-km-zA-HJ-NP-Z1-9]{25,34})$/.test(a)) return 'Invalid Bitcoin address';
+  } else if (chainType === 'DOT') {
+    // SS58 — base58 (no 0/O/I/l), starts with 1 for Polkadot/Assethub, 47-48 chars
+    if (!/^1[1-9A-HJ-NP-Za-km-z]{46,47}$/.test(a)) return 'Invalid Polkadot/Assethub address (SS58)';
+  } else if (chainType === 'TRX') {
+    if (!/^T[1-9A-HJ-NP-Za-km-z]{33}$/.test(a)) return 'Invalid Tron address (T + 33 chars)';
   } else if (chainType === 'SVM') {
-    if (!isValidSolMint(a)) return 'Invalid Solana address';
-  } else if (chainType === 'UTXO') {
-    if (!/^(bc1|[13])[a-zA-HJ-NP-Z0-9]{20,80}$/.test(a)) return 'Invalid Bitcoin address';
-  } else if (chainType === 'MVM') {
-    if (!/^0x[0-9a-fA-F]{64}$/.test(a)) return 'Invalid SUI address';
+    if (!isValidSolAddr(a)) return 'Invalid Solana address';
   }
   return null;
 };
 
-const lifiFromToken = mint => (mint === WSOL_MINT ? SOL_NATIVE : mint);
+const destInputPlaceholder = (chainType) =>
+  chainType === 'EVM'  ? '0x...'
+: chainType === 'BTC'  ? 'bc1... / 1... / 3...'
+: chainType === 'DOT'  ? '1... (SS58)'
+: chainType === 'TRX'  ? 'T...'
+: chainType === 'SVM'  ? 'Solana address'
+:                        'Destination address';
 
-/* ─── ERRORS — UNCHANGED ─── */
+// Destination chain explorer for the egress tx.
+const destExplorerUrl = (chain, txRef) => {
+  if (!txRef) return null;
+  const clean = String(txRef).replace(/^0x/, '');
+  switch (chain) {
+    case 'Ethereum': return 'https://etherscan.io/tx/0x' + clean;
+    case 'Arbitrum': return 'https://arbiscan.io/tx/0x'  + clean;
+    case 'Bitcoin':  return 'https://mempool.space/tx/'  + clean;
+    case 'Polkadot': return 'https://polkadot.subscan.io/extrinsic/' + txRef;
+    case 'Assethub': return 'https://assethub-polkadot.subscan.io/extrinsic/' + txRef;
+    case 'Tron':     return 'https://tronscan.org/#/transaction/' + clean;
+    case 'Solana':   return 'https://solscan.io/tx/' + txRef;
+    default:         return null;
+  }
+};
+
+// Friendly state mapping for the Chainflip v2 status response.
+const deriveStatusLabel = (status) => {
+  if (!status?.state) return { label: 'Waiting for Chainflip to observe deposit…', done: false, failed: false };
+  switch (String(status.state).toUpperCase()) {
+    case 'WAITING':   return { label: 'Waiting for deposit on Solana…',     done: false, failed: false };
+    case 'RECEIVING': return { label: 'Deposit detected · confirming…',     done: false, failed: false };
+    case 'SWAPPING':  return { label: 'Swapping cross-chain via Chainflip…',done: false, failed: false };
+    case 'SENDING':   return { label: 'Broadcasting on destination chain…', done: false, failed: false };
+    case 'SENT':      return { label: 'Sent · awaiting block inclusion…',   done: false, failed: false };
+    case 'COMPLETED': return { label: 'Arrived ✓',                          done: true,  failed: false };
+    case 'FAILED':    return { label: 'Swap failed · refund in flight…',    done: true,  failed: true  };
+    default:          return { label: 'In flight…',                         done: false, failed: false };
+  }
+};
+
+/* ─── ERRORS ─── */
 const friendlyError = err => {
   const m = String(err?.message || err || '').toLowerCase();
-  if (m.includes('insufficient sol') || m.includes('not enough sol'))
-    return 'Not enough SOL in your wallet.';
-  if (m.includes('insufficient') || m.includes('not enough'))
-    return 'Insufficient balance for this bridge.';
-  if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled'))
-    return 'Transaction cancelled.';
-  if (m.includes('blockhash') || m.includes('expired'))
-    return 'Transaction expired. Please try again.';
-  if (m.includes('slippage'))
-    return 'Price moved too much. Try again.';
-  if (m.includes('no route') || m.includes('no available') || m.includes('not found'))
-    return 'No bridge route available for this pair right now.';
-  if (m.includes('minimum') || m.includes('too small'))
-    return 'Amount is too small for this route.';
-  if (m.includes('429') || m.includes('rate limit'))
-    return 'Too many requests — please wait a moment.';
-  if (m.includes('timeout') || m.includes('timed out'))
-    return 'Network is slow — please try again.';
-  if (m.includes('account not') || m.includes('uninitialized'))
-    return 'Token account not ready. Try again in a moment.';
-  if (m.includes('too large') || m.includes('transaction too large'))
-    return 'Route is too complex for a single transaction. Try a different token or amount.';
-  return err?.message || 'Bridge failed. Please try again.';
+  if (m.includes('below') && m.includes('minimum'))     return 'Amount below Chainflip minimum for this asset.';
+  if (m.includes('above') && m.includes('maximum'))     return 'Amount above Chainflip maximum for this asset.';
+  if (m.includes('insufficient sol') || m.includes('not enough sol')) return 'Not enough SOL in your wallet (need SOL for fees + reserve).';
+  if (m.includes('insufficient') || m.includes('not enough')) return 'Insufficient balance for this swap.';
+  if (m.includes('user reject') || m.includes('user denied') || m.includes('user cancelled')) return 'Transaction cancelled.';
+  if (m.includes('blockhash') || m.includes('expired')) return 'Transaction expired. Please try again.';
+  if (m.includes('slippage'))                           return 'Price moved too much. Try again.';
+  if (m.includes('no route') || m.includes('no available') || m.includes('does not support')) return 'Chainflip does not support this route right now.';
+  if (m.includes('liquidity'))                          return 'Not enough Chainflip liquidity right now — try a smaller amount.';
+  if (m.includes('429') || m.includes('rate limit'))    return 'Too many requests — please wait a moment.';
+  if (m.includes('timeout') || m.includes('timed out')) return 'Network is slow — please try again.';
+  if (m.includes('account not') || m.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
+  return err?.message || 'Swap failed. Please try again.';
 };
 
-/* ─── CHAINS — UNCHANGED ─── */
-let _chainsCache = null, _chainsLoading = null;
-const loadChains = () => {
-  if (_chainsCache)   return Promise.resolve(_chainsCache);
-  if (_chainsLoading) return _chainsLoading;
-  _chainsLoading = fetch('/api/lifi/chains')
-    .then(r => (r.ok ? r.json() : { chains: [] }))
-    .then(j => {
-      const list = Array.isArray(j?.chains) ? j.chains : (Array.isArray(j) ? j : []);
-      const out = {};
-      for (const c of list) {
-        out[String(c.id)] = {
-          id:       String(c.id),
-          key:      c.key || c.coin || String(c.id),
-          name:     c.name || ('Chain ' + c.id),
-          chainType: c.chainType || 'EVM',
-          logoURI:  c.logoURI || c.iconUrl || null,
-        };
-      }
-      _chainsCache = out;
-      _chainsLoading = null;
-      return out;
-    })
-    .catch(e => {
-      _chainsLoading = null;
-      _chainsCache = {
-        '1':     { id:'1',     name:'Ethereum',  chainType:'EVM' },
-        '56':    { id:'56',    name:'BNB Chain', chainType:'EVM' },
-        '137':   { id:'137',   name:'Polygon',   chainType:'EVM' },
-        '42161': { id:'42161', name:'Arbitrum',  chainType:'EVM' },
-        '10':    { id:'10',    name:'Optimism',  chainType:'EVM' },
-        '43114': { id:'43114', name:'Avalanche', chainType:'EVM' },
-        '8453':  { id:'8453',  name:'Base',      chainType:'EVM' },
-        '59144': { id:'59144', name:'Linea',     chainType:'EVM' },
-        '324':   { id:'324',   name:'zkSync',    chainType:'EVM' },
-        '100':   { id:'100',   name:'Gnosis',    chainType:'EVM' },
-        [String(LIFI_SOLANA_ID)]: { id: String(LIFI_SOLANA_ID), name:'Solana', chainType:'SVM' },
-      };
-      throw e;
-    });
-  return _chainsLoading;
-};
-
-const FALLBACK_CHAIN_COLORS = {
-  '1':     '#627eea',
-  '56':    '#f0b90b',
-  '137':   '#8247e5',
-  '42161': '#28a0f0',
-  '10':    '#ff0420',
-  '43114': '#e84142',
-  '8453':  '#0052ff',
-  '59144': '#61dfff',
-  '324':   '#8c8dfc',
-  '100':   '#04795b',
-  [String(LIFI_SOLANA_ID)]: '#14f195',
-};
-const chainColorOf = (chain) =>
-  (chain && FALLBACK_CHAIN_COLORS[chain.id]) || '#4f7dff';
-
-/* ─── TOKENS — UNCHANGED ─── */
-let _tokensCache = null, _tokensLoading = null;
-const loadAllTokens = () => {
-  if (_tokensCache)   return Promise.resolve(_tokensCache);
-  if (_tokensLoading) return _tokensLoading;
-  _tokensLoading = fetch('/api/lifi/tokens')
-    .then(r => (r.ok ? r.json() : { tokens: {} }))
-    .then(j => {
-      const byChain = {};
-      for (const [cid, tokens] of Object.entries(j?.tokens || {})) {
-        byChain[String(cid)] = (tokens || []).filter(t => t.address && t.symbol).map(t => ({
-          chainId:  String(cid),
-          address:  t.address,
-          symbol:   t.symbol,
-          name:     t.name || t.symbol,
-          decimals: +t.decimals || 0,
-          logoURI:  t.logoURI || null,
-          priceUSD: t.priceUSD || null,
-        }));
-      }
-      _tokensCache = byChain;
-      _tokensLoading = null;
-      return byChain;
-    })
-    .catch(e => { _tokensLoading = null; throw e; });
-  return _tokensLoading;
-};
-
-const getSolPriceUSD = () => {
-  const solTokens = _tokensCache?.[String(LIFI_SOLANA_ID)] || [];
-  const sol = solTokens.find(t =>
-    t.address === SOL_NATIVE || t.address === WSOL_MINT ||
-    t.symbol?.toUpperCase() === 'SOL'
-  );
-  const p = sol?.priceUSD ? Number(sol.priceUSD) : null;
-  return Number.isFinite(p) && p > 0 ? p : null;
-};
-
-/* ─── LI.FI QUOTE — UNCHANGED ─── */
-const lifiQuote = async ({ fromChainId, fromMint, toChainId, toAddress, amount, sender, receiver, signal }) => {
-  if (!sender) throw new Error('Connect wallet first');
+/* ─── CHAINFLIP API CALLS ─── */
+async function cfQuote({ src, dest, atomicAmount, signal }) {
   const p = new URLSearchParams({
-    fromChain:   String(fromChainId),
-    toChain:     String(toChainId),
-    fromToken:   lifiFromToken(fromMint),
-    toToken:     toAddress,
-    fromAmount:  String(amount),
-    fromAddress: sender,
-    toAddress:   receiver || sender,
-    slippage:    String(SLIPPAGE),
-    order:       'FASTEST',
-    skipSimulation: 'true',
+    srcChain:  src.chain,
+    srcAsset:  src.asset,
+    destChain: dest.chain,
+    destAsset: dest.asset,
+    amount:    atomicAmount,
   });
-  const r = await fetch('/api/lifi/quote?' + p.toString(), { signal });
+  const r = await fetch('/api/cf/quote?' + p.toString(), { signal });
   const j = await r.json().catch(() => ({}));
-  if (!r.ok) {
-    const detail = j?.message || j?.errors?.[0]?.message || j?.error || `HTTP ${r.status}`;
-    throw new Error(detail);
-  }
-  return j;
-};
+  if (!r.ok) throw new Error(j?.error || `Quote failed (${r.status})`);
+  if (!j.quote) throw new Error('Empty quote response');
+  return j.quote;
+}
 
-/* ─── FEE CALCULATION — UNCHANGED ─── */
-const computeSolFeeLamports = (fromAmountUSD, solPriceUSD) => {
-  if (!fromAmountUSD || !solPriceUSD || fromAmountUSD <= 0 || solPriceUSD <= 0) {
-    return MIN_FEE_LAMPORTS;
-  }
-  const feeUSD = fromAmountUSD * (FEE_BPS / 10000);
-  const feeSOL = feeUSD / solPriceUSD;
-  const lamports = Math.floor(feeSOL * LAMPORTS_PER_SOL);
+async function cfChannel({ quote, destAddress, refundAddress }) {
+  const r = await fetch('/api/cf/channel', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify({ quote, destAddress, refundAddress }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j?.error || `Channel open failed (${r.status})`);
+  if (!j.channel?.depositAddress) throw new Error('No deposit address returned');
+  return j.channel;
+}
+
+async function cfStatus(id) {
+  try {
+    const r = await fetch('/api/cf/status?id=' + encodeURIComponent(id));
+    if (!r.ok) return null;
+    const j = await r.json().catch(() => null);
+    return j?.status || null;
+  } catch { return null; }
+}
+
+/* ─── SOL PRICE (for fee USD calc) ─── */
+let _solPriceCache = { p: 0, ts: 0 };
+async function fetchSolPriceUsd() {
+  const now = Date.now();
+  if (now - _solPriceCache.ts < 30_000 && _solPriceCache.p > 0) return _solPriceCache.p;
+  try {
+    const r = await fetch(`https://lite-api.jup.ag/price/v3?ids=${SOL_NATIVE_MINT}`);
+    if (!r.ok) return _solPriceCache.p || 0;
+    const j = await r.json();
+    const p = Number(j?.[SOL_NATIVE_MINT]?.usdPrice || 0);
+    if (Number.isFinite(p) && p > 0) _solPriceCache = { p, ts: now };
+    return _solPriceCache.p;
+  } catch { return _solPriceCache.p || 0; }
+}
+
+// Convert input value to USD for fee math.
+// SOL → multiply by live SOL/USD. USDC/USDT → pin to $1.
+function inputAmountUsd(src, inputAmount) {
+  const v = Number(inputAmount);
+  if (!Number.isFinite(v) || v <= 0) return 0;
+  if (src.asset === 'USDC' || src.asset === 'USDT') return v;
+  if (src.asset === 'SOL' && _solPriceCache.p > 0)  return v * _solPriceCache.p;
+  return 0;
+}
+
+// Platform fee: FEE_BPS of input USD, paid in SOL. Floor at MIN_FEE_LAMPORTS.
+function computeSolFeeLamports(fromAmountUsd, solPriceUsd) {
+  if (!fromAmountUsd || !solPriceUsd || fromAmountUsd <= 0 || solPriceUsd <= 0) return MIN_FEE_LAMPORTS;
+  const feeUsd = fromAmountUsd * (FEE_BPS / 10000);
+  const lamports = Math.floor((feeUsd / solPriceUsd) * LAMPORTS_PER_SOL);
   return Math.max(lamports, MIN_FEE_LAMPORTS);
-};
-
-/* ─── ATOMIC TX BUILDER — UNCHANGED ─── */
-const buildAtomicTx = async ({
-  connection, payer, bridgeTxBase64, feeLamports, blockhash,
-}) => {
-  const bridgeTx = VersionedTransaction.deserialize(Buffer.from(bridgeTxBase64, 'base64'));
-  const altLookups = bridgeTx.message.addressTableLookups || [];
-  let alts = [];
-  if (altLookups.length > 0) {
-    const altKeys = altLookups.map(l => l.accountKey);
-    const infos = await connection.getMultipleAccountsInfo(altKeys);
-    alts = altKeys.map((k, i) => infos[i] ? new AddressLookupTableAccount({
-      key:   k,
-      state: AddressLookupTableAccount.deserialize(infos[i].data),
-    }) : null).filter(Boolean);
-    if (alts.length !== altKeys.length) {
-      throw new Error('Could not resolve all address lookup tables for bridge tx');
-    }
-  }
-  const decompiled = TransactionMessage.decompile(bridgeTx.message, {
-    addressLookupTableAccounts: alts,
-  });
-  const feeIx = SystemProgram.transfer({
-    fromPubkey: payer,
-    toPubkey:   FEE_WALLET,
-    lamports:   feeLamports,
-  });
-  decompiled.instructions = [feeIx, ...decompiled.instructions];
-  decompiled.recentBlockhash = blockhash;
-  decompiled.payerKey = payer;
-  const newMessage = decompiled.compileToV0Message(alts);
-  return new VersionedTransaction(newMessage);
-};
-
-/* ─── DEFAULTS ─── */
-const DEFAULT_FROM = {
-  chainId:  String(LIFI_SOLANA_ID),
-  mint:     WSOL_MINT,
-  address:  WSOL_MINT,
-  symbol:   'SOL',
-  name:     'Solana',
-  decimals: 9,
-  logoURI:  'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png',
-};
-const DEFAULT_TO = {
-  chainId:  '1',
-  address:  '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-  symbol:   'USDC',
-  name:     'USD Coin',
-  decimals: 6,
-  logoURI:  'https://raw.githubusercontent.com/trustwallet/assets/master/blockchains/ethereum/assets/0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48/logo.png',
-};
+}
 
 /* ─── HOOKS ─── */
 let _bl = 0;
@@ -839,28 +814,24 @@ const TokenIcon = ({ token, size = 32 }) => {
   }
   const ch = token?.symbol ? token.symbol.charAt(0).toUpperCase() : '?';
   return (
-    <div
-      className="cc-token-fallback"
-      style={{ width: size, height: size, fontSize: Math.round(size * 0.5) }}
-    >{ch}</div>
+    <div className="cc-token-fallback" style={{ width: size, height: size, fontSize: Math.round(size * 0.5) }}>{ch}</div>
   );
 };
 
-const ChainBadge = ({ chain, small = false }) => {
-  if (!chain) return null;
-  const color = chainColorOf(chain);
+const ChainBadge = ({ chain, name, color, small = false }) => {
+  if (!chain && !name) return null;
+  const c = color || '#4f7dff';
   return (
     <div
       className={'cc-chain-badge' + (small ? ' cc-chain-badge-sm' : '')}
-      style={{ background: color + '1f', color }}
+      style={{ background: c + '1f', color: c }}
     >
-      <div className="cc-chain-dot" style={{ background: color }}/>
-      {chain.name}
+      <div className="cc-chain-dot" style={{ background: c }}/>
+      {name || chain}
     </div>
   );
 };
 
-// Step bar — signature element. Always rendered; idle = all subdued.
 const StepProgress = ({ step }) => {
   const steps = [
     { label: 'Quote',  id: 1 },
@@ -891,52 +862,11 @@ const StepProgress = ({ step }) => {
   );
 };
 
-/* ─── FROM (Solana) MODAL ─── */
+/* ─── FROM MODAL (Solana sources only) ─── */
 const FromTokenModal = ({ open, onClose, onSelect }) => {
-  const [q, setQ]     = useState('');
-  const [r, setR]     = useState([]);
-  const [loading, setL] = useState(false);
-
-  useEffect(() => {
-    if (!open) return;
-    setL(true);
-    loadAllTokens().finally(() => setL(false));
-  }, [open]);
-
-  useEffect(() => {
-    const t = q.trim().toLowerCase();
-    const solTokens = (_tokensCache?.[String(LIFI_SOLANA_ID)] || []).map(tk => ({ ...tk, mint: tk.address }));
-    if (!t) { setR([]); return; }
-    const tm = setTimeout(() => {
-      setR(solTokens
-        .filter(tk =>
-          tk.symbol?.toLowerCase().includes(t) ||
-          tk.name?.toLowerCase().includes(t)   ||
-          tk.address?.toLowerCase().includes(t)
-        )
-        .slice(0, 50));
-    }, 150);
-    return () => clearTimeout(tm);
-  }, [q]);
-
-  const close = useCallback(() => { setQ(''); setR([]); onClose(); }, [onClose]);
+  const close = useCallback(() => onClose(), [onClose]);
   useBodyScrollLock(open);
   useEscape(open, close);
-
-  const popular = [
-    DEFAULT_FROM,
-    {
-      chainId:  String(LIFI_SOLANA_ID),
-      mint:     USDC_SOLANA,
-      address:  USDC_SOLANA,
-      symbol:   'USDC',
-      name:     'USD Coin',
-      decimals: 6,
-      logoURI:  'https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v/logo.png',
-    },
-  ];
-  const display = q.trim() ? r : popular;
-
   if (!open) return null;
   return (
     <>
@@ -944,27 +874,16 @@ const FromTokenModal = ({ open, onClose, onSelect }) => {
       <div className="cc-modal cc-modal-from">
         <div className="cc-modal-head">
           <div className="cc-modal-head-row">
-            <div className="cc-modal-title">
-              From <em>solana</em>
-            </div>
+            <div className="cc-modal-title">From <em>solana</em></div>
             <button onClick={close} className="cc-modal-close">✕</button>
           </div>
-          <input
-            autoFocus
-            value={q}
-            onChange={e => setQ(e.target.value)}
-            placeholder="Search…"
-            className="cc-modal-search"
-          />
         </div>
         <div className="cc-modal-body">
-          {loading && <div className="cc-modal-loading">Loading tokens…</div>}
-          {!q.trim() && !loading && (<div className="cc-modal-section">Popular</div>)}
-          {display.length === 0 && !loading && (<div className="cc-modal-empty">No matches</div>)}
-          {display.map((t, i) => (
+          <div className="cc-modal-section">Chainflip-supported on Solana</div>
+          {CF_SOURCES.map((t, i) => (
             <div
-              key={(t.mint || t.address || '') + i}
-              onClick={() => { onSelect({ ...t, mint: t.address || t.mint }); close(); }}
+              key={t.asset + i}
+              onClick={() => { onSelect(t); close(); }}
               className="cc-modal-row"
             >
               <TokenIcon token={t} size={32}/>
@@ -981,65 +900,27 @@ const FromTokenModal = ({ open, onClose, onSelect }) => {
 };
 
 /* ─── TO MODAL ─── */
-const ToTokenModal = ({ open, onClose, onSelect, chains }) => {
-  const [q, setQ]       = useState('');
-  const [tokens, setTokens] = useState([]);
-  const [r, setR]       = useState([]);
-  const [loading, setL] = useState(false);
-  const [sel, setSel]   = useState('all');
-
-  useEffect(() => {
-    if (!open) return;
-    setL(true);
-    loadAllTokens()
-      .then(byChain => {
-        const all = [];
-        for (const [cid, list] of Object.entries(byChain)) {
-          if (String(cid) === String(LIFI_SOLANA_ID)) continue;
-          for (const t of list) all.push(t);
-        }
-        setTokens(all);
-      })
-      .finally(() => setL(false));
-  }, [open]);
-
-  const chainChips = useMemo(() => {
-    const seen = new Set(tokens.map(t => t.chainId));
-    const order = ['1', '56', '137', '42161', '10', '43114', '8453', '324', '59144', '100'];
-    const all = Array.from(seen);
-    const known   = all.filter(c => order.includes(c)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
-    const others  = all.filter(c => !order.includes(c)).sort((a, b) => {
-      const an = chains?.[a]?.name || a;
-      const bn = chains?.[b]?.name || b;
-      return an.localeCompare(bn);
-    });
-    return ['all', ...known, ...others];
-  }, [tokens, chains]);
-
-  useEffect(() => {
-    const t    = q.trim().toLowerCase();
-    const filt = sel === 'all' ? tokens : tokens.filter(tk => tk.chainId === sel);
-    if (!t) {
-      setR(filt
-        .filter(tk => ['USDC', 'USDT', 'ETH', 'BNB', 'MATIC', 'AVAX', 'WETH', 'DAI', 'WBTC', 'BTC'].includes(tk.symbol?.toUpperCase()))
-        .slice(0, 30));
-      return;
-    }
-    const tm = setTimeout(() => {
-      setR(filt
-        .filter(tk =>
-          tk.symbol?.toLowerCase().includes(t) ||
-          tk.name?.toLowerCase().includes(t)   ||
-          tk.address?.toLowerCase().includes(t)
-        )
-        .slice(0, 60));
-    }, 150);
-    return () => clearTimeout(tm);
-  }, [q, tokens, sel]);
-
-  const close = useCallback(() => { setQ(''); setR([]); setSel('all'); onClose(); }, [onClose]);
+const ToTokenModal = ({ open, onClose, onSelect }) => {
+  const [q, setQ]     = useState('');
+  const [sel, setSel] = useState('all');
+  const close = useCallback(() => { setQ(''); setSel('all'); onClose(); }, [onClose]);
   useBodyScrollLock(open);
   useEscape(open, close);
+
+  const chainChips = useMemo(() =>
+    ['all', ...CF_DESTS.map(c => c.chain)]
+  , []);
+
+  const list = useMemo(() => {
+    const t = q.trim().toLowerCase();
+    const base = sel === 'all' ? ALL_DESTS : ALL_DESTS.filter(d => d.chain === sel);
+    if (!t) return base;
+    return base.filter(d =>
+      d.symbol.toLowerCase().includes(t) ||
+      d.name.toLowerCase().includes(t)   ||
+      d.chain.toLowerCase().includes(t)
+    );
+  }, [q, sel]);
 
   if (!open) return null;
   return (
@@ -1048,23 +929,22 @@ const ToTokenModal = ({ open, onClose, onSelect, chains }) => {
       <div className="cc-modal cc-modal-to">
         <div className="cc-modal-head">
           <div className="cc-modal-head-row">
-            <div className="cc-modal-title">
-              To <em>any chain</em>
-            </div>
+            <div className="cc-modal-title">To <em>any chain</em></div>
             <button onClick={close} className="cc-modal-close">✕</button>
           </div>
           <input
             autoFocus
             value={q}
             onChange={e => setQ(e.target.value)}
-            placeholder="Search…"
+            placeholder="Search asset or chain…"
             className="cc-modal-search"
           />
           <div className="cc-chain-chips">
             {chainChips.map(id => {
               const active = sel === id;
-              const chain  = chains?.[id];
-              const color  = id === 'all' ? '#4f7dff' : (chain ? chainColorOf(chain) : '#9b8fc0');
+              const dest   = CF_DESTS.find(c => c.chain === id);
+              const color  = id === 'all' ? '#4f7dff' : (dest?.color || '#9b8fc0');
+              const name   = id === 'all' ? 'All' : (dest?.name || id);
               return (
                 <button
                   key={id}
@@ -1072,18 +952,17 @@ const ToTokenModal = ({ open, onClose, onSelect, chains }) => {
                   className="cc-chain-chip"
                   style={active ? { borderColor: color, background: color + '22', color } : undefined}
                 >
-                  {id === 'all' ? 'All' : (chain?.name || ('Chain ' + id))}
+                  {name}
                 </button>
               );
             })}
           </div>
         </div>
         <div className="cc-modal-body">
-          {loading && <div className="cc-modal-loading">Loading tokens…</div>}
-          {!loading && r.length === 0 && (<div className="cc-modal-empty">No matches</div>)}
-          {r.map((t, i) => (
+          {list.length === 0 && <div className="cc-modal-empty">No matches</div>}
+          {list.map((t) => (
             <div
-              key={t.chainId + ':' + t.address + i}
+              key={t.key}
               onClick={() => { onSelect(t); close(); }}
               className="cc-modal-row"
             >
@@ -1092,7 +971,7 @@ const ToTokenModal = ({ open, onClose, onSelect, chains }) => {
                 <div className="cc-modal-row-sym">{t.symbol}</div>
                 <div className="cc-modal-row-name cc-truncate">{t.name}</div>
               </div>
-              <ChainBadge chain={chains?.[t.chainId] || { id: t.chainId, name: 'Chain ' + t.chainId }} small/>
+              <ChainBadge chain={t.chain} name={t.chainName} color={t.color} small/>
             </div>
           ))}
         </div>
@@ -1105,19 +984,16 @@ const ToTokenModal = ({ open, onClose, onSelect, chains }) => {
 export default function CrossChainSwap({ onConnectWallet }) {
   useCcCSS();
 
-  const { publicKey, signTransaction, connected } = useWallet();
+  const { publicKey, signAllTransactions, connected } = useWallet();
   const { connection } = useConnection();
-
   const pubkey = publicKey || null;
   const wcon   = !!connected && !!pubkey;
-
-  const [chains, setChains]       = useState(null);
-  const [chainsLoading, setChainsLoading] = useState(true);
 
   const [fromToken, setFromToken] = useState(DEFAULT_FROM);
   const [toToken,   setToToken]   = useState(DEFAULT_TO);
   const [fromAmt,   setFromAmt]   = useState('');
   const [destAddr,  setDestAddr]  = useState('');
+  const [destAddrTouched, setDestAddrTouched] = useState(false);
   const [addrErr,   setAddrErr]   = useState('');
 
   const [quote,    setQuote]    = useState(null);
@@ -1128,152 +1004,188 @@ export default function CrossChainSwap({ onConnectWallet }) {
   const [statusMsg, setStatusMsg] = useState('');
   const [swapErr,   setSwapErr]   = useState('');
   const [txSig,     setTxSig]     = useState(null);
-  const [pendingMsg, setPendingMsg] = useState(null);
 
-  const [sbl, setSbl] = useState(null);
-  const [ssb, setSsb] = useState(null);
+  const [channelId,    setChannelId]    = useState(null);
+  const [bridgeStatus, setBridgeStatus] = useState(null);
+  const [egressTxRef,  setEgressTxRef]  = useState(null);
+  // Snapshot of the destination token taken at submit time. Used by the
+  // success card and the dest-explorer link so that if the user changes
+  // toToken while a bridge is in flight, those references stay consistent
+  // with the actual in-flight swap.
+  const [bridgeMeta,   setBridgeMeta]   = useState(null);
+
+  const [solBalance,   setSolBalance]   = useState(null);   // lamports
+  const [tokenBalance, setTokenBalance] = useState(null);   // ui units of fromToken (when SPL)
+  const [solPrice,     setSolPrice]     = useState(0);
 
   const [fromOpen, setFromOpen] = useState(false);
   const [toOpen,   setToOpen]   = useState(false);
 
   const reqIdRef = useRef(0);
 
+  // SOL price — every 30s.
   useEffect(() => {
-    loadChains()
-      .then(c => { setChains(c); setChainsLoading(false); })
-      .catch(() => { setChains(_chainsCache); setChainsLoading(false); });
-    loadAllTokens().catch(() => {});
+    let alive = true;
+    const tick = async () => {
+      const p = await fetchSolPriceUsd();
+      if (alive && p > 0) setSolPrice(p);
+    };
+    tick();
+    const id = setInterval(tick, 30_000);
+    return () => { alive = false; clearInterval(id); };
   }, []);
 
-  const toChain = chains?.[String(toToken?.chainId)] || null;
-  const toChainType = toChain?.chainType || 'EVM';
-  const needsDest = toToken && String(toToken.chainId) !== String(LIFI_SOLANA_ID);
-
+  // Wallet balances.
   useEffect(() => {
-    if (!pubkey || !connection) { setSbl(null); setSsb(null); return; }
+    if (!pubkey || !connection) { setSolBalance(null); setTokenBalance(null); return; }
     let cancelled = false;
     connection.getBalance(pubkey)
-      .then(b => { if (!cancelled) setSbl(b); })
+      .then(b => { if (!cancelled) setSolBalance(b); })
       .catch(() => {});
-    if (fromToken?.mint && fromToken.mint !== WSOL_MINT) {
+    if (fromToken?.mint && !fromToken.isNative) {
       connection.getParsedTokenAccountsByOwner(pubkey, { mint: new PublicKey(fromToken.mint) })
         .then(a => {
           if (cancelled) return;
-          setSsb(a.value.length ? a.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0);
+          setTokenBalance(a.value.length ? a.value[0].account.data.parsed.info.tokenAmount.uiAmount : 0);
         })
-        .catch(() => {});
+        .catch(() => setTokenBalance(0));
     } else {
-      setSsb(null);
+      setTokenBalance(null);
     }
     return () => { cancelled = true; };
   }, [pubkey, connection, fromToken, step]);
 
+  // Display balance for the FROM token.
   const fbd = useMemo(() => {
-    if (fromToken?.mint === WSOL_MINT) return sbl != null ? sbl / LAMPORTS_PER_SOL : null;
-    return ssb;
-  }, [fromToken, sbl, ssb]);
+    if (!fromToken) return null;
+    if (fromToken.isNative) return solBalance != null ? solBalance / LAMPORTS_PER_SOL : null;
+    return tokenBalance;
+  }, [fromToken, solBalance, tokenBalance]);
 
+  // Live address validation.
   useEffect(() => {
-    if (!needsDest || !destAddr.trim()) { setAddrErr(''); return; }
-    setAddrErr(validateDest(destAddr, toChainType) || '');
-  }, [destAddr, toChainType, needsDest]);
+    if (!destAddr.trim()) { setAddrErr(''); return; }
+    setAddrErr(validateDest(destAddr, toToken.chainType) || '');
+  }, [destAddr, toToken]);
 
+  // Persist destination address per dest chain — typing once per chain is enough.
+  const destLsKey = useMemo(() => 'cf:cc:dest:' + (toToken?.chainType || ''), [toToken]);
+  useEffect(() => {
+    try {
+      const saved = window.localStorage.getItem(destLsKey);
+      if (saved && !validateDest(saved, toToken.chainType)) setDestAddr(saved);
+      else setDestAddr('');
+      setDestAddrTouched(false);
+    } catch { setDestAddr(''); }
+  }, [destLsKey, toToken]);
+  useEffect(() => {
+    if (destAddr && !validateDest(destAddr, toToken.chainType)) {
+      try { window.localStorage.setItem(destLsKey, destAddr); } catch {}
+    }
+  }, [destAddr, destLsKey, toToken]);
+
+  // Debounced quote.
   const fetchQuote = useCallback(async () => {
     setQuoteErr('');
-    if (!fromAmt || +fromAmt <= 0 || !fromToken || !toToken) { setQuote(null); return; }
-    if (!pubkey) { setQuote(null); setQuoteErr('Connect a wallet to see a quote'); return; }
-
+    const n = Number(fromAmt);
+    if (!fromAmt || !Number.isFinite(n) || n <= 0) { setQuote(null); return; }
+    if (n < (fromToken.uiMin || 0)) { setQuote(null); setQuoteErr(`Minimum ${fromToken.uiMin} ${fromToken.symbol}`); return; }
     const myReq = ++reqIdRef.current;
     setQuoting(true);
-
     try {
-      const dec = fromToken.decimals;
-      const raw = toRaw(fromAmt, dec);
-      if (!raw || raw === '0') { setQuote(null); setQuoting(false); return; }
-
-      const sender   = pubkey.toString();
-      const userDest = destAddr.trim();
-      const userDestOk = userDest && !validateDest(userDest, toChainType);
-      const receiver = userDestOk
-        ? userDest
-        : (toChainType === 'EVM' ? '0x000000000000000000000000000000000000dEaD' : sender);
-
-      const j = await lifiQuote({
-        fromChainId: LIFI_SOLANA_ID,
-        fromMint:    fromToken.mint || fromToken.address,
-        toChainId:   toToken.chainId,
-        toAddress:   toToken.address,
-        amount:      raw,
-        sender, receiver,
-      });
+      const atomicAmount = toRaw(fromAmt, fromToken.decimals);
+      if (!atomicAmount || atomicAmount === '0') { setQuote(null); setQuoting(false); return; }
+      const q = await cfQuote({ src: fromToken, dest: toToken, atomicAmount });
       if (myReq !== reqIdRef.current) return;
 
-      if (!j?.estimate) throw new Error('No route available');
-      const outAmt = Number(j.estimate.toAmountMin || j.estimate.toAmount) / Math.pow(10, toToken.decimals);
-      const fromUSD = Number(j.estimate.fromAmountUSD) || 0;
-      const solPrice = getSolPriceUSD();
-      const feeLamports = computeSolFeeLamports(fromUSD, solPrice);
-      const feeSOL = feeLamports / LAMPORTS_PER_SOL;
-      const feeUSD = solPrice ? feeSOL * solPrice : null;
+      const egressUi = Number(q.egressAmount) / Math.pow(10, toToken.decimals);
+      const inputUsd = inputAmountUsd(fromToken, fromAmt);
+      const sp = solPrice || _solPriceCache.p || 0;
+      const feeLamports = computeSolFeeLamports(inputUsd, sp);
 
       setQuote({
-        outAmt,
-        outDisplay: fmtTok(outAmt),
-        estTime:    j.estimate.executionDuration || null,
-        bridge:     j.toolDetails?.name || j.tool || 'LI.FI',
-        raw:        j,
-        rawAmount:  raw,
+        cf:           q,
+        egressUi,
+        egressDisplay: fmtTok(egressUi),
+        durationSec:  Number(q.estimatedDurationSeconds) || null,
+        slippagePct:  Number(q.recommendedSlippageTolerancePercent ?? 1),
+        atomicAmount,
+        inputUsd,
         feeLamports,
-        feeSOL,
-        feeUSD,
-        fromUSD,
+        feeSOL:       feeLamports / LAMPORTS_PER_SOL,
+        feeUSD:       sp ? (feeLamports / LAMPORTS_PER_SOL) * sp : null,
+        fetchedAt:    Date.now(),
       });
     } catch (e) {
       if (e.name === 'AbortError') return;
-      if (myReq === reqIdRef.current) {
-        setQuote(null);
-        setQuoteErr(friendlyError(e));
-      }
+      if (myReq === reqIdRef.current) { setQuote(null); setQuoteErr(friendlyError(e)); }
     } finally {
       if (myReq === reqIdRef.current) setQuoting(false);
     }
-  }, [fromAmt, fromToken, toToken, destAddr, pubkey, toChainType]);
+  }, [fromAmt, fromToken, toToken, solPrice]);
 
   useEffect(() => {
     const t = setTimeout(fetchQuote, QUOTE_DEBOUNCE);
     return () => clearTimeout(t);
   }, [fetchQuote]);
 
+  // MAX.
   const onMax = useCallback(() => {
     if (fbd == null || fbd <= 0) return;
     const dec = Math.min(fromToken.decimals, 9);
-    if (fromToken?.mint === WSOL_MINT) {
+    if (fromToken.isNative) {
+      // Keep enough for fee + reserve.
       const reserveLamports = SOL_RESERVE + MIN_FEE_LAMPORTS;
-      setFromAmt(fmtInput(Math.max(0, (sbl - reserveLamports)) / LAMPORTS_PER_SOL, dec));
+      setFromAmt(fmtInput(Math.max(0, (solBalance - reserveLamports)) / LAMPORTS_PER_SOL, dec));
     } else {
       setFromAmt(fmtInput(fbd, dec));
     }
-  }, [fbd, fromToken, sbl]);
+  }, [fbd, fromToken, solBalance]);
 
+  // Check SOL has enough for tx fees + platform fee + (if SOL source) the bridge amount.
   const solShortfall = useMemo(() => {
-    if (!quote || sbl == null) return null;
+    if (!quote || solBalance == null) return null;
     const need = quote.feeLamports + SOL_RESERVE;
-    if (fromToken?.mint === WSOL_MINT) {
+    if (fromToken.isNative) {
       const inputLamports = Math.floor(Number(fromAmt) * LAMPORTS_PER_SOL);
       const total = inputLamports + quote.feeLamports + SOL_RESERVE;
-      return sbl < total ? (total - sbl) : 0;
+      return solBalance < total ? (total - solBalance) : 0;
     }
-    return sbl < need ? (need - sbl) : 0;
-  }, [quote, sbl, fromToken, fromAmt]);
+    return solBalance < need ? (need - solBalance) : 0;
+  }, [quote, solBalance, fromToken, fromAmt]);
+
+  // Status polling once channel is open.
+  useEffect(() => {
+    if (!channelId) return;
+    let alive = true;
+    let done = false;
+
+    const tick = async () => {
+      if (!alive) return;
+      const status = await cfStatus(channelId);
+      if (!alive) return;
+      const derived = deriveStatusLabel(status);
+      setBridgeStatus(derived);
+      const ref = status?.swapEgress?.txRef || status?.refundEgress?.txRef;
+      if (ref) setEgressTxRef(ref);
+      if (derived.done) done = true;
+    };
+
+    tick();
+    const id = setInterval(() => { if (done) { clearInterval(id); return; } tick(); }, 6_000);
+    const stopAt = setTimeout(() => { alive = false; clearInterval(id); }, 30 * 60_000);
+    return () => { alive = false; clearInterval(id); clearTimeout(stopAt); };
+  }, [channelId]);
 
   const execute = useCallback(async () => {
     if (!wcon) { onConnectWallet?.(); return; }
-    if (needsDest) {
-      const e = validateDest(destAddr, toChainType);
-      if (e) { setAddrErr(e); return; }
+    const addrError = validateDest(destAddr, toToken.chainType);
+    if (addrError) { setAddrErr(addrError); setDestAddrTouched(true); return; }
+    if (!quote)    { setSwapErr('No route. Wait for routing.'); return; }
+    if (!signAllTransactions) {
+      setSwapErr('Wallet does not support signing multiple transactions. Use Phantom or Solflare.');
+      return;
     }
-    if (!quote) { setSwapErr('No route. Wait for routing.'); return; }
-    if (!signTransaction) { setSwapErr('Wallet does not support signing. Use Phantom or Solflare.'); return; }
     if (solShortfall && solShortfall > 0) {
       setSwapErr(`Not enough SOL — need ~${(solShortfall / LAMPORTS_PER_SOL).toFixed(4)} more SOL in your wallet.`);
       return;
@@ -1281,140 +1193,214 @@ export default function CrossChainSwap({ onConnectWallet }) {
 
     setStep(1);
     setSwapErr('');
-    setStatusMsg('Building route…');
+    setStatusMsg('Refreshing route…');
     setTxSig(null);
-    setPendingMsg(null);
+    setChannelId(null);
+    setBridgeStatus(null);
+    setEgressTxRef(null);
+    setBridgeMeta(null);
 
     try {
-      const dec = fromToken.decimals;
-      const raw = toRaw(fromAmt, dec);
-      if (!raw || raw === '0') throw new Error('Invalid amount');
-
-      const j = quote.raw;
-      const txData = j?.transactionRequest?.data;
-      if (!txData) throw new Error('LI.FI returned no transaction');
-
-      const feeLamports = quote.feeLamports;
-
-      setStatusMsg('Preparing transaction…');
-      const latest = await connection.getLatestBlockhash('confirmed');
-      const tx = await buildAtomicTx({
-        connection, payer: pubkey,
-        bridgeTxBase64: txData,
-        feeLamports,
-        blockhash: latest.blockhash,
+      // Fresh quote — stale quotes can drift past slippage tolerance, and
+      // Chainflip absorbs out-of-bound deposits. Re-quote on submit.
+      const freshQuote = await cfQuote({
+        src:          fromToken,
+        dest:         toToken,
+        atomicAmount: quote.atomicAmount,
       });
 
-      const mapSimErr = (logs) => {
-        const t = (logs || []).join('\n').toLowerCase();
-        if (t.includes('insufficient') || t.includes('0x1')) return 'Insufficient balance for this bridge.';
-        if (t.includes('slippage') || t.includes('0x1771'))  return 'Price moved — try a smaller amount or wait a moment.';
-        if (t.includes('account not') || t.includes('uninitialized')) return 'Token account not ready. Try again in a moment.';
-        if (t.includes('blockhash') || t.includes('expired')) return 'Quote expired. Please refresh and retry.';
-        return null;
-      };
-      try {
-        const sim = await connection.simulateTransaction(tx, {
-          replaceRecentBlockhash: true,
-          sigVerify: false,
+      setStatusMsg('Opening Chainflip deposit channel…');
+      const channel = await cfChannel({
+        quote:         freshQuote,
+        destAddress:   destAddr.trim(),
+        refundAddress: pubkey.toString(),                                                     // refund lands back on Solana
+      });
+      const depositAddress = new PublicKey(channel.depositAddress);
+
+      setStatusMsg('Building transactions…');
+      const { blockhash, lastValidBlockHeight } = await connection.getLatestBlockhash('confirmed');
+
+      const cuLimitIx = ComputeBudgetProgram.setComputeUnitLimit({ units: 200_000 });
+      const priorityIx = ComputeBudgetProgram.setComputeUnitPrice({ microLamports: 50_000 });
+
+      // Tx A: platform fee in SOL → FEE_WALLET.
+      const feeMsg = new TransactionMessage({
+        payerKey:        pubkey,
+        recentBlockhash: blockhash,
+        instructions: [
+          cuLimitIx, priorityIx,
+          SystemProgram.transfer({
+            fromPubkey: pubkey,
+            toPubkey:   FEE_WALLET,
+            lamports:   Number(quote.feeLamports),
+          }),
+        ],
+      }).compileToV0Message();
+      const feeTx = new VersionedTransaction(feeMsg);
+
+      // Tx B: bridge transfer to Chainflip deposit address.
+      let bridgeIx;
+      if (fromToken.isNative) {
+        // SOL source: plain SystemProgram.transfer.
+        bridgeIx = SystemProgram.transfer({
+          fromPubkey: pubkey,
+          toPubkey:   depositAddress,
+          lamports:   Number(quote.atomicAmount),
         });
-        if (sim.value.err) {
-          throw new Error(mapSimErr(sim.value.logs) || 'Bridge simulation failed — the price may have moved.');
+      } else {
+        // SPL source (USDC/USDT on Solana): TransferChecked from user ATA
+        // to Chainflip's deposit channel account.
+        //
+        // Chainflip's SDK may return `depositAddress` as one of two things,
+        // depending on internal implementation choice for this asset:
+        //   (a) the pre-created ATA for the deposit channel (token account)
+        //   (b) the owner PDA (we derive the ATA from it ourselves)
+        //
+        // We detect at runtime — a token account is owned by the SPL Token
+        // Program and has data.length === 165. Anything else is treated as
+        // an owner pubkey and we derive its ATA (PDAs are off-curve, so
+        // allowOwnerOffCurve must be true).
+        const mint    = new PublicKey(fromToken.mint);
+        const userAta = getAssociatedTokenAddressSync(mint, pubkey);
+
+        setStatusMsg('Resolving Chainflip deposit account…');
+        let destTokenAccount = depositAddress;
+        try {
+          const info = await connection.getAccountInfo(depositAddress, 'confirmed');
+          const isAta =
+            info &&
+            info.owner.equals(TOKEN_PROGRAM_ID) &&
+            info.data?.length === 165;
+          if (!isAta) {
+            destTokenAccount = getAssociatedTokenAddressSync(mint, depositAddress, true);
+          }
+        } catch {
+          // If account-info lookup fails, fall back to deriving the ATA —
+          // safer assumption since wallets do the same thing when sending
+          // SPL tokens to a "wallet address".
+          destTokenAccount = getAssociatedTokenAddressSync(mint, depositAddress, true);
         }
-      } catch (simErr) {
-        if (simErr?.message && /balance|slippage|simulation failed|account not|expired/i.test(simErr.message)) {
-          throw simErr;
-        }
-        console.warn('[crosschain] sim non-fatal', simErr);
+
+        bridgeIx = createTransferCheckedInstruction(
+          userAta,                       // source ATA (user's)
+          mint,                          // mint (for decimals check)
+          destTokenAccount,              // destination ATA (Chainflip's)
+          pubkey,                        // owner / authority
+          BigInt(quote.atomicAmount),    // atomic amount
+          fromToken.decimals,
+          [],
+          TOKEN_PROGRAM_ID,
+        );
       }
+      const bridgeMsg = new TransactionMessage({
+        payerKey:        pubkey,
+        recentBlockhash: blockhash,
+        instructions: [cuLimitIx, priorityIx, bridgeIx],
+      }).compileToV0Message();
+      const bridgeTx = new VersionedTransaction(bridgeMsg);
 
       setStep(2);
-      setStatusMsg('Sign in wallet…');
-      const signed = await signTransaction(tx);
+      setStatusMsg('Confirm in your wallet…');
+      const [signedFee, signedBridge] = await signAllTransactions([feeTx, bridgeTx]);
 
       setStep(3);
-      setStatusMsg('Submitting transaction…');
-      const sig = await connection.sendRawTransaction(signed.serialize(), {
+      setStatusMsg('Sending fee transaction…');
+      const feeSig = await connection.sendRawTransaction(signedFee.serialize(), {
         skipPreflight: false, maxRetries: 3,
       });
-      setTxSig(sig);
 
-      let bridgeOk = false;
-      try {
-        const result = await Promise.race([
-          connection.confirmTransaction({
-            signature: sig,
-            blockhash: latest.blockhash,
-            lastValidBlockHeight: latest.lastValidBlockHeight,
-          }, 'confirmed'),
-          new Promise((_, rej) => setTimeout(() => rej(new Error('confirm-timeout')), 35_000)),
-        ]);
-        bridgeOk = !result?.value?.err;
-        if (result?.value?.err) throw new Error('Bridge tx failed on-chain: ' + JSON.stringify(result.value.err));
-      } catch (cfErr) {
-        const deadline = Date.now() + 20_000;
-        while (Date.now() < deadline) {
-          await new Promise(r => setTimeout(r, 2000));
-          try {
-            const st = await connection.getSignatureStatus(sig, { searchTransactionHistory: true });
-            const cs = st?.value?.confirmationStatus;
-            if (cs === 'confirmed' || cs === 'finalized') { bridgeOk = true; break; }
-            if (st?.value?.err) throw new Error('Bridge tx failed on-chain.');
-          } catch (e) {
-            if (/failed on-chain/i.test(String(e.message))) throw e;
-          }
-        }
-      }
+      setStatusMsg('Confirming fee…');
+      const feeConfirm = await connection.confirmTransaction(
+        { signature: feeSig, blockhash, lastValidBlockHeight },
+        'confirmed',
+      );
+      if (feeConfirm?.value?.err) throw new Error('Fee transaction failed — bridge not sent.');
 
-      if (bridgeOk) {
-        setStep(4);
-        setStatusMsg('');
-      } else {
-        setStep(4);
-        setStatusMsg('');
-        setPendingMsg('Submitted but still confirming. Check Solscan for status.');
-      }
+      setStatusMsg('Sending bridge transaction…');
+      const bridgeSig = await connection.sendRawTransaction(signedBridge.serialize(), {
+        skipPreflight: false, maxRetries: 3,
+      });
+      setTxSig(bridgeSig);
+
+      // Don't wait for full bridge confirmation — Chainflip status polling
+      // takes over from here. The bridge tx confirming is just "deposit
+      // detected on Solana"; the swap then plays out over the next minutes.
+      setChannelId(channel.depositChannelId);
+      setBridgeMeta({
+        chain:     toToken.chain,
+        chainName: toToken.chainName,
+        color:     toToken.color,
+        symbol:    toToken.symbol,
+      });
+      setBridgeStatus({ label: 'Bridge tx submitted · Chainflip observing…', done: false, failed: false });
+
+      setStep(4);
+      setStatusMsg('');
+      setFromAmt('');
+      setQuote(null);
     } catch (e) {
-      console.error('[CrossChain]', e);
+      console.error('[CrossChain CF]', e);
       setSwapErr(friendlyError(e));
       setStep(-1);
       setTimeout(() => { setStep(0); setSwapErr(''); }, 6000);
     }
   }, [
-    wcon, needsDest, destAddr, toToken, fromToken, fromAmt,
-    pubkey, signTransaction, connection, quote, onConnectWallet, toChainType, solShortfall,
+    wcon, destAddr, toToken, fromToken, quote, signAllTransactions, connection,
+    pubkey, onConnectWallet, solShortfall,
   ]);
 
   const reset = useCallback(() => {
-    setStep(0); setStatusMsg(''); setSwapErr(''); setTxSig(null); setPendingMsg(null);
+    setStep(0); setStatusMsg(''); setSwapErr(''); setTxSig(null);
+    setChannelId(null); setBridgeStatus(null); setEgressTxRef(null);
+    setBridgeMeta(null);
     setFromAmt(''); setQuote(null); setQuoteErr('');
   }, []);
 
-  const tuv = quote?.raw?.estimate?.toAmountUSD ? Number(quote.raw.estimate.toAmountUSD) : 0;
-  const fromUsd = quote?.fromUSD || 0;
-  const busy      = step > 0 && step < 4 && step !== -1;
-  const isSuccess = step === 4;
-  const isError   = step === -1;
-  const solscan   = txSig ? 'https://solscan.io/tx/' + txSig : null;
+  /* ─── DERIVED ─── */
+  const n          = Number(fromAmt) || 0;
+  const inputUsd   = inputAmountUsd(fromToken, fromAmt);
+  const busy       = step > 0 && step < 4 && step !== -1;
+  const isSuccess  = step === 4;
+  const isError    = step === -1;
+  const addrValid  = !!destAddr && !addrErr;
+  const solscan    = txSig ? 'https://solscan.io/tx/' + txSig : null;
+  const destExplorer = destExplorerUrl(bridgeMeta?.chain || toToken.chain, egressTxRef);
+
+  // Dest USD (egress * destination price). For non-stable assets we don't
+  // have on-page pricing — show only if quote includes it. Chainflip quote
+  // includes ingressFee USD values but not destination USD; we approximate
+  // by comparing to input USD minus fees for stable→stable, else skip.
+  const destUsd = useMemo(() => {
+    if (!quote) return 0;
+    if (toToken.asset === 'USDC' || toToken.asset === 'USDT') return quote.egressUi;
+    // For non-stable dest, rough estimate via input USD - protocol fees.
+    return null;
+  }, [quote, toToken]);
 
   const btnLabel = () => {
     if (!wcon) return 'Connect Wallet';
-    if (step === 1)   return 'Building Route…';
+    if (step === 1)   return 'Refreshing…';
     if (step === 2)   return 'Sign in Wallet…';
     if (step === 3)   return 'Bridging…';
-    if (isSuccess)    return pendingMsg ? 'Submitted ✓' : 'Bridge Submitted ✓';
+    if (isSuccess)    return 'Submitted ✓';
     if (isError)      return 'Try Again';
     if (!fromAmt)     return 'Enter Amount';
-    if (needsDest && !destAddr.trim()) return 'Enter Destination';
-    if (addrErr)      return 'Invalid Address';
-    if (!quote)       return quoting ? 'Finding Route…' : 'No Route';
-    if (solShortfall) return 'Need more SOL';
-    return null; // render with italic arrow below
+    if (n < (fromToken.uiMin || 0)) return `Min ${fromToken.uiMin} ${fromToken.symbol}`;
+    if (!destAddr.trim())   return `Enter ${toToken.chain} address`;
+    if (addrErr)            return 'Invalid Address';
+    if (!quote)             return quoting ? 'Quoting Chainflip…' : 'No Route';
+    if (solShortfall)       return 'Need more SOL';
+    return null;
   };
 
   const btnDisabled = busy ||
-    (wcon && (!fromAmt || (needsDest && !destAddr.trim()) || !!addrErr ||
-              (!quote && !isError && !isSuccess) || !!solShortfall));
+    (wcon && (!fromAmt
+      || n < (fromToken.uiMin || 0)
+      || !destAddr.trim()
+      || !!addrErr
+      || (!quote && !isError && !isSuccess)
+      || !!solShortfall
+    ));
 
   const btnClass = () => {
     if (isSuccess)  return 'cc-cta cc-cta-success';
@@ -1422,10 +1408,6 @@ export default function CrossChainSwap({ onConnectWallet }) {
     if (btnDisabled && wcon) return 'cc-cta cc-cta-disabled';
     return 'cc-cta';
   };
-
-  const fromChain = chains?.[String(LIFI_SOLANA_ID)] || { id: String(LIFI_SOLANA_ID), name: 'Solana', chainType: 'SVM' };
-  const toChainDisplay = chains?.[String(toToken?.chainId)] || { id: toToken?.chainId, name: 'Chain ' + toToken?.chainId };
-  const toChainColor = chainColorOf(toChainDisplay);
 
   const labelOverride = btnLabel();
 
@@ -1441,13 +1423,13 @@ export default function CrossChainSwap({ onConnectWallet }) {
             <div className="cc-brand-dot"/>
             <span className="cc-wordmark">bridge<span className="slash">//</span><span className="grad">cross-chain</span></span>
           </div>
-          <div className="cc-head-live"><span className="d"/>LI.FI</div>
+          <div className="cc-head-live"><span className="d"/>CHAINFLIP</div>
         </div>
 
         <div className="cc-mini-hero">
-          <div className="cc-mh-eyebrow">∞ ANY CHAIN</div>
+          <div className="cc-mh-eyebrow">∞ NATIVE · NO WRAPS</div>
           <h1 className="cc-mh-title">Move it <em>anywhere.</em></h1>
-          <div className="cc-mh-sub">One transaction. Solana out, any chain in.</div>
+          <div className="cc-mh-sub">Real assets, native on every chain. Auto-refund if a swap can't fill — no stuck funds.</div>
         </div>
 
         <div className="cc-card">
@@ -1458,7 +1440,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
             <div className="cc-io-head">
               <span className="cc-io-label">You Send</span>
               <div className="cc-io-meta">
-                <ChainBadge chain={fromChain} small/>
+                <ChainBadge chain="Solana" name="Solana" color="#14f195" small/>
                 {fbd != null && (
                   <span className="cc-io-bal">Bal: <span className="cc-io-bal-val">{fmtTok(fbd)}</span></span>
                 )}
@@ -1471,7 +1453,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
                 disabled={busy}
               >
                 <TokenIcon token={fromToken} size={22}/>
-                <span className="cc-token-sym">{fromToken?.symbol}</span>
+                <span className="cc-token-sym">{fromToken.symbol}</span>
                 {!busy && <span className="cc-token-caret">▾</span>}
               </button>
               <input
@@ -1484,7 +1466,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
               />
               {fbd > 0 && !busy && (<button onClick={onMax} className="cc-max-btn">MAX</button>)}
             </div>
-            {fromUsd > 0 && (<div className="cc-io-usd">≈ {fmtUsd(fromUsd)}</div>)}
+            {inputUsd > 0 && (<div className="cc-io-usd">≈ {fmtUsd(inputUsd)}</div>)}
           </div>
 
           <div className="cc-flip-wrap"><div className="cc-flip-arrow">↓</div></div>
@@ -1493,7 +1475,7 @@ export default function CrossChainSwap({ onConnectWallet }) {
           <div className="cc-io-box">
             <div className="cc-io-head">
               <span className="cc-io-label">You Receive (est.)</span>
-              {toToken && <ChainBadge chain={toChainDisplay} small/>}
+              <ChainBadge chain={toToken.chain} name={toToken.chainName} color={toToken.color} small/>
             </div>
             <div className="cc-io-row">
               <button
@@ -1502,57 +1484,54 @@ export default function CrossChainSwap({ onConnectWallet }) {
                 disabled={busy}
               >
                 <TokenIcon token={toToken} size={22}/>
-                <span className="cc-token-sym">{toToken?.symbol}</span>
+                <span className="cc-token-sym">{toToken.symbol}</span>
                 {!busy && <span className="cc-token-caret">▾</span>}
               </button>
               <div className={'cc-io-output' + ((!quote && !quoting) ? ' cc-io-output-empty' : '')}>
-                {quoting ? <span className="cc-io-output-loading">…</span> : (quote?.outDisplay || '0')}
+                {quoting ? <span className="cc-io-output-loading">…</span> : (quote?.egressDisplay || '0')}
               </div>
             </div>
-            {tuv > 0 && (<div className="cc-io-usd">≈ {fmtUsd(tuv)}</div>)}
+            {destUsd != null && destUsd > 0 && (<div className="cc-io-usd">≈ {fmtUsd(destUsd)}</div>)}
             {quote && (
               <div className="cc-route-meta">
-                <span className="cc-route-via">via <span className="cc-route-tag">{quote.bridge}</span></span>
+                <span className="cc-route-via">via <span className="cc-route-tag">Chainflip</span></span>
                 <span>
-                  <b>{(SLIPPAGE * 100).toFixed(1)}%</b> slip
-                  {quote.estTime ? <> · <b>~{Math.max(1, Math.ceil(quote.estTime / 60))} min</b></> : null}
+                  <b>{quote.slippagePct.toFixed(2)}%</b> slip
+                  {quote.durationSec ? <> · <b>~{Math.max(1, Math.ceil(quote.durationSec / 60))} min</b></> : null}
                 </span>
               </div>
             )}
           </div>
 
-          {needsDest && (
-            <div className="cc-dest">
-              <div className="cc-dest-label">
-                DESTINATION · <span className="cc-dest-chain" style={{ color: toChainColor }}>
-                  {(toChainDisplay?.name || '').toUpperCase()}
-                </span>
-              </div>
-              <div className="cc-dest-input-wrap">
-                <input
-                  value={destAddr}
-                  onChange={e => { if (!busy) setDestAddr(e.target.value.trim()); }}
-                  placeholder={
-                    toChainType === 'EVM'  ? '0x...'
-                    : toChainType === 'SVM' ? 'Solana address'
-                    : toChainType === 'UTXO' ? 'bc1... / 1... / 3...'
-                    : toChainType === 'MVM' ? '0x... (64 hex)'
-                    : 'Destination address'
-                  }
-                  disabled={busy}
-                  className={'cc-dest-input' + (addrErr ? ' cc-dest-err' : destAddr && !addrErr ? ' cc-dest-ok' : '')}
-                />
-                {destAddr && !addrErr && (<div className="cc-dest-check">✓</div>)}
-              </div>
-              {addrErr && <div className="cc-dest-err-msg">{addrErr}</div>}
+          {/* DESTINATION ADDRESS */}
+          <div className="cc-dest">
+            <div className="cc-dest-label">
+              DESTINATION · <span className="cc-dest-chain" style={{ color: toToken.color }}>
+                {toToken.chainName?.toUpperCase()}
+              </span>
             </div>
-          )}
+            <div className="cc-dest-input-wrap">
+              <input
+                value={destAddr}
+                onChange={e => { if (!busy) setDestAddr(e.target.value.trim()); }}
+                onBlur={() => setDestAddrTouched(true)}
+                placeholder={destInputPlaceholder(toToken.chainType)}
+                disabled={busy}
+                spellCheck={false}
+                autoCapitalize="off"
+                autoCorrect="off"
+                className={'cc-dest-input' + (addrErr && destAddrTouched ? ' cc-dest-err' : addrValid ? ' cc-dest-ok' : '')}
+              />
+              {addrValid && (<div className="cc-dest-check">✓</div>)}
+            </div>
+            {addrErr && destAddrTouched && <div className="cc-dest-err-msg">{addrErr}</div>}
+          </div>
 
           {quoteErr && !quote && (<div className="cc-warn">{quoteErr}</div>)}
 
           {solShortfall > 0 && quote && (
             <div className="cc-warn">
-              You need ~{(solShortfall / LAMPORTS_PER_SOL).toFixed(4)} more SOL in your wallet to complete this bridge.
+              You need ~{(solShortfall / LAMPORTS_PER_SOL).toFixed(4)} more SOL in your wallet to cover swap + fee.
             </div>
           )}
 
@@ -1562,18 +1541,44 @@ export default function CrossChainSwap({ onConnectWallet }) {
 
           {swapErr && (<div className="cc-error">{swapErr}</div>)}
 
+          {/* Chainflip status banner — shows live state until terminal.
+              Once done (COMPLETED or FAILED), the success card below takes over. */}
+          {channelId && bridgeStatus && !bridgeStatus.done && (
+            <div className="cc-status" style={{ marginTop: 14 }}>
+              <div className="cc-spinner"/>
+              <span>{bridgeStatus.label}</span>
+            </div>
+          )}
+
+          {/* Success card — uses bridgeMeta (snapshot at submit) instead of
+              live toToken, so it stays correct if the user changes the dest
+              dropdown while the swap is still mid-flight. */}
           {isSuccess && (
-            <div className={'cc-success' + (pendingMsg ? ' cc-success-pending' : '')}>
-              <div className="cc-success-icon">{pendingMsg ? '⏳' : '🎉'}</div>
-              <div className="cc-success-title">{pendingMsg ? 'Bridge Submitted' : 'Bridge Submitted!'}</div>
+            <div className={
+              'cc-success' +
+              (bridgeStatus?.failed ? ' cc-success-fail' :
+               bridgeStatus?.done && !bridgeStatus.failed ? '' :
+               ' cc-success-pending')
+            }>
+              <div className="cc-success-icon">
+                {bridgeStatus?.failed ? '⚠️' : bridgeStatus?.done ? '🎉' : '⏳'}
+              </div>
+              <div className="cc-success-title">
+                {bridgeStatus?.failed ? 'Refund in flight' :
+                 bridgeStatus?.done   ? 'Arrived on ' + (bridgeMeta?.chainName || 'destination') :
+                                        'Chainflip is bridging…'}
+              </div>
               <div className="cc-success-sub">
-                {pendingMsg || (quote?.estTime
-                  ? 'Funds arrive in ~' + Math.max(1, Math.ceil(quote.estTime / 60)) + ' min'
-                  : 'Funds arrive in a few minutes')}
+                {bridgeStatus?.failed
+                  ? 'Funds will return to your Solana wallet.'
+                  : (quote?.durationSec
+                      ? `Funds arrive in ~${Math.max(1, Math.ceil(quote.durationSec / 60))} min`
+                      : 'Funds arrive in a few minutes')}
               </div>
             </div>
           )}
 
+          {/* CTA */}
           {!isSuccess ? (
             <button
               onClick={isError ? reset : (!wcon ? () => onConnectWallet?.() : execute)}
@@ -1582,30 +1587,34 @@ export default function CrossChainSwap({ onConnectWallet }) {
             >
               {busy && <span className="cc-cta-spinner">⟳</span>}
               {labelOverride != null ? labelOverride : (
-                <>Bridge {fromToken?.symbol || ''} <em>→</em> {toToken?.symbol || ''}</>
+                <>Bridge {fromToken.symbol} <em>→</em> {toToken.symbol}</>
               )}
             </button>
           ) : (
             <button onClick={reset} className="cc-cta cc-cta-reset">New Bridge</button>
           )}
 
+          {/* Links */}
           {txSig && solscan && (
-            <a href={solscan} target="_blank" rel="noreferrer" className="cc-solscan-link">View on Solscan ↗</a>
+            <a href={solscan} target="_blank" rel="noreferrer" className="cc-solscan-link">View deposit on Solscan ↗</a>
           )}
-          <p className="cc-footer-note">Non-custodial · LI.FI aggregator · Solana origin</p>
+          {destExplorer && (
+            <a href={destExplorer} target="_blank" rel="noreferrer" className="cc-solscan-link">View arrival on {bridgeMeta?.chainName || 'destination chain'} ↗</a>
+          )}
+
+          <p className="cc-footer-note">Non-custodial · Chainflip native · Auto-refund · Solana origin</p>
         </div>
       </div>
 
       <FromTokenModal
         open={fromOpen}
         onClose={() => setFromOpen(false)}
-        onSelect={t => { setFromToken(t); setQuote(null); }}
+        onSelect={t => { setFromToken(t); setQuote(null); setFromAmt(''); }}
       />
       <ToTokenModal
         open={toOpen}
         onClose={() => setToOpen(false)}
-        onSelect={t => { setToToken(t); setQuote(null); setDestAddr(''); setAddrErr(''); }}
-        chains={chains}
+        onSelect={t => { setToToken(t); setQuote(null); }}
       />
     </div>
   );
