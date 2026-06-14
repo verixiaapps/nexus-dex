@@ -1,13 +1,20 @@
-// Portfolio.jsx — holdings dashboard.
+// Portfolio.jsx — Solana wallet dashboard.
 //
-// PERFORMANCE PATCH:
-//   • Two-phase load: SOL balance + price render immediately, tokens stream in
-//   • Parallelized Jupiter meta + price chunk fetches (was serial)
-//   • All trading-related logic still byte-identical
+// REWRITE NOTES:
+//   • One batched JSON-RPC call (SOL balance + both SPL programs) via /api/solana-rpc.
+//     The server routes that to ALCHEMY_SOLANA_RPC (top priority in getSolanaRpcUrl).
+//   • In parallel: Jupiter token meta (/api/jupiter/tokens/search) + Jupiter prices
+//     direct from lite-api.jup.ag/price/v3 (CSP-permitted). Prices include SOL.
+//   • One-shot render — full reveal when data arrives. No skeletons, no progressive
+//     phases.
+//   • Manual refresh only. No setInterval, no polling.
+//   • Only shows SOL + tokens worth ≥ MIN_TOKEN_VALUE_USD ($1). SOL always shows.
+//   • MoonPay CTA — "Buy Solana with USD", inline SVG logo, no external image.
+//   • No Helius DAS, no fallbacks.
+//   • Dropped @solana/web3.js PublicKey + useConnection — all RPC server-proxied.
 
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import { useWallet, useConnection } from '@solana/wallet-adapter-react';
-import { PublicKey } from '@solana/web3.js';
+import { useWallet } from '@solana/wallet-adapter-react';
 
 // =====================================================================
 // INLINE CSS — Syne + JetBrains Mono · mint + violet, native dark
@@ -24,6 +31,7 @@ const PF_CSS = `
   --pf-sol:#9945ff;
   --pf-up:#3dd598; --pf-down:#ff8a9e;
   --pf-amber:#f5b53d; --pf-gold:#ffcd3c;
+  --pf-moonpay:#7D00FE;
   --pf-border:rgba(255,255,255,.06);
   --pf-border-hi:rgba(77,255,210,.24);
   --pf-hairline:rgba(255,255,255,.05);
@@ -76,8 +84,6 @@ const PF_CSS = `
 /* WIDGET TITLE */
 .pf-widget-title{display:flex;align-items:center;justify-content:space-between;padding:0 4px 12px;margin-top:-4px}
 .pf-widget-title .nm{font-family:var(--pf-font-display);font-weight:800;font-size:20px;color:var(--pf-ink-str);letter-spacing:-.01em}
-.pf-widget-title .live{display:flex;align-items:center;gap:6px;font-family:var(--pf-font-mono);font-size:10px;font-weight:800;color:var(--pf-hl);border:1px solid var(--pf-border-hi);border-radius:100px;padding:5px 11px;background:var(--pf-hl-dim)}
-.pf-widget-title .live .d{width:5px;height:5px;border-radius:50%;background:var(--pf-hl);box-shadow:0 0 8px var(--pf-hl);animation:pf-pulse 1.6s ease-in-out infinite}
 
 /* HERO */
 .pf-hero{margin-top:0;padding:22px 20px;border-radius:22px;background:linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98));border:1.5px solid rgba(255,255,255,.07);box-shadow:0 20px 60px rgba(0,0,0,.55);position:relative;overflow:hidden}
@@ -104,7 +110,7 @@ const PF_CSS = `
 .pf-copy-pill.pf-copied{color:var(--pf-up);background:rgba(61,213,152,.10);border-color:rgba(61,213,152,.30)}
 
 /* STATS */
-.pf-stats{display:grid;gap:8px;margin-top:12px;margin-bottom:18px}
+.pf-stats{display:grid;gap:8px;margin-top:12px;margin-bottom:14px}
 .pf-stats-2{grid-template-columns:repeat(2,1fr)}
 .pf-stats-3{grid-template-columns:repeat(3,1fr)}
 .pf-stat{padding:11px 13px;border-radius:12px;background:rgba(10,16,32,.50);border:1.5px solid var(--pf-border);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
@@ -114,6 +120,24 @@ const PF_CSS = `
 .pf-stat-mint{color:var(--pf-hl)}
 .pf-stat-amber{color:var(--pf-amber)}
 .pf-stat-sub{font-size:10px;color:var(--pf-muted);margin-top:2px;font-weight:600;font-family:var(--pf-font-mono)}
+
+/* MOONPAY CTA */
+.pf-moonpay{
+  display:flex;align-items:center;gap:12px;width:100%;
+  padding:13px 16px;margin:0 0 16px;border-radius:14px;
+  background:linear-gradient(135deg,#7D00FE 0%,#5A0EB8 100%);
+  border:1px solid rgba(168,127,255,.45);
+  text-decoration:none;color:#fff;font-family:inherit;
+  box-shadow:0 6px 20px rgba(125,0,254,.30),inset 0 1px 0 rgba(255,255,255,.18);
+  transition:transform .15s,box-shadow .15s;
+}
+.pf-moonpay:hover{transform:translateY(-1px);box-shadow:0 10px 28px rgba(125,0,254,.45),inset 0 1px 0 rgba(255,255,255,.22)}
+.pf-moonpay:active{transform:translateY(0)}
+.pf-moonpay-logo{width:34px;height:34px;border-radius:50%;background:#fff;display:grid;place-items:center;flex-shrink:0;box-shadow:0 2px 8px rgba(0,0,0,.18)}
+.pf-moonpay-text{flex:1;min-width:0;display:flex;flex-direction:column;align-items:flex-start}
+.pf-moonpay-title{font-family:var(--pf-font-display);font-weight:800;font-size:14px;letter-spacing:-.01em;color:#fff;line-height:1.15}
+.pf-moonpay-sub{font-family:var(--pf-font-mono);font-size:10px;font-weight:600;color:rgba(255,255,255,.78);margin-top:2px;letter-spacing:.04em}
+.pf-moonpay-arrow{font-size:16px;color:rgba(255,255,255,.85);flex-shrink:0;font-weight:700}
 
 /* ERROR */
 .pf-error{background:rgba(255,138,158,.08);border:1px solid rgba(255,138,158,.24);border-radius:12px;padding:12px;margin-bottom:14px;font-size:12px;color:var(--pf-down);font-weight:600}
@@ -145,17 +169,14 @@ const PF_CSS = `
 .pf-badge-img{border-radius:50%;flex-shrink:0;object-fit:cover;background:rgba(255,255,255,.04)}
 
 /* EMPTY */
-.pf-empty{padding:28px 18px;text-align:center}
+.pf-empty{padding:24px 18px;text-align:center}
 .pf-empty-title{color:var(--pf-muted);font-size:12.5px;margin-bottom:6px;font-weight:700}
 .pf-empty-sub{color:var(--pf-muted-2);font-size:11px;font-weight:500}
 
-/* SKELETON */
-.pf-skel-row{grid-template-columns:36px 1fr 80px}
-.pf-skel-badge{width:36px;height:36px;border-radius:50%;background:rgba(255,255,255,.04)}
-.pf-skel-bar{border-radius:4px;background:rgba(255,255,255,.05)}
-.pf-skel-bar-1{height:12px;width:64px;margin-bottom:6px}
-.pf-skel-bar-2{height:10px;width:96px;background:rgba(255,255,255,.035)}
-.pf-skel-bar-3{height:12px;width:60px;justify-self:end}
+/* LOADING — one-shot reveal, no skeletons */
+.pf-loading-card{padding:60px 24px;text-align:center}
+.pf-loading-spinner{width:30px;height:30px;border-radius:50%;border:2.5px solid rgba(77,255,210,.15);border-top-color:var(--pf-hl);margin:0 auto 14px;animation:pf-spin .8s linear infinite}
+.pf-loading-text{font-family:var(--pf-font-mono);font-size:10px;color:var(--pf-muted);font-weight:700;letter-spacing:.14em}
 
 /* POWERED */
 .pf-powered{display:flex;align-items:center;justify-content:center;gap:9px;padding:12px 16px;margin-top:18px;border-radius:14px;background:rgba(255,255,255,.02);border:1px solid var(--pf-border)}
@@ -178,16 +199,19 @@ function usePfCSS() {
 // =====================================================================
 // CONSTANTS
 // =====================================================================
-const SOL_MINT              = 'So11111111111111111111111111111111111111112';
-const USDC_SOLANA           = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
-const USDT_SOLANA           = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
-const SPL_LEGACY_PROGRAM    = new PublicKey('TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA');
-const SPL_TOKEN2022_PROGRAM = new PublicKey('TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb');
+const SOL_MINT    = 'So11111111111111111111111111111111111111112';
+const USDC_SOLANA = 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v';
+const USDT_SOLANA = 'Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB';
 
-const DUST_THRESHOLD_USD = 0.10;
-const PRICE_CACHE_TTL_MS = 60_000;
-const META_CACHE_TTL_MS  = 24 * 60 * 60_000;
-const POLL_INTERVAL_MS   = 30_000;
+// SPL program IDs as base58 strings — passed raw to JSON-RPC, no PublicKey wrapper.
+const SPL_LEGACY_PROGRAM    = 'TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA';
+const SPL_TOKEN2022_PROGRAM = 'TokenzQdBNbLqP5VEhdkAS6EPFLC1PHnBqCXEpPxuEb';
+
+// Minimum USD value for a token row to render. SOL always shows regardless.
+const MIN_TOKEN_VALUE_USD = 1;
+
+// MoonPay buy URL — appends &walletAddress=... at render time when available.
+const MOONPAY_BUY_BASE = 'https://buy.moonpay.com/?defaultCurrencyCode=sol';
 
 const BRAND_TOKENS = {
   'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB': { symbol:'TSLAx',  name:'Tesla',                color:'#e31837', textColor:'#fff', isBrand:true, decimals:8 },
@@ -264,10 +288,8 @@ function colorFromMint(mint) {
 }
 
 // =====================================================================
-// TOKEN METADATA
+// META HELPERS
 // =====================================================================
-const _metaCache = new Map();
-
 function getCoreMeta(mint) {
   if (BRAND_TOKENS[mint]) return BRAND_TOKENS[mint];
   if (CORE_TOKENS[mint])  return CORE_TOKENS[mint];
@@ -282,102 +304,149 @@ function buildFallbackMeta(mint) {
     icon:      null,
   };
 }
-async function fetchJupiterMeta(mints) {
-  if (!mints || mints.length === 0) return {};
-  const out = {};
-  const need = [];
-  for (const m of mints) {
-    if (getCoreMeta(m)) { out[m] = getCoreMeta(m); continue; }
-    const cached = _metaCache.get(m);
-    if (cached && Date.now() - cached.ts < META_CACHE_TTL_MS) {
-      out[m] = cached.meta;
-      continue;
-    }
-    need.push(m);
+
+// =====================================================================
+// PORTFOLIO FETCH — one batched RPC, then parallel meta + prices.
+// Throws on RPC failure; meta/price failures degrade silently to 0.
+// =====================================================================
+async function fetchPortfolio(addressStr) {
+  // Phase 1 — batched JSON-RPC (SOL balance + both SPL programs)
+  const rpcBatch = [
+    { jsonrpc: '2.0', id: 1, method: 'getBalance',
+      params: [addressStr] },
+    { jsonrpc: '2.0', id: 2, method: 'getTokenAccountsByOwner',
+      params: [addressStr, { programId: SPL_LEGACY_PROGRAM },    { encoding: 'jsonParsed' }] },
+    { jsonrpc: '2.0', id: 3, method: 'getTokenAccountsByOwner',
+      params: [addressStr, { programId: SPL_TOKEN2022_PROGRAM }, { encoding: 'jsonParsed' }] },
+  ];
+
+  const rpcResp = await fetch('/api/solana-rpc', {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body:    JSON.stringify(rpcBatch),
+  });
+  if (!rpcResp.ok) throw new Error('RPC HTTP ' + rpcResp.status);
+  const rpcJson = await rpcResp.json();
+  if (!Array.isArray(rpcJson)) throw new Error('RPC: expected batch array');
+
+  // Match responses by id — Solana RPC may reorder batch items.
+  const byId = {};
+  for (const item of rpcJson) {
+    if (item && item.id != null) byId[item.id] = item;
   }
-  if (need.length === 0) return out;
-  try {
-    const chunks = [];
-    for (let i = 0; i < need.length; i += 100) chunks.push(need.slice(i, i + 100));
-    // PARALLEL: was serial `for...await` loop
-    const results = await Promise.all(chunks.map(async (chunk) => {
-      try {
-        const r = await fetch(`/api/jupiter/tokens/search?query=${encodeURIComponent(chunk.join(','))}`);
-        if (!r.ok) return [];
-        const data = await r.json();
-        return Array.isArray(data) ? data : (data?.tokens || []);
-      } catch { return []; }
-    }));
-    for (const list of results) {
-      list.forEach(t => {
-        const mint = t.id || t.address || t.mint;
-        if (!mint) return;
-        const meta = {
-          symbol:    t.symbol || (mint.slice(0, 4) + '...'),
-          name:      t.name   || 'SPL Token',
-          icon:      t.icon || t.logoURI || null,
-          decimals:  Number.isFinite(t.decimals) ? t.decimals : 6,
-          color:     colorFromMint(mint),
-          textColor: '#fff',
+
+  // getBalance → { result: { context, value: lamports } }
+  const lamports = Number(byId[1]?.result?.value || 0);
+
+  // getTokenAccountsByOwner → { result: { context, value: [...] } }
+  const legacyAccounts  = byId[2]?.result?.value || [];
+  const token22Accounts = byId[3]?.result?.value || [];
+  const allAccounts     = legacyAccounts.concat(token22Accounts);
+
+  // Phase 2 — aggregate by mint (a wallet can have multiple accounts per mint)
+  const byMint = {};
+  for (const acc of allAccounts) {
+    try {
+      const info = acc.account.data.parsed.info;
+      const ta   = info.tokenAmount || {};
+      const ui   = Number(ta.uiAmountString || ta.uiAmount || 0);
+      const mint = info.mint;
+      if (!mint || !Number.isFinite(ui) || ui <= 0) continue;
+      if (!byMint[mint]) {
+        byMint[mint] = {
+          mint,
+          uiAmount: 0,
+          decimals: Number.isFinite(Number(ta.decimals)) ? Number(ta.decimals) : 6,
         };
-        _metaCache.set(mint, { meta, ts: Date.now() });
-        out[mint] = meta;
-      });
-    }
-  } catch (e) {
-    console.warn('[portfolio] meta fetch failed', e?.message || e);
+      }
+      byMint[mint].uiAmount += ui;
+    } catch {}
   }
-  for (const m of need) if (!out[m]) out[m] = buildFallbackMeta(m);
+
+  const tokenMints = Object.keys(byMint).filter(m => m !== SOL_MINT);
+
+  // Phase 3 — meta + prices in parallel. Prices request includes SOL.
+  const [metaMap, priceMap] = await Promise.all([
+    fetchMetaBatched(tokenMints),
+    fetchPricesBatched([SOL_MINT, ...tokenMints]),
+  ]);
+
+  // Phase 4 — enrich, threshold-filter, sort
+  const enriched = Object.values(byMint).map(h => {
+    const core    = getCoreMeta(h.mint);
+    const fetched = metaMap[h.mint];
+    const meta    = core || fetched || buildFallbackMeta(h.mint);
+    const price   = meta.isStable ? 1 : (priceMap[h.mint] || 0);
+    return { ...h, meta, price, value: h.uiAmount * price };
+  });
+
+  const filtered = enriched
+    .filter(h => h.mint !== SOL_MINT)
+    .filter(h => h.value >= MIN_TOKEN_VALUE_USD);
+
+  filtered.sort((a, b) => {
+    const rank = m => m.isStable ? 0 : m.isBrand ? 1 : 2;
+    const ra = rank(a.meta), rb = rank(b.meta);
+    if (ra !== rb) return ra - rb;
+    return b.value - a.value;
+  });
+
+  return {
+    solBalance:  lamports / 1e9,
+    solPriceUsd: priceMap[SOL_MINT] || 0,
+    tokens:      filtered,
+  };
+}
+
+// Chunked at 100 mints (Jupiter URL length safety). Parallel.
+async function fetchMetaBatched(mints) {
+  const out = {};
+  if (!mints.length) return out;
+  const chunks = [];
+  for (let i = 0; i < mints.length; i += 100) chunks.push(mints.slice(i, i + 100));
+  const results = await Promise.all(chunks.map(async (chunk) => {
+    try {
+      const r = await fetch(`/api/jupiter/tokens/search?query=${encodeURIComponent(chunk.join(','))}`);
+      if (!r.ok) return [];
+      const data = await r.json();
+      return Array.isArray(data) ? data : (data?.tokens || []);
+    } catch { return []; }
+  }));
+  for (const list of results) {
+    for (const t of list) {
+      const m = t.id || t.address || t.mint;
+      if (!m) continue;
+      out[m] = {
+        symbol:    t.symbol || (m.slice(0, 4) + '...'),
+        name:      t.name   || 'SPL Token',
+        icon:      t.icon || t.logoURI || null,
+        decimals:  Number.isFinite(t.decimals) ? t.decimals : 6,
+        color:     colorFromMint(m),
+        textColor: '#fff',
+      };
+    }
+  }
   return out;
 }
 
-// =====================================================================
-// PRICE FETCH
-// =====================================================================
-const _priceCache = new Map();
-function clearPriceCache() { _priceCache.clear(); }
-
-async function fetchJupiterPrices(mints, force = false) {
-  if (!mints || mints.length === 0) return {};
+async function fetchPricesBatched(mints) {
   const out = {};
-  const need = [];
-  for (const m of mints) {
-    const core = getCoreMeta(m);
-    if (core?.isStable) { out[m] = 1; continue; }
-    if (!force) {
-      const cached = _priceCache.get(m);
-      if (cached && Date.now() - cached.ts < PRICE_CACHE_TTL_MS) {
-        out[m] = cached.price;
-        continue;
-      }
+  if (!mints.length) return out;
+  const chunks = [];
+  for (let i = 0; i < mints.length; i += 100) chunks.push(mints.slice(i, i + 100));
+  const results = await Promise.all(chunks.map(async (chunk) => {
+    try {
+      const r = await fetch(`https://lite-api.jup.ag/price/v3?ids=${chunk.join(',')}`);
+      if (!r.ok) return {};
+      return await r.json();
+    } catch { return {}; }
+  }));
+  for (const j of results) {
+    for (const [m, info] of Object.entries(j || {})) {
+      const p = Number(info?.usdPrice);
+      if (Number.isFinite(p) && p > 0) out[m] = p;
     }
-    need.push(m);
   }
-  if (need.length === 0) return out;
-  try {
-    const chunks = [];
-    for (let i = 0; i < need.length; i += 100) chunks.push(need.slice(i, i + 100));
-    // PARALLEL: was serial `for...await` loop
-    const results = await Promise.all(chunks.map(async (chunk) => {
-      try {
-        const r = await fetch(`https://lite-api.jup.ag/price/v3?ids=${chunk.join(',')}`);
-        if (!r.ok) return {};
-        return await r.json();
-      } catch { return {}; }
-    }));
-    for (const j of results) {
-      Object.entries(j || {}).forEach(([mint, info]) => {
-        const p = Number(info?.usdPrice);
-        if (Number.isFinite(p) && p > 0) {
-          _priceCache.set(mint, { price: p, ts: Date.now() });
-          out[mint] = p;
-        }
-      });
-    }
-  } catch (e) {
-    console.warn('[portfolio] price fetch failed', e?.message || e);
-  }
-  for (const m of need) if (out[m] == null) out[m] = 0;
   return out;
 }
 
@@ -413,19 +482,6 @@ function TokenBadge({ meta, mint, size = 36 }) {
   );
 }
 
-function SkeletonRow() {
-  return (
-    <div className="pf-row pf-skel-row">
-      <div className="pf-skel-badge"/>
-      <div>
-        <div className="pf-skel-bar pf-skel-bar-1"/>
-        <div className="pf-skel-bar pf-skel-bar-2"/>
-      </div>
-      <div className="pf-skel-bar pf-skel-bar-3"/>
-    </div>
-  );
-}
-
 function TokenRow({ token }) {
   const meta    = token.meta || buildFallbackMeta(token.mint);
   const val     = token.value || 0;
@@ -454,6 +510,33 @@ function TokenRow({ token }) {
   );
 }
 
+// MoonPay CTA — inline SVG logo, no external image dependency.
+// The "M" mark is rendered as a path so there's no broken-image risk and
+// no extra network request.
+function MoonPayButton({ walletAddress }) {
+  const url = walletAddress
+    ? `${MOONPAY_BUY_BASE}&walletAddress=${encodeURIComponent(walletAddress)}`
+    : MOONPAY_BUY_BASE;
+  return (
+    <a href={url} target="_blank" rel="noopener noreferrer" className="pf-moonpay">
+      <span className="pf-moonpay-logo" aria-hidden="true">
+        <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
+          <circle cx="16" cy="16" r="16" fill="#7D00FE"/>
+          <path
+            d="M9.6 22V10h3.1l3.3 5.6L19.3 10h3.1v12h-2.9v-7.6l-2.7 4.5h-1.6l-2.7-4.5V22H9.6Z"
+            fill="#fff"
+          />
+        </svg>
+      </span>
+      <span className="pf-moonpay-text">
+        <span className="pf-moonpay-title">Buy Solana with USD</span>
+        <span className="pf-moonpay-sub">Card · Apple Pay · Bank transfer</span>
+      </span>
+      <span className="pf-moonpay-arrow">↗</span>
+    </a>
+  );
+}
+
 // =====================================================================
 // MAIN
 // =====================================================================
@@ -461,130 +544,57 @@ export default function Portfolio({ onConnectWallet }) {
   usePfCSS();
 
   const { publicKey: extPk, connected: solCon } = useWallet();
-  const { connection } = useConnection();
+  const addressStr = useMemo(() => extPk ? extPk.toString() : null, [extPk]);
 
-  const pubkey = useMemo(() => extPk || null, [extPk]);
-  const hasSol = !!solCon;
-
-  const [solBalance, setSolBalance]     = useState(0);
-  const [solPriceUsd, setSolPriceUsd]   = useState(0);
-  const [tokens, setTokens]             = useState([]);
-  const [loading, setLoading]           = useState(true);     // initial paint blocker — released after SOL phase
-  const [tokensLoading, setTokensLoading] = useState(true);   // skeleton in the holdings list
-  const [refreshing, setRefreshing]     = useState(false);
-  const [error, setError]               = useState('');
-  const [copied, setCopied]             = useState(false);
+  const [data, setData]             = useState(null);
+  const [loading, setLoading]       = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [error, setError]           = useState('');
+  const [copied, setCopied]         = useState(false);
 
   const inFlightRef = useRef(false);
 
-  const fetchPortfolio = useCallback(async (force = false) => {
-    if (!pubkey || !connection) { setLoading(false); setTokensLoading(false); return; }
+  const load = useCallback(async (isInitial) => {
+    if (!addressStr) { setLoading(false); return; }
     if (inFlightRef.current) return;
     inFlightRef.current = true;
-    if (force) clearPriceCache();
-    setRefreshing(true);
+    if (!isInitial) setRefreshing(true);
     setError('');
-
     try {
-      // ───────────── PHASE 1: SOL balance + SOL price (fast) ─────────────
-      // Render the hero immediately so the user sees their wallet value.
-      const [lamportsRes, solPriceMap] = await Promise.all([
-        connection.getBalance(pubkey).catch(() => 0),
-        fetchJupiterPrices([SOL_MINT], force).catch(() => ({})),
-      ]);
-      const lamports = lamportsRes || 0;
-      const sol = lamports / 1e9;
-      setSolBalance(sol);
-      const solPrice = solPriceMap[SOL_MINT] || 0;
-      setSolPriceUsd(solPrice);
-      setLoading(false);   // hero is now ready — release initial blocker
-
-      // ───────────── PHASE 2: token accounts + enrichment (slow) ─────────────
-      setTokensLoading(true);
-      const results = await Promise.allSettled([
-        connection.getParsedTokenAccountsByOwner(pubkey, { programId: SPL_LEGACY_PROGRAM }),
-        connection.getParsedTokenAccountsByOwner(pubkey, { programId: SPL_TOKEN2022_PROGRAM }),
-      ]);
-      let allAccounts = [];
-      results.forEach(r => { if (r.status === 'fulfilled' && r.value?.value) allAccounts = allAccounts.concat(r.value.value); });
-
-      const byMint = {};
-      allAccounts.forEach(acc => {
-        try {
-          const info = acc.account.data.parsed.info;
-          const ta   = info.tokenAmount || {};
-          const ui   = Number(ta.uiAmountString || ta.uiAmount || 0);
-          const mint = info.mint;
-          if (!mint || !Number.isFinite(ui) || ui <= 0.000001) return;
-          if (!byMint[mint]) byMint[mint] = { mint, uiAmount: 0, decimals: Number.isFinite(Number(ta.decimals)) ? Number(ta.decimals) : 6 };
-          byMint[mint].uiAmount += ui;
-        } catch {}
-      });
-
-      const tokenMints = Object.keys(byMint).filter(m => m !== SOL_MINT);
-      const [metaMap, priceMap] = await Promise.all([
-        fetchJupiterMeta(tokenMints),
-        fetchJupiterPrices(tokenMints, force),
-      ]);
-
-      const enriched = Object.values(byMint)
-        .filter(h => h.mint !== SOL_MINT)
-        .map(h => {
-          const meta  = metaMap[h.mint] || buildFallbackMeta(h.mint);
-          const price = priceMap[h.mint] || 0;
-          const value = h.uiAmount * price;
-          return { ...h, meta, price, value };
-        });
-
-      const filtered = enriched.filter(h => {
-        if (h.meta.isStable || h.meta.isBrand) return true;
-        return h.value >= DUST_THRESHOLD_USD;
-      });
-
-      filtered.sort((a, b) => {
-        const rank = m => m.isStable ? 0 : m.isBrand ? 1 : 2;
-        const ra = rank(a.meta), rb = rank(b.meta);
-        if (ra !== rb) return ra - rb;
-        return b.value - a.value;
-      });
-
-      setTokens(filtered);
+      const result = await fetchPortfolio(addressStr);
+      setData(result);
     } catch (e) {
       console.warn('[portfolio]', e);
-      setError('Failed to load portfolio');
+      setError('Failed to load wallet');
     } finally {
       inFlightRef.current = false;
       setLoading(false);
-      setTokensLoading(false);
       setRefreshing(false);
     }
-  }, [pubkey, connection]);
+  }, [addressStr]);
 
+  // Fetch once on connect / address change. NO polling.
   useEffect(() => {
-    if (!pubkey || !connection) { setLoading(false); setTokensLoading(false); return undefined; }
-    fetchPortfolio(false);
-    const i = setInterval(() => fetchPortfolio(false), POLL_INTERVAL_MS);
-    return () => clearInterval(i);
-  }, [pubkey, connection, fetchPortfolio]);
+    if (!addressStr) { setLoading(false); setData(null); return; }
+    setLoading(true);
+    setData(null);
+    load(true);
+  }, [addressStr, load]);
 
-  const handleRefresh = useCallback(() => fetchPortfolio(true), [fetchPortfolio]);
-  const displayAddr   = pubkey ? pubkey.toString() : null;
+  const handleRefresh = useCallback(() => load(false), [load]);
+
   const handleCopyAddr = useCallback(async () => {
-    if (!displayAddr) return;
-    const ok = await copyText(displayAddr);
-    if (ok) { setCopied(true); setTimeout(() => setCopied(false), 1600); }
-  }, [displayAddr]);
-
-  const solValue     = solBalance * solPriceUsd;
-  const tokensTotal  = tokens.reduce((s, h) => s + (h.value || 0), 0);
-  const totalValue   = solValue + tokensTotal;
-  const tokenCount   = tokens.length + (solBalance > 0 ? 1 : 0);
-  const brandsCount  = tokens.filter(t => t.meta.isBrand).length;
+    if (!addressStr) return;
+    if (await copyText(addressStr)) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1600);
+    }
+  }, [addressStr]);
 
   // ===================================================================
   // DISCONNECTED
   // ===================================================================
-  if (!hasSol) {
+  if (!solCon) {
     return (
       <div className="pf-page pf-page-disconnected">
         <div className="pf-disconnect-card">
@@ -598,7 +608,7 @@ export default function Portfolio({ onConnectWallet }) {
             Connect your{' '}
             <span className="pf-disconnect-italic">wallet</span>
           </h1>
-          <p className="pf-disconnect-sub">See your SOL, tokens, and brands in one place.</p>
+          <p className="pf-disconnect-sub">See your SOL and meaningful holdings in one place.</p>
           <button onClick={() => onConnectWallet?.()} className="pf-disconnect-btn">Connect Wallet</button>
         </div>
       </div>
@@ -606,15 +616,43 @@ export default function Portfolio({ onConnectWallet }) {
   }
 
   // ===================================================================
-  // CONNECTED
+  // CONNECTED — LOADING (one-shot reveal, no skeletons)
   // ===================================================================
+  if (loading && !data) {
+    return (
+      <div className="pf-page">
+        <div className="pf-widget-title">
+          <div className="nm">Wallet</div>
+        </div>
+        <div className="pf-hero">
+          <div className="pf-loading-card">
+            <div className="pf-loading-spinner"/>
+            <div className="pf-loading-text">LOADING WALLET</div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ===================================================================
+  // CONNECTED — READY
+  // ===================================================================
+  const solBalance  = data?.solBalance  || 0;
+  const solPriceUsd = data?.solPriceUsd || 0;
+  const tokens      = data?.tokens      || [];
+
+  const solValue    = solBalance * solPriceUsd;
+  const tokensTotal = tokens.reduce((s, h) => s + (h.value || 0), 0);
+  const totalValue  = solValue + tokensTotal;
+  const tokenCount  = tokens.length + (solBalance > 0 ? 1 : 0);
+  const brandsCount = tokens.filter(t => t.meta.isBrand).length;
+
   const solMeta = CORE_TOKENS[SOL_MINT];
 
   return (
     <div className="pf-page">
       <div className="pf-widget-title">
         <div className="nm">Wallet</div>
-        <div className="live"><span className="d"></span>LIVE</div>
       </div>
 
       <div className="pf-hero">
@@ -624,7 +662,7 @@ export default function Portfolio({ onConnectWallet }) {
           <div className="pf-hero-top">
             <div className="pf-status-pill">
               <span className="pf-status-dot"/>
-              <span className="pf-status-text">SOLANA · LIVE</span>
+              <span className="pf-status-text">SOLANA · MAINNET</span>
             </div>
             <button
               onClick={handleRefresh}
@@ -647,7 +685,7 @@ export default function Portfolio({ onConnectWallet }) {
             <div className="pf-wallet-icon"><span>S</span></div>
             <div className="pf-wallet-info">
               <div className="pf-wallet-label">WALLET ADDRESS</div>
-              <div className="pf-wallet-addr">{shortAddr(displayAddr)}</div>
+              <div className="pf-wallet-addr">{shortAddr(addressStr)}</div>
             </div>
             <span className={'pf-copy-pill' + (copied ? ' pf-copied' : '')}>
               {copied ? 'COPIED' : 'COPY'}
@@ -676,32 +714,28 @@ export default function Portfolio({ onConnectWallet }) {
         )}
       </div>
 
+      <MoonPayButton walletAddress={addressStr}/>
+
       {error && (<div className="pf-error">{error}</div>)}
 
       <div className="pf-holdings-head">
         <div className="pf-holdings-label">HOLDINGS</div>
-        <div className="pf-holdings-meta">JUPITER · AUTO 30s</div>
+        <div className="pf-holdings-meta">JUPITER PRICES</div>
       </div>
 
       <div className="pf-list">
         <TokenRow token={{
-          mint: SOL_MINT,
-          meta: solMeta,
-          price: solPriceUsd,
-          value: solValue,
+          mint:     SOL_MINT,
+          meta:     solMeta,
+          price:    solPriceUsd,
+          value:    solValue,
           uiAmount: solBalance,
         }}/>
 
-        {tokensLoading && !tokens.length ? (
-          <>
-            <SkeletonRow/>
-            <SkeletonRow/>
-            <SkeletonRow/>
-          </>
-        ) : !tokens.length ? (
+        {tokens.length === 0 ? (
           <div className="pf-empty">
-            <div className="pf-empty-title">No tokens yet.</div>
-            <div className="pf-empty-sub">Buy something on Wonderland or Markets to get started.</div>
+            <div className="pf-empty-title">No tokens worth showing.</div>
+            <div className="pf-empty-sub">Holdings under ${MIN_TOKEN_VALUE_USD} are hidden.</div>
           </div>
         ) : tokens.map(token => (
           <TokenRow key={token.mint} token={token}/>
@@ -710,7 +744,7 @@ export default function Portfolio({ onConnectWallet }) {
 
       <div className="pf-powered">
         <span className="pf-powered-label">POWERED BY</span>
-        <span className="pf-powered-name">JUPITER · SOLANA</span>
+        <span className="pf-powered-name">ALCHEMY · JUPITER</span>
         <span className="pf-powered-sep">|</span>
         <span className="pf-powered-label">NON-CUSTODIAL</span>
       </div>
