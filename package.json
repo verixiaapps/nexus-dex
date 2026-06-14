@@ -51,7 +51,8 @@
   },
   "overrides": {
     "uuid": "^9.0.1",
-    "@coral-xyz/anchor": "^0.31.1"
+    "@coral-xyz/anchor": "^0.31.1",
+    "@noble/hashes": "^1.6.1"
   },
   "devDependencies": {
     "concurrently": "^8.2.0",
