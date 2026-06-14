@@ -1040,6 +1040,190 @@ app.get('/api/chainflip/status', async (req, res) => {
   }
 });
 
+/* ========================================================================
+ * Chainflip — Generic multi-route swaps (NEW SECTION, additive)
+ * ─────────────────────────────────────────────────────────────────────────
+ * Used by CrossChainSwap.jsx. Distinct routes from the SOL→BTC block above
+ * (which the BTC page hardcodes). No shared state — own SDK instance,
+ * own helpers, own validation. Mount this BEFORE `app.all('/api/*', ...)`.
+ *
+ *   GET  /api/cf/assets   — chains + asset matrix (hardcoded from docs)
+ *   GET  /api/cf/quote    — ?srcChain&srcAsset&destChain&destAsset&amount
+ *   POST /api/cf/channel  — body: { quote, destAddress, refundAddress }
+ *                          opens a deposit channel for ANY supported route
+ *   GET  /api/cf/status   — ?id=<depositChannelId>
+ *
+ * Chains (7): Bitcoin · Ethereum · Arbitrum · Polkadot · Solana · Assethub · Tron
+ * Assets (per docs March 30 2026):
+ *   Ethereum  — ETH, USDC, USDT, WBTC, FLIP
+ *   Arbitrum  — ETH, USDC, USDT
+ *   Bitcoin   — BTC
+ *   Solana    — SOL, USDC, USDT
+ *   Polkadot  — DOT
+ *   Assethub  — SOL, USDC, USDT
+ *   Tron      — TRX, USDT
+ *
+ * SAFETY NOTE: Chainflip absorbs (unrecoverable) any deposit outside
+ * the min/max swap amount for an asset. The SDK's getQuoteV2 validates
+ * this — we surface "Amount below/above Chainflip minimum/maximum" so
+ * the user cannot proceed past quoting with an unsafe amount.
+ *
+ * Re-uses: logError from earlier in this file. The /api/ rate limiter
+ * already covers these paths.
+ * ===================================================================== */
+const _cfMod   = require('@chainflip/sdk/swap');
+const _cfMulti = new _cfMod.SwapSDK({ network: 'mainnet' });
+
+function _cfMultiErr(e) {
+  const m = String(e?.message || e || 'Chainflip error');
+  if (/below.*minimum|minimum.*deposit|too small/i.test(m)) return 'Amount below Chainflip minimum for this asset';
+  if (/above.*maximum|maximum.*deposit|too large/i.test(m)) return 'Amount above Chainflip maximum for this asset';
+  if (/no.*liquidity|insufficient.*liquidity/i.test(m))     return 'Insufficient liquidity right now';
+  if (/no.*route|unsupported|invalid.*(chain|asset)/i.test(m)) return 'Chainflip does not support this route';
+  if (/timed?\s*out|timeout/i.test(m))                      return 'Chainflip timed out — please retry';
+  return m.length > 160 ? m.slice(0, 160) + '…' : m;
+}
+
+const _cfChainSet = new Set(['Bitcoin', 'Ethereum', 'Arbitrum', 'Polkadot', 'Solana', 'Assethub', 'Tron']);
+const _cfAssetSet = new Set(['BTC', 'ETH', 'USDC', 'USDT', 'FLIP', 'WBTC', 'DOT', 'SOL', 'TRX']);
+
+// Asset matrix — verified from Chainflip docs (March 30 2026 update).
+// Decimals are the protocol-side decimals for each (chain, asset). Update
+// if Chainflip adds chains/assets.
+const _cfMatrix = {
+  updatedAt: '2026-03-30',
+  chains: [
+    { chain: 'Ethereum', chainType: 'EVM', name: 'Ethereum', color: '#627eea',
+      assets: [
+        { asset: 'ETH',  symbol: 'ETH',  name: 'Ether',           decimals: 18 },
+        { asset: 'USDC', symbol: 'USDC', name: 'USD Coin',        decimals: 6  },
+        { asset: 'USDT', symbol: 'USDT', name: 'Tether USD',      decimals: 6  },
+        { asset: 'WBTC', symbol: 'WBTC', name: 'Wrapped Bitcoin', decimals: 8  },
+        { asset: 'FLIP', symbol: 'FLIP', name: 'Chainflip',       decimals: 18 },
+      ],
+    },
+    { chain: 'Arbitrum', chainType: 'EVM', name: 'Arbitrum', color: '#28a0f0',
+      assets: [
+        { asset: 'ETH',  symbol: 'ETH',  name: 'Ether',      decimals: 18 },
+        { asset: 'USDC', symbol: 'USDC', name: 'USD Coin',   decimals: 6  },
+        { asset: 'USDT', symbol: 'USDT', name: 'Tether USD', decimals: 6  },
+      ],
+    },
+    { chain: 'Bitcoin', chainType: 'BTC', name: 'Bitcoin', color: '#f7931a',
+      assets: [
+        { asset: 'BTC', symbol: 'BTC', name: 'Bitcoin', decimals: 8 },
+      ],
+    },
+    { chain: 'Solana', chainType: 'SVM', name: 'Solana', color: '#14f195',
+      assets: [
+        { asset: 'SOL',  symbol: 'SOL',  name: 'Solana',     decimals: 9 },
+        { asset: 'USDC', symbol: 'USDC', name: 'USD Coin',   decimals: 6 },
+        { asset: 'USDT', symbol: 'USDT', name: 'Tether USD', decimals: 6 },
+      ],
+    },
+    { chain: 'Polkadot', chainType: 'DOT', name: 'Polkadot', color: '#e6007a',
+      assets: [
+        { asset: 'DOT', symbol: 'DOT', name: 'Polkadot', decimals: 10 },
+      ],
+    },
+    { chain: 'Assethub', chainType: 'DOT', name: 'Assethub', color: '#aa5cdb',
+      assets: [
+        { asset: 'SOL',  symbol: 'SOL',  name: 'Solana',     decimals: 9 },
+        { asset: 'USDC', symbol: 'USDC', name: 'USD Coin',   decimals: 6 },
+        { asset: 'USDT', symbol: 'USDT', name: 'Tether USD', decimals: 6 },
+      ],
+    },
+    { chain: 'Tron', chainType: 'TRX', name: 'Tron', color: '#ff060a',
+      assets: [
+        { asset: 'TRX',  symbol: 'TRX',  name: 'Tronix',     decimals: 6 },
+        { asset: 'USDT', symbol: 'USDT', name: 'Tether USD', decimals: 6 },
+      ],
+    },
+  ],
+};
+
+app.get('/api/cf/assets', (req, res) => res.json(_cfMatrix));
+
+app.get('/api/cf/quote', async (req, res) => {
+  try {
+    const srcChain  = String(req.query.srcChain  || '');
+    const srcAsset  = String(req.query.srcAsset  || '');
+    const destChain = String(req.query.destChain || '');
+    const destAsset = String(req.query.destAsset || '');
+    const amount    = String(req.query.amount    || '');
+    if (!_cfChainSet.has(srcChain))  return res.status(400).json({ error: 'Invalid srcChain' });
+    if (!_cfChainSet.has(destChain)) return res.status(400).json({ error: 'Invalid destChain' });
+    if (!_cfAssetSet.has(srcAsset))  return res.status(400).json({ error: 'Invalid srcAsset' });
+    if (!_cfAssetSet.has(destAsset)) return res.status(400).json({ error: 'Invalid destAsset' });
+    if (srcChain === destChain && srcAsset === destAsset) {
+      return res.status(400).json({ error: 'Source and destination must differ' });
+    }
+    if (!/^\d+$/.test(amount) || BigInt(amount) <= 0n) {
+      return res.status(400).json({ error: 'amount (atomic units, positive integer) required' });
+    }
+    const { quotes } = await _cfMulti.getQuoteV2({
+      srcChain, srcAsset, destChain, destAsset, amount,
+    });
+    const regular = Array.isArray(quotes) ? quotes.find(q => q.type === 'REGULAR') : null;
+    if (!regular) return res.status(502).json({ error: 'No regular quote available for this route' });
+    return res.json({ quote: regular });
+  } catch (e) {
+    logError('cf-quote', e);
+    return res.status(500).json({ error: _cfMultiErr(e) });
+  }
+});
+
+app.post('/api/cf/channel', async (req, res) => {
+  try {
+    const { quote, destAddress, refundAddress } = req.body || {};
+    if (!quote || typeof quote !== 'object')                 return res.status(400).json({ error: 'quote required' });
+    if (!destAddress   || typeof destAddress   !== 'string') return res.status(400).json({ error: 'destAddress required'   });
+    if (!refundAddress || typeof refundAddress !== 'string') return res.status(400).json({ error: 'refundAddress required' });
+    if (quote.type !== 'REGULAR')                            return res.status(400).json({ error: 'REGULAR quote required' });
+
+    const channel = await _cfMulti.requestDepositAddressV2({
+      quote,
+      destAddress,
+      fillOrKillParams: {
+        refundAddress,
+        retryDurationBlocks: 150,                                                       // ~15 min @ 6s state-chain blocks
+        slippageTolerancePercent: Number(quote.recommendedSlippageTolerancePercent ?? 1),
+        livePriceSlippageTolerancePercent: quote.recommendedLivePriceSlippageTolerancePercent,
+      },
+    });
+
+    return res.json({
+      channel: {
+        depositChannelId:    channel.depositChannelId,
+        depositAddress:      channel.depositAddress,
+        srcChain:            channel.srcChain,
+        srcAsset:            channel.srcAsset,
+        destChain:           channel.destChain,
+        destAsset:           channel.destAsset,
+        srcChainExpiryBlock: String(channel.depositChannelExpiryBlock),
+        channelOpeningFee:   String(channel.channelOpeningFee),
+        estimatedExpiryTime: channel.estimatedDepositChannelExpiryTime ?? null,
+        brokerCommissionBps: channel.brokerCommissionBps,
+      },
+    });
+  } catch (e) {
+    logError('cf-channel', e);
+    return res.status(500).json({ error: _cfMultiErr(e) });
+  }
+});
+
+app.get('/api/cf/status', async (req, res) => {
+  try {
+    const id = String(req.query.id || '');
+    if (!id) return res.status(400).json({ error: 'id (depositChannelId) required' });
+    const status = await _cfMulti.getStatusV2({ id });
+    return res.json({ status });
+  } catch (e) {
+    logError('cf-status', e);
+    return res.status(500).json({ error: _cfMultiErr(e) });
+  }
+});
+
 app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not found: ' + req.path }));
 
 /* ========================================================================
