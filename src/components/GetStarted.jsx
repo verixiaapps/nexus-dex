@@ -1194,3 +1194,4 @@ export default function GetStarted({ onConnectWallet, onSwitchTab }) {
     </div>
   );
 }
+ 
