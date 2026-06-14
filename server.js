@@ -598,6 +598,7 @@ app.get('/api/health', (req, res) => {
       jupiterSeoKey:  Boolean(JUPITER_API_KEY_SEO),
       helius:         Boolean(HELIUS_API_KEY || HELIUS_RPC_URL),
       lifiApiKey:     Boolean(LIFI_API_KEY),
+      chainflip:      true,
     },
     jupiter: {
       swapV2: JUPITER_SWAP_V2_BASE,
@@ -608,6 +609,7 @@ app.get('/api/health', (req, res) => {
       seoKeySet: Boolean(JUPITER_API_KEY_SEO),
     },
     lifi: { baseUrl: LIFI_API, keySet: Boolean(LIFI_API_KEY) },
+    chainflip: { network: 'mainnet', brokerCommissionBps: 0 },
     solanaRpc: {
       provider: HELIUS_RPC_URL ? 'helius (custom url)'
               : HELIUS_API_KEY ? 'helius'
@@ -915,6 +917,129 @@ app.get('/api/jupiter/ultra-order', async (req, res) => {
   }
 });
 
+/* ========================================================================
+ * Chainflip — SOL → native BTC
+ * ─────────────────────────────────────────────────────────────────────────
+ * Self-contained section. Mounted BEFORE `app.all('/api/*', ...)`.
+ *
+ * Uses @chainflip/sdk server-side. The SDK handles the Q128 fixed-point
+ * conversion of `slippageTolerancePercent` → `minPriceX128` on the wire
+ * (the public REST endpoint will NOT accept the friendly form), validates
+ * amounts against state-chain limits, and locks the schema to a known
+ * version. The browser never touches the SDK — it only sees the three
+ * thin JSON routes below.
+ *
+ *   GET  /api/chainflip/quote?amount=<lamports>
+ *        → { quote }                                  // REGULAR only
+ *
+ *   POST /api/chainflip/channel
+ *        body: { quote, destAddress, refundAddress }
+ *        → { channel: { depositAddress, depositChannelId,
+ *                       srcChainExpiryBlock, channelOpeningFee, ... } }
+ *
+ *   GET  /api/chainflip/status?id=<depositChannelId>
+ *        → { status }                                 // v2 status object
+ *
+ * No broker URL is configured, so `brokerCommissionBps` is forced to 0.
+ * The 3% platform fee is collected on-chain via a separate SOL transfer
+ * in the client (SolToBtcChainflip.jsx), preserving the same atomic
+ * two-tx pattern the Thor page uses.
+ *
+ * Requires: `npm i @chainflip/sdk` (server-side dep only, ~188KB).
+ * Mainnet backend URL is baked into the SDK
+ * (https://chainflip-swap.chainflip.io/). No env vars needed.
+ *
+ * Reuses existing helpers from server.js: logError. The /api/ rate
+ * limiter already covers these paths.
+ * ===================================================================== */
+const { SwapSDK, Chains, Assets } = require('@chainflip/sdk/swap');
+
+// One SDK instance, reused across requests. Quotes hit a stateless HTTP
+// backend, so this is safe to share. No broker URL → broker commission
+// disabled; we take our cut on-chain in SOL instead (see client).
+const chainflipSdk = new SwapSDK({ network: 'mainnet' });
+
+// Map SDK / SwapService errors to short, user-facing messages without
+// leaking internals. Falls back to the raw message if nothing matches.
+function _cfErrMsg(e) {
+  const m = String(e?.message || e || 'Chainflip error');
+  if (/below.*minimum|minimum.*deposit|too small/i.test(m)) return 'Amount below Chainflip minimum';
+  if (/above.*maximum|maximum.*deposit|too large/i.test(m)) return 'Amount above Chainflip maximum';
+  if (/no.*liquidity|insufficient.*liquidity/i.test(m))     return 'Insufficient liquidity right now';
+  if (/timed?\s*out|timeout/i.test(m))                      return 'Chainflip timed out — retry';
+  return m.length > 160 ? m.slice(0, 160) + '…' : m;
+}
+
+app.get('/api/chainflip/quote', async (req, res) => {
+  try {
+    const amount = String(req.query.amount || '');
+    if (!/^\d+$/.test(amount) || BigInt(amount) <= 0n) {
+      return res.status(400).json({ error: 'amount (lamports, positive integer) required' });
+    }
+    const { quotes } = await chainflipSdk.getQuoteV2({
+      srcChain:  Chains.Solana,
+      srcAsset:  Assets.SOL,
+      destChain: Chains.Bitcoin,
+      destAsset: Assets.BTC,
+      amount,
+    });
+    const regular = Array.isArray(quotes) ? quotes.find(q => q.type === 'REGULAR') : null;
+    if (!regular) return res.status(502).json({ error: 'No regular quote available' });
+    return res.json({ quote: regular });
+  } catch (e) {
+    logError('chainflip-quote', e);
+    return res.status(500).json({ error: _cfErrMsg(e) });
+  }
+});
+
+app.post('/api/chainflip/channel', async (req, res) => {
+  try {
+    const { quote, destAddress, refundAddress } = req.body || {};
+    if (!quote || typeof quote !== 'object')                 return res.status(400).json({ error: 'quote required' });
+    if (!destAddress   || typeof destAddress   !== 'string') return res.status(400).json({ error: 'destAddress required'   });
+    if (!refundAddress || typeof refundAddress !== 'string') return res.status(400).json({ error: 'refundAddress required' });
+    if (quote.type !== 'REGULAR')                            return res.status(400).json({ error: 'REGULAR quote required' });
+
+    const channel = await chainflipSdk.requestDepositAddressV2({
+      quote,
+      destAddress,
+      fillOrKillParams: {
+        refundAddress,
+        retryDurationBlocks: 150,                                                       // ~15 min @ 6s state-chain blocks
+        slippageTolerancePercent: Number(quote.recommendedSlippageTolerancePercent ?? 3),
+        livePriceSlippageTolerancePercent: quote.recommendedLivePriceSlippageTolerancePercent,
+      },
+    });
+
+    // BigInts won't JSON-serialize; coerce the two that are present.
+    return res.json({
+      channel: {
+        depositChannelId:        channel.depositChannelId,
+        depositAddress:          channel.depositAddress,
+        srcChainExpiryBlock:     String(channel.depositChannelExpiryBlock),
+        channelOpeningFee:       String(channel.channelOpeningFee),
+        estimatedExpiryTime:     channel.estimatedDepositChannelExpiryTime ?? null,
+        brokerCommissionBps:     channel.brokerCommissionBps,
+      },
+    });
+  } catch (e) {
+    logError('chainflip-channel', e);
+    return res.status(500).json({ error: _cfErrMsg(e) });
+  }
+});
+
+app.get('/api/chainflip/status', async (req, res) => {
+  try {
+    const id = String(req.query.id || '');
+    if (!id) return res.status(400).json({ error: 'id (depositChannelId) required' });
+    const status = await chainflipSdk.getStatusV2({ id });
+    return res.json({ status });
+  } catch (e) {
+    logError('chainflip-status', e);
+    return res.status(500).json({ error: _cfErrMsg(e) });
+  }
+});
+
 app.all('/api/*', (req, res) => res.status(404).json({ error: 'API route not found: ' + req.path }));
 
 /* ========================================================================
@@ -970,6 +1095,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log('  Jupiter Swap V2: ' + JUPITER_SWAP_V2_BASE + (JUPITER_API_KEY ? ' (main key set)' : ' (no main key)') + (JUPITER_API_KEY_SEO ? ' (SEO key set)' : ' (no SEO key)'));
   console.log('  Jupiter Price:   ' + JUPITER_PRICE_BASE);
   console.log('  LI.FI:           ' + LIFI_API + (LIFI_API_KEY ? ' (key set)' : ' (no key)'));
+  console.log('  Chainflip:       mainnet (SOL → BTC, broker commission disabled)');
   console.log('  Solana RPC:      ' + (HELIUS_RPC_URL ? 'helius (custom)' : HELIUS_API_KEY ? 'helius' : 'public mainnet-beta'));
   console.log('  Allowed origins: ' + allowedOrigins.join(', '));
 });
