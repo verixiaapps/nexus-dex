@@ -1,600 +1,675 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { useFlipsy } from '../hooks/useFlipsy';
- 
+
 // ============================================================
-// INLINE CSS — injected once on mount, no separate .css file
+// INLINE CSS — Wonderland with Solana-tinted accents · injected once
 // ============================================================
 const FLIPSY_CSS = `
-.fp-page {
-  min-height: 100vh;
-  width: 100%;
-  background: #06060C;
-  font-family: 'Inter', system-ui, -apple-system, sans-serif;
-  color: #FFFFFF;
-  padding-bottom: 60px;
-  position: relative;
-  overflow-x: hidden;
-}
-.fp-page * { box-sizing: border-box; }
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@500;600;700&display=swap');
 
-.fp-glow {
-  position: absolute;
-  border-radius: 50%;
-  filter: blur(60px);
-  pointer-events: none;
-  will-change: opacity;
-}
-.fp-glow-1 { top: -10%; left: -8%; width: 380px; height: 380px;
-  background: radial-gradient(circle, #9945FF 0%, transparent 60%); opacity: 0.28; }
-.fp-glow-2 { top: 35%; right: -8%; width: 340px; height: 340px;
-  background: radial-gradient(circle, #00D9FF 0%, transparent 60%); opacity: 0.22;
-  animation: fp-glow-pulse 9s ease-in-out infinite alternate; }
-.fp-glow-3 { bottom: -10%; left: 30%; width: 360px; height: 360px;
-  background: radial-gradient(circle, #14F195 0%, transparent 60%); opacity: 0.2;
-  animation: fp-glow-pulse 13s ease-in-out infinite alternate-reverse; }
-@keyframes fp-glow-pulse {
-  0%   { opacity: 0.2; transform: scale(1); }
-  100% { opacity: 0.42; transform: scale(1.15); }
-}
+.fp-page{
+  --ink:#1A1B4E; --ink-2:rgba(26,27,78,0.7); --ink-3:rgba(26,27,78,0.45);
+  --pink:#FF8FBE; --mint:#7FFFD4; --lav:#B794F6; --peach:#FFB088;
+  --sky:#A0E7FF; --gold:#FFD46B;
+  --sol-mint:#14F195; --sol-mag:#DC1FFF; --sol-cyan:#00D9FF; --sol-purple:#9945FF;
+  --green:#0a7a4c; --red:#D14B6A;
+  --glass:rgba(255,255,255,0.6); --glass-strong:rgba(255,255,255,0.80);
+  --border:rgba(183,148,246,0.22);
+  --hairline:rgba(26,27,78,0.08);
 
-.fp-claim-banner {
-  position: sticky;
-  top: 0;
-  z-index: 100;
-  background: linear-gradient(90deg, #14F195 0%, #00D9FF 50%, #9945FF 100%);
-  color: #000000;
-  font-size: 12px;
-  font-weight: 900;
-  letter-spacing: 0.06em;
-  text-align: center;
-  padding: 11px 16px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 8px;
-  animation: fp-banner-slide 0.4s cubic-bezier(0.16, 1, 0.3, 1);
+  position:relative;min-height:100vh;min-height:100dvh;width:100%;
+  padding-bottom:calc(env(safe-area-inset-bottom) + 60px);overflow-x:hidden;
+  color:var(--ink);
+  font-family:"Space Grotesk",-apple-system,system-ui,sans-serif;
+  background:
+    radial-gradient(ellipse at 20% 0%,#FFE8F4 0%,transparent 45%),
+    radial-gradient(ellipse at 90% 5%,#FFF3D9 0%,transparent 40%),
+    radial-gradient(ellipse at 70% 45%,#E4F2FF 0%,transparent 55%),
+    radial-gradient(ellipse at 10% 80%,#F0E7FF 0%,transparent 50%),
+    linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);
+  background-attachment:fixed;
+  border-radius:24px;
 }
-.fp-claim-banner:active { opacity: 0.85; }
-.fp-claim-banner-icon { font-size: 15px; }
-.fp-claim-banner-count {
-  background: rgba(0,0,0,0.2);
-  border-radius: 999px;
-  padding: 2px 8px;
-  font-size: 10px;
-}
-@keyframes fp-banner-slide {
-  from { transform: translateY(-100%); opacity: 0; }
-  to   { transform: translateY(0);    opacity: 1; }
+.fp-page *{box-sizing:border-box}
+
+@keyframes fp-drift{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(20px,-30px) scale(1.05)}}
+@keyframes fp-pulse{0%,100%{opacity:1}50%{opacity:0.4}}
+@keyframes fp-spin{to{transform:rotate(360deg)}}
+@keyframes fp-shimmer{0%{background-position:0% 50%}100%{background-position:200% 50%}}
+@keyframes fp-mascot-float{0%,100%{transform:translateY(0) rotate(-2deg)}50%{transform:translateY(-3px) rotate(3deg)}}
+@keyframes fp-card-enter{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fp-live-glow{0%,100%{opacity:0.45}50%{opacity:0.7}}
+@keyframes fp-price-tick{from{transform:translateY(2px);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes fp-pop{0%{transform:scale(0.92);opacity:0}60%{transform:scale(1.04)}100%{transform:scale(1);opacity:1}}
+@keyframes fp-banner-slide{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
+@keyframes fp-modal-up{from{transform:translateX(-50%) translateY(100%);opacity:0}to{transform:translateX(-50%) translateY(0);opacity:1}}
+@keyframes fp-timer-urgent{0%,100%{transform:scale(1)}50%{transform:scale(1.05)}}
+
+.fp-blob{
+  position:absolute;border-radius:50%;filter:blur(70px);opacity:0.42;
+  animation:fp-drift 14s ease-in-out infinite;pointer-events:none;z-index:0;
 }
 
-.fp-flash-top {
-  margin: 8px 24px 0;
-  border-radius: 14px;
-  position: relative;
-  z-index: 10;
+/* CLAIM BANNER */
+.fp-claim-banner{
+  position:sticky;top:0;z-index:50;
+  padding:11px 16px;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  background:linear-gradient(90deg,#FFD46B,#FFB088 50%,#FF8FBE);
+  color:var(--ink);
+  font-family:"Space Grotesk",sans-serif;font-size:11px;font-weight:700;letter-spacing:1.2px;
+  cursor:pointer;
+  box-shadow:0 4px 18px rgba(255,180,140,.35);
+  animation:fp-banner-slide .4s cubic-bezier(.16,1,.3,1);
+}
+.fp-claim-banner:active{opacity:.92}
+.fp-claim-banner-count{
+  background:rgba(26,27,78,0.12);border-radius:999px;padding:2px 9px;font-size:10px;font-weight:800;
 }
 
-.fp-header {
-  max-width: 1200px;
-  margin: 0 auto;
-  padding: 22px 24px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  position: relative;
-  z-index: 2;
+/* TOP FLASH */
+.fp-flash-top{margin:8px 22px 0;position:relative;z-index:10}
+.fp-flash{
+  padding:10px 14px;border-radius:14px;
+  font-size:11px;font-weight:700;text-align:center;letter-spacing:0.4px;
+  font-family:"Space Grotesk",sans-serif;
+  animation:fp-pop .35s cubic-bezier(.34,1.56,.64,1);
 }
-.fp-brand { display: flex; align-items: center; gap: 12px; }
-.fp-mascot {
-  width: 50px; height: 50px;
-  border-radius: 50%;
-  background: linear-gradient(135deg, #14F195 0%, #00D9FF 35%, #9945FF 70%, #DC1FFF 100%);
-  display: flex; align-items: center; justify-content: center;
-  font-size: 24px; font-weight: 900; color: #000;
-  box-shadow:
-    0 0 36px rgba(153, 69, 255, 0.5),
-    inset 0 -3px 6px rgba(0, 0, 0, 0.2),
-    inset 0 3px 6px rgba(255, 255, 255, 0.35);
-  animation: fp-mascot-float 4s ease-in-out infinite;
+.fp-flash.error{background:rgba(209,75,106,.10);color:var(--red);border:1px solid rgba(209,75,106,.35)}
+.fp-flash.success{background:rgba(20,241,149,.16);color:var(--green);border:1px solid rgba(20,241,149,.45)}
+
+/* HEADER */
+.fp-page-inner{position:relative;z-index:5}
+
+.fp-header{
+  display:flex;align-items:center;justify-content:space-between;gap:10px;
+  padding:18px 22px 6px;max-width:520px;margin:0 auto;
 }
-@keyframes fp-mascot-float {
-  0%, 100% { transform: translateY(0) rotate(-2deg); }
-  50%      { transform: translateY(-4px) rotate(3deg); }
+.fp-brand{display:flex;align-items:center;gap:12px}
+.fp-mascot{
+  width:46px;height:46px;border-radius:50%;
+  background:linear-gradient(135deg,#FF8FBE 0%,#FFD46B 30%,#7FFFD4 60%,#B794F6 100%);
+  display:grid;place-items:center;
+  font-family:"Instrument Serif",serif;font-style:italic;font-size:24px;color:#fff;
+  text-shadow:0 2px 4px rgba(26,27,78,.20);
+  box-shadow:0 6px 22px rgba(183,148,246,0.40),
+             inset 0 -2px 4px rgba(26,27,78,.10),
+             inset 0 2px 4px rgba(255,255,255,.40);
+  animation:fp-mascot-float 4s ease-in-out infinite;
+  flex-shrink:0;
 }
-.fp-title {
-  font-size: 28px;
-  font-weight: 900;
-  letter-spacing: -0.02em;
-  line-height: 1;
-  background: linear-gradient(90deg, #14F195, #00D9FF 33%, #9945FF 66%, #DC1FFF);
-  background-size: 200% 100%;
-  background-clip: text;
-  -webkit-background-clip: text;
-  color: transparent;
-  animation: fp-shimmer 6s linear infinite;
+.fp-brand-text .fp-title{
+  font-family:"Instrument Serif",serif;font-style:italic;font-size:26px;line-height:1;letter-spacing:-.02em;
+  background:linear-gradient(90deg,#FF8FBE,#FFD46B 30%,#7FFFD4 60%,#B794F6);
+  background-size:200% 100%;
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  animation:fp-shimmer 8s linear infinite;
 }
-@keyframes fp-shimmer {
-  0%   { background-position: -200% 0; }
-  100% { background-position: 200% 0; }
-}
-.fp-subtitle {
-  margin-top: 2px;
-  font-size: 9px;
-  font-weight: 800;
-  color: #9892B5;
-  letter-spacing: 0.22em;
-  text-transform: uppercase;
-}
-.fp-actions { display: flex; align-items: center; gap: 8px; }
-.fp-balance {
-  background: rgba(20, 20, 35, 0.7);
-  backdrop-filter: blur(20px);
-  border: 1px solid rgba(153, 69, 255, 0.22);
-  border-radius: 999px;
-  padding: 7px 14px;
-  font-size: 12px;
-  display: flex;
-  align-items: center;
-  gap: 7px;
-}
-.fp-balance-label {
-  color: #5D5876;
-  font-size: 9px;
-  font-weight: 800;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-}
-.fp-balance-val {
-  color: #14F195;
-  font-variant-numeric: tabular-nums;
-  font-weight: 800;
-  text-shadow: 0 0 12px rgba(20, 241, 149, 0.5);
-  font-size: 13px;
+.fp-brand-text .fp-subtitle{
+  margin-top:3px;font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;
+  color:var(--ink-3);letter-spacing:1.6px;text-transform:uppercase;
 }
 
-.fp-rounds-head {
-  max-width: 1200px;
-  margin: 6px auto 14px;
-  padding: 0 24px;
-  display: flex;
-  align-items: baseline;
-  gap: 10px;
-  position: relative;
-  z-index: 2;
+.fp-actions{display:flex;align-items:center;gap:8px;flex-shrink:0}
+.fp-rounds-btn{
+  display:flex;align-items:center;gap:6px;
+  padding:7px 13px;border-radius:999px;
+  background:var(--glass);backdrop-filter:blur(10px);
+  border:1px solid var(--border);color:var(--ink);
+  font-family:inherit;font-size:11px;font-weight:700;letter-spacing:0.8px;
+  cursor:pointer;transition:all .15s;
 }
-.fp-rounds-title {
-  font-size: 14px;
-  font-weight: 900;
-  margin: 0;
-  color: #FFFFFF;
-  letter-spacing: 0.06em;
+.fp-rounds-btn:hover{border-color:var(--lav);background:var(--glass-strong)}
+.fp-rounds-btn.fp-has-claim{
+  background:linear-gradient(135deg,#FFD46B,#FFB088);
+  border-color:rgba(255,180,107,0.45);
+  box-shadow:0 4px 12px rgba(255,180,107,.30);
 }
-.fp-rounds-sub {
-  font-size: 9px;
-  color: #5D5876;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
+.fp-rounds-btn-count{
+  background:#fff;color:var(--ink);border-radius:50%;
+  width:18px;height:18px;display:grid;place-items:center;
+  font-size:10px;font-weight:800;
 }
-.fp-rounds-sub .arrow { color: #00D9FF; }
+.fp-bal{
+  display:flex;align-items:center;gap:6px;
+  padding:7px 12px;border-radius:999px;
+  background:var(--glass);backdrop-filter:blur(10px);
+  border:1px solid var(--border);
+  cursor:default;
+}
+.fp-bal-l{font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;color:var(--ink-3);letter-spacing:1.4px}
+.fp-bal-v{font-family:"JetBrains Mono",monospace;font-size:12px;font-weight:700;color:var(--green);font-variant-numeric:tabular-nums}
+.fp-bal-connect{cursor:pointer}
+.fp-bal-connect .fp-bal-v{color:var(--sol-purple);font-family:"Space Grotesk",sans-serif;font-size:11px;font-weight:800;letter-spacing:0.6px}
 
-.fp-carousel {
-  display: flex;
-  gap: 14px;
-  padding: 8px 24px 24px;
-  overflow-x: auto;
-  overflow-y: visible;
-  scroll-snap-type: x proximity;
-  touch-action: pan-x pan-y;
-  overscroll-behavior-x: contain;
-  scrollbar-width: none;
-  -ms-overflow-style: none;
-  -webkit-overflow-scrolling: touch;
-  position: relative;
-  z-index: 2;
+/* ROUNDS LABEL */
+.fp-rounds-head{
+  padding:14px 26px 8px;max-width:520px;margin:0 auto;
+  display:flex;align-items:baseline;justify-content:space-between;gap:10px;
 }
-.fp-carousel::-webkit-scrollbar { display: none; }
+.fp-rounds-title{
+  font-family:"Instrument Serif",serif;font-size:24px;line-height:1;color:var(--ink);letter-spacing:-.015em;
+  margin:0;font-weight:400;
+}
+.fp-rounds-title em{
+  font-style:italic;
+  background:linear-gradient(120deg,#7FFFD4,#A0E7FF);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.fp-rounds-sub{
+  font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;color:var(--ink-3);
+  letter-spacing:1.4px;text-transform:uppercase;
+}
+.fp-rounds-sub .arrow{color:var(--sol-cyan)}
 
-.fp-card {
-  flex-shrink: 0;
-  width: min(280px, 80vw);
-  min-height: 440px;
-  scroll-snap-align: center;
-  background: linear-gradient(180deg, rgba(22, 22, 38, 0.85) 0%, rgba(14, 14, 26, 0.85) 100%);
-  backdrop-filter: blur(12px);
-  border: 1px solid rgba(153, 69, 255, 0.22);
-  border-radius: 36px;
-  padding: 16px;
-  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
-  position: relative;
-  overflow: hidden;
-  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-  animation: fp-card-enter 0.5s cubic-bezier(0.16, 1, 0.3, 1) backwards;
+/* CAROUSEL */
+.fp-carousel{
+  display:flex;gap:14px;
+  padding:14px 22px 26px;
+  overflow-x:auto;overflow-y:visible;
+  scroll-snap-type:x proximity;
+  touch-action:pan-x pan-y;
+  overscroll-behavior-x:contain;
+  scrollbar-width:none;-ms-overflow-style:none;
+  -webkit-overflow-scrolling:touch;
 }
-.fp-card:hover { transform: translateY(-4px); }
-@keyframes fp-card-enter {
-  from { opacity: 0; transform: translateY(20px); }
-  to   { opacity: 1; transform: translateY(0); }
-}
-.fp-card-previous { opacity: 0.55; }
-.fp-card-later    { opacity: 0.7; }
+.fp-carousel::-webkit-scrollbar{display:none}
 
-.fp-card-live {
-  width: min(320px, 88vw);
-  min-height: 480px;
-  border-color: rgba(20, 241, 149, 0.55);
-  box-shadow:
-    0 24px 60px rgba(0, 0, 0, 0.6),
-    0 0 80px rgba(20, 241, 149, 0.18),
-    0 0 40px rgba(0, 217, 255, 0.12);
+/* CARD */
+.fp-card{
+  flex-shrink:0;width:min(260px,76vw);min-height:420px;
+  scroll-snap-align:center;
+  background:var(--glass-strong);backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,.85);border-radius:28px;
+  padding:14px;
+  display:flex;flex-direction:column;
+  box-shadow:0 16px 40px rgba(26,27,78,.10);
+  position:relative;overflow:hidden;
+  animation:fp-card-enter .45s cubic-bezier(.2,1,.4,1) backwards;
 }
-.fp-card-livering {
-  position: absolute;
-  inset: -1px;
-  border-radius: 36px;
-  pointer-events: none;
-  background: linear-gradient(135deg, #14F195, #00D9FF, #9945FF, #DC1FFF);
-  opacity: 0.3;
-  z-index: -1;
-  filter: blur(8px);
-  animation: fp-livering-pulse 3s ease-in-out infinite;
-}
-@keyframes fp-livering-pulse {
-  0%, 100% { opacity: 0.25; }
-  50%      { opacity: 0.5; }
-}
+.fp-card-previous{opacity:0.72}
+.fp-card-later{opacity:0.78}
+.fp-card-loading{width:100%;max-width:320px;margin:0 auto;min-height:200px;justify-content:center;align-items:center;text-align:center;color:var(--ink-2);font-size:13px;font-weight:500}
 
-.fp-card-loading {
-  width: 100%;
-  max-width: 320px;
-  margin: 0 auto;
-  min-height: 200px;
+/* LIVE CARD — signature treatment */
+.fp-card-live{
+  width:min(310px,86vw);min-height:485px;
+  background:
+    radial-gradient(ellipse at 50% 0%,rgba(127,255,212,.30),transparent 55%),
+    linear-gradient(180deg,#fff 0%,#F5FFFC 100%);
+  border-color:rgba(20,241,149,.55);
+  box-shadow:0 20px 50px rgba(20,241,149,.18),
+             0 0 0 1px rgba(20,241,149,.20),
+             0 0 60px rgba(127,255,212,.20);
 }
+.fp-card-livering{
+  position:absolute;
+  width:340px;height:340px;border-radius:50%;
+  background:radial-gradient(circle,rgba(20,241,149,.20),transparent 60%);
+  filter:blur(40px);
+  top:-60px;left:50%;transform:translateX(-50%);
+  pointer-events:none;z-index:0;
+  animation:fp-live-glow 4s ease-in-out infinite;
+}
+.fp-card-live > *:not(.fp-card-livering){position:relative;z-index:1}
 
-.fp-card-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 12px;
-  padding: 0 4px;
+/* URGENT — warm wash on live card during last 10s */
+.fp-card-urgent{
+  background:
+    radial-gradient(ellipse at 50% 0%,rgba(255,180,136,.40),transparent 55%),
+    linear-gradient(180deg,#FFF7ED 0%,#FFEEDD 100%) !important;
+  border-color:rgba(255,180,136,.65) !important;
+  box-shadow:0 20px 50px rgba(255,180,136,.30),
+             0 0 0 1px rgba(255,180,136,.30),
+             0 0 60px rgba(255,180,136,.30) !important;
 }
-.fp-card-badge {
-  font-size: 10px;
-  font-weight: 900;
-  letter-spacing: 0.12em;
-  padding: 4px 12px;
-  border-radius: 999px;
-  border: 1px solid;
-  background: rgba(255, 255, 255, 0.04);
-}
-.fp-card-epoch {
-  font-size: 11px;
-  font-weight: 800;
-  color: #5D5876;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.04em;
-}
+.fp-card-urgent .fp-card-livering{background:radial-gradient(circle,rgba(255,180,136,.32),transparent 60%)}
 
-.fp-card-side {
-  width: 100%;
-  border-radius: 24px;
-  padding: 18px 16px;
-  cursor: pointer;
-  font-family: inherit;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  font-weight: 800;
-  transition: all 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
-  position: relative;
-  overflow: hidden;
+/* CARD HEAD */
+.fp-card-head{
+  display:flex;align-items:center;justify-content:space-between;
+  margin-bottom:12px;padding:0 2px;
 }
-.fp-card-side:hover:not(:disabled)  { transform: translateY(-2px); }
-.fp-card-side:active:not(:disabled) { transform: scale(0.97); }
-.fp-card-side:disabled { cursor: not-allowed; }
+.fp-card-badge{
+  font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;
+  padding:4px 10px;border-radius:999px;letter-spacing:1.2px;
+}
+.fp-card-badge.prev{background:rgba(26,27,78,.06);color:var(--ink-3)}
+.fp-card-badge.live{background:rgba(20,241,149,.18);color:var(--green);border:1px solid rgba(20,241,149,.45)}
+.fp-card-badge.live .d{display:inline-block;width:5px;height:5px;border-radius:50%;background:var(--green);margin-right:4px;animation:fp-pulse 1.4s ease-in-out infinite;vertical-align:middle}
+.fp-card-badge.next{background:rgba(183,148,246,.18);color:#5e3aa8;border:1px solid rgba(183,148,246,.40)}
+.fp-card-badge.later{background:rgba(26,27,78,.06);color:var(--ink-3)}
+.fp-card-urgent .fp-card-badge.live{background:rgba(255,180,136,.30);color:#8a4a1d;border-color:rgba(255,180,136,.60)}
+.fp-card-urgent .fp-card-badge.live .d{background:#8a4a1d}
+.fp-card-epoch{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-3);font-weight:700;letter-spacing:0.6px}
 
-.fp-card-long {
-  background: linear-gradient(135deg, rgba(20, 241, 149, 0.18), rgba(0, 217, 255, 0.08));
-  border: 1.5px solid rgba(20, 241, 149, 0.5);
-  color: #14F195;
-  box-shadow: 0 8px 24px rgba(20, 241, 149, 0.15);
+/* SIDE BUTTONS */
+.fp-card-side{
+  width:100%;padding:14px 16px;border-radius:18px;
+  border:1.5px solid;font-family:inherit;font-weight:700;
+  display:flex;align-items:center;justify-content:space-between;gap:8px;
+  cursor:pointer;transition:transform .2s;
 }
-.fp-card-long.active {
-  background: linear-gradient(135deg, #14F195, #00D9FF);
-  color: #001A0F;
-  border-color: #14F195;
-  box-shadow: 0 12px 32px rgba(20, 241, 149, 0.5);
+.fp-card-side:hover:not(:disabled){transform:translateY(-1px)}
+.fp-card-side:active:not(:disabled){transform:scale(.98)}
+.fp-card-side:disabled{cursor:not-allowed}
+.fp-card-side-icon{font-size:20px;line-height:1;font-weight:900;width:24px;text-align:center}
+.fp-card-side-label{flex:1;text-align:center;font-family:"Space Grotesk",sans-serif;font-size:14px;font-weight:800;letter-spacing:0.10em}
+.fp-card-side-mult{font-family:"Instrument Serif",serif;font-style:italic;font-size:18px;font-variant-numeric:tabular-nums}
+
+.fp-card-long{
+  background:linear-gradient(135deg,rgba(20,241,149,.18),rgba(160,231,255,.10));
+  border-color:rgba(20,241,149,.50);color:var(--green);
 }
-.fp-card-long.won {
-  background: linear-gradient(135deg, #14F195, #00D9FF);
-  color: #001A0F;
-  border-color: #14F195;
-  box-shadow: 0 8px 24px rgba(20, 241, 149, 0.4);
+.fp-card-long.active{
+  background:linear-gradient(135deg,#14F195,#A0E7FF);
+  border-color:#14F195;color:var(--ink);
+  box-shadow:0 8px 20px rgba(20,241,149,.30);
 }
-.fp-card-long.lost {
-  background: rgba(20, 241, 149, 0.04);
-  border-color: rgba(20, 241, 149, 0.2);
-  color: #5D5876;
-  box-shadow: none;
+.fp-card-long.won{
+  background:linear-gradient(135deg,#14F195,#A0E7FF);
+  border-color:#14F195;color:var(--ink);
+}
+.fp-card-long.lost{
+  background:rgba(20,241,149,.04);
+  border-color:rgba(20,241,149,.15);color:var(--ink-3);
 }
 
-.fp-card-short {
-  background: linear-gradient(135deg, rgba(220, 31, 255, 0.18), rgba(153, 69, 255, 0.08));
-  border: 1.5px solid rgba(220, 31, 255, 0.5);
-  color: #DC1FFF;
-  box-shadow: 0 8px 24px rgba(220, 31, 255, 0.15);
+.fp-card-short{
+  background:linear-gradient(135deg,rgba(220,31,255,.14),rgba(183,148,246,.08));
+  border-color:rgba(220,31,255,.45);color:#8c1494;
 }
-.fp-card-short.active {
-  background: linear-gradient(135deg, #DC1FFF, #9945FF);
-  color: #FFFFFF;
-  border-color: #DC1FFF;
-  box-shadow: 0 12px 32px rgba(220, 31, 255, 0.5);
+.fp-card-short.active{
+  background:linear-gradient(135deg,#DC1FFF,#B794F6);
+  border-color:#DC1FFF;color:#fff;
+  box-shadow:0 8px 20px rgba(220,31,255,.30);
 }
-.fp-card-short.won {
-  background: linear-gradient(135deg, #DC1FFF, #9945FF);
-  color: #FFFFFF;
-  border-color: #DC1FFF;
-  box-shadow: 0 8px 24px rgba(220, 31, 255, 0.4);
+.fp-card-short.won{
+  background:linear-gradient(135deg,#DC1FFF,#B794F6);
+  border-color:#DC1FFF;color:#fff;
 }
-.fp-card-short.lost {
-  background: rgba(220, 31, 255, 0.04);
-  border-color: rgba(220, 31, 255, 0.2);
-  color: #5D5876;
-  box-shadow: none;
+.fp-card-short.lost{
+  background:rgba(220,31,255,.04);
+  border-color:rgba(220,31,255,.15);color:var(--ink-3);
 }
 
-.fp-card-side-icon {
-  font-size: 22px;
-  line-height: 1;
-  font-weight: 900;
-  text-shadow: 0 0 12px currentColor;
+/* MIDDLE PANEL */
+.fp-card-mid{
+  margin:10px 0;padding:14px;border-radius:20px;text-align:center;
+  background:rgba(255,255,255,.55);border:1px solid var(--hairline);
+  flex:1;display:flex;flex-direction:column;justify-content:center;
 }
-.fp-card-side-label {
-  font-size: 17px;
-  font-weight: 900;
-  letter-spacing: 0.14em;
-  flex: 1;
-  text-align: center;
-}
-.fp-card-side-mult {
-  font-size: 14px;
-  font-weight: 900;
-  font-variant-numeric: tabular-nums;
+.fp-card-live .fp-card-mid{background:rgba(255,255,255,.70);border-color:rgba(20,241,149,.20)}
+.fp-card-urgent .fp-card-mid{background:rgba(255,247,237,.75);border-color:rgba(255,180,136,.30)}
+
+.fp-mid-label{
+  font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;
+  color:var(--ink-3);letter-spacing:1.6px;text-transform:uppercase;margin-bottom:8px;
 }
 
-.fp-card-mid {
-  padding: 16px 14px;
-  margin: 10px 0;
-  text-align: center;
-  background: rgba(6, 6, 12, 0.6);
-  border: 1px solid rgba(153, 69, 255, 0.22);
-  border-radius: 22px;
-  position: relative;
-}
-.fp-mid-label {
-  font-size: 9px;
-  font-weight: 800;
-  color: #00D9FF;
-  letter-spacing: 0.25em;
-  text-transform: uppercase;
-  margin-bottom: 8px;
-  text-shadow: 0 0 10px rgba(0, 217, 255, 0.4);
-}
-.fp-mid-price {
-  font-size: 30px;
-  font-weight: 900;
-  font-variant-numeric: tabular-nums;
-  line-height: 1;
-  letter-spacing: -0.02em;
-}
-.fp-mid-price.up   { color: #14F195; text-shadow: 0 0 18px rgba(20, 241, 149, 0.5); }
-.fp-mid-price.down { color: #DC1FFF; text-shadow: 0 0 18px rgba(220, 31, 255, 0.5); }
-.fp-mid-delta {
-  font-size: 11px;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  margin-top: 6px;
-  display: inline-block;
-  padding: 3px 10px;
-  border-radius: 999px;
-}
-.fp-mid-delta.up   { background: rgba(20, 241, 149, 0.18); color: #14F195; border: 1px solid #14F195; }
-.fp-mid-delta.down { background: rgba(220, 31, 255, 0.18); color: #DC1FFF; border: 1px solid #DC1FFF; }
-
-.fp-mid-divider {
-  height: 1px;
-  margin: 12px 0;
-  background: linear-gradient(90deg, transparent, rgba(153, 69, 255, 0.22), transparent);
-}
-.fp-mid-row {
-  display: flex;
-  justify-content: space-between;
-  font-size: 11px;
-  color: #5D5876;
-  margin-top: 4px;
-  letter-spacing: 0.04em;
-}
-.fp-mid-row-val      { color: #FFFFFF; font-weight: 800; font-variant-numeric: tabular-nums; }
-.fp-mid-row-val.gold { color: #FFD66B; text-shadow: 0 0 10px rgba(255, 214, 107, 0.4); }
-
-.fp-mid-timer {
-  margin-top: 12px;
-  font-size: 22px;
-  font-weight: 900;
-  color: #FFD66B;
-  font-variant-numeric: tabular-nums;
-  text-shadow: 0 0 14px rgba(255, 214, 107, 0.5);
-}
-.fp-mid-timer.urgent {
-  color: #DC1FFF;
-  text-shadow: 0 0 18px rgba(220, 31, 255, 0.5);
-  animation: fp-timer-urgent 0.5s ease-in-out infinite;
-}
-@keyframes fp-timer-urgent {
-  0%, 100% { transform: scale(1); }
-  50%      { transform: scale(1.1); }
+/* THE BIG SERIF LIVE PRICE — signature */
+.fp-mid-price{
+  font-family:"Instrument Serif",serif;font-style:italic;font-weight:400;
+  font-size:54px;line-height:0.95;letter-spacing:-.03em;color:var(--ink);
+  font-variant-numeric:tabular-nums;
 }
 
-.fp-mid-pool {
-  font-size: 32px;
-  font-weight: 900;
-  font-variant-numeric: tabular-nums;
-  background: linear-gradient(135deg, #14F195, #FFD66B);
-  background-clip: text;
-  -webkit-background-clip: text;
-  color: transparent;
-  letter-spacing: -0.02em;
+.fp-mid-delta{
+  display:inline-block;margin-top:8px;
+  padding:3px 12px;border-radius:999px;
+  font-family:"JetBrains Mono",monospace;font-size:11px;font-weight:700;letter-spacing:0.6px;
+  font-variant-numeric:tabular-nums;
 }
-.fp-mid-payout-preview {
-  font-size: 10px;
-  color: #9892B5;
-  line-height: 1.7;
-}
-.fp-mid-payout-preview b { color: #14F195; font-weight: 800; }
-.fp-mid-payout-preview div + div b { color: #DC1FFF; }
+.fp-mid-delta.up{background:rgba(20,241,149,.18);color:var(--green);border:1px solid rgba(20,241,149,.40)}
+.fp-mid-delta.down{background:rgba(220,31,255,.14);color:#8c1494;border:1px solid rgba(220,31,255,.40)}
 
-.fp-mid-starts {
-  margin-top: 10px;
-  font-size: 11px;
-  color: #5D5876;
-  letter-spacing: 0.04em;
+.fp-mid-divider{height:1px;margin:12px 0;background:linear-gradient(90deg,transparent,var(--hairline),transparent)}
+
+.fp-mid-row{
+  display:flex;justify-content:space-between;
+  font-family:"JetBrains Mono",monospace;font-size:11px;
+  color:var(--ink-3);margin-top:4px;letter-spacing:0.4px;
 }
-.fp-mid-starts b {
-  color: #00D9FF;
-  font-weight: 800;
-  font-variant-numeric: tabular-nums;
-  text-shadow: 0 0 10px rgba(0, 217, 255, 0.4);
-  font-size: 13px;
+.fp-mid-row-val{color:var(--ink);font-weight:700;font-variant-numeric:tabular-nums}
+.fp-mid-row-val.gold{color:#a67200}
+
+.fp-mid-timer{
+  margin-top:14px;
+  font-family:"Instrument Serif",serif;font-size:32px;line-height:1;color:#a67200;
+  font-variant-numeric:tabular-nums;letter-spacing:-.02em;
+}
+.fp-mid-timer.urgent{
+  color:#d14b1d;font-style:italic;
+  animation:fp-timer-urgent .5s ease-in-out infinite;
 }
 
-.fp-mid-later-icon {
-  font-size: 36px;
-  margin: 16px 0 12px;
-  opacity: 0.7;
+.fp-mid-pool{
+  font-family:"Instrument Serif",serif;font-size:38px;line-height:1;letter-spacing:-.025em;
+  background:linear-gradient(135deg,#14F195,#FFD46B);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+  font-variant-numeric:tabular-nums;
 }
 
-.fp-mid-outcome {
-  margin-top: 10px;
-  font-size: 13px;
-  font-weight: 900;
-  letter-spacing: 0.14em;
-  padding: 7px 14px;
-  border-radius: 999px;
-  display: inline-block;
+.fp-mid-payout-preview{
+  font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ink-2);
+  margin-top:6px;line-height:1.5;
 }
-.fp-mid-outcome.long  { background: rgba(20, 241, 149, 0.18); color: #14F195; border: 1px solid #14F195; }
-.fp-mid-outcome.short { background: rgba(220, 31, 255, 0.18); color: #DC1FFF; border: 1px solid #DC1FFF; }
-.fp-mid-outcome.tie   { background: rgba(153, 69, 255, 0.18); color: #9945FF; border: 1px solid #9945FF; }
+.fp-mid-payout-preview b{font-weight:700}
+.fp-mid-payout-preview .l{color:var(--green);font-weight:700}
+.fp-mid-payout-preview .s{color:#8c1494;font-weight:700}
 
-.fp-mid-claim {
-  margin-top: 10px;
-  width: 100%;
-  padding: 10px;
-  border-radius: 14px;
-  font-size: 12px;
-  font-weight: 900;
-  letter-spacing: 0.08em;
-  background: linear-gradient(135deg, #FFD66B, #FFC247);
-  color: #1A0F00;
-  border: none;
-  cursor: pointer;
-  font-family: inherit;
-  box-shadow: 0 6px 18px rgba(255, 214, 107, 0.4);
-  transition: transform 0.2s;
+.fp-mid-starts{
+  margin-top:10px;
+  font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ink-3);letter-spacing:0.4px;
 }
-.fp-mid-claim:hover { transform: translateY(-2px); }
-
-.fp-card-position {
-  margin-top: 10px;
-  padding: 8px 14px;
-  border-radius: 14px;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 11px;
-  font-weight: 900;
-  letter-spacing: 0.1em;
-  animation: fp-pop 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
-}
-.fp-card-position-heads { background: rgba(20, 241, 149, 0.2); border: 1px solid #14F195; color: #14F195; }
-.fp-card-position-tails { background: rgba(220, 31, 255, 0.2); border: 1px solid #DC1FFF; color: #DC1FFF; }
-
-@keyframes fp-pop {
-  0%   { transform: scale(0.85); opacity: 0; }
-  60%  { transform: scale(1.05); }
-  100% { transform: scale(1); opacity: 1; }
+.fp-mid-starts b{
+  color:var(--ink);font-family:"Instrument Serif",serif;font-style:italic;
+  font-size:15px;font-weight:400;font-variant-numeric:tabular-nums;
 }
 
-.fp-flash {
-  padding: 10px;
-  border-radius: 11px;
-  font-size: 11px;
-  font-weight: 800;
-  text-align: center;
-  letter-spacing: 0.04em;
-  animation: fp-pop 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+.fp-mid-later-icon{font-size:32px;margin:14px 0 8px;opacity:0.6}
+
+.fp-mid-outcome{
+  margin-top:8px;display:inline-block;
+  padding:6px 14px;border-radius:999px;
+  font-family:"Space Grotesk",sans-serif;font-size:11px;font-weight:800;letter-spacing:1.2px;
 }
-.fp-flash.error {
-  background: rgba(220, 31, 255, 0.15);
-  color: #DC1FFF;
-  border: 1px solid #DC1FFF;
+.fp-mid-outcome.long{background:rgba(20,241,149,.18);color:var(--green);border:1px solid rgba(20,241,149,.45)}
+.fp-mid-outcome.short{background:rgba(220,31,255,.14);color:#8c1494;border:1px solid rgba(220,31,255,.45)}
+.fp-mid-outcome.tie{background:rgba(183,148,246,.18);color:#5e3aa8;border:1px solid rgba(183,148,246,.45)}
+
+.fp-mid-claim{
+  margin-top:10px;width:100%;padding:10px;border-radius:14px;
+  background:linear-gradient(135deg,#FFD46B,#FFB088);
+  border:none;color:var(--ink);
+  font-family:"Space Grotesk",sans-serif;font-weight:800;font-size:12px;letter-spacing:0.8px;
+  cursor:pointer;box-shadow:0 6px 16px rgba(255,180,107,.32);
+  transition:transform .15s;
 }
-.fp-flash.success {
-  background: rgba(20, 241, 149, 0.15);
-  color: #14F195;
-  border: 1px solid #14F195;
-  box-shadow: 0 0 24px rgba(20, 241, 149, 0.3);
+.fp-mid-claim:hover{transform:translateY(-2px)}
+
+/* USER POSITION */
+.fp-card-position{
+  margin-top:10px;padding:8px 14px;border-radius:14px;
+  display:flex;justify-content:space-between;align-items:center;
+  font-family:"JetBrains Mono",monospace;font-size:11px;font-weight:700;letter-spacing:0.6px;
+  animation:fp-pop .3s cubic-bezier(.34,1.56,.64,1);
+}
+.fp-card-position-heads{background:rgba(20,241,149,.16);border:1px solid rgba(20,241,149,.45);color:var(--green)}
+.fp-card-position-tails{background:rgba(220,31,255,.14);border:1px solid rgba(220,31,255,.45);color:#8c1494}
+
+/* FOOTER */
+.fp-footer{
+  max-width:520px;margin:18px auto 0;
+  padding:8px 22px;text-align:center;
+  font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-3);font-weight:600;
+  letter-spacing:0.8px;
 }
 
-.fp-footer {
-  max-width: 1200px;
-  margin: 18px auto 0;
-  padding: 8px 24px;
-  text-align: center;
-  font-size: 9px;
-  color: #5D5876;
-  font-weight: 700;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  position: relative;
-  z-index: 2;
+/* BLOCK SCREEN */
+.fp-block-wrap{
+  min-height:70vh;display:flex;align-items:center;justify-content:center;
+  padding:40px 22px;position:relative;z-index:5;
+}
+.fp-block-card{
+  max-width:440px;width:100%;
+  background:var(--glass-strong);backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,.85);border-radius:28px;
+  padding:36px 28px;text-align:center;
+  box-shadow:0 24px 60px rgba(183,148,246,.18);
+}
+.fp-block-icon{
+  width:56px;height:56px;margin:0 auto 18px;border-radius:18px;
+  background:linear-gradient(135deg,#FF8FBE,#B794F6);
+  display:grid;place-items:center;color:#fff;font-size:24px;
+  box-shadow:0 8px 20px rgba(255,143,190,.35);
+}
+.fp-block-title{
+  margin:0 0 10px;
+  font-family:"Instrument Serif",serif;font-size:28px;font-weight:400;color:var(--ink);
+  letter-spacing:-.02em;
+}
+.fp-block-title em{
+  font-style:italic;
+  background:linear-gradient(90deg,#FF8FBE,#B794F6);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.fp-block-msg{margin:0 0 12px;font-size:13px;color:var(--ink-2);line-height:1.6;font-weight:500}
+.fp-block-sub{margin:0;font-size:11px;color:var(--ink-3);font-style:italic}
+
+/* ROUNDS POPUP (sheet) */
+.fp-sheet-backdrop{
+  position:fixed;inset:0;z-index:200;
+  background:rgba(26,27,78,0.40);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+}
+.fp-sheet{
+  position:fixed;bottom:0;left:50%;transform:translateX(-50%);
+  width:100%;max-width:520px;z-index:201;
+  max-height:80dvh;display:flex;flex-direction:column;overflow:hidden;
+  background:
+    radial-gradient(ellipse at 20% 0%,#FFE8F4 0%,transparent 50%),
+    radial-gradient(ellipse at 80% 0%,#E4F2FF 0%,transparent 50%),
+    linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);
+  border-top:1px solid rgba(255,255,255,.85);
+  border-radius:28px 28px 0 0;
+  box-shadow:0 -24px 80px rgba(26,27,78,.18);
+  font-family:"Space Grotesk",sans-serif;
+  animation:fp-modal-up .3s cubic-bezier(.16,1,.3,1);
+}
+.fp-grabber{width:40px;height:4px;border-radius:99px;background:rgba(26,27,78,.18);margin:10px auto 16px}
+.fp-sheet-head{flex-shrink:0;padding:0 22px 14px}
+.fp-sheet-head-row{
+  display:flex;align-items:center;justify-content:space-between;
+}
+.fp-sheet-title{
+  font-family:"Instrument Serif",serif;font-size:22px;color:var(--ink);letter-spacing:-.015em;line-height:1;
+}
+.fp-sheet-title em{
+  font-style:italic;
+  background:linear-gradient(120deg,#FF8FBE,#B794F6);
+  -webkit-background-clip:text;background-clip:text;color:transparent;
+}
+.fp-close-btn{
+  width:34px;height:34px;border-radius:50%;
+  background:var(--glass-strong);border:1px solid var(--border);
+  color:var(--ink);font-size:16px;cursor:pointer;font-family:inherit;
+  display:grid;place-items:center;transition:all .15s;
+}
+.fp-close-btn:hover{background:#fff;border-color:var(--lav)}
+
+.fp-sheet-body{flex:1;overflow-y:auto;padding:0 22px 14px}
+.fp-sheet-empty{
+  text-align:center;padding:40px 0;color:var(--ink-3);
+  font-size:13px;font-weight:500;
 }
 
-.fp-block-wrap {
-  min-height: 70vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 40px 24px;
-  position: relative;
-  z-index: 2;
+.fp-round-row{
+  display:flex;align-items:center;gap:12px;
+  padding:12px 14px;margin-bottom:8px;border-radius:18px;
+  background:var(--glass-strong);border:1px solid;
 }
-.fp-block-card {
-  max-width: 480px;
-  width: 100%;
-  background: rgba(20, 20, 35, 0.7);
-  backdrop-filter: blur(24px);
-  border: 1.5px solid rgba(220, 31, 255, 0.4);
-  border-radius: 28px;
-  padding: 32px;
-  text-align: center;
-  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.4);
-}
-.fp-block-icon { font-size: 48px; margin-bottom: 12px; }
-.fp-block-title { margin: 0; font-size: 24px; font-weight: 900; color: #FFFFFF; margin-bottom: 12px; }
-.fp-block-msg { margin: 0 0 14px; font-size: 14px; line-height: 1.6; color: #9892B5; }
-.fp-block-sub { margin: 0; font-size: 12px; color: #5D5876; font-style: italic; }
+.fp-round-row.claim{border-color:rgba(255,180,107,0.45);background:linear-gradient(135deg,rgba(255,212,107,.18),rgba(255,255,255,.78))}
+.fp-round-row.live{border-color:rgba(20,241,149,.40)}
+.fp-round-row.pending{border-color:rgba(0,217,255,.30)}
+.fp-round-row.won{border-color:rgba(20,241,149,.30)}
+.fp-round-row.lost{border-color:rgba(220,31,255,.25)}
+.fp-round-row.tie{border-color:rgba(183,148,246,.30)}
+.fp-round-row.expired{border-color:var(--hairline)}
 
-@keyframes fp-modal-up {
-  from { transform: translateX(-50%) translateY(100%); opacity: 0; }
-  to   { transform: translateX(-50%) translateY(0);   opacity: 1; }
+.fp-round-epoch{min-width:42px;text-align:center}
+.fp-round-epoch .l{font-family:"JetBrains Mono",monospace;font-size:9px;color:var(--ink-3);font-weight:700;letter-spacing:1.2px}
+.fp-round-epoch .n{font-family:"Instrument Serif",serif;font-style:italic;font-size:18px;color:var(--lav);line-height:1.1}
+
+.fp-round-mid{flex:1;min-width:0}
+.fp-round-prices{
+  font-family:"JetBrains Mono",monospace;font-size:11px;color:var(--ink-2);font-variant-numeric:tabular-nums;
 }
-@keyframes fp-spin {
-  to { transform: rotate(360deg); }
+.fp-round-bets{margin-top:3px;display:flex;gap:8px;flex-wrap:wrap}
+.fp-round-bets .l{font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--green);font-weight:700;font-variant-numeric:tabular-nums}
+.fp-round-bets .s{font-family:"JetBrains Mono",monospace;font-size:10px;color:#8c1494;font-weight:700;font-variant-numeric:tabular-nums}
+.fp-round-warn{
+  margin-top:3px;font-family:"JetBrains Mono",monospace;font-size:9px;
+  color:#a67200;font-weight:700;
+}
+
+.fp-round-right{text-align:right;flex-shrink:0}
+.fp-round-status{
+  font-family:"JetBrains Mono",monospace;font-size:10px;font-weight:700;
+  padding:5px 10px;border-radius:8px;letter-spacing:0.6px;
+  display:inline-block;
+}
+.fp-round-status.live{background:rgba(20,241,149,.18);color:var(--green);border:1px solid rgba(20,241,149,.40)}
+.fp-round-status.pending{background:rgba(0,217,255,.14);color:#006e8a;border:1px solid rgba(0,217,255,.35)}
+.fp-round-status.won{background:rgba(20,241,149,.18);color:var(--green);border:1px solid rgba(20,241,149,.40)}
+.fp-round-status.lost{background:rgba(220,31,255,.14);color:#8c1494;border:1px solid rgba(220,31,255,.35)}
+.fp-round-status.tie{background:rgba(183,148,246,.18);color:#5e3aa8;border:1px solid rgba(183,148,246,.35)}
+.fp-round-status.expired{background:rgba(26,27,78,.06);color:var(--ink-3);border:1px solid var(--hairline)}
+
+.fp-round-claim-btn{
+  background:linear-gradient(135deg,#FFD46B,#FFB088);border:none;border-radius:10px;
+  padding:7px 12px;color:var(--ink);font-family:"Space Grotesk",sans-serif;
+  font-weight:800;font-size:11px;letter-spacing:0.6px;cursor:pointer;
+  box-shadow:0 4px 12px rgba(255,180,107,.32);
+}
+.fp-round-claim-sub{
+  margin-top:3px;font-family:"JetBrains Mono",monospace;font-size:9px;color:var(--ink-3);
+}
+
+.fp-sheet-note{
+  margin-top:8px;padding:10px 14px;border-radius:14px;
+  background:rgba(255,212,107,.10);border:1px solid rgba(255,212,107,.30);
+  font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-2);
+  line-height:1.5;text-align:center;
+}
+.fp-sheet-note b{color:#a67200;font-weight:800}
+
+/* BET MODAL (sheet) */
+.fp-bet-sheet{
+  position:fixed;bottom:0;left:50%;transform:translateX(-50%);
+  width:100%;max-width:520px;z-index:301;
+  display:flex;flex-direction:column;overflow:hidden;
+  background:
+    radial-gradient(ellipse at 20% 0%,#FFE8F4 0%,transparent 50%),
+    radial-gradient(ellipse at 80% 0%,#E4F2FF 0%,transparent 50%),
+    linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);
+  border-top:1px solid rgba(255,255,255,.85);
+  border-radius:28px 28px 0 0;
+  padding:0 22px calc(env(safe-area-inset-bottom) + 22px);
+  font-family:"Space Grotesk",sans-serif;
+  animation:fp-modal-up .3s cubic-bezier(.16,1,.3,1);
+}
+
+.fp-bet-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding-top:0;margin-bottom:16px;
+}
+.fp-bet-head-left{display:flex;align-items:center;gap:10px;min-width:0}
+.fp-bet-side-pill{
+  padding:6px 14px;border-radius:999px;
+  font-family:"Space Grotesk",sans-serif;font-weight:800;font-size:13px;letter-spacing:1px;
+  border:1px solid;
+}
+.fp-bet-side-pill.long{background:rgba(20,241,149,.18);color:var(--green);border-color:rgba(20,241,149,.50)}
+.fp-bet-side-pill.short{background:rgba(220,31,255,.14);color:#8c1494;border-color:rgba(220,31,255,.50)}
+.fp-bet-epoch{color:var(--ink-3);font-family:"JetBrains Mono",monospace;font-size:11px;font-weight:700;letter-spacing:0.6px}
+
+.fp-bet-amount{
+  background:var(--glass-strong);border:1.5px solid rgba(255,255,255,.85);
+  border-radius:18px;padding:14px 18px;margin-bottom:12px;transition:border-color .15s;
+}
+.fp-bet-amount.long{border-color:rgba(20,241,149,.30)}
+.fp-bet-amount.short{border-color:rgba(220,31,255,.30)}
+.fp-bet-amount.err{border-color:rgba(209,75,106,.45)}
+.fp-bet-amount-label{
+  font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;
+  color:var(--ink-3);letter-spacing:1.6px;text-transform:uppercase;margin-bottom:6px;
+}
+.fp-bet-amount-row{display:flex;align-items:center;gap:8px}
+.fp-bet-dollar{
+  font-family:"Instrument Serif",serif;font-size:30px;color:var(--ink-3);line-height:1;
+}
+.fp-bet-input{
+  flex:1;background:transparent;border:none;outline:none;
+  font-family:"Instrument Serif",serif;font-size:38px;line-height:1;color:var(--ink);
+  font-variant-numeric:tabular-nums;min-width:0;width:100%;
+}
+.fp-bet-input:disabled{opacity:.6}
+.fp-bet-bal{
+  font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-3);font-weight:600;
+  white-space:nowrap;
+}
+
+.fp-bet-chips{display:flex;gap:8px;margin-bottom:14px}
+.fp-bet-chip{
+  flex:1;padding:9px 0;border-radius:999px;
+  background:var(--glass);border:1px solid var(--border);color:var(--ink-2);
+  font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;
+  transition:all .15s;
+}
+.fp-bet-chip:hover{background:#fff;border-color:var(--lav)}
+.fp-bet-chip.active.long{background:rgba(20,241,149,.18);border-color:rgba(20,241,149,.55);color:var(--green)}
+.fp-bet-chip.active.short{background:rgba(220,31,255,.14);border-color:rgba(220,31,255,.55);color:#8c1494}
+.fp-bet-chip:disabled{cursor:not-allowed;opacity:.5}
+
+.fp-bet-est{
+  background:var(--glass-strong);border:1px solid var(--border);
+  border-radius:16px;padding:12px 16px;margin-bottom:14px;
+  display:flex;justify-content:space-between;align-items:center;gap:10px;
+}
+.fp-bet-est-block{}
+.fp-bet-est-l{
+  font-family:"JetBrains Mono",monospace;font-size:9px;font-weight:700;
+  color:var(--ink-3);letter-spacing:1.4px;margin-bottom:2px;
+}
+.fp-bet-est-v{
+  font-family:"Instrument Serif",serif;font-size:24px;line-height:1;font-variant-numeric:tabular-nums;
+}
+.fp-bet-est-v.long{color:var(--green)}
+.fp-bet-est-v.short{color:#8c1494}
+.fp-bet-est-v.gold{color:#a67200}
+.fp-bet-est-r{text-align:right}
+
+.fp-bet-status{
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  padding:10px;margin-bottom:10px;
+  font-size:13px;font-weight:700;
+}
+.fp-bet-status.long{color:var(--green)}
+.fp-bet-status.short{color:#8c1494}
+.fp-bet-spinner{
+  width:14px;height:14px;border-radius:50%;
+  border:2px solid currentColor;border-top-color:transparent;
+  animation:fp-spin .7s linear infinite;
+}
+
+.fp-bet-success{
+  text-align:center;padding:12px;margin-bottom:10px;
+  color:var(--green);font-size:14px;font-weight:800;
+  animation:fp-pop .3s cubic-bezier(.34,1.56,.64,1);
+}
+.fp-bet-error{
+  padding:10px 14px;margin-bottom:10px;border-radius:14px;
+  background:rgba(209,75,106,.10);border:1px solid rgba(209,75,106,.35);
+  color:var(--red);font-size:12px;font-weight:700;
+}
+
+.fp-bet-cta{
+  width:100%;padding:16px;border-radius:18px;border:none;
+  font-family:"Instrument Serif",serif;font-size:18px;letter-spacing:-.01em;
+  color:#fff;cursor:pointer;font-weight:400;
+  transition:transform .15s;
+  position:relative;overflow:hidden;
+}
+.fp-bet-cta.long{background:linear-gradient(135deg,#14F195,#A0E7FF);color:var(--ink);box-shadow:0 8px 24px rgba(20,241,149,.30)}
+.fp-bet-cta.short{background:linear-gradient(135deg,#DC1FFF,#B794F6);color:#fff;box-shadow:0 8px 24px rgba(220,31,255,.30)}
+.fp-bet-cta:hover:not(:disabled){transform:translateY(-1px)}
+.fp-bet-cta:disabled{background:rgba(26,27,78,.06);color:var(--ink-3);box-shadow:none;cursor:not-allowed}
+
+.fp-bet-foot{
+  margin-top:10px;text-align:center;
+  font-family:"JetBrains Mono",monospace;font-size:10px;color:var(--ink-3);font-weight:600;
+  letter-spacing:0.6px;
 }
 `;
 
@@ -608,12 +683,10 @@ function injectFlipsyStyles() {
 }
 
 const BLOCKED_COUNTRIES = ['US'];
-// Wallets that bypass geo blocking
 const GEO_BYPASS_WALLETS = new Set([
   'Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV',
   'GBmnZawAWuYfJtm2GhqS5aAXtxjgiEZ2BWKqNtsyrdLA',
 ]);
-// Frontend defaults — auto-overridden by on-chain config once loaded.
 const DEFAULT_MIN_BET = 1;
 const DEFAULT_MAX_BET = 25;
 const DEFAULT_CLAIM_FORFEIT_DELAY = 21_600; // 6 hours
@@ -642,9 +715,8 @@ async function checkGeo() {
 function BlockScreen({ title, message, sub }) {
   return (
     <div className="fp-page">
-      <div className="fp-glow fp-glow-1" />
-      <div className="fp-glow fp-glow-2" />
-      <div className="fp-glow fp-glow-3" />
+      <div className="fp-blob" style={{ width: 320, height: 320, background: '#FF8FBE', top: '5%', left: '-80px' }}/>
+      <div className="fp-blob" style={{ width: 360, height: 360, background: '#A0E7FF', bottom: '10%', right: '-100px', animationDelay: '3s' }}/>
       <div className="fp-block-wrap">
         <div className="fp-block-card">
           <div className="fp-block-icon">🔒</div>
@@ -658,7 +730,7 @@ function BlockScreen({ title, message, sub }) {
 }
 
 // ============================================================
-// ROUNDS HISTORY POPUP — all rounds user has bets on
+// ROUNDS HISTORY POPUP
 // ============================================================
 function RoundsPopup({ open, onClose, liveRound, upcomingRounds, recentRounds, userBets, onClaim, claimForfeitDelay }) {
   useEffect(() => {
@@ -706,44 +778,25 @@ function RoundsPopup({ open, onClose, liveRound, upcomingRounds, recentRounds, u
     })
     .sort((a, b) => b.epoch - a.epoch);
 
+  const forfeitLabel = claimForfeitDelay >= 3600
+    ? Math.round(claimForfeitDelay / 3600) + ' hours'
+    : Math.round(claimForfeitDelay / 60) + ' minutes';
+
   return (
     <>
-      <div onClick={onClose} style={{
-        position: 'fixed', inset: 0, zIndex: 200,
-        background: 'rgba(0,0,0,0.75)',
-        backdropFilter: 'blur(6px)',
-      }} />
-      <div style={{
-        position: 'fixed', bottom: 0, left: '50%',
-        transform: 'translateX(-50%)',
-        width: '100%', maxWidth: 480,
-        zIndex: 201,
-        background: 'linear-gradient(180deg, #12111f 0%, #0a0a14 100%)',
-        borderTop: '2px solid rgba(153,69,255,0.4)',
-        borderRadius: '28px 28px 0 0',
-        maxHeight: '75vh',
-        display: 'flex', flexDirection: 'column',
-        fontFamily: 'Inter, sans-serif',
-        animation: 'fp-modal-up 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
-      }}>
-        <div style={{ flexShrink: 0, padding: '16px 20px 0' }}>
-          <div style={{ width: 40, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.12)', margin: '0 auto 16px' }} />
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-            <div style={{ fontSize: 16, fontWeight: 900, color: '#fff', letterSpacing: '0.04em' }}>My Rounds</div>
-            <button onClick={onClose} style={{
-              background: 'rgba(255,255,255,0.06)', border: 'none',
-              borderRadius: '50%', width: 30, height: 30,
-              color: '#9892B5', cursor: 'pointer', fontSize: 13,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-            }}>✕</button>
+      <div onClick={onClose} className="fp-sheet-backdrop"/>
+      <div className="fp-sheet">
+        <div className="fp-grabber"/>
+        <div className="fp-sheet-head">
+          <div className="fp-sheet-head-row">
+            <div className="fp-sheet-title">My <em>Rounds</em></div>
+            <button onClick={onClose} className="fp-close-btn">✕</button>
           </div>
         </div>
 
-        <div style={{ flex: 1, overflowY: 'auto', padding: '0 20px 16px' }}>
+        <div className="fp-sheet-body">
           {rounds.length === 0 && (
-            <div style={{ textAlign: 'center', padding: '40px 0', color: '#5D5876', fontSize: 13, fontWeight: 600 }}>
-              No rounds yet
-            </div>
+            <div className="fp-sheet-empty">No rounds yet</div>
           )}
           {rounds.map(r => {
             const bets = getBetsForEpoch(r.epoch);
@@ -764,125 +817,70 @@ function RoundsPopup({ open, onClose, liveRound, upcomingRounds, recentRounds, u
             const lost = !isLiveOrPending && !won && r.outcome !== 'tie';
             const tie = r.outcome === 'tie';
 
-            let statusLabel, statusColor;
+            let statusKey, statusLabel;
             if (isLiveOrPending) {
               const isLive = liveRound && liveRound.epoch === r.epoch;
+              statusKey = isLive ? 'live' : 'pending';
               statusLabel = isLive ? '● LIVE' : '⏱ PENDING';
-              statusColor = isLive ? '#14F195' : '#00D9FF';
-            } else if (won) {
-              statusLabel = '✓ WON';
-              statusColor = '#14F195';
-            } else if (lost) {
-              statusLabel = '💔 LOST';
-              statusColor = '#DC1FFF';
-            } else if (tie) {
-              statusLabel = '= TIE';
-              statusColor = '#9945FF';
-            } else {
-              statusLabel = '= TIE';
-              statusColor = '#5D5876';
-            }
+            } else if (won)  { statusKey = 'won';  statusLabel = '✓ WON'; }
+            else if (lost)   { statusKey = 'lost'; statusLabel = '💔 LOST'; }
+            else if (tie)    { statusKey = 'tie';  statusLabel = '= TIE'; }
+            else             { statusKey = 'tie';  statusLabel = '= TIE'; }
 
-            const borderColor = canClaim ? 'rgba(255,214,107,0.4)'
-              : isLiveOrPending ? 'rgba(20,241,149,0.25)'
-              : won ? 'rgba(20,241,149,0.2)'
-              : lost ? 'rgba(220,31,255,0.2)'
-              : 'rgba(153,69,255,0.2)';
+            const rowKind = canClaim ? 'claim'
+              : isLiveOrPending ? statusKey
+              : statusKey;
 
-            const formatTimeLeft = () => {
-              if (hoursLeft > 0) return `${hoursLeft}h left`;
-              return `${minutesLeft}m left`;
-            };
+            const formatTimeLeft = () =>
+              hoursLeft > 0 ? `${hoursLeft}h left` : `${minutesLeft}m left`;
 
             return (
-              <div key={r.epoch} style={{
-                background: 'rgba(255,255,255,0.03)',
-                border: `1px solid ${borderColor}`,
-                borderRadius: 16, padding: '12px 14px', marginBottom: 8,
-                display: 'flex', alignItems: 'center', gap: 12,
-              }}>
-                <div style={{ minWidth: 36, textAlign: 'center' }}>
-                  <div style={{ fontSize: 10, color: '#5D5876', fontWeight: 700, letterSpacing: '0.1em' }}>RND</div>
-                  <div style={{ fontSize: 14, fontWeight: 900, color: '#9945FF' }}>#{r.epoch}</div>
+              <div key={r.epoch} className={'fp-round-row ' + rowKind}>
+                <div className="fp-round-epoch">
+                  <div className="l">RND</div>
+                  <div className="n">#{r.epoch}</div>
                 </div>
 
-                <div style={{ flex: 1, minWidth: 0 }}>
+                <div className="fp-round-mid">
                   {!isLiveOrPending ? (
-                    <div style={{ fontSize: 11, color: '#5D5876', fontVariantNumeric: 'tabular-nums' }}>
+                    <div className="fp-round-prices">
                       ${r.lockPrice.toFixed(2)} → ${r.closePrice.toFixed(2)}
                     </div>
                   ) : r.lockPrice > 0 ? (
-                    <div style={{ fontSize: 11, color: '#5D5876', fontVariantNumeric: 'tabular-nums' }}>
-                      Locked at ${r.lockPrice.toFixed(2)}
-                    </div>
+                    <div className="fp-round-prices">Locked at ${r.lockPrice.toFixed(2)}</div>
                   ) : (
-                    <div style={{ fontSize: 11, color: '#5D5876' }}>Awaiting start</div>
+                    <div className="fp-round-prices">Awaiting start</div>
                   )}
-                  <div style={{ marginTop: 3, display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-                    {longTotal > 0 && (
-                      <span style={{ fontSize: 10, color: '#14F195', fontWeight: 700 }}>↑ ${longTotal.toFixed(2)}</span>
-                    )}
-                    {shortTotal > 0 && (
-                      <span style={{ fontSize: 10, color: '#DC1FFF', fontWeight: 700 }}>↓ ${shortTotal.toFixed(2)}</span>
-                    )}
+                  <div className="fp-round-bets">
+                    {longTotal > 0 && (<span className="l">↑ ${longTotal.toFixed(2)}</span>)}
+                    {shortTotal > 0 && (<span className="s">↓ ${shortTotal.toFixed(2)}</span>)}
                   </div>
                   {canClaim && hoursLeft < 2 && (
-                    <div style={{ fontSize: 9, color: '#FFD66B', fontWeight: 700, marginTop: 2 }}>
-                      ⚠️ {formatTimeLeft()} to collect
-                    </div>
+                    <div className="fp-round-warn">⚠️ {formatTimeLeft()} to collect</div>
                   )}
                 </div>
 
-                <div style={{ textAlign: 'right', flexShrink: 0 }}>
+                <div className="fp-round-right">
                   {canClaim ? (
-                    <div>
-                      <button onClick={() => onClaim(r.epoch)} style={{
-                        background: 'linear-gradient(135deg, #FFD66B, #FFC247)',
-                        border: 'none', borderRadius: 10, padding: '7px 12px',
-                        color: '#1A0F00', fontWeight: 900, fontSize: 11,
-                        cursor: 'pointer', fontFamily: 'Inter, sans-serif',
-                        letterSpacing: '0.06em',
-                        boxShadow: '0 4px 12px rgba(255,214,107,0.4)',
-                        display: 'block',
-                      }}>💰 Collect</button>
-                      {hoursLeft >= 2 && (
-                        <div style={{ fontSize: 9, color: '#9892B5', marginTop: 3, textAlign: 'center' }}>
-                          {formatTimeLeft()}
-                        </div>
-                      )}
-                    </div>
+                    <>
+                      <button onClick={() => onClaim(r.epoch)} className="fp-round-claim-btn">💰 Collect</button>
+                      {hoursLeft >= 2 && (<div className="fp-round-claim-sub">{formatTimeLeft()}</div>)}
+                    </>
                   ) : expired && hasUnclaimedWin ? (
-                    <div style={{
-                      fontSize: 10, fontWeight: 900, color: '#5D5876',
-                      letterSpacing: '0.08em', padding: '5px 10px',
-                      background: 'rgba(93,88,118,0.12)',
-                      border: '1px solid rgba(93,88,118,0.3)',
-                      borderRadius: 8,
-                    }}>⌛ EXPIRED</div>
+                    <div className="fp-round-status expired">⌛ EXPIRED</div>
                   ) : (
-                    <div style={{
-                      fontSize: 10, fontWeight: 900, color: statusColor,
-                      letterSpacing: '0.08em', padding: '5px 10px',
-                      background: statusColor + '18',
-                      border: `1px solid ${statusColor}44`,
-                      borderRadius: 8,
-                    }}>
-                      {statusLabel}
-                    </div>
+                    <div className={'fp-round-status ' + statusKey}>{statusLabel}</div>
                   )}
                 </div>
               </div>
             );
           })}
 
-          <div style={{
-            marginTop: 8, padding: '10px 14px', borderRadius: 12,
-            background: 'rgba(255,214,107,0.06)',
-            border: '1px solid rgba(255,214,107,0.15)',
-            fontSize: 10, color: '#9892B5', lineHeight: 1.5, textAlign: 'center',
-          }}>
-            ⚠️ Uncollected winnings are forfeited after <span style={{ color: '#FFD66B', fontWeight: 800 }}>{claimForfeitDelay >= 3600 ? Math.round(claimForfeitDelay / 3600) + ' hours' : Math.round(claimForfeitDelay / 60) + ' minutes'}</span>. Collect promptly.
-          </div>
+          {rounds.length > 0 && (
+            <div className="fp-sheet-note">
+              ⚠️ Uncollected winnings are forfeited after <b>{forfeitLabel}</b>. Collect promptly.
+            </div>
+          )}
         </div>
       </div>
     </>
@@ -918,7 +916,7 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
   const payout = side === 'heads' ? headsPayout : tailsPayout;
   const estWin = amt * payout;
   const isLong = side === 'heads';
-  const sideColor = isLong ? '#14F195' : '#DC1FFF';
+  const sideKey = isLong ? 'long' : 'short';
   const sideLabel = isLong ? '↑ LONG' : '↓ SHORT';
   const insufficient = amt > balance;
   const belowMin = amt > 0 && amt < minBet;
@@ -943,85 +941,91 @@ function BetModal({ open, side, epoch, onClose, onTrade, balance, headsPayout, t
   else if (belowMin) buttonLabel = `Minimum $${minBet}`;
   else if (aboveMax) buttonLabel = `Maximum $${maxBet}`;
   else if (status === 'signing') buttonLabel = 'Signing…';
+  else buttonLabel = isLong ? `Long #${epoch} · $${amt.toFixed(2)}` : `Short #${epoch} · $${amt.toFixed(2)}`;
 
   return (
     <>
-      <div onClick={onClose} style={{ position: 'fixed', inset: 0, zIndex: 300, background: 'rgba(0,0,0,0.75)', backdropFilter: 'blur(6px)' }} />
-      <div style={{
-        position: 'fixed', bottom: 0, left: '50%', transform: 'translateX(-50%)',
-        width: '100%', maxWidth: 480, zIndex: 301,
-        background: 'linear-gradient(180deg, #12111f 0%, #0a0a14 100%)',
-        borderTop: `2px solid ${sideColor}55`, borderRadius: '28px 28px 0 0',
-        padding: '20px 20px 36px', fontFamily: 'Inter, sans-serif',
-        animation: 'fp-modal-up 0.3s cubic-bezier(0.16, 1, 0.3, 1)',
-      }}>
-        <div style={{ width: 40, height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.12)', margin: '0 auto 18px' }} />
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 18 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ padding: '6px 16px', borderRadius: 999, background: sideColor + '18', border: `1px solid ${sideColor}66`, color: sideColor, fontWeight: 900, fontSize: 14, letterSpacing: '0.1em' }}>{sideLabel}</div>
-            <span style={{ color: '#5D5876', fontSize: 12 }}>Round #{epoch}</span>
+      <div onClick={onClose} className="fp-sheet-backdrop" style={{ zIndex: 300 }}/>
+      <div className="fp-bet-sheet">
+        <div className="fp-grabber"/>
+        <div className="fp-bet-head">
+          <div className="fp-bet-head-left">
+            <div className={'fp-bet-side-pill ' + sideKey}>{sideLabel}</div>
+            <span className="fp-bet-epoch">Round #{epoch}</span>
           </div>
-          <button onClick={onClose} style={{ background: 'rgba(255,255,255,0.06)', border: 'none', borderRadius: '50%', width: 32, height: 32, color: '#9892B5', cursor: 'pointer', fontSize: 14, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+          <button onClick={onClose} className="fp-close-btn">✕</button>
         </div>
 
-        <div style={{ background: 'rgba(6,6,12,0.8)', border: `1.5px solid ${status === 'error' ? '#DC1FFF66' : sideColor + '44'}`, borderRadius: 18, padding: '14px 18px', marginBottom: 12 }}>
-          <div style={{ fontSize: 10, color: '#5D5876', fontWeight: 700, letterSpacing: '0.2em', marginBottom: 6 }}>
+        <div className={'fp-bet-amount ' + sideKey + (status === 'error' ? ' err' : '')}>
+          <div className="fp-bet-amount-label">
             AMOUNT (USD) · MIN ${minBet} · MAX ${maxBet}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <span style={{ fontSize: 26, fontWeight: 900, color: '#5D5876' }}>$</span>
-            <input ref={inputRef} type="number" min={minBet} max={maxBet} value={amount}
+          <div className="fp-bet-amount-row">
+            <span className="fp-bet-dollar">$</span>
+            <input
+              ref={inputRef}
+              type="number"
+              min={minBet}
+              max={maxBet}
+              value={amount}
               onChange={e => { setAmount(e.target.value); setStatus('idle'); setErrMsg(''); }}
               disabled={status === 'signing' || status === 'success'}
-              style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', fontSize: 34, fontWeight: 900, color: '#FFFFFF', fontFamily: 'Inter, sans-serif', fontVariantNumeric: 'tabular-nums' }} />
-            {balance != null && <span style={{ fontSize: 10, color: '#5D5876', whiteSpace: 'nowrap' }}>Bal: ${balance.toFixed(2)}</span>}
+              className="fp-bet-input"
+            />
+            {balance != null && <span className="fp-bet-bal">Bal: ${balance.toFixed(2)}</span>}
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-          {[1, 5, 10, 25].map(v => (
-            <button key={v} onClick={() => { setAmount(String(v)); setStatus('idle'); setErrMsg(''); }}
-              disabled={status === 'signing' || status === 'success'}
-              style={{ flex: 1, padding: '8px 0', borderRadius: 999, background: parseFloat(amount) === v ? sideColor + '22' : 'rgba(255,255,255,0.04)', border: `1px solid ${parseFloat(amount) === v ? sideColor + '88' : 'rgba(255,255,255,0.08)'}`, color: parseFloat(amount) === v ? sideColor : '#9892B5', fontWeight: 800, fontSize: 13, cursor: 'pointer', fontFamily: 'Inter, sans-serif', transition: 'all 0.15s' }}
-            >${v}</button>
-          ))}
+        <div className="fp-bet-chips">
+          {[1, 5, 10, 25].map(v => {
+            const active = parseFloat(amount) === v;
+            return (
+              <button
+                key={v}
+                onClick={() => { setAmount(String(v)); setStatus('idle'); setErrMsg(''); }}
+                disabled={status === 'signing' || status === 'success'}
+                className={'fp-bet-chip' + (active ? ' active ' + sideKey : '')}
+              >${v}</button>
+            );
+          })}
         </div>
 
         {amt > 0 && !belowMin && !aboveMax && (
-          <div style={{ background: 'rgba(255,255,255,0.03)', border: '1px solid rgba(255,255,255,0.07)', borderRadius: 14, padding: '12px 16px', marginBottom: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-            <div>
-              <div style={{ fontSize: 10, color: '#5D5876', fontWeight: 700, letterSpacing: '0.15em', marginBottom: 3 }}>EST. PAYOUT</div>
-              <div style={{ fontSize: 22, fontWeight: 900, color: sideColor, fontVariantNumeric: 'tabular-nums' }}>${estWin.toFixed(2)}</div>
+          <div className="fp-bet-est">
+            <div className="fp-bet-est-block">
+              <div className="fp-bet-est-l">EST. PAYOUT</div>
+              <div className={'fp-bet-est-v ' + sideKey}>${estWin.toFixed(2)}</div>
             </div>
-            <div style={{ textAlign: 'right' }}>
-              <div style={{ fontSize: 10, color: '#5D5876', fontWeight: 700, letterSpacing: '0.15em', marginBottom: 3 }}>MULTIPLIER</div>
-              <div style={{ fontSize: 22, fontWeight: 900, color: '#FFD66B' }}>{payout.toFixed(2)}×</div>
+            <div className="fp-bet-est-r">
+              <div className="fp-bet-est-l">MULTIPLIER</div>
+              <div className="fp-bet-est-v gold">{payout.toFixed(2)}×</div>
             </div>
           </div>
         )}
 
         {status === 'signing' && (
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10, padding: '10px', marginBottom: 10, color: sideColor, fontSize: 13, fontWeight: 700 }}>
-            <div style={{ width: 16, height: 16, borderRadius: '50%', border: `2px solid ${sideColor}`, borderTopColor: 'transparent', animation: 'fp-spin 0.7s linear infinite' }} />
+          <div className={'fp-bet-status ' + sideKey}>
+            <div className="fp-bet-spinner"/>
             Check your wallet…
           </div>
         )}
         {status === 'success' && (
-          <div style={{ textAlign: 'center', padding: '10px', marginBottom: 10, color: '#14F195', fontSize: 14, fontWeight: 800, animation: 'fp-pop 0.3s cubic-bezier(0.34,1.56,0.64,1)' }}>✓ Trade placed!</div>
+          <div className="fp-bet-success">✓ Trade placed!</div>
         )}
         {status === 'error' && errMsg && (
-          <div style={{ padding: '10px 14px', marginBottom: 10, borderRadius: 12, background: 'rgba(220,31,255,0.1)', border: '1px solid #DC1FFF44', color: '#DC1FFF', fontSize: 12, fontWeight: 700 }}>{errMsg}</div>
+          <div className="fp-bet-error">{errMsg}</div>
         )}
 
         {status !== 'success' && (
-          <button onClick={handleTrade} disabled={amt <= 0 || invalidAmount || status === 'signing'}
-            style={{ width: '100%', padding: '16px', borderRadius: 18, border: 'none', background: invalidAmount ? 'rgba(255,255,255,0.06)' : status === 'signing' ? 'rgba(255,255,255,0.08)' : `linear-gradient(135deg, ${sideColor}, ${isLong ? '#00D9FF' : '#9945FF'})`, color: invalidAmount || status === 'signing' ? '#5D5876' : isLong ? '#001A0F' : '#FFFFFF', fontFamily: 'Inter, sans-serif', fontWeight: 900, fontSize: 16, letterSpacing: '0.08em', cursor: invalidAmount || status === 'signing' ? 'not-allowed' : 'pointer', boxShadow: invalidAmount || status === 'signing' ? 'none' : `0 8px 30px ${sideColor}44`, transition: 'all 0.2s' }}>
+          <button
+            onClick={handleTrade}
+            disabled={amt <= 0 || invalidAmount || status === 'signing'}
+            className={'fp-bet-cta ' + sideKey}
+          >
             {buttonLabel}
           </button>
         )}
-        <div style={{ textAlign: 'center', marginTop: 10, fontSize: 10, color: '#5D5876', fontWeight: 600, letterSpacing: '0.1em' }}>
-          NETWORK FEE ~0.000005 SOL · 25% FEE ON WINNINGS ONLY
-        </div>
+        <div className="fp-bet-foot">NETWORK FEE ~0.000005 SOL · 25% FEE ON WINNINGS ONLY</div>
       </div>
     </>
   );
@@ -1048,11 +1052,11 @@ function RoundCard({ round, state, userBets, livePrice, onSideTap, claim, claima
     return () => clearInterval(i);
   }, [isLive]);
 
-  let badge, badgeColor;
-  if (isPrev)  { badge = 'CLOSED'; badgeColor = '#5D5876'; }
-  if (isLive)  { badge = '● LIVE'; badgeColor = '#14F195'; }
-  if (isNext)  { badge = 'NEXT';   badgeColor = '#9945FF'; }
-  if (isLater) { badge = 'LATER';  badgeColor = '#5D5876'; }
+  let badge, badgeKey;
+  if (isPrev)  { badge = 'CLOSED'; badgeKey = 'prev'; }
+  if (isLive)  { badge = 'LIVE';   badgeKey = 'live'; }
+  if (isNext)  { badge = 'NEXT';   badgeKey = 'next'; }
+  if (isLater) { badge = 'LATER';  badgeKey = 'later'; }
 
   const priceDiff = isLive && lockPrice != null ? livePrice - lockPrice : 0;
   const isPriceUp = priceDiff >= 0;
@@ -1067,38 +1071,47 @@ function RoundCard({ round, state, userBets, livePrice, onSideTap, claim, claima
   const longTotal = betsArr.filter(b => b.side === 'heads').reduce((s, b) => s + b.amount, 0);
   const shortTotal = betsArr.filter(b => b.side === 'tails').reduce((s, b) => s + b.amount, 0);
 
+  const cardCls = 'fp-card fp-card-' + state + (urgent ? ' fp-card-urgent' : '');
+
   return (
-    <div className={`fp-card fp-card-${state}`}>
-      {isLive && <div className="fp-card-livering" />}
+    <div className={cardCls}>
+      {isLive && <div className="fp-card-livering"/>}
       <div className="fp-card-head">
-        <span className="fp-card-badge" style={{ color: badgeColor, borderColor: badgeColor + '88' }}>{badge}</span>
+        <span className={'fp-card-badge ' + badgeKey}>
+          {isLive && <span className="d"/>}{badge}
+        </span>
         <span className="fp-card-epoch">#{epoch}</span>
       </div>
 
-      <button className={`fp-card-side fp-card-long ${longWon ? 'won' : isPrev ? 'lost' : ''} ${longTotal > 0 ? 'active' : ''}`}
-        onClick={() => !isPrev && onSideTap(epoch, 'heads', headsPayout, tailsPayout)} disabled={isPrev}>
-        <div className="fp-card-side-icon">↑</div>
-        <div className="fp-card-side-label">LONG</div>
-        <div className="fp-card-side-mult">{headsPayout.toFixed(2)}×</div>
+      <button
+        className={'fp-card-side fp-card-long ' + (longWon ? 'won' : isPrev ? 'lost' : '') + (longTotal > 0 ? ' active' : '')}
+        onClick={() => !isPrev && onSideTap(epoch, 'heads', headsPayout, tailsPayout)}
+        disabled={isPrev}
+      >
+        <span className="fp-card-side-icon">↑</span>
+        <span className="fp-card-side-label">LONG</span>
+        <span className="fp-card-side-mult">{headsPayout.toFixed(2)}×</span>
       </button>
 
       <div className="fp-card-mid">
         {isLive && (<>
           <div className="fp-mid-label">LAST PRICE</div>
-          <div className={`fp-mid-price ${isPriceUp ? 'up' : 'down'}`}>${livePrice.toFixed(4)}</div>
-          <div className={`fp-mid-delta ${isPriceUp ? 'up' : 'down'}`}>{isPriceUp ? '↑' : '↓'} ${Math.abs(priceDiff).toFixed(4)}</div>
-          <div className="fp-mid-divider" />
+          <div className="fp-mid-price">${livePrice.toFixed(4)}</div>
+          <div className={'fp-mid-delta ' + (isPriceUp ? 'up' : 'down')}>
+            {isPriceUp ? '↑' : '↓'} ${Math.abs(priceDiff).toFixed(4)}
+          </div>
+          <div className="fp-mid-divider"/>
           <div className="fp-mid-row"><span>Locked</span><span className="fp-mid-row-val">${lockPrice.toFixed(2)}</span></div>
           <div className="fp-mid-row"><span>Pool</span><span className="fp-mid-row-val gold">${totalPool.toFixed(2)}</span></div>
-          <div className={`fp-mid-timer ${urgent ? 'urgent' : ''}`}>{fmtTime(timeLeft)}</div>
+          <div className={'fp-mid-timer' + (urgent ? ' urgent' : '')}>{fmtTime(timeLeft)}</div>
         </>)}
         {isNext && (<>
           <div className="fp-mid-label">PRIZE POOL</div>
           <div className="fp-mid-pool">${totalPool.toFixed(2)}</div>
-          <div className="fp-mid-divider" />
+          <div className="fp-mid-divider"/>
           <div className="fp-mid-payout-preview">
-            <div>Long wins <b>${(5 * headsPayout).toFixed(2)}</b> per $5</div>
-            <div>Short wins <b>${(5 * tailsPayout).toFixed(2)}</b> per $5</div>
+            <div><span className="l">Long</span> wins <b>${(5 * headsPayout).toFixed(2)}</b> per $5</div>
+            <div><span className="s">Short</span> wins <b>${(5 * tailsPayout).toFixed(2)}</b> per $5</div>
           </div>
           <div className="fp-mid-starts">Starts in <b>{fmtTime(startsIn)}</b></div>
         </>)}
@@ -1111,23 +1124,34 @@ function RoundCard({ round, state, userBets, livePrice, onSideTap, claim, claima
           <div className="fp-mid-label">CLOSED</div>
           <div className="fp-mid-row"><span>Lock</span><span className="fp-mid-row-val">${lockPrice.toFixed(2)}</span></div>
           <div className="fp-mid-row"><span>Close</span><span className="fp-mid-row-val">${closePrice.toFixed(2)}</span></div>
-          <div className="fp-mid-divider" />
-          <div className={`fp-mid-outcome ${longWon ? 'long' : shortWon ? 'short' : 'tie'}`}>
+          <div className="fp-mid-divider"/>
+          <div className={'fp-mid-outcome ' + (longWon ? 'long' : shortWon ? 'short' : 'tie')}>
             {longWon ? '↑ LONG WON' : shortWon ? '↓ SHORT WON' : '= TIE'}
           </div>
           {claimable && <button className="fp-mid-claim" onClick={() => claim?.(epoch)}>💰 Claim Winnings</button>}
         </>)}
       </div>
 
-      <button className={`fp-card-side fp-card-short ${shortWon ? 'won' : isPrev ? 'lost' : ''} ${shortTotal > 0 ? 'active' : ''}`}
-        onClick={() => !isPrev && onSideTap(epoch, 'tails', headsPayout, tailsPayout)} disabled={isPrev}>
-        <div className="fp-card-side-mult">{tailsPayout.toFixed(2)}×</div>
-        <div className="fp-card-side-label">SHORT</div>
-        <div className="fp-card-side-icon">↓</div>
+      <button
+        className={'fp-card-side fp-card-short ' + (shortWon ? 'won' : isPrev ? 'lost' : '') + (shortTotal > 0 ? ' active' : '')}
+        onClick={() => !isPrev && onSideTap(epoch, 'tails', headsPayout, tailsPayout)}
+        disabled={isPrev}
+      >
+        <span className="fp-card-side-mult">{tailsPayout.toFixed(2)}×</span>
+        <span className="fp-card-side-label">SHORT</span>
+        <span className="fp-card-side-icon">↓</span>
       </button>
 
-      {longTotal > 0 && <div className="fp-card-position fp-card-position-heads"><span>● LONG</span><span>${longTotal.toFixed(2)}</span></div>}
-      {shortTotal > 0 && <div className="fp-card-position fp-card-position-tails"><span>● SHORT</span><span>${shortTotal.toFixed(2)}</span></div>}
+      {longTotal > 0 && (
+        <div className="fp-card-position fp-card-position-heads">
+          <span>● LONG</span><span>${longTotal.toFixed(2)}</span>
+        </div>
+      )}
+      {shortTotal > 0 && (
+        <div className="fp-card-position fp-card-position-tails">
+          <span>● SHORT</span><span>${shortTotal.toFixed(2)}</span>
+        </div>
+      )}
     </div>
   );
 }
@@ -1138,20 +1162,20 @@ function RoundCard({ round, state, userBets, livePrice, onSideTap, claim, claima
 export default function Flipsy({ onConnectWallet }) {
   const wallet = useWallet();
 
-  // Inject inline CSS once on first render
   useEffect(() => { injectFlipsyStyles(); }, []);
 
   let hookData = null, hookError = null;
   try { hookData = useFlipsy(wallet); }
   catch (e) { hookError = e; console.error('[Flipsy] useFlipsy threw:', e); }
 
-  const { livePrice = 0, liveRound = null, upcomingRounds = [], recentRounds = [], userBets = {}, balance = 0,
+  const {
+    livePrice = 0, liveRound = null, upcomingRounds = [], recentRounds = [], userBets = {}, balance = 0,
     placeBet = async () => { throw new Error('Hook not ready'); },
     claim = async () => { throw new Error('Hook not ready'); },
     loading = true,
-    programConfig = null } = hookData || {};
+    programConfig = null,
+  } = hookData || {};
 
-  // Effective values: on-chain config takes priority, falls back to defaults.
   const minBetUsd = programConfig && livePrice > 0
     ? +((programConfig.minBet / 1e9) * livePrice).toFixed(2)
     : DEFAULT_MIN_BET;
@@ -1172,7 +1196,6 @@ export default function Flipsy({ onConnectWallet }) {
     return () => { cancelled = true; };
   }, []);
 
-  // Bypass geo block for whitelisted wallets
   const walletBypass = wallet?.publicKey && GEO_BYPASS_WALLETS.has(wallet.publicKey.toBase58());
   const effectivelyBlocked = geo.blocked && !walletBypass;
 
@@ -1244,102 +1267,98 @@ export default function Flipsy({ onConnectWallet }) {
   };
 
   if (geo.ready && effectivelyBlocked) {
-    return <BlockScreen title="Not Available" message="Flipsy is not available in your region." sub="This may change in the future." />;
+    return <BlockScreen title={<>Not available <em>here</em></>} message="Flipsy is not available in your region." sub="This may change in the future." />;
   }
+
+  const liveEpoch = liveRound?.epoch ?? upcomingRounds[0]?.epoch ?? null;
 
   return (
     <div className="fp-page">
-      <link rel="preconnect" href="https://fonts.googleapis.com" />
-      <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="" />
-      <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
-
-      <div className="fp-glow fp-glow-1" />
-      <div className="fp-glow fp-glow-2" />
-      <div className="fp-glow fp-glow-3" />
+      <div className="fp-blob" style={{ width: 380, height: 380, background: '#FFE8F4', top: -100, left: -120 }}/>
+      <div className="fp-blob" style={{ width: 420, height: 420, background: '#A0E7FF', top: '30%', right: -160, animationDelay: '3s' }}/>
+      <div className="fp-blob" style={{ width: 300, height: 300, background: '#FFD46B', bottom: '10%', left: -80, animationDelay: '6s' }}/>
 
       {hasClaim && (
         <div className="fp-claim-banner" onClick={() => setRoundsOpen(true)}>
-          <span className="fp-claim-banner-icon">💰</span>
-          <span>{claimableRounds.length} round{claimableRounds.length > 1 ? 's' : ''} ready to collect</span>
+          <span>💰</span>
+          <span>{claimableRounds.length} ROUND{claimableRounds.length > 1 ? 'S' : ''} READY TO COLLECT</span>
+          <b className="fp-claim-banner-count">{claimableRounds.length}</b>
         </div>
       )}
 
-      {flash && <div className={`fp-flash-top fp-flash ${flash.type}`}>{flash.msg}</div>}
-
-      <header className="fp-header">
-        <div className="fp-brand">
-          <div className="fp-mascot">F</div>
-          <div>
-            <div className="fp-title">FLIPSY</div>
-            <div className="fp-subtitle">Solana Sentiment</div>
+      <div className="fp-page-inner">
+        {flash && (
+          <div className="fp-flash-top">
+            <div className={'fp-flash ' + flash.type}>{flash.msg}</div>
           </div>
-        </div>
-        <div className="fp-actions">
-          <button onClick={() => setRoundsOpen(true)} style={{
-            background: hasClaim ? 'rgba(255,214,107,0.15)' : 'rgba(153,69,255,0.12)',
-            border: `1px solid ${hasClaim ? 'rgba(255,214,107,0.4)' : 'rgba(153,69,255,0.3)'}`,
-            borderRadius: 999, padding: '6px 14px',
-            color: hasClaim ? '#FFD66B' : '#9945FF',
-            fontFamily: 'Inter, sans-serif', fontWeight: 800, fontSize: 11,
-            cursor: 'pointer', letterSpacing: '0.08em',
-            display: 'flex', alignItems: 'center', gap: 6,
-          }}>
-            {hasClaim ? '💰' : '📋'} Rounds
-            {hasClaim && (
-              <span style={{ background: '#FFD66B', color: '#1A0F00', borderRadius: '50%', width: 16, height: 16, fontSize: 9, fontWeight: 900, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                {claimableRounds.length}
-              </span>
+        )}
+
+        <header className="fp-header">
+          <div className="fp-brand">
+            <div className="fp-mascot">F</div>
+            <div className="fp-brand-text">
+              <div className="fp-title">flipsy</div>
+              <div className="fp-subtitle">Solana Sentiment</div>
+            </div>
+          </div>
+          <div className="fp-actions">
+            <button
+              onClick={() => setRoundsOpen(true)}
+              className={'fp-rounds-btn' + (hasClaim ? ' fp-has-claim' : '')}
+            >
+              {hasClaim ? '💰' : '📋'} Rounds
+              {hasClaim && (<span className="fp-rounds-btn-count">{claimableRounds.length}</span>)}
+            </button>
+
+            {wallet.connected ? (
+              <div className="fp-bal">
+                <span className="fp-bal-l">BAL</span>
+                <span className="fp-bal-v">${balance.toFixed(2)}</span>
+              </div>
+            ) : (
+              <div className="fp-bal fp-bal-connect" onClick={() => onConnectWallet?.()}>
+                <span className="fp-bal-v">Connect</span>
+              </div>
             )}
-          </button>
-
-          {wallet.connected ? (
-            <div className="fp-balance">
-              <span className="fp-balance-label">Bal</span>
-              <span className="fp-balance-val">${balance.toFixed(2)}</span>
-            </div>
-          ) : (
-            <div className="fp-balance" style={{ cursor: 'pointer', color: '#14F195', fontSize: 11, fontWeight: 800 }} onClick={() => onConnectWallet?.()}>
-              Connect Wallet
-            </div>
-          )}
-        </div>
-      </header>
-
-      <div className="fp-rounds-head">
-        <h3 className="fp-rounds-title">Rounds</h3>
-        <span className="fp-rounds-sub">swipe <span className="arrow">←</span></span>
-      </div>
-
-      <div className="fp-carousel" ref={carouselRef}>
-        {loading && !liveRound && (
-          <div className="fp-card fp-card-loading">
-            <div style={{ textAlign: 'center', padding: 60, color: '#9892B5', fontSize: 13 }}>Loading rounds…</div>
           </div>
-        )}
-        {[...recentRounds].reverse().map(r => (
-          <RoundCard key={`prev-${r.epoch}`} round={r} state="previous"
-            userBets={getBetsForEpoch(r.epoch)} livePrice={livePrice}
-            onSideTap={handleSideTap} claim={handleClaim} claimable={isClaimable(r)} />
-        ))}
-        {liveRound && (
-          <RoundCard round={liveRound} state="live"
-            userBets={getBetsForEpoch(liveRound.epoch)} livePrice={livePrice}
-            onSideTap={handleSideTap} />
-        )}
-        {upcomingRounds[0] && (
-          <RoundCard key={`next-${upcomingRounds[0].epoch}`} round={upcomingRounds[0]} state="next"
-            userBets={getBetsForEpoch(upcomingRounds[0].epoch)} livePrice={livePrice}
-            onSideTap={handleSideTap} />
-        )}
-        {upcomingRounds.slice(1).map(r => (
-          <RoundCard key={`later-${r.epoch}`} round={r} state="later"
-            userBets={getBetsForEpoch(r.epoch)} livePrice={livePrice}
-            onSideTap={handleSideTap} />
-        ))}
-      </div>
+        </header>
 
-      <div className="fp-footer">
-        Powered by Solana · Non-custodial · 25% fee on wins only · No other fees
+        <div className="fp-rounds-head">
+          <h3 className="fp-rounds-title">
+            {liveEpoch != null ? <>Round <em>#{liveEpoch}</em></> : <>Rounds</>}
+          </h3>
+          <span className="fp-rounds-sub">swipe <span className="arrow">←</span></span>
+        </div>
+
+        <div className="fp-carousel" ref={carouselRef}>
+          {loading && !liveRound && (
+            <div className="fp-card fp-card-loading">Loading rounds…</div>
+          )}
+          {[...recentRounds].reverse().map(r => (
+            <RoundCard key={`prev-${r.epoch}`} round={r} state="previous"
+              userBets={getBetsForEpoch(r.epoch)} livePrice={livePrice}
+              onSideTap={handleSideTap} claim={handleClaim} claimable={isClaimable(r)} />
+          ))}
+          {liveRound && (
+            <RoundCard round={liveRound} state="live"
+              userBets={getBetsForEpoch(liveRound.epoch)} livePrice={livePrice}
+              onSideTap={handleSideTap} />
+          )}
+          {upcomingRounds[0] && (
+            <RoundCard key={`next-${upcomingRounds[0].epoch}`} round={upcomingRounds[0]} state="next"
+              userBets={getBetsForEpoch(upcomingRounds[0].epoch)} livePrice={livePrice}
+              onSideTap={handleSideTap} />
+          )}
+          {upcomingRounds.slice(1).map(r => (
+            <RoundCard key={`later-${r.epoch}`} round={r} state="later"
+              userBets={getBetsForEpoch(r.epoch)} livePrice={livePrice}
+              onSideTap={handleSideTap} />
+          ))}
+        </div>
+
+        <div className="fp-footer">
+          Powered by Solana · Non-custodial · 25% fee on wins only · No other fees
+        </div>
       </div>
 
       <RoundsPopup
