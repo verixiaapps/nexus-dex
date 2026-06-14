@@ -16,172 +16,429 @@ const ADMIN_WALLETS = new Set([
 ]);
 
 // =====================================================================
-// INLINE CSS — combined from Stocks.css into the component so the
-// previous "lost CSS file" class of bugs cannot happen again.
+// INLINE CSS — Wonderland palette · Instrument Serif + Space Grotesk
 // =====================================================================
 const STOCKS_CSS = `
-.st-page,.st-region-block,.st-sheet,.st-modal-backdrop {
-  --st-bg:#04070f; --st-bg-2:#070b16;
-  --st-surface:#0a1020; --st-surface-2:#0e1428;
-  --st-ink:#e6efff; --st-ink-str:#f5fafe;
-  --st-muted:#7a92b3; --st-muted-2:#475670;
-  --st-hl:#4dffd2; --st-hl-2:#5ee8ff;
-  --st-hl-dim:rgba(77,255,210,.14); --st-violet:#a87fff;
-  --st-up:#3dd598; --st-down:#ff8a9e; --st-amber:#f5b53d; --st-gold:#ffcd3c;
-  --st-border:rgba(255,255,255,.06);
-  --st-border-hi:rgba(77,255,210,.24);
-  --st-hairline:rgba(255,255,255,.05);
-  --st-font-display:'Unbounded','Syne',system-ui,sans-serif;
-  --st-font-body:'Fredoka','DM Sans',system-ui,sans-serif;
-  --st-font-mono:'IBM Plex Mono',ui-monospace,monospace;
-  font-family:var(--st-font-body); color:var(--st-ink);
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Space+Grotesk:wght@400;500;600;700;800&display=swap');
+
+.st-page,.st-region-block,.st-sheet,.st-modal-backdrop{
+  --ink:#1A1B4E; --ink-2:rgba(26,27,78,0.7); --ink-3:rgba(26,27,78,0.45);
+  --pink:#FF8FBE; --mint:#7FFFD4; --lav:#B794F6; --peach:#FFB088;
+  --sky:#A0E7FF; --gold:#FFD46B; --green:#1B7A4F; --red:#D14B6A;
+  --glass:rgba(255,255,255,0.6); --glass-strong:rgba(255,255,255,0.78);
+  --border:rgba(183,148,246,0.22);
+  font-family:"Space Grotesk",-apple-system,system-ui,sans-serif;
+  color:var(--ink);
 }
 .st-page,.st-page *,.st-sheet,.st-sheet *,.st-region-block,.st-region-block *{box-sizing:border-box}
 body.nexus-scroll-locked{overflow:hidden}
-@keyframes st-pulse{50%{opacity:0.4}}
+
+@keyframes st-drift{0%,100%{transform:translate(0,0) scale(1)}50%{transform:translate(20px,-30px) scale(1.05)}}
+@keyframes st-pulse{0%,100%{opacity:1}50%{opacity:0.3}}
+@keyframes st-rise{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:translateY(0)}}
 @keyframes st-spin{to{transform:rotate(360deg)}}
-@keyframes st-rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
+@keyframes st-shimmer{0%{background-position:0% 50%}100%{background-position:200% 50%}}
 @keyframes st-slide-up{from{transform:translate(-50%,100%)}to{transform:translate(-50%,0)}}
-@keyframes st-shimmer{0%{left:-110px}50%,100%{left:130%}}
 
-.st-page{max-width:680px;margin:0 auto;width:100%;padding:0 16px calc(env(safe-area-inset-bottom) + 90px)}
+/* ROOT PAGE */
+.st-page{
+  position:relative;min-height:100vh;min-height:100dvh;
+  max-width:520px;margin:0 auto;width:100%;
+  padding:0 0 calc(env(safe-area-inset-bottom) + 90px);
+  border-radius:24px;overflow-x:hidden;
+  background:
+    radial-gradient(ellipse at 20% 5%,#FFE8F4 0%,transparent 45%),
+    radial-gradient(ellipse at 85% 15%,#E4F2FF 0%,transparent 45%),
+    radial-gradient(ellipse at 50% 60%,#F0E7FF 0%,transparent 55%),
+    radial-gradient(ellipse at 15% 95%,#FFF3E4 0%,transparent 45%),
+    linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);
+  background-attachment:fixed;
+}
+.st-blob{
+  position:absolute;border-radius:50%;filter:blur(70px);opacity:0.45;
+  animation:st-drift 14s ease-in-out infinite;pointer-events:none;z-index:0;
+}
+.st-inner{position:relative;z-index:5}
 
-/* COMPACT HERO */
-.st-mini-hero{margin-top:14px;padding:18px 18px 16px;border-radius:18px;
-  background:linear-gradient(135deg,rgba(10,16,32,.96),rgba(7,11,22,.98));
-  border:1px solid var(--st-border-hi);position:relative;overflow:hidden}
-.st-mini-hero::before{content:'';position:absolute;inset:-1px;border-radius:18px;padding:1px;
-  background:linear-gradient(135deg,var(--st-hl),transparent 50%,var(--st-hl-2));
-  -webkit-mask:linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0);
-  -webkit-mask-composite:xor;mask-composite:exclude;opacity:.4;pointer-events:none}
-.st-mh-row{display:flex;justify-content:space-between;align-items:flex-start;gap:14px;position:relative;z-index:2}
-.st-mh-left{flex:1;min-width:0}
-.st-mh-eyebrow{display:inline-block;font-family:var(--st-font-mono);font-size:9px;font-weight:800;letter-spacing:.14em;text-transform:uppercase;color:var(--st-hl);margin-bottom:8px}
-.st-mh-title{font-family:var(--st-font-display);font-weight:900;font-size:clamp(22px,6.5vw,28px);line-height:1;letter-spacing:-.03em;margin:0 0 6px;color:var(--st-ink-str)}
-.st-mh-title .grad{background:linear-gradient(120deg,var(--st-hl),var(--st-hl-2));-webkit-background-clip:text;background-clip:text;color:transparent;font-style:italic;font-weight:500}
-.st-mh-sub{font-family:var(--st-font-body);font-size:12px;font-weight:600;color:var(--st-muted);line-height:1.4;margin:0}
-.st-mh-live{flex-shrink:0;text-align:right;display:flex;flex-direction:column;align-items:flex-end;gap:4px}
-.st-mh-live .v{font-family:var(--st-font-display);font-weight:900;font-size:18px;color:var(--st-hl);letter-spacing:-.02em;line-height:1;font-variant-numeric:tabular-nums}
-.st-mh-live .l{font-family:var(--st-font-mono);font-size:8px;color:var(--st-muted-2);letter-spacing:.12em;text-transform:uppercase;font-weight:700}
-.st-mh-live .pulse{display:inline-block;width:5px;height:5px;border-radius:50%;background:#00ffa3;box-shadow:0 0 8px #00ffa3;animation:st-pulse 1.4s infinite;margin-right:5px;vertical-align:middle}
+/* HEADER */
+.st-head{
+  display:flex;align-items:center;justify-content:space-between;
+  padding:18px 22px 4px;
+}
+.st-brand{display:flex;align-items:center;gap:10px}
+.st-brand-dot{
+  width:28px;height:28px;border-radius:50%;
+  background:linear-gradient(135deg,#FF8FBE,#B794F6 60%,#7FFFD4);
+  box-shadow:0 0 14px rgba(183,148,246,0.5);
+}
+.st-wordmark{font-family:"Instrument Serif",serif;font-style:italic;font-size:20px;line-height:1}
+.st-wordmark .slash{opacity:0.4;margin:0 3px;font-style:normal}
+.st-wordmark .grad{
+  background:linear-gradient(90deg,#FF8FBE,#B794F6,#7FFFD4);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+}
 
-/* KYC pill */
-.st-kyc{margin:12px 0 6px;display:flex;align-items:center;justify-content:center;gap:14px;
-  padding:9px 14px;border-radius:100px;
-  background:linear-gradient(90deg,rgba(0,0,0,.4),rgba(77,255,210,.06),rgba(0,0,0,.4));
-  border:1px solid var(--st-border-hi)}
-.st-kyc span{font-family:var(--st-font-mono);font-size:10px;font-weight:800;letter-spacing:.12em;text-transform:uppercase;color:var(--st-hl);white-space:nowrap}
-.st-kyc span:nth-child(3){color:var(--st-hl-2)}
-.st-kyc span:nth-child(5){color:#00ffa3}
-.st-kyc .dot{display:inline-block;width:3px;height:3px;border-radius:50%;background:var(--st-muted);opacity:.5}
+/* HERO */
+.st-hero{padding:28px 22px 8px;text-align:center;position:relative;z-index:2}
+.st-eyebrow{
+  display:inline-flex;align-items:center;gap:7px;
+  background:var(--glass);backdrop-filter:blur(10px);
+  border:1px solid var(--border);border-radius:999px;
+  padding:6px 14px;margin-bottom:18px;
+  font-size:10px;font-weight:700;color:var(--ink-2);letter-spacing:1.5px;
+}
+.st-eyebrow .dot{
+  width:6px;height:6px;border-radius:50%;
+  background:var(--green);box-shadow:0 0 8px var(--green);
+  animation:st-pulse 1.6s ease-in-out infinite;
+}
+.st-eyebrow b{color:var(--ink);font-weight:700;letter-spacing:1.5px}
+.st-hero h1{
+  font-family:"Instrument Serif",serif;font-weight:400;
+  font-size:54px;line-height:0.95;letter-spacing:-0.015em;
+  margin:0 0 14px;color:var(--ink);
+}
+.st-hero h1 .shim{
+  font-style:italic;
+  background:linear-gradient(90deg,#FF8FBE,#B794F6,#7FFFD4,#FFB088,#FF8FBE);
+  background-size:200% 100%;
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+  animation:st-shimmer 6s linear infinite;
+}
+.st-hero p{
+  color:var(--ink-2);font-size:14px;font-weight:500;
+  margin:0 auto;max-width:340px;line-height:1.5;
+}
+
+/* TRUST PILL */
+.st-trust{
+  margin:18px 22px 0;
+  display:flex;align-items:center;justify-content:center;gap:10px;
+  padding:10px 14px;border-radius:999px;
+  background:var(--glass);backdrop-filter:blur(10px);
+  border:1px solid var(--border);
+}
+.st-trust span{font-size:10px;font-weight:700;color:var(--ink);letter-spacing:1.4px}
+.st-trust .sep{color:var(--ink-3);opacity:0.6}
+
+/* SECTION HEAD */
+.st-section{
+  display:flex;justify-content:space-between;align-items:center;
+  padding:26px 26px 12px;position:relative;z-index:2;
+}
+.st-section-title{
+  font-size:10px;font-weight:700;letter-spacing:2.5px;text-transform:uppercase;
+  background:linear-gradient(90deg,#FF8FBE,#B794F6);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+}
+.st-section-meta{font-size:10px;color:var(--ink-2);font-weight:600;letter-spacing:0.8px}
 
 /* FILTERS */
-.st-filters{display:flex;gap:6px;margin:14px 0 12px;overflow-x:auto;-webkit-overflow-scrolling:touch;padding-bottom:4px;scrollbar-width:none}
+.st-filters{
+  display:flex;gap:8px;padding:0 22px;overflow-x:auto;
+  scrollbar-width:none;-webkit-overflow-scrolling:touch;
+}
 .st-filters::-webkit-scrollbar{display:none}
-.st-filter{padding:8px 14px;border-radius:999px;border:1.5px solid var(--st-border);background:rgba(255,255,255,.03);color:var(--st-muted);font-size:11px;font-weight:800;cursor:pointer;white-space:nowrap;flex-shrink:0;font-family:var(--st-font-display);letter-spacing:0.02em;transition:all 0.15s}
-.st-filter.st-active{background:linear-gradient(135deg,var(--st-hl),var(--st-hl-2));border-color:var(--st-hl);color:#04070f;box-shadow:0 2px 12px rgba(77,255,210,.3)}
+.st-filter{
+  flex-shrink:0;padding:9px 16px;border-radius:999px;
+  background:var(--glass);backdrop-filter:blur(10px);
+  border:1px solid var(--border);color:var(--ink-2);
+  font-family:inherit;font-size:11px;font-weight:700;letter-spacing:0.4px;
+  cursor:pointer;transition:all .15s;white-space:nowrap;
+}
+.st-filter:hover{border-color:var(--lav);color:var(--ink)}
+.st-filter.st-active{
+  background:linear-gradient(135deg,#7FFFD4,#A0E7FF);
+  color:var(--ink);border-color:#7FFFD4;
+  box-shadow:0 4px 14px rgba(127,255,212,.35);
+}
 
 /* LIST */
-.st-list{background:rgba(10,16,32,.50);border:1.5px solid var(--st-border);border-radius:18px;overflow:hidden;margin-bottom:18px;backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px)}
-.st-empty{padding:30px 16px;text-align:center;color:var(--st-muted);font-size:12px}
-
-.st-tile{padding:14px 16px;display:grid;grid-template-columns:40px 1fr auto;gap:14px;align-items:center;background:transparent;border:none;border-bottom:1px solid var(--st-hairline);width:100%;text-align:left;cursor:pointer;-webkit-tap-highlight-color:rgba(77,255,210,.10);transition:background 0.15s;color:inherit;font-family:inherit}
+.st-list{
+  margin:14px 22px 0;
+  background:var(--glass);backdrop-filter:blur(10px);
+  border:1px solid var(--border);border-radius:24px;overflow:hidden;
+}
+.st-empty{padding:30px 16px;text-align:center;color:var(--ink-2);font-size:12px}
+.st-tile{
+  padding:14px 16px;display:grid;grid-template-columns:42px 1fr auto;gap:12px;align-items:center;
+  border-bottom:1px solid var(--border);
+  background:transparent;border-left:none;border-right:none;border-top:none;width:100%;text-align:left;
+  font-family:inherit;color:inherit;cursor:pointer;
+  -webkit-tap-highlight-color:rgba(127,255,212,.12);
+  transition:background .15s;
+  animation:st-rise .35s cubic-bezier(.2,.8,.2,1) backwards;
+}
 .st-tile:last-child{border-bottom:none}
-.st-tile:hover{background:rgba(77,255,210,.04)}
-.st-tile:active{background:rgba(77,255,210,.08)}
+.st-tile:hover{background:rgba(255,255,255,.35)}
 .st-tile-mid{min-width:0}
 .st-tile-row{display:flex;align-items:center;gap:8px}
-.st-tile-sym{color:var(--st-ink-str);font-weight:800;font-size:15px;letter-spacing:-.01em;font-family:var(--st-font-display)}
-.st-tile-ticker{color:var(--st-muted-2);font-size:9px;font-weight:700;padding:2px 7px;border-radius:5px;background:rgba(255,255,255,.04);letter-spacing:.04em;font-family:var(--st-font-mono)}
-.st-tile-name{color:var(--st-muted);font-size:11.5px;margin-top:2px}
+.st-tile-sym{font-family:"Instrument Serif",serif;font-size:18px;line-height:1;letter-spacing:-.01em;color:var(--ink)}
+.st-tile-ticker{
+  font-size:9px;font-weight:700;color:var(--ink-2);letter-spacing:1.2px;
+  background:rgba(183,148,246,.12);padding:3px 7px;border-radius:5px;
+  font-family:"Space Grotesk",sans-serif;
+}
+.st-tile-name{font-size:11px;color:var(--ink-2);margin-top:3px;font-weight:500}
 .st-tile-right{text-align:right}
-.st-tile-price{color:var(--st-ink-str);font-size:15px;font-weight:800;font-variant-numeric:tabular-nums;font-family:var(--st-font-mono)}
-.st-tile-price.st-muted{color:var(--st-muted)}
-.st-tile-cta{font-size:9px;color:var(--st-hl);font-weight:800;letter-spacing:.12em;margin-top:3px;font-family:var(--st-font-display)}
+.st-tile-price{
+  font-family:"Instrument Serif",serif;font-size:20px;line-height:1;color:var(--ink);
+  font-variant-numeric:tabular-nums;
+}
+.st-tile-price.st-muted{color:var(--ink-3);font-size:14px;font-family:"Space Grotesk",sans-serif;font-weight:500}
+.st-tile-cta{
+  font-size:9px;font-weight:700;color:var(--lav);letter-spacing:1.2px;
+  margin-top:4px;
+}
 
-.st-badge{border-radius:50%;display:flex;align-items:center;justify-content:center;color:#fff;font-weight:900;flex-shrink:0;letter-spacing:-.02em;text-shadow:0 1px 3px rgba(0,0,0,.5);font-family:var(--st-font-display)}
+/* BADGE — sector-based pastel gradient with Instrument Serif italic letter */
+.st-badge{
+  border-radius:13px;flex-shrink:0;
+  display:grid;place-items:center;
+  font-family:"Instrument Serif",serif;font-style:italic;line-height:1;color:#fff;
+  box-shadow:0 4px 12px rgba(26,27,78,.10);
+}
+.st-badge.st-sec-tech{background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink)}
+.st-badge.st-sec-crypto{background:linear-gradient(135deg,#FF8FBE,#B794F6)}
+.st-badge.st-sec-index{background:linear-gradient(135deg,#FFD46B,#FFB088);color:var(--ink)}
 
-.st-powered{display:flex;align-items:center;justify-content:center;gap:9px;padding:12px 16px;border-radius:14px;background:rgba(255,255,255,.02);border:1px solid var(--st-border);margin-bottom:8px}
-.st-powered-label{font-size:9px;color:var(--st-muted-2);font-weight:700;letter-spacing:.08em;font-family:var(--st-font-mono)}
-.st-powered-name{font-size:11px;font-weight:800;letter-spacing:.04em;background:linear-gradient(135deg,var(--st-hl) 0%,var(--st-violet) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text;font-family:var(--st-font-mono)}
-.st-powered-sep{color:var(--st-muted-2);font-size:9px}
+/* FOOTER */
+.st-foot{
+  display:flex;align-items:center;justify-content:center;gap:9px;
+  margin:24px 22px 0;padding:14px 16px;border-radius:16px;
+  background:var(--glass);border:1px solid var(--border);backdrop-filter:blur(10px);
+}
+.st-foot-label{font-size:10px;color:var(--ink-2);font-weight:600;letter-spacing:0.6px}
+.st-foot-name{
+  font-family:"Instrument Serif",serif;font-style:italic;font-size:14px;
+  background:linear-gradient(135deg,#FF8FBE,#B794F6 60%,#7FFFD4);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+}
+.st-foot-sep{color:var(--ink-3);font-size:10px}
 
-/* MODAL / SHEET */
-.st-modal-backdrop{position:fixed;inset:0;z-index:400;background:rgba(0,0,0,.82);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);cursor:pointer;animation:st-rise 0.2s}
+/* MODAL / SHEET — LIGHT GLASS */
+.st-modal-backdrop{
+  position:fixed;inset:0;z-index:400;
+  background:rgba(26,27,78,0.35);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);
+  cursor:pointer;animation:st-rise .2s;
+}
 .st-modal-backdrop.st-busy{cursor:wait}
-.st-sheet{position:fixed;bottom:0;left:50%;transform:translateX(-50%);width:100%;max-width:540px;z-index:401;background:linear-gradient(180deg,var(--st-surface-2) 0%,var(--st-bg) 100%);border-top:1.5px solid var(--st-border-hi);border-radius:28px 28px 0 0;max-height:92dvh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 -28px 80px rgba(0,0,0,.7),0 0 60px rgba(77,255,210,.08);animation:st-slide-up 0.4s cubic-bezier(0.2,1.2,0.4,1)}
-.st-grabber{width:40px;height:4px;background:rgba(255,255,255,.18);border-radius:99px;margin:0 auto 16px}
-.st-sheet-head{flex-shrink:0;padding:14px 22px 12px}
+.st-sheet{
+  position:fixed;bottom:0;left:50%;transform:translateX(-50%);
+  width:100%;max-width:520px;z-index:401;max-height:92dvh;
+  display:flex;flex-direction:column;overflow:hidden;
+  background:
+    radial-gradient(ellipse at 20% 0%,#FFE8F4 0%,transparent 50%),
+    radial-gradient(ellipse at 80% 0%,#E4F2FF 0%,transparent 50%),
+    linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);
+  border-top:1px solid rgba(255,255,255,.8);
+  border-radius:28px 28px 0 0;
+  box-shadow:0 -24px 80px rgba(26,27,78,.18);
+  animation:st-slide-up .4s cubic-bezier(0.2,1.2,0.4,1);
+}
+.st-grabber{width:40px;height:4px;background:rgba(26,27,78,.18);border-radius:99px;margin:10px auto 14px}
+.st-sheet-head{flex-shrink:0;padding:0 22px 12px}
 .st-sheet-head-row{display:flex;align-items:center;gap:12px}
 .st-sheet-title-wrap{flex:1;min-width:0}
 .st-sheet-title-row{display:flex;align-items:center;gap:8px}
-.st-sheet-title{font-size:20px;font-weight:900;color:var(--st-ink-str);letter-spacing:-.02em;font-family:var(--st-font-display)}
-.st-sheet-subtitle{font-size:11.5px;color:var(--st-muted);margin-top:2px}
-.st-close-btn{background:rgba(255,255,255,.05);border:1px solid var(--st-border);color:var(--st-muted);width:34px;height:34px;border-radius:10px;font-size:18px;cursor:pointer;flex-shrink:0;font-family:inherit;transition:all 0.15s}
-.st-close-btn:hover{background:rgba(255,255,255,.1);color:var(--st-ink)}
-.st-close-btn:disabled{cursor:not-allowed;opacity:0.5}
-.st-live-price{margin-top:12px;padding:10px 14px;border-radius:12px;background:rgba(0,0,0,.30);border:1px solid var(--st-border);display:flex;justify-content:space-between;align-items:center}
-.st-live-price-label{font-size:10px;color:var(--st-muted-2);font-weight:700;letter-spacing:.10em;font-family:var(--st-font-mono)}
-.st-live-price-val{font-size:17px;color:var(--st-ink-str);font-weight:800;font-variant-numeric:tabular-nums;font-family:var(--st-font-mono)}
-.st-you-own{margin-top:8px;padding:10px 14px;border-radius:12px;background:rgba(77,255,210,.05);border:1px solid var(--st-border-hi);display:flex;justify-content:space-between;align-items:center;gap:8px}
-.st-you-own-label{font-size:10px;color:var(--st-hl);font-weight:800;letter-spacing:.10em;font-family:var(--st-font-mono)}
-.st-you-own-val{font-size:12.5px;color:var(--st-ink-str);font-weight:700;font-variant-numeric:tabular-nums;text-align:right;font-family:var(--st-font-mono)}
-.st-muted-soft{color:var(--st-muted);font-weight:600}
-.st-muted-deep{color:var(--st-muted-2);font-weight:600}
-.st-muted{color:var(--st-muted)}
-.st-sheet-body{flex:1;overflow-y:auto;padding:4px 22px 14px;min-height:0}
-.st-side-switch{display:inline-flex;padding:4px;margin-bottom:14px;background:rgba(255,255,255,.04);border:1px solid var(--st-border);border-radius:999px;gap:3px;width:100%}
-.st-side-btn{flex:1;padding:10px 16px;border-radius:999px;border:none;background:transparent;color:var(--st-muted);font-weight:800;font-size:13px;cursor:pointer;letter-spacing:-.01em;font-family:var(--st-font-display);transition:all 0.2s}
+.st-sheet-title{
+  font-family:"Instrument Serif",serif;font-size:24px;letter-spacing:-.015em;
+  color:var(--ink);line-height:1;
+}
+.st-sheet-subtitle{font-size:12px;color:var(--ink-2);margin-top:4px;font-weight:500}
+.st-close-btn{
+  width:36px;height:36px;border-radius:50%;flex-shrink:0;
+  background:var(--glass-strong);border:1px solid var(--border);
+  color:var(--ink);font-size:20px;cursor:pointer;font-family:inherit;
+  display:grid;place-items:center;transition:all .15s;
+}
+.st-close-btn:hover{background:#fff;border-color:var(--lav)}
+.st-close-btn:disabled{cursor:not-allowed;opacity:.5}
+
+.st-live-price{
+  margin-top:14px;padding:12px 16px;border-radius:14px;
+  background:var(--glass-strong);border:1px solid var(--border);
+  display:flex;justify-content:space-between;align-items:center;
+}
+.st-live-price-label{font-size:10px;color:var(--ink-2);font-weight:700;letter-spacing:1.4px}
+.st-live-price-val{
+  font-family:"Instrument Serif",serif;font-size:22px;color:var(--ink);
+  font-variant-numeric:tabular-nums;line-height:1;
+}
+
+.st-you-own{
+  margin-top:10px;padding:10px 14px;border-radius:14px;
+  background:linear-gradient(135deg,rgba(127,255,212,.18),rgba(160,231,255,.18));
+  border:1px solid rgba(127,255,212,.40);
+  display:flex;justify-content:space-between;align-items:center;gap:8px;font-size:11px;
+}
+.st-you-own-label{color:var(--green);font-weight:700;letter-spacing:1.2px;font-size:10px}
+.st-you-own-val{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums;text-align:right}
+.st-muted-soft{color:var(--ink-2);font-weight:500}
+.st-muted-deep{color:var(--ink-3);font-weight:500}
+.st-muted{color:var(--ink-3)}
+
+.st-sheet-body{flex:1;overflow-y:auto;padding:4px 22px 12px;min-height:0}
+
+.st-side-switch{
+  display:flex;padding:4px;margin:14px 0;gap:4px;width:100%;
+  background:var(--glass-strong);border:1px solid var(--border);border-radius:999px;
+}
+.st-side-btn{
+  flex:1;padding:11px 16px;border-radius:999px;border:none;background:transparent;
+  color:var(--ink-2);font-family:inherit;font-size:13px;font-weight:700;cursor:pointer;
+  letter-spacing:0.2px;transition:all .2s;
+}
 .st-side-btn:disabled{cursor:not-allowed;opacity:0.5}
-.st-side-btn.st-active.st-buy{background:rgba(61,213,152,.2);color:var(--st-up);box-shadow:0 2px 12px rgba(61,213,152,.2)}
-.st-side-btn.st-active.st-sell{background:rgba(255,138,158,.2);color:var(--st-down);box-shadow:0 2px 12px rgba(255,138,158,.2)}
-.st-amount-wrap{margin-bottom:12px}
-.st-amount-label{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;font-size:10px;color:var(--st-muted);font-weight:700;letter-spacing:.08em;font-family:var(--st-font-mono)}
-.st-amount-input-wrap{background:rgba(255,255,255,.04);border:1.5px solid var(--st-border);border-radius:14px;padding:14px;margin-bottom:9px;display:flex;align-items:center;gap:10px;transition:all 0.2s}
-.st-amount-input-wrap:focus-within{border-color:var(--st-hl);box-shadow:0 0 0 4px rgba(77,255,210,.1)}
-.st-amount-input-wrap.st-busy{opacity:0.6}
-.st-amount-dollar{color:var(--st-muted);font-size:20px;font-family:var(--st-font-mono)}
-.st-amount-input{flex:1;background:transparent;border:none;font-size:26px;font-weight:900;color:var(--st-ink-str);outline:none;font-variant-numeric:tabular-nums;font-family:var(--st-font-display);letter-spacing:-0.02em;min-width:0;width:100%}
-.st-amount-input::placeholder{color:var(--st-muted-2);font-weight:700}
-.st-amount-suffix{color:var(--st-ink);font-size:12px;font-weight:800;font-family:var(--st-font-mono);flex-shrink:0}
-.st-amount-equiv{font-size:10px;color:var(--st-muted);font-weight:600;margin-bottom:9px;margin-top:-3px;padding-left:4px;font-family:var(--st-font-mono)}
+.st-side-btn.st-active.st-buy{
+  background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink);
+  box-shadow:0 4px 14px rgba(127,255,212,.35);
+}
+.st-side-btn.st-active.st-sell{
+  background:linear-gradient(135deg,#FF8FBE,#FFB088);color:#fff;
+  box-shadow:0 4px 14px rgba(255,143,190,.35);
+}
+
+.st-amount-wrap{margin-bottom:10px}
+.st-amount-label{
+  display:flex;justify-content:space-between;
+  font-size:10px;color:var(--ink-2);font-weight:700;letter-spacing:1.4px;
+  margin-bottom:8px;
+}
+.st-amount-input-wrap{
+  background:var(--glass-strong);border:1.5px solid var(--border);
+  border-radius:16px;padding:14px 16px;margin-bottom:10px;
+  display:flex;align-items:center;gap:10px;transition:all .2s;
+}
+.st-amount-input-wrap:focus-within{border-color:var(--lav);box-shadow:0 0 0 4px rgba(183,148,246,.12)}
+.st-amount-input-wrap.st-busy{opacity:.6}
+.st-amount-dollar{font-family:"Instrument Serif",serif;font-size:28px;color:var(--ink-2);line-height:1}
+.st-amount-input{
+  flex:1;background:transparent;border:none;outline:none;
+  font-family:"Instrument Serif",serif;font-size:36px;line-height:1;color:var(--ink);
+  font-variant-numeric:tabular-nums;min-width:0;width:100%;
+}
+.st-amount-input::placeholder{color:var(--ink-3)}
+.st-amount-suffix{font-size:11px;font-weight:700;color:var(--ink-2);letter-spacing:1px;flex-shrink:0}
+.st-amount-equiv{font-size:11px;color:var(--ink-2);font-weight:500;margin:-4px 0 8px;padding-left:4px}
+
 .st-chips{display:flex;gap:6px}
-.st-chip{flex:1;padding:9px 0;border-radius:10px;border:1.5px solid var(--st-border);background:rgba(255,255,255,.03);color:var(--st-muted);font-weight:800;font-size:11px;cursor:pointer;font-family:var(--st-font-display);letter-spacing:0.04em;box-shadow:0 2px 0 rgba(0,0,0,.2);transition:all 0.15s cubic-bezier(0.2,1.2,0.4,1)}
-.st-chip:not(.st-chip-off):hover{border-color:var(--st-hl);color:var(--st-hl)}
-.st-chip:not(.st-chip-off):active{transform:translateY(2px);box-shadow:0 0 0 rgba(0,0,0,.2)}
-.st-chip-off{cursor:not-allowed;opacity:0.4;color:var(--st-muted-2)}
-.st-receive{background:rgba(77,255,210,.04);border:1.5px solid rgba(77,255,210,.18);border-radius:14px;padding:14px;margin-bottom:12px}
-.st-receive-head{font-size:9px;color:var(--st-muted-2);font-weight:800;letter-spacing:.12em;margin-bottom:10px;display:flex;justify-content:space-between;font-family:var(--st-font-mono)}
-.st-receive-loading{color:var(--st-hl)}
-.st-receive-val{font-size:22px;font-weight:900;color:var(--st-ink-str);font-variant-numeric:tabular-nums;margin-bottom:10px;font-family:var(--st-font-display);letter-spacing:-0.02em}
-.st-receive-val.st-muted{color:var(--st-muted)}
-.st-receive-meta{border-top:1px solid var(--st-hairline);padding-top:8px}
-.st-receive-meta-row{display:flex;justify-content:space-between;padding:4px 0;font-size:11px}
-.st-receive-meta-row span:first-child{color:var(--st-muted)}
-.st-receive-meta-row span:last-child{color:var(--st-ink);font-weight:700;font-family:var(--st-font-mono)}
-.st-cta-wrap{flex-shrink:0;padding:14px 22px calc(env(safe-area-inset-bottom) + 90px);border-top:1px solid var(--st-hairline);background:linear-gradient(180deg,transparent 0%,var(--st-bg) 20%)}
-.st-status-banner{margin-bottom:10px;padding:11px 12px;background:rgba(77,255,210,.06);border:1px solid rgba(77,255,210,.22);border-radius:12px;display:flex;align-items:center;gap:10px;font-size:12px;color:var(--st-ink);font-weight:600}
-.st-spinner{width:14px;height:14px;border-radius:50%;border:2px solid var(--st-hl-dim);border-top-color:var(--st-hl);animation:st-spin 0.8s linear infinite}
-.st-error-banner{margin-bottom:10px;padding:11px 12px;background:rgba(255,138,158,.08);border:1px solid rgba(255,138,158,.24);border-radius:12px;font-size:12px;color:var(--st-down);font-weight:600}
-.st-cta{width:100%;padding:18px;border-radius:18px;border:none;color:#04070f;font-weight:900;font-size:15px;cursor:pointer;min-height:56px;letter-spacing:0.04em;font-family:var(--st-font-display);position:relative;overflow:hidden;transition:all 0.15s cubic-bezier(0.2,1.2,0.4,1)}
-.st-cta::after{content:'';position:absolute;top:0;bottom:0;width:70px;left:-110px;background:linear-gradient(90deg,transparent,rgba(255,255,255,.4),transparent);animation:st-shimmer 2.8s ease-in-out infinite}
-.st-cta:active:not(.st-cta-disabled){transform:translateY(3px)}
-.st-cta-connect{background:linear-gradient(135deg,var(--st-violet) 0%,var(--st-hl-2) 100%);box-shadow:0 8px 28px rgba(168,127,255,.35),0 4px 0 rgba(0,0,0,.25),inset 0 -3px 0 rgba(0,0,0,.12),inset 0 2px 0 rgba(255,255,255,.3)}
-.st-cta-buy{background:linear-gradient(135deg,var(--st-up) 0%,var(--st-hl-2) 100%);box-shadow:0 8px 28px rgba(61,213,152,.35),0 4px 0 rgba(0,0,0,.25),inset 0 -3px 0 rgba(0,0,0,.12),inset 0 2px 0 rgba(255,255,255,.3)}
-.st-cta-sell{color:#fff;background:linear-gradient(135deg,var(--st-down) 0%,var(--st-violet) 100%);box-shadow:0 8px 28px rgba(255,138,158,.35),0 4px 0 rgba(0,0,0,.25),inset 0 -3px 0 rgba(0,0,0,.18),inset 0 2px 0 rgba(255,255,255,.2)}
-.st-cta-success{background:linear-gradient(135deg,var(--st-up) 0%,var(--st-hl-2) 100%)}
-.st-cta-disabled{cursor:not-allowed;opacity:0.55}
-.st-cta-disabled::after{display:none}
-.st-cta-footer{font-size:10px;color:var(--st-muted-2);text-align:center;margin-top:10px;line-height:1.5;font-weight:500}
+.st-chip{
+  flex:1;padding:9px 0;border-radius:12px;
+  background:var(--glass);border:1px solid var(--border);color:var(--ink);
+  font-family:inherit;font-size:11px;font-weight:700;letter-spacing:0.4px;cursor:pointer;
+  transition:all .15s;
+}
+.st-chip:not(.st-chip-off):hover{background:#fff;border-color:var(--lav)}
+.st-chip-off{cursor:not-allowed;opacity:0.4;color:var(--ink-3)}
+
+.st-receive{
+  margin-top:14px;padding:14px 16px;border-radius:18px;
+  background:linear-gradient(135deg,rgba(183,148,246,.10),rgba(127,255,212,.10));
+  border:1px solid rgba(183,148,246,.30);
+}
+.st-receive-head{
+  display:flex;justify-content:space-between;
+  font-size:10px;color:var(--ink-2);font-weight:700;letter-spacing:1.4px;
+  margin-bottom:10px;
+}
+.st-receive-loading{color:var(--lav)}
+.st-receive-val{
+  font-family:"Instrument Serif",serif;font-size:30px;line-height:1;
+  color:var(--ink);font-variant-numeric:tabular-nums;margin-bottom:10px;
+}
+.st-receive-val.st-muted{color:var(--ink-3)}
+.st-receive-meta{border-top:1px solid var(--border);padding-top:8px}
+.st-receive-meta-row{display:flex;justify-content:space-between;padding:3px 0;font-size:11px}
+.st-receive-meta-row span:first-child{color:var(--ink-2);font-weight:500}
+.st-receive-meta-row span:last-child{color:var(--ink);font-weight:600;font-variant-numeric:tabular-nums}
+
+.st-cta-wrap{
+  flex-shrink:0;padding:14px 22px calc(env(safe-area-inset-bottom) + 90px);
+  border-top:1px solid var(--border);
+  background:linear-gradient(180deg,transparent 0%,rgba(255,255,255,.7) 30%);
+}
+.st-status-banner{
+  margin-bottom:10px;padding:11px 12px;border-radius:12px;
+  background:rgba(183,148,246,.10);border:1px solid rgba(183,148,246,.30);
+  display:flex;align-items:center;gap:10px;font-size:12px;color:var(--ink);font-weight:600;
+}
+.st-spinner{
+  width:14px;height:14px;border-radius:50%;
+  border:2px solid rgba(183,148,246,.25);border-top-color:var(--lav);
+  animation:st-spin .8s linear infinite;
+}
+.st-error-banner{
+  margin-bottom:10px;padding:11px 12px;border-radius:12px;
+  background:rgba(209,75,106,.10);border:1px solid rgba(209,75,106,.30);
+  font-size:12px;color:var(--red);font-weight:600;
+}
+.st-cta{
+  width:100%;padding:18px;border-radius:18px;border:none;
+  font-family:"Instrument Serif",serif;font-size:18px;letter-spacing:-.01em;cursor:pointer;
+  color:var(--ink);transition:transform .15s,box-shadow .15s;
+  position:relative;overflow:hidden;min-height:56px;
+}
+.st-cta-connect{
+  background:linear-gradient(135deg,#B794F6,#FF8FBE);color:#fff;
+  box-shadow:0 8px 24px rgba(183,148,246,.35);
+}
+.st-cta-buy{
+  background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink);
+  box-shadow:0 8px 24px rgba(127,255,212,.35);
+}
+.st-cta-sell{
+  background:linear-gradient(135deg,#FF8FBE,#FFB088);color:#fff;
+  box-shadow:0 8px 24px rgba(255,143,190,.35);
+}
+.st-cta-success{background:linear-gradient(135deg,#7FFFD4,#A0E7FF);color:var(--ink)}
+.st-cta:hover:not(.st-cta-disabled){transform:translateY(-1px)}
+.st-cta:active:not(.st-cta-disabled){transform:translateY(1px)}
+.st-cta-disabled{cursor:not-allowed;opacity:.55;box-shadow:none}
+.st-cta-footer{
+  text-align:center;font-size:10px;color:var(--ink-3);font-weight:500;
+  margin-top:10px;letter-spacing:0.2px;line-height:1.5;
+}
 
 /* REGION BLOCK */
-.st-region-block{max-width:680px;margin:0 auto;width:100%;padding:0 16px calc(env(safe-area-inset-bottom) + 90px);min-height:80vh;display:flex;align-items:center;justify-content:center;background-image:radial-gradient(ellipse 80% 40% at 50% 10%,rgba(168,127,255,.14),transparent 60%),radial-gradient(ellipse 60% 30% at 80% 30%,rgba(77,255,210,.08),transparent 50%)}
-.st-region-card{width:100%;max-width:480px;padding:44px 28px 40px;border-radius:28px;background:linear-gradient(145deg,rgba(14,20,40,.96),rgba(7,11,22,.98));border:1.5px solid rgba(168,127,255,.22);box-shadow:0 24px 80px rgba(0,0,0,.55),0 0 60px rgba(168,127,255,.10);text-align:center;position:relative;overflow:hidden}
-.st-region-glow{position:absolute;inset:0;background:radial-gradient(ellipse 100% 60% at 50% -10%,rgba(77,255,210,.10),transparent 70%);pointer-events:none}
-.st-region-inner{position:relative}
-.st-region-icon{width:56px;height:56px;margin:0 auto 20px;border-radius:14px;background:var(--st-hl-dim);border:1px solid var(--st-border-hi);display:flex;align-items:center;justify-content:center;color:var(--st-hl)}
-.st-region-title{font-family:var(--st-font-display);font-size:28px;line-height:1.05;font-weight:800;margin:0 0 12px;letter-spacing:-.04em;background:linear-gradient(135deg,var(--st-ink-str) 0%,var(--st-violet) 100%);-webkit-background-clip:text;-webkit-text-fill-color:transparent;background-clip:text}
-.st-region-sub{font-size:13px;color:var(--st-muted);line-height:1.6;font-weight:500}
+.st-region-block{
+  position:relative;min-height:100vh;min-height:100dvh;
+  max-width:520px;margin:0 auto;width:100%;
+  padding:60px 22px calc(env(safe-area-inset-bottom) + 90px);
+  display:flex;align-items:center;justify-content:center;
+  background:
+    radial-gradient(ellipse at 20% 5%,#FFE8F4 0%,transparent 45%),
+    radial-gradient(ellipse at 85% 15%,#E4F2FF 0%,transparent 45%),
+    radial-gradient(ellipse at 50% 60%,#F0E7FF 0%,transparent 55%),
+    linear-gradient(180deg,#FBF5FF 0%,#F2F8FF 100%);
+  background-attachment:fixed;
+  border-radius:24px;overflow:hidden;
+}
+.st-region-card{
+  width:100%;max-width:440px;padding:40px 28px;
+  border-radius:28px;text-align:center;position:relative;
+  background:var(--glass-strong);backdrop-filter:blur(14px);
+  border:1px solid rgba(255,255,255,.8);
+  box-shadow:0 24px 60px rgba(183,148,246,.18);
+}
+.st-region-icon{
+  width:56px;height:56px;margin:0 auto 20px;border-radius:18px;
+  background:linear-gradient(135deg,#FF8FBE,#B794F6);
+  display:grid;place-items:center;color:#fff;
+  box-shadow:0 8px 20px rgba(255,143,190,.35);
+}
+.st-region-title{
+  font-family:"Instrument Serif",serif;font-size:32px;line-height:1.05;
+  letter-spacing:-.025em;margin:0 0 12px;color:var(--ink);font-weight:400;
+}
+.st-region-title em{
+  font-style:italic;
+  background:linear-gradient(90deg,#FF8FBE,#B794F6,#7FFFD4);
+  -webkit-background-clip:text;background-clip:text;-webkit-text-fill-color:transparent;
+}
+.st-region-sub{
+  font-size:13px;color:var(--ink-2);line-height:1.6;font-weight:500;
+}
 `;
 
 // =====================================================================
@@ -234,26 +491,26 @@ async function detectCountry() {
 // =====================================================================
 const BRANDS = [
   // ------ TECH MEGABRANDS ------
-  { mint: 'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB', symbol: 'TSLAx',  name: 'Tesla',                 ticker: 'TSLA',  decimals: 8, sector: 'Tech',   color: '#e31837' },
-  { mint: 'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp', symbol: 'AAPLx',  name: 'Apple',                 ticker: 'AAPL',  decimals: 8, sector: 'Tech',   color: '#a2aaad' },
-  { mint: 'Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh', symbol: 'NVDAx',  name: 'NVIDIA',                ticker: 'NVDA',  decimals: 8, sector: 'Tech',   color: '#76b900' },
-  { mint: 'Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu', symbol: 'METAx',  name: 'Meta Platforms',        ticker: 'META',  decimals: 8, sector: 'Tech',   color: '#0866ff' },
-  { mint: 'XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN', symbol: 'GOOGLx', name: 'Alphabet',              ticker: 'GOOGL', decimals: 8, sector: 'Tech',   color: '#4285f4' },
-  { mint: 'Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg', symbol: 'AMZNx',  name: 'Amazon',                ticker: 'AMZN',  decimals: 8, sector: 'Tech',   color: '#ff9900' },
-  { mint: 'XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX', symbol: 'MSFTx',  name: 'Microsoft',             ticker: 'MSFT',  decimals: 8, sector: 'Tech',   color: '#00a4ef' },
-  { mint: 'XsEH7wWfJJu2ZT3UCFeVfALnVA6CP5ur7Ee11KmzVpL', symbol: 'NFLXx',  name: 'Netflix',               ticker: 'NFLX',  decimals: 8, sector: 'Tech',   color: '#e50914' },
-  { mint: 'XsoBhf2ufR8fTyNSjqfU71DYGaE6Z3SUGAidpzriAA4', symbol: 'PLTRx',  name: 'Palantir',              ticker: 'PLTR',  decimals: 8, sector: 'Tech',   color: '#0a0a0a' },
-  { mint: 'XsgSaSvNSqLTtFuyWPBhK9196Xb9Bbdyjj4fH3cPJGo', symbol: 'AVGOx',  name: 'Broadcom',              ticker: 'AVGO',  decimals: 8, sector: 'Tech',   color: '#cc092f' },
+  { mint: 'XsDoVfqeBukxuZHWhdvWHBhgEHjGNst4MLodqsJHzoB', symbol: 'TSLAx',  name: 'Tesla',                 ticker: 'TSLA',  decimals: 8, sector: 'Tech'   },
+  { mint: 'XsbEhLAtcf6HdfpFZ5xEMdqW8nfAvcsP5bdudRLJzJp', symbol: 'AAPLx',  name: 'Apple',                 ticker: 'AAPL',  decimals: 8, sector: 'Tech'   },
+  { mint: 'Xsc9qvGR1efVDFGLrVsmkzv3qi45LTBjeUKSPmx9qEh', symbol: 'NVDAx',  name: 'NVIDIA',                ticker: 'NVDA',  decimals: 8, sector: 'Tech'   },
+  { mint: 'Xsa62P5mvPszXL1krVUnU5ar38bBSVcWAB6fmPCo5Zu', symbol: 'METAx',  name: 'Meta Platforms',        ticker: 'META',  decimals: 8, sector: 'Tech'   },
+  { mint: 'XsCPL9dNWBMvFtTmwcCA5v3xWPSMEBCszbQdiLLq6aN', symbol: 'GOOGLx', name: 'Alphabet',              ticker: 'GOOGL', decimals: 8, sector: 'Tech'   },
+  { mint: 'Xs3eBt7uRfJX8QUs4suhyU8p2M6DoUDrJyWBa8LLZsg', symbol: 'AMZNx',  name: 'Amazon',                ticker: 'AMZN',  decimals: 8, sector: 'Tech'   },
+  { mint: 'XspzcW1PRtgf6Wj92HCiZdjzKCyFekVD8P5Ueh3dRMX', symbol: 'MSFTx',  name: 'Microsoft',             ticker: 'MSFT',  decimals: 8, sector: 'Tech'   },
+  { mint: 'XsEH7wWfJJu2ZT3UCFeVfALnVA6CP5ur7Ee11KmzVpL', symbol: 'NFLXx',  name: 'Netflix',               ticker: 'NFLX',  decimals: 8, sector: 'Tech'   },
+  { mint: 'XsoBhf2ufR8fTyNSjqfU71DYGaE6Z3SUGAidpzriAA4', symbol: 'PLTRx',  name: 'Palantir',              ticker: 'PLTR',  decimals: 8, sector: 'Tech'   },
+  { mint: 'XsgSaSvNSqLTtFuyWPBhK9196Xb9Bbdyjj4fH3cPJGo', symbol: 'AVGOx',  name: 'Broadcom',              ticker: 'AVGO',  decimals: 8, sector: 'Tech'   },
   // ------ CRYPTO-ADJACENT ------
-  { mint: 'Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu', symbol: 'COINx',  name: 'Coinbase',              ticker: 'COIN',  decimals: 8, sector: 'Crypto', color: '#0052ff' },
-  { mint: 'XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ', symbol: 'MSTRx',  name: 'MicroStrategy',         ticker: 'MSTR',  decimals: 8, sector: 'Crypto', color: '#fcb017' },
-  { mint: 'XsueG8BtpquVJX9LVLLEGuViXUungE6WmK5YZ3p3bd1', symbol: 'CRCLx',  name: 'Circle',                ticker: 'CRCL',  decimals: 8, sector: 'Crypto', color: '#3399ff' },
-  { mint: 'XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg', symbol: 'HOODx',  name: 'Robinhood',             ticker: 'HOOD',  decimals: 8, sector: 'Crypto', color: '#cdff00' },
+  { mint: 'Xs7ZdzSHLU9ftNJsii5fCeJhoRWSC32SQGzGQtePxNu', symbol: 'COINx',  name: 'Coinbase',              ticker: 'COIN',  decimals: 8, sector: 'Crypto' },
+  { mint: 'XsP7xzNPvEHS1m6qfanPUGjNmdnmsLKEoNAnHjdxxyZ', symbol: 'MSTRx',  name: 'MicroStrategy',         ticker: 'MSTR',  decimals: 8, sector: 'Crypto' },
+  { mint: 'XsueG8BtpquVJX9LVLLEGuViXUungE6WmK5YZ3p3bd1', symbol: 'CRCLx',  name: 'Circle',                ticker: 'CRCL',  decimals: 8, sector: 'Crypto' },
+  { mint: 'XsvNBAYkrDRNhA7wPHQfX3ZUXZyZLdnCQDfHZ56bzpg', symbol: 'HOODx',  name: 'Robinhood',             ticker: 'HOOD',  decimals: 8, sector: 'Crypto' },
   // ------ INDEX TOKENS ------
-  { mint: 'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W', symbol: 'SPYx',   name: 'Solana 500',            ticker: 'SPY',   decimals: 8, sector: 'Index',  color: '#1c4f9c' },
-  { mint: 'Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ', symbol: 'QQQx',   name: 'Solana 100',            ticker: 'QQQ',   decimals: 8, sector: 'Index',  color: '#003b71' },
-  { mint: 'Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re', symbol: 'GLDx',   name: 'Gold',                  ticker: 'GLD',   decimals: 8, sector: 'Index',  color: '#d4af37' },
-  { mint: 'XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp', symbol: 'TBLLx',  name: 'Short-Term Solana',     ticker: 'TBLL',  decimals: 8, sector: 'Index',  color: '#2a4d6e' },
+  { mint: 'XsoCS1TfEyfFhfvj8EtZ528L3CaKBDBRqRapnBbDF2W', symbol: 'SPYx',   name: 'Solana 500',            ticker: 'SPY',   decimals: 8, sector: 'Index'  },
+  { mint: 'Xs8S1uUs1zvS2p7iwtsG3b6fkhpvmwz4GYU3gWAmWHZ', symbol: 'QQQx',   name: 'Solana 100',            ticker: 'QQQ',   decimals: 8, sector: 'Index'  },
+  { mint: 'Xsv9hRk1z5ystj9MhnA7Lq4vjSsLwzL2nxrwmwtD3re', symbol: 'GLDx',   name: 'Gold',                  ticker: 'GLD',   decimals: 8, sector: 'Index'  },
+  { mint: 'XsqBC5tcVQLYt8wqGCHRnAUUecbRYXoJCReD6w7QEKp', symbol: 'TBLLx',  name: 'Short-Term Solana',     ticker: 'TBLL',  decimals: 8, sector: 'Index'  },
 ];
 
 const FILTERS = [
@@ -263,6 +520,13 @@ const FILTERS = [
   { id: 'Crypto',   label: 'Crypto-Adj' },
   { id: 'Index',    label: 'Index' },
 ];
+
+// Sector → badge class (kept in sync with .st-sec-* CSS)
+function sectorClass(sector) {
+  if (sector === 'Tech')   return 'st-sec-tech';
+  if (sector === 'Crypto') return 'st-sec-crypto';
+  return 'st-sec-index';
+}
 
 // =====================================================================
 // UTILS — UNCHANGED
@@ -586,22 +850,27 @@ function useStocksCSS() {
 // =====================================================================
 // SUB-COMPONENTS
 // =====================================================================
-function BrandBadge({ brand, size = 40 }) {
+function BrandBadge({ brand, size = 42 }) {
   const letter = (brand.ticker || brand.symbol || '?').charAt(0).toUpperCase();
+  const fontSize = Math.round(size * 0.52);
   return (
-    <div className="st-badge" style={{
-      width: size, height: size,
-      background: `linear-gradient(135deg,${brand.color},${brand.color}dd)`,
-      fontSize: Math.round(size * 0.38),
-      boxShadow: `0 4px 14px ${brand.color}50`,
-    }}>{letter}</div>
+    <div
+      className={'st-badge ' + sectorClass(brand.sector)}
+      style={{ width: size, height: size, fontSize, borderRadius: Math.round(size * 0.31) }}
+    >
+      {letter}
+    </div>
   );
 }
 
-function BrandTile({ brand, price, onClick }) {
+function BrandTile({ brand, price, onClick, idx }) {
   return (
-    <button onClick={onClick} className="st-tile">
-      <BrandBadge brand={brand} size={40}/>
+    <button
+      onClick={onClick}
+      className="st-tile"
+      style={{ animationDelay: (idx * 0.03) + 's' }}
+    >
+      <BrandBadge brand={brand} size={42}/>
       <div className="st-tile-mid">
         <div className="st-tile-row">
           <span className="st-tile-sym">{brand.symbol}</span>
@@ -834,10 +1103,10 @@ function TradeModal({ open, brand, price, onClose, walletPubkey, onConnectWallet
     <>
       <div onClick={isBusy ? undefined : onClose} className={'st-modal-backdrop' + (isBusy ? ' st-busy' : '')}/>
       <div className="st-sheet">
+        <div className="st-grabber"/>
         <div className="st-sheet-head">
-          <div className="st-grabber"/>
           <div className="st-sheet-head-row">
-            <BrandBadge brand={brand} size={44}/>
+            <BrandBadge brand={brand} size={48}/>
             <div className="st-sheet-title-wrap">
               <div className="st-sheet-title-row">
                 <span className="st-sheet-title">{brand.symbol}</span>
@@ -988,20 +1257,19 @@ function TradeModal({ open, brand, price, onClose, walletPubkey, onConnectWallet
 function BrandsRegionBlock() {
   return (
     <div className="st-region-block">
+      <div className="st-blob" style={{ width: 320, height: 320, background: '#FF8FBE', top: '5%', left: '-80px' }}/>
+      <div className="st-blob" style={{ width: 360, height: 360, background: '#A0E7FF', bottom: '10%', right: '-100px', animationDelay: '3s' }}/>
       <div className="st-region-card">
-        <div className="st-region-glow"/>
-        <div className="st-region-inner">
-          <div className="st-region-icon">
-            <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10"/>
-              <line x1="2" y1="12" x2="22" y2="12"/>
-              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
-            </svg>
-          </div>
-          <h1 className="st-region-title">Not available in your region</h1>
-          <div className="st-region-sub">
-            Brand tokens are restricted in your region. Swap, Bridge, Wonderland, and Wallet remain fully available.
-          </div>
+        <div className="st-region-icon">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="10"/>
+            <line x1="2" y1="12" x2="22" y2="12"/>
+            <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/>
+          </svg>
+        </div>
+        <h1 className="st-region-title">Not available in <em>your region</em></h1>
+        <div className="st-region-sub">
+          Brand tokens are restricted in your region. Swap, Bridge, Wonderland, and Wallet remain fully available.
         </div>
       </div>
     </div>
@@ -1009,7 +1277,7 @@ function BrandsRegionBlock() {
 }
 
 // =====================================================================
-// MAIN — compact hero + list
+// MAIN — Wonderland hero + glass list
 // =====================================================================
 function BrandsInner({ onConnectWallet }) {
   useStocksCSS();
@@ -1045,52 +1313,63 @@ function BrandsInner({ onConnectWallet }) {
   return (
     <>
       <div className="st-page">
-        {/* Compact hero */}
-        <div className="st-mini-hero">
-          <div className="st-mh-row">
-            <div className="st-mh-left">
-              <div className="st-mh-eyebrow">📈 Tokenized Brands</div>
-              <h1 className="st-mh-title">
-                WATCH THE<br /><span className="grad">Market.</span>
-              </h1>
-              <p className="st-mh-sub">Trade global brands. 24/7. Settle in USDC.</p>
-            </div>
-            <div className="st-mh-live">
-              <div className="v">{totalPriced || BRANDS.length}</div>
-              <div className="l"><span className="pulse"></span>Live Prices</div>
+        <div className="st-blob" style={{ width: 380, height: 380, background: '#FF8FBE', top: -80, left: -120 }}/>
+        <div className="st-blob" style={{ width: 440, height: 440, background: '#A0E7FF', top: '30%', right: -160, animationDelay: '3s' }}/>
+        <div className="st-blob" style={{ width: 320, height: 320, background: '#B794F6', bottom: '10%', left: -100, animationDelay: '6s' }}/>
+
+        <div className="st-inner">
+          <div className="st-head">
+            <div className="st-brand">
+              <div className="st-brand-dot"/>
+              <span className="st-wordmark">
+                stocks<span className="slash">//</span><span className="grad">on-chain</span>
+              </span>
             </div>
           </div>
-        </div>
 
-        <div className="st-kyc">
-          <span>No KYC</span><span className="dot"></span>
-          <span>No Account</span><span className="dot"></span>
-          <span>No Limits</span>
-        </div>
+          <div className="st-hero">
+            <div className="st-eyebrow">
+              <span className="dot"/>LIVE · <b>{totalPriced || BRANDS.length} BRANDS</b>
+            </div>
+            <h1>Trade the<br/><span className="shim">whole market.</span></h1>
+            <p>Tokenized stocks on Solana. 24/7. Settle in USDC.</p>
+          </div>
 
-        <div className="st-filters">
-          {FILTERS.map(f => (
-            <button
-              key={f.id}
-              onClick={() => setFilter(f.id)}
-              className={'st-filter' + (filter === f.id ? ' st-active' : '')}
-            >{f.label}</button>
-          ))}
-        </div>
+          <div className="st-trust">
+            <span>No KYC</span><span className="sep">·</span>
+            <span>No Account</span><span className="sep">·</span>
+            <span>No Limits</span>
+          </div>
 
-        <div className="st-list">
-          {filtered.length === 0 ? (
-            <div className="st-empty">No brands in this category.</div>
-          ) : filtered.map(s => (
-            <BrandTile key={s.mint} brand={s} price={prices[s.mint] || 0} onClick={() => setActive(s)}/>
-          ))}
-        </div>
+          <div className="st-section">
+            <div className="st-section-title">browse</div>
+            <div className="st-section-meta">JUPITER PRICES</div>
+          </div>
 
-        <div className="st-powered">
-          <span className="st-powered-label">POWERED BY</span>
-          <span className="st-powered-name">JUPITER</span>
-          <span className="st-powered-sep">|</span>
-          <span className="st-powered-label">NON-CUSTODIAL</span>
+          <div className="st-filters">
+            {FILTERS.map(f => (
+              <button
+                key={f.id}
+                onClick={() => setFilter(f.id)}
+                className={'st-filter' + (filter === f.id ? ' st-active' : '')}
+              >{f.label}</button>
+            ))}
+          </div>
+
+          <div className="st-list">
+            {filtered.length === 0 ? (
+              <div className="st-empty">No brands in this category.</div>
+            ) : filtered.map((s, i) => (
+              <BrandTile key={s.mint} brand={s} price={prices[s.mint] || 0} onClick={() => setActive(s)} idx={i}/>
+            ))}
+          </div>
+
+          <div className="st-foot">
+            <span className="st-foot-label">powered by</span>
+            <span className="st-foot-name">jupiter</span>
+            <span className="st-foot-sep">·</span>
+            <span className="st-foot-label">non-custodial</span>
+          </div>
         </div>
       </div>
 
