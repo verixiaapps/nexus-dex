@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as anchor from '@coral-xyz/anchor';
 import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
 import idl from '../idl/flipsy.json';
-
+ 
 // ============================================================
 // CONFIG
 // ============================================================
