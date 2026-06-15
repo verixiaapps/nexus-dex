@@ -1,143 +1,82 @@
-name: Fix everything
+name: Fix noble hashes ESM crash
 
 on:
- workflow_dispatch:
+  workflow_dispatch:
 
 permissions:
- contents: write
+  contents: write
 
 jobs:
- fix:
-   runs-on: ubuntu-latest
-   timeout-minutes: 20
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
 
-   steps:
-     - uses: actions/checkout@v4
-       with:
-         fetch-depth: 0
-         token: ${{ secrets.GITHUB_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
 
-     - uses: actions/setup-node@v4
-       with:
-         node-version: "20"
+      - name: Pin @noble/hashes to v1 (last CJS-compatible)
+        run: |
+          node <<'EOF'
+          const fs = require('fs');
+          const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const T = '1.5.0';
+          p.overrides = p.overrides || {};
+          p.overrides['@noble/hashes'] = T;
+          for (const k of ['dependencies','devDependencies']) {
+            if (p[k] && p[k]['@noble/hashes']) {
+              console.log(`${k}.@noble/hashes: ${p[k]['@noble/hashes']} -> ${T}`);
+              p[k]['@noble/hashes'] = T;
+            }
+          }
+          fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+          EOF
+          cat package.json
 
-     - name: Initial install (tolerant)
-       run: |
-         npm install --ignore-scripts --no-audit --no-fund --legacy-peer-deps || \
-         npm install --ignore-scripts --no-audit --no-fund --force
+      - name: Wipe and reinstall
+        run: |
+          rm -rf node_modules package-lock.json
+          npm install --no-audit --no-fund
 
-     - name: Discover anchor version pump packages need
-       id: discover
-       run: |
-         node <<'EOF' > /tmp/target.txt
-         const fs = require('fs');
-         function read(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } }
-         const candidates = [
-           'node_modules/@pump-fun/pump-sdk/package.json',
-           'node_modules/@pump-fun/pump-swap-sdk/package.json',
-         ];
-         const found = [];
-         for (const p of candidates) {
-           const pkg = read(p); if (!pkg) continue;
-           const a = (pkg.dependencies && pkg.dependencies['@coral-xyz/anchor'])
-                  || (pkg.peerDependencies && pkg.peerDependencies['@coral-xyz/anchor']);
-           if (a) found.push({ pkg: pkg.name, version: pkg.version, anchor: a });
-         }
-         console.error('Discovered:', JSON.stringify(found, null, 2));
-         let target = '0.30.1';
-         if (found.length) {
-           const raw = found[0].anchor.replace(/^[\^~>=<\s]+/, '').split(/\s/)[0];
-           if (/^\d+\.\d+\.\d+/.test(raw)) target = raw;
-           else if (/^\d+\.\d+/.test(raw)) target = raw + '.0';
-         }
-         process.stdout.write(target);
-         EOF
-         T=$(cat /tmp/target.txt)
-         echo "Target anchor: $T"
-         echo "target=$T" >> $GITHUB_OUTPUT
+      - name: Verify only one noble/hashes version, and it's 1.x
+        run: |
+          npm ls @noble/hashes --all 2>&1 || true
+          VER=$(node -e "console.log(require('@noble/hashes/package.json').version)")
+          echo "Installed: $VER"
+          case "$VER" in
+            1.*) echo "OK: 1.x";;
+            *) echo "FAIL: not 1.x"; exit 1;;
+          esac
 
-     - name: Patch package.json
-       run: |
-         T="${{ steps.discover.outputs.target }}"
-         node <<EOF
-         const fs = require('fs');
-         const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-         const T = '${T}';
-         for (const k of ['dependencies','devDependencies','peerDependencies']) {
-           if (p[k] && p[k]['@coral-xyz/anchor']) {
-             console.log(\`\${k}.@coral-xyz/anchor: \${p[k]['@coral-xyz/anchor']} -> \${T}\`);
-             p[k]['@coral-xyz/anchor'] = T;
-           }
-         }
-         p.overrides = p.overrides || {};
-         p.overrides['@coral-xyz/anchor'] = T;
-         p.engines = p.engines || {};
-         p.engines.node = '20.x';
-         fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
-         EOF
-         echo "20" > .nvmrc
-         cat package.json
+      - name: Smoke 1 — chainflip/utils loads (the crash site)
+        run: node -e "require('@chainflip/utils/dist/ss58.cjs'); console.log('OK');"
 
-     - name: Wipe and reinstall
-       run: |
-         rm -rf node_modules package-lock.json yarn.lock pnpm-lock.yaml
-         npm install --no-audit --no-fund
+      - name: Smoke 2 — pump-sdk still loads (don't regress prior fix)
+        run: node -e "require('@pump-fun/pump-sdk'); console.log('OK');"
 
-     - name: Verify single anchor version
-       run: npm ls @coral-xyz/anchor --all 2>&1 || true
+      - name: Smoke 3 — server.js loads
+        run: |
+          if [ -f server.js ]; then
+            node -e "
+            try { require('./server.js'); console.log('OK'); }
+            catch (e) {
+              if (/env|ENV|RPC|KEYPAIR|HELIUS|listen|EADDR/i.test(e.message)) {
+                console.log('OK (runtime check):', e.message);
+              } else { console.error('FAIL:', e.stack); process.exit(1); }
+            }
+            "
+          fi
 
-     - name: Smoke 1 — pump-sdk loads
-       run: node -e "require('@pump-fun/pump-sdk'); console.log('OK');"
-
-     - name: Smoke 2 — pump-swap-sdk loads (the crash site)
-       run: node -e "require('@pump-fun/pump-swap-sdk'); console.log('OK');"
-
-     - name: Smoke 3 — pump-sdk methods intact
-       run: |
-         node -e "
-         const pkg = require('@pump-fun/pump-sdk');
-         const { Connection } = require('@solana/web3.js');
-         const Online = pkg.OnlinePumpSdk || pkg.PumpSdk;
-         if (!Online) { console.error('FAIL: no OnlinePumpSdk/PumpSdk'); process.exit(1); }
-         const sdk = new Online(new Connection('https://api.mainnet-beta.solana.com'));
-         for (const m of ['buyInstructions','sellInstructions','fetchGlobal','fetchBuyState','fetchSellState']) {
-           if (typeof sdk[m] !== 'function') console.warn('MISSING:', m);
-           else console.log('ok:', m);
-         }
-         "
-
-     - name: Smoke 4 — pumpfun-trade.js loads
-       run: |
-         if [ -f pumpfun-trade.js ]; then
-           node -e "
-           try { require('./pumpfun-trade.js'); console.log('OK'); }
-           catch (e) {
-             if (/env|ENV|RPC|KEYPAIR|HELIUS/i.test(e.message)) {
-               console.log('OK (env check at require time):', e.message);
-             } else { console.error('FAIL:', e.stack); process.exit(1); }
-           }
-           "
-         fi
-
-     - name: Commit straight to main
-       run: |
-         if git diff --quiet package.json && git diff --quiet package-lock.json 2>/dev/null; then
-           echo "::notice::No changes needed"
-           exit 0
-         fi
-         git config user.name "github-actions[bot]"
-         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-         git add package.json package-lock.json .nvmrc
-         git commit -m "fix: align anchor to ${{ steps.discover.outputs.target }}, pin Node 20
-
-         Fixes BN 'Assertion failed' crash at startup.
-
-         @pump-fun/pump-swap-sdk (transitive of pump-sdk) calls
-         getPumpAmmProgram(null) at module load, using Anchor's 2-arg
-         Program(idl, provider) constructor introduced in 0.30. The
-         previous @coral-xyz/anchor@0.29.0 has only the 3-arg signature,
-         so idl.address isn't read and new PublicKey() crashes BN.
-
-         All four smoke tests passed before this commit."
-         git push origin HEAD:main
-         echo "::notice::Pushed fix straight to main"
+      - name: Commit to main
+        run: |
+          if git diff --quiet package.json && git diff --quiet package-lock.json; then
+            echo "::notice::No changes"; exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package.json package-lock.json
+          git commit -m "fix: pin @noble/hashes to 1.
