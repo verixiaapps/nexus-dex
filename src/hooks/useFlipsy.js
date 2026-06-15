@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as anchor from '@coral-xyz/anchor';
 import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
 import idl from '../idl/flipsy.json';
-  
+   
 const PROGRAM_ID = new PublicKey('71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs');
 const FLIPSY_RPC = 'https://api.devnet.solana.com';
 const PRICE_URL = 'https://api.coinbase.com/v2/prices/SOL-USD/spot';
