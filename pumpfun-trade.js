@@ -26,14 +26,10 @@
 const { Connection, PublicKey } = require('@solana/web3.js');
 const BN = require('bn.js');
 
-// ── SDK import. Works with the official @pump-fun/pump-sdk OR the
-//    API-compatible fork @nirholas/pump-sdk.
-let _pkg = null;
-try {
-  _pkg = require('@pump-fun/pump-sdk');
-} catch (e) {
-  _pkg = require('@nirholas/pump-sdk');
-}
+// ── SDK import. Official @pump-fun/pump-sdk only (in package.json).
+//    No try/catch fallback — if this fails, we want the real error visible,
+//    not a confusing MODULE_NOT_FOUND for a package that was never installed.
+const _pkg = require('@pump-fun/pump-sdk');
 
 const OnlineClass = _pkg.OnlinePumpSdk || _pkg.PumpSdk; // fetch* lives here
 const OfflineClass = _pkg.PumpSdk || null;              // offline builders
