@@ -620,9 +620,12 @@ app.get('/api/health', (req, res) => {
 });
 
 /* ========================================================================
- * Launch Radar — DexScreener data + PumpPortal trades
+ * Launch Radar — DexScreener data + PumpPortal trades (NEW SECTION)
  * ─────────────────────────────────────────────────────────────────────────
- * Self-contained Launch Radar backend.
+ * Self-contained Launch Radar backend. Replaces ./pumpfun-trade.js — the
+ * routes here register BEFORE the `require('./pumpfun-trade')...` line
+ * further down, so this version wins (Express first-match-wins). After
+ * adopting this, delete pumpfun-trade.js and the require line below.
  *
  *   GET  /api/dex/launches      — latest pump.fun / PumpSwap launches
  *   GET  /api/dex/token/:mint   — one token, shaped + hasPumpPair flag
@@ -634,6 +637,9 @@ app.get('/api/health', (req, res) => {
  * Contract gate: launches + token endpoints only return mints with at
  * least one pair on dexId "pumpfun" or "pumpswap". Anything in the UI
  * is guaranteed tradable via PumpPortal's pool="auto" routing.
+ *
+ * Re-uses existing helpers: fetchWithTimeout, safeJson, respondJsonOrError,
+ * getCachedJson, setCachedJson, logError. AbortError → 504 like the rest.
  * ===================================================================== */
 const DEX_BASE          = 'https://api.dexscreener.com';
 const PUMPPORTAL_URL    = 'https://pumpportal.fun/api/trade-local';
@@ -702,7 +708,7 @@ app.get('/api/dex/launches', async (req, res) => {
     }
     if (mints.length === 0) {
       const payload = { tokens: [] };
-      setCachedJson(cacheKey, 200, payload, 3_000);
+      setCachedJson(cacheKey, 200, payload, 8_000);
       return res.json(payload);
     }
 
@@ -732,7 +738,7 @@ app.get('/api/dex/launches', async (req, res) => {
     tokens.sort((a, b) => Number(b.pairCreatedAt || 0) - Number(a.pairCreatedAt || 0));
 
     const payload = { tokens };
-    setCachedJson(cacheKey, 200, payload, 3_000);
+    setCachedJson(cacheKey, 200, payload, 8_000);
     return res.json(payload);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'DexScreener launches timed out' });
@@ -760,7 +766,7 @@ app.get('/api/dex/token/:mint', async (req, res) => {
     const pairs = Array.isArray(data?.pairs) ? data.pairs : [];
     const shaped = _shapePumpToken(mint, pairs);
     const payload = { token: shaped, hasPumpPair: !!shaped };
-    setCachedJson(cacheKey, 200, payload, 3_000);
+    setCachedJson(cacheKey, 200, payload, 5_000);
     return res.json(payload);
   } catch (e) {
     if (e.name === 'AbortError') return res.status(504).json({ error: 'DexScreener token timed out' });
@@ -879,6 +885,13 @@ app.post('/api/pumpfun/trade', async (req, res) => {
     return res.status(500).json({ error: e.message || 'Unknown error' });
   }
 });
+
+/* ========================================================================
+ * Launch Radar — pump.fun bonding-curve trades
+ * Builds buy/sell instructions server-side via @pump-fun/pump-sdk.
+ * Mounted BEFORE the /api/* catch-all so the route resolves.
+ * ===================================================================== */
+require('./pumpfun-trade').mountRoutes(app);
 
 /* ========================================================================
  * Launch Radar — Jupiter Ultra V3 proxy (Iris router; pre-grad bonding curves)
