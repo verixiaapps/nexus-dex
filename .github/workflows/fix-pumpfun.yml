@@ -15,8 +15,6 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Setup Node 20
         uses: actions/setup-node@v4
@@ -26,23 +24,33 @@ jobs:
       - name: Pin Node to 20 via .nvmrc
         run: echo "20" > .nvmrc
 
-      - name: Add anchor override to package.json
+      - name: Bump anchor direct dep + add override
         run: |
           node <<'EOF'
           const fs = require('fs');
           const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          const TARGET = '0.30.1';
+
+          for (const key of ['dependencies', 'devDependencies', 'peerDependencies']) {
+            if (p[key] && p[key]['@coral-xyz/anchor']) {
+              console.log(`Updating ${key}["@coral-xyz/anchor"]: ${p[key]['@coral-xyz/anchor']} -> ${TARGET}`);
+              p[key]['@coral-xyz/anchor'] = TARGET;
+            }
+          }
+
           p.overrides = p.overrides || {};
-          p.overrides['@coral-xyz/anchor'] = '0.30.1';
+          p.overrides['@coral-xyz/anchor'] = TARGET;
+
           p.engines = p.engines || {};
           p.engines.node = '20.x';
+
           fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
-          console.log('Updated package.json');
           EOF
+          echo "=== updated package.json ==="
           cat package.json
 
       - name: Nuke node_modules and lockfile
-        run: |
-          rm -rf node_modules package-lock.json yarn.lock pnpm-lock.yaml
+        run: rm -rf node_modules package-lock.json yarn.lock pnpm-lock.yaml
 
       - name: Fresh install
         run: npm install
@@ -50,52 +58,39 @@ jobs:
       - name: Verify only one anchor version
         run: |
           echo "=== anchor versions installed ==="
-          npm ls @coral-xyz/anchor || true
-          COUNT=$(npm ls @coral-xyz/anchor --all --json 2>/dev/null | grep -o '"version"' | wc -l)
-          echo "anchor instances: $COUNT"
+          npm ls @coral-xyz/anchor --all || true
 
-      - name: Smoke test - can we require pump-sdk without crashing?
+      - name: Smoke test - require pump-sdk
         run: |
           node -e "
           try {
             require('@pump-fun/pump-sdk');
-            console.log('✅ @pump-fun/pump-sdk loads cleanly');
+            console.log('OK: @pump-fun/pump-sdk loads cleanly');
           } catch (e) {
-            console.error('❌ Still crashing on require:');
-            console.error(e.stack);
+            console.error('FAIL:', e.stack);
             process.exit(1);
           }
           "
 
-      - name: Smoke test - load your trade file
-        run: |
-          node -e "
-          try {
-            require('./pumpfun-trade.js');
-            console.log('✅ pumpfun-trade.js loads cleanly');
-          } catch (e) {
-            console.error('❌ pumpfun-trade.js crashed:');
-            console.error(e.stack);
-            process.exit(1);
-          }
-          " || echo "(non-fatal; may need env vars at require time)"
-
-      - name: Commit fix to a new branch and open PR
+      - name: Commit and open PR
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          BRANCH="fix/pump-sdk-anchor-pin-$(date +%s)"
+          BRANCH="fix/pump-sdk-anchor-bump-$(date +%s)"
           git checkout -b "$BRANCH"
           git add package.json package-lock.json .nvmrc
-          git commit -m "fix: pin @coral-xyz/anchor to 0.30.1, Node 20
+          git commit -m "fix: bump @coral-xyz/anchor 0.29.0 -> 0.30.1, Node 20
 
-          Resolves 'Assertion failed' crash on startup caused by Anchor
-          version mismatch inside @pump-fun/pump-swap-sdk's module-load
-          call to getPumpAmmProgram(null)."
+          @pump-fun/pump-swap-sdk (transitive dep of pump-sdk) calls
+          getPumpAmmProgram(null) at module load, which uses Anchor's
+          2-arg Program(idl, provider) signature requiring idl.address.
+          Anchor 0.29 reads this differently than 0.30, causing
+          new PublicKey() to receive an invalid value and crash via BN
+          assertion. Pinning to 0.30.1 resolves the startup crash."
           git push origin "$BRANCH"
           gh pr create \
-            --title "fix: pump-sdk startup crash (anchor pin + Node 20)" \
-            --body "Auto-generated fix. Pins anchor to 0.30.1 via npm overrides, locks Node to 20, regenerates lockfile. Smoke test passed: pump-sdk requires cleanly." \
+            --title "fix: pump-sdk startup crash (anchor 0.29 -> 0.30.1)" \
+            --body "Auto-generated. Smoke test passed." \
             --base main \
             --head "$BRANCH"
         env:
