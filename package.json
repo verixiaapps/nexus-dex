@@ -7,7 +7,6 @@
     "@chainflip/sdk": "2.1.1",
     "@coral-xyz/anchor": "0.29.0",
     "@lifi/sdk": "^3.16.3",
-    "@noble/hashes": "^2.0.0",
     "@pump-fun/pump-sdk": "^1.35.0",
     "@reown/appkit": "^1.8.20",
     "@reown/appkit-adapter-solana": "^1.8.20",
@@ -52,7 +51,21 @@
   },
   "overrides": {
     "uuid": "9.0.1",
-    "@noble/hashes": "^2.0.0"
+    "@chainflip/sdk": { "@noble/hashes": "^2.0.0" },
+    "@chainflip/utils": { "@noble/hashes": "^2.0.0" },
+    "@reown/appkit": { "@noble/hashes": "^2.0.0" },
+    "@reown/appkit-adapter-solana": { "@noble/hashes": "^2.0.0" },
+    "@walletconnect/universal-provider": { "@noble/hashes": "^2.0.0" },
+    "@walletconnect/modal": { "@noble/hashes": "^2.0.0" },
+    "@lifi/sdk": { "@noble/hashes": "^2.0.0" },
+    "@solana/web3.js": { "@noble/hashes": "1.5.0" },
+    "@solana/spl-token": { "@noble/hashes": "1.5.0" },
+    "@solana/wallet-adapter-base": { "@noble/hashes": "1.5.0" },
+    "@solana/wallet-adapter-react": { "@noble/hashes": "1.5.0" },
+    "@solana/wallet-adapter-phantom": { "@noble/hashes": "1.5.0" },
+    "@solana/wallet-adapter-walletconnect": { "@noble/hashes": "1.5.0" },
+    "@coral-xyz/anchor": { "@noble/hashes": "1.5.0" },
+    "@pump-fun/pump-sdk": { "@noble/hashes": "1.5.0" }
   },
   "devDependencies": {
     "concurrently": "^8.2.0",
