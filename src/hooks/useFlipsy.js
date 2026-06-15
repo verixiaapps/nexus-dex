@@ -139,7 +139,11 @@ export function useFlipsy(wallet) {
       connection, wallet,
       { commitment: 'confirmed', preflightCommitment: 'confirmed' },
     );
-    return new anchor.Program(idl, PROGRAM_ID, provider);
+    // anchor 0.30+ reads the programId from a top-level `address` field on
+    // the IDL — the legacy `(idl, programId, provider)` constructor was
+    // removed. Inject the address here so we don't have to edit the JSON.
+    const idlWithAddress = { ...idl, address: PROGRAM_ID.toBase58() };
+    return new anchor.Program(idlWithAddress, provider);
   }, [connection, wallet?.publicKey, wallet?.signTransaction]);
 
   // -------- POLL COINBASE --------
