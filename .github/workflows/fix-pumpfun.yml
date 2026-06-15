@@ -22,4 +22,4 @@ jobs:
           npm install --no-audit --no-fund
 
       - name: Build
-        run: npm run build:all
+        run: npm run build
