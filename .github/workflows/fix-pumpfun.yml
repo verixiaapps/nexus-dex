@@ -1,4 +1,4 @@
-name: Diagnose @noble/hashes
+name: Build
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  diagnose:
+  build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -18,36 +18,8 @@ jobs:
       - name: Install
         run: |
           npm install -g npm@10
-          if [ -f package-lock.json ]; then
-            npm ci --no-audit --no-fund || npm install --no-audit --no-fund
-          else
-            npm install --no-audit --no-fund
-          fi
-
-      - name: npm ls @noble/hashes
-        run: npm ls @noble/hashes --all || true
-
-      - name: npm ls viem @solana/web3.js
-        run: npm ls viem @solana/web3.js --all || true
-
-      - name: Every @noble/hashes package.json in tree
-        run: |
-          find node_modules -path "*/@noble/hashes/package.json" | while read f; do
-            echo "=== $f ==="
-            node -p "const p=require('./$f'); JSON.stringify({version:p.version, exports:p.exports}, null, 2)"
-            echo
-          done
-
-      - name: Legacy v1-style sha* imports
-        run: |
-          grep -rEn "@noble/hashes/(sha256|sha512|sha3|blake[0-9]+|hmac|hkdf|pbkdf2|ripemd160)[\"']" node_modules \
-            --include="*.js" --include="*.cjs" --include="*.mjs" \
-            | grep -vE "\.(js|cjs|mjs)[\"']" || echo "none"
-
-      - name: New v2-style sha*.js imports
-        run: |
-          grep -rEn "@noble/hashes/(sha256|sha512|sha3|blake[0-9]+|hmac|hkdf|pbkdf2|ripemd160)\.js" node_modules \
-            --include="*.js" --include="*.cjs" --include="*.mjs" || echo "none"
+          rm -rf node_modules package-lock.json
+          npm install --no-audit --no-fund
 
       - name: Build
         run: npm run build:all
