@@ -2,56 +2,32 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import * as anchor from '@coral-xyz/anchor';
 import { Connection, PublicKey, SystemProgram } from '@solana/web3.js';
 import idl from '../idl/flipsy.json';
- 
-// ============================================================
-// CONFIG
-// ============================================================
-const PROGRAM_ID = new PublicKey('71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs');
 
+const PROGRAM_ID = new PublicKey('71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs');
 const FLIPSY_RPC = 'https://api.devnet.solana.com';
 const PRICE_URL = 'https://api.coinbase.com/v2/prices/SOL-USD/spot';
-
 const POLL_PRICE_MS = 2_500;
 const POLL_CHAIN_MS = 5_000;
-
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const PRICE_SCALE = 1e8;
-
 const DEFAULT_BETTING_DURATION = 900;
 const DEFAULT_GAP_DURATION = 30;
 const DEFAULT_CLAIM_FORFEIT_DELAY = 21_600;
-
 const RECENT_ROUNDS_COUNT = 10;
 
-// ============================================================
-// PDA HELPERS
-// ============================================================
 const u64Buf = (n) => new anchor.BN(n).toArrayLike(Buffer, 'le', 8);
-
 const findConfigPda = () =>
   PublicKey.findProgramAddressSync([Buffer.from('config')], PROGRAM_ID)[0];
-
 const findRoundPda = (epoch) =>
-  PublicKey.findProgramAddressSync(
-    [Buffer.from('round'), u64Buf(epoch)],
-    PROGRAM_ID,
-  )[0];
-
+  PublicKey.findProgramAddressSync([Buffer.from('round'), u64Buf(epoch)], PROGRAM_ID)[0];
 const findVaultPda = (epoch) =>
-  PublicKey.findProgramAddressSync(
-    [Buffer.from('vault'), u64Buf(epoch)],
-    PROGRAM_ID,
-  )[0];
-
+  PublicKey.findProgramAddressSync([Buffer.from('vault'), u64Buf(epoch)], PROGRAM_ID)[0];
 const findBetPda = (epoch, user, betIndex) =>
   PublicKey.findProgramAddressSync(
     [Buffer.from('bet'), u64Buf(epoch), user.toBuffer(), u64Buf(betIndex)],
     PROGRAM_ID,
   )[0];
 
-// ============================================================
-// CONVERSION HELPERS
-// ============================================================
 const bnToNumber = (bn) => {
   if (bn == null) return 0;
   if (typeof bn === 'number') return bn;
@@ -64,21 +40,16 @@ const lamportsToSol = (l) => bnToNumber(l) / LAMPORTS_PER_SOL;
 const chainPriceToUsd = (p) => bnToNumber(p) / PRICE_SCALE;
 const solToUsd = (sol, pricePerSol) => sol * (pricePerSol || 0);
 
-// Coerce anything resembling a Solana address into a real PublicKey.
-// This is the fix for the "undefined is not an object (evaluating 'e._bn')"
-// crash — host apps (Nexus) hand us publicKey as a base58 STRING, and
-// Anchor's tx serializer expects a PublicKey instance with a `_bn` field.
+// Coerce string/PublicKey-like into a real PublicKey.
 function toPubkey(x) {
   if (!x) return null;
   if (x instanceof PublicKey) return x;
   if (typeof x === 'string') {
     try { return new PublicKey(x); } catch (_) { return null; }
   }
-  // Some adapters wrap pubkey in a getter; handle common shapes:
   if (typeof x?.toBase58 === 'function') {
     try { return new PublicKey(x.toBase58()); } catch (_) { return null; }
   }
-  if (x?._bn) return x; // already a PublicKey-like
   return null;
 }
 
@@ -90,7 +61,6 @@ function outcomeStr(outcome) {
   if ('allLost' in outcome) return 'allLost';
   return 'unresolved';
 }
-
 function sideToVariant(side) {
   return side === 'heads' ? { heads: {} } : { tails: {} };
 }
@@ -98,13 +68,10 @@ function sideToVariant(side) {
 function mapRound(r, livePrice) {
   const headsSol = lamportsToSol(r.headsPool);
   const tailsSol = lamportsToSol(r.tailsPool);
-  const lockPrice = chainPriceToUsd(r.lockPrice);
-  const closePrice = chainPriceToUsd(r.closePrice);
-
   return {
     epoch: bnToNumber(r.epoch),
-    lockPrice,
-    closePrice,
+    lockPrice: chainPriceToUsd(r.lockPrice),
+    closePrice: chainPriceToUsd(r.closePrice),
     startTime: bnToNumber(r.startTime),
     lockTime: bnToNumber(r.lockTime),
     closeTime: bnToNumber(r.closeTime),
@@ -135,14 +102,8 @@ function stubRound(epoch, expectedStartTime, bettingDuration, gapDuration) {
   };
 }
 
-// ============================================================
-// HOOK
-// ============================================================
 export function useFlipsy(wallet) {
-  const connection = useMemo(
-    () => new Connection(FLIPSY_RPC, 'confirmed'),
-    [],
-  );
+  const connection = useMemo(() => new Connection(FLIPSY_RPC, 'confirmed'), []);
 
   const [livePrice, setLivePrice] = useState(0);
   const [liveRound, setLiveRound] = useState(null);
@@ -154,47 +115,50 @@ export function useFlipsy(wallet) {
   const [programConfig, setProgramConfig] = useState(null);
   const livePriceRef = useRef(0);
 
-  // Stable string key for the wallet's pubkey so useMemo/useEffect don't
-  // recompute on every render when the adapter hands us a new PublicKey
-  // instance with the same underlying value.
+  // Stable string key for the wallet's pubkey so memos don't rebuild
+  // every render (adapters often hand a fresh PublicKey instance each time).
   const walletPkStr = useMemo(() => {
     const pk = toPubkey(wallet?.publicKey);
     return pk ? pk.toBase58() : null;
   }, [wallet?.publicKey]);
 
-  const program = useMemo(() => {
+  // READ-ONLY program — works without a wallet. Lets us show live rounds
+  // before connect, and isolates "no wallet" from "no data".
+  // NOT wrapped in try/catch — if this throws, your existing hookError
+  // banner will display the real message instead of an empty screen.
+  const readProgram = useMemo(() => {
+    const dummyWallet = {
+      publicKey: PROGRAM_ID,
+      signTransaction: async () => { throw new Error('read-only'); },
+      signAllTransactions: async () => { throw new Error('read-only'); },
+    };
+    const provider = new anchor.AnchorProvider(
+      connection, dummyWallet,
+      { commitment: 'confirmed', preflightCommitment: 'confirmed' },
+    );
+    const idlWithAddress = { ...idl, address: PROGRAM_ID.toBase58() };
+    return new anchor.Program(idlWithAddress, provider);
+  }, [connection]);
+
+  // WRITE program — only built when wallet is ready.
+  const writeProgram = useMemo(() => {
     if (!walletPkStr) return null;
     if (typeof wallet?.signTransaction !== 'function') return null;
-
-    try {
-      const pk = new PublicKey(walletPkStr);
-
-      // Anchor expects a Wallet-shaped object: { publicKey, signTransaction,
-      // signAllTransactions }. Host wallets often forget signAllTransactions
-      // or pass publicKey as a string — patch both.
-      const wrappedWallet = {
-        publicKey: pk,
-        signTransaction: wallet.signTransaction.bind(wallet),
-        signAllTransactions:
-          typeof wallet.signAllTransactions === 'function'
-            ? wallet.signAllTransactions.bind(wallet)
-            : async (txs) => Promise.all(txs.map((t) => wallet.signTransaction(t))),
-      };
-
-      const provider = new anchor.AnchorProvider(
-        connection,
-        wrappedWallet,
-        { commitment: 'confirmed', preflightCommitment: 'confirmed' },
-      );
-
-      // Anchor 0.30+ reads the programId from a top-level `address` field on
-      // the IDL. Inject it so we don't have to edit the JSON.
-      const idlWithAddress = { ...idl, address: PROGRAM_ID.toBase58() };
-      return new anchor.Program(idlWithAddress, provider);
-    } catch (e) {
-      console.error('[flipsy] program init failed:', e);
-      return null;
-    }
+    const pk = new PublicKey(walletPkStr);
+    const wrappedWallet = {
+      publicKey: pk,
+      signTransaction: wallet.signTransaction.bind(wallet),
+      signAllTransactions:
+        typeof wallet.signAllTransactions === 'function'
+          ? wallet.signAllTransactions.bind(wallet)
+          : async (txs) => Promise.all(txs.map((t) => wallet.signTransaction(t))),
+    };
+    const provider = new anchor.AnchorProvider(
+      connection, wrappedWallet,
+      { commitment: 'confirmed', preflightCommitment: 'confirmed' },
+    );
+    const idlWithAddress = { ...idl, address: PROGRAM_ID.toBase58() };
+    return new anchor.Program(idlWithAddress, provider);
   }, [connection, walletPkStr, wallet?.signTransaction]);
 
   // -------- POLL COINBASE --------
@@ -217,20 +181,15 @@ export function useFlipsy(wallet) {
     return () => { cancelled = true; clearInterval(i); };
   }, []);
 
-  // -------- POLL CHAIN STATE --------
+  // -------- POLL CHAIN STATE (uses read-only program; works with or w/o wallet) --------
   useEffect(() => {
-    if (!program) {
-      // No wallet / program yet — release the loading state so the UI
-      // shows something other than the perpetual spinner.
-      setLoading(false);
-      return;
-    }
+    if (!readProgram) return;
     let cancelled = false;
 
     async function fetchState() {
       try {
         const configPda = findConfigPda();
-        const config = await program.account.config.fetch(configPda);
+        const config = await readProgram.account.config.fetch(configPda);
         const currentEpoch = bnToNumber(config.currentEpoch);
         const price = livePriceRef.current;
 
@@ -241,7 +200,7 @@ export function useFlipsy(wallet) {
         let live = null;
         if (currentEpoch > 0) {
           try {
-            const r = await program.account.round.fetch(findRoundPda(currentEpoch));
+            const r = await readProgram.account.round.fetch(findRoundPda(currentEpoch));
             live = mapRound(r, price);
             if (live.outcome !== 'unresolved') live = null;
           } catch (_) {}
@@ -253,7 +212,7 @@ export function useFlipsy(wallet) {
         const upcoming = await Promise.all(
           upcomingEpochs.map(async (e, idx) => {
             try {
-              const r = await program.account.round.fetch(findRoundPda(e));
+              const r = await readProgram.account.round.fetch(findRoundPda(e));
               const mapped = mapRound(r, price);
               if (mapped.outcome !== 'unresolved') return null;
               return mapped;
@@ -271,11 +230,10 @@ export function useFlipsy(wallet) {
           if (currentEpoch - i > 0) recentEpochs.push(currentEpoch - i);
         }
         const allRecent = currentEpoch > 0 ? [currentEpoch, ...recentEpochs] : recentEpochs;
-
         const recents = await Promise.all(
           allRecent.map(async (e) => {
             try {
-              const r = await program.account.round.fetch(findRoundPda(e));
+              const r = await readProgram.account.round.fetch(findRoundPda(e));
               const m = mapRound(r, price);
               return m.outcome === 'unresolved' ? null : m;
             } catch (_) { return null; }
@@ -286,7 +244,7 @@ export function useFlipsy(wallet) {
         let userBetsMap = {};
         if (walletPk) {
           try {
-            const bets = await program.account.bet.all([
+            const bets = await readProgram.account.bet.all([
               { memcmp: { offset: 8, bytes: walletPk.toBase58() } },
             ]);
             for (const b of bets) {
@@ -342,22 +300,19 @@ export function useFlipsy(wallet) {
     fetchState();
     const i = setInterval(fetchState, POLL_CHAIN_MS);
     return () => { cancelled = true; clearInterval(i); };
-  }, [program, walletPkStr, connection, wallet]);
+  }, [readProgram, walletPkStr, connection, wallet]);
 
   // -------- PLACE BET --------
   const placeBet = useCallback(async (epoch, side, usdAmount) => {
-    if (!program) throw new Error('Connect your wallet first');
+    if (!writeProgram) throw new Error('Connect your wallet first');
     const walletPk = toPubkey(wallet?.publicKey);
     if (!walletPk) throw new Error('Wallet public key unavailable');
-
     const price = livePriceRef.current;
     if (!price) throw new Error('Price not loaded yet, try again in a sec');
 
     const solAmount = usdAmount / price;
     const lamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
-    if (!Number.isFinite(lamports) || lamports <= 0) {
-      throw new Error('Invalid bet amount');
-    }
+    if (!Number.isFinite(lamports) || lamports <= 0) throw new Error('Invalid bet amount');
 
     const existingBets = userBets[epoch] || [];
     const betIndex = existingBets.length > 0
@@ -370,7 +325,7 @@ export function useFlipsy(wallet) {
     const betPda = findBetPda(epoch, walletPk, betIndex);
 
     try {
-      const tx = await program.methods
+      return await writeProgram.methods
         .placeBet(
           new anchor.BN(epoch),
           new anchor.BN(betIndex),
@@ -378,25 +333,20 @@ export function useFlipsy(wallet) {
           sideToVariant(side),
         )
         .accounts({
-          config: configPda,
-          round: roundPda,
-          vault: vaultPda,
-          bet: betPda,
-          user: walletPk,
-          systemProgram: SystemProgram.programId,
+          config: configPda, round: roundPda, vault: vaultPda, bet: betPda,
+          user: walletPk, systemProgram: SystemProgram.programId,
         })
         .rpc();
-      return tx;
     } catch (e) {
       const msg = e?.error?.errorMessage || e?.message || 'Bet failed';
       console.error('[flipsy] placeBet error:', e);
       throw new Error(msg);
     }
-  }, [program, wallet, userBets]);
+  }, [writeProgram, wallet, userBets]);
 
   // -------- CLAIM --------
   const claim = useCallback(async (epoch) => {
-    if (!program) throw new Error('Connect your wallet first');
+    if (!writeProgram) throw new Error('Connect your wallet first');
     const walletPk = toPubkey(wallet?.publicKey);
     if (!walletPk) throw new Error('Wallet public key unavailable');
 
@@ -408,7 +358,7 @@ export function useFlipsy(wallet) {
     let resolvedAt = 0;
     let claimForfeitDelay = DEFAULT_CLAIM_FORFEIT_DELAY;
     try {
-      const roundData = await program.account.round.fetch(roundPda);
+      const roundData = await writeProgram.account.round.fetch(roundPda);
       resolvedAt = bnToNumber(roundData.resolvedAt);
     } catch (e) {
       console.warn('[flipsy] could not fetch round for deadline check:', e);
@@ -417,7 +367,7 @@ export function useFlipsy(wallet) {
     const configPda = findConfigPda();
     let authority;
     try {
-      const config = await program.account.config.fetch(configPda);
+      const config = await writeProgram.account.config.fetch(configPda);
       authority = toPubkey(config.authority);
       claimForfeitDelay = bnToNumber(config.claimForfeitDelay) || DEFAULT_CLAIM_FORFEIT_DELAY;
     } catch (e) {
@@ -431,20 +381,15 @@ export function useFlipsy(wallet) {
     }
 
     const vaultPda = findVaultPda(epoch);
-
     let lastTx = null;
     for (const bet of unclaimedBets) {
       const betPda = findBetPda(epoch, walletPk, bet.betIndex);
       try {
-        lastTx = await program.methods
+        lastTx = await writeProgram.methods
           .claim()
           .accounts({
-            config: configPda,
-            round: roundPda,
-            bet: betPda,
-            vault: vaultPda,
-            authority,
-            user: walletPk,
+            config: configPda, round: roundPda, bet: betPda, vault: vaultPda,
+            authority, user: walletPk,
           })
           .rpc();
       } catch (e) {
@@ -454,18 +399,10 @@ export function useFlipsy(wallet) {
       }
     }
     return lastTx;
-  }, [program, wallet, userBets]);
+  }, [writeProgram, wallet, userBets]);
 
   return {
-    livePrice,
-    liveRound,
-    upcomingRounds,
-    recentRounds,
-    userBets,
-    balance,
-    placeBet,
-    claim,
-    loading,
-    programConfig,
+    livePrice, liveRound, upcomingRounds, recentRounds, userBets, balance,
+    placeBet, claim, loading, programConfig,
   };
 }
