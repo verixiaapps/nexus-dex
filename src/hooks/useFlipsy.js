@@ -8,10 +8,7 @@ import idl from '../idl/flipsy.json';
 // ============================================================
 const PROGRAM_ID = new PublicKey('71bEAUToad7j8k8As9LwsGWBYTLxVJoP2SBNB3S3RLHs');
 
-// Devnet RPC. For mainnet, swap to your Helius URL:
-//   https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
 const FLIPSY_RPC = 'https://api.devnet.solana.com';
-
 const PRICE_URL = 'https://api.coinbase.com/v2/prices/SOL-USD/spot';
 
 const POLL_PRICE_MS = 2_500;
@@ -20,7 +17,6 @@ const POLL_CHAIN_MS = 5_000;
 const LAMPORTS_PER_SOL = 1_000_000_000;
 const PRICE_SCALE = 1e8;
 
-// Frontend defaults — auto-overridden by on-chain config once loaded.
 const DEFAULT_BETTING_DURATION = 900;
 const DEFAULT_GAP_DURATION = 30;
 const DEFAULT_CLAIM_FORFEIT_DELAY = 21_600;
@@ -56,10 +52,35 @@ const findBetPda = (epoch, user, betIndex) =>
 // ============================================================
 // CONVERSION HELPERS
 // ============================================================
-const bnToNumber = (bn) => (typeof bn === 'object' && bn.toNumber) ? bn.toNumber() : Number(bn);
+const bnToNumber = (bn) => {
+  if (bn == null) return 0;
+  if (typeof bn === 'number') return bn;
+  if (typeof bn.toNumber === 'function') {
+    try { return bn.toNumber(); } catch (_) { return Number(bn.toString()); }
+  }
+  return Number(bn);
+};
 const lamportsToSol = (l) => bnToNumber(l) / LAMPORTS_PER_SOL;
 const chainPriceToUsd = (p) => bnToNumber(p) / PRICE_SCALE;
 const solToUsd = (sol, pricePerSol) => sol * (pricePerSol || 0);
+
+// Coerce anything resembling a Solana address into a real PublicKey.
+// This is the fix for the "undefined is not an object (evaluating 'e._bn')"
+// crash — host apps (Nexus) hand us publicKey as a base58 STRING, and
+// Anchor's tx serializer expects a PublicKey instance with a `_bn` field.
+function toPubkey(x) {
+  if (!x) return null;
+  if (x instanceof PublicKey) return x;
+  if (typeof x === 'string') {
+    try { return new PublicKey(x); } catch (_) { return null; }
+  }
+  // Some adapters wrap pubkey in a getter; handle common shapes:
+  if (typeof x?.toBase58 === 'function') {
+    try { return new PublicKey(x.toBase58()); } catch (_) { return null; }
+  }
+  if (x?._bn) return x; // already a PublicKey-like
+  return null;
+}
 
 function outcomeStr(outcome) {
   if (!outcome) return 'unresolved';
@@ -133,18 +154,48 @@ export function useFlipsy(wallet) {
   const [programConfig, setProgramConfig] = useState(null);
   const livePriceRef = useRef(0);
 
+  // Stable string key for the wallet's pubkey so useMemo/useEffect don't
+  // recompute on every render when the adapter hands us a new PublicKey
+  // instance with the same underlying value.
+  const walletPkStr = useMemo(() => {
+    const pk = toPubkey(wallet?.publicKey);
+    return pk ? pk.toBase58() : null;
+  }, [wallet?.publicKey]);
+
   const program = useMemo(() => {
-    if (!wallet?.publicKey || !wallet?.signTransaction) return null;
-    const provider = new anchor.AnchorProvider(
-      connection, wallet,
-      { commitment: 'confirmed', preflightCommitment: 'confirmed' },
-    );
-    // anchor 0.30+ reads the programId from a top-level `address` field on
-    // the IDL — the legacy `(idl, programId, provider)` constructor was
-    // removed. Inject the address here so we don't have to edit the JSON.
-    const idlWithAddress = { ...idl, address: PROGRAM_ID.toBase58() };
-    return new anchor.Program(idlWithAddress, provider);
-  }, [connection, wallet?.publicKey, wallet?.signTransaction]);
+    if (!walletPkStr) return null;
+    if (typeof wallet?.signTransaction !== 'function') return null;
+
+    try {
+      const pk = new PublicKey(walletPkStr);
+
+      // Anchor expects a Wallet-shaped object: { publicKey, signTransaction,
+      // signAllTransactions }. Host wallets often forget signAllTransactions
+      // or pass publicKey as a string — patch both.
+      const wrappedWallet = {
+        publicKey: pk,
+        signTransaction: wallet.signTransaction.bind(wallet),
+        signAllTransactions:
+          typeof wallet.signAllTransactions === 'function'
+            ? wallet.signAllTransactions.bind(wallet)
+            : async (txs) => Promise.all(txs.map((t) => wallet.signTransaction(t))),
+      };
+
+      const provider = new anchor.AnchorProvider(
+        connection,
+        wrappedWallet,
+        { commitment: 'confirmed', preflightCommitment: 'confirmed' },
+      );
+
+      // Anchor 0.30+ reads the programId from a top-level `address` field on
+      // the IDL. Inject it so we don't have to edit the JSON.
+      const idlWithAddress = { ...idl, address: PROGRAM_ID.toBase58() };
+      return new anchor.Program(idlWithAddress, provider);
+    } catch (e) {
+      console.error('[flipsy] program init failed:', e);
+      return null;
+    }
+  }, [connection, walletPkStr, wallet?.signTransaction]);
 
   // -------- POLL COINBASE --------
   useEffect(() => {
@@ -168,7 +219,12 @@ export function useFlipsy(wallet) {
 
   // -------- POLL CHAIN STATE --------
   useEffect(() => {
-    if (!program) return;
+    if (!program) {
+      // No wallet / program yet — release the loading state so the UI
+      // shows something other than the perpetual spinner.
+      setLoading(false);
+      return;
+    }
     let cancelled = false;
 
     async function fetchState() {
@@ -226,11 +282,12 @@ export function useFlipsy(wallet) {
           }),
         );
 
+        const walletPk = toPubkey(wallet?.publicKey);
         let userBetsMap = {};
-        if (wallet?.publicKey) {
+        if (walletPk) {
           try {
             const bets = await program.account.bet.all([
-              { memcmp: { offset: 8, bytes: wallet.publicKey.toBase58() } },
+              { memcmp: { offset: 8, bytes: walletPk.toBase58() } },
             ]);
             for (const b of bets) {
               const epoch = bnToNumber(b.account.epoch);
@@ -252,9 +309,9 @@ export function useFlipsy(wallet) {
         }
 
         let walletBalanceUsd = 0;
-        if (wallet?.publicKey) {
+        if (walletPk) {
           try {
-            const lamports = await connection.getBalance(wallet.publicKey);
+            const lamports = await connection.getBalance(walletPk);
             walletBalanceUsd = solToUsd(lamportsToSol(lamports), price);
           } catch (_) {}
         }
@@ -275,25 +332,32 @@ export function useFlipsy(wallet) {
           claimForfeitDelay,
           paused: config.paused,
         });
-        setLoading(false);
       } catch (e) {
         console.error('[flipsy] state fetch error:', e);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     }
 
     fetchState();
     const i = setInterval(fetchState, POLL_CHAIN_MS);
     return () => { cancelled = true; clearInterval(i); };
-  }, [program, wallet?.publicKey, connection]);
+  }, [program, walletPkStr, connection, wallet]);
 
   // -------- PLACE BET --------
   const placeBet = useCallback(async (epoch, side, usdAmount) => {
-    if (!program || !wallet?.publicKey) throw new Error('Connect your wallet first');
+    if (!program) throw new Error('Connect your wallet first');
+    const walletPk = toPubkey(wallet?.publicKey);
+    if (!walletPk) throw new Error('Wallet public key unavailable');
+
     const price = livePriceRef.current;
     if (!price) throw new Error('Price not loaded yet, try again in a sec');
 
     const solAmount = usdAmount / price;
     const lamports = Math.floor(solAmount * LAMPORTS_PER_SOL);
+    if (!Number.isFinite(lamports) || lamports <= 0) {
+      throw new Error('Invalid bet amount');
+    }
 
     const existingBets = userBets[epoch] || [];
     const betIndex = existingBets.length > 0
@@ -303,7 +367,7 @@ export function useFlipsy(wallet) {
     const configPda = findConfigPda();
     const roundPda = findRoundPda(epoch);
     const vaultPda = findVaultPda(epoch);
-    const betPda = findBetPda(epoch, wallet.publicKey, betIndex);
+    const betPda = findBetPda(epoch, walletPk, betIndex);
 
     try {
       const tx = await program.methods
@@ -318,7 +382,7 @@ export function useFlipsy(wallet) {
           round: roundPda,
           vault: vaultPda,
           bet: betPda,
-          user: wallet.publicKey,
+          user: walletPk,
           systemProgram: SystemProgram.programId,
         })
         .rpc();
@@ -328,11 +392,13 @@ export function useFlipsy(wallet) {
       console.error('[flipsy] placeBet error:', e);
       throw new Error(msg);
     }
-  }, [program, wallet?.publicKey, userBets]);
+  }, [program, wallet, userBets]);
 
   // -------- CLAIM --------
   const claim = useCallback(async (epoch) => {
-    if (!program || !wallet?.publicKey) throw new Error('Connect your wallet first');
+    if (!program) throw new Error('Connect your wallet first');
+    const walletPk = toPubkey(wallet?.publicKey);
+    if (!walletPk) throw new Error('Wallet public key unavailable');
 
     const betsForEpoch = userBets[epoch] || [];
     const unclaimedBets = betsForEpoch.filter(b => !b.claimed);
@@ -352,11 +418,12 @@ export function useFlipsy(wallet) {
     let authority;
     try {
       const config = await program.account.config.fetch(configPda);
-      authority = config.authority;
+      authority = toPubkey(config.authority);
       claimForfeitDelay = bnToNumber(config.claimForfeitDelay) || DEFAULT_CLAIM_FORFEIT_DELAY;
     } catch (e) {
       throw new Error('Failed to load program config');
     }
+    if (!authority) throw new Error('Program authority missing');
 
     const nowTs = Math.floor(Date.now() / 1000);
     if (resolvedAt > 0 && nowTs > resolvedAt + claimForfeitDelay) {
@@ -367,7 +434,7 @@ export function useFlipsy(wallet) {
 
     let lastTx = null;
     for (const bet of unclaimedBets) {
-      const betPda = findBetPda(epoch, wallet.publicKey, bet.betIndex);
+      const betPda = findBetPda(epoch, walletPk, bet.betIndex);
       try {
         lastTx = await program.methods
           .claim()
@@ -377,7 +444,7 @@ export function useFlipsy(wallet) {
             bet: betPda,
             vault: vaultPda,
             authority,
-            user: wallet.publicKey,
+            user: walletPk,
           })
           .rpc();
       } catch (e) {
@@ -387,7 +454,7 @@ export function useFlipsy(wallet) {
       }
     }
     return lastTx;
-  }, [program, wallet?.publicKey, userBets]);
+  }, [program, wallet, userBets]);
 
   return {
     livePrice,
