@@ -1,4 +1,3 @@
-cross chain crypto platform
 cross chain token exchange
 cross chain token routing
 cross chain liquidity routing
