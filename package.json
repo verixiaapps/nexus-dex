@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "proxy": "http://localhost:3001",
+  "overrides": {
+    "@noble/hashes": "^1.8.0"
+  },
   "dependencies": {
     "@chainflip/sdk": "^2.1.1",
     "@coral-xyz/anchor": "^0.29.0",
@@ -28,6 +31,7 @@
     "crypto-browserify": "^3.12.1",
     "dotenv": "^16.4.7",
     "esbuild": "^0.25.0",
+    "events": "^3.3.0",
     "express": "^4.21.2",
     "express-rate-limit": "^7.5.0",
     "https-browserify": "^1.0.0",
