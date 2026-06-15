@@ -1,82 +1,100 @@
 name: Fix noble hashes ESM crash
 
 on:
-  workflow_dispatch:
+ workflow_dispatch:
 
 permissions:
-  contents: write
+ contents: write
 
 jobs:
-  fix:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+ fix:
+   runs-on: ubuntu-latest
+   timeout-minutes: 15
 
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
+   steps:
+     - uses: actions/checkout@v4
+       with:
+         token: ${{ secrets.GITHUB_TOKEN }}
+     - uses: actions/setup-node@v4
+       with:
+         node-version: "20"
 
-      - name: Pin @noble/hashes to v1 (last CJS-compatible)
-        run: |
-          node <<'EOF'
-          const fs = require('fs');
-          const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-          const T = '1.5.0';
-          p.overrides = p.overrides || {};
-          p.overrides['@noble/hashes'] = T;
-          for (const k of ['dependencies','devDependencies']) {
-            if (p[k] && p[k]['@noble/hashes']) {
-              console.log(`${k}.@noble/hashes: ${p[k]['@noble/hashes']} -> ${T}`);
-              p[k]['@noble/hashes'] = T;
-            }
-          }
-          fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
-          EOF
-          cat package.json
+     - name: Pin @noble/hashes to v1 (last CJS-compatible)
+       run: |
+         node <<'EOF'
+         const fs = require('fs');
+         const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+         const T = '1.5.0';
+         p.overrides = p.overrides || {};
+         p.overrides['@noble/hashes'] = T;
+         for (const k of ['dependencies','devDependencies']) {
+           if (p[k] && p[k]['@noble/hashes']) {
+             console.log(`${k}.@noble/hashes: ${p[k]['@noble/hashes']} -> ${T}`);
+             p[k]['@noble/hashes'] = T;
+           }
+         }
+         fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+         EOF
+         cat package.json
 
-      - name: Wipe and reinstall
-        run: |
-          rm -rf node_modules package-lock.json
-          npm install --no-audit --no-fund
+     - name: Wipe and reinstall
+       run: |
+         rm -rf node_modules package-lock.json
+         npm install --no-audit --no-fund
 
-      - name: Verify only one noble/hashes version, and it's 1.x
-        run: |
-          npm ls @noble/hashes --all 2>&1 || true
-          VER=$(node -e "console.log(require('@noble/hashes/package.json').version)")
-          echo "Installed: $VER"
-          case "$VER" in
-            1.*) echo "OK: 1.x";;
-            *) echo "FAIL: not 1.x"; exit 1;;
-          esac
+     - name: Verify only one noble/hashes version, and it's 1.x
+       run: |
+         npm ls @noble/hashes --all 2>&1 || true
+         VER=$(node -e "
+           const fs = require('fs');
+           const path = require('path');
+           const p = require.resolve('@noble/hashes/utils');
+           let d = path.dirname(p);
+           while (d !== '/') {
+             const pj = path.join(d, 'package.json');
+             if (fs.existsSync(pj) && d.endsWith('@noble/hashes')) {
+               console.log(JSON.parse(fs.readFileSync(pj, 'utf8')).version);
+               process.exit(0);
+             }
+             d = path.dirname(d);
+           }
+         ")
+         echo \"Installed: \$VER\"
+         case \"\$VER\" in
+           1.*) echo 'OK: 1.x' ;;
+           *) echo 'FAIL: not 1.x'; exit 1 ;;
+         esac
 
-      - name: Smoke 1 — chainflip/utils loads (the crash site)
-        run: node -e "require('@chainflip/utils/dist/ss58.cjs'); console.log('OK');"
+     - name: Smoke 1 — chainflip/utils loads (the crash site)
+       run: node -e "require('@chainflip/utils/dist/ss58.cjs'); console.log('OK');"
 
-      - name: Smoke 2 — pump-sdk still loads (don't regress prior fix)
-        run: node -e "require('@pump-fun/pump-sdk'); console.log('OK');"
+     - name: Smoke 2 — pump-sdk still loads (don't regress prior fix)
+       run: node -e "require('@pump-fun/pump-sdk'); console.log('OK');"
 
-      - name: Smoke 3 — server.js loads
-        run: |
-          if [ -f server.js ]; then
-            node -e "
-            try { require('./server.js'); console.log('OK'); }
-            catch (e) {
-              if (/env|ENV|RPC|KEYPAIR|HELIUS|listen|EADDR/i.test(e.message)) {
-                console.log('OK (runtime check):', e.message);
-              } else { console.error('FAIL:', e.stack); process.exit(1); }
-            }
-            "
-          fi
+     - name: Smoke 3 — server.js loads
+       run: |
+         if [ -f server.js ]; then
+           node -e "
+           try { require('./server.js'); console.log('OK'); }
+           catch (e) {
+             if (/env|ENV|RPC|KEYPAIR|HELIUS|listen|EADDR/i.test(e.message)) {
+               console.log('OK (runtime check):', e.message);
+             } else { console.error('FAIL:', e.stack); process.exit(1); }
+           }
+           "
+         fi
 
-      - name: Commit to main
-        run: |
-          if git diff --quiet package.json && git diff --quiet package-lock.json; then
-            echo "::notice::No changes"; exit 0
-          fi
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json package-lock.json
-          git commit -m "fix: pin @noble/hashes to 1.
+     - name: Commit to main
+       run: |
+         if git diff --quiet package.json && git diff --quiet package-lock.json; then
+           echo "::notice::No changes"; exit 0
+         fi
+         git config user.name "github-actions[bot]"
+         git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+         git add package.json package-lock.json
+         git commit -m "fix: pin @noble/hashes to 1.5.0 (CJS compat)
+
+         @chainflip/utils ships CJS and does require('@noble/hashes/blake2.js').
+         @noble/hashes v2 is ESM-only, causing ERR_REQUIRE_ESM at startup.
+         Pin to 1.5.0 via npm overrides until chainflip ships ESM build."
+         git push origin HEAD:main
