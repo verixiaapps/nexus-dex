@@ -1,0 +1,123 @@
+name: Diagnose pump-swap-sdk crash
+
+on:
+ workflow_dispatch:
+   inputs:
+     entrypoint:
+       description: "App entrypoint (e.g. dist/index.js, src/index.ts, index.js)"
+       required: false
+       default: ""
+
+jobs:
+ diagnose:
+   runs-on: ubuntu-latest
+   timeout-minutes: 10
+
+   steps:
+     - name: Checkout
+       uses: actions/checkout@v4
+
+     - name: Setup Node 22
+       uses: actions/setup-node@v4
+       with:
+         node-version: "22"
+
+     - name: Show package.json deps
+       run: |
+         echo "=== dependencies ==="
+         node -e "const p=require('./package.json'); console.log(JSON.stringify({...p.dependencies, ...p.devDependencies}, null, 2))" || true
+
+     - name: Install
+       run: |
+         if [ -f pnpm-lock.yaml ]; then
+           npm i -g pnpm && pnpm install --frozen-lockfile
+         elif [ -f yarn.lock ]; then
+           corepack enable && yarn install --frozen-lockfile
+         else
+           npm ci || npm install
+         fi
+
+     - name: Find pump SDK usage in your code
+       run: |
+         echo "=== files importing @pump-fun/* ==="
+         grep -rEn "@pump-fun/(pump-sdk|pump-swap-sdk)" \
+           --include="*.ts" --include="*.js" --include="*.mjs" --include="*.cjs" \
+           --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git \
+           . || echo "(no matches)"
+
+         echo ""
+         echo "=== symbols used from pump SDKs ==="
+         grep -rEn "(getPumpAmmProgram|PumpAmmSdk|PumpSdk|OnlinePumpSdk|PUMP_AMM_PROGRAM|PUMP_PROGRAM)" \
+           --include="*.ts" --include="*.js" --include="*.mjs" --include="*.cjs" \
+           --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git \
+           . || echo "(no matches)"
+
+     - name: Find every env var your code reads
+       run: |
+         echo "=== process.env.* references in source ==="
+         grep -rEoh "process\.env\.[A-Z_][A-Z0-9_]*" \
+           --include="*.ts" --include="*.js" --include="*.mjs" --include="*.cjs" \
+           --exclude-dir=node_modules --exclude-dir=dist --exclude-dir=.git \
+           . | sort -u || true
+
+     - name: Inspect the exact crash site in pump-swap-sdk
+       run: |
+         SDK="node_modules/@pump-fun/pump-swap-sdk/dist/index.js"
+         if [ -f "$SDK" ]; then
+           echo "=== getPumpAmmProgram region (lines 8330-8370) ==="
+           sed -n '8330,8370p' "$SDK" || true
+           echo ""
+           echo "=== module-init region (lines 8880-8910) ==="
+           sed -n '8880,8910p' "$SDK" || true
+         else
+           echo "pump-swap-sdk not installed at expected path"
+           find node_modules/@pump-fun -maxdepth 3 -name "index.js" 2>/dev/null || true
+         fi
+
+     - name: Probe PublicKey construction with empty/bad values
+       run: |
+         node -e "
+         const { PublicKey } = require('@solana/web3.js');
+         for (const v of ['', undefined, null, '0', 'not-base58!']) {
+           try { new PublicKey(v); console.log('OK   ', JSON.stringify(v)); }
+           catch (e) { console.log('THROW', JSON.stringify(v), '->', e.message); }
+         }
+         " || true
+
+     - name: Try to boot the app and capture the crash
+       env:
+         NODE_ENV: production
+       run: |
+         ENTRY='${{ inputs.entrypoint }}'
+         if [ -z "$ENTRY" ]; then
+           ENTRY=$(node -e "const p=require('./package.json'); console.log(p.main || '')")
+         fi
+         if [ -z "$ENTRY" ]; then
+           for c in dist/index.js build/index.js src/index.ts index.js index.ts; do
+             [ -f "$c" ] && ENTRY="$c" && break
+           done
+         fi
+         echo "Booting: $ENTRY"
+
+         if [[ "$ENTRY" == *.ts ]]; then
+           npx --yes tsx "$ENTRY" > boot.log 2>&1 &
+         else
+           node "$ENTRY" > boot.log 2>&1 &
+         fi
+         PID=$!
+         sleep 8
+         if kill -0 $PID 2>/dev/null; then
+           echo "App is running (no startup crash). Killing."
+           kill $PID || true
+         else
+           echo "=== APP CRASHED ON STARTUP ==="
+         fi
+         echo "=== boot.log ==="
+         cat boot.log || true
+
+     - name: Diagnosis summary
+       if: always()
+       run: |
+         echo "::notice::Check the 'env vars' step for every process.env.* your code reads."
+         echo "::notice::Cross-reference against Railway Variables. Any missing or empty one whose name suggests a program ID / pubkey is the cause."
+         echo "::notice::The crash is new PublicKey() receiving an invalid value inside getPumpAmmProgram."
