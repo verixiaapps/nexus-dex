@@ -1,5 +1,5 @@
 // LaunchRadar.jsx — Solana new launches + per-card BUY/SELL modal trade flow.
-//   
+//
 // TRADE PATH: /api/pumpfun/trade (your existing pumpfun-trade.js).
 // Pump.fun bonding curve only. One signature per trade. Atomic 3% SOL fee.
 //
@@ -12,10 +12,6 @@
 //          APPENDED so it runs after the curve has paid native SOL into
 //          the user's wallet. Pump curve pays NATIVE SOL — no WSOL ATA,
 //          no unwrap step.
-//
-// SIM ORDER: user signs first (Phantom opens instantly), then we sim the
-// SIGNED tx before broadcasting. No pre-sign sim — that was blocking the
-// Phantom popup whenever a public RPC throttled simulateTransaction.
 
 import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import { Buffer } from 'buffer';
@@ -372,17 +368,24 @@ function useLrCSS() {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   CONFIG
+   CONFIG — pump.fun bonding curve only. 3% SOL fee → FEE_WALLET, atomic
+   in the same signed tx. No ATAs touched on the fee side — pure
+   SystemProgram.transfer of lamports. The pump SDK on the server
+   handles the token ATA for the trade itself.
    ════════════════════════════════════════════════════════════════════ */
 const SOL_MINT   = 'So11111111111111111111111111111111111111112';
 const FEE_WALLET = new PublicKey('Dd6bKf6SXYQfs24M8evyTXo1MdYrZgbxhk6wWby8NRFV');
-const FEE_BPS    = 300;
+const FEE_BPS    = 300;   // 3%
 
+// Cushion for tx + priority fees + the pump SDK's own associated-token-account
+// creation rent on a first buy of a new mint. ATA rent (~0.00204 SOL) is paid
+// by the user but goes to their OWN token account — not a real loss.
 const SOL_RESERVE = 0.01;
 
 const DEFAULT_BUY_PRESETS  = [0.1, 0.25, 0.5, 1, 2];
 const DEFAULT_SELL_PRESETS = [25, 50, 100];
 
+// ── BALANCE RPC ──────────────────────────────────────────────────────
 const RUNTIME_CFG = (typeof window !== 'undefined' && window.__VERIXIA_CONFIG__) || {};
 const ALCHEMY_RPC =
   (typeof process !== 'undefined' && process.env && process.env.REACT_APP_ALCHEMY_RPC) || '';
@@ -415,34 +418,9 @@ const balRpcRace = (op) => {
   )).catch(() => { throw new Error('All balance RPCs failed'); });
 };
 
-// FEED: 2.5s poll, abort stale, backoff on error, localStorage cache for instant first paint.
-const POLL_RECENT  = 2_500;
-const POLL_SOL     = 20_000;
-const POLL_BALANCE = 20_000;
-
-const RECENT_CACHE_KEY = 'lr_recent_tokens_v1';
-const RECENT_CACHE_MAX_AGE_MS = 5 * 60_000;
-
-function readRecentCache() {
-  try {
-    if (typeof localStorage === 'undefined') return null;
-    const raw = localStorage.getItem(RECENT_CACHE_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed || typeof parsed.ts !== 'number') return null;
-    if (Date.now() - parsed.ts > RECENT_CACHE_MAX_AGE_MS) return null;
-    return Array.isArray(parsed.tokens) && parsed.tokens.length > 0 ? parsed.tokens : null;
-  } catch { return null; }
-}
-function writeRecentCache(tokens) {
-  try {
-    if (typeof localStorage === 'undefined') return;
-    localStorage.setItem(RECENT_CACHE_KEY, JSON.stringify({
-      ts: Date.now(),
-      tokens: tokens.slice(0, 60),
-    }));
-  } catch {}
-}
+const POLL_RECENT  = 5_000;
+const POLL_SOL     = 30_000;
+const POLL_BALANCE = 30_000;
 
 /* ════════════════════════════════════════════════════════════════════
    FORMATTERS
@@ -528,13 +506,12 @@ function normalize(t) {
     ageMs:     am,
     mcap:      Number(t.mcap || t.fdv || 0),
     volume24h: Number(t.volume24h || 0),
-    holders:   0,
+    holders:   0, // DexScreener doesn't expose this directly
     liquidity: Number(t.liquidity || 0),
     decimals:  Number(t.decimals ?? 6),
     pumpPool:  t.pumpPool || 'auto',
     dexId:     t.dexId || null,
     source:    'dexscreener',
-    pairCreatedAt: t.pairCreatedAt || null,
   };
 }
 
@@ -547,7 +524,7 @@ const friendlyError = (err) => {
   if (m.includes('insufficient') || m.includes('debit an account')) return 'Not enough SOL for this trade + fees.';
   if (m.includes('blockhash') || m.includes('expired')) return 'Tx expired — retry.';
   if (m.includes("didn't confirm") || m.includes('not confirm')) return "Sent but didn't confirm — check Solscan before retrying.";
-  if (m.includes('simulation failed') || m.includes('sim failed')) return 'Trade would fail right now — price likely moved.';
+  if (m.includes('simulation failed')) return 'Trade would fail right now — price likely moved.';
   if (m.includes('incorrectprogramid')) return "Pump SDK fee-config stale — try again. If it keeps happening, the server RPC is rate-limited.";
   if (m.includes('rate')) return 'Rate limited — try again.';
   return err?.message?.slice(0, 200) || 'Trade failed.';
@@ -566,7 +543,10 @@ function describeSimLogs(logs, fallbackMsg) {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   PUMP TRADE
+   PUMP.FUN TRADE via PumpPortal — server returns a built v0 tx as
+   base64. Client decompiles it (fetching any address-lookup tables),
+   splices in the 3% SOL fee, recompiles with a fresh blockhash, signs,
+   sends.
    ════════════════════════════════════════════════════════════════════ */
 async function decodeBuiltTx(b64, connection) {
   const txBytes = Buffer.from(b64, 'base64');
@@ -641,7 +621,7 @@ function openTwitterShare(text, url) {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   BADGES
+   SIGNAL / RISK BADGES
    ════════════════════════════════════════════════════════════════════ */
 function deriveSignalBadges(t) {
   const out = [];
@@ -660,7 +640,7 @@ function deriveRiskBadge(t) {
 }
 
 /* ════════════════════════════════════════════════════════════════════
-   ICONS
+   TOKEN ICON
    ════════════════════════════════════════════════════════════════════ */
 const _iconCache = new Map();
 const _iconPending = new Map();
@@ -838,26 +818,37 @@ function SettingsModal({ buyPresets, setBuyPresets, sellPresets, setSellPresets,
 
 /* ════════════════════════════════════════════════════════════════════
    TRADE MODAL
+     BUY  : user enters X SOL. Trade portion sent to server = 0.97 X.
+            Client prepends SystemProgram.transfer of 0.03 X SOL to
+            FEE_WALLET. Total wallet debit = X.
+     SELL : user enters % of holding. Full token amount goes to the
+            pump curve. Client appends SystemProgram.transfer of 3%
+            of expectedSol to FEE_WALLET, after the curve has paid
+            native SOL into the user's wallet.
    ════════════════════════════════════════════════════════════════════ */
 function TradeModal({
-  token, initialMode, onClose, onPreview, onSign,
+  token, initialMode, onClose, onConfirm,
   buyPresets, sellPresets,
   solBalance, tokenBalance, solPrice,
 }) {
   const [mode, setMode] = useState(initialMode || 'buy');
   const [amount, setAmount] = useState('');
-  // stage: 'input' | 'previewing' | 'previewed' | 'signing'
-  const [stage, setStage] = useState('input');
-  const [prepared, setPrepared] = useState(null);
+  const [confirming, setConfirming] = useState(false);
   const [error, setError] = useState(null);
 
-  // Any change to amount/mode invalidates the preview.
-  useEffect(() => { setAmount(''); setError(null); setPrepared(null); setStage('input'); }, [mode]);
-  useEffect(() => { setError(null); setPrepared(null); setStage('input'); }, [amount]);
+  useEffect(() => { setAmount(''); setError(null); }, [mode]);
+  useEffect(() => { setError(null); }, [amount]);
 
   const isBuy = mode === 'buy';
   const presets = isBuy ? buyPresets : sellPresets;
 
+  // BUY  → user enters X SOL.
+  //   totalLamports = X * 1e9               (wallet debit = X)
+  //   tradeLamports = floor(X * 1e9 * 0.97) (to pump curve via server)
+  //   feeLamports   = totalLamports - tradeLamports  (to FEE_WALLET)
+  // SELL → user enters percent.
+  //   tradeTokens   = pct% of holding (raw units) → full sell
+  //   fee in SOL is computed AFTER server returns expectedSol
   const swapParams = useMemo(() => {
     if (!amount) return null;
     const n = Number(amount);
@@ -866,6 +857,10 @@ function TradeModal({
     if (isBuy) {
       const totalLamports = BigInt(Math.floor(n * 1e9));
       if (totalLamports <= 0n) return null;
+      // Pump curve is exact-out-tokens, max-in-SOL. Server slippage = 10% means
+      // the curve may pull up to 1.10× what we send. We need:
+      //   feeLamports + tradeLamports * 1.10 ≤ totalLamports
+      // So size the curve send accordingly.
       const feeLamports   = (totalLamports * BigInt(FEE_BPS)) / 10000n;
       const tradeLamports = ((totalLamports - feeLamports) * 100n) / 110n;
       if (tradeLamports <= 0n || feeLamports <= 0n) return null;
@@ -883,6 +878,12 @@ function TradeModal({
     const tradeTokens = (BigInt(tokenBalance.amount) * BigInt(Math.floor(pct * 100))) / 10000n;
     if (tradeTokens <= 0n) return null;
     const decimals = tokenBalance.decimals || token.decimals || 6;
+    // SELL fee (in SOL) — client-side estimate from token.price and solPrice.
+    // PumpPortal's built tx doesn't return an expected-output value, so we
+    // compute the fee from current price feeds. The appended SystemProgram
+    // transfer runs AFTER the curve pays native SOL into the wallet, so the
+    // wallet just needs `feeLamports - actual_sol_out` worth of pre-trade SOL
+    // headroom — and `actual_sol_out` is usually within a few % of estimate.
     const tradeTokensUi = Number(tradeTokens) / Math.pow(10, decimals);
     let feeLamports = '0';
     if (token?.price > 0 && solPrice > 0) {
@@ -900,6 +901,8 @@ function TradeModal({
     };
   }, [amount, isBuy, token, tokenBalance, solPrice]);
 
+  // Display estimate from the current price feed; the on-chain amount comes
+  // from the pump curve at sign-time. Marked "(est.)".
   const estReceive = useMemo(() => {
     if (!swapParams || !(token?.price > 0) || !(solPrice > 0)) return null;
     if (swapParams.mode === 'buy') {
@@ -918,33 +921,18 @@ function TradeModal({
   const hasFunds = (() => {
     if (!amount || Number(amount) <= 0) return false;
     if (isBuy) return Number(amount) <= availSol;
-    return ownedUiAmount > 0 && (solBalance?.uiAmount || 0) >= 0.003;
+    return ownedUiAmount > 0 && (solBalance?.uiAmount || 0) >= 0.003; // tx + priority
   })();
 
-  const handlePreview = async () => {
-    if (!swapParams || stage !== 'input') return;
-    setStage('previewing');
+  const handleConfirm = async () => {
+    if (!swapParams || confirming) return;
+    setConfirming(true);
     setError(null);
     try {
-      const result = await onPreview({ mode, swapParams, token });
-      setPrepared(result);
-      setStage('previewed');
+      await onConfirm({ mode, swapParams, token });
     } catch (e) {
       setError(friendlyError(e));
-      setStage('input');
-    }
-  };
-
-  const handleSign = async () => {
-    if (!prepared || stage !== 'previewed') return;
-    setStage('signing');
-    setError(null);
-    try {
-      await onSign({ ...prepared, mode, swapParams, token });
-      // modal closes from parent on success
-    } catch (e) {
-      setError(friendlyError(e));
-      setStage('previewed'); // let them retry the sign
+      setConfirming(false);
     }
   };
 
@@ -953,8 +941,7 @@ function TradeModal({
     setAmount(String(Math.floor(availSol * 10000) / 10000));
   };
 
-  const previewDisabled = stage !== 'input' || !swapParams || !hasFunds || !!error;
-  const signDisabled    = stage !== 'previewed' || !prepared;
+  const confirmDisabled = confirming || !swapParams || !hasFunds || !!error;
 
   return (
     <div className="lr-trade-overlay" onClick={onClose}>
@@ -1109,49 +1096,21 @@ function TradeModal({
             <div className="lr-trade-banner lr-trade-banner-error">{error}</div>
           )}
 
-          {stage === 'previewed' && prepared && !error && (
-            <div className="lr-trade-banner lr-trade-banner-info" style={{
-              background: 'rgba(127,255,212,.18)',
-              borderColor: 'rgba(127,255,212,.5)',
-              color: 'var(--green)',
-            }}>
-              <b>✓ Simulation passed.</b> Tx will succeed at current chain state. Click below to sign in your wallet.
-              {prepared.simulatedOut > 0 && (
-                <div style={{ marginTop: 4, fontFamily: 'ui-monospace,monospace', fontSize: 11, color: 'var(--ink)' }}>
-                  Sim result: {isBuy
-                    ? '≈ ' + formatTokens(prepared.simulatedOut) + ' ' + token.sym
-                    : '≈ ' + formatSol(prepared.simulatedOut) + ' SOL'}
-                </div>
-              )}
-            </div>
-          )}
-
-          {stage !== 'previewed' ? (
-            <button type="button"
-              className={'lr-trade-confirm ' + (isBuy ? 'lr-mode-buy' : 'lr-mode-sell')}
-              disabled={previewDisabled}
-              onClick={handlePreview}>
-              {stage === 'previewing'
-                ? 'Simulating…'
-                : !amount || Number(amount) <= 0
-                  ? (isBuy ? 'Enter SOL amount' : 'Enter percentage')
-                  : !hasFunds
-                    ? (isBuy
-                        ? 'Insufficient SOL'
-                        : (ownedUiAmount <= 0 ? ('No ' + token.sym + ' to sell') : 'Need ~0.003 SOL for fees'))
-                    : (isBuy ? ('🔍 Preview buy ' + amount + ' SOL of $' + token.sym)
-                             : ('🔍 Preview sell ' + Math.min(100, Number(amount)) + '% of $' + token.sym))}
-            </button>
-          ) : (
-            <button type="button"
-              className={'lr-trade-confirm ' + (isBuy ? 'lr-mode-buy' : 'lr-mode-sell')}
-              disabled={signDisabled}
-              onClick={handleSign}>
-              {stage === 'signing'
-                ? (isBuy ? 'Signing & sending…' : 'Signing & sending…')
-                : (isBuy ? ('🍭 Sign & buy $' + token.sym) : ('💸 Sign & sell $' + token.sym))}
-            </button>
-          )}
+          <button type="button"
+            className={'lr-trade-confirm ' + (isBuy ? 'lr-mode-buy' : 'lr-mode-sell')}
+            disabled={confirmDisabled}
+            onClick={handleConfirm}>
+            {confirming
+              ? (isBuy ? 'Buying…' : 'Selling…')
+              : !amount || Number(amount) <= 0
+                ? (isBuy ? 'Enter SOL amount' : 'Enter percentage')
+                : !hasFunds
+                  ? (isBuy
+                      ? 'Insufficient SOL'
+                      : (ownedUiAmount <= 0 ? ('No ' + token.sym + ' to sell') : 'Need ~0.003 SOL for fees'))
+                  : (isBuy ? ('🍭 Buy ' + amount + ' SOL of $' + token.sym)
+                           : ('💸 Sell ' + Math.min(100, Number(amount)) + '% of $' + token.sym))}
+          </button>
 
           <p className="lr-trade-footer">
             Routed via <b style={{ color: 'var(--ink)' }}>pump.fun</b> · Your keys, your coins
@@ -1257,78 +1216,38 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
 
   const freshThresholdMs = 30 * 60_000;
 
-  // FEED — instant first paint from cache, then 2.5s polling with abort + backoff.
-  const [recentTokens, setRecentTokens] = useState(() => readRecentCache() || []);
-  const [recentLoading, setRecentLoading] = useState(() => !readRecentCache());
+  const [recentTokens, setRecentTokens] = useState([]);
+  const [recentLoading, setRecentLoading] = useState(true);
   const [recentError, setRecentError] = useState(null);
-
   useEffect(() => {
     let cancelled = false;
-    let controller = null;
-    let timeoutId = null;
-    let consecutiveErrors = 0;
-
     async function load() {
-      if (controller) { try { controller.abort(); } catch {} }
-      controller = new AbortController();
       try {
-        const r = await fetch('/api/dex/launches', { signal: controller.signal });
-        if (!r.ok) throw new Error('HTTP ' + r.status);
-        const d = await r.json();
-        if (cancelled) return;
-        const list = Array.isArray(d?.tokens) ? d.tokens : [];
-        const normalized = list.map(normalize).filter(Boolean);
-
-        // Only update if something meaningful changed — prevents unnecessary re-renders.
-        setRecentTokens(prev => {
-          if (prev.length === normalized.length && prev.length > 0) {
-            let same = true;
-            for (let i = 0; i < prev.length; i++) {
-              if (
-                prev[i].mint !== normalized[i].mint ||
-                prev[i].price !== normalized[i].price ||
-                prev[i].volume24h !== normalized[i].volume24h ||
-                prev[i].change !== normalized[i].change
-              ) { same = false; break; }
-            }
-            if (same) return prev;
+        const r = await fetch('/api/dex/launches');
+        if (!r.ok) {
+          if (!cancelled) {
+            setRecentError('DexScreener feed unreachable (HTTP ' + r.status + ')');
+            setRecentLoading(false);
           }
-          return normalized;
-        });
-        writeRecentCache(normalized);
-        setRecentLoading(false);
-        setRecentError(null);
-        consecutiveErrors = 0;
+          return;
+        }
+        const d = await r.json();
+        const list = Array.isArray(d?.tokens) ? d.tokens : [];
+        if (!cancelled) {
+          setRecentTokens(list.map(normalize).filter(Boolean));
+          setRecentLoading(false);
+          setRecentError(null);
+        }
       } catch (e) {
-        if (e?.name === 'AbortError' || cancelled) return;
-        consecutiveErrors++;
-        setRecentError(String(e?.message || 'feed unreachable').slice(0, 120));
-        setRecentLoading(false);
-      } finally {
-        if (cancelled) return;
-        const delay = consecutiveErrors > 0
-          ? Math.min(POLL_RECENT * Math.pow(2, consecutiveErrors), 30_000)
-          : POLL_RECENT;
-        timeoutId = setTimeout(load, delay);
+        if (!cancelled) {
+          setRecentError(String(e?.message || 'DexScreener feed unreachable').slice(0, 120));
+          setRecentLoading(false);
+        }
       }
     }
-
     load();
-
-    const onVis = () => {
-      if (!document.hidden) {
-        if (timeoutId) { clearTimeout(timeoutId); timeoutId = null; }
-        load();
-      }
-    };
-    document.addEventListener('visibilitychange', onVis);
-
-    return () => {
-      cancelled = true;
-      if (controller) { try { controller.abort(); } catch {} }
-      if (timeoutId) clearTimeout(timeoutId);
-      document.removeEventListener('visibilitychange', onVis);
-    };
+    const id = setInterval(load, POLL_RECENT);
+    return () => { cancelled = true; clearInterval(id); };
   }, []);
 
   const [solPrice, setSolPrice] = useState(0);
@@ -1476,18 +1395,35 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
   }, [confettiKey]);
 
   /* ════════════════════════════════════════════════════════════════
-     prepareAndSimulate — build the tx, splice the 3% fee, run an
-     unsigned simulation against fresh chain state. NO wallet popup.
-     Returns the prepared tx + sim summary so the modal can show it
-     to the user before they sign.
+     executeSwap — PumpPortal pump.fun/PumpSwap. Flow:
+       1. POST /api/pumpfun/trade → built v0 tx (base64) including
+          PumpPortal's own compute-budget priority fee.
+       2. decodeBuiltTx: deserialize, fetch any ALTs, decompile to a
+          flat instruction list.
+       3. Build the 3% SOL fee transfer:
+            BUY  → 3% of entered SOL (already in swapParams.feeLamports)
+            SELL → 3% of estimated SOL out (computed from price feeds
+                   in swapParams.feeLamports; appended AFTER curve pays
+                   native SOL to wallet).
+       4. Splice the fee transfer:
+            BUY  → after the leading compute-budget ixs, before swap
+            SELL → at the very end
+       5. Compile v0 with fresh blockhash and the SAME ALTs.
+       6. Pre-sign simulateTransaction — if it fails, modal shows the
+          on-chain reason and Phantom never opens.
+       7. Sign once, send skipPreflight, rebroadcast until confirmed
+          or blockhash expires.
      ════════════════════════════════════════════════════════════════ */
-  const prepareAndSimulate = useCallback(async ({ mode, swapParams, token }) => {
-    if (!wallet.publicKey) throw new Error('Please connect a wallet.');
+  const executeSwap = useCallback(async ({ mode, swapParams, token }) => {
+    if (!wallet.publicKey || !wallet.signTransaction) {
+      throw new Error('Please connect a wallet (Phantom, Solflare, Backpack).');
+    }
     if (!swapParams) throw new Error('Nothing to trade.');
 
     const isBuy  = mode === 'buy';
     const userPk = wallet.publicKey;
 
+    // 1. PumpPortal builds the tx; we decompile it locally.
     const route = await getPumpRoute({
       action: isBuy ? 'buy' : 'sell',
       mint:   token.mint,
@@ -1497,6 +1433,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       connection,
     });
 
+    // 2. Build the 3% SOL fee transfer.
     const feeLamports = BigInt(swapParams.feeLamports || '0');
     if (feeLamports <= 0n) {
       throw new Error(isBuy
@@ -1509,6 +1446,9 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       lamports:   Number(feeLamports),
     });
 
+    // 3. Splice. PumpPortal's tx already includes its own ComputeBudget
+    //    instructions at the start — we insert AFTER them so they keep
+    //    setting the priority fee for the whole tx.
     const CB_PROGRAM = 'ComputeBudget111111111111111111111111111111';
     const ixs = route.instructions.slice();
     if (isBuy) {
@@ -1519,6 +1459,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       ixs.push(feeIx);
     }
 
+    // 4. Fresh blockhash, recompile with the SAME ALTs PumpPortal used.
     const latest = await connection.getLatestBlockhash('confirmed');
     const message = new TransactionMessage({
       payerKey:        userPk,
@@ -1527,53 +1468,36 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     }).compileToV0Message(route.alts);
     const tx = new VersionedTransaction(message);
 
-    // Unsigned simulation. replaceRecentBlockhash so the RPC ignores any
-    // staleness in our blockhash. sigVerify:false because tx is unsigned.
-    const sim = await connection.simulateTransaction(tx, {
-      sigVerify: false,
-      replaceRecentBlockhash: true,
-      commitment: 'processed',
-    });
-    const simLogs = sim?.value?.logs || null;
-    if (sim?.value?.err) {
-      console.error('[lr-sim] failed:', JSON.stringify(sim.value.err),
-        simLogs ? '\n' + simLogs.join('\n') : '');
-      throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err)));
-    }
+    // 5. Pre-sign simulation against fresh chain state. Catches stale
+    //    bonding-curve state, slippage failures, balance shortfalls —
+    //    without spending a Phantom popup.
+    let simLogs = null;
     try {
-      console.log('[lr-sim] ok | CU:', sim?.value?.unitsConsumed,
-        '| logs:', (simLogs || []).length);
-    } catch {}
-
-    // Best-effort estimate to show alongside the sim-passed banner.
-    let simulatedOut = 0;
-    if (token?.price > 0 && solPrice > 0) {
-      if (isBuy) {
-        const tradeSol = Number(swapParams.tradeLamports) / 1e9;
-        simulatedOut = (tradeSol * solPrice) / token.price;
-      } else {
-        const grossSol = (swapParams.tradeTokensUi * token.price) / solPrice;
-        simulatedOut = Math.max(0, grossSol * (1 - FEE_BPS / 10000));
+      const sim = await connection.simulateTransaction(tx, {
+        sigVerify: false,
+        replaceRecentBlockhash: true,
+        commitment: 'processed',
+      });
+      simLogs = sim?.value?.logs || null;
+      if (sim?.value?.err) {
+        console.error('[lr-sim] failed:', JSON.stringify(sim.value.err),
+          simLogs ? '\n' + simLogs.join('\n') : '');
+        throw new Error(describeSimLogs(simLogs, JSON.stringify(sim.value.err)));
       }
+      try {
+        console.log('[lr-sim] ok | CU:', sim?.value?.unitsConsumed,
+          '| logs:', (simLogs || []).length);
+      } catch {}
+    } catch (simErr) {
+      if (simErr instanceof Error && /sim failed/i.test(simErr.message)) throw simErr;
+      console.warn('[lr-sim] could not run sim, proceeding:', simErr?.message);
     }
 
-    return { tx, latest, route, simulatedOut, unitsConsumed: sim?.value?.unitsConsumed || 0 };
-  }, [wallet, connection, solPrice]);
-
-  /* ════════════════════════════════════════════════════════════════
-     signAndBroadcast — Phantom popup opens here. Phantom runs its
-     OWN sim inside the popup (per Phantom's docs) so the user gets a
-     second safety check. After they approve, we broadcast and watch
-     for confirmation.
-     ════════════════════════════════════════════════════════════════ */
-  const signAndBroadcast = useCallback(async ({ tx, latest, route, mode, swapParams, token }) => {
-    if (!wallet.signTransaction) {
-      throw new Error('Wallet does not support signing.');
-    }
-
+    // 6. User signs.
     const signed = await wallet.signTransaction(tx);
     const raw = signed.serialize();
 
+    // 7. Send.
     let sig;
     try {
       sig = await connection.sendRawTransaction(raw, {
@@ -1589,6 +1513,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       throw new Error(describeSimLogs(logs, sendErr?.message));
     }
 
+    // 8. Rebroadcast same bytes until confirmed or blockhash expires.
     let confirmed = false, onchainErr = null;
     const startedAt = Date.now();
     const HARD_CAP_MS = 60_000;
@@ -1611,9 +1536,10 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
       throw new Error('Trade failed on-chain — price likely moved past slippage.');
     }
 
-    return { sig, confirmed, mode, token, route: route?.route };
+    return { sig, confirmed, mode, token, route: route.route };
   }, [wallet, connection]);
 
+  /* ──── card actions ──── */
   const onCardBuy = useCallback((token) => {
     if (!requireWallet()) return;
     setTradeOpen({ token, mode: 'buy' });
@@ -1627,9 +1553,10 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     refreshOneToken(token.mint);
   }, [requireWallet, refreshSol, refreshOneToken]);
 
-  const handleTradeSign = useCallback(async ({ tx, latest, route, mode, swapParams, token }) => {
-    const { sig, confirmed } = await signAndBroadcast({ tx, latest, route, mode, swapParams, token });
+  const handleTradeConfirm = useCallback(async ({ mode, swapParams, token }) => {
+    const { sig, confirmed } = await executeSwap({ mode, swapParams, token });
 
+    // Estimated output for the toast, from current price feed.
     let outAmount = 0;
     if (mode === 'buy' && token?.price > 0 && solPrice > 0) {
       const tradeSol = Number(swapParams.tradeLamports) / 1e9;
@@ -1675,8 +1602,9 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
     aggressiveRefresh();
     setTradeOpen(null);
     return { closed: true };
-  }, [signAndBroadcast, fireConfetti, pushToast, aggressiveRefresh, refreshSol, refreshOneToken, solPrice]);
+  }, [executeSwap, fireConfetti, pushToast, aggressiveRefresh, refreshSol, refreshOneToken, solPrice]);
 
+  /* ──── derived display ──── */
   const deriveDisplayValues = useCallback((t) => t, []);
 
   const freshTokens = useMemo(
@@ -1932,8 +1860,7 @@ export default function LaunchRadar({ onConnectWallet } = {}) {
           token={tradeOpen.token}
           initialMode={tradeOpen.mode}
           onClose={() => setTradeOpen(null)}
-          onPreview={prepareAndSimulate}
-          onSign={handleTradeSign}
+          onConfirm={handleTradeConfirm}
           buyPresets={buyPresets}
           sellPresets={sellPresets}
           solBalance={solBalance}
