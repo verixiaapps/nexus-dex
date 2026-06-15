@@ -64,6 +64,7 @@ cheaper-alternative-to-birdeye
 cheaper-alternative-to-bullx
 cheaper-alternative-to-dexscreener
 cheaper-alternative-to-gmgn
+cheaper-alternative-to-photon
 cross-border-defi
 cross-chain-app
 cross-chain-bridge-aggregator
